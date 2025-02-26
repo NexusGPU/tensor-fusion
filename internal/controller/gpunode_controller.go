@@ -367,7 +367,11 @@ func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *
 
 	// Create node on cloud provider [this can result in cloud vendor bills, be cautious!!!]
 	var nodeParam types.NodeCreationParam
-	json.Unmarshal([]byte(node.Spec.CloudVendorParam), &nodeParam)
+	err = json.Unmarshal([]byte(node.Spec.CloudVendorParam), &nodeParam)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal cloud vendor param: %w, GPUNode: %s", err, node.Name)
+	}
+
 	status, err := provider.CreateNode(ctx, &nodeParam)
 	if err != nil {
 		return err
