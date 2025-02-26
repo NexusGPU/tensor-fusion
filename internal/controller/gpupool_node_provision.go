@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"sync"
@@ -84,7 +85,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	}
 
 	// create provisioner
-	provider, cluster, err := createProvisionerAndQueryCluster(ctx, pool, r)
+	provider, cluster, err := createProvisionerAndQueryCluster(ctx, pool, r.Client)
 	if err != nil {
 		return false, err
 	}
@@ -123,6 +124,8 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 				errList = append(errList, pricingErr)
 				return
 			}
+
+			params, _ := json.Marshal(node)
 			gpuNodeRes := &tfv1.GPUNode{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: node.NodeName,
@@ -132,12 +135,13 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 						constants.LabelKeyNodeClass:    nodeClass,
 
 						// to be compatible with nodeSelector mode, allow GPUNode controller to start HyperVisor pod
-						fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): pool.Name,
+						fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true",
 					},
 				},
 				Spec: tfv1.GPUNodeSpec{
-					ManageMode:  tfv1.GPUNodeManageModeProvisioned,
-					CostPerHour: strconv.FormatFloat(costPerHour, 'f', 6, 64),
+					ManageMode:       tfv1.GPUNodeManageModeProvisioned,
+					CostPerHour:      strconv.FormatFloat(costPerHour, 'f', 6, 64),
+					CloudVendorParam: string(params),
 				},
 			}
 			_ = controllerutil.SetControllerReference(pool, gpuNodeRes, r.Scheme)
@@ -153,42 +157,6 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 				errList = append(errList, err)
 				return
 			}
-
-			// Create node on cloud provider [this can result in cloud vendor bills, be cautious!!!]
-			// Create node and update status must be atomic operation, terminate node if status update failed, otherwise will result in orphaned nodes
-			status, err := provider.CreateNode(ctx, &node)
-			if err != nil {
-				errList = append(errList, err)
-				return
-			}
-
-			// Update GPUNode status about the cloud vendor info
-			// To match GPUNode - K8S node, the --node-label in Kubelet is MUST-have, like Karpenter, it force set userdata to add a provisionerId label, k8s node controller then can set its ownerReference to the GPUNode
-			gpuNodeResNew := &tfv1.GPUNode{}
-			err = r.Client.Get(ctx, client.ObjectKey{Name: node.NodeName}, gpuNodeResNew)
-			if err != nil {
-				errList = append(errList, err)
-				return
-			}
-			gpuNodeResNew.Status.NodeInfo.IP = status.PrivateIP
-			gpuNodeResNew.Status.NodeInfo.InstanceID = status.InstanceID
-			gpuNodeResNew.Status.NodeInfo.Region = node.Region
-			if err := r.Client.Status().Patch(ctx, gpuNodeResNew, client.Merge); err != nil {
-				errList = append(errList, err)
-
-				log.Info("Failed to update GPUNode status, must terminate node to keep operation atomic", "name", node.NodeName)
-				errTerminate := provider.TerminateNode(ctx, &types.NodeIdentityParam{
-					InstanceID: status.InstanceID,
-					Region:     node.Region,
-				})
-				if errTerminate != nil {
-					log.Error(errTerminate, "Failed to terminate cloud vendor node when GPUNode status failed to update")
-					panic(errTerminate)
-				}
-				return
-			}
-
-			r.Recorder.Eventf(pool, corev1.EventTypeNormal, "GPUNodeCreated", "Created node: %s, IP: %s", status.InstanceID, status.PrivateIP)
 		}(node)
 	}
 
@@ -200,7 +168,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	return len(gpuNodeParams) > 0, nil
 }
 
-func createProvisionerAndQueryCluster(ctx context.Context, pool *tfv1.GPUPool, r *GPUPoolReconciler) (types.GPUNodeProvider, *tfv1.TensorFusionCluster, error) {
+func createProvisionerAndQueryCluster(ctx context.Context, pool *tfv1.GPUPool, r client.Client) (types.GPUNodeProvider, *tfv1.TensorFusionCluster, error) {
 	clusterName := pool.Labels[constants.LabelKeyOwner]
 	if clusterName == "" {
 		return nil, nil, fmt.Errorf("failed to get cluster name for pool %s", pool.Name)

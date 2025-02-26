@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,7 +47,8 @@ import (
 // PodReconciler reconciles a Pod object
 type NodeReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch;create;update;patch;delete
@@ -74,6 +76,10 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		// Provision mode, match the provisionerID(GPUNode) here
 		gpuNode := &tfv1.GPUNode{}
 		if err := r.Client.Get(ctx, client.ObjectKey{Name: node.GetLabels()[constants.ProvisionerLabelKey]}, gpuNode); err != nil {
+			if errors.IsNotFound(err) {
+				r.Recorder.Eventf(node, corev1.EventTypeNormal, "NodeProvisionerNotFound", "GPUNode %q provisioner not found, current Kubernetes node %q", node.GetLabels()[constants.ProvisionerLabelKey], node.Name)
+				return ctrl.Result{}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("get gpuNode(%s) : %w", node.GetLabels()[constants.ProvisionerLabelKey], err)
 		}
 		// set owned by GPUNode CR

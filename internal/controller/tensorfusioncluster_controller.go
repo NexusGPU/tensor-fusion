@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -48,6 +49,8 @@ type TensorFusionClusterReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+
+	LastProcessedItems sync.Map
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionclusters,verbs=get;list;watch;create;update;patch;delete
@@ -63,6 +66,14 @@ type TensorFusionClusterReconciler struct {
 // Reconcile a TensorFusionCluster object, create and monitor GPU Pool, managing cluster level component versions
 func (r *TensorFusionClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
+
+	runNow, alreadyQueued, waitTime := utils.DebouncedReconcileCheck(ctx, &r.LastProcessedItems, req.NamespacedName)
+	if alreadyQueued {
+		return ctrl.Result{}, nil
+	}
+	if !runNow {
+		return ctrl.Result{RequeueAfter: waitTime}, nil
+	}
 
 	log.Info("Reconciling TensorFusionCluster", "name", req.NamespacedName.Name)
 	defer func() {
@@ -387,7 +398,7 @@ func (r *TensorFusionClusterReconciler) updateTFClusterStatus(ctx context.Contex
 			return nil
 		}
 	}
-	if err := r.Status().Patch(ctx, tfc, client.Merge); err != nil {
+	if err := r.Status().Update(ctx, tfc); err != nil {
 		r.Recorder.Eventf(tfc, corev1.EventTypeWarning, "UpdateClusterStatusError", err.Error())
 		return err
 	}

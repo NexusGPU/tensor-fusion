@@ -19,7 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
-	"time"
+	"sync"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
@@ -39,6 +39,8 @@ import (
 type GPUPoolReconciler struct {
 	client.Client
 
+	LastProcessedItems sync.Map
+
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 }
@@ -51,7 +53,14 @@ type GPUPoolReconciler struct {
 func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	// TODO, debounce the reconcile when lots of GPUNodes created/updated, GPUPool should not updated too frequently (it owns Job)
+	runNow, alreadyQueued, waitTime := utils.DebouncedReconcileCheck(ctx, &r.LastProcessedItems, req.NamespacedName)
+	if alreadyQueued {
+		return ctrl.Result{}, nil
+	}
+	if !runNow {
+		return ctrl.Result{RequeueAfter: waitTime}, nil
+	}
+
 	log.Info("Reconciling GPUPool", "name", req.NamespacedName.Name)
 	defer func() {
 		log.Info("Finished reconciling GPUPool", "name", req.NamespacedName.Name)
@@ -78,7 +87,7 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// Update pool capacity at first
-	if err := r.reconcilePoolCurrentCapacityAndReadiness(ctx, pool.Name); err != nil {
+	if err := r.reconcilePoolCurrentCapacityAndReadiness(ctx, pool); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -95,28 +104,27 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if newNodeCreated {
 			// Refresh the capacity again since new node has been created
 			pool.Status.Phase = tfv1.TensorFusionPoolPhaseUpdating
-			if err := r.reconcilePoolCurrentCapacityAndReadiness(ctx, pool.Name); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
 		}
+	}
+
+	if err := r.reconcilePoolCurrentCapacityAndReadiness(ctx, pool); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// TODO, when componentConfig changed, it should notify corresponding resource to upgrade
 	// eg. when hypervisor changed, should change all owned GPUNode's status.phase to Updating
 
+	if pool.Status.Phase == tfv1.TensorFusionPoolPhaseUpdating {
+		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
-func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context.Context, poolName string) error {
+func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context.Context, pool *tfv1.GPUPool) error {
 	log := log.FromContext(ctx)
 
-	var pool tfv1.GPUPool
-	if err := r.Get(ctx, client.ObjectKey{Name: poolName}, &pool); err != nil {
-		return fmt.Errorf("get pool %s failed: %v", poolName, err)
-	}
 	nodes := &tfv1.GPUNodeList{}
-	if err := r.Client.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: poolName}); err != nil {
+	if err := r.Client.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
 		return fmt.Errorf("list nodes of Pool %s failed: %v", pool.Name, err)
 	}
 
@@ -151,7 +159,7 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 	pool.Status.VirtualTFlops = virtualTFlops
 	pool.Status.VirtualVRAM = virtualVRAM
 
-	if readyNodes == len(nodes.Items) {
+	if readyNodes == len(nodes.Items) && readyNodes != 0 {
 		pool.Status.Phase = tfv1.TensorFusionPoolPhaseRunning
 		log.Info("Pool is running, all nodes are ready", "name", pool.Name, "nodes", len(nodes.Items))
 	} else {
@@ -159,7 +167,7 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 		pool.Status.Phase = tfv1.TensorFusionPoolPhasePending
 	}
 
-	if err := r.Client.Status().Patch(ctx, &pool, client.Merge); err != nil {
+	if err := r.Client.Status().Update(ctx, pool); err != nil {
 		return fmt.Errorf("update pool status: %w", err)
 	}
 	return nil

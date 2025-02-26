@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -47,7 +48,8 @@ import (
 // GPUNodeReconciler reconciles a GPUNode object
 type GPUNodeReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch;create;update;patch;delete
@@ -92,7 +94,8 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 
 			if node.Status.NodeInfo.InstanceID == "" {
-				return fmt.Errorf("provisioned node without instanceID, this could result in orphaned nodes, please check manually: %s", node.Name)
+				r.Recorder.Eventf(node, corev1.EventTypeWarning, "OrphanedNode", "provisioned node without instanceID, this could result in orphaned nodes, please check manually: %s", node.Name)
+				return nil
 			}
 			err = (*provider).TerminateNode(ctx, &types.NodeIdentityParam{
 				InstanceID: node.Status.NodeInfo.InstanceID,
@@ -121,6 +124,16 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
+	poolObj := &tfv1.GPUPool{}
+	err = r.Client.Get(ctx, client.ObjectKey{Name: poolName}, poolObj)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to get tensor-fusion pool, can not create node discovery job, pool: %s", poolName)
+	}
+
+	if err := r.reconcileCloudVendorNode(ctx, node, poolObj); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Only reconcile if the node has a kubernetes node name, otherwise the DaemonSet like workloads can not be scheduled
 	if node.Status.KubernetesNodeName == "" {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -128,12 +141,6 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if poolName == "" {
 		log.Error(nil, "failed to get pool name", "node", node.Name)
 		return ctrl.Result{}, nil
-	}
-
-	poolObj := &tfv1.GPUPool{}
-	err = r.Client.Get(ctx, client.ObjectKey{Name: poolName}, poolObj)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to get tensor-fusion pool, can not create node discovery job, pool: %s", poolName)
 	}
 
 	if err := r.reconcileNodeDiscoveryJob(ctx, node, poolObj); err != nil {
@@ -146,30 +153,44 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// Check if hypervisor is running well, if so, set as running status
+	checkAgain, err := r.checkStatusAndUpdateVirtualCapacity(ctx, hypervisorName, node, poolObj)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if checkAgain {
+		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Context, hypervisorName string, node *tfv1.GPUNode, poolObj *tfv1.GPUPool) (bool, error) {
 	pod := &corev1.Pod{}
 	fetchErr := r.Client.Get(ctx, client.ObjectKey{Name: hypervisorName, Namespace: utils.CurrentNamespace()}, pod)
 	if fetchErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to get hypervisor pod: %w", fetchErr)
+		return false, fmt.Errorf("failed to get hypervisor pod: %w", fetchErr)
 	}
 
 	// Reconcile GPUNode status with hypervisor pod status, when changed
-	if pod.Status.Phase != corev1.PodRunning {
-		delay := 5 * time.Second
+	if pod.Status.Phase != corev1.PodRunning && !utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady) {
 		node.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
-		err = r.Status().Update(ctx, node)
+		err := r.Status().Update(ctx, node)
 		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update GPU node status: %w", err)
+			return false, fmt.Errorf("failed to update GPU node status: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: delay}, nil
+		return true, nil
 	} else {
+
+		virtualTFlops, virtualVRAM := r.CalculateVirtualCapacity(node, poolObj)
+		node.Status.VirtualTFlops = virtualTFlops
+		node.Status.VirtualVRAM = virtualVRAM
+
 		node.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
-		err = r.Status().Update(ctx, node)
+		err := r.Status().Update(ctx, node)
 		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update GPU node status: %w", err)
+			return false, fmt.Errorf("failed to update GPU node status: %w", err)
 		}
 	}
-
-	return ctrl.Result{}, nil
+	return false, nil
 }
 
 func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
@@ -310,7 +331,75 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tf
 	return hypervisorPodName, nil
 }
 
-// TODO after node info updated, trigger a reconcile loop to complement virtual capacity and other status from operator side
+func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) error {
+	// no cloud vendor param indicates it isn't a managed node, skip cloud vendor reconcile
+	if node.Spec.CloudVendorParam == "" {
+		if node.Spec.ManageMode != tfv1.GPUNodeManageModeProvisioned {
+			return nil
+		}
+		return fmt.Errorf("cloud vendor param is empty, but manage mode is provisioned: %s", node.Name)
+	}
+
+	// Avoid creating duplicated cloud vendor nodes, if not working, keep pending status
+	if node.Status.NodeInfo.InstanceID != "" {
+		// node already created, check status
+		if node.Status.KubernetesNodeName != "" {
+			var k8sNode corev1.Node
+			if err := r.Get(ctx, client.ObjectKey{Name: node.Status.KubernetesNodeName}, &k8sNode); err != nil {
+				if errors.IsNotFound(err) {
+					r.Recorder.Eventf(node, corev1.EventTypeNormal, "NodeNotFound", "Kubernetes node has been disappeared, deleting GPUNode", node.Status.KubernetesNodeName)
+					err := r.Delete(ctx, node)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			// TODO: sync cordon and drain status to all GPUs it owned
+		}
+		return nil
+	}
+
+	// No NodeInfo, should create new one
+	provider, _, err := createProvisionerAndQueryCluster(ctx, pool, r.Client)
+	if err != nil {
+		return err
+	}
+
+	// Create node on cloud provider [this can result in cloud vendor bills, be cautious!!!]
+	var nodeParam types.NodeCreationParam
+	json.Unmarshal([]byte(node.Spec.CloudVendorParam), &nodeParam)
+	status, err := provider.CreateNode(ctx, &nodeParam)
+	if err != nil {
+		return err
+	}
+
+	// Update GPUNode status about the cloud vendor info
+	// To match GPUNode - K8S node, the --node-label in Kubelet is MUST-have, like Karpenter, it force set userdata to add a provisionerId label, k8s node controller then can set its ownerReference to the GPUNode
+	gpuNode := &tfv1.GPUNode{}
+	err = r.Client.Get(ctx, client.ObjectKey{Name: nodeParam.NodeName}, gpuNode)
+	if err != nil {
+		return err
+	}
+	gpuNode.Status.NodeInfo.IP = status.PrivateIP
+	gpuNode.Status.NodeInfo.InstanceID = status.InstanceID
+	gpuNode.Status.NodeInfo.Region = nodeParam.Region
+	if err := r.Client.Status().Update(ctx, gpuNode); err != nil {
+		log.FromContext(ctx).Info("Failed to update GPUNode status, must terminate node to keep operation atomic", "name", nodeParam.NodeName)
+		errTerminate := provider.TerminateNode(ctx, &types.NodeIdentityParam{
+			InstanceID: status.InstanceID,
+			Region:     nodeParam.Region,
+		})
+		if errTerminate != nil {
+			log.FromContext(ctx).Error(errTerminate, "Failed to terminate cloud vendor node when GPUNode status failed to update")
+			panic(errTerminate)
+		}
+		return nil
+	}
+
+	r.Recorder.Eventf(pool, corev1.EventTypeNormal, "ManagedNodeCreated", "Created node: %s, IP: %s", status.InstanceID, status.PrivateIP)
+	return nil
+}
+
 func (r *GPUNodeReconciler) CalculateVirtualCapacity(node *tfv1.GPUNode, pool *tfv1.GPUPool) (resource.Quantity, resource.Quantity) {
 	diskSize, _ := node.Status.NodeInfo.DataDiskSize.AsInt64()
 	ramSize, _ := node.Status.NodeInfo.RAMSize.AsInt64()

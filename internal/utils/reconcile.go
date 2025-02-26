@@ -9,10 +9,13 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
+	"sync"
 	"time"
 
 	constants "github.com/NexusGPU/tensor-fusion-operator/internal/constants"
+	"k8s.io/apimachinery/pkg/types"
 
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -98,4 +101,43 @@ func GetObjectHash(obj any) string {
 	str := string(jsonBytes)
 	hasher.Write([]byte(str))
 	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+const DebounceKeySuffix = ":in_queue"
+
+func DebouncedReconcileCheck(ctx context.Context, lastProcessedItems *sync.Map, name types.NamespacedName) (runNow bool, alreadyQueued bool, waitTime time.Duration) {
+	const (
+		// Minimum time between reconciliations for the same object
+		debounceInterval = 5 * time.Second
+	)
+	now := time.Now()
+	key := name.String()
+	inQueueKey := key + DebounceKeySuffix
+
+	if val, exists := lastProcessedItems.Load(key); exists {
+		if lastProcessed, ok := val.(time.Time); ok {
+			elapsed := now.Sub(lastProcessed)
+			if elapsed < debounceInterval {
+				wait := debounceInterval - elapsed
+
+				if _, loaded := lastProcessedItems.LoadOrStore(inQueueKey, now); loaded {
+					return false, true, wait
+				}
+				return false, false, wait
+			}
+		}
+	}
+
+	lastProcessedItems.Delete(inQueueKey)
+	lastProcessedItems.Store(key, now)
+	return true, false, 0
+}
+
+func IsPodConditionTrue(conditions []corev1.PodCondition, conditionType corev1.PodConditionType) bool {
+	for _, condition := range conditions {
+		if condition.Type == conditionType {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }

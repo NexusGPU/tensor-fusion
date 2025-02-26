@@ -38,6 +38,9 @@ type GPUNodeSpec struct {
 	// onboard all GPU cards to the pool
 	// +optional
 	GPUCardIndices []int `json:"gpuCardIndices,omitempty"`
+
+	// +optional
+	CloudVendorParam string `json:"cloudVendorParam,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Manual;AutoSelect;Provisioned
@@ -102,7 +105,7 @@ type GPUNodeAllocationDetails struct {
 	QoS      string          `json:"qos,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=Pending;Migrating;Running;Succeeded;Failed;Unknown;Destroying
+// +kubebuilder:validation:Enum=Pending;Provisioning;Migrating;Running;Succeeded;Failed;Unknown;Destroying
 type TensorFusionGPUNodePhase string
 
 const (

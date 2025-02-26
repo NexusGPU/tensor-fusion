@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
@@ -28,12 +29,14 @@ type GPUPoolCompactionReconciler struct {
 const defaultCompactionDuration = 1 * time.Minute
 const newNodeProtectionDuration = 5 * time.Minute
 
-// TODO: need to write a interval in go coroutine to check if node could be compacted like Karpenter, when it's ok to mark as destroying, change the status and trigger a reconcile
+var jobStarted sync.Map
+
 // if it's AutoSelect mode, stop all Pods on it, and let ClusterAutoscaler or Karpenter to delete the node
 // if it's Provision mode, stop all Pods on it, and destroy the Node from cloud provider
 
 // Strategy #1: check if any empty node can be deleted (must satisfy 'allocatedCapacity + warmUpCapacity <= currentCapacity - toBeDeletedCapacity') -- Done
 
+// TODO: implement other strategies
 // Strategy #2: check if whole Pool can be bin-packing into less nodes, check from low-priority to high-priority nodes one by one, if workloads could be moved to other nodes (using a simulated scheduler), evict it and mark cordoned, let scheduler to re-schedule
 
 // Strategy #3: check if any node can be reduced to 1/2 size. for remaining nodes, check if allocated size < 1/2 * total size, if so, check if can buy smaller instance
@@ -144,6 +147,10 @@ func (r *GPUPoolCompactionReconciler) getCompactionDuration(ctx context.Context,
 func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
+	if _, loaded := jobStarted.LoadOrStore(req.NamespacedName.String(), true); loaded {
+		return ctrl.Result{}, nil
+	}
+
 	log.Info("Start compaction check for GPUPool", "name", req.NamespacedName.Name)
 	defer func() {
 		log.Info("Finished compaction check for GPUPool", "name", req.NamespacedName.Name)
@@ -162,7 +169,7 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, compactionErr
 	}
 
-	// Next ticker
+	// Next ticker, timer set by user, won't impacted by other reconcile requests
 	return ctrl.Result{RequeueAfter: r.getCompactionDuration(ctx, pool.Spec.NodeManagerConfig)}, nil
 }
 
@@ -170,6 +177,6 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 func (r *GPUPoolCompactionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gpupool-compaction").
-		WatchesMetadata(&tfv1.GPUNode{}, &handler.EnqueueRequestForObject{}).
+		WatchesMetadata(&tfv1.GPUPool{}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }

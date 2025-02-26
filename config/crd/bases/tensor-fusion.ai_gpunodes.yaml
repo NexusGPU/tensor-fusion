@@ -64,6 +64,8 @@ spec:
           spec:
             description: GPUNodeSpec defines the desired state of GPUNode.
             properties:
+              cloudVendorParam:
+                type: string
               costPerHour:
                 type: string
               gpuCardIndices:
@@ -283,6 +285,7 @@ spec:
                 default: Pending
                 enum:
                 - Pending
+                - Provisioning
                 - Migrating
                 - Running
                 - Succeeded

@@ -30,6 +30,7 @@ const (
 	VRAMLimitAnnotationFormat     = Domain + "/vram-limit-%s"
 
 	PendingRequeueDuration = time.Second * 3
+	StatusCheckInterval    = time.Second * 6
 
 	GetConnectionURLEnv    = "TENSOR_FUSION_OPERATOR_GET_CONNECTION_URL"
 	ConnectionNameEnv      = "TENSOR_FUSION_CONNECTION_NAME"
