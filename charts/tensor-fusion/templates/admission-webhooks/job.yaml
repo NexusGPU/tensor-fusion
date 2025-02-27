@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "tensor-fusion.fullname" . }}-create-admission-webhook-secret
+  name: {{ include "tensor-fusion.fullname" . }}-add-hook-crt
   namespace: {{ include "tensor-fusion.namespace" . }}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
@@ -13,7 +13,7 @@ spec:
 {{- end }}
   template:
     metadata:
-      name: {{ include "tensor-fusion.fullname" . }}-create-admission-webhook-secret
+      name: {{ include "tensor-fusion.fullname" . }}-add-hook-crt
     spec:
       containers:
         - name: create
