@@ -114,6 +114,9 @@ func (tfc *TensorFusionCluster) RefreshStatus(ownedPools []GPUPool) {
 	tfc.Status.AvailableTFlops = resource.Quantity{}
 	tfc.Status.AvailableVRAM = resource.Quantity{}
 
+	tfc.Status.VirtualTFlops = resource.Quantity{}
+	tfc.Status.VirtualVRAM = resource.Quantity{}
+
 	for i, gpuPool := range ownedPools {
 		if gpuPool.Status.Phase != constants.PhaseRunning {
 			tfc.Status.NotReadyGPUPools = append(tfc.Status.NotReadyGPUPools, gpuPool.Name)
@@ -126,5 +129,8 @@ func (tfc *TensorFusionCluster) RefreshStatus(ownedPools []GPUPool) {
 		tfc.Status.TotalVRAM.Add(gpuPool.Status.TotalVRAM)
 		tfc.Status.AvailableTFlops.Add(gpuPool.Status.AvailableTFlops)
 		tfc.Status.AvailableVRAM.Add(gpuPool.Status.AvailableVRAM)
+
+		tfc.Status.VirtualTFlops.Add(gpuPool.Status.VirtualTFlops)
+		tfc.Status.VirtualVRAM.Add(gpuPool.Status.VirtualVRAM)
 	}
 }

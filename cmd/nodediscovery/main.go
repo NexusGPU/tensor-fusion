@@ -8,6 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
+
+	"github.com/shirou/gopsutil/mem"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
@@ -43,7 +47,7 @@ func main() {
 		k8sNodeName = os.Getenv("HOSTNAME")
 	}
 
-	k8sclient, err := kubeClient()
+	k8sClient, err := kubeClient()
 	if err != nil {
 		ctrl.Log.Error(err, "unable to create kubeClient")
 		os.Exit(1)
@@ -93,7 +97,7 @@ func main() {
 			Name: gpuNodeName,
 		},
 	}
-	if err := k8sclient.Get(ctx, client.ObjectKeyFromObject(gpunode), gpunode); err != nil {
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpunode), gpunode); err != nil {
 		ctrl.Log.Error(err, "unable to get gpuNode")
 		os.Exit(1)
 	}
@@ -102,6 +106,8 @@ func main() {
 	totalVRAM := resource.MustParse("0Ki")
 	availableTFlops := resource.MustParse("0")
 	availableVRAM := resource.MustParse("0Ki")
+
+	allDeviceIDs := make([]string, 0)
 
 	for i := 0; i < count; i++ {
 		device, ret := nvml.DeviceGetHandleByIndex(i)
@@ -122,6 +128,8 @@ func main() {
 			os.Exit(1)
 		}
 
+		allDeviceIDs = append(allDeviceIDs, uuid)
+
 		memInfo, ret := device.GetMemoryInfo_v2()
 		if ret != nvml.SUCCESS {
 			ctrl.Log.Error(errors.New(nvml.ErrorString(ret)), "unable to get memory info of device", "index", i)
@@ -137,6 +145,12 @@ func main() {
 		gpu := &tfv1.GPU{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: uuid,
+				Labels: map[string]string{
+					constants.LabelKeyOwner: gpunode.Name,
+				},
+				Annotations: map[string]string{
+					constants.GPULastReportTimeAnnotationKey: time.Now().Format(time.RFC3339),
+				},
 			},
 		}
 
@@ -157,7 +171,7 @@ func main() {
 				"kubernetes.io/hostname": k8sNodeName,
 			},
 		}
-		_, err = controllerutil.CreateOrUpdate(ctx, k8sclient, gpu, func() error { return nil })
+		_, err = controllerutil.CreateOrUpdate(ctx, k8sClient, gpu, func() error { return nil })
 		if err != nil {
 			ctrl.Log.Error(err, "failed to create GPU", "gpu", gpu)
 			os.Exit(1)
@@ -170,7 +184,7 @@ func main() {
 			gpu.Status.Available = available
 		}
 
-		if err := k8sclient.Status().Patch(ctx, gpu, client.Merge); err != nil {
+		if err := k8sClient.Status().Patch(ctx, gpu, client.Merge); err != nil {
 			ctrl.Log.Error(err, "failed to update status of GPU", "gpu", gpu)
 			os.Exit(1)
 		}
@@ -186,8 +200,13 @@ func main() {
 	ns.TotalVRAM = totalVRAM
 	ns.AvailableTFlops = availableTFlops
 	ns.AvailableVRAM = availableVRAM
+	ns.TotalGPUs = int32(count)
+	ns.ManagedGPUs = int32(count)
+	ns.ManagedGPUDeviceIDs = allDeviceIDs
+	ns.NodeInfo.RAMSize = *resource.NewQuantity(getTotalHostRAM(), resource.DecimalSI)
+	ns.NodeInfo.DataDiskSize = *resource.NewQuantity(getDiskInfo(constants.TFDataPath), resource.DecimalSI)
 	gpunode.Status = *ns
-	if err := k8sclient.Status().Patch(ctx, gpunode, client.Merge); err != nil {
+	if err := k8sClient.Status().Patch(ctx, gpunode, client.Merge); err != nil {
 		ctrl.Log.Error(err, "failed to update status of GPUNode")
 		os.Exit(1)
 	}
@@ -227,4 +246,40 @@ func kubeClient() (client.Client, error) {
 		return nil, fmt.Errorf("create kubeClient %w", err)
 	}
 	return client, nil
+}
+
+func getTotalHostRAM() int64 {
+	v, err := mem.VirtualMemory()
+	if err != nil {
+		fmt.Printf("error getting memory info: %v\n", err)
+		return 0
+	}
+	return int64(v.Total)
+}
+
+func getDiskInfo(path string) (total int64) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		fmt.Printf("error getting disk path: %v\n", err)
+		return 0
+	}
+
+	var stat syscall.Statfs_t
+	err = syscall.Statfs(absPath, &stat)
+	if err != nil {
+		if errors.Is(err, syscall.ENOENT) {
+			os.MkdirAll(absPath, 0755)
+			err = syscall.Statfs(absPath, &stat)
+			if err != nil {
+				fmt.Printf("error getting disk stats after creation: %v\n", err)
+				return 0
+			}
+		} else {
+			fmt.Printf("error getting disk stats: %v\n", err)
+			return 0
+		}
+	}
+
+	total = int64(stat.Blocks * uint64(stat.Bsize))
+	return total
 }

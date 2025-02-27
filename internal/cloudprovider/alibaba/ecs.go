@@ -120,7 +120,7 @@ func (p AlibabaGPUNodeProvider) CreateNode(ctx context.Context, param *types.Nod
 	}
 
 	return &types.GPUNodeStatus{
-		InstanceID: response.RequestId,
+		InstanceID: response.InstanceIdSets.InstanceIdSet[0],
 		CreatedAt:  time.Now(),
 	}, nil
 }
@@ -129,6 +129,7 @@ func (p AlibabaGPUNodeProvider) TerminateNode(ctx context.Context, param *types.
 	request := ecs.CreateDeleteInstanceRequest()
 	request.InstanceId = param.InstanceID
 	request.RegionId = param.Region
+	request.Force = requests.NewBoolean(true)
 	response, err := p.client.DeleteInstance(request)
 	if err != nil {
 		return fmt.Errorf("failed to terminate instance: %w", err)

@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -143,55 +142,41 @@ func (r *TensorFusionClusterReconciler) Reconcile(ctx context.Context, req ctrl.
 		if err := r.updateTFClusterStatus(ctx, tfc, originalStatus); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
 	// when updating, check util they are ready
-	if tfc.Status.Phase == constants.PhaseUpdating {
-		// check status, if not ready, requeue after backoff delay, if all components are ready, set as ready
-		if ready, conditions, err := r.checkTFClusterComponentsReady(ctx, tfc); err != nil {
+	// check status, if not ready, requeue after backoff delay, if all components are ready, set as ready
+	if ready, conditions, err := r.checkTFClusterComponentsReady(ctx, tfc); err != nil {
+		return ctrl.Result{}, err
+	} else if !ready {
+		// update retry count
+		tfc.Status.RetryCount = tfc.Status.RetryCount + 1
+		// store additional check result for each component
+		tfc.SetAsUpdating(conditions...)
+
+		if err := r.updateTFClusterStatus(ctx, tfc, originalStatus); err != nil {
 			return ctrl.Result{}, err
-		} else if !ready {
-			// update retry count
-			tfc.Status.RetryCount = tfc.Status.RetryCount + 1
-			// store additional check result for each component
-			tfc.SetAsUpdating(conditions...)
-
-			if err := r.updateTFClusterStatus(ctx, tfc, originalStatus); err != nil {
-				return ctrl.Result{}, err
-			}
-			delay := utils.CalculateExponentialBackoffWithJitter(tfc.Status.RetryCount)
-			return ctrl.Result{RequeueAfter: delay}, nil
-		} else {
-			// all components are ready, set cluster as ready
-			tfc.Status.RetryCount = 0
-			tfc.SetAsReady(conditions...)
-			gpupools, err := r.mustListOwnedGPUPools(ctx, tfc)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			tfc.RefreshStatus(gpupools)
-			if err := r.updateTFClusterStatus(ctx, tfc, originalStatus); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{}, nil
 		}
+		delay := utils.CalculateExponentialBackoffWithJitter(tfc.Status.RetryCount)
+		return ctrl.Result{RequeueAfter: delay}, nil
+	} else {
+		// all components are ready, set cluster as ready
+		tfc.Status.RetryCount = 0
+		tfc.SetAsReady(conditions...)
+		gpupools, err := r.listOwnedGPUPools(ctx, tfc)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		tfc.RefreshStatus(gpupools)
+		if err := r.updateTFClusterStatus(ctx, tfc, originalStatus); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
-
-	// Refresh status anyway
-	gpupools, err := r.mustListOwnedGPUPools(ctx, tfc)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	tfc.SetAsReady()
-	tfc.RefreshStatus(gpupools)
-	if err := r.updateTFClusterStatus(ctx, tfc, originalStatus); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{}, nil
 }
 
-func (r *TensorFusionClusterReconciler) mustListOwnedGPUPools(ctx context.Context, tfc *tfv1.TensorFusionCluster) ([]tfv1.GPUPool, error) {
+func (r *TensorFusionClusterReconciler) listOwnedGPUPools(ctx context.Context, tfc *tfv1.TensorFusionCluster) ([]tfv1.GPUPool, error) {
 	var gpupoolsList tfv1.GPUPoolList
 	err := r.List(ctx, &gpupoolsList, client.MatchingLabels(map[string]string{
 		constants.LabelKeyOwner: tfc.GetName(),

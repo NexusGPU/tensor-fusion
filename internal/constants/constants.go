@@ -21,6 +21,8 @@ const (
 	TensorFusionEnabledLabelKey = Domain + "/enabled"
 	InitialGPUNodeSelector      = "nvidia.com/gpu.present=true"
 
+	GPULastReportTimeAnnotationKey = Domain + "/last-sync"
+
 	// Annotation key constants
 	GpuPoolAnnotationKey = Domain + "/gpupool"
 	// %s -> container_name
@@ -86,3 +88,6 @@ const (
 const (
 	NodeDiscoveryReportGPUNodeEnvName = "NODE_DISCOVERY_REPORT_GPU_NODE"
 )
+
+const TFDataPath = "/tmp/tensor-fusion/data"
+const DataVolumeName = "tf-data"

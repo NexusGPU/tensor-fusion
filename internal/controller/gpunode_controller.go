@@ -163,7 +163,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
-func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Context, hypervisorName string, node *tfv1.GPUNode, poolObj *tfv1.GPUPool) (bool, error) {
+func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Context, hypervisorName string, node *tfv1.GPUNode, poolObj *tfv1.GPUPool) (checkAgain bool, err error) {
 	pod := &corev1.Pod{}
 	fetchErr := r.Client.Get(ctx, client.ObjectKey{Name: hypervisorName, Namespace: utils.CurrentNamespace()}, pod)
 	if fetchErr != nil {
@@ -171,26 +171,71 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 	}
 
 	// Reconcile GPUNode status with hypervisor pod status, when changed
-	if pod.Status.Phase != corev1.PodRunning && !utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady) {
+	if pod.Status.Phase != corev1.PodRunning || !utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady) {
 		node.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
 		err := r.Status().Update(ctx, node)
 		if err != nil {
-			return false, fmt.Errorf("failed to update GPU node status: %w", err)
+			return true, fmt.Errorf("failed to update GPU node status: %w", err)
 		}
+
+		// Update all GPU devices status to Pending
+		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhasePending)
+		if err != nil {
+			return true, err
+		}
+
 		return true, nil
 	} else {
+		gpuList, err := r.fetchAllOwnedGPUDevices(ctx, node)
+		if err != nil {
+			return true, err
+		}
+		if len(gpuList) == 0 {
+			// node discovery job not completed, check again
+			return true, nil
+		}
 
-		virtualTFlops, virtualVRAM := r.CalculateVirtualCapacity(node, poolObj)
+		virtualVRAM, virtualTFlops := r.CalculateVirtualCapacity(node, poolObj)
 		node.Status.VirtualTFlops = virtualTFlops
 		node.Status.VirtualVRAM = virtualVRAM
 
 		node.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
-		err := r.Status().Update(ctx, node)
+		err = r.Status().Update(ctx, node)
 		if err != nil {
-			return false, fmt.Errorf("failed to update GPU node status: %w", err)
+			return true, fmt.Errorf("failed to update GPU node status: %w", err)
+		}
+
+		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhaseRunning)
+		if err != nil {
+			return true, err
+		}
+		return false, nil
+	}
+}
+
+func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tfv1.GPUNode, state tfv1.TensorFusionGPUPhase) error {
+	gpuList, err := r.fetchAllOwnedGPUDevices(ctx, node)
+	if err != nil {
+		return err
+	}
+
+	for _, gpu := range gpuList {
+		if gpu.Status.Phase != state {
+			gpu.Status.Phase = state
+			if err := r.Status().Update(ctx, &gpu); err != nil {
+				return fmt.Errorf("failed to update GPU device status: %w", err)
+			}
 		}
 	}
-	return false, nil
+	return nil
+}
+
+func (r *GPUNodeReconciler) fetchAllOwnedGPUDevices(ctx context.Context, node *tfv1.GPUNode) ([]tfv1.GPU, error) {
+	gpuList := &tfv1.GPUList{}
+	if err := r.List(ctx, gpuList, client.MatchingLabels{constants.LabelKeyOwner: node.Name}); err != nil {
+		return nil, fmt.Errorf("failed to list GPUs: %w", err)
+	}
+	return gpuList.Items, nil
 }
 
 func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
@@ -254,7 +299,7 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 	// create node-discovery job
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("node-discovery-%s", gpunode.Name),
+			Name:      getDiscoveryJobName(gpunode.Name),
 			Namespace: utils.CurrentNamespace(),
 		},
 		Spec: batchv1.JobSpec{
@@ -298,6 +343,19 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tf
 		spec.NodeSelector = make(map[string]string)
 	}
 	spec.NodeSelector["kubernetes.io/hostname"] = node.Status.KubernetesNodeName
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name: constants.DataVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: constants.TFDataPath,
+			},
+		},
+	})
+	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+		Name:      constants.DataVolumeName,
+		ReadOnly:  false,
+		MountPath: constants.TFDataPath,
+	})
 	newPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      hypervisorPodName,
@@ -332,13 +390,6 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tf
 }
 
 func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) error {
-	// no cloud vendor param indicates it isn't a managed node, skip cloud vendor reconcile
-	if node.Spec.CloudVendorParam == "" {
-		if node.Spec.ManageMode != tfv1.GPUNodeManageModeProvisioned {
-			return nil
-		}
-		return fmt.Errorf("cloud vendor param is empty, but manage mode is provisioned: %s", node.Name)
-	}
 
 	// Avoid creating duplicated cloud vendor nodes, if not working, keep pending status
 	if node.Status.NodeInfo.InstanceID != "" {
@@ -356,6 +407,15 @@ func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *
 			}
 			// TODO: sync cordon and drain status to all GPUs it owned
 		}
+		return nil
+	}
+
+	// no cloud vendor param indicates it isn't a managed node, skip cloud vendor reconcile
+	if node.Spec.CloudVendorParam == "" {
+		if node.Spec.ManageMode != tfv1.GPUNodeManageModeProvisioned {
+			return nil
+		}
+		r.Recorder.Eventf(node, corev1.EventTypeWarning, "CloudVendorParamEmpty", "cloud vendor param is empty, but manage mode is provisioned: %s", node.Name)
 		return nil
 	}
 
@@ -409,7 +469,7 @@ func (r *GPUNodeReconciler) CalculateVirtualCapacity(node *tfv1.GPUNode, pool *t
 	ramSize, _ := node.Status.NodeInfo.RAMSize.AsInt64()
 
 	virtualVRAM := node.Status.TotalVRAM.DeepCopy()
-	virtualTFlops := node.Status.TotalTFlops.DeepCopy()
+	vTFlops := node.Status.TotalTFlops.AsApproximateFloat64() * (float64(pool.Spec.CapacityConfig.Oversubscription.TFlopsOversellRatio) / 100.0)
 
 	virtualVRAM.Add(*resource.NewQuantity(
 		int64(float64(float64(diskSize)*float64(pool.Spec.CapacityConfig.Oversubscription.VRAMExpandToHostDisk)/100.0)),
@@ -419,8 +479,8 @@ func (r *GPUNodeReconciler) CalculateVirtualCapacity(node *tfv1.GPUNode, pool *t
 		int64(float64(float64(ramSize)*float64(pool.Spec.CapacityConfig.Oversubscription.VRAMExpandToHostMem)/100.0)),
 		resource.DecimalSI),
 	)
-	virtualTFlops.Mul(int64(pool.Spec.CapacityConfig.Oversubscription.TFlopsOversellRatio))
-	return virtualVRAM, virtualTFlops
+
+	return virtualVRAM, *resource.NewQuantity(int64(vTFlops), resource.DecimalSI)
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -432,4 +492,10 @@ func (r *GPUNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Pod{}).
 		Complete(r)
+	// WARN: can not Owns(&tfv1.GPU{}) here, because gpunode controller also reconciles GPU devices,
+	// this controller also sync node status to devices status when hypervisor not working
+}
+
+func getDiscoveryJobName(gpunodeName string) string {
+	return fmt.Sprintf("node-discovery-%s", gpunodeName)
 }

@@ -48,6 +48,14 @@
                 "ENABLE_WEBHOOKS": "false"
             },
             "program": "${workspaceFolder}/cmd/operator/main.go",
+        },
+        {
+            "name": "Debug Test Code",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "console": "integratedTerminal",
+            "program": "${workspaceFolder}/cmd/tmp/main.go",
         }
     ]
 }

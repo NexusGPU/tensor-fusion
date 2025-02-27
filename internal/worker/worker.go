@@ -3,6 +3,7 @@ package worker
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"strconv"
 	"time"
 
@@ -56,6 +57,18 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		spec.NodeSelector = make(map[string]string)
 	}
 	spec.NodeSelector = gpu.Status.NodeSelector
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name: constants.DataVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: path.Join(constants.TFDataPath, namespacedName.Name),
+			},
+		},
+	})
+	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+		Name:      constants.DataVolumeName,
+		MountPath: constants.TFDataPath,
+	})
 
 	spec.Containers[0].Env = append(spec.Containers[0].Env, corev1.EnvVar{
 		Name:  "NVIDIA_VISIBLE_DEVICES",

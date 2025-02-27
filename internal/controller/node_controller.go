@@ -77,7 +77,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		gpuNode := &tfv1.GPUNode{}
 		if err := r.Client.Get(ctx, client.ObjectKey{Name: node.GetLabels()[constants.ProvisionerLabelKey]}, gpuNode); err != nil {
 			if errors.IsNotFound(err) {
-				r.Recorder.Eventf(node, corev1.EventTypeNormal, "NodeProvisionerNotFound", "GPUNode %q provisioner not found, current Kubernetes node %q", node.GetLabels()[constants.ProvisionerLabelKey], node.Name)
+				r.Recorder.Eventf(node, corev1.EventTypeNormal, "NodeProvisionerNotFound", "GPUNode not found for node %s", node.Name)
 				return ctrl.Result{}, nil
 			}
 			return ctrl.Result{}, fmt.Errorf("get gpuNode(%s) : %w", node.GetLabels()[constants.ProvisionerLabelKey], err)

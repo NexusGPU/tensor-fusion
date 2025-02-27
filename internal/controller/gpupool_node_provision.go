@@ -62,7 +62,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 		vramGap = warmUpVRAM - availableVRAM
 
 		shouldScaleUp = (tflopsGap > 0) || (vramGap > 0)
-		if !shouldScaleUp {
+		if shouldScaleUp {
 			log.Info("Should scale up GPU node due gap of available <-> warmup capacity", "pool", pool.Name)
 		}
 	}
@@ -74,7 +74,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 		if totalTFlops >= maxTFlops || totalVRAM >= maxVRAM {
 			shouldScaleUp = false
 
-			log.Info("Should not scale up GPU node due to max capacity constraint", "pool", pool.Name)
+			log.Info("Should NOT scale up GPU node due to max capacity constraint", "pool", pool.Name)
 
 			r.Recorder.Eventf(pool, corev1.EventTypeWarning, "MaxResourceConstraintReached", "Max resource constraint can not be satisfied, can not scale up: %v", pool.Spec.CapacityConfig.MaxResources)
 		}

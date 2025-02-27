@@ -35,6 +35,9 @@ func (s *NaiveScheduler) Schedule(request tfv1.Resource) (*tfv1.GPU, error) {
 			return gpu, nil
 		}
 	}
+
+	// TODO: requirement can not be fulfilled by single GPU, group scheduling
+
 	return nil, fmt.Errorf("no suitable gpu found for request: %v", request)
 }
 

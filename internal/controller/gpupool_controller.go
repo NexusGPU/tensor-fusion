@@ -86,7 +86,6 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	// Update pool capacity at first
 	if err := r.reconcilePoolCurrentCapacityAndReadiness(ctx, pool); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -104,19 +103,16 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if newNodeCreated {
 			// Refresh the capacity again since new node has been created
 			pool.Status.Phase = tfv1.TensorFusionPoolPhaseUpdating
+			if err := r.Status().Patch(ctx, pool, client.Merge); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 		}
-	}
-
-	if err := r.reconcilePoolCurrentCapacityAndReadiness(ctx, pool); err != nil {
-		return ctrl.Result{}, err
 	}
 
 	// TODO, when componentConfig changed, it should notify corresponding resource to upgrade
 	// eg. when hypervisor changed, should change all owned GPUNode's status.phase to Updating
 
-	if pool.Status.Phase == tfv1.TensorFusionPoolPhaseUpdating {
-		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
-	}
 	return ctrl.Result{}, nil
 }
 
@@ -137,6 +133,9 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 	totalTFlops := resource.Quantity{}
 	virtualTFlops := resource.Quantity{}
 
+	availableVRAM := resource.Quantity{}
+	availableTFlops := resource.Quantity{}
+
 	for _, node := range nodes.Items {
 		totalGPUs = totalGPUs + node.Status.TotalGPUs
 		totalVRAM.Add(node.Status.TotalVRAM)
@@ -146,12 +145,17 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 		}
 		virtualVRAM.Add(node.Status.VirtualVRAM)
 		virtualTFlops.Add(node.Status.VirtualTFlops)
+
+		availableVRAM.Add(node.Status.AvailableVRAM)
+		availableTFlops.Add(node.Status.AvailableTFlops)
 	}
 
 	pool.Status.TotalGPUs = totalGPUs
 	pool.Status.TotalNodes = int32(len(nodes.Items))
 	pool.Status.TotalVRAM = totalVRAM
 	pool.Status.TotalTFlops = totalTFlops
+	pool.Status.AvailableTFlops = availableTFlops
+	pool.Status.AvailableVRAM = availableVRAM
 
 	pool.Status.ReadyNodes = int32(readyNodes)
 	pool.Status.NotReadyNodes = int32(len(nodes.Items)) - pool.Status.ReadyNodes
