@@ -26,11 +26,14 @@ const (
 	GpuPoolKey = Domain + "/gpupool"
 
 	// Annotation key constants
-	// %s -> container_name
-	TFLOPSRequestAnnotationFormat = Domain + "/tflops-request-%s"
-	VRAMRequestAnnotationFormat   = Domain + "/vram-request-%s"
-	TFLOPSLimitAnnotationFormat   = Domain + "/tflops-limit-%s"
-	VRAMLimitAnnotationFormat     = Domain + "/vram-limit-%s"
+
+	TFLOPSRequestAnnotation   = Domain + "/tflops-request"
+	VRAMRequestAnnotation     = Domain + "/vram-request"
+	TFLOPSLimitAnnotation     = Domain + "/tflops-limit"
+	VRAMLimitAnnotation       = Domain + "/vram-limit"
+	ClientProfileAnnotation   = Domain + "/client-profile"
+	InjectContainerAnnotation = Domain + "/inject-container"
+	GPUAnnotation             = Domain + "/gpu"
 
 	PendingRequeueDuration = time.Second * 3
 	StatusCheckInterval    = time.Second * 6

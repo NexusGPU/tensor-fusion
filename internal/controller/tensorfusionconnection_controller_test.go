@@ -106,6 +106,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			By("Cleanup the specific resource instance TensorFusionConnection")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
+
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 
@@ -135,6 +136,113 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "mock-gpu"}, gpu)).NotTo(HaveOccurred())
 			Expect(gpu.Status.Available.Tflops).To(Equal(resource.MustParse("1")))
 			Expect(gpu.Status.Available.Vram).To(Equal(resource.MustParse("1Gi")))
+		})
+	})
+
+	Context("When reconciling a resource with local GPU mode", func() {
+		const localResourceName = "local-gpu-connection"
+
+		ctx := context.Background()
+
+		localTypeNamespacedName := types.NamespacedName{
+			Name:      localResourceName,
+			Namespace: "default",
+		}
+
+		It("should successfully reconcile the resource with local GPU mode", func() {
+			// Create a new GPU for local GPU mode test
+			localGpu := &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "local-gpu",
+					Labels: map[string]string{
+						constants.GpuPoolKey: "mock",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, localGpu)).To(Succeed())
+
+			// Set up the GPU status - we need to retrieve it first
+			retrievedGpu := &tfv1.GPU{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "local-gpu"}, retrievedGpu)).To(Succeed())
+
+			retrievedGpu.Status = tfv1.GPUStatus{
+				Phase: tfv1.TensorFusionGPUPhaseRunning,
+				UUID:  "local-gpu-uuid",
+				NodeSelector: map[string]string{
+					"kubernetes.io/hostname": "local-node",
+				},
+				Capacity: &tfv1.Resource{
+					Tflops: resource.MustParse("5"),
+					Vram:   resource.MustParse("5Gi"),
+				},
+				Available: &tfv1.Resource{
+					Tflops: resource.MustParse("5"),
+					Vram:   resource.MustParse("5Gi"),
+				},
+			}
+			Expect(k8sClient.Status().Update(ctx, retrievedGpu)).To(Succeed())
+
+			// Create a TensorFusionConnection that directly specifies the GPU (local GPU mode)
+			localConnection := &tfv1.TensorFusionConnection{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      localResourceName,
+					Namespace: "default",
+				},
+				Spec: tfv1.TensorFusionConnectionSpec{
+					PoolName: "mock",
+					Resources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							Tflops: resource.MustParse("2"),
+							Vram:   resource.MustParse("2Gi"),
+						},
+						Limits: tfv1.Resource{
+							Tflops: resource.MustParse("2"),
+							Vram:   resource.MustParse("2Gi"),
+						},
+					},
+					GPU: "local-gpu", // This is what makes it local GPU mode
+				},
+			}
+			Expect(k8sClient.Create(ctx, localConnection)).To(Succeed())
+
+			// Create a reconciler and run it
+			controllerReconciler := &TensorFusionConnectionReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				// dont need scheduler here
+				// Scheduler: scheduler.NewScheduler(k8sClient),
+			}
+
+			// First reconcile to add finalizer
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: localTypeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Get the connection and verify finalizer was added
+			updatedConnection := &tfv1.TensorFusionConnection{}
+			Expect(k8sClient.Get(ctx, localTypeNamespacedName, updatedConnection)).NotTo(HaveOccurred())
+			Expect(updatedConnection.Finalizers).Should(ConsistOf(constants.Finalizer))
+
+			// Second reconcile to perform the actual processing
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: localTypeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify connection status
+			Expect(k8sClient.Get(ctx, localTypeNamespacedName, updatedConnection)).NotTo(HaveOccurred())
+			Expect(updatedConnection.Status.Phase).To(Equal(tfv1.TensorFusionConnectionStarting))
+			Expect(updatedConnection.Status.GPU).To(Equal("local-gpu"))
+
+			// Verify worker pod was created with correct node selector
+			workerPod := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, localTypeNamespacedName, workerPod)).NotTo(HaveOccurred())
+			Expect(workerPod.Spec.NodeSelector).To(Equal(retrievedGpu.Status.NodeSelector))
+
+			// Clean up the test resource
+			Expect(k8sClient.Delete(ctx, localConnection)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, localGpu)).To(Succeed())
 		})
 	})
 })

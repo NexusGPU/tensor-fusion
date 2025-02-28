@@ -40,6 +40,9 @@ spec:
           spec:
             description: TensorFusionConnectionSpec defines the desired state of TensorFusionConnection.
             properties:
+              gpu:
+                description: localGpu mode will schedule the GPU in advance
+                type: string
               poolName:
                 type: string
               resources:

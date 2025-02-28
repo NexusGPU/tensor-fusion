@@ -4,21 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: tensorfusionconnections.tensor-fusion.ai
+  name: clientprofiles.tensor-fusion.ai
 spec:
   group: tensor-fusion.ai
   names:
-    kind: TensorFusionConnection
-    listKind: TensorFusionConnectionList
-    plural: tensorfusionconnections
-    singular: tensorfusionconnection
+    kind: ClientProfile
+    listKind: ClientProfileList
+    plural: clientprofiles
+    singular: clientprofile
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: TensorFusionConnection is the Schema for the tensorfusionconnections
-          API.
+        description: ClientProfile is the Schema for the clientprofiles API.
         properties:
           apiVersion:
             description: |-
@@ -38,12 +37,13 @@ spec:
           metadata:
             type: object
           spec:
-            description: TensorFusionConnectionSpec defines the desired state of TensorFusionConnection.
+            description: ClientProfileSpec defines the desired state of ClientProfile.
             properties:
-              gpu:
-                description: localGpu mode will schedule the GPU in advance
-                type: string
+              isLocalGPU:
+                type: boolean
               poolName:
+                type: string
+              qos:
                 type: string
               resources:
                 properties:
@@ -88,24 +88,11 @@ spec:
                 - requests
                 type: object
             required:
-            - poolName
-            - resources
+            - isLocalGPU
+            - qos
             type: object
           status:
-            description: TensorFusionConnectionStatus defines the observed state of
-              TensorFusionConnection.
-            properties:
-              connectionURL:
-                type: string
-              gpu:
-                type: string
-              phase:
-                type: string
-              qosClass:
-                type: string
-            required:
-            - connectionURL
-            - phase
+            description: ClientProfileStatus defines the observed state of ClientProfile.
             type: object
         type: object
     served: true

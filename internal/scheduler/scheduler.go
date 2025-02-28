@@ -49,11 +49,7 @@ func (s *Scheduler) Schedule(ctx context.Context, poolName string, request tfv1.
 		return nil, fmt.Errorf("list GPUs: %w", err)
 	}
 
-	// Create a resource filter for this specific request
-	resourceFilter := NewResourceFilter(request)
-
-	// Create a new filter registry from the base one, adding the resource filter
-	filterRegistry := s.filterRegistry.With(resourceFilter)
+	filterRegistry := s.filterRegistry.With(NewResourceFilter(request))
 
 	// Apply the filters in sequence
 	filteredGPUs, err := filterRegistry.Apply(ctx, gpus.Items)

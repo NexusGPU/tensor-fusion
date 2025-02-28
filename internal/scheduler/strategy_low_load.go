@@ -26,11 +26,6 @@ func (l LowLoadFirst) SelectGPU(gpus []tfv1.GPU) (*tfv1.GPU, error) {
 	for i := 1; i < len(gpus); i++ {
 		gpu := &gpus[i]
 
-		// Only consider GPUs in Running state
-		if gpu.Status.Phase != tfv1.TensorFusionGPUPhaseRunning {
-			continue
-		}
-
 		currentTflops := gpu.Status.Available.Tflops.Value()
 		currentVRAM := gpu.Status.Available.Vram.Value()
 

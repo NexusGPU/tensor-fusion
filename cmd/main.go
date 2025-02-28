@@ -28,12 +28,6 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/controller"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/server"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/server/router"
-	webhookcorev1 "github.com/NexusGPU/tensor-fusion-operator/internal/webhook/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -44,6 +38,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	"github.com/NexusGPU/tensor-fusion-operator/internal/controller"
+	"github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
+	"github.com/NexusGPU/tensor-fusion-operator/internal/server"
+	"github.com/NexusGPU/tensor-fusion-operator/internal/server/router"
+	webhookcorev1 "github.com/NexusGPU/tensor-fusion-operator/internal/webhook/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -56,6 +58,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(tfv1.AddToScheme(scheme))
+	utilruntime.Must(tensorfusionaiv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -175,7 +178,7 @@ func main() {
 
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err = webhookcorev1.SetupPodWebhookWithManager(mgr); err != nil {
+		if err = webhookcorev1.SetupPodWebhookWithManager(mgr, scheduler); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
 			os.Exit(1)
 		}
@@ -245,6 +248,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&controller.ClientProfileReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ClientProfile")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

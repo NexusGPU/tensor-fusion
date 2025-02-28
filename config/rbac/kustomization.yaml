@@ -22,6 +22,8 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the Project itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- clientprofile_editor_role.yaml
+- clientprofile_viewer_role.yaml
 - schedulingconfigtemplate_editor_role.yaml
 - schedulingconfigtemplate_viewer_role.yaml
 - gpunodeclass_editor_role.yaml

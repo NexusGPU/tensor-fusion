@@ -12,7 +12,7 @@
             "env": {
                 "ENABLE_WEBHOOKS": "false"
             },
-            "program": "${workspaceFolder}/cmd/operator/main.go",
+            "program": "${workspaceFolder}/cmd/main.go",
         },
         {
             "name": "Debug Discovery",
@@ -35,7 +35,7 @@
                 "KUBECONFIG": "~/.kube/config-tf-dev",
                 "ENABLE_WEBHOOKS": "false"
             },
-            "program": "${workspaceFolder}/cmd/operator/main.go",
+            "program": "${workspaceFolder}/cmd/main.go",
         },
         {
             "name": "Debug Demo Env Operator",
@@ -47,7 +47,7 @@
                 "KUBECONFIG": "~/.kube/dev_us-east-1_demo",
                 "ENABLE_WEBHOOKS": "false"
             },
-            "program": "${workspaceFolder}/cmd/operator/main.go",
+            "program": "${workspaceFolder}/cmd/main.go",
         },
         {
             "name": "Debug Test Code",

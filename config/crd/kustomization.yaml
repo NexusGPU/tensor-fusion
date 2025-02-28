@@ -9,6 +9,7 @@ resources:
 - bases/tensor-fusion.ai_gpunodes.yaml
 - bases/tensor-fusion.ai_gpunodeclasses.yaml
 - bases/tensor-fusion.ai_schedulingconfigtemplates.yaml
+- bases/tensor-fusion.ai_clientprofiles.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

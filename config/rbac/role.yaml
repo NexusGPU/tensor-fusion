@@ -87,6 +87,7 @@ rules:
 - apiGroups:
   - tensor-fusion.ai
   resources:
+  - clientprofiles
   - gpunodeclasses
   - gpunodes
   - gpupools
@@ -105,6 +106,7 @@ rules:
 - apiGroups:
   - tensor-fusion.ai
   resources:
+  - clientprofiles/finalizers
   - gpunodeclasses/finalizers
   - gpunodes/finalizers
   - gpupools/finalizers
@@ -117,6 +119,7 @@ rules:
 - apiGroups:
   - tensor-fusion.ai
   resources:
+  - clientprofiles/status
   - gpunodeclasses/status
   - gpunodes/status
   - gpupools/status
