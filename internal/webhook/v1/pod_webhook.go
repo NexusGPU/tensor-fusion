@@ -162,8 +162,11 @@ func ParseTFResources(ctx context.Context, k8sclient client.Client, pod *corev1.
 		clientProfile.Spec.Resources.Limits.Vram = resource.MustParse(vramLimit)
 	}
 
-	injectContainer, _ := pod.Annotations[constants.InjectContainerAnnotation]
+	injectContainer, ok := pod.Annotations[constants.InjectContainerAnnotation]
 	containerNames = strings.Split(injectContainer, ",")
+	if !ok || len(containerNames) == 0 {
+		return nil, nil, fmt.Errorf("inject container not found")
+	}
 	return &clientProfile.Spec, containerNames, nil
 }
 
