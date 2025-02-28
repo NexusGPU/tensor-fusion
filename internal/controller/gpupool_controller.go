@@ -75,15 +75,25 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// TODO: if phase is destroying, stop all existing workers and hypervisors, stop time series flow aggregations
-	deleted, err := utils.HandleFinalizer(ctx, pool, r.Client, func(ctx context.Context, pool *tfv1.GPUPool) error {
-		// TODO: stop all existing components
-		return nil
+	deleted, err := utils.HandleFinalizer(ctx, pool, r.Client, func(ctx context.Context, pool *tfv1.GPUPool) (bool, error) {
+		if pool.Status.Phase != tfv1.TensorFusionPoolPhaseDestroying {
+			pool.Status.Phase = tfv1.TensorFusionPoolPhaseDestroying
+			if err := r.Status().Update(ctx, pool); err != nil {
+				return false, err
+			}
+		}
+		// check if all nodes has been deleted
+		nodes := &tfv1.GPUNodeList{}
+		if err := r.Client.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
+			return false, err
+		}
+		return len(nodes.Items) == 0, nil
 	})
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if deleted {
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
 	if err := r.reconcilePoolCurrentCapacityAndReadiness(ctx, pool); err != nil {
@@ -163,12 +173,23 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 	pool.Status.VirtualTFlops = virtualTFlops
 	pool.Status.VirtualVRAM = virtualVRAM
 
-	if readyNodes == len(nodes.Items) && readyNodes != 0 {
+	minTFlops, _ := pool.Spec.CapacityConfig.MinResources.TFlops.AsInt64()
+	minVRAM, _ := pool.Spec.CapacityConfig.MinResources.VRAM.AsInt64()
+
+	allowScaleToZero := minTFlops == 0 && minVRAM == 0
+	allNodesReady := readyNodes == len(nodes.Items)
+	if allNodesReady && readyNodes == 0 {
+		if !allowScaleToZero {
+			allNodesReady = false
+		}
+	}
+
+	if allNodesReady {
 		pool.Status.Phase = tfv1.TensorFusionPoolPhaseRunning
 		log.Info("Pool is running, all nodes are ready", "name", pool.Name, "nodes", len(nodes.Items))
 	} else {
 		// set back to updating, wait GPUNode change triggering the pool change
-		pool.Status.Phase = tfv1.TensorFusionPoolPhasePending
+		pool.Status.Phase = tfv1.TensorFusionPoolPhaseUpdating
 	}
 
 	if err := r.Client.Status().Update(ctx, pool); err != nil {

@@ -73,46 +73,59 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	deleted, err := utils.HandleFinalizer(ctx, node, r.Client, func(ctx context.Context, node *tfv1.GPUNode) error {
+	deleted, err := utils.HandleFinalizer(ctx, node, r.Client, func(ctx context.Context, node *tfv1.GPUNode) (bool, error) {
+
+		if node.Status.Phase != tfv1.TensorFusionGPUNodePhaseDestroying {
+			node.Status.Phase = tfv1.TensorFusionGPUNodePhaseDestroying
+			if err := r.Status().Update(ctx, node); err != nil {
+				return false, err
+			}
+		}
+
 		if node.Spec.ManageMode == tfv1.GPUNodeManageModeAutoSelect {
 			// Do nothing, but if it's managed by Karpenter, should come up with some way to tell Karpenter to terminate the GPU node
 		} else if node.Spec.ManageMode == tfv1.GPUNodeManageModeProvisioned {
 			clusterName := node.GetLabels()[constants.LabelKeyClusterOwner]
 			cluster := &tfv1.TensorFusionCluster{}
 			if err := r.Get(ctx, client.ObjectKey{Name: clusterName}, cluster); err != nil {
-				return err
+
+				if errors.IsNotFound(err) {
+					r.Recorder.Eventf(node, corev1.EventTypeWarning, "OrphanedNode", "provisioned node not found, this could result in orphaned nodes, please check manually: %s", node.Name)
+					return true, nil
+				}
+				return false, err
 			}
 
 			vendorCfg := cluster.Spec.ComputingVendor
 			if vendorCfg == nil {
-				return fmt.Errorf("failed to get computing vendor config for cluster %s", clusterName)
+				return false, fmt.Errorf("failed to get computing vendor config for cluster %s", clusterName)
 			}
 
 			provider, err := cloudprovider.GetProvider(*vendorCfg)
 			if err != nil {
-				return err
+				return false, err
 			}
 
 			if node.Status.NodeInfo.InstanceID == "" {
 				r.Recorder.Eventf(node, corev1.EventTypeWarning, "OrphanedNode", "provisioned node without instanceID, this could result in orphaned nodes, please check manually: %s", node.Name)
-				return nil
+				return false, nil
 			}
 			err = (*provider).TerminateNode(ctx, &types.NodeIdentityParam{
 				InstanceID: node.Status.NodeInfo.InstanceID,
 				Region:     node.Status.NodeInfo.Region,
 			})
 			if err != nil {
-				return err
+				return false, err
 			}
 
 		}
-		return nil
+		return true, nil
 	})
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if deleted {
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
 	var poolName string

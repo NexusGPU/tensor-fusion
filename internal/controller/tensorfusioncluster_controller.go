@@ -91,15 +91,25 @@ func (r *TensorFusionClusterReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 	originalStatus := tfc.Status.DeepCopy()
 
-	deleted, err := utils.HandleFinalizer(ctx, tfc, r.Client, func(context context.Context, tfc *tfv1.TensorFusionCluster) error {
+	deleted, err := utils.HandleFinalizer(ctx, tfc, r.Client, func(context context.Context, tfc *tfv1.TensorFusionCluster) (bool, error) {
 		log.Info("TensorFusionCluster is being deleted", "name", tfc.Name)
-		return nil
+		if tfc.Status.Phase != tfv1.TensorFusionClusterDestroying {
+			tfc.Status.Phase = tfv1.TensorFusionClusterDestroying
+			if err := r.Status().Update(ctx, tfc); err != nil {
+				return false, err
+			}
+		}
+		var poolList tfv1.GPUPoolList
+		if err := r.List(ctx, &poolList, client.MatchingLabels{constants.LabelKeyOwner: tfc.Name}); err != nil {
+			return false, err
+		}
+		return len(poolList.Items) == 0, nil
 	})
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if deleted {
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
 	if tfc.Status.Phase == "" || tfc.Status.Phase == constants.PhaseUnknown {

@@ -73,8 +73,7 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{}, err
 	}
 	if deleted {
-		// Object is being deleted, no need to proceed scheduling and other actions
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
 	var gpu *tfv1.GPU
@@ -171,9 +170,9 @@ func (r *TensorFusionConnectionReconciler) tryStartWorker(
 }
 
 // handleDeletion handles cleanup of external dependencies
-func (r *TensorFusionConnectionReconciler) handleDeletion(ctx context.Context, connection *tfv1.TensorFusionConnection) error {
+func (r *TensorFusionConnectionReconciler) handleDeletion(ctx context.Context, connection *tfv1.TensorFusionConnection) (bool, error) {
 	if connection.Status.GPU == "" {
-		return nil // No gpu was allocated, nothing to clean up
+		return true, nil // No gpu was allocated, nothing to clean up
 	}
 
 	// Get the gpu
@@ -181,17 +180,17 @@ func (r *TensorFusionConnectionReconciler) handleDeletion(ctx context.Context, c
 	if err := r.Get(ctx, client.ObjectKey{Name: connection.Status.GPU}, gpu); err != nil {
 		if errors.IsNotFound(err) {
 			// gpu is already gone, nothing to do
-			return nil
+			return true, nil
 		}
-		return err
+		return false, err
 	}
 
 	// Release the resources
 	if err := r.Scheduler.Release(connection.Spec.Resources.Requests, gpu); err != nil {
-		return err
+		return false, err
 	}
 
-	return r.mustUpdateTFConnectionStatus(ctx, connection, gpu)
+	return true, r.mustUpdateTFConnectionStatus(ctx, connection, gpu)
 }
 
 func (r *TensorFusionConnectionReconciler) mustUpdateTFConnectionStatus(ctx context.Context, connection *tfv1.TensorFusionConnection, gpu *tfv1.GPU) error {
