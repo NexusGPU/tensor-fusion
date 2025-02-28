@@ -154,7 +154,7 @@ func main() {
 
 	ctx := context.Background()
 
-	scheduler := scheduler.NewNaiveScheduler()
+	scheduler := scheduler.NewScheduler(mgr.GetClient())
 	if err = (&controller.TensorFusionConnectionReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),

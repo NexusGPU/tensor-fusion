@@ -44,10 +44,12 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			Name:      resourceName,
 			Namespace: "default",
 		}
-		scheduler := scheduler.NewNaiveScheduler()
 		gpu := &tfv1.GPU{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "mock-gpu",
+				Labels: map[string]string{
+					constants.GpuPoolKey: "mock",
+				},
 			},
 		}
 		BeforeEach(func() {
@@ -77,7 +79,6 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 
-			scheduler.OnAdd(gpu)
 			Expect(k8sClient.Create(ctx, gpu)).To(Succeed())
 			gpu.Status = tfv1.GPUStatus{
 				Phase: tfv1.TensorFusionGPUPhaseRunning,
@@ -111,7 +112,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			controllerReconciler := &TensorFusionConnectionReconciler{
 				Client:    k8sClient,
 				Scheme:    k8sClient.Scheme(),
-				Scheduler: scheduler,
+				Scheduler: scheduler.NewScheduler(k8sClient),
 			}
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,

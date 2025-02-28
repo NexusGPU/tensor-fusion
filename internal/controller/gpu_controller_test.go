@@ -18,13 +18,17 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -36,11 +40,23 @@ var _ = Describe("GPU Controller", func() {
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
 		gpu := &tfv1.GPU{}
+		gpunode := &tfv1.GPUNode{}
 
 		BeforeEach(func() {
+			By("creating the custom resource for the Kind GPUNode")
+			gpunode = &tfv1.GPUNode{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: resourceName + "-node",
+					Labels: map[string]string{
+						fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, "mock"): "true",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, gpunode)).To(Succeed())
+
 			By("creating the custom resource for the Kind GPU")
 			err := k8sClient.Get(ctx, typeNamespacedName, gpu)
 			if err != nil && errors.IsNotFound(err) {
@@ -49,20 +65,22 @@ var _ = Describe("GPU Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
 				}
+				Expect(controllerutil.SetControllerReference(gpunode, resource, scheme.Scheme)).To(Succeed())
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &tfv1.GPU{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance GPU")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			By("Cleanup the specific resource instance GPUNode")
+			Expect(k8sClient.Delete(ctx, gpunode)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
@@ -75,8 +93,6 @@ var _ = Describe("GPU Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
 		})
 	})
 })

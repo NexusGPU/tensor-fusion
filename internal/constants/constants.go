@@ -23,8 +23,9 @@ const (
 
 	GPULastReportTimeAnnotationKey = Domain + "/last-sync"
 
+	GpuPoolKey = Domain + "/gpupool"
+
 	// Annotation key constants
-	GpuPoolAnnotationKey = Domain + "/gpupool"
 	// %s -> container_name
 	TFLOPSRequestAnnotationFormat = Domain + "/tflops-request-%s"
 	VRAMRequestAnnotationFormat   = Domain + "/vram-request-%s"

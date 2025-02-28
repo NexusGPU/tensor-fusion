@@ -18,15 +18,18 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
+	scheduler "github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
+	"github.com/samber/lo"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
-
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	scheduler "github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
 )
 
 // GPUReconciler reconciles a GPU object
@@ -43,6 +46,59 @@ type GPUReconciler struct {
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *GPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	gpu := &tfv1.GPU{}
+	if err := r.Get(ctx, req.NamespacedName, gpu); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	kgvs, _, err := r.Scheme.ObjectKinds(&tfv1.GPUNode{})
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("get object kinds for GPUNode: %w", err)
+	}
+
+	owner, ok := lo.Find(gpu.OwnerReferences, func(or metav1.OwnerReference) bool {
+		for _, kvg := range kgvs {
+			if kvg.Kind == or.Kind && fmt.Sprintf("%s/%s", kvg.Group, kvg.Version) == or.APIVersion {
+				return true
+			}
+		}
+		return false
+	})
+
+	if !ok {
+		return ctrl.Result{}, fmt.Errorf("owner node %s not found", gpu.Name)
+	}
+
+	gpunode := &tfv1.GPUNode{}
+	if err := r.Get(ctx, client.ObjectKey{Name: owner.Name}, gpunode); err != nil {
+		return ctrl.Result{}, fmt.Errorf("get node %s: %w", owner.Name, err)
+	}
+
+	var poolName string
+	for labelKey := range gpunode.Labels {
+		after, ok := strings.CutPrefix(labelKey, constants.GPUNodePoolIdentifierLabelPrefix)
+		if ok {
+			poolName = after
+			break
+		}
+	}
+
+	if poolName == "" {
+		return ctrl.Result{}, fmt.Errorf("node %s is not assigned to any pool", gpunode.Name)
+	}
+
+	if gpu.Labels == nil {
+		gpu.Labels = make(map[string]string)
+	}
+	gpu.Labels[constants.GpuPoolKey] = poolName
+
+	// update gpu
+	if err := r.Update(ctx, gpu); err != nil {
+		return ctrl.Result{}, fmt.Errorf("update gpu %s: %w", gpu.Name, err)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -51,21 +107,5 @@ func (r *GPUReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.GPU{}).
 		Named("gpu").
-		WithEventFilter(
-			predicate.Funcs{
-				CreateFunc: func(e event.CreateEvent) bool {
-					r.Scheduler.OnAdd(e.Object.(*tfv1.GPU))
-					return true
-				},
-				UpdateFunc: func(e event.UpdateEvent) bool {
-					r.Scheduler.OnUpdate(e.ObjectOld.(*tfv1.GPU), e.ObjectNew.(*tfv1.GPU))
-					return true
-				},
-				DeleteFunc: func(e event.DeleteEvent) bool {
-					r.Scheduler.OnDelete(e.Object.(*tfv1.GPU))
-					return true
-				},
-			},
-		).
 		Complete(r)
 }

@@ -109,7 +109,7 @@ func ParseTFResources(pod *corev1.Pod) (poolName string, resources []TFResource)
 	}
 
 	resources = make([]TFResource, 0, len(pod.Spec.Containers))
-	poolName, ok := pod.Annotations[constants.GpuPoolAnnotationKey]
+	poolName, ok := pod.Annotations[constants.GpuPoolKey]
 	if !ok {
 		return "", nil
 	}

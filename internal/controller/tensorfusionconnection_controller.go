@@ -81,7 +81,7 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 	if connection.Status.Phase == "" || connection.Status.Phase == tfv1.TensorFusionConnectionPending {
 		// Try to get an available gpu from scheduler
 		var err error
-		gpu, err = r.Scheduler.Schedule(connection.Spec.Resources.Requests)
+		gpu, err = r.Scheduler.Schedule(ctx, connection.Spec.PoolName, connection.Spec.Resources.Requests)
 		if err != nil {
 			log.Error(err, "Failed to schedule gpu instance")
 			connection.Status.Phase = tfv1.TensorFusionConnectionPending
@@ -186,7 +186,7 @@ func (r *TensorFusionConnectionReconciler) handleDeletion(ctx context.Context, c
 	}
 
 	// Release the resources
-	if err := r.Scheduler.Release(connection.Spec.Resources.Requests, gpu); err != nil {
+	if err := r.Scheduler.Release(ctx, connection.Spec.Resources.Requests, gpu); err != nil {
 		return false, err
 	}
 
