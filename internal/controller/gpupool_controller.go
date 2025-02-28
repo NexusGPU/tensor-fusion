@@ -173,10 +173,14 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 	pool.Status.VirtualTFlops = virtualTFlops
 	pool.Status.VirtualVRAM = virtualVRAM
 
-	minTFlops, _ := pool.Spec.CapacityConfig.MinResources.TFlops.AsInt64()
-	minVRAM, _ := pool.Spec.CapacityConfig.MinResources.VRAM.AsInt64()
+	allowScaleToZero := true
+	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MinResources != nil {
+		minTFlops, _ := pool.Spec.CapacityConfig.MinResources.TFlops.AsInt64()
+		minVRAM, _ := pool.Spec.CapacityConfig.MinResources.VRAM.AsInt64()
 
-	allowScaleToZero := minTFlops == 0 && minVRAM == 0
+		allowScaleToZero = minTFlops == 0 && minVRAM == 0
+	}
+
 	allNodesReady := readyNodes == len(nodes.Items)
 	if allNodesReady && readyNodes == 0 {
 		if !allowScaleToZero {
