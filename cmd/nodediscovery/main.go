@@ -268,7 +268,11 @@ func getDiskInfo(path string) (total int64) {
 	err = syscall.Statfs(absPath, &stat)
 	if err != nil {
 		if errors.Is(err, syscall.ENOENT) {
-			os.MkdirAll(absPath, 0755)
+			err = os.MkdirAll(absPath, 0755)
+			if err != nil {
+				fmt.Printf("error creating folder: %s, err: %v\n", absPath, err)
+				return 0
+			}
 			err = syscall.Statfs(absPath, &stat)
 			if err != nil {
 				fmt.Printf("error getting disk stats after creation: %v\n", err)
