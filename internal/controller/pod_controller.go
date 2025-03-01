@@ -116,7 +116,7 @@ func generateTensorFusionConnection(pod *corev1.Pod, profile *tfv1.ClientProfile
 	}
 	gpuName, ok := pod.Annotations[constants.GPUAnnotation]
 	if ok {
-		connection.Spec.GPU = gpuName
+		connection.Spec.GPUs = []string{gpuName}
 	}
 	return connection
 }

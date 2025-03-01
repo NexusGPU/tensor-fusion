@@ -89,7 +89,6 @@ spec:
                 type: object
             required:
             - isLocalGPU
-            - qos
             type: object
           status:
             description: ClientProfileStatus defines the observed state of ClientProfile.

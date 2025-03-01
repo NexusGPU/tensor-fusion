@@ -42,7 +42,9 @@ spec:
             properties:
               gpu:
                 description: localGpu mode will schedule the GPU in advance
-                type: string
+                items:
+                  type: string
+                type: array
               poolName:
                 type: string
               resources:

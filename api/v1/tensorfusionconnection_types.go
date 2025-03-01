@@ -38,7 +38,7 @@ type TensorFusionConnectionSpec struct {
 
 	// +optional
 	// localGpu mode will schedule the GPU in advance
-	GPU string `json:"gpu"`
+	GPUs []string `json:"gpu"`
 }
 
 type TensorFusionConnectionPhase string

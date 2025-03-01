@@ -200,7 +200,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 							Vram:   resource.MustParse("2Gi"),
 						},
 					},
-					GPU: "local-gpu", // This is what makes it local GPU mode
+					GPUs: []string{"local-gpu"}, // This is what makes it local GPU mode
 				},
 			}
 			Expect(k8sClient.Create(ctx, localConnection)).To(Succeed())

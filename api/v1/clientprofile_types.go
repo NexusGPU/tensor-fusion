@@ -23,12 +23,13 @@ import (
 // ClientProfileSpec defines the desired state of ClientProfile.
 type ClientProfileSpec struct {
 	// +optional
-	PoolName string `json:"poolName"`
+	PoolName string `json:"poolName,omitempty"`
 
 	// +optional
-	Resources Resources `json:"resources"`
+	Resources Resources `json:"resources,omitempty"`
 
-	Qos string `json:"qos"` // low high
+	// +optional
+	Qos string `json:"qos,omitempty"` // low high
 
 	IsLocalGPU bool `json:"isLocalGPU"`
 }
