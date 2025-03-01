@@ -102,7 +102,7 @@ type GPUNodeAllocationDetails struct {
 
 	Requests GPUResourceUnit `json:"requests"`
 	Limits   GPUResourceUnit `json:"limits"`
-	QoS      string          `json:"qos,omitempty"`
+	QoS      QoSLevel        `json:"qos,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Provisioning;Migrating;Running;Succeeded;Failed;Unknown;Destroying

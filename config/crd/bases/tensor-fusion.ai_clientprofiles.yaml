@@ -44,6 +44,12 @@ spec:
               poolName:
                 type: string
               qos:
+                description: Qos defines the quality of service level for the client.
+                enum:
+                - low
+                - medium
+                - high
+                - critical
                 type: string
               resources:
                 properties:

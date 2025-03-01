@@ -152,10 +152,10 @@ type ScaleToZero struct {
 }
 
 type AutoFreeze struct {
-	Qos             string `json:"qos,omitempty"`
-	FreezeToMemTTL  string `json:"freezeToMemTTL,omitempty"`
-	FreezeToDiskTTL string `json:"freezeToDiskTTL,omitempty"`
-	Enable          *bool  `json:"enable,omitempty"`
+	Qos             QoSLevel `json:"qos,omitempty"`
+	FreezeToMemTTL  string   `json:"freezeToMemTTL,omitempty"`
+	FreezeToDiskTTL string   `json:"freezeToDiskTTL,omitempty"`
+	Enable          *bool    `json:"enable,omitempty"`
 }
 
 type SmartSchedulerModelInput struct {

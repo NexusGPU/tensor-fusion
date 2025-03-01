@@ -516,6 +516,11 @@ spec:
                 description: Define different QoS and their price.
                 properties:
                   defaultQoS:
+                    enum:
+                    - low
+                    - medium
+                    - high
+                    - critical
                     type: string
                   definitions:
                     items:
@@ -523,6 +528,11 @@ spec:
                         description:
                           type: string
                         name:
+                          enum:
+                          - low
+                          - medium
+                          - high
+                          - critical
                           type: string
                         priority:
                           type: integer
@@ -539,6 +549,11 @@ spec:
                             be cheaper, for example Low QoS, ratio should be 0.5
                           type: string
                         qos:
+                          enum:
+                          - low
+                          - medium
+                          - high
+                          - critical
                           type: string
                         requests:
                           description: |-
@@ -649,6 +664,11 @@ spec:
                                 freezeToMemTTL:
                                   type: string
                                 qos:
+                                  enum:
+                                  - low
+                                  - medium
+                                  - high
+                                  - critical
                                   type: string
                               type: object
                             type: array

@@ -260,14 +260,14 @@ type AlertConfig struct {
 // Define different QoS and their price.
 type QosConfig struct {
 	Definitions []QosDefinition `json:"definitions,omitempty"`
-	DefaultQoS  string          `json:"defaultQoS,omitempty"`
+	DefaultQoS  QoSLevel        `json:"defaultQoS,omitempty"`
 	Pricing     []QosPricing    `json:"pricing,omitempty"`
 }
 
 type QosDefinition struct {
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	Priority    int    `json:"priority,omitempty"` // Range from 1-100, reflects the scheduling priority when GPU is full and tasks are in the queue.
+	Name        QoSLevel `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Priority    int      `json:"priority,omitempty"` // Range from 1-100, reflects the scheduling priority when GPU is full and tasks are in the queue.
 }
 
 type GPUResourceUnit struct {
@@ -292,7 +292,7 @@ type GPUOrCPUResourceUnit struct {
 }
 
 type QosPricing struct {
-	Qos string `json:"qos,omitempty"`
+	Qos QoSLevel `json:"qos,omitempty"`
 
 	Requests GPUResourcePricingUnit `json:"requests,omitempty"`
 

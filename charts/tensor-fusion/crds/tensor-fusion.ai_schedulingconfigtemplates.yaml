@@ -138,6 +138,11 @@ spec:
                             freezeToMemTTL:
                               type: string
                             qos:
+                              enum:
+                              - low
+                              - medium
+                              - high
+                              - critical
                               type: string
                           type: object
                         type: array

@@ -20,6 +20,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:validation:Enum=low;medium;high;critical
+type QoSLevel string
+
+const (
+	QoSLow      QoSLevel = "low"
+	QoSMedium   QoSLevel = "medium"
+	QoSHigh     QoSLevel = "high"
+	QoSCritical QoSLevel = "critical"
+)
+
 // ClientProfileSpec defines the desired state of ClientProfile.
 type ClientProfileSpec struct {
 	// +optional
@@ -29,7 +39,8 @@ type ClientProfileSpec struct {
 	Resources Resources `json:"resources,omitempty"`
 
 	// +optional
-	Qos string `json:"qos,omitempty"` // low high
+	// Qos defines the quality of service level for the client.
+	Qos QoSLevel `json:"qos,omitempty"`
 
 	IsLocalGPU bool `json:"isLocalGPU"`
 }

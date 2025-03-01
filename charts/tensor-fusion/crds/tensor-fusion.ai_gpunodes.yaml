@@ -116,6 +116,11 @@ spec:
                     podName:
                       type: string
                     qos:
+                      enum:
+                      - low
+                      - medium
+                      - high
+                      - critical
                       type: string
                     requests:
                       properties:

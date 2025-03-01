@@ -103,7 +103,12 @@ spec:
                 type: string
               phase:
                 type: string
-              qosClass:
+              qos:
+                enum:
+                - low
+                - medium
+                - high
+                - critical
                 type: string
             required:
             - connectionURL
