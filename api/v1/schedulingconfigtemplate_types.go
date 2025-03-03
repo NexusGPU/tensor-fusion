@@ -187,14 +187,32 @@ type SmartSchedulerModelInput struct {
 }
 
 type ReBalancerConfig struct {
-	Internal              string             `json:"internal,omitempty"`
-	ReBalanceCoolDownTime string             `json:"reBalanceCoolDownTime,omitempty"`
-	Threshold             ReBalanceThreshold `json:"threshold,omitempty"`
+	Enable *bool `json:"enable,omitempty"`
+
+	// how frequent to re-balance hot GPUs
+	Interval              string `json:"interval,omitempty"`
+	ReBalanceCoolDownTime string `json:"reBalanceCoolDownTime,omitempty"`
+
+	// Defines re-balance hot GPUs conditions, or-relations, re-balance only take effect on GPUs scheduled with more than one workloads
+	// +optional
+	Thresholds []ReBalanceThreshold `json:"threshold,omitempty"`
 }
 
 type ReBalanceThreshold struct {
-	MatchAny runtime.RawExtension `json:"matchAny,omitempty"`
+	TriggerType ReBalanceTriggerType `json:"triggerType,omitempty"`
+
+	Duration string `json:"duration,omitempty"`
+
+	Threshold string `json:"threshold,omitempty"`
 }
+
+type ReBalanceTriggerType string
+
+const (
+	ReBalanceTriggerTypeTemperature ReBalanceTriggerType = "temperatureTooHigh"
+	ReBalanceTriggerTypeTFlops      ReBalanceTriggerType = "tflopsTooHigh"
+	ReBalanceTriggerTypeVRAM        ReBalanceTriggerType = "vramSwitchTooFrequent"
+)
 
 type HypervisorScheduling struct {
 	MultiProcessQueuing MultiProcessQueuing `json:"multiProcessQueuing,omitempty"`
