@@ -206,6 +206,7 @@ type ReBalanceThreshold struct {
 	Threshold string `json:"threshold,omitempty"`
 }
 
+// +kubebuilder:validation:Enum=temperatureTooHigh;tflopsTooHigh;vramSwitchTooFrequent
 type ReBalanceTriggerType string
 
 const (

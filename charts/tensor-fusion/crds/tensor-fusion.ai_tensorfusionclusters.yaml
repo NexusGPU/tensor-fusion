@@ -889,6 +889,10 @@ spec:
                                       threshold:
                                         type: string
                                       triggerType:
+                                        enum:
+                                        - temperatureTooHigh
+                                        - tflopsTooHigh
+                                        - vramSwitchTooFrequent
                                         type: string
                                     type: object
                                   type: array
