@@ -28,7 +28,9 @@ type GPUPoolCompactionReconciler struct {
 
 const defaultCompactionDuration = 1 * time.Minute
 const newNodeProtectionDuration = 5 * time.Minute
+const manualCompactionReconcileMaxDelay = 3 * time.Second
 
+// to avoid concurrent job for node compaction, make sure the interval
 var jobStarted sync.Map
 
 // if it's AutoSelect mode, stop all Pods on it, and let ClusterAutoscaler or Karpenter to delete the node
@@ -147,15 +149,6 @@ func (r *GPUPoolCompactionReconciler) getCompactionDuration(ctx context.Context,
 func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	if _, loaded := jobStarted.LoadOrStore(req.NamespacedName.String(), true); loaded {
-		return ctrl.Result{}, nil
-	}
-
-	log.Info("Start compaction check for GPUPool", "name", req.NamespacedName.Name)
-	defer func() {
-		log.Info("Finished compaction check for GPUPool", "name", req.NamespacedName.Name)
-	}()
-
 	pool := &tfv1.GPUPool{}
 	if err := r.Get(ctx, req.NamespacedName, pool); err != nil {
 		if errors.IsNotFound(err) {
@@ -164,13 +157,52 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	needStartCompactionJob := true
+	nextDuration := r.getCompactionDuration(ctx, pool.Spec.NodeManagerConfig)
+
+	if lastCompactionTime, loaded := jobStarted.Load(req.NamespacedName.String()); loaded {
+		// last compaction is less than compaction interval, do nothing, unless its manual triggered
+		if time.Now().Before(lastCompactionTime.(time.Time).Add(nextDuration)) {
+
+			if manualCompactionValue, exists := pool.Annotations[constants.TensorFusionPoolManualCompaction]; exists {
+				// Parse the annotation value as duration
+				if manualTriggerTime, err := time.Parse(time.RFC3339, manualCompactionValue); err == nil {
+					// not return empty result, will continue current reconcile logic
+					if manualTriggerTime.After(time.Now().Add(manualCompactionReconcileMaxDelay)) {
+						log.Info("Manual compaction requested", "name", req.NamespacedName.Name)
+
+					} else {
+						needStartCompactionJob = false
+					}
+				} else {
+					log.Error(err, "Invalid manual compaction time", "name", req.NamespacedName.Name, "time", manualCompactionValue)
+					needStartCompactionJob = false
+				}
+			} else {
+				// skip this reconcile, wait for the next ticker
+				needStartCompactionJob = false
+			}
+
+		}
+	}
+
+	if !needStartCompactionJob {
+		return ctrl.Result{}, nil
+	}
+
+	jobStarted.Store(req.NamespacedName.String(), time.Now())
+	log.Info("Start compaction check for GPUPool", "name", req.NamespacedName.Name)
+	defer func() {
+		log.Info("Finished compaction check for GPUPool", "name", req.NamespacedName.Name)
+	}()
+
 	compactionErr := r.checkNodeCompaction(ctx, pool)
 	if compactionErr != nil {
 		return ctrl.Result{}, compactionErr
 	}
 
 	// Next ticker, timer set by user, won't impacted by other reconcile requests
-	return ctrl.Result{RequeueAfter: r.getCompactionDuration(ctx, pool.Spec.NodeManagerConfig)}, nil
+	return ctrl.Result{RequeueAfter: nextDuration}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

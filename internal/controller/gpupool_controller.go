@@ -145,6 +145,8 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 
 	availableVRAM := resource.Quantity{}
 	availableTFlops := resource.Quantity{}
+	virtualAvailableVRAM := resource.Quantity{}
+	virtualAvailableTFlops := resource.Quantity{}
 
 	for _, node := range nodes.Items {
 		totalGPUs = totalGPUs + node.Status.TotalGPUs
@@ -158,6 +160,13 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 
 		availableVRAM.Add(node.Status.AvailableVRAM)
 		availableTFlops.Add(node.Status.AvailableTFlops)
+
+		if node.Status.VirtualAvailableVRAM != nil {
+			virtualAvailableVRAM.Add(*node.Status.VirtualAvailableVRAM)
+		}
+		if node.Status.VirtualAvailableTFlops != nil {
+			virtualAvailableTFlops.Add(*node.Status.VirtualAvailableTFlops)
+		}
 	}
 
 	pool.Status.TotalGPUs = totalGPUs
@@ -166,6 +175,9 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 	pool.Status.TotalTFlops = totalTFlops
 	pool.Status.AvailableTFlops = availableTFlops
 	pool.Status.AvailableVRAM = availableVRAM
+
+	pool.Status.VirtualAvailableTFlops = &virtualAvailableTFlops
+	pool.Status.VirtualAvailableVRAM = &virtualAvailableVRAM
 
 	pool.Status.ReadyNodes = int32(readyNodes)
 	pool.Status.NotReadyNodes = int32(len(nodes.Items)) - pool.Status.ReadyNodes

@@ -95,3 +95,4 @@ const (
 
 const TFDataPath = "/tmp/tensor-fusion/data"
 const DataVolumeName = "tf-data"
+const TensorFusionPoolManualCompaction = "tensor-fusion.ai/manual-compaction"

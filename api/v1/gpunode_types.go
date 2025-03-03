@@ -73,6 +73,11 @@ type GPUNodeStatus struct {
 	AvailableVRAM   resource.Quantity `json:"availableVRAM"`
 
 	// +optional
+	VirtualAvailableTFlops *resource.Quantity `json:"virtualAvailableTFlops,omitempty"`
+	// +optional
+	VirtualAvailableVRAM *resource.Quantity `json:"virtualAvailableVRAM,omitempty"`
+
+	// +optional
 	HypervisorStatus NodeHypervisorStatus `json:"hypervisorStatus,omitempty"`
 
 	// +optional

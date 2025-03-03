@@ -375,6 +375,11 @@ type GPUPoolStatus struct {
 	AvailableTFlops resource.Quantity `json:"availableTFlops"`
 	AvailableVRAM   resource.Quantity `json:"availableVRAM"`
 
+	// +optional
+	VirtualAvailableTFlops *resource.Quantity `json:"virtualAvailableTFlops,omitempty"`
+	// +optional
+	VirtualAvailableVRAM *resource.Quantity `json:"virtualAvailableVRAM,omitempty"`
+
 	// when updating any component version or config, pool controller will perform rolling update.
 	// the status will be updated periodically, default to 5s, progress will be 0-100.
 	// when the progress is 100, the component version or config is fully updated.
@@ -397,6 +402,9 @@ type GPUPoolStatus struct {
 	// If this field is not empty, scheduler will not schedule new AI workloads and stop scaling-up check.
 	// TODO not implemented yet
 	BudgetExceeded string `json:"budgetExceeded,omitempty"`
+
+	// +optional
+	LastCompactionTime *metav1.Time `json:"lastCompactionTime,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Running;Updating;Destroying;Unknown

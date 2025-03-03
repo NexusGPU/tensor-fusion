@@ -59,6 +59,11 @@ type TensorFusionClusterStatus struct {
 	AvailableVRAM   resource.Quantity `json:"availableVRAM"`
 
 	// +optional
+	VirtualAvailableTFlops *resource.Quantity `json:"virtualAvailableTFlops,omitempty"`
+	// +optional
+	VirtualAvailableVRAM *resource.Quantity `json:"virtualAvailableVRAM,omitempty"`
+
+	// +optional
 	ReadyGPUPools []string `json:"readyGPUPools"`
 
 	// +optional
