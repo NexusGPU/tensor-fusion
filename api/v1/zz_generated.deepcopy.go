@@ -1613,8 +1613,8 @@ func (in *ReBalancerConfig) DeepCopyInto(out *ReBalancerConfig) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.Thresholds != nil {
-		in, out := &in.Thresholds, &out.Thresholds
+	if in.Conditions != nil {
+		in, out := &in.Conditions, &out.Conditions
 		*out = make([]ReBalanceThreshold, len(*in))
 		copy(*out, *in)
 	}

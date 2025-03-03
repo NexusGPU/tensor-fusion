@@ -233,14 +233,7 @@ spec:
                   avoid hot GPU devices and continuously balance the workload
                   implemented by trigger a simulation scheduling and advise better GPU nodes for scheduler
                 properties:
-                  enable:
-                    type: boolean
-                  interval:
-                    description: how frequent to re-balance hot GPUs
-                    type: string
-                  reBalanceCoolDownTime:
-                    type: string
-                  threshold:
+                  conditions:
                     description: Defines re-balance hot GPUs conditions, or-relations,
                       re-balance only take effect on GPUs scheduled with more than
                       one workloads
@@ -258,6 +251,16 @@ spec:
                           type: string
                       type: object
                     type: array
+                  enable:
+                    type: boolean
+                  interval:
+                    description: how frequent to re-balance hot GPUs
+                    type: string
+                  reBalanceCoolDownTime:
+                    description: for each workload, it should not be disrupted too
+                      frequently, this setting will filter-out new created/scheduled
+                      workloads
+                    type: string
                 type: object
             required:
             - placement

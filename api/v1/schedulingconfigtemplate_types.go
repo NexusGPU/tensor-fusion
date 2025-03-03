@@ -190,15 +190,18 @@ type ReBalancerConfig struct {
 	Enable *bool `json:"enable,omitempty"`
 
 	// how frequent to re-balance hot GPUs
-	Interval              string `json:"interval,omitempty"`
+	Interval string `json:"interval,omitempty"`
+
+	// for each workload, it should not be disrupted too frequently, this setting will filter-out new created/scheduled workloads
 	ReBalanceCoolDownTime string `json:"reBalanceCoolDownTime,omitempty"`
 
 	// Defines re-balance hot GPUs conditions, or-relations, re-balance only take effect on GPUs scheduled with more than one workloads
 	// +optional
-	Thresholds []ReBalanceThreshold `json:"threshold,omitempty"`
+	Conditions []ReBalanceThreshold `json:"conditions,omitempty"`
 }
 
 type ReBalanceThreshold struct {
+	// +kubebuilder:validation:Enum=temperatureTooHigh;tflopsTooHigh;vramSwitchTooFrequent
 	TriggerType ReBalanceTriggerType `json:"triggerType,omitempty"`
 
 	Duration string `json:"duration,omitempty"`
@@ -206,7 +209,6 @@ type ReBalanceThreshold struct {
 	Threshold string `json:"threshold,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=temperatureTooHigh;tflopsTooHigh;vramSwitchTooFrequent
 type ReBalanceTriggerType string
 
 const (
