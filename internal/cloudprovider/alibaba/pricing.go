@@ -25,21 +25,22 @@ func init() {
 	// https://github.com/aws/karpenter-provider-aws/blob/2cb43bc468d04f2263d43109e0ccc7cbe616e226/pkg/providers/pricing/zz_generated.pricing_aws.go
 	// https://github.com/cloudpilot-ai/karpenter-provider-alibabacloud/blob/main/hack/tools/price_gen/price_gen.go
 	GPUInstanceTypeInfo = []types.GPUNodeInstanceInfo{
-		{
-			InstanceType: "ecs.gn6i-c4g1.xlarge",
-			CostPerHour:  1.152,
+		// Out of stock
+		// {
+		// 	InstanceType: "ecs.gn6i-c4g1.xlarge",
+		// 	CostPerHour:  1.152,
 
-			CPUs:      4,
-			MemoryGiB: 15,
+		// 	CPUs:      4,
+		// 	MemoryGiB: 15,
 
-			FP16TFlopsPerGPU:    65,
-			VRAMGigabytesPerGPU: 15,
+		// 	FP16TFlopsPerGPU:    65,
+		// 	VRAMGigabytesPerGPU: 15,
 
-			GPUModel:        "NVIDIA T4",
-			GPUCount:        1,
-			GPUArchitecture: types.GPUArchitectureNvidiaTuring,
-			CPUArchitecture: types.CPUArchitectureAMD64,
-		},
+		// 	GPUModel:        "NVIDIA T4",
+		// 	GPUCount:        1,
+		// 	GPUArchitecture: types.GPUArchitectureNvidiaTuring,
+		// 	CPUArchitecture: types.CPUArchitectureAMD64,
+		// },
 
 		{
 			InstanceType: "ecs.gn6i-c8g1.2xlarge",

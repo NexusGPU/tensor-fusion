@@ -108,7 +108,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 			if node.Status.NodeInfo.InstanceID == "" {
 				r.Recorder.Eventf(node, corev1.EventTypeWarning, "OrphanedNode", "provisioned node without instanceID, this could result in orphaned nodes, please check manually: %s", node.Name)
-				return false, nil
+				return true, nil
 			}
 			err = (*provider).TerminateNode(ctx, &types.NodeIdentityParam{
 				InstanceID: node.Status.NodeInfo.InstanceID,

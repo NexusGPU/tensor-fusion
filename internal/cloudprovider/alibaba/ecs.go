@@ -208,8 +208,8 @@ func handleNodeClassAndExtraParams(request *ecs.RunInstancesRequest, param *type
 	request.UserData = base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(nodeClass.UserData, constants.ProvisionerNamePlaceholder, param.NodeName)))
 
 	// Handle extra params
-	capacityType := param.ExtraParams[string(tfv1.NodeRequirementKeyCapacityType)]
-	if capacityType != "" && capacityType != string(types.CapacityTypeOnDemand) {
+	capacityType := param.CapacityType
+	if capacityType != "" && capacityType != types.CapacityTypeOnDemand {
 		// Convert from Spot/OnDemand to each cloud vendor's equivalent
 		if param.ExtraParams["spotPriceLimit"] != "" {
 			priceLimit, err := strconv.ParseFloat(param.ExtraParams["spotPriceLimit"], 64)
