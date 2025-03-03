@@ -580,15 +580,24 @@ spec:
                         description: layer 1 vertical auto-scaling, turbo burst to
                           existing GPU cards quickly
                         properties:
+                          enable:
+                            type: boolean
                           evaluationPeriod:
+                            description: how frequent to adjust limits, auto-limits
+                              should be very dynamic and fast
                             type: string
                           extraTFlopsBufferRatio:
-                            type: string
-                          ignoredDeltaRange:
+                            description: the buffer to add more resources than PercentileForAutoLimits
+                              needed, to handle unexpected traffic burst
                             type: string
                           maxRatioToRequests:
                             description: the multiplier of requests, to avoid limit
                               set too high, like 5.0
+                            type: string
+                          percentileForAutoLimits:
+                            description: |-
+                              The auto-set limits should meet how much percent of metrics point, for example, when set to 99, it indicates 99% of time
+                              the smart limits can meet user demands, without scaling up replicas
                             type: string
                           prediction:
                             properties:
@@ -601,8 +610,6 @@ spec:
                               predictionPeriod:
                                 type: string
                             type: object
-                          scaleUpStep:
-                            type: string
                         type: object
                       autoSetReplicas:
                         description: layer 2 horizontal auto-scaling, scale up to
@@ -611,6 +618,7 @@ spec:
                           enable:
                             type: boolean
                           evaluationPeriod:
+                            description: how frequent to adjust replicas
                             type: string
                           scaleDownCoolDownTime:
                             type: string
@@ -628,15 +636,24 @@ spec:
                           in the long run
                         properties:
                           aggregationPeriod:
+                            description: how long to look back to get historical metrics
+                              for setting better requests
                             type: string
+                          enable:
+                            type: boolean
                           evaluationPeriod:
+                            description: how frequent to adjust requests, for example,
+                              every 30m
                             type: string
-                          extraBufferRatio:
+                          extraTFlopsBufferRatio:
                             description: the request buffer ratio, for example actual
                               usage is 1.0, 10% buffer will be 1.1 as final preferred
                               requests
                             type: string
                           percentileForAutoRequests:
+                            description: |-
+                              The auto-set request should meet how much percent of metrics point, for example, when set to 95, it indicates 95% of time
+                              the smart request can meet user demands, without scaling up replicas
                             type: string
                           prediction:
                             properties:
@@ -657,8 +674,6 @@ spec:
                           autoFreeze:
                             items:
                               properties:
-                                enable:
-                                  type: boolean
                                 freezeToDiskTTL:
                                   type: string
                                 freezeToMemTTL:
@@ -672,6 +687,14 @@ spec:
                                   type: string
                               type: object
                             type: array
+                          enableAutoFreeze:
+                            description: auto freeze indicates move all GPU mem to
+                              host mem or disk, so that to release the GPU resources
+                            type: boolean
+                          enableAutoWarmup:
+                            description: auto warmup indicates move the freezed mem
+                              back to GPU VRAM, to avoid cold-start
+                            type: boolean
                           intelligenceWarmup:
                             properties:
                               enable:

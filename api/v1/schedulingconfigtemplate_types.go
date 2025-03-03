@@ -110,13 +110,17 @@ type AutoScalingConfig struct {
 // if AI prediction enabled, it helps to detect history pattern, and set more reasonable, explainable limit value
 // the final set limits should be max(finalPreferredLimits, last(predict_value * (1 + extraTFlopsBufferRatio)))
 type AutoSetLimits struct {
+	Enable *bool `json:"enable,omitempty"`
+
+	// how frequent to adjust limits, auto-limits should be very dynamic and fast
 	EvaluationPeriod string `json:"evaluationPeriod,omitempty"`
 
+	// The auto-set limits should meet how much percent of metrics point, for example, when set to 99, it indicates 99% of time
+	// the smart limits can meet user demands, without scaling up replicas
+	PercentileForAutoLimits string `json:"percentileForAutoLimits,omitempty"`
+
+	// the buffer to add more resources than PercentileForAutoLimits needed, to handle unexpected traffic burst
 	ExtraTFlopsBufferRatio string `json:"extraTFlopsBufferRatio,omitempty"`
-
-	IgnoredDeltaRange string `json:"ignoredDeltaRange,omitempty"`
-
-	ScaleUpStep string `json:"scaleUpStep,omitempty"`
 
 	// the multiplier of requests, to avoid limit set too high, like 5.0
 	MaxRatioToRequests string `json:"maxRatioToRequests,omitempty"`
@@ -126,28 +130,46 @@ type AutoSetLimits struct {
 
 // To handle burst traffic, scale up in short time (this feature requires GPU context migration & replication, not available yet)
 type AutoSetReplicas struct {
-	Enable                *bool  `json:"enable,omitempty"`
-	TargetTFlopsOfLimits  string `json:"targetTFlopsOfLimits,omitempty"`
-	EvaluationPeriod      string `json:"evaluationPeriod,omitempty"`
-	ScaleUpStep           string `json:"scaleUpStep,omitempty"`
-	ScaleDownStep         string `json:"scaleDownStep,omitempty"`
+	Enable               *bool  `json:"enable,omitempty"`
+	TargetTFlopsOfLimits string `json:"targetTFlopsOfLimits,omitempty"`
+
+	// how frequent to adjust replicas
+	EvaluationPeriod string `json:"evaluationPeriod,omitempty"`
+
+	ScaleUpStep   string `json:"scaleUpStep,omitempty"`
+	ScaleDownStep string `json:"scaleDownStep,omitempty"`
+
 	ScaleUpCoolDownTime   string `json:"scaleUpCoolDownTime,omitempty"`
 	ScaleDownCoolDownTime string `json:"scaleDownCoolDownTime,omitempty"`
 }
 
 type AutoSetRequests struct {
+	Enable *bool `json:"enable,omitempty"`
+
+	// The auto-set request should meet how much percent of metrics point, for example, when set to 95, it indicates 95% of time
+	// the smart request can meet user demands, without scaling up replicas
 	PercentileForAutoRequests string `json:"percentileForAutoRequests,omitempty"`
 
 	// the request buffer ratio, for example actual usage is 1.0, 10% buffer will be 1.1 as final preferred requests
-	ExtraBufferRatio string `json:"extraBufferRatio,omitempty"`
+	ExtraTFlopsBufferRatio string `json:"extraTFlopsBufferRatio,omitempty"`
 
-	EvaluationPeriod  string                   `json:"evaluationPeriod,omitempty"`
+	// how frequent to adjust requests, for example, every 30m
+	EvaluationPeriod string `json:"evaluationPeriod,omitempty"`
+
+	// how long to look back to get historical metrics for setting better requests
 	AggregationPeriod string                   `json:"aggregationPeriod,omitempty"`
 	Prediction        SmartSchedulerModelInput `json:"prediction,omitempty"`
 }
 
 type ScaleToZero struct {
-	AutoFreeze         []AutoFreeze             `json:"autoFreeze,omitempty"`
+	// auto freeze indicates move all GPU mem to host mem or disk, so that to release the GPU resources
+	EnableAutoFreeze *bool `json:"enableAutoFreeze,omitempty"`
+
+	// auto warmup indicates move the freezed mem back to GPU VRAM, to avoid cold-start
+	EnableAutoWarmup *bool `json:"enableAutoWarmup,omitempty"`
+
+	AutoFreeze []AutoFreeze `json:"autoFreeze,omitempty"`
+
 	IntelligenceWarmup SmartSchedulerModelInput `json:"intelligenceWarmup,omitempty"`
 }
 
@@ -155,7 +177,6 @@ type AutoFreeze struct {
 	Qos             QoSLevel `json:"qos,omitempty"`
 	FreezeToMemTTL  string   `json:"freezeToMemTTL,omitempty"`
 	FreezeToDiskTTL string   `json:"freezeToDiskTTL,omitempty"`
-	Enable          *bool    `json:"enable,omitempty"`
 }
 
 type SmartSchedulerModelInput struct {
