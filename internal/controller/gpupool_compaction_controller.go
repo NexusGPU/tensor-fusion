@@ -48,7 +48,7 @@ var jobStarted sync.Map
 // Add adds the provide y quantity to the current value. If the current value is zero,
 // the format of the quantity will be updated to the format of y.
 
-func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, pool *tfv1.GPUPool) error {
+func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, pool *tfv1.GPUPool, manualCompaction bool) error {
 	log := log.FromContext(ctx)
 
 	// Strategy #1, terminate empty node
@@ -79,8 +79,8 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 			// Not running, should not be terminated
 			continue
 		}
-		// Protect new nodes at least 5 minutes to avoid flapping
-		if gpuNode.CreationTimestamp.Time.After(time.Now().Add(newNodeProtectionDuration)) {
+		// Protect new nodes at least 5 minutes to avoid flapping, unless its manual triggered
+		if !manualCompaction && gpuNode.CreationTimestamp.Time.After(time.Now().Add(newNodeProtectionDuration)) {
 			continue
 		}
 
@@ -158,6 +158,7 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	needStartCompactionJob := true
+	manualCompaction := false
 	nextDuration := r.getCompactionDuration(ctx, pool.Spec.NodeManagerConfig)
 
 	if lastCompactionTime, loaded := jobStarted.Load(req.NamespacedName.String()); loaded {
@@ -170,7 +171,7 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 					// not return empty result, will continue current reconcile logic
 					if manualTriggerTime.After(time.Now().Add(manualCompactionReconcileMaxDelay)) {
 						log.Info("Manual compaction requested", "name", req.NamespacedName.Name)
-
+						manualCompaction = true
 					} else {
 						needStartCompactionJob = false
 					}
@@ -196,7 +197,7 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		log.Info("Finished compaction check for GPUPool", "name", req.NamespacedName.Name)
 	}()
 
-	compactionErr := r.checkNodeCompaction(ctx, pool)
+	compactionErr := r.checkNodeCompaction(ctx, pool, manualCompaction)
 	if compactionErr != nil {
 		return ctrl.Result{}, compactionErr
 	}
