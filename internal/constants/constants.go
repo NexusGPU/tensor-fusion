@@ -9,6 +9,7 @@ const (
 	// Finalizer constants
 	FinalizerSuffix = "finalizer"
 	Finalizer       = Domain + "/" + FinalizerSuffix
+	GPUResourceCleanupFinalizer = Domain + "/gpu-resource-cleanup"
 
 	LabelKeyOwner        = Domain + "/managed-by"
 	LabelKeyClusterOwner = Domain + "/cluster"
@@ -22,8 +23,9 @@ const (
 	InitialGPUNodeSelector      = "nvidia.com/gpu.present=true"
 
 	GPULastReportTimeAnnotationKey = Domain + "/last-sync"
-
-	GpuPoolKey = Domain + "/gpupool"
+	WorkloadLabel                  = Domain + "/workload"
+	GpuKey                         = Domain + "/gpu"
+	GpuPoolKey                     = Domain + "/gpupool"
 
 	// Annotation key constants
 

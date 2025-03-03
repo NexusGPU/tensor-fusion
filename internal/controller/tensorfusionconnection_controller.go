@@ -134,7 +134,7 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 
 		if workerPod.Status.Phase == corev1.PodRunning {
 			connection.Status.Phase = tfv1.TensorFusionConnectionRunning
-			connection.Status.ConnectionURL, err = workerGenerator.GenerateConnectionURL(connection, workerPod)
+			connection.Status.ConnectionURL, err = workerGenerator.GenerateConnectionURL(workerPod)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -167,7 +167,7 @@ func (r *TensorFusionConnectionReconciler) tryStartWorker(
 		if errors.IsNotFound(err) {
 			// Pod doesn't exist, create a new one
 			port := workerGenerator.AllocPort()
-			pod, err = workerGenerator.GenerateWorkerPod(gpu, connection, namespacedName, port)
+			pod, err = workerGenerator.GenerateWorkerPod(gpu, namespacedName, port)
 			if err != nil {
 				return nil, fmt.Errorf("generate worker pod %w", err)
 			}

@@ -1,0 +1,9 @@
+apiVersion: tensor-fusion.ai/v1
+kind: TensorFusionWorkload
+metadata:
+  labels:
+    app.kubernetes.io/name: tensor-fusion-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: tensorfusionworkload-sample
+spec:
+  # TODO(user): Add fields here

@@ -1,0 +1,23 @@
+# permissions for end users to view tensorfusionworkloads.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: tensor-fusion-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: tensorfusionworkload-viewer-role
+rules:
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - tensorfusionworkloads
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - tensorfusionworkloads/status
+  verbs:
+  - get

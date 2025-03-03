@@ -24,7 +24,7 @@ type WorkerGenerator struct {
 	WorkerConfig *tfv1.WorkerConfig
 }
 
-func (wg *WorkerGenerator) GenerateConnectionURL(connection *tfv1.TensorFusionConnection, pod *corev1.Pod) (string, error) {
+func (wg *WorkerGenerator) GenerateConnectionURL(pod *corev1.Pod) (string, error) {
 	port, ok := lo.Find(pod.Spec.Containers[0].Env, func(env corev1.EnvVar) bool {
 		return env.Name == constants.WorkerPortEnv
 	})
@@ -43,7 +43,6 @@ func (wg *WorkerGenerator) AllocPort() int {
 
 func (wg *WorkerGenerator) GenerateWorkerPod(
 	gpu *tfv1.GPU,
-	connection *tfv1.TensorFusionConnection,
 	namespacedName types.NamespacedName,
 	port int,
 ) (*corev1.Pod, error) {
