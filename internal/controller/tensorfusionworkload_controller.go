@@ -319,7 +319,7 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(ctx context.Context, workl
 	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker}
 
 	// Generate connection URLs for all running pods
-	var connectionURLs []string
+	connectionURLs := []string{}
 	readyReplicas := int32(0)
 
 	for i := range pods {
