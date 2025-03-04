@@ -1,0 +1,128 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: tensorfusionworkloads.tensor-fusion.ai
+spec:
+  group: tensor-fusion.ai
+  names:
+    kind: TensorFusionWorkload
+    listKind: TensorFusionWorkloadList
+    plural: tensorfusionworkloads
+    singular: tensorfusionworkload
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        description: TensorFusionWorkload is the Schema for the tensorfusionworkloads
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TensorFusionWorkloadSpec defines the desired state of TensorFusionWorkload.
+            properties:
+              isLocalGPU:
+                type: boolean
+              poolName:
+                type: string
+              qos:
+                enum:
+                - low
+                - medium
+                - high
+                - critical
+                type: string
+              replicas:
+                format: int32
+                type: integer
+              resources:
+                properties:
+                  limits:
+                    properties:
+                      tflops:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      vram:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                    required:
+                    - tflops
+                    - vram
+                    type: object
+                  requests:
+                    properties:
+                      tflops:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      vram:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                    required:
+                    - tflops
+                    - vram
+                    type: object
+                required:
+                - limits
+                - requests
+                type: object
+            required:
+            - poolName
+            - resources
+            type: object
+          status:
+            description: TensorFusionWorkloadStatus defines the observed state of
+              TensorFusionWorkload.
+            properties:
+              connectionURLs:
+                items:
+                  type: string
+                type: array
+              readyReplicas:
+                description: readyReplicas is the number of pods created for this
+                  Workload with a Ready Condition.
+                format: int32
+                type: integer
+              replicas:
+                description: replicas is the number of Pods created by the Workload
+                  controller.
+                format: int32
+                type: integer
+            required:
+            - replicas
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

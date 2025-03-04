@@ -29,13 +29,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"slices"
+
 	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
 	scheduler "github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/utils"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/worker"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // TensorFusionWorkloadReconciler reconciles a TensorFusionWorkload object
@@ -71,6 +72,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, fmt.Errorf("list pods: %w", err)
 	}
 
+	hasdeletion := false
 	// Process pods with our finalizer
 	for i := range podList.Items {
 		pod := &podList.Items[i]
@@ -83,10 +85,11 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if deleted {
-			// If the pod was deleted by the finalizer, continue to the next pod
-			continue
-		}
+		hasdeletion = hasdeletion || deleted
+	}
+
+	if hasdeletion {
+		return ctrl.Result{Requeue: true, RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
 	// Fetch the GPUPool
@@ -170,7 +173,7 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 			pod.Labels[constants.GpuKey] = gpu.Name
 
 			// Add finalizer for GPU resource cleanup
-			pod.Finalizers = append(pod.Finalizers, constants.GPUResourceCleanupFinalizer)
+			pod.Finalizers = append(pod.Finalizers, constants.Finalizer)
 
 			if err := ctrl.SetControllerReference(workload, pod, r.Scheme); err != nil {
 				return nil, fmt.Errorf("set owner reference %w", err)
@@ -206,7 +209,7 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 	log := log.FromContext(ctx)
 
 	// Check if this is our finalizer
-	if !containsFinalizer(pod, constants.GPUResourceCleanupFinalizer) {
+	if !containsFinalizer(pod, constants.Finalizer) {
 		// Not our finalizer, skip processing
 		return true, nil
 	}
@@ -243,43 +246,14 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 
 // Helper function to check if a pod has a specific finalizer
 func containsFinalizer(pod *corev1.Pod, finalizer string) bool {
-	for _, fin := range pod.Finalizers {
-		if fin == finalizer {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(pod.Finalizers, finalizer)
 }
 
-// Helper function to remove a finalizer from a pod
-func (r *TensorFusionWorkloadReconciler) removeFinalizer(ctx context.Context, pod *corev1.Pod) error {
-	// Create a copy of the pod to avoid modifying the cache
-	podCopy := pod.DeepCopy()
-
-	// Remove the finalizer
-	var finalizers []string
-	for _, fin := range podCopy.Finalizers {
-		if fin != constants.GPUResourceCleanupFinalizer {
-			finalizers = append(finalizers, fin)
-		}
-	}
-	podCopy.Finalizers = finalizers
-
-	// Update the pod
-	return r.Update(ctx, podCopy)
-}
-
-// deletePod deletes a pod with foreground deletion policy
+// deletePod deletes a pod
 func (r *TensorFusionWorkloadReconciler) deletePod(ctx context.Context, pod *corev1.Pod) error {
 	log := log.FromContext(ctx)
 
-	// Use foreground deletion policy to ensure the pod is fully deleted
-	deletePropagation := metav1.DeletePropagationForeground
-	deleteOptions := client.DeleteOptions{
-		PropagationPolicy: &deletePropagation,
-	}
-
-	if err := r.Delete(ctx, pod, &deleteOptions); err != nil {
+	if err := r.Delete(ctx, pod); err != nil {
 		log.Error(err, "Failed to delete worker pod", "name", pod.Name)
 		return fmt.Errorf("delete worker pod: %w", err)
 	}
@@ -302,7 +276,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 
 	// Create worker pods
 	currentCount := int(workload.Status.Replicas)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		// Schedule GPU for the worker
 		gpu, err := r.Scheduler.Schedule(ctx, workload.Spec.PoolName, workload.Spec.Resources.Requests)
 		if err != nil {

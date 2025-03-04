@@ -105,6 +105,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 
 			By("Cleanup the specific resource instance TensorFusionConnection")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, gpu)).To(Succeed())
 		})
 
 		It("should successfully reconcile the resource", func() {

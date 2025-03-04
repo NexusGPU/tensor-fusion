@@ -25,6 +25,10 @@ type TensorFusionWorkloadSpec struct {
 	Replicas  *int32    `json:"replicas,omitempty"`
 	PoolName  string    `json:"poolName"`
 	Resources Resources `json:"resources"`
+	// +optional
+	Qos QoSLevel `json:"qos,omitempty"`
+	// +optional
+	IsLocalGPU bool `json:"isLocalGPU,omitempty"`
 }
 
 // TensorFusionWorkloadStatus defines the observed state of TensorFusionWorkload.

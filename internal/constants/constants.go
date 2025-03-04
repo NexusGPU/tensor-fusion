@@ -9,7 +9,6 @@ const (
 	// Finalizer constants
 	FinalizerSuffix = "finalizer"
 	Finalizer       = Domain + "/" + FinalizerSuffix
-	GPUResourceCleanupFinalizer = Domain + "/gpu-resource-cleanup"
 
 	LabelKeyOwner        = Domain + "/managed-by"
 	LabelKeyClusterOwner = Domain + "/cluster"
