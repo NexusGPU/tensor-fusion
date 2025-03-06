@@ -22,25 +22,19 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
-	scheduler "github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/utils"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/worker"
-	corev1 "k8s.io/api/core/v1"
+	"github.com/samber/lo"
 )
 
 // TensorFusionConnectionReconciler reconciles a TensorFusionConnection object
 type TensorFusionConnectionReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Scheduler scheduler.Scheduler
+	Scheme *runtime.Scheme
 }
 
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
@@ -68,189 +62,90 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{}, err
 	}
 
-	deleted, err := utils.HandleFinalizer(ctx, connection, r.Client, r.handleDeletion)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if deleted {
-		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
+	workloadName, ok := connection.Labels[constants.WorkloadLabel]
+	if !ok {
+		return ctrl.Result{}, fmt.Errorf("missing workload label")
 	}
 
-	var gpu *tfv1.GPU
-	// If status is not set or pending, try to schedule
-	if connection.Status.Phase == "" || connection.Status.Phase == tfv1.TensorFusionConnectionPending {
-		if len(connection.Spec.GPUs) > 0 {
-
-			// local gpu mode
-			gpu = &tfv1.GPU{}
-			// Here we only take the 0th GPU temporarily. will support multi-GPU mode in the future.
-			if err := r.Get(ctx, client.ObjectKey{Name: connection.Spec.GPUs[0]}, gpu); err != nil {
-				return ctrl.Result{}, fmt.Errorf("get gpu(%s) : %w", connection.Spec.GPUs[0], err)
-			}
-			// Store the gpu name for cleanup
-			connection.Status.GPU = gpu.Name
-			connection.Status.Phase = tfv1.TensorFusionConnectionStarting
-		} else {
-			// Try to get an available gpu from scheduler
-			var err error
-			gpu, err = r.Scheduler.Schedule(ctx, connection.Spec.PoolName, connection.Spec.Resources.Requests)
-			if err != nil {
-				log.Error(err, "Failed to schedule gpu instance")
-				connection.Status.Phase = tfv1.TensorFusionConnectionPending
-			} else if gpu != nil {
-				connection.Status.Phase = tfv1.TensorFusionConnectionStarting
-				// Store the gpu name for cleanup
-				connection.Status.GPU = gpu.Name
-			} else {
-				// Init status
-				connection.Status.Phase = tfv1.TensorFusionConnectionPending
-			}
-		}
-
+	workload := &tfv1.TensorFusionWorkload{}
+	if err := r.Get(ctx, client.ObjectKey{Name: workloadName, Namespace: connection.Namespace}, workload); err != nil {
+		return ctrl.Result{}, fmt.Errorf("get TensorFusionWorkload: %w", err)
 	}
 
-	// check schedule result
-	if gpu == nil && connection.Status.GPU != "" {
-		gpu = &tfv1.GPU{}
-		if err := r.Get(ctx, client.ObjectKey{Name: connection.Status.GPU}, gpu); err != nil {
-			log.Error(err, "Failed to get GPU.", "gpu", connection.Status.GPU)
-			gpu = nil
-		}
-	}
-
-	// Start worker Pod
-	if connection.Status.Phase != tfv1.TensorFusionConnectionPending && gpu != nil {
-		pool := &tfv1.GPUPool{}
-		if err := r.Get(ctx, client.ObjectKey{Name: connection.Spec.PoolName}, pool); err != nil {
-			return ctrl.Result{}, fmt.Errorf("gpu pool(%s) does not exist", connection.Spec.PoolName)
-		}
-		workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker}
-		// Start worker job
-		workerPod, err := r.tryStartWorker(ctx, workerGenerator, gpu, connection, client.ObjectKeyFromObject(connection))
+	needReSelectWorker, workerStatus := r.needReSelectWorker(connection, workload.Status.WorkerStatuses)
+	if needReSelectWorker {
+		s, err := r.selectWorker(ctx, workloadName, workload.Status.WorkerStatuses)
 		if err != nil {
-			log.Error(err, "Failed to start worker pod")
 			return ctrl.Result{}, err
 		}
-
-		if workerPod.Status.Phase == corev1.PodRunning {
-			connection.Status.Phase = tfv1.TensorFusionConnectionRunning
-			connection.Status.ConnectionURL, err = workerGenerator.GenerateConnectionURL(workerPod)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		// TODO: Handle PodFailure
+		workerStatus = *s
 	}
 
-	if err := r.mustUpdateTFConnectionStatus(ctx, connection, gpu); err != nil {
-		return ctrl.Result{}, err
+	connection.Status.Phase = workerStatus.WorkerPhase
+	connection.Status.WorkerName = workerStatus.WorkerName
+	connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d", workerStatus.WorkerIp, workerStatus.WorkerPort)
+	if err := r.Status().Update(ctx, connection); err != nil {
+		return ctrl.Result{}, fmt.Errorf("update connection status: %w", err)
 	}
-
-	if connection.Status.Phase == tfv1.TensorFusionConnectionPending {
-		// requeue
-		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
-	}
-
 	return ctrl.Result{}, nil
 }
 
-func (r *TensorFusionConnectionReconciler) tryStartWorker(
-	ctx context.Context,
-	workerGenerator *worker.WorkerGenerator,
-	gpu *tfv1.GPU,
-	connection *tfv1.TensorFusionConnection,
-	namespacedName types.NamespacedName,
-) (*corev1.Pod, error) {
-	// Try to get the Pod
-	pod := &corev1.Pod{}
-	if err := r.Get(ctx, namespacedName, pod); err != nil {
-		if errors.IsNotFound(err) {
-			// Pod doesn't exist, create a new one
-			port := workerGenerator.AllocPort()
-			pod, err = workerGenerator.GenerateWorkerPod(gpu, namespacedName, port)
-			if err != nil {
-				return nil, fmt.Errorf("generate worker pod %w", err)
-			}
-			if err := ctrl.SetControllerReference(connection, pod, r.Scheme); err != nil {
-				return nil, fmt.Errorf("set owner reference %w", err)
-			}
-			if err := r.Create(ctx, pod); err != nil {
-				return nil, fmt.Errorf("create pod %w", err)
-			}
-			return pod, nil
+func (r *TensorFusionConnectionReconciler) needReSelectWorker(conneciton *tfv1.TensorFusionConnection, workerStatuses []tfv1.WorkerStatus) (bool, tfv1.WorkerStatus) {
+	workerStatus, ok := lo.Find(workerStatuses, func(workerStatus tfv1.WorkerStatus) bool {
+		return workerStatus.WorkerName == conneciton.Status.WorkerName
+	})
+	return !ok || workerStatus.WorkerPhase == tfv1.WorkerFailed, workerStatus
+}
+
+func (r *TensorFusionConnectionReconciler) selectWorker(ctx context.Context, workloadName string, workerStatuses []tfv1.WorkerStatus) (*tfv1.WorkerStatus, error) {
+	if len(workerStatuses) == 0 {
+		return nil, fmt.Errorf("no available worker")
+	}
+	usageMapping := make(map[string]int, len(workerStatuses))
+	for _, workerStatus := range workerStatuses {
+		usageMapping[workerStatus.WorkerName] = 0
+	}
+
+	connectionList := tfv1.TensorFusionConnectionList{}
+	if err := r.List(ctx, &connectionList, client.MatchingLabels{constants.WorkloadLabel: workloadName}); err != nil {
+		return nil, fmt.Errorf("list TensorFusionConnection: %w", err)
+	}
+
+	for _, connection := range connectionList.Items {
+		if connection.Status.WorkerName != "" {
+			continue
+		}
+		usageMapping[connection.Status.WorkerName]++
+	}
+
+	var minUsageWorker *tfv1.WorkerStatus
+	// Initialize with max int value
+	minUsage := int(^uint(0) >> 1)
+	for _, workerStatus := range workerStatuses {
+		if workerStatus.WorkerPhase == tfv1.WorkerFailed {
+			continue
+		}
+		usage := usageMapping[workerStatus.WorkerName]
+		if usage < minUsage {
+			minUsage = usage
+			minUsageWorker = &workerStatus
 		}
 	}
-	return pod, nil
+	if minUsageWorker == nil {
+		return nil, fmt.Errorf("no available worker")
+	}
+	return minUsageWorker, nil
 }
 
 // handleDeletion handles cleanup of external dependencies
 func (r *TensorFusionConnectionReconciler) handleDeletion(ctx context.Context, connection *tfv1.TensorFusionConnection) (bool, error) {
-	if connection.Status.GPU == "" {
-		return true, nil // No gpu was allocated, nothing to clean up
-	}
-
-	// Get the gpu
-	gpu := &tfv1.GPU{}
-	if err := r.Get(ctx, client.ObjectKey{Name: connection.Status.GPU}, gpu); err != nil {
-		if errors.IsNotFound(err) {
-			// gpu is already gone, nothing to do
-			return true, nil
-		}
-		return false, err
-	}
-
-	// Release the resources
-	if err := r.Scheduler.Release(ctx, connection.Spec.Resources.Requests, gpu); err != nil {
-		return false, err
-	}
-
-	return true, r.mustUpdateTFConnectionStatus(ctx, connection, gpu)
-}
-
-func (r *TensorFusionConnectionReconciler) mustUpdateTFConnectionStatus(ctx context.Context, connection *tfv1.TensorFusionConnection, gpu *tfv1.GPU) error {
-	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		// Get the latest version of the connection
-		latestConnection := &tfv1.TensorFusionConnection{}
-		if err := r.Get(ctx, client.ObjectKey{
-			Name:      connection.Name,
-			Namespace: connection.Namespace,
-		}, latestConnection); err != nil {
-			return err
-		}
-
-		// Update the status fields we care about
-		latestConnection.Status = connection.Status
-
-		// Update the connection status
-		if err := r.Status().Update(ctx, latestConnection); err != nil {
-			return err
-		}
-
-		if gpu != nil {
-			// Get the latest version of the gpu
-			latestgpu := &tfv1.GPU{}
-
-			if err := r.Get(ctx, client.ObjectKey{
-				Name: gpu.Name,
-			}, latestgpu); err != nil {
-				return err
-			}
-
-			// Update the status fields we care about
-			latestgpu.Status.Available = gpu.Status.Available
-			if err := r.Status().Update(ctx, latestgpu); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	return true, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *TensorFusionConnectionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.TensorFusionConnection{}).
-		Owns(&corev1.Pod{}).
 		Named("tensorfusionconnection").
 		Complete(r)
 }

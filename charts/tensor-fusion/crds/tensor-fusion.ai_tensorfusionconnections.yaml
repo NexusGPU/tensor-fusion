@@ -99,20 +99,14 @@ spec:
             properties:
               connectionURL:
                 type: string
-              gpu:
-                type: string
               phase:
                 type: string
-              qos:
-                enum:
-                - low
-                - medium
-                - high
-                - critical
+              workerName:
                 type: string
             required:
             - connectionURL
             - phase
+            - workerName
             type: object
         type: object
     served: true

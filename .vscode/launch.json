@@ -50,12 +50,12 @@
             "program": "${workspaceFolder}/cmd/main.go",
         },
         {
-            "name": "Debug Test Code",
+            "name": "Run Unit Tests",
             "type": "go",
             "request": "launch",
-            "mode": "auto",
-            "console": "integratedTerminal",
-            "program": "${workspaceFolder}/cmd/tmp/main.go",
+            "mode": "test",
+            "program": "${workspaceFolder}",
+            "console": "integratedTerminal"
         }
     ]
 }

@@ -104,9 +104,21 @@ spec:
             description: TensorFusionWorkloadStatus defines the observed state of
               TensorFusionWorkload.
             properties:
-              connectionURLs:
+              WorkerStatuses:
                 items:
-                  type: string
+                  properties:
+                    workerIp:
+                      type: string
+                    workerName:
+                      type: string
+                    workerPhase:
+                      type: string
+                    workerPort:
+                      type: integer
+                  required:
+                  - workerName
+                  - workerPhase
+                  type: object
                 type: array
               readyReplicas:
                 description: readyReplicas is the number of pods created for this

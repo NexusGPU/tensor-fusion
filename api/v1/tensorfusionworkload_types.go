@@ -31,6 +31,24 @@ type TensorFusionWorkloadSpec struct {
 	IsLocalGPU bool `json:"isLocalGPU,omitempty"`
 }
 
+type WorkerPhase string
+
+const (
+	WorkerPending WorkerPhase = "Pending"
+	WorkerRunning WorkerPhase = "Running"
+	WorkerFailed  WorkerPhase = "Failed"
+)
+
+type WorkerStatus struct {
+	WorkerPhase WorkerPhase `json:"workerPhase"`
+
+	WorkerName string `json:"workerName"`
+	// +optional
+	WorkerIp string `json:"workerIp,omitempty"`
+	// +optional
+	WorkerPort int `json:"workerPort,omitempty"`
+}
+
 // TensorFusionWorkloadStatus defines the observed state of TensorFusionWorkload.
 type TensorFusionWorkloadStatus struct {
 	// replicas is the number of Pods created by the Workload controller.
@@ -39,7 +57,7 @@ type TensorFusionWorkloadStatus struct {
 	// readyReplicas is the number of pods created for this Workload with a Ready Condition.
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
-	ConnectionURLs []string `json:"connectionURLs,omitempty"`
+	WorkerStatuses []WorkerStatus `json:"WorkerStatuses,omitempty"`
 }
 
 // +kubebuilder:object:root=true

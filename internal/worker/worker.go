@@ -24,15 +24,16 @@ type WorkerGenerator struct {
 	WorkerConfig *tfv1.WorkerConfig
 }
 
-func (wg *WorkerGenerator) GenerateConnectionURL(pod *corev1.Pod) (string, error) {
+func (wg *WorkerGenerator) WorkerPort(pod *corev1.Pod) (int, error) {
 	port, ok := lo.Find(pod.Spec.Containers[0].Env, func(env corev1.EnvVar) bool {
 		return env.Name == constants.WorkerPortEnv
 	})
 
 	if !ok {
-		return "", fmt.Errorf("worker port not found in pod %s", pod.Name)
+		return 0, fmt.Errorf("worker port not found in pod %s", pod.Name)
 	}
-	return fmt.Sprintf("native+%s+%s", pod.Status.PodIP, port.Value), nil
+
+	return strconv.Atoi(port.Value)
 }
 
 func (wg *WorkerGenerator) AllocPort() int {

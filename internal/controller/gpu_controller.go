@@ -23,7 +23,6 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
-	scheduler "github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
 	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,8 +34,7 @@ import (
 // GPUReconciler reconciles a GPU object
 type GPUReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Scheduler scheduler.Scheduler
+	Scheme *runtime.Scheme
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpus,verbs=get;list;watch;create;update;patch;delete

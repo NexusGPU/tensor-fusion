@@ -31,6 +31,8 @@ import (
 
 	"slices"
 
+	"reflect"
+
 	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
@@ -98,6 +100,9 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, fmt.Errorf("gpu pool(%s) does not exist", workload.Spec.PoolName)
 	}
 
+	// Create worker generator
+	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker}
+
 	// Determine the number of replicas
 	desiredReplicas := int32(1)
 	if workload.Spec.Replicas != nil {
@@ -122,7 +127,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 
 		// Calculate how many pods need to be added
 		podsToAdd := int(desiredReplicas - currentReplicas)
-		if err := r.scaleUpWorkers(ctx, workload, podsToAdd, req.Namespace); err != nil {
+		if err := r.scaleUpWorkers(ctx, workerGenerator, workload, podsToAdd, req.Namespace); err != nil {
 			return ctrl.Result{}, err
 		}
 	} else if currentReplicas > desiredReplicas {
@@ -140,7 +145,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 	}
 
-	if err := r.updateStatus(ctx, workload, podList.Items); err != nil {
+	if err := r.updateStatus(ctx, workload, podList.Items, workerGenerator); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -263,16 +268,8 @@ func (r *TensorFusionWorkloadReconciler) deletePod(ctx context.Context, pod *cor
 }
 
 // scaleUpWorkers handles the scaling up of worker pods
-func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, workload *tfv1.TensorFusionWorkload, count int, namespace string) error {
+func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, count int, namespace string) error {
 	log := log.FromContext(ctx)
-
-	// Create worker generator
-	pool := &tfv1.GPUPool{}
-	if err := r.Get(ctx, client.ObjectKey{Name: workload.Spec.PoolName}, pool); err != nil {
-		return fmt.Errorf("get gpu pool(%s): %w", workload.Spec.PoolName, err)
-	}
-
-	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker}
 
 	// Create worker pods
 	currentCount := int(workload.Status.Replicas)
@@ -306,55 +303,66 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 	return nil
 }
 
-// updateStatus updates the connectionURLs and readyReplicas field in the workload status
-func (r *TensorFusionWorkloadReconciler) updateStatus(ctx context.Context, workload *tfv1.TensorFusionWorkload, pods []corev1.Pod) error {
+// updateStatus updates the WorkerStatuses and readyReplicas field in the workload status
+func (r *TensorFusionWorkloadReconciler) updateStatus(
+	ctx context.Context,
+	workload *tfv1.TensorFusionWorkload,
+	pods []corev1.Pod,
+	workerGenerator *worker.WorkerGenerator,
+) error {
 	log := log.FromContext(ctx)
-
-	// Create worker generator
-	pool := &tfv1.GPUPool{}
-	if err := r.Get(ctx, client.ObjectKey{Name: workload.Spec.PoolName}, pool); err != nil {
-		return fmt.Errorf("get gpu pool(%s): %w", workload.Spec.PoolName, err)
-	}
-
-	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker}
-
-	// Generate connection URLs for all running pods
-	connectionURLs := []string{}
 	readyReplicas := int32(0)
 
-	for i := range pods {
-		pod := &pods[i]
+	// Create a worker statuses slice to hold all worker status information
+	workerStatuses := []tfv1.WorkerStatus{}
 
-		// Count ready pods
-		for _, condition := range pod.Status.Conditions {
-			if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-				readyReplicas++
-				break
-			}
-		}
-
-		// Only generate URL for running pods
-		if pod.Status.Phase != corev1.PodRunning {
+	for _, pod := range pods {
+		// Skip pods that are being deleted
+		if pod.DeletionTimestamp != nil {
 			continue
 		}
 
-		// Generate connection URL
-		url, err := workerGenerator.GenerateConnectionURL(pod)
+		readyReplicas++
+
+		// Get worker IP and port information from pod
+		ip := pod.Status.PodIP
+		port, err := workerGenerator.WorkerPort(&pod)
 		if err != nil {
-			log.Error(err, "Failed to generate connection URL", "pod", pod.Name)
+			log.Error(err, "can not get worker port", "pod", pod.Name, "error", err)
 			continue
 		}
 
-		connectionURLs = append(connectionURLs, url)
+		var workerPhase tfv1.WorkerPhase
+		switch pod.Status.Phase {
+		case corev1.PodPending:
+			workerPhase = tfv1.WorkerPending
+		case corev1.PodRunning:
+			workerPhase = tfv1.WorkerRunning
+		case corev1.PodFailed:
+			workerPhase = tfv1.WorkerFailed
+		default:
+			workerPhase = tfv1.WorkerPending
+		}
+
+		// Create and append worker status
+		workerStatus := tfv1.WorkerStatus{
+			WorkerPhase: workerPhase,
+			WorkerName:  pod.Name,
+			WorkerIp:    ip,
+			WorkerPort:  port,
+		}
+
+		workerStatuses = append(workerStatuses, workerStatus)
 	}
 
 	// Check if we need to update status
-	statusChanged := workload.Status.ReadyReplicas != readyReplicas
+	statusChanged := workload.Status.ReadyReplicas != readyReplicas ||
+		!reflect.DeepEqual(workload.Status.WorkerStatuses, workerStatuses)
 
 	if statusChanged {
-		log.Info("Updating workload status", "readyReplicas", readyReplicas, "connectionURLs", len(connectionURLs))
+		log.Info("Updating workload status", "readyReplicas", readyReplicas, "workerCount", len(workerStatuses))
 		workload.Status.ReadyReplicas = readyReplicas
-		workload.Status.ConnectionURLs = connectionURLs
+		workload.Status.WorkerStatuses = workerStatuses
 		if err := r.Status().Update(ctx, workload); err != nil {
 			return fmt.Errorf("update workload status: %w", err)
 		}
