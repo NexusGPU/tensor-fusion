@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -134,8 +135,9 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			By("Reconciling the created resource")
 
 			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Recorder: record.NewFakeRecorder(10),
 			}
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
@@ -147,8 +149,9 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			By("Reconciling the connection resource")
 
 			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Recorder: record.NewFakeRecorder(10),
 			}
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
@@ -188,9 +191,11 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			Expect(k8sClient.Create(ctx, connectionNoLabel)).To(Succeed())
 
 			By("Reconciling the connection without workload label")
+
 			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Recorder: record.NewFakeRecorder(10),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -210,10 +215,10 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 		It("should handle worker selection when worker status changes", func() {
 			By("Setting up a connection with an already assigned worker")
 
-			// First create and reconcile the connection normally
 			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Recorder: record.NewFakeRecorder(10),
 			}
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
