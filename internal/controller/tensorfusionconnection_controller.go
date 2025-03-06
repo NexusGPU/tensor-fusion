@@ -91,16 +91,11 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 	return ctrl.Result{}, nil
 }
 
-func (r *TensorFusionConnectionReconciler) needReSelectWorker(conneciton *tfv1.TensorFusionConnection, workerStatuses []tfv1.WorkerStatus) (bool, tfv1.WorkerStatus) {
+func (r *TensorFusionConnectionReconciler) needReSelectWorker(connection *tfv1.TensorFusionConnection, workerStatuses []tfv1.WorkerStatus) (bool, tfv1.WorkerStatus) {
 	workerStatus, ok := lo.Find(workerStatuses, func(workerStatus tfv1.WorkerStatus) bool {
-		return workerStatus.WorkerName == conneciton.Status.WorkerName
+		return workerStatus.WorkerName == connection.Status.WorkerName
 	})
 	return !ok || workerStatus.WorkerPhase == tfv1.WorkerFailed, workerStatus
-}
-
-// handleDeletion handles cleanup of external dependencies
-func (r *TensorFusionConnectionReconciler) handleDeletion(ctx context.Context, connection *tfv1.TensorFusionConnection) (bool, error) {
-	return true, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

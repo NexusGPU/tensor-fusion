@@ -102,7 +102,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	}
 
 	// Inject initContainer and env variables
-	patches, err := m.patchTFClient(ctx, pod, pool.Spec.ComponentConfig.Client, tfInfo.ContainerNames, nodeSelector)
+	patches, err := m.patchTFClient(pod, pool.Spec.ComponentConfig.Client, tfInfo.ContainerNames, nodeSelector)
 	if err != nil {
 		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
 		return admission.Errored(http.StatusInternalServerError, err)
@@ -168,7 +168,6 @@ func (m *TensorFusionPodMutator) createOrUpdateWrokload(ctx context.Context, pod
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(
-	ctx context.Context,
 	pod *corev1.Pod,
 	clientConfig *tfv1.ClientConfig,
 	containerNames []string,

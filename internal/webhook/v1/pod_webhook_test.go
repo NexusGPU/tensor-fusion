@@ -352,7 +352,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				},
 			}
 
-			patch, err := mutator.patchTFClient(ctx, pod, config.MockGPUPoolSpec.ComponentConfig.Client, []string{"test-container"}, nil)
+			patch, err := mutator.patchTFClient(pod, config.MockGPUPoolSpec.ComponentConfig.Client, []string{"test-container"}, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(patch).NotTo(BeEmpty())
 			// There should be at least 2 patches (initContainers and the container env patches)
