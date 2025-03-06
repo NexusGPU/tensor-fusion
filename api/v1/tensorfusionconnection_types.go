@@ -33,12 +33,7 @@ type Resources struct {
 
 // TensorFusionConnectionSpec defines the desired state of TensorFusionConnection.
 type TensorFusionConnectionSpec struct {
-	PoolName  string    `json:"poolName"`
-	Resources Resources `json:"resources"`
-
-	// +optional
-	// localGpu mode will schedule the GPU in advance
-	GPUs []string `json:"gpu"`
+	WorkloadName string `json:"workloadName"`
 }
 
 // TensorFusionConnectionStatus defines the observed state of TensorFusionConnection.

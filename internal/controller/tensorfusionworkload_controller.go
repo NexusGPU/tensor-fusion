@@ -70,7 +70,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList,
 		client.InNamespace(req.Namespace),
-		client.MatchingLabels{constants.WorkloadLabel: workload.Name}); err != nil {
+		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list pods: %w", err)
 	}
 
@@ -174,7 +174,7 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 			if pod.Labels == nil {
 				pod.Labels = make(map[string]string)
 			}
-			pod.Labels[constants.WorkloadLabel] = workload.Name
+			pod.Labels[constants.WorkloadKey] = workload.Name
 			pod.Labels[constants.GpuKey] = gpu.Name
 
 			// Add finalizer for GPU resource cleanup

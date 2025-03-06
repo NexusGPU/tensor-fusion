@@ -66,8 +66,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	// generate tensor fusion connections and apply to cluster
-	tfConnection := generateTensorFusionConnection(pod, profile, containerNames)
-
+	tfConnection := generateTensorFusionConnection(pod)
 	existConn := &tfv1.TensorFusionConnection{}
 	if err := r.Get(ctx, types.NamespacedName{Name: tfConnection.Name, Namespace: tfConnection.Namespace}, existConn); err != nil {
 		if errors.IsNotFound(err) {
@@ -93,13 +92,15 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	return ctrl.Result{}, nil
 }
 
-func generateTensorFusionConnection(pod *corev1.Pod, profile *tfv1.ClientProfileSpec, containerNames []string) *tfv1.TensorFusionConnection {
-	connectionNameNamespace := findConnectionNameNamespace(pod, containerNames)
-
+func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnection {
+	workloadName, ok := pod.Annotations[constants.WorkloadKey]
+	if !ok {
+		return nil
+	}
 	connection := &tfv1.TensorFusionConnection{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      connectionNameNamespace.Name,
-			Namespace: connectionNameNamespace.Namespace,
+			Name:      pod.Name,
+			Namespace: pod.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: "v1",
@@ -110,13 +111,8 @@ func generateTensorFusionConnection(pod *corev1.Pod, profile *tfv1.ClientProfile
 			},
 		},
 		Spec: tfv1.TensorFusionConnectionSpec{
-			PoolName:  profile.PoolName,
-			Resources: profile.Resources,
+			WorkloadName: workloadName,
 		},
-	}
-	gpuName, ok := pod.Annotations[constants.GPUAnnotation]
-	if ok {
-		connection.Spec.GPUs = []string{gpuName}
 	}
 	return connection
 }

@@ -96,7 +96,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 		podList := &corev1.PodList{}
 		err := k8sClient.List(ctx, podList,
 			client.InNamespace(resourceNamespace),
-			client.MatchingLabels{constants.WorkloadLabel: resourceName})
+			client.MatchingLabels{constants.WorkloadKey: resourceName})
 		Expect(err).NotTo(HaveOccurred())
 
 		for i := range podList.Items {
@@ -119,7 +119,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 		var podList corev1.PodList
 		Expect(k8sClient.List(ctx, &podList,
 			client.InNamespace(resourceNamespace),
-			client.MatchingLabels{constants.WorkloadLabel: resourceName})).To(Succeed())
+			client.MatchingLabels{constants.WorkloadKey: resourceName})).To(Succeed())
 
 		// remove finalizers from each pod
 		for i := range podList.Items {
@@ -131,7 +131,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 		}
 		Expect(k8sClient.DeleteAllOf(ctx, &corev1.Pod{},
 			client.InNamespace(resourceNamespace),
-			client.MatchingLabels{constants.WorkloadLabel: resourceName},
+			client.MatchingLabels{constants.WorkloadKey: resourceName},
 			client.GracePeriodSeconds(0),
 		)).To(Succeed())
 
@@ -176,7 +176,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
 					client.InNamespace(resourceNamespace),
-					client.MatchingLabels{constants.WorkloadLabel: resourceName})
+					client.MatchingLabels{constants.WorkloadKey: resourceName})
 				if err != nil {
 					return 0
 				}
@@ -238,7 +238,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
 					client.InNamespace(resourceNamespace),
-					client.MatchingLabels{constants.WorkloadLabel: resourceName})
+					client.MatchingLabels{constants.WorkloadKey: resourceName})
 				if err != nil {
 					return 0
 				}
@@ -261,7 +261,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
 					client.InNamespace(resourceNamespace),
-					client.MatchingLabels{constants.WorkloadLabel: resourceName})
+					client.MatchingLabels{constants.WorkloadKey: resourceName})
 				if err != nil {
 					return 0
 				}
@@ -323,7 +323,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
 					client.InNamespace(resourceNamespace),
-					client.MatchingLabels{constants.WorkloadLabel: resourceName})
+					client.MatchingLabels{constants.WorkloadKey: resourceName})
 				if err != nil {
 					return 0
 				}
@@ -352,7 +352,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
 					client.InNamespace(resourceNamespace),
-					client.MatchingLabels{constants.WorkloadLabel: resourceName})
+					client.MatchingLabels{constants.WorkloadKey: resourceName})
 				if err != nil {
 					return -1
 				}
@@ -419,7 +419,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
 					client.InNamespace(resourceNamespace),
-					client.MatchingLabels{constants.WorkloadLabel: resourceName})
+					client.MatchingLabels{constants.WorkloadKey: resourceName})
 				if err != nil {
 					return 0
 				}

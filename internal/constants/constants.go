@@ -22,7 +22,7 @@ const (
 	InitialGPUNodeSelector      = "nvidia.com/gpu.present=true"
 
 	GPULastReportTimeAnnotationKey = Domain + "/last-sync"
-	WorkloadLabel                  = Domain + "/workload"
+	WorkloadKey                    = Domain + "/workload"
 	GpuKey                         = Domain + "/gpu"
 	GpuPoolKey                     = Domain + "/gpupool"
 

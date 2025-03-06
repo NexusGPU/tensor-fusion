@@ -101,21 +101,11 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 						Labels: map[string]string{
-							constants.WorkloadLabel: workloadName,
+							constants.WorkloadKey: workloadName,
 						},
 					},
 					Spec: tfv1.TensorFusionConnectionSpec{
-						PoolName: "mock",
-						Resources: tfv1.Resources{
-							Requests: tfv1.Resource{
-								Tflops: resource.MustParse("1"),
-								Vram:   resource.MustParse("1Gi"),
-							},
-							Limits: tfv1.Resource{
-								Tflops: resource.MustParse("1"),
-								Vram:   resource.MustParse("1Gi"),
-							},
-						},
+						WorkloadName: workloadName,
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -192,17 +182,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					// No workload label
 				},
 				Spec: tfv1.TensorFusionConnectionSpec{
-					PoolName: "mock",
-					Resources: tfv1.Resources{
-						Requests: tfv1.Resource{
-							Tflops: resource.MustParse("1"),
-							Vram:   resource.MustParse("1Gi"),
-						},
-						Limits: tfv1.Resource{
-							Tflops: resource.MustParse("1"),
-							Vram:   resource.MustParse("1Gi"),
-						},
-					},
+					WorkloadName: workloadName,
 				},
 			}
 			Expect(k8sClient.Create(ctx, connectionNoLabel)).To(Succeed())

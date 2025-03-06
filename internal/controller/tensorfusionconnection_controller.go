@@ -62,7 +62,7 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{}, err
 	}
 
-	workloadName, ok := connection.Labels[constants.WorkloadLabel]
+	workloadName, ok := connection.Labels[constants.WorkloadKey]
 	if !ok {
 		return ctrl.Result{}, fmt.Errorf("missing workload label")
 	}
@@ -107,7 +107,7 @@ func (r *TensorFusionConnectionReconciler) selectWorker(ctx context.Context, wor
 	}
 
 	connectionList := tfv1.TensorFusionConnectionList{}
-	if err := r.List(ctx, &connectionList, client.MatchingLabels{constants.WorkloadLabel: workloadName}); err != nil {
+	if err := r.List(ctx, &connectionList, client.MatchingLabels{constants.WorkloadKey: workloadName}); err != nil {
 		return nil, fmt.Errorf("list TensorFusionConnection: %w", err)
 	}
 
