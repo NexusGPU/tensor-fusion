@@ -226,7 +226,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 				}
 
 				// add connection env
-				connectionName := fmt.Sprintf("%s-tf-worker-%s", pod.GenerateName, shortuuid.NewWithAlphabet("123456789abcdefghijkmnopqrstuvwxy"))
+				connectionName := fmt.Sprintf("%s-%s", pod.GenerateName, shortuuid.NewWithAlphabet("123456789abcdefghijkmnopqrstuvwxy"))
 				connectionNamespace := pod.Namespace
 
 				container.Env = append(container.Env, corev1.EnvVar{

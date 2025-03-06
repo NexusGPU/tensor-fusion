@@ -97,10 +97,11 @@ func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnectio
 	if !ok {
 		return nil
 	}
+	nameNamespace := findConnectionNameNamespace(pod)
 	connection := &tfv1.TensorFusionConnection{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pod.Name,
-			Namespace: pod.Namespace,
+			Name:      nameNamespace.Name,
+			Namespace: nameNamespace.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: "v1",
@@ -134,16 +135,10 @@ func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // findConnectionNameNamespace extracts the connection name and namespace from the container's environment variables
-func findConnectionNameNamespace(pod *corev1.Pod, tfInfo webhookv1.TensorFusionInfo) client.ObjectKey {
+func findConnectionNameNamespace(pod *corev1.Pod) client.ObjectKey {
 	connectionNameNamespace := client.ObjectKey{}
 
-	for _, containerName := range tfInfo.ContainerNames {
-		container, ok := lo.Find(pod.Spec.Containers, func(c corev1.Container) bool {
-			return c.Name == containerName
-		})
-		if !ok {
-			continue
-		}
+	for _, container := range pod.Spec.Containers {
 		connectionName, ok := lo.Find(container.Env, func(env corev1.EnvVar) bool {
 			return env.Name == constants.ConnectionNameEnv
 		})
@@ -158,7 +153,7 @@ func findConnectionNameNamespace(pod *corev1.Pod, tfInfo webhookv1.TensorFusionI
 		}
 		connectionNameNamespace.Name = connectionName.Value
 		connectionNameNamespace.Namespace = connectionNamespace.Value
+		break
 	}
-
 	return connectionNameNamespace
 }
