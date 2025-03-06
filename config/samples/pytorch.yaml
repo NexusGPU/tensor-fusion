@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pytorch-test
+  namespace: tensor-fusion
+  labels:
+    app: pytorch-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pytorch-test
+  template:
+    metadata:
+      labels:
+        app: pytorch-test
+        tensor-fusion.ai/enabled: 'true'
+      annotations:
+        tensor-fusion.ai/replicas: '1'
+        tensor-fusion.ai/workload: pytorch-test
+        tensor-fusion.ai/inject-container: pytorch
+        tensor-fusion.ai/generate-workload: 'true'
+        tensor-fusion.ai/gpupool: shared-tensor-fusion-cluster-shared
+        tensor-fusion.ai/tflops-limit-python: '10'
+        tensor-fusion.ai/tflops-request-python: '10'
+        tensor-fusion.ai/vram-limit-python: 1Gi
+        tensor-fusion.ai/vram-request-python: 1Gi
+    spec:
+      containers:
+        - name: pytorch
+          image: pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
+          command:
+            - sh
+            - '-c'
+            - sleep infinity
+     

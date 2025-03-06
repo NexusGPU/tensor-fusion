@@ -59,7 +59,7 @@ type TensorFusionWorkloadStatus struct {
 	// readyReplicas is the number of pods created for this Workload with a Ready Condition.
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
-	WorkerStatuses []WorkerStatus `json:"WorkerStatuses,omitempty"`
+	WorkerStatuses []WorkerStatus `json:"workerStatuses,omitempty"`
 }
 
 // +kubebuilder:object:root=true

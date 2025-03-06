@@ -102,6 +102,9 @@ func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnectio
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      nameNamespace.Name,
 			Namespace: nameNamespace.Namespace,
+			Labels: map[string]string{
+				constants.WorkloadKey: workloadName,
+			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: "v1",
