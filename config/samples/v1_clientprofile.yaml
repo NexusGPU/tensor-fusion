@@ -1,9 +1,7 @@
 apiVersion: tensor-fusion.ai/v1
 kind: ClientProfile
 metadata:
-  labels:
-    app.kubernetes.io/name: tensor-fusion-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: clientprofile-sample
+  name: defalut-clientprofile
+  namespace: tensor-fusion
 spec:
-  # TODO(user): Add fields here
+  isLocalGPU: true
