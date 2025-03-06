@@ -93,6 +93,7 @@ rules:
   - schedulingconfigtemplates
   - tensorfusionclusters
   - tensorfusionconnections
+  - tensorfusionworkloads
   verbs:
   - create
   - delete
@@ -111,6 +112,7 @@ rules:
   - schedulingconfigtemplates/finalizers
   - tensorfusionclusters/finalizers
   - tensorfusionconnections/finalizers
+  - tensorfusionworkloads/finalizers
   verbs:
   - update
 - apiGroups:
@@ -123,6 +125,7 @@ rules:
   - schedulingconfigtemplates/status
   - tensorfusionclusters/status
   - tensorfusionconnections/status
+  - tensorfusionworkloads/status
   verbs:
   - get
   - patch
