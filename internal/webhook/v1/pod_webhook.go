@@ -21,14 +21,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
+	"reflect"
 
 	"gomodules.xyz/jsonpatch/v2"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -36,29 +35,28 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
+	"github.com/NexusGPU/tensor-fusion-operator/internal/worker"
 	"github.com/lithammer/shortuuid/v4"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // SetupPodWebhookWithManager registers the webhook for Pod in the manager.
-func SetupPodWebhookWithManager(mgr ctrl.Manager, scheduler scheduler.Scheduler) error {
+func SetupPodWebhookWithManager(mgr ctrl.Manager) error {
 	webhookServer := mgr.GetWebhookServer()
 
 	webhookServer.Register("/mutate-v1-pod",
 		&admission.Webhook{
 			Handler: &TensorFusionPodMutator{
-				decoder:   admission.NewDecoder(runtime.NewScheme()),
-				Client:    mgr.GetClient(),
-				scheduler: scheduler,
+				decoder: admission.NewDecoder(runtime.NewScheme()),
+				Client:  mgr.GetClient(),
 			},
 		})
 	return nil
 }
 
 type TensorFusionPodMutator struct {
-	Client    client.Client
-	decoder   admission.Decoder
-	scheduler scheduler.Scheduler
+	Client  client.Client
+	decoder admission.Decoder
 }
 
 // Handle implements admission.Handler interface.
@@ -71,39 +69,42 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	log := log.FromContext(ctx)
 	log.Info("Mutating pod", "generateName", pod.GenerateName, "namespace", pod.Namespace)
 
-	profile, containerNames, err := ParseTFResources(ctx, m.Client, pod)
+	tfInfo, err := ParseTensorFusionInfo(ctx, m.Client, pod)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("parse tf resources: %w", err))
 	}
 
-	pool := &tfv1.GPUPool{}
-	if err := m.Client.Get(ctx, client.ObjectKey{Name: profile.PoolName}, pool); err != nil {
-		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("gpu pool(%s) does not exist", profile.PoolName))
+	workload := &tfv1.TensorFusionWorkload{}
+	if tfInfo.GenWorkload {
+		if err := m.createOrUpdateWrokload(ctx, pod, &tfInfo, workload); err != nil {
+			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("create tf workload: %w", err))
+		}
 	}
 
-	var gpu *tfv1.GPU = nil
-	if profile.IsLocalGPU {
-		gpu, err = m.scheduler.Schedule(ctx, profile.PoolName, profile.Resources.Requests)
-		if err != nil {
-			log.Error(err, "failed to schedule gpu for pod", "pod", req.Name, "namespace", req.Namespace)
-			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("schedule gpu: %w", err))
+	pool := &tfv1.GPUPool{}
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.Profile.PoolName}, pool); err != nil {
+		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("gpu pool(%s) does not exist", tfInfo.Profile.PoolName))
+	}
+
+	var nodeSelector map[string]string
+	if tfInfo.Profile.IsLocalGPU {
+		if !tfInfo.GenWorkload {
+			if err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.WorkloadName, Namespace: pod.Namespace}, workload); err != nil {
+				return admission.Errored(http.StatusInternalServerError, fmt.Errorf("workload(%s) does not exist", tfInfo.WorkloadName))
+			}
 		}
+		workloadStatus, err := worker.SelectWorker(ctx, m.Client, tfInfo.WorkloadName, workload.Status.WorkerStatuses)
+		if err != nil {
+			log.Error(err, "failed to select worker for pod", "pod", req.Name, "namespace", req.Namespace)
+			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("select worker: %w", err))
+		}
+		nodeSelector = workloadStatus.NodeSelector
 	}
 
 	// Inject initContainer and env variables
-	patches, err := m.patchTFClient(pod, pool.Spec.ComponentConfig.Client, containerNames, gpu)
+	patches, err := m.patchTFClient(ctx, pod, pool.Spec.ComponentConfig.Client, tfInfo.ContainerNames, nodeSelector)
 	if err != nil {
-		if gpu != nil {
-			retryErr := retry.OnError(retry.DefaultRetry, func(err error) bool {
-				// Retry on all errors
-				return true
-			}, func() error {
-				return m.scheduler.Release(ctx, profile.Resources.Requests, gpu)
-			})
-			if retryErr != nil {
-				log.Error(retryErr, "failed to release gpu after multiple retries", "pod", req.Name, "namespace", req.Namespace)
-			}
-		}
+		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
@@ -116,68 +117,70 @@ func (m *TensorFusionPodMutator) InjectDecoder(d admission.Decoder) error {
 	return nil
 }
 
-type TFResource struct {
-	ContainerName       string
-	ConnectionName      string
-	ConnectionNamespace string
-	TflopsRequest       resource.Quantity
-	VramRequest         resource.Quantity
-	TflopsLimit         resource.Quantity
-	VramLimit           resource.Quantity
-}
+func (m *TensorFusionPodMutator) createOrUpdateWrokload(ctx context.Context, pod *corev1.Pod, tfInfo *TensorFusionInfo, workload *tfv1.TensorFusionWorkload) error {
+	// Check if workload exists
+	err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.WorkloadName, Namespace: pod.Namespace}, workload)
 
-func ParseTFResources(ctx context.Context, k8sclient client.Client, pod *corev1.Pod) (profile *tfv1.ClientProfileSpec, containerNames []string, err error) {
-	if pod.Annotations == nil {
-		return nil, nil, fmt.Errorf("no annotations found")
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to get workload: %w", err)
+		}
+		// Create a new workload
+		replicas := tfInfo.Replicas
+		workload = &tfv1.TensorFusionWorkload{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tfInfo.WorkloadName,
+				Namespace: pod.Namespace,
+			},
+			Spec: tfv1.TensorFusionWorkloadSpec{
+				Replicas:   &replicas,
+				PoolName:   tfInfo.Profile.PoolName,
+				Resources:  tfInfo.Profile.Resources,
+				Qos:        tfInfo.Profile.Qos,
+				IsLocalGPU: tfInfo.Profile.IsLocalGPU,
+			},
+		}
+
+		if err := m.Client.Create(ctx, workload); err != nil {
+			return fmt.Errorf("failed to create workload: %w", err)
+		}
+		return nil
 	}
-	clientProfileName, ok := pod.Annotations[constants.ClientProfileAnnotation]
-	clientProfile := &tfv1.ClientProfile{}
-	if ok {
-		if err := k8sclient.Get(ctx, client.ObjectKey{Name: clientProfileName, Namespace: pod.Namespace}, clientProfile); err != nil {
-			return nil, nil, fmt.Errorf("get client profile(%s) : %w", clientProfileName, err)
+
+	// Create the desired spec for comparison
+	replicas := tfInfo.Replicas
+	desiredSpec := tfv1.TensorFusionWorkloadSpec{
+		Replicas:   &replicas,
+		PoolName:   tfInfo.Profile.PoolName,
+		Resources:  tfInfo.Profile.Resources,
+		Qos:        tfInfo.Profile.Qos,
+		IsLocalGPU: tfInfo.Profile.IsLocalGPU,
+	}
+
+	// Compare the entire spec at once
+	if !reflect.DeepEqual(workload.Spec, desiredSpec) {
+		workload.Spec = desiredSpec
+		if err := m.Client.Update(ctx, workload); err != nil {
+			return fmt.Errorf("failed to update workload: %w", err)
 		}
 	}
-
-	poolName, ok := pod.Annotations[constants.GpuPoolKey]
-	if !ok {
-		// TODO: select default pool
-		return nil, nil, fmt.Errorf("gpu pool not found")
-	}
-	clientProfile.Spec.PoolName = poolName
-
-	tflopsRequest, ok := pod.Annotations[constants.TFLOPSRequestAnnotation]
-	if ok {
-		clientProfile.Spec.Resources.Requests.Tflops = resource.MustParse(tflopsRequest)
-	}
-	vramRequest, ok := pod.Annotations[constants.VRAMRequestAnnotation]
-	if ok {
-		clientProfile.Spec.Resources.Requests.Vram = resource.MustParse(vramRequest)
-	}
-	tflopsLimit, ok := pod.Annotations[constants.TFLOPSLimitAnnotation]
-	if ok {
-		clientProfile.Spec.Resources.Limits.Tflops = resource.MustParse(tflopsLimit)
-	}
-	vramLimit, ok := pod.Annotations[constants.VRAMLimitAnnotation]
-	if ok {
-		clientProfile.Spec.Resources.Limits.Vram = resource.MustParse(vramLimit)
-	}
-
-	injectContainer, ok := pod.Annotations[constants.InjectContainerAnnotation]
-	containerNames = strings.Split(injectContainer, ",")
-	if !ok || len(containerNames) == 0 {
-		return nil, nil, fmt.Errorf("inject container not found")
-	}
-	return &clientProfile.Spec, containerNames, nil
+	return nil
 }
 
-func (m *TensorFusionPodMutator) patchTFClient(pod *corev1.Pod, clientConfig *tfv1.ClientConfig, containerNames []string, gpu *tfv1.GPU) ([]jsonpatch.JsonPatchOperation, error) {
+func (m *TensorFusionPodMutator) patchTFClient(
+	ctx context.Context,
+	pod *corev1.Pod,
+	clientConfig *tfv1.ClientConfig,
+	containerNames []string,
+	nodeSelector map[string]string,
+) ([]jsonpatch.JsonPatchOperation, error) {
 	// Convert the current pod to JSON
 	currentBytes, err := json.Marshal(pod)
 	if err != nil {
 		return nil, fmt.Errorf("marshal current pod: %w", err)
 	}
 
-	if gpu != nil {
+	if nodeSelector != nil {
 		// Local GPU Mode
 		if pod.Spec.Affinity == nil {
 			pod.Spec.Affinity = &corev1.Affinity{}
@@ -190,18 +193,13 @@ func (m *TensorFusionPodMutator) patchTFClient(pod *corev1.Pod, clientConfig *tf
 							{
 								Key:      "kubernetes.io/hostname",
 								Operator: corev1.NodeSelectorOpIn,
-								Values:   []string{gpu.Status.NodeSelector["kubernetes.io/hostname"]},
+								Values:   []string{nodeSelector["kubernetes.io/hostname"]},
 							},
 						},
 					},
 				},
 			},
 		}
-		// Add GPU annotation
-		if pod.Annotations == nil {
-			pod.Annotations = make(map[string]string)
-		}
-		pod.Annotations[constants.GPUAnnotation] = gpu.Name
 	}
 
 	// Patch to Container

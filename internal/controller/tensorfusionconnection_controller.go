@@ -28,6 +28,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
+	"github.com/NexusGPU/tensor-fusion-operator/internal/worker"
 	"github.com/samber/lo"
 )
 
@@ -74,7 +75,7 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 
 	needReSelectWorker, workerStatus := r.needReSelectWorker(connection, workload.Status.WorkerStatuses)
 	if needReSelectWorker {
-		s, err := r.selectWorker(ctx, workloadName, workload.Status.WorkerStatuses)
+		s, err := worker.SelectWorker(ctx, r.Client, workloadName, workload.Status.WorkerStatuses)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -95,46 +96,6 @@ func (r *TensorFusionConnectionReconciler) needReSelectWorker(conneciton *tfv1.T
 		return workerStatus.WorkerName == conneciton.Status.WorkerName
 	})
 	return !ok || workerStatus.WorkerPhase == tfv1.WorkerFailed, workerStatus
-}
-
-func (r *TensorFusionConnectionReconciler) selectWorker(ctx context.Context, workloadName string, workerStatuses []tfv1.WorkerStatus) (*tfv1.WorkerStatus, error) {
-	if len(workerStatuses) == 0 {
-		return nil, fmt.Errorf("no available worker")
-	}
-	usageMapping := make(map[string]int, len(workerStatuses))
-	for _, workerStatus := range workerStatuses {
-		usageMapping[workerStatus.WorkerName] = 0
-	}
-
-	connectionList := tfv1.TensorFusionConnectionList{}
-	if err := r.List(ctx, &connectionList, client.MatchingLabels{constants.WorkloadKey: workloadName}); err != nil {
-		return nil, fmt.Errorf("list TensorFusionConnection: %w", err)
-	}
-
-	for _, connection := range connectionList.Items {
-		if connection.Status.WorkerName != "" {
-			continue
-		}
-		usageMapping[connection.Status.WorkerName]++
-	}
-
-	var minUsageWorker *tfv1.WorkerStatus
-	// Initialize with max int value
-	minUsage := int(^uint(0) >> 1)
-	for _, workerStatus := range workerStatuses {
-		if workerStatus.WorkerPhase == tfv1.WorkerFailed {
-			continue
-		}
-		usage := usageMapping[workerStatus.WorkerName]
-		if usage < minUsage {
-			minUsage = usage
-			minUsageWorker = &workerStatus
-		}
-	}
-	if minUsageWorker == nil {
-		return nil, fmt.Errorf("no available worker")
-	}
-	return minUsageWorker, nil
 }
 
 // handleDeletion handles cleanup of external dependencies

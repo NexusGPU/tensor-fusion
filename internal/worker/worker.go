@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -14,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func init() {
@@ -85,4 +87,44 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		},
 		Spec: spec,
 	}, nil
+}
+
+func SelectWorker(ctx context.Context, k8sClient client.Client, workloadName string, workerStatuses []tfv1.WorkerStatus) (*tfv1.WorkerStatus, error) {
+	if len(workerStatuses) == 0 {
+		return nil, fmt.Errorf("no available worker")
+	}
+	usageMapping := make(map[string]int, len(workerStatuses))
+	for _, workerStatus := range workerStatuses {
+		usageMapping[workerStatus.WorkerName] = 0
+	}
+
+	connectionList := tfv1.TensorFusionConnectionList{}
+	if err := k8sClient.List(ctx, &connectionList, client.MatchingLabels{constants.WorkloadKey: workloadName}); err != nil {
+		return nil, fmt.Errorf("list TensorFusionConnection: %w", err)
+	}
+
+	for _, connection := range connectionList.Items {
+		if connection.Status.WorkerName != "" {
+			continue
+		}
+		usageMapping[connection.Status.WorkerName]++
+	}
+
+	var minUsageWorker *tfv1.WorkerStatus
+	// Initialize with max int value
+	minUsage := int(^uint(0) >> 1)
+	for _, workerStatus := range workerStatuses {
+		if workerStatus.WorkerPhase == tfv1.WorkerFailed {
+			continue
+		}
+		usage := usageMapping[workerStatus.WorkerName]
+		if usage < minUsage {
+			minUsage = usage
+			minUsageWorker = &workerStatus
+		}
+	}
+	if minUsageWorker == nil {
+		return nil, fmt.Errorf("no available worker")
+	}
+	return minUsageWorker, nil
 }

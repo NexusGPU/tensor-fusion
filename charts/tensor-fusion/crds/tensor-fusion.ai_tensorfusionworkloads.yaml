@@ -98,7 +98,6 @@ spec:
                 type: object
             required:
             - poolName
-            - resources
             type: object
           status:
             description: TensorFusionWorkloadStatus defines the observed state of
@@ -107,6 +106,10 @@ spec:
               WorkerStatuses:
                 items:
                   properties:
+                    nodeSelector:
+                      additionalProperties:
+                        type: string
+                      type: object
                     workerIp:
                       type: string
                     workerName:

@@ -24,7 +24,6 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/config"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	admissionv1 "k8s.io/api/admission/v1"
@@ -55,11 +54,9 @@ var _ = Describe("TensorFusionPodMutator", func() {
 		k8sclient = k8sClient
 
 		mutator = &TensorFusionPodMutator{
-			Client:    k8sclient,
-			scheduler: scheduler.NewScheduler(k8sclient),
+			Client:  k8sclient,
+			decoder: decoder,
 		}
-		Expect(mutator.InjectDecoder(decoder)).To(Succeed())
-
 	})
 
 	Context("Handle", func() {
@@ -84,7 +81,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-
 			Expect(k8sclient.Create(ctx, clientProfile)).To(Succeed())
 
 			pod := &corev1.Pod{
@@ -98,6 +94,8 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.GpuPoolKey:                "mock",
 						constants.ClientProfileAnnotation:   "test-profile-handle",
 						constants.InjectContainerAnnotation: "main",
+						constants.WorkloadKey:               "test-workload",
+						constants.GenWorkload:               "true",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -138,7 +136,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			resp := mutator.Handle(ctx, req)
 			Expect(resp.Allowed).To(BeTrue())
 			Expect(resp.Patches).NotTo(BeEmpty())
-			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should handle pods without TF requirements", func() {
@@ -170,6 +167,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			}
 
 			resp := mutator.Handle(ctx, req)
+			// Should fail because no annotations are found
 			Expect(resp.Allowed).To(BeFalse())
 			Expect(resp.Patches).To(BeEmpty())
 		})
@@ -192,32 +190,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 
 	Context("Handle with local GPU mode", func() {
 		It("should successfully handle a pod with local GPU mode", func() {
-			// Create a mock GPU
-			mockGPU := &tfv1.GPU{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "mock-gpu-1",
-					Labels: map[string]string{
-						constants.GpuPoolKey: "mock",
-					},
-				},
-			}
-			Expect(k8sclient.Create(ctx, mockGPU)).To(Succeed())
-			mockGPU.Status = tfv1.GPUStatus{
-				Phase: tfv1.TensorFusionGPUPhaseRunning,
-				UUID:  "mock-gpu",
-				NodeSelector: map[string]string{
-					"kubernetes.io/hostname": "mock-node",
-				},
-				Capacity: &tfv1.Resource{
-					Tflops: resource.MustParse("200"),
-					Vram:   resource.MustParse("200Gi"),
-				},
-				Available: &tfv1.Resource{
-					Tflops: resource.MustParse("200"),
-					Vram:   resource.MustParse("200Gi"),
-				},
-			}
-			Expect(k8sclient.Status().Update(ctx, mockGPU)).To(Succeed())
 			// Set up a client profile with IsLocalGPU set to true
 			clientProfile := &tfv1.ClientProfile{
 				ObjectMeta: metav1.ObjectMeta{
@@ -239,8 +211,33 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-
 			Expect(k8sclient.Create(ctx, clientProfile)).To(Succeed())
+
+			// Create a TensorFusionWorkload first
+			workload := &tfv1.TensorFusionWorkload{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "local-gpu-workload",
+					Namespace: "default",
+				},
+				Spec: tfv1.TensorFusionWorkloadSpec{
+					PoolName:   "mock",
+					IsLocalGPU: true,
+				},
+			}
+			Expect(k8sclient.Create(ctx, workload)).To(Succeed())
+
+			// Update workload status
+			workload.Status.WorkerStatuses = []tfv1.WorkerStatus{
+				{
+					WorkerName:  "mock-worker",
+					WorkerPhase: tfv1.WorkerRunning,
+					NodeSelector: map[string]string{
+						"kubernetes.io/hostname": "mock-node",
+					},
+				},
+			}
+			Expect(k8sclient.Status().Update(ctx, workload)).To(Succeed())
+
 			// Create a pod with the local GPU profile
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -253,6 +250,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.GpuPoolKey:                "mock",
 						constants.ClientProfileAnnotation:   "local-gpu-profile",
 						constants.InjectContainerAnnotation: "main",
+						constants.WorkloadKey:               "local-gpu-workload",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -282,17 +280,10 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			// Verify the response
 			Expect(resp.Allowed).To(BeTrue())
 			Expect(resp.Patches).NotTo(BeEmpty())
-
-			// Check the GPU resources were updated
-			updatedGPU := &tfv1.GPU{}
-			Expect(k8sclient.Get(ctx, client.ObjectKeyFromObject(mockGPU), updatedGPU)).NotTo(HaveOccurred())
-			// The available resources should be reduced by the requested amount
-			Expect(updatedGPU.Status.Available.Tflops.Cmp(resource.MustParse("190"))).To(Equal(0))
-			Expect(updatedGPU.Status.Available.Vram.String()).To(Equal("199Gi"))
 		})
 	})
 
-	Context("ParseTFResources", func() {
+	Context("ParseTensorFusionInfo", func() {
 		It("should correctly parse TF requirements from pod annotations", func() {
 			// Set up a client profile for testing
 			clientProfile := &tfv1.ClientProfile{
@@ -323,6 +314,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					Annotations: map[string]string{
 						constants.GpuPoolKey:              "mock",
 						constants.ClientProfileAnnotation: "test-profile-parse-tf-resources",
+						constants.WorkloadKey:             "test-workload",
 						// override tflops request
 						constants.TFLOPSRequestAnnotation:   "20",
 						constants.InjectContainerAnnotation: "test-container",
@@ -332,29 +324,19 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					Containers: []corev1.Container{
 						{
 							Name: "test-container",
-							Env: []corev1.EnvVar{
-								{
-									Name:  constants.ConnectionNameEnv,
-									Value: "conn1",
-								},
-								{
-									Name:  constants.ConnectionNamespaceEnv,
-									Value: "ns",
-								},
-							},
 						},
 					},
 				},
 			}
-			profile, containerNames, err := ParseTFResources(ctx, k8sclient, pod)
+			tfInfo, err := ParseTensorFusionInfo(ctx, k8sclient, pod)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(containerNames).To(HaveLen(1))
-			Expect(containerNames[0]).To(Equal("test-container"))
-			Expect(profile.PoolName).To(Equal("mock"))
-			Expect(profile.Resources.Requests.Tflops.String()).To(Equal("20"))
-			Expect(profile.Resources.Requests.Vram.String()).To(Equal("1Gi"))
-			Expect(profile.Resources.Limits.Tflops.String()).To(Equal("100"))
-			Expect(profile.Resources.Limits.Vram.String()).To(Equal("16Gi"))
+			Expect(tfInfo.ContainerNames).To(HaveLen(1))
+			Expect(tfInfo.ContainerNames[0]).To(Equal("test-container"))
+			Expect(tfInfo.Profile.PoolName).To(Equal("mock"))
+			Expect(tfInfo.Profile.Resources.Requests.Tflops.String()).To(Equal("20"))
+			Expect(tfInfo.Profile.Resources.Requests.Vram.String()).To(Equal("1Gi"))
+			Expect(tfInfo.Profile.Resources.Limits.Tflops.String()).To(Equal("100"))
+			Expect(tfInfo.Profile.Resources.Limits.Vram.String()).To(Equal("16Gi"))
 		})
 	})
 
@@ -370,12 +352,11 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				},
 			}
 
-			patch, err := mutator.patchTFClient(pod, config.MockGPUPoolSpec.ComponentConfig.Client, []string{"test-container"}, nil)
+			patch, err := mutator.patchTFClient(ctx, pod, config.MockGPUPoolSpec.ComponentConfig.Client, []string{"test-container"}, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(patch).NotTo(BeEmpty())
-			Expect(patch).To(HaveLen(2))
-			Expect(patch[1].Path).To(Equal("/spec/initContainers"))
-			Expect(patch[1].Operation).To(Equal("add"))
+			// There should be at least 2 patches (initContainers and the container env patches)
+			Expect(len(patch)).To(BeNumerically(">=", 2))
 		})
 	})
 })

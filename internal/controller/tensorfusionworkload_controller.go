@@ -346,10 +346,11 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 
 		// Create and append worker status
 		workerStatus := tfv1.WorkerStatus{
-			WorkerPhase: workerPhase,
-			WorkerName:  pod.Name,
-			WorkerIp:    ip,
-			WorkerPort:  port,
+			WorkerPhase:  workerPhase,
+			WorkerName:   pod.Name,
+			WorkerIp:     ip,
+			WorkerPort:   port,
+			NodeSelector: pod.Spec.NodeSelector,
 		}
 
 		workerStatuses = append(workerStatuses, workerStatus)

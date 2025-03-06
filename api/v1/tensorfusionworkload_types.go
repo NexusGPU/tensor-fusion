@@ -22,8 +22,9 @@ import (
 
 // TensorFusionWorkloadSpec defines the desired state of TensorFusionWorkload.
 type TensorFusionWorkloadSpec struct {
-	Replicas  *int32    `json:"replicas,omitempty"`
-	PoolName  string    `json:"poolName"`
+	Replicas *int32 `json:"replicas,omitempty"`
+	PoolName string `json:"poolName"`
+	// +optional
 	Resources Resources `json:"resources"`
 	// +optional
 	Qos QoSLevel `json:"qos,omitempty"`
@@ -42,7 +43,8 @@ const (
 type WorkerStatus struct {
 	WorkerPhase WorkerPhase `json:"workerPhase"`
 
-	WorkerName string `json:"workerName"`
+	WorkerName   string            `json:"workerName"`
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 	// +optional
 	WorkerIp string `json:"workerIp,omitempty"`
 	// +optional
