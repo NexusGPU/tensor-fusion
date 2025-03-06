@@ -103,7 +103,17 @@ spec:
             description: TensorFusionWorkloadStatus defines the observed state of
               TensorFusionWorkload.
             properties:
-              WorkerStatuses:
+              readyReplicas:
+                description: readyReplicas is the number of pods created for this
+                  Workload with a Ready Condition.
+                format: int32
+                type: integer
+              replicas:
+                description: replicas is the number of Pods created by the Workload
+                  controller.
+                format: int32
+                type: integer
+              workerStatuses:
                 items:
                   properties:
                     nodeSelector:
@@ -123,16 +133,6 @@ spec:
                   - workerPhase
                   type: object
                 type: array
-              readyReplicas:
-                description: readyReplicas is the number of pods created for this
-                  Workload with a Ready Condition.
-                format: int32
-                type: integer
-              replicas:
-                description: replicas is the number of Pods created by the Workload
-                  controller.
-                format: int32
-                type: integer
             required:
             - replicas
             type: object

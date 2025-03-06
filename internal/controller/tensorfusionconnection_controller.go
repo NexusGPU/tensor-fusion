@@ -20,8 +20,10 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -35,7 +37,8 @@ import (
 // TensorFusionConnectionReconciler reconciles a TensorFusionConnection object
 type TensorFusionConnectionReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
@@ -75,11 +78,14 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 
 	needReSelectWorker, workerStatus := r.needReSelectWorker(connection, workload.Status.WorkerStatuses)
 	if needReSelectWorker {
+		r.Recorder.Eventf(connection, corev1.EventTypeNormal, "SelectingWorker", "Selecting worker for connection %s", connection.Name)
 		s, err := worker.SelectWorker(ctx, r.Client, workloadName, workload.Status.WorkerStatuses)
 		if err != nil {
+			r.Recorder.Eventf(connection, corev1.EventTypeWarning, "WorkerSelectionFailed", "Failed to select worker: %v", err)
 			return ctrl.Result{}, err
 		}
 		workerStatus = *s
+		r.Recorder.Eventf(connection, corev1.EventTypeNormal, "WorkerSelected", "Worker %s successfully selected for connection", workerStatus.WorkerName)
 	}
 
 	connection.Status.Phase = workerStatus.WorkerPhase
@@ -88,6 +94,7 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 	if err := r.Status().Update(ctx, connection); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update connection status: %w", err)
 	}
+	r.Recorder.Eventf(connection, corev1.EventTypeNormal, "ConnectionReady", "Connection URL: %s", connection.Status.ConnectionURL)
 	return ctrl.Result{}, nil
 }
 

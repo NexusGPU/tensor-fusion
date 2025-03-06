@@ -159,8 +159,9 @@ func main() {
 
 	scheduler := scheduler.NewScheduler(mgr.GetClient())
 	if err = (&controller.TensorFusionConnectionReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("TensorFusionConnection"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionConnection")
 		os.Exit(1)
