@@ -258,6 +258,7 @@ func main() {
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Scheduler: scheduler,
+		Recorder:  mgr.GetEventRecorderFor("tensorfusionworkload"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionWorkload")
 		os.Exit(1)
