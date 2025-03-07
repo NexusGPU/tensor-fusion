@@ -22,10 +22,10 @@ spec:
         tensor-fusion.ai/client-profile: defalut-clientprofile
         tensor-fusion.ai/generate-workload: 'true'
         tensor-fusion.ai/gpupool: shared-tensor-fusion-cluster-shared
-        tensor-fusion.ai/tflops-limit-python: '10'
-        tensor-fusion.ai/tflops-request-python: '10'
-        tensor-fusion.ai/vram-limit-python: 1Gi
-        tensor-fusion.ai/vram-request-python: 1Gi
+        tensor-fusion.ai/tflops-limit: '10'
+        tensor-fusion.ai/tflops-request: '10'
+        tensor-fusion.ai/vram-limit: 1Gi
+        tensor-fusion.ai/vram-request: 1Gi
     spec:
       containers:
         - name: pytorch

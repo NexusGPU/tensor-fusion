@@ -26,7 +26,9 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
 	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
@@ -109,6 +111,37 @@ func (r *TensorFusionConnectionReconciler) needReSelectWorker(connection *tfv1.T
 func (r *TensorFusionConnectionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.TensorFusionConnection{}).
+		Watches(
+			&tfv1.TensorFusionWorkload{},
+			handler.EnqueueRequestsFromMapFunc(r.findConnectionsForWorkload),
+		).
 		Named("tensorfusionconnection").
 		Complete(r)
+}
+
+// findConnectionsForWorkload maps a TensorFusionWorkload to its associated TensorFusionConnections
+func (r *TensorFusionConnectionReconciler) findConnectionsForWorkload(ctx context.Context, obj client.Object) []reconcile.Request {
+	workload, ok := obj.(*tfv1.TensorFusionWorkload)
+	if !ok {
+		return nil
+	}
+
+	// Get the list of connections associated with this workload
+	connectionList := &tfv1.TensorFusionConnectionList{}
+	if err := r.List(ctx, connectionList,
+		client.InNamespace(workload.Namespace),
+		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
+		return nil
+	}
+	var requests []reconcile.Request
+	for i := range connectionList.Items {
+		connection := &connectionList.Items[i]
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKey{
+				Name:      connection.Name,
+				Namespace: connection.Namespace,
+			},
+		})
+	}
+	return requests
 }
