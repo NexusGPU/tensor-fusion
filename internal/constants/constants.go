@@ -44,9 +44,11 @@ const (
 	ConnectionNameEnv      = "TENSOR_FUSION_CONNECTION_NAME"
 	ConnectionNamespaceEnv = "TENSOR_FUSION_CONNECTION_NAMESPACE"
 
-	WorkerPortEnv       = "TENSOR_FUSION_WORKER_PORT"
-	NamespaceEnv        = "OPERATOR_NAMESPACE"
-	NamespaceDefaultVal = "tensor-fusion"
+	WorkerPortEnv        = "TENSOR_FUSION_WORKER_PORT"
+	WokerCudaUpLimitEnv  = "TENSOR_FUSION_CUDA_UP_LIMIT"
+	WokerCudaMemLimitEnv = "TENSOR_FUSION_CUDA_MEM_LIMIT"
+	NamespaceEnv         = "OPERATOR_NAMESPACE"
+	NamespaceDefaultVal  = "tensor-fusion"
 )
 
 const (

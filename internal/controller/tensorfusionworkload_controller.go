@@ -165,7 +165,7 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 		if errors.IsNotFound(err) {
 			// Pod doesn't exist, create a new one
 			port := workerGenerator.AllocPort()
-			pod, err = workerGenerator.GenerateWorkerPod(gpu, namespacedName, port)
+			pod, err = workerGenerator.GenerateWorkerPod(gpu, namespacedName, port, workload.Spec.Resources.Limits)
 			if err != nil {
 				return nil, fmt.Errorf("generate worker pod %w", err)
 			}

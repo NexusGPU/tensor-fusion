@@ -48,6 +48,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	gpu *tfv1.GPU,
 	namespacedName types.NamespacedName,
 	port int,
+	limits tfv1.Resource,
 ) (*corev1.Pod, error) {
 	podTmpl := &corev1.PodTemplate{}
 	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
@@ -78,6 +79,14 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	}, corev1.EnvVar{
 		Name:  constants.WorkerPortEnv,
 		Value: strconv.Itoa(port),
+	}, corev1.EnvVar{
+		Name: constants.WokerCudaUpLimitEnv,
+		// TODO: convert tflops to percent
+		Value: "100",
+	}, corev1.EnvVar{
+		Name: constants.WokerCudaMemLimitEnv,
+		// bytesize
+		Value: strconv.FormatInt(limits.Vram.Value(), 10),
 	})
 
 	return &corev1.Pod{
