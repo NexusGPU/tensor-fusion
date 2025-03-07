@@ -133,7 +133,7 @@ func (r *TensorFusionConnectionReconciler) findConnectionsForWorkload(ctx contex
 		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
 		return nil
 	}
-	var requests []reconcile.Request
+	requests := []reconcile.Request{}
 	for i := range connectionList.Items {
 		connection := &connectionList.Items[i]
 		requests = append(requests, reconcile.Request{
