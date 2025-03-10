@@ -92,7 +92,12 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 
 	connection.Status.Phase = workerStatus.WorkerPhase
 	connection.Status.WorkerName = workerStatus.WorkerName
-	connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d", workerStatus.WorkerIp, workerStatus.WorkerPort)
+	resourceVersion := workerStatus.ResourceVersion
+	if resourceVersion == "" {
+		resourceVersion = "0"
+	}
+
+	connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d+%s-%s", workerStatus.WorkerIp, workerStatus.WorkerPort, workerStatus.WorkerName, resourceVersion)
 	if err := r.Status().Update(ctx, connection); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update connection status: %w", err)
 	}

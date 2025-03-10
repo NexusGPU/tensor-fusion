@@ -49,6 +49,8 @@ type WorkerStatus struct {
 	WorkerIp string `json:"workerIp,omitempty"`
 	// +optional
 	WorkerPort int `json:"workerPort,omitempty"`
+	// +optional
+	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 
 // TensorFusionWorkloadStatus defines the observed state of TensorFusionWorkload.

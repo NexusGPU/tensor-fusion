@@ -172,7 +172,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			// Verify specific values
 			Expect(connection.Status.WorkerName).To(Equal("test-worker-1"))
 			Expect(connection.Status.Phase).To(Equal(tfv1.WorkerRunning))
-			Expect(connection.Status.ConnectionURL).To(Equal("native+192.168.1.1+8080"))
+			Expect(connection.Status.ConnectionURL).To(Equal("native+192.168.1.1+8080+test-worker-1-0"))
 		})
 
 		It("should handle missing workload label", func() {
@@ -268,7 +268,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					return false
 				}
 				return connection.Status.WorkerName == "test-worker-2" &&
-					connection.Status.ConnectionURL == "native+192.168.1.2+8081"
+					connection.Status.ConnectionURL == "native+192.168.1.2+8081+test-worker-2-0"
 			}, time.Second*5, time.Millisecond*100).Should(BeTrue())
 		})
 	})

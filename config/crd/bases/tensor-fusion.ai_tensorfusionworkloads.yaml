@@ -120,6 +120,8 @@ spec:
                       additionalProperties:
                         type: string
                       type: object
+                    resourceVersion:
+                      type: string
                     workerIp:
                       type: string
                     workerName:
