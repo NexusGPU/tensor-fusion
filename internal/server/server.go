@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/NexusGPU/tensor-fusion-operator/internal/server/router"
+	"github.com/NexusGPU/tensor-fusion/internal/server/router"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 )

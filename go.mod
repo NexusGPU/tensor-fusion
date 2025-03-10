@@ -1,4 +1,4 @@
-module github.com/NexusGPU/tensor-fusion-operator
+module github.com/NexusGPU/tensor-fusion
 
 go 1.23.4
 

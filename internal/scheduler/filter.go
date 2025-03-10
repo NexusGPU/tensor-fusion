@@ -3,7 +3,7 @@ package scheduler
 import (
 	"context"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
 // GPUFilter defines an interface for filtering GPU candidates

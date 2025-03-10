@@ -34,12 +34,12 @@ import (
 
 	"reflect"
 
-	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
-	scheduler "github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/utils"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/worker"
+	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	"github.com/NexusGPU/tensor-fusion/internal/worker"
 )
 
 // TensorFusionWorkloadReconciler reconciles a TensorFusionWorkload object

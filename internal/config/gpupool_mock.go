@@ -3,7 +3,7 @@ package config
 import (
 	"encoding/json"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"

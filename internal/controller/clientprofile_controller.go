@@ -24,7 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
 // ClientProfileReconciler reconciles a ClientProfile object

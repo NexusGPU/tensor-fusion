@@ -27,8 +27,8 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/config"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 

@@ -8,8 +8,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/cloudprovider/types"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 )
 
 type AWSGPUNodeProvider struct {

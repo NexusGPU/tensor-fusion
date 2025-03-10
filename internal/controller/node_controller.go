@@ -22,9 +22,9 @@ import (
 	"os"
 	"strings"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/utils"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"

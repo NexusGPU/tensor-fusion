@@ -32,10 +32,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/cloudprovider"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
-	utils "github.com/NexusGPU/tensor-fusion-operator/internal/utils"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	utils "github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

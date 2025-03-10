@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/gin-gonic/gin"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"

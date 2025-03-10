@@ -21,9 +21,9 @@ import (
 	"fmt"
 	"sync"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
-	utils "github.com/NexusGPU/tensor-fusion-operator/internal/utils"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	utils "github.com/NexusGPU/tensor-fusion/internal/utils"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"

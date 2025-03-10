@@ -23,12 +23,12 @@ import (
 	"strings"
 	"time"
 
-	cloudprovider "github.com/NexusGPU/tensor-fusion-operator/internal/cloudprovider"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/cloudprovider/types"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/utils"
+	cloudprovider "github.com/NexusGPU/tensor-fusion/internal/cloudprovider"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"

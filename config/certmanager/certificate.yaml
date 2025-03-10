@@ -5,7 +5,7 @@ apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
   labels:
-    app.kubernetes.io/name: tensor-fusion-operator
+    app.kubernetes.io/name: tensor-fusion
     app.kubernetes.io/managed-by: kustomize
   name: selfsigned-issuer
   namespace: system
@@ -19,8 +19,8 @@ metadata:
     app.kubernetes.io/name: certificate
     app.kubernetes.io/instance: serving-cert
     app.kubernetes.io/component: certificate
-    app.kubernetes.io/created-by: tensor-fusion-operator
-    app.kubernetes.io/part-of: tensor-fusion-operator
+    app.kubernetes.io/created-by: tensor-fusion
+    app.kubernetes.io/part-of: tensor-fusion
     app.kubernetes.io/managed-by: kustomize
   name: serving-cert  # this name should match the one appeared in kustomizeconfig.yaml
   namespace: system

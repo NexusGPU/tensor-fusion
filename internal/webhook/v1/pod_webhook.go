@@ -33,9 +33,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/worker"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/worker"
 	"github.com/lithammer/shortuuid/v4"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )

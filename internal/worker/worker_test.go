@@ -3,7 +3,7 @@ package worker
 import (
 	"testing"
 
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

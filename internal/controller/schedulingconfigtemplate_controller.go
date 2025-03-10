@@ -19,7 +19,7 @@ package controller
 import (
 	"context"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"

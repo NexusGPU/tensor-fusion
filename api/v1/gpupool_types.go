@@ -17,7 +17,7 @@ limitations under the License.
 package v1
 
 import (
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	types "github.com/NexusGPU/tensor-fusion-operator/internal/cloudprovider/types"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	types "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 )
 
 type MockGPUNodeProvider struct {

@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: controller-manager
   labels:
-    app.kubernetes.io/name: tensor-fusion-operator
+    app.kubernetes.io/name: tensor-fusion
     app.kubernetes.io/managed-by: kustomize
 spec:
   template:

@@ -21,9 +21,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/config"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	admissionv1 "k8s.io/api/admission/v1"

@@ -3,12 +3,12 @@ package cloudprovider
 import (
 	"fmt"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/cloudprovider/types"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 
-	alibaba "github.com/NexusGPU/tensor-fusion-operator/internal/cloudprovider/alibaba"
-	aws "github.com/NexusGPU/tensor-fusion-operator/internal/cloudprovider/aws"
-	mock "github.com/NexusGPU/tensor-fusion-operator/internal/cloudprovider/mock"
+	alibaba "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/alibaba"
+	aws "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/aws"
+	mock "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/mock"
 )
 
 func GetProvider(config tfv1.ComputingVendorConfig) (*types.GPUNodeProvider, error) {

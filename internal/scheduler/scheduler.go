@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 

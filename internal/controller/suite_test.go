@@ -36,10 +36,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/config"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/utils"
+	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	// +kubebuilder:scaffold:imports
 )
 

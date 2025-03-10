@@ -4,7 +4,7 @@ metadata:
   name: controller-manager
   labels:
     control-plane: controller-manager
-    app.kubernetes.io/name: tensor-fusion-operator
+    app.kubernetes.io/name: tensor-fusion
     app.kubernetes.io/managed-by: kustomize
 spec:
   selector:

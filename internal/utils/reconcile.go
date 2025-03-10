@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	constants "github.com/NexusGPU/tensor-fusion-operator/internal/constants"
+	constants "github.com/NexusGPU/tensor-fusion/internal/constants"
 	"k8s.io/apimachinery/pkg/types"
 
 	corev1 "k8s.io/api/core/v1"

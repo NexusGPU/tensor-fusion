@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
 var _ = Describe("ClientProfile Controller", func() {

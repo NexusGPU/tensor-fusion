@@ -31,10 +31,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
-	scheduler "github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
+	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
 )
 
 var _ = Describe("TensorFusionWorkload Controller", func() {

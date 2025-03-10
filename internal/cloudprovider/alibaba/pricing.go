@@ -3,7 +3,7 @@ package alibaba
 import (
 	"fmt"
 
-	"github.com/NexusGPU/tensor-fusion-operator/internal/cloudprovider/types"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 )
 
 var GPUInstanceTypeInfo []types.GPUNodeInstanceInfo

@@ -14,9 +14,9 @@ import (
 	"github.com/shirou/gopsutil/mem"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/config"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/constants"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

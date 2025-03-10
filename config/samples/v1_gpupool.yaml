@@ -2,7 +2,7 @@ apiVersion: tensor-fusion.ai/v1
 kind: GPUPool
 metadata:
   labels:
-    app.kubernetes.io/name: tensor-fusion-operator
+    app.kubernetes.io/name: tensor-fusion
     app.kubernetes.io/managed-by: kustomize
   name: gpupool-sample
 spec:

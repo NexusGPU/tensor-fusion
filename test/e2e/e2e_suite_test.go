@@ -25,7 +25,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/NexusGPU/tensor-fusion-operator/test/utils"
+	"github.com/NexusGPU/tensor-fusion/test/utils"
 )
 
 var (

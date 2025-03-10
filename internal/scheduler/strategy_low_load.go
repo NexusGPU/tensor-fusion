@@ -3,7 +3,7 @@ package scheduler
 import (
 	"fmt"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
 // LowLoadFirst selects GPU with maximum available resources (least utilized)

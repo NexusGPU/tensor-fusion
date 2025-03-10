@@ -39,13 +39,13 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	tfv1 "github.com/NexusGPU/tensor-fusion-operator/api/v1"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/controller"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/scheduler"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/server"
-	"github.com/NexusGPU/tensor-fusion-operator/internal/server/router"
-	webhookcorev1 "github.com/NexusGPU/tensor-fusion-operator/internal/webhook/v1"
+	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/controller"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler"
+	"github.com/NexusGPU/tensor-fusion/internal/server"
+	"github.com/NexusGPU/tensor-fusion/internal/server/router"
+	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
 	// +kubebuilder:scaffold:imports
 )
 
