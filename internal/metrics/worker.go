@@ -6,32 +6,36 @@ import (
 )
 
 var (
+	labels = []string{
+		"namespace", "worker", "pool",
+	}
+
 	GpuTflopsRequest = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gpu_tflops_request",
 		},
-		[]string{"namespace", "pod", "container"},
+		labels,
 	)
 
 	GpuTflopsLimit = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gpu_tflops_limit",
 		},
-		[]string{"namespace", "pod", "container"},
+		labels,
 	)
 
 	VramBytesRequest = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "vram_bytes_request",
 		},
-		[]string{"namespace", "pod", "container"},
+		labels,
 	)
 
 	VramBytesLimit = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "vram_bytes_limit",
 		},
-		[]string{"namespace", "pod", "container"},
+		labels,
 	)
 )
 

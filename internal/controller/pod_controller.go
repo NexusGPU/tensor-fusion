@@ -22,9 +22,6 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
-	"github.com/NexusGPU/tensor-fusion/internal/metrics"
-	webhookv1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -60,10 +57,6 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		log.Error(err, "Failed to get Pod")
 		return ctrl.Result{}, err
 	}
-	tfInfo, err := webhookv1.ParseTensorFusionInfo(ctx, r.Client, pod)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("parse tf resources: %w", err)
-	}
 
 	// generate tensor fusion connections and apply to cluster
 	tfConnection := generateTensorFusionConnection(pod)
@@ -74,19 +67,6 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 				return ctrl.Result{}, fmt.Errorf("create connection(%s) : %w", tfConnection.Namespace+"/"+tfConnection.Name, err)
 			}
 		}
-	}
-
-	// update metrics
-	for _, container := range tfInfo.ContainerNames {
-		labels := prometheus.Labels{
-			"pod":       pod.Name,
-			"namespace": pod.Namespace,
-			"container": container,
-		}
-		metrics.GpuTflopsRequest.With(labels).Set(tfInfo.Profile.Resources.Requests.Tflops.AsApproximateFloat64())
-		metrics.GpuTflopsLimit.With(labels).Set(tfInfo.Profile.Resources.Limits.Tflops.AsApproximateFloat64())
-		metrics.VramBytesRequest.With(labels).Set(tfInfo.Profile.Resources.Requests.Vram.AsApproximateFloat64())
-		metrics.VramBytesLimit.With(labels).Set(tfInfo.Profile.Resources.Limits.Vram.AsApproximateFloat64())
 	}
 
 	return ctrl.Result{}, nil

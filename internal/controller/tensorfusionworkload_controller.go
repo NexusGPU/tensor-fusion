@@ -36,9 +36,11 @@ import (
 	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // TensorFusionWorkloadReconciler reconciles a TensorFusionWorkload object
@@ -141,7 +143,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 
 		// Calculate how many pods need to be removed
 		podsToRemove := int(currentReplicas - desiredReplicas)
-		if err := r.scaleDownWorkers(ctx, podList.Items[:podsToRemove]); err != nil {
+		if err := r.scaleDownWorkers(ctx, workload, podList.Items[:podsToRemove]); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -185,7 +187,7 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 }
 
 // scaleDownWorkers handles the scaling down of worker pods
-func (r *TensorFusionWorkloadReconciler) scaleDownWorkers(ctx context.Context, pods []corev1.Pod) error {
+func (r *TensorFusionWorkloadReconciler) scaleDownWorkers(ctx context.Context, workload *tfv1.TensorFusionWorkload, pods []corev1.Pod) error {
 	log := log.FromContext(ctx)
 
 	for i := range pods {
@@ -196,6 +198,16 @@ func (r *TensorFusionWorkloadReconciler) scaleDownWorkers(ctx context.Context, p
 		if err := r.deletePod(ctx, podToDelete); err != nil {
 			return err
 		}
+
+		labels := prometheus.Labels{
+			"worker":    podToDelete.Name,
+			"namespace": podToDelete.Namespace,
+			"pool":      workload.Spec.PoolName,
+		}
+		metrics.GpuTflopsRequest.Delete(labels)
+		metrics.GpuTflopsLimit.Delete(labels)
+		metrics.VramBytesRequest.Delete(labels)
+		metrics.VramBytesLimit.Delete(labels)
 	}
 	return nil
 }
@@ -271,7 +283,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 			return fmt.Errorf("schedule GPU: %w", err)
 		}
 
-		_, err = r.tryStartWorker(ctx, workerGenerator, gpu, workload)
+		pod, err := r.tryStartWorker(ctx, workerGenerator, gpu, workload)
 		if err != nil {
 			// Try to release the GPU resource if pod creation fails
 			releaseErr := r.Scheduler.Release(ctx, workload.Spec.Resources.Requests, gpu)
@@ -280,6 +292,16 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 			}
 			return fmt.Errorf("create worker pod: %w", err)
 		}
+
+		labels := prometheus.Labels{
+			"worker":    pod.Name,
+			"namespace": pod.Namespace,
+			"pool":      workload.Spec.PoolName,
+		}
+		metrics.GpuTflopsRequest.With(labels).Set(workload.Spec.Resources.Requests.Tflops.AsApproximateFloat64())
+		metrics.GpuTflopsLimit.With(labels).Set(workload.Spec.Resources.Limits.Tflops.AsApproximateFloat64())
+		metrics.VramBytesRequest.With(labels).Set(workload.Spec.Resources.Requests.Vram.AsApproximateFloat64())
+		metrics.VramBytesLimit.With(labels).Set(workload.Spec.Resources.Limits.Vram.AsApproximateFloat64())
 	}
 
 	return nil
