@@ -208,6 +208,18 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 			return true, nil
 		}
 
+		node.Status.AvailableVRAM = resource.Quantity{}
+		node.Status.AvailableTFlops = resource.Quantity{}
+		node.Status.TotalTFlops = resource.Quantity{}
+		node.Status.TotalVRAM = resource.Quantity{}
+
+		for _, gpu := range gpuList {
+			node.Status.AvailableVRAM.Add(gpu.Status.Available.Vram)
+			node.Status.AvailableTFlops.Add(gpu.Status.Available.Tflops)
+			node.Status.TotalVRAM.Add(gpu.Status.Capacity.Vram)
+			node.Status.TotalTFlops.Add(gpu.Status.Capacity.Tflops)
+		}
+
 		virtualVRAM, virtualTFlops := r.CalculateVirtualCapacity(node, poolObj)
 		node.Status.VirtualTFlops = virtualTFlops
 		node.Status.VirtualVRAM = virtualVRAM

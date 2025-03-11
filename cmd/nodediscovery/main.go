@@ -102,10 +102,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	totalTFlops := resource.MustParse("0")
-	totalVRAM := resource.MustParse("0Ki")
-	availableTFlops := resource.MustParse("0")
-	availableVRAM := resource.MustParse("0Ki")
+	totalTFlops := resource.Quantity{}
+	totalVRAM := resource.Quantity{}
+	availableTFlops := resource.Quantity{}
+	availableVRAM := resource.Quantity{}
 
 	allDeviceIDs := make([]string, 0)
 
@@ -140,7 +140,7 @@ func main() {
 		})
 		tflops := info.Fp16TFlops
 		if !ok {
-			tflops = resource.MustParse("0")
+			tflops = resource.Quantity{}
 		}
 		gpu := &tfv1.GPU{
 			ObjectMeta: metav1.ObjectMeta{
