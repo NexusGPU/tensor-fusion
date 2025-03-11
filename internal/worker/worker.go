@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path"
 	"strconv"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"golang.org/x/exp/rand"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -46,7 +44,8 @@ func (wg *WorkerGenerator) AllocPort() int {
 
 func (wg *WorkerGenerator) GenerateWorkerPod(
 	gpu *tfv1.GPU,
-	namespacedName types.NamespacedName,
+	generateName string,
+	namespace string,
 	port int,
 	limits tfv1.Resource,
 ) (*corev1.Pod, error) {
@@ -64,13 +63,14 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		Name: constants.DataVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			HostPath: &corev1.HostPathVolumeSource{
-				Path: path.Join(constants.TFDataPath, namespacedName.Name),
+				Path: constants.TFDataPath,
 			},
 		},
 	})
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, corev1.VolumeMount{
-		Name:      constants.DataVolumeName,
-		MountPath: constants.TFDataPath,
+		Name:        constants.DataVolumeName,
+		MountPath:   constants.TFDataPath,
+		SubPathExpr: fmt.Sprintf("${%s}", constants.WorkerPodNameEnv),
 	})
 
 	spec.Containers[0].Env = append(spec.Containers[0].Env, corev1.EnvVar{
@@ -80,19 +80,26 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		Name:  constants.WorkerPortEnv,
 		Value: strconv.Itoa(port),
 	}, corev1.EnvVar{
-		Name: constants.WokerCudaUpLimitEnv,
+		Name: constants.WorkerCudaUpLimitEnv,
 		// TODO: convert tflops to percent
 		Value: "100",
 	}, corev1.EnvVar{
-		Name: constants.WokerCudaMemLimitEnv,
+		Name: constants.WorkerCudaMemLimitEnv,
 		// bytesize
 		Value: strconv.FormatInt(limits.Vram.Value(), 10),
+	}, corev1.EnvVar{
+		Name: constants.WorkerPodNameEnv,
+		ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{
+				FieldPath: "metadata.name",
+			},
+		},
 	})
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      namespacedName.Name,
-			Namespace: namespacedName.Namespace,
+			GenerateName: generateName,
+			Namespace:    namespace,
 		},
 		Spec: spec,
 	}, nil

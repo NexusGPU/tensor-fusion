@@ -24,7 +24,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -129,7 +128,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 
 		// Calculate how many pods need to be added
 		podsToAdd := int(desiredReplicas - currentReplicas)
-		if err := r.scaleUpWorkers(ctx, workerGenerator, workload, podsToAdd, req.Namespace); err != nil {
+		if err := r.scaleUpWorkers(ctx, workerGenerator, workload, podsToAdd); err != nil {
 			return ctrl.Result{}, err
 		}
 	} else if currentReplicas > desiredReplicas {
@@ -159,38 +158,28 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	workerGenerator *worker.WorkerGenerator,
 	gpu *tfv1.GPU,
 	workload *tfv1.TensorFusionWorkload,
-	namespacedName types.NamespacedName,
 ) (*corev1.Pod, error) {
-	// Try to get the Pod
-	pod := &corev1.Pod{}
-	if err := r.Get(ctx, namespacedName, pod); err != nil {
-		if errors.IsNotFound(err) {
-			// Pod doesn't exist, create a new one
-			port := workerGenerator.AllocPort()
-			pod, err = workerGenerator.GenerateWorkerPod(gpu, namespacedName, port, workload.Spec.Resources.Limits)
-			if err != nil {
-				return nil, fmt.Errorf("generate worker pod %w", err)
-			}
+	port := workerGenerator.AllocPort()
+	pod, err := workerGenerator.GenerateWorkerPod(gpu, workload.Name, workload.Namespace, port, workload.Spec.Resources.Limits)
+	if err != nil {
+		return nil, fmt.Errorf("generate worker pod %w", err)
+	}
 
-			// Add labels to identify this pod as part of the workload
-			if pod.Labels == nil {
-				pod.Labels = make(map[string]string)
-			}
-			pod.Labels[constants.WorkloadKey] = workload.Name
-			pod.Labels[constants.GpuKey] = gpu.Name
+	// Add labels to identify this pod as part of the workload
+	if pod.Labels == nil {
+		pod.Labels = make(map[string]string)
+	}
+	pod.Labels[constants.WorkloadKey] = workload.Name
+	pod.Labels[constants.GpuKey] = gpu.Name
 
-			// Add finalizer for GPU resource cleanup
-			pod.Finalizers = append(pod.Finalizers, constants.Finalizer)
+	// Add finalizer for GPU resource cleanup
+	pod.Finalizers = append(pod.Finalizers, constants.Finalizer)
 
-			if err := ctrl.SetControllerReference(workload, pod, r.Scheme); err != nil {
-				return nil, fmt.Errorf("set owner reference %w", err)
-			}
-			if err := r.Create(ctx, pod); err != nil {
-				return nil, fmt.Errorf("create pod %w", err)
-			}
-			return pod, nil
-		}
-		return nil, err
+	if err := ctrl.SetControllerReference(workload, pod, r.Scheme); err != nil {
+		return nil, fmt.Errorf("set owner reference %w", err)
+	}
+	if err := r.Create(ctx, pod); err != nil {
+		return nil, fmt.Errorf("create pod %w", err)
 	}
 	return pod, nil
 }
@@ -270,12 +259,11 @@ func (r *TensorFusionWorkloadReconciler) deletePod(ctx context.Context, pod *cor
 }
 
 // scaleUpWorkers handles the scaling up of worker pods
-func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, count int, namespace string) error {
+func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, count int) error {
 	log := log.FromContext(ctx)
 
 	// Create worker pods
-	currentCount := int(workload.Status.Replicas)
-	for i := range count {
+	for range count {
 		// Schedule GPU for the worker
 		gpu, err := r.Scheduler.Schedule(ctx, workload.Spec.PoolName, workload.Spec.Resources.Requests)
 		if err != nil {
@@ -283,14 +271,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 			return fmt.Errorf("schedule GPU: %w", err)
 		}
 
-		// Create worker pod
-		workerName := fmt.Sprintf("%s-worker-%d", workload.Name, currentCount+i)
-		namespacedName := types.NamespacedName{
-			Namespace: namespace,
-			Name:      workerName,
-		}
-
-		_, err = r.tryStartWorker(ctx, workerGenerator, gpu, workload, namespacedName)
+		_, err = r.tryStartWorker(ctx, workerGenerator, gpu, workload)
 		if err != nil {
 			// Try to release the GPU resource if pod creation fails
 			releaseErr := r.Scheduler.Release(ctx, workload.Spec.Resources.Requests, gpu)
@@ -299,8 +280,6 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 			}
 			return fmt.Errorf("create worker pod: %w", err)
 		}
-
-		log.Info("Created worker pod", "name", workerName)
 	}
 
 	return nil
