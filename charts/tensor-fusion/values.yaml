@@ -20,7 +20,6 @@ serviceAccount:
   annotations: {}
 
 hypervisor:
-  greptimedbEndpoint: greptimedb-standalone.tensor-fusion.svc.cluster.local:4001
   image:
     repository: tensorfusion/tensor-fusion-hypervisor
     # Overrides the image tag whose default is the chart appVersion.
@@ -51,13 +50,24 @@ controller:
   tolerations: []
   affinity: {}
   
-  greptimedbEndpoint: http://greptimedb-standalone.tensor-fusion.svc.cluster.local:4000/v1/prometheus/write?db=public
   admissionWebhooks:
     failurePolicy: Fail
     secretName: tensor-fusion-webhook-secret
     patch:
       image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0
 
+greptime:
+  isCloud: false
+  internalHost: greptimedb-standalone.tensor-fusion.svc.cluster.local
+  port: 4001
+
+# greptime:
+#   isCloud: true
+#   host: y6lmxod4zm69.us-west-2.aws.greptime.cloud
+#   user: "dummy"
+#   db: "public"
+#   password: "dummy"
+#   port: 5001
 
 agent:
   enrollToken: "token-from-cloud"

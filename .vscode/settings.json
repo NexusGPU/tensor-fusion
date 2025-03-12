@@ -33,6 +33,7 @@
         "gpunodes",
         "gpupool",
         "gpupools",
+        "greptime",
         "greptimedb",
         "healthz",
         "karpenter",

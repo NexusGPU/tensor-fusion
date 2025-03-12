@@ -53,10 +53,19 @@ data:
         inputs:
           - log_to_metric
         new_naming: false
-        endpoint: {{ .Values.hypervisor.greptimedbEndpoint }}
+        endpoint: {{ .Values.greptime.endpoint }}:{{ .Values.greptime.port }}
 
       sink_greptimedb_controller_metrics:
         type: prometheus_remote_write
         inputs:
           - prepare_controller_metrics
-        endpoint: {{ .Values.controller.greptimedbEndpoint }}
+        {{- if ne .Values.greptime.isCloud true }}
+        endpoint: http://{{ .Values.greptime.internalHost }}:4000/v1/prometheus/write?db=public
+        {{- else }}
+        endpoint: https://{{ .Values.greptime.host }}/v1/prometheus/write?db={{ .Values.greptime.db }}
+        {{- end }}
+        auth:
+          strategy: basic
+          user: {{ .Values.greptime.user }}
+          password: {{ .Values.greptime.password }}
+          

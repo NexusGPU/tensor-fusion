@@ -23,12 +23,11 @@ import (
 	"strings"
 	"time"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	cloudprovider "github.com/NexusGPU/tensor-fusion/internal/cloudprovider"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
-	"github.com/NexusGPU/tensor-fusion/internal/utils"
-
-	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -36,6 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -457,6 +457,7 @@ func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *
 		return fmt.Errorf("failed to unmarshal cloud vendor param: %w, GPUNode: %s", err, node.Name)
 	}
 
+	// TODO: query cloud vendor by node name
 	status, err := provider.CreateNode(ctx, &nodeParam)
 	if err != nil {
 		return err
@@ -469,11 +470,31 @@ func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *
 	if err != nil {
 		return err
 	}
+	gpuNode.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
 	gpuNode.Status.NodeInfo.IP = status.PrivateIP
 	gpuNode.Status.NodeInfo.InstanceID = status.InstanceID
 	gpuNode.Status.NodeInfo.Region = nodeParam.Region
-	if err := r.Client.Status().Update(ctx, gpuNode); err != nil {
-		log.FromContext(ctx).Info("Failed to update GPUNode status, must terminate node to keep operation atomic", "name", nodeParam.NodeName)
+
+	// Retry status update until success to handle version conflicts
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		// Get the latest version before attempting an update
+		latest := &tfv1.GPUNode{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, latest); err != nil {
+			return err
+		}
+
+		// Apply our status updates to the latest version
+		latest.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
+		latest.Status.NodeInfo.IP = status.PrivateIP
+		latest.Status.NodeInfo.InstanceID = status.InstanceID
+		latest.Status.NodeInfo.Region = nodeParam.Region
+
+		// Attempt to update with the latest version
+		return r.Client.Status().Update(ctx, latest)
+	})
+
+	if err != nil {
+		log.FromContext(ctx).Error(err, "Failed to update GPUNode status after retries, must terminate node to keep operation atomic", "name", nodeParam.NodeName)
 		errTerminate := provider.TerminateNode(ctx, &types.NodeIdentityParam{
 			InstanceID: status.InstanceID,
 			Region:     nodeParam.Region,
