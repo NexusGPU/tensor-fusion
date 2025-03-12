@@ -288,6 +288,140 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 		})
 	})
 
+	Context("When resource limits change in a workload", func() {
+		It("Should rebuild all worker pods", func() {
+			// Create a workload with 2 replicas
+			workload := &tfv1.TensorFusionWorkload{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: resourceNamespace,
+				},
+				Spec: tfv1.TensorFusionWorkloadSpec{
+					Replicas: ptr.Int32(2),
+					PoolName: poolName,
+					Resources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							Tflops: tflopsRequests,
+							Vram:   vramRequests,
+						},
+						Limits: tfv1.Resource{
+							Tflops: tflopsLimits,
+							Vram:   vramLimits,
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
+
+			// First reconcile to create the initial pods
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Check that pods are created
+			podList := &corev1.PodList{}
+			Eventually(func() int {
+				err := k8sClient.List(ctx, podList,
+					client.InNamespace(resourceNamespace),
+					client.MatchingLabels{constants.WorkloadKey: resourceName})
+				if err != nil {
+					return 0
+				}
+				return len(podList.Items)
+			}, 5*time.Second, 100*time.Millisecond).Should(Equal(2))
+
+			// Store the original pod template hash
+			var originalPodNames []string
+			var originalPodTemplateHash string
+			for _, pod := range podList.Items {
+				originalPodNames = append(originalPodNames, pod.Name)
+				originalPodTemplateHash = pod.Labels[constants.LabelKeyPodTemplateHash]
+			}
+			Expect(originalPodTemplateHash).NotTo(BeEmpty())
+
+			// Update workload with different resource limits
+			workload = &tfv1.TensorFusionWorkload{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, workload)).To(Succeed())
+			workload.Spec.Resources.Limits.Tflops = resource.MustParse("30") // Increase TFLOPS limit
+			workload.Spec.Resources.Limits.Vram = resource.MustParse("24Gi") // Increase VRAM limit
+			Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+
+			// Reconcile to handle the resource limits change
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Reconcile again to handle the Finalizer
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify old pods are deleted due to template hash change
+			Eventually(func() bool {
+				podList := &corev1.PodList{}
+				err := k8sClient.List(ctx, podList,
+					client.InNamespace(resourceNamespace),
+					client.MatchingLabels{constants.WorkloadKey: resourceName})
+				if err != nil || len(podList.Items) != 0 {
+					return false
+				}
+				return true // All pods should be deleted
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+
+			// Reconcile again to create new pods
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify new pods are created
+			Eventually(func() int {
+				err := k8sClient.List(ctx, podList,
+					client.InNamespace(resourceNamespace),
+					client.MatchingLabels{constants.WorkloadKey: resourceName})
+				if err != nil {
+					return 0
+				}
+				return len(podList.Items)
+			}, 5*time.Second, 100*time.Millisecond).Should(Equal(2))
+
+			// Verify new pods have different names and pod template hash
+			var newPodNames []string
+			var newPodTemplateHash string
+			for _, pod := range podList.Items {
+				newPodNames = append(newPodNames, pod.Name)
+				newPodTemplateHash = pod.Labels[constants.LabelKeyPodTemplateHash]
+			}
+			Expect(newPodTemplateHash).NotTo(BeEmpty())
+			Expect(newPodTemplateHash).NotTo(Equal(originalPodTemplateHash))
+
+			// Verify that pod names have changed
+			for _, originalName := range originalPodNames {
+				Expect(newPodNames).NotTo(ContainElement(originalName))
+			}
+
+			// Reconcile again to handle status
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify workload status was updated
+			Eventually(func() int32 {
+				workload := &tfv1.TensorFusionWorkload{}
+				err = k8sClient.Get(ctx, typeNamespacedName, workload)
+				if err != nil {
+					return -1
+				}
+				return workload.Status.Replicas
+			}, 5*time.Second, 100*time.Millisecond).Should(Equal(int32(2)))
+		})
+	})
+
 	Context("When scaling down a workload", func() {
 		It("Should delete excess worker pods", func() {
 			// Create a workload with 3 replicas

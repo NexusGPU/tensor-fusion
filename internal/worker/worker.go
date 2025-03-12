@@ -9,6 +9,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 	"golang.org/x/exp/rand"
 	corev1 "k8s.io/api/core/v1"
@@ -42,18 +43,28 @@ func (wg *WorkerGenerator) AllocPort() int {
 	return rand.Intn(max-min+1) + min
 }
 
+func (wg *WorkerGenerator) PodTemplateHash(limits tfv1.Resource) (string, error) {
+	podTmpl := &corev1.PodTemplate{}
+	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
+	if err != nil {
+		return "", fmt.Errorf("failed to unmarshal pod template: %w", err)
+	}
+	return utils.GetObjectHash(podTmpl, limits), nil
+}
+
 func (wg *WorkerGenerator) GenerateWorkerPod(
 	gpu *tfv1.GPU,
 	generateName string,
 	namespace string,
 	port int,
 	limits tfv1.Resource,
-) (*corev1.Pod, error) {
+) (*corev1.Pod, string, error) {
 	podTmpl := &corev1.PodTemplate{}
 	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal pod template: %w", err)
+		return nil, "", fmt.Errorf("failed to unmarshal pod template: %w", err)
 	}
+	podTemplateHash := utils.GetObjectHash(podTmpl, limits)
 	spec := podTmpl.Template.Spec
 	if spec.NodeSelector == nil {
 		spec.NodeSelector = make(map[string]string)
@@ -95,14 +106,13 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 			},
 		},
 	})
-
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: generateName,
 			Namespace:    namespace,
 		},
 		Spec: spec,
-	}, nil
+	}, podTemplateHash, nil
 }
 
 func SelectWorker(ctx context.Context, k8sClient client.Client, workloadName string, workerStatuses []tfv1.WorkerStatus) (*tfv1.WorkerStatus, error) {

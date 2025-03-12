@@ -106,6 +106,38 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	// Create worker generator
 	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker}
 
+	podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec.Resources.Limits)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("get pod template hash: %w", err)
+	}
+
+	if workload.Status.PodTemplateHash != podTemplateHash {
+		workload.Status.PodTemplateHash = podTemplateHash
+		if err := r.Status().Update(ctx, workload); err != nil {
+			return ctrl.Result{}, fmt.Errorf("update status: %w", err)
+		}
+	}
+
+	// Check if there are any Pods using the old podTemplateHash and delete them if any
+	if len(podList.Items) > 0 {
+		var outdatedPods []corev1.Pod
+		for i := range podList.Items {
+			pod := &podList.Items[i]
+			if pod.Labels[constants.LabelKeyPodTemplateHash] != podTemplateHash {
+				outdatedPods = append(outdatedPods, *pod)
+			}
+		}
+
+		if len(outdatedPods) > 0 {
+			log.Info("Found outdated pods with different template hash", "count", len(outdatedPods))
+			if err := r.scaleDownWorkers(ctx, workload, outdatedPods); err != nil {
+				return ctrl.Result{}, err
+			}
+			// After deletion, requeue, and the next reconcile will create a new pod
+			return ctrl.Result{Requeue: true}, nil
+		}
+	}
+
 	// Determine the number of replicas
 	desiredReplicas := int32(1)
 	if workload.Spec.Replicas != nil {
@@ -162,7 +194,7 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	workload *tfv1.TensorFusionWorkload,
 ) (*corev1.Pod, error) {
 	port := workerGenerator.AllocPort()
-	pod, err := workerGenerator.GenerateWorkerPod(gpu, workload.Name+"-", workload.Namespace, port, workload.Spec.Resources.Limits)
+	pod, hash, err := workerGenerator.GenerateWorkerPod(gpu, workload.Name+"-", workload.Namespace, port, workload.Spec.Resources.Limits)
 	if err != nil {
 		return nil, fmt.Errorf("generate worker pod %w", err)
 	}
@@ -173,6 +205,7 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	}
 	pod.Labels[constants.WorkloadKey] = workload.Name
 	pod.Labels[constants.GpuKey] = gpu.Name
+	pod.Labels[constants.LabelKeyPodTemplateHash] = hash
 
 	// Add finalizer for GPU resource cleanup
 	pod.Finalizers = append(pod.Finalizers, constants.Finalizer)

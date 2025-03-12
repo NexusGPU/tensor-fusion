@@ -2,10 +2,10 @@ package utils
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"hash/fnv"
 	"math"
 	"math/rand/v2"
 	"os"
@@ -95,15 +95,21 @@ func CurrentNamespace() string {
 	return namespace
 }
 
-func GetObjectHash(obj any) string {
-	hasher := sha256.New()
-	jsonBytes, err := json.Marshal(obj)
-	if err != nil {
-		panic(err)
+// GetObjectHash generates a shorter FNV-1a hash for one or more objects
+func GetObjectHash(objs ...any) string {
+	hasher := fnv.New64a()
+
+	for _, obj := range objs {
+		jsonBytes, err := json.Marshal(obj)
+		if err != nil {
+			panic(err)
+		}
+		// Add length prefix to prevent collisions when combining multiple objects
+		hasher.Write(fmt.Appendf(nil, "%d:", len(jsonBytes)))
+		hasher.Write(jsonBytes)
 	}
-	str := string(jsonBytes)
-	hasher.Write([]byte(str))
-	return hex.EncodeToString(hasher.Sum(nil))
+
+	return fmt.Sprintf("%x", hasher.Sum(nil))
 }
 
 const DebounceKeySuffix = ":in_queue"

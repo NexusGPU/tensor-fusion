@@ -62,6 +62,8 @@ type TensorFusionWorkloadStatus struct {
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
 	WorkerStatuses []WorkerStatus `json:"workerStatuses,omitempty"`
+
+	PodTemplateHash string `json:"podTemplateHash,omitempty"`
 }
 
 // +kubebuilder:object:root=true

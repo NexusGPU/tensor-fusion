@@ -10,9 +10,10 @@ const (
 	FinalizerSuffix = "finalizer"
 	Finalizer       = Domain + "/" + FinalizerSuffix
 
-	LabelKeyOwner        = Domain + "/managed-by"
-	LabelKeyClusterOwner = Domain + "/cluster"
-	LabelKeyNodeClass    = Domain + "/node-class"
+	LabelKeyOwner           = Domain + "/managed-by"
+	LabelKeyClusterOwner    = Domain + "/cluster"
+	LabelKeyNodeClass       = Domain + "/node-class"
+	LabelKeyPodTemplateHash = Domain + "/pod-template-hash"
 
 	GPUNodePoolIdentifierLabelPrefix = Domain + "/pool-"
 	GPUNodePoolIdentifierLabelFormat = Domain + "/pool-%s"
@@ -80,7 +81,7 @@ const (
 const (
 	// No disrupt label, similar to Karpenter, avoid TFConnection/Worker/GPUNode to be moved to another node or destroying node.
 	// Refer: https://karpenter.sh/docs/concepts/disruption/
-	SchedulingDoNotDisruptLabel = "tensor-fusion.ai/do-not-disrupt"
+	SchedulingDoNotDisruptLabel = Domain + "/do-not-disrupt"
 )
 
 const (
@@ -91,7 +92,7 @@ const (
 
 // To match GPUNode with K8S node, when creating from cloud vendor, must set a label from cloud-init userdata
 const (
-	ProvisionerLabelKey        = "tensor-fusion.ai/node-provisioner"
+	ProvisionerLabelKey        = Domain + "/node-provisioner"
 	ProvisionerNamePlaceholder = "__GPU_NODE_RESOURCE_NAME__"
 )
 const (
@@ -100,4 +101,4 @@ const (
 
 const TFDataPath = "/tmp/tensor-fusion/data"
 const DataVolumeName = "tf-data"
-const TensorFusionPoolManualCompaction = "tensor-fusion.ai/manual-compaction"
+const TensorFusionPoolManualCompaction = Domain + "/manual-compaction"

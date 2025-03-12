@@ -103,6 +103,8 @@ spec:
             description: TensorFusionWorkloadStatus defines the observed state of
               TensorFusionWorkload.
             properties:
+              podTemplateHash:
+                type: string
               readyReplicas:
                 description: readyReplicas is the number of pods created for this
                   Workload with a Ready Condition.
