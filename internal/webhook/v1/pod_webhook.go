@@ -201,6 +201,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		}
 	}
 
+	contianerPatched := false
 	// Patch to Container
 	for _, name := range containerNames {
 		for i := range pod.Spec.Containers {
@@ -241,9 +242,14 @@ func (m *TensorFusionPodMutator) patchTFClient(
 					Name:  constants.GetConnectionURLEnv,
 					Value: fmt.Sprintf("%s/api/connection?name=%s&namespace=%s", clientConfig.OperatorEndpoint, connectionName, connectionNamespace),
 				})
+				contianerPatched = true
 			}
 			pod.Spec.Containers[i] = *container
 		}
+	}
+
+	if !contianerPatched {
+		return nil, fmt.Errorf("no container found that needs tf-client injection")
 	}
 
 	containerPatchedJSON, err := json.Marshal(pod)
