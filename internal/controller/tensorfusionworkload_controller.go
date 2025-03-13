@@ -194,7 +194,7 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	workload *tfv1.TensorFusionWorkload,
 ) (*corev1.Pod, error) {
 	port := workerGenerator.AllocPort()
-	pod, hash, err := workerGenerator.GenerateWorkerPod(gpu, workload.Name+"-", workload.Namespace, port, workload.Spec.Resources.Limits)
+	pod, hash, err := workerGenerator.GenerateWorkerPod(gpu, fmt.Sprintf("%s-tf-worker-", workload.Name), workload.Namespace, port, workload.Spec.Resources.Limits)
 	if err != nil {
 		return nil, fmt.Errorf("generate worker pod %w", err)
 	}
