@@ -5,6 +5,9 @@ metadata:
   namespace: {{ include "tensor-fusion.namespace" . }}
 data:
   vector.yaml: |
+    api:
+      enabled: true
+    
     sources:
       metrics:
         type: file
@@ -53,14 +56,20 @@ data:
         inputs:
           - log_to_metric
         new_naming: false
-        endpoint: {{ .Values.greptime.endpoint }}:{{ .Values.greptime.port }}
+        endpoint: {{ .Values.greptime.host }}:{{ .Values.greptime.port }}
+        {{- if eq .Values.greptime.isCloud true }}
+        dbname: {{ .Values.greptime.db }}
+        username: {{ .Values.greptime.user }}
+        password: {{ .Values.greptime.password }}
+        tls: {}
+        {{- end }}
 
       sink_greptimedb_controller_metrics:
         type: prometheus_remote_write
         inputs:
           - prepare_controller_metrics
         {{- if ne .Values.greptime.isCloud true }}
-        endpoint: http://{{ .Values.greptime.internalHost }}:4000/v1/prometheus/write?db=public
+        endpoint: http://{{ .Values.greptime.host }}:4000/v1/prometheus/write?db=public
         {{- else }}
         endpoint: https://{{ .Values.greptime.host }}/v1/prometheus/write?db={{ .Values.greptime.db }}
         {{- end }}

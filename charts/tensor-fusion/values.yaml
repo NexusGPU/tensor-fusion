@@ -58,8 +58,9 @@ controller:
 
 greptime:
   isCloud: false
-  internalHost: greptimedb-standalone.tensor-fusion.svc.cluster.local
+  host: greptimedb-standalone.greptimedb.svc.cluster.local
   port: 4001
+  installStandalone: true
 
 # greptime:
 #   isCloud: true
