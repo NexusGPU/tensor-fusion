@@ -82,6 +82,7 @@ func (p AlibabaGPUNodeProvider) CreateNode(ctx context.Context, param *types.Nod
 	nodeClass := param.NodeClass.Spec
 	request := ecs.CreateRunInstancesRequest()
 	request.LaunchTemplateId = nodeClass.LaunchTemplate.ID
+	request.ClientToken = param.NodeName
 
 	if len(nodeClass.OSImageSelectorTerms) > 0 {
 		// TODO: should support other query types not only ID
