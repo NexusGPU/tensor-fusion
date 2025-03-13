@@ -105,42 +105,72 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	}, nil
 }
 
-func SelectWorker(ctx context.Context, k8sClient client.Client, workloadName string, workerStatuses []tfv1.WorkerStatus) (*tfv1.WorkerStatus, error) {
-	if len(workerStatuses) == 0 {
+func SelectWorker(
+	ctx context.Context,
+	k8sClient client.Client,
+	workload *tfv1.TensorFusionWorkload,
+	maxSkew int32,
+) (*tfv1.WorkerStatus, error) {
+	if len(workload.Status.WorkerStatuses) == 0 {
 		return nil, fmt.Errorf("no available worker")
 	}
-	usageMapping := make(map[string]int, len(workerStatuses))
-	for _, workerStatus := range workerStatuses {
+	usageMapping := make(map[string]int, len(workload.Status.WorkerStatuses))
+	for _, workerStatus := range workload.Status.WorkerStatuses {
 		usageMapping[workerStatus.WorkerName] = 0
 	}
 
 	connectionList := tfv1.TensorFusionConnectionList{}
-	if err := k8sClient.List(ctx, &connectionList, client.MatchingLabels{constants.WorkloadKey: workloadName}); err != nil {
+	if err := k8sClient.List(ctx, &connectionList, client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
 		return nil, fmt.Errorf("list TensorFusionConnection: %w", err)
 	}
 
 	for _, connection := range connectionList.Items {
 		if connection.Status.WorkerName != "" {
-			continue
+			usageMapping[connection.Status.WorkerName]++
 		}
-		usageMapping[connection.Status.WorkerName]++
 	}
 
-	var minUsageWorker *tfv1.WorkerStatus
-	// Initialize with max int value
+	// First find the minimum usage
 	minUsage := int(^uint(0) >> 1)
-	for _, workerStatus := range workerStatuses {
+	// Initialize with max int value
+	for _, workerStatus := range workload.Status.WorkerStatuses {
 		if workerStatus.WorkerPhase == tfv1.WorkerFailed {
 			continue
 		}
 		usage := usageMapping[workerStatus.WorkerName]
 		if usage < minUsage {
 			minUsage = usage
-			minUsageWorker = &workerStatus
 		}
 	}
-	if minUsageWorker == nil {
+
+	// Collect all eligible workers that are within maxSkew of the minimum usage
+	var eligibleWorkers []*tfv1.WorkerStatus
+	for _, workerStatus := range workload.Status.WorkerStatuses {
+		if workerStatus.WorkerPhase == tfv1.WorkerFailed {
+			continue
+		}
+		usage := usageMapping[workerStatus.WorkerName]
+		// Worker is eligible if its usage is within maxSkew of the minimum usage
+		if usage <= minUsage+int(maxSkew) {
+			eligibleWorkers = append(eligibleWorkers, &workerStatus)
+		}
+	}
+
+	if len(eligibleWorkers) == 0 {
 		return nil, fmt.Errorf("no available worker")
 	}
-	return minUsageWorker, nil
+
+	// Choose the worker with the minimum usage among eligible workers
+	selectedWorker := eligibleWorkers[0]
+	selectedUsage := usageMapping[selectedWorker.WorkerName]
+	for i := 1; i < len(eligibleWorkers); i++ {
+		worker := eligibleWorkers[i]
+		usage := usageMapping[worker.WorkerName]
+		if usage < selectedUsage {
+			selectedWorker = worker
+			selectedUsage = usage
+		}
+	}
+
+	return selectedWorker, nil
 }

@@ -93,7 +93,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 				return admission.Errored(http.StatusInternalServerError, fmt.Errorf("workload(%s) does not exist", tfInfo.WorkloadName))
 			}
 		}
-		workloadStatus, err := worker.SelectWorker(ctx, m.Client, tfInfo.WorkloadName, workload.Status.WorkerStatuses)
+		workloadStatus, err := worker.SelectWorker(ctx, m.Client, workload, 1)
 		if err != nil {
 			log.Error(err, "failed to select worker for pod", "pod", req.Name, "namespace", req.Namespace)
 			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("select worker: %w", err))

@@ -81,7 +81,7 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 	needReSelectWorker, workerStatus := r.needReSelectWorker(connection, workload.Status.WorkerStatuses)
 	if needReSelectWorker {
 		r.Recorder.Eventf(connection, corev1.EventTypeNormal, "SelectingWorker", "Selecting worker for connection %s", connection.Name)
-		s, err := worker.SelectWorker(ctx, r.Client, workloadName, workload.Status.WorkerStatuses)
+		s, err := worker.SelectWorker(ctx, r.Client, workload, 1)
 		if err != nil {
 			r.Recorder.Eventf(connection, corev1.EventTypeWarning, "WorkerSelectionFailed", "Failed to select worker: %v", err)
 			return ctrl.Result{}, err
