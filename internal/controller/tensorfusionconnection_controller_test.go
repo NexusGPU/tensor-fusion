@@ -271,5 +271,100 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					connection.Status.ConnectionURL == "native+192.168.1.2+8081+test-worker-2-0"
 			}, time.Second*5, time.Millisecond*100).Should(BeTrue())
 		})
+
+		It("should update status to WorkerPending when worker selection fails", func() {
+			By("Creating a TensorFusionWorkload without worker status")
+
+			// Create a workload with no workers (empty WorkerStatuses)
+			failWorkloadName := "test-workload-no-workers"
+			failWorkloadNamespacedName := types.NamespacedName{
+				Name:      failWorkloadName,
+				Namespace: "default",
+			}
+
+			failWorkload := &tfv1.TensorFusionWorkload{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      failWorkloadName,
+					Namespace: "default",
+				},
+				Spec: tfv1.TensorFusionWorkloadSpec{
+					PoolName: "mock-empty",
+					Resources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							Tflops: resource.MustParse("1"),
+							Vram:   resource.MustParse("1Gi"),
+						},
+						Limits: tfv1.Resource{
+							Tflops: resource.MustParse("1"),
+							Vram:   resource.MustParse("1Gi"),
+						},
+					},
+				},
+				Status: tfv1.TensorFusionWorkloadStatus{
+					Replicas:      0,
+					ReadyReplicas: 0,
+					// Empty WorkerStatuses to force selection failure
+					WorkerStatuses: []tfv1.WorkerStatus{},
+				},
+			}
+			Expect(k8sClient.Create(ctx, failWorkload)).To(Succeed())
+			// Update status
+			Expect(k8sClient.Status().Update(ctx, failWorkload)).To(Succeed())
+
+			// Verify workload was created properly
+			createdWorkload := &tfv1.TensorFusionWorkload{}
+			Eventually(func() bool {
+				if err := k8sClient.Get(ctx, failWorkloadNamespacedName, createdWorkload); err != nil {
+					return false
+				}
+				return len(createdWorkload.Status.WorkerStatuses) == 0
+			}, time.Second*5, time.Millisecond*100).Should(BeTrue())
+
+			By("Creating a connection to the workload with no workers")
+			failConnectionName := "test-connection-fail"
+			failConnectionNamespacedName := types.NamespacedName{
+				Name:      failConnectionName,
+				Namespace: "default",
+			}
+
+			failConnection := &tfv1.TensorFusionConnection{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      failConnectionName,
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.WorkloadKey: failWorkloadName,
+					},
+				},
+				Spec: tfv1.TensorFusionConnectionSpec{
+					WorkloadName: failWorkloadName,
+				},
+			}
+			Expect(k8sClient.Create(ctx, failConnection)).To(Succeed())
+
+			By("Reconciling the connection to trigger worker selection failure")
+			controllerReconciler := &TensorFusionConnectionReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Recorder: record.NewFakeRecorder(10),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: failConnectionNamespacedName,
+			})
+			// We expect an error since worker selection should fail
+			Expect(err).To(HaveOccurred())
+
+			By("Verifying the connection status is updated to WorkerPending")
+			Eventually(func() bool {
+				if err := k8sClient.Get(ctx, failConnectionNamespacedName, failConnection); err != nil {
+					return false
+				}
+				return failConnection.Status.Phase == tfv1.WorkerPending
+			}, time.Second*5, time.Millisecond*100).Should(BeTrue())
+
+			By("Cleaning up test resources")
+			Expect(k8sClient.Delete(ctx, failConnection)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, failWorkload)).To(Succeed())
+		})
 	})
 })

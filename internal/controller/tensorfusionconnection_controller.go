@@ -84,6 +84,11 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 		s, err := worker.SelectWorker(ctx, r.Client, workload, 1)
 		if err != nil {
 			r.Recorder.Eventf(connection, corev1.EventTypeWarning, "WorkerSelectionFailed", "Failed to select worker: %v", err)
+			// Update the status to WorkerPending when worker selection fails
+			connection.Status.Phase = tfv1.WorkerPending
+			if updateErr := r.Status().Update(ctx, connection); updateErr != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to select worker: %w, failed to update status: %v", err, updateErr)
+			}
 			return ctrl.Result{}, err
 		}
 		workerStatus = *s
