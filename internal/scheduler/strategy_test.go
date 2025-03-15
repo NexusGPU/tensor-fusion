@@ -226,10 +226,10 @@ func TestCompactFirst(t *testing.T) {
 func TestStrategyEdgeCases(t *testing.T) {
 	// Test both strategies with different edge cases
 	edgeCases := []struct {
-		name         string
-		gpus         []tfv1.GPU
-		lowLoadName  string   // expected result for LowLoadFirst
-		compactName  string   // expected result for CompactFirst
+		name          string
+		gpus          []tfv1.GPU
+		lowLoadName   string // expected result for LowLoadFirst
+		compactName   string // expected result for CompactFirst
 		errorExpected bool
 	}{
 		{
@@ -254,8 +254,8 @@ func TestStrategyEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			lowLoadName:  "gpu-1", // Both strategies should pick the first one when values are equal
-			compactName:  "gpu-1", 
+			lowLoadName:   "gpu-1", // Both strategies should pick the first one when values are equal
+			compactName:   "gpu-1",
 			errorExpected: false,
 		},
 		{
@@ -280,8 +280,8 @@ func TestStrategyEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			lowLoadName:  "gpu-2", // Highest resources
-			compactName:  "gpu-1", // Lowest resources
+			lowLoadName:   "gpu-2", // Highest resources
+			compactName:   "gpu-1", // Lowest resources
 			errorExpected: false,
 		},
 	}
