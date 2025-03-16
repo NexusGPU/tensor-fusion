@@ -49,29 +49,11 @@ WIP
 - [Getting Started on VM](https://tensor-fusion.ai/guide/deployment-vm)
 - [Deploy Self-hosted Community Edition](https://tensor-fusion.ai/guide/self-host)
 
-### Try it out
+<!-- (TODO: Asciinema) -->
 
-- Explore the demo account: [Demo Console - Working in progress](https://app.tensor-fusion.ai?hint=demo)
+<!-- ### Playground
 
-- Run following command to try TensorFusion in 3 minutes
-
-```bash
-# Step 1: Install TensorFusion in Kubernetes
-helm install --repo https://nexusgpu.github.io/tensor-fusion/ --create-namespace
-
-# Step 2. Onboard GPU nodes into TensorFusion cluster
-kubectl apply -f https://raw.githubusercontent.com/NexusGPU/tensor-fusion/main/manifests/gpu-node.yaml
-
-# Step 3. Check if cluster and pool is ready
-kubectl get gpupools -o wide && kubectl get gpunodes -o wide
-
-# Step3. Create an inference app using virtual, remote GPU resources in TensorFusion cluster
-kubectl apply -f https://raw.githubusercontent.com/NexusGPU/tensor-fusion/main/manifests/inference-app.yaml
-
-# Then you can forward the port to test inference, or exec shell
-```
-
-(TODO: Asciinema)
+- Explore the demo account: [Demo Console - Working in progress](https://app.tensor-fusion.ai?hint=demo) -->
 
 ### 💬 Discussion
 
@@ -87,28 +69,29 @@ kubectl apply -f https://raw.githubusercontent.com/NexusGPU/tensor-fusion/main/m
 ### Core GPU Virtualization Features
 
 - [x] Fractional GPU and flexible oversubscription
-- [x] GPU-over-IP, remote GPU sharing with less than 4% performance loss
-- [x] GPU VRAM expansion or swap to host RAM
+- [x] Remote GPU sharing with SOTA GPU-over-IP technology, less than 4% performance loss
+- [x] GPU VRAM expansion and hot/warm/cold tiering
 - [ ] None NVIDIA GPU/NPU vendor support
 
 ### Pooling & Scheduling & Management
 
 - [x] GPU/NPU pool management in Kubernetes
-- [x] GPU-first resource scheduler based on virtual TFlops/VRAM capacity
-- [x] GPU-first auto provisioning and bin-packing
+- [x] GPU-first scheduling and allocation, with single TFlops/MB precision
+- [x] GPU node auto provisioning/termination
+- [x] GPU compaction/bin-packing
 - [x] Seamless onboarding experience for Pytorch, TensorFlow, llama.cpp, vLLM, Tensor-RT, SGlang and all popular AI training/serving frameworks
-- [x] Basic management console and dashboards
-- [ ] Basic autoscaling policies, auto set requests/limits/replicas
-- [ ] GPU Group scheduling for LLMs
+- [x] Centralized Dashboard & Control Plane
+- [ ] GPU-first autoscaling policies, auto set requests/limits/replicas
+- [ ] Request multiple vGPUs with group scheduling for large models
 - [ ] Support different QoS levels
 
 ### Enterprise Features
 
-- [x] GPU live-migration, fastest in the world
-- [ ] Preloading and P2P distribution of container images, AI models, GPU snapshots etc.
+- [x] GPU live-migration, snapshot/distribute/restore GPU context cross cluster, fastest in the world
+- [ ] AI model registry and preloading, build your own private MaaS(Model-as-a-Service)
 - [ ] Advanced auto-scaling policies, scale to zero, rebalance of hot GPUs
 - [ ] Advanced observability features, detailed metrics & tracing/profiling of CUDA calls
-- [ ] Multi-tenancy billing based on actual usage
+- [ ] Monetization your GPU cluster by multi-tenancy usage measurement & billing report
 - [ ] Enterprise level high availability and resilience, support topology aware scheduling, GPU node auto failover etc.
 - [ ] Enterprise level security, complete on-premise deployment support, encryption in-transit & at-rest
 - [ ] Enterprise level compliance, SSO/SAML support, advanced audit, ReBAC control, SOC2 and other compliance reports available

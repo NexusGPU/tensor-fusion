@@ -381,7 +381,7 @@ func (r *TensorFusionClusterReconciler) checkTFClusterComponentsReady(ctx contex
 		}
 	}
 
-	// Step 2. check TimeSeriesDatabase, Model/Snapshot Distributor etc. TODO
+	// Step 2. check TimeSeriesDatabase connection Model/Snapshot Distributor etc. TODO
 
 	return allPass, conditions, nil
 }

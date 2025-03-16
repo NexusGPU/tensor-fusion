@@ -26,6 +26,15 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - pods/exec
+  verbs:
+  - create
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
   - nodes/finalizers
   - pods/finalizers
   verbs:

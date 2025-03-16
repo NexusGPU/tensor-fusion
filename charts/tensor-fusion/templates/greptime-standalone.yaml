@@ -1,60 +1,172 @@
 {{- if .Values.greptime.installStandalone }}
-# NOTICE: make sure greptimedb operator had been installed in your test cluster
+# NOTICE: make sure greptimedb operator had been installed in your cluster if not enable 'installStandalone'
 # cloud mode is recommended to reduce the maintenance effort
 # ```bash
 # helm repo add greptime https://greptimeteam.github.io/helm-charts/
 # helm repo update
 # helm install greptimedb-operator greptime/greptimedb-operator -n greptimedb --create-namespace
 # ```
-apiVersion: greptime.io/v1alpha1
-kind: GreptimeDBStandalone
+---
+apiVersion: v1
+kind: Namespace
 metadata:
   name: greptimedb
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: greptimedb-standalone
   namespace: greptimedb
+data:
+  config.toml: |
+    [logging]
+      dir = "/data/greptimedb/logs"
+      level = "info"
+      log_format = "text"
+
+    [storage]
+      data_home = "/data/greptimedb"
+
+    [wal]
+      dir = "/data/greptimedb/wal"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: greptimedb-standalone
+  namespace: greptimedb
+  labels:
+    app.greptime.io/component: greptimedb-standalone
 spec:
-  base:
-    main:
-      image: docker.io/greptime/greptimedb:latest
-      livenessProbe:
-        failureThreshold: 10
-        httpGet:
-          path: /health
-          port: 4000
-        periodSeconds: 5
-      readinessProbe:
-        failureThreshold: 10
-        httpGet:
-          path: /health
-          port: 4000
-        periodSeconds: 5
-      resources: {}
-      startupProbe:
-        failureThreshold: 60
-        httpGet:
-          path: /health
-          port: 4000
-        periodSeconds: 5
-  datanodeStorage:
-    dataHome: /data/greptimedb
-    fs:
-      mountPath: /data/greptimedb
-      name: datanode
-      storageRetainPolicy: Retain
-      storageSize: 20Gi
-  httpPort: 4000
-  logging:
-    format: text
-    level: info
-    logsDir: /data/greptimedb/logs
-    onlyLogToStdout: false
-    persistentWithData: false
-  mysqlPort: 4002
-  postgreSQLPort: 4003
-  rollingUpdate:
-    maxUnavailable: 1
-    partition: 0
-  rpcPort: 4001
-  service:
-    type: ClusterIP
-  version: latest
+  selector:
+    app.greptime.io/component: greptimedb-standalone
+  ports:
+    - name: grpc
+      port: 4001
+      targetPort: 4001
+    - name: http
+      port: 4000
+      targetPort: 4000
+    - name: mysql
+      port: 4002
+      targetPort: 4002
+    - name: postgres
+      port: 4003
+      targetPort: 4003
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: greptimedb-standalone
+  namespace: greptimedb
+  labels:
+    app.greptime.io/component: greptimedb-standalone
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.greptime.io/component: greptimedb-standalone
+  template:
+    metadata:
+      labels:
+        app.greptime.io/component: greptimedb-standalone
+    spec:
+      volumes:
+        - name: logs
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: greptimedb-standalone
+            defaultMode: 420
+      containers:
+        - name: standalone
+          image: docker.io/greptime/greptimedb:latest
+          args:
+            - standalone
+            - start
+            - '--rpc-bind-addr'
+            - 0.0.0.0:4001
+            - '--mysql-addr'
+            - 0.0.0.0:4002
+            - '--http-addr'
+            - 0.0.0.0:4000
+            - '--postgres-addr'
+            - 0.0.0.0:4003
+            - '--config-file'
+            - /etc/greptimedb/config.toml
+          ports:
+            - name: grpc
+              containerPort: 4001
+              protocol: TCP
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+            - name: mysql
+              containerPort: 4002
+              protocol: TCP
+            - name: postgres
+              containerPort: 4003
+              protocol: TCP
+          resources: {}
+          volumeMounts:
+            - name: datanode
+              mountPath: /data/greptimedb
+            - name: logs
+              mountPath: /data/greptimedb/logs
+            - name: config
+              mountPath: /etc/greptimedb
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+              scheme: HTTP
+            timeoutSeconds: 1
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+              scheme: HTTP
+            timeoutSeconds: 1
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 10
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 4000
+              scheme: HTTP
+            timeoutSeconds: 1
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 60
+          imagePullPolicy: Always
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+  volumeClaimTemplates:
+    - kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata:
+        name: datanode
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+        volumeMode: Filesystem
+  serviceName: ''
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  revisionHistoryLimit: 10
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
 {{- end }}

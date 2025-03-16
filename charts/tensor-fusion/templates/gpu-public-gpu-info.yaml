@@ -29,32 +29,32 @@ data:
 
     # Ampere Architecture Series
     - model: A100_SXM4
-      fullModelName: "A100 SXM4"
+      fullModelName: "NVIDIA A100 SXM4"
       vendor: NVIDIA
       costPerHour: 1.89
       fp16TFlops: 312
     
     - model: A100_PCIe
-      fullModelName: "A100 PCIe"
+      fullModelName: "NVIDIA A100 PCIe"
       vendor: NVIDIA
       costPerHour: 1.64
       fp16TFlops: 312
 
     - model: A10
-      fullModelName: "A10"
+      fullModelName: "NVIDIA A10"
       vendor: NVIDIA
       costPerHour: 0.9
       fp16TFlops: 125
 
     # A10G has less CUDA core than A10, but with RT cores for rendering case
     - model: A10G
-      fullModelName: "A10G"
+      fullModelName: "NVIDIA A10G"
       vendor: NVIDIA
       costPerHour: 0.75 # from lambda labs
-      fp16TFlops: 125
+      fp16TFlops: 63
 
     - model: A40
-      fullModelName: "A40"
+      fullModelName: "NVIDIA A40"
       vendor: NVIDIA
       costPerHour: 0.44
       fp16TFlops: 125
@@ -67,22 +67,22 @@ data:
 
     # Ada Lovelace Architecture Series  
     - model: L4
-      fullModelName: "L4"
+      fullModelName: "NVIDIA L4"
       vendor: NVIDIA
       costPerHour: 0.43
       fp16TFlops: 121
 
     - model: L40
-      fullModelName: "L40"
+      fullModelName: "NVIDIA L40"
       vendor: NVIDIA
       costPerHour: 0.86 # should be a bit cheaper than L40s
-      fp16TFlops: 362
+      fp16TFlops: 181
 
     - model: L40s
-      fullModelName: "L40s"
+      fullModelName: "NVIDIA L40s"
       vendor: NVIDIA
       costPerHour: 0.86
-      fp16TFlops: 362
+      fp16TFlops: 181
 
     - model: RTX4090
       fullModelName: "RTX4090"
@@ -92,20 +92,20 @@ data:
 
     # Hopper Architecture Series
     - model: H100_SXM4
-      fullModelName: "H100 SXM4"
+      fullModelName: "NVIDIA H100 SXM4"
       vendor: NVIDIA
       costPerHour: 2.99
       fp16TFlops: 989
     
     - model: H100_PCIe
-      fullModelName: "H100 PCIe"
+      fullModelName: "NVIDIA H100 PCIe"
       vendor: NVIDIA
       costPerHour: 2.39
       fp16TFlops: 835
    
     # Blackwell Architecture Series
     - model: B200_SXM4
-      fullModelName: "B200 SXM4"
+      fullModelName: "NVIDIA B200 SXM4"
       vendor: NVIDIA
       costPerHour: 10.99 # unknown price,on-request
       fp16TFlops: 2250
