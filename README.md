@@ -35,11 +35,22 @@ Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** 
 #### 🔄 Battle-tested GPU-over-IP Remote GPU Sharing 
 #### ⚖️ GPU-first Scheduling and Auto-scaling
 #### 📊 Computing Oversubscription and GPU VRAM Expansion
-#### 🛫 GPU Live Migration
+#### 🛫 GPU Pooling, Monitoring, Live Migration, AI Model Preloading and more
 
 ## 🎬 Demo
 
-WIP
+### Fractional vGPU & GPU-over-IP & Distributed Allocation
+
+![Fractional vGPU & GPU-over-IP & Distributed Allocation](https://cdn.tensor-fusion.ai//demo/overall-demo.gif)
+
+
+### AI Infra Console
+
+![AI Infra Console](https://cdn.tensor-fusion.ai//demo/ai-infra-console.gif)
+
+### GPU Live-migration [End-to-end feature WIP]
+
+![Live-migration PoC](https://cdn.tensor-fusion.ai//demo/gpu-migration-poc.gif)
 
 ## 🚀 Quick Start
 

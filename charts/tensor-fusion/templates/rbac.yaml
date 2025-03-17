@@ -3,6 +3,17 @@ kind: ClusterRole
 metadata:
   name: {{ include "tensor-fusion.fullname" . }}-role
 rules:
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - namespaces
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -26,15 +37,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods/exec
-  verbs:
-  - create
-  - get
-  - patch
-  - update
-- apiGroups:
-  - ""
-  resources:
   - nodes/finalizers
   - pods/finalizers
   verbs:
@@ -51,19 +53,17 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - secrets
+  - pods/exec
   verbs:
+  - create
   - get
-  - list
-  - watch
+  - patch
+  - update
 - apiGroups:
   - apps
   resources:
-  - configmaps
   - daemonsets
   - deployments
-  - namespaces
-  - secrets
   verbs:
   - create
   - delete
@@ -95,6 +95,7 @@ rules:
 - apiGroups:
   - tensor-fusion.ai
   resources:
+  - clientprofiles
   - gpunodeclasses
   - gpunodes
   - gpupools
@@ -103,7 +104,6 @@ rules:
   - tensorfusionclusters
   - tensorfusionconnections
   - tensorfusionworkloads
-  - clientprofiles
   verbs:
   - create
   - delete
@@ -115,11 +115,13 @@ rules:
 - apiGroups:
   - tensor-fusion.ai
   resources:
+  - clientprofiles/finalizers
   - gpunodeclasses/finalizers
   - gpunodes/finalizers
   - gpupools/finalizers
   - gpus/finalizers
   - schedulingconfigtemplates/finalizers
+  - tensorfusionclusters/finalizers
   - tensorfusionconnections/finalizers
   - tensorfusionworkloads/finalizers
   verbs:
@@ -127,6 +129,7 @@ rules:
 - apiGroups:
   - tensor-fusion.ai
   resources:
+  - clientprofiles/status
   - gpunodeclasses/status
   - gpunodes/status
   - gpupools/status
@@ -135,11 +138,11 @@ rules:
   - tensorfusionclusters/status
   - tensorfusionconnections/status
   - tensorfusionworkloads/status
-  - clientprofiles/status
   verbs:
   - get
   - patch
   - update
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

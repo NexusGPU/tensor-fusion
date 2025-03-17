@@ -7,6 +7,16 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
+  - namespaces
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - events
   verbs:
   - create
@@ -50,21 +60,10 @@ rules:
   - patch
   - update
 - apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - apps
   resources:
-  - configmaps
   - daemonsets
   - deployments
-  - namespaces
-  - secrets
   verbs:
   - create
   - delete
@@ -104,6 +103,7 @@ rules:
   - schedulingconfigtemplates
   - tensorfusionclusters
   - tensorfusionconnections
+  - tensorfusionworkloads
   verbs:
   - create
   - delete
@@ -123,6 +123,7 @@ rules:
   - schedulingconfigtemplates/finalizers
   - tensorfusionclusters/finalizers
   - tensorfusionconnections/finalizers
+  - tensorfusionworkloads/finalizers
   verbs:
   - update
 - apiGroups:
@@ -136,6 +137,7 @@ rules:
   - schedulingconfigtemplates/status
   - tensorfusionclusters/status
   - tensorfusionconnections/status
+  - tensorfusionworkloads/status
   verbs:
   - get
   - patch
