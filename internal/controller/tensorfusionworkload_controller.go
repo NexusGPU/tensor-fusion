@@ -164,8 +164,12 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 
 		// Calculate how many pods need to be added
 		podsToAdd := int(desiredReplicas - currentReplicas)
-		if err := r.scaleUpWorkers(ctx, workerGenerator, workload, podsToAdd); err != nil {
-			return ctrl.Result{}, err
+		result, err := r.scaleUpWorkers(ctx, workerGenerator, workload, podsToAdd)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("scale up workers: %w", err)
+		}
+		if !result.IsZero() {
+			return result, nil
 		}
 	} else if currentReplicas > desiredReplicas {
 		log.Info("Scaling down workers", "from", currentReplicas, "to", desiredReplicas)
@@ -306,7 +310,7 @@ func (r *TensorFusionWorkloadReconciler) deletePod(ctx context.Context, pod *cor
 }
 
 // scaleUpWorkers handles the scaling up of worker pods
-func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, count int) error {
+func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, count int) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
 	// Create worker pods
@@ -315,7 +319,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 		gpu, err := r.Scheduler.Schedule(ctx, workload.Spec.PoolName, workload.Spec.Resources.Requests)
 		if err != nil {
 			r.Recorder.Eventf(workload, corev1.EventTypeWarning, "ScheduleGPUFailed", "Failed to schedule GPU: %v", err)
-			return fmt.Errorf("schedule GPU: %w", err)
+			return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 		}
 
 		pod, err := r.tryStartWorker(ctx, workerGenerator, gpu, workload)
@@ -325,7 +329,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 			if releaseErr != nil {
 				log.Error(releaseErr, "Failed to release GPU after pod creation failure")
 			}
-			return fmt.Errorf("create worker pod: %w", err)
+			return ctrl.Result{}, fmt.Errorf("create worker pod: %w", err)
 		}
 
 		labels := prometheus.Labels{
@@ -339,7 +343,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 		metrics.VramBytesLimit.With(labels).Set(workload.Spec.Resources.Limits.Vram.AsApproximateFloat64())
 	}
 
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // updateStatus updates the WorkerStatuses and readyReplicas field in the workload status
