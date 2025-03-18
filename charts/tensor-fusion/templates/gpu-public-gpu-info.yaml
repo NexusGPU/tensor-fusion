@@ -11,6 +11,9 @@ data:
     # Refer: 
     #  - https://www.techpowerup.com/gpu-specs
     #  - https://getdeploying.com/reference/cloud-gpu
+    #  - https://en.wikipedia.org/wiki/List_of_Nvidia_graphics_processing_units
+    #  - https://en.wikipedia.org/wiki/GeForce_RTX_30_series#
+    #  - https://en.wikipedia.org/wiki/GeForce_RTX_50_series
 
     # Field Definition:
     # - 'model' is `GPUModel_BoardSlotType` to identify the GPU
@@ -59,11 +62,64 @@ data:
       costPerHour: 0.44
       fp16TFlops: 125
     
-    - model: RTX3090
-      fullModelName: "RTX3090"
+    - model: A6000
+      fullModelName: "NVIDIA A6000"
       vendor: NVIDIA
-      costPerHour: 0.43
+      costPerHour: 0.48
+      fp16TFlops: 154
+
+    - model: A6000Ada
+      fullModelName: "NVIDIA A6000 Ada"
+      vendor: NVIDIA
+      costPerHour: 0.95
+      fp16TFlops: 323
+
+    - model: RTX3090
+      fullModelName: "NVIDIA GeForce RTX 3090"
+      vendor: NVIDIA
+      costPerHour: 0.2
       fp16TFlops: 143
+    - model: RTX3090Ti
+      fullModelName: "NVIDIA GeForce RTX 3090 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.21
+      fp16TFlops: 160
+    
+    - model: RTX3080
+      fullModelName: "NVIDIA GeForce RTX 3080"
+      vendor: NVIDIA
+      costPerHour: 0.13
+      fp16TFlops: 119
+    - model: RTX3080Ti
+      fullModelName: "NVIDIA GeForce RTX 3080 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.14
+      fp16TFlops: 136
+    - model: RTX3070
+      fullModelName: "NVIDIA GeForce RTX 3070"
+      vendor: NVIDIA
+      costPerHour: 0.08
+      fp16TFlops: 81
+    - model: RTX3070Ti
+      fullModelName: "NVIDIA GeForce RTX 3070 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.09
+      fp16TFlops: 87
+    - model: RTX3060
+      fullModelName: "NVIDIA GeForce RTX 3060"
+      vendor: NVIDIA
+      costPerHour: 0.07
+      fp16TFlops: 51
+    - model: RTX3060Ti
+      fullModelName: "NVIDIA GeForce RTX 3060 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.08
+      fp16TFlops: 65
+    - model: RTX3050
+      fullModelName: "NVIDIA GeForce RTX 3050"
+      vendor: NVIDIA
+      costPerHour: 0.05
+      fp16TFlops: 36
 
     # Ada Lovelace Architecture Series  
     - model: L4
@@ -75,20 +131,14 @@ data:
     - model: L40
       fullModelName: "NVIDIA L40"
       vendor: NVIDIA
-      costPerHour: 0.86 # should be a bit cheaper than L40s
+      costPerHour: 0.7 # should be a bit cheaper than L40S
       fp16TFlops: 181
 
-    - model: L40s
-      fullModelName: "NVIDIA L40s"
+    - model: L40S
+      fullModelName: "NVIDIA L40S"
       vendor: NVIDIA
-      costPerHour: 0.86
-      fp16TFlops: 181
-
-    - model: RTX4090
-      fullModelName: "RTX4090"
-      vendor: NVIDIA
-      costPerHour: 0.69
-      fp16TFlops: 330
+      costPerHour: 1.4
+      fp16TFlops: 365
 
     # Hopper Architecture Series
     - model: H100_SXM4
@@ -110,8 +160,71 @@ data:
       costPerHour: 10.99 # unknown price,on-request
       fp16TFlops: 2250
 
-    - model: RTX5090
-      fullModelName: "RTX5090"
+    - model: RTX4060
+      fullModelName: "NVIDIA GeForce RTX 4060"
       vendor: NVIDIA
-      costPerHour: 2.99
-      fp16TFlops: 838
+      costPerHour: 0.1
+      fp16TFlops: 113
+    - model: RTX4060Ti
+      fullModelName: "NVIDIA GeForce RTX 4060 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.11
+      fp16TFlops: 120
+
+    - model: RTX4070
+      fullModelName: "NVIDIA GeForce RTX 4070"
+      vendor: NVIDIA
+      costPerHour: 0.15
+      fp16TFlops: 153
+    - model: RTX4070S
+      fullModelName: "NVIDIA GeForce RTX 4070 Super"
+      vendor: NVIDIA
+      costPerHour: 0.18
+      fp16TFlops: 161
+    - model: RTX4070STi
+      fullModelName: "NVIDIA GeForce RTX 4070 Super Ti"
+      vendor: NVIDIA
+      costPerHour: 0.2
+      fp16TFlops: 181
+
+    - model: RTX4080
+      fullModelName: "NVIDIA GeForce RTX 4080"
+      vendor: NVIDIA
+      costPerHour: 0.23
+      fp16TFlops: 221
+
+    - model: RTX4090
+      fullModelName: "NVIDIA GeForce RTX 4090"
+      vendor: NVIDIA
+      costPerHour: 0.3
+      fp16TFlops: 252
+
+    - model: RTX4090Ti
+      fullModelName: "NVIDIA GeForce RTX 4090 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.4
+      fp16TFlops: 352
+
+    - model: RTX5070
+      fullModelName: "NVIDIA GeForce RTX 5070"
+      vendor: NVIDIA
+      costPerHour: 0.21
+      fp16TFlops: 124
+
+    - model: RTX5070Ti
+      fullModelName: "NVIDIA GeForce RTX 5070 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.25
+      fp16TFlops: 177
+
+    - model: RTX5080
+      fullModelName: "NVIDIA GeForce RTX 5080"
+      vendor: NVIDIA
+      costPerHour: 0.3
+      fp16TFlops: 225
+
+    - model: RTX5090
+      fullModelName: "NVIDIA GeForce RTX 5090"
+      vendor: NVIDIA
+      costPerHour: 0.65
+      fp16TFlops: 419
