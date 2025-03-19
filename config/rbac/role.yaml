@@ -95,7 +95,6 @@ rules:
 - apiGroups:
   - tensor-fusion.ai
   resources:
-  - clientprofiles
   - gpunodeclasses
   - gpunodes
   - gpupools
@@ -104,6 +103,7 @@ rules:
   - tensorfusionclusters
   - tensorfusionconnections
   - tensorfusionworkloads
+  - workloadprofiles
   verbs:
   - create
   - delete
@@ -115,7 +115,6 @@ rules:
 - apiGroups:
   - tensor-fusion.ai
   resources:
-  - clientprofiles/finalizers
   - gpunodeclasses/finalizers
   - gpunodes/finalizers
   - gpupools/finalizers
@@ -124,12 +123,12 @@ rules:
   - tensorfusionclusters/finalizers
   - tensorfusionconnections/finalizers
   - tensorfusionworkloads/finalizers
+  - workloadprofiles/finalizers
   verbs:
   - update
 - apiGroups:
   - tensor-fusion.ai
   resources:
-  - clientprofiles/status
   - gpunodeclasses/status
   - gpunodes/status
   - gpupools/status
@@ -138,6 +137,7 @@ rules:
   - tensorfusionclusters/status
   - tensorfusionconnections/status
   - tensorfusionworkloads/status
+  - workloadprofiles/status
   verbs:
   - get
   - patch

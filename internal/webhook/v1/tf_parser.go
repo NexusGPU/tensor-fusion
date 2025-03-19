@@ -24,7 +24,7 @@ type TFResource struct {
 }
 
 type TensorFusionInfo struct {
-	Profile        *tfv1.ClientProfileSpec
+	Profile        *tfv1.WorkloadProfileSpec
 	Replicas       int32
 	WorkloadName   string
 	ContainerNames []string
@@ -56,11 +56,11 @@ func ParseTensorFusionInfo(ctx context.Context, k8sclient client.Client, pod *co
 		info.Replicas = int32(val)
 	}
 
-	clientProfileName, ok := pod.Annotations[constants.ClientProfileAnnotation]
-	clientProfile := &tfv1.ClientProfile{}
+	workloadProfileName, ok := pod.Annotations[constants.WorkloadProfileAnnotation]
+	workloadProfile := &tfv1.WorkloadProfile{}
 	if ok {
-		if err := k8sclient.Get(ctx, client.ObjectKey{Name: clientProfileName, Namespace: pod.Namespace}, clientProfile); err != nil {
-			return info, fmt.Errorf("get client profile(%s) : %w", clientProfileName, err)
+		if err := k8sclient.Get(ctx, client.ObjectKey{Name: workloadProfileName, Namespace: pod.Namespace}, workloadProfile); err != nil {
+			return info, fmt.Errorf("get workload profile(%s) : %w", workloadProfileName, err)
 		}
 	}
 
@@ -69,23 +69,23 @@ func ParseTensorFusionInfo(ctx context.Context, k8sclient client.Client, pod *co
 		// TODO: select default pool
 		return info, fmt.Errorf("gpu pool not found")
 	}
-	clientProfile.Spec.PoolName = poolName
+	workloadProfile.Spec.PoolName = poolName
 
 	tflopsRequest, ok := pod.Annotations[constants.TFLOPSRequestAnnotation]
 	if ok {
-		clientProfile.Spec.Resources.Requests.Tflops = resource.MustParse(tflopsRequest)
+		workloadProfile.Spec.Resources.Requests.Tflops = resource.MustParse(tflopsRequest)
 	}
 	vramRequest, ok := pod.Annotations[constants.VRAMRequestAnnotation]
 	if ok {
-		clientProfile.Spec.Resources.Requests.Vram = resource.MustParse(vramRequest)
+		workloadProfile.Spec.Resources.Requests.Vram = resource.MustParse(vramRequest)
 	}
 	tflopsLimit, ok := pod.Annotations[constants.TFLOPSLimitAnnotation]
 	if ok {
-		clientProfile.Spec.Resources.Limits.Tflops = resource.MustParse(tflopsLimit)
+		workloadProfile.Spec.Resources.Limits.Tflops = resource.MustParse(tflopsLimit)
 	}
 	vramLimit, ok := pod.Annotations[constants.VRAMLimitAnnotation]
 	if ok {
-		clientProfile.Spec.Resources.Limits.Vram = resource.MustParse(vramLimit)
+		workloadProfile.Spec.Resources.Limits.Vram = resource.MustParse(vramLimit)
 	}
 
 	injectContainer, ok := pod.Annotations[constants.InjectContainerAnnotation]
@@ -94,7 +94,7 @@ func ParseTensorFusionInfo(ctx context.Context, k8sclient client.Client, pod *co
 		return info, fmt.Errorf("inject container not found")
 	}
 
-	info.Profile = &clientProfile.Spec
+	info.Profile = &workloadProfile.Spec
 	info.ContainerNames = containerNames
 	return info, nil
 }

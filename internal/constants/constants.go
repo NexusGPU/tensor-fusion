@@ -33,7 +33,7 @@ const (
 	VRAMRequestAnnotation     = Domain + "/vram-request"
 	TFLOPSLimitAnnotation     = Domain + "/tflops-limit"
 	VRAMLimitAnnotation       = Domain + "/vram-limit"
-	ClientProfileAnnotation   = Domain + "/client-profile"
+	WorkloadProfileAnnotation = Domain + "/client-profile"
 	InjectContainerAnnotation = Domain + "/inject-container"
 	ReplicasAnnotation        = Domain + "/replicas"
 	GenWorkload               = Domain + "/generate-workload"

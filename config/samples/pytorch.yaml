@@ -19,7 +19,7 @@ spec:
         tensor-fusion.ai/replicas: '1'
         tensor-fusion.ai/workload: pytorch-test
         tensor-fusion.ai/inject-container: pytorch
-        tensor-fusion.ai/client-profile: defalut-clientprofile
+        tensor-fusion.ai/client-profile: defalut-workloadprofile
         tensor-fusion.ai/generate-workload: 'true'
         tensor-fusion.ai/gpupool: shared-tensor-fusion-cluster-shared
         tensor-fusion.ai/tflops-limit: '10'

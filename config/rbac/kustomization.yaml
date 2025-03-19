@@ -24,8 +24,8 @@ resources:
 # if you do not want those helpers be installed with your Project.
 - tensorfusionworkload_editor_role.yaml
 - tensorfusionworkload_viewer_role.yaml
-- clientprofile_editor_role.yaml
-- clientprofile_viewer_role.yaml
+- workloadprofile_editor_role.yaml
+- workloadprofile_viewer_role.yaml
 - schedulingconfigtemplate_editor_role.yaml
 - schedulingconfigtemplate_viewer_role.yaml
 - gpunodeclass_editor_role.yaml

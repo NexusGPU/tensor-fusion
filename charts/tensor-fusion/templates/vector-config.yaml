@@ -72,9 +72,10 @@ data:
         endpoint: http://{{ .Values.greptime.host }}:4000/v1/prometheus/write?db=public
         {{- else }}
         endpoint: https://{{ .Values.greptime.host }}/v1/prometheus/write?db={{ .Values.greptime.db }}
-        {{- end }}
         auth:
           strategy: basic
           user: {{ .Values.greptime.user }}
           password: {{ .Values.greptime.password }}
+        {{- end }}
+        
           

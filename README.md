@@ -50,7 +50,7 @@ Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** 
 
 ### GPU Live-migration [End-to-end feature WIP]
 
-![Live-migration PoC](https://cdn.tensor-fusion.ai//demo/gpu-migration-poc.gif)
+https://cdn.tensor-fusion.ai/GPU_Content_Migration.mp4
 
 ## 🚀 Quick Start
 

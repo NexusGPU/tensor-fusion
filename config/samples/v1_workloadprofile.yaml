@@ -1,7 +1,7 @@
 apiVersion: tensor-fusion.ai/v1
-kind: ClientProfile
+kind: WorkloadProfile
 metadata:
-  name: defalut-clientprofile
+  name: defalut-workloadprofile
   namespace: tensor-fusion
 spec:
   isLocalGPU: true

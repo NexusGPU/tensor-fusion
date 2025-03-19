@@ -30,7 +30,7 @@ import (
 	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
-var _ = Describe("ClientProfile Controller", func() {
+var _ = Describe("WorkloadProfile Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 
@@ -40,13 +40,13 @@ var _ = Describe("ClientProfile Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		clientprofile := &tensorfusionaiv1.ClientProfile{}
+		workloadprofile := &tensorfusionaiv1.WorkloadProfile{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind ClientProfile")
-			err := k8sClient.Get(ctx, typeNamespacedName, clientprofile)
+			By("creating the custom resource for the Kind WorkloadProfile")
+			err := k8sClient.Get(ctx, typeNamespacedName, workloadprofile)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &tensorfusionaiv1.ClientProfile{
+				resource := &tensorfusionaiv1.WorkloadProfile{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,16 +59,16 @@ var _ = Describe("ClientProfile Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &tensorfusionaiv1.ClientProfile{}
+			resource := &tensorfusionaiv1.WorkloadProfile{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance ClientProfile")
+			By("Cleanup the specific resource instance WorkloadProfile")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &ClientProfileReconciler{
+			controllerReconciler := &WorkloadProfileReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
