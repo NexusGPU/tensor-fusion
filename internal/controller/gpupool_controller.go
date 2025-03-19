@@ -55,6 +55,7 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	runNow, alreadyQueued, waitTime := utils.DebouncedReconcileCheck(ctx, &r.LastProcessedItems, req.NamespacedName)
 	if alreadyQueued {
+		log.Info("GPUPool already queued for reconcile", "name", req.NamespacedName.Name)
 		return ctrl.Result{}, nil
 	}
 	if !runNow {

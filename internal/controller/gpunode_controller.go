@@ -38,11 +38,9 @@ import (
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 // GPUNodeReconciler reconciles a GPUNode object
@@ -74,7 +72,6 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	deleted, err := utils.HandleFinalizer(ctx, node, r.Client, func(ctx context.Context, node *tfv1.GPUNode) (bool, error) {
-
 		if node.Status.Phase != tfv1.TensorFusionGPUNodePhaseDestroying {
 			node.Status.Phase = tfv1.TensorFusionGPUNodePhaseDestroying
 			if err := r.Status().Update(ctx, node); err != nil {
@@ -136,6 +133,10 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			break
 		}
 	}
+	if poolName == "" {
+		log.Error(nil, "failed to get pool name", "node", node.Name)
+		return ctrl.Result{}, nil
+	}
 
 	poolObj := &tfv1.GPUPool{}
 	err = r.Client.Get(ctx, client.ObjectKey{Name: poolName}, poolObj)
@@ -143,6 +144,28 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("failed to get tensor-fusion pool, can not create node discovery job, pool: %s", poolName)
 	}
 
+	if node.Spec.ManageMode != tfv1.GPUNodeManageModeProvisioned {
+		// Check if the Kubernetes node exists; if not, the GPUNode should delete itself.
+		if node.Status.KubernetesNodeName != "" {
+			// Try to get the Kubernetes node
+			coreNode := &corev1.Node{}
+			err := r.Get(ctx, client.ObjectKey{Name: node.Status.KubernetesNodeName}, coreNode)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					// The Kubernetes node does not exist, delete the GPUNode
+					log.Info("Kubernetes node does not exist, deleting GPUNode",
+						"kubernetesNodeName", node.Status.KubernetesNodeName)
+					if err := r.Delete(ctx, node); err != nil {
+						return ctrl.Result{}, fmt.Errorf("failed to delete GPUNode after Kubernetes node was deleted: %w", err)
+					}
+					// Return early since we've deleted the resource
+					return ctrl.Result{}, nil
+				}
+				return ctrl.Result{}, fmt.Errorf("failed to get Kubernetes node %s: %w",
+					node.Status.KubernetesNodeName, err)
+			}
+		}
+	}
 	if err := r.reconcileCloudVendorNode(ctx, node, poolObj); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -150,10 +173,6 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Only reconcile if the node has a kubernetes node name, otherwise the DaemonSet like workloads can not be scheduled
 	if node.Status.KubernetesNodeName == "" {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-	if poolName == "" {
-		log.Error(nil, "failed to get pool name", "node", node.Name)
-		return ctrl.Result{}, nil
 	}
 
 	if err := r.reconcileNodeDiscoveryJob(ctx, node, poolObj); err != nil {
@@ -415,7 +434,6 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tf
 }
 
 func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) error {
-
 	// Avoid creating duplicated cloud vendor nodes, if not working, keep pending status
 	if node.Status.NodeInfo.InstanceID != "" {
 		// node already created, check status
@@ -532,7 +550,7 @@ func (r *GPUNodeReconciler) CalculateVirtualCapacity(node *tfv1.GPUNode, pool *t
 // SetupWithManager sets up the controller with the Manager.
 func (r *GPUNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&tfv1.GPUNode{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&tfv1.GPUNode{}).
 		Named("gpunode").
 		Owns(&corev1.Node{}).
 		Owns(&batchv1.Job{}).

@@ -363,7 +363,7 @@ type GPUPoolStatus struct {
 
 	TotalNodes    int32 `json:"totalNodes,omitempty"`
 	TotalGPUs     int32 `json:"totalGPUs,omitempty"`
-	ReadyNodes    int32 `json:"readyNodes,omitempty"`
+	ReadyNodes    int32 `json:"readyNodes"`
 	NotReadyNodes int32 `json:"notReadyNodes"`
 
 	TotalTFlops resource.Quantity `json:"totalTFlops"`

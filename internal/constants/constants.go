@@ -50,7 +50,7 @@ const (
 	WorkerCudaMemLimitEnv = "TENSOR_FUSION_CUDA_MEM_LIMIT"
 	WorkerPodNameEnv      = "POD_NAME"
 	NamespaceEnv          = "OPERATOR_NAMESPACE"
-	NamespaceDefaultVal   = "tensor-fusion"
+	NamespaceDefaultVal   = "tensor-fusion-sys"
 )
 
 const (

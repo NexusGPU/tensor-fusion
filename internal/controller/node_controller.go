@@ -105,7 +105,6 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{}, err
 		}
 		if !matched {
-
 			// delete gpunode if no matched pool
 			if err := r.Client.Delete(ctx, &tfv1.GPUNode{
 				ObjectMeta: metav1.ObjectMeta{
@@ -122,10 +121,6 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		if err := r.Client.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
 			if errors.IsNotFound(err) {
 				gpuNode = r.generateGPUNode(node, pool)
-				// Set owner reference to cascade delete after GPU node created
-				if err := controllerutil.SetControllerReference(node, gpuNode, r.Scheme); err != nil {
-					return ctrl.Result{}, fmt.Errorf("failed to set controller reference: %w", err)
-				}
 				_, e := controllerutil.CreateOrUpdate(ctx, r.Client, gpuNode, func() error { return nil })
 				if e != nil {
 					return ctrl.Result{}, fmt.Errorf("failed to create or patch GPUNode: %w", e)
@@ -159,6 +154,7 @@ func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool) 
 		ObjectMeta: metav1.ObjectMeta{
 			Name: node.Name,
 			Labels: map[string]string{
+				constants.LabelKeyOwner: pool.Name,
 				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true",
 			},
 		},
@@ -167,7 +163,7 @@ func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool) 
 		},
 	}
 
-	_ = controllerutil.SetOwnerReference(pool, gpuNode, r.Scheme)
+	_ = controllerutil.SetControllerReference(pool, gpuNode, r.Scheme)
 	return gpuNode
 }
 
