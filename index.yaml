@@ -3,6 +3,16 @@ entries:
   tensor-fusion:
   - apiVersion: v2
     appVersion: 1.12.1
+    created: "2025-03-19T10:03:18.282940037Z"
+    description: A Helm chart for Kubernetes
+    digest: 639c0df5a42158bced249dad11373c908ff8891373c8b99aa10f114dd043af9e
+    name: tensor-fusion
+    type: application
+    urls:
+    - https://github.com/NexusGPU/tensor-fusion/releases/download/tensor-fusion-helm-1.2.11/tensor-fusion-1.2.11.tgz
+    version: 1.2.11
+  - apiVersion: v2
+    appVersion: 1.12.1
     created: "2025-03-17T13:38:43.611651389Z"
     description: A Helm chart for Kubernetes
     digest: 9af24cb13df8f45c731ae01a383567257470ddee866cc0077bfc0c223b193f1b
@@ -191,4 +201,4 @@ entries:
     urls:
     - https://github.com/NexusGPU/tensor-fusion-operator/releases/download/tensor-fusion-0.1.0/tensor-fusion-0.1.0.tgz
     version: 0.1.0
-generated: "2025-03-17T13:38:43.611822056Z"
+generated: "2025-03-19T10:03:18.283110115Z"
