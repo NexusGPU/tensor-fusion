@@ -27,26 +27,26 @@ import (
 	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
-// ClientProfileReconciler reconciles a ClientProfile object
-type ClientProfileReconciler struct {
+// WorkloadProfileReconciler reconciles a WorkloadProfile object
+type WorkloadProfileReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=clientprofiles,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=clientprofiles/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=clientprofiles/finalizers,verbs=update
+// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=workloadprofiles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=workloadprofiles/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=workloadprofiles/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the ClientProfile object against the actual cluster state, and then
+// the WorkloadProfile object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.1/pkg/reconcile
-func (r *ClientProfileReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *WorkloadProfileReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
 
 	// TODO(user): your logic here
@@ -55,9 +55,9 @@ func (r *ClientProfileReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ClientProfileReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *WorkloadProfileReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&tensorfusionaiv1.ClientProfile{}).
-		Named("clientprofile").
+		For(&tensorfusionaiv1.WorkloadProfile{}).
+		Named("workloadprofile").
 		Complete(r)
 }

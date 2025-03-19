@@ -7,6 +7,6 @@ resources:
 - v1_gpunode.yaml
 - v1_gpunodeclass.yaml
 - v1_schedulingconfigtemplate.yaml
-- v1_clientprofile.yaml
+- v1_workloadprofile.yaml
 - v1_tensorfusionworkload.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

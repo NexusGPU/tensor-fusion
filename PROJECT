@@ -76,7 +76,7 @@ resources:
     namespaced: true
   controller: true
   domain: tensor-fusion.ai
-  kind: ClientProfile
+  kind: WorkloadProfile
   path: github.com/NexusGPU/tensor-fusion/api/v1
   version: v1
 - api:

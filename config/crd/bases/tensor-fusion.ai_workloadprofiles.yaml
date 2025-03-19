@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: clientprofiles.tensor-fusion.ai
+  name: workloadprofiles.tensor-fusion.ai
 spec:
   group: tensor-fusion.ai
   names:
-    kind: ClientProfile
-    listKind: ClientProfileList
-    plural: clientprofiles
-    singular: clientprofile
+    kind: WorkloadProfile
+    listKind: WorkloadProfileList
+    plural: workloadprofiles
+    singular: workloadprofile
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: ClientProfile is the Schema for the clientprofiles API.
+        description: WorkloadProfile is the Schema for the workloadprofiles API.
         properties:
           apiVersion:
             description: |-
@@ -37,7 +37,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: ClientProfileSpec defines the desired state of ClientProfile.
+            description: WorkloadProfileSpec defines the desired state of WorkloadProfile.
             properties:
               isLocalGPU:
                 type: boolean
@@ -97,7 +97,7 @@ spec:
             - isLocalGPU
             type: object
           status:
-            description: ClientProfileStatus defines the observed state of ClientProfile.
+            description: WorkloadProfileStatus defines the observed state of WorkloadProfile.
             type: object
         type: object
     served: true

@@ -30,8 +30,8 @@ const (
 	QoSCritical QoSLevel = "critical"
 )
 
-// ClientProfileSpec defines the desired state of ClientProfile.
-type ClientProfileSpec struct {
+// WorkloadProfileSpec defines the desired state of WorkloadProfile.
+type WorkloadProfileSpec struct {
 	// +optional
 	PoolName string `json:"poolName,omitempty"`
 
@@ -45,31 +45,31 @@ type ClientProfileSpec struct {
 	IsLocalGPU bool `json:"isLocalGPU"`
 }
 
-// ClientProfileStatus defines the observed state of ClientProfile.
-type ClientProfileStatus struct {
+// WorkloadProfileStatus defines the observed state of WorkloadProfile.
+type WorkloadProfileStatus struct {
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 
-// ClientProfile is the Schema for the clientprofiles API.
-type ClientProfile struct {
+// WorkloadProfile is the Schema for the workloadprofiles API.
+type WorkloadProfile struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ClientProfileSpec   `json:"spec,omitempty"`
-	Status ClientProfileStatus `json:"status,omitempty"`
+	Spec   WorkloadProfileSpec   `json:"spec,omitempty"`
+	Status WorkloadProfileStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// ClientProfileList contains a list of ClientProfile.
-type ClientProfileList struct {
+// WorkloadProfileList contains a list of WorkloadProfile.
+type WorkloadProfileList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []ClientProfile `json:"items"`
+	Items           []WorkloadProfile `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&ClientProfile{}, &ClientProfileList{})
+	SchemeBuilder.Register(&WorkloadProfile{}, &WorkloadProfileList{})
 }

@@ -61,13 +61,13 @@ var _ = Describe("TensorFusionPodMutator", func() {
 
 	Context("Handle", func() {
 		It("should successfully mutate a pod with TF resources", func() {
-			// Set up a client profile for testing
-			clientProfile := &tfv1.ClientProfile{
+			// Set up a workload profile for testing
+			workloadProfile := &tfv1.WorkloadProfile{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-profile-handle",
 					Namespace: "default",
 				},
-				Spec: tfv1.ClientProfileSpec{
+				Spec: tfv1.WorkloadProfileSpec{
 					PoolName: "mock",
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
@@ -81,7 +81,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-			Expect(k8sclient.Create(ctx, clientProfile)).To(Succeed())
+			Expect(k8sclient.Create(ctx, workloadProfile)).To(Succeed())
 
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -92,7 +92,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 					Annotations: map[string]string{
 						constants.GpuPoolKey:                "mock",
-						constants.ClientProfileAnnotation:   "test-profile-handle",
+						constants.WorkloadProfileAnnotation: "test-profile-handle",
 						constants.InjectContainerAnnotation: "main",
 						constants.WorkloadKey:               "test-workload",
 						constants.GenWorkload:               "true",
@@ -190,13 +190,13 @@ var _ = Describe("TensorFusionPodMutator", func() {
 
 	Context("Handle with local GPU mode", func() {
 		It("should successfully handle a pod with local GPU mode", func() {
-			// Set up a client profile with IsLocalGPU set to true
-			clientProfile := &tfv1.ClientProfile{
+			// Set up a workload profile with IsLocalGPU set to true
+			workloadProfile := &tfv1.WorkloadProfile{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "local-gpu-profile",
 					Namespace: "default",
 				},
-				Spec: tfv1.ClientProfileSpec{
+				Spec: tfv1.WorkloadProfileSpec{
 					PoolName:   "mock",
 					IsLocalGPU: true,
 					Resources: tfv1.Resources{
@@ -211,7 +211,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-			Expect(k8sclient.Create(ctx, clientProfile)).To(Succeed())
+			Expect(k8sclient.Create(ctx, workloadProfile)).To(Succeed())
 
 			// Create a TensorFusionWorkload first
 			workload := &tfv1.TensorFusionWorkload{
@@ -248,7 +248,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 					Annotations: map[string]string{
 						constants.GpuPoolKey:                "mock",
-						constants.ClientProfileAnnotation:   "local-gpu-profile",
+						constants.WorkloadProfileAnnotation: "local-gpu-profile",
 						constants.InjectContainerAnnotation: "main",
 						constants.WorkloadKey:               "local-gpu-workload",
 					},
@@ -285,13 +285,13 @@ var _ = Describe("TensorFusionPodMutator", func() {
 
 	Context("ParseTensorFusionInfo", func() {
 		It("should correctly parse TF requirements from pod annotations", func() {
-			// Set up a client profile for testing
-			clientProfile := &tfv1.ClientProfile{
+			// Set up a workload profile for testing
+			workloadProfile := &tfv1.WorkloadProfile{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-profile-parse-tf-resources",
 					Namespace: "default",
 				},
-				Spec: tfv1.ClientProfileSpec{
+				Spec: tfv1.WorkloadProfileSpec{
 					PoolName: "mock",
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
@@ -306,15 +306,15 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				},
 			}
 
-			Expect(k8sclient.Create(ctx, clientProfile)).To(Succeed())
+			Expect(k8sclient.Create(ctx, workloadProfile)).To(Succeed())
 
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "default",
 					Annotations: map[string]string{
-						constants.GpuPoolKey:              "mock",
-						constants.ClientProfileAnnotation: "test-profile-parse-tf-resources",
-						constants.WorkloadKey:             "test-workload",
+						constants.GpuPoolKey:                "mock",
+						constants.WorkloadProfileAnnotation: "test-profile-parse-tf-resources",
+						constants.WorkloadKey:               "test-workload",
 						// override tflops request
 						constants.TFLOPSRequestAnnotation:   "20",
 						constants.InjectContainerAnnotation: "test-container",

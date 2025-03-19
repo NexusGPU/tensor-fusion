@@ -248,11 +248,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.ClientProfileReconciler{
+	if err = (&controller.WorkloadProfileReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ClientProfile")
+		setupLog.Error(err, "unable to create controller", "controller", "WorkloadProfile")
 		os.Exit(1)
 	}
 	if err = (&controller.TensorFusionWorkloadReconciler{
