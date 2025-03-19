@@ -942,6 +942,7 @@ spec:
             - componentStatus
             - notReadyNodes
             - phase
+            - readyNodes
             - totalTFlops
             - totalVRAM
             - virtualTFlops

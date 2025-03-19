@@ -63,6 +63,14 @@ var _ = Describe("GPUNode Controller", func() {
 				resource.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
 				Expect(k8sClient.Status().Update(ctx, resource)).To(Succeed())
 			}
+			By("creating the core node")
+			coreNode := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: resourceName,
+				},
+				Spec: corev1.NodeSpec{},
+			}
+			Expect(k8sClient.Create(ctx, coreNode)).To(Succeed())
 		})
 
 		AfterEach(func() {
@@ -72,6 +80,11 @@ var _ = Describe("GPUNode Controller", func() {
 
 			By("Cleanup the specific resource instance GPUNode")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			By("Cleanup the core node")
+			coreNode := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+				Name: resourceName,
+			}}
+			Expect(k8sClient.Delete(ctx, coreNode)).To(Succeed())
 		})
 
 		It("should successfully reconcile the resource", func() {
