@@ -32,13 +32,25 @@ data:
 
     # Ampere Architecture Series
     - model: A100_SXM4
-      fullModelName: "NVIDIA A100 SXM4"
+      fullModelName: "NVIDIA A100 80GB SXM"
       vendor: NVIDIA
       costPerHour: 1.89
       fp16TFlops: 312
     
     - model: A100_PCIe
-      fullModelName: "NVIDIA A100 PCIe"
+      fullModelName: "NVIDIA A100 80GB PCIE"
+      vendor: NVIDIA
+      costPerHour: 1.64
+      fp16TFlops: 312
+
+    - model: A800_SXM4
+      fullModelName: "NVIDIA A800 80GB SXM"
+      vendor: NVIDIA
+      costPerHour: 1.89
+      fp16TFlops: 312
+    
+    - model: A800_PCIe
+      fullModelName: "NVIDIA A800 80GB PCIE"
       vendor: NVIDIA
       costPerHour: 1.64
       fp16TFlops: 312
@@ -57,16 +69,16 @@ data:
       fp16TFlops: 63
 
     - model: A40
-      fullModelName: "NVIDIA A40"
+      fullModelName: "NVIDIA A40 48GB PCIE"
       vendor: NVIDIA
       costPerHour: 0.44
-      fp16TFlops: 125
-    
+      fp16TFlops: 149.7
+
     - model: A6000
-      fullModelName: "NVIDIA A6000"
+      fullModelName: "NVIDIA RTX A6000"
       vendor: NVIDIA
       costPerHour: 0.48
-      fp16TFlops: 154
+      fp16TFlops: 38.71
 
     - model: A6000Ada
       fullModelName: "NVIDIA A6000 Ada"
@@ -74,52 +86,116 @@ data:
       costPerHour: 0.95
       fp16TFlops: 323
 
-    - model: RTX3090
-      fullModelName: "NVIDIA GeForce RTX 3090"
-      vendor: NVIDIA
-      costPerHour: 0.2
-      fp16TFlops: 143
-    - model: RTX3090Ti
-      fullModelName: "NVIDIA GeForce RTX 3090 Ti"
-      vendor: NVIDIA
-      costPerHour: 0.21
-      fp16TFlops: 160
-    
-    - model: RTX3080
-      fullModelName: "NVIDIA GeForce RTX 3080"
-      vendor: NVIDIA
-      costPerHour: 0.13
-      fp16TFlops: 119
-    - model: RTX3080Ti
-      fullModelName: "NVIDIA GeForce RTX 3080 Ti"
-      vendor: NVIDIA
-      costPerHour: 0.14
-      fp16TFlops: 136
-    - model: RTX3070
-      fullModelName: "NVIDIA GeForce RTX 3070"
-      vendor: NVIDIA
-      costPerHour: 0.08
-      fp16TFlops: 81
-    - model: RTX3070Ti
-      fullModelName: "NVIDIA GeForce RTX 3070 Ti"
-      vendor: NVIDIA
-      costPerHour: 0.09
-      fp16TFlops: 87
-    - model: RTX3060
-      fullModelName: "NVIDIA GeForce RTX 3060"
-      vendor: NVIDIA
-      costPerHour: 0.07
-      fp16TFlops: 51
-    - model: RTX3060Ti
-      fullModelName: "NVIDIA GeForce RTX 3060 Ti"
-      vendor: NVIDIA
-      costPerHour: 0.08
-      fp16TFlops: 65
-    - model: RTX3050
-      fullModelName: "NVIDIA GeForce RTX 3050"
+    # NVIDIA RTX Series
+    # RTX 20 Series
+    - model: RTX2060
+      fullModelName: "NVIDIA GEFORCE RTX 2060"
       vendor: NVIDIA
       costPerHour: 0.05
-      fp16TFlops: 36
+      fp16TFlops: 12.9
+
+    - model: RTX2060S
+      fullModelName: "NVIDIA GEFORCE RTX 2060 SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.06
+      fp16TFlops: 14.4
+
+    - model: RTX2070
+      fullModelName: "NVIDIA GEFORCE RTX 2070"
+      vendor: NVIDIA
+      costPerHour: 0.06
+      fp16TFlops: 14.93
+
+    - model: RTX2070S
+      fullModelName: "NVIDIA GEFORCE RTX 2070 SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.07
+      fp16TFlops: 18.12
+
+    - model: RTX2080
+      fullModelName: "NVIDIA GEFORCE RTX 2080"
+      vendor: NVIDIA
+      costPerHour: 0.08
+      fp16TFlops: 20.14
+
+    - model: RTX2080S
+      fullModelName: "NVIDIA GEFORCE RTX 2080 SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.09
+      fp16TFlops: 22.30
+
+    - model: RTX2080Ti
+      fullModelName: "NVIDIA GEFORCE RTX 2080 TI"
+      vendor: NVIDIA
+      costPerHour: 0.1
+      fp16TFlops: 26.9
+
+    - model: TITANRTX
+      fullModelName: "NVIDIA TITAN RTX"
+      vendor: NVIDIA
+      costPerHour: 0.12
+      fp16TFlops: 32.62
+
+    # RTX 30 Series
+    - model: RTX3050
+      fullModelName: "NVIDIA GEFORCE RTX 3050"
+      vendor: NVIDIA
+      costPerHour: 0.05
+      fp16TFlops: 18.22
+
+    - model: RTX3060
+      fullModelName: "NVIDIA GEFORCE RTX 3060"
+      vendor: NVIDIA
+      costPerHour: 0.07
+      fp16TFlops: 26.0
+    
+    - model: RTX3060Ti
+      fullModelName: "NVIDIA GEFORCE RTX 3060 TI"
+      vendor: NVIDIA
+      costPerHour: 0.08
+      fp16TFlops: 32.4
+    
+    - model: RTX3070
+      fullModelName: "NVIDIA GEFORCE RTX 3070"
+      vendor: NVIDIA
+      costPerHour: 0.08
+      fp16TFlops: 40.6
+    
+    - model: RTX3070Ti
+      fullModelName: "NVIDIA GEFORCE RTX 3070 TI"
+      vendor: NVIDIA
+      costPerHour: 0.09
+      fp16TFlops: 43.6
+    
+    - model: RTX3080
+      fullModelName: "NVIDIA GEFORCE RTX 3080 (10 GB)"
+      vendor: NVIDIA
+      costPerHour: 0.13
+      fp16TFlops: 59.6
+    
+    - model: RTX3080_12GB
+      fullModelName: "NVIDIA GEFORCE RTX 3080 (12 GB)"
+      vendor: NVIDIA
+      costPerHour: 0.14
+      fp16TFlops: 61.2
+    
+    - model: RTX3080Ti
+      fullModelName: "NVIDIA GEFORCE RTX 3080 TI"
+      vendor: NVIDIA
+      costPerHour: 0.14
+      fp16TFlops: 68.2
+    
+    - model: RTX3090
+      fullModelName: "NVIDIA GEFORCE RTX 3090"
+      vendor: NVIDIA
+      costPerHour: 0.2
+      fp16TFlops: 71.2
+    
+    - model: RTX3090Ti
+      fullModelName: "NVIDIA GEFORCE RTX 3090 TI"
+      vendor: NVIDIA
+      costPerHour: 0.21
+      fp16TFlops: 80.0
 
     # Ada Lovelace Architecture Series  
     - model: L4
@@ -139,6 +215,67 @@ data:
       vendor: NVIDIA
       costPerHour: 1.4
       fp16TFlops: 365
+
+    # RTX 40 Series
+    - model: RTX4060
+      fullModelName: "NVIDIA GEFORCE RTX 4060"
+      vendor: NVIDIA
+      costPerHour: 0.1
+      fp16TFlops: 44.0
+    
+    - model: RTX4060Ti
+      fullModelName: "NVIDIA GEFORCE RTX 4060 TI"
+      vendor: NVIDIA
+      costPerHour: 0.11
+      fp16TFlops: 44.0
+    
+    - model: RTX4060Ti_16GB
+      fullModelName: "NVIDIA GEFORCE RTX 4060 TI 16GB"
+      vendor: NVIDIA
+      costPerHour: 0.12
+      fp16TFlops: 44.0
+    
+    - model: RTX4070
+      fullModelName: "NVIDIA GEFORCE RTX 4070"
+      vendor: NVIDIA
+      costPerHour: 0.15
+      fp16TFlops: 58.0
+    
+    - model: RTX4070S
+      fullModelName: "NVIDIA GEFORCE RTX 4070 SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.18
+      fp16TFlops: 60.0
+    
+    - model: RTX4070Ti
+      fullModelName: "NVIDIA GEFORCE RTX 4070 TI"
+      vendor: NVIDIA
+      costPerHour: 0.2
+      fp16TFlops: 78.86
+    
+    - model: RTX4070TiS
+      fullModelName: "NVIDIA GEFORCE RTX 4070 TI SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.22
+      fp16TFlops: 80.0
+
+    - model: RTX4080
+      fullModelName: "NVIDIA GEFORCE RTX 4080"
+      vendor: NVIDIA
+      costPerHour: 0.23
+      fp16TFlops: 97.48
+    
+    - model: RTX4080S
+      fullModelName: "NVIDIA GEFORCE RTX 4080 SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.25
+      fp16TFlops: 104.0
+
+    - model: RTX4090
+      fullModelName: "NVIDIA GEFORCE RTX 4090"
+      vendor: NVIDIA
+      costPerHour: 0.3
+      fp16TFlops: 165.16
 
     # Hopper Architecture Series
     - model: H100_SXM4
@@ -160,71 +297,278 @@ data:
       costPerHour: 10.99 # unknown price,on-request
       fp16TFlops: 2250
 
-    - model: RTX4060
-      fullModelName: "NVIDIA GeForce RTX 4060"
-      vendor: NVIDIA
-      costPerHour: 0.1
-      fp16TFlops: 113
-    - model: RTX4060Ti
-      fullModelName: "NVIDIA GeForce RTX 4060 Ti"
-      vendor: NVIDIA
-      costPerHour: 0.11
-      fp16TFlops: 120
-
-    - model: RTX4070
-      fullModelName: "NVIDIA GeForce RTX 4070"
+    # NVIDIA Quadro RTX Ampere Series
+    - model: RTXA2000
+      fullModelName: "NVIDIA RTX A2000"
       vendor: NVIDIA
       costPerHour: 0.15
-      fp16TFlops: 153
-    - model: RTX4070S
-      fullModelName: "NVIDIA GeForce RTX 4070 Super"
-      vendor: NVIDIA
-      costPerHour: 0.18
-      fp16TFlops: 161
-    - model: RTX4070STi
-      fullModelName: "NVIDIA GeForce RTX 4070 Super Ti"
-      vendor: NVIDIA
-      costPerHour: 0.2
-      fp16TFlops: 181
-
-    - model: RTX4080
-      fullModelName: "NVIDIA GeForce RTX 4080"
-      vendor: NVIDIA
-      costPerHour: 0.23
-      fp16TFlops: 221
-
-    - model: RTX4090
-      fullModelName: "NVIDIA GeForce RTX 4090"
-      vendor: NVIDIA
-      costPerHour: 0.3
-      fp16TFlops: 252
-
-    - model: RTX4090Ti
-      fullModelName: "NVIDIA GeForce RTX 4090 Ti"
-      vendor: NVIDIA
-      costPerHour: 0.4
-      fp16TFlops: 352
-
-    - model: RTX5070
-      fullModelName: "NVIDIA GeForce RTX 5070"
-      vendor: NVIDIA
-      costPerHour: 0.21
-      fp16TFlops: 124
-
-    - model: RTX5070Ti
-      fullModelName: "NVIDIA GeForce RTX 5070 Ti"
+      fp16TFlops: 7.99
+    
+    - model: RTXA4000
+      fullModelName: "NVIDIA RTX A4000"
       vendor: NVIDIA
       costPerHour: 0.25
-      fp16TFlops: 177
-
-    - model: RTX5080
-      fullModelName: "NVIDIA GeForce RTX 5080"
+      fp16TFlops: 19.17
+    
+    - model: RTXA4500
+      fullModelName: "NVIDIA RTX A4500"
       vendor: NVIDIA
       costPerHour: 0.3
-      fp16TFlops: 225
-
-    - model: RTX5090
-      fullModelName: "NVIDIA GeForce RTX 5090"
+      fp16TFlops: 23.65
+    
+    - model: RTXA5000
+      fullModelName: "NVIDIA RTX A5000"
       vendor: NVIDIA
-      costPerHour: 0.65
-      fp16TFlops: 419
+      costPerHour: 0.35
+      fp16TFlops: 27.8
+    
+    - model: RTX4000AdaGen
+      fullModelName: "NVIDIA RTX 4000 ADA GENERATION"
+      vendor: NVIDIA
+      costPerHour: 0.28
+      fp16TFlops: 26.7
+
+    # NVIDIA GTX Series
+    - model: GTX1050Ti
+      fullModelName: "NVIDIA GEFORCE GTX 1050 TI"
+      vendor: NVIDIA
+      costPerHour: 0.03
+      fp16TFlops: 4.0
+    
+    - model: GTX1070
+      fullModelName: "NVIDIA GEFORCE GTX 1070"
+      vendor: NVIDIA
+      costPerHour: 0.04
+      fp16TFlops: 0.101
+    
+    - model: GTX1080
+      fullModelName: "NVIDIA GEFORCE GTX 1080"
+      vendor: NVIDIA
+      costPerHour: 0.05
+      fp16TFlops: 0.138
+    
+    - model: GTX1080Ti
+      fullModelName: "NVIDIA GEFORCE GTX 1080 TI"
+      vendor: NVIDIA
+      costPerHour: 0.06
+      fp16TFlops: 0.177
+    
+    - model: GTX1660Ti
+      fullModelName: "NVIDIA GeForce GTX 1660 TI"
+      vendor: NVIDIA
+      costPerHour: 0.04
+      fp16TFlops: 9.6
+
+    # Apple Silicon
+    - model: M1
+      fullModelName: "Apple M1"
+      vendor: Apple
+      costPerHour: 0.1
+      fp16TFlops: 4.58
+    
+    - model: M1Pro
+      fullModelName: "Apple M1 Pro"
+      vendor: Apple
+      costPerHour: 0.15
+      fp16TFlops: 10.60
+    
+    - model: M1Max
+      fullModelName: "Apple M1 Max"
+      vendor: Apple
+      costPerHour: 0.2
+      fp16TFlops: 21.20
+    
+    - model: M1Ultra
+      fullModelName: "Apple M1 Ultra"
+      vendor: Apple
+      costPerHour: 0.3
+      fp16TFlops: 42.40
+    
+    - model: M2
+      fullModelName: "Apple M2"
+      vendor: Apple
+      costPerHour: 0.12
+      fp16TFlops: 7.10
+    
+    - model: M2Pro
+      fullModelName: "Apple M2 Pro"
+      vendor: Apple
+      costPerHour: 0.18
+      fp16TFlops: 11.36
+    
+    - model: M2Max
+      fullModelName: "Apple M2 Max"
+      vendor: Apple
+      costPerHour: 0.25
+      fp16TFlops: 26.98
+    
+    - model: M2Ultra
+      fullModelName: "Apple M2 Ultra"
+      vendor: Apple
+      costPerHour: 0.35
+      fp16TFlops: 53.96
+    
+    - model: M3
+      fullModelName: "Apple M3"
+      vendor: Apple
+      costPerHour: 0.14
+      fp16TFlops: 7.10
+    
+    - model: M3Pro
+      fullModelName: "Apple M3 Pro"
+      vendor: Apple
+      costPerHour: 0.2
+      fp16TFlops: 9.94
+    
+    - model: M3Max
+      fullModelName: "Apple M3 Max"
+      vendor: Apple
+      costPerHour: 0.28
+      fp16TFlops: 28.40
+    
+    - model: M3Ultra
+      fullModelName: "Apple M3 Ultra"
+      vendor: Apple
+      costPerHour: 0.4
+      fp16TFlops: 108.52
+    
+    - model: M4
+      fullModelName: "Apple M4"
+      vendor: Apple
+      costPerHour: 0.16
+      fp16TFlops: 8.52
+    
+    - model: M4Pro
+      fullModelName: "Apple M4 Pro"
+      vendor: Apple
+      costPerHour: 0.22
+      fp16TFlops: 11.44
+    
+    - model: M4Max
+      fullModelName: "Apple M4 Max"
+      vendor: Apple
+      costPerHour: 0.3
+      fp16TFlops: 36.07
+
+    # Apple A Series
+    - model: A13Bionic
+      fullModelName: "Apple A13 Bionic"
+      vendor: Apple
+      costPerHour: 0.05
+      fp16TFlops: 1.38
+    
+    - model: A14Bionic
+      fullModelName: "Apple A14 Bionic"
+      vendor: Apple
+      costPerHour: 0.06
+      fp16TFlops: 1.50
+    
+    - model: A15Bionic
+      fullModelName: "Apple A15 Bionic"
+      vendor: Apple
+      costPerHour: 0.07
+      fp16TFlops: 2.74
+    
+    - model: A16Bionic
+      fullModelName: "Apple A16 Bionic"
+      vendor: Apple
+      costPerHour: 0.08
+      fp16TFlops: 3.58
+    
+    - model: A17Pro
+      fullModelName: "Apple A17 Pro"
+      vendor: Apple
+      costPerHour: 0.09
+      fp16TFlops: 4.30
+
+    # AMD Radeon RX 6000 Series
+    - model: RX6400
+      fullModelName: "AMD Radeon RX 6400"
+      vendor: AMD
+      costPerHour: 0.04
+      fp16TFlops: 7.14
+    
+    - model: RX6500XT
+      fullModelName: "AMD Radeon RX 6500 XT"
+      vendor: AMD
+      costPerHour: 0.05
+      fp16TFlops: 11.54
+    
+    - model: RX6600
+      fullModelName: "AMD Radeon RX 6600"
+      vendor: AMD
+      costPerHour: 0.06
+      fp16TFlops: 17.86
+    
+    - model: RX6600XT
+      fullModelName: "AMD Radeon RX 6600 XT"
+      vendor: AMD
+      costPerHour: 0.07
+      fp16TFlops: 21.2
+    
+    - model: RX6700
+      fullModelName: "AMD Radeon RX 6700"
+      vendor: AMD
+      costPerHour: 0.08
+      fp16TFlops: 22.8
+    
+    - model: RX6700XT
+      fullModelName: "AMD Radeon RX 6700 XT"
+      vendor: AMD
+      costPerHour: 0.09
+      fp16TFlops: 26.42
+    
+    - model: RX6800
+      fullModelName: "AMD Radeon RX 6800"
+      vendor: AMD
+      costPerHour: 0.11
+      fp16TFlops: 32.34
+    
+    - model: RX6800XT
+      fullModelName: "AMD Radeon RX 6800 XT"
+      vendor: AMD
+      costPerHour: 0.13
+      fp16TFlops: 41.48
+    
+    - model: RX6900XT
+      fullModelName: "AMD Radeon RX 6900 XT"
+      vendor: AMD
+      costPerHour: 0.15
+      fp16TFlops: 46.08
+
+    # AMD Radeon RX 7000 Series
+    - model: RX7500
+      fullModelName: "AMD Radeon RX 7500"
+      vendor: AMD
+      costPerHour: 0.06
+      fp16TFlops: 32.4
+    
+    - model: RX7600
+      fullModelName: "AMD Radeon RX 7600"
+      vendor: AMD
+      costPerHour: 0.08
+      fp16TFlops: 43.0
+    
+    - model: RX7700XT
+      fullModelName: "AMD Radeon RX 7700 XT"
+      vendor: AMD
+      costPerHour: 0.12
+      fp16TFlops: 68.4
+    
+    - model: RX7800XT
+      fullModelName: "AMD Radeon RX 7800 XT"
+      vendor: AMD
+      costPerHour: 0.15
+      fp16TFlops: 85.2
+    
+    - model: RX7900XT
+      fullModelName: "AMD Radeon RX 7900 XT"
+      vendor: AMD
+      costPerHour: 0.18
+      fp16TFlops: 106.8
+    
+    - model: RX7900XTX
+      fullModelName: "AMD Radeon RX 7900 XTX"
+      vendor: AMD
+      costPerHour: 0.2
+      fp16TFlops: 122.8
