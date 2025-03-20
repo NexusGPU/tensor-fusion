@@ -19,21 +19,7 @@ serviceAccount:
   # Annotations to add to the service account
   annotations: {}
 
-hypervisor:
-  image:
-    repository: tensorfusion/tensor-fusion-hypervisor
-    # Overrides the image tag whose default is the chart appVersion.
-    tag: "1.9.0_amd64"
-  affinity:
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-          - matchExpressions:
-              - key: kubernetes.io/hostname
-                operator: In
-                values:
-                  - ubuntu
-
+initialGpuNodeLabelSelector: "nvidia.com/gpu.present=true"
 
 controller:
   # This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
@@ -49,6 +35,9 @@ controller:
   podAnnotations: {}
   tolerations: []
   affinity: {}
+  # livenessProbe: {}
+  # readinessProbe: {}
+  # resources: {}
   
   admissionWebhooks:
     failurePolicy: Fail

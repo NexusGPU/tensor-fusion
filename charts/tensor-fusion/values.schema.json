@@ -1,0 +1,314 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Values for tensor-fusion Helm chart",
+  "description": "Schema for the values.yaml file for the tensor-fusion Helm chart",
+  "type": "object",
+  "properties": {
+    "imagePullSecrets": {
+      "type": "array",
+      "description": "List of secrets for pulling images from private repositories. See: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the secret containing the registry credentials"
+          }
+        }
+      }
+    },
+    "nameOverride": {
+      "type": "string",
+      "description": "Override for the chart name"
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "description": "Override for the full name of resources created by this chart"
+    },
+    "namespaceOverride": {
+      "type": "string",
+      "description": "Override for the namespace where resources will be deployed"
+    },
+    "serviceAccount": {
+      "type": "object",
+      "description": "Configuration for the service account. See: https://kubernetes.io/docs/concepts/security/service-accounts/",
+      "properties": {
+        "create": {
+          "type": "boolean",
+          "description": "Specifies whether a service account should be created",
+          "default": true
+        },
+        "automount": {
+          "type": "boolean",
+          "description": "Automatically mount a ServiceAccount's API credentials",
+          "default": true
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Annotations to add to the service account",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "initialGpuNodeLabelSelector": {
+      "type": "string",
+      "description": "Label selector used to identify GPU nodes in the cluster",
+      "default": "nvidia.com/gpu.present=true"
+    },
+    "controller": {
+      "type": "object",
+      "description": "Configuration for the tensor-fusion controller component",
+      "properties": {
+        "replicaCount": {
+          "type": "integer",
+          "description": "Number of replicas for the controller deployment",
+          "minimum": 1,
+          "default": 1
+        },
+        "image": {
+          "type": "object",
+          "description": "Container image configuration for the controller",
+          "properties": {
+            "repository": {
+              "type": "string",
+              "description": "Repository for the controller image",
+              "default": "tensorfusion/tensor-fusion-operator"
+            },
+            "tag": {
+              "type": "string",
+              "description": "Tag for the controller image",
+              "default": "latest"
+            }
+          },
+          "required": ["repository"]
+        },
+        "podAnnotations": {
+          "type": "object",
+          "description": "Annotations to add to the controller pods",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "tolerations": {
+          "type": "array",
+          "description": "Tolerations for the controller pods",
+          "items": {
+            "type": "object"
+          }
+        },
+        "affinity": {
+          "type": "object",
+          "description": "Affinity rules for the controller pods"
+        },
+        "livenessProbe": {
+          "type": "object",
+          "description": "Liveness probe configuration for the controller pods",
+          "additionalProperties": true
+        },
+        "readinessProbe": {
+          "type": "object",
+          "description": "Readiness probe configuration for the controller pods",
+          "additionalProperties": true
+        },
+        "resources": {
+          "type": "object",
+          "description": "Resource requirements for the controller",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "description": "Resource requests for the controller",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU request for the controller"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory request for the controller"
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "description": "Resource limits for the controller",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU limit for the controller"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory limit for the controller"
+                }
+              }
+            }
+          }
+        },
+        "admissionWebhooks": {
+          "type": "object",
+          "description": "Configuration for the admission webhooks",
+          "properties": {
+            "failurePolicy": {
+              "type": "string",
+              "description": "Failure policy for the admission webhooks",
+              "enum": ["Fail", "Ignore"],
+              "default": "Fail"
+            },
+            "secretName": {
+              "type": "string",
+              "description": "Name of the secret containing the webhook certificates",
+              "default": "tensor-fusion-webhook-secret"
+            },
+            "patch": {
+              "type": "object",
+              "description": "Configuration for patching the webhook certificates",
+              "properties": {
+                "image": {
+                  "type": "string",
+                  "description": "Image for the webhook certificate generator",
+                  "default": "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0"
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": ["image"]
+    },
+    "greptime": {
+      "type": "object",
+      "description": "Configuration for GreptimeDB integration",
+      "properties": {
+        "isCloud": {
+          "type": "boolean",
+          "description": "Whether to use GreptimeDB Cloud",
+          "default": false
+        },
+        "host": {
+          "type": "string",
+          "description": "Hostname of the GreptimeDB server",
+          "default": "greptimedb-standalone.greptimedb.svc.cluster.local"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Port of the GreptimeDB server",
+          "default": 4001
+        },
+        "installStandalone": {
+          "type": "boolean",
+          "description": "Whether to install a standalone GreptimeDB instance",
+          "default": true
+        },
+        "user": {
+          "type": "string",
+          "description": "Username for GreptimeDB authentication"
+        },
+        "db": {
+          "type": "string",
+          "description": "Database name in GreptimeDB"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password for GreptimeDB authentication"
+        }
+      },
+      "required": ["host", "port"]
+    },
+    "agent": {
+      "type": "object",
+      "description": "Configuration for the tensor-fusion agent component",
+      "properties": {
+        "enrollToken": {
+          "type": "string",
+          "description": "Token used for agent enrollment with the cloud service",
+          "default": "token-from-cloud"
+        },
+        "agentId": {
+          "type": "string",
+          "description": "Unique identifier for the agent in the format 'org:env'",
+          "default": "org-from-cloud:env"
+        },
+        "cloudEndpoint": {
+          "type": "string",
+          "description": "WebSocket endpoint for cloud communication",
+          "default": "wss://app.tensor-fusion.ai/_ws"
+        },
+        "image": {
+          "type": "object",
+          "description": "Container image configuration for the agent",
+          "properties": {
+            "repository": {
+              "type": "string",
+              "description": "Repository for the agent image",
+              "default": "tensorfusion/tensor-fusion-agent"
+            },
+            "tag": {
+              "type": "string",
+              "description": "Tag for the agent image",
+              "default": "latest"
+            }
+          },
+          "required": ["repository"]
+        },
+        "resources": {
+          "type": "object",
+          "description": "Resource requirements for the agent",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "description": "Resource requests for the agent",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU request for the agent",
+                  "default": "50m"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory request for the cluster agent",
+                  "default": "64Mi"
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "description": "Resource limits for the cluster agent",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU limit for the cluster agent",
+                  "default": "1000m"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory limit for the cluster agent",
+                  "default": "512Mi"
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": ["enrollToken", "agentId", "cloudEndpoint", "image"]
+    },
+    "cloudVendorCredentials": {
+      "type": "object",
+      "description": "Cloud vendor credentials for pools running in Provisioned mode without IRSA or zero-credential auth",
+      "properties": {
+        "accessKey": {
+          "type": "string",
+          "description": "Access key for cloud vendor authentication",
+          "default": "dummy"
+        },
+        "secretKey": {
+          "type": "string",
+          "description": "Secret key for cloud vendor authentication",
+          "default": "dummy"
+        }
+      },
+      "required": ["accessKey", "secretKey"]
+    }
+  }
+}
