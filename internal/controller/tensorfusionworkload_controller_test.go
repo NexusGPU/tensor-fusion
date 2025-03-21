@@ -33,6 +33,7 @@ import (
 
 	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
 )
@@ -70,8 +71,9 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 		}
 		Expect(k8sClient.Create(ctx, gpu)).To(Succeed())
 		gpu.Status = tfv1.GPUStatus{
-			Phase: tfv1.TensorFusionGPUPhaseRunning,
-			UUID:  "mock-gpu",
+			Phase:    tfv1.TensorFusionGPUPhaseRunning,
+			UUID:     "mock-gpu",
+			GPUModel: "mock",
 			NodeSelector: map[string]string{
 				"kubernetes.io/hostname": "mock-node",
 			},
@@ -92,6 +94,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Scheme:    k8sClient.Scheme(),
 			Scheduler: scheduler.NewScheduler(k8sClient),
 			Recorder:  record.NewFakeRecorder(3),
+			GpuInfos:  config.MockGpuInfo(),
 		}
 
 		// Clean up any pods from previous tests

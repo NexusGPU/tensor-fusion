@@ -41,6 +41,7 @@ import (
 
 	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/controller"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler"
 	"github.com/NexusGPU/tensor-fusion/internal/server"
@@ -69,6 +70,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
+	var gpuInfoConfig string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -80,6 +82,7 @@ func main() {
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&gpuInfoConfig, "gpu-info-config", "/etc/tensor-fusion/gpu-info.yaml", "specify the path to gpuInfoConfig file")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -106,6 +109,12 @@ func main() {
 	webhookServer := webhook.NewServer(webhook.Options{
 		TLSOpts: tlsOpts,
 	})
+
+	gpuInfos, err := config.LoadGpuInfoFromFile(gpuInfoConfig)
+	if err != nil {
+		ctrl.Log.Error(err, "unable to read gpuInfoConfig file")
+		gpuInfos = make([]config.GpuInfo, 0)
+	}
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
@@ -260,6 +269,7 @@ func main() {
 		Scheme:    mgr.GetScheme(),
 		Scheduler: scheduler,
 		Recorder:  mgr.GetEventRecorderFor("tensorfusionworkload"),
+		GpuInfos:  gpuInfos,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionWorkload")
 		os.Exit(1)

@@ -109,7 +109,7 @@ func main() {
 
 	allDeviceIDs := make([]string, 0)
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		device, ret := nvml.DeviceGetHandleByIndex(i)
 		if ret != nvml.SUCCESS {
 			ctrl.Log.Error(errors.New(nvml.ErrorString(ret)), "unable to get device", "index", i)

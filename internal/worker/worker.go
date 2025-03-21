@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
@@ -22,6 +24,7 @@ func init() {
 }
 
 type WorkerGenerator struct {
+	GpuInfos     []config.GpuInfo
 	WorkerConfig *tfv1.WorkerConfig
 }
 
@@ -84,6 +87,13 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		SubPathExpr: fmt.Sprintf("${%s}", constants.WorkerPodNameEnv),
 	})
 
+	info, ok := lo.Find(wg.GpuInfos, func(info config.GpuInfo) bool {
+		return info.FullModelName == gpu.Status.GPUModel
+	})
+	if !ok {
+		return nil, "", fmt.Errorf("gpu info(%s) not found", gpu.Status.GPUModel)
+	}
+
 	spec.Containers[0].Env = append(spec.Containers[0].Env, corev1.EnvVar{
 		Name:  "NVIDIA_VISIBLE_DEVICES",
 		Value: gpu.Status.UUID,
@@ -91,9 +101,11 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		Name:  constants.WorkerPortEnv,
 		Value: strconv.Itoa(port),
 	}, corev1.EnvVar{
-		Name: constants.WorkerCudaUpLimitEnv,
-		// TODO: convert tflops to percent
-		Value: "100",
+		Name:  constants.WorkerCudaUpLimitTflopsEnv,
+		Value: strconv.FormatInt(info.Fp16TFlops.Value(), 10),
+	}, corev1.EnvVar{
+		Name:  constants.WorkerCudaUpLimitEnv,
+		Value: strconv.FormatInt(int64(math.Ceil(float64(limits.Tflops.Value())/float64(info.Fp16TFlops.Value())*100)), 10),
 	}, corev1.EnvVar{
 		Name: constants.WorkerCudaMemLimitEnv,
 		// bytesize

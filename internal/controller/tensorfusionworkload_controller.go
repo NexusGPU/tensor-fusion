@@ -35,6 +35,7 @@ import (
 
 	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
@@ -49,6 +50,7 @@ type TensorFusionWorkloadReconciler struct {
 	Scheme    *runtime.Scheme
 	Scheduler scheduler.Scheduler
 	Recorder  record.EventRecorder
+	GpuInfos  []config.GpuInfo
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionworkloads,verbs=get;list;watch;create;update;patch;delete
@@ -106,7 +108,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// Create worker generator
-	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker}
+	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker, GpuInfos: r.GpuInfos}
 
 	podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec.Resources.Limits)
 	if err != nil {

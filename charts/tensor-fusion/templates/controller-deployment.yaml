@@ -57,6 +57,9 @@ spec:
             - name: cloud-vendor-credentials
               mountPath: /tmp/secret
               readOnly: true
+            - name: gpu-info
+              mountPath: /etc/tensor-fusion
+              readOnly: true
         {{- if .Values.agent.agentId }}
         - name: cluster-agent
           image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag | default "latest" }}"
@@ -105,6 +108,10 @@ spec:
           secret:
             secretName: tf-cloud-vendor-credentials
             defaultMode: 420
+        - configMap:
+            defaultMode: 420
+            name: {{ .Release.Name }}-public-gpu-info
+          name: gpu-info
         - name: logs
           emptyDir: {}
       {{- with .Values.controller.affinity }}

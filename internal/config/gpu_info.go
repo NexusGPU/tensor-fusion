@@ -27,3 +27,15 @@ func LoadGpuInfoFromFile(filename string) ([]GpuInfo, error) {
 	}
 	return infos, nil
 }
+
+func MockGpuInfo() []GpuInfo {
+	return []GpuInfo{
+		{
+			Model:         "mock",
+			Vendor:        "mock",
+			CostPerHour:   0.1,
+			Fp16TFlops:    resource.MustParse("1000"),
+			FullModelName: "mock",
+		},
+	}
+}
