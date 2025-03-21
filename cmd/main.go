@@ -82,7 +82,8 @@ func main() {
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	flag.StringVar(&gpuInfoConfig, "gpu-info-config", "/etc/tensor-fusion/gpu-info.yaml", "specify the path to gpuInfoConfig file")
+	flag.StringVar(&gpuInfoConfig, "gpu-info-config",
+		"/etc/tensor-fusion/gpu-info.yaml", "specify the path to gpuInfoConfig file")
 	opts := zap.Options{
 		Development: true,
 	}
