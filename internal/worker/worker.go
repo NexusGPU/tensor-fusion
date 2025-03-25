@@ -102,7 +102,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		Value: strconv.Itoa(port),
 	}, corev1.EnvVar{
 		Name:  constants.WorkerCudaUpLimitTflopsEnv,
-		Value: strconv.FormatInt(info.Fp16TFlops.Value(), 10),
+		Value: strconv.FormatInt(limits.Tflops.Value(), 10),
 	}, corev1.EnvVar{
 		Name:  constants.WorkerCudaUpLimitEnv,
 		Value: strconv.FormatInt(int64(math.Ceil(float64(limits.Tflops.Value())/float64(info.Fp16TFlops.Value())*100)), 10),
