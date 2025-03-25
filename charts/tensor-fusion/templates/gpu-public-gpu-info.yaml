@@ -130,8 +130,8 @@ data:
       costPerHour: 0.1
       fp16TFlops: 26.9
 
-    - model: TiTANRTX
-      fullModelName: "NVIDIA TiTAN RTX"
+    - model: TITANRTX
+      fullModelName: "NVIDIA TITAN RTX"
       vendor: NVIDIA
       costPerHour: 0.12
       fp16TFlops: 32.62
@@ -323,7 +323,7 @@ data:
       fp16TFlops: 27.8
     
     - model: RTX4000AdaGen
-      fullModelName: "NVIDIA RTX 4000 ADA GENERATiON"
+      fullModelName: "NVIDIA RTX 4000 ADA GENERATION"
       vendor: NVIDIA
       costPerHour: 0.28
       fp16TFlops: 26.7
