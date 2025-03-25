@@ -20,7 +20,7 @@ require (
 	golang.org/x/exp v0.0.0-20241217172543-b2144cdd0a67
 	gomodules.xyz/jsonpatch/v2 v2.4.0
 	k8s.io/api v0.32.1
-	k8s.io/apimachinery v0.32.1
+	k8s.io/apimachinery v0.32.3
 	k8s.io/client-go v0.32.1
 	k8s.io/component-helpers v0.32.1
 	k8s.io/utils v0.0.0-20241210054802-24370beab758
