@@ -125,13 +125,13 @@ data:
       fp16TFlops: 22.30
 
     - model: RTX2080Ti
-      fullModelName: "NVIDIA GEFORCE RTX 2080 TI"
+      fullModelName: "NVIDIA GEFORCE RTX 2080 Ti"
       vendor: NVIDIA
       costPerHour: 0.1
       fp16TFlops: 26.9
 
-    - model: TITANRTX
-      fullModelName: "NVIDIA TITAN RTX"
+    - model: TiTANRTX
+      fullModelName: "NVIDIA TiTAN RTX"
       vendor: NVIDIA
       costPerHour: 0.12
       fp16TFlops: 32.62
@@ -150,7 +150,7 @@ data:
       fp16TFlops: 26.0
     
     - model: RTX3060Ti
-      fullModelName: "NVIDIA GEFORCE RTX 3060 TI"
+      fullModelName: "NVIDIA GEFORCE RTX 3060 Ti"
       vendor: NVIDIA
       costPerHour: 0.08
       fp16TFlops: 32.4
@@ -162,7 +162,7 @@ data:
       fp16TFlops: 40.6
     
     - model: RTX3070Ti
-      fullModelName: "NVIDIA GEFORCE RTX 3070 TI"
+      fullModelName: "NVIDIA GEFORCE RTX 3070 Ti"
       vendor: NVIDIA
       costPerHour: 0.09
       fp16TFlops: 43.6
@@ -180,7 +180,7 @@ data:
       fp16TFlops: 61.2
     
     - model: RTX3080Ti
-      fullModelName: "NVIDIA GEFORCE RTX 3080 TI"
+      fullModelName: "NVIDIA GEFORCE RTX 3080 Ti"
       vendor: NVIDIA
       costPerHour: 0.14
       fp16TFlops: 68.2
@@ -192,7 +192,7 @@ data:
       fp16TFlops: 71.2
     
     - model: RTX3090Ti
-      fullModelName: "NVIDIA GEFORCE RTX 3090 TI"
+      fullModelName: "NVIDIA GEFORCE RTX 3090 Ti"
       vendor: NVIDIA
       costPerHour: 0.21
       fp16TFlops: 80.0
@@ -224,13 +224,13 @@ data:
       fp16TFlops: 44.0
     
     - model: RTX4060Ti
-      fullModelName: "NVIDIA GEFORCE RTX 4060 TI"
+      fullModelName: "NVIDIA GEFORCE RTX 4060 Ti"
       vendor: NVIDIA
       costPerHour: 0.11
       fp16TFlops: 44.0
     
     - model: RTX4060Ti_16GB
-      fullModelName: "NVIDIA GEFORCE RTX 4060 TI 16GB"
+      fullModelName: "NVIDIA GEFORCE RTX 4060 Ti 16GB"
       vendor: NVIDIA
       costPerHour: 0.12
       fp16TFlops: 44.0
@@ -248,13 +248,13 @@ data:
       fp16TFlops: 60.0
     
     - model: RTX4070Ti
-      fullModelName: "NVIDIA GEFORCE RTX 4070 TI"
+      fullModelName: "NVIDIA GEFORCE RTX 4070 Ti"
       vendor: NVIDIA
       costPerHour: 0.2
       fp16TFlops: 78.86
     
     - model: RTX4070TiS
-      fullModelName: "NVIDIA GEFORCE RTX 4070 TI SUPER"
+      fullModelName: "NVIDIA GEFORCE RTX 4070 Ti SUPER"
       vendor: NVIDIA
       costPerHour: 0.22
       fp16TFlops: 80.0
@@ -323,14 +323,14 @@ data:
       fp16TFlops: 27.8
     
     - model: RTX4000AdaGen
-      fullModelName: "NVIDIA RTX 4000 ADA GENERATION"
+      fullModelName: "NVIDIA RTX 4000 ADA GENERATiON"
       vendor: NVIDIA
       costPerHour: 0.28
       fp16TFlops: 26.7
 
     # NVIDIA GTX Series
     - model: GTX1050Ti
-      fullModelName: "NVIDIA GEFORCE GTX 1050 TI"
+      fullModelName: "NVIDIA GEFORCE GTX 1050 Ti"
       vendor: NVIDIA
       costPerHour: 0.03
       fp16TFlops: 4.0
@@ -348,13 +348,13 @@ data:
       fp16TFlops: 0.138
     
     - model: GTX1080Ti
-      fullModelName: "NVIDIA GEFORCE GTX 1080 TI"
+      fullModelName: "NVIDIA GEFORCE GTX 1080 Ti"
       vendor: NVIDIA
       costPerHour: 0.06
       fp16TFlops: 0.177
     
     - model: GTX1660Ti
-      fullModelName: "NVIDIA GeForce GTX 1660 TI"
+      fullModelName: "NVIDIA GeForce GTX 1660 Ti"
       vendor: NVIDIA
       costPerHour: 0.04
       fp16TFlops: 9.6
