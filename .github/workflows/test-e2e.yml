@@ -2,8 +2,6 @@ name: E2E Tests
 
 on:
   workflow_dispatch:
-  # push:
-  # pull_request:
 
 jobs:
   test-e2e:

@@ -2,7 +2,21 @@ name: Lint
 
 on:
   push:
+    branches:
+      - main
+      - release/**
+    paths-ignore:
+      - "*.md"
+      - "charts/**"
+      - "config/**"
   pull_request:
+    branches:
+      - main
+      - release/**
+    paths-ignore:
+      - "*.md"
+      - "charts/**"
+      - "config/**"
 
 jobs:
   lint:

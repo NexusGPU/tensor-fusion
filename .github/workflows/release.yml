@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+      - release/**
+    paths-ignore:
+      - "*.md"
+      - "charts/**"
+      - "config/**"
   workflow_dispatch:
 
 jobs:
