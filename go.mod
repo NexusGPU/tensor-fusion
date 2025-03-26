@@ -5,7 +5,7 @@ go 1.23.4
 require (
 	github.com/NVIDIA/go-nvml v0.12.4-1
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.86
-	github.com/aws/aws-sdk-go-v2 v1.36.1
+	github.com/aws/aws-sdk-go-v2 v1.36.3
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.202.4
 	github.com/aws/smithy-go v1.22.2
 	github.com/gin-contrib/gzip v1.0.1
