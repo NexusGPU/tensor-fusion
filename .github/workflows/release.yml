@@ -53,7 +53,7 @@ jobs:
         run: echo "tag=dev-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: tensorfusion/tensor-fusion-operator
           tags: ${{ github.event_name == 'workflow_dispatch' && steps.set_tag.outputs.tag || format('type=semver,pattern={{{{version}}}},value={0}', needs.release.outputs.version) }}
@@ -91,7 +91,7 @@ jobs:
         run: echo "tag=dev-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
      
       - id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: tensorfusion/tensor-fusion-node-discovery
           tags: ${{ github.event_name == 'workflow_dispatch' && steps.set_tag.outputs.tag || format('type=semver,pattern={{{{version}}}},value={0}', needs.release.outputs.version) }}
