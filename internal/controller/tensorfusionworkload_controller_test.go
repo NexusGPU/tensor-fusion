@@ -112,9 +112,16 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 	AfterEach(func() {
 		// Clean up workload resources
+
 		resource := &tensorfusionaiv1.TensorFusionWorkload{}
 		err := k8sClient.Get(ctx, typeNamespacedName, resource)
 		if err == nil {
+			By("remove finalizers from workload")
+			if len(resource.Finalizers) > 0 {
+				resource.Finalizers = []string{}
+				Expect(k8sClient.Update(ctx, resource)).To(Succeed())
+			}
+
 			By("Cleaning up the test workload")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		}

@@ -73,7 +73,6 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, err
 	}
 
-	// First, handle pods with finalizers that need GPU resource cleanup
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList,
 		client.InNamespace(req.Namespace),
@@ -81,11 +80,22 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, fmt.Errorf("list pods: %w", err)
 	}
 
-	hasdeletion := false
+	deleted, err := utils.HandleFinalizer(ctx, workload, r.Client, func(ctx context.Context, _ *tfv1.TensorFusionWorkload) (bool, error) {
+		// check if all pods are deleted
+		return len(podList.Items) == 0, nil
+	})
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("handle finalizer: %w", err)
+	}
+	if deleted {
+		return ctrl.Result{}, nil
+	}
+
+	// Handle pods with finalizers that need GPU resource cleanup
+	hasDeletion := false
 	// Process pods with our finalizer
 	for i := range podList.Items {
 		pod := &podList.Items[i]
-
 		// Handle our GPU resource cleanup finalizer
 		deleted, err := utils.HandleFinalizer(ctx, pod, r.Client, func(ctx context.Context, obj *corev1.Pod) (bool, error) {
 			return r.handlePodGPUCleanup(ctx, pod, workload)
@@ -94,10 +104,10 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		hasdeletion = hasdeletion || deleted
+		hasDeletion = hasDeletion || deleted
 	}
 
-	if hasdeletion {
+	if hasDeletion {
 		return ctrl.Result{Requeue: true, RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
