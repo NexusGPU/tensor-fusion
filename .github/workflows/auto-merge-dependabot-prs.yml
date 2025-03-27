@@ -10,6 +10,8 @@ jobs:
   auto-merge:
     if: github.repository == 'NexusGPU/tensor-fusion' && startsWith(github.head_ref, 'dependabot/')
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     environment:
       name: auto-merge
       url: https://github.com/NexusGPU/tensor-fusion/blob/main/.github/workflows/auto-merge-dependabot-prs.yml
