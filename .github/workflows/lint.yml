@@ -21,6 +21,8 @@ on:
 jobs:
   lint:
     name: Run on Ubuntu
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code
