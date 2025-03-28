@@ -1,6 +1,6 @@
 module github.com/NexusGPU/tensor-fusion
 
-go 1.23.4
+go 1.24.1
 
 require (
 	github.com/NVIDIA/go-nvml v0.12.4-1
