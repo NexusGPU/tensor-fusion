@@ -1,10 +1,9 @@
 module github.com/NexusGPU/tensor-fusion
 
 go 1.24.1
-
 require (
 	github.com/NVIDIA/go-nvml v0.12.4-1
-	github.com/aliyun/alibaba-cloud-sdk-go v1.63.101
+	github.com/aliyun/alibaba-cloud-sdk-go v1.63.103
 	github.com/aws/aws-sdk-go-v2 v1.36.3
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.210.1
 	github.com/aws/smithy-go v1.22.3
