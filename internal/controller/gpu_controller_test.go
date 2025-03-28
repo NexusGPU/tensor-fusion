@@ -18,81 +18,40 @@ package controller
 
 import (
 	"context"
-	"fmt"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 var _ = Describe("GPU Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
-
-		ctx := context.Background()
-
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default",
-		}
-		gpu := &tfv1.GPU{}
-		gpunode := &tfv1.GPUNode{}
-
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind GPUNode")
-			gpunode = &tfv1.GPUNode{
+	Context("When reconciling a GPU resource", func() {
+		It("Should add a specific label with pool name", func() {
+			ctx := context.Background()
+			pool := getMockGPUPool(ctx)
+			gpunode := getMockGPUNode(ctx, "mock-node")
+			By("creating the custom resource for the Kind GPU")
+			key := client.ObjectKey{Name: "mock-gpu", Namespace: "default"}
+			gpu := &tfv1.GPU{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: resourceName + "-node",
-					Labels: map[string]string{
-						fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, "mock"): "true",
-					},
+					Name:      key.Name,
+					Namespace: key.Namespace,
 				},
 			}
-			Expect(k8sClient.Create(ctx, gpunode)).To(Succeed())
+			Expect(controllerutil.SetControllerReference(gpunode, gpu, scheme.Scheme)).To(Succeed())
+			Expect(k8sClient.Create(ctx, gpu)).To(Succeed())
+			By("checking gpu lables")
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, key, gpu)).Should(Succeed())
+				g.Expect(gpu.GetLabels()[constants.GpuPoolKey]).Should(Equal(pool.Name))
+			}, timeout, interval).Should(Succeed())
 
-			By("creating the custom resource for the Kind GPU")
-			err := k8sClient.Get(ctx, typeNamespacedName, gpu)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &tfv1.GPU{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-				}
-				Expect(controllerutil.SetControllerReference(gpunode, resource, scheme.Scheme)).To(Succeed())
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
-		})
-
-		AfterEach(func() {
-			resource := &tfv1.GPU{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance GPU")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-
-			By("Cleanup the specific resource instance GPUNode")
-			Expect(k8sClient.Delete(ctx, gpunode)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &GPUReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Delete(ctx, gpu)).Should(Succeed())
 		})
 	})
 })

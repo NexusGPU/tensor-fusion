@@ -21,65 +21,30 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 )
 
 var _ = Describe("TensorFusionCluster Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	Context("When creating a cluster with a GPUPool", func() {
+		It("Should create GPUPool custom resource according to spec", func() {
+			ctx := context.Background()
+			tfc := getMockCluster(ctx)
 
-		ctx := context.Background()
-
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
-		tensorfusioncluster := &tfv1.TensorFusionCluster{}
-
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind TensorFusionCluster")
-			err := k8sClient.Get(ctx, typeNamespacedName, tensorfusioncluster)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &tfv1.TensorFusionCluster{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
+			By("checking that the GPUPool is created with specific name and label")
+			Eventually(func() string {
+				poolList := &tfv1.GPUPoolList{}
+				err := k8sClient.List(ctx, poolList, client.MatchingLabels(map[string]string{
+					constants.LabelKeyOwner: tfc.GetName(),
+				}))
+				Expect(err).NotTo(HaveOccurred())
+				if len(poolList.Items) > 0 {
+					return poolList.Items[0].Name
 				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
-		})
-
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &tfv1.TensorFusionCluster{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance TensorFusionCluster")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &TensorFusionClusterReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(3),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+				return ""
+			}, timeout, interval).Should(Equal(tfc.Name + "-" + tfc.Spec.GPUPools[0].Name))
 		})
 	})
 })

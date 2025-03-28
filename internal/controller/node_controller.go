@@ -110,7 +110,11 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				ObjectMeta: metav1.ObjectMeta{
 					Name: node.Name,
 				},
-			}); err != nil && !errors.IsNotFound(err) {
+			}); err != nil {
+				// requeue if the gpunode is not generated
+				if errors.IsNotFound(err) {
+					return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
+				}
 				return ctrl.Result{}, fmt.Errorf("can not delete gpuNode(%s) : %w", node.Name, err)
 			}
 			return ctrl.Result{}, nil
@@ -121,9 +125,8 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		if err := r.Client.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
 			if errors.IsNotFound(err) {
 				gpuNode = r.generateGPUNode(node, pool)
-				_, e := controllerutil.CreateOrUpdate(ctx, r.Client, gpuNode, func() error { return nil })
-				if e != nil {
-					return ctrl.Result{}, fmt.Errorf("failed to create or patch GPUNode: %w", e)
+				if e := r.Client.Create(ctx, gpuNode); e != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to create GPUNode: %w", e)
 				}
 			}
 		} else {

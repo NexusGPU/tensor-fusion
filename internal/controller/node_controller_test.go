@@ -18,21 +18,22 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 )
 
-var _ = Describe("GPUPool Controller", func() {
-	Context("When reconciling a resource", func() {
-		It("Should update status when nodes ready", func() {
+var _ = Describe("Node Controller", func() {
+	Context("When a node has specific labels", func() {
+		It("Should create GPUNode custom resource", func() {
 			ctx := context.Background()
-			Eventually(func(g Gomega) {
-				pool := getMockGPUPool(ctx)
-				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
-			}, timeout, interval).Should(Succeed())
+			pool := getMockGPUPool(ctx)
+			gpunode := getMockGPUNode(ctx, "mock-node")
+			Expect(gpunode.GetLabels()[constants.LabelKeyOwner]).Should(Equal(pool.Name))
+			Expect(gpunode.GetLabels()[fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name)]).Should(Equal("true"))
 		})
 	})
 })
