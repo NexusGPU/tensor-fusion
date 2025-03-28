@@ -25,8 +25,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -77,20 +75,6 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					},
 				}
 				Expect(k8sClient.Create(ctx, workload)).To(Succeed())
-				workload.Status = tfv1.TensorFusionWorkloadStatus{
-					Replicas:      1,
-					ReadyReplicas: 1,
-					WorkerStatuses: []tfv1.WorkerStatus{
-						{
-							WorkerPhase: tfv1.WorkerRunning,
-							WorkerName:  "test-worker-1",
-							WorkerIp:    "192.168.1.1",
-							WorkerPort:  8080,
-						},
-					},
-				}
-				// Update status
-				Expect(k8sClient.Status().Update(ctx, workload)).To(Succeed())
 			}
 
 			connection := &tfv1.TensorFusionConnection{}
@@ -131,33 +115,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
 		})
 
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-
-			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(10),
-			}
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-		})
-
 		It("should update connection status with worker information", func() {
-			By("Reconciling the connection resource")
-
-			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(10),
-			}
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
 			By("Verifying the connection status is updated")
 			connection := &tfv1.TensorFusionConnection{}
 			Eventually(func() bool {
@@ -190,43 +148,33 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, connectionNoLabel)).To(Succeed())
 
-			By("Reconciling the connection without workload label")
-
-			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(10),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{
+			By("Verifying the connection status")
+			Eventually(func() bool {
+				connection := &tfv1.TensorFusionConnection{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{
 					Name:      "test-connection-no-label",
 					Namespace: "default",
-				},
-			})
+				}, connection); err != nil {
+					return false
+				}
+				return connection.Status.WorkerName == "" &&
+					connection.Status.Phase == tfv1.WorkerPending
+			}, time.Second*5, time.Millisecond*100).Should(BeTrue())
 
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("missing workload label"))
-
-			// Clean up the test connection
+			// Cleanup
 			Expect(k8sClient.Delete(ctx, connectionNoLabel)).To(Succeed())
 		})
 
 		It("should handle worker selection when worker status changes", func() {
 			By("Setting up a connection with an already assigned worker")
 
-			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(10),
-			}
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			// Wait for the controller to process the resource
+			connection := &tfv1.TensorFusionConnection{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, typeNamespacedName, connection)
+			}, time.Second*5, time.Millisecond*100).Should(Succeed())
 
 			// Verify initial worker assignment
-			connection := &tfv1.TensorFusionConnection{}
 			Eventually(func() bool {
 				if err := k8sClient.Get(ctx, typeNamespacedName, connection); err != nil {
 					return false
@@ -253,16 +201,9 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					WorkerPort:  8081,
 				},
 			}
-
 			Expect(k8sClient.Status().Update(ctx, workload)).To(Succeed())
 
-			By("Reconciling the connection after worker status change")
-			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify worker reselection
+			By("Verifying worker reselection")
 			Eventually(func() bool {
 				if err := k8sClient.Get(ctx, typeNamespacedName, connection); err != nil {
 					return false
@@ -300,16 +241,10 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 						},
 					},
 				},
-				Status: tfv1.TensorFusionWorkloadStatus{
-					Replicas:      0,
-					ReadyReplicas: 0,
-					// Empty WorkerStatuses to force selection failure
-					WorkerStatuses: []tfv1.WorkerStatus{},
-				},
 			}
 			Expect(k8sClient.Create(ctx, failWorkload)).To(Succeed())
-			// Update status
-			Expect(k8sClient.Status().Update(ctx, failWorkload)).To(Succeed())
+			// Get the latest version after creation
+			Expect(k8sClient.Get(ctx, failWorkloadNamespacedName, failWorkload)).To(Succeed())
 
 			// Verify workload was created properly
 			createdWorkload := &tfv1.TensorFusionWorkload{}
@@ -340,19 +275,6 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, failConnection)).To(Succeed())
-
-			By("Reconciling the connection to trigger worker selection failure")
-			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(10),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: failConnectionNamespacedName,
-			})
-			// We expect an error since worker selection should fail
-			Expect(err).To(HaveOccurred())
 
 			By("Verifying the connection status is updated to WorkerPending")
 			Eventually(func() bool {

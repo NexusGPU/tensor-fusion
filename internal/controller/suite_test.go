@@ -47,6 +47,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	// +kubebuilder:scaffold:imports
 )
@@ -182,31 +183,28 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
-	//	scheduler := scheduler.NewScheduler(mgr.GetClient())
-	//	err = (&TensorFusionConnectionReconciler{
-	//		Client:   mgr.GetClient(),
-	//		Scheme:   mgr.GetScheme(),
-	//		Recorder: mgr.GetEventRecorderFor("TensorFusionConnection"),
-	//	}).SetupWithManager(mgr)
-	//	Expect(err).ToNot(HaveOccurred())
-	//
+	scheduler := scheduler.NewScheduler(mgr.GetClient())
+	err = (&TensorFusionConnectionReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("TensorFusionConnection"),
+	}).SetupWithManager(mgr)
+	Expect(err).ToNot(HaveOccurred())
+
 	err = (&GPUReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(ctx, mgr)
 	Expect(err).ToNot(HaveOccurred())
 
-	// gpuInfos, err := config.LoadGpuInfoFromFile("")
-	// Expect(err).ToNot(HaveOccurred())
-
-	// err = (&TensorFusionWorkloadReconciler{
-	//	Client:    mgr.GetClient(),
-	//	Scheme:    mgr.GetScheme(),
-	//	Scheduler: scheduler,
-	//	Recorder:  mgr.GetEventRecorderFor("tensorfusionworkload"),
-	//	GpuInfos:  config.MockGpuInfo(),
-	// }).SetupWithManager(mgr)
-	// Expect(err).ToNot(HaveOccurred())
+	err = (&TensorFusionWorkloadReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Scheduler: scheduler,
+		Recorder:  mgr.GetEventRecorderFor("tensorfusionworkload"),
+		GpuInfos:  config.MockGpuInfo(),
+	}).SetupWithManager(mgr)
+	Expect(err).ToNot(HaveOccurred())
 
 	go func() {
 		defer GinkgoRecover()
