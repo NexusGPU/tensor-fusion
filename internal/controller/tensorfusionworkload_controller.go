@@ -33,7 +33,6 @@ import (
 
 	"reflect"
 
-	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -430,7 +429,7 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 // SetupWithManager sets up the controller with the Manager.
 func (r *TensorFusionWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&tensorfusionaiv1.TensorFusionWorkload{}).
+		For(&tfv1.TensorFusionWorkload{}).
 		Named("tensorfusionworkload").
 		Owns(&corev1.Pod{}).
 		Complete(r)

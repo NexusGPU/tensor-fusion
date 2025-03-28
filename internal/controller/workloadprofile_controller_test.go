@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
 var _ = Describe("WorkloadProfile Controller", func() {
@@ -40,13 +40,13 @@ var _ = Describe("WorkloadProfile Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		workloadprofile := &tensorfusionaiv1.WorkloadProfile{}
+		workloadprofile := &tfv1.WorkloadProfile{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind WorkloadProfile")
 			err := k8sClient.Get(ctx, typeNamespacedName, workloadprofile)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &tensorfusionaiv1.WorkloadProfile{
+				resource := &tfv1.WorkloadProfile{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,7 +59,7 @@ var _ = Describe("WorkloadProfile Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &tensorfusionaiv1.WorkloadProfile{}
+			resource := &tfv1.WorkloadProfile{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 

@@ -43,7 +43,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -104,7 +103,7 @@ var _ = BeforeSuite(func() {
 	err = corev1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = tensorfusionaiv1.AddToScheme(scheme.Scheme)
+	err = tfv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
@@ -196,9 +195,6 @@ var _ = BeforeSuite(func() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(ctx, mgr)
 	Expect(err).ToNot(HaveOccurred())
-
-	// gpuInfos, err := config.LoadGpuInfoFromFile("")
-	// Expect(err).ToNot(HaveOccurred())
 
 	err = (&TensorFusionWorkloadReconciler{
 		Client:    mgr.GetClient(),
