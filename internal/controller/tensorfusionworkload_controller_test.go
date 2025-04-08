@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -55,7 +55,6 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 	var gpu *tfv1.GPU
 	BeforeEach(func() {
-
 		gpu = &tfv1.GPU{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "mock-gpu",
@@ -99,17 +98,24 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 	AfterEach(func() {
 		// Clean up workload resources
 		resource := &tfv1.TensorFusionWorkload{}
-		err := k8sClient.Get(ctx, typeNamespacedName, resource)
-		if err == nil {
+		Eventually(func() error {
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					return nil
+				}
+				return err
+			}
 			By("remove finalizers from workload")
 			if len(resource.Finalizers) > 0 {
 				resource.Finalizers = []string{}
-				Expect(k8sClient.Update(ctx, resource)).To(Succeed())
+				err = k8sClient.Update(ctx, resource)
+				if err != nil {
+					return err
+				}
 			}
-
-			By("Cleaning up the test workload")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		}
+			return k8sClient.Delete(ctx, resource)
+		}, 5*time.Second, 100*time.Millisecond).Should(BeNil())
 
 		By("Cleaning up the test pods")
 		// List the pods
@@ -499,8 +505,8 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			By("Creating a workload with 2 replicas")
 			workload := &tfv1.TensorFusionWorkload{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-cleanup-workload",
-					Namespace: "default",
+					Name:      resourceName,
+					Namespace: resourceNamespace,
 				},
 				Spec: tfv1.TensorFusionWorkloadSpec{
 					PoolName: "mock",
@@ -523,7 +529,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Eventually(func() int {
 				podList := &corev1.PodList{}
 				err := k8sClient.List(ctx, podList,
-					client.InNamespace("default"),
+					client.InNamespace(resourceNamespace),
 					client.MatchingLabels{
 						constants.LabelKeyOwner: workload.Name,
 					})
