@@ -67,7 +67,7 @@ func (r *GPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	})
 
 	if !ok {
-		return ctrl.Result{}, fmt.Errorf("owner node %s not found", gpu.Name)
+		return ctrl.Result{}, fmt.Errorf("owner node of gpu(%s) not found", gpu.Name)
 	}
 
 	gpunode := &tfv1.GPUNode{}

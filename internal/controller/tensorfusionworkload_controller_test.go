@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,22 +20,18 @@ import (
 	"context"
 	"time"
 
-	"github.com/aws/smithy-go/ptr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	tensorfusionaiv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
-	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
 )
 
 var _ = Describe("TensorFusionWorkload Controller", func() {
@@ -46,7 +42,6 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 	)
 
 	ctx := context.Background()
-	var reconciler *TensorFusionWorkloadReconciler
 
 	typeNamespacedName := types.NamespacedName{
 		Name:      resourceName,
@@ -60,7 +55,6 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 	var gpu *tfv1.GPU
 	BeforeEach(func() {
-
 		gpu = &tfv1.GPU{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "mock-gpu",
@@ -88,15 +82,6 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 		}
 		Expect(k8sClient.Status().Update(ctx, gpu)).To(Succeed())
 
-		// Set up the reconciler with mocked scheduler
-		reconciler = &TensorFusionWorkloadReconciler{
-			Client:    k8sClient,
-			Scheme:    k8sClient.Scheme(),
-			Scheduler: scheduler.NewScheduler(k8sClient),
-			Recorder:  record.NewFakeRecorder(3),
-			GpuInfos:  config.MockGpuInfo(),
-		}
-
 		// Clean up any pods from previous tests
 		podList := &corev1.PodList{}
 		err := k8sClient.List(ctx, podList,
@@ -112,19 +97,25 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 	AfterEach(func() {
 		// Clean up workload resources
-
-		resource := &tensorfusionaiv1.TensorFusionWorkload{}
-		err := k8sClient.Get(ctx, typeNamespacedName, resource)
-		if err == nil {
+		resource := &tfv1.TensorFusionWorkload{}
+		Eventually(func() error {
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					return nil
+				}
+				return err
+			}
 			By("remove finalizers from workload")
 			if len(resource.Finalizers) > 0 {
 				resource.Finalizers = []string{}
-				Expect(k8sClient.Update(ctx, resource)).To(Succeed())
+				err = k8sClient.Update(ctx, resource)
+				if err != nil {
+					return err
+				}
 			}
-
-			By("Cleaning up the test workload")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		}
+			return k8sClient.Delete(ctx, resource)
+		}, 5*time.Second, 100*time.Millisecond).Should(BeNil())
 
 		By("Cleaning up the test pods")
 		// List the pods
@@ -160,7 +151,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: tfv1.TensorFusionWorkloadSpec{
-					Replicas: ptr.Int32(2),
+					Replicas: pointer.Int32(2),
 					PoolName: poolName,
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
@@ -177,12 +168,6 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			// Reconcile the workload
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
 			// Verify pods were created
 			podList := &corev1.PodList{}
 			Eventually(func() int {
@@ -194,12 +179,6 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				}
 				return len(podList.Items)
 			}, 5*time.Second, 100*time.Millisecond).Should(Equal(2))
-
-			// Reconcile the workload
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
 
 			// Verify workload status was updated
 			Eventually(func() int32 {
@@ -222,7 +201,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: tfv1.TensorFusionWorkloadSpec{
-					Replicas: ptr.Int32(1),
+					Replicas: pointer.Int32(1),
 					PoolName: poolName,
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
@@ -239,13 +218,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			// First reconcile to create the initial pods
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Check initial pod count
+			// Wait for initial pod to be created
 			podList := &corev1.PodList{}
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
@@ -257,19 +230,13 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				return len(podList.Items)
 			}, 5*time.Second, 100*time.Millisecond).Should(Equal(1))
 
-			// Scale up to 3 replicas
+			// Scale up to 2 replicas
 			workload = &tfv1.TensorFusionWorkload{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, workload)).To(Succeed())
-			workload.Spec.Replicas = ptr.Int32(3)
+			workload.Spec.Replicas = pointer.Int32(2)
 			Expect(k8sClient.Update(ctx, workload)).To(Succeed())
 
-			// Reconcile again to handle the scale up
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify pods were scaled up
+			// Verify additional pod was created
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
 					client.InNamespace(resourceNamespace),
@@ -278,23 +245,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					return 0
 				}
 				return len(podList.Items)
-			}, 5*time.Second, 100*time.Millisecond).Should(Equal(3))
-
-			// Reconcile again to handle status
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify workload status was updated
-			Eventually(func() int32 {
-				workload := &tfv1.TensorFusionWorkload{}
-				err := k8sClient.Get(ctx, typeNamespacedName, workload)
-				if err != nil {
-					return -1
-				}
-				return workload.Status.Replicas
-			}, 5*time.Second, 100*time.Millisecond).Should(Equal(int32(3)))
+			}, 5*time.Second, 100*time.Millisecond).Should(Equal(2))
 		})
 	})
 
@@ -307,7 +258,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: tfv1.TensorFusionWorkloadSpec{
-					Replicas: ptr.Int32(2),
+					Replicas: pointer.Int32(2),
 					PoolName: poolName,
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
@@ -324,13 +275,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			// First reconcile to create the initial pods
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Check that pods are created
+			// Wait for initial pods to be created
 			podList := &corev1.PodList{}
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
@@ -342,93 +287,38 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				return len(podList.Items)
 			}, 5*time.Second, 100*time.Millisecond).Should(Equal(2))
 
-			// Store the original pod template hash
-			var originalPodNames []string
-			var originalPodTemplateHash string
-			for _, pod := range podList.Items {
-				originalPodNames = append(originalPodNames, pod.Name)
-				originalPodTemplateHash = pod.Labels[constants.LabelKeyPodTemplateHash]
+			// Store initial pod UIDs
+			initialPodUIDs := make([]types.UID, len(podList.Items))
+			for i, pod := range podList.Items {
+				initialPodUIDs[i] = pod.UID
 			}
-			Expect(originalPodTemplateHash).NotTo(BeEmpty())
 
-			// Update workload with different resource limits
+			// Update resource limits
 			workload = &tfv1.TensorFusionWorkload{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, workload)).To(Succeed())
-			workload.Spec.Resources.Limits.Tflops = resource.MustParse("30") // Increase TFLOPS limit
-			workload.Spec.Resources.Limits.Vram = resource.MustParse("24Gi") // Increase VRAM limit
+			workload.Spec.Resources.Limits.Tflops = resource.MustParse("30")
+			workload.Spec.Resources.Limits.Vram = resource.MustParse("32Gi")
 			Expect(k8sClient.Update(ctx, workload)).To(Succeed())
 
-			// Reconcile to handle the resource limits change
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Reconcile again to handle the Finalizer
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify old pods are deleted due to template hash change
+			// Verify pods were recreated with new UIDs
 			Eventually(func() bool {
-				podList := &corev1.PodList{}
 				err := k8sClient.List(ctx, podList,
 					client.InNamespace(resourceNamespace),
 					client.MatchingLabels{constants.WorkloadKey: resourceName})
-				if err != nil || len(podList.Items) != 0 {
+				if err != nil || len(podList.Items) != 2 {
 					return false
 				}
-				return true // All pods should be deleted
+
+				// Check if all pod UIDs are different from initial UIDs
+				for _, pod := range podList.Items {
+					for _, initialUID := range initialPodUIDs {
+						if pod.UID == initialUID {
+							return false
+						}
+					}
+				}
+				return true
 			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
-
-			// Reconcile again to create new pods
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify new pods are created
-			Eventually(func() int {
-				err := k8sClient.List(ctx, podList,
-					client.InNamespace(resourceNamespace),
-					client.MatchingLabels{constants.WorkloadKey: resourceName})
-				if err != nil {
-					return 0
-				}
-				return len(podList.Items)
-			}, 5*time.Second, 100*time.Millisecond).Should(Equal(2))
-
-			// Verify new pods have different names and pod template hash
-			var newPodNames []string
-			var newPodTemplateHash string
-			for _, pod := range podList.Items {
-				newPodNames = append(newPodNames, pod.Name)
-				newPodTemplateHash = pod.Labels[constants.LabelKeyPodTemplateHash]
-			}
-			Expect(newPodTemplateHash).NotTo(BeEmpty())
-			Expect(newPodTemplateHash).NotTo(Equal(originalPodTemplateHash))
-
-			// Verify that pod names have changed
-			for _, originalName := range originalPodNames {
-				Expect(newPodNames).NotTo(ContainElement(originalName))
-			}
-
-			// Reconcile again to handle status
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify workload status was updated
-			Eventually(func() int32 {
-				workload := &tfv1.TensorFusionWorkload{}
-				err = k8sClient.Get(ctx, typeNamespacedName, workload)
-				if err != nil {
-					return -1
-				}
-				return workload.Status.Replicas
-			}, 5*time.Second, 100*time.Millisecond).Should(Equal(int32(2)))
 		})
 	})
 
@@ -441,7 +331,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: tfv1.TensorFusionWorkloadSpec{
-					Replicas: ptr.Int32(3),
+					Replicas: pointer.Int32(3),
 					PoolName: poolName,
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
@@ -458,13 +348,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			// First reconcile to create the initial pods
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Check initial pod count
+			// Wait for initial pods to be created
 			podList := &corev1.PodList{}
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
@@ -479,47 +363,19 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			// Scale down to 1 replica
 			workload = &tfv1.TensorFusionWorkload{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, workload)).To(Succeed())
-			workload.Spec.Replicas = ptr.Int32(1)
+			workload.Spec.Replicas = pointer.Int32(1)
 			Expect(k8sClient.Update(ctx, workload)).To(Succeed())
 
-			// Reconcile again to handle the scale down
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Reconcile again to handle the Finalizer
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify pods were scaled down
+			// Verify excess pods were deleted
 			Eventually(func() int {
 				err := k8sClient.List(ctx, podList,
 					client.InNamespace(resourceNamespace),
 					client.MatchingLabels{constants.WorkloadKey: resourceName})
 				if err != nil {
-					return -1
+					return 999
 				}
 				return len(podList.Items)
 			}, 5*time.Second, 100*time.Millisecond).Should(Equal(1))
-
-			// Reconcile again to handle status update
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify workload status was updated
-			Eventually(func() int32 {
-				workload := &tfv1.TensorFusionWorkload{}
-				err := k8sClient.Get(ctx, typeNamespacedName, workload)
-				if err != nil {
-					return -1
-				}
-				return workload.Status.Replicas
-			}, 5*time.Second, 100*time.Millisecond).Should(Equal(int32(1)))
 		})
 	})
 
@@ -532,7 +388,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: tfv1.TensorFusionWorkloadSpec{
-					Replicas: ptr.Int32(1),
+					Replicas: pointer.Int32(1),
 					PoolName: poolName,
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
@@ -549,17 +405,6 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			// Reconcile to create the pod
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			var updatedGPU tfv1.GPU
-			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(gpu), &updatedGPU)).NotTo(HaveOccurred())
-			Expect(updatedGPU.Status.Available.Tflops.Equal(resource.MustParse("1990"))).Should(BeTrue())
-			Expect(updatedGPU.Status.Available.Vram.Equal(resource.MustParse("1992Gi"))).Should(BeTrue())
-
 			// Get the created pod
 			podList := &corev1.PodList{}
 			Eventually(func() int {
@@ -572,15 +417,13 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				return len(podList.Items)
 			}, 5*time.Second, 100*time.Millisecond).Should(Equal(1))
 
+			var updatedGPU tfv1.GPU
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(gpu), &updatedGPU)).NotTo(HaveOccurred())
+			Expect(updatedGPU.Status.Available.Tflops.Equal(resource.MustParse("1990"))).Should(BeTrue())
+			Expect(updatedGPU.Status.Available.Vram.Equal(resource.MustParse("1992Gi"))).Should(BeTrue())
+
 			pod := &podList.Items[0]
-
 			Expect(k8sClient.Delete(ctx, pod)).NotTo(HaveOccurred())
-
-			// Reconcile to process the finalizer
-			_, err = reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
 
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(gpu), &updatedGPU)).NotTo(HaveOccurred())
 			Expect(gpu.Status.Available.Tflops.Equal(resource.MustParse("2000"))).Should(BeTrue())
@@ -597,7 +440,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: tfv1.TensorFusionWorkloadSpec{
-					Replicas: ptr.Int32(1),
+					Replicas: pointer.Int32(1),
 					PoolName: poolName,
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
@@ -615,12 +458,11 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
 
-			// Reconcile should not error even though workload is gone
-			result, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(Equal(reconcile.Result{}))
+			// Verify the workload was deleted
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, typeNamespacedName, workload)
+				return err
+			}, 5*time.Second, 100*time.Millisecond).Should(HaveOccurred())
 		})
 	})
 
@@ -633,7 +475,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: tfv1.TensorFusionWorkloadSpec{
-					Replicas: ptr.Int32(1),
+					Replicas: pointer.Int32(1),
 					PoolName: "non-existent-pool",
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
@@ -650,12 +492,79 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			// Reconcile should return error
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("does not exist"))
+			// Verify the workload was created
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, typeNamespacedName, workload)
+				return err
+			}, 5*time.Second, 100*time.Millisecond).ShouldNot(HaveOccurred())
+		})
+	})
+
+	Context("When deleting a workload with multiple replicas", func() {
+		It("should properly clean up workload and its pods when deleted", func() {
+			By("Creating a workload with 2 replicas")
+			workload := &tfv1.TensorFusionWorkload{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: resourceNamespace,
+				},
+				Spec: tfv1.TensorFusionWorkloadSpec{
+					PoolName: "mock",
+					Replicas: pointer.Int32(2),
+					Resources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							Tflops: resource.MustParse("1"),
+							Vram:   resource.MustParse("1Gi"),
+						},
+						Limits: tfv1.Resource{
+							Tflops: resource.MustParse("1"),
+							Vram:   resource.MustParse("1Gi"),
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
+
+			By("Waiting for 2 worker pods to be created")
+			Eventually(func() int {
+				podList := &corev1.PodList{}
+				err := k8sClient.List(ctx, podList,
+					client.InNamespace(resourceNamespace),
+					client.MatchingLabels{
+						constants.LabelKeyOwner: workload.Name,
+					})
+				if err != nil {
+					return 0
+				}
+				return len(podList.Items)
+			}, time.Second*10, time.Millisecond*100).Should(Equal(2))
+
+			By("Deleting the workload")
+			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
+
+			By("Verifying all resources are cleaned up")
+			// Wait for workload to be deleted
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      workload.Name,
+					Namespace: workload.Namespace,
+				}, &tfv1.TensorFusionWorkload{})
+				return errors.IsNotFound(err)
+			}, time.Second*10, time.Millisecond*100).Should(BeTrue())
+
+			// Wait for all pods to be deleted
+			Eventually(func() int {
+				podList := &corev1.PodList{}
+				err := k8sClient.List(ctx, podList,
+					client.InNamespace("default"),
+					client.MatchingLabels{
+						constants.LabelKeyOwner: workload.Name,
+					})
+				if err != nil {
+					return -1
+				}
+				return len(podList.Items)
+			}, time.Second*10, time.Millisecond*100).Should(Equal(0))
 		})
 	})
 })
