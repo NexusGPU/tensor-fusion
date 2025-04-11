@@ -47,6 +47,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	// +kubebuilder:scaffold:imports
 )
@@ -182,14 +183,14 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
-	//	scheduler := scheduler.NewScheduler(mgr.GetClient())
-	//	err = (&TensorFusionConnectionReconciler{
-	//		Client:   mgr.GetClient(),
-	//		Scheme:   mgr.GetScheme(),
-	//		Recorder: mgr.GetEventRecorderFor("TensorFusionConnection"),
-	//	}).SetupWithManager(mgr)
-	//	Expect(err).ToNot(HaveOccurred())
-	//
+	scheduler := scheduler.NewScheduler(mgr.GetClient())
+	err = (&TensorFusionConnectionReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("TensorFusionConnection"),
+	}).SetupWithManager(mgr)
+	Expect(err).ToNot(HaveOccurred())
+
 	err = (&GPUReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -199,14 +200,14 @@ var _ = BeforeSuite(func() {
 	// gpuInfos, err := config.LoadGpuInfoFromFile("")
 	// Expect(err).ToNot(HaveOccurred())
 
-	// err = (&TensorFusionWorkloadReconciler{
-	//	Client:    mgr.GetClient(),
-	//	Scheme:    mgr.GetScheme(),
-	//	Scheduler: scheduler,
-	//	Recorder:  mgr.GetEventRecorderFor("tensorfusionworkload"),
-	//	GpuInfos:  config.MockGpuInfo(),
-	// }).SetupWithManager(mgr)
-	// Expect(err).ToNot(HaveOccurred())
+	err = (&TensorFusionWorkloadReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Scheduler: scheduler,
+		Recorder:  mgr.GetEventRecorderFor("tensorfusionworkload"),
+		GpuInfos:  config.MockGpuInfo(),
+	}).SetupWithManager(mgr)
+	Expect(err).ToNot(HaveOccurred())
 
 	go func() {
 		defer GinkgoRecover()
@@ -214,8 +215,6 @@ var _ = BeforeSuite(func() {
 		Expect(err).ToNot(HaveOccurred(), "failed to run manager")
 	}()
 
-	// TODO: backward compatible with existing tests, can be removed when unnecessary
-	createMockPoolForTestsUsingManualReconcile(ctx)
 })
 
 var _ = AfterSuite(func() {
@@ -500,7 +499,7 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 					gpu.Status = tfv1.GPUStatus{
 						Phase:    tfv1.TensorFusionGPUPhaseRunning,
 						UUID:     key.Name,
-						GPUModel: "T4",
+						GPUModel: "mock",
 						NodeSelector: map[string]string{
 							"kubernetes.io/hostname": b.getNodeName(poolIndex, nodeIndex),
 						},
@@ -525,27 +524,4 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 	b.UpdateHypervisorStatus()
 
 	return b.TensorFusionEnv
-}
-
-func createMockPoolForTestsUsingManualReconcile(ctx context.Context) {
-	poolSpecCopy := config.MockGPUPoolSpec.DeepCopy()
-	poolSpecCopy.NodeManagerConfig.NodeSelector.NodeSelectorTerms = []corev1.NodeSelectorTerm{
-		{
-			MatchExpressions: []corev1.NodeSelectorRequirement{
-				{
-					Key:      "foo-mock-label", // avoid conflict
-					Operator: "In",
-					Values:   []string{"true"},
-				},
-			},
-		},
-	}
-
-	pool := &tfv1.GPUPool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "mock",
-		},
-		Spec: *poolSpecCopy,
-	}
-	Expect(k8sClient.Create(ctx, pool)).To(Succeed())
 }

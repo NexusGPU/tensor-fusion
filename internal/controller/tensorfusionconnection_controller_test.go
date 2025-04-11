@@ -18,15 +18,14 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -51,66 +50,31 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			Namespace: "default",
 		}
 
+		var tfEnv *TensorFusionEnv
 		BeforeEach(func() {
+			tfEnv = NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(1).SetGpuCountPerNode(2).
+				Build()
+			pool := tfEnv.GetGPUPool(0)
 			// Create workload first
-			workload := &tfv1.TensorFusionWorkload{}
-			err := k8sClient.Get(ctx, workloadNamespacedName, workload)
-			if err != nil && errors.IsNotFound(err) {
-				By("creating the TensorFusionWorkload resource")
-				workload = &tfv1.TensorFusionWorkload{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      workloadName,
-						Namespace: "default",
-					},
-					Spec: tfv1.TensorFusionWorkloadSpec{
-						PoolName: "mock",
-						Resources: tfv1.Resources{
-							Requests: tfv1.Resource{
-								Tflops: resource.MustParse("1"),
-								Vram:   resource.MustParse("1Gi"),
-							},
-							Limits: tfv1.Resource{
-								Tflops: resource.MustParse("1"),
-								Vram:   resource.MustParse("1Gi"),
-							},
-						},
-					},
-				}
-				Expect(k8sClient.Create(ctx, workload)).To(Succeed())
-				workload.Status = tfv1.TensorFusionWorkloadStatus{
-					Replicas:      1,
-					ReadyReplicas: 1,
-					WorkerStatuses: []tfv1.WorkerStatus{
-						{
-							WorkerPhase: tfv1.WorkerRunning,
-							WorkerName:  "test-worker-1",
-							WorkerIp:    "192.168.1.1",
-							WorkerPort:  8080,
-						},
-					},
-				}
-				// Update status
-				Expect(k8sClient.Status().Update(ctx, workload)).To(Succeed())
-			}
+			workload := createTensorFusionWorkload(pool.Name, workloadNamespacedName, 2)
+			checkWorkerPodCount(workload)
+			checkWorkloadStatus(workload)
 
-			connection := &tfv1.TensorFusionConnection{}
 			By("creating the custom resource for the Kind TensorFusionConnection")
-			err = k8sClient.Get(ctx, typeNamespacedName, connection)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &tfv1.TensorFusionConnection{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-						Labels: map[string]string{
-							constants.WorkloadKey: workloadName,
-						},
+			resource := &tfv1.TensorFusionConnection{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.WorkloadKey: workloadName,
 					},
-					Spec: tfv1.TensorFusionConnectionSpec{
-						WorkloadName: workloadName,
-					},
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+				},
+				Spec: tfv1.TensorFusionConnectionSpec{
+					WorkloadName: workloadName,
+				},
 			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 		})
 
 		AfterEach(func() {
@@ -123,61 +87,28 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			Expect(k8sClient.Delete(ctx, connection)).To(Succeed())
 
 			// Clean up workload
-			workload := &tfv1.TensorFusionWorkload{}
-			err = k8sClient.Get(ctx, workloadNamespacedName, workload)
-			Expect(err).NotTo(HaveOccurred())
+			cleanupWorkload(workloadNamespacedName)
 
-			By("Cleanup the TensorFusionWorkload resource")
-			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
-		})
-
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-
-			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(10),
-			}
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			tfEnv.Cleanup()
 		})
 
 		It("should update connection status with worker information", func() {
-			By("Reconciling the connection resource")
-
-			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(10),
-			}
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
 			By("Verifying the connection status is updated")
 			connection := &tfv1.TensorFusionConnection{}
-			Eventually(func() bool {
-				if err := k8sClient.Get(ctx, typeNamespacedName, connection); err != nil {
-					return false
-				}
-				return connection.Status.WorkerName != "" &&
-					connection.Status.Phase == tfv1.WorkerRunning &&
-					connection.Status.ConnectionURL != ""
-			}, time.Second*5, time.Millisecond*100).Should(BeTrue())
-
-			// Verify specific values
-			Expect(connection.Status.WorkerName).To(Equal("test-worker-1"))
-			Expect(connection.Status.Phase).To(Equal(tfv1.WorkerRunning))
-			Expect(connection.Status.ConnectionURL).To(Equal("native+192.168.1.1+8080+test-worker-1-0"))
+			workload := &tfv1.TensorFusionWorkload{}
+			Expect(k8sClient.Get(ctx, workloadNamespacedName, workload)).Should(Succeed())
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, connection)).Should(Succeed())
+				workerStatus := workload.Status.WorkerStatuses[0]
+				g.Expect(connection.Status.WorkerName).Should(Equal(workerStatus.WorkerName))
+				g.Expect(connection.Status.Phase).Should(Equal(workerStatus.WorkerPhase))
+				connectionUrl := fmt.Sprintf("native+%s+%d+%s-%s", workerStatus.WorkerIp, workerStatus.WorkerPort, workerStatus.WorkerName, workerStatus.ResourceVersion)
+				g.Expect(connection.Status.ConnectionURL).Should(Equal(connectionUrl))
+			}, timeout, interval).Should(Succeed())
 		})
 
 		It("should handle missing workload label", func() {
 			By("Creating a connection without workload label")
-
 			connectionNoLabel := &tfv1.TensorFusionConnection{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-connection-no-label",
@@ -189,24 +120,10 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, connectionNoLabel)).To(Succeed())
-
-			By("Reconciling the connection without workload label")
-
-			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(10),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      "test-connection-no-label",
-					Namespace: "default",
-				},
-			})
-
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("missing workload label"))
+			Consistently(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(connectionNoLabel), connectionNoLabel)).Should(Succeed())
+				g.Expect(connectionNoLabel.Status.WorkerName).Should(BeEmpty())
+			}, 5*time.Second, interval).Should(Succeed())
 
 			// Clean up the test connection
 			Expect(k8sClient.Delete(ctx, connectionNoLabel)).To(Succeed())
@@ -214,62 +131,31 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 
 		It("should handle worker selection when worker status changes", func() {
 			By("Setting up a connection with an already assigned worker")
-
-			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(10),
-			}
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
 			// Verify initial worker assignment
+			workload := &tfv1.TensorFusionWorkload{}
+			Expect(k8sClient.Get(ctx, workloadNamespacedName, workload)).Should(Succeed())
 			connection := &tfv1.TensorFusionConnection{}
-			Eventually(func() bool {
-				if err := k8sClient.Get(ctx, typeNamespacedName, connection); err != nil {
-					return false
-				}
-				return connection.Status.WorkerName == "test-worker-1"
-			}, time.Second*5, time.Millisecond*100).Should(BeTrue())
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, connection)).Should(Succeed())
+				workerStatus := workload.Status.WorkerStatuses[0]
+				g.Expect(connection.Status.WorkerName).Should(Equal(workerStatus.WorkerName))
+			}, timeout, interval).Should(Succeed())
 
 			By("Updating the workload to mark the worker as failed")
-			workload := &tfv1.TensorFusionWorkload{}
 			Expect(k8sClient.Get(ctx, workloadNamespacedName, workload)).To(Succeed())
-
-			// Add a new worker and mark the existing one as failed
-			workload.Status.WorkerStatuses = []tfv1.WorkerStatus{
-				{
-					WorkerPhase: tfv1.WorkerFailed, // Mark as failed
-					WorkerName:  "test-worker-1",
-					WorkerIp:    "192.168.1.1",
-					WorkerPort:  8080,
-				},
-				{
-					WorkerPhase: tfv1.WorkerRunning,
-					WorkerName:  "test-worker-2",
-					WorkerIp:    "192.168.1.2",
-					WorkerPort:  8081,
-				},
-			}
-
+			workload.Status.WorkerStatuses[0].WorkerPhase = tfv1.WorkerFailed
 			Expect(k8sClient.Status().Update(ctx, workload)).To(Succeed())
 
-			By("Reconciling the connection after worker status change")
-			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
 			// Verify worker reselection
-			Eventually(func() bool {
-				if err := k8sClient.Get(ctx, typeNamespacedName, connection); err != nil {
-					return false
-				}
-				return connection.Status.WorkerName == "test-worker-2" &&
-					connection.Status.ConnectionURL == "native+192.168.1.2+8081+test-worker-2-0"
-			}, time.Second*5, time.Millisecond*100).Should(BeTrue())
+			Expect(k8sClient.Get(ctx, workloadNamespacedName, workload)).Should(Succeed())
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, connection)).Should(Succeed())
+				workerStatus := workload.Status.WorkerStatuses[1]
+				g.Expect(connection.Status.WorkerName).Should(Equal(workerStatus.WorkerName))
+				g.Expect(connection.Status.Phase).Should(Equal(workerStatus.WorkerPhase))
+				connectionUrl := fmt.Sprintf("native+%s+%d+%s-%s", workerStatus.WorkerIp, workerStatus.WorkerPort, workerStatus.WorkerName, workerStatus.ResourceVersion)
+				g.Expect(connection.Status.ConnectionURL).Should(Equal(connectionUrl))
+			}, timeout, interval).Should(Succeed())
 		})
 
 		It("should update status to WorkerPending when worker selection fails", func() {
@@ -308,8 +194,6 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, failWorkload)).To(Succeed())
-			// Update status
-			Expect(k8sClient.Status().Update(ctx, failWorkload)).To(Succeed())
 
 			// Verify workload was created properly
 			createdWorkload := &tfv1.TensorFusionWorkload{}
@@ -340,19 +224,6 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, failConnection)).To(Succeed())
-
-			By("Reconciling the connection to trigger worker selection failure")
-			controllerReconciler := &TensorFusionConnectionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Recorder: record.NewFakeRecorder(10),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: failConnectionNamespacedName,
-			})
-			// We expect an error since worker selection should fail
-			Expect(err).To(HaveOccurred())
 
 			By("Verifying the connection status is updated to WorkerPending")
 			Eventually(func() bool {
