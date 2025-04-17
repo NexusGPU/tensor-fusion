@@ -73,22 +73,23 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("parse tf resources: %w", err))
 	}
+	counter := &TensorFusionPodCounter{Client: m.Client}
 	enabledReplicas := tfInfo.EnabledReplicas
+
+	var podCounterAnnotationKey string
 	if enabledReplicas != nil {
 		// Get `tf-pod-count` by querying the owner's annotation
 		// and then decide whether to patch the current pod
-		counter := &TensorFusionPodCounter{Client: m.Client}
-		podCount, err := counter.Get(ctx, pod)
+		podCount, podCounterKey, err := counter.Get(ctx, pod)
 		if err != nil {
 			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("get tf pod count: %w", err))
 		}
 		if podCount >= *enabledReplicas {
 			return admission.Allowed("tf pod count exceeds enabled replicas")
 		}
-		if err := counter.Increase(ctx, pod); err != nil {
-			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("increase tf pod count: %w", err))
-		}
+		podCounterAnnotationKey = podCounterKey
 	}
+
 	workload := &tfv1.TensorFusionWorkload{}
 	if tfInfo.GenWorkload {
 		if err := m.createOrUpdateWrokload(ctx, pod, &tfInfo, workload); err != nil {
@@ -121,6 +122,19 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	if err != nil {
 		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
 		return admission.Errored(http.StatusInternalServerError, err)
+	}
+
+	if podCounterAnnotationKey != "" {
+		if err := counter.Increase(ctx, pod); err != nil {
+			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("increase tf pod count: %w", err))
+		}
+		// Patch annotation for pod counter
+		patch := jsonpatch.JsonPatchOperation{
+			Operation: "add",
+			Path:      "/metadata/annotations/" + constants.TensorFusionPodCounterKeyAnnotation,
+			Value:     podCounterAnnotationKey,
+		}
+		patches = append(patches, patch)
 	}
 
 	return admission.Patched("tensor fusion component patched", patches...)

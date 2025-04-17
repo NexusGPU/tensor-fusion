@@ -34,10 +34,10 @@ func getOrGenerateKey(pod *corev1.Pod) string {
 }
 
 // Get gets the counter value from the owner annotation by key
-func (c *TensorFusionPodCounter) Get(ctx context.Context, pod *corev1.Pod) (int32, error) {
+func (c *TensorFusionPodCounter) Get(ctx context.Context, pod *corev1.Pod) (int32, string, error) {
 	ownerRef := getControllerOwnerRef(pod)
 	if ownerRef == nil {
-		return 0, fmt.Errorf("no controller owner reference found for pod %s/%s", pod.Namespace, pod.Name)
+		return 0, "", fmt.Errorf("no controller owner reference found for pod %s/%s", pod.Namespace, pod.Name)
 	}
 	key := getOrGenerateKey(pod)
 	ownerObj := &unstructured.Unstructured{}
@@ -45,21 +45,21 @@ func (c *TensorFusionPodCounter) Get(ctx context.Context, pod *corev1.Pod) (int3
 	ownerObj.SetKind(ownerRef.Kind)
 	objKey := client.ObjectKey{Name: ownerRef.Name, Namespace: pod.Namespace}
 	if err := c.Client.Get(ctx, objKey, ownerObj); err != nil {
-		return 0, fmt.Errorf("failed to get owner object: %w", err)
+		return 0, "", fmt.Errorf("failed to get owner object: %w", err)
 	}
 	annotations := ownerObj.GetAnnotations()
 	if annotations == nil {
-		return 0, nil
+		return 0, "", nil
 	}
 	val, ok := annotations[key]
 	if !ok || val == "" {
-		return 0, nil
+		return 0, "", nil
 	}
 	count, err := strconv.ParseInt(val, 10, 32)
 	if err != nil {
-		return 0, fmt.Errorf("invalid count annotation: %s, err: %w", val, err)
+		return 0, "", fmt.Errorf("invalid count annotation: %s, err: %w", val, err)
 	}
-	return int32(count), nil
+	return int32(count), key, nil
 }
 
 // Increase increases the counter in owner annotation by key
@@ -123,10 +123,12 @@ func (c *TensorFusionPodCounter) Decrease(ctx context.Context, pod *corev1.Pod) 
 	if err != nil {
 		return fmt.Errorf("invalid count annotation: %s, err: %w", val, err)
 	}
-	if count > 0 {
-		count--
+	count--
+	if count <= 0 {
+		delete(annotations, key)
+	} else {
+		annotations[key] = fmt.Sprintf("%d", count)
 	}
-	annotations[key] = fmt.Sprintf("%d", count)
 	ownerObj.SetAnnotations(annotations)
 	if err := c.Client.Update(ctx, ownerObj); err != nil {
 		return fmt.Errorf("failed to update owner annotation: %w", err)
