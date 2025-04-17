@@ -32,6 +32,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 
 	// +kubebuilder:scaffold:imports
@@ -95,6 +96,9 @@ var _ = BeforeSuite(func() {
 
 	scheme := apimachineryruntime.NewScheme()
 	err = corev1.AddToScheme(scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = appsv1.AddToScheme(scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	Expect(tfv1.AddToScheme(scheme)).NotTo(HaveOccurred())

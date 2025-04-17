@@ -37,7 +37,11 @@ const (
 	WorkloadProfileAnnotation = Domain + "/client-profile"
 	InjectContainerAnnotation = Domain + "/inject-container"
 	ReplicasAnnotation        = Domain + "/replicas"
-	GenWorkload               = Domain + "/generate-workload"
+	GenWorkloadAnnotation     = Domain + "/generate-workload"
+
+	TensorFusionPodCounterKeyAnnotation   = Domain + "/pod-counter-key"
+	TensorFusionPodCountAnnotation        = Domain + "/tf-pod-count"
+	TensorFusionEnabledReplicasAnnotation = Domain + "/enabled-replicas"
 
 	PendingRequeueDuration = time.Second * 3
 	StatusCheckInterval    = time.Second * 6

@@ -24,11 +24,12 @@ type TFResource struct {
 }
 
 type TensorFusionInfo struct {
-	Profile        *tfv1.WorkloadProfileSpec
-	Replicas       int32
-	WorkloadName   string
-	ContainerNames []string
-	GenWorkload    bool
+	Profile         *tfv1.WorkloadProfileSpec
+	Replicas        int32
+	EnabledReplicas *int32
+	WorkloadName    string
+	ContainerNames  []string
+	GenWorkload     bool
 }
 
 func ParseTensorFusionInfo(ctx context.Context, k8sclient client.Client, pod *corev1.Pod) (TensorFusionInfo, error) {
@@ -36,12 +37,24 @@ func ParseTensorFusionInfo(ctx context.Context, k8sclient client.Client, pod *co
 	if pod.Annotations == nil {
 		return info, fmt.Errorf("no annotations found")
 	}
+	enabledReplicas, ok := pod.Annotations[constants.TensorFusionEnabledReplicasAnnotation]
+	if !ok {
+		info.EnabledReplicas = nil
+	} else {
+		val, err := strconv.ParseInt(enabledReplicas, 10, 32)
+		if err != nil {
+			return info, fmt.Errorf("invalid enabledReplicas value: %s, err: %w", enabledReplicas, err)
+		}
+		val32 := int32(val)
+		info.EnabledReplicas = &val32
+	}
+
 	workloadName, ok := pod.Annotations[constants.WorkloadKey]
 	if !ok {
 		return info, fmt.Errorf("workload key not found")
 	}
 	info.WorkloadName = workloadName
-	genWorkload, ok := pod.Annotations[constants.GenWorkload]
+	genWorkload, ok := pod.Annotations[constants.GenWorkloadAnnotation]
 	info.GenWorkload = (ok && genWorkload == "true")
 
 	replicas, ok := pod.Annotations[constants.ReplicasAnnotation]

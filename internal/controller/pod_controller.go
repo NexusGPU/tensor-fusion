@@ -22,6 +22,8 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	v1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -50,6 +52,22 @@ type PodReconciler struct {
 func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	pod := &corev1.Pod{}
+
+	if _, ok := pod.Annotations[constants.TensorFusionEnabledReplicasAnnotation]; ok {
+		deleted, err := utils.HandleFinalizer(ctx, pod, r.Client, func(context context.Context, pod *corev1.Pod) (bool, error) {
+			counter := &v1.TensorFusionPodCounter{Client: r.Client}
+			if err := counter.Decrease(ctx, pod); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if deleted {
+			return ctrl.Result{}, nil
+		}
+	}
 
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
 		if errors.IsNotFound(err) {

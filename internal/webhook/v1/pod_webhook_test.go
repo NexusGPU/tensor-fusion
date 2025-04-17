@@ -95,7 +95,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.WorkloadProfileAnnotation: "test-profile-handle",
 						constants.InjectContainerAnnotation: "main",
 						constants.WorkloadKey:               "test-workload",
-						constants.GenWorkload:               "true",
+						constants.GenWorkloadAnnotation:     "true",
 					},
 				},
 				Spec: corev1.PodSpec{

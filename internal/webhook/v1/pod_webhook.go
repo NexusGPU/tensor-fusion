@@ -73,7 +73,22 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("parse tf resources: %w", err))
 	}
-
+	enabledReplicas := tfInfo.EnabledReplicas
+	if enabledReplicas != nil {
+		// Get `tf-pod-count` by querying the owner's annotation
+		// and then decide whether to patch the current pod
+		counter := &TensorFusionPodCounter{Client: m.Client}
+		podCount, err := counter.Get(ctx, pod)
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("get tf pod count: %w", err))
+		}
+		if podCount >= *enabledReplicas {
+			return admission.Allowed("tf pod count exceeds enabled replicas")
+		}
+		if err := counter.Increase(ctx, pod); err != nil {
+			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("increase tf pod count: %w", err))
+		}
+	}
 	workload := &tfv1.TensorFusionWorkload{}
 	if tfInfo.GenWorkload {
 		if err := m.createOrUpdateWrokload(ctx, pod, &tfInfo, workload); err != nil {
