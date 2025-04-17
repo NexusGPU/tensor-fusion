@@ -17,7 +17,7 @@ type TensorFusionPodCounter struct {
 	Client client.Client
 }
 
-// getOrGenerateKey returns the pod's counter key from annotation if present, otherwise generates one from pod template labels (e.g. pod-template-hash or fallback to pod name)
+// getOrGenerateKey returns the pod's counter key from annotation if present, otherwise generates one from pod template labels (e.g. pod-template-hash or fallback to object hash)
 func getOrGenerateKey(pod *corev1.Pod) string {
 	if pod.Annotations != nil {
 		if key, ok := pod.Annotations[constants.TensorFusionPodCounterKeyAnnotation]; ok && key != "" {
