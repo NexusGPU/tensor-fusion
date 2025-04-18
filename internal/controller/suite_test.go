@@ -61,8 +61,8 @@ var ctx context.Context
 var cancel context.CancelFunc
 
 const (
-	timeout  = time.Second * 15
-	interval = time.Second
+	timeout  = time.Second * 10
+	interval = time.Millisecond * 100
 )
 
 func TestControllers(t *testing.T) {

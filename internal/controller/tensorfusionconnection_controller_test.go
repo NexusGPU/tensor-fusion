@@ -202,7 +202,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					return false
 				}
 				return len(createdWorkload.Status.WorkerStatuses) == 0
-			}, time.Second*5, time.Millisecond*100).Should(BeTrue())
+			}, timeout, interval).Should(BeTrue())
 
 			By("Creating a connection to the workload with no workers")
 			failConnectionName := "test-connection-fail"
@@ -231,7 +231,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					return false
 				}
 				return failConnection.Status.Phase == tfv1.WorkerPending
-			}, time.Second*5, time.Millisecond*100).Should(BeTrue())
+			}, timeout, interval).Should(BeTrue())
 
 			By("Cleaning up test resources")
 			Expect(k8sClient.Delete(ctx, failConnection)).To(Succeed())
