@@ -64,6 +64,8 @@ rules:
   resources:
   - daemonsets
   - deployments
+  - statefulsets
+  - replicasets
   verbs:
   - create
   - delete
