@@ -24,11 +24,6 @@
 
 Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** designed to optimize GPU cluster utilization to its fullest potential.
 
-<a href="https://tensor-fusion.ai/guide/overview"><b>English</b></a>
-    |
-    <a href="./README-zh.md">简体中文</a>
-<br />
-
 ## 🌟 Highlights
 
 #### 📐 Fractional GPU with Single TFlops/MiB Precision
