@@ -19,6 +19,7 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -27,6 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	admissionv1 "k8s.io/api/admission/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -283,6 +285,141 @@ var _ = Describe("TensorFusionPodMutator", func() {
 		})
 	})
 
+	Context("Handle with EnabledReplicas", func() {
+		It("should only patch enabledReplicas pods", func() {
+			// Create a ReplicaSet as the owner for the pod
+			replicaSet := &appsv1.ReplicaSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-rs",
+					Namespace: "default",
+				},
+				Spec: appsv1.ReplicaSetSpec{
+					Selector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"app": "test-app",
+						},
+					},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{
+								"app": "test-app",
+							},
+						},
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{
+								{
+									Name:  "test-container",
+									Image: "test-image",
+								},
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sclient.Create(ctx, replicaSet)).To(Succeed())
+
+			// Get the ReplicaSet to obtain its UID
+			createdReplicaSet := &appsv1.ReplicaSet{}
+			Expect(k8sclient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "test-rs"}, createdReplicaSet)).To(Succeed())
+			replicaSetUID := createdReplicaSet.GetUID()
+
+			// Create a workload profile
+			workloadProfile := &tfv1.WorkloadProfile{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-profile-enabled-replicas",
+					Namespace: "default",
+				},
+				Spec: tfv1.WorkloadProfileSpec{
+					PoolName: "mock",
+					Resources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							Tflops: resource.MustParse("10"),
+							Vram:   resource.MustParse("1Gi"),
+						},
+						Limits: tfv1.Resource{
+							Tflops: resource.MustParse("100"),
+							Vram:   resource.MustParse("16Gi"),
+						},
+					},
+				},
+			}
+			Expect(k8sclient.Create(ctx, workloadProfile)).To(Succeed())
+
+			// Create a pod with TF resources and owner reference
+			trueVal := true
+			enabledReplicas := int32(1)
+
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:    "default",
+					GenerateName: "test-pod-enabled-replicas-",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+						"pod-template-hash":                   "test-hash",
+					},
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                            "mock",
+						constants.WorkloadProfileAnnotation:             "test-profile-enabled-replicas",
+						constants.InjectContainerAnnotation:             "main",
+						constants.WorkloadKey:                           "test-workload",
+						constants.TensorFusionEnabledReplicasAnnotation: fmt.Sprintf("%d", enabledReplicas), // Using the correct constant
+					},
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: "apps/v1",
+							Kind:       "ReplicaSet",
+							Name:       "test-rs",
+							UID:        replicaSetUID,
+							Controller: &trueVal,
+						},
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main",
+							Image: "test-image",
+						},
+					},
+				},
+			}
+
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+				},
+			}
+
+			resp := mutator.Handle(ctx, req)
+			// First call: Pod mutation should occur since enabledReplicas is 1,
+			// so the response should be allowed and contain patches
+			Expect(resp.Allowed).To(BeTrue())
+			Expect(resp.Patches).NotTo(BeEmpty())
+
+			counter := &TensorFusionPodCounter{Client: k8sclient}
+			count, _, err := counter.Get(ctx, pod)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(count).To(Equal(int32(1)))
+
+			resp = mutator.Handle(ctx, req)
+			// Second call: Pod should be ignored since it's been processed already,
+			// so the response should be allowed but patches should be empty
+			Expect(resp.Allowed).To(BeTrue())
+			Expect(resp.Patches).To(BeEmpty())
+
+			// Clean up
+			Expect(k8sclient.Delete(ctx, replicaSet)).To(Succeed())
+			Expect(k8sclient.Delete(ctx, workloadProfile)).To(Succeed())
+		})
+	})
+
 	Context("ParseTensorFusionInfo", func() {
 		It("should correctly parse TF requirements from pod annotations", func() {
 			// Set up a workload profile for testing
@@ -316,8 +453,9 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.WorkloadProfileAnnotation: "test-profile-parse-tf-resources",
 						constants.WorkloadKey:               "test-workload",
 						// override tflops request
-						constants.TFLOPSRequestAnnotation:   "20",
-						constants.InjectContainerAnnotation: "test-container",
+						constants.TFLOPSRequestAnnotation:               "20",
+						constants.InjectContainerAnnotation:             "test-container",
+						constants.TensorFusionEnabledReplicasAnnotation: "3",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -337,6 +475,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(tfInfo.Profile.Resources.Requests.Vram.String()).To(Equal("1Gi"))
 			Expect(tfInfo.Profile.Resources.Limits.Tflops.String()).To(Equal("100"))
 			Expect(tfInfo.Profile.Resources.Limits.Vram.String()).To(Equal("16Gi"))
+			Expect(*tfInfo.EnabledReplicas).To(Equal(int32(3)))
 		})
 	})
 

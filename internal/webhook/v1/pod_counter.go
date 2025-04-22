@@ -26,11 +26,11 @@ func getOrGenerateKey(pod *corev1.Pod) string {
 	}
 	// Try to use pod-template-hash if present
 	if hash, ok := pod.Labels["pod-template-hash"]; ok && hash != "" {
-		return hash
+		return fmt.Sprintf("%s/tf-counter-%s", constants.Domain, hash)
 	}
 
 	// Fallback to object hash
-	return utils.GetObjectHash(pod)
+	return fmt.Sprintf("%s/tf-counter-%s", constants.Domain, utils.GetObjectHash(pod))
 }
 
 // Get gets the counter value from the owner annotation by key
@@ -49,11 +49,11 @@ func (c *TensorFusionPodCounter) Get(ctx context.Context, pod *corev1.Pod) (int3
 	}
 	annotations := ownerObj.GetAnnotations()
 	if annotations == nil {
-		return 0, "", nil
+		return 0, key, nil
 	}
 	val, ok := annotations[key]
 	if !ok || val == "" {
-		return 0, "", nil
+		return 0, key, nil
 	}
 	count, err := strconv.ParseInt(val, 10, 32)
 	if err != nil {

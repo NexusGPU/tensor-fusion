@@ -153,7 +153,6 @@ var _ = BeforeSuite(func() {
 		if err != nil {
 			return err
 		}
-
 		return conn.Close()
 	}).Should(Succeed())
 })
