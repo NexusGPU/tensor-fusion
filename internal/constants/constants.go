@@ -3,6 +3,9 @@ package constants
 import "time"
 
 const (
+	NvidiaGPUKey = "nvidia.com/gpu"
+)
+const (
 	// Domain is the domain prefix used for all tensor-fusion.ai related annotations and finalizers
 	Domain = "tensor-fusion.ai"
 

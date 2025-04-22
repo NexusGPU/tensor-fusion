@@ -255,6 +255,14 @@ func (m *TensorFusionPodMutator) patchTFClient(
 					return nil, fmt.Errorf("unmarshal patched container: %w", err)
 				}
 
+				// remove nvidia.com/gpu in resources
+				if container.Resources.Requests != nil {
+					delete(container.Resources.Requests, constants.NvidiaGPUKey)
+				}
+				if container.Resources.Limits != nil {
+					delete(container.Resources.Limits, constants.NvidiaGPUKey)
+				}
+
 				// add connection env
 				connectionName := fmt.Sprintf("%s%s", pod.GenerateName, shortuuid.NewWithAlphabet("123456789abcdefghijkmnopqrstuvwxy"))
 				connectionNamespace := pod.Namespace
