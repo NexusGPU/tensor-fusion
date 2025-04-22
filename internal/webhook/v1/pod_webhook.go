@@ -35,6 +35,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
 	"github.com/lithammer/shortuuid/v4"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -131,7 +132,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		// Patch annotation for pod counter
 		patch := jsonpatch.JsonPatchOperation{
 			Operation: "add",
-			Path:      "/metadata/annotations/" + constants.TensorFusionPodCounterKeyAnnotation,
+			Path:      "/metadata/annotations/" + utils.EscapeJSONPointer(constants.TensorFusionPodCounterKeyAnnotation),
 			Value:     podCounterAnnotationKey,
 		}
 		patches = append(patches, patch)
