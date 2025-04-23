@@ -141,6 +141,9 @@ func main() {
 		tflops := info.Fp16TFlops
 		if !ok {
 			tflops = resource.Quantity{}
+			ctrl.Log.Info("unable to find GPU info from config", "deviceName", deviceName, "uuid", uuid)
+		} else {
+			ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "baseline FP16 TFlops", tflops, "uuid", uuid)
 		}
 		gpu := &tfv1.GPU{
 			ObjectMeta: metav1.ObjectMeta{

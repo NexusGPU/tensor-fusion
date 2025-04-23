@@ -14,6 +14,7 @@ data:
     #  - https://en.wikipedia.org/wiki/List_of_Nvidia_graphics_processing_units
     #  - https://en.wikipedia.org/wiki/GeForce_RTX_30_series#
     #  - https://en.wikipedia.org/wiki/GeForce_RTX_50_series
+    #  - https://github.com/exo-explore/exo/blob/main/exo/topology/device_capabilities.py
 
     # Field Definition:
     # - 'model' is `GPUModel_BoardSlotType` to identify the GPU
@@ -32,7 +33,7 @@ data:
 
     # Ampere Architecture Series
     - model: A100_SXM
-      fullModelName: "NVIDIA A100 80GB SXM"
+      fullModelName: "NVIDIA A100-SXM4-80GB"
       vendor: NVIDIA
       costPerHour: 1.89
       fp16TFlops: 312
@@ -44,7 +45,7 @@ data:
       fp16TFlops: 312
 
     - model: A100_40G_SXM
-      fullModelName: "NVIDIA A100 40GB SXM"
+      fullModelName: "NVIDIA A100-SXM4-40G"
       vendor: NVIDIA
       costPerHour: 1.4
       fp16TFlops: 312
@@ -56,7 +57,7 @@ data:
       fp16TFlops: 312
 
     - model: A800_SXM
-      fullModelName: "NVIDIA A800 80GB SXM"
+      fullModelName: "NVIDIA A800-SXM4-40G"
       vendor: NVIDIA
       costPerHour: 1.89
       fp16TFlops: 312
@@ -93,7 +94,7 @@ data:
       fp16TFlops: 38.71
 
     - model: A6000Ada
-      fullModelName: "NVIDIA A6000 Ada"
+      fullModelName: "NVIDIA RTX 6000 Ada Generation"
       vendor: NVIDIA
       costPerHour: 0.95
       fp16TFlops: 323
@@ -291,7 +292,7 @@ data:
 
     # Hopper Architecture Series
     - model: H100_SXM
-      fullModelName: "NVIDIA H100 SXM"
+      fullModelName: "NVIDIA H100 80GB HBM3"
       vendor: NVIDIA
       costPerHour: 2.99
       fp16TFlops: 989
@@ -303,7 +304,7 @@ data:
       fp16TFlops: 835
 
     - model: H800_SXM
-      fullModelName: "NVIDIA H800 SXM"
+      fullModelName: "NVIDIA H800 80GB HBM3"
       vendor: NVIDIA
       costPerHour: 2.99
       fp16TFlops: 989
@@ -353,7 +354,7 @@ data:
       fp16TFlops: 27.8
     
     - model: RTX4000AdaGen
-      fullModelName: "NVIDIA RTX 4000 ADA GENERATION"
+      fullModelName: "NVIDIA RTX 4000 Ada Generation"
       vendor: NVIDIA
       costPerHour: 0.28
       fp16TFlops: 26.7
