@@ -4,7 +4,37 @@ metadata:
   name: {{ include "tensor-fusion.fullname" . }}-vector-config
   namespace: {{ include "tensor-fusion.namespace" . }}
 data:
-  vector.yaml: |
+  vector-operator.yaml: |
+    api:
+      enabled: true
+    sources:
+      controller_metrics:
+        type: prometheus_scrape
+        endpoints:
+          - http://localhost:9000/metrics
+    transforms:
+      prepare_controller_metrics:
+        type: remap
+        inputs: 
+          - controller_metrics
+        source: |
+          .namespace = "tf"
+    sinks:
+      sink_greptimedb_controller_metrics:
+        type: prometheus_remote_write
+        inputs:
+          - prepare_controller_metrics
+        {{- if ne .Values.greptime.isCloud true }}
+        endpoint: http://{{ .Values.greptime.host }}:4000/v1/prometheus/write?db=public
+        {{- else }}
+        endpoint: https://{{ .Values.greptime.host }}/v1/prometheus/write?db={{ .Values.greptime.db }}
+        auth:
+          strategy: basic
+          user: {{ .Values.greptime.user }}
+          password: {{ .Values.greptime.password }}
+        {{- end }}
+
+  vector-hypervisor.yaml: |
     api:
       enabled: true
     
@@ -15,11 +45,6 @@ data:
         include:
           - /logs/metrics.log
       
-      controller_metrics:
-        type: prometheus_scrape
-        endpoints:
-          - http://localhost:9000/metrics
-
     transforms:
       parse_influx:
         type: remap
@@ -27,7 +52,6 @@ data:
           - metrics
         source: |
           . = parse_influxdb!(.message)
-          
       prepare_metrics:
         type: remap
         inputs:
@@ -43,13 +67,6 @@ data:
         all_metrics: true
         metrics: []
 
-      prepare_controller_metrics:
-        type: remap
-        inputs: 
-          - controller_metrics
-        source: |
-          .namespace = "tf"
-
     sinks:
       sink_greptimedb_hypervisor_metrics:
         type: greptimedb_metrics
@@ -64,18 +81,3 @@ data:
         tls: {}
         {{- end }}
 
-      sink_greptimedb_controller_metrics:
-        type: prometheus_remote_write
-        inputs:
-          - prepare_controller_metrics
-        {{- if ne .Values.greptime.isCloud true }}
-        endpoint: http://{{ .Values.greptime.host }}:4000/v1/prometheus/write?db=public
-        {{- else }}
-        endpoint: https://{{ .Values.greptime.host }}/v1/prometheus/write?db={{ .Values.greptime.db }}
-        auth:
-          strategy: basic
-          user: {{ .Values.greptime.user }}
-          password: {{ .Values.greptime.password }}
-        {{- end }}
-        
-          

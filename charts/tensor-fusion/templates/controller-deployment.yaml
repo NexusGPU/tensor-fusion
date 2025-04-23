@@ -89,7 +89,8 @@ spec:
             - name: logs
               mountPath: /logs
             - name: vector-config
-              mountPath: /etc/vector
+              mountPath: /etc/vector/vector.yaml
+              subPath: vector-operator.yaml
       volumes:
         - name: cert
           secret:
