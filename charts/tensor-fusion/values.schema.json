@@ -196,6 +196,56 @@
           "description": "Port of the GreptimeDB server",
           "default": 4001
         },
+        "image": {
+          "type": "object",
+          "description": "Container image configuration for GreptimeDB",
+          "properties": {
+            "repository": {
+              "type": "string",
+              "description": "Repository for the GreptimeDB image, for China mainland users, should change 'greptime.image.repository' value to 'greptime-registry.cn-hangzhou.cr.aliyuncs.com/greptime/greptimedb'",
+              "default": "docker.io/greptime/greptimedb"
+            },
+            "tag": {
+              "type": "string",
+              "description": "Tag for the GreptimeDB image",
+              "default": "latest"
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "description": "Resource requirements for GreptimeDB",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "description": "Resource requests for GreptimeDB",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU request for GreptimeDB"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory request for GreptimeDB"
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "description": "Resource limits for GreptimeDB",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU limit for GreptimeDB"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory limit for GreptimeDB"
+                }
+              }
+            }
+          }
+        },
         "installStandalone": {
           "type": "boolean",
           "description": "Whether to install a standalone GreptimeDB instance",

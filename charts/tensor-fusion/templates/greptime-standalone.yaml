@@ -80,7 +80,7 @@ spec:
             defaultMode: 420
       containers:
         - name: standalone
-          image: docker.io/greptime/greptimedb:latest
+          image: {{ .Values.greptime.image.repository }}:{{ .Values.greptime.image.tag }}
           args:
             - standalone
             - start
@@ -107,7 +107,7 @@ spec:
             - name: postgres
               containerPort: 4003
               protocol: TCP
-          resources: {}
+          resources: {{ .Values.greptime.resources }}
           volumeMounts:
             - name: datanode
               mountPath: /data/greptimedb

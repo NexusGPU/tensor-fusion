@@ -50,6 +50,16 @@ greptime:
   host: greptimedb-standalone.greptimedb.svc.cluster.local
   port: 4001
   installStandalone: true
+  image:
+    repository: docker.io/greptime/greptimedb
+    tag: latest
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 100m
+    limits:
+      memory: 2Gi
+      cpu: 200m
 
 # greptime:
 #   isCloud: true
@@ -70,11 +80,11 @@ agent:
   
   resources:
     requests:
-      cpu: 50m
-      memory: 64Mi
+      cpu: 100m
+      memory: 128Mi
     limits:
-      cpu: 1000m
-      memory: 512Mi
+      cpu: 4000m
+      memory: 2Gi
 
 # Only needed if your pool is running in Provisioned mode, and the cloud vendor doesn't support IRSA or any serviceAccount like zero-credential Auth approaches
 cloudVendorCredentials:
