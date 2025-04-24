@@ -167,7 +167,4 @@ spec:
     rollingUpdate:
       partition: 0
   revisionHistoryLimit: 10
-  persistentVolumeClaimRetentionPolicy:
-    whenDeleted: Retain
-    whenScaled: Retain
 {{- end }}
