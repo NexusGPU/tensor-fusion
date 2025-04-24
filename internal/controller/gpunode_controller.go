@@ -71,7 +71,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	deleted, err := utils.HandleFinalizer(ctx, node, r.Client, func(ctx context.Context, node *tfv1.GPUNode) (bool, error) {
+	shouldReturn, err := utils.HandleFinalizer(ctx, node, r.Client, func(ctx context.Context, node *tfv1.GPUNode) (bool, error) {
 		if node.Status.Phase != tfv1.TensorFusionGPUNodePhaseDestroying {
 			node.Status.Phase = tfv1.TensorFusionGPUNodePhaseDestroying
 			if err := r.Status().Update(ctx, node); err != nil {
@@ -121,8 +121,8 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if deleted {
-		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
+	if shouldReturn {
+		return ctrl.Result{}, nil
 	}
 
 	var poolName string

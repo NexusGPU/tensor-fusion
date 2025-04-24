@@ -39,11 +39,10 @@ import (
 
 var _ = Describe("TensorFusionPodMutator", func() {
 	var (
-		mutator   *TensorFusionPodMutator
-		ctx       context.Context
-		scheme    *runtime.Scheme
-		decoder   admission.Decoder
-		k8sclient client.Client
+		mutator *TensorFusionPodMutator
+		ctx     context.Context
+		scheme  *runtime.Scheme
+		decoder admission.Decoder
 	)
 
 	BeforeEach(func() {
@@ -53,10 +52,9 @@ var _ = Describe("TensorFusionPodMutator", func() {
 		Expect(tfv1.AddToScheme(scheme)).To(Succeed())
 
 		decoder = admission.NewDecoder(scheme)
-		k8sclient = k8sClient
 
 		mutator = &TensorFusionPodMutator{
-			Client:  k8sclient,
+			Client:  k8sClient,
 			decoder: decoder,
 		}
 	})
@@ -83,7 +81,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-			Expect(k8sclient.Create(ctx, workloadProfile)).To(Succeed())
+			Expect(k8sClient.Create(ctx, workloadProfile)).To(Succeed())
 
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -213,7 +211,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-			Expect(k8sclient.Create(ctx, workloadProfile)).To(Succeed())
+			Expect(k8sClient.Create(ctx, workloadProfile)).To(Succeed())
 
 			// Create a TensorFusionWorkload first
 			workload := &tfv1.TensorFusionWorkload{
@@ -226,7 +224,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					IsLocalGPU: true,
 				},
 			}
-			Expect(k8sclient.Create(ctx, workload)).To(Succeed())
+			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
 			// Update workload status
 			workload.Status.WorkerStatuses = []tfv1.WorkerStatus{
@@ -238,7 +236,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-			Expect(k8sclient.Status().Update(ctx, workload)).To(Succeed())
+			Expect(k8sClient.Status().Update(ctx, workload)).To(Succeed())
 
 			// Create a pod with the local GPU profile
 			pod := &corev1.Pod{
@@ -317,11 +315,11 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				},
 			}
 
-			Expect(k8sclient.Create(ctx, replicaSet)).To(Succeed())
+			Expect(k8sClient.Create(ctx, replicaSet)).To(Succeed())
 
 			// Get the ReplicaSet to obtain its UID
 			createdReplicaSet := &appsv1.ReplicaSet{}
-			Expect(k8sclient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "test-rs"}, createdReplicaSet)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "test-rs"}, createdReplicaSet)).To(Succeed())
 			replicaSetUID := createdReplicaSet.GetUID()
 
 			// Create a workload profile
@@ -344,7 +342,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-			Expect(k8sclient.Create(ctx, workloadProfile)).To(Succeed())
+			Expect(k8sClient.Create(ctx, workloadProfile)).To(Succeed())
 
 			// Create a pod with TF resources and owner reference
 			trueVal := true
@@ -403,7 +401,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(resp.Allowed).To(BeTrue())
 			Expect(resp.Patches).NotTo(BeEmpty())
 
-			counter := &TensorFusionPodCounter{Client: k8sclient}
+			counter := &TensorFusionPodCounter{Client: k8sClient}
 			count, _, err := counter.Get(ctx, pod)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(count).To(Equal(int32(1)))
@@ -415,8 +413,8 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(resp.Patches).To(BeEmpty())
 
 			// Clean up
-			Expect(k8sclient.Delete(ctx, replicaSet)).To(Succeed())
-			Expect(k8sclient.Delete(ctx, workloadProfile)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, replicaSet)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, workloadProfile)).To(Succeed())
 		})
 	})
 
@@ -443,7 +441,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				},
 			}
 
-			Expect(k8sclient.Create(ctx, workloadProfile)).To(Succeed())
+			Expect(k8sClient.Create(ctx, workloadProfile)).To(Succeed())
 
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -466,7 +464,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-			tfInfo, err := ParseTensorFusionInfo(ctx, k8sclient, pod)
+			tfInfo, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(tfInfo.ContainerNames).To(HaveLen(1))
 			Expect(tfInfo.ContainerNames[0]).To(Equal("test-container"))

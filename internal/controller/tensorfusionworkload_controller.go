@@ -79,14 +79,14 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, fmt.Errorf("list pods: %w", err)
 	}
 
-	deleted, err := utils.HandleFinalizer(ctx, workload, r.Client, func(ctx context.Context, _ *tfv1.TensorFusionWorkload) (bool, error) {
+	shouldReturn, err := utils.HandleFinalizer(ctx, workload, r.Client, func(ctx context.Context, _ *tfv1.TensorFusionWorkload) (bool, error) {
 		// check if all pods are deleted
 		return len(podList.Items) == 0, nil
 	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("handle finalizer: %w", err)
 	}
-	if deleted {
+	if shouldReturn {
 		return ctrl.Result{}, nil
 	}
 
@@ -95,8 +95,9 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	// Process pods with our finalizer
 	for i := range podList.Items {
 		pod := &podList.Items[i]
+		deleted := pod.DeletionTimestamp != nil
 		// Handle our GPU resource cleanup finalizer
-		deleted, err := utils.HandleFinalizer(ctx, pod, r.Client, func(ctx context.Context, obj *corev1.Pod) (bool, error) {
+		_, err := utils.HandleFinalizer(ctx, pod, r.Client, func(ctx context.Context, obj *corev1.Pod) (bool, error) {
 			return r.handlePodGPUCleanup(ctx, pod, workload)
 		})
 

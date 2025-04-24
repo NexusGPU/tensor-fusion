@@ -27,36 +27,64 @@ var ErrNextLoop = errors.New("stop this loop and return the associated Result ob
 // ErrTerminateLoop is not a real error. It forces the current reconciliation loop to stop
 var ErrTerminateLoop = errors.New("stop this loop and do not requeue")
 
-func HandleFinalizer[T client.Object](ctx context.Context, obj T, r client.Client, deleteHook func(context.Context, T) (bool, error)) (bool, error) {
-	// Check if object is being deleted
-	deleted := !obj.GetDeletionTimestamp().IsZero()
-	if deleted {
-		// Object is being deleted - process finalizer
+// HandleFinalizer ensures proper finalizer management for Kubernetes resources.
+// It automatically adds the finalizer when needed, and removes it after successful cleanup.
+// Returns (shouldReturn, err):
+//   - shouldReturn: true if the caller should immediately return and wait for the next reconcile.
+//   - err: any error encountered during update or deleteHook.
+func HandleFinalizer[T client.Object](
+	ctx context.Context,
+	obj T,
+	r client.Client,
+	deleteHook func(context.Context, T) (bool, error),
+) (shouldReturn bool, err error) {
+	// If the object is being deleted, handle finalizer removal
+	if !obj.GetDeletionTimestamp().IsZero() {
 		if controllerutil.ContainsFinalizer(obj, constants.Finalizer) {
-			// Run custom deletion hook
-			canBeDeleted, err := deleteHook(ctx, obj)
+			// Run custom deletion logic before removing the finalizer
+			var canBeDeleted bool
+			canBeDeleted, err = deleteHook(ctx, obj)
 			if err != nil {
-				return false, err
+				// Error during deletion hook, requeue for next reconcile
+				shouldReturn = true
+				return
 			}
-
-			// Remove finalizer once cleanup is done
 			if canBeDeleted {
 				controllerutil.RemoveFinalizer(obj, constants.Finalizer)
-				if err := r.Update(ctx, obj); err != nil {
-					return false, err
+				err = r.Update(ctx, obj)
+				if err != nil {
+					// Failed to update object, requeue for next reconcile
+					return
 				}
+				// Finalizer removed, wait for next reconcile
+				shouldReturn = true
+				return
 			}
+			// Cleanup not ready, wait for next reconcile
+			shouldReturn = true
+			return
 		}
-	} else {
-		// Object is not being deleted - add finalizer if not present
-		if !controllerutil.ContainsFinalizer(obj, constants.Finalizer) {
-			controllerutil.AddFinalizer(obj, constants.Finalizer)
-			if err := r.Update(ctx, obj); err != nil {
-				return false, err
-			}
-		}
+		// Finalizer already removed, continue with deletion
+		shouldReturn = false
+		return
 	}
-	return deleted, nil
+
+	// If the object is not being deleted, ensure the finalizer is present
+	if !controllerutil.ContainsFinalizer(obj, constants.Finalizer) {
+		controllerutil.AddFinalizer(obj, constants.Finalizer)
+		err = r.Update(ctx, obj)
+		if err != nil {
+			// Failed to update object, requeue for next reconcile
+			return
+		}
+		// Finalizer added, wait for next reconcile
+		shouldReturn = true
+		return
+	}
+
+	// Finalizer already present, continue with business logic
+	shouldReturn = false
+	return
 }
 
 func CalculateExponentialBackoffWithJitter(retryCount int64) time.Duration {

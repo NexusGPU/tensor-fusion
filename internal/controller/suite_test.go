@@ -103,9 +103,6 @@ var _ = BeforeSuite(func() {
 	err = corev1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = tfv1.AddToScheme(scheme.Scheme)
-	Expect(err).NotTo(HaveOccurred())
-
 	// +kubebuilder:scaffold:scheme
 
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
@@ -122,7 +119,6 @@ var _ = BeforeSuite(func() {
 		Scheme: scheme.Scheme,
 	})
 	Expect(err).ToNot(HaveOccurred())
-
 	err = (&TensorFusionClusterReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -200,7 +196,7 @@ var _ = BeforeSuite(func() {
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Scheduler: scheduler,
-		Recorder:  mgr.GetEventRecorderFor("tensorfusionworkload"),
+		Recorder:  mgr.GetEventRecorderFor("TensorFusionWorkload"),
 		GpuInfos:  config.MockGpuInfo(),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
@@ -454,6 +450,15 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 
 	tfc.Spec.GPUPools = gpuPools
 	Expect(k8sClient.Create(ctx, tfc)).To(Succeed())
+
+	// wait for pools are created
+	Eventually(func(g Gomega) {
+		gpuPoolList := &tfv1.GPUPoolList{}
+		g.Expect(k8sClient.List(ctx, gpuPoolList, client.MatchingLabels(map[string]string{
+			constants.LabelKeyOwner: tfc.Name,
+		}))).Should(Succeed())
+		g.Expect(gpuPoolList.Items).Should(HaveLen(b.poolCount))
+	}, timeout*1000, interval).Should(Succeed())
 
 	// generate nodes
 	selectors := strings.Split(constants.InitialGPUNodeSelector, "=")

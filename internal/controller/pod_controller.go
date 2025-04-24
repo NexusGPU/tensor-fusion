@@ -52,9 +52,16 @@ type PodReconciler struct {
 func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	pod := &corev1.Pod{}
+	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		log.Error(err, "Failed to get Pod")
+		return ctrl.Result{}, err
+	}
 
 	if _, ok := pod.Annotations[constants.TensorFusionEnabledReplicasAnnotation]; ok {
-		deleted, err := utils.HandleFinalizer(ctx, pod, r.Client, func(context context.Context, pod *corev1.Pod) (bool, error) {
+		shouldReturn, err := utils.HandleFinalizer(ctx, pod, r.Client, func(context context.Context, pod *corev1.Pod) (bool, error) {
 			counter := &v1.TensorFusionPodCounter{Client: r.Client}
 			if err := counter.Decrease(ctx, pod); err != nil {
 				return false, err
@@ -64,17 +71,9 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if deleted {
+		if shouldReturn {
 			return ctrl.Result{}, nil
 		}
-	}
-
-	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
-		if errors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
-		log.Error(err, "Failed to get Pod")
-		return ctrl.Result{}, err
 	}
 
 	// generate tensor fusion connections and apply to cluster

@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -36,7 +35,7 @@ import (
 var _ = Describe("TensorFusionConnection Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
-		const workloadName = "test-workload"
+		const workloadName = "test-workload-1"
 
 		ctx := context.Background()
 
@@ -122,8 +121,8 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			Expect(k8sClient.Create(ctx, connectionNoLabel)).To(Succeed())
 			Consistently(func(g Gomega) {
 				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(connectionNoLabel), connectionNoLabel)).Should(Succeed())
-				g.Expect(connectionNoLabel.Status.WorkerName).Should(BeEmpty())
-			}, 5*time.Second, interval).Should(Succeed())
+				g.Expect(connectionNoLabel.Status.WorkerName).Should(Equal(""))
+			}, timeout, interval).Should(Succeed())
 
 			// Clean up the test connection
 			Expect(k8sClient.Delete(ctx, connectionNoLabel)).To(Succeed())

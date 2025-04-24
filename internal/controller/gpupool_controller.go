@@ -76,7 +76,7 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// TODO: if phase is destroying, stop all existing workers and hypervisors, stop time series flow aggregations
-	deleted, err := utils.HandleFinalizer(ctx, pool, r.Client, func(ctx context.Context, pool *tfv1.GPUPool) (bool, error) {
+	shouldReturn, err := utils.HandleFinalizer(ctx, pool, r.Client, func(ctx context.Context, pool *tfv1.GPUPool) (bool, error) {
 		log.Info("TensorFusionGPUPool is being deleted", "name", pool.Name)
 		if pool.Status.Phase != tfv1.TensorFusionPoolPhaseDestroying {
 			pool.Status.Phase = tfv1.TensorFusionPoolPhaseDestroying
@@ -94,8 +94,10 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if deleted {
-		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
+	if shouldReturn {
+		// requeue for next loop
+		// we need manually requeue cause GenerationChangedPredicate
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	if err := r.reconcilePoolCurrentCapacityAndReadiness(ctx, pool); err != nil {

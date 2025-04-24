@@ -38,27 +38,29 @@ var _ = Describe("WorkloadProfile Controller", func() {
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
-		workloadprofile := &tfv1.WorkloadProfile{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind WorkloadProfile")
-			err := k8sClient.Get(ctx, typeNamespacedName, workloadprofile)
+			workloadProfile := &tfv1.WorkloadProfile{}
+			err := k8sClient.Get(ctx, typeNamespacedName, workloadProfile)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &tfv1.WorkloadProfile{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: tfv1.WorkloadProfileSpec{
+						PoolName:   "mock",
+						IsLocalGPU: false,
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &tfv1.WorkloadProfile{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())

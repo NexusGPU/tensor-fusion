@@ -37,7 +37,7 @@ var _ = Describe("SchedulingConfigTemplate Controller", func() {
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
 		schedulingconfigtemplate := &tfv1.SchedulingConfigTemplate{}
 
@@ -75,7 +75,6 @@ var _ = Describe("SchedulingConfigTemplate Controller", func() {
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
-
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
