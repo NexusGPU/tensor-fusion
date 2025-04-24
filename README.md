@@ -137,6 +137,8 @@ Don't forget to give the project a star! Thanks again!
 2. **GPU virtualization and GPU-over-IP features** are also free to use as the part of **Community Plan**, the implementation is not fully open sourced
 3. Features mentioned in "**Enterprise Features**" above are paid, **licensed users can automatically unlock these features**.
 
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FNexusGPU%2Ftensor-fusion.svg?type=large&issueType=license)](https://app.fossa.com/projects/git%2Bgithub.com%2FNexusGPU%2Ftensor-fusion?ref=badge_large&issueType=license)
+
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
 [contributors-shield]: https://img.shields.io/github/contributors/NexusGPU/tensor-fusion.svg?style=for-the-badge
