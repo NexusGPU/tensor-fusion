@@ -308,7 +308,19 @@ data:
       vendor: NVIDIA
       costPerHour: 2.99
       fp16TFlops: 989
+  
+    - model: H800_NVL
+      fullModelName: "NVIDIA H800 NVL"
+      vendor: NVIDIA
+      costPerHour: 2.99
+      fp16TFlops: 989
     
+    - model: H20
+      fullModelName: "NVIDIA H20"
+      vendor: NVIDIA
+      costPerHour: 1.00
+      fp16TFlops: 148
+
     - model: H800_PCIe
       fullModelName: "NVIDIA H800 PCIe"
       vendor: NVIDIA
