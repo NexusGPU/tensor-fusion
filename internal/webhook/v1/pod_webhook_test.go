@@ -60,6 +60,48 @@ var _ = Describe("TensorFusionPodMutator", func() {
 	})
 
 	Context("Handle", func() {
+		It("should handle pod with empty namespace and set workload.Namespace to 'default' (via Handle)", func() {
+			// Create a pod with empty namespace
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-pod-empty-ns",
+					// empty namespace
+					Namespace: "",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                "mock",
+						constants.InjectContainerAnnotation: "main",
+						constants.WorkloadKey:               "test-workload-empty-ns",
+						constants.GenWorkloadAnnotation:     "true",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "main",
+						Image: "test-image",
+					}},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Construct an admission request with the pod
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+				},
+			}
+
+			// Call mutator.Handle to process the admission request
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+		})
+
 		It("should successfully mutate a pod with TF resources", func() {
 			// Set up a workload profile for testing
 			workloadProfile := &tfv1.WorkloadProfile{

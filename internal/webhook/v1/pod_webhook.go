@@ -67,6 +67,10 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
+	// Default namespace to 'default' if empty
+	if len(pod.Namespace) == 0 {
+		pod.Namespace = "default"
+	}
 	log := log.FromContext(ctx)
 	log.Info("Mutating pod", "generateName", pod.GenerateName, "namespace", pod.Namespace)
 
