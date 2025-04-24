@@ -47,26 +47,26 @@ func HandleFinalizer[T client.Object](
 			if err != nil {
 				// Error during deletion hook, requeue for next reconcile
 				shouldReturn = true
-				return
+				return shouldReturn, err
 			}
 			if canBeDeleted {
 				controllerutil.RemoveFinalizer(obj, constants.Finalizer)
 				err = r.Update(ctx, obj)
 				if err != nil {
 					// Failed to update object, requeue for next reconcile
-					return
+					return shouldReturn, err
 				}
 				// Finalizer removed, wait for next reconcile
 				shouldReturn = true
-				return
+				return shouldReturn, err
 			}
 			// Cleanup not ready, wait for next reconcile
 			shouldReturn = true
-			return
+			return shouldReturn, err
 		}
 		// Finalizer already removed, continue with deletion
 		shouldReturn = false
-		return
+		return shouldReturn, err
 	}
 
 	// If the object is not being deleted, ensure the finalizer is present
@@ -75,16 +75,16 @@ func HandleFinalizer[T client.Object](
 		err = r.Update(ctx, obj)
 		if err != nil {
 			// Failed to update object, requeue for next reconcile
-			return
+			return shouldReturn, err
 		}
 		// Finalizer added, wait for next reconcile
 		shouldReturn = true
-		return
+		return shouldReturn, err
 	}
 
 	// Finalizer already present, continue with business logic
 	shouldReturn = false
-	return
+	return shouldReturn, err
 }
 
 func CalculateExponentialBackoffWithJitter(retryCount int64) time.Duration {
