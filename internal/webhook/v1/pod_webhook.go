@@ -93,7 +93,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 
 	workload := &tfv1.TensorFusionWorkload{}
 	if tfInfo.GenWorkload {
-		if err := m.createOrUpdateWrokload(ctx, pod, &tfInfo, workload); err != nil {
+		if err := m.createOrUpdateWorkload(ctx, pod, &tfInfo, workload); err != nil {
 			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("create tf workload: %w", err))
 		}
 	}
@@ -147,7 +147,7 @@ func (m *TensorFusionPodMutator) InjectDecoder(d admission.Decoder) error {
 	return nil
 }
 
-func (m *TensorFusionPodMutator) createOrUpdateWrokload(ctx context.Context, pod *corev1.Pod, tfInfo *TensorFusionInfo, workload *tfv1.TensorFusionWorkload) error {
+func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod *corev1.Pod, tfInfo *TensorFusionInfo, workload *tfv1.TensorFusionWorkload) error {
 	// Check if workload exists
 	err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.WorkloadName, Namespace: pod.Namespace}, workload)
 
@@ -231,7 +231,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		}
 	}
 
-	contianerPatched := false
+	containerPatched := false
 	// Patch to Container
 	for _, name := range containerNames {
 		for i := range pod.Spec.Containers {
@@ -280,13 +280,13 @@ func (m *TensorFusionPodMutator) patchTFClient(
 					Name:  constants.GetConnectionURLEnv,
 					Value: fmt.Sprintf("%s/api/connection?name=%s&namespace=%s", clientConfig.OperatorEndpoint, connectionName, connectionNamespace),
 				})
-				contianerPatched = true
+				containerPatched = true
 			}
 			pod.Spec.Containers[i] = *container
 		}
 	}
 
-	if !contianerPatched {
+	if !containerPatched {
 		return nil, fmt.Errorf("no container found that needs tf-client injection")
 	}
 
