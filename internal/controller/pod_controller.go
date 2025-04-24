@@ -59,6 +59,12 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		log.Error(err, "Failed to get Pod")
 		return ctrl.Result{}, err
 	}
+	// generate tensor fusion connections and apply to cluster
+	tfConnection := generateTensorFusionConnection(pod)
+	if tfConnection == nil {
+		// not a tf pod skipped
+		return ctrl.Result{}, nil
+	}
 
 	if _, ok := pod.Annotations[constants.TensorFusionEnabledReplicasAnnotation]; ok {
 		shouldReturn, err := utils.HandleFinalizer(ctx, pod, r.Client, func(context context.Context, pod *corev1.Pod) (bool, error) {
@@ -76,8 +82,6 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 	}
 
-	// generate tensor fusion connections and apply to cluster
-	tfConnection := generateTensorFusionConnection(pod)
 	existConn := &tfv1.TensorFusionConnection{}
 	if err := r.Get(ctx, types.NamespacedName{Name: tfConnection.Name, Namespace: tfConnection.Namespace}, existConn); err != nil {
 		if errors.IsNotFound(err) {
@@ -96,6 +100,9 @@ func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnectio
 		return nil
 	}
 	nameNamespace := findConnectionNameNamespace(pod)
+	if nameNamespace.Name == "" || nameNamespace.Namespace == "" {
+		return nil
+	}
 	connection := &tfv1.TensorFusionConnection{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      nameNamespace.Name,
