@@ -60,7 +60,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 	})
 
 	Context("Handle", func() {
-		It("should handle pod with empty namespace and set workload.Namespace to 'default' (via Handle)", func() {
+		It("should handle pod with empty namespace", func() {
 			// Create a pod with empty namespace
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -94,6 +94,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						Raw: podBytes,
 					},
 					Operation: admissionv1.Create,
+					Namespace: "default",
 				},
 			}
 
