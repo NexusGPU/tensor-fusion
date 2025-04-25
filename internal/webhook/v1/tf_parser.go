@@ -32,7 +32,7 @@ type TensorFusionInfo struct {
 	GenWorkload     bool
 }
 
-func ParseTensorFusionInfo(ctx context.Context, k8sclient client.Client, pod *corev1.Pod) (TensorFusionInfo, error) {
+func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *corev1.Pod) (TensorFusionInfo, error) {
 	var info TensorFusionInfo
 	if pod.Annotations == nil {
 		return info, fmt.Errorf("no annotations found")
@@ -72,7 +72,7 @@ func ParseTensorFusionInfo(ctx context.Context, k8sclient client.Client, pod *co
 	workloadProfileName, ok := pod.Annotations[constants.WorkloadProfileAnnotation]
 	workloadProfile := &tfv1.WorkloadProfile{}
 	if ok {
-		if err := k8sclient.Get(ctx, client.ObjectKey{Name: workloadProfileName, Namespace: pod.Namespace}, workloadProfile); err != nil {
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: workloadProfileName, Namespace: pod.Namespace}, workloadProfile); err != nil {
 			return info, fmt.Errorf("get workload profile(%s) : %w", workloadProfileName, err)
 		}
 	}
