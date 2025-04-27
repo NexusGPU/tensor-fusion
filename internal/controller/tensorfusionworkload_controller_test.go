@@ -199,7 +199,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				g.Expect(k8sClient.List(ctx, podList,
 					client.InNamespace(key.Namespace),
 					client.MatchingLabels{constants.WorkloadKey: key.Name})).To(Succeed())
-				g.Expect(len(podList.Items)).To(Equal(2))
+				g.Expect(podList.Items).To(HaveLen(2))
 			}, timeout, interval).Should(Succeed())
 
 			// delete workload
