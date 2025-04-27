@@ -160,6 +160,12 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 		if !errors.IsNotFound(err) {
 			return fmt.Errorf("failed to get workload: %w", err)
 		}
+		// find root owner references of pod
+		rootOwnerRef, err := utils.FindRootOwnerReference(ctx, m.Client, pod.Namespace, pod)
+		if err != nil {
+			return fmt.Errorf("failed to find root owner reference: %w", err)
+		}
+
 		// Create a new workload
 		replicas := tfInfo.Replicas
 		workload = &tfv1.TensorFusionWorkload{
@@ -174,6 +180,10 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 				Qos:        tfInfo.Profile.Qos,
 				IsLocalGPU: tfInfo.Profile.IsLocalGPU,
 			},
+		}
+
+		if rootOwnerRef != nil {
+			workload.OwnerReferences = []metav1.OwnerReference{*rootOwnerRef}
 		}
 
 		if err := m.Client.Create(ctx, workload); err != nil {
