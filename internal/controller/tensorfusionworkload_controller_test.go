@@ -301,14 +301,16 @@ func cleanupWorkload(key client.ObjectKey) {
 	GinkgoHelper()
 	workload := &tfv1.TensorFusionWorkload{}
 
+	if err := k8sClient.Get(ctx, key, workload); err != nil {
+		if errors.IsNotFound(err) {
+			return
+		}
+		Expect(err).To(HaveOccurred())
+	}
+
 	// Set replicas to 0
 	Eventually(func(g Gomega) {
-		if err := k8sClient.Get(ctx, key, workload); err != nil {
-			if errors.IsNotFound(err) {
-				return
-			}
-			g.Expect(err).To(HaveOccurred())
-		}
+		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 		workload.Spec.Replicas = ptr.Int32(0)
 		g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
 	}, timeout, interval).Should(Succeed())
