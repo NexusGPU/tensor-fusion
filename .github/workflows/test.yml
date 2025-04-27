@@ -22,6 +22,9 @@ jobs:
   test:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        envtest_k8s_version: [1.22.0, 1.27.0, 1.31.0]
     steps:
       - name: Clone the code
         uses: actions/checkout@v4
@@ -35,3 +38,5 @@ jobs:
         run: |
           go mod tidy
           make test
+        env:
+          ENVTEST_K8S_VERSION: ${{ matrix.envtest_k8s_version }}
