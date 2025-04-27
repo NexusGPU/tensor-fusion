@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
@@ -133,6 +134,13 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					Labels: map[string]string{
 						constants.TensorFusionEnabledLabelKey: "true",
 					},
+					OwnerReferences: []metav1.OwnerReference{{
+						APIVersion: "apps/v1",
+						Kind:       "Deployment",
+						Name:       "owner",
+						UID:        "owner-uid",
+						Controller: ptr.To(true),
+					}},
 					Annotations: map[string]string{
 						constants.GpuPoolKey:                "mock",
 						constants.WorkloadProfileAnnotation: "test-profile-handle",
@@ -179,6 +187,15 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			resp := mutator.Handle(ctx, req)
 			Expect(resp.Allowed).To(BeTrue())
 			Expect(resp.Patches).NotTo(BeEmpty())
+
+			// Check workload created
+			workload := &tfv1.TensorFusionWorkload{}
+			err = k8sClient.Get(ctx, client.ObjectKey{Name: "test-workload", Namespace: "default"}, workload)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*workload.Spec.Replicas).To(Equal(int32(1)))
+			// check workload owner reference
+			Expect(workload.OwnerReferences).To(HaveLen(1))
+			Expect(workload.OwnerReferences[0].Name).To(Equal("owner"))
 		})
 
 		It("should handle pods without TF requirements", func() {
