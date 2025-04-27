@@ -60,11 +60,8 @@ func HandleFinalizer[T client.Object](
 				shouldReturn = true
 				return shouldReturn, err
 			}
-			// Cleanup not ready, wait for next reconcile
-			shouldReturn = true
-			return shouldReturn, err
 		}
-		// Finalizer already removed, continue with deletion
+		// continue with deletion logic
 		shouldReturn = false
 		return shouldReturn, err
 	}

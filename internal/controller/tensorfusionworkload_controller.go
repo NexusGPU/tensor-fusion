@@ -41,6 +41,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/samber/lo"
 )
 
 // TensorFusionWorkloadReconciler reconciles a TensorFusionWorkload object
@@ -80,6 +81,17 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	shouldReturn, err := utils.HandleFinalizer(ctx, workload, r.Client, func(ctx context.Context, _ *tfv1.TensorFusionWorkload) (bool, error) {
+		// delete all pods
+		existsPods := lo.Filter(podList.Items, func(pod corev1.Pod, _ int) bool {
+			return pod.DeletionTimestamp == nil
+		})
+		if len(existsPods) > 0 {
+			if err := r.DeleteAllOf(ctx, &corev1.Pod{},
+				client.InNamespace(req.Namespace),
+				client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
+				return false, fmt.Errorf("delete pods: %w", err)
+			}
+		}
 		// check if all pods are deleted
 		return len(podList.Items) == 0, nil
 	})

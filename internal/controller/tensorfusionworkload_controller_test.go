@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -184,6 +185,44 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 		})
 	})
 
+	Context("When deleting workload directly", func() {
+		It("Should delete all pods and the workload itself", func() {
+			pool := tfEnv.GetGPUPool(0)
+
+			workload := createTensorFusionWorkload(pool.Name, key, 2)
+			checkWorkerPodCount(workload)
+			checkWorkloadStatus(workload)
+
+			// wait for 2 pods to be created
+			Eventually(func(g Gomega) {
+				podList := &corev1.PodList{}
+				g.Expect(k8sClient.List(ctx, podList,
+					client.InNamespace(key.Namespace),
+					client.MatchingLabels{constants.WorkloadKey: key.Name})).To(Succeed())
+				g.Expect(len(podList.Items)).To(Equal(2))
+			}, timeout, interval).Should(Succeed())
+
+			// delete workload
+			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
+
+			// wait for all pods to be deleted
+			Eventually(func(g Gomega) {
+				podList := &corev1.PodList{}
+				g.Expect(k8sClient.List(ctx, podList,
+					client.InNamespace(key.Namespace),
+					client.MatchingLabels{constants.WorkloadKey: key.Name})).To(Succeed())
+				g.Expect(podList.Items).Should(BeEmpty())
+			}, timeout, interval).Should(Succeed())
+
+			// wait for workload itself to be deleted
+			Eventually(func(g Gomega) {
+				w := &tfv1.TensorFusionWorkload{}
+				err := k8sClient.Get(ctx, key, w)
+				g.Expect(err).To(HaveOccurred())
+			}, timeout, interval).Should(Succeed())
+		})
+	})
+
 	Context("When GPUPool doesn't exist", func() {
 		It("Should not create worker pod when reconciling a workload with non-existent pool", func() {
 			workload := createTensorFusionWorkload("non-existent-pool", key, 1)
@@ -264,7 +303,12 @@ func cleanupWorkload(key client.ObjectKey) {
 
 	// Set replicas to 0
 	Eventually(func(g Gomega) {
-		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
+		if err := k8sClient.Get(ctx, key, workload); err != nil {
+			if errors.IsNotFound(err) {
+				return
+			}
+			g.Expect(err).To(HaveOccurred())
+		}
 		workload.Spec.Replicas = ptr.Int32(0)
 		g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
 	}, timeout, interval).Should(Succeed())
