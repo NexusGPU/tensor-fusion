@@ -61,7 +61,7 @@ type TensorFusionClusterReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces;configmaps,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=daemonsets;statefulsets;replicasets,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile a TensorFusionCluster object, create and monitor GPU Pool, managing cluster level component versions
 func (r *TensorFusionClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
