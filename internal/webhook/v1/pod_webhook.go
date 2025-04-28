@@ -259,7 +259,8 @@ func (m *TensorFusionPodMutator) patchTFClient(
 					shell := container.Command[0]
 					if (shell == "bash" || shell == "zsh") && container.Command[1] == "-c" {
 						originalCommand := container.Command[2]
-						safeCommand := shellescape.Quote(originalCommand)
+						comment := "# [TensorFusion Patch] This command is wrapped by sh -c to improve compatibility with certain container environments."
+						safeCommand := shellescape.Quote(fmt.Sprintf("%s\n%s", comment, originalCommand))
 						container.Command = []string{"sh", "-c", fmt.Sprintf("%s -c %s", shell, safeCommand)}
 					}
 				}
