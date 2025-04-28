@@ -18,6 +18,9 @@ on:
       - "charts/**"
       - "config/**"
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Run on Ubuntu
