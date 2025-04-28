@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"al.essio.dev/pkg/shellescape"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -252,6 +253,16 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		for i := range pod.Spec.Containers {
 			container := &pod.Spec.Containers[i]
 			if container.Name == name {
+				// fix for issue https://github.com/NexusGPU/tensor-fusion/issues/164:
+				//	transform bash/zsh -c commands
+				if len(container.Command) >= 3 {
+					shell := container.Command[0]
+					if (shell == "bash" || shell == "zsh") && container.Command[1] == "-c" {
+						originalCommand := container.Command[2]
+						safeCommand := shellescape.Quote(originalCommand)
+						container.Command = []string{"sh", "-c", fmt.Sprintf("%s -c %s", shell, safeCommand)}
+					}
+				}
 				// patch from config
 				containerJSON, err := json.Marshal(container)
 				if err != nil {
