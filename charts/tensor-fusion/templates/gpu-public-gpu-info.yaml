@@ -32,41 +32,53 @@ data:
       fp16TFlops: 65
 
     # Ampere Architecture Series
-    - model: A100_SXM
+    - model: A100_SXM_80G
       fullModelName: "NVIDIA A100-SXM4-80GB"
       vendor: NVIDIA
       costPerHour: 1.89
       fp16TFlops: 312
     
-    - model: A100_PCIe
+    - model: A100_PCIe_80G
       fullModelName: "NVIDIA A100 80GB PCIe"
       vendor: NVIDIA
       costPerHour: 1.64
       fp16TFlops: 312
 
-    - model: A100_40G_SXM
-      fullModelName: "NVIDIA A100-SXM4-40G"
+    - model: A100_SXM_40G
+      fullModelName: "NVIDIA A100-SXM4-40GB"
       vendor: NVIDIA
       costPerHour: 1.4
       fp16TFlops: 312
     
-    - model: A100_40G_PCIe
+    - model: A100_PCIe_40G
       fullModelName: "NVIDIA A100 40GB PCIe"
       vendor: NVIDIA
       costPerHour: 1.2
       fp16TFlops: 312
 
-    - model: A800_SXM
-      fullModelName: "NVIDIA A800-SXM4-40G"
+    - model: A800_SXM_40G
+      fullModelName: "NVIDIA A800-SXM4-40GB"
+      vendor: NVIDIA
+      costPerHour: 1.89
+      fp16TFlops: 312
+
+    - model: A800_SXM_80G
+      fullModelName: "NVIDIA A800-SXM4-80GB"
       vendor: NVIDIA
       costPerHour: 1.89
       fp16TFlops: 312
     
-    - model: A800_PCIe
+    - model: A800_PCIe_80G
       fullModelName: "NVIDIA A800 80GB PCIe"
       vendor: NVIDIA
       costPerHour: 1.64
       fp16TFlops: 312
+
+    - model: A800_PCIe_40G
+      fullModelName: "NVIDIA A800 40GB PCIe"
+      vendor: NVIDIA
+      costPerHour: 1.64
+      fp16TFlops: 312  
 
     - model: A10
       fullModelName: "NVIDIA A10"

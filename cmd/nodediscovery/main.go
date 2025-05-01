@@ -24,6 +24,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -140,10 +141,10 @@ func main() {
 		})
 		tflops := info.Fp16TFlops
 		if !ok {
-			tflops = resource.Quantity{}
-			ctrl.Log.Info("unable to find GPU info from config", "deviceName", deviceName, "uuid", uuid)
+			ctrl.Log.Info("unknown GPU model, please update `gpu-public-gpu-info` configMap to match the GPU model name found in `nvidia-smi`, node discovery job failed may cause TensorFusion workload stuck, refer this doc to resolve it: https://tensor-fusion.ai/guide/troubleshooting/handbook#pod-stuck-in-starting-status-after-enabling-tensorfusion", "deviceName", deviceName, "uuid", uuid)
+			os.Exit(1)
 		} else {
-			ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "baseline FP16 TFlops", tflops, "uuid", uuid)
+			ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
 		}
 		gpu := &tfv1.GPU{
 			ObjectMeta: metav1.ObjectMeta{
@@ -174,11 +175,19 @@ func main() {
 				"kubernetes.io/hostname": k8sNodeName,
 			},
 		}
-		_, err = controllerutil.CreateOrUpdate(ctx, k8sClient, gpu, func() error { return nil })
+
+		err = retry.OnError(retry.DefaultBackoff, func(err error) bool {
+			return true // Retry on all errors for now
+		}, func() error {
+			_, err := controllerutil.CreateOrUpdate(ctx, k8sClient, gpu, func() error { return nil })
+			return err
+		})
+
 		if err != nil {
-			ctrl.Log.Error(err, "failed to create or update GPU", "gpu", gpu)
+			ctrl.Log.Error(err, "failed to create or update GPU after retries", "gpu", gpu)
 			os.Exit(1)
 		}
+
 		available := gpuStatus.Available
 		gpu.Status = gpuStatus
 		if available == nil {
@@ -187,8 +196,19 @@ func main() {
 			gpu.Status.Available = available
 		}
 
-		if err := k8sClient.Status().Patch(ctx, gpu, client.Merge); err != nil {
-			ctrl.Log.Error(err, "failed to update status of GPU", "gpu", gpu)
+		err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			currentGPU := &tfv1.GPU{}
+			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpu), currentGPU); err != nil {
+				return err
+			}
+
+			currentGPU.Status = gpu.Status
+
+			return k8sClient.Status().Update(ctx, currentGPU)
+		})
+
+		if err != nil {
+			ctrl.Log.Error(err, "failed to update status of GPU after retries", "gpu", gpu)
 			os.Exit(1)
 		}
 
@@ -209,8 +229,20 @@ func main() {
 	ns.NodeInfo.RAMSize = *resource.NewQuantity(getTotalHostRAM(), resource.DecimalSI)
 	ns.NodeInfo.DataDiskSize = *resource.NewQuantity(getDiskInfo(constants.TFDataPath), resource.DecimalSI)
 	gpunode.Status = *ns
-	if err := k8sClient.Status().Patch(ctx, gpunode, client.Merge); err != nil {
-		ctrl.Log.Error(err, "failed to update status of GPUNode")
+
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		currentGPUNode := &tfv1.GPUNode{}
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpunode), currentGPUNode); err != nil {
+			return err
+		}
+
+		currentGPUNode.Status = *ns
+
+		return k8sClient.Status().Update(ctx, currentGPUNode)
+	})
+
+	if err != nil {
+		ctrl.Log.Error(err, "failed to update status of GPUNode after retries")
 		os.Exit(1)
 	}
 }
