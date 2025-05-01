@@ -124,6 +124,12 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		nodeSelector = workloadStatus.NodeSelector
 	}
 
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(pool.Spec.ComponentConfig)
+	pod.Labels[fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name)] = constants.TrueStringValue
+
 	// Inject initContainer and env variables
 	patches, err := m.patchTFClient(pod, pool.Spec.ComponentConfig.Client, tfInfo.ContainerNames, nodeSelector)
 	if err != nil {
