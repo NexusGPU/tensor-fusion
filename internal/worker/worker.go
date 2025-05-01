@@ -24,7 +24,7 @@ func init() {
 }
 
 type WorkerGenerator struct {
-	GpuInfos     []config.GpuInfo
+	GpuInfos     *[]config.GpuInfo
 	WorkerConfig *tfv1.WorkerConfig
 }
 
@@ -87,7 +87,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		SubPathExpr: fmt.Sprintf("${%s}", constants.WorkerPodNameEnv),
 	})
 
-	info, ok := lo.Find(wg.GpuInfos, func(info config.GpuInfo) bool {
+	info, ok := lo.Find(*wg.GpuInfos, func(info config.GpuInfo) bool {
 		return info.FullModelName == gpu.Status.GPUModel
 	})
 	if !ok {

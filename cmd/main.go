@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -115,6 +116,9 @@ func main() {
 		ctrl.Log.Error(err, "unable to read gpuInfoConfig file")
 		gpuInfos = make([]config.GpuInfo, 0)
 	}
+
+	// Watch configMap change with interval, check lastModifiedTime to reload gpuInfoConfig
+	watchGPUInfoChanges(gpuInfoConfig, &gpuInfos)
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
@@ -269,7 +273,7 @@ func main() {
 		Scheme:    mgr.GetScheme(),
 		Scheduler: scheduler,
 		Recorder:  mgr.GetEventRecorderFor("tensorfusionworkload"),
-		GpuInfos:  gpuInfos,
+		GpuInfos:  &gpuInfos,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionWorkload")
 		os.Exit(1)
@@ -309,6 +313,41 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func watchGPUInfoChanges(gpuInfoConfig string, gpuInfos *[]config.GpuInfo) {
+	var lastModTime time.Time
+	if fileInfo, err := os.Stat(gpuInfoConfig); err == nil {
+		lastModTime = fileInfo.ModTime()
+	}
+
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			// Check if file has been modified
+			fileInfo, err := os.Stat(gpuInfoConfig)
+			if err != nil {
+				ctrl.Log.Error(err, "unable to stat gpuInfo file", "gpuInfoConfig", gpuInfoConfig)
+				continue
+			}
+
+			currentModTime := fileInfo.ModTime()
+			if currentModTime.After(lastModTime) {
+				ctrl.Log.Info("gpuInfo file modified, reloading.")
+				updatedGpuInfos, err := config.LoadGpuInfoFromFile(gpuInfoConfig)
+				if err != nil {
+					ctrl.Log.Error(err, "unable to reload gpuInfo file", "gpuInfoConfig", gpuInfoConfig)
+					continue
+				}
+
+				*gpuInfos = updatedGpuInfos
+				lastModTime = currentModTime
+				ctrl.Log.Info("gpuInfo reloaded successfully.", "gpuInfoConfig", gpuInfoConfig)
+			}
+		}
+	}()
 }
 
 // only for local development, won't set KUBECONFIG env var in none local environments

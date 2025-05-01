@@ -28,8 +28,8 @@ func LoadGpuInfoFromFile(filename string) ([]GpuInfo, error) {
 	return infos, nil
 }
 
-func MockGpuInfo() []GpuInfo {
-	return []GpuInfo{
+func MockGpuInfo() *[]GpuInfo {
+	return &[]GpuInfo{
 		{
 			Model:         "mock",
 			Vendor:        "mock",

@@ -176,7 +176,7 @@ func main() {
 		}
 		_, err = controllerutil.CreateOrUpdate(ctx, k8sClient, gpu, func() error { return nil })
 		if err != nil {
-			ctrl.Log.Error(err, "failed to create GPU", "gpu", gpu)
+			ctrl.Log.Error(err, "failed to create or update GPU", "gpu", gpu)
 			os.Exit(1)
 		}
 		available := gpuStatus.Available

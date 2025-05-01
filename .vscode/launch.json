@@ -13,6 +13,7 @@
                 "ENABLE_WEBHOOKS": "false"
             },
             "program": "${workspaceFolder}/cmd/main.go",
+            "args": ["--gpu-info-config", "${workspaceFolder}/config/samples/gpu-info-config.yaml"]
         },
         {
             "name": "Debug Discovery",

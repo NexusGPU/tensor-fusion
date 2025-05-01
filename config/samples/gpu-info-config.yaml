@@ -1,0 +1,11 @@
+- model: T4
+  fullModelName: "Tesla T4"
+  vendor: NVIDIA
+  costPerHour: 0.53
+  fp16TFlops: 65
+
+- model: A100_SXM
+  fullModelName: "NVIDIA A100-SXM4-80GB"
+  vendor: NVIDIA
+  costPerHour: 1.89
+  fp16TFlops: 312

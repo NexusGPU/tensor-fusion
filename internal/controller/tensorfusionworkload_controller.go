@@ -50,7 +50,7 @@ type TensorFusionWorkloadReconciler struct {
 	Scheme    *runtime.Scheme
 	Scheduler scheduler.Scheduler
 	Recorder  record.EventRecorder
-	GpuInfos  []config.GpuInfo
+	GpuInfos  *[]config.GpuInfo
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionworkloads,verbs=get;list;watch;create;update;patch;delete
