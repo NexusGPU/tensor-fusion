@@ -80,7 +80,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 			continue
 		}
 		// Protect new nodes at least 5 minutes to avoid flapping
-		if gpuNode.CreationTimestamp.Time.After(time.Now().Add(newNodeProtectionDuration)) {
+		if gpuNode.CreationTimestamp.After(time.Now().Add(newNodeProtectionDuration)) {
 			continue
 		}
 
@@ -160,7 +160,7 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	needStartCompactionJob := true
 	nextDuration := r.getCompactionDuration(ctx, pool.Spec.NodeManagerConfig)
 
-	if lastCompactionTime, loaded := jobStarted.Load(req.NamespacedName.String()); loaded {
+	if lastCompactionTime, loaded := jobStarted.Load(req.String()); loaded {
 		// last compaction is less than compaction interval, do nothing, unless its manual triggered
 		if time.Now().Before(lastCompactionTime.(time.Time).Add(nextDuration)) {
 
@@ -169,13 +169,13 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				if manualTriggerTime, err := time.Parse(time.RFC3339, manualCompactionValue); err == nil {
 					// not return empty result, will continue current reconcile logic
 					if manualTriggerTime.After(time.Now().Add(manualCompactionReconcileMaxDelay)) {
-						log.Info("Manual compaction requested", "name", req.NamespacedName.Name)
+						log.Info("Manual compaction requested", "name", req.Name)
 
 					} else {
 						needStartCompactionJob = false
 					}
 				} else {
-					log.Error(err, "Invalid manual compaction time", "name", req.NamespacedName.Name, "time", manualCompactionValue)
+					log.Error(err, "Invalid manual compaction time", "name", req.Name, "time", manualCompactionValue)
 					needStartCompactionJob = false
 				}
 			} else {
@@ -190,10 +190,10 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
-	jobStarted.Store(req.NamespacedName.String(), time.Now())
-	log.Info("Start compaction check for GPUPool", "name", req.NamespacedName.Name)
+	jobStarted.Store(req.String(), time.Now())
+	log.Info("Start compaction check for GPUPool", "name", req.Name)
 	defer func() {
-		log.Info("Finished compaction check for GPUPool", "name", req.NamespacedName.Name)
+		log.Info("Finished compaction check for GPUPool", "name", req.Name)
 	}()
 
 	compactionErr := r.checkNodeCompaction(ctx, pool)

@@ -145,7 +145,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 				},
 			}
 			_ = controllerutil.SetControllerReference(pool, gpuNodeRes, r.Scheme)
-			err := r.Client.Create(ctx, gpuNodeRes)
+			err := r.Create(ctx, gpuNodeRes)
 			if err != nil {
 				errList = append(errList, err)
 				return

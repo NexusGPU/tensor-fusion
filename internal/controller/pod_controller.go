@@ -85,7 +85,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	existConn := &tfv1.TensorFusionConnection{}
 	if err := r.Get(ctx, types.NamespacedName{Name: tfConnection.Name, Namespace: tfConnection.Namespace}, existConn); err != nil {
 		if errors.IsNotFound(err) {
-			if err := r.Client.Create(ctx, tfConnection); err != nil {
+			if err := r.Create(ctx, tfConnection); err != nil {
 				return ctrl.Result{}, fmt.Errorf("create connection(%s) : %w", tfConnection.Namespace+"/"+tfConnection.Name, err)
 			}
 		}

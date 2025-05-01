@@ -76,9 +76,9 @@ func (r *TensorFusionClusterReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{RequeueAfter: waitTime}, nil
 	}
 
-	log.Info("Reconciling TensorFusionCluster", "name", req.NamespacedName.Name)
+	log.Info("Reconciling TensorFusionCluster", "name", req.Name)
 	defer func() {
-		log.Info("Finished reconciling TensorFusionCluster", "name", req.NamespacedName.Name)
+		log.Info("Finished reconciling TensorFusionCluster", "name", req.Name)
 	}()
 
 	// Get the TensorFusionConnection object

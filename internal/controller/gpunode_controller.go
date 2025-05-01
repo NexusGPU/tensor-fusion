@@ -58,9 +58,9 @@ type GPUNodeReconciler struct {
 func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	log.Info("Reconciling GPUNode", "name", req.NamespacedName.Name)
+	log.Info("Reconciling GPUNode", "name", req.Name)
 	defer func() {
-		log.Info("Finished reconciling GPUNode", "name", req.NamespacedName.Name)
+		log.Info("Finished reconciling GPUNode", "name", req.Name)
 	}()
 
 	node := &tfv1.GPUNode{}
@@ -79,9 +79,10 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 		}
 
-		if node.Spec.ManageMode == tfv1.GPUNodeManageModeAutoSelect {
+		switch node.Spec.ManageMode {
+		case tfv1.GPUNodeManageModeAutoSelect:
 			// Do nothing, but if it's managed by Karpenter, should come up with some way to tell Karpenter to terminate the GPU node
-		} else if node.Spec.ManageMode == tfv1.GPUNodeManageModeProvisioned {
+		case tfv1.GPUNodeManageModeProvisioned:
 			clusterName := node.GetLabels()[constants.LabelKeyClusterOwner]
 			cluster := &tfv1.TensorFusionCluster{}
 			if err := r.Get(ctx, client.ObjectKey{Name: clusterName}, cluster); err != nil {
@@ -139,7 +140,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	poolObj := &tfv1.GPUPool{}
-	err = r.Client.Get(ctx, client.ObjectKey{Name: poolName}, poolObj)
+	err = r.Get(ctx, client.ObjectKey{Name: poolName}, poolObj)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to get tensor-fusion pool, can not create node discovery job, pool: %s", poolName)
 	}
@@ -197,7 +198,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Context, hypervisorName string, node *tfv1.GPUNode, poolObj *tfv1.GPUPool) (checkAgain bool, err error) {
 	pod := &corev1.Pod{}
-	fetchErr := r.Client.Get(ctx, client.ObjectKey{Name: hypervisorName, Namespace: utils.CurrentNamespace()}, pod)
+	fetchErr := r.Get(ctx, client.ObjectKey{Name: hypervisorName, Namespace: utils.CurrentNamespace()}, pod)
 	if fetchErr != nil {
 		return false, fmt.Errorf("failed to get hypervisor pod: %w", fetchErr)
 	}
@@ -525,7 +526,7 @@ func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *
 	// Update GPUNode status about the cloud vendor info
 	// To match GPUNode - K8S node, the --node-label in Kubelet is MUST-have, like Karpenter, it force set userdata to add a provisionerId label, k8s node controller then can set its ownerReference to the GPUNode
 	gpuNode := &tfv1.GPUNode{}
-	err = r.Client.Get(ctx, client.ObjectKey{Name: nodeParam.NodeName}, gpuNode)
+	err = r.Get(ctx, client.ObjectKey{Name: nodeParam.NodeName}, gpuNode)
 	if err != nil {
 		return err
 	}
@@ -538,7 +539,7 @@ func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		// Get the latest version before attempting an update
 		latest := &tfv1.GPUNode{}
-		if err := r.Client.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, latest); err != nil {
+		if err := r.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, latest); err != nil {
 			return err
 		}
 

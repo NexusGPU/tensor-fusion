@@ -62,9 +62,9 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: waitTime}, nil
 	}
 
-	log.Info("Reconciling GPUPool", "name", req.NamespacedName.Name)
+	log.Info("Reconciling GPUPool", "name", req.Name)
 	defer func() {
-		log.Info("Finished reconciling GPUPool", "name", req.NamespacedName.Name)
+		log.Info("Finished reconciling GPUPool", "name", req.Name)
 	}()
 
 	pool := &tfv1.GPUPool{}
@@ -86,7 +86,7 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		// check if all nodes has been deleted
 		nodes := &tfv1.GPUNodeList{}
-		if err := r.Client.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
+		if err := r.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
 			return false, err
 		}
 		return len(nodes.Items) == 0, nil
@@ -134,7 +134,7 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 	log := log.FromContext(ctx)
 
 	nodes := &tfv1.GPUNodeList{}
-	if err := r.Client.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
+	if err := r.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
 		return fmt.Errorf("list nodes of Pool %s failed: %v", pool.Name, err)
 	}
 

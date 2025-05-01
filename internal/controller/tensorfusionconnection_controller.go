@@ -52,9 +52,9 @@ type TensorFusionConnectionReconciler struct {
 func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	log.Info("Reconciling TensorFusionConnection", "name", req.NamespacedName.Name)
+	log.Info("Reconciling TensorFusionConnection", "name", req.Name)
 	defer func() {
-		log.Info("Finished reconciling TensorFusionConnection", "name", req.NamespacedName.Name)
+		log.Info("Finished reconciling TensorFusionConnection", "name", req.Name)
 	}()
 
 	// Get the TensorFusionConnection object

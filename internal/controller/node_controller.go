@@ -75,7 +75,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if node.GetLabels()[constants.ProvisionerLabelKey] != "" {
 		// Provision mode, match the provisionerID(GPUNode) here
 		gpuNode := &tfv1.GPUNode{}
-		if err := r.Client.Get(ctx, client.ObjectKey{Name: node.GetLabels()[constants.ProvisionerLabelKey]}, gpuNode); err != nil {
+		if err := r.Get(ctx, client.ObjectKey{Name: node.GetLabels()[constants.ProvisionerLabelKey]}, gpuNode); err != nil {
 			if errors.IsNotFound(err) {
 				r.Recorder.Eventf(node, corev1.EventTypeNormal, "NodeProvisionerNotFound", "GPUNode not found for node %s", node.Name)
 				return ctrl.Result{}, nil
@@ -84,7 +84,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		// set owned by GPUNode CR
 		_ = controllerutil.SetControllerReference(gpuNode, node, r.Scheme)
-		err := r.Client.Update(ctx, node)
+		err := r.Update(ctx, node)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("can not update node(%s) controller reference  : %w", node.Name, err)
 		}
@@ -97,7 +97,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	} else {
 		// Select mode, GPU node is controlled by K8S node
 		var poolList tfv1.GPUPoolList
-		if err := r.Client.List(ctx, &poolList); err != nil {
+		if err := r.List(ctx, &poolList); err != nil {
 			return ctrl.Result{}, fmt.Errorf("can not list gpuPool : %w", err)
 		}
 		pool, matched, err := getMatchedPoolName(node, poolList.Items)
@@ -106,7 +106,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		if !matched {
 			// delete gpunode if no matched pool
-			if err := r.Client.Delete(ctx, &tfv1.GPUNode{
+			if err := r.Delete(ctx, &tfv1.GPUNode{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: node.Name,
 				},
@@ -122,10 +122,10 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 		// Skip creation if the GPUNode already exists
 		gpuNode := &tfv1.GPUNode{}
-		if err := r.Client.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
+		if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
 			if errors.IsNotFound(err) {
 				gpuNode = r.generateGPUNode(node, pool)
-				if e := r.Client.Create(ctx, gpuNode); e != nil {
+				if e := r.Create(ctx, gpuNode); e != nil {
 					return ctrl.Result{}, fmt.Errorf("failed to create GPUNode: %w", e)
 				}
 			}
@@ -134,7 +134,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			// GPUNode controller should sync node phase to GPUNode phase, so that to trigger the GPUPool and Cluster updates
 			// But GPUNode only watches  K8S Nodes it owns, thus need to manual trigger a GPUNode reconcile request here, with the same NodeName
 			gpuNode.SetAnnotationToTriggerNodeSync()
-			if err := r.Client.Update(ctx, gpuNode); err != nil {
+			if err := r.Update(ctx, gpuNode); err != nil {
 				return ctrl.Result{}, fmt.Errorf("can not update gpuNode(%s) annotation : %w", gpuNode.Name, err)
 			}
 		}

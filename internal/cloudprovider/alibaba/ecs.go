@@ -72,7 +72,7 @@ func (p AlibabaGPUNodeProvider) TestConnection() error {
 	request := ecs.CreateDescribeRegionsRequest()
 	_, err := p.client.DescribeRegions(request)
 	if err != nil {
-		return fmt.Errorf("Can not connect to Aliyun ECS API: %v", err)
+		return fmt.Errorf("can not connect to Aliyun ECS API: %v", err)
 	}
 	fmt.Printf("Successfully connected to Aliyun ECS. Available regions got")
 	return nil

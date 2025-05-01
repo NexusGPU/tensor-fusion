@@ -141,7 +141,13 @@ func main() {
 		})
 		tflops := info.Fp16TFlops
 		if !ok {
-			ctrl.Log.Info("unknown GPU model, please update `gpu-public-gpu-info` configMap to match the GPU model name found in `nvidia-smi`, node discovery job failed may cause TensorFusion workload stuck, refer this doc to resolve it: https://tensor-fusion.ai/guide/troubleshooting/handbook#pod-stuck-in-starting-status-after-enabling-tensorfusion", "deviceName", deviceName, "uuid", uuid)
+			ctrl.Log.Info(
+				"[Error] Unknown GPU model, please update `gpu-public-gpu-info` configMap "+
+					" to match your GPU model name in `nvidia-smi`, this may cause you workload stuck, "+
+					"refer this doc to resolve it in detail: "+
+					"https://tensor-fusion.ai/guide/troubleshooting/handbook"+
+					"#pod-stuck-in-starting-status-after-enabling-tensorfusion",
+				"deviceName", deviceName, "uuid", uuid)
 			os.Exit(1)
 		} else {
 			ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
@@ -149,18 +155,7 @@ func main() {
 		gpu := &tfv1.GPU{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: uuid,
-				Labels: map[string]string{
-					constants.LabelKeyOwner: gpunode.Name,
-				},
-				Annotations: map[string]string{
-					constants.GPULastReportTimeAnnotationKey: time.Now().Format(time.RFC3339),
-				},
 			},
-		}
-
-		if err := controllerutil.SetControllerReference(gpunode, gpu, Scheme); err != nil {
-			ctrl.Log.Error(err, "failed to set controller reference")
-			os.Exit(1)
 		}
 
 		gpuStatus := tfv1.GPUStatus{
@@ -179,7 +174,18 @@ func main() {
 		err = retry.OnError(retry.DefaultBackoff, func(err error) bool {
 			return true // Retry on all errors for now
 		}, func() error {
-			_, err := controllerutil.CreateOrUpdate(ctx, k8sClient, gpu, func() error { return nil })
+			_, err := controllerutil.CreateOrUpdate(ctx, k8sClient, gpu, func() error {
+				// Set metadata fields
+				gpu.Labels = map[string]string{
+					constants.LabelKeyOwner: gpunode.Name,
+				}
+				gpu.Annotations = map[string]string{
+					constants.GPULastReportTimeAnnotationKey: time.Now().Format(time.RFC3339),
+				}
+
+				// Set controller reference
+				return controllerutil.SetControllerReference(gpunode, gpu, Scheme)
+			})
 			return err
 		})
 
