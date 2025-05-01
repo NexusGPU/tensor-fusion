@@ -95,7 +95,7 @@ func (c *Client) PerformBatchUpdate(r client.Client, ctx context.Context, pool *
 	log := log.FromContext(ctx)
 
 	log.Info("perform batch update", "component", c.GetName())
-	for i := range int(delta) {
+	for i := range delta {
 		pod := c.podsToUpdate[i]
 		if err := r.Delete(ctx, pod); err != nil {
 			return false, fmt.Errorf("failed to delete pod: %w", err)

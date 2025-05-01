@@ -38,7 +38,7 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 		log.Info("component configuration changed", "component", component.GetName(), "old hash", oldHash, "new hash", configHash)
 		component.SetConfigHash(newStatus, configHash)
 		component.SetUpdateProgress(newStatus, 0)
-		if oldHash == "" || autoUpdate == false {
+		if oldHash == "" || !autoUpdate {
 			return nil, patchComponentStatus(r, ctx, pool, newStatus)
 		}
 		if pool.Annotations == nil {
@@ -51,7 +51,7 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 			return nil, fmt.Errorf("failed to patch pool: %w", err)
 		}
 	} else {
-		if autoUpdate == false || component.GetUpdateInProgressInfo(pool) != configHash {
+		if !autoUpdate || component.GetUpdateInProgressInfo(pool) != configHash {
 			return nil, nil
 		}
 		if timeInfo := component.GetBatchUpdateLastTimeInfo(pool); len(timeInfo) != 0 {

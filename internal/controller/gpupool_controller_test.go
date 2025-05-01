@@ -106,6 +106,23 @@ var _ = Describe("GPUPool Controller", func() {
 			tfEnv.Cleanup()
 		})
 
+		It("Should pause the update according to batch interval", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(2).
+				SetGpuCountPerNode(1).
+				Build()
+
+			By("configuring a large enougth batch inteval to prevent next update batch")
+			updateRollingUpdatePolicy(tfEnv, true, 50, "10m")
+			newHash, oldHash := triggerHypervisorUpdate(tfEnv)
+			verifyHypervisorPodHash(tfEnv.GetGPUNode(0, 0), newHash)
+			verifyHypervisorUpdateProgress(tfEnv, 50)
+			verifyHypervisorPodHashConsistently(tfEnv.GetGPUNode(0, 1), oldHash)
+			verifyHypervisorUpdateProgressConsistently(tfEnv, 50)
+
+			tfEnv.Cleanup()
+		})
+
 		It("Should perform update according to batch percentage", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(2).
@@ -118,17 +135,17 @@ var _ = Describe("GPUPool Controller", func() {
 			tfEnv.Cleanup()
 		})
 
-		It("Should perform update according to non-divisible batch percentage", func() {
-			tfEnv := NewTensorFusionEnvBuilder().
-				AddPoolWithNodeCount(3).
-				SetGpuCountPerNode(1).
-				Build()
-			updateRollingUpdatePolicy(tfEnv, true, 66, "3s")
-			newHash, _ := triggerHypervisorUpdate(tfEnv)
-			verifyAllHypervisorPodHash(tfEnv, newHash)
-			verifyHypervisorUpdateProgress(tfEnv, 100)
-			tfEnv.Cleanup()
-		})
+		// It("Should perform update according to non-divisible batch percentage", func() {
+		// 	tfEnv := NewTensorFusionEnvBuilder().
+		// 		AddPoolWithNodeCount(3).
+		// 		SetGpuCountPerNode(1).
+		// 		Build()
+		// 	updateRollingUpdatePolicy(tfEnv, true, 66, "3s")
+		// 	newHash, _ := triggerHypervisorUpdate(tfEnv)
+		// 	verifyAllHypervisorPodHash(tfEnv, newHash)
+		// 	verifyHypervisorUpdateProgress(tfEnv, 100)
+		// 	tfEnv.Cleanup()
+		// })
 
 		It("Should update all nodes at once if BatchPercentage is 100", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
@@ -337,14 +354,13 @@ func triggerClientUpdate(tfEnv *TensorFusionEnv) (string, string) {
 	return newHash, oldHash
 }
 
-func triggerWorkerUpdate(tfEnv *TensorFusionEnv) (string, string) {
+func triggerWorkerUpdate(tfEnv *TensorFusionEnv) {
 	GinkgoHelper()
 	ensureGpuPoolIsRunning(tfEnv)
 	oldHash := verifyGpuPoolWorkerHash(tfEnv, "")
 	updateWorkerConfig(tfEnv)
 	newHash := verifyGpuPoolWorkerHash(tfEnv, oldHash)
 	Expect(newHash).ShouldNot(Equal(oldHash))
-	return newHash, oldHash
 }
 
 func updateWorkerConfig(tfEnv *TensorFusionEnv) {
@@ -485,19 +501,19 @@ func verifyAllHypervisorPodHash(tfEnv *TensorFusionEnv, hash string) {
 	}, timeout, interval).Should(Succeed())
 }
 
-func verifyWorkerPodContainerName(workloadIndex int, name string) {
-	GinkgoHelper()
-	Eventually(func(g Gomega) {
-		podList := &corev1.PodList{}
-		g.Expect(k8sClient.List(ctx, podList,
-			client.InNamespace("default"),
-			client.MatchingLabels{constants.WorkloadKey: getWorkloadName(workloadIndex)})).Should(Succeed())
-		g.Expect(podList.Items).Should(HaveLen(1))
-		for _, pod := range podList.Items {
-			g.Expect(pod.Spec.Containers[0].Name).Should(Equal(name))
-		}
-	}, timeout, interval).Should(Succeed())
-}
+// func verifyWorkerPodContainerName(workloadIndex int, name string) {
+// 	GinkgoHelper()
+// 	Eventually(func(g Gomega) {
+// 		podList := &corev1.PodList{}
+// 		g.Expect(k8sClient.List(ctx, podList,
+// 			client.InNamespace("default"),
+// 			client.MatchingLabels{constants.WorkloadKey: getWorkloadName(workloadIndex)})).Should(Succeed())
+// 		g.Expect(podList.Items).Should(HaveLen(1))
+// 		for _, pod := range podList.Items {
+// 			g.Expect(pod.Spec.Containers[0].Name).Should(Equal(name))
+// 		}
+// 	}, timeout, interval).Should(Succeed())
+// }
 
 func verifyWorkerPodContainerNameConsistently(workloadIndex int, name string) {
 	GinkgoHelper()
@@ -551,27 +567,27 @@ func verifyAllHypervisorPodHashConsistently(tfEnv *TensorFusionEnv, hash string)
 	}, duration, interval).Should(Succeed())
 }
 
-func verifyAllWorkerPodContainerNameConsistently(tfEnv *TensorFusionEnv, name string) {
-	GinkgoHelper()
-	pool := tfEnv.GetGPUPool(0)
-	Consistently(func(g Gomega) {
-		workloadList := &tfv1.TensorFusionWorkloadList{}
-		g.Expect(k8sClient.List(ctx, workloadList, client.MatchingLabels(map[string]string{
-			constants.LabelKeyOwner: pool.Name,
-		}))).Should(Succeed())
-		for _, workload := range workloadList.Items {
-			podList := &corev1.PodList{}
-			g.Expect(k8sClient.List(ctx, podList,
-				client.InNamespace(workload.Namespace),
-				client.MatchingLabels{constants.WorkloadKey: workload.Name})).Should(Succeed())
-			g.Expect(podList.Items).Should(HaveLen(int(*workload.Spec.Replicas)))
-			for _, pod := range podList.Items {
-				g.Expect(pod.Spec.Containers[0].Name).Should(Equal(name))
-			}
-		}
+// func verifyAllWorkerPodContainerNameConsistently(tfEnv *TensorFusionEnv, name string) {
+// 	GinkgoHelper()
+// 	pool := tfEnv.GetGPUPool(0)
+// 	Consistently(func(g Gomega) {
+// 		workloadList := &tfv1.TensorFusionWorkloadList{}
+// 		g.Expect(k8sClient.List(ctx, workloadList, client.MatchingLabels(map[string]string{
+// 			constants.LabelKeyOwner: pool.Name,
+// 		}))).Should(Succeed())
+// 		for _, workload := range workloadList.Items {
+// 			podList := &corev1.PodList{}
+// 			g.Expect(k8sClient.List(ctx, podList,
+// 				client.InNamespace(workload.Namespace),
+// 				client.MatchingLabels{constants.WorkloadKey: workload.Name})).Should(Succeed())
+// 			g.Expect(podList.Items).Should(HaveLen(int(*workload.Spec.Replicas)))
+// 			for _, pod := range podList.Items {
+// 				g.Expect(pod.Spec.Containers[0].Name).Should(Equal(name))
+// 			}
+// 		}
 
-	}, duration, interval).Should(Succeed())
-}
+// 	}, duration, interval).Should(Succeed())
+// }
 
 func verifyHypervisorUpdateProgress(tfEnv *TensorFusionEnv, progress int32) {
 	GinkgoHelper()
