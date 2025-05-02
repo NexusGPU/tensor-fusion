@@ -139,7 +139,7 @@ func GetObjectHash(objs ...any) string {
 
 func CompareAndGetObjectHash(hash string, obj ...any) (bool, string) {
 	newHash := GetObjectHash(obj...)
-	return !(hash == newHash), newHash
+	return hash != newHash, newHash
 }
 
 const DebounceKeySuffix = ":in_queue"
