@@ -175,3 +175,7 @@ func IsPodConditionTrue(conditions []corev1.PodCondition, conditionType corev1.P
 	}
 	return false
 }
+
+func IsPodTerminated(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded
+}

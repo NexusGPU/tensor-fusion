@@ -55,8 +55,8 @@ var _ = Describe("GPUNode Controller", func() {
 			}, timeout, interval).Should(Succeed())
 
 			By("checking that the hypervisor pod is created")
+			pod := &corev1.Pod{}
 			Eventually(func(g Gomega) {
-				pod := &corev1.Pod{}
 				err := k8sClient.Get(ctx, types.NamespacedName{
 					Name:      fmt.Sprintf("hypervisor-%s", gpuNode.Name),
 					Namespace: utils.CurrentNamespace(),
@@ -71,37 +71,20 @@ var _ = Describe("GPUNode Controller", func() {
 				g.Expect(gpunode.Status.Phase).Should(Equal(tfv1.TensorFusionGPUNodePhaseRunning))
 			}, timeout, interval).Should(Succeed())
 
+			By("checking the hypervisor pod should be recreated when enters terminated status")
+			pod.Status.Phase = corev1.PodFailed
+			Expect(k8sClient.Status().Update(ctx, pod)).Should(Succeed())
+			Eventually(func(g Gomega) {
+				newPod := &corev1.Pod{}
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      fmt.Sprintf("hypervisor-%s", gpuNode.Name),
+					Namespace: utils.CurrentNamespace(),
+				}, newPod)
+				g.Expect(err).ShouldNot(HaveOccurred())
+				g.Expect(newPod.UID).ShouldNot(Equal(pod.UID))
+			}, timeout, interval).Should(Succeed())
+
 			tfEnv.Cleanup()
-
-			// By("checking that it will recreate terminated hypervisor pod")
-			// Expect(k8sClient.Delete(ctx, pod)).Should(Succeed())
-			// Eventually(func() error {
-			// return k8sClient.Get(ctx, types.NamespacedName{
-			// Name:      fmt.Sprintf("hypervisor-%s", gpuNode.Name),
-			// Namespace: utils.CurrentNamespace(),
-			// }, pod)
-			// }, timeout, interval).Should(Succeed())
-
-			// TODO: make this test pass when implement rolling udpate
-			// By("checking that the hypervisor config changed")
-			// tfc := getMockCluster(ctx)
-			// hypervisor := tfc.Spec.GPUPools[0].SpecTemplate.ComponentConfig.Hypervisor
-			// podTmpl := &corev1.PodTemplate{}
-			// err := json.Unmarshal(hypervisor.PodTemplate.Raw, podTmpl)
-			// Expect(err).NotTo(HaveOccurred())
-			// podTmpl.Template.Spec.Containers[0].Name = "foo"
-			// hypervisor.PodTemplate.Raw = lo.Must(json.Marshal(podTmpl))
-			// Expect(k8sClient.Update(ctx, tfc)).To(Succeed())
-			// Eventually(func() string {
-			// 	pod := &corev1.Pod{}
-			// 	if err = k8sClient.Get(ctx, types.NamespacedName{
-			// 		Name:      fmt.Sprintf("hypervisor-%s", gpuNode.Name),
-			// 		Namespace: utils.CurrentNamespace(),
-			// 	}, pod); err != nil {
-			// 		return ""
-			// 	}
-			// 	return pod.Spec.Containers[0].Name
-			// }, timeout, interval).Should(Equal("foo"))
 		})
 	})
 })

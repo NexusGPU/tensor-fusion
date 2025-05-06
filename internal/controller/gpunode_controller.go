@@ -393,7 +393,8 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tf
 			return key.Name, nil
 		}
 
-		if currentPod.Labels[constants.LabelKeyPodTemplateHash] != utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor) {
+		if utils.IsPodTerminated(currentPod) ||
+			currentPod.Labels[constants.LabelKeyPodTemplateHash] != utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor) {
 			if err := r.Delete(ctx, currentPod); err != nil {
 				return "", fmt.Errorf("failed to delete old hypervisor pod: %w", err)
 			}
