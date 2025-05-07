@@ -31,6 +31,13 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 				},
 			},
 		},
+		NodePoolRollingUpdatePolicy: &tfv1.NodeRollingUpdatePolicy{
+			AutoUpdate:        ptr.To(false),
+			BatchPercentage:   25,
+			BatchInterval:     "10m",
+			MaxDuration:       "10m",
+			MaintenanceWindow: tfv1.MaintenanceWindow{},
+		},
 	},
 	ComponentConfig: &tfv1.ComponentConfig{
 		Hypervisor: &tfv1.HypervisorConfig{

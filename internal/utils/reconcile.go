@@ -137,12 +137,17 @@ func GetObjectHash(objs ...any) string {
 	return fmt.Sprintf("%x", hasher.Sum(nil))
 }
 
+func CompareAndGetObjectHash(hash string, obj ...any) (bool, string) {
+	newHash := GetObjectHash(obj...)
+	return hash != newHash, newHash
+}
+
 const DebounceKeySuffix = ":in_queue"
 
 func DebouncedReconcileCheck(ctx context.Context, lastProcessedItems *sync.Map, name types.NamespacedName) (runNow bool, alreadyQueued bool, waitTime time.Duration) {
 	const (
 		// Minimum time between reconciliations for the same object
-		debounceInterval = 5 * time.Second
+		debounceInterval = 3 * time.Second
 	)
 	now := time.Now()
 	key := name.String()
