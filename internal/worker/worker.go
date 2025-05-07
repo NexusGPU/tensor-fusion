@@ -46,13 +46,13 @@ func (wg *WorkerGenerator) AllocPort() int {
 	return rand.Intn(max-min+1) + min
 }
 
-func (wg *WorkerGenerator) PodTemplateHash(limits tfv1.Resource) (string, error) {
+func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
 	podTmpl := &corev1.PodTemplate{}
 	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
 	if err != nil {
 		return "", fmt.Errorf("failed to unmarshal pod template: %w", err)
 	}
-	return utils.GetObjectHash(podTmpl, limits), nil
+	return utils.GetObjectHash(podTmpl, workloadSpec), nil
 }
 
 func (wg *WorkerGenerator) GenerateWorkerPod(

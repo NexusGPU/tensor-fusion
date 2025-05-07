@@ -132,7 +132,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	// Create worker generator
 	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker, GpuInfos: r.GpuInfos}
 
-	podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec.Resources.Limits)
+	podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("get pod template hash: %w", err)
 	}
