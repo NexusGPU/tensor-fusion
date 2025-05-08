@@ -43,6 +43,12 @@ type WorkloadProfileSpec struct {
 	Qos QoSLevel `json:"qos,omitempty"`
 
 	IsLocalGPU bool `json:"isLocalGPU"`
+
+	// +optional
+	// AutoScalingConfig configured here will override Pool's schedulingConfig
+	// This field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,
+	// user can set tensor-fusion.ai/auto-limits|requests|replicas: 'true'
+	AutoScalingConfig AutoScalingConfig `json:"autoScalingConfig,omitempty"`
 }
 
 // WorkloadProfileStatus defines the observed state of WorkloadProfile.

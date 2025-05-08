@@ -43,9 +43,6 @@ type GPUPoolSpec struct {
 	ComponentConfig *ComponentConfig `json:"componentConfig,omitempty"`
 
 	// +optional
-	SchedulingConfig *SchedulingConfigTemplateSpec `json:"schedulingConfig,omitempty"`
-
-	// +optional
 	SchedulingConfigTemplate *string `json:"schedulingConfigTemplate,omitempty"`
 }
 

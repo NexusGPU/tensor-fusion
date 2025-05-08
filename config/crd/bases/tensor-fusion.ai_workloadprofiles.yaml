@@ -39,6 +39,129 @@ spec:
           spec:
             description: WorkloadProfileSpec defines the desired state of WorkloadProfile.
             properties:
+              autoScalingConfig:
+                description: |-
+                  AutoScalingConfig configured here will override Pool's schedulingConfig
+                  This field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,
+                  user can set tensor-fusion.ai/auto-limits|requests|replicas: 'true'
+                properties:
+                  autoSetLimits:
+                    description: |-
+                      layer 1 vertical auto-scaling, turbo burst to existing GPU cards quickly
+                      VPA-like, aggregate metrics data <1m
+                    properties:
+                      enable:
+                        type: boolean
+                      evaluationPeriod:
+                        type: string
+                      extraTFlopsBufferRatio:
+                        type: string
+                      ignoredDeltaRange:
+                        type: string
+                      maxRatioToRequests:
+                        description: the multiplier of requests, to avoid limit set
+                          too high, like 5.0
+                        type: string
+                      prediction:
+                        properties:
+                          enable:
+                            type: boolean
+                          historyDataPeriod:
+                            type: string
+                          model:
+                            type: string
+                          predictionPeriod:
+                            type: string
+                        type: object
+                      scaleUpStep:
+                        type: string
+                    type: object
+                  autoSetReplicas:
+                    description: |-
+                      layer 2 horizontal auto-scaling, scale up to more GPU cards if max limits threshold hit
+                      HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
+                    properties:
+                      enable:
+                        type: boolean
+                      evaluationPeriod:
+                        type: string
+                      scaleDownCoolDownTime:
+                        type: string
+                      scaleDownStep:
+                        type: string
+                      scaleUpCoolDownTime:
+                        type: string
+                      scaleUpStep:
+                        type: string
+                      targetTFlopsOfLimits:
+                        type: string
+                    type: object
+                  autoSetRequests:
+                    description: |-
+                      layer 3 adjusting, to match the actual usage in the long run
+                      Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
+                    properties:
+                      aggregationPeriod:
+                        type: string
+                      enable:
+                        type: boolean
+                      evaluationPeriod:
+                        type: string
+                      extraBufferRatio:
+                        description: the request buffer ratio, for example actual
+                          usage is 1.0, 10% buffer will be 1.1 as final preferred
+                          requests
+                        type: string
+                      percentileForAutoRequests:
+                        type: string
+                      prediction:
+                        properties:
+                          enable:
+                            type: boolean
+                          historyDataPeriod:
+                            type: string
+                          model:
+                            type: string
+                          predictionPeriod:
+                            type: string
+                        type: object
+                    type: object
+                  scaleToZero:
+                    description: |-
+                      additional layer to save VRAM, auto-freeze memory and cool down to RAM and Disk
+                      Hypervisor will monitor and trigger freeze of inactive workers, Operator should mark them as scaled-to-zero and release the GPU pool resources, don't scale down CPU client part, so that they can continue to serve the traffic or scale down by other auto-scaling solutions like KEDA/KNative
+                    properties:
+                      autoFreeze:
+                        items:
+                          properties:
+                            enable:
+                              type: boolean
+                            freezeToDiskTTL:
+                              type: string
+                            freezeToMemTTL:
+                              type: string
+                            qos:
+                              enum:
+                              - low
+                              - medium
+                              - high
+                              - critical
+                              type: string
+                          type: object
+                        type: array
+                      intelligenceWarmup:
+                        properties:
+                          enable:
+                            type: boolean
+                          historyDataPeriod:
+                            type: string
+                          model:
+                            type: string
+                          predictionPeriod:
+                            type: string
+                        type: object
+                    type: object
+                type: object
               isLocalGPU:
                 type: boolean
               poolName:

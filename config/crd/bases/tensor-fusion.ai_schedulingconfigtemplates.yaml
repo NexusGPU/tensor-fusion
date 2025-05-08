@@ -51,9 +51,12 @@ spec:
                 description: scale the workload based on the usage and traffic
                 properties:
                   autoSetLimits:
-                    description: layer 1 vertical auto-scaling, turbo burst to existing
-                      GPU cards quickly
+                    description: |-
+                      layer 1 vertical auto-scaling, turbo burst to existing GPU cards quickly
+                      VPA-like, aggregate metrics data <1m
                     properties:
+                      enable:
+                        type: boolean
                       evaluationPeriod:
                         type: string
                       extraTFlopsBufferRatio:
@@ -79,8 +82,9 @@ spec:
                         type: string
                     type: object
                   autoSetReplicas:
-                    description: layer 2 horizontal auto-scaling, scale up to more
-                      GPU cards if max limits threshold hit
+                    description: |-
+                      layer 2 horizontal auto-scaling, scale up to more GPU cards if max limits threshold hit
+                      HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
                     properties:
                       enable:
                         type: boolean
@@ -98,11 +102,14 @@ spec:
                         type: string
                     type: object
                   autoSetRequests:
-                    description: layer 3 adjusting, to match the actual usage in the
-                      long run
+                    description: |-
+                      layer 3 adjusting, to match the actual usage in the long run
+                      Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
                     properties:
                       aggregationPeriod:
                         type: string
+                      enable:
+                        type: boolean
                       evaluationPeriod:
                         type: string
                       extraBufferRatio:
@@ -125,8 +132,9 @@ spec:
                         type: object
                     type: object
                   scaleToZero:
-                    description: additional layer to save VRAM, auto-freeze memory
-                      and cool down to RAM and Disk
+                    description: |-
+                      additional layer to save VRAM, auto-freeze memory and cool down to RAM and Disk
+                      Hypervisor will monitor and trigger freeze of inactive workers, Operator should mark them as scaled-to-zero and release the GPU pool resources, don't scale down CPU client part, so that they can continue to serve the traffic or scale down by other auto-scaling solutions like KEDA/KNative
                     properties:
                       autoFreeze:
                         items:
