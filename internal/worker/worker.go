@@ -61,13 +61,13 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	namespace string,
 	port int,
 	limits tfv1.Resource,
+	podTemplateHash string,
 ) (*corev1.Pod, string, error) {
 	podTmpl := &corev1.PodTemplate{}
 	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to unmarshal pod template: %w", err)
 	}
-	podTemplateHash := utils.GetObjectHash(podTmpl, limits)
 	spec := podTmpl.Template.Spec
 	if spec.NodeSelector == nil {
 		spec.NodeSelector = make(map[string]string)

@@ -21,10 +21,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"reflect"
 
 	"gomodules.xyz/jsonpatch/v2"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
@@ -204,7 +204,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 	}
 
 	// Compare the entire spec at once
-	if !reflect.DeepEqual(workload.Spec, desiredSpec) {
+	if !equality.Semantic.DeepEqual(workload.Spec, desiredSpec) {
 		workload.Spec = desiredSpec
 		if err := m.Client.Update(ctx, workload); err != nil {
 			return fmt.Errorf("failed to update workload: %w", err)
