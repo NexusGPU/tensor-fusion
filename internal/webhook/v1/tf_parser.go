@@ -100,6 +100,24 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 	if ok {
 		workloadProfile.Spec.Resources.Limits.Vram = resource.MustParse(vramLimit)
 	}
+	localGPU, ok := pod.Annotations[constants.IsLocalGPUAnnotation]
+	if ok && localGPU == "true" {
+		workloadProfile.Spec.IsLocalGPU = true
+	}
+
+	// Parse auto-scaling annotations
+	autoLimits, ok := pod.Annotations[constants.AutoScaleLimitsAnnotation]
+	if ok && autoLimits == "true" {
+		workloadProfile.Spec.AutoScalingConfig.AutoSetLimits.Enable = true
+	}
+	autoRequests, ok := pod.Annotations[constants.AutoScaleRequestsAnnotation]
+	if ok && autoRequests == "true" {
+		workloadProfile.Spec.AutoScalingConfig.AutoSetRequests.Enable = true
+	}
+	autoReplicas, ok := pod.Annotations[constants.AutoScaleReplicasAnnotation]
+	if ok && autoReplicas == "true" {
+		workloadProfile.Spec.AutoScalingConfig.AutoSetReplicas.Enable = true
+	}
 
 	injectContainer, ok := pod.Annotations[constants.InjectContainerAnnotation]
 	containerNames := strings.Split(injectContainer, ",")

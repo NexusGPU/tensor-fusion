@@ -87,15 +87,19 @@ type GPUFilter struct {
 
 type AutoScalingConfig struct {
 	// layer 1 vertical auto-scaling, turbo burst to existing GPU cards quickly
+	// VPA-like, aggregate metrics data <1m
 	AutoSetLimits AutoSetLimits `json:"autoSetLimits,omitempty"`
 
 	// layer 2 horizontal auto-scaling, scale up to more GPU cards if max limits threshold hit
+	// HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
 	AutoSetReplicas AutoSetReplicas `json:"autoSetReplicas,omitempty"`
 
 	// layer 3 adjusting, to match the actual usage in the long run
+	// Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
 	AutoSetRequests AutoSetRequests `json:"autoSetRequests,omitempty"`
 
 	// additional layer to save VRAM, auto-freeze memory and cool down to RAM and Disk
+	// Hypervisor will monitor and trigger freeze of inactive workers, Operator should mark them as scaled-to-zero and release the GPU pool resources, don't scale down CPU client part, so that they can continue to serve the traffic or scale down by other auto-scaling solutions like KEDA/KNative
 	ScaleToZero ScaleToZero `json:"scaleToZero,omitempty"`
 }
 
@@ -110,6 +114,8 @@ type AutoScalingConfig struct {
 // if AI prediction enabled, it helps to detect history pattern, and set more reasonable, explainable limit value
 // the final set limits should be max(finalPreferredLimits, last(predict_value * (1 + extraTFlopsBufferRatio)))
 type AutoSetLimits struct {
+	Enable bool `json:"enable,omitempty"`
+
 	EvaluationPeriod string `json:"evaluationPeriod,omitempty"`
 
 	ExtraTFlopsBufferRatio string `json:"extraTFlopsBufferRatio,omitempty"`
@@ -126,7 +132,7 @@ type AutoSetLimits struct {
 
 // To handle burst traffic, scale up in short time (this feature requires GPU context migration & replication, not available yet)
 type AutoSetReplicas struct {
-	Enable                *bool  `json:"enable,omitempty"`
+	Enable                bool   `json:"enable,omitempty"`
 	TargetTFlopsOfLimits  string `json:"targetTFlopsOfLimits,omitempty"`
 	EvaluationPeriod      string `json:"evaluationPeriod,omitempty"`
 	ScaleUpStep           string `json:"scaleUpStep,omitempty"`
@@ -136,6 +142,8 @@ type AutoSetReplicas struct {
 }
 
 type AutoSetRequests struct {
+	Enable bool `json:"enable,omitempty"`
+
 	PercentileForAutoRequests string `json:"percentileForAutoRequests,omitempty"`
 
 	// the request buffer ratio, for example actual usage is 1.0, 10% buffer will be 1.1 as final preferred requests

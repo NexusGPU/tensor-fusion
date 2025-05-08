@@ -173,6 +173,9 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      tfInfo.WorkloadName,
 				Namespace: pod.Namespace,
+				Labels: map[string]string{
+					constants.GpuPoolKey: tfInfo.Profile.PoolName,
+				},
 			},
 			Spec: tfv1.TensorFusionWorkloadSpec{
 				Replicas:   &replicas,
@@ -181,6 +184,12 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 				Qos:        tfInfo.Profile.Qos,
 				IsLocalGPU: tfInfo.Profile.IsLocalGPU,
 			},
+		}
+
+		// Add related Deployment's ReplicaSet for frontend to get related client side workload for this TensorFusionWorkload
+		// TODO: support multiple client workloads using the same TF workload
+		if len(pod.OwnerReferences) > 0 {
+			workload.Labels[constants.LabelKeyUser] = pod.OwnerReferences[0].Kind + "/" + pod.OwnerReferences[0].Name
 		}
 
 		if rootOwnerRef != nil {
