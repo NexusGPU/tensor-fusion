@@ -75,6 +75,10 @@ spec:
                         type: object
                       scaleUpStep:
                         type: string
+                      targetResource:
+                        description: target resource to scale limits, such as "tflops",
+                          "vram", or "all" by default
+                        type: string
                     type: object
                   autoSetReplicas:
                     description: |-
@@ -125,6 +129,10 @@ spec:
                           predictionPeriod:
                             type: string
                         type: object
+                      targetResource:
+                        description: target resource to scale requests, such as "tflops",
+                          "vram", or "all" by default
+                        type: string
                     type: object
                   scaleToZero:
                     description: |-
@@ -162,7 +170,19 @@ spec:
                         type: object
                     type: object
                 type: object
+              gpuCount:
+                description: The number of GPUs to be used by the workload, default
+                  to 1
+                type: integer
               isLocalGPU:
+                description: Schedule the workload to the same GPU server that runs
+                  vGPU worker for best performance, default to false
+                type: boolean
+              noStandaloneWorkerMode:
+                description: This mode is only available when `is-local-gpu` set to
+                  true, in this mode, TensorFusion will also inject vGPU worker into
+                  init container, so that to achieve best performance, trade-off is
+                  user might by-pass the vGPU worker and using physical GPU directly
                 type: boolean
               poolName:
                 type: string
@@ -216,8 +236,6 @@ spec:
                 - limits
                 - requests
                 type: object
-            required:
-            - isLocalGPU
             type: object
           status:
             description: WorkloadProfileStatus defines the observed state of WorkloadProfile.

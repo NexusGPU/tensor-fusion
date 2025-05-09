@@ -100,9 +100,22 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 	if ok {
 		workloadProfile.Spec.Resources.Limits.Vram = resource.MustParse(vramLimit)
 	}
+	gpuCount, ok := pod.Annotations[constants.GpuCountKey]
+	if ok {
+		val, err := strconv.ParseInt(gpuCount, 10, 32)
+		if err != nil {
+			return info, fmt.Errorf("invalid gpuCount value: %w", err)
+		}
+		workloadProfile.Spec.GPUCount = int(val)
+	}
+
 	localGPU, ok := pod.Annotations[constants.IsLocalGPUAnnotation]
 	if ok && localGPU == "true" {
 		workloadProfile.Spec.IsLocalGPU = true
+	}
+	noStandaloneWorkerMode, ok := pod.Annotations[constants.NoStandaloneWorkerModeAnnotation]
+	if ok && noStandaloneWorkerMode == "true" {
+		workloadProfile.Spec.NoStandaloneWorkerMode = true
 	}
 
 	// Parse auto-scaling annotations

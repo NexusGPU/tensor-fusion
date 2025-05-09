@@ -116,6 +116,9 @@ type AutoScalingConfig struct {
 type AutoSetLimits struct {
 	Enable bool `json:"enable,omitempty"`
 
+	// target resource to scale limits, such as "tflops", "vram", or "all" by default
+	TargetResource string `json:"targetResource,omitempty"`
+
 	EvaluationPeriod string `json:"evaluationPeriod,omitempty"`
 
 	ExtraTFlopsBufferRatio string `json:"extraTFlopsBufferRatio,omitempty"`
@@ -143,6 +146,9 @@ type AutoSetReplicas struct {
 
 type AutoSetRequests struct {
 	Enable bool `json:"enable,omitempty"`
+
+	// target resource to scale requests, such as "tflops", "vram", or "all" by default
+	TargetResource string `json:"targetResource,omitempty"`
 
 	PercentileForAutoRequests string `json:"percentileForAutoRequests,omitempty"`
 
