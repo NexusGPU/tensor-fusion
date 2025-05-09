@@ -286,15 +286,6 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 		return true, nil
 	}
 
-	if pod.Annotations == nil {
-		pod.Annotations = make(map[string]string)
-	}
-
-	if pod.Annotations[constants.GpuReleasedAnnotation] == constants.TrueStringValue {
-		log.Info("GPU has been released for this pod", "pod", pod.Name)
-		return true, nil
-	}
-
 	// Get the GPU
 	gpu := &tfv1.GPU{}
 	if err := r.Get(ctx, client.ObjectKey{Name: gpuName}, gpu); err != nil {
