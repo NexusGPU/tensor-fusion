@@ -30,8 +30,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"slices"
-
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -279,6 +277,7 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 	log := log.FromContext(ctx)
 
 	log.Info("Processing pod with GPU resource cleanup finalizer", "pod", pod.Name)
+
 	// Get GPU name from pod label
 	gpuName, ok := pod.Labels[constants.GpuKey]
 	if !ok {
@@ -290,7 +289,7 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 		pod.Annotations = make(map[string]string)
 	}
 
-	if pod.Annotations[constants.GpuReleasedAnnotation] == "true" {
+	if pod.Annotations[constants.GpuReleasedAnnotation] == constants.TrueStringValue {
 		log.Info("GPU has been released for this pod", "pod", pod.Name)
 		return true, nil
 	}
@@ -308,7 +307,7 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 		return false, err
 	}
 
-	pod.Annotations[constants.GpuReleasedAnnotation] = "true"
+	pod.Annotations[constants.GpuReleasedAnnotation] = constants.TrueStringValue
 
 	// Update the annotation of the Pod to mark that GPU cleanup has been successfully processed.
 	// This is a key part of ensuring idempotency for the handlePodGPUCleanup function.
@@ -328,11 +327,6 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 
 	log.Info("Released GPU resources via finalizer", "gpu", gpuName, "pod", pod.Name)
 	return true, nil
-}
-
-// Helper function to check if a pod has a specific finalizer
-func containsFinalizer(pod *corev1.Pod, finalizer string) bool {
-	return slices.Contains(pod.Finalizers, finalizer)
 }
 
 // deletePod deletes a pod

@@ -68,7 +68,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	// Remove deletion mark if updated
-	if node.GetLabels()[constants.NodeDeletionMark] == "true" {
+	if node.GetLabels()[constants.NodeDeletionMark] == constants.TrueStringValue {
 		log.Info("Node should be removed due to GPUNode compaction, but it's not managed by TensorFusion, skip.", "name", node.Name)
 	}
 
