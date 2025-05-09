@@ -42,7 +42,19 @@ type WorkloadProfileSpec struct {
 	// Qos defines the quality of service level for the client.
 	Qos QoSLevel `json:"qos,omitempty"`
 
-	IsLocalGPU bool `json:"isLocalGPU"`
+	// +optional
+	// Schedule the workload to the same GPU server that runs vGPU worker for best performance, default to false
+	IsLocalGPU bool `json:"isLocalGPU,omitempty"`
+
+	// +optional
+	// TODO, not implemented
+	// The number of GPUs to be used by the workload, default to 1
+	GPUCount int `json:"gpuCount,omitempty"`
+
+	// +optional
+	// TODO, not implemented
+	// This mode is only available when `is-local-gpu` set to true, in this mode, TensorFusion will also inject vGPU worker into init container, so that to achieve best performance, trade-off is user might by-pass the vGPU worker and using physical GPU directly
+	NoStandaloneWorkerMode bool `json:"noStandaloneWorkerMode,omitempty"`
 
 	// +optional
 	// AutoScalingConfig configured here will override Pool's schedulingConfig

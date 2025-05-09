@@ -80,6 +80,10 @@ spec:
                         type: object
                       scaleUpStep:
                         type: string
+                      targetResource:
+                        description: target resource to scale limits, such as "tflops",
+                          "vram", or "all" by default
+                        type: string
                     type: object
                   autoSetReplicas:
                     description: |-
@@ -130,6 +134,10 @@ spec:
                           predictionPeriod:
                             type: string
                         type: object
+                      targetResource:
+                        description: target resource to scale requests, such as "tflops",
+                          "vram", or "all" by default
+                        type: string
                     type: object
                   scaleToZero:
                     description: |-
