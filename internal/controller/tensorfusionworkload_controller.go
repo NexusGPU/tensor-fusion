@@ -313,7 +313,6 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 	}
 	pod.Annotations[constants.GpuReleasedAnnotation] = shortuuid.New()
 
-
 	// Update the annotation of the Pod to mark that GPU cleanup has been successfully processed.
 	// This is a key part of ensuring idempotency for the handlePodGPUCleanup function.
 	// If this function is called again for the same Pod instance (e.g., due to the client cache
