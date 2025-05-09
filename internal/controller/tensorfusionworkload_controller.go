@@ -37,6 +37,7 @@ import (
 	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
+	"github.com/lithammer/shortuuid/v4"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
 )
@@ -285,15 +286,6 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 		return true, nil
 	}
 
-	if pod.Annotations == nil {
-		pod.Annotations = make(map[string]string)
-	}
-
-	if pod.Annotations[constants.GpuReleasedAnnotation] == constants.TrueStringValue {
-		log.Info("GPU has been released for this pod", "pod", pod.Name)
-		return true, nil
-	}
-
 	// Get the GPU
 	gpu := &tfv1.GPU{}
 	if err := r.Get(ctx, client.ObjectKey{Name: gpuName}, gpu); err != nil {
@@ -307,7 +299,10 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 		return false, err
 	}
 
-	pod.Annotations[constants.GpuReleasedAnnotation] = constants.TrueStringValue
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+	pod.Annotations[constants.GpuReleasedAnnotation] = shortuuid.New()
 
 	// Update the annotation of the Pod to mark that GPU cleanup has been successfully processed.
 	// This is a key part of ensuring idempotency for the handlePodGPUCleanup function.
