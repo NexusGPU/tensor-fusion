@@ -41,6 +41,7 @@ const (
 	InjectContainerAnnotation = Domain + "/inject-container"
 	ReplicasAnnotation        = Domain + "/replicas"
 	GenWorkloadAnnotation     = Domain + "/generate-workload"
+	GpuReleasedAnnotation     = Domain + "/gpu-released"
 
 	TensorFusionPodCounterKeyAnnotation   = Domain + "/pod-counter-key"
 	TensorFusionPodCountAnnotation        = Domain + "/tf-pod-count"

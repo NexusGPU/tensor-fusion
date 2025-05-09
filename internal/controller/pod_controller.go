@@ -62,7 +62,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	// generate tensor fusion connections and apply to cluster
 	tfConnection := generateTensorFusionConnection(pod)
 	if tfConnection == nil {
-		// not a tf pod skipped
+		// not a tf client pod skipped
 		return ctrl.Result{}, nil
 	}
 

@@ -100,7 +100,6 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	if shouldReturn {
 		return ctrl.Result{}, nil
 	}
-
 	// Handle pods with finalizers that need GPU resource cleanup
 	hasDeletion := false
 	// Process pods with our finalizer
@@ -279,16 +278,20 @@ func (r *TensorFusionWorkloadReconciler) scaleDownWorkers(ctx context.Context, w
 func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context, pod *corev1.Pod, workload *tfv1.TensorFusionWorkload) (bool, error) {
 	log := log.FromContext(ctx)
 
-	// Check if this is our finalizer
-	if !containsFinalizer(pod, constants.Finalizer) {
-		// Not our finalizer, skip processing
-		return true, nil
-	}
 	log.Info("Processing pod with GPU resource cleanup finalizer", "pod", pod.Name)
 	// Get GPU name from pod label
 	gpuName, ok := pod.Labels[constants.GpuKey]
 	if !ok {
 		log.Info("Pod has finalizer but no GPU label", "pod", pod.Name)
+		return true, nil
+	}
+
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+
+	if pod.Annotations[constants.GpuReleasedAnnotation] == "true" {
+		log.Info("GPU has been released for this pod", "pod", pod.Name)
 		return true, nil
 	}
 
@@ -302,6 +305,18 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 		}
 		// Error getting GPU, retry later
 		log.Error(err, "Failed to get GPU", "gpu", gpuName, "pod", pod.Name)
+		return false, err
+	}
+
+	pod.Annotations[constants.GpuReleasedAnnotation] = "true"
+
+	// Update the annotation of the Pod to mark that GPU cleanup has been successfully processed.
+	// This is a key part of ensuring idempotency for the handlePodGPUCleanup function.
+	// If this function is called again for the same Pod instance (e.g., due to the client cache
+	// not yet reflecting the finalizer's removal), Then this r.Update pod will fail.
+	// Will not cause duplicate releases
+	if err := r.Update(ctx, pod); err != nil {
+		log.Error(err, "Failed to mark that GPU cleanup of pod", "gpu", gpuName, "pod", pod.Name)
 		return false, err
 	}
 
