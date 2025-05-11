@@ -152,71 +152,8 @@ func main() {
 		} else {
 			ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
 		}
-		gpu := &tfv1.GPU{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: uuid,
-			},
-		}
 
-		gpuStatus := tfv1.GPUStatus{
-			Phase: tfv1.TensorFusionGPUPhaseRunning,
-			Capacity: &tfv1.Resource{
-				Vram:   resource.MustParse(fmt.Sprintf("%dKi", memInfo.Total/1024)),
-				Tflops: tflops,
-			},
-			UUID:     uuid,
-			GPUModel: deviceName,
-			NodeSelector: map[string]string{
-				"kubernetes.io/hostname": k8sNodeName,
-			},
-		}
-
-		err = retry.OnError(retry.DefaultBackoff, func(err error) bool {
-			return true // Retry on all errors for now
-		}, func() error {
-			_, err := controllerutil.CreateOrUpdate(ctx, k8sClient, gpu, func() error {
-				// Set metadata fields
-				gpu.Labels = map[string]string{
-					constants.LabelKeyOwner: gpunode.Name,
-				}
-				gpu.Annotations = map[string]string{
-					constants.GPULastReportTimeAnnotationKey: time.Now().Format(time.RFC3339),
-				}
-
-				// Set controller reference
-				return controllerutil.SetControllerReference(gpunode, gpu, Scheme)
-			})
-			return err
-		})
-
-		if err != nil {
-			ctrl.Log.Error(err, "failed to create or update GPU after retries", "gpu", gpu)
-			os.Exit(1)
-		}
-
-		available := gpuStatus.Available
-		gpu.Status = gpuStatus
-		if available == nil {
-			gpu.Status.Available = gpuStatus.Capacity
-		} else {
-			gpu.Status.Available = available
-		}
-
-		err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-			currentGPU := &tfv1.GPU{}
-			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpu), currentGPU); err != nil {
-				return err
-			}
-
-			currentGPU.Status = gpu.Status
-
-			return k8sClient.Status().Update(ctx, currentGPU)
-		})
-
-		if err != nil {
-			ctrl.Log.Error(err, "failed to update status of GPU after retries", "gpu", gpu)
-			os.Exit(1)
-		}
+		gpu := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpunode, uuid, deviceName,memInfo, tflops)
 
 		totalTFlops.Add(gpu.Status.Capacity.Tflops)
 		totalVRAM.Add(gpu.Status.Capacity.Vram)
@@ -246,11 +183,79 @@ func main() {
 
 		return k8sClient.Status().Update(ctx, currentGPUNode)
 	})
-
 	if err != nil {
 		ctrl.Log.Error(err, "failed to update status of GPUNode after retries")
 		os.Exit(1)
 	}
+}
+
+func createOrUpdateTensorFusionGPU(k8sClient client.Client, ctx context.Context, k8sNodeName string, gpunode *tfv1.GPUNode, 
+	uuid string, deviceName string, memInfo nvml.Memory_v2, tflops resource.Quantity) *tfv1.GPU {
+	gpu := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: uuid,
+		},
+	}
+
+	err := retry.OnError(retry.DefaultBackoff, func(err error) bool {
+		return true // Retry on all errors for now
+	}, func() error {
+		_, err := controllerutil.CreateOrUpdate(ctx, k8sClient, gpu, func() error {
+			// Set metadata fields
+			gpu.Labels = map[string]string{
+				constants.LabelKeyOwner: gpunode.Name,
+			}
+			gpu.Annotations = map[string]string{
+				constants.GPULastReportTimeAnnotationKey: time.Now().Format(time.RFC3339),
+			}
+
+			if !metav1.IsControlledBy(gpu, gpunode) {
+				gpu.OwnerReferences = []metav1.OwnerReference{
+					*metav1.NewControllerRef(gpunode, gpunode.GroupVersionKind()),
+				} 
+			}
+
+			return nil
+		})
+		return err
+	})
+	if err != nil {
+		ctrl.Log.Error(err, "failed to create or update GPU after retries", "gpu", gpu)
+		os.Exit(1)
+	}
+
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpu), gpu); err != nil {
+			return err
+		}
+
+		newStatus := tfv1.GPUStatus{
+			Phase: tfv1.TensorFusionGPUPhaseRunning,
+			Capacity: &tfv1.Resource{
+				Vram:   resource.MustParse(fmt.Sprintf("%dKi", memInfo.Total/1024)),
+				Tflops: tflops,
+			},
+			UUID:     uuid,
+			GPUModel: deviceName,
+			NodeSelector: map[string]string{
+				"kubernetes.io/hostname": k8sNodeName,
+			},
+		}
+
+		if gpu.Status.Available == nil {
+			newStatus.Available = newStatus.Capacity
+		} else {
+			newStatus.Available = gpu.Status.Available
+		}
+		gpu.Status = newStatus
+		return k8sClient.Status().Update(ctx, gpu)
+	})
+	if err != nil {
+		ctrl.Log.Error(err, "failed to update status of GPU after retries", "gpu", gpu)
+		os.Exit(1)
+	}
+
+	return gpu
 }
 
 func nodeStatus(k8sNodeName string) *tfv1.GPUNodeStatus {
@@ -309,7 +314,7 @@ func getDiskInfo(path string) (total int64) {
 	err = syscall.Statfs(absPath, &stat)
 	if err != nil {
 		if errors.Is(err, syscall.ENOENT) {
-			err = os.MkdirAll(absPath, 0755)
+			err = os.MkdirAll(absPath, 0o755)
 			if err != nil {
 				fmt.Printf("error creating folder: %s, err: %v\n", absPath, err)
 				return 0
