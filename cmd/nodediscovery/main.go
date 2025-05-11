@@ -153,7 +153,7 @@ func main() {
 			ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
 		}
 
-		gpu := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpunode, uuid, deviceName,memInfo, tflops)
+		gpu := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpunode, uuid, deviceName, memInfo, tflops)
 
 		totalTFlops.Add(gpu.Status.Capacity.Tflops)
 		totalVRAM.Add(gpu.Status.Capacity.Vram)
@@ -189,7 +189,8 @@ func main() {
 	}
 }
 
-func createOrUpdateTensorFusionGPU(k8sClient client.Client, ctx context.Context, k8sNodeName string, gpunode *tfv1.GPUNode, 
+func createOrUpdateTensorFusionGPU(
+	k8sClient client.Client, ctx context.Context, k8sNodeName string, gpunode *tfv1.GPUNode,
 	uuid string, deviceName string, memInfo nvml.Memory_v2, tflops resource.Quantity) *tfv1.GPU {
 	gpu := &tfv1.GPU{
 		ObjectMeta: metav1.ObjectMeta{
@@ -212,7 +213,7 @@ func createOrUpdateTensorFusionGPU(k8sClient client.Client, ctx context.Context,
 			if !metav1.IsControlledBy(gpu, gpunode) {
 				gpu.OwnerReferences = []metav1.OwnerReference{
 					*metav1.NewControllerRef(gpunode, gpunode.GroupVersionKind()),
-				} 
+				}
 			}
 
 			return nil

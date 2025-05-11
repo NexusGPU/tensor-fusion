@@ -45,12 +45,14 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 	assert.Equal(t, tflops, gpu.Status.Capacity.Tflops, "GPU TFlops should match")
 	assert.Equal(t, resource.MustParse("16384Mi"), gpu.Status.Capacity.Vram, "GPU VRAM should match")
 	assert.Equal(t, gpu.Status.Capacity, gpu.Status.Available, "Available resources should match capacity")
-	assert.Equal(t, map[string]string{"kubernetes.io/hostname": k8sNodeName}, gpu.Status.NodeSelector, "Node selector should match")
+	assert.Equal(t, map[string]string{"kubernetes.io/hostname": k8sNodeName},
+		gpu.Status.NodeSelector, "Node selector should match")
 	assert.Equal(t, tfv1.TensorFusionGPUPhaseRunning, gpu.Status.Phase, "GPU phase should be running")
 
 	// Verify labels and annotations
 	assert.Equal(t, map[string]string{constants.LabelKeyOwner: gpuNodeName}, gpu.Labels, "GPU labels should match")
-	assert.Contains(t, gpu.Annotations, constants.GPULastReportTimeAnnotationKey, "GPU annotations should contain last report time")
+	assert.Contains(t, gpu.Annotations, constants.GPULastReportTimeAnnotationKey,
+		"GPU annotations should contain last report time")
 	_, err := time.Parse(time.RFC3339, gpu.Annotations[constants.GPULastReportTimeAnnotationKey])
 	assert.NoError(t, err, "Last report time annotation should be a valid RFC3339 timestamp")
 
@@ -80,7 +82,7 @@ func TestGPUControllerReference(t *testing.T) {
 	gpuNode := &tfv1.GPUNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: gpuNodeName,
-			UID: "mock-uid",
+			UID:  "mock-uid",
 		},
 	}
 
@@ -95,9 +97,10 @@ func TestGPUControllerReference(t *testing.T) {
 	newGpuNode := &tfv1.GPUNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "new-test-gpu-node",
-			UID: "new-mock-uid",
+			UID:  "new-mock-uid",
 		},
 	}
+
 	gpu = createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, newGpuNode, uuid, deviceName, memInfo, tflops)
 	assert.True(t, metav1.IsControlledBy(gpu, newGpuNode))
 	assert.False(t, metav1.IsControlledBy(gpu, gpuNode))
