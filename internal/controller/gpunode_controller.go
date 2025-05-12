@@ -242,8 +242,8 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 		}
 
 		// update metrics to get historical allocation line chart and trending
-		metrics.AllocatedTflopsPercent.WithLabelValues(node.Name, poolObj.Name).Set((node.Status.TotalTFlops.AsApproximateFloat64() - node.Status.AvailableTFlops.AsApproximateFloat64()) / node.Status.TotalTFlops.AsApproximateFloat64())
-		metrics.AllocatedVramBytes.WithLabelValues(node.Name, poolObj.Name).Set(node.Status.TotalVRAM.AsApproximateFloat64() - node.Status.AvailableVRAM.AsApproximateFloat64())
+		metrics.AllocatedTflopsPercent.WithLabelValues(node.Status.KubernetesNodeName, poolObj.Name).Set((node.Status.TotalTFlops.AsApproximateFloat64() - node.Status.AvailableTFlops.AsApproximateFloat64()) / node.Status.TotalTFlops.AsApproximateFloat64())
+		metrics.AllocatedVramBytes.WithLabelValues(node.Status.KubernetesNodeName, poolObj.Name).Set(node.Status.TotalVRAM.AsApproximateFloat64() - node.Status.AvailableVRAM.AsApproximateFloat64())
 
 		virtualVRAM, virtualTFlops := r.CalculateVirtualCapacity(node, poolObj)
 		node.Status.VirtualTFlops = virtualTFlops

@@ -11,7 +11,7 @@ var (
 	}
 
 	nodeLabels = []string{
-		"node", "pool",
+		"nodeName", "pool",
 	}
 
 	GpuTflopsRequest = prometheus.NewGaugeVec(
