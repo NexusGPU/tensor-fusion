@@ -117,7 +117,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	if hasDeletion {
-		return ctrl.Result{Requeue: true, RequeueAfter: constants.PendingRequeueDuration}, nil
+		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
 	// Fetch the GPUPool
