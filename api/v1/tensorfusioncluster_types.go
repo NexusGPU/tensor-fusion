@@ -73,15 +73,15 @@ type TensorFusionClusterStatus struct {
 	//
 	RetryCount int64 `json:"retryCount"`
 
-	// calculated every 5m average
+	// TODO: calculated every 1h/1d/1w average
 	UtilizedTFlopsPercent string `json:"utilizedTFlopsPercent,omitempty"`
 	UtilizedVRAMPercent   string `json:"utilizedVRAMPercent,omitempty"`
 
-	// updated with interval
+	// TODO: updated with interval
 	AllocatedTFlopsPercent string `json:"allocatedTFlopsPercent,omitempty"`
 	AllocatedVRAMPercent   string `json:"allocatedVRAMPercent,omitempty"`
 
-	// aggregated with interval
+	// TODO: aggregated with interval
 	SavedCostsPerMonth       string `json:"savedCostsPerMonth,omitempty"`
 	PotentialSavingsPerMonth string `json:"potentialSavingsPerMonth,omitempty"`
 

@@ -10,6 +10,10 @@ var (
 		"namespace", "worker", "pool",
 	}
 
+	nodeLabels = []string{
+		"node", "pool",
+	}
+
 	GpuTflopsRequest = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gpu_tflops_request",
@@ -36,6 +40,20 @@ var (
 			Name: "vram_bytes_limit",
 		},
 		labels,
+	)
+
+	AllocatedTflopsPercent = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "allocated_compute_percentage",
+		},
+		nodeLabels,
+	)
+
+	AllocatedVramBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "allocated_memory_bytes",
+		},
+		nodeLabels,
 	)
 )
 

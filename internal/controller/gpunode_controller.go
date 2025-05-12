@@ -27,6 +27,7 @@ import (
 	cloudprovider "github.com/NexusGPU/tensor-fusion/internal/cloudprovider"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -239,6 +240,10 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 			node.Status.TotalVRAM.Add(gpu.Status.Capacity.Vram)
 			node.Status.TotalTFlops.Add(gpu.Status.Capacity.Tflops)
 		}
+
+		// update metrics to get historical allocation line chart and trending
+		metrics.AllocatedTflopsPercent.WithLabelValues(node.Name, poolObj.Name).Set((node.Status.TotalTFlops.AsApproximateFloat64() - node.Status.AvailableTFlops.AsApproximateFloat64()) / node.Status.TotalTFlops.AsApproximateFloat64())
+		metrics.AllocatedVramBytes.WithLabelValues(node.Name, poolObj.Name).Set(node.Status.TotalVRAM.AsApproximateFloat64() - node.Status.AvailableVRAM.AsApproximateFloat64())
 
 		virtualVRAM, virtualTFlops := r.CalculateVirtualCapacity(node, poolObj)
 		node.Status.VirtualTFlops = virtualTFlops
