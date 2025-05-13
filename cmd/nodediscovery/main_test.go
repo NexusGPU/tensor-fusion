@@ -102,6 +102,8 @@ func TestGPUControllerReference(t *testing.T) {
 	}
 
 	gpu = createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, newGpuNode, uuid, deviceName, memInfo, tflops)
+	assert.NotNil(t, gpu.OwnerReferences[0].Kind)
+	assert.NotNil(t, gpu.OwnerReferences[0].APIVersion)
 	assert.True(t, metav1.IsControlledBy(gpu, newGpuNode))
 	assert.False(t, metav1.IsControlledBy(gpu, gpuNode))
 }

@@ -25,8 +25,10 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
@@ -211,11 +213,21 @@ func createOrUpdateTensorFusionGPU(
 			}
 
 			if !metav1.IsControlledBy(gpu, gpunode) {
-				gpu.OwnerReferences = []metav1.OwnerReference{
-					*metav1.NewControllerRef(gpunode, gpunode.GroupVersionKind()),
+				// Create a new controller ref.
+				gvk, err := apiutil.GVKForObject(gpunode, Scheme)
+				if err != nil {
+					return err
 				}
+				ref := metav1.OwnerReference{
+					APIVersion:         gvk.GroupVersion().String(),
+					Kind:               gvk.Kind,
+					Name:               gpunode.GetName(),
+					UID:                gpunode.GetUID(),
+					BlockOwnerDeletion: ptr.To(true),
+					Controller:         ptr.To(true),
+				}
+				gpu.OwnerReferences = []metav1.OwnerReference{ref}
 			}
-
 			return nil
 		})
 		return err
