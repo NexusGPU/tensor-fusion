@@ -55,7 +55,7 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 	}
 	info.WorkloadName = workloadName
 	genWorkload, ok := pod.Annotations[constants.GenWorkloadAnnotation]
-	info.GenWorkload = (ok && genWorkload == "true")
+	info.GenWorkload = (ok && genWorkload == constants.TrueStringValue)
 
 	replicas, ok := pod.Annotations[constants.ReplicasAnnotation]
 
@@ -110,25 +110,25 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 	}
 
 	localGPU, ok := pod.Annotations[constants.IsLocalGPUAnnotation]
-	if ok && localGPU == "true" {
+	if ok && localGPU == constants.TrueStringValue {
 		workloadProfile.Spec.IsLocalGPU = true
 	}
 	noStandaloneWorkerMode, ok := pod.Annotations[constants.NoStandaloneWorkerModeAnnotation]
-	if ok && noStandaloneWorkerMode == "true" {
+	if ok && noStandaloneWorkerMode == constants.TrueStringValue {
 		workloadProfile.Spec.NoStandaloneWorkerMode = true
 	}
 
 	// Parse auto-scaling annotations
 	autoLimits, ok := pod.Annotations[constants.AutoScaleLimitsAnnotation]
-	if ok && autoLimits == "true" {
+	if ok && autoLimits == constants.TrueStringValue {
 		workloadProfile.Spec.AutoScalingConfig.AutoSetLimits.Enable = true
 	}
 	autoRequests, ok := pod.Annotations[constants.AutoScaleRequestsAnnotation]
-	if ok && autoRequests == "true" {
+	if ok && autoRequests == constants.TrueStringValue {
 		workloadProfile.Spec.AutoScalingConfig.AutoSetRequests.Enable = true
 	}
 	autoReplicas, ok := pod.Annotations[constants.AutoScaleReplicasAnnotation]
-	if ok && autoReplicas == "true" {
+	if ok && autoReplicas == constants.TrueStringValue {
 		workloadProfile.Spec.AutoScalingConfig.AutoSetReplicas.Enable = true
 	}
 
