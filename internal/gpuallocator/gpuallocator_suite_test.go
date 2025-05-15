@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -48,6 +49,7 @@ var (
 	ctx       context.Context
 	k8sClient client.Client
 	testEnv   *envtest.Environment
+	mgr       ctrl.Manager
 )
 
 func TestGPUAllocator(t *testing.T) {
@@ -84,6 +86,11 @@ var _ = BeforeSuite(func() {
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
+
+	mgr, err = ctrl.NewManager(cfg, ctrl.Options{
+		Scheme: scheme.Scheme,
+	})
+	Expect(err).NotTo(HaveOccurred())
 
 	// Create test scheduling config template
 	schedulingConfig := &tfv1.SchedulingConfigTemplate{
@@ -268,10 +275,4 @@ func getGPU(name string, namespace string) *tfv1.GPU {
 	err := k8sClient.Get(ctx, key, gpu)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	return gpu
-}
-
-// Helper function to create a GPU allocator for testing
-func createAllocator() *GpuAllocator {
-	allocator := NewGpuAllocator(ctx, k8sClient)
-	return allocator
 }

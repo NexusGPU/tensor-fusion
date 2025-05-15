@@ -17,6 +17,8 @@ limitations under the License.
 package gpuallocator
 
 import (
+	"time"
+
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	. "github.com/onsi/ginkgo/v2"
@@ -30,7 +32,9 @@ var _ = Describe("GPU Allocator", func() {
 	var allocator *GpuAllocator
 
 	BeforeEach(func() {
-		allocator = createAllocator()
+		allocator = NewGpuAllocator(ctx, k8sClient, 3*time.Second)
+		err := allocator.SetupWithManager(ctx, mgr)
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	AfterEach(func() {

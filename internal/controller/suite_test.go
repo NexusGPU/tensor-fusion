@@ -179,7 +179,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	ctx := context.Background()
-	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient())
+	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 3*time.Second)
 	err = allocator.SetupWithManager(ctx, mgr)
 	Expect(err).ToNot(HaveOccurred())
 

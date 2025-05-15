@@ -135,7 +135,7 @@ func (s *GpuAllocator) Dealloc(ctx context.Context, request tfv1.Resource, gpu *
 	return nil
 }
 
-func NewGpuAllocator(ctx context.Context, client client.Client) *GpuAllocator {
+func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval time.Duration) *GpuAllocator {
 	log := log.FromContext(ctx)
 
 	if client == nil {
@@ -152,7 +152,7 @@ func NewGpuAllocator(ctx context.Context, client client.Client) *GpuAllocator {
 		Client:         client,
 		filterRegistry: baseRegistry,
 		gpuStore:       make(map[types.NamespacedName]*tfv1.GPU),
-		syncInterval:   30 * time.Second, // Sync every 30 seconds by default
+		syncInterval:   syncInterval,
 	}
 
 	return allocator
