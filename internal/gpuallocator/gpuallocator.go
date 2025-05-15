@@ -265,7 +265,11 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 		},
 	})
 
-	mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+	if err != nil {
+		return fmt.Errorf("failed to add event handler: %w", err)
+	}
+
+	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		// Create a context with cancel function for the sync loop
 		syncCtx, cancel := context.WithCancel(ctx)
 		s.cancel = cancel
