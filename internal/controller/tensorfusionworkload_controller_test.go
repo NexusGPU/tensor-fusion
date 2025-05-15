@@ -158,11 +158,15 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			checkWorkerPodCount(workload)
 			checkWorkloadStatus(workload)
 
-			gpuList := tfEnv.GetPoolGpuList(0)
-			updatedGPU, ok := lo.Find(gpuList.Items, func(gpu tfv1.GPU) bool {
-				return gpu.Status.Available.Tflops.Equal(resource.MustParse("1990")) && gpu.Status.Available.Vram.Equal(resource.MustParse("1992Gi"))
-			})
-			Expect(ok).Should(BeTrue())
+			var updatedGPU tfv1.GPU
+			Eventually(func(g Gomega) bool {
+				gpuList := tfEnv.GetPoolGpuList(0)
+				ok := false
+				updatedGPU, ok = lo.Find(gpuList.Items, func(gpu tfv1.GPU) bool {
+					return gpu.Status.Available.Tflops.Equal(resource.MustParse("1990")) && gpu.Status.Available.Vram.Equal(resource.MustParse("1992Gi"))
+				})
+				return ok
+			}, timeout, interval).Should(BeTrue())
 
 			Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 			workloadCopy := workload.DeepCopy()
