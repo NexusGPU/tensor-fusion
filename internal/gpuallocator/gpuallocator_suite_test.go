@@ -259,6 +259,12 @@ var _ = BeforeSuite(func() {
 		err = k8sClient.Status().Update(ctx, gpu)
 		Expect(err).NotTo(HaveOccurred())
 	}
+
+	go func() {
+		defer GinkgoRecover()
+		err = mgr.Start(ctx)
+		Expect(err).ToNot(HaveOccurred(), "failed to run manager")
+	}()
 })
 
 var _ = AfterSuite(func() {

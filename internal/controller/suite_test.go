@@ -180,7 +180,7 @@ var _ = BeforeSuite(func() {
 
 	ctx := context.Background()
 	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 3*time.Second)
-	err = allocator.SetupWithManager(ctx, mgr)
+	_, err = allocator.SetupWithManager(ctx, mgr)
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&TensorFusionConnectionReconciler{

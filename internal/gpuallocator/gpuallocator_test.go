@@ -33,8 +33,17 @@ var _ = Describe("GPU Allocator", func() {
 
 	BeforeEach(func() {
 		allocator = NewGpuAllocator(ctx, k8sClient, 3*time.Second)
-		err := allocator.SetupWithManager(ctx, mgr)
+		readyCh, err := allocator.SetupWithManager(ctx, mgr)
 		Expect(err).NotTo(HaveOccurred())
+
+		var ready bool
+		select {
+		case <-readyCh:
+			ready = true
+		case <-time.After(10 * time.Second):
+			ready = false
+		}
+		Expect(ready).To(BeTrue(), "allocator failed to become ready within timeout")
 	})
 
 	AfterEach(func() {

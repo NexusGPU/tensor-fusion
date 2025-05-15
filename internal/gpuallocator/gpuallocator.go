@@ -1,3 +1,4 @@
+// Package gpuallocator handles GPU allocation
 package gpuallocator
 
 import (
@@ -208,22 +209,29 @@ func (s *GpuAllocator) initGPUStore(ctx context.Context) error {
 	return nil
 }
 
+var indexSetupOnce sync.Once
+
 // SetupWithManager sets up the GpuAllocator with the Manager.
-func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager) error {
+func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager) (<-chan struct{}, error) {
 	log := log.FromContext(ctx)
 	log.Info("Setting up GPU watches with manager")
 
-	// Set up informer for GPU resources
-	if err := mgr.GetCache().IndexField(ctx, &tfv1.GPU{}, "metadata.name", func(obj client.Object) []string {
-		return []string{obj.GetName()}
-	}); err != nil {
-		return fmt.Errorf("failed to set up GPU cache indexer: %w", err)
+	readyCh := make(chan struct{})
+
+	// ensure the indexer is set up only once
+	var indexErr error
+	indexSetupOnce.Do(func() {
+		indexErr = mgr.GetCache().IndexField(ctx, &tfv1.GPU{}, "metadata.name", func(obj client.Object) []string {
+			return []string{obj.GetName()}
+		})
+	})
+	if indexErr != nil {
+		return readyCh, fmt.Errorf("failed to setup indexer for field metadata.name: %w", indexErr)
 	}
 
-	// Set up handler for GPU events
 	informer, err := mgr.GetCache().GetInformer(ctx, &tfv1.GPU{})
 	if err != nil {
-		return fmt.Errorf("failed to get GPU informer: %w", err)
+		return readyCh, fmt.Errorf("failed to get GPU informer: %w", err)
 	}
 
 	// Add event handlers
@@ -266,7 +274,7 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to add event handler: %w", err)
+		return readyCh, fmt.Errorf("failed to add event handler: %w", err)
 	}
 
 	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
@@ -280,10 +288,11 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 		}
 		// Start the background sync goroutine
 		go s.startSyncLoop(syncCtx)
+		readyCh <- struct{}{}
 		return nil
 	}))
 
-	return err
+	return readyCh, err
 }
 
 // handleGPUCreate handles GPU creation events
