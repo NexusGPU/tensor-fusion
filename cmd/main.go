@@ -170,8 +170,8 @@ func main() {
 	ctx := context.Background()
 
 	// Initialize GPU allocator and set up watches
-	scheduler := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient())
-	if err = scheduler.SetupWithManager(ctx, mgr); err != nil {
+	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient())
+	if err = allocator.SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to set up GPU allocator watches")
 		os.Exit(1)
 	}
@@ -275,7 +275,7 @@ func main() {
 	if err = (&controller.TensorFusionWorkloadReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
-		Scheduler: scheduler,
+		Allocator: allocator,
 		Recorder:  mgr.GetEventRecorderFor("tensorfusionworkload"),
 		GpuInfos:  &gpuInfos,
 	}).SetupWithManager(mgr); err != nil {

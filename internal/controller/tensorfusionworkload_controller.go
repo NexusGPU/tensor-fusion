@@ -46,7 +46,7 @@ import (
 type TensorFusionWorkloadReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Scheduler *gpuallocator.GpuAllocator
+	Allocator *gpuallocator.GpuAllocator
 	Recorder  record.EventRecorder
 	GpuInfos  *[]config.GpuInfo
 }
@@ -315,7 +315,7 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 	}
 
 	// Release GPU resources
-	if err := r.Scheduler.Dealloc(ctx, workload.Spec.Resources.Requests, gpu); err != nil {
+	if err := r.Allocator.Dealloc(ctx, workload.Spec.Resources.Requests, gpu); err != nil {
 		log.Error(err, "Failed to release GPU resources, will retry", "gpu", gpuName, "pod", pod.Name)
 		return false, err
 	}
@@ -344,7 +344,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 	// Create worker pods
 	for range count {
 		// Schedule GPU for the worker
-		gpus, err := r.Scheduler.Alloc(ctx, workload.Spec.PoolName, workload.Spec.Resources.Requests, 1)
+		gpus, err := r.Allocator.Alloc(ctx, workload.Spec.PoolName, workload.Spec.Resources.Requests, 1)
 		if err != nil {
 			r.Recorder.Eventf(workload, corev1.EventTypeWarning, "ScheduleGPUFailed", "Failed to schedule GPU: %v", err)
 			return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
@@ -356,7 +356,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 		pod, err := r.tryStartWorker(ctx, workerGenerator, gpu, workload, hash)
 		if err != nil {
 			// Try to release the GPU resource if pod creation fails
-			releaseErr := r.Scheduler.Dealloc(ctx, workload.Spec.Resources.Requests, gpu)
+			releaseErr := r.Allocator.Dealloc(ctx, workload.Spec.Resources.Requests, gpu)
 			if releaseErr != nil {
 				log.Error(releaseErr, "Failed to release GPU after pod creation failure")
 			}

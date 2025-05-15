@@ -148,24 +148,12 @@ func NewGpuAllocator(ctx context.Context, client client.Client) *GpuAllocator {
 		filter.NewPhaseFilter(tfv1.TensorFusionGPUPhaseRunning),
 	)
 
-	// Create a context with cancel function for the sync loop
-	syncCtx, cancel := context.WithCancel(ctx)
-
 	allocator := &GpuAllocator{
 		Client:         client,
 		filterRegistry: baseRegistry,
 		gpuStore:       make(map[types.NamespacedName]*tfv1.GPU),
 		syncInterval:   30 * time.Second, // Sync every 30 seconds by default
-		cancel:         cancel,
 	}
-
-	// Initialize the GPU store
-	if err := allocator.initGPUStore(ctx); err != nil {
-		log.Error(err, "Failed to initialize GPU store")
-	}
-
-	// Start the background sync goroutine
-	go allocator.startSyncLoop(syncCtx)
 
 	return allocator
 }
@@ -182,10 +170,6 @@ func (s *GpuAllocator) startSyncLoop(ctx context.Context) {
 			// Sync changes back to Kubernetes
 			if err := s.syncToK8s(ctx); err != nil {
 				log.Error(err, "Failed to sync GPU store to Kubernetes")
-			}
-			// Refresh the store from Kubernetes
-			if err := s.initGPUStore(ctx); err != nil {
-				log.Error(err, "Failed to refresh GPU store")
 			}
 		case <-ctx.Done():
 			log.Info("Stopping GPU allocator sync loop")
@@ -271,7 +255,29 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 			}
 			s.handleGPUDelete(ctx, gpu)
 		},
+		UpdateFunc: func(oldObj, newObj any) {
+			newGPU, ok := newObj.(*tfv1.GPU)
+			if !ok {
+				log.Error(fmt.Errorf("unexpected type"), "expected new GPU")
+				return
+			}
+			s.handleGPUUpdate(ctx, newGPU)
+		},
 	})
+
+	mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		// Create a context with cancel function for the sync loop
+		syncCtx, cancel := context.WithCancel(ctx)
+		s.cancel = cancel
+		// Initialize the GPU store
+		if err := s.initGPUStore(ctx); err != nil {
+			log.Error(err, "Failed to initialize GPU store")
+			return err
+		}
+		// Start the background sync goroutine
+		go s.startSyncLoop(syncCtx)
+		return nil
+	}))
 
 	return err
 }
@@ -300,6 +306,28 @@ func (s *GpuAllocator) handleGPUDelete(ctx context.Context, gpu *tfv1.GPU) {
 	// Remove GPU from store
 	delete(s.gpuStore, key)
 	log.V(4).Info("Removed GPU from store", "name", key.Name)
+}
+
+// handleGPUUpdate handles GPU update events
+func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
+	log := log.FromContext(ctx)
+	key := types.NamespacedName{Name: gpu.Name, Namespace: gpu.Namespace}
+
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+
+	if old, ok := s.gpuStore[key]; ok && old != nil {
+		// Keep the Available field in the store
+		newGpu := gpu.DeepCopy()
+		if old.Status.Available != nil {
+			newGpu.Status.Available = old.Status.Available
+		}
+		s.gpuStore[key] = newGpu
+		log.V(4).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
+	} else {
+		s.gpuStore[key] = gpu.DeepCopy()
+		log.V(4).Info("Updated GPU in store (new entry)", "name", key.Name, "phase", gpu.Status.Phase)
+	}
 }
 
 // syncToK8s syncs the in-memory GPU store to Kubernetes

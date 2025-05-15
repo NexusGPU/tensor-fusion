@@ -179,7 +179,10 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	ctx := context.Background()
-	scheduler := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient())
+	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient())
+	err = allocator.SetupWithManager(ctx, mgr)
+	Expect(err).ToNot(HaveOccurred())
+
 	err = (&TensorFusionConnectionReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -196,7 +199,7 @@ var _ = BeforeSuite(func() {
 	err = (&TensorFusionWorkloadReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
-		Scheduler: scheduler,
+		Allocator: allocator,
 		Recorder:  mgr.GetEventRecorderFor("TensorFusionWorkload"),
 		GpuInfos:  config.MockGpuInfo(),
 	}).SetupWithManager(mgr)
