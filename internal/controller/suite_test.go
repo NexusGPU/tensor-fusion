@@ -46,7 +46,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
-	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	// +kubebuilder:scaffold:imports
 )
@@ -178,7 +178,8 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
-	scheduler := scheduler.NewScheduler(mgr.GetClient())
+	ctx := context.Background()
+	scheduler := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient())
 	err = (&TensorFusionConnectionReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),

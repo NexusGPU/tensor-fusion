@@ -33,8 +33,8 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
-	scheduler "github.com/NexusGPU/tensor-fusion/internal/scheduler"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
 	"github.com/lithammer/shortuuid/v4"
@@ -46,7 +46,7 @@ import (
 type TensorFusionWorkloadReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Scheduler scheduler.Scheduler
+	Scheduler *gpuallocator.GpuAllocator
 	Recorder  record.EventRecorder
 	GpuInfos  *[]config.GpuInfo
 }
@@ -315,7 +315,7 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 	}
 
 	// Release GPU resources
-	if err := r.Scheduler.Release(ctx, workload.Spec.Resources.Requests, gpu); err != nil {
+	if err := r.Scheduler.Dealloc(ctx, workload.Spec.Resources.Requests, gpu); err != nil {
 		log.Error(err, "Failed to release GPU resources, will retry", "gpu", gpuName, "pod", pod.Name)
 		return false, err
 	}
@@ -344,16 +344,19 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 	// Create worker pods
 	for range count {
 		// Schedule GPU for the worker
-		gpu, err := r.Scheduler.Schedule(ctx, workload.Spec.PoolName, workload.Spec.Resources.Requests)
+		gpus, err := r.Scheduler.Alloc(ctx, workload.Spec.PoolName, workload.Spec.Resources.Requests, 1)
 		if err != nil {
 			r.Recorder.Eventf(workload, corev1.EventTypeWarning, "ScheduleGPUFailed", "Failed to schedule GPU: %v", err)
 			return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 		}
 
+		// Use the first GPU from the allocated array
+		gpu := gpus[0]
+
 		pod, err := r.tryStartWorker(ctx, workerGenerator, gpu, workload, hash)
 		if err != nil {
 			// Try to release the GPU resource if pod creation fails
-			releaseErr := r.Scheduler.Release(ctx, workload.Spec.Resources.Requests, gpu)
+			releaseErr := r.Scheduler.Dealloc(ctx, workload.Spec.Resources.Requests, gpu)
 			if releaseErr != nil {
 				log.Error(releaseErr, "Failed to release GPU after pod creation failure")
 			}
