@@ -178,9 +178,7 @@ func (s *GpuAllocator) startSyncLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			// Sync changes back to Kubernetes
-			if err := s.syncToK8s(ctx); err != nil {
-				log.Error(err, "Failed to sync GPU store to Kubernetes")
-			}
+			s.syncToK8s(ctx)
 		case <-ctx.Done():
 			log.Info("Stopping GPU allocator sync loop")
 			return
@@ -353,7 +351,8 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 }
 
 // syncToK8s syncs the modified GPUs from in-memory store to Kubernetes
-func (s *GpuAllocator) syncToK8s(ctx context.Context) error {
+func (s *GpuAllocator) syncToK8s(ctx context.Context) {
+	log := log.FromContext(ctx)
 	s.dirtyQueueLock.Lock()
 	// Get all dirty GPUs and clear the queue
 	dirtyGPUs := make([]types.NamespacedName, 0, len(s.dirtyQueue))
@@ -365,7 +364,7 @@ func (s *GpuAllocator) syncToK8s(ctx context.Context) error {
 
 	// No dirty GPUs to sync
 	if len(dirtyGPUs) == 0 {
-		return nil
+		return
 	}
 
 	s.storeMutex.RLock()
@@ -376,15 +375,18 @@ func (s *GpuAllocator) syncToK8s(ctx context.Context) error {
 		if !exists {
 			continue
 		}
-		// Create a copy to avoid modifying the cache
+		// Create a copy to avoid modifying the memory store directly
 		gpuCopy := gpu.DeepCopy()
 
 		// Update the GPU status in Kubernetes
 		if err := s.Status().Update(ctx, gpuCopy); err != nil {
-			return fmt.Errorf("update GPU %s: %w", gpuCopy.Name, err)
+			// If update fails, put the GPU back in the dirty queue
+			s.dirtyQueueLock.Lock()
+			s.dirtyQueue[key] = struct{}{}
+			s.dirtyQueueLock.Unlock()
+			log.Error(err, "Failed to update GPU status, will retry later", "gpu", key.String())
 		}
 	}
-	return nil
 }
 
 // listGPUsFromPool gets GPUs from the specified pool using the in-memory store

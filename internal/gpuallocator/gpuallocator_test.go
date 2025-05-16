@@ -64,8 +64,7 @@ var _ = Describe("GPU Allocator", func() {
 			Expect(gpus).To(HaveLen(1))
 
 			// Explicitly call syncToK8s to persist changes before verification
-			err = allocator.syncToK8s(ctx)
-			Expect(err).NotTo(HaveOccurred())
+			allocator.syncToK8s(ctx)
 
 			// Verify resources were reduced on the allocated GPU
 			gpu := getGPU(gpus[0].Name, gpus[0].Namespace)
