@@ -41,6 +41,10 @@ type GpuAllocator struct {
 	storeMutex   sync.RWMutex
 	syncInterval time.Duration
 	cancel       context.CancelFunc
+
+	// Queue for tracking modified GPUs that need to be synced
+	dirtyQueue     map[types.NamespacedName]struct{}
+	dirtyQueueLock sync.Mutex
 }
 
 // Alloc allocates a request to a gpu or multiple gpus from the same node.
@@ -103,6 +107,8 @@ func (s *GpuAllocator) Alloc(
 		// reduce available resource on the GPU status
 		gpu.Status.Available.Tflops.Sub(request.Tflops)
 		gpu.Status.Available.Vram.Sub(request.Vram)
+
+		s.markGPUDirty(key)
 	}
 
 	// Return copies of the selected GPUs from the store
@@ -133,6 +139,8 @@ func (s *GpuAllocator) Dealloc(ctx context.Context, request tfv1.Resource, gpu *
 	storeGPU.Status.Available.Tflops.Add(request.Tflops)
 	storeGPU.Status.Available.Vram.Add(request.Vram)
 
+	s.markGPUDirty(key)
+
 	return nil
 }
 
@@ -154,6 +162,7 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 		filterRegistry: baseRegistry,
 		gpuStore:       make(map[types.NamespacedName]*tfv1.GPU),
 		syncInterval:   syncInterval,
+		dirtyQueue:     make(map[types.NamespacedName]struct{}),
 	}
 
 	return allocator
@@ -343,12 +352,30 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 	}
 }
 
-// syncToK8s syncs the in-memory GPU store to Kubernetes
+// syncToK8s syncs the modified GPUs from in-memory store to Kubernetes
 func (s *GpuAllocator) syncToK8s(ctx context.Context) error {
+	s.dirtyQueueLock.Lock()
+	// Get all dirty GPUs and clear the queue
+	dirtyGPUs := make([]types.NamespacedName, 0, len(s.dirtyQueue))
+	for key := range s.dirtyQueue {
+		dirtyGPUs = append(dirtyGPUs, key)
+	}
+	s.dirtyQueue = make(map[types.NamespacedName]struct{})
+	s.dirtyQueueLock.Unlock()
+
+	// No dirty GPUs to sync
+	if len(dirtyGPUs) == 0 {
+		return nil
+	}
+
 	s.storeMutex.RLock()
 	defer s.storeMutex.RUnlock()
 
-	for _, gpu := range s.gpuStore {
+	for _, key := range dirtyGPUs {
+		gpu, exists := s.gpuStore[key]
+		if !exists {
+			continue
+		}
 		// Create a copy to avoid modifying the cache
 		gpuCopy := gpu.DeepCopy()
 
@@ -373,4 +400,10 @@ func (s *GpuAllocator) listGPUsFromPool(poolName string) []tfv1.GPU {
 	}
 
 	return result
+}
+
+func (s *GpuAllocator) markGPUDirty(key types.NamespacedName) {
+	s.dirtyQueueLock.Lock()
+	defer s.dirtyQueueLock.Unlock()
+	s.dirtyQueue[key] = struct{}{}
 }

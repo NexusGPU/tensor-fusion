@@ -171,7 +171,7 @@ func main() {
 	ctx := context.Background()
 
 	// Initialize GPU allocator and set up watches
-	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 30*time.Second)
+	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 10*time.Second)
 	if _, err = allocator.SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to set up GPU allocator watches")
 		os.Exit(1)
