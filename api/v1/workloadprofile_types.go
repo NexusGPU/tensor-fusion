@@ -39,8 +39,8 @@ type WorkloadProfileSpec struct {
 	PoolName string `json:"poolName,omitempty"`
 
 	// +optional
-	Resources Resources `json:"resources,omitempty"`
 
+	Resources Resources `json:"resources,omitempty"`
 	// +optional
 	// Qos defines the quality of service level for the client.
 	Qos QoSLevel `json:"qos,omitempty"`
@@ -50,9 +50,8 @@ type WorkloadProfileSpec struct {
 	IsLocalGPU bool `json:"isLocalGPU,omitempty"`
 
 	// +optional
-	// TODO, not implemented
 	// The number of GPUs to be used by the workload, default to 1
-	GPUCount int `json:"gpuCount,omitempty"`
+	GPUCount uint `json:"gpuCount,omitempty"`
 
 	// +optional
 	// TODO, not implemented

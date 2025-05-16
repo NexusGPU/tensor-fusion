@@ -42,6 +42,14 @@ var (
 		labels,
 	)
 
+	GpuCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gpu_count",
+			Help: "Number of GPUs allocated to the workload",
+		},
+		labels,
+	)
+
 	AllocatedTflopsPercent = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "allocated_compute_percentage",
@@ -58,5 +66,13 @@ var (
 )
 
 func init() {
-	metrics.Registry.MustRegister(GpuTflopsRequest, GpuTflopsLimit, VramBytesRequest, VramBytesLimit)
+	metrics.Registry.MustRegister(
+		GpuTflopsRequest,
+		GpuTflopsLimit,
+		VramBytesRequest,
+		VramBytesLimit,
+		AllocatedTflopsPercent,
+		AllocatedVramBytes,
+		GpuCount,
+	)
 }
