@@ -216,7 +216,7 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 	log := log.FromContext(ctx)
 	log.Info("Setting up GPU watches with manager")
 
-	readyCh := make(chan struct{})
+	readyCh := make(chan struct{}, 1)
 
 	// ensure the indexer is set up only once
 	var indexErr error
