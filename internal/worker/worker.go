@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -56,7 +57,7 @@ func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
 }
 
 func (wg *WorkerGenerator) GenerateWorkerPod(
-	gpu *tfv1.GPU,
+	gpus []*tfv1.GPU,
 	generateName string,
 	namespace string,
 	port int,
@@ -69,10 +70,10 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		return nil, "", fmt.Errorf("failed to unmarshal pod template: %w", err)
 	}
 	spec := podTmpl.Template.Spec
-	if spec.NodeSelector == nil {
-		spec.NodeSelector = make(map[string]string)
-	}
-	spec.NodeSelector = gpu.Status.NodeSelector
+
+	// all the gpus are on the same node
+	spec.NodeSelector = gpus[0].Status.NodeSelector
+
 	spec.Volumes = append(spec.Volumes, corev1.Volume{
 		Name: constants.DataVolumeName,
 		VolumeSource: corev1.VolumeSource{
@@ -81,22 +82,28 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 			},
 		},
 	})
+
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, corev1.VolumeMount{
 		Name:        constants.DataVolumeName,
 		MountPath:   constants.TFDataPath,
 		SubPathExpr: fmt.Sprintf("${%s}", constants.WorkerPodNameEnv),
 	})
 
+	firstGPU := gpus[0]
 	info, ok := lo.Find(*wg.GpuInfos, func(info config.GpuInfo) bool {
-		return info.FullModelName == gpu.Status.GPUModel
+		return info.FullModelName == firstGPU.Status.GPUModel
 	})
 	if !ok {
-		return nil, "", fmt.Errorf("gpu info(%s) not found", gpu.Status.GPUModel)
+		return nil, "", fmt.Errorf("gpu info(%s) not found", firstGPU.Status.GPUModel)
 	}
+
+	gpuUUIDs := lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
+		return gpu.Status.UUID
+	})
 
 	spec.Containers[0].Env = append(spec.Containers[0].Env, corev1.EnvVar{
 		Name:  "NVIDIA_VISIBLE_DEVICES",
-		Value: gpu.Status.UUID,
+		Value: strings.Join(gpuUUIDs, ","),
 	}, corev1.EnvVar{
 		Name:  constants.WorkerPortEnv,
 		Value: strconv.Itoa(port),
@@ -118,6 +125,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 			},
 		},
 	})
+
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: generateName,
@@ -136,63 +144,46 @@ func SelectWorker(
 	if len(workload.Status.WorkerStatuses) == 0 {
 		return nil, fmt.Errorf("no available worker")
 	}
-	usageMapping := make(map[string]int, len(workload.Status.WorkerStatuses))
-	for _, workerStatus := range workload.Status.WorkerStatuses {
-		usageMapping[workerStatus.WorkerName] = 0
-	}
+
+	usageMapping := lo.SliceToMap(workload.Status.WorkerStatuses, func(status tfv1.WorkerStatus) (string, int) {
+		return status.WorkerName, 0
+	})
 
 	connectionList := tfv1.TensorFusionConnectionList{}
 	if err := k8sClient.List(ctx, &connectionList, client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
 		return nil, fmt.Errorf("list TensorFusionConnection: %w", err)
 	}
 
-	for _, connection := range connectionList.Items {
-		if connection.Status.WorkerName != "" {
-			usageMapping[connection.Status.WorkerName]++
+	lo.ForEach(connectionList.Items, func(conn tfv1.TensorFusionConnection, _ int) {
+		if conn.Status.WorkerName != "" {
+			usageMapping[conn.Status.WorkerName]++
 		}
-	}
+	})
 
-	// First find the minimum usage
-	minUsage := int(^uint(0) >> 1)
-	// Initialize with max int value
-	for _, workerStatus := range workload.Status.WorkerStatuses {
-		if workerStatus.WorkerPhase == tfv1.WorkerFailed {
-			continue
-		}
-		usage := usageMapping[workerStatus.WorkerName]
-		if usage < minUsage {
-			minUsage = usage
-		}
-	}
+	// filter out failed workers and get the usage of available workers
+	activeWorkers := lo.Filter(workload.Status.WorkerStatuses, func(status tfv1.WorkerStatus, _ int) bool {
+		return status.WorkerPhase != tfv1.WorkerFailed
+	})
 
-	// Collect all eligible workers that are within maxSkew of the minimum usage
-	var eligibleWorkers []*tfv1.WorkerStatus
-	for _, workerStatus := range workload.Status.WorkerStatuses {
-		if workerStatus.WorkerPhase == tfv1.WorkerFailed {
-			continue
-		}
-		usage := usageMapping[workerStatus.WorkerName]
-		// Worker is eligible if its usage is within maxSkew of the minimum usage
-		if usage <= minUsage+int(maxSkew) {
-			eligibleWorkers = append(eligibleWorkers, &workerStatus)
-		}
-	}
-
-	if len(eligibleWorkers) == 0 {
+	if len(activeWorkers) == 0 {
 		return nil, fmt.Errorf("no available worker")
 	}
 
-	// Choose the worker with the minimum usage among eligible workers
-	selectedWorker := eligibleWorkers[0]
-	selectedUsage := usageMapping[selectedWorker.WorkerName]
-	for i := 1; i < len(eligibleWorkers); i++ {
-		worker := eligibleWorkers[i]
-		usage := usageMapping[worker.WorkerName]
-		if usage < selectedUsage {
-			selectedWorker = worker
-			selectedUsage = usage
-		}
-	}
+	// find the worker with the minimum usage
+	minUsage := lo.MinBy(activeWorkers, func(a, b tfv1.WorkerStatus) bool {
+		return usageMapping[a.WorkerName] < usageMapping[b.WorkerName]
+	})
+	minUsageValue := usageMapping[minUsage.WorkerName]
 
-	return selectedWorker, nil
+	// collect all workers within the minimum usage plus maxSkew range
+	eligibleWorkers := lo.Filter(activeWorkers, func(status tfv1.WorkerStatus, _ int) bool {
+		return usageMapping[status.WorkerName] <= minUsageValue+int(maxSkew)
+	})
+
+	// select the worker with the minimum usage among eligible workers
+	selectedWorker := lo.MinBy(eligibleWorkers, func(a, b tfv1.WorkerStatus) bool {
+		return usageMapping[a.WorkerName] < usageMapping[b.WorkerName]
+	})
+
+	return &selectedWorker, nil
 }

@@ -27,6 +27,9 @@ type TensorFusionWorkloadSpec struct {
 	// +optional
 	Resources Resources `json:"resources"`
 	// +optional
+	// The number of GPUs to be used by the workload, default to 1
+	GPUCount uint `json:"gpuCount,omitempty"`
+	// +optional
 	Qos QoSLevel `json:"qos,omitempty"`
 	// +optional
 	IsLocalGPU bool `json:"isLocalGPU,omitempty"`
