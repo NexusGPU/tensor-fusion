@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -311,6 +312,21 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+
+	// cleanup function to stop the allocator
+	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		// wait for the context to be done
+		<-ctx.Done()
+		setupLog.Info("stopping allocator")
+		if allocator != nil {
+			allocator.Stop()
+		}
+		return nil
+	}))
+	if err != nil {
+		setupLog.Error(err, "unable to add allocator cleanup to manager")
+		os.Exit(1)
+	}
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {

@@ -59,6 +59,7 @@ var k8sClient client.Client
 var testEnv *envtest.Environment
 var ctx context.Context
 var cancel context.CancelFunc
+var allocator *gpuallocator.GpuAllocator
 
 const (
 	timeout  = time.Second * 10
@@ -179,7 +180,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	ctx := context.Background()
-	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 3*time.Second)
+	allocator = gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 3*time.Second)
 	_, err = allocator.SetupWithManager(ctx, mgr)
 	Expect(err).ToNot(HaveOccurred())
 
@@ -215,6 +216,7 @@ var _ = BeforeSuite(func() {
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
+	allocator.Stop()
 	cancel()
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
