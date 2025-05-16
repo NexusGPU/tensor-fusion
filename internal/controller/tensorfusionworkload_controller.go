@@ -234,13 +234,17 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 		pod.Labels = make(map[string]string)
 	}
 
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+
 	gpuNames := lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
 		return gpu.Name
 	})
 
 	pod.Labels[constants.WorkloadKey] = workload.Name
-	pod.Labels[constants.GpuKey] = strings.Join(gpuNames, ",")
 	pod.Labels[constants.LabelKeyPodTemplateHash] = hash
+	pod.Annotations[constants.GpuKey] = strings.Join(gpuNames, ",")
 
 	// Add finalizer for GPU resource cleanup
 	pod.Finalizers = append(pod.Finalizers, constants.Finalizer)
@@ -287,8 +291,8 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 
 	log.Info("Processing pod with GPU resource cleanup finalizer", "pod", pod.Name)
 
-	// Get GPU names from pod label
-	gpuNamesStr, ok := pod.Labels[constants.GpuKey]
+	// read the GPU names from the pod annotations
+	gpuNamesStr, ok := pod.Annotations[constants.GpuKey]
 	if !ok {
 		log.Info("Pod has finalizer but no GPU label", "pod", pod.Name)
 		return true, nil
