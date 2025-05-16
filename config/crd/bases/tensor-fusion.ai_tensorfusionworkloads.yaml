@@ -40,6 +40,10 @@ spec:
           spec:
             description: TensorFusionWorkloadSpec defines the desired state of TensorFusionWorkload.
             properties:
+              gpuCount:
+                description: The number of GPUs to be used by the workload, default
+                  to 1
+                type: integer
               isLocalGPU:
                 type: boolean
               poolName:
