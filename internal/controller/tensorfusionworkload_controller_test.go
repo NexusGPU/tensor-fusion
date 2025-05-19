@@ -276,7 +276,7 @@ func createTensorFusionWorkload(poolName string, key client.ObjectKey, replicas 
 				constants.LabelKeyOwner: poolName,
 			},
 		},
-		Spec: tfv1.TensorFusionWorkloadSpec{
+		Spec: tfv1.WorkloadProfileSpec{
 			Replicas: ptr.Int32(int32(replicas)),
 			PoolName: poolName,
 			Resources: tfv1.Resources{

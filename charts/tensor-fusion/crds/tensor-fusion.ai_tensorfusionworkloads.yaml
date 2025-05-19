@@ -38,13 +38,157 @@ spec:
           metadata:
             type: object
           spec:
-            description: TensorFusionWorkloadSpec defines the desired state of TensorFusionWorkload.
+            description: WorkloadProfileSpec defines the desired state of WorkloadProfile.
             properties:
+              autoScalingConfig:
+                description: |-
+                  AutoScalingConfig configured here will override Pool's schedulingConfig
+                  This field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,
+                  user can set tensor-fusion.ai/auto-limits|requests|replicas: 'true'
+                properties:
+                  autoSetLimits:
+                    description: |-
+                      layer 1 vertical auto-scaling, turbo burst to existing GPU cards quickly
+                      VPA-like, aggregate metrics data <1m
+                    properties:
+                      enable:
+                        type: boolean
+                      evaluationPeriod:
+                        type: string
+                      extraTFlopsBufferRatio:
+                        type: string
+                      ignoredDeltaRange:
+                        type: string
+                      maxRatioToRequests:
+                        description: the multiplier of requests, to avoid limit set
+                          too high, like 5.0
+                        type: string
+                      prediction:
+                        properties:
+                          enable:
+                            type: boolean
+                          historyDataPeriod:
+                            type: string
+                          model:
+                            type: string
+                          predictionPeriod:
+                            type: string
+                        type: object
+                      scaleUpStep:
+                        type: string
+                      targetResource:
+                        description: target resource to scale limits, such as "tflops",
+                          "vram", or "all" by default
+                        type: string
+                    type: object
+                  autoSetReplicas:
+                    description: |-
+                      layer 2 horizontal auto-scaling, scale up to more GPU cards if max limits threshold hit
+                      HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
+                    properties:
+                      enable:
+                        type: boolean
+                      evaluationPeriod:
+                        type: string
+                      scaleDownCoolDownTime:
+                        type: string
+                      scaleDownStep:
+                        type: string
+                      scaleUpCoolDownTime:
+                        type: string
+                      scaleUpStep:
+                        type: string
+                      targetTFlopsOfLimits:
+                        type: string
+                    type: object
+                  autoSetRequests:
+                    description: |-
+                      layer 3 adjusting, to match the actual usage in the long run
+                      Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
+                    properties:
+                      aggregationPeriod:
+                        type: string
+                      enable:
+                        type: boolean
+                      evaluationPeriod:
+                        type: string
+                      extraBufferRatio:
+                        description: the request buffer ratio, for example actual
+                          usage is 1.0, 10% buffer will be 1.1 as final preferred
+                          requests
+                        type: string
+                      percentileForAutoRequests:
+                        type: string
+                      prediction:
+                        properties:
+                          enable:
+                            type: boolean
+                          historyDataPeriod:
+                            type: string
+                          model:
+                            type: string
+                          predictionPeriod:
+                            type: string
+                        type: object
+                      targetResource:
+                        description: target resource to scale requests, such as "tflops",
+                          "vram", or "all" by default
+                        type: string
+                    type: object
+                  scaleToZero:
+                    description: |-
+                      additional layer to save VRAM, auto-freeze memory and cool down to RAM and Disk
+                      Hypervisor will monitor and trigger freeze of inactive workers, Operator should mark them as scaled-to-zero and release the GPU pool resources, don't scale down CPU client part, so that they can continue to serve the traffic or scale down by other auto-scaling solutions like KEDA/KNative
+                    properties:
+                      autoFreeze:
+                        items:
+                          properties:
+                            enable:
+                              type: boolean
+                            freezeToDiskTTL:
+                              type: string
+                            freezeToMemTTL:
+                              type: string
+                            qos:
+                              enum:
+                              - low
+                              - medium
+                              - high
+                              - critical
+                              type: string
+                          type: object
+                        type: array
+                      intelligenceWarmup:
+                        properties:
+                          enable:
+                            type: boolean
+                          historyDataPeriod:
+                            type: string
+                          model:
+                            type: string
+                          predictionPeriod:
+                            type: string
+                        type: object
+                    type: object
+                type: object
+              gpuCount:
+                description: The number of GPUs to be used by the workload, default
+                  to 1
+                type: integer
               isLocalGPU:
+                description: Schedule the workload to the same GPU server that runs
+                  vGPU worker for best performance, default to false
+                type: boolean
+              noStandaloneWorkerMode:
+                description: This mode is only available when `is-local-gpu` set to
+                  true, in this mode, TensorFusion will also inject vGPU worker into
+                  init container, so that to achieve best performance, trade-off is
+                  user might by-pass the vGPU worker and using physical GPU directly
                 type: boolean
               poolName:
                 type: string
               qos:
+                description: Qos defines the quality of service level for the client.
                 enum:
                 - low
                 - medium
@@ -96,8 +240,6 @@ spec:
                 - limits
                 - requests
                 type: object
-            required:
-            - poolName
             type: object
           status:
             description: TensorFusionWorkloadStatus defines the observed state of

@@ -577,7 +577,6 @@ spec:
             description: GPUPoolStatus defines the observed state of GPUPool.
             properties:
               allocatedTFlopsPercent:
-                description: updated with interval
                 type: string
               allocatedVRAMPercent:
                 type: string
@@ -706,7 +705,6 @@ spec:
                 format: int32
                 type: integer
               savedCostsPerMonth:
-                description: aggregated with interval
                 type: string
               totalGPUs:
                 format: int32
@@ -727,7 +725,6 @@ spec:
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
               utilizedTFlopsPercent:
-                description: calculated every 5m average
                 type: string
               utilizedVRAMPercent:
                 type: string

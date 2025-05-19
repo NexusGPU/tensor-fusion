@@ -33,6 +33,9 @@ const (
 // WorkloadProfileSpec defines the desired state of WorkloadProfile.
 type WorkloadProfileSpec struct {
 	// +optional
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// +optional
 	PoolName string `json:"poolName,omitempty"`
 
 	// +optional

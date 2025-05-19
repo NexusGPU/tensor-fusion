@@ -20,18 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// TensorFusionWorkloadSpec defines the desired state of TensorFusionWorkload.
-type TensorFusionWorkloadSpec struct {
-	Replicas *int32 `json:"replicas,omitempty"`
-	PoolName string `json:"poolName"`
-	// +optional
-	Resources Resources `json:"resources"`
-	// +optional
-	Qos QoSLevel `json:"qos,omitempty"`
-	// +optional
-	IsLocalGPU bool `json:"isLocalGPU,omitempty"`
-}
-
 type WorkerPhase string
 
 const (
@@ -74,7 +62,7 @@ type TensorFusionWorkload struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   TensorFusionWorkloadSpec   `json:"spec,omitempty"`
+	Spec   WorkloadProfileSpec        `json:"spec,omitempty"`
 	Status TensorFusionWorkloadStatus `json:"status,omitempty"`
 }
 

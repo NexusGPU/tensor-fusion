@@ -279,7 +279,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					Name:      "local-gpu-workload",
 					Namespace: "default",
 				},
-				Spec: tfv1.TensorFusionWorkloadSpec{
+				Spec: tfv1.WorkloadProfileSpec{
 					PoolName:   "mock",
 					IsLocalGPU: true,
 				},

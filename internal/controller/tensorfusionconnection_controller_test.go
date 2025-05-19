@@ -172,7 +172,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					Name:      failWorkloadName,
 					Namespace: "default",
 				},
-				Spec: tfv1.TensorFusionWorkloadSpec{
+				Spec: tfv1.WorkloadProfileSpec{
 					PoolName: "mock-empty",
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{

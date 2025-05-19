@@ -177,7 +177,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 					constants.GpuPoolKey: tfInfo.Profile.PoolName,
 				},
 			},
-			Spec: tfv1.TensorFusionWorkloadSpec{
+			Spec: tfv1.WorkloadProfileSpec{
 				Replicas:   &replicas,
 				PoolName:   tfInfo.Profile.PoolName,
 				Resources:  tfInfo.Profile.Resources,
@@ -204,7 +204,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 
 	// Create the desired spec for comparison
 	replicas := tfInfo.Replicas
-	desiredSpec := tfv1.TensorFusionWorkloadSpec{
+	desiredSpec := tfv1.WorkloadProfileSpec{
 		Replicas:   &replicas,
 		PoolName:   tfInfo.Profile.PoolName,
 		Resources:  tfInfo.Profile.Resources,

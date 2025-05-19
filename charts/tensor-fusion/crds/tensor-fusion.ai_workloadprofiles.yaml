@@ -194,6 +194,9 @@ spec:
                 - high
                 - critical
                 type: string
+              replicas:
+                format: int32
+                type: integer
               resources:
                 properties:
                   limits:

@@ -179,8 +179,10 @@ type SmartSchedulerModelInput struct {
 	PredictionPeriod  string `json:"predictionPeriod,omitempty"`
 }
 
+// Avoid hot GPU devices and continuously balance the workload\nimplemented by trigger a simulation scheduling and advise better GPU nodes for scheduler
 type ReBalancerConfig struct {
-	Internal              string             `json:"internal,omitempty"`
+	Enable                *bool              `json:"enable,omitempty"`
+	Interval              string             `json:"interval,omitempty"`
 	ReBalanceCoolDownTime string             `json:"reBalanceCoolDownTime,omitempty"`
 	Threshold             ReBalanceThreshold `json:"threshold,omitempty"`
 }
@@ -194,8 +196,11 @@ type HypervisorScheduling struct {
 }
 
 type MultiProcessQueuing struct {
-	Enable               *bool    `json:"enable,omitempty"`
-	Interval             string   `json:"interval,omitempty"`
+	// +optional
+	Enable *bool `json:"enable,omitempty"`
+
+	Interval string `json:"interval,omitempty"`
+
 	QueueLevelTimeSlices []string `json:"queueLevelTimeSlices,omitempty"`
 }
 

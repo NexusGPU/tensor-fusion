@@ -226,7 +226,9 @@ spec:
                   avoid hot GPU devices and continuously balance the workload
                   implemented by trigger a simulation scheduling and advise better GPU nodes for scheduler
                 properties:
-                  internal:
+                  enable:
+                    type: boolean
+                  interval:
                     type: string
                   reBalanceCoolDownTime:
                     type: string
