@@ -28,7 +28,7 @@ data:
     - model: T4
       fullModelName: "Tesla T4"
       vendor: NVIDIA
-      costPerHour: 0.53
+      costPerHour: 0.3
       fp16TFlops: 65
 
     # Ampere Architecture Series
@@ -96,19 +96,19 @@ data:
     - model: A40
       fullModelName: "NVIDIA A40 48GB PCIe"
       vendor: NVIDIA
-      costPerHour: 0.44
+      costPerHour: 0.4
       fp16TFlops: 149.7
 
     - model: A6000
       fullModelName: "NVIDIA RTX A6000"
       vendor: NVIDIA
-      costPerHour: 0.48
+      costPerHour: 0.49
       fp16TFlops: 38.71
 
     - model: A6000Ada
       fullModelName: "NVIDIA RTX 6000 Ada Generation"
       vendor: NVIDIA
-      costPerHour: 0.95
+      costPerHour: 0.77
       fp16TFlops: 323
 
     # NVIDIA RTX Series
@@ -183,37 +183,37 @@ data:
     - model: RTX3070
       fullModelName: "NVIDIA GeForce RTX 3070"
       vendor: NVIDIA
-      costPerHour: 0.08
+      costPerHour: 0.1
       fp16TFlops: 40.6
     
     - model: RTX3070Ti
       fullModelName: "NVIDIA GeForce RTX 3070 Ti"
       vendor: NVIDIA
-      costPerHour: 0.09
+      costPerHour: 0.1
       fp16TFlops: 43.6
     
     - model: RTX3080
       fullModelName: "NVIDIA GeForce RTX 3080 (10 GB)"
       vendor: NVIDIA
-      costPerHour: 0.13
+      costPerHour: 0.18
       fp16TFlops: 59.6
     
     - model: RTX3080_12GB
       fullModelName: "NVIDIA GeForce RTX 3080 (12 GB)"
       vendor: NVIDIA
-      costPerHour: 0.14
+      costPerHour: 0.2
       fp16TFlops: 61.2
     
     - model: RTX3080Ti
       fullModelName: "NVIDIA GeForce RTX 3080 Ti"
       vendor: NVIDIA
-      costPerHour: 0.14
+      costPerHour: 0.18
       fp16TFlops: 68.2
     
     - model: RTX3090
       fullModelName: "NVIDIA GeForce RTX 3090"
       vendor: NVIDIA
-      costPerHour: 0.2
+      costPerHour: 0.25
       fp16TFlops: 71.2
     
     - model: RTX3090Ti
@@ -324,14 +324,21 @@ data:
     - model: H800_NVL
       fullModelName: "NVIDIA H800 NVL"
       vendor: NVIDIA
-      costPerHour: 2.99
-      fp16TFlops: 989
+      costPerHour: 2.79
+      fp16TFlops: 835
     
     - model: H20
       fullModelName: "NVIDIA H20"
       vendor: NVIDIA
       costPerHour: 1.00
       fp16TFlops: 148
+
+    # higher mem bandwidth and vram size(141G) than H100
+    - model: H200
+      fullModelName: "NVIDIA H200 80GB HBM3"
+      vendor: NVIDIA
+      costPerHour: 3.99
+      fp16TFlops: 989
 
     - model: H800_PCIe
       fullModelName: "NVIDIA H800 PCIe"
@@ -349,39 +356,81 @@ data:
     - model: B200_SXM
       fullModelName: "NVIDIA B200 SXM"
       vendor: NVIDIA
-      costPerHour: 10.99 # unknown price,on-request
+      costPerHour: 6.39 # unknown price,on-request
       fp16TFlops: 2250
+
+    - model: RTX_5090
+      fullModelName: "NVIDIA GeForce RTX 5090"
+      vendor: NVIDIA
+      costPerHour: 0.89
+      fp16TFlops: 419.2
+  
+    - model: RTX_5090D
+      fullModelName: "NVIDIA GeForceRTX 5090D"
+      vendor: NVIDIA
+      costPerHour: 0.65
+      fp16TFlops: 380
+    
+    - model: RTX_5080
+      fullModelName: "NVIDIA GeForce RTX 5080"
+      vendor: NVIDIA
+      costPerHour: 0.3
+      fp16TFlops: 225
+
+    - model: RTX_5070Ti
+      fullModelName: "NVIDIA GeForce RTX 5070 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.4
+      fp16TFlops: 177.4
+
+    - model: RTX_5070
+      fullModelName: "NVIDIA GeForce RTX 5070"
+      vendor: NVIDIA
+      costPerHour: 0.3
+      fp16TFlops: 124
+
+    - model: RTX_5060Ti
+      fullModelName: "NVIDIA GeForce RTX 5060 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.25
+      fp16TFlops: 91
+
+    - model: RTX_5060
+      fullModelName: "NVIDIA GeForce RTX 5060"
+      vendor: NVIDIA
+      costPerHour: 0.18
+      fp16TFlops: 75
 
     # NVIDIA Quadro RTX Ampere Series
     - model: RTXA2000
       fullModelName: "NVIDIA RTX A2000"
       vendor: NVIDIA
-      costPerHour: 0.15
-      fp16TFlops: 7.99
+      costPerHour: 0.1
+      fp16TFlops: 32
     
     - model: RTXA4000
       fullModelName: "NVIDIA RTX A4000"
       vendor: NVIDIA
-      costPerHour: 0.25
-      fp16TFlops: 19.17
+      costPerHour: 0.24
+      fp16TFlops: 76.5
     
     - model: RTXA4500
       fullModelName: "NVIDIA RTX A4500"
       vendor: NVIDIA
-      costPerHour: 0.3
-      fp16TFlops: 23.65
+      costPerHour: 0.23
+      fp16TFlops: 94.5
     
     - model: RTXA5000
       fullModelName: "NVIDIA RTX A5000"
       vendor: NVIDIA
-      costPerHour: 0.35
-      fp16TFlops: 27.8
+      costPerHour: 0.26
+      fp16TFlops: 111
     
     - model: RTX4000AdaGen
       fullModelName: "NVIDIA RTX 4000 Ada Generation"
       vendor: NVIDIA
-      costPerHour: 0.28
-      fp16TFlops: 26.7
+      costPerHour: 0.26
+      fp16TFlops: 163
 
     # NVIDIA GTX Series
     - model: GTX1050Ti
