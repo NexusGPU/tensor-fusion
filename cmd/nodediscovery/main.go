@@ -143,13 +143,19 @@ func main() {
 		})
 		tflops := info.Fp16TFlops
 		if !ok {
-			ctrl.Log.Info(
-				"[Error] Unknown GPU model, please update `gpu-public-gpu-info` configMap "+
-					" to match your GPU model name in `nvidia-smi`, this may cause you workload stuck, "+
-					"refer this doc to resolve it in detail: "+
-					"https://tensor-fusion.ai/guide/troubleshooting/handbook"+
-					"#pod-stuck-in-starting-status-after-enabling-tensorfusion",
-				"deviceName", deviceName, "uuid", uuid)
+			if deviceName == "NVIDIA Graphics Device" {
+				ctrl.Log.Info(
+					"[Error] GPU name can not be retrieved, please try upgrade to newer driver on your GPU nodes, "+
+						"refer: https://www.nvidia.com/en-us/drivers/", "device uuid", uuid)
+			} else {
+				ctrl.Log.Info(
+					"[Error] Unknown GPU model, please update `gpu-public-gpu-info` configMap "+
+						" to match your GPU model name in `nvidia-smi`, this may cause you workload stuck, "+
+						"refer this doc to resolve it in detail: "+
+						"https://tensor-fusion.ai/guide/troubleshooting/handbook"+
+						"#pod-stuck-in-starting-status-after-enabling-tensorfusion",
+					"deviceName", deviceName, "uuid", uuid)
+			}
 			os.Exit(1)
 		} else {
 			ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
