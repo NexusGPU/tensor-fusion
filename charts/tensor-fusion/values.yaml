@@ -32,6 +32,9 @@ controller:
     tag: "latest"
   # This is for setting Kubernetes Annotations to a Pod.
   # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/ 
+  
+  vectorAgentImage: docker.io/timberio/vector:latest-alpine
+
   podAnnotations: {}
   tolerations: []
   affinity: {}
@@ -44,7 +47,6 @@ controller:
     secretName: tensor-fusion-webhook-secret
     patch:
       image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0
-
 greptime:
   isCloud: false
   host: greptimedb-standalone.greptimedb.svc.cluster.local

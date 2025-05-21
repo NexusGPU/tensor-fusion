@@ -74,7 +74,7 @@ spec:
             {{- toYaml .Values.agent.resources | nindent 12 }}
         {{- end }}
         - name: vector
-          image: docker.io/timberio/vector:latest-alpine
+          image: {{ .Values.controller.vectorAgentImage }}
           env:
             - name: NODE_NAME
               valueFrom:

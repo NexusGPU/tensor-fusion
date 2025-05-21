@@ -84,6 +84,11 @@
           },
           "required": ["repository"]
         },
+        "vectorAgentImage": {
+          "type": "string",
+          "description": "Tag for the vector agent, for collecting metrics to TSDB",
+          "default": "docker.io/timberio/vector:latest-alpine"
+        },
         "podAnnotations": {
           "type": "object",
           "description": "Annotations to add to the controller pods",

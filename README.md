@@ -21,6 +21,7 @@
 [![Issues][issues-shield]][issues-url]
 [![MIT License][license-shield]][license-url]
 [![LinkedIn][linkedin-shield]][linkedin-url]
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NexusGPU/tensor-fusion)
 
 Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** designed to optimize GPU cluster utilization to its fullest potential.
 
