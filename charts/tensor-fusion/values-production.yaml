@@ -1,0 +1,22 @@
+controller:
+  replicaCount: 2
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 1000m
+    limits:
+      memory: 4Gi
+      cpu: 4000m
+
+# Bring your own Greptime in production for HA
+greptime:
+  installStandalone: false
+
+agent:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 256Mi
+    limits:
+      cpu: 4000m
+      memory: 2Gi
