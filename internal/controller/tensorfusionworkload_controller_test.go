@@ -70,7 +70,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 						constants.LabelKeyOwner: pool.Name,
 					},
 				},
-				Spec: tfv1.TensorFusionWorkloadSpec{
+				Spec: tfv1.WorkloadProfileSpec{
 					Replicas: ptr.Int32(1),
 					PoolName: pool.Name,
 					GPUCount: 2,
