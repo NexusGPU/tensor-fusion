@@ -109,14 +109,35 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		Value: strconv.Itoa(port),
 	}, corev1.EnvVar{
 		Name:  constants.WorkerCudaUpLimitTflopsEnv,
-		Value: strconv.FormatInt(limits.Tflops.Value(), 10),
+		Value: func() string {
+			tflopsMap := make(map[string]int64)
+			for _, gpu := range gpus {
+				tflopsMap[gpu.Status.UUID] = limits.Tflops.Value()
+			}
+			jsonBytes, _ := json.Marshal(tflopsMap)
+			return string(jsonBytes)
+		}(),
 	}, corev1.EnvVar{
 		Name:  constants.WorkerCudaUpLimitEnv,
-		Value: strconv.FormatInt(int64(math.Ceil(float64(limits.Tflops.Value())/float64(info.Fp16TFlops.Value())*100)), 10),
+		Value: func() string {
+			upLimitMap := make(map[string]int64)
+			for _, gpu := range gpus {
+				upLimitMap[gpu.Status.UUID] = int64(math.Ceil(float64(limits.Tflops.Value())/float64(info.Fp16TFlops.Value())*100))
+			}
+			jsonBytes, _ := json.Marshal(upLimitMap)
+			return string(jsonBytes)
+		}(),
 	}, corev1.EnvVar{
 		Name: constants.WorkerCudaMemLimitEnv,
 		// bytesize
-		Value: strconv.FormatInt(limits.Vram.Value(), 10),
+		Value: func() string {
+			memLimitMap := make(map[string]int64)
+			for _, gpu := range gpus {
+				memLimitMap[gpu.Status.UUID] = limits.Vram.Value()
+			}
+			jsonBytes, _ := json.Marshal(memLimitMap)
+			return string(jsonBytes)
+		}(),
 	}, corev1.EnvVar{
 		Name: constants.WorkerPodNameEnv,
 		ValueFrom: &corev1.EnvVarSource{
