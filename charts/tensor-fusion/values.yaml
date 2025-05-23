@@ -32,19 +32,41 @@ controller:
     tag: "latest"
   # This is for setting Kubernetes Annotations to a Pod.
   # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/ 
+  
+  vectorAgentImage: docker.io/timberio/vector:latest-alpine
+
   podAnnotations: {}
   tolerations: []
   affinity: {}
-  # livenessProbe: {}
-  # readinessProbe: {}
-  # resources: {}
-  
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 8081
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 5
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: 8081
+    initialDelaySeconds: 5
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 2
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 50m
+    limits:
+      memory: 2Gi
+      cpu: 2000m
+
   admissionWebhooks:
     failurePolicy: Fail
     secretName: tensor-fusion-webhook-secret
     patch:
       image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0
-
 greptime:
   isCloud: false
   host: greptimedb-standalone.greptimedb.svc.cluster.local

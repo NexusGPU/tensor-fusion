@@ -392,14 +392,14 @@ data:
     - model: RTX_5060Ti
       fullModelName: "NVIDIA GeForce RTX 5060 Ti"
       vendor: NVIDIA
-      costPerHour: 0.25
-      fp16TFlops: 91
+      costPerHour: 0.2
+      fp16TFlops: 51
 
     - model: RTX_5060
       fullModelName: "NVIDIA GeForce RTX 5060"
       vendor: NVIDIA
       costPerHour: 0.18
-      fp16TFlops: 75
+      fp16TFlops: 42
 
     # NVIDIA Quadro RTX Ampere Series
     - model: RTXA2000

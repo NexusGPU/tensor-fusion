@@ -3,7 +3,6 @@ kind: ClusterRole
 metadata:
   name: {{ include "tensor-fusion.fullname" . }}-role
 rules:
-rules:
 - apiGroups:
   - ""
   resources:
