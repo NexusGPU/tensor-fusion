@@ -108,7 +108,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		Name:  constants.WorkerPortEnv,
 		Value: strconv.Itoa(port),
 	}, corev1.EnvVar{
-		Name:  constants.WorkerCudaUpLimitTflopsEnv,
+		Name: constants.WorkerCudaUpLimitTflopsEnv,
 		Value: func() string {
 			tflopsMap := make(map[string]int64)
 			for _, gpu := range gpus {
@@ -118,11 +118,11 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 			return string(jsonBytes)
 		}(),
 	}, corev1.EnvVar{
-		Name:  constants.WorkerCudaUpLimitEnv,
+		Name: constants.WorkerCudaUpLimitEnv,
 		Value: func() string {
 			upLimitMap := make(map[string]int64)
 			for _, gpu := range gpus {
-				upLimitMap[gpu.Status.UUID] = int64(math.Ceil(float64(limits.Tflops.Value())/float64(info.Fp16TFlops.Value())*100))
+				upLimitMap[gpu.Status.UUID] = int64(math.Ceil(float64(limits.Tflops.Value()) / float64(info.Fp16TFlops.Value()) * 100))
 			}
 			jsonBytes, _ := json.Marshal(upLimitMap)
 			return string(jsonBytes)
