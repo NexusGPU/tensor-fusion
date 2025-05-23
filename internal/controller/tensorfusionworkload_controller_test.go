@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"time"
 
 	"github.com/aws/smithy-go/ptr"
@@ -55,6 +56,51 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			workload := createTensorFusionWorkload(pool.Name, key, replicas)
 
 			checkWorkerPodCount(workload)
+			checkWorkloadStatus(workload)
+		})
+
+		It("Should allocate multiple GPUs per workload when GPUCount > 1", func() {
+			pool := tfEnv.GetGPUPool(0)
+			By("creating a workload that requests 2 GPUs")
+			workload := &tfv1.TensorFusionWorkload{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      key.Name,
+					Namespace: key.Namespace,
+					Labels: map[string]string{
+						constants.LabelKeyOwner: pool.Name,
+					},
+				},
+				Spec: tfv1.WorkloadProfileSpec{
+					Replicas: ptr.Int32(1),
+					PoolName: pool.Name,
+					GPUCount: 2,
+					Resources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							Tflops: resource.MustParse("10"),
+							Vram:   resource.MustParse("8Gi"),
+						},
+						Limits: tfv1.Resource{
+							Tflops: resource.MustParse("20"),
+							Vram:   resource.MustParse("16Gi"),
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
+
+			// Check that pod is created with 2 GPUs
+			podList := &corev1.PodList{}
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.List(ctx, podList,
+					client.InNamespace(key.Namespace),
+					client.MatchingLabels{constants.WorkloadKey: key.Name})).Should(Succeed())
+				g.Expect(podList.Items).Should(HaveLen(1))
+
+				gpuNames := strings.Split(podList.Items[0].Annotations[constants.GpuKey], ",")
+				g.Expect(gpuNames).Should(HaveLen(2))
+			}, timeout, interval).Should(Succeed())
+
 			checkWorkloadStatus(workload)
 		})
 	})
