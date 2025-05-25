@@ -273,7 +273,7 @@ func createTensorFusionWorkload(poolName string, key client.ObjectKey, replicas 
 			Name:      key.Name,
 			Namespace: key.Namespace,
 			Labels: map[string]string{
-				constants.LabelKeyOwner: poolName,
+				constants.GpuPoolKey: poolName,
 			},
 		},
 		Spec: tfv1.WorkloadProfileSpec{

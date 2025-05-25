@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -32,6 +31,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -256,7 +256,7 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 
 		node.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
 
-		if !reflect.DeepEqual(node.Status, statusCopy) {
+		if !equality.Semantic.DeepEqual(node.Status, statusCopy) {
 			err = r.Status().Update(ctx, node)
 			if err != nil {
 				return true, fmt.Errorf("failed to update GPU node status: %w", err)

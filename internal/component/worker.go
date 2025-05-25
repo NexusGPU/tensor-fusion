@@ -68,7 +68,7 @@ func (w *Worker) GetResourcesInfo(r client.Client, ctx context.Context, pool *tf
 	log := log.FromContext(ctx)
 	workloadList := &tfv1.TensorFusionWorkloadList{}
 	if err := r.List(ctx, workloadList, client.MatchingLabels(map[string]string{
-		constants.LabelKeyOwner: pool.Name,
+		constants.GpuPoolKey: pool.Name,
 	})); err != nil {
 		return 0, 0, false, fmt.Errorf("failed to list workloads : %w", err)
 	}
@@ -85,7 +85,7 @@ func (w *Worker) GetResourcesInfo(r client.Client, ctx context.Context, pool *tf
 			log.Info("workload in pending status", "name", workload.Name)
 			return 0, 0, true, nil
 		}
-		podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec.Resources.Limits)
+		podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec)
 		if err != nil {
 			return 0, 0, false, fmt.Errorf("failed to get pod template hash: %w", err)
 		}

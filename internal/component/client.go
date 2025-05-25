@@ -68,8 +68,8 @@ func (c *Client) GetResourcesInfo(r client.Client, ctx context.Context, pool *tf
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList,
 		client.MatchingLabels{
-			constants.TensorFusionEnabledLabelKey:                              constants.LabelValueTrue,
-			fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): constants.LabelValueTrue,
+			constants.TensorFusionEnabledLabelKey: constants.TrueStringValue,
+			constants.GpuPoolKey:                  pool.Name,
 		}); err != nil {
 		return 0, 0, false, fmt.Errorf("failed to list pods: %w", err)
 	}

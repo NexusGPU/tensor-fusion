@@ -695,9 +695,9 @@ func createClientPodByIndex(tfEnv *TensorFusionEnv, index int) {
 			Name:      getClientPodName(index),
 			Namespace: utils.CurrentNamespace(),
 			Labels: map[string]string{
-				constants.TensorFusionEnabledLabelKey:                              constants.LabelValueTrue,
-				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): constants.LabelValueTrue,
-				constants.LabelKeyPodTemplateHash:                                  utils.GetObjectHash(pool.Spec.ComponentConfig.Client),
+				constants.TensorFusionEnabledLabelKey: constants.TrueStringValue,
+				constants.GpuPoolKey:                  pool.Name,
+				constants.LabelKeyPodTemplateHash:     utils.GetObjectHash(pool.Spec.ComponentConfig.Client),
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -727,9 +727,9 @@ func createClientPods(tfEnv *TensorFusionEnv, count int) {
 				Name:      getClientPodName(i),
 				Namespace: utils.CurrentNamespace(),
 				Labels: map[string]string{
-					constants.TensorFusionEnabledLabelKey:                              constants.LabelValueTrue,
-					fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): constants.LabelValueTrue,
-					constants.LabelKeyPodTemplateHash:                                  utils.GetObjectHash(pool.Spec.ComponentConfig.Client),
+					constants.TensorFusionEnabledLabelKey: constants.TrueStringValue,
+					constants.GpuPoolKey:                  pool.Name,
+					constants.LabelKeyPodTemplateHash:     utils.GetObjectHash(pool.Spec.ComponentConfig.Client),
 				},
 			},
 			Spec: corev1.PodSpec{

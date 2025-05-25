@@ -124,12 +124,6 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		nodeSelector = workloadStatus.NodeSelector
 	}
 
-	if pod.Labels == nil {
-		pod.Labels = map[string]string{}
-	}
-	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(pool.Spec.ComponentConfig)
-	pod.Labels[constants.LabelKeyOwner] = pool.Name
-
 	// Inject initContainer and env variables
 	patches, err := m.patchTFClient(pod, pool, tfInfo.ContainerNames, nodeSelector)
 	if err != nil {
@@ -262,13 +256,14 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		}
 	}
 
+	clientConfig := pool.Spec.ComponentConfig.Client
+
 	if pod.Labels == nil {
 		pod.Labels = map[string]string{}
 	}
-	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(pool.Spec.ComponentConfig)
-	pod.Labels[fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name)] = constants.LabelValueTrue
+	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(clientConfig)
+	pod.Labels[constants.GpuPoolKey] = pool.Name
 
-	clientConfig := pool.Spec.ComponentConfig.Client
 	containerPatched := false
 	// Patch to Container
 	for _, name := range containerNames {
