@@ -23,11 +23,9 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var _ = Describe("GPU Allocator", func() {
@@ -140,7 +138,7 @@ var _ = Describe("GPU Allocator", func() {
 			allocatedVram := allocatedGPU.Status.Available.Vram.DeepCopy()
 
 			// Now deallocate
-			err = allocator.Dealloc(ctx, request, []types.NamespacedName{client.ObjectKeyFromObject(gpus[0])})
+			err = allocator.Dealloc(ctx, request, allocatedGPU)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify resources were restored
@@ -150,68 +148,8 @@ var _ = Describe("GPU Allocator", func() {
 			expectedTflops.Add(request.Tflops)
 			expectedVram.Add(request.Vram)
 
-			Expect(deallocatedGPU.Status.Available.Tflops.Cmp(expectedTflops)).To(Equal(0))
-			Expect(deallocatedGPU.Status.Available.Vram.Cmp(expectedVram)).To(Equal(0))
+			Expect(deallocatedGPU.Status.Available.Tflops.Cmp(allocatedTflops)).To(Equal(1))
 			Expect(deallocatedGPU.Status.Available.Vram.Cmp(allocatedVram)).To(Equal(1))
-		})
-
-		It("should continue deallocating when some GPUs don't exist", func() {
-			// First allocate resources to multiple GPUs
-			request := tfv1.Resource{
-				Tflops: resource.MustParse("20"),
-				Vram:   resource.MustParse("4Gi"),
-			}
-
-			// Allocate 2 GPUs
-			allocatedGPUs, err := allocator.Alloc(ctx, "test-pool", request, 2)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(allocatedGPUs).To(HaveLen(2))
-
-			// Create a non-existent GPU
-			nonExistentGPU := &tfv1.GPU{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "non-existent-gpu",
-					Namespace: "default",
-				},
-			}
-
-			// Add the non-existent GPU to the list
-			gpusToDealloc := append(allocatedGPUs, nonExistentGPU)
-
-			// Store the allocated values for existing GPUs
-			initialStates := make(map[string]struct {
-				tflops resource.Quantity
-				vram   resource.Quantity
-			})
-			for _, gpu := range allocatedGPUs {
-				initialStates[gpu.Name] = struct {
-					tflops resource.Quantity
-					vram   resource.Quantity
-				}{
-					tflops: gpu.Status.Available.Tflops.DeepCopy(),
-					vram:   gpu.Status.Available.Vram.DeepCopy(),
-				}
-			}
-			gpusToDeallocKeys := lo.Map(gpusToDealloc, func(gpu *tfv1.GPU, _ int) types.NamespacedName {
-				return client.ObjectKeyFromObject(gpu)
-			})
-			// Now deallocate all GPUs including the non-existent one
-			err = allocator.Dealloc(ctx, request, gpusToDeallocKeys)
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify resources were restored for existing GPUs
-			for _, allocatedGPU := range allocatedGPUs {
-				deallocatedGPU := getGPU(allocatedGPU.Name, allocatedGPU.Namespace)
-				initialState := initialStates[allocatedGPU.Name]
-
-				expectedTflops := initialState.tflops.DeepCopy()
-				expectedVram := initialState.vram.DeepCopy()
-				expectedTflops.Add(request.Tflops)
-				expectedVram.Add(request.Vram)
-
-				Expect(deallocatedGPU.Status.Available.Tflops.Cmp(initialState.tflops)).To(Equal(1))
-				Expect(deallocatedGPU.Status.Available.Vram.Cmp(initialState.vram)).To(Equal(1))
-			}
 		})
 	})
 

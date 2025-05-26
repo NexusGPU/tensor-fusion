@@ -121,26 +121,25 @@ func (s *GpuAllocator) Alloc(
 	return result, nil
 }
 
-// Dealloc deallocates a request from one or multiple gpus.
-func (s *GpuAllocator) Dealloc(ctx context.Context, request tfv1.Resource, gpus []types.NamespacedName) error {
+// Dealloc deallocates a request from a gpu.
+func (s *GpuAllocator) Dealloc(ctx context.Context, request tfv1.Resource, gpu *tfv1.GPU) error {
 	log := log.FromContext(ctx)
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
 
-	for _, gpu := range gpus {
-		// Get the GPU from the store
-		storeGPU, exists := s.gpuStore[gpu]
-		if !exists {
-			log.Error(fmt.Errorf("GPU not found in store"), "Failed to deallocate GPU", "name", gpu.String())
-			continue
-		}
-
-		// Add resources back to the GPU
-		storeGPU.Status.Available.Tflops.Add(request.Tflops)
-		storeGPU.Status.Available.Vram.Add(request.Vram)
-
-		s.markGPUDirty(gpu)
+	// Get the GPU from the store
+	key := types.NamespacedName{Name: gpu.Name, Namespace: gpu.Namespace}
+	storeGPU, exists := s.gpuStore[key]
+	if !exists {
+		log.Info("GPU not found in store during deallocation", "name", key.String())
+		return fmt.Errorf("GPU %s not found in store", key.String())
 	}
+
+	// Add resources back to the GPU
+	storeGPU.Status.Available.Tflops.Add(request.Tflops)
+	storeGPU.Status.Available.Vram.Add(request.Vram)
+
+	s.markGPUDirty(key)
 
 	return nil
 }

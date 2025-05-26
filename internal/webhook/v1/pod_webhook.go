@@ -181,7 +181,6 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 				Replicas:   &replicas,
 				PoolName:   tfInfo.Profile.PoolName,
 				Resources:  tfInfo.Profile.Resources,
-				GPUCount:   tfInfo.Profile.GPUCount,
 				Qos:        tfInfo.Profile.Qos,
 				IsLocalGPU: tfInfo.Profile.IsLocalGPU,
 			},

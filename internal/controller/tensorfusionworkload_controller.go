@@ -20,13 +20,11 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -219,12 +217,12 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	ctx context.Context,
 	workerGenerator *worker.WorkerGenerator,
-	gpus []*tfv1.GPU,
+	gpu *tfv1.GPU,
 	workload *tfv1.TensorFusionWorkload,
 	hash string,
 ) (*corev1.Pod, error) {
 	port := workerGenerator.AllocPort()
-	pod, hash, err := workerGenerator.GenerateWorkerPod(gpus, fmt.Sprintf("%s-tf-worker-", workload.Name), workload.Namespace, port, workload.Spec.Resources.Limits, hash)
+	pod, hash, err := workerGenerator.GenerateWorkerPod(gpu, fmt.Sprintf("%s-tf-worker-", workload.Name), workload.Namespace, port, workload.Spec.Resources.Limits, hash)
 	if err != nil {
 		return nil, fmt.Errorf("generate worker pod %w", err)
 	}
@@ -233,18 +231,9 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	if pod.Labels == nil {
 		pod.Labels = make(map[string]string)
 	}
-
-	if pod.Annotations == nil {
-		pod.Annotations = make(map[string]string)
-	}
-
-	gpuNames := lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
-		return gpu.Name
-	})
-
 	pod.Labels[constants.WorkloadKey] = workload.Name
+	pod.Labels[constants.GpuKey] = gpu.Name
 	pod.Labels[constants.LabelKeyPodTemplateHash] = hash
-	pod.Annotations[constants.GpuKey] = strings.Join(gpuNames, ",")
 
 	// Add finalizer for GPU resource cleanup
 	pod.Finalizers = append(pod.Finalizers, constants.Finalizer)
@@ -280,7 +269,6 @@ func (r *TensorFusionWorkloadReconciler) scaleDownWorkers(ctx context.Context, w
 		metrics.GpuTflopsLimit.Delete(labels)
 		metrics.VramBytesRequest.Delete(labels)
 		metrics.VramBytesLimit.Delete(labels)
-		metrics.GpuCount.Delete(labels)
 	}
 	return nil
 }
@@ -291,24 +279,26 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 
 	log.Info("Processing pod with GPU resource cleanup finalizer", "pod", pod.Name)
 
-	// read the GPU names from the pod annotations
-	gpuNamesStr, ok := pod.Annotations[constants.GpuKey]
+	// Get GPU name from pod label
+	gpuName, ok := pod.Labels[constants.GpuKey]
 	if !ok {
 		log.Info("Pod has finalizer but no GPU label", "pod", pod.Name)
 		return true, nil
 	}
 
-	// Split GPU names by comma
-	gpuNames := strings.Split(gpuNamesStr, ",")
-	gpus := lo.Map(gpuNames, func(gpuName string, _ int) types.NamespacedName {
-		return types.NamespacedName{Name: gpuName}
-	})
-	// Release GPU resources
-	if err := r.Allocator.Dealloc(ctx, workload.Spec.Resources.Requests, gpus); err != nil {
-		log.Error(err, "Failed to release GPU resources, will retry", "gpus", gpus, "pod", pod.Name)
+	// Get the GPU
+	gpu := &tfv1.GPU{}
+	if err := r.Get(ctx, client.ObjectKey{Name: gpuName}, gpu); err != nil {
+		if errors.IsNotFound(err) {
+			// GPU not found, just continue
+			log.Info("GPU not found", "gpu", gpuName, "pod", pod.Name)
+			return true, nil
+		}
+		// Error getting GPU, retry later
+		log.Error(err, "Failed to get GPU", "gpu", gpuName, "pod", pod.Name)
 		return false, err
 	}
-	log.Info("Released GPU resources via finalizer", "gpus", gpus, "pod", pod.Name)
+
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
@@ -320,10 +310,17 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 	// not yet reflecting the finalizer's removal), Then this r.Update pod will fail.
 	// Will not cause duplicate releases
 	if err := r.Update(ctx, pod); err != nil {
-		log.Error(err, "Failed to mark that GPU cleanup of pod")
+		log.Error(err, "Failed to mark that GPU cleanup of pod", "gpu", gpuName, "pod", pod.Name)
 		return false, err
 	}
 
+	// Release GPU resources
+	if err := r.Allocator.Dealloc(ctx, workload.Spec.Resources.Requests, gpu); err != nil {
+		log.Error(err, "Failed to release GPU resources, will retry", "gpu", gpuName, "pod", pod.Name)
+		return false, err
+	}
+
+	log.Info("Released GPU resources via finalizer", "gpu", gpuName, "pod", pod.Name)
 	return true, nil
 }
 
@@ -347,21 +344,21 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 	// Create worker pods
 	for range count {
 		// Schedule GPU for the worker
-		gpus, err := r.Allocator.Alloc(ctx, workload.Spec.PoolName, workload.Spec.Resources.Requests, workload.Spec.GPUCount)
+		gpus, err := r.Allocator.Alloc(ctx, workload.Spec.PoolName, workload.Spec.Resources.Requests, 1)
 		if err != nil {
 			r.Recorder.Eventf(workload, corev1.EventTypeWarning, "ScheduleGPUFailed", "Failed to schedule GPU: %v", err)
 			return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 		}
 
-		pod, err := r.tryStartWorker(ctx, workerGenerator, gpus, workload, hash)
+		// Use the first GPU from the allocated array
+		gpu := gpus[0]
+
+		pod, err := r.tryStartWorker(ctx, workerGenerator, gpu, workload, hash)
 		if err != nil {
-			// Try to release all allocated GPUs if pod creation fails
-			gpus := lo.Map(gpus, func(gpu *tfv1.GPU, _ int) types.NamespacedName {
-				return client.ObjectKeyFromObject(gpu)
-			})
-			releaseErr := r.Allocator.Dealloc(ctx, workload.Spec.Resources.Requests, gpus)
+			// Try to release the GPU resource if pod creation fails
+			releaseErr := r.Allocator.Dealloc(ctx, workload.Spec.Resources.Requests, gpu)
 			if releaseErr != nil {
-				log.Error(releaseErr, "Failed to release GPU after pod creation failure", "gpus", gpus)
+				log.Error(releaseErr, "Failed to release GPU after pod creation failure")
 			}
 			return ctrl.Result{}, fmt.Errorf("create worker pod: %w", err)
 		}
@@ -375,7 +372,6 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 		metrics.GpuTflopsLimit.With(labels).Set(workload.Spec.Resources.Limits.Tflops.AsApproximateFloat64())
 		metrics.VramBytesRequest.With(labels).Set(workload.Spec.Resources.Requests.Vram.AsApproximateFloat64())
 		metrics.VramBytesLimit.With(labels).Set(workload.Spec.Resources.Limits.Vram.AsApproximateFloat64())
-		metrics.GpuCount.With(labels).Set(float64(workload.Spec.GPUCount))
 	}
 
 	return ctrl.Result{}, nil

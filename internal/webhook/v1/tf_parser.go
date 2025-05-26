@@ -106,7 +106,7 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 		if err != nil {
 			return info, fmt.Errorf("invalid gpuCount value: %w", err)
 		}
-		workloadProfile.Spec.GPUCount = uint(val)
+		workloadProfile.Spec.GPUCount = int(val)
 	}
 
 	localGPU, ok := pod.Annotations[constants.IsLocalGPUAnnotation]
