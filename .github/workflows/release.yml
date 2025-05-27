@@ -74,6 +74,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           no-cache: true
+          build-args: |
+            GO_LDFLAGS=-X 'main.CurrentVersion=${{ github.event_name == 'workflow_dispatch' && steps.set_tag.outputs.tag || needs.release.outputs.version }}'
 
   publish_node_discovery_image:
     needs:
