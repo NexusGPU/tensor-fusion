@@ -52,9 +52,9 @@ https://cdn.tensor-fusion.ai/GPU_Content_Migration.mp4
 
 ### Onboard Your Own AI Infra
 
-- [Getting Started on Kubernetes](https://tensor-fusion.ai/guide/deployment-k8s)
-- [Getting Started on VM](https://tensor-fusion.ai/guide/deployment-vm)
-- [Deploy Self-hosted Community Edition](https://tensor-fusion.ai/guide/self-host)
+- [Deploy in Kubernetes cluster](https://tensor-fusion.ai/guide/getting-started/deployment-k8s)
+- [Create new cluster in VM/BareMetal](https://tensor-fusion.ai/guide/getting-started/deployment-vm)
+- [Learn Essential Concepts & Architecture](https://tensor-fusion.ai/guide/getting-started/architecture)
 
 <!-- (TODO: Asciinema) -->
 

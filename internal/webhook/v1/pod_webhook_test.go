@@ -549,7 +549,11 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				},
 			}
 
-			patch, err := mutator.patchTFClient(pod, config.MockGPUPoolSpec.ComponentConfig.Client, []string{"test-container"}, nil)
+			pool := &tfv1.GPUPool{
+				Spec: *config.MockGPUPoolSpec,
+			}
+
+			patch, err := mutator.patchTFClient(pod, pool, []string{"test-container"}, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(patch).NotTo(BeEmpty())
 			// There should be at least 2 patches (initContainers and the container env patches)
@@ -584,13 +588,15 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				},
 			}
 
-			clientConfig := &tfv1.ClientConfig{}
+			pool := &tfv1.GPUPool{
+				Spec: *config.MockGPUPoolSpec,
+			}
 			containerNames := []string{"bash-container", "zsh-container", "other-container"}
 			nodeSelector := map[string]string{}
 
 			// Call the function that includes the command transformation
 			mutator := &TensorFusionPodMutator{}
-			patches, err := mutator.patchTFClient(pod, clientConfig, containerNames, nodeSelector)
+			patches, err := mutator.patchTFClient(pod, pool, containerNames, nodeSelector)
 
 			// Verify results
 			Expect(err).NotTo(HaveOccurred())

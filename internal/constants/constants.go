@@ -49,6 +49,9 @@ const (
 	AutoScaleRequestsAnnotation = Domain + "/auto-requests"
 	AutoScaleReplicasAnnotation = Domain + "/auto-replicas"
 
+	// GPUModelAnnotation specifies the required GPU model (e.g., "A100", "H100")
+	GPUModelAnnotation = Domain + "/gpu-model"
+
 	GpuReleasedAnnotation = Domain + "/gpu-released"
 
 	TensorFusionPodCounterKeyAnnotation   = Domain + "/pod-counter-key"

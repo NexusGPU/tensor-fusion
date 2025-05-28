@@ -19,14 +19,18 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/component"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	utils "github.com/NexusGPU/tensor-fusion/internal/utils"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -124,8 +128,11 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	// TODO, when componentConfig changed, it should notify corresponding resource to upgrade
-	// eg. when hypervisor changed, should change all owned GPUNode's status.phase to Updating
+	if ctrlResult, err := r.reconcilePoolComponents(ctx, pool); err != nil {
+		return ctrl.Result{}, err
+	} else if ctrlResult != nil {
+		return *ctrlResult, nil
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -216,6 +223,47 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 		return fmt.Errorf("update pool status: %w", err)
 	}
 	return nil
+}
+
+func (r *GPUPoolReconciler) reconcilePoolComponents(ctx context.Context, pool *tfv1.GPUPool) (*ctrl.Result, error) {
+	if pool.Spec.ComponentConfig == nil {
+		return nil, fmt.Errorf(`missing componentconfig in pool spec`)
+	}
+
+	log := log.FromContext(ctx)
+	startTime := time.Now()
+	log.Info("Started reconciling components", "startTime", startTime)
+	defer func() {
+		log.Info("Finished reconciling components", "duration", time.Since(startTime))
+	}()
+
+	components := []component.Interface{
+		&component.Hypervisor{},
+		&component.Worker{},
+		&component.Client{},
+	}
+
+	errs := []error{}
+	ctrlResults := []*ctrl.Result{}
+	for _, c := range components {
+		ctrlResult, err := component.ManageUpdate(r.Client, ctx, pool, c)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if ctrlResult != nil {
+			ctrlResults = append(ctrlResults, ctrlResult)
+		}
+	}
+
+	var ctrlResult *ctrl.Result
+	if len(ctrlResults) > 0 {
+		sort.Slice(ctrlResults, func(i, j int) bool {
+			return ctrlResults[i].RequeueAfter < ctrlResults[j].RequeueAfter
+		})
+		ctrlResult = ctrlResults[0]
+	}
+
+	return ctrlResult, utilerrors.NewAggregate(errs)
 }
 
 // SetupWithManager sets up the controller with the Manager.

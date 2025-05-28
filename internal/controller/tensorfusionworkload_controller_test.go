@@ -235,6 +235,53 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 		})
 	})
 
+	Context("When specifying GPU model in workload", func() {
+		It("Should allocate GPUs of the specified model", func() {
+			pool := tfEnv.GetGPUPool(0)
+
+			// Create a workload requesting specific GPU model
+			workload := createTensorFusionWorkload(pool.Name, key, 1)
+			Eventually(func(g Gomega) {
+				// Get the latest version of the workload
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(workload), workload)).To(Succeed())
+				// Set the GPU model
+				workload.Spec.GPUModel = "mock"
+				// Update the workload
+				g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+			}, timeout, interval).Should(Succeed())
+
+			checkWorkerPodCount(workload)
+			checkWorkloadStatus(workload)
+
+			// Verify pods got GPUs of the correct model
+			podList := &corev1.PodList{}
+			// First make sure the pod exists
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.List(ctx, podList,
+					client.InNamespace(key.Namespace),
+					client.MatchingLabels{constants.WorkloadKey: key.Name})).Should(Succeed())
+				g.Expect(podList.Items).Should(HaveLen(1))
+			}, timeout, interval).Should(Succeed())
+
+			// Now check if the pod has the correct GPU
+			Eventually(func(g Gomega) {
+				// Get the latest version of the pod
+				pod := &corev1.Pod{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKey{
+					Namespace: podList.Items[0].Namespace,
+					Name:      podList.Items[0].Name,
+				}, pod)).Should(Succeed())
+				gpuName := pod.Labels[constants.GpuKey]
+				gpuList := tfEnv.GetPoolGpuList(0)
+				gpu, ok := lo.Find(gpuList.Items, func(gpu tfv1.GPU) bool {
+					return gpu.Name == gpuName
+				})
+				g.Expect(ok).To(BeTrue())
+				g.Expect(gpu.Status.GPUModel).To(Equal("mock"))
+			}, timeout, interval).Should(Succeed())
+		})
+	})
+
 	Context("When deleting workload directly", func() {
 		It("Should delete all pods and the workload itself", func() {
 			pool := tfEnv.GetGPUPool(0)
@@ -319,7 +366,7 @@ func createTensorFusionWorkload(poolName string, key client.ObjectKey, replicas 
 			Name:      key.Name,
 			Namespace: key.Namespace,
 			Labels: map[string]string{
-				constants.LabelKeyOwner: poolName,
+				constants.GpuPoolKey: poolName,
 			},
 		},
 		Spec: tfv1.WorkloadProfileSpec{

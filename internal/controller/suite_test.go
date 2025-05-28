@@ -63,6 +63,7 @@ var allocator *gpuallocator.GpuAllocator
 
 const (
 	timeout  = time.Second * 10
+	duration = time.Second * 5
 	interval = time.Millisecond * 100
 )
 
@@ -229,6 +230,7 @@ type TensorFusionEnv struct {
 }
 
 func (c *TensorFusionEnv) GetCluster() *tfv1.TensorFusionCluster {
+	GinkgoHelper()
 	tfc := &tfv1.TensorFusionCluster{}
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.Get(ctx, c.clusterKey, tfc)).Should(Succeed())
@@ -237,10 +239,12 @@ func (c *TensorFusionEnv) GetCluster() *tfv1.TensorFusionCluster {
 }
 
 func (c *TensorFusionEnv) UpdateCluster(tfc *tfv1.TensorFusionCluster) {
+	GinkgoHelper()
 	Expect(k8sClient.Update(ctx, tfc)).Should(Succeed())
 }
 
 func (c *TensorFusionEnv) Cleanup() {
+	GinkgoHelper()
 	for poolIndex, nodeGpuMap := range c.poolNodeMap {
 		for nodeIndex := range nodeGpuMap {
 			c.DeleteGPUNode(poolIndex, nodeIndex)
@@ -269,6 +273,7 @@ func (c *TensorFusionEnv) Cleanup() {
 }
 
 func (c *TensorFusionEnv) GetGPUPoolList() *tfv1.GPUPoolList {
+	GinkgoHelper()
 	poolList := &tfv1.GPUPoolList{}
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.List(ctx, poolList, client.MatchingLabels(map[string]string{
@@ -280,14 +285,16 @@ func (c *TensorFusionEnv) GetGPUPoolList() *tfv1.GPUPoolList {
 }
 
 func (c *TensorFusionEnv) GetGPUPool(poolIndex int) *tfv1.GPUPool {
+	GinkgoHelper()
 	pool := &tfv1.GPUPool{}
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.Get(ctx, client.ObjectKey{Name: c.getPoolName(poolIndex)}, pool)).Should(Succeed())
-	}).Should(Succeed())
+	}, timeout, interval).Should(Succeed())
 	return pool
 }
 
 func (c *TensorFusionEnv) GetGPUNodeList(poolIndex int) *tfv1.GPUNodeList {
+	GinkgoHelper()
 	nodeList := &tfv1.GPUNodeList{}
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.List(ctx, nodeList, client.MatchingLabels(map[string]string{
@@ -299,6 +306,7 @@ func (c *TensorFusionEnv) GetGPUNodeList(poolIndex int) *tfv1.GPUNodeList {
 }
 
 func (c *TensorFusionEnv) GetGPUNode(poolIndex int, nodeIndex int) *tfv1.GPUNode {
+	GinkgoHelper()
 	node := &tfv1.GPUNode{}
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.Get(ctx, client.ObjectKey{Name: c.getNodeName(poolIndex, nodeIndex)}, node)).Should(Succeed())
@@ -307,6 +315,7 @@ func (c *TensorFusionEnv) GetGPUNode(poolIndex int, nodeIndex int) *tfv1.GPUNode
 }
 
 func (c *TensorFusionEnv) DeleteGPUNode(poolIndex int, nodeIndex int) {
+	GinkgoHelper()
 	c.DeleteNodeGpuList(poolIndex, nodeIndex)
 	node := c.GetGPUNode(poolIndex, nodeIndex)
 	Expect(k8sClient.Delete(ctx, node)).Should(Succeed())
@@ -317,6 +326,7 @@ func (c *TensorFusionEnv) DeleteGPUNode(poolIndex int, nodeIndex int) {
 }
 
 func (c *TensorFusionEnv) GetNodeGpuList(poolIndex int, nodeIndex int) *tfv1.GPUList {
+	GinkgoHelper()
 	gpuList := &tfv1.GPUList{}
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.List(ctx, gpuList, client.MatchingLabels(map[string]string{
@@ -328,12 +338,14 @@ func (c *TensorFusionEnv) GetNodeGpuList(poolIndex int, nodeIndex int) *tfv1.GPU
 }
 
 func (c *TensorFusionEnv) DeleteNodeGpuList(poolIndex int, nodeIndex int) {
+	GinkgoHelper()
 	Expect(k8sClient.DeleteAllOf(ctx, &tfv1.GPU{},
 		client.MatchingLabels{constants.LabelKeyOwner: c.getNodeName(poolIndex, nodeIndex)},
 	)).Should(Succeed())
 }
 
 func (c *TensorFusionEnv) GetPoolGpuList(poolIndex int) *tfv1.GPUList {
+	GinkgoHelper()
 	gpuList := &tfv1.GPUList{}
 	poolGpuCount := 0
 	for _, gpuCount := range c.poolNodeMap[poolIndex] {
@@ -353,6 +365,7 @@ func (c *TensorFusionEnv) GetPoolGpuList(poolIndex int) *tfv1.GPUList {
 // So the checkStatusAndUpdateVirtualCapacity in gpunode_controller.go checking pod status always pending and the gpunode status can't change to running
 // When using an existing cluster, the test speed go a lot faster, may change later?
 func (c *TensorFusionEnv) UpdateHypervisorStatus() {
+	GinkgoHelper()
 	if os.Getenv("USE_EXISTING_CLUSTER") != "true" {
 		for poolIndex := range c.poolNodeMap {
 			podList := &corev1.PodList{}
@@ -427,6 +440,7 @@ func (b *TensorFusionEnvBuilder) SetGpuCountForNode(nodeIndex int, gpuCount int)
 var testEnvId int = 0
 
 func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
+	GinkgoHelper()
 	b.clusterKey = client.ObjectKey{
 		Name:      fmt.Sprintf("cluster-%d", testEnvId),
 		Namespace: "default",
@@ -463,7 +477,7 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 			constants.LabelKeyOwner: tfc.Name,
 		}))).Should(Succeed())
 		g.Expect(gpuPoolList.Items).Should(HaveLen(b.poolCount))
-	}, timeout*1000, interval).Should(Succeed())
+	}, timeout, interval).Should(Succeed())
 
 	// generate nodes
 	selectors := strings.Split(constants.InitialGPUNodeSelector, "=")

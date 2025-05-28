@@ -125,7 +125,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	}
 
 	// Inject initContainer and env variables
-	patches, err := m.patchTFClient(pod, pool.Spec.ComponentConfig.Client, tfInfo.ContainerNames, nodeSelector)
+	patches, err := m.patchTFClient(pod, pool, tfInfo.ContainerNames, nodeSelector)
 	if err != nil {
 		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
 		return admission.Errored(http.StatusInternalServerError, err)
@@ -225,7 +225,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 
 func (m *TensorFusionPodMutator) patchTFClient(
 	pod *corev1.Pod,
-	clientConfig *tfv1.ClientConfig,
+	pool *tfv1.GPUPool,
 	containerNames []string,
 	nodeSelector map[string]string,
 ) ([]jsonpatch.JsonPatchOperation, error) {
@@ -256,6 +256,14 @@ func (m *TensorFusionPodMutator) patchTFClient(
 			},
 		}
 	}
+
+	clientConfig := pool.Spec.ComponentConfig.Client
+
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(clientConfig)
+	pod.Labels[constants.GpuPoolKey] = pool.Name
 
 	containerPatched := false
 	// Patch to Container

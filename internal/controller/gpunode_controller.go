@@ -31,6 +31,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -206,10 +207,12 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 
 	// Reconcile GPUNode status with hypervisor pod status, when changed
 	if pod.Status.Phase != corev1.PodRunning || !utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady) {
-		node.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
-		err := r.Status().Update(ctx, node)
-		if err != nil {
-			return true, fmt.Errorf("failed to update GPU node status: %w", err)
+		if node.Status.Phase != tfv1.TensorFusionGPUNodePhasePending {
+			node.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
+			err := r.Status().Update(ctx, node)
+			if err != nil {
+				return true, fmt.Errorf("failed to update GPU node status: %w", err)
+			}
 		}
 
 		// Update all GPU devices status to Pending
@@ -228,6 +231,8 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 			// node discovery job not completed, check again
 			return true, nil
 		}
+
+		statusCopy := node.Status.DeepCopy()
 
 		node.Status.AvailableVRAM = resource.Quantity{}
 		node.Status.AvailableTFlops = resource.Quantity{}
@@ -250,9 +255,12 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 		node.Status.VirtualVRAM = virtualVRAM
 
 		node.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
-		err = r.Status().Update(ctx, node)
-		if err != nil {
-			return true, fmt.Errorf("failed to update GPU node status: %w", err)
+
+		if !equality.Semantic.DeepEqual(node.Status, statusCopy) {
+			err = r.Status().Update(ctx, node)
+			if err != nil {
+				return true, fmt.Errorf("failed to update GPU node status: %w", err)
+			}
 		}
 
 		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhaseRunning)
@@ -271,9 +279,10 @@ func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tf
 
 	for _, gpu := range gpuList {
 		if gpu.Status.Phase != state {
+			patch := client.MergeFrom(gpu.DeepCopy())
 			gpu.Status.Phase = state
-			if err := r.Status().Update(ctx, &gpu); err != nil {
-				return fmt.Errorf("failed to update GPU device status: %w", err)
+			if err := r.Status().Patch(ctx, &gpu, patch); err != nil {
+				return fmt.Errorf("failed to patch GPU device status: %w", err)
 			}
 		}
 	}
@@ -376,8 +385,6 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) (string, error) {
 	log := log.FromContext(ctx)
 
-	log.Info("reconciling hypervisor pod")
-
 	if pool.Spec.ComponentConfig == nil || pool.Spec.ComponentConfig.Hypervisor == nil {
 		return "", fmt.Errorf("missing hypervisor config")
 	}
@@ -393,6 +400,10 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tf
 			return "", fmt.Errorf("failed to get current hypervisor pod: %w", err)
 		}
 	} else {
+		if node.Status.Phase == tfv1.TensorFusionGPUNodePhaseRunning {
+			return key.Name, nil
+		}
+
 		if !currentPod.DeletionTimestamp.IsZero() {
 			log.Info("hypervisor pod is being deleted", "name", key.Name)
 			return key.Name, nil
@@ -581,6 +592,7 @@ func (r *GPUNodeReconciler) CalculateVirtualCapacity(node *tfv1.GPUNode, pool *t
 	ramSize, _ := node.Status.NodeInfo.RAMSize.AsInt64()
 
 	virtualVRAM := node.Status.TotalVRAM.DeepCopy()
+	// TODO: panic if not set TFlopsOversellRatio
 	vTFlops := node.Status.TotalTFlops.AsApproximateFloat64() * (float64(pool.Spec.CapacityConfig.Oversubscription.TFlopsOversellRatio) / 100.0)
 
 	virtualVRAM.Add(*resource.NewQuantity(

@@ -61,7 +61,7 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("8Gi"),
 			}
 
-			gpus, err := allocator.Alloc(ctx, "test-pool", request, 1)
+			gpus, err := allocator.Alloc(ctx, "test-pool", request, 1, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(gpus).To(HaveLen(1))
 
@@ -80,7 +80,7 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("4Gi"),
 			}
 
-			gpus, err := allocator.Alloc(ctx, "test-pool", request, 2)
+			gpus, err := allocator.Alloc(ctx, "test-pool", request, 2, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(gpus).To(HaveLen(2))
 
@@ -97,7 +97,7 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("2Gi"),
 			}
 
-			_, err := allocator.Alloc(ctx, "test-pool", request, 10)
+			_, err := allocator.Alloc(ctx, "test-pool", request, 10, "")
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -107,7 +107,7 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("64Gi"),
 			}
 
-			_, err := allocator.Alloc(ctx, "test-pool", request, 1)
+			_, err := allocator.Alloc(ctx, "test-pool", request, 1, "")
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -117,7 +117,24 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("2Gi"),
 			}
 
-			_, err := allocator.Alloc(ctx, "nonexistent-pool", request, 1)
+			_, err := allocator.Alloc(ctx, "nonexistent-pool", request, 1, "")
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should filter GPUs by model", func() {
+			request := tfv1.Resource{
+				Tflops: resource.MustParse("50"),
+				Vram:   resource.MustParse("8Gi"),
+			}
+
+			// Try allocating with a specific GPU model
+			gpus, err := allocator.Alloc(ctx, "test-pool", request, 1, "NVIDIA A100")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gpus).To(HaveLen(1))
+			Expect(gpus[0].Status.GPUModel).To(Equal("NVIDIA A100"))
+
+			// Try allocating with a non-existent GPU model
+			_, err = allocator.Alloc(ctx, "test-pool", request, 1, "NonExistentModel")
 			Expect(err).To(HaveOccurred())
 		})
 	})
@@ -130,7 +147,7 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("6Gi"),
 			}
 
-			gpus, err := allocator.Alloc(ctx, "test-pool", request, 1)
+			gpus, err := allocator.Alloc(ctx, "test-pool", request, 1, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(gpus).To(HaveLen(1))
 

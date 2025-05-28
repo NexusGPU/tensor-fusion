@@ -21,6 +21,7 @@ type TFResource struct {
 	VramRequest         resource.Quantity
 	TflopsLimit         resource.Quantity
 	VramLimit           resource.Quantity
+	GPUModel            string // Required GPU model (e.g., A100, H100)
 }
 
 type TensorFusionInfo struct {
@@ -136,6 +137,11 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 	containerNames := strings.Split(injectContainer, ",")
 	if !ok || len(containerNames) == 0 {
 		return info, fmt.Errorf("inject container not found")
+	}
+
+	gpuModel, ok := pod.Annotations[constants.GPUModelAnnotation]
+	if ok {
+		workloadProfile.Spec.GPUModel = gpuModel
 	}
 
 	info.Profile = &workloadProfile.Spec

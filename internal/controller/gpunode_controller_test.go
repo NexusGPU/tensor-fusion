@@ -85,6 +85,7 @@ var _ = Describe("GPUNode Controller", func() {
 			}, timeout, interval).Should(Succeed())
 
 			tfEnv.Cleanup()
+
 		})
 	})
 })

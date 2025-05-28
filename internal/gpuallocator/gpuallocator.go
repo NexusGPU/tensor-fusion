@@ -53,12 +53,19 @@ func (s *GpuAllocator) Alloc(
 	poolName string,
 	request tfv1.Resource,
 	count uint,
+	gpuModel string,
 ) ([]*tfv1.GPU, error) {
 	// Get GPUs from the pool using the in-memory store
 	poolGPUs := s.listGPUsFromPool(poolName)
 
 	// Add SameNodeFilter if count > 1 to ensure GPUs are from the same node
 	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(request))
+
+	// Add GPU model filter if specified
+	if gpuModel != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(gpuModel))
+	}
+
 	if count > 1 {
 		filterRegistry = filterRegistry.With(filter.NewSameNodeFilter(count))
 	}
