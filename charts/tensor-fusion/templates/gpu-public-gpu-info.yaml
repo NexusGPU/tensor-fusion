@@ -432,6 +432,12 @@ data:
       costPerHour: 0.26
       fp16TFlops: 163
 
+    - model: RTX2000Ada
+      fullModelName: "NVIDIA RTX 2000 Ada Generation"
+      vendor: NVIDIA
+      costPerHour: 0.23
+      fp16TFlops: 46
+
     # NVIDIA GTX Series
     - model: GTX1050Ti
       fullModelName: "NVIDIA GeForce GTX 1050 Ti"

@@ -61,15 +61,18 @@ metadata:
   namespace: greptimedb
   labels:
     app.greptime.io/component: greptimedb-standalone
+    tensor-fusion.ai/component: greptimedb
 spec:
   replicas: 1
   selector:
     matchLabels:
       app.greptime.io/component: greptimedb-standalone
+      tensor-fusion.ai/component: greptimedb
   template:
     metadata:
       labels:
         app.greptime.io/component: greptimedb-standalone
+        tensor-fusion.ai/component: greptimedb
     spec:
       volumes:
         - name: logs

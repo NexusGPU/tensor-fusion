@@ -23,6 +23,7 @@ webhooks:
     resources:
     - pods
   sideEffects: None
+  timeoutSeconds: 30
   objectSelector:
     matchExpressions:
       - key: tensor-fusion.ai/enabled

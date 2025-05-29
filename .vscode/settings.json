@@ -1,5 +1,6 @@
 {
     "cSpell.words": [
+        "alertmanager",
         "alicloud",
         "Aliyun",
         "AMDCDNA",
@@ -7,6 +8,7 @@
         "apimachinery",
         "AWSGPU",
         "batchv",
+        "burstable",
         "CDNA",
         "certificaterequests",
         "certmanager",
@@ -51,6 +53,7 @@
         "NVML",
         "omitempty",
         "onsi",
+        "portallocator",
         "printcolumn",
         "prometheusagents",
         "prometheuses",
