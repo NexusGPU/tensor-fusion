@@ -180,7 +180,7 @@ var _ = Describe("GPU Allocator", func() {
 			}
 
 			// Allocate 2 GPUs
-			allocatedGPUs, err := allocator.Alloc(ctx, "test-pool", request, 2)
+			allocatedGPUs, err := allocator.Alloc(ctx, "test-pool", request, 2, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(allocatedGPUs).To(HaveLen(2))
 
