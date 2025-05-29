@@ -275,10 +275,10 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					Namespace: podList.Items[0].Namespace,
 					Name:      podList.Items[0].Name,
 				}, pod)).Should(Succeed())
-				gpuName := pod.Labels[constants.GpuKey]
+				gpuNames := strings.Split(pod.Annotations[constants.GpuKey], ",")
 				gpuList := tfEnv.GetPoolGpuList(0)
 				gpu, ok := lo.Find(gpuList.Items, func(gpu tfv1.GPU) bool {
-					return gpu.Name == gpuName
+					return gpu.Name == gpuNames[0]
 				})
 				g.Expect(ok).To(BeTrue())
 				g.Expect(gpu.Status.GPUModel).To(Equal("mock"))
