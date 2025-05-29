@@ -54,6 +54,7 @@ type GPUNodeReconciler struct {
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile GPU nodes
 func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -79,6 +80,9 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				return false, err
 			}
 		}
+
+		// remove from metrics map
+		metrics.RemoveNodeMetrics(node.Name)
 
 		switch node.Spec.ManageMode {
 		case tfv1.GPUNodeManageModeAutoSelect:
@@ -231,20 +235,22 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 		node.Status.TotalTFlops = resource.Quantity{}
 		node.Status.TotalVRAM = resource.Quantity{}
 
+		gpuModels := []string{}
+
 		for _, gpu := range gpuList {
 			node.Status.AvailableVRAM.Add(gpu.Status.Available.Vram)
 			node.Status.AvailableTFlops.Add(gpu.Status.Available.Tflops)
 			node.Status.TotalVRAM.Add(gpu.Status.Capacity.Vram)
 			node.Status.TotalTFlops.Add(gpu.Status.Capacity.Tflops)
+			gpuModels = append(gpuModels, gpu.Status.GPUModel)
 		}
-
-		// update metrics to get historical allocation line chart and trending
-		metrics.AllocatedTflopsPercent.WithLabelValues(node.Status.KubernetesNodeName, poolObj.Name).Set((node.Status.TotalTFlops.AsApproximateFloat64() - node.Status.AvailableTFlops.AsApproximateFloat64()) / node.Status.TotalTFlops.AsApproximateFloat64())
-		metrics.AllocatedVramBytes.WithLabelValues(node.Status.KubernetesNodeName, poolObj.Name).Set(node.Status.TotalVRAM.AsApproximateFloat64() - node.Status.AvailableVRAM.AsApproximateFloat64())
 
 		virtualVRAM, virtualTFlops := r.CalculateVirtualCapacity(node, poolObj)
 		node.Status.VirtualTFlops = virtualTFlops
 		node.Status.VirtualVRAM = virtualVRAM
+
+		// update metrics to get historical allocation line chart and trending
+		metrics.SetNodeMetrics(node, poolObj, gpuModels)
 
 		node.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
 
@@ -305,21 +311,24 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 	if err != nil {
 		return fmt.Errorf("unmarshal pod template: %w", err)
 	}
-
-	templateCopy := podTmpl.Template.DeepCopy()
-	if templateCopy.Spec.Affinity == nil {
-		templateCopy.Spec.Affinity = &corev1.Affinity{}
+	tmpl := podTmpl.Template
+	if tmpl.Labels == nil {
+		tmpl.Labels = map[string]string{}
 	}
-	if templateCopy.Spec.Affinity.NodeAffinity == nil {
-		templateCopy.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+	tmpl.Labels[constants.LabelComponent] = constants.ComponentNodeDiscovery
+	if tmpl.Spec.Affinity == nil {
+		tmpl.Spec.Affinity = &corev1.Affinity{}
 	}
-	if templateCopy.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
-		templateCopy.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{
+	if tmpl.Spec.Affinity.NodeAffinity == nil {
+		tmpl.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+	}
+	if tmpl.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		tmpl.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{
 			NodeSelectorTerms: make([]corev1.NodeSelectorTerm, 0),
 		}
 	}
-	templateCopy.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms =
-		append(templateCopy.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms, corev1.NodeSelectorTerm{
+	tmpl.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms =
+		append(tmpl.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms, corev1.NodeSelectorTerm{
 			MatchFields: []corev1.NodeSelectorRequirement{
 				{
 					Key:      "metadata.name",
@@ -329,19 +338,19 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 			},
 		})
 	// allow job to run at any taint Nodes that marked as NoSchedule
-	if templateCopy.Spec.Tolerations == nil {
-		templateCopy.Spec.Tolerations = []corev1.Toleration{}
+	if tmpl.Spec.Tolerations == nil {
+		tmpl.Spec.Tolerations = []corev1.Toleration{}
 	}
-	templateCopy.Spec.Tolerations = append(templateCopy.Spec.Tolerations, corev1.Toleration{
+	tmpl.Spec.Tolerations = append(tmpl.Spec.Tolerations, corev1.Toleration{
 		Key:      "NoSchedule",
 		Operator: corev1.TolerationOpExists,
 	})
 
-	if len(templateCopy.Spec.Containers) > 0 {
-		if len(templateCopy.Spec.Containers[0].Env) == 0 {
-			templateCopy.Spec.Containers[0].Env = []corev1.EnvVar{}
+	if len(tmpl.Spec.Containers) > 0 {
+		if len(tmpl.Spec.Containers[0].Env) == 0 {
+			tmpl.Spec.Containers[0].Env = []corev1.EnvVar{}
 		}
-		templateCopy.Spec.Containers[0].Env = append(templateCopy.Spec.Containers[0].Env, corev1.EnvVar{
+		tmpl.Spec.Containers[0].Env = append(tmpl.Spec.Containers[0].Env, corev1.EnvVar{
 			Name:  constants.NodeDiscoveryReportGPUNodeEnvName,
 			Value: gpunode.Name,
 		})
@@ -350,12 +359,14 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 	// create node-discovery job
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      getDiscoveryJobName(gpunode.Name),
-			Namespace: utils.CurrentNamespace(),
+			Name:        getDiscoveryJobName(gpunode.Name),
+			Namespace:   utils.CurrentNamespace(),
+			Labels:      tmpl.Labels,
+			Annotations: tmpl.Annotations,
 		},
 		Spec: batchv1.JobSpec{
 			TTLSecondsAfterFinished: ptr.To[int32](3600 * 10),
-			Template:                *templateCopy,
+			Template:                tmpl,
 		},
 	}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(job), job); err != nil {
@@ -432,7 +443,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal pod template: %w", err)
 	}
-	spec := podTmpl.Template.Spec.DeepCopy()
+	spec := podTmpl.Template.Spec
 	if spec.NodeSelector == nil {
 		spec.NodeSelector = make(map[string]string)
 	}
@@ -454,12 +465,19 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      key.Name,
 			Namespace: key.Namespace,
-			Labels: map[string]string{
-				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true",
-				constants.LabelKeyPodTemplateHash:                                  utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor),
-			},
+			Labels: func() map[string]string {
+				mergedLabels := make(map[string]string)
+				for k, v := range podTmpl.Template.Labels {
+					mergedLabels[k] = v
+				}
+				mergedLabels[fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name)] = "true"
+				mergedLabels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
+				mergedLabels[constants.LabelComponent] = constants.ComponentHypervisor
+				return mergedLabels
+			}(),
+			Annotations: podTmpl.Template.Annotations,
 		},
-		Spec: *spec,
+		Spec: spec,
 	}
 
 	if newPod.Spec.Tolerations == nil {

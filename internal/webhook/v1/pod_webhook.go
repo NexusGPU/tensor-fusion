@@ -19,8 +19,10 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	goErrors "errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"gomodules.xyz/jsonpatch/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -116,12 +118,26 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 				return admission.Errored(http.StatusInternalServerError, fmt.Errorf("workload(%s) does not exist", tfInfo.WorkloadName))
 			}
 		}
-		workloadStatus, err := worker.SelectWorker(ctx, m.Client, workload, 1)
-		if err != nil {
-			log.Error(err, "failed to select worker for pod", "pod", req.Name, "namespace", req.Namespace)
-			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("select worker: %w", err))
+
+		workerFound := false
+		for i := 0; i < 25; i++ {
+			workloadStatus, err := worker.SelectWorker(ctx, m.Client, workload, 1)
+			if err != nil {
+				if goErrors.Is(err, worker.ErrNoAvailableWorker) {
+					time.Sleep(time.Second)
+					continue
+				}
+				log.Error(err, "failed to select worker for pod", "pod", req.Name, "namespace", req.Namespace)
+				return admission.Errored(http.StatusInternalServerError, fmt.Errorf("select worker: %w", err))
+			}
+			nodeSelector = workloadStatus.NodeSelector
+			workerFound = true
+			break
 		}
-		nodeSelector = workloadStatus.NodeSelector
+
+		if !workerFound {
+			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("no available worker for pod: %s", req.Name))
+		}
 	}
 
 	// Inject initContainer and env variables
@@ -266,6 +282,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		pod.Labels = map[string]string{}
 	}
 	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(clientConfig)
+	pod.Labels[constants.LabelComponent] = constants.ComponentClient
 	pod.Labels[constants.GpuPoolKey] = pool.Name
 
 	containerPatched := false

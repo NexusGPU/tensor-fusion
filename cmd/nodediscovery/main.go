@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/retry"
@@ -200,7 +201,12 @@ func createOrUpdateTensorFusionGPU(
 		},
 	}
 
-	err := retry.OnError(retry.DefaultBackoff, func(err error) bool {
+	err := retry.OnError(wait.Backoff{
+		Steps:    10,
+		Duration: time.Second,
+		Factor:   1.0,
+		Jitter:   0.1,
+	}, func(err error) bool {
 		return true // Retry on all errors for now
 	}, func() error {
 		_, err := controllerutil.CreateOrUpdate(ctx, k8sClient, gpu, func() error {

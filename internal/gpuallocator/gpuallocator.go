@@ -4,12 +4,15 @@ package gpuallocator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -221,6 +224,10 @@ func (s *GpuAllocator) initGPUStore(ctx context.Context) error {
 	}
 
 	log.Info("GPU store initialized", "count", len(s.gpuStore))
+
+	// reconcile allocation state based on existing workers
+	s.reconcileAllocationState(ctx)
+	log.Info("GPU store data reconciled")
 	return nil
 }
 
@@ -416,4 +423,54 @@ func (s *GpuAllocator) markGPUDirty(key types.NamespacedName) {
 	s.dirtyQueueLock.Lock()
 	defer s.dirtyQueueLock.Unlock()
 	s.dirtyQueue[key] = struct{}{}
+}
+
+// When it's leader, should reconcile state based on existing workers
+// this function is run inside storeMutex lock
+func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
+	logger := log.FromContext(ctx)
+	workers := &v1.PodList{}
+	if err := s.List(ctx, workers, client.MatchingLabels(map[string]string{
+		constants.LabelComponent: constants.ComponentWorker,
+	})); err != nil {
+		logger.Error(err, "Failed to list Workloads to reconcile allocation state")
+		return
+	}
+
+	tflopsCapacityMap := make(map[types.NamespacedName]resource.Quantity)
+	vramCapacityMap := make(map[types.NamespacedName]resource.Quantity)
+
+	for gpuKey, gpu := range s.gpuStore {
+		tflopsCapacityMap[gpuKey] = gpu.Status.Capacity.Tflops
+		vramCapacityMap[gpuKey] = gpu.Status.Capacity.Vram
+	}
+
+	for _, worker := range workers.Items {
+		tflopsRequest, _ := resource.ParseQuantity(worker.Annotations[constants.TFLOPSRequestAnnotation])
+		vramRequest, _ := resource.ParseQuantity(worker.Annotations[constants.VRAMRequestAnnotation])
+		gpuIds := worker.Annotations[constants.GpuKey]
+		gpuIdsList := strings.Split(gpuIds, ",")
+		for _, gpuId := range gpuIdsList {
+			gpuKey := types.NamespacedName{Name: gpuId}
+			gpuCapacity, ok := tflopsCapacityMap[gpuKey]
+			if ok {
+				gpuCapacity.Sub(tflopsRequest)
+			}
+			gpuCapacity, ok = vramCapacityMap[gpuKey]
+			if ok {
+				gpuCapacity.Sub(vramRequest)
+			}
+		}
+	}
+
+	for gpuKey, gpu := range s.gpuStore {
+		sameTflops := gpu.Status.Available.Tflops.Equal(tflopsCapacityMap[gpuKey])
+		sameVRAM := gpu.Status.Available.Vram.Equal(vramCapacityMap[gpuKey])
+		if !sameTflops || !sameVRAM {
+			gpu.Status.Available.Tflops = tflopsCapacityMap[gpuKey]
+			gpu.Status.Available.Vram = vramCapacityMap[gpuKey]
+			s.markGPUDirty(gpuKey)
+			log.FromContext(ctx).Info("Correcting gpu available resources", "gpu", gpuKey.Name, "tflops", gpu.Status.Available.Tflops.String(), "vram", gpu.Status.Available.Vram.String())
+		}
+	}
 }

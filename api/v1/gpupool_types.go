@@ -293,7 +293,7 @@ type QosPricing struct {
 
 	Requests GPUResourcePricingUnit `json:"requests,omitempty"`
 
-	// Default requests and limitsOverRequests are same, indicates normal on-demand serverless GPU usage, in hands-on lab low QoS case, limitsOverRequests should be cheaper, for example Low QoS, ratio should be 0.5
+	// Default requests and limitsOverRequests are same, indicates normal on-demand serverless GPU usage, in hands-on lab low QoS case, limitsOverRequests should be lower, so that user can get burstable GPU resources with very low cost
 	// +kubebuilder:default="1"
 	LimitsOverRequestsChargingRatio string `json:"limitsOverRequests,omitempty"`
 }

@@ -117,11 +117,13 @@ func (cw *connectionWatcher) subscribe(req types.NamespacedName) (connectionChan
 func (cw *connectionWatcher) watchConnections(ctx context.Context, watcher watch.Interface) {
 	// Watch for changes
 	defer watcher.Stop()
+	watcherChan := watcher.ResultChan()
 	for {
+
 		select {
 		case <-ctx.Done():
 			return
-		case event, ok := <-watcher.ResultChan():
+		case event, ok := <-watcherChan:
 			if !ok {
 				return
 			}

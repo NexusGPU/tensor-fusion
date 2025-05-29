@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -35,6 +36,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	utils "github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 
@@ -46,8 +48,9 @@ import (
 // TensorFusionClusterReconciler reconciles a TensorFusionCluster object
 type TensorFusionClusterReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Scheme          *runtime.Scheme
+	Recorder        record.EventRecorder
+	MetricsRecorder *metrics.MetricsRecorder
 
 	LastProcessedItems sync.Map
 }
@@ -302,6 +305,7 @@ func (r *TensorFusionClusterReconciler) reconcileGPUPool(ctx context.Context, tf
 			}
 			err = r.Create(ctx, gpupool)
 			anyPoolChanged = true
+			r.updateMetricsRecorder(ctx, gpupool)
 			if err != nil {
 				errors = append(errors, fmt.Errorf("failed to create GPUPool %s: %w", key, err))
 				continue
@@ -315,6 +319,7 @@ func (r *TensorFusionClusterReconciler) reconcileGPUPool(ctx context.Context, tf
 					errors = append(errors, fmt.Errorf("failed to update GPUPool %s: %w", key, err))
 				}
 				anyPoolChanged = true
+				r.updateMetricsRecorder(ctx, existingPool)
 			}
 		}
 	}
@@ -411,4 +416,26 @@ func (r *TensorFusionClusterReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Named("tensorfusioncluster").
 		Owns(&tfv1.GPUPool{}).
 		Complete(r)
+}
+
+// Update metrics recorder's raw billing map
+func (r *TensorFusionClusterReconciler) updateMetricsRecorder(ctx context.Context, pool *tfv1.GPUPool) {
+	qosConfig := pool.Spec.QosConfig
+	if _, ok := r.MetricsRecorder.WorkerUnitPriceMap[pool.Name]; !ok {
+		r.MetricsRecorder.WorkerUnitPriceMap[pool.Name] = make(map[string]metrics.RawBillingPricing)
+	}
+	pricingDetail := r.MetricsRecorder.WorkerUnitPriceMap[pool.Name]
+	for _, pricing := range qosConfig.Pricing {
+		tflopsPerSecond, _ := strconv.ParseFloat(pricing.Requests.PerFP16TFlopsPerHour, 64)
+		vramPerSecond, _ := strconv.ParseFloat(pricing.Requests.PerGBOfVRAMPerHour, 64)
+		limitOverRequestChargingRatio, _ := strconv.ParseFloat(pricing.LimitsOverRequestsChargingRatio, 64)
+
+		pricingDetail[string(pricing.Qos)] = metrics.RawBillingPricing{
+			TflopsPerSecond: tflopsPerSecond / 3600,
+			VramPerSecond:   vramPerSecond / 3600,
+
+			TflopsOverRequestPerSecond: tflopsPerSecond / 3600 * limitOverRequestChargingRatio,
+			VramOverRequestPerSecond:   vramPerSecond / 3600 * limitOverRequestChargingRatio,
+		}
+	}
 }
