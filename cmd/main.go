@@ -93,8 +93,11 @@ func main() {
 	flag.StringVar(&gpuInfoConfig, "gpu-info-config",
 		"/etc/tensor-fusion/gpu-info.yaml", "specify the path to gpuInfoConfig file")
 	flag.StringVar(&metricsPath, "metrics-path", "/logs/metrics.log", "specify the path to metrics file")
-	flag.StringVar(&nodeLevelPortRange, "host-port-range", "40000-42000", "specify the port range for assigning ports to pre-scheduled Pods such as vGPU workers")
-	flag.StringVar(&clusterLevelPortRange, "cluster-host-port-range", "42000-62000", "specify the port range for assigning ports to random Pods marked with `tensor-fusion.ai/host-port: auto` and `tensor-fusion.ai/port-name: ssh`")
+	flag.StringVar(&nodeLevelPortRange, "host-port-range", "40000-42000",
+		"specify the port range for assigning ports to pre-scheduled Pods such as vGPU workers")
+	flag.StringVar(&clusterLevelPortRange, "cluster-host-port-range", "42000-62000",
+		"specify the port range for assigning ports to random Pods"+
+			" marked with `tensor-fusion.ai/host-port: auto` and `tensor-fusion.ai/port-name: ssh`")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -196,14 +199,8 @@ func main() {
 		// Key is poolName, second level key is QoS level
 		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
 	}
-	if enableLeaderElection {
-		go func() {
-			<-mgr.Elected()
-			metricsRecorder.Start()
-		}()
-	} else {
-		go metricsRecorder.Start()
-	}
+
+	startMetricsRecorder(enableLeaderElection, mgr, metricsRecorder)
 
 	// Initialize GPU allocator and set up watches
 	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 10*time.Second)
@@ -239,7 +236,7 @@ func main() {
 
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err = webhookcorev1.SetupPodWebhookWithManager(mgr); err != nil {
+		if err = webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
 			os.Exit(1)
 		}
@@ -295,8 +292,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err = (&controller.PodReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod")
 		os.Exit(1)
@@ -377,6 +375,17 @@ func main() {
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
+	}
+}
+
+func startMetricsRecorder(enableLeaderElection bool, mgr manager.Manager, metricsRecorder metrics.MetricsRecorder) {
+	if enableLeaderElection {
+		go func() {
+			<-mgr.Elected()
+			metricsRecorder.Start()
+		}()
+	} else {
+		go metricsRecorder.Start()
 	}
 }
 

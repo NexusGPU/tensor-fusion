@@ -22,6 +22,7 @@ import (
 	goErrors "errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"gomodules.xyz/jsonpatch/v2"
@@ -38,6 +39,7 @@ import (
 	"al.essio.dev/pkg/shellescape"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
 	"github.com/lithammer/shortuuid/v4"
@@ -45,22 +47,24 @@ import (
 )
 
 // SetupPodWebhookWithManager registers the webhook for Pod in the manager.
-func SetupPodWebhookWithManager(mgr ctrl.Manager) error {
+func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator) error {
 	webhookServer := mgr.GetWebhookServer()
 
 	webhookServer.Register("/mutate-v1-pod",
 		&admission.Webhook{
 			Handler: &TensorFusionPodMutator{
-				decoder: admission.NewDecoder(runtime.NewScheme()),
-				Client:  mgr.GetClient(),
+				decoder:       admission.NewDecoder(runtime.NewScheme()),
+				Client:        mgr.GetClient(),
+				portAllocator: portAllocator,
 			},
 		})
 	return nil
 }
 
 type TensorFusionPodMutator struct {
-	Client  client.Client
-	decoder admission.Decoder
+	Client        client.Client
+	decoder       admission.Decoder
+	portAllocator *portallocator.PortAllocator
 }
 
 // Handle implements admission.Handler interface.
@@ -285,6 +289,13 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	pod.Labels[constants.LabelComponent] = constants.ComponentClient
 	pod.Labels[constants.GpuPoolKey] = pool.Name
 
+	// Patch hostPort allocation
+	if pod.Labels[constants.GenHostPortLabel] == constants.GenHostPortLabelValue {
+		if err := m.generateHostPort(pod, pod.Labels[constants.GenHostPortNameLabel]); err != nil {
+			return nil, fmt.Errorf("can not generate host port: %w", err)
+		}
+	}
+
 	containerPatched := false
 	// Patch to Container
 	for _, name := range containerNames {
@@ -390,4 +401,32 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 	patches = append(patches, strategicpatches...)
 	return patches, nil
+}
+
+func (m *TensorFusionPodMutator) generateHostPort(pod *corev1.Pod, portName string) error {
+
+	portNumber, err := m.portAllocator.AssignClusterLevelHostPort(pod.Name)
+	if err != nil {
+		return fmt.Errorf("assign cluster level host port: %w", err)
+	}
+	pod.Annotations[constants.GenPortNumberAnnotation] = strconv.Itoa(portNumber)
+
+	portNameFound := false
+	for i := range pod.Spec.Containers {
+		container := &pod.Spec.Containers[i]
+		for j := range container.Ports {
+			port := &container.Ports[j]
+			if port.Name == portName {
+				port.HostPort = int32(portNumber)
+				portNameFound = true
+			}
+		}
+	}
+
+	if !portNameFound {
+		_ = m.portAllocator.ReleaseClusterLevelHostPort(pod.Name, portNumber)
+		return fmt.Errorf("port name %s not found", portName)
+	}
+
+	return nil
 }

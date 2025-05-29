@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"math/rand"
+
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
-	"golang.org/x/exp/rand"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -205,7 +206,8 @@ func contains(slice []string, item string) bool {
 
 func generateRandomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz"
-	rand.Seed(uint64(time.Now().UnixNano()))
+	source := rand.NewSource(time.Now().UnixNano())
+	rand := rand.New(source)
 
 	result := make([]byte, length)
 	for i := range result {

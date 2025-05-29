@@ -19,9 +19,11 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	v1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
 	"github.com/samber/lo"
@@ -40,7 +42,8 @@ import (
 // PodReconciler reconciles a Pod object
 type PodReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme        *runtime.Scheme
+	PortAllocator *portallocator.PortAllocator
 }
 
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete;deletecollection
@@ -58,6 +61,15 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 		log.Error(err, "Failed to get Pod")
 		return ctrl.Result{}, err
+	}
+
+	// Release cluster level port when Pod deleted
+	if !pod.DeletionTimestamp.IsZero() {
+		if pod.Annotations[constants.GenHostPortLabel] == constants.GenHostPortLabelValue {
+			podPortNumber, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
+			_ = r.PortAllocator.ReleaseClusterLevelHostPort(pod.Name, podPortNumber)
+			log.Info("Released port", "pod", pod.Name, "port", podPortNumber)
+		}
 	}
 	// generate tensor fusion connections and apply to cluster
 	tfConnection := generateTensorFusionConnection(pod)
