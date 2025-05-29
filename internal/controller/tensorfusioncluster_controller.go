@@ -420,6 +420,7 @@ func (r *TensorFusionClusterReconciler) SetupWithManager(mgr ctrl.Manager) error
 
 // Update metrics recorder's raw billing map
 func (r *TensorFusionClusterReconciler) updateMetricsRecorder(ctx context.Context, pool *tfv1.GPUPool) {
+	log := log.FromContext(ctx)
 	qosConfig := pool.Spec.QosConfig
 	if _, ok := r.MetricsRecorder.WorkerUnitPriceMap[pool.Name]; !ok {
 		r.MetricsRecorder.WorkerUnitPriceMap[pool.Name] = make(map[string]metrics.RawBillingPricing)
@@ -438,4 +439,6 @@ func (r *TensorFusionClusterReconciler) updateMetricsRecorder(ctx context.Contex
 			VramOverRequestPerSecond:   vramPerSecond / 3600 * limitOverRequestChargingRatio,
 		}
 	}
+
+	log.V(5).Info("Updated metrics recorder", "pool", pool.Name, "pricing", pricingDetail)
 }

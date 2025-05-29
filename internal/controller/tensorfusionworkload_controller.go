@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -59,6 +60,8 @@ type TensorFusionWorkloadReconciler struct {
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionworkloads/finalizers,verbs=update
 
 // TensorFusionWorkload Reconciler
+//
+//nolint:gocyclo
 func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	log.Info("Reconciling TensorFusionWorkload", "request", req)
@@ -111,6 +114,8 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 
 		if deleted {
 			metrics.RemoveWorkerMetrics(pod.Name, pod.DeletionTimestamp.Time)
+			podPort, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
+			_ = r.PortAllocator.ReleaseHostPort(pod.Spec.NodeName, podPort)
 		}
 
 		// Handle our GPU resource cleanup finalizer
@@ -128,12 +133,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
-	// init metrics map if needed
-	now := time.Now()
-	for i := range podList.Items {
-		pod := &podList.Items[i]
-		metrics.SetWorkerMetricsByWorkload(pod, workload, now)
-	}
+	handleMetricsRecorder(podList, workload)
 
 	// Fetch the GPUPool
 	pool := &tfv1.GPUPool{}
@@ -229,6 +229,14 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	return ctrl.Result{}, nil
 }
 
+func handleMetricsRecorder(podList *corev1.PodList, workload *tfv1.TensorFusionWorkload) {
+	now := time.Now()
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		metrics.SetWorkerMetricsByWorkload(pod, workload, now)
+	}
+}
+
 func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	ctx context.Context,
 	workerGenerator *worker.WorkerGenerator,
@@ -236,7 +244,7 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	workload *tfv1.TensorFusionWorkload,
 	hash string,
 ) (*corev1.Pod, error) {
-	port, err := r.PortAllocator.GetHostPort(gpu.Status.NodeSelector[constants.KubernetesHostNameLabel])
+	port, err := r.PortAllocator.AssignHostPort(gpu.Status.NodeSelector[constants.KubernetesHostNameLabel])
 	if err != nil {
 		return nil, fmt.Errorf("get host port %w", err)
 	}
@@ -271,7 +279,7 @@ func (r *TensorFusionWorkloadReconciler) scaleDownWorkers(ctx context.Context, w
 
 	for i := range pods {
 		podToDelete := &pods[i]
-		log.Info("Scaling down worker pod", "name", podToDelete.Name)
+		log.Info("Scaling down worker pod", "name", podToDelete.Name, "workload", workload.Name)
 		// Delete the pod with foreground deletion policy
 		// The finalizer will handle GPU resource cleanup
 		if err := r.deletePod(ctx, podToDelete); err != nil {

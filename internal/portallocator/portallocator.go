@@ -40,8 +40,8 @@ type PortAllocator struct {
 
 	client client.Client
 
-	bitmapPerNode map[string][]uint64
-	bitmapCluster []uint64
+	BitmapPerNode map[string][]uint64
+	BitmapCluster []uint64
 }
 
 var storeMutexNode sync.RWMutex
@@ -71,11 +71,11 @@ func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRa
 		PortRangeStartNode:    portRangeStartNode,
 		PortRangeEndNode:      portRangeEndNode,
 		PortRangeStartCluster: portRangeStartCluster,
-		PortRangeEndCluster:   int(portRangeEndCluster),
+		PortRangeEndCluster:   portRangeEndCluster,
 		client:                client,
 
-		bitmapPerNode: make(map[string][]uint64),
-		bitmapCluster: make([]uint64, (portRangeEndCluster-portRangeStartCluster)/64+1),
+		BitmapPerNode: make(map[string][]uint64),
+		BitmapCluster: make([]uint64, (portRangeEndCluster-portRangeStartCluster)/64+1),
 	}
 
 	return allocator, nil
@@ -98,40 +98,81 @@ func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manage
 	}()
 }
 
-// GetHostPort always called by operator itself, thus no Leader-Follower inconsistency issue
-func (s *PortAllocator) GetHostPort(nodeName string) (int, error) {
+// AssignHostPort always called by operator itself, thus no Leader-Follower inconsistency issue
+func (s *PortAllocator) AssignHostPort(nodeName string) (int, error) {
 	if nodeName == "" {
 		return 0, fmt.Errorf("node name cannot be empty when assign host port")
 	}
 	storeMutexNode.Lock()
 	defer storeMutexNode.Unlock()
 
-	if bitmap, ok := s.bitmapPerNode[nodeName]; !ok {
-		return 0, fmt.Errorf("node %s not found in bitmap", nodeName)
-	} else {
-		// TODO: handle bitmap overflow
-		return bits.TrailingZeros64(bitmap[0]), nil
+	bitmap, ok := s.BitmapPerNode[nodeName]
+	if !ok {
+		// found new nodes not have any ports assigned before
+		s.BitmapPerNode[nodeName] = make([]uint64, (s.PortRangeEndNode-s.PortRangeStartNode)/64+1)
 	}
+	for i, subMap := range bitmap {
+		bitPos := bits.TrailingZeros64(subMap)
+		portOffset := i*64 + bitPos
+		if subMap != 0xFFFFFFFFFFFFFFFF {
+			assignedPort := portOffset + s.PortRangeStartNode
+			if assignedPort < s.PortRangeEndNode {
+				bitmap[i] |= 1 << bitPos
+				return assignedPort, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("no available port on node %s", nodeName)
 
 }
 
-// TODO: implement
 func (s *PortAllocator) ReleaseHostPort(nodeName string, port int) error {
+	if port == 0 {
+		return fmt.Errorf("port cannot be 0 when release host port, may caused by portNumber annotation not detected, nodeName: %s", nodeName)
+	}
 	storeMutexNode.Lock()
 	defer storeMutexNode.Unlock()
+
+	if bitmap, ok := s.BitmapPerNode[nodeName]; !ok {
+		return fmt.Errorf("node %s not found in bitmap", nodeName)
+	} else {
+		portOffset := port - s.PortRangeStartNode
+		bitmap[portOffset/64] &^= 1 << (portOffset % 64)
+	}
 	return nil
 }
 
-// TODO: side effect, should forward the Pod mutating webhook request to the Leader if current node is not a leader
-func (s *PortAllocator) GetClusterLevelHostPort(podName string) (int, error) {
+func (s *PortAllocator) AssignClusterLevelHostPort(podName string) (int, error) {
+
 	storeMutexCluster.Lock()
 	defer storeMutexCluster.Unlock()
-	return bits.TrailingZeros64(uint64(s.PortRangeStartCluster)), nil
+
+	for i, subMap := range s.BitmapCluster {
+		bitPos := bits.TrailingZeros64(subMap)
+		portOffset := i*64 + bitPos
+		if subMap != 0xFFFFFFFFFFFFFFFF {
+			assignedPort := portOffset + s.PortRangeStartCluster
+			if assignedPort < s.PortRangeEndCluster {
+				s.BitmapCluster[i] |= 1 << bitPos
+				return assignedPort, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("no available port on cluster")
 }
 
 func (s *PortAllocator) ReleaseClusterLevelHostPort(podName string, port int) error {
+	if port == 0 {
+		return fmt.Errorf("port cannot be 0 when release host port, may caused by portNumber annotation not detected, podName: %s", podName)
+	}
+
+	// TODO, may need a defer queue for releasing so that to avoid port being assigned again to fast
+
 	storeMutexCluster.Lock()
 	defer storeMutexCluster.Unlock()
+
+	portOffset := port - s.PortRangeStartCluster
+	s.BitmapCluster[portOffset/64] &^= 1 << (portOffset % 64)
 	return nil
 }
 
@@ -151,7 +192,7 @@ func (s *PortAllocator) initBitMapForClusterLevelPortAssign(ctx context.Context)
 	}
 
 	for _, port := range usedPorts {
-		s.bitmapCluster[port/64] |= 1 << (port % 64)
+		s.BitmapCluster[port/64] |= 1 << (port % 64)
 	}
 }
 
@@ -168,10 +209,10 @@ func (s *PortAllocator) initBitMapForNodeLevelPortAssign(ctx context.Context) {
 	for _, pod := range podList.Items {
 		port, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
 		bitOffSet := port - s.PortRangeStartNode
-		if _, ok := s.bitmapPerNode[pod.Spec.NodeName]; !ok {
-			s.bitmapPerNode[pod.Spec.NodeName] = make([]uint64, size)
+		if _, ok := s.BitmapPerNode[pod.Spec.NodeName]; !ok {
+			s.BitmapPerNode[pod.Spec.NodeName] = make([]uint64, size)
 		}
-		s.bitmapPerNode[pod.Spec.NodeName][bitOffSet/64] |= 1 << (bitOffSet % 64)
+		s.BitmapPerNode[pod.Spec.NodeName][bitOffSet/64] |= 1 << (bitOffSet % 64)
 	}
 
 }
