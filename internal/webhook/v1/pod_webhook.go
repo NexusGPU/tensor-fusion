@@ -213,6 +213,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 		Qos:        tfInfo.Profile.Qos,
 		IsLocalGPU: tfInfo.Profile.IsLocalGPU,
 		GPUCount:   tfInfo.Profile.GPUCount,
+		GPUModel:   tfInfo.Profile.GPUModel,
 	}
 
 	// Compare the entire spec at once
