@@ -9,28 +9,20 @@ import (
 	"sync"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/util/retry"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
-// offer API for host port allocation, range from user configured port range
-// when started, fetch all allocated TENSOR_FUSION_WORKER_PORT
-
-// - label: tensor-fusion.ai/component=worker
-//   portStart: 40000
-//   portEnd: 41000
-//   byNode: true
-// - label: tensor-fusion.ai/workload-type=lab
-//   portStart: 41001
-//   portEnd: 60000
-//   byNode: false
-
-// PodLabel => NodeName => HostPort
-// Annotation: tensor-fusion.ai/host-port: assigned port
-// Annotation: tensor-fusion.ai/host-port: assigned pod name
+// Offer API for host port allocation, range from user configured port range
+// Use label: `tensor-fusion.ai/host-port: auto` to assigned port at cluster level
+// vGPU worker's hostPort will be managed by operator
 type PortAllocator struct {
 	PortRangeStartNode int
 	PortRangeEndNode   int
@@ -38,10 +30,12 @@ type PortAllocator struct {
 	PortRangeStartCluster int
 	PortRangeEndCluster   int
 
-	client client.Client
+	IsLeader bool
 
 	BitmapPerNode map[string][]uint64
 	BitmapCluster []uint64
+
+	Client client.Client
 }
 
 var storeMutexNode sync.RWMutex
@@ -72,10 +66,10 @@ func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRa
 		PortRangeEndNode:      portRangeEndNode,
 		PortRangeStartCluster: portRangeStartCluster,
 		PortRangeEndCluster:   portRangeEndCluster,
-		client:                client,
-
-		BitmapPerNode: make(map[string][]uint64),
-		BitmapCluster: make([]uint64, (portRangeEndCluster-portRangeStartCluster)/64+1),
+		Client:                client,
+		IsLeader:              false,
+		BitmapPerNode:         make(map[string][]uint64),
+		BitmapCluster:         make([]uint64, (portRangeEndCluster-portRangeStartCluster)/64+1),
 	}
 
 	return allocator, nil
@@ -84,6 +78,23 @@ func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRa
 func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager) {
 	go func() {
 		<-mgr.Elected()
+
+		s.IsLeader = true
+		leaderInfo := &v1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      constants.LeaderInfoConfigMapName,
+				Namespace: utils.CurrentNamespace(),
+			},
+		}
+		retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			_, err := controllerutil.CreateOrUpdate(ctx, s.Client, leaderInfo, func() error {
+				leaderInfo.Data = map[string]string{
+					constants.LeaderInfoConfigMapLeaderIPKey: utils.CurrentIP(),
+				}
+				return nil
+			})
+			return err
+		})
 
 		storeMutexNode.Lock()
 		storeMutexCluster.Lock()
@@ -96,6 +107,18 @@ func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manage
 		// 2. init bit map for existing vGPU workers
 		s.initBitMapForNodeLevelPortAssign(ctx)
 	}()
+}
+
+func (s *PortAllocator) GetLeaderIP() string {
+	leaderInfo := &v1.ConfigMap{}
+	s.Client.Get(context.Background(), client.ObjectKey{
+		Name:      constants.LeaderInfoConfigMapName,
+		Namespace: utils.CurrentNamespace(),
+	}, leaderInfo)
+	if leaderInfo.Data == nil {
+		return ""
+	}
+	return leaderInfo.Data[constants.LeaderInfoConfigMapLeaderIPKey]
 }
 
 // AssignHostPort always called by operator itself, thus no Leader-Follower inconsistency issue
@@ -179,7 +202,7 @@ func (s *PortAllocator) ReleaseClusterLevelHostPort(podName string, port int) er
 func (s *PortAllocator) initBitMapForClusterLevelPortAssign(ctx context.Context) {
 	log := log.FromContext(ctx)
 	podList := &v1.PodList{}
-	err := s.client.List(ctx, podList, client.MatchingLabels{constants.GenHostPortLabel: constants.GenHostPortLabelValue})
+	err := s.Client.List(ctx, podList, client.MatchingLabels{constants.GenHostPortLabel: constants.GenHostPortLabelValue})
 	if err != nil {
 		log.Error(err, "failed to list pods with port allocation label")
 		return
@@ -199,7 +222,7 @@ func (s *PortAllocator) initBitMapForClusterLevelPortAssign(ctx context.Context)
 func (s *PortAllocator) initBitMapForNodeLevelPortAssign(ctx context.Context) {
 	log := log.FromContext(ctx)
 	podList := &v1.PodList{}
-	err := s.client.List(ctx, podList, client.MatchingLabels{constants.LabelComponent: constants.ComponentWorker})
+	err := s.Client.List(ctx, podList, client.MatchingLabels{constants.LabelComponent: constants.ComponentWorker})
 	if err != nil {
 		log.Error(err, "failed to list pods with port allocation label")
 		return

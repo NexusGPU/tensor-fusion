@@ -347,7 +347,12 @@ func main() {
 		setupLog.Error(err, "failed to create connection router")
 		os.Exit(1)
 	}
-	httpServer := server.NewHTTPServer(connectionRouter)
+	assignHostPortRouter, err := router.NewAssignHostPortRouter(ctx, portAllocator)
+	if err != nil {
+		setupLog.Error(err, "failed to create assign host port router")
+		os.Exit(1)
+	}
+	httpServer := server.NewHTTPServer(connectionRouter, assignHostPortRouter)
 	go func() {
 		err := httpServer.Run()
 		if err != nil {
