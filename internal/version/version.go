@@ -46,6 +46,6 @@ func Hash() string {
 	return hash
 }
 
-func EncodeVersionInfo() string {
+func VersionInfo() string {
 	return fmt.Sprintf("version: %s, hash: %s, time: %s", Version(), Hash(), Time())
 }
