@@ -75,7 +75,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           no-cache: true
           build-args: |
-            GO_LDFLAGS=-X 'main.CurrentVersion=${{ github.event_name == 'workflow_dispatch' && steps.set_tag.outputs.tag || needs.release.outputs.version }}'
+            GO_LDFLAGS=-X 'github.com/NexusGPU/tensor-fusion/internal/version.BuildVersion=${{ needs.release.outputs.version }}'
 
   publish_node_discovery_image:
     needs:

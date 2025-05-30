@@ -16,6 +16,8 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY api/ api/
 COPY internal/ internal/
+# Copy .git directory to enable VCS info in build
+COPY .git/ .git/
 
 
 # Build
