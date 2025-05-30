@@ -481,12 +481,9 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 
 	// generate nodes
 	selectors := strings.Split(constants.InitialGPUNodeSelector, "=")
-	for poolIndex, nodeGpuMap := range b.poolNodeMap {
-		if poolIndex >= b.poolCount {
-			continue
-		}
-
-		for nodeIndex, gpuCount := range nodeGpuMap {
+	for poolIndex := range b.poolCount {
+		nodeCount := len(b.poolNodeMap[poolIndex])
+		for nodeIndex := range nodeCount {
 			coreNode := &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: b.getNodeName(poolIndex, nodeIndex),
@@ -499,8 +496,8 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 			Expect(k8sClient.Create(ctx, coreNode)).To(Succeed())
 
 			// generate gpus for gpunode
-			if gpuCount > 0 {
-				gpuNode := b.GetGPUNode(poolIndex, nodeIndex)
+			gpuNode := b.GetGPUNode(poolIndex, nodeIndex)
+			if gpuCount := b.poolNodeMap[poolIndex][nodeIndex]; gpuCount > 0 {
 				for gpuIndex := range gpuCount {
 					key := client.ObjectKey{
 						Name: b.getGPUName(poolIndex, nodeIndex, gpuIndex),
