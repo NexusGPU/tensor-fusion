@@ -461,6 +461,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 		ReadOnly:  false,
 		MountPath: constants.TFDataPath,
 	})
+	spec.ServiceAccountName = constants.HypervisorServiceAccountName
 	newPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      key.Name,

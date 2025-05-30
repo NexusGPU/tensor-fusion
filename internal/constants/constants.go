@@ -85,8 +85,9 @@ const (
 	NamespaceEnv               = "OPERATOR_NAMESPACE"
 	NamespaceDefaultVal        = "tensor-fusion-sys"
 
-	KubernetesHostNameLabel = "kubernetes.io/hostname"
-	GiBToBytes              = 1024 * 1024 * 1024
+	KubernetesHostNameLabel      = "kubernetes.io/hostname"
+	GiBToBytes                   = 1024 * 1024 * 1024
+	HypervisorServiceAccountName = "tensor-fusion-hypervisor-sa"
 )
 
 const (
@@ -138,3 +139,8 @@ const (
 const TFDataPath = "/tmp/tensor-fusion/data"
 const DataVolumeName = "tf-data"
 const TensorFusionPoolManualCompaction = Domain + "/manual-compaction"
+
+const (
+	LeaderInfoConfigMapName        = "tensor-fusion-operator-leader-info"
+	LeaderInfoConfigMapLeaderIPKey = "leader-ip"
+)

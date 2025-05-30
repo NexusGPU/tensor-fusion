@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -405,28 +406,69 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 func (m *TensorFusionPodMutator) generateHostPort(pod *corev1.Pod, portName string) error {
 
-	portNumber, err := m.portAllocator.AssignClusterLevelHostPort(pod.Name)
-	if err != nil {
-		return fmt.Errorf("assign cluster level host port: %w", err)
-	}
-	pod.Annotations[constants.GenPortNumberAnnotation] = strconv.Itoa(portNumber)
-
 	portNameFound := false
+	containerIndex := -1
+	portIndex := -1
 	for i := range pod.Spec.Containers {
 		container := &pod.Spec.Containers[i]
 		for j := range container.Ports {
 			port := &container.Ports[j]
 			if port.Name == portName {
-				port.HostPort = int32(portNumber)
 				portNameFound = true
+				containerIndex = i
+				portIndex = j
 			}
 		}
 	}
-
 	if !portNameFound {
-		_ = m.portAllocator.ReleaseClusterLevelHostPort(pod.Name, portNumber)
-		return fmt.Errorf("port name %s not found", portName)
+		return fmt.Errorf("port name %s not found, can not assign host port for pod %s", portName, pod.Name)
 	}
 
+	if !m.portAllocator.IsLeader {
+		port, err := m.assignClusterHostPortFromLeader(pod)
+		if err != nil {
+			return fmt.Errorf("can not assign cluster host port from leader: %w", err)
+		}
+		pod.Annotations[constants.GenPortNumberAnnotation] = strconv.Itoa(port)
+	} else {
+		port, err := m.portAllocator.AssignClusterLevelHostPort(pod.Name)
+		if err != nil {
+			return fmt.Errorf("can not assign cluster level host port: %w", err)
+		}
+		pod.Annotations[constants.GenPortNumberAnnotation] = strconv.Itoa(port)
+	}
+
+	pod.Spec.Containers[containerIndex].Ports[portIndex].HostPort = int32(m.getPortNumber(pod))
 	return nil
+}
+
+func (m *TensorFusionPodMutator) getPortNumber(pod *corev1.Pod) int {
+	portNumber, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
+	return portNumber
+}
+
+func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod) (int, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	leaderIP := m.portAllocator.GetLeaderIP()
+	if leaderIP == "" {
+		return 0, fmt.Errorf("operator leader IP not found")
+	}
+
+	url := fmt.Sprintf("http://%s:8080/assign-host-port?podName=%s", leaderIP, pod.Name)
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0, fmt.Errorf("failed to assign host port: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("host port allocation failed: %s", resp.Status)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read allocation response: %w", err)
+	}
+
+	return strconv.Atoi(string(body))
 }
