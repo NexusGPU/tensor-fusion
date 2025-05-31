@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -377,7 +378,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 	return ctrl.Result{}, nil
 }
 
-// updateStatus updates the WorkerStatuses and readyReplicas field in the workload status
+// updateStatus updates the status of a TensorFusionWorkload
 func (r *TensorFusionWorkloadReconciler) updateStatus(
 	ctx context.Context,
 	workload *tfv1.TensorFusionWorkload,
@@ -386,6 +387,7 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 ) error {
 	log := log.FromContext(ctx)
 	readyReplicas := int32(0)
+	failedWorkers := 0
 
 	// Create a worker statuses slice to hold all worker status information
 	workerStatuses := []tfv1.WorkerStatus{}
@@ -396,7 +398,23 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 			continue
 		}
 
-		readyReplicas++
+		var workerPhase tfv1.WorkerPhase
+		switch pod.Status.Phase {
+		case corev1.PodPending:
+			workerPhase = tfv1.WorkerPending
+		case corev1.PodRunning:
+			if utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady) {
+				workerPhase = tfv1.WorkerRunning
+				readyReplicas++
+			} else {
+				workerPhase = tfv1.WorkerPending
+			}
+		case corev1.PodFailed:
+			workerPhase = tfv1.WorkerFailed
+			failedWorkers++
+		default:
+			workerPhase = tfv1.WorkerPending
+		}
 
 		// Get worker IP and port information from pod
 		ip := pod.Status.PodIP
@@ -404,18 +422,6 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 		if err != nil {
 			log.Error(err, "can not get worker port", "pod", pod.Name, "error", err)
 			continue
-		}
-
-		var workerPhase tfv1.WorkerPhase
-		switch pod.Status.Phase {
-		case corev1.PodPending:
-			workerPhase = tfv1.WorkerPending
-		case corev1.PodRunning:
-			workerPhase = tfv1.WorkerRunning
-		case corev1.PodFailed:
-			workerPhase = tfv1.WorkerFailed
-		default:
-			workerPhase = tfv1.WorkerPending
 		}
 
 		// Create and append worker status
@@ -431,12 +437,45 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 		workerStatuses = append(workerStatuses, workerStatus)
 	}
 
+	// Determine workload phase
+	var phase tfv1.TensorFusionWorkloadPhase
+	var conditions []metav1.Condition
+
+	// Update Ready condition based on readyReplicas and desired replicas
+	readyCondition := metav1.Condition{
+		Type:               constants.ConditionStatusTypeReady,
+		LastTransitionTime: metav1.Now(),
+	}
+
+	if workload.Spec.Replicas != nil && readyReplicas == *workload.Spec.Replicas {
+		phase = tfv1.TensorFusionWorkloadPhaseRunning
+		readyCondition.Status = metav1.ConditionTrue
+		readyCondition.Reason = "WorkloadReady"
+		readyCondition.Message = "All workers are running"
+	} else if failedWorkers > 0 {
+		phase = tfv1.TensorFusionWorkloadPhaseFailed
+		readyCondition.Status = metav1.ConditionFalse
+		readyCondition.Reason = "WorkerFailed"
+		readyCondition.Message = fmt.Sprintf("Failed workers: %d", failedWorkers)
+		r.Recorder.Eventf(workload, corev1.EventTypeWarning, "WorkerFailed", "Failed workers: %d", failedWorkers)
+	} else {
+		phase = tfv1.TensorFusionWorkloadPhasePending
+		readyCondition.Status = metav1.ConditionFalse
+		readyCondition.Reason = "WaitingForWorkers"
+		readyCondition.Message = fmt.Sprintf("Ready replicas: %d/%d", readyReplicas, *workload.Spec.Replicas)
+	}
+	conditions = append(conditions, readyCondition)
+
 	// Check if we need to update status
 	statusChanged := workload.Status.ReadyReplicas != readyReplicas ||
-		!equality.Semantic.DeepEqual(workload.Status.WorkerStatuses, workerStatuses)
+		!equality.Semantic.DeepEqual(workload.Status.WorkerStatuses, workerStatuses) ||
+		workload.Status.Phase != phase ||
+		!equality.Semantic.DeepEqual(workload.Status.Conditions, conditions)
 
 	if statusChanged {
-		log.Info("Updating workload status", "readyReplicas", readyReplicas, "workerCount", len(workerStatuses))
+		log.Info("Updating workload status", "phase", phase, "readyReplicas", readyReplicas, "workerCount", len(workerStatuses))
+		workload.Status.Phase = phase
+		workload.Status.Conditions = conditions
 		workload.Status.ReadyReplicas = readyReplicas
 		workload.Status.WorkerStatuses = workerStatuses
 		if err := r.Status().Update(ctx, workload); err != nil {

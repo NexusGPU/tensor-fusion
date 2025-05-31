@@ -304,7 +304,31 @@ func checkWorkloadStatus(in *tfv1.TensorFusionWorkload) {
 	Eventually(func(g Gomega) {
 		workload := &tfv1.TensorFusionWorkload{}
 		g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(in), workload)).Should(Succeed())
+
+		// Check basic status
 		g.Expect(workload.Status.Replicas).Should(Equal(*workload.Spec.Replicas))
+
+		if *workload.Spec.Replicas == 0 {
+			return
+		}
+		// Check phase and conditions
+		if workload.Status.Replicas == 0 {
+			g.Expect(workload.Status.Phase).Should(Equal(tfv1.TensorFusionWorkloadPhasePending))
+		} else {
+			readyCondition, found := lo.Find(workload.Status.Conditions, func(c metav1.Condition) bool {
+				return c.Type == "Ready"
+			})
+			g.Expect(found).Should(BeTrue())
+
+			if readyCondition.Status == metav1.ConditionTrue {
+				g.Expect(workload.Status.Phase).Should(Equal(tfv1.TensorFusionWorkloadPhaseRunning))
+				g.Expect(readyCondition.Reason).Should(Equal("WorkloadReady"))
+				g.Expect(readyCondition.Message).Should(Equal("All workers are running"))
+			} else if readyCondition.Status == metav1.ConditionFalse && readyCondition.Reason == "WorkerFailed" {
+				g.Expect(workload.Status.Phase).Should(Equal(tfv1.TensorFusionWorkloadPhaseFailed))
+				g.Expect(readyCondition.Message).Should(ContainSubstring("Failed workers:"))
+			}
+		}
 	}, timeout, interval).Should(Succeed())
 }
 

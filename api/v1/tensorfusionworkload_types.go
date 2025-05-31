@@ -41,16 +41,35 @@ type WorkerStatus struct {
 	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 
+// +kubebuilder:validation:Enum=Pending;Running;Failed;Unknown
+type TensorFusionWorkloadPhase string
+
+const (
+	TensorFusionWorkloadPhasePending TensorFusionWorkloadPhase = "Pending"
+	TensorFusionWorkloadPhaseRunning TensorFusionWorkloadPhase = "Running"
+	TensorFusionWorkloadPhaseFailed  TensorFusionWorkloadPhase = "Failed"
+)
+
 // TensorFusionWorkloadStatus defines the observed state of TensorFusionWorkload.
 type TensorFusionWorkloadStatus struct {
+	// +kubebuilder:default=Pending
+	Phase TensorFusionWorkloadPhase `json:"phase,omitempty"`
+
+	// Represents the latest available observations of the workload's current state.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
 	// replicas is the number of Pods created by the Workload controller.
 	Replicas int32 `json:"replicas"`
 
 	// readyReplicas is the number of pods created for this Workload with a Ready Condition.
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
+	// Represents the status of each worker in the workload.
+	// +optional
 	WorkerStatuses []WorkerStatus `json:"workerStatuses,omitempty"`
 
+	// Hash of the pod template used to create worker pods
 	PodTemplateHash string `json:"podTemplateHash,omitempty"`
 }
 
