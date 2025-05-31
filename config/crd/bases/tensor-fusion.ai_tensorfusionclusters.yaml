@@ -650,8 +650,8 @@ spec:
                                     description: Default requests and limitsOverRequests
                                       are same, indicates normal on-demand serverless
                                       GPU usage, in hands-on lab low QoS case, limitsOverRequests
-                                      should be cheaper, for example Low QoS, ratio
-                                      should be 0.5
+                                      should be lower, so that user can get burstable
+                                      GPU resources with very low cost
                                     type: string
                                   qos:
                                     enum:

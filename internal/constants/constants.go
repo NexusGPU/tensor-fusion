@@ -18,7 +18,14 @@ const (
 	LabelKeyClusterOwner    = Domain + "/cluster"
 	LabelKeyNodeClass       = Domain + "/node-class"
 	LabelKeyPodTemplateHash = Domain + "/pod-template-hash"
+	LabelComponent          = Domain + "/component"
 	TrueStringValue         = "true"
+
+	ComponentClient        = "client"
+	ComponentWorker        = "worker"
+	ComponentHypervisor    = "hypervisor"
+	ComponentNodeDiscovery = "node-discovery"
+	ComponentOperator      = "operator"
 
 	GPUNodePoolIdentifierLabelPrefix = Domain + "/pool-"
 	GPUNodePoolIdentifierLabelFormat = Domain + "/pool-%s"
@@ -44,6 +51,11 @@ const (
 	GenWorkloadAnnotation            = Domain + "/generate-workload"
 	IsLocalGPUAnnotation             = Domain + "/is-local-gpu"
 	NoStandaloneWorkerModeAnnotation = Domain + "/no-standalone-worker-mode"
+
+	GenHostPortLabel        = Domain + "/host-port"
+	GenHostPortLabelValue   = "auto"
+	GenHostPortNameLabel    = Domain + "/port-name"
+	GenPortNumberAnnotation = Domain + "port-number"
 
 	AutoScaleLimitsAnnotation   = Domain + "/auto-limits"
 	AutoScaleRequestsAnnotation = Domain + "/auto-requests"
@@ -72,6 +84,10 @@ const (
 	WorkerPodNameEnv           = "POD_NAME"
 	NamespaceEnv               = "OPERATOR_NAMESPACE"
 	NamespaceDefaultVal        = "tensor-fusion-sys"
+
+	KubernetesHostNameLabel      = "kubernetes.io/hostname"
+	GiBToBytes                   = 1024 * 1024 * 1024
+	HypervisorServiceAccountName = "tensor-fusion-hypervisor-sa"
 )
 
 const (
@@ -123,3 +139,8 @@ const (
 const TFDataPath = "/tmp/tensor-fusion/data"
 const DataVolumeName = "tf-data"
 const TensorFusionPoolManualCompaction = Domain + "/manual-compaction"
+
+const (
+	LeaderInfoConfigMapName        = "tensor-fusion-operator-leader-info"
+	LeaderInfoConfigMapLeaderIPKey = "leader-ip"
+)

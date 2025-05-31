@@ -3,33 +3,36 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
-	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
-	"golang.org/x/exp/rand"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
-
-func init() {
-	rand.Seed(uint64(time.Now().UnixNano()))
-}
 
 type WorkerGenerator struct {
 	GpuInfos     *[]config.GpuInfo
 	WorkerConfig *tfv1.WorkerConfig
 }
 
+var ErrNoAvailableWorker = errors.New("no available worker")
+
 func (wg *WorkerGenerator) WorkerPort(pod *corev1.Pod) (int, error) {
-	port, ok := lo.Find(pod.Spec.Containers[0].Env, func(env corev1.EnvVar) bool {
+	portAnnotation, ok := pod.Annotations[constants.GenPortNumberAnnotation]
+	if ok {
+		return strconv.Atoi(portAnnotation)
+	}
+
+	// Compatible with old version in which no annotation in worker Pod
+	portEnv, ok := lo.Find(pod.Spec.Containers[0].Env, func(env corev1.EnvVar) bool {
 		return env.Name == constants.WorkerPortEnv
 	})
 
@@ -37,13 +40,7 @@ func (wg *WorkerGenerator) WorkerPort(pod *corev1.Pod) (int, error) {
 		return 0, fmt.Errorf("worker port not found in pod %s", pod.Name)
 	}
 
-	return strconv.Atoi(port.Value)
-}
-
-func (wg *WorkerGenerator) AllocPort() int {
-	min := 30000
-	max := 65535
-	return rand.Intn(max-min+1) + min
+	return strconv.Atoi(portEnv.Value)
 }
 
 func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
@@ -60,6 +57,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	generateName string,
 	namespace string,
 	port int,
+	requests tfv1.Resource,
 	limits tfv1.Resource,
 	podTemplateHash string,
 ) (*corev1.Pod, string, error) {
@@ -118,10 +116,32 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 			},
 		},
 	})
+	workerLabels := map[string]string{
+		constants.LabelComponent: constants.ComponentWorker,
+	}
+	if podTmpl.Template.Labels != nil {
+		for k, v := range podTmpl.Template.Labels {
+			workerLabels[k] = v
+		}
+	}
+	workerAnnotations := map[string]string{
+		constants.TFLOPSRequestAnnotation: requests.Tflops.String(),
+		constants.TFLOPSLimitAnnotation:   limits.Tflops.String(),
+		constants.VRAMRequestAnnotation:   requests.Vram.String(),
+		constants.VRAMLimitAnnotation:     limits.Vram.String(),
+		constants.GenPortNumberAnnotation: strconv.Itoa(port),
+	}
+	if podTmpl.Template.Annotations != nil {
+		for k, v := range podTmpl.Template.Annotations {
+			workerAnnotations[k] = v
+		}
+	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: generateName,
 			Namespace:    namespace,
+			Labels:       workerLabels,
+			Annotations:  workerAnnotations,
 		},
 		Spec: spec,
 	}, podTemplateHash, nil
@@ -134,7 +154,7 @@ func SelectWorker(
 	maxSkew int32,
 ) (*tfv1.WorkerStatus, error) {
 	if len(workload.Status.WorkerStatuses) == 0 {
-		return nil, fmt.Errorf("no available worker")
+		return nil, ErrNoAvailableWorker
 	}
 	usageMapping := make(map[string]int, len(workload.Status.WorkerStatuses))
 	for _, workerStatus := range workload.Status.WorkerStatuses {
@@ -179,7 +199,7 @@ func SelectWorker(
 	}
 
 	if len(eligibleWorkers) == 0 {
-		return nil, fmt.Errorf("no available worker")
+		return nil, ErrNoAvailableWorker
 	}
 
 	// Choose the worker with the minimum usage among eligible workers

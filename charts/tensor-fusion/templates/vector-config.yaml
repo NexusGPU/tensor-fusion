@@ -8,43 +8,17 @@ data:
     api:
       enabled: true
     sources:
-      controller_metrics:
-        type: prometheus_scrape
-        endpoints:
-          - http://localhost:9000/metrics
-    transforms:
-      prepare_controller_metrics:
-        type: remap
-        inputs: 
-          - controller_metrics
-        source: |
-          .namespace = "tf"
-    sinks:
-      sink_greptimedb_controller_metrics:
-        type: prometheus_remote_write
-        inputs:
-          - prepare_controller_metrics
-        {{- if ne .Values.greptime.isCloud true }}
-        endpoint: http://{{ .Values.greptime.host }}:4000/v1/prometheus/write?db=public
-        {{- else }}
-        endpoint: https://{{ .Values.greptime.host }}/v1/prometheus/write?db={{ .Values.greptime.db }}
-        auth:
-          strategy: basic
-          user: {{ .Values.greptime.user }}
-          password: {{ .Values.greptime.password }}
-        {{- end }}
-
-  vector-hypervisor.yaml: |
-    api:
-      enabled: true
-    
-    sources:
       metrics:
         type: file
         data_dir: /logs
         include:
           - /logs/metrics.log
-      
+
+      kubernetes_logs:
+        type: kubernetes_logs
+        self_node_name: "${NODE_NAME}"
+        extra_label_selector: "tensor-fusion.ai/component in (operator)"
+
     transforms:
       parse_influx:
         type: remap
@@ -67,6 +41,99 @@ data:
         all_metrics: true
         metrics: []
 
+      prepare_kubernetes_logs:
+        type: remap
+        inputs:
+          - kubernetes_logs
+        source: |
+          .message = .message
+          .container = .kubernetes.container_name
+          .pod = .kubernetes.pod_name
+          .namespace = .kubernetes.pod_namespace
+          .component = .kubernetes.pod_labels."tensor-fusion.ai/component"
+          del(.kubernetes)
+          del(.file)
+          del(.source_type)
+    sinks:
+      sink_greptimedb_operator_metrics:
+        type: greptimedb_metrics
+        inputs:
+          - log_to_metric
+        new_naming: false
+        endpoint: {{ .Values.greptime.host }}:{{ .Values.greptime.port }}
+        {{- if eq .Values.greptime.isCloud true }}
+        dbname: {{ .Values.greptime.db }}
+        username: {{ .Values.greptime.user }}
+        password: {{ .Values.greptime.password }}
+        tls: {}
+        {{- end }}
+      
+      sink_greptimedb_operator_logs:
+        type: greptimedb_logs
+        compression: gzip
+        table: tf_system_log
+        inputs:
+          - prepare_kubernetes_logs
+        {{- if ne .Values.greptime.isCloud true }}
+        endpoint: http://{{ .Values.greptime.host }}:4000
+        dbname: public
+        {{- else }}
+        endpoint: https://{{ .Values.greptime.host }}
+        dbname: {{ .Values.greptime.db }}
+        username: {{ .Values.greptime.user }}
+        password: {{ .Values.greptime.password }}
+        {{- end }}
+
+  vector-hypervisor.yaml: |
+    api:
+      enabled: true
+    
+    sources:
+      kubernetes_logs:
+        type: kubernetes_logs
+        self_node_name: "${NODE_NAME}"
+        extra_label_selector: "tensor-fusion.ai/component in (hypervisor,worker)"
+      metrics:
+        type: file
+        data_dir: /logs
+        include:
+          - /logs/metrics.log
+    transforms:
+      parse_influx:
+        type: remap
+        inputs:
+          - metrics
+        source: |
+          . = parse_influxdb!(.message)
+      prepare_metrics:
+        type: remap
+        inputs:
+          - parse_influx
+        source: |
+          .namespace = "tf"
+          .tags.nodeName = "${NODE_NAME}"
+      
+      log_to_metric:
+        type: log_to_metric
+        inputs:
+          - prepare_metrics
+        all_metrics: true
+        metrics: []
+
+      prepare_kubernetes_logs:
+        type: remap
+        inputs:
+          - kubernetes_logs
+        source: |
+          .message = .message
+          .container = .kubernetes.container_name
+          .pod = .kubernetes.pod_name
+          .namespace = .kubernetes.pod_namespace
+          .component = .kubernetes.pod_labels."tensor-fusion.ai/component"
+          del(.kubernetes)
+          del(.file)
+          del(.source_type)
+
     sinks:
       sink_greptimedb_hypervisor_metrics:
         type: greptimedb_metrics
@@ -80,4 +147,18 @@ data:
         password: {{ .Values.greptime.password }}
         tls: {}
         {{- end }}
-
+      sink_greptimedb_hypervisor_worker_logs:
+        type: greptimedb_logs
+        compression: gzip
+        table: tf_system_log
+        inputs:
+          - prepare_kubernetes_logs
+        {{- if ne .Values.greptime.isCloud true }}
+        endpoint: http://{{ .Values.greptime.host }}:4000
+        dbname: public
+        {{- else }}
+        endpoint: https://{{ .Values.greptime.host }}
+        dbname: {{ .Values.greptime.db }}
+        username: {{ .Values.greptime.user }}
+        password: {{ .Values.greptime.password }}
+        {{- end }}

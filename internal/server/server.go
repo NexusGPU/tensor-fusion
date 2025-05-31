@@ -8,6 +8,7 @@ import (
 
 func NewHTTPServer(
 	cr *router.ConnectionRouter,
+	ahp *router.AssignHostPortRouter,
 ) *gin.Engine {
 
 	r := gin.New()
@@ -17,5 +18,6 @@ func NewHTTPServer(
 
 	apiGroup := r.Group("/api")
 	apiGroup.GET("/connection", cr.Get)
+	apiGroup.POST("/assign-host-port", ahp.AssignHostPort)
 	return r
 }

@@ -37,7 +37,18 @@ controller:
 
   podAnnotations: {}
   tolerations: []
-  affinity: {}
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: tensor-fusion.ai/component
+              operator: In
+              values:
+              - operator
+          topologyKey: "kubernetes.io/hostname"
   livenessProbe:
     httpGet:
       path: /healthz
@@ -94,7 +105,7 @@ greptime:
 agent:
   enrollToken: "token-from-cloud"
   agentId: 'org-from-cloud:env'
-  cloudEndpoint: "wss://app.tensor-fusion.ai/_ws"
+  cloudEndpoint: "wss://app.tensor-fusion.ai"
   
   image:
     repository: tensorfusion/tensor-fusion-agent

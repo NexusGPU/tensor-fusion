@@ -19,8 +19,12 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	goErrors "errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
+	"time"
 
 	"gomodules.xyz/jsonpatch/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +40,7 @@ import (
 	"al.essio.dev/pkg/shellescape"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
 	"github.com/lithammer/shortuuid/v4"
@@ -43,22 +48,24 @@ import (
 )
 
 // SetupPodWebhookWithManager registers the webhook for Pod in the manager.
-func SetupPodWebhookWithManager(mgr ctrl.Manager) error {
+func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator) error {
 	webhookServer := mgr.GetWebhookServer()
 
 	webhookServer.Register("/mutate-v1-pod",
 		&admission.Webhook{
 			Handler: &TensorFusionPodMutator{
-				decoder: admission.NewDecoder(runtime.NewScheme()),
-				Client:  mgr.GetClient(),
+				decoder:       admission.NewDecoder(runtime.NewScheme()),
+				Client:        mgr.GetClient(),
+				portAllocator: portAllocator,
 			},
 		})
 	return nil
 }
 
 type TensorFusionPodMutator struct {
-	Client  client.Client
-	decoder admission.Decoder
+	Client        client.Client
+	decoder       admission.Decoder
+	portAllocator *portallocator.PortAllocator
 }
 
 // Handle implements admission.Handler interface.
@@ -116,12 +123,26 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 				return admission.Errored(http.StatusInternalServerError, fmt.Errorf("workload(%s) does not exist", tfInfo.WorkloadName))
 			}
 		}
-		workloadStatus, err := worker.SelectWorker(ctx, m.Client, workload, 1)
-		if err != nil {
-			log.Error(err, "failed to select worker for pod", "pod", req.Name, "namespace", req.Namespace)
-			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("select worker: %w", err))
+
+		workerFound := false
+		for i := 0; i < 25; i++ {
+			workloadStatus, err := worker.SelectWorker(ctx, m.Client, workload, 1)
+			if err != nil {
+				if goErrors.Is(err, worker.ErrNoAvailableWorker) {
+					time.Sleep(time.Second)
+					continue
+				}
+				log.Error(err, "failed to select worker for pod", "pod", req.Name, "namespace", req.Namespace)
+				return admission.Errored(http.StatusInternalServerError, fmt.Errorf("select worker: %w", err))
+			}
+			nodeSelector = workloadStatus.NodeSelector
+			workerFound = true
+			break
 		}
-		nodeSelector = workloadStatus.NodeSelector
+
+		if !workerFound {
+			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("no available worker for pod: %s", req.Name))
+		}
 	}
 
 	// Inject initContainer and env variables
@@ -262,7 +283,15 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		pod.Labels = map[string]string{}
 	}
 	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(clientConfig)
+	pod.Labels[constants.LabelComponent] = constants.ComponentClient
 	pod.Labels[constants.GpuPoolKey] = pool.Name
+
+	// Patch hostPort allocation
+	if pod.Labels[constants.GenHostPortLabel] == constants.GenHostPortLabelValue {
+		if err := m.generateHostPort(pod, pod.Labels[constants.GenHostPortNameLabel]); err != nil {
+			return nil, fmt.Errorf("can not generate host port: %w", err)
+		}
+	}
 
 	containerPatched := false
 	// Patch to Container
@@ -369,4 +398,73 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 	patches = append(patches, strategicpatches...)
 	return patches, nil
+}
+
+func (m *TensorFusionPodMutator) generateHostPort(pod *corev1.Pod, portName string) error {
+
+	portNameFound := false
+	containerIndex := -1
+	portIndex := -1
+	for i := range pod.Spec.Containers {
+		container := &pod.Spec.Containers[i]
+		for j := range container.Ports {
+			port := &container.Ports[j]
+			if port.Name == portName {
+				portNameFound = true
+				containerIndex = i
+				portIndex = j
+			}
+		}
+	}
+	if !portNameFound {
+		return fmt.Errorf("port name %s not found, can not assign host port for pod %s", portName, pod.Name)
+	}
+
+	if !m.portAllocator.IsLeader {
+		port, err := m.assignClusterHostPortFromLeader(pod)
+		if err != nil {
+			return fmt.Errorf("can not assign cluster host port from leader: %w", err)
+		}
+		pod.Annotations[constants.GenPortNumberAnnotation] = strconv.Itoa(port)
+	} else {
+		port, err := m.portAllocator.AssignClusterLevelHostPort(pod.Name)
+		if err != nil {
+			return fmt.Errorf("can not assign cluster level host port: %w", err)
+		}
+		pod.Annotations[constants.GenPortNumberAnnotation] = strconv.Itoa(port)
+	}
+
+	pod.Spec.Containers[containerIndex].Ports[portIndex].HostPort = int32(m.getPortNumber(pod))
+	return nil
+}
+
+func (m *TensorFusionPodMutator) getPortNumber(pod *corev1.Pod) int {
+	portNumber, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
+	return portNumber
+}
+
+func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod) (int, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	leaderIP := m.portAllocator.GetLeaderIP()
+	if leaderIP == "" {
+		return 0, fmt.Errorf("operator leader IP not found")
+	}
+
+	url := fmt.Sprintf("http://%s:8080/assign-host-port?podName=%s", leaderIP, pod.Name)
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0, fmt.Errorf("failed to assign host port: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("host port allocation failed: %s", resp.Status)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read allocation response: %w", err)
+	}
+
+	return strconv.Atoi(string(body))
 }

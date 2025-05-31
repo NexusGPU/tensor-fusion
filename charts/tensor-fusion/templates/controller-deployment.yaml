@@ -4,6 +4,7 @@ metadata:
   name: {{ include "tensor-fusion.fullname" . }}-controller
   namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
+    tensor-fusion.ai/component: operator
     {{- include "tensor-fusion.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.controller.replicaCount }}
@@ -12,6 +13,7 @@ spec:
       app.kubernetes.io/name: {{ include "tensor-fusion.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: controller
+      tensor-fusion.ai/component: operator
   template:
     metadata:
       {{- with .Values.controller.podAnnotations }}
@@ -22,6 +24,7 @@ spec:
         app.kubernetes.io/name: {{ include "tensor-fusion.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: controller
+        tensor-fusion.ai/component: operator
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -35,6 +38,7 @@ spec:
             - /manager
             - -metrics-bind-address
             - :9000
+            - -leader-elect
           livenessProbe:
             {{- toYaml .Values.controller.livenessProbe | nindent 12 }}
           readinessProbe:
@@ -54,6 +58,8 @@ spec:
             - name: cert
               readOnly: true
               mountPath: /tmp/k8s-webhook-server/serving-certs
+            - name: logs
+              mountPath: /logs
             - name: cloud-vendor-credentials
               mountPath: /tmp/secret
               readOnly: true
@@ -85,12 +91,17 @@ spec:
             requests:
               cpu: 50m
               memory: 64Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
           volumeMounts:
             - name: logs
               mountPath: /logs
             - name: vector-config
               mountPath: /etc/vector/vector.yaml
               subPath: vector-operator.yaml
+            - name: kubernetes-logs
+              mountPath: /var/log/pods
       volumes:
         - name: cert
           secret:
@@ -115,6 +126,9 @@ spec:
           name: gpu-info
         - name: logs
           emptyDir: {}
+        - name: kubernetes-logs
+          hostPath:
+            path: /var/log/pods
       {{- with .Values.controller.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
