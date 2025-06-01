@@ -149,6 +149,27 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 	}
 
+	result, err := r.reconcileScaling(ctx, workload, podList, workerGenerator, podTemplateHash)
+	if err != nil || !result.IsZero() {
+		return result, err
+	}
+
+	if err := r.updateStatus(ctx, workload, podList.Items, workerGenerator); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// reconcileScaling handles scaling up and down of worker pods and updates replica status
+func (r *TensorFusionWorkloadReconciler) reconcileScaling(
+	ctx context.Context,
+	workload *tfv1.TensorFusionWorkload,
+	podList *corev1.PodList,
+	workerGenerator *worker.WorkerGenerator,
+	podTemplateHash string,
+) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
 	// Check if there are any Pods using the old podTemplateHash and delete them if any
 	if len(podList.Items) > 0 {
 		var outdatedPods []corev1.Pod
@@ -213,10 +234,6 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		if err := r.scaleDownWorkers(ctx, workload, podList.Items[:podsToRemove]); err != nil {
 			return ctrl.Result{}, err
 		}
-	}
-
-	if err := r.updateStatus(ctx, workload, podList.Items, workerGenerator); err != nil {
-		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
