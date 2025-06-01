@@ -9,12 +9,14 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	constants "github.com/NexusGPU/tensor-fusion/internal/constants"
 	"k8s.io/apimachinery/pkg/types"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -183,4 +185,16 @@ func IsPodConditionTrue(conditions []corev1.PodCondition, conditionType corev1.P
 
 func IsPodTerminated(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded
+}
+
+func ExtractPoolNameFromNodeLabel(node *tfv1.GPUNode) string {
+	var poolName string
+	for labelKey := range node.Labels {
+		after, ok := strings.CutPrefix(labelKey, constants.GPUNodePoolIdentifierLabelPrefix)
+		if ok {
+			poolName = after
+			break
+		}
+	}
+	return poolName
 }

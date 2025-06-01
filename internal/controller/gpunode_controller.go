@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -128,14 +127,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	var poolName string
-	for labelKey := range node.Labels {
-		after, ok := strings.CutPrefix(labelKey, constants.GPUNodePoolIdentifierLabelPrefix)
-		if ok {
-			poolName = after
-			break
-		}
-	}
+	poolName := utils.ExtractPoolNameFromNodeLabel(node)
 	if poolName == "" {
 		log.Error(nil, "failed to get pool name", "node", node.Name)
 		return ctrl.Result{}, nil

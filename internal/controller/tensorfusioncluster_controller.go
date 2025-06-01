@@ -110,7 +110,7 @@ func (r *TensorFusionClusterReconciler) Reconcile(ctx context.Context, req ctrl.
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if shouldReturn {
+	if shouldReturn || !tfc.DeletionTimestamp.IsZero() {
 		// requeue for next loop
 		// we need manually requeue cause GenerationChangedPredicate
 		return ctrl.Result{Requeue: true}, nil
