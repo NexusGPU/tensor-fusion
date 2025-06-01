@@ -123,6 +123,11 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
+	if !workload.DeletionTimestamp.IsZero() {
+		log.Info("Workload is being deleted, skipping pod creation", "name", workload.Name, "namespace", workload.Namespace)
+		return ctrl.Result{}, nil
+	}
+
 	// Fetch the GPUPool
 	pool := &tfv1.GPUPool{}
 	if err := r.Get(ctx, client.ObjectKey{Name: workload.Spec.PoolName}, pool); err != nil {
