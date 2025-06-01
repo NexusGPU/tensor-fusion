@@ -124,7 +124,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if shouldReturn {
+	if shouldReturn || !node.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
 

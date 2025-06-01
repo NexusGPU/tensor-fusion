@@ -98,7 +98,7 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if shouldReturn {
+	if shouldReturn || !pool.DeletionTimestamp.IsZero() {
 		// requeue for next loop
 		// we need manually requeue cause GenerationChangedPredicate
 		return ctrl.Result{Requeue: true}, nil
