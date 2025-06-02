@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.224.0
 	github.com/aws/smithy-go v1.22.3
 	github.com/gin-contrib/gzip v1.2.3
-	github.com/gin-gonic/gin v1.10.0
+	github.com/gin-gonic/gin v1.10.1
 	github.com/lithammer/shortuuid/v4 v4.2.0
 	github.com/onsi/ginkgo/v2 v2.23.4
 	github.com/onsi/gomega v1.37.0
