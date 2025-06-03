@@ -29,6 +29,15 @@ var ErrNextLoop = errors.New("stop this loop and return the associated Result ob
 // ErrTerminateLoop is not a real error. It forces the current reconciliation loop to stop
 var ErrTerminateLoop = errors.New("stop this loop and do not requeue")
 
+// Minimum time between reconciliations for the same object
+var debounceInterval = 3 * time.Second
+
+func init() {
+	if os.Getenv("GO_TESTING") == "true" {
+		debounceInterval = 60 * time.Millisecond
+	}
+}
+
 // HandleFinalizer ensures proper finalizer management for Kubernetes resources.
 // It automatically adds the finalizer when needed, and removes it after successful cleanup.
 // Returns (shouldReturn, err):
@@ -147,10 +156,6 @@ func CompareAndGetObjectHash(hash string, obj ...any) (bool, string) {
 const DebounceKeySuffix = ":in_queue"
 
 func DebouncedReconcileCheck(ctx context.Context, lastProcessedItems *sync.Map, name types.NamespacedName) (runNow bool, alreadyQueued bool, waitTime time.Duration) {
-	const (
-		// Minimum time between reconciliations for the same object
-		debounceInterval = 3 * time.Second
-	)
 	now := time.Now()
 	key := name.String()
 	inQueueKey := key + DebounceKeySuffix

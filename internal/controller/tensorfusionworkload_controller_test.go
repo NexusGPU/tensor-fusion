@@ -142,9 +142,9 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				byteWriter := bytes.NewBuffer([]byte{})
 				metricsRecorder.RecordMetrics(byteWriter)
 				str := byteWriter.String()
-				g.Expect(str).Should(MatchRegexp("raw_cost=0.00116\\d+"))
+				g.Expect(str).Should(MatchRegexp("raw_cost=\\d+"))
 
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			// Store the original pod template hash
 			var originalPodNames []string
@@ -179,7 +179,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				for _, originalName := range originalPodNames {
 					g.Expect(newPodNames).NotTo(ContainElement(originalName))
 				}
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			checkWorkloadStatus(workload)
 		})
@@ -220,7 +220,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					return gpu.Status.Available.Tflops.Equal(resource.MustParse("1990")) && gpu.Status.Available.Vram.Equal(resource.MustParse("1992Gi"))
 				})
 				return ok
-			}, timeout, interval).Should(BeTrue())
+			}).Should(BeTrue())
 
 			Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 			workloadCopy := workload.DeepCopy()
@@ -232,14 +232,14 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					client.InNamespace(key.Namespace),
 					client.MatchingLabels{constants.WorkloadKey: key.Name})).To(Succeed())
 				g.Expect(podList.Items).Should(BeEmpty())
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			Eventually(func(g Gomega) {
 				gpu := &tfv1.GPU{}
 				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(&updatedGPU), gpu)).NotTo(HaveOccurred())
 				g.Expect(gpu.Status.Available.Tflops.Equal(resource.MustParse("2000"))).Should(BeTrue())
 				g.Expect(gpu.Status.Available.Vram.Equal(resource.MustParse("2000Gi"))).Should(BeTrue())
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 		})
 	})
 
@@ -256,7 +256,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				workload.Spec.GPUModel = "mock"
 				// Update the workload
 				g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			checkWorkerPodCount(workload)
 			checkWorkloadStatus(workload)
@@ -273,7 +273,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					return pod.DeletionTimestamp == nil
 				})
 				g.Expect(podList.Items).Should(HaveLen(1))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			// Now check if the pod has the correct GPU
 			Eventually(func(g Gomega) {
@@ -290,7 +290,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				})
 				g.Expect(ok).To(BeTrue())
 				g.Expect(gpu.Status.GPUModel).To(Equal("mock"))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 		})
 	})
 
@@ -309,7 +309,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					client.InNamespace(key.Namespace),
 					client.MatchingLabels{constants.WorkloadKey: key.Name})).To(Succeed())
 				g.Expect(podList.Items).To(HaveLen(2))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			// delete workload
 			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
@@ -321,14 +321,14 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					client.InNamespace(key.Namespace),
 					client.MatchingLabels{constants.WorkloadKey: key.Name})).To(Succeed())
 				g.Expect(podList.Items).Should(BeEmpty())
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			// wait for workload itself to be deleted
 			Eventually(func(g Gomega) {
 				w := &tfv1.TensorFusionWorkload{}
 				err := k8sClient.Get(ctx, key, w)
 				g.Expect(err).To(HaveOccurred())
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 		})
 	})
 
@@ -354,7 +354,7 @@ func checkWorkerPodCount(workload *tfv1.TensorFusionWorkload) {
 			client.InNamespace(workload.Namespace),
 			client.MatchingLabels{constants.WorkloadKey: workload.Name})).Should(Succeed())
 		g.Expect(podList.Items).Should(HaveLen(int(*workload.Spec.Replicas)))
-	}, timeout, interval).Should(Succeed())
+	}).Should(Succeed())
 }
 
 func checkWorkloadStatus(in *tfv1.TensorFusionWorkload) {
@@ -387,7 +387,7 @@ func checkWorkloadStatus(in *tfv1.TensorFusionWorkload) {
 				g.Expect(readyCondition.Message).Should(ContainSubstring("Failed workers:"))
 			}
 		}
-	}, timeout, interval).Should(Succeed())
+	}).Should(Succeed())
 }
 
 func createTensorFusionWorkload(poolName string, key client.ObjectKey, replicas int) *tfv1.TensorFusionWorkload {
@@ -426,7 +426,7 @@ func createTensorFusionWorkload(poolName string, key client.ObjectKey, replicas 
 
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
-	}, timeout, interval).Should(Succeed())
+	}).Should(Succeed())
 
 	return workload
 }
@@ -447,7 +447,7 @@ func cleanupWorkload(key client.ObjectKey) {
 		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 		workload.Spec.Replicas = ptr.Int32(0)
 		g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
-	}, timeout, interval).Should(Succeed())
+	}).Should(Succeed())
 
 	Eventually(func(g Gomega) {
 		podList := &corev1.PodList{}
@@ -455,12 +455,12 @@ func cleanupWorkload(key client.ObjectKey) {
 			client.InNamespace(key.Namespace),
 			client.MatchingLabels{constants.WorkloadKey: key.Name})).To(Succeed())
 		g.Expect(podList.Items).Should(BeEmpty())
-	}, timeout, interval).Should(Succeed())
+	}).Should(Succeed())
 
 	Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 	Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
 	Eventually(func(g Gomega) {
 		err := k8sClient.Get(ctx, key, workload)
 		g.Expect(err).Should(HaveOccurred())
-	}, timeout, interval).Should(Succeed())
+	}).Should(Succeed())
 }

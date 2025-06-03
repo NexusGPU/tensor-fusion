@@ -103,7 +103,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 				g.Expect(connection.Status.Phase).Should(Equal(workerStatus.WorkerPhase))
 				connectionUrl := fmt.Sprintf("native+%s+%d+%s-%s", workerStatus.WorkerIp, workerStatus.WorkerPort, workerStatus.WorkerName, workerStatus.ResourceVersion)
 				g.Expect(connection.Status.ConnectionURL).Should(Equal(connectionUrl))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 		})
 
 		It("should handle missing workload label", func() {
@@ -122,7 +122,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			Consistently(func(g Gomega) {
 				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(connectionNoLabel), connectionNoLabel)).Should(Succeed())
 				g.Expect(connectionNoLabel.Status.WorkerName).Should(Equal(""))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			// Clean up the test connection
 			Expect(k8sClient.Delete(ctx, connectionNoLabel)).To(Succeed())
@@ -138,7 +138,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 				g.Expect(k8sClient.Get(ctx, typeNamespacedName, connection)).Should(Succeed())
 				workerStatus := workload.Status.WorkerStatuses[0]
 				g.Expect(connection.Status.WorkerName).Should(Equal(workerStatus.WorkerName))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			By("Updating the workload to mark the worker as failed")
 			Expect(k8sClient.Get(ctx, workloadNamespacedName, workload)).To(Succeed())
@@ -154,7 +154,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 				g.Expect(connection.Status.Phase).Should(Equal(workerStatus.WorkerPhase))
 				connectionUrl := fmt.Sprintf("native+%s+%d+%s-%s", workerStatus.WorkerIp, workerStatus.WorkerPort, workerStatus.WorkerName, workerStatus.ResourceVersion)
 				g.Expect(connection.Status.ConnectionURL).Should(Equal(connectionUrl))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 		})
 
 		It("should update status to WorkerPending when worker selection fails", func() {
@@ -201,7 +201,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					return false
 				}
 				return len(createdWorkload.Status.WorkerStatuses) == 0
-			}, timeout, interval).Should(BeTrue())
+			}).Should(BeTrue())
 
 			By("Creating a connection to the workload with no workers")
 			failConnectionName := "test-connection-fail"
@@ -230,7 +230,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					return false
 				}
 				return failConnection.Status.Phase == tfv1.WorkerPending
-			}, timeout, interval).Should(BeTrue())
+			}).Should(BeTrue())
 
 			By("Cleaning up test resources")
 			Expect(k8sClient.Delete(ctx, failConnection)).To(Succeed())
