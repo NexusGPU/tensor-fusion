@@ -126,7 +126,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 	})
 
 	Context("When resource limits change in a workload", func() {
-		FIt("Should rebuild all worker pods", func() {
+		It("Should rebuild all worker pods", func() {
 			pool := tfEnv.GetGPUPool(0)
 
 			createTensorFusionWorkload(pool.Name, key, 2)
