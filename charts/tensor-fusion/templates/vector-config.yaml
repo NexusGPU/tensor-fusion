@@ -12,7 +12,7 @@ data:
         type: file
         data_dir: /logs
         include:
-          - /logs/metrics.log
+          - /logs/metrics*.log
 
       kubernetes_logs:
         type: kubernetes_logs
@@ -97,7 +97,7 @@ data:
         type: file
         data_dir: /logs
         include:
-          - /logs/metrics.log
+          - /logs/metrics.log.*
     transforms:
       parse_influx:
         type: remap

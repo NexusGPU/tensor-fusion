@@ -41,7 +41,7 @@ var _ = Describe("GPUNode Controller", func() {
 			By("checking that the k8s node name should be set")
 			Eventually(func(g Gomega) {
 				g.Expect(gpuNode.Status.KubernetesNodeName).Should(Equal(gpuNode.Name))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			By("checking that the node discovery job is created")
 			Eventually(func(g Gomega) {
@@ -52,7 +52,7 @@ var _ = Describe("GPUNode Controller", func() {
 				}, job)).Should(Succeed())
 
 				g.Expect(job.Spec.TTLSecondsAfterFinished).Should(Equal(ptr.To[int32](3600 * 10)))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			By("checking that the hypervisor pod is created")
 			pod := &corev1.Pod{}
@@ -63,13 +63,13 @@ var _ = Describe("GPUNode Controller", func() {
 				}, pod)
 				g.Expect(err).ShouldNot(HaveOccurred())
 				g.Expect(pod.Status.Phase).Should(Equal(corev1.PodRunning))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			By("checking that the gpunode status phase should be running")
 			Eventually(func(g Gomega) {
 				gpunode := tfEnv.GetGPUNode(0, 0)
 				g.Expect(gpunode.Status.Phase).Should(Equal(tfv1.TensorFusionGPUNodePhaseRunning))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			By("checking the hypervisor pod should be recreated when enters terminated status")
 			pod.Status.Phase = corev1.PodFailed
@@ -82,7 +82,7 @@ var _ = Describe("GPUNode Controller", func() {
 				}, newPod)
 				g.Expect(err).ShouldNot(HaveOccurred())
 				g.Expect(newPod.UID).ShouldNot(Equal(pod.UID))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			tfEnv.Cleanup()
 

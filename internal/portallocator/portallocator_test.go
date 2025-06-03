@@ -65,7 +65,6 @@ var _ = Describe("Port Allocator", func() {
 				assignedPorts[lastPort] = true
 			}
 
-			// Eventually we should get an error about no available ports
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("no available port"))
 		})

@@ -17,8 +17,8 @@ func RefreshGPUNodeCapacity(ctx context.Context, k8sClient client.Client, node *
 		return nil, fmt.Errorf("failed to list GPUs: %w", err)
 	}
 	if len(gpuList.Items) == 0 {
-		// node discovery job not completed, check again
-		return nil, fmt.Errorf("node discovery job not completed, no gpu found for this node, should check again")
+		// node discovery job not completed, wait next reconcile loop to check again
+		return nil, nil
 	}
 
 	statusCopy := node.Status.DeepCopy()

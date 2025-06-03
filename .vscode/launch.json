@@ -55,7 +55,10 @@
             "type": "go",
             "request": "launch",
             "mode": "test",
-            "program": "${workspaceFolder}",
+            "env": {
+                "GO_TESTING": "true"
+            },
+            "program": "${workspaceFolder}/internal/controller",
             "console": "integratedTerminal"
         }
     ]
