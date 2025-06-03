@@ -36,10 +36,10 @@ type PortAllocator struct {
 	BitmapCluster []uint64
 
 	Client client.Client
-}
 
-var storeMutexNode sync.RWMutex
-var storeMutexCluster sync.RWMutex
+	storeMutexNode    sync.RWMutex
+	storeMutexCluster sync.RWMutex
+}
 
 func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRange string, clusterLevelPortRange string) (*PortAllocator, error) {
 	if client == nil {
@@ -64,6 +64,9 @@ func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRa
 		IsLeader:              false,
 		BitmapPerNode:         make(map[string][]uint64),
 		BitmapCluster:         make([]uint64, (portRangeEndCluster-portRangeStartCluster)/64+1),
+
+		storeMutexNode:    sync.RWMutex{},
+		storeMutexCluster: sync.RWMutex{},
 	}
 
 	return allocator, nil
@@ -93,10 +96,10 @@ func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manage
 			log.FromContext(ctx).Error(err, "Failed to update leader IP info in ConfigMap")
 		}
 
-		storeMutexNode.Lock()
-		storeMutexCluster.Lock()
-		defer storeMutexNode.Unlock()
-		defer storeMutexCluster.Unlock()
+		s.storeMutexNode.Lock()
+		s.storeMutexCluster.Lock()
+		defer s.storeMutexNode.Unlock()
+		defer s.storeMutexCluster.Unlock()
 
 		// 1. init bit map from existing pods labeled with tensor-fusion.ai/host-port=auto
 		s.initBitMapForClusterLevelPortAssign(ctx)
@@ -131,8 +134,8 @@ func (s *PortAllocator) AssignHostPort(nodeName string) (int, error) {
 	if nodeName == "" {
 		return 0, fmt.Errorf("node name cannot be empty when assign host port")
 	}
-	storeMutexNode.Lock()
-	defer storeMutexNode.Unlock()
+	s.storeMutexNode.Lock()
+	defer s.storeMutexNode.Unlock()
 
 	bitmap, ok := s.BitmapPerNode[nodeName]
 	if !ok {
@@ -162,8 +165,8 @@ func (s *PortAllocator) ReleaseHostPort(nodeName string, port int) error {
 	if port == 0 {
 		return fmt.Errorf("port cannot be 0 when release host port, may caused by portNumber annotation not detected, nodeName: %s", nodeName)
 	}
-	storeMutexNode.Lock()
-	defer storeMutexNode.Unlock()
+	s.storeMutexNode.Lock()
+	defer s.storeMutexNode.Unlock()
 
 	if bitmap, ok := s.BitmapPerNode[nodeName]; !ok {
 		return fmt.Errorf("node %s not found in bitmap", nodeName)
@@ -176,8 +179,8 @@ func (s *PortAllocator) ReleaseHostPort(nodeName string, port int) error {
 
 func (s *PortAllocator) AssignClusterLevelHostPort(podName string) (int, error) {
 
-	storeMutexCluster.Lock()
-	defer storeMutexCluster.Unlock()
+	s.storeMutexCluster.Lock()
+	defer s.storeMutexCluster.Unlock()
 
 	for i, subMap := range s.BitmapCluster {
 		bitPos := bits.TrailingZeros64(^subMap)
@@ -200,8 +203,8 @@ func (s *PortAllocator) ReleaseClusterLevelHostPort(podName string, port int) er
 
 	// TODO, may need a defer queue for releasing so that to avoid port being assigned again too fast
 
-	storeMutexCluster.Lock()
-	defer storeMutexCluster.Unlock()
+	s.storeMutexCluster.Lock()
+	defer s.storeMutexCluster.Unlock()
 
 	portOffset := port - s.PortRangeStartCluster
 	s.BitmapCluster[portOffset/64] &^= 1 << (portOffset % 64)
