@@ -88,6 +88,11 @@ func (r *GPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, fmt.Errorf("node %s is not assigned to any pool", gpunode.Name)
 	}
 
+	// No need to calculate patch since GPU's owner pool not changed
+	if gpu.Labels != nil && gpu.Labels[constants.GpuPoolKey] == poolName {
+		return ctrl.Result{}, nil
+	}
+
 	patch := client.MergeFrom(gpu.DeepCopy())
 	if gpu.Labels == nil {
 		gpu.Labels = make(map[string]string)

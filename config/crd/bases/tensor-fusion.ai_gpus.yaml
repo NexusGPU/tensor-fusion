@@ -116,6 +116,21 @@ spec:
                 - Destroying
                 - Migrating
                 type: string
+              runningApps:
+                items:
+                  properties:
+                    count:
+                      description: Worker count
+                      type: integer
+                    name:
+                      description: Workload name namespace
+                      type: string
+                    namespace:
+                      type: string
+                  required:
+                  - count
+                  type: object
+                type: array
               uuid:
                 type: string
             required:

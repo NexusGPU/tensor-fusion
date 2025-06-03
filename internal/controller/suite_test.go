@@ -47,6 +47,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	// +kubebuilder:scaffold:imports
 )
@@ -60,6 +62,7 @@ var testEnv *envtest.Environment
 var ctx context.Context
 var cancel context.CancelFunc
 var allocator *gpuallocator.GpuAllocator
+var metricsRecorder *metrics.MetricsRecorder
 
 const (
 	timeout  = time.Second * 10
@@ -121,10 +124,20 @@ var _ = BeforeSuite(func() {
 		Scheme: scheme.Scheme,
 	})
 	Expect(err).ToNot(HaveOccurred())
+
+	metricsRecorder = &metrics.MetricsRecorder{
+		MetricsOutputPath: "./metrics.log",
+		HourlyUnitPriceMap: map[string]float64{
+			"A100": 10,
+		},
+		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
+	}
+
 	err = (&TensorFusionClusterReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("TensorFusionCluster"),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		Recorder:        mgr.GetEventRecorderFor("TensorFusionCluster"),
+		MetricsRecorder: metricsRecorder,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
@@ -142,12 +155,11 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
-	// err = (&GPUPoolCompactionReconciler{
-	// 	Client:   mgr.GetClient(),
-	// 	Scheme:   mgr.GetScheme(),
-	// 	Recorder: mgr.GetEventRecorderFor("GPUPoolCompaction"),
-	// }).SetupWithManager(mgr)
-	// Expect(err).ToNot(HaveOccurred())
+	portAllocator, err := portallocator.NewPortAllocator(ctx, mgr.GetClient(), "40000-42000", "42001-60000")
+	if err != nil {
+		Expect(err).ToNot(HaveOccurred())
+	}
+	_ = portAllocator.SetupWithManager(ctx, mgr)
 
 	err = (&GPUNodeClassReconciler{
 		Client: mgr.GetClient(),
@@ -162,8 +174,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&PodReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
@@ -198,11 +211,12 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&TensorFusionWorkloadReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Allocator: allocator,
-		Recorder:  mgr.GetEventRecorderFor("TensorFusionWorkload"),
-		GpuInfos:  config.MockGpuInfo(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Allocator:     allocator,
+		Recorder:      mgr.GetEventRecorderFor("TensorFusionWorkload"),
+		GpuInfos:      config.MockGpuInfo(),
+		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
@@ -452,6 +466,14 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      b.clusterKey.Name,
 			Namespace: b.clusterKey.Namespace,
+		},
+		Spec: tfv1.TensorFusionClusterSpec{
+			GPUPools: []tfv1.GPUPoolDefinition{
+				{
+					Name:         fmt.Sprintf("pool-%d", b.poolCount),
+					SpecTemplate: *config.MockGPUPoolSpec,
+				},
+			},
 		},
 	}
 

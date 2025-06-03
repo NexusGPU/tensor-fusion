@@ -68,6 +68,7 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+//nolint:gocyclo
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -215,7 +216,7 @@ func main() {
 		setupLog.Error(err, "unable to set up port allocator")
 		os.Exit(1)
 	}
-	portAllocator.SetupWithManager(ctx, mgr)
+	_ = portAllocator.SetupWithManager(ctx, mgr)
 
 	if err = (&controller.TensorFusionConnectionReconciler{
 		Client:   mgr.GetClient(),
@@ -243,9 +244,10 @@ func main() {
 	}
 
 	if err = (&controller.TensorFusionClusterReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("TensorFusionCluster"),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		Recorder:        mgr.GetEventRecorderFor("TensorFusionCluster"),
+		MetricsRecorder: &metricsRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionCluster")
 		os.Exit(1)

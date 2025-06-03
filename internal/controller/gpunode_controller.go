@@ -26,13 +26,12 @@ import (
 	cloudprovider "github.com/NexusGPU/tensor-fusion/internal/cloudprovider"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -219,47 +218,13 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 
 		return true, nil
 	} else {
-		gpuList, err := r.fetchAllOwnedGPUDevices(ctx, node)
+		gpuModels, err := gpuallocator.RefreshGPUNodeCapacity(ctx, r.Client, node, poolObj)
 		if err != nil {
 			return true, err
 		}
-		if len(gpuList) == 0 {
-			// node discovery job not completed, check again
-			return true, nil
-		}
-
-		statusCopy := node.Status.DeepCopy()
-
-		node.Status.AvailableVRAM = resource.Quantity{}
-		node.Status.AvailableTFlops = resource.Quantity{}
-		node.Status.TotalTFlops = resource.Quantity{}
-		node.Status.TotalVRAM = resource.Quantity{}
-
-		gpuModels := []string{}
-
-		for _, gpu := range gpuList {
-			node.Status.AvailableVRAM.Add(gpu.Status.Available.Vram)
-			node.Status.AvailableTFlops.Add(gpu.Status.Available.Tflops)
-			node.Status.TotalVRAM.Add(gpu.Status.Capacity.Vram)
-			node.Status.TotalTFlops.Add(gpu.Status.Capacity.Tflops)
-			gpuModels = append(gpuModels, gpu.Status.GPUModel)
-		}
-
-		virtualVRAM, virtualTFlops := r.CalculateVirtualCapacity(node, poolObj)
-		node.Status.VirtualTFlops = virtualTFlops
-		node.Status.VirtualVRAM = virtualVRAM
 
 		// update metrics to get historical allocation line chart and trending
 		metrics.SetNodeMetrics(node, poolObj, gpuModels)
-
-		node.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
-
-		if !equality.Semantic.DeepEqual(node.Status, statusCopy) {
-			err = r.Status().Update(ctx, node)
-			if err != nil {
-				return true, fmt.Errorf("failed to update GPU node status: %w", err)
-			}
-		}
 
 		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhaseRunning)
 		if err != nil {
@@ -378,7 +343,7 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 				return fmt.Errorf("create node discovery job %w", err)
 			}
 		} else {
-			return fmt.Errorf("create node job %w", err)
+			return fmt.Errorf("create node discovery job %w", err)
 		}
 	}
 
@@ -598,31 +563,12 @@ func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *
 	return nil
 }
 
-func (r *GPUNodeReconciler) CalculateVirtualCapacity(node *tfv1.GPUNode, pool *tfv1.GPUPool) (resource.Quantity, resource.Quantity) {
-	diskSize, _ := node.Status.NodeInfo.DataDiskSize.AsInt64()
-	ramSize, _ := node.Status.NodeInfo.RAMSize.AsInt64()
-
-	virtualVRAM := node.Status.TotalVRAM.DeepCopy()
-	// TODO: panic if not set TFlopsOversellRatio
-	vTFlops := node.Status.TotalTFlops.AsApproximateFloat64() * (float64(pool.Spec.CapacityConfig.Oversubscription.TFlopsOversellRatio) / 100.0)
-
-	virtualVRAM.Add(*resource.NewQuantity(
-		int64(float64(float64(diskSize)*float64(pool.Spec.CapacityConfig.Oversubscription.VRAMExpandToHostDisk)/100.0)),
-		resource.DecimalSI),
-	)
-	virtualVRAM.Add(*resource.NewQuantity(
-		int64(float64(float64(ramSize)*float64(pool.Spec.CapacityConfig.Oversubscription.VRAMExpandToHostMem)/100.0)),
-		resource.DecimalSI),
-	)
-
-	return virtualVRAM, *resource.NewQuantity(int64(vTFlops), resource.DecimalSI)
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *GPUNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.GPUNode{}).
 		Named("gpunode").
+		// TODO: should not own node, let node_claim_controller to own node for cloud vendor VM nodes,
 		Owns(&corev1.Node{}).
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Pod{}).

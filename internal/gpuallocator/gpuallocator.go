@@ -11,10 +11,13 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
+	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -54,6 +57,7 @@ type GpuAllocator struct {
 func (s *GpuAllocator) Alloc(
 	ctx context.Context,
 	poolName string,
+	workloadNameNamespace tfv1.NameNamespace,
 	request tfv1.Resource,
 	count uint,
 	gpuModel string,
@@ -118,6 +122,8 @@ func (s *GpuAllocator) Alloc(
 		gpu.Status.Available.Tflops.Sub(request.Tflops)
 		gpu.Status.Available.Vram.Sub(request.Vram)
 
+		addRunningApp(gpu, workloadNameNamespace)
+
 		s.markGPUDirty(key)
 	}
 
@@ -131,8 +137,8 @@ func (s *GpuAllocator) Alloc(
 	return result, nil
 }
 
-// Dealloc deallocates a request from one or multiple gpus.
-func (s *GpuAllocator) Dealloc(ctx context.Context, request tfv1.Resource, gpus []types.NamespacedName) error {
+// Dealloc a request from gpu to release available resources on it.
+func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.NameNamespace, request tfv1.Resource, gpu *tfv1.GPU) error {
 	log := log.FromContext(ctx)
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
@@ -385,6 +391,8 @@ func (s *GpuAllocator) syncToK8s(ctx context.Context) {
 	s.storeMutex.RLock()
 	defer s.storeMutex.RUnlock()
 
+	dirtyNodes := make(map[string]struct{})
+
 	for _, key := range dirtyGPUs {
 		gpu, exists := s.gpuStore[key]
 		if !exists {
@@ -393,6 +401,8 @@ func (s *GpuAllocator) syncToK8s(ctx context.Context) {
 		// Create a copy to avoid modifying the memory store directly
 		gpuCopy := gpu.DeepCopy()
 
+		dirtyNodes[gpuCopy.Labels[constants.LabelKeyOwner]] = struct{}{}
+
 		// Update the GPU status in Kubernetes
 		if err := s.Status().Update(ctx, gpuCopy); err != nil {
 			// If update fails, put the GPU back in the dirty queue
@@ -400,6 +410,25 @@ func (s *GpuAllocator) syncToK8s(ctx context.Context) {
 			s.dirtyQueue[key] = struct{}{}
 			s.dirtyQueueLock.Unlock()
 			log.Error(err, "Failed to update GPU status, will retry later", "gpu", key.String())
+		}
+	}
+
+	for nodeName := range dirtyNodes {
+		// Refer https://datatracker.ietf.org/doc/html/rfc6901#section-3 encode `/` as `~1`
+		patch := []byte(`[{
+			"op": "add",
+			"path": "/metadata/annotations/` + strings.ReplaceAll(constants.GPULastReportTimeAnnotationKey, "/", "~1") + `",
+			"value": "` + time.Now().Format(time.RFC3339) + `"
+		}]`)
+		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			return s.Patch(ctx, &tfv1.GPUNode{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: nodeName,
+				},
+			}, client.RawPatch(types.JSONPatchType, patch))
+		})
+		if err != nil {
+			log.Error(err, "Failed to update GPU node last report time, will retry later", "node", nodeName)
 		}
 	}
 }
@@ -441,8 +470,10 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 	vramCapacityMap := make(map[types.NamespacedName]resource.Quantity)
 
 	for gpuKey, gpu := range s.gpuStore {
-		tflopsCapacityMap[gpuKey] = gpu.Status.Capacity.Tflops
-		vramCapacityMap[gpuKey] = gpu.Status.Capacity.Vram
+		if gpu.Status.Capacity != nil {
+			tflopsCapacityMap[gpuKey] = gpu.Status.Capacity.Tflops
+			vramCapacityMap[gpuKey] = gpu.Status.Capacity.Vram
+		}
 	}
 
 	for _, worker := range workers.Items {
@@ -464,6 +495,10 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 	}
 
 	for gpuKey, gpu := range s.gpuStore {
+		if gpu.Status.Capacity == nil {
+			log.FromContext(ctx).Info("[Warning] GPU capacity is nil, skip reconcile", "gpu", gpuKey.Name)
+			continue
+		}
 		sameTflops := gpu.Status.Available.Tflops.Equal(tflopsCapacityMap[gpuKey])
 		sameVRAM := gpu.Status.Available.Vram.Equal(vramCapacityMap[gpuKey])
 		if !sameTflops || !sameVRAM {
@@ -472,5 +507,43 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 			s.markGPUDirty(gpuKey)
 			log.FromContext(ctx).Info("Correcting gpu available resources", "gpu", gpuKey.Name, "tflops", gpu.Status.Available.Tflops.String(), "vram", gpu.Status.Available.Vram.String())
 		}
+	}
+}
+
+func addRunningApp(gpu *tfv1.GPU, workloadNameNamespace tfv1.NameNamespace) {
+	if gpu.Status.RunningApps == nil {
+		gpu.Status.RunningApps = []*tfv1.RunningAppDetail{}
+	}
+
+	item, found := lo.Find(gpu.Status.RunningApps, func(app *tfv1.RunningAppDetail) bool {
+		return app.Name == workloadNameNamespace.Name && app.Namespace == workloadNameNamespace.Namespace
+	})
+
+	if found {
+		item.Count++
+	} else {
+		gpu.Status.RunningApps = append(gpu.Status.RunningApps, &tfv1.RunningAppDetail{
+			Name:      workloadNameNamespace.Name,
+			Namespace: workloadNameNamespace.Namespace,
+			Count:     1,
+		})
+	}
+}
+
+func removeRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace tfv1.NameNamespace) {
+	item, found := lo.Find(gpu.Status.RunningApps, func(app *tfv1.RunningAppDetail) bool {
+		return app.Name == workloadNameNamespace.Name && app.Namespace == workloadNameNamespace.Namespace
+	})
+	if found {
+		item.Count--
+		if item.Count == 0 {
+			// scale down to zero, not running any more
+			gpu.Status.RunningApps = lo.Filter(gpu.Status.RunningApps, func(app *tfv1.RunningAppDetail, _ int) bool {
+				return app.Name != workloadNameNamespace.Name && app.Namespace != workloadNameNamespace.Namespace
+			})
+		}
+	} else {
+		// should not happen, if deallocation twice, it should be a bug
+		log.FromContext(ctx).Info("[Warning] The app to remove not found, could be caused by deallocation twice bug", "gpu", gpu.Name, "namespace", gpu.Namespace, "workload", workloadNameNamespace.Name, "namespace", workloadNameNamespace.Namespace)
 	}
 }

@@ -259,6 +259,7 @@ func createOrUpdateTensorFusionGPU(
 			NodeSelector: map[string]string{
 				"kubernetes.io/hostname": k8sNodeName,
 			},
+			RunningApps: []*tfv1.RunningAppDetail{},
 		}
 
 		if gpu.Status.Available == nil {

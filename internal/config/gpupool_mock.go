@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -124,6 +125,35 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 						},
 					},
 				})),
+			},
+		},
+	},
+	QosConfig: &tfv1.QosConfig{
+		Definitions: []tfv1.QosDefinition{
+			{
+				Name: constants.QoSLevelMedium,
+			},
+			{
+				Name: constants.QoSLevelHigh,
+			},
+		},
+		DefaultQoS: constants.QoSLevelMedium,
+		Pricing: []tfv1.QosPricing{
+			{
+				Qos: constants.QoSLevelMedium,
+				Requests: tfv1.GPUResourcePricingUnit{
+					PerFP16TFlopsPerHour: "2",
+					PerGBOfVRAMPerHour:   "1",
+				},
+				LimitsOverRequestsChargingRatio: "0.5",
+			},
+			{
+				Qos: constants.QoSLevelHigh,
+				Requests: tfv1.GPUResourcePricingUnit{
+					PerFP16TFlopsPerHour: "2",
+					PerGBOfVRAMPerHour:   "1",
+				},
+				LimitsOverRequestsChargingRatio: "0.8",
 			},
 		},
 	},

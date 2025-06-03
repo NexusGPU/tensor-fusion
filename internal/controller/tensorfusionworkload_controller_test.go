@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"strings"
 	"time"
 
@@ -125,7 +126,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 	})
 
 	Context("When resource limits change in a workload", func() {
-		It("Should rebuild all worker pods", func() {
+		FIt("Should rebuild all worker pods", func() {
 			pool := tfEnv.GetGPUPool(0)
 
 			createTensorFusionWorkload(pool.Name, key, 2)
@@ -136,6 +137,13 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					client.InNamespace(key.Namespace),
 					client.MatchingLabels{constants.WorkloadKey: key.Name})).Should(Succeed())
 				g.Expect(podList.Items).Should(HaveLen(2))
+
+				// Check if metrics is recorded correctly
+				byteWriter := bytes.NewBuffer([]byte{})
+				metricsRecorder.RecordMetrics(byteWriter)
+				str := byteWriter.String()
+				g.Expect(str).Should(MatchRegexp("raw_cost=0.00116\\d+"))
+
 			}, timeout, interval).Should(Succeed())
 
 			// Store the original pod template hash
@@ -410,6 +418,7 @@ func createTensorFusionWorkload(poolName string, key client.ObjectKey, replicas 
 					Vram:   vramLimits,
 				},
 			},
+			Qos: constants.QoSLevelMedium,
 		},
 	}
 

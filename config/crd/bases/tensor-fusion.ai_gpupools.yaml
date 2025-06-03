@@ -705,6 +705,9 @@ spec:
               readyNodes:
                 format: int32
                 type: integer
+              runningAppsCnt:
+                format: int32
+                type: integer
               savedCostsPerMonth:
                 type: string
               totalGPUs:

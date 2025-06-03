@@ -372,6 +372,8 @@ type GPUPoolStatus struct {
 	AvailableTFlops resource.Quantity `json:"availableTFlops"`
 	AvailableVRAM   resource.Quantity `json:"availableVRAM"`
 
+	RunningAppsCnt int32 `json:"runningAppsCnt,omitempty"`
+
 	// +optional
 	VirtualAvailableTFlops *resource.Quantity `json:"virtualAvailableTFlops,omitempty"`
 	// +optional

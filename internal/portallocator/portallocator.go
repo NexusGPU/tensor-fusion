@@ -41,12 +41,6 @@ type PortAllocator struct {
 var storeMutexNode sync.RWMutex
 var storeMutexCluster sync.RWMutex
 
-// Node level bit map for assigning ports to pods already scheduled to certain node
-var BitMapPerNode map[string][]uint64 = make(map[string][]uint64)
-
-// Cluster level bit map for assigning ports to pods which not scheduled anywhere
-var BitMapClusterLevel []uint64 = make([]uint64, 0)
-
 func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRange string, clusterLevelPortRange string) (*PortAllocator, error) {
 	if client == nil {
 		return nil, fmt.Errorf("client cannot be nil")
@@ -75,10 +69,10 @@ func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRa
 	return allocator, nil
 }
 
-func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager) {
-	go func() {
+func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager) <-chan struct{} {
+	readyCh := make(chan struct{}, 1)
+	_ = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		<-mgr.Elected()
-
 		s.IsLeader = true
 		leaderInfo := &v1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -86,7 +80,7 @@ func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manage
 				Namespace: utils.CurrentNamespace(),
 			},
 		}
-		retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 			_, err := controllerutil.CreateOrUpdate(ctx, s.Client, leaderInfo, func() error {
 				leaderInfo.Data = map[string]string{
 					constants.LeaderInfoConfigMapLeaderIPKey: utils.CurrentIP(),
@@ -95,6 +89,9 @@ func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manage
 			})
 			return err
 		})
+		if err != nil {
+			log.FromContext(ctx).Error(err, "Failed to update leader IP info in ConfigMap")
+		}
 
 		storeMutexNode.Lock()
 		storeMutexCluster.Lock()
@@ -106,15 +103,23 @@ func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manage
 
 		// 2. init bit map for existing vGPU workers
 		s.initBitMapForNodeLevelPortAssign(ctx)
-	}()
+
+		readyCh <- struct{}{}
+		return nil
+	}))
+	return readyCh
 }
 
 func (s *PortAllocator) GetLeaderIP() string {
 	leaderInfo := &v1.ConfigMap{}
-	s.Client.Get(context.Background(), client.ObjectKey{
+	err := s.Client.Get(context.Background(), client.ObjectKey{
 		Name:      constants.LeaderInfoConfigMapName,
 		Namespace: utils.CurrentNamespace(),
 	}, leaderInfo)
+	if err != nil {
+		log.FromContext(context.Background()).Error(err, "Failed to get leader IP info from ConfigMap")
+		return ""
+	}
 	if leaderInfo.Data == nil {
 		return ""
 	}
@@ -132,16 +137,20 @@ func (s *PortAllocator) AssignHostPort(nodeName string) (int, error) {
 	bitmap, ok := s.BitmapPerNode[nodeName]
 	if !ok {
 		// found new nodes not have any ports assigned before
-		s.BitmapPerNode[nodeName] = make([]uint64, (s.PortRangeEndNode-s.PortRangeStartNode)/64+1)
+		bitmapSize := (s.PortRangeEndNode - s.PortRangeStartNode + 63) / 64
+		s.BitmapPerNode[nodeName] = make([]uint64, bitmapSize)
+		bitmap = s.BitmapPerNode[nodeName]
 	}
 	for i, subMap := range bitmap {
-		bitPos := bits.TrailingZeros64(subMap)
+		bitPos := bits.TrailingZeros64(^subMap)
 		portOffset := i*64 + bitPos
 		if subMap != 0xFFFFFFFFFFFFFFFF {
 			assignedPort := portOffset + s.PortRangeStartNode
 			if assignedPort < s.PortRangeEndNode {
-				bitmap[i] |= 1 << bitPos
+				bitmap[i] = subMap | (1 << bitPos)
 				return assignedPort, nil
+			} else {
+				break
 			}
 		}
 	}
@@ -171,7 +180,7 @@ func (s *PortAllocator) AssignClusterLevelHostPort(podName string) (int, error) 
 	defer storeMutexCluster.Unlock()
 
 	for i, subMap := range s.BitmapCluster {
-		bitPos := bits.TrailingZeros64(subMap)
+		bitPos := bits.TrailingZeros64(^subMap)
 		portOffset := i*64 + bitPos
 		if subMap != 0xFFFFFFFFFFFFFFFF {
 			assignedPort := portOffset + s.PortRangeStartCluster
@@ -189,7 +198,7 @@ func (s *PortAllocator) ReleaseClusterLevelHostPort(podName string, port int) er
 		return fmt.Errorf("port cannot be 0 when release host port, may caused by portNumber annotation not detected, podName: %s", podName)
 	}
 
-	// TODO, may need a defer queue for releasing so that to avoid port being assigned again to fast
+	// TODO, may need a defer queue for releasing so that to avoid port being assigned again too fast
 
 	storeMutexCluster.Lock()
 	defer storeMutexCluster.Unlock()
@@ -209,8 +218,16 @@ func (s *PortAllocator) initBitMapForClusterLevelPortAssign(ctx context.Context)
 	}
 	usedPorts := []uint16{}
 	for _, pod := range podList.Items {
+		if pod.Annotations == nil {
+			continue
+		}
 		port, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
+		if port > s.PortRangeEndCluster || port < s.PortRangeStartCluster {
+			log.Error(err, "existing Pod's host port out of range", "port", port, "expected-start", s.PortRangeStartCluster, "expected-end", s.PortRangeEndCluster, "pod", pod.Name)
+			continue
+		}
 		bitOffSet := port - s.PortRangeStartCluster
+
 		usedPorts = append(usedPorts, uint16(bitOffSet))
 	}
 
@@ -230,7 +247,14 @@ func (s *PortAllocator) initBitMapForNodeLevelPortAssign(ctx context.Context) {
 
 	size := (s.PortRangeEndNode-s.PortRangeStartNode)/64 + 1
 	for _, pod := range podList.Items {
+		if pod.Annotations == nil {
+			continue
+		}
 		port, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
+		if port > s.PortRangeEndNode || port < s.PortRangeStartNode {
+			log.Error(err, "existing Pod's node level host port out of range", "port", port, "expected-start", s.PortRangeStartNode, "expected-end", s.PortRangeEndNode, "pod", pod.Name, "node", pod.Spec.NodeName)
+			continue
+		}
 		bitOffSet := port - s.PortRangeStartNode
 		if _, ok := s.BitmapPerNode[pod.Spec.NodeName]; !ok {
 			s.BitmapPerNode[pod.Spec.NodeName] = make([]uint64, size)

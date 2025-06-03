@@ -104,16 +104,16 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		podCounterAnnotationKey = podCounterKey
 	}
 
-	workload := &tfv1.TensorFusionWorkload{}
-	if tfInfo.GenWorkload {
-		if err := m.createOrUpdateWorkload(ctx, pod, &tfInfo, workload); err != nil {
-			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("create tf workload: %w", err))
-		}
-	}
-
 	pool := &tfv1.GPUPool{}
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.Profile.PoolName}, pool); err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("gpu pool(%s) does not exist", tfInfo.Profile.PoolName))
+	}
+
+	workload := &tfv1.TensorFusionWorkload{}
+	if tfInfo.GenWorkload {
+		if err := m.createOrUpdateWorkload(ctx, pod, &tfInfo, workload, pool); err != nil {
+			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("create tf workload: %w", err))
+		}
 	}
 
 	var nodeSelector map[string]string
@@ -174,9 +174,11 @@ func (m *TensorFusionPodMutator) InjectDecoder(d admission.Decoder) error {
 	return nil
 }
 
-func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod *corev1.Pod, tfInfo *TensorFusionInfo, workload *tfv1.TensorFusionWorkload) error {
+func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod *corev1.Pod, tfInfo *TensorFusionInfo, workload *tfv1.TensorFusionWorkload, pool *tfv1.GPUPool) error {
 	// Check if workload exists
 	err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.WorkloadName, Namespace: pod.Namespace}, workload)
+
+	qos := calculateQoSLevel(tfInfo.Profile, pool)
 
 	if err != nil {
 		if !errors.IsNotFound(err) {
@@ -203,7 +205,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 				PoolName:   tfInfo.Profile.PoolName,
 				Resources:  tfInfo.Profile.Resources,
 				GPUCount:   tfInfo.Profile.GPUCount,
-				Qos:        tfInfo.Profile.Qos,
+				Qos:        qos,
 				GPUModel:   tfInfo.Profile.GPUModel,
 				IsLocalGPU: tfInfo.Profile.IsLocalGPU,
 			},
@@ -231,7 +233,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 		Replicas:   &replicas,
 		PoolName:   tfInfo.Profile.PoolName,
 		Resources:  tfInfo.Profile.Resources,
-		Qos:        tfInfo.Profile.Qos,
+		Qos:        qos,
 		IsLocalGPU: tfInfo.Profile.IsLocalGPU,
 		GPUCount:   tfInfo.Profile.GPUCount,
 		GPUModel:   tfInfo.Profile.GPUModel,
@@ -459,7 +461,9 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 	if err != nil {
 		return 0, fmt.Errorf("failed to assign host port: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("host port allocation failed: %s", resp.Status)
@@ -471,4 +475,23 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 	}
 
 	return strconv.Atoi(string(body))
+}
+
+func calculateQoSLevel(profile *tfv1.WorkloadProfileSpec, pool *tfv1.GPUPool) tfv1.QoSLevel {
+	sameReqLimits := profile.Resources.Limits.Tflops.Value() == profile.Resources.Requests.Tflops.Value() &&
+		profile.Resources.Limits.Vram.Value() == profile.Resources.Requests.Vram.Value()
+
+	// set to critical if req == limits, same logic as Kubernetes QoS
+	if sameReqLimits {
+		return constants.QoSLevelCritical
+	}
+
+	// when not set, assign default QoS
+	if profile.Qos == "" {
+		if pool.Spec.QosConfig == nil || pool.Spec.QosConfig.DefaultQoS == "" {
+			return constants.QoSLevelMedium
+		}
+		return pool.Spec.QosConfig.DefaultQoS
+	}
+	return profile.Qos
 }
