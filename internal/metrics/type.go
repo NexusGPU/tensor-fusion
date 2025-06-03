@@ -15,6 +15,7 @@ type WorkerMetrics struct {
 	TflopsLimit      float64 `json:"tflopsLimit"`
 	VramBytesRequest float64 `json:"vramBytesRequest"`
 	VramBytesLimit   float64 `json:"vramBytesLimit"`
+	GPUCount         int     `json:"gpuCount"`
 	RawCost          float64 `json:"rawCost"`
 
 	LastRecordTime time.Time `json:"lastRecordTime"`
