@@ -314,6 +314,18 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 
 	log.Info("Processing pod with GPU resource cleanup finalizer", "pod", pod.Name)
 
+	pod.Annotations[constants.GpuReleasedAnnotation] = shortuuid.New()
+
+	// Update the annotation of the Pod to mark that GPU cleanup has been successfully processed.
+	// This is a key part of ensuring idempotency for the handlePodGPUCleanup function.
+	// If this function is called again for the same Pod instance (e.g., due to the client cache
+	// not yet reflecting the finalizer's removal), Then this r.Update pod will fail.
+	// Will not cause duplicate releases
+	if err := r.Update(ctx, pod); err != nil {
+		log.Error(err, "Failed to mark that GPU cleanup of pod")
+		return false, err
+	}
+
 	// read the GPU names from the pod annotations
 	gpuNamesStr, ok := pod.Annotations[constants.GpuKey]
 	if !ok {
@@ -334,17 +346,6 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 	log.Info("Released GPU resources via finalizer", "gpus", gpus, "pod", pod.Name)
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
-	}
-	pod.Annotations[constants.GpuReleasedAnnotation] = shortuuid.New()
-
-	// Update the annotation of the Pod to mark that GPU cleanup has been successfully processed.
-	// This is a key part of ensuring idempotency for the handlePodGPUCleanup function.
-	// If this function is called again for the same Pod instance (e.g., due to the client cache
-	// not yet reflecting the finalizer's removal), Then this r.Update pod will fail.
-	// Will not cause duplicate releases
-	if err := r.Update(ctx, pod); err != nil {
-		log.Error(err, "Failed to mark that GPU cleanup of pod")
-		return false, err
 	}
 
 	return true, nil
