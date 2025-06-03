@@ -86,66 +86,19 @@ spec:
           status:
             description: GPUNodeStatus defines the observed state of GPUNode.
             properties:
-              allocationDetails:
-                description: Allocation details is for node compaction, and calculate
-                  used apps
+              allocationInfo:
                 items:
                   properties:
-                    limits:
-                      properties:
-                        tflops:
-                          anyOf:
-                          - type: integer
-                          - type: string
-                          description: Tera floating point operations per second
-                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                          x-kubernetes-int-or-string: true
-                        vram:
-                          anyOf:
-                          - type: integer
-                          - type: string
-                          description: VRAM is short for Video memory, namely GPU
-                            RAM
-                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                          x-kubernetes-int-or-string: true
-                      type: object
+                    count:
+                      description: Worker count
+                      type: integer
+                    name:
+                      description: Workload name namespace
+                      type: string
                     namespace:
                       type: string
-                    podID:
-                      type: string
-                    podName:
-                      type: string
-                    qos:
-                      enum:
-                      - low
-                      - medium
-                      - high
-                      - critical
-                      type: string
-                    requests:
-                      properties:
-                        tflops:
-                          anyOf:
-                          - type: integer
-                          - type: string
-                          description: Tera floating point operations per second
-                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                          x-kubernetes-int-or-string: true
-                        vram:
-                          anyOf:
-                          - type: integer
-                          - type: string
-                          description: VRAM is short for Video memory, namely GPU
-                            RAM
-                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                          x-kubernetes-int-or-string: true
-                      type: object
-                    workload:
-                      type: string
                   required:
-                  - limits
-                  - namespace
-                  - requests
+                  - count
                   type: object
                 type: array
               availableTFlops:

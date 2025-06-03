@@ -36,6 +36,18 @@ type GPUStatus struct {
 	GPUModel     string            `json:"gpuModel"`
 
 	Message string `json:"message"`
+
+	// +optional
+	RunningApps []*RunningAppDetail `json:"runningApps,omitempty"`
+}
+
+type RunningAppDetail struct {
+	// Workload name namespace
+	Name      string `json:"name,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+
+	// Worker count
+	Count int `json:"count"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Provisioning;Running;Unknown;Destroying;Migrating

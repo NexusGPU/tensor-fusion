@@ -265,6 +265,91 @@ var _ = BeforeSuite(func() {
 		Expect(err).NotTo(HaveOccurred())
 	}
 
+	nodes := []tfv1.GPUNode{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "node-1",
+				Labels: map[string]string{
+					constants.LabelKeyOwner: "test-pool",
+				},
+			},
+			Spec: tfv1.GPUNodeSpec{
+				ManageMode: tfv1.GPUNodeManageModeAutoSelect,
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "node-2",
+				Labels: map[string]string{
+					constants.LabelKeyOwner: "test-pool",
+				},
+			},
+			Spec: tfv1.GPUNodeSpec{
+				ManageMode: tfv1.GPUNodeManageModeAutoSelect,
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "node-3",
+				Labels: map[string]string{
+					constants.LabelKeyOwner: "test-pool",
+				},
+			},
+			Spec: tfv1.GPUNodeSpec{
+				ManageMode: tfv1.GPUNodeManageModeAutoSelect,
+			},
+		},
+	}
+	for _, node := range nodes {
+		err = k8sClient.Create(ctx, &node)
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	gpuNodeStatuses := []struct {
+		name   string
+		status tfv1.GPUNodeStatus
+	}{
+		{
+			name: "node-1",
+			status: tfv1.GPUNodeStatus{
+				Phase:           tfv1.TensorFusionGPUNodePhaseRunning,
+				TotalTFlops:     resource.MustParse("200"),
+				TotalVRAM:       resource.MustParse("48Gi"),
+				AvailableTFlops: resource.MustParse("180"),
+				AvailableVRAM:   resource.MustParse("48Gi"),
+			},
+		},
+		{
+			name: "node-2",
+			status: tfv1.GPUNodeStatus{
+				Phase:           tfv1.TensorFusionGPUNodePhaseRunning,
+				TotalTFlops:     resource.MustParse("120"),
+				TotalVRAM:       resource.MustParse("24Gi"),
+				AvailableTFlops: resource.MustParse("120"),
+				AvailableVRAM:   resource.MustParse("24Gi"),
+			},
+		},
+		{
+			name: "node-3",
+			status: tfv1.GPUNodeStatus{
+				Phase:           tfv1.TensorFusionGPUNodePhaseRunning,
+				TotalTFlops:     resource.MustParse("150"),
+				TotalVRAM:       resource.MustParse("48Gi"),
+				AvailableTFlops: resource.MustParse("150"),
+				AvailableVRAM:   resource.MustParse("48Gi"),
+			},
+		},
+	}
+
+	for _, gpuNodeStatus := range gpuNodeStatuses {
+		gpuNode := &tfv1.GPUNode{}
+		err = k8sClient.Get(ctx, types.NamespacedName{Name: gpuNodeStatus.name, Namespace: "default"}, gpuNode)
+		Expect(err).NotTo(HaveOccurred())
+		gpuNode.Status = gpuNodeStatus.status
+		err = k8sClient.Status().Update(ctx, gpuNode)
+		Expect(err).NotTo(HaveOccurred())
+	}
+
 	go func() {
 		defer GinkgoRecover()
 		err = mgr.Start(ctx)
@@ -286,4 +371,12 @@ func getGPU(name string, namespace string) *tfv1.GPU {
 	err := k8sClient.Get(ctx, key, gpu)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	return gpu
+}
+
+func getGPUNode(gpu *tfv1.GPU) *tfv1.GPUNode {
+	gpuNode := &tfv1.GPUNode{}
+	key := types.NamespacedName{Name: gpu.Labels[constants.LabelKeyOwner]}
+	err := k8sClient.Get(ctx, key, gpuNode)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	return gpuNode
 }

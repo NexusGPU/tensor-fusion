@@ -94,20 +94,8 @@ type GPUNodeStatus struct {
 
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// Allocation details is for node compaction, and calculate used apps
 	// +optional
-	AllocationDetails *[]GPUNodeAllocationDetails `json:"allocationDetails,omitempty"`
-}
-
-type GPUNodeAllocationDetails struct {
-	PodID        string `json:"podID,omitempty"`
-	PodName      string `json:"podName,omitempty"`
-	Namespace    string `json:"namespace"`
-	WorkloadName string `json:"workload,omitempty"`
-
-	Requests GPUResourceUnit `json:"requests"`
-	Limits   GPUResourceUnit `json:"limits"`
-	QoS      QoSLevel        `json:"qos,omitempty"`
+	AllocationInfo []*RunningAppDetail `json:"allocationInfo,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Provisioning;Migrating;Running;Succeeded;Failed;Unknown;Destroying

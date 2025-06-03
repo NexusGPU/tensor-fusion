@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"io"
 	"sync"
 	"time"
 
@@ -115,82 +116,7 @@ func (mr *MetricsRecorder) Start() {
 	go func() {
 		for {
 			<-ticker.C
-
-			workerCount := len(workerMetricsMap)
-			nodeCount := len(NodeMetricsMap)
-
-			if workerCount > 0 || nodeCount > 0 {
-				log.Info("metrics and raw billing recorded:", "workerCount", workerCount, "nodeCount", nodeCount)
-			} else {
-				continue
-			}
-
-			now := time.Now()
-
-			var enc metricsProto.Encoder
-			enc.SetPrecision(metricsProto.Microsecond)
-
-			workerMetricsLock.RLock()
-			for _, metrics := range workerMetricsMap {
-
-				if !metrics.DeletionTimestamp.IsZero() {
-					metrics.RawCost = mr.getWorkerRawCost(metrics, metrics.DeletionTimestamp.Sub(metrics.LastRecordTime))
-				} else {
-					metrics.RawCost = mr.getWorkerRawCost(metrics, now.Sub(metrics.LastRecordTime))
-				}
-				metrics.LastRecordTime = now
-
-				// Skip recording metrics if raw cost is negative
-				// which means worker already deleted waiting for cleanup
-				if metrics.RawCost < 0 {
-					continue
-				}
-				enc.StartLine("tf_worker_metrics")
-				enc.AddTag("worker_name", metrics.WorkerName)
-				enc.AddTag("workload_name", metrics.WorkloadName)
-				enc.AddTag("pool_name", metrics.PoolName)
-				enc.AddTag("namespace", metrics.Namespace)
-				enc.AddTag("qos", metrics.QoS)
-
-				enc.AddField("tflops_request", metricsProto.MustNewValue(metrics.TflopsRequest))
-				enc.AddField("tflops_limit", metricsProto.MustNewValue(metrics.TflopsLimit))
-				enc.AddField("vram_bytes_request", metricsProto.MustNewValue(metrics.VramBytesRequest))
-				enc.AddField("vram_bytes_limit", metricsProto.MustNewValue(metrics.VramBytesLimit))
-				enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
-				enc.EndLine(now)
-			}
-			enc.StartLine("tf_system_metrics")
-			enc.AddField("total_workers_cnt", metricsProto.MustNewValue(int64(len(workerMetricsMap))))
-			workerMetricsLock.RUnlock()
-
-			nodeMetricsLock.RLock()
-			for _, metrics := range NodeMetricsMap {
-				metrics.RawCost = mr.getNodeRawCost(metrics, now.Sub(metrics.LastRecordTime), mr.HourlyUnitPriceMap)
-				metrics.LastRecordTime = now
-
-				enc.StartLine("tf_node_metrics")
-				enc.AddTag("node_name", metrics.NodeName)
-				enc.AddTag("pool_name", metrics.PoolName)
-
-				enc.AddField("allocated_tflops", metricsProto.MustNewValue(metrics.AllocatedTflops))
-				enc.AddField("allocated_tflops_percent", metricsProto.MustNewValue(metrics.AllocatedTflopsPercent))
-				enc.AddField("allocated_vram_bytes", metricsProto.MustNewValue(metrics.AllocatedVramBytes))
-				enc.AddField("allocated_vram_percent", metricsProto.MustNewValue(metrics.AllocatedVramPercent))
-				enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
-				enc.EndLine(now)
-			}
-			enc.StartLine("tf_system_metrics")
-			enc.AddField("total_nodes_cnt", metricsProto.MustNewValue(int64(len(NodeMetricsMap))))
-			enc.EndLine(now)
-			nodeMetricsLock.RUnlock()
-
-			if err := enc.Err(); err != nil {
-				log.Error(err, "metrics encoding error", "workerCount", len(workerMetricsMap), "nodeCount", len(NodeMetricsMap))
-			}
-
-			if _, err := writer.Write(enc.Bytes()); err != nil {
-				log.Error(err, "metrics writing error", "workerCount", len(workerMetricsMap), "nodeCount", len(NodeMetricsMap))
-			}
+			mr.RecordMetrics(writer)
 		}
 	}()
 
@@ -209,6 +135,86 @@ func (mr *MetricsRecorder) Start() {
 	}()
 }
 
+func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
+	if len(workerMetricsMap) <= 0 && len(NodeMetricsMap) <= 0 {
+		return
+	}
+
+	now := time.Now()
+
+	var enc metricsProto.Encoder
+	enc.SetPrecision(metricsProto.Millisecond)
+
+	workerMetricsLock.RLock()
+
+	activeWorkerCnt := 0
+	for _, metrics := range workerMetricsMap {
+
+		if !metrics.DeletionTimestamp.IsZero() {
+			metrics.RawCost = mr.getWorkerRawCost(metrics, metrics.DeletionTimestamp.Sub(metrics.LastRecordTime))
+		} else {
+			metrics.RawCost = mr.getWorkerRawCost(metrics, now.Sub(metrics.LastRecordTime))
+		}
+		metrics.LastRecordTime = now
+
+		// Skip recording metrics if raw cost is negative
+		// which means worker already deleted waiting for cleanup
+		if metrics.RawCost < 0 {
+			continue
+		}
+		activeWorkerCnt++
+		enc.StartLine("tf_worker_metrics")
+		enc.AddTag("namespace", metrics.Namespace)
+		enc.AddTag("pool_name", metrics.PoolName)
+		enc.AddTag("qos", metrics.QoS)
+		enc.AddTag("worker_name", metrics.WorkerName)
+		enc.AddTag("workload_name", metrics.WorkloadName)
+
+		enc.AddField("tflops_limit", metricsProto.MustNewValue(metrics.TflopsLimit))
+		enc.AddField("tflops_request", metricsProto.MustNewValue(metrics.TflopsRequest))
+		enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
+		enc.AddField("vram_bytes_limit", metricsProto.MustNewValue(metrics.VramBytesLimit))
+		enc.AddField("vram_bytes_request", metricsProto.MustNewValue(metrics.VramBytesRequest))
+
+		enc.EndLine(now)
+	}
+	enc.StartLine("tf_system_metrics")
+	enc.AddField("total_workers_cnt", metricsProto.MustNewValue(int64(activeWorkerCnt)))
+	workerMetricsLock.RUnlock()
+
+	nodeMetricsLock.RLock()
+	for _, metrics := range NodeMetricsMap {
+		metrics.RawCost = mr.getNodeRawCost(metrics, now.Sub(metrics.LastRecordTime), mr.HourlyUnitPriceMap)
+		metrics.LastRecordTime = now
+
+		enc.StartLine("tf_node_metrics")
+
+		enc.AddTag("node_name", metrics.NodeName)
+		enc.AddTag("pool_name", metrics.PoolName)
+
+		enc.AddField("allocated_tflops", metricsProto.MustNewValue(metrics.AllocatedTflops))
+		enc.AddField("allocated_tflops_percent", metricsProto.MustNewValue(metrics.AllocatedTflopsPercent))
+		enc.AddField("allocated_vram_bytes", metricsProto.MustNewValue(metrics.AllocatedVramBytes))
+		enc.AddField("allocated_vram_percent", metricsProto.MustNewValue(metrics.AllocatedVramPercent))
+		enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
+		enc.EndLine(now)
+	}
+	enc.StartLine("tf_system_metrics")
+	enc.AddField("total_nodes_cnt", metricsProto.MustNewValue(int64(len(NodeMetricsMap))))
+	enc.EndLine(now)
+
+	nodeMetricsLock.RUnlock()
+
+	if err := enc.Err(); err != nil {
+		log.Error(err, "metrics encoding error", "workerCount", activeWorkerCnt, "nodeCount", len(NodeMetricsMap))
+	}
+
+	if _, err := writer.Write(enc.Bytes()); err != nil {
+		log.Error(err, "metrics writing error", "workerCount", activeWorkerCnt, "nodeCount", len(NodeMetricsMap))
+	}
+	log.Info("metrics and raw billing recorded:", "workerCount", activeWorkerCnt, "nodeCount", len(NodeMetricsMap))
+}
+
 func (mr *MetricsRecorder) getWorkerRawCost(metrics *WorkerMetrics, duration time.Duration) float64 {
 	qosPricing, ok := mr.WorkerUnitPriceMap[metrics.PoolName]
 	// The qos pricing for this pool not set
@@ -216,7 +222,11 @@ func (mr *MetricsRecorder) getWorkerRawCost(metrics *WorkerMetrics, duration tim
 		return 0
 	}
 	// The price of current qos not defined for this pool
-	pricing, ok := qosPricing[metrics.QoS]
+	qosLevel := metrics.QoS
+	if qosLevel == "" {
+		qosLevel = constants.QoSLevelMedium
+	}
+	pricing, ok := qosPricing[qosLevel]
 	if !ok {
 		return 0
 	}

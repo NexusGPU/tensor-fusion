@@ -331,7 +331,7 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 	}
 
 	// Release GPU resources
-	if err := r.Allocator.Dealloc(ctx, workload.Spec.Resources.Requests, gpu); err != nil {
+	if err := r.Allocator.Dealloc(ctx, tfv1.NameNamespace{Namespace: workload.Namespace, Name: workload.Name}, workload.Spec.Resources.Requests, gpu); err != nil {
 		log.Error(err, "Failed to release GPU resources, will retry", "gpu", gpuName, "pod", pod.Name)
 		return false, err
 	}
@@ -356,11 +356,11 @@ func (r *TensorFusionWorkloadReconciler) deletePod(ctx context.Context, pod *cor
 // scaleUpWorkers handles the scaling up of worker pods
 func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, count int, hash string) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
-
+	workloadNameNs := tfv1.NameNamespace{Namespace: workload.Namespace, Name: workload.Name}
 	// Create worker pods
 	for range count {
 		// Schedule GPU for the worker
-		gpus, err := r.Allocator.Alloc(ctx, workload.Spec.PoolName, workload.Spec.Resources.Requests, 1, workload.Spec.GPUModel)
+		gpus, err := r.Allocator.Alloc(ctx, workload.Spec.PoolName, workloadNameNs, workload.Spec.Resources.Requests, 1, workload.Spec.GPUModel)
 		if err != nil {
 			r.Recorder.Eventf(workload, corev1.EventTypeWarning, "ScheduleGPUFailed", "Failed to schedule GPU: %v", err)
 			return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
@@ -372,7 +372,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 		_, err = r.tryStartWorker(ctx, workerGenerator, gpu, workload, hash)
 		if err != nil {
 			// Try to release the GPU resource if pod creation fails
-			releaseErr := r.Allocator.Dealloc(ctx, workload.Spec.Resources.Requests, gpu)
+			releaseErr := r.Allocator.Dealloc(ctx, workloadNameNs, workload.Spec.Resources.Requests, gpu)
 			if releaseErr != nil {
 				log.Error(releaseErr, "Failed to release GPU after pod creation failure")
 			}

@@ -55,7 +55,7 @@ const (
 	GenHostPortLabel        = Domain + "/host-port"
 	GenHostPortLabelValue   = "auto"
 	GenHostPortNameLabel    = Domain + "/port-name"
-	GenPortNumberAnnotation = Domain + "port-number"
+	GenPortNumberAnnotation = Domain + "/port-number"
 
 	AutoScaleLimitsAnnotation   = Domain + "/auto-limits"
 	AutoScaleRequestsAnnotation = Domain + "/auto-requests"
@@ -88,6 +88,11 @@ const (
 	KubernetesHostNameLabel      = "kubernetes.io/hostname"
 	GiBToBytes                   = 1024 * 1024 * 1024
 	HypervisorServiceAccountName = "tensor-fusion-hypervisor-sa"
+
+	QoSLevelLow      = "low"
+	QoSLevelMedium   = "medium"
+	QoSLevelHigh     = "high"
+	QoSLevelCritical = "critical"
 )
 
 const (
