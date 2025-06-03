@@ -68,7 +68,7 @@ var metricsRecorder *metrics.MetricsRecorder
 
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
-	SetDefaultEventuallyTimeout(7 * time.Second)
+	SetDefaultEventuallyTimeout(6 * time.Second)
 	SetDefaultEventuallyPollingInterval(200 * time.Millisecond)
 	SetDefaultConsistentlyDuration(5 * time.Second)
 	SetDefaultConsistentlyPollingInterval(200 * time.Millisecond)

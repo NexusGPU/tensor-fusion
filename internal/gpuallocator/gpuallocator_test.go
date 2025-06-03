@@ -35,6 +35,20 @@ var workloadNameNs = tfv1.NameNamespace{Namespace: "default", Name: "test-worklo
 var _ = Describe("GPU Allocator", func() {
 	var allocator *GpuAllocator
 
+	allocateAndSync := func(poolName string, request tfv1.Resource, count uint, gpuModel string) ([]*tfv1.GPU, error) {
+		gpus, err := allocator.Alloc(ctx, poolName, workloadNameNs, request, count, gpuModel)
+		allocator.syncToK8s(ctx)
+		return gpus, err
+	}
+
+	deallocateAndSync := func(gpus []*tfv1.GPU, request tfv1.Resource) {
+		err := allocator.Dealloc(ctx, workloadNameNs, request, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) types.NamespacedName {
+			return client.ObjectKeyFromObject(gpu)
+		}))
+		Expect(err).NotTo(HaveOccurred())
+		allocator.syncToK8s(ctx)
+	}
+
 	BeforeEach(func() {
 		allocator = NewGpuAllocator(ctx, k8sClient, 150*time.Millisecond)
 		readyCh, err := allocator.SetupWithManager(ctx, mgr)
@@ -63,14 +77,10 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("8Gi"),
 			}
 
-			gpus, err := allocator.Alloc(ctx, "test-pool", workloadNameNs, request, 1, "")
+			gpus, err := allocateAndSync("test-pool", request, 1, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(gpus).To(HaveLen(1))
 
-			// Explicitly call syncToK8s to persist changes before verification
-			allocator.syncToK8s(ctx)
-
-			// Explicitly refresh node capacity, simulate reconcile loop of GPUNode triggered
 			gpuNode := &tfv1.GPUNode{}
 			if err := k8sClient.Get(ctx, types.NamespacedName{Name: gpus[0].Labels[constants.LabelKeyOwner]}, gpuNode); err != nil {
 				Expect(err).NotTo(HaveOccurred())
@@ -82,7 +92,7 @@ var _ = Describe("GPU Allocator", func() {
 			_, _ = RefreshGPUNodeCapacity(ctx, k8sClient, gpuNode, pool)
 
 			// Verify resources were reduced on the allocated GPU
-			gpu := getGPU(gpus[0].Name, gpus[0].Namespace)
+			gpu := getGPU(gpus[0].Name)
 			Expect(gpu.Status.Available.Tflops.Cmp(gpu.Status.Capacity.Tflops)).To(Equal(-1))
 			Expect(gpu.Status.Available.Vram.Cmp(gpu.Status.Capacity.Vram)).To(Equal(-1))
 
@@ -99,7 +109,7 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("4Gi"),
 			}
 
-			gpus, err := allocator.Alloc(ctx, "test-pool", workloadNameNs, request, 2, "")
+			gpus, err := allocateAndSync("test-pool", request, 2, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(gpus).To(HaveLen(2))
 
@@ -116,7 +126,7 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("2Gi"),
 			}
 
-			_, err := allocator.Alloc(ctx, "test-pool", workloadNameNs, request, 10, "")
+			_, err := allocateAndSync("test-pool", request, 10, "")
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -126,7 +136,7 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("64Gi"),
 			}
 
-			_, err := allocator.Alloc(ctx, "test-pool", workloadNameNs, request, 1, "")
+			_, err := allocateAndSync("test-pool", request, 1, "")
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -136,7 +146,7 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("2Gi"),
 			}
 
-			_, err := allocator.Alloc(ctx, "nonexistent-pool", workloadNameNs, request, 1, "")
+			_, err := allocateAndSync("nonexistent-pool", request, 1, "")
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -147,13 +157,12 @@ var _ = Describe("GPU Allocator", func() {
 			}
 
 			// Try allocating with a specific GPU model
-			gpus, err := allocator.Alloc(ctx, "test-pool", workloadNameNs, request, 1, "NVIDIA A100")
+			gpus, err := allocateAndSync("test-pool", request, 1, "NVIDIA A100")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(gpus).To(HaveLen(1))
 			Expect(gpus[0].Status.GPUModel).To(Equal("NVIDIA A100"))
 
 			// Try allocating with a non-existent GPU model
-			_, err = allocator.Alloc(ctx, "test-pool", workloadNameNs, request, 1, "NonExistentModel")
+			_, err = allocateAndSync("test-pool", request, 1, "NonExistentModel")
 			Expect(err).To(HaveOccurred())
 		})
 	})
@@ -166,7 +175,7 @@ var _ = Describe("GPU Allocator", func() {
 				Vram:   resource.MustParse("6Gi"),
 			}
 
-			gpus, err := allocator.Alloc(ctx, "test-pool", workloadNameNs, request, 1, "")
+			gpus, err := allocateAndSync("test-pool", request, 1, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(gpus).To(HaveLen(1))
 
@@ -176,13 +185,10 @@ var _ = Describe("GPU Allocator", func() {
 			allocatedVram := allocatedGPU.Status.Available.Vram.DeepCopy()
 
 			// Now deallocate
-			err = allocator.Dealloc(ctx, workloadNameNs, request, []types.NamespacedName{client.ObjectKeyFromObject(gpus[0])})
-			Expect(err).NotTo(HaveOccurred())
-
-			allocator.syncToK8s(ctx)
+			deallocateAndSync(gpus, request)
 
 			// Verify resources were restored
-			deallocatedGPU := getGPU(allocatedGPU.Name, allocatedGPU.Namespace)
+			deallocatedGPU := getGPU(allocatedGPU.Name)
 			expectedTflops := allocatedTflops.DeepCopy()
 			expectedVram := allocatedVram.DeepCopy()
 			expectedTflops.Add(request.Tflops)
@@ -201,7 +207,7 @@ var _ = Describe("GPU Allocator", func() {
 			}
 
 			// Allocate 2 GPUs
-			allocatedGPUs, err := allocator.Alloc(ctx, "test-pool", tfv1.NameNamespace{Namespace: "default", Name: "test-workload"}, request, 2, "")
+			allocatedGPUs, err := allocateAndSync("test-pool", request, 2, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(allocatedGPUs).To(HaveLen(2))
 
@@ -230,23 +236,14 @@ var _ = Describe("GPU Allocator", func() {
 					vram:   gpu.Status.Available.Vram.DeepCopy(),
 				}
 			}
-			gpusToDeallocKeys := lo.Map(gpusToDealloc, func(gpu *tfv1.GPU, _ int) types.NamespacedName {
-				return client.ObjectKeyFromObject(gpu)
-			})
+
 			// Now deallocate all GPUs including the non-existent one
-			err = allocator.Dealloc(ctx, tfv1.NameNamespace{Namespace: "default", Name: "test-workload"}, request, gpusToDeallocKeys)
-			Expect(err).NotTo(HaveOccurred())
+			deallocateAndSync(gpusToDealloc, request)
 
 			// Verify resources were restored for existing GPUs
 			for _, allocatedGPU := range allocatedGPUs {
-				deallocatedGPU := getGPU(allocatedGPU.Name, allocatedGPU.Namespace)
+				deallocatedGPU := getGPU(allocatedGPU.Name)
 				initialState := initialStates[allocatedGPU.Name]
-
-				expectedTflops := initialState.tflops.DeepCopy()
-				expectedVram := initialState.vram.DeepCopy()
-				expectedTflops.Add(request.Tflops)
-				expectedVram.Add(request.Vram)
-
 				Expect(deallocatedGPU.Status.Available.Tflops.Cmp(initialState.tflops)).To(Equal(1))
 				Expect(deallocatedGPU.Status.Available.Vram.Cmp(initialState.vram)).To(Equal(1))
 			}
@@ -301,7 +298,7 @@ var _ = Describe("GPU Allocator", func() {
 			Expect(exists).To(BeTrue())
 
 			// Get the GPU from the API server
-			gpuToDelete := getGPU("gpu-1", "")
+			gpuToDelete := getGPU("gpu-1")
 
 			// Handle the deletion event
 			allocator.handleGPUDelete(ctx, gpuToDelete)

@@ -365,9 +365,9 @@ var _ = AfterSuite(func() {
 })
 
 // Helper function to get a GPU from the API server
-func getGPU(name string, namespace string) *tfv1.GPU {
+func getGPU(name string) *tfv1.GPU {
 	gpu := &tfv1.GPU{}
-	key := types.NamespacedName{Name: name, Namespace: namespace}
+	key := types.NamespacedName{Name: name}
 	err := k8sClient.Get(ctx, key, gpu)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	return gpu

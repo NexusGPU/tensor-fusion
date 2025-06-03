@@ -97,12 +97,35 @@ func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []strin
 	metricsItem.PoolName = poolObj.Name
 	metricsItem.GPUModels = gpuModels
 
-	metricsItem.AllocatedTflops = node.Status.TotalTFlops.AsApproximateFloat64() - node.Status.AvailableTFlops.AsApproximateFloat64()
-	metricsItem.AllocatedTflopsPercent = metricsItem.AllocatedTflops / node.Status.TotalTFlops.AsApproximateFloat64() * 100
-	metricsItem.AllocatedVramBytes = node.Status.TotalVRAM.AsApproximateFloat64() - node.Status.AvailableVRAM.AsApproximateFloat64()
-	metricsItem.AllocatedVramPercent = metricsItem.AllocatedVramBytes / node.Status.TotalVRAM.AsApproximateFloat64() * 100
-	metricsItem.AllocatedTflopsPercentToVirtualCap = metricsItem.AllocatedTflops / node.Status.VirtualTFlops.AsApproximateFloat64() * 100
-	metricsItem.AllocatedVramPercentToVirtualCap = metricsItem.AllocatedVramBytes / node.Status.VirtualVRAM.AsApproximateFloat64() * 100
+	totalTflops := node.Status.TotalTFlops.AsApproximateFloat64()
+	totalVram := node.Status.TotalVRAM.AsApproximateFloat64()
+
+	metricsItem.AllocatedTflops = totalTflops - node.Status.AvailableTFlops.AsApproximateFloat64()
+	if totalTflops <= 0 {
+		metricsItem.AllocatedTflopsPercent = 0
+	} else {
+		metricsItem.AllocatedTflopsPercent = metricsItem.AllocatedTflops / totalTflops * 100
+	}
+
+	metricsItem.AllocatedVramBytes = totalVram - node.Status.AvailableVRAM.AsApproximateFloat64()
+	if totalVram <= 0 {
+		metricsItem.AllocatedVramPercent = 0
+	} else {
+		metricsItem.AllocatedVramPercent = metricsItem.AllocatedVramBytes / totalVram * 100
+	}
+
+	totalVirtualTflops := node.Status.VirtualTFlops.AsApproximateFloat64()
+	totalVirtualVram := node.Status.VirtualVRAM.AsApproximateFloat64()
+	if totalVirtualTflops <= 0 {
+		metricsItem.AllocatedTflopsPercentToVirtualCap = 0
+	} else {
+		metricsItem.AllocatedTflopsPercentToVirtualCap = metricsItem.AllocatedTflops / totalVirtualTflops * 100
+	}
+	if totalVirtualVram <= 0 {
+		metricsItem.AllocatedVramPercentToVirtualCap = 0
+	} else {
+		metricsItem.AllocatedVramPercentToVirtualCap = metricsItem.AllocatedVramBytes / totalVirtualVram * 100
+	}
 }
 
 // Start metrics recorder
