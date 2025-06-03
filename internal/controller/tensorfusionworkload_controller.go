@@ -269,6 +269,9 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	workload *tfv1.TensorFusionWorkload,
 	hash string,
 ) (*corev1.Pod, error) {
+	if len(gpus) == 0 || gpus[0].Labels == nil {
+		return nil, fmt.Errorf("no gpus or no labels, can not assign host port for worker")
+	}
 	port, err := r.PortAllocator.AssignHostPort(gpus[0].Status.NodeSelector[constants.KubernetesHostNameLabel])
 	if err != nil {
 		return nil, fmt.Errorf("get host port %w", err)

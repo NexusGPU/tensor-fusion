@@ -108,7 +108,9 @@ func (s *GpuAllocator) Alloc(
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
 
+	appAdded := false
 	for _, selectedGPU := range selectedGPUs {
+
 		// Get the GPU from the store
 		key := types.NamespacedName{Name: selectedGPU.Name, Namespace: selectedGPU.Namespace}
 		gpu, exists := s.gpuStore[key]
@@ -122,7 +124,10 @@ func (s *GpuAllocator) Alloc(
 		gpu.Status.Available.Tflops.Sub(request.Tflops)
 		gpu.Status.Available.Vram.Sub(request.Vram)
 
-		addRunningApp(gpu, workloadNameNamespace)
+		if !appAdded {
+			addRunningApp(ctx, gpu, workloadNameNamespace)
+			appAdded = true
+		}
 
 		s.markGPUDirty(key)
 	}
@@ -143,6 +148,7 @@ func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.N
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
 
+	appRemoved := false
 	for _, gpu := range gpus {
 		// Get the GPU from the store
 		storeGPU, exists := s.gpuStore[gpu]
@@ -154,6 +160,10 @@ func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.N
 		// Add resources back to the GPU
 		storeGPU.Status.Available.Tflops.Add(request.Tflops)
 		storeGPU.Status.Available.Vram.Add(request.Vram)
+		if !appRemoved {
+			removeRunningApp(ctx, storeGPU, workloadNameNamespace)
+			appRemoved = true
+		}
 
 		s.markGPUDirty(gpu)
 	}
@@ -468,11 +478,14 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 
 	tflopsCapacityMap := make(map[types.NamespacedName]resource.Quantity)
 	vramCapacityMap := make(map[types.NamespacedName]resource.Quantity)
+	gpuMap := make(map[types.NamespacedName]*tfv1.GPU)
 
 	for gpuKey, gpu := range s.gpuStore {
 		if gpu.Status.Capacity != nil {
 			tflopsCapacityMap[gpuKey] = gpu.Status.Capacity.Tflops
 			vramCapacityMap[gpuKey] = gpu.Status.Capacity.Vram
+			gpu.Status.RunningApps = []*tfv1.RunningAppDetail{}
+			gpuMap[gpuKey] = gpu
 		}
 	}
 
@@ -481,6 +494,7 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 		vramRequest, _ := resource.ParseQuantity(worker.Annotations[constants.VRAMRequestAnnotation])
 		gpuIds := worker.Annotations[constants.GpuKey]
 		gpuIdsList := strings.Split(gpuIds, ",")
+		appAdded := false
 		for _, gpuId := range gpuIdsList {
 			gpuKey := types.NamespacedName{Name: gpuId}
 			gpuCapacity, ok := tflopsCapacityMap[gpuKey]
@@ -490,6 +504,10 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 			gpuCapacity, ok = vramCapacityMap[gpuKey]
 			if ok {
 				gpuCapacity.Sub(vramRequest)
+			}
+			if !appAdded {
+				addRunningApp(ctx, gpuMap[gpuKey], tfv1.NameNamespace{Namespace: worker.Namespace, Name: worker.Labels[constants.WorkloadKey]})
+				appAdded = true
 			}
 		}
 	}
@@ -510,7 +528,11 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 	}
 }
 
-func addRunningApp(gpu *tfv1.GPU, workloadNameNamespace tfv1.NameNamespace) {
+func addRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace tfv1.NameNamespace) {
+	if gpu == nil {
+		log.FromContext(ctx).Info("[Warning] GPU is nil, skip adding running app", "workload", workloadNameNamespace.Name, "namespace", workloadNameNamespace.Namespace)
+		return
+	}
 	if gpu.Status.RunningApps == nil {
 		gpu.Status.RunningApps = []*tfv1.RunningAppDetail{}
 	}

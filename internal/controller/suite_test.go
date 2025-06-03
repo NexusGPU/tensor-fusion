@@ -35,6 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -253,7 +254,15 @@ func (c *TensorFusionEnv) GetCluster() *tfv1.TensorFusionCluster {
 
 func (c *TensorFusionEnv) UpdateCluster(tfc *tfv1.TensorFusionCluster) {
 	GinkgoHelper()
-	Expect(k8sClient.Update(ctx, tfc)).Should(Succeed())
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		latest := &tfv1.TensorFusionCluster{}
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(tfc), latest); err != nil {
+			return err
+		}
+		latest.Spec = tfc.Spec
+		return k8sClient.Update(ctx, latest)
+	})
+	Expect(err).Should(Succeed())
 }
 
 func (c *TensorFusionEnv) Cleanup() {

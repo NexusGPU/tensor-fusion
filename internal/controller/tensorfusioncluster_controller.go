@@ -432,16 +432,16 @@ func (r *TensorFusionClusterReconciler) updateMetricsRecorder(ctx context.Contex
 	}
 	pricingDetail := r.MetricsRecorder.WorkerUnitPriceMap[pool.Name]
 	for _, pricing := range qosConfig.Pricing {
-		tflopsPerSecond, _ := strconv.ParseFloat(pricing.Requests.PerFP16TFlopsPerHour, 64)
-		vramPerSecond, _ := strconv.ParseFloat(pricing.Requests.PerGBOfVRAMPerHour, 64)
+		tflopsPerHour, _ := strconv.ParseFloat(pricing.Requests.PerFP16TFlopsPerHour, 64)
+		vramPerHour, _ := strconv.ParseFloat(pricing.Requests.PerGBOfVRAMPerHour, 64)
 		limitOverRequestChargingRatio, _ := strconv.ParseFloat(pricing.LimitsOverRequestsChargingRatio, 64)
 
 		pricingDetail[string(pricing.Qos)] = metrics.RawBillingPricing{
-			TflopsPerSecond: tflopsPerSecond / 3600,
-			VramPerSecond:   vramPerSecond / 3600,
+			TflopsPerSecond: tflopsPerHour / float64(3600),
+			VramPerSecond:   vramPerHour / float64(3600),
 
-			TflopsOverRequestPerSecond: tflopsPerSecond / 3600 * limitOverRequestChargingRatio,
-			VramOverRequestPerSecond:   vramPerSecond / 3600 * limitOverRequestChargingRatio,
+			TflopsOverRequestPerSecond: tflopsPerHour / float64(3600) * limitOverRequestChargingRatio,
+			VramOverRequestPerSecond:   vramPerHour / float64(3600) * limitOverRequestChargingRatio,
 		}
 	}
 
