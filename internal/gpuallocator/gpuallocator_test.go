@@ -176,7 +176,7 @@ var _ = Describe("GPU Allocator", func() {
 			allocatedVram := allocatedGPU.Status.Available.Vram.DeepCopy()
 
 			// Now deallocate
-			err = allocator.Dealloc(ctx, workloadNameNs, request, allocatedGPU)
+			err = allocator.Dealloc(ctx, workloadNameNs, request, []types.NamespacedName{client.ObjectKeyFromObject(gpus[0])})
 			Expect(err).NotTo(HaveOccurred())
 
 			allocator.syncToK8s(ctx)
@@ -201,7 +201,7 @@ var _ = Describe("GPU Allocator", func() {
 			}
 
 			// Allocate 2 GPUs
-			allocatedGPUs, err := allocator.Alloc(ctx, "test-pool", request, 2, "")
+			allocatedGPUs, err := allocator.Alloc(ctx, "test-pool", tfv1.NameNamespace{Namespace: "default", Name: "test-workload"}, request, 2, "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(allocatedGPUs).To(HaveLen(2))
 
@@ -234,7 +234,7 @@ var _ = Describe("GPU Allocator", func() {
 				return client.ObjectKeyFromObject(gpu)
 			})
 			// Now deallocate all GPUs including the non-existent one
-			err = allocator.Dealloc(ctx, request, gpusToDeallocKeys)
+			err = allocator.Dealloc(ctx, tfv1.NameNamespace{Namespace: "default", Name: "test-workload"}, request, gpusToDeallocKeys)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify resources were restored for existing GPUs

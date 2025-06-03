@@ -394,7 +394,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 			return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 		}
 
-		pod, err := r.tryStartWorker(ctx, workerGenerator, gpus, workload, hash)
+		_, err = r.tryStartWorker(ctx, workerGenerator, gpus, workload, hash)
 		if err != nil {
 			// Try to release all allocated GPUs if pod creation fails
 			gpus := lo.Map(gpus, func(gpu *tfv1.GPU, _ int) types.NamespacedName {

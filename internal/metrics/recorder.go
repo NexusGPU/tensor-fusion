@@ -178,7 +178,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddTag("worker_name", metrics.WorkerName)
 		enc.AddTag("workload_name", metrics.WorkloadName)
 
-		enc.AddField("gpu_count", metricsProto.MustNewValue(metrics.GPUCount))
+		enc.AddField("gpu_count", metricsProto.MustNewValue(int64(metrics.GPUCount)))
 		enc.AddField("tflops_limit", metricsProto.MustNewValue(metrics.TflopsLimit))
 		enc.AddField("tflops_request", metricsProto.MustNewValue(metrics.TflopsRequest))
 		enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
@@ -205,7 +205,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("allocated_tflops_percent", metricsProto.MustNewValue(metrics.AllocatedTflopsPercent))
 		enc.AddField("allocated_vram_bytes", metricsProto.MustNewValue(metrics.AllocatedVramBytes))
 		enc.AddField("allocated_vram_percent", metricsProto.MustNewValue(metrics.AllocatedVramPercent))
-		enc.AddField("gpu_count", metricsProto.MustNewValue(len(metrics.GPUModels)))
+		enc.AddField("gpu_count", metricsProto.MustNewValue(int64(len(metrics.GPUModels))))
 		enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
 		enc.EndLine(now)
 	}

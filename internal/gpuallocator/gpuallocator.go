@@ -138,7 +138,7 @@ func (s *GpuAllocator) Alloc(
 }
 
 // Dealloc a request from gpu to release available resources on it.
-func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.NameNamespace, request tfv1.Resource, gpu *tfv1.GPU) error {
+func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.NameNamespace, request tfv1.Resource, gpus []types.NamespacedName) error {
 	log := log.FromContext(ctx)
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
