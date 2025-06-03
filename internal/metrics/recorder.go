@@ -75,7 +75,7 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod, workload *tfv1.TensorFusionWork
 		// handle invalid data if exists
 		metricsItem.GPUCount = 1
 	} else {
-		metricsItem.GPUCount = workload.Spec.GPUCount
+		metricsItem.GPUCount = int(workload.Spec.GPUCount)
 	}
 	metricsItem.WorkloadName = workload.Name
 

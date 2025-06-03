@@ -100,7 +100,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 				gpuNames := strings.Split(podList.Items[0].Annotations[constants.GpuKey], ",")
 				g.Expect(gpuNames).Should(HaveLen(2))
-			}, timeout, interval).Should(Succeed())
+			}).Should(Succeed())
 
 			checkWorkloadStatus(workload)
 		})

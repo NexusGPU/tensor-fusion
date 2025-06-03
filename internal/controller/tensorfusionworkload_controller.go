@@ -269,11 +269,11 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	workload *tfv1.TensorFusionWorkload,
 	hash string,
 ) (*corev1.Pod, error) {
-	port, err := r.PortAllocator.AssignHostPort(gpu.Status.NodeSelector[constants.KubernetesHostNameLabel])
+	port, err := r.PortAllocator.AssignHostPort(gpus[0].Status.NodeSelector[constants.KubernetesHostNameLabel])
 	if err != nil {
 		return nil, fmt.Errorf("get host port %w", err)
 	}
-	pod, hash, err := workerGenerator.GenerateWorkerPod(gpu, fmt.Sprintf("%s-tf-worker-", workload.Name), workload.Namespace, port, workload.Spec.Resources.Requests, workload.Spec.Resources.Limits, hash)
+	pod, hash, err := workerGenerator.GenerateWorkerPod(gpus, fmt.Sprintf("%s-tf-worker-", workload.Name), workload.Namespace, port, workload.Spec.Resources.Requests, workload.Spec.Resources.Limits, hash)
 	if err != nil {
 		return nil, fmt.Errorf("generate worker pod %w", err)
 	}
