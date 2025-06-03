@@ -71,6 +71,14 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod, workload *tfv1.TensorFusionWork
 	metricsItem.TflopsLimit = workload.Spec.Resources.Limits.Tflops.AsApproximateFloat64()
 	metricsItem.VramBytesRequest = workload.Spec.Resources.Requests.Vram.AsApproximateFloat64()
 	metricsItem.VramBytesLimit = workload.Spec.Resources.Limits.Vram.AsApproximateFloat64()
+	if workload.Spec.GPUCount <= 0 {
+		// handle invalid data if exists
+		metricsItem.GPUCount = 1
+	} else {
+		metricsItem.GPUCount = workload.Spec.GPUCount
+	}
+	metricsItem.WorkloadName = workload.Name
+
 }
 
 func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []string) {
@@ -170,6 +178,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddTag("worker_name", metrics.WorkerName)
 		enc.AddTag("workload_name", metrics.WorkloadName)
 
+		enc.AddField("gpu_count", metricsProto.MustNewValue(metrics.GPUCount))
 		enc.AddField("tflops_limit", metricsProto.MustNewValue(metrics.TflopsLimit))
 		enc.AddField("tflops_request", metricsProto.MustNewValue(metrics.TflopsRequest))
 		enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
@@ -196,6 +205,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("allocated_tflops_percent", metricsProto.MustNewValue(metrics.AllocatedTflopsPercent))
 		enc.AddField("allocated_vram_bytes", metricsProto.MustNewValue(metrics.AllocatedVramBytes))
 		enc.AddField("allocated_vram_percent", metricsProto.MustNewValue(metrics.AllocatedVramPercent))
+		enc.AddField("gpu_count", metricsProto.MustNewValue(len(metrics.GPUModels)))
 		enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
 		enc.EndLine(now)
 	}
@@ -240,7 +250,7 @@ func (mr *MetricsRecorder) getWorkerRawCost(metrics *WorkerMetrics, duration tim
 	rawCostVRAMLimitOverRequest := (metrics.VramBytesLimit - metrics.VramBytesRequest) * pricing.VramOverRequestPerSecond / constants.GiBToBytes
 	rawCostPerVRAM := pricing.VramPerSecond * metrics.VramBytesRequest / constants.GiBToBytes
 
-	return (rawCostPerTflops + rawCostPerVRAM + rawCostTflopsLimitOverRequest + rawCostVRAMLimitOverRequest) * duration.Seconds()
+	return (rawCostPerTflops + rawCostPerVRAM + rawCostTflopsLimitOverRequest + rawCostVRAMLimitOverRequest) * duration.Seconds() * float64(metrics.GPUCount)
 }
 
 // unit price data comes from global config map, and multi-GPU instance should normalized with per GPU pricing, e.g. 8xA100 p4d.24xlarge price should divide by 8
