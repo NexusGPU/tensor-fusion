@@ -1,47 +1,89 @@
+// NOTE: Make sure any new field/tag to existing metrics or new metrics
+// should be added to SetupTable function for manual DB migration
 package metrics
 
-import "time"
+import (
+	"time"
+)
+
+type TensorFusionSystemMetrics struct {
+	PoolName string `json:"poolName" gorm:"column:pool_name;index:,class:INVERTED"`
+
+	TotalWorkerCount            int64 `json:"totalWorkerCount" gorm:"column:total_workers_cnt"`
+	TotalNodeCount              int64 `json:"totalNodeCount" gorm:"column:total_nodes_cnt"`
+	TotalAllocationFailCount    int64 `json:"totalAllocationFailCount" gorm:"column:total_allocation_fail_cnt"`
+	TotalAllocationSuccessCount int64 `json:"totalAllocationSuccessCount" gorm:"column:total_allocation_success_cnt"`
+
+	// NOTE: make sure new fields will be migrated in SetupTable function
+
+	Timestamp time.Time `json:"ts" gorm:"column:ts;index:,class:TIME"`
+}
+
+func (wm TensorFusionSystemMetrics) TableName() string {
+	return "tf_system_metrics"
+}
+
+var TensorFusionSystemMetricsMap = make(map[string]*TensorFusionSystemMetrics)
 
 // Metrics will be stored in a map, key is the worker name, value is the metrics
 // By default, metrics will be updated every minute
-type WorkerMetrics struct {
-	WorkerName   string `json:"workerName"`
-	WorkloadName string `json:"workloadName"`
-	PoolName     string `json:"poolName"`
-	Namespace    string `json:"namespace"`
-	QoS          string `json:"qos"`
+type WorkerResourceMetrics struct {
+	WorkerName   string `json:"workerName" gorm:"column:worker_name;index:,class:INVERTED"`
+	WorkloadName string `json:"workloadName" gorm:"column:workload_name;index:,class:INVERTED"`
+	PoolName     string `json:"poolName" gorm:"column:pool_name;index:,class:INVERTED"`
+	Namespace    string `json:"namespace" gorm:"column:namespace;index:,class:INVERTED"`
+	QoS          string `json:"qos" gorm:"column:qos"`
 
-	TflopsRequest    float64 `json:"tflopsRequest"`
-	TflopsLimit      float64 `json:"tflopsLimit"`
-	VramBytesRequest float64 `json:"vramBytesRequest"`
-	VramBytesLimit   float64 `json:"vramBytesLimit"`
-	GPUCount         int     `json:"gpuCount"`
-	RawCost          float64 `json:"rawCost"`
+	TflopsRequest    float64 `json:"tflopsRequest" gorm:"column:tflops_request"`
+	TflopsLimit      float64 `json:"tflopsLimit" gorm:"column:tflops_limit"`
+	VramBytesRequest float64 `json:"vramBytesRequest" gorm:"column:vram_bytes_request"`
+	VramBytesLimit   float64 `json:"vramBytesLimit" gorm:"column:vram_bytes_limit"`
+	GPUCount         int     `json:"gpuCount" gorm:"column:gpu_count"`
+	RawCost          float64 `json:"rawCost" gorm:"column:raw_cost"`
 
-	LastRecordTime time.Time `json:"lastRecordTime"`
+	// NOTE: make sure new fields will be migrated in SetupTable function
+
+	LastRecordTime time.Time `json:"lastRecordTime" gorm:"column:ts;index:,class:TIME"`
 
 	// For more accurate metrics, should record the deletion timestamp to calculate duration for the last metrics
-	DeletionTimestamp time.Time `json:"deletionTimestamp"`
+	deletionTimestamp *time.Time
 }
 
-type NodeMetrics struct {
-	NodeName string `json:"nodeName"`
-	PoolName string `json:"poolName"`
+func (wm WorkerResourceMetrics) TableName() string {
+	return "tf_worker_resources"
+}
 
-	AllocatedTflops        float64 `json:"allocatedTflops"`
-	AllocatedTflopsPercent float64 `json:"allocatedTflopsPercent"`
-	AllocatedVramBytes     float64 `json:"allocatedVramBytes"`
-	AllocatedVramPercent   float64 `json:"allocatedVramPercent"`
+type NodeResourceMetrics struct {
+	NodeName string `json:"nodeName" gorm:"column:node_name;index:,class:INVERTED"`
+	PoolName string `json:"poolName" gorm:"column:pool_name;index:,class:INVERTED"`
 
-	AllocatedTflopsPercentToVirtualCap float64 `json:"allocatedTflopsPercentToVirtualCap"`
-	AllocatedVramPercentToVirtualCap   float64 `json:"allocatedVramPercentToVirtualCap"`
+	AllocatedTflops        float64 `json:"allocatedTflops" gorm:"column:allocated_tflops"`
+	AllocatedTflopsPercent float64 `json:"allocatedTflopsPercent" gorm:"column:allocated_tflops_percent"`
+	AllocatedVramBytes     float64 `json:"allocatedVramBytes" gorm:"column:allocated_vram_bytes"`
+	AllocatedVramPercent   float64 `json:"allocatedVramPercent" gorm:"column:allocated_vram_percent"`
 
-	RawCost float64 `json:"rawCost"`
+	AllocatedTflopsPercentToVirtualCap float64 `json:"allocatedTflopsPercentToVirtualCap" gorm:"column:allocated_tflops_percent_virtual"`
+	AllocatedVramPercentToVirtualCap   float64 `json:"allocatedVramPercentToVirtualCap" gorm:"column:allocated_vram_percent_virtual"`
 
-	LastRecordTime time.Time `json:"lastRecordTime"`
+	RawCost  float64 `json:"rawCost" gorm:"column:raw_cost"`
+	GPUCount int     `json:"gpuCount" gorm:"column:gpu_count"`
+
+	// NOTE: make sure new fields will be migrated in SetupTable function
+
+	LastRecordTime time.Time `json:"lastRecordTime" gorm:"column:ts;index:,class:TIME"`
 
 	// additional field for raw cost calculation since each GPU has different price
-	GPUModels []string `json:"gpuModels"`
+	// private field automatically ignored in gorm
+	gpuModels []string
+}
+
+func (nm NodeResourceMetrics) TableName() string {
+	return "tf_node_resources"
+}
+
+func (nm *NodeResourceMetrics) SetGPUModelAndCount(gpuModels []string) {
+	nm.gpuModels = gpuModels
+	nm.GPUCount = len(gpuModels)
 }
 
 type RawBillingPricing struct {
@@ -51,3 +93,64 @@ type RawBillingPricing struct {
 	TflopsOverRequestPerSecond float64
 	VramOverRequestPerSecond   float64
 }
+
+// Other tables are used to store metrics from hypervisor or system logs
+
+type TFSystemLog struct {
+	Component string `json:"component" gorm:"column:component;index:,class:INVERTED"`
+	Container string `json:"container" gorm:"column:container;index:,class:INVERTED"`
+	Message   string `json:"message" gorm:"column:message;index:,class:FULLTEXT,option:WITH (analyzer = 'English' $comma$ case_sensitive = 'false')"`
+	Namespace string `json:"namespace" gorm:"column:namespace;index:,class:INVERTED"`
+	Pod       string `json:"pod" gorm:"column:pod;index"`
+	Stream    string `json:"stream" gorm:"column:stream"`
+	// message written timestamp
+	Timestamp string `json:"timestamp" gorm:"column:timestamp"`
+
+	// NOTE: make sure new fields will be migrated in SetupTable function
+
+	GreptimeTimestamp time.Time `json:"greptime_timestamp" gorm:"column:greptime_timestamp;index:,class:TIME"`
+}
+
+func (sl TFSystemLog) TableName() string {
+	return "tf_system_log"
+}
+
+type HypervisorWorkerUsageMetrics struct {
+	WorkloadName string `json:"workloadName" gorm:"column:workload_name;index:,class:INVERTED"`
+	WorkerName   string `json:"workerName" gorm:"column:worker_name,index"`
+	PoolName     string `json:"poolName" gorm:"column:pool_name;index:,class:INVERTED"`
+	NodeName     string `json:"nodeName" gorm:"column:node_name;index:,class:INVERTED"`
+	UUID         string `json:"uuid" gorm:"column:uuid;index:,class:INVERTED"`
+
+	ComputePercent float64 `json:"compute_percent" gorm:"column:compute_percent"`
+	VRAMBytes      uint64  `json:"vram_bytes" gorm:"column:vram_bytes"`
+	ComputeTflops  float64 `json:"compute_tflops" gorm:"column:compute_tflops"`
+
+	// NOTE: make sure new fields will be migrated in SetupTable function
+
+	Timestamp time.Time `json:"ts" gorm:"column:ts;index:,class:TIME"`
+}
+
+func (wu HypervisorWorkerUsageMetrics) TableName() string {
+	return "tf_worker_usage"
+}
+
+type HypervisorGPUUsageMetrics struct {
+	NodeName string `json:"nodeName" gorm:"column:node_name;index:,class:INVERTED"`
+	PoolName string `json:"poolName" gorm:"column:pool_name;index:,class:INVERTED"`
+	UUID     string `json:"uuid" gorm:"column:uuid;index:,class:INVERTED"`
+
+	ComputePercent float64 `json:"compute_percent" gorm:"column:compute_percent"`
+	VRAMBytes      uint64  `json:"vram_bytes" gorm:"column:vram_bytes"`
+	ComputeTflops  float64 `json:"compute_tflops" gorm:"column:compute_tflops"`
+
+	// NOTE: make sure new fields will be migrated in SetupTable function
+
+	Timestamp time.Time `json:"ts" gorm:"column:ts;index:,class:TIME"`
+}
+
+func (nu HypervisorGPUUsageMetrics) TableName() string {
+	return "tf_gpu_usage"
+}
+
+// NOTE: make sure new metrics will be migrated in SetupTable function

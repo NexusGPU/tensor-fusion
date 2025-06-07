@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -55,7 +57,7 @@ func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
 
 func (wg *WorkerGenerator) GenerateWorkerPod(
 	gpus []*tfv1.GPU,
-	generateName string,
+	workloadName string,
 	namespace string,
 	port int,
 	requests tfv1.Resource,
@@ -81,10 +83,13 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		},
 	})
 
+	// performance optimization, service link will cause high CPU usage when service number is large
+	spec.EnableServiceLinks = ptr.To(false)
+
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, corev1.VolumeMount{
 		Name:        constants.DataVolumeName,
 		MountPath:   constants.TFDataPath,
-		SubPathExpr: fmt.Sprintf("${%s}", constants.WorkerPodNameEnv),
+		SubPathExpr: fmt.Sprintf("${%s}", constants.PodNameEnv),
 	})
 
 	firstGPU := gpus[0]
@@ -137,20 +142,21 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 			return string(jsonBytes)
 		}(),
 	}, corev1.EnvVar{
-		Name: constants.WorkerPodNameEnv,
+		Name: constants.PodNameEnv,
 		ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{
 				FieldPath: "metadata.name",
 			},
 		},
+	}, corev1.EnvVar{
+		Name:  constants.WorkloadNameEnv,
+		Value: workloadName,
 	})
 	workerLabels := map[string]string{
 		constants.LabelComponent: constants.ComponentWorker,
 	}
 	if podTmpl.Template.Labels != nil {
-		for k, v := range podTmpl.Template.Labels {
-			workerLabels[k] = v
-		}
+		maps.Copy(workerLabels, podTmpl.Template.Labels)
 	}
 	workerAnnotations := map[string]string{
 		constants.TFLOPSRequestAnnotation: requests.Tflops.String(),
@@ -166,7 +172,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: generateName,
+			GenerateName: fmt.Sprintf("%s-tf-worker-", workloadName),
 			Namespace:    namespace,
 			Labels:       workerLabels,
 			Annotations:  workerAnnotations,

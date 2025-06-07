@@ -310,6 +310,7 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 		Key:      "NoSchedule",
 		Operator: corev1.TolerationOpExists,
 	})
+	tmpl.Spec.EnableServiceLinks = ptr.To(false)
 
 	if len(tmpl.Spec.Containers) > 0 {
 		if len(tmpl.Spec.Containers[0].Env) == 0 {
@@ -412,6 +413,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 	if spec.NodeSelector == nil {
 		spec.NodeSelector = make(map[string]string)
 	}
+	spec.EnableServiceLinks = ptr.To(false)
 	spec.NodeSelector["kubernetes.io/hostname"] = node.Status.KubernetesNodeName
 	spec.Volumes = append(spec.Volumes, corev1.Volume{
 		Name: constants.DataVolumeName,
@@ -425,6 +427,23 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 		Name:      constants.DataVolumeName,
 		ReadOnly:  false,
 		MountPath: constants.TFDataPath,
+	})
+	if spec.Containers[0].Env == nil {
+		spec.Containers[0].Env = []corev1.EnvVar{}
+	}
+	spec.Containers[0].Env = append(spec.Containers[0].Env, corev1.EnvVar{
+		Name: constants.PodNameEnv,
+		ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{
+				FieldPath: "metadata.name",
+			},
+		},
+	}, corev1.EnvVar{
+		Name:  constants.PoolNameEnv,
+		Value: pool.Name,
+	}, corev1.EnvVar{
+		Name:  constants.GPUNodeNameEnv,
+		Value: node.Name,
 	})
 	spec.ServiceAccountName = constants.HypervisorServiceAccountName
 	newPod := &corev1.Pod{

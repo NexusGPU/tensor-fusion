@@ -150,6 +150,7 @@ spec:
       restartPolicy: Always
       terminationGracePeriodSeconds: 30
       dnsPolicy: ClusterFirst
+      enableServiceLinks: false
   volumeClaimTemplates:
     - kind: PersistentVolumeClaim
       apiVersion: v1

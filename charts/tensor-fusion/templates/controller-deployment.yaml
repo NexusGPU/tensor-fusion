@@ -31,6 +31,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "tensor-fusion.serviceAccountName" . }}
+      enableServiceLinks: false
       containers:
         - name: controller
           image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}"
@@ -54,6 +55,24 @@ spec:
             # when deploy with AutoSelect mode, GPU node is managed by Kubernetes rather than TensorFusion, thus, need to specify the label selector to generate the GPUNode custom resource
             - name: INITIAL_GPU_NODE_LABEL_SELECTOR
               value: "{{ default "nvidia.com/gpu.present=true" .Values.initialGpuNodeLabelSelector }}"
+            - name: TSDB_MYSQL_HOST
+              value: "{{ .Values.greptime.host }}"
+            - name: TSDB_MYSQL_PORT
+              value: "{{ .Values.greptime.port }}"
+            - name: TSDB_MYSQL_DATABASE
+              value: "{{ .Values.greptime.db }}"
+            {{- if .Values.greptime.isCloud }}
+            - name: TSDB_MYSQL_USER
+              value: "{{ .Values.greptime.user }}"
+            - name: TSDB_MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tf-greptimedb-secret
+                  key: password
+            {{- else }}
+            - name: TSDB_MYSQL_USER
+              value: root
+            {{- end }}
           volumeMounts:
             - name: cert
               readOnly: true
@@ -76,6 +95,24 @@ spec:
               value: "{{ .Values.agent.agentId }}"
             - name: ENROLL_TOKEN
               value: "{{ .Values.agent.enrollToken }}"
+            - name: TSDB_MYSQL_HOST
+              value: "{{ .Values.greptime.host }}"
+            - name: TSDB_MYSQL_PORT
+              value: "{{ .Values.greptime.port }}"
+            - name: TSDB_MYSQL_DATABASE
+              value: "{{ .Values.greptime.db }}"
+            {{- if .Values.greptime.isCloud }}
+            - name: TSDB_MYSQL_USER
+              value: "{{ .Values.greptime.user }}"
+            - name: TSDB_MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tf-greptimedb-secret
+                  key: password
+            {{- else }}
+            - name: TSDB_MYSQL_USER
+              value: "root"
+            {{- end }}
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
         {{- end }}

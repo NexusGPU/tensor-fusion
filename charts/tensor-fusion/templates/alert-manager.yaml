@@ -1,0 +1,132 @@
+{{- if .Values.alert.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alert-manager-config
+  namespace: {{ include "tensor-fusion.namespace" . }}
+  labels:
+    tensor-fusion.ai/component: alert-manager
+data:
+  alertmanager.yml: |
+    {{- toYaml .Values.alert.alertManagerConfig | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: alert-manager
+  namespace: {{ include "tensor-fusion.namespace" . }}
+  labels:
+    tensor-fusion.ai/component: alert-manager
+spec:
+  replicas: {{ .Values.alert.replicaCount }}
+  selector:
+    matchLabels:
+      tensor-fusion.ai/component: alert-manager
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        tensor-fusion.ai/component: alert-manager
+    spec:
+      enableServiceLinks: false
+      volumes:
+        - name: config
+          configMap:
+            name: alert-manager-config
+            defaultMode: 420
+        - name: storage
+          hostPath:
+            path: /data/alertmanager
+            type: DirectoryOrCreate
+      containers:
+        - name: alertmanager
+          image: {{ .Values.alert.image.repository }}:{{ .Values.alert.image.tag }}
+          args:
+            - '--storage.path=/alertmanager'
+            - '--config.file=/etc/alertmanager/alertmanager.yml'
+          ports:
+            - name: http
+              containerPort: 9093
+              protocol: TCP
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.podIP
+          resources: 
+            {{- toYaml .Values.alert.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+            - name: storage
+              mountPath: /alertmanager
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+              scheme: HTTP
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+              scheme: HTTP
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+      restartPolicy: Always
+      serviceAccountName: alert-manager
+  serviceName: alert-manager-headless
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  revisionHistoryLimit: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-manager
+  namespace: {{ include "tensor-fusion.namespace" . }}
+  labels:
+    tensor-fusion.ai/component: alert-manager
+spec:
+  ports:
+    - name: http
+      protocol: TCP
+      port: 9093
+      targetPort: http
+  selector:
+    tensor-fusion.ai/component: alert-manager
+  type: ClusterIP
+  sessionAffinity: None
+  internalTrafficPolicy: Cluster
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-manager-headless
+  namespace: {{ include "tensor-fusion.namespace" . }}
+  labels:
+    tensor-fusion.ai/component: alert-manager-headless
+spec:
+  ports:
+    - name: http
+      protocol: TCP
+      port: 9093
+      targetPort: http
+  selector:
+    tensor-fusion.ai/component: alert-manager
+  clusterIP: None
+  clusterIPs:
+    - None
+  type: ClusterIP
+  sessionAffinity: None
+  internalTrafficPolicy: Cluster
+
+{{- end }}
