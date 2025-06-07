@@ -20,3 +20,13 @@ agent:
     limits:
       cpu: 4000m
       memory: 2Gi
+
+alert:
+  replicaCount: 3
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 200m
+    limits:
+      memory: 1Gi
+      cpu: 2000m

@@ -262,6 +262,8 @@ func handleMetricsRecorder(podList *corev1.PodList, workload *tfv1.TensorFusionW
 	}
 }
 
+// TODO for is-local-gpu mode, should not start worker, and workload replicas must be dynamic, to support worker-as-lib design
+// create special tensorfusion connection instead with finalizer, based on workload status's pending worker count, when connection is removed, should Dealloc GPU resources
 func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	ctx context.Context,
 	workerGenerator *worker.WorkerGenerator,
@@ -276,7 +278,7 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	if err != nil {
 		return nil, fmt.Errorf("get host port %w", err)
 	}
-	pod, hash, err := workerGenerator.GenerateWorkerPod(gpus, fmt.Sprintf("%s-tf-worker-", workload.Name), workload.Namespace, port, workload.Spec.Resources.Requests, workload.Spec.Resources.Limits, hash)
+	pod, hash, err := workerGenerator.GenerateWorkerPod(gpus, workload.Name, workload.Namespace, port, workload.Spec.Resources.Requests, workload.Spec.Resources.Limits, hash)
 	if err != nil {
 		return nil, fmt.Errorf("generate worker pod %w", err)
 	}

@@ -80,14 +80,15 @@ controller:
 greptime:
   isCloud: false
   host: greptimedb-standalone.greptimedb.svc.cluster.local
-  port: 4001
+  port: 4002
+  db: public
   installStandalone: true
   image:
     repository: docker.io/greptime/greptimedb
     tag: latest
   resources:
     requests:
-      memory: 1Gi
+      memory: 512Mi
       cpu: 100m
     limits:
       memory: 2Gi
@@ -122,3 +123,178 @@ agent:
 cloudVendorCredentials:
   accessKey: "dummy"
   secretKey: "dummy"
+
+alert:
+  enabled: true
+  image:
+    repository: quay.io/prometheus/alertmanager
+    tag: v0.28.1
+  replicaCount: 1
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 50m
+    limits:
+      memory: 1Gi
+      cpu: 1500m
+  alertManagerConfig:
+    global: {}
+    receivers:
+    - name: default-receiver
+    route:
+      group_interval: 5m
+      group_wait: 10s
+      receiver: default-receiver
+      repeat_interval: 3h
+    templates:
+    - /etc/alertmanager/*.tmpl
+  rules:
+    - name: TFWorkerPodRestartCountIncreasing
+      query: SQL
+      threshold: 2
+      evaluationInterval: 1m
+      consecutiveCount: 1
+      severity: P0
+      summary: "TF Worker Pod Restart Count Increasing"
+      description: "Worker pod {{ $labels.instance }} has restarted more than 2 times"
+    
+    # Worker TFlops throttled alert
+    - name: TFWorkerTFlopsThrottled
+      query: tf_worker_tflops_used / tf_worker_tflops_limit
+      threshold: 0.95
+      evaluationInterval: 15s
+      consecutiveCount: 3
+      severity: P1
+      summary: "Worker TFlops Throttled"
+      description: "Worker {{ $labels.instance }} is using more than 95% of its TFlops limit"
+    
+    # Worker VRAM switching too frequent alert
+    - name: TFWorkerVRAMSwitchCountIncreasing
+      query: tf_worker_vram_switch_count
+      threshold: 2
+      evaluationInterval: 2m
+      consecutiveCount: 1
+      severity: P1
+      summary: "TF Worker Pod VRAM Switch Count Increasing"
+      description: "Worker {{ $labels.instance }} has switched VRAM more than 2 times"
+    
+    # Worker can not scale up/scheduled alert
+    - name: TFWorkerPendingScaleUp
+      query: tf_pending_scale_up_worker_count
+      threshold: 0
+      evaluationInterval: 30s
+      consecutiveCount: 1
+      severity: P1
+      summary: "Pending Scale Up Worker"
+      description: "There are workers pending scale up"
+    
+    # Single GPU Alerts
+    
+    # GPU VRAM Full Alert
+    - name: GPUVRAMFull
+      query: tf_gpu_vram_used_bytes / tf_gpu_vram_total_bytes
+      threshold: 0.97
+      evaluationInterval: 30s
+      consecutiveCount: 2
+      severity: P1
+      summary: "GPU VRAM Full"
+      description: "GPU {{ $labels.instance }} has VRAM usage above 97%"
+    
+    # GPU TFlops Full Alert
+    - name: GPUTFlopsFull
+      query: tf_gpu_tflops_used / tf_gpu_tflops_total
+      threshold: 0.97
+      evaluationInterval: 30s
+      consecutiveCount: 4
+      severity: P1
+      summary: "GPU TFlops Full"
+      description: "GPU {{ $labels.instance }} has TFlops usage above 97%"
+    
+    # GPU Temperature alert
+    - name: GPUTemperatureHigh
+      query: tf_gpu_temperature_celsius
+      threshold: 90
+      evaluationInterval: 30s
+      consecutiveCount: 3
+      severity: P1
+      summary: "GPU Temperature High"
+      description: "GPU {{ $labels.instance }} has temperature above 90°C"
+    
+    # GPU Pool Alerts
+    
+    # Pool TFlops exhausted alert - Any GPU
+    - name: PoolAnyGPUTFlopsExhaustedCritical
+      query: min(tf_gpu_tflops_available / tf_gpu_tflops_total) by pool_id
+      threshold: 0.05
+      evaluationInterval: 1m
+      consecutiveCount: 2
+      severity: P0
+      summary: "Pool Any GPU TFlops Exhausted Critical"
+      description: "In pool {{ $labels.pool_id }}, at least one GPU has available TFlops below 5%"
+    
+    - name: PoolAnyGPUTFlopsExhaustedWarning
+      query: min(tf_gpu_tflops_available / tf_gpu_tflops_total) by pool_id
+      threshold: 0.10
+      evaluationInterval: 1m
+      consecutiveCount: 2
+      severity: P1
+      summary: "Pool Any GPU TFlops Exhausted Warning"
+      description: "In pool {{ $labels.pool_id }}, at least one GPU has available TFlops below 10%"
+    
+    # Pool TFlops exhausted alert - Total
+    - name: PoolTotalTFlopsExhaustedCritical
+      query: sum(tf_gpu_tflops_available) / sum(tf_gpu_tflops_total) by pool_id
+      threshold: 0.05
+      evaluationInterval: 1m
+      consecutiveCount: 2
+      severity: P0
+      summary: "Pool Total TFlops Exhausted Critical"
+      description: "In pool {{ $labels.poolName }}, total available TFlops below 5%"
+    
+    - name: PoolTotalTFlopsExhaustedWarning
+      query: sum(tf_gpu_tflops_available) / sum(tf_gpu_tflops_total) by pool_id
+      threshold: 0.10
+      evaluationInterval: 1m
+      consecutiveCount: 2
+      severity: P1
+      summary: "Pool Total TFlops Exhausted Warning"
+      description: "In pool {{ $labels.poolName }}, total available TFlops below 10%"
+    
+    # Pool VRAM exhausted alert - Any GPU
+    - name: PoolAnyGPUVRAMExhausted
+      query: min(tf_gpu_vram_available_bytes) by pool_id
+      threshold: 0
+      evaluationInterval: 1m
+      consecutiveCount: 2
+      severity: P1
+      summary: "Pool Any GPU VRAM Exhausted"
+      description: "In pool {{ $labels.poolName }}, at least one GPU has 0 available VRAM"
+    
+    # Pool VRAM exhausted alert - Total
+    - name: PoolTotalVRAMExhaustedCritical
+      query: sum(tf_gpu_vram_available_bytes) / sum(tf_gpu_vram_total_bytes) by pool_id
+      threshold: 0.05
+      evaluationInterval: 1m
+      consecutiveCount: 2
+      severity: P0
+      summary: "Pool Total VRAM Exhausted Critical"
+      description: "In pool {{ $labels.poolName }}, total available VRAM below 5%"
+    
+    - name: PoolTotalVRAMExhaustedWarning
+      query: sum(tf_gpu_vram_available_bytes) / sum(tf_gpu_vram_total_bytes) by pool_id
+      threshold: 0.10
+      evaluationInterval: 1m
+      consecutiveCount: 2
+      severity: P1
+      summary: "Pool Total VRAM Exhausted Warning"
+      description: "In pool {{ $labels.poolName }}, total available VRAM below 10%"
+    
+    # Empty GPU Alert
+    - name: EmptyGPU
+      query: tf_gpu_tflops_available == tf_gpu_tflops_total and tf_gpu_vram_available_bytes == tf_gpu_vram_total_bytes
+      threshold: true
+      evaluationInterval: 1m
+      consecutiveCount: 3
+      severity: P2
+      summary: "Empty GPU"
+      description: "GPU {{ $labels.instance }} has been completely unused"

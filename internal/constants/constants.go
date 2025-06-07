@@ -81,7 +81,10 @@ const (
 	WorkerCudaUpLimitTflopsEnv = "TENSOR_FUSION_CUDA_UP_LIMIT_TFLOPS"
 	WorkerCudaUpLimitEnv       = "TENSOR_FUSION_CUDA_UP_LIMIT"
 	WorkerCudaMemLimitEnv      = "TENSOR_FUSION_CUDA_MEM_LIMIT"
-	WorkerPodNameEnv           = "POD_NAME"
+	WorkloadNameEnv            = "TENSOR_FUSION_WORKLOAD_NAME"
+	PoolNameEnv                = "TENSOR_FUSION_POOL_NAME"
+	PodNameEnv                 = "POD_NAME"
+	GPUNodeNameEnv             = "GPU_NODE_NAME"
 	NamespaceEnv               = "OPERATOR_NAMESPACE"
 	NamespaceDefaultVal        = "tensor-fusion-sys"
 

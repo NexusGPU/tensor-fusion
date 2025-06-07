@@ -33,14 +33,16 @@ const (
 // WorkloadProfileSpec defines the desired state of WorkloadProfile.
 type WorkloadProfileSpec struct {
 	// +optional
+	// If replicas not set, it will be dynamic based on pending Pod
+	// If isLocalGPU set to true, replicas must be dynamic, and this field will be ignored
 	Replicas *int32 `json:"replicas,omitempty"`
 
 	// +optional
 	PoolName string `json:"poolName,omitempty"`
 
 	// +optional
+	Resources Resources `json:"resources"`
 
-	Resources Resources `json:"resources,omitempty"`
 	// +optional
 	// Qos defines the quality of service level for the client.
 	Qos QoSLevel `json:"qos,omitempty"`

@@ -364,6 +364,118 @@
         }
       },
       "required": ["accessKey", "secretKey"]
+    },
+    "alert": {
+      "type": "object",
+      "description": "Configuration for alerting",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable alerting",
+          "default": false
+        },
+        "image": {
+          "type": "object",
+          "description": "Image for alerting",
+          "properties": {
+            "repository": {
+              "type": "string",
+              "description": "Repository for the alerting image",
+              "default": "dummy"
+            },
+            "tag": {
+              "type": "string",
+              "description": "Tag for the alerting image",
+              "default": "dummy"
+            }
+          },
+          "required": ["repository"]
+        },
+        "replicaCount": {
+          "type": "integer",
+          "description": "Number of replicas for alerting",
+          "default": 1
+        },
+        "resources": {
+          "type": "object",
+          "description": "Resource requirements for alerting",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "description": "Resource requests for alerting",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU request for alerting"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory request for alerting"
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "description": "Resource limits for alerting",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU limit for alerting"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory limit for alerting"
+                }
+              }
+            }
+          }
+        },
+        "alertManagerConfig": {
+          "type": "object",
+          "description": "Alertmanager configuration"
+        },
+        "rules": {
+          "type": "array",
+          "description": "Alerting rules",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Name of the alerting rule"
+              },
+              "query": {
+                "type": "string",
+                "description": "Query for the alerting rule"
+              },
+              "threshold": {
+                "type": "number",
+                "description": "Threshold for the alerting rule"
+              },
+              "severity": {
+                "type": "string",
+                "description": "Severity for the alerting rule"
+              },
+              "evaluationInterval": {
+                "type": "string",
+                "description": "Evaluation interval for the alerting rule"
+              },
+              "consecutiveCount": {
+                "type": "integer",
+                "description": "Consecutive count for the alerting rule"
+              },
+              "summary": {
+                "type": "string",
+                "description": "Summary for the alerting rule, can use $labels to access labels, eg. $labels.poolName $labels.instance"
+              },
+              "description": {
+                "type": "string",
+                "description": "Description for the alerting rule, can use $labels to access labels, eg. $labels.poolName $labels.instance"
+              }             
+            }
+          }
+        }
+      }
     }
   }
 }
