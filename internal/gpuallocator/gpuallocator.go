@@ -11,6 +11,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -87,6 +88,8 @@ func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest) ([]*tfv1.GPU
 	// Apply the filters in sequence
 	filteredGPUs, err := filterRegistry.Apply(ctx, poolGPUs)
 	if err != nil {
+		// TODDDDDDD
+		metrics.SetSchedulerMetrics(poolName, false)
 		return nil, fmt.Errorf("apply filters: %w", err)
 	}
 

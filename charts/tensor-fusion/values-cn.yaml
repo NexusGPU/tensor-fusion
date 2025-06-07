@@ -14,3 +14,8 @@ admissionWebhooks:
 agent:
   image:
     repository: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-agent
+
+alert:
+  image:
+    repository: docker.m.daocloud.io/prom/alertmanager
+  

@@ -16,11 +16,11 @@ import (
 // Worker level metrics, include worker resources/costs status
 // map updated in one reconcile loop in single goroutine, thus no RW lock needed
 var workerMetricsLock sync.RWMutex
-var workerMetricsMap = map[string]*WorkerMetrics{}
+var workerMetricsMap = map[string]*WorkerResourceMetrics{}
 
 // Node level metrics, include node allocation/costs status
 var nodeMetricsLock sync.RWMutex
-var NodeMetricsMap = map[string]*NodeMetrics{}
+var nodeMetricsMap = map[string]*NodeResourceMetrics{}
 
 var log = ctrl.Log.WithName("metrics-recorder")
 
@@ -34,17 +34,22 @@ type MetricsRecorder struct {
 	WorkerUnitPriceMap map[string]map[string]RawBillingPricing
 }
 
+type ActiveNodeAndWorker struct {
+	workerCnt int
+	nodeCnt   int
+}
+
 func RemoveWorkerMetrics(workerName string, deletionTime time.Time) {
 	workerMetricsLock.Lock()
 	// to get more accurate metrics, should record the deletion timestamp to calculate duration for the last metrics
-	workerMetricsMap[workerName].DeletionTimestamp = deletionTime
+	workerMetricsMap[workerName].deletionTimestamp = &deletionTime
 	workerMetricsLock.Unlock()
 }
 
 func RemoveNodeMetrics(nodeName string) {
 	nodeMetricsLock.Lock()
 	// Node lifecycle is much longer than worker, so just delete the metrics, 1 minute metrics interval is enough
-	delete(NodeMetricsMap, nodeName)
+	delete(nodeMetricsMap, nodeName)
 	nodeMetricsLock.Unlock()
 }
 
@@ -54,7 +59,7 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod, workload *tfv1.TensorFusionWork
 
 	// Initialize metrics
 	if _, ok := workerMetricsMap[pod.Name]; !ok {
-		workerMetricsMap[pod.Name] = &WorkerMetrics{
+		workerMetricsMap[pod.Name] = &WorkerResourceMetrics{
 			WorkerName:     pod.Name,
 			WorkloadName:   workload.Name,
 			PoolName:       workload.Spec.PoolName,
@@ -85,17 +90,17 @@ func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []strin
 	nodeMetricsLock.Lock()
 	defer nodeMetricsLock.Unlock()
 
-	if _, ok := NodeMetricsMap[node.Name]; !ok {
-		NodeMetricsMap[node.Name] = &NodeMetrics{
+	if _, ok := nodeMetricsMap[node.Name]; !ok {
+		nodeMetricsMap[node.Name] = &NodeResourceMetrics{
 			NodeName:       node.Name,
 			RawCost:        0,
 			LastRecordTime: time.Now(),
 		}
 	}
 	// Fields that possibly change after initialization
-	metricsItem := NodeMetricsMap[node.Name]
+	metricsItem := nodeMetricsMap[node.Name]
 	metricsItem.PoolName = poolObj.Name
-	metricsItem.GPUModels = gpuModels
+	metricsItem.SetGPUModelAndCount(gpuModels)
 
 	totalTflops := node.Status.TotalTFlops.AsApproximateFloat64()
 	totalVram := node.Status.TotalVRAM.AsApproximateFloat64()
@@ -128,6 +133,27 @@ func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []strin
 	}
 }
 
+func SetSchedulerMetrics(poolName string, isSuccess bool) {
+	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
+		TensorFusionSystemMetricsMap[poolName] = &TensorFusionSystemMetrics{
+			PoolName: poolName,
+		}
+	}
+	if isSuccess {
+		TensorFusionSystemMetricsMap[poolName].TotalAllocationSuccessCount++
+	} else {
+		TensorFusionSystemMetricsMap[poolName].TotalAllocationFailCount++
+	}
+}
+
+func getSchedulerMetricsByPool(poolName string) (int64, int64) {
+	if item, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
+		return 0, 0
+	} else {
+		return item.TotalAllocationSuccessCount, item.TotalAllocationFailCount
+	}
+}
+
 // Start metrics recorder
 // The leader container will fill the metrics map, so followers don't have metrics point
 // thus metrics recorder only printed in one controller instance
@@ -157,7 +183,7 @@ func (mr *MetricsRecorder) Start() {
 			time.Sleep(5 * time.Minute)
 			workerMetricsLock.Lock()
 			for _, metrics := range workerMetricsMap {
-				if !metrics.DeletionTimestamp.IsZero() {
+				if metrics.deletionTimestamp != nil && !metrics.deletionTimestamp.IsZero() {
 					delete(workerMetricsMap, metrics.WorkerName)
 				}
 			}
@@ -167,7 +193,7 @@ func (mr *MetricsRecorder) Start() {
 }
 
 func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
-	if len(workerMetricsMap) <= 0 && len(NodeMetricsMap) <= 0 {
+	if len(workerMetricsMap) <= 0 && len(nodeMetricsMap) <= 0 {
 		return
 	}
 
@@ -179,10 +205,12 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 	workerMetricsLock.RLock()
 
 	activeWorkerCnt := 0
+	activeWorkerAndNodeByPool := map[string]*ActiveNodeAndWorker{}
+
 	for _, metrics := range workerMetricsMap {
 
-		if !metrics.DeletionTimestamp.IsZero() {
-			metrics.RawCost = mr.getWorkerRawCost(metrics, metrics.DeletionTimestamp.Sub(metrics.LastRecordTime))
+		if metrics.deletionTimestamp != nil && !metrics.deletionTimestamp.IsZero() {
+			metrics.RawCost = mr.getWorkerRawCost(metrics, metrics.deletionTimestamp.Sub(metrics.LastRecordTime))
 		} else {
 			metrics.RawCost = mr.getWorkerRawCost(metrics, now.Sub(metrics.LastRecordTime))
 		}
@@ -194,7 +222,16 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 			continue
 		}
 		activeWorkerCnt++
-		enc.StartLine("tf_worker_metrics")
+
+		if _, ok := activeWorkerAndNodeByPool[metrics.PoolName]; !ok {
+			activeWorkerAndNodeByPool[metrics.PoolName] = &ActiveNodeAndWorker{
+				workerCnt: 0,
+				nodeCnt:   0,
+			}
+		}
+		activeWorkerAndNodeByPool[metrics.PoolName].workerCnt++
+
+		enc.StartLine("tf_worker_resources")
 		enc.AddTag("namespace", metrics.Namespace)
 		enc.AddTag("pool_name", metrics.PoolName)
 		enc.AddTag("qos", metrics.QoS)
@@ -210,14 +247,21 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 
 		enc.EndLine(now)
 	}
-	enc.StartLine("tf_system_metrics")
-	enc.AddField("total_workers_cnt", metricsProto.MustNewValue(int64(activeWorkerCnt)))
 	workerMetricsLock.RUnlock()
 
 	nodeMetricsLock.RLock()
-	for _, metrics := range NodeMetricsMap {
+
+	for _, metrics := range nodeMetricsMap {
 		metrics.RawCost = mr.getNodeRawCost(metrics, now.Sub(metrics.LastRecordTime), mr.HourlyUnitPriceMap)
 		metrics.LastRecordTime = now
+
+		if _, ok := activeWorkerAndNodeByPool[metrics.PoolName]; !ok {
+			activeWorkerAndNodeByPool[metrics.PoolName] = &ActiveNodeAndWorker{
+				workerCnt: 0,
+				nodeCnt:   0,
+			}
+		}
+		activeWorkerAndNodeByPool[metrics.PoolName].nodeCnt++
 
 		enc.StartLine("tf_node_metrics")
 
@@ -226,29 +270,39 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 
 		enc.AddField("allocated_tflops", metricsProto.MustNewValue(metrics.AllocatedTflops))
 		enc.AddField("allocated_tflops_percent", metricsProto.MustNewValue(metrics.AllocatedTflopsPercent))
+		enc.AddField("allocated_tflops_percent_virtual", metricsProto.MustNewValue(metrics.AllocatedTflopsPercentToVirtualCap))
 		enc.AddField("allocated_vram_bytes", metricsProto.MustNewValue(metrics.AllocatedVramBytes))
 		enc.AddField("allocated_vram_percent", metricsProto.MustNewValue(metrics.AllocatedVramPercent))
-		enc.AddField("gpu_count", metricsProto.MustNewValue(int64(len(metrics.GPUModels))))
+		enc.AddField("allocated_vram_percent_virtual", metricsProto.MustNewValue(metrics.AllocatedVramPercentToVirtualCap))
+		enc.AddField("gpu_count", metricsProto.MustNewValue(int64(metrics.GPUCount)))
 		enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
 		enc.EndLine(now)
 	}
+
 	enc.StartLine("tf_system_metrics")
-	enc.AddField("total_nodes_cnt", metricsProto.MustNewValue(int64(len(NodeMetricsMap))))
-	enc.EndLine(now)
+	for poolName, activeNodeAndWorker := range activeWorkerAndNodeByPool {
+		successCount, failCount := getSchedulerMetricsByPool(poolName)
+		enc.AddTag("pool_name", poolName)
+		enc.AddField("total_workers_cnt", metricsProto.MustNewValue(int64(activeNodeAndWorker.workerCnt)))
+		enc.AddField("total_nodes_cnt", metricsProto.MustNewValue(int64(activeNodeAndWorker.nodeCnt)))
+		enc.AddField("total_allocation_fail_cnt", metricsProto.MustNewValue(int64(failCount)))
+		enc.AddField("total_allocation_success_cnt", metricsProto.MustNewValue(int64(successCount)))
+		enc.EndLine(now)
+	}
 
 	nodeMetricsLock.RUnlock()
 
 	if err := enc.Err(); err != nil {
-		log.Error(err, "metrics encoding error", "workerCount", activeWorkerCnt, "nodeCount", len(NodeMetricsMap))
+		log.Error(err, "metrics encoding error", "workerCount", activeWorkerCnt, "nodeCount", len(nodeMetricsMap))
 	}
 
 	if _, err := writer.Write(enc.Bytes()); err != nil {
-		log.Error(err, "metrics writing error", "workerCount", activeWorkerCnt, "nodeCount", len(NodeMetricsMap))
+		log.Error(err, "metrics writing error", "workerCount", activeWorkerCnt, "nodeCount", len(nodeMetricsMap))
 	}
-	log.Info("metrics and raw billing recorded:", "workerCount", activeWorkerCnt, "nodeCount", len(NodeMetricsMap))
+	log.Info("metrics and raw billing recorded:", "workerCount", activeWorkerCnt, "nodeCount", len(nodeMetricsMap))
 }
 
-func (mr *MetricsRecorder) getWorkerRawCost(metrics *WorkerMetrics, duration time.Duration) float64 {
+func (mr *MetricsRecorder) getWorkerRawCost(metrics *WorkerResourceMetrics, duration time.Duration) float64 {
 	qosPricing, ok := mr.WorkerUnitPriceMap[metrics.PoolName]
 	// The qos pricing for this pool not set
 	if !ok {
@@ -277,9 +331,9 @@ func (mr *MetricsRecorder) getWorkerRawCost(metrics *WorkerMetrics, duration tim
 }
 
 // unit price data comes from global config map, and multi-GPU instance should normalized with per GPU pricing, e.g. 8xA100 p4d.24xlarge price should divide by 8
-func (mr *MetricsRecorder) getNodeRawCost(metrics *NodeMetrics, duration time.Duration, hourlyUnitPriceMap map[string]float64) float64 {
+func (mr *MetricsRecorder) getNodeRawCost(metrics *NodeResourceMetrics, duration time.Duration, hourlyUnitPriceMap map[string]float64) float64 {
 	cost := 0.0
-	for _, gpuModel := range metrics.GPUModels {
+	for _, gpuModel := range metrics.gpuModels {
 		cost += metrics.AllocatedTflops * duration.Hours() * hourlyUnitPriceMap[gpuModel]
 	}
 	return cost

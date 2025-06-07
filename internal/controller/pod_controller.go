@@ -52,6 +52,7 @@ type PodReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=pods/finalizers,verbs=update
 
 // Add GPU connection for Pods using GPU
+// Have to create TensorFusion connection here because pod UID not available in MutatingWebhook
 func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	pod := &corev1.Pod{}

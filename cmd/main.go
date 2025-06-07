@@ -55,8 +55,10 @@ import (
 )
 
 var (
-	scheme   = runtime.NewScheme()
-	setupLog = ctrl.Log.WithName("setup")
+	scheme            = runtime.NewScheme()
+	setupLog          = ctrl.Log.WithName("setup")
+	autoScaleEnabled  = false
+	alertCanBeEnabled = false
 )
 
 const LeaderElectionID = "85104305.tensor-fusion.ai"
@@ -80,6 +82,10 @@ func main() {
 	var metricsPath string
 	var nodeLevelPortRange string
 	var clusterLevelPortRange string
+	var metricsStorageTTL string
+	var enableAlert bool
+	var alertManagerAddr string
+	var timeSeriesDB *metrics.TimeSeriesDB
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -99,6 +105,9 @@ func main() {
 	flag.StringVar(&clusterLevelPortRange, "cluster-host-port-range", "42000-62000",
 		"specify the port range for assigning ports to random Pods"+
 			" marked with `tensor-fusion.ai/host-port: auto` and `tensor-fusion.ai/port-name: ssh`")
+	flag.StringVar(&metricsStorageTTL, "metrics-storage-ttl", "30d", "specify the ttl for time series data")
+	flag.BoolVar(&enableAlert, "enable-alert", false, "if turn on alert, TensorFusion will generate alerts with built-in rules, alert rules are managed in configMap `tensor-fusion-alert-rules` of TensorFusion system namespace")
+	flag.StringVar(&alertManagerAddr, "alert-manager-addr", "alertmanager.tensor-fusion-sys.svc.cluster.local:9093", "specify the alert manager address, TensorFusion will generate alerts with built-in rules if enabled alert, you can configure routers and receivers in your own alertmanager config, refer https://prometheus.io/docs/alerting/latest/configuration")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -142,10 +151,6 @@ func main() {
 	// Watch configMap change with interval, check lastModifiedTime to reload gpuInfoConfig
 	watchGPUInfoChanges(gpuInfoConfig, &gpuInfos, gpuPricingMap)
 
-	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
-	// More info:
-	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.1/pkg/metrics/server
-	// - https://book.kubebuilder.io/reference/metrics.html
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
 		SecureServing: secureMetrics,
@@ -153,15 +158,7 @@ func main() {
 	}
 
 	if secureMetrics {
-		// FilterProvider is used to protect the metrics endpoint with authn/authz.
-		// These configurations ensure that only authorized users and service accounts
-		// can access the metrics endpoint. The RBAC are configured in 'config/rbac/kustomization.yaml'. More info:
-		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.1/pkg/metrics/filters#WithAuthenticationAndAuthorization
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
-
-		// TODO(user): If CertDir, CertName, and KeyName are not specified, controller-runtime will automatically
-		// generate self-signed certificates for the metrics server. While convenient for development and testing,
-		// this setup is not recommended for production.
 	}
 
 	normalizeKubeConfigEnv()
@@ -191,6 +188,24 @@ func main() {
 	}
 
 	ctx := context.Background()
+
+	timeSeriesDB = setupTimeSeriesDB()
+	if timeSeriesDB != nil {
+		if err := timeSeriesDB.SetupTables(metricsStorageTTL); err != nil {
+			setupLog.Error(err, "unable to init timeseries tables")
+		} else {
+			autoScaleEnabled = true
+			alertCanBeEnabled = true
+			setupLog.Info("time series db setup successfully.")
+		}
+	}
+	if enableAlert {
+		if alertCanBeEnabled {
+			// enable alert
+		} else {
+			setupLog.Error(nil, "can not enable alert since time series db is not connected")
+		}
+	}
 
 	metricsRecorder := metrics.MetricsRecorder{
 		MetricsOutputPath:  metricsPath,
@@ -445,4 +460,28 @@ func normalizeKubeConfigEnv() {
 		}
 		_ = os.Setenv("KUBECONFIG", strings.Replace(cfgPath, "~", home, 1))
 	}
+}
+
+// Setup GreptimeDB connection
+func setupTimeSeriesDB() *metrics.TimeSeriesDB {
+	timeSeriesDB := &metrics.TimeSeriesDB{}
+	connection := metrics.GreptimeDBConnection{
+		Host:     getEnvOrDefault("TSDB_MYSQL_HOST", "127.0.0.1"),
+		Port:     getEnvOrDefault("TSDB_MYSQL_PORT", "4002"),
+		User:     getEnvOrDefault("TSDB_MYSQL_USER", "root"),
+		Password: getEnvOrDefault("TSDB_MYSQL_PASSWORD", ""),
+		Database: getEnvOrDefault("TSDB_MYSQL_DATABASE", "public"),
+	}
+	if err := timeSeriesDB.Setup(connection); err != nil {
+		setupLog.Error(err, "unable to setup time series db, features including alert, autoScaling, rebalance won't work", "connection", connection.Host, "port", connection.Port, "user", connection.User, "database", connection.Database)
+		return nil
+	}
+	return timeSeriesDB
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }

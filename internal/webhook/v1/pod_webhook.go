@@ -47,6 +47,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+var httpClient = &http.Client{Timeout: 10 * time.Second}
+
 // SetupPodWebhookWithManager registers the webhook for Pod in the manager.
 func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator) error {
 	webhookServer := mgr.GetWebhookServer()
@@ -242,6 +244,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 	// Compare the entire spec at once
 	if !equality.Semantic.DeepEqual(workload.Spec, desiredSpec) {
 		workload.Spec = desiredSpec
+		// TODO retry on conflict
 		if err := m.Client.Update(ctx, workload); err != nil {
 			return fmt.Errorf("failed to update workload: %w", err)
 		}
@@ -450,14 +453,14 @@ func (m *TensorFusionPodMutator) getPortNumber(pod *corev1.Pod) int {
 }
 
 func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod) (int, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+
 	leaderIP := m.portAllocator.GetLeaderIP()
 	if leaderIP == "" {
 		return 0, fmt.Errorf("operator leader IP not found")
 	}
 
 	url := fmt.Sprintf("http://%s:8080/assign-host-port?podName=%s", leaderIP, pod.Name)
-	resp, err := client.Get(url)
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return 0, fmt.Errorf("failed to assign host port: %w", err)
 	}
