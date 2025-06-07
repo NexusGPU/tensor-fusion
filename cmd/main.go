@@ -241,6 +241,10 @@ func main() {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
 			os.Exit(1)
 		}
+		if err = webhookcorev1.SetupGPUResourceQuotaWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "GPUResourceQuota")
+			os.Exit(1)
+		}
 	}
 
 	if err = (&controller.TensorFusionClusterReconciler{
@@ -326,6 +330,14 @@ func main() {
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionWorkload")
+		os.Exit(1)
+	}
+	if err = (&controller.GPUResourceQuotaReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("GPUResourceQuota"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GPUResourceQuota")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

@@ -1,0 +1,95 @@
+apiVersion: tensor-fusion.ai/v1
+kind: GPUResourceQuota
+metadata:
+  name: production-namespace
+  namespace: production-namespace
+spec:
+  # Total namespace limits (similar to ResourceQuotas)
+  total:
+    requests.tflops: "1000"
+    requests.vram: "200Gi"
+    limits.tflops: "1500"
+    limits.vram: "300Gi"
+    workers: 100
+    alertThresholdPercent: 90
+    
+  # Per-workload limits (similar to LimitRanges)
+  single:
+    max:
+      tflops: "200"
+      vram: "40Gi"
+      workers: 10
+    min:
+      tflops: "100m"
+      vram: "256Mi"
+      workers: 1
+    default:
+      tflops: "1"
+      vram: "2Gi"
+    defaultRequest:
+      tflops: "500m"
+      vram: "1Gi"
+---
+apiVersion: tensor-fusion.ai/v1
+kind: GPUResourceQuota
+metadata:
+  name: development-namespace
+  namespace: development-namespace
+spec:
+  # Total namespace limits for development
+  total:
+    requests.tflops: "200"
+    requests.vram: "40Gi"
+    limits.tflops: "300"
+    limits.vram: "60Gi"
+    workers: 20
+    alertThresholdPercent: 95
+    
+  # Per-workload limits for development
+  single:
+    max:
+      tflops: "50"
+      vram: "8Gi"
+      workers: 5
+    min:
+      tflops: "50m"
+      vram: "128Mi"
+      workers: 1
+    default:
+      tflops: "500m"
+      vram: "1Gi"
+    defaultRequest:
+      tflops: "250m"
+      vram: "512Mi"
+---
+apiVersion: tensor-fusion.ai/v1
+kind: GPUResourceQuota
+metadata:
+  name: research-namespace
+  namespace: research-namespace
+spec:
+  # Total namespace limits for research
+  total:
+    requests.tflops: "2000"
+    requests.vram: "400Gi"
+    limits.tflops: "3000"
+    limits.vram: "600Gi"
+    workers: 200
+    alertThresholdPercent: 85
+    
+  # Per-workload limits for research (more flexible)
+  single:
+    max:
+      tflops: "500"
+      vram: "80Gi"
+      workers: 20
+    min:
+      tflops: "200m"
+      vram: "512Mi"
+      workers: 1
+    default:
+      tflops: "2"
+      vram: "4Gi"
+    defaultRequest:
+      tflops: "1"
+      vram: "2Gi" 
