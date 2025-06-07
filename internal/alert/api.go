@@ -84,7 +84,9 @@ func SendAlert(ctx context.Context, alertManagerURL string, alerts []PostableAle
 	if err != nil {
 		return fmt.Errorf("error sending alert request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status code when sending alert: %d", resp.StatusCode)

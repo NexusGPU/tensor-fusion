@@ -285,8 +285,8 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddTag("pool_name", poolName)
 		enc.AddField("total_workers_cnt", metricsProto.MustNewValue(int64(activeNodeAndWorker.workerCnt)))
 		enc.AddField("total_nodes_cnt", metricsProto.MustNewValue(int64(activeNodeAndWorker.nodeCnt)))
-		enc.AddField("total_allocation_fail_cnt", metricsProto.MustNewValue(int64(failCount)))
-		enc.AddField("total_allocation_success_cnt", metricsProto.MustNewValue(int64(successCount)))
+		enc.AddField("total_allocation_fail_cnt", metricsProto.MustNewValue(failCount))
+		enc.AddField("total_allocation_success_cnt", metricsProto.MustNewValue(successCount))
 		enc.EndLine(now)
 	}
 

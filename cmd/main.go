@@ -42,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/alert"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/controller"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
@@ -106,8 +107,15 @@ func main() {
 		"specify the port range for assigning ports to random Pods"+
 			" marked with `tensor-fusion.ai/host-port: auto` and `tensor-fusion.ai/port-name: ssh`")
 	flag.StringVar(&metricsStorageTTL, "metrics-storage-ttl", "30d", "specify the ttl for time series data")
-	flag.BoolVar(&enableAlert, "enable-alert", false, "if turn on alert, TensorFusion will generate alerts with built-in rules, alert rules are managed in configMap `tensor-fusion-alert-rules` of TensorFusion system namespace")
-	flag.StringVar(&alertManagerAddr, "alert-manager-addr", "alertmanager.tensor-fusion-sys.svc.cluster.local:9093", "specify the alert manager address, TensorFusion will generate alerts with built-in rules if enabled alert, you can configure routers and receivers in your own alertmanager config, refer https://prometheus.io/docs/alerting/latest/configuration")
+	flag.BoolVar(&enableAlert, "enable-alert", false, "if turn on alert, "+
+		"TensorFusion will generate alerts with built-in rules, alert rules are managed in"+
+		" configMap `tensor-fusion-alert-rules` of TensorFusion system namespace")
+	flag.StringVar(&alertManagerAddr, "alert-manager-addr",
+		"alertmanager.tensor-fusion-sys.svc.cluster.local:9093",
+		"specify the alert manager address, TensorFusion will generate alerts with "+
+			"built-in rules if enabled alert, you can configure routers and receivers "+
+			"in your own alertmanager config, "+
+			"refer https://prometheus.io/docs/alerting/latest/configuration")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -200,11 +208,11 @@ func main() {
 		}
 	}
 	if enableAlert {
-		if alertCanBeEnabled {
-			// enable alert
-		} else {
-			setupLog.Error(nil, "can not enable alert since time series db is not connected")
-		}
+		setupAlertControllerOrExit(ctx, timeSeriesDB, alertManagerAddr)
+	}
+	if autoScaleEnabled {
+		// TODO init auto scale module
+		setupLog.Info("auto scale enabled")
 	}
 
 	metricsRecorder := metrics.MetricsRecorder{
@@ -400,6 +408,20 @@ func main() {
 	}
 }
 
+func setupAlertControllerOrExit(ctx context.Context, timeSeriesDB *metrics.TimeSeriesDB, alertManagerAddr string) {
+	if alertCanBeEnabled {
+		// TODO read and watch configMap change to update rules
+		alertEvaluator := alert.NewAlertEvaluator(ctx, timeSeriesDB, []alert.Rule{}, alertManagerAddr)
+		err := alertEvaluator.StartEvaluate()
+		if err != nil {
+			setupLog.Error(err, "failed to start alert evaluator")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Error(nil, "can not enable alert since time series db is not connected")
+	}
+}
+
 func startMetricsRecorder(enableLeaderElection bool, mgr manager.Manager, metricsRecorder metrics.MetricsRecorder) {
 	if enableLeaderElection {
 		go func() {
@@ -473,7 +495,9 @@ func setupTimeSeriesDB() *metrics.TimeSeriesDB {
 		Database: getEnvOrDefault("TSDB_MYSQL_DATABASE", "public"),
 	}
 	if err := timeSeriesDB.Setup(connection); err != nil {
-		setupLog.Error(err, "unable to setup time series db, features including alert, autoScaling, rebalance won't work", "connection", connection.Host, "port", connection.Port, "user", connection.User, "database", connection.Database)
+		setupLog.Error(err, "unable to setup time series db, features including alert, "+
+			"autoScaling, rebalance won't work", "connection", connection.Host, "port",
+			connection.Port, "user", connection.User, "database", connection.Database)
 		return nil
 	}
 	return timeSeriesDB
