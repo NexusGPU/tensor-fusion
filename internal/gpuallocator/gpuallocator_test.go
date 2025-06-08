@@ -36,7 +36,13 @@ var _ = Describe("GPU Allocator", func() {
 	var allocator *GpuAllocator
 
 	allocateAndSync := func(poolName string, request tfv1.Resource, count uint, gpuModel string) ([]*tfv1.GPU, error) {
-		gpus, err := allocator.Alloc(ctx, poolName, workloadNameNs, request, count, gpuModel)
+		gpus, err := allocator.Alloc(ctx, AllocRequest{
+			PoolName:              poolName,
+			WorkloadNameNamespace: workloadNameNs,
+			Request:               request,
+			Count:                 count,
+			GPUModel:              gpuModel,
+		})
 		allocator.syncToK8s(ctx)
 		return gpus, err
 	}

@@ -357,16 +357,11 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 		return types.NamespacedName{Name: gpuName}
 	})
 	// Release GPU resources
-	if err := r.Allocator.Dealloc(ctx,
-		tfv1.NameNamespace{Namespace: workload.Namespace, Name: workload.Name},
-		workload.Spec.Resources.Requests, gpus); err != nil {
+	if err := r.Allocator.Dealloc(ctx, tfv1.NameNamespace{Name: workload.Name, Namespace: workload.Namespace}, workload.Spec.Resources.Requests, gpus); err != nil {
 		log.Error(err, "Failed to release GPU resources, will retry", "gpus", gpus, "pod", pod.Name)
 		return false, err
 	}
 	log.Info("Released GPU resources via finalizer", "gpus", gpus, "pod", pod.Name)
-	if pod.Annotations == nil {
-		pod.Annotations = make(map[string]string)
-	}
 
 	return true, nil
 }
@@ -391,7 +386,13 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 	// Create worker pods
 	for range count {
 		// Schedule GPU for the worker
-		gpus, err := r.Allocator.Alloc(ctx, workload.Spec.PoolName, workloadNameNs, workload.Spec.Resources.Requests, workload.Spec.GPUCount, workload.Spec.GPUModel)
+		gpus, err := r.Allocator.Alloc(ctx, gpuallocator.AllocRequest{
+			PoolName:              workload.Spec.PoolName,
+			WorkloadNameNamespace: workloadNameNs,
+			Request:               workload.Spec.Resources.Requests,
+			Count:                 workload.Spec.GPUCount,
+			GPUModel:              workload.Spec.GPUModel,
+		})
 		if err != nil {
 			r.Recorder.Eventf(workload, corev1.EventTypeWarning, "ScheduleGPUFailed", "Failed to schedule GPU: %v", err)
 			return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
@@ -526,7 +527,7 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 func (r *TensorFusionWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.TensorFusionWorkload{}).
-		Named("tensorfusionworkload").
 		Owns(&corev1.Pod{}).
+		Named("tensorfusionworkload").
 		Complete(r)
 }
