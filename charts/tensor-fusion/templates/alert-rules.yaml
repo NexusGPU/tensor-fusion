@@ -1,10 +1,11 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: tensor-fusion-alert-rules
-  namespace: tensor-fusion-sys
+  name: {{ .Release.Name }}-alert-rules
+  namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
-    app: tensor-fusion-alert-rules
+    tensor-fusion.ai/component: alert-rules
+    {{- include "tensor-fusion.labels" . | nindent 4 }}
 data:
   # Read by tensor fusion operator, eval alert rules and send to alertmanager if enabledAlert is true
   rules.yaml: |

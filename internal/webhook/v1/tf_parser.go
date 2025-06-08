@@ -113,10 +113,12 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 	localGPU, ok := pod.Annotations[constants.IsLocalGPUAnnotation]
 	if ok && localGPU == constants.TrueStringValue {
 		workloadProfile.Spec.IsLocalGPU = true
-	}
-	noStandaloneWorkerMode, ok := pod.Annotations[constants.NoStandaloneWorkerModeAnnotation]
-	if ok && noStandaloneWorkerMode == constants.TrueStringValue {
-		workloadProfile.Spec.NoStandaloneWorkerMode = true
+		// default to no-standalone-worker, namely embedded worker when it's local GPU mode
+		standaloneWorkerMode := pod.Annotations[constants.StandaloneWorkerModeAnnotation]
+		workloadProfile.Spec.StandaloneWorkerMode = standaloneWorkerMode == constants.TrueStringValue
+	} else {
+		// default to standalone worker mode, ignore standalone-worker-mode annotation when it's not local GPU mode
+		workloadProfile.Spec.StandaloneWorkerMode = true
 	}
 
 	// Parse auto-scaling annotations

@@ -183,12 +183,6 @@ spec:
                 description: Schedule the workload to the same GPU server that runs
                   vGPU worker for best performance, default to false
                 type: boolean
-              noStandaloneWorkerMode:
-                description: This mode is only available when `is-local-gpu` set to
-                  true, in this mode, TensorFusion will also inject vGPU worker into
-                  init container, so that to achieve best performance, trade-off is
-                  user might by-pass the vGPU worker and using physical GPU directly
-                type: boolean
               poolName:
                 type: string
               qos:
@@ -200,6 +194,9 @@ spec:
                 - critical
                 type: string
               replicas:
+                description: |-
+                  If replicas not set, it will be dynamic based on pending Pod
+                  If isLocalGPU set to true, replicas must be dynamic, and this field will be ignored
                 format: int32
                 type: integer
               resources:
@@ -244,6 +241,12 @@ spec:
                 - limits
                 - requests
                 type: object
+              standaloneWorkerMode:
+                description: This mode is only available when `is-local-gpu` set to
+                  true, in this mode, TensorFusion will also inject vGPU worker into
+                  init container, so that to achieve best performance, trade-off is
+                  user might by-pass the vGPU worker and using physical GPU directly
+                type: boolean
             type: object
           status:
             description: TensorFusionWorkloadStatus defines the observed state of

@@ -396,10 +396,12 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 			GPUModel:              workload.Spec.GPUModel,
 		})
 		if err != nil {
+			metrics.SetSchedulerMetrics(workload.Spec.PoolName, false)
 			r.Recorder.Eventf(workload, corev1.EventTypeWarning, "ScheduleGPUFailed", "Failed to schedule GPU: %v", err)
 			return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 		}
 
+		metrics.SetSchedulerMetrics(workload.Spec.PoolName, true)
 		_, err = r.tryStartWorker(ctx, workerGenerator, gpus, workload, hash)
 		if err != nil {
 			// Try to release all allocated GPUs if pod creation fails

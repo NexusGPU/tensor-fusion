@@ -6,6 +6,7 @@ metadata:
   namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
     tensor-fusion.ai/component: alert-manager
+    {{- include "tensor-fusion.labels" . | nindent 4 }}
 data:
   alertmanager.yml: |
     {{- toYaml .Values.alert.alertManagerConfig | nindent 4 }}
@@ -17,6 +18,7 @@ metadata:
   namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
     tensor-fusion.ai/component: alert-manager
+    {{- include "tensor-fusion.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.alert.replicaCount }}
   selector:
@@ -27,6 +29,7 @@ spec:
       creationTimestamp: null
       labels:
         tensor-fusion.ai/component: alert-manager
+        {{- include "tensor-fusion.labels" . | nindent 8 }}
     spec:
       enableServiceLinks: false
       volumes:
@@ -40,7 +43,7 @@ spec:
             type: DirectoryOrCreate
       containers:
         - name: alertmanager
-          image: {{ .Values.alert.image.repository }}:{{ .Values.alert.image.tag }}
+          image: "{{ .Values.alert.image.repository }}:{{ .Values.alert.image.tag }}"
           args:
             - '--storage.path=/alertmanager'
             - '--config.file=/etc/alertmanager/alertmanager.yml'
@@ -95,6 +98,7 @@ metadata:
   namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
     tensor-fusion.ai/component: alert-manager
+    {{- include "tensor-fusion.labels" . | nindent 4 }}
 spec:
   ports:
     - name: http
@@ -114,6 +118,7 @@ metadata:
   namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
     tensor-fusion.ai/component: alert-manager-headless
+    {{- include "tensor-fusion.labels" . | nindent 4 }}
 spec:
   ports:
     - name: http

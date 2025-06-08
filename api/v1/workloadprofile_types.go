@@ -59,9 +59,8 @@ type WorkloadProfileSpec struct {
 	GPUCount uint `json:"gpuCount,omitempty"`
 
 	// +optional
-	// TODO, not implemented
 	// This mode is only available when `is-local-gpu` set to true, in this mode, TensorFusion will also inject vGPU worker into init container, so that to achieve best performance, trade-off is user might by-pass the vGPU worker and using physical GPU directly
-	NoStandaloneWorkerMode bool `json:"noStandaloneWorkerMode,omitempty"`
+	StandaloneWorkerMode bool `json:"standaloneWorkerMode,omitempty"`
 
 	// +optional
 	// AutoScalingConfig configured here will override Pool's schedulingConfig

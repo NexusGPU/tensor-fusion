@@ -41,7 +41,7 @@ func TestGetInitTableSQL(t *testing.T) {
 
 	t.Run("test get init table sql for system metrics", func(t *testing.T) {
 		sql := getInitTableSQL(&TensorFusionSystemMetrics{}, "30d")
-		expect := strings.TrimSpace("CREATE TABLE IF NOT EXISTS tf_system_metrics (\n    `pool_name` String NULL INVERTED INDEX,\n    `total_workers_cnt` BigInt NULL,\n    `total_nodes_cnt` BigInt NULL,\n    `total_allocation_fail_cnt` BigInt NULL,\n    `total_allocation_success_cnt` BigInt NULL,\n    `ts` Timestamp_ms TIME INDEX\n    )\n    ENGINE=mito WITH( ttl='30d', append_mode = 'true')")
+		expect := strings.TrimSpace("CREATE TABLE IF NOT EXISTS tf_system_metrics (\n    `pool_name` String NULL INVERTED INDEX,\n    `total_workers_cnt` BigInt NULL,\n    `total_nodes_cnt` BigInt NULL,\n    `total_allocation_fail_cnt` BigInt NULL,\n    `total_allocation_success_cnt` BigInt NULL,\n    `total_scale_up_cnt` BigInt NULL,\n    `total_scale_down_cnt` BigInt NULL,\n    `ts` Timestamp_ms TIME INDEX\n    )\n    ENGINE=mito WITH( ttl='30d', append_mode = 'true')")
 		assert.Equal(t, expect, sql, "SQL migrated, should sync sql here and add ALTER table sql for migrating changed fields")
 	})
 }

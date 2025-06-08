@@ -83,7 +83,12 @@ spec:
               mountPath: /tmp/secret
               readOnly: true
             - name: gpu-info
-              mountPath: /etc/tensor-fusion
+              mountPath: /etc/tensor-fusion/gpu-info.yaml
+              subPath: gpu-info.yaml
+              readOnly: true
+            - name: alert-rules
+              mountPath: /etc/tensor-fusion/rules.yaml
+              subPath: rules.yaml
               readOnly: true
         {{- if .Values.agent.agentId }}
         - name: cluster-agent
@@ -161,6 +166,10 @@ spec:
             defaultMode: 420
             name: {{ .Release.Name }}-public-gpu-info
           name: gpu-info
+        - configMap:
+            defaultMode: 420
+            name: {{ .Release.Name }}-alert-rules
+          name: alert-rules
         - name: logs
           emptyDir: {}
         - name: kubernetes-logs

@@ -13,6 +13,8 @@ type TensorFusionSystemMetrics struct {
 	TotalNodeCount              int64 `json:"totalNodeCount" gorm:"column:total_nodes_cnt"`
 	TotalAllocationFailCount    int64 `json:"totalAllocationFailCount" gorm:"column:total_allocation_fail_cnt"`
 	TotalAllocationSuccessCount int64 `json:"totalAllocationSuccessCount" gorm:"column:total_allocation_success_cnt"`
+	TotalScaleUpCount           int64 `json:"totalScaleUpCount" gorm:"column:total_scale_up_cnt"`
+	TotalScaleDownCount         int64 `json:"totalScaleDownCount" gorm:"column:total_scale_down_cnt"`
 
 	// NOTE: make sure new fields will be migrated in SetupTable function
 

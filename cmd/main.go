@@ -27,6 +27,7 @@ import (
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
+
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -50,8 +51,10 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/server"
 	"github.com/NexusGPU/tensor-fusion/internal/server/router"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/version"
 	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
+	"sigs.k8s.io/yaml"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -66,7 +69,6 @@ const LeaderElectionID = "85104305.tensor-fusion.ai"
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
 	utilruntime.Must(tfv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -87,6 +89,7 @@ func main() {
 	var enableAlert bool
 	var alertManagerAddr string
 	var timeSeriesDB *metrics.TimeSeriesDB
+	var alertRuleConfigPath string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -100,6 +103,8 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&gpuInfoConfig, "gpu-info-config",
 		"/etc/tensor-fusion/gpu-info.yaml", "specify the path to gpuInfoConfig file")
+	flag.StringVar(&alertRuleConfigPath, "alert-rule-config",
+		"/etc/tensor-fusion/rules.yaml", "specify the path to alertRuleConfig file")
 	flag.StringVar(&metricsPath, "metrics-path", "/logs/metrics.log", "specify the path to metrics file")
 	flag.StringVar(&nodeLevelPortRange, "host-port-range", "40000-42000",
 		"specify the port range for assigning ports to pre-scheduled Pods such as vGPU workers")
@@ -146,18 +151,17 @@ func main() {
 		TLSOpts: tlsOpts,
 	})
 
-	gpuInfos, err := config.LoadGpuInfoFromFile(gpuInfoConfig)
+	gpuInfos := make([]config.GpuInfo, 0)
+	err := utils.LoadConfigFromFile(gpuInfoConfig, &gpuInfos)
 	if err != nil {
 		ctrl.Log.Error(err, "unable to read gpuInfoConfig file")
-		gpuInfos = make([]config.GpuInfo, 0)
 	}
 	gpuPricingMap := make(map[string]float64)
 	for _, gpuInfo := range gpuInfos {
 		gpuPricingMap[gpuInfo.FullModelName] = gpuInfo.CostPerHour
 	}
 
-	// Watch configMap change with interval, check lastModifiedTime to reload gpuInfoConfig
-	watchGPUInfoChanges(gpuInfoConfig, &gpuInfos, gpuPricingMap)
+	startWatchGPUInfoChanges(gpuInfoConfig, &gpuInfos, gpuPricingMap)
 
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
@@ -208,7 +212,7 @@ func main() {
 		}
 	}
 	if enableAlert {
-		setupAlertControllerOrExit(ctx, timeSeriesDB, alertManagerAddr)
+		setupAlertEvaluatorOrExit(ctx, timeSeriesDB, alertManagerAddr, alertRuleConfigPath)
 	}
 	if autoScaleEnabled {
 		// TODO init auto scale module
@@ -408,15 +412,41 @@ func main() {
 	}
 }
 
-func setupAlertControllerOrExit(ctx context.Context, timeSeriesDB *metrics.TimeSeriesDB, alertManagerAddr string) {
+func setupAlertEvaluatorOrExit(ctx context.Context, timeSeriesDB *metrics.TimeSeriesDB, alertManagerAddr string, alertRuleConfigPath string) {
 	if alertCanBeEnabled {
-		// TODO read and watch configMap change to update rules
-		alertEvaluator := alert.NewAlertEvaluator(ctx, timeSeriesDB, []alert.Rule{}, alertManagerAddr)
-		err := alertEvaluator.StartEvaluate()
+		alertRules := []alert.Rule{}
+		err := utils.LoadConfigFromFile(alertRuleConfigPath, &alertRules)
+		if err != nil {
+			ctrl.Log.Error(err, "unable to read alertRuleConfig file")
+			os.Exit(1)
+		}
+		alertEvaluator := alert.NewAlertEvaluator(ctx, timeSeriesDB, alertRules, alertManagerAddr)
+		err = alertEvaluator.StartEvaluate()
 		if err != nil {
 			setupLog.Error(err, "failed to start alert evaluator")
 			os.Exit(1)
 		}
+
+		ch, err := utils.WatchConfigFileChanges(alertRuleConfigPath)
+		if err != nil {
+			ctrl.Log.Error(err, "unable to watch alertRuleConfig file, file may not exist", "alertRuleConfigPath", alertRuleConfigPath)
+			return
+		}
+		go func() {
+			for data := range ch {
+				ctrl.Log.Info("alertRuleConfig file modified, reloading.")
+				updatedAlertRules := []alert.Rule{}
+				err := yaml.Unmarshal(data, &updatedAlertRules)
+				if err != nil {
+					ctrl.Log.Error(err, "unable to reload alertRuleConfig file, file is not valid yaml", "alertRuleConfigPath", alertRuleConfigPath)
+					continue
+				}
+				err = alertEvaluator.UpdateAlertRules(updatedAlertRules)
+				if err != nil {
+					ctrl.Log.Error(err, "unable to update alert rules", "alertRuleConfigPath", alertRuleConfigPath)
+				}
+			}
+		}()
 	} else {
 		setupLog.Error(nil, "can not enable alert since time series db is not connected")
 	}
@@ -433,39 +463,26 @@ func startMetricsRecorder(enableLeaderElection bool, mgr manager.Manager, metric
 	}
 }
 
-func watchGPUInfoChanges(gpuInfoConfig string, gpuInfos *[]config.GpuInfo, gpuPricingMap map[string]float64) {
-	var lastModTime time.Time
-	if fileInfo, err := os.Stat(gpuInfoConfig); err == nil {
-		lastModTime = fileInfo.ModTime()
+func startWatchGPUInfoChanges(gpuInfoConfig string, gpuInfos *[]config.GpuInfo, gpuPricingMap map[string]float64) {
+	ch, err := utils.WatchConfigFileChanges(gpuInfoConfig)
+	if err != nil {
+		ctrl.Log.Error(err, "unable to watch gpuInfo file, file may not exist", "gpuInfoConfig", gpuInfoConfig)
+		return
 	}
 
 	go func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
+		for data := range ch {
+			ctrl.Log.Info("gpuInfo file modified, reloading.")
 
-		for range ticker.C {
-			// Check if file has been modified
-			fileInfo, err := os.Stat(gpuInfoConfig)
+			updatedGpuInfos := make([]config.GpuInfo, 0)
+			err := yaml.Unmarshal(data, &updatedGpuInfos)
 			if err != nil {
-				ctrl.Log.Error(err, "unable to stat gpuInfo file", "gpuInfoConfig", gpuInfoConfig)
+				ctrl.Log.Error(err, "unable to reload gpuInfo file, file is not valid yaml", "gpuInfoConfig", gpuInfoConfig)
 				continue
 			}
-
-			currentModTime := fileInfo.ModTime()
-			if currentModTime.After(lastModTime) {
-				ctrl.Log.Info("gpuInfo file modified, reloading.")
-				updatedGpuInfos, err := config.LoadGpuInfoFromFile(gpuInfoConfig)
-				if err != nil {
-					ctrl.Log.Error(err, "unable to reload gpuInfo file", "gpuInfoConfig", gpuInfoConfig)
-					continue
-				}
-
-				*gpuInfos = updatedGpuInfos
-				for _, gpuInfo := range updatedGpuInfos {
-					gpuPricingMap[gpuInfo.FullModelName] = gpuInfo.CostPerHour
-				}
-				lastModTime = currentModTime
-				ctrl.Log.Info("gpuInfo reloaded successfully.", "gpuInfoConfig", gpuInfoConfig)
+			*gpuInfos = updatedGpuInfos
+			for _, gpuInfo := range updatedGpuInfos {
+				gpuPricingMap[gpuInfo.FullModelName] = gpuInfo.CostPerHour
 			}
 		}
 	}()

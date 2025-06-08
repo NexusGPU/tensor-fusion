@@ -4,6 +4,7 @@ metadata:
   name: {{ .Release.Name }}-public-gpu-info
   namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
+    tensor-fusion.ai/component: gpu-info
     {{- include "tensor-fusion.labels" . | nindent 4 }}
 data:
   # TODO: should be auto generated based on some server side database

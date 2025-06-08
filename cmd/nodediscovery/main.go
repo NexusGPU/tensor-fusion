@@ -17,6 +17,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,10 +71,11 @@ func main() {
 	flag.Parse()
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	gpuInfo, err := config.LoadGpuInfoFromFile(gpuInfoConfig)
+	gpuInfo := make([]config.GpuInfo, 0)
+	err = utils.LoadConfigFromFile(gpuInfoConfig, &gpuInfo)
 	if err != nil {
 		ctrl.Log.Error(err, "unable to read gpuInfoConfig file")
-		gpuInfo = make([]config.GpuInfo, 0)
+		os.Exit(1)
 	}
 
 	ret := nvml.Init()

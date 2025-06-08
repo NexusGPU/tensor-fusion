@@ -146,11 +146,25 @@ func SetSchedulerMetrics(poolName string, isSuccess bool) {
 	}
 }
 
-func getSchedulerMetricsByPool(poolName string) (int64, int64) {
-	if item, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
-		return 0, 0
+// TODO should record metrics after autoscaling feature added
+func SetAutoscalingMetrics(poolName string, isScaleUp bool) {
+	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
+		TensorFusionSystemMetricsMap[poolName] = &TensorFusionSystemMetrics{
+			PoolName: poolName,
+		}
+	}
+	if isScaleUp {
+		TensorFusionSystemMetricsMap[poolName].TotalScaleUpCount++
 	} else {
-		return item.TotalAllocationSuccessCount, item.TotalAllocationFailCount
+		TensorFusionSystemMetricsMap[poolName].TotalScaleDownCount++
+	}
+}
+
+func getSchedulerMetricsByPool(poolName string) (int64, int64, int64, int64) {
+	if item, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
+		return 0, 0, 0, 0
+	} else {
+		return item.TotalAllocationSuccessCount, item.TotalAllocationFailCount, item.TotalScaleUpCount, item.TotalScaleDownCount
 	}
 }
 
@@ -281,12 +295,14 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 
 	enc.StartLine("tf_system_metrics")
 	for poolName, activeNodeAndWorker := range activeWorkerAndNodeByPool {
-		successCount, failCount := getSchedulerMetricsByPool(poolName)
+		successCount, failCount, scaleUpCount, scaleDownCount := getSchedulerMetricsByPool(poolName)
 		enc.AddTag("pool_name", poolName)
 		enc.AddField("total_workers_cnt", metricsProto.MustNewValue(int64(activeNodeAndWorker.workerCnt)))
 		enc.AddField("total_nodes_cnt", metricsProto.MustNewValue(int64(activeNodeAndWorker.nodeCnt)))
 		enc.AddField("total_allocation_fail_cnt", metricsProto.MustNewValue(failCount))
 		enc.AddField("total_allocation_success_cnt", metricsProto.MustNewValue(successCount))
+		enc.AddField("total_scale_up_cnt", metricsProto.MustNewValue(scaleUpCount))
+		enc.AddField("total_scale_down_cnt", metricsProto.MustNewValue(scaleDownCount))
 		enc.EndLine(now)
 	}
 
