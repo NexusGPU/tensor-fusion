@@ -92,6 +92,8 @@ const (
 	GiBToBytes                   = 1024 * 1024 * 1024
 	HypervisorServiceAccountName = "tensor-fusion-hypervisor-sa"
 
+	TSDBVersionConfigMap = "tensor-fusion-tsdb-version"
+
 	QoSLevelLow      = "low"
 	QoSLevelMedium   = "medium"
 	QoSLevelHigh     = "high"

@@ -96,7 +96,7 @@ greptime:
 
 # greptime:
 #   isCloud: true
-#   host: y6lmxod4zm69.us-west-2.aws.greptime.cloud
+#   host: your-instance.us-west-2.aws.greptime.cloud
 #   user: "dummy"
 #   db: "public"
 #   password: "dummy"
@@ -148,7 +148,14 @@ alert:
       repeat_interval: 3h
     templates:
     - /etc/alertmanager/*.tmpl
-  rules:
+
+# KV structure config for other global configs
+dynamicConfig:
+  # retention period for metrics data
+  metricsTTL: 30d
+
+  # alert rules
+  alertRules:
     - name: TFWorkerPodRestartCountIncreasing
       query: SQL
       threshold: 2
@@ -160,7 +167,7 @@ alert:
     
     # Worker TFlops throttled alert
     - name: TFWorkerTFlopsThrottled
-      query: tf_worker_tflops_used / tf_worker_tflops_limit
+      query: tf_worker_tflops_used > tf_worker_tflops_limit
       threshold: 0.95
       evaluationInterval: 15s
       consecutiveCount: 3
@@ -192,7 +199,7 @@ alert:
     
     # GPU VRAM Full Alert
     - name: GPUVRAMFull
-      query: tf_gpu_vram_used_bytes / tf_gpu_vram_total_bytes
+      query:  select memory_percentage from tf_gpu_usage where pool_name = {{ $labels.pool_name }} // TODO ID
       threshold: 0.97
       evaluationInterval: 30s
       consecutiveCount: 2

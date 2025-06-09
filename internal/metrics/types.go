@@ -7,7 +7,7 @@ import (
 )
 
 type TensorFusionSystemMetrics struct {
-	PoolName string `json:"poolName" gorm:"column:pool_name;index:,class:INVERTED"`
+	PoolName string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
 
 	TotalWorkerCount            int64 `json:"totalWorkerCount" gorm:"column:total_workers_cnt"`
 	TotalNodeCount              int64 `json:"totalNodeCount" gorm:"column:total_nodes_cnt"`
@@ -30,9 +30,9 @@ var TensorFusionSystemMetricsMap = make(map[string]*TensorFusionSystemMetrics)
 // Metrics will be stored in a map, key is the worker name, value is the metrics
 // By default, metrics will be updated every minute
 type WorkerResourceMetrics struct {
-	WorkerName   string `json:"workerName" gorm:"column:worker_name;index:,class:INVERTED"`
-	WorkloadName string `json:"workloadName" gorm:"column:workload_name;index:,class:INVERTED"`
-	PoolName     string `json:"poolName" gorm:"column:pool_name;index:,class:INVERTED"`
+	WorkerName   string `json:"workerName" gorm:"column:worker;index:,class:SKIPPING"`
+	WorkloadName string `json:"workloadName" gorm:"column:workload;index:,class:INVERTED"`
+	PoolName     string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
 	Namespace    string `json:"namespace" gorm:"column:namespace;index:,class:INVERTED"`
 	QoS          string `json:"qos" gorm:"column:qos"`
 
@@ -56,8 +56,8 @@ func (wm WorkerResourceMetrics) TableName() string {
 }
 
 type NodeResourceMetrics struct {
-	NodeName string `json:"nodeName" gorm:"column:node_name;index:,class:INVERTED"`
-	PoolName string `json:"poolName" gorm:"column:pool_name;index:,class:INVERTED"`
+	NodeName string `json:"nodeName" gorm:"column:node;index:,class:INVERTED"`
+	PoolName string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
 
 	AllocatedTflops        float64 `json:"allocatedTflops" gorm:"column:allocated_tflops"`
 	AllocatedTflopsPercent float64 `json:"allocatedTflopsPercent" gorm:"column:allocated_tflops_percent"`
@@ -103,7 +103,7 @@ type TFSystemLog struct {
 	Container string `json:"container" gorm:"column:container;index:,class:INVERTED"`
 	Message   string `json:"message" gorm:"column:message;index:,class:FULLTEXT,option:WITH (analyzer = 'English' $comma$ case_sensitive = 'false')"`
 	Namespace string `json:"namespace" gorm:"column:namespace;index:,class:INVERTED"`
-	Pod       string `json:"pod" gorm:"column:pod;index"`
+	Pod       string `json:"pod" gorm:"column:pod;index:,class:SKIPPING"`
 	Stream    string `json:"stream" gorm:"column:stream"`
 	// message written timestamp
 	Timestamp string `json:"timestamp" gorm:"column:timestamp"`
@@ -118,15 +118,19 @@ func (sl TFSystemLog) TableName() string {
 }
 
 type HypervisorWorkerUsageMetrics struct {
-	WorkloadName string `json:"workloadName" gorm:"column:workload_name;index:,class:INVERTED"`
-	WorkerName   string `json:"workerName" gorm:"column:worker_name,index"`
-	PoolName     string `json:"poolName" gorm:"column:pool_name;index:,class:INVERTED"`
-	NodeName     string `json:"nodeName" gorm:"column:node_name;index:,class:INVERTED"`
+	WorkloadName string `json:"workloadName" gorm:"column:workload;index:,class:INVERTED"`
+	WorkerName   string `json:"workerName" gorm:"column:worker;index:,class:SKIPPING"`
+	PoolName     string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
+	NodeName     string `json:"nodeName" gorm:"column:node;index:,class:INVERTED"`
 	UUID         string `json:"uuid" gorm:"column:uuid;index:,class:INVERTED"`
 
-	ComputePercent float64 `json:"compute_percent" gorm:"column:compute_percent"`
-	VRAMBytes      uint64  `json:"vram_bytes" gorm:"column:vram_bytes"`
-	ComputeTflops  float64 `json:"compute_tflops" gorm:"column:compute_tflops"`
+	ComputePercent float64 `json:"computePercent" gorm:"column:compute_percentage"`
+	VRAMBytes      uint64  `json:"vramBytes" gorm:"column:memory_bytes"`
+	ComputeTflops  float64 `json:"computeTflops" gorm:"column:compute_tflops"`
+
+	ComputeThrottledCount int64 `json:"computeThrottledCount" gorm:"column:compute_throttled_cnt"`
+	VRAMFreezedCount      int64 `json:"vramFreezedCount" gorm:"column:vram_freezed_cnt"`
+	VRAMResumedCount      int64 `json:"vramResumedCount" gorm:"column:vram_resumed_cnt"`
 
 	// NOTE: make sure new fields will be migrated in SetupTable function
 
@@ -138,13 +142,19 @@ func (wu HypervisorWorkerUsageMetrics) TableName() string {
 }
 
 type HypervisorGPUUsageMetrics struct {
-	NodeName string `json:"nodeName" gorm:"column:node_name;index:,class:INVERTED"`
-	PoolName string `json:"poolName" gorm:"column:pool_name;index:,class:INVERTED"`
+	NodeName string `json:"nodeName" gorm:"column:node;index:,class:INVERTED"`
+	PoolName string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
 	UUID     string `json:"uuid" gorm:"column:uuid;index:,class:INVERTED"`
 
-	ComputePercent float64 `json:"compute_percent" gorm:"column:compute_percent"`
-	VRAMBytes      uint64  `json:"vram_bytes" gorm:"column:vram_bytes"`
-	ComputeTflops  float64 `json:"compute_tflops" gorm:"column:compute_tflops"`
+	ComputePercent float64 `json:"computePercent" gorm:"column:compute_percentage"`
+	VRAMPercent    float64 `json:"vramPercent" gorm:"column:memory_percentage"`
+
+	VRAMBytes     uint64  `json:"vramBytes" gorm:"column:memory_bytes"`
+	ComputeTflops float64 `json:"computeTflops" gorm:"column:compute_tflops"`
+
+	PcieRxKB    float64 `json:"pcieRx" gorm:"column:rx"`
+	PcieTxKB    float64 `json:"pcieTx" gorm:"column:tx"`
+	Temperature float64 `json:"temperature" gorm:"column:temperature"`
 
 	// NOTE: make sure new fields will be migrated in SetupTable function
 

@@ -247,10 +247,6 @@ func (s *GpuAllocator) initGPUStore(ctx context.Context) error {
 	}
 
 	log.Info("GPU store initialized", "count", len(s.gpuStore))
-
-	// reconcile allocation state based on existing workers
-	s.reconcileAllocationState(ctx)
-	log.Info("GPU store data reconciled")
 	return nil
 }
 
@@ -324,18 +320,26 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 
 	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		// Create a context with cancel function for the sync loop
-		syncCtx, cancel := context.WithCancel(ctx)
+		_, cancel := context.WithCancel(ctx)
 		s.cancel = cancel
 		// Initialize the GPU store
 		if err := s.initGPUStore(ctx); err != nil {
 			log.Error(err, "Failed to initialize GPU store")
 			return err
 		}
-		// Start the background sync goroutine
-		go s.startSyncLoop(syncCtx)
 		readyCh <- struct{}{}
 		return nil
 	}))
+
+	go func() {
+		<-mgr.Elected()
+		// reconcile allocation state based on existing workers, run only when it's elected as leader
+		// and only if it's leader, it will start allocating resources to workers, and start sync loop here
+		s.reconcileAllocationState(ctx)
+		log.Info("GPU store data reconciled")
+		// Start the background sync goroutine
+		go s.startSyncLoop(ctx)
+	}()
 
 	return readyCh, err
 }

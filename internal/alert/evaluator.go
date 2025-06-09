@@ -100,6 +100,7 @@ func (e *AlertEvaluator) evaluate(rule Rule) error {
 	var result []struct {
 		Value float64
 	}
+	// need get labels from query result
 	err := e.DB.Raw(rule.Query).Scan(&result).Error
 	if err != nil {
 		return fmt.Errorf("failed to evaluate rule %v: %w", rule, err)
