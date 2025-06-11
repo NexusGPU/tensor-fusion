@@ -155,153 +155,258 @@ dynamicConfig:
   metricsTTL: 30d
 
   # alert rules
-  alertRules:
-    - name: TFWorkerPodRestartCountIncreasing
-      query: SQL
-      threshold: 2
-      evaluationInterval: 1m
-      consecutiveCount: 1
-      severity: P0
-      summary: "TF Worker Pod Restart Count Increasing"
-      description: "Worker pod {{ $labels.instance }} has restarted more than 2 times"
-    
+  alertRules:    
     # Worker TFlops throttled alert
-    - name: TFWorkerTFlopsThrottled
-      query: tf_worker_tflops_used > tf_worker_tflops_limit
-      threshold: 0.95
+    - name: WorkerTFlopsThrottled
+      query: |
+        SELECT workload, worker, uuid, node_name, MAX(compute_throttled_cnt)-MIN(compute_throttled_cnt) as throttled_increase
+        FROM tf_worker_usage
+        WHERE {{ .Conditions }}
+        GROUP BY workload, worker, uuid, node_name
+        HAVING throttled_increase > {{ .Threshold }}
+      threshold: 0
       evaluationInterval: 15s
       consecutiveCount: 3
       severity: P1
       summary: "Worker TFlops Throttled"
-      description: "Worker {{ $labels.instance }} is using more than 95% of its TFlops limit"
+      description: "Worker {{ .worker }} from Node {{ .node_name }} is using more than {{ .Threshold }}% of its TFlops limit"
+      alertTargetInstance: "{{ .worker }}-{{ .uuid }}"
+      runbookURL: "https://tensor-fusion.ai/guide/troubleshooting/handbook"
     
     # Worker VRAM switching too frequent alert
-    - name: TFWorkerVRAMSwitchCountIncreasing
-      query: tf_worker_vram_switch_count
-      threshold: 2
+    - name: WorkerVRAMSwitchCountIncreasing
+      query: |
+        SELECT workload, worker, uuid, node_name, MAX(vram_resumed_cnt)-MIN(vram_resumed_cnt) as switch_increase
+        FROM tf_worker_usage 
+        WHERE {{ .Conditions }}
+        GROUP BY workload, worker, uuid, node_name
+        HAVING switch_increase > {{ .Threshold }}
+      threshold: 0
       evaluationInterval: 2m
       consecutiveCount: 1
       severity: P1
-      summary: "TF Worker Pod VRAM Switch Count Increasing"
-      description: "Worker {{ $labels.instance }} has switched VRAM more than 2 times"
+      summary: "Worker VRAM Switch Count Increasing"
+      description: "Worker {{ .worker }} from Node {{ .node_name }} has switched VRAM {{ .switch_increase }} times in last 2 minutes, GPU may be too hot"
+      alertTargetInstance: "{{ .worker }}-{{ .uuid }}"
+      runbookURL: "https://tensor-fusion.ai/guide/troubleshooting/handbook"
     
     # Worker can not scale up/scheduled alert
-    - name: TFWorkerPendingScaleUp
-      query: tf_pending_scale_up_worker_count
+    - name: WorkerAllocationFailed
+      query: |
+        SELECT pool, (MAX(total_allocation_fail_cnt) - MIN(total_allocation_fail_cnt)) as failure_increase,
+        FROM tf_system_metrics
+        WHERE {{ .Conditions }}
+        GROUP BY pool
+        HAVING failure_increase > {{ .Threshold }}
       threshold: 0
       evaluationInterval: 30s
       consecutiveCount: 1
       severity: P1
-      summary: "Pending Scale Up Worker"
-      description: "There are workers pending scale up"
+      summary: "Worker allocation failed for GPU Pool {{ .pool }}"
+      description: "Worker allocation failed, {{ .failure_increase }} times in last 30 seconds for GPU Pool {{ .pool }}"
+      alertTargetInstance: "{{ .pool }}"
+      runbookURL: "https://tensor-fusion.ai/guide/troubleshooting/handbook"
     
     # Single GPU Alerts
     
     # GPU VRAM Full Alert
     - name: GPUVRAMFull
-      query:  select memory_percentage from tf_gpu_usage where pool_name = {{ $labels.pool_name }} // TODO ID
-      threshold: 0.97
+      query: |
+        SELECT
+          node_name,
+          pool,
+          uuid,
+          avg(memory_percentage) AS memory_used
+        FROM tf_gpu_usage
+        WHERE memory_percentage > {{ .Threshold }} AND {{ .Conditions }}
+        GROUP BY node_name, pool, uuid
+      threshold: 97
       evaluationInterval: 30s
       consecutiveCount: 2
       severity: P1
-      summary: "GPU VRAM Full"
-      description: "GPU {{ $labels.instance }} has VRAM usage above 97%"
+      summary: "GPU VRAM Full, used {{ .memory_used }}% on {{ .node_name }} {{ .uuid }}"
+      alertTargetInstance: "{{ .uuid }}"
+      description: "GPU {{ .uuid }} on Node {{ .node_name }} in Pool {{ .pool }} has VRAM usage above {{ .Threshold }}% for 2 consecutive 30s, average usage: {{ .memory_used }}%"
     
     # GPU TFlops Full Alert
     - name: GPUTFlopsFull
-      query: tf_gpu_tflops_used / tf_gpu_tflops_total
-      threshold: 0.97
+      query: |
+        SELECT
+          node_name,
+          pool,
+          uuid,
+          avg(compute_percentage) AS compute_used
+        FROM tf_gpu_usage
+        WHERE compute_percentage > {{ .Threshold }} AND {{ .Conditions }}
+        GROUP BY node_name, pool, uuid
+      threshold: 97
       evaluationInterval: 30s
       consecutiveCount: 4
       severity: P1
-      summary: "GPU TFlops Full"
-      description: "GPU {{ $labels.instance }} has TFlops usage above 97%"
+      summary: "GPU TFlops Full, used {{ .compute_used }}% on {{ .node_name }} {{ .uuid }}"
+      alertTargetInstance: "{{ .uuid }}"
+      description: "GPU {{ .uuid }} on Node {{ .node_name }} in Pool {{ .pool }} has TFlops usage above {{ .Threshold }}% for 4 consecutive 30s, average usage: {{ .compute_used }}%"
     
     # GPU Temperature alert
     - name: GPUTemperatureHigh
-      query: tf_gpu_temperature_celsius
+      query: |
+        SELECT
+          node_name,
+          pool,
+          uuid,
+          avg(temperature) AS avg_temperature
+        FROM tf_gpu_usage
+        WHERE temperature > {{ .Threshold }} AND {{ .Conditions }}
+        GROUP BY node_name, pool, uuid
       threshold: 90
       evaluationInterval: 30s
       consecutiveCount: 3
       severity: P1
-      summary: "GPU Temperature High"
-      description: "GPU {{ $labels.instance }} has temperature above 90°C"
+      summary: "GPU Temperature High, {{ .avg_temperature }}°C on {{ .node_name }} {{ .uuid }}"
+      alertTargetInstance: "{{ .uuid }}"
+      description: "GPU {{ .uuid }} from Node {{ .node_name }} has temperature above {{ .Threshold }}°C, Average temperature: {{ .avg_temperature }}, GPU Pool: {{ .pool }}"
+      runbookURL: "https://tensor-fusion.ai/guide/troubleshooting/handbook"
     
     # GPU Pool Alerts
     
-    # Pool TFlops exhausted alert - Any GPU
-    - name: PoolAnyGPUTFlopsExhaustedCritical
-      query: min(tf_gpu_tflops_available / tf_gpu_tflops_total) by pool_id
-      threshold: 0.05
+    # Node TFlops allocation alert
+    - name: NodeTFlopsAllocationCritical
+      query: | 
+        SELECT node_name, pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+        FROM tf_node_resources
+        WHERE {{ .Conditions }}
+        GROUP BY node_name, pool
+        HAVING tflops_available < {{ .Threshold }}
+      threshold: 5
       evaluationInterval: 1m
       consecutiveCount: 2
       severity: P0
-      summary: "Pool Any GPU TFlops Exhausted Critical"
-      description: "In pool {{ $labels.pool_id }}, at least one GPU has available TFlops below 5%"
+      summary: "Available TFlops below threshold, remaining {{ .tflops_available }}% for {{ .node_name }}"
+      description: "Node {{ .node _name }} in Pool {{ .pool }} has available TFlops below {{ .Threshold }}%"
+      alertTargetInstance: "{{ .node _name }}"
     
-    - name: PoolAnyGPUTFlopsExhaustedWarning
-      query: min(tf_gpu_tflops_available / tf_gpu_tflops_total) by pool_id
-      threshold: 0.10
+    - name: NodeTFlopsAllocationWarning
+      query: | 
+        SELECT node_name, pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+        FROM tf_node_resources
+        WHERE {{ .Conditions }}
+        GROUP BY node_name, pool
+        HAVING tflops_available < {{ .Threshold }}
+      threshold: 10
       evaluationInterval: 1m
       consecutiveCount: 2
       severity: P1
-      summary: "Pool Any GPU TFlops Exhausted Warning"
-      description: "In pool {{ $labels.pool_id }}, at least one GPU has available TFlops below 10%"
+      summary: "Node available TFlops below threshold, remaining {{ .tflops_available }}% for {{ .node_name }}"
+      description: "Node {{ .node _name }} in Pool {{ .pool }} has available TFlops below {{ .Threshold }}%"
+      alertTargetInstance: "{{ .node _name }}"
     
-    # Pool TFlops exhausted alert - Total
-    - name: PoolTotalTFlopsExhaustedCritical
-      query: sum(tf_gpu_tflops_available) / sum(tf_gpu_tflops_total) by pool_id
-      threshold: 0.05
+    # Pool TFlops allocation alert - Total
+    - name: PoolTotalTFlopsAllocationCritical
+      query: |
+        SELECT pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+        FROM tf_node_resources
+        WHERE {{ .Conditions }}
+        GROUP BY pool
+        HAVING tflops_available < {{ .Threshold }}
+      threshold: 5
       evaluationInterval: 1m
       consecutiveCount: 2
       severity: P0
-      summary: "Pool Total TFlops Exhausted Critical"
-      description: "In pool {{ $labels.poolName }}, total available TFlops below 5%"
+      summary: "Pool available TFlops below threshold, remaining {{ .tflops_available }}%"
+      description: "Pool {{ .pool }} has available TFlops below {{ .Threshold }}%"
+      alertTargetInstance: "{{ .pool }}"
     
-    - name: PoolTotalTFlopsExhaustedWarning
-      query: sum(tf_gpu_tflops_available) / sum(tf_gpu_tflops_total) by pool_id
-      threshold: 0.10
+    - name: PoolTotalTFlopsAllocationWarning
+      query: |
+        SELECT pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+        FROM tf_node_resources
+        WHERE {{ .Conditions }}
+        GROUP BY pool
+        HAVING tflops_available < {{ .Threshold }}
+      threshold: 10
       evaluationInterval: 1m
       consecutiveCount: 2
       severity: P1
-      summary: "Pool Total TFlops Exhausted Warning"
-      description: "In pool {{ $labels.poolName }}, total available TFlops below 10%"
+      summary: "Pool available TFlops below threshold, remaining {{ .tflops_available }}%"
+      description: "Pool {{ .pool }} has available TFlops below {{ .Threshold }}%"
+      alertTargetInstance: "{{ .pool }}"
     
-    # Pool VRAM exhausted alert - Any GPU
-    - name: PoolAnyGPUVRAMExhausted
-      query: min(tf_gpu_vram_available_bytes) by pool_id
-      threshold: 0
+    # Node VRAM allocation alert
+    - name: NodeVRAMAllocationCritical
+      query: |
+        SELECT node_name, pool, (100 - avg(allocated_vram_percent)) as vram_available
+        FROM tf_node_resources
+        WHERE {{ .Conditions }}
+        GROUP BY node_name, pool
+        HAVING vram_available < {{ .Threshold }}
+      threshold: 5
       evaluationInterval: 1m
       consecutiveCount: 2
       severity: P1
-      summary: "Pool Any GPU VRAM Exhausted"
-      description: "In pool {{ $labels.poolName }}, at least one GPU has 0 available VRAM"
-    
-    # Pool VRAM exhausted alert - Total
-    - name: PoolTotalVRAMExhaustedCritical
-      query: sum(tf_gpu_vram_available_bytes) / sum(tf_gpu_vram_total_bytes) by pool_id
-      threshold: 0.05
-      evaluationInterval: 1m
-      consecutiveCount: 2
-      severity: P0
-      summary: "Pool Total VRAM Exhausted Critical"
-      description: "In pool {{ $labels.poolName }}, total available VRAM below 5%"
-    
-    - name: PoolTotalVRAMExhaustedWarning
-      query: sum(tf_gpu_vram_available_bytes) / sum(tf_gpu_vram_total_bytes) by pool_id
-      threshold: 0.10
+      summary: "Node available VRAM below threshold, remaining {{ .vram_available }}% for {{ .node_name }}"
+      description: "Node {{ .node _name }} in Pool {{ .pool }} has available VRAM below {{ .Threshold }}%"
+      alertTargetInstance: "{{ .node _name }}"
+
+    - name: NodeVRAMAllocationWarning
+      query: |
+        SELECT node_name, pool, (100 - avg(allocated_vram_percent)) as vram_available
+        FROM tf_node_resources
+        WHERE {{ .Conditions }}
+        GROUP BY node_name, pool
+        HAVING vram_available < {{ .Threshold }}
+      threshold: 10
       evaluationInterval: 1m
       consecutiveCount: 2
       severity: P1
-      summary: "Pool Total VRAM Exhausted Warning"
-      description: "In pool {{ $labels.poolName }}, total available VRAM below 10%"
+      summary: "Node available VRAM below threshold, remaining {{ .vram_available }}% for {{ .node_name }}"
+      description: "Node {{ .node _name }} in Pool {{ .pool }} has available VRAM below {{ .Threshold }}%"
+      alertTargetInstance: "{{ .node _name }}"
     
-    # Empty GPU Alert
+    # Pool VRAM allocation alert
+    - name: PoolVRAMAllocationWarning
+      query: |
+        SELECT pool, (100 - avg(allocated_vram_percent)) as vram_available
+        FROM tf_node_resources
+        WHERE {{ .Conditions }}
+        GROUP BY pool
+        HAVING vram_available < {{ .Threshold }}
+      threshold: 10
+      evaluationInterval: 1m
+      consecutiveCount: 2
+      severity: P1
+      summary: "Pool available VRAM below threshold, remaining {{ .vram_available }}% for {{ .pool }}"
+      description: "Pool {{ .pool }} has available VRAM below {{ .Threshold }}%"
+      alertTargetInstance: "{{ .pool }}"
+    
+    # Empty or Idle GPU Alert
     - name: EmptyGPU
-      query: tf_gpu_tflops_available == tf_gpu_tflops_total and tf_gpu_vram_available_bytes == tf_gpu_vram_total_bytes
-      threshold: true
-      evaluationInterval: 1m
+      query: |
+        SELECT DISTINCT node_name 
+        FROM tf_node_resources 
+        WHERE {{ .Conditions }} AND node_name NOT IN (
+            SELECT DISTINCT node_name 
+            FROM tf_worker_usage 
+            WHERE {{ .Conditions }}
+        )
+      threshold: N/A
+      evaluationInterval: 5m
+      consecutiveCount: 2
+      severity: P2
+      summary: "Empty GPU without any workload, Node {{ .node_name }}"
+      description: "GPU Node {{ .node_name }} has no workload running, should be decommissioned"
+      alertTargetInstance: "{{ .node_name }}"
+    
+    - name: IdleGPU
+      query: |
+        SELECT node_name, pool, uuid, avg(compute_percentage) as compute, avg(memory_percentage) vram
+        FROM tf_gpu_usage
+        WHERE {{ .Conditions }}
+        GROUP BY node_name, pool, uuid
+        HAVING compute < 1 and vram < {{ .Threshold }};
+      threshold: 5
+      evaluationInterval: 10m
       consecutiveCount: 3
       severity: P2
-      summary: "Empty GPU"
-      description: "GPU {{ $labels.instance }} has been completely unused"
+      summary: "Idle GPU found: {{ .uuid }} on Node {{ .node_name }}"
+      description: "GPU {{ .uuid }} on Node {{ .node_name }} in Pool {{ .pool }} has been idle for 3 consecutive 10m, compute: {{ .compute }}, vram: {{ .vram }}"
+      alertTargetInstance: "{{ .uuid }}"

@@ -40,28 +40,28 @@ func WatchConfigFileChanges(ctx context.Context, filename string) (<-chan []byte
 		for {
 			select {
 			case <-ctx.Done():
-				ctrl.Log.Info("stopping config file watcher for %s", filename)
+				ctrl.Log.Info("stopping config file watcher", "filename", filename)
 				return
 			case <-ticker.C:
 				fileInfo, err := os.Stat(filename)
 				if err != nil {
-					ctrl.Log.Error(err, "unable to stat config file %s", filename)
+					ctrl.Log.Error(err, "unable to stat config file", "filename", filename)
 					continue
 				}
 
 				currentModTime := fileInfo.ModTime()
 				if currentModTime.After(lastModTime) {
-					ctrl.Log.Info("config file %s modified, reloading", filename)
+					ctrl.Log.Info("config file modified, reloading", "filename", filename)
 
 					data, err := os.ReadFile(filename)
 					if err != nil {
-						ctrl.Log.Error(err, "unable to read config file %s", filename)
+						ctrl.Log.Error(err, "unable to read config file", "filename", filename)
 						continue
 					}
 
 					ch <- data
 					lastModTime = currentModTime
-					ctrl.Log.Info("config file %s reloaded successfully", filename)
+					ctrl.Log.Info("config file reloaded successfully", "filename", filename)
 				}
 			}
 		}

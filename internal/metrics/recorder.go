@@ -248,6 +248,10 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.StartLine("tf_worker_resources")
 		enc.AddTag("namespace", metrics.Namespace)
 		enc.AddTag("pool_name", metrics.PoolName)
+
+		if metrics.QoS == "" {
+			metrics.QoS = constants.QoSLevelMedium
+		}
 		enc.AddTag("qos", metrics.QoS)
 		enc.AddTag("worker_name", metrics.WorkerName)
 		enc.AddTag("workload_name", metrics.WorkloadName)

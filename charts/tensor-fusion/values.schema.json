@@ -433,8 +433,18 @@
         "alertManagerConfig": {
           "type": "object",
           "description": "Alertmanager configuration"
+        }
+      }
+    },
+    "dynamicConfig": {
+      "type": "object",
+      "description": "Dynamic configuration for alerting",
+      "properties": {
+        "metricsTTL": {
+          "type": "string",
+          "description": "Metrics and Logs Retention Period, default to 30d"
         },
-        "rules": {
+        "alertRules": {
           "type": "array",
           "description": "Alerting rules",
           "items": {
@@ -466,12 +476,16 @@
               },
               "summary": {
                 "type": "string",
-                "description": "Summary for the alerting rule, can use $labels to access labels, eg. $labels.poolName $labels.instance"
+                "description": "Summary for the alerting rule, can use $labels to access labels, eg. {{ .pool }} {{ .worker }} {{ .Threshold }}"
               },
               "description": {
                 "type": "string",
-                "description": "Description for the alerting rule, can use $labels to access labels, eg. $labels.poolName $labels.instance"
-              }             
+                "description": "Description for the alerting rule, can use $labels to access labels, eg. {{ .pool }} {{ .worker }} {{ .Threshold }}"
+              },
+              "alertTargetInstance": {
+                "type": "string",
+                "description": "Alert target instance for the alerting rule"
+              }         
             }
           }
         }

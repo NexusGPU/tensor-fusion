@@ -12,3 +12,17 @@ rules:
   - get
   - list
   - watch
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tensor-fusion-hypervisor-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tensor-fusion-hypervisor-role
+subjects:
+- kind: ServiceAccount
+  name: tensor-fusion-hypervisor-sa
+  namespace: {{ include "tensor-fusion.namespace" . }}

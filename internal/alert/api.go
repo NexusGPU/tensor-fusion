@@ -56,15 +56,10 @@ type GettableAlert struct {
 	Status      AlertStatus `json:"status"`
 }
 
-func CreateAlert(name, summary, description string, labels LabelSet, annotations LabelSet, isResolved bool) PostableAlert {
-	alert := createAlertData(name, summary, description, labels, annotations)
-	if isResolved {
-		alert.EndsAt = alert.StartsAt
-	}
-	return alert
-}
-
 func SendAlert(ctx context.Context, alertManagerURL string, alerts []PostableAlert) error {
+	if len(alerts) == 0 {
+		return nil
+	}
 	if alertManagerURL[len(alertManagerURL)-1] != '/' {
 		alertManagerURL += "/"
 	}
@@ -94,27 +89,12 @@ func SendAlert(ctx context.Context, alertManagerURL string, alerts []PostableAle
 	return nil
 }
 
-func createAlertData(name, summary, description string, labels LabelSet, annotations LabelSet) PostableAlert {
-	if labels == nil {
-		labels = LabelSet{}
-	}
-	if annotations == nil {
-		annotations = LabelSet{}
-	}
-
-	labels["alertname"] = name
-	if summary != "" {
-		annotations["summary"] = summary
-	}
-	if description != "" {
-		annotations["description"] = description
-	}
-
+func CreateAlertData(name, summary, description string, labels LabelSet, annotations LabelSet, startsAt time.Time) PostableAlert {
 	return PostableAlert{
 		Alert: Alert{
 			Labels: labels,
 		},
-		StartsAt:    time.Now(),
+		StartsAt:    startsAt,
 		Annotations: annotations,
 	}
 }

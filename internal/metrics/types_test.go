@@ -21,7 +21,7 @@ func TestGetInitTableSQL(t *testing.T) {
 		}
 
 		for idx, initSql := range TFVersionMigrationMap[0].AlterSQL {
-			assert.Equal(t, initSql, getInitTableSQL(tables[idx], "30d"), "SQL migrated, should sync sql here and add ALTER table sql in migrate.go")
+			assert.Equal(t, initSql, getInitTableSQL(tables[idx], "30d"), "table structure has been changed, need to sync sql and add ALTER table sql in `migrate.go`")
 		}
 	})
 }

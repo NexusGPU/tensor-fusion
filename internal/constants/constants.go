@@ -149,6 +149,7 @@ const (
 const TFDataPath = "/tmp/tensor-fusion/data"
 const DataVolumeName = "tf-data"
 const TensorFusionPoolManualCompaction = Domain + "/manual-compaction"
+const AlertJobName = "tensor-fusion"
 
 const (
 	LeaderInfoConfigMapName        = "tensor-fusion-operator-leader-info"

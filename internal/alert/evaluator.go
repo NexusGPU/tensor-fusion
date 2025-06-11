@@ -1,10 +1,13 @@
 package alert
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"sync"
+	"text/template"
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
@@ -17,9 +20,9 @@ const JITTER_FACTOR = 7000
 // AlertEvaluator send new or resolved alerts to alertmanager
 // use alertmanager to implement deduplication, notification
 // it connect TSDB, evaluate all rules to with its own interval
-// for each rule, the query result should contains 'val' field,
-// which is the value to compare with threshold, and other fields
-// which are used to generate alert labelSet and description
+// for each rule, the query result should contains fields that can be compared with threshold,
+// and other fields which are used to generate alert labelSet and description
+// The query and description can use Go templates with the rule data and query results
 type AlertEvaluator struct {
 	ctx context.Context
 
@@ -76,7 +79,7 @@ func (e *AlertEvaluator) StartEvaluate() error {
 			for {
 				select {
 				case <-ticker.C:
-					if err := e.evaluate(rule); err != nil {
+					if _, err := e.evaluate(&rule); err != nil {
 						log.FromContext(e.ctx).Error(err, "failed to evaluate rule", "rule", rule)
 					}
 				case <-e.ctx.Done():
@@ -96,35 +99,102 @@ func (e *AlertEvaluator) StopEvaluate() error {
 	return nil
 }
 
-func (e *AlertEvaluator) evaluate(rule Rule) error {
-	var result []struct {
-		Value float64
-	}
-	// need get labels from query result
-	err := e.DB.Raw(rule.Query).Scan(&result).Error
+// renderQueryTemplate renders the SQL query template with rule data
+func renderQueryTemplate(rule *Rule) (string, error) {
+	tmpl, err := template.New("query").Parse(rule.Query)
 	if err != nil {
-		return fmt.Errorf("failed to evaluate rule %v: %w", rule, err)
+		return "", fmt.Errorf("failed to parse query template: %w", err)
 	}
 
-	toSendAlerts := []PostableAlert{}
-
-	// TODO: result > 1 indicates multiple alerts
-	if len(result) == 0 {
-		// no alert, check if pending alerts need to be resolved
-		// resolved if still alarming
-		toSendAlerts = append(toSendAlerts, rule.ToPostableAlert(LabelSet{}, LabelSet{}, true))
-	} else if result[0].Value >= rule.Threshold {
-		// alert
-		toSendAlerts = append(toSendAlerts, rule.ToPostableAlert(LabelSet{}, LabelSet{}, false))
-	} else {
-		// resolved if still alarming
-		toSendAlerts = append(toSendAlerts, rule.ToPostableAlert(LabelSet{}, LabelSet{}, true))
+	var buf bytes.Buffer
+	data := map[string]interface{}{
+		"Threshold":  rule.Threshold,
+		"Conditions": fmt.Sprintf("ts >= now() - '%s'::INTERVAL", rule.EvaluationInterval),
+		"Severity":   rule.Severity,
+		"Name":       rule.Name,
 	}
 
-	// todo use query ID to record unresolved alerts, when query result is less than threshold, delete it and send resolved
-
-	if len(toSendAlerts) > 0 {
-		return SendAlert(e.ctx, e.alertManagerURL, toSendAlerts)
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("failed to execute query template: %w", err)
 	}
-	return nil
+
+	return buf.String(), nil
+}
+
+// evaluate evaluates a rule against the database and sends alerts if conditions are met
+func (e *AlertEvaluator) evaluate(rule *Rule) ([]PostableAlert, error) {
+	renderedQuery, err := renderQueryTemplate(rule)
+	if err != nil {
+		return nil, fmt.Errorf("failed to render query template for rule %s: %w", rule.Name, err)
+	}
+	rows, err := e.DB.Raw(renderedQuery).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query for rule %s: %w", rule.Name, err)
+	}
+	defer rows.Close()
+
+	alerts := []PostableAlert{}
+	processedAlerts, err := e.processQueryResults(rows, rule)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process query results for rule %s: %w", rule.Name, err)
+	}
+	if len(processedAlerts) > 0 {
+		alerts = append(alerts, processedAlerts...)
+	}
+
+	// Send alerts if rule not in test mode
+	if !rule.IsTestMode() {
+		return alerts, SendAlert(e.ctx, e.alertManagerURL, alerts)
+	}
+	return alerts, nil
+}
+
+// processQueryResults processes query results and returns alerts for matching conditions
+func (e *AlertEvaluator) processQueryResults(rows *sql.Rows, rule *Rule) ([]PostableAlert, error) {
+	alerts := []PostableAlert{}
+	firingAlertSet := map[string]struct{}{}
+
+	// Process each row from the query result
+	for rows.Next() {
+		columns, err := rows.Columns()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get columns: %w", err)
+		}
+
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		rowData := make(map[string]interface{})
+		for i, col := range columns {
+			rowData[col] = values[i]
+		}
+
+		// Add other general fields
+		rowData["Threshold"] = rule.Threshold
+
+		alert, consecutiveCountMatched, hash := rule.AddFiringAlertAndCheckResolved(rowData)
+		if alert != nil {
+			if _, ok := firingAlertSet[hash]; ok {
+				// check if duplicated in previous rows
+				continue
+			}
+			firingAlertSet[hash] = struct{}{}
+			if consecutiveCountMatched {
+				alerts = append(alerts, *alert)
+			}
+		}
+
+	}
+
+	// check and remove resolved alerts
+	resolvedAlerts := rule.CheckAndRemoveFiringAlerts(firingAlertSet)
+	alerts = append(alerts, resolvedAlerts...)
+
+	return alerts, nil
 }
