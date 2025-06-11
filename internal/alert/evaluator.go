@@ -131,7 +131,11 @@ func (e *AlertEvaluator) evaluate(rule *Rule) ([]PostableAlert, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query for rule %s: %w", rule.Name, err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.FromContext(e.ctx).Error(err, "failed to close rows")
+		}
+	}()
 
 	alerts := []PostableAlert{}
 	processedAlerts, err := e.processQueryResults(rows, rule)

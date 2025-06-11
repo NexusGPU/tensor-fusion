@@ -49,7 +49,11 @@ func createTestRule(name string) *Rule {
 
 func TestAlertEvaluator(t *testing.T) {
 	db, mock, tsdb := setupMockDB(t)
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error("failed to close db", err)
+		}
+	}()
 
 	evaluator := newAlertEvaluator(tsdb)
 
@@ -152,7 +156,11 @@ func TestAlertEvaluator(t *testing.T) {
 
 	t.Run("process query results empty results", func(t *testing.T) {
 		db, mock, tsdb := setupMockDB(t)
-		defer db.Close()
+		defer func() {
+			if err := db.Close(); err != nil {
+				t.Error("failed to close db", err)
+			}
+		}()
 
 		rule := createTestRule("test-rule")
 		evaluator := newAlertEvaluator(tsdb)
@@ -162,7 +170,11 @@ func TestAlertEvaluator(t *testing.T) {
 
 		sqlRows, err := tsdb.Raw("SELECT value, instance, job FROM metrics").Rows()
 		require.NoError(t, err)
-		defer sqlRows.Close()
+		defer func() {
+			if err := sqlRows.Close(); err != nil {
+				t.Error("failed to close sql rows", err)
+			}
+		}()
 
 		alerts, err := evaluator.processQueryResults(sqlRows, rule)
 		assert.NoError(t, err)
@@ -207,7 +219,11 @@ func TestAlertEvaluator(t *testing.T) {
 	// Test edge cases
 	t.Run("evaluate database error", func(t *testing.T) {
 		db, mock, tsdb := setupMockDB(t)
-		defer db.Close()
+		defer func() {
+			if err := db.Close(); err != nil {
+				t.Error("failed to close db", err)
+			}
+		}()
 
 		rule := createTestRule("test-rule")
 

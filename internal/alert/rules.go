@@ -56,7 +56,7 @@ func (r *Rule) AddFiringAlertAndCheckResolved(alertQueryResult map[string]interf
 
 	// calculate hash based on labels as fingerprint, for counting consecutive alerts
 	hasher := fnv.New64a()
-	var labels []string
+	labels := make([]string, 0, len(alert.Labels))
 	for label := range alert.Labels {
 		labels = append(labels, label)
 	}
