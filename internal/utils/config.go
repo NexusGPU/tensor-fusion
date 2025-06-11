@@ -25,12 +25,14 @@ func LoadConfigFromFile[T any](filename string, target *T) error {
 // The channel will receive the raw file content as []byte whenever the file is modified.
 // The watch interval is set to 15 seconds by default.
 func WatchConfigFileChanges(ctx context.Context, filename string) (<-chan []byte, error) {
-	ch := make(chan []byte)
+	ch := make(chan []byte, 1)
 	var lastModTime time.Time
 
 	if _, err := os.Stat(filename); err != nil {
 		return nil, err
 	}
+
+	lastModTime = checkFileUpdated(filename, lastModTime, ch)
 
 	go func() {
 		ticker := time.NewTicker(WatchConfigFileChangesInterval)
@@ -43,31 +45,36 @@ func WatchConfigFileChanges(ctx context.Context, filename string) (<-chan []byte
 				ctrl.Log.Info("stopping config file watcher", "filename", filename)
 				return
 			case <-ticker.C:
-				fileInfo, err := os.Stat(filename)
-				if err != nil {
-					ctrl.Log.Error(err, "unable to stat config file", "filename", filename)
-					continue
-				}
-
-				currentModTime := fileInfo.ModTime()
-				if currentModTime.After(lastModTime) {
-					ctrl.Log.Info("config file modified, reloading", "filename", filename)
-
-					data, err := os.ReadFile(filename)
-					if err != nil {
-						ctrl.Log.Error(err, "unable to read config file", "filename", filename)
-						continue
-					}
-
-					ch <- data
-					lastModTime = currentModTime
-					ctrl.Log.Info("config file reloaded successfully", "filename", filename)
-				}
+				lastModTime = checkFileUpdated(filename, lastModTime, ch)
 			}
 		}
 	}()
 
 	return ch, nil
+}
+
+func checkFileUpdated(filename string, lastModTime time.Time, ch chan []byte) time.Time {
+	fileInfo, err := os.Stat(filename)
+	if err != nil {
+		ctrl.Log.Error(err, "unable to stat config file", "filename", filename)
+		return lastModTime
+	}
+
+	currentModTime := fileInfo.ModTime()
+	if currentModTime.After(lastModTime) {
+		ctrl.Log.Info("load config", "filename", filename)
+
+		data, err := os.ReadFile(filename)
+		if err != nil {
+			ctrl.Log.Error(err, "unable to read config file", "filename", filename)
+			return lastModTime
+		}
+
+		ch <- data
+		ctrl.Log.Info("config file reloaded", "filename", filename)
+		return currentModTime
+	}
+	return lastModTime
 }
 
 func GetEnvOrDefault(key, defaultValue string) string {

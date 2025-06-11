@@ -26,7 +26,7 @@ var _ = Describe("Port Allocator", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(port).To(Equal(40003))
 
-			err = pa.ReleaseHostPort("node-1", 40002)
+			err = pa.ReleaseHostPort("node-1", "pod-1", 40002, true)
 			Expect(err).NotTo(HaveOccurred())
 
 			port, err = pa.AssignHostPort("node-1")
@@ -76,7 +76,7 @@ var _ = Describe("Port Allocator", func() {
 			port, err := pa.AssignHostPort(nodeName)
 			Expect(err).NotTo(HaveOccurred())
 
-			err = pa.ReleaseHostPort(nodeName, port)
+			err = pa.ReleaseHostPort(nodeName, "pod-1", port, true)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -93,7 +93,7 @@ var _ = Describe("Port Allocator", func() {
 
 			for _, tc := range tests {
 				By(tc.description)
-				err := pa.ReleaseHostPort(tc.node, tc.port)
+				err := pa.ReleaseHostPort(tc.node, "pod-1", tc.port, true)
 				Expect(err).To(HaveOccurred())
 				if tc.errorMsg != "" {
 					Expect(err.Error()).To(ContainSubstring(tc.errorMsg))
@@ -109,10 +109,10 @@ var _ = Describe("Port Allocator", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(port).To(Equal(42002))
 
-			err = pa.ReleaseClusterLevelHostPort(podName, port)
+			err = pa.ReleaseClusterLevelHostPort(podName, port, true)
 			Expect(err).NotTo(HaveOccurred())
 
-			err = pa.ReleaseClusterLevelHostPort(podName, 59999)
+			err = pa.ReleaseClusterLevelHostPort(podName, 59999, true)
 			Expect(err).NotTo(HaveOccurred())
 
 			port, err = pa.AssignClusterLevelHostPort(podName)
@@ -121,7 +121,7 @@ var _ = Describe("Port Allocator", func() {
 		})
 
 		It("should fail to release a cluster port with invalid parameters", func() {
-			err := pa.ReleaseClusterLevelHostPort("test-pod", 0)
+			err := pa.ReleaseClusterLevelHostPort("test-pod", 0, true)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("port cannot be 0 when release host port"))
 		})

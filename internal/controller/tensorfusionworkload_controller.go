@@ -117,7 +117,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		if deleted {
 			metrics.RemoveWorkerMetrics(pod.Name, pod.DeletionTimestamp.Time)
 			podPort, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
-			_ = r.PortAllocator.ReleaseHostPort(pod.Spec.NodeName, podPort)
+			_ = r.PortAllocator.ReleaseHostPort(pod.Spec.NodeName, pod.Name, podPort, false)
 		}
 
 		// Handle our GPU resource cleanup finalizer

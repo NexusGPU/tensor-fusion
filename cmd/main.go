@@ -192,23 +192,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	timeSeriesDB = setupTimeSeriesDB()
-	if timeSeriesDB != nil {
-		if err := timeSeriesDB.SetupTables(mgr.GetClient()); err != nil {
-			setupLog.Error(err, "unable to init timeseries tables")
-		} else {
-			autoScaleEnabled = true
-			alertCanBeEnabled = true
-
-			setupLog.Info("time series db setup successfully.")
-		}
-	}
-
-	alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, globalConfig.AlertRules, alertManagerAddr)
-
 	// global config includes metrics table ttl / alert rules
 	// when changed, handle with different functions
-	go watchGlobalConfigChanges(ctx, mgr)
+	go setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
 
 	if autoScaleEnabled {
 		// TODO init auto scale module
@@ -408,9 +394,23 @@ func main() {
 	}
 }
 
-func watchGlobalConfigChanges(ctx context.Context, mgr manager.Manager) {
+func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager.Manager) {
 	// config change will cause a full reloading
 	<-mgr.Elected()
+
+	timeSeriesDB = setupTimeSeriesDB()
+	if timeSeriesDB != nil {
+		if err := timeSeriesDB.SetupTables(mgr.GetClient()); err != nil {
+			setupLog.Error(err, "unable to init timeseries tables")
+		} else {
+			autoScaleEnabled = true
+			alertCanBeEnabled = true
+
+			setupLog.Info("time series db setup successfully.")
+		}
+	}
+
+	alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, globalConfig.AlertRules, alertManagerAddr)
 
 	ch, err := utils.WatchConfigFileChanges(ctx, configPath)
 	if err != nil {
@@ -469,8 +469,6 @@ func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, g
 
 	go func() {
 		for data := range ch {
-			ctrl.Log.Info("gpuInfo file loading.")
-
 			updatedGpuInfos := make([]config.GpuInfo, 0)
 			err := yaml.Unmarshal(data, &updatedGpuInfos)
 			if err != nil {

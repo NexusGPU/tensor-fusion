@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	CREATE_TABLE_OPTION_TPL = "ENGINE=mito WITH( ttl='%s', append_mode = 'true')"
+	CREATE_TABLE_OPTION_TPL = "ENGINE=mito WITH( ttl='%s', merge_mode = 'last_non_null')"
 )
 
 func getInitTableSQL(model schema.Tabler, ttl string) string {
@@ -21,6 +21,7 @@ func getInitTableSQL(model schema.Tabler, ttl string) string {
 	}
 
 	var fields []string
+	var partitionKeys []string
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 
@@ -102,6 +103,9 @@ func getInitTableSQL(model schema.Tabler, ttl string) string {
 
 		// Add index if needed
 		if isIndex && indexClass != "" {
+			if indexClass != "TIME" && indexClass != "FULLTEXT" {
+				partitionKeys = append(partitionKeys, columnName)
+			}
 			if extraOption != "" {
 				extraOption = strings.ReplaceAll(extraOption, "$comma$", ",")
 				fieldDef += fmt.Sprintf(" %s INDEX %s", indexClass, extraOption)
@@ -117,9 +121,10 @@ func getInitTableSQL(model schema.Tabler, ttl string) string {
 	fieldsSQL := strings.Join(fields, ",\n    ")
 
 	return fmt.Sprintf(
-		"CREATE TABLE IF NOT EXISTS %s (\n    %s\n    )\n    %s",
+		"CREATE TABLE IF NOT EXISTS %s (\n    %s,\n    PRIMARY KEY (`%s`))\n    %s",
 		model.TableName(),
 		fieldsSQL,
+		strings.Join(partitionKeys, "`, `"),
 		fmt.Sprintf(CREATE_TABLE_OPTION_TPL, ttl),
 	)
 }

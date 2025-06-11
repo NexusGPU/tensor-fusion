@@ -1,0 +1,20 @@
+metricsTTL: 30d
+
+alertRules:
+- name: GPUTFlopsFull
+  query: |
+    SELECT
+      node_name,
+      pool,
+      uuid,
+      avg(compute_percentage) AS compute_used
+    FROM tf_gpu_usage
+    WHERE compute_percentage > {{ .Threshold }} AND {{ .Conditions }}
+    GROUP BY node_name, pool, uuid
+  threshold: 97
+  evaluationInterval: 30s
+  consecutiveCount: 4
+  severity: P1
+  summary: "GPU TFlops Full, used {{ .compute_used }}% on {{ .node_name }} {{ .uuid }}"
+  alertTargetInstance: "{{ .uuid }}"
+  description: "GPU {{ .uuid }} on Node {{ .node_name }} in Pool {{ .pool }} has TFlops usage above {{ .Threshold }}% for 4 consecutive 30s, average usage: {{ .compute_used }}%"

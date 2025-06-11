@@ -7,18 +7,30 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/util/retry"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
+
+const RELEASE_PORT_RETRY_INTERVAL = 10 * time.Second
+
+var RETRY_CONFIG = wait.Backoff{
+	Steps:    100,
+	Duration: RELEASE_PORT_RETRY_INTERVAL,
+	Factor:   1.1,
+	Jitter:   0.1,
+}
 
 // Offer API for host port allocation, range from user configured port range
 // Use label: `tensor-fusion.ai/host-port: auto` to assigned port at cluster level
@@ -39,6 +51,18 @@ type PortAllocator struct {
 
 	storeMutexNode    sync.RWMutex
 	storeMutexCluster sync.RWMutex
+	ctx               context.Context
+
+	clusterLevelPortReleaseQueue chan struct {
+		podName string
+		port    int
+	}
+
+	nodeLevelPortReleaseQueue chan struct {
+		nodeName string
+		podName  string
+		port     int
+	}
 }
 
 func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRange string, clusterLevelPortRange string) (*PortAllocator, error) {
@@ -67,7 +91,21 @@ func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRa
 
 		storeMutexNode:    sync.RWMutex{},
 		storeMutexCluster: sync.RWMutex{},
+		ctx:               ctx,
+
+		clusterLevelPortReleaseQueue: make(chan struct {
+			podName string
+			port    int
+		}),
+		nodeLevelPortReleaseQueue: make(chan struct {
+			nodeName string
+			podName  string
+			port     int
+		}),
 	}
+
+	go allocator.releaseClusterPortUntilPodDeleted()
+	go allocator.releaseNodePortUntilPodDeleted()
 
 	return allocator, nil
 }
@@ -161,18 +199,29 @@ func (s *PortAllocator) AssignHostPort(nodeName string) (int, error) {
 
 }
 
-func (s *PortAllocator) ReleaseHostPort(nodeName string, port int) error {
+func (s *PortAllocator) ReleaseHostPort(nodeName string, podName string, port int, immediateRelease bool) error {
 	if port == 0 {
-		return fmt.Errorf("port cannot be 0 when release host port, may caused by portNumber annotation not detected, nodeName: %s", nodeName)
+		return fmt.Errorf("port cannot be 0 when release host port, may caused by portNumber annotation not detected, nodeName: %s, podName: %s", nodeName, podName)
 	}
-	s.storeMutexNode.Lock()
-	defer s.storeMutexNode.Unlock()
 
 	if bitmap, ok := s.BitmapPerNode[nodeName]; !ok {
 		return fmt.Errorf("node %s not found in bitmap", nodeName)
 	} else {
+
 		portOffset := port - s.PortRangeStartNode
-		bitmap[portOffset/64] &^= 1 << (portOffset % 64)
+		if immediateRelease {
+			s.storeMutexNode.Lock()
+			defer s.storeMutexNode.Unlock()
+
+			bitmap[portOffset/64] &^= 1 << (portOffset % 64)
+		} else {
+			// put into queue, release until Pod not found
+			s.nodeLevelPortReleaseQueue <- struct {
+				nodeName string
+				podName  string
+				port     int
+			}{nodeName, podName, port}
+		}
 	}
 	return nil
 }
@@ -196,19 +245,70 @@ func (s *PortAllocator) AssignClusterLevelHostPort(podName string) (int, error) 
 	return 0, fmt.Errorf("no available port on cluster")
 }
 
-func (s *PortAllocator) ReleaseClusterLevelHostPort(podName string, port int) error {
+func (s *PortAllocator) ReleaseClusterLevelHostPort(podName string, port int, immediateRelease bool) error {
 	if port == 0 {
 		return fmt.Errorf("port cannot be 0 when release host port, may caused by portNumber annotation not detected, podName: %s", podName)
 	}
 
-	// TODO, may need a defer queue for releasing so that to avoid port being assigned again too fast
-
-	s.storeMutexCluster.Lock()
-	defer s.storeMutexCluster.Unlock()
-
 	portOffset := port - s.PortRangeStartCluster
-	s.BitmapCluster[portOffset/64] &^= 1 << (portOffset % 64)
+
+	if immediateRelease {
+		s.storeMutexCluster.Lock()
+		defer s.storeMutexCluster.Unlock()
+		s.BitmapCluster[portOffset/64] &^= 1 << (portOffset % 64)
+		return nil
+	} else {
+		// put into queue, release until Pod not found
+		s.clusterLevelPortReleaseQueue <- struct {
+			podName string
+			port    int
+		}{podName, port}
+	}
 	return nil
+}
+
+func (s *PortAllocator) releaseClusterPortUntilPodDeleted() {
+	for item := range s.clusterLevelPortReleaseQueue {
+		podName := item.podName
+		portOffset := item.port - s.PortRangeStartCluster
+
+		_ = retry.OnError(RETRY_CONFIG, func(_ error) bool {
+			return true
+		}, func() error {
+			pod := &v1.Pod{}
+			err := s.Client.Get(s.ctx, client.ObjectKey{Name: podName}, pod)
+			if errors.IsNotFound(err) {
+				s.storeMutexCluster.Lock()
+				defer s.storeMutexCluster.Unlock()
+				s.BitmapCluster[portOffset/64] &^= 1 << (portOffset % 64)
+				return nil
+			}
+			return fmt.Errorf("pod still there, can not release port %s", podName)
+		})
+	}
+}
+
+func (s *PortAllocator) releaseNodePortUntilPodDeleted() {
+	for item := range s.nodeLevelPortReleaseQueue {
+		podName := item.podName
+		portOffset := item.port - s.PortRangeStartNode
+
+		go func() {
+			_ = retry.OnError(RETRY_CONFIG, func(_ error) bool {
+				return true
+			}, func() error {
+				pod := &v1.Pod{}
+				err := s.Client.Get(s.ctx, client.ObjectKey{Name: podName}, pod)
+				if errors.IsNotFound(err) {
+					s.storeMutexNode.Lock()
+					defer s.storeMutexNode.Unlock()
+					s.BitmapPerNode[item.nodeName][portOffset/64] &^= 1 << (portOffset % 64)
+					return nil
+				}
+				return fmt.Errorf("pod still there, can not release port %s", podName)
+			})
+		}()
+	}
 }
 
 func (s *PortAllocator) initBitMapForClusterLevelPortAssign(ctx context.Context) {

@@ -68,7 +68,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if !pod.DeletionTimestamp.IsZero() {
 		if pod.Annotations[constants.GenHostPortLabel] == constants.GenHostPortLabelValue {
 			podPortNumber, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
-			_ = r.PortAllocator.ReleaseClusterLevelHostPort(pod.Name, podPortNumber)
+			_ = r.PortAllocator.ReleaseClusterLevelHostPort(pod.Name, podPortNumber, false)
 			log.Info("Released port", "pod", pod.Name, "port", podPortNumber)
 		}
 	}

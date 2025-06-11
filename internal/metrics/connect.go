@@ -68,8 +68,9 @@ func (t *TimeSeriesDB) SetupTables(client client.Client) error {
 			if err := client.Create(context.Background(), &versionConfig); err != nil {
 				return err
 			}
+		} else {
+			return err
 		}
-		return err
 	}
 
 	version := versionConfig.Data["version"]
@@ -109,7 +110,7 @@ func (t *TimeSeriesDB) SetTableTTL(ttl string) error {
 		&HypervisorGPUUsageMetrics{},
 	}
 	for _, table := range tables {
-		if err := t.DB.Exec("ALTER TABLE "+table.TableName()+" SET ttl = ?", ttl).Error; err != nil {
+		if err := t.DB.Exec("ALTER TABLE " + table.TableName() + " SET ttl = '" + ttl + "'").Error; err != nil {
 			return err
 		}
 	}
