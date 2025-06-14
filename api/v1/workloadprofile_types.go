@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -67,6 +68,14 @@ type WorkloadProfileSpec struct {
 	// This field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,
 	// user can set tensor-fusion.ai/auto-limits|requests|replicas: 'true'
 	AutoScalingConfig AutoScalingConfig `json:"autoScalingConfig,omitempty"`
+
+	// +optional
+	// NodeAffinity specifies the node affinity requirements for the workload
+	NodeAffinity *corev1.NodeSelector `json:"nodeAffinity,omitempty"`
+
+	// +optional
+	// Preferred specifies the preferred node selector terms for the workload
+	Preferred []corev1.PreferredSchedulingTerm `json:"preferred,omitempty"`
 }
 
 // WorkloadProfileStatus defines the observed state of WorkloadProfile.

@@ -65,6 +65,10 @@ type AllocRequest struct {
 	Count uint
 	// Specific GPU model to allocate, empty string means any model
 	GPUModel string
+	// Node affinity requirements
+	NodeAffinity *v1.NodeSelector
+	// Preferred node selector terms
+	Preferred []v1.PreferredSchedulingTerm
 }
 
 // Alloc allocates a request to a gpu or multiple gpus from the same node.
@@ -82,6 +86,10 @@ func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest) ([]*tfv1.GPU
 
 	if req.Count > 1 {
 		filterRegistry = filterRegistry.With(filter.NewSameNodeFilter(req.Count))
+	}
+	// Add NodeAffinityFilter if specified
+	if req.NodeAffinity != nil || len(req.Preferred) > 0 {
+		filterRegistry = filterRegistry.With(filter.NewNodeAffinityFilter(req.NodeAffinity, req.Preferred))
 	}
 
 	// Apply the filters in sequence

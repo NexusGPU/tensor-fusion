@@ -394,6 +394,8 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 			Request:               workload.Spec.Resources.Requests,
 			Count:                 workload.Spec.GPUCount,
 			GPUModel:              workload.Spec.GPUModel,
+			NodeAffinity:          workload.Spec.NodeAffinity,
+			Preferred:             workload.Spec.Preferred,
 		})
 		if err != nil {
 			metrics.SetSchedulerMetrics(workload.Spec.PoolName, false)
