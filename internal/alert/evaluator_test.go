@@ -16,7 +16,7 @@ import (
 )
 
 // Mock data for testing
-func setupMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *metrics.TimeSeriesDB) {
+func setupMockDB(t *testing.T) (sqlmock.Sqlmock, *metrics.TimeSeriesDB) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 
@@ -27,7 +27,7 @@ func setupMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *metrics.TimeSeriesDB)
 	require.NoError(t, err)
 
 	tsdb := &metrics.TimeSeriesDB{DB: gormDB}
-	return db, mock, tsdb
+	return mock, tsdb
 }
 
 func createTestRule(name string) *Rule {
@@ -48,7 +48,7 @@ func createTestRule(name string) *Rule {
 }
 
 func TestAlertEvaluator(t *testing.T) {
-	_, mock, tsdb := setupMockDB(t)
+	mock, tsdb := setupMockDB(t)
 
 	evaluator := newAlertEvaluator(tsdb)
 
@@ -150,7 +150,7 @@ func TestAlertEvaluator(t *testing.T) {
 	})
 
 	t.Run("process query results empty results", func(t *testing.T) {
-		_, mock, tsdb := setupMockDB(t)
+		mock, tsdb := setupMockDB(t)
 		rule := createTestRule("test-rule")
 		evaluator := newAlertEvaluator(tsdb)
 
@@ -207,7 +207,7 @@ func TestAlertEvaluator(t *testing.T) {
 
 	// Test edge cases
 	t.Run("evaluate database error", func(t *testing.T) {
-		_, mock, tsdb := setupMockDB(t)
+		mock, tsdb := setupMockDB(t)
 		rule := createTestRule("test-rule")
 
 		evaluator := newAlertEvaluator(tsdb)
