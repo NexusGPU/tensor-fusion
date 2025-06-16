@@ -80,7 +80,7 @@ var clusterLevelPortRange string
 var enableAlert bool
 var alertManagerAddr string
 var timeSeriesDB *metrics.TimeSeriesDB
-var configPath string
+var dynamicConfigPath string
 var globalConfig config.GlobalConfig
 var alertEvaluator *alert.AlertEvaluator
 
@@ -104,8 +104,8 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&gpuInfoConfig, "gpu-info-config",
 		"/etc/tensor-fusion/gpu-info.yaml", "specify the path to gpuInfoConfig file")
-	flag.StringVar(&configPath, "alert-rule-config",
-		"/etc/tensor-fusion/rules.yaml", "specify the path to alertRuleConfig file")
+	flag.StringVar(&dynamicConfigPath, "dynamic-config",
+		"/etc/tensor-fusion/config.yaml", "specify the path to dynamic config file")
 	flag.StringVar(&metricsPath, "metrics-path", "/logs/metrics.log", "specify the path to metrics file")
 	flag.StringVar(&nodeLevelPortRange, "host-port-range", "40000-42000",
 		"specify the port range for assigning ports to pre-scheduled Pods such as vGPU workers")
@@ -412,10 +412,10 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 
 	alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, globalConfig.AlertRules, alertManagerAddr)
 
-	ch, err := utils.WatchConfigFileChanges(ctx, configPath)
+	ch, err := utils.WatchConfigFileChanges(ctx, dynamicConfigPath)
 	if err != nil {
 		ctrl.Log.Error(err, "unable to watch global config file, file may not exist",
-			"configPath", configPath)
+			"configPath", dynamicConfigPath)
 		return
 	}
 
@@ -424,7 +424,7 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 		err := yaml.Unmarshal(data, &globalConfig)
 		if err != nil {
 			ctrl.Log.Error(err, "unable to reload global config file, not valid config structure",
-				"configPath", configPath)
+				"configPath", dynamicConfigPath)
 			continue
 		}
 
@@ -433,7 +433,7 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 			if alertCanBeEnabled && enableAlert {
 				err = alertEvaluator.UpdateAlertRules(globalConfig.AlertRules)
 				if err != nil {
-					ctrl.Log.Error(err, "unable to update alert rules", "configPath", configPath)
+					ctrl.Log.Error(err, "unable to update alert rules", "configPath", dynamicConfigPath)
 				}
 			}
 		}()

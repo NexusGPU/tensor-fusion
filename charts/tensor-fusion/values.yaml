@@ -388,7 +388,7 @@ dynamicConfig:
             FROM tf_worker_usage 
             WHERE {{ .Conditions }}
         )
-      threshold: N/A
+      threshold: 0
       evaluationInterval: 5m
       consecutiveCount: 2
       severity: P2
