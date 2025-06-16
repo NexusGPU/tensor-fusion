@@ -5,7 +5,7 @@ go 1.24.1
 require (
 	al.essio.dev/pkg/shellescape v1.6.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/NVIDIA/go-nvml v0.12.4-1
+	github.com/NVIDIA/go-nvml v0.12.9-0
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107
 	github.com/aws/aws-sdk-go-v2 v1.36.4
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.225.1
