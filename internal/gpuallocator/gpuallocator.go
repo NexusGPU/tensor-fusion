@@ -327,12 +327,13 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 			log.Error(err, "Failed to initialize GPU store")
 			return err
 		}
-		readyCh <- struct{}{}
+		close(readyCh)
 		return nil
 	}))
 
 	go func() {
 		<-mgr.Elected()
+		<-readyCh
 		// reconcile allocation state based on existing workers, run only when it's elected as leader
 		// and only if it's leader, it will start allocating resources to workers, and start sync loop here
 		s.reconcileAllocationState(ctx)
@@ -435,12 +436,37 @@ func (s *GpuAllocator) syncToK8s(ctx context.Context) {
 	}
 
 	for nodeName := range dirtyNodes {
-		// Refer https://datatracker.ietf.org/doc/html/rfc6901#section-3 encode `/` as `~1`
-		patch := []byte(`[{
-			"op": "add",
-			"path": "/metadata/annotations/` + strings.ReplaceAll(constants.GPULastReportTimeAnnotationKey, "/", "~1") + `",
-			"value": "` + time.Now().Format(time.RFC3339) + `"
-		}]`)
+		// First, get the current node to check if annotations exist
+		node := &tfv1.GPUNode{}
+		nodeKey := client.ObjectKey{Name: nodeName}
+		if err := s.Get(ctx, nodeKey, node); err != nil {
+			log.Error(err, "Failed to get GPU node for updating last report time", "node", nodeName)
+			continue
+		}
+
+		var patch []byte
+		timeValue := time.Now().Format(time.RFC3339)
+		encodedKey := strings.ReplaceAll(constants.GPULastReportTimeAnnotationKey, "/", "~1")
+
+		// Check if annotations already exist
+		if node.Annotations == nil {
+			// Create annotations if they don't exist
+			patch = []byte(`[{
+				"op": "add",
+				"path": "/metadata/annotations",
+				"value": {
+					"` + constants.GPULastReportTimeAnnotationKey + `": "` + timeValue + `"
+				}
+			}]`)
+		} else {
+			// Add to existing annotations
+			patch = []byte(`[{
+				"op": "add",
+				"path": "/metadata/annotations/` + encodedKey + `",
+				"value": "` + timeValue + `"
+			}]`)
+		}
+
 		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 			return s.Patch(ctx, &tfv1.GPUNode{
 				ObjectMeta: metav1.ObjectMeta{
@@ -449,7 +475,7 @@ func (s *GpuAllocator) syncToK8s(ctx context.Context) {
 			}, client.RawPatch(types.JSONPatchType, patch))
 		})
 		if err != nil {
-			log.Error(err, "Failed to update GPU node last report time, will retry later", "node", nodeName)
+			log.Error(err, "Failed to update GPU node last report time, allocation state may be inconsistent", "node", nodeName)
 		}
 	}
 }
