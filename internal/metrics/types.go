@@ -110,7 +110,7 @@ type TFSystemLog struct {
 
 	// NOTE: make sure new fields will be migrated in SetupTable function
 
-	GreptimeTimestamp time.Time `json:"greptime_timestamp" gorm:"column:greptime_timestamp;index:,class:TIME"`
+	GreptimeTimestamp time.Time `json:"greptime_timestamp" gorm:"column:greptime_timestamp;index:,class:TIME;precision:ms"`
 }
 
 func (sl TFSystemLog) TableName() string {
