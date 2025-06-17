@@ -8,6 +8,7 @@ rules:
   resources:
   - nodes
   - pods
+  - namespaces
   verbs:
   - get
   - list
