@@ -359,10 +359,7 @@ func (r *TensorFusionWorkloadReconciler) handlePodGPUCleanup(ctx context.Context
 		return types.NamespacedName{Name: gpuName}
 	})
 	// Release GPU resources
-	if err := r.Allocator.Dealloc(ctx, tfv1.NameNamespace{Name: workload.Name, Namespace: workload.Namespace}, workload.Spec.Resources.Requests, gpus); err != nil {
-		log.Error(err, "Failed to release GPU resources, will retry", "gpus", gpus, "pod", pod.Name)
-		return false, err
-	}
+	r.Allocator.Dealloc(ctx, tfv1.NameNamespace{Name: workload.Name, Namespace: workload.Namespace}, workload.Spec.Resources.Requests, gpus)
 	log.Info("Released GPU resources via finalizer", "gpus", gpus, "pod", pod.Name)
 
 	return true, nil
@@ -383,7 +380,6 @@ func (r *TensorFusionWorkloadReconciler) deletePod(ctx context.Context, pod *cor
 
 // scaleUpWorkers handles the scaling up of worker pods
 func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, count int, hash string) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
 	workloadNameNs := tfv1.NameNamespace{Namespace: workload.Namespace, Name: workload.Name}
 	// Create worker pods
 	for range count {
@@ -408,10 +404,7 @@ func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, wor
 			gpus := lo.Map(gpus, func(gpu *tfv1.GPU, _ int) types.NamespacedName {
 				return client.ObjectKeyFromObject(gpu)
 			})
-			releaseErr := r.Allocator.Dealloc(ctx, workloadNameNs, workload.Spec.Resources.Requests, gpus)
-			if releaseErr != nil {
-				log.Error(releaseErr, "Failed to release GPU after pod creation failure", "gpus", gpus)
-			}
+			r.Allocator.Dealloc(ctx, workloadNameNs, workload.Spec.Resources.Requests, gpus)
 			return ctrl.Result{}, fmt.Errorf("create worker pod: %w", err)
 		}
 

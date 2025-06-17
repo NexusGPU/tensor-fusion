@@ -40,17 +40,20 @@ type ActiveNodeAndWorker struct {
 }
 
 func RemoveWorkerMetrics(workerName string, deletionTime time.Time) {
+	defer workerMetricsLock.Unlock()
 	workerMetricsLock.Lock()
+
 	// to get more accurate metrics, should record the deletion timestamp to calculate duration for the last metrics
-	workerMetricsMap[workerName].deletionTimestamp = &deletionTime
-	workerMetricsLock.Unlock()
+	if _, ok := workerMetricsMap[workerName]; ok {
+		workerMetricsMap[workerName].deletionTimestamp = &deletionTime
+	}
 }
 
 func RemoveNodeMetrics(nodeName string) {
+	defer nodeMetricsLock.Unlock()
 	nodeMetricsLock.Lock()
 	// Node lifecycle is much longer than worker, so just delete the metrics, 1 minute metrics interval is enough
 	delete(nodeMetricsMap, nodeName)
-	nodeMetricsLock.Unlock()
 }
 
 func SetWorkerMetricsByWorkload(pod *corev1.Pod, workload *tfv1.TensorFusionWorkload, now time.Time) {

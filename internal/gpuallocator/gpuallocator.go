@@ -150,7 +150,7 @@ func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest) ([]*tfv1.GPU
 }
 
 // Dealloc a request from gpu to release available resources on it.
-func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.NameNamespace, request tfv1.Resource, gpus []types.NamespacedName) error {
+func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.NameNamespace, request tfv1.Resource, gpus []types.NamespacedName) {
 	log := log.FromContext(ctx)
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
@@ -175,7 +175,6 @@ func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.N
 		s.markGPUDirty(gpu)
 	}
 
-	return nil
 }
 
 func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval time.Duration) *GpuAllocator {
@@ -452,7 +451,7 @@ func (s *GpuAllocator) syncToK8s(ctx context.Context) {
 		if node.Annotations == nil {
 			// Create annotations if they don't exist
 			patch = []byte(`[{
-				"op": "add",
+			"op": "add",
 				"path": "/metadata/annotations",
 				"value": {
 					"` + constants.GPULastReportTimeAnnotationKey + `": "` + timeValue + `"
@@ -464,7 +463,7 @@ func (s *GpuAllocator) syncToK8s(ctx context.Context) {
 				"op": "add",
 				"path": "/metadata/annotations/` + encodedKey + `",
 				"value": "` + timeValue + `"
-			}]`)
+		}]`)
 		}
 
 		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -501,6 +500,10 @@ func (s *GpuAllocator) markGPUDirty(key types.NamespacedName) {
 	s.dirtyQueue[key] = struct{}{}
 }
 
+func (s *GpuAllocator) markGPUDirtyLoced(key types.NamespacedName) {
+	s.dirtyQueue[key] = struct{}{}
+}
+
 // When it's leader, should reconcile state based on existing workers
 // this function is run inside storeMutex lock
 func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
@@ -517,6 +520,9 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 	vramCapacityMap := make(map[types.NamespacedName]resource.Quantity)
 	gpuMap := make(map[types.NamespacedName]*tfv1.GPU)
 
+	defer s.storeMutex.Unlock()
+	s.storeMutex.Lock()
+
 	for gpuKey, gpu := range s.gpuStore {
 		if gpu.Status.Capacity != nil {
 			tflopsCapacityMap[gpuKey] = gpu.Status.Capacity.Tflops
@@ -527,6 +533,9 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 	}
 
 	for _, worker := range workers.Items {
+		if !worker.DeletionTimestamp.IsZero() {
+			continue
+		}
 		tflopsRequest, _ := resource.ParseQuantity(worker.Annotations[constants.TFLOPSRequestAnnotation])
 		vramRequest, _ := resource.ParseQuantity(worker.Annotations[constants.VRAMRequestAnnotation])
 		gpuIds := worker.Annotations[constants.GpuKey]
@@ -559,7 +568,7 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 		if !sameTflops || !sameVRAM {
 			gpu.Status.Available.Tflops = tflopsCapacityMap[gpuKey]
 			gpu.Status.Available.Vram = vramCapacityMap[gpuKey]
-			s.markGPUDirty(gpuKey)
+			s.markGPUDirtyLoced(gpuKey)
 			log.FromContext(ctx).Info("Correcting gpu available resources", "gpu", gpuKey.Name, "tflops", gpu.Status.Available.Tflops.String(), "vram", gpu.Status.Available.Vram.String())
 		}
 	}

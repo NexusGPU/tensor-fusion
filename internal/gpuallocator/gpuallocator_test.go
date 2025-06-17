@@ -48,10 +48,9 @@ var _ = Describe("GPU Allocator", func() {
 	}
 
 	deallocateAndSync := func(gpus []*tfv1.GPU, request tfv1.Resource) {
-		err := allocator.Dealloc(ctx, workloadNameNs, request, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) types.NamespacedName {
+		allocator.Dealloc(ctx, workloadNameNs, request, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) types.NamespacedName {
 			return client.ObjectKeyFromObject(gpu)
 		}))
-		Expect(err).NotTo(HaveOccurred())
 		allocator.syncToK8s(ctx)
 	}
 
