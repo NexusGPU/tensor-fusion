@@ -79,6 +79,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		VolumeSource: corev1.VolumeSource{
 			HostPath: &corev1.HostPathVolumeSource{
 				Path: constants.TFDataPath,
+				Type: ptr.To(corev1.HostPathDirectoryOrCreate),
 			},
 		},
 	})
