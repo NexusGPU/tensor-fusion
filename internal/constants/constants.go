@@ -97,6 +97,9 @@ const (
 	QoSLevelMedium   = "medium"
 	QoSLevelHigh     = "high"
 	QoSLevelCritical = "critical"
+
+	EnableWebhookEnv = "ENABLE_WEBHOOKS"
+	EnableSchedulerEnv = "ENABLE_SCHEDULER"
 )
 
 const (

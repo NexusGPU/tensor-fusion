@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -43,12 +44,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/cmd/sched"
 	"github.com/NexusGPU/tensor-fusion/internal/alert"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/controller"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler"
 	"github.com/NexusGPU/tensor-fusion/internal/server"
 	"github.com/NexusGPU/tensor-fusion/internal/server/router"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -244,12 +248,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+	if os.Getenv(constants.EnableWebhookEnv) != "false" {
 		if err = webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
 			os.Exit(1)
 		}
+	}
+
+	if os.Getenv(constants.EnableSchedulerEnv) != "false" {
+
+		pluginOpt := app.WithPlugin(scheduler.Name, scheduler.New)
+		cc, scheduler, err := sched.SetupScheduler(ctx, pluginOpt)
+		if err != nil {
+			setupLog.Error(err, "unable to create tensor fusion scheduler")
+			os.Exit(1)
+		}
+		sched.RunScheduler(ctx, cc, scheduler)
 	}
 
 	if err = (&controller.TensorFusionClusterReconciler{
