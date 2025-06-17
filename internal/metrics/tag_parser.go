@@ -41,18 +41,19 @@ func getInitTableSQL(model schema.Tabler, ttl string) string {
 		var indexClass string
 		var isIndex bool
 		var extraOption string
+		timePrecision := "ns"
 
 		// Split by semicolon first
-		parts := strings.Split(gormTag, ";")
-		for _, part := range parts {
+		parts := strings.SplitSeq(gormTag, ";")
+		for part := range parts {
 			if part == "" {
 				continue
 			}
 
 			// Split by colon
-			keyValue := strings.Split(part, ",")
+			keyValue := strings.SplitSeq(part, ",")
 
-			for _, key := range keyValue {
+			for key := range keyValue {
 				if strings.HasPrefix(key, "column:") {
 					columnName = strings.TrimPrefix(key, "column:")
 				} else if strings.HasPrefix(key, "index:") {
@@ -61,6 +62,8 @@ func getInitTableSQL(model schema.Tabler, ttl string) string {
 					indexClass = strings.TrimPrefix(key, "class:")
 				} else if strings.HasPrefix(key, "option:") {
 					extraOption = strings.TrimPrefix(key, "option:")
+				} else if strings.HasPrefix(key, "precision:") {
+					timePrecision = strings.TrimPrefix(key, "precision:")
 				}
 			}
 		}
@@ -85,7 +88,7 @@ func getInitTableSQL(model schema.Tabler, ttl string) string {
 		default:
 			// Check if it's time.Time
 			if field.Type == reflect.TypeOf(time.Time{}) {
-				dbType = "Timestamp_ms"
+				dbType = fmt.Sprintf("Timestamp_%s", timePrecision)
 				isNullable = false
 			} else {
 				// Default to String for unknown types
