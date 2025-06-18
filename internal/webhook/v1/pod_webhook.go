@@ -127,6 +127,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		}
 
 		workerFound := false
+		// TODO refactor, get rid of this
 		for i := 0; i < 25; i++ {
 			workloadStatus, err := worker.SelectWorker(ctx, m.Client, workload, 1)
 			if err != nil {
@@ -166,6 +167,20 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		}
 		patches = append(patches, patch)
 	}
+
+	// Inject scheduler name
+	patches = append(patches, jsonpatch.JsonPatchOperation{
+		Operation: "add",
+		Path:      "/spec/schedulerName",
+		Value:     constants.SchedulerName,
+	})
+
+	// TODO refactor, for localGPU mode, should add worker identifier in this pod,
+	//  so that for scheduler to assign resources
+	// when it's auto-replicas mode, should create another worker pod and
+	// set owner to this Pod in pod controller, workload label to TFWorkload CR
+	// and for non-local-gpu & auto-replicas mode, connection info should be fixed
+	// and for non-local-gpu & specified-worker-replicas mode, connection info should be dynamic
 
 	return admission.Patched("tensor fusion component patched", patches...)
 }

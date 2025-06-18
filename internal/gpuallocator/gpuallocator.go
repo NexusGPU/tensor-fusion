@@ -11,6 +11,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -509,7 +510,7 @@ func (s *GpuAllocator) syncGPUsToK8s(ctx context.Context) {
 
 		var patch []byte
 		timeValue := time.Now().Format(time.RFC3339)
-		encodedKey := strings.ReplaceAll(constants.GPULastReportTimeAnnotationKey, "/", "~1")
+		encodedKey := utils.EscapeJSONPointer(constants.GPULastReportTimeAnnotationKey)
 
 		// Check if annotations already exist
 		if node.Annotations == nil {

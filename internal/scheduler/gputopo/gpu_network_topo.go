@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	v1 "k8s.io/api/core/v1"
@@ -25,17 +26,29 @@ type GPUNetworkTopologyAware struct {
 	podLister cache.Indexer
 	pdbLister cache.Indexer
 	client    *rest.RESTClient
+	cfg       *GPUNetworkTopologyAwareConfig
+}
+
+type GPUNetworkTopologyAwareConfig struct {
+	TotalIntranetBandWidthGBps int64 `json:"totalIntranetBandWidthGBps"`
 }
 
 type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
 
 func NewWithDeps(allocator *gpuallocator.GpuAllocator) PluginFactoryFunc {
 	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+		target := &GPUNetworkTopologyAwareConfig{}
+		if unknown, ok := obj.(*runtime.Unknown); ok {
+			if err := json.Unmarshal(unknown.Raw, target); err != nil {
+				return nil, err
+			}
+		}
 		lh := klog.FromContext(ctx).WithValues("plugin", Name)
 		c := &GPUNetworkTopologyAware{
 			logger:    &lh,
 			fh:        handle,
 			allocator: allocator,
+			cfg:       target,
 		}
 		return c, nil
 	}
