@@ -18,12 +18,10 @@ package sched
 import (
 	"context"
 	"fmt"
-	"os"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/component-base/configz"
-	utilversion "k8s.io/component-base/version"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	schedulerserverconfig "k8s.io/kubernetes/cmd/kube-scheduler/app/config"
@@ -35,8 +33,28 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/profile"
 )
 
-func SetupScheduler(ctx context.Context, outOfTreeRegistryOptions ...app.Option) (*schedulerserverconfig.CompletedConfig, *scheduler.Scheduler, error) {
+const (
+	schedulerConfigFlagSet = "misc"
+	schedulerConfigFlag    = "config"
+	configName             = "componentconfig"
+)
+
+func SetupScheduler(
+	ctx context.Context,
+	schedulerConfigPath string,
+	outOfTreeRegistryOptions ...app.Option,
+) (*schedulerserverconfig.CompletedConfig, *scheduler.Scheduler, error) {
 	opts := options.NewOptions()
+	schedulerConfigFlag := opts.Flags.FlagSet(schedulerConfigFlagSet).Lookup(schedulerConfigFlag)
+	schedulerConfigFlag.Changed = true
+	err := schedulerConfigFlag.Value.Set(schedulerConfigPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = opts.ComponentGlobalsRegistry.Set()
+	if err != nil {
+		return nil, nil, err
+	}
 
 	if cfg, err := latest.Default(); err != nil {
 		return nil, nil, err
@@ -71,7 +89,7 @@ func SetupScheduler(ctx context.Context, outOfTreeRegistryOptions ...app.Option)
 		cc.InformerFactory,
 		cc.DynInformerFactory,
 		recorderFactory,
-		scheduler.WithComponentConfigVersion(cc.ComponentConfig.TypeMeta.APIVersion),
+		scheduler.WithComponentConfigVersion(cc.ComponentConfig.APIVersion),
 		scheduler.WithKubeConfig(cc.KubeConfig),
 		scheduler.WithProfiles(cc.ComponentConfig.Profiles...),
 		scheduler.WithPercentageOfNodesToScore(cc.ComponentConfig.PercentageOfNodesToScore),
@@ -82,14 +100,18 @@ func SetupScheduler(ctx context.Context, outOfTreeRegistryOptions ...app.Option)
 		scheduler.WithExtenders(cc.ComponentConfig.Extenders...),
 		scheduler.WithParallelism(cc.ComponentConfig.Parallelism),
 		scheduler.WithBuildFrameworkCapturer(func(profile kubeschedulerconfig.KubeSchedulerProfile) {
-			// Profiles are processed during Framework instantiation to set default plugins and configurations. Capturing them for logging
 			completedProfiles = append(completedProfiles, profile)
 		}),
 	)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := options.LogOrWriteConfig(klog.FromContext(ctx), opts.WriteConfigTo, &cc.ComponentConfig, completedProfiles); err != nil {
+	if err := options.LogOrWriteConfig(
+		klog.FromContext(ctx),
+		opts.WriteConfigTo,
+		&cc.ComponentConfig,
+		completedProfiles,
+	); err != nil {
 		return nil, nil, err
 	}
 
@@ -99,14 +121,9 @@ func SetupScheduler(ctx context.Context, outOfTreeRegistryOptions ...app.Option)
 func RunScheduler(ctx context.Context, cc *schedulerserverconfig.CompletedConfig, sched *scheduler.Scheduler) error {
 	logger := klog.FromContext(ctx)
 
-	// To help debugging, immediately log version
-	logger.Info("Starting Kubernetes Scheduler", "version", utilversion.Get())
-
-	logger.Info("Golang settings", "GOGC", os.Getenv("GOGC"), "GOMAXPROCS", os.Getenv("GOMAXPROCS"), "GOTRACEBACK", os.Getenv("GOTRACEBACK"))
-
-	// Configz registration.
-	if cz, err := configz.New("componentconfig"); err != nil {
-		return fmt.Errorf("unable to register configz: %s", err)
+	// Config registration.
+	if cz, err := configz.New(configName); err != nil {
+		return fmt.Errorf("unable to register config: %s", err)
 	} else {
 		cz.Set(cc.ComponentConfig)
 	}
@@ -114,6 +131,31 @@ func RunScheduler(ctx context.Context, cc *schedulerserverconfig.CompletedConfig
 	// Start events processing pipeline.
 	cc.EventBroadcaster.StartRecordingToSink(ctx.Done())
 	defer cc.EventBroadcaster.Shutdown()
+
+	startInformersAndWaitForSync := func(ctx context.Context) {
+		// Start all informers.
+		cc.InformerFactory.Start(ctx.Done())
+		// DynInformerFactory can be nil in tests.
+		if cc.DynInformerFactory != nil {
+			cc.DynInformerFactory.Start(ctx.Done())
+		}
+
+		// Wait for all caches to sync before scheduling.
+		cc.InformerFactory.WaitForCacheSync(ctx.Done())
+		// DynInformerFactory can be nil in tests.
+		if cc.DynInformerFactory != nil {
+			cc.DynInformerFactory.WaitForCacheSync(ctx.Done())
+		}
+
+		// Wait for all handlers to sync (all items in the initial list delivered) before scheduling.
+		if err := sched.WaitForHandlersSync(ctx); err != nil {
+			logger.Error(err, "waiting for handlers to sync")
+		}
+		logger.V(3).Info("Handlers synced")
+	}
+	startInformersAndWaitForSync(ctx)
+
+	go sched.Run(ctx)
 	return nil
 }
 

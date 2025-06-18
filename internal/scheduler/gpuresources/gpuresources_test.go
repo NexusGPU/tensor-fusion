@@ -1,4 +1,4 @@
-package scheduler
+package gpuresources
 
 import (
 	"context"
@@ -85,12 +85,12 @@ func TestPreFilter(t *testing.T) {
 				frameworkruntime.WithSnapshotSharedLister(testutil.NewFakeSharedLister(make([]*v1.Pod, 0), make([]*v1.Node, 0))),
 			)
 
-			if err != nil {
+ 			if err != nil {
 				t.Fatal(err)
 			}
 
 			// TODO add gpu store
-			cs := &TensorFusionScheduling{
+			cs := &GPUFit{
 				fh: fwk,
 			}
 
@@ -106,7 +106,7 @@ func TestPreFilter(t *testing.T) {
 
 			state := framework.NewCycleState()
 			for i := range pods {
-				if _, got := cs.PreFilter(context.TODO(), state, pods[i]); got.Code() != tt.expected[i] {
+				if got := cs.Filter(context.TODO(), state, pods[i], nil); got.Code() != tt.expected[i] {
 					t.Errorf("expected %v, got %v : %v", tt.expected[i], got.Code(), got.Message())
 				}
 			}
@@ -163,7 +163,7 @@ func TestReserve(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			cs := &TensorFusionScheduling{
+			cs := &GPUFit{
 				fh: fwk,
 			}
 
@@ -224,7 +224,7 @@ func TestUnreserve(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			cs := &TensorFusionScheduling{
+			cs := &GPUFit{
 				fh: fwk,
 			}
 

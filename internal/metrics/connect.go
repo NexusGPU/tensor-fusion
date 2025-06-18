@@ -109,6 +109,9 @@ func (t *TimeSeriesDB) SetTableTTL(ttl string) error {
 		&HypervisorWorkerUsageMetrics{},
 		&HypervisorGPUUsageMetrics{},
 	}
+	if t == nil || t.DB == nil {
+		return nil
+	}
 	for _, table := range tables {
 		if err := t.DB.Exec("ALTER TABLE " + table.TableName() + " SET ttl = '" + ttl + "'").Error; err != nil {
 			return err

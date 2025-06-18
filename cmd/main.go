@@ -29,6 +29,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/klog/v2"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -37,7 +38,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -52,7 +52,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
-	"github.com/NexusGPU/tensor-fusion/internal/scheduler"
+	gpuResourceFitPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
+	gpuTopoPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gputopo"
 	"github.com/NexusGPU/tensor-fusion/internal/server"
 	"github.com/NexusGPU/tensor-fusion/internal/server/router"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -87,6 +88,7 @@ var timeSeriesDB *metrics.TimeSeriesDB
 var dynamicConfigPath string
 var globalConfig config.GlobalConfig
 var alertEvaluator *alert.AlertEvaluator
+var schedulerConfigPath string
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -110,6 +112,8 @@ func main() {
 		"/etc/tensor-fusion/gpu-info.yaml", "specify the path to gpuInfoConfig file")
 	flag.StringVar(&dynamicConfigPath, "dynamic-config",
 		"/etc/tensor-fusion/config.yaml", "specify the path to dynamic config file")
+	flag.StringVar(&schedulerConfigPath, "scheduler-config", "/etc/tensor-fusion/scheduler-config.yaml",
+		"specify the path to TensorFusion scheduler config file")
 	flag.StringVar(&metricsPath, "metrics-path", "/logs/metrics.log", "specify the path to metrics file")
 	flag.StringVar(&nodeLevelPortRange, "host-port-range", "40000-42000",
 		"specify the port range for assigning ports to pre-scheduled Pods such as vGPU workers")
@@ -125,13 +129,9 @@ func main() {
 			"built-in rules if enabled alert, you can configure routers and receivers "+
 			"in your own alertmanager config, "+
 			"refer https://prometheus.io/docs/alerting/latest/configuration")
-	opts := zap.Options{
-		Development: true,
-	}
-	opts.BindFlags(flag.CommandLine)
-	flag.Parse()
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	flag.Parse()
+	ctrl.SetLogger(klog.NewKlogr())
 	ctx := context.Background()
 
 	// print version info
@@ -256,14 +256,30 @@ func main() {
 	}
 
 	if os.Getenv(constants.EnableSchedulerEnv) != "false" {
+		if schedulerConfigPath == "" {
+			setupLog.Error(err, "scheduler config path is empty, please and --scheduler-config in command line")
+			os.Exit(1)
+		}
 
-		pluginOpt := app.WithPlugin(scheduler.Name, scheduler.New)
-		cc, scheduler, err := sched.SetupScheduler(ctx, pluginOpt)
+		gpuResourceFitOpt := app.WithPlugin(
+			gpuResourceFitPlugin.Name,
+			gpuResourceFitPlugin.NewWithDeps(allocator),
+		)
+		gpuTopoOpt := app.WithPlugin(
+			gpuTopoPlugin.Name,
+			gpuTopoPlugin.NewWithDeps(allocator),
+		)
+
+		cc, scheduler, err := sched.SetupScheduler(ctx, schedulerConfigPath, gpuResourceFitOpt, gpuTopoOpt)
 		if err != nil {
 			setupLog.Error(err, "unable to create tensor fusion scheduler")
 			os.Exit(1)
 		}
-		sched.RunScheduler(ctx, cc, scheduler)
+
+		if err := sched.RunScheduler(ctx, cc, scheduler); err != nil {
+			setupLog.Error(err, "unable to run tensor fusion scheduler")
+			os.Exit(1)
+		}
 	}
 
 	if err = (&controller.TensorFusionClusterReconciler{

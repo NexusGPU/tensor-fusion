@@ -15,8 +15,9 @@
             "program": "${workspaceFolder}/cmd/main.go",
             "args": [
                 "--gpu-info-config", "${workspaceFolder}/config/samples/gpu-info-config.yaml",
-                "--alert-rule-config", "${workspaceFolder}/config/samples/dynamic-config.yaml",
-                "--enable-alert", "true"
+                "--dynamic-config", "${workspaceFolder}/config/samples/dynamic-config.yaml",
+                "--scheduler-config", "${workspaceFolder}/config/samples/scheduler-config.yaml",
+                // "--enable-alert"
             ]
         },
         {
