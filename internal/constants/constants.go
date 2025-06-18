@@ -13,6 +13,8 @@ const (
 	FinalizerSuffix = "finalizer"
 	Finalizer       = Domain + "/" + FinalizerSuffix
 
+	SchedulerName = "tensor-fusion-scheduler"
+
 	LabelKeyOwner           = Domain + "/managed-by"
 	LabelKeyUser            = Domain + "/used-by"
 	LabelKeyClusterOwner    = Domain + "/cluster"
@@ -98,6 +100,9 @@ const (
 	QoSLevelMedium   = "medium"
 	QoSLevelHigh     = "high"
 	QoSLevelCritical = "critical"
+
+	EnableWebhookEnv   = "ENABLE_WEBHOOKS"
+	EnableSchedulerEnv = "ENABLE_SCHEDULER"
 )
 
 const (
