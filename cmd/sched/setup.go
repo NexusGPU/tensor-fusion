@@ -18,6 +18,8 @@ package sched
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/events"
@@ -31,12 +33,15 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/latest"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
+	yaml "sigs.k8s.io/yaml"
 )
 
 const (
 	schedulerConfigFlagSet = "misc"
 	schedulerConfigFlag    = "config"
 	configName             = "componentconfig"
+	clientConnectionCfgKey = "clientConnection"
+	kubeConfigCfgKey       = "kubeconfig"
 )
 
 func SetupScheduler(
@@ -47,7 +52,11 @@ func SetupScheduler(
 	opts := options.NewOptions()
 	schedulerConfigFlag := opts.Flags.FlagSet(schedulerConfigFlagSet).Lookup(schedulerConfigFlag)
 	schedulerConfigFlag.Changed = true
-	err := schedulerConfigFlag.Value.Set(schedulerConfigPath)
+	cfgPath, err := preHandleConfig(schedulerConfigPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = schedulerConfigFlag.Value.Set(cfgPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -163,4 +172,43 @@ func getRecorderFactory(cc *schedulerserverconfig.CompletedConfig) profile.Recor
 	return func(name string) events.EventRecorder {
 		return cc.EventBroadcaster.NewRecorder(name)
 	}
+}
+
+func preHandleConfig(cfgPath string) (string, error) {
+	tempDir := os.TempDir()
+	tempFile, err := os.CreateTemp(tempDir, "kube-scheduler-config")
+	if err != nil {
+		return "", err
+	}
+	defer tempFile.Close()
+	cfgBytes, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return "", err
+	}
+	var cfgRaw map[string]interface{}
+	err = yaml.Unmarshal(cfgBytes, &cfgRaw)
+	if err != nil {
+		return "", err
+	}
+
+	// Replace $HOME with actual home directory
+	if cfgRaw[clientConnectionCfgKey].(map[string]interface{})[kubeConfigCfgKey] != "" {
+		cfgRaw[clientConnectionCfgKey].(map[string]interface{})[kubeConfigCfgKey] = strings.ReplaceAll(
+			cfgRaw[clientConnectionCfgKey].(map[string]interface{})[kubeConfigCfgKey].(string),
+			"$HOME",
+			os.Getenv("HOME"),
+		)
+	}
+
+	// TODO set other fields if needed
+
+	cfgBytes, err = yaml.Marshal(cfgRaw)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(tempFile.Name(), cfgBytes, 0644); err != nil {
+		return "", err
+	}
+	return tempFile.Name(), nil
 }
