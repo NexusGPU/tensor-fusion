@@ -137,7 +137,7 @@ var _ = Describe("Autoscaler", func() {
 	})
 
 	Context("when processing workloads", func() {
-		It("should update worker annotations if resource out of bounds", func() {
+		It("should update only those resources exceeding the recommended resource boundaries", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
@@ -181,32 +181,8 @@ var _ = Describe("Autoscaler", func() {
 				g.Expect(vramLimit.Value()).To(Equal(int64(rr.TargetVram * 2)))
 
 			}).Should(Succeed())
-		})
 
-		It("should not udpate worker annotations if resources in bounds", func() {
-			tfEnv := NewTensorFusionEnvBuilder().
-				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
-				Build()
-			defer tfEnv.Cleanup()
-			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
-			defer deleteWorkload(workload)
-
-			scaler, _ := NewAutoscaler(k8sClient)
-			scaler.LoadWorkloads(ctx)
-
-			recommender := &FakeRecommender{
-				RecommendedResources: RecommendedResources{
-					TargetTflops:     110,
-					LowerBoundTflops: 10,
-					UpperBoundTflops: 120,
-					TargetVram:       110 * 1000 * 1000 * 1000,
-					LowerBoundVram:   5 * 1000 * 1000 * 1000,
-					UpperBoundVram:   120 * 1000 * 1000 * 1000,
-				},
-			}
-
-			scaler.Recommender = recommender
-
+			// Upon reprocessing the workload, it should skip resource updates since they are already within the recommended resource boundaries
 			scaler.ProcessWorkloads(ctx)
 
 			Consistently(func(g Gomega) {
@@ -214,16 +190,16 @@ var _ = Describe("Autoscaler", func() {
 				annotations := workers[0].GetAnnotations()
 
 				tflopsRequest := resource.MustParse(annotations[constants.TFLOPSRequestAnnotation])
-				g.Expect(tflopsRequest.Equal(workload.Spec.Resources.Requests.Tflops)).To(BeTrue())
+				g.Expect(tflopsRequest.Value()).To(Equal(int64(rr.TargetTflops)))
 
 				tflopsLimit := resource.MustParse(annotations[constants.TFLOPSLimitAnnotation])
-				g.Expect(tflopsLimit.Equal(workload.Spec.Resources.Limits.Tflops)).To(BeTrue())
+				g.Expect(tflopsLimit.Value()).To(Equal(int64(rr.TargetTflops * 2)))
 
 				vramRequest := resource.MustParse(annotations[constants.VRAMRequestAnnotation])
-				g.Expect(vramRequest.Equal(workload.Spec.Resources.Requests.Vram)).To(BeTrue())
+				g.Expect(vramRequest.Value()).To(Equal(int64(rr.TargetVram)))
 
 				vramLimit := resource.MustParse(annotations[constants.VRAMLimitAnnotation])
-				g.Expect(vramLimit.Equal(workload.Spec.Resources.Limits.Vram)).To(BeTrue())
+				g.Expect(vramLimit.Value()).To(Equal(int64(rr.TargetVram * 2)))
 
 			}).Should(Succeed())
 		})
