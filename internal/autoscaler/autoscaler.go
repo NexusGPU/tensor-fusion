@@ -14,6 +14,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+)
+
+var (
+	_ manager.Runnable               = (*Autoscaler)(nil)
+	_ manager.LeaderElectionRunnable = (*Autoscaler)(nil)
 )
 
 type Autoscaler struct {
@@ -32,7 +38,7 @@ func NewAutoscaler(c client.Client) (*Autoscaler, error) {
 	return &Autoscaler{
 		Client:          c,
 		Recommender:     NewRecommender(),
-		MetricsProvider: NewMetricsProvider(),
+		MetricsProvider: NewMetricsProvider(nil),
 		WorkloadStates:  map[string]*WorkloadState{},
 		WorkerStates:    map[string]*WorkerState{},
 	}, nil
@@ -55,6 +61,10 @@ func (s *Autoscaler) Start(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func (s *Autoscaler) NeedLeaderElection() bool {
+	return true
 }
 
 func (s *Autoscaler) Run(ctx context.Context) {
@@ -80,8 +90,8 @@ func (s *Autoscaler) LoadWorkloads(ctx context.Context) {
 		autoScalingConfig := workload.Spec.AutoScalingConfig
 		// Currently only supports enabling both AutoSetLimits and AutoSetRequests simultaneously
 		if !workload.DeletionTimestamp.IsZero() ||
-			!(autoScalingConfig.AutoSetLimits.Enable &&
-				autoScalingConfig.AutoSetRequests.Enable) {
+			!autoScalingConfig.AutoSetLimits.Enable ||
+			!autoScalingConfig.AutoSetRequests.Enable {
 			continue
 		}
 
@@ -138,15 +148,15 @@ func (s *Autoscaler) LoadHistoryMetrics(ctx context.Context) {
 
 	workersMetrics := s.MetricsProvider.GetHistoryMetrics()
 	for _, metrics := range workersMetrics {
-		workloadState, exists := s.WorkloadStates[metrics.Workload]
+		workloadState, exists := s.WorkloadStates[metrics.WorkloadName]
 		if !exists {
-			workloadState = NewWorkloadState(metrics.Workload)
-			s.WorkloadStates[metrics.Workload] = workloadState
+			workloadState = NewWorkloadState(metrics.WorkloadName)
+			s.WorkloadStates[metrics.WorkloadName] = workloadState
 		}
-		workerState, exists := s.WorkerStates[metrics.Worker]
+		workerState, exists := s.WorkerStates[metrics.WorkerName]
 		if !exists {
-			workerState = NewWorkerState(metrics.Worker, metrics.Workload)
-			s.WorkerStates[metrics.Worker] = workerState
+			workerState = NewWorkerState(metrics.WorkerName, metrics.WorkloadName)
+			s.WorkerStates[metrics.WorkerName] = workerState
 		}
 
 		s.addSamples(workloadState, workerState, metrics)
@@ -159,11 +169,11 @@ func (s *Autoscaler) LoadRealTimeMetrics(ctx context.Context) {
 
 	workersMetrics := s.MetricsProvider.GetWorkersMetrics()
 	for _, metrics := range workersMetrics {
-		workloadState, workloadExists := s.WorkloadStates[metrics.Workload]
+		workloadState, workloadExists := s.WorkloadStates[metrics.WorkloadName]
 		if !workloadExists {
 			continue
 		}
-		workerState, workerExists := s.WorkerStates[metrics.Worker]
+		workerState, workerExists := s.WorkerStates[metrics.WorkerName]
 		if !workerExists {
 			continue
 		}
@@ -186,8 +196,12 @@ func (s *Autoscaler) ProcessWorkloads(ctx context.Context) {
 			continue
 		}
 
+		if len(podList.Items) <= 0 {
+			continue
+		}
+
 		// TODO: apply config
-		// asConfig := workloadState.AutoScalingConfig
+		//  asConfig := workloadState.AutoScalingConfig
 		rr := s.Recommender.GetRecommendedResources(workloadState)
 		log.Info("Autoscaler processWorkloads", "recommended resources", rr)
 
@@ -197,13 +211,13 @@ func (s *Autoscaler) ProcessWorkloads(ctx context.Context) {
 			}
 
 			annotations := worker.GetAnnotations()
+			newAnnotations := map[string]string{}
+
 			tflopsRequest, err := resource.ParseQuantity(annotations[constants.TFLOPSRequestAnnotation])
 			if err != nil {
 				log.Error(err, "failed to parse vram request")
 				continue
 			}
-
-			newAnnotations := map[string]string{}
 			if tflopsRequest.Cmp(QuantityFromAmount(rr.LowerBoundTflops)) < 0 ||
 				tflopsRequest.Cmp(QuantityFromAmount(rr.UpperBoundTflops)) > 0 {
 				targetTflopsRequest := QuantityFromAmount(rr.TargetTflops)
@@ -248,6 +262,7 @@ func (s *Autoscaler) ProcessWorkloads(ctx context.Context) {
 					worker.Annotations[key] = value
 				}
 
+				// TODO: replace using the patch method
 				if err := s.Update(ctx, &worker); err != nil {
 					log.Error(err, "failed to update worker")
 				}
