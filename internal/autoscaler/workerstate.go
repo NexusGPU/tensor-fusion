@@ -7,9 +7,7 @@ import (
 type WorkerState struct {
 	Name                 string
 	Workload             string
-	TflopsPeak           ResourceAmount
 	LastTflopsSampleTime time.Time
-	TflopsWindowEnd      time.Time
 
 	VramPeak           ResourceAmount
 	LastVramSampleTime time.Time
@@ -21,41 +19,17 @@ func NewWorkerState(name string, workload string) *WorkerState {
 		Name:                 name,
 		Workload:             workload,
 		LastTflopsSampleTime: time.Time{},
-		TflopsWindowEnd:      time.Time{},
 		LastVramSampleTime:   time.Time{},
 		VramWindowEnd:        time.Time{},
 	}
 }
 
 func (w *WorkerState) AddTflopsSample(workload *WorkloadState, metrics *WorkerMetrics) bool {
-	ts := metrics.Timestamp
-	if ts.Before(w.LastTflopsSampleTime) {
+	if metrics.Timestamp.Before(w.LastTflopsSampleTime) {
 		return false
 	}
-	w.LastTflopsSampleTime = ts
-	if w.TflopsWindowEnd.IsZero() {
-		w.TflopsWindowEnd = ts
-	}
-
-	addNewPeak := false
-	if ts.Before(w.TflopsWindowEnd) {
-		if w.TflopsPeak != 0 && metrics.TflopsUsage > w.TflopsPeak {
-			workload.TflopsHistogram.SubtractSample(float64(w.TflopsPeak), 1.0, w.TflopsWindowEnd)
-			addNewPeak = true
-		}
-	} else {
-		aggregationInteval := DefaultAggregationInterval
-		shift := ts.Sub(w.TflopsWindowEnd).Truncate(aggregationInteval) + aggregationInteval
-		w.TflopsWindowEnd = w.TflopsWindowEnd.Add(shift)
-		w.TflopsPeak = 0
-		addNewPeak = true
-	}
-
-	if addNewPeak {
-		workload.TflopsHistogram.AddSample(float64(metrics.TflopsUsage), 1.0, metrics.Timestamp)
-		w.TflopsPeak = metrics.TflopsUsage
-	}
-
+	workload.TflopsHistogram.AddSample(float64(metrics.TflopsUsage), minSampleWeight, metrics.Timestamp)
+	w.LastTflopsSampleTime = metrics.Timestamp
 	return true
 }
 

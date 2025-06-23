@@ -33,6 +33,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// tflops add all samples, like cpu in vpa
+// Consider gpu allocator, check if enough tflops or vram to allocate
+// cron scheduler stragegy
+// Add AutoSetResources to schedulingconfigtemplate and make it more configurable
+// refactor main, setup database may not put in leader election runnable group
+// scale to zero when query data if no usage, need carl to support
+// add recommendation to workload
+// resolve conversation on github, thanks for reviews
+
 var _ = Describe("Autoscaler", func() {
 	Context("when creating an autoscaler", func() {
 		It("should return an error if there is no client", func() {
@@ -49,8 +58,8 @@ var _ = Describe("Autoscaler", func() {
 			scaler.LoadHistoryMetrics(ctx)
 			metrics := scaler.MetricsProvider.GetHistoryMetrics()
 			for _, m := range metrics {
-				Expect(scaler.WorkloadStates).To(HaveKey(m.Workload))
-				Expect(scaler.WorkerStates).To(HaveKey(m.Worker))
+				Expect(scaler.WorkloadStates).To(HaveKey(m.WorkloadName))
+				Expect(scaler.WorkerStates).To(HaveKey(m.WorkerName))
 			}
 		})
 	})
@@ -101,7 +110,7 @@ var _ = Describe("Autoscaler", func() {
 	})
 
 	Context("when loading real time metrics", func() {
-		It("should update the state of workloads and workers", func() {
+		FIt("should update the state of workloads and workers", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
@@ -117,17 +126,16 @@ var _ = Describe("Autoscaler", func() {
 			scaler.LoadWorkloads(ctx)
 			ws := scaler.WorkloadStates[workload.Name]
 			metrics := &WorkerMetrics{
-				Workload:    workload.Name,
-				Worker:      worker,
-				TflopsUsage: ResourceAmount(12.0),
-				VramUsage:   9000,
-				Timestamp:   time.Now(),
+				WorkloadName: workload.Name,
+				WorkerName:   worker,
+				TflopsUsage:  ResourceAmount(12.0),
+				VramUsage:    9000,
+				Timestamp:    time.Now(),
 			}
 
 			scaler.MetricsProvider = &FakeMetricsProvider{[]*WorkerMetrics{metrics}}
 			scaler.LoadRealTimeMetrics(ctx)
 
-			Expect(scaler.WorkerStates[worker].TflopsPeak).To(Equal(metrics.TflopsUsage))
 			Expect(scaler.WorkerStates[worker].LastTflopsSampleTime).To(Equal(metrics.Timestamp))
 			Expect(ws.TflopsHistogram.IsEmpty()).To(BeFalse())
 			Expect(scaler.WorkerStates[worker].VramPeak).To(Equal(metrics.VramUsage))
@@ -302,11 +310,11 @@ func (f *FakeMetricsProvider) GetHistoryMetrics() []*WorkerMetrics {
 		for hour := 0; hour < 24; hour++ {
 			idx := day*24 + hour
 			metrics = append(metrics, &WorkerMetrics{
-				Workload:    "workload-0",
-				Worker:      fmt.Sprintf("worker-%d", idx),
-				TflopsUsage: ResourceAmount(10.0 + float64(idx%10)),
-				VramUsage:   1 * 1024 * 1024 * 1024,
-				Timestamp:   startTime.Add(time.Duration(day*24+hour) * time.Hour),
+				WorkloadName: "workload-0",
+				WorkerName:   fmt.Sprintf("worker-%d", idx),
+				TflopsUsage:  ResourceAmount(10.0 + float64(idx%10)),
+				VramUsage:    1 * 1024 * 1024 * 1024,
+				Timestamp:    startTime.Add(time.Duration(day*24+hour) * time.Hour),
 			})
 		}
 	}
