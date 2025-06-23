@@ -178,6 +178,7 @@ var _ = BeforeSuite(func() {
 	err = (&PodReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
+		Allocator:     allocator,
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
@@ -215,7 +216,6 @@ var _ = BeforeSuite(func() {
 	err = (&TensorFusionWorkloadReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
-		Allocator:     allocator,
 		Recorder:      mgr.GetEventRecorderFor("TensorFusionWorkload"),
 		GpuInfos:      config.MockGpuInfo(),
 		PortAllocator: portAllocator,

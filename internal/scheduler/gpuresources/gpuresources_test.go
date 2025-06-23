@@ -85,7 +85,7 @@ func TestPreFilter(t *testing.T) {
 				frameworkruntime.WithSnapshotSharedLister(testutil.NewFakeSharedLister(make([]*v1.Pod, 0), make([]*v1.Node, 0))),
 			)
 
- 			if err != nil {
+			if err != nil {
 				t.Fatal(err)
 			}
 

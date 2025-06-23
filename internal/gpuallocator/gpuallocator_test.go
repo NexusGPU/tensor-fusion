@@ -42,7 +42,7 @@ var _ = Describe("GPU Allocator", func() {
 			Request:               request,
 			Count:                 count,
 			GPUModel:              gpuModel,
-		})
+		}, "test-pod")
 		allocator.syncToK8s(ctx)
 		return gpus, err
 	}
@@ -50,7 +50,8 @@ var _ = Describe("GPU Allocator", func() {
 	deallocateAndSync := func(gpus []*tfv1.GPU, request tfv1.Resource) {
 		allocator.Dealloc(ctx, workloadNameNs, request, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) types.NamespacedName {
 			return client.ObjectKeyFromObject(gpu)
-		}))
+		}), "test-pod")
+		Expect(err).NotTo(HaveOccurred())
 		allocator.syncToK8s(ctx)
 	}
 

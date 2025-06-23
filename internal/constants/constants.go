@@ -51,6 +51,7 @@ const (
 	ReplicasAnnotation             = Domain + "/replicas"
 	GenWorkloadAnnotation          = Domain + "/generate-workload"
 	IsLocalGPUAnnotation           = Domain + "/is-local-gpu"
+	EmbeddedWorkerAnnotation       = Domain + "/embedded-worker"
 	StandaloneWorkerModeAnnotation = Domain + "/no-standalone-worker-mode"
 
 	GenHostPortLabel        = Domain + "/host-port"
@@ -70,6 +71,7 @@ const (
 	TensorFusionPodCounterKeyAnnotation   = Domain + "/pod-counter-key"
 	TensorFusionPodCountAnnotation        = Domain + "/tf-pod-count"
 	TensorFusionEnabledReplicasAnnotation = Domain + "/enabled-replicas"
+	TensorFusionDefaultPoolKeyAnnotation  = Domain + "/is-default-pool"
 
 	PendingRequeueDuration = time.Second * 3
 	StatusCheckInterval    = time.Second * 6
@@ -159,3 +161,5 @@ const (
 	LeaderInfoConfigMapName        = "tensor-fusion-operator-leader-info"
 	LeaderInfoConfigMapLeaderIPKey = "leader-ip"
 )
+
+const ShortUUIDAlphabet = "123456789abcdefghijkmnopqrstuvwxy"

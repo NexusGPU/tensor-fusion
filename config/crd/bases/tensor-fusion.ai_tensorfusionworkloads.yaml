@@ -530,29 +530,6 @@ spec:
                   controller.
                 format: int32
                 type: integer
-              workerStatuses:
-                description: Represents the status of each worker in the workload.
-                items:
-                  properties:
-                    nodeSelector:
-                      additionalProperties:
-                        type: string
-                      type: object
-                    resourceVersion:
-                      type: string
-                    workerIp:
-                      type: string
-                    workerName:
-                      type: string
-                    workerPhase:
-                      type: string
-                    workerPort:
-                      type: integer
-                  required:
-                  - workerName
-                  - workerPhase
-                  type: object
-                type: array
             required:
             - replicas
             type: object

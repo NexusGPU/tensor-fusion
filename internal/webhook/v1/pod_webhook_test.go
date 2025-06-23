@@ -286,16 +286,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			}
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			// Update workload status
-			workload.Status.WorkerStatuses = []tfv1.WorkerStatus{
-				{
-					WorkerName:  "mock-worker",
-					WorkerPhase: tfv1.WorkerRunning,
-					NodeSelector: map[string]string{
-						"kubernetes.io/hostname": "mock-node",
-					},
-				},
-			}
 			Expect(k8sClient.Status().Update(ctx, workload)).To(Succeed())
 
 			// Create a pod with the local GPU profile
@@ -553,7 +543,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				Spec: *config.MockGPUPoolSpec,
 			}
 
-			patch, err := mutator.patchTFClient(pod, pool, []string{"test-container"}, nil)
+			patch, err := mutator.patchTFClient(pod, pool, []string{"test-container"}, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(patch).NotTo(BeEmpty())
 			// There should be at least 2 patches (initContainers and the container env patches)
@@ -592,11 +582,10 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				Spec: *config.MockGPUPoolSpec,
 			}
 			containerNames := []string{"bash-container", "zsh-container", "other-container"}
-			nodeSelector := map[string]string{}
 
 			// Call the function that includes the command transformation
 			mutator := &TensorFusionPodMutator{}
-			patches, err := mutator.patchTFClient(pod, pool, containerNames, nodeSelector)
+			patches, err := mutator.patchTFClient(pod, pool, containerNames, false)
 
 			// Verify results
 			Expect(err).NotTo(HaveOccurred())

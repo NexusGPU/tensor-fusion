@@ -347,6 +347,9 @@ type ClientConfig struct {
 
 	// +optional
 	PatchToContainer *runtime.RawExtension `json:"patchToContainer,omitempty"`
+
+	// +optional
+	PatchEmbeddedWorkerToPod *runtime.RawExtension `json:"patchEmbeddedWorkerToPod,omitempty"`
 }
 
 // GPUPoolStatus defines the observed state of GPUPool.

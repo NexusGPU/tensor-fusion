@@ -13,7 +13,19 @@ rules:
   - get
   - list
   - watch
-
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - gpunodes
+  - gpunodes/status
+  - gpus
+  - gpus/status
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

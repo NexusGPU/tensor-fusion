@@ -19,7 +19,6 @@ package v1
 import (
 	"context"
 	"encoding/json"
-	goErrors "errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,7 +41,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
-	"github.com/NexusGPU/tensor-fusion/internal/worker"
 	"github.com/lithammer/shortuuid/v4"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -118,38 +116,8 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		}
 	}
 
-	var nodeSelector map[string]string
-	if tfInfo.Profile.IsLocalGPU {
-		if !tfInfo.GenWorkload {
-			if err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.WorkloadName, Namespace: pod.Namespace}, workload); err != nil {
-				return admission.Errored(http.StatusInternalServerError, fmt.Errorf("workload(%s) does not exist", tfInfo.WorkloadName))
-			}
-		}
-
-		workerFound := false
-		// TODO refactor, get rid of this
-		for i := 0; i < 25; i++ {
-			workloadStatus, err := worker.SelectWorker(ctx, m.Client, workload, 1)
-			if err != nil {
-				if goErrors.Is(err, worker.ErrNoAvailableWorker) {
-					time.Sleep(time.Second)
-					continue
-				}
-				log.Error(err, "failed to select worker for pod", "pod", req.Name, "namespace", req.Namespace)
-				return admission.Errored(http.StatusInternalServerError, fmt.Errorf("select worker: %w", err))
-			}
-			nodeSelector = workloadStatus.NodeSelector
-			workerFound = true
-			break
-		}
-
-		if !workerFound {
-			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("no available worker for pod: %s", req.Name))
-		}
-	}
-
 	// Inject initContainer and env variables
-	patches, err := m.patchTFClient(pod, pool, tfInfo.ContainerNames, nodeSelector)
+	patches, err := m.patchTFClient(pod, pool, tfInfo.ContainerNames, tfInfo.Profile.IsLocalGPU)
 	if err != nil {
 		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
 		return admission.Errored(http.StatusInternalServerError, err)
@@ -265,34 +233,12 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	pod *corev1.Pod,
 	pool *tfv1.GPUPool,
 	containerNames []string,
-	nodeSelector map[string]string,
+	isLocalGPU bool,
 ) ([]jsonpatch.JsonPatchOperation, error) {
 	// Convert the current pod to JSON
 	currentBytes, err := json.Marshal(pod)
 	if err != nil {
 		return nil, fmt.Errorf("marshal current pod: %w", err)
-	}
-
-	if nodeSelector != nil {
-		// Local GPU Mode
-		if pod.Spec.Affinity == nil {
-			pod.Spec.Affinity = &corev1.Affinity{}
-		}
-		pod.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{
-			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-				NodeSelectorTerms: []corev1.NodeSelectorTerm{
-					{
-						MatchExpressions: []corev1.NodeSelectorRequirement{
-							{
-								Key:      "kubernetes.io/hostname",
-								Operator: corev1.NodeSelectorOpIn,
-								Values:   []string{nodeSelector["kubernetes.io/hostname"]},
-							},
-						},
-					},
-				},
-			},
-		}
 	}
 
 	clientConfig := pool.Spec.ComponentConfig.Client
@@ -301,84 +247,60 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		pod.Labels = map[string]string{}
 	}
 	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(clientConfig)
-	pod.Labels[constants.LabelComponent] = constants.ComponentClient
-	pod.Labels[constants.GpuPoolKey] = pool.Name
 
-	// Patch hostPort allocation
-	if pod.Labels[constants.GenHostPortLabel] == constants.GenHostPortLabelValue {
-		if err := m.generateHostPort(pod, pod.Labels[constants.GenHostPortNameLabel]); err != nil {
-			return nil, fmt.Errorf("can not generate host port: %w", err)
-		}
-	}
+	assignPodLabelsAndAnnotations(isLocalGPU, pod, pool)
 
 	containerPatched := false
 	// Patch to Container
 	for _, name := range containerNames {
 		for i := range pod.Spec.Containers {
 			container := &pod.Spec.Containers[i]
-			if container.Name == name {
-				// fix for issue https://github.com/NexusGPU/tensor-fusion/issues/164:
-				//	transform bash/zsh -c commands
-				if len(container.Command) >= 3 {
-					shell := container.Command[0]
-					if (shell == "bash" || shell == "zsh") && container.Command[1] == "-c" {
-						originalCommand := container.Command[2]
-						comment := "# [TensorFusion Patch] This command is wrapped by sh -c to improve compatibility with certain container environments."
-						safeCommand := shellescape.Quote(fmt.Sprintf("%s\n%s", comment, originalCommand))
-						container.Command = []string{"sh", "-c", fmt.Sprintf("%s -c %s", shell, safeCommand)}
-					}
-				}
-				// patch from config
-				containerJSON, err := json.Marshal(container)
-				if err != nil {
-					return nil, fmt.Errorf("marshal container: %w", err)
-				}
-				patchJSON, err := json.Marshal(clientConfig.PatchToContainer)
-				if err != nil {
-					return nil, fmt.Errorf("marshal patchToContainer: %w", err)
-				}
-
-				patchedJSON, err := strategicpatch.StrategicMergePatch(containerJSON, patchJSON, corev1.Container{})
-				if err != nil {
-					return nil, fmt.Errorf("apply strategic merge patch to container: %w", err)
-				}
-				container = &corev1.Container{}
-				if err := json.Unmarshal(patchedJSON, container); err != nil {
-					return nil, fmt.Errorf("unmarshal patched container: %w", err)
-				}
-
-				// remove nvidia.com/gpu in resources
-				if container.Resources.Requests != nil {
-					delete(container.Resources.Requests, constants.NvidiaGPUKey)
-				}
-				if container.Resources.Limits != nil {
-					delete(container.Resources.Limits, constants.NvidiaGPUKey)
-				}
-
-				// add connection env
-				connectionName := fmt.Sprintf("%s%s", pod.GenerateName, shortuuid.NewWithAlphabet("123456789abcdefghijkmnopqrstuvwxy"))
-				connectionNamespace := pod.Namespace
-
-				container.Env = append(container.Env, corev1.EnvVar{
-					Name:  constants.ConnectionNameEnv,
-					Value: connectionName,
-				})
-				container.Env = append(container.Env, corev1.EnvVar{
-					Name:  constants.ConnectionNamespaceEnv,
-					Value: connectionNamespace,
-				})
-				container.Env = append(container.Env, corev1.EnvVar{
-					Name:  constants.GetConnectionURLEnv,
-					Value: fmt.Sprintf("%s/api/connection?name=%s&namespace=%s", clientConfig.OperatorEndpoint, connectionName, connectionNamespace),
-				})
-				containerPatched = true
+			if container.Name != name {
+				continue
 			}
+
+			if len(container.Command) >= 3 {
+				manipulateContainerCmdForLDPreload(container)
+			}
+
+			containerJSON, err := json.Marshal(container)
+			if err != nil {
+				return nil, fmt.Errorf("marshal container: %w", err)
+			}
+
+			var patchJSON []byte
+			patchJSON, err = serializeInjectionPatchJson(clientConfig, patchJSON)
+			if err != nil {
+				return nil, err
+			}
+
+			patchedJSON, err := strategicpatch.StrategicMergePatch(containerJSON, patchJSON, corev1.Container{})
+			if err != nil {
+				return nil, fmt.Errorf("apply strategic merge patch to container: %w", err)
+			}
+			container = &corev1.Container{}
+			if err := json.Unmarshal(patchedJSON, container); err != nil {
+				return nil, fmt.Errorf("unmarshal patched container: %w", err)
+			}
+
+			removeNativeGPUResourceClaim(container)
+
+			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
+			containerPatched = true
+
 			pod.Spec.Containers[i] = *container
 		}
 	}
 
 	if !containerPatched {
-		return nil, fmt.Errorf("no container found that needs tf-client injection")
+		return nil, fmt.Errorf("no container found that needs tensor fusion runtime injection")
+	}
+
+	// Patch hostPort allocation
+	if pod.Labels[constants.GenHostPortLabel] == constants.GenHostPortLabelValue {
+		if err := m.generateHostPort(pod, pod.Labels[constants.GenHostPortNameLabel]); err != nil {
+			return nil, fmt.Errorf("can not generate host port: %w", err)
+		}
 	}
 
 	containerPatchedJSON, err := json.Marshal(pod)
@@ -390,9 +312,24 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		return nil, fmt.Errorf("patch to container: %w", err)
 	}
 
-	// Convert the strategic merge patch to JSON
-	patchBytes, err := json.Marshal(clientConfig.PatchToPod)
+	strategicpatches, err := calculatePodPatch(currentBytes, pod, clientConfig, isLocalGPU)
+	if err != nil {
+		return nil, fmt.Errorf("calculate pod patch: %w", err)
+	}
 
+	patches = append(patches, strategicpatches...)
+	return patches, nil
+}
+
+// Convert the strategic merge patch to JSON
+func calculatePodPatch(currentBytes []byte, pod *corev1.Pod, clientConfig *tfv1.ClientConfig, isLocalGPU bool) ([]jsonpatch.JsonPatchOperation, error) {
+	var patchBytes []byte
+	var err error
+	if isLocalGPU {
+		patchBytes, err = json.Marshal(clientConfig.PatchToPod)
+	} else {
+		patchBytes, err = json.Marshal(clientConfig.PatchEmbeddedWorkerToPod)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("marshal patch: %w", err)
 	}
@@ -402,20 +339,86 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	if err != nil {
 		return nil, fmt.Errorf("apply strategic merge patch: %w", err)
 	}
-
 	// Generate JSON patch operations by comparing original and patched pod
 	strategicpatches, err := jsonpatch.CreatePatch(currentBytes, resultBytes)
 	if err != nil {
 		return nil, fmt.Errorf("create json patch: %w", err)
 	}
-
 	// Unmarshal the result back into the pod
 	if err := json.Unmarshal(resultBytes, pod); err != nil {
 		return nil, fmt.Errorf("unmarshal patched pod: %w", err)
 	}
+	return strategicpatches, nil
+}
 
-	patches = append(patches, strategicpatches...)
-	return patches, nil
+func assignPodLabelsAndAnnotations(isLocalGPU bool, pod *corev1.Pod, pool *tfv1.GPUPool) {
+	if isLocalGPU {
+		pod.Labels[constants.LabelComponent] = constants.ComponentWorker
+	} else {
+		pod.Labels[constants.LabelComponent] = constants.ComponentClient
+	}
+	pod.Labels[constants.GpuPoolKey] = pool.Name
+
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+
+	// add local gpu mode in annotation, to be read by scheduler
+	if isLocalGPU {
+		pod.Annotations[constants.EmbeddedWorkerAnnotation] = constants.TrueStringValue
+		// no need to add port in local gpu mode, communication is done through shared memory in the same process
+	}
+}
+
+func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *corev1.Container, clientConfig *tfv1.ClientConfig) {
+	connectionName := fmt.Sprintf("%s%s", pod.GenerateName, shortuuid.NewWithAlphabet(constants.ShortUUIDAlphabet))
+	connectionNamespace := pod.Namespace
+
+	container.Env = append(container.Env, corev1.EnvVar{
+		Name:  constants.ConnectionNameEnv,
+		Value: connectionName,
+	})
+	container.Env = append(container.Env, corev1.EnvVar{
+		Name:  constants.ConnectionNamespaceEnv,
+		Value: connectionNamespace,
+	})
+	container.Env = append(container.Env, corev1.EnvVar{
+		Name:  constants.GetConnectionURLEnv,
+		Value: fmt.Sprintf("%s/api/connection?name=%s&namespace=%s", clientConfig.OperatorEndpoint, connectionName, connectionNamespace),
+	})
+}
+
+// remove nvidia.com/gpu in resources
+func removeNativeGPUResourceClaim(container *corev1.Container) {
+	if container.Resources.Requests != nil {
+		delete(container.Resources.Requests, constants.NvidiaGPUKey)
+	}
+	if container.Resources.Limits != nil {
+		delete(container.Resources.Limits, constants.NvidiaGPUKey)
+	}
+}
+
+func serializeInjectionPatchJson(clientConfig *tfv1.ClientConfig, patchJSON []byte) ([]byte, error) {
+	var err error
+	if clientConfig.PatchToContainer != nil {
+		patchJSON, err = json.Marshal(clientConfig.PatchToContainer)
+		if err != nil {
+			return nil, fmt.Errorf("marshal patchToContainer: %w", err)
+		}
+	}
+	return patchJSON, nil
+}
+
+// fix for issue https://github.com/NexusGPU/tensor-fusion/issues/164
+// transform bash/zsh -c commands
+func manipulateContainerCmdForLDPreload(container *corev1.Container) {
+	shell := container.Command[0]
+	if (shell == "bash" || shell == "zsh") && container.Command[1] == "-c" {
+		originalCommand := container.Command[2]
+		comment := "# [TensorFusion Patch] This command is wrapped by sh -c to improve compatibility with certain container environments."
+		safeCommand := shellescape.Quote(fmt.Sprintf("%s\n%s", comment, originalCommand))
+		container.Command = []string{"sh", "-c", fmt.Sprintf("%s -c %s", shell, safeCommand)}
+	}
 }
 
 func (m *TensorFusionPodMutator) generateHostPort(pod *corev1.Pod, portName string) error {

@@ -19,21 +19,20 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
-	"github.com/samber/lo"
 )
 
 // TensorFusionConnectionReconciler reconciles a TensorFusionConnection object
@@ -52,12 +51,11 @@ type TensorFusionConnectionReconciler struct {
 func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	log.Info("Reconciling TensorFusionConnection", "name", req.Name)
+	log.V(6).Info("Reconciling TensorFusionConnection", "name", req.Name)
 	defer func() {
-		log.Info("Finished reconciling TensorFusionConnection", "name", req.Name)
+		log.V(6).Info("Finished reconciling TensorFusionConnection", "name", req.Name)
 	}()
 
-	// Get the TensorFusionConnection object
 	connection := &tfv1.TensorFusionConnection{}
 	if err := r.Get(ctx, req.NamespacedName, connection); err != nil {
 		if errors.IsNotFound(err) {
@@ -67,19 +65,43 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 		log.Error(err, "Failed to get TensorFusionConnection")
 		return ctrl.Result{}, err
 	}
-
-	workloadName, ok := connection.Labels[constants.WorkloadKey]
-	if !ok {
-		return ctrl.Result{}, fmt.Errorf("missing workload label")
+	needSelectWorker := false
+	if connection.Status.WorkerName != "" {
+		// check if worker pod is still running
+		pod := &v1.Pod{}
+		if err := r.Get(ctx, client.ObjectKey{Name: connection.Status.WorkerName, Namespace: connection.Namespace}, pod); err != nil {
+			if errors.IsNotFound(err) {
+				needSelectWorker = true
+			} else {
+				log.Error(err, "Failed to get worker pod")
+				return ctrl.Result{}, err
+			}
+		}
+		if pod.Status.Phase != v1.PodRunning {
+			connection.Status.WorkerName = ""
+			connection.Status.Phase = tfv1.WorkerFailed
+			connection.Status.ConnectionURL = ""
+			// set worker name to empty to trigger select worker again
+			if updateErr := r.Status().Update(ctx, connection); updateErr != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update connection status: %w", updateErr)
+			}
+			return ctrl.Result{}, nil
+		}
+	} else {
+		needSelectWorker = true
 	}
 
-	workload := &tfv1.TensorFusionWorkload{}
-	if err := r.Get(ctx, client.ObjectKey{Name: workloadName, Namespace: connection.Namespace}, workload); err != nil {
-		return ctrl.Result{}, fmt.Errorf("get TensorFusionWorkload: %w", err)
-	}
+	if needSelectWorker {
+		workloadName, ok := connection.Labels[constants.WorkloadKey]
+		if !ok {
+			return ctrl.Result{}, fmt.Errorf("missing workload label")
+		}
 
-	needReSelectWorker, workerStatus := r.needReSelectWorker(connection, workload.Status.WorkerStatuses)
-	if needReSelectWorker {
+		workload := &tfv1.TensorFusionWorkload{}
+		if err := r.Get(ctx, client.ObjectKey{Name: workloadName, Namespace: connection.Namespace}, workload); err != nil {
+			return ctrl.Result{}, fmt.Errorf("get TensorFusionWorkload: %w", err)
+		}
+
 		r.Recorder.Eventf(connection, corev1.EventTypeNormal, "SelectingWorker", "Selecting worker for connection %s", connection.Name)
 		s, err := worker.SelectWorker(ctx, r.Client, workload, 1)
 		if err != nil {
@@ -93,67 +115,29 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 			}
 			return ctrl.Result{}, err
 		}
-		workerStatus = *s
-		r.Recorder.Eventf(connection, corev1.EventTypeNormal, "WorkerSelected", "Worker %s successfully selected for connection", workerStatus.WorkerName)
+		r.Recorder.Eventf(connection, corev1.EventTypeNormal, "WorkerSelected", "Worker %s successfully selected for connection", s.WorkerName)
+		connection.Status.Phase = s.WorkerPhase
+		connection.Status.WorkerName = s.WorkerName
+		resourceVersion := s.ResourceVersion
+		if resourceVersion == "" {
+			resourceVersion = "0"
+		}
+
+		connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d+%s-%s", s.WorkerIp, s.WorkerPort, s.WorkerName, resourceVersion)
+		if err := r.Status().Update(ctx, connection); err != nil {
+			return ctrl.Result{}, fmt.Errorf("update connection status: %w", err)
+		}
+		r.Recorder.Eventf(connection, corev1.EventTypeNormal, "ConnectionReady", "Connection URL: %s", connection.Status.ConnectionURL)
 	}
 
-	connection.Status.Phase = workerStatus.WorkerPhase
-	connection.Status.WorkerName = workerStatus.WorkerName
-	resourceVersion := workerStatus.ResourceVersion
-	if resourceVersion == "" {
-		resourceVersion = "0"
-	}
-
-	connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d+%s-%s", workerStatus.WorkerIp, workerStatus.WorkerPort, workerStatus.WorkerName, resourceVersion)
-	if err := r.Status().Update(ctx, connection); err != nil {
-		return ctrl.Result{}, fmt.Errorf("update connection status: %w", err)
-	}
-	r.Recorder.Eventf(connection, corev1.EventTypeNormal, "ConnectionReady", "Connection URL: %s", connection.Status.ConnectionURL)
-	return ctrl.Result{}, nil
-}
-
-func (r *TensorFusionConnectionReconciler) needReSelectWorker(connection *tfv1.TensorFusionConnection, workerStatuses []tfv1.WorkerStatus) (bool, tfv1.WorkerStatus) {
-	workerStatus, ok := lo.Find(workerStatuses, func(workerStatus tfv1.WorkerStatus) bool {
-		return workerStatus.WorkerName == connection.Status.WorkerName
-	})
-	return !ok || workerStatus.WorkerPhase == tfv1.WorkerFailed, workerStatus
+	// continuous check if worker is failed or not, if failed, trigger re-select worker
+	return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *TensorFusionConnectionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.TensorFusionConnection{}).
-		Watches(
-			&tfv1.TensorFusionWorkload{},
-			handler.EnqueueRequestsFromMapFunc(r.findConnectionsForWorkload),
-		).
 		Named("tensorfusionconnection").
 		Complete(r)
-}
-
-// findConnectionsForWorkload maps a TensorFusionWorkload to its associated TensorFusionConnections
-func (r *TensorFusionConnectionReconciler) findConnectionsForWorkload(ctx context.Context, obj client.Object) []reconcile.Request {
-	workload, ok := obj.(*tfv1.TensorFusionWorkload)
-	if !ok {
-		return nil
-	}
-
-	// Get the list of connections associated with this workload
-	connectionList := &tfv1.TensorFusionConnectionList{}
-	if err := r.List(ctx, connectionList,
-		client.InNamespace(workload.Namespace),
-		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
-		return nil
-	}
-	requests := []reconcile.Request{}
-	for i := range connectionList.Items {
-		connection := &connectionList.Items[i]
-		requests = append(requests, reconcile.Request{
-			NamespacedName: client.ObjectKey{
-				Name:      connection.Name,
-				Namespace: connection.Namespace,
-			},
-		})
-	}
-	return requests
 }

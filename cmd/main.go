@@ -335,6 +335,7 @@ func main() {
 	if err = (&controller.PodReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
+		Allocator:     allocator,
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod")
@@ -359,7 +360,6 @@ func main() {
 	if err = (&controller.TensorFusionWorkloadReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
-		Allocator:     allocator,
 		Recorder:      mgr.GetEventRecorderFor("tensorfusionworkload"),
 		GpuInfos:      &gpuInfos,
 		PortAllocator: portAllocator,

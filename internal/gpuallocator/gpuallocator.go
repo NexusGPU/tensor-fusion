@@ -53,6 +53,10 @@ type GpuAllocator struct {
 	// Queue for tracking modified GPUs that need to be synced
 	dirtyQueue     map[types.NamespacedName]struct{}
 	dirtyQueueLock sync.Mutex
+
+	// each pod can only allocate and deallocate once, and deallocation must be after allocation
+	uniqueAllocation   map[string]struct{}
+	uniqueDeallocation map[string]struct{}
 }
 
 // AllocRequest encapsulates all parameters needed for GPU allocation
@@ -71,10 +75,9 @@ type AllocRequest struct {
 	NodeAffinity *v1.NodeAffinity
 }
 
-// Alloc allocates a request to a gpu or multiple gpus from the same node.
-func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest) ([]*tfv1.GPU, error) {
-	log := log.FromContext(ctx)
-
+// Filter applies filters to a pool of GPUs based on the provided request and returns selected GPUs.
+// It does not modify the GPU resources, only filters and selects them.
+func (s *GpuAllocator) Filter(ctx context.Context, req AllocRequest) ([]*tfv1.GPU, error) {
 	// Get GPUs from the pool using the in-memory store
 	poolGPUs := s.listGPUsFromPool(req.PoolName)
 
@@ -122,7 +125,27 @@ func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest) ([]*tfv1.GPU
 		return nil, fmt.Errorf("select GPU: %w", err)
 	}
 
-	// 4. Atomic allocation and check quota under lock
+	// Return copies of the selected GPUs
+	result := make([]*tfv1.GPU, len(selectedGPUs))
+	for i, gpu := range selectedGPUs {
+		result[i] = gpu.DeepCopy()
+	}
+
+	return result, nil
+}
+
+// Bind allocates resources on the provided GPUs for the given request.
+// It updates the in-memory store and marks the GPUs as dirty for syncing.
+func (s *GpuAllocator) Bind(ctx context.Context, gpus []*tfv1.GPU, req AllocRequest, podName string) ([]*tfv1.GPU, error) {
+	log := log.FromContext(ctx)
+	if len(gpus) == 0 {
+		return nil, fmt.Errorf("no GPUs provided to bind")
+	}
+
+	if _, exists := s.uniqueAllocation[podName]; exists {
+		return nil, fmt.Errorf("pod %s has already allocated GPUs", podName)
+	}
+
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
 
@@ -134,8 +157,7 @@ func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest) ([]*tfv1.GPU
 
 	// 6. Proceed with GPU allocation
 	appAdded := false
-	for _, selectedGPU := range selectedGPUs {
-
+	for _, selectedGPU := range gpus {
 		// Get the GPU from the store
 		key := types.NamespacedName{Name: selectedGPU.Name, Namespace: selectedGPU.Namespace}
 		gpu, exists := s.gpuStore[key]
@@ -160,31 +182,57 @@ func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest) ([]*tfv1.GPU
 	// 7. Allocate quota resources (atomic with GPU allocation)
 	// Use actual allocated GPU count instead of requested count
 	actualReq := req
-	actualReq.Count = uint(len(selectedGPUs))
+	actualReq.Count = uint(len(gpus))
 	s.quotaStore.AllocateQuota(req.WorkloadNameNamespace.Namespace, actualReq)
 
-	// Log successful allocation
-	log.V(1).Info("GPU allocation successful",
+	log.Info("GPU allocation successful",
 		"namespace", req.WorkloadNameNamespace.Namespace,
 		"workload", req.WorkloadNameNamespace.Name,
-		"pool", req.PoolName,
-		"requested", req.Count,
-		"allocated", len(selectedGPUs),
+		"gpu_count", len(gpus),
 		"tflops", req.Request.Tflops.String(),
 		"vram", req.Request.Vram.String())
 
-	// Return copies of the selected GPUs from the store
-	result := make([]*tfv1.GPU, len(selectedGPUs))
-	for i, gpu := range selectedGPUs {
+	// Return copies of the bound GPUs from the store
+	result := make([]*tfv1.GPU, len(gpus))
+	for i, gpu := range gpus {
 		key := types.NamespacedName{Name: gpu.Name, Namespace: gpu.Namespace}
 		result[i] = s.gpuStore[key].DeepCopy()
 	}
 
+	s.uniqueAllocation[podName] = struct{}{}
 	return result, nil
 }
 
+// Alloc allocates a request to a gpu or multiple gpus from the same node.
+// This is now implemented as a combination of Filter and Bind for backward compatibility.
+func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest, podName string) ([]*tfv1.GPU, error) {
+	// First, filter and select GPUs
+	selectedGPUs, err := s.Filter(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Then, bind resources to the selected GPUs
+	return s.Bind(ctx, selectedGPUs, req, podName)
+}
+
 // Dealloc a request from gpu to release available resources on it.
-func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.NameNamespace, request tfv1.Resource, gpus []types.NamespacedName) {
+func (s *GpuAllocator) Dealloc(
+	ctx context.Context,
+	workloadNameNamespace tfv1.NameNamespace,
+	request tfv1.Resource,
+	gpus []types.NamespacedName,
+	podName string,
+) error {
+
+	if _, exists := s.uniqueAllocation[podName]; exists {
+		return fmt.Errorf("pod %s has already allocated GPUs", podName)
+	}
+
+	if _, exists := s.uniqueDeallocation[podName]; exists {
+		return fmt.Errorf("pod %s has already deallocated GPUs", podName)
+	}
+
 	log := log.FromContext(ctx)
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
@@ -213,13 +261,15 @@ func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.N
 	replicas := int32(len(gpus)) // Assuming one replica per GPU for simplicity
 	s.quotaStore.DeallocateQuota(workloadNameNamespace.Namespace, request, replicas)
 
-	// Log successful deallocation
-	log.V(1).Info("GPU deallocation successful",
+	s.uniqueDeallocation[podName] = struct{}{}
+
+	log.Info("GPU deallocation successful",
 		"namespace", workloadNameNamespace.Namespace,
 		"workload", workloadNameNamespace.Name,
 		"gpu_count", len(gpus),
 		"tflops", request.Tflops.String(),
 		"vram", request.Vram.String())
+	return nil
 }
 
 func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval time.Duration) *GpuAllocator {
@@ -580,6 +630,17 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 		logger.Error(err, "Failed to list Workloads to reconcile allocation state")
 		return
 	}
+
+	// filter out pending workers which doesn't have nodeName or is being deleted
+	workers.Items = lo.Filter(workers.Items, func(worker v1.Pod, _ int) bool {
+		scheduled := worker.Spec.NodeName != ""
+		deleted := !worker.DeletionTimestamp.IsZero()
+
+		if scheduled {
+			s.uniqueAllocation[worker.Name] = struct{}{}
+		}
+		return scheduled && !deleted
+	})
 
 	tflopsCapacityMap := make(map[types.NamespacedName]resource.Quantity)
 	vramCapacityMap := make(map[types.NamespacedName]resource.Quantity)

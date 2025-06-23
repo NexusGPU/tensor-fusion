@@ -193,6 +193,9 @@ spec:
                     properties:
                       operatorEndpoint:
                         type: string
+                      patchEmbeddedWorkerToPod:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
                       patchToContainer:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true

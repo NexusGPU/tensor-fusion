@@ -63,11 +63,9 @@ func TestWorkerPort(t *testing.T) {
 		},
 	}
 
-	wg := &WorkerGenerator{}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			port, err := wg.WorkerPort(tt.pod)
+			port, err := WorkerPort(tt.pod)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -98,9 +96,6 @@ func TestSelectWorker(t *testing.T) {
 					Name:      "test-workload",
 					Namespace: "default",
 				},
-				Status: tfv1.TensorFusionWorkloadStatus{
-					WorkerStatuses: []tfv1.WorkerStatus{},
-				},
 			},
 			connections:    []tfv1.TensorFusionConnection{},
 			expectedWorker: "",
@@ -115,14 +110,6 @@ func TestSelectWorker(t *testing.T) {
 					Name:      "test-workload",
 					Namespace: "default",
 				},
-				Status: tfv1.TensorFusionWorkloadStatus{
-					WorkerStatuses: []tfv1.WorkerStatus{
-						{
-							WorkerName:  "worker-1",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-					},
-				},
 			},
 			connections:    []tfv1.TensorFusionConnection{},
 			expectedWorker: "worker-1",
@@ -135,18 +122,6 @@ func TestSelectWorker(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-workload",
 					Namespace: "default",
-				},
-				Status: tfv1.TensorFusionWorkloadStatus{
-					WorkerStatuses: []tfv1.WorkerStatus{
-						{
-							WorkerName:  "worker-1",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-						{
-							WorkerName:  "worker-2",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-					},
 				},
 			},
 			connections: []tfv1.TensorFusionConnection{
@@ -185,22 +160,6 @@ func TestSelectWorker(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-workload",
 					Namespace: "default",
-				},
-				Status: tfv1.TensorFusionWorkloadStatus{
-					WorkerStatuses: []tfv1.WorkerStatus{
-						{
-							WorkerName:  "worker-1",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-						{
-							WorkerName:  "worker-2",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-						{
-							WorkerName:  "worker-3",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-					},
 				},
 			},
 			connections: []tfv1.TensorFusionConnection{
@@ -252,18 +211,6 @@ func TestSelectWorker(t *testing.T) {
 					Name:      "test-workload",
 					Namespace: "default",
 				},
-				Status: tfv1.TensorFusionWorkloadStatus{
-					WorkerStatuses: []tfv1.WorkerStatus{
-						{
-							WorkerName:  "worker-1",
-							WorkerPhase: tfv1.WorkerFailed,
-						},
-						{
-							WorkerName:  "worker-2",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-					},
-				},
 			},
 			connections: []tfv1.TensorFusionConnection{
 				{
@@ -289,22 +236,6 @@ func TestSelectWorker(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-workload",
 					Namespace: "default",
-				},
-				Status: tfv1.TensorFusionWorkloadStatus{
-					WorkerStatuses: []tfv1.WorkerStatus{
-						{
-							WorkerName:  "worker-1",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-						{
-							WorkerName:  "worker-2",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-						{
-							WorkerName:  "worker-3",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-					},
 				},
 			},
 			connections: []tfv1.TensorFusionConnection{
@@ -343,22 +274,6 @@ func TestSelectWorker(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-workload",
 					Namespace: "default",
-				},
-				Status: tfv1.TensorFusionWorkloadStatus{
-					WorkerStatuses: []tfv1.WorkerStatus{
-						{
-							WorkerName:  "worker-1",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-						{
-							WorkerName:  "worker-2",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-						{
-							WorkerName:  "worker-3",
-							WorkerPhase: tfv1.WorkerRunning,
-						},
-					},
 				},
 			},
 			connections: []tfv1.TensorFusionConnection{

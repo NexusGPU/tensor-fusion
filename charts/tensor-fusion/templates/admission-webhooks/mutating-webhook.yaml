@@ -10,7 +10,7 @@ webhooks:
       name: {{ include "tensor-fusion.fullname" . }}-webhook
       namespace: {{ include "tensor-fusion.namespace" . }}
       path: /mutate-v1-pod
-  failurePolicy: Fail
+  failurePolicy: {{ .Values.controller.admissionWebhooks.failurePolicy }}
   name: mpod-v1.kb.io
   rules:
   - apiGroups:
@@ -22,7 +22,7 @@ webhooks:
     resources:
     - pods
   sideEffects: None
-  timeoutSeconds: 30
+  timeoutSeconds: 10
   objectSelector:
     matchExpressions:
       - key: tensor-fusion.ai/enabled

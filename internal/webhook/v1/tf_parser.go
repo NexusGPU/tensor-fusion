@@ -38,8 +38,8 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 	if pod.Annotations == nil {
 		return info, fmt.Errorf("no annotations found")
 	}
-	enabledReplicas, ok := pod.Annotations[constants.TensorFusionEnabledReplicasAnnotation]
-	if !ok {
+	enabledReplicas, specifiedPool := pod.Annotations[constants.TensorFusionEnabledReplicasAnnotation]
+	if !specifiedPool {
 		info.EnabledReplicas = nil
 	} else {
 		val, err := strconv.ParseInt(enabledReplicas, 10, 32)
@@ -50,17 +50,17 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 		info.EnabledReplicas = &val32
 	}
 
-	workloadName, ok := pod.Annotations[constants.WorkloadKey]
-	if !ok {
+	workloadName, specifiedPool := pod.Annotations[constants.WorkloadKey]
+	if !specifiedPool {
 		return info, fmt.Errorf("workload key not found")
 	}
 	info.WorkloadName = workloadName
-	genWorkload, ok := pod.Annotations[constants.GenWorkloadAnnotation]
-	info.GenWorkload = (ok && genWorkload == constants.TrueStringValue)
+	genWorkload, specifiedPool := pod.Annotations[constants.GenWorkloadAnnotation]
+	info.GenWorkload = (specifiedPool && genWorkload == constants.TrueStringValue)
 
-	replicas, ok := pod.Annotations[constants.ReplicasAnnotation]
+	replicas, specifiedPool := pod.Annotations[constants.ReplicasAnnotation]
 
-	if !ok {
+	if !specifiedPool {
 		info.Replicas = 1
 	} else {
 		val, err := strconv.ParseInt(replicas, 10, 32)
@@ -70,39 +70,58 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 		info.Replicas = int32(val)
 	}
 
-	workloadProfileName, ok := pod.Annotations[constants.WorkloadProfileAnnotation]
+	workloadProfileName, specifiedPool := pod.Annotations[constants.WorkloadProfileAnnotation]
 	workloadProfile := &tfv1.WorkloadProfile{}
-	if ok {
+	if specifiedPool {
 		if err := k8sClient.Get(ctx, client.ObjectKey{Name: workloadProfileName, Namespace: pod.Namespace}, workloadProfile); err != nil {
 			return info, fmt.Errorf("get workload profile(%s) : %w", workloadProfileName, err)
 		}
 	}
 
-	poolName, ok := pod.Annotations[constants.GpuPoolKey]
-	if !ok {
-		// TODO: select default pool
+	gpuPoolList := &tfv1.GPUPoolList{}
+	if err := k8sClient.List(ctx, gpuPoolList); err != nil {
+		return info, fmt.Errorf("list gpu pools: %w", err)
+	}
+
+	poolName, specifiedPool := pod.Annotations[constants.GpuPoolKey]
+	validPool := false
+	// verify gpu pool name or assign default pool when not specified
+	for _, gpuPool := range gpuPoolList.Items {
+		if !specifiedPool && gpuPool.Annotations != nil &&
+			gpuPool.Annotations[constants.TensorFusionDefaultPoolKeyAnnotation] == constants.TrueStringValue {
+			poolName = gpuPool.Name
+			validPool = true
+			break
+		}
+		if specifiedPool && gpuPool.Name == poolName {
+			validPool = true
+			break
+		}
+	}
+	if !validPool {
 		return info, fmt.Errorf("gpu pool not found")
 	}
+
 	workloadProfile.Spec.PoolName = poolName
 
-	tflopsRequest, ok := pod.Annotations[constants.TFLOPSRequestAnnotation]
-	if ok {
+	tflopsRequest, specifiedPool := pod.Annotations[constants.TFLOPSRequestAnnotation]
+	if specifiedPool {
 		workloadProfile.Spec.Resources.Requests.Tflops = resource.MustParse(tflopsRequest)
 	}
-	vramRequest, ok := pod.Annotations[constants.VRAMRequestAnnotation]
-	if ok {
+	vramRequest, specifiedPool := pod.Annotations[constants.VRAMRequestAnnotation]
+	if specifiedPool {
 		workloadProfile.Spec.Resources.Requests.Vram = resource.MustParse(vramRequest)
 	}
-	tflopsLimit, ok := pod.Annotations[constants.TFLOPSLimitAnnotation]
-	if ok {
+	tflopsLimit, specifiedPool := pod.Annotations[constants.TFLOPSLimitAnnotation]
+	if specifiedPool {
 		workloadProfile.Spec.Resources.Limits.Tflops = resource.MustParse(tflopsLimit)
 	}
-	vramLimit, ok := pod.Annotations[constants.VRAMLimitAnnotation]
-	if ok {
+	vramLimit, specifiedPool := pod.Annotations[constants.VRAMLimitAnnotation]
+	if specifiedPool {
 		workloadProfile.Spec.Resources.Limits.Vram = resource.MustParse(vramLimit)
 	}
-	gpuCount, ok := pod.Annotations[constants.GpuCountKey]
-	if ok {
+	gpuCount, specifiedPool := pod.Annotations[constants.GpuCountKey]
+	if specifiedPool {
 		val, err := strconv.ParseInt(gpuCount, 10, 32)
 		if err != nil {
 			return info, fmt.Errorf("invalid gpuCount value: %w", err)
@@ -110,8 +129,8 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 		workloadProfile.Spec.GPUCount = uint(val)
 	}
 
-	localGPU, ok := pod.Annotations[constants.IsLocalGPUAnnotation]
-	if ok && localGPU == constants.TrueStringValue {
+	localGPU, specifiedPool := pod.Annotations[constants.IsLocalGPUAnnotation]
+	if specifiedPool && localGPU == constants.TrueStringValue {
 		workloadProfile.Spec.IsLocalGPU = true
 		// default to no-standalone-worker, namely embedded worker when it's local GPU mode
 		standaloneWorkerMode := pod.Annotations[constants.StandaloneWorkerModeAnnotation]
@@ -122,27 +141,32 @@ func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *co
 	}
 
 	// Parse auto-scaling annotations
-	autoLimits, ok := pod.Annotations[constants.AutoScaleLimitsAnnotation]
-	if ok && autoLimits == constants.TrueStringValue {
+	autoLimits, specifiedPool := pod.Annotations[constants.AutoScaleLimitsAnnotation]
+	if specifiedPool && autoLimits == constants.TrueStringValue {
 		workloadProfile.Spec.AutoScalingConfig.AutoSetLimits.Enable = true
 	}
-	autoRequests, ok := pod.Annotations[constants.AutoScaleRequestsAnnotation]
-	if ok && autoRequests == constants.TrueStringValue {
+	autoRequests, specifiedPool := pod.Annotations[constants.AutoScaleRequestsAnnotation]
+	if specifiedPool && autoRequests == constants.TrueStringValue {
 		workloadProfile.Spec.AutoScalingConfig.AutoSetRequests.Enable = true
 	}
-	autoReplicas, ok := pod.Annotations[constants.AutoScaleReplicasAnnotation]
-	if ok && autoReplicas == constants.TrueStringValue {
+	autoReplicas, specifiedPool := pod.Annotations[constants.AutoScaleReplicasAnnotation]
+	if specifiedPool && autoReplicas == constants.TrueStringValue {
 		workloadProfile.Spec.AutoScalingConfig.AutoSetReplicas.Enable = true
 	}
 
-	injectContainer, ok := pod.Annotations[constants.InjectContainerAnnotation]
+	injectContainer, specifiedPool := pod.Annotations[constants.InjectContainerAnnotation]
 	containerNames := strings.Split(injectContainer, ",")
-	if !ok || len(containerNames) == 0 {
-		return info, fmt.Errorf("inject container not found")
+	if len(pod.Spec.Containers) > 1 {
+		if !specifiedPool || len(containerNames) == 0 {
+			return info, fmt.Errorf("inject container has to be specified when Pod containers > 1")
+		}
+	} else {
+		// assign default container name when annotation not specified
+		containerNames = []string{pod.Spec.Containers[0].Name}
 	}
 
-	gpuModel, ok := pod.Annotations[constants.GPUModelAnnotation]
-	if ok {
+	gpuModel, specifiedPool := pod.Annotations[constants.GPUModelAnnotation]
+	if specifiedPool {
 		workloadProfile.Spec.GPUModel = gpuModel
 	}
 
