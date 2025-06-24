@@ -129,15 +129,17 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 }
 
 func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
-
 	allocRequest, reason, err := composeAllocationRequest(pod)
 	if err != nil {
 		s.logger.Error(err, "failed to compose allocation request", "pod", pod.Name, "reason", reason)
 		return
 	}
 	// TODO get allocated GPU info as 4th param
-	s.allocator.Dealloc(ctx, tfv1.NameNamespace{
+	err = s.allocator.Dealloc(ctx, tfv1.NameNamespace{
 		Name:      pod.Name,
 		Namespace: pod.Namespace,
 	}, allocRequest.Request, []types.NamespacedName{}, pod.Name)
+	if err != nil {
+		s.logger.Error(err, "failed to deallocate GPU", "pod", pod.Name)
+	}
 }

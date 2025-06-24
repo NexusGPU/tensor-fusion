@@ -12,7 +12,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
-	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -26,14 +25,14 @@ type WorkerGenerator struct {
 
 var ErrNoAvailableWorker = errors.New("no available worker")
 
-func WorkerPort(pod *corev1.Pod) (int, error) {
+func WorkerPort(pod *v1.Pod) (int, error) {
 	portAnnotation, ok := pod.Annotations[constants.GenPortNumberAnnotation]
 	if ok {
 		return strconv.Atoi(portAnnotation)
 	}
 
 	// Compatible with old version in which no annotation in worker Pod
-	portEnv, ok := lo.Find(pod.Spec.Containers[0].Env, func(env corev1.EnvVar) bool {
+	portEnv, ok := lo.Find(pod.Spec.Containers[0].Env, func(env v1.EnvVar) bool {
 		return env.Name == constants.WorkerPortEnv
 	})
 
@@ -45,7 +44,7 @@ func WorkerPort(pod *corev1.Pod) (int, error) {
 }
 
 func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
-	podTmpl := &corev1.PodTemplate{}
+	podTmpl := &v1.PodTemplate{}
 	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
 	if err != nil {
 		return "", fmt.Errorf("failed to unmarshal pod template: %w", err)
@@ -56,19 +55,19 @@ func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
 func (wg *WorkerGenerator) GenerateWorkerPod(
 	workload *tfv1.TensorFusionWorkload,
 	podTemplateHash string,
-) (*corev1.Pod, string, error) {
-	podTmpl := &corev1.PodTemplate{}
+) (*v1.Pod, string, error) {
+	podTmpl := &v1.PodTemplate{}
 	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to unmarshal pod template: %w", err)
 	}
 	spec := podTmpl.Template.Spec
-	spec.Volumes = append(spec.Volumes, corev1.Volume{
+	spec.Volumes = append(spec.Volumes, v1.Volume{
 		Name: constants.DataVolumeName,
-		VolumeSource: corev1.VolumeSource{
-			HostPath: &corev1.HostPathVolumeSource{
+		VolumeSource: v1.VolumeSource{
+			HostPath: &v1.HostPathVolumeSource{
 				Path: constants.TFDataPath,
-				Type: ptr.To(corev1.HostPathDirectoryOrCreate),
+				Type: ptr.To(v1.HostPathDirectoryOrCreate),
 			},
 		},
 	})
@@ -76,7 +75,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	// performance optimization, service link will cause high CPU usage when service number is large
 	spec.EnableServiceLinks = ptr.To(false)
 
-	return &corev1.Pod{
+	return &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: fmt.Sprintf("%s-tf-worker-", workload.Name),
 			Namespace:    workload.Namespace,

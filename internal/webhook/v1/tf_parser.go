@@ -33,7 +33,11 @@ type TensorFusionInfo struct {
 	GenWorkload     bool
 }
 
-func ParseTensorFusionInfo(ctx context.Context, k8sClient client.Client, pod *corev1.Pod) (TensorFusionInfo, error) {
+func ParseTensorFusionInfo(
+	ctx context.Context,
+	k8sClient client.Client,
+	pod *corev1.Pod,
+) (TensorFusionInfo, error) {
 	var info TensorFusionInfo
 	if pod.Annotations == nil {
 		return info, fmt.Errorf("no annotations found")

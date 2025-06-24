@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -102,10 +101,10 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 			return ctrl.Result{}, fmt.Errorf("get TensorFusionWorkload: %w", err)
 		}
 
-		r.Recorder.Eventf(connection, corev1.EventTypeNormal, "SelectingWorker", "Selecting worker for connection %s", connection.Name)
+		r.Recorder.Eventf(connection, v1.EventTypeNormal, "SelectingWorker", "Selecting worker for connection %s", connection.Name)
 		s, err := worker.SelectWorker(ctx, r.Client, workload, 1)
 		if err != nil {
-			r.Recorder.Eventf(connection, corev1.EventTypeWarning, "WorkerSelectionFailed", "Failed to select worker: %v", err)
+			r.Recorder.Eventf(connection, v1.EventTypeWarning, "WorkerSelectionFailed", "Failed to select worker: %v", err)
 			// Update the status to WorkerPending when worker selection fails
 			connection.Status.Phase = tfv1.WorkerPending
 			connection.Status.WorkerName = ""
@@ -115,7 +114,7 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 			}
 			return ctrl.Result{}, err
 		}
-		r.Recorder.Eventf(connection, corev1.EventTypeNormal, "WorkerSelected", "Worker %s successfully selected for connection", s.WorkerName)
+		r.Recorder.Eventf(connection, v1.EventTypeNormal, "WorkerSelected", "Worker %s successfully selected for connection", s.WorkerName)
 		connection.Status.Phase = s.WorkerPhase
 		connection.Status.WorkerName = s.WorkerName
 		resourceVersion := s.ResourceVersion
@@ -127,7 +126,7 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 		if err := r.Status().Update(ctx, connection); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update connection status: %w", err)
 		}
-		r.Recorder.Eventf(connection, corev1.EventTypeNormal, "ConnectionReady", "Connection URL: %s", connection.Status.ConnectionURL)
+		r.Recorder.Eventf(connection, v1.EventTypeNormal, "ConnectionReady", "Connection URL: %s", connection.Status.ConnectionURL)
 	}
 
 	// continuous check if worker is failed or not, if failed, trigger re-select worker
