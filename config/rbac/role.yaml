@@ -134,6 +134,7 @@ rules:
   - gpunodeclasses
   - gpunodes
   - gpupools
+  - gpuresourcequotas
   - gpus
   - schedulingconfigtemplates
   - tensorfusionclusters
@@ -154,6 +155,7 @@ rules:
   - gpunodeclasses/finalizers
   - gpunodes/finalizers
   - gpupools/finalizers
+  - gpuresourcequotas/finalizers
   - gpus/finalizers
   - schedulingconfigtemplates/finalizers
   - tensorfusionclusters/finalizers
@@ -168,6 +170,7 @@ rules:
   - gpunodeclasses/status
   - gpunodes/status
   - gpupools/status
+  - gpuresourcequotas/status
   - gpus/status
   - schedulingconfigtemplates/status
   - tensorfusionclusters/status

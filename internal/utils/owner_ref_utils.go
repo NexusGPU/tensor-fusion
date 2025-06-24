@@ -14,6 +14,10 @@ import (
 
 // FindRootOwnerReference recursively finds the root owner reference for a given object (e.g. Pod).
 func FindRootOwnerReference(ctx context.Context, c client.Client, namespace string, obj metav1.Object) (*metav1.OwnerReference, error) {
+	owners := obj.GetOwnerReferences()
+	if len(owners) == 0 {
+		return nil, nil
+	}
 	current := obj
 	for {
 		owners := current.GetOwnerReferences()

@@ -39,9 +39,7 @@ func TestFindRootOwnerReference(t *testing.T) {
 
 		rootRef, err := utils.FindRootOwnerReference(context.TODO(), c, "default", pod)
 		require.NoError(t, err)
-		require.NotNil(t, rootRef)
-		require.Equal(t, "mypod", rootRef.Name)
-		require.Equal(t, "Pod", rootRef.Kind)
+		require.Nil(t, rootRef)
 	})
 
 	t.Run("hierarchy returns deployment", func(t *testing.T) {
