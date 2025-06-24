@@ -41,6 +41,7 @@ func NewStrategy(placementMode tfv1.PlacementMode) Strategy {
 type GpuAllocator struct {
 	client.Client
 	filterRegistry *filter.FilterRegistry
+	quotaStore     *QuotaStore
 
 	// In-memory store of GPUs
 	gpuStore     map[types.NamespacedName]*tfv1.GPU
@@ -71,6 +72,8 @@ type AllocRequest struct {
 
 // Alloc allocates a request to a gpu or multiple gpus from the same node.
 func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest) ([]*tfv1.GPU, error) {
+	log := log.FromContext(ctx)
+
 	// Get GPUs from the pool using the in-memory store
 	poolGPUs := s.listGPUsFromPool(req.PoolName)
 
@@ -118,9 +121,17 @@ func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest) ([]*tfv1.GPU
 		return nil, fmt.Errorf("select GPU: %w", err)
 	}
 
+	// 4. Atomic allocation and check quota under lock
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
 
+	// 5. Fast quota check (fail fast if quota insufficient)
+	if err := s.quotaStore.checkQuotaAvailable(req.WorkloadNameNamespace.Namespace, req); err != nil {
+		log.V(2).Info("Quota check failed", "namespace", req.WorkloadNameNamespace.Namespace, "workload", req.WorkloadNameNamespace.Name, "error", err)
+		return nil, fmt.Errorf("quota check failed: %w", err)
+	}
+
+	// 6. Proceed with GPU allocation
 	appAdded := false
 	for _, selectedGPU := range selectedGPUs {
 
@@ -144,6 +155,22 @@ func (s *GpuAllocator) Alloc(ctx context.Context, req AllocRequest) ([]*tfv1.GPU
 
 		s.markGPUDirty(key)
 	}
+
+	// 7. Allocate quota resources (atomic with GPU allocation)
+	// Use actual allocated GPU count instead of requested count
+	actualReq := req
+	actualReq.Count = uint(len(selectedGPUs))
+	s.quotaStore.AllocateQuota(req.WorkloadNameNamespace.Namespace, actualReq)
+
+	// Log successful allocation
+	log.V(1).Info("GPU allocation successful",
+		"namespace", req.WorkloadNameNamespace.Namespace,
+		"workload", req.WorkloadNameNamespace.Name,
+		"pool", req.PoolName,
+		"requested", req.Count,
+		"allocated", len(selectedGPUs),
+		"tflops", req.Request.Tflops.String(),
+		"vram", req.Request.Vram.String())
 
 	// Return copies of the selected GPUs from the store
 	result := make([]*tfv1.GPU, len(selectedGPUs))
@@ -181,6 +208,17 @@ func (s *GpuAllocator) Dealloc(ctx context.Context, workloadNameNamespace tfv1.N
 		s.markGPUDirty(gpu)
 	}
 
+	// Deallocate quota resources in memory (atomic operation)
+	replicas := int32(len(gpus)) // Assuming one replica per GPU for simplicity
+	s.quotaStore.DeallocateQuota(workloadNameNamespace.Namespace, request, replicas)
+
+	// Log successful deallocation
+	log.V(1).Info("GPU deallocation successful",
+		"namespace", workloadNameNamespace.Namespace,
+		"workload", workloadNameNamespace.Name,
+		"gpu_count", len(gpus),
+		"tflops", request.Tflops.String(),
+		"vram", request.Vram.String())
 }
 
 func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval time.Duration) *GpuAllocator {
@@ -196,9 +234,13 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 		filter.NewPhaseFilter(tfv1.TensorFusionGPUPhaseRunning),
 	)
 
+	// Create quota store
+	quotaStore := NewQuotaStore(client)
+
 	allocator := &GpuAllocator{
 		Client:         client,
 		filterRegistry: baseRegistry,
+		quotaStore:     quotaStore,
 		gpuStore:       make(map[types.NamespacedName]*tfv1.GPU),
 		syncInterval:   syncInterval,
 		dirtyQueue:     make(map[types.NamespacedName]struct{}),
@@ -233,9 +275,11 @@ func (s *GpuAllocator) Stop() {
 	}
 }
 
-// initGPUStore initializes the in-memory GPU store from Kubernetes
-func (s *GpuAllocator) initGPUStore(ctx context.Context) error {
+// initGPUAndQuotaStore initializes both GPU store and quota store from Kubernetes
+func (s *GpuAllocator) initGPUAndQuotaStore(ctx context.Context) error {
 	log := log.FromContext(ctx)
+
+	// Initialize GPU store
 	log.Info("Initializing GPU store")
 	gpus := &tfv1.GPUList{}
 	if err := s.List(ctx, gpus); err != nil {
@@ -243,15 +287,19 @@ func (s *GpuAllocator) initGPUStore(ctx context.Context) error {
 	}
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
-	// Initialize the store with current GPUs
 	s.gpuStore = make(map[types.NamespacedName]*tfv1.GPU, len(gpus.Items))
 	for i := range gpus.Items {
 		gpu := &gpus.Items[i]
 		key := types.NamespacedName{Name: gpu.Name, Namespace: gpu.Namespace}
 		s.gpuStore[key] = gpu.DeepCopy()
 	}
-
 	log.Info("GPU store initialized", "count", len(s.gpuStore))
+
+	// Initialize quota store
+	if err := s.quotaStore.initQuotaStore(ctx); err != nil {
+		return fmt.Errorf("initialize quota store: %w", err)
+	}
+
 	return nil
 }
 
@@ -327,9 +375,9 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 		// Create a context with cancel function for the sync loop
 		_, cancel := context.WithCancel(ctx)
 		s.cancel = cancel
-		// Initialize the GPU store
-		if err := s.initGPUStore(ctx); err != nil {
-			log.Error(err, "Failed to initialize GPU store")
+		// Initialize the GPU store and quota store
+		if err := s.initGPUAndQuotaStore(ctx); err != nil {
+			log.Error(err, "Failed to initialize GPU and quota store")
 			return err
 		}
 		close(readyCh)
@@ -343,6 +391,7 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 		// and only if it's leader, it will start allocating resources to workers, and start sync loop here
 		s.reconcileAllocationState(ctx)
 		log.Info("GPU store data reconciled")
+
 		// Start the background sync goroutine
 		go s.startSyncLoop(ctx)
 	}()
@@ -398,8 +447,17 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 	}
 }
 
-// syncToK8s syncs the modified GPUs from in-memory store to Kubernetes
+// syncToK8s syncs the modified GPUs and quotas from in-memory store to Kubernetes
 func (s *GpuAllocator) syncToK8s(ctx context.Context) {
+	// Sync GPU status
+	s.syncGPUsToK8s(ctx)
+
+	// Sync quota status
+	s.quotaStore.syncQuotasToK8s(ctx)
+}
+
+// syncGPUsToK8s syncs GPU status to Kubernetes
+func (s *GpuAllocator) syncGPUsToK8s(ctx context.Context) {
 	log := log.FromContext(ctx)
 	s.dirtyQueueLock.Lock()
 	// Get all dirty GPUs and clear the queue
@@ -526,8 +584,8 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 	vramCapacityMap := make(map[types.NamespacedName]resource.Quantity)
 	gpuMap := make(map[types.NamespacedName]*tfv1.GPU)
 
-	defer s.storeMutex.Unlock()
 	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
 
 	for gpuKey, gpu := range s.gpuStore {
 		if gpu.Status.Capacity != nil {
@@ -578,6 +636,10 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 			log.FromContext(ctx).Info("Correcting gpu available resources", "gpu", gpuKey.Name, "tflops", gpu.Status.Available.Tflops.String(), "vram", gpu.Status.Available.Vram.String())
 		}
 	}
+
+	// reconcile quota store state
+	s.quotaStore.reconcileQuotaStore(ctx, workers.Items)
+	log.FromContext(ctx).Info("Quota store data reconciled")
 }
 
 func addRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace tfv1.NameNamespace) {
