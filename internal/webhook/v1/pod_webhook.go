@@ -213,12 +213,6 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 			},
 		}
 
-		// Add related Deployment's ReplicaSet for frontend to get related client side workload for this TensorFusionWorkload
-		// TODO: support multiple client workloads using the same TF workload
-		if len(pod.OwnerReferences) > 0 {
-			workload.Labels[constants.LabelKeyUser] = pod.OwnerReferences[0].Kind + "_" + pod.OwnerReferences[0].Name
-		}
-
 		if rootOwnerRef != nil {
 			workload.OwnerReferences = []metav1.OwnerReference{*rootOwnerRef}
 		}

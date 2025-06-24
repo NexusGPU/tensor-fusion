@@ -14,7 +14,6 @@ const (
 	Finalizer       = Domain + "/" + FinalizerSuffix
 
 	LabelKeyOwner           = Domain + "/managed-by"
-	LabelKeyUser            = Domain + "/used-by"
 	LabelKeyClusterOwner    = Domain + "/cluster"
 	LabelKeyNodeClass       = Domain + "/node-class"
 	LabelKeyPodTemplateHash = Domain + "/pod-template-hash"

@@ -506,7 +506,7 @@ func (s *GpuAllocator) markGPUDirty(key types.NamespacedName) {
 	s.dirtyQueue[key] = struct{}{}
 }
 
-func (s *GpuAllocator) markGPUDirtyLoced(key types.NamespacedName) {
+func (s *GpuAllocator) markGPUDirtyLocked(key types.NamespacedName) {
 	s.dirtyQueue[key] = struct{}{}
 }
 
@@ -574,7 +574,7 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 		if !sameTflops || !sameVRAM {
 			gpu.Status.Available.Tflops = tflopsCapacityMap[gpuKey]
 			gpu.Status.Available.Vram = vramCapacityMap[gpuKey]
-			s.markGPUDirtyLoced(gpuKey)
+			s.markGPUDirtyLocked(gpuKey)
 			log.FromContext(ctx).Info("Correcting gpu available resources", "gpu", gpuKey.Name, "tflops", gpu.Status.Available.Tflops.String(), "vram", gpu.Status.Available.Vram.String())
 		}
 	}
