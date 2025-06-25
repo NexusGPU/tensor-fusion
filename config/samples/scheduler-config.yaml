@@ -6,6 +6,9 @@ profiles:
 # Refer: https://kubernetes.io/docs/reference/scheduling/config/
 - schedulerName: tensor-fusion-scheduler
   plugins:
+    preFilter:
+      enabled:
+      - name: GPUResourceFit
     filter:
       enabled:
       - name: GPUResourceFit
@@ -16,6 +19,9 @@ profiles:
         weight: 5
       - name: GPUNetworkTopologyAware
         weight: 7
+    preBind:
+      enabled:
+      - name: GPUResourceFit
   pluginConfig:
   - name: GPUResourceFit
     args:
@@ -38,9 +44,9 @@ profiles:
           - utilization: 0
             score: 0
           - utilization: 80
-            score: 10
+            score: 100
           - utilization: 90
-            score: 1
+            score: 20
           - utilization: 100
             score: 0
         type: RequestedToCapacityRatio

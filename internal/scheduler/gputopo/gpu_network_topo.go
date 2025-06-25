@@ -7,10 +7,9 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const Name = "GPUNetworkTopologyAware"
@@ -23,9 +22,8 @@ type GPUNetworkTopologyAware struct {
 	logger    *klog.Logger
 	fh        framework.Handle
 	allocator *gpuallocator.GpuAllocator
-	podLister cache.Indexer
-	pdbLister cache.Indexer
-	client    *rest.RESTClient
+	client    client.Client
+	ctx       context.Context
 	cfg       *GPUNetworkTopologyAwareConfig
 }
 
@@ -35,7 +33,7 @@ type GPUNetworkTopologyAwareConfig struct {
 
 type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
 
-func NewWithDeps(allocator *gpuallocator.GpuAllocator) PluginFactoryFunc {
+func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) PluginFactoryFunc {
 	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 		target := &GPUNetworkTopologyAwareConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
@@ -48,7 +46,9 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator) PluginFactoryFunc {
 			logger:    &lh,
 			fh:        handle,
 			allocator: allocator,
+			client:    client,
 			cfg:       target,
+			ctx:       ctx,
 		}
 		return c, nil
 	}

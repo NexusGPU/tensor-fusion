@@ -75,7 +75,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.GpuPoolKey:                "mock",
 						constants.InjectContainerAnnotation: "main",
 						constants.WorkloadKey:               "test-workload-empty-ns",
-						constants.GenWorkloadAnnotation:     "true",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -146,7 +145,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.WorkloadProfileAnnotation: "test-profile-handle",
 						constants.InjectContainerAnnotation: "main",
 						constants.WorkloadKey:               "test-workload",
-						constants.GenWorkloadAnnotation:     "true",
 					},
 				},
 				Spec: corev1.PodSpec{

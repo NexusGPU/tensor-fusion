@@ -263,11 +263,11 @@ func main() {
 
 		gpuResourceFitOpt := app.WithPlugin(
 			gpuResourceFitPlugin.Name,
-			gpuResourceFitPlugin.NewWithDeps(allocator),
+			gpuResourceFitPlugin.NewWithDeps(allocator, mgr.GetClient()),
 		)
 		gpuTopoOpt := app.WithPlugin(
 			gpuTopoPlugin.Name,
-			gpuTopoPlugin.NewWithDeps(allocator),
+			gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
 		)
 
 		cc, scheduler, err := sched.SetupScheduler(ctx, schedulerConfigPath, gpuResourceFitOpt, gpuTopoOpt)
@@ -361,7 +361,6 @@ func main() {
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		Recorder:      mgr.GetEventRecorderFor("tensorfusionworkload"),
-		GpuInfos:      &gpuInfos,
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionWorkload")
@@ -386,12 +385,7 @@ func main() {
 	}
 
 	// Initialize and start the HTTP server
-	client, err := client.NewWithWatch(kc, client.Options{Scheme: scheme})
-	if err != nil {
-		setupLog.Error(err, "failed to create client with watch")
-		os.Exit(1)
-	}
-	connectionRouter, err := router.NewConnectionRouter(ctx, client)
+	connectionRouter, err := router.NewConnectionRouter(ctx, mgr.GetClient().(client.WithWatch))
 	if err != nil {
 		setupLog.Error(err, "failed to create connection router")
 		os.Exit(1)

@@ -6,6 +6,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/samber/lo"
 )
 
 // LowLoadFirst selects GPU with maximum available resources (least utilized)
@@ -45,19 +46,12 @@ func (l LowLoadFirst) SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, erro
 
 	// For count > 1, we need to find GPUs from the same node
 	// Group GPUs by node
-	gpusByNode := make(map[string][]tfv1.GPU)
-	for _, gpu := range gpus {
-		if gpu.Labels == nil {
-			continue
-		}
-
-		nodeName, exists := gpu.Labels[constants.LabelKeyOwner]
-		if !exists {
-			continue
-		}
-
-		gpusByNode[nodeName] = append(gpusByNode[nodeName], gpu)
-	}
+	validGPUs := lo.Filter(gpus, func(gpu tfv1.GPU, _ int) bool {
+		return gpu.Labels != nil && gpu.Labels[constants.LabelKeyOwner] != ""
+	})
+	gpusByNode := lo.GroupBy(validGPUs, func(gpu tfv1.GPU) string {
+		return gpu.Labels[constants.LabelKeyOwner]
+	})
 
 	// Find nodes that have at least 'count' GPUs
 	var candidateNodes []string
@@ -119,4 +113,9 @@ func (l LowLoadFirst) SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, erro
 		result[i] = &gpusByNode[bestNodeName][i]
 	}
 	return result, nil
+}
+
+func (l LowLoadFirst) Score(gpu tfv1.GPU) int64 {
+	// TODO
+	return gpu.Status.Available.Vram.Value()
 }

@@ -33,7 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
@@ -46,7 +45,6 @@ type TensorFusionWorkloadReconciler struct {
 	client.Client
 	Scheme        *runtime.Scheme
 	Recorder      record.EventRecorder
-	GpuInfos      *[]config.GpuInfo
 	PortAllocator *portallocator.PortAllocator
 }
 
@@ -94,7 +92,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// Create worker generator
-	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker, GpuInfos: r.GpuInfos}
+	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker}
 
 	podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec)
 	if err != nil {
@@ -108,14 +106,17 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 	}
 
-	if workload.Spec.Replicas != nil {
+	// When it is not dynamic replica, workload maintains worker replicas by itself,
+	// In this mode, allow any Pod select connection to connect to any worker,
+	// to achieve a sub-pool for lower costs when CPU side scaling frequency is high
+	if !workload.Spec.IsDynamicReplica() {
 		result, err := r.reconcileScaling(ctx, workload, podList, workerGenerator, podTemplateHash)
 		if err != nil || !result.IsZero() {
 			return result, err
 		}
 	}
 
-	if err := r.updateStatus(ctx, workload, podList.Items, workerGenerator); err != nil {
+	if err := r.updateStatus(ctx, workload, podList.Items); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -175,12 +176,8 @@ func (r *TensorFusionWorkloadReconciler) reconcileScaling(
 
 		// Calculate how many pods need to be added
 		podsToAdd := int(desiredReplicas - currentReplicas)
-		result, err := r.scaleUpWorkers(ctx, workerGenerator, workload, podsToAdd, podTemplateHash)
-		if err != nil {
+		if err := r.scaleUpWorkers(ctx, workerGenerator, workload, podsToAdd, podTemplateHash); err != nil {
 			return ctrl.Result{}, fmt.Errorf("scale up workers: %w", err)
-		}
-		if !result.IsZero() {
-			return result, nil
 		}
 	} else if currentReplicas > desiredReplicas {
 		log.Info("Scaling down workers", "from", currentReplicas, "to", desiredReplicas)
@@ -208,26 +205,15 @@ func handleMetricsRecorder(podList *corev1.PodList, workload *tfv1.TensorFusionW
 	}
 }
 
-// TODO for is-local-gpu mode, should not start worker, and workload replicas must be dynamic, to support worker-as-lib design
-// create special tensorfusion connection instead with finalizer, based on workload status's pending worker count, when connection is removed, should Dealloc GPU resources
 func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	ctx context.Context,
 	workerGenerator *worker.WorkerGenerator,
 	workload *tfv1.TensorFusionWorkload,
 	hash string,
 ) (*corev1.Pod, error) {
-	pod, hash, err := workerGenerator.GenerateWorkerPod(workload, hash)
+	pod, err := workerGenerator.GenerateWorkerPod(workload)
 	if err != nil {
 		return nil, fmt.Errorf("generate worker pod %w", err)
-	}
-
-	// Add labels to identify this pod as part of the workload
-	if pod.Labels == nil {
-		pod.Labels = make(map[string]string)
-	}
-
-	if pod.Annotations == nil {
-		pod.Annotations = make(map[string]string)
 	}
 
 	pod.Labels[constants.WorkloadKey] = workload.Name
@@ -275,16 +261,15 @@ func (r *TensorFusionWorkloadReconciler) deletePod(ctx context.Context, pod *cor
 }
 
 // scaleUpWorkers handles the scaling up of worker pods
-func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, count int, hash string) (ctrl.Result, error) {
+func (r *TensorFusionWorkloadReconciler) scaleUpWorkers(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, count int, hash string) error {
 	// Create worker pods
 	for range count {
 		_, err := r.tryStartWorker(ctx, workerGenerator, workload, hash)
 		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("create worker pod: %w", err)
+			return fmt.Errorf("create worker pod: %w", err)
 		}
 	}
-
-	return ctrl.Result{}, nil
+	return nil
 }
 
 // updateStatus updates the status of a TensorFusionWorkload
@@ -292,7 +277,6 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 	ctx context.Context,
 	workload *tfv1.TensorFusionWorkload,
 	pods []corev1.Pod,
-	workerGenerator *worker.WorkerGenerator,
 ) error {
 	log := log.FromContext(ctx)
 	readyReplicas := int32(0)

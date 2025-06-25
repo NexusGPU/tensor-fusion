@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"gomodules.xyz/jsonpatch/v2"
@@ -41,7 +42,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
-	"github.com/lithammer/shortuuid/v4"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -116,6 +116,10 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		}
 	}
 
+	// make sure required Pod info has been changed before generating patches
+	pod.Spec.SchedulerName = constants.SchedulerName
+	addOrOverridePodMissingAnnotations(pod, tfInfo)
+
 	// Inject initContainer and env variables
 	patches, err := m.patchTFClient(pod, pool, tfInfo.ContainerNames, tfInfo.Profile.IsLocalGPU)
 	if err != nil {
@@ -136,20 +140,6 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		patches = append(patches, patch)
 	}
 
-	// Inject scheduler name
-	patches = append(patches, jsonpatch.JsonPatchOperation{
-		Operation: "add",
-		Path:      "/spec/schedulerName",
-		Value:     constants.SchedulerName,
-	})
-
-	// TODO refactor, for localGPU mode, should add worker identifier in this pod,
-	//  so that for scheduler to assign resources
-	// when it's auto-replicas mode, should create another worker pod and
-	// set owner to this Pod in pod controller, workload label to TFWorkload CR
-	// and for non-local-gpu & auto-replicas mode, connection info should be fixed
-	// and for non-local-gpu & specified-worker-replicas mode, connection info should be dynamic
-
 	return admission.Patched("tensor fusion component patched", patches...)
 }
 
@@ -159,24 +149,34 @@ func (m *TensorFusionPodMutator) InjectDecoder(d admission.Decoder) error {
 	return nil
 }
 
-func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod *corev1.Pod, tfInfo *TensorFusionInfo, workload *tfv1.TensorFusionWorkload, pool *tfv1.GPUPool) error {
-	// Check if workload exists
-	err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.WorkloadName, Namespace: pod.Namespace}, workload)
+func addOrOverridePodMissingAnnotations(pod *corev1.Pod, tfInfo TensorFusionInfo) {
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+	pod.Annotations[constants.WorkloadKey] = tfInfo.WorkloadName
+	pod.Annotations[constants.TFLOPSLimitAnnotation] = tfInfo.Profile.Resources.Limits.Tflops.String()
+	pod.Annotations[constants.VRAMLimitAnnotation] = tfInfo.Profile.Resources.Limits.Vram.String()
+	pod.Annotations[constants.TFLOPSRequestAnnotation] = tfInfo.Profile.Resources.Requests.Tflops.String()
+	pod.Annotations[constants.VRAMRequestAnnotation] = tfInfo.Profile.Resources.Requests.Vram.String()
+	pod.Annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", tfInfo.Profile.GPUCount)
+	pod.Annotations[constants.GpuPoolKey] = tfInfo.Profile.PoolName
+	pod.Annotations[constants.GPUModelAnnotation] = tfInfo.Profile.GPUModel
+	pod.Annotations[constants.IsLocalGPUAnnotation] = strconv.FormatBool(tfInfo.Profile.IsLocalGPU)
+	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
+}
 
+func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod *corev1.Pod, tfInfo *TensorFusionInfo, workload *tfv1.TensorFusionWorkload, pool *tfv1.GPUPool) error {
 	qos := calculateQoSLevel(tfInfo.Profile, pool)
 
+	err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.WorkloadName, Namespace: pod.Namespace}, workload)
 	if err != nil {
 		if !errors.IsNotFound(err) {
 			return fmt.Errorf("failed to get workload: %w", err)
 		}
 		// find root owner references of pod
-		rootOwnerRef, err := utils.FindRootOwnerReference(ctx, m.Client, pod.Namespace, pod)
-		if err != nil {
-			return fmt.Errorf("failed to find root owner reference: %w", err)
-		}
+		firstLevelOwnerRef := utils.FindFirstLevelOwnerReference(pod)
 
 		// Create a new workload
-		replicas := tfInfo.Replicas
 		workload = &tfv1.TensorFusionWorkload{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      tfInfo.WorkloadName,
@@ -186,7 +186,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 				},
 			},
 			Spec: tfv1.WorkloadProfileSpec{
-				Replicas:   &replicas,
+				Replicas:   nil,
 				PoolName:   tfInfo.Profile.PoolName,
 				Resources:  tfInfo.Profile.Resources,
 				GPUCount:   tfInfo.Profile.GPUCount,
@@ -196,8 +196,8 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 			},
 		}
 
-		if rootOwnerRef != nil {
-			workload.OwnerReferences = []metav1.OwnerReference{*rootOwnerRef}
+		if firstLevelOwnerRef != nil {
+			workload.OwnerReferences = []metav1.OwnerReference{*firstLevelOwnerRef}
 		}
 
 		if err := m.Client.Create(ctx, workload); err != nil {
@@ -207,9 +207,8 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 	}
 
 	// Create the desired spec for comparison
-	replicas := tfInfo.Replicas
 	desiredSpec := tfv1.WorkloadProfileSpec{
-		Replicas:   &replicas,
+		Replicas:   nil,
 		PoolName:   tfInfo.Profile.PoolName,
 		Resources:  tfInfo.Profile.Resources,
 		Qos:        qos,
@@ -285,7 +284,9 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 			removeNativeGPUResourceClaim(container)
 
-			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
+			if !isLocalGPU {
+				addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
+			}
 			containerPatched = true
 
 			pod.Spec.Containers[i] = *container
@@ -326,9 +327,9 @@ func calculatePodPatch(currentBytes []byte, pod *corev1.Pod, clientConfig *tfv1.
 	var patchBytes []byte
 	var err error
 	if isLocalGPU {
-		patchBytes, err = json.Marshal(clientConfig.PatchToPod)
-	} else {
 		patchBytes, err = json.Marshal(clientConfig.PatchEmbeddedWorkerToPod)
+	} else {
+		patchBytes, err = json.Marshal(clientConfig.PatchToPod)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("marshal patch: %w", err)
@@ -352,28 +353,27 @@ func calculatePodPatch(currentBytes []byte, pod *corev1.Pod, clientConfig *tfv1.
 }
 
 func assignPodLabelsAndAnnotations(isLocalGPU bool, pod *corev1.Pod, pool *tfv1.GPUPool) {
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
 	if isLocalGPU {
 		pod.Labels[constants.LabelComponent] = constants.ComponentWorker
+		pod.Annotations[constants.EmbeddedWorkerAnnotation] = constants.TrueStringValue
+		// no need to add port in local gpu mode, communication is done through shared memory in the same process
 	} else {
 		pod.Labels[constants.LabelComponent] = constants.ComponentClient
 	}
 	pod.Labels[constants.GpuPoolKey] = pool.Name
-
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
-	}
-
-	// add local gpu mode in annotation, to be read by scheduler
-	if isLocalGPU {
-		pod.Annotations[constants.EmbeddedWorkerAnnotation] = constants.TrueStringValue
-		// no need to add port in local gpu mode, communication is done through shared memory in the same process
-	}
 }
 
 func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *corev1.Container, clientConfig *tfv1.ClientConfig) {
-	connectionName := fmt.Sprintf("%s%s", pod.GenerateName, shortuuid.NewWithAlphabet(constants.ShortUUIDAlphabet))
+	connectionName := fmt.Sprintf("%s%s", pod.GenerateName, utils.NewShortID(10))
 	connectionNamespace := pod.Namespace
 
+	// metadata TF_POD_NAME and TF_CONNECTION_NAMESPACE
 	container.Env = append(container.Env, corev1.EnvVar{
 		Name:  constants.ConnectionNameEnv,
 		Value: connectionName,
@@ -382,6 +382,7 @@ func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *co
 		Name:  constants.ConnectionNamespaceEnv,
 		Value: connectionNamespace,
 	})
+	// operator k8s serviceURL ? namespace
 	container.Env = append(container.Env, corev1.EnvVar{
 		Name:  constants.GetConnectionURLEnv,
 		Value: fmt.Sprintf("%s/api/connection?name=%s&namespace=%s", clientConfig.OperatorEndpoint, connectionName, connectionNamespace),

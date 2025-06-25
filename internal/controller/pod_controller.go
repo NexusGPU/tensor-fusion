@@ -69,6 +69,11 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, err
 	}
 
+	if pod.Annotations == nil {
+		log.Info("Pod has no annotations, skipped, this should never happen", "pod", pod.Name)
+		return ctrl.Result{}, nil
+	}
+
 	// Release cluster level port when Pod deleted
 	if !pod.DeletionTimestamp.IsZero() {
 		if pod.Annotations[constants.GenHostPortLabel] == constants.GenHostPortLabelValue {
@@ -77,14 +82,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			log.Info("Released port", "pod", pod.Name, "port", podPortNumber)
 		}
 	}
-	// generate tensor fusion connections and apply to cluster
-	tfConnection := generateTensorFusionConnection(pod)
-	if tfConnection == nil {
-		// not a tf client pod skipped
-		return ctrl.Result{}, nil
-	}
 
-	// TODO why enable-replicas ?, need figure out
 	if _, ok := pod.Annotations[constants.TensorFusionEnabledReplicasAnnotation]; ok {
 		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
 		if err != nil {
@@ -95,7 +93,17 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 	}
 
-	// TODO: for dynamic replica or localGPU workload, no need to create tf connection
+	if pod.Annotations[constants.IsLocalGPUAnnotation] == constants.TrueStringValue {
+		// do nothing for localGPU mode
+		return ctrl.Result{}, nil
+	}
+
+	// generate tensor fusion connections and apply to cluster
+	tfConnection := generateTensorFusionConnection(pod)
+	if tfConnection == nil {
+		log.Info("Pod is not a TensorFusion client, skipped, this should never happen", "pod", pod.Name)
+		return ctrl.Result{}, nil
+	}
 
 	existConn := &tfv1.TensorFusionConnection{}
 	if err := r.Get(ctx, types.NamespacedName{Name: tfConnection.Name, Namespace: tfConnection.Namespace}, existConn); err != nil {
@@ -113,10 +121,6 @@ func (r *PodReconciler) handleWorkerPodFinalizer(ctx context.Context, pod *corev
 	// Handle our GPU resource cleanup finalizer
 	shouldReturn, err := utils.HandleFinalizer(ctx, pod, r.Client, func(ctx context.Context, obj *corev1.Pod) (bool, error) {
 		metrics.RemoveWorkerMetrics(pod.Name, pod.DeletionTimestamp.Time)
-		podPort, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
-		_ = r.PortAllocator.ReleaseHostPort(pod.Spec.NodeName, pod.Name, podPort, false)
-
-		// TODO, make sure this logic is correct
 		counter := &v1.TensorFusionPodCounter{Client: r.Client}
 		if err := counter.Decrease(ctx, pod); err != nil {
 			return false, err
@@ -157,6 +161,7 @@ func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnectio
 		},
 		Spec: tfv1.TensorFusionConnectionSpec{
 			WorkloadName: workloadName,
+			ClientPod:    pod.Name,
 		},
 	}
 	return connection
@@ -228,8 +233,8 @@ func (r *PodReconciler) handlePodGPUCleanup(ctx context.Context, pod *corev1.Pod
 
 	// Split GPU names by comma
 	gpuNames := strings.Split(gpuNamesStr, ",")
-	gpus := lo.Map(gpuNames, func(gpuName string, _ int) types.NamespacedName {
-		return types.NamespacedName{Name: gpuName}
+	gpus := lo.Map(gpuNames, func(gpuName string, _ int) string {
+		return gpuName
 	})
 	// Release GPU resources
 	gpuResource, err := utils.GetGPUResource(pod, true)
@@ -237,10 +242,11 @@ func (r *PodReconciler) handlePodGPUCleanup(ctx context.Context, pod *corev1.Pod
 		log.Error(err, "Failed to get GPU resource", "pod", pod.Name)
 		return false, err
 	}
-	if err := r.Allocator.Dealloc(ctx, tfv1.NameNamespace{Name: pod.Name, Namespace: pod.Namespace}, gpuResource, gpus, pod.Name); err != nil {
-		log.Error(err, "Failed to release GPU resources, will retry", "gpus", gpus, "pod", pod.Name)
-		return false, err
-	}
+	r.Allocator.Dealloc(ctx,
+		tfv1.NameNamespace{Name: pod.Labels[constants.WorkloadKey], Namespace: pod.Namespace},
+		gpuResource, gpus,
+		pod.ObjectMeta,
+	)
 	log.Info("Released GPU resources via finalizer", "gpus", gpus, "pod", pod.Name)
 
 	return true, nil

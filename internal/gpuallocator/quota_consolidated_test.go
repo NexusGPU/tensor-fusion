@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -25,6 +24,8 @@ const (
 	TestPoolName  = "test-pool"
 	TestWorkload  = "test-workload"
 )
+
+var podMeta = metav1.ObjectMeta{Namespace: TestNamespace, Name: TestWorkload, UID: "test-pod"}
 
 // Test helper functions
 //
@@ -392,7 +393,7 @@ func TestGPUAllocator_QuotaIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		req := createAllocRequest(30, 300, 2)
-		allocatedGPUs, err := allocator.Alloc(ctx, req)
+		allocatedGPUs, err := allocator.Alloc(ctx, req, podMeta)
 		require.NoError(t, err)
 		require.Len(t, allocatedGPUs, 2)
 
@@ -433,7 +434,7 @@ func TestGPUAllocator_QuotaIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		req := createAllocRequest(60, 600, 2) // 60*2=120 > 100 quota
-		_, err = allocator.Alloc(ctx, req)
+		_, err = allocator.Alloc(ctx, req, podMeta)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "total.requests.tflops")
 	})
@@ -476,7 +477,7 @@ func TestGPUAllocator_ConcurrentQuotaEnforcement(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			req := createAllocRequest(10, 100, 1) // Each request uses 10 TFlops
-			_, err := allocator.Alloc(ctx, req)
+			_, err := allocator.Alloc(ctx, req, podMeta)
 			results <- err
 		}()
 	}
@@ -586,7 +587,7 @@ func TestGPUAllocator_QuotaDeallocation(t *testing.T) {
 
 	// Allocate GPUs
 	req := createAllocRequest(30, 300, 2)
-	allocatedGPUs, err := allocator.Alloc(ctx, req)
+	allocatedGPUs, err := allocator.Alloc(ctx, req, podMeta)
 	require.NoError(t, err)
 	require.Len(t, allocatedGPUs, 2)
 
@@ -597,12 +598,12 @@ func TestGPUAllocator_QuotaDeallocation(t *testing.T) {
 	assert.Equal(t, int64(40), available.RequestsTFlops.Value())
 
 	// Deallocate GPUs
-	gpuNames := make([]types.NamespacedName, len(allocatedGPUs))
+	gpuNames := make([]string, len(allocatedGPUs))
 	for i, gpu := range allocatedGPUs {
-		gpuNames[i] = types.NamespacedName{Name: gpu.Name}
+		gpuNames[i] = gpu.Name
 	}
 
-	allocator.Dealloc(ctx, req.WorkloadNameNamespace, req.Request, gpuNames)
+	allocator.Dealloc(ctx, req.WorkloadNameNamespace, req.Request, gpuNames, podMeta)
 
 	// Verify deallocation
 	usage, available, exists = allocator.quotaStore.GetQuotaStatus(TestNamespace)

@@ -180,7 +180,9 @@ func preHandleConfig(cfgPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer tempFile.Close()
+	defer func() {
+		_ = tempFile.Close()
+	}()
 	cfgBytes, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return "", err

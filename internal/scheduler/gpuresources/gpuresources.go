@@ -3,45 +3,65 @@ package gpuresources
 import (
 	"context"
 	"encoding/json"
-	"strconv"
+	"sort"
+	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const Name = "GPUResourceFit"
+const CycleStateAllocateRequest = "allocateRequest"
+const CycleStateGPUSchedulingResult = "gpuSchedulingResult"
 
+var _ framework.PreFilterPlugin = &GPUFit{}
 var _ framework.FilterPlugin = &GPUFit{}
 var _ framework.ScorePlugin = &GPUFit{}
 var _ framework.ReservePlugin = &GPUFit{}
+var _ framework.PreBindPlugin = &GPUFit{}
 
 type GPUFit struct {
 	logger    *klog.Logger
 	fh        framework.Handle
-	podLister cache.Indexer
-	pdbLister cache.Indexer
-	client    *rest.RESTClient
+	client    client.Client
 	allocator *gpuallocator.GpuAllocator
-
-	cfg *GPUFitConfig
+	ctx       context.Context
+	cfg       *GPUFitConfig
 }
 
 type GPUFitConfig struct {
 	MaxWorkerPerNode int `json:"maxWorkerPerNode"`
 }
 
+type GPUSchedulingStateData struct {
+	// PreFilter stage compose valid nodes and their GPUs
+	NodeGPUs map[string][]tfv1.GPU
+
+	// Score stage compose each node's each GPU's score,
+	// node store is sum of GPU score
+	ValidNodeGPUScore map[string]map[string]int
+
+	// In Reserve stage, bind GPUs to pod, update allocator cache
+	// In PreBind stage, fetch final GPUs call Pod patch API to update annotation
+	FinalGPUs []string
+}
+
+func (p *GPUSchedulingStateData) Clone() framework.StateData {
+	return p
+}
+
 type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
 
-func NewWithDeps(allocator *gpuallocator.GpuAllocator) PluginFactoryFunc {
+func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) PluginFactoryFunc {
 	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 		target := &GPUFitConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
@@ -55,7 +75,11 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator) PluginFactoryFunc {
 			fh:        handle,
 			cfg:       target,
 			allocator: allocator,
+			ctx:       ctx,
+			client:    client,
 		}
+
+		allocator.SetMaxWorkerPerNode(target.MaxWorkerPerNode)
 		return c, nil
 	}
 }
@@ -64,51 +88,71 @@ func (s *GPUFit) Name() string {
 	return Name
 }
 
-func (s *GPUFit) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
-	if pod.Labels == nil || pod.Labels[constants.LabelComponent] != constants.ComponentWorker {
-		return framework.NewStatus(framework.Success)
-	}
-
-	allocRequest, reason, err := composeAllocationRequest(pod)
+func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
+	allocRequest, reason, err := s.allocator.ComposeAllocationRequest(s.ctx, pod)
 	if err != nil {
-		return framework.NewStatus(framework.Unschedulable, reason)
+		return nil, framework.NewStatus(framework.Error, reason)
+	}
+	state.Write(CycleStateAllocateRequest, &allocRequest)
+
+	filteredGPUs, err := s.allocator.CheckQuotaAndFilter(ctx, allocRequest)
+	if err != nil {
+		return nil, framework.NewStatus(framework.Unschedulable, err.Error())
 	}
 
-	// TODO judge nodeInfo with better simpler way rather than loop all nodes
-	_, err = s.allocator.Filter(ctx, allocRequest)
+	validNodeGPUs := lo.GroupBy(filteredGPUs, func(gpu tfv1.GPU) string {
+		return gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+	})
+	// remove nodes that don't have enough GPUs that meet the request
+	for k, v := range validNodeGPUs {
+		if len(v) < int(allocRequest.Count) {
+			delete(validNodeGPUs, k)
+		}
+	}
+
+	// assign score based on different strategies
+	score := s.allocator.Score(ctx, allocRequest, validNodeGPUs)
+
+	state.Write(CycleStateGPUSchedulingResult, &GPUSchedulingStateData{
+		NodeGPUs:          validNodeGPUs,
+		ValidNodeGPUScore: score,
+		FinalGPUs:         []string{},
+	})
+
+	return nil, framework.NewStatus(framework.Success)
+}
+
+func (s *GPUFit) PreFilterExtensions() framework.PreFilterExtensions {
+	return nil
+}
+
+func (s *GPUFit) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
 		return framework.NewStatus(framework.Error, err.Error())
+	}
+	nodeName := nodeInfo.GetName()
+	if _, ok := filterResult.(*GPUSchedulingStateData).NodeGPUs[nodeName]; !ok {
+		return framework.NewStatus(framework.Unschedulable, "no valid node found, gpu capacity not enough")
 	}
 	return framework.NewStatus(framework.Success, "")
 }
 
-func composeAllocationRequest(pod *v1.Pod) (gpuallocator.AllocRequest, string, error) {
-	gpuResource, err := utils.GetGPUResource(pod, true)
-	if err != nil {
-		return gpuallocator.AllocRequest{}, "invalid gpu resource annotation", err
-	}
-
-	count, err := strconv.ParseUint(pod.Annotations[constants.GpuCountKey], 10, 64)
-	if err != nil {
-		return gpuallocator.AllocRequest{}, "invalid gpu count annotation", err
-	}
-	allocRequest := gpuallocator.AllocRequest{
-		PoolName: pod.Annotations[constants.GpuPoolKey],
-		Request:  gpuResource,
-
-		Count:    uint(count),
-		GPUModel: pod.Annotations[constants.GPUModelAnnotation],
-		WorkloadNameNamespace: tfv1.NameNamespace{
-			Name:      pod.Name,
-			Namespace: pod.Namespace,
-		},
-	}
-	return allocRequest, "", nil
-}
-
 func (s *GPUFit) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
-	// TODO rank nodeInfo based on GPU resources
-	return 0, nil
+	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
+	scheduledState := filterResult.(*GPUSchedulingStateData)
+	if err != nil {
+		return 0, framework.NewStatus(framework.Error, err.Error())
+	}
+	gpuScoreMap, ok := scheduledState.ValidNodeGPUScore[nodeName]
+	if !ok {
+		return 0, framework.NewStatus(framework.Unschedulable, "no valid node found, gpu capacity not enough")
+	}
+	sum := 0
+	for _, score := range gpuScoreMap {
+		sum += score
+	}
+	return int64(sum / len(gpuScoreMap)), nil
 }
 
 func (s *GPUFit) ScoreExtensions() framework.ScoreExtensions {
@@ -116,12 +160,41 @@ func (s *GPUFit) ScoreExtensions() framework.ScoreExtensions {
 }
 
 func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
-	allocRequest, reason, err := composeAllocationRequest(pod)
+	allocRequest, err := state.Read(CycleStateAllocateRequest)
 	if err != nil {
-		return framework.NewStatus(framework.Unschedulable, reason)
+		return framework.NewStatus(framework.Error, err.Error())
 	}
-	// TODO bind to node and GPUs
-	_, err = s.allocator.Bind(ctx, []*tfv1.GPU{}, allocRequest, "")
+
+	schedulingResultRaw, err := state.Read(CycleStateGPUSchedulingResult)
+	if err != nil {
+		return framework.NewStatus(framework.Error, err.Error())
+	}
+
+	// set final GPUs and try update GPU allocator cache
+	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
+	gpuScoreMap, ok := schedulingResult.ValidNodeGPUScore[nodeName]
+	if !ok {
+		return framework.NewStatus(framework.Unschedulable, "no valid node found, gpu capacity not enough")
+	}
+
+	// find top N score GPUs in this node
+	neededGPUs := allocRequest.(*gpuallocator.AllocRequest).Count
+
+	gpuScoreEntries := lo.Entries(gpuScoreMap)
+	sort.Slice(gpuScoreEntries, func(i, j int) bool {
+		return gpuScoreEntries[i].Value < gpuScoreEntries[j].Value
+	})
+
+	schedulingResult.FinalGPUs = lo.Map(gpuScoreEntries[:neededGPUs], func(entry lo.Entry[string, int], _ int) string {
+		return entry.Key
+	})
+
+	_, err = s.allocator.Bind(
+		ctx,
+		schedulingResult.FinalGPUs,
+		*allocRequest.(*gpuallocator.AllocRequest),
+		pod.ObjectMeta,
+	)
 	if err != nil {
 		return framework.NewStatus(framework.Error, err.Error())
 	}
@@ -129,17 +202,40 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 }
 
 func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
-	allocRequest, reason, err := composeAllocationRequest(pod)
+	allocRequest, err := state.Read(CycleStateAllocateRequest)
 	if err != nil {
-		s.logger.Error(err, "failed to compose allocation request", "pod", pod.Name, "reason", reason)
+		s.logger.Error(err, "failed to read gpu scheduling result", "pod", pod.Name)
 		return
 	}
-	// TODO get allocated GPU info as 4th param
-	err = s.allocator.Dealloc(ctx, tfv1.NameNamespace{
-		Name:      pod.Name,
-		Namespace: pod.Namespace,
-	}, allocRequest.Request, []types.NamespacedName{}, pod.Name)
+
+	schedulingResultRaw, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
-		s.logger.Error(err, "failed to deallocate GPU", "pod", pod.Name)
+		s.logger.Error(err, "failed to read gpu scheduling result", "pod", pod.Name)
+		return
 	}
+	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
+
+	s.allocator.Dealloc(ctx, tfv1.NameNamespace{
+		Name:      pod.Labels[constants.WorkloadKey],
+		Namespace: pod.Namespace,
+	}, allocRequest.(*gpuallocator.AllocRequest).Request, schedulingResult.FinalGPUs, pod.ObjectMeta)
+}
+
+func (s *GPUFit) PreBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
+	gpuSchedulingResult, err := state.Read(CycleStateGPUSchedulingResult)
+	if err != nil {
+		return framework.NewStatus(framework.Error, err.Error())
+	}
+	// write the allocated GPU info to Pod in bindingCycle, before default binder changing the Pod nodeName info
+	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
+	patch := []byte(`[{
+		"op": "add",
+		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
+		"value": "` + gpuIDs + `"}]`)
+
+	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patch))
+	if err != nil {
+		return framework.NewStatus(framework.Error, err.Error())
+	}
+	return framework.NewStatus(framework.Success, "")
 }

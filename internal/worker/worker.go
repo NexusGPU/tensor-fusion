@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
+	"maps"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
@@ -19,29 +18,10 @@ import (
 )
 
 type WorkerGenerator struct {
-	GpuInfos     *[]config.GpuInfo
 	WorkerConfig *tfv1.WorkerConfig
 }
 
 var ErrNoAvailableWorker = errors.New("no available worker")
-
-func WorkerPort(pod *v1.Pod) (int, error) {
-	portAnnotation, ok := pod.Annotations[constants.GenPortNumberAnnotation]
-	if ok {
-		return strconv.Atoi(portAnnotation)
-	}
-
-	// Compatible with old version in which no annotation in worker Pod
-	portEnv, ok := lo.Find(pod.Spec.Containers[0].Env, func(env v1.EnvVar) bool {
-		return env.Name == constants.WorkerPortEnv
-	})
-
-	if !ok {
-		return 0, fmt.Errorf("worker port not found in pod %s", pod.Name)
-	}
-
-	return strconv.Atoi(portEnv.Value)
-}
 
 func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
 	podTmpl := &v1.PodTemplate{}
@@ -54,14 +34,22 @@ func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
 
 func (wg *WorkerGenerator) GenerateWorkerPod(
 	workload *tfv1.TensorFusionWorkload,
-	podTemplateHash string,
-) (*v1.Pod, string, error) {
+) (*v1.Pod, error) {
 	podTmpl := &v1.PodTemplate{}
 	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to unmarshal pod template: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal pod template: %w", err)
 	}
 	spec := podTmpl.Template.Spec
+
+	// Set environment variable to make all GPUs visible to the worker,
+	// vgpu.rs limiter will limit to specific devices after Pod started
+	spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
+		Name:  constants.NvidiaVisibleAllDeviceEnv,
+		Value: constants.NvidiaVisibleAllDeviceValue,
+	})
+
+	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{
 		Name: constants.DataVolumeName,
 		VolumeSource: v1.VolumeSource{
@@ -75,15 +63,37 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	// performance optimization, service link will cause high CPU usage when service number is large
 	spec.EnableServiceLinks = ptr.To(false)
 
+	// Add labels to identify this pod as part of the workload
+	labels, annotations := appendLabelsAndAnnotations(podTmpl, workload)
+
 	return &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: fmt.Sprintf("%s-tf-worker-", workload.Name),
 			Namespace:    workload.Namespace,
-			Labels:       podTmpl.Template.Labels,
-			Annotations:  map[string]string{},
+			Labels:       labels,
+			Annotations:  annotations,
 		},
 		Spec: spec,
-	}, podTemplateHash, nil
+	}, nil
+}
+
+func appendLabelsAndAnnotations(podTmpl *v1.PodTemplate, workload *tfv1.TensorFusionWorkload) (map[string]string, map[string]string) {
+	labels := maps.Clone(podTmpl.Template.Labels)
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels[constants.LabelComponent] = constants.ComponentWorker
+
+	annotations := maps.Clone(podTmpl.Template.Annotations)
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	res := workload.Spec.Resources
+	annotations[constants.TFLOPSLimitAnnotation] = res.Limits.Tflops.String()
+	annotations[constants.VRAMLimitAnnotation] = res.Limits.Vram.String()
+	annotations[constants.TFLOPSRequestAnnotation] = res.Requests.Tflops.String()
+	annotations[constants.VRAMRequestAnnotation] = res.Requests.Vram.String()
+	return labels, annotations
 }
 
 func SelectWorker(
@@ -94,7 +104,9 @@ func SelectWorker(
 ) (*tfv1.WorkerStatus, error) {
 
 	workerList := v1.PodList{}
-	k8sClient.List(ctx, &workerList, client.MatchingLabels{constants.WorkloadKey: workload.Name})
+	if err := k8sClient.List(ctx, &workerList, client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
+		return nil, fmt.Errorf("can not list worker pods: %w", err)
+	}
 	usageMapping := lo.SliceToMap(workerList.Items, func(pod v1.Pod) (string, int) {
 		return pod.Name, 0
 	})
@@ -134,15 +146,9 @@ func SelectWorker(
 		return usageMapping[a.Name] < usageMapping[b.Name]
 	})
 
-	workerPort, err := WorkerPort(&selectedWorker)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get worker port: %w", err)
-	}
-
 	return &tfv1.WorkerStatus{
 		WorkerName:      selectedWorker.Name,
 		WorkerIp:        selectedWorker.Status.PodIP,
-		WorkerPort:      workerPort,
 		ResourceVersion: selectedWorker.ResourceVersion,
 	}, nil
 }

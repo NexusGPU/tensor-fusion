@@ -27,10 +27,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var workloadNameNs = tfv1.NameNamespace{Namespace: "default", Name: "test-workload"}
+
+var testPodMeta = metav1.ObjectMeta{UID: "test-pod"}
 
 var _ = Describe("GPU Allocator", func() {
 	var allocator *GpuAllocator
@@ -42,16 +43,15 @@ var _ = Describe("GPU Allocator", func() {
 			Request:               request,
 			Count:                 count,
 			GPUModel:              gpuModel,
-		}, "test-pod")
+		}, testPodMeta)
 		allocator.syncToK8s(ctx)
 		return gpus, err
 	}
 
 	deallocateAndSync := func(gpus []*tfv1.GPU, request tfv1.Resource) {
-		allocator.Dealloc(ctx, workloadNameNs, request, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) types.NamespacedName {
-			return client.ObjectKeyFromObject(gpu)
-		}), "test-pod")
-		Expect(err).NotTo(HaveOccurred())
+		allocator.Dealloc(ctx, workloadNameNs, request, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
+			return gpu.Name
+		}), testPodMeta)
 		allocator.syncToK8s(ctx)
 	}
 

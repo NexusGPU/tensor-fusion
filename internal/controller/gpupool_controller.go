@@ -183,9 +183,10 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 		}
 
 		for _, runningApp := range node.Status.AllocationInfo {
-			if _, ok := deduplicationMap[runningApp.Name+"_"+runningApp.Namespace]; !ok {
+			workloadIdentifier := runningApp.Name + "_" + runningApp.Namespace
+			if _, ok := deduplicationMap[workloadIdentifier]; !ok {
 				runningAppsCnt++
-				deduplicationMap[runningApp.Name+"_"+runningApp.Namespace] = struct{}{}
+				deduplicationMap[workloadIdentifier] = struct{}{}
 			}
 		}
 	}

@@ -36,8 +36,6 @@ type WorkerStatus struct {
 	// +optional
 	WorkerIp string `json:"workerIp,omitempty"`
 	// +optional
-	WorkerPort int `json:"workerPort,omitempty"`
-	// +optional
 	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 

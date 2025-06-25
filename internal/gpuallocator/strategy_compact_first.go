@@ -120,3 +120,8 @@ func (c CompactFirst) SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, erro
 	}
 	return result, nil
 }
+
+func (c CompactFirst) Score(gpu tfv1.GPU) int64 {
+	// TODO
+	return gpu.Status.Available.Vram.Value()
+}

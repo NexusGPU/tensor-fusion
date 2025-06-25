@@ -217,7 +217,6 @@ var _ = BeforeSuite(func() {
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		Recorder:      mgr.GetEventRecorderFor("TensorFusionWorkload"),
-		GpuInfos:      config.MockGpuInfo(),
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())

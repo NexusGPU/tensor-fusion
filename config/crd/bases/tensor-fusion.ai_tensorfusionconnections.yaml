@@ -40,9 +40,12 @@ spec:
           spec:
             description: TensorFusionConnectionSpec defines the desired state of TensorFusionConnection.
             properties:
+              clientPod:
+                type: string
               workloadName:
                 type: string
             required:
+            - clientPod
             - workloadName
             type: object
           status:

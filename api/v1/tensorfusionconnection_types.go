@@ -34,6 +34,7 @@ type Resources struct {
 // TensorFusionConnectionSpec defines the desired state of TensorFusionConnection.
 type TensorFusionConnectionSpec struct {
 	WorkloadName string `json:"workloadName"`
+	ClientPod    string `json:"clientPod"`
 }
 
 // TensorFusionConnectionStatus defines the observed state of TensorFusionConnection.
