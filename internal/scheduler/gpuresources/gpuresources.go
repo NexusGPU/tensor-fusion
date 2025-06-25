@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -35,11 +36,7 @@ type GPUFit struct {
 	client    client.Client
 	allocator *gpuallocator.GpuAllocator
 	ctx       context.Context
-	cfg       *GPUFitConfig
-}
-
-type GPUFitConfig struct {
-	MaxWorkerPerNode int `json:"maxWorkerPerNode"`
+	cfg       *config.GPUFitConfig
 }
 
 type GPUSchedulingStateData struct {
@@ -63,7 +60,7 @@ type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle fram
 
 func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) PluginFactoryFunc {
 	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
-		target := &GPUFitConfig{}
+		target := &config.GPUFitConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
 			if err := json.Unmarshal(unknown.Raw, target); err != nil {
 				return nil, err
@@ -111,7 +108,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 	}
 
 	// assign score based on different strategies
-	score := s.allocator.Score(ctx, allocRequest, validNodeGPUs)
+	score := s.allocator.Score(ctx, s.cfg, allocRequest, validNodeGPUs)
 
 	state.Write(CycleStateGPUSchedulingResult, &GPUSchedulingStateData{
 		NodeGPUs:          validNodeGPUs,

@@ -5,13 +5,18 @@ import (
 	"sort"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/samber/lo"
 )
 
 // LowLoadFirst selects GPU with maximum available resources (least utilized)
 // to distribute workloads more evenly across GPUs
-type LowLoadFirst struct{}
+type LowLoadFirst struct {
+	cfg *config.GPUFitConfig
+}
+
+var _ Strategy = LowLoadFirst{}
 
 // SelectGPUs selects multiple GPUs from the same node with the most available resources (least loaded)
 func (l LowLoadFirst) SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, error) {
@@ -115,7 +120,9 @@ func (l LowLoadFirst) SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, erro
 	return result, nil
 }
 
-func (l LowLoadFirst) Score(gpu tfv1.GPU) int64 {
-	// TODO
-	return gpu.Status.Available.Vram.Value()
+// Score function is using by Kubernetes scheduler framework
+func (l LowLoadFirst) Score(gpu tfv1.GPU) int {
+	tflopsAvailablePercentage := gpu.Status.Available.Tflops.AsApproximateFloat64() / gpu.Status.Capacity.Tflops.AsApproximateFloat64() * 100
+	vramAvailablePercentage := gpu.Status.Available.Vram.AsApproximateFloat64() / gpu.Status.Capacity.Vram.AsApproximateFloat64() * 100
+	return normalizeScore(l.cfg, vramAvailablePercentage, tflopsAvailablePercentage)
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -26,20 +27,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
+const MaxGPUCounterPerAllocation = 128
+
 type Strategy interface {
-	Score(gpu tfv1.GPU) int64
+	Score(gpu tfv1.GPU) int
 
 	SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, error)
 }
 
 // NewStrategy creates a strategy based on the placement mode
-func NewStrategy(placementMode tfv1.PlacementMode) Strategy {
+func NewStrategy(placementMode tfv1.PlacementMode, cfg *config.GPUFitConfig) Strategy {
 	switch placementMode {
 	case tfv1.PlacementModeLowLoadFirst:
-		return LowLoadFirst{}
+		return LowLoadFirst{cfg: cfg}
 	default:
 		// CompactFirst is the default strategy
-		return CompactFirst{}
+		return CompactFirst{cfg: cfg}
 	}
 }
 
@@ -60,7 +63,7 @@ type GpuAllocator struct {
 	dirtyQueueLock sync.Mutex
 
 	// each pod can only allocate and deallocate once, and deallocation must be after allocation
-	uniqueAllocation   map[string]AllocRequest
+	uniqueAllocation   map[string]*AllocRequest
 	uniqueDeallocation map[string]struct{}
 
 	maxWorkerPerNode int
@@ -131,7 +134,9 @@ func (s *GpuAllocator) Select(ctx context.Context, req AllocRequest, filteredGPU
 		}
 	}
 
-	strategy := NewStrategy(schedulingConfigTemplate.Spec.Placement.Mode)
+	strategy := NewStrategy(schedulingConfigTemplate.Spec.Placement.Mode, &config.GPUFitConfig{
+		MaxWorkerPerNode: s.maxWorkerPerNode,
+	})
 	selectedGPUs, err := strategy.SelectGPUs(filteredGPUs, req.Count)
 	if err != nil {
 		return nil, fmt.Errorf("select GPU: %w", err)
@@ -210,7 +215,7 @@ func (s *GpuAllocator) Bind(
 		result[i] = s.gpuStore[key].DeepCopy()
 	}
 
-	s.uniqueAllocation[string(podMeta.UID)] = req
+	s.uniqueAllocation[string(podMeta.UID)] = &req
 	return result, nil
 }
 
@@ -247,6 +252,15 @@ func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req AllocRequest
 	}
 	if len(filteredGPUs) == 0 {
 		return nil, fmt.Errorf("no gpus available in pool %s after filtering", req.PoolName)
+	}
+
+	if s.maxWorkerPerNode > 0 {
+		for _, gpu := range filteredGPUs {
+			nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+			if len(s.nodeWorkerStore[nodeName]) > s.maxWorkerPerNode {
+				return nil, fmt.Errorf("node %s has reached the maximum number of workers", nodeName)
+			}
+		}
 	}
 
 	return filteredGPUs, nil
@@ -346,9 +360,19 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 }
 
 // First level is k8s node name, second level is GPU name, value is score
-func (s *GpuAllocator) Score(ctx context.Context, req AllocRequest, validNodeGPUs map[string][]tfv1.GPU) map[string]map[string]int {
-	// TODO
-	return nil
+func (s *GpuAllocator) Score(ctx context.Context, cfg *config.GPUFitConfig, req AllocRequest, validNodeGPUs map[string][]tfv1.GPU) map[string]map[string]int {
+	result := make(map[string]map[string]int, len(validNodeGPUs))
+	strategy := NewStrategy(s.getPlacementMode(ctx, req.PoolName), cfg)
+	for nodeName, gpus := range validNodeGPUs {
+		for _, gpu := range gpus {
+			res := strategy.Score(gpu)
+			if _, exists := result[nodeName]; !exists {
+				result[nodeName] = make(map[string]int, len(gpus))
+			}
+			result[nodeName][gpu.Name] = res
+		}
+	}
+	return result
 }
 
 // startSyncLoop starts a goroutine that periodically syncs the in-memory store with Kubernetes
@@ -693,7 +717,7 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 				logger.Error(err, "Failed to compose allocation request", "pod", worker.Name)
 				return false
 			}
-			s.uniqueAllocation[string(worker.UID)] = allocRequest
+			s.uniqueAllocation[string(worker.UID)] = &allocRequest
 			s.addAllocationMap(worker.Spec.NodeName, worker.ObjectMeta)
 		}
 		return scheduled && !deleted
@@ -816,9 +840,12 @@ func (s *GpuAllocator) ComposeAllocationRequest(ctx context.Context, pod *v1.Pod
 		return AllocRequest{}, "invalid gpu resource annotation", err
 	}
 
-	count, err := strconv.ParseUint(pod.Annotations[constants.GpuCountAnnotation], 10, 64)
+	count, err := strconv.ParseUint(pod.Annotations[constants.GpuCountAnnotation], 10, 32)
 	if err != nil {
 		return AllocRequest{}, "invalid gpu count annotation", err
+	}
+	if count > MaxGPUCounterPerAllocation {
+		return AllocRequest{}, "gpu count annotation is too large", nil
 	}
 	allocRequest := AllocRequest{
 		PoolName: pod.Annotations[constants.GpuPoolKey],
@@ -841,4 +868,29 @@ func (s *GpuAllocator) addAllocationMap(gpuNodeName string, podMeta metav1.Objec
 	}
 	workerPodKey := types.NamespacedName{Namespace: podMeta.Namespace, Name: podMeta.Name}
 	s.nodeWorkerStore[gpuNodeName][workerPodKey] = struct{}{}
+}
+
+func (s *GpuAllocator) getPlacementMode(ctx context.Context, poolName string) tfv1.PlacementMode {
+	pool := &tfv1.GPUPool{}
+	if err := s.Client.Get(ctx, client.ObjectKey{Name: poolName}, pool); err != nil {
+		// if failed to get pool, default to compact first
+		return tfv1.PlacementModeCompactFirst
+	}
+
+	if pool.Spec.SchedulingConfigTemplate == nil || *pool.Spec.SchedulingConfigTemplate == "" {
+		return tfv1.PlacementModeCompactFirst
+	}
+
+	// get scheduling config template
+	schedulingConfigTemplate := &tfv1.SchedulingConfigTemplate{}
+	if err := s.Client.Get(ctx, client.ObjectKey{Name: *pool.Spec.SchedulingConfigTemplate}, schedulingConfigTemplate); err != nil {
+		// if failed to get scheduling config template, default to compact first
+		return tfv1.PlacementModeCompactFirst
+	}
+	return schedulingConfigTemplate.Spec.Placement.Mode
+}
+
+// normalize score to [0, 100]
+func normalizeScore(cfg *config.GPUFitConfig, vramScore, tflopsScore float64) int {
+	return int(vramScore*cfg.VramWeight + tflopsScore*cfg.TflopsWeight)
 }
