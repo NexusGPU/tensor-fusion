@@ -8,22 +8,20 @@ profiles:
   plugins:
     preFilter:
       enabled:
-      - name: GPUResourceFit
+      - name: GPUResourcesFit
     filter:
       enabled:
-      - name: GPUResourceFit
+      - name: GPUResourcesFit
       - name: GPUNetworkTopologyAware
     score:
       enabled:
-      - name: GPUResourceFit
+      - name: GPUResourcesFit
         weight: 5
-      - name: GPUNetworkTopologyAware
-        weight: 7
     preBind:
       enabled:
-      - name: GPUResourceFit
+      - name: GPUResourcesFit
   pluginConfig:
-  - name: GPUResourceFit
+  - name: GPUResourcesFit
     args:
       maxWorkerPerNode: 256
       vramWeight: 0.7

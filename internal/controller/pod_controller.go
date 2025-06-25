@@ -39,6 +39,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
@@ -68,10 +69,21 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		log.Error(err, "Failed to get Pod")
 		return ctrl.Result{}, err
 	}
-
+	// avoid possible nil pointer error
 	if pod.Annotations == nil {
-		log.Info("Pod has no annotations, skipped, this should never happen", "pod", pod.Name)
-		return ctrl.Result{}, nil
+		pod.Annotations = map[string]string{}
+	}
+
+	// check if need to set owner reference
+	if ownedWorkloadName, ok := pod.Annotations[constants.SetPendingOwnedWorkloadAnnotation]; ok {
+		log.Info("Setting pending owned workload", "pod", pod.Name, "ownedWorkload", ownedWorkloadName)
+		if err := r.setPendingOwnedWorkload(ctx, pod, ownedWorkloadName); err != nil {
+			return ctrl.Result{}, err
+		}
+		delete(pod.Annotations, constants.SetPendingOwnedWorkloadAnnotation)
+		if err := r.Update(ctx, pod); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Release cluster level port when Pod deleted
@@ -83,7 +95,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 	}
 
-	if _, ok := pod.Annotations[constants.TensorFusionEnabledReplicasAnnotation]; ok {
+	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
 		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -93,23 +105,20 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 	}
 
-	if pod.Annotations[constants.IsLocalGPUAnnotation] == constants.TrueStringValue {
-		// do nothing for localGPU mode
-		return ctrl.Result{}, nil
-	}
-
 	// generate tensor fusion connections and apply to cluster
-	tfConnection := generateTensorFusionConnection(pod)
-	if tfConnection == nil {
-		log.Info("Pod is not a TensorFusion client, skipped, this should never happen", "pod", pod.Name)
-		return ctrl.Result{}, nil
-	}
+	if pod.Labels[constants.LabelComponent] == constants.ComponentClient {
+		tfConnection := generateTensorFusionConnection(pod)
+		if tfConnection == nil {
+			log.Info("Pod is not a TensorFusion client, skipped, this should never happen", "pod", pod.Name)
+			return ctrl.Result{}, nil
+		}
 
-	existConn := &tfv1.TensorFusionConnection{}
-	if err := r.Get(ctx, types.NamespacedName{Name: tfConnection.Name, Namespace: tfConnection.Namespace}, existConn); err != nil {
-		if errors.IsNotFound(err) {
-			if err := r.Create(ctx, tfConnection); err != nil {
-				return ctrl.Result{}, fmt.Errorf("create connection(%s) : %w", tfConnection.Namespace+"/"+tfConnection.Name, err)
+		existConn := &tfv1.TensorFusionConnection{}
+		if err := r.Get(ctx, types.NamespacedName{Name: tfConnection.Name, Namespace: tfConnection.Namespace}, existConn); err != nil {
+			if errors.IsNotFound(err) {
+				if err := r.Create(ctx, tfConnection); err != nil {
+					return ctrl.Result{}, fmt.Errorf("create connection(%s) : %w", tfConnection.Namespace+"/"+tfConnection.Name, err)
+				}
 			}
 		}
 	}
@@ -125,13 +134,22 @@ func (r *PodReconciler) handleWorkerPodFinalizer(ctx context.Context, pod *corev
 		if err := counter.Decrease(ctx, pod); err != nil {
 			return false, err
 		}
-
 		return r.handlePodGPUCleanup(ctx, pod)
+
 	})
 	if err != nil {
 		return false, err
 	}
 	return shouldReturn, nil
+}
+
+func (r *PodReconciler) setPendingOwnedWorkload(ctx context.Context, pod *corev1.Pod, ownedWorkloadName string) error {
+	tfWorkload := &tfv1.TensorFusionWorkload{}
+	if err := r.Get(ctx, types.NamespacedName{Name: ownedWorkloadName, Namespace: pod.Namespace}, tfWorkload); err != nil {
+		return err
+	}
+	controllerutil.SetControllerReference(pod, tfWorkload, r.Scheme)
+	return r.Update(ctx, tfWorkload)
 }
 
 func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnection {
@@ -170,8 +188,12 @@ func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnectio
 // SetupWithManager sets up the controller with the Manager.
 func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	p, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
-		MatchLabels: map[string]string{
-			constants.Domain + "/enabled": "true",
+		MatchExpressions: []metav1.LabelSelectorRequirement{
+			{
+				Key:      constants.LabelComponent,
+				Operator: metav1.LabelSelectorOpIn,
+				Values:   []string{constants.ComponentClient, constants.ComponentWorker},
+			},
 		},
 	})
 	if err != nil {

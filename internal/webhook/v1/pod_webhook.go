@@ -104,6 +104,10 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		podCounterAnnotationKey = podCounterKey
 	}
 
+	if tfInfo.PendingSetPodAsOwner {
+		pod.Annotations[constants.SetPendingOwnedWorkloadAnnotation] = tfInfo.WorkloadName
+	}
+
 	pool := &tfv1.GPUPool{}
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.Profile.PoolName}, pool); err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("gpu pool(%s) does not exist", tfInfo.Profile.PoolName))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -15,8 +16,6 @@ import (
 const Name = "GPUNetworkTopologyAware"
 
 var _ framework.FilterPlugin = &GPUNetworkTopologyAware{}
-var _ framework.ScorePlugin = &GPUNetworkTopologyAware{}
-var _ framework.ReservePlugin = &GPUNetworkTopologyAware{}
 
 type GPUNetworkTopologyAware struct {
 	logger    *klog.Logger
@@ -24,18 +23,14 @@ type GPUNetworkTopologyAware struct {
 	allocator *gpuallocator.GpuAllocator
 	client    client.Client
 	ctx       context.Context
-	cfg       *GPUNetworkTopologyAwareConfig
-}
-
-type GPUNetworkTopologyAwareConfig struct {
-	TotalIntranetBandWidthGBps int64 `json:"totalIntranetBandWidthGBps"`
+	cfg       *config.GPUNetworkTopologyAwareConfig
 }
 
 type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
 
 func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) PluginFactoryFunc {
 	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
-		target := &GPUNetworkTopologyAwareConfig{}
+		target := &config.GPUNetworkTopologyAwareConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
 			if err := json.Unmarshal(unknown.Raw, target); err != nil {
 				return nil, err
@@ -58,21 +53,6 @@ func (s *GPUNetworkTopologyAware) Name() string {
 	return Name
 }
 
-func (s *GPUNetworkTopologyAware) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
-	return 0, nil
-}
-
-func (s *GPUNetworkTopologyAware) ScoreExtensions() framework.ScoreExtensions {
-	return nil
-}
-
 func (s *GPUNetworkTopologyAware) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
-	return nil
-}
-
-func (s *GPUNetworkTopologyAware) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
-	return nil
-}
-
-func (s *GPUNetworkTopologyAware) Unreserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
+	return framework.NewStatus(framework.Success, "")
 }

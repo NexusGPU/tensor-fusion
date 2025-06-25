@@ -20,7 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const Name = "GPUResourceFit"
+const Name = "GPUResourcesFit"
 const CycleStateAllocateRequest = "allocateRequest"
 const CycleStateGPUSchedulingResult = "gpuSchedulingResult"
 

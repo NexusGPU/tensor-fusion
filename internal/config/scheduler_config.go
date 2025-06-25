@@ -6,3 +6,7 @@ type GPUFitConfig struct {
 	VramWeight   float64 `json:"vramWeight"`
 	TflopsWeight float64 `json:"tflopsWeight"`
 }
+
+type GPUNetworkTopologyAwareConfig struct {
+	TotalIntranetBandWidthGBps int64 `json:"totalIntranetBandWidthGBps"`
+}

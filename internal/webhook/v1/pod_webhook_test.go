@@ -74,7 +74,15 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					Annotations: map[string]string{
 						constants.GpuPoolKey:                "mock",
 						constants.InjectContainerAnnotation: "main",
-						constants.WorkloadKey:               "test-workload-empty-ns",
+					},
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: "apps/v1",
+							Kind:       "ReplicaSet",
+							Name:       "test-workload",
+							UID:        "owner-uid",
+							Controller: ptr.To(true),
+						},
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -144,7 +152,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.GpuPoolKey:                "mock",
 						constants.WorkloadProfileAnnotation: "test-profile-handle",
 						constants.InjectContainerAnnotation: "main",
-						constants.WorkloadKey:               "test-workload",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -190,10 +197,10 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			workload := &tfv1.TensorFusionWorkload{}
 			err = k8sClient.Get(ctx, client.ObjectKey{Name: "test-workload", Namespace: "default"}, workload)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(*workload.Spec.Replicas).To(Equal(int32(1)))
+			Expect(workload.Spec.Replicas).To(BeNil())
 			// check workload owner reference
 			Expect(workload.OwnerReferences).To(HaveLen(1))
-			Expect(workload.OwnerReferences[0].Name).To(Equal("owner"))
+			Expect(workload.OwnerReferences[0].Name).To(Equal("test-workload"))
 		})
 
 		It("should handle pods without TF requirements", func() {
@@ -298,7 +305,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.GpuPoolKey:                "mock",
 						constants.WorkloadProfileAnnotation: "local-gpu-profile",
 						constants.InjectContainerAnnotation: "main",
-						constants.WorkloadKey:               "local-gpu-workload",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -408,7 +414,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.GpuPoolKey:                            "mock",
 						constants.WorkloadProfileAnnotation:             "test-profile-enabled-replicas",
 						constants.InjectContainerAnnotation:             "main",
-						constants.WorkloadKey:                           "test-workload",
 						constants.TensorFusionEnabledReplicasAnnotation: fmt.Sprintf("%d", enabledReplicas), // Using the correct constant
 					},
 					OwnerReferences: []metav1.OwnerReference{
@@ -497,7 +502,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					Annotations: map[string]string{
 						constants.GpuPoolKey:                "mock",
 						constants.WorkloadProfileAnnotation: "test-profile-parse-tf-resources",
-						constants.WorkloadKey:               "test-workload",
 						// override tflops request
 						constants.TFLOPSRequestAnnotation:               "20",
 						constants.InjectContainerAnnotation:             "test-container",

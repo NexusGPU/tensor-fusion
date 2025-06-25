@@ -58,7 +58,8 @@ const (
 	// GPUModelAnnotation specifies the required GPU model (e.g., "A100", "H100")
 	GPUModelAnnotation = Domain + "/gpu-model"
 	// GPU ID list is assigned by scheduler, should not specified by user
-	GPUDeviceIDsAnnotation = Domain + "/gpu-ids"
+	GPUDeviceIDsAnnotation            = Domain + "/gpu-ids"
+	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
 
 	GenHostPortLabel             = Domain + "/host-port"
 	GenHostPortLabelValue        = "auto"

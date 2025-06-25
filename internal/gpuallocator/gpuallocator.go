@@ -354,6 +354,9 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 		nodeWorkerStore: make(map[string]map[types.NamespacedName]struct{}),
 		syncInterval:    syncInterval,
 		dirtyQueue:      make(map[types.NamespacedName]struct{}),
+
+		uniqueAllocation:   make(map[string]*AllocRequest),
+		uniqueDeallocation: make(map[string]struct{}),
 	}
 
 	return allocator
@@ -449,9 +452,52 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 		return readyCh, fmt.Errorf("failed to setup indexer for field metadata.name: %w", indexErr)
 	}
 
+	// setup gpu quota indexer
+
+	err := s.startInformerForGPU(ctx, mgr)
+	if err != nil {
+		return readyCh, err
+	}
+
+	err = s.startInformerForGPUQuota(ctx, mgr)
+	if err != nil {
+		return readyCh, err
+	}
+
+	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		// Create a context with cancel function for the sync loop
+		_, cancel := context.WithCancel(ctx)
+		s.cancel = cancel
+		// Initialize the GPU store and quota store
+		if err := s.initGPUAndQuotaStore(ctx); err != nil {
+			log.Error(err, "Failed to initialize GPU and quota store")
+			return err
+		}
+		close(readyCh)
+		return nil
+	}))
+
+	go func() {
+		<-mgr.Elected()
+		<-readyCh
+		// reconcile allocation state based on existing workers, run only when it's elected as leader
+		// and only if it's leader, it will start allocating resources to workers, and start sync loop here
+		s.reconcileAllocationState(ctx)
+		log.Info("GPU store data reconciled")
+
+		// Start the background sync goroutine
+		go s.startSyncLoop(ctx)
+	}()
+
+	return readyCh, err
+}
+
+func (s *GpuAllocator) startInformerForGPU(ctx context.Context, mgr manager.Manager) error {
+	log := log.FromContext(ctx)
+
 	informer, err := mgr.GetCache().GetInformer(ctx, &tfv1.GPU{})
 	if err != nil {
-		return readyCh, fmt.Errorf("failed to get GPU informer: %w", err)
+		return fmt.Errorf("failed to get GPU informer: %w", err)
 	}
 
 	// Add event handlers
@@ -492,37 +538,95 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 			s.handleGPUUpdate(ctx, newGPU)
 		},
 	})
+	return err
+}
 
+func (s *GpuAllocator) startInformerForGPUQuota(ctx context.Context, mgr manager.Manager) error {
+	log := log.FromContext(ctx)
+
+	informer, err := mgr.GetCache().GetInformer(ctx, &tfv1.GPUResourceQuota{})
 	if err != nil {
-		return readyCh, fmt.Errorf("failed to add event handler: %w", err)
+		return fmt.Errorf("failed to get GPUResourceQuota informer: %w", err)
 	}
 
-	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		// Create a context with cancel function for the sync loop
-		_, cancel := context.WithCancel(ctx)
-		s.cancel = cancel
-		// Initialize the GPU store and quota store
-		if err := s.initGPUAndQuotaStore(ctx); err != nil {
-			log.Error(err, "Failed to initialize GPU and quota store")
-			return err
-		}
-		close(readyCh)
-		return nil
-	}))
+	// Add event handlers
+	_, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj any) {
+			gpuQuota, ok := obj.(*tfv1.GPUResourceQuota)
+			if !ok {
+				log.Error(fmt.Errorf("unexpected type"), "expected GPUResourceQuota")
+				return
+			}
+			s.handleGPUQuotaCreate(ctx, gpuQuota)
+		},
+		DeleteFunc: func(obj any) {
+			gpuQuota, ok := obj.(*tfv1.GPUResourceQuota)
+			if !ok {
+				// When a delete is dropped, the relist will notice a GPUResourceQuota in the store not
+				// in the list, leading to the insertion of a tombstone object which contains
+				// the deleted key/value.
+				tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+				if !ok {
+					log.Error(fmt.Errorf("unexpected type"), "expected GPUResourceQuota or tombstone")
+					return
+				}
+				gpuQuota, ok = tombstone.Obj.(*tfv1.GPUResourceQuota)
+				if !ok {
+					log.Error(fmt.Errorf("unexpected type"), "expected GPUResourceQuota in tombstone")
+					return
+				}
+			}
+			s.handleGPUQuotaDelete(ctx, gpuQuota)
+		},
+		UpdateFunc: func(oldObj, newObj any) {
+			newGPUQuota, ok := newObj.(*tfv1.GPUResourceQuota)
+			if !ok {
+				log.Error(fmt.Errorf("unexpected type"), "expected new GPUResourceQuota")
+				return
+			}
+			s.handleGPUQuotaUpdate(ctx, newGPUQuota)
+		},
+	})
+	return err
+}
 
-	go func() {
-		<-mgr.Elected()
-		<-readyCh
-		// reconcile allocation state based on existing workers, run only when it's elected as leader
-		// and only if it's leader, it will start allocating resources to workers, and start sync loop here
-		s.reconcileAllocationState(ctx)
-		log.Info("GPU store data reconciled")
+// handleGPUQuotaCreate handles GPU quota creation events
+func (s *GpuAllocator) handleGPUQuotaCreate(ctx context.Context, gpuQuota *tfv1.GPUResourceQuota) {
+	log := log.FromContext(ctx)
+	key := gpuQuota.Namespace
 
-		// Start the background sync goroutine
-		go s.startSyncLoop(ctx)
-	}()
+	s.quotaStore.storeMutex.Lock()
+	defer s.quotaStore.storeMutex.Unlock()
 
-	return readyCh, err
+	// Add GPU quota to store, TODO: need verify logic
+	s.quotaStore.quotaStore[key].quota = gpuQuota.DeepCopy()
+	log.V(4).Info("Added GPU quota to store", "namespace", key)
+}
+
+// handleGPUQuotaDelete handles GPU quota deletion events
+func (s *GpuAllocator) handleGPUQuotaDelete(ctx context.Context, gpuQuota *tfv1.GPUResourceQuota) {
+	log := log.FromContext(ctx)
+	key := gpuQuota.Namespace
+
+	s.quotaStore.storeMutex.Lock()
+	defer s.quotaStore.storeMutex.Unlock()
+
+	// Remove GPU quota from store
+	delete(s.quotaStore.quotaStore, key)
+	log.V(4).Info("Removed GPU quota from store", "namespace", key)
+}
+
+// handleGPUQuotaUpdate handles GPU quota update events
+func (s *GpuAllocator) handleGPUQuotaUpdate(ctx context.Context, gpuQuota *tfv1.GPUResourceQuota) {
+	log := log.FromContext(ctx)
+	key := gpuQuota.Namespace
+
+	s.quotaStore.storeMutex.Lock()
+	defer s.quotaStore.storeMutex.Unlock()
+
+	// TODO verify logic
+	s.quotaStore.quotaStore[key].quota = gpuQuota.DeepCopy()
+	log.V(4).Info("Updated GPU quota in store (preserve Used)", "namespace", key)
 }
 
 // handleGPUCreate handles GPU creation events
@@ -560,12 +664,13 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 	defer s.storeMutex.Unlock()
 
 	if old, ok := s.gpuStore[key]; ok && old != nil {
-		// Keep the Available field in the store
-		newGpu := gpu.DeepCopy()
-		if old.Status.Available != nil {
-			newGpu.Status.Available = old.Status.Available
-		}
-		s.gpuStore[key] = newGpu
+		// should never update available and runningApps here, to avoid circular update
+		s.gpuStore[key].Status.Capacity = gpu.Status.Capacity.DeepCopy()
+		s.gpuStore[key].Status.Phase = gpu.Status.Phase
+		s.gpuStore[key].Status.Message = gpu.Status.Message
+		s.gpuStore[key].Status.UUID = gpu.Status.UUID
+		s.gpuStore[key].Status.NodeSelector = gpu.Status.NodeSelector
+		s.gpuStore[key].Status.GPUModel = gpu.Status.GPUModel
 		log.V(4).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
 	} else {
 		s.gpuStore[key] = gpu.DeepCopy()
