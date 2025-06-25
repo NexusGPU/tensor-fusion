@@ -102,17 +102,16 @@ func SelectWorker(
 	workload *tfv1.TensorFusionWorkload,
 	maxSkew int32,
 ) (*tfv1.WorkerStatus, error) {
-
-	workerList := v1.PodList{}
-	if err := k8sClient.List(ctx, &workerList, client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
+	workerList := &v1.PodList{}
+	if err := k8sClient.List(ctx, workerList, client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
 		return nil, fmt.Errorf("can not list worker pods: %w", err)
 	}
 	usageMapping := lo.SliceToMap(workerList.Items, func(pod v1.Pod) (string, int) {
 		return pod.Name, 0
 	})
 
-	connectionList := tfv1.TensorFusionConnectionList{}
-	if err := k8sClient.List(ctx, &connectionList, client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
+	connectionList := &tfv1.TensorFusionConnectionList{}
+	if err := k8sClient.List(ctx, connectionList, client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
 		return nil, fmt.Errorf("list TensorFusionConnection: %w", err)
 	}
 	lo.ForEach(connectionList.Items, func(conn tfv1.TensorFusionConnection, _ int) {

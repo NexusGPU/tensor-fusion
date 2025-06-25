@@ -143,34 +143,42 @@ func parseAutoScalingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workload
 }
 
 func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) error {
-	workloadProfile.Spec.Resources.Requests.Tflops = parseResourceQuantity(pod, constants.TFLOPSRequestAnnotation)
-	workloadProfile.Spec.Resources.Requests.Vram = parseResourceQuantity(pod, constants.VRAMRequestAnnotation)
-	workloadProfile.Spec.Resources.Limits.Tflops = parseResourceQuantity(pod, constants.TFLOPSLimitAnnotation)
-	workloadProfile.Spec.Resources.Limits.Vram = parseResourceQuantity(pod, constants.VRAMLimitAnnotation)
+	if tflopsRequest, hasValue := parseResourceQuantity(pod, constants.TFLOPSRequestAnnotation); hasValue {
+		workloadProfile.Spec.Resources.Requests.Tflops = tflopsRequest
+	}
+	if vramRequest, hasValue := parseResourceQuantity(pod, constants.VRAMRequestAnnotation); hasValue {
+		workloadProfile.Spec.Resources.Requests.Vram = vramRequest
+	}
+	if tflopsLimit, hasValue := parseResourceQuantity(pod, constants.TFLOPSLimitAnnotation); hasValue {
+		workloadProfile.Spec.Resources.Limits.Tflops = tflopsLimit
+	}
+	if vramLimit, hasValue := parseResourceQuantity(pod, constants.VRAMLimitAnnotation); hasValue {
+		workloadProfile.Spec.Resources.Limits.Vram = vramLimit
+	}
 
-	gpuCount, ok := pod.Annotations[constants.GpuCountAnnotation]
-	if ok {
+	gpuCount, hasValue := pod.Annotations[constants.GpuCountAnnotation]
+	if hasValue {
 		val, err := strconv.ParseInt(gpuCount, 10, 32)
 		if err != nil {
 			return fmt.Errorf("invalid gpuCount value: %w", err)
 		}
 		workloadProfile.Spec.GPUCount = uint(val)
-	} else {
+	} else if workloadProfile.Spec.GPUCount == 0 {
 		workloadProfile.Spec.GPUCount = 1
 	}
 	return nil
 }
 
-func parseResourceQuantity(pod *corev1.Pod, annotationKey string) resource.Quantity {
-	if pod.Annotations[annotationKey] == "" {
-		return resource.Quantity{}
+func parseResourceQuantity(pod *corev1.Pod, annotationKey string) (resource.Quantity, bool) {
+	if pod.Annotations == nil || pod.Annotations[annotationKey] == "" {
+		return resource.Quantity{}, false
 	}
 	quantity, err := resource.ParseQuantity(pod.Annotations[annotationKey])
 	if err != nil {
 		// not valid quantity, return empty quantity, handle error in scheduler
-		return resource.Quantity{}
+		return resource.Quantity{}, false
 	}
-	return quantity
+	return quantity, true
 }
 
 func setGPUPoolNameAndVerify(ctx context.Context, k8sClient client.Client, pod *corev1.Pod) (string, error) {

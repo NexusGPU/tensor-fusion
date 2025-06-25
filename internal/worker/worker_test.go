@@ -6,9 +6,12 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -22,6 +25,7 @@ func TestSelectWorker(t *testing.T) {
 		connections    []tfv1.TensorFusionConnection
 		expectedWorker string
 		expectError    bool
+		workerStatuses []tfv1.WorkerStatus
 		errorSubstring string
 	}{
 		{
@@ -33,18 +37,28 @@ func TestSelectWorker(t *testing.T) {
 					Namespace: "default",
 				},
 			},
+			workerStatuses: []tfv1.WorkerStatus{},
 			connections:    []tfv1.TensorFusionConnection{},
 			expectedWorker: "",
 			expectError:    true,
 			errorSubstring: "no available worker",
 		},
 		{
-			name:    "one worker with no connections",
+			name:    "one worker with no connections from dynamic replicas",
 			maxSkew: 1,
 			workload: &tfv1.TensorFusionWorkload{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-workload",
 					Namespace: "default",
+				},
+				Spec: tfv1.WorkloadProfileSpec{
+					Replicas: ptr.To(int32(1)),
+				},
+			},
+			workerStatuses: []tfv1.WorkerStatus{
+				{
+					WorkerName:  "worker-1",
+					WorkerPhase: tfv1.WorkerRunning,
 				},
 			},
 			connections:    []tfv1.TensorFusionConnection{},
@@ -58,6 +72,19 @@ func TestSelectWorker(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-workload",
 					Namespace: "default",
+				},
+				Spec: tfv1.WorkloadProfileSpec{
+					Replicas: ptr.To(int32(2)),
+				},
+			},
+			workerStatuses: []tfv1.WorkerStatus{
+				{
+					WorkerName:  "worker-1",
+					WorkerPhase: tfv1.WorkerRunning,
+				},
+				{
+					WorkerName:  "worker-2",
+					WorkerPhase: tfv1.WorkerRunning,
 				},
 			},
 			connections: []tfv1.TensorFusionConnection{
@@ -96,6 +123,20 @@ func TestSelectWorker(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-workload",
 					Namespace: "default",
+				},
+			},
+			workerStatuses: []tfv1.WorkerStatus{
+				{
+					WorkerName:  "worker-1",
+					WorkerPhase: tfv1.WorkerRunning,
+				},
+				{
+					WorkerName:  "worker-2",
+					WorkerPhase: tfv1.WorkerRunning,
+				},
+				{
+					WorkerName:  "worker-3",
+					WorkerPhase: tfv1.WorkerRunning,
 				},
 			},
 			connections: []tfv1.TensorFusionConnection{
@@ -147,6 +188,19 @@ func TestSelectWorker(t *testing.T) {
 					Name:      "test-workload",
 					Namespace: "default",
 				},
+				Spec: tfv1.WorkloadProfileSpec{
+					Replicas: ptr.To(int32(1)),
+				},
+			},
+			workerStatuses: []tfv1.WorkerStatus{
+				{
+					WorkerName:  "worker-1",
+					WorkerPhase: tfv1.WorkerFailed,
+				},
+				{
+					WorkerName:  "worker-2",
+					WorkerPhase: tfv1.WorkerRunning,
+				},
 			},
 			connections: []tfv1.TensorFusionConnection{
 				{
@@ -172,6 +226,20 @@ func TestSelectWorker(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-workload",
 					Namespace: "default",
+				},
+			},
+			workerStatuses: []tfv1.WorkerStatus{
+				{
+					WorkerName:  "worker-1",
+					WorkerPhase: tfv1.WorkerRunning,
+				},
+				{
+					WorkerName:  "worker-2",
+					WorkerPhase: tfv1.WorkerRunning,
+				},
+				{
+					WorkerName:  "worker-3",
+					WorkerPhase: tfv1.WorkerRunning,
 				},
 			},
 			connections: []tfv1.TensorFusionConnection{
@@ -210,6 +278,20 @@ func TestSelectWorker(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-workload",
 					Namespace: "default",
+				},
+			},
+			workerStatuses: []tfv1.WorkerStatus{
+				{
+					WorkerName:  "worker-1",
+					WorkerPhase: tfv1.WorkerRunning,
+				},
+				{
+					WorkerName:  "worker-2",
+					WorkerPhase: tfv1.WorkerRunning,
+				},
+				{
+					WorkerName:  "worker-3",
+					WorkerPhase: tfv1.WorkerRunning,
 				},
 			},
 			connections: []tfv1.TensorFusionConnection{
@@ -260,6 +342,7 @@ func TestSelectWorker(t *testing.T) {
 			// Create a new scheme and add the types that we need to register
 			scheme := runtime.NewScheme()
 			_ = tfv1.AddToScheme(scheme)
+			_ = v1.AddToScheme(scheme)
 
 			// Create a list of connection objects to be returned when List is called
 			connectionList := &tfv1.TensorFusionConnectionList{
@@ -270,6 +353,7 @@ func TestSelectWorker(t *testing.T) {
 			client := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithLists(connectionList).
+				WithLists(generateWorkerPodList(tt.workerStatuses)).
 				Build()
 
 			// Call the function under test
@@ -288,5 +372,23 @@ func TestSelectWorker(t *testing.T) {
 				assert.Equal(t, tt.expectedWorker, worker.WorkerName)
 			}
 		})
+	}
+}
+
+func generateWorkerPodList(workloadStatus []tfv1.WorkerStatus) *v1.PodList {
+	return &v1.PodList{
+		Items: lo.Map(workloadStatus, func(status tfv1.WorkerStatus, _ int) v1.Pod {
+			return v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: status.WorkerName,
+					Labels: map[string]string{
+						constants.WorkloadKey: "test-workload",
+					},
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodPhase(status.WorkerPhase),
+				},
+			}
+		}),
 	}
 }
