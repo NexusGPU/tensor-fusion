@@ -148,7 +148,9 @@ func (r *PodReconciler) setPendingOwnedWorkload(ctx context.Context, pod *corev1
 	if err := r.Get(ctx, types.NamespacedName{Name: ownedWorkloadName, Namespace: pod.Namespace}, tfWorkload); err != nil {
 		return err
 	}
-	controllerutil.SetControllerReference(pod, tfWorkload, r.Scheme)
+	if err := controllerutil.SetControllerReference(pod, tfWorkload, r.Scheme); err != nil {
+		return err
+	}
 	return r.Update(ctx, tfWorkload)
 }
 
@@ -258,15 +260,10 @@ func (r *PodReconciler) handlePodGPUCleanup(ctx context.Context, pod *corev1.Pod
 	gpus := lo.Map(gpuNames, func(gpuName string, _ int) string {
 		return gpuName
 	})
-	// Release GPU resources
-	gpuResource, err := utils.GetGPUResource(pod, true)
-	if err != nil {
-		log.Error(err, "Failed to get GPU resource", "pod", pod.Name)
-		return false, err
-	}
+
 	r.Allocator.Dealloc(ctx,
 		tfv1.NameNamespace{Name: pod.Labels[constants.WorkloadKey], Namespace: pod.Namespace},
-		gpuResource, gpus,
+		gpus,
 		pod.ObjectMeta,
 	)
 	log.Info("Released GPU resources via finalizer", "gpus", gpus, "pod", pod.Name)

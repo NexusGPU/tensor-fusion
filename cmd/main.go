@@ -370,6 +370,8 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("GPUResourceQuota"),
+
+		QuotaStore: allocator.GetQuotaStore(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUResourceQuota")
 		os.Exit(1)

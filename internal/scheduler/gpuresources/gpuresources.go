@@ -92,7 +92,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 	}
 	state.Write(CycleStateAllocateRequest, &allocRequest)
 
-	filteredGPUs, err := s.allocator.CheckQuotaAndFilter(ctx, allocRequest)
+	filteredGPUs, err := s.allocator.CheckQuotaAndFilter(ctx, &allocRequest)
 	if err != nil {
 		return nil, framework.NewStatus(framework.Unschedulable, err.Error())
 	}
@@ -175,7 +175,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 	}
 
 	// find top N score GPUs in this node
-	neededGPUs := allocRequest.(*gpuallocator.AllocRequest).Count
+	neededGPUs := allocRequest.(*tfv1.AllocRequest).Count
 
 	gpuScoreEntries := lo.Entries(gpuScoreMap)
 	sort.Slice(gpuScoreEntries, func(i, j int) bool {
@@ -189,7 +189,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 	_, err = s.allocator.Bind(
 		ctx,
 		schedulingResult.FinalGPUs,
-		*allocRequest.(*gpuallocator.AllocRequest),
+		allocRequest.(*tfv1.AllocRequest),
 		pod.ObjectMeta,
 	)
 	if err != nil {
@@ -199,12 +199,6 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 }
 
 func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
-	allocRequest, err := state.Read(CycleStateAllocateRequest)
-	if err != nil {
-		s.logger.Error(err, "failed to read gpu scheduling result", "pod", pod.Name)
-		return
-	}
-
 	schedulingResultRaw, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
 		s.logger.Error(err, "failed to read gpu scheduling result", "pod", pod.Name)
@@ -215,7 +209,7 @@ func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod
 	s.allocator.Dealloc(ctx, tfv1.NameNamespace{
 		Name:      pod.Labels[constants.WorkloadKey],
 		Namespace: pod.Namespace,
-	}, allocRequest.(*gpuallocator.AllocRequest).Request, schedulingResult.FinalGPUs, pod.ObjectMeta)
+	}, schedulingResult.FinalGPUs, pod.ObjectMeta)
 }
 
 func (s *GPUFit) PreBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {

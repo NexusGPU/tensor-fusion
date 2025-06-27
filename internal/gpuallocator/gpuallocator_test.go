@@ -37,19 +37,21 @@ var _ = Describe("GPU Allocator", func() {
 	var allocator *GpuAllocator
 
 	allocateAndSync := func(poolName string, request tfv1.Resource, count uint, gpuModel string) ([]*tfv1.GPU, error) {
-		gpus, err := allocator.Alloc(ctx, AllocRequest{
+		gpus, err := allocator.Alloc(ctx, &tfv1.AllocRequest{
 			PoolName:              poolName,
 			WorkloadNameNamespace: workloadNameNs,
 			Request:               request,
-			Count:                 count,
-			GPUModel:              gpuModel,
+			// use same limits as requests during unit testing
+			Limit:    request,
+			Count:    count,
+			GPUModel: gpuModel,
 		}, testPodMeta)
 		allocator.syncToK8s(ctx)
 		return gpus, err
 	}
 
-	deallocateAndSync := func(gpus []*tfv1.GPU, request tfv1.Resource) {
-		allocator.Dealloc(ctx, workloadNameNs, request, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
+	deallocateAndSync := func(gpus []*tfv1.GPU) {
+		allocator.Dealloc(ctx, workloadNameNs, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
 			return gpu.Name
 		}), testPodMeta)
 		allocator.syncToK8s(ctx)
@@ -191,7 +193,7 @@ var _ = Describe("GPU Allocator", func() {
 			allocatedVram := allocatedGPU.Status.Available.Vram.DeepCopy()
 
 			// Now deallocate
-			deallocateAndSync(gpus, request)
+			deallocateAndSync(gpus)
 
 			// Verify resources were restored
 			deallocatedGPU := getGPU(allocatedGPU.Name)
@@ -244,7 +246,7 @@ var _ = Describe("GPU Allocator", func() {
 			}
 
 			// Now deallocate all GPUs including the non-existent one
-			deallocateAndSync(gpusToDealloc, request)
+			deallocateAndSync(gpusToDealloc)
 
 			// Verify resources were restored for existing GPUs
 			for _, allocatedGPU := range allocatedGPUs {

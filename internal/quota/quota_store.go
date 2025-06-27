@@ -1,0 +1,538 @@
+package quota
+
+import (
+	"context"
+	"fmt"
+	"sync"
+
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+)
+
+const (
+	MaxTFlopsLimitResource   = "single.max.tflops.limit"
+	MaxVRAMLimitResource     = "single.max.vram.limit"
+	MaxTFlopsRequestResource = "single.max.tflops.request"
+	MaxVRAMRequestResource   = "single.max.vram.request"
+	MaxGPULimitResource      = "single.max.gpuCount.limit"
+
+	TotalMaxTFlopsLimitResource   = "total.max.tflops.limit"
+	TotalMaxVRAMLimitResource     = "total.max.vram.limit"
+	TotalMaxTFlopsRequestResource = "total.max.tflops.request"
+	TotalMaxVRAMRequestResource   = "total.max.vram.request"
+
+	TotalMaxWorkersLimitResource = "total.max.workers.limit"
+)
+
+// QuotaStore manages GPU resource quotas in memory for atomic operations
+type QuotaStore struct {
+	client.Client
+
+	// In-memory quota store: namespace -> quota info
+	QuotaStore map[string]*QuotaStoreEntry
+	StoreMutex sync.RWMutex
+
+	// Calculator for shared quota computation logic
+	Calculator *Calculator
+
+	// Queue for tracking modified quotas that need to be synced to K8s
+	dirtyQuotas    map[string]struct{}
+	dirtyQuotaLock sync.Mutex
+}
+
+// QuotaStoreEntry represents quota information in memory
+type QuotaStoreEntry struct {
+	// Original Quota definition from K8s
+	Quota *tfv1.GPUResourceQuota
+
+	// Current usage calculated in memory (authoritative)
+	CurrentUsage *tfv1.GPUResourceUsage
+}
+
+// NewQuotaStore creates a new quota store
+func NewQuotaStore(client client.Client) *QuotaStore {
+	return &QuotaStore{
+		Client:      client,
+		QuotaStore:  make(map[string]*QuotaStoreEntry),
+		dirtyQuotas: make(map[string]struct{}),
+		Calculator:  NewCalculator(),
+	}
+}
+
+// CheckQuotaAvailable is the quota checking logic
+// Note: This method assumes proper locking is handled by the caller
+func (qs *QuotaStore) CheckQuotaAvailable(namespace string, req *tfv1.AllocRequest) error {
+	entry, exists := qs.QuotaStore[namespace]
+	if !exists {
+		// No quota defined for this namespace, allow allocation
+		return nil
+	}
+	// 1. Check single (per-workload) limits first
+	if err := qs.checkSingleQuotas(entry, req); err != nil {
+		return err
+	}
+	// 2. Check total namespace limits
+	return qs.checkTotalQuotas(entry, req)
+}
+
+// checkSingleQuotas checks per-workload limits
+func (qs *QuotaStore) checkSingleQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRequest) error {
+	single := &entry.Quota.Spec.Single
+	// Check maximum limits per workload
+	if single.MaxLimits != nil {
+		// Check single TFlops limit (per GPU)
+		if !single.MaxLimits.Tflops.IsZero() && req.Limit.Tflops.Cmp(single.MaxLimits.Tflops) > 0 {
+			return &QuotaExceededError{
+				Namespace: entry.Quota.Namespace,
+				Resource:  MaxTFlopsLimitResource,
+				Requested: req.Limit.Tflops,
+				Limit:     single.MaxLimits.Tflops,
+			}
+		}
+
+		// Check single VRAM limit (per GPU)
+		if !single.MaxLimits.Vram.IsZero() && req.Request.Vram.Cmp(single.MaxLimits.Vram) > 0 {
+			return &QuotaExceededError{
+				Namespace: entry.Quota.Namespace,
+				Resource:  MaxVRAMLimitResource,
+				Requested: req.Request.Vram,
+				Limit:     single.MaxLimits.Vram,
+			}
+		}
+
+		// Check single GPU count limit (per worker)
+		if single.MaxGPUCount != nil && int32(req.Count) > *single.MaxGPUCount {
+			return &QuotaExceededError{
+				Namespace: entry.Quota.Namespace,
+				Resource:  MaxGPULimitResource,
+				Requested: *resource.NewQuantity(int64(req.Count), resource.DecimalSI),
+				Limit:     *resource.NewQuantity(int64(*single.MaxGPUCount), resource.DecimalSI),
+			}
+		}
+	}
+	return nil
+}
+
+// checkTotalLimits checks total namespace limits
+func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRequest) error {
+	quotaNs := entry.Quota.Namespace
+	// Check total requests
+
+	if entry.Quota.Spec.Total.Requests != nil {
+		total := entry.Quota.Spec.Total.Requests
+		current := entry.CurrentUsage.Requests
+		err := checkTotalExceeded(req, total, current, quotaNs, true)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Check total limits
+	if entry.Quota.Spec.Total.Limits != nil {
+		total := entry.Quota.Spec.Total.Limits
+		usage := entry.CurrentUsage.Limits
+		err := checkTotalExceeded(req, total, usage, quotaNs, false)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Check total workers, each allocation will create one worker instance
+	if entry.Quota.Spec.Total.MaxWorkers != nil {
+		if *entry.CurrentUsage.Workers >= *entry.Quota.Spec.Total.MaxWorkers {
+			return &QuotaExceededError{
+				Namespace: quotaNs,
+				Resource:  TotalMaxWorkersLimitResource,
+				Requested: *resource.NewQuantity(1, resource.DecimalSI),
+				Limit:     *resource.NewQuantity(int64(*entry.Quota.Spec.Total.MaxWorkers), resource.DecimalSI),
+			}
+		}
+	}
+	return nil
+}
+
+func checkTotalExceeded(req *tfv1.AllocRequest, totalQuota *tfv1.Resource, current tfv1.Resource, quotaNs string, isRequest bool) error {
+	reqGPUNum := int64(req.Count)
+	var tflops, vram int64
+	if isRequest {
+		tflops = req.Request.Tflops.Value() * reqGPUNum
+		vram = req.Request.Vram.Value() * reqGPUNum
+	} else {
+		tflops = req.Limit.Tflops.Value() * reqGPUNum
+		vram = req.Limit.Vram.Value() * reqGPUNum
+	}
+
+	if !totalQuota.Tflops.IsZero() &&
+		totalQuota.Tflops.Value() < (current.Tflops.Value()+tflops) {
+		var exceededMsg string
+		if isRequest {
+			exceededMsg = TotalMaxTFlopsRequestResource
+		} else {
+			exceededMsg = TotalMaxTFlopsLimitResource
+		}
+		return &QuotaExceededError{
+			Namespace: quotaNs,
+			Resource:  exceededMsg,
+			Requested: *resource.NewQuantity(tflops, resource.DecimalSI),
+			Limit:     totalQuota.Tflops,
+		}
+	}
+	if !totalQuota.Vram.IsZero() &&
+		totalQuota.Vram.Value() < (current.Vram.Value()+vram) {
+		var exceededMsg string
+		if isRequest {
+			exceededMsg = TotalMaxVRAMRequestResource
+		} else {
+			exceededMsg = TotalMaxVRAMLimitResource
+		}
+		return &QuotaExceededError{
+			Namespace: quotaNs,
+			Resource:  exceededMsg,
+			Requested: *resource.NewQuantity(vram, resource.DecimalSI),
+			Limit:     totalQuota.Vram,
+		}
+	}
+	return nil
+}
+
+// AllocateQuota atomically allocates quota resources
+// This function is called under GPU allocator's storeMutex
+func (qs *QuotaStore) AllocateQuota(namespace string, req *tfv1.AllocRequest) {
+	entry, exists := qs.QuotaStore[namespace]
+	if !exists {
+		return
+	}
+	qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, req, true)
+	qs.markQuotaDirty(namespace)
+}
+
+// DeallocateQuota atomically deallocate quota resources
+// This function is called under GPU allocator's storeMutex
+func (qs *QuotaStore) DeallocateQuota(namespace string, allocation *tfv1.AllocRequest) {
+	entry, exists := qs.QuotaStore[namespace]
+	if !exists {
+		return
+	}
+	qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, allocation, false)
+	qs.markQuotaDirty(namespace)
+}
+
+func (qs *QuotaStore) CalculateUsagePercent(namespace string) map[string]int64 {
+	entry, exists := qs.QuotaStore[namespace]
+	if !exists {
+		return nil
+	}
+	return qs.Calculator.CalculateUsagePercent(entry.Quota, entry.CurrentUsage)
+}
+
+// initQuotaStore initializes the quota store from Kubernetes
+func (qs *QuotaStore) InitQuotaStore(ctx context.Context) error {
+	log := log.FromContext(ctx)
+	log.Info("Initializing quota store")
+
+	quotaList := &tfv1.GPUResourceQuotaList{}
+	if err := qs.List(ctx, quotaList); err != nil {
+		return fmt.Errorf("failed to list GPUResourceQuotas: %w", err)
+	}
+
+	if len(quotaList.Items) == 0 {
+		log.Info("No GPUResourceQuotas found, skipping quota store initialization")
+		return nil
+	}
+	qs.QuotaStore = make(map[string]*QuotaStoreEntry)
+
+	for i := range quotaList.Items {
+		quota := &quotaList.Items[i]
+		namespace := quota.Namespace
+
+		// Validate quota configuration
+		if err := qs.validateQuotaConfig(quota); err != nil {
+			log.Error(err, "Invalid quota configuration, skipping", "namespace", namespace)
+			continue
+		}
+		currentUsage := qs.Calculator.CreateZeroUsage()
+
+		qs.QuotaStore[namespace] = &QuotaStoreEntry{
+			Quota:        quota.DeepCopy(),
+			CurrentUsage: currentUsage,
+		}
+	}
+
+	log.Info("Quota store initialized", "count", len(qs.QuotaStore))
+	return nil
+}
+
+// ValidateQuotaConfig validates quota configuration
+func (qs *QuotaStore) validateQuotaConfig(quota *tfv1.GPUResourceQuota) error {
+	// Check for negative values
+	if !quota.Spec.Total.Requests.Tflops.IsZero() && quota.Spec.Total.Requests.Tflops.Cmp(resource.Quantity{}) < 0 {
+		return fmt.Errorf("requests.tflops cannot be negative")
+	}
+	if !quota.Spec.Total.Requests.Vram.IsZero() && quota.Spec.Total.Requests.Vram.Cmp(resource.Quantity{}) < 0 {
+		return fmt.Errorf("requests.vram cannot be negative")
+	}
+	if !quota.Spec.Total.Limits.Tflops.IsZero() && quota.Spec.Total.Limits.Tflops.Cmp(resource.Quantity{}) < 0 {
+		return fmt.Errorf("limits.tflops cannot be negative")
+	}
+	if !quota.Spec.Total.Limits.Vram.IsZero() && quota.Spec.Total.Limits.Vram.Cmp(resource.Quantity{}) < 0 {
+		return fmt.Errorf("limits.vram cannot be negative")
+	}
+	if quota.Spec.Total.MaxWorkers != nil && *quota.Spec.Total.MaxWorkers < 0 {
+		return fmt.Errorf("workers cannot be negative")
+	}
+
+	// Validate limits >= requests
+	if !quota.Spec.Total.Requests.Tflops.IsZero() && !quota.Spec.Total.Limits.Tflops.IsZero() {
+		if quota.Spec.Total.Limits.Tflops.Cmp(quota.Spec.Total.Requests.Tflops) < 0 {
+			return fmt.Errorf("limits.tflops cannot be less than requests.tflops")
+		}
+	}
+	if !quota.Spec.Total.Requests.Vram.IsZero() && !quota.Spec.Total.Limits.Vram.IsZero() {
+		if quota.Spec.Total.Limits.Vram.Cmp(quota.Spec.Total.Requests.Vram) < 0 {
+			return fmt.Errorf("limits.vram cannot be less than requests.vram")
+		}
+	}
+
+	// Validate alert threshold percentage range
+	if quota.Spec.Total.AlertThresholdPercent != nil {
+		threshold := *quota.Spec.Total.AlertThresholdPercent
+		if threshold < 0 || threshold > 100 {
+			return fmt.Errorf("alertThresholdPercent must be between 0 and 100, got %d", threshold)
+		}
+	}
+
+	return nil
+}
+
+// ReconcileQuotaStore rebuilds quota usage from actual worker pods
+func (qs *QuotaStore) ReconcileQuotaStore(ctx context.Context, namespacedAllocations map[string]*tfv1.AllocRequest) {
+	log := log.FromContext(ctx)
+	if len(qs.QuotaStore) == 0 {
+		return
+	}
+	log.Info("Reconciling namespace level quota store")
+
+	// Reset all current usage to zero
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
+
+	for _, entry := range qs.QuotaStore {
+		entry.CurrentUsage = qs.Calculator.CreateZeroUsage()
+	}
+
+	// Process worker pods to rebuild quota usage
+	for ns, allocation := range namespacedAllocations {
+		entry, exists := qs.QuotaStore[ns]
+		if !exists {
+			continue // No quota defined for this namespace
+		}
+		qs.addPodToUsage(entry, allocation)
+	}
+
+	log.Info("Quota store reconcile completed", "quota_count", len(qs.QuotaStore), "processed_pods", len(namespacedAllocations))
+}
+
+// addPodToUsage adds pod resources to current usage and updates available
+func (qs *QuotaStore) addPodToUsage(entry *QuotaStoreEntry, allocation *tfv1.AllocRequest) {
+	qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, allocation, true)
+}
+
+// markQuotaDirty marks a quota as dirty for sync to K8s
+func (qs *QuotaStore) markQuotaDirty(namespace string) {
+	qs.dirtyQuotaLock.Lock()
+	defer qs.dirtyQuotaLock.Unlock()
+	qs.dirtyQuotas[namespace] = struct{}{}
+}
+
+// clearQuotaDirty clears a quota from dirty queue after successful sync
+func (qs *QuotaStore) clearQuotaDirty(namespace string) {
+	qs.dirtyQuotaLock.Lock()
+	defer qs.dirtyQuotaLock.Unlock()
+	delete(qs.dirtyQuotas, namespace)
+}
+
+// GetQuotaStatus returns current quota status for a namespace
+func (qs *QuotaStore) GetQuotaStatus(namespace string) (*tfv1.GPUResourceUsage, bool) {
+	qs.StoreMutex.RLock()
+	defer qs.StoreMutex.RUnlock()
+
+	entry, exists := qs.QuotaStore[namespace]
+	if !exists {
+		return nil, false
+	}
+	return entry.CurrentUsage.DeepCopy(), true
+}
+
+// syncQuotasToK8s syncs dirty quotas to Kubernetes
+func (qs *QuotaStore) SyncQuotasToK8s(ctx context.Context) {
+	log := log.FromContext(ctx)
+
+	// Get dirty quotas
+	qs.dirtyQuotaLock.Lock()
+	dirtyNamespaces := make([]string, 0, len(qs.dirtyQuotas))
+	for namespace := range qs.dirtyQuotas {
+		dirtyNamespaces = append(dirtyNamespaces, namespace)
+	}
+	// Don't clear dirty quotas here - clear only after successful sync
+	qs.dirtyQuotaLock.Unlock()
+
+	if len(dirtyNamespaces) == 0 {
+		return
+	}
+
+	qs.StoreMutex.RLock()
+	defer qs.StoreMutex.RUnlock()
+
+	for _, namespace := range dirtyNamespaces {
+		entry, exists := qs.QuotaStore[namespace]
+		if !exists {
+			continue
+		}
+
+		// Calculate available percentages using calculator
+		availablePercent := qs.Calculator.CalculateAvailablePercent(entry.Quota, entry.CurrentUsage)
+
+		// Update the quota status
+		quotaCopy := entry.Quota.DeepCopy()
+		quotaCopy.Status.Used = *entry.CurrentUsage.DeepCopy()
+		quotaCopy.Status.AvailablePercent = *availablePercent
+		now := metav1.Now()
+		quotaCopy.Status.LastUpdateTime = &now
+
+		// Update conditions using calculator
+		qs.updateQuotaConditions(quotaCopy, entry)
+
+		// Sync to Kubernetes
+		if err := qs.Status().Update(ctx, quotaCopy); err != nil {
+			log.Error(err, "Failed to update quota status", "namespace", namespace)
+			// Keep in dirty queue for retry (already marked as dirty)
+		} else {
+			log.V(2).Info("Quota status synced to K8s", "namespace", namespace)
+			// Clear from dirty queue only on successful sync
+			qs.clearQuotaDirty(namespace)
+		}
+	}
+}
+
+// updateQuotaConditions updates the quota conditions based on current usage
+func (qs *QuotaStore) updateQuotaConditions(quota *tfv1.GPUResourceQuota, entry *QuotaStoreEntry) {
+	// Get default alert threshold
+	alertThreshold := int32(95)
+	if entry.Quota.Spec.Total.AlertThresholdPercent != nil {
+		alertThreshold = *entry.Quota.Spec.Total.AlertThresholdPercent
+	}
+
+	// Use calculator to check conditions
+	exceeded := qs.Calculator.IsQuotaExceeded(entry.Quota, entry.CurrentUsage)
+	availablePercent := qs.Calculator.CalculateAvailablePercent(entry.Quota, entry.CurrentUsage)
+	alertReached := qs.Calculator.IsAlertThresholdReached(availablePercent, alertThreshold)
+
+	// Use calculator to create standard conditions
+	quota.Status.Conditions = qs.Calculator.CreateStandardConditions(exceeded, alertReached, alertThreshold)
+}
+
+// QuotaExceededError represents a quota exceeded error with detailed information
+type QuotaExceededError struct {
+	Namespace string
+	Resource  string
+	Requested resource.Quantity
+	Limit     resource.Quantity
+}
+
+func (e *QuotaExceededError) Error() string {
+	return fmt.Sprintf("quota exceeded in namespace %s for %s: requested %s, limit %s",
+		e.Namespace, e.Resource, e.Requested.String(), e.Limit.String())
+}
+
+// handleGPUQuotaCreate handles GPU quota creation events
+func (qs *QuotaStore) handleGPUQuotaCreate(ctx context.Context, gpuQuota *tfv1.GPUResourceQuota) {
+	log := log.FromContext(ctx)
+	key := gpuQuota.Namespace
+
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
+
+	// Add GPU quota to store, TODO: need verify logic
+	qs.QuotaStore[key].Quota = gpuQuota.DeepCopy()
+	log.V(4).Info("Added GPU quota to store", "namespace", key)
+}
+
+// handleGPUQuotaDelete handles GPU quota deletion events
+func (qs *QuotaStore) handleGPUQuotaDelete(ctx context.Context, gpuQuota *tfv1.GPUResourceQuota) {
+	log := log.FromContext(ctx)
+	key := gpuQuota.Namespace
+
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
+
+	// Remove GPU quota from store
+	delete(qs.QuotaStore, key)
+	log.V(4).Info("Removed GPU quota from store", "namespace", key)
+}
+
+// handleGPUQuotaUpdate handles GPU quota update events
+func (qs *QuotaStore) handleGPUQuotaUpdate(ctx context.Context, gpuQuota *tfv1.GPUResourceQuota) {
+	log := log.FromContext(ctx)
+	key := gpuQuota.Namespace
+
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
+
+	// TODO verify logic
+	qs.QuotaStore[key].Quota = gpuQuota.DeepCopy()
+	log.V(4).Info("Updated GPU quota in store (preserve Used)", "namespace", key)
+}
+
+func (qs *QuotaStore) StartInformerForGPUQuota(ctx context.Context, mgr manager.Manager) error {
+	log := log.FromContext(ctx)
+
+	informer, err := mgr.GetCache().GetInformer(ctx, &tfv1.GPUResourceQuota{})
+	if err != nil {
+		return fmt.Errorf("failed to get GPUResourceQuota informer: %w", err)
+	}
+
+	// Add event handlers
+	_, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj any) {
+			gpuQuota, ok := obj.(*tfv1.GPUResourceQuota)
+			if !ok {
+				log.Error(fmt.Errorf("unexpected type"), "expected GPUResourceQuota")
+				return
+			}
+			qs.handleGPUQuotaCreate(ctx, gpuQuota)
+		},
+		DeleteFunc: func(obj any) {
+			gpuQuota, ok := obj.(*tfv1.GPUResourceQuota)
+			if !ok {
+				// When a delete is dropped, the relist will notice a GPUResourceQuota in the store not
+				// in the list, leading to the insertion of a tombstone object which contains
+				// the deleted key/value.
+				tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+				if !ok {
+					log.Error(fmt.Errorf("unexpected type"), "expected GPUResourceQuota or tombstone")
+					return
+				}
+				gpuQuota, ok = tombstone.Obj.(*tfv1.GPUResourceQuota)
+				if !ok {
+					log.Error(fmt.Errorf("unexpected type"), "expected GPUResourceQuota in tombstone")
+					return
+				}
+			}
+			qs.handleGPUQuotaDelete(ctx, gpuQuota)
+		},
+		UpdateFunc: func(oldObj, newObj any) {
+			newGPUQuota, ok := newObj.(*tfv1.GPUResourceQuota)
+			if !ok {
+				log.Error(fmt.Errorf("unexpected type"), "expected new GPUResourceQuota")
+				return
+			}
+			qs.handleGPUQuotaUpdate(ctx, newGPUQuota)
+		},
+	})
+	return err
+}

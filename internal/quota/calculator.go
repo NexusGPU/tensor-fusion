@@ -1,6 +1,8 @@
 package quota
 
 import (
+	"strconv"
+
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -15,175 +17,77 @@ func NewCalculator() *Calculator {
 	return &Calculator{}
 }
 
-// ResourceOperation represents a resource operation (increase/decrease)
-type ResourceOperation struct {
-	TFlops  resource.Quantity
-	VRAM    resource.Quantity
-	Workers int32
-}
-
-// NewResourceOperation creates a resource operation from base resource and replicas
-func (c *Calculator) NewResourceOperation(baseResource tfv1.Resource, replicas int32) *ResourceOperation {
-	return &ResourceOperation{
-		TFlops:  c.multiplyQuantity(baseResource.Tflops, replicas),
-		VRAM:    c.multiplyQuantity(baseResource.Vram, replicas),
-		Workers: replicas,
-	}
-}
-
-// NewResourceOperationFromUsage creates a resource operation from current usage
-func (c *Calculator) NewResourceOperationFromUsage(usage *tfv1.GPUResourceUsage) *ResourceOperation {
-	op := &ResourceOperation{}
-
-	if usage.RequestsTFlops != nil {
-		op.TFlops = usage.RequestsTFlops.DeepCopy()
-	}
-	if usage.RequestsVRAM != nil {
-		op.VRAM = usage.RequestsVRAM.DeepCopy()
-	}
-	if usage.Workers != nil {
-		op.Workers = *usage.Workers
-	}
-
-	return op
-}
-
 // IncreaseUsage safely increases resource usage
-func (c *Calculator) IncreaseUsage(usage *tfv1.GPUResourceUsage, operation *ResourceOperation) {
+func (c *Calculator) IncreaseUsage(usage *tfv1.GPUResourceUsage, allocation *tfv1.AllocRequest) {
 	// Update requests
-	c.SafeAdd(usage.RequestsTFlops, operation.TFlops)
-	c.SafeAdd(usage.RequestsVRAM, operation.VRAM)
+	c.SafeAdd(&usage.Requests.Tflops, allocation.Request.Tflops)
+	c.SafeAdd(&usage.Requests.Vram, allocation.Request.Vram)
 
 	// Update limits (assume limits = requests for now)
-	c.SafeAdd(usage.LimitsTFlops, operation.TFlops)
-	c.SafeAdd(usage.LimitsVRAM, operation.VRAM)
+	c.SafeAdd(&usage.Limits.Tflops, allocation.Request.Tflops)
+	c.SafeAdd(&usage.Limits.Vram, allocation.Request.Vram)
 
 	// Update workers
 	if usage.Workers != nil {
-		*usage.Workers += operation.Workers
+		*usage.Workers += 1
 	}
 }
 
 // DecreaseUsage safely decreases resource usage with bounds checking
-func (c *Calculator) DecreaseUsage(usage *tfv1.GPUResourceUsage, operation *ResourceOperation) {
+func (c *Calculator) DecreaseUsage(usage *tfv1.GPUResourceUsage, allocation *tfv1.AllocRequest) {
 	// Update requests with bounds checking
-	c.SafeSub(usage.RequestsTFlops, operation.TFlops)
-	c.SafeSub(usage.RequestsVRAM, operation.VRAM)
+	c.SafeSub(&usage.Requests.Tflops, allocation.Request.Tflops)
+	c.SafeSub(&usage.Requests.Vram, allocation.Request.Vram)
 
 	// Update limits with bounds checking
-	c.SafeSub(usage.LimitsTFlops, operation.TFlops)
-	c.SafeSub(usage.LimitsVRAM, operation.VRAM)
+	c.SafeSub(&usage.Limits.Tflops, allocation.Request.Tflops)
+	c.SafeSub(&usage.Limits.Vram, allocation.Request.Vram)
 
 	// Update workers with bounds checking
 	if usage.Workers != nil {
-		if *usage.Workers >= operation.Workers {
-			*usage.Workers -= operation.Workers
+		if *usage.Workers >= int32(allocation.Count) {
+			*usage.Workers -= int32(allocation.Count)
 		} else {
 			*usage.Workers = 0
 		}
 	}
 }
 
-// UpdateAvailableQuota updates available quota after usage change
-func (c *Calculator) UpdateAvailableQuota(available *tfv1.GPUResourceUsage, operation *ResourceOperation, isIncrease bool) {
-	if isIncrease {
-		// Increase usage means decrease available
-		c.SafeSub(available.RequestsTFlops, operation.TFlops)
-		c.SafeSub(available.RequestsVRAM, operation.VRAM)
-		c.SafeSub(available.LimitsTFlops, operation.TFlops)
-		c.SafeSub(available.LimitsVRAM, operation.VRAM)
-		if available.Workers != nil {
-			if *available.Workers >= operation.Workers {
-				*available.Workers -= operation.Workers
-			} else {
-				*available.Workers = 0
-			}
-		}
-	} else {
-		// Decrease usage means increase available
-		c.SafeAdd(available.RequestsTFlops, operation.TFlops)
-		c.SafeAdd(available.RequestsVRAM, operation.VRAM)
-		c.SafeAdd(available.LimitsTFlops, operation.TFlops)
-		c.SafeAdd(available.LimitsVRAM, operation.VRAM)
-		if available.Workers != nil {
-			*available.Workers += operation.Workers
-		}
-	}
-}
-
 // ApplyUsageOperation atomically applies a usage operation (increase or decrease)
-func (c *Calculator) ApplyUsageOperation(currentUsage, available *tfv1.GPUResourceUsage, operation *ResourceOperation, isIncrease bool) {
+func (c *Calculator) ApplyUsageOperation(currentUsage *tfv1.GPUResourceUsage, allocation *tfv1.AllocRequest, isIncrease bool) {
 	if isIncrease {
-		c.IncreaseUsage(currentUsage, operation)
-		c.UpdateAvailableQuota(available, operation, true)
+		c.IncreaseUsage(currentUsage, allocation)
 	} else {
-		c.DecreaseUsage(currentUsage, operation)
-		c.UpdateAvailableQuota(available, operation, false)
+		c.DecreaseUsage(currentUsage, allocation)
 	}
 }
 
 // CalculateActualDeallocation calculates actual deallocation amounts clamped to current usage
-func (c *Calculator) CalculateActualDeallocation(currentUsage *tfv1.GPUResourceUsage, operation *ResourceOperation) *ResourceOperation {
-	actual := &ResourceOperation{}
+func (c *Calculator) CalculateActualDeallocation(currentUsage *tfv1.GPUResourceUsage, allocation *tfv1.AllocRequest) *tfv1.Resource {
 
-	// Clamp TFlops deallocation
-	if currentUsage.RequestsTFlops != nil && currentUsage.RequestsTFlops.Cmp(operation.TFlops) < 0 {
-		actual.TFlops = currentUsage.RequestsTFlops.DeepCopy()
-	} else {
-		actual.TFlops = operation.TFlops.DeepCopy()
-	}
+	// // Clamp TFlops deallocation
+	// if !currentUsage.Requests.Tflops.IsZero() && currentUsage.Requests.Tflops.Cmp(allocation.Request.Tflops) < 0 {
+	// 	actual.TFlops = currentUsage.Requests.Tflops.DeepCopy()
+	// } else {
+	// 	actual.TFlops = allocation.Request.Tflops.DeepCopy()
+	// }
 
-	// Clamp VRAM deallocation
-	if currentUsage.RequestsVRAM != nil && currentUsage.RequestsVRAM.Cmp(operation.VRAM) < 0 {
-		actual.VRAM = currentUsage.RequestsVRAM.DeepCopy()
-	} else {
-		actual.VRAM = operation.VRAM.DeepCopy()
-	}
+	// // Clamp VRAM deallocation
+	// if !currentUsage.Requests.Vram.IsZero() && currentUsage.Requests.Vram.Cmp(allocation.Request.Vram) < 0 {
+	// 	actual.VRAM = currentUsage.Requests.Vram.DeepCopy()
+	// } else {
+	// 	actual.VRAM = allocation.Request.Vram.DeepCopy()
+	// }
 
-	// Clamp workers deallocation
-	if currentUsage.Workers != nil {
-		actual.Workers = min(*currentUsage.Workers, operation.Workers)
-	} else {
-		actual.Workers = 0
-	}
+	// // Clamp workers deallocation
+	// if currentUsage.Workers != nil {
+	// 	actual.Workers = min(*currentUsage.Workers, int32(allocation.Count))
+	// } else {
+	// 	actual.Workers = 0
+	// }
 
-	return actual
-}
-
-// CopyUsageToTotal copies available quota from total quota specification
-func (c *Calculator) CopyUsageToTotal(quota *tfv1.GPUResourceQuota) *tfv1.GPUResourceUsage {
-	available := &tfv1.GPUResourceUsage{
-		Workers: new(int32),
-	}
-
-	if quota.Spec.Total.RequestsTFlops != nil {
-		copy := quota.Spec.Total.RequestsTFlops.DeepCopy()
-		available.RequestsTFlops = &copy
-	}
-	if quota.Spec.Total.RequestsVRAM != nil {
-		copy := quota.Spec.Total.RequestsVRAM.DeepCopy()
-		available.RequestsVRAM = &copy
-	}
-	if quota.Spec.Total.LimitsTFlops != nil {
-		copy := quota.Spec.Total.LimitsTFlops.DeepCopy()
-		available.LimitsTFlops = &copy
-	}
-	if quota.Spec.Total.LimitsVRAM != nil {
-		copy := quota.Spec.Total.LimitsVRAM.DeepCopy()
-		available.LimitsVRAM = &copy
-	}
-	if quota.Spec.Total.Workers != nil {
-		*available.Workers = *quota.Spec.Total.Workers
-	}
-
-	return available
-}
-
-// multiplyQuantity helper method to multiply quantity by replicas
-func (c *Calculator) multiplyQuantity(base resource.Quantity, replicas int32) resource.Quantity {
-	result := base.DeepCopy()
-	result.Set(result.Value() * int64(replicas))
-	return result
+	// return actual
+	return &tfv1.Resource{}
 }
 
 // CalculateAvailablePercent calculates available percentage for each resource
@@ -191,39 +95,38 @@ func (c *Calculator) CalculateAvailablePercent(quota *tfv1.GPUResourceQuota, usa
 	percent := &tfv1.GPUResourceAvailablePercent{}
 
 	// Calculate requests.tflops percentage
-	if quota.Spec.Total.RequestsTFlops != nil && usage.RequestsTFlops != nil {
-		if p := c.calculateResourcePercent(quota.Spec.Total.RequestsTFlops.Value(), usage.RequestsTFlops.Value()); p != nil {
-			percent.RequestsTFlops = p
+	if !quota.Spec.Total.Requests.Tflops.IsZero() && !usage.Requests.Tflops.IsZero() {
+		if p := c.calculateResourcePercent(quota.Spec.Total.Requests.Tflops.Value(), usage.Requests.Tflops.Value()); p != nil {
+			percent.RequestsTFlops = strconv.FormatFloat(*p, 'f', 2, 64)
 		}
 	}
-
 	// Calculate requests.vram percentage
-	if quota.Spec.Total.RequestsVRAM != nil && usage.RequestsVRAM != nil {
-		if p := c.calculateResourcePercent(quota.Spec.Total.RequestsVRAM.Value(), usage.RequestsVRAM.Value()); p != nil {
-			percent.RequestsVRAM = p
+	if !quota.Spec.Total.Requests.Vram.IsZero() && !usage.Requests.Vram.IsZero() {
+		if p := c.calculateResourcePercent(quota.Spec.Total.Requests.Vram.Value(), usage.Requests.Vram.Value()); p != nil {
+			percent.RequestsVRAM = strconv.FormatFloat(*p, 'f', 2, 64)
 		}
 	}
 
 	// Calculate limits.tflops percentage
-	if quota.Spec.Total.LimitsTFlops != nil && usage.LimitsTFlops != nil {
-		if p := c.calculateResourcePercent(quota.Spec.Total.LimitsTFlops.Value(), usage.LimitsTFlops.Value()); p != nil {
-			percent.LimitsTFlops = p
+	if !quota.Spec.Total.Limits.Tflops.IsZero() && !usage.Limits.Tflops.IsZero() {
+		if p := c.calculateResourcePercent(quota.Spec.Total.Limits.Tflops.Value(), usage.Limits.Tflops.Value()); p != nil {
+			percent.LimitsTFlops = strconv.FormatFloat(*p, 'f', 2, 64)
 		}
 	}
 
 	// Calculate limits.vram percentage
-	if quota.Spec.Total.LimitsVRAM != nil && usage.LimitsVRAM != nil {
-		if p := c.calculateResourcePercent(quota.Spec.Total.LimitsVRAM.Value(), usage.LimitsVRAM.Value()); p != nil {
-			percent.LimitsVRAM = p
+	if !quota.Spec.Total.Limits.Vram.IsZero() && !usage.Limits.Vram.IsZero() {
+		if p := c.calculateResourcePercent(quota.Spec.Total.Limits.Vram.Value(), usage.Limits.Vram.Value()); p != nil {
+			percent.LimitsVRAM = strconv.FormatFloat(*p, 'f', 2, 64)
 		}
 	}
 
 	// Calculate workers percentage
-	if quota.Spec.Total.Workers != nil && usage.Workers != nil {
-		total := int64(*quota.Spec.Total.Workers)
+	if quota.Spec.Total.MaxWorkers != nil && usage.Workers != nil {
+		total := int64(*quota.Spec.Total.MaxWorkers)
 		used := int64(*usage.Workers)
 		if p := c.calculateResourcePercent(total, used); p != nil {
-			percent.Workers = p
+			percent.Workers = strconv.FormatFloat(*p, 'f', 2, 64)
 		}
 	}
 
@@ -231,38 +134,38 @@ func (c *Calculator) CalculateAvailablePercent(quota *tfv1.GPUResourceQuota, usa
 }
 
 // calculateResourcePercent calculates available percentage for a single resource
-func (c *Calculator) calculateResourcePercent(total, used int64) *int64 {
+func (c *Calculator) calculateResourcePercent(total, used int64) *float64 {
 	if total <= 0 {
 		return nil
 	}
-	available := max(0, (total-used)*100/total)
+	available := max(0, float64(total-used)*100.0/float64(total))
 	return &available
 }
 
 // IsQuotaExceeded checks if any quota limit is exceeded
 func (c *Calculator) IsQuotaExceeded(quota *tfv1.GPUResourceQuota, usage *tfv1.GPUResourceUsage) bool {
-	if quota.Spec.Total.RequestsTFlops != nil && usage.RequestsTFlops != nil {
-		if usage.RequestsTFlops.Cmp(*quota.Spec.Total.RequestsTFlops) > 0 {
+	if !quota.Spec.Total.Requests.Tflops.IsZero() && !usage.Requests.Tflops.IsZero() {
+		if usage.Requests.Tflops.Cmp(quota.Spec.Total.Requests.Tflops) > 0 {
 			return true
 		}
 	}
-	if quota.Spec.Total.RequestsVRAM != nil && usage.RequestsVRAM != nil {
-		if usage.RequestsVRAM.Cmp(*quota.Spec.Total.RequestsVRAM) > 0 {
+	if !quota.Spec.Total.Requests.Vram.IsZero() && !usage.Requests.Vram.IsZero() {
+		if usage.Requests.Vram.Cmp(quota.Spec.Total.Requests.Vram) > 0 {
 			return true
 		}
 	}
-	if quota.Spec.Total.LimitsTFlops != nil && usage.LimitsTFlops != nil {
-		if usage.LimitsTFlops.Cmp(*quota.Spec.Total.LimitsTFlops) > 0 {
+	if !quota.Spec.Total.Limits.Tflops.IsZero() && !usage.Limits.Tflops.IsZero() {
+		if usage.Limits.Tflops.Cmp(quota.Spec.Total.Limits.Tflops) > 0 {
 			return true
 		}
 	}
-	if quota.Spec.Total.LimitsVRAM != nil && usage.LimitsVRAM != nil {
-		if usage.LimitsVRAM.Cmp(*quota.Spec.Total.LimitsVRAM) > 0 {
+	if !quota.Spec.Total.Limits.Vram.IsZero() && !usage.Limits.Vram.IsZero() {
+		if usage.Limits.Vram.Cmp(quota.Spec.Total.Limits.Vram) > 0 {
 			return true
 		}
 	}
-	if quota.Spec.Total.Workers != nil && usage.Workers != nil {
-		if *usage.Workers > *quota.Spec.Total.Workers {
+	if quota.Spec.Total.MaxWorkers != nil && usage.Workers != nil {
+		if *usage.Workers > *quota.Spec.Total.MaxWorkers {
 			return true
 		}
 	}
@@ -271,21 +174,26 @@ func (c *Calculator) IsQuotaExceeded(quota *tfv1.GPUResourceQuota, usage *tfv1.G
 
 // IsAlertThresholdReached checks if alert threshold is reached for any resource
 func (c *Calculator) IsAlertThresholdReached(availablePercent *tfv1.GPUResourceAvailablePercent, threshold int32) bool {
-	thresholdInt64 := int64(100 - threshold)
+	thresholdFloat := float64(100 - threshold)
 
-	if availablePercent.RequestsTFlops != nil && *availablePercent.RequestsTFlops < thresholdInt64 {
+	tflops, _ := strconv.ParseFloat(availablePercent.RequestsTFlops, 64)
+	if availablePercent.RequestsTFlops != "" && tflops < thresholdFloat {
 		return true
 	}
-	if availablePercent.RequestsVRAM != nil && *availablePercent.RequestsVRAM < thresholdInt64 {
+	vram, _ := strconv.ParseFloat(availablePercent.RequestsVRAM, 64)
+	if availablePercent.RequestsVRAM != "" && vram < thresholdFloat {
 		return true
 	}
-	if availablePercent.LimitsTFlops != nil && *availablePercent.LimitsTFlops < thresholdInt64 {
+	tflopsLimits, _ := strconv.ParseFloat(availablePercent.LimitsTFlops, 64)
+	if availablePercent.LimitsTFlops != "" && tflopsLimits < thresholdFloat {
 		return true
 	}
-	if availablePercent.LimitsVRAM != nil && *availablePercent.LimitsVRAM < thresholdInt64 {
+	vramLimits, _ := strconv.ParseFloat(availablePercent.LimitsVRAM, 64)
+	if availablePercent.LimitsVRAM != "" && vramLimits < thresholdFloat {
 		return true
 	}
-	if availablePercent.Workers != nil && *availablePercent.Workers < thresholdInt64 {
+	workers, _ := strconv.ParseFloat(availablePercent.Workers, 64)
+	if availablePercent.Workers != "" && workers < thresholdFloat {
 		return true
 	}
 	return false
@@ -357,11 +265,15 @@ func (c *Calculator) AggregateWorkloadResources(baseResource tfv1.Resource, repl
 // CreateZeroUsage creates a zero-initialized usage object
 func (c *Calculator) CreateZeroUsage() *tfv1.GPUResourceUsage {
 	return &tfv1.GPUResourceUsage{
-		RequestsTFlops: resource.NewQuantity(0, resource.DecimalSI),
-		RequestsVRAM:   resource.NewQuantity(0, resource.BinarySI),
-		LimitsTFlops:   resource.NewQuantity(0, resource.DecimalSI),
-		LimitsVRAM:     resource.NewQuantity(0, resource.BinarySI),
-		Workers:        new(int32),
+		Requests: tfv1.Resource{
+			Tflops: *resource.NewQuantity(0, resource.DecimalSI),
+			Vram:   *resource.NewQuantity(0, resource.BinarySI),
+		},
+		Limits: tfv1.Resource{
+			Tflops: *resource.NewQuantity(0, resource.DecimalSI),
+			Vram:   *resource.NewQuantity(0, resource.BinarySI),
+		},
+		Workers: new(int32),
 	}
 }
 
@@ -369,16 +281,16 @@ func (c *Calculator) CreateZeroUsage() *tfv1.GPUResourceUsage {
 func (c *Calculator) CalculateUsagePercent(quota *tfv1.GPUResourceQuota, usage *tfv1.GPUResourceUsage) map[string]int64 {
 	percentages := make(map[string]int64)
 
-	if quota.Spec.Total.RequestsTFlops != nil && usage.RequestsTFlops != nil && quota.Spec.Total.RequestsTFlops.Value() > 0 {
-		percentages["requests.tflops"] = usage.RequestsTFlops.Value() * 100 / quota.Spec.Total.RequestsTFlops.Value()
+	if !quota.Spec.Total.Requests.Tflops.IsZero() && !usage.Requests.Tflops.IsZero() && quota.Spec.Total.Requests.Tflops.Value() > 0 {
+		percentages["requests.tflops"] = usage.Requests.Tflops.Value() * 100 / quota.Spec.Total.Requests.Tflops.Value()
 	}
 
-	if quota.Spec.Total.RequestsVRAM != nil && usage.RequestsVRAM != nil && quota.Spec.Total.RequestsVRAM.Value() > 0 {
-		percentages["requests.vram"] = usage.RequestsVRAM.Value() * 100 / quota.Spec.Total.RequestsVRAM.Value()
+	if !quota.Spec.Total.Requests.Vram.IsZero() && !usage.Requests.Vram.IsZero() && quota.Spec.Total.Requests.Vram.Value() > 0 {
+		percentages["requests.vram"] = usage.Requests.Vram.Value() * 100 / quota.Spec.Total.Requests.Vram.Value()
 	}
 
-	if quota.Spec.Total.Workers != nil && usage.Workers != nil && *quota.Spec.Total.Workers > 0 {
-		percentages["workers"] = int64(*usage.Workers) * 100 / int64(*quota.Spec.Total.Workers)
+	if quota.Spec.Total.MaxWorkers != nil && usage.Workers != nil && *quota.Spec.Total.MaxWorkers > 0 {
+		percentages["workers"] = int64(*usage.Workers) * 100 / int64(*quota.Spec.Total.MaxWorkers)
 	}
 
 	return percentages
@@ -386,14 +298,14 @@ func (c *Calculator) CalculateUsagePercent(quota *tfv1.GPUResourceQuota, usage *
 
 // SafeAdd safely adds quantities with nil checks
 func (c *Calculator) SafeAdd(a *resource.Quantity, b resource.Quantity) {
-	if a != nil {
+	if !a.IsZero() {
 		a.Add(b)
 	}
 }
 
 // SafeSub safely subtracts b from a, ensuring a doesn't go negative
 func (c *Calculator) SafeSub(a *resource.Quantity, b resource.Quantity) {
-	if a == nil {
+	if a.IsZero() {
 		return
 	}
 	a.Sub(b)
