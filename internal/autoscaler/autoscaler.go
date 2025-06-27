@@ -27,7 +27,7 @@ var (
 type Autoscaler struct {
 	client.Client
 	Allocator
-	Recommender
+	ResourceRecommender
 	MetricsProvider
 	WorkloadStates map[string]*WorkloadState
 	WorkerStates   map[string]*WorkerState
@@ -47,12 +47,12 @@ func NewAutoscaler(c client.Client, allocator Allocator) (*Autoscaler, error) {
 	}
 
 	return &Autoscaler{
-		Client:          c,
-		Allocator:       allocator,
-		Recommender:     NewRecommender(),
-		MetricsProvider: NewMetricsProvider(nil),
-		WorkloadStates:  map[string]*WorkloadState{},
-		WorkerStates:    map[string]*WorkerState{},
+		Client:              c,
+		Allocator:           allocator,
+		ResourceRecommender: NewResourceRecommender(),
+		MetricsProvider:     NewMetricsProvider(nil),
+		WorkloadStates:      map[string]*WorkloadState{},
+		WorkerStates:        map[string]*WorkerState{},
 	}, nil
 }
 
@@ -100,11 +100,7 @@ func (s *Autoscaler) LoadWorkloads(ctx context.Context) {
 	observedWorkloads := map[string]bool{}
 	for _, workload := range workloadList.Items {
 		autoScalingConfig := workload.Spec.AutoScalingConfig
-		// Currently only supports enabling both AutoSetLimits and AutoSetRequests simultaneously
-		// TODO: when recommending, need to observe all workload
-		if !workload.DeletionTimestamp.IsZero() ||
-			!autoScalingConfig.AutoSetLimits.Enable ||
-			!autoScalingConfig.AutoSetRequests.Enable {
+		if !workload.DeletionTimestamp.IsZero() {
 			continue
 		}
 
@@ -223,8 +219,10 @@ func (s *Autoscaler) ProcessWorkloads(ctx context.Context) {
 		}
 
 		// TODO: apply config
-		//  asConfig := workloadState.AutoScalingConfig
-		rr := s.Recommender.GetRecommendedResources(workloadState)
+		// asConfig := workloadState.AutoScalingConfig
+		// NewResourceRecommenderFromAutoScalingConfig(ResouceRecomenderConfig{
+		// }).GetRecommendedResources(workloadState)
+		rr := s.ResourceRecommender.GetRecommendedResources(workloadState)
 		log.Info("Autoscaler processWorkloads", "recommended resources", rr)
 
 		for _, worker := range podList.Items {
@@ -243,57 +241,74 @@ func (s *Autoscaler) updateWorker(ctx context.Context, worker *corev1.Pod, rr *R
 	annotations := worker.GetAnnotations()
 	newAnnotations := map[string]string{}
 
-	tflopsRequest, err := resource.ParseQuantity(annotations[constants.TFLOPSRequestAnnotation])
-	if err != nil {
-		return fmt.Errorf("failed to parse tflops request: %v", err)
-	}
-	if tflopsRequest.Cmp(QuantityFromAmount(rr.LowerBoundTflops)) < 0 ||
-		tflopsRequest.Cmp(QuantityFromAmount(rr.UpperBoundTflops)) > 0 {
-		targetTflopsRequest := QuantityFromAmount(rr.TargetTflops)
-		newAnnotations[constants.TFLOPSRequestAnnotation] = targetTflopsRequest.String()
-		tflopsLimit, err := resource.ParseQuantity(annotations[constants.TFLOPSLimitAnnotation])
-		if err != nil {
-			return fmt.Errorf("failed to parse tflops limit annotation: %v", err)
-		}
-		targetTflopsLimit := getProportionalLimit(&tflopsLimit, &tflopsRequest, &targetTflopsRequest)
-		if targetTflopsLimit == nil {
-			return fmt.Errorf("failed to get limit for tflops")
-		}
-		newAnnotations[constants.TFLOPSLimitAnnotation] = targetTflopsLimit.String()
+	resourcesInfo := []struct {
+		requestKey string
+		limitKey   string
+		lowerBound ResourceAmount
+		upperBound ResourceAmount
+		target     ResourceAmount
+	}{
+		{
+			requestKey: constants.TFLOPSRequestAnnotation,
+			limitKey:   constants.TFLOPSLimitAnnotation,
+			lowerBound: rr.LowerBoundTflops,
+			upperBound: rr.UpperBoundTflops,
+			target:     rr.TargetTflops,
+		},
+		{
+			requestKey: constants.VRAMRequestAnnotation,
+			limitKey:   constants.VRAMLimitAnnotation,
+			lowerBound: rr.LowerBoundVram,
+			upperBound: rr.UpperBoundVram,
+			target:     rr.TargetVram,
+		},
 	}
 
-	vramRequest, err := resource.ParseQuantity(annotations[constants.VRAMRequestAnnotation])
-	if err != nil {
-		return fmt.Errorf("failed to parse vram request: %v", err)
-	}
-	if vramRequest.Cmp(QuantityFromAmount(rr.LowerBoundVram)) < 0 ||
-		vramRequest.Cmp(QuantityFromAmount(rr.UpperBoundVram)) > 0 {
-		targetVramRequest := QuantityFromAmount(rr.TargetVram)
-		newAnnotations[constants.VRAMRequestAnnotation] = targetVramRequest.String()
-		vramLimit, err := resource.ParseQuantity(annotations[constants.VRAMLimitAnnotation])
-		if err != nil {
-			return fmt.Errorf("failed to parse vram limit annotation: %v", err)
+	for _, resInfo := range resourcesInfo {
+		if err := updateResource(
+			annotations, newAnnotations,
+			resInfo.requestKey, resInfo.limitKey,
+			resInfo.lowerBound, resInfo.upperBound, resInfo.target,
+		); err != nil {
+			return err
 		}
-		targetVramLimit := getProportionalLimit(&vramLimit, &vramRequest, &targetVramRequest)
-		if targetVramLimit == nil {
-			return fmt.Errorf("failed to get limit for vram")
-		}
-		newAnnotations[constants.VRAMLimitAnnotation] = targetVramLimit.String()
 	}
 
 	if len(newAnnotations) > 0 {
 		if err := s.Allocator.Realloc(ctx, gpuallocator.AllocRequest{}); err != nil {
 			return fmt.Errorf("failed to reallocate resources: %v", err)
 		}
-
+		// Patch the worker with updated annotations
+		patch := client.MergeFrom(worker.DeepCopy())
 		for key, value := range newAnnotations {
 			worker.Annotations[key] = value
 		}
-
-		// TODO: replace using the patch method
-		if err := s.Update(ctx, worker); err != nil {
-			return fmt.Errorf("failed to update worker: %v", err)
+		if err := s.Patch(ctx, worker, patch); err != nil {
+			return fmt.Errorf("failed to patch worker: %v", err)
 		}
+	}
+
+	return nil
+}
+
+func updateResource(annotations, newAnnotations map[string]string, requestKey, limitKey string, lowerBound, upperBound, target ResourceAmount) error {
+	currentRequest, err := resource.ParseQuantity(annotations[requestKey])
+	if err != nil {
+		return fmt.Errorf("failed to parse %s: %v", requestKey, err)
+	}
+	if currentRequest.Cmp(QuantityFromAmount(lowerBound)) < 0 ||
+		currentRequest.Cmp(QuantityFromAmount(upperBound)) > 0 {
+		targetRequest := QuantityFromAmount(target)
+		newAnnotations[requestKey] = targetRequest.String()
+		currentLimit, err := resource.ParseQuantity(annotations[limitKey])
+		if err != nil {
+			return fmt.Errorf("failed to parse %s: %v", limitKey, err)
+		}
+		targetLimit := getProportionalLimit(&currentLimit, &currentRequest, &targetRequest)
+		if targetLimit == nil {
+			return fmt.Errorf("failed to get limit for %s", requestKey)
+		}
+		newAnnotations[limitKey] = targetLimit.String()
 	}
 
 	return nil
@@ -327,7 +342,7 @@ func getProportionalLimit(originalLimit, originalRequest, recommendedRequest *re
 }
 
 // Start after manager started
-func SetupWithManager(mgr ctrl.Manager) error {
+func SetupWithManager(mgr ctrl.Manager, allocator *gpuallocator.GpuAllocator) error {
 	autoScaler, err := NewAutoscaler(mgr.GetClient(), nil)
 	if err != nil {
 		return err
