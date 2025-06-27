@@ -3,6 +3,7 @@ package gpuresources
 import (
 	"context"
 	"testing"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -15,30 +16,37 @@ import (
 	imageutils "k8s.io/kubernetes/test/utils/image"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	gpuallocator "github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	testutil "sigs.k8s.io/scheduler-plugins/test/util"
 )
 
 const ResourceGPU v1.ResourceName = "nvidia.com/gpu"
 
+type PodInfo struct {
+	podName      string
+	podNamespace string
+	tflopsReq    int64
+	vramReqGiB   int64
+	tflopsLimit  int64
+	vramLimitGiB int64
+}
+
 func TestPreFilter(t *testing.T) {
-	type podInfo struct {
-		podName      string
-		podNamespace string
-		memReq       int64
-	}
 
 	tests := []struct {
 		name     string
-		podInfos []podInfo
+		podInfos []PodInfo
 		gpus     []tfv1.GPU
 		expected []framework.Code
 	}{
 		{
 			name: "find gpu",
-			podInfos: []podInfo{
-				{podName: "ns1-p1", podNamespace: "ns1", memReq: 500},
-				{podName: "ns1-p2", podNamespace: "ns1", memReq: 1800},
+			podInfos: []PodInfo{
+				// wrong, all the test pod should test the case that make sense
+				{podName: "ns1-p1", podNamespace: "ns1", tflopsReq: 500, vramReqGiB: 0, tflopsLimit: 0, vramLimitGiB: 0},
+				{podName: "ns1-p2", podNamespace: "ns1", tflopsReq: 1800, vramReqGiB: 0, tflopsLimit: 0, vramLimitGiB: 0},
 			},
 			gpus: []tfv1.GPU{
 				{
@@ -80,22 +88,21 @@ func TestPreFilter(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// "TODO, this is wrong, how to make a k8s client that share the same data with scheduler test framework, which use fake data, but allocator need data from kubebuilder's client?"
+			cs := makeScheduler(ctx, nil, fwk)
 
-			// TODO add gpu store
-			cs := &GPUFit{
-				fh: fwk,
-			}
-
+			// wrong, should use test case data
 			pods := make([]*v1.Pod, 0)
 
 			for _, podInfo := range tt.podInfos {
-				pod := makePod(podInfo.podName, podInfo.podNamespace, podInfo.memReq, 0, 0, podInfo.podName, "")
+				pod := makePod(podInfo)
 				pods = append(pods, pod)
 			}
 
 			state := framework.NewCycleState()
 			for i := range pods {
-				if got := cs.Filter(context.TODO(), state, pods[i], nil); got.Code() != tt.expected[i] {
+				// wrong, should judge first return result, the scheduling actually done at PreFilter stage
+				if _, got := cs.PreFilter(context.TODO(), state, pods[i]); got.Code() != tt.expected[i] {
 					t.Errorf("expected %v, got %v : %v", tt.expected[i], got.Code(), got.Message())
 				}
 			}
@@ -113,8 +120,22 @@ func TestReserve(t *testing.T) {
 		{
 			name: "Reserve pods",
 			pods: []*v1.Pod{
-				makePod("t1-p1", "ns1", 50, 0, 0, "t1-p1", "node-a"),
-				makePod("t1-p2", "ns2", 50, 0, 0, "t1-p2", "node-a"),
+				makePod(PodInfo{
+					podName:      "t1-p1",
+					podNamespace: "ns1",
+					tflopsReq:    50,
+					vramReqGiB:   0,
+					tflopsLimit:  0,
+					vramLimitGiB: 0,
+				}),
+				makePod(PodInfo{
+					podName:      "t1-p2",
+					podNamespace: "ns2",
+					tflopsReq:    50,
+					vramReqGiB:   0,
+					tflopsLimit:  0,
+					vramLimitGiB: 0,
+				}),
 			},
 			expectedCodes: []framework.Code{
 				framework.Success,
@@ -177,9 +198,30 @@ func TestUnreserve(t *testing.T) {
 		{
 			name: "Unreserve pods",
 			pods: []*v1.Pod{
-				makePod("t1-p1", "ns1", 50, 0, 100, "t1-p1", "node-a"),
-				makePod("t1-p2", "ns2", 50, 0, 0, "t1-p2", "node-a"),
-				makePod("t1-p3", "ns1", 50, 100, 0, "t1-p3", "node-a"),
+				makePod(PodInfo{
+					podName:      "t1-p1",
+					podNamespace: "ns1",
+					tflopsReq:    50,
+					vramReqGiB:   0,
+					tflopsLimit:  100,
+					vramLimitGiB: 0,
+				}),
+				makePod(PodInfo{
+					podName:      "t1-p2",
+					podNamespace: "ns2",
+					tflopsReq:    50,
+					vramReqGiB:   0,
+					tflopsLimit:  0,
+					vramLimitGiB: 0,
+				}),
+				makePod(PodInfo{
+					podName:      "t1-p3",
+					podNamespace: "ns1",
+					tflopsReq:    50,
+					vramReqGiB:   100,
+					tflopsLimit:  0,
+					vramLimitGiB: 0,
+				}),
 			},
 			expected: []tfv1.GPUStatus{
 				{
@@ -226,16 +268,24 @@ func TestUnreserve(t *testing.T) {
 	}
 }
 
-func makePod(podName string, namespace string, memReq int64, cpuReq int64, gpuReq int64, uid string, nodeName string) *v1.Pod {
+func makePod(podInfo PodInfo) *v1.Pod {
 	pause := imageutils.GetPauseImageName()
-	pod := st.MakePod().Namespace(namespace).Name(podName).Container(pause).
-		Node(nodeName).UID(uid).ZeroTerminationGracePeriod().Obj()
-	pod.Spec.Containers[0].Resources = v1.ResourceRequirements{
-		Requests: v1.ResourceList{
-			v1.ResourceMemory: *resource.NewQuantity(memReq, resource.DecimalSI),
-			v1.ResourceCPU:    *resource.NewMilliQuantity(cpuReq, resource.DecimalSI),
-			ResourceGPU:       *resource.NewQuantity(gpuReq, resource.DecimalSI),
-		},
-	}
+	pod := st.MakePod().
+		Namespace(podInfo.podNamespace).
+		Name(podInfo.podName).
+		Container(pause).
+		UID(podInfo.podName).
+		ZeroTerminationGracePeriod().Obj()
 	return pod
+}
+
+func makeScheduler(ctx context.Context, client client.Client, fwk framework.Framework) *GPUFit {
+	return &GPUFit{
+		allocator: gpuallocator.NewGpuAllocator(
+			ctx,
+			client,
+			time.Second,
+		),
+		fh: fwk,
+	}
 }

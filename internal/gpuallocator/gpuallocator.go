@@ -435,8 +435,6 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 		return readyCh, fmt.Errorf("failed to setup indexer for field metadata.name: %w", indexErr)
 	}
 
-	// setup gpu quota indexer
-
 	err := s.startInformerForGPU(ctx, mgr)
 	if err != nil {
 		return readyCh, err

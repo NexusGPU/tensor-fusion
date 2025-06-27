@@ -15,6 +15,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -101,14 +102,23 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 		return gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 	})
 	// remove nodes that don't have enough GPUs that meet the request
+	nodeNames := sets.New[string]()
 	for k, v := range validNodeGPUs {
 		if len(v) < int(allocRequest.Count) {
 			delete(validNodeGPUs, k)
+		} else {
+			nodeNames.Insert(k)
 		}
 	}
 
 	// assign score based on different strategies
 	score := s.allocator.Score(ctx, s.cfg, allocRequest, validNodeGPUs)
+
+	if s.logger.V(6).Enabled() {
+		jsonStr, _ := json.Marshal(validNodeGPUs)
+		scoreJsonStr, _ := json.Marshal(score)
+		s.logger.V(6).Info("PreFilterResult", "validNodeGPUs", jsonStr, "score", scoreJsonStr)
+	}
 
 	state.Write(CycleStateGPUSchedulingResult, &GPUSchedulingStateData{
 		NodeGPUs:          validNodeGPUs,
@@ -116,7 +126,9 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 		FinalGPUs:         []string{},
 	})
 
-	return nil, framework.NewStatus(framework.Success)
+	return &framework.PreFilterResult{
+		NodeNames: nodeNames,
+	}, framework.NewStatus(framework.Success)
 }
 
 func (s *GPUFit) PreFilterExtensions() framework.PreFilterExtensions {
