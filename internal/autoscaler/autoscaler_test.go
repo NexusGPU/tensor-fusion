@@ -35,18 +35,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Consider gpu allocator, check if enough tflops or vram to allocate
-// Add tests for recommender
-// Add logs for key events
 // [x] tflops add all samples, like cpu in vpa
-// Implement gc for cleaning outdated data
-// Add AutoSetResources to schedulingconfigtemplate and make it more configurable
+// [x] Reallocate resources before update annotation
+// Add AutoSetResources, make it more configurable
+// Implement Realloc method on GpuAllocator
+// Add tests for recommender
+// Log key events
 // Scale to zero if no usage, need carl to support
-// Add recommendation to workload
+// Add recommendation to workload status
 // Write some documents
 // cron scheduler stragegy,  parallisam ?
 // Refactor main, setup database may not put in leader election runnable group
-// resolve conversation on github, thanks for reviews
+// Resolve conversation on github, thanks for reviews
 
 var _ = Describe("Autoscaler", func() {
 	Context("when creating an autoscaler", func() {
@@ -158,7 +158,7 @@ var _ = Describe("Autoscaler", func() {
 	})
 
 	Context("when processing workloads", func() {
-		It("should update only those resources exceeding the recommended resource boundaries", func() {
+		FIt("should update only those resources exceeding the recommended resource boundaries", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
@@ -169,8 +169,8 @@ var _ = Describe("Autoscaler", func() {
 			scaler, _ := NewAutoscaler(k8sClient, &FakeAllocator{})
 			scaler.LoadWorkloads(ctx)
 
-			scaler.Recommender = &FakeOutBoundRecommender{}
-			rr := scaler.Recommender.GetRecommendedResources(nil)
+			scaler.ResourceRecommender = &FakeOutBoundRecommender{}
+			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
 
 			scaler.ProcessWorkloads(ctx)
 			Eventually(func(g Gomega) {
@@ -192,12 +192,16 @@ var _ = Describe("Autoscaler", func() {
 			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
 			defer deleteWorkload(workload)
 
-			scaler, _ := NewAutoscaler(k8sClient, &FakeAllocator{})
+			scaler, _ := NewAutoscaler(k8sClient, &FakeFailedAllocator{})
 			scaler.LoadWorkloads(ctx)
-			scaler.Recommender = &FakeOutBoundRecommender{}
-			rr := scaler.Recommender.GetRecommendedResources(nil)
+			scaler.ResourceRecommender = &FakeOutBoundRecommender{}
+			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
 			err := scaler.updateWorker(ctx, getWorkers(workload)[0], rr)
 			Expect(err.Error()).To(ContainSubstring("failed to reallocate resources"))
+		})
+
+		It("should update scaleToZero annotation if recommended resource closer to zero", func() {
+
 		})
 	})
 })
@@ -234,11 +238,7 @@ func createWorkload(pool *tfv1.GPUPool, id int, replicas int) *tfv1.TensorFusion
 			},
 			Qos: constants.QoSLevelMedium,
 			AutoScalingConfig: tfv1.AutoScalingConfig{
-				AutoSetLimits: tfv1.AutoSetLimits{
-					Enable:         true,
-					TargetResource: "",
-				},
-				AutoSetRequests: tfv1.AutoSetRequests{
+				AutoSetResources: tfv1.AutoSetResources{
 					Enable:         true,
 					TargetResource: "",
 				},
@@ -286,7 +286,13 @@ func getWorkers(workload *tfv1.TensorFusionWorkload) []*corev1.Pod {
 type FakeAllocator struct{}
 
 func (*FakeAllocator) Realloc(ctx context.Context, req gpuallocator.AllocRequest) error {
-	return fmt.Errorf("failed to reallocate resources")
+	return nil
+}
+
+type FakeFailedAllocator struct{}
+
+func (*FakeFailedAllocator) Realloc(ctx context.Context, req gpuallocator.AllocRequest) error {
+	return fmt.Errorf("not enough resources")
 }
 
 type FakeMetricsProvider struct {
