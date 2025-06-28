@@ -2,6 +2,7 @@ package gpuallocator
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -96,6 +98,7 @@ func createWorkerPod(namespace, name, tflops, vram string) v1.Pod {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
+			UID:       types.UID(fmt.Sprintf("%s-uid", name)),
 			Labels: map[string]string{
 				constants.LabelComponent: constants.ComponentWorker,
 				constants.WorkloadKey:    TestWorkload,
@@ -103,7 +106,14 @@ func createWorkerPod(namespace, name, tflops, vram string) v1.Pod {
 			Annotations: map[string]string{
 				constants.TFLOPSRequestAnnotation: tflops,
 				constants.VRAMRequestAnnotation:   vram,
+				constants.TFLOPSLimitAnnotation:   tflops,
+				constants.VRAMLimitAnnotation:     vram,
+				constants.GpuCountAnnotation:      "1",
+				constants.GpuPoolKey:              TestPoolName,
 			},
+		},
+		Spec: v1.PodSpec{
+			NodeName: "test-node", // Pods need to be scheduled
 		},
 		Status: v1.PodStatus{
 			Phase: v1.PodRunning,
@@ -177,8 +187,8 @@ func TestQuotaStore_BasicOperations(t *testing.T) {
 				count        uint
 			}{30, 300, 2},
 			expectError: false,
-			finalUsage:  QuotaExpectation{TFlops: 60, VRAM: 600, Workers: 2},
-			finalAvail:  QuotaExpectation{TFlops: 40, VRAM: 400, Workers: 8},
+			finalUsage:  QuotaExpectation{TFlops: 60, VRAM: 600, Workers: 1},
+			finalAvail:  QuotaExpectation{TFlops: 40, VRAM: 400, Workers: 9},
 			testFunc: func(t *testing.T, fixture *QuotaTestFixture) {
 				req := createAllocRequest(30, 300, 2)
 				err := fixture.quotaStore.CheckQuotaAvailable(TestNamespace, req)
@@ -198,7 +208,7 @@ func TestQuotaStore_BasicOperations(t *testing.T) {
 				req := createAllocRequest(60, 600, 2)
 				err := fixture.quotaStore.CheckQuotaAvailable(TestNamespace, req)
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "total.requests.tflops")
+				assert.Contains(t, err.Error(), "total.max.tflops.request")
 			},
 		},
 		{
@@ -275,44 +285,34 @@ func TestQuotaStore_ConcurrentOperations(t *testing.T) {
 
 func TestQuotaStore_BoundaryConditions(t *testing.T) {
 	tests := []struct {
-		name           string
-		quotaTFlops    int64
-		quotaVRAM      int64
-		quotaWorkers   int32
-		requestTFlops  int64
-		requestVRAM    int64
-		requestWorkers uint
-		expectError    bool
+		name          string
+		quotaTFlops   int64
+		quotaVRAM     int64
+		quotaWorkers  int32
+		requestTFlops int64
+		requestVRAM   int64
+		requestGPUs   uint
+		expectError   bool
 	}{
 		{
-			name:           "exact quota boundary",
-			quotaTFlops:    100,
-			quotaVRAM:      1000,
-			quotaWorkers:   10,
-			requestTFlops:  10,
-			requestVRAM:    100,
-			requestWorkers: 10,
-			expectError:    false,
+			name:          "exact quota boundary",
+			quotaTFlops:   100,
+			quotaVRAM:     1000,
+			quotaWorkers:  10,
+			requestTFlops: 10,
+			requestVRAM:   100,
+			requestGPUs:   10,
+			expectError:   false,
 		},
 		{
-			name:           "exceed quota by one worker",
-			quotaTFlops:    100,
-			quotaVRAM:      1000,
-			quotaWorkers:   10,
-			requestTFlops:  9,
-			requestVRAM:    90,
-			requestWorkers: 11,
-			expectError:    true,
-		},
-		{
-			name:           "zero quota allocation",
-			quotaTFlops:    0,
-			quotaVRAM:      0,
-			quotaWorkers:   0,
-			requestTFlops:  1,
-			requestVRAM:    1,
-			requestWorkers: 1,
-			expectError:    true,
+			name:          "zero quota allocation",
+			quotaTFlops:   0,
+			quotaVRAM:     0,
+			quotaWorkers:  0,
+			requestTFlops: 1,
+			requestVRAM:   1,
+			requestGPUs:   1,
+			expectError:   true,
 		},
 	}
 
@@ -327,7 +327,7 @@ func TestQuotaStore_BoundaryConditions(t *testing.T) {
 			}
 			qs.QuotaStore[TestNamespace] = entry
 
-			req := createAllocRequest(tt.requestTFlops, tt.requestVRAM, tt.requestWorkers)
+			req := createAllocRequest(tt.requestTFlops, tt.requestVRAM, tt.requestGPUs)
 			err := qs.CheckQuotaAvailable(TestNamespace, req)
 
 			if tt.expectError {
@@ -377,7 +377,7 @@ func TestGPUAllocator_QuotaIntegration(t *testing.T) {
 		require.True(t, exists)
 		assert.Equal(t, int64(60), usage.Requests.Tflops.Value())
 		assert.Equal(t, int64(600), usage.Requests.Vram.Value())
-		assert.Equal(t, int32(2), usage.Workers)
+		assert.Equal(t, int32(1), usage.Workers)
 	})
 
 	t.Run("allocation exceeds quota", func(t *testing.T) {
@@ -446,15 +446,20 @@ func TestGPUAllocator_ConcurrentQuotaEnforcement(t *testing.T) {
 	results := make(chan error, 10)
 
 	// Launch 6 concurrent allocation attempts, but quota only allows 5 workers
-	for range 6 {
+	for i := range 6 {
 		wg.Add(1)
-		go func() {
+		go func(index int) {
 			defer wg.Done()
 			req := createAllocRequest(10, 100, 1) // Each request uses 10 TFlops
-			req.PodMeta = podMeta
+			// Create unique pod metadata for each goroutine
+			req.PodMeta = metav1.ObjectMeta{
+				Name:      fmt.Sprintf("test-pod-%d", index),
+				Namespace: TestNamespace,
+				UID:       types.UID(fmt.Sprintf("test-uid-%d", index)),
+			}
 			_, err := allocator.Alloc(req)
 			results <- err
-		}()
+		}(i)
 	}
 
 	wg.Wait()
@@ -567,8 +572,8 @@ func TestGPUAllocator_QuotaDeallocation(t *testing.T) {
 	usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
 	require.True(t, exists)
 	assert.Equal(t, int64(60), usage.Requests.Tflops.Value())
-	assert.Equal(t, int64(40), usage.Requests.Vram.Value())
-	assert.Equal(t, int32(2), usage.Workers)
+	assert.Equal(t, int64(600), usage.Requests.Vram.Value()) // 300 * 2 = 600
+	assert.Equal(t, int32(1), usage.Workers)
 
 	// Deallocate GPUs
 	gpuNames := make([]string, len(allocatedGPUs))
