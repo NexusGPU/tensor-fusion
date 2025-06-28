@@ -44,7 +44,7 @@ type GPUResourcesSuite struct {
 func (s *GPUResourcesSuite) SetupTest() {
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	log.FromContext(s.ctx).Info("Setting up test")
-	tfv1.AddToScheme(scheme.Scheme)
+	_ = tfv1.AddToScheme(scheme.Scheme)
 	// Initial objects for the fake client
 	pods := []*v1.Pod{
 		{
@@ -182,13 +182,16 @@ func (s *GPUResourcesSuite) SetupTest() {
 		Build()
 
 	for _, pod := range pods {
-		s.client.Create(s.ctx, pod)
+		err := s.client.Create(s.ctx, pod)
+		s.NoError(err)
 	}
 	for _, gpu := range gpus {
-		s.client.Create(s.ctx, gpu)
+		err := s.client.Create(s.ctx, gpu)
+		s.NoError(err)
 	}
 	for _, node := range nodes {
-		s.client.Create(s.ctx, node)
+		err := s.client.Create(s.ctx, node)
+		s.NoError(err)
 	}
 
 	var registerPlugins []tf.RegisterPluginFunc
@@ -239,7 +242,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 	}{
 		{
 			name: "pod requires 1 GPU, enough capacity",
-			pod: s.makePod("p1", "ns1", "workload-1", "pool-a",
+			pod: s.makePod("p1",
 				map[string]string{
 					constants.GpuCountAnnotation:      "1",
 					constants.TFLOPSRequestAnnotation: "100",
@@ -250,7 +253,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 		},
 		{
 			name: "pod requires 1 GPU, enough tflops",
-			pod: s.makePod("p2", "ns1", "workload-1", "pool-a",
+			pod: s.makePod("p2",
 				map[string]string{
 					constants.GpuCountAnnotation:      "1",
 					constants.TFLOPSRequestAnnotation: "2000",
@@ -261,7 +264,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 		},
 		{
 			name: "pod requires 2 GPUs should be scheduled on node-b",
-			pod: s.makePod("p3", "ns1", "workload-1", "pool-a",
+			pod: s.makePod("p3",
 				map[string]string{
 					constants.GpuCountAnnotation:      "2",
 					constants.TFLOPSRequestAnnotation: "100",
@@ -272,7 +275,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 		},
 		{
 			name: "pod requires 1 GPU, not enough vram",
-			pod: s.makePod("p2", "ns1", "workload-1", "pool-a",
+			pod: s.makePod("p2",
 				map[string]string{
 					constants.GpuCountAnnotation:      "1",
 					constants.TFLOPSRequestAnnotation: "2000",
@@ -283,7 +286,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 		},
 		{
 			name: "pod requires 3 GPUs, but at most 2 on existing nodes",
-			pod: s.makePod("p3", "ns1", "workload-1", "pool-a",
+			pod: s.makePod("p3",
 				map[string]string{
 					constants.GpuCountAnnotation:      "3",
 					constants.TFLOPSRequestAnnotation: "100",
@@ -312,7 +315,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 func (s *GPUResourcesSuite) TestFilter() {
 	log.FromContext(s.ctx).Info("Running TestFilter")
 	state := framework.NewCycleState()
-	pod := s.makePod("p1", "ns1", "workload-1", "pool-a",
+	pod := s.makePod("p1",
 		map[string]string{
 			constants.GpuCountAnnotation:      "1",
 			constants.TFLOPSRequestAnnotation: "100",
@@ -353,7 +356,7 @@ func (s *GPUResourcesSuite) TestFilter() {
 func (s *GPUResourcesSuite) TestScore() {
 	log.FromContext(s.ctx).Info("Running TestScore")
 	state := framework.NewCycleState()
-	pod := s.makePod("p1", "ns1", "workload-1", "pool-a",
+	pod := s.makePod("p1",
 		map[string]string{
 			constants.GpuCountAnnotation:      "1",
 			constants.TFLOPSRequestAnnotation: "100",
@@ -380,7 +383,7 @@ func (s *GPUResourcesSuite) TestScore() {
 func (s *GPUResourcesSuite) TestReserveAndUnreserve() {
 	log.FromContext(s.ctx).Info("Running TestReserveAndUnreserve")
 	state := framework.NewCycleState()
-	pod := s.makePod("p1", "ns1", "workload-1", "pool-a",
+	pod := s.makePod("p1",
 		map[string]string{
 			constants.GpuCountAnnotation:      "1",
 			constants.TFLOPSRequestAnnotation: "100",
@@ -421,7 +424,7 @@ func (s *GPUResourcesSuite) TestReserveAndUnreserve() {
 func (s *GPUResourcesSuite) TestPreBind() {
 	log.FromContext(s.ctx).Info("Running TestPreBind")
 	state := framework.NewCycleState()
-	pod := s.makePod("p1", "ns1", "workload-1", "pool-a",
+	pod := s.makePod("p1",
 		map[string]string{
 			constants.GpuCountAnnotation:      "1",
 			constants.TFLOPSRequestAnnotation: "100",
@@ -448,21 +451,21 @@ func TestGPUResourcesSuite(t *testing.T) {
 	suite.Run(t, new(GPUResourcesSuite))
 }
 
-func (s *GPUResourcesSuite) makePod(name, namespace, workload, pool string, annotations map[string]string) *v1.Pod {
+func (s *GPUResourcesSuite) makePod(name string, annotations map[string]string) *v1.Pod {
 	log.FromContext(s.ctx).Info("Making pod", "name", name)
 	pod := st.MakePod().
-		Namespace(namespace).
+		Namespace("ns1").
 		Name(name).
 		UID(name).
 		ZeroTerminationGracePeriod().Obj()
 	pod.Labels = map[string]string{
-		constants.WorkloadKey: workload,
+		constants.WorkloadKey: "workload-1",
 	}
 	pod.Annotations = annotations
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}
-	pod.Annotations[constants.GpuPoolKey] = pool
+	pod.Annotations[constants.GpuPoolKey] = "pool-a"
 	if annotations[constants.TFLOPSLimitAnnotation] == "" {
 		pod.Annotations[constants.TFLOPSLimitAnnotation] = pod.Annotations[constants.TFLOPSRequestAnnotation]
 	}
@@ -474,7 +477,7 @@ func (s *GPUResourcesSuite) makePod(name, namespace, workload, pool string, anno
 	}
 
 	existingPod := &v1.Pod{}
-	if err := s.client.Get(s.ctx, client.ObjectKey{Name: name, Namespace: namespace}, existingPod); err != nil {
+	if err := s.client.Get(s.ctx, client.ObjectKey{Name: name, Namespace: "ns1"}, existingPod); err != nil {
 		if errors.IsNotFound(err) {
 			s.NoError(s.client.Create(s.ctx, pod))
 		}
@@ -538,7 +541,7 @@ func (s *GPUResourcesSuite) TestName() {
 
 func (s *GPUResourcesSuite) TestReserve_ErrorHandling() {
 	state := framework.NewCycleState()
-	pod := s.makePod("p1", "ns1", "workload-1", "pool-a",
+	pod := s.makePod("p1",
 		map[string]string{
 			constants.GpuCountAnnotation:      "1",
 			constants.TFLOPSRequestAnnotation: "100",
@@ -560,7 +563,7 @@ func (s *GPUResourcesSuite) TestReserve_ErrorHandling() {
 func (s *GPUResourcesSuite) TestUnreserve_ErrorHandling() {
 	log.FromContext(s.ctx).Info("Running TestUnreserve_ErrorHandling")
 	state := framework.NewCycleState()
-	pod := s.makePod("p1", "ns1", "workload-1", "pool-a",
+	pod := s.makePod("p1",
 		map[string]string{
 			constants.GpuCountAnnotation:      "1",
 			constants.TFLOPSRequestAnnotation: "100",
@@ -576,7 +579,7 @@ func (s *GPUResourcesSuite) TestUnreserve_ErrorHandling() {
 func (s *GPUResourcesSuite) TestPreBind_ErrorHandling() {
 	log.FromContext(s.ctx).Info("Running TestPreBind_ErrorHandling")
 	state := framework.NewCycleState()
-	pod := s.makePod("p1", "ns1", "workload-1", "pool-a",
+	pod := s.makePod("p1",
 		map[string]string{
 			constants.GpuCountAnnotation:      "1",
 			constants.TFLOPSRequestAnnotation: "100",
@@ -604,7 +607,7 @@ func (s *GPUResourcesSuite) TestPreBind_ErrorHandling() {
 func (s *GPUResourcesSuite) TestFilter_ErrorHandling() {
 	log.FromContext(s.ctx).Info("Running TestFilter_ErrorHandling")
 	state := framework.NewCycleState()
-	pod := s.makePod("p1", "ns1", "workload-1", "pool-a", nil)
+	pod := s.makePod("p1", nil)
 	nodeInfo := &framework.NodeInfo{}
 	nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
 
@@ -617,7 +620,7 @@ func (s *GPUResourcesSuite) TestFilter_ErrorHandling() {
 func (s *GPUResourcesSuite) TestScore_ErrorHandling() {
 	log.FromContext(s.ctx).Info("Running TestScore_ErrorHandling")
 	state := framework.NewCycleState()
-	pod := s.makePod("p1", "ns1", "workload-1", "pool-a", map[string]string{
+	pod := s.makePod("p1", map[string]string{
 		constants.TFLOPSRequestAnnotation: "100",
 		constants.VRAMRequestAnnotation:   "10Gi",
 	})
