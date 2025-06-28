@@ -261,7 +261,7 @@ func (r *PodReconciler) handlePodGPUCleanup(ctx context.Context, pod *corev1.Pod
 		return gpuName
 	})
 
-	r.Allocator.Dealloc(ctx,
+	r.Allocator.Dealloc(
 		tfv1.NameNamespace{Name: pod.Labels[constants.WorkloadKey], Namespace: pod.Namespace},
 		gpus,
 		pod.ObjectMeta,

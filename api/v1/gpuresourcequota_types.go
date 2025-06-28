@@ -179,6 +179,20 @@ type AllocRequest struct {
 	GPUModel string
 	// Node affinity requirements
 	NodeAffinity *v1.NodeAffinity
+
+	// final scheduled GPU IDs for this allocation request
+	// This fields is set by GPUAllocator, user should not choose specific GPUs
+	GPUNames []string
+
+	// record the pod meta for quota check
+	PodMeta metav1.ObjectMeta
+}
+
+type AdjustRequest struct {
+	PodUID     string
+	IsScaleUp  bool
+	NewRequest Resource
+	NewLimit   Resource
 }
 
 func (ar *AllocRequest) Clone() framework.StateData {

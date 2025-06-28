@@ -368,7 +368,8 @@ func TestGPUAllocator_QuotaIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		req := createAllocRequest(30, 300, 2)
-		allocatedGPUs, err := allocator.Alloc(ctx, req, podMeta)
+		req.PodMeta = podMeta
+		allocatedGPUs, err := allocator.Alloc(req)
 		require.NoError(t, err)
 		require.Len(t, allocatedGPUs, 2)
 
@@ -406,7 +407,8 @@ func TestGPUAllocator_QuotaIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		req := createAllocRequest(60, 600, 2) // 60*2=120 > 100 quota
-		_, err = allocator.Alloc(ctx, req, podMeta)
+		req.PodMeta = podMeta
+		_, err = allocator.Alloc(req)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "total.max.tflops")
 	})
@@ -449,7 +451,8 @@ func TestGPUAllocator_ConcurrentQuotaEnforcement(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			req := createAllocRequest(10, 100, 1) // Each request uses 10 TFlops
-			_, err := allocator.Alloc(ctx, req, podMeta)
+			req.PodMeta = podMeta
+			_, err := allocator.Alloc(req)
 			results <- err
 		}()
 	}
@@ -555,7 +558,8 @@ func TestGPUAllocator_QuotaDeallocation(t *testing.T) {
 
 	// Allocate GPUs
 	req := createAllocRequest(30, 300, 2)
-	allocatedGPUs, err := allocator.Alloc(ctx, req, podMeta)
+	req.PodMeta = podMeta
+	allocatedGPUs, err := allocator.Alloc(req)
 	require.NoError(t, err)
 	require.Len(t, allocatedGPUs, 2)
 
@@ -572,7 +576,7 @@ func TestGPUAllocator_QuotaDeallocation(t *testing.T) {
 		gpuNames[i] = gpu.Name
 	}
 
-	allocator.Dealloc(ctx, req.WorkloadNameNamespace, gpuNames, podMeta)
+	allocator.Dealloc(req.WorkloadNameNamespace, gpuNames, podMeta)
 
 	// Verify deallocation
 	usage, exists = allocator.quotaStore.GetQuotaStatus(TestNamespace)

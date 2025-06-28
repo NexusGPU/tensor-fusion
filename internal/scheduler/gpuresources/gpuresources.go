@@ -207,10 +207,8 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 	})
 
 	_, err = s.allocator.Bind(
-		ctx,
 		schedulingResult.FinalGPUs,
 		allocRequest.(*tfv1.AllocRequest),
-		pod.ObjectMeta,
 	)
 	if err != nil {
 		return framework.NewStatus(framework.Error, err.Error())
@@ -227,7 +225,7 @@ func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod
 	}
 	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
 
-	s.allocator.Dealloc(ctx, tfv1.NameNamespace{
+	s.allocator.Dealloc(tfv1.NameNamespace{
 		Name:      pod.Labels[constants.WorkloadKey],
 		Namespace: pod.Namespace,
 	}, schedulingResult.FinalGPUs, pod.ObjectMeta)

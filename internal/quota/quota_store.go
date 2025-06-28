@@ -73,20 +73,31 @@ func (qs *QuotaStore) CheckQuotaAvailable(namespace string, req *tfv1.AllocReque
 		// No quota defined for this namespace, allow allocation
 		return nil
 	}
-	// 1. Check single (per-workload) limits first
 	if err := qs.checkSingleQuotas(entry, req); err != nil {
 		return err
 	}
-	// 2. Check total namespace limits
 	return qs.checkTotalQuotas(entry, req)
+}
+
+func (qs *QuotaStore) AdjustQuota(namespace string, reqDelta tfv1.Resource, limitDelta tfv1.Resource) {
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
+
+	entry, exists := qs.QuotaStore[namespace]
+	if !exists {
+		return
+	}
+	entry.CurrentUsage.Requests.Tflops.Add(reqDelta.Tflops)
+	entry.CurrentUsage.Requests.Vram.Add(reqDelta.Vram)
+	entry.CurrentUsage.Limits.Tflops.Add(limitDelta.Tflops)
+	entry.CurrentUsage.Limits.Vram.Add(limitDelta.Vram)
+	qs.markQuotaDirty(namespace)
 }
 
 // checkSingleQuotas checks per-workload limits
 func (qs *QuotaStore) checkSingleQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRequest) error {
 	single := &entry.Quota.Spec.Single
-	// Check maximum limits per workload
 	if single.MaxLimits != nil {
-		// Check single TFlops limit (per GPU)
 		if !single.MaxLimits.Tflops.IsZero() && req.Limit.Tflops.Cmp(single.MaxLimits.Tflops) > 0 {
 			return &QuotaExceededError{
 				Namespace: entry.Quota.Namespace,
@@ -119,10 +130,8 @@ func (qs *QuotaStore) checkSingleQuotas(entry *QuotaStoreEntry, req *tfv1.AllocR
 	return nil
 }
 
-// checkTotalLimits checks total namespace limits
 func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRequest) error {
 	quotaNs := entry.Quota.Namespace
-	// Check total requests
 	if entry.Quota.Spec.Total.Requests != nil {
 		total := entry.Quota.Spec.Total.Requests
 		current := entry.CurrentUsage.Requests
