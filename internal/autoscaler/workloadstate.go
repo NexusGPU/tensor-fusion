@@ -1,6 +1,7 @@
 package autoscaler
 
 import (
+	"strconv"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -17,7 +18,7 @@ const (
 	DefaultAggregationInterval = time.Hour * 24
 	// DefaultHistogramBucketSizeGrowth is the default value for HistogramBucketSizeGrowth.
 	DefaultHistogramBucketSizeGrowth = 0.05 // Make each bucket 5% larger than the previous one.
-	// DefaultVramHistogramDecayHalfLife is the default value for HistogramDecayHalfLife.
+	// DefaultHistogramDecayHalfLife is the default value for HistogramDecayHalfLife.
 	DefaultHistogramDecayHalfLife = time.Hour * 24
 )
 
@@ -61,4 +62,43 @@ func (w *WorkloadState) UpdateSampleStats(metrics *WorkerMetrics) {
 		w.FirstSampleStart = metrics.Timestamp
 	}
 	w.TotalSamplesCount++
+}
+
+func (w *WorkloadState) GetResourceRecommenderConfig() *ResourceRecommenderConfig {
+	cfg := DefaultResourceRecommenderConfig
+
+	asr := w.AutoScalingConfig.AutoSetResources
+	fields := []struct {
+		val string
+		dst *float64
+	}{
+		{asr.TargetTflopsPercentile, &cfg.TargetTflopsPercentile},
+		{asr.LowerBoundTflopsPercentile, &cfg.LowerBoundTflopsPercentile},
+		{asr.UpperBoundTflopsPercentile, &cfg.UpperBoundTflopsPercentile},
+		{asr.TargetVramPercentile, &cfg.TargetVramPercentile},
+		{asr.LowerBoundVramPercentile, &cfg.LowerBoundVramPercentile},
+		{asr.UpperBoundVramPercentile, &cfg.UpperBoundVramPercentile},
+		{asr.RequestMarginFraction, &cfg.RequestMarginFraction},
+	}
+	for _, f := range fields {
+		if f.val == "" {
+			continue
+		}
+		if v, err := strconv.ParseFloat(f.val, 64); err == nil {
+			*f.dst = v
+		}
+	}
+
+	if asr.ConfidenceInterval != "" {
+		if d, err := time.ParseDuration(asr.ConfidenceInterval); err == nil {
+			cfg.ConfidenceInterval = d
+		}
+	}
+
+	return &cfg
+}
+
+func (w *WorkloadState) IsTargetResource(resourceName string) bool {
+	target := w.AutoScalingConfig.AutoSetResources.TargetResource
+	return target == "" || resourceName == target
 }
