@@ -158,7 +158,7 @@ var _ = Describe("Autoscaler", func() {
 	})
 
 	Context("when processing workloads", func() {
-		FIt("should update only those resources exceeding the recommended resource boundaries", func() {
+		It("should update only those resources exceeding the recommended resource boundaries", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
@@ -184,6 +184,34 @@ var _ = Describe("Autoscaler", func() {
 			}).Should(Succeed())
 		})
 
+		It("should update specific resources based on TargetResource", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
+				Build()
+			defer tfEnv.Cleanup()
+			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
+			defer deleteWorkload(workload)
+
+			scaler, _ := NewAutoscaler(k8sClient, &FakeAllocator{})
+			scaler.LoadWorkloads(ctx)
+
+			scaler.ResourceRecommender = &FakeOutBoundRecommender{}
+			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
+
+			workloadState := scaler.WorkloadStates[workload.Name]
+			workloadState.AutoScalingConfig.AutoSetResources.TargetResource = "tflops"
+
+			oldRes := workloadState.Resources
+			scaler.ProcessWorkloads(ctx)
+			Eventually(func(g Gomega) {
+				tflopsRequest, tflopsLimit, vramRequest, vramLimit := parseResourceAnnotations(getWorkers(workload)[0])
+				Expect(tflopsRequest.Value()).To(Equal(int64(rr.TargetTflops)))
+				Expect(tflopsLimit.Value()).To(Equal(int64(rr.TargetTflops * 2)))
+				Expect(vramRequest.Equal(oldRes.Requests.Vram)).To(BeTrue())
+				Expect(vramLimit.Equal(oldRes.Limits.Vram)).To(BeTrue())
+			}).Should(Succeed())
+		})
+
 		It("should return an error if failed to reallocate resources", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
@@ -196,7 +224,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler.LoadWorkloads(ctx)
 			scaler.ResourceRecommender = &FakeOutBoundRecommender{}
 			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
-			err := scaler.updateWorker(ctx, getWorkers(workload)[0], rr)
+			err := scaler.updateWorkerResourcesIfNeeded(ctx, scaler.WorkloadStates[workload.Name], getWorkers(workload)[0], rr)
 			Expect(err.Error()).To(ContainSubstring("failed to reallocate resources"))
 		})
 
@@ -388,16 +416,26 @@ func cleanupWorkload(key client.ObjectKey) {
 }
 
 func assertWorkerAnnotations(worker *corev1.Pod, rr *RecommendedResources) {
-	annotations := worker.GetAnnotations()
-	tflopsRequest := resource.MustParse(annotations[constants.TFLOPSRequestAnnotation])
+	tflopsRequest, tflopsLimit, vramRequest, vramLimit := parseResourceAnnotations(worker)
 	Expect(tflopsRequest.Value()).To(Equal(int64(rr.TargetTflops)))
-
-	tflopsLimit := resource.MustParse(annotations[constants.TFLOPSLimitAnnotation])
 	Expect(tflopsLimit.Value()).To(Equal(int64(rr.TargetTflops * 2)))
-
-	vramRequest := resource.MustParse(annotations[constants.VRAMRequestAnnotation])
 	Expect(vramRequest.Value()).To(Equal(int64(rr.TargetVram)))
-
-	vramLimit := resource.MustParse(annotations[constants.VRAMLimitAnnotation])
 	Expect(vramLimit.Value()).To(Equal(int64(rr.TargetVram * 2)))
+}
+
+func parseResourceAnnotations(worker *corev1.Pod) (tflopsRequest, tflopsLimit, vramRequest, vramLimit resource.Quantity) {
+	annotations := worker.GetAnnotations()
+	keys := []struct {
+		key string
+		dst *resource.Quantity
+	}{
+		{constants.TFLOPSRequestAnnotation, &tflopsRequest},
+		{constants.TFLOPSLimitAnnotation, &tflopsLimit},
+		{constants.VRAMRequestAnnotation, &vramRequest},
+		{constants.VRAMLimitAnnotation, &vramLimit},
+	}
+	for _, k := range keys {
+		*k.dst = resource.MustParse(annotations[k.key])
+	}
+	return
 }

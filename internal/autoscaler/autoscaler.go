@@ -99,7 +99,6 @@ func (s *Autoscaler) LoadWorkloads(ctx context.Context) {
 
 	observedWorkloads := map[string]bool{}
 	for _, workload := range workloadList.Items {
-		autoScalingConfig := workload.Spec.AutoScalingConfig
 		if !workload.DeletionTimestamp.IsZero() {
 			continue
 		}
@@ -111,7 +110,7 @@ func (s *Autoscaler) LoadWorkloads(ctx context.Context) {
 		}
 		workloadState.Namespace = workload.Namespace
 		workloadState.Resources = workload.Spec.Resources
-		workloadState.AutoScalingConfig = autoScalingConfig
+		workloadState.AutoScalingConfig = workload.Spec.AutoScalingConfig
 		s.WorkloadStates[workloadName] = workloadState
 
 		observedWorkloads[workloadName] = true
@@ -218,30 +217,24 @@ func (s *Autoscaler) ProcessWorkloads(ctx context.Context) {
 			continue
 		}
 
-		// TODO: apply config
-		// asConfig := workloadState.AutoScalingConfig
-		// NewResourceRecommenderFromAutoScalingConfig(ResouceRecomenderConfig{
-		// }).GetRecommendedResources(workloadState)
 		rr := s.ResourceRecommender.GetRecommendedResources(workloadState)
-		log.Info("Autoscaler processWorkloads", "recommended resources", rr)
+		log.Info("recommend resources", "workload", workloadState.Name, "resources", rr)
 
 		for _, worker := range podList.Items {
 			if !worker.DeletionTimestamp.IsZero() {
 				continue
 			}
 
-			if err := s.updateWorker(ctx, &worker, rr); err != nil {
+			if err := s.updateWorkerResourcesIfNeeded(ctx, workloadState, &worker, rr); err != nil {
 				log.Error(err, "failed to update worker")
 			}
 		}
 	}
 }
 
-func (s *Autoscaler) updateWorker(ctx context.Context, worker *corev1.Pod, rr *RecommendedResources) error {
-	annotations := worker.GetAnnotations()
-	newAnnotations := map[string]string{}
-
+func (s *Autoscaler) updateWorkerResourcesIfNeeded(ctx context.Context, workloadState *WorkloadState, worker *corev1.Pod, rr *RecommendedResources) error {
 	resourcesInfo := []struct {
+		name       string
 		requestKey string
 		limitKey   string
 		lowerBound ResourceAmount
@@ -249,6 +242,7 @@ func (s *Autoscaler) updateWorker(ctx context.Context, worker *corev1.Pod, rr *R
 		target     ResourceAmount
 	}{
 		{
+			name:       "tflops",
 			requestKey: constants.TFLOPSRequestAnnotation,
 			limitKey:   constants.TFLOPSLimitAnnotation,
 			lowerBound: rr.LowerBoundTflops,
@@ -256,6 +250,7 @@ func (s *Autoscaler) updateWorker(ctx context.Context, worker *corev1.Pod, rr *R
 			target:     rr.TargetTflops,
 		},
 		{
+			name:       "vram",
 			requestKey: constants.VRAMRequestAnnotation,
 			limitKey:   constants.VRAMLimitAnnotation,
 			lowerBound: rr.LowerBoundVram,
@@ -264,8 +259,13 @@ func (s *Autoscaler) updateWorker(ctx context.Context, worker *corev1.Pod, rr *R
 		},
 	}
 
+	annotations := worker.GetAnnotations()
+	newAnnotations := map[string]string{}
 	for _, resInfo := range resourcesInfo {
-		if err := updateResource(
+		if !workloadState.IsTargetResource(resInfo.name) {
+			continue
+		}
+		if err := detectResourceChanges(
 			annotations, newAnnotations,
 			resInfo.requestKey, resInfo.limitKey,
 			resInfo.lowerBound, resInfo.upperBound, resInfo.target,
@@ -291,7 +291,7 @@ func (s *Autoscaler) updateWorker(ctx context.Context, worker *corev1.Pod, rr *R
 	return nil
 }
 
-func updateResource(annotations, newAnnotations map[string]string, requestKey, limitKey string, lowerBound, upperBound, target ResourceAmount) error {
+func detectResourceChanges(annotations, newAnnotations map[string]string, requestKey, limitKey string, lowerBound, upperBound, target ResourceAmount) error {
 	currentRequest, err := resource.ParseQuantity(annotations[requestKey])
 	if err != nil {
 		return fmt.Errorf("failed to parse %s: %v", requestKey, err)
