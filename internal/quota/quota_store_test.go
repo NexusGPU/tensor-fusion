@@ -24,10 +24,6 @@ func TestQuotaCalculator_EdgeCases(t *testing.T) {
 		quota := createTestQuota(0, 0, 0)
 		usage := createZeroUsage()
 
-		// Should not panic on zero totals
-		percentages := calc.CalculateUsagePercent(quota, usage)
-		assert.Empty(t, percentages)
-
 		percent := calc.CalculateAvailablePercent(quota, usage)
 		assert.Empty(t, percent.RequestsTFlops)
 		assert.Empty(t, percent.RequestsVRAM)
@@ -40,7 +36,7 @@ func TestQuotaCalculator_EdgeCases(t *testing.T) {
 
 		// Try to subtract more than available
 		toSubtract := *resource.NewQuantity(20, resource.DecimalSI)
-		calc.SafeSub(&usage.Requests.Tflops, toSubtract)
+		calc.SafeSub(&usage.Requests.Tflops, toSubtract, 1)
 
 		// Should clamp to zero
 		assert.Equal(t, int64(0), usage.Requests.Tflops.Value())
@@ -51,8 +47,8 @@ func TestQuotaCalculator_EdgeCases(t *testing.T) {
 		var nilQty *resource.Quantity
 		testQty := *resource.NewQuantity(10, resource.DecimalSI)
 
-		calc.SafeAdd(nilQty, testQty) // Should not panic
-		calc.SafeSub(nilQty, testQty) // Should not panic
+		calc.SafeAdd(nilQty, testQty, 1) // Should not panic
+		calc.SafeSub(nilQty, testQty, 1) // Should not panic
 	})
 }
 

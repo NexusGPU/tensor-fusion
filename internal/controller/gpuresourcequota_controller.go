@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -54,37 +53,7 @@ func (r *GPUResourceQuotaReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 		log.FromContext(ctx).Error(err, "Failed to get GPUResourceQuota")
 	}
-	// Check for alert conditions (but don't update status - QuotaStore handles that)
-	r.checkAlertConditions(quota)
-	// each update status will trigger a requeue when mark quota as dirty by gpuallocator
 	return ctrl.Result{}, nil
-}
-
-// checkAlertConditions checks and triggers alert events
-func (r *GPUResourceQuotaReconciler) checkAlertConditions(quota *tfv1.GPUResourceQuota) {
-	alertThreshold := int32(95)
-	if quota.Spec.Total.AlertThresholdPercent != nil {
-		alertThreshold = *quota.Spec.Total.AlertThresholdPercent
-	}
-
-	// Use calculator to get usage percentages
-	percentages := r.QuotaStore.CalculateUsagePercent(quota.Namespace)
-
-	// Check each resource type for alert threshold
-	for resourceType, usagePercent := range percentages {
-		if usagePercent >= int64(alertThreshold) {
-			var message string
-			switch resourceType {
-			case "requests.tflops":
-				message = fmt.Sprintf("Requests TFlops usage (%d%%) has reached alert threshold (%d%%)", usagePercent, alertThreshold)
-			case "requests.vram":
-				message = fmt.Sprintf("Requests VRAM usage (%d%%) has reached alert threshold (%d%%)", usagePercent, alertThreshold)
-			case "workers":
-				message = fmt.Sprintf("Workers usage (%d%%) has reached alert threshold (%d%%)", usagePercent, alertThreshold)
-			}
-			r.Recorder.Event(quota, "Warning", "AlertThresholdReached", message)
-		}
-	}
 }
 
 // SetupWithManager sets up the controller with the Manager.

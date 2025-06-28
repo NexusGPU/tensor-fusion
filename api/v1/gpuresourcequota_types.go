@@ -105,7 +105,7 @@ type GPUResourceUsage struct {
 
 	// Current number of workers
 	// +optional
-	Workers *int32 `json:"workers,omitempty"`
+	Workers int32 `json:"workers,omitempty"`
 }
 
 // GPUResourceAvailablePercent defines available percentage for each resource
@@ -133,8 +133,7 @@ type GPUResourceQuotaConditionType string
 const (
 	// GPUResourceQuotaConditionReady indicates the quota is ready and functioning
 	GPUResourceQuotaConditionReady GPUResourceQuotaConditionType = "Ready"
-	// GPUResourceQuotaConditionExceeded indicates the quota has been exceeded
-	GPUResourceQuotaConditionExceeded GPUResourceQuotaConditionType = "Exceeded"
+
 	// GPUResourceQuotaConditionAlertThresholdReached indicates the alert threshold has been reached
 	GPUResourceQuotaConditionAlertThresholdReached GPUResourceQuotaConditionType = "AlertThresholdReached"
 )

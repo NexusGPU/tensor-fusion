@@ -27,6 +27,7 @@ const (
 	TotalMaxVRAMRequestResource   = "total.max.vram.request"
 
 	TotalMaxWorkersLimitResource = "total.max.workers.limit"
+	DefaultAlertThresholdPercent = int32(95)
 )
 
 // QuotaStore manages GPU resource quotas in memory for atomic operations
@@ -122,7 +123,6 @@ func (qs *QuotaStore) checkSingleQuotas(entry *QuotaStoreEntry, req *tfv1.AllocR
 func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRequest) error {
 	quotaNs := entry.Quota.Namespace
 	// Check total requests
-
 	if entry.Quota.Spec.Total.Requests != nil {
 		total := entry.Quota.Spec.Total.Requests
 		current := entry.CurrentUsage.Requests
@@ -144,7 +144,7 @@ func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRe
 
 	// Check total workers, each allocation will create one worker instance
 	if entry.Quota.Spec.Total.MaxWorkers != nil {
-		if *entry.CurrentUsage.Workers >= *entry.Quota.Spec.Total.MaxWorkers {
+		if entry.CurrentUsage.Workers >= *entry.Quota.Spec.Total.MaxWorkers {
 			return &QuotaExceededError{
 				Namespace: quotaNs,
 				Resource:  TotalMaxWorkersLimitResource,
@@ -220,14 +220,6 @@ func (qs *QuotaStore) DeallocateQuota(namespace string, allocation *tfv1.AllocRe
 	}
 	qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, allocation, false)
 	qs.markQuotaDirty(namespace)
-}
-
-func (qs *QuotaStore) CalculateUsagePercent(namespace string) map[string]int64 {
-	entry, exists := qs.QuotaStore[namespace]
-	if !exists {
-		return nil
-	}
-	return qs.Calculator.CalculateUsagePercent(entry.Quota, entry.CurrentUsage)
 }
 
 // initQuotaStore initializes the quota store from Kubernetes
@@ -331,15 +323,10 @@ func (qs *QuotaStore) ReconcileQuotaStore(ctx context.Context, namespacedAllocat
 		if !exists {
 			continue // No quota defined for this namespace
 		}
-		qs.addPodToUsage(entry, allocation)
+		qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, allocation, true)
 	}
 
 	log.Info("Quota store reconcile completed", "quota_count", len(qs.QuotaStore), "processed_pods", len(namespacedAllocations))
-}
-
-// addPodToUsage adds pod resources to current usage and updates available
-func (qs *QuotaStore) addPodToUsage(entry *QuotaStoreEntry, allocation *tfv1.AllocRequest) {
-	qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, allocation, true)
 }
 
 // markQuotaDirty marks a quota as dirty for sync to K8s
@@ -398,42 +385,39 @@ func (qs *QuotaStore) SyncQuotasToK8s(ctx context.Context) {
 		availablePercent := qs.Calculator.CalculateAvailablePercent(entry.Quota, entry.CurrentUsage)
 
 		// Update the quota status
-		quotaCopy := entry.Quota.DeepCopy()
-		quotaCopy.Status.Used = *entry.CurrentUsage.DeepCopy()
-		quotaCopy.Status.AvailablePercent = *availablePercent
+		toPatch := &tfv1.GPUResourceQuota{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      entry.Quota.Name,
+				Namespace: namespace,
+			},
+		}
+		toPatch.Status.Used = *entry.CurrentUsage
+		toPatch.Status.AvailablePercent = *availablePercent
 		now := metav1.Now()
-		quotaCopy.Status.LastUpdateTime = &now
+		toPatch.Status.LastUpdateTime = &now
 
-		// Update conditions using calculator
-		qs.updateQuotaConditions(quotaCopy, entry)
+		// calculate if alert conditions are met
+		alertThreshold := DefaultAlertThresholdPercent
+		if entry.Quota.Spec.Total.AlertThresholdPercent != nil {
+			alertThreshold = *entry.Quota.Spec.Total.AlertThresholdPercent
+		}
+		previousMsg := ""
+		if len(entry.Quota.Status.Conditions) > 0 {
+			previousMsg = entry.Quota.Status.Conditions[0].Message
+		}
+		newConditions := qs.Calculator.CalculateConditions(availablePercent, alertThreshold, previousMsg)
+		if newConditions != nil {
+			toPatch.Status.Conditions = newConditions
+		}
 
-		// Sync to Kubernetes
-		if err := qs.Status().Update(ctx, quotaCopy); err != nil {
-			log.Error(err, "Failed to update quota status", "namespace", namespace)
-			// Keep in dirty queue for retry (already marked as dirty)
+		// Use patch to update the quota status, avoid potential conflicts
+		if err := qs.Status().Patch(ctx, toPatch, client.MergeFrom(&tfv1.GPUResourceQuota{})); err != nil {
+			log.Error(err, "Failed to sync quota status to K8s", "namespace", namespace)
 		} else {
-			log.V(2).Info("Quota status synced to K8s", "namespace", namespace)
-			// Clear from dirty queue only on successful sync
+			log.V(6).Info("Quota status synced to K8s", "namespace", namespace)
 			qs.clearQuotaDirty(namespace)
 		}
 	}
-}
-
-// updateQuotaConditions updates the quota conditions based on current usage
-func (qs *QuotaStore) updateQuotaConditions(quota *tfv1.GPUResourceQuota, entry *QuotaStoreEntry) {
-	// Get default alert threshold
-	alertThreshold := int32(95)
-	if entry.Quota.Spec.Total.AlertThresholdPercent != nil {
-		alertThreshold = *entry.Quota.Spec.Total.AlertThresholdPercent
-	}
-
-	// Use calculator to check conditions
-	exceeded := qs.Calculator.IsQuotaExceeded(entry.Quota, entry.CurrentUsage)
-	availablePercent := qs.Calculator.CalculateAvailablePercent(entry.Quota, entry.CurrentUsage)
-	alertReached := qs.Calculator.IsAlertThresholdReached(availablePercent, alertThreshold)
-
-	// Use calculator to create standard conditions
-	quota.Status.Conditions = qs.Calculator.CreateStandardConditions(exceeded, alertReached, alertThreshold)
 }
 
 // QuotaExceededError represents a quota exceeded error with detailed information
@@ -457,7 +441,6 @@ func (qs *QuotaStore) handleGPUQuotaCreate(ctx context.Context, gpuQuota *tfv1.G
 	qs.StoreMutex.Lock()
 	defer qs.StoreMutex.Unlock()
 
-	// Add GPU quota to store, TODO: need verify logic
 	qs.QuotaStore[key].Quota = gpuQuota.DeepCopy()
 	log.V(4).Info("Added GPU quota to store", "namespace", key)
 }
@@ -470,7 +453,6 @@ func (qs *QuotaStore) handleGPUQuotaDelete(ctx context.Context, gpuQuota *tfv1.G
 	qs.StoreMutex.Lock()
 	defer qs.StoreMutex.Unlock()
 
-	// Remove GPU quota from store
 	delete(qs.QuotaStore, key)
 	log.V(4).Info("Removed GPU quota from store", "namespace", key)
 }
@@ -495,7 +477,6 @@ func (qs *QuotaStore) StartInformerForGPUQuota(ctx context.Context, mgr manager.
 		return fmt.Errorf("failed to get GPUResourceQuota informer: %w", err)
 	}
 
-	// Add event handlers
 	_, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
 			gpuQuota, ok := obj.(*tfv1.GPUResourceQuota)
@@ -508,9 +489,6 @@ func (qs *QuotaStore) StartInformerForGPUQuota(ctx context.Context, mgr manager.
 		DeleteFunc: func(obj any) {
 			gpuQuota, ok := obj.(*tfv1.GPUResourceQuota)
 			if !ok {
-				// When a delete is dropped, the relist will notice a GPUResourceQuota in the store not
-				// in the list, leading to the insertion of a tombstone object which contains
-				// the deleted key/value.
 				tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 				if !ok {
 					log.Error(fmt.Errorf("unexpected type"), "expected GPUResourceQuota or tombstone")
