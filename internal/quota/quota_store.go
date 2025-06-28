@@ -483,7 +483,6 @@ func (qs *QuotaStore) handleGPUQuotaUpdate(ctx context.Context, gpuQuota *tfv1.G
 	qs.StoreMutex.Lock()
 	defer qs.StoreMutex.Unlock()
 
-	// TODO verify logic
 	qs.QuotaStore[key].Quota = gpuQuota.DeepCopy()
 	log.V(4).Info("Updated GPU quota in store (preserve Used)", "namespace", key)
 }

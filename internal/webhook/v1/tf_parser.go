@@ -162,7 +162,7 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 		if err != nil {
 			return fmt.Errorf("invalid gpuCount value: %w", err)
 		}
-		workloadProfile.Spec.GPUCount = uint(val)
+		workloadProfile.Spec.GPUCount = uint32(val)
 	} else if workloadProfile.Spec.GPUCount == 0 {
 		workloadProfile.Spec.GPUCount = 1
 	}

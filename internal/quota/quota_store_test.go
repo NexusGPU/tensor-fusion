@@ -29,9 +29,9 @@ func TestQuotaCalculator_EdgeCases(t *testing.T) {
 		assert.Empty(t, percentages)
 
 		percent := calc.CalculateAvailablePercent(quota, usage)
-		assert.Nil(t, percent.RequestsTFlops)
-		assert.Nil(t, percent.RequestsVRAM)
-		assert.Nil(t, percent.Workers)
+		assert.Empty(t, percent.RequestsTFlops)
+		assert.Empty(t, percent.RequestsVRAM)
+		assert.Empty(t, percent.Workers)
 	})
 
 	t.Run("negative usage protection", func(t *testing.T) {

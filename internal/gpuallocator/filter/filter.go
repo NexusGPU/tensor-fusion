@@ -10,7 +10,7 @@ import (
 type GPUFilter interface {
 	// Filter filters the list of GPUs and returns only those that pass the filter criteria
 	// The implementation should not modify the input slice
-	Filter(ctx context.Context, gpus []tfv1.GPU) ([]tfv1.GPU, error)
+	Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error)
 }
 
 // FilterRegistry provides an immutable collection of GPU filters
@@ -44,13 +44,13 @@ func (fr *FilterRegistry) With(filters ...GPUFilter) *FilterRegistry {
 
 // Apply applies the filters in this registry to the given GPU list
 // Filters are applied in the order they were added (parent filters first)
-func (fr *FilterRegistry) Apply(ctx context.Context, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
+func (fr *FilterRegistry) Apply(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
 	// First apply parent filters (if any)
 	filteredGPUs := gpus
 	var err error
 
 	if fr.parent != nil {
-		filteredGPUs, err = fr.parent.Apply(ctx, filteredGPUs)
+		filteredGPUs, err = fr.parent.Apply(ctx, workerPodKey, filteredGPUs)
 		if err != nil {
 			return nil, err
 		}
@@ -63,7 +63,7 @@ func (fr *FilterRegistry) Apply(ctx context.Context, gpus []tfv1.GPU) ([]tfv1.GP
 
 	// Then apply filters at this level
 	for _, filter := range fr.filters {
-		filteredGPUs, err = filter.Filter(ctx, filteredGPUs)
+		filteredGPUs, err = filter.Filter(ctx, workerPodKey, filteredGPUs)
 		if err != nil {
 			return nil, err
 		}

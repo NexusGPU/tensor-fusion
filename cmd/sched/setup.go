@@ -33,6 +33,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/latest"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	yaml "sigs.k8s.io/yaml"
 )
 
@@ -46,6 +47,7 @@ const (
 
 func SetupScheduler(
 	ctx context.Context,
+	mgr manager.Manager,
 	schedulerConfigPath string,
 	outOfTreeRegistryOptions ...app.Option,
 ) (*schedulerserverconfig.CompletedConfig, *scheduler.Scheduler, error) {
@@ -92,7 +94,9 @@ func SetupScheduler(
 
 	recorderFactory := getRecorderFactory(&cc)
 	completedProfiles := make([]kubeschedulerconfig.KubeSchedulerProfile, 0)
-	// Create the scheduler.
+
+	// TODO share the same informer with controller, do not use 'cc' to avoid duplicated watch
+
 	sched, err := scheduler.New(ctx,
 		cc.Client,
 		cc.InformerFactory,

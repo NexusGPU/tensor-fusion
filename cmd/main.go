@@ -270,7 +270,7 @@ func main() {
 			gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
 		)
 
-		cc, scheduler, err := sched.SetupScheduler(ctx, schedulerConfigPath, gpuResourceFitOpt, gpuTopoOpt)
+		cc, scheduler, err := sched.SetupScheduler(ctx, mgr, schedulerConfigPath, gpuResourceFitOpt, gpuTopoOpt)
 		if err != nil {
 			setupLog.Error(err, "unable to create tensor fusion scheduler")
 			os.Exit(1)

@@ -57,7 +57,7 @@ type WorkloadProfileSpec struct {
 	GPUModel string `json:"gpuModel,omitempty"`
 
 	// The number of GPUs to be used by the workload, default to 1
-	GPUCount uint `json:"gpuCount,omitempty"`
+	GPUCount uint32 `json:"gpuCount,omitempty"`
 
 	// +optional
 	// AutoScalingConfig configured here will override Pool's schedulingConfig

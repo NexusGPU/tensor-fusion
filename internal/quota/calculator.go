@@ -298,14 +298,15 @@ func (c *Calculator) CalculateUsagePercent(quota *tfv1.GPUResourceQuota, usage *
 
 // SafeAdd safely adds quantities with nil checks
 func (c *Calculator) SafeAdd(a *resource.Quantity, b resource.Quantity) {
-	if !a.IsZero() {
-		a.Add(b)
+	if a == nil || a.IsZero() {
+		return
 	}
+	a.Add(b)
 }
 
 // SafeSub safely subtracts b from a, ensuring a doesn't go negative
 func (c *Calculator) SafeSub(a *resource.Quantity, b resource.Quantity) {
-	if a.IsZero() {
+	if a == nil || a.IsZero() {
 		return
 	}
 	a.Sub(b)

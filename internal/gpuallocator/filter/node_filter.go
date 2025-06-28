@@ -22,7 +22,7 @@ func NewSameNodeFilter(count uint) *SameNodeFilter {
 
 // Filter implements GPUFilter.Filter
 // It groups GPUs by node and returns only those nodes that have at least 'count' GPUs
-func (f *SameNodeFilter) Filter(_ context.Context, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
+func (f *SameNodeFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
 	// If count is 1 or 0, no need to filter by node
 	if f.count <= 1 {
 		return gpus, nil

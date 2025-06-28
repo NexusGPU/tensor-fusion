@@ -68,6 +68,7 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) Plu
 			}
 		}
 		lh := klog.FromContext(ctx).WithValues("plugin", Name)
+		lh.Info("Creating new GPUFit plugin")
 		c := &GPUFit{
 			logger:    &lh,
 			fh:        handle,
@@ -76,6 +77,7 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) Plu
 			ctx:       ctx,
 			client:    client,
 		}
+		lh.Info("Created new GPUFit plugin", "plugin", c)
 
 		allocator.SetMaxWorkerPerNode(target.MaxWorkerPerNode)
 		return c, nil
@@ -87,6 +89,7 @@ func (s *GPUFit) Name() string {
 }
 
 func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
+	s.logger.Info("checking GPU node resources for pod", "pod", pod.Name)
 	allocRequest, reason, err := s.allocator.ComposeAllocationRequest(s.ctx, pod)
 	if err != nil {
 		return nil, framework.NewStatus(framework.Error, reason)
@@ -148,15 +151,19 @@ func (s *GPUFit) Filter(ctx context.Context, state *framework.CycleState, pod *v
 }
 
 func (s *GPUFit) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
+	if state == nil {
+		return 0, framework.NewStatus(framework.Error, "no valid node found, gpu capacity not enough")
+	}
 	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
-	scheduledState := filterResult.(*GPUSchedulingStateData)
 	if err != nil {
 		return 0, framework.NewStatus(framework.Error, err.Error())
 	}
+	scheduledState := filterResult.(*GPUSchedulingStateData)
 	gpuScoreMap, ok := scheduledState.ValidNodeGPUScore[nodeName]
 	if !ok {
 		return 0, framework.NewStatus(framework.Unschedulable, "no valid node found, gpu capacity not enough")
 	}
+	// normalize to 0-100 when each node has
 	sum := 0
 	for _, score := range gpuScoreMap {
 		sum += score
@@ -169,6 +176,7 @@ func (s *GPUFit) ScoreExtensions() framework.ScoreExtensions {
 }
 
 func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
+	s.logger.Info("Reserving pod for GPU resources", "pod", pod.Name, "node", nodeName)
 	allocRequest, err := state.Read(CycleStateAllocateRequest)
 	if err != nil {
 		return framework.NewStatus(framework.Error, err.Error())
@@ -211,6 +219,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 }
 
 func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
+	s.logger.Info("Un-reserving pod for GPU resources", "pod", pod.Name, "node", nodeName)
 	schedulingResultRaw, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
 		s.logger.Error(err, "failed to read gpu scheduling result", "pod", pod.Name)
@@ -225,6 +234,7 @@ func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod
 }
 
 func (s *GPUFit) PreBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
+	s.logger.Info("PreBinding pod for GPU resources", "pod", pod.Name, "node", nodeName)
 	gpuSchedulingResult, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
 		return framework.NewStatus(framework.Error, err.Error())

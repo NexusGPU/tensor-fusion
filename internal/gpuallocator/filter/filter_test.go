@@ -11,7 +11,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+var testPodKey = tfv1.NameNamespace{
+	Name:      "test-pod",
+	Namespace: "test-namespace",
+}
+
 func TestFilters(t *testing.T) {
+
 	// Create test GPUs
 	gpus := []tfv1.GPU{
 		{
@@ -84,7 +90,7 @@ func TestFilters(t *testing.T) {
 
 	t.Run("PhaseFilter", func(t *testing.T) {
 		filter := NewPhaseFilter(tfv1.TensorFusionGPUPhaseRunning)
-		result, err := filter.Filter(ctx, gpus)
+		result, err := filter.Filter(ctx, testPodKey, gpus)
 		assert.NoError(t, err)
 		assert.Len(t, result, 3)
 		for _, gpu := range result {
@@ -97,7 +103,7 @@ func TestFilters(t *testing.T) {
 			Tflops: resource.MustParse("8"),
 			Vram:   resource.MustParse("30Gi"),
 		})
-		result, err := filter.Filter(ctx, gpus)
+		result, err := filter.Filter(ctx, testPodKey, gpus)
 		assert.NoError(t, err)
 		assert.Len(t, result, 2)
 		// Should include gpu-1 and gpu-3
@@ -114,7 +120,7 @@ func TestFilters(t *testing.T) {
 			}))
 
 		// Apply filters
-		result, err := registry.Apply(ctx, gpus)
+		result, err := registry.Apply(ctx, testPodKey, gpus)
 		assert.NoError(t, err)
 		assert.Len(t, result, 1)
 		assert.Equal(t, "gpu-1", result[0].Name)
@@ -133,12 +139,12 @@ func TestFilters(t *testing.T) {
 			}))
 
 		// Apply base registry filters
-		baseResult, err := baseRegistry.Apply(ctx, gpus)
+		baseResult, err := baseRegistry.Apply(ctx, testPodKey, gpus)
 		assert.NoError(t, err)
 		assert.Len(t, baseResult, 3) // Only phase filter applied
 
 		// Apply extended registry filters
-		extendedResult, err := extendedRegistry.Apply(ctx, gpus)
+		extendedResult, err := extendedRegistry.Apply(ctx, testPodKey, gpus)
 		assert.NoError(t, err)
 		assert.Len(t, extendedResult, 1) // Phase and model filters applied
 	})
@@ -300,7 +306,7 @@ func TestSameNodeFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			filter := NewSameNodeFilter(tt.count)
-			result, err := filter.Filter(ctx, gpus)
+			result, err := filter.Filter(ctx, testPodKey, gpus)
 
 			if tt.expectError {
 				assert.Error(t, err)

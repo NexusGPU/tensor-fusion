@@ -4,6 +4,7 @@ package gpuallocator
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,7 +18,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
@@ -95,7 +96,7 @@ func (s *GpuAllocator) Filter(ctx context.Context, req *tfv1.AllocRequest, toFil
 	}
 
 	// Apply the filters in sequence
-	filteredGPUs, err := filterRegistry.Apply(ctx, toFilterGPUs)
+	filteredGPUs, err := filterRegistry.Apply(ctx, req.WorkloadNameNamespace, toFilterGPUs)
 	if err != nil {
 		return nil, fmt.Errorf("apply filters: %w", err)
 	}
@@ -231,7 +232,7 @@ func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocR
 		return nil, err
 	}
 	if len(filteredGPUs) == 0 {
-		return nil, fmt.Errorf("no gpus available in pool %s after filtering", req.PoolName)
+		return nil, fmt.Errorf("no gpus available or valid in pool %s after filtering", req.PoolName)
 	}
 
 	if s.maxWorkerPerNode > 0 {
@@ -387,8 +388,8 @@ func (s *GpuAllocator) Stop() {
 	}
 }
 
-// initGPUAndQuotaStore initializes both GPU store and quota store from Kubernetes
-func (s *GpuAllocator) initGPUAndQuotaStore(ctx context.Context) error {
+// InitGPUAndQuotaStore initializes both GPU store and quota store from Kubernetes
+func (s *GpuAllocator) InitGPUAndQuotaStore(ctx context.Context) error {
 	log := log.FromContext(ctx)
 
 	// Initialize GPU store
@@ -435,7 +436,7 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 		return readyCh, fmt.Errorf("failed to setup indexer for field metadata.name: %w", indexErr)
 	}
 
-	err := s.startInformerForGPU(ctx, mgr)
+	err := s.StartInformerForGPU(ctx, mgr)
 	if err != nil {
 		return readyCh, err
 	}
@@ -450,7 +451,7 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 		_, cancel := context.WithCancel(ctx)
 		s.cancel = cancel
 		// Initialize the GPU store and quota store
-		if err := s.initGPUAndQuotaStore(ctx); err != nil {
+		if err := s.InitGPUAndQuotaStore(ctx); err != nil {
 			log.Error(err, "Failed to initialize GPU and quota store")
 			return err
 		}
@@ -463,7 +464,7 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 		<-readyCh
 		// reconcile allocation state based on existing workers, run only when it's elected as leader
 		// and only if it's leader, it will start allocating resources to workers, and start sync loop here
-		s.reconcileAllocationState(ctx)
+		s.ReconcileAllocationState(ctx)
 		log.Info("GPU store data reconciled")
 
 		// Start the background sync goroutine
@@ -473,7 +474,7 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 	return readyCh, err
 }
 
-func (s *GpuAllocator) startInformerForGPU(ctx context.Context, mgr manager.Manager) error {
+func (s *GpuAllocator) StartInformerForGPU(ctx context.Context, mgr manager.Manager) error {
 	log := log.FromContext(ctx)
 
 	informer, err := mgr.GetCache().GetInformer(ctx, &tfv1.GPU{})
@@ -532,7 +533,7 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 
 	// Add GPU to store
 	s.gpuStore[key] = gpu.DeepCopy()
-	log.V(4).Info("Added GPU to store", "name", key.Name, "phase", gpu.Status.Phase)
+	log.Info("Added GPU to store", "name", key.Name, "phase", gpu.Status.Phase)
 }
 
 // handleGPUDelete handles GPU deletion events
@@ -545,7 +546,7 @@ func (s *GpuAllocator) handleGPUDelete(ctx context.Context, gpu *tfv1.GPU) {
 
 	// Remove GPU from store
 	delete(s.gpuStore, key)
-	log.V(4).Info("Removed GPU from store", "name", key.Name)
+	log.Info("Removed GPU from store", "name", key.Name)
 }
 
 // handleGPUUpdate handles GPU update events
@@ -558,30 +559,32 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 
 	if old, ok := s.gpuStore[key]; ok && old != nil {
 		// should never update available and runningApps here, to avoid circular update
-		s.gpuStore[key].Status.Capacity = gpu.Status.Capacity.DeepCopy()
-		s.gpuStore[key].Status.Phase = gpu.Status.Phase
-		s.gpuStore[key].Status.Message = gpu.Status.Message
-		s.gpuStore[key].Status.UUID = gpu.Status.UUID
-		s.gpuStore[key].Status.NodeSelector = gpu.Status.NodeSelector
-		s.gpuStore[key].Status.GPUModel = gpu.Status.GPUModel
-		log.V(4).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
+		old.Status.Capacity = gpu.Status.Capacity.DeepCopy()
+		old.Status.Phase = gpu.Status.Phase
+		old.Status.Message = gpu.Status.Message
+		old.Status.UUID = gpu.Status.UUID
+		old.Status.NodeSelector = gpu.Status.NodeSelector
+		old.Status.GPUModel = gpu.Status.GPUModel
+		old.ResourceVersion = gpu.ResourceVersion
+		old.Generation = gpu.Generation
+		log.V(6).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
 	} else {
 		s.gpuStore[key] = gpu.DeepCopy()
-		log.V(4).Info("Updated GPU in store (new entry)", "name", key.Name, "phase", gpu.Status.Phase)
+		log.V(6).Info("Updated GPU in store (new entry)", "name", key.Name, "phase", gpu.Status.Phase)
 	}
 }
 
 // syncToK8s syncs the modified GPUs and quotas from in-memory store to Kubernetes
 func (s *GpuAllocator) syncToK8s(ctx context.Context) {
 	// Sync GPU status
-	s.syncGPUsToK8s(ctx)
+	s.SyncGPUsToK8s(ctx)
 
 	// Sync quota status
 	s.quotaStore.SyncQuotasToK8s(ctx)
 }
 
-// syncGPUsToK8s syncs GPU status to Kubernetes
-func (s *GpuAllocator) syncGPUsToK8s(ctx context.Context) {
+// SyncGPUsToK8s syncs GPU status to Kubernetes
+func (s *GpuAllocator) SyncGPUsToK8s(ctx context.Context) {
 	log := log.FromContext(ctx)
 	s.dirtyQueueLock.Lock()
 	// Get all dirty GPUs and clear the queue
@@ -607,18 +610,27 @@ func (s *GpuAllocator) syncGPUsToK8s(ctx context.Context) {
 		if !exists {
 			continue
 		}
-		// Create a copy to avoid modifying the memory store directly
-		gpuCopy := gpu.DeepCopy()
 
-		dirtyNodes[gpuCopy.Labels[constants.LabelKeyOwner]] = struct{}{}
+		dirtyNodes[gpu.Labels[constants.LabelKeyOwner]] = struct{}{}
 
 		// Update the GPU status in Kubernetes
-		if err := s.Status().Update(ctx, gpuCopy); err != nil {
+		// using raw patch to avoid outdated revision conflicts
+		gpuToPatch := &tfv1.GPU{}
+		gpuToPatch.SetName(gpu.GetName())
+		gpuToPatch.Status.Available = gpu.Status.Available
+		gpuToPatch.Status.RunningApps = gpu.Status.RunningApps
+
+		if err := s.Status().Patch(ctx, gpuToPatch, client.MergeFrom(&tfv1.GPU{})); err != nil {
+			if errors.IsNotFound(err) {
+				// skip not existing resource to avoid infinite loop
+				log.V(6).Info("GPU not found, skipping update", "gpu", key.String())
+				continue
+			}
 			// If update fails, put the GPU back in the dirty queue
 			s.dirtyQueueLock.Lock()
 			s.dirtyQueue[key] = struct{}{}
 			s.dirtyQueueLock.Unlock()
-			log.Error(err, "Failed to update GPU status, will retry later", "gpu", key.String())
+			log.Error(err, "Failed to patch GPU status, will retry later", "gpu", key.String())
 		}
 	}
 
@@ -694,7 +706,7 @@ func (s *GpuAllocator) markGPUDirtyLocked(key types.NamespacedName) {
 
 // When it's leader, should reconcile state based on existing workers
 // this function is run inside storeMutex lock
-func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
+func (s *GpuAllocator) ReconcileAllocationState(ctx context.Context) {
 	logger := log.FromContext(ctx)
 	workers := &v1.PodList{}
 	if err := s.List(ctx, workers, client.MatchingLabels(map[string]string{
@@ -723,8 +735,7 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 		return scheduled && !deletedAndDeAllocated
 	})
 
-	tflopsCapacityMap := make(map[types.NamespacedName]resource.Quantity)
-	vramCapacityMap := make(map[types.NamespacedName]resource.Quantity)
+	actualAvailableMap := make(map[types.NamespacedName]*tfv1.Resource)
 	gpuMap := make(map[types.NamespacedName]*tfv1.GPU)
 
 	s.storeMutex.Lock()
@@ -732,8 +743,7 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 
 	for gpuKey, gpu := range s.gpuStore {
 		if gpu.Status.Capacity != nil {
-			tflopsCapacityMap[gpuKey] = gpu.Status.Capacity.Tflops
-			vramCapacityMap[gpuKey] = gpu.Status.Capacity.Vram
+			actualAvailableMap[gpuKey] = gpu.Status.Capacity.DeepCopy()
 			gpu.Status.RunningApps = []*tfv1.RunningAppDetail{}
 			gpuMap[gpuKey] = gpu
 		}
@@ -742,17 +752,14 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 	for _, worker := range workers.Items {
 		allocRequest := s.uniqueAllocation[string(worker.UID)]
 		gpuIds := worker.Annotations[constants.GpuKey]
-		gpuIdsList := strings.Split(gpuIds, ",")
+		gpuIdsList := strings.SplitSeq(gpuIds, ",")
 
-		for _, gpuId := range gpuIdsList {
+		for gpuId := range gpuIdsList {
 			gpuKey := types.NamespacedName{Name: gpuId}
-			gpuCapacity, ok := tflopsCapacityMap[gpuKey]
+			gpuAvailableRes, ok := actualAvailableMap[gpuKey]
 			if ok {
-				gpuCapacity.Sub(allocRequest.Request.Tflops)
-			}
-			gpuCapacity, ok = vramCapacityMap[gpuKey]
-			if ok {
-				gpuCapacity.Sub(allocRequest.Request.Vram)
+				gpuAvailableRes.Tflops.Sub(allocRequest.Request.Tflops)
+				gpuAvailableRes.Vram.Sub(allocRequest.Request.Vram)
 			}
 			addRunningApp(ctx, gpuMap[gpuKey], tfv1.NameNamespace{Namespace: worker.Namespace, Name: worker.Labels[constants.WorkloadKey]})
 		}
@@ -763,11 +770,11 @@ func (s *GpuAllocator) reconcileAllocationState(ctx context.Context) {
 			log.FromContext(ctx).Info("[Warning] GPU capacity is nil, skip reconcile", "gpu", gpuKey.Name)
 			continue
 		}
-		sameTflops := gpu.Status.Available.Tflops.Equal(tflopsCapacityMap[gpuKey])
-		sameVRAM := gpu.Status.Available.Vram.Equal(vramCapacityMap[gpuKey])
+		sameTflops := gpu.Status.Available.Tflops.Equal(actualAvailableMap[gpuKey].Tflops)
+		sameVRAM := gpu.Status.Available.Vram.Equal(actualAvailableMap[gpuKey].Vram)
 		if !sameTflops || !sameVRAM {
-			gpu.Status.Available.Tflops = tflopsCapacityMap[gpuKey]
-			gpu.Status.Available.Vram = vramCapacityMap[gpuKey]
+			gpu.Status.Available.Tflops = actualAvailableMap[gpuKey].Tflops
+			gpu.Status.Available.Vram = actualAvailableMap[gpuKey].Vram
 			s.markGPUDirtyLocked(gpuKey)
 			log.FromContext(ctx).Info("Correcting gpu available resources", "gpu", gpuKey.Name, "tflops", gpu.Status.Available.Tflops.String(), "vram", gpu.Status.Available.Vram.String())
 		}
@@ -893,5 +900,5 @@ func (s *GpuAllocator) getPlacementMode(ctx context.Context, poolName string) tf
 
 // normalize score to [0, 100]
 func normalizeScore(cfg *config.GPUFitConfig, vramScore, tflopsScore float64) int {
-	return int(vramScore*cfg.VramWeight + tflopsScore*cfg.TflopsWeight)
+	return int(math.Round(vramScore*cfg.VramWeight + tflopsScore*cfg.TflopsWeight))
 }

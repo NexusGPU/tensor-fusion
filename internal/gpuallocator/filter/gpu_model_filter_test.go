@@ -10,6 +10,10 @@ import (
 )
 
 func TestGPUModelFilter(t *testing.T) {
+	testPodKey := tfv1.NameNamespace{
+		Name:      "test-pod",
+		Namespace: "test-namespace",
+	}
 	tests := []struct {
 		name          string
 		requiredModel string
@@ -82,7 +86,7 @@ func TestGPUModelFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			filter := NewGPUModelFilter(tt.requiredModel)
-			got, err := filter.Filter(context.Background(), tt.gpus)
+			got, err := filter.Filter(context.Background(), testPodKey, tt.gpus)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return

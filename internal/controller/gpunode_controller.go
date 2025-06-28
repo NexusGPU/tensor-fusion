@@ -211,6 +211,7 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 		}
 
 		// Update all GPU devices status to Pending
+		// TODO, should update in batch, making every GPU pending state led to unschedule for new workers
 		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhasePending)
 		if err != nil {
 			return true, err

@@ -32,7 +32,7 @@ func NewNodeAffinityFilter(c client.Reader, nodeAffinity *corev1.NodeAffinity) *
 }
 
 // Filter
-func (f *NodeAffinityFilter) Filter(ctx context.Context, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
+func (f *NodeAffinityFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
 	if f.nodeSelector == nil && len(f.preferred) == 0 {
 		return gpus, nil
 	}
