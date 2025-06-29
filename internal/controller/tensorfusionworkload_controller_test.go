@@ -101,6 +101,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				gpuNames := strings.Split(podList.Items[0].Annotations[constants.GpuKey], ",")
 				g.Expect(gpuNames).Should(HaveLen(2))
 			}).Should(Succeed())
+			// TODO test issue
 
 			checkWorkloadStatus(workload)
 		})
@@ -221,6 +222,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				})
 				return ok
 			}).Should(BeTrue())
+			// TODO test issue
 
 			Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 			workloadCopy := workload.DeepCopy()
@@ -289,6 +291,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					return gpu.Name == gpuNames[0]
 				})
 				g.Expect(ok).To(BeTrue())
+				// TODO test issue
 				g.Expect(gpu.Status.GPUModel).To(Equal("mock"))
 			}).Should(Succeed())
 		})
@@ -319,6 +322,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				podList := &corev1.PodList{}
 				g.Expect(k8sClient.List(ctx, podList,
 					client.InNamespace(key.Namespace),
+					// TODO test issue
 					client.MatchingLabels{constants.WorkloadKey: key.Name})).To(Succeed())
 				g.Expect(podList.Items).Should(BeEmpty())
 			}).Should(Succeed())
@@ -340,6 +344,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				g.Expect(k8sClient.List(ctx, podList,
 					client.InNamespace(workload.Namespace),
 					client.MatchingLabels{constants.WorkloadKey: workload.Name})).Should(Succeed())
+				// TODO test issue
 				g.Expect(podList.Items).Should(BeEmpty())
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})

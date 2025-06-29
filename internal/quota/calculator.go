@@ -94,7 +94,7 @@ func (c *Calculator) CalculateAvailablePercent(quota *tfv1.GPUResourceQuota, usa
 // returns round(2) float string, range [0, 100]
 func (c *Calculator) calculateResourcePercent(total, used resource.Quantity) string {
 	if total.Value() <= 0 {
-		return "0"
+		return "100"
 	}
 	totalFloat := total.AsApproximateFloat64()
 	usedFloat := used.AsApproximateFloat64()

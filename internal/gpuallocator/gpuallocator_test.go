@@ -17,6 +17,7 @@ limitations under the License.
 package gpuallocator
 
 import (
+	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -35,8 +36,11 @@ var testPodMeta = metav1.ObjectMeta{UID: "test-pod", Namespace: "default", Name:
 
 var _ = Describe("GPU Allocator", func() {
 	var allocator *GpuAllocator
+	var mutex sync.Mutex
 
 	allocateAndSync := func(poolName string, request tfv1.Resource, count uint, gpuModel string) ([]*tfv1.GPU, error) {
+		mutex.Lock()
+		defer mutex.Unlock()
 		gpus, err := allocator.Alloc(&tfv1.AllocRequest{
 			PoolName:              poolName,
 			WorkloadNameNamespace: workloadNameNs,
@@ -53,6 +57,8 @@ var _ = Describe("GPU Allocator", func() {
 	}
 
 	deallocateAndSync := func(gpus []*tfv1.GPU) {
+		mutex.Lock()
+		defer mutex.Unlock()
 		allocator.Dealloc(workloadNameNs, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
 			return gpu.Name
 		}), testPodMeta)
@@ -261,7 +267,7 @@ var _ = Describe("GPU Allocator", func() {
 	})
 
 	Context("GPU AutoScale", func() {
-		It("should scale up GPUs when needed", func() {
+		It("should scale up GPUs", func() {
 			request := tfv1.Resource{
 				Tflops: resource.MustParse("50"),
 				Vram:   resource.MustParse("10Gi"),

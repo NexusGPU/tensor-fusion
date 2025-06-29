@@ -25,9 +25,9 @@ func TestQuotaCalculator_EdgeCases(t *testing.T) {
 		usage := createZeroUsage()
 
 		percent := calc.CalculateAvailablePercent(quota, usage)
-		assert.Empty(t, percent.RequestsTFlops)
-		assert.Empty(t, percent.RequestsVRAM)
-		assert.Empty(t, percent.Workers)
+		assert.Equal(t, percent.RequestsTFlops, "100")
+		assert.Equal(t, percent.RequestsVRAM, "100")
+		assert.Equal(t, percent.Workers, "100")
 	})
 
 	t.Run("negative usage protection", func(t *testing.T) {
@@ -71,7 +71,7 @@ func TestQuotaStore_ValidationRules(t *testing.T) {
 	t.Run("limits less than requests validation", func(t *testing.T) {
 		quota := createTestQuota(100, 1000, 10)
 		// Set limits lower than requests
-		quota.Spec.Total.Requests.Tflops = *resource.NewQuantity(50, resource.DecimalSI)
+		quota.Spec.Total.Limits.Tflops = *resource.NewQuantity(50, resource.DecimalSI)
 
 		err := qs.validateQuotaConfig(quota)
 		assert.Error(t, err)

@@ -93,10 +93,16 @@ func ParseTensorFusionInfo(
 		workloadProfile.Spec.IsLocalGPU = true
 	}
 
-	if poolName, err := setGPUPoolNameAndVerify(ctx, k8sClient, pod); err != nil {
+	if poolName, err := getGPUPoolNameAndVerify(ctx, k8sClient, pod); err != nil {
 		return info, err
 	} else {
 		workloadProfile.Spec.PoolName = poolName
+	}
+
+	nsQuotas := &tfv1.GPUResourceQuotaList{}
+	nsQuotasErr := k8sClient.List(ctx, nsQuotas, client.InNamespace(pod.Namespace))
+	if nsQuotasErr == nil && len(nsQuotas.Items) > 0 {
+		setDefaultQuotasIfExists(workloadProfile, nsQuotas.Items[0].Spec.Single)
 	}
 
 	err := parseGPUResourcesAnnotations(pod, workloadProfile)
@@ -181,7 +187,7 @@ func parseResourceQuantity(pod *corev1.Pod, annotationKey string) (resource.Quan
 	return quantity, true
 }
 
-func setGPUPoolNameAndVerify(ctx context.Context, k8sClient client.Client, pod *corev1.Pod) (string, error) {
+func getGPUPoolNameAndVerify(ctx context.Context, k8sClient client.Client, pod *corev1.Pod) (string, error) {
 	gpuPoolList := &tfv1.GPUPoolList{}
 	if err := k8sClient.List(ctx, gpuPoolList); err != nil {
 		return "", fmt.Errorf("list gpu pools: %w", err)
@@ -206,4 +212,26 @@ func setGPUPoolNameAndVerify(ctx context.Context, k8sClient client.Client, pod *
 		return "", fmt.Errorf("gpu pool not found")
 	}
 	return poolName, nil
+}
+
+func setDefaultQuotasIfExists(workloadProfile *tfv1.WorkloadProfile, single tfv1.GPUResourceQuotaSingle) {
+	defaultReq := single.DefaultRequests.DeepCopy()
+	if defaultReq != nil {
+		if workloadProfile.Spec.Resources.Requests.Tflops.IsZero() {
+			workloadProfile.Spec.Resources.Requests.Tflops = defaultReq.Tflops
+		}
+		if workloadProfile.Spec.Resources.Requests.Vram.IsZero() {
+			workloadProfile.Spec.Resources.Requests.Vram = defaultReq.Vram
+		}
+	}
+
+	defaultLimit := single.DefaultLimits.DeepCopy()
+	if defaultLimit != nil {
+		if workloadProfile.Spec.Resources.Limits.Tflops.IsZero() {
+			workloadProfile.Spec.Resources.Limits.Tflops = defaultLimit.Tflops
+		}
+		if workloadProfile.Spec.Resources.Limits.Vram.IsZero() {
+			workloadProfile.Spec.Resources.Limits.Vram = defaultLimit.Vram
+		}
+	}
 }

@@ -33,7 +33,9 @@ var ErrTerminateLoop = errors.New("stop this loop and do not requeue")
 var debounceInterval = 3 * time.Second
 
 func init() {
-	if os.Getenv("GO_TESTING") == "true" {
+	// in unit testing mode, debounce should be very short
+	if (len(os.Args) > 1 && os.Args[1] == "-test.run") ||
+		os.Getenv("GO_TESTING") == "true" {
 		debounceInterval = 60 * time.Millisecond
 	}
 }

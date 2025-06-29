@@ -220,6 +220,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 				}
 				return failConnection.Status.Phase == tfv1.WorkerPending
 			}).Should(BeTrue())
+			// TODO test issue
 
 			By("Cleaning up test resources")
 			Expect(k8sClient.Delete(ctx, failConnection)).To(Succeed())
