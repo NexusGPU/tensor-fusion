@@ -157,7 +157,11 @@ func addOrOverridePodMissingAnnotations(pod *corev1.Pod, tfInfo TensorFusionInfo
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
+	// add workload to pod annotations just for additional information
+	// so that users will know which GPU workload this pod binds to
 	pod.Annotations[constants.WorkloadKey] = tfInfo.WorkloadName
+
+	// add full annotations
 	pod.Annotations[constants.TFLOPSLimitAnnotation] = tfInfo.Profile.Resources.Limits.Tflops.String()
 	pod.Annotations[constants.VRAMLimitAnnotation] = tfInfo.Profile.Resources.Limits.Vram.String()
 	pod.Annotations[constants.TFLOPSRequestAnnotation] = tfInfo.Profile.Resources.Requests.Tflops.String()
@@ -166,6 +170,8 @@ func addOrOverridePodMissingAnnotations(pod *corev1.Pod, tfInfo TensorFusionInfo
 	pod.Annotations[constants.GpuPoolKey] = tfInfo.Profile.PoolName
 	pod.Annotations[constants.GPUModelAnnotation] = tfInfo.Profile.GPUModel
 	pod.Annotations[constants.IsLocalGPUAnnotation] = strconv.FormatBool(tfInfo.Profile.IsLocalGPU)
+
+	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
 }
 

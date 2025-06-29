@@ -44,6 +44,8 @@ type QuotaStore struct {
 	// Queue for tracking modified quotas that need to be synced to K8s
 	dirtyQuotas    map[string]struct{}
 	dirtyQuotaLock sync.Mutex
+
+	ctx context.Context
 }
 
 // QuotaStoreEntry represents quota information in memory
@@ -56,12 +58,13 @@ type QuotaStoreEntry struct {
 }
 
 // NewQuotaStore creates a new quota store
-func NewQuotaStore(client client.Client) *QuotaStore {
+func NewQuotaStore(client client.Client, ctx context.Context) *QuotaStore {
 	return &QuotaStore{
 		Client:      client,
 		QuotaStore:  make(map[string]*QuotaStoreEntry),
 		dirtyQuotas: make(map[string]struct{}),
 		Calculator:  NewCalculator(),
+		ctx:         ctx,
 	}
 }
 
@@ -240,12 +243,12 @@ func (qs *QuotaStore) DeallocateQuota(namespace string, allocation *tfv1.AllocRe
 }
 
 // initQuotaStore initializes the quota store from Kubernetes
-func (qs *QuotaStore) InitQuotaStore(ctx context.Context) error {
-	log := log.FromContext(ctx)
+func (qs *QuotaStore) InitQuotaStore() error {
+	log := log.FromContext(qs.ctx)
 	log.Info("Initializing quota store")
 
 	quotaList := &tfv1.GPUResourceQuotaList{}
-	if err := qs.List(ctx, quotaList); err != nil {
+	if err := qs.List(qs.ctx, quotaList); err != nil {
 		return fmt.Errorf("failed to list GPUResourceQuotas: %w", err)
 	}
 

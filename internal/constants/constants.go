@@ -5,6 +5,12 @@ import "time"
 const (
 	NvidiaGPUKey = "nvidia.com/gpu"
 )
+
+var (
+	PendingRequeueDuration = time.Second * 3
+	StatusCheckInterval    = time.Second * 6
+)
+
 const (
 	// Domain is the domain prefix used for all tensor-fusion.ai related annotations and finalizers
 	Domain = "tensor-fusion.ai"
@@ -80,9 +86,6 @@ const (
 	// For grey release
 	TensorFusionEnabledReplicasAnnotation = Domain + "/enabled-replicas"
 	TensorFusionDefaultPoolKeyAnnotation  = Domain + "/is-default-pool"
-
-	PendingRequeueDuration = time.Second * 3
-	StatusCheckInterval    = time.Second * 6
 
 	GetConnectionURLEnv    = "TENSOR_FUSION_OPERATOR_GET_CONNECTION_URL"
 	ConnectionNameEnv      = "TENSOR_FUSION_CONNECTION_NAME"

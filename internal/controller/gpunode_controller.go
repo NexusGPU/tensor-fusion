@@ -79,8 +79,6 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				return false, err
 			}
 		}
-
-		// remove from metrics map
 		metrics.RemoveNodeMetrics(node.Name)
 
 		switch node.Spec.ManageMode {

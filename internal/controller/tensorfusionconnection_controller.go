@@ -137,6 +137,9 @@ func (r *TensorFusionConnectionReconciler) selectWorkerAndSyncStatusFromWorkerPo
 	connection *tfv1.TensorFusionConnection,
 	workload *tfv1.TensorFusionWorkload,
 ) (ctrl.Result, error) {
+	if workload.Spec.Replicas == nil || *workload.Spec.Replicas <= 0 {
+		return ctrl.Result{}, fmt.Errorf("invalid workload, replicas less than 1")
+	}
 	workloadName, ok := connection.Labels[constants.WorkloadKey]
 	if !ok {
 		return ctrl.Result{}, fmt.Errorf("missing workload label")
@@ -222,6 +225,12 @@ func (r *TensorFusionConnectionReconciler) shouldSelectWorker(
 			return false, true, nil
 		}
 	} else {
+		if connection.Status.Phase == "" {
+			connection.Status.Phase = tfv1.WorkerPending
+			if updateErr := r.Status().Update(ctx, connection); updateErr != nil {
+				return false, true, fmt.Errorf("failed to update connection status: %w", updateErr)
+			}
+		}
 		needSelectWorker = true
 	}
 	return needSelectWorker, false, nil
@@ -289,7 +298,7 @@ func (r *TensorFusionConnectionReconciler) SetupWithManager(mgr ctrl.Manager) er
 }
 
 func (r *TensorFusionConnectionReconciler) createDedicatedWorker(ctx context.Context, workload *tfv1.TensorFusionWorkload, connection *tfv1.TensorFusionConnection) error {
-	if connection.DeletionTimestamp.IsZero() {
+	if !connection.DeletionTimestamp.IsZero() {
 		// do nothing when connection being deleted
 		return nil
 	}
@@ -325,11 +334,7 @@ func (r *TensorFusionConnectionReconciler) createDedicatedWorker(ctx context.Con
 
 	if !existingPod.DeletionTimestamp.IsZero() {
 		// worker being deleting but connection is still there, should start another worker to avoid connection failed
-		if err := r.startDedicatedWorkerPod(ctx, workerGenerator, workload, podTemplateHash, connection); err != nil {
-			return err
-		} else {
-			return nil
-		}
+		return fmt.Errorf("dedicated worker deleting but connection still there, reconcile later after deletion")
 	}
 
 	// pod exists, check if template hash is the same, if not delete current one,

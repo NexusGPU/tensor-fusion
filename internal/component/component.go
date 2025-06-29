@@ -30,6 +30,7 @@ type Interface interface {
 func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, component Interface) (*ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
+	defaultRequeueDelay := constants.PendingRequeueDuration
 	autoUpdate, batchInterval := getUpdatePolicy(pool)
 	newStatus := pool.Status.ComponentStatus.DeepCopy()
 
@@ -51,7 +52,8 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 			return nil, fmt.Errorf("failed to patch pool: %w", err)
 		}
 	} else {
-		if !autoUpdate || component.GetUpdateInProgressInfo(pool) != configHash {
+		inProgressHash := component.GetUpdateInProgressInfo(pool)
+		if !autoUpdate || inProgressHash != configHash {
 			return nil, nil
 		}
 		if timeInfo := component.GetBatchUpdateLastTimeInfo(pool); len(timeInfo) != 0 {
@@ -69,10 +71,11 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 	}
 
 	totalSize, updatedSize, recheck, err := component.GetResourcesInfo(r, ctx, pool, configHash)
+
 	if err != nil {
 		return nil, err
 	} else if recheck {
-		return &ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, err
+		return &ctrl.Result{RequeueAfter: defaultRequeueDelay}, err
 	} else if totalSize <= 0 {
 		return nil, nil
 	}
@@ -92,7 +95,7 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 		component.SetUpdateProgress(newStatus, newUpdateProgress)
 		if newUpdateProgress != 100 {
 			component.SetBatchUpdateLastTimeInfo(pool, time.Now().Format(time.RFC3339))
-			interval := max(batchInterval, constants.PendingRequeueDuration)
+			interval := max(batchInterval, defaultRequeueDelay)
 			ctrlResult = &ctrl.Result{RequeueAfter: interval}
 			log.Info("current batch update has completed", "progress", newUpdateProgress, "currentBatchIndex", currentBatchIndex, "nextUpdateTime", time.Now().Add(interval))
 		} else {
@@ -108,7 +111,7 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 		if err != nil {
 			return nil, err
 		} else if recheck {
-			ctrlResult = &ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}
+			ctrlResult = &ctrl.Result{RequeueAfter: defaultRequeueDelay}
 		}
 	}
 
@@ -153,7 +156,7 @@ func calculateDesiredUpdatedDelta(total int, updatedSize int, batchPercentage in
 		currentBatchIndex = newUpdateProgress / batchPercentage
 		desiredSize = min((currentBatchIndex+1)*int32(batchSize), int32(total))
 		delta = desiredSize - int32(updatedSize)
-		// if rolling udpate policy changed or new nodes were added during update, we need to update progress
+		// if rolling update policy changed or new nodes were added during update, we need to update progress
 		if delta < 0 {
 			newUpdateProgress = min(newUpdateProgress+batchPercentage, 100)
 		} else {

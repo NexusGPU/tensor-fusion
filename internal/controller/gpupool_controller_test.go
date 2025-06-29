@@ -204,7 +204,7 @@ var _ = Describe("GPUPool Controller", func() {
 				AddPoolWithNodeCount(1).
 				SetGpuCountPerNode(2).
 				Build()
-			updateRollingUpdatePolicy(tfEnv, true, 50, "1s")
+			updateRollingUpdatePolicy(tfEnv, true, 50, "200ms")
 			createWorkloads(tfEnv, 2)
 			triggerWorkerUpdate(tfEnv)
 			verifyAllWorkerPodContainerName(tfEnv, "updated-name")
@@ -218,7 +218,7 @@ var _ = Describe("GPUPool Controller", func() {
 				AddPoolWithNodeCount(1).
 				SetGpuCountPerNode(2).
 				Build()
-			updateRollingUpdatePolicy(tfEnv, true, 100, "1s")
+			updateRollingUpdatePolicy(tfEnv, true, 100, "500ms")
 			createWorkloads(tfEnv, 2)
 			triggerWorkerUpdate(tfEnv)
 			verifyAllWorkerPodContainerName(tfEnv, "updated-name")
@@ -754,7 +754,7 @@ func createWorkloads(tfEnv *TensorFusionEnv, count int) {
 		key := client.ObjectKey{Name: getWorkloadName(workloadIndex), Namespace: "default"}
 		replicas := 1
 		workload := createTensorFusionWorkload(pool.Name, key, replicas)
-		checkWorkerPodCount(workload)
+		_ = checkWorkerPodCount(workload)
 		checkWorkloadStatus(workload)
 	}
 }

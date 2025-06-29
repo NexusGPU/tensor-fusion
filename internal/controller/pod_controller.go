@@ -56,6 +56,7 @@ type PodReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=pods/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create;get;update;patch
 // +kubebuilder:rbac:groups=core,resources=pods/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=pods/binding,verbs=update
 
 // Add GPU connection for Pods using GPU
 // Have to create TensorFusion connection here because pod UID not available in MutatingWebhook

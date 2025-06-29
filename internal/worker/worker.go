@@ -24,12 +24,7 @@ type WorkerGenerator struct {
 var ErrNoAvailableWorker = errors.New("no available worker")
 
 func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
-	podTmpl := &v1.PodTemplate{}
-	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
-	if err != nil {
-		return "", fmt.Errorf("failed to unmarshal pod template: %w", err)
-	}
-	return utils.GetObjectHash(podTmpl, workloadSpec), nil
+	return utils.GetObjectHash(wg.WorkerConfig.PodTemplate.Raw, workloadSpec), nil
 }
 
 func (wg *WorkerGenerator) GenerateWorkerPod(
@@ -93,6 +88,16 @@ func appendLabelsAndAnnotations(podTmpl *v1.PodTemplate, workload *tfv1.TensorFu
 	annotations[constants.VRAMLimitAnnotation] = res.Limits.Vram.String()
 	annotations[constants.TFLOPSRequestAnnotation] = res.Requests.Tflops.String()
 	annotations[constants.VRAMRequestAnnotation] = res.Requests.Vram.String()
+
+	if workload.Spec.GPUCount > 0 {
+		annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", workload.Spec.GPUCount)
+	} else {
+		annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", 1)
+	}
+	annotations[constants.GpuPoolKey] = workload.Spec.PoolName
+	if workload.Spec.GPUModel != "" {
+		annotations[constants.GPUModelAnnotation] = workload.Spec.GPUModel
+	}
 	return labels, annotations
 }
 

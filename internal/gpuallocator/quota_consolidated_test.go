@@ -128,8 +128,14 @@ type QuotaTestFixture struct {
 	entry      *quota.QuotaStoreEntry
 }
 
+func initAllocator(t *testing.T, allocator *GpuAllocator) {
+	err := allocator.InitGPUAndQuotaStore()
+	require.NoError(t, err)
+	allocator.ReconcileAllocationState()
+}
+
 func setupQuotaTest(tflops, vram int64, workers int32) *QuotaTestFixture {
-	qs := quota.NewQuotaStore(nil)
+	qs := quota.NewQuotaStore(nil, context.Background())
 	quotaObj := createTestQuota(tflops, vram, workers)
 
 	calc := quota.NewCalculator()
@@ -318,7 +324,7 @@ func TestQuotaStore_BoundaryConditions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			qs := quota.NewQuotaStore(nil)
+			qs := quota.NewQuotaStore(nil, context.Background())
 			quotaObj := createTestQuota(tt.quotaTFlops, tt.quotaVRAM, tt.quotaWorkers)
 
 			entry := &quota.QuotaStoreEntry{
@@ -364,8 +370,7 @@ func TestGPUAllocator_QuotaIntegration(t *testing.T) {
 		ctx := context.Background()
 		allocator := NewGpuAllocator(ctx, client, 0)
 
-		err := allocator.InitGPUAndQuotaStore(ctx)
-		require.NoError(t, err)
+		initAllocator(t, allocator)
 
 		req := createAllocRequest(30, 300, 2)
 		req.PodMeta = podMeta
@@ -403,12 +408,11 @@ func TestGPUAllocator_QuotaIntegration(t *testing.T) {
 		ctx := context.Background()
 		allocator := NewGpuAllocator(ctx, client, 0)
 
-		err := allocator.InitGPUAndQuotaStore(ctx)
-		require.NoError(t, err)
+		initAllocator(t, allocator)
 
 		req := createAllocRequest(60, 600, 2) // 60*2=120 > 100 quota
 		req.PodMeta = podMeta
-		_, err = allocator.Alloc(req)
+		_, err := allocator.Alloc(req)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "total.max.tflops")
 	})
@@ -439,8 +443,7 @@ func TestGPUAllocator_ConcurrentQuotaEnforcement(t *testing.T) {
 	ctx := context.Background()
 	allocator := NewGpuAllocator(ctx, client, 0)
 
-	err := allocator.InitGPUAndQuotaStore(ctx)
-	require.NoError(t, err)
+	initAllocator(t, allocator)
 
 	var wg sync.WaitGroup
 	results := make(chan error, 10)
@@ -526,11 +529,7 @@ func TestGPUAllocator_QuotaReconciliation(t *testing.T) {
 	ctx := context.Background()
 	allocator := NewGpuAllocator(ctx, client, 0)
 
-	err := allocator.InitGPUAndQuotaStore(ctx)
-	require.NoError(t, err)
-
-	// Manually trigger reconciliation
-	allocator.ReconcileAllocationState(ctx)
+	initAllocator(t, allocator)
 
 	// Verify quota usage reflects the worker pods
 	usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
@@ -564,8 +563,7 @@ func TestGPUAllocator_QuotaDeallocation(t *testing.T) {
 	ctx := context.Background()
 	allocator := NewGpuAllocator(ctx, client, 0)
 
-	err := allocator.InitGPUAndQuotaStore(ctx)
-	require.NoError(t, err)
+	initAllocator(t, allocator)
 
 	// Allocate GPUs
 	req := createAllocRequest(30, 300, 2)

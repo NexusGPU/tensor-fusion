@@ -61,6 +61,7 @@
             "request": "launch",
             "mode": "test",
             "env": {
+                "DEBUG_MODE": "true",
                 "GO_TESTING": "true"
             },
             "program": "${workspaceFolder}/internal/controller",

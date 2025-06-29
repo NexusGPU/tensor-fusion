@@ -23,14 +23,15 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -75,6 +76,30 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		client.InNamespace(req.Namespace),
 		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list pods: %w", err)
+	}
+
+	// handle finalizer
+	shouldReturn, err := utils.HandleFinalizer(ctx, workload, r.Client, func(ctx context.Context, workload *tfv1.TensorFusionWorkload) (bool, error) {
+		if workload.Spec.IsDynamicReplica() {
+			// dynamic replica mode, should be deleted by owner, not itself
+			return true, nil
+		}
+
+		// fixed replica mode which created by user, should trigger pod deletion and stop scale up
+		// when all pods are deleted, finalizer will be removed
+		if len(podList.Items) == 0 {
+			return true, nil
+		}
+		if err := r.scaleDownWorkers(ctx, workload, podList.Items); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if shouldReturn {
+		return ctrl.Result{}, nil
 	}
 
 	if !workload.DeletionTimestamp.IsZero() {
@@ -330,7 +355,7 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 	// Check if we need to update status
 	statusChanged := workload.Status.ReadyReplicas != readyReplicas ||
 		workload.Status.Phase != phase ||
-		!equality.Semantic.DeepEqual(workload.Status.Conditions, conditions)
+		!utils.EqualConditionsDisregardTransitionTime(workload.Status.Conditions, conditions)
 
 	if statusChanged {
 		log.Info("Updating workload status", "phase", phase, "readyReplicas", readyReplicas)
@@ -349,5 +374,17 @@ func (r *TensorFusionWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) erro
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.TensorFusionWorkload{}).
 		Named("tensorfusionworkload").
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+			pod := obj.(*corev1.Pod)
+			if pod.Labels == nil || pod.Labels[constants.WorkloadKey] == "" {
+				return nil
+			}
+			return []reconcile.Request{
+				{NamespacedName: client.ObjectKey{
+					Name:      pod.Labels[constants.WorkloadKey],
+					Namespace: pod.Namespace,
+				}},
+			}
+		})).
 		Complete(r)
 }

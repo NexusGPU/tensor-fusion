@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"context"
 	"testing"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -53,7 +54,7 @@ func TestQuotaCalculator_EdgeCases(t *testing.T) {
 }
 
 func TestQuotaStore_ValidationRules(t *testing.T) {
-	qs := NewQuotaStore(nil)
+	qs := NewQuotaStore(nil, context.Background())
 
 	t.Run("valid quota configuration", func(t *testing.T) {
 		quota := createTestQuota(100, 1000, 10)

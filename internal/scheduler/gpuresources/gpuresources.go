@@ -90,7 +90,7 @@ func (s *GPUFit) Name() string {
 
 func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
 	s.logger.Info("checking GPU node resources for pod", "pod", pod.Name)
-	allocRequest, reason, err := s.allocator.ComposeAllocationRequest(s.ctx, pod)
+	allocRequest, reason, err := s.allocator.ComposeAllocationRequest(pod)
 	if err != nil {
 		return nil, framework.NewStatus(framework.Error, reason)
 	}

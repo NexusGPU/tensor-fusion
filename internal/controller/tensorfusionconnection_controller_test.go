@@ -18,9 +18,12 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,6 +38,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 		const workloadName = "test-workload-1"
+		var podList *corev1.PodList
 
 		ctx := context.Background()
 
@@ -56,7 +60,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			pool := tfEnv.GetGPUPool(0)
 			// Create workload first
 			workload := createTensorFusionWorkload(pool.Name, workloadNamespacedName, 2)
-			checkWorkerPodCount(workload)
+			podList = checkWorkerPodCount(workload)
 			checkWorkloadStatus(workload)
 
 			By("creating the custom resource for the Kind TensorFusionConnection")
@@ -97,7 +101,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			Expect(k8sClient.Get(ctx, workloadNamespacedName, workload)).Should(Succeed())
 			Eventually(func(g Gomega) {
 				g.Expect(k8sClient.Get(ctx, typeNamespacedName, connection)).Should(Succeed())
-				// TODO should assert based on actual worker pod status
+				g.Expect(connection.Status.WorkerName).ShouldNot(Equal(""))
 			}).Should(Succeed())
 		})
 
@@ -107,7 +111,6 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-connection-no-label",
 					Namespace: "default",
-					// No workload label
 				},
 				Spec: tfv1.TensorFusionConnectionSpec{
 					WorkloadName: workloadName,
@@ -117,9 +120,8 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			Consistently(func(g Gomega) {
 				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(connectionNoLabel), connectionNoLabel)).Should(Succeed())
 				g.Expect(connectionNoLabel.Status.WorkerName).Should(Equal(""))
-			}).Should(Succeed())
+			}, 2*time.Second, 400*time.Millisecond).Should(Succeed())
 
-			// Clean up the test connection
 			Expect(k8sClient.Delete(ctx, connectionNoLabel)).To(Succeed())
 		})
 
@@ -131,39 +133,44 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			connection := &tfv1.TensorFusionConnection{}
 			Eventually(func(g Gomega) {
 				g.Expect(k8sClient.Get(ctx, typeNamespacedName, connection)).Should(Succeed())
-				// TODO
+				g.Expect(connection.Status.WorkerName).ShouldNot(Equal(""))
 			}).Should(Succeed())
 
 			By("Updating the workload to mark the worker as failed")
-			Expect(k8sClient.Get(ctx, workloadNamespacedName, workload)).To(Succeed())
-			// TODO
-			Expect(k8sClient.Status().Update(ctx, workload)).To(Succeed())
 
-			// Verify worker reselection
-			Expect(k8sClient.Get(ctx, workloadNamespacedName, workload)).Should(Succeed())
+			usedWorkerPod, ok := lo.Find(podList.Items, func(pod corev1.Pod) bool {
+				return pod.Name == connection.Status.WorkerName
+			})
+			Expect(ok).To(BeTrue())
+
+			failPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      usedWorkerPod.Name,
+					Namespace: usedWorkerPod.Namespace,
+				},
+			}
+			failPod.Status.Phase = corev1.PodFailed
+			failPod.Status.Reason = "Failed"
+			failPod.Status.Message = "Test failure"
+			Expect(k8sClient.Status().Patch(ctx, failPod, client.MergeFrom(&corev1.Pod{}))).To(Succeed())
+
 			Eventually(func(g Gomega) {
 				g.Expect(k8sClient.Get(ctx, typeNamespacedName, connection)).Should(Succeed())
-				// TODO
+				g.Expect(connection.Status.WorkerName).ShouldNot(Equal(failPod.Name))
 			}).Should(Succeed())
 		})
 
-		It("should update status to WorkerPending when worker selection fails", func() {
-			By("Creating a TensorFusionWorkload without worker status")
+		It("should create dedicated worker for dynamic replica workload", func() {
+			By("Creating a TensorFusionWorkload with dynamic replica, simulate pod webhook effect")
 
-			// Create a workload with no workers (empty WorkerStatuses)
-			failWorkloadName := "test-workload-no-workers"
-			failWorkloadNamespacedName := types.NamespacedName{
-				Name:      failWorkloadName,
-				Namespace: "default",
-			}
-
-			failWorkload := &tfv1.TensorFusionWorkload{
+			workloadName := "test-workload-dynamic-replica"
+			workload := &tfv1.TensorFusionWorkload{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      failWorkloadName,
+					Name:      workloadName,
 					Namespace: "default",
 				},
 				Spec: tfv1.WorkloadProfileSpec{
-					PoolName: "mock-empty",
+					PoolName: "cluster-0-pool-0",
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
 							Tflops: resource.MustParse("1"),
@@ -180,51 +187,39 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					ReadyReplicas: 0,
 				},
 			}
-			Expect(k8sClient.Create(ctx, failWorkload)).To(Succeed())
+			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			// Verify workload was created properly
-			createdWorkload := &tfv1.TensorFusionWorkload{}
-			Eventually(func() bool {
-				if err := k8sClient.Get(ctx, failWorkloadNamespacedName, createdWorkload); err != nil {
-					return false
-				}
-				// TODO refactor
-				return true
-			}).Should(BeTrue())
-
-			By("Creating a connection to the workload with no workers")
-			failConnectionName := "test-connection-fail"
-			failConnectionNamespacedName := types.NamespacedName{
-				Name:      failConnectionName,
+			By("Creating a connection use the dynamic replica workload")
+			connectionName := "test-connection-dynamic-replica"
+			connectionNamespacedName := types.NamespacedName{
+				Name:      connectionName,
 				Namespace: "default",
 			}
-
-			failConnection := &tfv1.TensorFusionConnection{
+			connection := &tfv1.TensorFusionConnection{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      failConnectionName,
+					Name:      connectionName,
 					Namespace: "default",
 					Labels: map[string]string{
-						constants.WorkloadKey: failWorkloadName,
+						constants.WorkloadKey: workloadName,
 					},
 				},
 				Spec: tfv1.TensorFusionConnectionSpec{
-					WorkloadName: failWorkloadName,
+					WorkloadName: workloadName,
 				},
 			}
-			Expect(k8sClient.Create(ctx, failConnection)).To(Succeed())
+			Expect(k8sClient.Create(ctx, connection)).To(Succeed())
 
 			By("Verifying the connection status is updated to WorkerPending")
 			Eventually(func() bool {
-				if err := k8sClient.Get(ctx, failConnectionNamespacedName, failConnection); err != nil {
+				if err := k8sClient.Get(ctx, connectionNamespacedName, connection); err != nil {
 					return false
 				}
-				return failConnection.Status.Phase == tfv1.WorkerPending
+				return connection.Status.Phase == tfv1.WorkerPending
 			}).Should(BeTrue())
-			// TODO test issue
 
 			By("Cleaning up test resources")
-			Expect(k8sClient.Delete(ctx, failConnection)).To(Succeed())
-			Expect(k8sClient.Delete(ctx, failWorkload)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, connection)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
 		})
 	})
 })

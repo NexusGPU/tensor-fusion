@@ -49,6 +49,7 @@ rules:
   resources:
   - nodes/finalizers
   - pods/finalizers
+  - pods/binding
   verbs:
   - update
 - apiGroups:

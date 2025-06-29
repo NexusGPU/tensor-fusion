@@ -68,10 +68,15 @@ var metricsRecorder *metrics.MetricsRecorder
 
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
-	SetDefaultEventuallyTimeout(6 * time.Second)
-	SetDefaultEventuallyPollingInterval(200 * time.Millisecond)
+
+	if os.Getenv("DEBUG_MODE") == "true" {
+		SetDefaultEventuallyTimeout(10 * time.Minute)
+	} else {
+		SetDefaultEventuallyTimeout(6 * time.Second)
+	}
+	SetDefaultEventuallyPollingInterval(250 * time.Millisecond)
 	SetDefaultConsistentlyDuration(5 * time.Second)
-	SetDefaultConsistentlyPollingInterval(200 * time.Millisecond)
+	SetDefaultConsistentlyPollingInterval(250 * time.Millisecond)
 	RunSpecs(t, "Controller Suite")
 }
 
@@ -125,6 +130,7 @@ var _ = BeforeSuite(func() {
 			BindAddress: "0",
 		},
 	})
+
 	Expect(err).ToNot(HaveOccurred())
 
 	metricsRecorder = &metrics.MetricsRecorder{
@@ -134,6 +140,16 @@ var _ = BeforeSuite(func() {
 		},
 		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
 	}
+
+	allocator = gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 150*time.Millisecond)
+	_, err = allocator.SetupWithManager(ctx, mgr)
+	Expect(err).ToNot(HaveOccurred())
+
+	portAllocator, err := portallocator.NewPortAllocator(ctx, mgr.GetClient(), "40000-42000", "42001-60000")
+	if err != nil {
+		Expect(err).ToNot(HaveOccurred())
+	}
+	_ = portAllocator.SetupWithManager(ctx, mgr)
 
 	err = (&TensorFusionClusterReconciler{
 		Client:          mgr.GetClient(),
@@ -156,12 +172,6 @@ var _ = BeforeSuite(func() {
 		Recorder: mgr.GetEventRecorderFor("GPUNode"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
-
-	portAllocator, err := portallocator.NewPortAllocator(ctx, mgr.GetClient(), "40000-42000", "42001-60000")
-	if err != nil {
-		Expect(err).ToNot(HaveOccurred())
-	}
-	_ = portAllocator.SetupWithManager(ctx, mgr)
 
 	err = (&GPUNodeClassReconciler{
 		Client: mgr.GetClient(),
@@ -194,10 +204,6 @@ var _ = BeforeSuite(func() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr)
-	Expect(err).ToNot(HaveOccurred())
-
-	allocator = gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 150*time.Millisecond)
-	_, err = allocator.SetupWithManager(ctx, mgr)
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&TensorFusionConnectionReconciler{
@@ -420,6 +426,10 @@ func (c *TensorFusionEnv) getGPUName(poolIndex int, nodeIndex int, gpuIndex int)
 	return fmt.Sprintf("%s-pool-%d-node-%d-gpu-%d", c.clusterKey.Name, poolIndex, nodeIndex, gpuIndex)
 }
 
+func (c *TensorFusionEnv) GetConfig() *rest.Config {
+	return cfg
+}
+
 type TensorFusionEnvBuilder struct {
 	*TensorFusionEnv
 }
@@ -536,6 +546,7 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 							Name: key.Name,
 							Labels: map[string]string{
 								constants.LabelKeyOwner: gpuNode.Name,
+								constants.GpuPoolKey:    b.getPoolName(poolIndex),
 							},
 						},
 					}

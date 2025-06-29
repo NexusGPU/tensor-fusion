@@ -210,9 +210,9 @@ func (s *GPUResourcesSuite) SetupTest() {
 	s.fwk = fwk
 
 	s.allocator = gpuallocator.NewGpuAllocator(s.ctx, s.client, time.Second)
-	err = s.allocator.InitGPUAndQuotaStore(s.ctx)
+	err = s.allocator.InitGPUAndQuotaStore()
 	s.NoError(err)
-	s.allocator.ReconcileAllocationState(s.ctx)
+	s.allocator.ReconcileAllocationState()
 
 	pluginFactory := NewWithDeps(s.allocator, s.client)
 	pluginConfig := &runtime.Unknown{
@@ -399,7 +399,7 @@ func (s *GPUResourcesSuite) TestReserveAndUnreserve() {
 	s.True(reserveStatus.IsSuccess())
 
 	// Manual trigger a sync loop for dirty GPUs
-	s.plugin.allocator.SyncGPUsToK8s(s.ctx)
+	s.plugin.allocator.SyncGPUsToK8s()
 
 	// Check allocator state
 	gpu := &tfv1.GPU{}
@@ -412,7 +412,7 @@ func (s *GPUResourcesSuite) TestReserveAndUnreserve() {
 	s.Equal(2, gpu.Status.RunningApps[0].Count)
 
 	s.plugin.Unreserve(s.ctx, state, pod, "node-a")
-	s.plugin.allocator.SyncGPUsToK8s(s.ctx)
+	s.plugin.allocator.SyncGPUsToK8s()
 
 	// Check allocator state again
 	s.NoError(s.client.Get(s.ctx, types.NamespacedName{Name: "gpu-1"}, gpu))

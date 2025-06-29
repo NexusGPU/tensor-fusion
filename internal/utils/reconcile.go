@@ -18,6 +18,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -32,11 +33,16 @@ var ErrTerminateLoop = errors.New("stop this loop and do not requeue")
 // Minimum time between reconciliations for the same object
 var debounceInterval = 3 * time.Second
 
+var IsTestMode = false
+
 func init() {
 	// in unit testing mode, debounce should be very short
 	if (len(os.Args) > 1 && os.Args[1] == "-test.run") ||
 		os.Getenv("GO_TESTING") == "true" {
 		debounceInterval = 60 * time.Millisecond
+		IsTestMode = true
+		constants.PendingRequeueDuration = time.Millisecond * 100
+		constants.StatusCheckInterval = time.Millisecond * 200
 	}
 }
 
@@ -138,15 +144,18 @@ func GetObjectHash(objs ...any) string {
 	hasher := fnv.New64a()
 
 	for _, obj := range objs {
-		jsonBytes, err := json.Marshal(obj)
-		if err != nil {
-			panic(err)
+		if objStr, ok := obj.(string); ok {
+			hasher.Write([]byte(objStr))
+		} else if objBytes, ok := obj.([]byte); ok {
+			hasher.Write(objBytes)
+		} else {
+			jsonBytes, err := json.Marshal(obj)
+			if err != nil {
+				hasher.Write([]byte(err.Error()))
+			}
+			hasher.Write(jsonBytes)
 		}
-		// Add length prefix to prevent collisions when combining multiple objects
-		hasher.Write(fmt.Appendf(nil, "%d:", len(jsonBytes)))
-		hasher.Write(jsonBytes)
 	}
-
 	return fmt.Sprintf("%x", hasher.Sum(nil))
 }
 
@@ -204,4 +213,19 @@ func ExtractPoolNameFromNodeLabel(node *tfv1.GPUNode) string {
 		}
 	}
 	return poolName
+}
+
+func EqualConditionsDisregardTransitionTime(a, b []metav1.Condition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Type != b[i].Type ||
+			a[i].Status != b[i].Status ||
+			a[i].Reason != b[i].Reason ||
+			a[i].Message != b[i].Message {
+			return false
+		}
+	}
+	return true
 }
