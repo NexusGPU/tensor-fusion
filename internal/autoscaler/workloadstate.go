@@ -2,6 +2,7 @@ package autoscaler
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -100,5 +101,9 @@ func (w *WorkloadState) GetResourceRecommenderConfig() *ResourceRecommenderConfi
 
 func (w *WorkloadState) IsTargetResource(resourceName string) bool {
 	target := w.AutoScalingConfig.AutoSetResources.TargetResource
-	return target == "" || resourceName == target
+	return target == "" || strings.EqualFold(target, "all") || strings.EqualFold(resourceName, target)
+}
+
+func (w *WorkloadState) IsAutoScalingEnabled() bool {
+	return w.AutoScalingConfig.AutoSetResources.Enable
 }

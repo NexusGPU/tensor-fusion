@@ -220,6 +220,12 @@ func (s *Autoscaler) ProcessWorkloads(ctx context.Context) {
 		rr := s.ResourceRecommender.GetRecommendedResources(workloadState)
 		log.Info("recommend resources", "workload", workloadState.Name, "resources", rr)
 
+		// TODO: update recommmendation status of workload
+
+		if !workloadState.IsAutoScalingEnabled() {
+			continue
+		}
+
 		for _, worker := range podList.Items {
 			if !worker.DeletionTimestamp.IsZero() {
 				continue

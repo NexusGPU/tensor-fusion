@@ -83,6 +83,13 @@ var _ = Describe("Workload State", func() {
 		Expect(ws.IsTargetResource("vram")).To(BeTrue())
 
 		ws.AutoScalingConfig = tfv1.AutoScalingConfig{
+			AutoSetResources: tfv1.AutoSetResources{TargetResource: "all"},
+		}
+
+		Expect(ws.IsTargetResource("tflops")).To(BeTrue())
+		Expect(ws.IsTargetResource("vram")).To(BeTrue())
+
+		ws.AutoScalingConfig = tfv1.AutoScalingConfig{
 			AutoSetResources: tfv1.AutoSetResources{TargetResource: "tflops"},
 		}
 		Expect(ws.IsTargetResource("tflops")).To(BeTrue())
@@ -93,5 +100,18 @@ var _ = Describe("Workload State", func() {
 		}
 		Expect(ws.IsTargetResource("tflops")).To(BeFalse())
 		Expect(ws.IsTargetResource("vram")).To(BeTrue())
+	})
+
+	It("should correctly determine if auto scaling is enabled based on config", func() {
+		ws := NewWorkloadState("test")
+
+		ws.AutoScalingConfig = tfv1.AutoScalingConfig{
+			AutoSetResources: tfv1.AutoSetResources{Enable: true},
+		}
+		Expect(ws.IsAutoScalingEnabled()).To(BeTrue())
+		ws.AutoScalingConfig = tfv1.AutoScalingConfig{
+			AutoSetResources: tfv1.AutoSetResources{Enable: false},
+		}
+		Expect(ws.IsAutoScalingEnabled()).To(BeFalse())
 	})
 })
