@@ -216,6 +216,10 @@ func (qs *QuotaStore) AllocateQuota(namespace string, req *tfv1.AllocRequest) {
 	if !exists {
 		return
 	}
+
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
+
 	qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, req, true)
 	qs.markQuotaDirty(namespace)
 }
@@ -227,6 +231,10 @@ func (qs *QuotaStore) DeallocateQuota(namespace string, allocation *tfv1.AllocRe
 	if !exists {
 		return
 	}
+
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
+
 	qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, allocation, false)
 	qs.markQuotaDirty(namespace)
 }
@@ -327,7 +335,8 @@ func (qs *QuotaStore) ReconcileQuotaStore(ctx context.Context, namespacedAllocat
 	}
 
 	// Process worker pods to rebuild quota usage
-	for ns, allocation := range namespacedAllocations {
+	for _, allocation := range namespacedAllocations {
+		ns := allocation.WorkloadNameNamespace.Namespace
 		entry, exists := qs.QuotaStore[ns]
 		if !exists {
 			continue // No quota defined for this namespace

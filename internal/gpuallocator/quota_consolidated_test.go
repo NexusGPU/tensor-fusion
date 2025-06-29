@@ -507,6 +507,12 @@ func TestGPUAllocator_QuotaReconciliation(t *testing.T) {
 	testPool := createTestGPUPool()
 	allObjects := objectsFromGPUs(gpus)
 	allObjects = append(allObjects, testPool)
+	allObjects = append(allObjects, &tfv1.TensorFusionWorkload{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TestWorkload,
+			Namespace: TestNamespace,
+		},
+	})
 
 	client := fake.NewClientBuilder().
 		WithScheme(scheme).

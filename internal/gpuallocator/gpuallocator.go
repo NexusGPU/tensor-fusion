@@ -60,6 +60,7 @@ type GpuAllocator struct {
 	gpuStore        map[types.NamespacedName]*tfv1.GPU
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{}
 	storeMutex      sync.RWMutex
+	allocateMutex   sync.Mutex
 	syncInterval    time.Duration
 	cancel          context.CancelFunc
 	ctx             context.Context
@@ -244,6 +245,9 @@ func (s *GpuAllocator) Bind(
 // Alloc allocates a request to a gpu or multiple gpus from the same node.
 // This is now implemented as a combination of Filter and Bind for backward compatibility.
 func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
+	s.allocateMutex.Lock()
+	defer s.allocateMutex.Unlock()
+
 	filteredGPUs, err := s.CheckQuotaAndFilter(s.ctx, req)
 	if err != nil {
 		return nil, err

@@ -26,6 +26,7 @@ func (c *Calculator) IncreaseUsage(usage *tfv1.GPUResourceUsage, allocation *tfv
 	if allocation == nil {
 		return
 	}
+
 	count := int64(allocation.Count)
 	c.SafeAdd(&usage.Requests.Tflops, allocation.Request.Tflops, count)
 	c.SafeAdd(&usage.Requests.Vram, allocation.Request.Vram, count)
