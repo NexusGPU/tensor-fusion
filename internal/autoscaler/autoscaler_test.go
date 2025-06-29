@@ -184,7 +184,7 @@ var _ = Describe("Autoscaler", func() {
 			}).Should(Succeed())
 		})
 
-		It("should update specific resources based on TargetResource", func() {
+		It("should update resources based on auto scaling config", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
@@ -199,9 +199,22 @@ var _ = Describe("Autoscaler", func() {
 			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
 
 			workloadState := scaler.WorkloadStates[workload.Name]
-			workloadState.AutoScalingConfig.AutoSetResources.TargetResource = "tflops"
-
 			oldRes := workloadState.Resources
+
+			// verify IsAutoScalingEnabled
+			workloadState.AutoScalingConfig.AutoSetResources.Enable = false
+			scaler.ProcessWorkloads(ctx)
+			Eventually(func(g Gomega) {
+				tflopsRequest, tflopsLimit, vramRequest, vramLimit := parseResourceAnnotations(getWorkers(workload)[0])
+				Expect(tflopsRequest.Equal(oldRes.Requests.Tflops)).To(BeTrue())
+				Expect(tflopsLimit.Equal(oldRes.Limits.Tflops)).To(BeTrue())
+				Expect(vramRequest.Equal(oldRes.Requests.Vram)).To(BeTrue())
+				Expect(vramLimit.Equal(oldRes.Limits.Vram)).To(BeTrue())
+			}).Should(Succeed())
+
+			// verify IsTargetResource
+			workloadState.AutoScalingConfig.AutoSetResources.Enable = true
+			workloadState.AutoScalingConfig.AutoSetResources.TargetResource = "tflops"
 			scaler.ProcessWorkloads(ctx)
 			Eventually(func(g Gomega) {
 				tflopsRequest, tflopsLimit, vramRequest, vramLimit := parseResourceAnnotations(getWorkers(workload)[0])
