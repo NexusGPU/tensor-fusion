@@ -26,10 +26,10 @@ func (c *Client) GetName() string {
 	return "client"
 }
 
-func (c *Client) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string, int32) {
+func (c *Client) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string) {
 	oldHash := status.ClientVersion
 	changed, newHash := utils.CompareAndGetObjectHash(oldHash, pool.Spec.ComponentConfig.Client)
-	return changed, newHash, oldHash, status.ClientUpdateProgress
+	return changed, newHash, oldHash
 }
 
 func (c *Client) SetConfigHash(status *tfv1.PoolComponentStatus, hash string) {
@@ -78,8 +78,7 @@ func (c *Client) GetResourcesInfo(r client.Client, ctx context.Context, pool *tf
 
 	for _, pod := range podList.Items {
 		if !pod.DeletionTimestamp.IsZero() {
-			// ignore deleting pod
-			continue
+			return 0, 0, true, nil
 		}
 		if pod.Labels[constants.LabelKeyPodTemplateHash] != configHash {
 			c.podsToUpdate = append(c.podsToUpdate, &pod)

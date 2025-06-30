@@ -15,7 +15,7 @@ import (
 
 type Interface interface {
 	GetName() string
-	DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string, int32)
+	DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string)
 	SetConfigHash(status *tfv1.PoolComponentStatus, hash string)
 	GetUpdateInProgressInfo(pool *tfv1.GPUPool) string
 	SetUpdateInProgressInfo(pool *tfv1.GPUPool, hash string)
@@ -30,11 +30,10 @@ type Interface interface {
 func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, component Interface) (*ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	defaultRequeueDelay := constants.PendingRequeueDuration
 	autoUpdate, batchInterval := getUpdatePolicy(pool)
 	newStatus := pool.Status.ComponentStatus.DeepCopy()
 
-	changed, configHash, oldHash, oldProgress := component.DetectConfigChange(pool, newStatus)
+	changed, configHash, oldHash := component.DetectConfigChange(pool, newStatus)
 	if changed {
 		log.Info("component configuration changed", "component", component.GetName(), "old hash", oldHash, "new hash", configHash)
 		component.SetConfigHash(newStatus, configHash)
@@ -52,8 +51,7 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 			return nil, fmt.Errorf("failed to patch pool: %w", err)
 		}
 	} else {
-		inProgressHash := component.GetUpdateInProgressInfo(pool)
-		if !autoUpdate || inProgressHash != configHash {
+		if !autoUpdate || component.GetUpdateInProgressInfo(pool) != configHash {
 			return nil, nil
 		}
 		if timeInfo := component.GetBatchUpdateLastTimeInfo(pool); len(timeInfo) != 0 {
@@ -71,36 +69,30 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 	}
 
 	totalSize, updatedSize, recheck, err := component.GetResourcesInfo(r, ctx, pool, configHash)
-	batchPercentage := pool.Spec.NodeManagerConfig.NodePoolRollingUpdatePolicy.BatchPercentage
-	updateProgress := component.GetUpdateProgress(newStatus)
-	delta, newUpdateProgress, currentBatchIndex := calculateDesiredUpdatedDelta(totalSize, updatedSize, batchPercentage, updateProgress)
-	newProgressReCalc := min((currentBatchIndex+1)*batchPercentage, 100)
-
 	if err != nil {
-		log.Error(err, "failed to get resources info when rolling update", "component", component.GetName())
 		return nil, err
 	} else if recheck {
-		log.Info("recheck resources info for rolling update", "component", component.GetName(), "hash", configHash, "after", defaultRequeueDelay)
-		return &ctrl.Result{RequeueAfter: defaultRequeueDelay}, err
-	} else if totalSize <= 0 && newProgressReCalc == oldProgress {
-		log.Info("no more resources to update or check", "component",
-			component.GetName(), "hash", configHash, "progress", "newUpdateProgress", newProgressReCalc)
+		return &ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, err
+	} else if totalSize <= 0 {
 		return nil, nil
 	}
 
+	batchPercentage := pool.Spec.NodeManagerConfig.NodePoolRollingUpdatePolicy.BatchPercentage
+	updateProgress := component.GetUpdateProgress(newStatus)
+	delta, newUpdateProgress, currentBatchIndex := calculateDesiredUpdatedDelta(totalSize, updatedSize, batchPercentage, updateProgress)
 	component.SetUpdateProgress(newStatus, newUpdateProgress)
 	log.Info("update in progress", "component", component.GetName(), "hash", configHash,
-		"updateProgress", newUpdateProgress, "newProgressReCalc", newProgressReCalc,
-		"totalSize", totalSize, "updatedSize", updatedSize,
+		"updateProgress", newUpdateProgress, "totalSize", totalSize, "updatedSize", updatedSize,
 		"batchPercentage", batchPercentage, "currentBatchIndex", currentBatchIndex, "delta", delta)
 
 	var ctrlResult *ctrl.Result
 	if delta == 0 {
 		patch := client.MergeFrom(pool.DeepCopy())
-		component.SetUpdateProgress(newStatus, newProgressReCalc)
+		newUpdateProgress = min((currentBatchIndex+1)*batchPercentage, 100)
+		component.SetUpdateProgress(newStatus, newUpdateProgress)
 		if newUpdateProgress != 100 {
 			component.SetBatchUpdateLastTimeInfo(pool, time.Now().Format(time.RFC3339))
-			interval := max(batchInterval, defaultRequeueDelay)
+			interval := max(batchInterval, constants.PendingRequeueDuration)
 			ctrlResult = &ctrl.Result{RequeueAfter: interval}
 			log.Info("current batch update has completed", "progress", newUpdateProgress, "currentBatchIndex", currentBatchIndex, "nextUpdateTime", time.Now().Add(interval))
 		} else {
@@ -114,11 +106,9 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 	} else if delta > 0 {
 		recheck, err := component.PerformBatchUpdate(r, ctx, pool, int(delta))
 		if err != nil {
-			log.Error(err, "failed to perform batch update", "component", component.GetName())
 			return nil, err
 		} else if recheck {
-			log.Info("recheck resources info for rolling update next batch", "component", component.GetName(), "hash", configHash, "after", defaultRequeueDelay)
-			ctrlResult = &ctrl.Result{RequeueAfter: defaultRequeueDelay}
+			ctrlResult = &ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}
 		}
 	}
 
@@ -163,7 +153,7 @@ func calculateDesiredUpdatedDelta(total int, updatedSize int, batchPercentage in
 		currentBatchIndex = newUpdateProgress / batchPercentage
 		desiredSize = min((currentBatchIndex+1)*int32(batchSize), int32(total))
 		delta = desiredSize - int32(updatedSize)
-		// if rolling update policy changed or new nodes were added during update, we need to update progress
+		// if rolling udpate policy changed or new nodes were added during update, we need to update progress
 		if delta < 0 {
 			newUpdateProgress = min(newUpdateProgress+batchPercentage, 100)
 		} else {

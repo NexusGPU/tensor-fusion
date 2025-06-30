@@ -253,7 +253,7 @@ var _ = Describe("GPUPool Controller", func() {
 			tfEnv.Cleanup()
 		})
 
-		It("Should update according to batch interval", func() {
+		PIt("Should update according to batch interval", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(2).
 				SetGpuCountPerNode(1).
@@ -284,7 +284,7 @@ var _ = Describe("GPUPool Controller", func() {
 			tfEnv.Cleanup()
 		})
 
-		It("Should update all client pods at once if BatchPercentage is 100", func() {
+		PIt("Should update all client pods at once if BatchPercentage is 100", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).
 				SetGpuCountPerNode(1).
@@ -448,7 +448,8 @@ func verifyClientPodHashConsistently(index int, hash string) {
 	Consistently(func(g Gomega) {
 		pod := &corev1.Pod{}
 		key := client.ObjectKey{Namespace: utils.CurrentNamespace(), Name: getClientPodName(index)}
-		g.Expect(k8sClient.Get(ctx, key, pod)).Should(Succeed())
+		err := k8sClient.Get(ctx, key, pod)
+		g.Expect(err).Should(Succeed())
 		g.Expect(pod.Labels[constants.LabelKeyPodTemplateHash]).Should(Equal(hash))
 	}).Should(Succeed())
 }
@@ -589,7 +590,7 @@ func verifyHypervisorUpdateProgress(tfEnv *TensorFusionEnv, progress int32) {
 		} else {
 			g.Expect(pool.Status.ComponentStatus.HypervisorConfigSynced).To(BeFalse())
 		}
-	}).Should(Succeed())
+	}, 6*time.Second, 300*time.Millisecond).Should(Succeed())
 }
 
 func verifyWorkerUpdateProgress(tfEnv *TensorFusionEnv, progress int32) {

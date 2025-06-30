@@ -57,11 +57,7 @@ type GPUPoolReconciler struct {
 func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	runNow, alreadyQueued, waitTime := utils.DebouncedReconcileCheck(ctx, &r.LastProcessedItems, req.NamespacedName)
-	if alreadyQueued {
-		log.V(8).Info("GPUPool already queued for reconcile", "name", req.Name, "waitTime", waitTime)
-		return ctrl.Result{}, nil
-	}
+	runNow, _, waitTime := utils.DebouncedReconcileCheck(ctx, &r.LastProcessedItems, req.NamespacedName)
 	if !runNow {
 		return ctrl.Result{RequeueAfter: waitTime}, nil
 	}
