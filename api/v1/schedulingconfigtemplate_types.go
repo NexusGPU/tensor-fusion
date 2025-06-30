@@ -94,13 +94,9 @@ type AutoScalingConfig struct {
 	// HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
 	AutoSetReplicas AutoSetReplicas `json:"autoSetReplicas,omitempty"`
 
-	// layer 3 adjusting, to match the actual usage in the long run
+	// layer 3 adjusting, to match the actual usage in the long run, only for N:M remote vGPU mode, not impl yet
 	// Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
 	AutoSetRequests AutoSetRequests `json:"autoSetRequests,omitempty"`
-
-	// additional layer to save VRAM, auto-freeze memory and cool down to RAM and Disk
-	// Hypervisor will monitor and trigger freeze of inactive workers, Operator should mark them as scaled-to-zero and release the GPU pool resources, don't scale down CPU client part, so that they can continue to serve the traffic or scale down by other auto-scaling solutions like KEDA/KNative
-	ScaleToZero ScaleToZero `json:"scaleToZero,omitempty"`
 }
 
 // A typical autoLimits algorithm could be checking every 5m, look back 1 day data,
@@ -160,7 +156,7 @@ type AutoSetRequests struct {
 	Prediction        SmartSchedulerModelInput `json:"prediction,omitempty"`
 }
 
-type ScaleToZero struct {
+type AutoFreezeAndResume struct {
 	AutoFreeze         []AutoFreeze             `json:"autoFreeze,omitempty"`
 	IntelligenceWarmup SmartSchedulerModelInput `json:"intelligenceWarmup,omitempty"`
 }
@@ -192,6 +188,12 @@ type ReBalanceThreshold struct {
 }
 
 type HypervisorScheduling struct {
+	// additional layer to save VRAM, auto-freeze memory and cool down to RAM and Disk
+	// Hypervisor will monitor and trigger freeze of inactive workers, Operator should mark them as scaled-to-zero and release the GPU pool resources, don't scale down CPU client part, so that they can continue to serve the traffic or scale down by other auto-scaling solutions like KEDA/KNative
+	AutoFreezeAndResume AutoFreezeAndResume `json:"autoFreezeAndResume,omitempty"`
+
+	// Hypervisor will move low priority jobs to pending queue if GPU is full
+	// This config can adjust hypervisor's queueing behavior to balance the co-scheduling CUDA calls
 	MultiProcessQueuing MultiProcessQueuing `json:"multiProcessQueuing,omitempty"`
 }
 

@@ -22,16 +22,20 @@ import (
 	"strconv"
 	"sync"
 
+	"golang.org/x/time/rate"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider"
@@ -69,16 +73,6 @@ type TensorFusionClusterReconciler struct {
 // Reconcile a TensorFusionCluster object, create and monitor GPU Pool, managing cluster level component versions
 func (r *TensorFusionClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
-
-	runNow, _, waitTime := utils.DebouncedReconcileCheck(ctx, &r.LastProcessedItems, req.NamespacedName)
-	// If delete event happen during wait time and no other event trigger reconciliation, it will not be deleted
-	// if alreadyQueued {
-	// 	return ctrl.Result{}, nil
-	// }
-	if !runNow {
-		return ctrl.Result{RequeueAfter: waitTime}, nil
-	}
-
 	log.Info("Reconciling TensorFusionCluster", "name", req.Name)
 	defer func() {
 		log.Info("Finished reconciling TensorFusionCluster", "name", req.Name)
@@ -423,6 +417,20 @@ func (r *TensorFusionClusterReconciler) updateTFClusterStatus(ctx context.Contex
 // SetupWithManager sets up the controller with the Manager.
 func (r *TensorFusionClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{
+			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(
+				workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
+					constants.LowFrequencyObjFailureInitialDelay,
+					constants.LowFrequencyObjFailureMaxDelay,
+				),
+				&workqueue.TypedBucketRateLimiter[reconcile.Request]{
+					Limiter: rate.NewLimiter(rate.Limit(
+						constants.LowFrequencyObjFailureMaxRPS),
+						constants.LowFrequencyObjFailureMaxBurst),
+				},
+			),
+			MaxConcurrentReconciles: constants.LowFrequencyObjFailureConcurrentReconcile,
+		}).
 		For(&tfv1.TensorFusionCluster{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("tensorfusioncluster").
 		Owns(&tfv1.GPUPool{}).

@@ -167,6 +167,7 @@ const TFDataPath = "/tmp/tensor-fusion/data"
 const DataVolumeName = "tf-data"
 const TensorFusionPoolManualCompaction = Domain + "/manual-compaction"
 const AlertJobName = "tensor-fusion"
+const HypervisorSchedulingConfigEnv = "TF_HYPERVISOR_SCHEDULING_CONFIG"
 
 const (
 	LeaderInfoConfigMapName        = "tensor-fusion-operator-leader-info"
@@ -176,3 +177,11 @@ const (
 const ShortUUIDAlphabet = "123456789abcdefghijkmnopqrstuvwxy"
 const NvidiaVisibleAllDeviceEnv = "NVIDIA_VISIBLE_DEVICES"
 const NvidiaVisibleAllDeviceValue = "all"
+
+const (
+	LowFrequencyObjFailureInitialDelay        = 100 * time.Millisecond
+	LowFrequencyObjFailureMaxDelay            = 1000 * time.Second
+	LowFrequencyObjFailureMaxRPS              = 1
+	LowFrequencyObjFailureMaxBurst            = 1
+	LowFrequencyObjFailureConcurrentReconcile = 5
+)

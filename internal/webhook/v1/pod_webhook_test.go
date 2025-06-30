@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -194,13 +195,14 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(resp.Patches).NotTo(BeEmpty())
 
 			// Check workload created
-			workload := &tfv1.TensorFusionWorkload{}
-			err = k8sClient.Get(ctx, client.ObjectKey{Name: "test-workload", Namespace: "default"}, workload)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(workload.Spec.Replicas).To(BeNil())
-			// check workload owner reference
-			Expect(workload.OwnerReferences).To(HaveLen(1))
-			Expect(workload.OwnerReferences[0].Name).To(Equal("test-workload"))
+			Eventually(func(g Gomega) error {
+				workload := &tfv1.TensorFusionWorkload{}
+				err = k8sClient.Get(ctx, client.ObjectKey{Name: "test-workload", Namespace: "default"}, workload)
+				g.Expect(workload.Spec.Replicas).To(BeNil())
+				g.Expect(workload.OwnerReferences).To(HaveLen(1))
+				g.Expect(workload.OwnerReferences[0].Name).To(Equal("test-workload"))
+				return err
+			}, 5*time.Second, 250*time.Millisecond).Should(Succeed())
 		})
 
 		It("should handle pods without TF requirements", func() {

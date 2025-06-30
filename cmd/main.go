@@ -64,10 +64,10 @@ import (
 )
 
 var (
-	scheme            = runtime.NewScheme()
-	setupLog          = ctrl.Log.WithName("setup")
-	autoScaleEnabled  = false
-	alertCanBeEnabled = false
+	scheme                = runtime.NewScheme()
+	setupLog              = ctrl.Log.WithName("setup")
+	autoScaleCanBeEnabled = false
+	alertCanBeEnabled     = false
 )
 
 const LeaderElectionID = "85104305.tensor-fusion.ai"
@@ -82,6 +82,7 @@ var gpuInfoConfig string
 var metricsPath string
 var nodeLevelPortRange string
 var clusterLevelPortRange string
+var enableAutoScale bool
 var enableAlert bool
 var alertManagerAddr string
 var timeSeriesDB *metrics.TimeSeriesDB
@@ -123,6 +124,8 @@ func main() {
 	flag.BoolVar(&enableAlert, "enable-alert", false, "if turn on alert, "+
 		"TensorFusion will generate alerts with built-in rules, alert rules are managed in"+
 		" configMap `tensor-fusion-alert-rules` of TensorFusion system namespace")
+	flag.BoolVar(&enableAutoScale, "enable-auto-scale", false, "if turn on auto scale, "+
+		"TensorFusion will auto scale vGPU TFlops and VRAM based on the usage and traffic")
 	flag.StringVar(&alertManagerAddr, "alert-manager-addr",
 		"alertmanager.tensor-fusion-sys.svc.cluster.local:9093",
 		"specify the alert manager address, TensorFusion will generate alerts with "+
@@ -198,9 +201,12 @@ func main() {
 
 	// global config includes metrics table ttl / alert rules
 	// when changed, handle with different functions
-	go setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
+	if enableAlert && enableAutoScale {
+		// connect TSDB only when any feature depends on it
+		go setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
+	}
 
-	if autoScaleEnabled {
+	if autoScaleCanBeEnabled && enableAutoScale {
 		// TODO init auto scale module
 		setupLog.Info("auto scale enabled")
 	}
@@ -437,7 +443,7 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 		if err := timeSeriesDB.SetupTables(mgr.GetClient()); err != nil {
 			setupLog.Error(err, "unable to init timeseries tables")
 		} else {
-			autoScaleEnabled = true
+			autoScaleCanBeEnabled = true
 			alertCanBeEnabled = true
 
 			setupLog.Info("time series db setup successfully.")

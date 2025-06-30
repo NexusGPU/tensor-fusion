@@ -1,5 +1,6 @@
 {
     "cSpell.words": [
+        "admissionv",
         "alertmanager",
         "alertname",
         "alicloud",
@@ -7,6 +8,7 @@
         "AMDCDNA",
         "AMDRDNA",
         "apimachinery",
+        "apimachineryruntime",
         "apiruntime",
         "apiutil",
         "automount",
@@ -126,6 +128,7 @@
         "vgpu",
         "webhookcorev",
         "workloadprofiles",
+        "workqueue",
         "Xlarge"
     ]
 }

@@ -27,16 +27,20 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/component"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	utils "github.com/NexusGPU/tensor-fusion/internal/utils"
+	"golang.org/x/time/rate"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // GPUPoolReconciler reconciles a GPUPool object
@@ -56,11 +60,6 @@ type GPUPoolReconciler struct {
 // Reconcile GPU pools
 func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
-
-	runNow, _, waitTime := utils.DebouncedReconcileCheck(ctx, &r.LastProcessedItems, req.NamespacedName)
-	if !runNow {
-		return ctrl.Result{RequeueAfter: waitTime}, nil
-	}
 
 	log.Info("Reconciling GPUPool", "name", req.Name)
 	defer func() {
@@ -283,6 +282,20 @@ func (r *GPUPoolReconciler) reconcilePoolComponents(ctx context.Context, pool *t
 // SetupWithManager sets up the controller with the Manager.
 func (r *GPUPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{
+			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(
+				workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
+					constants.LowFrequencyObjFailureInitialDelay,
+					constants.LowFrequencyObjFailureMaxDelay,
+				),
+				&workqueue.TypedBucketRateLimiter[reconcile.Request]{
+					Limiter: rate.NewLimiter(rate.Limit(
+						constants.LowFrequencyObjFailureMaxRPS),
+						constants.LowFrequencyObjFailureMaxBurst),
+				},
+			),
+			MaxConcurrentReconciles: constants.LowFrequencyObjFailureConcurrentReconcile,
+		}).
 		For(&tfv1.GPUPool{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("gpupool").
 		Owns(&tfv1.GPUNode{}).

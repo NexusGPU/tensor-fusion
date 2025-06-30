@@ -10,11 +10,9 @@ import (
 	"math/rand/v2"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	constants "github.com/NexusGPU/tensor-fusion/internal/constants"
-	"k8s.io/apimachinery/pkg/types"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -162,32 +160,6 @@ func GetObjectHash(objs ...any) string {
 func CompareAndGetObjectHash(hash string, obj ...any) (bool, string) {
 	newHash := GetObjectHash(obj...)
 	return hash != newHash, newHash
-}
-
-const DebounceKeySuffix = ":in_queue"
-
-func DebouncedReconcileCheck(ctx context.Context, lastProcessedItems *sync.Map, name types.NamespacedName) (runNow bool, alreadyQueued bool, waitTime time.Duration) {
-	now := time.Now()
-	key := name.String()
-	inQueueKey := key + DebounceKeySuffix
-
-	if val, exists := lastProcessedItems.Load(key); exists {
-		if lastProcessed, ok := val.(time.Time); ok {
-			elapsed := now.Sub(lastProcessed)
-			if elapsed < debounceInterval {
-				wait := debounceInterval - elapsed
-
-				if _, loaded := lastProcessedItems.LoadOrStore(inQueueKey, now); loaded {
-					return false, true, wait
-				}
-				return false, false, wait
-			}
-		}
-	}
-
-	lastProcessedItems.Delete(inQueueKey)
-	lastProcessedItems.Store(key, now)
-	return true, false, 0
 }
 
 func IsPodConditionTrue(conditions []corev1.PodCondition, conditionType corev1.PodConditionType) bool {

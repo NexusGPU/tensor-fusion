@@ -590,7 +590,7 @@ func verifyHypervisorUpdateProgress(tfEnv *TensorFusionEnv, progress int32) {
 		} else {
 			g.Expect(pool.Status.ComponentStatus.HypervisorConfigSynced).To(BeFalse())
 		}
-	}, 6*time.Second, 300*time.Millisecond).Should(Succeed())
+	}).Should(Succeed())
 }
 
 func verifyWorkerUpdateProgress(tfEnv *TensorFusionEnv, progress int32) {

@@ -103,7 +103,7 @@ spec:
                     type: object
                   autoSetRequests:
                     description: |-
-                      layer 3 adjusting, to match the actual usage in the long run
+                      layer 3 adjusting, to match the actual usage in the long run, only for N:M remote vGPU mode, not impl yet
                       Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
                     properties:
                       aggregationPeriod:
@@ -134,41 +134,6 @@ spec:
                         description: target resource to scale requests, such as "tflops",
                           "vram", or "all" by default
                         type: string
-                    type: object
-                  scaleToZero:
-                    description: |-
-                      additional layer to save VRAM, auto-freeze memory and cool down to RAM and Disk
-                      Hypervisor will monitor and trigger freeze of inactive workers, Operator should mark them as scaled-to-zero and release the GPU pool resources, don't scale down CPU client part, so that they can continue to serve the traffic or scale down by other auto-scaling solutions like KEDA/KNative
-                    properties:
-                      autoFreeze:
-                        items:
-                          properties:
-                            enable:
-                              type: boolean
-                            freezeToDiskTTL:
-                              type: string
-                            freezeToMemTTL:
-                              type: string
-                            qos:
-                              enum:
-                              - low
-                              - medium
-                              - high
-                              - critical
-                              type: string
-                          type: object
-                        type: array
-                      intelligenceWarmup:
-                        properties:
-                          enable:
-                            type: boolean
-                          historyDataPeriod:
-                            type: string
-                          model:
-                            type: string
-                          predictionPeriod:
-                            type: string
-                        type: object
                     type: object
                 type: object
               gpuCount:
