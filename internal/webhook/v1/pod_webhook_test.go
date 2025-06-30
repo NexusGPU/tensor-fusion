@@ -74,8 +74,15 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					Annotations: map[string]string{
 						constants.GpuPoolKey:                "mock",
 						constants.InjectContainerAnnotation: "main",
-						constants.WorkloadKey:               "test-workload-empty-ns",
-						constants.GenWorkloadAnnotation:     "true",
+					},
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: "apps/v1",
+							Kind:       "ReplicaSet",
+							Name:       "test-workload",
+							UID:        "owner-uid",
+							Controller: ptr.To(true),
+						},
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -145,8 +152,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.GpuPoolKey:                "mock",
 						constants.WorkloadProfileAnnotation: "test-profile-handle",
 						constants.InjectContainerAnnotation: "main",
-						constants.WorkloadKey:               "test-workload",
-						constants.GenWorkloadAnnotation:     "true",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -192,10 +197,10 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			workload := &tfv1.TensorFusionWorkload{}
 			err = k8sClient.Get(ctx, client.ObjectKey{Name: "test-workload", Namespace: "default"}, workload)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(*workload.Spec.Replicas).To(Equal(int32(1)))
+			Expect(workload.Spec.Replicas).To(BeNil())
 			// check workload owner reference
 			Expect(workload.OwnerReferences).To(HaveLen(1))
-			Expect(workload.OwnerReferences[0].Name).To(Equal("owner"))
+			Expect(workload.OwnerReferences[0].Name).To(Equal("test-workload"))
 		})
 
 		It("should handle pods without TF requirements", func() {
@@ -286,16 +291,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			}
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			// Update workload status
-			workload.Status.WorkerStatuses = []tfv1.WorkerStatus{
-				{
-					WorkerName:  "mock-worker",
-					WorkerPhase: tfv1.WorkerRunning,
-					NodeSelector: map[string]string{
-						"kubernetes.io/hostname": "mock-node",
-					},
-				},
-			}
 			Expect(k8sClient.Status().Update(ctx, workload)).To(Succeed())
 
 			// Create a pod with the local GPU profile
@@ -310,7 +305,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.GpuPoolKey:                "mock",
 						constants.WorkloadProfileAnnotation: "local-gpu-profile",
 						constants.InjectContainerAnnotation: "main",
-						constants.WorkloadKey:               "local-gpu-workload",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -420,7 +414,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.GpuPoolKey:                            "mock",
 						constants.WorkloadProfileAnnotation:             "test-profile-enabled-replicas",
 						constants.InjectContainerAnnotation:             "main",
-						constants.WorkloadKey:                           "test-workload",
 						constants.TensorFusionEnabledReplicasAnnotation: fmt.Sprintf("%d", enabledReplicas), // Using the correct constant
 					},
 					OwnerReferences: []metav1.OwnerReference{
@@ -509,7 +502,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					Annotations: map[string]string{
 						constants.GpuPoolKey:                "mock",
 						constants.WorkloadProfileAnnotation: "test-profile-parse-tf-resources",
-						constants.WorkloadKey:               "test-workload",
 						// override tflops request
 						constants.TFLOPSRequestAnnotation:               "20",
 						constants.InjectContainerAnnotation:             "test-container",
@@ -553,7 +545,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				Spec: *config.MockGPUPoolSpec,
 			}
 
-			patch, err := mutator.patchTFClient(pod, pool, []string{"test-container"}, nil)
+			patch, err := mutator.patchTFClient(pod, pool, []string{"test-container"}, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(patch).NotTo(BeEmpty())
 			// There should be at least 2 patches (initContainers and the container env patches)
@@ -592,11 +584,10 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				Spec: *config.MockGPUPoolSpec,
 			}
 			containerNames := []string{"bash-container", "zsh-container", "other-container"}
-			nodeSelector := map[string]string{}
 
 			// Call the function that includes the command transformation
 			mutator := &TensorFusionPodMutator{}
-			patches, err := mutator.patchTFClient(pod, pool, containerNames, nodeSelector)
+			patches, err := mutator.patchTFClient(pod, pool, containerNames, false)
 
 			// Verify results
 			Expect(err).NotTo(HaveOccurred())

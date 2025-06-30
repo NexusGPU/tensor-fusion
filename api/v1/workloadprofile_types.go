@@ -57,11 +57,7 @@ type WorkloadProfileSpec struct {
 	GPUModel string `json:"gpuModel,omitempty"`
 
 	// The number of GPUs to be used by the workload, default to 1
-	GPUCount uint `json:"gpuCount,omitempty"`
-
-	// +optional
-	// This mode is only available when `is-local-gpu` set to true, in this mode, TensorFusion will also inject vGPU worker into init container, so that to achieve best performance, trade-off is user might by-pass the vGPU worker and using physical GPU directly
-	StandaloneWorkerMode bool `json:"standaloneWorkerMode,omitempty"`
+	GPUCount uint32 `json:"gpuCount,omitempty"`
 
 	// +optional
 	// AutoScalingConfig configured here will override Pool's schedulingConfig
@@ -72,6 +68,10 @@ type WorkloadProfileSpec struct {
 	// +optional
 	// NodeAffinity specifies the node affinity requirements for the workload
 	NodeAffinity *v1.NodeAffinity `json:"nodeAffinity,omitempty"`
+}
+
+func (t WorkloadProfileSpec) IsDynamicReplica() bool {
+	return t.Replicas == nil
 }
 
 // WorkloadProfileStatus defines the observed state of WorkloadProfile.

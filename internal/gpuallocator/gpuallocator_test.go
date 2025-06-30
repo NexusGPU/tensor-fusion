@@ -17,6 +17,7 @@ limitations under the License.
 package gpuallocator
 
 import (
+	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -27,30 +28,40 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var workloadNameNs = tfv1.NameNamespace{Namespace: "default", Name: "test-workload"}
 
+var testPodMeta = metav1.ObjectMeta{UID: "test-pod", Namespace: "default", Name: "test-pod"}
+
 var _ = Describe("GPU Allocator", func() {
 	var allocator *GpuAllocator
+	var mutex sync.Mutex
 
 	allocateAndSync := func(poolName string, request tfv1.Resource, count uint, gpuModel string) ([]*tfv1.GPU, error) {
-		gpus, err := allocator.Alloc(ctx, AllocRequest{
+		mutex.Lock()
+		defer mutex.Unlock()
+		gpus, err := allocator.Alloc(&tfv1.AllocRequest{
 			PoolName:              poolName,
 			WorkloadNameNamespace: workloadNameNs,
 			Request:               request,
-			Count:                 count,
-			GPUModel:              gpuModel,
+			// use same limits as requests during unit testing
+			Limit:    request,
+			Count:    count,
+			GPUModel: gpuModel,
+
+			PodMeta: testPodMeta,
 		})
 		allocator.syncToK8s(ctx)
 		return gpus, err
 	}
 
-	deallocateAndSync := func(gpus []*tfv1.GPU, request tfv1.Resource) {
-		allocator.Dealloc(ctx, workloadNameNs, request, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) types.NamespacedName {
-			return client.ObjectKeyFromObject(gpu)
-		}))
+	deallocateAndSync := func(gpus []*tfv1.GPU) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		allocator.Dealloc(workloadNameNs, lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
+			return gpu.Name
+		}), testPodMeta)
 		allocator.syncToK8s(ctx)
 	}
 
@@ -190,7 +201,7 @@ var _ = Describe("GPU Allocator", func() {
 			allocatedVram := allocatedGPU.Status.Available.Vram.DeepCopy()
 
 			// Now deallocate
-			deallocateAndSync(gpus, request)
+			deallocateAndSync(gpus)
 
 			// Verify resources were restored
 			deallocatedGPU := getGPU(allocatedGPU.Name)
@@ -243,7 +254,7 @@ var _ = Describe("GPU Allocator", func() {
 			}
 
 			// Now deallocate all GPUs including the non-existent one
-			deallocateAndSync(gpusToDealloc, request)
+			deallocateAndSync(gpusToDealloc)
 
 			// Verify resources were restored for existing GPUs
 			for _, allocatedGPU := range allocatedGPUs {
@@ -252,6 +263,75 @@ var _ = Describe("GPU Allocator", func() {
 				Expect(deallocatedGPU.Status.Available.Tflops.Cmp(initialState.tflops)).To(Equal(1))
 				Expect(deallocatedGPU.Status.Available.Vram.Cmp(initialState.vram)).To(Equal(1))
 			}
+		})
+	})
+
+	Context("GPU AutoScale", func() {
+		It("should scale up GPUs", func() {
+			request := tfv1.Resource{
+				Tflops: resource.MustParse("50"),
+				Vram:   resource.MustParse("10Gi"),
+			}
+			gpus, err := allocateAndSync("test-pool", request, 1, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gpus).To(HaveLen(1))
+
+			gpu := getGPU(gpus[0].Name)
+			remain, err := allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+				PodUID:    string(testPodMeta.UID),
+				IsScaleUp: true,
+				NewRequest: tfv1.Resource{
+					Tflops: resource.MustParse("300"),
+					Vram:   resource.MustParse("30Gi"),
+				},
+				NewLimit: tfv1.Resource{
+					Tflops: resource.MustParse("400"),
+					Vram:   resource.MustParse("40Gi"),
+				},
+			}, true)
+
+			Expect(IsScalingQuotaExceededError(err)).To(BeTrue())
+			Expect(remain.Tflops.Value()).To(BeEquivalentTo(gpu.Status.Available.Tflops.Value()))
+			Expect(remain.Vram.Value()).To(BeEquivalentTo(gpu.Status.Available.Vram.Value()))
+
+			_, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+				PodUID:    string(testPodMeta.UID),
+				IsScaleUp: true,
+				NewRequest: tfv1.Resource{
+					Tflops: resource.MustParse("90"),
+					Vram:   resource.MustParse("15Gi"),
+				},
+			}, false)
+			Expect(err).NotTo(HaveOccurred())
+
+			allocator.syncToK8s(ctx)
+
+			// get actual available resources
+			latestGPU := getGPU(gpus[0].Name)
+			Expect(gpu.Status.Available.Tflops.Value() - latestGPU.Status.Available.Tflops.Value()).
+				To(BeEquivalentTo(40))
+			Expect(gpu.Status.Available.Vram.Value() - latestGPU.Status.Available.Vram.Value()).
+				To(BeEquivalentTo(5 * 1024 * 1024 * 1024))
+
+			// test scale down
+			_, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+				PodUID:    string(testPodMeta.UID),
+				IsScaleUp: false,
+				NewRequest: tfv1.Resource{
+					Tflops: resource.MustParse("10"),
+					Vram:   resource.MustParse("1Gi"),
+				},
+			}, false)
+			Expect(err).NotTo(HaveOccurred())
+
+			allocator.syncToK8s(ctx)
+
+			// get actual available resources
+			latestGPU = getGPU(gpus[0].Name)
+			Expect(gpu.Status.Available.Tflops.Value() - latestGPU.Status.Available.Tflops.Value()).
+				To(BeEquivalentTo(-40))
+			Expect(gpu.Status.Available.Vram.Value() - latestGPU.Status.Available.Vram.Value()).
+				To(BeEquivalentTo(-9 * 1024 * 1024 * 1024))
 		})
 	})
 

@@ -20,12 +20,16 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	v1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
+	"github.com/lithammer/shortuuid/v4"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -35,6 +39,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
@@ -43,6 +48,7 @@ import (
 type PodReconciler struct {
 	client.Client
 	Scheme        *runtime.Scheme
+	Allocator     *gpuallocator.GpuAllocator
 	PortAllocator *portallocator.PortAllocator
 }
 
@@ -50,6 +56,7 @@ type PodReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=pods/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create;get;update;patch
 // +kubebuilder:rbac:groups=core,resources=pods/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=pods/binding,verbs=update
 
 // Add GPU connection for Pods using GPU
 // Have to create TensorFusion connection here because pod UID not available in MutatingWebhook
@@ -63,6 +70,27 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		log.Error(err, "Failed to get Pod")
 		return ctrl.Result{}, err
 	}
+	// avoid possible nil pointer error
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+
+	// check if need to set owner reference
+	if ownedWorkloadName, ok := pod.Annotations[constants.SetPendingOwnedWorkloadAnnotation]; ok {
+		log.Info("Setting pending owned workload", "pod", pod.Name, "ownedWorkload", ownedWorkloadName)
+		if err := r.setPendingOwnedWorkload(ctx, pod, ownedWorkloadName); err != nil {
+			if errors.IsNotFound(err) {
+				log.Error(err, "Orphaned pod, failed to set pending owned workload because owner not found",
+					"pod", pod.Name, "ownedWorkload", ownedWorkloadName)
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, err
+		}
+		delete(pod.Annotations, constants.SetPendingOwnedWorkloadAnnotation)
+		if err := r.Update(ctx, pod); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 
 	// Release cluster level port when Pod deleted
 	if !pod.DeletionTimestamp.IsZero() {
@@ -72,21 +100,9 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			log.Info("Released port", "pod", pod.Name, "port", podPortNumber)
 		}
 	}
-	// generate tensor fusion connections and apply to cluster
-	tfConnection := generateTensorFusionConnection(pod)
-	if tfConnection == nil {
-		// not a tf client pod skipped
-		return ctrl.Result{}, nil
-	}
 
-	if _, ok := pod.Annotations[constants.TensorFusionEnabledReplicasAnnotation]; ok {
-		shouldReturn, err := utils.HandleFinalizer(ctx, pod, r.Client, func(context context.Context, pod *corev1.Pod) (bool, error) {
-			counter := &v1.TensorFusionPodCounter{Client: r.Client}
-			if err := counter.Decrease(ctx, pod); err != nil {
-				return false, err
-			}
-			return true, nil
-		})
+	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
+		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -95,16 +111,53 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 	}
 
-	existConn := &tfv1.TensorFusionConnection{}
-	if err := r.Get(ctx, types.NamespacedName{Name: tfConnection.Name, Namespace: tfConnection.Namespace}, existConn); err != nil {
-		if errors.IsNotFound(err) {
-			if err := r.Create(ctx, tfConnection); err != nil {
-				return ctrl.Result{}, fmt.Errorf("create connection(%s) : %w", tfConnection.Namespace+"/"+tfConnection.Name, err)
+	// generate tensor fusion connections and apply to cluster
+	if pod.Labels[constants.LabelComponent] == constants.ComponentClient {
+		tfConnection := generateTensorFusionConnection(pod)
+		if tfConnection == nil {
+			log.Info("Pod is not a TensorFusion client, skipped, this should never happen", "pod", pod.Name)
+			return ctrl.Result{}, nil
+		}
+
+		existConn := &tfv1.TensorFusionConnection{}
+		if err := r.Get(ctx, types.NamespacedName{Name: tfConnection.Name, Namespace: tfConnection.Namespace}, existConn); err != nil {
+			if errors.IsNotFound(err) {
+				if err := r.Create(ctx, tfConnection); err != nil {
+					return ctrl.Result{}, fmt.Errorf("create connection(%s) : %w", tfConnection.Namespace+"/"+tfConnection.Name, err)
+				}
 			}
 		}
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *PodReconciler) handleWorkerPodFinalizer(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	// Handle our GPU resource cleanup finalizer
+	shouldReturn, err := utils.HandleFinalizer(ctx, pod, r.Client, func(ctx context.Context, obj *corev1.Pod) (bool, error) {
+		metrics.RemoveWorkerMetrics(pod.Name, pod.DeletionTimestamp.Time)
+		counter := &v1.TensorFusionPodCounter{Client: r.Client}
+		if err := counter.Decrease(ctx, pod); err != nil {
+			return false, err
+		}
+		return r.handlePodGPUCleanup(ctx, pod)
+
+	})
+	if err != nil {
+		return false, err
+	}
+	return shouldReturn, nil
+}
+
+func (r *PodReconciler) setPendingOwnedWorkload(ctx context.Context, pod *corev1.Pod, ownedWorkloadName string) error {
+	tfWorkload := &tfv1.TensorFusionWorkload{}
+	if err := r.Get(ctx, types.NamespacedName{Name: ownedWorkloadName, Namespace: pod.Namespace}, tfWorkload); err != nil {
+		return err
+	}
+	if err := controllerutil.SetControllerReference(pod, tfWorkload, r.Scheme); err != nil {
+		return err
+	}
+	return r.Update(ctx, tfWorkload)
 }
 
 func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnection {
@@ -134,6 +187,7 @@ func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnectio
 		},
 		Spec: tfv1.TensorFusionConnectionSpec{
 			WorkloadName: workloadName,
+			ClientPod:    pod.Name,
 		},
 	}
 	return connection
@@ -142,8 +196,12 @@ func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnectio
 // SetupWithManager sets up the controller with the Manager.
 func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	p, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
-		MatchLabels: map[string]string{
-			constants.Domain + "/enabled": "true",
+		MatchExpressions: []metav1.LabelSelectorRequirement{
+			{
+				Key:      constants.LabelComponent,
+				Operator: metav1.LabelSelectorOpIn,
+				Values:   []string{constants.ComponentClient, constants.ComponentWorker},
+			},
 		},
 	})
 	if err != nil {
@@ -177,4 +235,44 @@ func findConnectionNameNamespace(pod *corev1.Pod) client.ObjectKey {
 		break
 	}
 	return connectionNameNamespace
+}
+
+// handlePodGPUCleanup handles the cleanup of GPU resources when a pod is being deleted
+func (r *PodReconciler) handlePodGPUCleanup(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	log := log.FromContext(ctx)
+	log.Info("Processing pod with GPU resource cleanup finalizer", "pod", pod.Name)
+
+	pod.Annotations[constants.GpuReleasedAnnotation] = shortuuid.New()
+
+	// Update the annotation of the Pod to mark that GPU cleanup has been successfully processed.
+	// This is a key part of ensuring idempotency for the handlePodGPUCleanup function.
+	// If this function is called again for the same Pod instance (e.g., due to the client cache
+	// not yet reflecting the finalizer's removal), Then this r.Update pod will fail.
+	// Will not cause duplicate releases
+	if err := r.Update(ctx, pod); err != nil {
+		log.Error(err, "Failed to mark that GPU cleanup of pod")
+		return false, err
+	}
+
+	// read the GPU names from the pod annotations
+	gpuNamesStr, ok := pod.Annotations[constants.GpuKey]
+	if !ok {
+		log.Info("Pod has finalizer but no GPU label", "pod", pod.Name)
+		return true, nil
+	}
+
+	// Split GPU names by comma
+	gpuNames := strings.Split(gpuNamesStr, ",")
+	gpus := lo.Map(gpuNames, func(gpuName string, _ int) string {
+		return gpuName
+	})
+
+	r.Allocator.Dealloc(
+		tfv1.NameNamespace{Name: pod.Labels[constants.WorkloadKey], Namespace: pod.Namespace},
+		gpus,
+		pod.ObjectMeta,
+	)
+	log.Info("Released GPU resources via finalizer", "gpus", gpus, "pod", pod.Name)
+
+	return true, nil
 }

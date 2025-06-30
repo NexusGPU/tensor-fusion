@@ -44,10 +44,6 @@ var jobStarted sync.Map
 // Strategy #3: check if any node can be reduced to 1/2 size. for remaining nodes, check if allocated size < 1/2 * total size, if so, check if can buy smaller instance
 
 // Strategy #4: check if any two same nodes can be merged into one larger node, and make the remained capacity bigger and node number less without violating the capacity constraint and saving the hidden management,license,monitoring costs, potentially schedule more workloads since remaining capacity is single cohesive piece rather than fragments
-
-// Add adds the provide y quantity to the current value. If the current value is zero,
-// the format of the quantity will be updated to the format of y.
-
 func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, pool *tfv1.GPUPool) error {
 	log := log.FromContext(ctx)
 

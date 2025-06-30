@@ -5,6 +5,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/samber/lo"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // PhaseFilter filters GPUs based on their operational phase
@@ -20,8 +21,15 @@ func NewPhaseFilter(allowedPhases ...tfv1.TensorFusionGPUPhase) *PhaseFilter {
 }
 
 // Filter implements GPUFilter.Filter
-func (f *PhaseFilter) Filter(_ context.Context, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
-	return lo.Filter(gpus, func(gpu tfv1.GPU, _ int) bool {
-		return lo.Contains(f.allowedPhases, gpu.Status.Phase)
-	}), nil
+func (f *PhaseFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
+	validPhase := 0
+	filteredGPUs := lo.Filter(gpus, func(gpu tfv1.GPU, _ int) bool {
+		ok := lo.Contains(f.allowedPhases, gpu.Status.Phase)
+		if ok {
+			validPhase = validPhase + 1
+		}
+		return ok
+	})
+	log.FromContext(ctx).V(6).Info("PhaseFilter", "validPhase", validPhase, "total", len(gpus), "workerPodKey", workerPodKey)
+	return filteredGPUs, nil
 }

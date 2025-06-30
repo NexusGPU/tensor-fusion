@@ -39,6 +39,7 @@ rules:
   - ""
   resources:
   - nodes/finalizers
+  - pods/binding
   - pods/finalizers
   verbs:
   - update

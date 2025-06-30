@@ -29,26 +29,31 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/klog/v2"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/cmd/sched"
 	"github.com/NexusGPU/tensor-fusion/internal/alert"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/controller"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
+	gpuResourceFitPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
+	gpuTopoPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gputopo"
 	"github.com/NexusGPU/tensor-fusion/internal/server"
 	"github.com/NexusGPU/tensor-fusion/internal/server/router"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -83,6 +88,7 @@ var timeSeriesDB *metrics.TimeSeriesDB
 var dynamicConfigPath string
 var globalConfig config.GlobalConfig
 var alertEvaluator *alert.AlertEvaluator
+var schedulerConfigPath string
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -106,6 +112,8 @@ func main() {
 		"/etc/tensor-fusion/gpu-info.yaml", "specify the path to gpuInfoConfig file")
 	flag.StringVar(&dynamicConfigPath, "dynamic-config",
 		"/etc/tensor-fusion/config.yaml", "specify the path to dynamic config file")
+	flag.StringVar(&schedulerConfigPath, "scheduler-config", "/etc/tensor-fusion/scheduler-config.yaml",
+		"specify the path to TensorFusion scheduler config file")
 	flag.StringVar(&metricsPath, "metrics-path", "/logs/metrics.log", "specify the path to metrics file")
 	flag.StringVar(&nodeLevelPortRange, "host-port-range", "40000-42000",
 		"specify the port range for assigning ports to pre-scheduled Pods such as vGPU workers")
@@ -121,13 +129,9 @@ func main() {
 			"built-in rules if enabled alert, you can configure routers and receivers "+
 			"in your own alertmanager config, "+
 			"refer https://prometheus.io/docs/alerting/latest/configuration")
-	opts := zap.Options{
-		Development: true,
-	}
-	opts.BindFlags(flag.CommandLine)
-	flag.Parse()
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	flag.Parse()
+	ctrl.SetLogger(klog.NewKlogr())
 	ctx := context.Background()
 
 	// print version info
@@ -244,10 +248,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+	if os.Getenv(constants.EnableWebhookEnv) != "false" {
 		if err = webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
+			os.Exit(1)
+		}
+	}
+
+	if os.Getenv(constants.EnableSchedulerEnv) != "false" {
+		if schedulerConfigPath == "" {
+			setupLog.Error(err, "scheduler config path is empty, please and --scheduler-config in command line")
+			os.Exit(1)
+		}
+
+		gpuResourceFitOpt := app.WithPlugin(
+			gpuResourceFitPlugin.Name,
+			gpuResourceFitPlugin.NewWithDeps(allocator, mgr.GetClient()),
+		)
+		gpuTopoOpt := app.WithPlugin(
+			gpuTopoPlugin.Name,
+			gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
+		)
+
+		cc, scheduler, err := sched.SetupScheduler(ctx, mgr, schedulerConfigPath, gpuResourceFitOpt, gpuTopoOpt)
+		if err != nil {
+			setupLog.Error(err, "unable to create tensor fusion scheduler")
+			os.Exit(1)
+		}
+
+		if err := sched.RunScheduler(ctx, cc, scheduler); err != nil {
+			setupLog.Error(err, "unable to run tensor fusion scheduler")
 			os.Exit(1)
 		}
 	}
@@ -305,6 +335,7 @@ func main() {
 	if err = (&controller.PodReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
+		Allocator:     allocator,
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod")
@@ -329,9 +360,7 @@ func main() {
 	if err = (&controller.TensorFusionWorkloadReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
-		Allocator:     allocator,
 		Recorder:      mgr.GetEventRecorderFor("tensorfusionworkload"),
-		GpuInfos:      &gpuInfos,
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionWorkload")
@@ -341,6 +370,8 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("GPUResourceQuota"),
+
+		QuotaStore: allocator.GetQuotaStore(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUResourceQuota")
 		os.Exit(1)
@@ -356,12 +387,7 @@ func main() {
 	}
 
 	// Initialize and start the HTTP server
-	client, err := client.NewWithWatch(kc, client.Options{Scheme: scheme})
-	if err != nil {
-		setupLog.Error(err, "failed to create client with watch")
-		os.Exit(1)
-	}
-	connectionRouter, err := router.NewConnectionRouter(ctx, client)
+	connectionRouter, err := router.NewConnectionRouter(ctx, mgr.GetClient().(client.WithWatch))
 	if err != nil {
 		setupLog.Error(err, "failed to create connection router")
 		os.Exit(1)

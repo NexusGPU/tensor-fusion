@@ -19,7 +19,7 @@ func NewGPUModelFilter(model string) *GPUModelFilter {
 }
 
 // Filter implements GPUFilter interface
-func (f *GPUModelFilter) Filter(ctx context.Context, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
+func (f *GPUModelFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
 	if f.requiredModel == "" {
 		return gpus, nil
 	}

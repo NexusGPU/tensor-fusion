@@ -295,6 +295,9 @@ func (r *TensorFusionClusterReconciler) reconcileGPUPool(ctx context.Context, tf
 				ObjectMeta: metav1.ObjectMeta{
 					Name:   key,
 					Labels: poolLabels,
+					Annotations: map[string]string{
+						constants.TensorFusionDefaultPoolKeyAnnotation: strconv.FormatBool(poolSpec.IsDefault),
+					},
 				},
 				Spec: poolSpec.SpecTemplate,
 			}
@@ -312,8 +315,16 @@ func (r *TensorFusionClusterReconciler) reconcileGPUPool(ctx context.Context, tf
 			}
 		} else {
 			// Update existing GPUPool if spec changed
-			if !equality.Semantic.DeepEqual(&existingPool.Spec, &poolSpec.SpecTemplate) {
+			specChanged := !equality.Semantic.DeepEqual(&existingPool.Spec, &poolSpec.SpecTemplate)
+			defaultPoolChanged := existingPool.Annotations == nil ||
+				existingPool.Annotations[constants.TensorFusionDefaultPoolKeyAnnotation] != strconv.FormatBool(poolSpec.IsDefault)
+
+			if specChanged || defaultPoolChanged {
 				existingPool.Spec = poolSpec.SpecTemplate
+				if existingPool.Annotations == nil {
+					existingPool.Annotations = make(map[string]string)
+				}
+				existingPool.Annotations[constants.TensorFusionDefaultPoolKeyAnnotation] = strconv.FormatBool(poolSpec.IsDefault)
 				err = r.Update(ctx, existingPool)
 				if err != nil {
 					errors = append(errors, fmt.Errorf("failed to update GPUPool %s: %w", key, err))

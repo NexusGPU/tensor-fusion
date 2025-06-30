@@ -105,16 +105,15 @@ type ProvisioningMode string
 
 const (
 	ProvisioningModeProvisioned ProvisioningMode = "Provisioned"
-	ProvisioningModeAutoSelect  ProvisioningMode = "AutoSelect"
+
+	ProvisioningModeAutoSelect ProvisioningMode = "AutoSelect"
+
+	ProvisioningModeKarpenter ProvisioningMode = "Karpenter"
 )
 
 // NodeProvisioner or NodeSelector, they are exclusive.
 // NodeSelector is for existing GPUs, NodeProvisioner is for Karpenter-like auto management.
 type NodeProvisioner struct {
-	// Mode could be Karpenter or Native, for Karpenter mode, node provisioner will start dummy nodes to provision and warmup GPU nodes, do nothing for CPU nodes, for Native mode, provisioner will create or compact GPU & CPU nodes based on current pods
-	// +kubebuilder:default=Native
-	Mode NodeProvisionerMode `json:"mode,omitempty"`
-
 	NodeClass string `json:"nodeClass,omitempty"`
 
 	// +optional
@@ -157,14 +156,6 @@ type BudgetExceedStrategy string
 const (
 	BudgetExceedStrategyAlertOnly           BudgetExceedStrategy = "AlertOnly"
 	BudgetExceedStrategyAlertAndTerminateVM BudgetExceedStrategy = "AlertAndTerminateVM"
-)
-
-// +kubebuilder:validation:Enum=Native;Karpenter
-type NodeProvisionerMode string
-
-const (
-	NodeProvisionerModeNative    NodeProvisionerMode = "Native"
-	NodeProvisionerModeKarpenter NodeProvisionerMode = "Karpenter"
 )
 
 type Requirement struct {
@@ -347,6 +338,9 @@ type ClientConfig struct {
 
 	// +optional
 	PatchToContainer *runtime.RawExtension `json:"patchToContainer,omitempty"`
+
+	// +optional
+	PatchEmbeddedWorkerToPod *runtime.RawExtension `json:"patchEmbeddedWorkerToPod,omitempty"`
 }
 
 // GPUPoolStatus defines the observed state of GPUPool.

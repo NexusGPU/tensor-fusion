@@ -1,0 +1,53 @@
+apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+clientConnection:
+  kubeconfig: $HOME/.kube/config
+profiles:
+# Refer: https://kubernetes.io/docs/reference/scheduling/config/
+- schedulerName: tensor-fusion-scheduler
+  plugins:
+    preFilter:
+      enabled:
+      - name: GPUResourcesFit
+    filter:
+      enabled:
+      - name: GPUResourcesFit
+      - name: GPUNetworkTopologyAware
+    score:
+      enabled:
+      - name: GPUResourcesFit
+        weight: 5
+    preBind:
+      enabled:
+      - name: GPUResourcesFit
+  pluginConfig:
+  - name: GPUResourcesFit
+    args:
+      maxWorkerPerNode: 256
+      vramWeight: 0.7
+      tflopsWeight: 0.3
+  - name: GPUNetworkTopologyAware
+    args:
+      # Avoid the remote TFWorker RX/TX to avoid single node consume too much bandwidth
+      # Need enable monitor to take effect
+      totalIntranetBandWidthGBps: 100
+  - name: NodeResourcesFit
+    args:
+      scoringStrategy:
+        resources:
+        - name: cpu
+          weight: 1
+        - name: memory
+          weight: 1
+        requestedToCapacityRatio:
+          shape:
+          - utilization: 0
+            score: 0
+          - utilization: 80
+            score: 100
+          - utilization: 90
+            score: 20
+          - utilization: 100
+            score: 0
+        type: RequestedToCapacityRatio
+

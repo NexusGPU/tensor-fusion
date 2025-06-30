@@ -92,14 +92,14 @@ var _ = Describe("GPUPool Controller", func() {
 				SetGpuCountPerNode(1).
 				Build()
 
-			By("configuring a large enougth batch inteval to prevent next update batch")
+			By("configuring a large enough batch interval to prevent next update batch")
 			updateRollingUpdatePolicy(tfEnv, true, 50, "10m")
 			newHash, oldHash := triggerHypervisorUpdate(tfEnv)
 			verifyHypervisorPodHash(tfEnv.GetGPUNode(0, 0), newHash)
 			verifyHypervisorPodHashConsistently(tfEnv.GetGPUNode(0, 1), oldHash)
 			verifyHypervisorUpdateProgressConsistently(tfEnv, 50)
 
-			By("changing the batch inteval to trigger next update batch")
+			By("changing the batch interval to trigger next update batch")
 			updateRollingUpdatePolicy(tfEnv, true, 50, "1s")
 			verifyHypervisorPodHash(tfEnv.GetGPUNode(0, 1), newHash)
 			verifyHypervisorUpdateProgress(tfEnv, 100)
@@ -113,7 +113,7 @@ var _ = Describe("GPUPool Controller", func() {
 				SetGpuCountPerNode(1).
 				Build()
 
-			By("configuring a large enougth batch inteval to prevent next update batch")
+			By("configuring a large enough batch interval to prevent next update batch")
 			updateRollingUpdatePolicy(tfEnv, true, 50, "10m")
 			newHash, oldHash := triggerHypervisorUpdate(tfEnv)
 			verifyHypervisorPodHash(tfEnv.GetGPUNode(0, 0), newHash)
@@ -204,7 +204,7 @@ var _ = Describe("GPUPool Controller", func() {
 				AddPoolWithNodeCount(1).
 				SetGpuCountPerNode(2).
 				Build()
-			updateRollingUpdatePolicy(tfEnv, true, 50, "1s")
+			updateRollingUpdatePolicy(tfEnv, true, 50, "200ms")
 			createWorkloads(tfEnv, 2)
 			triggerWorkerUpdate(tfEnv)
 			verifyAllWorkerPodContainerName(tfEnv, "updated-name")
@@ -218,7 +218,7 @@ var _ = Describe("GPUPool Controller", func() {
 				AddPoolWithNodeCount(1).
 				SetGpuCountPerNode(2).
 				Build()
-			updateRollingUpdatePolicy(tfEnv, true, 100, "1s")
+			updateRollingUpdatePolicy(tfEnv, true, 100, "500ms")
 			createWorkloads(tfEnv, 2)
 			triggerWorkerUpdate(tfEnv)
 			verifyAllWorkerPodContainerName(tfEnv, "updated-name")
@@ -262,7 +262,7 @@ var _ = Describe("GPUPool Controller", func() {
 
 			createClientPods(tfEnv, 2)
 
-			By("configuring a large enougth batch inteval to prevent next update batch")
+			By("configuring a large enough batch interval to prevent next update batch")
 			updateRollingUpdatePolicy(tfEnv, true, 50, "10m")
 			newHash, oldHash := triggerClientUpdate(tfEnv)
 
@@ -273,8 +273,8 @@ var _ = Describe("GPUPool Controller", func() {
 			verifyClientPodHashConsistently(1, oldHash)
 			verifyClientUpdateProgressConsistently(tfEnv, 50)
 
-			By("changing the batch inteval to trigger next update batch")
-			updateRollingUpdatePolicy(tfEnv, true, 50, "3s")
+			By("changing the batch interval to trigger next update batch")
+			updateRollingUpdatePolicy(tfEnv, true, 50, "1s")
 			verifyClientPodWasDeleted(1)
 			createClientPodByIndex(tfEnv, 1)
 			verifyClientPodHash(1, newHash)
@@ -290,7 +290,7 @@ var _ = Describe("GPUPool Controller", func() {
 				SetGpuCountPerNode(1).
 				Build()
 			ensureGpuPoolIsRunning(tfEnv)
-			updateRollingUpdatePolicy(tfEnv, true, 100, "3s")
+			updateRollingUpdatePolicy(tfEnv, true, 100, "300ms")
 			replicas := 2
 			createClientPods(tfEnv, replicas)
 			updateClientConfig(tfEnv)
@@ -676,7 +676,7 @@ func ensureGpuPoolIsRunning(tfEnv *TensorFusionEnv) {
 	}).Should(Succeed())
 }
 
-// no RepliaSet like controller in EnvTest, need to create by ourself
+// no ReplicaSet like controller in EnvTest, need to create by ourself
 func createClientPodByIndex(tfEnv *TensorFusionEnv, index int) {
 	GinkgoHelper()
 	pool := tfEnv.GetGPUPool(0)
@@ -754,7 +754,7 @@ func createWorkloads(tfEnv *TensorFusionEnv, count int) {
 		key := client.ObjectKey{Name: getWorkloadName(workloadIndex), Namespace: "default"}
 		replicas := 1
 		workload := createTensorFusionWorkload(pool.Name, key, replicas)
-		checkWorkerPodCount(workload)
+		_ = checkWorkerPodCount(workload)
 		checkWorkloadStatus(workload)
 	}
 }

@@ -36,8 +36,6 @@ type WorkerStatus struct {
 	// +optional
 	WorkerIp string `json:"workerIp,omitempty"`
 	// +optional
-	WorkerPort int `json:"workerPort,omitempty"`
-	// +optional
 	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 
@@ -64,10 +62,6 @@ type TensorFusionWorkloadStatus struct {
 
 	// readyReplicas is the number of pods created for this Workload with a Ready Condition.
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
-
-	// Represents the status of each worker in the workload.
-	// +optional
-	WorkerStatuses []WorkerStatus `json:"workerStatuses,omitempty"`
 
 	// Hash of the pod template used to create worker pods
 	PodTemplateHash string `json:"podTemplateHash,omitempty"`

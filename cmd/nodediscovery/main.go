@@ -259,7 +259,7 @@ func createOrUpdateTensorFusionGPU(
 			UUID:     uuid,
 			GPUModel: deviceName,
 			NodeSelector: map[string]string{
-				"kubernetes.io/hostname": k8sNodeName,
+				constants.KubernetesHostNameLabel: k8sNodeName,
 			},
 			RunningApps: []*tfv1.RunningAppDetail{},
 		}

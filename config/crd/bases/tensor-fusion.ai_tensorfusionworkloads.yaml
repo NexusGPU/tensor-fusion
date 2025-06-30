@@ -174,6 +174,7 @@ spec:
               gpuCount:
                 description: The number of GPUs to be used by the workload, default
                   to 1
+                format: int32
                 type: integer
               gpuModel:
                 description: GPUModel specifies the required GPU model (e.g., "A100",
@@ -440,12 +441,6 @@ spec:
                 - limits
                 - requests
                 type: object
-              standaloneWorkerMode:
-                description: This mode is only available when `is-local-gpu` set to
-                  true, in this mode, TensorFusion will also inject vGPU worker into
-                  init container, so that to achieve best performance, trade-off is
-                  user might by-pass the vGPU worker and using physical GPU directly
-                type: boolean
             type: object
           status:
             description: TensorFusionWorkloadStatus defines the observed state of
@@ -530,29 +525,6 @@ spec:
                   controller.
                 format: int32
                 type: integer
-              workerStatuses:
-                description: Represents the status of each worker in the workload.
-                items:
-                  properties:
-                    nodeSelector:
-                      additionalProperties:
-                        type: string
-                      type: object
-                    resourceVersion:
-                      type: string
-                    workerIp:
-                      type: string
-                    workerName:
-                      type: string
-                    workerPhase:
-                      type: string
-                    workerPort:
-                      type: integer
-                  required:
-                  - workerName
-                  - workerPhase
-                  type: object
-                type: array
             required:
             - replicas
             type: object

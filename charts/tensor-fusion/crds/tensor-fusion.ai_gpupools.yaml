@@ -193,6 +193,9 @@ spec:
                     properties:
                       operatorEndpoint:
                         type: string
+                      patchEmbeddedWorkerToPod:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
                       patchToContainer:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
@@ -386,17 +389,6 @@ spec:
                               type: string
                           type: object
                         type: array
-                      mode:
-                        default: Native
-                        description: Mode could be Karpenter or Native, for Karpenter
-                          mode, node provisioner will start dummy nodes to provision
-                          and warmup GPU nodes, do nothing for CPU nodes, for Native
-                          mode, provisioner will create or compact GPU & CPU nodes
-                          based on current pods
-                        enum:
-                        - Native
-                        - Karpenter
-                        type: string
                       nodeClass:
                         type: string
                     type: object

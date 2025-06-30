@@ -5,6 +5,12 @@ import (
 	"os"
 	"time"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	constants "github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/lithammer/shortuuid/v4"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/yaml"
 )
@@ -82,4 +88,33 @@ func GetEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
+	tflopsKey := constants.TFLOPSRequestAnnotation
+	vramKey := constants.VRAMRequestAnnotation
+	if !isRequest {
+		tflopsKey = constants.TFLOPSLimitAnnotation
+		vramKey = constants.VRAMLimitAnnotation
+	}
+	tflops, err := resource.ParseQuantity(pod.Annotations[tflopsKey])
+	if err != nil {
+		return tfv1.Resource{}, err
+	}
+	vram, err := resource.ParseQuantity(pod.Annotations[vramKey])
+	if err != nil {
+		return tfv1.Resource{}, err
+	}
+	return tfv1.Resource{
+		Tflops: tflops,
+		Vram:   vram,
+	}, nil
+}
+
+func NewShortID(length int) string {
+	id := shortuuid.NewWithAlphabet(constants.ShortUUIDAlphabet)
+	if length >= len(id) {
+		return id
+	}
+	return id[:length]
 }

@@ -2,12 +2,13 @@ package gpuallocator
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
-	"github.com/NexusGPU/tensor-fusion/internal/quota"
+	quota "github.com/NexusGPU/tensor-fusion/internal/quota"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
@@ -24,32 +25,13 @@ const (
 	TestNamespace = "test-ns"
 	TestPoolName  = "test-pool"
 	TestWorkload  = "test-workload"
+	TestQuotaName = "test-quota"
 )
 
-// Test helper functions
-//
-//nolint:unparam // Test helper - namespace parameter is consistent by design
-func createTestQuota(namespace string, tflops, vram int64, workers int32) *tfv1.GPUResourceQuota {
-	return &tfv1.GPUResourceQuota{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-quota",
-			Namespace: namespace,
-		},
-		Spec: tfv1.GPUResourceQuotaSpec{
-			Total: tfv1.GPUResourceQuotaTotal{
-				RequestsTFlops: resource.NewQuantity(tflops, resource.DecimalSI),
-				RequestsVRAM:   resource.NewQuantity(vram, resource.BinarySI),
-				LimitsTFlops:   resource.NewQuantity(tflops, resource.DecimalSI),
-				LimitsVRAM:     resource.NewQuantity(vram, resource.BinarySI),
-				Workers:        &workers,
-			},
-		},
-	}
-}
+var podMeta = metav1.ObjectMeta{Namespace: TestNamespace, Name: TestWorkload, UID: "test-pod"}
 
-//nolint:unparam // Test helper - namespace parameter is consistent by design
-func createAllocRequest(tflops, vram int64, count uint) AllocRequest {
-	return AllocRequest{
+func createAllocRequest(tflops, vram int64, count uint) *tfv1.AllocRequest {
+	return &tfv1.AllocRequest{
 		PoolName: TestPoolName,
 		WorkloadNameNamespace: tfv1.NameNamespace{
 			Namespace: TestNamespace,
@@ -59,18 +41,21 @@ func createAllocRequest(tflops, vram int64, count uint) AllocRequest {
 			Tflops: *resource.NewQuantity(tflops, resource.DecimalSI),
 			Vram:   *resource.NewQuantity(vram, resource.BinarySI),
 		},
+		Limit: tfv1.Resource{
+			Tflops: *resource.NewQuantity(tflops, resource.DecimalSI),
+			Vram:   *resource.NewQuantity(vram, resource.BinarySI),
+		},
 		Count: count,
 	}
 }
 
-//nolint:unparam // Test helper - pool parameter is consistent by design
-func createAvailableGPU(name, pool string, tflops, vram int64) tfv1.GPU {
+func createAvailableGPU(name string, tflops, vram int64) tfv1.GPU {
 	return tfv1.GPU{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			Labels: map[string]string{
 				constants.LabelKeyOwner: "node1",
-				constants.GpuPoolKey:    pool,
+				constants.GpuPoolKey:    TestPoolName,
 			},
 		},
 		Status: tfv1.GPUStatus{
@@ -88,11 +73,10 @@ func createAvailableGPU(name, pool string, tflops, vram int64) tfv1.GPU {
 	}
 }
 
-//nolint:unparam // Test helper - name parameter is consistent by design
-func createTestGPUPool(name string) *tfv1.GPUPool {
+func createTestGPUPool() *tfv1.GPUPool {
 	return &tfv1.GPUPool{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
+			Name: TestPoolName,
 		},
 		Spec: tfv1.GPUPoolSpec{},
 		Status: tfv1.GPUPoolStatus{
@@ -114,6 +98,7 @@ func createWorkerPod(namespace, name, tflops, vram string) v1.Pod {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
+			UID:       types.UID(fmt.Sprintf("%s-uid", name)),
 			Labels: map[string]string{
 				constants.LabelComponent: constants.ComponentWorker,
 				constants.WorkloadKey:    TestWorkload,
@@ -121,7 +106,14 @@ func createWorkerPod(namespace, name, tflops, vram string) v1.Pod {
 			Annotations: map[string]string{
 				constants.TFLOPSRequestAnnotation: tflops,
 				constants.VRAMRequestAnnotation:   vram,
+				constants.TFLOPSLimitAnnotation:   tflops,
+				constants.VRAMLimitAnnotation:     vram,
+				constants.GpuCountAnnotation:      "1",
+				constants.GpuPoolKey:              TestPoolName,
 			},
+		},
+		Spec: v1.PodSpec{
+			NodeName: "test-node", // Pods need to be scheduled
 		},
 		Status: v1.PodStatus{
 			Phase: v1.PodRunning,
@@ -131,22 +123,27 @@ func createWorkerPod(namespace, name, tflops, vram string) v1.Pod {
 
 // Shared test fixtures to reduce duplication
 type QuotaTestFixture struct {
-	quotaStore *QuotaStore
+	quotaStore *quota.QuotaStore
 	quota      *tfv1.GPUResourceQuota
-	entry      *QuotaStoreEntry
+	entry      *quota.QuotaStoreEntry
+}
+
+func initAllocator(t *testing.T, allocator *GpuAllocator) {
+	err := allocator.InitGPUAndQuotaStore()
+	require.NoError(t, err)
+	allocator.ReconcileAllocationState()
 }
 
 func setupQuotaTest(tflops, vram int64, workers int32) *QuotaTestFixture {
-	qs := NewQuotaStore(nil)
-	quotaObj := createTestQuota(TestNamespace, tflops, vram, workers)
+	qs := quota.NewQuotaStore(nil, context.Background())
+	quotaObj := createTestQuota(tflops, vram, workers)
 
 	calc := quota.NewCalculator()
-	entry := &QuotaStoreEntry{
-		quota:        quotaObj,
-		currentUsage: calc.CreateZeroUsage(),
-		available:    calc.CopyUsageToTotal(quotaObj),
+	entry := &quota.QuotaStoreEntry{
+		Quota:        quotaObj,
+		CurrentUsage: calc.CreateZeroUsage(),
 	}
-	qs.quotaStore[TestNamespace] = entry
+	qs.QuotaStore[TestNamespace] = entry
 
 	return &QuotaTestFixture{
 		quotaStore: qs,
@@ -161,11 +158,6 @@ func createZeroUsage() *tfv1.GPUResourceUsage {
 	return calc.CreateZeroUsage()
 }
 
-func createUsageFromQuota(quotaObj *tfv1.GPUResourceQuota) *tfv1.GPUResourceUsage {
-	calc := quota.NewCalculator()
-	return calc.CopyUsageToTotal(quotaObj)
-}
-
 // Common assertion helper
 type QuotaExpectation struct {
 	TFlops  int64
@@ -174,9 +166,9 @@ type QuotaExpectation struct {
 }
 
 func assertQuotaState(t *testing.T, usage *tfv1.GPUResourceUsage, expected QuotaExpectation, desc string) {
-	assert.Equal(t, expected.TFlops, usage.RequestsTFlops.Value(), "%s - TFlops mismatch", desc)
-	assert.Equal(t, expected.VRAM, usage.RequestsVRAM.Value(), "%s - VRAM mismatch", desc)
-	assert.Equal(t, expected.Workers, *usage.Workers, "%s - Workers mismatch", desc)
+	assert.Equal(t, expected.TFlops, usage.Requests.Tflops.Value(), "%s - TFlops mismatch", desc)
+	assert.Equal(t, expected.VRAM, usage.Requests.Vram.Value(), "%s - VRAM mismatch", desc)
+	assert.Equal(t, expected.Workers, usage.Workers, "%s - Workers mismatch", desc)
 }
 
 // Core QuotaStore Tests - Table-driven approach
@@ -201,11 +193,11 @@ func TestQuotaStore_BasicOperations(t *testing.T) {
 				count        uint
 			}{30, 300, 2},
 			expectError: false,
-			finalUsage:  QuotaExpectation{TFlops: 60, VRAM: 600, Workers: 2},
-			finalAvail:  QuotaExpectation{TFlops: 40, VRAM: 400, Workers: 8},
+			finalUsage:  QuotaExpectation{TFlops: 60, VRAM: 600, Workers: 1},
+			finalAvail:  QuotaExpectation{TFlops: 40, VRAM: 400, Workers: 9},
 			testFunc: func(t *testing.T, fixture *QuotaTestFixture) {
 				req := createAllocRequest(30, 300, 2)
-				err := fixture.quotaStore.checkQuotaAvailable(TestNamespace, req)
+				err := fixture.quotaStore.CheckQuotaAvailable(TestNamespace, req)
 				require.NoError(t, err)
 				fixture.quotaStore.AllocateQuota(TestNamespace, req)
 			},
@@ -220,9 +212,9 @@ func TestQuotaStore_BasicOperations(t *testing.T) {
 			expectError: true,
 			testFunc: func(t *testing.T, fixture *QuotaTestFixture) {
 				req := createAllocRequest(60, 600, 2)
-				err := fixture.quotaStore.checkQuotaAvailable(TestNamespace, req)
+				err := fixture.quotaStore.CheckQuotaAvailable(TestNamespace, req)
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "total.requests.tflops")
+				assert.Contains(t, err.Error(), "total.max.tflops.request")
 			},
 		},
 		{
@@ -238,7 +230,7 @@ func TestQuotaStore_BasicOperations(t *testing.T) {
 			testFunc: func(t *testing.T, fixture *QuotaTestFixture) {
 				req := createAllocRequest(30, 300, 2)
 				fixture.quotaStore.AllocateQuota(TestNamespace, req)
-				fixture.quotaStore.DeallocateQuota(TestNamespace, req.Request, int32(req.Count))
+				fixture.quotaStore.DeallocateQuota(TestNamespace, req)
 			},
 		},
 	}
@@ -250,10 +242,9 @@ func TestQuotaStore_BasicOperations(t *testing.T) {
 			tt.testFunc(t, fixture)
 
 			if !tt.expectError {
-				usage, available, exists := fixture.quotaStore.GetQuotaStatus(TestNamespace)
+				usage, exists := fixture.quotaStore.GetQuotaStatus(TestNamespace)
 				require.True(t, exists)
 				assertQuotaState(t, usage, tt.finalUsage, "final usage")
-				assertQuotaState(t, available, tt.finalAvail, "final available")
 			}
 		})
 	}
@@ -273,15 +264,17 @@ func TestQuotaStore_ConcurrentOperations(t *testing.T) {
 			defer wg.Done()
 			req := createAllocRequest(8, 80, 1)
 
-			fixture.quotaStore.storeMutex.Lock()
-			err := fixture.quotaStore.checkQuotaAvailable(TestNamespace, req)
+			// TODO
+			// fixture.quotaStore.storeMutex.Lock()
+			// defer fixture.quotaStore.storeMutex.Unlock()
+			err := fixture.quotaStore.CheckQuotaAvailable(TestNamespace, req)
 			if err == nil {
 				fixture.quotaStore.AllocateQuota(TestNamespace, req)
 				successes <- true
 			} else {
 				errors <- err
 			}
-			fixture.quotaStore.storeMutex.Unlock()
+
 		}()
 	}
 
@@ -298,61 +291,50 @@ func TestQuotaStore_ConcurrentOperations(t *testing.T) {
 
 func TestQuotaStore_BoundaryConditions(t *testing.T) {
 	tests := []struct {
-		name           string
-		quotaTFlops    int64
-		quotaVRAM      int64
-		quotaWorkers   int32
-		requestTFlops  int64
-		requestVRAM    int64
-		requestWorkers uint
-		expectError    bool
+		name          string
+		quotaTFlops   int64
+		quotaVRAM     int64
+		quotaWorkers  int32
+		requestTFlops int64
+		requestVRAM   int64
+		requestGPUs   uint
+		expectError   bool
 	}{
 		{
-			name:           "exact quota boundary",
-			quotaTFlops:    100,
-			quotaVRAM:      1000,
-			quotaWorkers:   10,
-			requestTFlops:  10,
-			requestVRAM:    100,
-			requestWorkers: 10,
-			expectError:    false,
+			name:          "exact quota boundary",
+			quotaTFlops:   100,
+			quotaVRAM:     1000,
+			quotaWorkers:  10,
+			requestTFlops: 10,
+			requestVRAM:   100,
+			requestGPUs:   10,
+			expectError:   false,
 		},
 		{
-			name:           "exceed quota by one worker",
-			quotaTFlops:    100,
-			quotaVRAM:      1000,
-			quotaWorkers:   10,
-			requestTFlops:  9,
-			requestVRAM:    90,
-			requestWorkers: 11,
-			expectError:    true,
-		},
-		{
-			name:           "zero quota allocation",
-			quotaTFlops:    0,
-			quotaVRAM:      0,
-			quotaWorkers:   0,
-			requestTFlops:  1,
-			requestVRAM:    1,
-			requestWorkers: 1,
-			expectError:    true,
+			name:          "zero quota allocation",
+			quotaTFlops:   0,
+			quotaVRAM:     0,
+			quotaWorkers:  0,
+			requestTFlops: 1,
+			requestVRAM:   1,
+			requestGPUs:   1,
+			expectError:   true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			qs := NewQuotaStore(nil)
-			quota := createTestQuota(TestNamespace, tt.quotaTFlops, tt.quotaVRAM, tt.quotaWorkers)
+			qs := quota.NewQuotaStore(nil, context.Background())
+			quotaObj := createTestQuota(tt.quotaTFlops, tt.quotaVRAM, tt.quotaWorkers)
 
-			entry := &QuotaStoreEntry{
-				quota:        quota,
-				currentUsage: createZeroUsage(),
-				available:    createUsageFromQuota(quota),
+			entry := &quota.QuotaStoreEntry{
+				Quota:        quotaObj,
+				CurrentUsage: createZeroUsage(),
 			}
-			qs.quotaStore[TestNamespace] = entry
+			qs.QuotaStore[TestNamespace] = entry
 
-			req := createAllocRequest(tt.requestTFlops, tt.requestVRAM, tt.requestWorkers)
-			err := qs.checkQuotaAvailable(TestNamespace, req)
+			req := createAllocRequest(tt.requestTFlops, tt.requestVRAM, tt.requestGPUs)
+			err := qs.CheckQuotaAvailable(TestNamespace, req)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -369,13 +351,13 @@ func TestGPUAllocator_QuotaIntegration(t *testing.T) {
 		scheme := runtime.NewScheme()
 		require.NoError(t, tfv1.AddToScheme(scheme))
 
-		quota := createTestQuota(TestNamespace, 100, 1000, 10)
+		quota := createTestQuota(100, 1000, 10)
 		gpus := []tfv1.GPU{
-			createAvailableGPU("gpu1", TestPoolName, 50, 500),
-			createAvailableGPU("gpu2", TestPoolName, 50, 500),
+			createAvailableGPU("gpu1", 50, 500),
+			createAvailableGPU("gpu2", 50, 500),
 		}
 
-		testPool := createTestGPUPool(TestPoolName)
+		testPool := createTestGPUPool()
 		allObjects := objectsFromGPUs(gpus)
 		allObjects = append(allObjects, testPool)
 
@@ -388,35 +370,32 @@ func TestGPUAllocator_QuotaIntegration(t *testing.T) {
 		ctx := context.Background()
 		allocator := NewGpuAllocator(ctx, client, 0)
 
-		err := allocator.initGPUAndQuotaStore(ctx)
-		require.NoError(t, err)
+		initAllocator(t, allocator)
 
 		req := createAllocRequest(30, 300, 2)
-		allocatedGPUs, err := allocator.Alloc(ctx, req)
+		req.PodMeta = podMeta
+		allocatedGPUs, err := allocator.Alloc(req)
 		require.NoError(t, err)
 		require.Len(t, allocatedGPUs, 2)
 
-		usage, available, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
+		usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
 		require.True(t, exists)
-		assert.Equal(t, int64(60), usage.RequestsTFlops.Value())
-		assert.Equal(t, int64(600), usage.RequestsVRAM.Value())
-		assert.Equal(t, int32(2), *usage.Workers)
-		assert.Equal(t, int64(40), available.RequestsTFlops.Value())
-		assert.Equal(t, int64(400), available.RequestsVRAM.Value())
-		assert.Equal(t, int32(8), *available.Workers)
+		assert.Equal(t, int64(60), usage.Requests.Tflops.Value())
+		assert.Equal(t, int64(600), usage.Requests.Vram.Value())
+		assert.Equal(t, int32(1), usage.Workers)
 	})
 
 	t.Run("allocation exceeds quota", func(t *testing.T) {
 		scheme := runtime.NewScheme()
 		require.NoError(t, tfv1.AddToScheme(scheme))
 
-		quota := createTestQuota(TestNamespace, 100, 1000, 10)
+		quota := createTestQuota(100, 1000, 10)
 		gpus := []tfv1.GPU{
-			createAvailableGPU("gpu1", TestPoolName, 100, 1000),
-			createAvailableGPU("gpu2", TestPoolName, 100, 1000),
+			createAvailableGPU("gpu1", 100, 1000),
+			createAvailableGPU("gpu2", 100, 1000),
 		}
 
-		testPool := createTestGPUPool(TestPoolName)
+		testPool := createTestGPUPool()
 		allObjects := objectsFromGPUs(gpus)
 		allObjects = append(allObjects, testPool)
 
@@ -429,13 +408,13 @@ func TestGPUAllocator_QuotaIntegration(t *testing.T) {
 		ctx := context.Background()
 		allocator := NewGpuAllocator(ctx, client, 0)
 
-		err := allocator.initGPUAndQuotaStore(ctx)
-		require.NoError(t, err)
+		initAllocator(t, allocator)
 
 		req := createAllocRequest(60, 600, 2) // 60*2=120 > 100 quota
-		_, err = allocator.Alloc(ctx, req)
+		req.PodMeta = podMeta
+		_, err := allocator.Alloc(req)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "total.requests.tflops")
+		assert.Contains(t, err.Error(), "total.max.tflops")
 	})
 }
 
@@ -443,15 +422,15 @@ func TestGPUAllocator_ConcurrentQuotaEnforcement(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, tfv1.AddToScheme(scheme))
 
-	quota := createTestQuota(TestNamespace, 50, 500, 5)
+	quota := createTestQuota(50, 500, 5)
 	gpus := []tfv1.GPU{
-		createAvailableGPU("gpu1", TestPoolName, 20, 200),
-		createAvailableGPU("gpu2", TestPoolName, 20, 200),
-		createAvailableGPU("gpu3", TestPoolName, 20, 200),
-		createAvailableGPU("gpu4", TestPoolName, 20, 200),
+		createAvailableGPU("gpu1", 20, 200),
+		createAvailableGPU("gpu2", 20, 200),
+		createAvailableGPU("gpu3", 20, 200),
+		createAvailableGPU("gpu4", 20, 200),
 	}
 
-	testPool := createTestGPUPool(TestPoolName)
+	testPool := createTestGPUPool()
 	allObjects := objectsFromGPUs(gpus)
 	allObjects = append(allObjects, testPool)
 
@@ -464,21 +443,26 @@ func TestGPUAllocator_ConcurrentQuotaEnforcement(t *testing.T) {
 	ctx := context.Background()
 	allocator := NewGpuAllocator(ctx, client, 0)
 
-	err := allocator.initGPUAndQuotaStore(ctx)
-	require.NoError(t, err)
+	initAllocator(t, allocator)
 
 	var wg sync.WaitGroup
 	results := make(chan error, 10)
 
 	// Launch 6 concurrent allocation attempts, but quota only allows 5 workers
-	for range 6 {
+	for i := range 6 {
 		wg.Add(1)
-		go func() {
+		go func(index int) {
 			defer wg.Done()
 			req := createAllocRequest(10, 100, 1) // Each request uses 10 TFlops
-			_, err := allocator.Alloc(ctx, req)
+			// Create unique pod metadata for each goroutine
+			req.PodMeta = metav1.ObjectMeta{
+				Name:      fmt.Sprintf("test-pod-%d", index),
+				Namespace: TestNamespace,
+				UID:       types.UID(fmt.Sprintf("test-uid-%d", index)),
+			}
+			_, err := allocator.Alloc(req)
 			results <- err
-		}()
+		}(i)
 	}
 
 	wg.Wait()
@@ -500,11 +484,10 @@ func TestGPUAllocator_ConcurrentQuotaEnforcement(t *testing.T) {
 	assert.Equal(t, 1, failures, "Should reject 1 allocation due to quota")
 
 	// Verify final quota state
-	usage, available, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
+	usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
 	require.True(t, exists)
-	assert.Equal(t, int64(50), usage.RequestsTFlops.Value(), "Should use full quota")
-	assert.Equal(t, int64(0), available.RequestsTFlops.Value(), "No quota should remain")
-	assert.Equal(t, int32(5), *usage.Workers, "Should have 5 workers allocated")
+	assert.Equal(t, int64(50), usage.Requests.Tflops.Value(), "Should use full quota")
+	assert.Equal(t, int32(5), usage.Workers, "Should have 5 workers allocated")
 }
 
 func TestGPUAllocator_QuotaReconciliation(t *testing.T) {
@@ -512,10 +495,10 @@ func TestGPUAllocator_QuotaReconciliation(t *testing.T) {
 	require.NoError(t, tfv1.AddToScheme(scheme))
 	require.NoError(t, v1.AddToScheme(scheme))
 
-	quota := createTestQuota(TestNamespace, 100, 1000, 10)
+	quota := createTestQuota(100, 1000, 10)
 	gpus := []tfv1.GPU{
-		createAvailableGPU("gpu1", TestPoolName, 50, 500),
-		createAvailableGPU("gpu2", TestPoolName, 50, 500),
+		createAvailableGPU("gpu1", 50, 500),
+		createAvailableGPU("gpu2", 50, 500),
 	}
 
 	// Create worker pods that should be counted in quota usage
@@ -524,9 +507,15 @@ func TestGPUAllocator_QuotaReconciliation(t *testing.T) {
 		createWorkerPod(TestNamespace, "worker2", "30", "300"),
 	}
 
-	testPool := createTestGPUPool(TestPoolName)
+	testPool := createTestGPUPool()
 	allObjects := objectsFromGPUs(gpus)
 	allObjects = append(allObjects, testPool)
+	allObjects = append(allObjects, &tfv1.TensorFusionWorkload{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TestWorkload,
+			Namespace: TestNamespace,
+		},
+	})
 
 	client := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -540,35 +529,28 @@ func TestGPUAllocator_QuotaReconciliation(t *testing.T) {
 	ctx := context.Background()
 	allocator := NewGpuAllocator(ctx, client, 0)
 
-	err := allocator.initGPUAndQuotaStore(ctx)
-	require.NoError(t, err)
-
-	// Manually trigger reconciliation
-	allocator.reconcileAllocationState(ctx)
+	initAllocator(t, allocator)
 
 	// Verify quota usage reflects the worker pods
-	usage, available, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
+	usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
 	require.True(t, exists)
 
-	assert.Equal(t, int64(50), usage.RequestsTFlops.Value())     // 20+30
-	assert.Equal(t, int64(500), usage.RequestsVRAM.Value())      // 200+300
-	assert.Equal(t, int32(2), *usage.Workers)                    // 2 pods
-	assert.Equal(t, int64(50), available.RequestsTFlops.Value()) // 100-50
-	assert.Equal(t, int64(500), available.RequestsVRAM.Value())  // 1000-500
-	assert.Equal(t, int32(8), *available.Workers)                // 10-2
+	assert.Equal(t, int64(50), usage.Requests.Tflops.Value()) // 20+30
+	assert.Equal(t, int64(500), usage.Requests.Vram.Value())  // 200+300
+	assert.Equal(t, int32(2), usage.Workers)                  // 2 pods
 }
 
 func TestGPUAllocator_QuotaDeallocation(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, tfv1.AddToScheme(scheme))
 
-	quota := createTestQuota(TestNamespace, 100, 1000, 10)
+	quota := createTestQuota(100, 1000, 10)
 	gpus := []tfv1.GPU{
-		createAvailableGPU("gpu1", TestPoolName, 50, 500),
-		createAvailableGPU("gpu2", TestPoolName, 50, 500),
+		createAvailableGPU("gpu1", 50, 500),
+		createAvailableGPU("gpu2", 50, 500),
 	}
 
-	testPool := createTestGPUPool(TestPoolName)
+	testPool := createTestGPUPool()
 	allObjects := objectsFromGPUs(gpus)
 	allObjects = append(allObjects, testPool)
 
@@ -581,185 +563,55 @@ func TestGPUAllocator_QuotaDeallocation(t *testing.T) {
 	ctx := context.Background()
 	allocator := NewGpuAllocator(ctx, client, 0)
 
-	err := allocator.initGPUAndQuotaStore(ctx)
-	require.NoError(t, err)
+	initAllocator(t, allocator)
 
 	// Allocate GPUs
 	req := createAllocRequest(30, 300, 2)
-	allocatedGPUs, err := allocator.Alloc(ctx, req)
+	req.PodMeta = podMeta
+	allocatedGPUs, err := allocator.Alloc(req)
 	require.NoError(t, err)
 	require.Len(t, allocatedGPUs, 2)
 
 	// Verify allocation
-	usage, available, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
+	usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
 	require.True(t, exists)
-	assert.Equal(t, int64(60), usage.RequestsTFlops.Value())
-	assert.Equal(t, int64(40), available.RequestsTFlops.Value())
+	assert.Equal(t, int64(60), usage.Requests.Tflops.Value())
+	assert.Equal(t, int64(600), usage.Requests.Vram.Value()) // 300 * 2 = 600
+	assert.Equal(t, int32(1), usage.Workers)
 
 	// Deallocate GPUs
-	gpuNames := make([]types.NamespacedName, len(allocatedGPUs))
+	gpuNames := make([]string, len(allocatedGPUs))
 	for i, gpu := range allocatedGPUs {
-		gpuNames[i] = types.NamespacedName{Name: gpu.Name}
+		gpuNames[i] = gpu.Name
 	}
 
-	allocator.Dealloc(ctx, req.WorkloadNameNamespace, req.Request, gpuNames)
+	allocator.Dealloc(req.WorkloadNameNamespace, gpuNames, podMeta)
 
 	// Verify deallocation
-	usage, available, exists = allocator.quotaStore.GetQuotaStatus(TestNamespace)
+	usage, exists = allocator.quotaStore.GetQuotaStatus(TestNamespace)
 	require.True(t, exists)
-	assert.Equal(t, int64(0), usage.RequestsTFlops.Value())
-	assert.Equal(t, int64(100), available.RequestsTFlops.Value())
-	assert.Equal(t, int32(0), *usage.Workers)
-	assert.Equal(t, int32(10), *available.Workers)
+	assert.Equal(t, int64(0), usage.Requests.Tflops.Value())
+	assert.Equal(t, int32(0), usage.Workers)
 }
 
-// Calculator-specific Tests
-func TestQuotaCalculator_ResourceOperations(t *testing.T) {
-	calc := quota.NewCalculator()
-
-	t.Run("resource operation creation", func(t *testing.T) {
-		baseResource := tfv1.Resource{
-			Tflops: *resource.NewQuantity(10, resource.DecimalSI),
-			Vram:   *resource.NewQuantity(100, resource.BinarySI),
-		}
-
-		op := calc.NewResourceOperation(baseResource, 3)
-		assert.Equal(t, int64(30), op.TFlops.Value())
-		assert.Equal(t, int64(300), op.VRAM.Value())
-		assert.Equal(t, int32(3), op.Workers)
-	})
-
-	t.Run("usage percentage calculation", func(t *testing.T) {
-		quota := createTestQuota(TestNamespace, 100, 1000, 10)
-		usage := createZeroUsage()
-		usage.RequestsTFlops.Set(25)
-		usage.RequestsVRAM.Set(400)
-		*usage.Workers = 3
-
-		percentages := calc.CalculateUsagePercent(quota, usage)
-		assert.Equal(t, int64(25), percentages["requests.tflops"])
-		assert.Equal(t, int64(40), percentages["requests.vram"])
-		assert.Equal(t, int64(30), percentages["workers"])
-	})
-
-	t.Run("available percent calculation", func(t *testing.T) {
-		quota := createTestQuota(TestNamespace, 100, 1000, 10)
-		usage := createZeroUsage()
-		usage.RequestsTFlops.Set(25)
-		usage.RequestsVRAM.Set(400)
-		*usage.Workers = 3
-
-		percent := calc.CalculateAvailablePercent(quota, usage)
-		assert.Equal(t, int64(75), *percent.RequestsTFlops)
-		assert.Equal(t, int64(60), *percent.RequestsVRAM)
-		assert.Equal(t, int64(70), *percent.Workers)
-	})
-
-	t.Run("quota exceeded detection", func(t *testing.T) {
-		quota := createTestQuota(TestNamespace, 100, 1000, 10)
-
-		// Within limits
-		usage := createZeroUsage()
-		usage.RequestsTFlops.Set(50)
-		assert.False(t, calc.IsQuotaExceeded(quota, usage))
-
-		// Exceeds limits
-		usage.RequestsTFlops.Set(150)
-		assert.True(t, calc.IsQuotaExceeded(quota, usage))
-	})
-
-	t.Run("deallocation clamping", func(t *testing.T) {
-		usage := createZeroUsage()
-		usage.RequestsTFlops.Set(30)
-		usage.RequestsVRAM.Set(300)
-		*usage.Workers = 2
-
-		// Try to deallocate more than available
-		operation := &quota.ResourceOperation{
-			TFlops:  *resource.NewQuantity(50, resource.DecimalSI),
-			VRAM:    *resource.NewQuantity(500, resource.BinarySI),
-			Workers: 5,
-		}
-
-		actual := calc.CalculateActualDeallocation(usage, operation)
-		assert.Equal(t, int64(30), actual.TFlops.Value())
-		assert.Equal(t, int64(300), actual.VRAM.Value())
-		assert.Equal(t, int32(2), actual.Workers)
-	})
-}
-
-func TestQuotaCalculator_EdgeCases(t *testing.T) {
-	calc := quota.NewCalculator()
-
-	t.Run("zero division safety", func(t *testing.T) {
-		quota := createTestQuota(TestNamespace, 0, 0, 0)
-		usage := createZeroUsage()
-
-		// Should not panic on zero totals
-		percentages := calc.CalculateUsagePercent(quota, usage)
-		assert.Empty(t, percentages)
-
-		percent := calc.CalculateAvailablePercent(quota, usage)
-		assert.Nil(t, percent.RequestsTFlops)
-		assert.Nil(t, percent.RequestsVRAM)
-		assert.Nil(t, percent.Workers)
-	})
-
-	t.Run("negative usage protection", func(t *testing.T) {
-		usage := createZeroUsage()
-		usage.RequestsTFlops.Set(10)
-
-		// Try to subtract more than available
-		toSubtract := *resource.NewQuantity(20, resource.DecimalSI)
-		calc.SafeSub(usage.RequestsTFlops, toSubtract)
-
-		// Should clamp to zero
-		assert.Equal(t, int64(0), usage.RequestsTFlops.Value())
-	})
-
-	t.Run("nil quantity handling", func(t *testing.T) {
-		// Should not panic with nil quantities
-		var nilQty *resource.Quantity
-		testQty := *resource.NewQuantity(10, resource.DecimalSI)
-
-		calc.SafeAdd(nilQty, testQty) // Should not panic
-		calc.SafeSub(nilQty, testQty) // Should not panic
-	})
-}
-
-func TestQuotaStore_ValidationRules(t *testing.T) {
-	qs := NewQuotaStore(nil)
-
-	t.Run("valid quota configuration", func(t *testing.T) {
-		quota := createTestQuota(TestNamespace, 100, 1000, 10)
-		err := qs.validateQuotaConfig(quota)
-		assert.NoError(t, err)
-	})
-
-	t.Run("negative values validation", func(t *testing.T) {
-		quota := createTestQuota(TestNamespace, -10, 1000, 10)
-		err := qs.validateQuotaConfig(quota)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "requests.tflops cannot be negative")
-	})
-
-	t.Run("limits less than requests validation", func(t *testing.T) {
-		quota := createTestQuota(TestNamespace, 100, 1000, 10)
-		// Set limits lower than requests
-		quota.Spec.Total.LimitsTFlops = resource.NewQuantity(50, resource.DecimalSI)
-
-		err := qs.validateQuotaConfig(quota)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "limits.tflops cannot be less than requests.tflops")
-	})
-
-	t.Run("invalid alert threshold validation", func(t *testing.T) {
-		quota := createTestQuota(TestNamespace, 100, 1000, 10)
-		invalidThreshold := int32(150)
-		quota.Spec.Total.AlertThresholdPercent = &invalidThreshold
-
-		err := qs.validateQuotaConfig(quota)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "alertThresholdPercent must be between 0 and 100")
-	})
+func createTestQuota(tflops, vram int64, workers int32) *tfv1.GPUResourceQuota {
+	return &tfv1.GPUResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      TestQuotaName,
+			Namespace: TestNamespace,
+		},
+		Spec: tfv1.GPUResourceQuotaSpec{
+			Total: tfv1.GPUResourceQuotaTotal{
+				Requests: &tfv1.Resource{
+					Tflops: *resource.NewQuantity(tflops, resource.DecimalSI),
+					Vram:   *resource.NewQuantity(vram, resource.BinarySI),
+				},
+				Limits: &tfv1.Resource{
+					Tflops: *resource.NewQuantity(tflops, resource.DecimalSI),
+					Vram:   *resource.NewQuantity(vram, resource.BinarySI),
+				},
+				MaxWorkers: &workers,
+			},
+		},
+	}
 }

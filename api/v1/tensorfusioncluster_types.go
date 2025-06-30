@@ -104,6 +104,8 @@ const (
 type GPUPoolDefinition struct {
 	Name string `json:"name,omitempty"` // Name of the GPU pool.
 
+	IsDefault bool `json:"isDefault,omitempty"`
+
 	SpecTemplate GPUPoolSpec `json:"specTemplate"`
 }
 

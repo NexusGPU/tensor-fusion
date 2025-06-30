@@ -27,10 +27,10 @@ func (h *Hypervisor) GetName() string {
 	return "hypervisor"
 }
 
-func (h *Hypervisor) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string) {
+func (h *Hypervisor) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string, int32) {
 	oldHash := status.HypervisorVersion
 	changed, newHash := utils.CompareAndGetObjectHash(oldHash, pool.Spec.ComponentConfig.Hypervisor)
-	return changed, newHash, oldHash
+	return changed, newHash, oldHash, status.HyperVisorUpdateProgress
 }
 
 func (h *Hypervisor) SetConfigHash(status *tfv1.PoolComponentStatus, hash string) {

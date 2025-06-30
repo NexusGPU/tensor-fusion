@@ -17,8 +17,9 @@ limitations under the License.
 package v1
 
 import (
-	"k8s.io/apimachinery/pkg/api/resource"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 // GPUResourceQuotaSpec defines the desired state of GPUResourceQuota
@@ -34,25 +35,23 @@ type GPUResourceQuotaSpec struct {
 type GPUResourceQuotaTotal struct {
 	// Total requests limits for the namespace
 	// +optional
-	RequestsTFlops *resource.Quantity `json:"requests.tflops,omitempty"`
-	// +optional
-	RequestsVRAM *resource.Quantity `json:"requests.vram,omitempty"`
+	Requests *Resource `json:"requests,omitempty"`
 
 	// Total limits for the namespace
 	// +optional
-	LimitsTFlops *resource.Quantity `json:"limits.tflops,omitempty"`
-	// +optional
-	LimitsVRAM *resource.Quantity `json:"limits.vram,omitempty"`
+	Limits *Resource `json:"limits,omitempty"`
 
 	// Maximum number of workers in the namespace
 	// +optional
-	Workers *int32 `json:"workers,omitempty"`
+	// +kubebuilder:default=32768
+	MaxWorkers *int32 `json:"maxWorkers,omitempty"`
 
 	// Alert threshold percentage (0-100)
 	// When usage exceeds this percentage, an alert event will be triggered
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:default=95
+	// +optional
 	AlertThresholdPercent *int32 `json:"alertThresholdPercent,omitempty"`
 }
 
@@ -60,45 +59,21 @@ type GPUResourceQuotaTotal struct {
 type GPUResourceQuotaSingle struct {
 	// Maximum resources per workload
 	// +optional
-	Max *GPUResourceLimits `json:"max,omitempty"`
+	MaxRequests *Resource `json:"maxRequests,omitempty"`
 
-	// Minimum resources per workload
 	// +optional
-	Min *GPUResourceLimits `json:"min,omitempty"`
+	MaxLimits *Resource `json:"maxLimits,omitempty"`
+
+	// +optional
+	MaxGPUCount *int32 `json:"maxGPUCount,omitempty"`
 
 	// Default limits applied to workloads without explicit limits
 	// +optional
-	Default *GPUResourceDefaults `json:"default,omitempty"`
+	DefaultRequests *Resource `json:"defaultRequests,omitempty"`
 
 	// Default requests applied to workloads without explicit requests
 	// +optional
-	DefaultRequest *GPUResourceDefaults `json:"defaultRequest,omitempty"`
-}
-
-// GPUResourceLimits defines resource limits
-type GPUResourceLimits struct {
-	// TFlops limit
-	// +optional
-	TFlops *resource.Quantity `json:"tflops,omitempty"`
-
-	// VRAM limit
-	// +optional
-	VRAM *resource.Quantity `json:"vram,omitempty"`
-
-	// Maximum number of workers
-	// +optional
-	Workers *int32 `json:"workers,omitempty"`
-}
-
-// GPUResourceDefaults defines default resource values
-type GPUResourceDefaults struct {
-	// Default TFlops
-	// +optional
-	TFlops *resource.Quantity `json:"tflops,omitempty"`
-
-	// Default VRAM
-	// +optional
-	VRAM *resource.Quantity `json:"vram,omitempty"`
+	DefaultLimits *Resource `json:"defaultLimits,omitempty"`
 }
 
 // GPUResourceQuotaStatus defines the observed state of GPUResourceQuota
@@ -122,42 +97,34 @@ type GPUResourceQuotaStatus struct {
 type GPUResourceUsage struct {
 	// Current requests usage
 	// +optional
-	RequestsTFlops *resource.Quantity `json:"requests.tflops,omitempty"`
-	// +optional
-	RequestsVRAM *resource.Quantity `json:"requests.vram,omitempty"`
+	Requests Resource `json:"requests,omitempty"`
 
 	// Current limits usage
 	// +optional
-	LimitsTFlops *resource.Quantity `json:"limits.tflops,omitempty"`
-	// +optional
-	LimitsVRAM *resource.Quantity `json:"limits.vram,omitempty"`
+	Limits Resource `json:"limits,omitempty"`
 
 	// Current number of workers
 	// +optional
-	Workers *int32 `json:"workers,omitempty"`
+	Workers int32 `json:"workers,omitempty"`
 }
 
 // GPUResourceAvailablePercent defines available percentage for each resource
+// Use string for round(2) float to avoid kubernetes resource can not store float issue
 type GPUResourceAvailablePercent struct {
-	// Available percentage for requests.tflops (0-100)
 	// +optional
-	RequestsTFlops *int64 `json:"requests.tflops,omitempty"`
+	RequestsTFlops string `json:"requests.tflops,omitempty"`
 
-	// Available percentage for requests.vram (0-100)
 	// +optional
-	RequestsVRAM *int64 `json:"requests.vram,omitempty"`
+	RequestsVRAM string `json:"requests.vram,omitempty"`
 
-	// Available percentage for limits.tflops (0-100)
 	// +optional
-	LimitsTFlops *int64 `json:"limits.tflops,omitempty"`
+	LimitsTFlops string `json:"limits.tflops,omitempty"`
 
-	// Available percentage for limits.vram (0-100)
 	// +optional
-	LimitsVRAM *int64 `json:"limits.vram,omitempty"`
+	LimitsVRAM string `json:"limits.vram,omitempty"`
 
-	// Available percentage for workers (0-100)
 	// +optional
-	Workers *int64 `json:"workers,omitempty"`
+	Workers string `json:"workers,omitempty"`
 }
 
 // GPUResourceQuotaConditionType defines the condition types for GPUResourceQuota
@@ -166,8 +133,7 @@ type GPUResourceQuotaConditionType string
 const (
 	// GPUResourceQuotaConditionReady indicates the quota is ready and functioning
 	GPUResourceQuotaConditionReady GPUResourceQuotaConditionType = "Ready"
-	// GPUResourceQuotaConditionExceeded indicates the quota has been exceeded
-	GPUResourceQuotaConditionExceeded GPUResourceQuotaConditionType = "Exceeded"
+
 	// GPUResourceQuotaConditionAlertThresholdReached indicates the alert threshold has been reached
 	GPUResourceQuotaConditionAlertThresholdReached GPUResourceQuotaConditionType = "AlertThresholdReached"
 )
@@ -197,6 +163,40 @@ type GPUResourceQuotaList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []GPUResourceQuota `json:"items"`
+}
+
+type AllocRequest struct {
+	// Name of the GPU pool to allocate from
+	PoolName string
+	// Namespace information for the workload
+	WorkloadNameNamespace NameNamespace
+	// Resource requirements for the allocation
+	Request Resource
+	Limit   Resource
+	// Number of GPUs to allocate
+	Count uint
+	// Specific GPU model to allocate, empty string means any model
+	GPUModel string
+	// Node affinity requirements
+	NodeAffinity *v1.NodeAffinity
+
+	// final scheduled GPU IDs for this allocation request
+	// This fields is set by GPUAllocator, user should not choose specific GPUs
+	GPUNames []string
+
+	// record the pod meta for quota check
+	PodMeta metav1.ObjectMeta
+}
+
+type AdjustRequest struct {
+	PodUID     string
+	IsScaleUp  bool
+	NewRequest Resource
+	NewLimit   Resource
+}
+
+func (ar *AllocRequest) Clone() framework.StateData {
+	return ar
 }
 
 func init() {

@@ -26,10 +26,10 @@ func (w *Worker) GetName() string {
 	return "worker"
 }
 
-func (w *Worker) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string) {
+func (w *Worker) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string, int32) {
 	oldHash := status.WorkerVersion
 	changed, newHash := utils.CompareAndGetObjectHash(oldHash, pool.Spec.ComponentConfig.Worker)
-	return changed, newHash, oldHash
+	return changed, newHash, oldHash, status.WorkerUpdateProgress
 }
 
 func (w *Worker) SetConfigHash(status *tfv1.PoolComponentStatus, hash string) {

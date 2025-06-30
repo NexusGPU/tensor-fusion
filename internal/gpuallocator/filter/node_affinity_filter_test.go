@@ -15,6 +15,10 @@ import (
 )
 
 func TestNodeAffinityFilter(t *testing.T) {
+	testPodKey := tfv1.NameNamespace{
+		Name:      "test-pod",
+		Namespace: "test-namespace",
+	}
 	tests := []struct {
 		name         string
 		nodeSelector *corev1.NodeSelector
@@ -256,7 +260,7 @@ func TestNodeAffinityFilter(t *testing.T) {
 				RequiredDuringSchedulingIgnoredDuringExecution:  tt.nodeSelector,
 				PreferredDuringSchedulingIgnoredDuringExecution: tt.preferred,
 			})
-			got, err := filter.Filter(context.Background(), tt.gpus)
+			got, err := filter.Filter(context.Background(), testPodKey, tt.gpus)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
