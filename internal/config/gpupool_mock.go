@@ -35,8 +35,8 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 		NodePoolRollingUpdatePolicy: &tfv1.NodeRollingUpdatePolicy{
 			AutoUpdate:        ptr.To(false),
 			BatchPercentage:   25,
-			BatchInterval:     "300ms",
-			MaxDuration:       "1m",
+			BatchInterval:     "10m",
+			MaxDuration:       "10m",
 			MaintenanceWindow: tfv1.MaintenanceWindow{},
 		},
 	},
