@@ -253,7 +253,7 @@ var _ = Describe("GPUPool Controller", func() {
 			tfEnv.Cleanup()
 		})
 
-		FIt("Should update according to batch interval", func() {
+		It("Should update according to batch interval", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(2).
 				SetGpuCountPerNode(1).
@@ -676,7 +676,7 @@ func ensureGpuPoolIsRunning(tfEnv *TensorFusionEnv) {
 	}).Should(Succeed())
 }
 
-// no RepliaSet like controller in EnvTest, need to create by ourself
+// no ReplicaSet like controller in EnvTest, need to create by ourself
 func createClientPodByIndex(tfEnv *TensorFusionEnv, index int) {
 	GinkgoHelper()
 	pool := tfEnv.GetGPUPool(0)
