@@ -131,7 +131,11 @@ func SetupScheduler(
 	return &cc, sched, nil
 }
 
-func RunScheduler(ctx context.Context, cc *schedulerserverconfig.CompletedConfig, sched *scheduler.Scheduler) error {
+func RunScheduler(ctx context.Context,
+	cc *schedulerserverconfig.CompletedConfig,
+	sched *scheduler.Scheduler,
+	mgr manager.Manager,
+) error {
 	logger := klog.FromContext(ctx)
 
 	// Config registration.
@@ -168,7 +172,11 @@ func RunScheduler(ctx context.Context, cc *schedulerserverconfig.CompletedConfig
 	}
 	startInformersAndWaitForSync(ctx)
 
-	go sched.Run(ctx)
+	go func() {
+		<-mgr.Elected()
+		logger.Info("Starting scheduling cycle")
+		sched.Run(ctx)
+	}()
 	return nil
 }
 

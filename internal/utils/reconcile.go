@@ -28,16 +28,12 @@ var ErrNextLoop = errors.New("stop this loop and return the associated Result ob
 // ErrTerminateLoop is not a real error. It forces the current reconciliation loop to stop
 var ErrTerminateLoop = errors.New("stop this loop and do not requeue")
 
-// Minimum time between reconciliations for the same object
-var debounceInterval = 3 * time.Second
-
 var IsTestMode = false
 
 func init() {
 	// in unit testing mode, debounce should be very short
 	if (len(os.Args) > 1 && os.Args[1] == "-test.run") ||
 		os.Getenv("GO_TESTING") == "true" {
-		debounceInterval = 60 * time.Millisecond
 		IsTestMode = true
 		constants.PendingRequeueDuration = time.Millisecond * 150
 		constants.StatusCheckInterval = time.Millisecond * 200

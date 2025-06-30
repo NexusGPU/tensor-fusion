@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aws/smithy-go/ptr"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -87,7 +87,7 @@ func FindFirstLevelOwnerReference(obj metav1.Object) *metav1.OwnerReference {
 			Kind:       "Pod",
 			Name:       obj.GetName(),
 			UID:        obj.GetUID(),
-			Controller: ptr.Bool(true),
+			Controller: ptr.To(true),
 		}
 	}
 	ownerRef := owners[0]

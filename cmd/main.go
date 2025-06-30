@@ -282,7 +282,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		if err := sched.RunScheduler(ctx, cc, scheduler); err != nil {
+		if err := sched.RunScheduler(ctx, cc, scheduler, mgr); err != nil {
 			setupLog.Error(err, "unable to run tensor fusion scheduler")
 			os.Exit(1)
 		}

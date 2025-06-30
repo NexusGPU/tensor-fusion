@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/smithy-go/ptr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
@@ -33,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -78,7 +78,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					},
 				},
 				Spec: tfv1.WorkloadProfileSpec{
-					Replicas: ptr.Int32(1),
+					Replicas: ptr.To(int32(1)),
 					PoolName: pool.Name,
 					GPUCount: 2,
 					Resources: tfv1.Resources{
@@ -122,7 +122,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 			workload = &tfv1.TensorFusionWorkload{}
 			Expect(k8sClient.Get(ctx, key, workload)).To(Succeed())
-			workload.Spec.Replicas = ptr.Int32(3)
+			workload.Spec.Replicas = ptr.To(int32(3))
 			Expect(k8sClient.Update(ctx, workload)).To(Succeed())
 
 			_ = checkWorkerPodCount(workload)
@@ -201,7 +201,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 			workload = &tfv1.TensorFusionWorkload{}
 			Expect(k8sClient.Get(ctx, key, workload)).To(Succeed())
-			workload.Spec.Replicas = ptr.Int32(1)
+			workload.Spec.Replicas = ptr.To(int32(1))
 			Expect(k8sClient.Update(ctx, workload)).To(Succeed())
 
 			_ = checkWorkerPodCount(workload)
@@ -229,7 +229,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 			Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 			workloadCopy := workload.DeepCopy()
-			workloadCopy.Spec.Replicas = ptr.Int32(0)
+			workloadCopy.Spec.Replicas = ptr.To(int32(0))
 			Expect(k8sClient.Update(ctx, workloadCopy)).To(Succeed())
 			Eventually(func(g Gomega) {
 				podList := &corev1.PodList{}
@@ -518,7 +518,7 @@ func createTensorFusionWorkload(poolName string, key client.ObjectKey, replicas 
 			},
 		},
 		Spec: tfv1.WorkloadProfileSpec{
-			Replicas: ptr.Int32(int32(replicas)),
+			Replicas: ptr.To(int32(replicas)),
 			PoolName: poolName,
 			Resources: tfv1.Resources{
 				Requests: tfv1.Resource{
@@ -557,7 +557,7 @@ func cleanupWorkload(key client.ObjectKey) {
 	// Set replicas to 0
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
-		workload.Spec.Replicas = ptr.Int32(0)
+		workload.Spec.Replicas = ptr.To(int32(0))
 		g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
 	}).Should(Succeed())
 
