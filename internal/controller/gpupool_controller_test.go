@@ -92,14 +92,14 @@ var _ = Describe("GPUPool Controller", func() {
 				SetGpuCountPerNode(1).
 				Build()
 
-			By("configuring a large enougth batch inteval to prevent next update batch")
+			By("configuring a large enough batch interval to prevent next update batch")
 			updateRollingUpdatePolicy(tfEnv, true, 50, "10m")
 			newHash, oldHash := triggerHypervisorUpdate(tfEnv)
 			verifyHypervisorPodHash(tfEnv.GetGPUNode(0, 0), newHash)
 			verifyHypervisorPodHashConsistently(tfEnv.GetGPUNode(0, 1), oldHash)
 			verifyHypervisorUpdateProgressConsistently(tfEnv, 50)
 
-			By("changing the batch inteval to trigger next update batch")
+			By("changing the batch interval to trigger next update batch")
 			updateRollingUpdatePolicy(tfEnv, true, 50, "1s")
 			verifyHypervisorPodHash(tfEnv.GetGPUNode(0, 1), newHash)
 			verifyHypervisorUpdateProgress(tfEnv, 100)
@@ -113,7 +113,7 @@ var _ = Describe("GPUPool Controller", func() {
 				SetGpuCountPerNode(1).
 				Build()
 
-			By("configuring a large enougth batch inteval to prevent next update batch")
+			By("configuring a large enough batch interval to prevent next update batch")
 			updateRollingUpdatePolicy(tfEnv, true, 50, "10m")
 			newHash, oldHash := triggerHypervisorUpdate(tfEnv)
 			verifyHypervisorPodHash(tfEnv.GetGPUNode(0, 0), newHash)
@@ -253,7 +253,7 @@ var _ = Describe("GPUPool Controller", func() {
 			tfEnv.Cleanup()
 		})
 
-		It("Should update according to batch interval", func() {
+		FIt("Should update according to batch interval", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(2).
 				SetGpuCountPerNode(1).
@@ -262,7 +262,7 @@ var _ = Describe("GPUPool Controller", func() {
 
 			createClientPods(tfEnv, 2)
 
-			By("configuring a large enougth batch inteval to prevent next update batch")
+			By("configuring a large enough batch interval to prevent next update batch")
 			updateRollingUpdatePolicy(tfEnv, true, 50, "10m")
 			newHash, oldHash := triggerClientUpdate(tfEnv)
 

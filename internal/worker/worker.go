@@ -131,7 +131,7 @@ func SelectWorker(
 	})
 
 	if len(activeWorkers) == 0 {
-		return nil, fmt.Errorf("no available worker")
+		return nil, ErrNoAvailableWorker
 	}
 
 	// find the worker with the minimum usage

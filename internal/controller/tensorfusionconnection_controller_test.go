@@ -57,6 +57,8 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			tfEnv = NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(2).
 				Build()
+			cfg := tfEnv.GetConfig()
+			go mockSchedulerLoop(ctx, cfg)
 			pool := tfEnv.GetGPUPool(0)
 			// Create workload first
 			workload := createTensorFusionWorkload(pool.Name, workloadNamespacedName, 2)
@@ -170,7 +172,7 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					Namespace: "default",
 				},
 				Spec: tfv1.WorkloadProfileSpec{
-					PoolName: "cluster-0-pool-0",
+					PoolName: tfEnv.clusterKey.Name + "-pool-0",
 					Resources: tfv1.Resources{
 						Requests: tfv1.Resource{
 							Tflops: resource.MustParse("1"),
@@ -209,12 +211,12 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, connection)).To(Succeed())
 
-			By("Verifying the connection status is updated to WorkerPending")
+			By("Verifying the connection status is updated to WorkerRunning")
 			Eventually(func() bool {
 				if err := k8sClient.Get(ctx, connectionNamespacedName, connection); err != nil {
 					return false
 				}
-				return connection.Status.Phase == tfv1.WorkerPending
+				return connection.Status.Phase == tfv1.WorkerRunning
 			}).Should(BeTrue())
 
 			By("Cleaning up test resources")

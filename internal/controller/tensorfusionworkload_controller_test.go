@@ -365,7 +365,7 @@ func checkWorkerPodCount(workload *tfv1.TensorFusionWorkload) *corev1.PodList {
 }
 
 func mockSchedulerLoop(ctx context.Context, cfg *rest.Config) {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(50 * time.Millisecond)
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		Expect(err).To(Succeed())
@@ -381,7 +381,7 @@ func mockSchedulerLoop(ctx context.Context, cfg *rest.Config) {
 				if pod.Spec.NodeName != "" {
 					continue
 				}
-				scheduleAndStartPod(&pod, clientset)
+				go scheduleAndStartPod(&pod, clientset)
 			}
 		}
 	}
