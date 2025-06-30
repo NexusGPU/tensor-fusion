@@ -79,6 +79,11 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if ownedWorkloadName, ok := pod.Annotations[constants.SetPendingOwnedWorkloadAnnotation]; ok {
 		log.Info("Setting pending owned workload", "pod", pod.Name, "ownedWorkload", ownedWorkloadName)
 		if err := r.setPendingOwnedWorkload(ctx, pod, ownedWorkloadName); err != nil {
+			if errors.IsNotFound(err) {
+				log.Error(err, "Orphaned pod, failed to set pending owned workload because owner not found",
+					"pod", pod.Name, "ownedWorkload", ownedWorkloadName)
+				return ctrl.Result{}, nil
+			}
 			return ctrl.Result{}, err
 		}
 		delete(pod.Annotations, constants.SetPendingOwnedWorkloadAnnotation)

@@ -8,6 +8,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -109,6 +110,10 @@ func (c *TensorFusionPodCounter) Decrease(ctx context.Context, pod *corev1.Pod) 
 	ownerObj.SetKind(ownerRef.Kind)
 	objKey := client.ObjectKey{Name: ownerRef.Name, Namespace: pod.Namespace}
 	if err := c.Client.Get(ctx, objKey, ownerObj); err != nil {
+		// when owner accidentally deleted, just ignore
+		if errors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("failed to get owner object: %w", err)
 	}
 	annotations := ownerObj.GetAnnotations()

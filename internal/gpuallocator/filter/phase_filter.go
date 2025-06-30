@@ -30,6 +30,6 @@ func (f *PhaseFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespac
 		}
 		return ok
 	})
-	log.FromContext(ctx).Info("PhaseFilter", "validPhase", validPhase, "total", len(gpus), "workerPodKey", workerPodKey)
+	log.FromContext(ctx).V(6).Info("PhaseFilter", "validPhase", validPhase, "total", len(gpus), "workerPodKey", workerPodKey)
 	return filteredGPUs, nil
 }

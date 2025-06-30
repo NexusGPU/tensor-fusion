@@ -57,11 +57,11 @@ type GPUPoolReconciler struct {
 func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	runNow, _, waitTime := utils.DebouncedReconcileCheck(ctx, &r.LastProcessedItems, req.NamespacedName)
-	// if alreadyQueued {
-	// 	log.Info("GPUPool already queued for reconcile", "name", req.NamespacedName.Name)
-	// 	return ctrl.Result{}, nil
-	// }
+	runNow, alreadyQueued, waitTime := utils.DebouncedReconcileCheck(ctx, &r.LastProcessedItems, req.NamespacedName)
+	if alreadyQueued {
+		log.V(8).Info("GPUPool already queued for reconcile", "name", req.Name, "waitTime", waitTime)
+		return ctrl.Result{}, nil
+	}
 	if !runNow {
 		return ctrl.Result{RequeueAfter: waitTime}, nil
 	}
@@ -88,6 +88,11 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				return false, err
 			}
 		}
+
+		// TODO, Pool deletion is complex business logic, can not simply check node existence
+		// GPUNode always owned by Kubernetes Node, need change HandleFinalizer of gpunode_controller
+		// make sure all workloads and workers are deleted, then delete pool
+
 		// check if all nodes has been deleted
 		nodes := &tfv1.GPUNodeList{}
 		if err := r.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {

@@ -273,8 +273,8 @@ var _ = Describe("GPUPool Controller", func() {
 			verifyClientPodHashConsistently(1, oldHash)
 			verifyClientUpdateProgressConsistently(tfEnv, 50)
 
-			By("changing the batch inteval to trigger next update batch")
-			updateRollingUpdatePolicy(tfEnv, true, 50, "3s")
+			By("changing the batch interval to trigger next update batch")
+			updateRollingUpdatePolicy(tfEnv, true, 50, "1s")
 			verifyClientPodWasDeleted(1)
 			createClientPodByIndex(tfEnv, 1)
 			verifyClientPodHash(1, newHash)
@@ -290,7 +290,7 @@ var _ = Describe("GPUPool Controller", func() {
 				SetGpuCountPerNode(1).
 				Build()
 			ensureGpuPoolIsRunning(tfEnv)
-			updateRollingUpdatePolicy(tfEnv, true, 100, "3s")
+			updateRollingUpdatePolicy(tfEnv, true, 100, "300ms")
 			replicas := 2
 			createClientPods(tfEnv, replicas)
 			updateClientConfig(tfEnv)

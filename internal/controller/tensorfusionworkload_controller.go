@@ -93,7 +93,7 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		if err := r.scaleDownWorkers(ctx, workload, podList.Items); err != nil {
 			return false, err
 		}
-		return true, nil
+		return false, nil
 	})
 	if err != nil {
 		return ctrl.Result{}, err

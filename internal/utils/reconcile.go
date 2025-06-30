@@ -41,7 +41,7 @@ func init() {
 		os.Getenv("GO_TESTING") == "true" {
 		debounceInterval = 60 * time.Millisecond
 		IsTestMode = true
-		constants.PendingRequeueDuration = time.Millisecond * 100
+		constants.PendingRequeueDuration = time.Millisecond * 150
 		constants.StatusCheckInterval = time.Millisecond * 200
 	}
 }

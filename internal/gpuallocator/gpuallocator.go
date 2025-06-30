@@ -553,8 +553,12 @@ func (s *GpuAllocator) initGPUAndQuotaStore() error {
 		key := types.NamespacedName{Name: gpu.Name}
 		s.gpuStore[key] = gpu.DeepCopy()
 
+		if gpu.Status.Capacity == nil {
+			// not a valid GPU, skip for now until updated by informer
+			continue
+		}
 		if s.gpuStore[key].Status.Available == nil {
-			s.gpuStore[key].Status.Available = &tfv1.Resource{}
+			s.gpuStore[key].Status.Available = gpu.Status.Capacity.DeepCopy()
 		}
 	}
 	log.Info("GPU store initialized", "count", len(s.gpuStore))
@@ -682,12 +686,11 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
 
-	if gpu.Status.Capacity == nil {
-		log.Error(fmt.Errorf("GPU capacity is nil"), "invalid GPU data without capacity, can not be added to store", "gpu", gpu.Name)
-		return
-	}
 	// Add GPU to store
 	gpuInMem := gpu.DeepCopy()
+	if gpuInMem.Status.Capacity == nil {
+		gpuInMem.Status.Capacity = &tfv1.Resource{}
+	}
 	if gpuInMem.Status.Available == nil {
 		gpuInMem.Status.Available = gpuInMem.Status.Capacity.DeepCopy()
 	}
@@ -717,9 +720,9 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 	defer s.storeMutex.Unlock()
 
 	if old, ok := s.gpuStore[key]; ok && old != nil {
+		s.handleGPUUpdateCapacityDiff(old, gpu)
+
 		// should never update available and runningApps here, to avoid circular update
-		old.Status.Capacity = gpu.Status.Capacity.DeepCopy()
-		// TODO potential issue: when GPU capacity changed, should adjust available and quota store
 		old.Status.Phase = gpu.Status.Phase
 		old.Status.Message = gpu.Status.Message
 		old.Status.UUID = gpu.Status.UUID
@@ -731,6 +734,29 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 	} else {
 		s.gpuStore[key] = gpu.DeepCopy()
 		log.V(6).Info("Updated GPU in store (new entry)", "name", key.Name, "phase", gpu.Status.Phase)
+	}
+}
+
+func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
+	if gpu == nil || gpu.Status.Capacity == nil {
+		return
+	}
+	if old.Status.Capacity == nil {
+		old.Status.Capacity = gpu.Status.Capacity.DeepCopy()
+		old.Status.Available = gpu.Status.Capacity.DeepCopy()
+	}
+
+	tflopsDiff := gpu.Status.Capacity.Tflops.DeepCopy()
+	tflopsDiff.Sub(old.Status.Capacity.Tflops)
+	if tflopsDiff.Value() != 0 {
+		old.Status.Capacity.Tflops.Add(tflopsDiff)
+		old.Status.Available.Tflops.Add(tflopsDiff)
+	}
+	vramDiff := gpu.Status.Capacity.Vram.DeepCopy()
+	vramDiff.Sub(old.Status.Capacity.Vram)
+	if vramDiff.Value() != 0 {
+		old.Status.Capacity.Vram.Add(vramDiff)
+		old.Status.Available.Vram.Add(vramDiff)
 	}
 }
 
@@ -895,9 +921,9 @@ func (s *GpuAllocator) reconcileAllocationState() {
 			!controllerutil.ContainsFinalizer(&worker, constants.Finalizer)
 
 		if scheduled {
-			allocRequest, _, err := s.ComposeAllocationRequest(&worker)
+			allocRequest, msg, err := s.ComposeAllocationRequest(&worker)
 			if err != nil {
-				logger.Error(err, "Failed to compose allocation request, annotation may not be valid", "pod", worker.Name)
+				logger.Error(err, "Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", worker.Name, "msg", msg)
 				return false
 			}
 			s.uniqueAllocation[string(worker.UID)] = &allocRequest

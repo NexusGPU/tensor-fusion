@@ -69,7 +69,7 @@ var metricsRecorder *metrics.MetricsRecorder
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
 
-	if os.Getenv("DEBUG_MODE") == "true" {
+	if os.Getenv("DEBUG_MODE") == constants.TrueStringValue {
 		SetDefaultEventuallyTimeout(10 * time.Minute)
 	} else {
 		SetDefaultEventuallyTimeout(6 * time.Second)
