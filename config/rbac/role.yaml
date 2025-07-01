@@ -8,20 +8,11 @@ rules:
   - ""
   resources:
   - configmaps
+  - events
   - namespaces
   verbs:
   - create
   - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - events
-  verbs:
-  - create
   - list
   - patch
   - update
