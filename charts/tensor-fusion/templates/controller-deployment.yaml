@@ -35,11 +35,8 @@ spec:
       containers:
         - name: controller
           image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}"
-          command:
-            - /manager
-            - -metrics-bind-address
-            - :9000
-            - -leader-elect
+          command: 
+            {{- toYaml .Values.controller.command | nindent 12 }}
           livenessProbe:
             {{- toYaml .Values.controller.livenessProbe | nindent 12 }}
           readinessProbe:

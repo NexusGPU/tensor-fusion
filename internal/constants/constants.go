@@ -91,7 +91,6 @@ const (
 	ConnectionNameEnv      = "TENSOR_FUSION_CONNECTION_NAME"
 	ConnectionNamespaceEnv = "TENSOR_FUSION_CONNECTION_NAMESPACE"
 
-	WorkerPortEnv              = "TENSOR_FUSION_WORKER_PORT"
 	WorkerCudaUpLimitTflopsEnv = "TENSOR_FUSION_CUDA_UP_LIMIT_TFLOPS"
 	WorkerCudaUpLimitEnv       = "TENSOR_FUSION_CUDA_UP_LIMIT"
 	WorkerCudaMemLimitEnv      = "TENSOR_FUSION_CUDA_MEM_LIMIT"

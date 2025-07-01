@@ -199,6 +199,9 @@ spec:
                       patchToContainer:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
+                      patchToEmbeddedWorkerContainer:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
                       patchToPod:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
@@ -488,21 +491,8 @@ spec:
                     enum:
                     - Provisioned
                     - AutoSelect
+                    - Karpenter
                     type: string
-                type: object
-              observabilityConfig:
-                properties:
-                  alert:
-                    properties:
-                      expression:
-                        type: object
-                        x-kubernetes-preserve-unknown-fields: true
-                    type: object
-                  monitor:
-                    properties:
-                      interval:
-                        type: string
-                    type: object
                 type: object
               qosConfig:
                 description: Define different QoS and their price.

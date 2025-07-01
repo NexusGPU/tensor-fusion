@@ -20,7 +20,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // TensorFusionClusterSpec defines the desired state of TensorFusionCluster.
@@ -29,12 +28,6 @@ type TensorFusionClusterSpec struct {
 
 	// +optional
 	ComputingVendor *ComputingVendorConfig `json:"computingVendor,omitempty"`
-
-	// +optional
-	StorageVendor *StorageVendorConfig `json:"storageVendor,omitempty"`
-
-	// +optional
-	DataPipelines *DataPipelinesConfig `json:"dataPipelines,omitempty"`
 }
 
 // TensorFusionClusterStatus defines the observed state of TensorFusionCluster.
@@ -177,52 +170,6 @@ type ComputingVendorParams struct {
 	// in ali cloud:" spotPriceLimit, spotDuration, spotInterruptionBehavior, systemDiskCategory, systemDiskSize, dataDiskPerformanceLevel
 	// in aws cloud: TODO
 	ExtraParams map[string]string `json:"extraParams,omitempty"`
-}
-
-// StorageVendorConfig defines Postgres database with extensions for timeseries storage and other resource aggregation results, system events and diagnostics reports etc.
-type StorageVendorConfig struct {
-	Mode  string `json:"mode,omitempty"`  // Mode of the storage vendor (e.g., cloudnative-pg, timescale-db, RDS for PG).
-	Image string `json:"image,omitempty"` // Image for the storage vendor (default to timescale).
-
-	// +optional
-	InstallCloudNativePGOperator *bool `json:"installCloudNativePGOperator,omitempty"` // Whether to install CloudNative-PG operator.
-
-	StorageClass      string               `json:"storageClass,omitempty"`      // Storage class for the storage vendor.
-	PGExtensions      []string             `json:"pgExtensions,omitempty"`      // List of PostgreSQL extensions to install.
-	PGClusterTemplate runtime.RawExtension `json:"pgClusterTemplate,omitempty"` // Extra spec for the PostgreSQL cluster template.
-}
-
-// DataPipelinesConfig defines the aggregation jobs that can make statistics on the data and then report to cloud if configured.
-type DataPipelinesConfig struct {
-	Resources DataPipeline4ResourcesConfig `json:"resources,omitempty"`
-
-	Timeseries DataPipeline4TimeSeriesConfig `json:"timeseries,omitempty"`
-}
-
-type DataPipeline4ResourcesConfig struct {
-	// +optional
-	SyncToCloud *bool `json:"syncToCloud,omitempty"` // Whether to sync resources to the cloud.
-
-	// +optional human readable time like 1h, 1d, default to 1h
-	SyncPeriod string `json:"syncPeriod,omitempty"` // Period for syncing resources.
-}
-
-type DataPipeline4TimeSeriesConfig struct {
-	AggregationPeriods       []string          `json:"aggregationPeriods,omitempty"`       // List of aggregation periods.
-	RawDataRetention         string            `json:"rawDataRetention,omitempty"`         // Retention period for raw data.
-	AggregationDataRetention string            `json:"aggregationDataRetention,omitempty"` // Retention period for aggregated data.
-	RemoteWrite              RemoteWriteConfig `json:"remoteWrite,omitempty"`              // Configuration for remote write.
-}
-
-// RemoteWriteConfig represents the configuration for remote write.
-type RemoteWriteConfig struct {
-	Connection DataPipelineResultRemoteWriteConfig `json:"connection,omitempty"`
-	Metrics    []string                            `json:"metrics,omitempty"` // List of metrics to remote write.
-}
-
-type DataPipelineResultRemoteWriteConfig struct {
-	Type string `json:"type,omitempty"` // Type of the connection (e.g., datadog).
-	URL  string `json:"url,omitempty"`  // URL of the connection.
 }
 
 // +kubebuilder:object:root=true

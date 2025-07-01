@@ -278,7 +278,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 			}
 
 			var patchJSON []byte
-			patchJSON, err = serializeInjectionPatchJson(clientConfig, patchJSON)
+			patchJSON, err = serializeContainerInjectionPatchJson(clientConfig, patchJSON, isLocalGPU)
 			if err != nil {
 				return nil, err
 			}
@@ -287,9 +287,11 @@ func (m *TensorFusionPodMutator) patchTFClient(
 			if err != nil {
 				return nil, fmt.Errorf("apply strategic merge patch to container: %w", err)
 			}
+
+			// validate if container decoded successfully after merge patch
 			container = &corev1.Container{}
 			if err := json.Unmarshal(patchedJSON, container); err != nil {
-				return nil, fmt.Errorf("unmarshal patched container: %w", err)
+				return nil, fmt.Errorf("unmarshal patched container, invalid container patch: %w", err)
 			}
 
 			removeNativeGPUResourceClaim(container)
@@ -323,6 +325,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		return nil, fmt.Errorf("patch to container: %w", err)
 	}
 
+	// Additional pod level patch
 	strategicpatches, err := calculatePodPatch(currentBytes, pod, clientConfig, isLocalGPU)
 	if err != nil {
 		return nil, fmt.Errorf("calculate pod patch: %w", err)
@@ -409,12 +412,17 @@ func removeNativeGPUResourceClaim(container *corev1.Container) {
 	}
 }
 
-func serializeInjectionPatchJson(clientConfig *tfv1.ClientConfig, patchJSON []byte) ([]byte, error) {
+func serializeContainerInjectionPatchJson(clientConfig *tfv1.ClientConfig, patchJSON []byte, isLocalGPU bool) ([]byte, error) {
 	var err error
-	if clientConfig.PatchToContainer != nil {
+	if !isLocalGPU && clientConfig.PatchToContainer != nil {
 		patchJSON, err = json.Marshal(clientConfig.PatchToContainer)
 		if err != nil {
 			return nil, fmt.Errorf("marshal patchToContainer: %w", err)
+		}
+	} else if isLocalGPU && clientConfig.PatchToEmbeddedWorkerContainer != nil {
+		patchJSON, err = json.Marshal(clientConfig.PatchToEmbeddedWorkerContainer)
+		if err != nil {
+			return nil, fmt.Errorf("marshal patchToEmbeddedWorkerContainer: %w", err)
 		}
 	}
 	return patchJSON, nil

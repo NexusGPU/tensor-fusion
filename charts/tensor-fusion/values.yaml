@@ -35,6 +35,15 @@ controller:
   
   vectorAgentImage: docker.io/timberio/vector:latest-alpine
 
+  # Startup command for TensorFusion controller-manager
+  command:
+    - /manager
+    - -metrics-bind-address
+    - :9000
+    - -leader-elect
+    - -enable-auto-scale
+    - -enable-alert
+
   podAnnotations: {}
   tolerations: []
   affinity:

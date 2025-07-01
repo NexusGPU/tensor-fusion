@@ -34,9 +34,6 @@ type GPUPoolSpec struct {
 	NodeManagerConfig *NodeManagerConfig `json:"nodeManagerConfig,omitempty"`
 
 	// +optional
-	ObservabilityConfig *ObservabilityConfig `json:"observabilityConfig,omitempty"`
-
-	// +optional
 	QosConfig *QosConfig `json:"qosConfig,omitempty"`
 
 	// +optional
@@ -100,7 +97,7 @@ type NodeManagerConfig struct {
 	NodePoolRollingUpdatePolicy *NodeRollingUpdatePolicy `json:"nodePoolRollingUpdatePolicy,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=Provisioned;AutoSelect
+// +kubebuilder:validation:Enum=Provisioned;AutoSelect;Karpenter
 type ProvisioningMode string
 
 const (
@@ -228,23 +225,6 @@ type MaintenanceWindow struct {
 	Includes []string `json:"includes,omitempty"`
 }
 
-type ObservabilityConfig struct {
-	// +optional
-	Monitor *MonitorConfig `json:"monitor,omitempty"`
-
-	// +optional
-	Alert *AlertConfig `json:"alert,omitempty"`
-}
-
-type MonitorConfig struct {
-	Interval string `json:"interval,omitempty"`
-}
-
-type AlertConfig struct {
-	// +optional
-	Expression *runtime.RawExtension `json:"expression,omitempty"`
-}
-
 // Define different QoS and their price.
 type QosConfig struct {
 	Definitions []QosDefinition `json:"definitions,omitempty"`
@@ -338,6 +318,9 @@ type ClientConfig struct {
 
 	// +optional
 	PatchToContainer *runtime.RawExtension `json:"patchToContainer,omitempty"`
+
+	// +optional
+	PatchToEmbeddedWorkerContainer *runtime.RawExtension `json:"patchToEmbeddedWorkerContainer,omitempty"`
 
 	// +optional
 	PatchEmbeddedWorkerToPod *runtime.RawExtension `json:"patchEmbeddedWorkerToPod,omitempty"`

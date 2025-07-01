@@ -201,7 +201,7 @@ func main() {
 
 	// global config includes metrics table ttl / alert rules
 	// when changed, handle with different functions
-	if enableAlert && enableAutoScale {
+	if enableAlert || enableAutoScale {
 		// connect TSDB only when any feature depends on it
 		go setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
 	}
@@ -393,7 +393,12 @@ func main() {
 	}
 
 	// Initialize and start the HTTP server
-	connectionRouter, err := router.NewConnectionRouter(ctx, mgr.GetClient().(client.WithWatch))
+	client, err := client.NewWithWatch(kc, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "failed to create client with watch")
+		os.Exit(1)
+	}
+	connectionRouter, err := router.NewConnectionRouter(ctx, client)
 	if err != nil {
 		setupLog.Error(err, "failed to create connection router")
 		os.Exit(1)

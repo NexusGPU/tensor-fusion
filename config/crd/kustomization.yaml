@@ -11,6 +11,7 @@ resources:
 - bases/tensor-fusion.ai_schedulingconfigtemplates.yaml
 - bases/tensor-fusion.ai_workloadprofiles.yaml
 - bases/tensor-fusion.ai_tensorfusionworkloads.yaml
+- bases/tensor-fusion.ai_gpuresourcequotas.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

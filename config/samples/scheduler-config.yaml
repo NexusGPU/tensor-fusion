@@ -44,9 +44,9 @@ profiles:
           - utilization: 0
             score: 0
           - utilization: 80
-            score: 100
+            score: 10
           - utilization: 90
-            score: 20
+            score: 2
           - utilization: 100
             score: 0
         type: RequestedToCapacityRatio
