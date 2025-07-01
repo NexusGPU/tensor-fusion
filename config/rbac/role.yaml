@@ -8,6 +8,7 @@ rules:
   - ""
   resources:
   - configmaps
+  - events
   - namespaces
   verbs:
   - create
@@ -19,14 +20,8 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
-  - ""
-  resources:
   - nodes
+  - pods
   verbs:
   - create
   - delete
@@ -55,19 +50,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods
-  verbs:
-  - create
-  - delete
-  - deletecollection
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - pods/exec
   verbs:
   - create
@@ -76,8 +58,10 @@ rules:
   - update
 - apiGroups:
   - ""
+  - policy
+  - storage.k8s.io
   resources:
-  - secrets
+  - '*'
   verbs:
   - get
   - list

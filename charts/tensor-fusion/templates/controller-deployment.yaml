@@ -87,6 +87,10 @@ spec:
               mountPath: /etc/tensor-fusion/config.yaml
               subPath: config.yaml
               readOnly: true
+            - name: config
+              mountPath: /etc/tensor-fusion/scheduler-config.yaml
+              subPath: scheduler-config.yaml
+              readOnly: true
         {{- if .Values.agent.agentId }}
         - name: cluster-agent
           image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag | default "latest" }}"
@@ -172,6 +176,7 @@ spec:
         - name: kubernetes-logs
           hostPath:
             path: /var/log/pods
+            type: DirectoryOrCreate
       {{- with .Values.controller.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}

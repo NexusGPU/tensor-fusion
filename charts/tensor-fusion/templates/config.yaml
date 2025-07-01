@@ -10,3 +10,6 @@ data:
   # Read by tensor fusion operator, eval alert rules and send to alertmanager if enabledAlert is true
   config.yaml: |
     {{- toYaml .Values.dynamicConfig | nindent 4 }}
+  scheduler-config.yaml: |
+    {{- toYaml .Values.schedulerConfig | nindent 4 }}
+    

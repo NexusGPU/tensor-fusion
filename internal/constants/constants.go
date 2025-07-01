@@ -55,7 +55,7 @@ const (
 	VRAMRequestAnnotation          = Domain + "/vram-request"
 	TFLOPSLimitAnnotation          = Domain + "/tflops-limit"
 	VRAMLimitAnnotation            = Domain + "/vram-limit"
-	WorkloadProfileAnnotation      = Domain + "/client-profile"
+	WorkloadProfileAnnotation      = Domain + "/workload-profile"
 	InjectContainerAnnotation      = Domain + "/inject-container"
 	IsLocalGPUAnnotation           = Domain + "/is-local-gpu"
 	EmbeddedWorkerAnnotation       = Domain + "/embedded-worker"

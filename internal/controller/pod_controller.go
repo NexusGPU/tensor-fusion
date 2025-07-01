@@ -52,7 +52,9 @@ type PodReconciler struct {
 	PortAllocator *portallocator.PortAllocator
 }
 
-// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete;deletecollection
+// +kubebuilder:rbac:groups=core,resources=*,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=*,verbs=get;list;watch
+// +kubebuilder:rbac:groups=policy,resources=*,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create;get;update;patch
 // +kubebuilder:rbac:groups=core,resources=pods/finalizers,verbs=update
@@ -113,7 +115,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 
 	// generate tensor fusion connections and apply to cluster
 	if pod.Labels[constants.LabelComponent] == constants.ComponentClient {
-		tfConnection := generateTensorFusionConnection(pod)
+		tfConnection := buildTensorFusionConnectionObj(pod)
 		if tfConnection == nil {
 			log.Info("Pod is not a TensorFusion client, skipped, this should never happen", "pod", pod.Name)
 			return ctrl.Result{}, nil
@@ -160,7 +162,7 @@ func (r *PodReconciler) setPendingOwnedWorkload(ctx context.Context, pod *corev1
 	return r.Update(ctx, tfWorkload)
 }
 
-func generateTensorFusionConnection(pod *corev1.Pod) *tfv1.TensorFusionConnection {
+func buildTensorFusionConnectionObj(pod *corev1.Pod) *tfv1.TensorFusionConnection {
 	workloadName, ok := pod.Annotations[constants.WorkloadKey]
 	if !ok {
 		return nil
