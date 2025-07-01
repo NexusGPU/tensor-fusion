@@ -29,6 +29,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -263,6 +264,20 @@ func (r *TensorFusionWorkloadReconciler) scaleDownWorkers(ctx context.Context, w
 	for i := range pods {
 		podToDelete := &pods[i]
 		log.Info("Scaling down worker pod", "name", podToDelete.Name, "workload", workload.Name)
+
+		// If it's already being deleting, should avoid call delete multiple times
+		if !podToDelete.DeletionTimestamp.IsZero() {
+
+			// handle a corner case when pod don't have worker label and finalizer exists
+			if podToDelete.Labels[constants.LabelComponent] != constants.ComponentWorker &&
+				controllerutil.RemoveFinalizer(podToDelete, constants.Finalizer) {
+				if err := r.Update(ctx, podToDelete); err != nil {
+					return fmt.Errorf("can not remove wrong added finalizer: %w", err)
+				}
+			}
+			continue
+		}
+
 		// Delete the pod with foreground deletion policy
 		// The finalizer will handle GPU resource cleanup
 		if err := r.deletePod(ctx, podToDelete); err != nil {
@@ -333,17 +348,24 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 		LastTransitionTime: metav1.Now(),
 	}
 
-	if workload.Spec.Replicas != nil && readyReplicas == *workload.Spec.Replicas {
+	if failedWorkers > 0 {
+		// when any worker failed, workload status should be false
+		phase = tfv1.TensorFusionWorkloadPhaseFailed
+		readyCondition.Status = metav1.ConditionFalse
+		readyCondition.Reason = "WorkerFailed"
+		readyCondition.Message = fmt.Sprintf("Failed workers num: %d", failedWorkers)
+		r.Recorder.Eventf(workload, corev1.EventTypeWarning, "WorkerFailed", "Failed workers num: %d", failedWorkers)
+	} else if workload.Spec.IsDynamicReplica() {
+		// for dynamic replicas, if no worker failed, indicate workload is running
+		phase = tfv1.TensorFusionWorkloadPhaseRunning
+		readyCondition.Status = metav1.ConditionTrue
+		readyCondition.Reason = "WorkloadReady"
+		readyCondition.Message = "All dynamic worker replicas are running"
+	} else if workload.Spec.Replicas != nil && readyReplicas == *workload.Spec.Replicas {
 		phase = tfv1.TensorFusionWorkloadPhaseRunning
 		readyCondition.Status = metav1.ConditionTrue
 		readyCondition.Reason = "WorkloadReady"
 		readyCondition.Message = "All workers are running"
-	} else if failedWorkers > 0 {
-		phase = tfv1.TensorFusionWorkloadPhaseFailed
-		readyCondition.Status = metav1.ConditionFalse
-		readyCondition.Reason = "WorkerFailed"
-		readyCondition.Message = fmt.Sprintf("Failed workers: %d", failedWorkers)
-		r.Recorder.Eventf(workload, corev1.EventTypeWarning, "WorkerFailed", "Failed workers: %d", failedWorkers)
 	} else {
 		phase = tfv1.TensorFusionWorkloadPhasePending
 		readyCondition.Status = metav1.ConditionFalse

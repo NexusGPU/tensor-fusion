@@ -80,6 +80,11 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		pod.Namespace = req.Namespace
 	}
 
+	currentBytes, err := json.Marshal(pod)
+	if err != nil {
+		return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to marshal current pod: %w", err))
+	}
+
 	log := log.FromContext(ctx)
 	log.Info("Mutating pod", "generateName", pod.GenerateName, "namespace", pod.Namespace)
 
@@ -121,11 +126,15 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	}
 
 	// make sure required Pod info has been changed before generating patches
-	pod.Spec.SchedulerName = constants.SchedulerName
+	if tfInfo.Profile.IsLocalGPU {
+		// only patch scheduler when using local-gpu mode
+		// for remote vGPU mode, start worker with tensor-fusion scheduler
+		pod.Spec.SchedulerName = constants.SchedulerName
+	}
 	addOrOverridePodMissingAnnotations(pod, tfInfo)
 
 	// Inject initContainer and env variables
-	patches, err := m.patchTFClient(pod, pool, tfInfo.ContainerNames, tfInfo.Profile.IsLocalGPU)
+	patches, err := m.patchTFClient(pod, pool, tfInfo.ContainerNames, tfInfo.Profile.IsLocalGPU, currentBytes)
 	if err != nil {
 		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
 		return admission.Errored(http.StatusInternalServerError, err)
@@ -243,13 +252,8 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	pool *tfv1.GPUPool,
 	containerNames []string,
 	isLocalGPU bool,
+	currentBytes []byte,
 ) ([]jsonpatch.JsonPatchOperation, error) {
-	// Convert the current pod to JSON
-	currentBytes, err := json.Marshal(pod)
-	if err != nil {
-		return nil, fmt.Errorf("marshal current pod: %w", err)
-	}
-
 	clientConfig := pool.Spec.ComponentConfig.Client
 
 	if pod.Labels == nil {

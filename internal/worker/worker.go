@@ -57,6 +57,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 
 	// performance optimization, service link will cause high CPU usage when service number is large
 	spec.EnableServiceLinks = ptr.To(false)
+	spec.SchedulerName = constants.SchedulerName
 
 	// Add labels to identify this pod as part of the workload
 	labels, annotations := appendLabelsAndAnnotations(podTmpl, workload)

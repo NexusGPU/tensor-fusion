@@ -29,6 +29,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -137,15 +138,8 @@ func main() {
 	ctrl.SetLogger(klog.NewKlogr())
 	ctx := context.Background()
 
-	// print version info
 	setupLog.Info(version.VersionInfo())
 
-	// if the enable-http2 flag is false (the default), http/2 should be disabled
-	// due to its vulnerabilities. More specifically, disabling http/2 will
-	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
-	// Rapid Reset CVEs. For more information see:
-	// - https://github.com/advisories/GHSA-qppj-fm5r-hxr3
-	// - https://github.com/advisories/GHSA-4374-p667-p6c8
 	disableHTTP2 := func(c *tls.Config) {
 		setupLog.Info("disabling http/2")
 		c.NextProtos = []string{"http/1.1"}
@@ -182,17 +176,6 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       LeaderElectionID,
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -211,20 +194,45 @@ func main() {
 		setupLog.Info("auto scale enabled")
 	}
 
-	metricsRecorder := metrics.MetricsRecorder{
-		MetricsOutputPath:  metricsPath,
-		HourlyUnitPriceMap: gpuPricingMap,
-
-		// Worker level map will be updated by cluster reconcile
-		// Key is poolName, second level key is QoS level
-		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
-	}
-
-	startMetricsRecorder(enableLeaderElection, mgr, metricsRecorder)
+	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, gpuPricingMap)
 
 	// Initialize GPU allocator and set up watches
+	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr)
+
+	startWebhook(mgr, portAllocator)
+
+	startScheduler(ctx, allocator, mgr)
+
+	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator)
+
+	startHttpServerForTFClient(ctx, kc, portAllocator)
+
+	// +kubebuilder:scaffold:builder
+	addHealthCheckAPI(mgr)
+
+	addStopHandlers(mgr, allocator)
+
+	setupLog.Info("starting tensor fusion controller manager")
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		setupLog.Error(err, "problem running manager")
+		os.Exit(1)
+	}
+}
+
+func addHealthCheckAPI(mgr manager.Manager) {
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		setupLog.Error(err, "unable to set up health check")
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		setupLog.Error(err, "unable to set up ready check")
+		os.Exit(1)
+	}
+}
+
+func startTensorFusionAllocators(ctx context.Context, mgr manager.Manager) (*gpuallocator.GpuAllocator, *portallocator.PortAllocator) {
 	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 10*time.Second)
-	if _, err = allocator.SetupWithManager(ctx, mgr); err != nil {
+	if _, err := allocator.SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to set up GPU allocator watches")
 		os.Exit(1)
 	}
@@ -236,7 +244,41 @@ func main() {
 		os.Exit(1)
 	}
 	_ = portAllocator.SetupWithManager(ctx, mgr)
+	return allocator, portAllocator
+}
 
+func startHttpServerForTFClient(ctx context.Context, kc *rest.Config, portAllocator *portallocator.PortAllocator) {
+	client, err := client.NewWithWatch(kc, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "failed to create client with watch")
+		os.Exit(1)
+	}
+	connectionRouter, err := router.NewConnectionRouter(ctx, client)
+	if err != nil {
+		setupLog.Error(err, "failed to create connection router")
+		os.Exit(1)
+	}
+	assignHostPortRouter, err := router.NewAssignHostPortRouter(ctx, portAllocator)
+	if err != nil {
+		setupLog.Error(err, "failed to create assign host port router")
+		os.Exit(1)
+	}
+	httpServer := server.NewHTTPServer(connectionRouter, assignHostPortRouter)
+	go func() {
+		err := httpServer.Run()
+		if err != nil {
+			setupLog.Error(err, "problem running HTTP server")
+			os.Exit(1)
+		}
+	}()
+}
+
+func startCustomResourceController(ctx context.Context, mgr manager.Manager, metricsRecorder metrics.MetricsRecorder, allocator *gpuallocator.GpuAllocator, portAllocator *portallocator.PortAllocator) {
+	if os.Getenv(constants.EnableCustomResourceControllerEnv) == "false" {
+		return
+	}
+
+	var err error
 	if err = (&controller.TensorFusionConnectionReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -252,40 +294,6 @@ func main() {
 	}).SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPU")
 		os.Exit(1)
-	}
-
-	if os.Getenv(constants.EnableWebhookEnv) != "false" {
-		if err = webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
-			os.Exit(1)
-		}
-	}
-
-	if os.Getenv(constants.EnableSchedulerEnv) != "false" {
-		if schedulerConfigPath == "" {
-			setupLog.Error(err, "scheduler config path is empty, please and --scheduler-config in command line")
-			os.Exit(1)
-		}
-
-		gpuResourceFitOpt := app.WithPlugin(
-			gpuResourceFitPlugin.Name,
-			gpuResourceFitPlugin.NewWithDeps(allocator, mgr.GetClient()),
-		)
-		gpuTopoOpt := app.WithPlugin(
-			gpuTopoPlugin.Name,
-			gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
-		)
-
-		cc, scheduler, err := sched.SetupScheduler(ctx, mgr, schedulerConfigPath, gpuResourceFitOpt, gpuTopoOpt)
-		if err != nil {
-			setupLog.Error(err, "unable to create tensor fusion scheduler")
-			os.Exit(1)
-		}
-
-		if err := sched.RunScheduler(ctx, cc, scheduler, mgr); err != nil {
-			setupLog.Error(err, "unable to run tensor fusion scheduler")
-			os.Exit(1)
-		}
 	}
 
 	if err = (&controller.TensorFusionClusterReconciler{
@@ -382,59 +390,44 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUResourceQuota")
 		os.Exit(1)
 	}
-	// +kubebuilder:scaffold:builder
-	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		setupLog.Error(err, "unable to set up health check")
+}
+
+func startWebhook(mgr manager.Manager, portAllocator *portallocator.PortAllocator) {
+	if os.Getenv(constants.EnableWebhookEnv) == "false" {
+		return
+	}
+	if err := webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		setupLog.Error(err, "unable to set up ready check")
+}
+
+func startScheduler(ctx context.Context, allocator *gpuallocator.GpuAllocator, mgr manager.Manager) {
+	if os.Getenv(constants.EnableSchedulerEnv) == "false" {
+		return
+	}
+	if schedulerConfigPath == "" {
+		setupLog.Error(fmt.Errorf("scheduler config path is empty, please and --scheduler-config in command line"), "")
 		os.Exit(1)
 	}
 
-	// Initialize and start the HTTP server
-	client, err := client.NewWithWatch(kc, client.Options{Scheme: scheme})
-	if err != nil {
-		setupLog.Error(err, "failed to create client with watch")
-		os.Exit(1)
-	}
-	connectionRouter, err := router.NewConnectionRouter(ctx, client)
-	if err != nil {
-		setupLog.Error(err, "failed to create connection router")
-		os.Exit(1)
-	}
-	assignHostPortRouter, err := router.NewAssignHostPortRouter(ctx, portAllocator)
-	if err != nil {
-		setupLog.Error(err, "failed to create assign host port router")
-		os.Exit(1)
-	}
-	httpServer := server.NewHTTPServer(connectionRouter, assignHostPortRouter)
-	go func() {
-		err := httpServer.Run()
-		if err != nil {
-			setupLog.Error(err, "problem running HTTP server")
-			os.Exit(1)
-		}
-	}()
+	gpuResourceFitOpt := app.WithPlugin(
+		gpuResourceFitPlugin.Name,
+		gpuResourceFitPlugin.NewWithDeps(allocator, mgr.GetClient()),
+	)
+	gpuTopoOpt := app.WithPlugin(
+		gpuTopoPlugin.Name,
+		gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
+	)
 
-	// cleanup function to stop the allocator
-	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		// wait for the context to be done
-		<-ctx.Done()
-		setupLog.Info("stopping allocator")
-		if allocator != nil {
-			allocator.Stop()
-		}
-		return nil
-	}))
+	cc, scheduler, err := sched.SetupScheduler(ctx, mgr, schedulerConfigPath, gpuResourceFitOpt, gpuTopoOpt)
 	if err != nil {
-		setupLog.Error(err, "unable to add allocator cleanup to manager")
+		setupLog.Error(err, "unable to create tensor fusion scheduler")
 		os.Exit(1)
 	}
 
-	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-		setupLog.Error(err, "problem running manager")
+	if err := sched.RunScheduler(ctx, cc, scheduler, mgr); err != nil {
+		setupLog.Error(err, "unable to run tensor fusion scheduler")
 		os.Exit(1)
 	}
 }
@@ -493,7 +486,15 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 	}
 }
 
-func startMetricsRecorder(enableLeaderElection bool, mgr manager.Manager, metricsRecorder metrics.MetricsRecorder) {
+func startMetricsRecorder(enableLeaderElection bool, mgr manager.Manager, gpuPricingMap map[string]float64) metrics.MetricsRecorder {
+	metricsRecorder := metrics.MetricsRecorder{
+		MetricsOutputPath:  metricsPath,
+		HourlyUnitPriceMap: gpuPricingMap,
+
+		// Worker level map will be updated by cluster reconcile
+		// Key is poolName, second level key is QoS level
+		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
+	}
 	if enableLeaderElection {
 		go func() {
 			<-mgr.Elected()
@@ -502,6 +503,7 @@ func startMetricsRecorder(enableLeaderElection bool, mgr manager.Manager, metric
 	} else {
 		go metricsRecorder.Start()
 	}
+	return metricsRecorder
 }
 
 func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, gpuPricingMap map[string]float64) {
@@ -558,4 +560,20 @@ func setupTimeSeriesDB() *metrics.TimeSeriesDB {
 		return nil
 	}
 	return timeSeriesDB
+}
+
+func addStopHandlers(mgr manager.Manager, allocator *gpuallocator.GpuAllocator) {
+	err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		// wait for the context to be done
+		<-ctx.Done()
+		setupLog.Info("stopping allocator")
+		if allocator != nil {
+			allocator.Stop()
+		}
+		return nil
+	}))
+	if err != nil {
+		setupLog.Error(err, "unable to add allocator cleanup to manager")
+		os.Exit(1)
+	}
 }
