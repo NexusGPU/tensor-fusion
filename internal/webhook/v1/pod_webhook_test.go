@@ -28,6 +28,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
+	"gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -336,6 +338,18 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			// Verify the response
 			Expect(resp.Allowed).To(BeTrue())
 			Expect(resp.Patches).NotTo(BeEmpty())
+
+			scheduleMutation, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return patch.Path == "/spec/schedulerName"
+			})
+			Expect(found).To(BeTrue())
+			Expect(scheduleMutation.Value).To(Equal(constants.SchedulerName))
+
+			workloadAnnotationMutation, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return patch.Path == "/metadata/annotations/tensor-fusion.ai~1workload"
+			})
+			Expect(found).To(BeTrue())
+			Expect(workloadAnnotationMutation.Value).To(Equal("test-pod-local-gpu"))
 		})
 	})
 
