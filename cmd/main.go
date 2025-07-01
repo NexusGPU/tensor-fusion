@@ -230,7 +230,10 @@ func addHealthCheckAPI(mgr manager.Manager) {
 	}
 }
 
-func startTensorFusionAllocators(ctx context.Context, mgr manager.Manager) (*gpuallocator.GpuAllocator, *portallocator.PortAllocator) {
+func startTensorFusionAllocators(
+	ctx context.Context,
+	mgr manager.Manager,
+) (*gpuallocator.GpuAllocator, *portallocator.PortAllocator) {
 	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 10*time.Second)
 	if _, err := allocator.SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to set up GPU allocator watches")
@@ -273,8 +276,14 @@ func startHttpServerForTFClient(ctx context.Context, kc *rest.Config, portAlloca
 	}()
 }
 
-func startCustomResourceController(ctx context.Context, mgr manager.Manager, metricsRecorder metrics.MetricsRecorder, allocator *gpuallocator.GpuAllocator, portAllocator *portallocator.PortAllocator) {
-	if os.Getenv(constants.EnableCustomResourceControllerEnv) == "false" {
+func startCustomResourceController(
+	ctx context.Context,
+	mgr manager.Manager,
+	metricsRecorder metrics.MetricsRecorder,
+	allocator *gpuallocator.GpuAllocator,
+	portAllocator *portallocator.PortAllocator,
+) {
+	if os.Getenv(constants.EnableCustomResourceControllerEnv) == constants.FalseStringValue {
 		return
 	}
 
@@ -393,7 +402,7 @@ func startCustomResourceController(ctx context.Context, mgr manager.Manager, met
 }
 
 func startWebhook(mgr manager.Manager, portAllocator *portallocator.PortAllocator) {
-	if os.Getenv(constants.EnableWebhookEnv) == "false" {
+	if os.Getenv(constants.EnableWebhookEnv) == constants.FalseStringValue {
 		return
 	}
 	if err := webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator); err != nil {
@@ -403,7 +412,7 @@ func startWebhook(mgr manager.Manager, portAllocator *portallocator.PortAllocato
 }
 
 func startScheduler(ctx context.Context, allocator *gpuallocator.GpuAllocator, mgr manager.Manager) {
-	if os.Getenv(constants.EnableSchedulerEnv) == "false" {
+	if os.Getenv(constants.EnableSchedulerEnv) == constants.FalseStringValue {
 		return
 	}
 	if schedulerConfigPath == "" {
@@ -486,7 +495,11 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 	}
 }
 
-func startMetricsRecorder(enableLeaderElection bool, mgr manager.Manager, gpuPricingMap map[string]float64) metrics.MetricsRecorder {
+func startMetricsRecorder(
+	enableLeaderElection bool,
+	mgr manager.Manager,
+	gpuPricingMap map[string]float64,
+) metrics.MetricsRecorder {
 	metricsRecorder := metrics.MetricsRecorder{
 		MetricsOutputPath:  metricsPath,
 		HourlyUnitPriceMap: gpuPricingMap,
