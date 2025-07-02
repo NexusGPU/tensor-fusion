@@ -197,7 +197,7 @@ func (r *TensorFusionClusterReconciler) listOwnedGPUPools(ctx context.Context, t
 	return gpupoolsList.Items, nil
 }
 
-func (r *TensorFusionClusterReconciler) reconcileTimeSeriesDatabase(ctx context.Context, tfc *tfv1.TensorFusionCluster) (bool, error) {
+func (r *TensorFusionClusterReconciler) reconcileTimeSeriesDatabase(_ context.Context, _ *tfv1.TensorFusionCluster) (bool, error) {
 	// TODO: Not implemented yet
 	return false, nil
 }

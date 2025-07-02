@@ -119,6 +119,7 @@
         "tensorfusionaiv",
         "tensorfusioncluster",
         "tensorfusionclusters",
+        "tensorfusionconnection",
         "tensorfusionconnections",
         "tensorfusionworkload",
         "tensorfusionworkloads",

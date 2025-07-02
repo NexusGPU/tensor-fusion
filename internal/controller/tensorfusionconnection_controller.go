@@ -87,10 +87,8 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 		}
 	}
 
-	needSelectWorker, shouldReturn, err := r.shouldSelectWorker(ctx, connection)
-	if shouldReturn {
-		// when err is not nil and shouldReturn is true,
-		// it means already cleared the existing workerName and updated status, wait next reconcile loop
+	needSelectWorker, err := r.shouldSelectWorker(ctx, connection)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -99,6 +97,7 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{}, nil
 	}
 
+	log.Info("Selecting worker for connection", "connection", connection.Name, "namespace", connection.Namespace)
 	if workload.Spec.IsDynamicReplica() {
 		// 1st MODE: select the dedicated worker if it's running, otherwise wait utils it's becoming ready
 		return ctrl.Result{}, r.syncDedicatedWorkerStatus(ctx, connection)
@@ -109,8 +108,8 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 }
 
 func (r *TensorFusionConnectionReconciler) syncDedicatedWorkerStatus(ctx context.Context, connection *tfv1.TensorFusionConnection) error {
-	var pod v1.Pod
-	if err := r.Get(ctx, client.ObjectKey{Name: connection.Name, Namespace: connection.Namespace}, &pod); err != nil {
+	pod := &v1.Pod{}
+	if err := r.Get(ctx, client.ObjectKey{Name: connection.Name, Namespace: connection.Namespace}, pod); err != nil {
 		return fmt.Errorf("failed to get dedicated worker pod for connection %w", err)
 	}
 	if pod.Status.Phase != v1.PodRunning {
@@ -124,12 +123,16 @@ func (r *TensorFusionConnectionReconciler) syncDedicatedWorkerStatus(ctx context
 		if revision == "" {
 			revision = "0"
 		}
-		connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d+%s-%s", pod.Status.PodIP, constants.TensorFusionWorkerPortNumber, pod.Name, revision)
+		setConnectionWorkerURL(connection, pod.Status.PodIP, pod.Name, revision)
 		if err := r.Status().Update(ctx, connection); err != nil {
 			return fmt.Errorf("failed to update connection status: %w", err)
 		}
 		return nil
 	}
+}
+
+func setConnectionWorkerURL(connection *tfv1.TensorFusionConnection, podIp string, podName string, revision string) {
+	connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d+%s-%s", podIp, constants.TensorFusionWorkerPortNumber, podName, revision)
 }
 
 func (r *TensorFusionConnectionReconciler) selectWorkerAndSyncStatusFromWorkerPool(
@@ -162,8 +165,7 @@ func (r *TensorFusionConnectionReconciler) selectWorkerAndSyncStatusFromWorkerPo
 	if resourceVersion == "" {
 		resourceVersion = "0"
 	}
-
-	connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d+%s-%s", s.WorkerIp, constants.TensorFusionWorkerPortNumber, s.WorkerName, resourceVersion)
+	setConnectionWorkerURL(connection, s.WorkerIp, s.WorkerName, resourceVersion)
 	if err := r.Status().Update(ctx, connection); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update connection status: %w", err)
 	}
@@ -202,8 +204,7 @@ func (r *TensorFusionConnectionReconciler) patchMatchedWorkerLabel(ctx context.C
 
 func (r *TensorFusionConnectionReconciler) shouldSelectWorker(
 	ctx context.Context, connection *tfv1.TensorFusionConnection,
-) (bool, bool, error) {
-	needSelectWorker := false
+) (needSelectWorker bool, err error) {
 	if connection.Status.WorkerName != "" {
 		// check if worker pod is still running
 		pod := &v1.Pod{}
@@ -211,29 +212,40 @@ func (r *TensorFusionConnectionReconciler) shouldSelectWorker(
 			if errors.IsNotFound(err) {
 				needSelectWorker = true
 			} else {
-				return false, true, fmt.Errorf("failed to get worker pod: %w", err)
+				return needSelectWorker, fmt.Errorf("failed to get worker pod: %w", err)
 			}
 		}
+		// NOTE: no need to handle pod deleting since connection should be deleted at first, sync running status with Pod
 		if pod.Status.Phase != v1.PodRunning {
 			connection.Status.WorkerName = ""
 			connection.Status.Phase = tfv1.WorkerFailed
 			connection.Status.ConnectionURL = ""
 			// set worker name to empty to trigger select worker again
 			if updateErr := r.Status().Update(ctx, connection); updateErr != nil {
-				return false, true, fmt.Errorf("failed to update connection status: %w", updateErr)
+				return false, fmt.Errorf("failed to update connection status: %w", updateErr)
 			}
-			return false, true, nil
+			// let next reconcile loop to trigger select worker
+			return false, nil
+		} else if connection.Status.Phase != tfv1.WorkerRunning {
+			// pod is running now, but connection is not running, update connection to running
+			connection.Status.Phase = tfv1.WorkerRunning
+			setConnectionWorkerURL(connection, pod.Status.PodIP, pod.Name, pod.ResourceVersion)
+			if updateErr := r.Status().Update(ctx, connection); updateErr != nil {
+				return false, fmt.Errorf("failed to update connection status: %w", updateErr)
+			}
+			// current worker is working again, no need to select another worker
+			return false, nil
 		}
 	} else {
 		if connection.Status.Phase == "" {
 			connection.Status.Phase = tfv1.WorkerPending
 			if updateErr := r.Status().Update(ctx, connection); updateErr != nil {
-				return false, true, fmt.Errorf("failed to update connection status: %w", updateErr)
+				return false, fmt.Errorf("failed to update connection status: %w", updateErr)
 			}
 		}
 		needSelectWorker = true
 	}
-	return needSelectWorker, false, nil
+	return needSelectWorker, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
