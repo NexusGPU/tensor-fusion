@@ -185,8 +185,8 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 					},
 				},
 				Status: tfv1.TensorFusionWorkloadStatus{
-					Replicas:      0,
-					ReadyReplicas: 0,
+					WorkerCount:  0,
+					ReadyWorkers: 0,
 				},
 			}
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())

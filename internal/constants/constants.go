@@ -179,7 +179,7 @@ const NvidiaVisibleAllDeviceEnv = "NVIDIA_VISIBLE_DEVICES"
 const NvidiaVisibleAllDeviceValue = "all"
 
 const (
-	LowFrequencyObjFailureInitialDelay        = 100 * time.Millisecond
+	LowFrequencyObjFailureInitialDelay        = 300 * time.Millisecond
 	LowFrequencyObjFailureMaxDelay            = 1000 * time.Second
 	LowFrequencyObjFailureMaxRPS              = 1
 	LowFrequencyObjFailureMaxBurst            = 1

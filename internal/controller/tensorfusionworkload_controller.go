@@ -40,6 +40,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
+	"github.com/samber/lo"
 )
 
 // TensorFusionWorkloadReconciler reconciles a TensorFusionWorkload object
@@ -78,6 +79,10 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list pods: %w", err)
 	}
+	// only calculate state based on not deleted pods, otherwise will cause wrong total replica count
+	podList.Items = lo.Filter(podList.Items, func(pod corev1.Pod, _ int) bool {
+		return pod.DeletionTimestamp.IsZero()
+	})
 
 	// handle finalizer
 	shouldReturn, err := utils.HandleFinalizer(ctx, workload, r.Client, func(ctx context.Context, workload *tfv1.TensorFusionWorkload) (bool, error) {
@@ -130,15 +135,16 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		if err := r.Status().Update(ctx, workload); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update status: %w", err)
 		}
+		return ctrl.Result{}, nil
 	}
 
 	// When it is not dynamic replica, workload maintains worker replicas by itself,
 	// In this mode, allow any Pod select connection to connect to any worker,
 	// to achieve a sub-pool for lower costs when CPU side scaling frequency is high
 	if !workload.Spec.IsDynamicReplica() {
-		result, err := r.reconcileScaling(ctx, workload, podList, workerGenerator, podTemplateHash)
-		if err != nil || !result.IsZero() {
-			return result, err
+		err := r.reconcileScaling(ctx, workload, podList, workerGenerator, podTemplateHash)
+		if err != nil {
+			return ctrl.Result{}, err
 		}
 	}
 
@@ -156,10 +162,15 @@ func (r *TensorFusionWorkloadReconciler) reconcileScaling(
 	podList *corev1.PodList,
 	workerGenerator *worker.WorkerGenerator,
 	podTemplateHash string,
-) (ctrl.Result, error) {
+) error {
 	log := log.FromContext(ctx)
 	// Check if there are any Pods using the old podTemplateHash and delete them if any
 	if len(podList.Items) > 0 {
+		// make oldest pod first, to delete from oldest to latest outdated pod
+		sort.Slice(podList.Items, func(i, j int) bool {
+			return podList.Items[i].CreationTimestamp.Before(&podList.Items[j].CreationTimestamp)
+		})
+
 		var outdatedPods []corev1.Pod
 		for i := range podList.Items {
 			pod := &podList.Items[i]
@@ -171,10 +182,10 @@ func (r *TensorFusionWorkloadReconciler) reconcileScaling(
 		if len(outdatedPods) > 0 {
 			log.Info("Found outdated pods with different template hash", "count", len(outdatedPods))
 			if err := r.scaleDownWorkers(ctx, workload, outdatedPods); err != nil {
-				return ctrl.Result{}, err
+				return err
 			}
-			// After deletion, requeue, and the next reconcile will create a new pod
-			return ctrl.Result{Requeue: true}, nil
+			// After deletion, requeue will be triggered by deleted Pod
+			return nil
 		}
 	}
 
@@ -189,10 +200,10 @@ func (r *TensorFusionWorkloadReconciler) reconcileScaling(
 	log.Info("Current replicas", "count", currentReplicas, "desired", desiredReplicas)
 
 	// Update workload status
-	if workload.Status.Replicas != currentReplicas {
-		workload.Status.Replicas = currentReplicas
+	if workload.Status.WorkerCount != currentReplicas {
+		workload.Status.WorkerCount = currentReplicas
 		if err := r.Status().Update(ctx, workload); err != nil {
-			return ctrl.Result{}, fmt.Errorf("update status: %w", err)
+			return fmt.Errorf("update status: %w", err)
 		}
 	}
 
@@ -203,7 +214,7 @@ func (r *TensorFusionWorkloadReconciler) reconcileScaling(
 		// Calculate how many pods need to be added
 		podsToAdd := int(desiredReplicas - currentReplicas)
 		if err := r.scaleUpWorkers(ctx, workerGenerator, workload, podsToAdd, podTemplateHash); err != nil {
-			return ctrl.Result{}, fmt.Errorf("scale up workers: %w", err)
+			return fmt.Errorf("scale up workers: %w", err)
 		}
 	} else if currentReplicas > desiredReplicas {
 		log.Info("Scaling down workers", "from", currentReplicas, "to", desiredReplicas)
@@ -216,11 +227,11 @@ func (r *TensorFusionWorkloadReconciler) reconcileScaling(
 		// Calculate how many pods need to be removed
 		podsToRemove := int(currentReplicas - desiredReplicas)
 		if err := r.scaleDownWorkers(ctx, workload, podList.Items[:podsToRemove]); err != nil {
-			return ctrl.Result{}, err
+			return err
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func handleMetricsRecorder(podList *corev1.PodList, workload *tfv1.TensorFusionWorkload) {
@@ -260,7 +271,6 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 // scaleDownWorkers handles the scaling down of worker pods
 func (r *TensorFusionWorkloadReconciler) scaleDownWorkers(ctx context.Context, workload *tfv1.TensorFusionWorkload, pods []corev1.Pod) error {
 	log := log.FromContext(ctx)
-
 	for i := range pods {
 		podToDelete := &pods[i]
 		log.Info("Scaling down worker pod", "name", podToDelete.Name, "workload", workload.Name)
@@ -375,7 +385,12 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 	conditions = append(conditions, readyCondition)
 
 	// Check if we need to update status
-	statusChanged := workload.Status.ReadyReplicas != readyReplicas ||
+	totalReplicasChangedInDynamicReplicaMode :=
+		workload.Status.WorkerCount != int32(len(pods)) && workload.Spec.IsDynamicReplica()
+	if totalReplicasChangedInDynamicReplicaMode {
+		workload.Status.WorkerCount = int32(len(pods))
+	}
+	statusChanged := totalReplicasChangedInDynamicReplicaMode || workload.Status.ReadyWorkers != readyReplicas ||
 		workload.Status.Phase != phase ||
 		!utils.EqualConditionsDisregardTransitionTime(workload.Status.Conditions, conditions)
 
@@ -383,7 +398,7 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 		log.Info("Updating workload status", "phase", phase, "readyReplicas", readyReplicas)
 		workload.Status.Phase = phase
 		workload.Status.Conditions = conditions
-		workload.Status.ReadyReplicas = readyReplicas
+		workload.Status.ReadyWorkers = readyReplicas
 		if err := r.Status().Update(ctx, workload); err != nil {
 			return fmt.Errorf("update workload status: %w", err)
 		}
