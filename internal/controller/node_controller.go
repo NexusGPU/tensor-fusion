@@ -53,7 +53,7 @@ type NodeReconciler struct {
 
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=nodes/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=core,resources=nodes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=nodes/finalizers,verbs=create;get;patch;update
 
 // This reconcile loop only take effect on nodeSelector mode, while in AutoProvision mode, GPUNode will manage the K8S Node rather than reversed
 func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

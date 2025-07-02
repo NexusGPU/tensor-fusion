@@ -350,10 +350,13 @@ func (s *PortAllocator) initBitMapForNodeLevelPortAssign(ctx context.Context) {
 
 	size := (s.PortRangeEndNode-s.PortRangeStartNode)/64 + 1
 	for _, pod := range podList.Items {
-		if pod.Annotations == nil {
+		if pod.Annotations == nil || pod.Annotations[constants.GenPortNumberAnnotation] == "" {
 			continue
 		}
-		port, _ := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
+		port, err := strconv.Atoi(pod.Annotations[constants.GenPortNumberAnnotation])
+		if err != nil {
+			continue
+		}
 		if port > s.PortRangeEndNode || port < s.PortRangeStartNode {
 			log.Error(err, "existing Pod's node level host port out of range", "port", port, "expected-start", s.PortRangeStartNode, "expected-end", s.PortRangeEndNode, "pod", pod.Name, "node", pod.Spec.NodeName)
 			continue

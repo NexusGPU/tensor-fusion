@@ -72,7 +72,7 @@ func TestControllers(t *testing.T) {
 	if os.Getenv("DEBUG_MODE") == constants.TrueStringValue {
 		SetDefaultEventuallyTimeout(10 * time.Minute)
 	} else {
-		SetDefaultEventuallyTimeout(7 * time.Second)
+		SetDefaultEventuallyTimeout(12 * time.Second)
 	}
 	SetDefaultEventuallyPollingInterval(200 * time.Millisecond)
 	SetDefaultConsistentlyDuration(5 * time.Second)

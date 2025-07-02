@@ -480,18 +480,16 @@ spec:
               podTemplateHash:
                 description: Hash of the pod template used to create worker pods
                 type: string
-              readyReplicas:
-                description: readyReplicas is the number of pods created for this
-                  Workload with a Ready Condition.
+              readyWorkers:
+                description: readyWorkers is the number of vGPU workers ready
                 format: int32
                 type: integer
-              replicas:
-                description: replicas is the number of Pods created by the Workload
-                  controller.
+              workerCount:
+                description: workerCount is the number of vGPU workers
                 format: int32
                 type: integer
             required:
-            - replicas
+            - workerCount
             type: object
         type: object
     served: true

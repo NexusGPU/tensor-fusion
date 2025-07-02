@@ -476,13 +476,13 @@ func checkWorkloadStatus(in *tfv1.TensorFusionWorkload) {
 		g.Expect(err).To(Succeed())
 
 		// Check basic status
-		g.Expect(workload.Status.Replicas).Should(Equal(*workload.Spec.Replicas))
+		g.Expect(workload.Status.WorkerCount).Should(Equal(*workload.Spec.Replicas))
 
 		if *workload.Spec.Replicas == 0 {
 			return
 		}
 		// Check phase and conditions
-		if workload.Status.Replicas == 0 {
+		if workload.Status.WorkerCount == 0 {
 			g.Expect(workload.Status.Phase).Should(Equal(tfv1.TensorFusionWorkloadPhasePending))
 		} else {
 			readyCondition, found := lo.Find(workload.Status.Conditions, func(c metav1.Condition) bool {

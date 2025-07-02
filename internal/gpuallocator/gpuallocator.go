@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,7 +91,7 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 
 	// Create base filter store with common filters
 	baseRegistry := filter.NewFilterRegistry().With(
-		filter.NewPhaseFilter(tfv1.TensorFusionGPUPhaseRunning),
+		filter.NewPhaseFilter(tfv1.TensorFusionGPUPhaseRunning, tfv1.TensorFusionGPUPhasePending),
 	)
 
 	// Create quota store
@@ -485,10 +486,19 @@ func (s *GpuAllocator) GetQuotaStore() *quota.QuotaStore {
 	return s.quotaStore
 }
 
+type scoredGPU struct {
+	nodeName string
+	gpuName  string
+	score    int
+}
+
 // First level is k8s node name, second level is GPU name, value is score
 func (s *GpuAllocator) Score(ctx context.Context, cfg *config.GPUFitConfig, req tfv1.AllocRequest, validNodeGPUs map[string][]tfv1.GPU) map[string]map[string]int {
 	result := make(map[string]map[string]int, len(validNodeGPUs))
 	strategy := NewStrategy(s.getPlacementMode(ctx, req.PoolName), cfg)
+
+	allScores := make([]scoredGPU, 0)
+
 	for nodeName, gpus := range validNodeGPUs {
 		for _, gpu := range gpus {
 			res := strategy.Score(gpu)
@@ -496,9 +506,31 @@ func (s *GpuAllocator) Score(ctx context.Context, cfg *config.GPUFitConfig, req 
 				result[nodeName] = make(map[string]int, len(gpus))
 			}
 			result[nodeName][gpu.Name] = res
+			allScores = append(allScores, scoredGPU{
+				nodeName: nodeName,
+				gpuName:  gpu.Name,
+				score:    res,
+			})
 		}
 	}
+
+	log.FromContext(ctx).Info("GPU scheduler score stage completed", "pod", req.PodMeta.Name, "top score gpus", strings.Join(topScoreItems(allScores), ", "))
 	return result
+}
+
+func topScoreItems(allScores []scoredGPU) []string {
+	sort.Slice(allScores, func(i, j int) bool {
+		return allScores[i].score > allScores[j].score
+	})
+	// Get top N (10 at most) scored GPUs
+	topN := min(len(allScores), 10)
+
+	// Format top scores for logging
+	topScores := make([]string, topN)
+	for i := range topN {
+		topScores[i] = fmt.Sprintf("%s/%s:%d", allScores[i].nodeName, allScores[i].gpuName, allScores[i].score)
+	}
+	return topScores
 }
 
 // startSyncLoop starts a goroutine that periodically syncs the in-memory store with Kubernetes

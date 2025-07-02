@@ -1,6 +1,8 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/NexusGPU/tensor-fusion/internal/server/router"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
@@ -9,6 +11,7 @@ import (
 func NewHTTPServer(
 	cr *router.ConnectionRouter,
 	ahp *router.AssignHostPortRouter,
+	leaderChan <-chan struct{},
 ) *gin.Engine {
 
 	r := gin.New()
@@ -18,6 +21,18 @@ func NewHTTPServer(
 
 	apiGroup := r.Group("/api")
 	apiGroup.GET("/connection", cr.Get)
-	apiGroup.POST("/assign-host-port", ahp.AssignHostPort)
+	apiGroup.POST("/assign-host-port", func(ctx *gin.Context) {
+		if leaderChan == nil {
+			ctx.String(http.StatusServiceUnavailable, "current instance is not the leader")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-leaderChan:
+		}
+		// suspend API call utils it becomes leader
+		ahp.AssignHostPort(ctx)
+	})
 	return r
 }

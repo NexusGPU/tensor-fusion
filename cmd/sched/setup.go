@@ -214,7 +214,10 @@ func preHandleConfig(cfgPath string) (string, error) {
 		)
 	}
 
-	// TODO set other fields if needed
+	// Replace to KUBECONFIG path if env var exists
+	if os.Getenv("KUBECONFIG") != "" {
+		cfgRaw[clientConnectionCfgKey].(map[string]interface{})[kubeConfigCfgKey] = os.Getenv("KUBECONFIG")
+	}
 
 	cfgBytes, err = yaml.Marshal(cfgRaw)
 	if err != nil {

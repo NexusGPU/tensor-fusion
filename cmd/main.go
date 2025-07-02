@@ -156,6 +156,7 @@ func main() {
 	gpuInfos := make([]config.GpuInfo, 0)
 	gpuPricingMap := make(map[string]float64)
 	startWatchGPUInfoChanges(ctx, &gpuInfos, gpuPricingMap)
+	utils.InitServiceAccountConfig()
 
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
@@ -205,7 +206,7 @@ func main() {
 
 	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator)
 
-	startHttpServerForTFClient(ctx, kc, portAllocator)
+	startHttpServerForTFClient(ctx, kc, portAllocator, mgr.Elected())
 
 	// +kubebuilder:scaffold:builder
 	addHealthCheckAPI(mgr)
@@ -250,7 +251,12 @@ func startTensorFusionAllocators(
 	return allocator, portAllocator
 }
 
-func startHttpServerForTFClient(ctx context.Context, kc *rest.Config, portAllocator *portallocator.PortAllocator) {
+func startHttpServerForTFClient(
+	ctx context.Context,
+	kc *rest.Config,
+	portAllocator *portallocator.PortAllocator,
+	leaderChan <-chan struct{},
+) {
 	client, err := client.NewWithWatch(kc, client.Options{Scheme: scheme})
 	if err != nil {
 		setupLog.Error(err, "failed to create client with watch")
@@ -266,7 +272,7 @@ func startHttpServerForTFClient(ctx context.Context, kc *rest.Config, portAlloca
 		setupLog.Error(err, "failed to create assign host port router")
 		os.Exit(1)
 	}
-	httpServer := server.NewHTTPServer(connectionRouter, assignHostPortRouter)
+	httpServer := server.NewHTTPServer(connectionRouter, assignHostPortRouter, leaderChan)
 	go func() {
 		err := httpServer.Run()
 		if err != nil {

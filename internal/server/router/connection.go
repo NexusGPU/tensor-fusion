@@ -3,17 +3,32 @@ package router
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/gin-gonic/gin"
+	v1 "k8s.io/api/authentication/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/apimachinery/pkg/watch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+const JWTTokenCacheDuration = time.Minute * 30
+const JWTTokenCacheSize = 20000
+const BearerPrefix = "Bearer "
+
 type ConnectionRouter struct {
-	watcher *connectionWatcher
+	watcher  *connectionWatcher
+	lruCache *cache.LRUExpireCache
+
+	client client.WithWatch
 }
 
 func NewConnectionRouter(ctx context.Context, client client.WithWatch) (*ConnectionRouter, error) {
@@ -21,7 +36,11 @@ func NewConnectionRouter(ctx context.Context, client client.WithWatch) (*Connect
 	if err != nil {
 		return nil, fmt.Errorf("create connection watcher: %w", err)
 	}
-	return &ConnectionRouter{watcher: watcher}, nil
+	return &ConnectionRouter{
+		watcher:  watcher,
+		client:   client,
+		lruCache: cache.NewLRUExpireCache(JWTTokenCacheSize),
+	}, nil
 }
 
 func (cr *ConnectionRouter) Get(ctx *gin.Context) {
@@ -33,6 +52,13 @@ func (cr *ConnectionRouter) Get(ctx *gin.Context) {
 	if conn == nil {
 		ctx.JSON(404, gin.H{"error": "connection not found"})
 		return
+	}
+
+	if os.Getenv(constants.DisableConnectionAuthEnv) != constants.TrueStringValue {
+		if !cr.authenticatePodConnection(ctx, conn) {
+			ctx.JSON(401, gin.H{"error": "unauthorized"})
+			return
+		}
 	}
 
 	if conn.Status.Phase == tfv1.WorkerRunning {
@@ -149,4 +175,61 @@ func (cw *connectionWatcher) watchConnections(ctx context.Context, watcher watch
 			cw.mu.RUnlock()
 		}
 	}
+}
+
+func (cr *ConnectionRouter) authenticatePodConnection(ctx *gin.Context, conn *tfv1.TensorFusionConnection) bool {
+	if len(conn.OwnerReferences) == 0 {
+		log.FromContext(ctx).Error(nil, "connection owner reference is empty")
+		return false
+	}
+	token := ctx.GetHeader(constants.AuthorizationHeader)
+
+	if token == "" || !strings.HasPrefix(token, BearerPrefix) {
+		return false
+	}
+	token = token[len(BearerPrefix):]
+
+	// use cache to avoid repeated token review and unnecessary API calls to API server
+	if value, exists := cr.lruCache.Get(token); exists {
+		if value.(bool) {
+			log.FromContext(ctx).Info("token authentication successful for connection from cache", "connection", conn.Name)
+			return true
+		}
+		log.FromContext(ctx).Info("token authentication failed for connection from cache", "connection", conn.Name)
+		return false
+	}
+
+	tokenReview := &v1.TokenReview{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: conn.Name,
+		},
+		Spec: v1.TokenReviewSpec{
+			Token: token,
+		},
+	}
+	if err := cr.client.Create(ctx, tokenReview); err != nil {
+		log.FromContext(ctx).Error(err, "token authentication failed, auth endpoint error", "connection", conn.Name)
+		return false
+	}
+	if !tokenReview.Status.Authenticated {
+		cr.lruCache.Add(token, false, JWTTokenCacheDuration)
+		log.FromContext(ctx).Error(nil, "token authentication failed, invalid token", "connection", conn.Name)
+		return false
+	}
+	if tokenReview.Status.User.Extra == nil ||
+		len(tokenReview.Status.User.Extra[constants.ExtraVerificationInfoPodIDKey]) == 0 {
+		cr.lruCache.Add(token, false, JWTTokenCacheDuration)
+		log.FromContext(ctx).Error(nil, "token authentication failed, no valid pod UID in token", "connection", conn.Name)
+		return false
+	}
+	// verified pod ID, the connection is valid
+	if string(conn.OwnerReferences[0].UID) == tokenReview.Status.User.Extra[constants.ExtraVerificationInfoPodIDKey][0] {
+		cr.lruCache.Add(token, true, JWTTokenCacheDuration)
+		log.FromContext(ctx).Info("token authentication successful for connection", "connection", conn.Name)
+		return true
+	}
+
+	cr.lruCache.Add(token, false, JWTTokenCacheDuration)
+	log.FromContext(ctx).Error(nil, "token authentication failed, pod ID not matched", "connection", conn.Name)
+	return false
 }

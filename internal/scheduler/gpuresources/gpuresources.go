@@ -98,6 +98,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 
 	filteredGPUs, err := s.allocator.CheckQuotaAndFilter(ctx, &allocRequest)
 	if err != nil {
+		s.logger.Error(err, "failed to check quota and filter", "pod", pod.Name)
 		return nil, framework.NewStatus(framework.Unschedulable, err.Error())
 	}
 
@@ -113,6 +114,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 			nodeNames.Insert(k)
 		}
 	}
+	s.logger.Info("filtered valid node GPUs", "validNodeGPU count", len(validNodeGPUs), "nodeNames count", nodeNames.Len(), "pod", pod.Name)
 
 	// assign score based on different strategies
 	score := s.allocator.Score(ctx, s.cfg, allocRequest, validNodeGPUs)
@@ -205,6 +207,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 	schedulingResult.FinalGPUs = lo.Map(gpuScoreEntries[:neededGPUs], func(entry lo.Entry[string, int], _ int) string {
 		return entry.Key
 	})
+	state.Write(CycleStateGPUSchedulingResult, schedulingResult)
 
 	_, err = s.allocator.Bind(
 		schedulingResult.FinalGPUs,
@@ -239,6 +242,7 @@ func (s *GPUFit) PreBind(ctx context.Context, state *framework.CycleState, pod *
 	}
 	// write the allocated GPU info to Pod in bindingCycle, before default binder changing the Pod nodeName info
 	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
+	s.logger.Info("PreBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
 	patch := []byte(`[{
 		"op": "add",
 		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",

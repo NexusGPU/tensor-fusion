@@ -57,11 +57,11 @@ type TensorFusionWorkloadStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// replicas is the number of Pods created by the Workload controller.
-	Replicas int32 `json:"replicas"`
+	// workerCount is the number of vGPU workers
+	WorkerCount int32 `json:"workerCount"`
 
-	// readyReplicas is the number of pods created for this Workload with a Ready Condition.
-	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
+	// readyWorkers is the number of vGPU workers ready
+	ReadyWorkers int32 `json:"readyWorkers,omitempty"`
 
 	// Hash of the pod template used to create worker pods
 	PodTemplateHash string `json:"podTemplateHash,omitempty"`
