@@ -99,8 +99,6 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 	filteredGPUs, err := s.allocator.CheckQuotaAndFilter(ctx, &allocRequest)
 	if err != nil {
 		s.logger.Error(err, "failed to check quota and filter", "pod", pod.Name)
-		s.fh.EventRecorder().Eventf(pod, nil, v1.EventTypeWarning,
-			"FailedToScheduleGPU", "check quota and pool issue", err.Error(), "workload", allocRequest.WorkloadNameNamespace.String())
 		return nil, framework.NewStatus(framework.Unschedulable, err.Error())
 	}
 
