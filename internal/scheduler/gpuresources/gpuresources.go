@@ -205,6 +205,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 	schedulingResult.FinalGPUs = lo.Map(gpuScoreEntries[:neededGPUs], func(entry lo.Entry[string, int], _ int) string {
 		return entry.Key
 	})
+	state.Write(CycleStateGPUSchedulingResult, schedulingResult)
 
 	_, err = s.allocator.Bind(
 		schedulingResult.FinalGPUs,
