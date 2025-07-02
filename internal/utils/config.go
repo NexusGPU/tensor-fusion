@@ -2,7 +2,10 @@ package utils
 
 import (
 	context "context"
+	"encoding/base64"
+	"encoding/json"
 	"os"
+	"strings"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -17,7 +20,37 @@ import (
 
 const (
 	WatchConfigFileChangesInterval = 15 * time.Second
+
+	ServiceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 )
+
+var selfServiceAccountName string
+
+func InitServiceAccountConfig() {
+	data, err := os.ReadFile(ServiceAccountTokenPath)
+	if err != nil {
+		ctrl.Log.Info("service account token not found, run outside of Kubernetes cluster")
+		return
+	}
+	tokenParts := strings.Split(string(data), ".")
+	if len(tokenParts) != 3 {
+		ctrl.Log.Error(err, "failed to parse service account token")
+		return
+	}
+	// resolve JWT token to get service account name
+	decodedToken, err := base64.RawURLEncoding.DecodeString(tokenParts[1])
+	if err != nil {
+		ctrl.Log.Error(err, "failed to decode service account token")
+		return
+	}
+	var jwt map[string]any
+	if err := json.Unmarshal(decodedToken, &jwt); err != nil {
+		ctrl.Log.Error(err, "failed to parse service account token")
+		return
+	}
+	selfServiceAccountName = jwt["sub"].(string)
+	ctrl.Log.Info("in-cluster mode detected, service account resolved", "name", selfServiceAccountName)
+}
 
 func LoadConfigFromFile[T any](filename string, target *T) error {
 	data, err := os.ReadFile(filename)
@@ -77,7 +110,7 @@ func checkFileUpdated(filename string, lastModTime time.Time, ch chan []byte) ti
 		}
 
 		ch <- data
-		ctrl.Log.Info("config file reloaded", "filename", filename)
+		ctrl.Log.Info("config file loaded/reloaded", "filename", filename)
 		return currentModTime
 	}
 	return lastModTime
@@ -117,4 +150,16 @@ func NewShortID(length int) string {
 		return id
 	}
 	return id[:length]
+}
+
+func ReadServiceAccountToken() string {
+	data, err := os.ReadFile(ServiceAccountTokenPath)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func GetSelfServiceAccountName() string {
+	return selfServiceAccountName
 }

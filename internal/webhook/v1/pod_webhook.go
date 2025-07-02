@@ -315,6 +315,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 	// Patch hostPort allocation
 	if pod.Labels[constants.GenHostPortLabel] == constants.GenHostPortLabelValue {
+		// TODO/FIXME potential bug, when it's deployment created Pod rather than standalone Pod, pod.Name is empty
 		if err := m.generateHostPort(pod, pod.Labels[constants.GenHostPortNameLabel]); err != nil {
 			return nil, fmt.Errorf("can not generate host port: %w", err)
 		}
@@ -494,8 +495,13 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 		return 0, fmt.Errorf("operator leader IP not found")
 	}
 
-	url := fmt.Sprintf("http://%s:8080/assign-host-port?podName=%s", leaderIP, pod.Name)
-	resp, err := httpClient.Get(url)
+	urlStr := fmt.Sprintf("http://%s:8080/assign-host-port?podName=%s", leaderIP, pod.Name)
+	req, err := http.NewRequest("GET", urlStr, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set(constants.AuthorizationHeader, "Bearer "+utils.ReadServiceAccountToken())
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("failed to assign host port: %w", err)
 	}

@@ -185,3 +185,21 @@ const (
 	LowFrequencyObjFailureMaxBurst            = 1
 	LowFrequencyObjFailureConcurrentReconcile = 5
 )
+
+// For security enhancement, there are 2 types of endpoints to protect
+// 1. client call operator /connection API, to obtain tensor fusion worker's URL
+// 2. worker call hypervisor API, to obtain current workers GPU quota info
+// if this env var is set on operator and hypervisor, will try to verify JWT signature for each call
+// not implemented yet, iss is public in EKS and most K8S distribution
+// but k3s and some K8S distribution may not support, need to find some way to get SA token JWT pub key
+
+const HypervisorVerifyServiceAccountEnabledEnvVar = "SA_TOKEN_VERIFY_ENABLED"
+const HypervisorVerifyServiceAccountPublicKeyEnvVar = "SA_TOKEN_VERIFY_PUBLIC_KEY"
+
+// TensorFusion ControllerManager's http endpoint will verify Pod JWT signature
+// if this env var is set, will disable the verification, it's enabled by default
+// should not set to true in production environment
+const DisableConnectionAuthEnv = "DISABLE_CONNECTION_AUTH"
+
+const AuthorizationHeader = "Authorization"
+const ExtraVerificationInfoPodIDKey = "authentication.kubernetes.io/pod-uid"

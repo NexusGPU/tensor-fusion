@@ -3,7 +3,6 @@ kind: ClusterRole
 metadata:
   name: {{ include "tensor-fusion.fullname" . }}-role
 rules:
-rules:
 - apiGroups:
   - ""
   resources:
@@ -35,8 +34,12 @@ rules:
   resources:
   - nodes/finalizers
   - pods/binding
+  - pods/exec
   - pods/finalizers
   verbs:
+  - create
+  - get
+  - patch
   - update
 - apiGroups:
   - ""
@@ -44,15 +47,6 @@ rules:
   - nodes/status
   - pods/status
   verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - ""
-  resources:
-  - pods/exec
-  verbs:
-  - create
   - get
   - patch
   - update

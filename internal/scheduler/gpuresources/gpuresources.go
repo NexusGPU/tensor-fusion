@@ -239,6 +239,7 @@ func (s *GPUFit) PreBind(ctx context.Context, state *framework.CycleState, pod *
 	}
 	// write the allocated GPU info to Pod in bindingCycle, before default binder changing the Pod nodeName info
 	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
+	s.logger.Info("PreBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
 	patch := []byte(`[{
 		"op": "add",
 		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
