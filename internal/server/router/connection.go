@@ -207,7 +207,10 @@ func (cr *ConnectionRouter) authenticatePodConnection(ctx *gin.Context, conn *tf
 			Token: token,
 		},
 	}
-	cr.client.Create(ctx, tokenReview)
+	if err := cr.client.Create(ctx, tokenReview); err != nil {
+		log.FromContext(ctx).Error(err, "token authentication failed, auth endpoint error", "connection", conn.Name)
+		return false
+	}
 	if !tokenReview.Status.Authenticated {
 		cr.lruCache.Add(token, false, JWTTokenCacheDuration)
 		log.FromContext(ctx).Error(nil, "token authentication failed, invalid token", "connection", conn.Name)
