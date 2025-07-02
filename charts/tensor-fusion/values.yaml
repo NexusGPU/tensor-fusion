@@ -180,6 +180,9 @@ schedulerConfig:
         enabled:
         - name: GPUResourcesFit
           weight: 5
+      reserve:
+        enabled:
+        - name: GPUResourcesFit
       preBind:
         enabled:
         - name: GPUResourcesFit
