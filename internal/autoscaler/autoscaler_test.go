@@ -38,10 +38,7 @@ import (
 // [x] tflops add all samples, like cpu in vpa
 // [x] Reallocate resources before update annotation
 // Add AutoSetResources, make it more configurable
-// Implement Realloc method on GpuAllocator
-// Add tests for recommender
 // Log key events
-// Scale to zero if no usage, need carl to support
 // Add recommendation to workload status
 // Write some documents
 // cron scheduler stragegy,  parallisam ?
@@ -239,10 +236,6 @@ var _ = Describe("Autoscaler", func() {
 			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
 			err := scaler.updateWorkerResourcesIfNeeded(ctx, scaler.WorkloadStates[workload.Name], getWorkers(workload)[0], rr)
 			Expect(err.Error()).To(ContainSubstring("failed to reallocate resources"))
-		})
-
-		It("should update scaleToZero annotation if recommended resource closer to zero", func() {
-
 		})
 	})
 })
