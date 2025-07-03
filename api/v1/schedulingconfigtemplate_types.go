@@ -86,17 +86,50 @@ type GPUFilter struct {
 }
 
 type AutoScalingConfig struct {
-	// layer 1 vertical auto-scaling, turbo burst to existing GPU cards quickly
-	// VPA-like, aggregate metrics data <1m
-	AutoSetLimits AutoSetLimits `json:"autoSetLimits,omitempty"`
+	// layer 1 adjusting, to match the actual usage in the long run, only for N:M remote vGPU mode
+	// Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
+	AutoSetResources AutoSetResources `json:"autoSetResources,omitempty"`
 
 	// layer 2 horizontal auto-scaling, scale up to more GPU cards if max limits threshold hit
 	// HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
 	AutoSetReplicas AutoSetReplicas `json:"autoSetReplicas,omitempty"`
+}
 
-	// layer 3 adjusting, to match the actual usage in the long run, only for N:M remote vGPU mode, not impl yet
-	// Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
-	AutoSetRequests AutoSetRequests `json:"autoSetRequests,omitempty"`
+type AutoSetResources struct {
+	Enable bool `json:"enable,omitempty"`
+
+	// Target resource to scale, such as "tflops", "vram", or "all" by default
+	TargetResource string `json:"targetResource,omitempty"`
+
+	// Tflops usage percentile that will be used as a base for tflops target recommendation. Default: 0.9
+	TargetTflopsPercentile string `json:"targettflopspercentile,omitempty"`
+
+	// Tflops usage percentile that will be used for the lower bound on tflops recommendation. Default: 0.5
+	LowerBoundTflopsPercentile string `json:"lowerboundtflopspercentile,omitempty"`
+
+	// Tflops usage percentile that will be used for the upper bound on tflops recommendation. Default: 0.95
+	UpperBoundTflopsPercentile string `json:"upperboundtflopspercentile,omitempty"`
+
+	// Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.9
+	TargetVramPercentile string `json:"targetvrampercentile,omitempty"`
+
+	// Vram usage percentile that will be used for the lower bound on vram recommendation. Default: 0.5
+	LowerBoundVramPercentile string `json:"lowerboundvrampercentile,omitempty"`
+
+	// Vram usage percentile that will be used for the upper bound on vram recommendation. Default: 0.95
+	UpperBoundVramPercentile string `json:"upperboundvrampercentile,omitempty"`
+
+	// Fraction of usage added as the safety margin to the recommended request. Default: 0.15
+	RequestMarginFraction string `json:"requestMarginFraction,omitempty"`
+
+	// The time interval used for computing the confidence multiplier for the lower and upper bound. Default: 24h
+	ConfidenceInterval string `json:"confidenceInterval,omitempty"`
+
+	// How much time back TSDB have to be queried to get historical metrics. Default: 1d
+	HistoryLength string `json:"historyLength,omitempty"`
+
+	// Resolution at which TSDB is queried for historical metrics. Default: 1m
+	HistoryResolution string `json:"historyResolution,omitempty"`
 }
 
 // A typical autoLimits algorithm could be checking every 5m, look back 1 day data,

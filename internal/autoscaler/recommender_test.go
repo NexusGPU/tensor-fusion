@@ -5,15 +5,11 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Recommender", func() {
-	Context("when get recommeded resource", func() {
-		It("should generate recommended resource based on histogram", func() {
-			recommender := NewRecommender()
-			Expect(recommender.GetRecommendedResources(nil)).To(BeNil())
-		})
-		It("should gererate recommended resource with safety margin", func() {
-		})
-		It("should gererate recommended resource with confidence multiplier", func() {
+var _ = Describe("Resource Recommender", func() {
+	Context("when getting recommended resource", func() {
+		It("should return correct RecommendedResources based on WorkloadState and config", func() {
+			ws := NewWorkloadState("test")
+			rr := resourceRecommender{}
 		})
 	})
 })

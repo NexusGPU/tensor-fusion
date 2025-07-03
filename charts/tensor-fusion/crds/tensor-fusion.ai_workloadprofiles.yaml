@@ -61,41 +61,6 @@ spec:
                   This field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,
                   user can set tensor-fusion.ai/auto-limits|requests|replicas: 'true'
                 properties:
-                  autoSetLimits:
-                    description: |-
-                      layer 1 vertical auto-scaling, turbo burst to existing GPU cards quickly
-                      VPA-like, aggregate metrics data <1m
-                    properties:
-                      enable:
-                        type: boolean
-                      evaluationPeriod:
-                        type: string
-                      extraTFlopsBufferRatio:
-                        type: string
-                      ignoredDeltaRange:
-                        type: string
-                      maxRatioToRequests:
-                        description: the multiplier of requests, to avoid limit set
-                          too high, like 5.0
-                        type: string
-                      prediction:
-                        properties:
-                          enable:
-                            type: boolean
-                          historyDataPeriod:
-                            type: string
-                          model:
-                            type: string
-                          predictionPeriod:
-                            type: string
-                        type: object
-                      scaleUpStep:
-                        type: string
-                      targetResource:
-                        description: target resource to scale limits, such as "tflops",
-                          "vram", or "all" by default
-                        type: string
-                    type: object
                   autoSetReplicas:
                     description: |-
                       layer 2 horizontal auto-scaling, scale up to more GPU cards if max limits threshold hit
@@ -116,38 +81,56 @@ spec:
                       targetTFlopsOfLimits:
                         type: string
                     type: object
-                  autoSetRequests:
+                  autoSetResources:
                     description: |-
-                      layer 3 adjusting, to match the actual usage in the long run, only for N:M remote vGPU mode, not impl yet
+                      layer 1 adjusting, to match the actual usage in the long run, only for N:M remote vGPU mode
                       Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
                     properties:
-                      aggregationPeriod:
+                      confidenceInterval:
+                        description: 'The time interval used for computing the confidence
+                          multiplier for the lower and upper bound. Default: 24h'
                         type: string
                       enable:
                         type: boolean
-                      evaluationPeriod:
+                      historyLength:
+                        description: 'How much time back TSDB have to be queried to
+                          get historical metrics. Default: 1d'
                         type: string
-                      extraBufferRatio:
-                        description: the request buffer ratio, for example actual
-                          usage is 1.0, 10% buffer will be 1.1 as final preferred
-                          requests
+                      historyResolution:
+                        description: 'Resolution at which TSDB is queried for historical
+                          metrics. Default: 1m'
                         type: string
-                      percentileForAutoRequests:
+                      lowerboundtflopspercentile:
+                        description: 'Tflops usage percentile that will be used for
+                          the lower bound on tflops recommendation. Default: 0.5'
                         type: string
-                      prediction:
-                        properties:
-                          enable:
-                            type: boolean
-                          historyDataPeriod:
-                            type: string
-                          model:
-                            type: string
-                          predictionPeriod:
-                            type: string
-                        type: object
+                      lowerboundvrampercentile:
+                        description: 'Vram usage percentile that will be used for
+                          the lower bound on vram recommendation. Default: 0.5'
+                        type: string
+                      requestMarginFraction:
+                        description: 'Fraction of usage added as the safety margin
+                          to the recommended request. Default: 0.15'
+                        type: string
                       targetResource:
-                        description: target resource to scale requests, such as "tflops",
-                          "vram", or "all" by default
+                        description: Target resource to scale, such as "tflops", "vram",
+                          or "all" by default
+                        type: string
+                      targettflopspercentile:
+                        description: 'Tflops usage percentile that will be used as
+                          a base for tflops target recommendation. Default: 0.9'
+                        type: string
+                      targetvrampercentile:
+                        description: 'Vram usage percentile that will be used as a
+                          base for vram target recommendation. Default: 0.9'
+                        type: string
+                      upperboundtflopspercentile:
+                        description: 'Tflops usage percentile that will be used for
+                          the upper bound on tflops recommendation. Default: 0.95'
+                        type: string
+                      upperboundvrampercentile:
+                        description: 'Vram usage percentile that will be used for
+                          the upper bound on vram recommendation. Default: 0.95'
                         type: string
                     type: object
                 type: object

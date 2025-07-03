@@ -25,9 +25,10 @@ func NewMetricsProvider(db *gorm.DB) MetricsProvider {
 }
 
 type greptimeDBProvider struct {
-	db              *gorm.DB
-	lastQueryTime   time.Time
-	historyDuration time.Duration
+	db                *gorm.DB
+	lastQueryTime     time.Time
+	historyLength     time.Duration
+	historyResolution time.Duration
 }
 
 func (g *greptimeDBProvider) GetWorkersMetrics() ([]*WorkerMetrics, error) {
@@ -38,6 +39,7 @@ func (g *greptimeDBProvider) GetWorkersMetrics() ([]*WorkerMetrics, error) {
 		Where("ts > ? and ts <= ?", g.lastQueryTime.Nanosecond(), now.Nanosecond()).
 		Group("workload, worker").
 		Order("ts asc").
+		Find(&data).
 		Error
 
 	if err != nil {
@@ -71,7 +73,7 @@ func (g *greptimeDBProvider) GetHistoryMetrics() ([]*WorkerMetrics, error) {
 	// TODO: replace using iteration for handling large datasets efficiently
 	// TODO: supply history resolution to config time window
 	err := g.db.Select("workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
-		Where("ts > ? and ts <= ?", now.Add(-g.historyDuration), now.Nanosecond()).
+		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24).Nanosecond(), now.Nanosecond()).
 		Group("workload, worker, time_window").
 		Order("time_window asc").
 		Find(&data).
