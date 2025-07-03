@@ -14,7 +14,7 @@ import (
 
 var _ = Describe("MetricsProvider", func() {
 	Context("when getting real time workers metrics", func() {
-		It("should return slices", func() {
+		It("should return metrics for every worker", func() {
 			db, mock := NewMockDB()
 			now := time.Now()
 			fakeMetrics := []metrics.HypervisorWorkerUsageMetrics{
@@ -39,7 +39,7 @@ var _ = Describe("MetricsProvider", func() {
 				rows.AddRow(row.WorkloadName, row.WorkerName, row.ComputeTflops, row.VRAMBytes, row.Timestamp)
 			}
 
-			mock.ExpectQuery(regexp.QuoteMeta("SELECT workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, max(ts) as ts FROM `tf_worker_usage` WHERE ts > ? GROUP BY workload, worker")).
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, max(ts) as ts FROM `tf_worker_usage` WHERE ts > ? and ts <= ? GROUP BY workload, worker ORDER BY ts asc")).
 				WillReturnRows(rows)
 			provider := &greptimeDBProvider{db: db}
 			got, _ := provider.GetWorkersMetrics()
@@ -53,7 +53,7 @@ var _ = Describe("MetricsProvider", func() {
 	})
 
 	Context("when getting history workers metrics", func() {
-		FIt("should return slices", func() {
+		It("should return metrics based on history length", func() {
 			db, mock := NewMockDB()
 			now := time.Now()
 			fakeMetrics := []hypervisorWorkerUsageMetrics{

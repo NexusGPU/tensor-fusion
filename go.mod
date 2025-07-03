@@ -26,6 +26,7 @@ require (
 	gorm.io/gorm v1.30.0
 	k8s.io/api v0.33.2
 	k8s.io/apimachinery v0.33.2
+	k8s.io/autoscaler/vertical-pod-autoscaler v1.3.0
 	k8s.io/client-go v0.33.2
 	k8s.io/component-base v0.32.5
 	k8s.io/component-helpers v0.33.2
