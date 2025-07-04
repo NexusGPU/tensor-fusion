@@ -25,10 +25,10 @@ func NewMetricsProvider(db *gorm.DB) MetricsProvider {
 }
 
 type greptimeDBProvider struct {
-	db                *gorm.DB
-	lastQueryTime     time.Time
-	historyLength     time.Duration
-	historyResolution time.Duration
+	db            *gorm.DB
+	lastQueryTime time.Time
+	// historyLength     time.Duration
+	// historyResolution time.Duration
 }
 
 func (g *greptimeDBProvider) GetWorkersMetrics() ([]*WorkerMetrics, error) {

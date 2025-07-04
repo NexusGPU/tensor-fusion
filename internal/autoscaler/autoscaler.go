@@ -150,7 +150,7 @@ func (s *Autoscaler) LoadHistoryMetrics(ctx context.Context) {
 	log := log.FromContext(ctx)
 	log.Info("loading historical metrics")
 
-	workersMetrics, err := s.MetricsProvider.GetHistoryMetrics()
+	workersMetrics, err := s.GetHistoryMetrics()
 	if err != nil {
 		log.Error(err, "failed to get history metrics")
 		return
@@ -175,7 +175,7 @@ func (s *Autoscaler) LoadRealTimeMetrics(ctx context.Context) {
 	log := log.FromContext(ctx)
 	log.Info("loading realtime metrics")
 
-	workersMetrics, err := s.MetricsProvider.GetWorkersMetrics()
+	workersMetrics, err := s.GetWorkersMetrics()
 	if err != nil {
 		log.Error(err, "failed to get workers metrics")
 		return
@@ -213,7 +213,7 @@ func (s *Autoscaler) ProcessWorkloads(ctx context.Context) {
 			continue
 		}
 
-		rr := s.ResourceRecommender.GetRecommendedResources(workloadState)
+		rr := s.GetRecommendedResources(workloadState)
 		log.Info("recommend resources", "workload", workloadState.Name, "resources", rr)
 
 		// TODO: update recommmendation status of workload

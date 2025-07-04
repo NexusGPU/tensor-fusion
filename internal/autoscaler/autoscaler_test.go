@@ -68,7 +68,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.MetricsProvider = &FakeMetricsProvider{}
 			scaler.LoadHistoryMetrics(ctx)
-			metrics, _ := scaler.MetricsProvider.GetHistoryMetrics()
+			metrics, _ := scaler.GetHistoryMetrics()
 			for _, m := range metrics {
 				Expect(scaler.WorkloadStates).To(HaveKey(m.WorkloadName))
 				Expect(scaler.WorkerStates).To(HaveKey(m.WorkerName))
@@ -85,8 +85,8 @@ var _ = Describe("Autoscaler", func() {
 
 			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
-			Expect(scaler.WorkloadStates).To(HaveLen(0))
-			Expect(scaler.WorkerStates).To(HaveLen(0))
+			Expect(scaler.WorkloadStates).To(BeEmpty())
+			Expect(scaler.WorkerStates).To(BeEmpty())
 
 			// create two workloads
 			pool := tfEnv.GetGPUPool(0)
@@ -171,7 +171,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler.LoadWorkloads(ctx)
 
 			scaler.ResourceRecommender = &FakeUpScalingRecommender{}
-			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
+			rr := scaler.GetRecommendedResources(nil)
 
 			scaler.ProcessWorkloads(ctx)
 			Eventually(func(g Gomega) {
@@ -198,7 +198,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler.LoadWorkloads(ctx)
 
 			scaler.ResourceRecommender = &FakeUpScalingRecommender{}
-			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
+			rr := scaler.GetRecommendedResources(nil)
 
 			workloadState := scaler.WorkloadStates[workload.Name]
 			oldRes := workloadState.Resources

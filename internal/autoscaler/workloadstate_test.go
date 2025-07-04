@@ -62,7 +62,7 @@ var _ = Describe("Workload State", func() {
 			},
 		}
 		cfg := ws.GetResourceRecommenderConfig()
-		Expect(cfg.ConfidenceInterval).To(Equal(time.Duration(30 * time.Minute)))
+		Expect(cfg.ConfidenceInterval).To(Equal(30 * time.Minute))
 	})
 
 	It("should ignore invalid ConfidenceInterval and keep default", func() {
