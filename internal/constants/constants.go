@@ -58,6 +58,7 @@ const (
 	WorkloadProfileAnnotation      = Domain + "/workload-profile"
 	InjectContainerAnnotation      = Domain + "/inject-container"
 	IsLocalGPUAnnotation           = Domain + "/is-local-gpu"
+	QoSLevelAnnotation             = Domain + "/qos"
 	EmbeddedWorkerAnnotation       = Domain + "/embedded-worker"
 	DedicatedWorkerAnnotation      = Domain + "/dedicated-worker"
 	StandaloneWorkerModeAnnotation = Domain + "/no-standalone-worker-mode"

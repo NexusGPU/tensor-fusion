@@ -64,7 +64,7 @@ spec:
             - name: TSDB_MYSQL_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: tf-greptimedb-secret
+                  name: {{ .Release.Name }}-greptimedb-secret
                   key: password
             {{- else }}
             - name: TSDB_MYSQL_USER
@@ -113,7 +113,7 @@ spec:
             - name: TSDB_MYSQL_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: tf-greptimedb-secret
+                  name: {{ .Release.Name }}-greptimedb-secret
                   key: password
             {{- else }}
             - name: TSDB_MYSQL_USER

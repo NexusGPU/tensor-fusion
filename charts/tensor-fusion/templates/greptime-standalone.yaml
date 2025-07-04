@@ -15,7 +15,7 @@ metadata:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: greptimedb-standalone
+  name: {{ .Release.Name }}-greptimedb-standalone
   namespace: greptimedb
 data:
   config.toml: |
@@ -57,7 +57,7 @@ spec:
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: greptimedb-standalone
+  name: {{ .Release.Name }}-greptimedb-standalone
   namespace: greptimedb
   labels:
     app.greptime.io/component: greptimedb-standalone
@@ -79,7 +79,7 @@ spec:
           emptyDir: {}
         - name: config
           configMap:
-            name: greptimedb-standalone
+            name: {{ .Release.Name }}-greptimedb-standalone
             defaultMode: 420
       containers:
         - name: standalone

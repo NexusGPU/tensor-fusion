@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: alert-manager-config
+  name: {{ .Release.Name }}-alert-manager-config
   namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
     tensor-fusion.ai/component: alert-manager
@@ -14,7 +14,7 @@ data:
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: alert-manager
+  name: {{ .Release.Name }}-alert-manager
   namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
     tensor-fusion.ai/component: alert-manager
@@ -35,7 +35,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: alert-manager-config
+            name: {{ .Release.Name }}-alert-manager-config
             defaultMode: 420
         - name: storage
           hostPath:

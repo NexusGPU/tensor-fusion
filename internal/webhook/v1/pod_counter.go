@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 type TensorFusionPodCounter struct {
@@ -100,9 +101,11 @@ func (c *TensorFusionPodCounter) Increase(ctx context.Context, pod *corev1.Pod) 
 
 // Decrease decreases the counter in owner annotation by key
 func (c *TensorFusionPodCounter) Decrease(ctx context.Context, pod *corev1.Pod) error {
+	log := log.FromContext(ctx)
 	ownerRef := getControllerOwnerRef(pod)
 	if ownerRef == nil {
-		return fmt.Errorf("no controller owner reference found for pod %s/%s", pod.Namespace, pod.Name)
+		log.Error(nil, "no controller owner reference found for pod", "namespace", pod.Namespace, "name", pod.Name)
+		return nil
 	}
 	key := getOrGenerateKey(pod)
 	ownerObj := &unstructured.Unstructured{}
@@ -114,7 +117,8 @@ func (c *TensorFusionPodCounter) Decrease(ctx context.Context, pod *corev1.Pod) 
 		if errors.IsNotFound(err) {
 			return nil
 		}
-		return fmt.Errorf("failed to get owner object: %w", err)
+		log.Error(err, "failed to get owner object", "namespace", pod.Namespace, "name", pod.Name)
+		return nil
 	}
 	annotations := ownerObj.GetAnnotations()
 	if annotations == nil {
@@ -126,7 +130,8 @@ func (c *TensorFusionPodCounter) Decrease(ctx context.Context, pod *corev1.Pod) 
 	}
 	count, err := strconv.ParseInt(val, 10, 32)
 	if err != nil {
-		return fmt.Errorf("invalid count annotation: %s, err: %w", val, err)
+		log.Error(err, "invalid count annotation", "namespace", pod.Namespace, "name", pod.Name)
+		return nil
 	}
 	count--
 	if count <= 0 {
@@ -136,7 +141,7 @@ func (c *TensorFusionPodCounter) Decrease(ctx context.Context, pod *corev1.Pod) 
 	}
 	ownerObj.SetAnnotations(annotations)
 	if err := c.Client.Update(ctx, ownerObj); err != nil {
-		return fmt.Errorf("failed to update owner annotation: %w", err)
+		return fmt.Errorf("failed to update owner annotation, try later: %w", err)
 	}
 	return nil
 }

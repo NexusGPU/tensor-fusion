@@ -162,6 +162,11 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 		workloadProfile.Spec.Resources.Limits.Vram = vramLimit
 	}
 
+	qosLevel, hasValue := pod.Annotations[constants.QoSLevelAnnotation]
+	if hasValue {
+		workloadProfile.Spec.Qos = tfv1.QoSLevel(qosLevel)
+	}
+
 	gpuCount, hasValue := pod.Annotations[constants.GpuCountAnnotation]
 	if hasValue {
 		val, err := strconv.ParseInt(gpuCount, 10, 32)

@@ -37,7 +37,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"al.essio.dev/pkg/shellescape"
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
@@ -173,13 +172,15 @@ func addOrOverridePodMissingAnnotations(pod *corev1.Pod, tfInfo TensorFusionInfo
 	// add full annotations
 	pod.Annotations[constants.TFLOPSLimitAnnotation] = tfInfo.Profile.Resources.Limits.Tflops.String()
 	pod.Annotations[constants.VRAMLimitAnnotation] = tfInfo.Profile.Resources.Limits.Vram.String()
+	pod.Annotations[constants.QoSLevelAnnotation] = string(tfInfo.Profile.Qos)
 	pod.Annotations[constants.TFLOPSRequestAnnotation] = tfInfo.Profile.Resources.Requests.Tflops.String()
 	pod.Annotations[constants.VRAMRequestAnnotation] = tfInfo.Profile.Resources.Requests.Vram.String()
 	pod.Annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", tfInfo.Profile.GPUCount)
 	pod.Annotations[constants.GpuPoolKey] = tfInfo.Profile.PoolName
-	pod.Annotations[constants.GPUModelAnnotation] = tfInfo.Profile.GPUModel
+	if tfInfo.Profile.GPUModel != "" {
+		pod.Annotations[constants.GPUModelAnnotation] = tfInfo.Profile.GPUModel
+	}
 	pod.Annotations[constants.IsLocalGPUAnnotation] = strconv.FormatBool(tfInfo.Profile.IsLocalGPU)
-
 	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
 }
@@ -270,10 +271,6 @@ func (m *TensorFusionPodMutator) patchTFClient(
 			container := &pod.Spec.Containers[i]
 			if container.Name != name {
 				continue
-			}
-
-			if len(container.Command) >= 3 {
-				manipulateContainerCmdForLDPreload(container)
 			}
 
 			containerJSON, err := json.Marshal(container)
@@ -431,18 +428,6 @@ func serializeContainerInjectionPatchJson(clientConfig *tfv1.ClientConfig, patch
 		}
 	}
 	return patchJSON, nil
-}
-
-// fix for issue https://github.com/NexusGPU/tensor-fusion/issues/164
-// transform bash/zsh -c commands
-func manipulateContainerCmdForLDPreload(container *corev1.Container) {
-	shell := container.Command[0]
-	if (shell == "bash" || shell == "zsh") && container.Command[1] == "-c" {
-		originalCommand := container.Command[2]
-		comment := "# [TensorFusion Patch] This command is wrapped by sh -c to improve compatibility with certain container environments."
-		safeCommand := shellescape.Quote(fmt.Sprintf("%s\n%s", comment, originalCommand))
-		container.Command = []string{"sh", "-c", fmt.Sprintf("%s -c %s", shell, safeCommand)}
-	}
 }
 
 func (m *TensorFusionPodMutator) generateHostPort(pod *corev1.Pod, portName string) error {

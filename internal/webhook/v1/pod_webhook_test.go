@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -204,7 +203,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				g.Expect(workload.OwnerReferences).To(HaveLen(1))
 				g.Expect(workload.OwnerReferences[0].Name).To(Equal("test-workload"))
 				return err
-			}, 5*time.Second, 250*time.Millisecond).Should(Succeed())
+			}).Should(Succeed())
 		})
 
 		It("should handle pods without TF requirements", func() {
@@ -522,6 +521,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.TFLOPSRequestAnnotation:               "20",
 						constants.InjectContainerAnnotation:             "test-container",
 						constants.TensorFusionEnabledReplicasAnnotation: "3",
+						constants.QoSLevelAnnotation:                    "high",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -541,6 +541,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(tfInfo.Profile.Resources.Requests.Vram.String()).To(Equal("1Gi"))
 			Expect(tfInfo.Profile.Resources.Limits.Tflops.String()).To(Equal("100"))
 			Expect(tfInfo.Profile.Resources.Limits.Vram.String()).To(Equal("16Gi"))
+			Expect(tfInfo.Profile.Qos).To(Equal(tfv1.QoSHigh))
 			Expect(*tfInfo.EnabledReplicas).To(Equal(int32(3)))
 		})
 	})
@@ -568,75 +569,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(patch).NotTo(BeEmpty())
 			// There should be at least 2 patches (initContainers and the container env patches)
 			Expect(len(patch)).To(BeNumerically(">=", 2))
-		})
-
-		It("should transform bash/zsh -c commands correctly", func() {
-			// Create a pod with bash and zsh -c commands
-			pod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-command-transform",
-					Namespace: "default",
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:    "bash-container",
-							Image:   "test-image",
-							Command: []string{"bash", "-c", "echo 'hello world' && ls -la"},
-						},
-						{
-							Name:    "zsh-container",
-							Image:   "test-image",
-							Command: []string{"zsh", "-c", "echo 'special chars: $HOME \"quoted\" text'"},
-						},
-						{
-							Name:    "other-container",
-							Image:   "test-image",
-							Command: []string{"sh", "-c", "echo 'this should not change'"},
-						},
-					},
-				},
-			}
-
-			pool := &tfv1.GPUPool{
-				Spec: *config.MockGPUPoolSpec,
-			}
-			containerNames := []string{"bash-container", "zsh-container", "other-container"}
-
-			// Call the function that includes the command transformation
-			mutator := &TensorFusionPodMutator{}
-			currentBytes, err := json.Marshal(pod)
-			Expect(err).NotTo(HaveOccurred())
-			patches, err := mutator.patchTFClient(pod, pool, containerNames, false, currentBytes)
-
-			// Verify results
-			Expect(err).NotTo(HaveOccurred())
-
-			// Check that the patches include command transformations
-			var bashCommandPatchFound, zshCommandPatchFound, otherCommandPatchFound bool
-
-			for _, patch := range patches {
-				// Check for command transformation patches
-				// Command patches are applied to individual elements, not the whole array
-				if patch.Path == "/spec/containers/0/command/0" && patch.Value == "sh" {
-					bashCommandPatchFound = true
-				} else if patch.Path == "/spec/containers/0/command/2" {
-					// Third element (the command string) for bash container
-					Expect(patch.Value).To(ContainSubstring("bash -c"))
-				} else if patch.Path == "/spec/containers/1/command/0" && patch.Value == "sh" {
-					zshCommandPatchFound = true
-				} else if patch.Path == "/spec/containers/1/command/2" {
-					// Third element (the command string) for zsh container
-					Expect(patch.Value).To(ContainSubstring("zsh -c"))
-				} else if patch.Path == "/spec/containers/2/command/0" && patch.Value == "sh" {
-					otherCommandPatchFound = true
-				}
-			}
-
-			// Verify the right patches were found
-			Expect(bashCommandPatchFound).To(BeTrue(), "No patch found for bash command transformation")
-			Expect(zshCommandPatchFound).To(BeTrue(), "No patch found for zsh command transformation")
-			Expect(otherCommandPatchFound).To(BeFalse(), "Unexpected patch found for other container command transformation")
 		})
 	})
 })

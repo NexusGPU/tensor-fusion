@@ -89,6 +89,7 @@ func appendLabelsAndAnnotations(podTmpl *v1.PodTemplate, workload *tfv1.TensorFu
 	annotations[constants.VRAMLimitAnnotation] = res.Limits.Vram.String()
 	annotations[constants.TFLOPSRequestAnnotation] = res.Requests.Tflops.String()
 	annotations[constants.VRAMRequestAnnotation] = res.Requests.Vram.String()
+	annotations[constants.QoSLevelAnnotation] = string(workload.Spec.Qos)
 
 	if workload.Spec.GPUCount > 0 {
 		annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", workload.Spec.GPUCount)
