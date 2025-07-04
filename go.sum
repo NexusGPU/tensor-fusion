@@ -270,6 +270,7 @@ github.com/stoewer/go-strcase v1.3.0/go.mod h1:fAH5hQ5pehh+j3nZfvwdk2RgEgQjAoM8w
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
 github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
+github.com/stretchr/objx v0.5.2 h1:xuMeJ0Sdp5ZMRXx/aWO6RZxdr3beISkG5/G/aIRr3pY=
 github.com/stretchr/objx v0.5.2/go.mod h1:FRsXN1f5AsAjCGJKqEizvkpNtU+EGNCLh3NxZ/8L+MA=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
@@ -458,6 +459,8 @@ k8s.io/apimachinery v0.32.5 h1:6We3aJ6crC0ap8EhsEXcgX3LpI6SEjubpiOMXLROwPM=
 k8s.io/apimachinery v0.32.5/go.mod h1:GpHVgxoKlTxClKcteaeuF1Ul/lDVb74KpZcxcmLDElE=
 k8s.io/apiserver v0.32.5 h1:phmm2EOUVFI+cLiq8Grtuh166fTt/qgvkGPkpgzp5uY=
 k8s.io/apiserver v0.32.5/go.mod h1:5bfueS1tgARVWVXRJBMI5mHoCmev0jOvbxebai/kiqc=
+k8s.io/autoscaler/vertical-pod-autoscaler v1.3.0 h1:oVv4QrTPKM7vWyQRRzCDgDgi00NWo4Rjle5/nujP/dI=
+k8s.io/autoscaler/vertical-pod-autoscaler v1.3.0/go.mod h1:W4k7qGP8A9Xqp+UK+lM49AfsWkAdXzE80F/s8kxwWVI=
 k8s.io/client-go v0.32.5 h1:huFmQMzgWu0z4kbWsuZci+Gt4Fo72I4CcrvhToZ/Qp0=
 k8s.io/client-go v0.32.5/go.mod h1:Qchw6f9WIVrur7DKojAHpRgGLcANT0RLIvF39Jz58xA=
 k8s.io/cloud-provider v0.32.5 h1:KzO0mpXYArWxQH91+a4WLLrhTaO5RGWmQn4lzUXY6ak=
