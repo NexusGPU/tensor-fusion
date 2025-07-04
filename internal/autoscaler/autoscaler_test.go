@@ -19,11 +19,11 @@ package autoscaler
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
-	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/aws/smithy-go/ptr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -32,6 +32,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -53,16 +56,16 @@ var _ = Describe("Autoscaler", func() {
 			Expect(err.Error()).To(ContainSubstring("must specify client"))
 		})
 
-		It("should return an error if there is no reallocator", func() {
+		It("should return an error if there is no allocator", func() {
 			as, err := NewAutoscaler(k8sClient, nil)
 			Expect(as).To(BeNil())
-			Expect(err.Error()).To(ContainSubstring("must specify reallocator"))
+			Expect(err.Error()).To(ContainSubstring("must specify allocator"))
 		})
 	})
 
 	Context("when loading history metrics", func() {
 		It("should create the state of workloads and workers based on historical metrics", func() {
-			scaler, _ := NewAutoscaler(k8sClient, &FakeAllocator{})
+			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.MetricsProvider = &FakeMetricsProvider{}
 			scaler.LoadHistoryMetrics(ctx)
 			metrics, _ := scaler.MetricsProvider.GetHistoryMetrics()
@@ -80,7 +83,7 @@ var _ = Describe("Autoscaler", func() {
 				Build()
 			defer tfEnv.Cleanup()
 
-			scaler, _ := NewAutoscaler(k8sClient, &FakeAllocator{})
+			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
 			Expect(scaler.WorkloadStates).To(HaveLen(0))
 			Expect(scaler.WorkerStates).To(HaveLen(0))
@@ -131,7 +134,7 @@ var _ = Describe("Autoscaler", func() {
 
 			worker := workers[0].Name
 
-			scaler, _ := NewAutoscaler(k8sClient, &FakeAllocator{})
+			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
 			ws := scaler.WorkloadStates[workload.Name]
 			now := time.Now()
@@ -160,13 +163,14 @@ var _ = Describe("Autoscaler", func() {
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
 			defer tfEnv.Cleanup()
+			go mockSchedulerLoop(ctx, cfg)
 			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
 			defer deleteWorkload(workload)
 
-			scaler, _ := NewAutoscaler(k8sClient, &FakeAllocator{})
+			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
 
-			scaler.ResourceRecommender = &FakeOutBoundRecommender{}
+			scaler.ResourceRecommender = &FakeUpScalingRecommender{}
 			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
 
 			scaler.ProcessWorkloads(ctx)
@@ -186,13 +190,14 @@ var _ = Describe("Autoscaler", func() {
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
 			defer tfEnv.Cleanup()
+			go mockSchedulerLoop(ctx, cfg)
 			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
 			defer deleteWorkload(workload)
 
-			scaler, _ := NewAutoscaler(k8sClient, &FakeAllocator{})
+			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
 
-			scaler.ResourceRecommender = &FakeOutBoundRecommender{}
+			scaler.ResourceRecommender = &FakeUpScalingRecommender{}
 			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
 
 			workloadState := scaler.WorkloadStates[workload.Name]
@@ -227,15 +232,16 @@ var _ = Describe("Autoscaler", func() {
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
 			defer tfEnv.Cleanup()
+			go mockSchedulerLoop(ctx, cfg)
 			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
 			defer deleteWorkload(workload)
 
-			scaler, _ := NewAutoscaler(k8sClient, &FakeFailedAllocator{})
+			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
-			scaler.ResourceRecommender = &FakeOutBoundRecommender{}
+			scaler.ResourceRecommender = &FakeQuotaExceededRecommender{}
 			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
 			err := scaler.updateWorkerResourcesIfNeeded(ctx, scaler.WorkloadStates[workload.Name], getWorkers(workload)[0], rr)
-			Expect(err.Error()).To(ContainSubstring("failed to reallocate resources"))
+			Expect(err.Error()).To(ContainSubstring("failed to adjust allocation: scaling quota exceeded"))
 		})
 	})
 })
@@ -319,16 +325,6 @@ func getWorkers(workload *tfv1.TensorFusionWorkload) []*corev1.Pod {
 
 type FakeAllocator struct{}
 
-func (*FakeAllocator) Realloc(ctx context.Context, req gpuallocator.AllocRequest) error {
-	return nil
-}
-
-type FakeFailedAllocator struct{}
-
-func (*FakeFailedAllocator) Realloc(ctx context.Context, req gpuallocator.AllocRequest) error {
-	return fmt.Errorf("not enough resources")
-}
-
 type FakeMetricsProvider struct {
 	Metrics []*WorkerMetrics
 }
@@ -358,9 +354,9 @@ func (f *FakeMetricsProvider) GetHistoryMetrics() ([]*WorkerMetrics, error) {
 	return metrics, nil
 }
 
-type FakeOutBoundRecommender struct{}
+type FakeUpScalingRecommender struct{}
 
-func (f *FakeOutBoundRecommender) GetRecommendedResources(_ *WorkloadState) *RecommendedResources {
+func (f *FakeUpScalingRecommender) GetRecommendedResources(_ *WorkloadState) *RecommendedResources {
 	return &RecommendedResources{
 		TargetTflops:     110,
 		LowerBoundTflops: 100,
@@ -368,6 +364,19 @@ func (f *FakeOutBoundRecommender) GetRecommendedResources(_ *WorkloadState) *Rec
 		TargetVram:       110 * 1000 * 1000 * 1000,
 		LowerBoundVram:   100 * 1000 * 1000 * 1000,
 		UpperBoundVram:   120 * 1000 * 1000 * 1000,
+	}
+}
+
+type FakeQuotaExceededRecommender struct{}
+
+func (f *FakeQuotaExceededRecommender) GetRecommendedResources(_ *WorkloadState) *RecommendedResources {
+	return &RecommendedResources{
+		TargetTflops:     9999,
+		LowerBoundTflops: 9999,
+		UpperBoundTflops: 9999,
+		TargetVram:       9999 * 1000 * 1000 * 1000,
+		LowerBoundVram:   9999 * 1000 * 1000 * 1000,
+		UpperBoundVram:   9999 * 1000 * 1000 * 1000,
 	}
 }
 
@@ -422,6 +431,7 @@ func cleanupWorkload(key client.ObjectKey) {
 }
 
 func assertWorkerAnnotations(worker *corev1.Pod, rr *RecommendedResources) {
+	GinkgoHelper()
 	tflopsRequest, tflopsLimit, vramRequest, vramLimit := parseResourceAnnotations(worker)
 	Expect(tflopsRequest.Value()).To(Equal(int64(rr.TargetTflops)))
 	Expect(tflopsLimit.Value()).To(Equal(int64(rr.TargetTflops * 2)))
@@ -444,4 +454,108 @@ func parseResourceAnnotations(worker *corev1.Pod) (tflopsRequest, tflopsLimit, v
 		*k.dst = resource.MustParse(annotations[k.key])
 	}
 	return
+}
+
+func mockSchedulerLoop(ctx context.Context, cfg *rest.Config) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		Expect(err).To(Succeed())
+	}
+	for range ticker.C {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			podList := &corev1.PodList{}
+			_ = k8sClient.List(ctx, podList)
+			for _, pod := range podList.Items {
+				if pod.Spec.NodeName != "" {
+					continue
+				}
+				go scheduleAndStartPod(&pod, clientset)
+			}
+		}
+	}
+}
+
+func scheduleAndStartPod(pod *corev1.Pod, clientset *kubernetes.Clientset) {
+	// simulate scheduling cycle Filter and Reserve
+	allocRequest, _, err := allocator.ComposeAllocationRequest(pod)
+	if errors.IsNotFound(err) {
+		return
+	}
+	Expect(err).To(Succeed())
+	gpus, err := allocator.Alloc(&allocRequest)
+	if err != nil {
+		// some test cases are expected to fail, just continue
+		return
+	}
+	Expect(gpus).To(HaveLen(int(allocRequest.Count)))
+	allocator.SyncGPUsToK8s()
+
+	// update pod annotation
+	Eventually(func(g Gomega) {
+		latestPod := &corev1.Pod{}
+		err := k8sClient.Get(ctx, types.NamespacedName{
+			Name:      pod.Name,
+			Namespace: pod.Namespace,
+		}, latestPod)
+		if errors.IsNotFound(err) {
+			return
+		}
+		g.Expect(err).To(Succeed())
+
+		if latestPod.Annotations == nil {
+			latestPod.Annotations = map[string]string{}
+		}
+		latestPod.Annotations[constants.GpuKey] = strings.Join(
+			lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
+				return gpu.Name
+			}), ",")
+		err = k8sClient.Status().Update(ctx, latestPod)
+		if errors.IsNotFound(err) {
+			return
+		}
+		g.Expect(err).To(Succeed())
+
+		// update pod node name
+		latestPod.Spec.NodeName = gpus[0].Status.NodeSelector[constants.KubernetesHostNameLabel]
+
+		// simulate k8s scheduler binding cycle Bind function
+		binding := &corev1.Binding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pod.Name,
+				Namespace: pod.Namespace,
+			},
+			Target: corev1.ObjectReference{
+				Kind: "Node",
+				Name: latestPod.Spec.NodeName,
+			},
+		}
+
+		err = clientset.CoreV1().Pods(latestPod.Namespace).Bind(ctx, binding, metav1.CreateOptions{})
+		if errors.IsNotFound(err) {
+			return
+		}
+		g.Expect(err).To(Succeed())
+	}).Should(Succeed())
+
+	// simulate kubelet start the pod successfully
+	patchPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pod.Name,
+			Namespace: pod.Namespace,
+		},
+	}
+	patchPod.Status.Phase = corev1.PodRunning
+	patchPod.Status.Conditions = append(patchPod.Status.Conditions, corev1.PodCondition{
+		Type:   corev1.PodReady,
+		Status: corev1.ConditionTrue,
+	})
+	err = k8sClient.Status().Patch(ctx, patchPod, client.MergeFrom(&corev1.Pod{}))
+	if errors.IsNotFound(err) {
+		return
+	}
+	Expect(err).To(Succeed())
 }
