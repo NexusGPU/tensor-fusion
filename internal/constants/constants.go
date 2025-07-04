@@ -73,9 +73,8 @@ const (
 	GenPortNumberAnnotation      = Domain + "/port-number"
 	TensorFusionWorkerPortNumber = 8000
 
-	AutoScaleLimitsAnnotation   = Domain + "/auto-limits"
-	AutoScaleRequestsAnnotation = Domain + "/auto-requests"
-	AutoScaleReplicasAnnotation = Domain + "/auto-replicas"
+	AutoScaleResourcesAnnotation = Domain + "/auto-resources"
+	AutoScaleReplicasAnnotation  = Domain + "/auto-replicas"
 
 	GpuReleasedAnnotation = Domain + "/gpu-released"
 
