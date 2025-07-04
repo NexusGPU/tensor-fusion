@@ -23,6 +23,13 @@ const (
 	DefaultHistogramDecayHalfLife = time.Hour * 24
 )
 
+type ResourceName string
+
+const (
+	ResourceTflops ResourceName = "tflops"
+	ResourceVram   ResourceName = "vram"
+)
+
 type WorkloadState struct {
 	Namespace         string
 	Name              string
@@ -99,9 +106,9 @@ func (w *WorkloadState) GetResourceRecommenderConfig() *ResourceRecommenderConfi
 	return &cfg
 }
 
-func (w *WorkloadState) IsTargetResource(resourceName string) bool {
+func (w *WorkloadState) IsTargetResource(name ResourceName) bool {
 	target := w.AutoScalingConfig.AutoSetResources.TargetResource
-	return target == "" || strings.EqualFold(target, "all") || strings.EqualFold(resourceName, target)
+	return target == "" || strings.EqualFold(target, "all") || strings.EqualFold(string(name), target)
 }
 
 func (w *WorkloadState) IsAutoScalingEnabled() bool {
