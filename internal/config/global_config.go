@@ -1,16 +1,31 @@
 package config
 
-import "github.com/NexusGPU/tensor-fusion/internal/alert"
-
 type GlobalConfig struct {
-	MetricsTTL string       `yaml:"metricsTTL"`
-	AlertRules []alert.Rule `yaml:"alertRules"`
+	MetricsTTL            string   `yaml:"metricsTTL"`
+	MetricsFormat         string   `yaml:"metricsFormat"`
+	MetricsExtraPodLabels []string `yaml:"metricsExtraPodLabels"`
+
+	AlertRules []AlertRule `yaml:"alertRules"`
 }
+
+const (
+	// Default format for fast greptimedb ingestion
+	// See https://docs.influxdata.com/influxdb/v2/reference/syntax/line-protocol/
+	MetricsFormatInflux = "influx"
+
+	// Json format with { "measure", "tag", "field", "ts"}
+	MetricsFormatJson = "json"
+
+	// Open telemetry format
+	MetricsFormatOTel = "otel"
+)
 
 func MockGlobalConfig() *GlobalConfig {
 	return &GlobalConfig{
-		MetricsTTL: "30d",
-		AlertRules: []alert.Rule{
+		MetricsTTL:            "30d",
+		MetricsFormat:         "influx",
+		MetricsExtraPodLabels: []string{"kubernetes.io/app"},
+		AlertRules: []AlertRule{
 			{
 				Name:               "mock",
 				Query:              "mock",

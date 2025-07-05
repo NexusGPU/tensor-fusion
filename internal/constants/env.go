@@ -85,12 +85,14 @@ const (
 
 // TensorFusion hypervisor related envs
 const (
-	HypervisorPoolNameEnv         = "TENSOR_FUSION_POOL_NAME"
-	HypervisorPodNameEnv          = "POD_NAME"
-	VectorPodNodeNameEnv          = "NODE_NAME"
-	HypervisorGPUNodeNameEnv      = "GPU_NODE_NAME"
-	HypervisorSchedulingConfigEnv = "TF_HYPERVISOR_SCHEDULING_CONFIG"
-	HypervisorListenAddrEnv       = "API_LISTEN_ADDR"
+	HypervisorPoolNameEnv           = "TENSOR_FUSION_POOL_NAME"
+	HypervisorPodNameEnv            = "POD_NAME"
+	VectorPodNodeNameEnv            = "NODE_NAME"
+	HypervisorGPUNodeNameEnv        = "GPU_NODE_NAME"
+	HypervisorSchedulingConfigEnv   = "TF_HYPERVISOR_SCHEDULING_CONFIG"
+	HypervisorListenAddrEnv         = "API_LISTEN_ADDR"
+	HypervisorMetricsFormatEnv      = "TF_HYPERVISOR_METRICS_FORMAT"
+	HypervisorMetricsExtraLabelsEnv = "TF_HYPERVISOR_METRICS_EXTRA_LABELS"
 
 	HypervisorDefaultPortNumber int32  = 8000
 	HypervisorPortName          string = "http"

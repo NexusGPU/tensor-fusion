@@ -10,6 +10,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -27,14 +28,14 @@ type AlertEvaluator struct {
 	ctx context.Context
 
 	DB    *metrics.TimeSeriesDB
-	Rules []Rule
+	Rules []config.AlertRule
 
 	alertManagerURL string
 	mu              sync.Mutex
 	tickers         map[string]*time.Ticker
 }
 
-func NewAlertEvaluator(ctx context.Context, db *metrics.TimeSeriesDB, rules []Rule, alertManagerURL string) *AlertEvaluator {
+func NewAlertEvaluator(ctx context.Context, db *metrics.TimeSeriesDB, rules []config.AlertRule, alertManagerURL string) *AlertEvaluator {
 	return &AlertEvaluator{
 		DB:    db,
 		Rules: rules,
@@ -46,7 +47,7 @@ func NewAlertEvaluator(ctx context.Context, db *metrics.TimeSeriesDB, rules []Ru
 	}
 }
 
-func (e *AlertEvaluator) UpdateAlertRules(rules []Rule) error {
+func (e *AlertEvaluator) UpdateAlertRules(rules []config.AlertRule) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -100,7 +101,7 @@ func (e *AlertEvaluator) StopEvaluate() error {
 }
 
 // renderQueryTemplate renders the SQL query template with rule data
-func renderQueryTemplate(rule *Rule) (string, error) {
+func renderQueryTemplate(rule *config.AlertRule) (string, error) {
 	tmpl, err := template.New("query").Parse(rule.Query)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse query template: %w", err)
@@ -122,7 +123,7 @@ func renderQueryTemplate(rule *Rule) (string, error) {
 }
 
 // evaluate evaluates a rule against the database and sends alerts if conditions are met
-func (e *AlertEvaluator) evaluate(rule *Rule) ([]PostableAlert, error) {
+func (e *AlertEvaluator) evaluate(rule *config.AlertRule) ([]config.PostableAlert, error) {
 	renderedQuery, err := renderQueryTemplate(rule)
 	if err != nil {
 		return nil, fmt.Errorf("failed to render query template for rule %s: %w", rule.Name, err)
@@ -137,7 +138,7 @@ func (e *AlertEvaluator) evaluate(rule *Rule) ([]PostableAlert, error) {
 		}
 	}()
 
-	alerts := []PostableAlert{}
+	alerts := []config.PostableAlert{}
 	processedAlerts, err := e.processQueryResults(rows, rule)
 	if err != nil {
 		return nil, fmt.Errorf("failed to process query results for rule %s: %w", rule.Name, err)
@@ -154,8 +155,8 @@ func (e *AlertEvaluator) evaluate(rule *Rule) ([]PostableAlert, error) {
 }
 
 // processQueryResults processes query results and returns alerts for matching conditions
-func (e *AlertEvaluator) processQueryResults(rows *sql.Rows, rule *Rule) ([]PostableAlert, error) {
-	alerts := []PostableAlert{}
+func (e *AlertEvaluator) processQueryResults(rows *sql.Rows, rule *config.AlertRule) ([]config.PostableAlert, error) {
+	alerts := []config.PostableAlert{}
 	firingAlertSet := map[string]struct{}{}
 
 	// Process each row from the query result

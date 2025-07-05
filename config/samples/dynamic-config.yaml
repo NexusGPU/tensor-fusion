@@ -1,5 +1,8 @@
 metricsTTL: 30d
 
+# default to 'influx', influx v2 line protocol
+metricsFormat: json
+
 alertRules:
 - name: GPUTFlopsFull
   query: |

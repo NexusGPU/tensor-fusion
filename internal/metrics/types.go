@@ -49,6 +49,8 @@ type WorkerResourceMetrics struct {
 
 	// For more accurate metrics, should record the deletion timestamp to calculate duration for the last metrics
 	deletionTimestamp *time.Time
+
+	podLabels map[string]string
 }
 
 func (wm WorkerResourceMetrics) TableName() string {
@@ -56,7 +58,7 @@ func (wm WorkerResourceMetrics) TableName() string {
 }
 
 type NodeResourceMetrics struct {
-	NodeName string `json:"nodeName" gorm:"column:node_name;index:,class:INVERTED"`
+	NodeName string `json:"nodeName" gorm:"column:node;index:,class:INVERTED"`
 	PoolName string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
 
 	AllocatedTflops        float64 `json:"allocatedTflops" gorm:"column:allocated_tflops"`
@@ -121,7 +123,7 @@ type HypervisorWorkerUsageMetrics struct {
 	WorkloadName string `json:"workloadName" gorm:"column:workload;index:,class:INVERTED"`
 	WorkerName   string `json:"workerName" gorm:"column:worker;index:,class:SKIPPING"`
 	PoolName     string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
-	NodeName     string `json:"nodeName" gorm:"column:node_name;index:,class:INVERTED"`
+	NodeName     string `json:"nodeName" gorm:"column:node;index:,class:INVERTED"`
 	UUID         string `json:"uuid" gorm:"column:uuid;index:,class:INVERTED"`
 
 	ComputePercent float64 `json:"computePercent" gorm:"column:compute_percentage"`
@@ -142,7 +144,7 @@ func (wu HypervisorWorkerUsageMetrics) TableName() string {
 }
 
 type HypervisorGPUUsageMetrics struct {
-	NodeName string `json:"nodeName" gorm:"column:node_name;index:,class:INVERTED"`
+	NodeName string `json:"nodeName" gorm:"column:node;index:,class:INVERTED"`
 	PoolName string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
 	UUID     string `json:"uuid" gorm:"column:uuid;index:,class:INVERTED"`
 

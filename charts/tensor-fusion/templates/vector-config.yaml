@@ -42,9 +42,9 @@ data:
         encoding:
           codec: text
         {{- if ne .Values.greptime.isCloud true }}
-        uri: "http://{{ .Values.greptime.host }}:4000/v1/influxdb/api/v2/write?db=public&precision=ns"
+        uri: "http://{{ .Values.greptime.host }}:4000/v1/influxdb/api/v2/write?db=public&precision=ms"
         {{- else }}
-        uri: "https://{{ .Values.greptime.host }}/v1/influxdb/api/v2/write?db={{ .Values.greptime.db }}&precision=ns"
+        uri: "https://{{ .Values.greptime.host }}/v1/influxdb/api/v2/write?db={{ .Values.greptime.db }}&precision=ms"
         request:
           headers:
             # refer https://docs.greptime.com/user-guide/protocols/http/#post-influxdb-line-protocol-data
@@ -106,9 +106,9 @@ data:
         encoding:
           codec: text
         {{- if ne .Values.greptime.isCloud true }}
-        uri: "http://{{ .Values.greptime.host }}:4000/v1/influxdb/api/v2/write?db=public&precision=ns"
+        uri: "http://{{ .Values.greptime.host }}:4000/v1/influxdb/api/v2/write?db=public&precision=ms"
         {{- else }}
-        uri: "https://{{ .Values.greptime.host }}/v1/influxdb/api/v2/write?db={{ .Values.greptime.db }}&precision=ns"
+        uri: "https://{{ .Values.greptime.host }}/v1/influxdb/api/v2/write?db={{ .Values.greptime.db }}&precision=ms"
         request:
           headers:
             # refer https://docs.greptime.com/user-guide/protocols/http/#post-influxdb-line-protocol-data

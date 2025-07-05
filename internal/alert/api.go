@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 )
 
 var alertManagerHttpClient = &http.Client{
@@ -14,18 +16,6 @@ var alertManagerHttpClient = &http.Client{
 }
 
 type LabelSet map[string]string
-
-type Alert struct {
-	Labels       LabelSet `json:"labels"`
-	GeneratorURL string   `json:"generatorURL,omitempty"`
-}
-
-type PostableAlert struct {
-	Alert
-	StartsAt    time.Time `json:"startsAt,omitempty"`
-	EndsAt      time.Time `json:"endsAt,omitempty"`
-	Annotations LabelSet  `json:"annotations,omitempty"`
-}
 
 type Matcher struct {
 	Name    string `json:"name"`
@@ -46,7 +36,7 @@ type AlertStatus struct {
 }
 
 type GettableAlert struct {
-	Alert
+	config.Alert
 	Annotations LabelSet    `json:"annotations"`
 	Receivers   []Receiver  `json:"receivers"`
 	Fingerprint string      `json:"fingerprint"`
@@ -56,7 +46,7 @@ type GettableAlert struct {
 	Status      AlertStatus `json:"status"`
 }
 
-func SendAlert(ctx context.Context, alertManagerURL string, alerts []PostableAlert) error {
+func SendAlert(ctx context.Context, alertManagerURL string, alerts []config.PostableAlert) error {
 	if len(alerts) == 0 {
 		return nil
 	}
@@ -87,14 +77,4 @@ func SendAlert(ctx context.Context, alertManagerURL string, alerts []PostableAle
 		return fmt.Errorf("unexpected status code when sending alert: %d", resp.StatusCode)
 	}
 	return nil
-}
-
-func CreateAlertData(name, summary, description string, labels LabelSet, annotations LabelSet, startsAt time.Time) PostableAlert {
-	return PostableAlert{
-		Alert: Alert{
-			Labels: labels,
-		},
-		StartsAt:    startsAt,
-		Annotations: annotations,
-	}
 }

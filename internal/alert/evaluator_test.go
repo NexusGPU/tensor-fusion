@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,8 +31,8 @@ func setupMockDB(t *testing.T) (sqlmock.Sqlmock, *metrics.TimeSeriesDB) {
 	return mock, tsdb
 }
 
-func createTestRule(name string) *Rule {
-	return &Rule{
+func createTestRule(name string) *config.AlertRule {
+	return &config.AlertRule{
 		Name:                name,
 		Query:               "SELECT value, instance, job FROM metrics WHERE value > {{.Threshold}} AND {{.Conditions}}",
 		Threshold:           80.0,
@@ -43,7 +44,7 @@ func createTestRule(name string) *Rule {
 		RunBookURL:          "https://example.com/runbook",
 		AlertTargetInstance: "{{.instance}}",
 
-		testMode: true,
+		TestMode: true,
 	}
 }
 
@@ -56,10 +57,7 @@ func TestAlertEvaluator(t *testing.T) {
 		rule := createTestRule("test-rule")
 
 		// Pre-populate firing alerts
-		rule.firingAlerts = make(map[string]*struct {
-			alert PostableAlert
-			count int
-		})
+		rule.FiringAlerts = map[string]*config.FiringAlertCache{}
 
 		// Mock empty result set
 		mock.ExpectQuery("SELECT value, instance, job FROM metrics").
@@ -70,7 +68,7 @@ func TestAlertEvaluator(t *testing.T) {
 		assert.Empty(t, alerts)
 
 		// Verify that firing alerts were resolved
-		assert.Empty(t, rule.firingAlerts)
+		assert.Empty(t, rule.FiringAlerts)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -85,7 +83,7 @@ func TestAlertEvaluator(t *testing.T) {
 		assert.Len(t, alerts, 2)
 
 		// Verify that alerts were added to firing alerts
-		assert.NotEmpty(t, rule.firingAlerts)
+		assert.NotEmpty(t, rule.FiringAlerts)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -100,7 +98,7 @@ func TestAlertEvaluator(t *testing.T) {
 		alerts, err := evaluator.evaluate(rule)
 		assert.NoError(t, err)
 		assert.Len(t, alerts, 0)
-		assert.Len(t, rule.firingAlerts, 1)
+		assert.Len(t, rule.FiringAlerts, 1)
 
 		mock.ExpectQuery("SELECT value, instance, job FROM metrics").
 			WillReturnRows(newAlertQueryRows(1, 85.5))
@@ -108,11 +106,11 @@ func TestAlertEvaluator(t *testing.T) {
 		alerts, err = evaluator.evaluate(rule)
 		assert.NoError(t, err)
 		assert.Len(t, alerts, 0)
-		assert.Len(t, rule.firingAlerts, 1)
+		assert.Len(t, rule.FiringAlerts, 1)
 
 		// Check that count increased
-		for _, firingAlert := range rule.firingAlerts {
-			assert.Equal(t, 2, firingAlert.count)
+		for _, firingAlert := range rule.FiringAlerts {
+			assert.Equal(t, 2, firingAlert.Count)
 		}
 
 		mock.ExpectQuery("SELECT value, instance, job FROM metrics").
@@ -121,11 +119,11 @@ func TestAlertEvaluator(t *testing.T) {
 		alerts, err = evaluator.evaluate(rule)
 		assert.NoError(t, err)
 		assert.Len(t, alerts, 1)
-		assert.Len(t, rule.firingAlerts, 1)
+		assert.Len(t, rule.FiringAlerts, 1)
 
 		// Check that count reached threshold
-		for _, firingAlert := range rule.firingAlerts {
-			assert.Equal(t, 3, firingAlert.count)
+		for _, firingAlert := range rule.FiringAlerts {
+			assert.Equal(t, 3, firingAlert.Count)
 		}
 
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -176,7 +174,7 @@ func TestAlertEvaluator(t *testing.T) {
 		rule.EvaluationInterval = "invalid-interval"
 
 		evaluator := newAlertEvaluator(nil)
-		evaluator.Rules = []Rule{*rule}
+		evaluator.Rules = []config.AlertRule{*rule}
 
 		err := evaluator.StartEvaluate()
 		assert.Error(t, err)
@@ -189,7 +187,7 @@ func TestAlertEvaluator(t *testing.T) {
 		evaluator := newAlertEvaluator(nil)
 
 		// Update with new rules
-		err := evaluator.UpdateAlertRules([]Rule{*rule2})
+		err := evaluator.UpdateAlertRules([]config.AlertRule{*rule2})
 		assert.NoError(t, err)
 		assert.Len(t, evaluator.Rules, 1)
 		assert.Equal(t, "rule2", evaluator.Rules[0].Name)

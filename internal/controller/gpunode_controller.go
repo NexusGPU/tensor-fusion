@@ -21,11 +21,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	cloudprovider "github.com/NexusGPU/tensor-fusion/internal/cloudprovider"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
@@ -49,6 +51,8 @@ type GPUNodeReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+
+	GlobalConfig *config.GlobalConfig
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch;create;update;patch;delete
@@ -409,6 +413,12 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 					spec.Containers[0].Env = append(spec.Containers[0].Env, corev1.EnvVar{
 						Name:  constants.HypervisorSchedulingConfigEnv,
 						Value: string(cfg),
+					}, corev1.EnvVar{
+						Name:  constants.HypervisorMetricsFormatEnv,
+						Value: r.GlobalConfig.MetricsFormat,
+					}, corev1.EnvVar{
+						Name:  constants.HypervisorMetricsExtraLabelsEnv,
+						Value: strings.Join(r.GlobalConfig.MetricsExtraPodLabels, ","),
 					})
 				}
 			}

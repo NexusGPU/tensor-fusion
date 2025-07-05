@@ -195,7 +195,7 @@ func main() {
 		setupLog.Info("auto scale enabled")
 	}
 
-	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, gpuPricingMap)
+	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, gpuPricingMap, &globalConfig)
 
 	// Initialize GPU allocator and set up watches
 	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr)
@@ -335,6 +335,8 @@ func startCustomResourceController(
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("GPUNode"),
+
+		GlobalConfig: &globalConfig,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUNode")
 		os.Exit(1)
@@ -505,10 +507,12 @@ func startMetricsRecorder(
 	enableLeaderElection bool,
 	mgr manager.Manager,
 	gpuPricingMap map[string]float64,
+	globalConfig *config.GlobalConfig,
 ) metrics.MetricsRecorder {
 	metricsRecorder := metrics.MetricsRecorder{
 		MetricsOutputPath:  metricsPath,
 		HourlyUnitPriceMap: gpuPricingMap,
+		GlobalConfig:       globalConfig,
 
 		// Worker level map will be updated by cluster reconcile
 		// Key is poolName, second level key is QoS level

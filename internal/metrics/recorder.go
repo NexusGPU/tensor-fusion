@@ -7,9 +7,9 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
-	metricsProto "github.com/influxdata/line-protocol/v2/lineprotocol"
 	"gopkg.in/natefinch/lumberjack.v2"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -34,6 +34,8 @@ type MetricsRecorder struct {
 
 	// Worker level unit price map, key is pool name, second level key is QoS level
 	WorkerUnitPriceMap map[string]map[string]RawBillingPricing
+
+	GlobalConfig *config.GlobalConfig
 }
 
 type ActiveNodeAndWorker struct {
@@ -80,6 +82,7 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod) {
 			PoolName:       pod.Annotations[constants.GpuPoolKey],
 			Namespace:      pod.Namespace,
 			QoS:            pod.Annotations[constants.QoSLevelAnnotation],
+			podLabels:      pod.Labels,
 			RawCost:        0,
 			LastRecordTime: time.Now(),
 		}
@@ -226,10 +229,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 	}
 
 	now := time.Now()
-
-	var enc metricsProto.Encoder
-	enc.SetPrecision(metricsProto.Millisecond)
-
+	enc := NewEncoder(mr.GlobalConfig.MetricsFormat)
 	workerMetricsLock.RLock()
 
 	activeWorkerCnt := 0
@@ -261,24 +261,27 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 
 		enc.StartLine("tf_worker_resources")
 		enc.AddTag("namespace", metrics.Namespace)
-		enc.AddTag("pool_name", metrics.PoolName)
+		enc.AddTag("pool", metrics.PoolName)
 
 		if metrics.QoS == "" {
 			metrics.QoS = constants.QoSLevelMedium
 		}
 		enc.AddTag("qos", metrics.QoS)
-		enc.AddTag("worker_name", metrics.WorkerName)
-		enc.AddTag("workload_name", metrics.WorkloadName)
+		enc.AddTag("worker", metrics.WorkerName)
+		enc.AddTag("workload", metrics.WorkloadName)
 
-		// TODO add more dynamic tags from pod label
-		// So as for hypervisor metrics
+		if mr.GlobalConfig.MetricsExtraPodLabels != nil {
+			for _, label := range mr.GlobalConfig.MetricsExtraPodLabels {
+				enc.AddTag(label, metrics.podLabels[label])
+			}
+		}
 
-		enc.AddField("gpu_count", metricsProto.MustNewValue(int64(metrics.GPUCount)))
-		enc.AddField("tflops_limit", metricsProto.MustNewValue(metrics.TflopsLimit))
-		enc.AddField("tflops_request", metricsProto.MustNewValue(metrics.TflopsRequest))
-		enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
-		enc.AddField("vram_bytes_limit", metricsProto.MustNewValue(metrics.VramBytesLimit))
-		enc.AddField("vram_bytes_request", metricsProto.MustNewValue(metrics.VramBytesRequest))
+		enc.AddField("gpu_count", int64(metrics.GPUCount))
+		enc.AddField("tflops_limit", metrics.TflopsLimit)
+		enc.AddField("tflops_request", metrics.TflopsRequest)
+		enc.AddField("raw_cost", metrics.RawCost)
+		enc.AddField("vram_bytes_limit", metrics.VramBytesLimit)
+		enc.AddField("vram_bytes_request", metrics.VramBytesRequest)
 
 		enc.EndLine(now)
 	}
@@ -300,30 +303,30 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 
 		enc.StartLine("tf_node_metrics")
 
-		enc.AddTag("node_name", metrics.NodeName)
-		enc.AddTag("pool_name", metrics.PoolName)
+		enc.AddTag("node", metrics.NodeName)
+		enc.AddTag("pool", metrics.PoolName)
 
-		enc.AddField("allocated_tflops", metricsProto.MustNewValue(metrics.AllocatedTflops))
-		enc.AddField("allocated_tflops_percent", metricsProto.MustNewValue(metrics.AllocatedTflopsPercent))
-		enc.AddField("allocated_tflops_percent_virtual", metricsProto.MustNewValue(metrics.AllocatedTflopsPercentToVirtualCap))
-		enc.AddField("allocated_vram_bytes", metricsProto.MustNewValue(metrics.AllocatedVramBytes))
-		enc.AddField("allocated_vram_percent", metricsProto.MustNewValue(metrics.AllocatedVramPercent))
-		enc.AddField("allocated_vram_percent_virtual", metricsProto.MustNewValue(metrics.AllocatedVramPercentToVirtualCap))
-		enc.AddField("gpu_count", metricsProto.MustNewValue(int64(metrics.GPUCount)))
-		enc.AddField("raw_cost", metricsProto.MustNewValue(metrics.RawCost))
+		enc.AddField("allocated_tflops", metrics.AllocatedTflops)
+		enc.AddField("allocated_tflops_percent", metrics.AllocatedTflopsPercent)
+		enc.AddField("allocated_tflops_percent_virtual", metrics.AllocatedTflopsPercentToVirtualCap)
+		enc.AddField("allocated_vram_bytes", metrics.AllocatedVramBytes)
+		enc.AddField("allocated_vram_percent", metrics.AllocatedVramPercent)
+		enc.AddField("allocated_vram_percent_virtual", metrics.AllocatedVramPercentToVirtualCap)
+		enc.AddField("gpu_count", int64(metrics.GPUCount))
+		enc.AddField("raw_cost", metrics.RawCost)
 		enc.EndLine(now)
 	}
 
-	enc.StartLine("tf_system_metrics")
 	for poolName, activeNodeAndWorker := range activeWorkerAndNodeByPool {
+		enc.StartLine("tf_system_metrics")
 		successCount, failCount, scaleUpCount, scaleDownCount := getSchedulerMetricsByPool(poolName)
-		enc.AddTag("pool_name", poolName)
-		enc.AddField("total_workers_cnt", metricsProto.MustNewValue(int64(activeNodeAndWorker.workerCnt)))
-		enc.AddField("total_nodes_cnt", metricsProto.MustNewValue(int64(activeNodeAndWorker.nodeCnt)))
-		enc.AddField("total_allocation_fail_cnt", metricsProto.MustNewValue(failCount))
-		enc.AddField("total_allocation_success_cnt", metricsProto.MustNewValue(successCount))
-		enc.AddField("total_scale_up_cnt", metricsProto.MustNewValue(scaleUpCount))
-		enc.AddField("total_scale_down_cnt", metricsProto.MustNewValue(scaleDownCount))
+		enc.AddTag("pool", poolName)
+		enc.AddField("total_workers_cnt", int64(activeNodeAndWorker.workerCnt))
+		enc.AddField("total_nodes_cnt", int64(activeNodeAndWorker.nodeCnt))
+		enc.AddField("total_allocation_fail_cnt", failCount)
+		enc.AddField("total_allocation_success_cnt", successCount)
+		enc.AddField("total_scale_up_cnt", scaleUpCount)
+		enc.AddField("total_scale_down_cnt", scaleDownCount)
 		enc.EndLine(now)
 	}
 

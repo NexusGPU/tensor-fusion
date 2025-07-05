@@ -41,7 +41,7 @@ func getInitTableSQL(model schema.Tabler, ttl string) string {
 		var indexClass string
 		var isIndex bool
 		var extraOption string
-		timePrecision := "ns"
+		timePrecision := "ms"
 
 		// Split by semicolon first
 		parts := strings.SplitSeq(gormTag, ";")

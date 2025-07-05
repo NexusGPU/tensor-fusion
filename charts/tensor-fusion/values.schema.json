@@ -444,6 +444,17 @@
           "type": "string",
           "description": "Metrics and Logs Retention Period, default to 30d"
         },
+        "metricsFormat": {
+          "type": "string",
+          "description": "Metrics format, default to 'influx', could be 'json' or 'otel'"
+        },
+        "metricsExtraPodLabels": {
+          "type": "array",
+          "description": "Extra pod labels to be added to metrics",
+          "items": {
+            "type": "string"
+          }
+        },
         "alertRules": {
           "type": "array",
           "description": "Alerting rules",

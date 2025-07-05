@@ -221,6 +221,7 @@ schedulerConfig:
 dynamicConfig:
   # retention period for metrics data
   metricsTTL: 30d
+  metricsFormat: influx
 
   # alert rules
   alertRules:    
