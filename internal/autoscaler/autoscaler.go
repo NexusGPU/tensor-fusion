@@ -369,7 +369,7 @@ func getInitialWorkerResourceRequest(worker *corev1.Pod) (*tfv1.AdjustRequest, e
 
 // Start after manager started
 func SetupWithManager(mgr ctrl.Manager, allocator *gpuallocator.GpuAllocator) error {
-	autoScaler, err := NewAutoscaler(mgr.GetClient(), nil)
+	autoScaler, err := NewAutoscaler(mgr.GetClient(), allocator)
 	if err != nil {
 		return err
 	}
