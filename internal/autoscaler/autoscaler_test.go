@@ -227,7 +227,7 @@ var _ = Describe("Autoscaler", func() {
 			}).Should(Succeed())
 		})
 
-		It("should return an error if failed to reallocate resources", func() {
+		It("should return an error if recommended resources exceeded quota", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
@@ -239,7 +239,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
 			scaler.ResourceRecommender = &FakeQuotaExceededRecommender{}
-			rr := scaler.ResourceRecommender.GetRecommendedResources(nil)
+			rr := scaler.GetRecommendedResources(nil)
 			err := scaler.updateWorkerResourcesIfNeeded(ctx, scaler.WorkloadStates[workload.Name], getWorkers(workload)[0], rr)
 			Expect(err.Error()).To(ContainSubstring("failed to adjust allocation: scaling quota exceeded"))
 		})
