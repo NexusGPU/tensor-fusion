@@ -77,7 +77,8 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		pod.Annotations = map[string]string{}
 	}
 
-	// check if need to set owner reference
+	// check if need to set owner reference, when standalone Pod created and no owner,
+	// the related workload's owner should be the Pod so that to be deleted automatically along with Pod deletion
 	if ownedWorkloadName, ok := pod.Annotations[constants.SetPendingOwnedWorkloadAnnotation]; ok {
 		log.Info("Setting pending owned workload", "pod", pod.Name, "ownedWorkload", ownedWorkloadName)
 		if err := r.setPendingOwnedWorkload(ctx, pod, ownedWorkloadName); err != nil {
@@ -104,6 +105,8 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
+		metrics.SetWorkerMetricsByWorkload(pod)
+
 		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
 		if err != nil {
 			return ctrl.Result{}, err

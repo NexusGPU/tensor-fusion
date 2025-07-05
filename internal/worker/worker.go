@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -18,16 +17,21 @@ import (
 )
 
 type WorkerGenerator struct {
-	WorkerConfig *tfv1.WorkerConfig
+	WorkerConfig     *tfv1.WorkerConfig
+	HypervisorConfig *tfv1.HypervisorConfig
 }
 
 var ErrNoAvailableWorker = errors.New("no available worker")
 
 func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
-	return utils.GetObjectHash(wg.WorkerConfig.PodTemplate.Raw, workloadSpec), nil
+	return utils.GetObjectHash(
+		wg.WorkerConfig,
+		workloadSpec,
+	), nil
 }
 
 func (wg *WorkerGenerator) GenerateWorkerPod(
+	ctx context.Context,
 	workload *tfv1.TensorFusionWorkload,
 ) (*v1.Pod, error) {
 	podTmpl := &v1.PodTemplate{}
@@ -37,30 +41,14 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	}
 	spec := podTmpl.Template.Spec
 
-	// Set environment variable to make all GPUs visible to the worker,
-	// vgpu.rs limiter will limit to specific devices after Pod started
-	spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
-		Name:  constants.NvidiaVisibleAllDeviceEnv,
-		Value: constants.NvidiaVisibleAllDeviceValue,
-	})
-
-	// Add volume from host for CUDA hot migration and snapshot
-	spec.Volumes = append(spec.Volumes, v1.Volume{
-		Name: constants.DataVolumeName,
-		VolumeSource: v1.VolumeSource{
-			HostPath: &v1.HostPathVolumeSource{
-				Path: constants.TFDataPath,
-				Type: ptr.To(v1.HostPathDirectoryOrCreate),
-			},
-		},
-	})
+	utils.AddWorkerConfAfterTemplate(ctx, &spec, wg.WorkerConfig, wg.HypervisorConfig)
 
 	// performance optimization, service link will cause high CPU usage when service number is large
 	spec.EnableServiceLinks = ptr.To(false)
 	spec.SchedulerName = constants.SchedulerName
 
 	// Add labels to identify this pod as part of the workload
-	labels, annotations := appendLabelsAndAnnotations(podTmpl, workload)
+	labels, annotations := utils.AppendTFWorkerLabelsAndAnnotationsAfterTemplate(podTmpl, workload)
 
 	return &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -71,36 +59,6 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		},
 		Spec: spec,
 	}, nil
-}
-
-func appendLabelsAndAnnotations(podTmpl *v1.PodTemplate, workload *tfv1.TensorFusionWorkload) (map[string]string, map[string]string) {
-	labels := maps.Clone(podTmpl.Template.Labels)
-	if labels == nil {
-		labels = make(map[string]string)
-	}
-	labels[constants.LabelComponent] = constants.ComponentWorker
-
-	annotations := maps.Clone(podTmpl.Template.Annotations)
-	if annotations == nil {
-		annotations = make(map[string]string)
-	}
-	res := workload.Spec.Resources
-	annotations[constants.TFLOPSLimitAnnotation] = res.Limits.Tflops.String()
-	annotations[constants.VRAMLimitAnnotation] = res.Limits.Vram.String()
-	annotations[constants.TFLOPSRequestAnnotation] = res.Requests.Tflops.String()
-	annotations[constants.VRAMRequestAnnotation] = res.Requests.Vram.String()
-	annotations[constants.QoSLevelAnnotation] = string(workload.Spec.Qos)
-
-	if workload.Spec.GPUCount > 0 {
-		annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", workload.Spec.GPUCount)
-	} else {
-		annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", 1)
-	}
-	annotations[constants.GpuPoolKey] = workload.Spec.PoolName
-	if workload.Spec.GPUModel != "" {
-		annotations[constants.GPUModelAnnotation] = workload.Spec.GPUModel
-	}
-	return labels, annotations
 }
 
 func SelectWorker(

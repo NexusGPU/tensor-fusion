@@ -46,7 +46,8 @@ func main() {
 
 	var gpuInfoConfig string
 	flag.StringVar(&k8sNodeName, "hostname", "", "hostname")
-	flag.StringVar(&gpuInfoConfig, "gpu-info-config", "", "specify the path to gpuInfoConfig file")
+	flag.StringVar(&gpuInfoConfig, "gpu-info-config",
+		constants.TensorFusionGPUInfoConfigMountPath, "specify the path to gpuInfoConfig file")
 
 	if k8sNodeName == "" {
 		k8sNodeName = os.Getenv("HOSTNAME")

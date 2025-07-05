@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}-public-gpu-info
+  name: tensor-fusion-sys-public-gpu-info
   namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
     tensor-fusion.ai/component: gpu-info

@@ -80,6 +80,8 @@
         "kubescheduler",
         "kubeschedulerconfig",
         "kustomization",
+        "libcuda",
+        "libnvidia",
         "metav",
         "metricsserver",
         "Milli",

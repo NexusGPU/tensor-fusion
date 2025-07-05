@@ -91,8 +91,8 @@ else
     
     # Delete ConfigMaps
     kubectl delete configmap $HELM_RELEASE-config -n $NAMESPACE || true
-    kubectl delete configmap $HELM_RELEASE-public-gpu-info -n $NAMESPACE || true
-    kubectl delete configmap $HELM_RELEASE-vector-config -n $NAMESPACE || true
+    kubectl delete configmap tensor-fusion-sys-public-gpu-info -n $NAMESPACE || true
+    kubectl delete configmap tensor-fusion-sys-vector-config -n $NAMESPACE || true
     
     # Delete Secrets
     kubectl delete secret $HELM_RELEASE-greptimedb-secret -n $NAMESPACE || true

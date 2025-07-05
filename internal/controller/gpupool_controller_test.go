@@ -17,7 +17,6 @@ limitations under the License.
 package controller
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -26,7 +25,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -142,8 +140,9 @@ var _ = Describe("GPUPool Controller", func() {
 				AddPoolWithNodeCount(3).
 				SetGpuCountPerNode(1).
 				Build()
-			updateRollingUpdatePolicy(tfEnv, true, 100, "1s")
+			updateRollingUpdatePolicy(tfEnv, true, 100, "500ms")
 			newHash, _ := triggerHypervisorUpdate(tfEnv)
+			time.Sleep(5 * time.Second)
 			verifyAllHypervisorPodHash(tfEnv, newHash)
 			verifyHypervisorUpdateProgress(tfEnv, 100)
 			tfEnv.Cleanup()
@@ -319,10 +318,7 @@ func updateHypervisorConfig(tfEnv *TensorFusionEnv) {
 	GinkgoHelper()
 	tfc := tfEnv.GetCluster()
 	hypervisor := tfc.Spec.GPUPools[0].SpecTemplate.ComponentConfig.Hypervisor
-	podTmpl := &corev1.PodTemplate{}
-	Expect(json.Unmarshal(hypervisor.PodTemplate.Raw, podTmpl)).Should(Succeed())
-	podTmpl.Template.Spec.Containers[0].Name = "updated-name"
-	hypervisor.PodTemplate.Raw = lo.Must(json.Marshal(podTmpl))
+	hypervisor.Image = "updated-image"
 	tfEnv.UpdateCluster(tfc)
 }
 
@@ -357,10 +353,7 @@ func updateWorkerConfig(tfEnv *TensorFusionEnv) {
 	GinkgoHelper()
 	tfc := tfEnv.GetCluster()
 	worker := tfc.Spec.GPUPools[0].SpecTemplate.ComponentConfig.Worker
-	podTmpl := &corev1.PodTemplate{}
-	Expect(json.Unmarshal(worker.PodTemplate.Raw, podTmpl)).Should(Succeed())
-	podTmpl.Template.Spec.Containers[0].Name = "updated-name"
-	worker.PodTemplate.Raw = lo.Must(json.Marshal(podTmpl))
+	worker.Image = "updated-name"
 	tfEnv.UpdateCluster(tfc)
 }
 
@@ -485,7 +478,6 @@ func verifyAllHypervisorPodHash(tfEnv *TensorFusionEnv, hash string) {
 				Name:      fmt.Sprintf("hypervisor-%s", gpuNode.Name),
 				Namespace: utils.CurrentNamespace(),
 			}, pod)).Should(Succeed())
-			g.Expect(pod.Spec.Containers[0].Name).Should(Equal("updated-name"))
 			g.Expect(pod.Labels[constants.LabelKeyPodTemplateHash]).Should(Equal(hash))
 			updatePodPhaseToRunning(pod, hash)
 		}

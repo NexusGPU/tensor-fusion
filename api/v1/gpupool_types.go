@@ -296,21 +296,38 @@ type ComponentConfig struct {
 	Client *ClientConfig `json:"client,omitempty"`
 }
 type NodeDiscoveryConfig struct {
+	Image string `json:"image,omitempty"`
+
 	// +optional
 	PodTemplate *runtime.RawExtension `json:"podTemplate,omitempty"`
 }
 
 type HypervisorConfig struct {
+	Image string `json:"image,omitempty"`
+
+	VectorImage string `json:"vectorImage,omitempty"`
+
+	// +kubebuilder:default=8000
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	PortNumber *int32 `json:"portNumber,omitempty"`
+
 	// +optional
 	PodTemplate *runtime.RawExtension `json:"podTemplate,omitempty"`
 }
 
 type WorkerConfig struct {
+	Image string `json:"image,omitempty"`
 	// +optional
 	PodTemplate *runtime.RawExtension `json:"podTemplate,omitempty"`
 }
 
 type ClientConfig struct {
+	RemoteModeImage string `json:"remoteModeImage,omitempty"`
+
+	EmbeddedModeImage string `json:"embeddedModeImage,omitempty"`
+
 	OperatorEndpoint string `json:"operatorEndpoint,omitempty"`
 
 	// +optional

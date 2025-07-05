@@ -1,6 +1,10 @@
 package constants
 
-import "time"
+import (
+	"time"
+
+	"k8s.io/utils/ptr"
+)
 
 const (
 	NvidiaGPUKey = "nvidia.com/gpu"
@@ -9,6 +13,7 @@ const (
 var (
 	PendingRequeueDuration = time.Second * 3
 	StatusCheckInterval    = time.Second * 6
+	GracefulPeriodSeconds  = ptr.To(int64(5))
 )
 
 const (
@@ -27,9 +32,7 @@ const (
 	LabelKeyPodTemplateHash = Domain + "/pod-template-hash"
 	LabelComponent          = Domain + "/component"
 	// used by TF connection, for matching the related connections when worker Pod state changed
-	LabelWorkerName  = Domain + "/worker-name"
-	TrueStringValue  = "true"
-	FalseStringValue = "false"
+	LabelWorkerName = Domain + "/worker-name"
 
 	ComponentClient        = "client"
 	ComponentWorker        = "worker"
@@ -68,11 +71,10 @@ const (
 	GPUDeviceIDsAnnotation            = Domain + "/gpu-ids"
 	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
 
-	GenHostPortLabel             = Domain + "/host-port"
-	GenHostPortLabelValue        = "auto"
-	GenHostPortNameLabel         = Domain + "/port-name"
-	GenPortNumberAnnotation      = Domain + "/port-number"
-	TensorFusionWorkerPortNumber = 8000
+	GenHostPortLabel        = Domain + "/host-port"
+	GenHostPortLabelValue   = "auto"
+	GenHostPortNameLabel    = Domain + "/port-name"
+	GenPortNumberAnnotation = Domain + "/port-number"
 
 	AutoScaleLimitsAnnotation   = Domain + "/auto-limits"
 	AutoScaleRequestsAnnotation = Domain + "/auto-requests"
@@ -88,22 +90,10 @@ const (
 	TensorFusionEnabledReplicasAnnotation = Domain + "/enabled-replicas"
 	TensorFusionDefaultPoolKeyAnnotation  = Domain + "/is-default-pool"
 
-	GetConnectionURLEnv    = "TENSOR_FUSION_OPERATOR_GET_CONNECTION_URL"
-	ConnectionNameEnv      = "TENSOR_FUSION_CONNECTION_NAME"
-	ConnectionNamespaceEnv = "TENSOR_FUSION_CONNECTION_NAMESPACE"
+	NamespaceDefaultVal = "tensor-fusion-sys"
 
-	WorkerCudaUpLimitTflopsEnv = "TENSOR_FUSION_CUDA_UP_LIMIT_TFLOPS"
-	WorkerCudaUpLimitEnv       = "TENSOR_FUSION_CUDA_UP_LIMIT"
-	WorkerCudaMemLimitEnv      = "TENSOR_FUSION_CUDA_MEM_LIMIT"
-	WorkloadNameEnv            = "TENSOR_FUSION_WORKLOAD_NAME"
-	PoolNameEnv                = "TENSOR_FUSION_POOL_NAME"
-	PodNameEnv                 = "POD_NAME"
-	GPUNodeNameEnv             = "GPU_NODE_NAME"
-	NamespaceEnv               = "OPERATOR_NAMESPACE"
-	NamespaceDefaultVal        = "tensor-fusion-sys"
+	KubernetesHostNameLabel = "kubernetes.io/hostname"
 
-	KubernetesHostNameLabel      = "kubernetes.io/hostname"
-	GiBToBytes                   = 1024 * 1024 * 1024
 	HypervisorServiceAccountName = "tensor-fusion-hypervisor-sa"
 
 	TSDBVersionConfigMap = "tensor-fusion-tsdb-version"
@@ -112,10 +102,12 @@ const (
 	QoSLevelMedium   = "medium"
 	QoSLevelHigh     = "high"
 	QoSLevelCritical = "critical"
+)
 
-	EnableWebhookEnv                  = "ENABLE_WEBHOOKS"
-	EnableSchedulerEnv                = "ENABLE_SCHEDULER"
-	EnableCustomResourceControllerEnv = "ENABLE_CR_CONTROLLER"
+// for avoid golang lint issues
+const (
+	TrueStringValue  = "true"
+	FalseStringValue = "false"
 )
 
 const (
@@ -160,15 +152,11 @@ const (
 	ProvisionerLabelKey        = Domain + "/node-provisioner"
 	ProvisionerNamePlaceholder = "__GPU_NODE_RESOURCE_NAME__"
 )
-const (
-	NodeDiscoveryReportGPUNodeEnvName = "NODE_DISCOVERY_REPORT_GPU_NODE"
-)
 
 const TFDataPath = "/tmp/tensor-fusion/data"
 const DataVolumeName = "tf-data"
 const TensorFusionPoolManualCompaction = Domain + "/manual-compaction"
 const AlertJobName = "tensor-fusion"
-const HypervisorSchedulingConfigEnv = "TF_HYPERVISOR_SCHEDULING_CONFIG"
 
 const (
 	LeaderInfoConfigMapName        = "tensor-fusion-operator-leader-info"
@@ -176,8 +164,6 @@ const (
 )
 
 const ShortUUIDAlphabet = "123456789abcdefghijkmnopqrstuvwxy"
-const NvidiaVisibleAllDeviceEnv = "NVIDIA_VISIBLE_DEVICES"
-const NvidiaVisibleAllDeviceValue = "all"
 
 const (
 	LowFrequencyObjFailureInitialDelay        = 300 * time.Millisecond
@@ -187,20 +173,7 @@ const (
 	LowFrequencyObjFailureConcurrentReconcile = 5
 )
 
-// For security enhancement, there are 2 types of endpoints to protect
-// 1. client call operator /connection API, to obtain tensor fusion worker's URL
-// 2. worker call hypervisor API, to obtain current workers GPU quota info
-// if this env var is set on operator and hypervisor, will try to verify JWT signature for each call
-// not implemented yet, iss is public in EKS and most K8S distribution
-// but k3s and some K8S distribution may not support, need to find some way to get SA token JWT pub key
-
-const HypervisorVerifyServiceAccountEnabledEnvVar = "SA_TOKEN_VERIFY_ENABLED"
-const HypervisorVerifyServiceAccountPublicKeyEnvVar = "SA_TOKEN_VERIFY_PUBLIC_KEY"
-
-// TensorFusion ControllerManager's http endpoint will verify Pod JWT signature
-// if this env var is set, will disable the verification, it's enabled by default
-// should not set to true in production environment
-const DisableConnectionAuthEnv = "DISABLE_CONNECTION_AUTH"
+const GiBToBytes = 1024 * 1024 * 1024
 
 const AuthorizationHeader = "Authorization"
 const ExtraVerificationInfoPodIDKey = "authentication.kubernetes.io/pod-uid"

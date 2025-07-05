@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -179,6 +180,10 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// pod deleted or deleting, wait next reconcile
+	if hypervisorName == "" {
+		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
+	}
 
 	// Check if hypervisor is running well, if so, set as running status
 	checkAgain, err := r.checkStatusAndUpdateVirtualCapacity(ctx, hypervisorName, node, poolObj)
@@ -280,46 +285,15 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 		tmpl.Labels = map[string]string{}
 	}
 	tmpl.Labels[constants.LabelComponent] = constants.ComponentNodeDiscovery
-	if tmpl.Spec.Affinity == nil {
-		tmpl.Spec.Affinity = &corev1.Affinity{}
-	}
-	if tmpl.Spec.Affinity.NodeAffinity == nil {
-		tmpl.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
-	}
-	if tmpl.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
-		tmpl.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{
-			NodeSelectorTerms: make([]corev1.NodeSelectorTerm, 0),
-		}
-	}
-	tmpl.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms =
-		append(tmpl.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms, corev1.NodeSelectorTerm{
-			MatchFields: []corev1.NodeSelectorRequirement{
-				{
-					Key:      "metadata.name",
-					Operator: corev1.NodeSelectorOpIn,
-					Values:   []string{gpunode.Status.KubernetesNodeName},
-				},
-			},
-		})
+	tmpl.Spec.NodeName = gpunode.Status.KubernetesNodeName
 	// allow job to run at any taint Nodes that marked as NoSchedule
-	if tmpl.Spec.Tolerations == nil {
-		tmpl.Spec.Tolerations = []corev1.Toleration{}
-	}
 	tmpl.Spec.Tolerations = append(tmpl.Spec.Tolerations, corev1.Toleration{
-		Key:      "NoSchedule",
+		Key:      string(corev1.TaintEffectNoSchedule),
 		Operator: corev1.TolerationOpExists,
 	})
 	tmpl.Spec.EnableServiceLinks = ptr.To(false)
 
-	if len(tmpl.Spec.Containers) > 0 {
-		if len(tmpl.Spec.Containers[0].Env) == 0 {
-			tmpl.Spec.Containers[0].Env = []corev1.EnvVar{}
-		}
-		tmpl.Spec.Containers[0].Env = append(tmpl.Spec.Containers[0].Env, corev1.EnvVar{
-			Name:  constants.NodeDiscoveryReportGPUNodeEnvName,
-			Value: gpunode.Name,
-		})
-	}
+	utils.AddTFNodeDiscoveryConfAfterTemplate(ctx, &tmpl, pool, gpunode.Name)
 
 	// create node-discovery job
 	job := &batchv1.Job{
@@ -334,6 +308,7 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 			Template:                tmpl,
 		},
 	}
+
 	if err := r.Get(ctx, client.ObjectKeyFromObject(job), job); err != nil {
 		if errors.IsNotFound(err) {
 			if err := ctrl.SetControllerReference(gpunode, job, r.Scheme); err != nil {
@@ -368,35 +343,39 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tf
 			return "", fmt.Errorf("failed to get current hypervisor pod: %w", err)
 		}
 	} else {
+		// hypervisor pod found, verify status and podTemplateHash
+
 		if node.Status.Phase == tfv1.TensorFusionGPUNodePhaseRunning {
 			return key.Name, nil
 		}
 
+		oldHash := currentPod.Labels[constants.LabelKeyPodTemplateHash]
 		if !currentPod.DeletionTimestamp.IsZero() {
-			log.Info("hypervisor pod is being deleted", "name", key.Name)
-			return key.Name, nil
+			log.Info("hypervisor pod is still being deleting", "name", key.Name, "hash", oldHash)
+			return "", nil
 		}
 
-		if utils.IsPodTerminated(currentPod) ||
-			currentPod.Labels[constants.LabelKeyPodTemplateHash] != utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor) {
+		newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
+		if utils.IsPodStopped(currentPod) || oldHash != newHash {
 			if err := r.Delete(ctx, currentPod); err != nil {
 				return "", fmt.Errorf("failed to delete old hypervisor pod: %w", err)
 			}
-			log.Info("old hypervisor pod deleted", "name", currentPod.Name)
+			log.Info("old hypervisor pod deleted", "name", currentPod.Name, "oldHash", oldHash, "newHash", newHash)
+			return "", nil
 		} else {
 			return key.Name, nil
 		}
 	}
 
-	// no existing pod or config changed, so create new one
+	log.Info("hypervisor pod not found, creating new one", "node", node.Name)
 	if err := r.createHypervisorPod(ctx, key, node, pool); err != nil {
 		if errors.IsAlreadyExists(err) {
+			log.Info("hypervisor pod already exists, skip creation", "node", node.Name)
 			return "", nil
 		} else {
 			return "", fmt.Errorf("failed to create hypervisor pod: %w", err)
 		}
 	}
-
 	return key.Name, nil
 }
 
@@ -404,6 +383,8 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 	log := log.FromContext(ctx)
 
 	podTmpl := &corev1.PodTemplate{}
+
+	// unmarshal pod template
 	err := json.Unmarshal(pool.Spec.ComponentConfig.Hypervisor.PodTemplate.Raw, podTmpl)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal pod template: %w", err)
@@ -413,40 +394,13 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 		spec.NodeSelector = make(map[string]string)
 	}
 	spec.EnableServiceLinks = ptr.To(false)
-	spec.NodeSelector["kubernetes.io/hostname"] = node.Status.KubernetesNodeName
-	spec.Volumes = append(spec.Volumes, corev1.Volume{
-		Name: constants.DataVolumeName,
-		VolumeSource: corev1.VolumeSource{
-			HostPath: &corev1.HostPathVolumeSource{
-				Path: constants.TFDataPath,
-				Type: ptr.To(corev1.HostPathDirectoryOrCreate),
-			},
-		},
-	})
-	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, corev1.VolumeMount{
-		Name:      constants.DataVolumeName,
-		ReadOnly:  false,
-		MountPath: constants.TFDataPath,
-	})
-	if spec.Containers[0].Env == nil {
-		spec.Containers[0].Env = []corev1.EnvVar{}
-	}
-	spec.Containers[0].Env = append(spec.Containers[0].Env, corev1.EnvVar{
-		Name: constants.PodNameEnv,
-		ValueFrom: &corev1.EnvVarSource{
-			FieldRef: &corev1.ObjectFieldSelector{
-				FieldPath: "metadata.name",
-			},
-		},
-	}, corev1.EnvVar{
-		Name:  constants.PoolNameEnv,
-		Value: pool.Name,
-	}, corev1.EnvVar{
-		Name:  constants.GPUNodeNameEnv,
-		Value: node.Name,
-	})
+	spec.NodeName = node.Status.KubernetesNodeName
 
-	// add auto freeze config for hypervisor
+	// add must-have tensor-fusion hypervisor manifest
+	log.Info("adding must-have tensor-fusion hypervisor manifest", "node", node.Name)
+	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool)
+
+	// add scheduling config for hypervisor
 	if pool.Spec.SchedulingConfigTemplate != nil {
 		schedulingConfigTemplate := &tfv1.SchedulingConfigTemplate{}
 		if err := r.Get(ctx, client.ObjectKey{Name: *pool.Spec.SchedulingConfigTemplate}, schedulingConfigTemplate); err == nil {
@@ -461,18 +415,17 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 		}
 	}
 
-	spec.ServiceAccountName = constants.HypervisorServiceAccountName
+	// compose the final pod and set tolerations and controller reference
+	newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
 	newPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      key.Name,
 			Namespace: key.Namespace,
 			Labels: func() map[string]string {
 				mergedLabels := make(map[string]string)
-				for k, v := range podTmpl.Template.Labels {
-					mergedLabels[k] = v
-				}
+				maps.Copy(mergedLabels, podTmpl.Template.Labels)
 				mergedLabels[fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name)] = "true"
-				mergedLabels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
+				mergedLabels[constants.LabelKeyPodTemplateHash] = newHash
 				mergedLabels[constants.LabelComponent] = constants.ComponentHypervisor
 				return mergedLabels
 			}(),
@@ -485,21 +438,19 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 		newPod.Spec.Tolerations = []corev1.Toleration{}
 	}
 	newPod.Spec.Tolerations = append(newPod.Spec.Tolerations, corev1.Toleration{
-		Key:      "NoSchedule",
+		Key:      string(corev1.TaintEffectNoSchedule),
 		Operator: corev1.TolerationOpExists,
 	})
-
 	err = controllerutil.SetControllerReference(node, newPod, r.Scheme)
 	if err != nil {
 		return fmt.Errorf("failed to set controller reference: %w", err)
 	}
 
+	// create hypervisor pod
 	if err = r.Create(ctx, newPod); err != nil {
 		return fmt.Errorf("failed to create hypervisor pod: %w", err)
 	}
-
-	log.Info("hypervisor pod created", "name", key.Name)
-
+	log.Info("hypervisor pod created", "name", key.Name, "hash", newHash)
 	return nil
 }
 

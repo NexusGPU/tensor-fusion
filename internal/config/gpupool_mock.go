@@ -42,12 +42,13 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 	},
 	ComponentConfig: &tfv1.ComponentConfig{
 		Hypervisor: &tfv1.HypervisorConfig{
+			Image:       "hypervisor",
+			VectorImage: "vector",
 			PodTemplate: &runtime.RawExtension{
 				Raw: lo.Must(json.Marshal(
 					corev1.PodTemplate{
 						Template: corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
-								RestartPolicy: corev1.RestartPolicyOnFailure,
 								Containers: []corev1.Container{
 									{
 										Name:    "tensorfusion-hypervisor",
@@ -62,6 +63,7 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 			},
 		},
 		NodeDiscovery: &tfv1.NodeDiscoveryConfig{
+			Image: "node-discovery",
 			PodTemplate: &runtime.RawExtension{
 				Raw: lo.Must(json.Marshal(
 					corev1.PodTemplate{
@@ -83,6 +85,7 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 			},
 		},
 		Worker: &tfv1.WorkerConfig{
+			Image: "worker",
 			PodTemplate: &runtime.RawExtension{
 				Raw: lo.Must(json.Marshal(
 					corev1.PodTemplate{
@@ -103,7 +106,9 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 			},
 		},
 		Client: &tfv1.ClientConfig{
-			OperatorEndpoint: "http://localhost:8080",
+			RemoteModeImage:   "client",
+			EmbeddedModeImage: "ngpu",
+			OperatorEndpoint:  "http://localhost:8080",
 			PatchToPod: &runtime.RawExtension{
 				Raw: lo.Must(json.Marshal(map[string]any{
 					"spec": map[string]any{

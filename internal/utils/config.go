@@ -160,6 +160,11 @@ func ReadServiceAccountToken() string {
 	return string(data)
 }
 
-func GetSelfServiceAccountName() string {
+func GetSelfServiceAccountNameFull() string {
 	return selfServiceAccountName
+}
+
+func GetSelfServiceAccountNameShort() string {
+	parts := strings.Split(selfServiceAccountName, ":")
+	return parts[len(parts)-1]
 }

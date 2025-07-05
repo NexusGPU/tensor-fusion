@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -36,7 +35,6 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
-	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
@@ -113,9 +111,6 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, nil
 	}
 
-	// init metrics map if needed
-	handleMetricsRecorder(podList, workload)
-
 	// Fetch the GPUPool
 	pool := &tfv1.GPUPool{}
 	if err := r.Get(ctx, client.ObjectKey{Name: workload.Spec.PoolName}, pool); err != nil {
@@ -123,7 +118,10 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// Create worker generator
-	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker}
+	workerGenerator := &worker.WorkerGenerator{
+		WorkerConfig:     pool.Spec.ComponentConfig.Worker,
+		HypervisorConfig: pool.Spec.ComponentConfig.Hypervisor,
+	}
 
 	podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec)
 	if err != nil {
@@ -234,21 +232,13 @@ func (r *TensorFusionWorkloadReconciler) reconcileScaling(
 	return nil
 }
 
-func handleMetricsRecorder(podList *corev1.PodList, workload *tfv1.TensorFusionWorkload) {
-	now := time.Now()
-	for i := range podList.Items {
-		pod := &podList.Items[i]
-		metrics.SetWorkerMetricsByWorkload(pod, workload, now)
-	}
-}
-
 func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	ctx context.Context,
 	workerGenerator *worker.WorkerGenerator,
 	workload *tfv1.TensorFusionWorkload,
 	hash string,
 ) (*corev1.Pod, error) {
-	pod, err := workerGenerator.GenerateWorkerPod(workload)
+	pod, err := workerGenerator.GenerateWorkerPod(ctx, workload)
 	if err != nil {
 		return nil, fmt.Errorf("generate worker pod %w", err)
 	}

@@ -25,25 +25,12 @@ type TFResource struct {
 	GPUModel            string // Required GPU model (e.g., A100, H100)
 }
 
-type TensorFusionInfo struct {
-	Profile         *tfv1.WorkloadProfileSpec
-	DynamicReplicas bool
-	EnabledReplicas *int32
-	WorkloadName    string
-	ContainerNames  []string
-	GenWorkload     bool
-
-	// Pod mutating webhook can not get Pod UID sometimes,
-	// thus need pod controller to set the owner reference
-	PendingSetPodAsOwner bool
-}
-
 func ParseTensorFusionInfo(
 	ctx context.Context,
 	k8sClient client.Client,
 	pod *corev1.Pod,
-) (TensorFusionInfo, error) {
-	var info TensorFusionInfo
+) (utils.TensorFusionInfo, error) {
+	var info utils.TensorFusionInfo
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}

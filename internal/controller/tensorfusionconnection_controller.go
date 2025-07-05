@@ -132,7 +132,7 @@ func (r *TensorFusionConnectionReconciler) syncDedicatedWorkerStatus(ctx context
 }
 
 func setConnectionWorkerURL(connection *tfv1.TensorFusionConnection, podIp string, podName string, revision string) {
-	connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d+%s-%s", podIp, constants.TensorFusionWorkerPortNumber, podName, revision)
+	connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d+%s-%s", podIp, constants.TensorFusionRemoteWorkerPortNumber, podName, revision)
 }
 
 func (r *TensorFusionConnectionReconciler) selectWorkerAndSyncStatusFromWorkerPool(
@@ -322,7 +322,8 @@ func (r *TensorFusionConnectionReconciler) createDedicatedWorker(ctx context.Con
 		return fmt.Errorf("gpu pool(%s) does not exist", gpuPoolName)
 	}
 	workerGenerator := &worker.WorkerGenerator{
-		WorkerConfig: gpuPool.Spec.ComponentConfig.Worker,
+		WorkerConfig:     gpuPool.Spec.ComponentConfig.Worker,
+		HypervisorConfig: gpuPool.Spec.ComponentConfig.Hypervisor,
 	}
 	podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec)
 	if err != nil {
@@ -362,7 +363,7 @@ func (r *TensorFusionConnectionReconciler) createDedicatedWorker(ctx context.Con
 }
 
 func (r *TensorFusionConnectionReconciler) startDedicatedWorkerPod(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, podTemplateHash string, connection *tfv1.TensorFusionConnection) error {
-	pod, err := workerGenerator.GenerateWorkerPod(workload)
+	pod, err := workerGenerator.GenerateWorkerPod(ctx, workload)
 	if err != nil {
 		return fmt.Errorf("generate worker pod %w", err)
 	}

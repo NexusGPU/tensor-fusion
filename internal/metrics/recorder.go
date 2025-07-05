@@ -2,11 +2,13 @@ package metrics
 
 import (
 	"io"
+	"strconv"
 	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	metricsProto "github.com/influxdata/line-protocol/v2/lineprotocol"
 	"gopkg.in/natefinch/lumberjack.v2"
 	corev1 "k8s.io/api/core/v1"
@@ -56,37 +58,46 @@ func RemoveNodeMetrics(nodeName string) {
 	delete(nodeMetricsMap, nodeName)
 }
 
-func SetWorkerMetricsByWorkload(pod *corev1.Pod, workload *tfv1.TensorFusionWorkload, now time.Time) {
+func SetWorkerMetricsByWorkload(pod *corev1.Pod) {
 	workerMetricsLock.Lock()
 	defer workerMetricsLock.Unlock()
+
+	gpuRequestResource, err := utils.GetGPUResource(pod, true)
+	if err != nil {
+		return
+	}
+	gpuLimitResource, err := utils.GetGPUResource(pod, false)
+	if err != nil {
+		return
+	}
+	count, _ := strconv.ParseUint(pod.Annotations[constants.GpuCountAnnotation], 10, 32)
 
 	// Initialize metrics
 	if _, ok := workerMetricsMap[pod.Name]; !ok {
 		workerMetricsMap[pod.Name] = &WorkerResourceMetrics{
 			WorkerName:     pod.Name,
-			WorkloadName:   workload.Name,
-			PoolName:       workload.Spec.PoolName,
+			WorkloadName:   pod.Annotations[constants.WorkloadKey],
+			PoolName:       pod.Annotations[constants.GpuPoolKey],
 			Namespace:      pod.Namespace,
-			QoS:            string(workload.Spec.Qos),
+			QoS:            pod.Annotations[constants.QoSLevelAnnotation],
 			RawCost:        0,
-			LastRecordTime: now,
+			LastRecordTime: time.Now(),
 		}
 	}
 
 	// Update metrics fields that are mutable
 	metricsItem := workerMetricsMap[pod.Name]
-	metricsItem.TflopsRequest = workload.Spec.Resources.Requests.Tflops.AsApproximateFloat64()
-	metricsItem.TflopsLimit = workload.Spec.Resources.Limits.Tflops.AsApproximateFloat64()
-	metricsItem.VramBytesRequest = workload.Spec.Resources.Requests.Vram.AsApproximateFloat64()
-	metricsItem.VramBytesLimit = workload.Spec.Resources.Limits.Vram.AsApproximateFloat64()
-	if workload.Spec.GPUCount <= 0 {
+	metricsItem.TflopsRequest = gpuRequestResource.Tflops.AsApproximateFloat64()
+	metricsItem.TflopsLimit = gpuLimitResource.Tflops.AsApproximateFloat64()
+	metricsItem.VramBytesRequest = gpuRequestResource.Vram.AsApproximateFloat64()
+	metricsItem.VramBytesLimit = gpuLimitResource.Vram.AsApproximateFloat64()
+	if count <= 0 {
 		// handle invalid data if exists
 		metricsItem.GPUCount = 1
 	} else {
-		metricsItem.GPUCount = int(workload.Spec.GPUCount)
+		metricsItem.GPUCount = int(count)
 	}
-	metricsItem.WorkloadName = workload.Name
-
+	metricsItem.WorkloadName = pod.Annotations[constants.WorkloadKey]
 }
 
 func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []string) {
@@ -258,6 +269,9 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddTag("qos", metrics.QoS)
 		enc.AddTag("worker_name", metrics.WorkerName)
 		enc.AddTag("workload_name", metrics.WorkloadName)
+
+		// TODO add more dynamic tags from pod label
+		// So as for hypervisor metrics
 
 		enc.AddField("gpu_count", metricsProto.MustNewValue(int64(metrics.GPUCount)))
 		enc.AddField("tflops_limit", metricsProto.MustNewValue(metrics.TflopsLimit))

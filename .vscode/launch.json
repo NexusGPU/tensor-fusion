@@ -72,7 +72,7 @@
             "program": "${workspaceFolder}/cmd/main.go",
         },
         {
-            "name": "Run Unit Tests",
+            "name": "Run Unit Tests - Controller",
             "type": "go",
             "request": "launch",
             "mode": "test",
@@ -81,6 +81,18 @@
                 "GO_TESTING": "true"
             },
             "program": "${workspaceFolder}/internal/controller",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Run Unit Tests - Webhook",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "env": {
+                "DEBUG_MODE": "true",
+                "GO_TESTING": "true"
+            },
+            "program": "${workspaceFolder}/internal/webhook/v1",
             "console": "integratedTerminal"
         }
     ]

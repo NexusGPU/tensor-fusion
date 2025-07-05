@@ -46,7 +46,7 @@ func (r *AssignHostPortRouter) AssignHostPort(ctx *gin.Context) {
 		ctx.String(http.StatusInternalServerError, "auth endpoint error")
 		return
 	}
-	if !tokenReview.Status.Authenticated || tokenReview.Status.User.Username != utils.GetSelfServiceAccountName() {
+	if !tokenReview.Status.Authenticated || tokenReview.Status.User.Username != utils.GetSelfServiceAccountNameFull() {
 		log.FromContext(ctx).Error(nil, "assigned host port failed, token invalid", "podName", podName)
 		ctx.String(http.StatusUnauthorized, "token authentication failed")
 		return

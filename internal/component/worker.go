@@ -75,7 +75,10 @@ func (w *Worker) GetResourcesInfo(r client.Client, ctx context.Context, pool *tf
 
 	total := len(workloadList.Items)
 
-	workerGenerator := &worker.WorkerGenerator{WorkerConfig: pool.Spec.ComponentConfig.Worker}
+	workerGenerator := &worker.WorkerGenerator{
+		WorkerConfig:     pool.Spec.ComponentConfig.Worker,
+		HypervisorConfig: pool.Spec.ComponentConfig.Hypervisor,
+	}
 	for _, workload := range workloadList.Items {
 		if !workload.DeletionTimestamp.IsZero() {
 			total--

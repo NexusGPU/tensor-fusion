@@ -157,7 +157,7 @@ spec:
                 path: tls.key
         - name: vector-config
           configMap:
-            name: {{ include "tensor-fusion.fullname" . }}-vector-config
+            name: tensor-fusion-sys-vector-config
             defaultMode: 420
         - name: cloud-vendor-credentials
           secret:
@@ -165,7 +165,7 @@ spec:
             defaultMode: 420
         - configMap:
             defaultMode: 420
-            name: {{ .Release.Name }}-public-gpu-info
+            name: tensor-fusion-sys-public-gpu-info
           name: gpu-info
         - configMap:
             defaultMode: 420

@@ -191,6 +191,8 @@ spec:
                 properties:
                   client:
                     properties:
+                      embeddedModeImage:
+                        type: string
                       operatorEndpoint:
                         type: string
                       patchEmbeddedWorkerToPod:
@@ -205,21 +207,37 @@ spec:
                       patchToPod:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
+                      remoteModeImage:
+                        type: string
                     type: object
                   hypervisor:
                     properties:
+                      image:
+                        type: string
                       podTemplate:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
+                      portNumber:
+                        default: 8000
+                        format: int32
+                        maximum: 65535
+                        minimum: 0
+                        type: integer
+                      vectorImage:
+                        type: string
                     type: object
                   nodeDiscovery:
                     properties:
+                      image:
+                        type: string
                       podTemplate:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
                     type: object
                   worker:
                     properties:
+                      image:
+                        type: string
                       podTemplate:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true

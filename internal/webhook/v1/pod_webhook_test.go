@@ -146,7 +146,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					OwnerReferences: []metav1.OwnerReference{{
 						APIVersion: "apps/v1",
 						Kind:       "Deployment",
-						Name:       "owner",
+						Name:       "test-workload",
 						UID:        "owner-uid",
 						Controller: ptr.To(true),
 					}},
@@ -564,7 +564,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 
 			currentBytes, err := json.Marshal(pod)
 			Expect(err).NotTo(HaveOccurred())
-			patch, err := mutator.patchTFClient(pod, pool, []string{"test-container"}, false, currentBytes)
+			patch, err := mutator.patchTFClient(pod, pool, false, currentBytes, []int{0})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(patch).NotTo(BeEmpty())
 			// There should be at least 2 patches (initContainers and the container env patches)

@@ -17,6 +17,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -37,6 +38,7 @@ func init() {
 		IsTestMode = true
 		constants.PendingRequeueDuration = time.Millisecond * 150
 		constants.StatusCheckInterval = time.Millisecond * 200
+		constants.GracefulPeriodSeconds = ptr.To(int64(0))
 	}
 }
 
@@ -167,7 +169,7 @@ func IsPodConditionTrue(conditions []corev1.PodCondition, conditionType corev1.P
 	return false
 }
 
-func IsPodTerminated(pod *corev1.Pod) bool {
+func IsPodStopped(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded
 }
 
