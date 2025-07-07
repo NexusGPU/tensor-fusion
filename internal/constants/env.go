@@ -72,12 +72,16 @@ const (
 	HostIPFieldRef       = "status.hostIP"
 	NodeNameFieldRef     = "spec.nodeName"
 	ResourceNameFieldRef = "metadata.name"
+	NamespaceFieldRef    = "metadata.namespace"
 )
 
 // TensorFusion worker related envs
 const (
 	HypervisorIPEnv   = "HYPERVISOR_IP"
 	HypervisorPortEnv = "HYPERVISOR_PORT"
+
+	PodNamespaceEnv  = "POD_NAMESPACE"
+	ContainerNameEnv = "CONTAINER_NAME"
 
 	TensorFusionRemoteWorkerPortNumber = 8000
 	TensorFusionRemoteWorkerPortName   = "remote-vgpu"
@@ -86,7 +90,7 @@ const (
 // TensorFusion hypervisor related envs
 const (
 	HypervisorPoolNameEnv           = "TENSOR_FUSION_POOL_NAME"
-	HypervisorPodNameEnv            = "POD_NAME"
+	PodNameEnv                      = "POD_NAME"
 	VectorPodNodeNameEnv            = "NODE_NAME"
 	HypervisorGPUNodeNameEnv        = "GPU_NODE_NAME"
 	HypervisorSchedulingConfigEnv   = "TF_HYPERVISOR_SCHEDULING_CONFIG"

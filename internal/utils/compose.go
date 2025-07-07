@@ -190,6 +190,23 @@ func AddTFDefaultClientConfBeforePatch(
 			}, v1.EnvVar{
 				Name:  constants.HypervisorPortEnv,
 				Value: strconv.Itoa(int(getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor))),
+			}, v1.EnvVar{
+				Name: constants.PodNamespaceEnv,
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: constants.NamespaceFieldRef,
+					},
+				},
+			}, v1.EnvVar{
+				Name: constants.PodNameEnv,
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: constants.ResourceNameFieldRef,
+					},
+				},
+			}, v1.EnvVar{
+				Name:  constants.ContainerNameEnv,
+				Value: pod.Spec.Containers[injectContainerIndex].Name,
 			})
 		}
 	}
@@ -287,7 +304,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 		Name:  constants.HypervisorListenAddrEnv,
 		Value: fmt.Sprintf("%s:%d", constants.DefaultHttpBindIP, port),
 	}, v1.EnvVar{
-		Name: constants.HypervisorPodNameEnv,
+		Name: constants.PodNameEnv,
 		ValueFrom: &v1.EnvVarSource{
 			FieldRef: &v1.ObjectFieldSelector{
 				FieldPath: constants.ResourceNameFieldRef,
@@ -425,6 +442,10 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig, hypervisorConfig *tfv1.HypervisorConfig) {
 	// NOTE: need to set environment variable to make all GPUs visible to the worker,
 	// vgpu.rs limiter will limit to specific devices after Pod started
+	spec.Containers[0].Name = constants.TFContainerNameWorker
+	if workerConfig.Image != "" {
+		spec.Containers[0].Image = workerConfig.Image
+	}
 	spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
 		Name:  constants.NvidiaVisibleAllDeviceEnv,
 		Value: constants.NvidiaVisibleAllDeviceValue,
@@ -441,6 +462,23 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 	}, v1.EnvVar{
 		Name:  constants.HypervisorPortEnv,
 		Value: strconv.Itoa(int(getHypervisorPortNumber(hypervisorConfig))),
+	}, v1.EnvVar{
+		Name: constants.PodNameEnv,
+		ValueFrom: &v1.EnvVarSource{
+			FieldRef: &v1.ObjectFieldSelector{
+				FieldPath: constants.ResourceNameFieldRef,
+			},
+		},
+	}, v1.EnvVar{
+		Name:  constants.ContainerNameEnv,
+		Value: constants.TFContainerNameWorker,
+	}, v1.EnvVar{
+		Name: constants.PodNamespaceEnv,
+		ValueFrom: &v1.EnvVarSource{
+			FieldRef: &v1.ObjectFieldSelector{
+				FieldPath: constants.NamespaceFieldRef,
+			},
+		},
 	})
 
 	// Add volume from host for CUDA hot migration and snapshot
