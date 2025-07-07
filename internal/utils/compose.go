@@ -161,12 +161,17 @@ func AddTFDefaultClientConfBeforePatch(
 			Value: constants.TFLibsVolumeMountPath,
 		})
 
-		pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(pod.Spec.Containers[injectContainerIndex].VolumeMounts, v1.VolumeMount{
-			Name:      constants.TFLibsVolumeName,
-			MountPath: constants.LdPreloadFile,
-			SubPath:   constants.LdPreloadFileName,
-			ReadOnly:  true,
-		})
+		pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
+			pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+			v1.VolumeMount{
+				Name:      constants.TFLibsVolumeName,
+				MountPath: constants.LdPreloadFile,
+				SubPath:   constants.LdPreloadFileName,
+				ReadOnly:  true,
+			}, v1.VolumeMount{
+				Name:      constants.TFLibsVolumeName,
+				MountPath: constants.TFLibsVolumeMountPath,
+			})
 	}
 
 	if tfInfo.Profile.IsLocalGPU {
