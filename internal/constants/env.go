@@ -63,8 +63,6 @@ const (
 
 	LdPreloadFileName = "ld.so.preload"
 	LdPreloadFile     = "/etc/ld.so.preload"
-	LdPreloadEnv      = "LD_PRELOAD"
-	LdPreloadLimiter  = "/home/app/libcuda_limiter.so"
 
 	TFLibsVolumeName      = "tf-libs"
 	TFLibsVolumeMountPath = "/tensor-fusion"
@@ -82,6 +80,21 @@ const (
 
 	PodNamespaceEnv  = "POD_NAMESPACE"
 	ContainerNameEnv = "CONTAINER_NAME"
+
+	// the path of nGPU lib for limiter to load
+	NGPUPathEnv   = "TENSOR_FUSION_NGPU_PATH"
+	NGPUPathValue = TFLibsVolumeMountPath + "/libcuda.so"
+
+	LdPreloadEnv     = "LD_PRELOAD"
+	LdPreloadLimiter = "/home/app/libcuda_limiter.so"
+
+	// disable GPU limiter, for emergency use
+	DisableGpuLimiterEnv = "DISABLE_GPU_LIMITER"
+	// directly forward CUDA calls to GPU driver in nGPU mode, for emergency use
+	DisableCudaOptimizationEnv = "TF_ENABLE_DISPATCH_FORWARD"
+	// disable vram manager, for emergency use
+	DisableVRAMManagerEnv      = "TF_DISABLE_MEMORY_MANAGER"
+	DisableWorkerFeatureEnvVal = "1"
 
 	TensorFusionRemoteWorkerPortNumber = 8000
 	TensorFusionRemoteWorkerPortName   = "remote-vgpu"

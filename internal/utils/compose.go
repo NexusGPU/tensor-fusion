@@ -48,6 +48,24 @@ var workerDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceMemory: resource.MustParse("128Mi"),
 }
 
+var featureShortcutMap = map[string]struct {
+	EnvName  string
+	EnvValue string
+}{
+	constants.BuiltInFeaturesCudaLimiter: {
+		EnvName:  constants.DisableGpuLimiterEnv,
+		EnvValue: constants.TrueStringValue,
+	},
+	constants.BuiltInFeaturesCudaOpt: {
+		EnvName:  constants.DisableCudaOptimizationEnv,
+		EnvValue: constants.DisableWorkerFeatureEnvVal,
+	},
+	constants.BuiltInFeaturesMemManager: {
+		EnvName:  constants.DisableVRAMManagerEnv,
+		EnvValue: constants.DisableWorkerFeatureEnvVal,
+	},
+}
+
 type TensorFusionInfo struct {
 	Profile         *tfv1.WorkloadProfileSpec
 	DynamicReplicas bool
@@ -212,7 +230,23 @@ func AddTFDefaultClientConfBeforePatch(
 			}, v1.EnvVar{
 				Name:  constants.ContainerNameEnv,
 				Value: pod.Spec.Containers[injectContainerIndex].Name,
+			}, v1.EnvVar{
+				Name:  constants.NGPUPathEnv,
+				Value: constants.NGPUPathValue,
 			})
+
+			// disable GPU limiter killer switch
+			if pod.Annotations[constants.DisableFeaturesAnnotation] != "" {
+				features := strings.Split(pod.Annotations[constants.DisableFeaturesAnnotation], ",")
+				for _, feature := range features {
+					if feat, ok := featureShortcutMap[feature]; ok {
+						pod.Spec.Containers[injectContainerIndex].Env = append(pod.Spec.Containers[injectContainerIndex].Env, v1.EnvVar{
+							Name:  feat.EnvName,
+							Value: feat.EnvValue,
+						})
+					}
+				}
+			}
 		}
 	}
 }
