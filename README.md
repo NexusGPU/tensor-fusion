@@ -1,4 +1,4 @@
-<p align="center"><a href="javascript:void(0);" target="_blank" rel="noreferrer"><img width="300" src="https://cdn.tensor-fusion.ai/tensor-fusion.png" alt="Logo"></a></p>
+<p align="center"><a href="javascript:void(0);" target="_blank" rel="noreferrer"><img width="200" src="https://cdn.tensor-fusion.ai/logo.svg" alt="Logo"></a></p>
 
 <p align="center">
     <strong><a href="https://tensor-fusion.ai" target="_blank">TensorFusion.AI</a></strong><br/>Next-Generation GPU Virtualization and Pooling for Enterprises<br><b>Less GPUs, More AI Apps.</b>
