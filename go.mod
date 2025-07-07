@@ -19,7 +19,7 @@ require (
 	github.com/shirou/gopsutil v3.21.11+incompatible
 	github.com/stretchr/testify v1.10.0
 	go.opentelemetry.io/otel v1.37.0
-	golang.org/x/time v0.9.0
+	golang.org/x/time v0.12.0
 	gomodules.xyz/jsonpatch/v2 v2.5.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gorm.io/driver/mysql v1.6.0
