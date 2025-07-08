@@ -98,7 +98,11 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	// add full annotations
 	pod.Annotations[constants.TFLOPSLimitAnnotation] = tfInfo.Profile.Resources.Limits.Tflops.String()
 	pod.Annotations[constants.VRAMLimitAnnotation] = tfInfo.Profile.Resources.Limits.Vram.String()
-	pod.Annotations[constants.QoSLevelAnnotation] = string(tfInfo.Profile.Qos)
+	if tfInfo.Profile.Qos == "" {
+		pod.Annotations[constants.QoSLevelAnnotation] = string(tfv1.QoSMedium)
+	} else {
+		pod.Annotations[constants.QoSLevelAnnotation] = string(tfInfo.Profile.Qos)
+	}
 	pod.Annotations[constants.TFLOPSRequestAnnotation] = tfInfo.Profile.Resources.Requests.Tflops.String()
 	pod.Annotations[constants.VRAMRequestAnnotation] = tfInfo.Profile.Resources.Requests.Vram.String()
 	pod.Annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", tfInfo.Profile.GPUCount)
@@ -127,7 +131,11 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(podTmpl *v1.PodTemplate, wo
 	annotations[constants.VRAMLimitAnnotation] = res.Limits.Vram.String()
 	annotations[constants.TFLOPSRequestAnnotation] = res.Requests.Tflops.String()
 	annotations[constants.VRAMRequestAnnotation] = res.Requests.Vram.String()
-	annotations[constants.QoSLevelAnnotation] = string(workload.Spec.Qos)
+	if workload.Spec.Qos == "" {
+		annotations[constants.QoSLevelAnnotation] = string(tfv1.QoSMedium)
+	} else {
+		annotations[constants.QoSLevelAnnotation] = string(workload.Spec.Qos)
+	}
 
 	if workload.Spec.GPUCount > 0 {
 		annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", workload.Spec.GPUCount)
@@ -256,14 +264,22 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	spec.HostPID = true
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
 
+	enableVector := pool.Spec.ComponentConfig.Hypervisor != nil && pool.Spec.ComponentConfig.Hypervisor.EnableVector
+
 	// when no config or config is not valid, reset hypervisor&vector container
-	if len(spec.Containers) != 2 {
+	if enableVector && len(spec.Containers) != 2 {
 		spec.Containers = []v1.Container{
 			{
 				Name: constants.TFContainerNameHypervisor,
 			},
 			{
 				Name: constants.TFContainerVector,
+			},
+		}
+	} else if len(spec.Containers) != 1 {
+		spec.Containers = []v1.Container{
+			{
+				Name: constants.TFContainerNameHypervisor,
 			},
 		}
 	}
@@ -311,7 +327,10 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	})
 
 	composeHypervisorContainer(spec, pool)
-	composeVectorContainer(spec, pool)
+
+	if enableVector {
+		composeVectorContainer(spec, pool)
+	}
 }
 
 func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {

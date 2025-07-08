@@ -315,6 +315,9 @@ type HypervisorConfig struct {
 
 	// +optional
 	PodTemplate *runtime.RawExtension `json:"podTemplate,omitempty"`
+
+	// +optional
+	EnableVector bool `json:"enableVector,omitempty"`
 }
 
 type WorkerConfig struct {

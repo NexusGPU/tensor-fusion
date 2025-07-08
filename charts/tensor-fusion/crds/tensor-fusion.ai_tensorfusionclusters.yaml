@@ -277,6 +277,8 @@ spec:
                               type: object
                             hypervisor:
                               properties:
+                                enableVector:
+                                  type: boolean
                                 image:
                                   type: string
                                 podTemplate:
