@@ -310,14 +310,16 @@ func (s *GpuAllocator) Dealloc(
 	log := log.FromContext(s.ctx)
 
 	request, exists := s.uniqueAllocation[podUID]
-	if !exists {
+	if !exists || request == nil {
 		// should not block finalizer
 		log.Error(fmt.Errorf("pod has not allocated GPUs"), "pod", podUID)
+		return
 	}
 
 	if _, exists := s.uniqueDeallocation[podUID]; exists {
 		// should not block finalizer
 		log.Error(fmt.Errorf("pod has already deallocated GPUs"), "pod", podUID)
+		return
 	}
 
 	s.storeMutex.Lock()
@@ -1057,16 +1059,6 @@ func removeRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace 
 }
 
 func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (tfv1.AllocRequest, string, error) {
-	var tfWorkload tfv1.TensorFusionWorkload
-
-	err := s.Get(s.ctx, client.ObjectKey{
-		Name:      pod.Labels[constants.WorkloadKey],
-		Namespace: pod.Namespace,
-	}, &tfWorkload)
-	if err != nil {
-		return tfv1.AllocRequest{}, "failed to get tf workload", err
-	}
-
 	gpuRequestResource, err := utils.GetGPUResource(pod, true)
 	if err != nil {
 		return tfv1.AllocRequest{}, "invalid gpu request annotation", err
@@ -1091,11 +1083,9 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (tfv1.AllocRequest,
 		Count:    uint(count),
 		GPUModel: pod.Annotations[constants.GPUModelAnnotation],
 		WorkloadNameNamespace: tfv1.NameNamespace{
-			Name:      tfWorkload.Name,
-			Namespace: tfWorkload.Namespace,
+			Name:      pod.Labels[constants.WorkloadKey],
+			Namespace: pod.Namespace,
 		},
-		NodeAffinity: tfWorkload.Spec.NodeAffinity,
-
 		PodMeta: pod.ObjectMeta,
 	}
 	return allocRequest, "", nil
