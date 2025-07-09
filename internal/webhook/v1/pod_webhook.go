@@ -78,11 +78,6 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		pod.Namespace = req.Namespace
 	}
 
-	currentBytes, err := json.Marshal(pod)
-	if err != nil {
-		return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to marshal current pod: %w", err))
-	}
-
 	log := log.FromContext(ctx)
 	log.Info("Mutating pod", "generateName", pod.GenerateName, "namespace", pod.Namespace)
 
@@ -98,6 +93,11 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 			})
 		}
 		return admission.Allowed("non tensor fusion pod nor GPU resource request, skipped")
+	}
+
+	currentBytes, err := json.Marshal(pod)
+	if err != nil {
+		return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to marshal current pod: %w", err))
 	}
 
 	tfInfo, err := ParseTensorFusionInfo(ctx, m.Client, pod)
