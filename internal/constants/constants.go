@@ -73,10 +73,10 @@ const (
 
 	// Annotations for killer switch: disable features
 	// ['gpu-opt', 'mem-manager', 'gpu-limiter']
-	DisableFeaturesAnnotation  = Domain + "/disable-features"
-	BuiltInFeaturesGpuOpt      = "gpu-opt"
-	BuiltInFeaturesGpuLimiter  = "gpu-limiter"
-	BuiltInFeaturesMemManager  = "mem-manager"
+	DisableFeaturesAnnotation = Domain + "/disable-features"
+	BuiltInFeaturesGpuOpt     = "gpu-opt"
+	BuiltInFeaturesGpuLimiter = "gpu-limiter"
+	BuiltInFeaturesMemManager = "mem-manager"
 
 	GenHostPortLabel        = Domain + "/host-port"
 	GenHostPortLabelValue   = "auto"

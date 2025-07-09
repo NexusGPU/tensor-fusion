@@ -29,6 +29,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 )
 
 type GPUResourcesSuite struct {
@@ -42,6 +43,7 @@ type GPUResourcesSuite struct {
 }
 
 func (s *GPUResourcesSuite) SetupTest() {
+	utils.SetProgressiveMigration(true)
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	log.FromContext(s.ctx).Info("Setting up test")
 	_ = tfv1.AddToScheme(scheme.Scheme)
@@ -80,6 +82,11 @@ func (s *GPUResourcesSuite) SetupTest() {
 				Name: "node-b",
 			},
 		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "node-c",
+			},
+		},
 	}
 	gpus := []*tfv1.GPU{
 		{
@@ -92,6 +99,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 			Status: tfv1.GPUStatus{
 				Phase:        tfv1.TensorFusionGPUPhaseRunning,
 				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-a"},
+				UsedBy:       tfv1.UsedByTensorFusion,
 				Capacity: &tfv1.Resource{
 					Tflops: resource.MustParse("1000"),
 					Vram:   resource.MustParse("20Gi"),
@@ -112,6 +120,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 			Status: tfv1.GPUStatus{
 				Phase:        tfv1.TensorFusionGPUPhaseRunning,
 				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-b"},
+				UsedBy:       tfv1.UsedByTensorFusion,
 				Capacity: &tfv1.Resource{
 					Tflops: resource.MustParse("1000"),
 					Vram:   resource.MustParse("20Gi"),
@@ -132,6 +141,28 @@ func (s *GPUResourcesSuite) SetupTest() {
 			Status: tfv1.GPUStatus{
 				Phase:        tfv1.TensorFusionGPUPhaseRunning,
 				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-b"},
+				UsedBy:       tfv1.UsedByTensorFusion,
+				Capacity: &tfv1.Resource{
+					Tflops: resource.MustParse("2000"),
+					Vram:   resource.MustParse("40Gi"),
+				},
+				Available: &tfv1.Resource{
+					Tflops: resource.MustParse("2000"),
+					Vram:   resource.MustParse("40Gi"),
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "gpu-4",
+				Labels: map[string]string{
+					constants.GpuPoolKey:    "pool-a",
+					constants.LabelKeyOwner: "node-c",
+				},
+			},
+			Status: tfv1.GPUStatus{
+				Phase:        tfv1.TensorFusionGPUPhaseRunning,
+				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-c"},
+				UsedBy:       tfv1.UsedByNvidiaDevicePlugin,
 				Capacity: &tfv1.Resource{
 					Tflops: resource.MustParse("2000"),
 					Vram:   resource.MustParse("40Gi"),
@@ -312,6 +343,43 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 	}
 }
 
+func (s *GPUResourcesSuite) TestPreFilterForNonTensorFusionPod() {
+	log.FromContext(s.ctx).Info("Running TestPreFilterForNonTensorFusionPod")
+	tests := []struct {
+		name           string
+		pod            *v1.Pod
+		expectedStatus framework.Code
+		expectedNodes  string
+	}{
+		{
+			name:           "pod requires 1 GPU, enough capacity",
+			pod:            s.makeNonTensorFusionPod("p1", 1),
+			expectedStatus: framework.Success,
+			expectedNodes:  "node-c",
+		},
+		{
+			name:           "pod requires 2 GPU, enough capacity",
+			pod:            s.makeNonTensorFusionPod("p1", 2),
+			expectedStatus: framework.Success,
+			expectedNodes:  "node-c",
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			state := framework.NewCycleState()
+			res, status := s.plugin.PreFilter(s.ctx, state, tt.pod)
+			s.Equal(tt.expectedStatus, status.Code(), status.Message())
+			if tt.expectedStatus == framework.Success {
+				s.Require().NotNil(res)
+				nodes := sort.StringSlice(res.NodeNames.UnsortedList())
+				nodes.Sort()
+				s.Equal(tt.expectedNodes, strings.Join(nodes, " "))
+			}
+		})
+	}
+}
+
 func (s *GPUResourcesSuite) TestFilter() {
 	log.FromContext(s.ctx).Info("Running TestFilter")
 	state := framework.NewCycleState()
@@ -451,6 +519,26 @@ func TestGPUResourcesSuite(t *testing.T) {
 	suite.Run(t, new(GPUResourcesSuite))
 }
 
+func (s *GPUResourcesSuite) makeNonTensorFusionPod(name string, gpuCount int) *v1.Pod {
+	log.FromContext(s.ctx).Info("Making pod", "name", name)
+	pod := st.MakePod().
+		Namespace("ns1").
+		Name(name).
+		UID(name).
+		ZeroTerminationGracePeriod().Obj()
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container-1",
+			Resources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{
+					v1.ResourceName("nvidia.com/gpu"): *resource.NewQuantity(int64(gpuCount), resource.DecimalSI),
+				},
+			},
+		},
+	}
+	return pod
+}
+
 func (s *GPUResourcesSuite) makePod(name string, annotations map[string]string) *v1.Pod {
 	log.FromContext(s.ctx).Info("Making pod", "name", name)
 	pod := st.MakePod().
@@ -459,7 +547,8 @@ func (s *GPUResourcesSuite) makePod(name string, annotations map[string]string) 
 		UID(name).
 		ZeroTerminationGracePeriod().Obj()
 	pod.Labels = map[string]string{
-		constants.WorkloadKey: "workload-1",
+		constants.TensorFusionEnabledLabelKey: "true",
+		constants.WorkloadKey:                 "workload-1",
 	}
 	pod.Annotations = annotations
 	if pod.Annotations == nil {

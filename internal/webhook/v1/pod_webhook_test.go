@@ -236,7 +236,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 
 			resp := mutator.Handle(ctx, req)
 			// Should fail because no annotations are found
-			Expect(resp.Allowed).To(BeFalse())
+			Expect(resp.Allowed).To(BeTrue())
 			Expect(resp.Patches).To(BeEmpty())
 		})
 

@@ -98,6 +98,9 @@ func (r *GPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		gpu.Labels = make(map[string]string)
 	}
 	gpu.Labels[constants.GpuPoolKey] = poolName
+	if gpu.Status.UsedBy == "" {
+		gpu.Status.UsedBy = tfv1.UsedByTensorFusion
+	}
 
 	if err := r.Patch(ctx, gpu, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch gpu %s: %w", gpu.Name, err)

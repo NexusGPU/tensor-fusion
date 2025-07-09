@@ -40,7 +40,8 @@ type GPUStatus struct {
 	// Hypervisor will watch kubelet device plugin to report all GPUs already used by nvidia-device-plugin
 	// GPUs will be grouped by usedBy to be used by different Pods,
 	// tensor-fusion annotation or nvidia-device-plugin resource block
-	UsedBy UsedBySystem `json:"usedBy"`
+	// +optional
+	UsedBy UsedBySystem `json:"usedBy,omitempty"`
 
 	Message string `json:"message"`
 

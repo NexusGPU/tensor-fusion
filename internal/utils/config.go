@@ -174,3 +174,8 @@ var nvidiaOperatorProgressiveMigrationEnv = os.Getenv(constants.NvidiaOperatorPr
 func IsProgressiveMigration() bool {
 	return nvidiaOperatorProgressiveMigrationEnv
 }
+
+// For test purpose only
+func SetProgressiveMigration(isProgressiveMigration bool) {
+	nvidiaOperatorProgressiveMigrationEnv = isProgressiveMigration
+}

@@ -157,7 +157,6 @@ spec:
             - message
             - nodeSelector
             - phase
-            - usedBy
             - uuid
             type: object
         type: object

@@ -773,6 +773,7 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 		old.Status.UUID = gpu.Status.UUID
 		old.Status.NodeSelector = gpu.Status.NodeSelector
 		old.Status.GPUModel = gpu.Status.GPUModel
+		old.Status.UsedBy = gpu.Status.UsedBy
 		old.ResourceVersion = gpu.ResourceVersion
 		old.Generation = gpu.Generation
 		log.V(6).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
