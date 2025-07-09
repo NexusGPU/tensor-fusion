@@ -14,7 +14,23 @@ spec:
     singular: workloadprofile
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.poolName
+      name: Pool Name
+      type: string
+    - jsonPath: .spec.qos
+      name: QoS
+      type: string
+    - jsonPath: .spec.isLocalGPU
+      name: Is Local GPU
+      type: string
+    - jsonPath: .spec.gpuCount
+      name: GPU Number
+      type: string
+    - jsonPath: .spec.replicas
+      name: Replicas
+      type: string
+    name: v1
     schema:
       openAPIV3Schema:
         description: WorkloadProfile is the Schema for the workloadprofiles API.

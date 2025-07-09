@@ -217,6 +217,7 @@ type SchedulingConfigTemplateStatus struct {
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Mode",type="string",JSONPath=".spec.placement.mode"
 // +kubebuilder:printcolumn:name="Allow Local GPU",type="string",JSONPath=".spec.placement.allowLocalGPU"
+// +kubebuilder:printcolumn:name="AutoFreeze",type="string",JSONPath=".spec.hypervisor.autoFreezeAndResume.autoFreeze.enable"
 // SchedulingConfigTemplate is the Schema for the schedulingconfigtemplates API.
 type SchedulingConfigTemplate struct {
 	metav1.TypeMeta   `json:",inline"`

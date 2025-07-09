@@ -13,6 +13,8 @@ const (
 	// if this env var is set, will disable the verification, it's enabled by default
 	// should not set to true in production environment
 	DisableConnectionAuthEnv = "DISABLE_CONNECTION_AUTH"
+
+	NvidiaOperatorProgressiveMigrationEnv = "NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION"
 )
 
 // General envs used in compose components manifest
@@ -25,6 +27,9 @@ const (
 	TensorFusionGPUInfoConfigMountPath  = "/etc/tensor-fusion/gpu-info.yaml"
 	TensorFusionGPUInfoConfigSubPath    = "gpu-info.yaml"
 	TensorFusionGPUInfoEnvVar           = "TENSOR_FUSION_GPU_INFO_PATH"
+
+	KubeletDevicePluginVolumeName = "device-plugin"
+	KubeletDevicePluginPath       = "/var/lib/kubelet/device-plugins"
 
 	TensorFusionVectorConfigName       = "tensor-fusion-sys-vector-config"
 	TensorFusionVectorConfigVolumeName = "vector-config"
@@ -110,6 +115,7 @@ const (
 	HypervisorListenAddrEnv         = "API_LISTEN_ADDR"
 	HypervisorMetricsFormatEnv      = "TF_HYPERVISOR_METRICS_FORMAT"
 	HypervisorMetricsExtraLabelsEnv = "TF_HYPERVISOR_METRICS_EXTRA_LABELS"
+	HypervisorDetectUsedGPUEnv      = "DETECT_IN_USED_GPU"
 
 	HypervisorDefaultPortNumber int32  = 8000
 	HypervisorPortName          string = "http"

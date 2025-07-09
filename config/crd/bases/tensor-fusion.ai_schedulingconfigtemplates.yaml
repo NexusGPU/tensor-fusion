@@ -21,6 +21,9 @@ spec:
     - jsonPath: .spec.placement.allowLocalGPU
       name: Allow Local GPU
       type: string
+    - jsonPath: .spec.hypervisor.autoFreezeAndResume.autoFreeze.enable
+      name: AutoFreeze
+      type: string
     name: v1
     schema:
       openAPIV3Schema:

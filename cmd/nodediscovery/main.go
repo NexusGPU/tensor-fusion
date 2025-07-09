@@ -257,6 +257,7 @@ func createOrUpdateTensorFusionGPU(
 				Vram:   resource.MustParse(fmt.Sprintf("%dKi", memInfo.Total/1024)),
 				Tflops: tflops,
 			},
+			UsedBy:   tfv1.UsedByTensorFusion,
 			UUID:     uuid,
 			GPUModel: deviceName,
 			NodeSelector: map[string]string{

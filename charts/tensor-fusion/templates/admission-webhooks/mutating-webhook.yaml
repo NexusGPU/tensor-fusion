@@ -23,9 +23,13 @@ webhooks:
     - pods
   sideEffects: None
   timeoutSeconds: 10
+# When it's progressive migration mode, remove the object selector so that all pods should be mutated 
+# it's to identify resources used by native scheduler and device plugin, two types of workload won't overlap
+{{ if not .Values.controller.nvidiaOperatorProgressiveMigration }}
   objectSelector:
     matchExpressions:
       - key: tensor-fusion.ai/enabled
         operator: In
         values:
           - "true"
+{{ end }}

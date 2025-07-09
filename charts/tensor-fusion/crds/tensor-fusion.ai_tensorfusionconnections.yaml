@@ -14,7 +14,23 @@ spec:
     singular: tensorfusionconnection
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.connectionURL
+      name: Connection URL
+      type: string
+    - jsonPath: .status.workerName
+      name: Worker Name
+      type: string
+    - jsonPath: .spec.workloadName
+      name: Workload Name
+      type: string
+    - jsonPath: .spec.clientPod
+      name: Client Pod
+      type: string
+    name: v1
     schema:
       openAPIV3Schema:
         description: TensorFusionConnection is the Schema for the tensorfusionconnections

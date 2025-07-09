@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -457,6 +458,16 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 			"limit vram", request.Limit.Vram.String())
 	}
 	return tfv1.Resource{}, nil
+}
+
+func (s *GpuAllocator) ListNonTensorFusionNodes() sets.Set[string] {
+	set := sets.New[string]()
+	for _, gpu := range s.gpuStore {
+		if gpu.Status.UsedBy != tfv1.UsedByTensorFusion {
+			set.Insert(gpu.Status.NodeSelector[constants.KubernetesHostNameLabel])
+		}
+	}
+	return set
 }
 
 func (s *GpuAllocator) checkGPUCapacityAndQuota(gpu *tfv1.GPU, oldRes, newRes tfv1.Resource) (tfv1.Resource, error) {

@@ -199,3 +199,36 @@ func EqualConditionsDisregardTransitionTime(a, b []metav1.Condition) bool {
 	}
 	return true
 }
+
+func HasGPUResourceRequest(pod *corev1.Pod) bool {
+	for _, container := range pod.Spec.Containers {
+		if container.Resources.Requests != nil {
+			if containsGPUResources(container.Resources.Requests) {
+				return true
+			}
+			if containsGPUResources(container.Resources.Limits) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func IsTensorFusionPod(pod *corev1.Pod) bool {
+	return pod.Labels[constants.TensorFusionEnabledLabelKey] == constants.TrueStringValue
+}
+
+var GPUResourceNames = []corev1.ResourceName{
+	"nvidia.com/gpu",
+	"amd.com/gpu",
+}
+
+func containsGPUResources(res corev1.ResourceList) bool {
+	for _, gpuResourceName := range GPUResourceNames {
+		_, ok := res[gpuResourceName]
+		if ok {
+			return true
+		}
+	}
+	return false
+}

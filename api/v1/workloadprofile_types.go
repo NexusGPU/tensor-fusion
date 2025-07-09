@@ -80,6 +80,11 @@ type WorkloadProfileStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Pool Name",type="string",JSONPath=".spec.poolName"
+// +kubebuilder:printcolumn:name="QoS",type="string",JSONPath=".spec.qos"
+// +kubebuilder:printcolumn:name="Is Local GPU",type="string",JSONPath=".spec.isLocalGPU"
+// +kubebuilder:printcolumn:name="GPU Number",type="string",JSONPath=".spec.gpuCount"
+// +kubebuilder:printcolumn:name="Replicas",type="string",JSONPath=".spec.replicas"
 
 // WorkloadProfile is the Schema for the workloadprofiles API.
 type WorkloadProfile struct {

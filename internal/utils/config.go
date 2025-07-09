@@ -168,3 +168,9 @@ func GetSelfServiceAccountNameShort() string {
 	parts := strings.Split(selfServiceAccountName, ":")
 	return parts[len(parts)-1]
 }
+
+var nvidiaOperatorProgressiveMigrationEnv = os.Getenv(constants.NvidiaOperatorProgressiveMigrationEnv) == "true"
+
+func IsProgressiveMigration() bool {
+	return nvidiaOperatorProgressiveMigrationEnv
+}

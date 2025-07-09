@@ -86,6 +86,20 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	log := log.FromContext(ctx)
 	log.Info("Mutating pod", "generateName", pod.GenerateName, "namespace", pod.Namespace)
 
+	// for non tensor fusion pod, check if there are any GPU resource request,
+	// when there is, set scheduler to tensor-fusion-scheduler to trigger proxied scheduling
+	// this is to ensure that non tensor fusion pod can be scheduled to nodes not conflict with tensor fusion
+	if !utils.IsTensorFusionPod(pod) {
+		if utils.IsProgressiveMigration() && utils.HasGPUResourceRequest(pod) {
+			return admission.Patched("set scheduler to tensor-fusion-scheduler", jsonpatch.JsonPatchOperation{
+				Operation: "replace",
+				Path:      "/spec/schedulerName",
+				Value:     constants.SchedulerName,
+			})
+		}
+		return admission.Allowed("non tensor fusion pod nor GPU resource request, skipped")
+	}
+
 	tfInfo, err := ParseTensorFusionInfo(ctx, m.Client, pod)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("parse tf resources: %w", err))

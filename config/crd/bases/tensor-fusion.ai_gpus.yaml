@@ -36,6 +36,12 @@ spec:
     - jsonPath: .status.uuid
       name: Device UUID
       type: string
+    - jsonPath: .status.usedBy
+      name: Used By
+      type: string
+    - jsonPath: .status.nodeSelector
+      name: Node
+      type: string
     name: v1
     schema:
       openAPIV3Schema:
@@ -131,6 +137,17 @@ spec:
                   - count
                   type: object
                 type: array
+              usedBy:
+                description: |-
+                  GPU is used by tensor-fusion or nvidia-operator
+                  This is the key to be compatible with nvidia-device-plugin to avoid resource overlap
+                  Hypervisor will watch kubelet device plugin to report all GPUs already used by nvidia-device-plugin
+                  GPUs will be grouped by usedBy to be used by different Pods,
+                  tensor-fusion annotation or nvidia-device-plugin resource block
+                enum:
+                - tensor-fusion
+                - nvidia-device-plugin
+                type: string
               uuid:
                 type: string
             required:
@@ -140,6 +157,7 @@ spec:
             - message
             - nodeSelector
             - phase
+            - usedBy
             - uuid
             type: object
         type: object

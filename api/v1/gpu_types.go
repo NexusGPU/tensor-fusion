@@ -35,11 +35,27 @@ type GPUStatus struct {
 	NodeSelector map[string]string `json:"nodeSelector"`
 	GPUModel     string            `json:"gpuModel"`
 
+	// GPU is used by tensor-fusion or nvidia-operator
+	// This is the key to be compatible with nvidia-device-plugin to avoid resource overlap
+	// Hypervisor will watch kubelet device plugin to report all GPUs already used by nvidia-device-plugin
+	// GPUs will be grouped by usedBy to be used by different Pods,
+	// tensor-fusion annotation or nvidia-device-plugin resource block
+	UsedBy UsedBySystem `json:"usedBy"`
+
 	Message string `json:"message"`
 
 	// +optional
 	RunningApps []*RunningAppDetail `json:"runningApps,omitempty"`
 }
+
+// +kubebuilder:validation:Enum=tensor-fusion;nvidia-device-plugin
+// +default="tensor-fusion"
+type UsedBySystem string
+
+const (
+	UsedByTensorFusion       UsedBySystem = "tensor-fusion"
+	UsedByNvidiaDevicePlugin UsedBySystem = "nvidia-device-plugin"
+)
 
 type RunningAppDetail struct {
 	// Workload name namespace
@@ -72,6 +88,8 @@ const (
 // +kubebuilder:printcolumn:name="Available TFlops",type="string",JSONPath=".status.available.tflops"
 // +kubebuilder:printcolumn:name="Available VRAM",type="string",JSONPath=".status.available.vram"
 // +kubebuilder:printcolumn:name="Device UUID",type="string",JSONPath=".status.uuid"
+// +kubebuilder:printcolumn:name="Used By",type="string",JSONPath=".status.usedBy"
+// +kubebuilder:printcolumn:name="Node",type="string",JSONPath=".status.nodeSelector"
 // GPU is the Schema for the gpus API.
 type GPU struct {
 	metav1.TypeMeta   `json:",inline"`

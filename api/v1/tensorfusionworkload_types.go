@@ -69,6 +69,15 @@ type TensorFusionWorkloadStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Worker Count",type="string",JSONPath=".status.workerCount"
+// +kubebuilder:printcolumn:name="Ready Workers",type="string",JSONPath=".status.readyWorkers"
+// +kubebuilder:printcolumn:name="Pod Template Hash",type="string",JSONPath=".status.podTemplateHash"
+// +kubebuilder:printcolumn:name="Pool Name",type="string",JSONPath=".spec.poolName"
+// +kubebuilder:printcolumn:name="QoS",type="string",JSONPath=".spec.qos"
+// +kubebuilder:printcolumn:name="Is Local GPU",type="string",JSONPath=".spec.isLocalGPU"
+// +kubebuilder:printcolumn:name="GPU Number",type="string",JSONPath=".spec.gpuCount"
+// +kubebuilder:printcolumn:name="Replicas",type="string",JSONPath=".spec.replicas"
 
 // TensorFusionWorkload is the Schema for the tensorfusionworkloads API.
 type TensorFusionWorkload struct {

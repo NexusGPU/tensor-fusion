@@ -72,10 +72,10 @@ const (
 	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
 
 	// Annotations for killer switch: disable features
-	// ['cuda-opt', 'mem-manager', 'cuda-limiter']
+	// ['gpu-opt', 'mem-manager', 'gpu-limiter']
 	DisableFeaturesAnnotation  = Domain + "/disable-features"
-	BuiltInFeaturesCudaOpt     = "cuda-opt"
-	BuiltInFeaturesCudaLimiter = "cuda-limiter"
+	BuiltInFeaturesGpuOpt      = "gpu-opt"
+	BuiltInFeaturesGpuLimiter  = "gpu-limiter"
 	BuiltInFeaturesMemManager  = "mem-manager"
 
 	GenHostPortLabel        = Domain + "/host-port"

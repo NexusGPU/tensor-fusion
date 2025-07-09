@@ -52,11 +52,11 @@ var featureShortcutMap = map[string]struct {
 	EnvName  string
 	EnvValue string
 }{
-	constants.BuiltInFeaturesCudaLimiter: {
+	constants.BuiltInFeaturesGpuLimiter: {
 		EnvName:  constants.DisableGpuLimiterEnv,
 		EnvValue: constants.TrueStringValue,
 	},
-	constants.BuiltInFeaturesCudaOpt: {
+	constants.BuiltInFeaturesGpuOpt: {
 		EnvName:  constants.DisableCudaOptimizationEnv,
 		EnvValue: constants.DisableWorkerFeatureEnvVal,
 	},
@@ -324,6 +324,14 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 				},
 			},
 		},
+	}, v1.Volume{
+		Name: constants.KubeletDevicePluginVolumeName,
+		VolumeSource: v1.VolumeSource{
+			HostPath: &v1.HostPathVolumeSource{
+				Path: constants.KubeletDevicePluginPath,
+				Type: ptr.To(v1.HostPathDirectoryOrCreate),
+			},
+		},
 	})
 
 	composeHypervisorContainer(spec, pool)
@@ -345,6 +353,9 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 		Name:      constants.TensorFusionGPUInfoConfigVolumeName,
 		MountPath: constants.TensorFusionGPUInfoConfigMountPath,
 		SubPath:   constants.TensorFusionGPUInfoConfigSubPath,
+	}, v1.VolumeMount{
+		Name:      constants.KubeletDevicePluginVolumeName,
+		MountPath: constants.KubeletDevicePluginPath,
 	})
 
 	port := getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor)
@@ -375,6 +386,9 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 				FieldPath: constants.NodeNameFieldRef,
 			},
 		},
+	}, v1.EnvVar{
+		Name:  constants.HypervisorDetectUsedGPUEnv,
+		Value: fmt.Sprintf("%t", IsProgressiveMigration()),
 	})
 
 	if pool.Spec.ComponentConfig.Hypervisor.Image != "" {

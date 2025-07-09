@@ -42,15 +42,15 @@ profiles:
           weight: 1
         - name: memory
           weight: 1
+        - name: nvidia.com/gpu
+          weight: 5
         requestedToCapacityRatio:
           shape:
           - utilization: 0
             score: 0
-          - utilization: 80
-            score: 10
-          - utilization: 90
-            score: 2
+          - utilization: 75
+            score: 9
           - utilization: 100
-            score: 0
+            score: 10
         type: RequestedToCapacityRatio
 

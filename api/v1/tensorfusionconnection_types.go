@@ -46,6 +46,11 @@ type TensorFusionConnectionStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Connection URL",type="string",JSONPath=".status.connectionURL"
+// +kubebuilder:printcolumn:name="Worker Name",type="string",JSONPath=".status.workerName"
+// +kubebuilder:printcolumn:name="Workload Name",type="string",JSONPath=".spec.workloadName"
+// +kubebuilder:printcolumn:name="Client Pod",type="string",JSONPath=".spec.clientPod"
 
 // TensorFusionConnection is the Schema for the tensorfusionconnections API.
 type TensorFusionConnection struct {

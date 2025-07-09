@@ -70,6 +70,10 @@ spec:
             - name: TSDB_MYSQL_USER
               value: root
             {{- end }}
+            {{- if .Values.controller.nvidiaOperatorProgressiveMigration }}
+            - name: NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION
+              value: "true"
+            {{- end }}
           volumeMounts:
             - name: cert
               readOnly: true

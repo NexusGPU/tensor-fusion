@@ -14,7 +14,35 @@ spec:
     singular: tensorfusionworkload
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.workerCount
+      name: Worker Count
+      type: string
+    - jsonPath: .status.readyWorkers
+      name: Ready Workers
+      type: string
+    - jsonPath: .status.podTemplateHash
+      name: Pod Template Hash
+      type: string
+    - jsonPath: .spec.poolName
+      name: Pool Name
+      type: string
+    - jsonPath: .spec.qos
+      name: QoS
+      type: string
+    - jsonPath: .spec.isLocalGPU
+      name: Is Local GPU
+      type: string
+    - jsonPath: .spec.gpuCount
+      name: GPU Number
+      type: string
+    - jsonPath: .spec.replicas
+      name: Replicas
+      type: string
+    name: v1
     schema:
       openAPIV3Schema:
         description: TensorFusionWorkload is the Schema for the tensorfusionworkloads
