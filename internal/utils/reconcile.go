@@ -218,6 +218,10 @@ func IsTensorFusionPod(pod *corev1.Pod) bool {
 	return pod.Labels[constants.TensorFusionEnabledLabelKey] == constants.TrueStringValue
 }
 
+func IsTensorFusionWorker(pod *corev1.Pod) bool {
+	return pod.Labels[constants.LabelComponent] == constants.ComponentWorker
+}
+
 var GPUResourceNames = []corev1.ResourceName{
 	"nvidia.com/gpu",
 	"amd.com/gpu",

@@ -60,7 +60,8 @@
             "env": {
                 "KUBECONFIG": "~/.kube/config-local-studio",
                 "ENABLE_WEBHOOKS": "false",
-                "ENABLE_SCHEDULER": "false"
+                "ENABLE_SCHEDULER": "true",
+                "ENABLE_CR_CONTROLLER": "true"
             },
             "args": [
                 "--gpu-info-config", "${workspaceFolder}/config/samples/gpu-info-config.yaml",

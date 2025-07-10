@@ -98,7 +98,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 	}
 
 	// Skip non tensor-fusion mode
-	if !utils.IsTensorFusionPod(pod) {
+	if !utils.IsTensorFusionWorker(pod) {
 		return nil, framework.NewStatus(framework.Skip, "skip for non tensor-fusion mode")
 	}
 
@@ -155,7 +155,7 @@ func (s *GPUFit) PreFilterExtensions() framework.PreFilterExtensions {
 }
 
 func (s *GPUFit) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
-	if !utils.IsTensorFusionPod(pod) {
+	if !utils.IsTensorFusionWorker(pod) {
 		return framework.NewStatus(framework.Success, "skip for non tensor-fusion mode")
 	}
 
@@ -172,7 +172,7 @@ func (s *GPUFit) Filter(ctx context.Context, state *framework.CycleState, pod *v
 
 func (s *GPUFit) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
 	// Skip non tensor-fusion mode scheduling
-	if !utils.IsTensorFusionPod(pod) {
+	if !utils.IsTensorFusionWorker(pod) {
 		return 0, framework.NewStatus(framework.Success, "")
 	}
 
@@ -201,7 +201,7 @@ func (s *GPUFit) ScoreExtensions() framework.ScoreExtensions {
 }
 
 func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
-	if !utils.IsTensorFusionPod(pod) {
+	if !utils.IsTensorFusionWorker(pod) {
 		return framework.NewStatus(framework.Success, "skip for non tensor-fusion mode")
 	}
 
@@ -247,7 +247,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 }
 
 func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
-	if !utils.IsTensorFusionPod(pod) {
+	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}
 
@@ -266,7 +266,7 @@ func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod
 }
 
 func (s *GPUFit) PreBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
-	if !utils.IsTensorFusionPod(pod) {
+	if !utils.IsTensorFusionWorker(pod) {
 		return framework.NewStatus(framework.Success, "skip for non tensor-fusion mode")
 	}
 

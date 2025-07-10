@@ -51,6 +51,7 @@
         "goerrors",
         "golint",
         "Gomega",
+        "gonic",
         "gopsutil",
         "gorm",
         "gosec",

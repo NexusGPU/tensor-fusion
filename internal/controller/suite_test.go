@@ -143,7 +143,7 @@ var _ = BeforeSuite(func() {
 	}
 
 	allocator = gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 150*time.Millisecond)
-	_, err = allocator.SetupWithManager(ctx, mgr)
+	err = allocator.SetupWithManager(ctx, mgr)
 	Expect(err).ToNot(HaveOccurred())
 
 	portAllocator, err := portallocator.NewPortAllocator(ctx, mgr.GetClient(), "40000-42000", "42001-60000")

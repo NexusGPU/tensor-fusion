@@ -547,8 +547,8 @@ func (s *GPUResourcesSuite) makePod(name string, annotations map[string]string) 
 		UID(name).
 		ZeroTerminationGracePeriod().Obj()
 	pod.Labels = map[string]string{
-		constants.TensorFusionEnabledLabelKey: "true",
-		constants.WorkloadKey:                 "workload-1",
+		constants.LabelComponent: constants.ComponentWorker,
+		constants.WorkloadKey:    "workload-1",
 	}
 	pod.Annotations = annotations
 	if pod.Annotations == nil {

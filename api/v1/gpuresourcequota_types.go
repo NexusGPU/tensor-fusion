@@ -188,6 +188,14 @@ type AllocRequest struct {
 	PodMeta metav1.ObjectMeta
 }
 
+type GPUAllocationInfo struct {
+	Request   Resource `json:"request,omitempty"`
+	Limit     Resource `json:"limit,omitempty"`
+	PodName   string   `json:"podName,omitempty"`
+	PodUID    string   `json:"podUID,omitempty"`
+	Namespace string   `json:"namespace,omitempty"`
+}
+
 type AdjustRequest struct {
 	PodUID     string
 	IsScaleUp  bool

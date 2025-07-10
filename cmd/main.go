@@ -36,6 +36,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
+	"k8s.io/kubernetes/pkg/scheduler"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -171,12 +172,13 @@ func main() {
 	normalizeKubeConfigEnv()
 	kc := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(kc, ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsServerOptions,
-		WebhookServer:          webhookServer,
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       LeaderElectionID,
+		Scheme:                  scheme,
+		Metrics:                 metricsServerOptions,
+		WebhookServer:           webhookServer,
+		HealthProbeBindAddress:  probeAddr,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        LeaderElectionID,
+		LeaderElectionNamespace: utils.CurrentNamespace(),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -202,11 +204,11 @@ func main() {
 
 	startWebhook(mgr, portAllocator)
 
-	startScheduler(ctx, allocator, mgr)
+	scheduler := startScheduler(ctx, allocator, mgr)
 
 	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator)
 
-	startHttpServerForTFClient(ctx, kc, portAllocator, mgr.Elected())
+	startHttpServerForTFClient(ctx, kc, portAllocator, allocator, scheduler, mgr.Elected())
 
 	// +kubebuilder:scaffold:builder
 	addHealthCheckAPI(mgr)
@@ -236,7 +238,7 @@ func startTensorFusionAllocators(
 	mgr manager.Manager,
 ) (*gpuallocator.GpuAllocator, *portallocator.PortAllocator) {
 	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 10*time.Second)
-	if _, err := allocator.SetupWithManager(ctx, mgr); err != nil {
+	if err := allocator.SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to set up GPU allocator watches")
 		os.Exit(1)
 	}
@@ -255,6 +257,8 @@ func startHttpServerForTFClient(
 	ctx context.Context,
 	kc *rest.Config,
 	portAllocator *portallocator.PortAllocator,
+	allocator *gpuallocator.GpuAllocator,
+	scheduler *scheduler.Scheduler,
 	leaderChan <-chan struct{},
 ) {
 	client, err := client.NewWithWatch(kc, client.Options{Scheme: scheme})
@@ -272,7 +276,12 @@ func startHttpServerForTFClient(
 		setupLog.Error(err, "failed to create assign host port router")
 		os.Exit(1)
 	}
-	httpServer := server.NewHTTPServer(connectionRouter, assignHostPortRouter, leaderChan)
+	allocatorInfoRouter, err := router.NewAllocatorInfoRouter(ctx, allocator, scheduler)
+	if err != nil {
+		setupLog.Error(err, "failed to create allocator info router")
+		os.Exit(1)
+	}
+	httpServer := server.NewHTTPServer(connectionRouter, assignHostPortRouter, allocatorInfoRouter, leaderChan)
 	go func() {
 		err := httpServer.Run()
 		if err != nil {
@@ -419,9 +428,13 @@ func startWebhook(mgr manager.Manager, portAllocator *portallocator.PortAllocato
 	}
 }
 
-func startScheduler(ctx context.Context, allocator *gpuallocator.GpuAllocator, mgr manager.Manager) {
+func startScheduler(
+	ctx context.Context,
+	allocator *gpuallocator.GpuAllocator,
+	mgr manager.Manager,
+) *scheduler.Scheduler {
 	if os.Getenv(constants.EnableSchedulerEnv) == constants.FalseStringValue {
-		return
+		return nil
 	}
 	if schedulerConfigPath == "" {
 		setupLog.Error(fmt.Errorf("scheduler config path is empty, please and --scheduler-config in command line"), "")
@@ -447,6 +460,7 @@ func startScheduler(ctx context.Context, allocator *gpuallocator.GpuAllocator, m
 		setupLog.Error(err, "unable to run tensor fusion scheduler")
 		os.Exit(1)
 	}
+	return scheduler
 }
 
 func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager.Manager) {

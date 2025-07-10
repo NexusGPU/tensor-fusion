@@ -118,6 +118,13 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 
 	// generate tensor fusion connections and apply to cluster
 	if pod.Labels[constants.LabelComponent] == constants.ComponentClient {
+
+		if controllerutil.ContainsFinalizer(pod, constants.Finalizer) {
+			log.Info("tensor-fusion client pod should not have tensor fusion finalizer, remove it", "pod", pod.Name)
+			controllerutil.RemoveFinalizer(pod, constants.Finalizer)
+			return ctrl.Result{}, r.Update(ctx, pod)
+		}
+
 		tfConnection := buildTensorFusionConnectionObj(pod)
 		if tfConnection == nil {
 			log.Info("Pod is not a TensorFusion client, skipped, this should never happen", "pod", pod.Name)
