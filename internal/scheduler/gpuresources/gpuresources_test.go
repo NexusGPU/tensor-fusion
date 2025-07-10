@@ -63,7 +63,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 					constants.TFLOPSLimitAnnotation:   "100",
 					constants.VRAMLimitAnnotation:     "4Gi",
 					constants.GpuCountAnnotation:      "1",
-					constants.GpuKey:                  "gpu-1",
+					constants.GPUDeviceIDsAnnotation:  "gpu-1",
 				},
 			},
 			Spec: v1.PodSpec{
@@ -244,6 +244,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 	err = s.allocator.InitGPUAndQuotaStore()
 	s.NoError(err)
 	s.allocator.ReconcileAllocationState()
+	s.allocator.SetAllocatorReady()
 
 	pluginFactory := NewWithDeps(s.allocator, s.client)
 	pluginConfig := &runtime.Unknown{

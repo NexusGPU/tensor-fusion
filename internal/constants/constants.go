@@ -49,7 +49,6 @@ const (
 
 	GPULastReportTimeAnnotationKey = Domain + "/last-sync"
 	WorkloadKey                    = Domain + "/workload"
-	GpuKey                         = Domain + "/gpu"
 	GpuPoolKey                     = Domain + "/gpupool"
 
 	// Annotation key constants

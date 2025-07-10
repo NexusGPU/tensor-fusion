@@ -351,9 +351,10 @@ func startCustomResourceController(
 		os.Exit(1)
 	}
 	if err = (&controller.GPUPoolCompactionReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("GPUPoolCompaction"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("GPUPoolCompaction"),
+		Allocator: allocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUPoolCompaction")
 		os.Exit(1)

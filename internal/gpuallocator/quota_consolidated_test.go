@@ -132,6 +132,7 @@ func initAllocator(t *testing.T, allocator *GpuAllocator) {
 	err := allocator.InitGPUAndQuotaStore()
 	require.NoError(t, err)
 	allocator.ReconcileAllocationState()
+	allocator.SetAllocatorReady()
 }
 
 func setupQuotaTest(tflops, vram int64, workers int32) *QuotaTestFixture {

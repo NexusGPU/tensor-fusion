@@ -288,7 +288,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					Namespace: podList.Items[0].Namespace,
 					Name:      podList.Items[0].Name,
 				}, pod)).Should(Succeed())
-				gpuNames := strings.Split(pod.Annotations[constants.GpuKey], ",")
+				gpuNames := strings.Split(pod.Annotations[constants.GPUDeviceIDsAnnotation], ",")
 				gpuList := tfEnv.GetPoolGpuList(0)
 				gpu, ok := lo.Find(gpuList.Items, func(gpu tfv1.GPU) bool {
 					return gpu.Name == gpuNames[0]
@@ -417,7 +417,7 @@ func scheduleAndStartPod(pod *corev1.Pod, clientset *kubernetes.Clientset) {
 		if latestPod.Annotations == nil {
 			latestPod.Annotations = map[string]string{}
 		}
-		latestPod.Annotations[constants.GpuKey] = strings.Join(
+		latestPod.Annotations[constants.GPUDeviceIDsAnnotation] = strings.Join(
 			lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
 				return gpu.Name
 			}), ",")

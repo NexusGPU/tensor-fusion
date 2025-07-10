@@ -267,7 +267,7 @@ func (r *PodReconciler) handlePodGPUCleanup(ctx context.Context, pod *corev1.Pod
 	}
 
 	// read the GPU names from the pod annotations
-	gpuNamesStr, ok := pod.Annotations[constants.GpuKey]
+	gpuNamesStr, ok := pod.Annotations[constants.GPUDeviceIDsAnnotation]
 	if !ok {
 		log.Info("Pod has finalizer but no GPU label", "pod", pod.Name)
 		return true, nil

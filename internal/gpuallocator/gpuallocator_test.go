@@ -69,7 +69,7 @@ var _ = Describe("GPU Allocator", func() {
 		allocator = NewGpuAllocator(ctx, k8sClient, 150*time.Millisecond)
 		err := allocator.SetupWithManager(ctx, mgr)
 		Expect(err).NotTo(HaveOccurred())
-		<-mgr.Elected()
+		<-allocator.initializedCh
 	})
 
 	AfterEach(func() {

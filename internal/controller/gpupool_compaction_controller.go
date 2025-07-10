@@ -8,6 +8,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,6 +25,8 @@ type GPUPoolCompactionReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+
+	Allocator *gpuallocator.GpuAllocator
 }
 
 const defaultCompactionDuration = 1 * time.Minute
@@ -61,22 +64,18 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 		}
 
 		// Check if node is empty, if not, continue
-		var nodeGPUConnection tfv1.TensorFusionConnectionList
-		if err := r.List(ctx, &nodeGPUConnection, client.MatchingLabels(map[string]string{
-			constants.LabelKeyOwner: gpuNode.Name,
-		})); err != nil {
-			return fmt.Errorf("failed to list node(%s) GPU connections : %w", gpuNode.Name, err)
-		}
-		if len(nodeGPUConnection.Items) != 0 {
-			// Not is in-using, should not be terminated
+		_, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
+		k8sNodeName := gpuNode.Status.KubernetesNodeName
+		if len(nodeToWorker[k8sNodeName]) != 0 {
+			// Node is in-use, should not be terminated
 			continue
 		}
 		if gpuNode.Status.Phase != tfv1.TensorFusionGPUNodePhaseRunning {
-			// Not running, should not be terminated
+			// Node is not running, should not be terminated
 			continue
 		}
 		// Protect new nodes at least 5 minutes to avoid flapping
-		if gpuNode.CreationTimestamp.After(time.Now().Add(newNodeProtectionDuration)) {
+		if gpuNode.CreationTimestamp.After(time.Now().Add(-newNodeProtectionDuration)) {
 			continue
 		}
 

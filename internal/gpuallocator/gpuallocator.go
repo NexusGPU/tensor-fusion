@@ -672,13 +672,17 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 			return err
 		}
 		// unlock all pending allocation/deallocation/scale operations after first initialization
-		close(s.initializedCh)
+		s.SetAllocatorReady()
 
 		// Start the background sync goroutine
 		go s.startSyncLoop(ctx)
 		return nil
 	}))
 	return err
+}
+
+func (s *GpuAllocator) SetAllocatorReady() {
+	close(s.initializedCh)
 }
 
 func (s *GpuAllocator) StartInformerForGPU(ctx context.Context, mgr manager.Manager) error {
@@ -1000,6 +1004,11 @@ func (s *GpuAllocator) reconcileAllocationState() {
 			actualAvailableMap[gpuKey] = gpu.Status.Capacity.DeepCopy()
 			gpu.Status.RunningApps = []*tfv1.RunningAppDetail{}
 			gpuMap[gpuKey] = gpu
+		}
+
+		gpuNodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if _, exists := s.nodeWorkerStore[gpuNodeName]; !exists {
+			s.nodeWorkerStore[gpuNodeName] = map[types.NamespacedName]struct{}{}
 		}
 	}
 
