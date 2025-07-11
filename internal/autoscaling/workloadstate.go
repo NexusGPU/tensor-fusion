@@ -1,11 +1,12 @@
-package autoscaler
+package autoscaling
 
 import (
-	"strconv"
 	"strings"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaling/metrics"
+	"k8s.io/apimachinery/pkg/api/resource"
 	vpa "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/util"
 )
 
@@ -23,22 +24,24 @@ const (
 	DefaultHistogramDecayHalfLife = time.Hour * 24
 )
 
-type ResourceName string
-
-const (
-	ResourceTflops ResourceName = "tflops"
-	ResourceVram   ResourceName = "vram"
-)
+type RecommendedResources struct {
+	LowerBoundTflops resource.Quantity
+	TargetTflops     resource.Quantity
+	UpperBoundTflops resource.Quantity
+	LowerBoundVram   resource.Quantity
+	TargetVram       resource.Quantity
+	UpperBoundVram   resource.Quantity
+}
 
 type WorkloadState struct {
 	Namespace         string
 	Name              string
 	Resources         tfv1.Resources
 	AutoScalingConfig tfv1.AutoScalingConfig
+	Recommendation    RecommendedResources
 
-	TflopsHistogram vpa.Histogram
-	VramHistogram   vpa.Histogram
-
+	TflopsHistogram   vpa.Histogram
+	VramHistogram     vpa.Histogram
 	FirstSampleStart  time.Time
 	LastSampleStart   time.Time
 	TotalSamplesCount int
@@ -62,51 +65,17 @@ func histogramOptions(maxValue, firstBucketSize float64) vpa.HistogramOptions {
 	return options
 }
 
-func (w *WorkloadState) UpdateSampleStats(metrics *WorkerMetrics) {
-	if metrics.Timestamp.After(w.LastSampleStart) {
-		w.LastSampleStart = metrics.Timestamp
+func (w *WorkloadState) UpdateSampleStats(sample *metrics.WorkerUsage) {
+	if sample.Timestamp.After(w.LastSampleStart) {
+		w.LastSampleStart = sample.Timestamp
 	}
-	if w.FirstSampleStart.IsZero() || metrics.Timestamp.Before(w.FirstSampleStart) {
-		w.FirstSampleStart = metrics.Timestamp
+	if w.FirstSampleStart.IsZero() || sample.Timestamp.Before(w.FirstSampleStart) {
+		w.FirstSampleStart = sample.Timestamp
 	}
 	w.TotalSamplesCount++
 }
 
-func (w *WorkloadState) GetResourceRecommenderConfig() *ResourceRecommenderConfig {
-	cfg := DefaultResourceRecommenderConfig
-
-	asr := w.AutoScalingConfig.AutoSetResources
-	fields := []struct {
-		val string
-		dst *float64
-	}{
-		{asr.TargetTflopsPercentile, &cfg.TargetTflopsPercentile},
-		{asr.LowerBoundTflopsPercentile, &cfg.LowerBoundTflopsPercentile},
-		{asr.UpperBoundTflopsPercentile, &cfg.UpperBoundTflopsPercentile},
-		{asr.TargetVramPercentile, &cfg.TargetVramPercentile},
-		{asr.LowerBoundVramPercentile, &cfg.LowerBoundVramPercentile},
-		{asr.UpperBoundVramPercentile, &cfg.UpperBoundVramPercentile},
-		{asr.RequestMarginFraction, &cfg.RequestMarginFraction},
-	}
-	for _, f := range fields {
-		if f.val == "" {
-			continue
-		}
-		if v, err := strconv.ParseFloat(f.val, 64); err == nil {
-			*f.dst = v
-		}
-	}
-
-	if asr.ConfidenceInterval != "" {
-		if d, err := time.ParseDuration(asr.ConfidenceInterval); err == nil {
-			cfg.ConfidenceInterval = d
-		}
-	}
-
-	return &cfg
-}
-
-func (w *WorkloadState) IsTargetResource(name ResourceName) bool {
+func (w *WorkloadState) IsTargetResource(name tfv1.ResourceName) bool {
 	target := w.AutoScalingConfig.AutoSetResources.TargetResource
 	return target == "" || strings.EqualFold(target, "all") || strings.EqualFold(string(name), target)
 }
