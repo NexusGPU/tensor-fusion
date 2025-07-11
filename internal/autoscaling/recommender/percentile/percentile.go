@@ -1,7 +1,11 @@
-package autoscaler
+package percentile
 
 import (
+	"strconv"
 	"time"
+
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaling"
 )
 
 const (
@@ -23,7 +27,7 @@ const (
 	defaultConfidenceInterval = time.Hour * 24
 )
 
-var DefaultResourceRecommenderConfig = ResourceRecommenderConfig{
+var DefaultPercentileConfig = PercentileConfig{
 	TargetTflopsPercentile:     defaultTargetTflopsPercentile,
 	LowerBoundTflopsPercentile: defaultLowerBoundTflopsPercentile,
 	UpperBoundTflopsPercentile: defaultUpperBoundTflopsPercentile,
@@ -34,20 +38,7 @@ var DefaultResourceRecommenderConfig = ResourceRecommenderConfig{
 	ConfidenceInterval:         defaultConfidenceInterval,
 }
 
-type ResourceRecommender interface {
-	GetRecommendedResources(*WorkloadState) *RecommendedResources
-}
-
-type RecommendedResources struct {
-	LowerBoundTflops ResourceAmount
-	TargetTflops     ResourceAmount
-	UpperBoundTflops ResourceAmount
-	LowerBoundVram   ResourceAmount
-	TargetVram       ResourceAmount
-	UpperBoundVram   ResourceAmount
-}
-
-type ResourceRecommenderConfig struct {
+type PercentileConfig struct {
 	TargetTflopsPercentile     float64
 	LowerBoundTflopsPercentile float64
 	UpperBoundTflopsPercentile float64
@@ -58,11 +49,7 @@ type ResourceRecommenderConfig struct {
 	ConfidenceInterval         time.Duration
 }
 
-func NewResourceRecommender() ResourceRecommender {
-	return &resourceRecommender{}
-}
-
-type resourceRecommender struct {
+type PercentileRecommender struct {
 	lowerBoundTflops TflopsEstimator
 	targetTflops     TflopsEstimator
 	upperBoundTflops TflopsEstimator
@@ -71,21 +58,62 @@ type resourceRecommender struct {
 	upperBoundVram   VramEstimator
 }
 
-func (r *resourceRecommender) GetRecommendedResources(s *WorkloadState) *RecommendedResources {
+func NewRecommender() *PercentileRecommender {
+	return &PercentileRecommender{}
+}
 
-	r.createEstimatorsFromConfig(s.GetResourceRecommenderConfig())
+func (p *PercentileRecommender) Name() string {
+	return "percentile"
+}
 
-	return &RecommendedResources{
-		LowerBoundTflops: r.lowerBoundTflops.GetTflopsEstimation(s),
-		TargetTflops:     r.targetTflops.GetTflopsEstimation(s),
-		UpperBoundTflops: r.upperBoundTflops.GetTflopsEstimation(s),
-		LowerBoundVram:   r.lowerBoundVram.GetVramEstimation(s),
-		TargetVram:       r.targetVram.GetVramEstimation(s),
-		UpperBoundVram:   r.upperBoundVram.GetVramEstimation(s),
+func (p *PercentileRecommender) Recommend(w *autoscaling.WorkloadState) {
+	// TODO: cache config
+	p.createEstimatorsFromConfig(p.getPercentileConfig(&w.AutoScalingConfig))
+	w.Recommendation = autoscaling.RecommendedResources{
+		LowerBoundTflops: QuantityFromAmount(p.lowerBoundTflops.GetTflopsEstimation(w)),
+		TargetTflops:     QuantityFromAmount(p.targetTflops.GetTflopsEstimation(w)),
+		UpperBoundTflops: QuantityFromAmount(p.upperBoundTflops.GetTflopsEstimation(w)),
+		LowerBoundVram:   QuantityFromAmount(p.lowerBoundVram.GetVramEstimation(w)),
+		TargetVram:       QuantityFromAmount(p.targetVram.GetVramEstimation(w)),
+		UpperBoundVram:   QuantityFromAmount(p.upperBoundVram.GetVramEstimation(w)),
 	}
 }
 
-func (r *resourceRecommender) createEstimatorsFromConfig(config *ResourceRecommenderConfig) {
+func (p *PercentileRecommender) getPercentileConfig(asc *tfv1.AutoScalingConfig) *PercentileConfig {
+	cfg := DefaultPercentileConfig
+
+	asr := asc.AutoSetResources
+	fields := []struct {
+		val string
+		dst *float64
+	}{
+		{asr.TargetTflopsPercentile, &cfg.TargetTflopsPercentile},
+		{asr.LowerBoundTflopsPercentile, &cfg.LowerBoundTflopsPercentile},
+		{asr.UpperBoundTflopsPercentile, &cfg.UpperBoundTflopsPercentile},
+		{asr.TargetVramPercentile, &cfg.TargetVramPercentile},
+		{asr.LowerBoundVramPercentile, &cfg.LowerBoundVramPercentile},
+		{asr.UpperBoundVramPercentile, &cfg.UpperBoundVramPercentile},
+		{asr.RequestMarginFraction, &cfg.RequestMarginFraction},
+	}
+	for _, f := range fields {
+		if f.val == "" {
+			continue
+		}
+		if v, err := strconv.ParseFloat(f.val, 64); err == nil {
+			*f.dst = v
+		}
+	}
+
+	if asr.ConfidenceInterval != "" {
+		if d, err := time.ParseDuration(asr.ConfidenceInterval); err == nil {
+			cfg.ConfidenceInterval = d
+		}
+	}
+
+	return &cfg
+}
+
+func (p *PercentileRecommender) createEstimatorsFromConfig(config *PercentileConfig) {
 	targetTflops := NewPercentileTflopsEstimator(config.TargetTflopsPercentile)
 	lowerBoundTflops := NewPercentileTflopsEstimator(config.LowerBoundTflopsPercentile)
 	upperBoundTflops := NewPercentileTflopsEstimator(config.UpperBoundTflopsPercentile)
@@ -108,7 +136,7 @@ func (r *resourceRecommender) createEstimatorsFromConfig(config *ResourceRecomme
 	upperBoundVram = WithVramConfidenceMultiplier(1.0, 1.0, upperBoundVram, config.ConfidenceInterval)
 	lowerBoundVram = WithVramConfidenceMultiplier(0.001, -2.0, lowerBoundVram, config.ConfidenceInterval)
 
-	*r = resourceRecommender{
+	*p = PercentileRecommender{
 		lowerBoundTflops: lowerBoundTflops,
 		targetTflops:     targetTflops,
 		upperBoundTflops: upperBoundTflops,
