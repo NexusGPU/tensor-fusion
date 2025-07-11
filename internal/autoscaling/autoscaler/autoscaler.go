@@ -8,6 +8,9 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaling"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaling/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaling/recommender"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/samber/lo"
@@ -26,14 +29,14 @@ var (
 
 type Autoscaler struct {
 	client.Client
-	allocator *gpuallocator.GpuAllocator
-	ResourceRecommender
-	MetricsProvider
-	WorkloadStates map[string]*WorkloadState
-	WorkerStates   map[string]*WorkerState
+	allocator       *gpuallocator.GpuAllocator
+	recommenders    []recommender.Interface
+	metricsProvider metrics.Provider
+	workloadStates  map[string]*autoscaling.WorkloadState
+	workerStates    map[string]*autoscaling.WorkerState
 }
 
-func NewAutoscaler(c client.Client, allocator *gpuallocator.GpuAllocator) (*Autoscaler, error) {
+func New(c client.Client, allocator *gpuallocator.GpuAllocator) (*Autoscaler, error) {
 	if c == nil {
 		return nil, errors.New("must specify client")
 	}
@@ -42,13 +45,18 @@ func NewAutoscaler(c client.Client, allocator *gpuallocator.GpuAllocator) (*Auto
 		return nil, errors.New("must specify allocator")
 	}
 
+	recommenders := []recommender.Interface{
+		recommender.New(recommender.PercentileRecommender),
+		recommender.New(recommender.CronRecommender),
+	}
+
 	return &Autoscaler{
-		Client:              c,
-		allocator:           allocator,
-		ResourceRecommender: NewResourceRecommender(),
-		MetricsProvider:     NewMetricsProvider(nil),
-		WorkloadStates:      map[string]*WorkloadState{},
-		WorkerStates:        map[string]*WorkerState{},
+		Client:          c,
+		allocator:       allocator,
+		recommenders:    recommenders,
+		metricsProvider: metrics.NewProvider(nil),
+		workloadStates:  map[string]*autoscaling.WorkloadState{},
+		workerStates:    map[string]*autoscaling.WorkerState{},
 	}, nil
 }
 
@@ -100,14 +108,14 @@ func (s *Autoscaler) LoadWorkloads(ctx context.Context) {
 		}
 
 		workloadName := workload.Name
-		workloadState, exists := s.WorkloadStates[workloadName]
+		workloadState, exists := s.workloadStates[workloadName]
 		if !exists {
-			workloadState = NewWorkloadState(workloadName)
+			workloadState = autoscaling.NewWorkloadState(workloadName)
 		}
 		workloadState.Namespace = workload.Namespace
 		workloadState.Resources = workload.Spec.Resources
 		workloadState.AutoScalingConfig = workload.Spec.AutoScalingConfig
-		s.WorkloadStates[workloadName] = workloadState
+		s.workloadStates[workloadName] = workloadState
 
 		observedWorkloads[workloadName] = true
 
@@ -124,24 +132,24 @@ func (s *Autoscaler) LoadWorkloads(ctx context.Context) {
 			if !worker.DeletionTimestamp.IsZero() {
 				continue
 			}
-			if _, exists := s.WorkerStates[worker.Name]; !exists {
-				s.WorkerStates[worker.Name] = NewWorkerState(worker.Name, workloadName)
+			if _, exists := s.workerStates[worker.Name]; !exists {
+				s.workerStates[worker.Name] = autoscaling.NewWorkerState(worker.Name, workloadName)
 			}
 			observedWorkers[worker.Name] = true
 		}
 
-		s.WorkerStates = lo.OmitBy(s.WorkerStates, func(key string, state *WorkerState) bool {
+		s.workerStates = lo.OmitBy(s.workerStates, func(key string, state *autoscaling.WorkerState) bool {
 			return state.Workload == workloadName && !observedWorkers[key]
 		})
 	}
 
 	// remove unused workloadStates
-	s.WorkloadStates = lo.OmitBy(s.WorkloadStates, func(key string, _ *WorkloadState) bool {
+	s.workloadStates = lo.OmitBy(s.workloadStates, func(key string, _ *autoscaling.WorkloadState) bool {
 		return !observedWorkloads[key]
 	})
 
 	// remove unused workerStates
-	s.WorkerStates = lo.OmitBy(s.WorkerStates, func(_ string, state *WorkerState) bool {
+	s.workerStates = lo.OmitBy(s.workerStates, func(_ string, state *autoscaling.WorkerState) bool {
 		return !observedWorkloads[state.Workload]
 	})
 }
@@ -150,21 +158,21 @@ func (s *Autoscaler) LoadHistoryMetrics(ctx context.Context) {
 	log := log.FromContext(ctx)
 	log.Info("loading historical metrics")
 
-	workersMetrics, err := s.GetHistoryMetrics()
+	workersMetrics, err := s.metricsProvider.GetHistoryMetrics()
 	if err != nil {
 		log.Error(err, "failed to get history metrics")
 		return
 	}
 	for _, metrics := range workersMetrics {
-		workloadState, exists := s.WorkloadStates[metrics.WorkloadName]
+		workloadState, exists := s.workloadStates[metrics.WorkloadName]
 		if !exists {
-			workloadState = NewWorkloadState(metrics.WorkloadName)
-			s.WorkloadStates[metrics.WorkloadName] = workloadState
+			workloadState = autoscaling.NewWorkloadState(metrics.WorkloadName)
+			s.workloadStates[metrics.WorkloadName] = workloadState
 		}
-		workerState, exists := s.WorkerStates[metrics.WorkerName]
+		workerState, exists := s.workerStates[metrics.WorkerName]
 		if !exists {
-			workerState = NewWorkerState(metrics.WorkerName, metrics.WorkloadName)
-			s.WorkerStates[metrics.WorkerName] = workerState
+			workerState = autoscaling.NewWorkerState(metrics.WorkerName, metrics.WorkloadName)
+			s.workerStates[metrics.WorkerName] = workerState
 		}
 
 		s.addSamples(workloadState, workerState, metrics)
@@ -175,18 +183,18 @@ func (s *Autoscaler) LoadRealTimeMetrics(ctx context.Context) {
 	log := log.FromContext(ctx)
 	log.Info("loading realtime metrics")
 
-	workersMetrics, err := s.GetWorkersMetrics()
+	workersMetrics, err := s.metricsProvider.GetWorkersMetrics()
 	if err != nil {
 		log.Error(err, "failed to get workers metrics")
 		return
 	}
 
 	for _, metrics := range workersMetrics {
-		workloadState, workloadExists := s.WorkloadStates[metrics.WorkloadName]
+		workloadState, workloadExists := s.workloadStates[metrics.WorkloadName]
 		if !workloadExists {
 			continue
 		}
-		workerState, workerExists := s.WorkerStates[metrics.WorkerName]
+		workerState, workerExists := s.workerStates[metrics.WorkerName]
 		if !workerExists {
 			continue
 		}
@@ -199,8 +207,7 @@ func (s *Autoscaler) ProcessWorkloads(ctx context.Context) {
 	log := log.FromContext(ctx)
 	log.Info("processing workloads")
 
-	for _, workloadState := range s.WorkloadStates {
-		// TODO: continue if histogram is empty
+	for _, workloadState := range s.workloadStates {
 		podList := &corev1.PodList{}
 		if err := s.List(ctx, podList,
 			client.InNamespace(workloadState.Namespace),
@@ -213,8 +220,8 @@ func (s *Autoscaler) ProcessWorkloads(ctx context.Context) {
 			continue
 		}
 
-		rr := s.GetRecommendedResources(workloadState)
-		log.Info("recommend resources", "workload", workloadState.Name, "resources", rr)
+		s.recommenders[0].Recommend(workloadState)
+		log.Info("recommended resources", "workload", workloadState.Name, "resources", workloadState.Recommendation)
 
 		// TODO: update recommmendation status of workload
 
@@ -227,32 +234,34 @@ func (s *Autoscaler) ProcessWorkloads(ctx context.Context) {
 				continue
 			}
 
-			if err := s.updateWorkerResourcesIfNeeded(ctx, workloadState, &worker, rr); err != nil {
+			if err := s.updateWorkerResourcesIfNeeded(ctx, workloadState, &worker); err != nil {
 				log.Error(err, "failed to update worker")
 			}
 		}
 	}
 }
 
-func (s *Autoscaler) updateWorkerResourcesIfNeeded(ctx context.Context, workloadState *WorkloadState, worker *corev1.Pod, rr *RecommendedResources) error {
+func (s *Autoscaler) updateWorkerResourcesIfNeeded(ctx context.Context, workloadState *autoscaling.WorkloadState, worker *corev1.Pod) error {
 	log := log.FromContext(ctx)
 
-	adjustRequest, err := getInitialWorkerResourceRequest(worker)
+	adjustRequest, err := getCurrentWorkerResourceRequest(worker)
 	if err != nil {
-		return fmt.Errorf("failed to get initial worker resource request, %v", err)
+		return fmt.Errorf("failed to get current worker resource request, %v", err)
 	}
+
+	rr := &workloadState.Recommendation
 	resourcesInfo := []struct {
-		name       ResourceName
+		name       tfv1.ResourceName
 		requestKey string
 		limitKey   string
 		request    *resource.Quantity
 		limit      *resource.Quantity
-		lowerBound ResourceAmount
-		upperBound ResourceAmount
-		target     ResourceAmount
+		lowerBound resource.Quantity
+		upperBound resource.Quantity
+		target     resource.Quantity
 	}{
 		{
-			name:       ResourceTflops,
+			name:       tfv1.ResourceTflops,
 			requestKey: constants.TFLOPSRequestAnnotation,
 			limitKey:   constants.TFLOPSLimitAnnotation,
 			request:    &adjustRequest.NewRequest.Tflops,
@@ -262,7 +271,7 @@ func (s *Autoscaler) updateWorkerResourcesIfNeeded(ctx context.Context, workload
 			target:     rr.TargetTflops,
 		},
 		{
-			name:       ResourceVram,
+			name:       tfv1.ResourceVram,
 			requestKey: constants.VRAMRequestAnnotation,
 			limitKey:   constants.VRAMLimitAnnotation,
 			request:    &adjustRequest.NewRequest.Vram,
@@ -279,10 +288,10 @@ func (s *Autoscaler) updateWorkerResourcesIfNeeded(ctx context.Context, workload
 		if !workloadState.IsTargetResource(resInfo.name) {
 			continue
 		}
-		upScaling = resInfo.request.Cmp(QuantityFromAmount(resInfo.lowerBound)) < 0
-		downScaling = resInfo.request.Cmp(QuantityFromAmount(resInfo.upperBound)) > 0
+		upScaling = resInfo.request.Cmp(resInfo.lowerBound) < 0
+		downScaling = resInfo.request.Cmp(resInfo.upperBound) > 0
 		if upScaling || downScaling {
-			targetRequest := QuantityFromAmount(resInfo.target)
+			targetRequest := resInfo.target
 			targetLimit := getProportionalLimit(resInfo.limit, resInfo.request, &targetRequest)
 			if targetLimit == nil {
 				return fmt.Errorf("failed to get limit for %s", resInfo.requestKey)
@@ -313,10 +322,10 @@ func (s *Autoscaler) updateWorkerResourcesIfNeeded(ctx context.Context, workload
 	return nil
 }
 
-func (*Autoscaler) addSamples(workloadState *WorkloadState, workerState *WorkerState, metrics *WorkerMetrics) {
-	workerState.AddTflopsSample(workloadState, metrics)
-	workerState.AddVramSample(workloadState, metrics)
-	workloadState.UpdateSampleStats(metrics)
+func (*Autoscaler) addSamples(workloadState *autoscaling.WorkloadState, workerState *autoscaling.WorkerState, sample *metrics.WorkerUsage) {
+	workerState.AddTflopsSample(workloadState, sample)
+	workerState.AddVramSample(workloadState, sample)
+	workloadState.UpdateSampleStats(sample)
 }
 
 func getProportionalLimit(originalLimit, originalRequest, recommendedRequest *resource.Quantity) *resource.Quantity {
@@ -339,7 +348,7 @@ func getProportionalLimit(originalLimit, originalRequest, recommendedRequest *re
 	return nil
 }
 
-func getInitialWorkerResourceRequest(worker *corev1.Pod) (*tfv1.AdjustRequest, error) {
+func getCurrentWorkerResourceRequest(worker *corev1.Pod) (*tfv1.AdjustRequest, error) {
 	adjustRequest := tfv1.AdjustRequest{
 		PodUID:     string(worker.UID),
 		IsScaleUp:  false,
@@ -369,7 +378,7 @@ func getInitialWorkerResourceRequest(worker *corev1.Pod) (*tfv1.AdjustRequest, e
 
 // Start after manager started
 func SetupWithManager(mgr ctrl.Manager, allocator *gpuallocator.GpuAllocator) error {
-	autoScaler, err := NewAutoscaler(mgr.GetClient(), allocator)
+	autoScaler, err := New(mgr.GetClient(), allocator)
 	if err != nil {
 		return err
 	}

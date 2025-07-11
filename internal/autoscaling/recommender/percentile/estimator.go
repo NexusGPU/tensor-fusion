@@ -1,9 +1,10 @@
-package autoscaler
+package percentile
 
 import (
 	"math"
 	"time"
 
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaling"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -37,7 +38,7 @@ func resourceAmountFromFloat(amount float64) ResourceAmount {
 }
 
 type VramEstimator interface {
-	GetVramEstimation(s *WorkloadState) ResourceAmount
+	GetVramEstimation(s *autoscaling.WorkloadState) ResourceAmount
 }
 
 type percentileVramEstimator struct {
@@ -49,7 +50,7 @@ func NewPercentileVramEstimator(percentile float64) VramEstimator {
 	return &percentileVramEstimator{percentile}
 }
 
-func (e *percentileVramEstimator) GetVramEstimation(s *WorkloadState) ResourceAmount {
+func (e *percentileVramEstimator) GetVramEstimation(s *autoscaling.WorkloadState) ResourceAmount {
 	return resourceAmountFromFloat(float64(s.VramHistogram.Percentile(e.percentile)))
 }
 
@@ -64,7 +65,7 @@ func WithVramMargin(marginFraction float64, baseEstimator VramEstimator) VramEst
 }
 
 // GetvramEstimation returns the vram estimation for the given AggregateContainerState.
-func (e *vramMarginEstimator) GetVramEstimation(s *WorkloadState) ResourceAmount {
+func (e *vramMarginEstimator) GetVramEstimation(s *autoscaling.WorkloadState) ResourceAmount {
 	base := e.baseEstimator.GetVramEstimation(s)
 	margin := resourceAmountFromFloat(float64(base) * e.marginFraction)
 	return base + margin
@@ -87,14 +88,14 @@ func WithVramConfidenceMultiplier(multiplier, exponent float64, baseEstimator Vr
 	}
 }
 
-func (e *vramConfidenceMultiplier) GetVramEstimation(s *WorkloadState) ResourceAmount {
+func (e *vramConfidenceMultiplier) GetVramEstimation(s *autoscaling.WorkloadState) ResourceAmount {
 	confidence := getConfidence(s, e.confidenceInterval)
 	base := e.baseEstimator.GetVramEstimation(s)
 	return resourceAmountFromFloat(float64(base) * math.Pow(1.+e.multiplier/confidence, e.exponent))
 }
 
 type TflopsEstimator interface {
-	GetTflopsEstimation(s *WorkloadState) ResourceAmount
+	GetTflopsEstimation(s *autoscaling.WorkloadState) ResourceAmount
 }
 
 type percentileTflopsEstimator struct {
@@ -106,7 +107,7 @@ func NewPercentileTflopsEstimator(percentile float64) TflopsEstimator {
 	return &percentileTflopsEstimator{percentile}
 }
 
-func (e *percentileTflopsEstimator) GetTflopsEstimation(s *WorkloadState) ResourceAmount {
+func (e *percentileTflopsEstimator) GetTflopsEstimation(s *autoscaling.WorkloadState) ResourceAmount {
 	return resourceAmountFromFloat(float64(s.TflopsHistogram.Percentile(e.percentile)))
 }
 
@@ -121,7 +122,7 @@ func WithTflopsMargin(marginFraction float64, baseEstimator TflopsEstimator) Tfl
 }
 
 // GetTflopsEstimation returns the tflops estimation for the given AggregateContainerState.
-func (e *tflopsMarginEstimator) GetTflopsEstimation(s *WorkloadState) ResourceAmount {
+func (e *tflopsMarginEstimator) GetTflopsEstimation(s *autoscaling.WorkloadState) ResourceAmount {
 	base := e.baseEstimator.GetTflopsEstimation(s)
 	margin := resourceAmountFromFloat(float64(base) * e.marginFraction)
 	return base + margin
@@ -144,19 +145,19 @@ func WithTflopsConfidenceMultiplier(multiplier, exponent float64, baseEstimator 
 	}
 }
 
-func (e *tflopsConfidenceMultiplier) GetTflopsEstimation(s *WorkloadState) ResourceAmount {
+func (e *tflopsConfidenceMultiplier) GetTflopsEstimation(s *autoscaling.WorkloadState) ResourceAmount {
 	confidence := getConfidence(s, e.confidenceInterval)
 	base := e.baseEstimator.GetTflopsEstimation(s)
 	return resourceAmountFromFloat(float64(base) * math.Pow(1.+e.multiplier/confidence, e.exponent))
 }
 
 // Returns a non-negative real number that heuristically measures how much
-// confidence the history aggregated in the WorkloadState provides.
+// confidence the history aggregated in the AggregateState provides.
 // For a workload producing a steady stream of samples over N days at the rate
 // of 1 sample per minute, this metric is equal to N.
 // This implementation is a very simple heuristic which looks at the total count
 // of samples and the time between the first and the last sample.
-func getConfidence(s *WorkloadState, confidenceInterval time.Duration) float64 {
+func getConfidence(s *autoscaling.WorkloadState, confidenceInterval time.Duration) float64 {
 	// Distance between the first and the last observed sample time, measured in days.
 	lifespanInDays := float64(s.LastSampleStart.Sub(s.FirstSampleStart)) / float64(confidenceInterval)
 	// Total count of samples normalized such that it equals the number of days for

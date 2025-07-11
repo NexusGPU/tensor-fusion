@@ -1,7 +1,9 @@
-package autoscaler
+package autoscaling
 
 import (
 	"time"
+
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaling/metrics"
 )
 
 type WorkerState struct {
@@ -9,7 +11,7 @@ type WorkerState struct {
 	Workload             string
 	LastTflopsSampleTime time.Time
 
-	VramPeak           ResourceAmount
+	VramPeak           uint64
 	LastVramSampleTime time.Time
 	VramWindowEnd      time.Time
 }
@@ -24,7 +26,7 @@ func NewWorkerState(name string, workload string) *WorkerState {
 	}
 }
 
-func (w *WorkerState) AddTflopsSample(workload *WorkloadState, metrics *WorkerMetrics) bool {
+func (w *WorkerState) AddTflopsSample(workload *WorkloadState, metrics *metrics.WorkerUsage) bool {
 	if metrics.Timestamp.Before(w.LastTflopsSampleTime) {
 		return false
 	}
@@ -33,7 +35,7 @@ func (w *WorkerState) AddTflopsSample(workload *WorkloadState, metrics *WorkerMe
 	return true
 }
 
-func (w *WorkerState) AddVramSample(workload *WorkloadState, metrics *WorkerMetrics) bool {
+func (w *WorkerState) AddVramSample(workload *WorkloadState, metrics *metrics.WorkerUsage) bool {
 	ts := metrics.Timestamp
 	if ts.Before(w.LastVramSampleTime) {
 		return false

@@ -23,6 +23,9 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaling"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaling/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaling/recommender"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/aws/smithy-go/ptr"
 	. "github.com/onsi/ginkgo/v2"
@@ -51,13 +54,13 @@ import (
 var _ = Describe("Autoscaler", func() {
 	Context("when creating an autoscaler", func() {
 		It("should return an error if there is no client", func() {
-			as, err := NewAutoscaler(nil, nil)
+			as, err := New(nil, nil)
 			Expect(as).To(BeNil())
 			Expect(err.Error()).To(ContainSubstring("must specify client"))
 		})
 
 		It("should return an error if there is no allocator", func() {
-			as, err := NewAutoscaler(k8sClient, nil)
+			as, err := New(k8sClient, nil)
 			Expect(as).To(BeNil())
 			Expect(err.Error()).To(ContainSubstring("must specify allocator"))
 		})
@@ -65,13 +68,13 @@ var _ = Describe("Autoscaler", func() {
 
 	Context("when loading history metrics", func() {
 		It("should create the state of workloads and workers based on historical metrics", func() {
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
-			scaler.MetricsProvider = &FakeMetricsProvider{}
+			scaler, _ := New(k8sClient, allocator)
+			scaler.metricsProvider = &FakeMetricsProvider{}
 			scaler.LoadHistoryMetrics(ctx)
-			metrics, _ := scaler.GetHistoryMetrics()
+			metrics, _ := scaler.metricsProvider.GetHistoryMetrics()
 			for _, m := range metrics {
-				Expect(scaler.WorkloadStates).To(HaveKey(m.WorkloadName))
-				Expect(scaler.WorkerStates).To(HaveKey(m.WorkerName))
+				Expect(scaler.workloadStates).To(HaveKey(m.WorkloadName))
+				Expect(scaler.workerStates).To(HaveKey(m.WorkerName))
 			}
 		})
 	})
@@ -83,10 +86,10 @@ var _ = Describe("Autoscaler", func() {
 				Build()
 			defer tfEnv.Cleanup()
 
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
+			scaler, _ := New(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
-			Expect(scaler.WorkloadStates).To(BeEmpty())
-			Expect(scaler.WorkerStates).To(BeEmpty())
+			Expect(scaler.workloadStates).To(BeEmpty())
+			Expect(scaler.workerStates).To(BeEmpty())
 
 			// create two workloads
 			pool := tfEnv.GetGPUPool(0)
@@ -98,26 +101,26 @@ var _ = Describe("Autoscaler", func() {
 			workload1Workers := getWorkers(workload1)
 
 			scaler.LoadWorkloads(ctx)
-			Expect(scaler.WorkloadStates).To(HaveLen(2))
-			Expect(scaler.WorkloadStates).To(HaveKey(workload0.Name))
-			Expect(scaler.WorkloadStates).To(HaveKey(workload1.Name))
-			Expect(scaler.WorkerStates).To(HaveLen(3))
-			Expect(scaler.WorkerStates).To(HaveKey(workload0Workers[0].Name))
-			Expect(scaler.WorkerStates).To(HaveKey(workload0Workers[1].Name))
-			Expect(scaler.WorkerStates).To(HaveKey(workload1Workers[0].Name))
+			Expect(scaler.workloadStates).To(HaveLen(2))
+			Expect(scaler.workloadStates).To(HaveKey(workload0.Name))
+			Expect(scaler.workloadStates).To(HaveKey(workload1.Name))
+			Expect(scaler.workerStates).To(HaveLen(3))
+			Expect(scaler.workerStates).To(HaveKey(workload0Workers[0].Name))
+			Expect(scaler.workerStates).To(HaveKey(workload0Workers[1].Name))
+			Expect(scaler.workerStates).To(HaveKey(workload1Workers[0].Name))
 
 			updateWorkloadReplicas(workload0, 1)
 			scaler.LoadWorkloads(ctx)
-			Expect(scaler.WorkerStates).To(HaveLen(2))
+			Expect(scaler.workerStates).To(HaveLen(2))
 
 			deleteWorkload(workload0)
 			deleteWorkload(workload1)
 			scaler.LoadWorkloads(ctx)
-			Expect(scaler.WorkloadStates).NotTo(HaveKey(workload0.Name))
-			Expect(scaler.WorkerStates).NotTo(HaveKey(workload0Workers[0].Name))
-			Expect(scaler.WorkerStates).NotTo(HaveKey(workload0Workers[1].Name))
-			Expect(scaler.WorkloadStates).NotTo(HaveKey(workload1.Name))
-			Expect(scaler.WorkerStates).NotTo(HaveKey(workload1Workers[0].Name))
+			Expect(scaler.workloadStates).NotTo(HaveKey(workload0.Name))
+			Expect(scaler.workerStates).NotTo(HaveKey(workload0Workers[0].Name))
+			Expect(scaler.workerStates).NotTo(HaveKey(workload0Workers[1].Name))
+			Expect(scaler.workloadStates).NotTo(HaveKey(workload1.Name))
+			Expect(scaler.workerStates).NotTo(HaveKey(workload1Workers[0].Name))
 		})
 	})
 
@@ -134,25 +137,25 @@ var _ = Describe("Autoscaler", func() {
 
 			worker := workers[0].Name
 
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
+			scaler, _ := New(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
-			ws := scaler.WorkloadStates[workload.Name]
+			ws := scaler.workloadStates[workload.Name]
 			now := time.Now()
-			metrics := &WorkerMetrics{
+			usage := &metrics.WorkerUsage{
 				WorkloadName: workload.Name,
 				WorkerName:   worker,
-				TflopsUsage:  ResourceAmount(12.0),
+				TflopsUsage:  12.0,
 				VramUsage:    9000,
 				Timestamp:    now,
 			}
 
-			scaler.MetricsProvider = &FakeMetricsProvider{[]*WorkerMetrics{metrics}}
+			scaler.metricsProvider = &FakeMetricsProvider{[]*metrics.WorkerUsage{usage}}
 			scaler.LoadRealTimeMetrics(ctx)
 
-			Expect(scaler.WorkerStates[worker].LastTflopsSampleTime).To(Equal(metrics.Timestamp))
+			Expect(scaler.workerStates[worker].LastTflopsSampleTime).To(Equal(usage.Timestamp))
 			Expect(ws.TflopsHistogram.IsEmpty()).To(BeFalse())
-			Expect(scaler.WorkerStates[worker].VramPeak).To(Equal(metrics.VramUsage))
-			Expect(scaler.WorkerStates[worker].LastVramSampleTime).To(Equal(metrics.Timestamp))
+			Expect(scaler.workerStates[worker].VramPeak).To(Equal(usage.VramUsage))
+			Expect(scaler.workerStates[worker].LastVramSampleTime).To(Equal(usage.Timestamp))
 			Expect(ws.VramHistogram.IsEmpty()).To(BeFalse())
 		})
 	})
@@ -167,13 +170,13 @@ var _ = Describe("Autoscaler", func() {
 			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
 			defer deleteWorkload(workload)
 
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
+			scaler, _ := New(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
 
-			scaler.ResourceRecommender = &FakeUpScalingRecommender{}
-			rr := scaler.GetRecommendedResources(nil)
-
+			scaler.recommenders[0] = &FakeUpScalingRecommender{}
 			scaler.ProcessWorkloads(ctx)
+
+			rr := scaler.workloadStates[workload.Name].Recommendation
 			Eventually(func(g Gomega) {
 				assertWorkerAnnotations(getWorkers(workload)[0], rr)
 			}).Should(Succeed())
@@ -194,13 +197,12 @@ var _ = Describe("Autoscaler", func() {
 			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
 			defer deleteWorkload(workload)
 
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
+			scaler, _ := New(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
 
-			scaler.ResourceRecommender = &FakeUpScalingRecommender{}
-			rr := scaler.GetRecommendedResources(nil)
+			scaler.recommenders[0] = &FakeUpScalingRecommender{}
 
-			workloadState := scaler.WorkloadStates[workload.Name]
+			workloadState := scaler.workloadStates[workload.Name]
 			oldRes := workloadState.Resources
 
 			// verify IsAutoScalingEnabled
@@ -218,10 +220,11 @@ var _ = Describe("Autoscaler", func() {
 			workloadState.AutoScalingConfig.AutoSetResources.Enable = true
 			workloadState.AutoScalingConfig.AutoSetResources.TargetResource = "tflops"
 			scaler.ProcessWorkloads(ctx)
+			rr := scaler.workloadStates[workload.Name].Recommendation
 			Eventually(func(g Gomega) {
 				tflopsRequest, tflopsLimit, vramRequest, vramLimit := parseResourceAnnotations(getWorkers(workload)[0])
-				Expect(tflopsRequest.Value()).To(Equal(int64(rr.TargetTflops)))
-				Expect(tflopsLimit.Value()).To(Equal(int64(rr.TargetTflops * 2)))
+				Expect(tflopsRequest.Value()).To(Equal(rr.TargetTflops.Value()))
+				Expect(tflopsLimit.Value()).To(Equal(rr.TargetTflops.Value() * 2))
 				Expect(vramRequest.Equal(oldRes.Requests.Vram)).To(BeTrue())
 				Expect(vramLimit.Equal(oldRes.Limits.Vram)).To(BeTrue())
 			}).Should(Succeed())
@@ -236,11 +239,11 @@ var _ = Describe("Autoscaler", func() {
 			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
 			defer deleteWorkload(workload)
 
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
+			scaler, _ := New(k8sClient, allocator)
 			scaler.LoadWorkloads(ctx)
-			scaler.ResourceRecommender = &FakeQuotaExceededRecommender{}
-			rr := scaler.GetRecommendedResources(nil)
-			err := scaler.updateWorkerResourcesIfNeeded(ctx, scaler.WorkloadStates[workload.Name], getWorkers(workload)[0], rr)
+			scaler.recommenders[0] = &FakeQuotaExceededRecommender{}
+			scaler.ProcessWorkloads(ctx)
+			err := scaler.updateWorkerResourcesIfNeeded(ctx, scaler.workloadStates[workload.Name], getWorkers(workload)[0])
 			Expect(err.Error()).To(ContainSubstring("failed to adjust allocation: scaling quota exceeded"))
 		})
 	})
@@ -326,24 +329,24 @@ func getWorkers(workload *tfv1.TensorFusionWorkload) []*corev1.Pod {
 type FakeAllocator struct{}
 
 type FakeMetricsProvider struct {
-	Metrics []*WorkerMetrics
+	Metrics []*metrics.WorkerUsage
 }
 
-func (f *FakeMetricsProvider) GetWorkersMetrics() ([]*WorkerMetrics, error) {
+func (f *FakeMetricsProvider) GetWorkersMetrics() ([]*metrics.WorkerUsage, error) {
 	return f.Metrics, nil
 }
 
-func (f *FakeMetricsProvider) GetHistoryMetrics() ([]*WorkerMetrics, error) {
-	metrics := []*WorkerMetrics{}
+func (f *FakeMetricsProvider) GetHistoryMetrics() ([]*metrics.WorkerUsage, error) {
+	sample := []*metrics.WorkerUsage{}
 	startTime := time.Now().Add(-8 * 24 * time.Hour)
 	for day := 0; day < 8; day++ {
 		for hour := 0; hour < 1; hour++ {
 			for minute := 0; minute < 60; minute++ {
 				// idx := day*24 + hour
-				metrics = append(metrics, &WorkerMetrics{
+				sample = append(sample, &metrics.WorkerUsage{
 					WorkloadName: "workload-0",
 					WorkerName:   fmt.Sprintf("worker-%d", 1),
-					TflopsUsage:  ResourceAmount(100.0),
+					TflopsUsage:  100.0,
 					VramUsage:    1 * 1000 * 1000 * 1000,
 					Timestamp:    startTime.Add(time.Duration(day*24+hour)*time.Hour + time.Duration(minute)*time.Minute),
 				})
@@ -351,32 +354,36 @@ func (f *FakeMetricsProvider) GetHistoryMetrics() ([]*WorkerMetrics, error) {
 		}
 	}
 
-	return metrics, nil
+	return sample, nil
 }
 
-type FakeUpScalingRecommender struct{}
+type FakeUpScalingRecommender struct {
+	recommender.Interface
+}
 
-func (f *FakeUpScalingRecommender) GetRecommendedResources(_ *WorkloadState) *RecommendedResources {
-	return &RecommendedResources{
-		TargetTflops:     110,
-		LowerBoundTflops: 100,
-		UpperBoundTflops: 120,
-		TargetVram:       110 * 1000 * 1000 * 1000,
-		LowerBoundVram:   100 * 1000 * 1000 * 1000,
-		UpperBoundVram:   120 * 1000 * 1000 * 1000,
+func (f *FakeUpScalingRecommender) Recommend(w *autoscaling.WorkloadState) {
+	w.Recommendation = autoscaling.RecommendedResources{
+		TargetTflops:     resource.MustParse("110"),
+		LowerBoundTflops: resource.MustParse("100"),
+		UpperBoundTflops: resource.MustParse("120"),
+		TargetVram:       resource.MustParse("110Gi"),
+		LowerBoundVram:   resource.MustParse("100Gi"),
+		UpperBoundVram:   resource.MustParse("120Gi"),
 	}
 }
 
-type FakeQuotaExceededRecommender struct{}
+type FakeQuotaExceededRecommender struct {
+	recommender.Interface
+}
 
-func (f *FakeQuotaExceededRecommender) GetRecommendedResources(_ *WorkloadState) *RecommendedResources {
-	return &RecommendedResources{
-		TargetTflops:     9999,
-		LowerBoundTflops: 9999,
-		UpperBoundTflops: 9999,
-		TargetVram:       9999 * 1000 * 1000 * 1000,
-		LowerBoundVram:   9999 * 1000 * 1000 * 1000,
-		UpperBoundVram:   9999 * 1000 * 1000 * 1000,
+func (f *FakeQuotaExceededRecommender) Recommend(w *autoscaling.WorkloadState) {
+	w.Recommendation = autoscaling.RecommendedResources{
+		TargetTflops:     resource.MustParse("9999"),
+		LowerBoundTflops: resource.MustParse("9999"),
+		UpperBoundTflops: resource.MustParse("9999"),
+		TargetVram:       resource.MustParse("999Gi"),
+		LowerBoundVram:   resource.MustParse("999Gi"),
+		UpperBoundVram:   resource.MustParse("999Gi"),
 	}
 }
 
@@ -430,13 +437,13 @@ func cleanupWorkload(key client.ObjectKey) {
 	}).Should(Succeed())
 }
 
-func assertWorkerAnnotations(worker *corev1.Pod, rr *RecommendedResources) {
+func assertWorkerAnnotations(worker *corev1.Pod, rr autoscaling.RecommendedResources) {
 	GinkgoHelper()
 	tflopsRequest, tflopsLimit, vramRequest, vramLimit := parseResourceAnnotations(worker)
-	Expect(tflopsRequest.Value()).To(Equal(int64(rr.TargetTflops)))
-	Expect(tflopsLimit.Value()).To(Equal(int64(rr.TargetTflops * 2)))
-	Expect(vramRequest.Value()).To(Equal(int64(rr.TargetVram)))
-	Expect(vramLimit.Value()).To(Equal(int64(rr.TargetVram * 2)))
+	Expect(tflopsRequest.Value()).To(Equal(rr.TargetTflops.Value()))
+	Expect(tflopsLimit.Value()).To(Equal(rr.TargetTflops.Value() * 2))
+	Expect(vramRequest.Value()).To(Equal(rr.TargetVram.Value()))
+	Expect(vramLimit.Value()).To(Equal(rr.TargetVram.Value() * 2))
 }
 
 func parseResourceAnnotations(worker *corev1.Pod) (tflopsRequest, tflopsLimit, vramRequest, vramLimit resource.Quantity) {

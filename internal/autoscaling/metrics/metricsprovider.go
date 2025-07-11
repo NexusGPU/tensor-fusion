@@ -1,4 +1,4 @@
-package autoscaler
+package metrics
 
 import (
 	"time"
@@ -7,20 +7,20 @@ import (
 	"gorm.io/gorm"
 )
 
-type WorkerMetrics struct {
+type WorkerUsage struct {
 	WorkloadName string
 	WorkerName   string
-	TflopsUsage  ResourceAmount
-	VramUsage    ResourceAmount
+	TflopsUsage  float64
+	VramUsage    uint64
 	Timestamp    time.Time
 }
 
-type MetricsProvider interface {
-	GetWorkersMetrics() ([]*WorkerMetrics, error)
-	GetHistoryMetrics() ([]*WorkerMetrics, error)
+type Provider interface {
+	GetWorkersMetrics() ([]*WorkerUsage, error)
+	GetHistoryMetrics() ([]*WorkerUsage, error)
 }
 
-func NewMetricsProvider(db *gorm.DB) MetricsProvider {
+func NewProvider(db *gorm.DB) Provider {
 	return &greptimeDBProvider{db: db}
 }
 
@@ -31,7 +31,7 @@ type greptimeDBProvider struct {
 	// historyResolution time.Duration
 }
 
-func (g *greptimeDBProvider) GetWorkersMetrics() ([]*WorkerMetrics, error) {
+func (g *greptimeDBProvider) GetWorkersMetrics() ([]*WorkerUsage, error) {
 	data := []*metrics.HypervisorWorkerUsageMetrics{}
 	now := time.Now()
 	// actual meaning:  max(avg[10s])[1m]
@@ -48,13 +48,13 @@ func (g *greptimeDBProvider) GetWorkersMetrics() ([]*WorkerMetrics, error) {
 
 	g.lastQueryTime = now
 
-	workersMetrics := make([]*WorkerMetrics, 0, len(data))
+	workersMetrics := make([]*WorkerUsage, 0, len(data))
 	for _, row := range data {
-		workersMetrics = append(workersMetrics, &WorkerMetrics{
+		workersMetrics = append(workersMetrics, &WorkerUsage{
 			WorkloadName: row.WorkloadName,
 			WorkerName:   row.WorkerName,
-			TflopsUsage:  resourceAmountFromFloat(row.ComputeTflops),
-			VramUsage:    ResourceAmount(row.VRAMBytes),
+			TflopsUsage:  row.ComputeTflops,
+			VramUsage:    row.VRAMBytes,
 			Timestamp:    row.Timestamp,
 		})
 	}
@@ -67,7 +67,7 @@ type hypervisorWorkerUsageMetrics struct {
 	TimeWindow time.Time `gorm:"column:time_window;index:,class:TIME"`
 }
 
-func (g *greptimeDBProvider) GetHistoryMetrics() ([]*WorkerMetrics, error) {
+func (g *greptimeDBProvider) GetHistoryMetrics() ([]*WorkerUsage, error) {
 	data := []*hypervisorWorkerUsageMetrics{}
 	now := time.Now()
 	// TODO: replace using iteration for handling large datasets efficiently
@@ -85,13 +85,13 @@ func (g *greptimeDBProvider) GetHistoryMetrics() ([]*WorkerMetrics, error) {
 
 	g.lastQueryTime = now
 
-	workersMetrics := make([]*WorkerMetrics, 0, len(data))
+	workersMetrics := make([]*WorkerUsage, 0, len(data))
 	for _, row := range data {
-		workersMetrics = append(workersMetrics, &WorkerMetrics{
+		workersMetrics = append(workersMetrics, &WorkerUsage{
 			WorkloadName: row.WorkloadName,
 			WorkerName:   row.WorkerName,
-			TflopsUsage:  resourceAmountFromFloat(row.ComputeTflops),
-			VramUsage:    ResourceAmount(row.VRAMBytes),
+			TflopsUsage:  row.ComputeTflops,
+			VramUsage:    row.VRAMBytes,
 			Timestamp:    row.TimeWindow,
 		})
 	}

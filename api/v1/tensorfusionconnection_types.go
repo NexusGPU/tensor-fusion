@@ -21,6 +21,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+type ResourceName string
+
+const (
+	ResourceTflops ResourceName = "tflops"
+	ResourceVram   ResourceName = "vram"
+)
+
 type Resource struct {
 	Tflops resource.Quantity `json:"tflops"`
 	Vram   resource.Quantity `json:"vram"`

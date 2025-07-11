@@ -1,4 +1,4 @@
-package autoscaler
+package metrics
 
 import (
 	"regexp"
@@ -46,8 +46,8 @@ var _ = Describe("MetricsProvider", func() {
 			Expect(got).To(HaveLen(2))
 			Expect(got[0].WorkloadName).To(Equal(fakeMetrics[0].WorkloadName))
 			Expect(got[0].WorkerName).To(Equal(fakeMetrics[0].WorkerName))
-			Expect(got[0].VramUsage).To(Equal(ResourceAmount(fakeMetrics[0].VRAMBytes)))
-			Expect(got[0].TflopsUsage).To(Equal(resourceAmountFromFloat(fakeMetrics[0].ComputeTflops)))
+			Expect(got[0].VramUsage).To(Equal(fakeMetrics[0].VRAMBytes))
+			Expect(got[0].TflopsUsage).To(Equal(fakeMetrics[0].ComputeTflops))
 			Expect(got[0].Timestamp).To(Equal(fakeMetrics[0].Timestamp))
 		})
 	})
@@ -91,8 +91,8 @@ var _ = Describe("MetricsProvider", func() {
 			Expect(got).To(HaveLen(2))
 			Expect(got[0].WorkloadName).To(Equal(fakeMetrics[0].WorkloadName))
 			Expect(got[0].WorkerName).To(Equal(fakeMetrics[0].WorkerName))
-			Expect(got[0].VramUsage).To(Equal(ResourceAmount(fakeMetrics[0].VRAMBytes)))
-			Expect(got[0].TflopsUsage).To(Equal(resourceAmountFromFloat(fakeMetrics[0].ComputeTflops)))
+			Expect(got[0].VramUsage).To(Equal(fakeMetrics[0].VRAMBytes))
+			Expect(got[0].TflopsUsage).To(Equal(fakeMetrics[0].ComputeTflops))
 			Expect(got[0].Timestamp).To(Equal(fakeMetrics[0].TimeWindow))
 		})
 	})
