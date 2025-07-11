@@ -360,7 +360,6 @@ func (s *GpuAllocator) Dealloc(
 		}
 
 		removeRunningApp(s.ctx, storeGPU, workloadNameNamespace)
-
 		s.markGPUDirty(gpuNameNs)
 	}
 

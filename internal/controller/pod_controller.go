@@ -29,7 +29,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	v1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
-	"github.com/lithammer/shortuuid/v4"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -253,18 +252,6 @@ func findConnectionNameNamespace(pod *corev1.Pod) client.ObjectKey {
 func (r *PodReconciler) handlePodGPUCleanup(ctx context.Context, pod *corev1.Pod) (bool, error) {
 	log := log.FromContext(ctx)
 	log.Info("Processing pod with GPU resource cleanup finalizer", "pod", pod.Name)
-
-	pod.Annotations[constants.GpuReleasedAnnotation] = shortuuid.New()
-
-	// Update the annotation of the Pod to mark that GPU cleanup has been successfully processed.
-	// This is a key part of ensuring idempotency for the handlePodGPUCleanup function.
-	// If this function is called again for the same Pod instance (e.g., due to the client cache
-	// not yet reflecting the finalizer's removal), Then this r.Update pod will fail.
-	// Will not cause duplicate releases
-	if err := r.Update(ctx, pod); err != nil {
-		log.Error(err, "Failed to mark that GPU cleanup of pod")
-		return false, err
-	}
 
 	// read the GPU names from the pod annotations
 	gpuNamesStr, ok := pod.Annotations[constants.GPUDeviceIDsAnnotation]

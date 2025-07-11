@@ -86,8 +86,6 @@ const (
 	AutoScaleRequestsAnnotation = Domain + "/auto-requests"
 	AutoScaleReplicasAnnotation = Domain + "/auto-replicas"
 
-	GpuReleasedAnnotation = Domain + "/gpu-released"
-
 	TensorFusionPodCounterKeyAnnotation = Domain + "/pod-counter-key"
 	TensorFusionPodCountAnnotation      = Domain + "/tf-pod-count"
 	TensorFusionWorkerSuffix            = "-tf"
