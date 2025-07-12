@@ -210,7 +210,7 @@ func (r *TensorFusionClusterReconciler) reconcileCloudVendorConnection(ctx conte
 	cfgHash := utils.GetObjectHash(tfc.Spec.ComputingVendor)
 	if tfc.Status.CloudVendorConfigHash == "" || tfc.Status.CloudVendorConfigHash != cfgHash {
 		// test the cloud vendor connection only when config changed
-		provider, err := cloudprovider.GetProvider(*tfc.Spec.ComputingVendor)
+		provider, err := cloudprovider.GetProvider(*tfc.Spec.ComputingVendor, r.Client, nil)
 		if err != nil {
 			return false, err
 		}

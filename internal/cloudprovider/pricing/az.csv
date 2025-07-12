@@ -1,0 +1,46 @@
+Name,API Name,Instance Memory,GPUs,Linux On Demand cost,Linux Reserved cost,Linux Spot cost,Windows On Demand cost,Windows Savings Plan,Windows Reserved cost,Windows Spot cost,GPU memory(per gpu)
+Standard ND40rs v2,ND40rs v2,672 GiB,8X V100 (NVlink),$22.0320 hourly,$10.7957 hourly,$3.9658 hourly,$23.8720 hourly,$20.1794 hourly,$12.6357 hourly,$4.2970 hourly,32GB
+ND96isr H200 v5,ND96isr H200 v5,1900 GiB,8x H200,unavailable,unavailable,unavailable,unavailable,unavailable,unavailable,unavailable,141GB
+ND96isr H100 v5,ND96isr H100 v5,1900 GiB,8x H100,$98.3200 hourly,$62.9248 hourly,$32.2195 hourly,$102.7360 hourly,unavailable,$67.3408 hourly,$33.6666 hourly,80GB
+ND96amsr A100 v4,ND96amsr A100 v4,1923 GiB,8x A100 (NVlink),$32.7700 hourly,$20.9728 hourly,$8.5202 hourly,$37.1860 hourly,$32.6605 hourly,$25.3888 hourly,$9.6684 hourly,80GB
+ND96asr A100 v4,ND96asr A100 v4,900 GiB,8x A100 (NVlink),$27.1970 hourly,$18.8283 hourly,$5.9833 hourly,$31.6130 hourly,$27.0357 hourly,$23.2443 hourly,$6.9549 hourly,40GB
+Standard NC24rs v3,NC24rs v3,448 GiB,4X V100,$13.4600 hourly,unavailable,$2.2801 hourly,$14.5600 hourly,$10.9702 hourly,unavailable,$2.4665 hourly,16GB
+Standard NC24s v3,NC24s v3,448 GiB,4X V100,$12.2400 hourly,unavailable,$2.0735 hourly,$13.3440 hourly,$10.0759 hourly,unavailable,$2.2605 hourly,16GB
+NC64as T4 v3,NC64as T4 v3,448 GiB,4X T4,$4.3520 hourly,$2.5590 hourly,$1.3213 hourly,$7.2960 hourly,$5.8868 hourly,$5.5030 hourly,$2.2340 hourly,16GB
+Standard NC24rs v2,NC24rs v2,448 GiB,4X P100,$9.1080 hourly,unavailable,$1.4026 hourly,$10.9710 hourly,$8.6855 hourly,unavailable,$1.6895 hourly,16GB
+Standard NC24s v2,NC24s v2,448 GiB,4X P100,$8.2800 hourly,unavailable,$1.2751 hourly,$9.9720 hourly,$7.9963 hourly,unavailable,$1.5357 hourly,16GB
+Standard ND24rs,ND24rs,448 GiB,4X P40,$9.1080 hourly,$5.8015 hourly,$1.4026 hourly,$10.9710 hourly,$8.6855 hourly,$6.9055 hourly,$1.6895 hourly,24GB
+Standard ND24s,ND24s,448 GiB,4X P40,$8.2800 hourly,$5.2742 hourly,$1.2751 hourly,$9.9720 hourly,$7.9963 hourly,$6.3782 hourly,$1.5357 hourly,24GB
+Standard NV24,NV24,224 GiB,4X M60,$4.5600 hourly,unavailable,$0.7022 hourly,$5.7610 hourly,$4.8997 hourly,unavailable,$0.8872 hourly,8GB
+Standard NV48s v3,NV48s v3,448 GiB,4X M60,$4.5600 hourly,$2.9047 hourly,$0.7296 hourly,$6.7680 hourly,$5.5487 hourly,$5.1127 hourly,$1.0829 hourly,8GB
+Standard NC24,NC24,224 GiB,4X K80,$3.6000 hourly,unavailable,$0.5544 hourly,$4.3360 hourly,$3.7410 hourly,unavailable,$0.6677 hourly,12GB
+Standard NC24r,NC24r,224 GiB,4X K80,$3.9600 hourly,unavailable,$0.6098 hourly,$4.7700 hourly,$4.0047 hourly,unavailable,$0.7346 hourly,12GB
+Standard NC96ads A100 v4,NC96ads A100 v4,880 GiB,4X A100,$14.6920 hourly,$9.6041 hourly,$4.5810 hourly,$19.1080 hourly,$16.6456 hourly,$14.0201 hourly,$5.9693 hourly,40GB
+Standard NC12s v3,NC12s v3,224 GiB,2X V100,$6.1200 hourly,unavailable,$1.0367 hourly,$6.6720 hourly,$5.0380 hourly,unavailable,$1.1302 hourly,16GB
+Standard NC12s v2,NC12s v2,224 GiB,2X P100,$4.1400 hourly,unavailable,$0.6376 hourly,$4.9860 hourly,$3.9981 hourly,unavailable,$0.7678 hourly,16GB
+Standard ND12s,ND12s,224 GiB,2X P40,$4.1400 hourly,$2.6371 hourly,$0.6376 hourly,$4.9860 hourly,$3.9981 hourly,$3.1891 hourly,$0.7678 hourly,24GB
+Standard NV12,NV12,112 GiB,2X M60,$2.2800 hourly,unavailable,$0.3511 hourly,$2.8800 hourly,$2.4499 hourly,unavailable,$0.4435 hourly,8GB
+Standard NV24s v3,NV24s v3,224 GiB,2X M60,$2.2800 hourly,$1.4524 hourly,$0.3648 hourly,$3.3840 hourly,$2.7743 hourly,$2.5564 hourly,$0.5414 hourly,8GB
+Standard NC12,NC12,112 GiB,2X K80,$1.8000 hourly,unavailable,$0.2772 hourly,$2.1680 hourly,$1.8705 hourly,unavailable,$0.3339 hourly,12GB
+NC80adis H100 v5,NC80adis H100 v5,640 GiB,2X H100,$13.9600 hourly,$10.4700 hourly,$13.9600 hourly,$17.6400 hourly,$15.2933 hourly,$14.1500 hourly,$17.6400 hourly,80GB
+Standard NC48ads A100 v4,NC48ads A100 v4,440 GiB,2X A100,$7.3460 hourly,$4.8021 hourly,$2.2905 hourly,$9.5540 hourly,$8.3228 hourly,$7.0101 hourly,$2.9847 hourly,40GB
+Standard NC32ads A10 v4,NC32ads A10 v4,440 GiB,2X A10,unavailable,unavailable,unavailable,unavailable,unavailable,unavailable,unavailable,24GB
+Standard NV72ads A10 v5,NV72ads A10 v5,880 GiB,2X A10,$6.5200 hourly,$4.1728 hourly,$1.1091 hourly,$9.8320 hourly,$8.7393 hourly,$7.4848 hourly,$1.6724 hourly,24GB
+Standard NC6s v3,NC6s v3,112 GiB,1X V100,$3.0600 hourly,unavailable,$0.5184 hourly,$3.3360 hourly,$2.5190 hourly,unavailable,$0.5651 hourly,16GB
+NC16as T4 v3,NC16as T4 v3,110 GiB,1X T4,$1.2040 hourly,$0.7080 hourly,$0.3655 hourly,$1.9400 hourly,$1.5501 hourly,$1.4440 hourly,$0.5940 hourly,16GB
+NC4as T4 v3,NC4as T4 v3,28 GiB,1X T4,$0.5260 hourly,$0.3092 hourly,$0.1597 hourly,$0.7100 hourly,$0.5397 hourly,$0.4932 hourly,$0.2174 hourly,16GB
+NC8as T4 v3,NC8as T4 v3,56 GiB,1X T4,$0.7520 hourly,$0.4421 hourly,$0.2282 hourly,$1.1200 hourly,$0.8765 hourly,$0.8101 hourly,$0.3429 hourly,16GB
+Standard NC6s v2,NC6s v2,112 GiB,1X P100,$2.0700 hourly,unavailable,$0.3188 hourly,$2.4930 hourly,$1.9991 hourly,unavailable,$0.3839 hourly,16GB
+Standard ND6s,ND6s,112 GiB,1X P40,$2.0700 hourly,$1.3186 hourly,$0.3188 hourly,$2.4930 hourly,$1.9991 hourly,$1.5946 hourly,$0.3839 hourly,24GB
+Standard NV32as v4,NV32as v4,112 GiB,1x MI25 (16GB VRAM),unavailable,unavailable,unavailable,$3.3360 hourly,$3.0236 hourly,$2.6649 hourly,$0.5137 hourly,16GB
+Standard NV12s v3,NV12s v3,112 GiB,1X M60,$1.1400 hourly,$0.7261 hourly,$0.1824 hourly,$1.6920 hourly,$1.3872 hourly,$1.2781 hourly,$0.2707 hourly,8GB
+Standard NV6,NV6,56 GiB,1X M60,$1.1400 hourly,unavailable,$0.1756 hourly,$1.4400 hourly,$1.2249 hourly,unavailable,$0.2218 hourly,8GB
+Standard NC6,NC6,56 GiB,1X K80,$0.9000 hourly,unavailable,$0.1386 hourly,$1.0840 hourly,$0.9353 hourly,unavailable,$0.1669 hourly,12GB
+NC40ads H100 v5,NC40ads H100 v5,320 GiB,1X H100,$6.9800 hourly,$5.2350 hourly,$6.9800 hourly,$8.8200 hourly,$7.6467 hourly,$7.0750 hourly,$8.8200 hourly,80GB
+NCC40ads H100 v5,NCC40ads H100 v5,320 GiB,1X H100,unavailable,unavailable,unavailable,unavailable,unavailable,unavailable,unavailable,80GB
+Standard NC24ads A100 v4,NC24ads A100 v4,220 GiB,1X A100,$3.6730 hourly,$2.4010 hourly,$1.1456 hourly,$4.7770 hourly,$4.1614 hourly,$3.5050 hourly,$1.4923 hourly,40GB
+Standard NC16ads A10 v4,NC16ads A10 v4,220 GiB,1X A10,unavailable,unavailable,unavailable,unavailable,unavailable,unavailable,unavailable,24GB
+Standard NV36adms A10 v5,NV36adms A10 v5,880 GiB,1X A10,$4.5200 hourly,$2.8928 hourly,$0.7689 hourly,$6.1760 hourly,$5.4184 hourly,$4.5488 hourly,$1.0505 hourly,24GB
+Standard NV36ads A10 v5,NV36ads A10 v5,440 GiB,1X A10,$3.2000 hourly,$2.0479 hourly,$0.5443 hourly,$4.8560 hourly,$4.3197 hourly,$3.7039 hourly,$0.8260 hourly,24GB
+Standard NV4as v4,NV4as v4,14 GiB,1/8th MI25 (2GB VRAM),unavailable,unavailable,unavailable,$0.4170 hourly,$0.3780 hourly,$0.3331 hourly,$0.0642 hourly,2GB
+Standard NV6ads A10 v5,NV6adsv5,55 GiB,1/6X A10,$0.4540 hourly,$0.2905 hourly,$0.0772 hourly,$0.7300 hourly,$0.6539 hourly,$0.5665 hourly,$0.1242 hourly,4GB

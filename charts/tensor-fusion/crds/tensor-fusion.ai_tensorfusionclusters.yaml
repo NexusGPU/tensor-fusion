@@ -119,6 +119,7 @@ spec:
                     - nvidia
                     - tencent
                     - runpod
+                    - karpenter
                     - mock
                     type: string
                 type: object

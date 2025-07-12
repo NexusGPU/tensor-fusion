@@ -1,0 +1,76 @@
+Name,API Name,Instance Memory,GPUs,GPU model,GPU memory,Arch,Network Performance,On Demand,Linux Reserved cost,Linux Spot Minimum cost,Windows On Demand cost,Windows Reserved cost
+TRN1 32xlarge,trn1.32xlarge,512 GiB,16,AWS Inferentia,512 GiB,x86_64,8x 100 Gigabit,$21.5000 hourly,$13.2289 hourly,unavailable,unavailable,unavailable
+INF1 24xlarge,inf1.24xlarge,192 GiB,16,AWS Inferentia,0 GiB,x86_64,100 Gigabit,$4.7210 hourly,$2.9740 hourly,unavailable,unavailable,unavailable
+TRN2 48xlarge,trn2.48xlarge,2048 GiB,16,AWS Trainium2,96 GiB,x86_64,3200 Gigabit,unavailable,unavailable,unavailable,unavailable,unavailable
+TRN1N 32xlarge,trn1n.32xlarge,512 GiB,16,AWS Inferentia,512 GiB,x86_64,16x 100 Gigabit,$24.7800 hourly,$15.2471 hourly,unavailable,unavailable,unavailable
+INF2 48xlarge,inf2.48xlarge,768 GiB,12,AWS Inferentia2,384 GiB,x86_64,100 Gigabit,$12.9813 hourly,$8.1782 hourly,unavailable,unavailable,unavailable
+P6-B200 High Performance and Machine Learning GPU 48xlarge,p6-b200.48xlarge,2048 GiB,8,NVIDIA B200,1440 GiB,x86_64,3200 Gigabit,unavailable,unavailable,unavailable,unavailable,unavailable
+G5 Graphics and Machine Learning GPU 48xlarge,g5.48xlarge,768 GiB,8,NVIDIA A10G,192 GiB,x86_64,100 Gigabit,$16.2880 hourly,$10.2614 hourly,unavailable,$25.1200 hourly,$19.0934 hourly
+P4D Highest Performance GPU 24xlarge,p4d.24xlarge,1152 GiB,8,NVIDIA A100,320 GiB,x86_64,4x 100 Gigabit,unavailable,$13.9211 hourly,unavailable,unavailable,unavailable
+P5 48xlarge,p5.48xlarge,2048 GiB,8,NVIDIA H100,640 GiB,x86_64,3200 Gigabit,unavailable,unavailable,unavailable,unavailable,unavailable
+P3 High Performance GPU 16xlarge,p3.16xlarge,488 GiB,8,NVIDIA Tesla V100,128 GiB,x86_64,25 Gigabit,$24.4800 hourly,unavailable,unavailable,$27.4240 hourly,unavailable
+G4DN Metal,g4dn.metal,384 GiB,8,NVIDIA T4 Tensor Core,128 GiB,x86_64,100 Gigabit,$7.8240 hourly,$4.9290 hourly,unavailable,$12.2400 hourly,$9.3450 hourly
+P5e High Performance Computing GPU 48xlarge,p5e.48xlarge,2048 GiB,8,NVIDIA H200,1128 GiB,x86_64,3200 Gigabit,unavailable,unavailable,unavailable,unavailable,unavailable
+P5en High Performance Computing GPU 48xlarge,p5en.48xlarge,2048 GiB,8,NVIDIA H200,1128 GiB,x86_64,3200 Gigabit,$63.2960 hourly,unavailable,unavailable,unavailable,unavailable
+G6 Graphics and Machine Learning GPU 48xlarge,g6.48xlarge,768 GiB,8,NVIDIA L4,192 GiB,x86_64,100 Gigabit,$13.3504 hourly,$8.6911 hourly,unavailable,$22.1824 hourly,$17.5231 hourly
+G6e Graphics and Machine Learning GPU 48xlarge,g6e.48xlarge,1536 GiB,8,NVIDIA L40S,384 GiB,x86_64,400 Gigabit,$30.1312 hourly,$18.9826 hourly,unavailable,$38.9632 hourly,$27.8146 hourly
+P2 General Purpose GPU 16xlarge,p2.16xlarge,732 GiB,8,NVIDIA Tesla K80,192 GiB,x86_64,20 Gigabit,$14.4000 hourly,unavailable,unavailable,$17.3440 hourly,unavailable
+P3DN 24xlarge,p3dn.24xlarge,768 GiB,8,NVIDIA Tesla V100,256 GiB,x86_64,100 Gigabit,$31.2120 hourly,$19.2150 hourly,unavailable,$35.6280 hourly,$23.6310 hourly
+P4DE 24xlarge,p4de.24xlarge,1152 GiB,8,NVIDIA A100,640 GiB,x86_64,4x 100 Gigabit,$27.4471 hourly,$17.4014 hourly,unavailable,unavailable,unavailable
+INF2 24xlarge,inf2.24xlarge,384 GiB,6,AWS Inferentia2,192 GiB,x86_64,50 Gigabit,$6.4906 hourly,$4.0891 hourly,unavailable,unavailable,unavailable
+G6e Graphics and Machine Learning GPU 12xlarge,g6e.12xlarge,384 GiB,4,NVIDIA L40S,192 GiB,x86_64,100 Gigabit,$10.4926 hourly,$6.6104 hourly,unavailable,$12.7006 hourly,$8.8184 hourly
+G5 Graphics and Machine Learning GPU 12xlarge,g5.12xlarge,192 GiB,4,NVIDIA A10G,96 GiB,x86_64,40 Gigabit,$5.6720 hourly,$3.5734 hourly,unavailable,$7.8800 hourly,$5.7814 hourly
+P2 General Purpose GPU Eight Extra Large,p2.8xlarge,488 GiB,4,NVIDIA Tesla K80,96 GiB,x86_64,10 Gigabit,$7.2000 hourly,unavailable,unavailable,$8.6720 hourly,unavailable
+G4DN 12xlarge,g4dn.12xlarge,192 GiB,4,NVIDIA T4 Tensor Core,64 GiB,x86_64,50 Gigabit,$3.9120 hourly,$2.4650 hourly,unavailable,$6.1200 hourly,$4.6730 hourly
+INF1 6xlarge,inf1.6xlarge,48 GiB,4,AWS Inferentia,0 GiB,x86_64,25 Gigabit,$1.1800 hourly,$0.7440 hourly,unavailable,unavailable,unavailable
+G6 Graphics and Machine Learning GPU 12xlarge,g6.12xlarge,192 GiB,4,NVIDIA L4,96 GiB,x86_64,40 Gigabit,$4.6016 hourly,$2.9956 hourly,unavailable,$6.8096 hourly,$5.2036 hourly
+G3 Graphics GPU 16xlarge,g3.16xlarge,488 GiB,4,NVIDIA Tesla M60,32 GiB,x86_64,20 Gigabit,$4.5600 hourly,unavailable,unavailable,$7.5040 hourly,unavailable
+G6e Graphics and Machine Learning GPU 24xlarge,g6e.24xlarge,768 GiB,4,NVIDIA L40S,192 GiB,x86_64,200 Gigabit,$15.0656 hourly,$9.4913 hourly,unavailable,$19.4816 hourly,$13.9073 hourly
+G5 Graphics and Machine Learning GPU 24xlarge,g5.24xlarge,384 GiB,4,NVIDIA A10G,96 GiB,x86_64,50 Gigabit,$8.1440 hourly,$5.1307 hourly,unavailable,$12.5600 hourly,$9.5467 hourly
+G6 Graphics and Machine Learning GPU 24xlarge,g6.24xlarge,384 GiB,4,NVIDIA L4,96 GiB,x86_64,50 Gigabit,$6.6752 hourly,$4.3456 hourly,unavailable,$11.0912 hourly,$8.7616 hourly
+G4AD 16xlarge,g4ad.16xlarge,256 GiB,4,AMD Radeon Pro V520,32 GiB,x86_64,25 Gigabit,$3.4680 hourly,$2.1848 hourly,unavailable,$6.4120 hourly,$5.1288 hourly
+P3 High Performance GPU Eight Extra Large,p3.8xlarge,244 GiB,4,NVIDIA Tesla V100,64 GiB,x86_64,10 Gigabit,$12.2400 hourly,unavailable,unavailable,$13.7120 hourly,unavailable
+G2 Eight Extra Large,g2.8xlarge,60 GiB,4,NVIDIA GRID K520,16 GiB,x86_64,High,$2.6000 hourly,unavailable,unavailable,$2.8780 hourly,unavailable
+G3 Graphics GPU Eight Extra Large,g3.8xlarge,244 GiB,2,NVIDIA Tesla M60,16 GiB,x86_64,10 Gigabit,$2.2800 hourly,unavailable,unavailable,$3.7520 hourly,unavailable
+G4AD Eight Extra Large,g4ad.8xlarge,128 GiB,2,AMD Radeon Pro V520,16 GiB,x86_64,15 Gigabit,$1.7340 hourly,$1.0924 hourly,unavailable,$3.2060 hourly,$2.5644 hourly
+G5G Metal,g5g.metal,128 GiB,2,NVIDIA T4G Tensor Core,32 GiB,arm64,25 Gigabit,$2.7440 hourly,$1.7287 hourly,unavailable,unavailable,unavailable
+G5G 16xlarge,g5g.16xlarge,128 GiB,2,NVIDIA T4G Tensor Core,32 GiB,arm64,25 Gigabit,$2.7440 hourly,$1.7287 hourly,unavailable,unavailable,unavailable
+G6e Graphics and Machine Learning GPU Double Extra Large,g6e.2xlarge,64 GiB,1,NVIDIA L40S,48 GiB,x86_64,Up to 20 Gigabit,$2.2421 hourly,$1.4125 hourly,unavailable,$2.6101 hourly,$1.7805 hourly
+G5 Graphics and Machine Learning GPU Eight Extra Large,g5.8xlarge,128 GiB,1,NVIDIA A10G,24 GiB,x86_64,25 Gigabit,$2.4480 hourly,$1.5422 hourly,unavailable,$3.9200 hourly,$3.0142 hourly
+INF1 Double Extra Large,inf1.2xlarge,16 GiB,1,AWS Inferentia,0 GiB,x86_64,Up to 25 Gigabit,$0.3620 hourly,$0.2280 hourly,unavailable,unavailable,unavailable
+INF1 Extra Large,inf1.xlarge,8 GiB,1,AWS Inferentia,0 GiB,x86_64,Up to 25 Gigabit,$0.2280 hourly,$0.1440 hourly,unavailable,unavailable,unavailable
+G6 Graphics and Machine Learning GPU Extra Large,g6.xlarge,16 GiB,1,NVIDIA L4,24 GiB,x86_64,Up to 10 Gigabit,$0.8048 hourly,$0.5239 hourly,unavailable,$0.9888 hourly,$0.7079 hourly
+G6e Graphics and Machine Learning GPU Eight Extra Large,g6e.8xlarge,256 GiB,1,NVIDIA L40S,48 GiB,x86_64,25 Gigabit,$4.5286 hourly,$2.8530 hourly,unavailable,$6.0006 hourly,$4.3250 hourly
+G6e Graphics and Machine Learning GPU Extra Large,g6e.xlarge,32 GiB,1,NVIDIA L40S,48 GiB,x86_64,Up to 20 Gigabit,$1.8610 hourly,$1.1724 hourly,unavailable,$2.0450 hourly,$1.3564 hourly
+G4DN Eight Extra Large,g4dn.8xlarge,128 GiB,1,NVIDIA T4 Tensor Core,16 GiB,x86_64,50 Gigabit,$2.1760 hourly,$1.3710 hourly,unavailable,$3.6480 hourly,$2.8430 hourly
+P3 High Performance GPU Double Extra Large,p3.2xlarge,61 GiB,1,NVIDIA Tesla V100,16 GiB,x86_64,Up to 10 Gigabit,$3.0600 hourly,unavailable,unavailable,$3.4280 hourly,unavailable
+G5 Graphics and Machine Learning GPU Quadruple Extra Large,g5.4xlarge,64 GiB,1,NVIDIA A10G,24 GiB,x86_64,Up to 25 Gigabit,$1.6240 hourly,$1.0231 hourly,unavailable,$2.3600 hourly,$1.7591 hourly
+G4DN Double Extra Large,g4dn.2xlarge,32 GiB,1,NVIDIA T4 Tensor Core,16 GiB,x86_64,Up to 25 Gigabit,$0.7520 hourly,$0.4740 hourly,unavailable,$1.1200 hourly,$0.8420 hourly
+G6 Graphics and Machine Learning GPU Quadruple Extra Large,g6.4xlarge,64 GiB,1,NVIDIA L4,24 GiB,x86_64,Up to 25 Gigabit,$1.3232 hourly,$0.8614 hourly,unavailable,$2.0592 hourly,$1.5974 hourly
+G6 Graphics and Machine Learning GPU Double Extra Large,g6.2xlarge,32 GiB,1,NVIDIA L4,24 GiB,x86_64,Up to 10 Gigabit,$0.9776 hourly,$0.6364 hourly,unavailable,$1.3456 hourly,$1.0044 hourly
+G4AD Extra Large,g4ad.xlarge,16 GiB,1,AMD Radeon Pro V520,8 GiB,x86_64,Up to 10 Gigabit,$0.3785 hourly,$0.2385 hourly,unavailable,$0.5625 hourly,$0.4225 hourly
+G6e Graphics and Machine Learning GPU Quadruple Extra Large,g6e.4xlarge,128 GiB,1,NVIDIA L40S,48 GiB,x86_64,20 Gigabit,$3.0042 hourly,$1.8927 hourly,unavailable,$3.7402 hourly,$2.6287 hourly
+G3S Extra Large,g3s.xlarge,30.5 GiB,1,NVIDIA Tesla M60,8 GiB,x86_64,10 Gigabit,$0.7500 hourly,unavailable,unavailable,$0.9340 hourly,unavailable
+G5 Graphics and Machine Learning GPU 16xlarge,g5.16xlarge,256 GiB,1,NVIDIA A10G,24 GiB,x86_64,25 Gigabit,$4.0960 hourly,$2.5805 hourly,unavailable,$7.0400 hourly,$5.5245 hourly
+Gr6 Graphics and Machine Learning GPU High RAM ratio Eight Extra Large,gr6.8xlarge,256 GiB,1,NVIDIA L4,24 GiB,x86_64,25 Gigabit,$2.4464 hourly,$1.5926 hourly,unavailable,$3.9184 hourly,$3.0646 hourly
+G4DN Extra Large,g4dn.xlarge,16 GiB,1,NVIDIA T4 Tensor Core,16 GiB,x86_64,Up to 25 Gigabit,$0.5260 hourly,$0.3310 hourly,unavailable,$0.7100 hourly,$0.5150 hourly
+G4DN 16xlarge,g4dn.16xlarge,256 GiB,1,NVIDIA T4 Tensor Core,16 GiB,x86_64,50 Gigabit,$4.3520 hourly,$2.7420 hourly,unavailable,$7.2960 hourly,$5.6860 hourly
+P2 General Purpose GPU Extra Large,p2.xlarge,61 GiB,1,NVIDIA Tesla K80,12 GiB,x86_64,High,$0.9000 hourly,unavailable,unavailable,$1.0840 hourly,unavailable
+G6 Graphics and Machine Learning GPU Eight Extra Large,g6.8xlarge,128 GiB,1,NVIDIA L4,24 GiB,x86_64,25 Gigabit,$2.0144 hourly,$1.3114 hourly,unavailable,$3.4864 hourly,$2.7834 hourly
+G4AD Double Extra Large,g4ad.2xlarge,32 GiB,1,AMD Radeon Pro V520,8 GiB,x86_64,Up to 10 Gigabit,$0.5412 hourly,$0.3409 hourly,unavailable,$0.9092 hourly,$0.7089 hourly
+G3 Graphics GPU Quadruple Extra Large,g3.4xlarge,122 GiB,1,NVIDIA Tesla M60,8 GiB,x86_64,Up to 10 Gigabit,$1.1400 hourly,unavailable,unavailable,$1.8760 hourly,unavailable
+G4DN Quadruple Extra Large,g4dn.4xlarge,64 GiB,1,NVIDIA T4 Tensor Core,16 GiB,x86_64,Up to 25 Gigabit,$1.2040 hourly,$0.7590 hourly,unavailable,$1.9400 hourly,$1.4950 hourly
+G6 Graphics and Machine Learning GPU 16xlarge,g6.16xlarge,256 GiB,1,NVIDIA L4,24 GiB,x86_64,25 Gigabit,$3.3968 hourly,$2.2113 hourly,unavailable,$6.3408 hourly,$5.1553 hourly
+INF2 Eight Extra Large,inf2.8xlarge,128 GiB,1,AWS Inferentia2,32 GiB,x86_64,Up to 25 Gigabit,$1.9679 hourly,$1.2397 hourly,unavailable,unavailable,unavailable
+G5 Graphics and Machine Learning GPU Double Extra Large,g5.2xlarge,32 GiB,1,NVIDIA A10G,24 GiB,x86_64,Up to 10 Gigabit,$1.2120 hourly,$0.7636 hourly,unavailable,$1.5800 hourly,$1.1316 hourly
+G6e Graphics and Machine Learning GPU 16xlarge,g6e.16xlarge,512 GiB,1,NVIDIA L40S,48 GiB,x86_64,35 Gigabit,$7.5772 hourly,$4.7736 hourly,unavailable,$10.5212 hourly,$7.7176 hourly
+Gr6 Graphics and Machine Learning GPU High RAM ratio Quadruple Extra Large,gr6.4xlarge,128 GiB,1,NVIDIA L4,24 GiB,x86_64,Up to 25 Gigabit,$1.5392 hourly,$1.0020 hourly,unavailable,$2.2752 hourly,$1.7380 hourly
+G5 Graphics and Machine Learning GPU Extra Large,g5.xlarge,16 GiB,1,NVIDIA A10G,24 GiB,x86_64,Up to 10 Gigabit,$1.0060 hourly,$0.6338 hourly,unavailable,$1.1900 hourly,$0.8178 hourly
+TRN1 Double Extra Large,trn1.2xlarge,32 GiB,1,AWS Inferentia,32 GiB,x86_64,Up to 12.5 Gigabit,$1.3438 hourly,$0.8268 hourly,unavailable,unavailable,unavailable
+G4AD Quadruple Extra Large,g4ad.4xlarge,64 GiB,1,AMD Radeon Pro V520,8 GiB,x86_64,Up to 10 Gigabit,$0.8670 hourly,$0.5462 hourly,unavailable,$1.6030 hourly,$1.2822 hourly
+INF2 Extra Large,inf2.xlarge,16 GiB,1,AWS Inferentia2,32 GiB,x86_64,Up to 15 Gigabit,$0.7582 hourly,$0.4777 hourly,unavailable,unavailable,unavailable
+G2 Double Extra Large,g2.2xlarge,15 GiB,1,NVIDIA GRID K520,4 GiB,x86_64,Moderate,$0.6500 hourly,unavailable,unavailable,$0.7670 hourly,unavailable
+G5G Double Extra Large,g5g.2xlarge,16 GiB,1,NVIDIA T4G Tensor Core,16 GiB,arm64,Up to 10 Gigabit,$0.5560 hourly,$0.3503 hourly,unavailable,unavailable,unavailable
+G5G Quadruple Extra Large,g5g.4xlarge,32 GiB,1,NVIDIA T4G Tensor Core,16 GiB,arm64,Up to 10 Gigabit,$0.8280 hourly,$0.5216 hourly,unavailable,unavailable,unavailable
+G5G Extra Large,g5g.xlarge,8 GiB,1,NVIDIA T4G Tensor Core,16 GiB,arm64,Up to 10 Gigabit,$0.4200 hourly,$0.2646 hourly,unavailable,unavailable,unavailable
+G5G Eight Extra Large,g5g.8xlarge,64 GiB,1,NVIDIA T4G Tensor Core,16 GiB,arm64,12 Gigabit,$1.3720 hourly,$0.8644 hourly,unavailable,unavailable,unavailable

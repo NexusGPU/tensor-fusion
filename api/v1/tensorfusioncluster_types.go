@@ -126,7 +126,7 @@ const (
 	AuthTypeServiceAccountRole AuthTypeEnum = "serviceAccountRole"
 )
 
-// +kubebuilder:validation:Enum=aws;lambda-labs;gcp;azure;oracle-oci;ibm;openshift;vultr;together-ai;alibaba;nvidia;tencent;runpod;mock
+// +kubebuilder:validation:Enum=aws;lambda-labs;gcp;azure;oracle-oci;ibm;openshift;vultr;together-ai;alibaba;nvidia;tencent;runpod;karpenter;mock
 type ComputingVendorName string
 
 const (
@@ -143,6 +143,7 @@ const (
 	ComputingVendorNvidia     ComputingVendorName = "nvidia"
 	ComputingVendorTencent    ComputingVendorName = "tencent"
 	ComputingVendorRunPod     ComputingVendorName = "runpod"
+	ComputingVendorKarpenter  ComputingVendorName = "karpenter"
 
 	// This is not unit/integration testing only, no cloud provider is involved
 	ComputingVendorMock ComputingVendorName = "mock"

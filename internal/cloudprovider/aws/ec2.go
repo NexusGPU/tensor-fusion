@@ -3,17 +3,20 @@ package aws
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 )
 
 type AWSGPUNodeProvider struct {
-	ec2Client *ec2.Client
+	ec2Client       *ec2.Client
+	pricingProvider *pricing.StaticPricingProvider
 }
 
 func NewAWSGPUNodeProvider(cfg tfv1.ComputingVendorConfig) (AWSGPUNodeProvider, error) {
@@ -22,8 +25,11 @@ func NewAWSGPUNodeProvider(cfg tfv1.ComputingVendorConfig) (AWSGPUNodeProvider, 
 		Region: cfg.Params.DefaultRegion,
 	}
 	ec2Client := ec2.NewFromConfig(awsCfg)
+	pricingProvider := pricing.NewStaticPricingProvider()
+
 	provider := AWSGPUNodeProvider{
-		ec2Client: ec2Client,
+		ec2Client:       ec2Client,
+		pricingProvider: pricingProvider,
 	}
 	return provider, nil
 }
@@ -112,11 +118,17 @@ func (p AWSGPUNodeProvider) GetNodeStatus(ctx context.Context, param *types.Node
 }
 
 func (p AWSGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType types.CapacityTypeEnum) (float64, error) {
-	// TODO: implement
+	if price, exists := p.pricingProvider.GetPringcing(instanceType, capacityType); exists {
+		return price, nil
+	}
 	return 0, nil
 }
 
 func (p AWSGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []types.GPUNodeInstanceInfo {
-	// TODO: implement
-	return nil
+	instanceTypes, exists := p.pricingProvider.GetGPUNodeInstanceTypeInfo(region)
+	if !exists {
+		log.Printf("no instance type info found for region %s", region)
+		return []types.GPUNodeInstanceInfo{}
+	}
+	return instanceTypes
 }
