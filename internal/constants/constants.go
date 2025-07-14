@@ -159,7 +159,7 @@ const (
 	ProvisionerNamePlaceholder = "__GPU_NODE_RESOURCE_NAME__"
 )
 
-const TFDataPath = "/tmp/tensor-fusion/data"
+const TFDataPath = "/run/tensor-fusion"
 const DataVolumeName = "tf-data"
 const TensorFusionPoolManualCompaction = Domain + "/manual-compaction"
 const AlertJobName = "tensor-fusion"

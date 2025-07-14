@@ -243,6 +243,8 @@ func AddTFDefaultClientConfBeforePatch(
 				Value: constants.NGPUPathValue,
 			})
 
+			pod.Spec.Containers[injectContainerIndex].Resources.Limits[constants.SharedMemResName] = resource.MustParse("1")
+
 			// disable GPU limiter killer switch
 			if pod.Annotations[constants.DisableFeaturesAnnotation] != "" {
 				features := strings.Split(pod.Annotations[constants.DisableFeaturesAnnotation], ",")
@@ -334,11 +336,27 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 		},
 	})
 
+	composeHypervisorInitContainer(spec, pool)
 	composeHypervisorContainer(spec, pool)
 
 	if enableVector {
 		composeVectorContainer(spec, pool)
 	}
+}
+
+func composeHypervisorInitContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
+	spec.InitContainers = append(spec.InitContainers, v1.Container{
+		Name:    "init-shm",
+		Image:   pool.Spec.ComponentConfig.Hypervisor.Image,
+		Command: []string{"hypervisor", "mount-shm"},
+		VolumeMounts: []v1.VolumeMount{
+			{
+				Name:      constants.DataVolumeName,
+				ReadOnly:  false,
+				MountPath: constants.TFDataPath,
+			},
+		},
+	})
 }
 
 func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
@@ -552,6 +570,8 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 			},
 		},
 	})
+
+	spec.Containers[0].Resources.Limits[constants.SharedMemResName] = resource.MustParse("1")
 
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{

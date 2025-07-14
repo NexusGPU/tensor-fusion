@@ -93,6 +93,8 @@ const (
 	LdPreloadEnv     = "LD_PRELOAD"
 	LdPreloadLimiter = "/home/app/libcuda_limiter.so"
 
+	SharedMemResName = "tensor-fusion.ai/shm"
+
 	// disable GPU limiter, for emergency use
 	DisableGpuLimiterEnv = "DISABLE_GPU_LIMITER"
 	// directly forward CUDA calls to GPU driver in nGPU mode, for emergency use
