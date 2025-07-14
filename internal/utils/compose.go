@@ -281,7 +281,8 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 				Name: constants.TFContainerVector,
 			},
 		}
-	} else if len(spec.Containers) != 1 {
+	}
+	if !enableVector && len(spec.Containers) != 1 {
 		spec.Containers = []v1.Container{
 			{
 				Name: constants.TFContainerNameHypervisor,
