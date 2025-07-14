@@ -243,6 +243,9 @@ func AddTFDefaultClientConfBeforePatch(
 				Value: constants.NGPUPathValue,
 			})
 
+			if len(pod.Spec.Containers[injectContainerIndex].Resources.Limits) == 0 {
+				pod.Spec.Containers[injectContainerIndex].Resources.Limits = v1.ResourceList{}
+			}
 			pod.Spec.Containers[injectContainerIndex].Resources.Limits[constants.SharedMemResName] = resource.MustParse("1")
 
 			// disable GPU limiter killer switch
@@ -571,6 +574,9 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 		},
 	})
 
+	if len(spec.Containers[0].Resources.Limits) == 0 {
+		spec.Containers[0].Resources.Limits = v1.ResourceList{}
+	}
 	spec.Containers[0].Resources.Limits[constants.SharedMemResName] = resource.MustParse("1")
 
 	// Add volume from host for CUDA hot migration and snapshot
