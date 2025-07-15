@@ -422,8 +422,9 @@ func startCustomResourceController(
 	}
 
 	if err := (&controller.GPUNodeClaimReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("GPUNodeClaim"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUNodeClaim")
 		os.Exit(1)

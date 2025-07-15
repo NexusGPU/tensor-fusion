@@ -214,7 +214,7 @@ func (r *TensorFusionClusterReconciler) reconcileCloudVendorConnection(ctx conte
 		if err != nil {
 			return false, err
 		}
-		err = (*provider).TestConnection()
+		err = provider.TestConnection()
 		if err != nil {
 			tfc.SetAsUpdating(metav1.Condition{
 				Type:    constants.ConditionStatusTypeCloudVendorConnection,

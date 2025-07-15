@@ -57,6 +57,7 @@
         "gosec",
         "gpuallocator",
         "gpunode",
+        "gpunodeclaim",
         "gpunodeclaims",
         "gpunodeclasses",
         "gpunodes",

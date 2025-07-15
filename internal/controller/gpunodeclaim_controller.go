@@ -32,6 +32,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 )
 
 // GPUNodeClaimReconciler reconciles a GPUNodeClaim object
@@ -58,11 +59,9 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	// Finalizer ?
 	clusterName := claim.GetLabels()[constants.LabelKeyClusterOwner]
 	cluster := &tfv1.TensorFusionCluster{}
 	if err := r.Get(ctx, client.ObjectKey{Name: clusterName}, cluster); err != nil {
-
 		if errors.IsNotFound(err) {
 			r.Recorder.Eventf(claim, corev1.EventTypeWarning, "OrphanedNode", "provisioned node not found, this could result in orphaned nodes, please check manually: %s", claim.Name)
 			return ctrl.Result{}, nil
@@ -75,50 +74,50 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to get computing vendor config for cluster %s", clusterName)
 	}
 
-	// provider, err := cloudprovider.GetProvider(*vendorCfg, nil)
-	// if err != nil {
-	// 	return ctrl.Result{}, err
-	// }
+	poolName := claim.GetLabels()[constants.LabelKeyOwner]
+	pool := &tfv1.GPUPool{}
+	if err := r.Get(ctx, client.ObjectKey{Name: poolName}, pool); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
 
-	// if claim.Status.NodeInfo.InstanceID == "" {
-	// 	r.Recorder.Eventf(claim, corev1.EventTypeWarning, "OrphanedNode", "provisioned node without instanceID, this could result in orphaned nodes, please check manually: %s", claim.Name)
-	// 	return ctrl.Result{}, nil
-	// }
-	// err = (*provider).TerminateNode(ctx, &types.NodeIdentityParam{
-	// 	InstanceID: claim.Status.NodeInfo.InstanceID,
-	// 	Region:     claim.Status.NodeInfo.Region,
-	// })
-	// if err != nil {
-	// 	return ctrl.Result{}, err
-	// }
+	shouldReturn, err := utils.HandleFinalizer(ctx, claim, r.Client, func(ctx context.Context, claim *tfv1.GPUNodeClaim) (bool, error) {
+		nodeList := &corev1.NodeList{}
+		if err := r.List(ctx, nodeList, client.MatchingLabels{constants.ProvisionerLabelKey: claim.Name}); err != nil {
+			if errors.IsNotFound(err) {
+				return true, nil
+			}
+			return false, err
+		}
+		if len(nodeList.Items) > 0 {
+			for _, node := range nodeList.Items {
+				if !node.DeletionTimestamp.IsZero() {
+					continue
+				}
+				// TODO: in karpenter mode, delete the NodeClaim
+				// in direct provisioning mode, call terminate instance and then delete k8s node
+				err := r.Delete(ctx, &node)
+				if err != nil {
+					return false, err
+				}
+			}
+			return false, nil
+		}
+		return true, nil
+	})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if shouldReturn {
+		return ctrl.Result{}, nil
+	}
 
-	// TODO create cloud vendor node
-	// if err := r.reconcileCloudVendorNode(ctx, node, poolObj); err != nil {
-	// 	return ctrl.Result{}, err
-	// }
-
-	// // TODO: for karpenter mode, the nodeClaim's owner is GPUNodeClaim, and delete along with GPUNodeClaim
-	// // for cloud vendor mode, detect node creation and set owner to GPUNodeClaim
-	// if node.GetLabels()[constants.ProvisionerLabelKey] != "" {
-	// 	// Provision mode, match the provisionerID(GPUNode) here
-	// 	gpuNode := &tfv1.GPUNode{}
-	// 	if err := r.Get(ctx, client.ObjectKey{Name: node.GetLabels()[constants.ProvisionerLabelKey]}, gpuNode); err != nil {
-	// 		if errors.IsNotFound(err) {
-	// 			r.Recorder.Eventf(node, corev1.EventTypeNormal, "NodeProvisionerNotFound", "GPUNode not found for node %s", node.Name)
-	// 			return ctrl.Result{}, nil
-	// 		}
-	// 		return ctrl.Result{}, fmt.Errorf("get gpuNode(%s) : %w", node.GetLabels()[constants.ProvisionerLabelKey], err)
-	// 	}
-	// 	// set owned by GPUNode CR
-	// 	_ = controllerutil.SetControllerReference(gpuNode, node, r.Scheme)
-	// 	err := r.Update(ctx, node)
-	// 	if err != nil {
-	// 		return ctrl.Result{}, fmt.Errorf("can not update node(%s) controller reference  : %w", node.Name, err)
-	// 	}
-	// }
-
-	// TODO set node info for GPUNode
-
+	// create cloud vendor node
+	if err := r.reconcileCloudVendorNode(ctx, claim, pool); err != nil {
+		return ctrl.Result{}, err
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -142,6 +141,8 @@ func (r *GPUNodeClaimReconciler) reconcileCloudVendorNode(ctx context.Context, c
 	if err != nil {
 		return err
 	}
+
+	// TODO: fix me, GPUNode is not created yet, node info should be stored in GPUNodeClaim status and sync in gpunode controller later !
 
 	// Update GPUNode status about the cloud vendor info
 	// To match GPUNode - K8S node, the --node-label in Kubelet is MUST-have, like Karpenter, it force set userdata to add a provisionerId label, k8s node controller then can set its ownerReference to the GPUNode

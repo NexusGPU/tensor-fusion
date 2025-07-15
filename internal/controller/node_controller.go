@@ -66,10 +66,10 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 
-	// Remove deletion mark if updated
-	if node.GetLabels()[constants.NodeDeletionMark] == constants.TrueStringValue {
-		log.Info("Node should be removed due to GPUNode compaction, but it's not managed by TensorFusion, skip.", "name", node.Name)
+	if node.Labels == nil {
+		node.Labels = map[string]string{}
 	}
+	provisioner := node.Labels[constants.ProvisionerLabelKey]
 
 	// Select mode, GPU node is controlled by K8S node
 	var poolList tfv1.GPUPoolList
@@ -96,11 +96,30 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
+	provisioningMode := pool.Spec.NodeManagerConfig.ProvisioningMode
+	// No owner for auto select mode, and node's owner will be Karpenter NodeClaim and then GPUNodeClaim in Karpenter mode
+	if provisioningMode == tfv1.ProvisioningModeProvisioned {
+		gpuNodeClaim := &tfv1.GPUNodeClaim{}
+		if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNodeClaim); err != nil {
+			if errors.IsNotFound(err) {
+				gpuNodeClaim = &tfv1.GPUNodeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: node.Name,
+					},
+				}
+			}
+		}
+		_ = controllerutil.SetControllerReference(gpuNodeClaim, node, r.Scheme)
+		if err := r.Update(ctx, node); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update owner of node: %w", err)
+		}
+	}
+
 	// Skip creation if the GPUNode already exists
 	gpuNode := &tfv1.GPUNode{}
 	if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
 		if errors.IsNotFound(err) {
-			gpuNode = r.generateGPUNode(node, pool)
+			gpuNode = r.generateGPUNode(node, pool, provisioner)
 			if e := r.Create(ctx, gpuNode); e != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to create GPUNode: %w", e)
 			}
@@ -109,17 +128,23 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, nil
 }
 
-func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool) *tfv1.GPUNode {
+func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool, provisioner string) *tfv1.GPUNode {
+	mode := tfv1.GPUNodeManageModeAutoSelect
+	if provisioner != "" {
+		mode = tfv1.GPUNodeManageModeProvisioned
+	}
 	gpuNode := &tfv1.GPUNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: node.Name,
 			Labels: map[string]string{
-				constants.LabelKeyOwner: pool.Name,
+				constants.LabelKeyOwner:       pool.Name,
+				constants.ProvisionerLabelKey: provisioner,
+
 				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true",
 			},
 		},
 		Spec: tfv1.GPUNodeSpec{
-			ManageMode: tfv1.GPUNodeManageModeAutoSelect,
+			ManageMode: mode,
 		},
 	}
 
