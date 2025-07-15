@@ -54,9 +54,6 @@ const (
 
 // GPUNodeStatus defines the observed state of GPUNode.
 type GPUNodeStatus struct {
-	// the identifier of the kubernetes node, in nodeSelector mode, GPUNode name is the same as kubernetes node name because of it's owned by the Kubernetes node, while in node provisioning mode owned by the GPUNode, and K8S Node name is uncontrollable
-	KubernetesNodeName string `json:"kubernetesNodeName"`
-
 	// +kubebuilder:default=Pending
 	Phase TensorFusionGPUNodePhase `json:"phase"`
 

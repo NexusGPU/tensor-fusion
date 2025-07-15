@@ -65,7 +65,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 
 		// Check if node is empty, if not, continue
 		_, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
-		k8sNodeName := gpuNode.Status.KubernetesNodeName
+		k8sNodeName := gpuNode.Name
 		if len(nodeToWorker[k8sNodeName]) != 0 {
 			// Node is in-use, should not be terminated
 			continue
@@ -93,7 +93,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 
 		if couldBeTerminatedByTFlops && couldBeTerminatedByVRAM {
 			r.Recorder.Eventf(pool, "Compaction", "Node %s is empty and deletion won't impact warm-up capacity, start terminating it", gpuNode.Name)
-			if pool.Spec.NodeManagerConfig.ProvisioningMode == tfv1.ProvisioningModeProvisioned {
+			if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
 				// not managed by Kubernetes, managed by TensorFusion, safe to terminate, and finalizer will cause K8S node and related cloud resources to be deleted
 				err := r.Delete(ctx, &gpuNode)
 				if err != nil {
@@ -109,7 +109,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 
 				err = r.Patch(ctx, &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: gpuNode.Status.KubernetesNodeName,
+						Name: gpuNode.Name,
 						Labels: map[string]string{
 							constants.NodeDeletionMark: constants.TrueStringValue,
 						},
@@ -117,7 +117,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 				}, client.Merge)
 
 				if err != nil {
-					return fmt.Errorf("patch node(%s) : %w", gpuNode.Status.KubernetesNodeName, err)
+					return fmt.Errorf("patch node(%s) : %w", gpuNode.Name, err)
 				}
 			}
 		}

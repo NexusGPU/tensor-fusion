@@ -22,11 +22,8 @@ import (
 	"fmt"
 	"maps"
 	"strings"
-	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	cloudprovider "github.com/NexusGPU/tensor-fusion/internal/cloudprovider"
-	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
@@ -38,12 +35,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // GPUNodeReconciler reconciles a GPUNode object
@@ -85,45 +83,6 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 		}
 		metrics.RemoveNodeMetrics(node.Name)
-
-		switch node.Spec.ManageMode {
-		case tfv1.GPUNodeManageModeAutoSelect:
-			// Do nothing, but if it's managed by Karpenter, should come up with some way to tell Karpenter to terminate the GPU node
-		case tfv1.GPUNodeManageModeProvisioned:
-			clusterName := node.GetLabels()[constants.LabelKeyClusterOwner]
-			cluster := &tfv1.TensorFusionCluster{}
-			if err := r.Get(ctx, client.ObjectKey{Name: clusterName}, cluster); err != nil {
-
-				if errors.IsNotFound(err) {
-					r.Recorder.Eventf(node, corev1.EventTypeWarning, "OrphanedNode", "provisioned node not found, this could result in orphaned nodes, please check manually: %s", node.Name)
-					return true, nil
-				}
-				return false, err
-			}
-
-			vendorCfg := cluster.Spec.ComputingVendor
-			if vendorCfg == nil {
-				return false, fmt.Errorf("failed to get computing vendor config for cluster %s", clusterName)
-			}
-
-			provider, err := cloudprovider.GetProvider(*vendorCfg, r.Client, nil)
-			if err != nil {
-				return false, err
-			}
-
-			if node.Status.NodeInfo.InstanceID == "" {
-				r.Recorder.Eventf(node, corev1.EventTypeWarning, "OrphanedNode", "provisioned node without instanceID, this could result in orphaned nodes, please check manually: %s", node.Name)
-				return true, nil
-			}
-			err = (*provider).TerminateNode(ctx, &types.NodeIdentityParam{
-				InstanceID: node.Status.NodeInfo.InstanceID,
-				Region:     node.Status.NodeInfo.Region,
-			})
-			if err != nil {
-				return false, err
-			}
-
-		}
 		return true, nil
 	})
 	if err != nil {
@@ -145,35 +104,18 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("failed to get tensor-fusion pool, can not create node discovery job, pool: %s", poolName)
 	}
 
-	if node.Spec.ManageMode != tfv1.GPUNodeManageModeProvisioned {
-		// Check if the Kubernetes node exists; if not, the GPUNode should delete itself.
-		if node.Status.KubernetesNodeName != "" {
-			// Try to get the Kubernetes node
-			coreNode := &corev1.Node{}
-			err := r.Get(ctx, client.ObjectKey{Name: node.Status.KubernetesNodeName}, coreNode)
-			if err != nil {
-				if errors.IsNotFound(err) {
-					// The Kubernetes node does not exist, delete the GPUNode
-					log.Info("Kubernetes node does not exist, deleting GPUNode",
-						"kubernetesNodeName", node.Status.KubernetesNodeName)
-					if err := r.Delete(ctx, node); err != nil {
-						return ctrl.Result{}, fmt.Errorf("failed to delete GPUNode after Kubernetes node was deleted: %w", err)
-					}
-					// Return early since we've deleted the resource
-					return ctrl.Result{}, nil
-				}
-				return ctrl.Result{}, fmt.Errorf("failed to get Kubernetes node %s: %w",
-					node.Status.KubernetesNodeName, err)
-			}
+	// Check if the Kubernetes node exists; if not, the GPUNode should delete itself.
+	coreNode := &corev1.Node{}
+	err = r.Get(ctx, client.ObjectKey{Name: node.Name}, coreNode)
+	if errors.IsNotFound(err) || !coreNode.DeletionTimestamp.IsZero() {
+		// The Kubernetes node does not exist or deleting, delete the GPUNode
+		log.Info("Kubernetes node does not exist or deleting, deleting GPUNode",
+			"kubernetesNodeName", node.Name)
+		if err := r.Delete(ctx, node); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to delete GPUNode after Kubernetes node was deleted: %w", err)
 		}
-	}
-	if err := r.reconcileCloudVendorNode(ctx, node, poolObj); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Only reconcile if the node has a kubernetes node name, otherwise the DaemonSet like workloads can not be scheduled
-	if node.Status.KubernetesNodeName == "" {
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		// Return early since we've deleted the resource
+		return ctrl.Result{}, nil
 	}
 
 	if err := r.reconcileNodeDiscoveryJob(ctx, node, poolObj); err != nil {
@@ -289,7 +231,7 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 		tmpl.Labels = map[string]string{}
 	}
 	tmpl.Labels[constants.LabelComponent] = constants.ComponentNodeDiscovery
-	tmpl.Spec.NodeName = gpunode.Status.KubernetesNodeName
+	tmpl.Spec.NodeName = gpunode.Name
 	// allow job to run at any taint Nodes that marked as NoSchedule
 	tmpl.Spec.Tolerations = append(tmpl.Spec.Tolerations, corev1.Toleration{
 		Key:      string(corev1.TaintEffectNoSchedule),
@@ -398,7 +340,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 		spec.NodeSelector = make(map[string]string)
 	}
 	spec.EnableServiceLinks = ptr.To(false)
-	spec.NodeName = node.Status.KubernetesNodeName
+	spec.NodeName = node.Name
 
 	// add must-have tensor-fusion hypervisor manifest
 	log.Info("adding must-have tensor-fusion hypervisor manifest", "node", node.Name)
@@ -464,108 +406,17 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 	return nil
 }
 
-func (r *GPUNodeReconciler) reconcileCloudVendorNode(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) error {
-	// Avoid creating duplicated cloud vendor nodes, if not working, keep pending status
-	if node.Status.NodeInfo.InstanceID != "" {
-		// node already created, check status
-		if node.Status.KubernetesNodeName != "" {
-			var k8sNode corev1.Node
-			if err := r.Get(ctx, client.ObjectKey{Name: node.Status.KubernetesNodeName}, &k8sNode); err != nil {
-				if errors.IsNotFound(err) {
-					r.Recorder.Eventf(node, corev1.EventTypeNormal, "NodeNotFound", "Kubernetes node has been disappeared, deleting GPUNode", node.Status.KubernetesNodeName)
-					err := r.Delete(ctx, node)
-					if err != nil {
-						return err
-					}
-				}
-			}
-			// TODO: sync cordon and drain status to all GPUs it owned
-		}
-		return nil
-	}
-
-	// no cloud vendor param indicates it isn't a managed node, skip cloud vendor reconcile
-	if node.Spec.CloudVendorParam == "" {
-		if node.Spec.ManageMode != tfv1.GPUNodeManageModeProvisioned {
-			return nil
-		}
-		r.Recorder.Eventf(node, corev1.EventTypeWarning, "CloudVendorParamEmpty", "cloud vendor param is empty, but manage mode is provisioned: %s", node.Name)
-		return nil
-	}
-
-	// No NodeInfo, should create new one
-	provider, _, err := createProvisionerAndQueryCluster(ctx, pool, r.Client)
-	if err != nil {
-		return err
-	}
-
-	// Create node on cloud provider [this can result in cloud vendor bills, be cautious!!!]
-	var nodeParam tfv1.NodeCreationParam
-	err = json.Unmarshal([]byte(node.Spec.CloudVendorParam), &nodeParam)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal cloud vendor param: %w, GPUNode: %s", err, node.Name)
-	}
-
-	// TODO: query cloud vendor by node name
-	status, err := provider.CreateNode(ctx, &nodeParam)
-	if err != nil {
-		return err
-	}
-
-	// Update GPUNode status about the cloud vendor info
-	// To match GPUNode - K8S node, the --node-label in Kubelet is MUST-have, like Karpenter, it force set userdata to add a provisionerId label, k8s node controller then can set its ownerReference to the GPUNode
-	gpuNode := &tfv1.GPUNode{}
-	err = r.Get(ctx, client.ObjectKey{Name: nodeParam.NodeName}, gpuNode)
-	if err != nil {
-		return err
-	}
-	gpuNode.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
-	gpuNode.Status.NodeInfo.IP = status.PrivateIP
-	gpuNode.Status.NodeInfo.InstanceID = status.InstanceID
-	gpuNode.Status.NodeInfo.Region = nodeParam.Region
-
-	// Retry status update until success to handle version conflicts
-	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		// Get the latest version before attempting an update
-		latest := &tfv1.GPUNode{}
-		if err := r.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, latest); err != nil {
-			return err
-		}
-
-		// Apply our status updates to the latest version
-		latest.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
-		latest.Status.NodeInfo.IP = status.PrivateIP
-		latest.Status.NodeInfo.InstanceID = status.InstanceID
-		latest.Status.NodeInfo.Region = nodeParam.Region
-
-		// Attempt to update with the latest version
-		return r.Client.Status().Update(ctx, latest)
-	})
-
-	if err != nil {
-		log.FromContext(ctx).Error(err, "Failed to update GPUNode status after retries, must terminate node to keep operation atomic", "name", nodeParam.NodeName)
-		errTerminate := provider.TerminateNode(ctx, &types.NodeIdentityParam{
-			InstanceID: status.InstanceID,
-			Region:     nodeParam.Region,
-		})
-		if errTerminate != nil {
-			log.FromContext(ctx).Error(errTerminate, "Failed to terminate cloud vendor node when GPUNode status failed to update")
-			panic(errTerminate)
-		}
-		return nil
-	}
-
-	r.Recorder.Eventf(pool, corev1.EventTypeNormal, "ManagedNodeCreated", "Created node: %s, IP: %s", status.InstanceID, status.PrivateIP)
-	return nil
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *GPUNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.GPUNode{}).
 		Named("gpunode").
-		// TODO: should not own node, let node_claim_controller to own node for cloud vendor VM nodes,
-		Owns(&corev1.Node{}).
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(
+			func(ctx context.Context, obj client.Object) []reconcile.Request {
+				return []reconcile.Request{
+					{NamespacedName: client.ObjectKey{Name: obj.GetName()}},
+				}
+			})).
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Pod{}).
 		Complete(r)

@@ -416,7 +416,22 @@ spec:
                               type: string
                           type: object
                         type: array
+                      karpenterNodeClassRef:
+                        description: Karpenter NodeClass name
+                        properties:
+                          group:
+                            type: string
+                          kind:
+                            type: string
+                          name:
+                            type: string
+                        required:
+                        - group
+                        - kind
+                        - name
+                        type: object
                       nodeClass:
+                        description: TensorFusion GPUNodeClass name
                         type: string
                     type: object
                   nodeSelector:
