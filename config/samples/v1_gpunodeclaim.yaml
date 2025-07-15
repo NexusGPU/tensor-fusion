@@ -1,0 +1,9 @@
+apiVersion: tensor-fusion.ai/v1
+kind: GPUNodeClaim
+metadata:
+  labels:
+    app.kubernetes.io/name: tensor-fusion
+    app.kubernetes.io/managed-by: kustomize
+  name: gpunodeclaim-sample
+spec:
+  # TODO(user): Add fields here

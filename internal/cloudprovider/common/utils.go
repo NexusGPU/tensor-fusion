@@ -34,9 +34,9 @@ func GetAccessKeyOrSecretFromPath(filePath string) (string, error) {
 // Pool config contains node requirements, nodeClass indicates some base template info for creating VM nodes, this func should output the list of VM to be created to meet TFlops and VRAM gap
 // Simple algorithm, try to find the instance type that best meets the gap
 // TODO: implement a more advanced algorithm to combine multiple instance types
-func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvider, cluster *tfv1.TensorFusionCluster, pool *tfv1.GPUPool, nodeClass *tfv1.GPUNodeClass, tflopsGap int64, vramGap int64) ([]types.NodeCreationParam, error) {
+func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvider, cluster *tfv1.TensorFusionCluster, pool *tfv1.GPUPool, nodeClass *tfv1.GPUNodeClass, tflopsGap int64, vramGap int64) ([]tfv1.NodeCreationParam, error) {
 	if tflopsGap <= 0 && vramGap <= 0 {
-		return []types.NodeCreationParam{}, nil
+		return []tfv1.NodeCreationParam{}, nil
 	}
 
 	requirements := pool.Spec.NodeManagerConfig.NodeProvisioner.GPURequirements
@@ -61,19 +61,19 @@ func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvi
 	var bestNumInstances int64
 
 	// Default to spot, it's cheaper
-	preferredCapacityType := types.CapacityTypeSpot
+	preferredCapacityType := tfv1.CapacityTypeSpot
 
 	for _, req := range requirements {
 		if req.Key == tfv1.NodeRequirementKeyCapacityType && req.Operator == corev1.NodeSelectorOpIn {
 			// user can specify other capacity types
 			hasSpot := false
 			for _, capacityType := range req.Values {
-				if capacityType == string(types.CapacityTypeSpot) {
+				if capacityType == string(tfv1.CapacityTypeSpot) {
 					hasSpot = true
 				}
 			}
 			if !hasSpot {
-				preferredCapacityType = types.CapacityTypeEnum(req.Values[0])
+				preferredCapacityType = tfv1.CapacityTypeEnum(req.Values[0])
 			}
 		} else if req.Key == tfv1.NodeRequirementKeyRegion && req.Operator == corev1.NodeSelectorOpIn {
 			// single pool can only leverage one region
@@ -125,10 +125,10 @@ func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvi
 		bestNumInstances = MAX_NODES_PER_RECONCILE_LOOP
 	}
 
-	nodes := make([]types.NodeCreationParam, 0, bestNumInstances)
+	nodes := make([]tfv1.NodeCreationParam, 0, bestNumInstances)
 	for i := int64(0); i < bestNumInstances; i++ {
 		// Zone and region should ideally be determined from nodeClass's subnet selectors
-		nodes = append(nodes, types.NodeCreationParam{
+		nodes = append(nodes, tfv1.NodeCreationParam{
 			NodeName:     fmt.Sprintf("%s-%s", pool.Name, generateRandomString(8)),
 			InstanceType: bestInstance.InstanceType,
 			NodeClass:    nodeClass,

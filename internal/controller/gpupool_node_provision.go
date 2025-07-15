@@ -112,7 +112,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	var errList []error
 
 	for _, node := range gpuNodeParams {
-		go func(node types.NodeCreationParam) {
+		go func(node tfv1.NodeCreationParam) {
 			defer wg.Done()
 
 			// Create GPUNode custom resource immediately and GPUNode controller will watch the K8S node to be ready

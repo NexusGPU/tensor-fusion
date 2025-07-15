@@ -1,4 +1,4 @@
-package alibaba
+package mock
 
 import (
 	"context"
@@ -20,7 +20,7 @@ func (p MockGPUNodeProvider) TestConnection() error {
 	return nil
 }
 
-func (p MockGPUNodeProvider) CreateNode(ctx context.Context, param *types.NodeCreationParam) (*types.GPUNodeStatus, error) {
+func (p MockGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.NodeCreationParam) (*types.GPUNodeStatus, error) {
 	// TODO: Mock a Kubernetes node for e2e testing
 	return &types.GPUNodeStatus{
 		InstanceID: param.NodeName + "-Mock",

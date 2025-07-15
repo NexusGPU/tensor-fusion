@@ -78,7 +78,7 @@ func (p AlibabaGPUNodeProvider) TestConnection() error {
 	return nil
 }
 
-func (p AlibabaGPUNodeProvider) CreateNode(ctx context.Context, param *types.NodeCreationParam) (*types.GPUNodeStatus, error) {
+func (p AlibabaGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.NodeCreationParam) (*types.GPUNodeStatus, error) {
 	nodeClass := param.NodeClass.Spec
 	request := ecs.CreateRunInstancesRequest()
 	request.LaunchTemplateId = nodeClass.LaunchTemplate.ID
@@ -172,7 +172,7 @@ func (p AlibabaGPUNodeProvider) GetNodeStatus(ctx context.Context, param *types.
 	return status, nil
 }
 
-func handleNodeClassAndExtraParams(request *ecs.RunInstancesRequest, param *types.NodeCreationParam) error {
+func handleNodeClassAndExtraParams(request *ecs.RunInstancesRequest, param *tfv1.NodeCreationParam) error {
 	nodeClass := param.NodeClass.Spec
 	if len(nodeClass.SecurityGroupSelectorTerms) > 0 {
 		request.SecurityGroupId = nodeClass.SecurityGroupSelectorTerms[0].ID
@@ -210,7 +210,7 @@ func handleNodeClassAndExtraParams(request *ecs.RunInstancesRequest, param *type
 
 	// Handle extra params
 	capacityType := param.CapacityType
-	if capacityType != "" && capacityType != types.CapacityTypeOnDemand {
+	if capacityType != "" && capacityType != tfv1.CapacityTypeOnDemand {
 		// Convert from Spot/OnDemand to each cloud vendor's equivalent
 		if param.ExtraParams["spotPriceLimit"] != "" {
 			priceLimit, err := strconv.ParseFloat(param.ExtraParams["spotPriceLimit"], 64)
