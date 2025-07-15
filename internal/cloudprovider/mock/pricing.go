@@ -1,7 +1,8 @@
-package alibaba
+package mock
 
 import (
-	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	types "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 )
 
 var GPUInstanceTypeInfo []types.GPUNodeInstanceInfo
@@ -30,6 +31,6 @@ func (p MockGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []types.G
 	return GPUInstanceTypeInfo
 }
 
-func (p MockGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType types.CapacityTypeEnum) (float64, error) {
+func (p MockGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType tfv1.CapacityTypeEnum) (float64, error) {
 	return 42, nil
 }

@@ -45,6 +45,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"sigs.k8s.io/yaml"
+
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/cmd/sched"
 	"github.com/NexusGPU/tensor-fusion/internal/alert"
@@ -62,7 +64,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/version"
 	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
-	"sigs.k8s.io/yaml"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -96,6 +97,7 @@ var schedulerConfigPath string
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(tfv1.AddToScheme(scheme))
 	utilruntime.Must(tfv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -416,6 +418,14 @@ func startCustomResourceController(
 		QuotaStore: allocator.GetQuotaStore(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUResourceQuota")
+		os.Exit(1)
+	}
+
+	if err := (&controller.GPUNodeClaimReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GPUNodeClaim")
 		os.Exit(1)
 	}
 }

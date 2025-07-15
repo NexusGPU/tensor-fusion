@@ -39,7 +39,7 @@ func (p AWSGPUNodeProvider) TestConnection() error {
 	return err
 }
 
-func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *types.NodeCreationParam) (*types.GPUNodeStatus, error) {
+func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.NodeCreationParam) (*types.GPUNodeStatus, error) {
 	awsTags := []ec2Types.Tag{
 		{Key: aws.String("managed-by"), Value: aws.String("tensor-fusion.ai")},
 		{Key: aws.String("tensor-fusion.ai/node-name"), Value: aws.String(param.NodeName)},

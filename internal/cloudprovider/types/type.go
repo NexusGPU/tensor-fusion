@@ -5,23 +5,7 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
-
-type NodeCreationParam struct {
-	NodeName     string
-	Region       string
-	Zone         string
-	InstanceType string
-	NodeClass    *tfv1.GPUNodeClass
-	CapacityType CapacityTypeEnum
-
-	TFlopsOffered    resource.Quantity
-	VRAMOffered      resource.Quantity
-	GPUDeviceOffered int32
-
-	ExtraParams map[string]string
-}
 
 type NodeIdentityParam struct {
 	InstanceID string
@@ -39,25 +23,14 @@ type GPUNodeStatus struct {
 type GPUNodeProvider interface {
 	TestConnection() error
 
-	CreateNode(ctx context.Context, param *NodeCreationParam) (*GPUNodeStatus, error)
+	CreateNode(ctx context.Context, param *tfv1.NodeCreationParam) (*GPUNodeStatus, error)
 	TerminateNode(ctx context.Context, param *NodeIdentityParam) error
 	GetNodeStatus(ctx context.Context, param *NodeIdentityParam) (*GPUNodeStatus, error)
 
-	GetInstancePricing(instanceType string, region string, capacityType CapacityTypeEnum) (float64, error)
+	GetInstancePricing(instanceType string, region string, capacityType tfv1.CapacityTypeEnum) (float64, error)
 
 	GetGPUNodeInstanceTypeInfo(region string) []GPUNodeInstanceInfo
 }
-
-type CapacityTypeEnum string
-
-const (
-	CapacityTypeOnDemand CapacityTypeEnum = "OnDemand"
-
-	CapacityTypeReserved CapacityTypeEnum = "Reserved"
-
-	// Spot and Preemptive are aliases of each other, used by different providers
-	CapacityTypeSpot CapacityTypeEnum = "Spot"
-)
 
 type GPUNodeInstanceInfo struct {
 	InstanceType string

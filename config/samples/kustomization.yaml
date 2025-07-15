@@ -9,4 +9,5 @@ resources:
 - v1_schedulingconfigtemplate.yaml
 - v1_workloadprofile.yaml
 - v1_tensorfusionworkload.yaml
+- v1_gpunodeclaim.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

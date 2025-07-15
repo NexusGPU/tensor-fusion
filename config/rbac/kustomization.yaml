@@ -40,4 +40,6 @@ resources:
 - gpu_viewer_role.yaml
 - tensorfusionconnection_editor_role.yaml
 - tensorfusionconnection_viewer_role.yaml
-
+- gpunodeclaim_admin_role.yaml
+- gpunodeclaim_editor_role.yaml
+- gpunodeclaim_viewer_role.yaml

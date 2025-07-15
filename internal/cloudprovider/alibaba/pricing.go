@@ -3,7 +3,8 @@ package alibaba
 import (
 	"fmt"
 
-	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	types "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 )
 
 var GPUInstanceTypeInfo []types.GPUNodeInstanceInfo
@@ -84,13 +85,13 @@ func (p AlibabaGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []type
 	return GPUInstanceTypeInfo
 }
 
-func (p AlibabaGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType types.CapacityTypeEnum) (float64, error) {
+func (p AlibabaGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType tfv1.CapacityTypeEnum) (float64, error) {
 	discountRatio := 1.0
 	if ratio, ok := RegionCostDifferenceRatio[region]; ok {
 		discountRatio = ratio
 	}
 
-	if capacityType == types.CapacityTypeSpot {
+	if capacityType == tfv1.CapacityTypeSpot {
 		// TODO: this should be dynamic, on average Spot instance can save 70% more, before get accurate Spot discount ratio, just use fix value for now
 		discountRatio = discountRatio * SPOT_DISCOUNT_RATIO
 	}
