@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"sync"
@@ -112,7 +111,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	var errList []error
 
 	for _, node := range gpuNodeParams {
-		go func(node tfv1.NodeCreationParam) {
+		go func(node tfv1.GPUNodeClaimSpec) {
 			defer wg.Done()
 
 			// Create GPUNode custom resource immediately and GPUNode controller will watch the K8S node to be ready
@@ -125,8 +124,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 				return
 			}
 
-			params, _ := json.Marshal(node)
-			gpuNodeRes := &tfv1.GPUNode{
+			gpuNodeRes := &tfv1.GPUNodeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: node.NodeName,
 					Labels: map[string]string{
@@ -137,23 +135,15 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 						// to be compatible with nodeSelector mode, allow GPUNode controller to start HyperVisor pod
 						fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true",
 					},
+					Annotations: map[string]string{
+						constants.PricingAnnotation: strconv.FormatFloat(costPerHour, 'f', 6, 64),
+					},
 				},
-				Spec: tfv1.GPUNodeSpec{
-					ManageMode:       tfv1.GPUNodeManageModeProvisioned,
-					CostPerHour:      strconv.FormatFloat(costPerHour, 'f', 6, 64),
-					CloudVendorParam: string(params),
-				},
+				Spec: node,
 			}
 			_ = controllerutil.SetControllerReference(pool, gpuNodeRes, r.Scheme)
 			err := r.Create(ctx, gpuNodeRes)
 			if err != nil {
-				errList = append(errList, err)
-				return
-			}
-
-			// Update GPUNode status to set the resource quantity
-			gpuNodeRes.InitializeStatus(node.TFlopsOffered, node.VRAMOffered, node.GPUDeviceOffered)
-			if err := r.Client.Status().Update(ctx, gpuNodeRes); err != nil {
 				errList = append(errList, err)
 				return
 			}
@@ -169,6 +159,11 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 }
 
 func createProvisionerAndQueryCluster(ctx context.Context, pool *tfv1.GPUPool, r client.Client) (types.GPUNodeProvider, *tfv1.TensorFusionCluster, error) {
+
+	if pool.Spec.NodeManagerConfig == nil || pool.Spec.NodeManagerConfig.NodeProvisioner == nil {
+		return nil, nil, fmt.Errorf("failed to get node provisioner for pool %s", pool.Name)
+	}
+
 	clusterName := pool.Labels[constants.LabelKeyOwner]
 	if clusterName == "" {
 		return nil, nil, fmt.Errorf("failed to get cluster name for pool %s", pool.Name)

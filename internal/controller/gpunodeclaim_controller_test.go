@@ -52,7 +52,11 @@ var _ = Describe("GPUNodeClaim Controller", func() {
 						Namespace: "default",
 					},
 					Spec: tfv1.GPUNodeClaimSpec{
-						NodeClassRef: "test-node-class",
+						NodeClassRef: tfv1.GroupKindName{
+							Name:  "test-node-class",
+							Kind:  "GPUNodeClass",
+							Group: "tensor-fusion.ai",
+						},
 					},
 					Status: tfv1.GPUNodeClaimStatus{
 						Phase: tfv1.GPUNodeClaimPending,

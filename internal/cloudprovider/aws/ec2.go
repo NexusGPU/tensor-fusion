@@ -17,9 +17,10 @@ import (
 type AWSGPUNodeProvider struct {
 	ec2Client       *ec2.Client
 	pricingProvider *pricing.StaticPricingProvider
+	nodeClass       *tfv1.GPUNodeClass
 }
 
-func NewAWSGPUNodeProvider(cfg tfv1.ComputingVendorConfig) (AWSGPUNodeProvider, error) {
+func NewAWSGPUNodeProvider(cfg tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNodeClass) (AWSGPUNodeProvider, error) {
 	// TODO only support IAM role at first, need to assume role if role set with custom role
 	awsCfg := aws.Config{
 		Region: cfg.Params.DefaultRegion,
@@ -30,6 +31,7 @@ func NewAWSGPUNodeProvider(cfg tfv1.ComputingVendorConfig) (AWSGPUNodeProvider, 
 	provider := AWSGPUNodeProvider{
 		ec2Client:       ec2Client,
 		pricingProvider: pricingProvider,
+		nodeClass:       nodeClass,
 	}
 	return provider, nil
 }
@@ -39,13 +41,13 @@ func (p AWSGPUNodeProvider) TestConnection() error {
 	return err
 }
 
-func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.NodeCreationParam) (*types.GPUNodeStatus, error) {
+func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*types.GPUNodeStatus, error) {
 	awsTags := []ec2Types.Tag{
 		{Key: aws.String("managed-by"), Value: aws.String("tensor-fusion.ai")},
 		{Key: aws.String("tensor-fusion.ai/node-name"), Value: aws.String(param.NodeName)},
-		{Key: aws.String("tensor-fusion.ai/node-class"), Value: aws.String(param.NodeClass.Name)},
+		{Key: aws.String("tensor-fusion.ai/node-class"), Value: aws.String(p.nodeClass.Name)},
 	}
-	nodeClass := param.NodeClass.Spec
+	nodeClass := p.nodeClass.Spec
 
 	for k, v := range nodeClass.Tags {
 		awsTags = append(awsTags, ec2Types.Tag{

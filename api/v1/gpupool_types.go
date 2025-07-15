@@ -111,7 +111,12 @@ const (
 // NodeProvisioner or NodeSelector, they are exclusive.
 // NodeSelector is for existing GPUs, NodeProvisioner is for Karpenter-like auto management.
 type NodeProvisioner struct {
+
+	// TensorFusion GPUNodeClass name
 	NodeClass string `json:"nodeClass,omitempty"`
+
+	// Karpenter NodeClass name
+	KarpenterNodeClassRef GroupKindName `json:"karpenterNodeClassRef,omitempty"`
 
 	// +optional
 	GPURequirements []Requirement `json:"gpuRequirements,omitempty"`

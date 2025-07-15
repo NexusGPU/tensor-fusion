@@ -38,11 +38,6 @@ var _ = Describe("GPUNode Controller", func() {
 				Build()
 			gpuNode := tfEnv.GetGPUNode(0, 0)
 
-			By("checking that the k8s node name should be set")
-			Eventually(func(g Gomega) {
-				g.Expect(gpuNode.Status.KubernetesNodeName).Should(Equal(gpuNode.Name))
-			}).Should(Succeed())
-
 			By("checking that the node discovery job is created")
 			Eventually(func(g Gomega) {
 				job := &batchv1.Job{}

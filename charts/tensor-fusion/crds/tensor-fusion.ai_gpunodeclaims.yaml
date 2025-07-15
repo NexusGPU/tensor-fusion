@@ -43,202 +43,52 @@ spec:
           spec:
             description: GPUNodeClaimSpec defines the desired state of GPUNodeClaim.
             properties:
-              nodeClassRef:
+              capacityType:
                 type: string
-              nodeCreationParam:
+              extraParams:
+                additionalProperties:
+                  type: string
+                type: object
+              gpuDeviceOffered:
+                format: int32
+                type: integer
+              instanceType:
+                type: string
+              nodeClassRef:
                 properties:
-                  capacityType:
+                  group:
                     type: string
-                  extraParams:
-                    additionalProperties:
-                      type: string
-                    type: object
-                  gpuDeviceOffered:
-                    format: int32
-                    type: integer
-                  instanceType:
+                  kind:
                     type: string
-                  nodeClass:
-                    description: GPUNodeClass is the Schema for the gpunodeclasses
-                      API.
-                    properties:
-                      apiVersion:
-                        description: |-
-                          APIVersion defines the versioned schema of this representation of an object.
-                          Servers should convert recognized schemas to the latest internal value, and
-                          may reject unrecognized values.
-                          More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-                        type: string
-                      kind:
-                        description: |-
-                          Kind is a string value representing the REST resource this object represents.
-                          Servers may infer this from the endpoint the client submits requests to.
-                          Cannot be updated.
-                          In CamelCase.
-                          More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-                        type: string
-                      metadata:
-                        type: object
-                      spec:
-                        description: GPUNodeClassSpec defines the desired state of
-                          GPUNodeClass.
-                        properties:
-                          blockDeviceMappings:
-                            items:
-                              properties:
-                                deviceName:
-                                  type: string
-                                ebs:
-                                  properties:
-                                    deleteOnTermination:
-                                      default: true
-                                      type: boolean
-                                    encrypted:
-                                      default: true
-                                      type: boolean
-                                    volumeSize:
-                                      type: string
-                                    volumeType:
-                                      description: |-
-                                        Default value would varies based on the cloud vendor
-                                        For AWS it's gp3, for Alicloud it's cloud_essd
-                                      type: string
-                                  type: object
-                              type: object
-                            type: array
-                          instanceProfile:
-                            description: The instance profile to use, assign IAM role
-                              and permissions for EC2 instances
-                            type: string
-                          launchTemplate:
-                            description: The launch template to use for VM instances,
-                              if set, all other fields could be skipped
-                            properties:
-                              id:
-                                description: The item ID
-                                type: string
-                              name:
-                                description: The item name
-                                type: string
-                              tags:
-                                additionalProperties:
-                                  type: string
-                                description: Query by tags
-                                type: object
-                            type: object
-                          metadataOptions:
-                            description: for AWS only, IMDSv2 metadata service options
-                            properties:
-                              httpEndpoint:
-                                default: true
-                                type: boolean
-                              httpProtocolIPv6:
-                                default: false
-                                type: boolean
-                              httpPutResponseHopLimit:
-                                default: 1
-                                type: integer
-                              httpTokens:
-                                default: required
-                                type: string
-                            type: object
-                          osImageSelectorTerms:
-                            description: the OS image identifier string, default to
-                              use first one, if not found, fallback to others
-                            items:
-                              properties:
-                                id:
-                                  description: The item ID
-                                  type: string
-                                name:
-                                  description: The item name
-                                  type: string
-                                tags:
-                                  additionalProperties:
-                                    type: string
-                                  description: Query by tags
-                                  type: object
-                              type: object
-                            type: array
-                          osImageType:
-                            default: Private
-                            description: Could be private or public, varies in different
-                              cloud vendor, define where to query the OSImageID
-                            enum:
-                            - Private
-                            - Public
-                            - System
-                            type: string
-                          securityGroupSelectorTerms:
-                            items:
-                              properties:
-                                id:
-                                  description: The item ID
-                                  type: string
-                                name:
-                                  description: The item name
-                                  type: string
-                                tags:
-                                  additionalProperties:
-                                    type: string
-                                  description: Query by tags
-                                  type: object
-                              type: object
-                            type: array
-                          subnetSelectorTerms:
-                            items:
-                              properties:
-                                id:
-                                  description: The item ID
-                                  type: string
-                                name:
-                                  description: The item name
-                                  type: string
-                                tags:
-                                  additionalProperties:
-                                    type: string
-                                  description: Query by tags
-                                  type: object
-                              type: object
-                            type: array
-                          tags:
-                            additionalProperties:
-                              type: string
-                            type: object
-                          userData:
-                            type: string
-                        type: object
-                      status:
-                        description: GPUNodeClassStatus defines the observed state
-                          of GPUNodeClass.
-                        type: object
-                    type: object
-                  nodeName:
-                    type: string
-                  region:
-                    type: string
-                  tflopsOffered:
-                    anyOf:
-                    - type: integer
-                    - type: string
-                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                    x-kubernetes-int-or-string: true
-                  vramOffered:
-                    anyOf:
-                    - type: integer
-                    - type: string
-                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                    x-kubernetes-int-or-string: true
-                  zone:
+                  name:
                     type: string
                 required:
-                - gpuDeviceOffered
-                - tflopsOffered
-                - vramOffered
+                - group
+                - kind
+                - name
                 type: object
+              nodeName:
+                type: string
+              region:
+                type: string
+              tflopsOffered:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              vramOffered:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              zone:
+                type: string
             required:
-            - nodeClassRef
-            - nodeCreationParam
+            - gpuDeviceOffered
+            - tflopsOffered
+            - vramOffered
             type: object
           status:
             description: GPUNodeClaimStatus defines the observed state of GPUNodeClaim.

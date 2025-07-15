@@ -21,15 +21,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// GPUNodeClaimSpec defines the desired state of GPUNodeClaim.
-type GPUNodeClaimSpec struct {
-	NodeClassRef      string            `json:"nodeClassRef"`
-	NodeCreationParam NodeCreationParam `json:"nodeCreationParam"`
-}
-
 // GPUNodeClaimStatus defines the observed state of GPUNodeClaim.
 type GPUNodeClaimStatus struct {
 
@@ -82,12 +73,13 @@ const (
 	CapacityTypeSpot CapacityTypeEnum = "Spot"
 )
 
-type NodeCreationParam struct {
+// GPUNodeClaimSpec defines the desired state of GPUNodeClaim.
+type GPUNodeClaimSpec struct {
 	NodeName     string           `json:"nodeName,omitempty"`
 	Region       string           `json:"region,omitempty"`
 	Zone         string           `json:"zone,omitempty"`
 	InstanceType string           `json:"instanceType,omitempty"`
-	NodeClass    *GPUNodeClass    `json:"nodeClass,omitempty"`
+	NodeClassRef GroupKindName    `json:"nodeClassRef,omitempty"`
 	CapacityType CapacityTypeEnum `json:"capacityType,omitempty"`
 
 	TFlopsOffered    resource.Quantity `json:"tflopsOffered"`
@@ -95,4 +87,10 @@ type NodeCreationParam struct {
 	GPUDeviceOffered int32             `json:"gpuDeviceOffered"`
 
 	ExtraParams map[string]string `json:"extraParams,omitempty"`
+}
+
+type GroupKindName struct {
+	Group string `json:"group"`
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
 }

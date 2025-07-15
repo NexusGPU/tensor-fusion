@@ -284,8 +284,7 @@ func createOrUpdateTensorFusionGPU(
 
 func nodeStatus(k8sNodeName string) *tfv1.GPUNodeStatus {
 	return &tfv1.GPUNodeStatus{
-		KubernetesNodeName: k8sNodeName,
-		Phase:              tfv1.TensorFusionGPUNodePhaseRunning,
+		Phase: tfv1.TensorFusionGPUNodePhaseRunning,
 	}
 }
 

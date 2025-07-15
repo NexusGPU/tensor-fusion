@@ -19,10 +19,11 @@ import (
 var cachedClient *ecs.Client
 
 type AlibabaGPUNodeProvider struct {
-	client *ecs.Client
+	client    *ecs.Client
+	nodeClass *tfv1.GPUNodeClass
 }
 
-func NewAlibabaGPUNodeProvider(config tfv1.ComputingVendorConfig) (AlibabaGPUNodeProvider, error) {
+func NewAlibabaGPUNodeProvider(config tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNodeClass) (AlibabaGPUNodeProvider, error) {
 
 	var provider AlibabaGPUNodeProvider
 
@@ -65,6 +66,7 @@ func NewAlibabaGPUNodeProvider(config tfv1.ComputingVendorConfig) (AlibabaGPUNod
 
 	cachedClient = client
 
+	provider.nodeClass = nodeClass
 	return provider, nil
 }
 
@@ -78,8 +80,8 @@ func (p AlibabaGPUNodeProvider) TestConnection() error {
 	return nil
 }
 
-func (p AlibabaGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.NodeCreationParam) (*types.GPUNodeStatus, error) {
-	nodeClass := param.NodeClass.Spec
+func (p AlibabaGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*types.GPUNodeStatus, error) {
+	nodeClass := p.nodeClass.Spec
 	request := ecs.CreateRunInstancesRequest()
 	request.LaunchTemplateId = nodeClass.LaunchTemplate.ID
 	request.ClientToken = param.NodeName
@@ -93,14 +95,14 @@ func (p AlibabaGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.Node
 	request.RegionId = param.Region
 	request.Amount = "1"
 
-	if err := handleNodeClassAndExtraParams(request, param); err != nil {
+	if err := p.handleNodeClassAndExtraParams(request, param); err != nil {
 		return nil, err
 	}
 
 	tag := []ecs.RunInstancesTag{
 		{Key: "managed-by", Value: "tensor-fusion.ai"},
 		{Key: "tensor-fusion.ai/node-name", Value: param.NodeName},
-		{Key: "tensor-fusion.ai/node-class", Value: param.NodeClass.Name},
+		{Key: "tensor-fusion.ai/node-class", Value: p.nodeClass.Name},
 	}
 	for k, v := range nodeClass.Tags {
 		tag = append(tag, ecs.RunInstancesTag{
@@ -172,8 +174,8 @@ func (p AlibabaGPUNodeProvider) GetNodeStatus(ctx context.Context, param *types.
 	return status, nil
 }
 
-func handleNodeClassAndExtraParams(request *ecs.RunInstancesRequest, param *tfv1.NodeCreationParam) error {
-	nodeClass := param.NodeClass.Spec
+func (p AlibabaGPUNodeProvider) handleNodeClassAndExtraParams(request *ecs.RunInstancesRequest, param *tfv1.GPUNodeClaimSpec) error {
+	nodeClass := p.nodeClass.Spec
 	if len(nodeClass.SecurityGroupSelectorTerms) > 0 {
 		request.SecurityGroupId = nodeClass.SecurityGroupSelectorTerms[0].ID
 	}
@@ -203,7 +205,7 @@ func handleNodeClassAndExtraParams(request *ecs.RunInstancesRequest, param *tfv1
 	// Add best practices
 	request.InternetMaxBandwidthOut = requests.NewInteger(100)
 	request.InternetChargeType = "PayByTraffic"
-	request.Description = "GPU node managed by TensorFusion NodeClass: " + param.NodeClass.Name
+	request.Description = "GPU node managed by TensorFusion NodeClass: " + p.nodeClass.Name
 
 	// Add user data, replace placeholder is very important, so that to build the mapping between GPUNode and real Kubernetes node
 	request.UserData = base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(nodeClass.UserData, constants.ProvisionerNamePlaceholder, param.NodeName)))

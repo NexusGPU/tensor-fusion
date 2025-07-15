@@ -34,9 +34,9 @@ func GetAccessKeyOrSecretFromPath(filePath string) (string, error) {
 // Pool config contains node requirements, nodeClass indicates some base template info for creating VM nodes, this func should output the list of VM to be created to meet TFlops and VRAM gap
 // Simple algorithm, try to find the instance type that best meets the gap
 // TODO: implement a more advanced algorithm to combine multiple instance types
-func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvider, cluster *tfv1.TensorFusionCluster, pool *tfv1.GPUPool, nodeClass *tfv1.GPUNodeClass, tflopsGap int64, vramGap int64) ([]tfv1.NodeCreationParam, error) {
+func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvider, cluster *tfv1.TensorFusionCluster, pool *tfv1.GPUPool, nodeClass *tfv1.GPUNodeClass, tflopsGap int64, vramGap int64) ([]tfv1.GPUNodeClaimSpec, error) {
 	if tflopsGap <= 0 && vramGap <= 0 {
-		return []tfv1.NodeCreationParam{}, nil
+		return []tfv1.GPUNodeClaimSpec{}, nil
 	}
 
 	requirements := pool.Spec.NodeManagerConfig.NodeProvisioner.GPURequirements
@@ -125,13 +125,16 @@ func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvi
 		bestNumInstances = MAX_NODES_PER_RECONCILE_LOOP
 	}
 
-	nodes := make([]tfv1.NodeCreationParam, 0, bestNumInstances)
+	nodes := make([]tfv1.GPUNodeClaimSpec, 0, bestNumInstances)
 	for i := int64(0); i < bestNumInstances; i++ {
-		// Zone and region should ideally be determined from nodeClass's subnet selectors
-		nodes = append(nodes, tfv1.NodeCreationParam{
+		nodes = append(nodes, tfv1.GPUNodeClaimSpec{
 			NodeName:     fmt.Sprintf("%s-%s", pool.Name, generateRandomString(8)),
 			InstanceType: bestInstance.InstanceType,
-			NodeClass:    nodeClass,
+			NodeClassRef: tfv1.GroupKindName{
+				Name:  nodeClass.Name,
+				Kind:  nodeClass.Kind,
+				Group: tfv1.GroupVersion.Group,
+			},
 			Region:       region,
 			Zone:         zones[rand.Intn(len(zones))],
 			CapacityType: preferredCapacityType,

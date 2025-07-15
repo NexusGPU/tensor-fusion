@@ -23,7 +23,7 @@ type GPUNodeStatus struct {
 type GPUNodeProvider interface {
 	TestConnection() error
 
-	CreateNode(ctx context.Context, param *tfv1.NodeCreationParam) (*GPUNodeStatus, error)
+	CreateNode(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*GPUNodeStatus, error)
 	TerminateNode(ctx context.Context, param *NodeIdentityParam) error
 	GetNodeStatus(ctx context.Context, param *NodeIdentityParam) (*GPUNodeStatus, error)
 

@@ -27,7 +27,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -55,7 +54,7 @@ type NodeReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=nodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=nodes/finalizers,verbs=create;get;patch;update
 
-// This reconcile loop only take effect on nodeSelector mode, while in AutoProvision mode, GPUNode will manage the K8S Node rather than reversed
+// Reconcile k8s nodes to create and update GPUNode
 func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	node := &corev1.Node{}
@@ -72,83 +71,41 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		log.Info("Node should be removed due to GPUNode compaction, but it's not managed by TensorFusion, skip.", "name", node.Name)
 	}
 
-	if node.GetLabels()[constants.ProvisionerLabelKey] != "" {
-		// Provision mode, match the provisionerID(GPUNode) here
-		gpuNode := &tfv1.GPUNode{}
-		if err := r.Get(ctx, client.ObjectKey{Name: node.GetLabels()[constants.ProvisionerLabelKey]}, gpuNode); err != nil {
+	// Select mode, GPU node is controlled by K8S node
+	var poolList tfv1.GPUPoolList
+	if err := r.List(ctx, &poolList); err != nil {
+		return ctrl.Result{}, fmt.Errorf("can not list gpuPool : %w", err)
+	}
+	pool, matched, err := getMatchedPoolName(node, poolList.Items)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !matched {
+		// delete gpunode if no matched pool
+		if err := r.Delete(ctx, &tfv1.GPUNode{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: node.Name,
+			},
+		}); err != nil {
+			// requeue if the gpunode is not generated
 			if errors.IsNotFound(err) {
-				r.Recorder.Eventf(node, corev1.EventTypeNormal, "NodeProvisionerNotFound", "GPUNode not found for node %s", node.Name)
-				return ctrl.Result{}, nil
+				return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 			}
-			return ctrl.Result{}, fmt.Errorf("get gpuNode(%s) : %w", node.GetLabels()[constants.ProvisionerLabelKey], err)
+			return ctrl.Result{}, fmt.Errorf("can not delete gpuNode(%s) : %w", node.Name, err)
 		}
-		// set owned by GPUNode CR
-		_ = controllerutil.SetControllerReference(gpuNode, node, r.Scheme)
-		err := r.Update(ctx, node)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("can not update node(%s) controller reference  : %w", node.Name, err)
-		}
-
-		// set GPU node's status to map to K8S node name
-		gpuNode.Status.KubernetesNodeName = node.Name
-		if err := r.Client.Status().Update(ctx, gpuNode); err != nil {
-			return ctrl.Result{}, fmt.Errorf("can not update gpuNode(%s) status : %w", gpuNode.Name, err)
-		}
-	} else {
-		// Select mode, GPU node is controlled by K8S node
-		var poolList tfv1.GPUPoolList
-		if err := r.List(ctx, &poolList); err != nil {
-			return ctrl.Result{}, fmt.Errorf("can not list gpuPool : %w", err)
-		}
-		pool, matched, err := getMatchedPoolName(node, poolList.Items)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if !matched {
-			// delete gpunode if no matched pool
-			if err := r.Delete(ctx, &tfv1.GPUNode{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: node.Name,
-				},
-			}); err != nil {
-				// requeue if the gpunode is not generated
-				if errors.IsNotFound(err) {
-					return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
-				}
-				return ctrl.Result{}, fmt.Errorf("can not delete gpuNode(%s) : %w", node.Name, err)
-			}
-			return ctrl.Result{}, nil
-		}
-
-		// Skip creation if the GPUNode already exists
-		gpuNode := &tfv1.GPUNode{}
-		if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
-			if errors.IsNotFound(err) {
-				gpuNode = r.generateGPUNode(node, pool)
-				if e := r.Create(ctx, gpuNode); e != nil {
-					return ctrl.Result{}, fmt.Errorf("failed to create GPUNode: %w", e)
-				}
-			}
-		} else {
-			// GPUNode resource already exists, indicate node has been changed
-			// GPUNode controller should sync node phase to GPUNode phase, so that to trigger the GPUPool and Cluster updates
-			// But GPUNode only watches  K8S Nodes it owns, thus need to manual trigger a GPUNode reconcile request here, with the same NodeName
-			gpuNode.SetAnnotationToTriggerNodeSync()
-			if err := r.Update(ctx, gpuNode); err != nil {
-				return ctrl.Result{}, fmt.Errorf("can not update gpuNode(%s) annotation : %w", gpuNode.Name, err)
-			}
-		}
-
-		if gpuNode.Status.KubernetesNodeName == "" {
-			gpuNode.InitializeStatus(resource.Quantity{}, resource.Quantity{}, 0)
-			gpuNode.Status.KubernetesNodeName = node.Name
-			if err := r.Client.Status().Update(ctx, gpuNode); err != nil {
-				return ctrl.Result{}, fmt.Errorf("can not add Kubernetes Node info into gpuNode(%s) status : %w", gpuNode.Name, err)
-			}
-			log.Info("Created GPUNode due to selector matched", "name", gpuNode.Name)
-		}
+		return ctrl.Result{}, nil
 	}
 
+	// Skip creation if the GPUNode already exists
+	gpuNode := &tfv1.GPUNode{}
+	if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
+		if errors.IsNotFound(err) {
+			gpuNode = r.generateGPUNode(node, pool)
+			if e := r.Create(ctx, gpuNode); e != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to create GPUNode: %w", e)
+			}
+		}
+	}
 	return ctrl.Result{}, nil
 }
 

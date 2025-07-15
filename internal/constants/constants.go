@@ -69,6 +69,7 @@ const (
 	// GPU ID list is assigned by scheduler, should not specified by user
 	GPUDeviceIDsAnnotation            = Domain + "/gpu-ids"
 	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
+	PricingAnnotation                 = Domain + "/hourly-pricing"
 
 	// Annotations for killer switch: disable features
 	// ['gpu-opt', 'mem-manager', 'gpu-limiter']
