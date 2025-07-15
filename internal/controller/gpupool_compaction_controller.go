@@ -95,35 +95,39 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 			r.Recorder.Eventf(pool, "Compaction", "Node %s is empty and deletion won't impact warm-up capacity, start terminating it", gpuNode.Name)
 			if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
 				// not managed by Kubernetes, managed by TensorFusion, safe to terminate, and finalizer will cause K8S node and related cloud resources to be deleted
-				err := r.Delete(ctx, &gpuNode)
-				if err != nil {
-					return fmt.Errorf("delete node(%s) : %w", gpuNode.Name, err)
+				gpuNodeClaimName := gpuNode.Labels[constants.ProvisionerLabelKey]
+				gpuNodeClaimObj := &tfv1.GPUNodeClaim{}
+				if err := r.Get(ctx, client.ObjectKey{Name: gpuNodeClaimName}, gpuNodeClaimObj); err != nil {
+					log.Error(err, "get gpuNodeClaim(%s) failed", gpuNodeClaimName)
+					continue
+				}
+				if err := r.Delete(ctx, gpuNodeClaimObj); err != nil {
+					log.Error(err, "delete gpuNodeClaim(%s) failed", gpuNodeClaimName)
+					continue
 				}
 			} else {
 				// managed by Kubernetes, mark it as destroying, GPUPool capacity should be reduced, and let K8S to delete it
 				gpuNode.Status.Phase = constants.PhaseDestroying
-				err := r.Update(ctx, &gpuNode)
-				if err != nil {
-					return fmt.Errorf("update node(%s) : %w", gpuNode.Name, err)
+				if err := r.Update(ctx, &gpuNode); err != nil {
+					log.Error(err, "update node(%s) failed", gpuNode.Name)
+					continue
 				}
 
-				err = r.Patch(ctx, &corev1.Node{
+				if err := r.Patch(ctx, &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: gpuNode.Name,
 						Labels: map[string]string{
 							constants.NodeDeletionMark: constants.TrueStringValue,
 						},
 					},
-				}, client.Merge)
-
-				if err != nil {
-					return fmt.Errorf("patch node(%s) : %w", gpuNode.Name, err)
+				}, client.Merge); err != nil {
+					log.Error(err, "patch node(%s) failed", gpuNode.Name)
+					continue
 				}
 			}
 		}
 	}
-
-	log.Info("Checking node compaction", "name", pool.Name)
+	log.Info("Checking node compaction completed", "name", pool.Name)
 	return nil
 }
 

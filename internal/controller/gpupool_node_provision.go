@@ -184,5 +184,5 @@ func createProvisionerAndQueryCluster(ctx context.Context, pool *tfv1.GPUPool, r
 		return nil, nil, err
 	}
 
-	return *provider, &cluster, nil
+	return provider, &cluster, nil
 }

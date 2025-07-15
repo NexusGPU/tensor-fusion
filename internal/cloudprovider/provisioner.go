@@ -13,7 +13,7 @@ import (
 	mock "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/mock"
 )
 
-func GetProvider(config tfv1.ComputingVendorConfig, client client.Client, nodeManagerConfig *tfv1.NodeManagerConfig) (*types.GPUNodeProvider, error) {
+func GetProvider(config tfv1.ComputingVendorConfig, client client.Client, nodeManagerConfig *tfv1.NodeManagerConfig) (types.GPUNodeProvider, error) {
 	var err error
 	var provider types.GPUNodeProvider
 	switch config.Type {
@@ -29,6 +29,6 @@ func GetProvider(config tfv1.ComputingVendorConfig, client client.Client, nodeMa
 	default:
 		return nil, fmt.Errorf("unsupported cloud provider: %s", config.Type)
 	}
-	return &provider, err
+	return provider, err
 
 }

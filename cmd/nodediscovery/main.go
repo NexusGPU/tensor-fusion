@@ -167,7 +167,7 @@ func main() {
 		availableVRAM.Add(gpu.Status.Available.Vram)
 	}
 
-	ns := nodeStatus(k8sNodeName)
+	ns := nodeStatus()
 	ns.TotalTFlops = totalTFlops
 	ns.TotalVRAM = totalVRAM
 	ns.AvailableTFlops = availableTFlops
@@ -282,7 +282,7 @@ func createOrUpdateTensorFusionGPU(
 	return gpu
 }
 
-func nodeStatus(k8sNodeName string) *tfv1.GPUNodeStatus {
+func nodeStatus() *tfv1.GPUNodeStatus {
 	return &tfv1.GPUNodeStatus{
 		Phase: tfv1.TensorFusionGPUNodePhaseRunning,
 	}
