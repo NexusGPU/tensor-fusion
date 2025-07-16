@@ -35,12 +35,12 @@ var _ = Describe("FakeNodeClaimController", func() {
 			Version: "v1",
 			Kind:    "EC2NodeClass",
 		})
-		ec2.SetName("test-nodeclass")
+		ec2.SetName("test-nodeClass")
 
 		ec2.Object["spec"] = map[string]any{
 			// Required
 			"role":      "arn:aws:iam::123456789012:role/dummy",
-			"amiFamily": "Bottlerocket",
+			"amiFamily": "AL2023",
 
 			// subnetSelectorTerms – at least 1 element
 			"subnetSelectorTerms": []any{
@@ -79,7 +79,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 			Version: "v1",
 			Kind:    "EC2NodeClass",
 		})
-		nc.SetName("test-nodeclass")
+		nc.SetName("test-nodeClass")
 		_ = k8sClient.Delete(ctx, nc)
 	})
 
@@ -136,12 +136,6 @@ var _ = Describe("FakeNodeClaimController", func() {
 				TFlopsOffered:    resource.MustParse("125"),
 				VRAMOffered:      resource.MustParse("64Gi"),
 				GPUDeviceOffered: 4,
-				ExtraParams: map[string]string{
-					"karpenter.nodeclassref.name":    "test-nodeclass",
-					"karpenter.nodeclassref.group":   "karpenter.k8s.aws",
-					"karpenter.nodeclassref.version": "v1",
-					"karpenter.nodeclassref.kind":    "EC2NodeClass",
-				},
 			}
 
 			gpuNodeStatus, err := provider.CreateNode(ctx, nodeCreationParam)
@@ -237,12 +231,8 @@ var _ = Describe("FakeNodeClaimController", func() {
 				VRAMOffered:      resource.MustParse("320Gi"),
 				GPUDeviceOffered: 8,
 				ExtraParams: map[string]string{
-					"karpenter.nodeclassref.name":                "test-nodeclass",
-					"karpenter.nodeclassref.group":               "karpenter.k8s.aws",
-					"karpenter.nodeclassref.version":             "v1",
-					"karpenter.nodeclassref.kind":                "EC2NodeClass",
-					"karpenter.nodeclaim.terminationgraceperiod": "120s",
-					"karpenter.gpuresource":                      "nvidia.com/gpu",
+					"karpenter.nodeClaim.terminationGracePeriod": "120s",
+					"karpenter.gpuResource":                      "nvidia.com/gpu",
 				},
 			}
 

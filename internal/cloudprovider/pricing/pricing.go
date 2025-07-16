@@ -19,10 +19,9 @@ package pricing
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/csv"
-	"fmt"
-	"log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -30,6 +29,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -76,13 +76,13 @@ func init() {
 	globalAWSGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
 	globalAzureGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
 	tflopsMap = make(map[string]config.GpuInfo)
-	loadCSVInstanceDataFromPath([]byte(awsCSV), providerAWS)
-	loadCSVInstanceDataFromPath([]byte(azureCSV), providerAzure)
+	loadCSVInstanceDataFromPath(context.Background(), []byte(awsCSV), providerAWS)
+	loadCSVInstanceDataFromPath(context.Background(), []byte(azureCSV), providerAzure)
 }
 
-func SetTflopsMap(gpuInfos *[]config.GpuInfo) {
+func SetTflopsMap(ctx context.Context, gpuInfos *[]config.GpuInfo) {
 	if gpuInfos == nil {
-		log.Println("gpuInfos is nil")
+		log.FromContext(ctx).Info("gpuInfos is empty, check public-gpu-info config file")
 		return
 	}
 	for _, gpuInfo := range *gpuInfos {
@@ -91,11 +91,11 @@ func SetTflopsMap(gpuInfos *[]config.GpuInfo) {
 }
 
 // loadCSVInstanceDataFromPath loads instance data from a single CSV file
-func loadCSVInstanceDataFromPath(data []byte, provider string) {
+func loadCSVInstanceDataFromPath(ctx context.Context, data []byte, provider string) {
 	reader := csv.NewReader(bytes.NewReader(data))
 	records, err := reader.ReadAll()
 	if err != nil {
-		fmt.Printf("Error reading %s CSV file: %v\n", provider, err)
+		log.FromContext(ctx).Error(err, "Error reading %s CSV file", provider)
 		return
 	}
 
@@ -153,7 +153,7 @@ func loadCSVInstanceDataFromPath(data []byte, provider string) {
 		globalAzureGPUInstanceData = localAzureGPUInstanceData
 	}
 
-	log.Printf("ReLoaded %d %s GPU instances", processedCount, provider)
+	log.FromContext(ctx).Info("Loaded %d %s GPU instance types", processedCount, provider)
 }
 
 // parseAWSRecord parses a single AWS CSV record

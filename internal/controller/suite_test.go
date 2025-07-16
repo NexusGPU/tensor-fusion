@@ -531,8 +531,44 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 		if b.provisionerConfig != nil {
 			if b.provisionerConfig.Type == tfv1.ComputingVendorKarpenter {
 				gpuPools[i].SpecTemplate.NodeManagerConfig.ProvisioningMode = tfv1.ProvisioningModeKarpenter
+				gpuPools[i].SpecTemplate.NodeManagerConfig.NodeProvisioner = &tfv1.NodeProvisioner{
+					KarpenterNodeClassRef: &tfv1.GroupKindName{
+						Group: "karpenter.sh",
+						Kind:  "NodeClass",
+						Name:  "test-nodeClass-karpenter",
+					},
+					GPURequirements: []tfv1.Requirement{
+						{
+							Key:      tfv1.NodeRequirementKeyInstanceType,
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{"g6.xlarge"},
+						},
+					},
+					GPULabels: map[string]string{
+						"mock-label": "true",
+					},
+					GPUAnnotation: map[string]string{
+						"mock-annotation": "true",
+					},
+				}
 			} else {
 				gpuPools[i].SpecTemplate.NodeManagerConfig.ProvisioningMode = tfv1.ProvisioningModeProvisioned
+				gpuPools[i].SpecTemplate.NodeManagerConfig.NodeProvisioner = &tfv1.NodeProvisioner{
+					NodeClass: "test-nodeClass",
+					GPURequirements: []tfv1.Requirement{
+						{
+							Key:      tfv1.NodeRequirementKeyInstanceType,
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{"g6.xlarge"},
+						},
+					},
+					GPULabels: map[string]string{
+						"mock-label": "true",
+					},
+					GPUAnnotation: map[string]string{
+						"mock-annotation": "true",
+					},
+				}
 			}
 		}
 	}

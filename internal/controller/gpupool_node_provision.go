@@ -89,18 +89,29 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 		return false, err
 	}
 
-	nodeClass := pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass
-	if nodeClass == "" {
-		return false, fmt.Errorf("failed to get node class for pool %s", pool.Name)
-	}
-	var nodeClassObj tfv1.GPUNodeClass
-	err = r.Get(ctx, client.ObjectKey{Name: nodeClass}, &nodeClassObj)
-	if err != nil {
-		return false, err
+	var nodeClassRef tfv1.GroupKindName
+	switch pool.Spec.NodeManagerConfig.ProvisioningMode {
+	case tfv1.ProvisioningModeProvisioned:
+		if pool.Spec.NodeManagerConfig.NodeProvisioner == nil {
+			return false, fmt.Errorf("failed to get node provisioner config for pool %s", pool.Name)
+		}
+		if pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass == "" {
+			return false, fmt.Errorf("failed to get node class for pool %s", pool.Name)
+		}
+		nodeClassRef = tfv1.GroupKindName{
+			Name:  pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass,
+			Kind:  "GPUNodeClass",
+			Group: tfv1.GroupVersion.Group,
+		}
+	case tfv1.ProvisioningModeKarpenter:
+		if pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef == nil {
+			return false, fmt.Errorf("failed to get karpenter node class ref for pool %s", pool.Name)
+		}
+		nodeClassRef = *pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef
 	}
 
 	// convert resource gap to least cost GPUNode creation param
-	gpuNodeParams, err := common.CalculateLeastCostGPUNodes(ctx, provider, cluster, pool, &nodeClassObj, tflopsGap, vramGap)
+	gpuNodeParams, err := common.CalculateLeastCostGPUNodes(ctx, provider, cluster, pool, nodeClassRef, tflopsGap, vramGap)
 	if err != nil {
 		return false, err
 	}
@@ -124,13 +135,13 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 				return
 			}
 
-			gpuNodeRes := &tfv1.GPUNodeClaim{
+			gpuNodeClaimRes := &tfv1.GPUNodeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: node.NodeName,
 					Labels: map[string]string{
 						constants.LabelKeyOwner:        pool.Name,
 						constants.LabelKeyClusterOwner: cluster.Name,
-						constants.LabelKeyNodeClass:    nodeClass,
+						constants.LabelKeyNodeClass:    nodeClassRef.Name,
 
 						// to be compatible with nodeSelector mode, allow GPUNode controller to start HyperVisor pod
 						fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true",
@@ -141,8 +152,8 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 				},
 				Spec: node,
 			}
-			_ = controllerutil.SetControllerReference(pool, gpuNodeRes, r.Scheme)
-			err := r.Create(ctx, gpuNodeRes)
+			_ = controllerutil.SetControllerReference(pool, gpuNodeClaimRes, r.Scheme)
+			err := r.Create(ctx, gpuNodeClaimRes)
 			if err != nil {
 				errList = append(errList, err)
 				return
@@ -161,7 +172,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 func createProvisionerAndQueryCluster(ctx context.Context, pool *tfv1.GPUPool, r client.Client) (types.GPUNodeProvider, *tfv1.TensorFusionCluster, error) {
 
 	if pool.Spec.NodeManagerConfig == nil || pool.Spec.NodeManagerConfig.NodeProvisioner == nil {
-		return nil, nil, fmt.Errorf("failed to get node provisioner for pool %s", pool.Name)
+		return nil, nil, fmt.Errorf("failed to get node provisioner config for pool %s", pool.Name)
 	}
 
 	clusterName := pool.Labels[constants.LabelKeyOwner]
