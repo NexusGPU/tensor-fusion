@@ -14,6 +14,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 var cachedClient *ecs.Client
@@ -21,9 +22,10 @@ var cachedClient *ecs.Client
 type AlibabaGPUNodeProvider struct {
 	client    *ecs.Client
 	nodeClass *tfv1.GPUNodeClass
+	ctx       context.Context
 }
 
-func NewAlibabaGPUNodeProvider(config tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNodeClass) (AlibabaGPUNodeProvider, error) {
+func NewAlibabaGPUNodeProvider(ctx context.Context, config tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNodeClass) (AlibabaGPUNodeProvider, error) {
 
 	var provider AlibabaGPUNodeProvider
 
@@ -67,6 +69,7 @@ func NewAlibabaGPUNodeProvider(config tfv1.ComputingVendorConfig, nodeClass *tfv
 	cachedClient = client
 
 	provider.nodeClass = nodeClass
+	provider.ctx = ctx
 	return provider, nil
 }
 
@@ -76,7 +79,7 @@ func (p AlibabaGPUNodeProvider) TestConnection() error {
 	if err != nil {
 		return fmt.Errorf("can not connect to Aliyun ECS API: %v", err)
 	}
-	fmt.Printf("Successfully connected to Aliyun ECS. Available regions got")
+	log.FromContext(p.ctx).Info("Successfully connected to Aliyun ECS. Available regions got")
 	return nil
 }
 

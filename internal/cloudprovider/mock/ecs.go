@@ -9,10 +9,12 @@ import (
 )
 
 type MockGPUNodeProvider struct {
+	nodeClass *tfv1.GPUNodeClass
 }
 
-func NewMockGPUNodeProvider(config tfv1.ComputingVendorConfig) (MockGPUNodeProvider, error) {
+func NewMockGPUNodeProvider(config tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNodeClass) (MockGPUNodeProvider, error) {
 	var provider MockGPUNodeProvider
+	provider.nodeClass = nodeClass
 	return provider, nil
 }
 

@@ -3,7 +3,6 @@ package karpenter
 import (
 	"context"
 	"fmt"
-	"log"
 	"maps"
 	"strings"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
@@ -38,9 +38,10 @@ type KarpenterGPUNodeProvider struct {
 	config            tfv1.ComputingVendorConfig
 	nodeManagerConfig *tfv1.NodeManagerConfig
 	pricingProvider   *pricing.StaticPricingProvider
+	ctx               context.Context
 }
 
-func NewKarpenterGPUNodeProvider(cfg tfv1.ComputingVendorConfig, client client.Client, nodeManagerConfig *tfv1.NodeManagerConfig) (KarpenterGPUNodeProvider, error) {
+func NewKarpenterGPUNodeProvider(ctx context.Context, cfg tfv1.ComputingVendorConfig, client client.Client, nodeManagerConfig *tfv1.NodeManagerConfig) (KarpenterGPUNodeProvider, error) {
 	// Validate configuration
 	if cfg.Type != tfv1.ComputingVendorKarpenter {
 		return KarpenterGPUNodeProvider{}, fmt.Errorf("invalid computing vendor type: expected 'karpenter', got '%s'", cfg.Type)
@@ -55,6 +56,7 @@ func NewKarpenterGPUNodeProvider(cfg tfv1.ComputingVendorConfig, client client.C
 		config:            cfg,
 		nodeManagerConfig: nodeManagerConfig,
 		pricingProvider:   pricingProvider,
+		ctx:               ctx,
 	}, nil
 }
 
@@ -65,7 +67,7 @@ func (p KarpenterGPUNodeProvider) TestConnection() error {
 	exist := true
 	// check if NodeClaim CRD exists
 	if err := p.client.List(context.Background(), &karpv1.NodeClaimList{}); err != nil {
-		log.Printf("karpenter NodeClaim CRD not found.")
+		log.FromContext(p.ctx).Error(err, "karpenter NodeClaim CRD not found.")
 		exist = false
 	}
 	if exist {
@@ -73,7 +75,7 @@ func (p KarpenterGPUNodeProvider) TestConnection() error {
 	}
 	// check if NodePool CRD exists
 	if err := p.client.List(context.Background(), &karpv1.NodePoolList{}); err != nil {
-		log.Printf("karpenter NodePool CRD not found.")
+		log.FromContext(p.ctx).Error(err, "karpenter NodePool CRD not found.")
 		return fmt.Errorf("karpenter CRD not found or not accessible")
 	}
 	return nil
@@ -95,8 +97,8 @@ func (p KarpenterGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GP
 	}
 
 	// Log the NodeClaim creation
-	fmt.Printf("Created NodeClaim: %s with instance type: %s in region: %s\n",
-		nodeClaim.Name, param.InstanceType, param.Region)
+	log.FromContext(ctx).Info("Created NodeClaim", "nodeClaim", nodeClaim.Name, "instanceType",
+		param.InstanceType, "region", param.Region)
 
 	// Return the initial status - actual node creation will be handled by Karpenter
 	status := &types.GPUNodeStatus{
@@ -129,7 +131,7 @@ func (p KarpenterGPUNodeProvider) TerminateNode(ctx context.Context, param *type
 	if err != nil {
 		return fmt.Errorf("failed to delete NodeClaim for instance %s: %v", param.InstanceID, err)
 	}
-	fmt.Printf("Terminated NodeClaim for instance: %s in region: %s\n", param.InstanceID, param.Region)
+	log.FromContext(ctx).Info("Terminated NodeClaim", "instanceID", param.InstanceID, "region", param.Region)
 
 	return nil
 }
@@ -174,8 +176,8 @@ func (p KarpenterGPUNodeProvider) GetNodeStatus(ctx context.Context, param *type
 	} else if !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("get Node %q failed: %w", param.InstanceID, err)
 	} else {
-		// Node not register
-		log.Printf("Node %q not registered in cluster", param.InstanceID)
+		// Node not registered
+		log.FromContext(ctx).Info("Node not registered in cluster", "instanceID", param.InstanceID)
 	}
 	return status, nil
 }
@@ -191,7 +193,7 @@ func (p KarpenterGPUNodeProvider) GetInstancePricing(instanceType string, region
 func (p KarpenterGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []types.GPUNodeInstanceInfo {
 	instanceTypes, exists := p.pricingProvider.GetGPUNodeInstanceTypeInfo(region)
 	if !exists {
-		log.Printf("no instance type info found for region %s", region)
+		log.FromContext(p.ctx).Error(nil, "no instance type info found for region %s", region)
 		return []types.GPUNodeInstanceInfo{} // avoid panic
 	}
 	return instanceTypes
@@ -427,7 +429,7 @@ func (p KarpenterGPUNodeProvider) buildTerminationGracePeriod(nodeClaim *karpv1.
 	duration, err := time.ParseDuration(karpenterConfig.NodeClaim.TerminationGracePeriod)
 	if err != nil {
 		// Log error and skip setting termination grace period
-		log.Printf("Failed to parse termination grace period %s: %v", karpenterConfig.NodeClaim.TerminationGracePeriod, err)
+		log.FromContext(p.ctx).Error(err, "Failed to parse termination grace period", "terminationGracePeriod", karpenterConfig.NodeClaim.TerminationGracePeriod)
 		return
 	}
 	nodeClaim.Spec.TerminationGracePeriod = &metav1.Duration{

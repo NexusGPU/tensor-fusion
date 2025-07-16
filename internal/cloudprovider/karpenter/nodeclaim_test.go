@@ -51,7 +51,8 @@ func TestNewKarpenterGPUNodeProvider(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			provider, err := NewKarpenterGPUNodeProvider(tt.cfg, tt.client, &tt.nodeConfig)
+			ctx := t.Context()
+			provider, err := NewKarpenterGPUNodeProvider(ctx, tt.cfg, tt.client, &tt.nodeConfig)
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorContains)
