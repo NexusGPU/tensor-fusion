@@ -93,6 +93,8 @@ spec:
           status:
             description: GPUNodeClaimStatus defines the observed state of GPUNodeClaim.
             properties:
+              instanceID:
+                type: string
               phase:
                 default: Pending
                 type: string

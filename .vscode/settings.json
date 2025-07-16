@@ -76,6 +76,7 @@
         "influxdata",
         "jsonpatch",
         "karpenter",
+        "karpv",
         "klog",
         "Klogr",
         "kubebuilder",
