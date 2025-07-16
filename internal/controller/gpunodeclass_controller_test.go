@@ -39,11 +39,11 @@ var _ = Describe("GPUNodeClass Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		gpunodeclass := &tfv1.GPUNodeClass{}
+		gpuNodeClass := &tfv1.GPUNodeClass{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind GPUNodeClass")
-			err := k8sClient.Get(ctx, typeNamespacedName, gpunodeclass)
+			err := k8sClient.Get(ctx, typeNamespacedName, gpuNodeClass)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &tfv1.GPUNodeClass{
 					ObjectMeta: metav1.ObjectMeta{

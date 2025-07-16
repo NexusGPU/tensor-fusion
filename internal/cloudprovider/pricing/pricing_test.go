@@ -4,7 +4,7 @@ import (
 	_ "embed"
 	"testing"
 
-	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -16,20 +16,20 @@ func TestStaticPricingProvider_AWS(t *testing.T) {
 	region := "us-east-1"
 
 	// Test on-demand pricing
-	price, found := provider.GetPringcing(instanceType, types.CapacityTypeOnDemand)
+	price, found := provider.GetPricing(instanceType, tfv1.CapacityTypeOnDemand)
 	if found {
 		assert.Greater(t, price, 0.0, "AWS on-demand price should be greater than 0")
 		t.Logf("AWS %s on-demand price: $%.4f/hour", instanceType, price)
 	}
 
 	// Test getting pricing with capacity type
-	onDemandPrice, foundOnDemand := provider.GetPringcing(instanceType, types.CapacityTypeOnDemand)
+	onDemandPrice, foundOnDemand := provider.GetPricing(instanceType, tfv1.CapacityTypeOnDemand)
 	if foundOnDemand {
 		assert.Greater(t, onDemandPrice, 0.0, "AWS on-demand price should be greater than 0")
-		t.Logf("AWS %s on-demand price (via GetPringcing): $%.4f/hour", instanceType, onDemandPrice)
+		t.Logf("AWS %s on-demand price (via GetPricing): $%.4f/hour", instanceType, onDemandPrice)
 	}
 
-	reservedPrice, foundReserved := provider.GetPringcing(instanceType, types.CapacityTypeReserved)
+	reservedPrice, foundReserved := provider.GetPricing(instanceType, tfv1.CapacityTypeReserved)
 	if foundReserved {
 		assert.GreaterOrEqual(t, reservedPrice, 0.0, "AWS reserved price should be >= 0")
 		t.Logf("AWS %s reserved price: $%.4f/hour", instanceType, reservedPrice)
@@ -75,26 +75,26 @@ func TestStaticPricingProvider_Azure(t *testing.T) {
 	region := "eastus"
 
 	// Test on-demand pricing
-	price, found := provider.GetPringcing(instanceType, types.CapacityTypeOnDemand)
+	price, found := provider.GetPricing(instanceType, tfv1.CapacityTypeOnDemand)
 	if found {
 		assert.Greater(t, price, 0.0, "Azure on-demand price should be greater than 0")
 		t.Logf("Azure %s on-demand price: $%.4f/hour", instanceType, price)
 	}
 
 	// Test getting pricing with capacity type
-	onDemandPrice, foundOnDemand := provider.GetPringcing(instanceType, types.CapacityTypeOnDemand)
+	onDemandPrice, foundOnDemand := provider.GetPricing(instanceType, tfv1.CapacityTypeOnDemand)
 	if foundOnDemand {
 		assert.Greater(t, onDemandPrice, 0.0, "Azure on-demand price should be greater than 0")
-		t.Logf("Azure %s on-demand price (via GetPringcing): $%.4f/hour", instanceType, onDemandPrice)
+		t.Logf("Azure %s on-demand price (via GetPricing): $%.4f/hour", instanceType, onDemandPrice)
 	}
 
-	reservedPrice, foundReserved := provider.GetPringcing(instanceType, types.CapacityTypeReserved)
+	reservedPrice, foundReserved := provider.GetPricing(instanceType, tfv1.CapacityTypeReserved)
 	if foundReserved {
 		assert.GreaterOrEqual(t, reservedPrice, 0.0, "Azure reserved price should be >= 0")
 		t.Logf("Azure %s reserved price: $%.4f/hour", instanceType, reservedPrice)
 	}
 
-	spotPrice, foundSpot := provider.GetPringcing(instanceType, types.CapacityTypeSpot)
+	spotPrice, foundSpot := provider.GetPricing(instanceType, tfv1.CapacityTypeSpot)
 	if foundSpot {
 		assert.GreaterOrEqual(t, spotPrice, 0.0, "Azure spot price should be >= 0")
 		t.Logf("Azure %s spot price: $%.4f/hour", instanceType, spotPrice)
@@ -150,19 +150,19 @@ func TestParseHelperFunctions(t *testing.T) {
 
 func TestIsFractionalGPUCount(t *testing.T) {
 	provider := NewStaticPricingProvider()
-	price, found := provider.GetPringcing("NV12ads v710 v5", types.CapacityTypeOnDemand)
+	price, found := provider.GetPricing("NV12ads v710 v5", tfv1.CapacityTypeOnDemand)
 	assert.False(t, found)
 	assert.Equal(t, 0.0, price)
 }
 
-func TestUnavaliableGPUCount(t *testing.T) {
+func TestUnavailableGPUCount(t *testing.T) {
 	provider := NewStaticPricingProvider()
-	price, found := provider.GetPringcing("NG32ads V620 v1", types.CapacityTypeOnDemand)
+	price, found := provider.GetPricing("NG32ads V620 v1", tfv1.CapacityTypeOnDemand)
 	assert.False(t, found)
 	assert.Equal(t, 0.0, price)
 }
 
-func TestAZGPUNodeInstanceInfo(t *testing.T) {
+func TestAzureGPUNodeInstanceInfo(t *testing.T) {
 	provider := NewStaticPricingProvider()
 	ND12s, found := provider.GetGPUNodeInstanceTypeInfoByInstance("ND12s", "eastus")
 	assert.True(t, found)

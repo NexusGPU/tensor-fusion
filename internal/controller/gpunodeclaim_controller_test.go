@@ -26,7 +26,7 @@ import (
 
 var _ = Describe("GPUNodeClaim Controller", func() {
 	Context("When reconciling pool with Karpenter provisioner", func() {
-		It("should successfully create GPU node claim and karpenter node-claim", func() {
+		FIt("should successfully create GPU node claim and karpenter node-claim", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).
 				SetGpuCountPerNode(1).

@@ -17,11 +17,11 @@ func GetProvider(config tfv1.ComputingVendorConfig, client client.Client, nodeMa
 	var err error
 	var provider types.GPUNodeProvider
 	switch config.Type {
-	// TODO
+	// TODO: fix me, param
 	case "aws":
 		provider, err = aws.NewAWSGPUNodeProvider(config, nil)
 	case "alibaba":
-		provider, err = alibaba.NewAlibabaGPUNodeProvider(config)
+		provider, err = alibaba.NewAlibabaGPUNodeProvider(config, nil)
 	case "karpenter":
 		provider, err = karpenter.NewKarpenterGPUNodeProvider(config, client, *nodeManagerConfig)
 	case "mock":
