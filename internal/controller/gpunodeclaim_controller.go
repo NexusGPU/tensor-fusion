@@ -130,9 +130,11 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	// create or check cloud vendor node
-	if err := r.reconcileCloudVendorNode(ctx, claim, pool); err != nil {
-		return ctrl.Result{}, err
+	// create or check cloud vendor node when instance ID is empty
+	if claim.Status.InstanceID == "" {
+		if err := r.reconcileCloudVendorNode(ctx, claim, pool, provider); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	return ctrl.Result{}, nil
 }
@@ -145,36 +147,28 @@ func (r *GPUNodeClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *GPUNodeClaimReconciler) reconcileCloudVendorNode(ctx context.Context, claim *tfv1.GPUNodeClaim, pool *tfv1.GPUPool) error {
-	// No NodeInfo, should create new one
-	provider, _, err := createProvisionerAndQueryCluster(ctx, pool, r.Client)
+func (r *GPUNodeClaimReconciler) reconcileCloudVendorNode(ctx context.Context, claim *tfv1.GPUNodeClaim, pool *tfv1.GPUPool, provider types.GPUNodeProvider) error {
+	// TODO: should be async with request ID
+	status, err := provider.CreateNode(ctx, &claim.Spec)
 	if err != nil {
 		return err
 	}
-
-	if claim.Status.InstanceID == "" {
-		// TODO: should be async with request ID
-		status, err := provider.CreateNode(ctx, &claim.Spec)
-		if err != nil {
+	r.Recorder.Eventf(pool, corev1.EventTypeNormal, "ManagedNodeCreated", "Created node: %s, IP: %s", status.InstanceID, status.PrivateIP)
+	// Retry status update until success to handle version conflicts
+	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		// Get the latest version before attempting an update
+		latest := &tfv1.GPUNodeClaim{}
+		if err := r.Get(ctx, client.ObjectKey{Name: claim.Name}, latest); err != nil {
 			return err
 		}
-		r.Recorder.Eventf(pool, corev1.EventTypeNormal, "ManagedNodeCreated", "Created node: %s, IP: %s", status.InstanceID, status.PrivateIP)
-		// Retry status update until success to handle version conflicts
-		if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-			// Get the latest version before attempting an update
-			latest := &tfv1.GPUNodeClaim{}
-			if err := r.Get(ctx, client.ObjectKey{Name: claim.Name}, latest); err != nil {
-				return err
-			}
-			// Apply our status updates to the latest version
-			latest.Status.InstanceID = status.InstanceID
-			latest.Status.Phase = tfv1.GPUNodeClaimBound
+		// Apply our status updates to the latest version
+		latest.Status.InstanceID = status.InstanceID
+		latest.Status.Phase = tfv1.GPUNodeClaimBound
 
-			// Attempt to update with the latest version
-			return r.Status().Update(ctx, latest)
-		}); err != nil {
-			return err
-		}
+		// Attempt to update with the latest version
+		return r.Status().Update(ctx, latest)
+	}); err != nil {
+		return err
 	}
 	return nil
 }

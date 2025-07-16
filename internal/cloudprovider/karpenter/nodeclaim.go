@@ -22,15 +22,8 @@ import (
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
-// KarpenterConfig holds Karpenter-specific configuration parsed from ExtraParams
-type KarpenterConfig struct {
-	NodeClassRef struct {
-		Name    string `mapstructure:"name"`
-		Group   string `mapstructure:"group"`
-		Version string `mapstructure:"version"`
-		Kind    string `mapstructure:"kind"`
-	} `mapstructure:"nodeClassRef"`
-
+// KarpenterExtraConfig holds Karpenter-specific configuration parsed from ExtraParams
+type KarpenterExtraConfig struct {
 	// NodeClaim configuration
 	NodeClaim struct {
 		TerminationGracePeriod string `mapstructure:"terminationGracePeriod"`
@@ -47,7 +40,7 @@ type KarpenterGPUNodeProvider struct {
 	pricingProvider   *pricing.StaticPricingProvider
 }
 
-func NewKarpenterGPUNodeProvider(cfg tfv1.ComputingVendorConfig, client client.Client, nodeManagerConfig tfv1.NodeManagerConfig) (KarpenterGPUNodeProvider, error) {
+func NewKarpenterGPUNodeProvider(cfg tfv1.ComputingVendorConfig, client client.Client, nodeManagerConfig *tfv1.NodeManagerConfig) (KarpenterGPUNodeProvider, error) {
 	// Validate configuration
 	if cfg.Type != tfv1.ComputingVendorKarpenter {
 		return KarpenterGPUNodeProvider{}, fmt.Errorf("invalid computing vendor type: expected 'karpenter', got '%s'", cfg.Type)
@@ -60,7 +53,7 @@ func NewKarpenterGPUNodeProvider(cfg tfv1.ComputingVendorConfig, client client.C
 	return KarpenterGPUNodeProvider{
 		client:            client,
 		config:            cfg,
-		nodeManagerConfig: &nodeManagerConfig,
+		nodeManagerConfig: nodeManagerConfig,
 		pricingProvider:   pricingProvider,
 	}, nil
 }
@@ -205,8 +198,8 @@ func (p KarpenterGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []ty
 }
 
 // parseKarpenterConfig extracts Karpenter-specific configuration from ExtraParams
-func (p KarpenterGPUNodeProvider) parseKarpenterConfig(param *tfv1.GPUNodeClaimSpec) *KarpenterConfig {
-	karpenterConfig := &KarpenterConfig{}
+func (p KarpenterGPUNodeProvider) parseKarpenterConfig(param *tfv1.GPUNodeClaimSpec) *KarpenterExtraConfig {
+	karpenterConfig := &KarpenterExtraConfig{}
 	extraParams := param.ExtraParams
 	if extraParams == nil {
 		return karpenterConfig
@@ -234,12 +227,12 @@ func (p KarpenterGPUNodeProvider) parseKarpenterConfig(param *tfv1.GPUNodeClaimS
 	})
 	if err != nil {
 		// if decoder creation failed, return empty config
-		return &KarpenterConfig{}
+		return &KarpenterExtraConfig{}
 	}
 
 	if err := decoder.Decode(karpenterData); err != nil {
 		// if decode failed, return empty config
-		return &KarpenterConfig{}
+		return &KarpenterExtraConfig{}
 	}
 
 	if karpenterConfig.GPUResourceName == "" {
@@ -282,10 +275,6 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *tfv
 	// Parse Karpenter configuration from ExtraParams
 	karpenterConfig := p.parseKarpenterConfig(param)
 
-	if karpenterConfig.NodeClassRef.Name == "" {
-		return nil, fmt.Errorf("NodeClass name is required")
-	}
-
 	// Build resource requirements - only include resources that Karpenter understands
 	resourceRequests := corev1.ResourceList{}
 
@@ -295,9 +284,9 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *tfv
 	}
 
 	// query nodeClass and build NodeClassRef
-	nodeClassRef, err := p.queryAndBuildNodeClassRef(ctx, *karpenterConfig)
+	nodeClassRef, err := p.queryAndBuildNodeClassRef(ctx, param)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query NodeClass %s: %v", karpenterConfig.NodeClassRef.Name, err)
+		return nil, fmt.Errorf("failed to query NodeClass %s: %v", param.NodeClassRef.Name, err)
 	}
 
 	// Create NodeClaim using Karpenter's official type
@@ -333,25 +322,24 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *tfv
 	return nodeClaim, nil
 }
 
-func (p KarpenterGPUNodeProvider) queryAndBuildNodeClassRef(ctx context.Context, karpenterConfig KarpenterConfig) (*karpv1.NodeClassReference, error) {
+func (p KarpenterGPUNodeProvider) queryAndBuildNodeClassRef(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*karpv1.NodeClassReference, error) {
 	gvk := schema.GroupVersionKind{
-		Group:   karpenterConfig.NodeClassRef.Group,
-		Version: karpenterConfig.NodeClassRef.Version,
-		Kind:    karpenterConfig.NodeClassRef.Kind,
+		Group: param.NodeClassRef.Group,
+		Kind:  param.NodeClassRef.Kind,
 	}
 	nodeClass := &unstructured.Unstructured{}
 	nodeClass.SetGroupVersionKind(gvk)
-	err := p.client.Get(ctx, client.ObjectKey{Name: karpenterConfig.NodeClassRef.Name}, nodeClass)
+	err := p.client.Get(ctx, client.ObjectKey{Name: param.NodeClassRef.Name}, nodeClass)
 	if err == nil {
 		return &karpv1.NodeClassReference{
 			Group: gvk.Group,
 			Kind:  gvk.Kind,
-			Name:  karpenterConfig.NodeClassRef.Name,
+			Name:  param.NodeClassRef.Name,
 		}, nil
 	} else if !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("error querying %s/%s %s: %v", gvk.Group, gvk.Kind, karpenterConfig.NodeClassRef.Name, err)
+		return nil, fmt.Errorf("error querying %s/%s %s: %v", gvk.Group, gvk.Kind, param.NodeClassRef.Name, err)
 	}
-	return nil, fmt.Errorf("NodeClass %s %s %s %s not found", gvk.Group, gvk.Version, gvk.Kind, karpenterConfig.NodeClassRef.Name)
+	return nil, fmt.Errorf("NodeClass %s %s %s %s not found", gvk.Group, gvk.Version, gvk.Kind, param.NodeClassRef.Name)
 }
 
 func (p KarpenterGPUNodeProvider) buildRequirements(nodeClaim *karpv1.NodeClaim, param *tfv1.GPUNodeClaimSpec) {
@@ -432,7 +420,7 @@ func (p KarpenterGPUNodeProvider) buildCustomTaints(nodeClaim *karpv1.NodeClaim)
 	}
 }
 
-func (p KarpenterGPUNodeProvider) buildTerminationGracePeriod(nodeClaim *karpv1.NodeClaim, karpenterConfig KarpenterConfig) {
+func (p KarpenterGPUNodeProvider) buildTerminationGracePeriod(nodeClaim *karpv1.NodeClaim, karpenterConfig KarpenterExtraConfig) {
 	if karpenterConfig.NodeClaim.TerminationGracePeriod == "" {
 		return
 	}
