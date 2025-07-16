@@ -120,7 +120,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 			}
 
 			var err error
-			provider, err = karpenter.NewKarpenterGPUNodeProvider(cfg, k8sClient, nodeManagerConfig)
+			provider, err = karpenter.NewKarpenterGPUNodeProvider(cfg, k8sClient, &nodeManagerConfig)
 			Expect(err).NotTo(HaveOccurred())
 		})
 

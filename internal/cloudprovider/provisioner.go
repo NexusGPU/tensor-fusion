@@ -23,7 +23,7 @@ func GetProvider(config tfv1.ComputingVendorConfig, client client.Client, nodeMa
 	case "alibaba":
 		provider, err = alibaba.NewAlibabaGPUNodeProvider(config, nil)
 	case "karpenter":
-		provider, err = karpenter.NewKarpenterGPUNodeProvider(config, client, *nodeManagerConfig)
+		provider, err = karpenter.NewKarpenterGPUNodeProvider(config, client, nodeManagerConfig)
 	case "mock":
 		provider, err = mock.NewMockGPUNodeProvider(config)
 	default:
