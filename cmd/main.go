@@ -450,7 +450,7 @@ func startScheduler(
 		return nil
 	}
 	if schedulerConfigPath == "" {
-		setupLog.Error(fmt.Errorf("scheduler config path is empty, please and --scheduler-config in command line"), "")
+		setupLog.Error(nil, "scheduler config path is empty, please and --scheduler-config in command line")
 		os.Exit(1)
 	}
 

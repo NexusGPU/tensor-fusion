@@ -190,7 +190,7 @@ func createProvisionerAndQueryCluster(ctx context.Context, pool *tfv1.GPUPool, r
 		return nil, nil, fmt.Errorf("failed to get computing vendor config for cluster %s", clusterName)
 	}
 
-	provider, err := cloudprovider.GetProvider(*vendorCfg, r, pool.Spec.NodeManagerConfig)
+	provider, err := cloudprovider.GetProvider(ctx, *vendorCfg, r, pool.Spec.NodeManagerConfig)
 	if err != nil {
 		return nil, nil, err
 	}

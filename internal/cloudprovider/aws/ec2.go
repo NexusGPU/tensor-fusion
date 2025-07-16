@@ -3,11 +3,11 @@ package aws
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
@@ -18,9 +18,10 @@ type AWSGPUNodeProvider struct {
 	ec2Client       *ec2.Client
 	pricingProvider *pricing.StaticPricingProvider
 	nodeClass       *tfv1.GPUNodeClass
+	ctx             context.Context
 }
 
-func NewAWSGPUNodeProvider(cfg tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNodeClass) (AWSGPUNodeProvider, error) {
+func NewAWSGPUNodeProvider(ctx context.Context, cfg tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNodeClass) (AWSGPUNodeProvider, error) {
 	// TODO only support IAM role at first, need to assume role if role set with custom role
 	awsCfg := aws.Config{
 		Region: cfg.Params.DefaultRegion,
@@ -32,6 +33,7 @@ func NewAWSGPUNodeProvider(cfg tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNo
 		ec2Client:       ec2Client,
 		pricingProvider: pricingProvider,
 		nodeClass:       nodeClass,
+		ctx:             ctx,
 	}
 	return provider, nil
 }
@@ -129,7 +131,7 @@ func (p AWSGPUNodeProvider) GetInstancePricing(instanceType string, region strin
 func (p AWSGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []types.GPUNodeInstanceInfo {
 	instanceTypes, exists := p.pricingProvider.GetGPUNodeInstanceTypeInfo(region)
 	if !exists {
-		log.Printf("no instance type info found for region %s", region)
+		log.FromContext(p.ctx).Error(nil, "no instance type info found for region", "region", region)
 		return []types.GPUNodeInstanceInfo{}
 	}
 	return instanceTypes
