@@ -26,13 +26,16 @@ type GPUNodeClaimStatus struct {
 
 	// +kubebuilder:default=Pending
 	Phase GPUNodeClaimPhase `json:"phase"`
+
+	InstanceID string `json:"instanceID,omitempty"`
 }
 
 type GPUNodeClaimPhase string
 
 const (
-	GPUNodeClaimPending GPUNodeClaimPhase = "Pending"
-	GPUNodeClaimBound   GPUNodeClaimPhase = "Bound"
+	GPUNodeClaimPending  GPUNodeClaimPhase = "Pending"
+	GPUNodeClaimCreating GPUNodeClaimPhase = "Creating"
+	GPUNodeClaimBound    GPUNodeClaimPhase = "Bound"
 )
 
 const GPUNodeClaimKind = "GPUNodeClaim"

@@ -17,77 +17,60 @@ limitations under the License.
 package controller
 
 import (
-	"context"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
 var _ = Describe("GPUNodeClaim Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
-
-		ctx := context.Background()
-
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
-		gpunodeclaim := &tfv1.GPUNodeClaim{}
-
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind GPUNodeClaim")
-			err := k8sClient.Get(ctx, typeNamespacedName, gpunodeclaim)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &tfv1.GPUNodeClaim{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
+	Context("When reconciling pool with Karpenter provisioner", func() {
+		It("should successfully create GPU node claim and karpenter node-claim", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(1).
+				SetGpuCountPerNode(1).
+				SetProvisioningMode(&tfv1.ComputingVendorConfig{
+					Name:   "karpenter-aws",
+					Type:   tfv1.ComputingVendorKarpenter,
+					Enable: ptr.To(true),
+					Params: tfv1.ComputingVendorParams{
+						DefaultRegion: "us-east-1",
 					},
-					Spec: tfv1.GPUNodeClaimSpec{
-						NodeClassRef: tfv1.GroupKindName{
-							Name:  "test-node-class",
-							Kind:  "GPUNodeClass",
-							Group: "tensor-fusion.ai",
-						},
-					},
-					Status: tfv1.GPUNodeClaimStatus{
-						Phase: tfv1.GPUNodeClaimPending,
-					},
+				}).
+				Build()
+			Eventually(func(g Gomega) {
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
+				// TODO
+				gpuNodeClaimList := &tfv1.GPUNodeClaimList{}
+				g.Expect(k8sClient.List(ctx, gpuNodeClaimList)).Should(Succeed())
+				g.Expect(gpuNodeClaimList.Items).Should(HaveLen(1))
+				for _, gpuNodeClaim := range gpuNodeClaimList.Items {
+					g.Expect(gpuNodeClaim.Status.Phase).Should(Equal(tfv1.GPUNodeClaimBound))
 				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
+			}).Should(Succeed())
+			tfEnv.Cleanup()
 		})
 
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &tfv1.GPUNodeClaim{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance GPUNodeClaim")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &GPUNodeClaimReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		PIt("should successfully create GPU node claim and aws node", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(1).
+				SetGpuCountPerNode(1).
+				SetProvisioningMode(&tfv1.ComputingVendorConfig{
+					Name:   "aws",
+					Type:   tfv1.ComputingVendorAWS,
+					Enable: ptr.To(true),
+					Params: tfv1.ComputingVendorParams{
+						DefaultRegion: "us-east-1",
+					},
+				}).
+				Build()
+			Eventually(func(g Gomega) {
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
+			}).Should(Succeed())
+			tfEnv.Cleanup()
 		})
 	})
 })

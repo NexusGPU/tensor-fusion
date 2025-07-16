@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
@@ -33,6 +34,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
 // GPUNodeClaimReconciler reconciles a GPUNodeClaim object
@@ -58,22 +60,6 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return ctrl.Result{}, err
 	}
-
-	clusterName := claim.GetLabels()[constants.LabelKeyClusterOwner]
-	cluster := &tfv1.TensorFusionCluster{}
-	if err := r.Get(ctx, client.ObjectKey{Name: clusterName}, cluster); err != nil {
-		if errors.IsNotFound(err) {
-			r.Recorder.Eventf(claim, corev1.EventTypeWarning, "OrphanedNode", "provisioned node not found, this could result in orphaned nodes, please check manually: %s", claim.Name)
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
-	}
-
-	vendorCfg := cluster.Spec.ComputingVendor
-	if vendorCfg == nil {
-		return ctrl.Result{}, fmt.Errorf("failed to get computing vendor config for cluster %s", clusterName)
-	}
-
 	poolName := claim.GetLabels()[constants.LabelKeyOwner]
 	pool := &tfv1.GPUPool{}
 	if err := r.Get(ctx, client.ObjectKey{Name: poolName}, pool); err != nil {
@@ -82,6 +68,19 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return ctrl.Result{}, err
 	}
+
+	provider, cluster, err := createProvisionerAndQueryCluster(ctx, pool, r.Client)
+	vendorCfg := cluster.Spec.ComputingVendor
+	if vendorCfg == nil {
+		return ctrl.Result{}, fmt.Errorf("failed to get computing vendor config for cluster %s", cluster.Name)
+	}
+
+	provisioningMode := pool.Spec.NodeManagerConfig.ProvisioningMode
+	if provisioningMode == tfv1.ProvisioningModeAutoSelect {
+		log.Info("AutoSelect mode, skip provision node", "name", claim.Name)
+		return ctrl.Result{}, nil
+	}
+	isKarpenterMode := provisioningMode == tfv1.ProvisioningModeKarpenter
 
 	shouldReturn, err := utils.HandleFinalizer(ctx, claim, r.Client, func(ctx context.Context, claim *tfv1.GPUNodeClaim) (bool, error) {
 		nodeList := &corev1.NodeList{}
@@ -96,11 +95,28 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				if !node.DeletionTimestamp.IsZero() {
 					continue
 				}
-				// TODO: in karpenter mode, delete the NodeClaim
-				// in direct provisioning mode, call terminate instance and then delete k8s node
-				err := r.Delete(ctx, &node)
-				if err != nil {
-					return false, err
+				if isKarpenterMode {
+					// karpenter mode, delete the NodeClaim
+					kClaim := &karpv1.NodeClaim{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: claim.Spec.NodeName,
+						},
+					}
+					log.Info("Deleting karpenter node claim", "name", claim.Spec.NodeName)
+					err := r.Delete(ctx, kClaim)
+					if err != nil {
+						return false, err
+					}
+				} else {
+					// TODO: should be async, return deletion request ID and check deletion status by request ID
+					log.Info("Deleting cloud vendor node", "instanceID", claim.Status.InstanceID, "region", claim.Spec.Region)
+					err = provider.TerminateNode(ctx, &types.NodeIdentityParam{
+						InstanceID: claim.Status.InstanceID,
+						Region:     claim.Spec.Region,
+					})
+					if err != nil {
+						return false, err
+					}
 				}
 			}
 			return false, nil
@@ -114,7 +130,7 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	// create cloud vendor node
+	// create or check cloud vendor node
 	if err := r.reconcileCloudVendorNode(ctx, claim, pool); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -136,57 +152,29 @@ func (r *GPUNodeClaimReconciler) reconcileCloudVendorNode(ctx context.Context, c
 		return err
 	}
 
-	// TODO: query cloud vendor by node name
-	status, err := provider.CreateNode(ctx, &claim.Spec)
-	if err != nil {
-		return err
-	}
-
-	// TODO: fix me, GPUNode is not created yet, node info should be stored in GPUNodeClaim status and sync in gpunode controller later !
-
-	// Update GPUNode status about the cloud vendor info
-	// To match GPUNode - K8S node, the --node-label in Kubelet is MUST-have, like Karpenter, it force set userdata to add a provisionerId label, k8s node controller then can set its ownerReference to the GPUNode
-	gpuNode := &tfv1.GPUNode{}
-	err = r.Get(ctx, client.ObjectKey{Name: claim.Spec.NodeName}, gpuNode)
-	if err != nil {
-		return err
-	}
-	gpuNode.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
-	gpuNode.Status.NodeInfo.IP = status.PrivateIP
-	gpuNode.Status.NodeInfo.InstanceID = status.InstanceID
-	gpuNode.Status.NodeInfo.Region = claim.Spec.Region
-
-	// Retry status update until success to handle version conflicts
-	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		// Get the latest version before attempting an update
-		latest := &tfv1.GPUNode{}
-		if err := r.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, latest); err != nil {
+	if claim.Status.InstanceID == "" {
+		// TODO: should be async with request ID
+		status, err := provider.CreateNode(ctx, &claim.Spec)
+		if err != nil {
 			return err
 		}
+		r.Recorder.Eventf(pool, corev1.EventTypeNormal, "ManagedNodeCreated", "Created node: %s, IP: %s", status.InstanceID, status.PrivateIP)
+		// Retry status update until success to handle version conflicts
+		if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			// Get the latest version before attempting an update
+			latest := &tfv1.GPUNodeClaim{}
+			if err := r.Get(ctx, client.ObjectKey{Name: claim.Name}, latest); err != nil {
+				return err
+			}
+			// Apply our status updates to the latest version
+			latest.Status.InstanceID = status.InstanceID
+			latest.Status.Phase = tfv1.GPUNodeClaimBound
 
-		// Apply our status updates to the latest version
-		latest.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
-		latest.Status.NodeInfo.IP = status.PrivateIP
-		latest.Status.NodeInfo.InstanceID = status.InstanceID
-		latest.Status.NodeInfo.Region = claim.Spec.Region
-
-		// Attempt to update with the latest version
-		return r.Client.Status().Update(ctx, latest)
-	})
-
-	if err != nil {
-		log.FromContext(ctx).Error(err, "Failed to update GPUNode status after retries, must terminate node to keep operation atomic", "name", claim.Spec.NodeName)
-		errTerminate := provider.TerminateNode(ctx, &types.NodeIdentityParam{
-			InstanceID: status.InstanceID,
-			Region:     claim.Spec.Region,
-		})
-		if errTerminate != nil {
-			log.FromContext(ctx).Error(errTerminate, "Failed to terminate cloud vendor node when GPUNode status failed to update")
-			panic(errTerminate)
+			// Attempt to update with the latest version
+			return r.Status().Update(ctx, latest)
+		}); err != nil {
+			return err
 		}
-		return nil
 	}
-
-	r.Recorder.Eventf(pool, corev1.EventTypeNormal, "ManagedNodeCreated", "Created node: %s, IP: %s", status.InstanceID, status.PrivateIP)
 	return nil
 }

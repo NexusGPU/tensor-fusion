@@ -262,9 +262,10 @@ var _ = AfterSuite(func() {
 })
 
 type TensorFusionEnv struct {
-	clusterKey  client.ObjectKey
-	poolCount   int
-	poolNodeMap map[int]map[int]int
+	clusterKey        client.ObjectKey
+	poolCount         int
+	poolNodeMap       map[int]map[int]int
+	provisionerConfig *tfv1.ComputingVendorConfig
 }
 
 func (c *TensorFusionEnv) GetCluster() *tfv1.TensorFusionCluster {
@@ -485,6 +486,11 @@ func (b *TensorFusionEnvBuilder) SetGpuCountForNode(nodeIndex int, gpuCount int)
 	return b
 }
 
+func (b *TensorFusionEnvBuilder) SetProvisioningMode(provisionerConfig *tfv1.ComputingVendorConfig) *TensorFusionEnvBuilder {
+	b.provisionerConfig = provisionerConfig
+	return b
+}
+
 var testEnvId int = 0
 
 func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
@@ -521,6 +527,19 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 			Name:         fmt.Sprintf("pool-%d", i),
 			SpecTemplate: *poolSpec,
 		}
+
+		if b.provisionerConfig != nil {
+			if b.provisionerConfig.Type == tfv1.ComputingVendorKarpenter {
+				gpuPools[i].SpecTemplate.NodeManagerConfig.ProvisioningMode = tfv1.ProvisioningModeKarpenter
+			} else {
+				gpuPools[i].SpecTemplate.NodeManagerConfig.ProvisioningMode = tfv1.ProvisioningModeProvisioned
+			}
+		}
+	}
+
+	// set provisioner config
+	if b.provisionerConfig != nil {
+		tfc.Spec.ComputingVendor = b.provisionerConfig
 	}
 
 	tfc.Spec.GPUPools = gpuPools

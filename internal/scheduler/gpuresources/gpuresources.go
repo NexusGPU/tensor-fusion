@@ -170,7 +170,12 @@ func (s *GPUFit) Filter(ctx context.Context, state *framework.CycleState, pod *v
 	return framework.NewStatus(framework.Success, "")
 }
 
-func (s *GPUFit) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
+func (s *GPUFit) Score(
+	ctx context.Context,
+	state *framework.CycleState,
+	pod *v1.Pod,
+	nodeInfo *framework.NodeInfo,
+) (int64, *framework.Status) {
 	// Skip non tensor-fusion mode scheduling
 	if !utils.IsTensorFusionWorker(pod) {
 		return 0, framework.NewStatus(framework.Success, "")
@@ -184,7 +189,7 @@ func (s *GPUFit) Score(ctx context.Context, state *framework.CycleState, pod *v1
 		return 0, framework.NewStatus(framework.Error, err.Error())
 	}
 	scheduledState := filterResult.(*GPUSchedulingStateData)
-	gpuScoreMap, ok := scheduledState.ValidNodeGPUScore[nodeName]
+	gpuScoreMap, ok := scheduledState.ValidNodeGPUScore[nodeInfo.GetName()]
 	if !ok {
 		return 0, framework.NewStatus(framework.Unschedulable, "no valid node found, gpu capacity not enough")
 	}
