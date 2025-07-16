@@ -368,10 +368,12 @@ func composeHypervisorInitContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 }
 
 func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
+	spec.HostNetwork = true
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
 		Name:      constants.DataVolumeName,
 		ReadOnly:  false,
-		MountPath: constants.TFDataPath,
+		MountPath: constants.SharedMemDeviceName,
+		SubPath:   constants.SharedMemMountSubPath,
 	}, v1.VolumeMount{
 		Name:      constants.LogsVolumeName,
 		MountPath: constants.TensorFusionLogPath,
@@ -420,12 +422,6 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 	if pool.Spec.ComponentConfig.Hypervisor.Image != "" {
 		spec.Containers[0].Image = pool.Spec.ComponentConfig.Hypervisor.Image
 	}
-	spec.Containers[0].Ports = append(spec.Containers[0].Ports, v1.ContainerPort{
-		ContainerPort: port,
-		HostPort:      port,
-		Name:          constants.HypervisorPortName,
-		Protocol:      v1.ProtocolTCP,
-	})
 
 	if len(spec.Containers[0].Resources.Requests) == 0 {
 		spec.Containers[0].Resources.Requests = hypervisorDefaultRequests
