@@ -197,7 +197,7 @@ func (mr *MetricsRecorder) Start() {
 		Filename:   mr.MetricsOutputPath,
 		MaxSize:    100,
 		MaxBackups: 10,
-		MaxAge:     28,
+		MaxAge:     14,
 	}
 
 	// Record metrics
