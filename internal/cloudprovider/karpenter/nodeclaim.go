@@ -29,15 +29,15 @@ type KarpenterConfig struct {
 		Group   string `mapstructure:"group"`
 		Version string `mapstructure:"version"`
 		Kind    string `mapstructure:"kind"`
-	} `mapstructure:"nodeclassref"`
+	} `mapstructure:"nodeClassRef"`
 
 	// NodeClaim configuration
 	NodeClaim struct {
-		TerminationGracePeriod string `mapstructure:"terminationgraceperiod"`
-	} `mapstructure:"nodeclaim"`
+		TerminationGracePeriod string `mapstructure:"terminationGracePeriod"`
+	} `mapstructure:"nodeClaim"`
 	// Additional Karpenter settings
 	// GPU resource name, default to "nvidia.com/gpu"
-	GPUResourceName corev1.ResourceName `mapstructure:"gpuresource"`
+	GPUResourceName corev1.ResourceName `mapstructure:"gpuResource"`
 }
 
 type KarpenterGPUNodeProvider struct {
@@ -86,7 +86,7 @@ func (p KarpenterGPUNodeProvider) TestConnection() error {
 	return nil
 }
 
-func (p KarpenterGPUNodeProvider) CreateNode(ctx context.Context, param *types.NodeCreationParam) (*types.GPUNodeStatus, error) {
+func (p KarpenterGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*types.GPUNodeStatus, error) {
 	if param == nil || p.client == nil {
 		return nil, fmt.Errorf("NodeCreationParam cannot be nil")
 	}
@@ -107,7 +107,7 @@ func (p KarpenterGPUNodeProvider) CreateNode(ctx context.Context, param *types.N
 
 	// Return the initial status - actual node creation will be handled by Karpenter
 	status := &types.GPUNodeStatus{
-		InstanceID: param.NodeName, // Use nodename as instance ID
+		InstanceID: param.NodeName, // Use nodeName as instance ID
 		CreatedAt:  metav1.Now().Time,
 		PrivateIP:  "", // Will be populated once node is actually provisioned
 		PublicIP:   "", // Will be populated once node is actually provisioned
@@ -187,9 +187,9 @@ func (p KarpenterGPUNodeProvider) GetNodeStatus(ctx context.Context, param *type
 	return status, nil
 }
 
-func (p KarpenterGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType types.CapacityTypeEnum) (float64, error) {
+func (p KarpenterGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType tfv1.CapacityTypeEnum) (float64, error) {
 	// Use the static pricing provider for calculations
-	if price, exists := p.pricingProvider.GetPringcing(instanceType, capacityType); exists {
+	if price, exists := p.pricingProvider.GetPricing(instanceType, capacityType); exists {
 		return price, nil
 	}
 	return 0.0, fmt.Errorf("no on-demand pricing found for instance type %s in region %s", instanceType, region)
@@ -205,7 +205,7 @@ func (p KarpenterGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []ty
 }
 
 // parseKarpenterConfig extracts Karpenter-specific configuration from ExtraParams
-func (p KarpenterGPUNodeProvider) parseKarpenterConfig(param *types.NodeCreationParam) *KarpenterConfig {
+func (p KarpenterGPUNodeProvider) parseKarpenterConfig(param *tfv1.GPUNodeClaimSpec) *KarpenterConfig {
 	karpenterConfig := &KarpenterConfig{}
 	extraParams := param.ExtraParams
 	if extraParams == nil {
@@ -271,7 +271,7 @@ func setNestedValue(data map[string]any, path string, value string) {
 	current[parts[len(parts)-1]] = value
 }
 
-func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *types.NodeCreationParam) (*karpv1.NodeClaim, error) {
+func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*karpv1.NodeClaim, error) {
 	if param == nil {
 		return nil, fmt.Errorf("create NodeClaim failed, NodeCreationParam cannot be nil")
 	}
@@ -354,7 +354,7 @@ func (p KarpenterGPUNodeProvider) queryAndBuildNodeClassRef(ctx context.Context,
 	return nil, fmt.Errorf("NodeClass %s %s %s %s not found", gvk.Group, gvk.Version, gvk.Kind, karpenterConfig.NodeClassRef.Name)
 }
 
-func (p KarpenterGPUNodeProvider) buildRequirements(nodeClaim *karpv1.NodeClaim, param *types.NodeCreationParam) {
+func (p KarpenterGPUNodeProvider) buildRequirements(nodeClaim *karpv1.NodeClaim, param *tfv1.GPUNodeClaimSpec) {
 	// Build node selector requirements using Karpenter's NodeSelectorRequirement
 	requirements := []karpv1.NodeSelectorRequirementWithMinValues{}
 	// 1. instance type

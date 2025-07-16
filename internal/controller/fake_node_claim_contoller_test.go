@@ -127,12 +127,12 @@ var _ = Describe("FakeNodeClaimController", func() {
 		It("should create NodeClaim via cloudprovider, observe controller consumption, check status, delete and re-check", func() {
 			// Step 1: Create NodeClaim using cloudprovider
 			By("Creating NodeClaim via CloudProvider")
-			nodeCreationParam := &types.NodeCreationParam{
+			nodeCreationParam := &tfv1.GPUNodeClaimSpec{
 				NodeName:         testNodeName,
 				Region:           "us-west-2",
 				Zone:             "us-west-2a",
 				InstanceType:     "p3.8xlarge",
-				CapacityType:     types.CapacityTypeOnDemand,
+				CapacityType:     tfv1.CapacityTypeOnDemand,
 				TFlopsOffered:    resource.MustParse("125"),
 				VRAMOffered:      resource.MustParse("64Gi"),
 				GPUDeviceOffered: 4,
@@ -227,12 +227,12 @@ var _ = Describe("FakeNodeClaimController", func() {
 			customNodeName := testNodeName + "-gpu"
 
 			By("Creating GPU NodeClaim via CloudProvider")
-			nodeCreationParam := &types.NodeCreationParam{
+			nodeCreationParam := &tfv1.GPUNodeClaimSpec{
 				NodeName:         customNodeName,
 				Region:           "us-east-1",
 				Zone:             "us-east-1a",
 				InstanceType:     "p4d.24xlarge",
-				CapacityType:     types.CapacityTypeSpot,
+				CapacityType:     tfv1.CapacityTypeSpot,
 				TFlopsOffered:    resource.MustParse("1000"),
 				VRAMOffered:      resource.MustParse("320Gi"),
 				GPUDeviceOffered: 8,

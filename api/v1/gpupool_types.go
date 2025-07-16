@@ -116,7 +116,8 @@ type NodeProvisioner struct {
 	NodeClass string `json:"nodeClass,omitempty"`
 
 	// Karpenter NodeClass name
-	KarpenterNodeClassRef GroupKindName `json:"karpenterNodeClassRef,omitempty"`
+	// +optional
+	KarpenterNodeClassRef *GroupKindName `json:"karpenterNodeClassRef,omitempty"`
 
 	// +optional
 	GPURequirements []Requirement `json:"gpuRequirements,omitempty"`

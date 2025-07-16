@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 )
@@ -45,7 +46,7 @@ var (
 
 // PricingProvider provides pricing information and calculations for instance types
 type PricingProvider interface {
-	GetPringcing(instanceType, capacityType types.CapacityTypeEnum) (float64, bool)
+	GetPricing(instanceType, capacityType tfv1.CapacityTypeEnum) (float64, bool)
 	GetGPUNodeInstanceTypeInfo(region string) ([]string, bool)
 }
 
@@ -300,16 +301,16 @@ func parseAzureGPUSpec(gpuSpec string) (int32, string) {
 	return 0, ""
 }
 
-// GetPringcing gets the pricing for the instanceType, capacityType
-func (p *StaticPricingProvider) GetPringcing(instanceType string, capacityType types.CapacityTypeEnum) (float64, bool) {
+// GetPricing gets the pricing for the instanceType, capacityType
+func (p *StaticPricingProvider) GetPricing(instanceType string, capacityType tfv1.CapacityTypeEnum) (float64, bool) {
 	// Check AWS instances first
 	if info, exists := globalAWSGPUInstanceData[instanceType]; exists {
 		switch capacityType {
-		case types.CapacityTypeOnDemand:
+		case tfv1.CapacityTypeOnDemand:
 			return info.onDemandPrice, true
-		case types.CapacityTypeReserved:
+		case tfv1.CapacityTypeReserved:
 			return info.reservedPrice, true
-		case types.CapacityTypeSpot:
+		case tfv1.CapacityTypeSpot:
 			return info.onDemandPrice, true // not support spot price for now
 		}
 	}
@@ -317,11 +318,11 @@ func (p *StaticPricingProvider) GetPringcing(instanceType string, capacityType t
 	// Check Azure instances
 	if info, exists := globalAzureGPUInstanceData[instanceType]; exists {
 		switch capacityType {
-		case types.CapacityTypeOnDemand:
+		case tfv1.CapacityTypeOnDemand:
 			return info.onDemandPrice, true
-		case types.CapacityTypeReserved:
+		case tfv1.CapacityTypeReserved:
 			return info.reservedPrice, true
-		case types.CapacityTypeSpot:
+		case tfv1.CapacityTypeSpot:
 			return info.onDemandPrice, true // not support spot price for now
 		}
 	}

@@ -145,8 +145,6 @@ const (
 	ComputingVendorRunPod     ComputingVendorName = "runpod"
 	ComputingVendorKarpenter  ComputingVendorName = "karpenter"
 
-	ComputingVendorKarpenter ComputingVendorName = "karpenter"
-
 	// This is not unit/integration testing only, no cloud provider is involved
 	ComputingVendorMock ComputingVendorName = "mock"
 )

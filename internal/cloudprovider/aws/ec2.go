@@ -119,8 +119,8 @@ func (p AWSGPUNodeProvider) GetNodeStatus(ctx context.Context, param *types.Node
 	return status, nil
 }
 
-func (p AWSGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType types.CapacityTypeEnum) (float64, error) {
-	if price, exists := p.pricingProvider.GetPringcing(instanceType, capacityType); exists {
+func (p AWSGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType tfv1.CapacityTypeEnum) (float64, error) {
+	if price, exists := p.pricingProvider.GetPricing(instanceType, capacityType); exists {
 		return price, nil
 	}
 	return 0, nil
