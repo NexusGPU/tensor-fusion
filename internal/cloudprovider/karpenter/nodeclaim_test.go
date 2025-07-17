@@ -105,9 +105,9 @@ func TestKarpenterGPUNodeProvider_CreateNode(t *testing.T) {
 
 	// Create a simple fake NodeClass using unstructured with basic fields only
 	nodeClass := &unstructured.Unstructured{}
-	nodeClass.SetAPIVersion("karpenter.k8s.aws/v1beta1")
+	nodeClass.SetAPIVersion("karpenter.k8s.aws/v1")
 	nodeClass.SetKind("EC2NodeClass")
-	nodeClass.SetName("test-nodeClass")
+	nodeClass.SetName("test-ec2-node-class")
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -153,11 +153,17 @@ func TestKarpenterGPUNodeProvider_CreateNode(t *testing.T) {
 		{
 			name: "successful node creation with GPU",
 			param: &tfv1.GPUNodeClaimSpec{
-				NodeName:         "test-gpu-node",
-				Region:           "us-west-2",
-				Zone:             "us-west-2a",
-				InstanceType:     "p3.8xlarge",
-				CapacityType:     tfv1.CapacityTypeOnDemand,
+				NodeName:     "test-gpu-node",
+				Region:       "us-west-2",
+				Zone:         "us-west-2a",
+				InstanceType: "p3.8xlarge",
+				CapacityType: tfv1.CapacityTypeOnDemand,
+				NodeClassRef: tfv1.GroupKindName{
+					Name:    "test-ec2-node-class",
+					Group:   "karpenter.k8s.aws",
+					Kind:    "EC2NodeClass",
+					Version: "v1",
+				},
 				TFlopsOffered:    resource.MustParse("125"),
 				VRAMOffered:      resource.MustParse("64Gi"),
 				GPUDeviceOffered: 4,
@@ -197,7 +203,7 @@ func TestKarpenterGPUNodeProvider_CreateNode(t *testing.T) {
 			assert.Equal(t, "true", nodeClaim.Annotations["karpenter.sh/do-not-disrupt"])
 
 			// Verify NodeClassRef
-			assert.Equal(t, "test-nodeClass", nodeClaim.Spec.NodeClassRef.Name)
+			assert.Equal(t, "test-ec2-node-class", nodeClaim.Spec.NodeClassRef.Name)
 			assert.Equal(t, "karpenter.k8s.aws", nodeClaim.Spec.NodeClassRef.Group)
 			assert.Equal(t, "EC2NodeClass", nodeClaim.Spec.NodeClassRef.Kind)
 

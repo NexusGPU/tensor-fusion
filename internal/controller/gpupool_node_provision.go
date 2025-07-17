@@ -99,9 +99,10 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 			return false, fmt.Errorf("failed to get node class for pool %s", pool.Name)
 		}
 		nodeClassRef = tfv1.GroupKindName{
-			Name:  pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass,
-			Kind:  "GPUNodeClass",
-			Group: tfv1.GroupVersion.Group,
+			Name:    pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass,
+			Kind:    tfv1.GPUNodeClassKind,
+			Group:   tfv1.GroupVersion.Group,
+			Version: tfv1.GroupVersion.Version,
 		}
 	case tfv1.ProvisioningModeKarpenter:
 		if pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef == nil {

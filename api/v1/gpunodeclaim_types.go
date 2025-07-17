@@ -95,7 +95,8 @@ type GPUNodeClaimSpec struct {
 }
 
 type GroupKindName struct {
-	Group string `json:"group"`
-	Kind  string `json:"kind"`
-	Name  string `json:"name"`
+	Group   string `json:"group"`
+	Kind    string `json:"kind"`
+	Version string `json:"version"`
+	Name    string `json:"name"`
 }
