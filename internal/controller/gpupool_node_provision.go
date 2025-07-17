@@ -20,7 +20,7 @@ import (
 )
 
 // Controller and trigger logic for abstract layer of node provisioning
-func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Context, pool *tfv1.GPUPool) (bool, error) {
+func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Context, pool *tfv1.GPUPool) ([]string, error) {
 	log := log.FromContext(ctx)
 	// check if min resource constraint is satisfied
 	shouldScaleUp := false
@@ -80,23 +80,23 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	}
 
 	if !shouldScaleUp {
-		return false, nil
+		return nil, nil
 	}
 
 	// create provisioner
 	provider, cluster, err := createProvisionerAndQueryCluster(ctx, pool, r.Client)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	var nodeClassRef tfv1.GroupKindName
 	switch pool.Spec.NodeManagerConfig.ProvisioningMode {
 	case tfv1.ProvisioningModeProvisioned:
 		if pool.Spec.NodeManagerConfig.NodeProvisioner == nil {
-			return false, fmt.Errorf("failed to get node provisioner config for pool %s", pool.Name)
+			return nil, fmt.Errorf("failed to get node provisioner config for pool %s", pool.Name)
 		}
 		if pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass == "" {
-			return false, fmt.Errorf("failed to get node class for pool %s", pool.Name)
+			return nil, fmt.Errorf("failed to get node class for pool %s", pool.Name)
 		}
 		nodeClassRef = tfv1.GroupKindName{
 			Name:    pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass,
@@ -106,7 +106,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 		}
 	case tfv1.ProvisioningModeKarpenter:
 		if pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef == nil {
-			return false, fmt.Errorf("failed to get karpenter node class ref for pool %s", pool.Name)
+			return nil, fmt.Errorf("failed to get karpenter node class ref for pool %s", pool.Name)
 		}
 		nodeClassRef = *pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef
 	}
@@ -114,7 +114,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	// convert resource gap to least cost GPUNode creation param
 	gpuNodeParams, err := common.CalculateLeastCostGPUNodes(ctx, provider, cluster, pool, nodeClassRef, tflopsGap, vramGap)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	var wg sync.WaitGroup
@@ -122,6 +122,8 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 
 	var errList []error
 
+	// lock the pool before next node scaling up loop, add assumed scaling resources util all pending nodeClaims are running
+	newCreatedNodes := []string{}
 	for _, node := range gpuNodeParams {
 		go func(node tfv1.GPUNodeClaimSpec) {
 			defer wg.Done()
@@ -159,15 +161,16 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 				errList = append(errList, err)
 				return
 			}
+			newCreatedNodes = append(newCreatedNodes, node.NodeName)
 		}(node)
 	}
 
 	wg.Wait()
 
 	if len(errList) > 0 {
-		return false, fmt.Errorf("failed to create nodes: %v", errList)
+		return nil, fmt.Errorf("failed to create nodes: %v", errList)
 	}
-	return len(gpuNodeParams) > 0, nil
+	return newCreatedNodes, nil
 }
 
 func createProvisionerAndQueryCluster(ctx context.Context, pool *tfv1.GPUPool, r client.Client) (types.GPUNodeProvider, *tfv1.TensorFusionCluster, error) {

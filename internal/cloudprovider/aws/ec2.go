@@ -43,10 +43,10 @@ func (p AWSGPUNodeProvider) TestConnection() error {
 	return err
 }
 
-func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*types.GPUNodeStatus, error) {
+func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeClaim) (*types.GPUNodeStatus, error) {
 	awsTags := []ec2Types.Tag{
 		{Key: aws.String("managed-by"), Value: aws.String("tensor-fusion.ai")},
-		{Key: aws.String("tensor-fusion.ai/node-name"), Value: aws.String(param.NodeName)},
+		{Key: aws.String("tensor-fusion.ai/node-name"), Value: aws.String(param.Spec.NodeName)},
 		{Key: aws.String("tensor-fusion.ai/node-class"), Value: aws.String(p.nodeClass.Name)},
 	}
 	nodeClass := p.nodeClass.Spec
@@ -67,7 +67,7 @@ func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeC
 
 	input := &ec2.RunInstancesInput{
 		ImageId:      &nodeClass.OSImageSelectorTerms[0].ID,
-		InstanceType: ec2Types.InstanceType(param.InstanceType),
+		InstanceType: ec2Types.InstanceType(param.Spec.InstanceType),
 		MinCount:     aws.Int32(1),
 		MaxCount:     aws.Int32(1),
 		TagSpecifications: []ec2Types.TagSpecification{

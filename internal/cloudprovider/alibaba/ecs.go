@@ -83,7 +83,8 @@ func (p AlibabaGPUNodeProvider) TestConnection() error {
 	return nil
 }
 
-func (p AlibabaGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*types.GPUNodeStatus, error) {
+func (p AlibabaGPUNodeProvider) CreateNode(ctx context.Context, claim *tfv1.GPUNodeClaim) (*types.GPUNodeStatus, error) {
+	param := claim.Spec
 	nodeClass := p.nodeClass.Spec
 	request := ecs.CreateRunInstancesRequest()
 	request.LaunchTemplateId = nodeClass.LaunchTemplate.ID
@@ -98,7 +99,7 @@ func (p AlibabaGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUN
 	request.RegionId = param.Region
 	request.Amount = "1"
 
-	if err := p.handleNodeClassAndExtraParams(request, param); err != nil {
+	if err := p.handleNodeClassAndExtraParams(request, &param); err != nil {
 		return nil, err
 	}
 

@@ -29,8 +29,9 @@ type GPUPoolCompactionReconciler struct {
 	Allocator *gpuallocator.GpuAllocator
 }
 
-const defaultCompactionDuration = 1 * time.Minute
-const newNodeProtectionDuration = 5 * time.Minute
+var defaultCompactionDuration = 1 * time.Minute
+var newNodeProtectionDuration = 5 * time.Minute
+
 const manualCompactionReconcileMaxDelay = 3 * time.Second
 
 // to avoid concurrent job for node compaction, make sure the interval
@@ -167,7 +168,7 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				// Parse the annotation value as duration
 				if manualTriggerTime, err := time.Parse(time.RFC3339, manualCompactionValue); err == nil {
 					// not return empty result, will continue current reconcile logic
-					if manualTriggerTime.After(time.Now().Add(manualCompactionReconcileMaxDelay)) {
+					if manualTriggerTime.After(time.Now().Add(-manualCompactionReconcileMaxDelay)) {
 						log.Info("Manual compaction requested", "name", req.Name)
 
 					} else {
@@ -195,6 +196,10 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		log.Info("Finished compaction check for GPUPool", "name", req.Name)
 	}()
 
+	if len(pool.Status.PendingGPUNodeClaimNames) > 0 {
+		// skip compaction check util all NodeClaims are bound and GPUNode created
+		return ctrl.Result{RequeueAfter: nextDuration}, nil
+	}
 	compactionErr := r.checkNodeCompaction(ctx, pool)
 	if compactionErr != nil {
 		return ctrl.Result{}, compactionErr
@@ -210,4 +215,9 @@ func (r *GPUPoolCompactionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("gpupool-compaction").
 		WatchesMetadata(&tfv1.GPUPool{}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
+}
+
+func SetTestModeCompactionPeriod() {
+	defaultCompactionDuration = 300 * time.Millisecond
+	newNodeProtectionDuration = 500 * time.Millisecond
 }

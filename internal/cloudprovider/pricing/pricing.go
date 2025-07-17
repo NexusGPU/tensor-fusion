@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
@@ -46,6 +47,7 @@ var (
 )
 
 var readyCh = make(chan struct{})
+var initOnce sync.Once
 
 // PricingProvider provides pricing information and calculations for instance types
 type PricingProvider interface {
@@ -90,7 +92,10 @@ func SetTflopsMapAndInitGPUPricingInfo(ctx context.Context, gpuInfos *[]config.G
 
 	loadCSVInstanceDataFromPath(context.Background(), []byte(awsCSV), providerAWS)
 	loadCSVInstanceDataFromPath(context.Background(), []byte(azureCSV), providerAzure)
-	close(readyCh)
+
+	initOnce.Do(func() {
+		close(readyCh)
+	})
 }
 
 // loadCSVInstanceDataFromPath loads instance data from a single CSV file
@@ -98,7 +103,7 @@ func loadCSVInstanceDataFromPath(ctx context.Context, data []byte, provider stri
 	reader := csv.NewReader(bytes.NewReader(data))
 	records, err := reader.ReadAll()
 	if err != nil {
-		log.FromContext(ctx).Error(err, "Error reading %s CSV file", provider)
+		log.FromContext(ctx).Error(err, "Error reading CSV file", "provider", provider)
 		return
 	}
 
@@ -163,7 +168,7 @@ func loadCSVInstanceDataFromPath(ctx context.Context, data []byte, provider stri
 		globalAzureGPUInstanceData = localAzureGPUInstanceData
 	}
 
-	log.FromContext(ctx).Info("Loaded %d %s GPU instance types", processedCount, provider)
+	log.FromContext(ctx).Info("Loaded GPU instance types", "count", processedCount, "provider", provider)
 }
 
 // parseAWSRecord parses a single AWS CSV record

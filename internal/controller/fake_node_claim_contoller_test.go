@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/rand"
@@ -85,7 +86,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 		It("should create NodeClaim via cloudprovider, observe controller consumption, check status, delete and re-check", func() {
 			// Step 1: Create NodeClaim using cloudprovider
 			By("Creating NodeClaim via CloudProvider")
-			nodeCreationParam := &tfv1.GPUNodeClaimSpec{
+			nodeCreationParam := tfv1.GPUNodeClaimSpec{
 				NodeName:     testNodeName,
 				Region:       "us-west-2",
 				Zone:         "us-west-2a",
@@ -102,7 +103,12 @@ var _ = Describe("FakeNodeClaimController", func() {
 				GPUDeviceOffered: 4,
 			}
 
-			gpuNodeStatus, err := provider.CreateNode(ctx, nodeCreationParam)
+			gpuNodeStatus, err := provider.CreateNode(ctx, &tfv1.GPUNodeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: testNodeName,
+				},
+				Spec: nodeCreationParam,
+			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(gpuNodeStatus).NotTo(BeNil())
 			Expect(gpuNodeStatus.InstanceID).To(Equal(testNodeName))
@@ -185,7 +191,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 			customNodeName := testNodeName + "-gpu"
 
 			By("Creating GPU NodeClaim via CloudProvider")
-			nodeCreationParam := &tfv1.GPUNodeClaimSpec{
+			nodeCreationParam := tfv1.GPUNodeClaimSpec{
 				NodeName:     customNodeName,
 				Region:       "us-east-1",
 				Zone:         "us-east-1a",
@@ -206,7 +212,12 @@ var _ = Describe("FakeNodeClaimController", func() {
 				},
 			}
 
-			gpuNodeStatus, err := provider.CreateNode(ctx, nodeCreationParam)
+			gpuNodeStatus, err := provider.CreateNode(ctx, &tfv1.GPUNodeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: customNodeName,
+				},
+				Spec: nodeCreationParam,
+			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(gpuNodeStatus.InstanceID).To(Equal(customNodeName))
 

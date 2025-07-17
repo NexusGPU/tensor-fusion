@@ -185,6 +185,15 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
+	SetTestModeCompactionPeriod()
+	err = (&GPUPoolCompactionReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("GPUPoolCompaction"),
+		Allocator: allocator,
+	}).SetupWithManager(mgr)
+	Expect(err).ToNot(HaveOccurred())
+
 	err = (&GPUNodeClassReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -502,6 +511,9 @@ var testEnvId int = 0
 
 func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 	GinkgoHelper()
+
+	GenerateKarpenterEC2NodeClass()
+
 	b.clusterKey = client.ObjectKey{
 		Name:      fmt.Sprintf("cluster-%d", testEnvId),
 		Namespace: "default",
@@ -553,7 +565,8 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 						},
 					},
 					GPULabels: map[string]string{
-						"mock-label": "true",
+						"mock-label":                            "true",
+						fmt.Sprintf("%s-label-%d", tfc.Name, i): "true",
 					},
 					GPUAnnotation: map[string]string{
 						"mock-annotation": "true",
@@ -562,7 +575,7 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 			} else {
 				gpuPools[i].SpecTemplate.NodeManagerConfig.ProvisioningMode = tfv1.ProvisioningModeProvisioned
 				gpuPools[i].SpecTemplate.NodeManagerConfig.NodeProvisioner = &tfv1.NodeProvisioner{
-					NodeClass: "test-ec2-node-class",
+					NodeClass: "test-node-class",
 					GPURequirements: []tfv1.Requirement{
 						{
 							Key:      tfv1.NodeRequirementKeyInstanceType,
@@ -657,9 +670,6 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 
 		b.GetPoolGpuList(poolIndex)
 	}
-
-	GenerateKarpenterEC2NodeClass()
-
 	b.UpdateHypervisorStatus()
 
 	return b.TensorFusionEnv

@@ -19,6 +19,8 @@ package controller
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/ptr"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -39,16 +41,48 @@ var _ = Describe("GPUNodeClaim Controller", func() {
 					},
 				}).
 				Build()
+
+			// Scale up the pool to meet capacity requirement
+			// will create mocked 2x g6.xlarge nodes
+			Eventually(func(g Gomega) {
+				tfEnv.UpdateHypervisorStatus()
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
+				gpuNodeClaimList := &tfv1.GPUNodeClaimList{}
+				g.Expect(k8sClient.List(ctx, gpuNodeClaimList)).Should(Succeed())
+
+				gpuNodes := &tfv1.GPUNodeList{}
+				g.Expect(k8sClient.List(ctx, gpuNodes)).Should(Succeed())
+
+				k8sNodes := &corev1.NodeList{}
+				g.Expect(k8sClient.List(ctx, k8sNodes)).Should(Succeed())
+
+				g.Expect(gpuNodeClaimList.Items).Should(HaveLen(2))
+				for _, gpuNodeClaim := range gpuNodeClaimList.Items {
+					g.Expect(gpuNodeClaim.Status.Phase).Should(Equal(tfv1.GPUNodeClaimBound))
+					g.Expect(gpuNodeClaim.Status.InstanceID).ShouldNot(BeEmpty())
+				}
+			}).Should(Succeed())
+
+			// Scale down the pool, set warm up to 100, should delete 1 g6.xlarge L4 GPU node
+			tfc := tfEnv.GetCluster()
+			tfc.Spec.GPUPools[0].SpecTemplate.CapacityConfig.WarmResources.TFlops = resource.MustParse("100")
+			tfEnv.UpdateCluster(tfc)
 			Eventually(func(g Gomega) {
 				pool := tfEnv.GetGPUPool(0)
 				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
-				// TODO
 				gpuNodeClaimList := &tfv1.GPUNodeClaimList{}
 				g.Expect(k8sClient.List(ctx, gpuNodeClaimList)).Should(Succeed())
+
+				gpuNodes := &tfv1.GPUNodeList{}
+				g.Expect(k8sClient.List(ctx, gpuNodes)).Should(Succeed())
+
+				k8sNodes := &corev1.NodeList{}
+				g.Expect(k8sClient.List(ctx, k8sNodes)).Should(Succeed())
+
 				g.Expect(gpuNodeClaimList.Items).Should(HaveLen(1))
-				for _, gpuNodeClaim := range gpuNodeClaimList.Items {
-					g.Expect(gpuNodeClaim.Status.Phase).Should(Equal(tfv1.GPUNodeClaimBound))
-				}
+				g.Expect(gpuNodeClaimList.Items[0].Status.Phase).Should(Equal(tfv1.GPUNodeClaimBound))
+				g.Expect(gpuNodeClaimList.Items[0].Status.InstanceID).ShouldNot(BeEmpty())
 			}).Should(Succeed())
 			tfEnv.Cleanup()
 		})

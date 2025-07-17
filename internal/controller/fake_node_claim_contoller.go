@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/awslabs/operatorpkg/status"
@@ -112,6 +113,7 @@ func (r *FakeNodeClaimReconciler) reconcileCreation(ctx context.Context, nodeCla
 			ObjectMeta: metav1.ObjectMeta{
 				Name: nodeName,
 				Labels: lo.Assign(map[string]string{
+					strings.Split(constants.InitialGPUNodeSelector, "=")[0]:       constants.TrueStringValue,
 					v1.NodeClassLabelKey(nodeClaim.Spec.NodeClassRef.GroupKind()): nodeClaim.Spec.NodeClassRef.Name,
 				}, nodeClaim.Labels),
 				Annotations: nodeClaim.Annotations,
