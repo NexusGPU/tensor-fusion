@@ -408,6 +408,9 @@ type GPUPoolStatus struct {
 	BudgetExceeded string `json:"budgetExceeded,omitempty"`
 
 	// +optional
+	PendingGPUNodeClaimNames []string `json:"pendingGPUNodeClaimNames,omitempty"`
+
+	// +optional
 	LastCompactionTime *metav1.Time `json:"lastCompactionTime,omitempty"`
 }
 

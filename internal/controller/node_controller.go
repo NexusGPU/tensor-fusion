@@ -89,7 +89,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}); err != nil {
 			// requeue if the gpunode is not generated
 			if errors.IsNotFound(err) {
-				return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
+				return ctrl.Result{}, nil
 			}
 			return ctrl.Result{}, fmt.Errorf("can not delete gpuNode(%s) : %w", node.Name, err)
 		}
@@ -97,11 +97,26 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	provisioningMode := pool.Spec.NodeManagerConfig.ProvisioningMode
+	isDirectManagedMode := provisioningMode == tfv1.ProvisioningModeProvisioned
+	isManagedNode := isDirectManagedMode || provisioningMode == tfv1.ProvisioningModeKarpenter
 	// No owner for auto select mode, and node's owner will be Karpenter NodeClaim and then GPUNodeClaim in Karpenter mode
-	if provisioningMode == tfv1.ProvisioningModeProvisioned {
+	if isManagedNode {
 		gpuNodeClaim := &tfv1.GPUNodeClaim{}
-		if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNodeClaim); err != nil {
+
+		provisionerName := node.Labels[constants.ProvisionerLabelKey]
+		if provisionerName == "" {
+			// TODO: create GPUNodeClaim, treat as case 1, not able to delete it
+			return ctrl.Result{}, fmt.Errorf("failed to get provisioner name from node labels: %v", node.Labels)
+		}
+
+		if err := r.Get(ctx, client.ObjectKey{Name: provisionerName}, gpuNodeClaim); err != nil {
 			if errors.IsNotFound(err) {
+				// case 1: this node is built-in, should create the gpuNodeClaim to make existing resource managed
+				// but these resources should not be deleted when its direct managed mode (used a special mark, eg unknown instance ID)
+				// if they are managed by Karpenter, could be delete, and change the owner ref from previous node pool to node claim
+
+				// case 2: this node is created by gpuNodeClaim (thru direct provisioning, Karpenter is impossible because owner ref is set)
+				// this should should have a one-to-one for a existing gpuNodeClaim
 				gpuNodeClaim = &tfv1.GPUNodeClaim{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: node.Name,
@@ -109,9 +124,14 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				}
 			}
 		}
-		_ = controllerutil.SetControllerReference(gpuNodeClaim, node, r.Scheme)
-		if err := r.Update(ctx, node); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update owner of node: %w", err)
+
+		if isDirectManagedMode {
+			// direct provisioned nodes, set owner ref to GPUNodeClaim
+			// while in Karpenter mode, owner auto set by Karpenter controller, and NodeClaim is owned by GPUNodeClaim
+			_ = controllerutil.SetControllerReference(gpuNodeClaim, node, r.Scheme)
+			if err := r.Update(ctx, node); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update owner of node: %w", err)
+			}
 		}
 	}
 

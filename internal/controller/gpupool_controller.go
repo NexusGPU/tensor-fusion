@@ -114,14 +114,22 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Provisioning mode, check capacity and scale up if needed
 	if isProvisioningMode {
-		newNodeCreated, err := r.reconcilePoolCapacityWithProvisioner(ctx, pool)
+		if len(pool.Status.PendingGPUNodeClaimNames) > 0 {
+			// clear this pending lock util all NodeClaims are bound and GPUNode created
+			// TODO: assumed capacity increase should happen (related gpuNode Capacity > 0)
+			// otherwise some nodes are not created
+			return ctrl.Result{}, nil
+		}
+
+		newCreatedNodes, err := r.reconcilePoolCapacityWithProvisioner(ctx, pool)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		// Set phase to updating and let GPUNode event trigger the check and update capacity loop, util all nodes are ready
-		if newNodeCreated {
+		if len(newCreatedNodes) > 0 {
 			// Refresh the capacity again since new node has been created
 			pool.Status.Phase = tfv1.TensorFusionPoolPhaseUpdating
+			pool.Status.PendingGPUNodeClaimNames = newCreatedNodes
 			if err := r.Status().Patch(ctx, pool, client.Merge); err != nil {
 				return ctrl.Result{}, err
 			}

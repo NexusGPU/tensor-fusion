@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
@@ -81,15 +82,19 @@ func (p KarpenterGPUNodeProvider) TestConnection() error {
 	return nil
 }
 
-func (p KarpenterGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*types.GPUNodeStatus, error) {
-	if param == nil || p.client == nil {
+func (p KarpenterGPUNodeProvider) CreateNode(ctx context.Context, claim *tfv1.GPUNodeClaim) (*types.GPUNodeStatus, error) {
+	if claim == nil || p.client == nil {
 		return nil, fmt.Errorf("NodeCreationParam cannot be nil")
 	}
+	param := &claim.Spec
 	// Build NodeClaim from the creation parameters
 	nodeClaim, err := p.buildNodeClaim(ctx, param)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to build NodeClaim for node %s: %v", param.NodeName, err)
 	}
+	_ = controllerutil.SetControllerReference(claim, nodeClaim, p.client.Scheme())
+
 	// Create the NodeClaim using the Karpenter client
 	err = p.client.Create(ctx, nodeClaim)
 	if err != nil {

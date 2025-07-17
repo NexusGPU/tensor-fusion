@@ -149,7 +149,7 @@ func (r *GPUNodeClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func (r *GPUNodeClaimReconciler) reconcileCloudVendorNode(ctx context.Context, claim *tfv1.GPUNodeClaim, pool *tfv1.GPUPool, provider types.GPUNodeProvider) error {
 	// TODO: should be async with request ID
-	status, err := provider.CreateNode(ctx, &claim.Spec)
+	status, err := provider.CreateNode(ctx, claim)
 	if err != nil {
 		return err
 	}
@@ -163,7 +163,11 @@ func (r *GPUNodeClaimReconciler) reconcileCloudVendorNode(ctx context.Context, c
 		}
 		// Apply our status updates to the latest version
 		latest.Status.InstanceID = status.InstanceID
-		latest.Status.Phase = tfv1.GPUNodeClaimBound
+
+		// If GPUNode created and set to bound state, provisioning stage is done, only set when its pending
+		if latest.Status.Phase == tfv1.GPUNodeClaimPending {
+			latest.Status.Phase = tfv1.GPUNodeClaimCreating
+		}
 
 		// Attempt to update with the latest version
 		return r.Status().Update(ctx, latest)

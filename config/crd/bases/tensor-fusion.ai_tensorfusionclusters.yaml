@@ -388,7 +388,7 @@ spec:
                                         - topology.kubernetes.io/region
                                         - topology.kubernetes.io/zone
                                         - karpenter.sh/capacity-type
-                                        - tensor-fusion.ai/gpu-arch
+                                        - tensor-fusion.ai/gpu-vendor
                                         - tensor-fusion.ai/gpu-instance-family
                                         - tensor-fusion.ai/gpu-instance-size
                                         type: string
@@ -445,7 +445,7 @@ spec:
                                         - topology.kubernetes.io/region
                                         - topology.kubernetes.io/zone
                                         - karpenter.sh/capacity-type
-                                        - tensor-fusion.ai/gpu-arch
+                                        - tensor-fusion.ai/gpu-vendor
                                         - tensor-fusion.ai/gpu-instance-family
                                         - tensor-fusion.ai/gpu-instance-size
                                         type: string
