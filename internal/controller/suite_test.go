@@ -39,6 +39,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/retry"
@@ -533,9 +535,10 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 				gpuPools[i].SpecTemplate.NodeManagerConfig.ProvisioningMode = tfv1.ProvisioningModeKarpenter
 				gpuPools[i].SpecTemplate.NodeManagerConfig.NodeProvisioner = &tfv1.NodeProvisioner{
 					KarpenterNodeClassRef: &tfv1.GroupKindName{
-						Group: "karpenter.sh",
-						Kind:  "NodeClass",
-						Name:  "test-nodeClass-karpenter",
+						Group:   "karpenter.k8s.aws",
+						Kind:    "EC2NodeClass",
+						Name:    "test-ec2-node-class",
+						Version: "v1",
 					},
 					GPURequirements: []tfv1.Requirement{
 						{
@@ -554,7 +557,7 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 			} else {
 				gpuPools[i].SpecTemplate.NodeManagerConfig.ProvisioningMode = tfv1.ProvisioningModeProvisioned
 				gpuPools[i].SpecTemplate.NodeManagerConfig.NodeProvisioner = &tfv1.NodeProvisioner{
-					NodeClass: "test-nodeClass",
+					NodeClass: "test-ec2-node-class",
 					GPURequirements: []tfv1.Requirement{
 						{
 							Key:      tfv1.NodeRequirementKeyInstanceType,
@@ -650,7 +653,55 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 		b.GetPoolGpuList(poolIndex)
 	}
 
+	GenerateKarpenterEC2NodeClass()
+
 	b.UpdateHypervisorStatus()
 
 	return b.TensorFusionEnv
+}
+
+func GenerateKarpenterEC2NodeClass() {
+	ec2 := &unstructured.Unstructured{}
+
+	// Inject an EC2NodeClass
+	ec2.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "karpenter.k8s.aws",
+		Version: "v1",
+		Kind:    "EC2NodeClass",
+	})
+	ec2.SetName("test-ec2-node-class")
+
+	ec2.Object["spec"] = map[string]any{
+		// Required
+		"role":      "arn:aws:iam::123456789012:role/dummy",
+		"amiFamily": "AL2023",
+
+		// subnetSelectorTerms – at least 1 element
+		"subnetSelectorTerms": []any{
+			map[string]any{
+				"tags": map[string]any{
+					"kubernetes.io/cluster/test": "owned",
+				},
+			},
+		},
+
+		// securityGroupSelectorTerms – at least 1 element
+		"securityGroupSelectorTerms": []any{
+			map[string]any{
+				"tags": map[string]any{
+					"karpenter.sh/discovery": "dummy",
+				},
+			},
+		},
+
+		// amiSelectorTerms – newly added and required in v1; provide a dummy AMI ID
+		"amiSelectorTerms": []any{
+			map[string]any{
+				"id": "ami-0123456789abcdef0",
+			},
+		},
+	}
+	// May already exist, try to delete first before creating (for test repeatability)
+	_ = k8sClient.Delete(ctx, ec2)
+	Expect(k8sClient.Create(ctx, ec2)).To(Succeed())
 }

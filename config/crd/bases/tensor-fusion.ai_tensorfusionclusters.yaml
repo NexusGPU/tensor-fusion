@@ -492,10 +492,13 @@ spec:
                                       type: string
                                     name:
                                       type: string
+                                    version:
+                                      type: string
                                   required:
                                   - group
                                   - kind
                                   - name
+                                  - version
                                   type: object
                                 nodeClass:
                                   description: TensorFusion GPUNodeClass name

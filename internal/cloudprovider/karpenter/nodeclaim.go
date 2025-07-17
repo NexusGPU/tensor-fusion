@@ -326,8 +326,9 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *tfv
 
 func (p KarpenterGPUNodeProvider) queryAndBuildNodeClassRef(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*karpv1.NodeClassReference, error) {
 	gvk := schema.GroupVersionKind{
-		Group: param.NodeClassRef.Group,
-		Kind:  param.NodeClassRef.Kind,
+		Group:   param.NodeClassRef.Group,
+		Kind:    param.NodeClassRef.Kind,
+		Version: param.NodeClassRef.Version,
 	}
 	nodeClass := &unstructured.Unstructured{}
 	nodeClass.SetGroupVersionKind(gvk)
