@@ -88,6 +88,15 @@ func (r *GPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, fmt.Errorf("node %s is not assigned to any pool", gpunode.Name)
 	}
 
+	if gpu.Status.UsedBy == "" {
+		patch := client.MergeFrom(gpu.DeepCopy())
+		gpu.Status.UsedBy = tfv1.UsedByTensorFusion
+		if err := r.Status().Patch(ctx, gpu, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("patch gpu %s: %w", gpu.Name, err)
+		}
+		return ctrl.Result{}, nil
+	}
+
 	// No need to calculate patch since GPU's owner pool not changed
 	if gpu.Labels != nil && gpu.Labels[constants.GpuPoolKey] == poolName {
 		return ctrl.Result{}, nil
@@ -98,13 +107,10 @@ func (r *GPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		gpu.Labels = make(map[string]string)
 	}
 	gpu.Labels[constants.GpuPoolKey] = poolName
-	if gpu.Status.UsedBy == "" {
-		gpu.Status.UsedBy = tfv1.UsedByTensorFusion
-	}
-
 	if err := r.Patch(ctx, gpu, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch gpu %s: %w", gpu.Name, err)
 	}
+
 	return ctrl.Result{}, nil
 }
 
