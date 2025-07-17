@@ -121,15 +121,15 @@ func (p AWSGPUNodeProvider) GetNodeStatus(ctx context.Context, param *types.Node
 	return status, nil
 }
 
-func (p AWSGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType tfv1.CapacityTypeEnum) (float64, error) {
-	if price, exists := p.pricingProvider.GetPricing(instanceType, capacityType); exists {
+func (p AWSGPUNodeProvider) GetInstancePricing(instanceType string, capacityType tfv1.CapacityTypeEnum, region string) (float64, error) {
+	if price, exists := p.pricingProvider.GetPricing(instanceType, capacityType, region); exists {
 		return price, nil
 	}
 	return 0, nil
 }
 
 func (p AWSGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []types.GPUNodeInstanceInfo {
-	instanceTypes, exists := p.pricingProvider.GetGPUNodeInstanceTypeInfo(region)
+	instanceTypes, exists := p.pricingProvider.GetRegionalGPUNodeInstanceTypes(region)
 	if !exists {
 		log.FromContext(p.ctx).Error(nil, "no instance type info found for region", "region", region)
 		return []types.GPUNodeInstanceInfo{}

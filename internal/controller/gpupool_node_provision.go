@@ -130,7 +130,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 			// Persist the status to GPUNode to avoid duplicated creation in next reconciliation
 			// If the K8S node never be ready after some time, the GPUNode will be deleted, then the Pool reconcile loop can scale up and meet the capacity constraint again
 
-			costPerHour, pricingErr := provider.GetInstancePricing(node.InstanceType, node.Region, node.CapacityType)
+			costPerHour, pricingErr := provider.GetInstancePricing(node.InstanceType, node.CapacityType, node.Region)
 			if pricingErr != nil {
 				errList = append(errList, pricingErr)
 				return

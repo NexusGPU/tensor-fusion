@@ -11,7 +11,7 @@ func init() {
 	GPUInstanceTypeInfo = []types.GPUNodeInstanceInfo{
 		{
 			InstanceType: "mock.g4dn.large",
-			CostPerHour:  2.152,
+			// CostPerHour:  2.152,
 
 			CPUs:      4,
 			MemoryGiB: 15,
@@ -21,7 +21,7 @@ func init() {
 
 			GPUModel:        "NVIDIA T4",
 			GPUCount:        1,
-			GPUArchitecture: types.GPUArchitectureNvidiaTuring,
+			GPUVendor:       types.GPUVendorNvidia,
 			CPUArchitecture: types.CPUArchitectureAMD64,
 		},
 	}
@@ -31,6 +31,6 @@ func (p MockGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []types.G
 	return GPUInstanceTypeInfo
 }
 
-func (p MockGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType tfv1.CapacityTypeEnum) (float64, error) {
+func (p MockGPUNodeProvider) GetInstancePricing(instanceType string, capacityType tfv1.CapacityTypeEnum, region string) (float64, error) {
 	return 42, nil
 }

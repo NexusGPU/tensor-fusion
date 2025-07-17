@@ -29,6 +29,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -41,8 +42,10 @@ const (
 var (
 	globalAWSGPUInstanceData   map[string]GPUNodeInstanceInfoAndPrice
 	globalAzureGPUInstanceData map[string]GPUNodeInstanceInfoAndPrice
-	tflopsMap                  map[string]config.GpuInfo
+	tflopsMap                  map[string]*config.GpuInfo
 )
+
+var readyCh = make(chan struct{})
 
 // PricingProvider provides pricing information and calculations for instance types
 type PricingProvider interface {
@@ -71,23 +74,23 @@ var awsCSV string
 //go:embed pricing-data/azure-gpu.csv
 var azureCSV string
 
-func init() {
-	// Initialize maps
-	globalAWSGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
-	globalAzureGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
-	tflopsMap = make(map[string]config.GpuInfo)
-	loadCSVInstanceDataFromPath(context.Background(), []byte(awsCSV), providerAWS)
-	loadCSVInstanceDataFromPath(context.Background(), []byte(azureCSV), providerAzure)
-}
-
-func SetTflopsMap(ctx context.Context, gpuInfos *[]config.GpuInfo) {
+func SetTflopsMapAndInitGPUPricingInfo(ctx context.Context, gpuInfos *[]config.GpuInfo) {
+	tflopsMap = make(map[string]*config.GpuInfo, len(*gpuInfos)*2)
 	if gpuInfos == nil {
 		log.FromContext(ctx).Info("gpuInfos is empty, check public-gpu-info config file")
 		return
 	}
 	for _, gpuInfo := range *gpuInfos {
-		tflopsMap[gpuInfo.Model] = gpuInfo
+		tflopsMap[gpuInfo.FullModelName] = &gpuInfo
+		tflopsMap[gpuInfo.Model] = &gpuInfo
 	}
+
+	globalAWSGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
+	globalAzureGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
+
+	loadCSVInstanceDataFromPath(context.Background(), []byte(awsCSV), providerAWS)
+	loadCSVInstanceDataFromPath(context.Background(), []byte(azureCSV), providerAzure)
+	close(readyCh)
 }
 
 // loadCSVInstanceDataFromPath loads instance data from a single CSV file
@@ -133,6 +136,13 @@ func loadCSVInstanceDataFromPath(ctx context.Context, data []byte, provider stri
 		}
 
 		// Store in appropriate map
+		gpuInfo, exists := tflopsMap[instanceInfo.GPUModel]
+		if !exists {
+			// not configured, skip
+			continue
+		}
+		instanceInfo.FP16TFlopsPerGPU = gpuInfo.Fp16TFlops.AsApproximateFloat64()
+
 		instanceInfoAndPrice := GPUNodeInstanceInfoAndPrice{
 			GPUNodeInstanceInfo: instanceInfo,
 			onDemandPrice:       prices[0],
@@ -158,15 +168,24 @@ func loadCSVInstanceDataFromPath(ctx context.Context, data []byte, provider stri
 
 // parseAWSRecord parses a single AWS CSV record
 func parseAWSRecord(record []string) (types.GPUNodeInstanceInfo, [3]float64) {
-	instanceType := record[1]     // API Name
-	memory := record[2]           // Instance Memory
-	gpuCountStr := record[3]      // GPUs
-	gpuModel := record[4]         // GPU model
-	gpuMemory := record[5]        // GPU memory
-	onDemandPriceStr := record[8] // On Demand
-	reservedPriceStr := record[9] // Linux Reserved cost
+	instanceType := record[1]      // API Name
+	memory := record[2]            // Instance Memory
+	cpuCountStr := record[3]       // vCPUs
+	gpuCountStr := record[4]       // GPUs
+	gpuModel := record[5]          // GPU model
+	gpuMemory := record[6]         // GPU memory
+	cpuArchStr := record[7]        // CPU architecture, x86_64 or arm64
+	onDemandPriceStr := record[9]  // On Demand
+	reservedPriceStr := record[10] // Linux Reserved cost
 	totalMemory := parseMemory(gpuMemory)
 	gpuCount := parseGPUCount(gpuCountStr)
+
+	// Default to amd64 (x86_64)
+	cpuArch := types.CPUArchitectureAMD64
+	if cpuArchStr == "arm64" {
+		cpuArch = types.CPUArchitectureARM64
+	}
+
 	var perGPUMemory int32
 	if gpuCount != 0 {
 		perGPUMemory = totalMemory / gpuCount
@@ -174,17 +193,19 @@ func parseAWSRecord(record []string) (types.GPUNodeInstanceInfo, [3]float64) {
 
 	info := types.GPUNodeInstanceInfo{
 		InstanceType:        instanceType,
-		CostPerHour:         parsePrice(onDemandPriceStr),
 		MemoryGiB:           parseMemory(memory),
 		VRAMGigabytesPerGPU: perGPUMemory,
 		GPUModel:            gpuModel,
 		GPUCount:            gpuCount,
+		CPUArchitecture:     cpuArch,
+		CPUs:                parseCPUCount(cpuCountStr),
+		GPUVendor:           types.GPUVendorNvidia,
 	}
 
 	prices := [3]float64{
 		parsePrice(onDemandPriceStr),
 		parsePrice(reservedPriceStr),
-		0, // Spot price not available in current CSV
+		parsePrice(onDemandPriceStr) * constants.SpotInstanceAssumedDiscountRatio, // Spot price not available in current CSV
 	}
 
 	return info, prices
@@ -206,7 +227,6 @@ func parseAzureRecord(record []string) (types.GPUNodeInstanceInfo, [3]float64) {
 
 	info := types.GPUNodeInstanceInfo{
 		InstanceType:        instanceType,
-		CostPerHour:         parsePrice(onDemandPriceStr),
 		MemoryGiB:           parseMemory(memory), // Now Azure has memory info
 		VRAMGigabytesPerGPU: gpuMemoryInt,        // Not provided in Azure CSV
 		GPUModel:            gpuModel,
@@ -241,6 +261,15 @@ func parsePrice(priceStr string) float64 {
 
 // parseGPUCount parses GPU count from string like "16" or "8"
 func parseGPUCount(countStr string) int32 {
+	if count, err := strconv.ParseInt(countStr, 10, 32); err == nil {
+		return int32(count)
+	}
+	return 0
+}
+
+func parseCPUCount(countStr string) int32 {
+	countStr = strings.ReplaceAll(countStr, "vCPUs", "")
+	countStr = strings.TrimSpace(countStr)
 	if count, err := strconv.ParseInt(countStr, 10, 32); err == nil {
 		return int32(count)
 	}
@@ -302,7 +331,9 @@ func parseAzureGPUSpec(gpuSpec string) (int32, string) {
 }
 
 // GetPricing gets the pricing for the instanceType, capacityType
-func (p *StaticPricingProvider) GetPricing(instanceType string, capacityType tfv1.CapacityTypeEnum) (float64, bool) {
+func (p *StaticPricingProvider) GetPricing(instanceType string, capacityType tfv1.CapacityTypeEnum, region string) (float64, bool) {
+	// TODO: region factor should be considered in future
+
 	// Check AWS instances first
 	if info, exists := globalAWSGPUInstanceData[instanceType]; exists {
 		switch capacityType {
@@ -331,34 +362,39 @@ func (p *StaticPricingProvider) GetPricing(instanceType string, capacityType tfv
 }
 
 // GetGPUNodeInstanceTypeInfoByInstance gets the gpu info for the instanceType, region
-func (p *StaticPricingProvider) GetGPUNodeInstanceTypeInfoByInstance(instanceType string, region string) ([]types.GPUNodeInstanceInfo, bool) {
-	var results []types.GPUNodeInstanceInfo
+func (p *StaticPricingProvider) GetGPUNodeInstanceTypeInfoByInstance(instanceType string, region string) (types.GPUNodeInstanceInfo, bool) {
+	<-readyCh
+	var result types.GPUNodeInstanceInfo
+	found := false
 
 	// Check AWS instances first
 	if info, exists := globalAWSGPUInstanceData[instanceType]; exists {
 		if tflopsMap != nil {
 			tflops := tflopsMap[info.GPUNodeInstanceInfo.GPUModel]
-			info.GPUNodeInstanceInfo.FP16TFlopsPerGPU = int32(tflops.Fp16TFlops.Value())
+			info.GPUNodeInstanceInfo.FP16TFlopsPerGPU = tflops.Fp16TFlops.AsApproximateFloat64()
 		}
-		results = append(results, info.GPUNodeInstanceInfo)
+		result = info.GPUNodeInstanceInfo
+		found = true
 	}
 
 	// Check Azure instances
 	if info, exists := globalAzureGPUInstanceData[instanceType]; exists {
 		if tflopsMap != nil {
 			tflops := tflopsMap[info.GPUNodeInstanceInfo.GPUModel]
-			info.GPUNodeInstanceInfo.FP16TFlopsPerGPU = int32(tflops.Fp16TFlops.Value())
+			info.GPUNodeInstanceInfo.FP16TFlopsPerGPU = tflops.Fp16TFlops.AsApproximateFloat64()
 		}
-		results = append(results, info.GPUNodeInstanceInfo)
+		result = info.GPUNodeInstanceInfo
+		found = true
 	}
 
-	return results, len(results) > 0
+	return result, found
 }
 
-// GetGPUNodeInstanceTypeInfo implements PricingProvider interface
-func (p *StaticPricingProvider) GetGPUNodeInstanceTypeInfo(region string) ([]types.GPUNodeInstanceInfo, bool) {
+// GetRegionalGPUNodeInstanceTypes implements PricingProvider interface
+func (p *StaticPricingProvider) GetRegionalGPUNodeInstanceTypes(region string) ([]types.GPUNodeInstanceInfo, bool) {
+	<-readyCh
 	// Pre-allocate slice with estimated capacity
-	instanceTypes := make([]types.GPUNodeInstanceInfo, 0, len(globalAWSGPUInstanceData)+len(globalAzureGPUInstanceData))
+	instanceTypes := make([]types.GPUNodeInstanceInfo, 0, len(globalAWSGPUInstanceData))
 
 	// Collect all instance types from AWS
 	for instanceType := range globalAWSGPUInstanceData {

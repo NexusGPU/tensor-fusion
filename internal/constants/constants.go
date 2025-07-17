@@ -171,6 +171,7 @@ const (
 )
 
 const ShortUUIDAlphabet = "123456789abcdefghijkmnopqrstuvwxy"
+const SpotInstanceAssumedDiscountRatio = 0.3
 
 const (
 	LowFrequencyObjFailureInitialDelay        = 300 * time.Millisecond

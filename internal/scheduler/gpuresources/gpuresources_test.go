@@ -727,6 +727,8 @@ func (s *GPUResourcesSuite) TestScore_ErrorHandling() {
 	s.Equal(framework.Error, status.Code())
 
 	// Pre-filter, but for a different node
+	nodeInfo = &framework.NodeInfo{}
+	nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-c-non-existent"}})
 	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod)
 	s.Require().True(preFilterStatus.IsSuccess())
 	_, status = s.plugin.Score(s.ctx, state, pod, nodeInfo)
