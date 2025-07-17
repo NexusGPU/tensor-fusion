@@ -173,13 +173,13 @@ type Requirement struct {
 	Values []string `json:"values,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=node.kubernetes.io/instance-type;kubernetes.io/arch;kubernetes.io/os;topology.kubernetes.io/region;topology.kubernetes.io/zone;karpenter.sh/capacity-type;tensor-fusion.ai/gpu-arch;tensor-fusion.ai/gpu-instance-family;tensor-fusion.ai/gpu-instance-size
+// +kubebuilder:validation:Enum=node.kubernetes.io/instance-type;kubernetes.io/arch;kubernetes.io/os;topology.kubernetes.io/region;topology.kubernetes.io/zone;karpenter.sh/capacity-type;tensor-fusion.ai/gpu-vendor;tensor-fusion.ai/gpu-instance-family;tensor-fusion.ai/gpu-instance-size
 type NodeRequirementKey string
 
 const (
-	NodeRequirementKeyInstanceType    NodeRequirementKey = "node.kubernetes.io/instance-type"
-	NodeRequirementKeyArchitecture    NodeRequirementKey = "kubernetes.io/arch"
-	NodeRequirementKeyGPUArchitecture NodeRequirementKey = "tensor-fusion.ai/gpu-arch"
+	NodeRequirementKeyInstanceType NodeRequirementKey = "node.kubernetes.io/instance-type"
+	NodeRequirementKeyArchitecture NodeRequirementKey = "kubernetes.io/arch"
+	NodeRequirementKeyGPUVendor    NodeRequirementKey = "tensor-fusion.ai/gpu-vendor"
 
 	NodeRequirementKeyOS     NodeRequirementKey = "kubernetes.io/os"
 	NodeRequirementKeyRegion NodeRequirementKey = "topology.kubernetes.io/region"

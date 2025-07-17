@@ -182,16 +182,16 @@ func (p KarpenterGPUNodeProvider) GetNodeStatus(ctx context.Context, param *type
 	return status, nil
 }
 
-func (p KarpenterGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType tfv1.CapacityTypeEnum) (float64, error) {
+func (p KarpenterGPUNodeProvider) GetInstancePricing(instanceType string, capacityType tfv1.CapacityTypeEnum, region string) (float64, error) {
 	// Use the static pricing provider for calculations
-	if price, exists := p.pricingProvider.GetPricing(instanceType, capacityType); exists {
+	if price, exists := p.pricingProvider.GetPricing(instanceType, capacityType, region); exists {
 		return price, nil
 	}
 	return 0.0, fmt.Errorf("no on-demand pricing found for instance type %s in region %s", instanceType, region)
 }
 
 func (p KarpenterGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []types.GPUNodeInstanceInfo {
-	instanceTypes, exists := p.pricingProvider.GetGPUNodeInstanceTypeInfo(region)
+	instanceTypes, exists := p.pricingProvider.GetRegionalGPUNodeInstanceTypes(region)
 	if !exists {
 		log.FromContext(p.ctx).Error(nil, "no instance type info found for region %s", region)
 		return []types.GPUNodeInstanceInfo{} // avoid panic

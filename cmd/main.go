@@ -576,7 +576,7 @@ func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, g
 			for _, gpuInfo := range updatedGpuInfos {
 				gpuPricingMap[gpuInfo.FullModelName] = gpuInfo.CostPerHour
 			}
-			pricing.SetTflopsMap(ctx, &updatedGpuInfos)
+			pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, &updatedGpuInfos)
 		}
 	}()
 }
