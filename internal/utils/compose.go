@@ -386,6 +386,14 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 		MountPath: constants.KubeletDevicePluginPath,
 	})
 
+	spec.Containers[0].SecurityContext = &v1.SecurityContext{
+		Capabilities: &v1.Capabilities{
+			Add: []v1.Capability{
+				constants.SystemPtraceCapability,
+			},
+		},
+	}
+
 	port := getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor)
 	spec.ServiceAccountName = constants.HypervisorServiceAccountName
 	spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
