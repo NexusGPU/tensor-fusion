@@ -96,33 +96,54 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
+	// Skip creation if the GPUNode already exists
+	gpuNode := &tfv1.GPUNode{}
+	if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
+		if errors.IsNotFound(err) {
+			gpuNode = r.generateGPUNode(node, pool, provisioner)
+			if e := r.Create(ctx, gpuNode); e != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to create GPUNode: %w", e)
+			}
+		}
+	}
+
 	provisioningMode := pool.Spec.NodeManagerConfig.ProvisioningMode
 	isDirectManagedMode := provisioningMode == tfv1.ProvisioningModeProvisioned
 	isManagedNode := isDirectManagedMode || provisioningMode == tfv1.ProvisioningModeKarpenter
 	// No owner for auto select mode, and node's owner will be Karpenter NodeClaim and then GPUNodeClaim in Karpenter mode
 	if isManagedNode {
-		gpuNodeClaim := &tfv1.GPUNodeClaim{}
+		if gpuNode.Labels != nil && provisioner != "" &&
+			gpuNode.Labels[constants.ProvisionerLabelKey] != provisioner {
+			gpuNode.Labels[constants.ProvisionerLabelKey] = provisioner
+			if err := r.Update(ctx, gpuNode); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update owner of node: %w", err)
+			}
+		}
 
+		gpuNodeClaim := &tfv1.GPUNodeClaim{}
 		provisionerName := node.Labels[constants.ProvisionerLabelKey]
 		if provisionerName == "" {
-			// TODO: create GPUNodeClaim, treat as case 1, not able to delete it
-			return ctrl.Result{}, fmt.Errorf("failed to get provisioner name from node labels: %v", node.Labels)
+			// Indicates the node can not be linked to GPUNodeClaim, should be marked as existing instance
+			// when GPUNodeClaim keeps Creating state, should measure and trigger warning.
+			// when GPUNodeClaim not exists, it's caused by migrating existing GPUNodes
+			log.Info("GPU node found but no linked to GPUNodeClaim since node-provisioner label missing", "node", node.Name)
+			return ctrl.Result{}, nil
 		}
 
 		if err := r.Get(ctx, client.ObjectKey{Name: provisionerName}, gpuNodeClaim); err != nil {
 			if errors.IsNotFound(err) {
-				// case 1: this node is built-in, should create the gpuNodeClaim to make existing resource managed
-				// but these resources should not be deleted when its direct managed mode (used a special mark, eg unknown instance ID)
-				// if they are managed by Karpenter, could be delete, and change the owner ref from previous node pool to node claim
-
-				// case 2: this node is created by gpuNodeClaim (thru direct provisioning, Karpenter is impossible because owner ref is set)
-				// this should should have a one-to-one for a existing gpuNodeClaim
-				gpuNodeClaim = &tfv1.GPUNodeClaim{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: node.Name,
-					},
+				if node.Labels[constants.ProvisionerMissingLabel] == constants.TrueStringValue {
+					return ctrl.Result{}, nil
+				} else {
+					log.Info("GPUNodeClaim is missing, Node is still there, should mark it as Orphan", "node", node.Name)
+					node.Labels[constants.ProvisionerMissingLabel] = constants.TrueStringValue
+					if err := r.Update(ctx, node); err != nil {
+						return ctrl.Result{}, fmt.Errorf("failed to update owner of node: %w", err)
+					}
 				}
+				return ctrl.Result{}, nil
 			}
+			return ctrl.Result{}, fmt.Errorf("failed to get GPUNodeClaim provisioner(%s): %w", provisionerName, err)
 		}
 
 		if isDirectManagedMode {
@@ -131,17 +152,6 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			_ = controllerutil.SetControllerReference(gpuNodeClaim, node, r.Scheme)
 			if err := r.Update(ctx, node); err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to update owner of node: %w", err)
-			}
-		}
-	}
-
-	// Skip creation if the GPUNode already exists
-	gpuNode := &tfv1.GPUNode{}
-	if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
-		if errors.IsNotFound(err) {
-			gpuNode = r.generateGPUNode(node, pool, provisioner)
-			if e := r.Create(ctx, gpuNode); e != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to create GPUNode: %w", e)
 			}
 		}
 	}
@@ -157,9 +167,7 @@ func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool, 
 		ObjectMeta: metav1.ObjectMeta{
 			Name: node.Name,
 			Labels: map[string]string{
-				constants.LabelKeyOwner:       pool.Name,
-				constants.ProvisionerLabelKey: provisioner,
-
+				constants.LabelKeyOwner: pool.Name,
 				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true",
 			},
 		},
@@ -167,7 +175,9 @@ func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool, 
 			ManageMode: mode,
 		},
 	}
-
+	if provisioner != "" {
+		gpuNode.Labels[constants.ProvisionerLabelKey] = provisioner
+	}
 	_ = controllerutil.SetControllerReference(pool, gpuNode, r.Scheme)
 	return gpuNode
 }

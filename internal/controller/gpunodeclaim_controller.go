@@ -22,7 +22,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
@@ -34,7 +33,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
-	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
 // GPUNodeClaimReconciler reconciles a GPUNodeClaim object
@@ -80,7 +78,6 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		log.Info("AutoSelect mode, skip provision node", "name", claim.Name)
 		return ctrl.Result{}, nil
 	}
-	isKarpenterMode := provisioningMode == tfv1.ProvisioningModeKarpenter
 
 	shouldReturn, err := utils.HandleFinalizer(ctx, claim, r.Client, func(ctx context.Context, claim *tfv1.GPUNodeClaim) (bool, error) {
 		nodeList := &corev1.NodeList{}
@@ -95,28 +92,13 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				if !node.DeletionTimestamp.IsZero() {
 					continue
 				}
-				if isKarpenterMode {
-					// karpenter mode, delete the NodeClaim
-					kClaim := &karpv1.NodeClaim{
-						ObjectMeta: metav1.ObjectMeta{
-							Name: claim.Spec.NodeName,
-						},
-					}
-					log.Info("Deleting karpenter node claim", "name", claim.Spec.NodeName)
-					err := r.Delete(ctx, kClaim)
-					if err != nil {
-						return false, err
-					}
-				} else {
-					// TODO: should be async, return deletion request ID and check deletion status by request ID
-					log.Info("Deleting cloud vendor node", "instanceID", claim.Status.InstanceID, "region", claim.Spec.Region)
-					err = provider.TerminateNode(ctx, &types.NodeIdentityParam{
-						InstanceID: claim.Status.InstanceID,
-						Region:     claim.Spec.Region,
-					})
-					if err != nil {
-						return false, err
-					}
+				log.Info("Deleting cloud vendor node", "instanceID", claim.Status.InstanceID, "region", claim.Spec.Region)
+				err = provider.TerminateNode(ctx, &types.NodeIdentityParam{
+					InstanceID: claim.Status.InstanceID,
+					Region:     claim.Spec.Region,
+				})
+				if err != nil {
+					return false, err
 				}
 			}
 			return false, nil

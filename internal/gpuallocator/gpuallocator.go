@@ -315,6 +315,27 @@ func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocR
 	return filteredGPUs, nil
 }
 
+func (s *GpuAllocator) DeallocAsync(
+	workloadNameNamespace tfv1.NameNamespace,
+	gpus []string,
+	podMeta metav1.ObjectMeta,
+) {
+	go func() {
+		retry := 0
+		for {
+			pod := &v1.Pod{}
+			if err := s.Client.Get(s.ctx, client.ObjectKey{Namespace: podMeta.Namespace, Name: podMeta.Name}, pod); err != nil {
+				if errors.IsNotFound(err) {
+					s.Dealloc(workloadNameNamespace, gpus, podMeta)
+					return
+				}
+			}
+			time.Sleep(utils.CalculateExponentialBackoffWithJitter(int64(retry)))
+			retry++
+		}
+	}()
+}
+
 // Dealloc a request from gpu to release available resources on it.
 func (s *GpuAllocator) Dealloc(
 	workloadNameNamespace tfv1.NameNamespace,
@@ -743,7 +764,8 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 	defer s.storeMutex.Unlock()
 
 	if s.gpuStore[key] != nil {
-		log.Info("GPU already exists in store", "name", key.Name)
+		syncGPUStatusFromCluster(s.gpuStore[key], gpu)
+		log.V(6).Info("GPU already exists in store", "name", key.Name)
 		return
 	}
 
@@ -784,19 +806,23 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 		s.handleGPUUpdateCapacityDiff(old, gpu)
 
 		// should never update available and runningApps here, to avoid circular update
-		old.Status.Phase = gpu.Status.Phase
-		old.Status.Message = gpu.Status.Message
-		old.Status.UUID = gpu.Status.UUID
-		old.Status.NodeSelector = gpu.Status.NodeSelector
-		old.Status.GPUModel = gpu.Status.GPUModel
-		old.Status.UsedBy = gpu.Status.UsedBy
-		old.ResourceVersion = gpu.ResourceVersion
-		old.Generation = gpu.Generation
+		syncGPUStatusFromCluster(old, gpu)
 		log.V(6).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
 	} else {
 		s.gpuStore[key] = gpu.DeepCopy()
 		log.V(6).Info("Updated GPU in store (new entry)", "name", key.Name, "phase", gpu.Status.Phase)
 	}
+}
+
+func syncGPUStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
+	old.Status.Phase = gpu.Status.Phase
+	old.Status.Message = gpu.Status.Message
+	old.Status.UUID = gpu.Status.UUID
+	old.Status.NodeSelector = gpu.Status.NodeSelector
+	old.Status.GPUModel = gpu.Status.GPUModel
+	old.Status.UsedBy = gpu.Status.UsedBy
+	old.ResourceVersion = gpu.ResourceVersion
+	old.Generation = gpu.Generation
 }
 
 func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {

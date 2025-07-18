@@ -20,15 +20,32 @@ import (
 )
 
 // Controller and trigger logic for abstract layer of node provisioning
-func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Context, pool *tfv1.GPUPool) ([]string, error) {
+func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Context, pool *tfv1.GPUPool) (map[string]tfv1.Resource, error) {
 	log := log.FromContext(ctx)
 	// check if min resource constraint is satisfied
 	shouldScaleUp := false
 	tflopsGap := int64(0)
 	vramGap := int64(0)
 
+	// creating resources should be counted to avoid duplicated provisioning
+	assumedAddingTflops := int64(0)
+	assumedAddingVRAM := int64(0)
+
+	for claimName := range pool.Status.PendingGPUNodeClaim {
+		gpuNodeClaim := tfv1.GPUNodeClaim{}
+		if err := r.Get(ctx, client.ObjectKey{Name: claimName}, &gpuNodeClaim); err != nil {
+			return nil, err
+		}
+		pendingTflops, _ := gpuNodeClaim.Spec.TFlopsOffered.AsInt64()
+		pendingVRAM, _ := gpuNodeClaim.Spec.VRAMOffered.AsInt64()
+		assumedAddingVRAM += pendingVRAM
+		assumedAddingTflops += pendingTflops
+	}
+
 	totalTFlops, _ := pool.Status.TotalTFlops.AsInt64()
 	totalVRAM, _ := pool.Status.TotalVRAM.AsInt64()
+	totalTFlops += assumedAddingTflops
+	totalVRAM += assumedAddingVRAM
 
 	// default warmUp is zero, only scale up when available < 0
 	warmUpTFlops := int64(0)
@@ -56,6 +73,8 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	if !shouldScaleUp && pool.Status.Phase == tfv1.TensorFusionPoolPhaseRunning {
 		availableTFlops, _ := pool.Status.AvailableTFlops.AsInt64()
 		availableVRAM, _ := pool.Status.AvailableVRAM.AsInt64()
+		availableTFlops += assumedAddingTflops
+		availableVRAM += assumedAddingVRAM
 
 		tflopsGap = warmUpTFlops - availableTFlops
 		vramGap = warmUpVRAM - availableVRAM
@@ -123,7 +142,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	var errList []error
 
 	// lock the pool before next node scaling up loop, add assumed scaling resources util all pending nodeClaims are running
-	newCreatedNodes := []string{}
+	newCreatedNodes := map[string]tfv1.Resource{}
 	for _, node := range gpuNodeParams {
 		go func(node tfv1.GPUNodeClaimSpec) {
 			defer wg.Done()
@@ -161,7 +180,10 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 				errList = append(errList, err)
 				return
 			}
-			newCreatedNodes = append(newCreatedNodes, node.NodeName)
+			newCreatedNodes[node.NodeName] = tfv1.Resource{
+				Tflops: node.TFlopsOffered,
+				Vram:   node.VRAMOffered,
+			}
 		}(node)
 	}
 

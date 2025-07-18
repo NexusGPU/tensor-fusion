@@ -112,16 +112,8 @@ func CalculateExponentialBackoffWithJitter(retryCount int64) time.Duration {
 	}
 
 	backoff := float64(baseDelay) * math.Pow(factor, float64(retryCount))
-
 	jitter := rand.Float64() * backoff
-
-	totalDelay := time.Duration(jitter)
-	if totalDelay < baseDelay {
-		totalDelay = baseDelay
-	}
-	if totalDelay > maxDelay {
-		totalDelay = maxDelay
-	}
+	totalDelay := min(max(time.Duration(jitter), baseDelay), maxDelay)
 
 	return totalDelay
 }

@@ -972,6 +972,13 @@ func (in *GPUPoolStatus) DeepCopyInto(out *GPUPoolStatus) {
 		*out = &x
 	}
 	out.ComponentStatus = in.ComponentStatus
+	if in.PendingGPUNodeClaim != nil {
+		in, out := &in.PendingGPUNodeClaim, &out.PendingGPUNodeClaim
+		*out = make(map[string]Resource, len(*in))
+		for key, val := range *in {
+			(*out)[key] = *val.DeepCopy()
+		}
+	}
 	if in.LastCompactionTime != nil {
 		in, out := &in.LastCompactionTime, &out.LastCompactionTime
 		*out = (*in).DeepCopy()

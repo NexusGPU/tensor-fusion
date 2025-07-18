@@ -53,6 +53,11 @@ type GPUPoolReconciler struct {
 	Recorder record.EventRecorder
 }
 
+// First round reconcile should build correct capacity, and then check provisioning
+// for each pool first reconcile, record the time + StatusCheckInterval * 2
+// and requeue until current time after that, start provisioning loop
+var provisioningInitializationMinTime = map[string]time.Time{}
+
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools/finalizers,verbs=update
@@ -108,17 +113,51 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
+	if _, ok := provisioningInitializationMinTime[pool.Name]; !ok {
+		provisioningInitializationMinTime[pool.Name] = time.Now().Add(constants.StatusCheckInterval * 3)
+	}
+
+	if ctrlResult, err := r.reconcilePoolComponents(ctx, pool); err != nil {
+		return ctrl.Result{}, err
+	} else if ctrlResult != nil {
+		return *ctrlResult, nil
+	}
+
 	// For provisioning mode, check if need to scale up GPUNodes upon AvailableCapacity changed
 	isProvisioningMode := pool.Spec.NodeManagerConfig.ProvisioningMode == tfv1.ProvisioningModeProvisioned ||
 		pool.Spec.NodeManagerConfig.ProvisioningMode == tfv1.ProvisioningModeKarpenter
 
 	// Provisioning mode, check capacity and scale up if needed
 	if isProvisioningMode {
-		if len(pool.Status.PendingGPUNodeClaimNames) > 0 {
-			// clear this pending lock util all NodeClaims are bound and GPUNode created
-			// TODO: assumed capacity increase should happen (related gpuNode Capacity > 0)
-			// otherwise some nodes are not created
-			return ctrl.Result{}, nil
+		if time.Now().Before(provisioningInitializationMinTime[pool.Name]) {
+			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
+		}
+
+		if len(pool.Status.PendingGPUNodeClaim) > 0 {
+			claimBoundChanged := false
+			latestPendingClaim := make(map[string]tfv1.Resource, len(pool.Status.PendingGPUNodeClaim))
+			for claimName, _ := range pool.Status.PendingGPUNodeClaim {
+				gpuNodeClaim := tfv1.GPUNodeClaim{}
+				if err := r.Get(ctx, client.ObjectKey{Name: claimName}, &gpuNodeClaim); err != nil {
+					return ctrl.Result{}, err
+				}
+				if gpuNodeClaim.Status.Phase == tfv1.GPUNodeClaimBound {
+					claimBoundChanged = true
+				} else {
+					latestPendingClaim[claimName] = tfv1.Resource{
+						Tflops: gpuNodeClaim.Spec.TFlopsOffered,
+						Vram:   gpuNodeClaim.Spec.VRAMOffered,
+					}
+				}
+			}
+			if claimBoundChanged {
+				pool.Status.PendingGPUNodeClaim = latestPendingClaim
+				if err := r.Status().Update(ctx, pool); err != nil {
+					return ctrl.Result{}, err
+				}
+				// will trigger next loop immediately because of the patch
+				return ctrl.Result{}, nil
+			}
 		}
 
 		newCreatedNodes, err := r.reconcilePoolCapacityWithProvisioner(ctx, pool)
@@ -128,19 +167,13 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		// Set phase to updating and let GPUNode event trigger the check and update capacity loop, util all nodes are ready
 		if len(newCreatedNodes) > 0 {
 			// Refresh the capacity again since new node has been created
-			pool.Status.Phase = tfv1.TensorFusionPoolPhaseUpdating
-			pool.Status.PendingGPUNodeClaimNames = newCreatedNodes
+			pool.Status.ProvisioningPhase = tfv1.ProvisioningPhaseProvisioning
+			pool.Status.PendingGPUNodeClaim = newCreatedNodes
 			if err := r.Status().Patch(ctx, pool, client.Merge); err != nil {
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 		}
-	}
-
-	if ctrlResult, err := r.reconcilePoolComponents(ctx, pool); err != nil {
-		return ctrl.Result{}, err
-	} else if ctrlResult != nil {
-		return *ctrlResult, nil
 	}
 
 	return ctrl.Result{}, nil
@@ -254,9 +287,9 @@ func (r *GPUPoolReconciler) reconcilePoolComponents(ctx context.Context, pool *t
 
 	log := log.FromContext(ctx)
 	startTime := time.Now()
-	log.Info("Started reconciling components", "startTime", startTime)
+	log.V(6).Info("Started reconciling components", "startTime", startTime)
 	defer func() {
-		log.Info("Finished reconciling components", "duration", time.Since(startTime))
+		log.V(6).Info("Finished reconciling components", "duration", time.Since(startTime))
 	}()
 
 	components := []component.Interface{
@@ -308,5 +341,6 @@ func (r *GPUPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&tfv1.GPUPool{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("gpupool").
 		Owns(&tfv1.GPUNode{}).
+		Owns(&tfv1.GPUNodeClaim{}).
 		Complete(r)
 }

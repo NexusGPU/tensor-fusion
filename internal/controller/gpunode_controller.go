@@ -176,6 +176,25 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 		// update metrics to get historical allocation line chart and trending
 		metrics.SetNodeMetrics(node, poolObj, gpuModels)
 
+		// check if need to set GPUNodeClaim to Bound phase after hypervisor pod is running
+		if node.Labels != nil && node.Labels[constants.ProvisionerLabelKey] != "" {
+			gpuNodeClaim := &tfv1.GPUNodeClaim{}
+			if err := r.Get(ctx, client.ObjectKey{Name: node.Labels[constants.ProvisionerLabelKey]}, gpuNodeClaim); err != nil {
+				if errors.IsNotFound(err) {
+					log.FromContext(ctx).Info("GPUNodeClaim not found but provisioner is not empty, orphan GPUNode",
+						"name", node.Labels[constants.ProvisionerLabelKey])
+					return false, nil
+				}
+				return true, fmt.Errorf("failed to get GPUNodeClaim: %w", err)
+			}
+			if gpuNodeClaim.Status.Phase != tfv1.GPUNodeClaimBound {
+				gpuNodeClaim.Status.Phase = tfv1.GPUNodeClaimBound
+				if err := r.Status().Update(ctx, gpuNodeClaim); err != nil {
+					return true, fmt.Errorf("failed to update GPUNodeClaim to bound state: %w", err)
+				}
+			}
+		}
+
 		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhaseRunning)
 		if err != nil {
 			return true, err

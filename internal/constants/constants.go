@@ -157,6 +157,7 @@ const (
 // To match GPUNode with K8S node, when creating from cloud vendor, must set a label from cloud-init userdata
 const (
 	ProvisionerLabelKey        = Domain + "/node-provisioner"
+	ProvisionerMissingLabel    = Domain + "/orphan"
 	ProvisionerNamePlaceholder = "__GPU_NODE_RESOURCE_NAME__"
 )
 

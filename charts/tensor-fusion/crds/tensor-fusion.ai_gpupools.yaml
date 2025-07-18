@@ -715,6 +715,26 @@ spec:
               notReadyNodes:
                 format: int32
                 type: integer
+              pendingGPUNodeClaimNames:
+                additionalProperties:
+                  properties:
+                    tflops:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    vram:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                  required:
+                  - tflops
+                  - vram
+                  type: object
+                type: object
               phase:
                 default: Pending
                 enum:
@@ -725,6 +745,14 @@ spec:
                 - Unknown
                 type: string
               potentialSavingsPerMonth:
+                type: string
+              provisioningPhase:
+                default: None
+                enum:
+                - None
+                - Initializing
+                - Provisioning
+                - Completed
                 type: string
               readyNodes:
                 format: int32
