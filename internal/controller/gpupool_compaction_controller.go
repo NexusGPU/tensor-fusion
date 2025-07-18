@@ -45,7 +45,7 @@ var jobStarted sync.Map
 // TODO: implement other strategies
 // Strategy #2: check if whole Pool can be bin-packing into less nodes, check from low-priority to high-priority nodes one by one, if workloads could be moved to other nodes (using a simulated scheduler), evict it and mark cordoned, let scheduler to re-schedule
 
-// Strategy #3: check if any node can be reduced to 1/2 size. for remaining nodes, check if allocated size < 1/2 * total size, if so, check if can buy smaller instance
+// Strategy #3: check if any node can be reduced to 1/2 size. for remaining nodes, check if allocated size < 1/2 * total size, if so, check if can buy smaller instance, note that the compaction MUST be GPU level, not node level
 
 // Strategy #4: check if any two same nodes can be merged into one larger node, and make the remained capacity bigger and node number less without violating the capacity constraint and saving the hidden management,license,monitoring costs, potentially schedule more workloads since remaining capacity is single cohesive piece rather than fragments
 func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, pool *tfv1.GPUPool) error {
@@ -196,8 +196,8 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		log.Info("Finished compaction check for GPUPool", "name", req.Name)
 	}()
 
-	if len(pool.Status.PendingGPUNodeClaimNames) > 0 {
-		// skip compaction check util all NodeClaims are bound and GPUNode created
+	if len(pool.Status.PendingGPUNodeClaim) > 0 {
+		log.Info("Skip compaction check util all NodeClaims are bound and GPUNode created", "name", req.Name)
 		return ctrl.Result{RequeueAfter: nextDuration}, nil
 	}
 	compactionErr := r.checkNodeCompaction(ctx, pool)

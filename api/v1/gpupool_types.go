@@ -408,7 +408,11 @@ type GPUPoolStatus struct {
 	BudgetExceeded string `json:"budgetExceeded,omitempty"`
 
 	// +optional
-	PendingGPUNodeClaimNames []string `json:"pendingGPUNodeClaimNames,omitempty"`
+	// +kubebuilder:default="None"
+	ProvisioningPhase ProvisioningPhase `json:"provisioningPhase,omitempty"`
+
+	// +optional
+	PendingGPUNodeClaim map[string]Resource `json:"pendingGPUNodeClaimNames,omitempty"`
 
 	// +optional
 	LastCompactionTime *metav1.Time `json:"lastCompactionTime,omitempty"`
@@ -423,6 +427,21 @@ const (
 	TensorFusionPoolPhaseUpdating   = TensorFusionPoolPhase(constants.PhaseUpdating)
 	TensorFusionPoolPhaseUnknown    = TensorFusionPoolPhase(constants.PhaseUnknown)
 	TensorFusionPoolPhaseDestroying = TensorFusionPoolPhase(constants.PhaseDestroying)
+)
+
+// +kubebuilder:validation:Enum=None;Initializing;Provisioning;Completed
+type ProvisioningPhase string
+
+const (
+	// None means not in provisioning mode
+	ProvisioningPhaseNone = ProvisioningPhase("None")
+
+	// When NodeClaim created and pending GPUNodeClaim not empty, it's provisioning state,
+	// check until all GPUNodeClaims are bound, unless next scale up should not happen
+	ProvisioningPhaseProvisioning = ProvisioningPhase("Provisioning")
+
+	// When all GPUNodeClaims are bound, set to Completed
+	ProvisioningPhaseCompleted = ProvisioningPhase("Completed")
 )
 
 type PoolProvisioningStatus struct {

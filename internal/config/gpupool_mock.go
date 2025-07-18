@@ -23,12 +23,12 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 			VRAM:   resource.MustParse("10Gi"),
 		},
 		MaxResources: &tfv1.GPUOrCPUResourceUnit{
-			TFlops: resource.MustParse("1000"),
-			VRAM:   resource.MustParse("100Gi"),
+			TFlops: resource.MustParse("3000"),
+			VRAM:   resource.MustParse("3000Gi"),
 		},
 		WarmResources: &tfv1.GPUOrCPUResourceUnit{
-			TFlops: resource.MustParse("200"),
-			VRAM:   resource.MustParse("20Gi"),
+			TFlops: resource.MustParse("2200"),
+			VRAM:   resource.MustParse("2020Gi"),
 		},
 	},
 	NodeManagerConfig: &tfv1.NodeManagerConfig{
