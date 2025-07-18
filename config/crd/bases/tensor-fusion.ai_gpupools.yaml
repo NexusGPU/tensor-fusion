@@ -321,7 +321,7 @@ spec:
                               - topology.kubernetes.io/region
                               - topology.kubernetes.io/zone
                               - karpenter.sh/capacity-type
-                              - tensor-fusion.ai/gpu-arch
+                              - tensor-fusion.ai/gpu-vendor
                               - tensor-fusion.ai/gpu-instance-family
                               - tensor-fusion.ai/gpu-instance-size
                               type: string
@@ -378,7 +378,7 @@ spec:
                               - topology.kubernetes.io/region
                               - topology.kubernetes.io/zone
                               - karpenter.sh/capacity-type
-                              - tensor-fusion.ai/gpu-arch
+                              - tensor-fusion.ai/gpu-vendor
                               - tensor-fusion.ai/gpu-instance-family
                               - tensor-fusion.ai/gpu-instance-size
                               type: string
@@ -416,7 +416,25 @@ spec:
                               type: string
                           type: object
                         type: array
+                      karpenterNodeClassRef:
+                        description: Karpenter NodeClass name
+                        properties:
+                          group:
+                            type: string
+                          kind:
+                            type: string
+                          name:
+                            type: string
+                          version:
+                            type: string
+                        required:
+                        - group
+                        - kind
+                        - name
+                        - version
+                        type: object
                       nodeClass:
+                        description: TensorFusion GPUNodeClass name
                         type: string
                     type: object
                   nodeSelector:
@@ -697,6 +715,26 @@ spec:
               notReadyNodes:
                 format: int32
                 type: integer
+              pendingGPUNodeClaimNames:
+                additionalProperties:
+                  properties:
+                    tflops:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    vram:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                  required:
+                  - tflops
+                  - vram
+                  type: object
+                type: object
               phase:
                 default: Pending
                 enum:
@@ -707,6 +745,14 @@ spec:
                 - Unknown
                 type: string
               potentialSavingsPerMonth:
+                type: string
+              provisioningPhase:
+                default: None
+                enum:
+                - None
+                - Initializing
+                - Provisioning
+                - Completed
                 type: string
               readyNodes:
                 format: int32

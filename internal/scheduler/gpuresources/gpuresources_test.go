@@ -438,13 +438,17 @@ func (s *GPUResourcesSuite) TestScore() {
 
 	// node a as one worker consumed 10% GPU resources
 	// the score should be 100 - 90 = 10
-	score, status := s.plugin.Score(s.ctx, state, pod, "node-a")
+	nodeInfo := &framework.NodeInfo{}
+	nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
+	score, status := s.plugin.Score(s.ctx, state, pod, nodeInfo)
 	s.True(status.IsSuccess())
 	s.Equal(int64(10), score)
 
 	// node-b has no worker, in compact first mode,
 	// it's available resources is 100%, thus score is 100-100 = 0
-	score, status = s.plugin.Score(s.ctx, state, pod, "node-b")
+	nodeInfo = &framework.NodeInfo{}
+	nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b"}})
+	score, status = s.plugin.Score(s.ctx, state, pod, nodeInfo)
 	s.True(status.IsSuccess())
 	s.Zero(score)
 }
@@ -716,13 +720,17 @@ func (s *GPUResourcesSuite) TestScore_ErrorHandling() {
 	})
 
 	// No pre-filter call, so state is empty
-	_, status := s.plugin.Score(s.ctx, state, pod, "node-a")
+	nodeInfo := &framework.NodeInfo{}
+	nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
+	_, status := s.plugin.Score(s.ctx, state, pod, nodeInfo)
 	s.Error(status.AsError())
 	s.Equal(framework.Error, status.Code())
 
 	// Pre-filter, but for a different node
+	nodeInfo = &framework.NodeInfo{}
+	nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-c-non-existent"}})
 	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod)
 	s.Require().True(preFilterStatus.IsSuccess())
-	_, status = s.plugin.Score(s.ctx, state, pod, "node-c-non-existent")
+	_, status = s.plugin.Score(s.ctx, state, pod, nodeInfo)
 	s.Equal(framework.Unschedulable, status.Code())
 }

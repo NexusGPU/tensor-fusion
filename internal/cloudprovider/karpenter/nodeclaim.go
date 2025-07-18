@@ -3,7 +3,6 @@ package karpenter
 import (
 	"context"
 	"fmt"
-	"log"
 	"maps"
 	"strings"
 	"time"
@@ -11,6 +10,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/mitchellh/mapstructure"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,25 +19,20 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
-// KarpenterConfig holds Karpenter-specific configuration parsed from ExtraParams
-type KarpenterConfig struct {
-	NodeClassRef struct {
-		Name    string `mapstructure:"name"`
-		Group   string `mapstructure:"group"`
-		Version string `mapstructure:"version"`
-		Kind    string `mapstructure:"kind"`
-	} `mapstructure:"nodeclassref"`
-
+// KarpenterExtraConfig holds Karpenter-specific configuration parsed from ExtraParams
+type KarpenterExtraConfig struct {
 	// NodeClaim configuration
 	NodeClaim struct {
-		TerminationGracePeriod string `mapstructure:"terminationgraceperiod"`
-	} `mapstructure:"nodeclaim"`
+		TerminationGracePeriod string `mapstructure:"terminationGracePeriod"`
+	} `mapstructure:"nodeClaim"`
 	// Additional Karpenter settings
 	// GPU resource name, default to "nvidia.com/gpu"
-	GPUResourceName corev1.ResourceName `mapstructure:"gpuresource"`
+	GPUResourceName corev1.ResourceName `mapstructure:"gpuResource"`
 }
 
 type KarpenterGPUNodeProvider struct {
@@ -45,9 +40,10 @@ type KarpenterGPUNodeProvider struct {
 	config            tfv1.ComputingVendorConfig
 	nodeManagerConfig *tfv1.NodeManagerConfig
 	pricingProvider   *pricing.StaticPricingProvider
+	ctx               context.Context
 }
 
-func NewKarpenterGPUNodeProvider(cfg tfv1.ComputingVendorConfig, client client.Client, nodeManagerConfig tfv1.NodeManagerConfig) (KarpenterGPUNodeProvider, error) {
+func NewKarpenterGPUNodeProvider(ctx context.Context, cfg tfv1.ComputingVendorConfig, client client.Client, nodeManagerConfig *tfv1.NodeManagerConfig) (KarpenterGPUNodeProvider, error) {
 	// Validate configuration
 	if cfg.Type != tfv1.ComputingVendorKarpenter {
 		return KarpenterGPUNodeProvider{}, fmt.Errorf("invalid computing vendor type: expected 'karpenter', got '%s'", cfg.Type)
@@ -60,8 +56,9 @@ func NewKarpenterGPUNodeProvider(cfg tfv1.ComputingVendorConfig, client client.C
 	return KarpenterGPUNodeProvider{
 		client:            client,
 		config:            cfg,
-		nodeManagerConfig: &nodeManagerConfig,
+		nodeManagerConfig: nodeManagerConfig,
 		pricingProvider:   pricingProvider,
+		ctx:               ctx,
 	}, nil
 }
 
@@ -72,7 +69,7 @@ func (p KarpenterGPUNodeProvider) TestConnection() error {
 	exist := true
 	// check if NodeClaim CRD exists
 	if err := p.client.List(context.Background(), &karpv1.NodeClaimList{}); err != nil {
-		log.Printf("karpenter NodeClaim CRD not found.")
+		log.FromContext(p.ctx).Error(err, "karpenter NodeClaim CRD not found.")
 		exist = false
 	}
 	if exist {
@@ -80,21 +77,25 @@ func (p KarpenterGPUNodeProvider) TestConnection() error {
 	}
 	// check if NodePool CRD exists
 	if err := p.client.List(context.Background(), &karpv1.NodePoolList{}); err != nil {
-		log.Printf("karpenter NodePool CRD not found.")
+		log.FromContext(p.ctx).Error(err, "karpenter NodePool CRD not found.")
 		return fmt.Errorf("karpenter CRD not found or not accessible")
 	}
 	return nil
 }
 
-func (p KarpenterGPUNodeProvider) CreateNode(ctx context.Context, param *types.NodeCreationParam) (*types.GPUNodeStatus, error) {
-	if param == nil || p.client == nil {
+func (p KarpenterGPUNodeProvider) CreateNode(ctx context.Context, claim *tfv1.GPUNodeClaim) (*types.GPUNodeStatus, error) {
+	if claim == nil || p.client == nil {
 		return nil, fmt.Errorf("NodeCreationParam cannot be nil")
 	}
+	param := &claim.Spec
 	// Build NodeClaim from the creation parameters
 	nodeClaim, err := p.buildNodeClaim(ctx, param)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to build NodeClaim for node %s: %v", param.NodeName, err)
 	}
+	_ = controllerutil.SetControllerReference(claim, nodeClaim, p.client.Scheme())
+
 	// Create the NodeClaim using the Karpenter client
 	err = p.client.Create(ctx, nodeClaim)
 	if err != nil {
@@ -102,12 +103,12 @@ func (p KarpenterGPUNodeProvider) CreateNode(ctx context.Context, param *types.N
 	}
 
 	// Log the NodeClaim creation
-	fmt.Printf("Created NodeClaim: %s with instance type: %s in region: %s\n",
-		nodeClaim.Name, param.InstanceType, param.Region)
+	log.FromContext(ctx).Info("Created NodeClaim", "nodeClaim", nodeClaim.Name, "instanceType",
+		param.InstanceType, "region", param.Region)
 
 	// Return the initial status - actual node creation will be handled by Karpenter
 	status := &types.GPUNodeStatus{
-		InstanceID: param.NodeName, // Use nodename as instance ID
+		InstanceID: param.NodeName, // Use nodeName as instance ID
 		CreatedAt:  metav1.Now().Time,
 		PrivateIP:  "", // Will be populated once node is actually provisioned
 		PublicIP:   "", // Will be populated once node is actually provisioned
@@ -136,7 +137,7 @@ func (p KarpenterGPUNodeProvider) TerminateNode(ctx context.Context, param *type
 	if err != nil {
 		return fmt.Errorf("failed to delete NodeClaim for instance %s: %v", param.InstanceID, err)
 	}
-	fmt.Printf("Terminated NodeClaim for instance: %s in region: %s\n", param.InstanceID, param.Region)
+	log.FromContext(ctx).Info("Terminated NodeClaim", "instanceID", param.InstanceID, "region", param.Region)
 
 	return nil
 }
@@ -181,32 +182,32 @@ func (p KarpenterGPUNodeProvider) GetNodeStatus(ctx context.Context, param *type
 	} else if !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("get Node %q failed: %w", param.InstanceID, err)
 	} else {
-		// Node not register
-		log.Printf("Node %q not registered in cluster", param.InstanceID)
+		// Node not registered
+		log.FromContext(ctx).Info("Node not registered in cluster", "instanceID", param.InstanceID)
 	}
 	return status, nil
 }
 
-func (p KarpenterGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType types.CapacityTypeEnum) (float64, error) {
+func (p KarpenterGPUNodeProvider) GetInstancePricing(instanceType string, capacityType tfv1.CapacityTypeEnum, region string) (float64, error) {
 	// Use the static pricing provider for calculations
-	if price, exists := p.pricingProvider.GetPringcing(instanceType, capacityType); exists {
+	if price, exists := p.pricingProvider.GetPricing(instanceType, capacityType, region); exists {
 		return price, nil
 	}
 	return 0.0, fmt.Errorf("no on-demand pricing found for instance type %s in region %s", instanceType, region)
 }
 
 func (p KarpenterGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []types.GPUNodeInstanceInfo {
-	instanceTypes, exists := p.pricingProvider.GetGPUNodeInstanceTypeInfo(region)
+	instanceTypes, exists := p.pricingProvider.GetRegionalGPUNodeInstanceTypes(region)
 	if !exists {
-		log.Printf("no instance type info found for region %s", region)
+		log.FromContext(p.ctx).Error(nil, "no instance type info found for region %s", region)
 		return []types.GPUNodeInstanceInfo{} // avoid panic
 	}
 	return instanceTypes
 }
 
 // parseKarpenterConfig extracts Karpenter-specific configuration from ExtraParams
-func (p KarpenterGPUNodeProvider) parseKarpenterConfig(param *types.NodeCreationParam) *KarpenterConfig {
-	karpenterConfig := &KarpenterConfig{}
+func (p KarpenterGPUNodeProvider) parseKarpenterConfig(param *tfv1.GPUNodeClaimSpec) *KarpenterExtraConfig {
+	karpenterConfig := &KarpenterExtraConfig{}
 	extraParams := param.ExtraParams
 	if extraParams == nil {
 		return karpenterConfig
@@ -234,12 +235,12 @@ func (p KarpenterGPUNodeProvider) parseKarpenterConfig(param *types.NodeCreation
 	})
 	if err != nil {
 		// if decoder creation failed, return empty config
-		return &KarpenterConfig{}
+		return &KarpenterExtraConfig{}
 	}
 
 	if err := decoder.Decode(karpenterData); err != nil {
 		// if decode failed, return empty config
-		return &KarpenterConfig{}
+		return &KarpenterExtraConfig{}
 	}
 
 	if karpenterConfig.GPUResourceName == "" {
@@ -271,7 +272,7 @@ func setNestedValue(data map[string]any, path string, value string) {
 	current[parts[len(parts)-1]] = value
 }
 
-func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *types.NodeCreationParam) (*karpv1.NodeClaim, error) {
+func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*karpv1.NodeClaim, error) {
 	if param == nil {
 		return nil, fmt.Errorf("create NodeClaim failed, NodeCreationParam cannot be nil")
 	}
@@ -282,10 +283,6 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *typ
 	// Parse Karpenter configuration from ExtraParams
 	karpenterConfig := p.parseKarpenterConfig(param)
 
-	if karpenterConfig.NodeClassRef.Name == "" {
-		return nil, fmt.Errorf("NodeClass name is required")
-	}
-
 	// Build resource requirements - only include resources that Karpenter understands
 	resourceRequests := corev1.ResourceList{}
 
@@ -295,9 +292,9 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *typ
 	}
 
 	// query nodeClass and build NodeClassRef
-	nodeClassRef, err := p.queryAndBuildNodeClassRef(ctx, *karpenterConfig)
+	nodeClassRef, err := p.queryAndBuildNodeClassRef(ctx, param)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query NodeClass %s: %v", karpenterConfig.NodeClassRef.Name, err)
+		return nil, fmt.Errorf("failed to query NodeClass %s: %v", param.NodeClassRef.Name, err)
 	}
 
 	// Create NodeClaim using Karpenter's official type
@@ -308,6 +305,10 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *typ
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: param.NodeName,
+			Labels: map[string]string{
+				// pass through provisioner label to discover its owner
+				constants.ProvisionerLabelKey: param.NodeName,
+			},
 			Annotations: map[string]string{
 				// Protection annotation to prevent unexpected deletion by Karpenter
 				"karpenter.sh/do-not-disrupt": "true",
@@ -333,28 +334,28 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *typ
 	return nodeClaim, nil
 }
 
-func (p KarpenterGPUNodeProvider) queryAndBuildNodeClassRef(ctx context.Context, karpenterConfig KarpenterConfig) (*karpv1.NodeClassReference, error) {
+func (p KarpenterGPUNodeProvider) queryAndBuildNodeClassRef(ctx context.Context, param *tfv1.GPUNodeClaimSpec) (*karpv1.NodeClassReference, error) {
 	gvk := schema.GroupVersionKind{
-		Group:   karpenterConfig.NodeClassRef.Group,
-		Version: karpenterConfig.NodeClassRef.Version,
-		Kind:    karpenterConfig.NodeClassRef.Kind,
+		Group:   param.NodeClassRef.Group,
+		Kind:    param.NodeClassRef.Kind,
+		Version: param.NodeClassRef.Version,
 	}
 	nodeClass := &unstructured.Unstructured{}
 	nodeClass.SetGroupVersionKind(gvk)
-	err := p.client.Get(ctx, client.ObjectKey{Name: karpenterConfig.NodeClassRef.Name}, nodeClass)
+	err := p.client.Get(ctx, client.ObjectKey{Name: param.NodeClassRef.Name}, nodeClass)
 	if err == nil {
 		return &karpv1.NodeClassReference{
 			Group: gvk.Group,
 			Kind:  gvk.Kind,
-			Name:  karpenterConfig.NodeClassRef.Name,
+			Name:  param.NodeClassRef.Name,
 		}, nil
 	} else if !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("error querying %s/%s %s: %v", gvk.Group, gvk.Kind, karpenterConfig.NodeClassRef.Name, err)
+		return nil, fmt.Errorf("error querying %s/%s %s: %v", gvk.Group, gvk.Kind, param.NodeClassRef.Name, err)
 	}
-	return nil, fmt.Errorf("NodeClass %s %s %s %s not found", gvk.Group, gvk.Version, gvk.Kind, karpenterConfig.NodeClassRef.Name)
+	return nil, fmt.Errorf("NodeClass %s %s %s %s not found", gvk.Group, gvk.Version, gvk.Kind, param.NodeClassRef.Name)
 }
 
-func (p KarpenterGPUNodeProvider) buildRequirements(nodeClaim *karpv1.NodeClaim, param *types.NodeCreationParam) {
+func (p KarpenterGPUNodeProvider) buildRequirements(nodeClaim *karpv1.NodeClaim, param *tfv1.GPUNodeClaimSpec) {
 	// Build node selector requirements using Karpenter's NodeSelectorRequirement
 	requirements := []karpv1.NodeSelectorRequirementWithMinValues{}
 	// 1. instance type
@@ -432,14 +433,14 @@ func (p KarpenterGPUNodeProvider) buildCustomTaints(nodeClaim *karpv1.NodeClaim)
 	}
 }
 
-func (p KarpenterGPUNodeProvider) buildTerminationGracePeriod(nodeClaim *karpv1.NodeClaim, karpenterConfig KarpenterConfig) {
+func (p KarpenterGPUNodeProvider) buildTerminationGracePeriod(nodeClaim *karpv1.NodeClaim, karpenterConfig KarpenterExtraConfig) {
 	if karpenterConfig.NodeClaim.TerminationGracePeriod == "" {
 		return
 	}
 	duration, err := time.ParseDuration(karpenterConfig.NodeClaim.TerminationGracePeriod)
 	if err != nil {
 		// Log error and skip setting termination grace period
-		log.Printf("Failed to parse termination grace period %s: %v", karpenterConfig.NodeClaim.TerminationGracePeriod, err)
+		log.FromContext(p.ctx).Error(err, "Failed to parse termination grace period", "terminationGracePeriod", karpenterConfig.NodeClaim.TerminationGracePeriod)
 		return
 	}
 	nodeClaim.Spec.TerminationGracePeriod = &metav1.Duration{

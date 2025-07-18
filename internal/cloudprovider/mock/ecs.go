@@ -1,4 +1,4 @@
-package alibaba
+package mock
 
 import (
 	"context"
@@ -9,10 +9,12 @@ import (
 )
 
 type MockGPUNodeProvider struct {
+	nodeClass *tfv1.GPUNodeClass
 }
 
-func NewMockGPUNodeProvider(config tfv1.ComputingVendorConfig) (MockGPUNodeProvider, error) {
+func NewMockGPUNodeProvider(config tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNodeClass) (MockGPUNodeProvider, error) {
 	var provider MockGPUNodeProvider
+	provider.nodeClass = nodeClass
 	return provider, nil
 }
 
@@ -20,10 +22,10 @@ func (p MockGPUNodeProvider) TestConnection() error {
 	return nil
 }
 
-func (p MockGPUNodeProvider) CreateNode(ctx context.Context, param *types.NodeCreationParam) (*types.GPUNodeStatus, error) {
+func (p MockGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeClaim) (*types.GPUNodeStatus, error) {
 	// TODO: Mock a Kubernetes node for e2e testing
 	return &types.GPUNodeStatus{
-		InstanceID: param.NodeName + "-Mock",
+		InstanceID: param.Spec.NodeName + "-Mock",
 		CreatedAt:  time.Now(),
 	}, nil
 }

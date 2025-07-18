@@ -1,23 +1,8 @@
 package controller
 
-/*
-Copyright The Kubernetes Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 import (
 	"context"
+	"strings"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/awslabs/operatorpkg/status"
@@ -40,7 +25,7 @@ type FakeNodeClaimReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-func registerKarpenterGVKs(s *runtime.Scheme) {
+func registerKarpenterGVK(s *runtime.Scheme) {
 	// EC2NodeClass
 	ec2GVK := schema.GroupVersionKind{
 		Group:   "karpenter.k8s.aws",
@@ -53,7 +38,7 @@ func registerKarpenterGVKs(s *runtime.Scheme) {
 }
 
 func (r *FakeNodeClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	registerKarpenterGVKs(mgr.GetScheme())
+	registerKarpenterGVK(mgr.GetScheme())
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1.NodeClaim{}).
@@ -91,7 +76,7 @@ func (r *FakeNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 func (r *FakeNodeClaimReconciler) reconcileDeletion(ctx context.Context, nc *v1.NodeClaim) (ctrl.Result, error) {
 	var node corev1.Node
 	if err := r.client.Get(ctx, client.ObjectKey{Name: nc.Status.ProviderID}, &node); err == nil {
-		_ = r.client.Delete(ctx, &node) //
+		_ = r.client.Delete(ctx, &node)
 	}
 	patch := client.MergeFrom(nc.DeepCopy())
 	controllerutil.RemoveFinalizer(nc, constants.Finalizer)
@@ -119,7 +104,7 @@ func (r *FakeNodeClaimReconciler) reconcileCreation(ctx context.Context, nodeCla
 
 	node := &corev1.Node{}
 	err := r.client.Get(ctx, types.NamespacedName{Name: nodeName}, node)
-	if err == nil { // exist
+	if err == nil {
 		log.Info("Node already exists", "node", nodeName)
 		return ctrl.Result{}, nil
 	}
@@ -128,6 +113,7 @@ func (r *FakeNodeClaimReconciler) reconcileCreation(ctx context.Context, nodeCla
 			ObjectMeta: metav1.ObjectMeta{
 				Name: nodeName,
 				Labels: lo.Assign(map[string]string{
+					strings.Split(constants.InitialGPUNodeSelector, "=")[0]:       constants.TrueStringValue,
 					v1.NodeClassLabelKey(nodeClaim.Spec.NodeClassRef.GroupKind()): nodeClaim.Spec.NodeClassRef.Name,
 				}, nodeClaim.Labels),
 				Annotations: nodeClaim.Annotations,

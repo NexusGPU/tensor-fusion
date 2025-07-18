@@ -69,6 +69,7 @@ const (
 	// GPU ID list is assigned by scheduler, should not specified by user
 	GPUDeviceIDsAnnotation            = Domain + "/gpu-ids"
 	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
+	PricingAnnotation                 = Domain + "/hourly-pricing"
 
 	// Annotations for killer switch: disable features
 	// ['gpu-opt', 'mem-manager', 'gpu-limiter']
@@ -156,6 +157,7 @@ const (
 // To match GPUNode with K8S node, when creating from cloud vendor, must set a label from cloud-init userdata
 const (
 	ProvisionerLabelKey        = Domain + "/node-provisioner"
+	ProvisionerMissingLabel    = Domain + "/orphan"
 	ProvisionerNamePlaceholder = "__GPU_NODE_RESOURCE_NAME__"
 )
 
@@ -170,6 +172,7 @@ const (
 )
 
 const ShortUUIDAlphabet = "123456789abcdefghijkmnopqrstuvwxy"
+const SpotInstanceAssumedDiscountRatio = 0.3
 
 const (
 	LowFrequencyObjFailureInitialDelay        = 300 * time.Millisecond

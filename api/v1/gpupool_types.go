@@ -111,7 +111,13 @@ const (
 // NodeProvisioner or NodeSelector, they are exclusive.
 // NodeSelector is for existing GPUs, NodeProvisioner is for Karpenter-like auto management.
 type NodeProvisioner struct {
+
+	// TensorFusion GPUNodeClass name
 	NodeClass string `json:"nodeClass,omitempty"`
+
+	// Karpenter NodeClass name
+	// +optional
+	KarpenterNodeClassRef *GroupKindName `json:"karpenterNodeClassRef,omitempty"`
 
 	// +optional
 	GPURequirements []Requirement `json:"gpuRequirements,omitempty"`
@@ -167,13 +173,13 @@ type Requirement struct {
 	Values []string `json:"values,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=node.kubernetes.io/instance-type;kubernetes.io/arch;kubernetes.io/os;topology.kubernetes.io/region;topology.kubernetes.io/zone;karpenter.sh/capacity-type;tensor-fusion.ai/gpu-arch;tensor-fusion.ai/gpu-instance-family;tensor-fusion.ai/gpu-instance-size
+// +kubebuilder:validation:Enum=node.kubernetes.io/instance-type;kubernetes.io/arch;kubernetes.io/os;topology.kubernetes.io/region;topology.kubernetes.io/zone;karpenter.sh/capacity-type;tensor-fusion.ai/gpu-vendor;tensor-fusion.ai/gpu-instance-family;tensor-fusion.ai/gpu-instance-size
 type NodeRequirementKey string
 
 const (
-	NodeRequirementKeyInstanceType    NodeRequirementKey = "node.kubernetes.io/instance-type"
-	NodeRequirementKeyArchitecture    NodeRequirementKey = "kubernetes.io/arch"
-	NodeRequirementKeyGPUArchitecture NodeRequirementKey = "tensor-fusion.ai/gpu-arch"
+	NodeRequirementKeyInstanceType NodeRequirementKey = "node.kubernetes.io/instance-type"
+	NodeRequirementKeyArchitecture NodeRequirementKey = "kubernetes.io/arch"
+	NodeRequirementKeyGPUVendor    NodeRequirementKey = "tensor-fusion.ai/gpu-vendor"
 
 	NodeRequirementKeyOS     NodeRequirementKey = "kubernetes.io/os"
 	NodeRequirementKeyRegion NodeRequirementKey = "topology.kubernetes.io/region"
@@ -402,6 +408,13 @@ type GPUPoolStatus struct {
 	BudgetExceeded string `json:"budgetExceeded,omitempty"`
 
 	// +optional
+	// +kubebuilder:default="None"
+	ProvisioningPhase ProvisioningPhase `json:"provisioningPhase,omitempty"`
+
+	// +optional
+	PendingGPUNodeClaim map[string]Resource `json:"pendingGPUNodeClaimNames,omitempty"`
+
+	// +optional
 	LastCompactionTime *metav1.Time `json:"lastCompactionTime,omitempty"`
 }
 
@@ -414,6 +427,21 @@ const (
 	TensorFusionPoolPhaseUpdating   = TensorFusionPoolPhase(constants.PhaseUpdating)
 	TensorFusionPoolPhaseUnknown    = TensorFusionPoolPhase(constants.PhaseUnknown)
 	TensorFusionPoolPhaseDestroying = TensorFusionPoolPhase(constants.PhaseDestroying)
+)
+
+// +kubebuilder:validation:Enum=None;Initializing;Provisioning;Completed
+type ProvisioningPhase string
+
+const (
+	// None means not in provisioning mode
+	ProvisioningPhaseNone = ProvisioningPhase("None")
+
+	// When NodeClaim created and pending GPUNodeClaim not empty, it's provisioning state,
+	// check until all GPUNodeClaims are bound, unless next scale up should not happen
+	ProvisioningPhaseProvisioning = ProvisioningPhase("Provisioning")
+
+	// When all GPUNodeClaims are bound, set to Completed
+	ProvisioningPhaseCompleted = ProvisioningPhase("Completed")
 )
 
 type PoolProvisioningStatus struct {

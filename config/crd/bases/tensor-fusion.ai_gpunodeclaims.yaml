@@ -1,0 +1,113 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: gpunodeclaims.tensor-fusion.ai
+spec:
+  group: tensor-fusion.ai
+  names:
+    kind: GPUNodeClaim
+    listKind: GPUNodeClaimList
+    plural: gpunodeclaims
+    singular: gpunodeclaim
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: GPUNodeClaim is the Schema for the gpunodeclaims API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: GPUNodeClaimSpec defines the desired state of GPUNodeClaim.
+            properties:
+              capacityType:
+                type: string
+              extraParams:
+                additionalProperties:
+                  type: string
+                type: object
+              gpuDeviceOffered:
+                format: int32
+                type: integer
+              instanceType:
+                type: string
+              nodeClassRef:
+                properties:
+                  group:
+                    type: string
+                  kind:
+                    type: string
+                  name:
+                    type: string
+                  version:
+                    type: string
+                required:
+                - group
+                - kind
+                - name
+                - version
+                type: object
+              nodeName:
+                type: string
+              region:
+                type: string
+              tflopsOffered:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              vramOffered:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              zone:
+                type: string
+            required:
+            - gpuDeviceOffered
+            - tflopsOffered
+            - vramOffered
+            type: object
+          status:
+            description: GPUNodeClaimStatus defines the observed state of GPUNodeClaim.
+            properties:
+              instanceID:
+                type: string
+              phase:
+                default: Pending
+                type: string
+            required:
+            - phase
+            type: object
+        required:
+        - metadata
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

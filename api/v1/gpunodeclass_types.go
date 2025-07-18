@@ -154,6 +154,10 @@ type GPUNodeClassList struct {
 	Items           []GPUNodeClass `json:"items"`
 }
 
+const (
+	GPUNodeClassKind = "GPUNodeClass"
+)
+
 func init() {
 	SchemeBuilder.Register(&GPUNodeClass{}, &GPUNodeClassList{})
 }

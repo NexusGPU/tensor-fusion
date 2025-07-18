@@ -120,6 +120,7 @@ rules:
   - tensorfusionconnections
   - tensorfusionworkloads
   - workloadprofiles
+  - gpunodeclaims
   verbs:
   - create
   - delete
@@ -141,6 +142,7 @@ rules:
   - tensorfusionconnections/finalizers
   - tensorfusionworkloads/finalizers
   - workloadprofiles/finalizers
+  - gpunodeclaims/finalizers
   verbs:
   - update
 - apiGroups:
@@ -156,6 +158,7 @@ rules:
   - tensorfusionconnections/status
   - tensorfusionworkloads/status
   - workloadprofiles/status
+  - gpunodeclaims/status
   verbs:
   - get
   - patch

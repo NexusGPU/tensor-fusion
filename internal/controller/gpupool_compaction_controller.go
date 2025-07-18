@@ -29,8 +29,9 @@ type GPUPoolCompactionReconciler struct {
 	Allocator *gpuallocator.GpuAllocator
 }
 
-const defaultCompactionDuration = 1 * time.Minute
-const newNodeProtectionDuration = 5 * time.Minute
+var defaultCompactionDuration = 1 * time.Minute
+var newNodeProtectionDuration = 5 * time.Minute
+
 const manualCompactionReconcileMaxDelay = 3 * time.Second
 
 // to avoid concurrent job for node compaction, make sure the interval
@@ -44,7 +45,7 @@ var jobStarted sync.Map
 // TODO: implement other strategies
 // Strategy #2: check if whole Pool can be bin-packing into less nodes, check from low-priority to high-priority nodes one by one, if workloads could be moved to other nodes (using a simulated scheduler), evict it and mark cordoned, let scheduler to re-schedule
 
-// Strategy #3: check if any node can be reduced to 1/2 size. for remaining nodes, check if allocated size < 1/2 * total size, if so, check if can buy smaller instance
+// Strategy #3: check if any node can be reduced to 1/2 size. for remaining nodes, check if allocated size < 1/2 * total size, if so, check if can buy smaller instance, note that the compaction MUST be GPU level, not node level
 
 // Strategy #4: check if any two same nodes can be merged into one larger node, and make the remained capacity bigger and node number less without violating the capacity constraint and saving the hidden management,license,monitoring costs, potentially schedule more workloads since remaining capacity is single cohesive piece rather than fragments
 func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, pool *tfv1.GPUPool) error {
@@ -65,7 +66,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 
 		// Check if node is empty, if not, continue
 		_, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
-		k8sNodeName := gpuNode.Status.KubernetesNodeName
+		k8sNodeName := gpuNode.Name
 		if len(nodeToWorker[k8sNodeName]) != 0 {
 			// Node is in-use, should not be terminated
 			continue
@@ -93,37 +94,41 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 
 		if couldBeTerminatedByTFlops && couldBeTerminatedByVRAM {
 			r.Recorder.Eventf(pool, "Compaction", "Node %s is empty and deletion won't impact warm-up capacity, start terminating it", gpuNode.Name)
-			if pool.Spec.NodeManagerConfig.ProvisioningMode == tfv1.ProvisioningModeProvisioned {
+			if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
 				// not managed by Kubernetes, managed by TensorFusion, safe to terminate, and finalizer will cause K8S node and related cloud resources to be deleted
-				err := r.Delete(ctx, &gpuNode)
-				if err != nil {
-					return fmt.Errorf("delete node(%s) : %w", gpuNode.Name, err)
+				gpuNodeClaimName := gpuNode.Labels[constants.ProvisionerLabelKey]
+				gpuNodeClaimObj := &tfv1.GPUNodeClaim{}
+				if err := r.Get(ctx, client.ObjectKey{Name: gpuNodeClaimName}, gpuNodeClaimObj); err != nil {
+					log.Error(err, "get gpuNodeClaim(%s) failed", gpuNodeClaimName)
+					continue
+				}
+				if err := r.Delete(ctx, gpuNodeClaimObj); err != nil {
+					log.Error(err, "delete gpuNodeClaim(%s) failed", gpuNodeClaimName)
+					continue
 				}
 			} else {
 				// managed by Kubernetes, mark it as destroying, GPUPool capacity should be reduced, and let K8S to delete it
 				gpuNode.Status.Phase = constants.PhaseDestroying
-				err := r.Update(ctx, &gpuNode)
-				if err != nil {
-					return fmt.Errorf("update node(%s) : %w", gpuNode.Name, err)
+				if err := r.Update(ctx, &gpuNode); err != nil {
+					log.Error(err, "update node(%s) failed", gpuNode.Name)
+					continue
 				}
 
-				err = r.Patch(ctx, &corev1.Node{
+				if err := r.Patch(ctx, &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
-						Name: gpuNode.Status.KubernetesNodeName,
+						Name: gpuNode.Name,
 						Labels: map[string]string{
 							constants.NodeDeletionMark: constants.TrueStringValue,
 						},
 					},
-				}, client.Merge)
-
-				if err != nil {
-					return fmt.Errorf("patch node(%s) : %w", gpuNode.Status.KubernetesNodeName, err)
+				}, client.Merge); err != nil {
+					log.Error(err, "patch node(%s) failed", gpuNode.Name)
+					continue
 				}
 			}
 		}
 	}
-
-	log.Info("Checking node compaction", "name", pool.Name)
+	log.Info("Checking node compaction completed", "name", pool.Name)
 	return nil
 }
 
@@ -163,7 +168,7 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				// Parse the annotation value as duration
 				if manualTriggerTime, err := time.Parse(time.RFC3339, manualCompactionValue); err == nil {
 					// not return empty result, will continue current reconcile logic
-					if manualTriggerTime.After(time.Now().Add(manualCompactionReconcileMaxDelay)) {
+					if manualTriggerTime.After(time.Now().Add(-manualCompactionReconcileMaxDelay)) {
 						log.Info("Manual compaction requested", "name", req.Name)
 
 					} else {
@@ -191,6 +196,10 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		log.Info("Finished compaction check for GPUPool", "name", req.Name)
 	}()
 
+	if len(pool.Status.PendingGPUNodeClaim) > 0 {
+		log.Info("Skip compaction check util all NodeClaims are bound and GPUNode created", "name", req.Name)
+		return ctrl.Result{RequeueAfter: nextDuration}, nil
+	}
 	compactionErr := r.checkNodeCompaction(ctx, pool)
 	if compactionErr != nil {
 		return ctrl.Result{}, compactionErr
@@ -206,4 +215,9 @@ func (r *GPUPoolCompactionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("gpupool-compaction").
 		WatchesMetadata(&tfv1.GPUPool{}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
+}
+
+func SetTestModeCompactionPeriod() {
+	defaultCompactionDuration = 300 * time.Millisecond
+	newNodeProtectionDuration = 500 * time.Millisecond
 }

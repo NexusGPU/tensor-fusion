@@ -45,6 +45,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"sigs.k8s.io/yaml"
+
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/cmd/sched"
 	"github.com/NexusGPU/tensor-fusion/internal/alert"
@@ -62,7 +64,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/version"
 	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
-	"sigs.k8s.io/yaml"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -96,6 +97,7 @@ var schedulerConfigPath string
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(tfv1.AddToScheme(scheme))
 	utilruntime.Must(tfv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -418,6 +420,15 @@ func startCustomResourceController(
 		setupLog.Error(err, "unable to create controller", "controller", "GPUResourceQuota")
 		os.Exit(1)
 	}
+
+	if err := (&controller.GPUNodeClaimReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("GPUNodeClaim"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GPUNodeClaim")
+		os.Exit(1)
+	}
 }
 
 func startWebhook(mgr manager.Manager, portAllocator *portallocator.PortAllocator) {
@@ -439,7 +450,7 @@ func startScheduler(
 		return nil
 	}
 	if schedulerConfigPath == "" {
-		setupLog.Error(fmt.Errorf("scheduler config path is empty, please and --scheduler-config in command line"), "")
+		setupLog.Error(nil, "scheduler config path is empty, please and --scheduler-config in command line")
 		os.Exit(1)
 	}
 
@@ -565,7 +576,7 @@ func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, g
 			for _, gpuInfo := range updatedGpuInfos {
 				gpuPricingMap[gpuInfo.FullModelName] = gpuInfo.CostPerHour
 			}
-			pricing.SetTflopsMap(&updatedGpuInfos)
+			pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, &updatedGpuInfos)
 		}
 	}()
 }

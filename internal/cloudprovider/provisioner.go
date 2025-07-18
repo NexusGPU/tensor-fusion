@@ -1,6 +1,7 @@
 package cloudprovider
 
 import (
+	"context"
 	"fmt"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -13,21 +14,35 @@ import (
 	mock "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/mock"
 )
 
-func GetProvider(config tfv1.ComputingVendorConfig, client client.Client, nodeManagerConfig *tfv1.NodeManagerConfig) (*types.GPUNodeProvider, error) {
+func GetProvider(ctx context.Context, config tfv1.ComputingVendorConfig, k8sClient client.Client, nodeManagerConfig *tfv1.NodeManagerConfig) (types.GPUNodeProvider, error) {
 	var err error
 	var provider types.GPUNodeProvider
+	if config.Type == "" {
+		return nil, fmt.Errorf("cloud provider type is empty")
+	}
+	if config.Type == tfv1.ComputingVendorKarpenter {
+		return karpenter.NewKarpenterGPUNodeProvider(ctx, config, k8sClient, nodeManagerConfig)
+	}
+
+	// for none karpenter vendors, get tensor fusion node class and pass to provider
+	nodeClass := &tfv1.GPUNodeClass{}
+	err = k8sClient.Get(ctx, client.ObjectKey{
+		Name: nodeManagerConfig.NodeProvisioner.NodeClass,
+	}, nodeClass)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node class %s", nodeManagerConfig.NodeProvisioner.NodeClass)
+	}
+
 	switch config.Type {
 	case "aws":
-		provider, err = aws.NewAWSGPUNodeProvider(config)
+		provider, err = aws.NewAWSGPUNodeProvider(ctx, config, nodeClass)
 	case "alibaba":
-		provider, err = alibaba.NewAlibabaGPUNodeProvider(config)
-	case "karpenter":
-		provider, err = karpenter.NewKarpenterGPUNodeProvider(config, client, *nodeManagerConfig)
+		provider, err = alibaba.NewAlibabaGPUNodeProvider(ctx, config, nodeClass)
 	case "mock":
-		provider, err = mock.NewMockGPUNodeProvider(config)
+		provider, err = mock.NewMockGPUNodeProvider(config, nodeClass)
 	default:
 		return nil, fmt.Errorf("unsupported cloud provider: %s", config.Type)
 	}
-	return &provider, err
+	return provider, err
 
 }

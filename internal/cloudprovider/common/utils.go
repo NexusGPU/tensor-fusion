@@ -34,9 +34,9 @@ func GetAccessKeyOrSecretFromPath(filePath string) (string, error) {
 // Pool config contains node requirements, nodeClass indicates some base template info for creating VM nodes, this func should output the list of VM to be created to meet TFlops and VRAM gap
 // Simple algorithm, try to find the instance type that best meets the gap
 // TODO: implement a more advanced algorithm to combine multiple instance types
-func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvider, cluster *tfv1.TensorFusionCluster, pool *tfv1.GPUPool, nodeClass *tfv1.GPUNodeClass, tflopsGap int64, vramGap int64) ([]types.NodeCreationParam, error) {
+func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvider, cluster *tfv1.TensorFusionCluster, pool *tfv1.GPUPool, nodeClassRef tfv1.GroupKindName, tflopsGap int64, vramGap int64) ([]tfv1.GPUNodeClaimSpec, error) {
 	if tflopsGap <= 0 && vramGap <= 0 {
-		return []types.NodeCreationParam{}, nil
+		return []tfv1.GPUNodeClaimSpec{}, nil
 	}
 
 	requirements := pool.Spec.NodeManagerConfig.NodeProvisioner.GPURequirements
@@ -61,19 +61,19 @@ func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvi
 	var bestNumInstances int64
 
 	// Default to spot, it's cheaper
-	preferredCapacityType := types.CapacityTypeSpot
+	preferredCapacityType := tfv1.CapacityTypeOnDemand
 
 	for _, req := range requirements {
 		if req.Key == tfv1.NodeRequirementKeyCapacityType && req.Operator == corev1.NodeSelectorOpIn {
 			// user can specify other capacity types
 			hasSpot := false
 			for _, capacityType := range req.Values {
-				if capacityType == string(types.CapacityTypeSpot) {
+				if capacityType == string(tfv1.CapacityTypeSpot) {
 					hasSpot = true
 				}
 			}
-			if !hasSpot {
-				preferredCapacityType = types.CapacityTypeEnum(req.Values[0])
+			if hasSpot {
+				preferredCapacityType = tfv1.CapacityTypeSpot
 			}
 		} else if req.Key == tfv1.NodeRequirementKeyRegion && req.Operator == corev1.NodeSelectorOpIn {
 			// single pool can only leverage one region
@@ -84,25 +84,24 @@ func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvi
 			zones = req.Values
 		}
 	}
-	if len(zones) == 0 {
-		return nil, fmt.Errorf("no zones found in node requirements")
-	}
 
 	for _, instance := range eligibleInstances {
 
-		costPerHour, err := provider.GetInstancePricing(instance.InstanceType, region, preferredCapacityType)
+		costPerHour, err := provider.GetInstancePricing(instance.InstanceType, preferredCapacityType, region)
 		if err != nil {
 			continue
 		}
 
-		tflopsPerInstance := instance.FP16TFlopsPerGPU * instance.GPUCount
+		tflopsPerInstance := instance.FP16TFlopsPerGPU * float64(instance.GPUCount)
 		vramPerInstance := instance.VRAMGigabytesPerGPU * instance.GPUCount
 
 		if tflopsPerInstance <= 0 || vramPerInstance <= 0 {
+			log.FromContext(ctx).Error(nil, "tflopsPerInstance or vramPerInstance for GPU instance is zero",
+				"tflopsPerInstance", tflopsPerInstance, "vramPerInstance", vramPerInstance, "instance", instance.InstanceType)
 			continue // Avoid division by zero
 		}
 
-		tflopsRequired := math.Ceil(float64(tflopsGap) / float64(tflopsPerInstance))
+		tflopsRequired := math.Ceil(float64(tflopsGap) / tflopsPerInstance)
 		vramRequired := math.Ceil(float64(vramGap) / float64(vramPerInstance) / float64(1024*1024*1024)) // convert GiB to bytes
 		numInstances := int64(math.Max(tflopsRequired, vramRequired))
 
@@ -125,18 +124,22 @@ func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvi
 		bestNumInstances = MAX_NODES_PER_RECONCILE_LOOP
 	}
 
-	nodes := make([]types.NodeCreationParam, 0, bestNumInstances)
+	zone := ""
+	if len(zones) > 0 {
+		zone = zones[rand.Intn(len(zones))]
+	}
+
+	nodes := make([]tfv1.GPUNodeClaimSpec, 0, bestNumInstances)
 	for i := int64(0); i < bestNumInstances; i++ {
-		// Zone and region should ideally be determined from nodeClass's subnet selectors
-		nodes = append(nodes, types.NodeCreationParam{
+		nodes = append(nodes, tfv1.GPUNodeClaimSpec{
 			NodeName:     fmt.Sprintf("%s-%s", pool.Name, generateRandomString(8)),
 			InstanceType: bestInstance.InstanceType,
-			NodeClass:    nodeClass,
+			NodeClassRef: nodeClassRef,
 			Region:       region,
-			Zone:         zones[rand.Intn(len(zones))],
+			Zone:         zone,
 			CapacityType: preferredCapacityType,
 
-			TFlopsOffered:    resource.MustParse(fmt.Sprintf("%d", bestInstance.FP16TFlopsPerGPU*bestInstance.GPUCount)),
+			TFlopsOffered:    resource.MustParse(fmt.Sprintf("%f", bestInstance.FP16TFlopsPerGPU*float64(bestInstance.GPUCount))),
 			VRAMOffered:      resource.MustParse(fmt.Sprintf("%dGi", bestInstance.VRAMGigabytesPerGPU*bestInstance.GPUCount)),
 			GPUDeviceOffered: bestInstance.GPUCount,
 
@@ -175,9 +178,9 @@ func getEligibleInstances(pool *tfv1.GPUPool, region string, provider types.GPUN
 						break
 					}
 				}
-			case tfv1.NodeRequirementKeyGPUArchitecture:
+			case tfv1.NodeRequirementKeyGPUVendor:
 				if req.Operator == corev1.NodeSelectorOpIn {
-					if !contains(req.Values, string(instance.GPUArchitecture)) {
+					if !contains(req.Values, string(instance.GPUVendor)) {
 						meetsRequirements = false
 						break
 					}

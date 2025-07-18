@@ -54,9 +54,6 @@ const (
 
 // GPUNodeStatus defines the observed state of GPUNode.
 type GPUNodeStatus struct {
-	// the identifier of the kubernetes node, in nodeSelector mode, GPUNode name is the same as kubernetes node name because of it's owned by the Kubernetes node, while in node provisioning mode owned by the GPUNode, and K8S Node name is uncontrollable
-	KubernetesNodeName string `json:"kubernetesNodeName"`
-
 	// +kubebuilder:default=Pending
 	Phase TensorFusionGPUNodePhase `json:"phase"`
 
@@ -112,21 +109,6 @@ const (
 )
 
 type GPUNodeInfo struct {
-	// +optional
-	// only set when node is managed by TensorFusion
-	InstanceID string `json:"instanceID,omitempty"`
-	Region     string `json:"region,omitempty"`
-
-	Hostname         string `json:"hostname,omitempty"`
-	IP               string `json:"ip,omitempty"`
-	KernelVersion    string `json:"kernelVersion,omitempty"`
-	OSImage          string `json:"osImage,omitempty"`
-	GPUDriverVersion string `json:"gpuDriverVersion,omitempty"`
-	GPUModel         string `json:"gpuModel,omitempty"`
-	GPUCount         int32  `json:"gpuCount,omitempty"`
-	OperatingSystem  string `json:"operatingSystem,omitempty"`
-	Architecture     string `json:"architecture,omitempty"`
-
 	// Additional space for L1/L2 VRAM buffer
 	RAMSize      resource.Quantity `json:"ramSize,omitempty"`
 	DataDiskSize resource.Quantity `json:"dataDiskSize,omitempty"`

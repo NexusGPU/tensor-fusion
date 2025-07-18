@@ -26,31 +26,31 @@ import (
 	"testing"
 	"time"
 
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/util/retry"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-
-	corev1 "k8s.io/api/core/v1"
-
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	// +kubebuilder:scaffold:imports
 )
@@ -106,6 +106,10 @@ var _ = BeforeSuite(func() {
 	var err error
 	// cfg is defined in this file globally.
 	cfg, err = testEnv.Start()
+
+	// set tflops map for pricing
+	pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, config.MockGpuInfo())
+
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())
 
@@ -113,6 +117,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	err = corev1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = tfv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
@@ -178,6 +185,15 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
+	SetTestModeCompactionPeriod()
+	err = (&GPUPoolCompactionReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("GPUPoolCompaction"),
+		Allocator: allocator,
+	}).SetupWithManager(mgr)
+	Expect(err).ToNot(HaveOccurred())
+
 	err = (&GPUNodeClassReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -234,7 +250,13 @@ var _ = BeforeSuite(func() {
 
 	err = (&FakeNodeClaimReconciler{
 		client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr)
+	Expect(err).ToNot(HaveOccurred())
+
+	err = (&GPUNodeClaimReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("GPUNodeClaim"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
@@ -256,9 +278,10 @@ var _ = AfterSuite(func() {
 })
 
 type TensorFusionEnv struct {
-	clusterKey  client.ObjectKey
-	poolCount   int
-	poolNodeMap map[int]map[int]int
+	clusterKey        client.ObjectKey
+	poolCount         int
+	poolNodeMap       map[int]map[int]int
+	provisionerConfig *tfv1.ComputingVendorConfig
 }
 
 func (c *TensorFusionEnv) GetCluster() *tfv1.TensorFusionCluster {
@@ -479,10 +502,18 @@ func (b *TensorFusionEnvBuilder) SetGpuCountForNode(nodeIndex int, gpuCount int)
 	return b
 }
 
+func (b *TensorFusionEnvBuilder) SetProvisioningMode(provisionerConfig *tfv1.ComputingVendorConfig) *TensorFusionEnvBuilder {
+	b.provisionerConfig = provisionerConfig
+	return b
+}
+
 var testEnvId int = 0
 
 func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 	GinkgoHelper()
+
+	GenerateKarpenterEC2NodeClass()
+
 	b.clusterKey = client.ObjectKey{
 		Name:      fmt.Sprintf("cluster-%d", testEnvId),
 		Namespace: "default",
@@ -515,6 +546,57 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 			Name:         fmt.Sprintf("pool-%d", i),
 			SpecTemplate: *poolSpec,
 		}
+
+		if b.provisionerConfig != nil {
+			if b.provisionerConfig.Type == tfv1.ComputingVendorKarpenter {
+				gpuPools[i].SpecTemplate.NodeManagerConfig.ProvisioningMode = tfv1.ProvisioningModeKarpenter
+				gpuPools[i].SpecTemplate.NodeManagerConfig.NodeProvisioner = &tfv1.NodeProvisioner{
+					KarpenterNodeClassRef: &tfv1.GroupKindName{
+						Group:   "karpenter.k8s.aws",
+						Kind:    "EC2NodeClass",
+						Name:    "test-ec2-node-class",
+						Version: "v1",
+					},
+					GPURequirements: []tfv1.Requirement{
+						{
+							Key:      tfv1.NodeRequirementKeyInstanceType,
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{"g6.xlarge"},
+						},
+					},
+					GPULabels: map[string]string{
+						"mock-label":                            "true",
+						fmt.Sprintf("%s-label-%d", tfc.Name, i): "true",
+					},
+					GPUAnnotation: map[string]string{
+						"mock-annotation": "true",
+					},
+				}
+			} else {
+				gpuPools[i].SpecTemplate.NodeManagerConfig.ProvisioningMode = tfv1.ProvisioningModeProvisioned
+				gpuPools[i].SpecTemplate.NodeManagerConfig.NodeProvisioner = &tfv1.NodeProvisioner{
+					NodeClass: "test-node-class",
+					GPURequirements: []tfv1.Requirement{
+						{
+							Key:      tfv1.NodeRequirementKeyInstanceType,
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{"g6.xlarge"},
+						},
+					},
+					GPULabels: map[string]string{
+						"mock-label": "true",
+					},
+					GPUAnnotation: map[string]string{
+						"mock-annotation": "true",
+					},
+				}
+			}
+		}
+	}
+
+	// set provisioner config
+	if b.provisionerConfig != nil {
+		tfc.Spec.ComputingVendor = b.provisionerConfig
 	}
 
 	tfc.Spec.GPUPools = gpuPools
@@ -588,8 +670,53 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 
 		b.GetPoolGpuList(poolIndex)
 	}
-
 	b.UpdateHypervisorStatus()
 
 	return b.TensorFusionEnv
+}
+
+func GenerateKarpenterEC2NodeClass() {
+	ec2 := &unstructured.Unstructured{}
+
+	// Inject an EC2NodeClass
+	ec2.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "karpenter.k8s.aws",
+		Version: "v1",
+		Kind:    "EC2NodeClass",
+	})
+	ec2.SetName("test-ec2-node-class")
+
+	ec2.Object["spec"] = map[string]any{
+		// Required
+		"role":      "arn:aws:iam::123456789012:role/dummy",
+		"amiFamily": "AL2023",
+
+		// subnetSelectorTerms – at least 1 element
+		"subnetSelectorTerms": []any{
+			map[string]any{
+				"tags": map[string]any{
+					"kubernetes.io/cluster/test": "owned",
+				},
+			},
+		},
+
+		// securityGroupSelectorTerms – at least 1 element
+		"securityGroupSelectorTerms": []any{
+			map[string]any{
+				"tags": map[string]any{
+					"karpenter.sh/discovery": "dummy",
+				},
+			},
+		},
+
+		// amiSelectorTerms – newly added and required in v1; provide a dummy AMI ID
+		"amiSelectorTerms": []any{
+			map[string]any{
+				"id": "ami-0123456789abcdef0",
+			},
+		},
+	}
+	// May already exist, try to delete first before creating (for test repeatability)
+	_ = k8sClient.Delete(ctx, ec2)
+	Expect(k8sClient.Create(ctx, ec2)).To(Succeed())
 }

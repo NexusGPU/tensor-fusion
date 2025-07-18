@@ -1,9 +1,9 @@
 package alibaba
 
 import (
-	"fmt"
-
-	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	pricing "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
+	types "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 )
 
 var GPUInstanceTypeInfo []types.GPUNodeInstanceInfo
@@ -16,8 +16,7 @@ var RegionCostDifferenceRatio = map[string]float64{
 }
 
 var PricingMap = map[string]*types.GPUNodeInstanceInfo{}
-
-const SPOT_DISCOUNT_RATIO = 0.3
+var pricingProvider *pricing.StaticPricingProvider
 
 func init() {
 	// TODO: this is just mock data, should refer Karpenter to get price and append GPU info.
@@ -44,7 +43,7 @@ func init() {
 
 		{
 			InstanceType: "ecs.gn6i-c8g1.2xlarge",
-			CostPerHour:  1.344,
+			// CostPerHour:  1.344,
 
 			CPUs:      8,
 			MemoryGiB: 31,
@@ -54,13 +53,13 @@ func init() {
 
 			GPUModel:        "NVIDIA T4",
 			GPUCount:        1,
-			GPUArchitecture: types.GPUArchitectureNvidiaTuring,
+			GPUVendor:       types.GPUVendorNvidia,
 			CPUArchitecture: types.CPUArchitectureAMD64,
 		},
 
 		{
 			InstanceType: "ecs.gn6i-c16g1.4xlarge",
-			CostPerHour:  1.729,
+			// CostPerHour:  1.729,
 
 			CPUs:      16,
 			MemoryGiB: 60,
@@ -70,7 +69,7 @@ func init() {
 
 			GPUModel:        "NVIDIA T4",
 			GPUCount:        1,
-			GPUArchitecture: types.GPUArchitectureNvidiaTuring,
+			GPUVendor:       types.GPUVendorNvidia,
 			CPUArchitecture: types.CPUArchitectureAMD64,
 		},
 	}
@@ -84,20 +83,9 @@ func (p AlibabaGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []type
 	return GPUInstanceTypeInfo
 }
 
-func (p AlibabaGPUNodeProvider) GetInstancePricing(instanceType string, region string, capacityType types.CapacityTypeEnum) (float64, error) {
-	discountRatio := 1.0
-	if ratio, ok := RegionCostDifferenceRatio[region]; ok {
-		discountRatio = ratio
+func (p AlibabaGPUNodeProvider) GetInstancePricing(instanceType string, capacityType tfv1.CapacityTypeEnum, region string) (float64, error) {
+	if price, exists := pricingProvider.GetPricing(instanceType, capacityType, region); exists {
+		return price, nil
 	}
-
-	if capacityType == types.CapacityTypeSpot {
-		// TODO: this should be dynamic, on average Spot instance can save 70% more, before get accurate Spot discount ratio, just use fix value for now
-		discountRatio = discountRatio * SPOT_DISCOUNT_RATIO
-	}
-
-	if PricingMap[instanceType] == nil {
-		// Should not happen after get all pricing data of all popular instance types
-		return 0, fmt.Errorf("instance type not found: %s", instanceType)
-	}
-	return PricingMap[instanceType].CostPerHour * discountRatio, nil
+	return 0, nil
 }

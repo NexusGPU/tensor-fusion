@@ -51,7 +51,8 @@ func TestNewKarpenterGPUNodeProvider(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			provider, err := NewKarpenterGPUNodeProvider(tt.cfg, tt.client, tt.nodeConfig)
+			ctx := t.Context()
+			provider, err := NewKarpenterGPUNodeProvider(ctx, tt.cfg, tt.client, &tt.nodeConfig)
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorContains)
@@ -104,9 +105,9 @@ func TestKarpenterGPUNodeProvider_CreateNode(t *testing.T) {
 
 	// Create a simple fake NodeClass using unstructured with basic fields only
 	nodeClass := &unstructured.Unstructured{}
-	nodeClass.SetAPIVersion("karpenter.k8s.aws/v1beta1")
+	nodeClass.SetAPIVersion("karpenter.k8s.aws/v1")
 	nodeClass.SetKind("EC2NodeClass")
-	nodeClass.SetName("test-nodeclass")
+	nodeClass.SetName("test-ec2-node-class")
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -146,27 +147,29 @@ func TestKarpenterGPUNodeProvider_CreateNode(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		param       *types.NodeCreationParam
+		param       *tfv1.GPUNodeClaimSpec
 		expectError bool
 	}{
 		{
 			name: "successful node creation with GPU",
-			param: &types.NodeCreationParam{
-				NodeName:         "test-gpu-node",
-				Region:           "us-west-2",
-				Zone:             "us-west-2a",
-				InstanceType:     "p3.8xlarge",
-				CapacityType:     types.CapacityTypeOnDemand,
+			param: &tfv1.GPUNodeClaimSpec{
+				NodeName:     "test-gpu-node",
+				Region:       "us-west-2",
+				Zone:         "us-west-2a",
+				InstanceType: "p3.8xlarge",
+				CapacityType: tfv1.CapacityTypeOnDemand,
+				NodeClassRef: tfv1.GroupKindName{
+					Name:    "test-ec2-node-class",
+					Group:   "karpenter.k8s.aws",
+					Kind:    "EC2NodeClass",
+					Version: "v1",
+				},
 				TFlopsOffered:    resource.MustParse("125"),
 				VRAMOffered:      resource.MustParse("64Gi"),
 				GPUDeviceOffered: 4,
 				ExtraParams: map[string]string{
-					"karpenter.nodeclassref.name":                "test-nodeclass",
-					"karpenter.nodeclassref.group":               "karpenter.k8s.aws",
-					"karpenter.nodeclassref.version":             "v1beta1",
-					"karpenter.nodeclassref.kind":                "EC2NodeClass",
-					"karpenter.nodeclaim.terminationgraceperiod": "30s",
-					"karpenter.gpuresource":                      "nvidia.com/gpu",
+					"karpenter.nodeClaim.terminationGracePeriod": "30s",
+					"karpenter.gpuResource":                      "nvidia.com/gpu",
 				},
 			},
 			expectError: false,
@@ -200,7 +203,7 @@ func TestKarpenterGPUNodeProvider_CreateNode(t *testing.T) {
 			assert.Equal(t, "true", nodeClaim.Annotations["karpenter.sh/do-not-disrupt"])
 
 			// Verify NodeClassRef
-			assert.Equal(t, "test-nodeclass", nodeClaim.Spec.NodeClassRef.Name)
+			assert.Equal(t, "test-ec2-node-class", nodeClaim.Spec.NodeClassRef.Name)
 			assert.Equal(t, "karpenter.k8s.aws", nodeClaim.Spec.NodeClassRef.Group)
 			assert.Equal(t, "EC2NodeClass", nodeClaim.Spec.NodeClassRef.Kind)
 
@@ -246,7 +249,7 @@ func TestKarpenterGPUNodeProvider_CreateNode(t *testing.T) {
 			assert.Equal(t, corev1.TaintEffectNoSchedule, nodeClaim.Spec.Taints[0].Effect)
 
 			// Verify termination grace period
-			if tt.param.ExtraParams["karpenter.nodeclaim.terminationgraceperiod"] != "" {
+			if tt.param.ExtraParams["karpenter.nodeClaim.terminationGracePeriod"] != "" {
 				assert.NotNil(t, nodeClaim.Spec.TerminationGracePeriod)
 			}
 		})
@@ -306,28 +309,25 @@ func TestKarpenterGPUNodeProvider_parseKarpenterConfig(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		param    *types.NodeCreationParam
+		param    *tfv1.GPUNodeClaimSpec
 		expected string // Just test the GPU resource name for simplicity
 	}{
 		{
 			name: "nil extra params",
-			param: &types.NodeCreationParam{
+			param: &tfv1.GPUNodeClaimSpec{
 				ExtraParams: nil,
 			},
 			expected: "", // Early return when extraParams is nil
 		},
 		{
 			name: "empty extra params",
-			param: &types.NodeCreationParam{
+			param: &tfv1.GPUNodeClaimSpec{
 				ExtraParams: map[string]string{
-					"karpenter.nodeclassref.name":                "default-nodeclass",
-					"karpenter.nodeclassref.group":               "karpenter.k8s.aws",
-					"karpenter.nodeclassref.version":             "v1beta1",
-					"karpenter.nodeclassref.kind":                "EC2NodeClass",
-					"karpenter.nodeclaim.terminationgraceperiod": "30s",
+					"karpenter.nodeClassRef.kind":                "EC2NodeClass",
+					"karpenter.nodeClaim.terminationGracePeriod": "30s",
 				},
 			},
-			expected: "default-nodeclass", // Default value should be set
+			expected: "30s", // Default value should be set
 		},
 	}
 
@@ -338,7 +338,7 @@ func TestKarpenterGPUNodeProvider_parseKarpenterConfig(t *testing.T) {
 
 	t.Run(tests[1].name, func(t *testing.T) {
 		result := provider.parseKarpenterConfig(tests[1].param)
-		assert.Equal(t, tests[1].expected, result.NodeClassRef.Name)
+		assert.Equal(t, tests[1].expected, result.NodeClaim.TerminationGracePeriod)
 	})
 
 }

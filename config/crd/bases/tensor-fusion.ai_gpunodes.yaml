@@ -179,12 +179,6 @@ spec:
                     format: date-time
                     type: string
                 type: object
-              kubernetesNodeName:
-                description: the identifier of the kubernetes node, in nodeSelector
-                  mode, GPUNode name is the same as kubernetes node name because of
-                  it's owned by the Kubernetes node, while in node provisioning mode
-                  owned by the GPUNode, and K8S Node name is uncontrollable
-                type: string
               loadedModels:
                 items:
                   type: string
@@ -198,34 +192,12 @@ spec:
                 type: integer
               nodeInfo:
                 properties:
-                  architecture:
-                    type: string
                   dataDiskSize:
                     anyOf:
                     - type: integer
                     - type: string
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
-                  gpuCount:
-                    format: int32
-                    type: integer
-                  gpuDriverVersion:
-                    type: string
-                  gpuModel:
-                    type: string
-                  hostname:
-                    type: string
-                  instanceID:
-                    description: only set when node is managed by TensorFusion
-                    type: string
-                  ip:
-                    type: string
-                  kernelVersion:
-                    type: string
-                  operatingSystem:
-                    type: string
-                  osImage:
-                    type: string
                   ramSize:
                     anyOf:
                     - type: integer
@@ -233,8 +205,6 @@ spec:
                     description: Additional space for L1/L2 VRAM buffer
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
-                  region:
-                    type: string
                 type: object
               observedGeneration:
                 format: int64
@@ -293,7 +263,6 @@ spec:
             required:
             - availableTFlops
             - availableVRAM
-            - kubernetesNodeName
             - managedGPUs
             - phase
             - totalGPUs

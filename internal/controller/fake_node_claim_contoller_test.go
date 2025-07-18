@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/rand"
@@ -27,49 +28,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 	BeforeEach(func() {
 		ctx = context.TODO()
 		testNodeName = "demo-node-" + rand.String(5)
-		ec2 := &unstructured.Unstructured{}
-
-		// Inject an EC2NodeClass
-		ec2.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   "karpenter.k8s.aws",
-			Version: "v1",
-			Kind:    "EC2NodeClass",
-		})
-		ec2.SetName("test-nodeclass")
-
-		ec2.Object["spec"] = map[string]any{
-			// Required
-			"role":      "arn:aws:iam::123456789012:role/dummy",
-			"amiFamily": "Bottlerocket",
-
-			// subnetSelectorTerms – at least 1 element
-			"subnetSelectorTerms": []any{
-				map[string]any{
-					"tags": map[string]any{
-						"kubernetes.io/cluster/test": "owned",
-					},
-				},
-			},
-
-			// securityGroupSelectorTerms – at least 1 element
-			"securityGroupSelectorTerms": []any{
-				map[string]any{
-					"tags": map[string]any{
-						"karpenter.sh/discovery": "dummy",
-					},
-				},
-			},
-
-			// amiSelectorTerms – newly added and required in v1; provide a dummy AMI ID
-			"amiSelectorTerms": []any{
-				map[string]any{
-					"id": "ami-0123456789abcdef0",
-				},
-			},
-		}
-		// May already exist, try to delete first before creating (for test repeatability)
-		_ = k8sClient.Delete(ctx, ec2)
-		Expect(k8sClient.Create(ctx, ec2)).To(Succeed())
+		GenerateKarpenterEC2NodeClass()
 	})
 
 	AfterEach(func() {
@@ -79,7 +38,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 			Version: "v1",
 			Kind:    "EC2NodeClass",
 		})
-		nc.SetName("test-nodeclass")
+		nc.SetName("test-ec2-node-class")
 		_ = k8sClient.Delete(ctx, nc)
 	})
 
@@ -120,31 +79,36 @@ var _ = Describe("FakeNodeClaimController", func() {
 			}
 
 			var err error
-			provider, err = karpenter.NewKarpenterGPUNodeProvider(cfg, k8sClient, nodeManagerConfig)
+			provider, err = karpenter.NewKarpenterGPUNodeProvider(ctx, cfg, k8sClient, &nodeManagerConfig)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should create NodeClaim via cloudprovider, observe controller consumption, check status, delete and re-check", func() {
 			// Step 1: Create NodeClaim using cloudprovider
 			By("Creating NodeClaim via CloudProvider")
-			nodeCreationParam := &types.NodeCreationParam{
-				NodeName:         testNodeName,
-				Region:           "us-west-2",
-				Zone:             "us-west-2a",
-				InstanceType:     "p3.8xlarge",
-				CapacityType:     types.CapacityTypeOnDemand,
+			nodeCreationParam := tfv1.GPUNodeClaimSpec{
+				NodeName:     testNodeName,
+				Region:       "us-west-2",
+				Zone:         "us-west-2a",
+				InstanceType: "p3.8xlarge",
+				NodeClassRef: tfv1.GroupKindName{
+					Group:   "karpenter.k8s.aws",
+					Kind:    "EC2NodeClass",
+					Name:    "test-ec2-node-class",
+					Version: "v1",
+				},
+				CapacityType:     tfv1.CapacityTypeOnDemand,
 				TFlopsOffered:    resource.MustParse("125"),
 				VRAMOffered:      resource.MustParse("64Gi"),
 				GPUDeviceOffered: 4,
-				ExtraParams: map[string]string{
-					"karpenter.nodeclassref.name":    "test-nodeclass",
-					"karpenter.nodeclassref.group":   "karpenter.k8s.aws",
-					"karpenter.nodeclassref.version": "v1",
-					"karpenter.nodeclassref.kind":    "EC2NodeClass",
-				},
 			}
 
-			gpuNodeStatus, err := provider.CreateNode(ctx, nodeCreationParam)
+			gpuNodeStatus, err := provider.CreateNode(ctx, &tfv1.GPUNodeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: testNodeName,
+				},
+				Spec: nodeCreationParam,
+			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(gpuNodeStatus).NotTo(BeNil())
 			Expect(gpuNodeStatus.InstanceID).To(Equal(testNodeName))
@@ -205,7 +169,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 				})
 				err := k8sClient.Get(ctx, client.ObjectKey{Name: testNodeName}, nodeClaim)
 				g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-			}, "10s", "500ms").Should(Succeed())
+			}).Should(Succeed())
 
 			// Verify controller also deleted the Node
 			By("Verifying FakeNodeClaimController deleted the Node")
@@ -213,7 +177,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 				node := &corev1.Node{}
 				err := k8sClient.Get(ctx, client.ObjectKey{Name: testNodeName}, node)
 				g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-			}, "10s", "500ms").Should(Succeed())
+			}).Should(Succeed())
 
 			// Step 5: Query node status again, should return NotFound error
 			By("Re-checking node status after deletion - should fail")
@@ -227,26 +191,33 @@ var _ = Describe("FakeNodeClaimController", func() {
 			customNodeName := testNodeName + "-gpu"
 
 			By("Creating GPU NodeClaim via CloudProvider")
-			nodeCreationParam := &types.NodeCreationParam{
-				NodeName:         customNodeName,
-				Region:           "us-east-1",
-				Zone:             "us-east-1a",
-				InstanceType:     "p4d.24xlarge",
-				CapacityType:     types.CapacityTypeSpot,
+			nodeCreationParam := tfv1.GPUNodeClaimSpec{
+				NodeName:     customNodeName,
+				Region:       "us-east-1",
+				Zone:         "us-east-1a",
+				InstanceType: "p4d.24xlarge",
+				NodeClassRef: tfv1.GroupKindName{
+					Group:   "karpenter.k8s.aws",
+					Kind:    "EC2NodeClass",
+					Name:    "test-ec2-node-class",
+					Version: "v1",
+				},
+				CapacityType:     tfv1.CapacityTypeSpot,
 				TFlopsOffered:    resource.MustParse("1000"),
 				VRAMOffered:      resource.MustParse("320Gi"),
 				GPUDeviceOffered: 8,
 				ExtraParams: map[string]string{
-					"karpenter.nodeclassref.name":                "test-nodeclass",
-					"karpenter.nodeclassref.group":               "karpenter.k8s.aws",
-					"karpenter.nodeclassref.version":             "v1",
-					"karpenter.nodeclassref.kind":                "EC2NodeClass",
-					"karpenter.nodeclaim.terminationgraceperiod": "120s",
-					"karpenter.gpuresource":                      "nvidia.com/gpu",
+					"karpenter.nodeClaim.terminationGracePeriod": "120s",
+					"karpenter.gpuResource":                      "nvidia.com/gpu",
 				},
 			}
 
-			gpuNodeStatus, err := provider.CreateNode(ctx, nodeCreationParam)
+			gpuNodeStatus, err := provider.CreateNode(ctx, &tfv1.GPUNodeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: customNodeName,
+				},
+				Spec: nodeCreationParam,
+			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(gpuNodeStatus.InstanceID).To(Equal(customNodeName))
 
@@ -273,7 +244,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 				}
 				g.Expect(foundGPUTaint).To(BeTrue())
 				g.Expect(foundUnregisteredTaint).To(BeTrue())
-			}, "10s", "500ms").Should(Succeed())
+			}).Should(Succeed())
 
 			// Query status and then cleanup
 			By("Checking node status and cleaning up")
@@ -295,7 +266,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 				node := &corev1.Node{}
 				err := k8sClient.Get(ctx, client.ObjectKey{Name: customNodeName}, node)
 				g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-			}, "10s", "500ms").Should(Succeed())
+			}).Should(Succeed())
 		})
 	})
 

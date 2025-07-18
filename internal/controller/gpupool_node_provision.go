@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"sync"
@@ -21,15 +20,32 @@ import (
 )
 
 // Controller and trigger logic for abstract layer of node provisioning
-func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Context, pool *tfv1.GPUPool) (bool, error) {
+func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Context, pool *tfv1.GPUPool) (map[string]tfv1.Resource, error) {
 	log := log.FromContext(ctx)
 	// check if min resource constraint is satisfied
 	shouldScaleUp := false
 	tflopsGap := int64(0)
 	vramGap := int64(0)
 
+	// creating resources should be counted to avoid duplicated provisioning
+	assumedAddingTflops := int64(0)
+	assumedAddingVRAM := int64(0)
+
+	for claimName := range pool.Status.PendingGPUNodeClaim {
+		gpuNodeClaim := tfv1.GPUNodeClaim{}
+		if err := r.Get(ctx, client.ObjectKey{Name: claimName}, &gpuNodeClaim); err != nil {
+			return nil, err
+		}
+		pendingTflops, _ := gpuNodeClaim.Spec.TFlopsOffered.AsInt64()
+		pendingVRAM, _ := gpuNodeClaim.Spec.VRAMOffered.AsInt64()
+		assumedAddingVRAM += pendingVRAM
+		assumedAddingTflops += pendingTflops
+	}
+
 	totalTFlops, _ := pool.Status.TotalTFlops.AsInt64()
 	totalVRAM, _ := pool.Status.TotalVRAM.AsInt64()
+	totalTFlops += assumedAddingTflops
+	totalVRAM += assumedAddingVRAM
 
 	// default warmUp is zero, only scale up when available < 0
 	warmUpTFlops := int64(0)
@@ -57,6 +73,8 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	if !shouldScaleUp && pool.Status.Phase == tfv1.TensorFusionPoolPhaseRunning {
 		availableTFlops, _ := pool.Status.AvailableTFlops.AsInt64()
 		availableVRAM, _ := pool.Status.AvailableVRAM.AsInt64()
+		availableTFlops += assumedAddingTflops
+		availableVRAM += assumedAddingVRAM
 
 		tflopsGap = warmUpTFlops - availableTFlops
 		vramGap = warmUpVRAM - availableVRAM
@@ -81,29 +99,41 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	}
 
 	if !shouldScaleUp {
-		return false, nil
+		return nil, nil
 	}
 
 	// create provisioner
 	provider, cluster, err := createProvisionerAndQueryCluster(ctx, pool, r.Client)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	nodeClass := pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass
-	if nodeClass == "" {
-		return false, fmt.Errorf("failed to get node class for pool %s", pool.Name)
-	}
-	var nodeClassObj tfv1.GPUNodeClass
-	err = r.Get(ctx, client.ObjectKey{Name: nodeClass}, &nodeClassObj)
-	if err != nil {
-		return false, err
+	var nodeClassRef tfv1.GroupKindName
+	switch pool.Spec.NodeManagerConfig.ProvisioningMode {
+	case tfv1.ProvisioningModeProvisioned:
+		if pool.Spec.NodeManagerConfig.NodeProvisioner == nil {
+			return nil, fmt.Errorf("failed to get node provisioner config for pool %s", pool.Name)
+		}
+		if pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass == "" {
+			return nil, fmt.Errorf("failed to get node class for pool %s", pool.Name)
+		}
+		nodeClassRef = tfv1.GroupKindName{
+			Name:    pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass,
+			Kind:    tfv1.GPUNodeClassKind,
+			Group:   tfv1.GroupVersion.Group,
+			Version: tfv1.GroupVersion.Version,
+		}
+	case tfv1.ProvisioningModeKarpenter:
+		if pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef == nil {
+			return nil, fmt.Errorf("failed to get karpenter node class ref for pool %s", pool.Name)
+		}
+		nodeClassRef = *pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef
 	}
 
 	// convert resource gap to least cost GPUNode creation param
-	gpuNodeParams, err := common.CalculateLeastCostGPUNodes(ctx, provider, cluster, pool, &nodeClassObj, tflopsGap, vramGap)
+	gpuNodeParams, err := common.CalculateLeastCostGPUNodes(ctx, provider, cluster, pool, nodeClassRef, tflopsGap, vramGap)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	var wg sync.WaitGroup
@@ -111,51 +141,48 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 
 	var errList []error
 
+	// lock the pool before next node scaling up loop, add assumed scaling resources util all pending nodeClaims are running
+	newCreatedNodes := map[string]tfv1.Resource{}
 	for _, node := range gpuNodeParams {
-		go func(node types.NodeCreationParam) {
+		go func(node tfv1.GPUNodeClaimSpec) {
 			defer wg.Done()
 
 			// Create GPUNode custom resource immediately and GPUNode controller will watch the K8S node to be ready
 			// Persist the status to GPUNode to avoid duplicated creation in next reconciliation
 			// If the K8S node never be ready after some time, the GPUNode will be deleted, then the Pool reconcile loop can scale up and meet the capacity constraint again
 
-			costPerHour, pricingErr := provider.GetInstancePricing(node.InstanceType, node.Region, node.CapacityType)
+			costPerHour, pricingErr := provider.GetInstancePricing(node.InstanceType, node.CapacityType, node.Region)
 			if pricingErr != nil {
 				errList = append(errList, pricingErr)
 				return
 			}
 
-			params, _ := json.Marshal(node)
-			gpuNodeRes := &tfv1.GPUNode{
+			gpuNodeClaimRes := &tfv1.GPUNodeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: node.NodeName,
 					Labels: map[string]string{
 						constants.LabelKeyOwner:        pool.Name,
 						constants.LabelKeyClusterOwner: cluster.Name,
-						constants.LabelKeyNodeClass:    nodeClass,
+						constants.LabelKeyNodeClass:    nodeClassRef.Name,
 
 						// to be compatible with nodeSelector mode, allow GPUNode controller to start HyperVisor pod
 						fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true",
 					},
+					Annotations: map[string]string{
+						constants.PricingAnnotation: strconv.FormatFloat(costPerHour, 'f', 6, 64),
+					},
 				},
-				Spec: tfv1.GPUNodeSpec{
-					ManageMode:       tfv1.GPUNodeManageModeProvisioned,
-					CostPerHour:      strconv.FormatFloat(costPerHour, 'f', 6, 64),
-					CloudVendorParam: string(params),
-				},
+				Spec: node,
 			}
-			_ = controllerutil.SetControllerReference(pool, gpuNodeRes, r.Scheme)
-			err := r.Create(ctx, gpuNodeRes)
+			_ = controllerutil.SetControllerReference(pool, gpuNodeClaimRes, r.Scheme)
+			err := r.Create(ctx, gpuNodeClaimRes)
 			if err != nil {
 				errList = append(errList, err)
 				return
 			}
-
-			// Update GPUNode status to set the resource quantity
-			gpuNodeRes.InitializeStatus(node.TFlopsOffered, node.VRAMOffered, node.GPUDeviceOffered)
-			if err := r.Client.Status().Update(ctx, gpuNodeRes); err != nil {
-				errList = append(errList, err)
-				return
+			newCreatedNodes[node.NodeName] = tfv1.Resource{
+				Tflops: node.TFlopsOffered,
+				Vram:   node.VRAMOffered,
 			}
 		}(node)
 	}
@@ -163,12 +190,17 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	wg.Wait()
 
 	if len(errList) > 0 {
-		return false, fmt.Errorf("failed to create nodes: %v", errList)
+		return nil, fmt.Errorf("failed to create nodes: %v", errList)
 	}
-	return len(gpuNodeParams) > 0, nil
+	return newCreatedNodes, nil
 }
 
 func createProvisionerAndQueryCluster(ctx context.Context, pool *tfv1.GPUPool, r client.Client) (types.GPUNodeProvider, *tfv1.TensorFusionCluster, error) {
+
+	if pool.Spec.NodeManagerConfig == nil || pool.Spec.NodeManagerConfig.NodeProvisioner == nil {
+		return nil, nil, fmt.Errorf("failed to get node provisioner config for pool %s", pool.Name)
+	}
+
 	clusterName := pool.Labels[constants.LabelKeyOwner]
 	if clusterName == "" {
 		return nil, nil, fmt.Errorf("failed to get cluster name for pool %s", pool.Name)
@@ -184,10 +216,10 @@ func createProvisionerAndQueryCluster(ctx context.Context, pool *tfv1.GPUPool, r
 		return nil, nil, fmt.Errorf("failed to get computing vendor config for cluster %s", clusterName)
 	}
 
-	provider, err := cloudprovider.GetProvider(*vendorCfg, r, pool.Spec.NodeManagerConfig)
+	provider, err := cloudprovider.GetProvider(ctx, *vendorCfg, r, pool.Spec.NodeManagerConfig)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return *provider, &cluster, nil
+	return provider, &cluster, nil
 }

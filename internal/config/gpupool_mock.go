@@ -7,6 +7,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 )
@@ -16,6 +17,18 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 	CapacityConfig: &tfv1.CapacityConfig{
 		Oversubscription: &tfv1.Oversubscription{
 			TFlopsOversellRatio: 2000,
+		},
+		MinResources: &tfv1.GPUOrCPUResourceUnit{
+			TFlops: resource.MustParse("100"),
+			VRAM:   resource.MustParse("10Gi"),
+		},
+		MaxResources: &tfv1.GPUOrCPUResourceUnit{
+			TFlops: resource.MustParse("3000"),
+			VRAM:   resource.MustParse("3000Gi"),
+		},
+		WarmResources: &tfv1.GPUOrCPUResourceUnit{
+			TFlops: resource.MustParse("2200"),
+			VRAM:   resource.MustParse("2020Gi"),
 		},
 	},
 	NodeManagerConfig: &tfv1.NodeManagerConfig{
@@ -39,6 +52,7 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 			MaxDuration:       "10m",
 			MaintenanceWindow: tfv1.MaintenanceWindow{},
 		},
+		ProvisioningMode: tfv1.ProvisioningModeAutoSelect,
 	},
 	ComponentConfig: &tfv1.ComponentConfig{
 		Hypervisor: &tfv1.HypervisorConfig{
