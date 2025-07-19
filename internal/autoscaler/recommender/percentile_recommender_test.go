@@ -1,4 +1,4 @@
-package percentile
+package recommender
 
 import (
 	"time"
@@ -10,9 +10,9 @@ import (
 
 var _ = Describe("Percentile Recommender", func() {
 	It("should return default config when no AutoScalingConfig is set", func() {
-		cfg := NewRecommender().getPercentileConfig(nil)
+		cfg := NewPercentileRecommender().getPercentileConfig(nil)
 		Expect(cfg).ToNot(BeNil())
-		Expect(*cfg).To(Equal(DefaultPercentileConfig))
+		Expect(*cfg).To(Equal(defaultPercentileConfig))
 	})
 
 	It("should parse float fields from AutoSetResources", func() {
@@ -27,7 +27,7 @@ var _ = Describe("Percentile Recommender", func() {
 				RequestMarginFraction:      "0.15",
 			},
 		}
-		cfg := NewRecommender().getPercentileConfig(asc)
+		cfg := NewPercentileRecommender().getPercentileConfig(asc)
 		Expect(cfg.TargetTflopsPercentile).To(Equal(0.8))
 		Expect(cfg.LowerBoundTflopsPercentile).To(Equal(0.1))
 		Expect(cfg.UpperBoundTflopsPercentile).To(Equal(0.95))
@@ -45,9 +45,9 @@ var _ = Describe("Percentile Recommender", func() {
 				UpperBoundTflopsPercentile: "0.99",
 			},
 		}
-		cfg := NewRecommender().getPercentileConfig(asc)
-		Expect(cfg.TargetTflopsPercentile).To(Equal(DefaultPercentileConfig.TargetTflopsPercentile))
-		Expect(cfg.LowerBoundTflopsPercentile).To(Equal(DefaultPercentileConfig.LowerBoundTflopsPercentile))
+		cfg := NewPercentileRecommender().getPercentileConfig(asc)
+		Expect(cfg.TargetTflopsPercentile).To(Equal(defaultPercentileConfig.TargetTflopsPercentile))
+		Expect(cfg.LowerBoundTflopsPercentile).To(Equal(defaultPercentileConfig.LowerBoundTflopsPercentile))
 		Expect(cfg.UpperBoundTflopsPercentile).To(Equal(0.99))
 	})
 
@@ -57,7 +57,7 @@ var _ = Describe("Percentile Recommender", func() {
 				ConfidenceInterval: "30m",
 			},
 		}
-		cfg := NewRecommender().getPercentileConfig(asc)
+		cfg := NewPercentileRecommender().getPercentileConfig(asc)
 		Expect(cfg.ConfidenceInterval).To(Equal(30 * time.Minute))
 	})
 
@@ -67,7 +67,7 @@ var _ = Describe("Percentile Recommender", func() {
 				ConfidenceInterval: "not-a-duration",
 			},
 		}
-		cfg := NewRecommender().getPercentileConfig(asc)
-		Expect(cfg.ConfidenceInterval).To(Equal(DefaultPercentileConfig.ConfidenceInterval))
+		cfg := NewPercentileRecommender().getPercentileConfig(asc)
+		Expect(cfg.ConfidenceInterval).To(Equal(defaultPercentileConfig.ConfidenceInterval))
 	})
 })
