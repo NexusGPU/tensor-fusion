@@ -1,11 +1,11 @@
-package percentile
+package recommender
 
 import (
 	"strconv"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/internal/autoscaling"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
 )
 
 const (
@@ -27,7 +27,7 @@ const (
 	defaultConfidenceInterval = time.Hour * 24
 )
 
-var DefaultPercentileConfig = PercentileConfig{
+var defaultPercentileConfig = PercentileConfig{
 	TargetTflopsPercentile:     defaultTargetTflopsPercentile,
 	LowerBoundTflopsPercentile: defaultLowerBoundTflopsPercentile,
 	UpperBoundTflopsPercentile: defaultUpperBoundTflopsPercentile,
@@ -58,7 +58,7 @@ type PercentileRecommender struct {
 	upperBoundVram   VramEstimator
 }
 
-func NewRecommender() *PercentileRecommender {
+func NewPercentileRecommender() *PercentileRecommender {
 	return &PercentileRecommender{}
 }
 
@@ -66,10 +66,10 @@ func (p *PercentileRecommender) Name() string {
 	return "percentile"
 }
 
-func (p *PercentileRecommender) Recommend(w *autoscaling.WorkloadState) {
+func (p *PercentileRecommender) Recommend(config *tfv1.AutoScalingConfig, w *metrics.WorkerUsageAggregator) RecommendedResources {
 	// TODO: cache config
-	p.createEstimatorsFromConfig(p.getPercentileConfig(&w.AutoScalingConfig))
-	w.Recommendation = autoscaling.RecommendedResources{
+	p.createEstimatorsFromConfig(p.getPercentileConfig(config))
+	return RecommendedResources{
 		LowerBoundTflops: QuantityFromAmount(p.lowerBoundTflops.GetTflopsEstimation(w)),
 		TargetTflops:     QuantityFromAmount(p.targetTflops.GetTflopsEstimation(w)),
 		UpperBoundTflops: QuantityFromAmount(p.upperBoundTflops.GetTflopsEstimation(w)),
@@ -80,7 +80,7 @@ func (p *PercentileRecommender) Recommend(w *autoscaling.WorkloadState) {
 }
 
 func (p *PercentileRecommender) getPercentileConfig(asc *tfv1.AutoScalingConfig) *PercentileConfig {
-	cfg := DefaultPercentileConfig
+	cfg := defaultPercentileConfig
 
 	asr := asc.AutoSetResources
 	fields := []struct {
