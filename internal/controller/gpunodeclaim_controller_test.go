@@ -45,17 +45,22 @@ var _ = Describe("GPUNodeClaim Controller", func() {
 			// Scale up the pool to meet capacity requirement
 			// will create mocked 2x g6.xlarge nodes
 			Eventually(func(g Gomega) {
-				tfEnv.UpdateHypervisorStatus()
-				pool := tfEnv.GetGPUPool(0)
-				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
+				tfEnv.UpdateHypervisorStatus(false)
+
 				gpuNodeClaimList := &tfv1.GPUNodeClaimList{}
 				g.Expect(k8sClient.List(ctx, gpuNodeClaimList)).Should(Succeed())
 
 				gpuNodes := &tfv1.GPUNodeList{}
 				g.Expect(k8sClient.List(ctx, gpuNodes)).Should(Succeed())
 
+				// Add mock GPU for the provisioned nodes
+				tfEnv.AddMockGPU4ProvisionedNodes(gpuNodeClaimList, gpuNodes)
+
 				k8sNodes := &corev1.NodeList{}
 				g.Expect(k8sClient.List(ctx, k8sNodes)).Should(Succeed())
+
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
 
 				g.Expect(gpuNodeClaimList.Items).Should(HaveLen(2))
 				for _, gpuNodeClaim := range gpuNodeClaimList.Items {
@@ -69,8 +74,6 @@ var _ = Describe("GPUNodeClaim Controller", func() {
 			tfc.Spec.GPUPools[0].SpecTemplate.CapacityConfig.WarmResources.TFlops = resource.MustParse("100")
 			tfEnv.UpdateCluster(tfc)
 			Eventually(func(g Gomega) {
-				pool := tfEnv.GetGPUPool(0)
-				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
 				gpuNodeClaimList := &tfv1.GPUNodeClaimList{}
 				g.Expect(k8sClient.List(ctx, gpuNodeClaimList)).Should(Succeed())
 
@@ -79,6 +82,9 @@ var _ = Describe("GPUNodeClaim Controller", func() {
 
 				k8sNodes := &corev1.NodeList{}
 				g.Expect(k8sClient.List(ctx, k8sNodes)).Should(Succeed())
+
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
 
 				g.Expect(gpuNodeClaimList.Items).Should(HaveLen(1))
 				g.Expect(gpuNodeClaimList.Items[0].Status.Phase).Should(Equal(tfv1.GPUNodeClaimBound))

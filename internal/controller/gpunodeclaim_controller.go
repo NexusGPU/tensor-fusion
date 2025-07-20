@@ -79,6 +79,7 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
+	needRequeueCheckDeletion := false
 	shouldReturn, err := utils.HandleFinalizer(ctx, claim, r.Client, func(ctx context.Context, claim *tfv1.GPUNodeClaim) (bool, error) {
 		nodeList := &corev1.NodeList{}
 		if err := r.List(ctx, nodeList, client.MatchingLabels{constants.ProvisionerLabelKey: claim.Name}); err != nil {
@@ -88,6 +89,7 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return false, err
 		}
 		if len(nodeList.Items) > 0 {
+			needRequeueCheckDeletion = true
 			for _, node := range nodeList.Items {
 				if !node.DeletionTimestamp.IsZero() {
 					continue
@@ -111,7 +113,9 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if shouldReturn {
 		return ctrl.Result{}, nil
 	}
-
+	if needRequeueCheckDeletion {
+		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
+	}
 	// create or check cloud vendor node when instance ID is empty
 	if claim.Status.InstanceID == "" {
 		if err := r.reconcileCloudVendorNode(ctx, claim, pool, provider); err != nil {

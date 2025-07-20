@@ -132,21 +132,15 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// Check if hypervisor is running well, if so, set as running status
-	checkAgain, err := r.checkStatusAndUpdateVirtualCapacity(ctx, hypervisorName, node, poolObj)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if checkAgain {
-		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
-	}
-	return ctrl.Result{}, nil
+	err = r.checkStatusAndUpdateVirtualCapacity(ctx, hypervisorName, node, poolObj)
+	return ctrl.Result{}, err
 }
 
-func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Context, hypervisorName string, node *tfv1.GPUNode, poolObj *tfv1.GPUPool) (checkAgain bool, err error) {
+func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Context, hypervisorName string, node *tfv1.GPUNode, poolObj *tfv1.GPUPool) error {
 	pod := &corev1.Pod{}
 	fetchErr := r.Get(ctx, client.ObjectKey{Name: hypervisorName, Namespace: utils.CurrentNamespace()}, pod)
 	if fetchErr != nil {
-		return false, fmt.Errorf("failed to get hypervisor pod: %w", fetchErr)
+		return fmt.Errorf("failed to get hypervisor pod: %w", fetchErr)
 	}
 
 	// Reconcile GPUNode status with hypervisor pod status, when changed
@@ -155,22 +149,24 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 			node.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
 			err := r.Status().Update(ctx, node)
 			if err != nil {
-				return true, fmt.Errorf("failed to update GPU node status: %w", err)
+				return fmt.Errorf("failed to update GPU node status: %w", err)
 			}
 		}
 
-		// Update all GPU devices status to Pending
-		// TODO, should update in batch, making every GPU pending state led to unschedule for new workers
-		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhasePending)
+		err := r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhasePending)
 		if err != nil {
-			return true, err
+			return err
 		}
 
-		return true, nil
+		return nil
 	} else {
 		gpuModels, err := gpuallocator.RefreshGPUNodeCapacity(ctx, r.Client, node, poolObj)
 		if err != nil {
-			return true, err
+			return err
+		}
+		if len(gpuModels) == 0 {
+			// when GPU created, will trigger next reconcile
+			return nil
 		}
 
 		// update metrics to get historical allocation line chart and trending
@@ -183,23 +179,23 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 				if errors.IsNotFound(err) {
 					log.FromContext(ctx).Info("GPUNodeClaim not found but provisioner is not empty, orphan GPUNode",
 						"name", node.Labels[constants.ProvisionerLabelKey])
-					return false, nil
+					return nil
 				}
-				return true, fmt.Errorf("failed to get GPUNodeClaim: %w", err)
+				return fmt.Errorf("failed to get GPUNodeClaim: %w", err)
 			}
 			if gpuNodeClaim.Status.Phase != tfv1.GPUNodeClaimBound {
 				gpuNodeClaim.Status.Phase = tfv1.GPUNodeClaimBound
 				if err := r.Status().Update(ctx, gpuNodeClaim); err != nil {
-					return true, fmt.Errorf("failed to update GPUNodeClaim to bound state: %w", err)
+					return fmt.Errorf("failed to update GPUNodeClaim to bound state: %w", err)
 				}
 			}
 		}
 
 		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhaseRunning)
 		if err != nil {
-			return true, err
+			return err
 		}
-		return false, nil
+		return nil
 	}
 }
 
@@ -309,7 +305,6 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tf
 		}
 	} else {
 		// hypervisor pod found, verify status and podTemplateHash
-
 		if node.Status.Phase == tfv1.TensorFusionGPUNodePhaseRunning {
 			return key.Name, nil
 		}
@@ -438,9 +433,8 @@ func (r *GPUNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			})).
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Pod{}).
+		Owns(&tfv1.GPU{}).
 		Complete(r)
-	// WARN: can not Owns(&tfv1.GPU{}) here, because gpunode controller also reconciles GPU devices,
-	// this controller also sync node status to devices status when hypervisor not working
 }
 
 func getDiscoveryJobName(gpunodeName string) string {

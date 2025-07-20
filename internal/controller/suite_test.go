@@ -38,6 +38,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -424,8 +425,7 @@ func (c *TensorFusionEnv) GetPoolGpuList(poolIndex int) *tfv1.GPUList {
 // https://book.kubebuilder.io/reference/envtest#testing-considerations
 // Unless you’re using an existing cluster, keep in mind that no built-in controllers are running in the test context.
 // So the checkStatusAndUpdateVirtualCapacity in gpunode_controller.go checking pod status always pending and the gpunode status can't change to running
-// When using an existing cluster, the test speed go a lot faster, may change later?
-func (c *TensorFusionEnv) UpdateHypervisorStatus() {
+func (c *TensorFusionEnv) UpdateHypervisorStatus(checkNodeNum bool) {
 	GinkgoHelper()
 	if os.Getenv("USE_EXISTING_CLUSTER") != constants.TrueStringValue {
 		for poolIndex := range c.poolNodeMap {
@@ -437,13 +437,69 @@ func (c *TensorFusionEnv) UpdateHypervisorStatus() {
 						fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, c.getPoolName(poolIndex)): "true",
 					}),
 				)).Should(Succeed())
-				g.Expect(podList.Items).Should(HaveLen(len(c.poolNodeMap[poolIndex])))
+				if checkNodeNum {
+					g.Expect(podList.Items).Should(HaveLen(len(c.poolNodeMap[poolIndex])))
+				}
 			}).Should(Succeed())
 			for _, pod := range podList.Items {
 				pod.Status.Phase = corev1.PodRunning
 				pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{Type: corev1.PodReady, Status: corev1.ConditionTrue})
 				Expect(k8sClient.Status().Update(ctx, &pod)).Should(Succeed())
 			}
+		}
+	}
+}
+
+func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(gpuNodeClaimList *tfv1.GPUNodeClaimList, gpuNodes *tfv1.GPUNodeList) {
+	GinkgoHelper()
+	claimToGPUNodeMap := make(map[string]*tfv1.GPUNode)
+	for _, gpuNode := range gpuNodes.Items {
+		claimToGPUNodeMap[gpuNode.Labels[constants.ProvisionerLabelKey]] = &gpuNode
+	}
+	for _, gpuNodeClaim := range gpuNodeClaimList.Items {
+		if gpuNodeClaim.Status.Phase == tfv1.GPUNodeClaimBound {
+			continue
+		}
+		gpuNode := claimToGPUNodeMap[gpuNodeClaim.Name]
+		if gpuNode == nil {
+			continue
+		}
+		gpu := &tfv1.GPU{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "gpu-" + gpuNodeClaim.Name,
+				Labels: map[string]string{
+					constants.LabelKeyOwner: gpuNode.Name,
+				},
+			},
+		}
+		controllerutil.SetControllerReference(gpuNode, gpu, scheme.Scheme)
+		err := k8sClient.Get(ctx, client.ObjectKey{Name: gpu.Name}, &tfv1.GPU{})
+		if errors.IsNotFound(err) {
+			Expect(k8sClient.Create(ctx, gpu)).Should(Succeed())
+
+			err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+				latest := &tfv1.GPU{}
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpu), latest); err != nil {
+					return err
+				}
+				latest.Status = tfv1.GPUStatus{
+					GPUModel: "mocked",
+					Capacity: &tfv1.Resource{
+						Tflops: gpuNodeClaim.Spec.TFlopsOffered,
+						Vram:   gpuNodeClaim.Spec.VRAMOffered,
+					},
+					Available: &tfv1.Resource{
+						Tflops: gpuNodeClaim.Spec.TFlopsOffered,
+						Vram:   gpuNodeClaim.Spec.VRAMOffered,
+					},
+					Phase: tfv1.TensorFusionGPUPhaseRunning,
+					NodeSelector: map[string]string{
+						constants.KubernetesHostNameLabel: gpuNode.Name,
+					},
+				}
+				return k8sClient.Status().Update(ctx, latest)
+			})
+			Expect(err).Should(Succeed())
 		}
 	}
 }
@@ -670,7 +726,7 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 
 		b.GetPoolGpuList(poolIndex)
 	}
-	b.UpdateHypervisorStatus()
+	b.UpdateHypervisorStatus(true)
 
 	return b.TensorFusionEnv
 }

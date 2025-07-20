@@ -99,21 +99,19 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 				gpuNodeClaimName := gpuNode.Labels[constants.ProvisionerLabelKey]
 				gpuNodeClaimObj := &tfv1.GPUNodeClaim{}
 				if err := r.Get(ctx, client.ObjectKey{Name: gpuNodeClaimName}, gpuNodeClaimObj); err != nil {
-					log.Error(err, "get gpuNodeClaim(%s) failed", gpuNodeClaimName)
+					log.Error(err, "get gpuNodeClaim failed", "gpuNodeClaimName", gpuNodeClaimName)
+					continue
+				}
+				// already deleting
+				if !gpuNodeClaimObj.DeletionTimestamp.IsZero() {
 					continue
 				}
 				if err := r.Delete(ctx, gpuNodeClaimObj); err != nil {
-					log.Error(err, "delete gpuNodeClaim(%s) failed", gpuNodeClaimName)
+					log.Error(err, "delete gpuNodeClaim failed", "gpuNodeClaimName", gpuNodeClaimName)
 					continue
 				}
 			} else {
 				// managed by Kubernetes, mark it as destroying, GPUPool capacity should be reduced, and let K8S to delete it
-				gpuNode.Status.Phase = constants.PhaseDestroying
-				if err := r.Update(ctx, &gpuNode); err != nil {
-					log.Error(err, "update node(%s) failed", gpuNode.Name)
-					continue
-				}
-
 				if err := r.Patch(ctx, &corev1.Node{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: gpuNode.Name,
@@ -122,7 +120,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 						},
 					},
 				}, client.Merge); err != nil {
-					log.Error(err, "patch node(%s) failed", gpuNode.Name)
+					log.Error(err, "patch idle node failed", "node", gpuNode.Name)
 					continue
 				}
 			}
@@ -135,7 +133,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 func (r *GPUPoolCompactionReconciler) getCompactionDuration(ctx context.Context, config *tfv1.NodeManagerConfig) time.Duration {
 	log := log.FromContext(ctx)
 	if config == nil || config.NodeCompaction == nil || config.NodeCompaction.Period == "" {
-		log.Info("Invalid NodeCompaction config, use default value", "duration", defaultCompactionDuration)
+		log.Info("empty node compaction config, use default value", "duration", defaultCompactionDuration)
 		return defaultCompactionDuration
 	}
 	duration, err := time.ParseDuration(config.NodeCompaction.Period)
