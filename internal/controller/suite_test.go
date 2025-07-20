@@ -307,6 +307,7 @@ func (c *TensorFusionEnv) UpdateCluster(tfc *tfv1.TensorFusionCluster) {
 
 func (c *TensorFusionEnv) Cleanup() {
 	GinkgoHelper()
+	ProvisioningToggle = false
 	for poolIndex, nodeGpuMap := range c.poolNodeMap {
 		for nodeIndex := range nodeGpuMap {
 			c.DeleteGPUNode(poolIndex, nodeIndex)
@@ -472,7 +473,7 @@ func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(gpuNodeClaimList *tfv1.GPU
 				},
 			},
 		}
-		controllerutil.SetControllerReference(gpuNode, gpu, scheme.Scheme)
+		_ = controllerutil.SetControllerReference(gpuNode, gpu, scheme.Scheme)
 		err := k8sClient.Get(ctx, client.ObjectKey{Name: gpu.Name}, &tfv1.GPU{})
 		if errors.IsNotFound(err) {
 			Expect(k8sClient.Create(ctx, gpu)).Should(Succeed())

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	utils "github.com/NexusGPU/tensor-fusion/internal/utils"
 	"golang.org/x/time/rate"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -35,13 +37,32 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
+
+var (
+	// Killer switch to avoid creating too much cloud vendor nodes
+	// Controlled by /api/provision?enable=true/false
+	ProvisioningToggle = true
+
+	// creating nodes, next round capacity check should consider the assumed resources
+	// map key is pool name, second level is GPUClaim name
+	PendingGPUNodeClaim map[string]map[string]tfv1.Resource
+
+	// deleting nodes, must be serialized, delete one round by one round
+	// map key is pool name, value is GPUNode name list
+	PendingDeletionGPUNodes map[string][]string
+
+	// TODO add metrics for node provisioning and compaction
+)
+
+func init() {
+	PendingGPUNodeClaim = make(map[string]map[string]tfv1.Resource)
+	PendingDeletionGPUNodes = make(map[string][]string)
+}
 
 // GPUPoolReconciler reconciles a GPUPool object
 type GPUPoolReconciler struct {
@@ -51,6 +72,8 @@ type GPUPoolReconciler struct {
 
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+
+	mutex sync.Mutex
 }
 
 // First round reconcile should build correct capacity, and then check provisioning
@@ -129,58 +152,119 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Provisioning mode, check capacity and scale up if needed
 	if isProvisioningMode {
+		// avoid provision before first round reconcile
 		if time.Now().Before(provisioningInitializationMinTime[pool.Name]) {
 			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 		}
-
-		if len(pool.Status.PendingGPUNodeClaim) > 0 {
-			claimBoundChanged := false
-			latestPendingClaim := make(map[string]tfv1.Resource, len(pool.Status.PendingGPUNodeClaim))
-			for claimName, _ := range pool.Status.PendingGPUNodeClaim {
-				gpuNodeClaim := tfv1.GPUNodeClaim{}
-				if err := r.Get(ctx, client.ObjectKey{Name: claimName}, &gpuNodeClaim); err != nil {
-					return ctrl.Result{}, err
-				}
-				if gpuNodeClaim.Status.Phase == tfv1.GPUNodeClaimBound {
-					claimBoundChanged = true
-				} else {
-					latestPendingClaim[claimName] = tfv1.Resource{
-						Tflops: gpuNodeClaim.Spec.TFlopsOffered,
-						Vram:   gpuNodeClaim.Spec.VRAMOffered,
-					}
-				}
-			}
-			if claimBoundChanged {
-				pool.Status.PendingGPUNodeClaim = latestPendingClaim
-				if err := r.Status().Update(ctx, pool); err != nil {
-					return ctrl.Result{}, err
-				}
-				// will trigger next loop immediately because of the patch
-				return ctrl.Result{}, nil
-			}
-		}
-
+		// avoid concurrent provisioning, must wait pending nodes bound, then start next round capacity check
 		newCreatedNodes, err := r.reconcilePoolCapacityWithProvisioner(ctx, pool)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		// Set phase to updating and let GPUNode event trigger the check and update capacity loop, util all nodes are ready
 		if len(newCreatedNodes) > 0 {
+			for claimName := range newCreatedNodes {
+				if PendingGPUNodeClaim[pool.Name] == nil {
+					PendingGPUNodeClaim[pool.Name] = make(map[string]tfv1.Resource, len(newCreatedNodes)*2)
+				}
+				PendingGPUNodeClaim[pool.Name][claimName] = newCreatedNodes[claimName]
+			}
 			// Refresh the capacity again since new node has been created
 			pool.Status.ProvisioningPhase = tfv1.ProvisioningPhaseProvisioning
-			pool.Status.PendingGPUNodeClaim = newCreatedNodes
 			if err := r.Status().Patch(ctx, pool, client.Merge); err != nil {
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
+		}
+
+		if len(PendingDeletionGPUNodes[pool.Name]) > 0 {
+			if err := r.reconcilePendingDeletingNodes(ctx, pool); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
+		if len(PendingGPUNodeClaim[pool.Name]) > 0 {
+			if err := r.reconcilePendingCreatingNodes(ctx, pool); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context.Context, pool *tfv1.GPUPool) error {
+func (r *GPUPoolReconciler) reconcilePendingDeletingNodes(ctx context.Context, pool *tfv1.GPUPool) error {
 	log := log.FromContext(ctx)
+	remainDeletingNodes := []string{}
+	deletingNodes := PendingDeletionGPUNodes[pool.Name]
+	for _, gpuNodeName := range deletingNodes {
+		gpuNodeObj := &tfv1.GPUNode{}
+		if err := r.Get(ctx, client.ObjectKey{Name: gpuNodeName}, gpuNodeObj); err != nil {
+			if errors.IsNotFound(err) {
+				// Already deleted, skip adding to deletingNodes, trigger pool status update
+				continue
+			} else {
+				return err
+			}
+		}
+
+		gpuNodeClaim := &tfv1.GPUNodeClaim{}
+		provisionedClaimName := gpuNodeObj.Labels[constants.ProvisionerLabelKey]
+		if provisionedClaimName == "" {
+			log.Error(nil, "invalid GPU provisioner name label for GPU node", "gpuNodeName", gpuNodeName)
+			continue
+		}
+		if err := r.Get(ctx, client.ObjectKey{Name: provisionedClaimName}, gpuNodeClaim); err != nil {
+			log.Error(err, "failed to get GPU node claim when GPUNode exists, should not happen",
+				"gpuNodeName", gpuNodeName, "claimName", provisionedClaimName)
+			return err
+		}
+		// Delete the root provisioning object GPU NodeClaim, to trigger the deletion of the GPU Node ultimately
+		if gpuNodeClaim.DeletionTimestamp.IsZero() {
+			if err := r.Delete(ctx, gpuNodeClaim); err != nil {
+				return err
+			}
+			log.Info("deleted GPU node claim", "gpuNodeName", gpuNodeName, "claimName", provisionedClaimName)
+		}
+		remainDeletingNodes = append(remainDeletingNodes, gpuNodeName)
+	}
+
+	if len(remainDeletingNodes) != len(deletingNodes) {
+		PendingDeletionGPUNodes[pool.Name] = remainDeletingNodes
+		return nil
+	}
+	return nil
+}
+
+func (r *GPUPoolReconciler) reconcilePendingCreatingNodes(ctx context.Context, pool *tfv1.GPUPool) error {
+	latestPendingClaim := make(map[string]tfv1.Resource, len(PendingGPUNodeClaim[pool.Name]))
+	completedBoundClaims := []string{}
+	for claimName := range PendingGPUNodeClaim[pool.Name] {
+		gpuNodeClaim := &tfv1.GPUNodeClaim{}
+		if err := r.Get(ctx, client.ObjectKey{Name: claimName}, gpuNodeClaim); err != nil {
+			return err
+		}
+		if gpuNodeClaim.Status.Phase == tfv1.GPUNodeClaimBound {
+			completedBoundClaims = append(completedBoundClaims, claimName)
+		} else {
+			latestPendingClaim[claimName] = tfv1.Resource{
+				Tflops: gpuNodeClaim.Spec.TFlopsOffered,
+				Vram:   gpuNodeClaim.Spec.VRAMOffered,
+			}
+		}
+	}
+	if len(completedBoundClaims) > 0 {
+		PendingGPUNodeClaim[pool.Name] = latestPendingClaim
+		log.FromContext(ctx).Info("GPU node provisioned and bound", "pool", pool.Name,
+			"bound node claims", strings.Join(completedBoundClaims, ","))
+	}
+	return nil
+}
+
+func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(
+	ctx context.Context, pool *tfv1.GPUPool) error {
+	log := log.FromContext(ctx)
+	staleStatus := pool.Status.DeepCopy()
 
 	nodes := &tfv1.GPUNodeList{}
 	if err := r.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
@@ -274,8 +358,11 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(ctx context
 		pool.Status.Phase = tfv1.TensorFusionPoolPhaseUpdating
 	}
 
-	if err := r.Client.Status().Update(ctx, pool); err != nil {
-		return fmt.Errorf("update pool status: %w", err)
+	if !equality.Semantic.DeepEqual(&pool.Status, staleStatus) {
+		if err := r.Client.Status().Update(ctx, pool); err != nil {
+			return fmt.Errorf("failed to update pool status: %w", err)
+		}
+		log.Info("updated pool status because of capacity or node status changed", "pool", pool.Name)
 	}
 	return nil
 }
@@ -338,7 +425,7 @@ func (r *GPUPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			),
 			MaxConcurrentReconciles: constants.LowFrequencyObjFailureConcurrentReconcile,
 		}).
-		For(&tfv1.GPUPool{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&tfv1.GPUPool{}).
 		Named("gpupool").
 		Owns(&tfv1.GPUNode{}).
 		Owns(&tfv1.GPUNodeClaim{}).

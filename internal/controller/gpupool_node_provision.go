@@ -21,31 +21,34 @@ import (
 
 // Controller and trigger logic for abstract layer of node provisioning
 func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Context, pool *tfv1.GPUPool) (map[string]tfv1.Resource, error) {
+	if !ProvisioningToggle {
+		return nil, nil
+	}
+
 	log := log.FromContext(ctx)
 	// check if min resource constraint is satisfied
 	shouldScaleUp := false
 	tflopsGap := int64(0)
 	vramGap := int64(0)
 
-	// creating resources should be counted to avoid duplicated provisioning
-	assumedAddingTflops := int64(0)
-	assumedAddingVRAM := int64(0)
+	assumedTflops := int64(0)
+	assumedVRAM := int64(0)
 
-	for claimName := range pool.Status.PendingGPUNodeClaim {
+	for claimName := range PendingGPUNodeClaim[pool.Name] {
 		gpuNodeClaim := tfv1.GPUNodeClaim{}
 		if err := r.Get(ctx, client.ObjectKey{Name: claimName}, &gpuNodeClaim); err != nil {
 			return nil, err
 		}
 		pendingTflops, _ := gpuNodeClaim.Spec.TFlopsOffered.AsInt64()
 		pendingVRAM, _ := gpuNodeClaim.Spec.VRAMOffered.AsInt64()
-		assumedAddingVRAM += pendingVRAM
-		assumedAddingTflops += pendingTflops
+		assumedTflops += pendingTflops
+		assumedVRAM += pendingVRAM
 	}
 
 	totalTFlops, _ := pool.Status.TotalTFlops.AsInt64()
 	totalVRAM, _ := pool.Status.TotalVRAM.AsInt64()
-	totalTFlops += assumedAddingTflops
-	totalVRAM += assumedAddingVRAM
+	totalTFlops += assumedTflops
+	totalVRAM += assumedVRAM
 
 	// default warmUp is zero, only scale up when available < 0
 	warmUpTFlops := int64(0)
@@ -66,15 +69,14 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 		if shouldScaleUp {
 			log.Info("Should scale up GPU node due gap of currentTotal <-> min capacity", "pool", pool.Name)
 		}
-
 	}
 
 	// Only check warm-up when everything is ready, otherwise it will cause duplicated resource creation
 	if !shouldScaleUp && pool.Status.Phase == tfv1.TensorFusionPoolPhaseRunning {
 		availableTFlops, _ := pool.Status.AvailableTFlops.AsInt64()
 		availableVRAM, _ := pool.Status.AvailableVRAM.AsInt64()
-		availableTFlops += assumedAddingTflops
-		availableVRAM += assumedAddingVRAM
+		availableTFlops += assumedTflops
+		availableVRAM += assumedVRAM
 
 		tflopsGap = warmUpTFlops - availableTFlops
 		vramGap = warmUpVRAM - availableVRAM

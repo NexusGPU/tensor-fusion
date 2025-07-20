@@ -33,6 +33,9 @@ func RefreshGPUNodeCapacity(ctx context.Context, k8sClient client.Client, node *
 	deduplicationMap := make(map[string]struct{})
 
 	for _, gpu := range gpuList.Items {
+		if gpu.Status.Available == nil || gpu.Status.Capacity == nil {
+			continue
+		}
 		node.Status.AvailableVRAM.Add(gpu.Status.Available.Vram)
 		node.Status.AvailableTFlops.Add(gpu.Status.Available.Tflops)
 		node.Status.TotalVRAM.Add(gpu.Status.Capacity.Vram)

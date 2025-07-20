@@ -71,7 +71,7 @@ var _ = Describe("GPUNodeClaim Controller", func() {
 
 			// Scale down the pool, set warm up to 100, should delete 1 g6.xlarge L4 GPU node
 			tfc := tfEnv.GetCluster()
-			tfc.Spec.GPUPools[0].SpecTemplate.CapacityConfig.WarmResources.TFlops = resource.MustParse("100")
+			tfc.Spec.GPUPools[0].SpecTemplate.CapacityConfig.WarmResources.TFlops = resource.MustParse("2100")
 			tfEnv.UpdateCluster(tfc)
 			Eventually(func(g Gomega) {
 				gpuNodeClaimList := &tfv1.GPUNodeClaimList{}

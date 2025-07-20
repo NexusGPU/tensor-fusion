@@ -107,6 +107,15 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
+	if !node.DeletionTimestamp.IsZero() {
+		log.Info("GPU node is being deleted, mark related GPUNode resource as destroying", "node", node.Name)
+		gpuNode.Status.Phase = tfv1.TensorFusionGPUNodePhaseDestroying
+		if err := r.Status().Update(ctx, gpuNode); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update GPU node status: %w", err)
+		}
+		return ctrl.Result{}, nil
+	}
+
 	provisioningMode := pool.Spec.NodeManagerConfig.ProvisioningMode
 	isDirectManagedMode := provisioningMode == tfv1.ProvisioningModeProvisioned
 	isManagedNode := isDirectManagedMode || provisioningMode == tfv1.ProvisioningModeKarpenter

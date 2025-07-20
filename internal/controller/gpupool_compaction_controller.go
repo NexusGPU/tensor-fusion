@@ -3,12 +3,14 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -58,6 +60,20 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 	})); err != nil {
 		return fmt.Errorf("failed to list nodes : %w", err)
 	}
+
+	// Use latest in memory data to calculate available resources
+	gpuStore, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
+	poolAvailableTFlops := lo.Reduce(lo.Values(gpuStore), func(acc int64, gpu *tfv1.GPU, _ int) int64 {
+		return acc + gpu.Status.Available.Tflops.Value()
+	}, 0)
+	poolAvailableVRAM := lo.Reduce(lo.Values(gpuStore), func(acc int64, gpu *tfv1.GPU, _ int) int64 {
+		return acc + gpu.Status.Available.Vram.Value()
+	}, 0)
+
+	poolWarmUpTFlops, _ := pool.Spec.CapacityConfig.WarmResources.TFlops.AsInt64()
+	poolWarmUpVRAM, _ := pool.Spec.CapacityConfig.WarmResources.VRAM.AsInt64()
+
+	toDeleteGPUNodes := []string{}
 	for _, gpuNode := range allNodes.Items {
 		// Skip a node that is labeled as NoDisrupt
 		if gpuNode.Labels[constants.SchedulingDoNotDisruptLabel] == constants.TrueStringValue {
@@ -65,7 +81,6 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 		}
 
 		// Check if node is empty, if not, continue
-		_, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
 		k8sNodeName := gpuNode.Name
 		if len(nodeToWorker[k8sNodeName]) != 0 {
 			// Node is in-use, should not be terminated
@@ -83,18 +98,14 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 		nodeCapTFlops, _ := gpuNode.Status.TotalTFlops.AsInt64()
 		nodeCapVRAM, _ := gpuNode.Status.TotalVRAM.AsInt64()
 
-		poolAvailableTFlops, _ := pool.Status.AvailableTFlops.AsInt64()
-		poolAvailableVRAM, _ := pool.Status.AvailableVRAM.AsInt64()
-
-		poolWarmUpTFlops, _ := pool.Spec.CapacityConfig.WarmResources.TFlops.AsInt64()
-		poolWarmUpVRAM, _ := pool.Spec.CapacityConfig.WarmResources.VRAM.AsInt64()
-
 		couldBeTerminatedByTFlops := poolAvailableTFlops-nodeCapTFlops >= poolWarmUpTFlops
 		couldBeTerminatedByVRAM := poolAvailableVRAM-nodeCapVRAM >= poolWarmUpVRAM
 
 		if couldBeTerminatedByTFlops && couldBeTerminatedByVRAM {
-			r.Recorder.Eventf(pool, corev1.EventTypeNormal,
-				"Node %s is empty and deletion won't impact warm-up capacity, start terminating it", gpuNode.Name,
+			poolAvailableTFlops -= nodeCapTFlops
+			poolAvailableVRAM -= nodeCapVRAM
+			r.Recorder.Eventf(pool, corev1.EventTypeNormal, "Compaction",
+				"Node %s is empty and deletion won't impact warm-up capacity, try terminating it", gpuNode.Name,
 			)
 			if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
 				// not managed by Kubernetes, managed by TensorFusion, safe to terminate, and finalizer will cause K8S node and related cloud resources to be deleted
@@ -106,12 +117,10 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 				}
 				// already deleting
 				if !gpuNodeClaimObj.DeletionTimestamp.IsZero() {
+					log.Info("[Warn] GPUNode deleting during compaction loop, this should not happen", "gpuNodeClaimName", gpuNodeClaimName)
 					continue
 				}
-				if err := r.Delete(ctx, gpuNodeClaimObj); err != nil {
-					log.Error(err, "delete gpuNodeClaim failed", "gpuNodeClaimName", gpuNodeClaimName)
-					continue
-				}
+				toDeleteGPUNodes = append(toDeleteGPUNodes, gpuNodeClaimName)
 			} else {
 				// managed by Kubernetes, mark it as destroying, GPUPool capacity should be reduced, and let K8S to delete it
 				if err := r.Patch(ctx, &corev1.Node{
@@ -125,10 +134,16 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 					log.Error(err, "patch idle node failed", "node", gpuNode.Name)
 					continue
 				}
+				log.Info("Mark node as deleting in gpu node compaction loop", "node", gpuNode.Name)
 			}
 		}
 	}
-	log.Info("Checking node compaction completed", "name", pool.Name)
+
+	if len(toDeleteGPUNodes) > 0 {
+		PendingDeletionGPUNodes[pool.Name] = toDeleteGPUNodes
+		log.Info("GPU node compaction completed, pending deletion nodes: ",
+			"name", pool.Name, "nodes", strings.Join(toDeleteGPUNodes, ","))
+	}
 	return nil
 }
 
@@ -170,7 +185,6 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 					// not return empty result, will continue current reconcile logic
 					if manualTriggerTime.After(time.Now().Add(-manualCompactionReconcileMaxDelay)) {
 						log.Info("Manual compaction requested", "name", req.Name)
-
 					} else {
 						needStartCompactionJob = false
 					}
@@ -182,12 +196,16 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				// skip this reconcile, wait for the next ticker
 				needStartCompactionJob = false
 			}
-
 		}
 	}
 
-	if !needStartCompactionJob {
-		return ctrl.Result{}, nil
+	if !needStartCompactionJob || len(PendingGPUNodeClaim[pool.Name]) > 0 {
+		log.Info("Skip compaction because node creating or duration not met", "name", req.Name)
+		return ctrl.Result{RequeueAfter: nextDuration}, nil
+	}
+	if len(PendingDeletionGPUNodes) > 0 {
+		log.Info("Skip compaction because node deleting in progress", "name", req.Name)
+		return ctrl.Result{RequeueAfter: nextDuration}, nil
 	}
 
 	jobStarted.Store(req.String(), time.Now())
@@ -196,10 +214,6 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		log.Info("Finished compaction check for GPUPool", "name", req.Name)
 	}()
 
-	if len(pool.Status.PendingGPUNodeClaim) > 0 {
-		log.Info("Skip compaction check util all NodeClaims are bound and GPUNode created", "name", req.Name)
-		return ctrl.Result{RequeueAfter: nextDuration}, nil
-	}
 	compactionErr := r.checkNodeCompaction(ctx, pool)
 	if compactionErr != nil {
 		return ctrl.Result{}, compactionErr

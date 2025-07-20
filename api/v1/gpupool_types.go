@@ -412,9 +412,6 @@ type GPUPoolStatus struct {
 	ProvisioningPhase ProvisioningPhase `json:"provisioningPhase,omitempty"`
 
 	// +optional
-	PendingGPUNodeClaim map[string]Resource `json:"pendingGPUNodeClaimNames,omitempty"`
-
-	// +optional
 	LastCompactionTime *metav1.Time `json:"lastCompactionTime,omitempty"`
 }
 
