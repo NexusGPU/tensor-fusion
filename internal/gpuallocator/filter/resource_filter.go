@@ -34,3 +34,7 @@ func (f *ResourceFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNames
 		return hasTflops && hasVram
 	}), nil
 }
+
+func (f *ResourceFilter) Name() string {
+	return "GPUResourceFilter"
+}

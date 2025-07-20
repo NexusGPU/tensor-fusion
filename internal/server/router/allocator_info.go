@@ -7,7 +7,9 @@ import (
 
 	"time"
 
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	"github.com/gin-gonic/gin"
 	"sigs.k8s.io/yaml"
@@ -102,6 +104,9 @@ func (r *AllocatorInfoRouter) SimulateScheduleOnePod(ctx *gin.Context) {
 	state.SetRecordPluginMetrics(false)
 	podsToActivate := framework.NewPodsToActivate()
 	state.Write(framework.PodsToActivateKey, podsToActivate)
+	state.Write(framework.StateKey(constants.SchedulerSimulationKey), &gpuallocator.SimulateSchedulingFilterDetail{
+		FilterStageDetails: []filter.FilterDetail{},
+	})
 
 	// simulate schedulingCycle non side effect part
 	fwk := r.scheduler.Profiles[pod.Spec.SchedulerName]

@@ -186,3 +186,5 @@ const GiBToBytes = 1024 * 1024 * 1024
 
 const AuthorizationHeader = "Authorization"
 const ExtraVerificationInfoPodIDKey = "authentication.kubernetes.io/pod-uid"
+
+const SchedulerSimulationKey = "simulate-schedule"

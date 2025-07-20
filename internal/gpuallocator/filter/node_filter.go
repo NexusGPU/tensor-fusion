@@ -3,9 +3,12 @@ package filter
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/samber/lo"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // SameNodeFilter ensures that the selected GPUs are from the same node
@@ -28,18 +31,13 @@ func (f *SameNodeFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNames
 		return gpus, nil
 	}
 
-	// Group GPUs by node
+	// Group GPUs by node // TODO use status rather than label FIX ME
 	gpusByNode := make(map[string][]tfv1.GPU)
 	for _, gpu := range gpus {
-		if gpu.Labels == nil {
-			continue
-		}
-
-		nodeName, exists := gpu.Labels[constants.LabelKeyOwner]
+		nodeName, exists := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		if !exists {
 			continue
 		}
-
 		gpusByNode[nodeName] = append(gpusByNode[nodeName], gpu)
 	}
 
@@ -56,5 +54,19 @@ func (f *SameNodeFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNames
 		return nil, fmt.Errorf("no node has at least %d available GPUs", f.count)
 	}
 
+	if log.FromContext(ctx).V(6).Enabled() {
+		log.FromContext(ctx).V(6).Info("Apply SameNodeMultipleGPU Filter",
+			"before", strings.Join(lo.Map(gpus, func(gpu tfv1.GPU, _ int) string {
+				return gpu.Name
+			}), ","),
+			"after", strings.Join(lo.Map(result, func(gpu tfv1.GPU, _ int) string {
+				return gpu.Name
+			}), ","), "pod", workerPodKey)
+	}
+
 	return result, nil
+}
+
+func (f *SameNodeFilter) Name() string {
+	return "SameNodeFilter"
 }

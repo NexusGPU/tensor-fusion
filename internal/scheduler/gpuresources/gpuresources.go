@@ -24,6 +24,7 @@ import (
 const Name = "GPUResourcesFit"
 const CycleStateAllocateRequest = "allocateRequest"
 const CycleStateGPUSchedulingResult = "gpuSchedulingResult"
+const SchedulerSimulationKey = "schedulerSimulation"
 
 var _ framework.PreFilterPlugin = &GPUFit{}
 var _ framework.FilterPlugin = &GPUFit{}
@@ -110,37 +111,42 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 	}
 	state.Write(CycleStateAllocateRequest, &allocRequest)
 
-	filteredGPUs, err := s.allocator.CheckQuotaAndFilter(ctx, &allocRequest)
+	simulateScheduleFilterDetail, err := state.Read(constants.SchedulerSimulationKey)
+	isSimulateSchedule := err == nil
+
+	filteredGPUs, filterDetails, err := s.allocator.CheckQuotaAndFilter(ctx, &allocRequest, isSimulateSchedule)
+
+	if isSimulateSchedule {
+		filterState := simulateScheduleFilterDetail.(*gpuallocator.SimulateSchedulingFilterDetail)
+		filterState.FilterStageDetails = filterDetails
+		state.Write(constants.SchedulerSimulationKey, filterState)
+	}
+
 	if err != nil {
 		s.logger.Error(err, "failed to check quota and filter", "pod", pod.Name)
 		return nil, framework.NewStatus(framework.Unschedulable, err.Error())
 	}
 
-	validNodeGPUs := lo.GroupBy(filteredGPUs, func(gpu tfv1.GPU) string {
+	validNodes := lo.GroupBy(filteredGPUs, func(gpu tfv1.GPU) string {
 		return gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 	})
-	// remove nodes that don't have enough GPUs that meet the request
 	nodeNames := sets.New[string]()
-	for k, v := range validNodeGPUs {
-		if len(v) < int(allocRequest.Count) {
-			delete(validNodeGPUs, k)
-		} else {
-			nodeNames.Insert(k)
-		}
+	for k := range validNodes {
+		nodeNames.Insert(k)
 	}
-	s.logger.Info("filtered valid node GPUs", "validNodeGPU count", len(validNodeGPUs), "nodeNames count", nodeNames.Len(), "pod", pod.Name)
+	s.logger.Info("filtered valid node GPUs", "nodes count", nodeNames.Len(), "pod", pod.Name)
 
 	// assign score based on different strategies
-	score := s.allocator.Score(ctx, s.cfg, allocRequest, validNodeGPUs)
+	score := s.allocator.Score(ctx, s.cfg, allocRequest, validNodes)
 
 	if s.logger.V(6).Enabled() {
-		jsonStr, _ := json.Marshal(validNodeGPUs)
+		jsonStr, _ := json.Marshal(validNodes)
 		scoreJsonStr, _ := json.Marshal(score)
 		s.logger.V(6).Info("PreFilterResult", "validNodeGPUs", jsonStr, "score", scoreJsonStr)
 	}
 
 	state.Write(CycleStateGPUSchedulingResult, &GPUSchedulingStateData{
-		NodeGPUs:          validNodeGPUs,
+		NodeGPUs:          validNodes,
 		ValidNodeGPUScore: score,
 		FinalGPUs:         []string{},
 	})

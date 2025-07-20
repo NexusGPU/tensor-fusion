@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -41,6 +42,15 @@ type Strategy interface {
 	Score(gpu tfv1.GPU) int
 
 	SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, error)
+}
+
+// When called /api/simulate-schedule with Pod yaml as body, return detailed filter details
+type SimulateSchedulingFilterDetail struct {
+	FilterStageDetails []filter.FilterDetail
+}
+
+func (p *SimulateSchedulingFilterDetail) Clone() framework.StateData {
+	return p
 }
 
 // NewStrategy creates a strategy based on the placement mode
@@ -138,7 +148,11 @@ func IsScalingQuotaExceededError(err error) bool {
 
 // Filter applies filters to a pool of GPUs based on the provided request and returns selected GPUs.
 // It does not modify the GPU resources, only filters and selects them.
-func (s *GpuAllocator) Filter(req *tfv1.AllocRequest, toFilterGPUs []tfv1.GPU) ([]tfv1.GPU, error) {
+func (s *GpuAllocator) Filter(
+	req *tfv1.AllocRequest,
+	toFilterGPUs []tfv1.GPU,
+	isSimulateSchedule bool,
+) ([]tfv1.GPU, []filter.FilterDetail, error) {
 	// Add SameNodeFilter if count > 1 to ensure GPUs are from the same node
 	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request))
 
@@ -156,12 +170,12 @@ func (s *GpuAllocator) Filter(req *tfv1.AllocRequest, toFilterGPUs []tfv1.GPU) (
 	}
 
 	// Apply the filters in sequence
-	filteredGPUs, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs)
+	filteredGPUs, filterDetails, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs, isSimulateSchedule)
 	if err != nil {
-		return nil, fmt.Errorf("apply filters: %w", err)
+		return nil, nil, fmt.Errorf("apply filters: %w", err)
 	}
 
-	return filteredGPUs, nil
+	return filteredGPUs, filterDetails, nil
 }
 
 func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []tfv1.GPU) ([]*tfv1.GPU, error) {
@@ -264,7 +278,7 @@ func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 	s.allocateMutex.Lock()
 	defer s.allocateMutex.Unlock()
 
-	filteredGPUs, err := s.CheckQuotaAndFilter(s.ctx, req)
+	filteredGPUs, _, err := s.CheckQuotaAndFilter(s.ctx, req, false)
 	if err != nil {
 		return nil, err
 	}
@@ -280,39 +294,39 @@ func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 	return s.Bind(gpuNames, req)
 }
 
-func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocRequest) ([]tfv1.GPU, error) {
+func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocRequest, isSimulateSchedule bool) ([]tfv1.GPU, []filter.FilterDetail, error) {
 	<-s.initializedCh
 	// Fast quota check (fail fast if quota insufficient)
 	if err := s.quotaStore.CheckQuotaAvailable(req.WorkloadNameNamespace.Namespace, req); err != nil {
-		return nil, fmt.Errorf("quota check failed: %w", err)
+		return nil, nil, fmt.Errorf("quota check failed: %w", err)
 	}
 
 	// Get GPUs from the pool using the in-memory store
 	if req.PoolName == "" {
-		return nil, fmt.Errorf("GPU Pool name is empty, can not find GPUs")
+		return nil, nil, fmt.Errorf("GPU Pool name is empty, can not find GPUs")
 	}
 	poolGPUs := s.listGPUsFromPool(req.PoolName)
 	if len(poolGPUs) == 0 {
-		return nil, fmt.Errorf("no gpu devices in pool %s", req.PoolName)
+		return nil, nil, fmt.Errorf("no gpu devices in pool %s", req.PoolName)
 	}
-	filteredGPUs, err := s.Filter(req, poolGPUs)
+	filteredGPUs, filterDetails, err := s.Filter(req, poolGPUs, isSimulateSchedule)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(filteredGPUs) == 0 {
-		return nil, fmt.Errorf("no gpus available or valid in pool %s after filtering", req.PoolName)
+		return nil, filterDetails, fmt.Errorf("no gpus available or valid in pool %s after filtering", req.PoolName)
 	}
 
 	if s.maxWorkerPerNode > 0 {
 		for _, gpu := range filteredGPUs {
 			nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 			if len(s.nodeWorkerStore[nodeName]) > s.maxWorkerPerNode {
-				return nil, fmt.Errorf("node %s has reached the maximum number of workers", nodeName)
+				return nil, nil, fmt.Errorf("node %s has reached the maximum number of workers", nodeName)
 			}
 		}
 	}
 
-	return filteredGPUs, nil
+	return filteredGPUs, filterDetails, nil
 }
 
 func (s *GpuAllocator) DeallocAsync(

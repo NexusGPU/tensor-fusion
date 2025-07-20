@@ -139,3 +139,7 @@ func (f *NodeAffinityFilter) filterPreferred(ctx context.Context, gpus []tfv1.GP
 	}
 	return result, nil
 }
+
+func (f *NodeAffinityFilter) Name() string {
+	return "NodeAffinityFilter"
+}

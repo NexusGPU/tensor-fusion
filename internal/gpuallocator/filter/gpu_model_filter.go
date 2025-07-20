@@ -32,3 +32,7 @@ func (f *GPUModelFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNames
 	}
 	return filtered, nil
 }
+
+func (f *GPUModelFilter) Name() string {
+	return "GPUModelFilter"
+}
