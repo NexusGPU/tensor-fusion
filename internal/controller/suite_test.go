@@ -568,7 +568,7 @@ var testEnvId int = 0
 
 func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 	GinkgoHelper()
-
+	ProvisioningToggle = true
 	GenerateKarpenterEC2NodeClass()
 
 	b.clusterKey = client.ObjectKey{
