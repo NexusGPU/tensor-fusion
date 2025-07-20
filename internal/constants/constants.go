@@ -47,9 +47,9 @@ const (
 	TensorFusionEnabledLabelKey = Domain + "/enabled"
 	InitialGPUNodeSelector      = "nvidia.com/gpu.present=true"
 
-	GPULastReportTimeAnnotationKey = Domain + "/last-sync"
-	WorkloadKey                    = Domain + "/workload"
-	GpuPoolKey                     = Domain + "/gpupool"
+	LastSyncTimeAnnotationKey = Domain + "/last-sync"
+	WorkloadKey               = Domain + "/workload"
+	GpuPoolKey                = Domain + "/gpupool"
 
 	// Annotation key constants
 	GpuCountAnnotation             = Domain + "/gpu-count"

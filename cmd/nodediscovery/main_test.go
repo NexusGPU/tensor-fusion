@@ -51,9 +51,9 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 
 	// Verify labels and annotations
 	assert.Equal(t, map[string]string{constants.LabelKeyOwner: gpuNodeName}, gpu.Labels, "GPU labels should match")
-	assert.Contains(t, gpu.Annotations, constants.GPULastReportTimeAnnotationKey,
+	assert.Contains(t, gpu.Annotations, constants.LastSyncTimeAnnotationKey,
 		"GPU annotations should contain last report time")
-	_, err := time.Parse(time.RFC3339, gpu.Annotations[constants.GPULastReportTimeAnnotationKey])
+	_, err := time.Parse(time.RFC3339, gpu.Annotations[constants.LastSyncTimeAnnotationKey])
 	assert.NoError(t, err, "Last report time annotation should be a valid RFC3339 timestamp")
 
 	// Verify the Available field does not change after the update

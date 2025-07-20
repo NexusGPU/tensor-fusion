@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -141,6 +142,20 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 
 	if len(toDeleteGPUNodes) > 0 {
 		PendingDeletionGPUNodes[pool.Name] = toDeleteGPUNodes
+		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			if err := r.Get(ctx, client.ObjectKey{Name: pool.Name}, pool); err != nil {
+				if errors.IsNotFound(err) {
+					return nil
+				}
+				return err
+			}
+			pool.Annotations[constants.LastSyncTimeAnnotationKey] = time.Now().Format(time.RFC3339)
+			return r.Patch(ctx, pool, client.Merge)
+		})
+		if err != nil {
+			PendingDeletionGPUNodes[pool.Name] = []string{}
+			return err
+		}
 		log.Info("GPU node compaction completed, pending deletion nodes: ",
 			"name", pool.Name, "nodes", strings.Join(toDeleteGPUNodes, ","))
 	}

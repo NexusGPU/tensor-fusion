@@ -933,7 +933,7 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 
 		var patch []byte
 		timeValue := time.Now().Format(time.RFC3339)
-		encodedKey := utils.EscapeJSONPointer(constants.GPULastReportTimeAnnotationKey)
+		encodedKey := utils.EscapeJSONPointer(constants.LastSyncTimeAnnotationKey)
 
 		// Check if annotations already exist
 		if node.Annotations == nil {
@@ -942,7 +942,7 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 			"op": "add",
 				"path": "/metadata/annotations",
 				"value": {
-					"` + constants.GPULastReportTimeAnnotationKey + `": "` + timeValue + `"
+					"` + constants.LastSyncTimeAnnotationKey + `": "` + timeValue + `"
 				}
 			}]`)
 		} else {

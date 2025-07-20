@@ -218,7 +218,7 @@ func createOrUpdateTensorFusionGPU(
 				constants.LabelKeyOwner: gpunode.Name,
 			}
 			gpu.Annotations = map[string]string{
-				constants.GPULastReportTimeAnnotationKey: time.Now().Format(time.RFC3339),
+				constants.LastSyncTimeAnnotationKey: time.Now().Format(time.RFC3339),
 			}
 
 			if !metav1.IsControlledBy(gpu, gpunode) {

@@ -202,7 +202,7 @@ var _ = BeforeSuite(func() {
 					Vram:   resource.MustParse("16Gi"),
 				},
 				GPUModel:     "NVIDIA A100",
-				NodeSelector: map[string]string{"node": "node-1"},
+				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-1"},
 			},
 		},
 		{
@@ -218,7 +218,7 @@ var _ = BeforeSuite(func() {
 					Vram:   resource.MustParse("32Gi"),
 				},
 				GPUModel:     "NVIDIA A100",
-				NodeSelector: map[string]string{"node": "node-1"},
+				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-1"},
 			},
 		},
 		{
@@ -234,7 +234,7 @@ var _ = BeforeSuite(func() {
 					Vram:   resource.MustParse("24Gi"),
 				},
 				GPUModel:     "NVIDIA A100",
-				NodeSelector: map[string]string{"node": "node-2"},
+				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-2"},
 			},
 		},
 		{
@@ -250,7 +250,7 @@ var _ = BeforeSuite(func() {
 					Vram:   resource.MustParse("48Gi"),
 				},
 				GPUModel:     "NVIDIA H100",
-				NodeSelector: map[string]string{"node": "node-3"},
+				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-3"},
 			},
 		},
 	}
