@@ -72,8 +72,6 @@ type GPUPoolReconciler struct {
 
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
-
-	mutex sync.Mutex
 }
 
 // First round reconcile should build correct capacity, and then check provisioning

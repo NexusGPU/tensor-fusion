@@ -479,7 +479,7 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 	// only init TSDB and evaluator in leader
 	needTSDB := enableAlert || enableAutoScale
 
-	mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+	err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		if !needTSDB {
 			return nil
 		}
@@ -498,6 +498,10 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
 		return nil
 	}))
+	if err != nil {
+		setupLog.Error(err, "unable to add time series setup to manager")
+		os.Exit(1)
+	}
 	go watchAndHandleConfigChanges(ctx, mgr, needTSDB)
 }
 
@@ -570,13 +574,18 @@ func startMetricsRecorder(
 
 func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, gpuPricingMap map[string]float64) {
 	initGpuInfos := make([]config.GpuInfo, 0)
-	utils.LoadConfigFromFile(gpuInfoConfig, &initGpuInfos)
+	err := utils.LoadConfigFromFile(gpuInfoConfig, &initGpuInfos)
+	if err != nil {
+		setupLog.Error(err, "unable to load gpuInfo file, "+
+			"file may not exist, this error will cause billing not working", "gpuInfoConfig", gpuInfoConfig)
+		return
+	}
 	*gpuInfos = initGpuInfos
 	pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, gpuInfos)
 
 	ch, err := utils.WatchConfigFileChanges(ctx, gpuInfoConfig)
 	if err != nil {
-		ctrl.Log.Error(err, "unable to watch gpuInfo file, "+
+		setupLog.Error(err, "unable to watch gpuInfo file, "+
 			"file may not exist, this error will cause billing not working", "gpuInfoConfig", gpuInfoConfig)
 		return
 	}
@@ -586,7 +595,7 @@ func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, g
 			updatedGpuInfos := make([]config.GpuInfo, 0)
 			err := yaml.Unmarshal(data, &updatedGpuInfos)
 			if err != nil {
-				ctrl.Log.Error(err, "unable to reload gpuInfo file, file is not valid yaml", "gpuInfoConfig", gpuInfoConfig)
+				setupLog.Error(err, "unable to reload gpuInfo file, file is not valid yaml", "gpuInfoConfig", gpuInfoConfig)
 				continue
 			}
 			*gpuInfos = updatedGpuInfos

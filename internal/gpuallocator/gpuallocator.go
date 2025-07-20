@@ -338,7 +338,7 @@ func (s *GpuAllocator) DeallocAsync(
 		retry := 0
 		for {
 			pod := &v1.Pod{}
-			if err := s.Client.Get(s.ctx, client.ObjectKey{Namespace: podMeta.Namespace, Name: podMeta.Name}, pod); err != nil {
+			if err := s.Get(s.ctx, client.ObjectKey{Namespace: podMeta.Namespace, Name: podMeta.Name}, pod); err != nil {
 				if errors.IsNotFound(err) {
 					s.Dealloc(workloadNameNamespace, gpus, podMeta)
 					return
