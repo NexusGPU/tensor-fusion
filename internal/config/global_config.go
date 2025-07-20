@@ -1,11 +1,27 @@
 package config
 
+import "fmt"
+
 type GlobalConfig struct {
 	MetricsTTL            string   `yaml:"metricsTTL"`
 	MetricsFormat         string   `yaml:"metricsFormat"`
 	MetricsExtraPodLabels []string `yaml:"metricsExtraPodLabels"`
 
 	AlertRules []AlertRule `yaml:"alertRules"`
+}
+
+var globalConfig *GlobalConfig
+
+func GetGlobalConfig() *GlobalConfig {
+	if globalConfig == nil {
+		fmt.Println("[WARN] trying to get global config before initialized")
+		return &GlobalConfig{}
+	}
+	return globalConfig
+}
+
+func SetGlobalConfig(config *GlobalConfig) {
+	globalConfig = config
 }
 
 const (

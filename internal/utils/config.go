@@ -70,9 +70,6 @@ func WatchConfigFileChanges(ctx context.Context, filename string) (<-chan []byte
 	if _, err := os.Stat(filename); err != nil {
 		return nil, err
 	}
-
-	lastModTime = checkFileUpdated(filename, lastModTime, ch)
-
 	go func() {
 		ticker := time.NewTicker(WatchConfigFileChangesInterval)
 		defer ticker.Stop()

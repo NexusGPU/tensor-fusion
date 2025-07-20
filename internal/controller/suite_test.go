@@ -108,6 +108,8 @@ var _ = BeforeSuite(func() {
 	// cfg is defined in this file globally.
 	cfg, err = testEnv.Start()
 
+	config.SetGlobalConfig(config.MockGlobalConfig())
+
 	// set tflops map for pricing
 	pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, config.MockGpuInfo())
 
@@ -150,7 +152,6 @@ var _ = BeforeSuite(func() {
 			"A100": 10,
 		},
 		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
-		GlobalConfig:       config.MockGlobalConfig(),
 	}
 
 	allocator = gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 150*time.Millisecond)
@@ -179,10 +180,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&GPUNodeReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Recorder:     mgr.GetEventRecorderFor("GPUNode"),
-		GlobalConfig: config.MockGlobalConfig(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("GPUNode"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 

@@ -34,8 +34,6 @@ type MetricsRecorder struct {
 
 	// Worker level unit price map, key is pool name, second level key is QoS level
 	WorkerUnitPriceMap map[string]map[string]RawBillingPricing
-
-	GlobalConfig *config.GlobalConfig
 }
 
 type ActiveNodeAndWorker struct {
@@ -190,9 +188,7 @@ func getSchedulerMetricsByPool(poolName string) (int64, int64, int64, int64) {
 // thus metrics recorder only printed in one controller instance
 // One minute interval could cause some metrics ignored or billing not accurate, known issue
 func (mr *MetricsRecorder) Start() {
-
 	ticker := time.NewTicker(time.Minute)
-
 	writer := &lumberjack.Logger{
 		Filename:   mr.MetricsOutputPath,
 		MaxSize:    100,
@@ -229,7 +225,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 	}
 
 	now := time.Now()
-	enc := NewEncoder(mr.GlobalConfig.MetricsFormat)
+	enc := NewEncoder(config.GetGlobalConfig().MetricsFormat)
 	workerMetricsLock.RLock()
 
 	activeWorkerCnt := 0
@@ -270,8 +266,8 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddTag("worker", metrics.WorkerName)
 		enc.AddTag("workload", metrics.WorkloadName)
 
-		if mr.GlobalConfig.MetricsExtraPodLabels != nil {
-			for _, label := range mr.GlobalConfig.MetricsExtraPodLabels {
+		if config.GetGlobalConfig().MetricsExtraPodLabels != nil {
+			for _, label := range config.GetGlobalConfig().MetricsExtraPodLabels {
 				enc.AddTag(label, metrics.podLabels[label])
 			}
 		}

@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/controller"
 	"github.com/NexusGPU/tensor-fusion/internal/server/router"
 	"github.com/gin-contrib/gzip"
@@ -40,6 +41,9 @@ func NewHTTPServer(
 	})
 	apiGroup.GET("/provision", func(ctx *gin.Context) {
 		controller.ProvisioningToggle = ctx.Query("enable") == "true"
+	})
+	apiGroup.GET("/config", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{"config": config.GetGlobalConfig()})
 	})
 	return r
 }

@@ -76,8 +76,11 @@ var awsCSV string
 //go:embed pricing-data/azure-gpu.csv
 var azureCSV string
 
+func init() {
+	tflopsMap = make(map[string]*config.GpuInfo, 100)
+}
+
 func SetTflopsMapAndInitGPUPricingInfo(ctx context.Context, gpuInfos *[]config.GpuInfo) {
-	tflopsMap = make(map[string]*config.GpuInfo, len(*gpuInfos)*2)
 	if gpuInfos == nil {
 		log.FromContext(ctx).Info("gpuInfos is empty, check public-gpu-info config file")
 		return
@@ -87,13 +90,13 @@ func SetTflopsMapAndInitGPUPricingInfo(ctx context.Context, gpuInfos *[]config.G
 		tflopsMap[gpuInfo.Model] = &gpuInfo
 	}
 
-	globalAWSGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
-	globalAzureGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
-
-	loadCSVInstanceDataFromPath(context.Background(), []byte(awsCSV), providerAWS)
-	loadCSVInstanceDataFromPath(context.Background(), []byte(azureCSV), providerAzure)
-
 	initOnce.Do(func() {
+		globalAWSGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
+		globalAzureGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
+
+		loadCSVInstanceDataFromPath(context.Background(), []byte(awsCSV), providerAWS)
+		loadCSVInstanceDataFromPath(context.Background(), []byte(azureCSV), providerAzure)
+
 		close(readyCh)
 	})
 }
@@ -168,7 +171,7 @@ func loadCSVInstanceDataFromPath(ctx context.Context, data []byte, provider stri
 		globalAzureGPUInstanceData = localAzureGPUInstanceData
 	}
 
-	log.FromContext(ctx).Info("Loaded GPU instance types", "count", processedCount, "provider", provider)
+	log.FromContext(ctx).V(6).Info("Loaded GPU instance types", "count", processedCount, "provider", provider)
 }
 
 // parseAWSRecord parses a single AWS CSV record

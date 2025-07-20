@@ -49,8 +49,6 @@ type GPUNodeReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
-
-	GlobalConfig *config.GlobalConfig
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch;create;update;patch;delete
@@ -371,10 +369,10 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 						Value: string(cfg),
 					}, corev1.EnvVar{
 						Name:  constants.HypervisorMetricsFormatEnv,
-						Value: r.GlobalConfig.MetricsFormat,
+						Value: config.GetGlobalConfig().MetricsFormat,
 					}, corev1.EnvVar{
 						Name:  constants.HypervisorMetricsExtraLabelsEnv,
-						Value: strings.Join(r.GlobalConfig.MetricsExtraPodLabels, ","),
+						Value: strings.Join(config.GetGlobalConfig().MetricsExtraPodLabels, ","),
 					})
 				}
 			}
