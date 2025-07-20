@@ -176,6 +176,9 @@ func TestSameNodeFilter(t *testing.T) {
 					Tflops: resource.MustParse("10"),
 					Vram:   resource.MustParse("40Gi"),
 				},
+				NodeSelector: map[string]string{
+					constants.KubernetesHostNameLabel: "node-1",
+				},
 			},
 		},
 		{
@@ -190,6 +193,9 @@ func TestSameNodeFilter(t *testing.T) {
 				Available: &tfv1.Resource{
 					Tflops: resource.MustParse("10"),
 					Vram:   resource.MustParse("40Gi"),
+				},
+				NodeSelector: map[string]string{
+					constants.KubernetesHostNameLabel: "node-1",
 				},
 			},
 		},
@@ -206,6 +212,9 @@ func TestSameNodeFilter(t *testing.T) {
 					Tflops: resource.MustParse("10"),
 					Vram:   resource.MustParse("40Gi"),
 				},
+				NodeSelector: map[string]string{
+					constants.KubernetesHostNameLabel: "node-2",
+				},
 			},
 		},
 		{
@@ -221,6 +230,9 @@ func TestSameNodeFilter(t *testing.T) {
 					Tflops: resource.MustParse("10"),
 					Vram:   resource.MustParse("40Gi"),
 				},
+				NodeSelector: map[string]string{
+					constants.KubernetesHostNameLabel: "node-2",
+				},
 			},
 		},
 		{
@@ -235,6 +247,9 @@ func TestSameNodeFilter(t *testing.T) {
 				Available: &tfv1.Resource{
 					Tflops: resource.MustParse("10"),
 					Vram:   resource.MustParse("40Gi"),
+				},
+				NodeSelector: map[string]string{
+					constants.KubernetesHostNameLabel: "node-3",
 				},
 			},
 		},
@@ -264,6 +279,9 @@ func TestSameNodeFilter(t *testing.T) {
 				Available: &tfv1.Resource{
 					Tflops: resource.MustParse("10"),
 					Vram:   resource.MustParse("40Gi"),
+				},
+				NodeSelector: map[string]string{
+					"test-label": "value",
 				},
 			},
 		},

@@ -69,6 +69,9 @@ func createAvailableGPU(name string, tflops, vram int64) tfv1.GPU {
 				Vram:   *resource.NewQuantity(vram, resource.BinarySI),
 			},
 			RunningApps: []*tfv1.RunningAppDetail{},
+			NodeSelector: map[string]string{
+				constants.KubernetesHostNameLabel: "node1",
+			},
 		},
 	}
 }
