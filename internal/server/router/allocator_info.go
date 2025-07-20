@@ -117,10 +117,12 @@ func (r *AllocatorInfoRouter) SimulateScheduleOnePod(ctx *gin.Context) {
 	}
 	scheduleResult, err := r.scheduler.SchedulePod(ctx, fwk, state, pod)
 	gpuCycleState, _ := state.Read(gpuresources.CycleStateGPUSchedulingResult)
+	simulateSchedulingFilterDetail, _ := state.Read(framework.StateKey(constants.SchedulerSimulationKey))
 	if err != nil {
 		if fitError, ok := err.(*framework.FitError); ok {
 			ctx.JSON(http.StatusOK, gin.H{
 				"scheduleResult": scheduleResult,
+				"filterDetail":   simulateSchedulingFilterDetail,
 				"error": gin.H{
 					"numAllNodes": fitError.NumAllNodes,
 					"diagnosis":   fitError.Diagnosis,
@@ -133,6 +135,7 @@ func (r *AllocatorInfoRouter) SimulateScheduleOnePod(ctx *gin.Context) {
 	}
 	ctx.JSON(http.StatusOK, gin.H{
 		"scheduleResult":    scheduleResult,
+		"filterDetail":      simulateSchedulingFilterDetail,
 		"error":             err,
 		"cycleState":        state,
 		"gpuSchedulerState": gpuCycleState,

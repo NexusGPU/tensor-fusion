@@ -104,32 +104,13 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// TODO: if phase is destroying, stop all existing workers and hypervisors, stop time series flow aggregations
 	shouldReturn, err := utils.HandleFinalizer(ctx, pool, r.Client, func(ctx context.Context, pool *tfv1.GPUPool) (bool, error) {
-		log.Info("TensorFusionGPUPool is being deleted", "name", pool.Name)
-		if pool.Status.Phase != tfv1.TensorFusionPoolPhaseDestroying {
-			pool.Status.Phase = tfv1.TensorFusionPoolPhaseDestroying
-			if err := r.Status().Update(ctx, pool); err != nil {
-				return false, err
-			}
-		}
-
-		// TODO, Pool deletion is complex business logic, can not simply check node existence
-		// GPUNode always owned by Kubernetes Node, need change HandleFinalizer of gpunode_controller
-		// make sure all workloads and workers are deleted, then delete pool
-
-		// check if all nodes has been deleted
-		nodes := &tfv1.GPUNodeList{}
-		if err := r.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
-			return false, err
-		}
-		return len(nodes.Items) == 0, nil
+		return r.cleanUpPool(ctx, pool)
 	})
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if shouldReturn || !pool.DeletionTimestamp.IsZero() {
-		// requeue for next loop
-		// we need manually requeue cause GenerationChangedPredicate
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{}, nil
 	}
 
 	if err := r.reconcilePoolCurrentCapacityAndReadiness(ctx, pool); err != nil {
@@ -189,7 +170,6 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 		}
 	}
-
 	return ctrl.Result{}, nil
 }
 
@@ -406,6 +386,38 @@ func (r *GPUPoolReconciler) reconcilePoolComponents(ctx context.Context, pool *t
 	}
 
 	return ctrlResult, utilerrors.NewAggregate(errs)
+}
+
+func (r *GPUPoolReconciler) cleanUpPool(ctx context.Context, pool *tfv1.GPUPool) (bool, error) {
+	log := log.FromContext(ctx)
+	log.Info("TensorFusionGPUPool is being deleted", "name", pool.Name)
+	if pool.Status.Phase != tfv1.TensorFusionPoolPhaseDestroying {
+		pool.Status.Phase = tfv1.TensorFusionPoolPhaseDestroying
+		if err := r.Status().Update(ctx, pool); err != nil {
+			return false, err
+		}
+	}
+
+	claims := &tfv1.GPUNodeClaimList{}
+	if err := r.List(ctx, claims, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
+		return false, err
+	}
+	if len(claims.Items) > 0 {
+		for _, claim := range claims.Items {
+			if claim.DeletionTimestamp.IsZero() {
+				log.Info("Pool deleting, cleanup GPUNodeClaim", "name", claim.Name)
+				if err := r.Delete(ctx, &claim); err != nil {
+					return false, err
+				}
+			}
+		}
+	}
+
+	nodes := &tfv1.GPUNodeList{}
+	if err := r.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
+		return false, err
+	}
+	return len(nodes.Items) == 0, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

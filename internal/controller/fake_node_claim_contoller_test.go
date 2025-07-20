@@ -106,6 +106,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 			gpuNodeStatus, err := provider.CreateNode(ctx, &tfv1.GPUNodeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: testNodeName,
+					UID:  "mock-uid",
 				},
 				Spec: nodeCreationParam,
 			})
@@ -215,6 +216,7 @@ var _ = Describe("FakeNodeClaimController", func() {
 			gpuNodeStatus, err := provider.CreateNode(ctx, &tfv1.GPUNodeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: customNodeName,
+					UID:  "mock-uid",
 				},
 				Spec: nodeCreationParam,
 			})
