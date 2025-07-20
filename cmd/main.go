@@ -322,7 +322,7 @@ func startCustomResourceController(
 		Scheme:          mgr.GetScheme(),
 		Recorder:        mgr.GetEventRecorderFor("TensorFusionCluster"),
 		MetricsRecorder: &metricsRecorder,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(mgr, true); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionCluster")
 		os.Exit(1)
 	}
@@ -332,7 +332,7 @@ func startCustomResourceController(
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("GPUPool"),
 	}
-	if err = GPUPoolReconciler.SetupWithManager(mgr); err != nil {
+	if err = GPUPoolReconciler.SetupWithManager(mgr, true); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUPool")
 		os.Exit(1)
 	}

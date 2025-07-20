@@ -169,14 +169,14 @@ var _ = BeforeSuite(func() {
 		Scheme:          mgr.GetScheme(),
 		Recorder:        mgr.GetEventRecorderFor("TensorFusionCluster"),
 		MetricsRecorder: metricsRecorder,
-	}).SetupWithManager(mgr)
+	}).SetupWithManager(mgr, false)
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&GPUPoolReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("GPUPool"),
-	}).SetupWithManager(mgr)
+	}).SetupWithManager(mgr, false)
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&GPUNodeReconciler{

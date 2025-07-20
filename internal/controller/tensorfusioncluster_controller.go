@@ -416,23 +416,27 @@ func (r *TensorFusionClusterReconciler) updateTFClusterStatus(ctx context.Contex
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *TensorFusionClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{
-			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(
-				workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-					constants.LowFrequencyObjFailureInitialDelay,
-					constants.LowFrequencyObjFailureMaxDelay,
-				),
-				&workqueue.TypedBucketRateLimiter[reconcile.Request]{
-					Limiter: rate.NewLimiter(rate.Limit(
-						constants.LowFrequencyObjFailureMaxRPS),
-						constants.LowFrequencyObjFailureMaxBurst),
-				},
+func (r *TensorFusionClusterReconciler) SetupWithManager(mgr ctrl.Manager, addLimiter bool) error {
+	rateLimiterOption := controller.Options{
+		RateLimiter: workqueue.NewTypedMaxOfRateLimiter(
+			workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
+				constants.LowFrequencyObjFailureInitialDelay,
+				constants.LowFrequencyObjFailureMaxDelay,
 			),
-			MaxConcurrentReconciles: constants.LowFrequencyObjFailureConcurrentReconcile,
-		}).
-		For(&tfv1.TensorFusionCluster{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+			&workqueue.TypedBucketRateLimiter[reconcile.Request]{
+				Limiter: rate.NewLimiter(rate.Limit(
+					constants.LowFrequencyObjFailureMaxRPS),
+					constants.LowFrequencyObjFailureMaxBurst),
+			},
+		),
+		MaxConcurrentReconciles: constants.LowFrequencyObjFailureConcurrentReconcile,
+	}
+
+	ctr := ctrl.NewControllerManagedBy(mgr)
+	if addLimiter {
+		ctr = ctr.WithOptions(rateLimiterOption)
+	}
+	return ctr.For(&tfv1.TensorFusionCluster{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("tensorfusioncluster").
 		Owns(&tfv1.GPUPool{}).
 		Complete(r)

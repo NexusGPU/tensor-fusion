@@ -63,7 +63,7 @@ func (fr *FilterRegistry) Apply(
 ) ([]tfv1.GPU, []FilterDetail, error) {
 	log := log.FromContext(ctx)
 	if len(gpus) == 0 {
-		log.Info("FilterRegistry", "no GPUs to filter", "workerPodKey", workerPodKey)
+		log.Info("FilterRegistry - no GPUs to filter", "workerPodKey", workerPodKey)
 		return gpus, nil, nil
 	}
 
@@ -82,7 +82,7 @@ func (fr *FilterRegistry) Apply(
 
 		// If no GPUs left after parent filtering, return early
 		if len(filteredGPUs) == 0 {
-			log.Info("FilterRegistry", "no GPUs left after parent filtering", "workerPodKey", workerPodKey)
+			log.Info("FilterRegistry - no GPUs left after parent filtering", "workerPodKey", workerPodKey)
 			return filteredGPUs, filterDetails, nil
 		}
 	}
@@ -107,12 +107,12 @@ func (fr *FilterRegistry) Apply(
 
 		// If no GPUs left after filtering, return early
 		if len(filteredGPUs) == 0 {
-			log.Info("FilterRegistry", "no GPUs left after filtering", "workerPodKey", workerPodKey)
+			log.Info("FilterRegistry - no GPUs left after filtering", "workerPodKey", workerPodKey)
 			return filteredGPUs, filterDetails, nil
 		}
 	}
 
-	log.Info("FilterRegistry", "filtered GPUs", "workerPodKey", workerPodKey,
+	log.Info("FilterRegistry - filtered GPUs", "workerPodKey", workerPodKey,
 		"before", len(gpus), "after", len(filteredGPUs))
 	return filteredGPUs, filterDetails, nil
 }

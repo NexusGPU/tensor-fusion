@@ -419,23 +419,26 @@ func (r *GPUPoolReconciler) cleanUpPool(ctx context.Context, pool *tfv1.GPUPool)
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *GPUPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{
-			RateLimiter: workqueue.NewTypedMaxOfRateLimiter(
-				workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-					constants.LowFrequencyObjFailureInitialDelay,
-					constants.LowFrequencyObjFailureMaxDelay,
-				),
-				&workqueue.TypedBucketRateLimiter[reconcile.Request]{
-					Limiter: rate.NewLimiter(rate.Limit(
-						constants.LowFrequencyObjFailureMaxRPS),
-						constants.LowFrequencyObjFailureMaxBurst),
-				},
+func (r *GPUPoolReconciler) SetupWithManager(mgr ctrl.Manager, addLimiter bool) error {
+	rateLimiterOption := controller.Options{
+		RateLimiter: workqueue.NewTypedMaxOfRateLimiter(
+			workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
+				constants.LowFrequencyObjFailureInitialDelay,
+				constants.LowFrequencyObjFailureMaxDelay,
 			),
-			MaxConcurrentReconciles: constants.LowFrequencyObjFailureConcurrentReconcile,
-		}).
-		For(&tfv1.GPUPool{}).
+			&workqueue.TypedBucketRateLimiter[reconcile.Request]{
+				Limiter: rate.NewLimiter(rate.Limit(
+					constants.LowFrequencyObjFailureMaxRPS),
+					constants.LowFrequencyObjFailureMaxBurst),
+			},
+		),
+		MaxConcurrentReconciles: constants.LowFrequencyObjFailureConcurrentReconcile,
+	}
+	ctr := ctrl.NewControllerManagedBy(mgr)
+	if addLimiter {
+		ctr = ctr.WithOptions(rateLimiterOption)
+	}
+	return ctr.For(&tfv1.GPUPool{}).
 		Named("gpupool").
 		Owns(&tfv1.GPUNode{}).
 		Owns(&tfv1.GPUNodeClaim{}).
