@@ -146,6 +146,89 @@ spec:
                           the upper bound on vram recommendation. Default: 0.95'
                         type: string
                     type: object
+                  cronScalers:
+                    description: CronScalers defines a list of CronScaler configurations
+                      used to schedule scaling actions based on cron expressions.
+                    items:
+                      description: |-
+                        CronScaler defines the configuration for scaling resources based on a cron schedule.
+                        It allows enabling/disabling the scaler, specifying the time window for scaling,
+                        and configuring the desired resources and replicas during the scheduled period.
+                      properties:
+                        desiredReplicas:
+                          description: DesiredReplicas is the target number of replicas
+                            during the schedule.
+                          format: int32
+                          type: integer
+                        desiredResources:
+                          description: DesiredResources specifies the target resources
+                            to scale to during the schedule.
+                          properties:
+                            limits:
+                              properties:
+                                tflops:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                vram:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              required:
+                              - tflops
+                              - vram
+                              type: object
+                            requests:
+                              properties:
+                                tflops:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                vram:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              required:
+                              - tflops
+                              - vram
+                              type: object
+                          required:
+                          - limits
+                          - requests
+                          type: object
+                        enable:
+                          description: Enable specifies whether the cron scaler is
+                            enabled.
+                          type: boolean
+                        end:
+                          description: End is the end time for the scaling schedule,
+                            in cron format.
+                          type: string
+                        name:
+                          description: Name is the identifier for the cron scaler.
+                          type: string
+                        replicasMultiplier:
+                          description: ReplicasMultiplier is a string representing
+                            the multiplier to apply to replicas.
+                          type: string
+                        resourceMultiplier:
+                          description: ResourceMultiplier is a string representing
+                            the multiplier to apply to resources.
+                          type: string
+                        start:
+                          description: Start is the start time for the scaling schedule,
+                            in cron format.
+                          type: string
+                      type: object
+                    type: array
                 type: object
               gpuCount:
                 description: The number of GPUs to be used by the workload, default
