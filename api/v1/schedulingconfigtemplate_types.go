@@ -93,6 +93,31 @@ type AutoScalingConfig struct {
 	// layer 2 horizontal auto-scaling, scale up to more GPU cards if max limits threshold hit
 	// HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
 	AutoSetReplicas AutoSetReplicas `json:"autoSetReplicas,omitempty"`
+
+	// CronScalers defines a list of CronScaler configurations used to schedule scaling actions based on cron expressions.
+	CronScalers []CronScaler `json:"cronScalers,omitempty"`
+}
+
+// CronScaler defines the configuration for scaling resources based on a cron schedule.
+// It allows enabling/disabling the scaler, specifying the time window for scaling,
+// and configuring the desired resources and replicas during the scheduled period.
+type CronScaler struct {
+	// Enable specifies whether the cron scaler is enabled.
+	Enable *bool `json:"enable,omitempty"`
+	// Name is the identifier for the cron scaler.
+	Name string `json:"name,omitempty"`
+	// Start is the start time for the scaling schedule, in cron format.
+	Start string `json:"start,omitempty"`
+	// End is the end time for the scaling schedule, in cron format.
+	End string `json:"end,omitempty"`
+	// DesiredResources specifies the target resources to scale to during the schedule.
+	DesiredResources Resources `json:"desiredResources,omitempty"`
+	// ResourceMultiplier is a string representing the multiplier to apply to resources.
+	ResourceMultiplier string `json:"resourceMultiplier,omitempty"`
+	// DesiredReplicas is the target number of replicas during the schedule.
+	DesiredReplicas *int32 `json:"desiredReplicas,omitempty"`
+	// ReplicasMultiplier is a string representing the multiplier to apply to replicas.
+	ReplicasMultiplier string `json:"replicasMultiplier,omitempty"`
 }
 
 type AutoSetResources struct {
