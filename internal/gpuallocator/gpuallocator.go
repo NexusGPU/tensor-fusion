@@ -510,11 +510,14 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 	return tfv1.Resource{}, nil
 }
 
-func (s *GpuAllocator) ListNonTensorFusionNodes() sets.Set[string] {
+func (s *GpuAllocator) ListNonUsingNodes() sets.Set[string] {
 	set := sets.New[string]()
-	for _, gpu := range s.gpuStore {
-		if gpu.Status.UsedBy != tfv1.UsedByTensorFusion {
-			set.Insert(gpu.Status.NodeSelector[constants.KubernetesHostNameLabel])
+	for nodeName, gpuNames := range s.nodeWorkerStore {
+		// If using by TF, the node can not be used by original scheduler
+		// If using by other scheduler, won't record as TF worker, thus the map is empty
+		// Return non using nodes can ensure original scheduler not conflict with TF
+		if len(gpuNames) == 0 {
+			set.Insert(nodeName)
 		}
 	}
 	return set

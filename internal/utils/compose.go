@@ -9,6 +9,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	constants "github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/ptr"
@@ -202,10 +203,50 @@ func AddTFDefaultClientConfBeforePatch(
 
 	if tfInfo.Profile.IsLocalGPU {
 		for _, injectContainerIndex := range injectContainerIndices {
-			pod.Spec.Containers[injectContainerIndex].Env = append(pod.Spec.Containers[injectContainerIndex].Env, v1.EnvVar{
-				Name:  constants.NvidiaVisibleAllDeviceEnv,
-				Value: constants.NvidiaVisibleAllDeviceValue,
-			}, v1.EnvVar{
+			envList := pod.Spec.Containers[injectContainerIndex].Env
+			if !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
+				return env.Name == constants.PodNamespaceEnv
+			}) {
+				envList = append(envList, v1.EnvVar{
+					Name: constants.PodNamespaceEnv,
+					ValueFrom: &v1.EnvVarSource{
+						FieldRef: &v1.ObjectFieldSelector{
+							FieldPath: constants.NamespaceFieldRef,
+						},
+					},
+				})
+			}
+			if !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
+				return env.Name == constants.PodNameEnv
+			}) {
+				envList = append(envList, v1.EnvVar{
+					Name: constants.PodNameEnv,
+					ValueFrom: &v1.EnvVarSource{
+						FieldRef: &v1.ObjectFieldSelector{
+							FieldPath: constants.ResourceNameFieldRef,
+						},
+					},
+				})
+			}
+			if !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
+				return env.Name == constants.ContainerNameEnv
+			}) {
+				envList = append(envList, v1.EnvVar{
+					Name:  constants.ContainerNameEnv,
+					Value: pod.Spec.Containers[injectContainerIndex].Name,
+				})
+			}
+
+			if !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
+				return env.Name == constants.NvidiaVisibleAllDeviceEnv
+			}) {
+				envList = append(envList, v1.EnvVar{
+					Name:  constants.NvidiaVisibleAllDeviceEnv,
+					Value: constants.NvidiaVisibleAllDeviceValue,
+				})
+			}
+
+			envList = append(envList, v1.EnvVar{
 				Name:  constants.RealNvmlLibPathEnv,
 				Value: constants.RealNvmlLibPathValue,
 			}, v1.EnvVar{
@@ -222,23 +263,6 @@ func AddTFDefaultClientConfBeforePatch(
 				Name:  constants.HypervisorPortEnv,
 				Value: strconv.Itoa(int(getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor))),
 			}, v1.EnvVar{
-				Name: constants.PodNamespaceEnv,
-				ValueFrom: &v1.EnvVarSource{
-					FieldRef: &v1.ObjectFieldSelector{
-						FieldPath: constants.NamespaceFieldRef,
-					},
-				},
-			}, v1.EnvVar{
-				Name: constants.PodNameEnv,
-				ValueFrom: &v1.EnvVarSource{
-					FieldRef: &v1.ObjectFieldSelector{
-						FieldPath: constants.ResourceNameFieldRef,
-					},
-				},
-			}, v1.EnvVar{
-				Name:  constants.ContainerNameEnv,
-				Value: pod.Spec.Containers[injectContainerIndex].Name,
-			}, v1.EnvVar{
 				Name:  constants.NGPUPathEnv,
 				Value: constants.NGPUPathValue,
 			})
@@ -253,13 +277,15 @@ func AddTFDefaultClientConfBeforePatch(
 				features := strings.Split(pod.Annotations[constants.DisableFeaturesAnnotation], ",")
 				for _, feature := range features {
 					if feat, ok := featureShortcutMap[feature]; ok {
-						pod.Spec.Containers[injectContainerIndex].Env = append(pod.Spec.Containers[injectContainerIndex].Env, v1.EnvVar{
+						envList = append(envList, v1.EnvVar{
 							Name:  feat.EnvName,
 							Value: feat.EnvValue,
 						})
 					}
 				}
 			}
+
+			pod.Spec.Containers[injectContainerIndex].Env = envList
 		}
 	}
 }

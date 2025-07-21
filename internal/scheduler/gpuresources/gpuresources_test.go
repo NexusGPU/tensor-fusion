@@ -356,13 +356,13 @@ func (s *GPUResourcesSuite) TestPreFilterForNonTensorFusionPod() {
 			name:           "pod requires 1 GPU, enough capacity",
 			pod:            s.makeNonTensorFusionPod("p1", 1),
 			expectedStatus: framework.Success,
-			expectedNodes:  "node-c",
+			expectedNodes:  "node-b node-c",
 		},
 		{
 			name:           "pod requires 2 GPU, enough capacity",
 			pod:            s.makeNonTensorFusionPod("p1", 2),
 			expectedStatus: framework.Success,
-			expectedNodes:  "node-c",
+			expectedNodes:  "node-b node-c",
 		},
 	}
 

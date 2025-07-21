@@ -92,7 +92,7 @@ func (s *GPUFit) Name() string {
 func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
 	// Handle progressive migration case
 	if utils.IsProgressiveMigration() && utils.HasGPUResourceRequest(pod) {
-		nodeNames := s.allocator.ListNonTensorFusionNodes()
+		nodeNames := s.allocator.ListNonUsingNodes()
 		return &framework.PreFilterResult{
 			NodeNames: nodeNames,
 		}, framework.NewStatus(framework.Success, "progressive migration for native resources claim")
