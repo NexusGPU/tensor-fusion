@@ -161,10 +161,12 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Expect(originalPodTemplateHash).NotTo(BeEmpty())
 
 			workload := &tfv1.TensorFusionWorkload{}
-			Expect(k8sClient.Get(ctx, key, workload)).To(Succeed())
-			workload.Spec.Resources.Limits.Tflops = resource.MustParse("30")
-			workload.Spec.Resources.Limits.Vram = resource.MustParse("24Gi")
-			Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, key, workload)).To(Succeed())
+				workload.Spec.Resources.Limits.Tflops = resource.MustParse("30")
+				workload.Spec.Resources.Limits.Vram = resource.MustParse("24Gi")
+				g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+			}).Should(Succeed())
 
 			Eventually(func(g Gomega) {
 				g.Expect(k8sClient.List(ctx, podList,
