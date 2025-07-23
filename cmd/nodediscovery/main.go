@@ -250,20 +250,16 @@ func createOrUpdateTensorFusionGPU(
 		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpu), gpu); err != nil {
 			return err
 		}
-
 		newStatus := tfv1.GPUStatus{
-			Phase: tfv1.TensorFusionGPUPhaseRunning,
 			Capacity: &tfv1.Resource{
 				Vram:   resource.MustParse(fmt.Sprintf("%dKi", memInfo.Total/1024)),
 				Tflops: tflops,
 			},
-			UsedBy:   tfv1.UsedByTensorFusion,
 			UUID:     uuid,
 			GPUModel: deviceName,
 			NodeSelector: map[string]string{
 				constants.KubernetesHostNameLabel: k8sNodeName,
 			},
-			RunningApps: []*tfv1.RunningAppDetail{},
 		}
 
 		if gpu.Status.Available == nil {
@@ -272,7 +268,7 @@ func createOrUpdateTensorFusionGPU(
 			newStatus.Available = gpu.Status.Available
 		}
 		gpu.Status = newStatus
-		return k8sClient.Status().Update(ctx, gpu)
+		return k8sClient.Status().Patch(ctx, gpu, client.Merge)
 	})
 	if err != nil {
 		ctrl.Log.Error(err, "failed to update status of GPU after retries", "gpu", gpu)
