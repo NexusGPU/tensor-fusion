@@ -265,6 +265,9 @@ func createOrUpdateTensorFusionGPU(
 		if gpu.Status.Available == nil {
 			gpu.Status.Available = gpu.Status.Capacity.DeepCopy()
 		}
+		if gpu.Status.UsedBy == "" {
+			gpu.Status.UsedBy = tfv1.UsedByTensorFusion
+		}
 		return k8sClient.Status().Patch(ctx, gpu, client.Merge)
 	})
 	if err != nil {
