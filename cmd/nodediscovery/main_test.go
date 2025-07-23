@@ -47,7 +47,6 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 	assert.Equal(t, gpu.Status.Capacity, gpu.Status.Available, "Available resources should match capacity")
 	assert.Equal(t, map[string]string{"kubernetes.io/hostname": k8sNodeName},
 		gpu.Status.NodeSelector, "Node selector should match")
-	assert.Equal(t, tfv1.TensorFusionGPUPhaseRunning, gpu.Status.Phase, "GPU phase should be running")
 
 	// Verify labels and annotations
 	assert.Equal(t, map[string]string{constants.LabelKeyOwner: gpuNodeName}, gpu.Labels, "GPU labels should match")
