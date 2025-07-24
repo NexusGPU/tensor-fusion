@@ -216,9 +216,11 @@ func AddTFDefaultClientConfBeforePatch(
 			pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
 				v1.VolumeMount{
-					Name:        constants.DataVolumeName,
-					MountPath:   constants.SharedMemDeviceName + constants.TFLibsVolumeMountPath,
-					SubPathExpr: constants.TFDataPathWorkerExpr,
+					Name:      constants.DataVolumeName,
+					MountPath: constants.SharedMemDeviceName,
+					SubPath:   constants.SharedMemMountSubPath,
+					//  + constants.TFLibsVolumeMountPath, SubPathExpr:      constants.TFDataPathWorkerExpr,
+					MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 				})
 
 			envList := pod.Spec.Containers[injectContainerIndex].Env
@@ -591,9 +593,13 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 	spec.Containers[0].VolumeMounts = append(
 		spec.Containers[0].VolumeMounts,
 		v1.VolumeMount{
-			Name:        constants.DataVolumeName,
-			MountPath:   constants.SharedMemDeviceName + constants.TFLibsVolumeMountPath,
-			SubPathExpr: constants.TFDataPathWorkerExpr,
+			Name:      constants.DataVolumeName,
+			MountPath: constants.SharedMemDeviceName,
+			// TODO not working.
+			// + constants.TFLibsVolumeMountPath
+			// SubPathExpr: constants.TFDataPathWorkerExpr,
+			SubPath:          constants.SharedMemMountSubPath,
+			MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 		})
 	spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
 		Name:  constants.NvidiaVisibleAllDeviceEnv,
