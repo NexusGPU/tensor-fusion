@@ -162,6 +162,7 @@ const (
 )
 
 const TFDataPath = "/run/tensor-fusion"
+const TFDataPathWorkerExpr = "shm/$(POD_NAMESPACE)/$(POD_NAME)"
 const DataVolumeName = "tf-data"
 const TensorFusionPoolManualCompaction = Domain + "/manual-compaction"
 const AlertJobName = "tensor-fusion"

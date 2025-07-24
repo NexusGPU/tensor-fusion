@@ -202,7 +202,25 @@ func AddTFDefaultClientConfBeforePatch(
 	}
 
 	if tfInfo.Profile.IsLocalGPU {
+		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+			Name: constants.DataVolumeName,
+			VolumeSource: v1.VolumeSource{
+				HostPath: &v1.HostPathVolumeSource{
+					Path: constants.TFDataPath,
+					Type: ptr.To(v1.HostPathDirectoryOrCreate),
+				},
+			},
+		})
+
 		for _, injectContainerIndex := range injectContainerIndices {
+			pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
+				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+				v1.VolumeMount{
+					Name:        constants.DataVolumeName,
+					MountPath:   constants.SharedMemDeviceName + constants.TFLibsVolumeMountPath,
+					SubPathExpr: constants.TFDataPathWorkerExpr,
+				})
+
 			envList := pod.Spec.Containers[injectContainerIndex].Env
 			if !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
 				return env.Name == constants.PodNamespaceEnv
@@ -266,11 +284,6 @@ func AddTFDefaultClientConfBeforePatch(
 				Name:  constants.NGPUPathEnv,
 				Value: constants.NGPUPathValue,
 			})
-
-			if len(pod.Spec.Containers[injectContainerIndex].Resources.Limits) == 0 {
-				pod.Spec.Containers[injectContainerIndex].Resources.Limits = v1.ResourceList{}
-			}
-			pod.Spec.Containers[injectContainerIndex].Resources.Limits[constants.SharedMemResName] = resource.MustParse("1")
 
 			// disable GPU limiter killer switch
 			if pod.Annotations[constants.DisableFeaturesAnnotation] != "" {
@@ -575,6 +588,13 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 	if workerConfig.Image != "" {
 		spec.Containers[0].Image = workerConfig.Image
 	}
+	spec.Containers[0].VolumeMounts = append(
+		spec.Containers[0].VolumeMounts,
+		v1.VolumeMount{
+			Name:        constants.DataVolumeName,
+			MountPath:   constants.SharedMemDeviceName + constants.TFLibsVolumeMountPath,
+			SubPathExpr: constants.TFDataPathWorkerExpr,
+		})
 	spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
 		Name:  constants.NvidiaVisibleAllDeviceEnv,
 		Value: constants.NvidiaVisibleAllDeviceValue,
@@ -609,11 +629,6 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 			},
 		},
 	})
-
-	if len(spec.Containers[0].Resources.Limits) == 0 {
-		spec.Containers[0].Resources.Limits = v1.ResourceList{}
-	}
-	spec.Containers[0].Resources.Limits[constants.SharedMemResName] = resource.MustParse("1")
 
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{

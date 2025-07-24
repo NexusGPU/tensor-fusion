@@ -93,7 +93,6 @@ const (
 	LdPreloadEnv     = "LD_PRELOAD"
 	LdPreloadLimiter = "/home/app/libcuda_limiter.so"
 
-	SharedMemResName      = "tensor-fusion.ai/shm"
 	SharedMemDeviceName   = "/dev/shm"
 	SharedMemMountSubPath = "shm"
 
