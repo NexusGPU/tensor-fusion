@@ -111,14 +111,22 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 			if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
 				// not managed by Kubernetes, managed by TensorFusion, safe to terminate, and finalizer will cause K8S node and related cloud resources to be deleted
 				gpuNodeClaimName := gpuNode.Labels[constants.ProvisionerLabelKey]
+				if gpuNodeClaimName == "" {
+					log.Info("skip existing nodes managed by other controller when compaction", "node", gpuNode.Name)
+					continue
+				}
 				gpuNodeClaimObj := &tfv1.GPUNodeClaim{}
 				if err := r.Get(ctx, client.ObjectKey{Name: gpuNodeClaimName}, gpuNodeClaimObj); err != nil {
+					if errors.IsNotFound(err) {
+						log.Info("skip existing nodes managed by other controller when compaction", "node", gpuNode.Name)
+						continue
+					}
 					log.Error(err, "get gpuNodeClaim failed", "gpuNodeClaimName", gpuNodeClaimName)
 					continue
 				}
 				// already deleting
 				if !gpuNodeClaimObj.DeletionTimestamp.IsZero() {
-					log.Info("[Warn] GPUNode deleting during compaction loop, this should not happen", "gpuNodeClaimName", gpuNodeClaimName)
+					log.Info("[Warn] GPUNode deleting during compaction loop, this should not happen", "node", gpuNode.Name)
 					continue
 				}
 				toDeleteGPUNodes = append(toDeleteGPUNodes, gpuNodeClaimName)

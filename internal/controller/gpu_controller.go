@@ -88,7 +88,7 @@ func (r *GPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, fmt.Errorf("node %s is not assigned to any pool", gpunode.Name)
 	}
 
-	if gpu.Status.UsedBy == "" {
+	if gpu.Status.UsedBy == "" && gpu.Status.UUID != "" {
 		patch := client.MergeFrom(gpu.DeepCopy())
 		gpu.Status.UsedBy = tfv1.UsedByTensorFusion
 		if err := r.Status().Patch(ctx, gpu, patch); err != nil {

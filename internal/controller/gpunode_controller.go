@@ -131,6 +131,10 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Check if hypervisor is running well, if so, set as running status
 	err = r.checkStatusAndUpdateVirtualCapacity(ctx, hypervisorName, node, poolObj)
+	if errors.IsNotFound(err) {
+		log.Info("Hypervisor pod not found, requeue", "hypervisorName", hypervisorName)
+		return ctrl.Result{Requeue: true}, nil
+	}
 	return ctrl.Result{}, err
 }
 
@@ -138,7 +142,7 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 	pod := &corev1.Pod{}
 	fetchErr := r.Get(ctx, client.ObjectKey{Name: hypervisorName, Namespace: utils.CurrentNamespace()}, pod)
 	if fetchErr != nil {
-		return fmt.Errorf("failed to get hypervisor pod: %w", fetchErr)
+		return fetchErr
 	}
 
 	// Reconcile GPUNode status with hypervisor pod status, when changed

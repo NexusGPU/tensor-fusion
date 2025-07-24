@@ -201,10 +201,11 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			_ = checkWorkerPodCount(workload)
 			checkWorkloadStatus(workload)
 
-			workload = &tfv1.TensorFusionWorkload{}
-			Expect(k8sClient.Get(ctx, key, workload)).To(Succeed())
-			workload.Spec.Replicas = ptr.To(int32(1))
-			Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, key, workload)).To(Succeed())
+				workload.Spec.Replicas = ptr.To(int32(1))
+				g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+			}).Should(Succeed())
 
 			_ = checkWorkerPodCount(workload)
 			checkWorkloadStatus(workload)
