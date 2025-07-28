@@ -37,7 +37,7 @@ require (
 	sigs.k8s.io/controller-runtime v0.21.0
 	sigs.k8s.io/karpenter v1.6.1
 	sigs.k8s.io/scheduler-plugins v0.31.8
-	sigs.k8s.io/yaml v1.5.0
+	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
