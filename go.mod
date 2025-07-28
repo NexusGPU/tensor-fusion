@@ -7,7 +7,7 @@ require (
 	github.com/NVIDIA/go-nvml v0.12.9-0
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107
 	github.com/aws/aws-sdk-go-v2 v1.36.6
-	github.com/aws/aws-sdk-go-v2/service/ec2 v1.233.1
+	github.com/aws/aws-sdk-go-v2/service/ec2 v1.236.0
 	github.com/awslabs/operatorpkg v0.0.0-20250624064700-e9977193119b
 	github.com/gin-contrib/gzip v1.2.3
 	github.com/gin-gonic/gin v1.10.1
