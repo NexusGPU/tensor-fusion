@@ -82,7 +82,7 @@ const (
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
-// +kubebuilder:printcolumn:name="GPU Model",type="string",JSONPath=".spec.gpuModel"
+// +kubebuilder:printcolumn:name="GPU Model",type="string",JSONPath=".status.gpuModel"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Total TFlops",type="string",JSONPath=".status.capacity.tflops"
 // +kubebuilder:printcolumn:name="Total VRAM",type="string",JSONPath=".status.capacity.vram"

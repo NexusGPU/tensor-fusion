@@ -65,10 +65,12 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 	// Use latest in memory data to calculate available resources
 	gpuStore, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
 	poolAvailableTFlops := lo.Reduce(lo.Values(gpuStore), func(acc int64, gpu *tfv1.GPU, _ int) int64 {
-		return acc + gpu.Status.Available.Tflops.Value()
+		tflops, _ := gpu.Status.Available.Tflops.AsInt64()
+		return acc + tflops
 	}, 0)
 	poolAvailableVRAM := lo.Reduce(lo.Values(gpuStore), func(acc int64, gpu *tfv1.GPU, _ int) int64 {
-		return acc + gpu.Status.Available.Vram.Value()
+		vram, _ := gpu.Status.Available.Vram.AsInt64()
+		return acc + vram
 	}, 0)
 
 	poolWarmUpTFlops, _ := pool.Spec.CapacityConfig.WarmResources.TFlops.AsInt64()
@@ -98,6 +100,9 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 
 		nodeCapTFlops, _ := gpuNode.Status.TotalTFlops.AsInt64()
 		nodeCapVRAM, _ := gpuNode.Status.TotalVRAM.AsInt64()
+		if nodeCapTFlops <= 0 || nodeCapVRAM <= 0 {
+			continue
+		}
 
 		couldBeTerminatedByTFlops := poolAvailableTFlops-nodeCapTFlops >= poolWarmUpTFlops
 		couldBeTerminatedByVRAM := poolAvailableVRAM-nodeCapVRAM >= poolWarmUpVRAM
@@ -105,9 +110,6 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 		if couldBeTerminatedByTFlops && couldBeTerminatedByVRAM {
 			poolAvailableTFlops -= nodeCapTFlops
 			poolAvailableVRAM -= nodeCapVRAM
-			r.Recorder.Eventf(pool, corev1.EventTypeNormal, "Compaction",
-				"Node %s is empty and deletion won't impact warm-up capacity, try terminating it", gpuNode.Name,
-			)
 			if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
 				// not managed by Kubernetes, managed by TensorFusion, safe to terminate, and finalizer will cause K8S node and related cloud resources to be deleted
 				gpuNodeClaimName := gpuNode.Labels[constants.ProvisionerLabelKey]
@@ -130,6 +132,9 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 					continue
 				}
 				toDeleteGPUNodes = append(toDeleteGPUNodes, gpuNodeClaimName)
+				r.Recorder.Eventf(pool, corev1.EventTypeNormal, "Compaction",
+					"Node %s is empty and deletion won't impact warm-up capacity, try terminating it", gpuNode.Name,
+				)
 			} else {
 				// managed by Kubernetes, mark it as destroying, GPUPool capacity should be reduced, and let K8S to delete it
 				if err := r.Patch(ctx, &corev1.Node{
@@ -149,7 +154,9 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 	}
 
 	if len(toDeleteGPUNodes) > 0 {
+		pendingGPUNodeStateLock.Lock()
 		PendingDeletionGPUNodes[pool.Name] = toDeleteGPUNodes
+		pendingGPUNodeStateLock.Unlock()
 		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 			if err := r.Get(ctx, client.ObjectKey{Name: pool.Name}, pool); err != nil {
 				if errors.IsNotFound(err) {
@@ -161,7 +168,9 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 			return r.Patch(ctx, pool, client.Merge)
 		})
 		if err != nil {
+			pendingGPUNodeStateLock.Lock()
 			PendingDeletionGPUNodes[pool.Name] = []string{}
+			pendingGPUNodeStateLock.Unlock()
 			return err
 		}
 		log.Info("GPU node compaction completed, pending deletion nodes: ",

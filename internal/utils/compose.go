@@ -528,7 +528,11 @@ func composeVectorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 
 func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTemplateSpec, pool *tfv1.GPUPool, gpuNodeName string) {
 	tmpl.Spec.RestartPolicy = v1.RestartPolicyOnFailure
-	tmpl.Spec.ServiceAccountName = GetSelfServiceAccountNameShort()
+	serviceAccountName := GetSelfServiceAccountNameShort()
+	if serviceAccountName == "" {
+		serviceAccountName = constants.NamespaceDefaultVal
+	}
+	tmpl.Spec.ServiceAccountName = serviceAccountName
 	tmpl.Spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
 
 	if len(tmpl.Spec.Containers) == 0 {

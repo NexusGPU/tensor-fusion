@@ -43,6 +43,11 @@ spec:
             {{- toYaml .Values.controller.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.controller.resources | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 8081
           env:
             - name: OPERATOR_NAMESPACE
               valueFrom:

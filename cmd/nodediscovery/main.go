@@ -35,6 +35,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
+const TMP_PATH = "/tmp"
+
 var Scheme = runtime.NewScheme()
 
 func init() {
@@ -176,7 +178,7 @@ func main() {
 	ns.ManagedGPUs = int32(count)
 	ns.ManagedGPUDeviceIDs = allDeviceIDs
 	ns.NodeInfo.RAMSize = *resource.NewQuantity(getTotalHostRAM(), resource.DecimalSI)
-	ns.NodeInfo.DataDiskSize = *resource.NewQuantity(getDiskInfo(constants.TFDataPath), resource.DecimalSI)
+	ns.NodeInfo.DataDiskSize = *resource.NewQuantity(getDiskInfo(TMP_PATH), resource.DecimalSI)
 	gpunode.Status = *ns
 
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -268,6 +270,9 @@ func createOrUpdateTensorFusionGPU(
 		if gpu.Status.UsedBy == "" {
 			gpu.Status.UsedBy = tfv1.UsedByTensorFusion
 		}
+		if gpu.Status.Phase == "" {
+			gpu.Status.Phase = tfv1.TensorFusionGPUPhasePending
+		}
 		return k8sClient.Status().Patch(ctx, gpu, client.Merge)
 	})
 	if err != nil {
@@ -316,7 +321,7 @@ func kubeClient() (client.Client, error) {
 func getTotalHostRAM() int64 {
 	v, err := mem.VirtualMemory()
 	if err != nil {
-		fmt.Printf("error getting memory info: %v\n", err)
+		fmt.Printf("[warning] getting memory info failed: %v\n", err)
 		return 0
 	}
 	return int64(v.Total)
@@ -325,7 +330,7 @@ func getTotalHostRAM() int64 {
 func getDiskInfo(path string) (total int64) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		fmt.Printf("error getting disk path: %v\n", err)
+		fmt.Printf("[warning] getting disk path failed: %v\n", err)
 		return 0
 	}
 
@@ -335,16 +340,16 @@ func getDiskInfo(path string) (total int64) {
 		if errors.Is(err, syscall.ENOENT) {
 			err = os.MkdirAll(absPath, 0o755)
 			if err != nil {
-				fmt.Printf("error creating folder: %s, err: %v\n", absPath, err)
+				fmt.Printf("[warning] creating folder to discover disk space failed: %s, err: %v\n", absPath, err)
 				return 0
 			}
 			err = syscall.Statfs(absPath, &stat)
 			if err != nil {
-				fmt.Printf("error getting disk stats after creation: %v\n", err)
+				fmt.Printf("[warning] getting disk stats after creation failed: %v\n", err)
 				return 0
 			}
 		} else {
-			fmt.Printf("error getting disk stats: %v\n", err)
+			fmt.Printf("[warning] getting disk stats failed: %v\n", err)
 			return 0
 		}
 	}

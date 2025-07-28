@@ -163,6 +163,25 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - karpenter.sh
+  resources:
+  - nodeclaims
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - karpenter.*
+  resources:
+  - *
+  verbs:
+  - get
+  - list
+  - watch
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
