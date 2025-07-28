@@ -94,16 +94,16 @@ type AutoScalingConfig struct {
 	// HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
 	AutoSetReplicas AutoSetReplicas `json:"autoSetReplicas,omitempty"`
 
-	// CronScalers defines a list of CronScaler configurations used to schedule scaling actions based on cron expressions.
-	CronScalers []CronScaler `json:"cronScalers,omitempty"`
+	// CronScalingRules defines a list of CronScaling rules used to schedule scaling actions based on cron expressions.
+	CronScalingRules []CronScalingRule `json:"cronScalingRules,omitempty"`
 }
 
-// CronScaler defines the configuration for scaling resources based on a cron schedule.
+// CronScalingRule defines the rule for scaling resources based on a cron schedule.
 // It allows enabling/disabling the scaler, specifying the time window for scaling,
 // and configuring the desired resources and replicas during the scheduled period.
-type CronScaler struct {
+type CronScalingRule struct {
 	// Enable specifies whether the cron scaler is enabled.
-	Enable *bool `json:"enable,omitempty"`
+	Enable bool `json:"enable,omitempty"`
 	// Name is the identifier for the cron scaler.
 	Name string `json:"name,omitempty"`
 	// Start is the start time for the scaling schedule, in cron format.
