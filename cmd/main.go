@@ -137,6 +137,7 @@ func main() {
 			"in your own alertmanager config, "+
 			"refer https://prometheus.io/docs/alerting/latest/configuration")
 
+	klog.InitFlags(nil)
 	flag.Parse()
 	ctrl.SetLogger(klog.NewKlogr())
 	ctx := context.Background()
