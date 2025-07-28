@@ -125,12 +125,12 @@ spec:
                           the upper bound on vram recommendation. Default: 0.95'
                         type: string
                     type: object
-                  cronScalers:
-                    description: CronScalers defines a list of CronScaler configurations
+                  cronScalingRules:
+                    description: CronScalingRules defines a list of CronScaling rules
                       used to schedule scaling actions based on cron expressions.
                     items:
                       description: |-
-                        CronScaler defines the configuration for scaling resources based on a cron schedule.
+                        CronScalingRule defines the rule for scaling resources based on a cron schedule.
                         It allows enabling/disabling the scaler, specifying the time window for scaling,
                         and configuring the desired resources and replicas during the scheduled period.
                       properties:
