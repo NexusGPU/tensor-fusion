@@ -190,7 +190,7 @@ func (r *GPUPoolReconciler) reconcilePendingDeletingNodes(ctx context.Context, p
 				return err
 			}
 		}
-		if gpuNodeList.Items == nil || len(gpuNodeList.Items) == 0 {
+		if len(gpuNodeList.Items) == 0 {
 			log.Info("GPU node already deleted, skip deleting", "gpuNodeName", gpuNodeName)
 			continue
 		}
