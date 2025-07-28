@@ -5,7 +5,7 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 )
 
 const (
@@ -66,23 +66,31 @@ func (p *PercentileRecommender) Name() string {
 	return "percentile"
 }
 
-func (p *PercentileRecommender) Recommend(config *tfv1.AutoScalingConfig, w *metrics.WorkerUsageAggregator) RecommendedResources {
+func (p *PercentileRecommender) Recommend(workload *workload.State) (*tfv1.RecommendedResources, error) {
 	// TODO: cache config
-	p.createEstimatorsFromConfig(p.getPercentileConfig(config))
-	return RecommendedResources{
-		LowerBoundTflops: QuantityFromAmount(p.lowerBoundTflops.GetTflopsEstimation(w)),
-		TargetTflops:     QuantityFromAmount(p.targetTflops.GetTflopsEstimation(w)),
-		UpperBoundTflops: QuantityFromAmount(p.upperBoundTflops.GetTflopsEstimation(w)),
-		LowerBoundVram:   QuantityFromAmount(p.lowerBoundVram.GetVramEstimation(w)),
-		TargetVram:       QuantityFromAmount(p.targetVram.GetVramEstimation(w)),
-		UpperBoundVram:   QuantityFromAmount(p.upperBoundVram.GetVramEstimation(w)),
+	aggregator := workload.WorkerUsageAggregator
+	if aggregator.TflopsHistogram.IsEmpty() && aggregator.VramHistogram.IsEmpty() {
+		return nil, nil
 	}
+
+	p.createEstimatorsFromConfig(p.getPercentileConfig(&workload.Spec.AutoScalingConfig.AutoSetResources))
+	return &tfv1.RecommendedResources{
+		LowerBoundTflops: QuantityFromAmount(p.lowerBoundTflops.GetTflopsEstimation(aggregator)),
+		TargetTflops:     QuantityFromAmount(p.targetTflops.GetTflopsEstimation(aggregator)),
+		UpperBoundTflops: QuantityFromAmount(p.upperBoundTflops.GetTflopsEstimation(aggregator)),
+		LowerBoundVram:   QuantityFromAmount(p.lowerBoundVram.GetVramEstimation(aggregator)),
+		TargetVram:       QuantityFromAmount(p.targetVram.GetVramEstimation(aggregator)),
+		UpperBoundVram:   QuantityFromAmount(p.upperBoundVram.GetVramEstimation(aggregator)),
+	}, nil
 }
 
-func (p *PercentileRecommender) getPercentileConfig(asc *tfv1.AutoScalingConfig) *PercentileConfig {
+func (p *PercentileRecommender) getPercentileConfig(asr *tfv1.AutoSetResources) *PercentileConfig {
 	cfg := defaultPercentileConfig
 
-	asr := asc.AutoSetResources
+	if asr == nil {
+		return &cfg
+	}
+
 	fields := []struct {
 		val string
 		dst *float64

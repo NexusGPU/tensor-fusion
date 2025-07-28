@@ -26,8 +26,8 @@ type Autoscaler struct {
 	allocator       *gpuallocator.GpuAllocator
 	metricsProvider metrics.Provider
 	recommenders    []recommender.Interface
-	workloadHandler *workload.Handler
-	workloads       map[string]*workload.WorkloadState
+	workloadHandler workload.Handler
+	workloads       map[string]*workload.State
 }
 
 func NewAutoscaler(c client.Client, allocator *gpuallocator.GpuAllocator) (*Autoscaler, error) {
@@ -50,7 +50,7 @@ func NewAutoscaler(c client.Client, allocator *gpuallocator.GpuAllocator) (*Auto
 		metricsProvider: metrics.NewProvider(nil),
 		recommenders:    recommenders,
 		workloadHandler: workload.NewHandler(c, allocator),
-		workloads:       map[string]*workload.WorkloadState{},
+		workloads:       map[string]*workload.State{},
 	}, nil
 }
 
@@ -103,18 +103,16 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 		if !workload.DeletionTimestamp.IsZero() {
 			continue
 		}
-		workloadState := s.findOrCreateWorkload(workload.Name)
-		workloadState.Namespace = workload.Namespace
-		workloadState.Spec = workload.Spec
-		observedWorkloads[workload.Name] = true
 
-		s.workloadHandler.UpdateWorkers(ctx, workloadState)
+		workloadState := s.findOrCreateWorkloadState(workload.Name)
+		s.workloadHandler.UpdateWorkloadState(ctx, workloadState, &workload)
+		observedWorkloads[workload.Name] = true
 	}
 
 	// remove non-existent workloads
-	for key := range s.workloads {
-		if !observedWorkloads[key] {
-			delete(s.workloads, key)
+	for name := range s.workloads {
+		if !observedWorkloads[name] {
+			delete(s.workloads, name)
 		}
 	}
 }
@@ -129,8 +127,7 @@ func (s *Autoscaler) loadHistoryMetrics(ctx context.Context) {
 		return
 	}
 	for _, sample := range workersMetrics {
-		workload := s.findOrCreateWorkload(sample.WorkloadName)
-		workload.AddSample(sample)
+		s.findOrCreateWorkloadState(sample.WorkloadName).AddSample(sample)
 	}
 }
 
@@ -156,27 +153,42 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 	log.Info("processing workloads")
 
 	for _, workload := range s.workloads {
-		recommendations := map[string]recommender.RecommendedResources{}
+		recommendations := map[string]*tfv1.RecommendedResources{}
 		for _, recommender := range s.recommenders {
 			name := recommender.Name()
-			recommendations[name] = recommender.Recommend(&workload.Spec.AutoScalingConfig, workload.WorkerUsageAggregator)
+			recommendation, err := recommender.Recommend(workload)
+			if err != nil {
+				log.Error(err, "failed to recommend resources", "recommender", name)
+				continue
+			}
+			if recommendation == nil {
+				continue
+			}
+
+			recommendations[name] = recommendation
 			log.Info("recommendation", "recommender", name, "workload", workload.Name, "resources", recommendations[name])
 		}
 
-		// var finalRecommendation recommender.RecommendedResources
-		// for _, recommendation := range recommendations {
-		// 	if recommendation.TargetTflops.IsZero()
-		// }
+		if len(recommendations) == 0 {
+			continue
+		}
 
-		// TODO: Implement updating the recommendation status of the workload CRD when the API is ready.
-		workload.UpdateRecommendation(recommendations["percentile"])
-		s.workloadHandler.ProcessWorkload(ctx, workload)
+		var finalRecommendation *tfv1.RecommendedResources
+		// for _, recommendation := range recommendations {
+		// 	finalRecommendation = recommendation
+		// }
+		// process cron recommendation
+		if recommendation, ok := recommendations[recommender.Cron]; ok {
+			finalRecommendation = recommendation
+		}
+
+		s.workloadHandler.ApplyRecommendationToWorkload(ctx, workload, finalRecommendation)
 	}
 }
 
-func (s *Autoscaler) findOrCreateWorkload(name string) *workload.WorkloadState {
-	w, ok := s.workloads[name]
-	if !ok {
+func (s *Autoscaler) findOrCreateWorkloadState(name string) *workload.State {
+	w, exists := s.workloads[name]
+	if !exists {
 		w = workload.NewWorkloadState(name)
 		s.workloads[name] = w
 	}

@@ -16,18 +16,16 @@ var _ = Describe("Percentile Recommender", func() {
 	})
 
 	It("should parse float fields from AutoSetResources", func() {
-		asc := &tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{
-				TargetTflopsPercentile:     "0.8",
-				LowerBoundTflopsPercentile: "0.1",
-				UpperBoundTflopsPercentile: "0.95",
-				TargetVramPercentile:       "0.7",
-				LowerBoundVramPercentile:   "0.2",
-				UpperBoundVramPercentile:   "0.9",
-				RequestMarginFraction:      "0.15",
-			},
+		asr := &tfv1.AutoSetResources{
+			TargetTflopsPercentile:     "0.8",
+			LowerBoundTflopsPercentile: "0.1",
+			UpperBoundTflopsPercentile: "0.95",
+			TargetVramPercentile:       "0.7",
+			LowerBoundVramPercentile:   "0.2",
+			UpperBoundVramPercentile:   "0.9",
+			RequestMarginFraction:      "0.15",
 		}
-		cfg := NewPercentileRecommender().getPercentileConfig(asc)
+		cfg := NewPercentileRecommender().getPercentileConfig(asr)
 		Expect(cfg.TargetTflopsPercentile).To(Equal(0.8))
 		Expect(cfg.LowerBoundTflopsPercentile).To(Equal(0.1))
 		Expect(cfg.UpperBoundTflopsPercentile).To(Equal(0.95))
@@ -38,36 +36,30 @@ var _ = Describe("Percentile Recommender", func() {
 	})
 
 	It("should ignore invalid float fields and keep defaults", func() {
-		asc := &tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{
-				TargetTflopsPercentile:     "not-a-float",
-				LowerBoundTflopsPercentile: "",
-				UpperBoundTflopsPercentile: "0.99",
-			},
+		asr := &tfv1.AutoSetResources{
+			TargetTflopsPercentile:     "not-a-float",
+			LowerBoundTflopsPercentile: "",
+			UpperBoundTflopsPercentile: "0.99",
 		}
-		cfg := NewPercentileRecommender().getPercentileConfig(asc)
+		cfg := NewPercentileRecommender().getPercentileConfig(asr)
 		Expect(cfg.TargetTflopsPercentile).To(Equal(defaultPercentileConfig.TargetTflopsPercentile))
 		Expect(cfg.LowerBoundTflopsPercentile).To(Equal(defaultPercentileConfig.LowerBoundTflopsPercentile))
 		Expect(cfg.UpperBoundTflopsPercentile).To(Equal(0.99))
 	})
 
 	It("should parse ConfidenceInterval if valid", func() {
-		asc := &tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{
-				ConfidenceInterval: "30m",
-			},
+		asr := &tfv1.AutoSetResources{
+			ConfidenceInterval: "30m",
 		}
-		cfg := NewPercentileRecommender().getPercentileConfig(asc)
+		cfg := NewPercentileRecommender().getPercentileConfig(asr)
 		Expect(cfg.ConfidenceInterval).To(Equal(30 * time.Minute))
 	})
 
 	It("should ignore invalid ConfidenceInterval and keep default", func() {
-		asc := &tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{
-				ConfidenceInterval: "not-a-duration",
-			},
+		asr := &tfv1.AutoSetResources{
+			ConfidenceInterval: "not-a-duration",
 		}
-		cfg := NewPercentileRecommender().getPercentileConfig(asc)
+		cfg := NewPercentileRecommender().getPercentileConfig(asr)
 		Expect(cfg.ConfidenceInterval).To(Equal(defaultPercentileConfig.ConfidenceInterval))
 	})
 })

@@ -14,30 +14,78 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-type Handler struct {
+type Handler interface {
+	UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload)
+	ApplyRecommendationToWorkload(ctx context.Context, state *State, recommendation *tfv1.RecommendedResources) error
+	UpdateWorkerResourcesIfNeeded(ctx context.Context, workload *State, worker *corev1.Pod) error
+}
+
+type handler struct {
 	client.Client
 	allocator *gpuallocator.GpuAllocator
 }
 
-func NewHandler(client client.Client, allocator *gpuallocator.GpuAllocator) *Handler {
-	return &Handler{
+func NewHandler(client client.Client, allocator *gpuallocator.GpuAllocator) Handler {
+	return &handler{
 		Client:    client,
 		allocator: allocator,
 	}
 }
 
-func (h *Handler) UpdateWorkers(ctx context.Context, workload *WorkloadState) {
+func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload) {
+	workloadState.Namespace = workload.Namespace
+	workloadState.Spec = workload.Spec
+	workloadState.Annotations = workload.Annotations
+
 	workerList := &corev1.PodList{}
 	if err := h.List(ctx, workerList,
-		client.InNamespace(workload.Namespace),
-		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
+		client.InNamespace(workloadState.Namespace),
+		client.MatchingLabels{constants.WorkloadKey: workloadState.Name}); err != nil {
 		log.FromContext(ctx).Error(err, "failed to list workers")
 		return
 	}
-	workload.UpdateWorkers(workerList)
+	workloadState.updateWorkers(workerList)
 }
 
-func (h *Handler) ProcessWorkload(ctx context.Context, workload *WorkloadState) {
+func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, state *State, recommendation *tfv1.RecommendedResources) error {
+	workload := &tfv1.TensorFusionWorkload{}
+	if err := h.Get(ctx, client.ObjectKey{Namespace: state.Namespace, Name: state.Name}, workload); err != nil {
+		return fmt.Errorf("failed to get workload: %v", err)
+	}
+
+	// record current and last resources by annotations
+	patch := client.MergeFrom(workload.DeepCopy())
+	if workload.Annotations == nil {
+		workload.Annotations = map[string]string{}
+	}
+	if tflopsRequest, ok := workload.Annotations[constants.TFLOPSRequestAnnotation]; ok {
+		workload.Annotations[constants.LastTFLOPSRequestAnnotation] = tflopsRequest
+	} else {
+		workload.Annotations[constants.LastTFLOPSRequestAnnotation] = workload.Spec.Resources.Requests.Tflops.String()
+	}
+	if vramRequest, ok := workload.Annotations[constants.VRAMRequestAnnotation]; ok {
+		workload.Annotations[constants.LastVRAMRequestAnnotation] = vramRequest
+	} else {
+		workload.Annotations[constants.LastVRAMRequestAnnotation] = workload.Spec.Resources.Requests.Vram.String()
+	}
+	workload.Annotations[constants.TFLOPSRequestAnnotation] = recommendation.TargetTflops.String()
+	workload.Annotations[constants.VRAMRequestAnnotation] = recommendation.TargetVram.String()
+
+	if err := h.Patch(ctx, workload, patch); err != nil {
+		return fmt.Errorf("failed to patch workload: %v", err)
+	}
+
+	state.Annotations = workload.Annotations
+	state.Recommendation = *recommendation
+
+	if err := h.ApplyRecommendationToWorkers(ctx, state); err != nil {
+		return fmt.Errorf("failed to apply recommendation to workers: %v", err)
+	}
+
+	return nil
+}
+
+func (h *handler) ApplyRecommendationToWorkers(ctx context.Context, workload *State) error {
 	log := log.FromContext(ctx)
 	workerList := &corev1.PodList{}
 	if err := h.List(ctx, workerList,
@@ -46,8 +94,8 @@ func (h *Handler) ProcessWorkload(ctx context.Context, workload *WorkloadState) 
 		log.Error(err, "failed to list workers")
 	}
 
-	if !workload.IsAutoScalingEnabled() {
-		return
+	if !workload.IsAutoSetResourcesEnabled() {
+		return nil
 	}
 
 	for _, worker := range workerList.Items {
@@ -59,9 +107,11 @@ func (h *Handler) ProcessWorkload(ctx context.Context, workload *WorkloadState) 
 			log.Error(err, "failed to update worker")
 		}
 	}
+
+	return nil
 }
 
-func (h *Handler) UpdateWorkerResourcesIfNeeded(ctx context.Context, workload *WorkloadState, worker *corev1.Pod) error {
+func (h *handler) UpdateWorkerResourcesIfNeeded(ctx context.Context, workload *State, worker *corev1.Pod) error {
 	log := log.FromContext(ctx)
 
 	adjustRequest, err := getCurrentWorkerResourceRequest(worker)
@@ -69,36 +119,42 @@ func (h *Handler) UpdateWorkerResourcesIfNeeded(ctx context.Context, workload *W
 		return fmt.Errorf("failed to get current worker resource request, %v", err)
 	}
 
-	rr := &workload.Recommendation
+	recommendation := &workload.Recommendation
 	resourcesInfo := []struct {
-		name       tfv1.ResourceName
-		requestKey string
-		limitKey   string
-		request    *resource.Quantity
-		limit      *resource.Quantity
-		lowerBound resource.Quantity
-		upperBound resource.Quantity
-		target     resource.Quantity
+		name           tfv1.ResourceName
+		requestKey     string
+		limitKey       string
+		lastRequestKey string
+		lastLimitKey   string
+		request        *resource.Quantity
+		limit          *resource.Quantity
+		lowerBound     resource.Quantity
+		upperBound     resource.Quantity
+		target         resource.Quantity
 	}{
 		{
-			name:       tfv1.ResourceTflops,
-			requestKey: constants.TFLOPSRequestAnnotation,
-			limitKey:   constants.TFLOPSLimitAnnotation,
-			request:    &adjustRequest.NewRequest.Tflops,
-			limit:      &adjustRequest.NewLimit.Tflops,
-			lowerBound: rr.LowerBoundTflops,
-			upperBound: rr.UpperBoundTflops,
-			target:     rr.TargetTflops,
+			name:           tfv1.ResourceTflops,
+			requestKey:     constants.TFLOPSRequestAnnotation,
+			limitKey:       constants.TFLOPSLimitAnnotation,
+			lastRequestKey: constants.LastTFLOPSRequestAnnotation,
+			lastLimitKey:   constants.LastTFLOPSLimitAnnotation,
+			request:        &adjustRequest.NewRequest.Tflops,
+			limit:          &adjustRequest.NewLimit.Tflops,
+			lowerBound:     recommendation.LowerBoundTflops,
+			upperBound:     recommendation.UpperBoundTflops,
+			target:         recommendation.TargetTflops,
 		},
 		{
-			name:       tfv1.ResourceVram,
-			requestKey: constants.VRAMRequestAnnotation,
-			limitKey:   constants.VRAMLimitAnnotation,
-			request:    &adjustRequest.NewRequest.Vram,
-			limit:      &adjustRequest.NewLimit.Vram,
-			lowerBound: rr.LowerBoundVram,
-			upperBound: rr.UpperBoundVram,
-			target:     rr.TargetVram,
+			name:           tfv1.ResourceVram,
+			requestKey:     constants.VRAMRequestAnnotation,
+			limitKey:       constants.VRAMLimitAnnotation,
+			lastRequestKey: constants.LastVRAMRequestAnnotation,
+			lastLimitKey:   constants.LastVRAMLimitAnnotation,
+			request:        &adjustRequest.NewRequest.Vram,
+			limit:          &adjustRequest.NewLimit.Vram,
+			lowerBound:     recommendation.LowerBoundVram,
+			upperBound:     recommendation.UpperBoundVram,
+			target:         recommendation.TargetVram,
 		},
 	}
 
@@ -116,6 +172,8 @@ func (h *Handler) UpdateWorkerResourcesIfNeeded(ctx context.Context, workload *W
 			if targetLimit == nil {
 				return fmt.Errorf("failed to get limit for %s", resInfo.requestKey)
 			}
+			newAnnotations[resInfo.lastRequestKey] = resInfo.request.String()
+			newAnnotations[resInfo.lastLimitKey] = resInfo.limit.String()
 			newAnnotations[resInfo.requestKey] = targetRequest.String()
 			newAnnotations[resInfo.limitKey] = targetLimit.String()
 			*resInfo.request = targetRequest
