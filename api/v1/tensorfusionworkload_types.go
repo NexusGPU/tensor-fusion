@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -47,6 +48,28 @@ const (
 	TensorFusionWorkloadPhaseRunning TensorFusionWorkloadPhase = "Running"
 	TensorFusionWorkloadPhaseFailed  TensorFusionWorkloadPhase = "Failed"
 )
+
+type RecommendedResources struct {
+	LowerBoundTflops resource.Quantity
+	TargetTflops     resource.Quantity
+	UpperBoundTflops resource.Quantity
+	LowerBoundVram   resource.Quantity
+	TargetVram       resource.Quantity
+	UpperBoundVram   resource.Quantity
+}
+
+func (r RecommendedResources) Merge(target *RecommendedResources) *RecommendedResources {
+	return target
+}
+
+func (r *RecommendedResources) Equal(t *RecommendedResources) bool {
+	return r.LowerBoundTflops.Equal(t.LowerBoundTflops) &&
+		r.TargetTflops.Equal(t.TargetTflops) &&
+		r.UpperBoundTflops.Equal(t.UpperBoundTflops) &&
+		r.LowerBoundVram.Equal(t.LowerBoundVram) &&
+		r.TargetVram.Equal(t.TargetVram) &&
+		r.UpperBoundVram.Equal(t.UpperBoundVram)
+}
 
 // TensorFusionWorkloadStatus defines the observed state of TensorFusionWorkload.
 type TensorFusionWorkloadStatus struct {

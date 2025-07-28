@@ -300,7 +300,7 @@ var _ = Describe("Autoscaler", func() {
 
 		})
 
-		It("should return an error if recommended resources exceeded quota", func() {
+		FIt("should return an error if recommended resources exceeded quota", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()

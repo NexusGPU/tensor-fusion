@@ -120,9 +120,9 @@ func (in *AutoScalingConfig) DeepCopyInto(out *AutoScalingConfig) {
 	*out = *in
 	out.AutoSetResources = in.AutoSetResources
 	out.AutoSetReplicas = in.AutoSetReplicas
-	if in.CronScalers != nil {
-		in, out := &in.CronScalers, &out.CronScalers
-		*out = make([]CronScaler, len(*in))
+	if in.CronScalingRules != nil {
+		in, out := &in.CronScalingRules, &out.CronScalingRules
+		*out = make([]CronScalingRule, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
