@@ -24,7 +24,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
-	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/recommender"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/aws/smithy-go/ptr"
 	. "github.com/onsi/ginkgo/v2"
@@ -79,7 +79,7 @@ var _ = Describe("Autoscaler", func() {
 	})
 
 	Context("when loading workloads", func() {
-		It("should keep the state of workloads and workers with auto-scaling enabled", func() {
+		It("should keep the state of workloads", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(3).
 				Build()
@@ -110,17 +110,13 @@ var _ = Describe("Autoscaler", func() {
 
 			updateWorkloadReplicas(workload0, 1)
 			scaler.loadWorkloads(ctx)
-			Expect(scaler.workloads[workload0.Name].Workers).To(HaveLen(2))
+			Expect(scaler.workloads[workload0.Name].Workers).To(HaveLen(1))
 
 			deleteWorkload(workload0)
 			deleteWorkload(workload1)
 			scaler.loadWorkloads(ctx)
 			Expect(scaler.workloads).NotTo(HaveKey(workload0.Name))
-			workers = scaler.workloads[workload0.Name].Workers
-			Expect(workers).NotTo(HaveKey(workload0Workers[0].Name))
-			Expect(workers).NotTo(HaveKey(workload0Workers[1].Name))
 			Expect(scaler.workloads).NotTo(HaveKey(workload1.Name))
-			Expect(scaler.workloads[workload1.Name].Workers).NotTo(HaveKey(workload1Workers[0].Name))
 		})
 	})
 
@@ -229,6 +225,79 @@ var _ = Describe("Autoscaler", func() {
 				Expect(vramRequest.Equal(oldRes.Requests.Vram)).To(BeTrue())
 				Expect(vramLimit.Equal(oldRes.Limits.Vram)).To(BeTrue())
 			}).Should(Succeed())
+		})
+
+		It("should update resources based on cron auto scaling config", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
+				Build()
+			defer tfEnv.Cleanup()
+			go mockSchedulerLoop(ctx, cfg)
+			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
+			defer deleteWorkload(workload)
+
+			scaler, _ := NewAutoscaler(k8sClient, allocator)
+			scaler.loadWorkloads(ctx)
+
+			workloadState := scaler.workloads[workload.Name]
+			lastResources := workloadState.Spec.Resources
+
+			tflopsRequestInRule := resource.MustParse("20")
+			vramRequestInRule := resource.MustParse("16Gi")
+			workloadState.Spec.AutoScalingConfig.CronScalingRules = []tfv1.CronScalingRule{
+				{
+					Enable: true,
+					Name:   "test",
+					Start:  "0 0 * * *",
+					End:    "59 23 * * *",
+					DesiredResources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							Tflops: tflopsRequestInRule,
+							Vram:   vramRequestInRule,
+						},
+					},
+				},
+			}
+			scaler.processWorkloads(ctx)
+			Eventually(func(g Gomega) {
+				tflopsRequest, _, vramRequest, _ := parseResourceAnnotations(getWorkers(workload)[0])
+				Expect(tflopsRequest.Equal(tflopsRequestInRule)).To(BeTrue())
+				Expect(vramRequest.Equal(vramRequestInRule)).To(BeTrue())
+				tflopsRequest, _, vramRequest, _ = parseLastResourceAnnotations(getWorkers(workload)[0])
+				Expect(tflopsRequest.Equal(lastResources.Requests.Tflops)).To(BeTrue())
+				Expect(vramRequest.Equal(lastResources.Requests.Vram)).To(BeTrue())
+			}).Should(Succeed())
+
+			// invalidate the rule by updating start and end fields
+			workloadState.Spec.AutoScalingConfig.CronScalingRules = []tfv1.CronScalingRule{
+				{
+					Enable: true,
+					Name:   "test",
+					Start:  "",
+					End:    "",
+					DesiredResources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							Tflops: tflopsRequestInRule,
+							Vram:   vramRequestInRule,
+						},
+					},
+				},
+			}
+
+			scaler.processWorkloads(ctx)
+			Eventually(func(g Gomega) {
+				tflopsRequest, _, vramRequest, _ := parseResourceAnnotations(getWorkers(workload)[0])
+				Expect(tflopsRequest.Equal(lastResources.Requests.Tflops)).To(BeTrue())
+				Expect(vramRequest.Equal(lastResources.Requests.Vram)).To(BeTrue())
+			}).Should(Succeed())
+		})
+
+		It("should merge multiple recommendations", func() {
+
+		})
+
+		It("should not update resource if resource is zero", func() {
+
 		})
 
 		It("should return an error if recommended resources exceeded quota", func() {
@@ -358,34 +427,38 @@ func (f *FakeMetricsProvider) GetHistoryMetrics() ([]*metrics.WorkerUsage, error
 	return sample, nil
 }
 
-type FakeUpScalingRecommender struct {
-	recommender.Interface
+type FakeUpScalingRecommender struct{}
+
+func (f *FakeUpScalingRecommender) Name() string {
+	return "FakeUpScaling"
 }
 
-func (f *FakeUpScalingRecommender) Recommend(_ *tfv1.AutoScalingConfig, _ *metrics.WorkerUsageAggregator) recommender.RecommendedResources {
-	return recommender.RecommendedResources{
+func (f *FakeUpScalingRecommender) Recommend(workoad *workload.State) (*tfv1.RecommendedResources, error) {
+	return &tfv1.RecommendedResources{
 		TargetTflops:     resource.MustParse("110"),
 		LowerBoundTflops: resource.MustParse("100"),
 		UpperBoundTflops: resource.MustParse("120"),
 		TargetVram:       resource.MustParse("110Gi"),
 		LowerBoundVram:   resource.MustParse("100Gi"),
 		UpperBoundVram:   resource.MustParse("120Gi"),
-	}
+	}, nil
 }
 
-type FakeQuotaExceededRecommender struct {
-	recommender.Interface
+type FakeQuotaExceededRecommender struct{}
+
+func (f *FakeQuotaExceededRecommender) Name() string {
+	return "FakeQuotaExceeded"
 }
 
-func (f *FakeQuotaExceededRecommender) Recommend(_ *tfv1.AutoScalingConfig, _ *metrics.WorkerUsageAggregator) recommender.RecommendedResources {
-	return recommender.RecommendedResources{
+func (f *FakeQuotaExceededRecommender) Recommend(workoad *workload.State) (*tfv1.RecommendedResources, error) {
+	return &tfv1.RecommendedResources{
 		TargetTflops:     resource.MustParse("9999"),
 		LowerBoundTflops: resource.MustParse("9999"),
 		UpperBoundTflops: resource.MustParse("9999"),
 		TargetVram:       resource.MustParse("999Gi"),
 		LowerBoundVram:   resource.MustParse("999Gi"),
 		UpperBoundVram:   resource.MustParse("999Gi"),
-	}
+	}, nil
 }
 
 func updateWorkloadReplicas(workload *tfv1.TensorFusionWorkload, replicas int) {
@@ -438,7 +511,7 @@ func cleanupWorkload(key client.ObjectKey) {
 	}).Should(Succeed())
 }
 
-func assertWorkerAnnotations(worker *corev1.Pod, rr recommender.RecommendedResources) {
+func assertWorkerAnnotations(worker *corev1.Pod, rr tfv1.RecommendedResources) {
 	GinkgoHelper()
 	tflopsRequest, tflopsLimit, vramRequest, vramLimit := parseResourceAnnotations(worker)
 	Expect(tflopsRequest.Value()).To(Equal(rr.TargetTflops.Value()))
@@ -457,6 +530,23 @@ func parseResourceAnnotations(worker *corev1.Pod) (tflopsRequest, tflopsLimit, v
 		{constants.TFLOPSLimitAnnotation, &tflopsLimit},
 		{constants.VRAMRequestAnnotation, &vramRequest},
 		{constants.VRAMLimitAnnotation, &vramLimit},
+	}
+	for _, k := range keys {
+		*k.dst = resource.MustParse(annotations[k.key])
+	}
+	return
+}
+
+func parseLastResourceAnnotations(worker *corev1.Pod) (tflopsRequest, tflopsLimit, vramRequest, vramLimit resource.Quantity) {
+	annotations := worker.GetAnnotations()
+	keys := []struct {
+		key string
+		dst *resource.Quantity
+	}{
+		{constants.LastTFLOPSRequestAnnotation, &tflopsRequest},
+		{constants.LastTFLOPSLimitAnnotation, &tflopsLimit},
+		{constants.LastVRAMRequestAnnotation, &vramRequest},
+		{constants.LastVRAMLimitAnnotation, &vramLimit},
 	}
 	for _, k := range keys {
 		*k.dst = resource.MustParse(annotations[k.key])
