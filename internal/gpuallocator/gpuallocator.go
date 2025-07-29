@@ -37,6 +37,7 @@ import (
 )
 
 const MaxGPUCounterPerAllocation = 128
+const CleanUpCheckInterval = 3 * time.Minute
 
 type Strategy interface {
 	Score(gpu tfv1.GPU) int
@@ -1013,6 +1014,7 @@ func (s *GpuAllocator) markGPUDirtyLocked(key types.NamespacedName) {
 func (s *GpuAllocator) ReconcileAllocationState() {
 	s.reconcileWorkerOnce.Do(func() {
 		s.reconcileAllocationState()
+		go s.startWorkerCleanUpChecker()
 	})
 }
 
@@ -1101,6 +1103,32 @@ func (s *GpuAllocator) reconcileAllocationState() {
 	// reconcile quota store state
 	s.quotaStore.ReconcileQuotaStore(ctx, s.uniqueAllocation)
 	log.FromContext(ctx).Info("Quota store data reconciled")
+}
+
+func (s *GpuAllocator) startWorkerCleanUpChecker() {
+	ticker := time.NewTicker(CleanUpCheckInterval)
+	for {
+		select {
+		case <-ticker.C:
+			cleaned := 0
+			for _, allocRequest := range s.uniqueAllocation {
+				if allocRequest.PodMeta.Name == "" {
+					continue
+				}
+				pod := &v1.Pod{}
+				err := s.Get(s.ctx, types.NamespacedName{Namespace: allocRequest.PodMeta.Namespace, Name: allocRequest.PodMeta.Name}, pod)
+				if errors.IsNotFound(err) {
+					log.FromContext(s.ctx).Info("Pod has been deleted, deallocate GPU", "pod", allocRequest.PodMeta.Name, "namespace", allocRequest.PodMeta.Namespace)
+					s.Dealloc(allocRequest.WorkloadNameNamespace, allocRequest.GPUNames, allocRequest.PodMeta)
+					cleaned++
+				}
+			}
+			log.FromContext(s.ctx).Info("GPU allocation cleaned up check completed", "total workers",
+				len(s.uniqueAllocation), "backup cleaner cleaned", cleaned)
+		case <-s.ctx.Done():
+			return
+		}
+	}
 }
 
 func addRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace tfv1.NameNamespace) {
