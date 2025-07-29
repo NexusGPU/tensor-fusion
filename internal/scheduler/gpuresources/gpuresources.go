@@ -30,7 +30,7 @@ var _ framework.PreFilterPlugin = &GPUFit{}
 var _ framework.FilterPlugin = &GPUFit{}
 var _ framework.ScorePlugin = &GPUFit{}
 var _ framework.ReservePlugin = &GPUFit{}
-var _ framework.PreBindPlugin = &GPUFit{}
+var _ framework.PostBindPlugin = &GPUFit{}
 
 type GPUFit struct {
 	logger    *klog.Logger
@@ -276,19 +276,20 @@ func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod
 	}, schedulingResult.FinalGPUs, pod.ObjectMeta)
 }
 
-func (s *GPUFit) PreBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
+func (s *GPUFit) PostBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
 	if !utils.IsTensorFusionWorker(pod) {
-		return framework.NewStatus(framework.Success, "skip for non tensor-fusion mode")
+		return
 	}
 
-	s.logger.Info("PreBinding pod for GPU resources", "pod", pod.Name, "node", nodeName)
+	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName)
 	gpuSchedulingResult, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
-		return framework.NewStatus(framework.Error, err.Error())
+		s.logger.Error(err, "failed to read gpu scheduling result", "pod", pod.Name)
+		return
 	}
 	// write the allocated GPU info to Pod in bindingCycle, before default binder changing the Pod nodeName info
 	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
-	s.logger.Info("PreBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
+	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
 	patch := []byte(`[{
 		"op": "add",
 		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
@@ -296,7 +297,6 @@ func (s *GPUFit) PreBind(ctx context.Context, state *framework.CycleState, pod *
 
 	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patch))
 	if err != nil {
-		return framework.NewStatus(framework.Error, err.Error())
+		s.logger.Error(err, "failed to patch gpu device ids", "pod", pod.Name)
 	}
-	return framework.NewStatus(framework.Success, "")
 }

@@ -67,6 +67,7 @@
                 "--gpu-info-config", "${workspaceFolder}/config/samples/gpu-info-config.yaml",
                 "--dynamic-config", "${workspaceFolder}/config/samples/dynamic-config.yaml",
                 "--scheduler-config", "${workspaceFolder}/config/samples/scheduler-config.yaml",
+                "-v", "4"
             ],
             "program": "${workspaceFolder}/cmd/main.go",
         },

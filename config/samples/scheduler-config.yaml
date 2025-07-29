@@ -20,7 +20,7 @@ profiles:
     reserve:
       enabled:
       - name: GPUResourcesFit
-    preBind:
+    postBind:
       enabled:
       - name: GPUResourcesFit
   pluginConfig:

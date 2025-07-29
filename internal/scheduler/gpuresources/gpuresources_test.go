@@ -511,8 +511,7 @@ func (s *GPUResourcesSuite) TestPreBind() {
 	reserveStatus := s.plugin.Reserve(s.ctx, state, pod, "node-a")
 	s.Require().True(reserveStatus.IsSuccess())
 
-	preBindStatus := s.plugin.PreBind(s.ctx, state, pod, "node-a")
-	s.True(preBindStatus.IsSuccess())
+	s.plugin.PostBind(s.ctx, state, pod, "node-a")
 
 	updatedPod := &v1.Pod{}
 	s.NoError(s.client.Get(s.ctx, types.NamespacedName{Name: "p1", Namespace: "ns1"}, updatedPod))
@@ -670,8 +669,8 @@ func (s *GPUResourcesSuite) TestUnreserve_ErrorHandling() {
 	})
 }
 
-func (s *GPUResourcesSuite) TestPreBind_ErrorHandling() {
-	log.FromContext(s.ctx).Info("Running TestPreBind_ErrorHandling")
+func (s *GPUResourcesSuite) TestPostBind_ErrorHandling() {
+	log.FromContext(s.ctx).Info("Running TestPostBind_ErrorHandling")
 	state := framework.NewCycleState()
 	pod := s.makePod("p1",
 		map[string]string{
@@ -681,9 +680,7 @@ func (s *GPUResourcesSuite) TestPreBind_ErrorHandling() {
 		})
 
 	// No pre-filter call, so state is empty
-	status := s.plugin.PreBind(s.ctx, state, pod, "node-a")
-	s.Error(status.AsError())
-	s.Equal(framework.Error, status.Code())
+	s.plugin.PostBind(s.ctx, state, pod, "node-a")
 
 	// Test with a pod that doesn't exist in the client
 	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod)
@@ -693,9 +690,7 @@ func (s *GPUResourcesSuite) TestPreBind_ErrorHandling() {
 
 	nonExistentPod := pod.DeepCopy()
 	nonExistentPod.Name = "p-non-existent"
-	status = s.plugin.PreBind(s.ctx, state, nonExistentPod, "node-a")
-	s.Error(status.AsError())
-	s.Equal(framework.Error, status.Code())
+	s.plugin.PostBind(s.ctx, state, nonExistentPod, "node-a")
 }
 
 func (s *GPUResourcesSuite) TestFilter_ErrorHandling() {
