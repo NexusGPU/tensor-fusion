@@ -110,6 +110,16 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 		if couldBeTerminatedByTFlops && couldBeTerminatedByVRAM {
 			poolAvailableTFlops -= nodeCapTFlops
 			poolAvailableVRAM -= nodeCapVRAM
+
+			log.Info("Empty node can be compacted", "node", gpuNode.Name,
+				"availableTFlopsAfterCompact", poolAvailableTFlops,
+				"availableVRAMAfterCompact", poolAvailableVRAM,
+				"warmUpTFlops", poolWarmUpTFlops,
+				"warmUpVRAM", poolWarmUpVRAM,
+				"nodeCapTFlops", nodeCapTFlops,
+				"nodeCapVRAM", nodeCapVRAM,
+			)
+
 			if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
 				// not managed by Kubernetes, managed by TensorFusion, safe to terminate, and finalizer will cause K8S node and related cloud resources to be deleted
 				gpuNodeClaimName := gpuNode.Labels[constants.ProvisionerLabelKey]

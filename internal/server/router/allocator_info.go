@@ -36,9 +36,9 @@ func NewAllocatorInfoRouter(
 }
 func (r *AllocatorInfoRouter) Get(ctx *gin.Context) {
 	gpuStore, nodeWorkerStore, uniqueAllocation := r.allocator.GetAllocationInfo()
-	gpuStoreResp := make(map[string]tfv1.GPUStatus)
+	gpuStoreResp := make(map[string]tfv1.GPU)
 	for key, gpu := range gpuStore {
-		gpuStoreResp[key.String()] = gpu.Status
+		gpuStoreResp[key.String()] = *gpu
 	}
 	nodeWorkerStoreResp := make(map[string]map[string]bool)
 	for key, nodeWorker := range nodeWorkerStore {
