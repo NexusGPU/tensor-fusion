@@ -314,6 +314,6 @@ func (r *GPUPoolCompactionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func SetTestModeCompactionPeriod() {
-	defaultCompactionDuration = 300 * time.Millisecond
-	newNodeProtectionDuration = 500 * time.Millisecond
+	defaultCompactionDuration = 700 * time.Millisecond
+	newNodeProtectionDuration = 1200 * time.Millisecond
 }

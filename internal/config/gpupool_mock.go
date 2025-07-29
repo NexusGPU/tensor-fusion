@@ -63,6 +63,14 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 					corev1.PodTemplate{
 						Template: corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
+								Volumes: []corev1.Volume{
+									{
+										Name: "mock-volume",
+										VolumeSource: corev1.VolumeSource{
+											EmptyDir: &corev1.EmptyDirVolumeSource{},
+										},
+									},
+								},
 								Containers: []corev1.Container{
 									{
 										Name:    "tensorfusion-hypervisor",

@@ -443,6 +443,9 @@ func (c *TensorFusionEnv) UpdateHypervisorStatus(checkNodeNum bool) {
 				}
 			}).Should(Succeed())
 			for _, pod := range podList.Items {
+				if pod.Status.Phase == corev1.PodRunning {
+					continue
+				}
 				pod.Status.Phase = corev1.PodRunning
 				pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{Type: corev1.PodReady, Status: corev1.ConditionTrue})
 				Expect(k8sClient.Status().Update(ctx, &pod)).Should(Succeed())
@@ -470,6 +473,7 @@ func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(gpuNodeClaimList *tfv1.GPU
 				Name: "gpu-" + gpuNodeClaim.Name,
 				Labels: map[string]string{
 					constants.LabelKeyOwner: gpuNode.Name,
+					constants.GpuPoolKey:    gpuNodeClaim.Labels[constants.LabelKeyOwner],
 				},
 			},
 		}
@@ -485,6 +489,7 @@ func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(gpuNodeClaimList *tfv1.GPU
 				}
 				latest.Status = tfv1.GPUStatus{
 					GPUModel: "mocked",
+					UsedBy:   tfv1.UsedByTensorFusion,
 					Capacity: &tfv1.Resource{
 						Tflops: gpuNodeClaim.Spec.TFlopsOffered,
 						Vram:   gpuNodeClaim.Spec.VRAMOffered,
@@ -498,7 +503,24 @@ func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(gpuNodeClaimList *tfv1.GPU
 						constants.KubernetesHostNameLabel: gpuNode.Name,
 					},
 				}
-				return k8sClient.Status().Update(ctx, latest)
+				if err := k8sClient.Status().Update(ctx, latest); err != nil {
+					return err
+				}
+
+				// update GPUNode status to trigger node level reconcile, simulate node discovery job
+				if gpuNode.Status.Phase == "" || gpuNode.Status.TotalGPUs == 0 {
+					gpuNode.Status = tfv1.GPUNodeStatus{
+						Phase:       tfv1.TensorFusionGPUNodePhasePending,
+						TotalGPUs:   1,
+						ManagedGPUs: 1,
+						TotalTFlops: gpuNodeClaim.Spec.TFlopsOffered,
+						TotalVRAM:   gpuNodeClaim.Spec.VRAMOffered,
+					}
+					if err := k8sClient.Status().Update(ctx, gpuNode); err != nil {
+						return err
+					}
+				}
+				return nil
 			})
 			Expect(err).Should(Succeed())
 		}
