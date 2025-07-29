@@ -29,6 +29,7 @@ var _ = Describe("Node Controller", func() {
 			tfEnv = NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(2).
 				AddPoolWithNodeCount(3).
+				SetGpuCountPerNode(1).
 				Build()
 			Expect(tfEnv.GetGPUNodeList(0).Items).Should(HaveLen(2))
 			Expect(tfEnv.GetGPUNodeList(1).Items).Should(HaveLen(3))

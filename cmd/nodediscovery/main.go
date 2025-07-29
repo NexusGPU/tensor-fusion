@@ -181,7 +181,7 @@ func main() {
 		patch := client.MergeFrom(currentGPUNode.DeepCopy())
 
 		// Update status fields conditionally
-		updateGPUNodeStatus(&currentGPUNode.Status, totalTFlops, totalVRAM, availableTFlops, availableVRAM, int32(count), allDeviceIDs)
+		updateGPUNodeStatus(&currentGPUNode.Status, totalTFlops, totalVRAM, int32(count), allDeviceIDs)
 
 		// Apply the patch using the status subresource
 		return k8sClient.Status().Patch(ctx, currentGPUNode, patch)
@@ -349,7 +349,10 @@ func getDiskInfo(path string) (total int64) {
 
 // updateGPUNodeStatus conditionally updates GPUNode status fields
 // Only updates phase if it's empty, and available resources if they are empty
-func updateGPUNodeStatus(status *tfv1.GPUNodeStatus, totalTFlops, totalVRAM, availableTFlops, availableVRAM resource.Quantity, totalGPUs int32, deviceIDs []string) {
+func updateGPUNodeStatus(
+	status *tfv1.GPUNodeStatus,
+	totalTFlops, totalVRAM resource.Quantity,
+	totalGPUs int32, deviceIDs []string) {
 	// Always update these fields as they represent current state
 	status.TotalTFlops = totalTFlops
 	status.TotalVRAM = totalVRAM
