@@ -10,7 +10,6 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
-	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -64,17 +63,35 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 
 	// Use latest in memory data to calculate available resources
 	gpuStore, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
-	poolAvailableTFlops := lo.Reduce(lo.Values(gpuStore), func(acc int64, gpu *tfv1.GPU, _ int) int64 {
-		tflops, _ := gpu.Status.Available.Tflops.AsInt64()
-		return acc + tflops
-	}, 0)
-	poolAvailableVRAM := lo.Reduce(lo.Values(gpuStore), func(acc int64, gpu *tfv1.GPU, _ int) int64 {
-		vram, _ := gpu.Status.Available.Vram.AsInt64()
-		return acc + vram
-	}, 0)
+
+	poolAvailableTFlops := int64(0)
+	poolAvailableVRAM := int64(0)
+	poolTotalTFlops := int64(0)
+	poolTotalVRAM := int64(0)
+
+	for _, gpu := range gpuStore {
+		if !gpu.DeletionTimestamp.IsZero() || gpu.Labels[constants.GpuPoolKey] != pool.Name ||
+			gpu.Status.UsedBy != tfv1.UsedByTensorFusion {
+			continue
+		}
+		availableTFlops, _ := gpu.Status.Available.Tflops.AsInt64()
+		poolAvailableTFlops += availableTFlops
+		availableVRAM, _ := gpu.Status.Available.Vram.AsInt64()
+		poolAvailableVRAM += availableVRAM
+
+		tflops, _ := gpu.Status.Capacity.Tflops.AsInt64()
+		poolTotalTFlops += tflops
+		vram, _ := gpu.Status.Capacity.Vram.AsInt64()
+		poolTotalVRAM += vram
+	}
 
 	poolWarmUpTFlops, _ := pool.Spec.CapacityConfig.WarmResources.TFlops.AsInt64()
 	poolWarmUpVRAM, _ := pool.Spec.CapacityConfig.WarmResources.VRAM.AsInt64()
+
+	poolMinTFlops, _ := pool.Spec.CapacityConfig.MinResources.TFlops.AsInt64()
+	poolMinVRAM, _ := pool.Spec.CapacityConfig.MinResources.VRAM.AsInt64()
+
+	log.Info("Found latest pool capacity constraints before compaction", "pool", pool.Name, "warmUpTFlops", poolWarmUpTFlops, "warmUpVRAM", poolWarmUpVRAM, "minTFlops", poolMinTFlops, "minVRAM", poolMinVRAM, "totalTFlops", poolTotalTFlops, "totalVRAM", poolTotalVRAM)
 
 	toDeleteGPUNodes := []string{}
 	for _, gpuNode := range allNodes.Items {
@@ -104,22 +121,12 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 			continue
 		}
 
-		couldBeTerminatedByTFlops := poolAvailableTFlops-nodeCapTFlops >= poolWarmUpTFlops
-		couldBeTerminatedByVRAM := poolAvailableVRAM-nodeCapVRAM >= poolWarmUpVRAM
+		matchWarmUpCapacityConstraints := poolAvailableTFlops-nodeCapTFlops >= poolWarmUpTFlops &&
+			poolAvailableVRAM-nodeCapVRAM >= poolWarmUpVRAM
+		matchMinCapacityConstraint := poolTotalTFlops-nodeCapTFlops >= poolMinTFlops &&
+			poolTotalVRAM-nodeCapVRAM >= poolMinVRAM
 
-		if couldBeTerminatedByTFlops && couldBeTerminatedByVRAM {
-			poolAvailableTFlops -= nodeCapTFlops
-			poolAvailableVRAM -= nodeCapVRAM
-
-			log.Info("Empty node can be compacted", "node", gpuNode.Name,
-				"availableTFlopsAfterCompact", poolAvailableTFlops,
-				"availableVRAMAfterCompact", poolAvailableVRAM,
-				"warmUpTFlops", poolWarmUpTFlops,
-				"warmUpVRAM", poolWarmUpVRAM,
-				"nodeCapTFlops", nodeCapTFlops,
-				"nodeCapVRAM", nodeCapVRAM,
-			)
-
+		if matchWarmUpCapacityConstraints && matchMinCapacityConstraint {
 			if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
 				// not managed by Kubernetes, managed by TensorFusion, safe to terminate, and finalizer will cause K8S node and related cloud resources to be deleted
 				gpuNodeClaimName := gpuNode.Labels[constants.ProvisionerLabelKey]
@@ -141,6 +148,21 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 					log.Info("[Warn] GPUNode deleting during compaction loop, this should not happen", "node", gpuNode.Name)
 					continue
 				}
+
+				poolAvailableTFlops -= nodeCapTFlops
+				poolAvailableVRAM -= nodeCapVRAM
+				poolTotalTFlops -= nodeCapTFlops
+				poolTotalVRAM -= nodeCapVRAM
+
+				log.Info("Empty node can be compacted - provision mode", "node", gpuNode.Name,
+					"availableTFlopsAfterCompact", poolAvailableTFlops,
+					"availableVRAMAfterCompact", poolAvailableVRAM,
+					"warmUpTFlops", poolWarmUpTFlops,
+					"warmUpVRAM", poolWarmUpVRAM,
+					"nodeCapTFlops", nodeCapTFlops,
+					"nodeCapVRAM", nodeCapVRAM,
+				)
+
 				toDeleteGPUNodes = append(toDeleteGPUNodes, gpuNodeClaimName)
 				r.Recorder.Eventf(pool, corev1.EventTypeNormal, "Compaction",
 					"Node %s is empty and deletion won't impact warm-up capacity, try terminating it", gpuNode.Name,
@@ -158,7 +180,20 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 					log.Error(err, "patch idle node failed", "node", gpuNode.Name)
 					continue
 				}
-				log.Info("Mark node as deleting in gpu node compaction loop", "node", gpuNode.Name)
+
+				poolAvailableTFlops -= nodeCapTFlops
+				poolAvailableVRAM -= nodeCapVRAM
+				poolTotalTFlops -= nodeCapTFlops
+				poolTotalVRAM -= nodeCapVRAM
+
+				log.Info("Empty node can be compacted - auto-select mode", "node", gpuNode.Name,
+					"availableTFlopsAfterCompact", poolAvailableTFlops,
+					"availableVRAMAfterCompact", poolAvailableVRAM,
+					"warmUpTFlops", poolWarmUpTFlops,
+					"warmUpVRAM", poolWarmUpVRAM,
+					"nodeCapTFlops", nodeCapTFlops,
+					"nodeCapVRAM", nodeCapVRAM,
+				)
 			}
 		}
 	}
@@ -214,6 +249,11 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	if !pool.DeletionTimestamp.IsZero() {
+		log.Info("GPUPool is being deleted, skip compaction", "name", req.Name)
+		return ctrl.Result{}, nil
+	}
+
 	needStartCompactionJob := true
 	nextDuration := r.getCompactionDuration(ctx, pool.Spec.NodeManagerConfig)
 
@@ -245,7 +285,7 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		log.Info("Skip compaction because node creating or duration not met", "name", req.Name)
 		return ctrl.Result{RequeueAfter: nextDuration}, nil
 	}
-	if len(PendingDeletionGPUNodes) > 0 {
+	if len(PendingDeletionGPUNodes[pool.Name]) > 0 {
 		log.Info("Skip compaction because node deleting in progress", "name", req.Name)
 		return ctrl.Result{RequeueAfter: nextDuration}, nil
 	}

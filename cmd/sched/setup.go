@@ -95,8 +95,6 @@ func SetupScheduler(
 	recorderFactory := getRecorderFactory(&cc)
 	completedProfiles := make([]kubeschedulerconfig.KubeSchedulerProfile, 0)
 
-	// TODO share the same informer with controller, do not use 'cc' to avoid duplicated watch
-
 	sched, err := scheduler.New(ctx,
 		cc.Client,
 		cc.InformerFactory,
@@ -145,9 +143,7 @@ func RunScheduler(ctx context.Context,
 		cz.Set(cc.ComponentConfig)
 	}
 
-	// Start events processing pipeline.
 	cc.EventBroadcaster.StartRecordingToSink(ctx.Done())
-	defer cc.EventBroadcaster.Shutdown()
 
 	startInformersAndWaitForSync := func(ctx context.Context) {
 		// Start all informers.
@@ -176,6 +172,7 @@ func RunScheduler(ctx context.Context,
 		<-mgr.Elected()
 		logger.Info("Starting scheduling cycle")
 		sched.Run(ctx)
+		cc.EventBroadcaster.Shutdown()
 	}()
 	return nil
 }
@@ -199,16 +196,16 @@ func preHandleConfig(cfgPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var cfgRaw map[string]interface{}
+	var cfgRaw map[string]any
 	err = yaml.Unmarshal(cfgBytes, &cfgRaw)
 	if err != nil {
 		return "", err
 	}
 
 	// Replace $HOME with actual home directory
-	if cfgRaw[clientConnectionCfgKey].(map[string]interface{})[kubeConfigCfgKey] != "" {
-		cfgRaw[clientConnectionCfgKey].(map[string]interface{})[kubeConfigCfgKey] = strings.ReplaceAll(
-			cfgRaw[clientConnectionCfgKey].(map[string]interface{})[kubeConfigCfgKey].(string),
+	if cfgRaw[clientConnectionCfgKey].(map[string]any)[kubeConfigCfgKey] != "" {
+		cfgRaw[clientConnectionCfgKey].(map[string]any)[kubeConfigCfgKey] = strings.ReplaceAll(
+			cfgRaw[clientConnectionCfgKey].(map[string]any)[kubeConfigCfgKey].(string),
 			"$HOME",
 			os.Getenv("HOME"),
 		)
@@ -216,7 +213,7 @@ func preHandleConfig(cfgPath string) (string, error) {
 
 	// Replace to KUBECONFIG path if env var exists
 	if os.Getenv("KUBECONFIG") != "" {
-		cfgRaw[clientConnectionCfgKey].(map[string]interface{})[kubeConfigCfgKey] = os.Getenv("KUBECONFIG")
+		cfgRaw[clientConnectionCfgKey].(map[string]any)[kubeConfigCfgKey] = os.Getenv("KUBECONFIG")
 	}
 
 	cfgBytes, err = yaml.Marshal(cfgRaw)

@@ -83,8 +83,9 @@ type GpuAllocator struct {
 	dirtyQueueLock sync.Mutex
 
 	// each pod can only allocate and deallocate once, and deallocation must be after allocation
-	uniqueAllocation   map[string]*tfv1.AllocRequest
-	uniqueDeallocation map[string]struct{}
+	uniqueAllocation       map[string]*tfv1.AllocRequest
+	uniqueDeallocation     map[string]struct{}
+	podNamespaceNsToPodUID map[string]string
 
 	maxWorkerPerNode int
 
@@ -119,9 +120,10 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 		dirtyQueue:      make(map[types.NamespacedName]struct{}),
 		ctx:             ctx,
 
-		uniqueAllocation:   make(map[string]*tfv1.AllocRequest),
-		uniqueDeallocation: make(map[string]struct{}),
-		initializedCh:      make(chan struct{}),
+		uniqueAllocation:       make(map[string]*tfv1.AllocRequest),
+		uniqueDeallocation:     make(map[string]struct{}),
+		podNamespaceNsToPodUID: make(map[string]string),
+		initializedCh:          make(chan struct{}),
 	}
 
 	return allocator
@@ -269,6 +271,7 @@ func (s *GpuAllocator) Bind(
 	}
 	req.GPUNames = gpuNames
 	s.uniqueAllocation[string(req.PodMeta.UID)] = req
+	s.podNamespaceNsToPodUID[req.PodMeta.Namespace+"/"+req.PodMeta.Name] = string(req.PodMeta.UID)
 	return result, nil
 }
 
@@ -399,13 +402,14 @@ func (s *GpuAllocator) Dealloc(
 		s.markGPUDirty(gpuNameNs)
 	}
 
-	// Deallocate quota resources in memory (atomic operation)
-	s.quotaStore.DeallocateQuota(workloadNameNamespace.Namespace, request)
-
 	// remove pod from nodeWorkerStore
 	delete(s.nodeWorkerStore[nodeName], types.NamespacedName{Name: podMeta.Name, Namespace: podMeta.Namespace})
 	delete(s.uniqueAllocation, podUID)
+	delete(s.podNamespaceNsToPodUID, podMeta.Namespace+"/"+podMeta.Name)
 	s.uniqueDeallocation[podUID] = struct{}{}
+
+	// Deallocate quota resources in memory (atomic operation)
+	s.quotaStore.DeallocateQuota(workloadNameNamespace.Namespace, request)
 
 	log.Info("GPU deallocation successful",
 		"namespace", workloadNameNamespace.Namespace,
@@ -521,6 +525,13 @@ func (s *GpuAllocator) ListNonUsingNodes() sets.Set[string] {
 		}
 	}
 	return set
+}
+
+func (s *GpuAllocator) DeallocByPodIdentifier(ctx context.Context, podIdentifier types.NamespacedName) {
+	podUID := s.podNamespaceNsToPodUID[podIdentifier.String()]
+	if request, exists := s.uniqueAllocation[podUID]; exists {
+		s.Dealloc(request.WorkloadNameNamespace, request.GPUNames, request.PodMeta)
+	}
 }
 
 func (s *GpuAllocator) checkGPUCapacityAndQuota(gpu *tfv1.GPU, oldRes, newRes tfv1.Resource) (tfv1.Resource, error) {
@@ -1031,6 +1042,7 @@ func (s *GpuAllocator) reconcileAllocationState() {
 				return false
 			}
 			s.uniqueAllocation[string(worker.UID)] = &allocRequest
+			s.podNamespaceNsToPodUID[worker.Namespace+"/"+worker.Name] = string(worker.UID)
 			s.addAllocationMap(worker.Spec.NodeName, worker.ObjectMeta)
 		}
 		return scheduled && !deletedAndDeAllocated

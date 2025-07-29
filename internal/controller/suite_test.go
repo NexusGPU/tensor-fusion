@@ -686,7 +686,8 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 
 			// generate gpus for gpunode
 			gpuNode := b.GetGPUNode(poolIndex, nodeIndex)
-			if gpuCount := b.poolNodeMap[poolIndex][nodeIndex]; gpuCount > 0 {
+			gpuCount := b.poolNodeMap[poolIndex][nodeIndex]
+			if gpuCount > 0 {
 				for gpuIndex := range gpuCount {
 					key := client.ObjectKey{
 						Name: b.getGPUName(poolIndex, nodeIndex, gpuIndex),
@@ -722,6 +723,15 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 					}
 					Expect(k8sClient.Status().Patch(ctx, gpu, patch)).To(Succeed())
 				}
+
+				gpuNode.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
+				gpuNode.Status.TotalGPUs = int32(gpuCount)
+				gpuNode.Status.ManagedGPUs = int32(gpuCount)
+				gpuNode.Status.TotalTFlops = resource.MustParse(fmt.Sprintf("%d", 2000*gpuCount))
+				gpuNode.Status.TotalVRAM = resource.MustParse(fmt.Sprintf("%dGi", 2000*gpuCount))
+				gpuNode.Status.AvailableTFlops = gpuNode.Status.TotalTFlops
+				gpuNode.Status.AvailableVRAM = gpuNode.Status.TotalVRAM
+				Expect(k8sClient.Status().Update(ctx, gpuNode)).To(Succeed())
 			}
 		}
 

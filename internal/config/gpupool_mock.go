@@ -68,6 +68,12 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 										Name:    "tensorfusion-hypervisor",
 										Image:   "busybox:stable-glibc",
 										Command: []string{"sleep", "infinity"},
+										VolumeMounts: []corev1.VolumeMount{
+											{
+												Name:      "mock-volume",
+												MountPath: "/mock",
+											},
+										},
 									},
 								},
 							},

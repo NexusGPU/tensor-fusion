@@ -169,27 +169,22 @@ func main() {
 		availableVRAM.Add(gpu.Status.Available.Vram)
 	}
 
-	ns := nodeStatus()
-	ns.TotalTFlops = totalTFlops
-	ns.TotalVRAM = totalVRAM
-	ns.AvailableTFlops = availableTFlops
-	ns.AvailableVRAM = availableVRAM
-	ns.TotalGPUs = int32(count)
-	ns.ManagedGPUs = int32(count)
-	ns.ManagedGPUDeviceIDs = allDeviceIDs
-	ns.NodeInfo.RAMSize = *resource.NewQuantity(getTotalHostRAM(), resource.DecimalSI)
-	ns.NodeInfo.DataDiskSize = *resource.NewQuantity(getDiskInfo(TMP_PATH), resource.DecimalSI)
-	gpunode.Status = *ns
-
+	// Use proper patch-based update with retry on conflict
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		// Get the latest version of the resource
 		currentGPUNode := &tfv1.GPUNode{}
 		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpunode), currentGPUNode); err != nil {
 			return err
 		}
 
-		currentGPUNode.Status = *ns
+		// Create a patch from the original to the desired state
+		patch := client.MergeFrom(currentGPUNode.DeepCopy())
 
-		return k8sClient.Status().Update(ctx, currentGPUNode)
+		// Update status fields conditionally
+		updateGPUNodeStatus(&currentGPUNode.Status, totalTFlops, totalVRAM, availableTFlops, availableVRAM, int32(count), allDeviceIDs)
+
+		// Apply the patch using the status subresource
+		return k8sClient.Status().Patch(ctx, currentGPUNode, patch)
 	})
 	if err != nil {
 		ctrl.Log.Error(err, "failed to update status of GPUNode after retries")
@@ -283,12 +278,6 @@ func createOrUpdateTensorFusionGPU(
 	return gpu
 }
 
-func nodeStatus() *tfv1.GPUNodeStatus {
-	return &tfv1.GPUNodeStatus{
-		Phase: tfv1.TensorFusionGPUNodePhaseRunning,
-	}
-}
-
 func kubeClient() (client.Client, error) {
 	kubeConfigEnvVar := os.Getenv("KUBECONFIG")
 	var config *rest.Config
@@ -356,4 +345,23 @@ func getDiskInfo(path string) (total int64) {
 
 	total = int64(stat.Blocks * uint64(stat.Bsize))
 	return total
+}
+
+// updateGPUNodeStatus conditionally updates GPUNode status fields
+// Only updates phase if it's empty, and available resources if they are empty
+func updateGPUNodeStatus(status *tfv1.GPUNodeStatus, totalTFlops, totalVRAM, availableTFlops, availableVRAM resource.Quantity, totalGPUs int32, deviceIDs []string) {
+	// Always update these fields as they represent current state
+	status.TotalTFlops = totalTFlops
+	status.TotalVRAM = totalVRAM
+	status.TotalGPUs = totalGPUs
+	status.ManagedGPUs = totalGPUs
+	status.ManagedGPUDeviceIDs = deviceIDs
+	status.NodeInfo = tfv1.GPUNodeInfo{
+		RAMSize:      *resource.NewQuantity(getTotalHostRAM(), resource.DecimalSI),
+		DataDiskSize: *resource.NewQuantity(getDiskInfo(TMP_PATH), resource.DecimalSI),
+	}
+	// Only update phase if it's empty (unset)
+	if status.Phase == "" {
+		status.Phase = tfv1.TensorFusionGPUNodePhasePending
+	}
 }
