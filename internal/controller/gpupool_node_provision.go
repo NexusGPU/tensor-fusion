@@ -145,15 +145,15 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 
 	// lock the pool before next node scaling up loop, add assumed scaling resources util all pending nodeClaims are running
 	newCreatedNodes := map[string]tfv1.Resource{}
-	for _, node := range gpuNodeParams {
-		go func(node tfv1.GPUNodeClaimSpec) {
+	for _, nodeClaim := range gpuNodeParams {
+		go func(nodeClaim tfv1.GPUNodeClaimSpec) {
 			defer wg.Done()
 
 			// Create GPUNode custom resource immediately and GPUNode controller will watch the K8S node to be ready
 			// Persist the status to GPUNode to avoid duplicated creation in next reconciliation
 			// If the K8S node never be ready after some time, the GPUNode will be deleted, then the Pool reconcile loop can scale up and meet the capacity constraint again
 
-			costPerHour, pricingErr := provider.GetInstancePricing(node.InstanceType, node.CapacityType, node.Region)
+			costPerHour, pricingErr := provider.GetInstancePricing(nodeClaim.InstanceType, nodeClaim.CapacityType, nodeClaim.Region)
 			if pricingErr != nil {
 				errList = append(errList, pricingErr)
 				return
@@ -161,7 +161,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 
 			gpuNodeClaimRes := &tfv1.GPUNodeClaim{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: node.NodeName,
+					Name: nodeClaim.NodeName,
 					Labels: map[string]string{
 						constants.LabelKeyOwner:        pool.Name,
 						constants.LabelKeyClusterOwner: cluster.Name,
@@ -174,7 +174,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 						constants.PricingAnnotation: strconv.FormatFloat(costPerHour, 'f', 6, 64),
 					},
 				},
-				Spec: node,
+				Spec: nodeClaim,
 			}
 			_ = controllerutil.SetControllerReference(pool, gpuNodeClaimRes, r.Scheme)
 			err := r.Create(ctx, gpuNodeClaimRes)
@@ -182,11 +182,12 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 				errList = append(errList, err)
 				return
 			}
-			newCreatedNodes[node.NodeName] = tfv1.Resource{
-				Tflops: node.TFlopsOffered,
-				Vram:   node.VRAMOffered,
+			log.Info("Created new GPUNode claim", "gpuNodeClaimName", nodeClaim.NodeName)
+			newCreatedNodes[nodeClaim.NodeName] = tfv1.Resource{
+				Tflops: nodeClaim.TFlopsOffered,
+				Vram:   nodeClaim.VRAMOffered,
 			}
-		}(node)
+		}(nodeClaim)
 	}
 
 	wg.Wait()

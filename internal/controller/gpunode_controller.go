@@ -120,6 +120,11 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
+	if node.Status.TotalGPUs == 0 {
+		log.Info("GPU on this node has not been discovered, wait next loop", "node", node.Name)
+		return ctrl.Result{}, nil
+	}
+
 	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -151,7 +156,7 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 			node.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
 			err := r.Status().Update(ctx, node)
 			if err != nil {
-				return fmt.Errorf("failed to update GPU node status: %w", err)
+				return fmt.Errorf("failed to update GPU node status to pending: %w", err)
 			}
 		}
 
@@ -212,7 +217,7 @@ func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tf
 			patch := client.MergeFrom(gpu.DeepCopy())
 			gpu.Status.Phase = state
 			if err := r.Status().Patch(ctx, &gpu, patch); err != nil {
-				return fmt.Errorf("failed to patch GPU device status: %w", err)
+				return fmt.Errorf("failed to patch GPU device status to %s: %w", state, err)
 			}
 		}
 	}

@@ -28,7 +28,9 @@ var _ = Describe("Node Controller", func() {
 			By("checking two pools, one with two nodes, one with three nodes")
 			tfEnv = NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(2).
+				SetGpuCountPerNode(1).
 				AddPoolWithNodeCount(3).
+				SetGpuCountPerNode(1).
 				Build()
 			Expect(tfEnv.GetGPUNodeList(0).Items).Should(HaveLen(2))
 			Expect(tfEnv.GetGPUNodeList(1).Items).Should(HaveLen(3))

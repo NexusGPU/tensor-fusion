@@ -57,6 +57,9 @@ var (
 	PendingDeletionGPUNodes map[string][]string
 
 	// TODO add metrics for node provisioning and compaction
+
+	// When add/remove pending provisioning or deleting nodes, lock the memory
+	pendingGPUNodeStateLock sync.Mutex
 )
 
 func init() {
@@ -142,12 +145,14 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		// Set phase to updating and let GPUNode event trigger the check and update capacity loop, util all nodes are ready
 		if len(newCreatedNodes) > 0 {
+			pendingGPUNodeStateLock.Lock()
 			for claimName := range newCreatedNodes {
 				if PendingGPUNodeClaim[pool.Name] == nil {
 					PendingGPUNodeClaim[pool.Name] = make(map[string]tfv1.Resource, len(newCreatedNodes)*2)
 				}
 				PendingGPUNodeClaim[pool.Name][claimName] = newCreatedNodes[claimName]
 			}
+			pendingGPUNodeStateLock.Unlock()
 			// Refresh the capacity again since new node has been created
 			pool.Status.ProvisioningPhase = tfv1.ProvisioningPhaseProvisioning
 			if err := r.Status().Patch(ctx, pool, client.Merge); err != nil {
@@ -176,8 +181,8 @@ func (r *GPUPoolReconciler) reconcilePendingDeletingNodes(ctx context.Context, p
 	remainDeletingNodes := []string{}
 	deletingNodes := PendingDeletionGPUNodes[pool.Name]
 	for _, gpuNodeName := range deletingNodes {
-		gpuNodeObj := &tfv1.GPUNode{}
-		if err := r.Get(ctx, client.ObjectKey{Name: gpuNodeName}, gpuNodeObj); err != nil {
+		gpuNodeList := &tfv1.GPUNodeList{}
+		if err := r.List(ctx, gpuNodeList, client.MatchingLabels{constants.ProvisionerLabelKey: gpuNodeName}); err != nil {
 			if errors.IsNotFound(err) {
 				// Already deleted, skip adding to deletingNodes, trigger pool status update
 				continue
@@ -185,9 +190,13 @@ func (r *GPUPoolReconciler) reconcilePendingDeletingNodes(ctx context.Context, p
 				return err
 			}
 		}
+		if len(gpuNodeList.Items) == 0 {
+			log.Info("GPU node already deleted, skip deleting", "gpuNodeName", gpuNodeName)
+			continue
+		}
 
 		gpuNodeClaim := &tfv1.GPUNodeClaim{}
-		provisionedClaimName := gpuNodeObj.Labels[constants.ProvisionerLabelKey]
+		provisionedClaimName := gpuNodeList.Items[0].Labels[constants.ProvisionerLabelKey]
 		if provisionedClaimName == "" {
 			log.Error(nil, "invalid GPU provisioner name label for GPU node", "gpuNodeName", gpuNodeName)
 			continue
@@ -208,7 +217,9 @@ func (r *GPUPoolReconciler) reconcilePendingDeletingNodes(ctx context.Context, p
 	}
 
 	if len(remainDeletingNodes) != len(deletingNodes) {
+		pendingGPUNodeStateLock.Lock()
 		PendingDeletionGPUNodes[pool.Name] = remainDeletingNodes
+		pendingGPUNodeStateLock.Unlock()
 		return nil
 	}
 	return nil
@@ -232,7 +243,9 @@ func (r *GPUPoolReconciler) reconcilePendingCreatingNodes(ctx context.Context, p
 		}
 	}
 	if len(completedBoundClaims) > 0 {
+		pendingGPUNodeStateLock.Lock()
 		PendingGPUNodeClaim[pool.Name] = latestPendingClaim
+		pendingGPUNodeStateLock.Unlock()
 		log.FromContext(ctx).Info("GPU node provisioned and bound", "pool", pool.Name,
 			"bound node claims", strings.Join(completedBoundClaims, ","))
 	}

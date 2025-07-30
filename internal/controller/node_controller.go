@@ -66,6 +66,11 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 
+	if node.Spec.Unschedulable {
+		log.Info("Node is unschedulable, skip reconciling", "node", node.Name)
+		return ctrl.Result{}, nil
+	}
+
 	if node.Labels == nil {
 		node.Labels = map[string]string{}
 	}

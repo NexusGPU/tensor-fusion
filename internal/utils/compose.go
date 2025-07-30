@@ -382,7 +382,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	})
 
 	composeHypervisorInitContainer(spec, pool)
-	composeHypervisorContainer(spec, pool)
+	composeHypervisorContainer(spec, pool, enableVector)
 
 	if enableVector {
 		composeVectorContainer(spec, pool)
@@ -408,16 +408,13 @@ func composeHypervisorInitContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 	})
 }
 
-func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
+func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVector bool) {
 	spec.HostNetwork = true
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
 		Name:      constants.DataVolumeName,
 		ReadOnly:  false,
 		MountPath: constants.SharedMemDeviceName,
 		SubPath:   constants.SharedMemMountSubPath,
-	}, v1.VolumeMount{
-		Name:      constants.LogsVolumeName,
-		MountPath: constants.TensorFusionLogPath,
 	}, v1.VolumeMount{
 		Name:      constants.TensorFusionGPUInfoConfigVolumeName,
 		MountPath: constants.TensorFusionGPUInfoConfigMountPath,
@@ -426,6 +423,12 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 		Name:      constants.KubeletDevicePluginVolumeName,
 		MountPath: constants.KubeletDevicePluginPath,
 	})
+	if enableVector {
+		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
+			Name:      constants.LogsVolumeName,
+			MountPath: constants.TensorFusionLogPath,
+		})
+	}
 
 	spec.Containers[0].SecurityContext = &v1.SecurityContext{
 		Capabilities: &v1.Capabilities{
@@ -528,7 +531,11 @@ func composeVectorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 
 func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTemplateSpec, pool *tfv1.GPUPool, gpuNodeName string) {
 	tmpl.Spec.RestartPolicy = v1.RestartPolicyOnFailure
-	tmpl.Spec.ServiceAccountName = GetSelfServiceAccountNameShort()
+	serviceAccountName := GetSelfServiceAccountNameShort()
+	if serviceAccountName == "" {
+		serviceAccountName = constants.NamespaceDefaultVal
+	}
+	tmpl.Spec.ServiceAccountName = serviceAccountName
 	tmpl.Spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
 
 	if len(tmpl.Spec.Containers) == 0 {

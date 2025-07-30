@@ -97,7 +97,6 @@ var schedulerConfigPath string
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(tfv1.AddToScheme(scheme))
-	utilruntime.Must(tfv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

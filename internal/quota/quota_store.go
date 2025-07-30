@@ -172,15 +172,21 @@ func checkTotalExceeded(req *tfv1.AllocRequest, totalQuota *tfv1.Resource, curre
 	reqGPUNum := int64(req.Count)
 	var tflops, vram int64
 	if isRequest {
-		tflops = req.Request.Tflops.Value() * reqGPUNum
-		vram = req.Request.Vram.Value() * reqGPUNum
+		tflops, _ = req.Request.Tflops.AsInt64()
+		vram, _ = req.Request.Vram.AsInt64()
+		tflops *= reqGPUNum
+		vram *= reqGPUNum
 	} else {
-		tflops = req.Limit.Tflops.Value() * reqGPUNum
-		vram = req.Limit.Vram.Value() * reqGPUNum
+		tflops, _ = req.Limit.Tflops.AsInt64()
+		vram, _ = req.Limit.Vram.AsInt64()
+		tflops *= reqGPUNum
+		vram *= reqGPUNum
 	}
 
+	tflopsQuota, _ := totalQuota.Tflops.AsInt64()
+	tflopsCurrent, _ := current.Tflops.AsInt64()
 	if !totalQuota.Tflops.IsZero() &&
-		totalQuota.Tflops.Value() < (current.Tflops.Value()+tflops) {
+		tflopsQuota < (tflopsCurrent+tflops) {
 		var exceededMsg string
 		if isRequest {
 			exceededMsg = TotalMaxTFlopsRequestResource
@@ -194,8 +200,10 @@ func checkTotalExceeded(req *tfv1.AllocRequest, totalQuota *tfv1.Resource, curre
 			Limit:     totalQuota.Tflops,
 		}
 	}
-	if !totalQuota.Vram.IsZero() &&
-		totalQuota.Vram.Value() < (current.Vram.Value()+vram) {
+
+	vramQuota, _ := totalQuota.Vram.AsInt64()
+	vramCurrent, _ := current.Vram.AsInt64()
+	if !totalQuota.Vram.IsZero() && vramQuota < (vramCurrent+vram) {
 		var exceededMsg string
 		if isRequest {
 			exceededMsg = TotalMaxVRAMRequestResource
