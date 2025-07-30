@@ -284,7 +284,7 @@ var _ = Describe("Autoscaler", func() {
 			}).Should(Succeed())
 		})
 
-		FIt("should update resources based on cron scaling rule", func() {
+		It("should update resources based on cron scaling rule", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
@@ -342,6 +342,7 @@ var _ = Describe("Autoscaler", func() {
 				g.Expect(res.Equal(&originalResources)).To(BeTrue())
 			}).Should(Succeed())
 
+			// should not change after cron scaling finish
 			scaler.processWorkloads(ctx)
 			Eventually(func(g Gomega) {
 				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
