@@ -61,28 +61,27 @@ func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, state *Stat
 	if err != nil {
 		return fmt.Errorf("failed to get current workload resources: %v", err)
 	}
-	maps.Copy(workload.Annotations, utils.CurrentResourcesToAnnotations(recommendation))
 	if curRes == nil {
-		maps.Copy(workload.Annotations, utils.LastResourcesToAnnotations(&workload.Spec.Resources))
-	} else {
-		maps.Copy(workload.Annotations, utils.LastResourcesToAnnotations(curRes))
+		curRes = &workload.Spec.Resources
 	}
+	maps.Copy(workload.Annotations, utils.LastResourcesToAnnotations(curRes))
+	maps.Copy(workload.Annotations, utils.CurrentResourcesToAnnotations(recommendation))
+	maps.Copy(workload.Annotations, state.ScalingAnnotations)
 
 	if err := h.Patch(ctx, workload, patch); err != nil {
 		return fmt.Errorf("failed to patch workload %s: %v", workload.Name, err)
 	}
 
 	state.Annotations = workload.Annotations
-	state.Recommendation = *recommendation
 
-	if err := h.applyRecommendationToWorkers(ctx, state); err != nil {
+	if err := h.applyRecommendationToWorkers(ctx, state, recommendation); err != nil {
 		return fmt.Errorf("failed to apply recommendation to workers: %v", err)
 	}
 
 	return nil
 }
 
-func (h *handler) applyRecommendationToWorkers(ctx context.Context, workload *State) error {
+func (h *handler) applyRecommendationToWorkers(ctx context.Context, workload *State, recommendation *tfv1.Resources) error {
 	workerList := &corev1.PodList{}
 	if err := h.List(ctx, workerList,
 		client.InNamespace(workload.Namespace),
@@ -99,7 +98,7 @@ func (h *handler) applyRecommendationToWorkers(ctx context.Context, workload *St
 			continue
 		}
 
-		if err := h.updateWorkerResources(ctx, workload, &worker); err != nil {
+		if err := h.updateWorkerResources(ctx, workload, &worker, recommendation); err != nil {
 			return fmt.Errorf("failed to update worker %s resources: %v", worker.Name, err)
 		}
 	}
@@ -107,11 +106,10 @@ func (h *handler) applyRecommendationToWorkers(ctx context.Context, workload *St
 	return nil
 }
 
-func (h *handler) updateWorkerResources(ctx context.Context, workload *State, worker *corev1.Pod) error {
+func (h *handler) updateWorkerResources(ctx context.Context, workload *State, worker *corev1.Pod, rec *tfv1.Resources) error {
 	log := log.FromContext(ctx)
 
-	rec := workload.Recommendation
-	annotationsToUpdate := utils.CurrentResourcesToAnnotations(&rec)
+	annotationsToUpdate := utils.CurrentResourcesToAnnotations(rec)
 	if !workload.ShouldScaleResource(tfv1.ResourceTflops) {
 		delete(annotationsToUpdate, constants.TFLOPSRequestAnnotation)
 		delete(annotationsToUpdate, constants.TFLOPSLimitAnnotation)
@@ -129,7 +127,7 @@ func (h *handler) updateWorkerResources(ctx context.Context, workload *State, wo
 	if err != nil {
 		return fmt.Errorf("failed to get current worker resources: %v", err)
 	}
-	if curRes.Equal(&rec) {
+	if curRes.Equal(rec) {
 		return nil
 	}
 

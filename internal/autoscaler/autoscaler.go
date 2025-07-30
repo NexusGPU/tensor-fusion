@@ -167,7 +167,7 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 			}
 
 			recommendations[name] = recommendation
-			log.Info("recommendation", "workload", workload.Name, "recommender", name, "resources", recommendations[name])
+			log.Info("recommendation", "workload", workload.Name, "recommender", name, "resources", recommendation)
 		}
 
 		if len(recommendations) == 0 {
@@ -178,7 +178,7 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 		log.Info("final recommendation", "workload", workload.Name, "resources", finalRecommendation)
 
 		if err := s.workloadHandler.ApplyRecommendationToWorkload(ctx, workload, finalRecommendation); err != nil {
-			log.Error(err, "failed to apply recommendation to workload %s", workload.Name)
+			log.Error(err, "failed to apply recommendation", "workload", workload.Name, "recommendation", finalRecommendation)
 		}
 	}
 }

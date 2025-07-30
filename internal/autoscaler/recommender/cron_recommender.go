@@ -7,8 +7,13 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/robfig/cron/v3"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+)
+
+const (
+	CronScalingAnnotation = constants.Domain + "/cron-scaling"
 )
 
 type CronRecommender struct {
@@ -32,26 +37,30 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*tf
 		return nil, fmt.Errorf("failed to get active cron scaling rule %w", err)
 	}
 
-	var result tfv1.Resources
+	var result *tfv1.Resources
 	if activeRule == nil {
-		// if no active rule, return last resources if annotations exists
+		// if no active ruleName, return last resources if cron scaling not finish
+		ruleName, ok := w.Annotations[CronScalingAnnotation]
+		if !ok || ruleName == "" {
+			return nil, nil
+		}
 		resources, err := w.GetLastResourcesSpec()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get last resources: %w", err)
 		}
-		// TODO: need to find a way to determine if triggered by cron recommender
-		// no annotations
 		if resources == nil {
 			return nil, nil
 		}
-		result = *resources
-		log.Info("restore last resources", "workload", w.Name, "resources", result)
+		result = resources
+		w.ScalingAnnotations[CronScalingAnnotation] = ""
+		log.Info("cron scaling rule finished and restore last resources", "workload", w.Name, "rule", ruleName, "resources", result)
 	} else {
-		result = activeRule.DesiredResources
+		result = &activeRule.DesiredResources
+		w.ScalingAnnotations[CronScalingAnnotation] = activeRule.Name
 		log.Info("cron scaling rule matched", "workload", w.Name, "rule", activeRule.Name, "resources", result)
 	}
 
-	return &result, nil
+	return result, nil
 }
 
 func (c *CronRecommender) getActiveCronScalingRule(config *tfv1.AutoScalingConfig) (*tfv1.CronScalingRule, error) {

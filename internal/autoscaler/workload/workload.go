@@ -13,8 +13,8 @@ type State struct {
 	Namespace             string
 	Name                  string
 	Annotations           map[string]string
+	ScalingAnnotations    map[string]string
 	Spec                  tfv1.WorkloadProfileSpec
-	Recommendation        tfv1.Resources
 	Workers               map[string]*WorkerState
 	WorkerUsageAggregator *metrics.WorkerUsageAggregator
 }
@@ -23,6 +23,7 @@ func NewWorkloadState(name string) *State {
 	return &State{
 		Name:                  name,
 		Workers:               make(map[string]*WorkerState),
+		ScalingAnnotations:    make(map[string]string),
 		WorkerUsageAggregator: metrics.NewWorkerUsageAggregator(),
 	}
 }

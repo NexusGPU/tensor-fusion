@@ -41,16 +41,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// [x] tflops add all samples, like cpu in vpa
-// [x] Reallocate resources before update annotation
-// Add AutoSetResources, make it more configurable
-// Log key events
-// Add recommendation to workload status
-// Write some documents
-// cron scheduler stragegy,  parallisam ?
-// Refactor main, setup database may not put in leader election runnable group
-// Resolve conversation on github, thanks for reviews
-
 var _ = Describe("Autoscaler", func() {
 	Context("when creating an autoscaler", func() {
 		It("should return an error if there is no client", func() {
