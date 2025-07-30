@@ -179,14 +179,16 @@ func main() {
 }
 
 // Use proper patch-based update with retry on conflict
-func patchGPUNodeStatus(k8sClient client.Client, ctx context.Context, gpunode *tfv1.GPUNode, totalTFlops resource.Quantity, totalVRAM resource.Quantity, count int32, allDeviceIDs []string) error {
+func patchGPUNodeStatus(k8sClient client.Client, ctx context.Context,
+	gpunode *tfv1.GPUNode, totalTFlops resource.Quantity, totalVRAM resource.Quantity,
+	count int32, allDeviceIDs []string) error {
 
 	currentGPUNode := &tfv1.GPUNode{}
 	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpunode), currentGPUNode); err != nil {
 		return err
 	}
 	patch := client.MergeFrom(currentGPUNode.DeepCopy())
-	updateGPUNodeStatus(&currentGPUNode.Status, totalTFlops, totalVRAM, int32(count), allDeviceIDs)
+	updateGPUNodeStatus(&currentGPUNode.Status, totalTFlops, totalVRAM, count, allDeviceIDs)
 	return k8sClient.Status().Patch(ctx, currentGPUNode, patch)
 }
 

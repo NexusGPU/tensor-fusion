@@ -181,7 +181,8 @@ func TestPatchGPUNodeStatus(t *testing.T) {
 				assert.Equal(t, resource.MustParse("24Gi"), patchedNode.Status.TotalVRAM)
 				assert.Equal(t, int32(6), patchedNode.Status.TotalGPUs)
 				assert.Equal(t, int32(6), patchedNode.Status.ManagedGPUs)
-				assert.Equal(t, []string{"gpu-0", "gpu-1", "gpu-2", "gpu-3", "gpu-4", "gpu-5"}, patchedNode.Status.ManagedGPUDeviceIDs)
+				assert.Equal(t, []string{"gpu-0", "gpu-1", "gpu-2", "gpu-3", "gpu-4", "gpu-5"},
+					patchedNode.Status.ManagedGPUDeviceIDs)
 				// Verify existing phase was preserved
 				assert.Equal(t, tfv1.TensorFusionGPUNodePhaseRunning, patchedNode.Status.Phase)
 			},
@@ -368,7 +369,8 @@ func TestPatchGPUNodeStatus_Integration(t *testing.T) {
 	for i, update := range updates {
 		t.Run(fmt.Sprintf("update_%d", i+1), func(t *testing.T) {
 			// Apply the patch
-			err := patchGPUNodeStatus(k8sClient, ctx, gpuNode, update.totalTFlops, update.totalVRAM, update.count, update.allDeviceIDs)
+			err := patchGPUNodeStatus(k8sClient, ctx, gpuNode, update.totalTFlops,
+				update.totalVRAM, update.count, update.allDeviceIDs)
 			assert.NoError(t, err, "Patch should succeed")
 
 			// Verify the update was applied

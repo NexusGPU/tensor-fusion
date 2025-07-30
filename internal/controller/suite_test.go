@@ -506,23 +506,21 @@ func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(gpuNodeClaimList *tfv1.GPU
 				if err := k8sClient.Status().Update(ctx, latest); err != nil {
 					return err
 				}
-
-				// update GPUNode status to trigger node level reconcile, simulate node discovery job
-				if gpuNode.Status.Phase == "" || gpuNode.Status.TotalGPUs == 0 {
-					gpuNode.Status = tfv1.GPUNodeStatus{
-						Phase:       tfv1.TensorFusionGPUNodePhasePending,
-						TotalGPUs:   1,
-						ManagedGPUs: 1,
-						TotalTFlops: gpuNodeClaim.Spec.TFlopsOffered,
-						TotalVRAM:   gpuNodeClaim.Spec.VRAMOffered,
-					}
-					if err := k8sClient.Status().Update(ctx, gpuNode); err != nil {
-						return err
-					}
-				}
 				return nil
 			})
 			Expect(err).Should(Succeed())
+		}
+
+		// update GPUNode status to trigger node level reconcile, simulate node discovery job
+		if gpuNode.Status.Phase == "" || gpuNode.Status.TotalGPUs == 0 {
+			gpuNode.Status = tfv1.GPUNodeStatus{
+				Phase:       tfv1.TensorFusionGPUNodePhasePending,
+				TotalGPUs:   1,
+				ManagedGPUs: 1,
+				TotalTFlops: gpuNodeClaim.Spec.TFlopsOffered,
+				TotalVRAM:   gpuNodeClaim.Spec.VRAMOffered,
+			}
+			Expect(k8sClient.Status().Update(ctx, gpuNode)).Should(Succeed())
 		}
 	}
 }
