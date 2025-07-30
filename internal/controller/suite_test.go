@@ -755,7 +755,7 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 					gpuNode.Status.TotalVRAM = resource.MustParse(fmt.Sprintf("%dGi", 2000*gpuCount))
 					gpuNode.Status.AvailableTFlops = gpuNode.Status.TotalTFlops
 					gpuNode.Status.AvailableVRAM = gpuNode.Status.TotalVRAM
-					Expect(k8sClient.Status().Update(ctx, gpuNode)).To(Succeed())
+					g.Expect(k8sClient.Status().Update(ctx, gpuNode)).To(Succeed())
 				}).Should(Succeed())
 			}
 		}
