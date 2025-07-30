@@ -106,10 +106,18 @@ func (h *handler) applyRecommendationToWorkers(ctx context.Context, workload *St
 	return nil
 }
 
-func (h *handler) updateWorkerResources(ctx context.Context, workload *State, worker *corev1.Pod, rec *tfv1.Resources) error {
+func (h *handler) updateWorkerResources(ctx context.Context, workload *State, worker *corev1.Pod, recommendation *tfv1.Resources) error {
 	log := log.FromContext(ctx)
 
-	annotationsToUpdate := utils.CurrentResourcesToAnnotations(rec)
+	curRes, err := utils.CurrentResourcesFromAnnotations(worker.Annotations)
+	if err != nil {
+		return fmt.Errorf("failed to get current worker resources: %v", err)
+	}
+	if curRes.Equal(recommendation) {
+		return nil
+	}
+
+	annotationsToUpdate := utils.CurrentResourcesToAnnotations(recommendation)
 	if !workload.ShouldScaleResource(tfv1.ResourceTflops) {
 		delete(annotationsToUpdate, constants.TFLOPSRequestAnnotation)
 		delete(annotationsToUpdate, constants.TFLOPSLimitAnnotation)
@@ -123,37 +131,31 @@ func (h *handler) updateWorkerResources(ctx context.Context, workload *State, wo
 		return nil
 	}
 
-	curRes, err := utils.CurrentResourcesFromAnnotations(worker.Annotations)
-	if err != nil {
-		return fmt.Errorf("failed to get current worker resources: %v", err)
-	}
-	if curRes.Equal(rec) {
-		return nil
+	isScaleUp := false
+	if _, ok := annotationsToUpdate[constants.TFLOPSRequestAnnotation]; ok {
+		isScaleUp = recommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0
+	} else {
+		isScaleUp = recommendation.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
 	}
 
 	adjustRequest := &tfv1.AdjustRequest{
 		PodUID:     string(worker.UID),
-		IsScaleUp:  rec.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0, // TODO: handle vram?
-		NewRequest: rec.Requests,
-		NewLimit:   rec.Limits,
+		IsScaleUp:  isScaleUp,
+		NewRequest: recommendation.Requests,
+		NewLimit:   recommendation.Limits,
 	}
-
 	if _, err := h.allocator.AdjustAllocation(ctx, *adjustRequest, true); err != nil {
 		return fmt.Errorf("failed to adjust allocation: %v", err)
 	}
-	log.Info("adjust allocation successfully", "adjustRequest", adjustRequest)
+	log.Info("adjust allocation successfully", "worker", worker.Name, "adjustRequest", adjustRequest)
 
 	patch := client.MergeFrom(worker.DeepCopy())
-
-	for key, value := range annotationsToUpdate {
-		worker.Annotations[key] = value
-	}
-
+	maps.Copy(worker.Annotations, annotationsToUpdate)
 	if err := h.Patch(ctx, worker, patch); err != nil {
 		return fmt.Errorf("failed to patch worker %s: %v", worker.Name, err)
 	}
 
-	log.Info("apply recommendation successfully", "worker", worker.Name, "recommendation", rec, "currentResources", curRes)
+	log.Info("apply recommendation successfully", "worker", worker.Name, "recommendation", recommendation, "currentResources", curRes)
 
 	return nil
 }
