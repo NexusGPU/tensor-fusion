@@ -1,11 +1,16 @@
 package recommender
 
 import (
+	"context"
+	"fmt"
+	"math/big"
 	"strconv"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -38,6 +43,15 @@ var defaultPercentileConfig = PercentileConfig{
 	ConfidenceInterval:         defaultConfidenceInterval,
 }
 
+type RecommendedResources struct {
+	LowerBoundTflops resource.Quantity
+	TargetTflops     resource.Quantity
+	UpperBoundTflops resource.Quantity
+	LowerBoundVram   resource.Quantity
+	TargetVram       resource.Quantity
+	UpperBoundVram   resource.Quantity
+}
+
 type PercentileConfig struct {
 	TargetTflopsPercentile     float64
 	LowerBoundTflopsPercentile float64
@@ -66,22 +80,59 @@ func (p *PercentileRecommender) Name() string {
 	return "percentile"
 }
 
-func (p *PercentileRecommender) Recommend(workload *workload.State) (*tfv1.RecommendedResources, error) {
+func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workload.State) (*tfv1.Resources, error) {
+	log := log.FromContext(ctx)
 	// TODO: cache config
 	aggregator := workload.WorkerUsageAggregator
-	if aggregator.TflopsHistogram.IsEmpty() && aggregator.VramHistogram.IsEmpty() {
+	if aggregator.IsEmpty() {
 		return nil, nil
 	}
 
+	curRes, err := workload.GetCurrentResourcesSpec()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current resources from workload %s: %v", workload.Name, err)
+	}
+
 	p.createEstimatorsFromConfig(p.getPercentileConfig(&workload.Spec.AutoScalingConfig.AutoSetResources))
-	return &tfv1.RecommendedResources{
+	rr := &RecommendedResources{
 		LowerBoundTflops: QuantityFromAmount(p.lowerBoundTflops.GetTflopsEstimation(aggregator)),
 		TargetTflops:     QuantityFromAmount(p.targetTflops.GetTflopsEstimation(aggregator)),
 		UpperBoundTflops: QuantityFromAmount(p.upperBoundTflops.GetTflopsEstimation(aggregator)),
 		LowerBoundVram:   QuantityFromAmount(p.lowerBoundVram.GetVramEstimation(aggregator)),
 		TargetVram:       QuantityFromAmount(p.targetVram.GetVramEstimation(aggregator)),
 		UpperBoundVram:   QuantityFromAmount(p.upperBoundVram.GetVramEstimation(aggregator)),
-	}, nil
+	}
+
+	log.Info("recommendation", "workload", workload.Name, "recommender", p.Name(), "resources", rr)
+
+	var result tfv1.Resources
+	if curRes.Requests.Tflops.Cmp(rr.LowerBoundTflops) < 0 ||
+		curRes.Requests.Tflops.Cmp(rr.UpperBoundTflops) > 0 {
+		result.Requests.Tflops = rr.TargetTflops
+		targetLimit := getProportionalLimit(&curRes.Limits.Tflops, &curRes.Requests.Tflops, &rr.TargetTflops)
+		if targetLimit == nil {
+			return nil, fmt.Errorf("failed to get tflops limit from workload %s", workload.Name)
+		}
+		result.Limits.Tflops = *targetLimit
+	}
+
+	if curRes.Requests.Vram.Cmp(rr.LowerBoundVram) < 0 ||
+		curRes.Requests.Vram.Cmp(rr.UpperBoundVram) > 0 {
+		result.Requests.Vram = rr.TargetVram
+		targetLimit := getProportionalLimit(&curRes.Limits.Vram, &curRes.Requests.Vram, &rr.TargetVram)
+		if targetLimit == nil {
+			return nil, fmt.Errorf("failed to get vram limit from workload %s", workload.Name)
+		}
+		result.Limits.Vram = *targetLimit
+	}
+
+	if result.Equal(curRes) {
+		return nil, nil
+	}
+
+	// TODO: handle tflops or vram should recommend
+
+	return &result, nil
 }
 
 func (p *PercentileRecommender) getPercentileConfig(asr *tfv1.AutoSetResources) *PercentileConfig {
@@ -152,4 +203,24 @@ func (p *PercentileRecommender) createEstimatorsFromConfig(config *PercentileCon
 		targetVram:       targetVram,
 		upperBoundVram:   upperBoundVram,
 	}
+}
+
+func getProportionalLimit(originalLimit, originalRequest, recommendedRequest *resource.Quantity) *resource.Quantity {
+	if originalLimit == nil || originalLimit.IsZero() ||
+		originalRequest == nil || originalRequest.IsZero() ||
+		recommendedRequest == nil || recommendedRequest.IsZero() {
+		return nil
+	}
+
+	originalValue := big.NewInt(originalLimit.Value())
+	scaleBaseValue := big.NewInt(originalRequest.Value())
+	scaleResultValue := big.NewInt(recommendedRequest.Value())
+	var scaledOriginal big.Int
+	scaledOriginal.Mul(originalValue, scaleResultValue)
+	scaledOriginal.Div(&scaledOriginal, scaleBaseValue)
+	if scaledOriginal.IsInt64() {
+		return resource.NewQuantity(scaledOriginal.Int64(), originalLimit.Format)
+	}
+
+	return nil
 }

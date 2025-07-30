@@ -3,6 +3,7 @@ package autoscaler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -153,10 +154,10 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 	log.Info("processing workloads")
 
 	for _, workload := range s.workloads {
-		recommendations := map[string]*tfv1.RecommendedResources{}
+		recommendations := map[string]*tfv1.Resources{}
 		for _, recommender := range s.recommenders {
 			name := recommender.Name()
-			recommendation, err := recommender.Recommend(workload)
+			recommendation, err := recommender.Recommend(ctx, workload)
 			if err != nil {
 				log.Error(err, "failed to recommend resources", "recommender", name)
 				continue
@@ -166,23 +167,19 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 			}
 
 			recommendations[name] = recommendation
-			log.Info("recommendation", "recommender", name, "workload", workload.Name, "resources", recommendations[name])
+			log.Info("recommendation", "workload", workload.Name, "recommender", name, "resources", recommendations[name])
 		}
 
 		if len(recommendations) == 0 {
 			continue
 		}
 
-		var finalRecommendation *tfv1.RecommendedResources
-		// for _, recommendation := range recommendations {
-		// 	finalRecommendation = recommendation
-		// }
-		// process cron recommendation
-		if recommendation, ok := recommendations[recommender.Cron]; ok {
-			finalRecommendation = recommendation
-		}
+		finalRecommendation := mergeRecommendations(recommendations)
+		log.Info("final recommendation", "workload", workload.Name, "resources", finalRecommendation)
 
-		s.workloadHandler.ApplyRecommendationToWorkload(ctx, workload, finalRecommendation)
+		if err := s.workloadHandler.ApplyRecommendationToWorkload(ctx, workload, finalRecommendation); err != nil {
+			log.Error(err, "failed to apply recommendation to workload %s", workload.Name)
+		}
 	}
 }
 
@@ -195,11 +192,26 @@ func (s *Autoscaler) findOrCreateWorkloadState(name string) *workload.State {
 	return w
 }
 
+func mergeRecommendations(recommendations map[string]*tfv1.Resources) *tfv1.Resources {
+	result := &tfv1.Resources{}
+	for _, rec := range recommendations {
+		if result.Requests.Tflops.Cmp(rec.Requests.Tflops) < 0 {
+			result.Requests.Tflops = rec.Requests.Tflops
+			result.Limits.Tflops = rec.Limits.Tflops
+		}
+		if result.Requests.Vram.Cmp(rec.Requests.Vram) < 0 {
+			result.Requests.Vram = rec.Requests.Vram
+			result.Limits.Vram = rec.Limits.Vram
+		}
+	}
+	return result
+}
+
 // Start after manager started
 func SetupWithManager(mgr ctrl.Manager, allocator *gpuallocator.GpuAllocator) error {
 	autoScaler, err := NewAutoscaler(mgr.GetClient(), allocator)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create auto scaler: %v", err)
 	}
 	return mgr.Add(autoScaler)
 }

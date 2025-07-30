@@ -35,6 +35,13 @@ func NewWorkerUsageAggregator() *WorkerUsageAggregator {
 	}
 }
 
+func (w *WorkerUsageAggregator) IsEmpty() bool {
+	if w.TflopsHistogram.IsEmpty() && w.VramHistogram.IsEmpty() {
+		return true
+	}
+	return false
+}
+
 func (w *WorkerUsageAggregator) AddTflopsSample(sample *WorkerUsage) bool {
 	w.TflopsHistogram.AddSample(float64(sample.TflopsUsage), minSampleWeight, sample.Timestamp)
 	if sample.Timestamp.After(w.LastSampleStart) {
