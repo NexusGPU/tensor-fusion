@@ -29,6 +29,8 @@ type GPUPoolCompactionReconciler struct {
 	Recorder record.EventRecorder
 
 	Allocator *gpuallocator.GpuAllocator
+
+	markDeletionNodes map[string]struct{}
 }
 
 var defaultCompactionDuration = 1 * time.Minute
@@ -71,9 +73,16 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 
 	for _, gpu := range gpuStore {
 		if !gpu.DeletionTimestamp.IsZero() || gpu.Labels[constants.GpuPoolKey] != pool.Name ||
-			gpu.Status.UsedBy != tfv1.UsedByTensorFusion {
+			gpu.Status.UsedBy != tfv1.UsedByTensorFusion || len(gpu.Status.NodeSelector) == 0 {
 			continue
 		}
+
+		k8sNodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if _, ok := r.markDeletionNodes[k8sNodeName]; ok {
+			log.V(4).Info("skip node already marked for deletion when calculation capacity", "node", k8sNodeName)
+			continue
+		}
+
 		availableTFlops, _ := gpu.Status.Available.Tflops.AsInt64()
 		poolAvailableTFlops += availableTFlops
 		availableVRAM, _ := gpu.Status.Available.Vram.AsInt64()
@@ -153,6 +162,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 				poolAvailableVRAM -= nodeCapVRAM
 				poolTotalTFlops -= nodeCapTFlops
 				poolTotalVRAM -= nodeCapVRAM
+				r.markDeletionNodes[k8sNodeName] = struct{}{}
 
 				log.Info("Empty node can be compacted - provision mode", "node", gpuNode.Name,
 					"availableTFlopsAfterCompact", poolAvailableTFlops,
@@ -185,6 +195,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 				poolAvailableVRAM -= nodeCapVRAM
 				poolTotalTFlops -= nodeCapTFlops
 				poolTotalVRAM -= nodeCapVRAM
+				r.markDeletionNodes[k8sNodeName] = struct{}{}
 
 				log.Info("Empty node can be compacted - auto-select mode", "node", gpuNode.Name,
 					"availableTFlopsAfterCompact", poolAvailableTFlops,
@@ -307,6 +318,7 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *GPUPoolCompactionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.markDeletionNodes = make(map[string]struct{})
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gpupool-compaction").
 		WatchesMetadata(&tfv1.GPUPool{}, &handler.EnqueueRequestForObject{}).
@@ -315,5 +327,5 @@ func (r *GPUPoolCompactionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func SetTestModeCompactionPeriod() {
 	defaultCompactionDuration = 700 * time.Millisecond
-	newNodeProtectionDuration = 1200 * time.Millisecond
+	newNodeProtectionDuration = 1000 * time.Millisecond
 }
