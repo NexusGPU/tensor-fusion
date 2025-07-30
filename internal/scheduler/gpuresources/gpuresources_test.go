@@ -496,8 +496,8 @@ func (s *GPUResourcesSuite) TestReserveAndUnreserve() {
 	s.Len(gpu.Status.RunningApps, 1)
 }
 
-func (s *GPUResourcesSuite) TestPreBind() {
-	log.FromContext(s.ctx).Info("Running TestPreBind")
+func (s *GPUResourcesSuite) TestPostBind() {
+	log.FromContext(s.ctx).Info("Running TestPostBind")
 	state := framework.NewCycleState()
 	pod := s.makePod("p1",
 		map[string]string{
