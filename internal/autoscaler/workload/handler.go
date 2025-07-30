@@ -3,21 +3,20 @@ package workload
 import (
 	"context"
 	"fmt"
-	"math/big"
+	"maps"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 type Handler interface {
 	UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload)
-	ApplyRecommendationToWorkload(ctx context.Context, state *State, recommendation *tfv1.RecommendedResources) error
-	UpdateWorkerResourcesIfNeeded(ctx context.Context, workload *State, worker *corev1.Pod) error
+	ApplyRecommendationToWorkload(ctx context.Context, state *State, recommendation *tfv1.Resources) error
 }
 
 type handler struct {
@@ -47,7 +46,7 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 	workloadState.updateWorkers(workerList)
 }
 
-func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, state *State, recommendation *tfv1.RecommendedResources) error {
+func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, state *State, recommendation *tfv1.Resources) error {
 	workload := &tfv1.TensorFusionWorkload{}
 	if err := h.Get(ctx, client.ObjectKey{Namespace: state.Namespace, Name: state.Name}, workload); err != nil {
 		return fmt.Errorf("failed to get workload: %v", err)
@@ -58,40 +57,37 @@ func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, state *Stat
 	if workload.Annotations == nil {
 		workload.Annotations = map[string]string{}
 	}
-	if tflopsRequest, ok := workload.Annotations[constants.TFLOPSRequestAnnotation]; ok {
-		workload.Annotations[constants.LastTFLOPSRequestAnnotation] = tflopsRequest
-	} else {
-		workload.Annotations[constants.LastTFLOPSRequestAnnotation] = workload.Spec.Resources.Requests.Tflops.String()
+	curRes, err := utils.CurrentResourcesFromAnnotations(workload.Annotations)
+	if err != nil {
+		return fmt.Errorf("failed to get current workload resources: %v", err)
 	}
-	if vramRequest, ok := workload.Annotations[constants.VRAMRequestAnnotation]; ok {
-		workload.Annotations[constants.LastVRAMRequestAnnotation] = vramRequest
+	maps.Copy(workload.Annotations, utils.CurrentResourcesToAnnotations(recommendation))
+	if curRes == nil {
+		maps.Copy(workload.Annotations, utils.LastResourcesToAnnotations(&workload.Spec.Resources))
 	} else {
-		workload.Annotations[constants.LastVRAMRequestAnnotation] = workload.Spec.Resources.Requests.Vram.String()
+		maps.Copy(workload.Annotations, utils.LastResourcesToAnnotations(curRes))
 	}
-	workload.Annotations[constants.TFLOPSRequestAnnotation] = recommendation.TargetTflops.String()
-	workload.Annotations[constants.VRAMRequestAnnotation] = recommendation.TargetVram.String()
 
 	if err := h.Patch(ctx, workload, patch); err != nil {
-		return fmt.Errorf("failed to patch workload: %v", err)
+		return fmt.Errorf("failed to patch workload %s: %v", workload.Name, err)
 	}
 
 	state.Annotations = workload.Annotations
 	state.Recommendation = *recommendation
 
-	if err := h.ApplyRecommendationToWorkers(ctx, state); err != nil {
+	if err := h.applyRecommendationToWorkers(ctx, state); err != nil {
 		return fmt.Errorf("failed to apply recommendation to workers: %v", err)
 	}
 
 	return nil
 }
 
-func (h *handler) ApplyRecommendationToWorkers(ctx context.Context, workload *State) error {
-	log := log.FromContext(ctx)
+func (h *handler) applyRecommendationToWorkers(ctx context.Context, workload *State) error {
 	workerList := &corev1.PodList{}
 	if err := h.List(ctx, workerList,
 		client.InNamespace(workload.Namespace),
 		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
-		log.Error(err, "failed to list workers")
+		return fmt.Errorf("failed to list workers: %v", err)
 	}
 
 	if !workload.IsAutoSetResourcesEnabled() {
@@ -103,147 +99,63 @@ func (h *handler) ApplyRecommendationToWorkers(ctx context.Context, workload *St
 			continue
 		}
 
-		if err := h.UpdateWorkerResourcesIfNeeded(ctx, workload, &worker); err != nil {
-			log.Error(err, "failed to update worker")
+		if err := h.updateWorkerResources(ctx, workload, &worker); err != nil {
+			return fmt.Errorf("failed to update worker %s resources: %v", worker.Name, err)
 		}
 	}
 
 	return nil
 }
 
-func (h *handler) UpdateWorkerResourcesIfNeeded(ctx context.Context, workload *State, worker *corev1.Pod) error {
+func (h *handler) updateWorkerResources(ctx context.Context, workload *State, worker *corev1.Pod) error {
 	log := log.FromContext(ctx)
 
-	adjustRequest, err := getCurrentWorkerResourceRequest(worker)
-	if err != nil {
-		return fmt.Errorf("failed to get current worker resource request, %v", err)
+	rec := workload.Recommendation
+	annotationsToUpdate := utils.CurrentResourcesToAnnotations(&rec)
+	if !workload.ShouldScaleResource(tfv1.ResourceTflops) {
+		delete(annotationsToUpdate, constants.TFLOPSRequestAnnotation)
+		delete(annotationsToUpdate, constants.TFLOPSLimitAnnotation)
+	}
+	if !workload.ShouldScaleResource(tfv1.ResourceVram) {
+		delete(annotationsToUpdate, constants.VRAMRequestAnnotation)
+		delete(annotationsToUpdate, constants.VRAMLimitAnnotation)
 	}
 
-	recommendation := &workload.Recommendation
-	resourcesInfo := []struct {
-		name           tfv1.ResourceName
-		requestKey     string
-		limitKey       string
-		lastRequestKey string
-		lastLimitKey   string
-		request        *resource.Quantity
-		limit          *resource.Quantity
-		lowerBound     resource.Quantity
-		upperBound     resource.Quantity
-		target         resource.Quantity
-	}{
-		{
-			name:           tfv1.ResourceTflops,
-			requestKey:     constants.TFLOPSRequestAnnotation,
-			limitKey:       constants.TFLOPSLimitAnnotation,
-			lastRequestKey: constants.LastTFLOPSRequestAnnotation,
-			lastLimitKey:   constants.LastTFLOPSLimitAnnotation,
-			request:        &adjustRequest.NewRequest.Tflops,
-			limit:          &adjustRequest.NewLimit.Tflops,
-			lowerBound:     recommendation.LowerBoundTflops,
-			upperBound:     recommendation.UpperBoundTflops,
-			target:         recommendation.TargetTflops,
-		},
-		{
-			name:           tfv1.ResourceVram,
-			requestKey:     constants.VRAMRequestAnnotation,
-			limitKey:       constants.VRAMLimitAnnotation,
-			lastRequestKey: constants.LastVRAMRequestAnnotation,
-			lastLimitKey:   constants.LastVRAMLimitAnnotation,
-			request:        &adjustRequest.NewRequest.Vram,
-			limit:          &adjustRequest.NewLimit.Vram,
-			lowerBound:     recommendation.LowerBoundVram,
-			upperBound:     recommendation.UpperBoundVram,
-			target:         recommendation.TargetVram,
-		},
-	}
-
-	newAnnotations := map[string]string{}
-	var upScaling, downScaling bool
-	for _, resInfo := range resourcesInfo {
-		if !workload.ShouldScaleResource(resInfo.name) {
-			continue
-		}
-		upScaling = resInfo.request.Cmp(resInfo.lowerBound) < 0
-		downScaling = resInfo.request.Cmp(resInfo.upperBound) > 0
-		if upScaling || downScaling {
-			targetRequest := resInfo.target
-			targetLimit := getProportionalLimit(resInfo.limit, resInfo.request, &targetRequest)
-			if targetLimit == nil {
-				return fmt.Errorf("failed to get limit for %s", resInfo.requestKey)
-			}
-			newAnnotations[resInfo.lastRequestKey] = resInfo.request.String()
-			newAnnotations[resInfo.lastLimitKey] = resInfo.limit.String()
-			newAnnotations[resInfo.requestKey] = targetRequest.String()
-			newAnnotations[resInfo.limitKey] = targetLimit.String()
-			*resInfo.request = targetRequest
-			*resInfo.limit = *targetLimit
-		}
-	}
-
-	if len(newAnnotations) > 0 {
-		adjustRequest.IsScaleUp = upScaling
-		if _, err := h.allocator.AdjustAllocation(ctx, *adjustRequest, true); err != nil {
-			return fmt.Errorf("failed to adjust allocation: %v", err)
-		}
-		log.Info("adjust allocation successfully", "adjustRequest", adjustRequest)
-		// Patch the worker with updated annotations
-		patch := client.MergeFrom(worker.DeepCopy())
-		for key, value := range newAnnotations {
-			worker.Annotations[key] = value
-		}
-		if err := h.Patch(ctx, worker, patch); err != nil {
-			return fmt.Errorf("failed to patch worker: %v", err)
-		}
-	}
-
-	return nil
-}
-
-func getProportionalLimit(originalLimit, originalRequest, recommendedRequest *resource.Quantity) *resource.Quantity {
-	if originalLimit == nil || originalLimit.IsZero() ||
-		originalRequest == nil || originalRequest.IsZero() ||
-		recommendedRequest == nil || recommendedRequest.IsZero() {
+	if len(annotationsToUpdate) <= 0 {
 		return nil
 	}
 
-	originalValue := big.NewInt(originalLimit.Value())
-	scaleBaseValue := big.NewInt(originalRequest.Value())
-	scaleResultValue := big.NewInt(recommendedRequest.Value())
-	var scaledOriginal big.Int
-	scaledOriginal.Mul(originalValue, scaleResultValue)
-	scaledOriginal.Div(&scaledOriginal, scaleBaseValue)
-	if scaledOriginal.IsInt64() {
-		return resource.NewQuantity(scaledOriginal.Int64(), originalLimit.Format)
+	curRes, err := utils.CurrentResourcesFromAnnotations(worker.Annotations)
+	if err != nil {
+		return fmt.Errorf("failed to get current worker resources: %v", err)
 	}
+	if curRes.Equal(&rec) {
+		return nil
+	}
+
+	adjustRequest := &tfv1.AdjustRequest{
+		PodUID:     string(worker.UID),
+		IsScaleUp:  rec.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0, // TODO: handle vram?
+		NewRequest: rec.Requests,
+		NewLimit:   rec.Limits,
+	}
+
+	if _, err := h.allocator.AdjustAllocation(ctx, *adjustRequest, true); err != nil {
+		return fmt.Errorf("failed to adjust allocation: %v", err)
+	}
+	log.Info("adjust allocation successfully", "adjustRequest", adjustRequest)
+
+	patch := client.MergeFrom(worker.DeepCopy())
+
+	for key, value := range annotationsToUpdate {
+		worker.Annotations[key] = value
+	}
+
+	if err := h.Patch(ctx, worker, patch); err != nil {
+		return fmt.Errorf("failed to patch worker %s: %v", worker.Name, err)
+	}
+
+	log.Info("apply recommendation successfully", "worker", worker.Name, "recommendation", rec, "currentResources", curRes)
 
 	return nil
-}
-
-func getCurrentWorkerResourceRequest(worker *corev1.Pod) (*tfv1.AdjustRequest, error) {
-	adjustRequest := tfv1.AdjustRequest{
-		PodUID:     string(worker.UID),
-		IsScaleUp:  false,
-		NewRequest: tfv1.Resource{},
-		NewLimit:   tfv1.Resource{},
-	}
-	annotations := worker.GetAnnotations()
-	resInfo := []struct {
-		key string
-		dst *resource.Quantity
-	}{
-		{constants.TFLOPSRequestAnnotation, &adjustRequest.NewRequest.Tflops},
-		{constants.TFLOPSLimitAnnotation, &adjustRequest.NewLimit.Tflops},
-		{constants.VRAMRequestAnnotation, &adjustRequest.NewRequest.Vram},
-		{constants.VRAMLimitAnnotation, &adjustRequest.NewLimit.Vram},
-	}
-	for _, info := range resInfo {
-		q, err := resource.ParseQuantity(annotations[info.key])
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse %s: %v", info.key, err)
-		}
-		*info.dst = q
-	}
-
-	return &adjustRequest, nil
 }

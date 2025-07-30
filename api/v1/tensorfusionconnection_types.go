@@ -38,6 +38,20 @@ type Resources struct {
 	Limits   Resource `json:"limits"`
 }
 
+func (r *Resources) Equal(t *Resources) bool {
+	return r.Requests.Tflops.Equal(t.Requests.Tflops) &&
+		r.Requests.Vram.Equal(t.Requests.Vram) &&
+		r.Limits.Tflops.Equal(t.Limits.Tflops) &&
+		r.Limits.Vram.Equal(t.Limits.Vram)
+}
+
+func (r *Resources) IsZero() bool {
+	return r.Requests.Tflops.IsZero() &&
+		r.Requests.Vram.IsZero() &&
+		r.Limits.Tflops.IsZero() &&
+		r.Limits.Vram.IsZero()
+}
+
 // TensorFusionConnectionSpec defines the desired state of TensorFusionConnection.
 type TensorFusionConnectionSpec struct {
 	WorkloadName string `json:"workloadName"`

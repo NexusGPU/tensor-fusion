@@ -1,13 +1,14 @@
 package recommender
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/robfig/cron/v3"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 type CronRecommender struct {
@@ -24,38 +25,33 @@ func (c *CronRecommender) Name() string {
 	return "cron"
 }
 
-func (c *CronRecommender) Recommend(w *workload.State) (*tfv1.RecommendedResources, error) {
+func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*tfv1.Resources, error) {
+	log := log.FromContext(ctx)
 	activeRule, err := c.getActiveCronScalingRule(&w.Spec.AutoScalingConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active cron scaling rule %w", err)
 	}
 
-	var tflopsRequest, vramRequest resource.Quantity
+	var result tfv1.Resources
 	if activeRule == nil {
 		// if no active rule, return last resources if annotations exists
-		resources, err := w.GetLastResourcesFromAnnotations()
+		resources, err := w.GetLastResourcesSpec()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get last resources: %w", err)
 		}
+		// TODO: need to find a way to determine if triggered by cron recommender
 		// no annotations
 		if resources == nil {
 			return nil, nil
 		}
-		tflopsRequest = resources.Requests.Tflops
-		vramRequest = resources.Requests.Vram
+		result = *resources
+		log.Info("restore last resources", "workload", w.Name, "resources", result)
 	} else {
-		tflopsRequest = activeRule.DesiredResources.Requests.Tflops
-		vramRequest = activeRule.DesiredResources.Requests.Vram
+		result = activeRule.DesiredResources
+		log.Info("cron scaling rule matched", "workload", w.Name, "rule", activeRule.Name, "resources", result)
 	}
 
-	return &tfv1.RecommendedResources{
-		LowerBoundTflops: tflopsRequest,
-		TargetTflops:     tflopsRequest,
-		UpperBoundTflops: tflopsRequest,
-		LowerBoundVram:   vramRequest,
-		TargetVram:       vramRequest,
-		UpperBoundVram:   vramRequest,
-	}, nil
+	return &result, nil
 }
 
 func (c *CronRecommender) getActiveCronScalingRule(config *tfv1.AutoScalingConfig) (*tfv1.CronScalingRule, error) {
@@ -64,7 +60,8 @@ func (c *CronRecommender) getActiveCronScalingRule(config *tfv1.AutoScalingConfi
 	currentTime := time.Now()
 
 	for _, rule := range config.CronScalingRules {
-		if !rule.Enable || rule.Start == "" || rule.End == "" {
+		if !rule.Enable || rule.Name == "" ||
+			rule.Start == "" || rule.End == "" {
 			continue
 		}
 
@@ -74,11 +71,11 @@ func (c *CronRecommender) getActiveCronScalingRule(config *tfv1.AutoScalingConfi
 
 		startSchedule, err := c.parser.Parse(rule.Start)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse start: %w", err)
+			return nil, fmt.Errorf("failed to parse cron rule %s start: %w", rule.Name, err)
 		}
 		endSchedule, err := c.parser.Parse(rule.End)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse end: %w", err)
+			return nil, fmt.Errorf("failed to parse cron rule %s end: %w", rule.Name, err)
 		}
 
 		nextStartTime := startSchedule.Next(time.Now())

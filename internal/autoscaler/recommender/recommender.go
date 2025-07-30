@@ -1,6 +1,7 @@
 package recommender
 
 import (
+	"context"
 	"fmt"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -15,7 +16,7 @@ const (
 // Interface defines the contract for resource recommendation strategies used by the autoscaler.
 type Interface interface {
 	Name() string
-	Recommend(workload *workload.State) (*tfv1.RecommendedResources, error)
+	Recommend(ctx context.Context, workload *workload.State) (*tfv1.Resources, error)
 }
 
 func New(name string) (Interface, error) {
