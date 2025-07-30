@@ -169,27 +169,25 @@ func main() {
 		availableVRAM.Add(gpu.Status.Available.Vram)
 	}
 
-	// Use proper patch-based update with retry on conflict
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		// Get the latest version of the resource
-		currentGPUNode := &tfv1.GPUNode{}
-		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpunode), currentGPUNode); err != nil {
-			return err
-		}
-
-		// Create a patch from the original to the desired state
-		patch := client.MergeFrom(currentGPUNode.DeepCopy())
-
-		// Update status fields conditionally
-		updateGPUNodeStatus(&currentGPUNode.Status, totalTFlops, totalVRAM, int32(count), allDeviceIDs)
-
-		// Apply the patch using the status subresource
-		return k8sClient.Status().Patch(ctx, currentGPUNode, patch)
+		return patchGPUNodeStatus(k8sClient, ctx, gpunode, totalTFlops, totalVRAM, int32(count), allDeviceIDs)
 	})
 	if err != nil {
-		ctrl.Log.Error(err, "failed to update status of GPUNode after retries")
+		ctrl.Log.Error(err, "failed to patch status of GPUNode after retries")
 		os.Exit(1)
 	}
+}
+
+// Use proper patch-based update with retry on conflict
+func patchGPUNodeStatus(k8sClient client.Client, ctx context.Context, gpunode *tfv1.GPUNode, totalTFlops resource.Quantity, totalVRAM resource.Quantity, count int32, allDeviceIDs []string) error {
+
+	currentGPUNode := &tfv1.GPUNode{}
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gpunode), currentGPUNode); err != nil {
+		return err
+	}
+	patch := client.MergeFrom(currentGPUNode.DeepCopy())
+	updateGPUNodeStatus(&currentGPUNode.Status, totalTFlops, totalVRAM, int32(count), allDeviceIDs)
+	return k8sClient.Status().Patch(ctx, currentGPUNode, patch)
 }
 
 func createOrUpdateTensorFusionGPU(

@@ -63,11 +63,15 @@ type GPUNodeStatus struct {
 	TotalTFlops resource.Quantity `json:"totalTFlops"`
 	TotalVRAM   resource.Quantity `json:"totalVRAM"`
 
-	VirtualTFlops resource.Quantity `json:"virtualTFlops"`
-	VirtualVRAM   resource.Quantity `json:"virtualVRAM"`
+	// +optional
+	VirtualTFlops resource.Quantity `json:"virtualTFlops,omitempty"`
+	// +optional
+	VirtualVRAM resource.Quantity `json:"virtualVRAM,omitempty"`
 
-	AvailableTFlops resource.Quantity `json:"availableTFlops"`
-	AvailableVRAM   resource.Quantity `json:"availableVRAM"`
+	// +optional
+	AvailableTFlops resource.Quantity `json:"availableTFlops,omitempty"`
+	// +optional
+	AvailableVRAM resource.Quantity `json:"availableVRAM,omitempty"`
 
 	// +optional
 	VirtualAvailableTFlops *resource.Quantity `json:"virtualAvailableTFlops,omitempty"`
