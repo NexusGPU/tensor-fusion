@@ -177,7 +177,7 @@ rules:
 - apiGroups:
   - karpenter.*
   resources:
-  - *
+  - '*'
   verbs:
   - get
   - list
