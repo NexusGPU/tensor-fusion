@@ -227,7 +227,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 func (r *GPUPoolCompactionReconciler) getCompactionDuration(ctx context.Context, config *tfv1.NodeManagerConfig) time.Duration {
 	log := log.FromContext(ctx)
 	if config == nil || config.NodeCompaction == nil || config.NodeCompaction.Period == "" {
-		log.Info("empty node compaction config, use default value", "duration", defaultCompactionDuration)
+		log.V(4).Info("empty node compaction config, use default value", "duration", defaultCompactionDuration)
 		return defaultCompactionDuration
 	}
 	duration, err := time.ParseDuration(config.NodeCompaction.Period)
