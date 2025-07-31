@@ -22,7 +22,6 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
-	"github.com/onsi/gomega"
 	. "github.com/onsi/gomega"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -88,7 +87,7 @@ var _ = Describe("Pod Controller", func() {
 
 		AfterEach(func() {
 			if workerPod != nil {
-				k8sClient.Delete(ctx, workerPod)
+				_ = k8sClient.Delete(ctx, workerPod)
 			}
 		})
 
@@ -198,10 +197,10 @@ var _ = Describe("Pod Controller", func() {
 
 		AfterEach(func() {
 			if workload != nil {
-				k8sClient.Delete(ctx, workload)
+				_ = k8sClient.Delete(ctx, workload)
 			}
 			if clientPod != nil {
-				k8sClient.Delete(ctx, clientPod)
+				_ = k8sClient.Delete(ctx, clientPod)
 			}
 		})
 
@@ -220,7 +219,7 @@ var _ = Describe("Pod Controller", func() {
 			}).Should(Succeed())
 
 			By("verifying connection has correct spec and owner reference")
-			Eventually(func(g gomega.Gomega) error {
+			Eventually(func(g Gomega) error {
 				g.Expect(connection.Spec.WorkloadName).To(Equal(workload.Name))
 				g.Expect(connection.Spec.ClientPod).To(Equal(clientPod.Name))
 				g.Expect(connection.Labels[constants.WorkloadKey]).To(Equal(workload.Name))
@@ -358,10 +357,10 @@ var _ = Describe("Pod Controller", func() {
 
 		AfterEach(func() {
 			if workload != nil {
-				k8sClient.Delete(ctx, workload)
+				_ = k8sClient.Delete(ctx, workload)
 			}
 			if pod != nil {
-				k8sClient.Delete(ctx, pod)
+				_ = k8sClient.Delete(ctx, pod)
 			}
 		})
 
