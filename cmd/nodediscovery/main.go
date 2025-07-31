@@ -161,8 +161,11 @@ func main() {
 			ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
 		}
 
-		gpu := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpunode, uuid, deviceName, memInfo, tflops)
-
+		gpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpunode, uuid, deviceName, memInfo, tflops)
+		if err != nil {
+			ctrl.Log.Error(err, "failed to create or update GPU", "uuid", uuid)
+			os.Exit(1)
+		}
 		totalTFlops.Add(gpu.Status.Capacity.Tflops)
 		totalVRAM.Add(gpu.Status.Capacity.Vram)
 		availableTFlops.Add(gpu.Status.Available.Tflops)
@@ -194,11 +197,15 @@ func patchGPUNodeStatus(k8sClient client.Client, ctx context.Context,
 
 func createOrUpdateTensorFusionGPU(
 	k8sClient client.Client, ctx context.Context, k8sNodeName string, gpunode *tfv1.GPUNode,
-	uuid string, deviceName string, memInfo nvml.Memory_v2, tflops resource.Quantity) *tfv1.GPU {
+	uuid string, deviceName string, memInfo nvml.Memory_v2, tflops resource.Quantity) (*tfv1.GPU, error) {
 	gpu := &tfv1.GPU{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: uuid,
 		},
+	}
+
+	if len(gpunode.OwnerReferences) == 0 {
+		return nil, fmt.Errorf("GPUNode has no owner references of GPU pool")
 	}
 
 	err := retry.OnError(wait.Backoff{
@@ -213,6 +220,7 @@ func createOrUpdateTensorFusionGPU(
 			// Set metadata fields
 			gpu.Labels = map[string]string{
 				constants.LabelKeyOwner: gpunode.Name,
+				constants.GpuPoolKey:    gpunode.OwnerReferences[0].Name,
 			}
 			gpu.Annotations = map[string]string{
 				constants.LastSyncTimeAnnotationKey: time.Now().Format(time.RFC3339),
@@ -240,7 +248,7 @@ func createOrUpdateTensorFusionGPU(
 	})
 	if err != nil {
 		ctrl.Log.Error(err, "failed to create or update GPU after retries", "gpu", gpu)
-		os.Exit(1)
+		return nil, err
 	}
 
 	err = retry.OnError(retry.DefaultBackoff, func(err error) bool {
@@ -272,10 +280,10 @@ func createOrUpdateTensorFusionGPU(
 	})
 	if err != nil {
 		ctrl.Log.Error(err, "failed to update status of GPU after retries", "gpu", gpu)
-		os.Exit(1)
+		return nil, err
 	}
 
-	return gpu
+	return gpu, nil
 }
 
 func kubeClient() (client.Client, error) {

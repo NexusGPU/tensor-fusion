@@ -19,13 +19,10 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
-	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,42 +49,12 @@ func (r *GPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, err
 	}
 
-	kgvs, _, err := r.Scheme.ObjectKinds(&tfv1.GPUNode{})
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("get object kinds for GPUNode: %w", err)
-	}
-
-	owner, ok := lo.Find(gpu.OwnerReferences, func(or metav1.OwnerReference) bool {
-		for _, kvg := range kgvs {
-			if kvg.Kind == or.Kind && fmt.Sprintf("%s/%s", kvg.Group, kvg.Version) == or.APIVersion {
-				return true
-			}
-		}
-		return false
-	})
-
-	if !ok {
-		return ctrl.Result{}, fmt.Errorf("owner node of gpu(%s) not found", gpu.Name)
-	}
-
 	gpunode := &tfv1.GPUNode{}
-	if err := r.Get(ctx, client.ObjectKey{Name: owner.Name}, gpunode); err != nil {
-		return ctrl.Result{}, fmt.Errorf("get node %s: %w", owner.Name, err)
+	if err := r.Get(ctx, client.ObjectKey{Name: gpu.Labels[constants.LabelKeyOwner]}, gpunode); err != nil {
+		return ctrl.Result{}, fmt.Errorf("can not get node %s: %w", gpu.Labels[constants.LabelKeyOwner], err)
 	}
 
-	var poolName string
-	for labelKey := range gpunode.Labels {
-		after, ok := strings.CutPrefix(labelKey, constants.GPUNodePoolIdentifierLabelPrefix)
-		if ok {
-			poolName = after
-			break
-		}
-	}
-
-	if poolName == "" {
-		return ctrl.Result{}, fmt.Errorf("node %s is not assigned to any pool", gpunode.Name)
-	}
-
+	// Fix old version issue when discovery job not set UsedBy field
 	if gpu.Status.UsedBy == "" && gpu.Status.UUID != "" {
 		patch := client.MergeFrom(gpu.DeepCopy())
 		gpu.Status.UsedBy = tfv1.UsedByTensorFusion
@@ -95,20 +62,6 @@ func (r *GPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			return ctrl.Result{}, fmt.Errorf("patch gpu %s: %w", gpu.Name, err)
 		}
 		return ctrl.Result{}, nil
-	}
-
-	// No need to calculate patch since GPU's owner pool not changed
-	if gpu.Labels != nil && gpu.Labels[constants.GpuPoolKey] == poolName {
-		return ctrl.Result{}, nil
-	}
-
-	patch := client.MergeFrom(gpu.DeepCopy())
-	if gpu.Labels == nil {
-		gpu.Labels = make(map[string]string)
-	}
-	gpu.Labels[constants.GpuPoolKey] = poolName
-	if err := r.Patch(ctx, gpu, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch gpu %s: %w", gpu.Name, err)
 	}
 
 	return ctrl.Result{}, nil

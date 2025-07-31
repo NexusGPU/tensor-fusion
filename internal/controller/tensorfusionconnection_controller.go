@@ -54,6 +54,7 @@ type TensorFusionConnectionReconciler struct {
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionconnections,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionconnections/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionconnections/finalizers,verbs=update
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 
 // Add and monitor GPU worker Pod for a TensorFusionConnection
 func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -70,14 +71,14 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 			// Object not found, could have been deleted after reconcile request, return without error
 			return ctrl.Result{}, nil
 		}
-		log.Error(err, "Failed to get TensorFusionConnection")
+		log.Error(err, "Failed to get TensorFusionConnection", "name", req.Name)
 		return ctrl.Result{}, err
 	}
 
 	workloadName := connection.Labels[constants.WorkloadKey]
 	workload := &tfv1.TensorFusionWorkload{}
 	if err := r.Get(ctx, client.ObjectKey{Name: workloadName, Namespace: connection.Namespace}, workload); err != nil {
-		return ctrl.Result{}, fmt.Errorf("can not found TensorFusionWorkload: %w", err)
+		return ctrl.Result{}, fmt.Errorf("can not found TensorFusionWorkload for connection %s: %w", connection.Name, err)
 	}
 
 	if workload.Spec.IsDynamicReplica() {

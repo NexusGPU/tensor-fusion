@@ -213,6 +213,9 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 				Labels: map[string]string{
 					constants.GpuPoolKey: tfInfo.Profile.PoolName,
 				},
+				Annotations: map[string]string{
+					constants.WorkloadModeAnnotation: constants.WorkloadModeDynamic,
+				},
 			},
 			Spec: tfv1.WorkloadProfileSpec{
 				Replicas:   nil,
@@ -223,6 +226,11 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 				GPUModel:   tfInfo.Profile.GPUModel,
 				IsLocalGPU: tfInfo.Profile.IsLocalGPU,
 			},
+		}
+
+		// Pass through disable features annotation
+		if pod.Labels[constants.DisableFeaturesAnnotation] != "" {
+			workload.Annotations[constants.DisableFeaturesAnnotation] = pod.Labels[constants.DisableFeaturesAnnotation]
 		}
 
 		if firstLevelOwnerRef != nil {

@@ -793,7 +793,7 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 	defer s.storeMutex.Unlock()
 
 	if s.gpuStore[key] != nil {
-		syncGPUStatusFromCluster(s.gpuStore[key], gpu)
+		syncGPUMetadataAndStatusFromCluster(s.gpuStore[key], gpu)
 		log.V(6).Info("GPU already exists in store", "name", key.Name)
 		return
 	}
@@ -835,7 +835,7 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 		s.handleGPUUpdateCapacityDiff(old, gpu)
 
 		// should never update available and runningApps here, to avoid circular update
-		syncGPUStatusFromCluster(old, gpu)
+		syncGPUMetadataAndStatusFromCluster(old, gpu)
 		log.V(6).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
 	} else {
 		s.gpuStore[key] = gpu.DeepCopy()
@@ -843,15 +843,20 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 	}
 }
 
-func syncGPUStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
+func syncGPUMetadataAndStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
+	old.Annotations = gpu.Annotations
+	old.Labels = gpu.Labels
+	old.ResourceVersion = gpu.ResourceVersion
+	old.Generation = gpu.Generation
+	old.OwnerReferences = gpu.OwnerReferences
+	old.Kind = gpu.Kind
+	old.APIVersion = gpu.APIVersion
 	old.Status.Phase = gpu.Status.Phase
 	old.Status.Message = gpu.Status.Message
 	old.Status.UUID = gpu.Status.UUID
 	old.Status.NodeSelector = gpu.Status.NodeSelector
 	old.Status.GPUModel = gpu.Status.GPUModel
 	old.Status.UsedBy = gpu.Status.UsedBy
-	old.ResourceVersion = gpu.ResourceVersion
-	old.Generation = gpu.Generation
 }
 
 func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {

@@ -30,6 +30,11 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 	gpuNode := &tfv1.GPUNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: gpuNodeName,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					Name: "test-gpu-pool",
+				},
+			},
 		},
 	}
 
@@ -38,7 +43,8 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&tfv1.GPU{}).Build()
 
-	gpu := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops)
+	gpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops)
+	assert.NoError(t, err)
 
 	// Assertions
 	assert.NotNil(t, gpu, "GPU object should not be nil")
@@ -51,10 +57,13 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 		gpu.Status.NodeSelector, "Node selector should match")
 
 	// Verify labels and annotations
-	assert.Equal(t, map[string]string{constants.LabelKeyOwner: gpuNodeName}, gpu.Labels, "GPU labels should match")
+	assert.Equal(t, map[string]string{
+		constants.LabelKeyOwner: gpuNodeName,
+		constants.GpuPoolKey:    "test-gpu-pool",
+	}, gpu.Labels, "GPU labels should match")
 	assert.Contains(t, gpu.Annotations, constants.LastSyncTimeAnnotationKey,
 		"GPU annotations should contain last report time")
-	_, err := time.Parse(time.RFC3339, gpu.Annotations[constants.LastSyncTimeAnnotationKey])
+	_, err = time.Parse(time.RFC3339, gpu.Annotations[constants.LastSyncTimeAnnotationKey])
 	assert.NoError(t, err, "Last report time annotation should be a valid RFC3339 timestamp")
 
 	// Verify the Available field does not change after the update
@@ -64,7 +73,8 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 	assert.NoError(t, err)
 
 	tflops.Add(resource.MustParse("100"))
-	updatedGpu := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops)
+	updatedGpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops)
+	assert.NoError(t, err)
 	assert.NotEqual(t, updatedGpu.Status.Capacity, gpu.Status.Capacity, "GPU capacity should not match")
 	assert.Equal(t, updatedGpu.Status.Available.Tflops, gpu.Status.Available.Tflops, "GPU TFlops should match")
 	assert.Equal(t, updatedGpu.Status.Available.Vram, gpu.Status.Available.Vram, "GPU VRAM should match")
@@ -84,6 +94,11 @@ func TestGPUControllerReference(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: gpuNodeName,
 			UID:  "mock-uid",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					Name: "test-gpu-pool",
+				},
+			},
 		},
 	}
 
@@ -92,17 +107,24 @@ func TestGPUControllerReference(t *testing.T) {
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&tfv1.GPU{}).Build()
 
-	gpu := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops)
+	gpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops)
+	assert.NoError(t, err)
 	assert.True(t, metav1.IsControlledBy(gpu, gpuNode))
 
 	newGpuNode := &tfv1.GPUNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "new-test-gpu-node",
 			UID:  "new-mock-uid",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					Name: "new-test-gpu-pool",
+				},
+			},
 		},
 	}
 
-	gpu = createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, newGpuNode, uuid, deviceName, memInfo, tflops)
+	gpu, err = createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, newGpuNode, uuid, deviceName, memInfo, tflops)
+	assert.NoError(t, err)
 	assert.NotNil(t, gpu.OwnerReferences[0].Kind)
 	assert.NotNil(t, gpu.OwnerReferences[0].APIVersion)
 	assert.True(t, metav1.IsControlledBy(gpu, newGpuNode))
@@ -127,6 +149,11 @@ func TestPatchGPUNodeStatus(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "test-gpu-node",
 						Namespace: "default",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								Name: "test-gpu-pool",
+							},
+						},
 					},
 					Status: tfv1.GPUNodeStatus{
 						Phase:       "", // Empty phase should be set to pending
@@ -161,6 +188,11 @@ func TestPatchGPUNodeStatus(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "test-gpu-node-running",
 						Namespace: "default",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								Name: "test-gpu-pool",
+							},
+						},
 					},
 					Status: tfv1.GPUNodeStatus{
 						Phase:       tfv1.TensorFusionGPUNodePhaseRunning,
@@ -194,6 +226,11 @@ func TestPatchGPUNodeStatus(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "test-gpu-node-zero",
 						Namespace: "default",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								Name: "test-gpu-pool",
+							},
+						},
 					},
 					Status: tfv1.GPUNodeStatus{
 						Phase: "",
@@ -279,6 +316,11 @@ func TestPatchGPUNodeStatus_ErrorScenarios(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "nonexistent-gpu-node",
 						Namespace: "default",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								Name: "test-gpu-pool",
+							},
+						},
 					},
 				}
 			},
@@ -315,6 +357,11 @@ func TestPatchGPUNodeStatus_Integration(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "integration-test-node",
 			Namespace: "default",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					Name: "test-gpu-pool",
+				},
+			},
 		},
 		Status: tfv1.GPUNodeStatus{
 			Phase:               "",

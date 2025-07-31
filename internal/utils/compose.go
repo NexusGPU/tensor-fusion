@@ -289,20 +289,25 @@ func AddTFDefaultClientConfBeforePatch(
 
 			// disable GPU limiter killer switch
 			if pod.Annotations[constants.DisableFeaturesAnnotation] != "" {
-				features := strings.Split(pod.Annotations[constants.DisableFeaturesAnnotation], ",")
-				for _, feature := range features {
-					if feat, ok := featureShortcutMap[feature]; ok {
-						envList = append(envList, v1.EnvVar{
-							Name:  feat.EnvName,
-							Value: feat.EnvValue,
-						})
-					}
-				}
+				envList = convertDisabledFeaturesToEnvs(pod.Annotations[constants.DisableFeaturesAnnotation], envList)
 			}
 
 			pod.Spec.Containers[injectContainerIndex].Env = envList
 		}
 	}
+}
+
+func convertDisabledFeaturesToEnvs(disabledFeatures string, envList []v1.EnvVar) []v1.EnvVar {
+	disabledFeaturesList := strings.Split(disabledFeatures, ",")
+	for _, feature := range disabledFeaturesList {
+		if feat, ok := featureShortcutMap[feature]; ok {
+			envList = append(envList, v1.EnvVar{
+				Name:  feat.EnvName,
+				Value: feat.EnvValue,
+			})
+		}
+	}
+	return envList
 }
 
 func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool) {
@@ -590,7 +595,7 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 	}
 }
 
-func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig, hypervisorConfig *tfv1.HypervisorConfig) {
+func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig, hypervisorConfig *tfv1.HypervisorConfig, workload *tfv1.TensorFusionWorkload) {
 	// NOTE: need to set environment variable to make all GPUs visible to the worker,
 	// vgpu.rs limiter will limit to specific devices after Pod started
 	spec.Containers[0].Name = constants.TFContainerNameWorker
@@ -612,9 +617,6 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 		Name:  constants.NvidiaVisibleAllDeviceEnv,
 		Value: constants.NvidiaVisibleAllDeviceValue,
 	}, v1.EnvVar{
-		Name:  constants.LdPreloadEnv,
-		Value: constants.LdPreloadLimiter,
-	}, v1.EnvVar{
 		Name: constants.HypervisorIPEnv,
 		ValueFrom: &v1.EnvVarSource{
 			FieldRef: &v1.ObjectFieldSelector{
@@ -635,6 +637,9 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 		Name:  constants.ContainerNameEnv,
 		Value: constants.TFContainerNameWorker,
 	}, v1.EnvVar{
+		Name:  constants.LdPreloadEnv,
+		Value: constants.LdPreloadLimiter,
+	}, v1.EnvVar{
 		Name: constants.PodNamespaceEnv,
 		ValueFrom: &v1.EnvVarSource{
 			FieldRef: &v1.ObjectFieldSelector{
@@ -643,6 +648,10 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 		},
 	})
 
+	disabledFeatures := workload.Annotations[constants.DisableFeaturesAnnotation]
+	if disabledFeatures != "" {
+		spec.Containers[0].Env = convertDisabledFeaturesToEnvs(disabledFeatures, spec.Containers[0].Env)
+	}
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{
 		Name: constants.DataVolumeName,
@@ -661,6 +670,21 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 		Protocol:      v1.ProtocolTCP,
 	})
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
+
+	if len(spec.Containers[0].Command) == 0 {
+		if strings.Contains(disabledFeatures, constants.BuiltInFeatureStartWorker) {
+			spec.Containers[0].Command = []string{
+				"sleep",
+				"infinity",
+			}
+		} else {
+			spec.Containers[0].Command = []string{
+				"./tensor-fusion-worker",
+				"-p",
+				strconv.Itoa(int(constants.TensorFusionRemoteWorkerPortNumber)),
+			}
+		}
+	}
 
 	if len(spec.Containers[0].Resources.Requests) == 0 {
 		spec.Containers[0].Resources.Requests = workerDefaultRequests

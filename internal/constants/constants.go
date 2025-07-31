@@ -71,12 +71,18 @@ const (
 	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
 	PricingAnnotation                 = Domain + "/hourly-pricing"
 
+	WorkloadModeAnnotation = Domain + "/workload-mode"
+	WorkloadModeDynamic    = "dynamic"
+	WorkloadModeFixed      = "fixed"
+
 	// Annotations for killer switch: disable features
 	// ['gpu-opt', 'mem-manager', 'gpu-limiter']
 	DisableFeaturesAnnotation = Domain + "/disable-features"
 	BuiltInFeaturesGpuOpt     = "gpu-opt"
 	BuiltInFeaturesGpuLimiter = "gpu-limiter"
 	BuiltInFeaturesMemManager = "mem-manager"
+	// For debug purpose only of Remote vGPU, disable start worker to manual start with ad-hoc command inside Pod
+	BuiltInFeatureStartWorker = "start-worker"
 
 	GenHostPortLabel        = Domain + "/host-port"
 	GenHostPortLabelValue   = "auto"

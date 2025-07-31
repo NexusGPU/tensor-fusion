@@ -41,7 +41,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	}
 	spec := podTmpl.Template.Spec
 
-	utils.AddWorkerConfAfterTemplate(ctx, &spec, wg.WorkerConfig, wg.HypervisorConfig)
+	utils.AddWorkerConfAfterTemplate(ctx, &spec, wg.WorkerConfig, wg.HypervisorConfig, workload)
 
 	// performance optimization, service link will cause high CPU usage when service number is large
 	spec.EnableServiceLinks = ptr.To(false)
