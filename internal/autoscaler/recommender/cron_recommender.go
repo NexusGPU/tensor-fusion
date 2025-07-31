@@ -3,25 +3,34 @@ package recommender
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/robfig/cron/v3"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+// Utilize these annotations to determine if the configuration has changed
 const (
-	CronScalingAnnotation = constants.Domain + "/cron-scaling"
+	CronScalingTFLOPSRequestAnnotation = constants.Domain + "/cron-scaling-tflops-request"
+	CronScalingVRAMRequestAnnotation   = constants.Domain + "/cron-scaling-vram-request"
+	CronScalingTFLOPSLimitAnnotation   = constants.Domain + "/cron-scaling-tflops-limit"
+	CronScalingVRAMLimitAnnotation     = constants.Domain + "/cron-scaling-vram-limit"
 )
 
 type CronRecommender struct {
+	client.Client
 	parser cron.Parser
 }
 
-func NewCronRecommender() *CronRecommender {
+func NewCronRecommender(c client.Client) *CronRecommender {
 	return &CronRecommender{
+		Client: c,
 		parser: cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 	}
 }
@@ -37,30 +46,70 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*tf
 		return nil, fmt.Errorf("failed to get active cron scaling rule %w", err)
 	}
 
+	curRes, err := cronScalingResourcesFromAnnotations(w.Annotations)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current resources from workload %s: %v", w.Name, err)
+	}
+
 	var result *tfv1.Resources
 	if activeRule == nil {
-		// if no active ruleName, return last resources if cron scaling not finish
-		ruleName, ok := w.Annotations[CronScalingAnnotation]
-		if !ok || ruleName == "" {
+		if curRes == nil {
 			return nil, nil
 		}
-		resources, err := w.GetLastResourcesSpec()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get last resources: %w", err)
-		}
-		if resources == nil {
-			return nil, nil
-		}
-		result = resources
-		w.ScalingAnnotations[CronScalingAnnotation] = ""
-		log.Info("cron scaling rule finished and restore last resources", "workload", w.Name, "rule", ruleName, "resources", result)
+		// revert the resources to those specified in the workload spec
+		result = w.GetResourcesSpec()
+		maps.Copy(w.ScalingAnnotations, cronScalingResourcesToAnnotations(&tfv1.Resources{}))
+		log.Info("cron scaling finished", "workload", w.Name, "resources", result)
 	} else {
 		result = &activeRule.DesiredResources
-		w.ScalingAnnotations[CronScalingAnnotation] = activeRule.Name
+		maps.Copy(w.ScalingAnnotations, cronScalingResourcesToAnnotations(result))
 		log.Info("cron scaling rule matched", "workload", w.Name, "rule", activeRule.Name, "resources", result)
 	}
 
+	if curRes != nil && result.Equal(curRes) {
+		return nil, nil
+	}
+
 	return result, nil
+}
+
+func cronScalingResourcesToAnnotations(resources *tfv1.Resources) map[string]string {
+	return map[string]string{
+		CronScalingTFLOPSRequestAnnotation: resources.Requests.Tflops.String(),
+		CronScalingTFLOPSLimitAnnotation:   resources.Limits.Tflops.String(),
+		CronScalingVRAMRequestAnnotation:   resources.Requests.Vram.String(),
+		CronScalingVRAMLimitAnnotation:     resources.Limits.Vram.String(),
+	}
+}
+
+func cronScalingResourcesFromAnnotations(annotations map[string]string) (*tfv1.Resources, error) {
+	result := tfv1.Resources{}
+	resInfo := []struct {
+		key string
+		dst *resource.Quantity
+	}{
+		{CronScalingTFLOPSRequestAnnotation, &result.Requests.Tflops},
+		{CronScalingTFLOPSLimitAnnotation, &result.Limits.Tflops},
+		{CronScalingVRAMRequestAnnotation, &result.Requests.Vram},
+		{CronScalingVRAMLimitAnnotation, &result.Limits.Vram},
+	}
+	for _, info := range resInfo {
+		annotation, ok := annotations[info.key]
+		if !ok {
+			continue
+		}
+		q, err := resource.ParseQuantity(annotation)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse %s: %v", info.key, err)
+		}
+		*info.dst = q
+	}
+
+	if result.IsZero() {
+		return nil, nil
+	}
+
+	return &result, nil
 }
 
 func (c *CronRecommender) getActiveCronScalingRule(config *tfv1.AutoScalingConfig) (*tfv1.CronScalingRule, error) {
