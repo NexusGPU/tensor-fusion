@@ -345,10 +345,10 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(scheduleMutation.Value).To(Equal(constants.SchedulerName))
 
 			workloadAnnotationMutation, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
-				return patch.Path == "/metadata/annotations/tensor-fusion.ai~1workload"
+				return patch.Path == "/metadata/annotations/tensor-fusion.ai~1tflops-limit"
 			})
 			Expect(found).To(BeTrue())
-			Expect(workloadAnnotationMutation.Value).To(Equal("test-pod-local-gpu"))
+			Expect(workloadAnnotationMutation.Value).To(Equal("100"))
 		})
 	})
 
