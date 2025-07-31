@@ -11,7 +11,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/robfig/cron/v3"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -24,13 +23,11 @@ const (
 )
 
 type CronRecommender struct {
-	client.Client
 	parser cron.Parser
 }
 
-func NewCronRecommender(c client.Client) *CronRecommender {
+func NewCronRecommender() *CronRecommender {
 	return &CronRecommender{
-		Client: c,
 		parser: cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 	}
 }

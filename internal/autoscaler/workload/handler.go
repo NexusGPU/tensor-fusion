@@ -83,7 +83,6 @@ func (h *handler) updateAutoScalingAnnotations(
 		return fmt.Errorf("failed to get workload: %v", err)
 	}
 
-	// record current and last resources
 	if workload.Annotations == nil {
 		workload.Annotations = map[string]string{}
 	}
