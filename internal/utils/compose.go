@@ -84,12 +84,14 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
 	// When it's worker, set workload key to label for triggering workload reconcile
 	if tfInfo.Profile.IsLocalGPU {
-		if pod.Labels == nil {
-			pod.Labels = map[string]string{}
-		}
 		pod.Labels[constants.WorkloadKey] = tfInfo.WorkloadName
+	} else {
+		pod.Annotations[constants.SelectedWorkloadAnnotation] = tfInfo.WorkloadName
 	}
 
 	// add full annotations
