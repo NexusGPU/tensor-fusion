@@ -29,10 +29,6 @@ func NewWorkloadState(name string) *State {
 	}
 }
 
-func (w *State) GetLastResourcesSpec() (*tfv1.Resources, error) {
-	return utils.LastResourcesFromAnnotations(w.Annotations)
-}
-
 func (w *State) GetResourcesSpec() *tfv1.Resources {
 	return &w.Spec.Resources
 }

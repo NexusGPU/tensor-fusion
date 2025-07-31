@@ -13,7 +13,7 @@ import (
 
 var _ = Describe("CronRecommender", func() {
 	ctx := context.TODO()
-	res := tfv1.Resources{
+	defaultRes := tfv1.Resources{
 		Requests: tfv1.Resource{
 			Tflops: resource.MustParse("10"),
 			Vram:   resource.MustParse("8Gi"),
@@ -33,14 +33,39 @@ var _ = Describe("CronRecommender", func() {
 					Name:             "test",
 					Start:            "0 0 * * *",
 					End:              "59 23 * * *",
-					DesiredResources: res,
+					DesiredResources: defaultRes,
 				},
 			},
 		}
 
-		recommender := NewCronRecommender(nil)
+		recommender := NewCronRecommender()
 		recommendation, _ := recommender.Recommend(ctx, workload)
-		Expect(recommendation.Equal(&res)).To(BeTrue())
+		Expect(recommendation.Equal(&defaultRes)).To(BeTrue())
+		newRes := tfv1.Resources{
+			Requests: tfv1.Resource{
+				Tflops: resource.MustParse("5"),
+				Vram:   resource.MustParse("4Gi"),
+			},
+			Limits: tfv1.Resource{
+				Tflops: resource.MustParse("10"),
+				Vram:   resource.MustParse("8Gi"),
+			},
+		}
+
+		workload.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
+			CronScalingRules: []tfv1.CronScalingRule{
+				{
+					Enable:           true,
+					Name:             "test",
+					Start:            "0 0 * * *",
+					End:              "59 23 * * *",
+					DesiredResources: newRes,
+				},
+			},
+		}
+
+		recommendation, _ = recommender.Recommend(ctx, workload)
+		Expect(recommendation.Equal(&newRes)).To(BeTrue())
 	})
 
 	It("should not return recommendation if there is no active cron scaling rule", func() {
@@ -52,12 +77,12 @@ var _ = Describe("CronRecommender", func() {
 					Name:             "test",
 					Start:            "",
 					End:              "",
-					DesiredResources: res,
+					DesiredResources: defaultRes,
 				},
 			},
 		}
 
-		recommender := NewCronRecommender(nil)
+		recommender := NewCronRecommender()
 		recommendation, _ := recommender.Recommend(ctx, workload)
 		Expect(recommendation).To(BeNil())
 	})
@@ -71,16 +96,16 @@ var _ = Describe("CronRecommender", func() {
 					Name:             "test",
 					Start:            "0 0 * * *",
 					End:              "59 23 * * *",
-					DesiredResources: res,
+					DesiredResources: defaultRes,
 				},
 			},
 		}
 
-		recommender := NewCronRecommender(nil)
+		recommender := NewCronRecommender()
 		recommendation, _ := recommender.Recommend(ctx, workload)
-		Expect(recommendation.Equal(&res)).To(BeTrue())
+		Expect(recommendation.Equal(&defaultRes)).To(BeTrue())
 
-		workload.Annotations = cronScalingResourcesToAnnotations(&res)
+		workload.Annotations = cronScalingResourcesToAnnotations(&defaultRes)
 
 		recommendation, _ = recommender.Recommend(ctx, workload)
 		Expect(recommendation).To(BeNil())
@@ -105,14 +130,14 @@ var _ = Describe("CronRecommender", func() {
 					Name:             "test",
 					Start:            "0 0 * * *",
 					End:              "59 23 * * *",
-					DesiredResources: res,
+					DesiredResources: defaultRes,
 				},
 			},
 		}
 
-		recommender := NewCronRecommender(nil)
+		recommender := NewCronRecommender()
 		recommendation, _ := recommender.Recommend(ctx, workload)
-		Expect(recommendation.Equal(&res)).To(BeTrue())
+		Expect(recommendation.Equal(&defaultRes)).To(BeTrue())
 
 		workload.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
 			CronScalingRules: []tfv1.CronScalingRule{
@@ -121,12 +146,12 @@ var _ = Describe("CronRecommender", func() {
 					Name:             "test",
 					Start:            "",
 					End:              "",
-					DesiredResources: res,
+					DesiredResources: defaultRes,
 				},
 			},
 		}
 
-		workload.Annotations = cronScalingResourcesToAnnotations(&res)
+		workload.Annotations = cronScalingResourcesToAnnotations(&defaultRes)
 		recommendation, _ = recommender.Recommend(ctx, workload)
 		Expect(recommendation.Equal(&workload.Spec.Resources)).To(BeTrue())
 
@@ -153,7 +178,7 @@ var _ = Describe("CronRecommender", func() {
 				},
 			},
 		}
-		recommender := NewCronRecommender(nil)
+		recommender := NewCronRecommender()
 		_, err := recommender.Recommend(ctx, workload)
 		Expect(err).To(HaveOccurred())
 	})
@@ -162,13 +187,13 @@ var _ = Describe("CronRecommender", func() {
 		asc := tfv1.AutoScalingConfig{
 			CronScalingRules: []tfv1.CronScalingRule{},
 		}
-		Expect(NewCronRecommender(nil).getActiveCronScalingRule(&asc)).To(BeNil())
+		Expect(NewCronRecommender().getActiveCronScalingRule(&asc)).To(BeNil())
 		asc = tfv1.AutoScalingConfig{
 			CronScalingRules: []tfv1.CronScalingRule{
 				{Enable: false},
 			},
 		}
-		Expect(NewCronRecommender(nil).getActiveCronScalingRule(&asc)).To(BeNil())
+		Expect(NewCronRecommender().getActiveCronScalingRule(&asc)).To(BeNil())
 	})
 
 	It("should return the active cron scaling rule if the current time falls within its scheduled interval", func() {
@@ -182,7 +207,7 @@ var _ = Describe("CronRecommender", func() {
 				},
 			},
 		}
-		rule, _ := NewCronRecommender(nil).getActiveCronScalingRule(&asc)
+		rule, _ := NewCronRecommender().getActiveCronScalingRule(&asc)
 		Expect(rule).NotTo(BeNil())
 	})
 })
