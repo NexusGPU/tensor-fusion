@@ -54,7 +54,7 @@ var _ = Describe("GPUNodeClaim Controller", func() {
 				g.Expect(k8sClient.List(ctx, gpuNodes)).Should(Succeed())
 
 				// Add mock GPU for the provisioned nodes
-				tfEnv.AddMockGPU4ProvisionedNodes(gpuNodeClaimList, gpuNodes)
+				tfEnv.AddMockGPU4ProvisionedNodes(g, gpuNodeClaimList, gpuNodes)
 
 				k8sNodes := &corev1.NodeList{}
 				g.Expect(k8sClient.List(ctx, k8sNodes)).Should(Succeed())

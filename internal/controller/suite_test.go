@@ -454,7 +454,7 @@ func (c *TensorFusionEnv) UpdateHypervisorStatus(checkNodeNum bool) {
 	}
 }
 
-func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(gpuNodeClaimList *tfv1.GPUNodeClaimList, gpuNodes *tfv1.GPUNodeList) {
+func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(g Gomega, gpuNodeClaimList *tfv1.GPUNodeClaimList, gpuNodes *tfv1.GPUNodeList) {
 	GinkgoHelper()
 	claimToGPUNodeMap := make(map[string]*tfv1.GPUNode)
 	for _, gpuNode := range gpuNodes.Items {
@@ -480,7 +480,7 @@ func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(gpuNodeClaimList *tfv1.GPU
 		_ = controllerutil.SetControllerReference(gpuNode, gpu, scheme.Scheme)
 		err := k8sClient.Get(ctx, client.ObjectKey{Name: gpu.Name}, &tfv1.GPU{})
 		if errors.IsNotFound(err) {
-			Expect(k8sClient.Create(ctx, gpu)).Should(Succeed())
+			g.Expect(k8sClient.Create(ctx, gpu)).Should(Succeed())
 
 			err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 				latest := &tfv1.GPU{}
@@ -508,7 +508,7 @@ func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(gpuNodeClaimList *tfv1.GPU
 				}
 				return nil
 			})
-			Expect(err).Should(Succeed())
+			g.Expect(err).Should(Succeed())
 		}
 
 		// update GPUNode status to trigger node level reconcile, simulate node discovery job
@@ -520,7 +520,7 @@ func (c *TensorFusionEnv) AddMockGPU4ProvisionedNodes(gpuNodeClaimList *tfv1.GPU
 				TotalTFlops: gpuNodeClaim.Spec.TFlopsOffered,
 				TotalVRAM:   gpuNodeClaim.Spec.VRAMOffered,
 			}
-			Expect(k8sClient.Status().Update(ctx, gpuNode)).Should(Succeed())
+			g.Expect(k8sClient.Status().Update(ctx, gpuNode)).Should(Succeed())
 		}
 	}
 }
