@@ -42,7 +42,7 @@ func NewAutoscaler(c client.Client, allocator *gpuallocator.GpuAllocator) (*Auto
 
 	recommenders := []recommender.Interface{
 		recommender.NewPercentileRecommender(),
-		recommender.NewCronRecommender(c),
+		recommender.NewCronRecommender(),
 	}
 
 	return &Autoscaler{

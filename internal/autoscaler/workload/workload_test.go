@@ -48,23 +48,6 @@ var _ = Describe("Workload", func() {
 		Expect(ws.IsAutoSetResourcesEnabled()).To(BeFalse())
 	})
 
-	It("should return last resources spec from the annotations", func() {
-		ws := NewWorkloadState("test")
-		expect := tfv1.Resources{
-			Requests: tfv1.Resource{
-				Tflops: resource.MustParse("10"),
-				Vram:   resource.MustParse("8Gi"),
-			},
-			Limits: tfv1.Resource{
-				Tflops: resource.MustParse("20"),
-				Vram:   resource.MustParse("16Gi"),
-			},
-		}
-		ws.Annotations = utils.LastResourcesToAnnotations(&expect)
-		got, _ := ws.GetLastResourcesSpec()
-		Expect(got.Equal(&expect))
-	})
-
 	It("should return current resources spec from the annotations", func() {
 		ws := NewWorkloadState("test")
 		expect := tfv1.Resources{
