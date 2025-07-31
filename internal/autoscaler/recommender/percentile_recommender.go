@@ -82,7 +82,6 @@ func (p *PercentileRecommender) Name() string {
 
 func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workload.State) (*tfv1.Resources, error) {
 	log := log.FromContext(ctx)
-	// TODO: cache config
 	aggregator := workload.WorkerUsageAggregator
 	if aggregator.IsEmpty() {
 		return nil, nil
@@ -93,6 +92,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		return nil, fmt.Errorf("failed to get current resources from workload %s: %v", workload.Name, err)
 	}
 
+	// TODO: cache config
 	p.createEstimatorsFromConfig(p.getPercentileConfig(&workload.Spec.AutoScalingConfig.AutoSetResources))
 	rr := &RecommendedResources{
 		LowerBoundTflops: QuantityFromAmount(p.lowerBoundTflops.GetTflopsEstimation(aggregator)),
@@ -105,7 +105,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 
 	log.Info("recommendation", "workload", workload.Name, "recommender", p.Name(), "resources", rr)
 
-	var result tfv1.Resources
+	result := &tfv1.Resources{}
 	if curRes.Requests.Tflops.Cmp(rr.LowerBoundTflops) < 0 ||
 		curRes.Requests.Tflops.Cmp(rr.UpperBoundTflops) > 0 {
 		result.Requests.Tflops = rr.TargetTflops
@@ -130,9 +130,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		return nil, nil
 	}
 
-	// TODO: handle tflops or vram should recommend
-
-	return &result, nil
+	return result, nil
 }
 
 func (p *PercentileRecommender) getPercentileConfig(asr *tfv1.AutoSetResources) *PercentileConfig {

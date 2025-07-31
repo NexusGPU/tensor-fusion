@@ -1,6 +1,7 @@
 package workload
 
 import (
+	"fmt"
 	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -32,8 +33,23 @@ func (w *State) GetLastResourcesSpec() (*tfv1.Resources, error) {
 	return utils.LastResourcesFromAnnotations(w.Annotations)
 }
 
+func (w *State) GetResourcesSpec() *tfv1.Resources {
+	return &w.Spec.Resources
+}
+
 func (w *State) GetCurrentResourcesSpec() (*tfv1.Resources, error) {
-	return utils.CurrentResourcesFromAnnotations(w.Annotations)
+	resources, err := utils.CurrentResourcesFromAnnotations(w.Annotations)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get resources from annotations: %v", err)
+	}
+	if resources == nil {
+		return &w.Spec.Resources, nil
+	}
+	return resources, nil
+}
+
+func (w *State) SetScalingAnnotation(key string, value string) {
+	w.ScalingAnnotations[key] = value
 }
 
 func (w *State) IsAutoSetResourcesEnabled() bool {

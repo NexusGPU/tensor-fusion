@@ -2,7 +2,6 @@ package recommender
 
 import (
 	"context"
-	"fmt"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
@@ -17,15 +16,4 @@ const (
 type Interface interface {
 	Name() string
 	Recommend(ctx context.Context, workload *workload.State) (*tfv1.Resources, error)
-}
-
-func New(name string) (Interface, error) {
-	switch name {
-	case Percentile:
-		return NewPercentileRecommender(), nil
-	case Cron:
-		return NewCronRecommender(), nil
-	default:
-		return nil, fmt.Errorf("unknown recommender name: %s", name)
-	}
 }

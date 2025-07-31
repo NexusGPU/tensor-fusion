@@ -42,7 +42,7 @@ func NewAutoscaler(c client.Client, allocator *gpuallocator.GpuAllocator) (*Auto
 
 	recommenders := []recommender.Interface{
 		recommender.NewPercentileRecommender(),
-		recommender.NewCronRecommender(),
+		recommender.NewCronRecommender(c),
 	}
 
 	return &Autoscaler{
@@ -165,16 +165,14 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 			if recommendation == nil {
 				continue
 			}
-
 			recommendations[name] = recommendation
 			log.Info("recommendation", "workload", workload.Name, "recommender", name, "resources", recommendation)
 		}
 
-		if len(recommendations) == 0 {
+		finalRecommendation := mergeRecommendations(recommendations)
+		if finalRecommendation.IsZero() {
 			continue
 		}
-
-		finalRecommendation := mergeRecommendations(recommendations)
 		log.Info("final recommendation", "workload", workload.Name, "resources", finalRecommendation)
 
 		if err := s.workloadHandler.ApplyRecommendationToWorkload(ctx, workload, finalRecommendation); err != nil {
