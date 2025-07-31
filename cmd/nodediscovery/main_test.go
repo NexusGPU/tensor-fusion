@@ -73,7 +73,9 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 	assert.NoError(t, err)
 
 	tflops.Add(resource.MustParse("100"))
-	updatedGpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops)
+	updatedGpu, err := createOrUpdateTensorFusionGPU(
+		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops,
+	)
 	assert.NoError(t, err)
 	assert.NotEqual(t, updatedGpu.Status.Capacity, gpu.Status.Capacity, "GPU capacity should not match")
 	assert.Equal(t, updatedGpu.Status.Available.Tflops, gpu.Status.Available.Tflops, "GPU TFlops should match")
