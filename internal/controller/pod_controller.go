@@ -172,7 +172,7 @@ func (r *PodReconciler) setPendingOwnedWorkload(ctx context.Context, pod *corev1
 }
 
 func buildTensorFusionConnectionObj(pod *corev1.Pod) *tfv1.TensorFusionConnection {
-	workloadName, ok := pod.Annotations[constants.WorkloadKey]
+	workloadName, ok := pod.Labels[constants.WorkloadKey]
 	if !ok {
 		return nil
 	}

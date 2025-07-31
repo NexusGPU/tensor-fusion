@@ -84,10 +84,6 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}
-	// add workload to pod annotations just for additional information
-	// so that users will know which GPU workload this pod binds to
-	pod.Annotations[constants.WorkloadKey] = tfInfo.WorkloadName
-
 	// When it's worker, set workload key to label for triggering workload reconcile
 	if tfInfo.Profile.IsLocalGPU {
 		if pod.Labels == nil {
@@ -116,7 +112,11 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
 }
 
-func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(podTmpl *v1.PodTemplate, workload *tfv1.TensorFusionWorkload) (map[string]string, map[string]string) {
+func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
+	podTmpl *v1.PodTemplate,
+	workload *tfv1.TensorFusionWorkload,
+	containerName string,
+) (map[string]string, map[string]string) {
 	labels := maps.Clone(podTmpl.Template.Labels)
 	if labels == nil {
 		labels = map[string]string{}
@@ -132,6 +132,7 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(podTmpl *v1.PodTemplate, wo
 	annotations[constants.VRAMLimitAnnotation] = res.Limits.Vram.String()
 	annotations[constants.TFLOPSRequestAnnotation] = res.Requests.Tflops.String()
 	annotations[constants.VRAMRequestAnnotation] = res.Requests.Vram.String()
+	annotations[constants.InjectContainerAnnotation] = containerName
 	if workload.Spec.Qos == "" {
 		annotations[constants.QoSLevelAnnotation] = string(tfv1.QoSMedium)
 	} else {
@@ -595,7 +596,7 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 	}
 }
 
-func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig, hypervisorConfig *tfv1.HypervisorConfig, workload *tfv1.TensorFusionWorkload) {
+func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig, hypervisorConfig *tfv1.HypervisorConfig, workload *tfv1.TensorFusionWorkload) string {
 	// NOTE: need to set environment variable to make all GPUs visible to the worker,
 	// vgpu.rs limiter will limit to specific devices after Pod started
 	spec.Containers[0].Name = constants.TFContainerNameWorker
@@ -689,4 +690,6 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 	if len(spec.Containers[0].Resources.Requests) == 0 {
 		spec.Containers[0].Resources.Requests = workerDefaultRequests
 	}
+
+	return spec.Containers[0].Name
 }

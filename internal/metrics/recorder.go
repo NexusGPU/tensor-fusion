@@ -76,7 +76,7 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod) {
 	if _, ok := workerMetricsMap[pod.Name]; !ok {
 		workerMetricsMap[pod.Name] = &WorkerResourceMetrics{
 			WorkerName:     pod.Name,
-			WorkloadName:   pod.Annotations[constants.WorkloadKey],
+			WorkloadName:   pod.Labels[constants.WorkloadKey],
 			PoolName:       pod.Annotations[constants.GpuPoolKey],
 			Namespace:      pod.Namespace,
 			QoS:            pod.Annotations[constants.QoSLevelAnnotation],
@@ -98,7 +98,7 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod) {
 	} else {
 		metricsItem.GPUCount = int(count)
 	}
-	metricsItem.WorkloadName = pod.Annotations[constants.WorkloadKey]
+	metricsItem.WorkloadName = pod.Labels[constants.WorkloadKey]
 }
 
 func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []string) {
