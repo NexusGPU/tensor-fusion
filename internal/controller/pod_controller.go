@@ -90,6 +90,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			return ctrl.Result{}, err
 		}
 		delete(pod.Annotations, constants.SetPendingOwnedWorkloadAnnotation)
+		log.Info("Pending owned workload set", "pod", pod.Name, "ownedWorkload", ownedWorkloadName)
 		if err := r.Update(ctx, pod); err != nil {
 			return ctrl.Result{}, err
 		}
