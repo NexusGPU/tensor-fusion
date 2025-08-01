@@ -2,8 +2,8 @@ package metrics
 
 import (
 	"io"
-	"strconv"
 	"math"
+	"strconv"
 	"sync"
 	"time"
 
