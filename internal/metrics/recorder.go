@@ -3,6 +3,7 @@ package metrics
 import (
 	"io"
 	"strconv"
+	"math"
 	"sync"
 	"time"
 
@@ -92,8 +93,8 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod) {
 	metricsItem.TflopsLimit = gpuLimitResource.Tflops.AsApproximateFloat64()
 	metricsItem.VramBytesRequest = gpuRequestResource.Vram.AsApproximateFloat64()
 	metricsItem.VramBytesLimit = gpuLimitResource.Vram.AsApproximateFloat64()
-	if count <= 0 {
-		// handle invalid data if exists
+	if count <= 0 || count > uint64(math.MaxInt32) {
+		// handle invalid or out-of-bounds data
 		metricsItem.GPUCount = 1
 	} else {
 		metricsItem.GPUCount = int(count)
