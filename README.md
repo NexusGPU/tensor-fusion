@@ -1,7 +1,7 @@
-<p align="center"><a href="javascript:void(0);" target="_blank" rel="noreferrer"><img width="200" src="https://cdn.tensor-fusion.ai/logo.svg" alt="Logo"></a></p>
+<p align="center"><a href="javascript:void(0);" target="_blank" rel="noreferrer"><img width="100%" src="https://cdn.tensor-fusion.ai/logo-banner.png" alt="Logo"></a></p>
 
 <p align="center">
-    <strong><a href="https://tensor-fusion.ai" target="_blank">TensorFusion.AI</a></strong><br/>Next-Generation GPU Virtualization and Pooling for Enterprises<br><b>Less GPUs, More AI Apps.</b>
+    <br /><strong><a href="https://tensor-fusion.ai" target="_blank">TensorFusion.AI</a></strong><br/><b>Less GPUs, More AI Apps.</b>
     <br />
     <a href="https://tensor-fusion.ai/guide/overview"><strong>Explore the docs »</strong></a>
     <br />
@@ -13,12 +13,9 @@
   </p>
 
 
-# ♾️ Tensor Fusion
-
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]
 [![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
 [![MIT License][license-shield]][license-url]
 [![LinkedIn][linkedin-shield]][linkedin-url]
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NexusGPU/tensor-fusion)
@@ -27,11 +24,11 @@ Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** 
 
 ## 🌟 Highlights
 
-#### 📐 Fractional GPU with Single TFlops/MiB Precision
-#### 🔄 Battle-tested GPU-over-IP Remote GPU Sharing 
+#### 📐 Fractional Virtual GPU
+#### 🔄 Remote GPU Sharing over Ethernet/InfiniBand
 #### ⚖️ GPU-first Scheduling and Auto-scaling
-#### 📊 Computing Oversubscription and GPU VRAM Expansion
-#### 🛫 GPU Pooling, Monitoring, Live Migration, AI Model Preloading and more
+#### 📊 GPU Oversubscription and VRAM Expansion
+#### 🛫 GPU Pooling, Monitoring, Live Migration, Model Preloading and more
 
 ## 🎬 Demo
 
@@ -88,27 +85,26 @@ https://cdn.tensor-fusion.ai/GPU_Content_Migration.mp4
 - [x] GPU compaction/bin-packing
 - [x] Seamless onboarding experience for Pytorch, TensorFlow, llama.cpp, vLLM, Tensor-RT, SGlang and all popular AI training/serving frameworks
 - [x] Centralized Dashboard & Control Plane
-- [ ] GPU-first autoscaling policies, auto set requests/limits/replicas
-- [ ] Request multiple vGPUs with group scheduling for large models
-- [ ] Support different QoS levels
+- [x] GPU-first autoscaling policies, auto set requests/limits/replicas
+- [x] Request multiple vGPUs with group scheduling for large models
+- [x] Support different QoS levels
 
 ### Enterprise Features
 
-- [x] GPU live-migration, snapshot/distribute/restore GPU context cross cluster, fastest in the world
+- [x] GPU live-migration, snapshot and restore GPU context cross cluster
 - [ ] AI model registry and preloading, build your own private MaaS(Model-as-a-Service)
 - [ ] Advanced auto-scaling policies, scale to zero, rebalance of hot GPUs
 - [ ] Advanced observability features, detailed metrics & tracing/profiling of CUDA calls
 - [ ] Monetize your GPU cluster by multi-tenancy usage measurement & billing report
 - [ ] Enterprise level high availability and resilience, support topology aware scheduling, GPU node auto failover etc.
-- [ ] Enterprise level security, complete on-premise deployment support, encryption in-transit & at-rest
+- [ ] Enterprise level security, complete on-premise deployment support
 - [ ] Enterprise level compliance, SSO/SAML support, advanced audit, ReBAC control, SOC2 and other compliance reports available
 
 ### 🗳️ Platform Support
 
 - [x] Run on Linux Kubernetes clusters
 - [x] Run on Linux VMs or Bare Metal (one-click onboarding to Edge K3S)
-- [x] Run on Windows (Docs not ready, contact us for support)
-- [ ] Run on MacOS (Imagining mount a virtual NVIDIA GPU device on MacOS!)
+- [x] Run on Windows (Not open sourced, contact us for support)
 
 See the [open issues](https://github.com/NexusGPU/tensor-fusion/issues) for a full list of proposed features (and known issues).
 
@@ -131,12 +127,13 @@ Don't forget to give the project a star! Thanks again!
   <img src="https://contrib.rocks/image?repo=NexusGPU/tensor-fusion" alt="contrib.rocks image" />
 </a>
 
-<!-- LICENSE -->
 ## 🔷 License
 
-1. This repo is open sourced with [Apache 2.0 License](./LICENSE), which includes **GPU pooling, scheduling, management features**, you can use it for free and modify it.
-2. **GPU virtualization and GPU-over-IP features** are also free to use as the part of **Community Plan**, the implementation is not fully open sourced
-3. Features mentioned in "**Enterprise Features**" above are paid, **licensed users can automatically unlock these features**.
+1. [TensorFusion main repo](https://github.com/NexusGPU/tensor-fusion) is open sourced with [Apache 2.0 License](./LICENSE), which includes **GPU pooling, scheduling, management features**, you can use it for free and customize it as you want.
+2. [vgpu.rs repo](https://github.com/NexusGPU/vgpu.rs) is open sourced with [Apache 2.0 License](./LICENSE), which includes **Fractional GPU** and **vGPU hypervisor features**, you can use it for free and customize it as you want.
+3. **Advanced GPU virtualization and GPU-over-IP sharing features** are also free to use when **GPU total number of your organization is less than 10**, but the implementation is not fully open sourced, please [contact us](mailto:support@tensor-fusion.com) for more details.
+4. Features mentioned in "**Enterprise Features**" above are paid, **licensed users can use these features in [TensorFusion Console](https://app.tensor-fusion.ai)**.
+5. For large scale deployment that involves non-free features of #3 and #4, please [contact us](mailto:support@tensor-fusion.com), pricing details are available [here](https://tensor-fusion.ai/pricing)
 
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FNexusGPU%2Ftensor-fusion.svg?type=large&issueType=license)](https://app.fossa.com/projects/git%2Bgithub.com%2FNexusGPU%2Ftensor-fusion?ref=badge_large&issueType=license)
 

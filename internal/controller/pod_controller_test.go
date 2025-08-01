@@ -158,6 +158,14 @@ var _ = Describe("Pod Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
+			Eventually(func() error {
+				updatedWorkload := &tfv1.TensorFusionWorkload{}
+				err := k8sClient.Get(ctx, client.ObjectKeyFromObject(workload), updatedWorkload)
+				if err != nil {
+					return err
+				}
+				return nil
+			}).Should(Succeed())
 
 			clientPod = &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -331,6 +339,14 @@ var _ = Describe("Pod Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
+			Eventually(func() error {
+				updatedWorkload := &tfv1.TensorFusionWorkload{}
+				err := k8sClient.Get(ctx, client.ObjectKeyFromObject(workload), updatedWorkload)
+				if err != nil {
+					return err
+				}
+				return nil
+			}).Should(Succeed())
 
 			pod = &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
