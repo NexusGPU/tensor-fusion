@@ -388,7 +388,11 @@ func assignPodLabelsAndAnnotations(isLocalGPU bool, pod *corev1.Pod, pool *tfv1.
 }
 
 func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *corev1.Container, clientConfig *tfv1.ClientConfig) {
-	connectionName := fmt.Sprintf("%s%s", pod.GenerateName, utils.NewShortID(10))
+	prefix := pod.GenerateName
+	if pod.GenerateName == "" {
+		prefix = pod.Name + constants.TFConnectionNamePrefix
+	}
+	connectionName := fmt.Sprintf("%s%s", prefix, utils.NewShortID(10))
 	connectionNamespace := pod.Namespace
 
 	// metadata TF_POD_NAME and TF_CONNECTION_NAMESPACE
