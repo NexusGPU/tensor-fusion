@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -199,6 +200,7 @@ var _ = Describe("Pod Controller", func() {
 							},
 						},
 					},
+					TerminationGracePeriodSeconds: ptr.To(int64(0)),
 				},
 			}
 		})
@@ -206,9 +208,15 @@ var _ = Describe("Pod Controller", func() {
 		AfterEach(func() {
 			if workload != nil {
 				_ = k8sClient.Delete(ctx, workload)
+				Eventually(func() error {
+					return k8sClient.Get(ctx, client.ObjectKeyFromObject(workload), workload)
+				}).Should(Satisfy(errors.IsNotFound))
 			}
 			if clientPod != nil {
 				_ = k8sClient.Delete(ctx, clientPod)
+				Eventually(func() error {
+					return k8sClient.Get(ctx, client.ObjectKeyFromObject(clientPod), clientPod)
+				}).Should(Satisfy(errors.IsNotFound))
 			}
 
 			connection := &tfv1.TensorFusionConnection{
@@ -218,6 +226,9 @@ var _ = Describe("Pod Controller", func() {
 				},
 			}
 			_ = k8sClient.Delete(ctx, connection)
+			Eventually(func() error {
+				return k8sClient.Get(ctx, client.ObjectKeyFromObject(connection), connection)
+			}).Should(Satisfy(errors.IsNotFound))
 		})
 
 		It("should successfully create TensorFusion connection for client pod", func() {
@@ -375,6 +386,7 @@ var _ = Describe("Pod Controller", func() {
 							Image: "test-image",
 						},
 					},
+					TerminationGracePeriodSeconds: ptr.To(int64(0)),
 				},
 			}
 		})
@@ -450,6 +462,7 @@ var _ = Describe("Pod Controller", func() {
 							},
 						},
 					},
+					TerminationGracePeriodSeconds: ptr.To(int64(0)),
 				},
 			}
 
