@@ -6,7 +6,7 @@ OUTPUT_FILE="./tmp.tensor-fusion-crds.yaml"
 echo "Generating combined CRD file..."
 > "$OUTPUT_FILE"
 for file in "$CRD_DIR"/*.yaml; do
-    [ -s "$OUTPUT_FILE" ] && echo "---" >> "$OUTPUT_FILE"
+    [ -s "$OUTPUT_FILE" ]
     cat "$file" >> "$OUTPUT_FILE"
 done
 echo "Generated: $OUTPUT_FILE"
