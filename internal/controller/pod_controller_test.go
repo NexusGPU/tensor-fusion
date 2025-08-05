@@ -210,6 +210,14 @@ var _ = Describe("Pod Controller", func() {
 			if clientPod != nil {
 				_ = k8sClient.Delete(ctx, clientPod)
 			}
+
+			connection := &tfv1.TensorFusionConnection{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-connection-pod-controller",
+					Namespace: "default",
+				},
+			}
+			_ = k8sClient.Delete(ctx, connection)
 		})
 
 		It("should successfully create TensorFusion connection for client pod", func() {
