@@ -142,3 +142,8 @@ const (
 	NodeDiscoveryReportGPUNodeEnvName = "NODE_DISCOVERY_REPORT_GPU_NODE"
 	NodeDiscoveryHostNameEnv          = "HOSTNAME"
 )
+
+const (
+	KubeApiVersionMajorEnv = "KUBE_API_VERSION_MAJOR"
+	KubeApiVersionMinorEnv = "KUBE_API_VERSION_MINOR"
+)

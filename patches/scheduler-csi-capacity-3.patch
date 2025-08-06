@@ -1,0 +1,26 @@
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/eventhandlers.go	2025-08-06 17:55:42
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/eventhandlers.go	2025-08-06 17:56:13
+@@ -19,6 +19,8 @@
+ import (
+ 	"context"
+ 	"fmt"
++	"os"
++	"strconv"
+ 	"strings"
+ 	"time"
+ 
+@@ -514,6 +516,14 @@
+ 			}
+ 			handlers = append(handlers, handlerRegistration)
+ 		case framework.CSIStorageCapacity:
++			// FIX kubernetes 1.24 and lower version API missing issue
++			minorVersionStr := os.Getenv("KUBE_API_VERSION_MINOR")
++			if minorVersionStr != "" {
++				minorVersion, err := strconv.Atoi(minorVersionStr)
++				if err != nil || minorVersion < 24 {
++					continue
++				}
++			}
+ 			if handlerRegistration, err = informerFactory.Storage().V1().CSIStorageCapacities().Informer().AddEventHandler(
+ 				buildEvtResHandler(at, framework.CSIStorageCapacity),
+ 			); err != nil {

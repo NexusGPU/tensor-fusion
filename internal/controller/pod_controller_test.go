@@ -82,6 +82,7 @@ var _ = Describe("Pod Controller", func() {
 							Image: "test-image",
 						},
 					},
+					TerminationGracePeriodSeconds: ptr.To(int64(0)),
 				},
 			}
 		})
@@ -89,6 +90,9 @@ var _ = Describe("Pod Controller", func() {
 		AfterEach(func() {
 			if workerPod != nil {
 				_ = k8sClient.Delete(ctx, workerPod)
+				Eventually(func() error {
+					return k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), workerPod)
+				}).Should(Satisfy(errors.IsNotFound))
 			}
 		})
 
@@ -394,9 +398,15 @@ var _ = Describe("Pod Controller", func() {
 		AfterEach(func() {
 			if workload != nil {
 				_ = k8sClient.Delete(ctx, workload)
+				Eventually(func() error {
+					return k8sClient.Get(ctx, client.ObjectKeyFromObject(workload), workload)
+				}).Should(Satisfy(errors.IsNotFound))
 			}
 			if pod != nil {
 				_ = k8sClient.Delete(ctx, pod)
+				Eventually(func() error {
+					return k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), pod)
+				}).Should(Satisfy(errors.IsNotFound))
 			}
 		})
 

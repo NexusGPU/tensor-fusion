@@ -1,0 +1,32 @@
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/volume_binding.go	2025-08-06 16:50:24
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/volume_binding.go	2025-08-06 16:51:16
+@@ -20,6 +20,8 @@
+ 	"context"
+ 	"errors"
+ 	"fmt"
++	"os"
++	"strconv"
+ 	"sync"
+ 	"time"
+ 
+@@ -603,9 +605,18 @@
+ 	storageClassInformer := fh.SharedInformerFactory().Storage().V1().StorageClasses()
+ 	csiNodeInformer := fh.SharedInformerFactory().Storage().V1().CSINodes()
+ 	capacityCheck := CapacityCheck{
+-		CSIDriverInformer:          fh.SharedInformerFactory().Storage().V1().CSIDrivers(),
+-		CSIStorageCapacityInformer: fh.SharedInformerFactory().Storage().V1().CSIStorageCapacities(),
++		CSIDriverInformer: fh.SharedInformerFactory().Storage().V1().CSIDrivers(),
+ 	}
++
++	// FIX kubernetes 1.24 and lower version API missing issue
++	minorVersionStr := os.Getenv("KUBE_API_VERSION_MINOR")
++	if minorVersionStr != "" {
++		minorVersion, err := strconv.Atoi(minorVersionStr)
++		if err == nil && minorVersion >= 24 {
++			capacityCheck.CSIStorageCapacityInformer = fh.SharedInformerFactory().Storage().V1().CSIStorageCapacities()
++		}
++	}
++
+ 	binder := NewVolumeBinder(klog.FromContext(ctx), fh.ClientSet(), fts, podInformer, nodeInformer, csiNodeInformer, pvcInformer, pvInformer, storageClassInformer, capacityCheck, time.Duration(args.BindTimeoutSeconds)*time.Second)
+ 
+ 	// build score function

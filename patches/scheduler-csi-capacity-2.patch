@@ -1,0 +1,27 @@
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/binder.go	2025-08-06 17:00:36
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/binder.go	2025-08-06 17:00:27
+@@ -269,7 +269,11 @@
+ 	}
+ 
+ 	b.csiDriverLister = capacityCheck.CSIDriverInformer.Lister()
+-	b.csiStorageCapacityLister = capacityCheck.CSIStorageCapacityInformer.Lister()
++
++	// FIX kubernetes 1.24 and lower version API missing issue
++	if capacityCheck.CSIStorageCapacityInformer != nil {
++		b.csiStorageCapacityLister = capacityCheck.CSIStorageCapacityInformer.Lister()
++	}
+ 
+ 	return b
+ }
+@@ -988,6 +992,11 @@
+ 		return true, nil, nil
+ 	}
+ 
++	// FIX kubernetes 1.24 and lower version API missing issue
++	if b.csiStorageCapacityLister == nil {
++		return true, nil, nil
++	}
++
+ 	// Look for a matching CSIStorageCapacity object(s).
+ 	// TODO (for beta): benchmark this and potentially introduce some kind of lookup structure (https://github.com/kubernetes/enhancements/issues/1698#issuecomment-654356718).
+ 	capacities, err := b.csiStorageCapacityLister.List(labels.Everything())

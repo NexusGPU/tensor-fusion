@@ -28,6 +28,7 @@ import (
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 
+	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
@@ -186,6 +187,21 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+
+	k8sClient, err := kubernetes.NewForConfig(kc)
+	if err != nil {
+		setupLog.Error(err, "unable to create k8s client")
+		os.Exit(1)
+	}
+	version, err := k8sClient.Discovery().ServerVersion()
+	if err != nil {
+		setupLog.Error(err, "unable to get k8s version")
+		os.Exit(1)
+	}
+	// set env for feature gating, so that to be compatible with different k8s version
+	setupLog.Info("detected API server version for feature gating", "version", version.String())
+	os.Setenv(constants.KubeApiVersionMajorEnv, version.Major)
+	os.Setenv(constants.KubeApiVersionMinorEnv, version.Minor)
 
 	setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
 

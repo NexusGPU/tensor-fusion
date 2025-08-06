@@ -1,0 +1,26 @@
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2025-08-06 17:45:27
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2025-08-06 17:45:19
+@@ -20,7 +20,9 @@
+ 	"context"
+ 	"fmt"
+ 	"math/rand"
++	"os"
+ 	"sort"
++	"strconv"
+ 
+ 	v1 "k8s.io/api/core/v1"
+ 	policy "k8s.io/api/policy/v1"
+@@ -364,5 +366,13 @@
+ }
+ 
+ func getPDBLister(informerFactory informers.SharedInformerFactory) policylisters.PodDisruptionBudgetLister {
++	// FIX kubernetes 1.21 and lower version API missing issue
++	minorVersionStr := os.Getenv("KUBE_API_VERSION_MINOR")
++	if minorVersionStr != "" {
++		minorVersion, err := strconv.Atoi(minorVersionStr)
++		if err != nil || minorVersion < 21 {
++			return nil
++		}
++	}
+ 	return informerFactory.Policy().V1().PodDisruptionBudgets().Lister()
+ }
