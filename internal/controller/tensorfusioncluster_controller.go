@@ -325,8 +325,8 @@ func (r *TensorFusionClusterReconciler) reconcileGPUPool(ctx context.Context, tf
 					errors = append(errors, fmt.Errorf("failed to update GPUPool %s: %w", key, err))
 				}
 				anyPoolChanged = true
-				r.updateMetricsRecorder(ctx, existingPool)
 			}
+			r.updateMetricsRecorder(ctx, existingPool)
 		}
 	}
 
