@@ -27,7 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        envtest_k8s_version: [1.23.5, 1.33.3]
+        # from https://github.com/kubernetes-sigs/controller-tools/blob/main/envtest-releases.yaml
+        envtest_k8s_version: [1.23.5, 1.33.0]
     steps:
       - name: Clone the code
         uses: actions/checkout@v4
