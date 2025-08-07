@@ -387,6 +387,14 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 				Type: ptr.To(v1.HostPathDirectoryOrCreate),
 			},
 		},
+	}, v1.Volume{
+		Name: constants.KubeletPodResourcesVolumeName,
+		VolumeSource: v1.VolumeSource{
+			HostPath: &v1.HostPathVolumeSource{
+				Path: constants.KubeletPodResourcesPath,
+				Type: ptr.To(v1.HostPathDirectoryOrCreate),
+			},
+		},
 	})
 
 	composeHypervisorInitContainer(spec, pool)
@@ -430,6 +438,9 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 	}, v1.VolumeMount{
 		Name:      constants.KubeletDevicePluginVolumeName,
 		MountPath: constants.KubeletDevicePluginPath,
+	}, v1.VolumeMount{
+		Name:      constants.KubeletPodResourcesVolumeName,
+		MountPath: constants.KubeletPodResourcesPath,
 	})
 	if enableVector {
 		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
