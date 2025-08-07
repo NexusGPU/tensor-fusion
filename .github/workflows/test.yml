@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        envtest_k8s_version: [1.23.5, 1.27.1, 1.31.0, 1.32.0]
+        envtest_k8s_version: [1.23.5, 1.33.3]
     steps:
       - name: Clone the code
         uses: actions/checkout@v4
