@@ -580,6 +580,12 @@ func (s *GpuAllocator) Score(ctx context.Context, cfg *config.GPUFitConfig, req 
 	for nodeName, gpus := range validNodeGPUs {
 		for _, gpu := range gpus {
 			res := strategy.Score(gpu)
+
+			// making Pending GPU to lower score, prefer not scheduling to them
+			if gpu.Status.Phase == tfv1.TensorFusionGPUPhasePending {
+				res = res / 4
+			}
+
 			if _, exists := result[nodeName]; !exists {
 				result[nodeName] = make(map[string]int, len(gpus))
 			}
