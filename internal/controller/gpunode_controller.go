@@ -158,6 +158,7 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 			if err != nil {
 				return fmt.Errorf("failed to update GPU node status to pending: %w", err)
 			}
+			metrics.SetNodeMetrics(node, poolObj, nil)
 		}
 
 		err := r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhasePending)
@@ -172,7 +173,7 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 			return err
 		}
 		if len(gpuModels) == 0 {
-			// when GPU created, will trigger next reconcile
+			log.FromContext(ctx).Info("GPU models not found, skip update", "node", node.Name)
 			return nil
 		}
 
@@ -288,6 +289,16 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 		} else {
 			return fmt.Errorf("create node discovery job %w", err)
 		}
+	}
+
+	if job.Status.Failed > 0 {
+		log.Info("node discovery job failed, update GPU node status to failed", "node", gpunode.Name)
+		// Update phase to failed, require manual address why it failed and restart of node discovery job
+		gpunode.Status.Phase = tfv1.TensorFusionGPUNodePhaseFailed
+		if err := r.Status().Update(ctx, gpunode); err != nil {
+			return fmt.Errorf("failed to update GPU node status to failed: %w", err)
+		}
+		metrics.SetNodeMetrics(gpunode, pool, nil)
 	}
 
 	return nil

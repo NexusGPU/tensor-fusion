@@ -93,6 +93,7 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod) {
 	metricsItem.TflopsLimit = gpuLimitResource.Tflops.AsApproximateFloat64()
 	metricsItem.VramBytesRequest = gpuRequestResource.Vram.AsApproximateFloat64()
 	metricsItem.VramBytesLimit = gpuLimitResource.Vram.AsApproximateFloat64()
+	metricsItem.Ready = utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady)
 	if count <= 0 || count > uint64(math.MaxInt32) {
 		// handle invalid or out-of-bounds data
 		metricsItem.GPUCount = 1
@@ -116,6 +117,7 @@ func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []strin
 	// Fields that possibly change after initialization
 	metricsItem := nodeMetricsMap[node.Name]
 	metricsItem.PoolName = poolObj.Name
+	metricsItem.Phase = string(node.Status.Phase)
 	metricsItem.SetGPUModelAndCount(gpuModels)
 
 	totalTflops := node.Status.TotalTFlops.AsApproximateFloat64()
@@ -279,6 +281,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("raw_cost", metrics.RawCost)
 		enc.AddField("vram_bytes_limit", metrics.VramBytesLimit)
 		enc.AddField("vram_bytes_request", metrics.VramBytesRequest)
+		enc.AddField("ready", metrics.Ready)
 
 		enc.EndLine(now)
 	}
@@ -302,6 +305,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 
 		enc.AddTag("node", metrics.NodeName)
 		enc.AddTag("pool", metrics.PoolName)
+		enc.AddTag("phase", metrics.Phase)
 
 		enc.AddField("allocated_tflops", metrics.AllocatedTflops)
 		enc.AddField("allocated_tflops_percent", metrics.AllocatedTflopsPercent)

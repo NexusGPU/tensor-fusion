@@ -42,6 +42,7 @@ type WorkerResourceMetrics struct {
 	VramBytesLimit   float64 `json:"vramBytesLimit" gorm:"column:vram_bytes_limit"`
 	GPUCount         int     `json:"gpuCount" gorm:"column:gpu_count"`
 	RawCost          float64 `json:"rawCost" gorm:"column:raw_cost"`
+	Ready            bool    `json:"ready" gorm:"column:ready"`
 
 	// NOTE: make sure new fields will be migrated in SetupTable function
 
@@ -60,6 +61,7 @@ func (wm WorkerResourceMetrics) TableName() string {
 type NodeResourceMetrics struct {
 	NodeName string `json:"nodeName" gorm:"column:node;index:,class:INVERTED"`
 	PoolName string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
+	Phase    string `json:"phase" gorm:"column:phase;index:,class:INVERTED"`
 
 	AllocatedTflops        float64 `json:"allocatedTflops" gorm:"column:allocated_tflops"`
 	AllocatedTflopsPercent float64 `json:"allocatedTflopsPercent" gorm:"column:allocated_tflops_percent"`
@@ -86,6 +88,9 @@ func (nm NodeResourceMetrics) TableName() string {
 }
 
 func (nm *NodeResourceMetrics) SetGPUModelAndCount(gpuModels []string) {
+	if gpuModels == nil {
+		return
+	}
 	nm.gpuModels = gpuModels
 	nm.GPUCount = len(gpuModels)
 }
