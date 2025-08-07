@@ -371,7 +371,7 @@ func (mr *MetricsRecorder) getWorkerRawCost(metrics *WorkerResourceMetrics, dura
 func (mr *MetricsRecorder) getNodeRawCost(metrics *NodeResourceMetrics, duration time.Duration, hourlyUnitPriceMap map[string]float64) float64 {
 	cost := 0.0
 	for _, gpuModel := range metrics.gpuModels {
-		cost += metrics.AllocatedTflops * duration.Hours() * hourlyUnitPriceMap[gpuModel]
+		cost += duration.Seconds() * hourlyUnitPriceMap[gpuModel] / 3600.0
 	}
 	return cost
 }

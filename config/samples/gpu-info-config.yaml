@@ -9,3 +9,15 @@
   vendor: NVIDIA
   costPerHour: 1.89
   fp16TFlops: 312
+
+- model: NVIDIA 3090
+  fullModelName: "NVIDIA GeForce RTX 3090"
+  vendor: NVIDIA
+  costPerHour: 0.3
+  fp16TFlops: 71.2
+
+- model: NVIDIA 5060 Ti
+  fullModelName: "NVIDIA GeForce RTX 5060 Ti"
+  vendor: NVIDIA
+  costPerHour: 0.25
+  fp16TFlops: 66
