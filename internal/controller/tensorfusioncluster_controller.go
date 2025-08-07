@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"golang.org/x/time/rate"
@@ -444,6 +445,7 @@ func (r *TensorFusionClusterReconciler) SetupWithManager(mgr ctrl.Manager, addLi
 
 // Update metrics recorder's raw billing map
 func (r *TensorFusionClusterReconciler) updateMetricsRecorder(ctx context.Context, pool *tfv1.GPUPool) {
+	const dollarSign = "$"
 	log := log.FromContext(ctx)
 	if pool.Spec.QosConfig == nil {
 		log.Info("QosConfig is nil, skip updating metrics recorder", "pool", pool.Name)
@@ -456,8 +458,8 @@ func (r *TensorFusionClusterReconciler) updateMetricsRecorder(ctx context.Contex
 	}
 	pricingDetail := r.MetricsRecorder.WorkerUnitPriceMap[pool.Name]
 	for _, pricing := range qosConfig.Pricing {
-		tflopsPerHour, _ := strconv.ParseFloat(pricing.Requests.PerFP16TFlopsPerHour, 64)
-		vramPerHour, _ := strconv.ParseFloat(pricing.Requests.PerGBOfVRAMPerHour, 64)
+		tflopsPerHour, _ := strconv.ParseFloat(strings.TrimPrefix(pricing.Requests.PerFP16TFlopsPerHour, dollarSign), 64)
+		vramPerHour, _ := strconv.ParseFloat(strings.TrimPrefix(pricing.Requests.PerGBOfVRAMPerHour, dollarSign), 64)
 		limitOverRequestChargingRatio, _ := strconv.ParseFloat(pricing.LimitsOverRequestsChargingRatio, 64)
 
 		pricingDetail[string(pricing.Qos)] = metrics.RawBillingPricing{
