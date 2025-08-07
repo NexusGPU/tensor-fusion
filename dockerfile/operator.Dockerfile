@@ -10,7 +10,6 @@ COPY go.mod go.mod
 COPY go.sum go.sum
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
-RUN go mod vendor
 
 # Copy the go source
 COPY cmd/ cmd/
@@ -21,7 +20,7 @@ COPY .git/ .git/
 
 COPY scripts/ scripts/
 COPY patches/ patches/
-RUN bash ./scripts/patch-scheduler.sh
+RUN go mod vendor && bash ./scripts/patch-scheduler.sh
 
 # Build
 # the GOARCH has not a default value to allow the binary be built according to the host where the command
@@ -38,3 +37,6 @@ COPY --from=builder /workspace/manager .
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]
+
+# Run locally
+# docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 --build-arg GO_LDFLAGS="-X 'github.com/NexusGPU/tensor-fusion/internal/version.BuildVersion=dev-test'" -t tensorfusion/tensor-fusion-operator:tmp-test . -f dockerfile/operator.Dockerfile
