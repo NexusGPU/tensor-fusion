@@ -7,9 +7,9 @@ controller:
     repository: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-operator
   vectorAgentImage: docker.m.daocloud.io/timberio/vector:latest-alpine
 
-admissionWebhooks:
-  patch:
-    image: k8s.m.daocloud.io/ingress-nginx/kube-webhook-certgen:v1.5.0
+  admissionWebhooks:
+    patch:
+      image: k8s.m.daocloud.io/ingress-nginx/kube-webhook-certgen:v1.5.0
 
 agent:
   image:
