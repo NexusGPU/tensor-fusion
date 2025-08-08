@@ -162,7 +162,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.loadWorkloads(ctx)
 
-			rec := tfv1.Resources{
+			targetRes := tfv1.Resources{
 				Requests: tfv1.Resource{
 					Tflops: resource.MustParse("110"),
 					Vram:   resource.MustParse("110Gi"),
@@ -174,20 +174,20 @@ var _ = Describe("Autoscaler", func() {
 			}
 
 			scaler.recommenders[0] = &FakeRecommender{
-				Resources: &rec,
+				Resources: &targetRes,
 			}
 
 			scaler.processWorkloads(ctx)
 			Eventually(func(g Gomega) {
 				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&rec)).To(BeTrue())
+				g.Expect(res.Equal(&targetRes)).To(BeTrue())
 			}).Should(Succeed())
 
 			// Upon reprocessing the workload, it should skip resource updates
 			scaler.processWorkloads(ctx)
 			Consistently(func(g Gomega) {
 				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&rec)).To(BeTrue())
+				g.Expect(res.Equal(&targetRes)).To(BeTrue())
 			}).Should(Succeed())
 		})
 
@@ -203,7 +203,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.loadWorkloads(ctx)
 
-			rec := tfv1.Resources{
+			targetRes := tfv1.Resources{
 				Requests: tfv1.Resource{
 					Tflops: resource.MustParse("110"),
 					Vram:   resource.MustParse("110Gi"),
@@ -215,7 +215,7 @@ var _ = Describe("Autoscaler", func() {
 			}
 
 			scaler.recommenders[0] = &FakeRecommender{
-				Resources: &rec,
+				Resources: &targetRes,
 			}
 
 			workloadState := scaler.workloads[workload.Name]
@@ -390,7 +390,7 @@ var _ = Describe("Autoscaler", func() {
 				g.Expect(res.Equal(&resourcesInRule)).To(BeTrue())
 			}).Should(Succeed())
 
-			fakeRec := tfv1.Resources{
+			fakeRes := tfv1.Resources{
 				Requests: tfv1.Resource{
 					Tflops: resource.MustParse("1"),
 					Vram:   resource.MustParse("1Gi"),
@@ -401,7 +401,7 @@ var _ = Describe("Autoscaler", func() {
 				},
 			}
 
-			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &fakeRec})
+			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &fakeRes})
 
 			scaler.processWorkloads(ctx)
 			Consistently(func(g Gomega) {
