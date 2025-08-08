@@ -16,7 +16,7 @@ import (
 
 type Handler interface {
 	UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload)
-	ApplyResourcesToWorkload(ctx context.Context, workloadState *State, recommendation *tfv1.Resources) error
+	ApplyResourcesToWorkload(ctx context.Context, workloadState *State, targetRes *tfv1.Resources) error
 }
 
 type handler struct {
@@ -46,8 +46,8 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 	workloadState.updateWorkers(workerList)
 }
 
-func (h *handler) ApplyResourcesToWorkload(ctx context.Context, workload *State, recommendation *tfv1.Resources) error {
-	if err := h.updateAutoScalingAnnotations(ctx, workload, recommendation); err != nil {
+func (h *handler) ApplyResourcesToWorkload(ctx context.Context, workload *State, targetRes *tfv1.Resources) error {
+	if err := h.updateAutoScalingAnnotations(ctx, workload, targetRes); err != nil {
 		return fmt.Errorf("failed to update auto scaling annotations: %v", err)
 	}
 
@@ -66,7 +66,7 @@ func (h *handler) ApplyResourcesToWorkload(ctx context.Context, workload *State,
 		if !worker.DeletionTimestamp.IsZero() {
 			continue
 		}
-		if err := h.applyResourcesToWorker(ctx, workload, &worker, recommendation); err != nil {
+		if err := h.applyResourcesToWorker(ctx, workload, &worker, targetRes); err != nil {
 			return fmt.Errorf("failed to update worker %s resources: %v", worker.Name, err)
 		}
 	}
@@ -97,18 +97,18 @@ func (h *handler) updateAutoScalingAnnotations(
 	return nil
 }
 
-func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, worker *corev1.Pod, recommendation *tfv1.Resources) error {
+func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, worker *corev1.Pod, targetRes *tfv1.Resources) error {
 	log := log.FromContext(ctx)
 
 	curRes, err := utils.CurrentResourcesFromAnnotations(worker.Annotations)
 	if err != nil {
 		return fmt.Errorf("failed to get current worker resources: %v", err)
 	}
-	if curRes != nil && curRes.Equal(recommendation) {
+	if curRes != nil && curRes.Equal(targetRes) {
 		return nil
 	}
 
-	annotationsToUpdate := utils.CurrentResourcesToAnnotations(recommendation)
+	annotationsToUpdate := utils.CurrentResourcesToAnnotations(targetRes)
 	if !workload.ShouldScaleResource(tfv1.ResourceTflops) {
 		delete(annotationsToUpdate, constants.TFLOPSRequestAnnotation)
 		delete(annotationsToUpdate, constants.TFLOPSLimitAnnotation)
@@ -124,16 +124,16 @@ func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, w
 
 	isScaleUp := false
 	if _, ok := annotationsToUpdate[constants.TFLOPSRequestAnnotation]; ok {
-		isScaleUp = recommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0
+		isScaleUp = targetRes.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0
 	} else {
-		isScaleUp = recommendation.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
+		isScaleUp = targetRes.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
 	}
 
 	adjustRequest := &tfv1.AdjustRequest{
 		PodUID:     string(worker.UID),
 		IsScaleUp:  isScaleUp,
-		NewRequest: recommendation.Requests,
-		NewLimit:   recommendation.Limits,
+		NewRequest: targetRes.Requests,
+		NewLimit:   targetRes.Limits,
 	}
 	if _, err := h.allocator.AdjustAllocation(ctx, *adjustRequest, true); err != nil {
 		return fmt.Errorf("failed to adjust allocation: %v", err)
@@ -146,7 +146,7 @@ func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, w
 		return fmt.Errorf("failed to patch worker %s: %v", worker.Name, err)
 	}
 
-	log.Info("apply recommendation successfully", "worker", worker.Name, "recommendation", recommendation, "currentResources", curRes)
+	log.Info("apply resources successfully", "worker", worker.Name, "targetResources", targetRes, "currentResources", curRes)
 
 	return nil
 }
