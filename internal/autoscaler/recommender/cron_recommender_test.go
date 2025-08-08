@@ -39,8 +39,8 @@ var _ = Describe("CronRecommender", func() {
 		}
 
 		recommender := NewCronRecommender()
-		recommendation, _ := recommender.Recommend(ctx, workload)
-		Expect(recommendation.Equal(&defaultRes)).To(BeTrue())
+		rec, _ := recommender.Recommend(ctx, workload)
+		Expect(rec.Resources.Equal(&defaultRes)).To(BeTrue())
 		newRes := tfv1.Resources{
 			Requests: tfv1.Resource{
 				Tflops: resource.MustParse("5"),
@@ -64,8 +64,8 @@ var _ = Describe("CronRecommender", func() {
 			},
 		}
 
-		recommendation, _ = recommender.Recommend(ctx, workload)
-		Expect(recommendation.Equal(&newRes)).To(BeTrue())
+		rec, _ = recommender.Recommend(ctx, workload)
+		Expect(rec.Resources.Equal(&newRes)).To(BeTrue())
 	})
 
 	It("should not return recommendation if there is no active cron scaling rule", func() {
@@ -103,12 +103,14 @@ var _ = Describe("CronRecommender", func() {
 
 		recommender := NewCronRecommender()
 		recommendation, _ := recommender.Recommend(ctx, workload)
-		Expect(recommendation.Equal(&defaultRes)).To(BeTrue())
+		Expect(recommendation.Resources.Equal(&defaultRes)).To(BeTrue())
 
 		workload.Annotations = cronScalingResourcesToAnnotations(&defaultRes)
 
 		recommendation, _ = recommender.Recommend(ctx, workload)
-		Expect(recommendation).To(BeNil())
+		Expect(recommendation).ToNot(BeNil())
+		Expect(recommendation.ScaleDownLocking).To(BeTrue())
+		Expect(recommendation.Resources.Equal(&defaultRes)).To(BeTrue())
 	})
 
 	It("should revert the resources to those specified in the workload spec if the active cron scaling finished", func() {
@@ -136,8 +138,8 @@ var _ = Describe("CronRecommender", func() {
 		}
 
 		recommender := NewCronRecommender()
-		recommendation, _ := recommender.Recommend(ctx, workload)
-		Expect(recommendation.Equal(&defaultRes)).To(BeTrue())
+		rec, _ := recommender.Recommend(ctx, workload)
+		Expect(rec.Resources.Equal(&defaultRes)).To(BeTrue())
 
 		workload.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
 			CronScalingRules: []tfv1.CronScalingRule{
@@ -152,12 +154,12 @@ var _ = Describe("CronRecommender", func() {
 		}
 
 		workload.Annotations = cronScalingResourcesToAnnotations(&defaultRes)
-		recommendation, _ = recommender.Recommend(ctx, workload)
-		Expect(recommendation.Equal(&workload.Spec.Resources)).To(BeTrue())
+		rec, _ = recommender.Recommend(ctx, workload)
+		Expect(rec.Resources.Equal(&workload.Spec.Resources)).To(BeTrue())
 
 		workload.Annotations = cronScalingResourcesToAnnotations(&tfv1.Resources{})
-		recommendation, _ = recommender.Recommend(ctx, workload)
-		Expect(recommendation).To(BeNil())
+		rec, _ = recommender.Recommend(ctx, workload)
+		Expect(rec).To(BeNil())
 	})
 
 	It("should return error if getting multiple active rules", func() {

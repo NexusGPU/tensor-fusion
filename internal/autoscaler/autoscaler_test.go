@@ -24,6 +24,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/recommender"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -350,45 +351,63 @@ var _ = Describe("Autoscaler", func() {
 			}).Should(Succeed())
 		})
 
-		It("should merge recomendations based on a larger request value", func() {
-			recommendations := map[string]*tfv1.Resources{
-				"rec1": {
-					Requests: tfv1.Resource{
-						Tflops: resource.MustParse("10"),
-						Vram:   resource.MustParse("10Gi"),
-					},
-					Limits: tfv1.Resource{
-						Tflops: resource.MustParse("15"),
-						Vram:   resource.MustParse("15Gi"),
-					},
+		It("should not scale down when merging recommendations during active cron scaling progress", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
+				Build()
+			defer tfEnv.Cleanup()
+			go mockSchedulerLoop(ctx, cfg)
+			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
+			defer deleteWorkload(workload)
+
+			scaler, _ := NewAutoscaler(k8sClient, allocator)
+			scaler.loadWorkloads(ctx)
+
+			workloadState := scaler.workloads[workload.Name]
+			resourcesInRule := tfv1.Resources{
+				Requests: tfv1.Resource{
+					Tflops: resource.MustParse("110"),
+					Vram:   resource.MustParse("110Gi"),
 				},
-				"rec2": {
-					Requests: tfv1.Resource{
-						Tflops: resource.MustParse("5"),
-						Vram:   resource.MustParse("15Gi"),
-					},
-					Limits: tfv1.Resource{
-						Tflops: resource.MustParse("20"),
-						Vram:   resource.MustParse("20Gi"),
-					},
+				Limits: tfv1.Resource{
+					Tflops: resource.MustParse("110"),
+					Vram:   resource.MustParse("110Gi"),
+				},
+			}
+			workloadState.Spec.AutoScalingConfig.CronScalingRules = []tfv1.CronScalingRule{
+				{
+					Enable:           true,
+					Name:             "test",
+					Start:            "0 0 * * *",
+					End:              "59 23 * * *",
+					DesiredResources: resourcesInRule,
 				},
 			}
 
-			final := mergeRecommendations(recommendations)
-			Expect(final.Equal(&tfv1.Resources{
+			scaler.processWorkloads(ctx)
+			Eventually(func(g Gomega) {
+				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
+				g.Expect(res.Equal(&resourcesInRule)).To(BeTrue())
+			}).Should(Succeed())
+
+			fakeRec := tfv1.Resources{
 				Requests: tfv1.Resource{
-					Tflops: resource.MustParse("10"),
-					Vram:   resource.MustParse("15Gi"),
+					Tflops: resource.MustParse("1"),
+					Vram:   resource.MustParse("1Gi"),
 				},
 				Limits: tfv1.Resource{
-					Tflops: resource.MustParse("15"),
-					Vram:   resource.MustParse("20Gi"),
+					Tflops: resource.MustParse("1"),
+					Vram:   resource.MustParse("1Gi"),
 				},
-			})).To(BeTrue())
-		})
+			}
 
-		It("should not update resource if resource is zero", func() {
+			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &fakeRec})
 
+			scaler.processWorkloads(ctx)
+			Consistently(func(g Gomega) {
+				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
+				g.Expect(res.Equal(&resourcesInRule)).To(BeTrue())
+			}).Should(Succeed())
 		})
 	})
 })
@@ -509,8 +528,10 @@ func (f *FakeRecommender) Name() string {
 	return "Fake"
 }
 
-func (f *FakeRecommender) Recommend(ctx context.Context, workoad *workload.State) (*tfv1.Resources, error) {
-	return f.Resources, nil
+func (f *FakeRecommender) Recommend(ctx context.Context, workoad *workload.State) (*recommender.Recommendation, error) {
+	return &recommender.Recommendation{
+		Resources: *f.Resources,
+	}, nil
 }
 
 func updateWorkloadReplicas(workload *tfv1.TensorFusionWorkload, replicas int) {

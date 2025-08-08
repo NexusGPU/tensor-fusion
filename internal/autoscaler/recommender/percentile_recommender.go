@@ -80,7 +80,7 @@ func (p *PercentileRecommender) Name() string {
 	return "percentile"
 }
 
-func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workload.State) (*tfv1.Resources, error) {
+func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workload.State) (*Recommendation, error) {
 	log := log.FromContext(ctx)
 	aggregator := workload.WorkerUsageAggregator
 	if aggregator.IsEmpty() {
@@ -105,32 +105,32 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 
 	log.Info("recommendation", "workload", workload.Name, "recommender", p.Name(), "resources", rr)
 
-	result := &tfv1.Resources{}
+	targetRes := &tfv1.Resources{}
 	if curRes.Requests.Tflops.Cmp(rr.LowerBoundTflops) < 0 ||
 		curRes.Requests.Tflops.Cmp(rr.UpperBoundTflops) > 0 {
-		result.Requests.Tflops = rr.TargetTflops
+		targetRes.Requests.Tflops = rr.TargetTflops
 		targetLimit := getProportionalLimit(&curRes.Limits.Tflops, &curRes.Requests.Tflops, &rr.TargetTflops)
 		if targetLimit == nil {
 			return nil, fmt.Errorf("failed to get tflops limit from workload %s", workload.Name)
 		}
-		result.Limits.Tflops = *targetLimit
+		targetRes.Limits.Tflops = *targetLimit
 	}
 
 	if curRes.Requests.Vram.Cmp(rr.LowerBoundVram) < 0 ||
 		curRes.Requests.Vram.Cmp(rr.UpperBoundVram) > 0 {
-		result.Requests.Vram = rr.TargetVram
+		targetRes.Requests.Vram = rr.TargetVram
 		targetLimit := getProportionalLimit(&curRes.Limits.Vram, &curRes.Requests.Vram, &rr.TargetVram)
 		if targetLimit == nil {
 			return nil, fmt.Errorf("failed to get vram limit from workload %s", workload.Name)
 		}
-		result.Limits.Vram = *targetLimit
+		targetRes.Limits.Vram = *targetLimit
 	}
 
-	if result.Equal(curRes) {
-		return nil, nil
-	}
-
-	return result, nil
+	return &Recommendation{
+		Resources:        *targetRes,
+		Applied:          targetRes.Equal(curRes),
+		ScaleDownLocking: false,
+	}, nil
 }
 
 func (p *PercentileRecommender) getPercentileConfig(asr *tfv1.AutoSetResources) *PercentileConfig {

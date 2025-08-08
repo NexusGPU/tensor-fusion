@@ -36,7 +36,7 @@ func (c *CronRecommender) Name() string {
 	return "cron"
 }
 
-func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*tfv1.Resources, error) {
+func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Recommendation, error) {
 	log := log.FromContext(ctx)
 	activeRule, err := c.getActiveCronScalingRule(&w.Spec.AutoScalingConfig)
 	if err != nil {
@@ -48,26 +48,26 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*tf
 		return nil, fmt.Errorf("failed to get current resources from workload %s: %v", w.Name, err)
 	}
 
-	var result *tfv1.Resources
+	var targetRes *tfv1.Resources
 	if activeRule == nil {
 		if curRes == nil {
 			return nil, nil
 		}
 		// revert the resources to those specified in the workload spec
-		result = w.GetResourcesSpec()
+		targetRes = w.GetResourcesSpec()
 		maps.Copy(w.ScalingAnnotations, cronScalingResourcesToAnnotations(&tfv1.Resources{}))
-		log.Info("cron scaling finished", "workload", w.Name, "resources", result)
+		log.Info("cron scaling finished", "workload", w.Name, "resources", targetRes)
 	} else {
-		result = &activeRule.DesiredResources
-		maps.Copy(w.ScalingAnnotations, cronScalingResourcesToAnnotations(result))
-		log.Info("cron scaling rule matched", "workload", w.Name, "rule", activeRule.Name, "resources", result)
+		targetRes = &activeRule.DesiredResources
+		maps.Copy(w.ScalingAnnotations, cronScalingResourcesToAnnotations(targetRes))
+		log.Info("cron scaling rule matched", "workload", w.Name, "rule", activeRule.Name, "resources", targetRes)
 	}
 
-	if curRes != nil && result.Equal(curRes) {
-		return nil, nil
-	}
-
-	return result, nil
+	return &Recommendation{
+		Resources:        *targetRes,
+		Applied:          curRes != nil && targetRes.Equal(curRes),
+		ScaleDownLocking: true,
+	}, nil
 }
 
 func cronScalingResourcesToAnnotations(resources *tfv1.Resources) map[string]string {
