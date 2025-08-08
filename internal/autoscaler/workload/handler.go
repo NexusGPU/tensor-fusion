@@ -16,7 +16,7 @@ import (
 
 type Handler interface {
 	UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload)
-	ApplyRecommendationToWorkload(ctx context.Context, workloadState *State, recommendation *tfv1.Resources) error
+	ApplyResourcesToWorkload(ctx context.Context, workloadState *State, recommendation *tfv1.Resources) error
 }
 
 type handler struct {
@@ -46,7 +46,7 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 	workloadState.updateWorkers(workerList)
 }
 
-func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, workload *State, recommendation *tfv1.Resources) error {
+func (h *handler) ApplyResourcesToWorkload(ctx context.Context, workload *State, recommendation *tfv1.Resources) error {
 	if err := h.updateAutoScalingAnnotations(ctx, workload, recommendation); err != nil {
 		return fmt.Errorf("failed to update auto scaling annotations: %v", err)
 	}
@@ -66,7 +66,7 @@ func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, workload *S
 		if !worker.DeletionTimestamp.IsZero() {
 			continue
 		}
-		if err := h.applyRecommendationToWorker(ctx, workload, &worker, recommendation); err != nil {
+		if err := h.applyResourcesToWorker(ctx, workload, &worker, recommendation); err != nil {
 			return fmt.Errorf("failed to update worker %s resources: %v", worker.Name, err)
 		}
 	}
@@ -97,7 +97,7 @@ func (h *handler) updateAutoScalingAnnotations(
 	return nil
 }
 
-func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *State, worker *corev1.Pod, recommendation *tfv1.Resources) error {
+func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, worker *corev1.Pod, recommendation *tfv1.Resources) error {
 	log := log.FromContext(ctx)
 
 	curRes, err := utils.CurrentResourcesFromAnnotations(worker.Annotations)

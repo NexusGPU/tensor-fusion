@@ -154,31 +154,36 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 	log.Info("processing workloads")
 
 	for _, workload := range s.workloads {
-		recommendations := map[string]*tfv1.Resources{}
-		for _, recommender := range s.recommenders {
-			name := recommender.Name()
-			recommendation, err := recommender.Recommend(ctx, workload)
-			if err != nil {
-				log.Error(err, "failed to recommend resources", "recommender", name)
-				continue
-			}
-			if recommendation == nil {
-				continue
-			}
-			recommendations[name] = recommendation
-			log.Info("recommendation", "workload", workload.Name, "recommender", name, "resources", recommendation)
-		}
-
-		finalRecommendation := mergeRecommendations(recommendations)
-		if finalRecommendation.IsZero() {
+		targetRes := s.calcWorkloadTargetResources(ctx, workload)
+		if targetRes.IsZero() {
 			continue
 		}
-		log.Info("final recommendation", "workload", workload.Name, "resources", finalRecommendation)
 
-		if err := s.workloadHandler.ApplyRecommendationToWorkload(ctx, workload, finalRecommendation); err != nil {
-			log.Error(err, "failed to apply recommendation", "workload", workload.Name, "recommendation", finalRecommendation)
+		log.Info("recommended target resources", "workload", workload.Name, "resources", targetRes)
+
+		if err := s.workloadHandler.ApplyResourcesToWorkload(ctx, workload, targetRes); err != nil {
+			log.Error(err, "failed to apply resources", "workload", workload.Name, "resources", targetRes)
 		}
 	}
+}
+
+func (s *Autoscaler) calcWorkloadTargetResources(ctx context.Context, workload *workload.State) *tfv1.Resources {
+	log := log.FromContext(ctx)
+	recommendations := map[string]*recommender.Recommendation{}
+	for _, recommender := range s.recommenders {
+		name := recommender.Name()
+		rec, err := recommender.Recommend(ctx, workload)
+		if err != nil {
+			log.Error(err, "failed to get recommendation", "recommender", name)
+			continue
+		}
+		if rec != nil {
+			recommendations[name] = rec
+			log.Info("recommendation", "workload", workload.Name, "recommender", name, "recommendation", rec)
+		}
+	}
+
+	return recommender.MergeRecommendations(recommendations)
 }
 
 func (s *Autoscaler) findOrCreateWorkloadState(name string) *workload.State {
@@ -188,21 +193,6 @@ func (s *Autoscaler) findOrCreateWorkloadState(name string) *workload.State {
 		s.workloads[name] = w
 	}
 	return w
-}
-
-func mergeRecommendations(recommendations map[string]*tfv1.Resources) *tfv1.Resources {
-	result := &tfv1.Resources{}
-	for _, rec := range recommendations {
-		if result.Requests.Tflops.Cmp(rec.Requests.Tflops) < 0 {
-			result.Requests.Tflops = rec.Requests.Tflops
-			result.Limits.Tflops = rec.Limits.Tflops
-		}
-		if result.Requests.Vram.Cmp(rec.Requests.Vram) < 0 {
-			result.Requests.Vram = rec.Requests.Vram
-			result.Limits.Vram = rec.Limits.Vram
-		}
-	}
-	return result
 }
 
 // Start after manager started
