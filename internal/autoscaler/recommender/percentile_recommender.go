@@ -128,7 +128,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 
 	return &Recommendation{
 		Resources:        *targetRes,
-		Applied:          targetRes.Equal(curRes),
+		HasApplied:       targetRes.Equal(curRes),
 		ScaleDownLocking: false,
 	}, nil
 }

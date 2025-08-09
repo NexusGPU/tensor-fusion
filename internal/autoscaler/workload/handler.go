@@ -77,7 +77,7 @@ func (h *handler) ApplyResourcesToWorkload(ctx context.Context, workload *State,
 func (h *handler) updateAutoScalingAnnotations(
 	ctx context.Context,
 	state *State,
-	recommendation *tfv1.Resources) error {
+	targetRes *tfv1.Resources) error {
 	workload := &tfv1.TensorFusionWorkload{}
 	if err := h.Get(ctx, client.ObjectKey{Namespace: state.Namespace, Name: state.Name}, workload); err != nil {
 		return fmt.Errorf("failed to get workload: %v", err)
@@ -87,7 +87,7 @@ func (h *handler) updateAutoScalingAnnotations(
 		workload.Annotations = map[string]string{}
 	}
 	patch := client.MergeFrom(workload.DeepCopy())
-	maps.Copy(workload.Annotations, utils.CurrentResourcesToAnnotations(recommendation))
+	maps.Copy(workload.Annotations, utils.CurrentResourcesToAnnotations(targetRes))
 	maps.Copy(workload.Annotations, state.ScalingAnnotations)
 	if err := h.Patch(ctx, workload, patch); err != nil {
 		return fmt.Errorf("failed to patch workload %s: %v", workload.Name, err)

@@ -65,7 +65,7 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 
 	return &Recommendation{
 		Resources:        *targetRes,
-		Applied:          curRes != nil && targetRes.Equal(curRes),
+		HasApplied:       curRes != nil && targetRes.Equal(curRes),
 		ScaleDownLocking: true,
 	}, nil
 }

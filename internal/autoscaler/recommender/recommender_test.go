@@ -21,7 +21,7 @@ var _ = Describe("Recommender", func() {
 						Vram:   resource.MustParse("15Gi"),
 					},
 				},
-				Applied:          false,
+				HasApplied:       false,
 				ScaleDownLocking: false,
 			},
 			"rec2": {
@@ -35,12 +35,12 @@ var _ = Describe("Recommender", func() {
 						Vram:   resource.MustParse("20Gi"),
 					},
 				},
-				Applied:          false,
+				HasApplied:       false,
 				ScaleDownLocking: false,
 			},
 		}
 
-		final := MergeRecommendations(recs)
+		final := getResourcesFromRecommendations(recs)
 		Expect(final.Equal(&tfv1.Resources{
 			Requests: tfv1.Resource{
 				Tflops: resource.MustParse("10"),
@@ -53,52 +53,7 @@ var _ = Describe("Recommender", func() {
 		})).To(BeTrue())
 	})
 
-	It("should be excluded from megring operations if recommendations have been applied", func() {
-		recs := map[string]*Recommendation{
-			"rec1": {
-				Resources: tfv1.Resources{
-					Requests: tfv1.Resource{
-						Tflops: resource.MustParse("10"),
-						Vram:   resource.MustParse("10Gi"),
-					},
-					Limits: tfv1.Resource{
-						Tflops: resource.MustParse("15"),
-						Vram:   resource.MustParse("15Gi"),
-					},
-				},
-				Applied:          false,
-				ScaleDownLocking: false,
-			},
-			"rec2": {
-				Resources: tfv1.Resources{
-					Requests: tfv1.Resource{
-						Tflops: resource.MustParse("100"),
-						Vram:   resource.MustParse("150Gi"),
-					},
-					Limits: tfv1.Resource{
-						Tflops: resource.MustParse("100"),
-						Vram:   resource.MustParse("150Gi"),
-					},
-				},
-				Applied:          true,
-				ScaleDownLocking: false,
-			},
-		}
-
-		final := MergeRecommendations(recs)
-		Expect(final.Equal(&tfv1.Resources{
-			Requests: tfv1.Resource{
-				Tflops: resource.MustParse("10"),
-				Vram:   resource.MustParse("10Gi"),
-			},
-			Limits: tfv1.Resource{
-				Tflops: resource.MustParse("15"),
-				Vram:   resource.MustParse("15Gi"),
-			},
-		})).To(BeTrue())
-	})
-
-	It("should not scale down when merging recomendations if scale down is locked", func() {
+	It("should not reduce resources if scale down is locked", func() {
 		recs := map[string]*Recommendation{
 			"rec1": {
 				Resources: tfv1.Resources{
@@ -111,7 +66,7 @@ var _ = Describe("Recommender", func() {
 						Vram:   resource.MustParse("50Gi"),
 					},
 				},
-				Applied:          true,
+				HasApplied:       true,
 				ScaleDownLocking: true,
 			},
 			"rec2": {
@@ -125,21 +80,11 @@ var _ = Describe("Recommender", func() {
 						Vram:   resource.MustParse("10Gi"),
 					},
 				},
-				Applied:          false,
+				HasApplied:       false,
 				ScaleDownLocking: false,
 			},
 		}
 
-		final := MergeRecommendations(recs)
-		Expect(final.Equal(&tfv1.Resources{
-			Requests: tfv1.Resource{
-				Tflops: resource.MustParse("50"),
-				Vram:   resource.MustParse("50Gi"),
-			},
-			Limits: tfv1.Resource{
-				Tflops: resource.MustParse("50"),
-				Vram:   resource.MustParse("50Gi"),
-			},
-		})).To(BeTrue())
+		Expect(getResourcesFromRecommendations(recs)).To(BeNil())
 	})
 })
