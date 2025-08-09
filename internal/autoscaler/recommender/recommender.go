@@ -2,6 +2,7 @@ package recommender
 
 import (
 	"context"
+	"fmt"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
@@ -15,24 +16,57 @@ type Interface interface {
 
 type Recommendation struct {
 	Resources        tfv1.Resources
-	Applied          bool
+	HasApplied       bool
 	ScaleDownLocking bool
 }
 
-func MergeRecommendations(recommendations map[string]*Recommendation) *tfv1.Resources {
-	result := &tfv1.Resources{}
-	for _, rec := range recommendations {
-		if !rec.ScaleDownLocking && rec.Applied {
-			continue
+func GetResourcesFromRecommenders(ctx context.Context, workload *workload.State, recommenders []Interface) (*tfv1.Resources, error) {
+	recommendations := map[string]*Recommendation{}
+	for _, recommender := range recommenders {
+		rec, err := recommender.Recommend(ctx, workload)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get recommendation from %s: %v", recommender.Name(), err)
 		}
-		if result.Requests.Tflops.Cmp(rec.Resources.Requests.Tflops) < 0 {
-			result.Requests.Tflops = rec.Resources.Requests.Tflops
-			result.Limits.Tflops = rec.Resources.Limits.Tflops
-		}
-		if result.Requests.Vram.Cmp(rec.Resources.Requests.Vram) < 0 {
-			result.Requests.Vram = rec.Resources.Requests.Vram
-			result.Limits.Vram = rec.Resources.Limits.Vram
+		if rec != nil {
+			recommendations[recommender.Name()] = rec
 		}
 	}
+
+	if len(recommendations) <= 0 {
+		return nil, nil
+	}
+
+	return getResourcesFromRecommendations(recommendations), nil
+}
+
+func getResourcesFromRecommendations(recommendations map[string]*Recommendation) *tfv1.Resources {
+	result := &tfv1.Resources{}
+	minRes := &tfv1.Resources{}
+	for _, rec := range recommendations {
+		if !rec.HasApplied {
+			mergeResourcesByLargerRequests(result, &rec.Resources)
+		}
+		if rec.ScaleDownLocking {
+			mergeResourcesByLargerRequests(minRes, &rec.Resources)
+		}
+	}
+
+	if result.IsZero() ||
+		result.Requests.Tflops.Cmp(minRes.Requests.Tflops) < 0 ||
+		result.Requests.Vram.Cmp(minRes.Requests.Vram) < 0 {
+		return nil
+	}
+
 	return result
+}
+
+func mergeResourcesByLargerRequests(s *tfv1.Resources, t *tfv1.Resources) {
+	if s.Requests.Tflops.Cmp(t.Requests.Tflops) < 0 {
+		s.Requests.Tflops = t.Requests.Tflops
+		s.Limits.Tflops = t.Limits.Tflops
+	}
+	if s.Requests.Vram.Cmp(t.Requests.Vram) < 0 {
+		s.Requests.Vram = t.Requests.Vram
+		s.Limits.Vram = t.Limits.Vram
+	}
 }

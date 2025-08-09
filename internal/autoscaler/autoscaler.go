@@ -154,36 +154,17 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 	log.Info("processing workloads")
 
 	for _, workload := range s.workloads {
-		targetRes := s.calcWorkloadTargetResources(ctx, workload)
-		if targetRes.IsZero() {
-			continue
-		}
-
-		log.Info("recommended target resources", "workload", workload.Name, "resources", targetRes)
-
-		if err := s.workloadHandler.ApplyResourcesToWorkload(ctx, workload, targetRes); err != nil {
-			log.Error(err, "failed to apply resources", "workload", workload.Name, "resources", targetRes)
-		}
-	}
-}
-
-func (s *Autoscaler) calcWorkloadTargetResources(ctx context.Context, workload *workload.State) *tfv1.Resources {
-	log := log.FromContext(ctx)
-	recommendations := map[string]*recommender.Recommendation{}
-	for _, recommender := range s.recommenders {
-		name := recommender.Name()
-		rec, err := recommender.Recommend(ctx, workload)
+		resources, err := recommender.GetResourcesFromRecommenders(ctx, workload, s.recommenders)
 		if err != nil {
-			log.Error(err, "failed to get recommendation", "recommender", name)
-			continue
+			log.Error(err, "failed to get resources from recommenders")
 		}
-		if rec != nil {
-			recommendations[name] = rec
-			log.Info("recommendation", "workload", workload.Name, "recommender", name, "recommendation", rec)
+		if resources != nil {
+			log.Info("recommended resources", "workload", workload.Name, "resources", resources)
+			if err := s.workloadHandler.ApplyResourcesToWorkload(ctx, workload, resources); err != nil {
+				log.Error(err, "failed to apply resources", "workload", workload.Name, "resources", resources)
+			}
 		}
 	}
-
-	return recommender.MergeRecommendations(recommendations)
 }
 
 func (s *Autoscaler) findOrCreateWorkloadState(name string) *workload.State {
