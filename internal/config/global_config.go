@@ -3,9 +3,9 @@ package config
 import "fmt"
 
 type GlobalConfig struct {
-	MetricsTTL            string   `yaml:"metricsTTL"`
-	MetricsFormat         string   `yaml:"metricsFormat"`
-	MetricsExtraPodLabels []string `yaml:"metricsExtraPodLabels"`
+	MetricsTTL            string            `yaml:"metricsTTL"`
+	MetricsFormat         string            `yaml:"metricsFormat"`
+	MetricsExtraPodLabels map[string]string `yaml:"metricsExtraPodLabels"`
 
 	AlertRules []AlertRule `yaml:"alertRules"`
 }

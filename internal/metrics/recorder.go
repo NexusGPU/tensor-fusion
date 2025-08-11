@@ -270,8 +270,8 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddTag("workload", metrics.WorkloadName)
 
 		if config.GetGlobalConfig().MetricsExtraPodLabels != nil {
-			for _, label := range config.GetGlobalConfig().MetricsExtraPodLabels {
-				enc.AddTag(label, metrics.podLabels[label])
+			for k, v := range config.GetGlobalConfig().MetricsExtraPodLabels {
+				enc.AddTag(v, metrics.podLabels[k])
 			}
 		}
 

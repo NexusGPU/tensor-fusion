@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -384,6 +383,10 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 		if err := r.Get(ctx, client.ObjectKey{Name: *pool.Spec.SchedulingConfigTemplate}, schedulingConfigTemplate); err == nil {
 			if schedulingConfigTemplate.Spec.Hypervisor != nil {
 				if cfg, err := json.Marshal(schedulingConfigTemplate.Spec.Hypervisor); err == nil {
+					extraLabelsJson, err := json.Marshal(config.GetGlobalConfig().MetricsExtraPodLabels)
+					if err != nil {
+						return fmt.Errorf("invalid metricsExtraPodLabels config, not valid map: %w", err)
+					}
 					spec.Containers[0].Env = append(spec.Containers[0].Env, corev1.EnvVar{
 						Name:  constants.HypervisorSchedulingConfigEnv,
 						Value: string(cfg),
@@ -392,7 +395,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 						Value: config.GetGlobalConfig().MetricsFormat,
 					}, corev1.EnvVar{
 						Name:  constants.HypervisorMetricsExtraLabelsEnv,
-						Value: strings.Join(config.GetGlobalConfig().MetricsExtraPodLabels, ","),
+						Value: string(extraLabelsJson),
 					})
 				}
 			}
