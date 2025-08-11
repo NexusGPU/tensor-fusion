@@ -40,7 +40,7 @@ func MockGlobalConfig() *GlobalConfig {
 	return &GlobalConfig{
 		MetricsTTL:            "30d",
 		MetricsFormat:         "influx",
-		MetricsExtraPodLabels: []string{"kubernetes.io/app"},
+		MetricsExtraPodLabels: map[string]string{"kubernetes.io/app": "app"},
 		AlertRules: []AlertRule{
 			{
 				Name:               "mock",
