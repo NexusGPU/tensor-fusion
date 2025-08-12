@@ -163,6 +163,13 @@ type HypervisorGPUUsageMetrics struct {
 	PcieTxKB    float64 `json:"pcieTx" gorm:"column:tx"`
 	Temperature float64 `json:"temperature" gorm:"column:temperature"`
 
+	GraphicsClockMHz float64 `json:"graphicsClockMHz" gorm:"column:graphics_clock_mhz"`
+	SMClockMHz       float64 `json:"smClockMHz" gorm:"column:sm_clock_mhz"`
+	MemoryClockMHz   float64 `json:"memoryClockMHz" gorm:"column:memory_clock_mhz"`
+	VideoClockMHz    float64 `json:"videoClockMHz" gorm:"column:video_clock_mhz"`
+	PowerUsage       float64 `json:"powerUsage" gorm:"column:power_usage"`
+	NvlinkRx         float64 `json:"nvlinkRx" gorm:"column:nvlink_rx"`
+	NvlinkTx         float64 `json:"nvlinkTx" gorm:"column:nvlink_tx"`
 	// NOTE: make sure new fields will be migrated in SetupTable function
 
 	Timestamp time.Time `json:"ts" gorm:"column:ts;index:,class:TIME"`

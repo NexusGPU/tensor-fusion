@@ -224,6 +224,9 @@ dynamicConfig:
   # retention period for metrics data
   metricsTTL: 30d
   metricsFormat: influx
+  # extra pod labels to be added to metrics, 
+  # you can map label keys to other measure tags
+  metricsExtraPodLabels: {}
 
   # alert rules
   alertRules:    
