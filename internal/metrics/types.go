@@ -127,13 +127,15 @@ func (sl TFSystemLog) TableName() string {
 type HypervisorWorkerUsageMetrics struct {
 	WorkloadName string `json:"workloadName" gorm:"column:workload;index:,class:INVERTED"`
 	WorkerName   string `json:"workerName" gorm:"column:worker;index:,class:SKIPPING"`
+	Namespace    string `json:"namespace" gorm:"column:namespace;index:,class:INVERTED"`
 	PoolName     string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
 	NodeName     string `json:"nodeName" gorm:"column:node;index:,class:INVERTED"`
 	UUID         string `json:"uuid" gorm:"column:uuid;index:,class:INVERTED"`
 
+	ComputeTflops  float64 `json:"computeTflops" gorm:"column:compute_tflops"`
 	ComputePercent float64 `json:"computePercent" gorm:"column:compute_percentage"`
 	VRAMBytes      uint64  `json:"vramBytes" gorm:"column:memory_bytes"`
-	ComputeTflops  float64 `json:"computeTflops" gorm:"column:compute_tflops"`
+	VRAMPercent    float64 `json:"vramPercent" gorm:"column:memory_percentage"`
 
 	ComputeThrottledCount int64 `json:"computeThrottledCount" gorm:"column:compute_throttled_cnt"`
 	VRAMFreezedCount      int64 `json:"vramFreezedCount" gorm:"column:vram_freezed_cnt"`
