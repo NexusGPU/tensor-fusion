@@ -1258,5 +1258,12 @@ func (s *GpuAllocator) getPlacementMode(ctx context.Context, poolName string) tf
 
 // normalize score to [0, 100]
 func normalizeScore(cfg *config.GPUFitConfig, vramScore, tflopsScore float64) int {
-	return int(math.Round(vramScore*cfg.VramWeight + tflopsScore*cfg.TflopsWeight))
+	score := int(math.Round(vramScore*cfg.VramWeight + tflopsScore*cfg.TflopsWeight))
+	if score < 0 {
+		return 0
+	}
+	if score > 100 {
+		return 100
+	}
+	return score
 }
