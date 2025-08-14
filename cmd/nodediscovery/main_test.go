@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +81,18 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 	assert.NotEqual(t, updatedGpu.Status.Capacity, gpu.Status.Capacity, "GPU capacity should not match")
 	assert.Equal(t, updatedGpu.Status.Available.Tflops, gpu.Status.Available.Tflops, "GPU TFlops should match")
 	assert.Equal(t, updatedGpu.Status.Available.Vram, gpu.Status.Available.Vram, "GPU VRAM should match")
+}
+
+func TestParseLaptopGPU(t *testing.T) {
+	deviceName := "NVIDIA-Test-GPU Laptop GPU"
+	isLaptopGPU := strings.HasSuffix(deviceName, " Laptop GPU")
+	assert.True(t, isLaptopGPU)
+	deviceName = strings.ReplaceAll(deviceName, " Laptop GPU", "")
+	assert.Equal(t, "NVIDIA-Test-GPU", deviceName)
+	tflops := resource.MustParse("100.147")
+	tflops = resource.MustParse(fmt.Sprintf("%.2f", tflops.AsApproximateFloat64()*constants.MobileGpuClockSpeedMultiplier))
+	expected := resource.MustParse("75110m")
+	assert.Equal(t, expected.String(), tflops.String())
 }
 
 func TestGPUControllerReference(t *testing.T) {
