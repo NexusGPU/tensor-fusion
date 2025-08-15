@@ -168,7 +168,8 @@ func main() {
 		}
 		tflops := info.Fp16TFlops
 		if isLaptopGPU {
-			tflops = resource.MustParse(fmt.Sprintf("%.2f", tflops.AsApproximateFloat64()*constants.MobileGpuClockSpeedMultiplier))
+			tflops = resource.MustParse(fmt.Sprintf("%.2f",
+				tflops.AsApproximateFloat64()*constants.MobileGpuClockSpeedMultiplier))
 		}
 		ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
 
