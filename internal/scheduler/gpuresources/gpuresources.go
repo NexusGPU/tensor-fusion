@@ -11,6 +11,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
@@ -127,6 +128,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 	}
 
 	if err != nil {
+		metrics.SetSchedulerMetrics(allocRequest.PoolName, false)
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUQuotaOrCapacityNotEnough",
 			"check quota and filter", "TensorFusion schedule failed, no enough resource or quotas: "+err.Error())
 		s.logger.Error(err, "failed to check quota and filter", "pod", pod.Name)

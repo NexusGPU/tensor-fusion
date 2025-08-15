@@ -64,6 +64,7 @@ type TensorFusionClusterReconciler struct {
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch;update;list;watch;get
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update;list;watch;get
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch

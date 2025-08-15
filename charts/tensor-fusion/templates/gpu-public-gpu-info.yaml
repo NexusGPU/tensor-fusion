@@ -84,15 +84,15 @@ data:
     - model: A10
       fullModelName: "NVIDIA A10"
       vendor: NVIDIA
-      costPerHour: 0.9
+      costPerHour: 0.7
       fp16TFlops: 125
 
-    # A10G has less CUDA core than A10, but with RT cores for rendering case
+    # A10G has more RT cores than A10for rendering case
     - model: A10G
       fullModelName: "NVIDIA A10G"
       vendor: NVIDIA
-      costPerHour: 0.75 # from lambda labs
-      fp16TFlops: 63
+      costPerHour: 0.8
+      fp16TFlops: 125
 
     - model: A40
       fullModelName: "NVIDIA A40 48GB PCIe"
@@ -334,6 +334,18 @@ data:
       costPerHour: 1.00
       fp16TFlops: 148
 
+    - model: V100
+      fullModelName: "NVIDIA V100"
+      vendor: NVIDIA
+      costPerHour: 0.7
+      fp16TFlops: 125
+
+    - model: V100S
+      fullModelName: "NVIDIA V100S"
+      vendor: NVIDIA
+      costPerHour: 0.8
+      fp16TFlops: 130
+
     # higher mem bandwidth and vram size(141G) than H100
     - model: H200
       fullModelName: "NVIDIA H200 80GB HBM3"
@@ -375,13 +387,13 @@ data:
     - model: RTX_5080
       fullModelName: "NVIDIA GeForce RTX 5080"
       vendor: NVIDIA
-      costPerHour: 0.3
+      costPerHour: 0.9
       fp16TFlops: 225
 
     - model: RTX_5070Ti
       fullModelName: "NVIDIA GeForce RTX 5070 Ti"
       vendor: NVIDIA
-      costPerHour: 0.4
+      costPerHour: 0.5
       fp16TFlops: 177.4
 
     - model: RTX_5070

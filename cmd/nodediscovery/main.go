@@ -36,6 +36,7 @@ import (
 )
 
 const TMP_PATH = "/tmp"
+const LAPTOP_GPU_SUFFIX = " Laptop GPU"
 
 var Scheme = runtime.NewScheme()
 
@@ -144,10 +145,17 @@ func main() {
 			ctrl.Log.Error(errors.New(nvml.ErrorString(ret)), "unable to get memory info of device", "index", i)
 			os.Exit(1)
 		}
+
+		// Nvidia mobile series GPU chips are the same as desktop series GPU, but clock speed is lower
+		// so we can use desktop series GPU info to represent mobile series GPU, and set available TFlops with a multiplier
+		isLaptopGPU := strings.HasSuffix(deviceName, LAPTOP_GPU_SUFFIX)
+		if isLaptopGPU {
+			deviceName = strings.ReplaceAll(deviceName, LAPTOP_GPU_SUFFIX, "")
+			ctrl.Log.Info("found mobile/laptop GPU, clock speed is lower, will set lower TFlops", "deviceName", deviceName)
+		}
 		info, ok := lo.Find(gpuInfo, func(info config.GpuInfo) bool {
 			return info.FullModelName == deviceName
 		})
-		tflops := info.Fp16TFlops
 		if !ok {
 			ctrl.Log.Info(
 				"[Error] Unknown GPU model, please update `gpu-public-gpu-info` configMap "+
@@ -157,9 +165,13 @@ func main() {
 					"#pod-stuck-in-starting-status-after-enabling-tensorfusion",
 				"deviceName", deviceName, "uuid", uuid)
 			os.Exit(1)
-		} else {
-			ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
 		}
+		tflops := info.Fp16TFlops
+		if isLaptopGPU {
+			tflops = resource.MustParse(fmt.Sprintf("%.2f",
+				tflops.AsApproximateFloat64()*constants.MobileGpuClockSpeedMultiplier))
+		}
+		ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
 
 		gpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpunode, uuid, deviceName, memInfo, tflops)
 		if err != nil {

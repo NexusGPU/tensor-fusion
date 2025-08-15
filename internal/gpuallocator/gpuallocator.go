@@ -18,6 +18,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/quota"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
@@ -256,6 +257,7 @@ func (s *GpuAllocator) Bind(
 	// Use actual allocated GPU count instead of requested count
 	s.quotaStore.AllocateQuota(req.WorkloadNameNamespace.Namespace, req)
 	s.addAllocationMap(gpuNodeName, req.PodMeta)
+	metrics.SetSchedulerMetrics(req.PoolName, true)
 
 	log.FromContext(s.ctx).Info("GPU allocation successful",
 		"namespace", req.WorkloadNameNamespace.Namespace,
@@ -284,10 +286,12 @@ func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 
 	filteredGPUs, _, err := s.CheckQuotaAndFilter(s.ctx, req, false)
 	if err != nil {
+		metrics.SetSchedulerMetrics(req.PoolName, false)
 		return nil, err
 	}
 	selectedGPUs, err := s.Select(req, filteredGPUs)
 	if err != nil {
+		metrics.SetSchedulerMetrics(req.PoolName, false)
 		return nil, err
 	}
 
@@ -1258,5 +1262,12 @@ func (s *GpuAllocator) getPlacementMode(ctx context.Context, poolName string) tf
 
 // normalize score to [0, 100]
 func normalizeScore(cfg *config.GPUFitConfig, vramScore, tflopsScore float64) int {
-	return int(math.Round(vramScore*cfg.VramWeight + tflopsScore*cfg.TflopsWeight))
+	score := int(math.Round(vramScore*cfg.VramWeight + tflopsScore*cfg.TflopsWeight))
+	if score < 0 {
+		return 0
+	}
+	if score > 100 {
+		return 100
+	}
+	return score
 }

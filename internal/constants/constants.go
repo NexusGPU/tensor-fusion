@@ -198,3 +198,5 @@ const AuthorizationHeader = "Authorization"
 const ExtraVerificationInfoPodIDKey = "authentication.kubernetes.io/pod-uid"
 
 const SchedulerSimulationKey = "simulate-schedule"
+
+const MobileGpuClockSpeedMultiplier = 0.75
