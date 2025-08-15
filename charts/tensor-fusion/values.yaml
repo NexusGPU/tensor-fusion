@@ -148,6 +148,10 @@ alert:
     limits:
       memory: 1Gi
       cpu: 1500m
+  persistence:
+    enabled: false
+    # storageClass: "gp3"
+    # size: 10Gi
   alertManagerConfig:
     global: {}
     receivers:
