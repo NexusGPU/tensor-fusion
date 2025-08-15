@@ -372,6 +372,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 	}
 	spec.EnableServiceLinks = ptr.To(false)
 	spec.NodeName = node.Name
+	spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
 
 	// add must-have tensor-fusion hypervisor manifest
 	log.Info("adding must-have tensor-fusion hypervisor manifest", "node", node.Name)

@@ -30,3 +30,6 @@ alert:
     limits:
       memory: 1Gi
       cpu: 2000m
+  persistence:
+    enabled: true
+    size: 5Gi
