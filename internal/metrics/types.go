@@ -71,6 +71,11 @@ type NodeResourceMetrics struct {
 	AllocatedTflopsPercentToVirtualCap float64 `json:"allocatedTflopsPercentToVirtualCap" gorm:"column:allocated_tflops_percent_virtual"`
 	AllocatedVramPercentToVirtualCap   float64 `json:"allocatedVramPercentToVirtualCap" gorm:"column:allocated_vram_percent_virtual"`
 
+	LimitedTFlops                    float64 `json:"limitedTFlops" gorm:"column:limited_tflops"`
+	LimitedVramBytes                 float64 `json:"limitedVramBytes" gorm:"column:limited_vram_bytes"`
+	LimitedTFlopsPercentToVirtualCap float64 `json:"limitedTFlopsPercentToVirtualCap" gorm:"column:limited_tflops_percent_virtual"`
+	LimitedVramPercentToVirtualCap   float64 `json:"limitedVramPercentToVirtualCap" gorm:"column:limited_vram_percent_virtual"`
+
 	RawCost  float64 `json:"rawCost" gorm:"column:raw_cost"`
 	GPUCount int     `json:"gpuCount" gorm:"column:gpu_count"`
 
@@ -84,7 +89,7 @@ type NodeResourceMetrics struct {
 }
 
 func (nm NodeResourceMetrics) TableName() string {
-	return "tf_node_resources"
+	return "tf_node_metrics"
 }
 
 func (nm *NodeResourceMetrics) SetGPUModelAndCount(gpuModels []string) {
@@ -93,6 +98,34 @@ func (nm *NodeResourceMetrics) SetGPUModelAndCount(gpuModels []string) {
 	}
 	nm.gpuModels = gpuModels
 	nm.GPUCount = len(gpuModels)
+}
+
+type PoolResourceMetrics struct {
+	PoolName string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
+
+	Phase string `json:"phase" gorm:"column:phase;index:,class:INVERTED"`
+
+	AllocatedTflops                    float64 `json:"allocatedTflops" gorm:"column:allocated_tflops"`
+	AllocatedTflopsPercent             float64 `json:"allocatedTflopsPercent" gorm:"column:allocated_tflops_percent"`
+	AllocatedTflopsPercentToVirtualCap float64 `json:"allocatedTflopsPercentToVirtualCap" gorm:"column:allocated_tflops_percent_virtual"`
+	AllocatedVramBytes                 float64 `json:"allocatedVramBytes" gorm:"column:allocated_vram_bytes"`
+	AllocatedVramPercent               float64 `json:"allocatedVramPercent" gorm:"column:allocated_vram_percent"`
+	AllocatedVramPercentToVirtualCap   float64 `json:"allocatedVramPercentToVirtualCap" gorm:"column:allocated_vram_percent_virtual"`
+
+	AssignedLimitedTFlops                    float64 `json:"limitedTFlops" gorm:"column:limited_tflops"`
+	AssignedLimitedVramBytes                 float64 `json:"limitedVramBytes" gorm:"column:limited_vram_bytes"`
+	AssignedLimitedTFlopsPercentToVirtualCap float64 `json:"limitedTFlopsPercentToVirtualCap" gorm:"column:limited_tflops_percent_virtual"`
+	AssignedLimitedVramPercentToVirtualCap   float64 `json:"limitedVramPercentToVirtualCap" gorm:"column:limited_vram_percent_virtual"`
+
+	GPUCount int `json:"gpuCount" gorm:"column:gpu_count"`
+
+	// NOTE: make sure new fields will be migrated in SetupTable function
+
+	LastRecordTime time.Time `json:"lastRecordTime" gorm:"column:ts;index:,class:TIME"`
+}
+
+func (pm PoolResourceMetrics) TableName() string {
+	return "tf_pool_metrics"
 }
 
 type RawBillingPricing struct {

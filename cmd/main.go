@@ -500,17 +500,9 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 			return nil
 		}
 		timeSeriesDB = setupTimeSeriesDB()
-		if timeSeriesDB != nil {
-			if err := timeSeriesDB.SetupTables(mgr.GetClient()); err != nil {
-				setupLog.Error(err, "unable to init timeseries tables")
-			} else {
-				autoScaleCanBeEnabled = true
-				alertCanBeEnabled = true
-
-				setupLog.Info("time series db setup successfully.")
-			}
-		}
-
+		autoScaleCanBeEnabled = true
+		alertCanBeEnabled = true
+		setupLog.Info("time series db setup successfully.")
 		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
 		return nil
 	}))
