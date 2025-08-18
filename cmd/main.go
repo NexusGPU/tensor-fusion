@@ -94,6 +94,7 @@ var timeSeriesDB *metrics.TimeSeriesDB
 var dynamicConfigPath string
 var alertEvaluator *alert.AlertEvaluator
 var schedulerConfigPath string
+var alertEvaluatorReady chan struct{}
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -203,6 +204,7 @@ func main() {
 	_ = os.Setenv(constants.KubeApiVersionMajorEnv, version.Major)
 	_ = os.Setenv(constants.KubeApiVersionMinorEnv, version.Minor)
 
+	alertEvaluatorReady = make(chan struct{})
 	setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
 
 	if autoScaleCanBeEnabled && enableAutoScale {
@@ -500,10 +502,11 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 			return nil
 		}
 		timeSeriesDB = setupTimeSeriesDB()
+		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
 		autoScaleCanBeEnabled = true
 		alertCanBeEnabled = true
+		close(alertEvaluatorReady)
 		setupLog.Info("time series db setup successfully.")
-		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
 		return nil
 	}))
 	if err != nil {
@@ -534,7 +537,7 @@ func watchAndHandleConfigChanges(ctx context.Context, mgr manager.Manager, needT
 
 		// handle alert rules update
 		go func() {
-			<-mgr.Elected()
+			<-alertEvaluatorReady
 			if alertCanBeEnabled && enableAlert {
 				err = alertEvaluator.UpdateAlertRules(globalConfig.AlertRules)
 				if err != nil {
