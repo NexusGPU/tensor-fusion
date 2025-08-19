@@ -74,7 +74,7 @@ const (
 
 	TFLibsVolumeName       = "tf-libs"
 	TFLibsVolumeMountPath  = "/tensor-fusion"
-	TFConnectionNamePrefix = "tf-vgpu-"
+	TFConnectionNamePrefix = "-tf-vgpu-"
 
 	HostIPFieldRef       = "status.hostIP"
 	NodeNameFieldRef     = "spec.nodeName"
