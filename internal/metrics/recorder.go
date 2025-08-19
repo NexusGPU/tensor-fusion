@@ -155,7 +155,16 @@ func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []strin
 	}
 }
 
+func InitPoolMetricsWhenNotExists(poolObj *tfv1.GPUPool) {
+	if _, ok := poolMetricsMap[poolObj.Name]; !ok {
+		SetPoolMetrics(poolObj)
+	}
+}
+
 func SetPoolMetrics(poolObj *tfv1.GPUPool) {
+	if poolObj == nil {
+		return
+	}
 	poolMetricsLock.Lock()
 	defer poolMetricsLock.Unlock()
 	if _, ok := poolMetricsMap[poolObj.Name]; !ok {

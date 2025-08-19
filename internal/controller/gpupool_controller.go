@@ -357,6 +357,8 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(
 			return fmt.Errorf("failed to update pool status: %w", err)
 		}
 		log.Info("updated pool status because of capacity or node status changed", "pool", pool.Name)
+	} else {
+		metrics.InitPoolMetricsWhenNotExists(pool)
 	}
 	return nil
 }
