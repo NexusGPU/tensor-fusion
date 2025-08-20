@@ -388,7 +388,7 @@ func assignPodLabelsAndAnnotations(isLocalGPU bool, pod *corev1.Pod, pool *tfv1.
 }
 
 func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *corev1.Container, clientConfig *tfv1.ClientConfig) {
-	prefix := pod.GenerateName
+	var prefix string
 	if pod.GenerateName == "" && pod.Name != "" {
 		prefix = pod.Name + constants.TFConnectionNamePrefix
 	} else {
