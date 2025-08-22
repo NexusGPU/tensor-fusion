@@ -169,7 +169,9 @@ func RunScheduler(ctx context.Context,
 	startInformersAndWaitForSync(ctx)
 
 	go func() {
-		<-mgr.Elected()
+		if mgr != nil {
+			<-mgr.Elected()
+		}
 		logger.Info("Starting scheduling cycle")
 		sched.Run(ctx)
 		cc.EventBroadcaster.Shutdown()
