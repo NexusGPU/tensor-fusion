@@ -394,7 +394,7 @@ func scheduleAndStartPod(pod *corev1.Pod, clientset *kubernetes.Clientset) {
 	// simulate scheduling cycle Filter and Reserve
 	allocRequest, _, err := allocator.ComposeAllocationRequest(pod)
 	Expect(err).To(Succeed())
-	gpus, err := allocator.Alloc(&allocRequest)
+	gpus, err := allocator.Alloc(allocRequest)
 	if err != nil {
 		// some test cases are expected to fail, just continue
 		return

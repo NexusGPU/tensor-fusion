@@ -23,7 +23,7 @@ func TestNodeAffinityFilter(t *testing.T) {
 		name         string
 		nodeSelector *corev1.NodeSelector
 		preferred    []corev1.PreferredSchedulingTerm
-		gpus         []tfv1.GPU
+		gpus         []*tfv1.GPU
 		want         int
 		wantErr      bool
 	}{
@@ -42,7 +42,7 @@ func TestNodeAffinityFilter(t *testing.T) {
 					},
 				},
 			},
-			gpus: []tfv1.GPU{
+			gpus: []*tfv1.GPU{
 				{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "gpu-1",
@@ -89,7 +89,7 @@ func TestNodeAffinityFilter(t *testing.T) {
 					},
 				},
 			},
-			gpus: []tfv1.GPU{
+			gpus: []*tfv1.GPU{
 				{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "gpu-1",
@@ -122,7 +122,7 @@ func TestNodeAffinityFilter(t *testing.T) {
 		},
 		{
 			name: "no node affinity specified",
-			gpus: []tfv1.GPU{
+			gpus: []*tfv1.GPU{
 				{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "gpu-1",
@@ -155,7 +155,7 @@ func TestNodeAffinityFilter(t *testing.T) {
 					},
 				},
 			},
-			gpus: []tfv1.GPU{
+			gpus: []*tfv1.GPU{
 				{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "gpu-1",
@@ -199,7 +199,7 @@ func TestNodeAffinityFilter(t *testing.T) {
 					},
 				},
 			},
-			gpus: []tfv1.GPU{
+			gpus: []*tfv1.GPU{
 				{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "gpu-1",
@@ -242,7 +242,7 @@ func TestNodeAffinityFilter(t *testing.T) {
 			// Build fake nodes corresponding to GPUs to populate the cache
 			var objs []runtime.Object
 			for i := range tt.gpus {
-				gpu := &tt.gpus[i]
+				gpu := tt.gpus[i]
 				if nodeName, ok := gpu.Labels[constants.LabelKeyOwner]; ok {
 					node := &corev1.Node{
 						ObjectMeta: metav1.ObjectMeta{
@@ -283,7 +283,7 @@ func TestNodeAffinityFilter(t *testing.T) {
 }
 
 // calculateScore calculates the score for a single GPU based on preferred scheduling terms
-func calculateScore(gpu tfv1.GPU, preferred []corev1.PreferredSchedulingTerm) int32 {
+func calculateScore(gpu *tfv1.GPU, preferred []corev1.PreferredSchedulingTerm) int32 {
 	var totalScore int32
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{

@@ -2,6 +2,10 @@ apiVersion: kubescheduler.config.k8s.io/v1
 kind: KubeSchedulerConfiguration
 clientConnection:
   kubeconfig: $HOME/.kube/config
+  # for local development benchmarking only
+  qps: 1000
+  burst: 2000
+percentageOfNodesToScore: 50
 profiles:
 # Refer: https://kubernetes.io/docs/reference/scheduling/config/
 - schedulerName: tensor-fusion-scheduler

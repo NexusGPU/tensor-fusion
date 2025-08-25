@@ -18,7 +18,7 @@ type CompactFirst struct {
 var _ Strategy = CompactFirst{}
 
 // SelectGPUs selects multiple GPUs from the same node with the least available resources (most packed)
-func (c CompactFirst) SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, error) {
+func (c CompactFirst) SelectGPUs(gpus []*tfv1.GPU, count uint) ([]*tfv1.GPU, error) {
 	if len(gpus) == 0 {
 		return nil, fmt.Errorf("no GPUs available")
 	}
@@ -26,13 +26,13 @@ func (c CompactFirst) SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, erro
 	// If count is 1, just find the most packed GPU
 	if count <= 1 {
 		// Start with the first GPU as the default selected
-		selected := &gpus[0]
+		selected := gpus[0]
 		lowestTflops, _ := selected.Status.Available.Tflops.AsInt64()
 		lowestVRAM, _ := selected.Status.Available.Vram.AsInt64()
 
 		// Find the GPU with the lowest available resources (most packed)
 		for i := 1; i < len(gpus); i++ {
-			gpu := &gpus[i]
+			gpu := gpus[i]
 
 			currentTflops, _ := gpu.Status.Available.Tflops.AsInt64()
 			currentVRAM, _ := gpu.Status.Available.Vram.AsInt64()
@@ -50,7 +50,7 @@ func (c CompactFirst) SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, erro
 
 	// For count > 1, we need to find GPUs from the same node
 	// Group GPUs by node
-	gpusByNode := make(map[string][]tfv1.GPU)
+	gpusByNode := make(map[string][]*tfv1.GPU)
 	for _, gpu := range gpus {
 		if gpu.Labels == nil {
 			continue
@@ -123,13 +123,13 @@ func (c CompactFirst) SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, erro
 	// Return the requested number of GPUs from the best node
 	result := make([]*tfv1.GPU, count)
 	for i := 0; i < int(count); i++ {
-		result[i] = &gpusByNode[bestNodeName][i]
+		result[i] = gpusByNode[bestNodeName][i]
 	}
 	return result, nil
 }
 
 // Score function is using by Kubernetes scheduler framework
-func (c CompactFirst) Score(gpu tfv1.GPU) int {
+func (c CompactFirst) Score(gpu *tfv1.GPU) int {
 	tflopsUsedPercentage := 100 - gpu.Status.Available.Tflops.AsApproximateFloat64()/gpu.Status.Capacity.Tflops.AsApproximateFloat64()*100
 	vramUsedPercentage := 100 - gpu.Status.Available.Vram.AsApproximateFloat64()/gpu.Status.Capacity.Vram.AsApproximateFloat64()*100
 	return normalizeScore(c.cfg, vramUsedPercentage, tflopsUsedPercentage)

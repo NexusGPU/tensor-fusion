@@ -17,14 +17,14 @@ func TestGPUModelFilter(t *testing.T) {
 	tests := []struct {
 		name          string
 		requiredModel string
-		gpus          []tfv1.GPU
+		gpus          []*tfv1.GPU
 		want          int
 		wantErr       bool
 	}{
 		{
 			name:          "filter A100 GPUs",
 			requiredModel: "A100",
-			gpus: []tfv1.GPU{
+			gpus: []*tfv1.GPU{
 				{
 					Status: tfv1.GPUStatus{
 						GPUModel: "A100",
@@ -50,7 +50,7 @@ func TestGPUModelFilter(t *testing.T) {
 		{
 			name:          "no model specified",
 			requiredModel: "",
-			gpus: []tfv1.GPU{
+			gpus: []*tfv1.GPU{
 				{
 					Status: tfv1.GPUStatus{
 						GPUModel: "A100",
@@ -67,7 +67,7 @@ func TestGPUModelFilter(t *testing.T) {
 		{
 			name:          "non-existent model",
 			requiredModel: "NonExistentModel",
-			gpus: []tfv1.GPU{
+			gpus: []*tfv1.GPU{
 				{
 					Status: tfv1.GPUStatus{
 						GPUModel: "A100",
