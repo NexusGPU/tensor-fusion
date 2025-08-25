@@ -26,8 +26,8 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/gorm v1.30.1
-	k8s.io/api v0.33.3
-	k8s.io/apimachinery v0.33.3
+	k8s.io/api v0.33.4
+	k8s.io/apimachinery v0.33.4
 	k8s.io/client-go v0.33.3
 	k8s.io/component-base v0.33.3
 	k8s.io/component-helpers v0.33.3
