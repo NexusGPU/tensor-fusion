@@ -25,6 +25,10 @@ var workerMetricsMap = map[string]*WorkerResourceMetrics{}
 var nodeMetricsLock sync.RWMutex
 var nodeMetricsMap = map[string]*NodeResourceMetrics{}
 
+// Pool level metrics, include pool allocation/costs status
+var poolMetricsLock sync.RWMutex
+var poolMetricsMap = map[string]*PoolResourceMetrics{}
+
 var log = ctrl.Log.WithName("metrics-recorder")
 
 type MetricsRecorder struct {
@@ -149,6 +153,61 @@ func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []strin
 	} else {
 		metricsItem.AllocatedVramPercentToVirtualCap = metricsItem.AllocatedVramBytes / totalVirtualVram * 100
 	}
+}
+
+func InitPoolMetricsWhenNotExists(poolObj *tfv1.GPUPool) {
+	if _, ok := poolMetricsMap[poolObj.Name]; !ok {
+		SetPoolMetrics(poolObj)
+	}
+}
+
+func SetPoolMetrics(poolObj *tfv1.GPUPool) {
+	if poolObj == nil {
+		return
+	}
+	poolMetricsLock.Lock()
+	defer poolMetricsLock.Unlock()
+	if _, ok := poolMetricsMap[poolObj.Name]; !ok {
+		poolMetricsMap[poolObj.Name] = &PoolResourceMetrics{
+			PoolName: poolObj.Name,
+		}
+	}
+	poolMetricsMap[poolObj.Name].Phase = string(poolObj.Status.Phase)
+
+	if poolObj.Status.TotalVRAM.AsApproximateFloat64() > 0 && poolObj.Status.TotalTFlops.AsApproximateFloat64() > 0 {
+		poolMetricsMap[poolObj.Name].AllocatedTflops = poolObj.Status.TotalTFlops.AsApproximateFloat64() -
+			poolObj.Status.AvailableTFlops.AsApproximateFloat64()
+		poolMetricsMap[poolObj.Name].AllocatedTflopsPercent = poolMetricsMap[poolObj.Name].AllocatedTflops /
+			poolObj.Status.TotalTFlops.AsApproximateFloat64() * 100
+
+		poolMetricsMap[poolObj.Name].AllocatedVramBytes = poolObj.Status.TotalVRAM.AsApproximateFloat64() -
+			poolObj.Status.AvailableVRAM.AsApproximateFloat64()
+		poolMetricsMap[poolObj.Name].AllocatedVramPercent = poolMetricsMap[poolObj.Name].AllocatedVramBytes /
+			poolObj.Status.TotalVRAM.AsApproximateFloat64() * 100
+	}
+
+	if poolObj.Status.VirtualAvailableTFlops != nil && poolObj.Status.VirtualAvailableVRAM != nil {
+		poolMetricsMap[poolObj.Name].AllocatedVramPercentToVirtualCap = poolMetricsMap[poolObj.Name].AllocatedVramBytes /
+			poolObj.Status.VirtualVRAM.AsApproximateFloat64() * 100
+
+		poolMetricsMap[poolObj.Name].AllocatedTflopsPercentToVirtualCap = poolMetricsMap[poolObj.Name].AllocatedTflops /
+			poolObj.Status.VirtualTFlops.AsApproximateFloat64() * 100
+		poolMetricsMap[poolObj.Name].AssignedLimitedTFlops = poolObj.Status.VirtualTFlops.AsApproximateFloat64() -
+			poolObj.Status.VirtualAvailableTFlops.AsApproximateFloat64()
+		poolMetricsMap[poolObj.Name].AssignedLimitedVramBytes = poolObj.Status.VirtualVRAM.AsApproximateFloat64() -
+			poolObj.Status.VirtualAvailableVRAM.AsApproximateFloat64()
+		poolMetricsMap[poolObj.Name].AssignedLimitedTFlopsPercentToVirtualCap = poolMetricsMap[poolObj.Name].AssignedLimitedTFlops /
+			poolObj.Status.VirtualTFlops.AsApproximateFloat64() * 100
+		poolMetricsMap[poolObj.Name].AssignedLimitedVramPercentToVirtualCap = poolMetricsMap[poolObj.Name].AssignedLimitedVramBytes /
+			poolObj.Status.VirtualVRAM.AsApproximateFloat64() * 100
+	}
+	poolMetricsMap[poolObj.Name].GPUCount = int(poolObj.Status.TotalGPUs)
+}
+
+func RemovePoolMetrics(poolName string) {
+	poolMetricsLock.Lock()
+	defer poolMetricsLock.Unlock()
+	delete(poolMetricsMap, poolName)
 }
 
 func SetSchedulerMetrics(poolName string, isSuccess bool) {
@@ -328,6 +387,24 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("total_allocation_success_cnt", successCount)
 		enc.AddField("total_scale_up_cnt", scaleUpCount)
 		enc.AddField("total_scale_down_cnt", scaleDownCount)
+	}
+
+	// Additional Pool level metrics
+	for _, metrics := range poolMetricsMap {
+		enc.StartLine("tf_pool_metrics")
+		enc.AddTag("pool", metrics.PoolName)
+		enc.AddTag("phase", metrics.Phase)
+		enc.AddField("allocatedTflops", metrics.AllocatedTflops)
+		enc.AddField("allocatedTflopsPercent", metrics.AllocatedTflopsPercent)
+		enc.AddField("allocatedTflopsPercentVirtual", metrics.AllocatedTflopsPercentToVirtualCap)
+		enc.AddField("allocatedVramBytes", metrics.AllocatedVramBytes)
+		enc.AddField("allocatedVramPercent", metrics.AllocatedVramPercent)
+		enc.AddField("allocatedVramPercentVirtual", metrics.AllocatedVramPercentToVirtualCap)
+		enc.AddField("assignedLimitedTFlops", metrics.AssignedLimitedTFlops)
+		enc.AddField("assignedLimitedVramBytes", metrics.AssignedLimitedVramBytes)
+		enc.AddField("assignedLimitedTFlopsPercentVirtual", metrics.AssignedLimitedTFlopsPercentToVirtualCap)
+		enc.AddField("assignedLimitedVramPercentVirtual", metrics.AssignedLimitedVramPercentToVirtualCap)
+		enc.AddField("gpu_count", int64(metrics.GPUCount))
 		enc.EndLine(now)
 	}
 

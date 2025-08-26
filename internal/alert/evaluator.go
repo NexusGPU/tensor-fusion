@@ -124,6 +124,9 @@ func renderQueryTemplate(rule *config.AlertRule) (string, error) {
 
 // evaluate evaluates a rule against the database and sends alerts if conditions are met
 func (e *AlertEvaluator) evaluate(rule *config.AlertRule) ([]config.PostableAlert, error) {
+	if e.DB == nil {
+		return []config.PostableAlert{}, nil
+	}
 	renderedQuery, err := renderQueryTemplate(rule)
 	if err != nil {
 		return nil, fmt.Errorf("failed to render query template for rule %s: %w", rule.Name, err)

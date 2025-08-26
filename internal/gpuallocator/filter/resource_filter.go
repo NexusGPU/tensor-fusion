@@ -20,8 +20,8 @@ func NewResourceFilter(required tfv1.Resource) *ResourceFilter {
 }
 
 // Filter implements GPUFilter.Filter
-func (f *ResourceFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
-	return lo.Filter(gpus, func(gpu tfv1.GPU, _ int) bool {
+func (f *ResourceFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []*tfv1.GPU) ([]*tfv1.GPU, error) {
+	return lo.Filter(gpus, func(gpu *tfv1.GPU, _ int) bool {
 		// Check if GPU has enough resources available
 		if gpu.Status.Available == nil {
 			return false

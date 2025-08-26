@@ -22,9 +22,9 @@ func NewPhaseFilter(allowedPhases ...tfv1.TensorFusionGPUPhase) *PhaseFilter {
 }
 
 // Filter implements GPUFilter.Filter
-func (f *PhaseFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
+func (f *PhaseFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []*tfv1.GPU) ([]*tfv1.GPU, error) {
 	validPhase := 0
-	filteredGPUs := lo.Filter(gpus, func(gpu tfv1.GPU, _ int) bool {
+	filteredGPUs := lo.Filter(gpus, func(gpu *tfv1.GPU, _ int) bool {
 		// when running progressive migration mode, only return GPUs used by tensor-fusion
 		if utils.IsProgressiveMigration() && gpu.Status.UsedBy != tfv1.UsedByTensorFusion {
 			return false

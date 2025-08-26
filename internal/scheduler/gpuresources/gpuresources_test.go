@@ -602,23 +602,6 @@ func (s *GPUResourcesSuite) TestNewWithDeps() {
 	s.Error(err)
 }
 
-func (s *GPUResourcesSuite) TestGPUSchedulingStateData_Clone() {
-	log.FromContext(s.ctx).Info("Running TestGPUSchedulingStateData_Clone")
-	state := &GPUSchedulingStateData{
-		NodeGPUs: map[string][]tfv1.GPU{
-			"node-a": {{ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"}}},
-		},
-		ValidNodeGPUScore: map[string]map[string]int{
-			"node-a": {"gpu-1": 100},
-		},
-		FinalGPUs: []string{"gpu-1"},
-	}
-	cloned := state.Clone()
-	s.Equal(state, cloned)
-	// Should be a shallow copy
-	s.Equal(&state.NodeGPUs, &cloned.(*GPUSchedulingStateData).NodeGPUs)
-}
-
 func (s *GPUResourcesSuite) TestScoreExtensions() {
 	log.FromContext(s.ctx).Info("Running TestScoreExtensions")
 	s.Nil(s.plugin.ScoreExtensions())

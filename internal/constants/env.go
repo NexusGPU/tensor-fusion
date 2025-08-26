@@ -15,6 +15,7 @@ const (
 	DisableConnectionAuthEnv = "DISABLE_CONNECTION_AUTH"
 
 	NvidiaOperatorProgressiveMigrationEnv = "NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION"
+	RunHypervisorUtilGPUAllocatable       = "RUN_HYPERVISOR_UTIL_GPU_ALLOCATABLE"
 )
 
 // General envs used in compose components manifest
@@ -74,7 +75,7 @@ const (
 
 	TFLibsVolumeName       = "tf-libs"
 	TFLibsVolumeMountPath  = "/tensor-fusion"
-	TFConnectionNamePrefix = "tf-vgpu-"
+	TFConnectionNamePrefix = "-tf-vgpu-"
 
 	HostIPFieldRef       = "status.hostIP"
 	NodeNameFieldRef     = "spec.nodeName"

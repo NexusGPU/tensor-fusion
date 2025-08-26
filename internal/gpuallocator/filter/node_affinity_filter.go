@@ -19,7 +19,7 @@ type NodeAffinityFilter struct {
 }
 
 type gpuScore struct {
-	gpu   tfv1.GPU
+	gpu   *tfv1.GPU
 	score int32
 }
 
@@ -32,7 +32,7 @@ func NewNodeAffinityFilter(c client.Reader, nodeAffinity *corev1.NodeAffinity) *
 }
 
 // Filter
-func (f *NodeAffinityFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
+func (f *NodeAffinityFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []*tfv1.GPU) ([]*tfv1.GPU, error) {
 	if f.nodeSelector == nil && len(f.preferred) == 0 {
 		return gpus, nil
 	}
@@ -59,8 +59,8 @@ func (f *NodeAffinityFilter) Filter(ctx context.Context, workerPodKey tfv1.NameN
 }
 
 // requiredDuringSchedulingIgnoredDuringExecution
-func (f *NodeAffinityFilter) filterRequired(ctx context.Context, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
-	var filteredGPUs []tfv1.GPU
+func (f *NodeAffinityFilter) filterRequired(ctx context.Context, gpus []*tfv1.GPU) ([]*tfv1.GPU, error) {
+	var filteredGPUs []*tfv1.GPU
 	for _, gpu := range gpus {
 		nodeName, exists := gpu.Labels[constants.LabelKeyOwner]
 		if !exists {
@@ -89,7 +89,7 @@ func (f *NodeAffinityFilter) filterRequired(ctx context.Context, gpus []tfv1.GPU
 }
 
 // preferredDuringSchedulingIgnoredDuringExecution
-func (f *NodeAffinityFilter) filterPreferred(ctx context.Context, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
+func (f *NodeAffinityFilter) filterPreferred(ctx context.Context, gpus []*tfv1.GPU) ([]*tfv1.GPU, error) {
 	gpuScores := make([]gpuScore, 0, len(gpus))
 	for _, gpu := range gpus {
 		nodeName, exists := gpu.Labels[constants.LabelKeyOwner]
@@ -133,7 +133,7 @@ func (f *NodeAffinityFilter) filterPreferred(ctx context.Context, gpus []tfv1.GP
 	})
 
 	// change back to gpu list
-	result := make([]tfv1.GPU, len(gpuScores))
+	result := make([]*tfv1.GPU, len(gpuScores))
 	for i, score := range gpuScores {
 		result[i] = score.gpu
 	}

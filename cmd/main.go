@@ -94,6 +94,7 @@ var timeSeriesDB *metrics.TimeSeriesDB
 var dynamicConfigPath string
 var alertEvaluator *alert.AlertEvaluator
 var schedulerConfigPath string
+var alertEvaluatorReady chan struct{}
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -203,6 +204,7 @@ func main() {
 	_ = os.Setenv(constants.KubeApiVersionMajorEnv, version.Major)
 	_ = os.Setenv(constants.KubeApiVersionMinorEnv, version.Minor)
 
+	alertEvaluatorReady = make(chan struct{})
 	setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
 
 	if autoScaleCanBeEnabled && enableAutoScale {
@@ -471,7 +473,7 @@ func startScheduler(
 		gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
 	)
 
-	cc, scheduler, err := sched.SetupScheduler(ctx, mgr, schedulerConfigPath, gpuResourceFitOpt, gpuTopoOpt)
+	cc, scheduler, err := sched.SetupScheduler(ctx, mgr, schedulerConfigPath, false, gpuResourceFitOpt, gpuTopoOpt)
 	if err != nil {
 		setupLog.Error(err, "unable to create tensor fusion scheduler")
 		os.Exit(1)
@@ -500,18 +502,11 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 			return nil
 		}
 		timeSeriesDB = setupTimeSeriesDB()
-		if timeSeriesDB != nil {
-			if err := timeSeriesDB.SetupTables(mgr.GetClient()); err != nil {
-				setupLog.Error(err, "unable to init timeseries tables")
-			} else {
-				autoScaleCanBeEnabled = true
-				alertCanBeEnabled = true
-
-				setupLog.Info("time series db setup successfully.")
-			}
-		}
-
 		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
+		autoScaleCanBeEnabled = true
+		alertCanBeEnabled = true
+		close(alertEvaluatorReady)
+		setupLog.Info("time series db setup successfully.")
 		return nil
 	}))
 	if err != nil {
@@ -542,7 +537,7 @@ func watchAndHandleConfigChanges(ctx context.Context, mgr manager.Manager, needT
 
 		// handle alert rules update
 		go func() {
-			<-mgr.Elected()
+			<-alertEvaluatorReady
 			if alertCanBeEnabled && enableAlert {
 				err = alertEvaluator.UpdateAlertRules(globalConfig.AlertRules)
 				if err != nil {

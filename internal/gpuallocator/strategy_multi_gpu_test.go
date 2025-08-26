@@ -12,7 +12,7 @@ import (
 
 func TestMultiGPUSelection(t *testing.T) {
 	// Create test GPUs with different node labels
-	gpus := []tfv1.GPU{
+	gpus := []*tfv1.GPU{
 		// Node 1 GPUs
 		{
 			ObjectMeta: metav1.ObjectMeta{

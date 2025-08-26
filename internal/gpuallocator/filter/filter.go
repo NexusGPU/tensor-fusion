@@ -19,7 +19,7 @@ type FilterDetail struct {
 type GPUFilter interface {
 	// Filter filters the list of GPUs and returns only those that pass the filter criteria
 	// The implementation should not modify the input slice
-	Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error)
+	Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []*tfv1.GPU) ([]*tfv1.GPU, error)
 
 	Name() string
 }
@@ -58,9 +58,9 @@ func (fr *FilterRegistry) With(filters ...GPUFilter) *FilterRegistry {
 func (fr *FilterRegistry) Apply(
 	ctx context.Context,
 	workerPodKey tfv1.NameNamespace,
-	gpus []tfv1.GPU,
+	gpus []*tfv1.GPU,
 	isSimulateSchedule bool,
-) ([]tfv1.GPU, []FilterDetail, error) {
+) ([]*tfv1.GPU, []FilterDetail, error) {
 	log := log.FromContext(ctx)
 	if len(gpus) == 0 {
 		log.Info("FilterRegistry - no GPUs to filter", "workerPodKey", workerPodKey)
@@ -97,8 +97,8 @@ func (fr *FilterRegistry) Apply(
 		if isSimulateSchedule {
 			detail := FilterDetail{
 				FilterName: filter.Name(),
-				Before:     lo.Map(filteredGPUs, func(gpu tfv1.GPU, _ int) string { return gpu.Name }),
-				After:      lo.Map(afterFilteredGPUs, func(gpu tfv1.GPU, _ int) string { return gpu.Name }),
+				Before:     lo.Map(filteredGPUs, func(gpu *tfv1.GPU, _ int) string { return gpu.Name }),
+				After:      lo.Map(afterFilteredGPUs, func(gpu *tfv1.GPU, _ int) string { return gpu.Name }),
 				Diff:       len(filteredGPUs) - len(afterFilteredGPUs),
 			}
 			filterDetails = append(filterDetails, detail)

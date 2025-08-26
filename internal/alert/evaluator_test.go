@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // Mock data for testing
@@ -24,7 +25,9 @@ func setupMockDB(t *testing.T) (sqlmock.Sqlmock, *metrics.TimeSeriesDB) {
 	gormDB, err := gorm.Open(mysql.New(mysql.Config{
 		Conn:                      db,
 		SkipInitializeWithVersion: true,
-	}), &gorm.Config{})
+	}), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
 	require.NoError(t, err)
 
 	tsdb := &metrics.TimeSeriesDB{DB: gormDB}

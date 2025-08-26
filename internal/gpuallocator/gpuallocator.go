@@ -41,9 +41,9 @@ const MaxGPUCounterPerAllocation = 128
 const CleanUpCheckInterval = 3 * time.Minute
 
 type Strategy interface {
-	Score(gpu tfv1.GPU) int
+	Score(gpu *tfv1.GPU) int
 
-	SelectGPUs(gpus []tfv1.GPU, count uint) ([]*tfv1.GPU, error)
+	SelectGPUs(gpus []*tfv1.GPU, count uint) ([]*tfv1.GPU, error)
 }
 
 // When called /api/simulate-schedule with Pod yaml as body, return detailed filter details
@@ -73,6 +73,8 @@ type GpuAllocator struct {
 
 	// In-memory store of GPUs
 	gpuStore        map[types.NamespacedName]*tfv1.GPU
+	nodeGpuStore    map[string]map[string]*tfv1.GPU
+	poolGpuStore    map[string]map[string]*tfv1.GPU
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{}
 	storeMutex      sync.RWMutex
 	allocateMutex   sync.Mutex
@@ -117,14 +119,16 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 		filterRegistry:  baseRegistry,
 		quotaStore:      quotaStore,
 		gpuStore:        make(map[types.NamespacedName]*tfv1.GPU),
+		nodeGpuStore:    make(map[string]map[string]*tfv1.GPU),
+		poolGpuStore:    make(map[string]map[string]*tfv1.GPU),
 		nodeWorkerStore: make(map[string]map[types.NamespacedName]struct{}),
 		syncInterval:    syncInterval,
 		dirtyQueue:      make(map[types.NamespacedName]struct{}),
 		ctx:             ctx,
 
-		uniqueAllocation:       make(map[string]*tfv1.AllocRequest),
-		uniqueDeallocation:     make(map[string]struct{}),
-		podNamespaceNsToPodUID: make(map[string]string),
+		uniqueAllocation:       make(map[string]*tfv1.AllocRequest, 512),
+		uniqueDeallocation:     make(map[string]struct{}, 512),
+		podNamespaceNsToPodUID: make(map[string]string, 512),
 		initializedCh:          make(chan struct{}),
 	}
 
@@ -137,6 +141,10 @@ func (s *GpuAllocator) GetAllocationInfo() (
 	uniqueAllocation map[string]*tfv1.AllocRequest,
 ) {
 	return s.gpuStore, s.nodeWorkerStore, s.uniqueAllocation
+}
+
+func (s *GpuAllocator) GetNodeGpuStore() map[string]map[string]*tfv1.GPU {
+	return s.nodeGpuStore
 }
 
 // AllocRequest encapsulates all parameters needed for GPU allocation
@@ -154,9 +162,9 @@ func IsScalingQuotaExceededError(err error) bool {
 // It does not modify the GPU resources, only filters and selects them.
 func (s *GpuAllocator) Filter(
 	req *tfv1.AllocRequest,
-	toFilterGPUs []tfv1.GPU,
+	toFilterGPUs []*tfv1.GPU,
 	isSimulateSchedule bool,
-) ([]tfv1.GPU, []filter.FilterDetail, error) {
+) ([]*tfv1.GPU, []filter.FilterDetail, error) {
 	// Add SameNodeFilter if count > 1 to ensure GPUs are from the same node
 	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request))
 
@@ -182,7 +190,7 @@ func (s *GpuAllocator) Filter(
 	return filteredGPUs, filterDetails, nil
 }
 
-func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []tfv1.GPU) ([]*tfv1.GPU, error) {
+func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []*tfv1.GPU) ([]*tfv1.GPU, error) {
 	pool := &tfv1.GPUPool{}
 	if err := s.Get(s.ctx, client.ObjectKey{Name: req.PoolName}, pool); err != nil {
 		return nil, fmt.Errorf("get pool %s: %w", req.PoolName, err)
@@ -302,7 +310,7 @@ func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 	return s.Bind(gpuNames, req)
 }
 
-func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocRequest, isSimulateSchedule bool) ([]tfv1.GPU, []filter.FilterDetail, error) {
+func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocRequest, isSimulateSchedule bool) ([]*tfv1.GPU, []filter.FilterDetail, error) {
 	<-s.initializedCh
 	// Fast quota check (fail fast if quota insufficient)
 	if err := s.quotaStore.CheckQuotaAvailable(req.WorkloadNameNamespace.Namespace, req); err != nil {
@@ -326,11 +334,26 @@ func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocR
 	}
 
 	if s.maxWorkerPerNode > 0 {
+		// First pass: check if any filtering is needed
+		needsFiltering := false
 		for _, gpu := range filteredGPUs {
 			nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 			if len(s.nodeWorkerStore[nodeName]) > s.maxWorkerPerNode {
-				return nil, nil, fmt.Errorf("node %s has reached the maximum number of workers", nodeName)
+				needsFiltering = true
+				break
 			}
+		}
+
+		// Only allocate and filter if necessary
+		if needsFiltering {
+			finalFilteredGPUs := make([]*tfv1.GPU, 0, len(filteredGPUs))
+			for _, gpu := range filteredGPUs {
+				nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+				if len(s.nodeWorkerStore[nodeName]) <= s.maxWorkerPerNode {
+					finalFilteredGPUs = append(finalFilteredGPUs, gpu)
+				}
+			}
+			filteredGPUs = finalFilteredGPUs
 		}
 	}
 
@@ -575,13 +598,15 @@ type scoredGPU struct {
 }
 
 // First level is k8s node name, second level is GPU name, value is score
-func (s *GpuAllocator) Score(ctx context.Context, cfg *config.GPUFitConfig, req tfv1.AllocRequest, validNodeGPUs map[string][]tfv1.GPU) map[string]map[string]int {
-	result := make(map[string]map[string]int, len(validNodeGPUs))
+func (s *GpuAllocator) Score(
+	ctx context.Context, cfg *config.GPUFitConfig, req *tfv1.AllocRequest, nodeGPUs map[string][]*tfv1.GPU,
+) map[string]map[string]int {
+	result := make(map[string]map[string]int, len(nodeGPUs))
 	strategy := NewStrategy(s.getPlacementMode(ctx, req.PoolName), cfg)
 
-	allScores := make([]scoredGPU, 0)
+	allScores := make([]scoredGPU, 0, len(nodeGPUs))
 
-	for nodeName, gpus := range validNodeGPUs {
+	for nodeName, gpus := range nodeGPUs {
 		for _, gpu := range gpus {
 			res := strategy.Score(gpu)
 
@@ -602,7 +627,9 @@ func (s *GpuAllocator) Score(ctx context.Context, cfg *config.GPUFitConfig, req 
 		}
 	}
 
-	log.FromContext(ctx).Info("GPU scheduler score stage completed", "pod", req.PodMeta.Name, "top score gpus", strings.Join(topScoreItems(allScores), ", "))
+	if log.FromContext(ctx).V(5).Enabled() {
+		log.FromContext(ctx).Info("GPU scheduler score stage completed", "pod", req.PodMeta.Name, "top score gpus", strings.Join(topScoreItems(allScores), ", "))
+	}
 	return result
 }
 
@@ -668,10 +695,12 @@ func (s *GpuAllocator) initGPUAndQuotaStore() error {
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
 	s.gpuStore = make(map[types.NamespacedName]*tfv1.GPU, len(gpus.Items))
+	s.nodeGpuStore = make(map[string]map[string]*tfv1.GPU, len(gpus.Items)/2)
+
 	for i := range gpus.Items {
-		gpu := &gpus.Items[i]
+		gpu := gpus.Items[i].DeepCopy()
 		key := types.NamespacedName{Name: gpu.Name}
-		s.gpuStore[key] = gpu.DeepCopy()
+		s.gpuStore[key] = gpu
 
 		if gpu.Status.Capacity == nil {
 			// not a valid GPU, skip for now until updated by informer
@@ -679,6 +708,22 @@ func (s *GpuAllocator) initGPUAndQuotaStore() error {
 		}
 		if s.gpuStore[key].Status.Available == nil {
 			s.gpuStore[key].Status.Available = gpu.Status.Capacity.DeepCopy()
+		}
+
+		gpuNodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if gpuNodeName != "" {
+			if _, exists := s.nodeGpuStore[gpuNodeName]; !exists {
+				s.nodeGpuStore[gpuNodeName] = make(map[string]*tfv1.GPU, 4)
+			}
+			s.nodeGpuStore[gpuNodeName][gpu.Name] = gpu
+		}
+
+		pool := gpu.Labels[constants.GpuPoolKey]
+		if pool != "" {
+			if _, exists := s.poolGpuStore[pool]; !exists {
+				s.poolGpuStore[pool] = make(map[string]*tfv1.GPU, 128)
+			}
+			s.poolGpuStore[pool][gpu.Name] = gpu
 		}
 	}
 	log.Info("GPU store initialized", "count", len(s.gpuStore))
@@ -817,6 +862,26 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 		gpuInMem.Status.Available = gpuInMem.Status.Capacity.DeepCopy()
 	}
 	s.gpuStore[key] = gpuInMem
+
+	if gpuInMem.Status.NodeSelector != nil {
+		gpuNodeName := gpuInMem.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if gpuNodeName != "" {
+			if _, exists := s.nodeGpuStore[gpuNodeName]; !exists {
+				s.nodeGpuStore[gpuNodeName] = make(map[string]*tfv1.GPU, 4)
+			}
+			s.nodeGpuStore[gpuNodeName][gpuInMem.Name] = gpuInMem
+		}
+	}
+
+	if gpuInMem.Labels != nil {
+		pool := gpuInMem.Labels[constants.GpuPoolKey]
+		if pool != "" {
+			if _, exists := s.poolGpuStore[pool]; !exists {
+				s.poolGpuStore[pool] = make(map[string]*tfv1.GPU, 128)
+			}
+			s.poolGpuStore[pool][gpuInMem.Name] = gpuInMem
+		}
+	}
 	log.Info("Added GPU to store", "name", key.Name, "phase", gpu.Status.Phase)
 }
 
@@ -830,6 +895,20 @@ func (s *GpuAllocator) handleGPUDelete(ctx context.Context, gpu *tfv1.GPU) {
 
 	// Remove GPU from store
 	delete(s.gpuStore, key)
+
+	if gpu.Status.NodeSelector != nil {
+		gpuNodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if s.nodeGpuStore[gpuNodeName] != nil {
+			delete(s.nodeGpuStore[gpuNodeName], gpu.Name)
+		}
+	}
+
+	if gpu.Labels != nil {
+		pool := gpu.Labels[constants.GpuPoolKey]
+		if pool != "" {
+			delete(s.poolGpuStore[pool], gpu.Name)
+		}
+	}
 	log.Info("Removed GPU from store", "name", key.Name)
 }
 
@@ -910,7 +989,7 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 	for key := range s.dirtyQueue {
 		dirtyGPUs = append(dirtyGPUs, key)
 	}
-	s.dirtyQueue = make(map[types.NamespacedName]struct{})
+	s.dirtyQueue = make(map[types.NamespacedName]struct{}, 16)
 	s.dirtyQueueLock.Unlock()
 
 	// No dirty GPUs to sync
@@ -998,20 +1077,10 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 }
 
 // listGPUsFromPool gets GPUs from the specified pool using the in-memory store
-func (s *GpuAllocator) listGPUsFromPool(poolName string) []tfv1.GPU {
+func (s *GpuAllocator) listGPUsFromPool(poolName string) []*tfv1.GPU {
 	s.storeMutex.RLock()
 	defer s.storeMutex.RUnlock()
-
-	result := make([]tfv1.GPU, 0, len(s.gpuStore)/2)
-	for _, gpu := range s.gpuStore {
-		if gpu.Labels[constants.GpuPoolKey] == poolName {
-			gpuCopy := *gpu
-			gpuCopy.ManagedFields = nil
-			result = append(result, gpuCopy)
-		}
-	}
-
-	return result
+	return lo.Values(s.poolGpuStore[poolName])
 }
 
 func (s *GpuAllocator) markGPUDirty(key types.NamespacedName) {
@@ -1058,7 +1127,7 @@ func (s *GpuAllocator) reconcileAllocationState() {
 				logger.Error(err, "Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", worker.Name, "msg", msg)
 				return false
 			}
-			s.uniqueAllocation[string(worker.UID)] = &allocRequest
+			s.uniqueAllocation[string(worker.UID)] = allocRequest
 			s.podNamespaceNsToPodUID[worker.Namespace+"/"+worker.Name] = string(worker.UID)
 			s.addAllocationMap(worker.Spec.NodeName, worker.ObjectMeta)
 		}
@@ -1066,7 +1135,6 @@ func (s *GpuAllocator) reconcileAllocationState() {
 	})
 
 	actualAvailableMap := make(map[types.NamespacedName]*tfv1.Resource)
-	gpuMap := make(map[types.NamespacedName]*tfv1.GPU)
 
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
@@ -1075,9 +1143,10 @@ func (s *GpuAllocator) reconcileAllocationState() {
 		if gpu.Status.Capacity != nil {
 			actualAvailableMap[gpuKey] = gpu.Status.Capacity.DeepCopy()
 			gpu.Status.RunningApps = []*tfv1.RunningAppDetail{}
-			gpuMap[gpuKey] = gpu
 		}
 
+		// This is important for progressive migration mode
+		// No workers, but node contains GPU, need include into nodeWorkerStore with empty map
 		gpuNodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		if _, exists := s.nodeWorkerStore[gpuNodeName]; !exists {
 			s.nodeWorkerStore[gpuNodeName] = map[types.NamespacedName]struct{}{}
@@ -1096,7 +1165,7 @@ func (s *GpuAllocator) reconcileAllocationState() {
 				gpuAvailableRes.Tflops.Sub(allocRequest.Request.Tflops)
 				gpuAvailableRes.Vram.Sub(allocRequest.Request.Vram)
 			}
-			addRunningApp(ctx, gpuMap[gpuKey], tfv1.NameNamespace{Namespace: worker.Namespace, Name: worker.Labels[constants.WorkloadKey]})
+			addRunningApp(ctx, s.gpuStore[gpuKey], tfv1.NameNamespace{Namespace: worker.Namespace, Name: worker.Labels[constants.WorkloadKey]})
 		}
 	}
 
@@ -1188,25 +1257,25 @@ func removeRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace 
 	}
 }
 
-func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (tfv1.AllocRequest, string, error) {
+func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest, string, error) {
 	gpuRequestResource, err := utils.GetGPUResource(pod, true)
 	if err != nil {
-		return tfv1.AllocRequest{}, "invalid gpu request annotation", err
+		return &tfv1.AllocRequest{}, "invalid gpu request annotation", err
 	}
 	gpuLimitResource, err := utils.GetGPUResource(pod, false)
 	if err != nil {
-		return tfv1.AllocRequest{}, "invalid gpu limit annotation", err
+		return &tfv1.AllocRequest{}, "invalid gpu limit annotation", err
 	}
 
 	count := 1
 	if gpuCountStr, exists := pod.Annotations[constants.GpuCountAnnotation]; exists {
 		count, err = strconv.Atoi(gpuCountStr)
 		if err != nil {
-			return tfv1.AllocRequest{}, "invalid gpu count annotation", err
+			return &tfv1.AllocRequest{}, "invalid gpu count annotation", err
 		}
 	}
 	if count > MaxGPUCounterPerAllocation {
-		return tfv1.AllocRequest{}, "gpu count annotation is too large", nil
+		return &tfv1.AllocRequest{}, "gpu count annotation is too large", nil
 	}
 
 	allocRequest := tfv1.AllocRequest{
@@ -1229,12 +1298,12 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (tfv1.AllocRequest,
 		allocRequest.GPUNames = slices.Collect(gpuIds)
 	}
 
-	return allocRequest, "", nil
+	return &allocRequest, "", nil
 }
 
 func (s *GpuAllocator) addAllocationMap(gpuNodeName string, podMeta metav1.ObjectMeta) {
 	if _, exists := s.nodeWorkerStore[gpuNodeName]; !exists {
-		s.nodeWorkerStore[gpuNodeName] = make(map[types.NamespacedName]struct{}, 0)
+		s.nodeWorkerStore[gpuNodeName] = make(map[types.NamespacedName]struct{}, 4)
 	}
 	workerPodKey := types.NamespacedName{Namespace: podMeta.Namespace, Name: podMeta.Name}
 	s.nodeWorkerStore[gpuNodeName][workerPodKey] = struct{}{}

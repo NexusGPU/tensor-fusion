@@ -3,11 +3,18 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
+
+	goerrors "errors"
+	golog "log"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -38,7 +45,21 @@ func (m *TimeSeriesDB) Setup(connection GreptimeDBConnection) error {
 	if connection.User != "" && connection.Password != "" {
 		dsn = fmt.Sprintf("%s:%s@%s", connection.User, connection.Password, dsn)
 	}
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+
+	logFile, err := os.OpenFile("/tmp/gorm.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		log.Error(err, "failed to create or open gorm log file in /tmp/gorm.log")
+		return goerrors.New("init gorm log failed")
+	}
+	logger := logger.New(golog.New(logFile, "\r\n", golog.LstdFlags), logger.Config{
+		SlowThreshold:             200 * time.Millisecond,
+		LogLevel:                  logger.Warn,
+		IgnoreRecordNotFoundError: false,
+		Colorful:                  true,
+	})
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+		Logger: logger,
+	})
 	if err != nil {
 		return err
 	}
@@ -47,6 +68,9 @@ func (m *TimeSeriesDB) Setup(connection GreptimeDBConnection) error {
 	return nil
 }
 
+// Deprecated Code
+// No need migration for new tables, Dynamic created during ingestion
+// Dynamic indexed in Greptime Cloud/Enterprise edition
 func (t *TimeSeriesDB) SetupTables(client client.Client) error {
 
 	// read or create configMap, version: v1
@@ -108,12 +132,19 @@ func (t *TimeSeriesDB) SetTableTTL(ttl string) error {
 		&TFSystemLog{},
 		&HypervisorWorkerUsageMetrics{},
 		&HypervisorGPUUsageMetrics{},
+		&PoolResourceMetrics{},
 	}
 	if t == nil || t.DB == nil {
 		return nil
 	}
 	for _, table := range tables {
 		if err := t.DB.Exec("ALTER TABLE " + table.TableName() + " SET ttl = '" + ttl + "'").Error; err != nil {
+			var mysqlErr *mysqlDriver.MySQLError
+			if goerrors.As(err, &mysqlErr) {
+				if mysqlErr.Number == 1146 {
+					continue
+				}
+			}
 			return err
 		}
 	}

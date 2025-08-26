@@ -25,14 +25,13 @@ func NewSameNodeFilter(count uint) *SameNodeFilter {
 
 // Filter implements GPUFilter.Filter
 // It groups GPUs by node and returns only those nodes that have at least 'count' GPUs
-func (f *SameNodeFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
+func (f *SameNodeFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []*tfv1.GPU) ([]*tfv1.GPU, error) {
 	// If count is 1 or 0, no need to filter by node
 	if f.count <= 1 {
 		return gpus, nil
 	}
 
-	// Group GPUs by node // TODO use status rather than label FIX ME
-	gpusByNode := make(map[string][]tfv1.GPU)
+	gpusByNode := make(map[string][]*tfv1.GPU, len(gpus)/2)
 	for _, gpu := range gpus {
 		nodeName, exists := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		if !exists {
@@ -42,7 +41,7 @@ func (f *SameNodeFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNames
 	}
 
 	// Filter nodes that have at least 'count' GPUs
-	var result []tfv1.GPU
+	result := make([]*tfv1.GPU, 0, len(gpus))
 	for _, nodeGPUs := range gpusByNode {
 		if uint(len(nodeGPUs)) >= f.count {
 			// Add all GPUs from this node to the result
@@ -56,10 +55,10 @@ func (f *SameNodeFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNames
 
 	if log.FromContext(ctx).V(6).Enabled() {
 		log.FromContext(ctx).V(6).Info("Apply SameNodeMultipleGPU Filter",
-			"before", strings.Join(lo.Map(gpus, func(gpu tfv1.GPU, _ int) string {
+			"before", strings.Join(lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
 				return gpu.Name
 			}), ","),
-			"after", strings.Join(lo.Map(result, func(gpu tfv1.GPU, _ int) string {
+			"after", strings.Join(lo.Map(result, func(gpu *tfv1.GPU, _ int) string {
 				return gpu.Name
 			}), ","), "pod", workerPodKey)
 	}

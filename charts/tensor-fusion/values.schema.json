@@ -430,6 +430,27 @@
             }
           }
         },
+        "persistence": {
+          "type": "object",
+          "description": "Persistent storage configuration for alerting",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable persistent storage for alerting",
+              "default": false
+            },
+            "storageClass": {
+              "type": "string",
+              "description": "Storage class for persistent storage",
+              "default": ""
+            },
+            "size": {
+              "type": "string",
+              "description": "Size of persistent storage",
+              "default": ""
+            }
+          }
+        },
         "alertManagerConfig": {
           "type": "object",
           "description": "Alertmanager configuration"

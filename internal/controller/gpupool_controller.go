@@ -27,6 +27,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/component"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	utils "github.com/NexusGPU/tensor-fusion/internal/utils"
 	"golang.org/x/time/rate"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -98,6 +99,7 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	pool := &tfv1.GPUPool{}
 	if err := r.Get(ctx, req.NamespacedName, pool); err != nil {
 		if errors.IsNotFound(err) {
+			metrics.RemovePoolMetrics(req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -350,10 +352,13 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(
 	}
 
 	if !equality.Semantic.DeepEqual(&pool.Status, staleStatus) {
+		metrics.SetPoolMetrics(pool)
 		if err := r.Client.Status().Update(ctx, pool); err != nil {
 			return fmt.Errorf("failed to update pool status: %w", err)
 		}
 		log.Info("updated pool status because of capacity or node status changed", "pool", pool.Name)
+	} else {
+		metrics.InitPoolMetricsWhenNotExists(pool)
 	}
 	return nil
 }
@@ -404,6 +409,7 @@ func (r *GPUPoolReconciler) cleanUpPool(ctx context.Context, pool *tfv1.GPUPool)
 	log.Info("TensorFusionGPUPool is being deleted", "name", pool.Name)
 	if pool.Status.Phase != tfv1.TensorFusionPoolPhaseDestroying {
 		pool.Status.Phase = tfv1.TensorFusionPoolPhaseDestroying
+		metrics.SetPoolMetrics(pool)
 		if err := r.Status().Update(ctx, pool); err != nil {
 			return false, err
 		}

@@ -49,11 +49,17 @@ func SetupScheduler(
 	ctx context.Context,
 	mgr manager.Manager,
 	schedulerConfigPath string,
+	disableHttpEndpoint bool,
 	outOfTreeRegistryOptions ...app.Option,
 ) (*schedulerserverconfig.CompletedConfig, *scheduler.Scheduler, error) {
 	opts := options.NewOptions()
 	schedulerConfigFlag := opts.Flags.FlagSet(schedulerConfigFlagSet).Lookup(schedulerConfigFlag)
 	schedulerConfigFlag.Changed = true
+
+	if disableHttpEndpoint {
+		opts.SecureServing.BindPort = 0
+	}
+
 	cfgPath, err := preHandleConfig(schedulerConfigPath)
 	if err != nil {
 		return nil, nil, err
@@ -169,7 +175,9 @@ func RunScheduler(ctx context.Context,
 	startInformersAndWaitForSync(ctx)
 
 	go func() {
-		<-mgr.Elected()
+		if mgr != nil {
+			<-mgr.Elected()
+		}
 		logger.Info("Starting scheduling cycle")
 		sched.Run(ctx)
 		cc.EventBroadcaster.Shutdown()

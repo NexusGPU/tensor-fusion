@@ -19,12 +19,12 @@ func NewGPUModelFilter(model string) *GPUModelFilter {
 }
 
 // Filter implements GPUFilter interface
-func (f *GPUModelFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []tfv1.GPU) ([]tfv1.GPU, error) {
+func (f *GPUModelFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []*tfv1.GPU) ([]*tfv1.GPU, error) {
 	if f.requiredModel == "" {
 		return gpus, nil
 	}
 
-	var filtered []tfv1.GPU
+	filtered := make([]*tfv1.GPU, 0, len(gpus))
 	for _, gpu := range gpus {
 		if gpu.Status.GPUModel == f.requiredModel {
 			filtered = append(filtered, gpu)

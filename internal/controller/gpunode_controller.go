@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -113,6 +114,21 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		// Return early since we've deleted the resource
 		return ctrl.Result{}, nil
+	}
+
+	// Support a some special case: when OS image shipped with Nvidia Driver, and Nvidia Operator override it
+	// Need wait device-plugin to be ready and K8S Node GPU resource to be allocatable,
+	// so that to avoid potential version mismatch issues from nvidia container toolkit mounted libs
+	if os.Getenv(constants.RunHypervisorUtilGPUAllocatable) == constants.TrueStringValue {
+		if len(coreNode.Status.Allocatable) > 0 {
+			if _, ok := coreNode.Status.Allocatable[constants.NvidiaGPUKey]; !ok {
+				log.Info("GPU resource not allocatable, wait allocatable to be set", "node", node.Name)
+				return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
+			}
+		} else {
+			log.Info("GPU resource not allocatable, node still in init phase", "node", node.Name)
+			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
+		}
 	}
 
 	if err := r.reconcileNodeDiscoveryJob(ctx, node, poolObj); err != nil {
@@ -372,6 +388,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 	}
 	spec.EnableServiceLinks = ptr.To(false)
 	spec.NodeName = node.Name
+	spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
 
 	// add must-have tensor-fusion hypervisor manifest
 	log.Info("adding must-have tensor-fusion hypervisor manifest", "node", node.Name)

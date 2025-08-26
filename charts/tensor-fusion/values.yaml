@@ -148,6 +148,10 @@ alert:
     limits:
       memory: 1Gi
       cpu: 1500m
+  persistence:
+    enabled: false
+    # storageClass: "gp3"
+    # size: 10Gi
   alertManagerConfig:
     global: {}
     receivers:
@@ -347,7 +351,7 @@ dynamicConfig:
     - name: NodeTFlopsAllocationCritical
       query: | 
         SELECT node, pool, (100 - avg(allocated_tflops_percent)) as tflops_available
-        FROM tf_node_resources
+        FROM tf_node_metrics
         WHERE {{ .Conditions }}
         GROUP BY node, pool
         HAVING tflops_available < {{ .Threshold }}
@@ -362,7 +366,7 @@ dynamicConfig:
     - name: NodeTFlopsAllocationWarning
       query: | 
         SELECT node, pool, (100 - avg(allocated_tflops_percent)) as tflops_available
-        FROM tf_node_resources
+        FROM tf_node_metrics
         WHERE {{ .Conditions }}
         GROUP BY node, pool
         HAVING tflops_available < {{ .Threshold }}
@@ -378,7 +382,7 @@ dynamicConfig:
     - name: PoolTotalTFlopsAllocationCritical
       query: |
         SELECT pool, (100 - avg(allocated_tflops_percent)) as tflops_available
-        FROM tf_node_resources
+        FROM tf_node_metrics
         WHERE {{ .Conditions }}
         GROUP BY pool
         HAVING tflops_available < {{ .Threshold }}
@@ -393,7 +397,7 @@ dynamicConfig:
     - name: PoolTotalTFlopsAllocationWarning
       query: |
         SELECT pool, (100 - avg(allocated_tflops_percent)) as tflops_available
-        FROM tf_node_resources
+        FROM tf_node_metrics
         WHERE {{ .Conditions }}
         GROUP BY pool
         HAVING tflops_available < {{ .Threshold }}
@@ -409,7 +413,7 @@ dynamicConfig:
     - name: NodeVRAMAllocationCritical
       query: |
         SELECT node, pool, (100 - avg(allocated_vram_percent)) as vram_available
-        FROM tf_node_resources
+        FROM tf_node_metrics
         WHERE {{ .Conditions }}
         GROUP BY node, pool
         HAVING vram_available < {{ .Threshold }}
@@ -424,7 +428,7 @@ dynamicConfig:
     - name: NodeVRAMAllocationWarning
       query: |
         SELECT node, pool, (100 - avg(allocated_vram_percent)) as vram_available
-        FROM tf_node_resources
+        FROM tf_node_metrics
         WHERE {{ .Conditions }}
         GROUP BY node, pool
         HAVING vram_available < {{ .Threshold }}
@@ -440,7 +444,7 @@ dynamicConfig:
     - name: PoolVRAMAllocationWarning
       query: |
         SELECT pool, (100 - avg(allocated_vram_percent)) as vram_available
-        FROM tf_node_resources
+        FROM tf_node_metrics
         WHERE {{ .Conditions }}
         GROUP BY pool
         HAVING vram_available < {{ .Threshold }}
@@ -456,7 +460,7 @@ dynamicConfig:
     - name: EmptyGPU
       query: |
         SELECT DISTINCT node 
-        FROM tf_node_resources 
+        FROM tf_node_metrics 
         WHERE {{ .Conditions }} AND node NOT IN (
             SELECT DISTINCT node 
             FROM tf_worker_usage 

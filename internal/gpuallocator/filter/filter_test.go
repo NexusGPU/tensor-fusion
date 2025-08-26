@@ -19,7 +19,7 @@ var testPodKey = tfv1.NameNamespace{
 func TestFilters(t *testing.T) {
 
 	// Create test GPUs
-	gpus := []tfv1.GPU{
+	gpus := []*tfv1.GPU{
 		{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "gpu-1",
@@ -162,7 +162,7 @@ func (f *CustomFilter) Filter(_ context.Context, gpus []tfv1.GPU) ([]tfv1.GPU, e
 
 func TestSameNodeFilter(t *testing.T) {
 	// Create test GPUs with different node labels
-	gpus := []tfv1.GPU{
+	gpus := []*tfv1.GPU{
 		{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "gpu-1",

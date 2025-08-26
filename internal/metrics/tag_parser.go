@@ -13,7 +13,7 @@ const (
 	CREATE_TABLE_OPTION_TPL = "ENGINE=mito WITH( ttl='%s', merge_mode = 'last_non_null')"
 )
 
-func getInitTableSQL(model schema.Tabler, ttl string) string {
+func GetInitTableSQL(model schema.Tabler, ttl string) string {
 	// Use reflection to get the struct fields and their gorm tags
 	t := reflect.TypeOf(model)
 	if t.Kind() == reflect.Ptr {
