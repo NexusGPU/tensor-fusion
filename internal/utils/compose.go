@@ -12,6 +12,7 @@ import (
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 )
 
@@ -499,6 +500,35 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 	}
 	if len(spec.Containers[0].Resources.Limits) == 0 {
 		spec.Containers[0].Resources.Limits = hypervisorDefaultLimits
+	}
+
+	if spec.Containers[0].LivenessProbe == nil {
+		spec.Containers[0].LivenessProbe = &v1.Probe{
+			ProbeHandler: v1.ProbeHandler{
+				HTTPGet: &v1.HTTPGetAction{
+					Path: "/healthz",
+					Port: intstr.FromInt(int(port)),
+				},
+			},
+			InitialDelaySeconds: 15,
+			PeriodSeconds:       20,
+			TimeoutSeconds:      5,
+			FailureThreshold:    5,
+		}
+	}
+	if spec.Containers[0].ReadinessProbe == nil {
+		spec.Containers[0].ReadinessProbe = &v1.Probe{
+			ProbeHandler: v1.ProbeHandler{
+				HTTPGet: &v1.HTTPGetAction{
+					Path: "/readyz",
+					Port: intstr.FromInt(int(port)),
+				},
+			},
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       15,
+			TimeoutSeconds:      5,
+			FailureThreshold:    2,
+		}
 	}
 
 	// TODO HypervisorVerifyServiceAccountEnabledEnvVar and Public Key
