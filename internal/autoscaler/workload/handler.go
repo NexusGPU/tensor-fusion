@@ -47,34 +47,32 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 }
 
 func (h *handler) ApplyResourcesToWorkload(ctx context.Context, workload *State, targetRes *tfv1.Resources) error {
-	if err := h.updateAutoScalingAnnotations(ctx, workload, targetRes); err != nil {
+	if workload.IsAutoSetResourcesEnabled() {
+		workerList := &corev1.PodList{}
+		if err := h.List(ctx, workerList,
+			client.InNamespace(workload.Namespace),
+			client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
+			return fmt.Errorf("failed to list workers: %v", err)
+		}
+
+		for _, worker := range workerList.Items {
+			if !worker.DeletionTimestamp.IsZero() {
+				continue
+			}
+			if err := h.applyResourcesToWorker(ctx, workload, &worker, targetRes); err != nil {
+				return fmt.Errorf("failed to update worker %s resources: %v", worker.Name, err)
+			}
+		}
+	}
+
+	if err := h.updateWorkload(ctx, workload, targetRes); err != nil {
 		return fmt.Errorf("failed to update auto scaling annotations: %v", err)
-	}
-
-	if !workload.IsAutoSetResourcesEnabled() {
-		return nil
-	}
-
-	workerList := &corev1.PodList{}
-	if err := h.List(ctx, workerList,
-		client.InNamespace(workload.Namespace),
-		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
-		return fmt.Errorf("failed to list workers: %v", err)
-	}
-
-	for _, worker := range workerList.Items {
-		if !worker.DeletionTimestamp.IsZero() {
-			continue
-		}
-		if err := h.applyResourcesToWorker(ctx, workload, &worker, targetRes); err != nil {
-			return fmt.Errorf("failed to update worker %s resources: %v", worker.Name, err)
-		}
 	}
 
 	return nil
 }
 
-func (h *handler) updateAutoScalingAnnotations(
+func (h *handler) updateWorkload(
 	ctx context.Context,
 	state *State,
 	targetRes *tfv1.Resources) error {
@@ -87,10 +85,15 @@ func (h *handler) updateAutoScalingAnnotations(
 		workload.Annotations = map[string]string{}
 	}
 	patch := client.MergeFrom(workload.DeepCopy())
-	maps.Copy(workload.Annotations, utils.CurrentResourcesToAnnotations(targetRes))
+	maps.Copy(workload.Annotations, utils.GPUResourcesToAnnotations(targetRes))
 	maps.Copy(workload.Annotations, state.ScalingAnnotations)
 	if err := h.Patch(ctx, workload, patch); err != nil {
 		return fmt.Errorf("failed to patch workload %s: %v", workload.Name, err)
+	}
+
+	workload.Status.Recommendation = *targetRes
+	if err := h.Status().Patch(ctx, workload, patch); err != nil {
+		return fmt.Errorf("failed to patch workload status %s: %v", workload.Name, err)
 	}
 
 	state.Annotations = workload.Annotations
@@ -100,7 +103,7 @@ func (h *handler) updateAutoScalingAnnotations(
 func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, worker *corev1.Pod, targetRes *tfv1.Resources) error {
 	log := log.FromContext(ctx)
 
-	curRes, err := utils.CurrentResourcesFromAnnotations(worker.Annotations)
+	curRes, err := utils.GPUResourcesFromAnnotations(worker.Annotations)
 	if err != nil {
 		return fmt.Errorf("failed to get current worker resources: %v", err)
 	}
@@ -108,7 +111,7 @@ func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, w
 		return nil
 	}
 
-	annotationsToUpdate := utils.CurrentResourcesToAnnotations(targetRes)
+	annotationsToUpdate := utils.GPUResourcesToAnnotations(targetRes)
 	if !workload.ShouldScaleResource(tfv1.ResourceTflops) {
 		delete(annotationsToUpdate, constants.TFLOPSRequestAnnotation)
 		delete(annotationsToUpdate, constants.TFLOPSLimitAnnotation)
@@ -122,12 +125,8 @@ func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, w
 		return nil
 	}
 
-	isScaleUp := false
-	if _, ok := annotationsToUpdate[constants.TFLOPSRequestAnnotation]; ok {
-		isScaleUp = targetRes.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0
-	} else {
-		isScaleUp = targetRes.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
-	}
+	isScaleUp := targetRes.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
+		targetRes.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
 
 	adjustRequest := &tfv1.AdjustRequest{
 		PodUID:     string(worker.UID),
@@ -138,7 +137,7 @@ func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, w
 	if _, err := h.allocator.AdjustAllocation(ctx, *adjustRequest, true); err != nil {
 		return fmt.Errorf("failed to adjust allocation: %v", err)
 	}
-	log.Info("adjust allocation successfully", "worker", worker.Name, "adjustRequest", adjustRequest)
+	log.Info("adjust allocation successfully", "worker", worker.Name, "currentResources", curRes, "adjustRequest", adjustRequest)
 
 	patch := client.MergeFrom(worker.DeepCopy())
 	maps.Copy(worker.Annotations, annotationsToUpdate)

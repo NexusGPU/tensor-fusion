@@ -38,14 +38,14 @@ type Resources struct {
 	Limits   Resource `json:"limits"`
 }
 
-func (r *Resources) Equal(t *Resources) bool {
-	return r.Requests.Tflops.Equal(t.Requests.Tflops) &&
-		r.Requests.Vram.Equal(t.Requests.Vram) &&
-		r.Limits.Tflops.Equal(t.Limits.Tflops) &&
-		r.Limits.Vram.Equal(t.Limits.Vram)
+func (r Resources) Equal(target *Resources) bool {
+	return r.Requests.Tflops.Equal(target.Requests.Tflops) &&
+		r.Requests.Vram.Equal(target.Requests.Vram) &&
+		r.Limits.Tflops.Equal(target.Limits.Tflops) &&
+		r.Limits.Vram.Equal(target.Limits.Vram)
 }
 
-func (r *Resources) IsZero() bool {
+func (r Resources) IsZero() bool {
 	return r.Requests.Tflops.IsZero() &&
 		r.Requests.Vram.IsZero() &&
 		r.Limits.Tflops.IsZero() &&

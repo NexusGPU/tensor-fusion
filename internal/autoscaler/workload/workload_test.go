@@ -60,7 +60,7 @@ var _ = Describe("Workload", func() {
 				Vram:   resource.MustParse("16Gi"),
 			},
 		}
-		ws.Annotations = utils.CurrentResourcesToAnnotations(&expect)
+		ws.Annotations = utils.GPUResourcesToAnnotations(&expect)
 		got, _ := ws.GetCurrentResourcesSpec()
 		Expect(got.Equal(&expect))
 	})
