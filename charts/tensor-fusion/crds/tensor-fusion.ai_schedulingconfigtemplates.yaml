@@ -194,14 +194,6 @@ spec:
                         name:
                           description: Name is the identifier for the cron scaler.
                           type: string
-                        replicasMultiplier:
-                          description: ReplicasMultiplier is a string representing
-                            the multiplier to apply to replicas.
-                          type: string
-                        resourceMultiplier:
-                          description: ResourceMultiplier is a string representing
-                            the multiplier to apply to resources.
-                          type: string
                         start:
                           description: Start is the start time for the scaling schedule,
                             in cron format.

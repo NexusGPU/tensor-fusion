@@ -112,12 +112,8 @@ type CronScalingRule struct {
 	End string `json:"end,omitempty"`
 	// DesiredResources specifies the target resources to scale to during the schedule.
 	DesiredResources Resources `json:"desiredResources,omitempty"`
-	// ResourceMultiplier is a string representing the multiplier to apply to resources.
-	ResourceMultiplier string `json:"resourceMultiplier,omitempty"`
 	// DesiredReplicas is the target number of replicas during the schedule.
 	DesiredReplicas *int32 `json:"desiredReplicas,omitempty"`
-	// ReplicasMultiplier is a string representing the multiplier to apply to replicas.
-	ReplicasMultiplier string `json:"replicasMultiplier,omitempty"`
 }
 
 type AutoSetResources struct {
