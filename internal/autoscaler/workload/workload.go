@@ -34,7 +34,7 @@ func (w *State) GetResourcesSpec() *tfv1.Resources {
 }
 
 func (w *State) GetCurrentResourcesSpec() (*tfv1.Resources, error) {
-	resources, err := utils.CurrentResourcesFromAnnotations(w.Annotations)
+	resources, err := utils.GPUResourcesFromAnnotations(w.Annotations)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get resources from annotations: %v", err)
 	}

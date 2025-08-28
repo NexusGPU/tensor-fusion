@@ -52,21 +52,21 @@ func getResourcesFromRecommendations(recommendations map[string]*Recommendation)
 	}
 
 	if result.IsZero() ||
-		result.Requests.Tflops.Cmp(minRes.Requests.Tflops) < 0 ||
-		result.Requests.Vram.Cmp(minRes.Requests.Vram) < 0 {
+		(result.Requests.Tflops.Cmp(minRes.Requests.Tflops) < 0 &&
+			result.Requests.Vram.Cmp(minRes.Requests.Vram) < 0) {
 		return nil
 	}
 
 	return result
 }
 
-func mergeResourcesByLargerRequests(s *tfv1.Resources, t *tfv1.Resources) {
-	if s.Requests.Tflops.Cmp(t.Requests.Tflops) < 0 {
-		s.Requests.Tflops = t.Requests.Tflops
-		s.Limits.Tflops = t.Limits.Tflops
+func mergeResourcesByLargerRequests(src *tfv1.Resources, target *tfv1.Resources) {
+	if src.Requests.Tflops.Cmp(target.Requests.Tflops) < 0 {
+		src.Requests.Tflops = target.Requests.Tflops
+		src.Limits.Tflops = target.Limits.Tflops
 	}
-	if s.Requests.Vram.Cmp(t.Requests.Vram) < 0 {
-		s.Requests.Vram = t.Requests.Vram
-		s.Limits.Vram = t.Limits.Vram
+	if src.Requests.Vram.Cmp(target.Requests.Vram) < 0 {
+		src.Requests.Vram = target.Requests.Vram
+		src.Limits.Vram = target.Limits.Vram
 	}
 }

@@ -157,6 +157,7 @@ var _ = Describe("Autoscaler", func() {
 			defer tfEnv.Cleanup()
 			go mockSchedulerLoop(ctx, cfg)
 			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
+			verifyGpuStatus(tfEnv)
 			defer deleteWorkload(workload)
 
 			scaler, _ := NewAutoscaler(k8sClient, allocator)
@@ -178,17 +179,11 @@ var _ = Describe("Autoscaler", func() {
 			}
 
 			scaler.processWorkloads(ctx)
-			Eventually(func(g Gomega) {
-				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&targetRes)).To(BeTrue())
-			}).Should(Succeed())
+			verifyRecommendationStatus(workload, &targetRes)
 
 			// Upon reprocessing the workload, it should skip resource updates
 			scaler.processWorkloads(ctx)
-			Consistently(func(g Gomega) {
-				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&targetRes)).To(BeTrue())
-			}).Should(Succeed())
+			verifyRecommendationStatusConsistently(workload, &targetRes)
 		})
 
 		It("should update resources based on auto scaling config", func() {
@@ -224,10 +219,7 @@ var _ = Describe("Autoscaler", func() {
 			// verify IsAutoScalingEnabled
 			workloadState.Spec.AutoScalingConfig.AutoSetResources.Enable = false
 			scaler.processWorkloads(ctx)
-			Eventually(func(g Gomega) {
-				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&oldRes)).To(BeTrue())
-			}).Should(Succeed())
+			verifyWorkerResources(workload, &oldRes)
 
 			// verify IsTargetResource
 			workloadState.Spec.AutoScalingConfig.AutoSetResources.Enable = true
@@ -243,10 +235,7 @@ var _ = Describe("Autoscaler", func() {
 					Vram:   resource.MustParse("16Gi"),
 				},
 			}
-			Eventually(func(g Gomega) {
-				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&expect)).To(BeTrue())
-			}).Should(Succeed())
+			verifyWorkerResources(workload, &expect)
 		})
 
 		It("should not update resources if recommended resources exceeded quota", func() {
@@ -279,10 +268,7 @@ var _ = Describe("Autoscaler", func() {
 			workloadState := scaler.workloads[workload.Name]
 			oldRes := workloadState.Spec.Resources
 			scaler.processWorkloads(ctx)
-			Eventually(func(g Gomega) {
-				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&oldRes)).To(BeTrue())
-			}).Should(Succeed())
+			verifyWorkerResources(workload, &oldRes)
 		})
 
 		It("should update resources based on cron scaling rule", func() {
@@ -320,10 +306,7 @@ var _ = Describe("Autoscaler", func() {
 				},
 			}
 			scaler.processWorkloads(ctx)
-			Eventually(func(g Gomega) {
-				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&resourcesInRule)).To(BeTrue())
-			}).Should(Succeed())
+			verifyRecommendationStatus(workload, &resourcesInRule)
 
 			// invalidate the rule by updating start and end fields
 			workloadState.Spec.AutoScalingConfig.CronScalingRules = []tfv1.CronScalingRule{
@@ -338,17 +321,11 @@ var _ = Describe("Autoscaler", func() {
 
 			scaler.processWorkloads(ctx)
 			originalResources := workloadState.Spec.Resources
-			Eventually(func(g Gomega) {
-				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&originalResources)).To(BeTrue())
-			}).Should(Succeed())
+			verifyRecommendationStatus(workload, &originalResources)
 
 			// should not change after cron scaling finish
 			scaler.processWorkloads(ctx)
-			Eventually(func(g Gomega) {
-				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&originalResources)).To(BeTrue())
-			}).Should(Succeed())
+			verifyRecommendationStatus(workload, &originalResources)
 		})
 
 		It("should not scale down when merging recommendations during active cron scaling progress", func() {
@@ -385,10 +362,7 @@ var _ = Describe("Autoscaler", func() {
 			}
 
 			scaler.processWorkloads(ctx)
-			Eventually(func(g Gomega) {
-				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&resourcesInRule)).To(BeTrue())
-			}).Should(Succeed())
+			verifyRecommendationStatus(workload, &resourcesInRule)
 
 			fakeRes := tfv1.Resources{
 				Requests: tfv1.Resource{
@@ -404,10 +378,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &fakeRes})
 
 			scaler.processWorkloads(ctx)
-			Consistently(func(g Gomega) {
-				res, _ := utils.CurrentResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
-				g.Expect(res.Equal(&resourcesInRule)).To(BeTrue())
-			}).Should(Succeed())
+			verifyRecommendationStatusConsistently(workload, &resourcesInRule)
 		})
 	})
 })
@@ -459,8 +430,18 @@ func createWorkload(pool *tfv1.GPUPool, id int, replicas int) *tfv1.TensorFusion
 	}).Should(Succeed())
 
 	checkWorkerPodCount(workload)
-
 	return workload
+}
+
+func verifyGpuStatus(tfEnv *TensorFusionEnv) {
+	Eventually(func(g Gomega) bool {
+		gpuList := tfEnv.GetPoolGpuList(0)
+		ok := false
+		_, ok = lo.Find(gpuList.Items, func(gpu tfv1.GPU) bool {
+			return gpu.Status.Available.Tflops.Equal(resource.MustParse("1990")) && gpu.Status.Available.Vram.Equal(resource.MustParse("1992Gi"))
+		})
+		return ok
+	}).Should(BeTrue())
 }
 
 func checkWorkerPodCount(workload *tfv1.TensorFusionWorkload) {
@@ -488,8 +469,6 @@ func getWorkers(workload *tfv1.TensorFusionWorkload) []*corev1.Pod {
 		return &pod
 	})
 }
-
-type FakeAllocator struct{}
 
 type FakeMetricsProvider struct {
 	Metrics []*metrics.WorkerUsage
@@ -532,6 +511,36 @@ func (f *FakeRecommender) Recommend(ctx context.Context, workoad *workload.State
 	return &recommender.Recommendation{
 		Resources: *f.Resources,
 	}, nil
+}
+
+func verifyWorkerResources(workload *tfv1.TensorFusionWorkload, expectedRes *tfv1.Resources) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		res, _ := utils.GPUResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
+		g.Expect(res.Equal(expectedRes)).To(BeTrue())
+	}).Should(Succeed())
+}
+
+func verifyRecommendationStatus(workload *tfv1.TensorFusionWorkload, expectedRes *tfv1.Resources) {
+	GinkgoHelper()
+	key := client.ObjectKeyFromObject(workload)
+	Eventually(func(g Gomega) {
+		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
+		g.Expect(workload.Status.Recommendation.Equal(expectedRes)).To(BeTrue())
+		res, _ := utils.GPUResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
+		g.Expect(res.Equal(expectedRes)).To(BeTrue())
+	}).Should(Succeed())
+}
+
+func verifyRecommendationStatusConsistently(workload *tfv1.TensorFusionWorkload, expectedRes *tfv1.Resources) {
+	GinkgoHelper()
+	key := client.ObjectKeyFromObject(workload)
+	Consistently(func(g Gomega) {
+		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
+		g.Expect(workload.Status.Recommendation.Equal(expectedRes)).To(BeTrue())
+		res, _ := utils.GPUResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
+		g.Expect(res.Equal(expectedRes)).To(BeTrue())
+	}).Should(Succeed())
 }
 
 func updateWorkloadReplicas(workload *tfv1.TensorFusionWorkload, replicas int) {

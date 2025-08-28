@@ -65,6 +65,10 @@ type TensorFusionWorkloadStatus struct {
 
 	// Hash of the pod template used to create worker pods
 	PodTemplateHash string `json:"podTemplateHash,omitempty"`
+
+	// The most recently GPU resources recommended by the autoscaler
+	// +optional
+	Recommendation Resources `json:"recommendation,omitempty"`
 }
 
 // +kubebuilder:object:root=true

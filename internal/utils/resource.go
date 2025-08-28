@@ -8,7 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-func CurrentResourcesFromAnnotations(annotations map[string]string) (*tfv1.Resources, error) {
+func GPUResourcesFromAnnotations(annotations map[string]string) (*tfv1.Resources, error) {
 	result := tfv1.Resources{}
 	resInfo := []struct {
 		key string
@@ -38,7 +38,7 @@ func CurrentResourcesFromAnnotations(annotations map[string]string) (*tfv1.Resou
 	return &result, nil
 }
 
-func CurrentResourcesToAnnotations(resources *tfv1.Resources) map[string]string {
+func GPUResourcesToAnnotations(resources *tfv1.Resources) map[string]string {
 	return map[string]string{
 		constants.TFLOPSRequestAnnotation: resources.Requests.Tflops.String(),
 		constants.TFLOPSLimitAnnotation:   resources.Limits.Tflops.String(),
