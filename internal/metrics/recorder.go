@@ -387,6 +387,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("total_allocation_success_cnt", successCount)
 		enc.AddField("total_scale_up_cnt", scaleUpCount)
 		enc.AddField("total_scale_down_cnt", scaleDownCount)
+		enc.EndLine(now)
 	}
 
 	// Additional Pool level metrics
