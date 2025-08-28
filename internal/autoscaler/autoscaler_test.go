@@ -150,20 +150,21 @@ var _ = Describe("Autoscaler", func() {
 	})
 
 	Context("when processing workloads", func() {
-		It("should scale up when the recommended resources exceed the current allocation", func() {
-			tfEnv := NewTensorFusionEnvBuilder().
+		var tfEnv *TensorFusionEnv
+		var workload *tfv1.TensorFusionWorkload
+		var scaler *Autoscaler
+		var targetRes tfv1.Resources
+		BeforeEach(func() {
+			tfEnv = NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
-			defer tfEnv.Cleanup()
 			go mockSchedulerLoop(ctx, cfg)
-			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
+			workload = createWorkload(tfEnv.GetGPUPool(0), 0, 1)
 			verifyGpuStatus(tfEnv)
-			defer deleteWorkload(workload)
 
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
+			scaler, _ = NewAutoscaler(k8sClient, allocator)
 			scaler.loadWorkloads(ctx)
-
-			targetRes := tfv1.Resources{
+			targetRes = tfv1.Resources{
 				Requests: tfv1.Resource{
 					Tflops: resource.MustParse("110"),
 					Vram:   resource.MustParse("110Gi"),
@@ -173,11 +174,13 @@ var _ = Describe("Autoscaler", func() {
 					Vram:   resource.MustParse("110Gi"),
 				},
 			}
-
-			scaler.recommenders[0] = &FakeRecommender{
-				Resources: &targetRes,
-			}
-
+		})
+		AfterEach(func() {
+			deleteWorkload(workload)
+			tfEnv.Cleanup()
+		})
+		It("should scale up when the recommended resources exceed the current allocation", func() {
+			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &targetRes})
 			scaler.processWorkloads(ctx)
 			verifyRecommendationStatus(workload, &targetRes)
 
@@ -187,32 +190,7 @@ var _ = Describe("Autoscaler", func() {
 		})
 
 		It("should update resources based on auto scaling config", func() {
-			tfEnv := NewTensorFusionEnvBuilder().
-				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
-				Build()
-			defer tfEnv.Cleanup()
-			go mockSchedulerLoop(ctx, cfg)
-			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
-			defer deleteWorkload(workload)
-
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
-			scaler.loadWorkloads(ctx)
-
-			targetRes := tfv1.Resources{
-				Requests: tfv1.Resource{
-					Tflops: resource.MustParse("110"),
-					Vram:   resource.MustParse("110Gi"),
-				},
-				Limits: tfv1.Resource{
-					Tflops: resource.MustParse("110"),
-					Vram:   resource.MustParse("110Gi"),
-				},
-			}
-
-			scaler.recommenders[0] = &FakeRecommender{
-				Resources: &targetRes,
-			}
-
+			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &targetRes})
 			workloadState := scaler.workloads[workload.Name]
 			oldRes := workloadState.Spec.Resources
 
@@ -239,18 +217,7 @@ var _ = Describe("Autoscaler", func() {
 		})
 
 		It("should not update resources if recommended resources exceeded quota", func() {
-			tfEnv := NewTensorFusionEnvBuilder().
-				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
-				Build()
-			defer tfEnv.Cleanup()
-			go mockSchedulerLoop(ctx, cfg)
-			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
-			defer deleteWorkload(workload)
-
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
-			scaler.loadWorkloads(ctx)
-
-			rec := tfv1.Resources{
+			excessiveRes := tfv1.Resources{
 				Requests: tfv1.Resource{
 					Tflops: resource.MustParse("9999"),
 					Vram:   resource.MustParse("9999Gi"),
@@ -261,9 +228,7 @@ var _ = Describe("Autoscaler", func() {
 				},
 			}
 
-			scaler.recommenders[0] = &FakeRecommender{
-				Resources: &rec,
-			}
+			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &excessiveRes})
 
 			workloadState := scaler.workloads[workload.Name]
 			oldRes := workloadState.Spec.Resources
@@ -272,27 +237,15 @@ var _ = Describe("Autoscaler", func() {
 		})
 
 		It("should update resources based on cron scaling rule", func() {
-			tfEnv := NewTensorFusionEnvBuilder().
-				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
-				Build()
-			defer tfEnv.Cleanup()
-			go mockSchedulerLoop(ctx, cfg)
-			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
-			defer deleteWorkload(workload)
-
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
-			scaler.loadWorkloads(ctx)
-
 			workloadState := scaler.workloads[workload.Name]
-
 			resourcesInRule := tfv1.Resources{
 				Requests: tfv1.Resource{
-					Tflops: resource.MustParse("110"),
-					Vram:   resource.MustParse("110Gi"),
+					Tflops: resource.MustParse("120"),
+					Vram:   resource.MustParse("120Gi"),
 				},
 				Limits: tfv1.Resource{
-					Tflops: resource.MustParse("110"),
-					Vram:   resource.MustParse("110Gi"),
+					Tflops: resource.MustParse("120"),
+					Vram:   resource.MustParse("120Gi"),
 				},
 			}
 
@@ -329,17 +282,6 @@ var _ = Describe("Autoscaler", func() {
 		})
 
 		It("should not scale down when merging recommendations during active cron scaling progress", func() {
-			tfEnv := NewTensorFusionEnvBuilder().
-				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
-				Build()
-			defer tfEnv.Cleanup()
-			go mockSchedulerLoop(ctx, cfg)
-			workload := createWorkload(tfEnv.GetGPUPool(0), 0, 1)
-			defer deleteWorkload(workload)
-
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
-			scaler.loadWorkloads(ctx)
-
 			workloadState := scaler.workloads[workload.Name]
 			resourcesInRule := tfv1.Resources{
 				Requests: tfv1.Resource{
@@ -592,7 +534,6 @@ func cleanupWorkload(key client.ObjectKey) {
 		g.Expect(err).Should(HaveOccurred())
 	}).Should(Succeed())
 }
-
 func mockSchedulerLoop(ctx context.Context, cfg *rest.Config) {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	clientset, err := kubernetes.NewForConfig(cfg)
@@ -619,11 +560,8 @@ func mockSchedulerLoop(ctx context.Context, cfg *rest.Config) {
 func scheduleAndStartPod(pod *corev1.Pod, clientset *kubernetes.Clientset) {
 	// simulate scheduling cycle Filter and Reserve
 	allocRequest, _, err := allocator.ComposeAllocationRequest(pod)
-	if errors.IsNotFound(err) {
-		return
-	}
 	Expect(err).To(Succeed())
-	gpus, err := allocator.Alloc(&allocRequest)
+	gpus, err := allocator.Alloc(allocRequest)
 	if err != nil {
 		// some test cases are expected to fail, just continue
 		return
@@ -646,7 +584,7 @@ func scheduleAndStartPod(pod *corev1.Pod, clientset *kubernetes.Clientset) {
 		if latestPod.Annotations == nil {
 			latestPod.Annotations = map[string]string{}
 		}
-		latestPod.Annotations[constants.GpuKey] = strings.Join(
+		latestPod.Annotations[constants.GPUDeviceIDsAnnotation] = strings.Join(
 			lo.Map(gpus, func(gpu *tfv1.GPU, _ int) string {
 				return gpu.Name
 			}), ",")
