@@ -62,7 +62,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler, _ := NewAutoscaler(k8sClient, allocator)
 			scaler.metricsProvider = &FakeMetricsProvider{}
 			scaler.loadHistoryMetrics(ctx)
-			metrics, _ := scaler.metricsProvider.GetHistoryMetrics()
+			metrics, _ := scaler.metricsProvider.GetHistoryMetrics(ctx)
 			for _, m := range metrics {
 				Expect(scaler.workloads).To(HaveKey(m.WorkloadName))
 				Expect(scaler.workloads[m.WorkloadName].Workers).To(HaveKey(m.WorkerName))
@@ -175,11 +175,13 @@ var _ = Describe("Autoscaler", func() {
 				},
 			}
 		})
+
 		AfterEach(func() {
 			deleteWorkload(workload)
 			tfEnv.Cleanup()
 		})
-		It("should scale up when the recommended resources exceed the current allocation", func() {
+
+		It("should scale up if the recommended resources exceed the current allocation", func() {
 			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &targetRes})
 			scaler.processWorkloads(ctx)
 			verifyRecommendationStatus(workload, &targetRes)
@@ -416,11 +418,11 @@ type FakeMetricsProvider struct {
 	Metrics []*metrics.WorkerUsage
 }
 
-func (f *FakeMetricsProvider) GetWorkersMetrics() ([]*metrics.WorkerUsage, error) {
+func (f *FakeMetricsProvider) GetWorkersMetrics(ctx context.Context) ([]*metrics.WorkerUsage, error) {
 	return f.Metrics, nil
 }
 
-func (f *FakeMetricsProvider) GetHistoryMetrics() ([]*metrics.WorkerUsage, error) {
+func (f *FakeMetricsProvider) GetHistoryMetrics(ctx context.Context) ([]*metrics.WorkerUsage, error) {
 	sample := []*metrics.WorkerUsage{}
 	startTime := time.Now().Add(-8 * 24 * time.Hour)
 	for day := 0; day < 8; day++ {

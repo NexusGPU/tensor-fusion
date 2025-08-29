@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"regexp"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 )
 
 var _ = Describe("MetricsProvider", func() {
+	ctx := context.Background()
 	Context("when getting real time workers metrics", func() {
 		It("should return metrics for every worker", func() {
 			db, mock := NewMockDB()
@@ -42,7 +44,7 @@ var _ = Describe("MetricsProvider", func() {
 			mock.ExpectQuery(regexp.QuoteMeta("SELECT workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, max(ts) as ts FROM `tf_worker_usage` WHERE ts > ? and ts <= ? GROUP BY workload, worker ORDER BY ts asc")).
 				WillReturnRows(rows)
 			provider := &greptimeDBProvider{db: db}
-			got, _ := provider.GetWorkersMetrics()
+			got, _ := provider.GetWorkersMetrics(ctx)
 			Expect(got).To(HaveLen(2))
 			Expect(got[0].WorkloadName).To(Equal(fakeMetrics[0].WorkloadName))
 			Expect(got[0].WorkerName).To(Equal(fakeMetrics[0].WorkerName))
@@ -87,7 +89,7 @@ var _ = Describe("MetricsProvider", func() {
 			mock.ExpectQuery(regexp.QuoteMeta("SELECT workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window FROM `tf_worker_usage` WHERE ts > ? and ts <= ? GROUP BY workload, worker, time_window ORDER BY time_window asc")).
 				WillReturnRows(rows)
 			provider := &greptimeDBProvider{db: db}
-			got, _ := provider.GetHistoryMetrics()
+			got, _ := provider.GetHistoryMetrics(ctx)
 			Expect(got).To(HaveLen(2))
 			Expect(got[0].WorkloadName).To(Equal(fakeMetrics[0].WorkloadName))
 			Expect(got[0].WorkerName).To(Equal(fakeMetrics[0].WorkerName))
