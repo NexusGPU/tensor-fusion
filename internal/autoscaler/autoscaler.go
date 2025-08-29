@@ -40,6 +40,11 @@ func NewAutoscaler(c client.Client, allocator *gpuallocator.GpuAllocator) (*Auto
 		return nil, errors.New("must specify allocator")
 	}
 
+	metricsProvider, err := metrics.NewProvider()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create metrics provider: %v", err)
+	}
+
 	recommenders := []recommender.Interface{
 		recommender.NewPercentileRecommender(),
 		recommender.NewCronRecommender(),
@@ -48,7 +53,7 @@ func NewAutoscaler(c client.Client, allocator *gpuallocator.GpuAllocator) (*Auto
 	return &Autoscaler{
 		Client:          c,
 		allocator:       allocator,
-		metricsProvider: metrics.NewProvider(nil),
+		metricsProvider: metricsProvider,
 		recommenders:    recommenders,
 		workloadHandler: workload.NewHandler(c, allocator),
 		workloads:       map[string]*workload.State{},
@@ -59,10 +64,7 @@ func (s *Autoscaler) Start(ctx context.Context) error {
 	log := log.FromContext(ctx)
 	log.Info("Starting autoscaler")
 
-	// Handle timeout for loading historical metrics
-	historyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	s.loadHistoryMetrics(historyCtx)
+	s.loadHistoryMetrics(ctx)
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -122,7 +124,7 @@ func (s *Autoscaler) loadHistoryMetrics(ctx context.Context) {
 	log := log.FromContext(ctx)
 	log.Info("loading historical metrics")
 
-	workersMetrics, err := s.metricsProvider.GetHistoryMetrics()
+	workersMetrics, err := s.metricsProvider.GetHistoryMetrics(ctx)
 	if err != nil {
 		log.Error(err, "failed to get history metrics")
 		return
@@ -136,7 +138,7 @@ func (s *Autoscaler) loadRealTimeMetrics(ctx context.Context) {
 	log := log.FromContext(ctx)
 	log.Info("loading realtime metrics")
 
-	workersMetrics, err := s.metricsProvider.GetWorkersMetrics()
+	workersMetrics, err := s.metricsProvider.GetWorkersMetrics(ctx)
 	if err != nil {
 		log.Error(err, "failed to get workers metrics")
 		return

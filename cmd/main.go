@@ -30,6 +30,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/cmd/sched"
 	"github.com/NexusGPU/tensor-fusion/internal/alert"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaler"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -213,15 +214,12 @@ func main() {
 	alertEvaluatorReady = make(chan struct{})
 	setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
 
-	if autoScaleCanBeEnabled && enableAutoScale {
-		// TODO init auto scale module
-		setupLog.Info("auto scale enabled")
-	}
-
 	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, gpuPricingMap)
 
 	// Initialize GPU allocator and set up watches
 	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr)
+
+	startAutoScaler(mgr, allocator)
 
 	// Create pricing provider for webhook
 	pricingProvider := pricing.NewStaticPricingProvider()
@@ -597,6 +595,16 @@ func startMetricsRecorder(
 		go metricsRecorder.Start()
 	}
 	return metricsRecorder
+}
+
+func startAutoScaler(mgr manager.Manager, allocator *gpuallocator.GpuAllocator) {
+	if enableAutoScale {
+		setupLog.Info("auto scale enabled")
+		if err := autoscaler.SetupWithManager(mgr, allocator); err != nil {
+			setupLog.Error(err, "unable to start auto scaler")
+			os.Exit(1)
+		}
+	}
 }
 
 func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, gpuPricingMap map[string]float64) {
