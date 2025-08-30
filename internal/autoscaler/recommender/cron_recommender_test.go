@@ -25,7 +25,7 @@ var _ = Describe("CronRecommender", func() {
 	}
 
 	It("should return recommendation based on the active cron scaling rule", func() {
-		workload := workload.NewWorkloadState("test")
+		workload := workload.NewWorkloadState()
 		workload.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
 			CronScalingRules: []tfv1.CronScalingRule{
 				{
@@ -69,7 +69,7 @@ var _ = Describe("CronRecommender", func() {
 	})
 
 	It("should not return recommendation if there is no active cron scaling rule", func() {
-		workload := workload.NewWorkloadState("test")
+		workload := workload.NewWorkloadState()
 		workload.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
 			CronScalingRules: []tfv1.CronScalingRule{
 				{
@@ -88,7 +88,7 @@ var _ = Describe("CronRecommender", func() {
 	})
 
 	It("should not return recommendation if the active cron scaling rule remains unchanged", func() {
-		workload := workload.NewWorkloadState("test")
+		workload := workload.NewWorkloadState()
 		workload.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
 			CronScalingRules: []tfv1.CronScalingRule{
 				{
@@ -114,7 +114,7 @@ var _ = Describe("CronRecommender", func() {
 	})
 
 	It("should revert the resources to those specified in the workload spec if the active cron scaling finished", func() {
-		workload := workload.NewWorkloadState("test")
+		workload := workload.NewWorkloadState()
 		workload.Spec.Resources = tfv1.Resources{
 			Requests: tfv1.Resource{
 				Tflops: resource.MustParse("5"),
@@ -163,7 +163,7 @@ var _ = Describe("CronRecommender", func() {
 	})
 
 	It("should return error if getting multiple active rules", func() {
-		workload := workload.NewWorkloadState("test")
+		workload := workload.NewWorkloadState()
 		workload.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
 			CronScalingRules: []tfv1.CronScalingRule{
 				{

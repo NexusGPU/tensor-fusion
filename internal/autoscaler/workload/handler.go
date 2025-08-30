@@ -33,8 +33,10 @@ func NewHandler(client client.Client, allocator *gpuallocator.GpuAllocator) Hand
 
 func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload) {
 	workloadState.Namespace = workload.Namespace
+	workloadState.Name = workload.Name
 	workloadState.Spec = workload.Spec
 	workloadState.Annotations = workload.Annotations
+	workloadState.Status = workload.Status
 
 	workerList := &corev1.PodList{}
 	if err := h.List(ctx, workerList,

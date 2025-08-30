@@ -21,9 +21,8 @@ type State struct {
 	WorkerUsageAggregator *metrics.WorkerUsageAggregator
 }
 
-func NewWorkloadState(name string) *State {
+func NewWorkloadState() *State {
 	return &State{
-		Name:                  name,
 		Workers:               make(map[string]*WorkerState),
 		ScalingAnnotations:    make(map[string]string),
 		WorkerUsageAggregator: metrics.NewWorkerUsageAggregator(),
