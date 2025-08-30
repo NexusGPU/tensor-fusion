@@ -45,22 +45,27 @@ import (
 var _ = Describe("Autoscaler", func() {
 	Context("when creating an autoscaler", func() {
 		It("should return an error if there is no client", func() {
-			as, err := NewAutoscaler(nil, nil)
+			as, err := NewAutoscaler(nil, nil, nil)
 			Expect(as).To(BeNil())
 			Expect(err.Error()).To(ContainSubstring("must specify client"))
 		})
 
 		It("should return an error if there is no allocator", func() {
-			as, err := NewAutoscaler(k8sClient, nil)
+			as, err := NewAutoscaler(k8sClient, nil, nil)
 			Expect(as).To(BeNil())
 			Expect(err.Error()).To(ContainSubstring("must specify allocator"))
+		})
+
+		It("should return an error if there is no metrics provider", func() {
+			as, err := NewAutoscaler(k8sClient, allocator, nil)
+			Expect(as).To(BeNil())
+			Expect(err.Error()).To(ContainSubstring("must specify metricsProvider"))
 		})
 	})
 
 	Context("when loading history metrics", func() {
 		It("should create the state of workloads and workers based on historical metrics", func() {
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
-			scaler.metricsProvider = &FakeMetricsProvider{}
+			scaler, _ := NewAutoscaler(k8sClient, allocator, &FakeMetricsProvider{})
 			scaler.loadHistoryMetrics(ctx)
 			metrics, _ := scaler.metricsProvider.GetHistoryMetrics(ctx)
 			for _, m := range metrics {
@@ -77,7 +82,7 @@ var _ = Describe("Autoscaler", func() {
 				Build()
 			defer tfEnv.Cleanup()
 
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
+			scaler, _ := NewAutoscaler(k8sClient, allocator, &FakeMetricsProvider{})
 			scaler.loadWorkloads(ctx)
 			Expect(scaler.workloads).To(BeEmpty())
 
@@ -125,7 +130,7 @@ var _ = Describe("Autoscaler", func() {
 
 			worker := workers[0].Name
 
-			scaler, _ := NewAutoscaler(k8sClient, allocator)
+			scaler, _ := NewAutoscaler(k8sClient, allocator, &FakeMetricsProvider{})
 			scaler.loadWorkloads(ctx)
 			ws := scaler.workloads[workload.Name]
 			now := time.Now()
@@ -162,7 +167,7 @@ var _ = Describe("Autoscaler", func() {
 			workload = createWorkload(tfEnv.GetGPUPool(0), 0, 1)
 			verifyGpuStatus(tfEnv)
 
-			scaler, _ = NewAutoscaler(k8sClient, allocator)
+			scaler, _ = NewAutoscaler(k8sClient, allocator, &FakeMetricsProvider{})
 			scaler.loadWorkloads(ctx)
 			targetRes = tfv1.Resources{
 				Requests: tfv1.Resource{
