@@ -69,8 +69,9 @@ var _ = Describe("Autoscaler", func() {
 			scaler.loadHistoryMetrics(ctx)
 			metrics, _ := scaler.metricsProvider.GetHistoryMetrics(ctx)
 			for _, m := range metrics {
-				Expect(scaler.workloads).To(HaveKey(m.WorkloadName))
-				Expect(scaler.workloads[m.WorkloadName].Workers).To(HaveKey(m.WorkerName))
+				key := WorkloadID{m.Namespace, m.WorkloadName}
+				Expect(scaler.workloads).To(HaveKey(key))
+				Expect(scaler.workloads[key].Workers).To(HaveKey(m.WorkerName))
 			}
 		})
 	})
@@ -91,29 +92,31 @@ var _ = Describe("Autoscaler", func() {
 			// with two replias
 			workload0 := createWorkload(pool, 0, 2)
 			workload0Workers := getWorkers(workload0)
+			key0 := WorkloadID{workload0.Namespace, workload0.Name}
 			// with one replia
 			workload1 := createWorkload(pool, 1, 1)
 			workload1Workers := getWorkers(workload1)
+			key1 := WorkloadID{workload1.Namespace, workload1.Name}
 
 			scaler.loadWorkloads(ctx)
 			Expect(scaler.workloads).To(HaveLen(2))
-			Expect(scaler.workloads).To(HaveKey(workload0.Name))
-			Expect(scaler.workloads).To(HaveKey(workload1.Name))
-			workers := scaler.workloads[workload0.Name].Workers
+			Expect(scaler.workloads).To(HaveKey(key0))
+			Expect(scaler.workloads).To(HaveKey(key1))
+			workers := scaler.workloads[key0].Workers
 			Expect(workers).To(HaveLen(2))
 			Expect(workers).To(HaveKey(workload0Workers[0].Name))
 			Expect(workers).To(HaveKey(workload0Workers[1].Name))
-			Expect(scaler.workloads[workload1.Name].Workers).To(HaveKey(workload1Workers[0].Name))
+			Expect(scaler.workloads[key1].Workers).To(HaveKey(workload1Workers[0].Name))
 
 			updateWorkloadReplicas(workload0, 1)
 			scaler.loadWorkloads(ctx)
-			Expect(scaler.workloads[workload0.Name].Workers).To(HaveLen(1))
+			Expect(scaler.workloads[key0].Workers).To(HaveLen(1))
 
 			deleteWorkload(workload0)
 			deleteWorkload(workload1)
 			scaler.loadWorkloads(ctx)
-			Expect(scaler.workloads).NotTo(HaveKey(workload0.Name))
-			Expect(scaler.workloads).NotTo(HaveKey(workload1.Name))
+			Expect(scaler.workloads).NotTo(HaveKey(key0))
+			Expect(scaler.workloads).NotTo(HaveKey(key1))
 		})
 	})
 
@@ -126,15 +129,17 @@ var _ = Describe("Autoscaler", func() {
 			pool := tfEnv.GetGPUPool(0)
 			workload := createWorkload(pool, 0, 1)
 			workers := getWorkers(workload)
+			key := WorkloadID{workload.Namespace, workload.Name}
 			defer deleteWorkload(workload)
 
 			worker := workers[0].Name
 
 			scaler, _ := NewAutoscaler(k8sClient, allocator, &FakeMetricsProvider{})
 			scaler.loadWorkloads(ctx)
-			ws := scaler.workloads[workload.Name]
+			ws := scaler.workloads[key]
 			now := time.Now()
 			usage := &metrics.WorkerUsage{
+				Namespace:    workload.Namespace,
 				WorkloadName: workload.Name,
 				WorkerName:   worker,
 				TflopsUsage:  12.0,
@@ -145,7 +150,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler.metricsProvider = &FakeMetricsProvider{[]*metrics.WorkerUsage{usage}}
 			scaler.loadRealTimeMetrics(ctx)
 
-			scalerWorkers := scaler.workloads[workload.Name].Workers
+			scalerWorkers := scaler.workloads[key].Workers
 			Expect(scalerWorkers[worker].LastTflopsSampleTime).To(Equal(usage.Timestamp))
 			Expect(ws.WorkerUsageAggregator.TflopsHistogram.IsEmpty()).To(BeFalse())
 			Expect(scalerWorkers[worker].VramPeak).To(Equal(usage.VramUsage))
@@ -157,6 +162,7 @@ var _ = Describe("Autoscaler", func() {
 	Context("when processing workloads", func() {
 		var tfEnv *TensorFusionEnv
 		var workload *tfv1.TensorFusionWorkload
+		var key WorkloadID
 		var scaler *Autoscaler
 		var targetRes tfv1.Resources
 		BeforeEach(func() {
@@ -165,6 +171,7 @@ var _ = Describe("Autoscaler", func() {
 				Build()
 			go mockSchedulerLoop(ctx, cfg)
 			workload = createWorkload(tfEnv.GetGPUPool(0), 0, 1)
+			key = WorkloadID{workload.Namespace, workload.Name}
 			verifyGpuStatus(tfEnv)
 
 			scaler, _ = NewAutoscaler(k8sClient, allocator, &FakeMetricsProvider{})
@@ -198,7 +205,7 @@ var _ = Describe("Autoscaler", func() {
 
 		It("should update resources based on auto scaling config", func() {
 			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &targetRes})
-			workloadState := scaler.workloads[workload.Name]
+			workloadState := scaler.workloads[key]
 			oldRes := workloadState.Spec.Resources
 
 			// verify IsAutoScalingEnabled
@@ -237,14 +244,14 @@ var _ = Describe("Autoscaler", func() {
 
 			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &excessiveRes})
 
-			workloadState := scaler.workloads[workload.Name]
+			workloadState := scaler.workloads[key]
 			oldRes := workloadState.Spec.Resources
 			scaler.processWorkloads(ctx)
 			verifyWorkerResources(workload, &oldRes)
 		})
 
 		It("should update resources based on cron scaling rule", func() {
-			workloadState := scaler.workloads[workload.Name]
+			workloadState := scaler.workloads[key]
 			resourcesInRule := tfv1.Resources{
 				Requests: tfv1.Resource{
 					Tflops: resource.MustParse("120"),
@@ -289,7 +296,7 @@ var _ = Describe("Autoscaler", func() {
 		})
 
 		It("should not scale down when merging recommendations during active cron scaling progress", func() {
-			workloadState := scaler.workloads[workload.Name]
+			workloadState := scaler.workloads[key]
 			resourcesInRule := tfv1.Resources{
 				Requests: tfv1.Resource{
 					Tflops: resource.MustParse("110"),
@@ -412,7 +419,7 @@ func getWorkers(workload *tfv1.TensorFusionWorkload) []*corev1.Pod {
 	GinkgoHelper()
 	podList := &corev1.PodList{}
 	Expect(k8sClient.List(ctx, podList,
-		client.InNamespace("default"),
+		client.InNamespace(workload.Namespace),
 		client.MatchingLabels{constants.WorkloadKey: workload.Name})).Should(Succeed())
 	return lo.Map(podList.Items, func(pod corev1.Pod, _ int) *corev1.Pod {
 		return &pod

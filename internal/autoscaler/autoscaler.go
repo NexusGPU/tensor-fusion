@@ -22,13 +22,18 @@ var (
 	_ manager.LeaderElectionRunnable = (*Autoscaler)(nil)
 )
 
+type WorkloadID struct {
+	Namespace string
+	Name      string
+}
+
 type Autoscaler struct {
 	client.Client
 	allocator       *gpuallocator.GpuAllocator
 	metricsProvider metrics.Provider
 	recommenders    []recommender.Interface
 	workloadHandler workload.Handler
-	workloads       map[string]*workload.State
+	workloads       map[WorkloadID]*workload.State
 }
 
 func NewAutoscaler(c client.Client,
@@ -57,7 +62,7 @@ func NewAutoscaler(c client.Client,
 		metricsProvider: metricsProvider,
 		recommenders:    recommenders,
 		workloadHandler: workload.NewHandler(c, allocator),
-		workloads:       map[string]*workload.State{},
+		workloads:       map[WorkloadID]*workload.State{},
 	}, nil
 }
 
@@ -100,21 +105,22 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 		return
 	}
 
-	observedWorkloads := map[string]bool{}
+	observedWorkloads := map[WorkloadID]bool{}
 	for _, workload := range workloadList.Items {
 		if !workload.DeletionTimestamp.IsZero() {
 			continue
 		}
 
-		workloadState := s.findOrCreateWorkloadState(workload.Name)
+		workloadID := WorkloadID{workload.Namespace, workload.Name}
+		workloadState := s.findOrCreateWorkloadState(workloadID.Namespace, workloadID.Name)
 		s.workloadHandler.UpdateWorkloadState(ctx, workloadState, &workload)
-		observedWorkloads[workload.Name] = true
+		observedWorkloads[workloadID] = true
 	}
 
 	// remove non-existent workloads
-	for name := range s.workloads {
-		if !observedWorkloads[name] {
-			delete(s.workloads, name)
+	for workloadID := range s.workloads {
+		if !observedWorkloads[workloadID] {
+			delete(s.workloads, workloadID)
 		}
 	}
 }
@@ -129,7 +135,7 @@ func (s *Autoscaler) loadHistoryMetrics(ctx context.Context) {
 		return
 	}
 	for _, sample := range workersMetrics {
-		s.findOrCreateWorkloadState(sample.WorkloadName).AddSample(sample)
+		s.findOrCreateWorkloadState(sample.Namespace, sample.WorkloadName).AddSample(sample)
 	}
 }
 
@@ -144,7 +150,7 @@ func (s *Autoscaler) loadRealTimeMetrics(ctx context.Context) {
 	}
 
 	for _, sample := range workersMetrics {
-		if workload, exists := s.workloads[sample.WorkloadName]; exists {
+		if workload, exists := s.findWorkloadState(sample.Namespace, sample.WorkloadName); exists {
 			workload.AddSample(sample)
 		}
 	}
@@ -168,13 +174,18 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 	}
 }
 
-func (s *Autoscaler) findOrCreateWorkloadState(name string) *workload.State {
-	w, exists := s.workloads[name]
+func (s *Autoscaler) findOrCreateWorkloadState(namespace, name string) *workload.State {
+	w, exists := s.findWorkloadState(namespace, name)
 	if !exists {
-		w = workload.NewWorkloadState(name)
-		s.workloads[name] = w
+		w = workload.NewWorkloadState()
+		s.workloads[WorkloadID{namespace, name}] = w
 	}
 	return w
+}
+
+func (s *Autoscaler) findWorkloadState(namespace, name string) (*workload.State, bool) {
+	w, exists := s.workloads[WorkloadID{namespace, name}]
+	return w, exists
 }
 
 // Start after manager started

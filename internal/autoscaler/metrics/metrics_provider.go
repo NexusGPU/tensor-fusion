@@ -16,6 +16,7 @@ const (
 )
 
 type WorkerUsage struct {
+	Namespace    string
 	WorkloadName string
 	WorkerName   string
 	TflopsUsage  float64
@@ -58,9 +59,9 @@ func (g *greptimeDBProvider) GetWorkersMetrics(ctx context.Context) ([]*WorkerUs
 	data := []*metrics.HypervisorWorkerUsageMetrics{}
 	// actual meaning:  max(avg[10s])[1m]
 	err := g.db.WithContext(timeoutCtx).
-		Select("workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, max(ts) as ts").
+		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, max(ts) as ts").
 		Where("ts > ? and ts <= ?", g.lastQueryTime, now).
-		Group("workload, worker").
+		Group("namespace, workload, worker").
 		Order("ts asc").
 		Find(&data).
 		Error
@@ -74,6 +75,7 @@ func (g *greptimeDBProvider) GetWorkersMetrics(ctx context.Context) ([]*WorkerUs
 	workersMetrics := make([]*WorkerUsage, 0, len(data))
 	for _, row := range data {
 		workersMetrics = append(workersMetrics, &WorkerUsage{
+			Namespace:    row.Namespace,
 			WorkloadName: row.WorkloadName,
 			WorkerName:   row.WorkerName,
 			TflopsUsage:  row.ComputeTflops,
@@ -106,9 +108,9 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 	// TODO: supply history resolution to config time window
 	data := []*hypervisorWorkerUsageMetrics{}
 	err := g.db.WithContext(timeoutCtx).
-		Select("workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
+		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
 		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24), now).
-		Group("workload, worker, time_window").
+		Group("namespace, workload, worker, time_window").
 		Order("time_window asc").
 		Find(&data).
 		Error
@@ -122,6 +124,7 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 	workersMetrics := make([]*WorkerUsage, 0, len(data))
 	for _, row := range data {
 		workersMetrics = append(workersMetrics, &WorkerUsage{
+			Namespace:    row.Namespace,
 			WorkloadName: row.WorkloadName,
 			WorkerName:   row.WorkerName,
 			TflopsUsage:  row.ComputeTflops,
