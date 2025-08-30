@@ -31,7 +31,9 @@ type Autoscaler struct {
 	workloads       map[string]*workload.State
 }
 
-func NewAutoscaler(c client.Client, allocator *gpuallocator.GpuAllocator) (*Autoscaler, error) {
+func NewAutoscaler(c client.Client,
+	allocator *gpuallocator.GpuAllocator,
+	metricsProvider metrics.Provider) (*Autoscaler, error) {
 	if c == nil {
 		return nil, errors.New("must specify client")
 	}
@@ -40,9 +42,8 @@ func NewAutoscaler(c client.Client, allocator *gpuallocator.GpuAllocator) (*Auto
 		return nil, errors.New("must specify allocator")
 	}
 
-	metricsProvider, err := metrics.NewProvider()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create metrics provider: %v", err)
+	if metricsProvider == nil {
+		return nil, errors.New("must specify metricsProvider")
 	}
 
 	recommenders := []recommender.Interface{
@@ -178,7 +179,11 @@ func (s *Autoscaler) findOrCreateWorkloadState(name string) *workload.State {
 
 // Start after manager started
 func SetupWithManager(mgr ctrl.Manager, allocator *gpuallocator.GpuAllocator) error {
-	autoScaler, err := NewAutoscaler(mgr.GetClient(), allocator)
+	metricsProvider, err := metrics.NewProvider()
+	if err != nil {
+		return fmt.Errorf("failed to create metrics provider: %v", err)
+	}
+	autoScaler, err := NewAutoscaler(mgr.GetClient(), allocator, metricsProvider)
 	if err != nil {
 		return fmt.Errorf("failed to create auto scaler: %v", err)
 	}
