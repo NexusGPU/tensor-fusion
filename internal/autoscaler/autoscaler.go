@@ -84,9 +84,6 @@ func (s *Autoscaler) NeedLeaderElection() bool {
 }
 
 func (s *Autoscaler) Run(ctx context.Context) {
-	log := log.FromContext(ctx)
-
-	log.Info("Autoscaler running")
 	s.loadWorkloads(ctx)
 	s.loadRealTimeMetrics(ctx)
 	s.processWorkloads(ctx)
@@ -94,6 +91,7 @@ func (s *Autoscaler) Run(ctx context.Context) {
 
 func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 	log := log.FromContext(ctx)
+	log.Info("loading workloads")
 
 	workloadList := tfv1.TensorFusionWorkloadList{}
 	if err := s.List(ctx, &workloadList); err != nil {

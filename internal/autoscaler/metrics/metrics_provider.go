@@ -47,9 +47,9 @@ func (g *greptimeDBProvider) GetWorkersMetrics(ctx context.Context) ([]*WorkerUs
 	now := time.Now()
 
 	log := log.FromContext(ctx)
-	log.V(6).Info("Started querying workers metrics", "startTime", now)
+	log.Info("Started querying workers metrics", "startTime", now)
 	defer func() {
-		log.V(6).Info("Finished querying workers metrics", "duration", time.Since(now))
+		log.Info("Finished querying workers metrics", "duration", time.Since(now))
 	}()
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
@@ -59,7 +59,7 @@ func (g *greptimeDBProvider) GetWorkersMetrics(ctx context.Context) ([]*WorkerUs
 	// actual meaning:  max(avg[10s])[1m]
 	err := g.db.WithContext(timeoutCtx).
 		Select("workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, max(ts) as ts").
-		Where("ts > ? and ts <= ?", g.lastQueryTime.Nanosecond(), now.Nanosecond()).
+		Where("ts > ? and ts <= ?", g.lastQueryTime, now).
 		Group("workload, worker").
 		Order("ts asc").
 		Find(&data).
@@ -94,9 +94,9 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 	now := time.Now()
 
 	log := log.FromContext(ctx)
-	log.V(6).Info("Started querying history metrics", "startTime", now)
+	log.Info("Started querying history metrics", "startTime", now)
 	defer func() {
-		log.V(6).Info("Finished querying history metrics", "duration", time.Since(now))
+		log.Info("Finished querying history metrics", "duration", time.Since(now))
 	}()
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
@@ -107,7 +107,7 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 	data := []*hypervisorWorkerUsageMetrics{}
 	err := g.db.WithContext(timeoutCtx).
 		Select("workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
-		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24).Nanosecond(), now.Nanosecond()).
+		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24), now).
 		Group("workload, worker, time_window").
 		Order("time_window asc").
 		Find(&data).

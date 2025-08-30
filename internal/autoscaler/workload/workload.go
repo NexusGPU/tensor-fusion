@@ -16,6 +16,7 @@ type State struct {
 	Annotations           map[string]string
 	ScalingAnnotations    map[string]string
 	Spec                  tfv1.WorkloadProfileSpec
+	Status                tfv1.TensorFusionWorkloadStatus
 	Workers               map[string]*WorkerState
 	WorkerUsageAggregator *metrics.WorkerUsageAggregator
 }
