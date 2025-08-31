@@ -54,6 +54,7 @@ func (w *State) IsAutoSetResourcesEnabled() bool {
 
 func (w *State) ShouldScaleResource(name tfv1.ResourceName) bool {
 	target := w.Spec.AutoScalingConfig.AutoSetResources.TargetResource
+	// Do not scale when TargetResouce is empty
 	return strings.EqualFold(target, "all") || strings.EqualFold(string(name), target)
 }
 

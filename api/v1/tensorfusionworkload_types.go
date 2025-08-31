@@ -68,7 +68,7 @@ type TensorFusionWorkloadStatus struct {
 
 	// The most recently GPU resources recommended by the autoscaler
 	// +optional
-	Recommendation Resources `json:"recommendation,omitempty"`
+	Recommendation *Resources `json:"recommendation,omitempty"`
 }
 
 // +kubebuilder:object:root=true

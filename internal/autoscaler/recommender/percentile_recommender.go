@@ -103,7 +103,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		UpperBoundVram:   QuantityFromAmount(p.upperBoundVram.GetVramEstimation(aggregator)),
 	}
 
-	log.Info("recommendation", "workload", workload.Name, "recommender", p.Name(), "resources", rr)
+	log.Info("current recommended resources from percentile recommender", "workload", workload.Name, "resources", rr)
 
 	targetRes := &tfv1.Resources{}
 	if curRes.Requests.Tflops.Cmp(rr.LowerBoundTflops) < 0 ||
@@ -124,6 +124,10 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 			return nil, fmt.Errorf("failed to get vram limit from workload %s", workload.Name)
 		}
 		targetRes.Limits.Vram = *targetLimit
+	}
+
+	if targetRes.IsZero() {
+		return nil, nil
 	}
 
 	return &Recommendation{

@@ -48,9 +48,9 @@ func (g *greptimeDBProvider) GetWorkersMetrics(ctx context.Context) ([]*WorkerUs
 	now := time.Now()
 
 	log := log.FromContext(ctx)
-	log.Info("Started querying workers metrics", "startTime", now)
+	log.V(6).Info("Started querying workers metrics", "startTime", now)
 	defer func() {
-		log.Info("Finished querying workers metrics", "duration", time.Since(now))
+		log.V(6).Info("Finished querying workers metrics", "duration", time.Since(now))
 	}()
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
@@ -96,9 +96,9 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 	now := time.Now()
 
 	log := log.FromContext(ctx)
-	log.Info("Started querying history metrics", "startTime", now)
+	log.V(6).Info("Started querying history metrics", "startTime", now)
 	defer func() {
-		log.Info("Finished querying history metrics", "duration", time.Since(now))
+		log.V(6).Info("Finished querying history metrics", "duration", time.Since(now))
 	}()
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
