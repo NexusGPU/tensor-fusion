@@ -93,19 +93,23 @@ func (h *handler) updateWorkload(
 		return fmt.Errorf("failed to patch workload %s: %v", workload.Name, err)
 	}
 
-	if !workload.Status.Recommendation.Equal(targetRes) {
-		workload.Status.Recommendation = *targetRes
+	if workload.Status.Recommendation == nil || !workload.Status.Recommendation.Equal(targetRes) {
+		workload.Status.Recommendation = targetRes
 		if err := h.Status().Patch(ctx, workload, patch); err != nil {
 			return fmt.Errorf("failed to patch workload status %s: %v", workload.Name, err)
 		}
-		log.FromContext(ctx).Info("workload recommendation status updated successfully", "workload", workload.Name, "recommendation", targetRes)
+		log.FromContext(ctx).Info("workload recommendation status updated successfully",
+			"workload", workload.Name, "recommendation", targetRes)
 	}
 
 	state.Annotations = workload.Annotations
 	return nil
 }
 
-func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, worker *corev1.Pod, targetRes *tfv1.Resources) error {
+func (h *handler) applyResourcesToWorker(ctx context.Context,
+	workload *State,
+	worker *corev1.Pod,
+	targetRes *tfv1.Resources) error {
 	log := log.FromContext(ctx)
 
 	curRes, err := utils.GPUResourcesFromAnnotations(worker.Annotations)
@@ -142,7 +146,8 @@ func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, w
 	if _, err := h.allocator.AdjustAllocation(ctx, *adjustRequest, true); err != nil {
 		return fmt.Errorf("failed to adjust allocation: %v", err)
 	}
-	log.Info("adjust allocation successfully", "worker", worker.Name, "currentResources", curRes, "adjustRequest", adjustRequest)
+	log.Info("adjust allocation successfully",
+		"worker", worker.Name, "currentResources", curRes, "adjustRequest", adjustRequest)
 
 	patch := client.MergeFrom(worker.DeepCopy())
 	maps.Copy(worker.Annotations, annotationsToUpdate)
@@ -150,7 +155,8 @@ func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, w
 		return fmt.Errorf("failed to patch worker %s: %v", worker.Name, err)
 	}
 
-	log.Info("apply resources successfully", "worker", worker.Name, "targetResources", targetRes, "currentResources", curRes)
+	log.Info("apply resources successfully",
+		"worker", worker.Name, "targetResources", targetRes, "currentResources", curRes)
 
 	return nil
 }

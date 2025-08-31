@@ -70,10 +70,9 @@ import (
 )
 
 var (
-	scheme                = runtime.NewScheme()
-	setupLog              = ctrl.Log.WithName("setup")
-	autoScaleCanBeEnabled = false
-	alertCanBeEnabled     = false
+	scheme            = runtime.NewScheme()
+	setupLog          = ctrl.Log.WithName("setup")
+	alertCanBeEnabled = false
 )
 
 const LeaderElectionID = "85104305.tensor-fusion.ai"
@@ -501,7 +500,6 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 		}
 		timeSeriesDB = setupTimeSeriesDB()
 		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
-		autoScaleCanBeEnabled = true
 		alertCanBeEnabled = true
 		close(alertEvaluatorReady)
 		setupLog.Info("time series db setup successfully.")
