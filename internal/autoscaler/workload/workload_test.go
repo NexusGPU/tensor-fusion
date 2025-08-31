@@ -62,6 +62,6 @@ var _ = Describe("Workload", func() {
 		}
 		ws.Annotations = utils.GPUResourcesToAnnotations(&expect)
 		got, _ := ws.GetCurrentResourcesSpec()
-		Expect(got.Equal(&expect))
+		Expect(got.Equal(&expect)).To(BeTrue())
 	})
 })
