@@ -51,6 +51,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/cmd/sched"
 	"github.com/NexusGPU/tensor-fusion/internal/alert"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaler"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -69,10 +70,9 @@ import (
 )
 
 var (
-	scheme                = runtime.NewScheme()
-	setupLog              = ctrl.Log.WithName("setup")
-	autoScaleCanBeEnabled = false
-	alertCanBeEnabled     = false
+	scheme            = runtime.NewScheme()
+	setupLog          = ctrl.Log.WithName("setup")
+	alertCanBeEnabled = false
 )
 
 const LeaderElectionID = "85104305.tensor-fusion.ai"
@@ -207,15 +207,12 @@ func main() {
 	alertEvaluatorReady = make(chan struct{})
 	setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
 
-	if autoScaleCanBeEnabled && enableAutoScale {
-		// TODO init auto scale module
-		setupLog.Info("auto scale enabled")
-	}
-
 	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, gpuPricingMap)
 
 	// Initialize GPU allocator and set up watches
 	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr)
+
+	startAutoScaler(mgr, allocator)
 
 	startWebhook(mgr, portAllocator)
 
@@ -503,7 +500,6 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 		}
 		timeSeriesDB = setupTimeSeriesDB()
 		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
-		autoScaleCanBeEnabled = true
 		alertCanBeEnabled = true
 		close(alertEvaluatorReady)
 		setupLog.Info("time series db setup successfully.")
@@ -581,6 +577,16 @@ func startMetricsRecorder(
 		go metricsRecorder.Start()
 	}
 	return metricsRecorder
+}
+
+func startAutoScaler(mgr manager.Manager, allocator *gpuallocator.GpuAllocator) {
+	if enableAutoScale {
+		setupLog.Info("auto scale enabled")
+		if err := autoscaler.SetupWithManager(mgr, allocator); err != nil {
+			setupLog.Error(err, "unable to start auto scaler")
+			os.Exit(1)
+		}
+	}
 }
 
 func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, gpuPricingMap map[string]float64) {
