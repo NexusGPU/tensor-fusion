@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -95,6 +98,12 @@ func (h *handler) updateWorkload(
 
 	if workload.Status.Recommendation == nil || !workload.Status.Recommendation.Equal(targetRes) {
 		workload.Status.Recommendation = targetRes
+		meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
+			Type:               constants.ConditionStatusTypeRecommendationProvided,
+			Status:             metav1.ConditionTrue,
+			Reason:             "GPUResourcesRecommended",
+			LastTransitionTime: metav1.NewTime(time.Now()),
+		})
 		if err := h.Status().Patch(ctx, workload, patch); err != nil {
 			return fmt.Errorf("failed to patch workload status %s: %v", workload.Name, err)
 		}

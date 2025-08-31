@@ -34,6 +34,7 @@ import (
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -483,6 +484,8 @@ func verifyRecommendationStatus(workload *tfv1.TensorFusionWorkload, expectedRes
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 		g.Expect(workload.Status.Recommendation.Equal(expectedRes)).To(BeTrue())
+		g.Expect(meta.FindStatusCondition(workload.Status.Conditions,
+			constants.ConditionStatusTypeRecommendationProvided)).To(Not(BeNil()))
 		res, _ := utils.GPUResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
 		g.Expect(res.Equal(expectedRes)).To(BeTrue())
 	}).Should(Succeed())

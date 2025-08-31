@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -333,7 +334,6 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 
 	// Determine workload phase
 	var phase tfv1.TensorFusionWorkloadPhase
-	var conditions []metav1.Condition
 
 	// Update Ready condition based on readyReplicas and desired replicas
 	readyCondition := metav1.Condition{
@@ -364,7 +364,8 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 		readyCondition.Reason = "WaitingForWorkers"
 		readyCondition.Message = fmt.Sprintf("Ready replicas: %d/%d", readyReplicas, *workload.Spec.Replicas)
 	}
-	conditions = append(conditions, readyCondition)
+
+	conditionsChanged := meta.SetStatusCondition(&workload.Status.Conditions, readyCondition)
 
 	// Check if we need to update status
 	totalReplicasChangedInDynamicReplicaMode :=
@@ -373,13 +374,11 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 		workload.Status.WorkerCount = int32(len(pods))
 	}
 	statusChanged := totalReplicasChangedInDynamicReplicaMode || workload.Status.ReadyWorkers != readyReplicas ||
-		workload.Status.Phase != phase ||
-		!utils.EqualConditionsDisregardTransitionTime(workload.Status.Conditions, conditions)
+		workload.Status.Phase != phase || conditionsChanged
 
 	if statusChanged {
 		log.Info("Updating workload status", "phase", phase, "readyReplicas", readyReplicas)
 		workload.Status.Phase = phase
-		workload.Status.Conditions = conditions
 		workload.Status.ReadyWorkers = readyReplicas
 		if err := r.Status().Update(ctx, workload); err != nil {
 			return fmt.Errorf("update workload status: %w", err)
