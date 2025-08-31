@@ -135,6 +135,8 @@ const (
 	ConditionStatusTypeGPUPool               = "GPUPoolReady"
 	ConditionStatusTypeTimeSeriesDatabase    = "TimeSeriesDatabaseReady"
 	ConditionStatusTypeCloudVendorConnection = "CloudVendorConnectionReady"
+
+	ConditionStatusTypeRecommendationProvided = "RecommendationProvided"
 )
 
 const (

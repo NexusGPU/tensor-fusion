@@ -103,7 +103,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		UpperBoundVram:   QuantityFromAmount(p.upperBoundVram.GetVramEstimation(aggregator)),
 	}
 
-	log.Info("current recommended resources from percentile recommender", "workload", workload.Name, "resources", rr)
+	log.V(6).Info("current recommended resources from percentile recommender", "workload", workload.Name, "resources", rr)
 
 	targetRes := &tfv1.Resources{}
 	if curRes.Requests.Tflops.Cmp(rr.LowerBoundTflops) < 0 ||
