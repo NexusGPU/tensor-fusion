@@ -186,6 +186,12 @@ type AllocRequest struct {
 
 	// record the pod meta for quota check
 	PodMeta metav1.ObjectMeta
+
+	// enable cel filter
+	DisableCELFilter bool
+
+	// cel filter expression
+	CELFilterExpression string
 }
 
 type GPUAllocationInfo struct {
