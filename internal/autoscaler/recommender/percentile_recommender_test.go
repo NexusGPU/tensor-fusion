@@ -1,65 +1,169 @@
 package recommender
 
 import (
+	"context"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 var _ = Describe("Percentile Recommender", func() {
-	It("should return default config when no AutoScalingConfig is set", func() {
-		cfg := NewPercentileRecommender().getPercentileConfig(nil)
-		Expect(cfg).ToNot(BeNil())
-		Expect(*cfg).To(Equal(defaultPercentileConfig))
+	Context("when recommending resources", func() {
+		ctx := context.Background()
+		var estimations EstimatedResources
+		BeforeEach(func() {
+			estimations = EstimatedResources{
+				LowerBoundTflops: resource.MustParse("100"),
+				TargetTflops:     resource.MustParse("200"),
+				UpperBoundTflops: resource.MustParse("300"),
+				LowerBoundVram:   resource.MustParse("100Gi"),
+				TargetVram:       resource.MustParse("200Gi"),
+				UpperBoundVram:   resource.MustParse("300Gi"),
+			}
+		})
+		It("should scale up if current resources under lower bounds", func() {
+			curRes := tfv1.Resources{
+				Requests: tfv1.Resource{
+					Tflops: resource.MustParse("20"),
+					Vram:   resource.MustParse("20Gi"),
+				},
+				Limits: tfv1.Resource{
+					Tflops: resource.MustParse("40"),
+					Vram:   resource.MustParse("40Gi"),
+				},
+			}
+			expectRes := tfv1.Resources{
+				Requests: tfv1.Resource{
+					Tflops: resource.MustParse("200"),
+					Vram:   resource.MustParse("200Gi"),
+				},
+				Limits: tfv1.Resource{
+					Tflops: resource.MustParse("400"),
+					Vram:   resource.MustParse("400Gi"),
+				},
+			}
+
+			workload := workload.NewWorkloadState()
+			workload.Spec.Resources = curRes
+			rec := &PercentileRecommender{&FakeResourcesEstimator{&estimations}}
+			got, _ := rec.Recommend(ctx, workload)
+			Expect(got.Resources.Equal(&expectRes)).To(BeTrue())
+		})
+
+		It("should scale down if current resources above upper bounds", func() {
+			curRes := tfv1.Resources{
+				Requests: tfv1.Resource{
+					Tflops: resource.MustParse("2000"),
+					Vram:   resource.MustParse("2000Gi"),
+				},
+				Limits: tfv1.Resource{
+					Tflops: resource.MustParse("4000"),
+					Vram:   resource.MustParse("4000Gi"),
+				},
+			}
+			expectRes := tfv1.Resources{
+				Requests: tfv1.Resource{
+					Tflops: resource.MustParse("200"),
+					Vram:   resource.MustParse("200Gi"),
+				},
+				Limits: tfv1.Resource{
+					Tflops: resource.MustParse("400"),
+					Vram:   resource.MustParse("400Gi"),
+				},
+			}
+
+			workload := workload.NewWorkloadState()
+			workload.Spec.Resources = curRes
+			rec := &PercentileRecommender{&FakeResourcesEstimator{&estimations}}
+			got, _ := rec.Recommend(ctx, workload)
+			Expect(got.Resources.Equal(&expectRes)).To(BeTrue())
+		})
+
+		It("should return nil if current resources within estimated bounds", func() {
+			curRes := tfv1.Resources{
+				Requests: tfv1.Resource{
+					Tflops: resource.MustParse("150"),
+					Vram:   resource.MustParse("150Gi"),
+				},
+				Limits: tfv1.Resource{
+					Tflops: resource.MustParse("200"),
+					Vram:   resource.MustParse("200Gi"),
+				},
+			}
+
+			workload := workload.NewWorkloadState()
+			workload.Spec.Resources = curRes
+			rec := &PercentileRecommender{&FakeResourcesEstimator{&estimations}}
+			got, _ := rec.Recommend(ctx, workload)
+			Expect(got).To(BeNil())
+		})
 	})
 
-	It("should parse float fields from AutoSetResources", func() {
-		asr := &tfv1.AutoSetResources{
-			TargetTflopsPercentile:     "0.8",
-			LowerBoundTflopsPercentile: "0.1",
-			UpperBoundTflopsPercentile: "0.95",
-			TargetVramPercentile:       "0.7",
-			LowerBoundVramPercentile:   "0.2",
-			UpperBoundVramPercentile:   "0.9",
-			RequestMarginFraction:      "0.15",
-		}
-		cfg := NewPercentileRecommender().getPercentileConfig(asr)
-		Expect(cfg.TargetTflopsPercentile).To(Equal(0.8))
-		Expect(cfg.LowerBoundTflopsPercentile).To(Equal(0.1))
-		Expect(cfg.UpperBoundTflopsPercentile).To(Equal(0.95))
-		Expect(cfg.TargetVramPercentile).To(Equal(0.7))
-		Expect(cfg.LowerBoundVramPercentile).To(Equal(0.2))
-		Expect(cfg.UpperBoundVramPercentile).To(Equal(0.9))
-		Expect(cfg.RequestMarginFraction).To(Equal(0.15))
-	})
+	Context("when parsing AutoScalingConfig", func() {
+		It("should return default config when no AutoScalingConfig is set", func() {
+			cfg := getPercentileConfig(nil)
+			Expect(cfg).ToNot(BeNil())
+			Expect(*cfg).To(Equal(defaultPercentileConfig))
+		})
 
-	It("should ignore invalid float fields and keep defaults", func() {
-		asr := &tfv1.AutoSetResources{
-			TargetTflopsPercentile:     "not-a-float",
-			LowerBoundTflopsPercentile: "",
-			UpperBoundTflopsPercentile: "0.99",
-		}
-		cfg := NewPercentileRecommender().getPercentileConfig(asr)
-		Expect(cfg.TargetTflopsPercentile).To(Equal(defaultPercentileConfig.TargetTflopsPercentile))
-		Expect(cfg.LowerBoundTflopsPercentile).To(Equal(defaultPercentileConfig.LowerBoundTflopsPercentile))
-		Expect(cfg.UpperBoundTflopsPercentile).To(Equal(0.99))
-	})
+		It("should parse float fields from AutoSetResources", func() {
+			asr := &tfv1.AutoSetResources{
+				TargetTflopsPercentile:     "0.8",
+				LowerBoundTflopsPercentile: "0.1",
+				UpperBoundTflopsPercentile: "0.95",
+				TargetVramPercentile:       "0.7",
+				LowerBoundVramPercentile:   "0.2",
+				UpperBoundVramPercentile:   "0.9",
+				RequestMarginFraction:      "0.15",
+			}
+			cfg := getPercentileConfig(asr)
+			Expect(cfg.TargetTflopsPercentile).To(Equal(0.8))
+			Expect(cfg.LowerBoundTflopsPercentile).To(Equal(0.1))
+			Expect(cfg.UpperBoundTflopsPercentile).To(Equal(0.95))
+			Expect(cfg.TargetVramPercentile).To(Equal(0.7))
+			Expect(cfg.LowerBoundVramPercentile).To(Equal(0.2))
+			Expect(cfg.UpperBoundVramPercentile).To(Equal(0.9))
+			Expect(cfg.RequestMarginFraction).To(Equal(0.15))
+		})
 
-	It("should parse ConfidenceInterval if valid", func() {
-		asr := &tfv1.AutoSetResources{
-			ConfidenceInterval: "30m",
-		}
-		cfg := NewPercentileRecommender().getPercentileConfig(asr)
-		Expect(cfg.ConfidenceInterval).To(Equal(30 * time.Minute))
-	})
+		It("should ignore invalid float fields and keep defaults", func() {
+			asr := &tfv1.AutoSetResources{
+				TargetTflopsPercentile:     "not-a-float",
+				LowerBoundTflopsPercentile: "",
+				UpperBoundTflopsPercentile: "0.99",
+			}
+			cfg := getPercentileConfig(asr)
+			Expect(cfg.TargetTflopsPercentile).To(Equal(defaultPercentileConfig.TargetTflopsPercentile))
+			Expect(cfg.LowerBoundTflopsPercentile).To(Equal(defaultPercentileConfig.LowerBoundTflopsPercentile))
+			Expect(cfg.UpperBoundTflopsPercentile).To(Equal(0.99))
+		})
 
-	It("should ignore invalid ConfidenceInterval and keep default", func() {
-		asr := &tfv1.AutoSetResources{
-			ConfidenceInterval: "not-a-duration",
-		}
-		cfg := NewPercentileRecommender().getPercentileConfig(asr)
-		Expect(cfg.ConfidenceInterval).To(Equal(defaultPercentileConfig.ConfidenceInterval))
+		It("should parse ConfidenceInterval if valid", func() {
+			asr := &tfv1.AutoSetResources{
+				ConfidenceInterval: "30m",
+			}
+			cfg := getPercentileConfig(asr)
+			Expect(cfg.ConfidenceInterval).To(Equal(30 * time.Minute))
+		})
+
+		It("should ignore invalid ConfidenceInterval and keep default", func() {
+			asr := &tfv1.AutoSetResources{
+				ConfidenceInterval: "not-a-duration",
+			}
+			cfg := getPercentileConfig(asr)
+			Expect(cfg.ConfidenceInterval).To(Equal(defaultPercentileConfig.ConfidenceInterval))
+		})
 	})
 })
+
+type FakeResourcesEstimator struct {
+	*EstimatedResources
+}
+
+func (f *FakeResourcesEstimator) GetResourcesEstimation(workoad *workload.State) *EstimatedResources {
+	return f.EstimatedResources
+}

@@ -15,28 +15,6 @@ const (
 
 type ResourceAmount int64
 
-// ResourceAmountMax returns the larger of two resource amounts.
-func ResourceAmountMax(amount1, amount2 ResourceAmount) ResourceAmount {
-	if amount1 > amount2 {
-		return amount1
-	}
-	return amount2
-}
-
-func QuantityFromAmount(amount ResourceAmount) resource.Quantity {
-	return *resource.NewScaledQuantity(int64(amount), 0)
-}
-
-func resourceAmountFromFloat(amount float64) ResourceAmount {
-	if amount < 0 {
-		return ResourceAmount(0)
-	} else if amount > float64(MaxResourceAmount) {
-		return MaxResourceAmount
-	} else {
-		return ResourceAmount(amount)
-	}
-}
-
 type VramEstimator interface {
 	GetVramEstimation(w *metrics.WorkerUsageAggregator) ResourceAmount
 }
@@ -164,4 +142,26 @@ func getConfidence(w *metrics.WorkerUsageAggregator, confidenceInterval time.Dur
 	// frequency of 1 sample/minute.
 	samplesAmount := float64(w.TotalSamplesCount) / confidenceInterval.Minutes()
 	return math.Min(lifespanInDays, samplesAmount)
+}
+
+// ResourceAmountMax returns the larger of two resource amounts.
+func ResourceAmountMax(amount1, amount2 ResourceAmount) ResourceAmount {
+	if amount1 > amount2 {
+		return amount1
+	}
+	return amount2
+}
+
+func QuantityFromAmount(amount ResourceAmount) resource.Quantity {
+	return *resource.NewScaledQuantity(int64(amount), 0)
+}
+
+func resourceAmountFromFloat(amount float64) ResourceAmount {
+	if amount < 0 {
+		return ResourceAmount(0)
+	} else if amount > float64(MaxResourceAmount) {
+		return MaxResourceAmount
+	} else {
+		return ResourceAmount(amount)
+	}
 }

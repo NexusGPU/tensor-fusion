@@ -43,13 +43,8 @@ var defaultPercentileConfig = PercentileConfig{
 	ConfidenceInterval:         defaultConfidenceInterval,
 }
 
-type RecommendedResources struct {
-	LowerBoundTflops resource.Quantity
-	TargetTflops     resource.Quantity
-	UpperBoundTflops resource.Quantity
-	LowerBoundVram   resource.Quantity
-	TargetVram       resource.Quantity
-	UpperBoundVram   resource.Quantity
+type ResourcesEstimator interface {
+	GetResourcesEstimation(*workload.State) *EstimatedResources
 }
 
 type PercentileConfig struct {
@@ -64,16 +59,13 @@ type PercentileConfig struct {
 }
 
 type PercentileRecommender struct {
-	lowerBoundTflops TflopsEstimator
-	targetTflops     TflopsEstimator
-	upperBoundTflops TflopsEstimator
-	lowerBoundVram   VramEstimator
-	targetVram       VramEstimator
-	upperBoundVram   VramEstimator
+	ResourcesEstimator
 }
 
 func NewPercentileRecommender() *PercentileRecommender {
-	return &PercentileRecommender{}
+	return &PercentileRecommender{
+		ResourcesEstimator: &resourcesEstimator{},
+	}
 }
 
 func (p *PercentileRecommender) Name() string {
@@ -82,44 +74,33 @@ func (p *PercentileRecommender) Name() string {
 
 func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workload.State) (*Recommendation, error) {
 	log := log.FromContext(ctx)
-	aggregator := workload.WorkerUsageAggregator
-	if aggregator.IsEmpty() {
+
+	estimations := p.GetResourcesEstimation(workload)
+	if estimations == nil {
 		return nil, nil
 	}
+
+	log.V(6).Info("current estimated resources from percentile recommender", "workload", workload.Name, "estimations", estimations)
 
 	curRes, err := workload.GetCurrentResourcesSpec()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current resources from workload %s: %v", workload.Name, err)
 	}
-
-	// TODO: cache config
-	p.createEstimatorsFromConfig(p.getPercentileConfig(&workload.Spec.AutoScalingConfig.AutoSetResources))
-	rr := &RecommendedResources{
-		LowerBoundTflops: QuantityFromAmount(p.lowerBoundTflops.GetTflopsEstimation(aggregator)),
-		TargetTflops:     QuantityFromAmount(p.targetTflops.GetTflopsEstimation(aggregator)),
-		UpperBoundTflops: QuantityFromAmount(p.upperBoundTflops.GetTflopsEstimation(aggregator)),
-		LowerBoundVram:   QuantityFromAmount(p.lowerBoundVram.GetVramEstimation(aggregator)),
-		TargetVram:       QuantityFromAmount(p.targetVram.GetVramEstimation(aggregator)),
-		UpperBoundVram:   QuantityFromAmount(p.upperBoundVram.GetVramEstimation(aggregator)),
-	}
-
-	log.V(6).Info("current recommended resources from percentile recommender", "workload", workload.Name, "resources", rr)
-
 	targetRes := &tfv1.Resources{}
-	if curRes.Requests.Tflops.Cmp(rr.LowerBoundTflops) < 0 ||
-		curRes.Requests.Tflops.Cmp(rr.UpperBoundTflops) > 0 {
-		targetRes.Requests.Tflops = rr.TargetTflops
-		targetLimit := getProportionalLimit(&curRes.Limits.Tflops, &curRes.Requests.Tflops, &rr.TargetTflops)
+	if curRes.Requests.Tflops.Cmp(estimations.LowerBoundTflops) < 0 ||
+		curRes.Requests.Tflops.Cmp(estimations.UpperBoundTflops) > 0 {
+		targetRes.Requests.Tflops = estimations.TargetTflops
+		targetLimit := getProportionalLimit(&curRes.Limits.Tflops, &curRes.Requests.Tflops, &estimations.TargetTflops)
 		if targetLimit == nil {
 			return nil, fmt.Errorf("failed to get tflops limit from workload %s", workload.Name)
 		}
 		targetRes.Limits.Tflops = *targetLimit
 	}
 
-	if curRes.Requests.Vram.Cmp(rr.LowerBoundVram) < 0 ||
-		curRes.Requests.Vram.Cmp(rr.UpperBoundVram) > 0 {
-		targetRes.Requests.Vram = rr.TargetVram
-		targetLimit := getProportionalLimit(&curRes.Limits.Vram, &curRes.Requests.Vram, &rr.TargetVram)
+	if curRes.Requests.Vram.Cmp(estimations.LowerBoundVram) < 0 ||
+		curRes.Requests.Vram.Cmp(estimations.UpperBoundVram) > 0 {
+		targetRes.Requests.Vram = estimations.TargetVram
+		targetLimit := getProportionalLimit(&curRes.Limits.Vram, &curRes.Requests.Vram, &estimations.TargetVram)
 		if targetLimit == nil {
 			return nil, fmt.Errorf("failed to get vram limit from workload %s", workload.Name)
 		}
@@ -137,7 +118,97 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 	}, nil
 }
 
-func (p *PercentileRecommender) getPercentileConfig(asr *tfv1.AutoSetResources) *PercentileConfig {
+func getProportionalLimit(originalLimit, originalRequest, recommendedRequest *resource.Quantity) *resource.Quantity {
+	if originalLimit == nil || originalLimit.IsZero() ||
+		originalRequest == nil || originalRequest.IsZero() ||
+		recommendedRequest == nil || recommendedRequest.IsZero() {
+		return nil
+	}
+
+	originalValue := big.NewInt(originalLimit.Value())
+	scaleBaseValue := big.NewInt(originalRequest.Value())
+	scaleResultValue := big.NewInt(recommendedRequest.Value())
+	var scaledOriginal big.Int
+	scaledOriginal.Mul(originalValue, scaleResultValue)
+	scaledOriginal.Div(&scaledOriginal, scaleBaseValue)
+	if scaledOriginal.IsInt64() {
+		return resource.NewQuantity(scaledOriginal.Int64(), originalLimit.Format)
+	}
+
+	return nil
+}
+
+type EstimatedResources struct {
+	LowerBoundTflops resource.Quantity
+	TargetTflops     resource.Quantity
+	UpperBoundTflops resource.Quantity
+	LowerBoundVram   resource.Quantity
+	TargetVram       resource.Quantity
+	UpperBoundVram   resource.Quantity
+}
+
+type resourcesEstimator struct {
+	lowerBoundTflops TflopsEstimator
+	targetTflops     TflopsEstimator
+	upperBoundTflops TflopsEstimator
+	lowerBoundVram   VramEstimator
+	targetVram       VramEstimator
+	upperBoundVram   VramEstimator
+}
+
+var percentileConfigToEstimatorsMap map[PercentileConfig]resourcesEstimator
+
+func (r *resourcesEstimator) GetResourcesEstimation(workload *workload.State) *EstimatedResources {
+	aggregator := workload.WorkerUsageAggregator
+	if aggregator.IsEmpty() {
+		return nil
+	}
+	// TODO: cache config
+	r.createEstimatorsFromConfig(getPercentileConfig(&workload.Spec.AutoScalingConfig.AutoSetResources))
+	return &EstimatedResources{
+		LowerBoundTflops: QuantityFromAmount(r.lowerBoundTflops.GetTflopsEstimation(aggregator)),
+		TargetTflops:     QuantityFromAmount(r.targetTflops.GetTflopsEstimation(aggregator)),
+		UpperBoundTflops: QuantityFromAmount(r.upperBoundTflops.GetTflopsEstimation(aggregator)),
+		LowerBoundVram:   QuantityFromAmount(r.lowerBoundVram.GetVramEstimation(aggregator)),
+		TargetVram:       QuantityFromAmount(r.targetVram.GetVramEstimation(aggregator)),
+		UpperBoundVram:   QuantityFromAmount(r.upperBoundVram.GetVramEstimation(aggregator)),
+	}
+}
+
+func (r *resourcesEstimator) createEstimatorsFromConfig(config *PercentileConfig) {
+	targetTflops := NewPercentileTflopsEstimator(config.TargetTflopsPercentile)
+	lowerBoundTflops := NewPercentileTflopsEstimator(config.LowerBoundTflopsPercentile)
+	upperBoundTflops := NewPercentileTflopsEstimator(config.UpperBoundTflopsPercentile)
+
+	targetTflops = WithTflopsMargin(config.RequestMarginFraction, targetTflops)
+	lowerBoundTflops = WithTflopsMargin(config.RequestMarginFraction, lowerBoundTflops)
+	upperBoundTflops = WithTflopsMargin(config.RequestMarginFraction, upperBoundTflops)
+
+	upperBoundTflops = WithTflopsConfidenceMultiplier(1.0, 1.0, upperBoundTflops, config.ConfidenceInterval)
+	lowerBoundTflops = WithTflopsConfidenceMultiplier(0.001, -2.0, lowerBoundTflops, config.ConfidenceInterval)
+
+	targetVram := NewPercentileVramEstimator(config.TargetVramPercentile)
+	lowerBoundVram := NewPercentileVramEstimator(config.LowerBoundVramPercentile)
+	upperBoundVram := NewPercentileVramEstimator(config.UpperBoundVramPercentile)
+
+	targetVram = WithVramMargin(config.RequestMarginFraction, targetVram)
+	lowerBoundVram = WithVramMargin(config.RequestMarginFraction, lowerBoundVram)
+	upperBoundVram = WithVramMargin(config.RequestMarginFraction, upperBoundVram)
+
+	upperBoundVram = WithVramConfidenceMultiplier(1.0, 1.0, upperBoundVram, config.ConfidenceInterval)
+	lowerBoundVram = WithVramConfidenceMultiplier(0.001, -2.0, lowerBoundVram, config.ConfidenceInterval)
+
+	*r = resourcesEstimator{
+		lowerBoundTflops: lowerBoundTflops,
+		targetTflops:     targetTflops,
+		upperBoundTflops: upperBoundTflops,
+		lowerBoundVram:   lowerBoundVram,
+		targetVram:       targetVram,
+		upperBoundVram:   upperBoundVram,
+	}
+}
+
+func getPercentileConfig(asr *tfv1.AutoSetResources) *PercentileConfig {
 	cfg := defaultPercentileConfig
 
 	if asr == nil {
@@ -172,57 +243,4 @@ func (p *PercentileRecommender) getPercentileConfig(asr *tfv1.AutoSetResources) 
 	}
 
 	return &cfg
-}
-
-func (p *PercentileRecommender) createEstimatorsFromConfig(config *PercentileConfig) {
-	targetTflops := NewPercentileTflopsEstimator(config.TargetTflopsPercentile)
-	lowerBoundTflops := NewPercentileTflopsEstimator(config.LowerBoundTflopsPercentile)
-	upperBoundTflops := NewPercentileTflopsEstimator(config.UpperBoundTflopsPercentile)
-
-	targetTflops = WithTflopsMargin(config.RequestMarginFraction, targetTflops)
-	lowerBoundTflops = WithTflopsMargin(config.RequestMarginFraction, lowerBoundTflops)
-	upperBoundTflops = WithTflopsMargin(config.RequestMarginFraction, upperBoundTflops)
-
-	upperBoundTflops = WithTflopsConfidenceMultiplier(1.0, 1.0, upperBoundTflops, config.ConfidenceInterval)
-	lowerBoundTflops = WithTflopsConfidenceMultiplier(0.001, -2.0, lowerBoundTflops, config.ConfidenceInterval)
-
-	targetVram := NewPercentileVramEstimator(config.TargetVramPercentile)
-	lowerBoundVram := NewPercentileVramEstimator(config.LowerBoundVramPercentile)
-	upperBoundVram := NewPercentileVramEstimator(config.UpperBoundVramPercentile)
-
-	targetVram = WithVramMargin(config.RequestMarginFraction, targetVram)
-	lowerBoundVram = WithVramMargin(config.RequestMarginFraction, lowerBoundVram)
-	upperBoundVram = WithVramMargin(config.RequestMarginFraction, upperBoundVram)
-
-	upperBoundVram = WithVramConfidenceMultiplier(1.0, 1.0, upperBoundVram, config.ConfidenceInterval)
-	lowerBoundVram = WithVramConfidenceMultiplier(0.001, -2.0, lowerBoundVram, config.ConfidenceInterval)
-
-	*p = PercentileRecommender{
-		lowerBoundTflops: lowerBoundTflops,
-		targetTflops:     targetTflops,
-		upperBoundTflops: upperBoundTflops,
-		lowerBoundVram:   lowerBoundVram,
-		targetVram:       targetVram,
-		upperBoundVram:   upperBoundVram,
-	}
-}
-
-func getProportionalLimit(originalLimit, originalRequest, recommendedRequest *resource.Quantity) *resource.Quantity {
-	if originalLimit == nil || originalLimit.IsZero() ||
-		originalRequest == nil || originalRequest.IsZero() ||
-		recommendedRequest == nil || recommendedRequest.IsZero() {
-		return nil
-	}
-
-	originalValue := big.NewInt(originalLimit.Value())
-	scaleBaseValue := big.NewInt(originalRequest.Value())
-	scaleResultValue := big.NewInt(recommendedRequest.Value())
-	var scaledOriginal big.Int
-	scaledOriginal.Mul(originalValue, scaleResultValue)
-	scaledOriginal.Div(&scaledOriginal, scaleBaseValue)
-	if scaledOriginal.IsInt64() {
-		return resource.NewQuantity(scaledOriginal.Int64(), originalLimit.Format)
-	}
-
-	return nil
 }

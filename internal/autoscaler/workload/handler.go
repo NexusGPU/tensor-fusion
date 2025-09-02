@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -102,7 +101,7 @@ func (h *handler) updateWorkload(
 			Type:               constants.ConditionStatusTypeRecommendationProvided,
 			Status:             metav1.ConditionTrue,
 			Reason:             "GPUResourcesRecommended",
-			LastTransitionTime: metav1.NewTime(time.Now()),
+			LastTransitionTime: metav1.Now(),
 		})
 		if err := h.Status().Patch(ctx, workload, patch); err != nil {
 			return fmt.Errorf("failed to patch workload status %s: %v", workload.Name, err)
