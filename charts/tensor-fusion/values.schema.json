@@ -470,9 +470,9 @@
           "description": "Metrics format, default to 'influx', could be 'json' or 'otel'"
         },
         "metricsExtraPodLabels": {
-          "type": "array",
+          "type": "object",
           "description": "Extra pod labels to be added to metrics",
-          "items": {
+          "additionalProperties": {
             "type": "string"
           }
         },
