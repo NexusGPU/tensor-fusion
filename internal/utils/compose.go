@@ -16,6 +16,10 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+var injectLibResource v1.ResourceList = v1.ResourceList{
+	v1.ResourceCPU:    resource.MustParse("20m"),
+	v1.ResourceMemory: resource.MustParse("64Mi"),
+}
 var nodeDiscoveryDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("20m"),
 	v1.ResourceMemory: resource.MustParse("64Mi"),
@@ -174,6 +178,10 @@ func AddTFDefaultClientConfBeforePatch(
 				Name:      constants.TFLibsVolumeName,
 				MountPath: constants.TFLibsVolumeMountPath,
 			},
+		},
+		Resources: v1.ResourceRequirements{
+			Requests: injectLibResource,
+			Limits:   injectLibResource,
 		},
 		Env: convertDisabledFeatures4InjectLib(pod.Annotations[constants.DisableFeaturesAnnotation]),
 	})
