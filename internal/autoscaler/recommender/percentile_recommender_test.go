@@ -6,8 +6,10 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -25,7 +27,8 @@ var _ = Describe("Percentile Recommender", func() {
 				UpperBoundVram:   resource.MustParse("300Gi"),
 			}
 		})
-		It("should scale up if current resources under lower bounds", func() {
+
+		It("should scale up if current resources below lower bounds", func() {
 			curRes := tfv1.Resources{
 				Requests: tfv1.Resource{
 					Tflops: resource.MustParse("20"),
@@ -52,17 +55,19 @@ var _ = Describe("Percentile Recommender", func() {
 			rec := &PercentileRecommender{&FakeResourcesEstimator{&estimations}}
 			got, _ := rec.Recommend(ctx, workload)
 			Expect(got.Resources.Equal(&expectRes)).To(BeTrue())
+			condition := meta.FindStatusCondition(workload.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
+			Expect(condition.Message).To(Equal("TFLOPS (20) below lower bound (100), VRAM (20Gi) below lower bound (100Gi)"))
 		})
 
 		It("should scale down if current resources above upper bounds", func() {
 			curRes := tfv1.Resources{
 				Requests: tfv1.Resource{
-					Tflops: resource.MustParse("2000"),
-					Vram:   resource.MustParse("2000Gi"),
+					Tflops: resource.MustParse("400"),
+					Vram:   resource.MustParse("400Gi"),
 				},
 				Limits: tfv1.Resource{
-					Tflops: resource.MustParse("4000"),
-					Vram:   resource.MustParse("4000Gi"),
+					Tflops: resource.MustParse("800"),
+					Vram:   resource.MustParse("800Gi"),
 				},
 			}
 			expectRes := tfv1.Resources{
@@ -81,6 +86,8 @@ var _ = Describe("Percentile Recommender", func() {
 			rec := &PercentileRecommender{&FakeResourcesEstimator{&estimations}}
 			got, _ := rec.Recommend(ctx, workload)
 			Expect(got.Resources.Equal(&expectRes)).To(BeTrue())
+			condition := meta.FindStatusCondition(workload.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
+			Expect(condition.Message).To(Equal("TFLOPS (400) above upper bound (300), VRAM (400Gi) above upper bound (300Gi)"))
 		})
 
 		It("should return nil if current resources within estimated bounds", func() {

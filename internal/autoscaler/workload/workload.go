@@ -14,7 +14,7 @@ type State struct {
 	Namespace             string
 	Name                  string
 	Annotations           map[string]string
-	ScalingAnnotations    map[string]string
+	NewAnnotations        map[string]string
 	Spec                  tfv1.WorkloadProfileSpec
 	Status                tfv1.TensorFusionWorkloadStatus
 	Workers               map[string]*WorkerState
@@ -24,7 +24,7 @@ type State struct {
 func NewWorkloadState() *State {
 	return &State{
 		Workers:               make(map[string]*WorkerState),
-		ScalingAnnotations:    make(map[string]string),
+		NewAnnotations:        make(map[string]string),
 		WorkerUsageAggregator: metrics.NewWorkerUsageAggregator(),
 	}
 }
@@ -45,7 +45,7 @@ func (w *State) GetCurrentResourcesSpec() (*tfv1.Resources, error) {
 }
 
 func (w *State) SetScalingAnnotation(key string, value string) {
-	w.ScalingAnnotations[key] = value
+	w.NewAnnotations[key] = value
 }
 
 func (w *State) IsAutoSetResourcesEnabled() bool {

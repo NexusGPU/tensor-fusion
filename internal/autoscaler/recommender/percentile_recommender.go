@@ -9,7 +9,10 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -86,36 +89,97 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current resources from workload %s: %v", workload.Name, err)
 	}
+
 	targetRes := &tfv1.Resources{}
-	if curRes.Requests.Tflops.Cmp(estimations.LowerBoundTflops) < 0 ||
-		curRes.Requests.Tflops.Cmp(estimations.UpperBoundTflops) > 0 {
-		targetRes.Requests.Tflops = estimations.TargetTflops
-		targetLimit := getProportionalLimit(&curRes.Limits.Tflops, &curRes.Requests.Tflops, &estimations.TargetTflops)
-		if targetLimit == nil {
-			return nil, fmt.Errorf("failed to get tflops limit from workload %s", workload.Name)
-		}
-		targetRes.Limits.Tflops = *targetLimit
+	message := ""
+
+	// Handle TFLOPS scaling
+	if result := p.handleResourceScaling(
+		"TFLOPS",
+		&curRes.Requests.Tflops,
+		&curRes.Limits.Tflops,
+		&estimations.TargetTflops,
+		&estimations.LowerBoundTflops,
+		&estimations.UpperBoundTflops,
+	); result != nil {
+		message = result.message
+		targetRes.Requests.Tflops = result.targetRequest
+		targetRes.Limits.Tflops = result.targetLimit
 	}
 
-	if curRes.Requests.Vram.Cmp(estimations.LowerBoundVram) < 0 ||
-		curRes.Requests.Vram.Cmp(estimations.UpperBoundVram) > 0 {
-		targetRes.Requests.Vram = estimations.TargetVram
-		targetLimit := getProportionalLimit(&curRes.Limits.Vram, &curRes.Requests.Vram, &estimations.TargetVram)
-		if targetLimit == nil {
-			return nil, fmt.Errorf("failed to get vram limit from workload %s", workload.Name)
+	// Handle VRAM scaling
+	if result := p.handleResourceScaling(
+		"VRAM",
+		&curRes.Requests.Vram,
+		&curRes.Limits.Vram,
+		&estimations.TargetVram,
+		&estimations.LowerBoundVram,
+		&estimations.UpperBoundVram,
+	); result != nil {
+		if len(message) > 0 {
+			message += fmt.Sprintf(", %s", result.message)
+		} else {
+			message = result.message
 		}
-		targetRes.Limits.Vram = *targetLimit
+		targetRes.Requests.Vram = result.targetRequest
+		targetRes.Limits.Vram = result.targetLimit
 	}
 
 	if targetRes.IsZero() {
 		return nil, nil
 	}
 
+	meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
+		Type:               constants.ConditionStatusTypeRecommendationProvided,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             "OutOfEstimatedBound",
+		Message:            message,
+	})
+
 	return &Recommendation{
 		Resources:        *targetRes,
 		HasApplied:       targetRes.Equal(curRes),
 		ScaleDownLocking: false,
 	}, nil
+}
+
+type scalingResult struct {
+	message       string
+	targetRequest resource.Quantity
+	targetLimit   resource.Quantity
+}
+
+func (p *PercentileRecommender) handleResourceScaling(
+	resourceName string,
+	currentRequest, currentLimit, targetRequest, lowerBound, upperBound *resource.Quantity,
+) *scalingResult {
+	isScaleUp := currentRequest.Cmp(*lowerBound) < 0
+	isScaleDown := currentRequest.Cmp(*upperBound) > 0
+
+	if !isScaleUp && !isScaleDown {
+		return nil
+	}
+
+	targetLimit := getProportionalLimit(currentLimit, currentRequest, targetRequest)
+	if targetLimit == nil {
+		return nil
+	}
+
+	var message string
+	if isScaleUp {
+		message = fmt.Sprintf("%s (%s) below lower bound (%s)",
+			resourceName, currentRequest.String(), lowerBound.String())
+	} else {
+		message = fmt.Sprintf("%s (%s) above upper bound (%s)",
+			resourceName, currentRequest.String(), upperBound.String())
+	}
+
+	return &scalingResult{
+		message:       message,
+		targetRequest: *targetRequest,
+		targetLimit:   *targetLimit,
+	}
 }
 
 func getProportionalLimit(originalLimit, originalRequest, recommendedRequest *resource.Quantity) *resource.Quantity {

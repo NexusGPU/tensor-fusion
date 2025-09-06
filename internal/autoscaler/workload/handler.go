@@ -11,7 +11,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -38,7 +37,7 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 	workloadState.Name = workload.Name
 	workloadState.Spec = workload.Spec
 	workloadState.Annotations = workload.Annotations
-	workloadState.Status = workload.Status
+	workloadState.Status = *workload.Status.DeepCopy()
 
 	workerList := &corev1.PodList{}
 	if err := h.List(ctx, workerList,
@@ -90,19 +89,17 @@ func (h *handler) updateWorkload(
 	}
 	patch := client.MergeFrom(workload.DeepCopy())
 	maps.Copy(workload.Annotations, utils.GPUResourcesToAnnotations(targetRes))
-	maps.Copy(workload.Annotations, state.ScalingAnnotations)
+	maps.Copy(workload.Annotations, state.NewAnnotations)
 	if err := h.Patch(ctx, workload, patch); err != nil {
 		return fmt.Errorf("failed to patch workload %s: %v", workload.Name, err)
 	}
 
 	if workload.Status.Recommendation == nil || !workload.Status.Recommendation.Equal(targetRes) {
 		workload.Status.Recommendation = targetRes
-		meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
-			Type:               constants.ConditionStatusTypeRecommendationProvided,
-			Status:             metav1.ConditionTrue,
-			Reason:             "GPUResourcesRecommended",
-			LastTransitionTime: metav1.Now(),
-		})
+		if condition := meta.FindStatusCondition(state.Status.Conditions,
+			constants.ConditionStatusTypeRecommendationProvided); condition != nil {
+			meta.SetStatusCondition(&workload.Status.Conditions, *condition)
+		}
 		if err := h.Status().Patch(ctx, workload, patch); err != nil {
 			return fmt.Errorf("failed to patch workload status %s: %v", workload.Name, err)
 		}
@@ -145,13 +142,13 @@ func (h *handler) applyResourcesToWorker(ctx context.Context,
 	isScaleUp := targetRes.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
 		targetRes.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
 
-	adjustRequest := &tfv1.AdjustRequest{
+	adjustRequest := tfv1.AdjustRequest{
 		PodUID:     string(worker.UID),
 		IsScaleUp:  isScaleUp,
 		NewRequest: targetRes.Requests,
 		NewLimit:   targetRes.Limits,
 	}
-	if _, err := h.allocator.AdjustAllocation(ctx, *adjustRequest, true); err != nil {
+	if _, err := h.allocator.AdjustAllocation(ctx, adjustRequest, true); err != nil {
 		return fmt.Errorf("failed to adjust allocation: %v", err)
 	}
 	log.Info("adjust allocation successfully",
