@@ -497,6 +497,73 @@ spec:
             description: TensorFusionWorkloadStatus defines the observed state of
               TensorFusionWorkload.
             properties:
+              activeCronScalingRule:
+                description: The currently active cron scaling rule
+                properties:
+                  desiredReplicas:
+                    description: DesiredReplicas is the target number of replicas
+                      during the schedule.
+                    format: int32
+                    type: integer
+                  desiredResources:
+                    description: DesiredResources specifies the target resources to
+                      scale to during the schedule.
+                    properties:
+                      limits:
+                        properties:
+                          tflops:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          vram:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                        required:
+                        - tflops
+                        - vram
+                        type: object
+                      requests:
+                        properties:
+                          tflops:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          vram:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                        required:
+                        - tflops
+                        - vram
+                        type: object
+                    required:
+                    - limits
+                    - requests
+                    type: object
+                  enable:
+                    description: Enable specifies whether the cron scaler is enabled.
+                    type: boolean
+                  end:
+                    description: End is the end time for the scaling schedule, in
+                      cron format.
+                    type: string
+                  name:
+                    description: Name is the identifier for the cron scaler.
+                    type: string
+                  start:
+                    description: Start is the start time for the scaling schedule,
+                      in cron format.
+                    type: string
+                type: object
               conditions:
                 description: Represents the latest available observations of the workload's
                   current state.

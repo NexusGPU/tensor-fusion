@@ -69,6 +69,10 @@ type TensorFusionWorkloadStatus struct {
 	// The most recently GPU resources recommended by the autoscaler
 	// +optional
 	Recommendation *Resources `json:"recommendation,omitempty"`
+
+	// The currently active cron scaling rule
+	// +optional
+	ActiveCronScalingRule *CronScalingRule `json:"activeCronScalingRule,omitempty"`
 }
 
 // +kubebuilder:object:root=true

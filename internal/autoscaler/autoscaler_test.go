@@ -461,10 +461,17 @@ type FakeRecommender struct {
 }
 
 func (f *FakeRecommender) Name() string {
-	return "Fake"
+	return "fake"
 }
 
 func (f *FakeRecommender) Recommend(ctx context.Context, workoad *workload.State) (*recommender.Recommendation, error) {
+	meta.SetStatusCondition(&workoad.Status.Conditions, metav1.Condition{
+		Type:               constants.ConditionStatusTypeRecommendationProvided,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             "FakeReason",
+		Message:            "Fake message",
+	})
 	return &recommender.Recommendation{
 		Resources: *f.Resources,
 	}, nil
@@ -479,7 +486,7 @@ func verifyWorkerResources(workload *tfv1.TensorFusionWorkload, expectedRes *tfv
 }
 
 func verifyRecommendationStatus(workload *tfv1.TensorFusionWorkload, expectedRes *tfv1.Resources) {
-	GinkgoHelper()
+	// GinkgoHelper()
 	key := client.ObjectKeyFromObject(workload)
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())

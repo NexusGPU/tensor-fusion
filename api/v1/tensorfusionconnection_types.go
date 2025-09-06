@@ -39,6 +39,9 @@ type Resources struct {
 }
 
 func (r Resources) Equal(target *Resources) bool {
+	if target == nil {
+		return false
+	}
 	return r.Requests.Tflops.Equal(target.Requests.Tflops) &&
 		r.Requests.Vram.Equal(target.Requests.Vram) &&
 		r.Limits.Tflops.Equal(target.Limits.Tflops) &&
