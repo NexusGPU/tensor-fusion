@@ -44,7 +44,7 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 	var reason, message string
 	if activeRule == nil {
 		// Revert the resources to those specified in the workload spec
-		targetRes = w.GetResourcesSpec()
+		targetRes = w.GetOriginalResourcesSpec()
 		reason = "RuleInactive"
 		message = fmt.Sprintf("Cron scaling rule %q is inactive", currentRule.Name)
 		log.FromContext(ctx).Info("cron scaling rule inactive", "rule", currentRule.Name, "workload", w.Name, "resources", targetRes)

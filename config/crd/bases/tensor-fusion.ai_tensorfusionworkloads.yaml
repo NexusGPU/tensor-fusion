@@ -564,6 +564,11 @@ spec:
                       in cron format.
                     type: string
                 type: object
+              appliedRecommendedReplicas:
+                description: The number of replicas currently applied based on the
+                  latest recommendation
+                format: int32
+                type: integer
               conditions:
                 description: Represents the latest available observations of the workload's
                   current state.

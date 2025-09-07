@@ -6,7 +6,6 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
-	"github.com/NexusGPU/tensor-fusion/internal/utils"
 )
 
 // Interface defines the contract for resource recommendation strategies used by the autoscaler.
@@ -39,11 +38,7 @@ func GetResourcesFromRecommenders(ctx context.Context, workload *workload.State,
 
 	resources := getResourcesFromRecommendations(recommendations)
 	if resources != nil {
-		curRes, err := utils.GPUResourcesFromAnnotations(workload.Annotations)
-		if err != nil {
-			return nil, err
-		}
-
+		curRes := workload.GetCurrentResourcesSpec()
 		// If a resource value is zero, replace it with current value
 		if resources.Requests.Tflops.IsZero() || resources.Limits.Tflops.IsZero() {
 			resources.Requests.Tflops = curRes.Requests.Tflops

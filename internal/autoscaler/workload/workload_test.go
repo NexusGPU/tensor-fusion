@@ -2,10 +2,8 @@ package workload
 
 import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 var _ = Describe("Workload", func() {
@@ -46,22 +44,5 @@ var _ = Describe("Workload", func() {
 			AutoSetResources: tfv1.AutoSetResources{Enable: false},
 		}
 		Expect(ws.IsAutoSetResourcesEnabled()).To(BeFalse())
-	})
-
-	It("should return current resources spec from the annotations", func() {
-		ws := NewWorkloadState()
-		expect := tfv1.Resources{
-			Requests: tfv1.Resource{
-				Tflops: resource.MustParse("10"),
-				Vram:   resource.MustParse("8Gi"),
-			},
-			Limits: tfv1.Resource{
-				Tflops: resource.MustParse("20"),
-				Vram:   resource.MustParse("16Gi"),
-			},
-		}
-		ws.Annotations = utils.GPUResourcesToAnnotations(&expect)
-		got, _ := ws.GetCurrentResourcesSpec()
-		Expect(got.Equal(&expect)).To(BeTrue())
 	})
 })

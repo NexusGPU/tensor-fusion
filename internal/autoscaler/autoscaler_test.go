@@ -72,7 +72,7 @@ var _ = Describe("Autoscaler", func() {
 			for _, m := range metrics {
 				key := WorkloadID{m.Namespace, m.WorkloadName}
 				Expect(scaler.workloads).To(HaveKey(key))
-				Expect(scaler.workloads[key].Workers).To(HaveKey(m.WorkerName))
+				Expect(scaler.workloads[key].WorkerUsageSamplers).To(HaveKey(m.WorkerName))
 			}
 		})
 	})
@@ -103,15 +103,15 @@ var _ = Describe("Autoscaler", func() {
 			Expect(scaler.workloads).To(HaveLen(2))
 			Expect(scaler.workloads).To(HaveKey(key0))
 			Expect(scaler.workloads).To(HaveKey(key1))
-			workers := scaler.workloads[key0].Workers
+			workers := scaler.workloads[key0].WorkerUsageSamplers
 			Expect(workers).To(HaveLen(2))
 			Expect(workers).To(HaveKey(workload0Workers[0].Name))
 			Expect(workers).To(HaveKey(workload0Workers[1].Name))
-			Expect(scaler.workloads[key1].Workers).To(HaveKey(workload1Workers[0].Name))
+			Expect(scaler.workloads[key1].WorkerUsageSamplers).To(HaveKey(workload1Workers[0].Name))
 
 			updateWorkloadReplicas(workload0, 1)
 			scaler.loadWorkloads(ctx)
-			Expect(scaler.workloads[key0].Workers).To(HaveLen(1))
+			Expect(scaler.workloads[key0].WorkerUsageSamplers).To(HaveLen(1))
 
 			deleteWorkload(workload0)
 			deleteWorkload(workload1)
@@ -151,7 +151,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler.metricsProvider = &FakeMetricsProvider{[]*metrics.WorkerUsage{usage}}
 			scaler.loadRealTimeMetrics(ctx)
 
-			scalerWorkers := scaler.workloads[key].Workers
+			scalerWorkers := scaler.workloads[key].WorkerUsageSamplers
 			Expect(scalerWorkers[worker].LastTflopsSampleTime).To(Equal(usage.Timestamp))
 			Expect(ws.WorkerUsageAggregator.TflopsHistogram.IsEmpty()).To(BeFalse())
 			Expect(scalerWorkers[worker].VramPeak).To(Equal(usage.VramUsage))
@@ -491,6 +491,7 @@ func verifyRecommendationStatus(workload *tfv1.TensorFusionWorkload, expectedRes
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 		g.Expect(workload.Status.Recommendation.Equal(expectedRes)).To(BeTrue())
+		g.Expect(workload.Status.AppliedRecommendedReplicas).To(Equal(int32(1)))
 		g.Expect(meta.FindStatusCondition(workload.Status.Conditions,
 			constants.ConditionStatusTypeRecommendationProvided)).To(Not(BeNil()))
 		res, _ := utils.GPUResourcesFromAnnotations(getWorkers(workload)[0].Annotations)

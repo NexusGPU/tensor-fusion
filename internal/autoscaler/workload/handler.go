@@ -16,8 +16,9 @@ import (
 )
 
 type Handler interface {
-	UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload)
+	UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload) error
 	ApplyResourcesToWorkload(ctx context.Context, workloadState *State, targetRes *tfv1.Resources) error
+	UpdateWorkloadStatus(ctx context.Context, state *State, targetRes *tfv1.Resources) error
 }
 
 type handler struct {
@@ -32,7 +33,7 @@ func NewHandler(client client.Client, allocator *gpuallocator.GpuAllocator) Hand
 	}
 }
 
-func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload) {
+func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload) error {
 	workloadState.Namespace = workload.Namespace
 	workloadState.Name = workload.Name
 	workloadState.Spec = workload.Spec
@@ -43,72 +44,65 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 	if err := h.List(ctx, workerList,
 		client.InNamespace(workloadState.Namespace),
 		client.MatchingLabels{constants.WorkloadKey: workloadState.Name}); err != nil {
-		log.FromContext(ctx).Error(err, "failed to list workers")
-		return
+		return err
 	}
-	workloadState.updateWorkers(workerList)
+	workloadState.updateCurrentActiveWorkers(workerList)
+	return nil
 }
 
 func (h *handler) ApplyResourcesToWorkload(ctx context.Context, workload *State, targetRes *tfv1.Resources) error {
-	if workload.IsAutoSetResourcesEnabled() {
-		workerList := &corev1.PodList{}
-		if err := h.List(ctx, workerList,
-			client.InNamespace(workload.Namespace),
-			client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
-			return fmt.Errorf("failed to list workers: %v", err)
-		}
-
-		for _, worker := range workerList.Items {
-			if !worker.DeletionTimestamp.IsZero() {
-				continue
-			}
-			if err := h.applyResourcesToWorker(ctx, workload, &worker, targetRes); err != nil {
-				return fmt.Errorf("failed to update worker %s resources: %v", worker.Name, err)
-			}
-		}
+	// If the latest recommendation has not been applied to all workers,
+	// we need to retry the update
+	if targetRes == nil &&
+		workload.Status.Recommendation != nil &&
+		workload.CurrentReplicas != workload.Status.AppliedRecommendedReplicas {
+		targetRes = workload.Status.Recommendation
 	}
 
-	if err := h.updateWorkload(ctx, workload, targetRes); err != nil {
-		return fmt.Errorf("failed to update auto scaling annotations: %v", err)
+	if targetRes != nil {
+		workload.Status.AppliedRecommendedReplicas = 0
+		for _, worker := range workload.CurrentActiveWorkers {
+			if err := h.applyResourcesToWorker(ctx, workload, worker, targetRes); err != nil {
+				log.FromContext(ctx).Error(err, "failed to update worker resources: %v", "worker", worker.Name)
+			}
+			workload.Status.AppliedRecommendedReplicas++
+		}
 	}
 
 	return nil
 }
 
-func (h *handler) updateWorkload(
-	ctx context.Context,
-	state *State,
-	targetRes *tfv1.Resources) error {
+func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, targetRes *tfv1.Resources) error {
 	workload := &tfv1.TensorFusionWorkload{}
 	if err := h.Get(ctx, client.ObjectKey{Namespace: state.Namespace, Name: state.Name}, workload); err != nil {
 		return fmt.Errorf("failed to get workload: %v", err)
 	}
 
-	if workload.Annotations == nil {
-		workload.Annotations = map[string]string{}
-	}
-	patch := client.MergeFrom(workload.DeepCopy())
-	maps.Copy(workload.Annotations, utils.GPUResourcesToAnnotations(targetRes))
-	maps.Copy(workload.Annotations, state.NewAnnotations)
-	if err := h.Patch(ctx, workload, patch); err != nil {
-		return fmt.Errorf("failed to patch workload %s: %v", workload.Name, err)
+	if targetRes == nil &&
+		workload.Status.AppliedRecommendedReplicas == state.Status.AppliedRecommendedReplicas {
+		return nil
 	}
 
-	if workload.Status.Recommendation == nil || !workload.Status.Recommendation.Equal(targetRes) {
-		workload.Status.Recommendation = targetRes
+	patch := client.MergeFrom(workload.DeepCopy())
+	if isResourcesChanged(&workload.Status, targetRes) {
+		workload.Status.Recommendation = targetRes.DeepCopy()
 		if condition := meta.FindStatusCondition(state.Status.Conditions,
 			constants.ConditionStatusTypeRecommendationProvided); condition != nil {
 			meta.SetStatusCondition(&workload.Status.Conditions, *condition)
 		}
-		if err := h.Status().Patch(ctx, workload, patch); err != nil {
-			return fmt.Errorf("failed to patch workload status %s: %v", workload.Name, err)
-		}
-		log.FromContext(ctx).Info("workload recommendation status updated successfully",
-			"workload", workload.Name, "recommendation", targetRes)
 	}
+	workload.Status.AppliedRecommendedReplicas = state.Status.AppliedRecommendedReplicas
+	if err := h.Status().Patch(ctx, workload, patch); err != nil {
+		return fmt.Errorf("failed to patch workload status %s: %v", workload.Name, err)
+	}
+	log.FromContext(ctx).Info("workload recommendation status updated successfully",
+		"workload", workload.Name, "recommendation", targetRes)
 
-	state.Annotations = workload.Annotations
 	return nil
+}
+
+func isResourcesChanged(status *tfv1.TensorFusionWorkloadStatus, targetRes *tfv1.Resources) bool {
+	return targetRes != nil && (status.Recommendation == nil || !status.Recommendation.Equal(targetRes))
 }
 
 func (h *handler) applyResourcesToWorker(ctx context.Context,
@@ -160,7 +154,7 @@ func (h *handler) applyResourcesToWorker(ctx context.Context,
 		return fmt.Errorf("failed to patch worker %s: %v", worker.Name, err)
 	}
 
-	log.Info("apply resources successfully",
+	log.Info("apply resources to worker successfully",
 		"worker", worker.Name, "targetResources", targetRes, "currentResources", curRes)
 
 	return nil
