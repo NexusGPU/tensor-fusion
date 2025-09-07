@@ -16,6 +16,10 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+var injectLibResource v1.ResourceList = v1.ResourceList{
+	v1.ResourceCPU:    resource.MustParse("20m"),
+	v1.ResourceMemory: resource.MustParse("64Mi"),
+}
 var nodeDiscoveryDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("20m"),
 	v1.ResourceMemory: resource.MustParse("64Mi"),
@@ -175,6 +179,11 @@ func AddTFDefaultClientConfBeforePatch(
 				MountPath: constants.TFLibsVolumeMountPath,
 			},
 		},
+		Resources: v1.ResourceRequirements{
+			Requests: injectLibResource,
+			Limits:   injectLibResource,
+		},
+		Env: convertDisabledFeatures4InjectLib(pod.Annotations[constants.DisableFeaturesAnnotation]),
 	})
 	pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 		Name: constants.TFLibsVolumeName,
@@ -302,16 +311,40 @@ func AddTFDefaultClientConfBeforePatch(
 }
 
 func convertDisabledFeaturesToEnvs(disabledFeatures string, envList []v1.EnvVar) []v1.EnvVar {
-	disabledFeaturesList := strings.Split(disabledFeatures, ",")
-	for _, feature := range disabledFeaturesList {
+	disabledFeaturesList := strings.SplitSeq(disabledFeatures, ",")
+	for feature := range disabledFeaturesList {
 		if feat, ok := featureShortcutMap[feature]; ok {
-			envList = append(envList, v1.EnvVar{
-				Name:  feat.EnvName,
-				Value: feat.EnvValue,
-			})
+			if !lo.ContainsBy(envList, func(item v1.EnvVar) bool {
+				return item.Name == feat.EnvName
+			}) {
+				envList = append(envList, v1.EnvVar{
+					Name:  feat.EnvName,
+					Value: feat.EnvValue,
+				})
+			}
 		}
 	}
 	return envList
+}
+
+func convertDisabledFeatures4InjectLib(disabledFeatures string) []v1.EnvVar {
+	if disabledFeatures == "" {
+		return []v1.EnvVar{}
+	}
+	disabledFeaturesList := strings.SplitSeq(disabledFeatures, ",")
+
+	// GPU limiter by-pass take effect in bootstrap stage, add special handling here
+	for feature := range disabledFeaturesList {
+		if feature == constants.BuiltInFeaturesGpuLimiter {
+			return []v1.EnvVar{
+				{
+					Name:  featureShortcutMap[feature].EnvName,
+					Value: featureShortcutMap[feature].EnvValue,
+				},
+			}
+		}
+	}
+	return []v1.EnvVar{}
 }
 
 func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool) {

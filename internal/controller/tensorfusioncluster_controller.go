@@ -43,7 +43,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	utils "github.com/NexusGPU/tensor-fusion/internal/utils"
-	corev1 "k8s.io/api/core/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -382,7 +381,6 @@ func (r *TensorFusionClusterReconciler) checkTFClusterComponentsReady(ctx contex
 		constants.LabelKeyOwner: tfc.GetName(),
 	}))
 	if err != nil {
-		r.Recorder.Eventf(tfc, corev1.EventTypeWarning, "CheckComponentStatusError", err.Error())
 		return false, nil, fmt.Errorf("failed to list GPUPools: %w", err)
 	}
 	if len(pools.Items) != len(tfc.Spec.GPUPools) {
@@ -411,7 +409,6 @@ func (r *TensorFusionClusterReconciler) updateTFClusterStatus(ctx context.Contex
 		}
 	}
 	if err := r.Status().Update(ctx, tfc); err != nil {
-		r.Recorder.Eventf(tfc, corev1.EventTypeWarning, "UpdateClusterStatusError", err.Error())
 		return err
 	}
 	return nil
