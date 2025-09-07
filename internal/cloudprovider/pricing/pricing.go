@@ -94,9 +94,6 @@ func SetTflopsMapAndInitGPUPricingInfo(ctx context.Context, gpuInfos *[]config.G
 		return
 	}
 	for _, gpuInfo := range *gpuInfos {
-		if tflopsMap[gpuInfo.FullModelName] != nil {
-			continue
-		}
 		completeInfo := &CompleteGPUInfo{
 			GpuInfo: &gpuInfo,
 		}
