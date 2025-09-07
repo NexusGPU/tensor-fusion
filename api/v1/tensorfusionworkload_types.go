@@ -70,6 +70,10 @@ type TensorFusionWorkloadStatus struct {
 	// +optional
 	Recommendation *Resources `json:"recommendation,omitempty"`
 
+	// The number of replicas currently applied based on the latest recommendation
+	// +optional
+	AppliedRecommendedReplicas int32 `json:"appliedRecommendedReplicas,omitempty"`
+
 	// The currently active cron scaling rule
 	// +optional
 	ActiveCronScalingRule *CronScalingRule `json:"activeCronScalingRule,omitempty"`

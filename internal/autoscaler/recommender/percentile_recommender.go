@@ -85,11 +85,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 
 	log.V(6).Info("current estimated resources from percentile recommender", "workload", workload.Name, "estimations", estimations)
 
-	curRes, err := workload.GetCurrentResourcesSpec()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current resources from workload %s: %v", workload.Name, err)
-	}
-
+	curRes := workload.GetCurrentResourcesSpec()
 	targetRes := &tfv1.Resources{}
 	message := ""
 

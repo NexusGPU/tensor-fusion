@@ -1,38 +1,31 @@
-package workload
+package metrics
 
 import (
 	"time"
-
-	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
 )
 
-type WorkerState struct {
-	Name                 string
-	WorkloadName         string
+type WorkerUsageSampler struct {
 	LastTflopsSampleTime time.Time
-
-	VramPeak           uint64
-	LastVramSampleTime time.Time
-	VramWindowEnd      time.Time
+	VramPeak             uint64
+	LastVramSampleTime   time.Time
+	VramWindowEnd        time.Time
 }
 
-func NewWorkerState(name string, workloadName string) *WorkerState {
-	return &WorkerState{
-		Name:                 name,
-		WorkloadName:         workloadName,
+func NewWorkerUsageSampler() *WorkerUsageSampler {
+	return &WorkerUsageSampler{
 		LastTflopsSampleTime: time.Time{},
 		LastVramSampleTime:   time.Time{},
 		VramWindowEnd:        time.Time{},
 	}
 }
 
-func (w *WorkerState) AddSample(aggregator *metrics.WorkerUsageAggregator, sample *metrics.WorkerUsage) bool {
+func (w *WorkerUsageSampler) AddSample(aggregator *WorkerUsageAggregator, sample *WorkerUsage) bool {
 	w.AddTflopsSample(aggregator, sample)
 	w.AddVramSample(aggregator, sample)
 	return true
 }
 
-func (w *WorkerState) AddTflopsSample(aggregator *metrics.WorkerUsageAggregator, sample *metrics.WorkerUsage) bool {
+func (w *WorkerUsageSampler) AddTflopsSample(aggregator *WorkerUsageAggregator, sample *WorkerUsage) bool {
 	if sample.Timestamp.Before(w.LastTflopsSampleTime) {
 		return false
 	}
@@ -41,7 +34,7 @@ func (w *WorkerState) AddTflopsSample(aggregator *metrics.WorkerUsageAggregator,
 	return true
 }
 
-func (w *WorkerState) AddVramSample(aggregator *metrics.WorkerUsageAggregator, sample *metrics.WorkerUsage) bool {
+func (w *WorkerUsageSampler) AddVramSample(aggregator *WorkerUsageAggregator, sample *WorkerUsage) bool {
 	ts := sample.Timestamp
 	if ts.Before(w.LastVramSampleTime) {
 		return false
@@ -58,7 +51,7 @@ func (w *WorkerState) AddVramSample(aggregator *metrics.WorkerUsageAggregator, s
 			addNewPeak = true
 		}
 	} else {
-		aggregationInteval := metrics.DefaultAggregationInterval
+		aggregationInteval := DefaultAggregationInterval
 		shift := ts.Sub(w.VramWindowEnd).Truncate(aggregationInteval) + aggregationInteval
 		w.VramWindowEnd = w.VramWindowEnd.Add(shift)
 		w.VramPeak = 0

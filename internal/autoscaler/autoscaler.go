@@ -105,21 +105,23 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 		return
 	}
 
-	observedWorkloads := map[WorkloadID]bool{}
+	activeWorkloads := map[WorkloadID]bool{}
 	for _, workload := range workloadList.Items {
 		if !workload.DeletionTimestamp.IsZero() {
 			continue
 		}
 
 		workloadID := WorkloadID{workload.Namespace, workload.Name}
+		activeWorkloads[workloadID] = true
 		workloadState := s.findOrCreateWorkloadState(workloadID.Namespace, workloadID.Name)
-		s.workloadHandler.UpdateWorkloadState(ctx, workloadState, &workload)
-		observedWorkloads[workloadID] = true
+		if err := s.workloadHandler.UpdateWorkloadState(ctx, workloadState, &workload); err != nil {
+			log.Error(err, "failed to update workload state", "workload", workloadID)
+		}
 	}
 
 	// remove non-existent workloads
 	for workloadID := range s.workloads {
-		if !observedWorkloads[workloadID] {
+		if !activeWorkloads[workloadID] {
 			delete(s.workloads, workloadID)
 		}
 	}
@@ -163,13 +165,16 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 	for _, workload := range s.workloads {
 		resources, err := recommender.GetResourcesFromRecommenders(ctx, workload, s.recommenders)
 		if err != nil {
-			log.Error(err, "failed to get resources from recommenders")
+			log.Error(err, "failed to get resources from recommenders", "workload", workload.Name)
+			continue
 		}
-		if resources != nil {
-			log.Info("recommended resources", "workload", workload.Name, "resources", resources)
-			if err := s.workloadHandler.ApplyResourcesToWorkload(ctx, workload, resources); err != nil {
-				log.Error(err, "failed to apply resources", "workload", workload.Name, "resources", resources)
-			}
+
+		if workload.IsAutoSetResourcesEnabled() {
+			s.workloadHandler.ApplyResourcesToWorkload(ctx, workload, resources)
+		}
+
+		if err := s.workloadHandler.UpdateWorkloadStatus(ctx, workload, resources); err != nil {
+			log.Error(err, "failed to update workload status", "workload", workload.Name)
 		}
 	}
 }
