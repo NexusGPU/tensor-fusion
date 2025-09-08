@@ -9,7 +9,7 @@ import (
 
 var _ = Describe("Recommender", func() {
 	It("should merge recomendations based on a larger request value", func() {
-		recs := map[string]*Recommendation{
+		recs := map[string]*RecResult{
 			"rec1": {
 				Resources: tfv1.Resources{
 					Requests: tfv1.Resource{
@@ -54,7 +54,7 @@ var _ = Describe("Recommender", func() {
 	})
 
 	It("should not reduce resources if scale down is locked", func() {
-		recs := map[string]*Recommendation{
+		recs := map[string]*RecResult{
 			"rec1": {
 				Resources: tfv1.Resources{
 					Requests: tfv1.Resource{

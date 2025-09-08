@@ -75,7 +75,7 @@ func (p *PercentileRecommender) Name() string {
 	return "percentile"
 }
 
-func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workload.State) (*Recommendation, error) {
+func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workload.State) (*RecResult, error) {
 	log := log.FromContext(ctx)
 
 	estimations := p.GetResourcesEstimation(workload)
@@ -133,7 +133,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		Message:            message,
 	})
 
-	return &Recommendation{
+	return &RecResult{
 		Resources:        *targetRes,
 		HasApplied:       targetRes.Equal(curRes),
 		ScaleDownLocking: false,

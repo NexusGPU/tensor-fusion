@@ -5,6 +5,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -48,6 +49,26 @@ func (w *State) ShouldScaleResource(name tfv1.ResourceName) bool {
 	return strings.EqualFold(target, "all") || strings.EqualFold(string(name), target)
 }
 
+func (w *State) IsRecommendationAppliedToAllWokers() bool {
+	if w.Status.Recommendation == nil {
+		return true
+	}
+
+	if w.CurrentReplicas != w.Status.AppliedRecommendedReplicas {
+		return false
+	}
+
+	curRes := w.GetCurrentResourcesSpec()
+	for _, worker := range w.CurrentActiveWorkers {
+		workerRes, _ := utils.GPUResourcesFromAnnotations(worker.Annotations)
+		if !curRes.Equal(workerRes) {
+			return false
+		}
+	}
+
+	return true
+}
+
 func (w *State) updateCurrentActiveWorkers(podList *corev1.PodList) {
 	w.CurrentActiveWorkers = map[string]*corev1.Pod{}
 	for _, worker := range podList.Items {
@@ -66,7 +87,7 @@ func (w *State) updateCurrentActiveWorkers(podList *corev1.PodList) {
 		}
 	}
 
-	w.CurrentReplicas = int32(len(w.WorkerUsageSamplers))
+	w.CurrentReplicas = int32(len(w.CurrentActiveWorkers))
 }
 
 func (w *State) AddSample(sample *metrics.WorkerUsage) {
