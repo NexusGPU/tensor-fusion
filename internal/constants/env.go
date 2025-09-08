@@ -98,8 +98,7 @@ const (
 	LdPreloadEnv     = "LD_PRELOAD"
 	LdPreloadLimiter = "/home/app/libcuda_limiter.so"
 
-	SharedMemDeviceName   = "/dev/shm"
-	SharedMemMountSubPath = "shm"
+	SharedMemMountSubPath = "/shm"
 
 	// disable GPU limiter, for emergency use
 	DisableGpuLimiterEnv = "DISABLE_GPU_LIMITER"

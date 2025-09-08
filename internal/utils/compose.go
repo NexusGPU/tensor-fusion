@@ -230,7 +230,7 @@ func AddTFDefaultClientConfBeforePatch(
 				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
 				v1.VolumeMount{
 					Name:             constants.DataVolumeName,
-					MountPath:        constants.TFLibsVolumeMountPath,
+					MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
 					SubPathExpr:      constants.TFDataPathWorkerExpr,
 					MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 				})
@@ -462,8 +462,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
 		Name:      constants.DataVolumeName,
 		ReadOnly:  false,
-		MountPath: constants.SharedMemDeviceName,
-		SubPath:   constants.SharedMemMountSubPath,
+		MountPath: constants.TFDataPath,
 	}, v1.VolumeMount{
 		Name:      constants.TensorFusionGPUInfoConfigVolumeName,
 		MountPath: constants.TensorFusionGPUInfoConfigMountPath,
@@ -682,7 +681,7 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 		spec.Containers[0].VolumeMounts,
 		v1.VolumeMount{
 			Name:             constants.DataVolumeName,
-			MountPath:        constants.TFLibsVolumeMountPath,
+			MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
 			SubPathExpr:      constants.TFDataPathWorkerExpr,
 			MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 		})
