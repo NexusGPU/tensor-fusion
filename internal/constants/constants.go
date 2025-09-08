@@ -30,6 +30,7 @@ const (
 	LabelKeyClusterOwner    = Domain + "/cluster"
 	LabelKeyNodeClass       = Domain + "/node-class"
 	LabelKeyPodTemplateHash = Domain + "/pod-template-hash"
+	LabelNodeSelectorHash   = Domain + "/node-selector-hash"
 	LabelComponent          = Domain + "/component"
 	// used by TF connection, for matching the related connections when worker Pod state changed
 	LabelWorkerName = Domain + "/worker-name"

@@ -19,8 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -86,12 +84,15 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 	if !matched {
-		// delete gpunode if no matched pool
-		if err := r.Delete(ctx, &tfv1.GPUNode{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: node.Name,
-			},
-		}); err != nil {
+		existingGPUNode := &tfv1.GPUNode{}
+		if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, existingGPUNode); err != nil {
+			if errors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, fmt.Errorf("can not get gpuNode(%s) : %w", node.Name, err)
+		}
+		// delete existing gpunode if no matched pool
+		if err := r.Delete(ctx, existingGPUNode); err != nil {
 			// requeue if the gpunode is not generated
 			if errors.IsNotFound(err) {
 				return ctrl.Result{}, nil
@@ -119,6 +120,14 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{}, fmt.Errorf("failed to update GPU node status: %w", err)
 		}
 		return ctrl.Result{}, nil
+	}
+
+	// update k8s node hash
+	hash := utils.GetObjectHash(pool.Spec.NodeManagerConfig.NodeSelector)
+	if node.Labels[constants.LabelNodeSelectorHash] != hash {
+		if err := UpdateK8SNodeSelectorHash(ctx, r.Client, node, hash); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update k8s node hash: %w", err)
+		}
 	}
 
 	provisioningMode := pool.Spec.NodeManagerConfig.ProvisioningMode
@@ -199,11 +208,7 @@ func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool, 
 // SetupWithManager sets up the controller with the Manager.
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// must choose an initial label selector to avoid performance impact in large Kubernetes clusters
-	selector := os.Getenv("INITIAL_GPU_NODE_LABEL_SELECTOR")
-	if selector == "" {
-		selector = constants.InitialGPUNodeSelector
-	}
-	selectors := strings.Split(selector, "=")
+	selectors := utils.GetInitialGPUNodeSelector()
 	p, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
 		MatchLabels: map[string]string{
 			selectors[0]: selectors[1],

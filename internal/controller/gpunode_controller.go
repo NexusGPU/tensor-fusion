@@ -140,7 +140,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj)
+	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj, coreNode)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -319,7 +319,12 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 	return nil
 }
 
-func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) (string, error) {
+func (r *GPUNodeReconciler) reconcileHypervisorPod(
+	ctx context.Context,
+	node *tfv1.GPUNode,
+	pool *tfv1.GPUPool,
+	k8sNode *corev1.Node,
+) (string, error) {
 	log := log.FromContext(ctx)
 
 	if pool.Spec.ComponentConfig == nil || pool.Spec.ComponentConfig.Hypervisor == nil {
@@ -361,7 +366,7 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tf
 	}
 
 	log.Info("hypervisor pod not found, creating new one", "node", node.Name)
-	if err := r.createHypervisorPod(ctx, key, node, pool); err != nil {
+	if err := r.createHypervisorPod(ctx, key, node, pool, k8sNode); err != nil {
 		if errors.IsAlreadyExists(err) {
 			log.Info("hypervisor pod already exists, skip creation", "node", node.Name)
 			return "", nil
@@ -372,7 +377,13 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(ctx context.Context, node *tf
 	return key.Name, nil
 }
 
-func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.ObjectKey, node *tfv1.GPUNode, pool *tfv1.GPUPool) error {
+func (r *GPUNodeReconciler) createHypervisorPod(
+	ctx context.Context,
+	key client.ObjectKey,
+	node *tfv1.GPUNode,
+	pool *tfv1.GPUPool,
+	k8sNode *corev1.Node,
+) error {
 	log := log.FromContext(ctx)
 
 	podTmpl := &corev1.PodTemplate{}
@@ -447,7 +458,11 @@ func (r *GPUNodeReconciler) createHypervisorPod(ctx context.Context, key client.
 	})
 	err = controllerutil.SetControllerReference(node, newPod, r.Scheme)
 	if err != nil {
-		return fmt.Errorf("failed to set controller reference: %w", err)
+		return fmt.Errorf("failed to set controller reference for hypervisor: %w", err)
+	}
+	// also set node owned by k8s node to allow Karpenter to delete the node while hypervisor exists
+	if err := controllerutil.SetOwnerReference(k8sNode, newPod, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set owner reference for hypervisor: %w", err)
 	}
 
 	// create hypervisor pod
