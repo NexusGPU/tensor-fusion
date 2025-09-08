@@ -23,6 +23,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultbinder"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/queuesort"
 	frameworkruntime "k8s.io/kubernetes/pkg/scheduler/framework/runtime"
+	"k8s.io/kubernetes/pkg/scheduler/metrics"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
 	tf "k8s.io/kubernetes/pkg/scheduler/testing/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -218,7 +219,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 		).
 		Build()
 
-	var k8sObjs []runtime.Object
+	k8sObjs := make([]runtime.Object, 0, len(pods)+len(nodes))
 	for _, pod := range pods {
 		err := s.client.Create(s.ctx, pod)
 		s.NoError(err)
@@ -243,12 +244,14 @@ func (s *GPUResourcesSuite) SetupTest() {
 
 	fakeClientSet := clientsetfake.NewSimpleClientset(k8sObjs...)
 	informerFactory := informers.NewSharedInformerFactory(fakeClientSet, 0)
-
+	metrics.Register()
+	metricsRecorder := metrics.NewMetricsAsyncRecorder(1000, time.Second, s.ctx.Done())
 	fwk, err := tf.NewFramework(
 		s.ctx, registeredPlugins, "",
 		frameworkruntime.WithPodNominator(internalqueue.NewSchedulingQueue(nil, informerFactory)),
 		frameworkruntime.WithSnapshotSharedLister(internalcache.NewEmptySnapshot()),
 		frameworkruntime.WithEventRecorder(&events.FakeRecorder{}),
+		frameworkruntime.WithMetricsRecorder(metricsRecorder),
 	)
 	s.NoError(err)
 	s.fwk = fwk

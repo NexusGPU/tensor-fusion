@@ -27,27 +27,6 @@ import (
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
-
-	"k8s.io/client-go/kubernetes"
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
-	"k8s.io/client-go/rest"
-	"k8s.io/klog/v2"
-
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/kubernetes/cmd/kube-scheduler/app"
-	"k8s.io/kubernetes/pkg/scheduler"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
-
-	"sigs.k8s.io/yaml"
-
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/cmd/sched"
 	"github.com/NexusGPU/tensor-fusion/internal/alert"
@@ -65,6 +44,25 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/version"
 	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	k8sVer "k8s.io/apimachinery/pkg/util/version"
+	"k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/cmd/kube-scheduler/app"
+	"k8s.io/kubernetes/pkg/scheduler"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/yaml"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -204,6 +202,14 @@ func main() {
 	_ = os.Setenv(constants.KubeApiVersionMajorEnv, version.Major)
 	_ = os.Setenv(constants.KubeApiVersionMinorEnv, version.Minor)
 
+	// TODO: there will still be risk after FeatureGate removed when the feature is stable for a long time
+	// To be compatible with long-term k8s version, need to patch Kubernetes source code
+	k8sVersion := k8sVer.MustParseSemantic(version.String())
+	err = feature.DefaultMutableFeatureGate.SetEmulationVersion(k8sVersion)
+	if err != nil {
+		setupLog.Error(err, "unable to set k8s version for feature gating")
+	}
+
 	alertEvaluatorReady = make(chan struct{})
 	setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
 
@@ -221,7 +227,7 @@ func main() {
 	pricingProvider := pricing.NewStaticPricingProvider()
 	startWebhook(mgr, portAllocator, pricingProvider)
 
-	scheduler := startScheduler(ctx, allocator, mgr)
+	scheduler := startScheduler(ctx, allocator, mgr, k8sVersion)
 
 	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator)
 
@@ -461,6 +467,7 @@ func startScheduler(
 	ctx context.Context,
 	allocator *gpuallocator.GpuAllocator,
 	mgr manager.Manager,
+	k8sVersion *k8sVer.Version,
 ) *scheduler.Scheduler {
 	if os.Getenv(constants.EnableSchedulerEnv) == constants.FalseStringValue {
 		return nil
@@ -479,7 +486,9 @@ func startScheduler(
 		gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
 	)
 
-	cc, scheduler, err := sched.SetupScheduler(ctx, mgr, schedulerConfigPath, false, gpuResourceFitOpt, gpuTopoOpt)
+	cc, scheduler, err := sched.SetupScheduler(
+		ctx, mgr, schedulerConfigPath, false, k8sVersion, gpuResourceFitOpt, gpuTopoOpt,
+	)
 	if err != nil {
 		setupLog.Error(err, "unable to create tensor fusion scheduler")
 		os.Exit(1)

@@ -28,6 +28,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultbinder"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/queuesort"
 	frameworkruntime "k8s.io/kubernetes/pkg/scheduler/framework/runtime"
+	"k8s.io/kubernetes/pkg/scheduler/metrics"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
 	tf "k8s.io/kubernetes/pkg/scheduler/testing/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -94,17 +95,29 @@ func NewBenchmarkFixture(
 	allocator := setupAllocator(b, ctx, client)
 
 	// Setup framework and plugin
-	fwk, plugin := setupFrameworkAndPlugin(b, ctx, client, allocator, pods, nodes, k8sNativeObjects)
-
-	return &BenchmarkFixture{
-		ctx:       ctx,
-		cancel:    cancel,
-		plugin:    plugin,
-		nodes:     nodes,
-		pods:      pods,
-		allocator: allocator,
-		client:    client,
-		fwk:       fwk,
+	if !realAPIServer {
+		fwk, plugin := setupFrameworkAndPlugin(b, ctx, client, allocator, k8sNativeObjects)
+		return &BenchmarkFixture{
+			ctx:       ctx,
+			cancel:    cancel,
+			plugin:    plugin,
+			nodes:     nodes,
+			pods:      pods,
+			allocator: allocator,
+			client:    client,
+			fwk:       fwk,
+		}
+	} else {
+		return &BenchmarkFixture{
+			ctx:       ctx,
+			cancel:    cancel,
+			plugin:    nil,
+			nodes:     nodes,
+			pods:      pods,
+			allocator: allocator,
+			client:    client,
+			fwk:       nil,
+		}
 	}
 }
 
@@ -323,8 +336,7 @@ func batchCreateResources(
 
 func setupFrameworkAndPlugin(
 	b *testing.B, ctx context.Context, client client.Client,
-	allocator *gpuallocator.GpuAllocator, pods []*v1.Pod, nodes []*v1.Node,
-	k8sObjs []runtime.Object,
+	allocator *gpuallocator.GpuAllocator, k8sObjs []runtime.Object,
 ) (framework.Framework, *gpuResourceFitPlugin.GPUFit) {
 	// Register plugins including our GPU plugin
 	registeredPlugins := []tf.RegisterPluginFunc{
@@ -334,12 +346,14 @@ func setupFrameworkAndPlugin(
 
 	fakeClientSet := clientsetfake.NewSimpleClientset(k8sObjs...)
 	informerFactory := informers.NewSharedInformerFactory(fakeClientSet, 0)
-
+	metrics.Register()
+	metricsRecorder := metrics.NewMetricsAsyncRecorder(1000, time.Second, ctx.Done())
 	fwk, err := tf.NewFramework(
 		ctx, registeredPlugins, "",
 		frameworkruntime.WithPodNominator(internalqueue.NewSchedulingQueue(nil, informerFactory)),
 		frameworkruntime.WithSnapshotSharedLister(internalcache.NewEmptySnapshot()),
 		frameworkruntime.WithEventRecorder(&events.FakeRecorder{}),
+		frameworkruntime.WithMetricsRecorder(metricsRecorder),
 	)
 	require.NoError(b, err)
 

@@ -47,6 +47,7 @@
         "envtest",
         "essd",
         "Eventf",
+        "featuregate",
         "finalizer",
         "Finalizers",
         "frameworkruntime",

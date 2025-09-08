@@ -6,14 +6,18 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/cmd/sched"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	gpuResourceFitPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	gpuTopoPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gputopo"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"go.uber.org/zap/zapcore"
+	"k8s.io/apimachinery/pkg/util/version"
+	"k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -41,7 +45,19 @@ func defaultBenchmarkConfig() BenchmarkConfig {
 
 var testEnv *envtest.Environment
 
-func setupKubernetes() (*rest.Config, error) {
+func setupKubernetes() (*version.Version, *rest.Config, error) {
+	// export ENVTEST_K8S_VERSION=1.34.0
+	// Run `./bin/setup-envtest use ${ENVTEST_K8S_VERSION} --bin-dir ./bin` before running the test
+	k8sVersion := os.Getenv("ENVTEST_K8S_VERSION")
+	if k8sVersion == "" {
+		k8sVersion = "1.31.0"
+	}
+	majorVersion := k8sVersion[:strings.Index(k8sVersion, ".")]
+	minorVersion := k8sVersion[strings.Index(k8sVersion, ".")+1 : strings.LastIndex(k8sVersion, ".")]
+	_ = os.Setenv(constants.KubeApiVersionMajorEnv, majorVersion)
+	_ = os.Setenv(constants.KubeApiVersionMinorEnv, minorVersion)
+	ver := version.MustParse(k8sVersion)
+	_ = feature.DefaultMutableFeatureGate.SetEmulationVersion(ver)
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "config", "crd", "bases"),
@@ -49,15 +65,14 @@ func setupKubernetes() (*rest.Config, error) {
 		},
 		ErrorIfCRDPathMissing: true,
 
-		// The BinaryAssetsDirectory is only required if you want to run the tests directly
-		// without call the makefile target test. If not informed it will look for the
-		// default path defined in controller-runtime which is /usr/local/kubebuilder/.
-		// Note that you must have the required binaries setup under the bin directory to perform
-		// the tests directly. When we run make test it will be setup and used automatically.
 		BinaryAssetsDirectory: filepath.Join("..", "..", "bin", "k8s",
-			fmt.Sprintf("1.31.0-%s-%s", runtime.GOOS, runtime.GOARCH)),
+			fmt.Sprintf("%s-%s-%s", k8sVersion, runtime.GOOS, runtime.GOARCH)),
 	}
-	return testEnv.Start()
+	cfg, err := testEnv.Start()
+	if err != nil {
+		return nil, nil, err
+	}
+	return ver, cfg, nil
 }
 
 // Estimated Performance: 400-500 pods/second for 1K nodes, 10K Pods cluster on Mac M4 Pro
@@ -65,7 +80,7 @@ func setupKubernetes() (*rest.Config, error) {
 func BenchmarkScheduler(b *testing.B) {
 	klog.SetLogger(zap.New(zap.WriteTo(os.Stderr), zap.UseDevMode(false), zap.Level(zapcore.ErrorLevel)))
 	// Setup phase - runs once before all benchmark iterations
-	cfg, err := setupKubernetes()
+	ver, cfg, err := setupKubernetes()
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -99,7 +114,7 @@ func BenchmarkScheduler(b *testing.B) {
 	testCtx := ctx
 
 	cc, scheduler, err := sched.SetupScheduler(testCtx, nil,
-		"../../config/samples/scheduler-config.yaml", true, gpuResourceFitOpt, gpuTopoOpt)
+		"../../config/samples/scheduler-config.yaml", true, ver, gpuResourceFitOpt, gpuTopoOpt)
 	if err != nil {
 		b.Fatal(err)
 	}
