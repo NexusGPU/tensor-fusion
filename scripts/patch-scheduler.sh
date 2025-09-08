@@ -1,6 +1,4 @@
 #!/bin/bash
-# To re-generate patch
-
 git apply ./patches/scheduler-csi-capacity-1.patch
 git apply ./patches/scheduler-csi-capacity-2.patch
 
