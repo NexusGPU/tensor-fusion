@@ -53,6 +53,8 @@ type NodeReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=nodes/finalizers,verbs=create;get;patch;update
 
 // Reconcile k8s nodes to create and update GPUNode
+//
+//nolint:gocyclo
 func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	node := &corev1.Node{}
