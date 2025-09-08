@@ -42,7 +42,7 @@ func BenchmarkGPUFitPlugin(b *testing.B) {
 				break
 			}
 			testPod := fixture.pods[i]
-			fixture.plugin.PreFilter(fixture.ctx, state, testPod)
+			fixture.plugin.PreFilter(fixture.ctx, state, testPod, nil)
 			filterResult, err := state.Read(gpuResourceFitPlugin.CycleStateGPUSchedulingResult)
 			if err != nil {
 				b.Fatal(err)
@@ -82,7 +82,7 @@ func BenchmarkGPUFitPlugin(b *testing.B) {
 
 	b.Run("Filter", func(b *testing.B) {
 		state := framework.NewCycleState()
-		fixture.plugin.PreFilter(fixture.ctx, state, testPod)
+		fixture.plugin.PreFilter(fixture.ctx, state, testPod, nil)
 		nodeInfo := &framework.NodeInfo{}
 
 		b.ResetTimer()
@@ -94,7 +94,7 @@ func BenchmarkGPUFitPlugin(b *testing.B) {
 
 	b.Run("Score", func(b *testing.B) {
 		state := framework.NewCycleState()
-		fixture.plugin.PreFilter(fixture.ctx, state, testPod)
+		fixture.plugin.PreFilter(fixture.ctx, state, testPod, nil)
 		nodeInfo := &framework.NodeInfo{}
 
 		b.ResetTimer()

@@ -30,7 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
+	fwk "k8s.io/kube-scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -51,7 +51,7 @@ type SimulateSchedulingFilterDetail struct {
 	FilterStageDetails []filter.FilterDetail
 }
 
-func (p *SimulateSchedulingFilterDetail) Clone() framework.StateData {
+func (p *SimulateSchedulingFilterDetail) Clone() fwk.StateData {
 	return p
 }
 

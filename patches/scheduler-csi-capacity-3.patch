@@ -9,10 +9,10 @@
  	"strings"
  	"time"
  
-@@ -514,6 +516,14 @@
+@@ -543,6 +545,14 @@
  			}
  			handlers = append(handlers, handlerRegistration)
- 		case framework.CSIStorageCapacity:
+ 		case fwk.CSIStorageCapacity:
 +			// FIX kubernetes 1.24 and lower version API missing issue
 +			minorVersionStr := os.Getenv("KUBE_API_VERSION_MINOR")
 +			if minorVersionStr != "" {
@@ -22,5 +22,5 @@
 +				}
 +			}
  			if handlerRegistration, err = informerFactory.Storage().V1().CSIStorageCapacities().Informer().AddEventHandler(
- 				buildEvtResHandler(at, framework.CSIStorageCapacity),
+ 				buildEvtResHandler(at, fwk.CSIStorageCapacity),
  			); err != nil {
