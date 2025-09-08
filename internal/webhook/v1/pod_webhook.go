@@ -395,7 +395,7 @@ func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *co
 	if pod.GenerateName == "" && pod.Name != "" {
 		prefix = pod.Name + constants.TFConnectionNamePrefix
 	} else {
-		prefix = pod.GenerateName + constants.TFConnectionNamePrefix
+		prefix = pod.GenerateName + constants.TFConnectionNameNoPrefix
 	}
 	connectionName := fmt.Sprintf("%s%s", prefix, utils.NewShortID(10))
 	connectionNamespace := pod.Namespace

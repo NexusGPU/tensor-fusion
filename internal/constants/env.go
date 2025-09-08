@@ -73,9 +73,10 @@ const (
 	LdPreloadFileName = "ld.so.preload"
 	LdPreloadFile     = "/etc/ld.so.preload"
 
-	TFLibsVolumeName       = "tf-libs"
-	TFLibsVolumeMountPath  = "/tensor-fusion"
-	TFConnectionNamePrefix = "-tf-vgpu-"
+	TFLibsVolumeName         = "tf-libs"
+	TFLibsVolumeMountPath    = "/tensor-fusion"
+	TFConnectionNamePrefix   = "-tf-vgpu-"
+	TFConnectionNameNoPrefix = "tf-vgpu-"
 
 	HostIPFieldRef       = "status.hostIP"
 	NodeNameFieldRef     = "spec.nodeName"
