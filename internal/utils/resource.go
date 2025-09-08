@@ -22,17 +22,14 @@ func GPUResourcesFromAnnotations(annotations map[string]string) (*tfv1.Resources
 	for _, info := range resInfo {
 		annotation, ok := annotations[info.key]
 		if !ok {
-			continue
+			// Should not happen
+			return nil, fmt.Errorf("missing gpu resource annotation %q", info.key)
 		}
 		q, err := resource.ParseQuantity(annotation)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse %s: %v", info.key, err)
+			return nil, fmt.Errorf("failed to parse %q: %v", info.key, err)
 		}
 		*info.dst = q
-	}
-
-	if result.IsZero() {
-		return nil, nil
 	}
 
 	return &result, nil

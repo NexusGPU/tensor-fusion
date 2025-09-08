@@ -28,7 +28,7 @@ func (c *CronRecommender) Name() string {
 	return "cron"
 }
 
-func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Recommendation, error) {
+func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*RecResult, error) {
 	activeRule, err := c.getActiveCronScalingRule(&w.Spec.AutoScalingConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active cron scaling rule %w", err)
@@ -68,7 +68,7 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 		})
 	}
 
-	return &Recommendation{
+	return &RecResult{
 		Resources:        *targetRes,
 		HasApplied:       len(reason) == 0,
 		ScaleDownLocking: true,

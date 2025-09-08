@@ -53,9 +53,7 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 func (h *handler) ApplyResourcesToWorkload(ctx context.Context, workload *State, targetRes *tfv1.Resources) error {
 	// If the latest recommendation has not been applied to all workers,
 	// we need to retry the update
-	if targetRes == nil &&
-		workload.Status.Recommendation != nil &&
-		workload.CurrentReplicas != workload.Status.AppliedRecommendedReplicas {
+	if targetRes == nil && !workload.IsRecommendationAppliedToAllWokers() {
 		targetRes = workload.Status.Recommendation
 	}
 
@@ -79,13 +77,14 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, target
 	}
 
 	if targetRes == nil &&
-		workload.Status.AppliedRecommendedReplicas == state.Status.AppliedRecommendedReplicas {
+		!isAppliedRecommendedReplicasChanged(workload, state) {
 		return nil
 	}
 
 	patch := client.MergeFrom(workload.DeepCopy())
-	if isResourcesChanged(&workload.Status, targetRes) {
+	if isRecommendationChanged(&workload.Status, targetRes) {
 		workload.Status.Recommendation = targetRes.DeepCopy()
+		workload.Status.ActiveCronScalingRule = state.Status.ActiveCronScalingRule
 		if condition := meta.FindStatusCondition(state.Status.Conditions,
 			constants.ConditionStatusTypeRecommendationProvided); condition != nil {
 			meta.SetStatusCondition(&workload.Status.Conditions, *condition)
@@ -101,21 +100,23 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, target
 	return nil
 }
 
-func isResourcesChanged(status *tfv1.TensorFusionWorkloadStatus, targetRes *tfv1.Resources) bool {
+func isRecommendationChanged(status *tfv1.TensorFusionWorkloadStatus, targetRes *tfv1.Resources) bool {
 	return targetRes != nil && (status.Recommendation == nil || !status.Recommendation.Equal(targetRes))
 }
 
-func (h *handler) applyResourcesToWorker(ctx context.Context,
-	workload *State,
-	worker *corev1.Pod,
-	targetRes *tfv1.Resources) error {
+func isAppliedRecommendedReplicasChanged(workload *tfv1.TensorFusionWorkload, state *State) bool {
+	return workload.Status.AppliedRecommendedReplicas == state.Status.AppliedRecommendedReplicas
+}
+
+func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, worker *corev1.Pod, targetRes *tfv1.Resources) error {
 	log := log.FromContext(ctx)
 
 	curRes, err := utils.GPUResourcesFromAnnotations(worker.Annotations)
 	if err != nil {
-		return fmt.Errorf("failed to get current worker resources: %v", err)
+		log.Error(err, "invalid GPU resources annotations")
 	}
-	if curRes != nil && curRes.Equal(targetRes) {
+
+	if targetRes.Equal(curRes) {
 		return nil
 	}
 

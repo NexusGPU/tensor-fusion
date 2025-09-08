@@ -11,32 +11,32 @@ import (
 // Interface defines the contract for resource recommendation strategies used by the autoscaler.
 type Interface interface {
 	Name() string
-	Recommend(ctx context.Context, workload *workload.State) (*Recommendation, error)
+	Recommend(ctx context.Context, workload *workload.State) (*RecResult, error)
 }
 
-type Recommendation struct {
+type RecResult struct {
 	Resources        tfv1.Resources
 	HasApplied       bool
 	ScaleDownLocking bool
 }
 
 func GetResourcesFromRecommenders(ctx context.Context, workload *workload.State, recommenders []Interface) (*tfv1.Resources, error) {
-	recommendations := map[string]*Recommendation{}
+	recResults := map[string]*RecResult{}
 	for _, recommender := range recommenders {
-		rec, err := recommender.Recommend(ctx, workload)
+		result, err := recommender.Recommend(ctx, workload)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get recommendation from %s: %v", recommender.Name(), err)
 		}
-		if rec != nil {
-			recommendations[recommender.Name()] = rec
+		if result != nil {
+			recResults[recommender.Name()] = result
 		}
 	}
 
-	if len(recommendations) <= 0 {
+	if len(recResults) <= 0 {
 		return nil, nil
 	}
 
-	resources := getResourcesFromRecommendations(recommendations)
+	resources := getResourcesFromRecommendations(recResults)
 	if resources != nil {
 		curRes := workload.GetCurrentResourcesSpec()
 		// If a resource value is zero, replace it with current value
@@ -54,25 +54,25 @@ func GetResourcesFromRecommenders(ctx context.Context, workload *workload.State,
 	return resources, nil
 }
 
-func getResourcesFromRecommendations(recommendations map[string]*Recommendation) *tfv1.Resources {
-	result := &tfv1.Resources{}
+func getResourcesFromRecommendations(recommendations map[string]*RecResult) *tfv1.Resources {
+	targetRes := &tfv1.Resources{}
 	minRes := &tfv1.Resources{}
 	for _, rec := range recommendations {
 		if !rec.HasApplied {
-			mergeResourcesByLargerRequests(result, &rec.Resources)
+			mergeResourcesByLargerRequests(targetRes, &rec.Resources)
 		}
 		if rec.ScaleDownLocking {
 			mergeResourcesByLargerRequests(minRes, &rec.Resources)
 		}
 	}
 
-	if result.IsZero() ||
-		(result.Requests.Tflops.Cmp(minRes.Requests.Tflops) < 0 &&
-			result.Requests.Vram.Cmp(minRes.Requests.Vram) < 0) {
+	if targetRes.IsZero() ||
+		(targetRes.Requests.Tflops.Cmp(minRes.Requests.Tflops) < 0 &&
+			targetRes.Requests.Vram.Cmp(minRes.Requests.Vram) < 0) {
 		return nil
 	}
 
-	return result
+	return targetRes
 }
 
 func mergeResourcesByLargerRequests(src *tfv1.Resources, target *tfv1.Resources) {

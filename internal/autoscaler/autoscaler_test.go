@@ -291,7 +291,7 @@ var _ = Describe("Autoscaler", func() {
 			originalResources := workloadState.Spec.Resources
 			verifyRecommendationStatus(workload, &originalResources)
 
-			// should not change after cron scaling finish
+			// should not change after cron scaling rule inactive
 			scaler.processWorkloads(ctx)
 			verifyRecommendationStatus(workload, &originalResources)
 		})
@@ -464,7 +464,7 @@ func (f *FakeRecommender) Name() string {
 	return "fake"
 }
 
-func (f *FakeRecommender) Recommend(ctx context.Context, workoad *workload.State) (*recommender.Recommendation, error) {
+func (f *FakeRecommender) Recommend(ctx context.Context, workoad *workload.State) (*recommender.RecResult, error) {
 	meta.SetStatusCondition(&workoad.Status.Conditions, metav1.Condition{
 		Type:               constants.ConditionStatusTypeRecommendationProvided,
 		Status:             metav1.ConditionTrue,
@@ -472,7 +472,7 @@ func (f *FakeRecommender) Recommend(ctx context.Context, workoad *workload.State
 		Reason:             "FakeReason",
 		Message:            "Fake message",
 	})
-	return &recommender.Recommendation{
+	return &recommender.RecResult{
 		Resources: *f.Resources,
 	}, nil
 }
@@ -486,14 +486,22 @@ func verifyWorkerResources(workload *tfv1.TensorFusionWorkload, expectedRes *tfv
 }
 
 func verifyRecommendationStatus(workload *tfv1.TensorFusionWorkload, expectedRes *tfv1.Resources) {
-	// GinkgoHelper()
+	GinkgoHelper()
 	key := client.ObjectKeyFromObject(workload)
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 		g.Expect(workload.Status.Recommendation.Equal(expectedRes)).To(BeTrue())
 		g.Expect(workload.Status.AppliedRecommendedReplicas).To(Equal(int32(1)))
-		g.Expect(meta.FindStatusCondition(workload.Status.Conditions,
-			constants.ConditionStatusTypeRecommendationProvided)).To(Not(BeNil()))
+		condition := meta.FindStatusCondition(workload.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
+		g.Expect(condition).ToNot(BeNil())
+		if condition != nil {
+			switch condition.Reason {
+			case "RuleActive":
+				g.Expect(workload.Status.ActiveCronScalingRule).ToNot(BeNil())
+			case "RuleInactive":
+				g.Expect(workload.Status.ActiveCronScalingRule).To(BeNil())
+			}
+		}
 		res, _ := utils.GPUResourcesFromAnnotations(getWorkers(workload)[0].Annotations)
 		g.Expect(res.Equal(expectedRes)).To(BeTrue())
 	}).Should(Succeed())
