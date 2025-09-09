@@ -53,20 +53,18 @@ func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.P
 	webhookServer.Register("/mutate-v1-pod",
 		&admission.Webhook{
 			Handler: &TensorFusionPodMutator{
-				decoder:         admission.NewDecoder(runtime.NewScheme()),
-				Client:          mgr.GetClient(),
-				portAllocator:   portAllocator,
-				pricingProvider: pricingProvider,
+				decoder:       admission.NewDecoder(runtime.NewScheme()),
+				Client:        mgr.GetClient(),
+				portAllocator: portAllocator,
 			},
 		})
 	return nil
 }
 
 type TensorFusionPodMutator struct {
-	Client          client.Client
-	decoder         admission.Decoder
-	portAllocator   *portallocator.PortAllocator
-	pricingProvider pricing.PricingProvider
+	Client        client.Client
+	decoder       admission.Decoder
+	portAllocator *portallocator.PortAllocator
 }
 
 // Handle implements admission.Handler interface.
@@ -103,7 +101,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to marshal current pod: %w", err))
 	}
 
-	tfInfo, err := ParseTensorFusionInfo(ctx, m.Client, pod, m.pricingProvider)
+	tfInfo, err := ParseTensorFusionInfo(ctx, m.Client, pod)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("parse tf resources: %w", err))
 	}

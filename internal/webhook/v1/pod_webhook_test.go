@@ -23,9 +23,9 @@ import (
 	"net/http"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
@@ -239,6 +239,56 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			// Should fail because no annotations are found
 			Expect(resp.Allowed).To(BeTrue())
 			Expect(resp.Patches).To(BeEmpty())
+		})
+
+		It("should handle dedicated GPU", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod-local-gpu",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.DedicatedGPUAnnotation: constants.TrueStringValue,
+						constants.GPUModelAnnotation:     "A100",
+						constants.GpuPoolKey:             "mock",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main",
+							Image: "test-image",
+						},
+					},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+
+			gpuallocator.GPUCapacityMap["A100"] = tfv1.Resource{
+				Tflops: resource.MustParse("312"),
+				Vram:   resource.MustParse("40Gi"),
+			}
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+
+			op, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return patch.Operation == "add" &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1tflops-request"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("312"))
 		})
 
 		It("should handle invalid pod specification", func() {
@@ -533,9 +583,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-			// Create a mock pricing provider for testing
-			mockPricingProvider := &pricing.StaticPricingProvider{}
-			tfInfo, err := ParseTensorFusionInfo(ctx, k8sClient, pod, mockPricingProvider)
+			tfInfo, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(tfInfo.ContainerNames).To(HaveLen(1))
 			Expect(tfInfo.ContainerNames[0]).To(Equal("test-container"))
