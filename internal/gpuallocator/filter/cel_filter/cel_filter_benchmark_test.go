@@ -13,13 +13,14 @@ import (
 // Benchmark performance of the CEL filter compared to the original filter
 func BenchmarkFilterPerformance(b *testing.B) {
 	// Create test data
-	const numGPUs = 1000
+	const numGPUs = 10000
 	gpus := make([]*tfv1.GPU, numGPUs)
 	for i := 0; i < numGPUs; i++ {
 		gpuModel := "A100"
-		if i%3 == 0 {
+		switch i % 3 {
+		case 0:
 			gpuModel = "V100"
-		} else if i%3 == 1 {
+		case 1:
 			gpuModel = "H100"
 		}
 
@@ -254,7 +255,7 @@ func printPerformanceComparison(b *testing.B) {
 === GPU Filter Performance Comparison ===
 
 Test Environment:
-- Number of GPUs: 1000
+- Number of GPUs: 10000
 - GPU Models: A100 (33%%), V100 (33%%), H100 (33%%)
 - GPU Phases: Ready (90%%), Pending (10%%)
 
