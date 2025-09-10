@@ -47,8 +47,9 @@ import (
 // GPUNodeReconciler reconciles a GPUNode object
 type GPUNodeReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
+	Allocator *gpuallocator.GpuAllocator
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch;create;update;patch;delete
@@ -158,7 +159,9 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, err
 }
 
-func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Context, hypervisorName string, node *tfv1.GPUNode, poolObj *tfv1.GPUPool) error {
+func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
+	ctx context.Context, hypervisorName string, node *tfv1.GPUNode, poolObj *tfv1.GPUPool,
+) error {
 	pod := &corev1.Pod{}
 	fetchErr := r.Get(ctx, client.ObjectKey{Name: hypervisorName, Namespace: utils.CurrentNamespace()}, pod)
 	if fetchErr != nil {
@@ -183,7 +186,7 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(ctx context.Cont
 
 		return nil
 	} else {
-		gpuModels, err := gpuallocator.RefreshGPUNodeCapacity(ctx, r.Client, node, poolObj)
+		gpuModels, err := gpuallocator.RefreshGPUNodeCapacity(ctx, r.Client, node, poolObj, r.Allocator)
 		if err != nil {
 			return err
 		}

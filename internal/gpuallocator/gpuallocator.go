@@ -564,6 +564,20 @@ func (s *GpuAllocator) DeallocByPodIdentifier(ctx context.Context, podIdentifier
 	}
 }
 
+func (s *GpuAllocator) GetAllocationReqByNodeName(nodeName string) []*tfv1.AllocRequest {
+	allocRequests := make([]*tfv1.AllocRequest, 0, 8)
+	for workerName := range s.nodeWorkerStore[nodeName] {
+		podUID := s.podNamespaceNsToPodUID[workerName.String()]
+		if podUID == "" {
+			continue
+		}
+		if request, exists := s.uniqueAllocation[podUID]; exists {
+			allocRequests = append(allocRequests, request)
+		}
+	}
+	return allocRequests
+}
+
 func (s *GpuAllocator) checkGPUCapacityAndQuota(gpu *tfv1.GPU, oldRes, newRes tfv1.Resource) (tfv1.Resource, error) {
 	if gpu.Status.Available == nil {
 		return tfv1.Resource{}, fmt.Errorf("GPU available is nil, skip check")

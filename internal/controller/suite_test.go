@@ -180,9 +180,10 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&GPUNodeReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("GPUNode"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("GPUNode"),
+		Allocator: allocator,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
