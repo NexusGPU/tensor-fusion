@@ -258,6 +258,7 @@ func handleDedicatedGPU(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) 
 	workloadProfile.Spec.Resources.Requests.Vram = resource.Vram
 	workloadProfile.Spec.Resources.Limits.Tflops = resource.Tflops
 	workloadProfile.Spec.Resources.Limits.Vram = resource.Vram
+	workloadProfile.Spec.Qos = tfv1.QoSCritical
 
 	return nil
 }

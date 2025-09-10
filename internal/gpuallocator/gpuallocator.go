@@ -850,6 +850,11 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 	defer s.storeMutex.Unlock()
 
 	if s.gpuStore[key] != nil {
+		if gpu.Status.GPUModel != "" {
+			if _, exists := GPUCapacityMap[gpu.Status.GPUModel]; !exists {
+				GPUCapacityMap[gpu.Status.GPUModel] = *gpu.Status.Capacity
+			}
+		}
 		syncGPUMetadataAndStatusFromCluster(s.gpuStore[key], gpu)
 		log.V(6).Info("GPU already exists in store", "name", key.Name)
 		return
