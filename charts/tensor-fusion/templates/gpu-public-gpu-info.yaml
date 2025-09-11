@@ -45,6 +45,18 @@ data:
       costPerHour: 1.64
       fp16TFlops: 312
 
+    - model: A100_PCIe_40GB
+      fullModelName: "NVIDIA A100-PCIE-40GB"
+      vendor: NVIDIA
+      costPerHour: 1.64
+      fp16TFlops: 312
+
+    - model: A100_PCIe_80GB
+      fullModelName: "NVIDIA A100-PCIE-80GB"
+      vendor: NVIDIA
+      costPerHour: 1.64
+      fp16TFlops: 312
+
     - model: A100_SXM_40G
       fullModelName: "NVIDIA A100-SXM4-40GB"
       vendor: NVIDIA
@@ -70,13 +82,13 @@ data:
       fp16TFlops: 312
     
     - model: A800_PCIe_80G
-      fullModelName: "NVIDIA A800 80GB PCIe"
+      fullModelName: "NVIDIA A800-PCIE-80GB"
       vendor: NVIDIA
       costPerHour: 1.64
       fp16TFlops: 312
 
     - model: A800_PCIe_40G
-      fullModelName: "NVIDIA A800 40GB PCIe"
+      fullModelName: "NVIDIA A800-PCIE-40GB"
       vendor: NVIDIA
       costPerHour: 1.64
       fp16TFlops: 312  
@@ -95,7 +107,7 @@ data:
       fp16TFlops: 125
 
     - model: A40
-      fullModelName: "NVIDIA A40 48GB PCIe"
+      fullModelName: "NVIDIA A40-PCIE-48GB"
       vendor: NVIDIA
       costPerHour: 0.4
       fp16TFlops: 149.7
