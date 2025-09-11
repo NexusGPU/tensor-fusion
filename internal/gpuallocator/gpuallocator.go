@@ -946,7 +946,11 @@ func (s *GpuAllocator) addOrUpdateGPUMaps(gpuInMem *tfv1.GPU) {
 				s.nodeGpuStore[gpuNodeName] = make(map[string]*tfv1.GPU, 4)
 			}
 			s.nodeGpuStore[gpuNodeName][gpuInMem.Name] = gpuInMem
+			if _, exists := s.nodeWorkerStore[gpuNodeName]; !exists {
+				s.nodeWorkerStore[gpuNodeName] = make(map[types.NamespacedName]struct{}, 4)
+			}
 		}
+
 	}
 
 	if gpuInMem.Labels != nil {
@@ -1181,7 +1185,7 @@ func (s *GpuAllocator) reconcileAllocationState() {
 		// No workers, but node contains GPU, need include into nodeWorkerStore with empty map
 		gpuNodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		if _, exists := s.nodeWorkerStore[gpuNodeName]; !exists {
-			s.nodeWorkerStore[gpuNodeName] = map[types.NamespacedName]struct{}{}
+			s.nodeWorkerStore[gpuNodeName] = make(map[types.NamespacedName]struct{}, 4)
 		}
 	}
 
