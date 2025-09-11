@@ -545,12 +545,13 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 }
 
 func (s *GpuAllocator) ListNonUsingNodes() sets.Set[string] {
+	<-s.initializedCh
 	set := sets.New[string]()
-	for nodeName, gpuNames := range s.nodeWorkerStore {
+	for nodeName, podNames := range s.nodeWorkerStore {
 		// If using by TF, the node can not be used by original scheduler
 		// If using by other scheduler, won't record as TF worker, thus the map is empty
 		// Return non using nodes can ensure original scheduler not conflict with TF
-		if len(gpuNames) == 0 {
+		if len(podNames) == 0 {
 			set.Insert(nodeName)
 		}
 	}
