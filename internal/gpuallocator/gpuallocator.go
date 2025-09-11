@@ -884,29 +884,7 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 	}
 	s.gpuStore[key] = gpuInMem
 
-	if gpuInMem.Status.NodeSelector != nil {
-		gpuNodeName := gpuInMem.Status.NodeSelector[constants.KubernetesHostNameLabel]
-		if gpuNodeName != "" {
-			if _, exists := s.nodeGpuStore[gpuNodeName]; !exists {
-				s.nodeGpuStore[gpuNodeName] = make(map[string]*tfv1.GPU, 4)
-			}
-			s.nodeGpuStore[gpuNodeName][gpuInMem.Name] = gpuInMem
-		}
-	}
-
-	if gpuInMem.Labels != nil {
-		pool := gpuInMem.Labels[constants.GpuPoolKey]
-		if pool != "" {
-			if _, exists := s.poolGpuStore[pool]; !exists {
-				s.poolGpuStore[pool] = make(map[string]*tfv1.GPU, 128)
-			}
-			s.poolGpuStore[pool][gpuInMem.Name] = gpuInMem
-		}
-	}
-
-	if gpu.Status.GPUModel != "" {
-		GPUCapacityMap[gpu.Status.GPUModel] = *gpu.Status.Capacity
-	}
+	s.addOrUpdateGPUMaps(gpuInMem)
 	log.Info("Added GPU to store", "name", key.Name, "phase", gpu.Status.Phase)
 }
 
@@ -956,10 +934,32 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 		log.V(6).Info("Updated GPU in store (new entry)", "name", key.Name, "phase", gpu.Status.Phase)
 	}
 
-	if gpu.Status.GPUModel != "" {
-		if _, exists := GPUCapacityMap[gpu.Status.GPUModel]; !exists {
-			GPUCapacityMap[gpu.Status.GPUModel] = *gpu.Status.Capacity
+	s.addOrUpdateGPUMaps(gpu)
+}
+
+func (s *GpuAllocator) addOrUpdateGPUMaps(gpuInMem *tfv1.GPU) {
+	if gpuInMem.Status.NodeSelector != nil {
+		gpuNodeName := gpuInMem.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if gpuNodeName != "" {
+			if _, exists := s.nodeGpuStore[gpuNodeName]; !exists {
+				s.nodeGpuStore[gpuNodeName] = make(map[string]*tfv1.GPU, 4)
+			}
+			s.nodeGpuStore[gpuNodeName][gpuInMem.Name] = gpuInMem
 		}
+	}
+
+	if gpuInMem.Labels != nil {
+		pool := gpuInMem.Labels[constants.GpuPoolKey]
+		if pool != "" {
+			if _, exists := s.poolGpuStore[pool]; !exists {
+				s.poolGpuStore[pool] = make(map[string]*tfv1.GPU, 128)
+			}
+			s.poolGpuStore[pool][gpuInMem.Name] = gpuInMem
+		}
+	}
+
+	if gpuInMem.Status.GPUModel != "" {
+		GPUCapacityMap[gpuInMem.Status.GPUModel] = *gpuInMem.Status.Capacity
 	}
 }
 

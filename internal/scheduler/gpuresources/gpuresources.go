@@ -158,11 +158,17 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 			continue
 		}
 
+		preAllocSize := total - matched
+		if preAllocSize <= 0 {
+			s.logger.Error(nil, "Filtering GPU error, unexpected less than 0", "pod",
+				pod.Name, "node", k, "totalGPU count", total, "matchedGPU count", matched)
+			preAllocSize = 2
+		}
 		// range if it's not in validNodesValidGPUs, add to validNodeNonMatchingGPUs
-		validNodeNonMatchingGPUs[k] = make([]*tfv1.GPU, 0, total-matched)
+		validNodeNonMatchingGPUs[k] = make([]*tfv1.GPU, 0, preAllocSize)
 		for gpuName, gpu := range allGPUs {
 			seen := false
-			// just loop because the number always <= 8
+			// just loop because the number always <= 8/16
 			for _, matchedGPU := range matchedGPUs {
 				if gpuName == matchedGPU.Name {
 					seen = true
