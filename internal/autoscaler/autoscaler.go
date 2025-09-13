@@ -170,7 +170,9 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 		}
 
 		if workload.IsAutoSetResourcesEnabled() {
-			s.workloadHandler.ApplyResourcesToWorkload(ctx, workload, resources)
+			if err := s.workloadHandler.ApplyResourcesToWorkload(ctx, workload, resources); err != nil {
+				log.Error(err, "failed to apply resources to workload", "workload", workload.Name)
+			}
 		}
 
 		if err := s.workloadHandler.UpdateWorkloadStatus(ctx, workload, resources); err != nil {

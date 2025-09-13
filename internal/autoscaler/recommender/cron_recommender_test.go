@@ -226,7 +226,7 @@ var _ = Describe("CronRecommender", func() {
 			rec := NewCronRecommender()
 			for _, config := range configs {
 				rule, err := rec.getActiveCronScalingRule(&config)
-				Expect(err).NotTo(BeNil())
+				Expect(err).To(HaveOccurred())
 				Expect(rule).To(BeNil())
 			}
 		})
