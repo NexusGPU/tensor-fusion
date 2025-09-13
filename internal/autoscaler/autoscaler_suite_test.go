@@ -79,7 +79,7 @@ func TestControllers(t *testing.T) {
 	SetDefaultEventuallyPollingInterval(200 * time.Millisecond)
 	SetDefaultConsistentlyDuration(5 * time.Second)
 	SetDefaultConsistentlyPollingInterval(250 * time.Millisecond)
-	RunSpecs(t, "Controller Suite")
+	RunSpecs(t, "AutoScaler Suite")
 }
 
 var _ = BeforeSuite(func() {
