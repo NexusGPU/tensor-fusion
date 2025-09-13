@@ -101,7 +101,7 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 		log.V(6).Info("Finished querying history metrics", "duration", time.Since(now))
 	}()
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, defaultHistoryQueryTimeout)
 	defer cancel()
 
 	// TODO: replace using iteration for handling large datasets efficiently
@@ -109,7 +109,7 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 	data := []*hypervisorWorkerUsageMetrics{}
 	err := g.db.WithContext(timeoutCtx).
 		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
-		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24), now).
+		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24*7), now).
 		Group("namespace, workload, worker, time_window").
 		Order("time_window asc").
 		Find(&data).
