@@ -8,6 +8,7 @@ require (
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107
 	github.com/aws/aws-sdk-go-v2 v1.39.0
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.251.0
+	github.com/aws/smithy-go v1.23.0
 	github.com/awslabs/operatorpkg v0.0.0-20250903180825-ba7ac0af36e5
 	github.com/gin-contrib/gzip v1.2.3
 	github.com/gin-gonic/gin v1.10.1
@@ -28,10 +29,11 @@ require (
 	gomodules.xyz/jsonpatch/v2 v2.5.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gorm.io/driver/mysql v1.6.0
-	gorm.io/gorm v1.31.0
+	gorm.io/gorm v1.31.3
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
 	k8s.io/apiserver v0.34.0
+	k8s.io/autoscaler/vertical-pod-autoscaler v1.3.0
 	k8s.io/client-go v0.34.1
 	k8s.io/component-base v0.34.0
 	k8s.io/component-helpers v0.34.1
@@ -55,7 +57,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.6 // indirect
-	github.com/aws/smithy-go v1.23.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
@@ -132,10 +133,10 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/spf13/cobra v1.10.1 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/stoewer/go-strcase v1.3.1 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
