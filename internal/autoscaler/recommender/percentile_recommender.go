@@ -216,7 +216,7 @@ type resourcesEstimator struct {
 	upperBoundVram   VramEstimator
 }
 
-var percentileConfigToEstimatorsMap map[PercentileConfig]resourcesEstimator
+// var percentileConfigToEstimatorsMap map[PercentileConfig]resourcesEstimator
 
 func (r *resourcesEstimator) GetResourcesEstimation(workload *workload.State) *EstimatedResources {
 	aggregator := workload.WorkerUsageAggregator

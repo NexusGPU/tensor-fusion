@@ -105,7 +105,7 @@ func isRecommendationChanged(status *tfv1.TensorFusionWorkloadStatus, targetRes 
 }
 
 func isAppliedRecommendedReplicasChanged(workload *tfv1.TensorFusionWorkload, state *State) bool {
-	return workload.Status.AppliedRecommendedReplicas == state.Status.AppliedRecommendedReplicas
+	return workload.Status.AppliedRecommendedReplicas != state.Status.AppliedRecommendedReplicas
 }
 
 func (h *handler) applyResourcesToWorker(ctx context.Context, workload *State, worker *corev1.Pod, targetRes *tfv1.Resources) error {

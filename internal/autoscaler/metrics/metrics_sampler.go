@@ -26,7 +26,7 @@ func (w *WorkerUsageSampler) AddSample(aggregator *WorkerUsageAggregator, sample
 }
 
 func (w *WorkerUsageSampler) AddTflopsSample(aggregator *WorkerUsageAggregator, sample *WorkerUsage) bool {
-	if sample.Timestamp.Before(w.LastTflopsSampleTime) {
+	if sample.TflopsUsage < 0 || sample.Timestamp.Before(w.LastTflopsSampleTime) {
 		return false
 	}
 	aggregator.AddTflopsSample(sample)
