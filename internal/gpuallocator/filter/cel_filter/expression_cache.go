@@ -88,6 +88,10 @@ func (c *ExpressionCache) GetOrCompileProgram(expression string) (cel.Program, e
 		return nil, fmt.Errorf("failed to compile CEL expression %q: %w", expression, issues.Err())
 	}
 
+	// Validate result type - must return boolean
+	// Note: Skip type validation for now as CEL type system is complex
+	// Runtime validation in Filter method is sufficient
+
 	program, err := c.env.Program(ast)
 	if err != nil {
 		c.misses++
@@ -121,7 +125,7 @@ func (c *ExpressionCache) hashExpression(expression string) string {
 // evictLRU removes the least recently used entry from cache
 func (c *ExpressionCache) evictLRU() {
 	var oldestKey string
-	var oldestTime time.Time = time.Now()
+	var oldestTime = time.Now()
 
 	for key, cached := range c.cache {
 		if cached.AccessedAt.Before(oldestTime) {
