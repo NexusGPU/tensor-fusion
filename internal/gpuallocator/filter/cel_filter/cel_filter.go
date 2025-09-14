@@ -10,10 +10,12 @@ import (
 	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/interpreter"
+	"github.com/samber/lo"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -39,8 +41,8 @@ type FastPathPredicate func(gpu *tfv1.GPU) bool
 
 // ExpressionPattern represents a recognized expression pattern for fast path
 type ExpressionPattern struct {
-	Pattern    *regexp.Regexp
-	Generator  func(matches []string) FastPathPredicate
+	Pattern   *regexp.Regexp
+	Generator func(matches []string) FastPathPredicate
 }
 
 // Common fast path patterns - order matters (most specific first)
@@ -52,7 +54,7 @@ var fastPathPatterns = []ExpressionPattern{
 			threshold, _ := strconv.ParseFloat(matches[1], 64)
 			labelKey, labelValue := matches[2], matches[3]
 			return func(gpu *tfv1.GPU) bool {
-				return gpu.Status.Available != nil && 
+				return gpu.Status.Available != nil &&
 					gpu.Status.Available.Tflops.AsApproximateFloat64() >= threshold &&
 					gpu.Labels != nil && gpu.Labels[labelKey] == labelValue
 			}
@@ -88,7 +90,7 @@ var fastPathPatterns = []ExpressionPattern{
 			}
 		},
 	},
-	// gpu.available.vram > NUMBER  
+	// gpu.available.vram > NUMBER
 	{
 		Pattern: regexp.MustCompile(`^gpu\.available\.vram\s*>\s*([0-9]+(?:\.[0-9]+)?)$`),
 		Generator: func(matches []string) FastPathPredicate {
@@ -120,7 +122,6 @@ var fastPathPatterns = []ExpressionPattern{
 	},
 }
 
-
 // ZeroAllocActivation provides zero-allocation variable resolution for CEL
 // This eliminates the need to create map[string]interface{} for each GPU
 type ZeroAllocActivation struct {
@@ -141,7 +142,7 @@ func (a *ZeroAllocActivation) ResolveName(name string) (interface{}, bool) {
 	}
 }
 
-// Parent implements interpreter.Activation interface  
+// Parent implements interpreter.Activation interface
 func (a *ZeroAllocActivation) Parent() interpreter.Activation {
 	return nil
 }
@@ -151,7 +152,6 @@ func (a *ZeroAllocActivation) createGPUObject() interface{} {
 	// Return GPU value with lazy caching
 	return &gpuVal{GPU: a.gpu}
 }
-
 
 // createWorkerPodKeyObject creates worker pod key object
 func (a *ZeroAllocActivation) createWorkerPodKeyObject() interface{} {
@@ -166,7 +166,7 @@ type gpuVal struct {
 	*tfv1.GPU
 	// Cached sub-values to avoid repeated allocations
 	labels       ref.Val
-	annotations  ref.Val 
+	annotations  ref.Val
 	nodeSelector ref.Val
 	available    ref.Val
 	runningApps  ref.Val
@@ -195,7 +195,7 @@ func (v *gpuVal) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
 	return v.GPU, nil
 }
 
-// ConvertToType implements ref.Val interface  
+// ConvertToType implements ref.Val interface
 func (v *gpuVal) ConvertToType(typeValue ref.Type) ref.Val {
 	switch typeValue {
 	case types.TypeType:
@@ -209,8 +209,8 @@ func (v *gpuVal) ConvertToType(typeValue ref.Type) ref.Val {
 func (v *gpuVal) HasField(field string) bool {
 	switch field {
 	case GPUFieldName, GPUFieldNamespace, GPUFieldGPUModel, GPUFieldUUID,
-		 GPUFieldPhase, GPUFieldUsedBy, GPUFieldMessage, GPUFieldLabels,
-		 GPUFieldAnnotations, GPUFieldAvailable, GPUFieldNodeSelector, GPUFieldRunningApps:
+		GPUFieldPhase, GPUFieldUsedBy, GPUFieldMessage, GPUFieldLabels,
+		GPUFieldAnnotations, GPUFieldAvailable, GPUFieldNodeSelector, GPUFieldRunningApps:
 		return true
 	default:
 		return false
@@ -223,7 +223,7 @@ func (v *gpuVal) Get(index ref.Val) ref.Val {
 	if !ok {
 		return types.NewErr("index must be string")
 	}
-	
+
 	switch field {
 	case GPUFieldName:
 		return types.String(v.GPU.Name)
@@ -246,7 +246,7 @@ func (v *gpuVal) Get(index ref.Val) ref.Val {
 		}
 		return v.labels
 	case GPUFieldAnnotations:
-		// Lazy initialization with caching  
+		// Lazy initialization with caching
 		if v.annotations == nil {
 			v.annotations = &labelsVal{labels: v.GPU.Annotations}
 		}
@@ -286,7 +286,7 @@ type availableVal struct {
 	available *tfv1.Resource
 }
 
-// Type implements ref.Val interface  
+// Type implements ref.Val interface
 func (v *availableVal) Type() ref.Type {
 	return types.MapType
 }
@@ -317,22 +317,22 @@ func (v *availableVal) Get(index ref.Val) ref.Val {
 	if !ok {
 		return types.NewErr("index must be string")
 	}
-	
+
 	if v.available == nil {
 		switch field {
-		case "tflops":
+		case ResourceFieldTFlops:
 			return types.Double(0.0)
-		case "vram":
+		case ResourceFieldVRAM:
 			return types.Int(0)
 		default:
 			return types.NewErr("no such field: %s", field)
 		}
 	}
-	
+
 	switch field {
-	case "tflops":
+	case ResourceFieldTFlops:
 		return types.Double(v.available.Tflops.AsApproximateFloat64())
-	case "vram":
+	case ResourceFieldVRAM:
 		return types.Int(v.available.Vram.Value())
 	default:
 		return types.NewErr("no such field: %s", field)
@@ -341,7 +341,7 @@ func (v *availableVal) Get(index ref.Val) ref.Val {
 
 // HasField implements field testing
 func (v *availableVal) HasField(field string) bool {
-	return field == "tflops" || field == "vram"
+	return field == ResourceFieldTFlops || field == ResourceFieldVRAM
 }
 
 // labelsVal provides direct access to GPU labels without copying
@@ -354,7 +354,7 @@ func (v *labelsVal) Type() ref.Type {
 	return types.MapType
 }
 
-// Value implements ref.Val interface  
+// Value implements ref.Val interface
 func (v *labelsVal) Value() interface{} {
 	return v.labels
 }
@@ -380,11 +380,11 @@ func (v *labelsVal) Get(index ref.Val) ref.Val {
 	if !ok {
 		return types.NewErr("index must be string")
 	}
-	
+
 	if v.labels == nil {
 		return types.String("")
 	}
-	
+
 	value, exists := v.labels[key]
 	if !exists {
 		return types.String("")
@@ -397,7 +397,7 @@ type CELFilter struct {
 	cache *ExpressionCache
 	name  string
 	// Store early filtering criteria for optimization
-	requiredPhase    string
+	requiredPhases   []tfv1.TensorFusionGPUPhase
 	requiredGPUModel string
 	userExpression   string
 	// Track which fields are actually used
@@ -411,10 +411,14 @@ type CELFilter struct {
 // NewAllocRequestCELFilter creates a new CEL filter from allocation request
 func NewCELFilter(req *tfv1.AllocRequest, cache *ExpressionCache) (*CELFilter, error) {
 	// Extract early filtering criteria
-	var requiredPhase, requiredGPUModel, userExpression, displayExpression string
+	var requiredPhases []tfv1.TensorFusionGPUPhase
+	var requiredGPUModel, userExpression, displayExpression string
 
 	if req != nil {
-		requiredPhase = "Ready" // Keep as Ready for compatibility with tests
+		requiredPhases = []tfv1.TensorFusionGPUPhase{
+			tfv1.TensorFusionGPUPhaseRunning,
+			tfv1.TensorFusionGPUPhasePending,
+		}
 		requiredGPUModel = req.GPUModel
 		userExpression = req.CELFilterExpression
 
@@ -424,7 +428,7 @@ func NewCELFilter(req *tfv1.AllocRequest, cache *ExpressionCache) (*CELFilter, e
 
 	// Analyze field usage in user expression only
 	usage := analyzeFieldUsage(userExpression)
-	
+
 	// Try to compile fast path predicate
 	fastPath := compileFastPath(userExpression)
 
@@ -437,7 +441,7 @@ func NewCELFilter(req *tfv1.AllocRequest, cache *ExpressionCache) (*CELFilter, e
 	return &CELFilter{
 		cache:             cache,
 		name:              name,
-		requiredPhase:     requiredPhase,
+		requiredPhases:    requiredPhases,
 		requiredGPUModel:  requiredGPUModel,
 		userExpression:    userExpression,
 		usage:             usage,
@@ -464,8 +468,12 @@ func (f *CELFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace,
 	// Early filtering phase: apply basic filters first to reduce CEL evaluation overhead
 	earlyFilteredGPUs := make([]*tfv1.GPU, 0, len(gpus))
 	for _, gpu := range gpus {
+		// when running progressive migration mode, only return GPUs used by tensor-fusion
+		if utils.IsProgressiveMigration() && gpu.Status.UsedBy != tfv1.UsedByTensorFusion {
+			continue
+		}
 		// Fast path: check phase first (most common filter)
-		if f.requiredPhase != "" && string(gpu.Status.Phase) != f.requiredPhase {
+		if f.requiredPhases != nil && !lo.Contains(f.requiredPhases, gpu.Status.Phase) {
 			continue
 		}
 
@@ -498,7 +506,6 @@ func (f *CELFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace,
 		return nil, fmt.Errorf("failed to get CEL program for expression %q: %w", f.userExpression, err)
 	}
 
-
 	// Use fast path if available, otherwise fall back to CEL
 	if f.fastPathPredicate != nil {
 		// Fast path: direct Go function evaluation with optional parallelization
@@ -511,7 +518,7 @@ func (f *CELFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace,
 				}
 			}
 		}
-		
+
 		log.V(1).Info("CEL filter applied (fast path)",
 			"filter", f.name,
 			"displayExpression", f.displayExpression,
@@ -528,7 +535,7 @@ func (f *CELFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace,
 			// Sequential evaluation for smaller sets
 			filteredGPUs = f.filterFallbackSequential(ctx, program, earlyFilteredGPUs, workerPodKey)
 		}
-		
+
 		log.V(1).Info("CEL filter applied (CEL evaluation)",
 			"filter", f.name,
 			"displayExpression", f.displayExpression,
@@ -584,7 +591,6 @@ func createCELEnvironment() (*cel.Env, error) {
 	)
 }
 
-
 // filterParallel processes GPUs in parallel for large datasets
 func (f *CELFilter) filterParallel(gpus []*tfv1.GPU) []*tfv1.GPU {
 	numGPUs := len(gpus)
@@ -592,10 +598,10 @@ func (f *CELFilter) filterParallel(gpus []*tfv1.GPU) []*tfv1.GPU {
 	if numWorkers > DefaultWorkerCount {
 		numWorkers = DefaultWorkerCount
 	}
-	
+
 	chunkSize := (numGPUs + numWorkers - 1) / numWorkers
 	resultChannels := make([]<-chan []*tfv1.GPU, numWorkers)
-	
+
 	// Create workers
 	for i := 0; i < numWorkers; i++ {
 		start := i * chunkSize
@@ -603,7 +609,7 @@ func (f *CELFilter) filterParallel(gpus []*tfv1.GPU) []*tfv1.GPU {
 		if end > numGPUs {
 			end = numGPUs
 		}
-		
+
 		if start >= end {
 			// No work for this worker
 			ch := make(chan []*tfv1.GPU, 1)
@@ -612,15 +618,15 @@ func (f *CELFilter) filterParallel(gpus []*tfv1.GPU) []*tfv1.GPU {
 			resultChannels[i] = ch
 			continue
 		}
-		
+
 		chunk := gpus[start:end]
 		resultCh := make(chan []*tfv1.GPU, 1)
 		resultChannels[i] = resultCh
-		
+
 		// Start worker goroutine
 		go func(gpuChunk []*tfv1.GPU, resultCh chan<- []*tfv1.GPU) {
 			defer close(resultCh)
-			
+
 			filtered := make([]*tfv1.GPU, 0, len(gpuChunk)/2) // Estimate 50% pass rate
 			for _, gpu := range gpuChunk {
 				if f.fastPathPredicate(gpu) {
@@ -630,14 +636,14 @@ func (f *CELFilter) filterParallel(gpus []*tfv1.GPU) []*tfv1.GPU {
 			resultCh <- filtered
 		}(chunk, resultCh)
 	}
-	
+
 	// Collect results
 	var totalFiltered []*tfv1.GPU
 	for _, ch := range resultChannels {
 		chunkResults := <-ch
 		totalFiltered = append(totalFiltered, chunkResults...)
 	}
-	
+
 	return totalFiltered
 }
 
@@ -645,7 +651,7 @@ func (f *CELFilter) filterParallel(gpus []*tfv1.GPU) []*tfv1.GPU {
 func (f *CELFilter) filterFallbackSequential(ctx context.Context, program cel.Program, gpus []*tfv1.GPU, workerPodKey tfv1.NameNamespace) []*tfv1.GPU {
 	filteredGPUs := make([]*tfv1.GPU, 0, len(gpus)/2)
 	log := log.FromContext(ctx)
-	
+
 	for i, gpu := range gpus {
 		// Periodic context check every 64 GPUs for very large sets
 		if i&63 == 0 {
@@ -690,7 +696,7 @@ func (f *CELFilter) filterFallbackSequential(ctx context.Context, program cel.Pr
 			continue
 		}
 	}
-	
+
 	return filteredGPUs
 }
 
@@ -701,10 +707,10 @@ func (f *CELFilter) filterFallbackParallel(ctx context.Context, program cel.Prog
 	if numWorkers > DefaultWorkerCount {
 		numWorkers = DefaultWorkerCount
 	}
-	
+
 	chunkSize := (numGPUs + numWorkers - 1) / numWorkers
 	resultChannels := make([]<-chan []*tfv1.GPU, numWorkers)
-	
+
 	// Create workers
 	for i := 0; i < numWorkers; i++ {
 		start := i * chunkSize
@@ -712,7 +718,7 @@ func (f *CELFilter) filterFallbackParallel(ctx context.Context, program cel.Prog
 		if end > numGPUs {
 			end = numGPUs
 		}
-		
+
 		if start >= end {
 			// No work for this worker
 			ch := make(chan []*tfv1.GPU, 1)
@@ -721,17 +727,17 @@ func (f *CELFilter) filterFallbackParallel(ctx context.Context, program cel.Prog
 			resultChannels[i] = ch
 			continue
 		}
-		
+
 		chunk := gpus[start:end]
 		resultCh := make(chan []*tfv1.GPU, 1)
 		resultChannels[i] = resultCh
-		
+
 		// Start worker goroutine
 		go func(gpuChunk []*tfv1.GPU, resultCh chan<- []*tfv1.GPU) {
 			defer close(resultCh)
-			
+
 			filtered := make([]*tfv1.GPU, 0, len(gpuChunk)/2) // Estimate 50% pass rate
-			
+
 			for _, gpu := range gpuChunk {
 				// Use zero-allocation activation
 				activation := &ZeroAllocActivation{
@@ -758,17 +764,16 @@ func (f *CELFilter) filterFallbackParallel(ctx context.Context, program cel.Prog
 			resultCh <- filtered
 		}(chunk, resultCh)
 	}
-	
+
 	// Collect results
 	var totalFiltered []*tfv1.GPU
 	for _, ch := range resultChannels {
 		chunkResults := <-ch
 		totalFiltered = append(totalFiltered, chunkResults...)
 	}
-	
+
 	return totalFiltered
 }
-
 
 // compileFastPath tries to compile expression into a fast path predicate
 // Uses AST analysis for better pattern matching than regex
@@ -776,12 +781,12 @@ func compileFastPath(expression string) FastPathPredicate {
 	if expression == "" {
 		return nil
 	}
-	
-	// Try AST-based compilation first (more flexible)  
+
+	// Try AST-based compilation first (more flexible)
 	if pred := compileASTFastPath(expression); pred != nil {
 		return pred
 	}
-	
+
 	// Fall back to regex patterns for backward compatibility
 	for _, pattern := range fastPathPatterns {
 		matches := pattern.Pattern.FindStringSubmatch(expression)
@@ -789,7 +794,7 @@ func compileFastPath(expression string) FastPathPredicate {
 			return pattern.Generator(matches)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -800,18 +805,18 @@ func compileASTFastPath(expression string) FastPathPredicate {
 	if err != nil {
 		return nil
 	}
-	
+
 	_, issues := env.Parse(expression)
 	if issues != nil && issues.Err() != nil {
 		return nil
 	}
-	
+
 	// Extract conditions from expression string (simplified approach)
 	conditions := extractConditionsFromString(expression)
 	if len(conditions) == 0 {
 		return nil
 	}
-	
+
 	// Generate fast path predicate
 	return func(gpu *tfv1.GPU) bool {
 		for _, condition := range conditions {
@@ -825,23 +830,22 @@ func compileASTFastPath(expression string) FastPathPredicate {
 
 // astCondition represents a simple condition extracted from AST
 type astCondition struct {
-	field    string    // e.g., "gpu.available.tflops", "gpu.labels['env']"
-	operator string    // "==", "!=", ">=", ">"
+	field    string      // e.g., "gpu.available.tflops", "gpu.labels['env']"
+	operator string      // "==", "!=", ">=", ">"
 	value    interface{} // expected value
 }
-
 
 // extractConditionsFromString uses enhanced pattern matching to extract conditions
 // This bridges the gap between regex and full AST until full AST implementation
 func extractConditionsFromString(exprStr string) []astCondition {
 	var conditions []astCondition
-	
+
 	// Split by && to handle multiple conditions
 	parts := strings.Split(exprStr, " && ")
-	
+
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
-		
+
 		// Handle gpu.available.tflops >= X
 		if strings.Contains(part, "gpu.available.tflops") && strings.Contains(part, ">=") {
 			if condition := parseNumericCondition(part, "gpu.available.tflops", ">="); condition != nil {
@@ -852,28 +856,28 @@ func extractConditionsFromString(exprStr string) []astCondition {
 				conditions = append(conditions, *condition)
 			}
 		}
-		
+
 		// Handle gpu.available.vram >= X
 		if strings.Contains(part, "gpu.available.vram") && strings.Contains(part, ">=") {
 			if condition := parseNumericCondition(part, "gpu.available.vram", ">="); condition != nil {
 				conditions = append(conditions, *condition)
 			}
 		}
-		
+
 		// Handle gpu.labels['key'] == 'value'
 		if strings.Contains(part, "gpu.labels[") && strings.Contains(part, "==") {
 			if condition := parseLabelCondition(part, "gpu.labels"); condition != nil {
 				conditions = append(conditions, *condition)
 			}
 		}
-		
-		// Handle gpu.annotations['key'] == 'value'  
+
+		// Handle gpu.annotations['key'] == 'value'
 		if strings.Contains(part, "gpu.annotations[") && strings.Contains(part, "==") {
 			if condition := parseLabelCondition(part, "gpu.annotations"); condition != nil {
 				conditions = append(conditions, *condition)
 			}
 		}
-		
+
 		// Handle gpu.gpuModel == 'value'
 		if strings.Contains(part, "gpu.gpuModel") && strings.Contains(part, "==") {
 			if condition := parseStringCondition(part, "gpu.gpuModel", "=="); condition != nil {
@@ -881,7 +885,7 @@ func extractConditionsFromString(exprStr string) []astCondition {
 			}
 		}
 	}
-	
+
 	return conditions
 }
 
@@ -891,13 +895,13 @@ func parseNumericCondition(expr, field, operator string) *astCondition {
 	if len(parts) != 2 {
 		return nil
 	}
-	
+
 	valueStr := strings.TrimSpace(parts[1])
 	value, err := strconv.ParseFloat(valueStr, 64)
 	if err != nil {
 		return nil
 	}
-	
+
 	return &astCondition{
 		field:    field,
 		operator: operator,
@@ -905,7 +909,7 @@ func parseNumericCondition(expr, field, operator string) *astCondition {
 	}
 }
 
-// parseLabelCondition parses label/annotation map access conditions  
+// parseLabelCondition parses label/annotation map access conditions
 func parseLabelCondition(expr, fieldPrefix string) *astCondition {
 	// Extract key from gpu.labels['key'] == 'value' format
 	keyStart := strings.Index(expr, "['") + 2
@@ -914,9 +918,9 @@ func parseLabelCondition(expr, fieldPrefix string) *astCondition {
 		return nil
 	}
 	key := expr[keyStart : keyStart+keyEnd]
-	
+
 	// Extract value
-	valueStart := strings.LastIndex(expr, "'") 
+	valueStart := strings.LastIndex(expr, "'")
 	if valueStart == -1 {
 		return nil
 	}
@@ -926,7 +930,7 @@ func parseLabelCondition(expr, fieldPrefix string) *astCondition {
 		return nil
 	}
 	value := expr[prevQuotePos+1 : valueStart]
-	
+
 	return &astCondition{
 		field:    fieldPrefix + "['" + key + "']",
 		operator: "==",
@@ -940,13 +944,13 @@ func parseStringCondition(expr, field, operator string) *astCondition {
 	if len(parts) != 2 {
 		return nil
 	}
-	
+
 	valueStr := strings.TrimSpace(parts[1])
 	// Remove quotes
 	if strings.HasPrefix(valueStr, "'") && strings.HasSuffix(valueStr, "'") {
 		valueStr = valueStr[1 : len(valueStr)-1]
 	}
-	
+
 	return &astCondition{
 		field:    field,
 		operator: operator,
@@ -966,7 +970,7 @@ func evaluateCondition(gpu *tfv1.GPU, condition astCondition) bool {
 		if !ok {
 			return false
 		}
-		
+
 		switch condition.operator {
 		case ">=":
 			return actualValue >= expectedValue
@@ -975,7 +979,7 @@ func evaluateCondition(gpu *tfv1.GPU, condition astCondition) bool {
 		default:
 			return false
 		}
-		
+
 	case "gpu.available.vram":
 		if gpu.Status.Available == nil {
 			return false
@@ -985,7 +989,7 @@ func evaluateCondition(gpu *tfv1.GPU, condition astCondition) bool {
 		if !ok {
 			return false
 		}
-		
+
 		switch condition.operator {
 		case ">=":
 			return actualValue >= expectedValue
@@ -994,14 +998,14 @@ func evaluateCondition(gpu *tfv1.GPU, condition astCondition) bool {
 		default:
 			return false
 		}
-		
+
 	case "gpu.gpuModel":
 		expectedValue, ok := condition.value.(string)
 		if !ok {
 			return false
 		}
 		return gpu.Status.GPUModel == expectedValue
-		
+
 	default:
 		// Handle label/annotation access
 		if strings.HasPrefix(condition.field, "gpu.labels['") {
@@ -1015,7 +1019,7 @@ func evaluateCondition(gpu *tfv1.GPU, condition astCondition) bool {
 			}
 			return gpu.Labels[key] == expectedValue
 		}
-		
+
 		if strings.HasPrefix(condition.field, "gpu.annotations['") {
 			key := strings.TrimSuffix(strings.TrimPrefix(condition.field, "gpu.annotations['"), "']")
 			expectedValue, ok := condition.value.(string)
@@ -1027,7 +1031,7 @@ func evaluateCondition(gpu *tfv1.GPU, condition astCondition) bool {
 			}
 			return gpu.Annotations[key] == expectedValue
 		}
-		
+
 		return false
 	}
 }
@@ -1046,4 +1050,3 @@ func analyzeFieldUsage(expression string) fieldUsage {
 		runningApps:  strings.Contains(expression, "runningApps"),
 	}
 }
-

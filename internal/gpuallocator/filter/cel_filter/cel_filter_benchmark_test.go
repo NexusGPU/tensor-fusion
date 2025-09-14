@@ -7,13 +7,14 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
 )
 
 // Benchmark performance of the CEL filter compared to the original filter
 func BenchmarkFilterPerformance(b *testing.B) {
 	// Create test data
-	const numGPUs = 10000
+	const numGPUs = 1000000
 	gpus := make([]*tfv1.GPU, numGPUs)
 	for i := 0; i < numGPUs; i++ {
 		gpuModel := "A100"
@@ -24,9 +25,9 @@ func BenchmarkFilterPerformance(b *testing.B) {
 			gpuModel = "H100"
 		}
 
-		phase := "Ready"
+		phase := constants.PhaseRunning
 		if i%10 == 0 {
-			phase = "Pending"
+			phase = constants.PhasePending
 		}
 
 		gpu := createTestGPU(fmt.Sprintf("gpu-%d", i), "default", gpuModel, phase, 150.0, 40.0)
@@ -44,7 +45,7 @@ func BenchmarkFilterPerformance(b *testing.B) {
 	b.Run("OriginalFilters", func(b *testing.B) {
 		// Import the original filter package
 		registry := filter.NewFilterRegistry().With(
-			filter.NewPhaseFilter("Ready"),
+			filter.NewPhaseFilter(constants.PhaseRunning),
 			filter.NewGPUModelFilter("A100"),
 		)
 
@@ -149,7 +150,7 @@ func BenchmarkCachePerformance(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	expression := "gpu.phase == 'Ready' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0"
+	expression := "gpu.phase == 'Running' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0"
 
 	b.Run("CacheHit", func(b *testing.B) {
 		// Pre-warm cache
@@ -170,7 +171,7 @@ func BenchmarkCachePerformance(b *testing.B) {
 	b.Run("CacheMiss", func(b *testing.B) {
 		expressions := make([]string, b.N)
 		for i := 0; i < b.N; i++ {
-			expressions[i] = fmt.Sprintf("gpu.phase == 'Ready' && gpu.gpuModel == 'A100' && gpu.available.tflops >= %d.0", i%200+50)
+			expressions[i] = fmt.Sprintf("gpu.phase == 'Running' && gpu.gpuModel == 'A100' && gpu.available.tflops >= %d.0", i%200+50)
 		}
 
 		b.ResetTimer()
@@ -188,7 +189,7 @@ func BenchmarkExpressionComplexity(b *testing.B) {
 	const numGPUs = 100
 	gpus := make([]*tfv1.GPU, numGPUs)
 	for i := 0; i < numGPUs; i++ {
-		gpu := createTestGPU(fmt.Sprintf("gpu-%d", i), "default", "A100", "Ready", 150.0, 40.0)
+		gpu := createTestGPU(fmt.Sprintf("gpu-%d", i), "default", "A100", constants.PhaseRunning, 150.0, 40.0)
 		gpu.Labels["environment"] = "production"
 		gpu.Labels["tier"] = "high-performance"
 		gpu.Annotations["priority"] = "critical"
@@ -204,23 +205,23 @@ func BenchmarkExpressionComplexity(b *testing.B) {
 	}{
 		{
 			name:       "Simple",
-			expression: "gpu.phase == 'Ready'",
+			expression: "gpu.phase == 'Running'",
 		},
 		{
 			name:       "Medium",
-			expression: "gpu.phase == 'Ready' && gpu.gpuModel == 'A100'",
+			expression: "gpu.phase == 'Running' && gpu.gpuModel == 'A100'",
 		},
 		{
 			name:       "Complex",
-			expression: "gpu.phase == 'Ready' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0",
+			expression: "gpu.phase == 'Running' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0",
 		},
 		{
 			name:       "VeryComplex",
-			expression: "gpu.phase == 'Ready' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0 && gpu.labels['environment'] == 'production'",
+			expression: "gpu.phase == 'Running' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0 && gpu.labels['environment'] == 'production'",
 		},
 		{
 			name:       "UltraComplex",
-			expression: "gpu.phase == 'Ready' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0 && gpu.labels['environment'] == 'production' && gpu.labels['tier'] == 'high-performance' && gpu.annotations['priority'] == 'critical'",
+			expression: "gpu.phase == 'Running' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0 && gpu.labels['environment'] == 'production' && gpu.labels['tier'] == 'high-performance' && gpu.annotations['priority'] == 'critical'",
 		},
 	}
 
