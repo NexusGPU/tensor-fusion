@@ -11,6 +11,13 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
 )
 
+// Test constants for repeated strings
+const (
+	testEnvironmentProduction = "production"
+	testTierHighPerformance   = "high-performance"
+	testPriorityCritical      = "critical"
+)
+
 // Benchmark performance of the CEL filter compared to the original filter
 func BenchmarkFilterPerformance(b *testing.B) {
 	// Create test data
@@ -30,10 +37,10 @@ func BenchmarkFilterPerformance(b *testing.B) {
 			phase = constants.PhasePending
 		}
 
-		gpu := createTestGPU(fmt.Sprintf("gpu-%d", i), "default", gpuModel, phase, 150.0, 40.0)
-		gpu.Labels["environment"] = "production"
+		gpu := createTestGPU(fmt.Sprintf("gpu-%d", i), gpuModel, phase, 150.0, 40.0)
+		gpu.Labels["environment"] = testEnvironmentProduction
 		if i%2 == 0 {
-			gpu.Labels["tier"] = "high-performance"
+			gpu.Labels["tier"] = testTierHighPerformance
 		}
 		gpus[i] = gpu
 	}
@@ -61,7 +68,7 @@ func BenchmarkFilterPerformance(b *testing.B) {
 
 	// Benchmark CEL filter - basic filtering
 	b.Run("CELFilter_Basic", func(b *testing.B) {
-		request := createTestAllocRequest("default", "test-workload", "A100", "")
+		request := createTestAllocRequest("A100", "")
 		cache, err := NewExpressionCache(100, 5*time.Minute)
 		if err != nil {
 			b.Fatal(err)
@@ -84,7 +91,7 @@ func BenchmarkFilterPerformance(b *testing.B) {
 
 	// Benchmark CEL filter - complex expression
 	b.Run("CELFilter_Complex", func(b *testing.B) {
-		request := createTestAllocRequest("default", "test-workload", "A100", "gpu.available.tflops >= 150.0 && gpu.labels['environment'] == 'production'")
+		request := createTestAllocRequest("A100", "gpu.available.tflops >= 150.0 && gpu.labels['environment'] == '"+testEnvironmentProduction+"'")
 		cache, err := NewExpressionCache(100, 5*time.Minute)
 		if err != nil {
 			b.Fatal(err)
@@ -116,15 +123,15 @@ func BenchmarkFilterPerformance(b *testing.B) {
 			"gpu.gpuModel == 'A100' && gpu.available.tflops > 100.0",
 			"gpu.gpuModel == 'V100' && gpu.available.tflops > 80.0",
 			"gpu.gpuModel == 'H100' && gpu.available.tflops > 180.0",
-			"gpu.labels['environment'] == 'production'",
-			"gpu.labels['tier'] == 'high-performance'",
+			"gpu.labels['environment'] == '" + testEnvironmentProduction + "'",
+			"gpu.labels['tier'] == '" + testTierHighPerformance + "'",
 			"gpu.available.vram > 30000000000",
 		}
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			expression := expressions[i%len(expressions)]
-			request := createTestAllocRequest("default", "test-workload", "", expression)
+			request := createTestAllocRequest("", expression)
 
 			celFilter, err := NewCELFilter(request, cache)
 			if err != nil {
@@ -189,10 +196,10 @@ func BenchmarkExpressionComplexity(b *testing.B) {
 	const numGPUs = 100
 	gpus := make([]*tfv1.GPU, numGPUs)
 	for i := 0; i < numGPUs; i++ {
-		gpu := createTestGPU(fmt.Sprintf("gpu-%d", i), "default", "A100", constants.PhaseRunning, 150.0, 40.0)
-		gpu.Labels["environment"] = "production"
-		gpu.Labels["tier"] = "high-performance"
-		gpu.Annotations["priority"] = "critical"
+		gpu := createTestGPU(fmt.Sprintf("gpu-%d", i), "A100", constants.PhaseRunning, 150.0, 40.0)
+		gpu.Labels["environment"] = testEnvironmentProduction
+		gpu.Labels["tier"] = testTierHighPerformance
+		gpu.Annotations["priority"] = testPriorityCritical
 		gpus[i] = gpu
 	}
 
@@ -217,11 +224,11 @@ func BenchmarkExpressionComplexity(b *testing.B) {
 		},
 		{
 			name:       "VeryComplex",
-			expression: "gpu.phase == 'Running' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0 && gpu.labels['environment'] == 'production'",
+			expression: "gpu.phase == 'Running' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0 && gpu.labels['environment'] == '" + testEnvironmentProduction + "'",
 		},
 		{
 			name:       "UltraComplex",
-			expression: "gpu.phase == 'Running' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0 && gpu.labels['environment'] == 'production' && gpu.labels['tier'] == 'high-performance' && gpu.annotations['priority'] == 'critical'",
+			expression: "gpu.phase == 'Running' && gpu.gpuModel == 'A100' && gpu.available.tflops >= 150.0 && gpu.labels['environment'] == '" + testEnvironmentProduction + "' && gpu.labels['tier'] == '" + testTierHighPerformance + "' && gpu.annotations['priority'] == '" + testPriorityCritical + "'",
 		},
 	}
 
@@ -232,7 +239,7 @@ func BenchmarkExpressionComplexity(b *testing.B) {
 				b.Fatal(err)
 			}
 
-			request := createTestAllocRequest("default", "test-workload", "", tc.expression)
+			request := createTestAllocRequest("", tc.expression)
 			celFilter, err := NewCELFilter(request, cache)
 			if err != nil {
 				b.Fatal(err)

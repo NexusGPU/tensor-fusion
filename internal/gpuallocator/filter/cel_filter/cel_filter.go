@@ -130,16 +130,16 @@ func (w *workerPodKeyVal) Get(index ref.Val) ref.Val {
 		return types.NewErr("index must be string")
 	}
 	switch key {
-	case "name":
+	case GPUFieldName:
 		return types.String(w.name)
-	case "namespace":
+	case GPUFieldNamespace:
 		return types.String(w.namespace)
 	default:
 		return types.String("")
 	}
 }
 func (w *workerPodKeyVal) HasField(field string) bool {
-	return field == "name" || field == "namespace"
+	return field == GPUFieldName || field == GPUFieldNamespace
 }
 
 type appVal struct {
@@ -291,7 +291,7 @@ func (v *gpuVal) Value() interface{} {
 // Equal implements ref.Val interface
 func (v *gpuVal) Equal(other ref.Val) ref.Val {
 	if otherGPU, ok := other.(*gpuVal); ok {
-		return types.Bool(v.GPU.UID == otherGPU.GPU.UID)
+		return types.Bool(v.UID == otherGPU.UID)
 	}
 	return types.False
 }
@@ -332,48 +332,48 @@ func (v *gpuVal) Get(index ref.Val) ref.Val {
 
 	switch field {
 	case GPUFieldName:
-		return types.String(v.GPU.Name)
+		return types.String(v.Name)
 	case GPUFieldNamespace:
-		return types.String(v.GPU.Namespace)
+		return types.String(v.Namespace)
 	case GPUFieldGPUModel:
-		return types.String(v.GPU.Status.GPUModel)
+		return types.String(v.Status.GPUModel)
 	case GPUFieldUUID:
-		return types.String(v.GPU.Status.UUID)
+		return types.String(v.Status.UUID)
 	case GPUFieldPhase:
-		return getPooledPhaseString(string(v.GPU.Status.Phase))
+		return getPooledPhaseString(string(v.Status.Phase))
 	case GPUFieldUsedBy:
-		return types.String(string(v.GPU.Status.UsedBy))
+		return types.String(string(v.Status.UsedBy))
 	case GPUFieldMessage:
-		return types.String(v.GPU.Status.Message)
+		return types.String(v.Status.Message)
 	case GPUFieldLabels:
 		// Lazy initialization with caching
 		if v.labels == nil {
-			v.labels = &labelsVal{labels: v.GPU.Labels}
+			v.labels = &labelsVal{labels: v.Labels}
 		}
 		return v.labels
 	case GPUFieldAnnotations:
 		// Lazy initialization with caching
 		if v.annotations == nil {
-			v.annotations = &labelsVal{labels: v.GPU.Annotations}
+			v.annotations = &labelsVal{labels: v.Annotations}
 		}
 		return v.annotations
 	case GPUFieldAvailable:
 		// Lazy initialization with caching
 		if v.available == nil {
-			v.available = &availableVal{available: v.GPU.Status.Available}
+			v.available = &availableVal{available: v.Status.Available}
 		}
 		return v.available
 	case GPUFieldNodeSelector:
 		// Lazy initialization with caching
 		if v.nodeSelector == nil {
-			v.nodeSelector = &labelsVal{labels: v.GPU.Status.NodeSelector}
+			v.nodeSelector = &labelsVal{labels: v.Status.NodeSelector}
 		}
 		return v.nodeSelector
 	case GPUFieldRunningApps:
 		// For now, keep simple implementation - can optimize later if needed
 		if v.runningApps == nil {
-			apps := make([]tfv1.RunningAppDetail, len(v.GPU.Status.RunningApps))
-			for i, app := range v.GPU.Status.RunningApps {
+			apps := make([]tfv1.RunningAppDetail, len(v.Status.RunningApps))
+			for i, app := range v.Status.RunningApps {
 				apps[i] = *app
 			}
 			v.runningApps = &runningAppsVal{apps: apps}
@@ -559,8 +559,8 @@ func (f *CELFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace,
 		return gpus, nil
 	}
 
-	// Pre-allocate result slice with estimated capacity
-	filteredGPUs := make([]*tfv1.GPU, 0, len(gpus))
+	// Pre-allocate result slice with estimated capacity for early filtering
+	var filteredGPUs []*tfv1.GPU
 
 	// Early filtering phase: apply basic filters first to reduce CEL evaluation overhead
 	earlyFilteredGPUs := make([]*tfv1.GPU, 0, len(gpus))
@@ -608,7 +608,7 @@ func (f *CELFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace,
 	// Fallback to CEL evaluation for complex expressions
 	if len(earlyFilteredGPUs) >= ParallelThreshold {
 		// Use parallel evaluation for large GPU sets
-		filteredGPUs = f.filterFallbackParallel(ctx, program, earlyFilteredGPUs, workerPodKey)
+		filteredGPUs = f.filterFallbackParallel(program, earlyFilteredGPUs, workerPodKey)
 	} else {
 		// Sequential evaluation for smaller sets
 		filteredGPUs = f.filterFallbackSequential(ctx, program, earlyFilteredGPUs, workerPodKey)
@@ -716,7 +716,7 @@ func (f *CELFilter) filterFallbackSequential(ctx context.Context, program cel.Pr
 }
 
 // filterFallbackParallel performs parallel CEL evaluation for large GPU sets
-func (f *CELFilter) filterFallbackParallel(ctx context.Context, program cel.Program, gpus []*tfv1.GPU, workerPodKey tfv1.NameNamespace) []*tfv1.GPU {
+func (f *CELFilter) filterFallbackParallel(program cel.Program, gpus []*tfv1.GPU, workerPodKey tfv1.NameNamespace) []*tfv1.GPU {
 	numGPUs := len(gpus)
 	numWorkers := runtime.NumCPU()
 	if numWorkers > DefaultWorkerCount {
