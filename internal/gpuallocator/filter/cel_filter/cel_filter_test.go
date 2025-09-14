@@ -191,6 +191,120 @@ func TestCELFilter_NormalCases(t *testing.T) {
 			expectedCount: 1,
 			description:   "Should filter A100 GPUs with TFLOPS >= 150, production environment, and Running/Pending phase",
 		},
+		{
+			name:    "filter by running apps - no running apps",
+			request: createTestAllocRequest("default", "test-workload", "", "size(gpu.runningApps) == 0"),
+			gpus: []*tfv1.GPU{
+				createTestGPU("gpu-1", "default", "A100", constants.PhaseRunning, 150.0, 40.0),
+				func() *tfv1.GPU {
+					gpu := createTestGPU("gpu-2", "default", "A100", constants.PhaseRunning, 150.0, 40.0)
+					gpu.Status.RunningApps = []*tfv1.RunningAppDetail{
+						{Name: "app1", Namespace: "default", Count: 1},
+					}
+					return gpu
+				}(),
+				createTestGPU("gpu-3", "default", "A100", constants.PhaseRunning, 150.0, 40.0),
+			},
+			expectedCount: 2,
+			description:   "Should return GPUs with no running apps",
+		},
+		{
+			name:    "filter by running apps - has specific app",
+			request: createTestAllocRequest("default", "test-workload", "", "gpu.runningApps.exists(app, app.name == 'training-job' && app.namespace == 'ml-team')"),
+			gpus: []*tfv1.GPU{
+				func() *tfv1.GPU {
+					gpu := createTestGPU("gpu-1", "default", "A100", constants.PhaseRunning, 150.0, 40.0)
+					gpu.Status.RunningApps = []*tfv1.RunningAppDetail{
+						{Name: "training-job", Namespace: "ml-team", Count: 2},
+						{Name: "other-job", Namespace: "default", Count: 1},
+					}
+					return gpu
+				}(),
+				func() *tfv1.GPU {
+					gpu := createTestGPU("gpu-2", "default", "A100", constants.PhaseRunning, 150.0, 40.0)
+					gpu.Status.RunningApps = []*tfv1.RunningAppDetail{
+						{Name: "other-job", Namespace: "ml-team", Count: 1},
+					}
+					return gpu
+				}(),
+				createTestGPU("gpu-3", "default", "A100", constants.PhaseRunning, 150.0, 40.0),
+			},
+			expectedCount: 1,
+			description:   "Should return GPUs running specific training job",
+		},
+		{
+			name:    "filter by running apps - count threshold",
+			request: createTestAllocRequest("default", "test-workload", "", "gpu.runningApps.all(app, app.count <= 2) && size(gpu.runningApps) > 0"),
+			gpus: []*tfv1.GPU{
+				func() *tfv1.GPU {
+					gpu := createTestGPU("gpu-1", "default", "A100", constants.PhaseRunning, 150.0, 40.0)
+					gpu.Status.RunningApps = []*tfv1.RunningAppDetail{
+						{Name: "job1", Namespace: "default", Count: 1},
+						{Name: "job2", Namespace: "default", Count: 2},
+					}
+					return gpu
+				}(),
+				func() *tfv1.GPU {
+					gpu := createTestGPU("gpu-2", "default", "A100", constants.PhaseRunning, 150.0, 40.0)
+					gpu.Status.RunningApps = []*tfv1.RunningAppDetail{
+						{Name: "job1", Namespace: "default", Count: 5}, // Count > 2
+					}
+					return gpu
+				}(),
+				createTestGPU("gpu-3", "default", "A100", constants.PhaseRunning, 150.0, 40.0), // No running apps
+			},
+			expectedCount: 1,
+			description:   "Should return GPUs where all running apps have count <= 2",
+		},
+		{
+			name:    "filter by running apps - complex condition",
+			request: createTestAllocRequest("default", "test-workload", "A100", "gpu.available.tflops >= 150.0 && (size(gpu.runningApps) == 0 || gpu.runningApps.all(app, app.namespace != 'restricted'))"),
+			gpus: []*tfv1.GPU{
+				createTestGPU("gpu-1", "default", "A100", constants.PhaseRunning, 150.0, 40.0), // No running apps
+				func() *tfv1.GPU {
+					gpu := createTestGPU("gpu-2", "default", "A100", constants.PhaseRunning, 150.0, 40.0)
+					gpu.Status.RunningApps = []*tfv1.RunningAppDetail{
+						{Name: "job1", Namespace: "allowed", Count: 1},
+					}
+					return gpu
+				}(),
+				func() *tfv1.GPU {
+					gpu := createTestGPU("gpu-3", "default", "A100", constants.PhaseRunning, 150.0, 40.0)
+					gpu.Status.RunningApps = []*tfv1.RunningAppDetail{
+						{Name: "job1", Namespace: "restricted", Count: 1}, // Restricted namespace
+					}
+					return gpu
+				}(),
+				createTestGPU("gpu-4", "default", "V100", constants.PhaseRunning, 150.0, 40.0), // Wrong model
+			},
+			expectedCount: 2,
+			description:   "Should return A100 GPUs with sufficient resources and no restricted apps",
+		},
+		{
+			name:    "filter by running apps - namespace isolation",
+			request: createTestAllocRequest("default", "test-workload", "", "!gpu.runningApps.exists(app, app.namespace == 'tenant-a')"),
+			gpus: []*tfv1.GPU{
+				func() *tfv1.GPU {
+					gpu := createTestGPU("gpu-1", "default", "A100", constants.PhaseRunning, 150.0, 40.0)
+					gpu.Status.RunningApps = []*tfv1.RunningAppDetail{
+						{Name: "job1", Namespace: "tenant-b", Count: 1},
+						{Name: "job2", Namespace: "shared", Count: 1},
+					}
+					return gpu
+				}(),
+				func() *tfv1.GPU {
+					gpu := createTestGPU("gpu-2", "default", "A100", constants.PhaseRunning, 150.0, 40.0)
+					gpu.Status.RunningApps = []*tfv1.RunningAppDetail{
+						{Name: "job1", Namespace: "tenant-a", Count: 1}, // Should be excluded
+						{Name: "job2", Namespace: "tenant-b", Count: 1},
+					}
+					return gpu
+				}(),
+				createTestGPU("gpu-3", "default", "A100", constants.PhaseRunning, 150.0, 40.0), // No running apps
+			},
+			expectedCount: 2,
+			description:   "Should return GPUs not running apps from tenant-a",
+		},
 	}
 
 	for _, tt := range tests {
@@ -208,6 +322,8 @@ func TestCELFilter_NormalCases(t *testing.T) {
 
 			// Verify results
 			require.NoError(t, err, "Filter execution should not fail")
+
+			// Debug output for complex condition test
 			assert.Len(t, filteredGPUs, tt.expectedCount, tt.description)
 
 			// Verify filter name

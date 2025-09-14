@@ -6,14 +6,16 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
+	"sync"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/common/types/traits"
 	"github.com/google/cel-go/interpreter"
 	"github.com/samber/lo"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -26,6 +28,30 @@ const (
 	// Default number of worker goroutines
 	DefaultWorkerCount = 4
 )
+
+// Global string pool for GPU Phase values to reduce allocations
+var (
+	gpuPhaseStringPool = sync.OnceValue(func() map[string]types.String {
+		return map[string]types.String{
+			constants.PhaseUnknown:    types.String(constants.PhaseUnknown),
+			constants.PhasePending:    types.String(constants.PhasePending),
+			constants.PhaseUpdating:   types.String(constants.PhaseUpdating),
+			constants.PhaseRunning:    types.String(constants.PhaseRunning),
+			constants.PhaseMigrating:  types.String(constants.PhaseMigrating),
+			constants.PhaseDestroying: types.String(constants.PhaseDestroying),
+		}
+	})
+)
+
+// getPooledPhaseString returns a pooled CEL String for the given phase
+func getPooledPhaseString(phase string) ref.Val {
+	pool := gpuPhaseStringPool()
+	if pooled, exists := pool[phase]; exists {
+		return pooled
+	}
+	// Return error for unexpected phase values
+	return types.NewErr("unknown GPU phase: %s", phase)
+}
 
 // fieldUsage tracks which GPU fields are used in the expression
 type fieldUsage struct {
@@ -45,98 +71,33 @@ type ExpressionPattern struct {
 	Generator func(matches []string) FastPathPredicate
 }
 
-// Common fast path patterns - order matters (most specific first)
-var fastPathPatterns = []ExpressionPattern{
-	// Complex AND pattern: gpu.available.tflops >= NUMBER && gpu.labels['KEY'] == 'VALUE'
-	{
-		Pattern: regexp.MustCompile(`^gpu\.available\.tflops\s*>=\s*([0-9]+(?:\.[0-9]+)?)\s*&&\s*gpu\.labels\['([^']+)'\]\s*==\s*'([^']+)'$`),
-		Generator: func(matches []string) FastPathPredicate {
-			threshold, _ := strconv.ParseFloat(matches[1], 64)
-			labelKey, labelValue := matches[2], matches[3]
-			return func(gpu *tfv1.GPU) bool {
-				return gpu.Status.Available != nil &&
-					gpu.Status.Available.Tflops.AsApproximateFloat64() >= threshold &&
-					gpu.Labels != nil && gpu.Labels[labelKey] == labelValue
-			}
-		},
-	},
-	// gpu.available.tflops >= NUMBER
-	{
-		Pattern: regexp.MustCompile(`^gpu\.available\.tflops\s*>=\s*([0-9]+(?:\.[0-9]+)?)$`),
-		Generator: func(matches []string) FastPathPredicate {
-			threshold, _ := strconv.ParseFloat(matches[1], 64)
-			return func(gpu *tfv1.GPU) bool {
-				return gpu.Status.Available != nil && gpu.Status.Available.Tflops.AsApproximateFloat64() >= threshold
-			}
-		},
-	},
-	// gpu.available.tflops > NUMBER
-	{
-		Pattern: regexp.MustCompile(`^gpu\.available\.tflops\s*>\s*([0-9]+(?:\.[0-9]+)?)$`),
-		Generator: func(matches []string) FastPathPredicate {
-			threshold, _ := strconv.ParseFloat(matches[1], 64)
-			return func(gpu *tfv1.GPU) bool {
-				return gpu.Status.Available != nil && gpu.Status.Available.Tflops.AsApproximateFloat64() > threshold
-			}
-		},
-	},
-	// gpu.available.vram >= NUMBER
-	{
-		Pattern: regexp.MustCompile(`^gpu\.available\.vram\s*>=\s*([0-9]+(?:\.[0-9]+)?)$`),
-		Generator: func(matches []string) FastPathPredicate {
-			threshold, _ := strconv.ParseFloat(matches[1], 64)
-			return func(gpu *tfv1.GPU) bool {
-				return gpu.Status.Available != nil && gpu.Status.Available.Vram.AsApproximateFloat64() >= threshold
-			}
-		},
-	},
-	// gpu.available.vram > NUMBER
-	{
-		Pattern: regexp.MustCompile(`^gpu\.available\.vram\s*>\s*([0-9]+(?:\.[0-9]+)?)$`),
-		Generator: func(matches []string) FastPathPredicate {
-			threshold, _ := strconv.ParseFloat(matches[1], 64)
-			return func(gpu *tfv1.GPU) bool {
-				return gpu.Status.Available != nil && gpu.Status.Available.Vram.AsApproximateFloat64() > threshold
-			}
-		},
-	},
-	// gpu.labels['KEY'] == 'VALUE'
-	{
-		Pattern: regexp.MustCompile(`^gpu\.labels\['([^']+)'\]\s*==\s*'([^']+)'$`),
-		Generator: func(matches []string) FastPathPredicate {
-			key, value := matches[1], matches[2]
-			return func(gpu *tfv1.GPU) bool {
-				return gpu.Labels != nil && gpu.Labels[key] == value
-			}
-		},
-	},
-	// gpu.annotations['KEY'] == 'VALUE'
-	{
-		Pattern: regexp.MustCompile(`^gpu\.annotations\['([^']+)'\]\s*==\s*'([^']+)'$`),
-		Generator: func(matches []string) FastPathPredicate {
-			key, value := matches[1], matches[2]
-			return func(gpu *tfv1.GPU) bool {
-				return gpu.Annotations != nil && gpu.Annotations[key] == value
-			}
-		},
-	},
-}
-
 // ZeroAllocActivation provides zero-allocation variable resolution for CEL
 // This eliminates the need to create map[string]interface{} for each GPU
 type ZeroAllocActivation struct {
-	gpu          *tfv1.GPU
-	workerPodKey tfv1.NameNamespace
+	gpuVal       gpuVal
+	workerPodKey workerPodKeyVal
 	usage        fieldUsage
+}
+
+func (a *ZeroAllocActivation) init(g *tfv1.GPU, k tfv1.NameNamespace, usage fieldUsage) {
+	a.gpuVal.GPU = g
+	a.gpuVal.labels = nil
+	a.gpuVal.annotations = nil
+	a.gpuVal.nodeSelector = nil
+	a.gpuVal.available = nil
+	a.gpuVal.runningApps = nil
+	a.workerPodKey.name = k.Name
+	a.workerPodKey.namespace = k.Namespace
+	a.usage = usage
 }
 
 // ResolveName implements interpreter.Activation interface
 func (a *ZeroAllocActivation) ResolveName(name string) (interface{}, bool) {
 	switch name {
 	case CELVarGPU:
-		return a.createGPUObject(), true
+		return &a.gpuVal, true
 	case CELVarWorkerPodKey:
-		return a.createWorkerPodKeyObject(), true
+		return &a.workerPodKey, true
 	default:
 		return nil, false
 	}
@@ -147,19 +108,164 @@ func (a *ZeroAllocActivation) Parent() interpreter.Activation {
 	return nil
 }
 
-// createGPUObject creates GPU object on-demand without maps
-func (a *ZeroAllocActivation) createGPUObject() interface{} {
-	// Return GPU value with lazy caching
-	return &gpuVal{GPU: a.gpu}
+type workerPodKeyVal struct {
+	name      string
+	namespace string
 }
 
-// createWorkerPodKeyObject creates worker pod key object
-func (a *ZeroAllocActivation) createWorkerPodKeyObject() interface{} {
-	return map[string]interface{}{
-		"name":      a.workerPodKey.Name,
-		"namespace": a.workerPodKey.Namespace,
+func (w *workerPodKeyVal) Type() ref.Type { return types.MapType }
+func (w *workerPodKeyVal) Value() interface{} {
+	return map[string]string{"name": w.name, "namespace": w.namespace}
+}
+func (w *workerPodKeyVal) Equal(other ref.Val) ref.Val { return types.False }
+func (w *workerPodKeyVal) ConvertToNative(t reflect.Type) (interface{}, error) {
+	return map[string]string{"name": w.name, "namespace": w.namespace}, nil
+}
+func (w *workerPodKeyVal) ConvertToType(typeValue ref.Type) ref.Val {
+	return types.NewErr("type conversion not supported")
+}
+func (w *workerPodKeyVal) Get(index ref.Val) ref.Val {
+	key, ok := index.Value().(string)
+	if !ok {
+		return types.NewErr("index must be string")
+	}
+	switch key {
+	case "name":
+		return types.String(w.name)
+	case "namespace":
+		return types.String(w.namespace)
+	default:
+		return types.String("")
 	}
 }
+func (w *workerPodKeyVal) HasField(field string) bool {
+	return field == "name" || field == "namespace"
+}
+
+type appVal struct {
+	name      string
+	namespace string
+	count     int64
+}
+
+func (a *appVal) Type() ref.Type              { return types.MapType }
+func (a *appVal) Value() interface{}          { return nil }
+func (a *appVal) Equal(other ref.Val) ref.Val { return types.False }
+func (a *appVal) ConvertToNative(t reflect.Type) (interface{}, error) {
+	return map[string]interface{}{
+		"name":      a.name,
+		"namespace": a.namespace,
+		"count":     a.count,
+	}, nil
+}
+func (a *appVal) ConvertToType(typeValue ref.Type) ref.Val {
+	return types.NewErr("type conversion not supported")
+}
+func (a *appVal) Get(index ref.Val) ref.Val {
+	key, _ := index.Value().(string)
+	switch key {
+	case "name":
+		return types.String(a.name)
+	case "namespace":
+		return types.String(a.namespace)
+	case "count":
+		return types.Int(a.count)
+	default:
+		return types.String("")
+	}
+}
+func (a *appVal) HasField(field string) bool {
+	return field == "name" || field == "namespace" || field == "count"
+}
+
+type runningAppsVal struct {
+	apps []tfv1.RunningAppDetail
+}
+
+func (r *runningAppsVal) Type() ref.Type              { return types.ListType }
+func (r *runningAppsVal) Value() interface{}          { return r.apps }
+func (r *runningAppsVal) Equal(other ref.Val) ref.Val { return types.False }
+func (r *runningAppsVal) ConvertToNative(t reflect.Type) (interface{}, error) {
+	if t.Kind() == reflect.Slice {
+		out := make([]map[string]interface{}, len(r.apps))
+		for i, a := range r.apps {
+			out[i] = map[string]interface{}{
+				"name":      a.Name,
+				"namespace": a.Namespace,
+				"count":     a.Count,
+			}
+		}
+		return out, nil
+	}
+	return r.apps, nil
+}
+func (r *runningAppsVal) ConvertToType(typeValue ref.Type) ref.Val {
+	return types.NewErr("type conversion not supported")
+}
+func (r *runningAppsVal) Get(index ref.Val) ref.Val {
+	i, ok := index.Value().(int)
+	if !ok {
+		if i64, ok2 := index.Value().(int64); ok2 {
+			i = int(i64)
+			ok = true
+		}
+	}
+	if !ok || i < 0 || i >= len(r.apps) {
+		return types.NewErr("index out of range")
+	}
+	app := r.apps[i]
+	return &appVal{name: app.Name, namespace: app.Namespace, count: int64(app.Count)}
+}
+
+func (r *runningAppsVal) Size() ref.Val { return types.Int(len(r.apps)) }
+
+func (r *runningAppsVal) Contains(elem ref.Val) ref.Val {
+	av, ok := elem.(*appVal)
+	if !ok {
+		return types.False
+	}
+	for _, a := range r.apps {
+		if a.Name == av.name && a.Namespace == av.namespace && int64(a.Count) == av.count {
+			return types.True
+		}
+	}
+	return types.False
+}
+func (r *runningAppsVal) Iterator() traits.Iterator {
+	return &runningAppsIterator{apps: r.apps}
+}
+func (r *runningAppsVal) Add(elem ref.Val) ref.Val {
+	return types.NewErr("runningApps list is read-only")
+}
+
+type runningAppsIterator struct {
+	apps []tfv1.RunningAppDetail
+	i    int
+}
+
+func (it *runningAppsIterator) Type() ref.Type              { return types.IteratorType }
+func (it *runningAppsIterator) Value() interface{}          { return nil }
+func (it *runningAppsIterator) Equal(other ref.Val) ref.Val { return types.False }
+func (it *runningAppsIterator) ConvertToNative(t reflect.Type) (interface{}, error) {
+	return nil, fmt.Errorf("iterator cannot convert to native")
+}
+func (it *runningAppsIterator) ConvertToType(typeValue ref.Type) ref.Val {
+	return types.NewErr("type conversion not supported")
+}
+func (it *runningAppsIterator) HasNext() ref.Val {
+	return types.Bool(it.i < len(it.apps))
+}
+func (it *runningAppsIterator) Next() ref.Val {
+	if it.i >= len(it.apps) {
+		return types.NewErr("iterator past end")
+	}
+	a := it.apps[it.i]
+	it.i++
+	return &appVal{name: a.Name, namespace: a.Namespace, count: int64(a.Count)}
+}
+
+var _ traits.Lister = (*runningAppsVal)(nil)
+var _ traits.Iterator = (*runningAppsIterator)(nil)
 
 // gpuVal implements CEL value interface for GPU objects to eliminate map allocations
 type gpuVal struct {
@@ -234,7 +340,7 @@ func (v *gpuVal) Get(index ref.Val) ref.Val {
 	case GPUFieldUUID:
 		return types.String(v.GPU.Status.UUID)
 	case GPUFieldPhase:
-		return types.String(string(v.GPU.Status.Phase))
+		return getPooledPhaseString(string(v.GPU.Status.Phase))
 	case GPUFieldUsedBy:
 		return types.String(string(v.GPU.Status.UsedBy))
 	case GPUFieldMessage:
@@ -266,14 +372,11 @@ func (v *gpuVal) Get(index ref.Val) ref.Val {
 	case GPUFieldRunningApps:
 		// For now, keep simple implementation - can optimize later if needed
 		if v.runningApps == nil {
-			apps := make([]interface{}, len(v.GPU.Status.RunningApps))
+			apps := make([]tfv1.RunningAppDetail, len(v.GPU.Status.RunningApps))
 			for i, app := range v.GPU.Status.RunningApps {
-				apps[i] = map[string]interface{}{
-					"name":      app.Name,
-					"namespace": app.Namespace,
-				}
+				apps[i] = *app
 			}
-			v.runningApps = types.NewDynamicList(types.DefaultTypeAdapter, apps)
+			v.runningApps = &runningAppsVal{apps: apps}
 		}
 		return v.runningApps
 	default:
@@ -323,7 +426,7 @@ func (v *availableVal) Get(index ref.Val) ref.Val {
 		case ResourceFieldTFlops:
 			return types.Double(0.0)
 		case ResourceFieldVRAM:
-			return types.Int(0)
+			return types.Double(0.0)
 		default:
 			return types.NewErr("no such field: %s", field)
 		}
@@ -333,7 +436,7 @@ func (v *availableVal) Get(index ref.Val) ref.Val {
 	case ResourceFieldTFlops:
 		return types.Double(v.available.Tflops.AsApproximateFloat64())
 	case ResourceFieldVRAM:
-		return types.Int(v.available.Vram.Value())
+		return types.Double(float64(v.available.Vram.Value()))
 	default:
 		return types.NewErr("no such field: %s", field)
 	}
@@ -404,8 +507,6 @@ type CELFilter struct {
 	usage fieldUsage
 	// Display expression for logging (read-only)
 	displayExpression string
-	// Fast path predicate for common patterns
-	fastPathPredicate FastPathPredicate
 }
 
 // NewAllocRequestCELFilter creates a new CEL filter from allocation request
@@ -429,9 +530,6 @@ func NewCELFilter(req *tfv1.AllocRequest, cache *ExpressionCache) (*CELFilter, e
 	// Analyze field usage in user expression only
 	usage := analyzeFieldUsage(userExpression)
 
-	// Try to compile fast path predicate
-	fastPath := compileFastPath(userExpression)
-
 	// Handle nil request case
 	name := "AllocRequest-unknown"
 	if req != nil {
@@ -446,7 +544,6 @@ func NewCELFilter(req *tfv1.AllocRequest, cache *ExpressionCache) (*CELFilter, e
 		userExpression:    userExpression,
 		usage:             usage,
 		displayExpression: displayExpression,
-		fastPathPredicate: fastPath,
 	}, nil
 }
 
@@ -507,43 +604,23 @@ func (f *CELFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace,
 	}
 
 	// Use fast path if available, otherwise fall back to CEL
-	if f.fastPathPredicate != nil {
-		// Fast path: direct Go function evaluation with optional parallelization
-		if len(earlyFilteredGPUs) >= ParallelThreshold {
-			filteredGPUs = f.filterParallel(earlyFilteredGPUs)
-		} else {
-			for _, gpu := range earlyFilteredGPUs {
-				if f.fastPathPredicate(gpu) {
-					filteredGPUs = append(filteredGPUs, gpu)
-				}
-			}
-		}
 
-		log.V(1).Info("CEL filter applied (fast path)",
-			"filter", f.name,
-			"displayExpression", f.displayExpression,
-			"userExpression", f.userExpression,
-			"inputGPUs", len(gpus),
-			"earlyFilteredGPUs", len(earlyFilteredGPUs),
-			"outputGPUs", len(filteredGPUs))
+	// Fallback to CEL evaluation for complex expressions
+	if len(earlyFilteredGPUs) >= ParallelThreshold {
+		// Use parallel evaluation for large GPU sets
+		filteredGPUs = f.filterFallbackParallel(ctx, program, earlyFilteredGPUs, workerPodKey)
 	} else {
-		// Fallback to CEL evaluation for complex expressions
-		if len(earlyFilteredGPUs) >= ParallelThreshold {
-			// Use parallel evaluation for large GPU sets
-			filteredGPUs = f.filterFallbackParallel(ctx, program, earlyFilteredGPUs, workerPodKey)
-		} else {
-			// Sequential evaluation for smaller sets
-			filteredGPUs = f.filterFallbackSequential(ctx, program, earlyFilteredGPUs, workerPodKey)
-		}
-
-		log.V(1).Info("CEL filter applied (CEL evaluation)",
-			"filter", f.name,
-			"displayExpression", f.displayExpression,
-			"userExpression", f.userExpression,
-			"inputGPUs", len(gpus),
-			"earlyFilteredGPUs", len(earlyFilteredGPUs),
-			"outputGPUs", len(filteredGPUs))
+		// Sequential evaluation for smaller sets
+		filteredGPUs = f.filterFallbackSequential(ctx, program, earlyFilteredGPUs, workerPodKey)
 	}
+
+	log.V(1).Info("CEL filter applied (CEL evaluation)",
+		"filter", f.name,
+		"displayExpression", f.displayExpression,
+		"userExpression", f.userExpression,
+		"inputGPUs", len(gpus),
+		"earlyFilteredGPUs", len(earlyFilteredGPUs),
+		"outputGPUs", len(filteredGPUs))
 
 	return filteredGPUs, nil
 }
@@ -591,67 +668,11 @@ func createCELEnvironment() (*cel.Env, error) {
 	)
 }
 
-// filterParallel processes GPUs in parallel for large datasets
-func (f *CELFilter) filterParallel(gpus []*tfv1.GPU) []*tfv1.GPU {
-	numGPUs := len(gpus)
-	numWorkers := runtime.NumCPU()
-	if numWorkers > DefaultWorkerCount {
-		numWorkers = DefaultWorkerCount
-	}
-
-	chunkSize := (numGPUs + numWorkers - 1) / numWorkers
-	resultChannels := make([]<-chan []*tfv1.GPU, numWorkers)
-
-	// Create workers
-	for i := 0; i < numWorkers; i++ {
-		start := i * chunkSize
-		end := start + chunkSize
-		if end > numGPUs {
-			end = numGPUs
-		}
-
-		if start >= end {
-			// No work for this worker
-			ch := make(chan []*tfv1.GPU, 1)
-			ch <- []*tfv1.GPU{}
-			close(ch)
-			resultChannels[i] = ch
-			continue
-		}
-
-		chunk := gpus[start:end]
-		resultCh := make(chan []*tfv1.GPU, 1)
-		resultChannels[i] = resultCh
-
-		// Start worker goroutine
-		go func(gpuChunk []*tfv1.GPU, resultCh chan<- []*tfv1.GPU) {
-			defer close(resultCh)
-
-			filtered := make([]*tfv1.GPU, 0, len(gpuChunk)/2) // Estimate 50% pass rate
-			for _, gpu := range gpuChunk {
-				if f.fastPathPredicate(gpu) {
-					filtered = append(filtered, gpu)
-				}
-			}
-			resultCh <- filtered
-		}(chunk, resultCh)
-	}
-
-	// Collect results
-	var totalFiltered []*tfv1.GPU
-	for _, ch := range resultChannels {
-		chunkResults := <-ch
-		totalFiltered = append(totalFiltered, chunkResults...)
-	}
-
-	return totalFiltered
-}
-
 // filterFallbackSequential performs sequential CEL evaluation for smaller GPU sets
 func (f *CELFilter) filterFallbackSequential(ctx context.Context, program cel.Program, gpus []*tfv1.GPU, workerPodKey tfv1.NameNamespace) []*tfv1.GPU {
 	filteredGPUs := make([]*tfv1.GPU, 0, len(gpus)/2)
 	log := log.FromContext(ctx)
-
+	var activation ZeroAllocActivation
 	for i, gpu := range gpus {
 		// Periodic context check every 64 GPUs for very large sets
 		if i&63 == 0 {
@@ -664,14 +685,10 @@ func (f *CELFilter) filterFallbackSequential(ctx context.Context, program cel.Pr
 		}
 
 		// Use zero-allocation activation instead of maps
-		activation := &ZeroAllocActivation{
-			gpu:          gpu,
-			workerPodKey: workerPodKey,
-			usage:        f.usage,
-		}
+		activation.init(gpu, workerPodKey, f.usage)
 
 		// Direct synchronous evaluation with custom activation
-		result, _, evalErr := program.Eval(activation)
+		result, _, evalErr := program.Eval(&activation)
 
 		if evalErr != nil {
 			log.Error(evalErr, "CEL expression evaluation failed",
@@ -683,10 +700,8 @@ func (f *CELFilter) filterFallbackSequential(ctx context.Context, program cel.Pr
 		}
 
 		// Convert result to boolean
-		if boolResult, ok := result.(types.Bool); ok {
-			if bool(boolResult) {
-				filteredGPUs = append(filteredGPUs, gpu)
-			}
+		if boolResult, ok := result.(types.Bool); ok && bool(boolResult) {
+			filteredGPUs = append(filteredGPUs, gpu)
 		} else {
 			log.Error(nil, "CEL expression did not return boolean",
 				"expression", f.userExpression,
@@ -710,7 +725,7 @@ func (f *CELFilter) filterFallbackParallel(ctx context.Context, program cel.Prog
 
 	chunkSize := (numGPUs + numWorkers - 1) / numWorkers
 	resultChannels := make([]<-chan []*tfv1.GPU, numWorkers)
-
+	var activation ZeroAllocActivation
 	// Create workers
 	for i := 0; i < numWorkers; i++ {
 		start := i * chunkSize
@@ -740,24 +755,18 @@ func (f *CELFilter) filterFallbackParallel(ctx context.Context, program cel.Prog
 
 			for _, gpu := range gpuChunk {
 				// Use zero-allocation activation
-				activation := &ZeroAllocActivation{
-					gpu:          gpu,
-					workerPodKey: workerPodKey,
-					usage:        f.usage,
-				}
+				activation.init(gpu, workerPodKey, f.usage)
 
 				// Direct synchronous evaluation
-				result, _, evalErr := program.Eval(activation)
+				result, _, evalErr := program.Eval(&activation)
 				if evalErr != nil {
 					// On error, exclude the GPU (fail-safe)
 					continue
 				}
 
 				// Convert result to boolean
-				if boolResult, ok := result.(types.Bool); ok {
-					if bool(boolResult) {
-						filtered = append(filtered, gpu)
-					}
+				if boolResult, ok := result.(types.Bool); ok && bool(boolResult) {
+					filtered = append(filtered, gpu)
 				}
 				// On non-boolean result, exclude the GPU (fail-safe)
 			}
@@ -775,273 +784,11 @@ func (f *CELFilter) filterFallbackParallel(ctx context.Context, program cel.Prog
 	return totalFiltered
 }
 
-// compileFastPath tries to compile expression into a fast path predicate
-// Uses AST analysis for better pattern matching than regex
-func compileFastPath(expression string) FastPathPredicate {
-	if expression == "" {
-		return nil
-	}
-
-	// Try AST-based compilation first (more flexible)
-	if pred := compileASTFastPath(expression); pred != nil {
-		return pred
-	}
-
-	// Fall back to regex patterns for backward compatibility
-	for _, pattern := range fastPathPatterns {
-		matches := pattern.Pattern.FindStringSubmatch(expression)
-		if matches != nil {
-			return pattern.Generator(matches)
-		}
-	}
-
-	return nil
-}
-
-// compileASTFastPath analyzes AST to generate fast path predicates
-func compileASTFastPath(expression string) FastPathPredicate {
-	// Parse expression to AST
-	env, err := createCELEnvironment()
-	if err != nil {
-		return nil
-	}
-
-	_, issues := env.Parse(expression)
-	if issues != nil && issues.Err() != nil {
-		return nil
-	}
-
-	// Extract conditions from expression string (simplified approach)
-	conditions := extractConditionsFromString(expression)
-	if len(conditions) == 0 {
-		return nil
-	}
-
-	// Generate fast path predicate
-	return func(gpu *tfv1.GPU) bool {
-		for _, condition := range conditions {
-			if !evaluateCondition(gpu, condition) {
-				return false // Short-circuit on first failure (AND logic)
-			}
-		}
-		return true
-	}
-}
-
-// astCondition represents a simple condition extracted from AST
-type astCondition struct {
-	field    string      // e.g., "gpu.available.tflops", "gpu.labels['env']"
-	operator string      // "==", "!=", ">=", ">"
-	value    interface{} // expected value
-}
-
-// extractConditionsFromString uses enhanced pattern matching to extract conditions
-// This bridges the gap between regex and full AST until full AST implementation
-func extractConditionsFromString(exprStr string) []astCondition {
-	var conditions []astCondition
-
-	// Split by && to handle multiple conditions
-	parts := strings.Split(exprStr, " && ")
-
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-
-		// Handle gpu.available.tflops >= X
-		if strings.Contains(part, "gpu.available.tflops") && strings.Contains(part, ">=") {
-			if condition := parseNumericCondition(part, "gpu.available.tflops", ">="); condition != nil {
-				conditions = append(conditions, *condition)
-			}
-		} else if strings.Contains(part, "gpu.available.tflops") && strings.Contains(part, ">") {
-			if condition := parseNumericCondition(part, "gpu.available.tflops", ">"); condition != nil {
-				conditions = append(conditions, *condition)
-			}
-		}
-
-		// Handle gpu.available.vram >= X
-		if strings.Contains(part, "gpu.available.vram") && strings.Contains(part, ">=") {
-			if condition := parseNumericCondition(part, "gpu.available.vram", ">="); condition != nil {
-				conditions = append(conditions, *condition)
-			}
-		}
-
-		// Handle gpu.labels['key'] == 'value'
-		if strings.Contains(part, "gpu.labels[") && strings.Contains(part, "==") {
-			if condition := parseLabelCondition(part, "gpu.labels"); condition != nil {
-				conditions = append(conditions, *condition)
-			}
-		}
-
-		// Handle gpu.annotations['key'] == 'value'
-		if strings.Contains(part, "gpu.annotations[") && strings.Contains(part, "==") {
-			if condition := parseLabelCondition(part, "gpu.annotations"); condition != nil {
-				conditions = append(conditions, *condition)
-			}
-		}
-
-		// Handle gpu.gpuModel == 'value'
-		if strings.Contains(part, "gpu.gpuModel") && strings.Contains(part, "==") {
-			if condition := parseStringCondition(part, "gpu.gpuModel", "=="); condition != nil {
-				conditions = append(conditions, *condition)
-			}
-		}
-	}
-
-	return conditions
-}
-
-// parseNumericCondition parses numeric comparison conditions
-func parseNumericCondition(expr, field, operator string) *astCondition {
-	parts := strings.Split(expr, operator)
-	if len(parts) != 2 {
-		return nil
-	}
-
-	valueStr := strings.TrimSpace(parts[1])
-	value, err := strconv.ParseFloat(valueStr, 64)
-	if err != nil {
-		return nil
-	}
-
-	return &astCondition{
-		field:    field,
-		operator: operator,
-		value:    value,
-	}
-}
-
-// parseLabelCondition parses label/annotation map access conditions
-func parseLabelCondition(expr, fieldPrefix string) *astCondition {
-	// Extract key from gpu.labels['key'] == 'value' format
-	keyStart := strings.Index(expr, "['") + 2
-	keyEnd := strings.Index(expr[keyStart:], "']")
-	if keyEnd == -1 {
-		return nil
-	}
-	key := expr[keyStart : keyStart+keyEnd]
-
-	// Extract value
-	valueStart := strings.LastIndex(expr, "'")
-	if valueStart == -1 {
-		return nil
-	}
-	// Find the quote before the last quote
-	prevQuotePos := strings.LastIndex(expr[:valueStart], "'")
-	if prevQuotePos == -1 {
-		return nil
-	}
-	value := expr[prevQuotePos+1 : valueStart]
-
-	return &astCondition{
-		field:    fieldPrefix + "['" + key + "']",
-		operator: "==",
-		value:    value,
-	}
-}
-
-// parseStringCondition parses simple string equality conditions
-func parseStringCondition(expr, field, operator string) *astCondition {
-	parts := strings.Split(expr, operator)
-	if len(parts) != 2 {
-		return nil
-	}
-
-	valueStr := strings.TrimSpace(parts[1])
-	// Remove quotes
-	if strings.HasPrefix(valueStr, "'") && strings.HasSuffix(valueStr, "'") {
-		valueStr = valueStr[1 : len(valueStr)-1]
-	}
-
-	return &astCondition{
-		field:    field,
-		operator: operator,
-		value:    valueStr,
-	}
-}
-
-// evaluateCondition evaluates a single condition against a GPU
-func evaluateCondition(gpu *tfv1.GPU, condition astCondition) bool {
-	switch condition.field {
-	case "gpu.available.tflops":
-		if gpu.Status.Available == nil {
-			return false
-		}
-		actualValue := gpu.Status.Available.Tflops.AsApproximateFloat64()
-		expectedValue, ok := condition.value.(float64)
-		if !ok {
-			return false
-		}
-
-		switch condition.operator {
-		case ">=":
-			return actualValue >= expectedValue
-		case ">":
-			return actualValue > expectedValue
-		default:
-			return false
-		}
-
-	case "gpu.available.vram":
-		if gpu.Status.Available == nil {
-			return false
-		}
-		actualValue := float64(gpu.Status.Available.Vram.Value())
-		expectedValue, ok := condition.value.(float64)
-		if !ok {
-			return false
-		}
-
-		switch condition.operator {
-		case ">=":
-			return actualValue >= expectedValue
-		case ">":
-			return actualValue > expectedValue
-		default:
-			return false
-		}
-
-	case "gpu.gpuModel":
-		expectedValue, ok := condition.value.(string)
-		if !ok {
-			return false
-		}
-		return gpu.Status.GPUModel == expectedValue
-
-	default:
-		// Handle label/annotation access
-		if strings.HasPrefix(condition.field, "gpu.labels['") {
-			key := strings.TrimSuffix(strings.TrimPrefix(condition.field, "gpu.labels['"), "']")
-			expectedValue, ok := condition.value.(string)
-			if !ok {
-				return false
-			}
-			if gpu.Labels == nil {
-				return expectedValue == ""
-			}
-			return gpu.Labels[key] == expectedValue
-		}
-
-		if strings.HasPrefix(condition.field, "gpu.annotations['") {
-			key := strings.TrimSuffix(strings.TrimPrefix(condition.field, "gpu.annotations['"), "']")
-			expectedValue, ok := condition.value.(string)
-			if !ok {
-				return false
-			}
-			if gpu.Annotations == nil {
-				return expectedValue == ""
-			}
-			return gpu.Annotations[key] == expectedValue
-		}
-
-		return false
-	}
-}
-
 // analyzeFieldUsage performs simple heuristic analysis of which fields are used in the expression
 func analyzeFieldUsage(expression string) fieldUsage {
 	if expression == "" {
 		return fieldUsage{}
 	}
-
 	return fieldUsage{
 		labels:       strings.Contains(expression, "labels"),
 		annotations:  strings.Contains(expression, "annotations"),

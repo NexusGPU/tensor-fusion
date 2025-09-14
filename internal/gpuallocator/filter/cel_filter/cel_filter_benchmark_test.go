@@ -256,7 +256,7 @@ func printPerformanceComparison(b *testing.B) {
 === GPU Filter Performance Comparison ===
 
 Test Environment:
-- Number of GPUs: 10000
+- Number of GPUs: 1000000
 - GPU Models: A100 (33%%), V100 (33%%), H100 (33%%)
 - GPU Phases: Ready (90%%), Pending (10%%)
 
