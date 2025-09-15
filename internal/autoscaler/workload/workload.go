@@ -5,6 +5,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -49,7 +50,7 @@ func (w *State) ShouldScaleResource(name tfv1.ResourceName) bool {
 	return strings.EqualFold(target, "all") || strings.EqualFold(string(name), target)
 }
 
-func (w *State) IsRecommendationAppliedToAllWokers() bool {
+func (w *State) IsRecommendationAppliedToAllWorkers() bool {
 	if w.Status.Recommendation == nil {
 		return true
 	}
@@ -60,6 +61,9 @@ func (w *State) IsRecommendationAppliedToAllWokers() bool {
 
 	curRes := w.GetCurrentResourcesSpec()
 	for _, worker := range w.CurrentActiveWorkers {
+		if isWorkerHasDedicatedGPU(worker) {
+			continue
+		}
 		workerRes, _ := utils.GPUResourcesFromAnnotations(worker.Annotations)
 		if !curRes.Equal(workerRes) {
 			return false
@@ -97,4 +101,8 @@ func (w *State) AddSample(sample *metrics.WorkerUsage) {
 		w.WorkerUsageSamplers[sample.WorkerName] = sampler
 	}
 	sampler.AddSample(w.WorkerUsageAggregator, sample)
+}
+
+func isWorkerHasDedicatedGPU(worker *corev1.Pod) bool {
+	return worker.Annotations[constants.DedicatedGPUAnnotation] == constants.TrueStringValue
 }
