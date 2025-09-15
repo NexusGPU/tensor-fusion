@@ -83,7 +83,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		return nil, nil
 	}
 
-	log.V(6).Info("current estimated resources from percentile recommender", "workload", workload.Name, "estimations", estimations)
+	log.Info("estimated resources", "workload", workload.Name, "estimations", estimations)
 
 	curRes := workload.GetCurrentResourcesSpec()
 	targetRes := &tfv1.Resources{}
@@ -226,12 +226,12 @@ func (r *resourcesEstimator) GetResourcesEstimation(workload *workload.State) *E
 	// TODO: cache config
 	r.createEstimatorsFromConfig(getPercentileConfig(&workload.Spec.AutoScalingConfig.AutoSetResources))
 	return &EstimatedResources{
-		LowerBoundTflops: QuantityFromAmount(r.lowerBoundTflops.GetTflopsEstimation(aggregator)),
-		TargetTflops:     QuantityFromAmount(r.targetTflops.GetTflopsEstimation(aggregator)),
-		UpperBoundTflops: QuantityFromAmount(r.upperBoundTflops.GetTflopsEstimation(aggregator)),
-		LowerBoundVram:   QuantityFromAmount(r.lowerBoundVram.GetVramEstimation(aggregator)),
-		TargetVram:       QuantityFromAmount(r.targetVram.GetVramEstimation(aggregator)),
-		UpperBoundVram:   QuantityFromAmount(r.upperBoundVram.GetVramEstimation(aggregator)),
+		LowerBoundTflops: QuantityFromAmount(r.lowerBoundTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
+		TargetTflops:     QuantityFromAmount(r.targetTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
+		UpperBoundTflops: QuantityFromAmount(r.upperBoundTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
+		LowerBoundVram:   QuantityFromAmount(r.lowerBoundVram.GetVramEstimation(aggregator), resource.BinarySI),
+		TargetVram:       QuantityFromAmount(r.targetVram.GetVramEstimation(aggregator), resource.BinarySI),
+		UpperBoundVram:   QuantityFromAmount(r.upperBoundVram.GetVramEstimation(aggregator), resource.BinarySI),
 	}
 }
 

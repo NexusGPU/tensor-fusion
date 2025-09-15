@@ -46,7 +46,7 @@ func (w *WorkerUsageSampler) AddVramSample(aggregator *WorkerUsageAggregator, sa
 
 	addNewPeak := false
 	if ts.Before(w.VramWindowEnd) {
-		if w.VramPeak != 0 && sample.VramUsage > w.VramPeak {
+		if sample.VramUsage > w.VramPeak {
 			aggregator.SubtractVramSample(float64(w.VramPeak), w.VramWindowEnd)
 			addNewPeak = true
 		}

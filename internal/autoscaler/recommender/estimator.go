@@ -152,8 +152,8 @@ func ResourceAmountMax(amount1, amount2 ResourceAmount) ResourceAmount {
 	return amount2
 }
 
-func QuantityFromAmount(amount ResourceAmount) resource.Quantity {
-	return *resource.NewScaledQuantity(int64(amount), 0)
+func QuantityFromAmount(amount ResourceAmount, format resource.Format) resource.Quantity {
+	return *resource.NewQuantity(int64(amount), format)
 }
 
 func resourceAmountFromFloat(amount float64) ResourceAmount {
