@@ -62,7 +62,7 @@ type WorkloadProfileSpec struct {
 	// +optional
 	// AutoScalingConfig configured here will override Pool's schedulingConfig
 	// This field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,
-	// user can set tensor-fusion.ai/auto-limits|requests|replicas: 'true'
+	// user can set tensor-fusion.ai/auto-resources|replicas: 'true'
 	AutoScalingConfig AutoScalingConfig `json:"autoScalingConfig,omitempty"`
 
 	// +optional

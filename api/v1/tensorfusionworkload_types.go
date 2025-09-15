@@ -65,6 +65,18 @@ type TensorFusionWorkloadStatus struct {
 
 	// Hash of the pod template used to create worker pods
 	PodTemplateHash string `json:"podTemplateHash,omitempty"`
+
+	// The most recently GPU resources recommended by the autoscaler
+	// +optional
+	Recommendation *Resources `json:"recommendation,omitempty"`
+
+	// The number of replicas currently applied based on the latest recommendation
+	// +optional
+	AppliedRecommendedReplicas int32 `json:"appliedRecommendedReplicas,omitempty"`
+
+	// The currently active cron scaling rule
+	// +optional
+	ActiveCronScalingRule *CronScalingRule `json:"activeCronScalingRule,omitempty"`
 }
 
 // +kubebuilder:object:root=true
