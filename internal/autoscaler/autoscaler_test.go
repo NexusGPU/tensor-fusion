@@ -231,6 +231,18 @@ var _ = Describe("Autoscaler", func() {
 			verifyWorkerResources(workload, &expect)
 		})
 
+		It("should not apply recommended resources if the worker has a dedicated GPU", func() {
+			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &targetRes})
+			// set the worker in dedicated mode
+			worker := getWorkers(workload)[0]
+			workloadState := scaler.workloads[key]
+			workloadState.CurrentActiveWorkers[worker.Name].Annotations[constants.DedicatedGPUAnnotation] = constants.TrueStringValue
+			oldRes := workloadState.Spec.Resources
+			scaler.processWorkloads(ctx)
+			// verify the worker's resources have not been altered
+			verifyWorkerResources(workload, &oldRes)
+		})
+
 		It("should not update resources if recommended resources exceeded quota", func() {
 			excessiveRes := tfv1.Resources{
 				Requests: tfv1.Resource{

@@ -53,15 +53,20 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 func (h *handler) ApplyResourcesToWorkload(ctx context.Context, workload *State, targetRes *tfv1.Resources) error {
 	// If the latest recommendation has not been applied to all workers,
 	// we need to retry the update
-	if targetRes == nil && !workload.IsRecommendationAppliedToAllWokers() {
+	if targetRes == nil && !workload.IsRecommendationAppliedToAllWorkers() {
 		targetRes = workload.Status.Recommendation
 	}
 
 	if targetRes != nil {
 		workload.Status.AppliedRecommendedReplicas = 0
 		for _, worker := range workload.CurrentActiveWorkers {
+			if isWorkerHasDedicatedGPU(worker) {
+				continue
+			}
+
 			if err := h.applyResourcesToWorker(ctx, workload, worker, targetRes); err != nil {
 				log.FromContext(ctx).Error(err, "failed to update worker resources: %v", "worker", worker.Name)
+				continue
 			}
 			workload.Status.AppliedRecommendedReplicas++
 		}
