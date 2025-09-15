@@ -33,7 +33,7 @@ require (
 	k8s.io/apiserver v0.34.0
 	k8s.io/client-go v0.34.1
 	k8s.io/component-base v0.34.0
-	k8s.io/component-helpers v0.34.0
+	k8s.io/component-helpers v0.34.1
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/kube-scheduler v0.34.0
 	k8s.io/kubernetes v1.34.0
