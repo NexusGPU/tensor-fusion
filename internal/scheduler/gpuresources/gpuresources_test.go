@@ -390,7 +390,7 @@ func (s *GPUResourcesSuite) TestPreFilterForNonTensorFusionPod() {
 			s.Equal(tt.expectedStatus, status.Code(), status.Message())
 			if tt.expectedStatus == fwk.Success {
 				s.Require().NotNil(res)
-				nodes := sort.StringSlice(getPreFilterResult(state))
+				nodes := sort.StringSlice(res.NodeNames.UnsortedList())
 				nodes.Sort()
 				s.Equal(tt.expectedNodes, strings.Join(nodes, " "))
 			}
@@ -624,7 +624,7 @@ func (s *GPUResourcesSuite) TestScoreExtensions() {
 
 func (s *GPUResourcesSuite) TestPreFilterExtensions() {
 	log.FromContext(s.ctx).Info("Running TestPreFilterExtensions")
-	s.Nil(s.plugin.PreFilterExtensions())
+	s.NotNil(s.plugin.PreFilterExtensions())
 }
 
 func (s *GPUResourcesSuite) TestName() {

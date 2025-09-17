@@ -1168,6 +1168,10 @@ func (s *GpuAllocator) ReconcileAllocationState() {
 	})
 }
 
+func (s *GpuAllocator) ReconcileAllocationStateForTesting() {
+	s.reconcileAllocationState()
+}
+
 func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 	nodeName string, allocReq *tfv1.AllocRequest, toPreemptPods sets.Set[types.NamespacedName],
 ) error {
