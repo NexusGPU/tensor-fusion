@@ -178,7 +178,8 @@ func testGPUResourcePreemption(t *testing.T, suite *PreemptionTestSuite) {
 	time.Sleep(1 * time.Second)
 
 	podList := &v1.PodList{}
-	suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
+	err := suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
+	require.NoError(t, err)
 	scheduledNodeMap := make(map[string]string)
 	for _, pod := range podList.Items {
 		scheduledNodeMap[pod.Name] = pod.Spec.NodeName
@@ -195,7 +196,8 @@ func testGPUResourcePreemption(t *testing.T, suite *PreemptionTestSuite) {
 
 	time.Sleep(1 * time.Second)
 
-	suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
+	err = suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
+	require.NoError(t, err)
 	for _, pod := range podList.Items {
 		if strings.Contains(pod.Name, "victim") {
 			continue
@@ -208,8 +210,8 @@ func testGPUResourcePreemption(t *testing.T, suite *PreemptionTestSuite) {
 }
 
 func testGPUResourceEvictProtection(t *testing.T, suite *PreemptionTestSuite) {
-	toBeVictimPods := createPreemptionTestPodsWithQoS("victim", constants.QoSLevelMedium, 1, "2000", "1Gi")
-	toBeVictimPods[0].Annotations[constants.EvictionProtectionAnnotation] = "1s"
+	toBeVictimPods := createPreemptionTestPodsWithQoS("victim", constants.QoSLevelMedium, 1, "2000", "2Gi")
+	toBeVictimPods[0].Annotations[constants.EvictionProtectionAnnotation] = "2s"
 	require.NoError(t, suite.k8sClient.Create(suite.ctx, toBeVictimPods[0]))
 	defer func() {
 		_ = suite.k8sClient.Delete(suite.ctx, toBeVictimPods[0])
@@ -217,7 +219,7 @@ func testGPUResourceEvictProtection(t *testing.T, suite *PreemptionTestSuite) {
 
 	suite.scheduler.ScheduleOne(suite.ctx)
 
-	toBeVictimPods = createPreemptionTestPodsWithQoS("high-priority", constants.QoSLevelHigh, 1, "2000", "1Gi")
+	toBeVictimPods = createPreemptionTestPodsWithQoS("high-priority", constants.QoSLevelHigh, 1, "2000", "2Gi")
 	require.NoError(t, suite.k8sClient.Create(suite.ctx, toBeVictimPods[0]))
 	defer func() {
 		_ = suite.k8sClient.Delete(suite.ctx, toBeVictimPods[0])
@@ -227,11 +229,12 @@ func testGPUResourceEvictProtection(t *testing.T, suite *PreemptionTestSuite) {
 	suite.scheduler.ScheduleOne(suite.ctx)
 
 	podList := &v1.PodList{}
-	suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
+	err := suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
+	require.NoError(t, err)
 	require.Equal(t, 2, len(podList.Items))
 
 	// should evict since protection period over
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
 	suite.scheduler.ScheduleOne(suite.ctx)
 
 	suite.fixture.allocator.ReconcileAllocationStateForTesting()
@@ -242,7 +245,8 @@ func testGPUResourceEvictProtection(t *testing.T, suite *PreemptionTestSuite) {
 	time.Sleep(300 * time.Millisecond)
 
 	podList = &v1.PodList{}
-	suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
+	err = suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
+	require.NoError(t, err)
 	require.Equal(t, 1, len(podList.Items))
 	require.Equal(t, "high-priority-0", podList.Items[0].Name)
 	require.Equal(t, "node-0", podList.Items[0].Spec.NodeName)

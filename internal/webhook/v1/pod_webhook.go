@@ -164,6 +164,12 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	utils.AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod, tfInfo)
 	utils.AddTFDefaultClientConfBeforePatch(ctx, pod, pool, tfInfo, containerIndices)
 
+	// Add priorityClass if contains higher QoS level and Pod priority class not specified
+	if pod.Spec.PriorityClassName == "" &&
+		(tfInfo.Profile.Qos == tfv1.QoSHigh || tfInfo.Profile.Qos == tfv1.QoSCritical) {
+		pod.Spec.PriorityClassName = constants.TensorFusionSystemName + string(tfInfo.Profile.Qos)
+	}
+
 	// Inject initContainer and env variables
 	patches, err := m.patchTFClient(
 		pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices,
