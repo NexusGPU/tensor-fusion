@@ -254,6 +254,19 @@ func (s *GpuAllocator) Bind(
 			gpuNodeName = gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		}
 
+		// Double-check resource availability to prevent over-allocation
+		if gpu.Status.Available == nil {
+			return nil, fmt.Errorf("GPU %s has nil available resources", selectedGPU)
+		}
+		if gpu.Status.Available.Tflops.Cmp(req.Request.Tflops) < 0 {
+			return nil, fmt.Errorf("GPU %s insufficient TFLOPs: available %s, requested %s",
+				selectedGPU, gpu.Status.Available.Tflops.String(), req.Request.Tflops.String())
+		}
+		if gpu.Status.Available.Vram.Cmp(req.Request.Vram) < 0 {
+			return nil, fmt.Errorf("GPU %s insufficient VRAM: available %s, requested %s",
+				selectedGPU, gpu.Status.Available.Vram.String(), req.Request.Vram.String())
+		}
+
 		// reduce available resource on the GPU status
 		gpu.Status.Available.Tflops.Sub(req.Request.Tflops)
 		gpu.Status.Available.Vram.Sub(req.Request.Vram)
