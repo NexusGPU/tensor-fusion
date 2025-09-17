@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/suite"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -352,7 +353,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 			s.Equal(tt.expectedStatus, status.Code(), status.Message())
 			if tt.expectedStatus == fwk.Success {
 				s.Require().NotNil(res)
-				nodes := sort.StringSlice(res.NodeNames.UnsortedList())
+				nodes := sort.StringSlice(getPreFilterResult(state))
 				nodes.Sort()
 				s.Equal(tt.expectedNodes, strings.Join(nodes, " "))
 			}
@@ -389,7 +390,7 @@ func (s *GPUResourcesSuite) TestPreFilterForNonTensorFusionPod() {
 			s.Equal(tt.expectedStatus, status.Code(), status.Message())
 			if tt.expectedStatus == fwk.Success {
 				s.Require().NotNil(res)
-				nodes := sort.StringSlice(res.NodeNames.UnsortedList())
+				nodes := sort.StringSlice(getPreFilterResult(state))
 				nodes.Sort()
 				s.Equal(tt.expectedNodes, strings.Join(nodes, " "))
 			}
@@ -727,4 +728,12 @@ func (s *GPUResourcesSuite) TestScore_ErrorHandling() {
 	s.Require().True(preFilterStatus.IsSuccess())
 	_, status = s.plugin.Score(s.ctx, state, pod, nodeInfo)
 	s.Equal(fwk.Unschedulable, status.Code())
+}
+
+func getPreFilterResult(state *framework.CycleState) []string {
+	data, err := state.Read(CycleStateGPUSchedulingResult)
+	if err != nil {
+		return nil
+	}
+	return lo.Keys(data.(*GPUSchedulingStateData).NodeGPUs)
 }
