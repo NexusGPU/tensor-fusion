@@ -350,6 +350,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	// Hypervisor needs to read /proc to map pod with processID
 	spec.HostPID = true
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
+	spec.PriorityClassName = constants.NodeCriticalPriorityClassName
 
 	enableVector := pool.Spec.ComponentConfig.Hypervisor != nil && pool.Spec.ComponentConfig.Hypervisor.EnableVector
 

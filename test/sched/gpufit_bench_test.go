@@ -20,7 +20,6 @@ func BenchmarkGPUFitPlugin(b *testing.B) {
 		NumNodes:  500,
 		NumGPUs:   3000,
 		NumPods:   10000,
-		BatchSize: 1,
 		PoolName:  "test-pool",
 		Namespace: "test-ns",
 		Timeout:   5 * time.Minute,

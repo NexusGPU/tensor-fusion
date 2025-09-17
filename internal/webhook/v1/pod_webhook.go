@@ -517,16 +517,17 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 }
 
 func calculateQoSLevel(profile *tfv1.WorkloadProfileSpec, pool *tfv1.GPUPool) tfv1.QoSLevel {
-	sameReqLimits := profile.Resources.Limits.Tflops.Cmp(profile.Resources.Requests.Tflops) == 0 &&
-		profile.Resources.Limits.Vram.Cmp(profile.Resources.Requests.Vram) == 0
-
-	// set to critical if req == limits, same logic as Kubernetes QoS
-	if sameReqLimits {
-		return constants.QoSLevelCritical
-	}
-
 	// when not set, assign default QoS
 	if profile.Qos == "" {
+		sameReqLimits := profile.Resources.Limits.Tflops.Cmp(profile.Resources.Requests.Tflops) == 0 &&
+			profile.Resources.Limits.Vram.Cmp(profile.Resources.Requests.Vram) == 0
+
+		// set to high if req == limits, same logic as Kubernetes QoS
+		// critical QoS can preempt other pods, have to be set manually
+		if sameReqLimits {
+			return constants.QoSLevelHigh
+		}
+
 		if pool.Spec.QosConfig == nil || pool.Spec.QosConfig.DefaultQoS == "" {
 			return constants.QoSLevelMedium
 		}

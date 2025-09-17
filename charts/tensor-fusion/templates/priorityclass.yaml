@@ -1,0 +1,23 @@
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tensor-fusion-critical
+value: 100000
+globalDefault: false
+description: "TensorFusion critical priority"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tensor-fusion-high
+value: 10000
+globalDefault: false
+description: "TensorFusion high priority"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: tensor-fusion-medium
+value: 0
+globalDefault: false
+description: "TensorFusion medium priority"

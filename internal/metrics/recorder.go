@@ -4,6 +4,7 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,15 +20,17 @@ import (
 // Worker level metrics, include worker resources/costs status
 // map updated in one reconcile loop in single goroutine, thus no RW lock needed
 var workerMetricsLock sync.RWMutex
-var workerMetricsMap = map[string]*WorkerResourceMetrics{}
+var workerMetricsMap = make(map[string]*WorkerResourceMetrics, 200)
 
 // Node level metrics, include node allocation/costs status
 var nodeMetricsLock sync.RWMutex
-var nodeMetricsMap = map[string]*NodeResourceMetrics{}
+var nodeMetricsMap = make(map[string]*NodeResourceMetrics, 100)
 
 // Pool level metrics, include pool allocation/costs status
 var poolMetricsLock sync.RWMutex
-var poolMetricsMap = map[string]*PoolResourceMetrics{}
+var poolMetricsMap = make(map[string]*PoolResourceMetrics, 4)
+
+var settingLock sync.RWMutex
 
 var log = ctrl.Log.WithName("metrics-recorder")
 
@@ -36,6 +39,9 @@ type MetricsRecorder struct {
 
 	// Raw billing result for node and workers
 	HourlyUnitPriceMap map[string]float64
+
+	// Pool level eviction protection price ratio map, key is pool name
+	PoolEvictionProtectionPriceRatioMap map[string]string
 
 	// Worker level unit price map, key is pool name, second level key is QoS level
 	WorkerUnitPriceMap map[string]map[string]RawBillingPricing
@@ -80,14 +86,16 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod) {
 	// Initialize metrics
 	if _, ok := workerMetricsMap[pod.Name]; !ok {
 		workerMetricsMap[pod.Name] = &WorkerResourceMetrics{
-			WorkerName:     pod.Name,
-			WorkloadName:   pod.Labels[constants.WorkloadKey],
-			PoolName:       pod.Annotations[constants.GpuPoolKey],
-			Namespace:      pod.Namespace,
-			QoS:            pod.Annotations[constants.QoSLevelAnnotation],
-			podLabels:      pod.Labels,
-			RawCost:        0,
-			LastRecordTime: time.Now(),
+			WorkerName:         pod.Name,
+			WorkloadName:       pod.Labels[constants.WorkloadKey],
+			PoolName:           pod.Annotations[constants.GpuPoolKey],
+			Namespace:          pod.Namespace,
+			QoS:                pod.Annotations[constants.QoSLevelAnnotation],
+			podLabels:          pod.Labels,
+			RawCost:            0,
+			LastRecordTime:     time.Now(),
+			creationTime:       pod.CreationTimestamp.Time,
+			evictionProtection: pod.Annotations[constants.EvictionProtectionAnnotation],
 		}
 	}
 
@@ -287,12 +295,16 @@ func (mr *MetricsRecorder) Start() {
 	// Clean up worker metrics that have been deleted
 	go func() {
 		for {
-			time.Sleep(5 * time.Minute)
+			time.Sleep(1 * time.Minute)
 			workerMetricsLock.Lock()
-			for _, metrics := range workerMetricsMap {
+			var keysToDelete []string
+			for key, metrics := range workerMetricsMap {
 				if metrics.deletionTimestamp != nil && !metrics.deletionTimestamp.IsZero() {
-					delete(workerMetricsMap, metrics.WorkerName)
+					keysToDelete = append(keysToDelete, key)
 				}
+			}
+			for _, key := range keysToDelete {
+				delete(workerMetricsMap, key)
 			}
 			workerMetricsLock.Unlock()
 		}
@@ -306,13 +318,12 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 
 	now := time.Now()
 	enc := NewEncoder(config.GetGlobalConfig().MetricsFormat)
-	workerMetricsLock.RLock()
+	workerMetricsLock.Lock()
 
 	activeWorkerCnt := 0
 	activeWorkerAndNodeByPool := map[string]*ActiveNodeAndWorker{}
 
 	for _, metrics := range workerMetricsMap {
-
 		if metrics.deletionTimestamp != nil && !metrics.deletionTimestamp.IsZero() {
 			metrics.RawCost = mr.getWorkerRawCost(metrics, metrics.deletionTimestamp.Sub(metrics.LastRecordTime))
 		} else {
@@ -333,7 +344,9 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 				nodeCnt:   0,
 			}
 		}
-		activeWorkerAndNodeByPool[metrics.PoolName].workerCnt++
+		if metrics.deletionTimestamp == nil || metrics.deletionTimestamp.IsZero() {
+			activeWorkerAndNodeByPool[metrics.PoolName].workerCnt++
+		}
 
 		enc.StartLine("tf_worker_resources")
 		enc.AddTag("namespace", metrics.Namespace)
@@ -362,7 +375,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 
 		enc.EndLine(now)
 	}
-	workerMetricsLock.RUnlock()
+	workerMetricsLock.Unlock()
 
 	nodeMetricsLock.RLock()
 
@@ -439,7 +452,51 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 	log.Info("metrics and raw billing recorded:", "workerCount", activeWorkerCnt, "nodeCount", len(nodeMetricsMap))
 }
 
+// Update metrics recorder's raw billing map
+func (r *MetricsRecorder) UpdateMetricsRecorder(pool *tfv1.GPUPool, specChanged bool) {
+	const dollarSign = "$"
+	settingLock.Lock()
+	defer settingLock.Unlock()
+	if pool.Spec.QosConfig == nil {
+		log.Info("QosConfig is nil, skip updating metrics recorder", "pool", pool.Name)
+		return
+	}
+
+	qosConfig := pool.Spec.QosConfig
+	if _, ok := r.WorkerUnitPriceMap[pool.Name]; !ok {
+		r.WorkerUnitPriceMap[pool.Name] = make(map[string]RawBillingPricing)
+	}
+
+	if r.PoolEvictionProtectionPriceRatioMap == nil {
+		r.PoolEvictionProtectionPriceRatioMap = make(map[string]string, 4)
+	}
+	r.PoolEvictionProtectionPriceRatioMap[pool.Name] = qosConfig.EvictionProtectionPriceRatio
+
+	pricingDetail := r.WorkerUnitPriceMap[pool.Name]
+	if !specChanged && len(pricingDetail) == 0 {
+		return
+	}
+	// Pricing potentially changed
+	for _, pricing := range qosConfig.Pricing {
+		tflopsPerHour, _ := strconv.ParseFloat(strings.TrimPrefix(pricing.Requests.PerFP16TFlopsPerHour, dollarSign), 64)
+		vramPerHour, _ := strconv.ParseFloat(strings.TrimPrefix(pricing.Requests.PerGBOfVRAMPerHour, dollarSign), 64)
+		limitOverRequestChargingRatio, _ := strconv.ParseFloat(pricing.LimitsOverRequestsChargingRatio, 64)
+
+		pricingDetail[string(pricing.Qos)] = RawBillingPricing{
+			TflopsPerSecond: tflopsPerHour / float64(3600),
+			VramPerSecond:   vramPerHour / float64(3600),
+
+			TflopsOverRequestPerSecond: tflopsPerHour / float64(3600) * limitOverRequestChargingRatio,
+			VramOverRequestPerSecond:   vramPerHour / float64(3600) * limitOverRequestChargingRatio,
+		}
+	}
+
+	log.V(5).Info("Updated metrics recorder", "pool", pool.Name, "pricing", pricingDetail)
+}
+
 func (mr *MetricsRecorder) getWorkerRawCost(metrics *WorkerResourceMetrics, duration time.Duration) float64 {
+	settingLock.RLock()
+	defer settingLock.RUnlock()
 	qosPricing, ok := mr.WorkerUnitPriceMap[metrics.PoolName]
 	// The qos pricing for this pool not set
 	if !ok {
@@ -464,7 +521,37 @@ func (mr *MetricsRecorder) getWorkerRawCost(metrics *WorkerResourceMetrics, dura
 	rawCostVRAMLimitOverRequest := (metrics.VramBytesLimit - metrics.VramBytesRequest) * pricing.VramOverRequestPerSecond / constants.GiBToBytes
 	rawCostPerVRAM := pricing.VramPerSecond * metrics.VramBytesRequest / constants.GiBToBytes
 
-	return (rawCostPerTflops + rawCostPerVRAM + rawCostTflopsLimitOverRequest + rawCostVRAMLimitOverRequest) * duration.Seconds() * float64(metrics.GPUCount)
+	baseCost := (rawCostPerTflops + rawCostPerVRAM + rawCostTflopsLimitOverRequest + rawCostVRAMLimitOverRequest) * duration.Seconds() * float64(metrics.GPUCount)
+
+	// Apply eviction protection price ratio if the pod is under protection and QoS is not critical
+	if metrics.evictionProtection != "" && qosLevel != constants.QoSLevelCritical {
+		if isUnderProtection := mr.isUnderEvictionProtection(metrics); isUnderProtection {
+			protectionPriceRatio := mr.PoolEvictionProtectionPriceRatioMap[metrics.PoolName]
+			protectionPriceRatioFloat, _ := strconv.ParseFloat(protectionPriceRatio, 64)
+			if protectionPriceRatioFloat < 1 {
+				protectionPriceRatioFloat = constants.DefaultEvictionProtectionPriceRatio
+			}
+			baseCost *= protectionPriceRatioFloat
+		}
+	}
+
+	return baseCost
+}
+
+// isUnderEvictionProtection checks if a worker is under eviction protection
+func (mr *MetricsRecorder) isUnderEvictionProtection(metrics *WorkerResourceMetrics) bool {
+	if metrics.evictionProtection == "" {
+		return false
+	}
+
+	// Parse protection duration (1h, 5h, 24h, etc.)
+	duration, err := time.ParseDuration(metrics.evictionProtection)
+	if err != nil {
+		return false
+	}
+
+	protectionEndTime := metrics.creationTime.Add(duration)
+	return time.Now().Before(protectionEndTime)
 }
 
 // unit price data comes from global config map, and multi-GPU instance should normalized with per GPU pricing, e.g. 8xA100 p4d.24xlarge price should divide by 8

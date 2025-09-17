@@ -586,7 +586,7 @@ func startMetricsRecorder(
 
 		// Worker level map will be updated by cluster reconcile
 		// Key is poolName, second level key is QoS level
-		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
+		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing, 8),
 	}
 	if enableLeaderElection {
 		go func() {

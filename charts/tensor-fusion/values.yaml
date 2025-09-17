@@ -169,8 +169,8 @@ schedulerConfig:
   kind: KubeSchedulerConfiguration
   clientConnection:
     kubeconfig: ""
-    qps: 50
-    burst: 100
+    qps: 1000
+    burst: 2000
   profiles:
   # Refer: https://kubernetes.io/docs/reference/scheduling/config/
   - schedulerName: tensor-fusion-scheduler

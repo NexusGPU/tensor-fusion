@@ -192,6 +192,37 @@ func (s *GpuAllocator) Filter(
 	return filteredGPUs, filterDetails, nil
 }
 
+func (s *GpuAllocator) FilterWithPreempt(
+	req *tfv1.AllocRequest,
+	preemptAllocRequests []*tfv1.AllocRequest,
+) ([]*tfv1.GPU, []filter.FilterDetail, error) {
+	toFilterGPUs := []*tfv1.GPU{}
+	for _, preemptAllocRequest := range preemptAllocRequests {
+		for _, gpuName := range preemptAllocRequest.GPUNames {
+			gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
+			if gpu == nil {
+				return nil, nil, fmt.Errorf("gpu %s not found", gpuName)
+			}
+			gpuCopy := gpu.DeepCopy()
+			gpuCopy.Status.Available.Tflops.Add(preemptAllocRequest.Request.Tflops)
+			gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
+			toFilterGPUs = append(toFilterGPUs, gpuCopy)
+		}
+	}
+
+	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request))
+	// Add GPU model filter if specified
+	if req.GPUModel != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
+	}
+	// No need to check count and other filters since it's always in the same node during each preempt trial
+	filteredGPUs, filterDetails, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs, false)
+	if err != nil {
+		return nil, nil, fmt.Errorf("apply filters: %w", err)
+	}
+	return filteredGPUs, filterDetails, nil
+}
+
 func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []*tfv1.GPU) ([]*tfv1.GPU, error) {
 	pool := &tfv1.GPUPool{}
 	if err := s.Get(s.ctx, client.ObjectKey{Name: req.PoolName}, pool); err != nil {
@@ -314,9 +345,8 @@ func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 
 func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocRequest, isSimulateSchedule bool) ([]*tfv1.GPU, []filter.FilterDetail, error) {
 	<-s.initializedCh
-	// Fast quota check (fail fast if quota insufficient)
 	if err := s.quotaStore.CheckQuotaAvailable(req.WorkloadNameNamespace.Namespace, req); err != nil {
-		return nil, nil, fmt.Errorf("quota check failed: %w", err)
+		return nil, nil, err
 	}
 
 	// Get GPUs from the pool using the in-memory store
@@ -935,7 +965,7 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 		log.V(6).Info("Updated GPU in store (new entry)", "name", key.Name, "phase", gpu.Status.Phase)
 	}
 
-	s.addOrUpdateGPUMaps(gpu)
+	s.addOrUpdateGPUMaps(s.gpuStore[key])
 }
 
 func (s *GpuAllocator) addOrUpdateGPUMaps(gpuInMem *tfv1.GPU) {
@@ -1138,6 +1168,64 @@ func (s *GpuAllocator) ReconcileAllocationState() {
 	})
 }
 
+func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
+	nodeName string, allocReq *tfv1.AllocRequest, toPreemptPods sets.Set[types.NamespacedName],
+) error {
+	<-s.initializedCh
+	// Only need to check total quotas when preempting
+	toPreemptUsage := &tfv1.GPUResourceUsage{
+		Requests: tfv1.Resource{
+			Tflops: resource.Quantity{},
+			Vram:   resource.Quantity{},
+		},
+		Limits: tfv1.Resource{
+			Tflops: resource.Quantity{},
+			Vram:   resource.Quantity{},
+		},
+	}
+	workers := s.nodeWorkerStore[nodeName]
+	preemptAllocRequests := make([]*tfv1.AllocRequest, 0, len(workers))
+	for workerName := range workers {
+		if !toPreemptPods.Has(workerName) {
+			continue
+		}
+		podUID := s.podNamespaceNsToPodUID[workerName.String()]
+		if podUID == "" {
+			continue
+		}
+		existingAllocation := s.uniqueAllocation[podUID]
+		if existingAllocation == nil {
+			continue
+		}
+		toPreemptUsage.Requests.Tflops.Add(existingAllocation.Request.Tflops)
+		toPreemptUsage.Requests.Vram.Add(existingAllocation.Request.Vram)
+		toPreemptUsage.Limits.Tflops.Add(existingAllocation.Limit.Tflops)
+		toPreemptUsage.Limits.Vram.Add(existingAllocation.Limit.Vram)
+		preemptAllocRequests = append(preemptAllocRequests, existingAllocation)
+	}
+
+	if log.FromContext(s.ctx).V(5).Enabled() {
+		log.FromContext(s.ctx).V(5).Info("Preempting node and check quotas", "nodeName", nodeName, "toPreemptUsage", toPreemptUsage)
+	}
+
+	if err := s.quotaStore.CheckTotalQuotaRelaxed(allocReq, toPreemptUsage); err != nil {
+		return fmt.Errorf("quota check failed during preempt: %w", err)
+	}
+
+	// Get GPUs from the pool using the in-memory store
+	if allocReq.PoolName == "" {
+		return fmt.Errorf("GPU Pool name is empty, can not find GPUs during preempt")
+	}
+	filteredGPUs, _, err := s.FilterWithPreempt(allocReq, preemptAllocRequests)
+	if err != nil {
+		return err
+	}
+	if len(filteredGPUs) < int(allocReq.Count) {
+		return fmt.Errorf("no gpus available or valid in pool %s after filtering during preempt", allocReq.PoolName)
+	}
+	return nil
+}
+
 func (s *GpuAllocator) reconcileAllocationState() {
 	ctx := s.ctx
 	logger := log.FromContext(ctx)
@@ -1314,6 +1402,11 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 		return &tfv1.AllocRequest{}, "gpu count annotation is too large", nil
 	}
 
+	qosLevel := tfv1.QoSLevel(pod.Annotations[constants.QoSLevelAnnotation])
+	if qosLevel == "" {
+		qosLevel = tfv1.QoSMedium
+	}
+
 	allocRequest := tfv1.AllocRequest{
 		PoolName: pod.Annotations[constants.GpuPoolKey],
 		Request:  gpuRequestResource,
@@ -1326,6 +1419,7 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 			Namespace: pod.Namespace,
 		},
 		PodMeta: pod.ObjectMeta,
+		QoS:     qosLevel,
 	}
 
 	// for already allocated workers, set the GPU device IDs for further scaling and retrieval

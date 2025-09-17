@@ -186,6 +186,8 @@ type AllocRequest struct {
 
 	// record the pod meta for quota check
 	PodMeta metav1.ObjectMeta
+
+	QoS QoSLevel
 }
 
 func (p *AllocRequest) Clone() fwk.StateData {

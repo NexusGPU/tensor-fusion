@@ -51,6 +51,10 @@ type WorkerResourceMetrics struct {
 	// For more accurate metrics, should record the deletion timestamp to calculate duration for the last metrics
 	deletionTimestamp *time.Time
 
+	// Fields for eviction protection tracking - private, not stored in TSDB
+	creationTime       time.Time
+	evictionProtection string
+
 	podLabels map[string]string
 }
 

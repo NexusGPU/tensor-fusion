@@ -14,6 +14,7 @@ import (
 	gpuResourceFitPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
+	schedv1 "k8s.io/api/scheduling/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/metrics"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
 	tf "k8s.io/kubernetes/pkg/scheduler/testing/framework"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -40,7 +42,6 @@ type BenchmarkConfig struct {
 	NumNodes  int
 	NumGPUs   int
 	NumPods   int
-	BatchSize int
 	PoolName  string
 	Namespace string
 	Timeout   time.Duration
@@ -89,7 +90,7 @@ func NewBenchmarkFixture(
 	b.Logf("%d Pods created, Needed TFLOPS: %f, Needed VRAM: %f", len(pods), neededTflops, neededVRAM)
 
 	// Batch create resources for better performance
-	k8sNativeObjects := batchCreateResources(b, ctx, client, nodes, gpus, pods, realAPIServer)
+	k8sNativeObjects := batchCreateResources(b, ctx, client, config.Namespace, nodes, gpus, pods, realAPIServer)
 
 	// Setup allocator
 	allocator := setupAllocator(b, ctx, client)
@@ -178,10 +179,10 @@ func generateGPUs(totalGPUs int, nodes []*v1.Node, poolName string) ([]*tfv1.GPU
 
 	// Pre-define GPU specs to avoid repeated allocations
 	gpuSpecs := []struct{ tflops, vram string }{
-		{"2250", "141Gi"}, // High-end
-		{"989", "80Gi"},   // Mid-range
-		{"450", "48Gi"},   // Entry-level
-		{"312", "40Gi"},   // Budget
+		{"2250", "141Gi"}, // Simulate B200
+		{"989", "80Gi"},   // Simulate H100
+		{"450", "48Gi"},   // Simulate L40s
+		{"312", "40Gi"},   // Simulate A100
 	}
 
 	gpuIndex := 0
@@ -287,12 +288,27 @@ func generatePods(count int, namespace, poolName string) ([]*v1.Pod, float64, fl
 
 // Helper functions for setup
 func batchCreateResources(
-	b *testing.B, ctx context.Context, client client.Client,
+	b *testing.B, ctx context.Context, client client.Client, namespace string,
 	nodes []*v1.Node, gpus []*tfv1.GPU, pods []*v1.Pod, realAPIServer bool,
 ) []runtime.Object {
+	// Create priority classes
+	require.NoError(b, client.Create(ctx, &schedv1.PriorityClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "tensor-fusion-" + constants.QoSLevelCritical},
+		Value:      100000,
+	}))
+	require.NoError(b, client.Create(ctx, &schedv1.PriorityClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "tensor-fusion-" + constants.QoSLevelHigh},
+		Value:      10000,
+	}))
+	require.NoError(b, client.Create(ctx, &schedv1.PriorityClass{
+		ObjectMeta:       metav1.ObjectMeta{Name: "tensor-fusion-" + constants.QoSLevelMedium},
+		Value:            100,
+		PreemptionPolicy: ptr.To(v1.PreemptNever),
+	}))
+
 	k8sObjs := []runtime.Object{}
 	require.NoError(b, client.Create(ctx, &v1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: "benchmark-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: namespace},
 	}))
 
 	timer := time.Now()

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -66,6 +67,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
 		if errors.IsNotFound(err) {
 			r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
+			metrics.RemoveWorkerMetrics(req.Name, time.Now())
 			log.Info("Released GPU resources when pod deleted", "pod", req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
@@ -106,8 +108,9 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
-		metrics.SetWorkerMetricsByWorkload(pod)
-
+		if pod.DeletionTimestamp.IsZero() {
+			metrics.SetWorkerMetricsByWorkload(pod)
+		}
 		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -148,7 +151,8 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 func (r *PodReconciler) handleWorkerPodFinalizer(ctx context.Context, pod *corev1.Pod) (bool, error) {
 	// Handle our GPU resource cleanup finalizer
 	shouldReturn, err := utils.HandleFinalizer(ctx, pod, r.Client, func(ctx context.Context, obj *corev1.Pod) (bool, error) {
-		metrics.RemoveWorkerMetrics(pod.Name, pod.DeletionTimestamp.Time)
+		// if the Pod keep terminating, should update deletion timestamp for raw cost calculation
+		metrics.RemoveWorkerMetrics(pod.Name, time.Now())
 		counter := &v1.TensorFusionPodCounter{Client: r.Client}
 		if err := counter.Decrease(ctx, pod); err != nil {
 			return false, err

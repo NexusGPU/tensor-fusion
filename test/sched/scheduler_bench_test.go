@@ -36,10 +36,9 @@ func defaultBenchmarkConfig() BenchmarkConfig {
 		NumNodes:  1000,
 		NumGPUs:   4000,
 		NumPods:   10000,
-		BatchSize: 100,
 		PoolName:  "benchmark-pool",
 		Namespace: "benchmark-ns",
-		Timeout:   10 * time.Minute,
+		Timeout:   5 * time.Minute,
 	}
 }
 

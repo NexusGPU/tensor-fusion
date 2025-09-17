@@ -238,6 +238,12 @@ type QosConfig struct {
 	Definitions []QosDefinition `json:"definitions,omitempty"`
 	DefaultQoS  QoSLevel        `json:"defaultQoS,omitempty"`
 	Pricing     []QosPricing    `json:"pricing,omitempty"`
+
+	// Eviction protection price ratio applied to cost calculation during protection period
+	// This multiplier increases pricing for protected workloads to discourage preemption
+	// +optional
+	// +kubebuilder:default="1.2"
+	EvictionProtectionPriceRatio string `json:"evictionProtectionPriceRatio,omitempty"`
 }
 
 type QosDefinition struct {

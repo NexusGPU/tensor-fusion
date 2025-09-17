@@ -107,6 +107,8 @@ const (
 	// For grey release
 	TensorFusionEnabledReplicasAnnotation = Domain + "/enabled-replicas"
 	TensorFusionDefaultPoolKeyAnnotation  = Domain + "/is-default-pool"
+	// Eviction protection annotation for controlling pod eviction timing
+	EvictionProtectionAnnotation = Domain + "/eviction-protection"
 
 	NamespaceDefaultVal = "tensor-fusion-sys"
 
@@ -202,3 +204,5 @@ const ExtraVerificationInfoPodIDKey = "authentication.kubernetes.io/pod-uid"
 const SchedulerSimulationKey = "simulate-schedule"
 
 const MobileGpuClockSpeedMultiplier = 0.75
+const DefaultEvictionProtectionPriceRatio = 1.2
+const NodeCriticalPriorityClassName = "system-node-critical"
