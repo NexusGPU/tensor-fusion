@@ -70,7 +70,9 @@ func (s *Autoscaler) Start(ctx context.Context) error {
 	log := log.FromContext(ctx)
 	log.Info("Starting autoscaler")
 
-	s.loadHistoryMetrics(ctx)
+	if err := s.loadHistoryMetrics(ctx); err != nil {
+		log.Error(err, "failed to load history metrics")
+	}
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -127,18 +129,20 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 	}
 }
 
-func (s *Autoscaler) loadHistoryMetrics(ctx context.Context) {
-	log := log.FromContext(ctx)
-	log.Info("loading historical metrics")
-
+func (s *Autoscaler) loadHistoryMetrics(ctx context.Context) error {
 	workersMetrics, err := s.metricsProvider.GetHistoryMetrics(ctx)
 	if err != nil {
-		log.Error(err, "failed to get history metrics")
-		return
+		return fmt.Errorf("failed to get history metrics: %v", err)
 	}
 	for _, sample := range workersMetrics {
 		s.findOrCreateWorkloadState(sample.Namespace, sample.WorkloadName).AddSample(sample)
 	}
+
+	if metricsCount := len(workersMetrics); metricsCount > 0 {
+		log.FromContext(ctx).Info("historical metrics loaded", "from",
+			workersMetrics[0].Timestamp, "to", workersMetrics[metricsCount-1].Timestamp, "metricsCount", metricsCount)
+	}
+	return nil
 }
 
 func (s *Autoscaler) loadRealTimeMetrics(ctx context.Context) {

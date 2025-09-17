@@ -41,7 +41,8 @@ func (w *State) GetCurrentResourcesSpec() *tfv1.Resources {
 }
 
 func (w *State) IsAutoSetResourcesEnabled() bool {
-	return w.Spec.AutoScalingConfig.AutoSetResources.Enable
+	return w.Spec.AutoScalingConfig.AutoSetResources.Enable &&
+		w.Spec.AutoScalingConfig.AutoSetResources.TargetResource != ""
 }
 
 func (w *State) ShouldScaleResource(name tfv1.ResourceName) bool {

@@ -202,7 +202,17 @@ func (m *TensorFusionPodMutator) InjectDecoder(d admission.Decoder) error {
 }
 
 func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod *corev1.Pod, tfInfo *utils.TensorFusionInfo, workload *tfv1.TensorFusionWorkload, pool *tfv1.GPUPool) error {
-	qos := calculateQoSLevel(tfInfo.Profile, pool)
+	// Create the desired spec for comparison
+	desiredSpec := tfv1.WorkloadProfileSpec{
+		Replicas:          nil,
+		PoolName:          tfInfo.Profile.PoolName,
+		Resources:         tfInfo.Profile.Resources,
+		Qos:               calculateQoSLevel(tfInfo.Profile, pool),
+		IsLocalGPU:        tfInfo.Profile.IsLocalGPU,
+		GPUCount:          tfInfo.Profile.GPUCount,
+		GPUModel:          tfInfo.Profile.GPUModel,
+		AutoScalingConfig: tfInfo.Profile.AutoScalingConfig,
+	}
 
 	err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.WorkloadName, Namespace: pod.Namespace}, workload)
 	if err != nil {
@@ -224,15 +234,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 					constants.WorkloadModeAnnotation: constants.WorkloadModeDynamic,
 				},
 			},
-			Spec: tfv1.WorkloadProfileSpec{
-				Replicas:   nil,
-				PoolName:   tfInfo.Profile.PoolName,
-				Resources:  tfInfo.Profile.Resources,
-				GPUCount:   tfInfo.Profile.GPUCount,
-				Qos:        qos,
-				GPUModel:   tfInfo.Profile.GPUModel,
-				IsLocalGPU: tfInfo.Profile.IsLocalGPU,
-			},
+			Spec: desiredSpec,
 		}
 
 		// Pass through disable features annotation
@@ -248,17 +250,6 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 			return fmt.Errorf("failed to create workload: %w", err)
 		}
 		return nil
-	}
-
-	// Create the desired spec for comparison
-	desiredSpec := tfv1.WorkloadProfileSpec{
-		Replicas:   nil,
-		PoolName:   tfInfo.Profile.PoolName,
-		Resources:  tfInfo.Profile.Resources,
-		Qos:        qos,
-		IsLocalGPU: tfInfo.Profile.IsLocalGPU,
-		GPUCount:   tfInfo.Profile.GPUCount,
-		GPUModel:   tfInfo.Profile.GPUModel,
 	}
 
 	// Compare the entire spec at once
