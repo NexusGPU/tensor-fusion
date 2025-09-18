@@ -120,11 +120,13 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			_ = checkWorkerPodCount(workload)
 			checkWorkloadStatus(workload)
 
-			Eventually(func(g Gomega) {
+			Eventually(func() error {
 				workload = &tfv1.TensorFusionWorkload{}
-				g.Expect(k8sClient.Get(ctx, key, workload)).To(Succeed())
+				if err := k8sClient.Get(ctx, key, workload); err != nil {
+					return err
+				}
 				workload.Spec.Replicas = ptr.To(int32(3))
-				g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+				return k8sClient.Update(ctx, workload)
 			}).Should(Succeed())
 
 			_ = checkWorkerPodCount(workload)
@@ -163,11 +165,13 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			Expect(originalPodTemplateHash).NotTo(BeEmpty())
 
 			workload := &tfv1.TensorFusionWorkload{}
-			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, key, workload)).To(Succeed())
+			Eventually(func() error {
+				if err := k8sClient.Get(ctx, key, workload); err != nil {
+					return err
+				}
 				workload.Spec.Resources.Limits.Tflops = resource.MustParse("30")
 				workload.Spec.Resources.Limits.Vram = resource.MustParse("24Gi")
-				g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+				return k8sClient.Update(ctx, workload)
 			}).Should(Succeed())
 
 			Eventually(func(g Gomega) {
@@ -203,10 +207,12 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			_ = checkWorkerPodCount(workload)
 			checkWorkloadStatus(workload)
 
-			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, key, workload)).To(Succeed())
+			Eventually(func() error {
+				if err := k8sClient.Get(ctx, key, workload); err != nil {
+					return err
+				}
 				workload.Spec.Replicas = ptr.To(int32(1))
-				g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+				return k8sClient.Update(ctx, workload)
 			}).Should(Succeed())
 
 			_ = checkWorkerPodCount(workload)
@@ -259,13 +265,15 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 
 			// Create a workload requesting specific GPU model
 			workload := createTensorFusionWorkload(pool.Name, key, 1)
-			Eventually(func(g Gomega) {
+			Eventually(func() error {
 				// Get the latest version of the workload
-				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(workload), workload)).To(Succeed())
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(workload), workload); err != nil {
+					return err
+				}
 				// Set the GPU model
 				workload.Spec.GPUModel = "mock"
 				// Update the workload
-				g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+				return k8sClient.Update(ctx, workload)
 			}).Should(Succeed())
 
 			_ = checkWorkerPodCount(workload)
@@ -557,10 +565,12 @@ func cleanupWorkload(key client.ObjectKey) {
 	}
 
 	// Set replicas to 0
-	Eventually(func(g Gomega) {
-		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
+	Eventually(func() error {
+		if err := k8sClient.Get(ctx, key, workload); err != nil {
+			return err
+		}
 		workload.Spec.Replicas = ptr.To(int32(0))
-		g.Expect(k8sClient.Update(ctx, workload)).To(Succeed())
+		return k8sClient.Update(ctx, workload)
 	}).Should(Succeed())
 
 	Eventually(func(g Gomega) {
