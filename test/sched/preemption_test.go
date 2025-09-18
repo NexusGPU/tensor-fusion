@@ -278,7 +278,7 @@ func testGPUResourceEvictProtection(suite *PreemptionTestSuite) {
 // Helper functions
 func createPreemptionTestPodsWithQoS(baseName, qosLevel string, count int, tflops, vram string) []*v1.Pod {
 	pods := make([]*v1.Pod, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		pod := st.MakePod().
 			Namespace("preemption-test-ns").
 			Name(fmt.Sprintf("%s-%d", baseName, i)).
