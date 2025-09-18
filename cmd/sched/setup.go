@@ -20,19 +20,24 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	k8sVer "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/component-base/configz"
 	"k8s.io/klog/v2"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	schedulerserverconfig "k8s.io/kubernetes/cmd/kube-scheduler/app/config"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app/options"
 	"k8s.io/kubernetes/pkg/scheduler"
 	kubeschedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/latest"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -53,6 +58,7 @@ func SetupScheduler(
 	schedulerConfigPath string,
 	disableHttpEndpoint bool,
 	k8sVersion *k8sVer.Version,
+	allocator *gpuallocator.GpuAllocator,
 	outOfTreeRegistryOptions ...app.Option,
 ) (*schedulerserverconfig.CompletedConfig, *scheduler.Scheduler, error) {
 	opts := options.NewOptions()
@@ -129,6 +135,23 @@ func SetupScheduler(
 			completedProfiles = append(completedProfiles, profile)
 		}),
 	)
+
+	// Initialize node expander
+	nodeExpander := expander.NewNodeExpander(ctx, allocator)
+	unschedHandler := expander.NewUnscheduledPodHandler(ctx, nodeExpander)
+
+	sched.FailureHandler = func(
+		ctx context.Context, fwk framework.Framework, podInfo *framework.QueuedPodInfo,
+		status *fwk.Status, nominatingInfo *framework.NominatingInfo, start time.Time,
+	) {
+		if status.IsRejected() {
+			// Handle TensorFusion pods that are rejected due to lack of GPU resources
+			// The unschedHandler will queue the pod and process expansion after buffer delay
+			unschedHandler.HandleRejectedPod(ctx, fwk, podInfo, status)
+		}
+		sched.FailureHandler(ctx, fwk, podInfo, status, nominatingInfo, start)
+	}
+
 	if err != nil {
 		return nil, nil, err
 	}
