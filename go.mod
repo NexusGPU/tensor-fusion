@@ -1,8 +1,6 @@
 module github.com/NexusGPU/tensor-fusion
 
-go 1.24.6
-
-toolchain go1.24.7
+go 1.24.5
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -40,11 +38,11 @@ require (
 	k8s.io/component-base v0.35.0-alpha.0
 	k8s.io/component-helpers v0.34.1
 	k8s.io/klog/v2 v2.130.1
-	k8s.io/kube-scheduler v0.34.1
-	k8s.io/kubernetes v1.34.1
+	k8s.io/kube-scheduler v0.34.0
+	k8s.io/kubernetes v1.34.0
 	k8s.io/utils v0.0.0-20250820121507-0af2bda4dd1d
 	sigs.k8s.io/controller-runtime v0.22.1
-	sigs.k8s.io/karpenter v1.7.0
+	sigs.k8s.io/karpenter v1.6.2
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -55,8 +53,8 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/NYTimes/gziphandler v1.1.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.7 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.7 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.6 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.7 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -183,12 +181,12 @@ require (
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/apiextensions-apiserver v0.35.0-alpha.0 // indirect
+	k8s.io/apiextensions-apiserver v0.34.0 // indirect
 	k8s.io/cloud-provider v0.34.0 // indirect
 	k8s.io/controller-manager v0.34.0 // indirect
 	k8s.io/csi-translation-lib v0.34.0 // indirect
 	k8s.io/dynamic-resource-allocation v0.34.0 // indirect
-	k8s.io/kms v0.35.0-alpha.0 // indirect
+	k8s.io/kms v0.34.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20250905212525-66792eed8611 // indirect
 	k8s.io/kubelet v0.34.0 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.33.0 // indirect
