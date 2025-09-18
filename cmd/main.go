@@ -485,7 +485,7 @@ func startScheduler(
 	)
 
 	cc, scheduler, err := sched.SetupScheduler(
-		ctx, mgr, schedulerConfigPath, false, k8sVersion, gpuResourceFitOpt, gpuTopoOpt,
+		ctx, mgr, schedulerConfigPath, false, k8sVersion, allocator, gpuResourceFitOpt, gpuTopoOpt,
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create tensor fusion scheduler")
