@@ -14,6 +14,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/zap/zapcore"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/klog/v2"
@@ -37,6 +38,8 @@ type PreemptionTestSuite struct {
 
 // SetupSuite initializes the test environment for preemption tests
 func (pts *PreemptionTestSuite) SetupSuite() {
+	klog.SetLogger(zap.New(zap.WriteTo(discardWriter{}), zap.UseDevMode(false), zap.Level(zapcore.InfoLevel)))
+
 	// Setup test environment
 	ver, cfg, err := setupKubernetes()
 	Expect(err).To(Succeed())
@@ -78,8 +81,8 @@ func (pts *PreemptionTestSuite) SetupSuite() {
 	pts.ctx = ctx
 	pts.cancel = cancel
 
-	cc, scheduler, _, err := sched.SetupScheduler(ctx, nil,
-		"../../config/samples/scheduler-config.yaml", true, ver, fixture.allocator, false, gpuResourceFitOpt, gpuTopoOpt)
+	cc, scheduler, err := sched.SetupScheduler(ctx, nil,
+		"../../config/samples/scheduler-config.yaml", true, ver, gpuResourceFitOpt, gpuTopoOpt)
 	Expect(err).To(Succeed())
 	pts.scheduler = scheduler
 	scheduler.SchedulingQueue.Run(klog.FromContext(ctx))
@@ -183,7 +186,7 @@ func testGPUResourcePreemption(suite *PreemptionTestSuite) {
 		err := suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
 		Expect(err).To(Succeed())
 		return len(podList.Items)
-	}, 5*time.Second, 200*time.Millisecond).Should(Equal(12)) // 2 Pods deleted, 14 - 2 = 12
+	}, 5*time.Second, 100*time.Millisecond).Should(Equal(12)) // 2 Pods deleted, 14 - 2 = 12
 
 	podList := &v1.PodList{}
 	err := suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
@@ -233,8 +236,8 @@ func testGPUResourceEvictProtection(suite *PreemptionTestSuite) {
 
 	suite.scheduler.ScheduleOne(suite.ctx)
 
-	preemptionPod := createPreemptionTestPodsWithQoS("high-priority", constants.QoSLevelHigh, 1, "2000", "2Gi")
-	Expect(suite.k8sClient.Create(suite.ctx, preemptionPod[0])).To(Succeed())
+	toBeVictimPods = createPreemptionTestPodsWithQoS("high-priority", constants.QoSLevelHigh, 1, "2000", "2Gi")
+	Expect(suite.k8sClient.Create(suite.ctx, toBeVictimPods[0])).To(Succeed())
 	defer func() {
 		_ = suite.k8sClient.Delete(suite.ctx, preemptionPod[0])
 	}()
@@ -248,15 +251,12 @@ func testGPUResourceEvictProtection(suite *PreemptionTestSuite) {
 		err := suite.k8sClient.List(suite.ctx, podList, &client.ListOptions{Namespace: "preemption-test-ns"})
 		Expect(err).To(Succeed())
 		return len(podList.Items)
-	}, 3*time.Second, 500*time.Millisecond).Should(Equal(2))
+	}, 3*time.Second, 100*time.Millisecond).Should(Equal(2))
 
 	// Trigger eviction after protection period
-	suite.scheduler.SchedulingQueue.Activate(klog.FromContext(suite.ctx), map[string]*v1.Pod{
-		preemptionPod[0].Name: preemptionPod[0],
-	})
 	suite.scheduler.ScheduleOne(suite.ctx)
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	suite.fixture.allocator.ReconcileAllocationStateForTesting()
 
 	// Should schedule the new high priority pod
