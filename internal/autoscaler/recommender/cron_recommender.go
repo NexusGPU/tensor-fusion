@@ -16,11 +16,13 @@ import (
 
 type CronRecommender struct {
 	parser cron.Parser
+	RecommendationProcessor
 }
 
-func NewCronRecommender() *CronRecommender {
+func NewCronRecommender(recommendationProcessor RecommendationProcessor) *CronRecommender {
 	return &CronRecommender{
-		parser: cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
+		parser:                  cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
+		RecommendationProcessor: recommendationProcessor,
 	}
 }
 
@@ -40,20 +42,34 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 		return nil, nil
 	}
 
-	var targetRes *tfv1.Resources
+	var recommendation tfv1.Resources
 	var reason, message string
 	if activeRule == nil {
 		// Revert the resources to those specified in the workload spec
-		targetRes = w.GetOriginalResourcesSpec()
+		recommendation = *w.GetOriginalResourcesSpec()
 		reason = "RuleInactive"
 		message = fmt.Sprintf("Cron scaling rule %q is inactive", currentRule.Name)
-		log.FromContext(ctx).Info("cron scaling rule inactive", "rule", currentRule.Name, "workload", w.Name, "resources", targetRes)
+		log.FromContext(ctx).Info("cron scaling rule inactive",
+			"rule", currentRule.Name, "workload", w.Name, "resources", recommendation)
 	} else {
-		targetRes = &activeRule.DesiredResources
-		if currentRule == nil || !targetRes.Equal(&currentRule.DesiredResources) {
+		recommendation = activeRule.DesiredResources
+		if currentRule == nil || !recommendation.Equal(&currentRule.DesiredResources) {
 			reason = "RuleActive"
 			message = fmt.Sprintf("Cron scaling rule %q is active", activeRule.Name)
-			log.FromContext(ctx).Info("cron scaling rule active", "rule", activeRule.Name, "workload", w.Name, "resources", targetRes)
+			log.FromContext(ctx).Info("cron scaling rule active",
+				"rule", activeRule.Name, "workload", w.Name, "resources", recommendation)
+			if c.RecommendationProcessor != nil {
+				var err error
+				var msg string
+				recommendation, msg, err = c.RecommendationProcessor.Apply(ctx, w, &recommendation)
+				if err != nil {
+					return nil, fmt.Errorf("failed to apply recommendation processor: %v", err)
+				}
+				if msg != "" {
+					message += fmt.Sprintf(", %s", msg)
+					log.FromContext(ctx).Info("recommendation processor applied", "message", message)
+				}
+			}
 		}
 	}
 
@@ -69,7 +85,7 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 	}
 
 	return &RecResult{
-		Resources:        *targetRes,
+		Resources:        recommendation,
 		HasApplied:       len(reason) == 0,
 		ScaleDownLocking: true,
 	}, nil

@@ -63,11 +63,13 @@ type PercentileConfig struct {
 
 type PercentileRecommender struct {
 	ResourcesEstimator
+	RecommendationProcessor
 }
 
-func NewPercentileRecommender() *PercentileRecommender {
+func NewPercentileRecommender(recommendationProcessor RecommendationProcessor) *PercentileRecommender {
 	return &PercentileRecommender{
-		ResourcesEstimator: &resourcesEstimator{},
+		ResourcesEstimator:      &resourcesEstimator{},
+		RecommendationProcessor: recommendationProcessor,
 	}
 }
 
@@ -86,7 +88,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 	log.Info("estimated resources", "workload", workload.Name, "estimations", estimations)
 
 	curRes := workload.GetCurrentResourcesSpec()
-	targetRes := &tfv1.Resources{}
+	recommendation := tfv1.Resources{}
 	message := ""
 
 	// Handle TFLOPS scaling
@@ -99,8 +101,8 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		&estimations.UpperBoundTflops,
 	); result != nil {
 		message = result.message
-		targetRes.Requests.Tflops = result.targetRequest
-		targetRes.Limits.Tflops = result.targetLimit
+		recommendation.Requests.Tflops = result.targetRequest
+		recommendation.Limits.Tflops = result.targetLimit
 	}
 
 	// Handle VRAM scaling
@@ -117,25 +119,41 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		} else {
 			message = result.message
 		}
-		targetRes.Requests.Vram = result.targetRequest
-		targetRes.Limits.Vram = result.targetLimit
+		recommendation.Requests.Vram = result.targetRequest
+		recommendation.Limits.Vram = result.targetLimit
 	}
 
-	if targetRes.IsZero() {
+	if recommendation.IsZero() {
 		return nil, nil
 	}
 
-	meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
-		Type:               constants.ConditionStatusTypeRecommendationProvided,
-		Status:             metav1.ConditionTrue,
-		LastTransitionTime: metav1.Now(),
-		Reason:             "OutOfEstimatedBound",
-		Message:            message,
-	})
+	if p.RecommendationProcessor != nil {
+		var err error
+		var msg string
+		recommendation, msg, err = p.RecommendationProcessor.Apply(ctx, workload, &recommendation)
+		if err != nil {
+			return nil, fmt.Errorf("failed to apply recommendation processor: %v", err)
+		}
+		if msg != "" {
+			message += fmt.Sprintf(", %s", msg)
+			log.Info("recommendation processor applied", "message", message)
+		}
+	}
+
+	hasApplied := recommendation.Equal(curRes)
+	if !hasApplied {
+		meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
+			Type:               constants.ConditionStatusTypeRecommendationProvided,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Now(),
+			Reason:             "OutOfEstimatedBound",
+			Message:            message,
+		})
+	}
 
 	return &RecResult{
-		Resources:        *targetRes,
-		HasApplied:       targetRes.Equal(curRes),
+		Resources:        recommendation,
+		HasApplied:       hasApplied,
 		ScaleDownLocking: false,
 	}, nil
 }
@@ -164,10 +182,10 @@ func (p *PercentileRecommender) handleResourceScaling(
 
 	var message string
 	if isScaleUp {
-		message = fmt.Sprintf("%s (%s) below lower bound (%s)",
+		message = fmt.Sprintf("%s scaled up due to (%s) below lower bound (%s)",
 			resourceName, currentRequest.String(), lowerBound.String())
 	} else {
-		message = fmt.Sprintf("%s (%s) above upper bound (%s)",
+		message = fmt.Sprintf("%s scaled down due to (%s) above upper bound (%s)",
 			resourceName, currentRequest.String(), upperBound.String())
 	}
 

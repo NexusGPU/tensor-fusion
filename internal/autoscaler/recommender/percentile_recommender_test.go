@@ -17,6 +17,8 @@ var _ = Describe("Percentile Recommender", func() {
 	Context("when recommending resources", func() {
 		ctx := context.Background()
 		var estimations EstimatedResources
+		var recommender *PercentileRecommender
+		var ws *workload.State
 		BeforeEach(func() {
 			estimations = EstimatedResources{
 				LowerBoundTflops: resource.MustParse("100"),
@@ -26,6 +28,11 @@ var _ = Describe("Percentile Recommender", func() {
 				TargetVram:       resource.MustParse("200Gi"),
 				UpperBoundVram:   resource.MustParse("300Gi"),
 			}
+			recommender = &PercentileRecommender{
+				&fakeResourcesEstimator{&estimations},
+				nil,
+			}
+			ws = workload.NewWorkloadState()
 		})
 
 		It("should scale up if current resources below lower bounds", func() {
@@ -50,13 +57,11 @@ var _ = Describe("Percentile Recommender", func() {
 				},
 			}
 
-			workload := workload.NewWorkloadState()
-			workload.Spec.Resources = curRes
-			rec := &PercentileRecommender{&FakeResourcesEstimator{&estimations}}
-			got, _ := rec.Recommend(ctx, workload)
+			ws.Spec.Resources = curRes
+			got, _ := recommender.Recommend(ctx, ws)
 			Expect(got.Resources.Equal(&expectRes)).To(BeTrue())
-			condition := meta.FindStatusCondition(workload.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
-			Expect(condition.Message).To(Equal("TFLOPS (20) below lower bound (100), VRAM (20Gi) below lower bound (100Gi)"))
+			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
+			Expect(condition.Message).To(Equal("TFLOPS scaled up due to (20) below lower bound (100), VRAM scaled up due to (20Gi) below lower bound (100Gi)"))
 		})
 
 		It("should scale down if current resources above upper bounds", func() {
@@ -81,13 +86,11 @@ var _ = Describe("Percentile Recommender", func() {
 				},
 			}
 
-			workload := workload.NewWorkloadState()
-			workload.Spec.Resources = curRes
-			rec := &PercentileRecommender{&FakeResourcesEstimator{&estimations}}
-			got, _ := rec.Recommend(ctx, workload)
+			ws.Spec.Resources = curRes
+			got, _ := recommender.Recommend(ctx, ws)
 			Expect(got.Resources.Equal(&expectRes)).To(BeTrue())
-			condition := meta.FindStatusCondition(workload.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
-			Expect(condition.Message).To(Equal("TFLOPS (400) above upper bound (300), VRAM (400Gi) above upper bound (300Gi)"))
+			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
+			Expect(condition.Message).To(Equal("TFLOPS scaled down due to (400) above upper bound (300), VRAM scaled down due to (400Gi) above upper bound (300Gi)"))
 		})
 
 		It("should return nil if current resources within estimated bounds", func() {
@@ -102,11 +105,42 @@ var _ = Describe("Percentile Recommender", func() {
 				},
 			}
 
-			workload := workload.NewWorkloadState()
-			workload.Spec.Resources = curRes
-			rec := &PercentileRecommender{&FakeResourcesEstimator{&estimations}}
-			got, _ := rec.Recommend(ctx, workload)
+			ws.Spec.Resources = curRes
+			got, _ := recommender.Recommend(ctx, ws)
 			Expect(got).To(BeNil())
+		})
+
+		It("should correctly apply recommendation processor", func() {
+			curRes := tfv1.Resources{
+				Requests: tfv1.Resource{
+					Tflops: resource.MustParse("20"),
+					Vram:   resource.MustParse("20Gi"),
+				},
+				Limits: tfv1.Resource{
+					Tflops: resource.MustParse("40"),
+					Vram:   resource.MustParse("40Gi"),
+				},
+			}
+			expectRes := tfv1.Resources{
+				Requests: tfv1.Resource{
+					Tflops: resource.MustParse("100"),
+					Vram:   resource.MustParse("100Gi"),
+				},
+				Limits: tfv1.Resource{
+					Tflops: resource.MustParse("200"),
+					Vram:   resource.MustParse("200Gi"),
+				},
+			}
+
+			recommender = &PercentileRecommender{
+				&fakeResourcesEstimator{&estimations},
+				&fakeRecommendationProcessor{expectRes},
+			}
+			ws.Spec.Resources = curRes
+			got, _ := recommender.Recommend(ctx, ws)
+			Expect(got.Resources.Equal(&expectRes)).To(BeTrue())
+			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
+			Expect(condition.Message).To(Equal("TFLOPS scaled up due to (20) below lower bound (100), VRAM scaled up due to (20Gi) below lower bound (100Gi), fake message"))
 		})
 	})
 
@@ -167,10 +201,10 @@ var _ = Describe("Percentile Recommender", func() {
 	})
 })
 
-type FakeResourcesEstimator struct {
+type fakeResourcesEstimator struct {
 	*EstimatedResources
 }
 
-func (f *FakeResourcesEstimator) GetResourcesEstimation(workoad *workload.State) *EstimatedResources {
+func (f *fakeResourcesEstimator) GetResourcesEstimation(workoad *workload.State) *EstimatedResources {
 	return f.EstimatedResources
 }

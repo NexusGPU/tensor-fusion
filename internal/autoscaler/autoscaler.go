@@ -36,10 +36,11 @@ type Autoscaler struct {
 	workloads       map[WorkloadID]*workload.State
 }
 
-func NewAutoscaler(c client.Client,
+func NewAutoscaler(
+	client client.Client,
 	allocator *gpuallocator.GpuAllocator,
 	metricsProvider metrics.Provider) (*Autoscaler, error) {
-	if c == nil {
+	if client == nil {
 		return nil, errors.New("must specify client")
 	}
 
@@ -51,17 +52,19 @@ func NewAutoscaler(c client.Client,
 		return nil, errors.New("must specify metricsProvider")
 	}
 
+	workloadHandler := workload.NewHandler(client, allocator)
+	recommendationProcessor := recommender.NewRecommendationProcessor(workloadHandler)
 	recommenders := []recommender.Interface{
-		recommender.NewPercentileRecommender(),
-		recommender.NewCronRecommender(),
+		recommender.NewPercentileRecommender(recommendationProcessor),
+		recommender.NewCronRecommender(recommendationProcessor),
 	}
 
 	return &Autoscaler{
-		Client:          c,
+		Client:          client,
 		allocator:       allocator,
 		metricsProvider: metricsProvider,
 		recommenders:    recommenders,
-		workloadHandler: workload.NewHandler(c, allocator),
+		workloadHandler: workloadHandler,
 		workloads:       map[WorkloadID]*workload.State{},
 	}, nil
 }
@@ -167,19 +170,19 @@ func (s *Autoscaler) processWorkloads(ctx context.Context) {
 	log.Info("processing workloads")
 
 	for _, workload := range s.workloads {
-		resources, err := recommender.GetResourcesFromRecommenders(ctx, workload, s.recommenders)
+		recommendation, err := recommender.GetRecommendation(ctx, workload, s.recommenders)
 		if err != nil {
-			log.Error(err, "failed to get resources from recommenders", "workload", workload.Name)
+			log.Error(err, "failed to get recommendation", "workload", workload.Name)
 			continue
 		}
 
 		if workload.IsAutoSetResourcesEnabled() {
-			if err := s.workloadHandler.ApplyResourcesToWorkload(ctx, workload, resources); err != nil {
-				log.Error(err, "failed to apply resources to workload", "workload", workload.Name)
+			if err := s.workloadHandler.ApplyRecommendationToWorkload(ctx, workload, recommendation); err != nil {
+				log.Error(err, "failed to apply recommendation to workload", "workload", workload.Name)
 			}
 		}
 
-		if err := s.workloadHandler.UpdateWorkloadStatus(ctx, workload, resources); err != nil {
+		if err := s.workloadHandler.UpdateWorkloadStatus(ctx, workload, recommendation); err != nil {
 			log.Error(err, "failed to update workload status", "workload", workload.Name)
 		}
 	}

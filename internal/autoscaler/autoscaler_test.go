@@ -349,6 +349,34 @@ var _ = Describe("Autoscaler", func() {
 			scaler.processWorkloads(ctx)
 			verifyRecommendationStatusConsistently(workload, &resourcesInRule)
 		})
+
+		It("should return max allowed resources spec per worker based on current worker count", func() {
+			workloadState := scaler.workloads[key]
+			workloadHandler := scaler.workloadHandler
+			gpuList := tfEnv.GetPoolGpuList(0)
+			capacity := gpuList.Items[0].Status.Capacity
+			allTflops, _ := capacity.Tflops.AsInt64()
+			allVram, _ := capacity.Vram.AsInt64()
+
+			got, _ := workloadHandler.GetMaxAllowedResourcesSpec(workloadState)
+			tflops, _ := got.Tflops.AsInt64()
+			vram, _ := got.Vram.AsInt64()
+			Expect(tflops).To(Equal(allTflops))
+			Expect(vram).To(Equal(allVram))
+
+			updateWorkloadReplicas(workload, 2)
+			scaler.loadWorkloads(ctx)
+			got, _ = workloadHandler.GetMaxAllowedResourcesSpec(workloadState)
+			tflops, _ = got.Tflops.AsInt64()
+			vram, _ = got.Vram.AsInt64()
+			Expect(tflops).To(Equal(allTflops / 2))
+			Expect(vram).To(Equal(allVram / 2))
+
+			updateWorkloadReplicas(workload, 0)
+			scaler.loadWorkloads(ctx)
+			got, _ = workloadHandler.GetMaxAllowedResourcesSpec(workloadState)
+			Expect(got).To(BeNil())
+		})
 	})
 })
 
@@ -503,7 +531,7 @@ func verifyRecommendationStatus(workload *tfv1.TensorFusionWorkload, expectedRes
 	Eventually(func(g Gomega) {
 		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 		g.Expect(workload.Status.Recommendation.Equal(expectedRes)).To(BeTrue())
-		g.Expect(workload.Status.AppliedRecommendedReplicas).To(Equal(int32(1)))
+		g.Expect(workload.Status.AppliedRecommendedReplicas).To(Equal(*workload.Spec.Replicas))
 		condition := meta.FindStatusCondition(workload.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
 		g.Expect(condition).ToNot(BeNil())
 		if condition != nil {

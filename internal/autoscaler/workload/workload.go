@@ -1,22 +1,24 @@
 package workload
 
 import (
+	"fmt"
 	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 type State struct {
 	Namespace             string
 	Name                  string
-	Annotations           map[string]string
 	Spec                  tfv1.WorkloadProfileSpec
 	Status                tfv1.TensorFusionWorkloadStatus
-	CurrentReplicas       int32
 	CurrentActiveWorkers  map[string]*corev1.Pod
 	WorkerUsageSamplers   map[string]*metrics.WorkerUsageSampler
 	WorkerUsageAggregator *metrics.WorkerUsageAggregator
@@ -56,7 +58,7 @@ func (w *State) IsRecommendationAppliedToAllWorkers() bool {
 		return true
 	}
 
-	if w.CurrentReplicas != w.Status.AppliedRecommendedReplicas {
+	if int32(len(w.CurrentActiveWorkers)) != w.Status.AppliedRecommendedReplicas {
 		return false
 	}
 
@@ -91,8 +93,6 @@ func (w *State) updateCurrentActiveWorkers(podList *corev1.PodList) {
 			delete(w.WorkerUsageSamplers, key)
 		}
 	}
-
-	w.CurrentReplicas = int32(len(w.CurrentActiveWorkers))
 }
 
 func (w *State) AddSample(sample *metrics.WorkerUsage) {
@@ -102,6 +102,59 @@ func (w *State) AddSample(sample *metrics.WorkerUsage) {
 		w.WorkerUsageSamplers[sample.WorkerName] = sampler
 	}
 	sampler.AddSample(w.WorkerUsageAggregator, sample)
+}
+
+func (w *State) GetWorkerMaxGPUAllocation(allocator *gpuallocator.GpuAllocator) (*tfv1.Resource, error) {
+	if len(w.CurrentActiveWorkers) <= 0 {
+		return nil, nil
+	}
+
+	gpuStore, _, allocRequests := allocator.GetAllocationInfo()
+	gpuToWorkers := map[*tfv1.GPU][]*corev1.Pod{}
+	for _, worker := range w.CurrentActiveWorkers {
+		allocated, exists := allocRequests[string(worker.UID)]
+		if !exists || allocated == nil {
+			return nil, fmt.Errorf("worker %s has not allocated GPUs", worker.Name)
+		}
+		for _, gpuName := range allocated.GPUNames {
+			gpuNameNs := types.NamespacedName{Name: gpuName}
+			gpu, exists := gpuStore[gpuNameNs]
+			if !exists {
+				return nil, fmt.Errorf("GPU not found in allocator store %s", gpuName)
+			}
+			gpuToWorkers[gpu] = append(gpuToWorkers[gpu], worker)
+		}
+	}
+
+	var (
+		maxTflops int64 = -1
+		maxVram   int64 = -1
+	)
+	for gpu, workers := range gpuToWorkers {
+		avaiableTflops := gpu.Status.Available.Tflops
+		avaiableVram := gpu.Status.Available.Vram
+		for _, worker := range workers {
+			avaiableTflops.Add(allocRequests[string(worker.UID)].Request.Tflops)
+			avaiableVram.Add(allocRequests[string(worker.UID)].Request.Vram)
+		}
+
+		allTflops, _ := avaiableTflops.AsInt64()
+		allVram, _ := avaiableVram.AsInt64()
+		workerCount := int64(len(workers))
+		tflopsPerWorker := allTflops / workerCount
+		vramPerWorker := allVram / workerCount
+		if maxTflops == -1 || tflopsPerWorker < maxTflops {
+			maxTflops = tflopsPerWorker
+		}
+		if maxVram == -1 || vramPerWorker < maxVram {
+			maxVram = vramPerWorker
+		}
+	}
+
+	return &tfv1.Resource{
+		Tflops: *resource.NewQuantity(maxTflops, resource.DecimalSI),
+		Vram:   *resource.NewQuantity(maxVram, resource.BinarySI),
+	}, nil
 }
 
 func isWorkerHasDedicatedGPU(worker *corev1.Pod) bool {

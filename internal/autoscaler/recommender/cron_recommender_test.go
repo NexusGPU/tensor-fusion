@@ -18,7 +18,7 @@ import (
 
 var _ = Describe("CronRecommender", func() {
 	ctx := context.TODO()
-	recommender := NewCronRecommender()
+	recommender := NewCronRecommender(nil)
 
 	Context("When an active rule is present", func() {
 		var activeRule *tfv1.CronScalingRule
@@ -69,15 +69,15 @@ var _ = Describe("CronRecommender", func() {
 			verifyCronRecommendationStatus(ctx, recommender, ws, activeRule)
 		})
 
-		It("should return recommendation with correct fields if the active cron scaling rule remains unchanged", func() {
-			recommendation, _ := recommender.Recommend(ctx, ws)
-			Expect(recommendation).ToNot(BeNil())
-			Expect(recommendation.HasApplied).To(BeTrue())
-			Expect(recommendation.ScaleDownLocking).To(BeTrue())
-			Expect(recommendation.Resources.Equal(&activeRule.DesiredResources)).To(BeTrue())
+		It("should return recResult with correct fields if the active cron scaling rule remains unchanged", func() {
+			recResult, _ := recommender.Recommend(ctx, ws)
+			Expect(recResult).ToNot(BeNil())
+			Expect(recResult.HasApplied).To(BeTrue())
+			Expect(recResult.ScaleDownLocking).To(BeTrue())
+			Expect(recResult.Resources.Equal(&activeRule.DesiredResources)).To(BeTrue())
 		})
 
-		It("should revert the resources to those specified in the workload spec if the active cron scaling finished", func() {
+		It("should revert the resources to those specified in the workload spec if the active cron scaling became inactive", func() {
 			ws.Spec.Resources = tfv1.Resources{
 				Requests: tfv1.Resource{
 					Tflops: resource.MustParse("5"),
@@ -95,17 +95,57 @@ var _ = Describe("CronRecommender", func() {
 				CronScalingRules: []tfv1.CronScalingRule{*activeRule},
 			}
 
-			rec, _ := recommender.Recommend(ctx, ws)
-			Expect(rec.Resources.Equal(&ws.Spec.Resources)).To(BeTrue())
-			Expect(rec.HasApplied).To(BeFalse())
-			Expect(rec.ScaleDownLocking).To(BeTrue())
+			recResult, _ := recommender.Recommend(ctx, ws)
+			Expect(recResult.Resources.Equal(&ws.Spec.Resources)).To(BeTrue())
+			Expect(recResult.HasApplied).To(BeFalse())
+			Expect(recResult.ScaleDownLocking).To(BeTrue())
 			Expect(ws.Status.ActiveCronScalingRule).To(BeNil())
 			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
 			expectedMsg := fmt.Sprintf("Cron scaling rule %q is inactive", activeRule.Name)
 			Expect(condition.Message).To(Equal(expectedMsg))
 
-			rec, _ = recommender.Recommend(ctx, ws)
-			Expect(rec).To(BeNil())
+			recResult, _ = recommender.Recommend(ctx, ws)
+			Expect(recResult).To(BeNil())
+		})
+
+		It("should correctly apply recommendation processor", func() {
+			newRes := tfv1.Resources{
+				Requests: tfv1.Resource{
+					Tflops: resource.MustParse("200"),
+					Vram:   resource.MustParse("200Gi"),
+				},
+				Limits: tfv1.Resource{
+					Tflops: resource.MustParse("400"),
+					Vram:   resource.MustParse("400Gi"),
+				},
+			}
+			activeRule = &tfv1.CronScalingRule{
+				Enable:           true,
+				Name:             "test",
+				Start:            "0 0 * * *",
+				End:              "59 23 * * *",
+				DesiredResources: newRes,
+			}
+			ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
+				CronScalingRules: []tfv1.CronScalingRule{*activeRule},
+			}
+
+			expectRes := tfv1.Resources{
+				Requests: tfv1.Resource{
+					Tflops: resource.MustParse("100"),
+					Vram:   resource.MustParse("100Gi"),
+				},
+				Limits: tfv1.Resource{
+					Tflops: resource.MustParse("200"),
+					Vram:   resource.MustParse("200Gi"),
+				},
+			}
+			recommender = NewCronRecommender(&fakeRecommendationProcessor{expectRes})
+			recResult, _ := recommender.Recommend(ctx, ws)
+			Expect(recResult.Resources.Equal(&expectRes)).To(BeTrue())
+			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
+			expectedMsg := fmt.Sprintf("Cron scaling rule %q is active, fake message", activeRule.Name)
+			Expect(condition.Message).To(Equal(expectedMsg))
 		})
 	})
 
@@ -146,7 +186,7 @@ var _ = Describe("CronRecommender", func() {
 		})
 
 		It("should return the active cron scaling rule if the current time falls within its scheduled interval", func() {
-			rec := NewCronRecommender()
+			rec := NewCronRecommender(nil)
 			weekDay := time.Now().Weekday().String()
 			asc := tfv1.AutoScalingConfig{
 				CronScalingRules: []tfv1.CronScalingRule{
@@ -223,20 +263,18 @@ var _ = Describe("CronRecommender", func() {
 				},
 			}
 
-			rec := NewCronRecommender()
+			rec := NewCronRecommender(nil)
 			for _, config := range configs {
 				rule, err := rec.getActiveCronScalingRule(&config)
 				Expect(err).To(HaveOccurred())
 				Expect(rule).To(BeNil())
 			}
 		})
-
 	})
-
 })
 
 func verifyCronRecommendationStatus(ctx context.Context, recommender *CronRecommender, w *workload.State, rule *tfv1.CronScalingRule) {
-	// GinkgoHelper()
+	GinkgoHelper()
 	recommendation, _ := recommender.Recommend(ctx, w)
 	if rule != nil {
 		// verify resource of recommendation

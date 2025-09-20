@@ -35,13 +35,16 @@ var _ = Describe("Workload", func() {
 
 	It("should correctly determine if auto set resources is enabled based on config", func() {
 		ws := NewWorkloadState()
-
 		ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{Enable: true},
+			AutoSetResources: tfv1.AutoSetResources{Enable: true, TargetResource: "all"},
 		}
 		Expect(ws.IsAutoSetResourcesEnabled()).To(BeTrue())
 		ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{Enable: false},
+			AutoSetResources: tfv1.AutoSetResources{Enable: false, TargetResource: "all"},
+		}
+		Expect(ws.IsAutoSetResourcesEnabled()).To(BeFalse())
+		ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
+			AutoSetResources: tfv1.AutoSetResources{Enable: true, TargetResource: ""},
 		}
 		Expect(ws.IsAutoSetResourcesEnabled()).To(BeFalse())
 	})

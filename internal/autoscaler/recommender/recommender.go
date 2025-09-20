@@ -20,7 +20,7 @@ type RecResult struct {
 	ScaleDownLocking bool
 }
 
-func GetResourcesFromRecommenders(ctx context.Context, workload *workload.State, recommenders []Interface) (*tfv1.Resources, error) {
+func GetRecommendation(ctx context.Context, workload *workload.State, recommenders []Interface) (*tfv1.Resources, error) {
 	recResults := map[string]*RecResult{}
 	for _, recommender := range recommenders {
 		result, err := recommender.Recommend(ctx, workload)
@@ -36,7 +36,7 @@ func GetResourcesFromRecommenders(ctx context.Context, workload *workload.State,
 		return nil, nil
 	}
 
-	resources := getResourcesFromRecommendations(recResults)
+	resources := getResourcesFromRecResults(recResults)
 	if resources != nil {
 		curRes := workload.GetCurrentResourcesSpec()
 		// If a resource value is zero, replace it with current value
@@ -54,10 +54,10 @@ func GetResourcesFromRecommenders(ctx context.Context, workload *workload.State,
 	return resources, nil
 }
 
-func getResourcesFromRecommendations(recommendations map[string]*RecResult) *tfv1.Resources {
+func getResourcesFromRecResults(recResults map[string]*RecResult) *tfv1.Resources {
 	targetRes := &tfv1.Resources{}
 	minRes := &tfv1.Resources{}
-	for _, rec := range recommendations {
+	for _, rec := range recResults {
 		if !rec.HasApplied {
 			mergeResourcesByLargerRequests(targetRes, &rec.Resources)
 		}
