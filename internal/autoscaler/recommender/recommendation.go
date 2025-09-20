@@ -17,7 +17,7 @@ func NewRecommendationProcessor(workloadHandler workload.Handler) Recommendation
 }
 
 type recommendationProcessor struct {
-	workload.Handler
+	workloadHandler workload.Handler
 }
 
 func (r *recommendationProcessor) Apply(
@@ -26,7 +26,7 @@ func (r *recommendationProcessor) Apply(
 	rec *tfv1.Resources) (tfv1.Resources, string, error) {
 	result := *rec
 	msg := ""
-	allowedRes, err := r.Handler.GetMaxAllowedResourcesSpec(workload)
+	allowedRes, err := r.workloadHandler.GetMaxAllowedResourcesSpec(workload)
 	if err != nil || allowedRes == nil {
 		return result, msg, err
 	}

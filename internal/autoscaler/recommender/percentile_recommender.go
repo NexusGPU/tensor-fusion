@@ -63,13 +63,13 @@ type PercentileConfig struct {
 
 type PercentileRecommender struct {
 	ResourcesEstimator
-	RecommendationProcessor
+	recommendationProcessor RecommendationProcessor
 }
 
 func NewPercentileRecommender(recommendationProcessor RecommendationProcessor) *PercentileRecommender {
 	return &PercentileRecommender{
 		ResourcesEstimator:      &resourcesEstimator{},
-		RecommendationProcessor: recommendationProcessor,
+		recommendationProcessor: recommendationProcessor,
 	}
 }
 
@@ -127,10 +127,10 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		return nil, nil
 	}
 
-	if p.RecommendationProcessor != nil {
+	if p.recommendationProcessor != nil {
 		var err error
 		var msg string
-		recommendation, msg, err = p.RecommendationProcessor.Apply(ctx, workload, &recommendation)
+		recommendation, msg, err = p.recommendationProcessor.Apply(ctx, workload, &recommendation)
 		if err != nil {
 			return nil, fmt.Errorf("failed to apply recommendation processor: %v", err)
 		}

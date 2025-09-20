@@ -67,7 +67,8 @@ var _ = Describe("Autoscaler", func() {
 	Context("when loading history metrics", func() {
 		It("should create the state of workloads and workers based on historical metrics", func() {
 			scaler, _ := NewAutoscaler(k8sClient, allocator, &FakeMetricsProvider{})
-			scaler.loadHistoryMetrics(ctx)
+			err := scaler.loadHistoryMetrics(ctx)
+			Expect(err).ToNot(HaveOccurred())
 			metrics, _ := scaler.metricsProvider.GetHistoryMetrics(ctx)
 			for _, m := range metrics {
 				key := WorkloadID{m.Namespace, m.WorkloadName}

@@ -15,14 +15,14 @@ import (
 )
 
 type CronRecommender struct {
-	parser cron.Parser
-	RecommendationProcessor
+	parser                  cron.Parser
+	recommendationProcessor RecommendationProcessor
 }
 
 func NewCronRecommender(recommendationProcessor RecommendationProcessor) *CronRecommender {
 	return &CronRecommender{
 		parser:                  cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
-		RecommendationProcessor: recommendationProcessor,
+		recommendationProcessor: recommendationProcessor,
 	}
 }
 
@@ -58,10 +58,10 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 			message = fmt.Sprintf("Cron scaling rule %q is active", activeRule.Name)
 			log.FromContext(ctx).Info("cron scaling rule active",
 				"rule", activeRule.Name, "workload", w.Name, "resources", recommendation)
-			if c.RecommendationProcessor != nil {
+			if c.recommendationProcessor != nil {
 				var err error
 				var msg string
-				recommendation, msg, err = c.RecommendationProcessor.Apply(ctx, w, &recommendation)
+				recommendation, msg, err = c.recommendationProcessor.Apply(ctx, w, &recommendation)
 				if err != nil {
 					return nil, fmt.Errorf("failed to apply recommendation processor: %v", err)
 				}
