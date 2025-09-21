@@ -91,7 +91,7 @@ var _ = Describe("MetricsProvider", func() {
 				rows.AddRow(row.Namespace, row.WorkloadName, row.WorkerName, row.ComputeTflops, row.VRAMBytes, row.TimeWindow)
 			}
 
-			mock.ExpectQuery(regexp.QuoteMeta("SELECT namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window FROM `tf_worker_usage` WHERE ts > ? and ts <= ? GROUP BY namespace, workload, worker, time_window ORDER BY time_window asc")).
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 hour'::INTERVAL, ts) as time_window FROM `tf_worker_usage` WHERE ts > ? and ts <= ? GROUP BY namespace, workload, worker, time_window ORDER BY time_window asc")).
 				WillReturnRows(rows)
 			provider := &greptimeDBProvider{db: db}
 			got, _ := provider.GetHistoryMetrics(ctx)

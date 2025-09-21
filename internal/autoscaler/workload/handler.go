@@ -199,11 +199,9 @@ func (h *handler) GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, e
 			avaiableVram.Add(allocRequests[string(worker.UID)].Request.Vram)
 		}
 
-		allTflops, _ := avaiableTflops.AsInt64()
-		allVram, _ := avaiableVram.AsInt64()
 		workerCount := int64(len(workers))
-		tflopsPerWorker := allTflops / workerCount
-		vramPerWorker := allVram / workerCount
+		tflopsPerWorker := int64(avaiableTflops.AsApproximateFloat64()) / workerCount
+		vramPerWorker := avaiableVram.Value() / workerCount
 		if maxTflops == -1 || tflopsPerWorker < maxTflops {
 			maxTflops = tflopsPerWorker
 		}

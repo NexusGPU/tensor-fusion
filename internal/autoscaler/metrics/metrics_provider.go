@@ -108,7 +108,7 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 	// TODO: supply history resolution to config time window
 	data := []*hypervisorWorkerUsageMetrics{}
 	err := g.db.WithContext(timeoutCtx).
-		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
+		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 hour'::INTERVAL, ts) as time_window").
 		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24*7).UnixNano(), now.UnixNano()).
 		Group("namespace, workload, worker, time_window").
 		Order("time_window asc").
