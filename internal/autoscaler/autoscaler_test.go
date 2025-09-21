@@ -356,22 +356,18 @@ var _ = Describe("Autoscaler", func() {
 			workloadHandler := scaler.workloadHandler
 			gpuList := tfEnv.GetPoolGpuList(0)
 			capacity := gpuList.Items[0].Status.Capacity
-			allTflops, _ := capacity.Tflops.AsInt64()
-			allVram, _ := capacity.Vram.AsInt64()
+			allTflops := int64(capacity.Tflops.AsApproximateFloat64())
+			allVram := capacity.Vram.Value()
 
 			got, _ := workloadHandler.GetMaxAllowedResourcesSpec(workloadState)
-			tflops, _ := got.Tflops.AsInt64()
-			vram, _ := got.Vram.AsInt64()
-			Expect(tflops).To(Equal(allTflops))
-			Expect(vram).To(Equal(allVram))
+			Expect(got.Tflops.Value()).To(Equal(allTflops))
+			Expect(got.Vram.Value()).To(Equal(allVram))
 
 			updateWorkloadReplicas(workload, 2)
 			scaler.loadWorkloads(ctx)
 			got, _ = workloadHandler.GetMaxAllowedResourcesSpec(workloadState)
-			tflops, _ = got.Tflops.AsInt64()
-			vram, _ = got.Vram.AsInt64()
-			Expect(tflops).To(Equal(allTflops / 2))
-			Expect(vram).To(Equal(allVram / 2))
+			Expect(got.Tflops.Value()).To(Equal(allTflops / 2))
+			Expect(got.Vram.Value()).To(Equal(allVram / 2))
 
 			updateWorkloadReplicas(workload, 0)
 			scaler.loadWorkloads(ctx)
