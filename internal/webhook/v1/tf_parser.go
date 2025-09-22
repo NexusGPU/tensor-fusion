@@ -28,6 +28,7 @@ type TFResource struct {
 func ParseTensorFusionInfo(
 	ctx context.Context,
 	k8sClient client.Client,
+	draProcessor *DRAProcessor,
 	pod *corev1.Pod,
 ) (utils.TensorFusionInfo, error) {
 	var info utils.TensorFusionInfo
@@ -113,6 +114,11 @@ func ParseTensorFusionInfo(
 	gpuModel, ok := pod.Annotations[constants.GPUModelAnnotation]
 	if ok {
 		workloadProfile.Spec.GPUModel = gpuModel
+	}
+
+	// Parse DRA enabled annotation
+	if draProcessor.IsDRAEnabled(ctx, pod) {
+		info.DRAEnabled = true
 	}
 
 	info.Profile = &workloadProfile.Spec

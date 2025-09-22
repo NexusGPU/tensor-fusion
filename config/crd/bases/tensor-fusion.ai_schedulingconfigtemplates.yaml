@@ -143,6 +143,20 @@ spec:
                         type: string
                     type: object
                 type: object
+              dra:
+                description: enable Dynamic Resource Allocation (DRA) for GPU resource
+                  management
+                properties:
+                  enable:
+                    description: Enable DRA mode for all workloads in this configuration
+                      template
+                    type: boolean
+                  resourceClass:
+                    default: tensorfusion.ai/gpu
+                    description: ResourceClass specifies the DRA resource class name
+                      to use
+                    type: string
+                type: object
               hypervisor:
                 description: single GPU device multi-process queuing and fair scheduling
                   with QoS constraint

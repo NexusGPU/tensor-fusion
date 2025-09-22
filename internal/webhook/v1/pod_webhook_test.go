@@ -57,8 +57,9 @@ var _ = Describe("TensorFusionPodMutator", func() {
 		decoder = admission.NewDecoder(scheme)
 
 		mutator = &TensorFusionPodMutator{
-			Client:  k8sClient,
-			decoder: decoder,
+			Client:       k8sClient,
+			decoder:      decoder,
+			draProcessor: NewDRAProcessor(k8sClient),
 		}
 	})
 
@@ -532,7 +533,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					},
 				},
 			}
-			tfInfo, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			tfInfo, err := ParseTensorFusionInfo(ctx, k8sClient, mutator.draProcessor, pod)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(tfInfo.ContainerNames).To(HaveLen(1))
 			Expect(tfInfo.ContainerNames[0]).To(Equal("test-container"))
@@ -564,7 +565,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 
 			currentBytes, err := json.Marshal(pod)
 			Expect(err).NotTo(HaveOccurred())
-			patch, err := mutator.patchTFClient(pod, pool, false, currentBytes, []int{0})
+			patch, err := mutator.patchTFClient(context.Background(), pod, pool, false, currentBytes, []int{0})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(patch).NotTo(BeEmpty())
 			// There should be at least 2 patches (initContainers and the container env patches)

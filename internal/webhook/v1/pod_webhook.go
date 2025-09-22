@@ -49,14 +49,21 @@ var httpClient = &http.Client{Timeout: 10 * time.Second}
 func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator) error {
 	webhookServer := mgr.GetWebhookServer()
 
-	webhookServer.Register("/mutate-v1-pod",
-		&admission.Webhook{
-			Handler: &TensorFusionPodMutator{
-				decoder:       admission.NewDecoder(runtime.NewScheme()),
-				Client:        mgr.GetClient(),
-				portAllocator: portAllocator,
-			},
-		})
+	// Initialize DRA processor
+	draProcessor := NewDRAProcessor(mgr.GetClient())
+	if err := draProcessor.InitializeDRAConfig(context.Background()); err != nil {
+		return fmt.Errorf("failed to initialize DRA config: %w", err)
+	}
+
+	// Initialize DRA setting from global configuration
+	mutator := &TensorFusionPodMutator{
+		decoder:       admission.NewDecoder(runtime.NewScheme()),
+		Client:        mgr.GetClient(),
+		portAllocator: portAllocator,
+		draProcessor:  draProcessor,
+	}
+
+	webhookServer.Register("/mutate-v1-pod", &admission.Webhook{Handler: mutator})
 	return nil
 }
 
@@ -64,6 +71,7 @@ type TensorFusionPodMutator struct {
 	Client        client.Client
 	decoder       admission.Decoder
 	portAllocator *portallocator.PortAllocator
+	draProcessor  *DRAProcessor
 }
 
 // Handle implements admission.Handler interface.
@@ -100,7 +108,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to marshal current pod: %w", err))
 	}
 
-	tfInfo, err := ParseTensorFusionInfo(ctx, m.Client, pod)
+	tfInfo, err := ParseTensorFusionInfo(ctx, m.Client, m.draProcessor, pod)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("parse tf resources: %w", err))
 	}
@@ -159,16 +167,28 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		return admission.Allowed("no valid container to inject tensor-fusion, skipped")
 	}
 
-	// Add defaults and tensor-fusion injection logic
+	// Handle DRA-specific processing if enabled
+	if tfInfo.DRAEnabled {
+		// Process DRA workload
+		if err := m.draProcessor.HandleDRAAdmission(ctx, pod, &tfInfo, containerIndices); err != nil {
+			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("failed to handle DRA admission: %w", err))
+		}
+	}
+
+	// Common processing for both DRA and regular modes
 	utils.AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod, tfInfo)
 	utils.AddTFDefaultClientConfBeforePatch(ctx, pod, pool, tfInfo, containerIndices)
 
 	// Inject initContainer and env variables
 	patches, err := m.patchTFClient(
-		pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices,
+		ctx, pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices,
 	)
 	if err != nil {
-		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
+		mode := "regular"
+		if tfInfo.DRAEnabled {
+			mode = "DRA"
+		}
+		log.Error(err, "failed to patch tf client", "mode", mode, "pod", req.Name, "namespace", req.Namespace)
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
@@ -266,6 +286,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(
+	ctx context.Context,
 	pod *corev1.Pod,
 	pool *tfv1.GPUPool,
 	isLocalGPU bool,

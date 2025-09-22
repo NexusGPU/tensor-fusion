@@ -121,6 +121,15 @@ const (
 	QoSLevelMedium   = "medium"
 	QoSLevelHigh     = "high"
 	QoSLevelCritical = "critical"
+
+	// DRA support
+	// annotation for pod to indicate if DRA is enabled
+	DRAEnabledAnnotation = Domain + "/dra-enabled"
+	DRAResourceClaimName = "tensor-fusion-resource-claim-%s"
+	// resource claim name for request
+	DRAResourceClaimRequestName = "tensor-fusion-resource-claim-request-%s"
+
+	DRAClaimDefineName = "tensor-fusion-gpu-claim"
 )
 
 // for avoid golang lint issues

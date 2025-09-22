@@ -26,6 +26,7 @@ import (
 const Name = "GPUResourcesFit"
 const CycleStateAllocateRequest = "allocateRequest"
 const CycleStateGPUSchedulingResult = "gpuSchedulingResult"
+
 const SchedulerSimulationKey = "schedulerSimulation"
 
 var _ framework.PreFilterPlugin = &GPUFit{}
@@ -103,6 +104,11 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 		return &framework.PreFilterResult{
 			NodeNames: nodeNames,
 		}, framework.NewStatus(framework.Success, "progressive migration for native resources claim")
+	}
+
+	// Check if DRA mode is enabled for this pod
+	if isDRAEnabled(pod) && hasDRAClaim(pod) {
+		return nil, framework.NewStatus(framework.Skip, "DRA mode enabled, skipping custom GPU prefilter")
 	}
 
 	// Skip non tensor-fusion mode
@@ -207,6 +213,11 @@ func (s *GPUFit) PreFilterExtensions() framework.PreFilterExtensions {
 }
 
 func (s *GPUFit) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+	// Check if DRA mode is enabled for this pod
+	if isDRAEnabled(pod) && hasDRAClaim(pod) {
+		return framework.NewStatus(framework.Skip, "DRA mode enabled, skipping custom GPU filter")
+	}
+
 	if !utils.IsTensorFusionWorker(pod) {
 		return framework.NewStatus(framework.Success, "skip for non tensor-fusion mode")
 	}
@@ -228,6 +239,11 @@ func (s *GPUFit) Score(
 	pod *v1.Pod,
 	nodeInfo *framework.NodeInfo,
 ) (int64, *framework.Status) {
+	// Check if DRA mode is enabled for this pod
+	if isDRAEnabled(pod) && hasDRAClaim(pod) {
+		return 0, framework.NewStatus(framework.Skip, "DRA mode enabled, skipping custom GPU scoring")
+	}
+
 	// Skip non tensor-fusion mode scheduling
 	if !utils.IsTensorFusionWorker(pod) {
 		return 0, framework.NewStatus(framework.Success, "")
@@ -266,6 +282,11 @@ func (s *GPUFit) ScoreExtensions() framework.ScoreExtensions {
 }
 
 func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
+	// Check if DRA mode is enabled for this pod
+	if isDRAEnabled(pod) && hasDRAClaim(pod) {
+		return framework.NewStatus(framework.Success, "DRA mode enabled, skipping custom GPU reservation")
+	}
+
 	if !utils.IsTensorFusionWorker(pod) {
 		return framework.NewStatus(framework.Success, "skip for non tensor-fusion mode")
 	}
@@ -312,6 +333,11 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 }
 
 func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
+	// Check if DRA mode is enabled for this pod
+	if isDRAEnabled(pod) && hasDRAClaim(pod) {
+		return // DRA handles unreservation
+	}
+
 	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}
@@ -331,6 +357,11 @@ func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod
 }
 
 func (s *GPUFit) PostBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
+	// Check if DRA mode is enabled for this pod
+	if isDRAEnabled(pod) && hasDRAClaim(pod) {
+		return // DRA handles post-bind actions
+	}
+
 	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}
@@ -358,4 +389,18 @@ func (s *GPUFit) PostBind(ctx context.Context, state *framework.CycleState, pod 
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
 			"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
 	}
+}
+
+// isDRAEnabled checks if DRA is enabled for a pod
+func isDRAEnabled(pod *v1.Pod) bool {
+	if pod.Annotations == nil {
+		return false
+	}
+	val, ok := pod.Annotations[constants.DRAEnabledAnnotation]
+	return ok && val == constants.TrueStringValue
+}
+
+// hasDRAClaim checks if a pod has DRA ResourceClaim references
+func hasDRAClaim(pod *v1.Pod) bool {
+	return len(pod.Spec.ResourceClaims) > 0
 }

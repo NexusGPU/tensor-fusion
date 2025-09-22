@@ -79,6 +79,8 @@ type TensorFusionInfo struct {
 	// Pod mutating webhook can not get Pod UID sometimes,
 	// thus need pod controller to set the owner reference
 	PendingSetPodAsOwner bool
+	// DRA support
+	DRAEnabled bool
 }
 
 func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo TensorFusionInfo) {
@@ -113,6 +115,10 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	pod.Annotations[constants.IsLocalGPUAnnotation] = strconv.FormatBool(tfInfo.Profile.IsLocalGPU)
 	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
+	// add DRA enabled annotation
+	if tfInfo.DRAEnabled {
+		pod.Annotations[constants.DRAEnabledAnnotation] = constants.TrueStringValue
+	}
 }
 
 func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
