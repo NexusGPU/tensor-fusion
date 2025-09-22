@@ -318,7 +318,7 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 
 	nodeName := nodeInfo.Node().Name
 	if _, ok := filterResult.(*GPUSchedulingStateData).NodeGPUs[nodeName]; !ok {
-		return fwk.NewStatus(fwk.Unschedulable, "no valid node found, gpu capacity not enough")
+		return fwk.NewStatus(fwk.Unschedulable, "GPU not fit")
 	}
 	return fwk.NewStatus(fwk.Success, "")
 }
@@ -335,7 +335,7 @@ func (s *GPUFit) Score(
 	}
 
 	if state == nil {
-		return 0, fwk.NewStatus(fwk.Error, "no valid node found, gpu capacity not enough")
+		return 0, fwk.NewStatus(fwk.Error, "invalid schedule state")
 	}
 	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
@@ -344,7 +344,7 @@ func (s *GPUFit) Score(
 	scheduledState := filterResult.(*GPUSchedulingStateData)
 	gpuScoreMap, ok := scheduledState.ValidNodeGPUScore[nodeInfo.Node().Name]
 	if !ok {
-		return 0, fwk.NewStatus(fwk.Unschedulable, "no valid node found, gpu capacity not enough")
+		return 0, fwk.NewStatus(fwk.Unschedulable, "not valid node")
 	}
 	// normalize to 0-100, when node has more GPUs but filtered out,
 	// should consider it as 100 when strategy is compact_first, and consider as 0 when is low_load_first
@@ -386,7 +386,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
 	gpuScoreMap, ok := schedulingResult.ValidNodeGPUScore[nodeName]
 	if !ok {
-		return fwk.NewStatus(fwk.Unschedulable, "no valid node found, gpu capacity not enough")
+		return fwk.NewStatus(fwk.Unschedulable, "not valid node")
 	}
 
 	// find top N score GPUs in this node
