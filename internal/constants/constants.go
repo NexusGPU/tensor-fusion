@@ -94,9 +94,9 @@ const (
 	GenHostPortNameLabel    = Domain + "/port-name"
 	GenPortNumberAnnotation = Domain + "/port-number"
 
-	AutoScaleResourcesAnnotation = Domain + "/auto-resources"
-	AutoScaleReplicasAnnotation  = Domain + "/auto-replicas"
-	AutoScaleTargetResourceAnnotation  = Domain + "/auto-target-resource"
+	AutoScaleResourcesAnnotation      = Domain + "/auto-resources"
+	AutoScaleReplicasAnnotation       = Domain + "/auto-replicas"
+	AutoScaleTargetResourceAnnotation = Domain + "/auto-scale-target-resource"
 
 	GpuReleasedAnnotation = Domain + "/gpu-released"
 
