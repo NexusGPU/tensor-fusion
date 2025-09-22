@@ -96,6 +96,7 @@ const (
 
 	AutoScaleResourcesAnnotation = Domain + "/auto-resources"
 	AutoScaleReplicasAnnotation  = Domain + "/auto-replicas"
+	AutoScaleTargetResourceAnnotation  = Domain + "/auto-target-resource"
 
 	GpuReleasedAnnotation = Domain + "/gpu-released"
 

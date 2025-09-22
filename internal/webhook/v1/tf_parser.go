@@ -132,6 +132,10 @@ func parseAutoScalingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workload
 	if ok && autoResources == constants.TrueStringValue {
 		workloadProfile.Spec.AutoScalingConfig.AutoSetResources.Enable = true
 	}
+	targetResource, ok := pod.Annotations[constants.AutoScaleTargetResourceAnnotation]
+	if ok {
+		workloadProfile.Spec.AutoScalingConfig.AutoSetResources.TargetResource = targetResource
+	}
 	autoReplicas, ok := pod.Annotations[constants.AutoScaleReplicasAnnotation]
 	if ok && autoReplicas == constants.TrueStringValue {
 		workloadProfile.Spec.AutoScalingConfig.AutoSetReplicas.Enable = true
