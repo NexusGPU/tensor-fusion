@@ -12,7 +12,7 @@ import (
 
 const (
 	defaultQueryTimeout        time.Duration = 15 * time.Second
-	defaultHistoryQueryTimeout time.Duration = 30 * time.Second
+	defaultHistoryQueryTimeout time.Duration = 60 * time.Second
 )
 
 type WorkerUsage struct {
@@ -55,6 +55,10 @@ func (g *greptimeDBProvider) GetWorkersMetrics(ctx context.Context) ([]*WorkerUs
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
 	defer cancel()
+
+	if g.lastQueryTime.IsZero() {
+		g.lastQueryTime = now.Add(-time.Minute)
+	}
 
 	data := []*metrics.HypervisorWorkerUsageMetrics{}
 	// actual meaning:  max(avg[10s])[1m]
@@ -108,8 +112,8 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 	// TODO: supply history resolution to config time window
 	data := []*hypervisorWorkerUsageMetrics{}
 	err := g.db.WithContext(timeoutCtx).
-		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 hour'::INTERVAL, ts) as time_window").
-		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24*7).UnixNano(), now.UnixNano()).
+		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
+		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24).UnixNano(), now.UnixNano()).
 		Group("namespace, workload, worker, time_window").
 		Order("time_window asc").
 		Find(&data).

@@ -123,18 +123,16 @@ var _ = Describe("Autoscaler", func() {
 	})
 
 	Context("when loading real time metrics", func() {
-		It("should update the state of workloads and workers", func() {
+		It("should correctly update the stat of the workload", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
 			defer tfEnv.Cleanup()
 			pool := tfEnv.GetGPUPool(0)
 			workload := createWorkload(pool, 0, 1)
-			workers := getWorkers(workload)
+			worker := getWorkers(workload)[0]
 			key := WorkloadID{workload.Namespace, workload.Name}
 			defer deleteWorkload(workload)
-
-			worker := workers[0].Name
 
 			scaler, _ := NewAutoscaler(k8sClient, allocator, &FakeMetricsProvider{})
 			scaler.loadWorkloads(ctx)
@@ -143,7 +141,7 @@ var _ = Describe("Autoscaler", func() {
 			usage := &metrics.WorkerUsage{
 				Namespace:    workload.Namespace,
 				WorkloadName: workload.Name,
-				WorkerName:   worker,
+				WorkerName:   worker.Name,
 				TflopsUsage:  12.0,
 				VramUsage:    9000,
 				Timestamp:    now,
@@ -153,11 +151,25 @@ var _ = Describe("Autoscaler", func() {
 			scaler.loadRealTimeMetrics(ctx)
 
 			scalerWorkers := scaler.workloads[key].WorkerUsageSamplers
-			Expect(scalerWorkers[worker].LastTflopsSampleTime).To(Equal(usage.Timestamp))
+			Expect(scalerWorkers[worker.Name].LastTflopsSampleTime).To(Equal(usage.Timestamp))
 			Expect(ws.WorkerUsageAggregator.TflopsHistogram.IsEmpty()).To(BeFalse())
-			Expect(scalerWorkers[worker].VramPeak).To(Equal(usage.VramUsage))
-			Expect(scalerWorkers[worker].LastVramSampleTime).To(Equal(usage.Timestamp))
+			Expect(scalerWorkers[worker.Name].VramPeak).To(Equal(usage.VramUsage))
+			Expect(scalerWorkers[worker.Name].LastVramSampleTime).To(Equal(usage.Timestamp))
 			Expect(ws.WorkerUsageAggregator.VramHistogram.IsEmpty()).To(BeFalse())
+			usage = &metrics.WorkerUsage{
+				Namespace:    workload.Namespace,
+				WorkloadName: workload.Name,
+				WorkerName:   worker.Name,
+				TflopsUsage:  13.0,
+				VramUsage:    10000,
+				Timestamp:    now.Add(time.Minute),
+			}
+			scaler.metricsProvider = &FakeMetricsProvider{[]*metrics.WorkerUsage{usage}}
+			scaler.loadRealTimeMetrics(ctx)
+			Expect(scalerWorkers[worker.Name].LastTflopsSampleTime).To(Equal(usage.Timestamp))
+			Expect(scalerWorkers[worker.Name].VramPeak).To(Equal(usage.VramUsage))
+			Expect(scalerWorkers[worker.Name].LastVramSampleTime).To(Equal(usage.Timestamp))
+			Expect(ws.WorkerUsageAggregator.TotalSamplesCount).To(Equal(2))
 		})
 	})
 
@@ -480,6 +492,7 @@ func (f *FakeMetricsProvider) GetHistoryMetrics(ctx context.Context) ([]*metrics
 			for minute := 0; minute < 60; minute++ {
 				// idx := day*24 + hour
 				sample = append(sample, &metrics.WorkerUsage{
+					Namespace:    "default",
 					WorkloadName: "workload-0",
 					WorkerName:   fmt.Sprintf("worker-%d", 1),
 					TflopsUsage:  100.0,

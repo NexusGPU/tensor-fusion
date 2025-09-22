@@ -102,7 +102,6 @@ func (s *Autoscaler) Run(ctx context.Context) {
 
 func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 	log := log.FromContext(ctx)
-	log.Info("loading workloads")
 
 	workloadList := tfv1.TensorFusionWorkloadList{}
 	if err := s.List(ctx, &workloadList); err != nil {
@@ -130,6 +129,8 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 			delete(s.workloads, workloadID)
 		}
 	}
+
+	log.Info("workloads loaded", "workloadCount", len(s.workloads))
 }
 
 func (s *Autoscaler) loadHistoryMetrics(ctx context.Context) error {
@@ -150,7 +151,6 @@ func (s *Autoscaler) loadHistoryMetrics(ctx context.Context) error {
 
 func (s *Autoscaler) loadRealTimeMetrics(ctx context.Context) {
 	log := log.FromContext(ctx)
-	log.Info("loading realtime metrics")
 
 	workersMetrics, err := s.metricsProvider.GetWorkersMetrics(ctx)
 	if err != nil {
@@ -167,7 +167,6 @@ func (s *Autoscaler) loadRealTimeMetrics(ctx context.Context) {
 
 func (s *Autoscaler) processWorkloads(ctx context.Context) {
 	log := log.FromContext(ctx)
-	log.Info("processing workloads")
 
 	for _, workload := range s.workloads {
 		recommendation, err := recommender.GetRecommendation(ctx, workload, s.recommenders)

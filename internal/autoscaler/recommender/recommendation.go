@@ -39,7 +39,7 @@ func (r *recommendationProcessor) Apply(
 	if err != nil || allowedRes == nil {
 		return result, msg, err
 	}
-	log.FromContext(ctx).Info("max allowed resources", "resources", allowedRes)
+	log.FromContext(ctx).Info("max allowed resources", "workload", workload.Name, "resources", allowedRes)
 
 	if isScaleUpTflops && rec.Requests.Tflops.Cmp(allowedRes.Tflops) > 0 {
 		maxTflopsLimit := getProportionalLimit(&rec.Limits.Tflops, &rec.Requests.Tflops, &allowedRes.Tflops)
