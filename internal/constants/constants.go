@@ -124,12 +124,20 @@ const (
 
 	// DRA support
 	// annotation for pod to indicate if DRA is enabled
-	DRAEnabledAnnotation = Domain + "/dra-enabled"
-	DRAResourceClaimName = "tensor-fusion-resource-claim-%s"
+	DRAEnabledAnnotation       = Domain + "/dra-enabled"
+	DRACelExpressionAnnotation = Domain + "/dra-cel-expression"
+
+	DRADriverName        = Domain + ".dra-driver"
+	DRAResourceClaimName = "tensor-fusion-resource-claim-%s-%s"
 	// resource claim name for request
 	DRAResourceClaimRequestName = "tensor-fusion-resource-claim-request-%s"
 
 	DRAClaimDefineName = "tensor-fusion-gpu-claim"
+
+	TensorFusionResourceClaimTemplateLabel = Domain + "/resource-claim-template"
+
+	// ResourceClaimTemplate related constants
+	DRAResourceClaimTemplateName = "tensor-fusion-gpu-template"
 )
 
 // for avoid golang lint issues

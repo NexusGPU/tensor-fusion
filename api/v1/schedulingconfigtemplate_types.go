@@ -216,10 +216,9 @@ type DRAConfig struct {
 	// +optional
 	Enable *bool `json:"enable,omitempty"`
 
-	// ResourceClass specifies the DRA resource class name to use
-	// +kubebuilder:default="tensorfusion.ai/gpu"
+	// ResourceClaimTemplateName specifies the ResourceClaim template name to use
 	// +optional
-	ResourceClass string `json:"resourceClass,omitempty"`
+	ResourceClaimTemplateName string `json:"resourceClaimTemplateName,omitempty"`
 }
 
 // SchedulingConfigTemplateStatus defines the observed state of SchedulingConfigTemplate.

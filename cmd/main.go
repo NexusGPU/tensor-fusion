@@ -56,6 +56,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/controller"
+	"github.com/NexusGPU/tensor-fusion/internal/controller/dra"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
@@ -395,6 +396,15 @@ func startCustomResourceController(
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod")
+		os.Exit(1)
+	}
+
+	// Setup ResourceClaim controller for DRA Phase 2
+	if err = (&dra.ResourceClaimReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ResourceClaim")
 		os.Exit(1)
 	}
 	if err = (&controller.NodeReconciler{
