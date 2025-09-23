@@ -32,12 +32,14 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 )
 
 // GPUNodeClaimReconciler reconciles a GPUNodeClaim object
 type GPUNodeClaimReconciler struct {
 	client.Client
+	Expander *expander.NodeExpander
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 }
@@ -73,6 +75,11 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to get computing vendor config for cluster %s", cluster.Name)
 	}
 
+	// When node really created, remove from in flight nodes
+	if claim.Status.Phase == tfv1.GPUNodeClaimBound {
+		r.Expander.RemoveInFlightNode(claim.Name)
+	}
+
 	provisioningMode := pool.Spec.NodeManagerConfig.ProvisioningMode
 	if provisioningMode == tfv1.ProvisioningModeAutoSelect {
 		log.Info("AutoSelect mode, skip provision node", "name", claim.Name)
@@ -82,6 +89,7 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	needRequeueCheckDeletion := false
 	shouldReturn, err := utils.HandleFinalizer(ctx, claim, r.Client, func(ctx context.Context, claim *tfv1.GPUNodeClaim) (bool, error) {
 		nodeList := &corev1.NodeList{}
+		r.Expander.RemoveInFlightNode(claim.Name)
 		if err := r.List(ctx, nodeList, client.MatchingLabels{constants.ProvisionerLabelKey: claim.Name}); err != nil {
 			if errors.IsNotFound(err) {
 				return true, nil

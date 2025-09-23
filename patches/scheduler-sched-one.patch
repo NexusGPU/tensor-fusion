@@ -1,0 +1,20 @@
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go	2025-09-15 17:45:27
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go	2025-09-15 17:45:19
+@@ -439,7 +439,7 @@
+ 		return result, ErrNoNodesAvailable
+ 	}
+ 
+-	feasibleNodes, diagnosis, err := sched.findNodesThatFitPod(ctx, fwk, state, pod)
++	feasibleNodes, diagnosis, err := sched.FindNodesThatFitPod(ctx, fwk, state, pod)
+ 	if err != nil {
+ 		return result, err
+ 	}
+@@ -479,7 +479,7 @@
+ 
+ // Filters the nodes to find the ones that fit the pod based on the framework
+ // filter plugins and filter extenders.
+-func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, error) {
++func (sched *Scheduler) FindNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, error) {
+ 	logger := klog.FromContext(ctx)
+ 	diagnosis := framework.Diagnosis{
+ 		NodeToStatus: framework.NewDefaultNodeToStatus(),
