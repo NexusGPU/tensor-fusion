@@ -5,10 +5,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
+	"k8s.io/kubernetes/pkg/scheduler"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -21,7 +24,6 @@ const (
 type queuedPod struct {
 	pod       *corev1.Pod
 	queueTime time.Time
-	framework framework.Framework
 }
 
 type UnscheduledPodHandler struct {
@@ -33,7 +35,9 @@ type UnscheduledPodHandler struct {
 	nodeExpander *NodeExpander
 }
 
-func NewUnscheduledPodHandler(ctx context.Context, nodeExpander *NodeExpander) *UnscheduledPodHandler {
+func NewUnscheduledPodHandler(ctx context.Context, scheduler *scheduler.Scheduler,
+	allocator *gpuallocator.GpuAllocator, recorder record.EventRecorder) (*UnscheduledPodHandler, *NodeExpander) {
+	nodeExpander := NewNodeExpander(ctx, allocator, scheduler, recorder)
 	h := &UnscheduledPodHandler{
 		pending:      make(map[string]*corev1.Pod),
 		queue:        make(chan *queuedPod, 100), // Buffered channel for queue
@@ -45,14 +49,17 @@ func NewUnscheduledPodHandler(ctx context.Context, nodeExpander *NodeExpander) *
 	// Start the queue processor
 	go h.processQueue()
 
-	return h
+	return h, nodeExpander
 }
 
-func (h *UnscheduledPodHandler) HandleRejectedPod(ctx context.Context, fwk framework.Framework, podInfo *framework.QueuedPodInfo, status *fwk.Status) {
+func (h *UnscheduledPodHandler) HandleRejectedPod(ctx context.Context, podInfo *framework.QueuedPodInfo, status *fwk.Status) {
 	pod := podInfo.Pod
 	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}
+
+	// take snapshot to avoid modify origin Pod info
+	pod = pod.DeepCopy()
 
 	h.mu.Lock()
 	h.pending[string(pod.UID)] = pod
@@ -65,7 +72,6 @@ func (h *UnscheduledPodHandler) HandleRejectedPod(ctx context.Context, fwk frame
 	case h.queue <- &queuedPod{
 		pod:       pod,
 		queueTime: time.Now(),
-		framework: fwk,
 	}:
 		h.logger.V(2).Info("Pod successfully queued for expansion", "pod", klog.KObj(pod))
 	case <-ctx.Done():
@@ -90,7 +96,7 @@ func (h *UnscheduledPodHandler) processQueue() {
 		case queuedPod := <-h.queue:
 			h.processQueuedPod(queuedPod)
 		case <-h.ctx.Done():
-			h.logger.Info("Queue processor shutting down")
+			h.logger.Info("Pending pod queue processor shutting down")
 			return
 		}
 	}
@@ -120,30 +126,14 @@ func (h *UnscheduledPodHandler) processQueuedPod(qp *queuedPod) {
 		}
 	}
 
-	h.processExpansion(qp)
-}
-
-// processExpansion handles the actual expansion logic
-func (h *UnscheduledPodHandler) processExpansion(qp *queuedPod) {
-	defer h.removePendingPod(qp.pod)
-
-	h.logger.Info("Processing expansion for TensorFusion pod after buffer",
-		"pod", klog.KObj(qp.pod),
-		"bufferTime", BufferDuration)
-
-	// Call the node expander to process expansion
-	if h.nodeExpander != nil {
-		if err := h.nodeExpander.ProcessExpansion(h.ctx, qp.framework, qp.pod); err != nil {
-			h.logger.Error(err, "Failed to process node expansion after buffer",
-				"pod", klog.KObj(qp.pod))
-		} else {
-			h.logger.V(5).Info("Successfully processed node expansion after buffer",
-				"pod", klog.KObj(qp.pod))
-		}
+	if err := h.nodeExpander.ProcessExpansion(h.ctx, qp.pod); err != nil {
+		h.logger.Error(err, "Failed to process node expansion after buffer",
+			"pod", klog.KObj(qp.pod))
 	} else {
-		h.logger.Error(nil, "NodeExpander is nil, cannot process expansion",
+		h.logger.V(5).Info("Successfully processed node expansion after buffer",
 			"pod", klog.KObj(qp.pod))
 	}
+	h.removePendingPod(qp.pod)
 }
 
 // removePendingPod removes a pod from the pending map

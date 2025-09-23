@@ -98,6 +98,8 @@ type GpuAllocator struct {
 	initGPUStoreOnce    sync.Once
 	reconcileWorkerOnce sync.Once
 	initializedCh       chan struct{}
+
+	bindHandlers []func(req *tfv1.AllocRequest)
 }
 
 func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval time.Duration) *GpuAllocator {
@@ -135,6 +137,10 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 	}
 
 	return allocator
+}
+
+func (s *GpuAllocator) RegisterBindHandler(handler func(req *tfv1.AllocRequest)) {
+	s.bindHandlers = append(s.bindHandlers, handler)
 }
 
 func (s *GpuAllocator) GetAllocationInfo() (
@@ -329,6 +335,10 @@ func (s *GpuAllocator) Bind(
 	req.GPUNames = gpuNames
 	s.uniqueAllocation[string(req.PodMeta.UID)] = req
 	s.podNamespaceNsToPodUID[req.PodMeta.Namespace+"/"+req.PodMeta.Name] = string(req.PodMeta.UID)
+
+	for _, handler := range s.bindHandlers {
+		handler(req)
+	}
 	return result, nil
 }
 
@@ -358,7 +368,7 @@ func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 
 func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocRequest, isSimulateSchedule bool) ([]*tfv1.GPU, []filter.FilterDetail, error) {
 	<-s.initializedCh
-	if err := s.quotaStore.CheckQuotaAvailable(req.WorkloadNameNamespace.Namespace, req); err != nil {
+	if err := s.quotaStore.CheckQuotaAvailable(req); err != nil {
 		return nil, nil, err
 	}
 
@@ -532,7 +542,9 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 		}
 
 		// check namespaced level quota
-		if err := s.quotaStore.CheckQuotaAvailable(request.PodMeta.Namespace, &tfv1.AllocRequest{
+		if err := s.quotaStore.CheckQuotaAvailable(&tfv1.AllocRequest{
+			WorkloadNameNamespace: request.WorkloadNameNamespace,
+
 			Count: uint(len(request.GPUNames)),
 			Request: tfv1.Resource{
 				Tflops: deltaTFlopsRequest,

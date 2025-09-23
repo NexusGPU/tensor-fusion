@@ -200,11 +200,12 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 
 		// check if need to set GPUNodeClaim to Bound phase after hypervisor pod is running
 		if node.Labels != nil && node.Labels[constants.ProvisionerLabelKey] != "" {
+			provisionerName := node.Labels[constants.ProvisionerLabelKey]
 			gpuNodeClaim := &tfv1.GPUNodeClaim{}
-			if err := r.Get(ctx, client.ObjectKey{Name: node.Labels[constants.ProvisionerLabelKey]}, gpuNodeClaim); err != nil {
+			if err := r.Get(ctx, client.ObjectKey{Name: provisionerName}, gpuNodeClaim); err != nil {
 				if errors.IsNotFound(err) {
 					log.FromContext(ctx).Info("GPUNodeClaim not found but provisioner is not empty, orphan GPUNode",
-						"name", node.Labels[constants.ProvisionerLabelKey])
+						"name", provisionerName)
 					return nil
 				}
 				return fmt.Errorf("failed to get GPUNodeClaim: %w", err)

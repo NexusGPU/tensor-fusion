@@ -201,7 +201,7 @@ func TestQuotaStore_BasicOperations(t *testing.T) {
 			finalAvail:  QuotaExpectation{TFlops: 40, VRAM: 400, Workers: 9},
 			testFunc: func(t *testing.T, fixture *QuotaTestFixture) {
 				req := createAllocRequest(30, 300, 2)
-				err := fixture.quotaStore.CheckQuotaAvailable(TestNamespace, req)
+				err := fixture.quotaStore.CheckQuotaAvailable(req)
 				require.NoError(t, err)
 				fixture.quotaStore.AllocateQuota(TestNamespace, req)
 			},
@@ -216,7 +216,7 @@ func TestQuotaStore_BasicOperations(t *testing.T) {
 			expectError: true,
 			testFunc: func(t *testing.T, fixture *QuotaTestFixture) {
 				req := createAllocRequest(60, 600, 2)
-				err := fixture.quotaStore.CheckQuotaAvailable(TestNamespace, req)
+				err := fixture.quotaStore.CheckQuotaAvailable(req)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "total.max.tflops.request")
 			},
@@ -271,7 +271,7 @@ func TestQuotaStore_ConcurrentOperations(t *testing.T) {
 			// TODO
 			// fixture.quotaStore.storeMutex.Lock()
 			// defer fixture.quotaStore.storeMutex.Unlock()
-			err := fixture.quotaStore.CheckQuotaAvailable(TestNamespace, req)
+			err := fixture.quotaStore.CheckQuotaAvailable(req)
 			if err == nil {
 				fixture.quotaStore.AllocateQuota(TestNamespace, req)
 				successes <- true
@@ -338,7 +338,7 @@ func TestQuotaStore_BoundaryConditions(t *testing.T) {
 			qs.QuotaStore[TestNamespace] = entry
 
 			req := createAllocRequest(tt.requestTFlops, tt.requestVRAM, tt.requestGPUs)
-			err := qs.CheckQuotaAvailable(TestNamespace, req)
+			err := qs.CheckQuotaAvailable(req)
 
 			if tt.expectError {
 				assert.Error(t, err)

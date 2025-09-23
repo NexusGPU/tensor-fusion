@@ -38,6 +38,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	gpuResourceFitPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	gpuTopoPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gputopo"
 	"github.com/NexusGPU/tensor-fusion/internal/server"
@@ -93,6 +94,7 @@ var dynamicConfigPath string
 var alertEvaluator *alert.AlertEvaluator
 var schedulerConfigPath string
 var alertEvaluatorReady chan struct{}
+var enableAutoExpander bool
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -135,6 +137,8 @@ func main() {
 			"built-in rules if enabled alert, you can configure routers and receivers "+
 			"in your own alertmanager config, "+
 			"refer https://prometheus.io/docs/alerting/latest/configuration")
+	flag.BoolVar(&enableAutoExpander, "enable-auto-expander", false, "if turn on auto expander, "+
+		"TensorFusion will auto expand Nodes then Pending Pods which caused by insufficient GPU resources found")
 
 	klog.InitFlags(nil)
 	flag.Parse()
@@ -224,9 +228,9 @@ func main() {
 	pricingProvider := pricing.NewStaticPricingProvider()
 	startWebhook(mgr, portAllocator, pricingProvider)
 
-	scheduler := startScheduler(ctx, allocator, mgr, k8sVersion)
+	scheduler, nodeExpander := startScheduler(ctx, allocator, mgr, k8sVersion)
 
-	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator)
+	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator, nodeExpander)
 
 	startHttpServerForTFClient(ctx, kc, portAllocator, allocator, scheduler, mgr.Elected())
 
@@ -317,6 +321,7 @@ func startCustomResourceController(
 	metricsRecorder metrics.MetricsRecorder,
 	allocator *gpuallocator.GpuAllocator,
 	portAllocator *portallocator.PortAllocator,
+	nodeExpander *expander.NodeExpander,
 ) {
 	if os.Getenv(constants.EnableCustomResourceControllerEnv) == constants.FalseStringValue {
 		return
@@ -397,6 +402,7 @@ func startCustomResourceController(
 		Scheme:        mgr.GetScheme(),
 		Allocator:     allocator,
 		PortAllocator: portAllocator,
+		Expander:      nodeExpander,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod")
 		os.Exit(1)
@@ -440,6 +446,7 @@ func startCustomResourceController(
 	if err := (&controller.GPUNodeClaimReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
+		Expander: nodeExpander,
 		Recorder: mgr.GetEventRecorderFor("GPUNodeClaim"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUNodeClaim")
@@ -466,9 +473,9 @@ func startScheduler(
 	allocator *gpuallocator.GpuAllocator,
 	mgr manager.Manager,
 	k8sVersion *k8sVer.Version,
-) *scheduler.Scheduler {
+) (*scheduler.Scheduler, *expander.NodeExpander) {
 	if os.Getenv(constants.EnableSchedulerEnv) == constants.FalseStringValue {
-		return nil
+		return nil, nil
 	}
 	if schedulerConfigPath == "" {
 		setupLog.Error(nil, "scheduler config path is empty, please and --scheduler-config in command line")
@@ -484,8 +491,9 @@ func startScheduler(
 		gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
 	)
 
-	cc, scheduler, err := sched.SetupScheduler(
-		ctx, mgr, schedulerConfigPath, false, k8sVersion, allocator, gpuResourceFitOpt, gpuTopoOpt,
+	cc, scheduler, nodeExpander, err := sched.SetupScheduler(
+		ctx, mgr, schedulerConfigPath, false, k8sVersion,
+		allocator, enableAutoExpander, gpuResourceFitOpt, gpuTopoOpt,
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create tensor fusion scheduler")
@@ -496,7 +504,7 @@ func startScheduler(
 		setupLog.Error(err, "unable to run tensor fusion scheduler")
 		os.Exit(1)
 	}
-	return scheduler
+	return scheduler, nodeExpander
 }
 
 func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager.Manager) {
