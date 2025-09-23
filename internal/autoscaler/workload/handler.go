@@ -192,8 +192,11 @@ func (h *handler) GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, e
 		maxVram   int64 = -1
 	)
 	for gpu, workers := range gpuToWorkers {
-		avaiableTflops := gpu.Status.Available.Tflops
-		avaiableVram := gpu.Status.Available.Vram
+		if gpu.Status.Available == nil {
+			return nil, fmt.Errorf("GPU available is nil")
+		}
+		avaiableTflops := gpu.Status.Available.Tflops.DeepCopy()
+		avaiableVram := gpu.Status.Available.Vram.DeepCopy()
 		for _, worker := range workers {
 			avaiableTflops.Add(allocRequests[string(worker.UID)].Request.Tflops)
 			avaiableVram.Add(allocRequests[string(worker.UID)].Request.Vram)
