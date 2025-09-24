@@ -8,6 +8,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -119,6 +120,11 @@ func ParseTensorFusionInfo(
 	// Parse DRA enabled annotation
 	if draProcessor.IsDRAEnabled(ctx, pod) {
 		info.DRAEnabled = true
+	}
+	// Handle dedicated GPU logic
+	err = handleDedicatedGPU(pod, workloadProfile)
+	if err != nil {
+		return info, fmt.Errorf("handle dedicated GPU: %w", err)
 	}
 
 	info.Profile = &workloadProfile.Spec
@@ -232,4 +238,30 @@ func setDefaultQuotasIfExists(workloadProfile *tfv1.WorkloadProfile, single tfv1
 			workloadProfile.Spec.Resources.Limits.Vram = defaultLimit.Vram
 		}
 	}
+}
+
+// handleDedicatedGPU handles dedicated GPU annotation by setting full GPU capacity
+func handleDedicatedGPU(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) error {
+	dedicatedGPU, ok := pod.Annotations[constants.DedicatedGPUAnnotation]
+	if !ok || dedicatedGPU != constants.TrueStringValue {
+		return nil // Not a dedicated GPU request
+	}
+
+	// Must have GPU model specified for dedicated GPU
+	if workloadProfile.Spec.GPUModel == "" {
+		return fmt.Errorf("dedicated GPU requires gpu-model annotation to be specified")
+	}
+
+	// Get full GPU capacity from pricing provider
+	resource, found := gpuallocator.GPUCapacityMap[workloadProfile.Spec.GPUModel]
+	if !found {
+		return fmt.Errorf("could not find capacity information for GPU model: %s", workloadProfile.Spec.GPUModel)
+	}
+
+	// Set full capacity for both requests and limits
+	workloadProfile.Spec.Resources.Requests.Tflops = resource.Tflops
+	workloadProfile.Spec.Resources.Requests.Vram = resource.Vram
+	workloadProfile.Spec.Resources.Limits.Tflops = resource.Tflops
+	workloadProfile.Spec.Resources.Limits.Vram = resource.Vram
+	return nil
 }

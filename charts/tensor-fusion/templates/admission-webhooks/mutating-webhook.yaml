@@ -11,7 +11,7 @@ webhooks:
       namespace: {{ include "tensor-fusion.namespace" . }}
       path: /mutate-v1-pod
   failurePolicy: {{ .Values.controller.admissionWebhooks.failurePolicy }}
-  name: mpod-v1.kb.io
+  name: mpod.tensor-fusion.ai
   rules:
   - apiGroups:
     - ""

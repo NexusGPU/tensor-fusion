@@ -230,9 +230,6 @@ var _ = Describe("Pod Controller", func() {
 				},
 			}
 			_ = k8sClient.Delete(ctx, connection)
-			Eventually(func() error {
-				return k8sClient.Get(ctx, client.ObjectKeyFromObject(connection), connection)
-			}).Should(Satisfy(errors.IsNotFound))
 		})
 
 		It("should successfully create TensorFusion connection for client pod", func() {

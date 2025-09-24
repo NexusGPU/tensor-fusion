@@ -27,6 +27,7 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	. "github.com/onsi/ginkgo/v2"
@@ -134,11 +135,13 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
+	// Create a mock pricing provider for testing
+	mockPricingProvider := &pricing.StaticPricingProvider{}
 	err = SetupPodWebhookWithManager(mgr, &portallocator.PortAllocator{
 		PortRangeStartCluster: 42000,
 		PortRangeEndCluster:   62000,
 		BitmapCluster:         make([]uint64, (62000-42000)/64+1),
-	})
+	}, mockPricingProvider)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:webhook

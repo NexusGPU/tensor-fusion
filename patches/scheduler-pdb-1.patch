@@ -1,16 +1,38 @@
---- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2025-08-06 17:45:27
-+++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2025-08-06 17:45:19
-@@ -20,7 +20,9 @@
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2025-09-15 17:45:27
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2025-09-15 17:45:19
+@@ -20,7 +20,10 @@
  	"context"
  	"fmt"
  	"math/rand"
 +	"os"
  	"sort"
 +	"strconv"
++	"time"
  
  	v1 "k8s.io/api/core/v1"
  	policy "k8s.io/api/policy/v1"
-@@ -364,5 +366,13 @@
+@@ -119,6 +122,20 @@
+ 	// Default behavior: No additional filtering, beyond the internal requirement that the victim pod
+ 	// have lower priority than the preemptor pod.
+ 	pl.IsEligiblePod = func(nodeInfo fwk.NodeInfo, victim fwk.PodInfo, preemptor *v1.Pod) bool {
++		victimAnnotation := victim.GetPod().Annotations
++		if victimAnnotation == nil {
++			return true
++		}
++		if protectionPeriod, ok := victimAnnotation["tensor-fusion.ai/eviction-protection"]; ok {
++			duration, err := time.ParseDuration(protectionPeriod)
++			if err != nil {
++				return true
++			}
++			// Still in protection period, not allow to preempt
++			if time.Now().Before(victim.GetPod().CreationTimestamp.Add(duration)) {
++				return false
++			}
++		}
+ 		return true
+ 	}
+ 
+@@ -430,5 +447,13 @@
  }
  
  func getPDBLister(informerFactory informers.SharedInformerFactory) policylisters.PodDisruptionBudgetLister {
@@ -24,3 +46,4 @@
 +	}
  	return informerFactory.Policy().V1().PodDisruptionBudgets().Lister()
  }
+ 

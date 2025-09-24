@@ -42,6 +42,14 @@ var _ = Describe("GPUPool Controller", func() {
 				pool := tfEnv.GetGPUPool(0)
 				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
 			}).Should(Succeed())
+			Eventually(func(g Gomega) {
+				nodeList := tfEnv.GetGPUNodeList(0)
+				for _, gpuNode := range nodeList.Items {
+					node := &corev1.Node{}
+					g.Expect(k8sClient.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, node)).Should(Succeed())
+					g.Expect(node.Labels).To(HaveKey(constants.LabelNodeSelectorHash))
+				}
+			}).Should(Succeed())
 			tfEnv.Cleanup()
 		})
 	})

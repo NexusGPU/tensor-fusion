@@ -6,12 +6,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/quota"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
@@ -19,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -57,9 +60,15 @@ type GPUSchedulingStateData struct {
 	// In Reserve stage, bind GPUs to pod, update allocator cache
 	// In PostBind stage, fetch final GPUs call Pod patch API to update annotation
 	FinalGPUs []string
+
+	// Preempt pods
+	PreemptPods sync.Map
+
+	// IsPreemption
+	IsPreemption bool
 }
 
-func (p *GPUSchedulingStateData) Clone() framework.StateData {
+func (p *GPUSchedulingStateData) Clone() fwk.StateData {
 	return p
 }
 
@@ -94,7 +103,7 @@ func (s *GPUFit) Name() string {
 	return Name
 }
 
-func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
+func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, _ []fwk.NodeInfo) (*framework.PreFilterResult, *fwk.Status) {
 	// Handle progressive migration case
 	if utils.IsProgressiveMigration() && utils.HasGPUResourceRequest(pod) {
 		nodeNames := s.allocator.ListNonUsingNodes()
@@ -103,7 +112,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 			"use native GPU resources, available native GPU nodes: "+strconv.Itoa(len(nodeNames)))
 		return &framework.PreFilterResult{
 			NodeNames: nodeNames,
-		}, framework.NewStatus(framework.Success, "progressive migration for native resources claim")
+		}, fwk.NewStatus(fwk.Success, "progressive migration for native resources claim")
 	}
 
 	// Check if DRA mode is enabled for this pod
@@ -113,14 +122,14 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 
 	// Skip non tensor-fusion mode
 	if !utils.IsTensorFusionWorker(pod) {
-		return nil, framework.NewStatus(framework.Skip, "skip for non tensor-fusion mode")
+		return nil, fwk.NewStatus(fwk.Skip, "skip for non tensor-fusion mode")
 	}
 
 	// Handle tensor-fusion mode scheduling
 	s.logger.Info("checking GPU node resources for pod", "pod", pod.Name)
 	allocRequest, reason, err := s.allocator.ComposeAllocationRequest(pod)
 	if err != nil {
-		return nil, framework.NewStatus(framework.Error, reason)
+		return nil, fwk.NewStatus(fwk.Error, reason)
 	}
 	state.Write(CycleStateAllocateRequest, allocRequest)
 
@@ -140,7 +149,16 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUQuotaOrCapacityNotEnough",
 			"check quota and filter", "TensorFusion schedule failed, no enough resource or quotas: "+err.Error())
 		s.logger.Error(err, "failed to check quota and filter", "pod", pod.Name)
-		return nil, framework.NewStatus(framework.Unschedulable, err.Error())
+
+		if quotaErr, ok := err.(*quota.QuotaExceededError); ok {
+			if quotaErr.Unresolvable {
+				return nil, fwk.NewStatus(fwk.UnschedulableAndUnresolvable, quotaErr.Error())
+			} else {
+				return nil, fwk.NewStatus(fwk.Unschedulable, err.Error())
+			}
+		} else {
+			return nil, fwk.NewStatus(fwk.Unschedulable, err.Error())
+		}
 	}
 
 	validNodesValidGPUs := lo.GroupBy(filteredGPUs, func(gpu *tfv1.GPU) string {
@@ -148,10 +166,14 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 	})
 	validNodeNonMatchingGPUs := make(map[string][]*tfv1.GPU, len(validNodesValidGPUs))
 
-	nodeNames := sets.New[string]()
+	cnt := 0
+	allGPUNodeNames := sets.New[string]()
 	nodeGPUs := s.allocator.GetNodeGpuStore()
+	for k := range nodeGPUs {
+		allGPUNodeNames.Insert(k)
+	}
 	for k, matchedGPUs := range validNodesValidGPUs {
-		nodeNames.Insert(k)
+		cnt++
 
 		// get all GPUs on this node
 		allGPUs := nodeGPUs[k]
@@ -163,11 +185,17 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 			continue
 		}
 
+		preAllocSize := total - matched
+		if preAllocSize <= 0 {
+			s.logger.Error(nil, "Filtering GPU error, unexpected less than 0", "pod",
+				pod.Name, "node", k, "totalGPU count", total, "matchedGPU count", matched)
+			preAllocSize = 2
+		}
 		// range if it's not in validNodesValidGPUs, add to validNodeNonMatchingGPUs
-		validNodeNonMatchingGPUs[k] = make([]*tfv1.GPU, 0, total-matched)
+		validNodeNonMatchingGPUs[k] = make([]*tfv1.GPU, 0, preAllocSize)
 		for gpuName, gpu := range allGPUs {
 			seen := false
-			// just loop because the number always <= 8
+			// just loop because the number always <= 8/16
 			for _, matchedGPU := range matchedGPUs {
 				if gpuName == matchedGPU.Name {
 					seen = true
@@ -179,7 +207,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 			}
 		}
 	}
-	s.logger.Info("filtered valid node GPUs", "nodes count", nodeNames.Len(), "pod", pod.Name)
+	s.logger.Info("filtered valid node GPUs", "nodes count", cnt, "pod", pod.Name)
 
 	// assign score based on different strategies
 	score := s.allocator.Score(ctx, s.cfg, allocRequest, validNodesValidGPUs)
@@ -188,7 +216,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 	notMatchingGPUScore := s.allocator.Score(ctx, s.cfg, allocRequest, validNodeNonMatchingGPUs)
 
 	s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "PreScheduleDone", "pre filter for TensorFusion workload",
-		"TensorFusion pre schedule done, valid GPU node count: "+strconv.Itoa(nodeNames.Len()))
+		"TensorFusion pre schedule done, valid GPU node count: "+strconv.Itoa(cnt))
 
 	if s.logger.V(6).Enabled() {
 		jsonStr, _ := json.Marshal(validNodesValidGPUs)
@@ -201,65 +229,133 @@ func (s *GPUFit) PreFilter(ctx context.Context, state *framework.CycleState, pod
 		ValidNodeGPUScore:            score,
 		ValidNodeNotMatchingGPUScore: notMatchingGPUScore,
 		FinalGPUs:                    []string{},
+		PreemptPods:                  sync.Map{},
+		IsPreemption:                 false,
 	})
 
 	return &framework.PreFilterResult{
-		NodeNames: nodeNames,
-	}, framework.NewStatus(framework.Success)
+		NodeNames: allGPUNodeNames,
+	}, fwk.NewStatus(fwk.Success)
 }
 
 func (s *GPUFit) PreFilterExtensions() framework.PreFilterExtensions {
-	return nil
+	return s
 }
 
-func (s *GPUFit) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+func (s *GPUFit) AddPod(ctx context.Context, state fwk.CycleState, pod *v1.Pod, podInfoToAdd fwk.PodInfo, nodeInfo fwk.NodeInfo) *fwk.Status {
+	stateData, err := state.Read(CycleStateGPUSchedulingResult)
+	if err != nil {
+		return fwk.NewStatus(fwk.Error, err.Error())
+	}
+	stateDataParsed := stateData.(*GPUSchedulingStateData)
+	if pods, ok := stateDataParsed.PreemptPods.Load(nodeInfo.Node().Name); ok {
+		podsParsed := pods.(sets.Set[types.NamespacedName])
+
+		nameNs := types.NamespacedName{
+			Namespace: podInfoToAdd.GetPod().Namespace,
+			Name:      podInfoToAdd.GetPod().Name,
+		}
+		if podsParsed.Has(nameNs) {
+			podsParsed.Delete(nameNs)
+		}
+	}
+	return fwk.NewStatus(fwk.Success, "")
+}
+
+func (s *GPUFit) RemovePod(ctx context.Context, state fwk.CycleState, pod *v1.Pod, podInfoToRemove fwk.PodInfo, nodeInfo fwk.NodeInfo) *fwk.Status {
+	stateData, err := state.Read(CycleStateGPUSchedulingResult)
+	if err != nil {
+		if fwk.ErrNotFound == err {
+			stateData = &GPUSchedulingStateData{
+				PreemptPods: sync.Map{},
+			}
+			state.Write(CycleStateGPUSchedulingResult, stateData)
+		} else {
+			return fwk.NewStatus(fwk.Error, err.Error())
+		}
+	}
+	stateDataParsed := stateData.(*GPUSchedulingStateData)
+	stateDataParsed.IsPreemption = true
+	if pods, ok := stateDataParsed.PreemptPods.Load(nodeInfo.Node().Name); ok {
+		parsedPods := pods.(sets.Set[types.NamespacedName])
+		parsedPods.Insert(types.NamespacedName{
+			Namespace: podInfoToRemove.GetPod().Namespace,
+			Name:      podInfoToRemove.GetPod().Name,
+		})
+	} else {
+		stateDataParsed.PreemptPods.Store(nodeInfo.Node().Name, sets.New(types.NamespacedName{
+			Namespace: podInfoToRemove.GetPod().Namespace,
+			Name:      podInfoToRemove.GetPod().Name,
+		}))
+	}
+	return fwk.NewStatus(fwk.Success, "")
+}
+
+func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeInfo fwk.NodeInfo) *fwk.Status {
 	// Check if DRA mode is enabled for this pod
 	if isDRAEnabled(pod) && hasDRAClaim(pod) {
 		return framework.NewStatus(framework.Skip, "DRA mode enabled, skipping custom GPU filter")
 	}
 
 	if !utils.IsTensorFusionWorker(pod) {
-		return framework.NewStatus(framework.Success, "skip for non tensor-fusion mode")
+		return fwk.NewStatus(fwk.Success, "skip for non tensor-fusion mode")
 	}
 
 	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
-		return framework.NewStatus(framework.Error, err.Error())
+		return fwk.NewStatus(fwk.Error, err.Error())
 	}
-	nodeName := nodeInfo.GetName()
+
+	// k8s will RemoveAll Pods, and run Filter for high priority pod,
+	// then Scheduler framework will reprieve victims one by one until filter returns unschedulable
+	if filterResult.(*GPUSchedulingStateData).IsPreemption {
+		allocRequest, err := state.Read(CycleStateAllocateRequest)
+		allocRequestParsed := allocRequest.(*tfv1.AllocRequest)
+		if err != nil {
+			return fwk.NewStatus(fwk.Error, err.Error())
+		}
+		podsToPreempt, ok := filterResult.(*GPUSchedulingStateData).PreemptPods.Load(nodeInfo.Node().Name)
+		if !ok {
+			return fwk.NewStatus(fwk.Unschedulable, "no pods to preempt")
+		}
+		podsToPreemptParsed := podsToPreempt.(sets.Set[types.NamespacedName])
+		err = s.allocator.CheckQuotaAndFilterSingleNodePreempt(
+			nodeInfo.Node().Name, allocRequestParsed, podsToPreemptParsed)
+		if err != nil {
+			return fwk.NewStatus(fwk.Unschedulable, err.Error())
+		}
+		return fwk.NewStatus(fwk.Success, "")
+	}
+
+	nodeName := nodeInfo.Node().Name
 	if _, ok := filterResult.(*GPUSchedulingStateData).NodeGPUs[nodeName]; !ok {
-		return framework.NewStatus(framework.Unschedulable, "no valid node found, gpu capacity not enough")
+		return fwk.NewStatus(fwk.Unschedulable, "no valid node found, gpu capacity not enough")
 	}
-	return framework.NewStatus(framework.Success, "")
+	return fwk.NewStatus(fwk.Success, "")
 }
 
 func (s *GPUFit) Score(
 	ctx context.Context,
-	state *framework.CycleState,
+	state fwk.CycleState,
 	pod *v1.Pod,
 	nodeInfo *framework.NodeInfo,
 ) (int64, *framework.Status) {
-	// Check if DRA mode is enabled for this pod
-	if isDRAEnabled(pod) && hasDRAClaim(pod) {
-		return 0, framework.NewStatus(framework.Skip, "DRA mode enabled, skipping custom GPU scoring")
-	}
-
 	// Skip non tensor-fusion mode scheduling
 	if !utils.IsTensorFusionWorker(pod) {
-		return 0, framework.NewStatus(framework.Success, "")
+		return 0, fwk.NewStatus(fwk.Success, "")
 	}
 
 	if state == nil {
-		return 0, framework.NewStatus(framework.Error, "no valid node found, gpu capacity not enough")
+		return 0, fwk.NewStatus(fwk.Error, "no valid node found, gpu capacity not enough")
 	}
 	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
-		return 0, framework.NewStatus(framework.Error, err.Error())
+		return 0, fwk.NewStatus(fwk.Error, err.Error())
 	}
 	scheduledState := filterResult.(*GPUSchedulingStateData)
-	gpuScoreMap, ok := scheduledState.ValidNodeGPUScore[nodeInfo.GetName()]
+	gpuScoreMap, ok := scheduledState.ValidNodeGPUScore[nodeInfo.Node().Name]
 	if !ok {
-		return 0, framework.NewStatus(framework.Unschedulable, "no valid node found, gpu capacity not enough")
+		return 0, fwk.NewStatus(fwk.Unschedulable, "no valid node found, gpu capacity not enough")
 	}
 	// normalize to 0-100, when node has more GPUs but filtered out,
 	// should consider it as 100 when strategy is compact_first, and consider as 0 when is low_load_first
@@ -268,7 +364,7 @@ func (s *GPUFit) Score(
 		sum += score
 	}
 
-	notMatchingGPUScoreMap, ok := scheduledState.ValidNodeNotMatchingGPUScore[nodeInfo.GetName()]
+	notMatchingGPUScoreMap, ok := scheduledState.ValidNodeNotMatchingGPUScore[nodeInfo.Node().Name]
 	if ok {
 		for _, score := range notMatchingGPUScoreMap {
 			sum += score
@@ -282,31 +378,26 @@ func (s *GPUFit) ScoreExtensions() framework.ScoreExtensions {
 }
 
 func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
-	// Check if DRA mode is enabled for this pod
-	if isDRAEnabled(pod) && hasDRAClaim(pod) {
-		return framework.NewStatus(framework.Success, "DRA mode enabled, skipping custom GPU reservation")
-	}
-
 	if !utils.IsTensorFusionWorker(pod) {
-		return framework.NewStatus(framework.Success, "skip for non tensor-fusion mode")
+		return fwk.NewStatus(fwk.Success, "skip for non tensor-fusion mode")
 	}
 
 	s.logger.Info("Reserving pod for GPU resources", "pod", pod.Name, "node", nodeName)
 	allocRequest, err := state.Read(CycleStateAllocateRequest)
 	if err != nil {
-		return framework.NewStatus(framework.Error, err.Error())
+		return fwk.NewStatus(fwk.Error, err.Error())
 	}
 
 	schedulingResultRaw, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
-		return framework.NewStatus(framework.Error, err.Error())
+		return fwk.NewStatus(fwk.Error, err.Error())
 	}
 
 	// set final GPUs and try update GPU allocator cache
 	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
 	gpuScoreMap, ok := schedulingResult.ValidNodeGPUScore[nodeName]
 	if !ok {
-		return framework.NewStatus(framework.Unschedulable, "no valid node found, gpu capacity not enough")
+		return fwk.NewStatus(fwk.Unschedulable, "no valid node found, gpu capacity not enough")
 	}
 
 	// find top N score GPUs in this node
@@ -327,17 +418,12 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 		allocRequest.(*tfv1.AllocRequest),
 	)
 	if err != nil {
-		return framework.NewStatus(framework.Error, err.Error())
+		return fwk.NewStatus(fwk.Error, err.Error())
 	}
-	return framework.NewStatus(framework.Success, "")
+	return fwk.NewStatus(fwk.Success, "")
 }
 
 func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
-	// Check if DRA mode is enabled for this pod
-	if isDRAEnabled(pod) && hasDRAClaim(pod) {
-		return // DRA handles unreservation
-	}
-
 	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}
@@ -357,11 +443,6 @@ func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod
 }
 
 func (s *GPUFit) PostBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
-	// Check if DRA mode is enabled for this pod
-	if isDRAEnabled(pod) && hasDRAClaim(pod) {
-		return // DRA handles post-bind actions
-	}
-
 	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}

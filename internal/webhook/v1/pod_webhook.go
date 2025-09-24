@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -46,7 +47,7 @@ import (
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // SetupPodWebhookWithManager registers the webhook for Pod in the manager.
-func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator) error {
+func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator, pricingProvider pricing.PricingProvider) error {
 	webhookServer := mgr.GetWebhookServer()
 
 	// Initialize DRA processor
@@ -178,6 +179,12 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	// Common processing for both DRA and regular modes
 	utils.AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod, tfInfo)
 	utils.AddTFDefaultClientConfBeforePatch(ctx, pod, pool, tfInfo, containerIndices)
+
+	// Add priorityClass if contains higher QoS level and Pod priority class not specified
+	if pod.Spec.PriorityClassName == "" &&
+		(tfInfo.Profile.Qos == tfv1.QoSHigh || tfInfo.Profile.Qos == tfv1.QoSCritical) {
+		pod.Spec.PriorityClassName = constants.TensorFusionSystemName + string(tfInfo.Profile.Qos)
+	}
 
 	// Inject initContainer and env variables
 	patches, err := m.patchTFClient(
@@ -413,7 +420,7 @@ func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *co
 	if pod.GenerateName == "" && pod.Name != "" {
 		prefix = pod.Name + constants.TFConnectionNamePrefix
 	} else {
-		prefix = pod.GenerateName + constants.TFConnectionNamePrefix
+		prefix = pod.GenerateName + constants.TFConnectionNameNoPrefix
 	}
 	connectionName := fmt.Sprintf("%s%s", prefix, utils.NewShortID(10))
 	connectionNamespace := pod.Namespace
@@ -537,16 +544,17 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 }
 
 func calculateQoSLevel(profile *tfv1.WorkloadProfileSpec, pool *tfv1.GPUPool) tfv1.QoSLevel {
-	sameReqLimits := profile.Resources.Limits.Tflops.Cmp(profile.Resources.Requests.Tflops) == 0 &&
-		profile.Resources.Limits.Vram.Cmp(profile.Resources.Requests.Vram) == 0
-
-	// set to critical if req == limits, same logic as Kubernetes QoS
-	if sameReqLimits {
-		return constants.QoSLevelCritical
-	}
-
 	// when not set, assign default QoS
 	if profile.Qos == "" {
+		sameReqLimits := profile.Resources.Limits.Tflops.Cmp(profile.Resources.Requests.Tflops) == 0 &&
+			profile.Resources.Limits.Vram.Cmp(profile.Resources.Requests.Vram) == 0
+
+		// set to high if req == limits, same logic as Kubernetes QoS
+		// critical QoS can preempt other pods, have to be set manually
+		if sameReqLimits {
+			return constants.QoSLevelHigh
+		}
+
 		if pool.Spec.QosConfig == nil || pool.Spec.QosConfig.DefaultQoS == "" {
 			return constants.QoSLevelMedium
 		}

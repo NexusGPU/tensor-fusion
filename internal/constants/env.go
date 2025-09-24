@@ -73,9 +73,10 @@ const (
 	LdPreloadFileName = "ld.so.preload"
 	LdPreloadFile     = "/etc/ld.so.preload"
 
-	TFLibsVolumeName       = "tf-libs"
-	TFLibsVolumeMountPath  = "/tensor-fusion"
-	TFConnectionNamePrefix = "-tf-vgpu-"
+	TFLibsVolumeName         = "tf-libs"
+	TFLibsVolumeMountPath    = "/tensor-fusion"
+	TFConnectionNamePrefix   = "-tf-vgpu-"
+	TFConnectionNameNoPrefix = "tf-vgpu-"
 
 	HostIPFieldRef       = "status.hostIP"
 	NodeNameFieldRef     = "spec.nodeName"
@@ -98,8 +99,7 @@ const (
 	LdPreloadEnv     = "LD_PRELOAD"
 	LdPreloadLimiter = "/home/app/libcuda_limiter.so"
 
-	SharedMemDeviceName   = "/dev/shm"
-	SharedMemMountSubPath = "shm"
+	SharedMemMountSubPath = "/shm"
 
 	// disable GPU limiter, for emergency use
 	DisableGpuLimiterEnv = "DISABLE_GPU_LIMITER"

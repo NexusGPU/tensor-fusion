@@ -67,6 +67,25 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/version"
 	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	k8sVer "k8s.io/apimachinery/pkg/util/version"
+	"k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/cmd/kube-scheduler/app"
+	"k8s.io/kubernetes/pkg/scheduler"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/yaml"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -207,6 +226,14 @@ func main() {
 	_ = os.Setenv(constants.KubeApiVersionMajorEnv, version.Major)
 	_ = os.Setenv(constants.KubeApiVersionMinorEnv, version.Minor)
 
+	// TODO: there will still be risk after FeatureGate removed when the feature is stable for a long time
+	// To be compatible with long-term k8s version, need to patch Kubernetes source code
+	k8sVersion := k8sVer.MustParseSemantic(version.String())
+	err = feature.DefaultMutableFeatureGate.SetEmulationVersion(k8sVersion)
+	if err != nil {
+		setupLog.Error(err, "unable to set k8s version for feature gating")
+	}
+
 	alertEvaluatorReady = make(chan struct{})
 	setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
 
@@ -220,9 +247,11 @@ func main() {
 	// Initialize GPU allocator and set up watches
 	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr)
 
-	startWebhook(mgr, portAllocator)
+	// Create pricing provider for webhook
+	pricingProvider := pricing.NewStaticPricingProvider()
+	startWebhook(mgr, portAllocator, pricingProvider)
 
-	scheduler := startScheduler(ctx, allocator, mgr)
+	scheduler := startScheduler(ctx, allocator, mgr, k8sVersion)
 
 	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator)
 
@@ -359,9 +388,10 @@ func startCustomResourceController(
 	}
 
 	if err = (&controller.GPUNodeReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("GPUNode"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("GPUNode"),
+		Allocator: allocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUNode")
 		os.Exit(1)
@@ -453,11 +483,15 @@ func startCustomResourceController(
 	}
 }
 
-func startWebhook(mgr manager.Manager, portAllocator *portallocator.PortAllocator) {
+func startWebhook(
+	mgr manager.Manager,
+	portAllocator *portallocator.PortAllocator,
+	pricingProvider pricing.PricingProvider,
+) {
 	if os.Getenv(constants.EnableWebhookEnv) == constants.FalseStringValue {
 		return
 	}
-	if err := webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator); err != nil {
+	if err := webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator, pricingProvider); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
 		os.Exit(1)
 	}
@@ -467,6 +501,7 @@ func startScheduler(
 	ctx context.Context,
 	allocator *gpuallocator.GpuAllocator,
 	mgr manager.Manager,
+	k8sVersion *k8sVer.Version,
 ) *scheduler.Scheduler {
 	if os.Getenv(constants.EnableSchedulerEnv) == constants.FalseStringValue {
 		return nil
@@ -485,7 +520,9 @@ func startScheduler(
 		gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
 	)
 
-	cc, scheduler, err := sched.SetupScheduler(ctx, mgr, schedulerConfigPath, false, gpuResourceFitOpt, gpuTopoOpt)
+	cc, scheduler, err := sched.SetupScheduler(
+		ctx, mgr, schedulerConfigPath, false, k8sVersion, gpuResourceFitOpt, gpuTopoOpt,
+	)
 	if err != nil {
 		setupLog.Error(err, "unable to create tensor fusion scheduler")
 		os.Exit(1)
@@ -582,7 +619,7 @@ func startMetricsRecorder(
 
 		// Worker level map will be updated by cluster reconcile
 		// Key is poolName, second level key is QoS level
-		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
+		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing, 8),
 	}
 	if enableLeaderElection {
 		go func() {

@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	k8sVer "k8s.io/apimachinery/pkg/util/version"
+	"k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/component-base/configz"
 	"k8s.io/klog/v2"
@@ -50,6 +52,7 @@ func SetupScheduler(
 	mgr manager.Manager,
 	schedulerConfigPath string,
 	disableHttpEndpoint bool,
+	k8sVersion *k8sVer.Version,
 	outOfTreeRegistryOptions ...app.Option,
 ) (*schedulerserverconfig.CompletedConfig, *scheduler.Scheduler, error) {
 	opts := options.NewOptions()
@@ -69,6 +72,12 @@ func SetupScheduler(
 		return nil, nil, err
 	}
 	err = opts.ComponentGlobalsRegistry.Set()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Setup enumerationVersion again since it's overridden by the config
+	err = feature.DefaultMutableFeatureGate.SetEmulationVersion(k8sVersion)
 	if err != nil {
 		return nil, nil, err
 	}

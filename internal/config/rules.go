@@ -132,7 +132,7 @@ func (r *AlertRule) toPostableAlert(alertQueryResult map[string]interface{}, sta
 	labels := LabelSet{
 		"alertname": r.Name,
 		"severity":  r.Severity,
-		"job":       constants.AlertJobName,
+		"job":       constants.TensorFusionSystemName,
 		"instance":  instance,
 	}
 	annotations := LabelSet{

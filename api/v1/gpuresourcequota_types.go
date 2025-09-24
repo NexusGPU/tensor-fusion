@@ -19,7 +19,7 @@ package v1
 import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
+	fwk "k8s.io/kube-scheduler/framework"
 )
 
 // GPUResourceQuotaSpec defines the desired state of GPUResourceQuota
@@ -192,6 +192,12 @@ type AllocRequest struct {
 
 	// cel filter expression
 	CELFilterExpression string
+
+	QoS QoSLevel
+}
+
+func (p *AllocRequest) Clone() fwk.StateData {
+	return p
 }
 
 type GPUAllocationInfo struct {
@@ -209,7 +215,7 @@ type AdjustRequest struct {
 	NewLimit   Resource
 }
 
-func (ar *AllocRequest) Clone() framework.StateData {
+func (ar *AdjustRequest) Clone() fwk.StateData {
 	return ar
 }
 
