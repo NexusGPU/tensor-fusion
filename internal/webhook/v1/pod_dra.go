@@ -136,7 +136,7 @@ func (p *DRAProcessor) HandleDRAAdmission(ctx context.Context, pod *corev1.Pod, 
 	return nil
 }
 
-// TODO: support more attributes for filtering
+// BuildCELSelector constructs a CEL expression for DRA device selection based on TensorFusion requirements
 func BuildCELSelector(pod *corev1.Pod, tfInfo *utils.TensorFusionInfo) (string, error) {
 	var conditions []string
 
@@ -152,6 +152,28 @@ func BuildCELSelector(pod *corev1.Pod, tfInfo *utils.TensorFusionInfo) (string, 
 	// 2. GPU model filter (if specified - basic attribute that should be widely supported)
 	if tfInfo.Profile.GPUModel != "" {
 		conditions = append(conditions, fmt.Sprintf(`device.attributes["model"] == "%s"`, tfInfo.Profile.GPUModel))
+	}
+
+	// 3. GPU count requirement (important for multi-GPU workloads)
+	if tfInfo.Profile.GPUCount > 0 {
+		conditions = append(conditions, fmt.Sprintf(`int(device.attributes["gpu_count"]) >= %d`, tfInfo.Profile.GPUCount))
+	}
+
+	// 4. Pool name filter (for resource isolation and scheduling preferences)
+	if tfInfo.Profile.PoolName != "" {
+		conditions = append(conditions, fmt.Sprintf(`device.attributes["pool_name"] == "%s"`, tfInfo.Profile.PoolName))
+	}
+
+	// 5. Workload name filter (for workload-specific device assignment)
+	if tfInfo.WorkloadName != "" {
+		conditions = append(conditions, fmt.Sprintf(`device.attributes["workload_name"] == "%s"`, tfInfo.WorkloadName))
+		// Workload namespace is same as pod namespace in TensorFusion
+		conditions = append(conditions, fmt.Sprintf(`device.attributes["workload_namespace"] == "%s"`, pod.Namespace))
+	}
+
+	// 6. Pod namespace filter (for namespace-based device isolation)
+	if pod.Namespace != "" {
+		conditions = append(conditions, fmt.Sprintf(`device.attributes["pod_namespace"] == "%s"`, pod.Namespace))
 	}
 
 	// Return a basic condition if no specific requirements

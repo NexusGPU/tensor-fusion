@@ -1355,7 +1355,7 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 		Limit:    gpuLimitResource,
 
 		DisableCELFilter:    disableCELFilter,
-		CELFilterExpression: pod.Annotations[constants.CELFilterExpressionAnnotation],
+		CELFilterExpression: pod.Annotations[constants.DRACelExpressionAnnotation],
 
 		Count:    uint(count),
 		GPUModel: pod.Annotations[constants.GPUModelAnnotation],

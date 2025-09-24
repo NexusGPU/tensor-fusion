@@ -149,37 +149,137 @@ func TestDRAProcessor_HandleDRAAdmission(t *testing.T) {
 }
 
 func TestBuildCELSelector(t *testing.T) {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pod",
-			Namespace: "test-namespace",
-		},
-	}
-
-	tfInfo := &utils.TensorFusionInfo{
-		Profile: &tfv1.WorkloadProfileSpec{
-			GPUCount: 2,
-			Resources: tfv1.Resources{
-				Requests: tfv1.Resource{
-					Tflops: resource.MustParse("20"),
-					Vram:   resource.MustParse("16Gi"),
+	tests := []struct {
+		name                 string
+		pod                  *corev1.Pod
+		tfInfo               *utils.TensorFusionInfo
+		expectedConditions   []string
+		unexpectedConditions []string
+	}{
+		{
+			name: "Basic resource filters",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
 				},
 			},
-			GPUModel: "H100",
+			tfInfo: &utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					GPUCount: 2,
+					Resources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							Tflops: resource.MustParse("20"),
+							Vram:   resource.MustParse("16Gi"),
+						},
+					},
+					GPUModel: "H100",
+				},
+			},
+			expectedConditions: []string{
+				`device.attributes["tflops"].quantity >= quantity("20")`,
+				`device.attributes["vram"].quantity >= quantity("16Gi")`,
+				`device.attributes["model"] == "H100"`,
+				`int(device.attributes["gpu_count"]) >= 2`,
+				`device.attributes["pod_namespace"] == "test-namespace"`,
+			},
+		},
+		{
+			name: "All filters including pool and workload",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "production",
+				},
+			},
+			tfInfo: &utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					GPUCount: 1,
+					Resources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							Tflops: resource.MustParse("10"),
+							Vram:   resource.MustParse("8Gi"),
+						},
+					},
+					GPUModel: "A100",
+					PoolName: "high-priority",
+				},
+				WorkloadName: "ml-training-job",
+			},
+			expectedConditions: []string{
+				`device.attributes["tflops"].quantity >= quantity("10")`,
+				`device.attributes["vram"].quantity >= quantity("8Gi")`,
+				`device.attributes["model"] == "A100"`,
+				`int(device.attributes["gpu_count"]) >= 1`,
+				`device.attributes["pool_name"] == "high-priority"`,
+				`device.attributes["workload_name"] == "ml-training-job"`,
+				`device.attributes["workload_namespace"] == "production"`,
+				`device.attributes["pod_namespace"] == "production"`,
+			},
+		},
+		{
+			name: "Zero resources fallback to default condition",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "default",
+				},
+			},
+			tfInfo: &utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					GPUCount: 0, // Zero count should not add condition
+					Resources: tfv1.Resources{
+						Requests: tfv1.Resource{
+							// Zero resources
+						},
+					},
+				},
+			},
+			expectedConditions: []string{
+				`device.attributes["pod_namespace"] == "default"`,
+			},
+		},
+		{
+			name: "Empty resources fallback to basic condition",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "",
+				},
+			},
+			tfInfo: &utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					// All empty/zero values
+				},
+			},
+			expectedConditions: []string{
+				`device.attributes.exists("type")`,
+			},
 		},
 	}
 
-	celExpression, err := BuildCELSelector(pod, tfInfo)
-	require.NoError(t, err)
-	require.NotEmpty(t, celExpression)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			celExpression, err := BuildCELSelector(tt.pod, tt.tfInfo)
+			require.NoError(t, err)
+			require.NotEmpty(t, celExpression)
 
-	// Verify it contains the expected resource filters
-	assert.Contains(t, celExpression, `device.attributes["tflops"].quantity >= quantity("20")`)
-	assert.Contains(t, celExpression, `device.attributes["vram"].quantity >= quantity("16Gi")`)
-	assert.Contains(t, celExpression, `device.attributes["model"] == "H100"`)
+			// Verify expected conditions are present
+			for _, condition := range tt.expectedConditions {
+				assert.Contains(t, celExpression, condition, "Expected condition not found: %s", condition)
+			}
 
-	// Verify conditions are combined with AND
-	assert.Contains(t, celExpression, " && ")
+			// Verify unexpected conditions are not present
+			for _, condition := range tt.unexpectedConditions {
+				assert.NotContains(t, celExpression, condition, "Unexpected condition found: %s", condition)
+			}
+
+			// Verify proper AND joining (unless it's the fallback condition)
+			if len(tt.expectedConditions) > 1 {
+				assert.Contains(t, celExpression, " && ", "Conditions should be joined with &&")
+			}
+		})
+	}
 }
 
 func TestHasDRAClaim(t *testing.T) {
