@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/suite"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -14,23 +15,28 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/informers"
+	clientsetfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
+	fwk "k8s.io/kube-scheduler/framework"
+	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultbinder"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/queuesort"
 	frameworkruntime "k8s.io/kubernetes/pkg/scheduler/framework/runtime"
+	"k8s.io/kubernetes/pkg/scheduler/metrics"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
 	tf "k8s.io/kubernetes/pkg/scheduler/testing/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	testutil "sigs.k8s.io/scheduler-plugins/test/util"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	internalcache "k8s.io/kubernetes/pkg/scheduler/backend/cache"
+	internalqueue "k8s.io/kubernetes/pkg/scheduler/backend/queue"
 )
 
 type GPUResourcesSuite struct {
@@ -201,6 +207,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 			},
 		},
 	}
+
 	s.client = fake.NewClientBuilder().WithScheme(scheme.Scheme).
 		WithRuntimeObjects(objList...).
 		WithStatusSubresource(
@@ -213,9 +220,11 @@ func (s *GPUResourcesSuite) SetupTest() {
 		).
 		Build()
 
+	k8sObjs := make([]runtime.Object, 0, len(pods)+len(nodes))
 	for _, pod := range pods {
 		err := s.client.Create(s.ctx, pod)
 		s.NoError(err)
+		k8sObjs = append(k8sObjs, pod)
 	}
 	for _, gpu := range gpus {
 		err := s.client.Create(s.ctx, gpu)
@@ -224,6 +233,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 	for _, node := range nodes {
 		err := s.client.Create(s.ctx, node)
 		s.NoError(err)
+		k8sObjs = append(k8sObjs, node)
 	}
 
 	var registerPlugins []tf.RegisterPluginFunc
@@ -233,11 +243,16 @@ func (s *GPUResourcesSuite) SetupTest() {
 		tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 	)
 
+	fakeClientSet := clientsetfake.NewSimpleClientset(k8sObjs...)
+	informerFactory := informers.NewSharedInformerFactory(fakeClientSet, 0)
+	metrics.Register()
+	metricsRecorder := metrics.NewMetricsAsyncRecorder(1000, time.Second, s.ctx.Done())
 	fwk, err := tf.NewFramework(
 		s.ctx, registeredPlugins, "",
-		frameworkruntime.WithPodNominator(testutil.NewPodNominator(nil)),
-		frameworkruntime.WithSnapshotSharedLister(testutil.NewFakeSharedLister(pods, nodes)),
+		frameworkruntime.WithPodNominator(internalqueue.NewSchedulingQueue(nil, informerFactory)),
+		frameworkruntime.WithSnapshotSharedLister(internalcache.NewEmptySnapshot()),
 		frameworkruntime.WithEventRecorder(&events.FakeRecorder{}),
+		frameworkruntime.WithMetricsRecorder(metricsRecorder),
 	)
 	s.NoError(err)
 	s.fwk = fwk
@@ -271,7 +286,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 	tests := []struct {
 		name           string
 		pod            *v1.Pod
-		expectedStatus framework.Code
+		expectedStatus fwk.Code
 		expectedNodes  string
 	}{
 		{
@@ -282,7 +297,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 					constants.TFLOPSRequestAnnotation: "100",
 					constants.VRAMRequestAnnotation:   "10Gi",
 				}),
-			expectedStatus: framework.Success,
+			expectedStatus: fwk.Success,
 			expectedNodes:  "node-a node-b",
 		},
 		{
@@ -293,7 +308,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 					constants.TFLOPSRequestAnnotation: "2000",
 					constants.VRAMRequestAnnotation:   "10Gi",
 				}),
-			expectedStatus: framework.Success,
+			expectedStatus: fwk.Success,
 			expectedNodes:  "node-b",
 		},
 		{
@@ -304,7 +319,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 					constants.TFLOPSRequestAnnotation: "100",
 					constants.VRAMRequestAnnotation:   "10Gi",
 				}),
-			expectedStatus: framework.Success,
+			expectedStatus: fwk.Success,
 			expectedNodes:  "node-b",
 		},
 		{
@@ -315,7 +330,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 					constants.TFLOPSRequestAnnotation: "2000",
 					constants.VRAMRequestAnnotation:   "80Gi",
 				}),
-			expectedStatus: framework.Unschedulable,
+			expectedStatus: fwk.Unschedulable,
 			expectedNodes:  "",
 		},
 		{
@@ -326,7 +341,7 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 					constants.TFLOPSRequestAnnotation: "100",
 					constants.VRAMRequestAnnotation:   "10Gi",
 				}),
-			expectedStatus: framework.Unschedulable,
+			expectedStatus: fwk.Unschedulable,
 			expectedNodes:  "",
 		},
 	}
@@ -334,11 +349,11 @@ func (s *GPUResourcesSuite) TestPreFilter() {
 	for _, tt := range tests {
 		s.Run(tt.name, func() {
 			state := framework.NewCycleState()
-			res, status := s.plugin.PreFilter(s.ctx, state, tt.pod)
+			res, status := s.plugin.PreFilter(s.ctx, state, tt.pod, []fwk.NodeInfo{})
 			s.Equal(tt.expectedStatus, status.Code(), status.Message())
-			if tt.expectedStatus == framework.Success {
+			if tt.expectedStatus == fwk.Success {
 				s.Require().NotNil(res)
-				nodes := sort.StringSlice(res.NodeNames.UnsortedList())
+				nodes := sort.StringSlice(getPreFilterResult(state))
 				nodes.Sort()
 				s.Equal(tt.expectedNodes, strings.Join(nodes, " "))
 			}
@@ -351,19 +366,19 @@ func (s *GPUResourcesSuite) TestPreFilterForNonTensorFusionPod() {
 	tests := []struct {
 		name           string
 		pod            *v1.Pod
-		expectedStatus framework.Code
+		expectedStatus fwk.Code
 		expectedNodes  string
 	}{
 		{
 			name:           "pod requires 1 GPU, enough capacity",
 			pod:            s.makeNonTensorFusionPod("p1", 1),
-			expectedStatus: framework.Success,
+			expectedStatus: fwk.Success,
 			expectedNodes:  "node-b node-c",
 		},
 		{
 			name:           "pod requires 2 GPU, enough capacity",
 			pod:            s.makeNonTensorFusionPod("p1", 2),
-			expectedStatus: framework.Success,
+			expectedStatus: fwk.Success,
 			expectedNodes:  "node-b node-c",
 		},
 	}
@@ -371,9 +386,9 @@ func (s *GPUResourcesSuite) TestPreFilterForNonTensorFusionPod() {
 	for _, tt := range tests {
 		s.Run(tt.name, func() {
 			state := framework.NewCycleState()
-			res, status := s.plugin.PreFilter(s.ctx, state, tt.pod)
+			res, status := s.plugin.PreFilter(s.ctx, state, tt.pod, []fwk.NodeInfo{})
 			s.Equal(tt.expectedStatus, status.Code(), status.Message())
-			if tt.expectedStatus == framework.Success {
+			if tt.expectedStatus == fwk.Success {
 				s.Require().NotNil(res)
 				nodes := sort.StringSlice(res.NodeNames.UnsortedList())
 				nodes.Sort()
@@ -394,23 +409,23 @@ func (s *GPUResourcesSuite) TestFilter() {
 			constants.TFLOPSLimitAnnotation:   "100",
 			constants.VRAMLimitAnnotation:     "40Gi",
 		})
-	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod)
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
 	s.Require().True(preFilterStatus.IsSuccess())
 
 	tests := []struct {
 		name           string
 		nodeName       string
-		expectedStatus framework.Code
+		expectedStatus fwk.Code
 	}{
 		{
 			name:           "node with available GPU",
 			nodeName:       "node-a",
-			expectedStatus: framework.Success,
+			expectedStatus: fwk.Success,
 		},
 		{
 			name:           "node without available GPU",
 			nodeName:       "node-c",
-			expectedStatus: framework.Unschedulable,
+			expectedStatus: fwk.Unschedulable,
 		},
 	}
 
@@ -435,7 +450,7 @@ func (s *GPUResourcesSuite) TestScore() {
 			constants.TFLOPSLimitAnnotation:   "100",
 			constants.VRAMLimitAnnotation:     "40Gi",
 		})
-	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod)
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
 	s.Require().True(preFilterStatus.IsSuccess())
 
 	// node a as one worker consumed 10% GPU resources
@@ -466,7 +481,7 @@ func (s *GPUResourcesSuite) TestReserveAndUnreserve() {
 			constants.TFLOPSLimitAnnotation:   "100",
 			constants.VRAMLimitAnnotation:     "40Gi",
 		})
-	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod)
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
 	s.Require().True(preFilterStatus.IsSuccess())
 
 	// Reserve on node-a
@@ -507,7 +522,7 @@ func (s *GPUResourcesSuite) TestPostBind() {
 			constants.TFLOPSLimitAnnotation:   "100",
 			constants.VRAMLimitAnnotation:     "40Gi",
 		})
-	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod)
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
 	s.Require().True(preFilterStatus.IsSuccess())
 
 	reserveStatus := s.plugin.Reserve(s.ctx, state, pod, "node-a")
@@ -609,7 +624,7 @@ func (s *GPUResourcesSuite) TestScoreExtensions() {
 
 func (s *GPUResourcesSuite) TestPreFilterExtensions() {
 	log.FromContext(s.ctx).Info("Running TestPreFilterExtensions")
-	s.Nil(s.plugin.PreFilterExtensions())
+	s.NotNil(s.plugin.PreFilterExtensions())
 }
 
 func (s *GPUResourcesSuite) TestName() {
@@ -629,13 +644,13 @@ func (s *GPUResourcesSuite) TestReserve_ErrorHandling() {
 	// No pre-filter call, so state is empty
 	status := s.plugin.Reserve(s.ctx, state, pod, "node-a")
 	s.Error(status.AsError())
-	s.Equal(framework.Error, status.Code())
+	s.Equal(fwk.Error, status.Code())
 
 	// Pre-filter, but for a different node
-	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod)
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
 	s.Require().True(preFilterStatus.IsSuccess())
 	status = s.plugin.Reserve(s.ctx, state, pod, "node-c-non-existent")
-	s.Equal(framework.Unschedulable, status.Code())
+	s.Equal(fwk.Unschedulable, status.Code())
 }
 
 func (s *GPUResourcesSuite) TestUnreserve_ErrorHandling() {
@@ -668,7 +683,7 @@ func (s *GPUResourcesSuite) TestPostBind_ErrorHandling() {
 	s.plugin.PostBind(s.ctx, state, pod, "node-a")
 
 	// Test with a pod that doesn't exist in the client
-	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod)
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
 	s.Require().True(preFilterStatus.IsSuccess())
 	reserveStatus := s.plugin.Reserve(s.ctx, state, pod, "node-a")
 	s.Require().True(reserveStatus.IsSuccess())
@@ -688,7 +703,7 @@ func (s *GPUResourcesSuite) TestFilter_ErrorHandling() {
 	// No pre-filter call, so state is empty
 	status := s.plugin.Filter(s.ctx, state, pod, nodeInfo)
 	s.Error(status.AsError())
-	s.Equal(framework.Error, status.Code())
+	s.Equal(fwk.Error, status.Code())
 }
 
 func (s *GPUResourcesSuite) TestScore_ErrorHandling() {
@@ -704,13 +719,21 @@ func (s *GPUResourcesSuite) TestScore_ErrorHandling() {
 	nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
 	_, status := s.plugin.Score(s.ctx, state, pod, nodeInfo)
 	s.Error(status.AsError())
-	s.Equal(framework.Error, status.Code())
+	s.Equal(fwk.Error, status.Code())
 
 	// Pre-filter, but for a different node
 	nodeInfo = &framework.NodeInfo{}
 	nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-c-non-existent"}})
-	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod)
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
 	s.Require().True(preFilterStatus.IsSuccess())
 	_, status = s.plugin.Score(s.ctx, state, pod, nodeInfo)
-	s.Equal(framework.Unschedulable, status.Code())
+	s.Equal(fwk.Unschedulable, status.Code())
+}
+
+func getPreFilterResult(state *framework.CycleState) []string {
+	data, err := state.Read(CycleStateGPUSchedulingResult)
+	if err != nil {
+		return nil
+	}
+	return lo.Keys(data.(*GPUSchedulingStateData).NodeGPUs)
 }

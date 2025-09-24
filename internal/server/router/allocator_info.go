@@ -17,6 +17,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -104,20 +105,20 @@ func (r *AllocatorInfoRouter) SimulateScheduleOnePod(ctx *gin.Context) {
 	state.SetRecordPluginMetrics(false)
 	podsToActivate := framework.NewPodsToActivate()
 	state.Write(framework.PodsToActivateKey, podsToActivate)
-	state.Write(framework.StateKey(constants.SchedulerSimulationKey), &gpuallocator.SimulateSchedulingFilterDetail{
+	state.Write(fwk.StateKey(constants.SchedulerSimulationKey), &gpuallocator.SimulateSchedulingFilterDetail{
 		FilterStageDetails: []filter.FilterDetail{},
 	})
 
 	// simulate schedulingCycle non side effect part
-	fwk := r.scheduler.Profiles[pod.Spec.SchedulerName]
-	if fwk == nil {
+	fwkInstance := r.scheduler.Profiles[pod.Spec.SchedulerName]
+	if fwkInstance == nil {
 		log.FromContext(ctx).Error(nil, "scheduler framework not found", "pod", pod.Name, "namespace", pod.Namespace)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "scheduler framework not found"})
 		return
 	}
-	scheduleResult, err := r.scheduler.SchedulePod(ctx, fwk, state, pod)
+	scheduleResult, err := r.scheduler.SchedulePod(ctx, fwkInstance, state, pod)
 	gpuCycleState, _ := state.Read(gpuresources.CycleStateGPUSchedulingResult)
-	simulateSchedulingFilterDetail, _ := state.Read(framework.StateKey(constants.SchedulerSimulationKey))
+	simulateSchedulingFilterDetail, _ := state.Read(fwk.StateKey(constants.SchedulerSimulationKey))
 	if err != nil {
 		if fitError, ok := err.(*framework.FitError); ok {
 			ctx.JSON(http.StatusOK, gin.H{

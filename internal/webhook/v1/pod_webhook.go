@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -46,17 +47,24 @@ import (
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // SetupPodWebhookWithManager registers the webhook for Pod in the manager.
-func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator) error {
+func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator, pricingProvider pricing.PricingProvider) error {
 	webhookServer := mgr.GetWebhookServer()
 
-	webhookServer.Register("/mutate-v1-pod",
-		&admission.Webhook{
-			Handler: &TensorFusionPodMutator{
-				decoder:       admission.NewDecoder(runtime.NewScheme()),
-				Client:        mgr.GetClient(),
-				portAllocator: portAllocator,
-			},
-		})
+	// Initialize DRA processor
+	draProcessor := NewDRAProcessor(mgr.GetClient())
+	if err := draProcessor.InitializeDRAConfig(context.Background()); err != nil {
+		return fmt.Errorf("failed to initialize DRA config: %w", err)
+	}
+
+	// Initialize DRA setting from global configuration
+	mutator := &TensorFusionPodMutator{
+		decoder:       admission.NewDecoder(runtime.NewScheme()),
+		Client:        mgr.GetClient(),
+		portAllocator: portAllocator,
+		draProcessor:  draProcessor,
+	}
+
+	webhookServer.Register("/mutate-v1-pod", &admission.Webhook{Handler: mutator})
 	return nil
 }
 
@@ -64,6 +72,7 @@ type TensorFusionPodMutator struct {
 	Client        client.Client
 	decoder       admission.Decoder
 	portAllocator *portallocator.PortAllocator
+	draProcessor  *DRAProcessor
 }
 
 // Handle implements admission.Handler interface.
@@ -100,7 +109,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to marshal current pod: %w", err))
 	}
 
-	tfInfo, err := ParseTensorFusionInfo(ctx, m.Client, pod)
+	tfInfo, err := ParseTensorFusionInfo(ctx, m.Client, m.draProcessor, pod)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("parse tf resources: %w", err))
 	}
@@ -159,16 +168,34 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		return admission.Allowed("no valid container to inject tensor-fusion, skipped")
 	}
 
-	// Add defaults and tensor-fusion injection logic
+	// Handle DRA-specific processing if enabled
+	if tfInfo.DRAEnabled {
+		// Process DRA workload
+		if err := m.draProcessor.HandleDRAAdmission(ctx, pod, &tfInfo, containerIndices); err != nil {
+			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("failed to handle DRA admission: %w", err))
+		}
+	}
+
+	// Common processing for both DRA and regular modes
 	utils.AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod, tfInfo)
 	utils.AddTFDefaultClientConfBeforePatch(ctx, pod, pool, tfInfo, containerIndices)
 
+	// Add priorityClass if contains higher QoS level and Pod priority class not specified
+	if pod.Spec.PriorityClassName == "" &&
+		(tfInfo.Profile.Qos == tfv1.QoSHigh || tfInfo.Profile.Qos == tfv1.QoSCritical) {
+		pod.Spec.PriorityClassName = constants.TensorFusionSystemName + string(tfInfo.Profile.Qos)
+	}
+
 	// Inject initContainer and env variables
 	patches, err := m.patchTFClient(
-		pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices,
+		ctx, pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices,
 	)
 	if err != nil {
-		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
+		mode := "regular"
+		if tfInfo.DRAEnabled {
+			mode = "DRA"
+		}
+		log.Error(err, "failed to patch tf client", "mode", mode, "pod", req.Name, "namespace", req.Namespace)
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 
@@ -266,6 +293,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(
+	ctx context.Context,
 	pod *corev1.Pod,
 	pool *tfv1.GPUPool,
 	isLocalGPU bool,
@@ -392,7 +420,7 @@ func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *co
 	if pod.GenerateName == "" && pod.Name != "" {
 		prefix = pod.Name + constants.TFConnectionNamePrefix
 	} else {
-		prefix = pod.GenerateName + constants.TFConnectionNamePrefix
+		prefix = pod.GenerateName + constants.TFConnectionNameNoPrefix
 	}
 	connectionName := fmt.Sprintf("%s%s", prefix, utils.NewShortID(10))
 	connectionNamespace := pod.Namespace
@@ -516,16 +544,17 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 }
 
 func calculateQoSLevel(profile *tfv1.WorkloadProfileSpec, pool *tfv1.GPUPool) tfv1.QoSLevel {
-	sameReqLimits := profile.Resources.Limits.Tflops.Cmp(profile.Resources.Requests.Tflops) == 0 &&
-		profile.Resources.Limits.Vram.Cmp(profile.Resources.Requests.Vram) == 0
-
-	// set to critical if req == limits, same logic as Kubernetes QoS
-	if sameReqLimits {
-		return constants.QoSLevelCritical
-	}
-
 	// when not set, assign default QoS
 	if profile.Qos == "" {
+		sameReqLimits := profile.Resources.Limits.Tflops.Cmp(profile.Resources.Requests.Tflops) == 0 &&
+			profile.Resources.Limits.Vram.Cmp(profile.Resources.Requests.Vram) == 0
+
+		// set to high if req == limits, same logic as Kubernetes QoS
+		// critical QoS can preempt other pods, have to be set manually
+		if sameReqLimits {
+			return constants.QoSLevelHigh
+		}
+
 		if pool.Spec.QosConfig == nil || pool.Spec.QosConfig.DefaultQoS == "" {
 			return constants.QoSLevelMedium
 		}

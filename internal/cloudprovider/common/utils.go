@@ -131,6 +131,16 @@ func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvi
 
 	nodes := make([]tfv1.GPUNodeClaimSpec, 0, bestNumInstances)
 	for i := int64(0); i < bestNumInstances; i++ {
+
+		tflopsQuantity, err := resource.ParseQuantity(fmt.Sprintf("%f", bestInstance.FP16TFlopsPerGPU*float64(bestInstance.GPUCount)))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse GPUDeviceOffered: %v", err)
+		}
+
+		vramQuantity, err := resource.ParseQuantity(fmt.Sprintf("%dGi", bestInstance.VRAMGigabytesPerGPU*bestInstance.GPUCount))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse VRAMOffered: %v", err)
+		}
 		nodes = append(nodes, tfv1.GPUNodeClaimSpec{
 			NodeName:     fmt.Sprintf("%s-%s", pool.Name, generateRandomString(8)),
 			InstanceType: bestInstance.InstanceType,
@@ -139,8 +149,8 @@ func CalculateLeastCostGPUNodes(ctx context.Context, provider types.GPUNodeProvi
 			Zone:         zone,
 			CapacityType: preferredCapacityType,
 
-			TFlopsOffered:    resource.MustParse(fmt.Sprintf("%f", bestInstance.FP16TFlopsPerGPU*float64(bestInstance.GPUCount))),
-			VRAMOffered:      resource.MustParse(fmt.Sprintf("%dGi", bestInstance.VRAMGigabytesPerGPU*bestInstance.GPUCount)),
+			TFlopsOffered:    tflopsQuantity,
+			VRAMOffered:      vramQuantity,
 			GPUDeviceOffered: bestInstance.GPUCount,
 
 			ExtraParams: cluster.Spec.ComputingVendor.Params.ExtraParams,

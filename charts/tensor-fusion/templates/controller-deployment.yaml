@@ -32,6 +32,7 @@ spec:
       {{- end }}
       serviceAccountName: {{ include "tensor-fusion.serviceAccountName" . }}
       enableServiceLinks: false
+      priorityClassName: "system-cluster-critical"
       containers:
         - name: controller
           image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}"

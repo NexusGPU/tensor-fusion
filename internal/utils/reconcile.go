@@ -214,6 +214,15 @@ func IsTensorFusionWorker(pod *corev1.Pod) bool {
 	return pod.Labels[constants.LabelComponent] == constants.ComponentWorker
 }
 
+func GetInitialGPUNodeSelector() []string {
+	selector := os.Getenv("INITIAL_GPU_NODE_LABEL_SELECTOR")
+	if selector == "" {
+		selector = constants.InitialGPUNodeSelector
+	}
+	selectors := strings.Split(selector, "=")
+	return selectors
+}
+
 var GPUResourceNames = []corev1.ResourceName{
 	"nvidia.com/gpu",
 	"amd.com/gpu",
