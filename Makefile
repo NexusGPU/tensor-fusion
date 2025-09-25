@@ -66,7 +66,7 @@ one-crd:
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 0 -cover -coverprofile cover.out -r --skip-file ./test/e2e
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 20m -cover -coverprofile cover.out -r --skip-file ./test/e2e
 
 .PHONY: test-serial
 test-serial: manifests generate fmt vet envtest ## Run tests.
