@@ -12,7 +12,6 @@ import (
 	gpuResourceFitPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	gpuTopoPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gputopo"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
-	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/zap/zapcore"
 	v1 "k8s.io/api/core/v1"
@@ -122,18 +121,18 @@ func (discardWriter) Write(p []byte) (n int, err error) {
 func TestPreemption(t *testing.T) {
 	t.Skip("Skipping preemption test")
 	suite := &PreemptionTestSuite{}
-	suite.SetupSuite(t)
-	defer suite.TearDownSuite(t)
-	testGPUResourcePreemption(t, suite)
+	suite.SetupSuite()
+	defer suite.TearDownSuite()
+	testGPUResourcePreemption(suite)
 }
 
 // TestPreemptionEvictProtection tests comprehensive preemption scenarios
 func TestPreemptionEvictProtection(t *testing.T) {
 	t.Skip("Skipping preemption test")
 	suite := &PreemptionTestSuite{}
-	suite.SetupSuite(t)
-	defer suite.TearDownSuite(t)
-	testGPUResourceEvictProtection(t, suite)
+	suite.SetupSuite()
+	defer suite.TearDownSuite()
+	testGPUResourceEvictProtection(suite)
 }
 
 // testGPUResourcePreemption tests GPU shortage detection logic
