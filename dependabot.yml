@@ -11,7 +11,7 @@ updates:
       - dependency-name: "sigs.k8s.io/karpenter*"
     open-pull-requests-limit: 3
     assignees:
-      - "maintainer"
+      - "code2life"
     labels:
       - "dependencies"
       - "go"
