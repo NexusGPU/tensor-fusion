@@ -28,6 +28,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -50,6 +51,7 @@ type GPUNodeReconciler struct {
 	Scheme    *runtime.Scheme
 	Recorder  record.EventRecorder
 	Allocator *gpuallocator.GpuAllocator
+	Expander  *expander.NodeExpander
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch;create;update;patch;delete
@@ -151,7 +153,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// Check if hypervisor is running well, if so, set as running status
-	err = r.checkStatusAndUpdateVirtualCapacity(ctx, hypervisorName, node, poolObj)
+	err = r.checkStatusAndUpdateVirtualCapacity(ctx, hypervisorName, node, poolObj, coreNode)
 	if errors.IsNotFound(err) {
 		log.Info("Hypervisor pod not found, requeue", "hypervisorName", hypervisorName)
 		return ctrl.Result{Requeue: true}, nil
@@ -160,7 +162,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 }
 
 func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
-	ctx context.Context, hypervisorName string, node *tfv1.GPUNode, poolObj *tfv1.GPUPool,
+	ctx context.Context, hypervisorName string, node *tfv1.GPUNode, poolObj *tfv1.GPUPool, coreNode *corev1.Node,
 ) error {
 	pod := &corev1.Pod{}
 	fetchErr := r.Get(ctx, client.ObjectKey{Name: hypervisorName, Namespace: utils.CurrentNamespace()}, pod)
@@ -216,6 +218,10 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 					return fmt.Errorf("failed to update GPUNodeClaim to bound state: %w", err)
 				}
 			}
+		}
+
+		if coreNode.Labels != nil && coreNode.Labels[constants.KarpenterExpansionLabel] != "" {
+			r.Expander.RemoveInFlightNode(coreNode.Labels[constants.KarpenterExpansionLabel])
 		}
 
 		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhaseRunning)

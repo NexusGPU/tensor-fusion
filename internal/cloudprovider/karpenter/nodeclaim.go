@@ -30,7 +30,6 @@ var (
 
 	KarpenterGroup         = "karpenter.sh"
 	KarpenterVersion       = "v1"
-	kindNodeClaim          = "NodeClaim"
 	DefaultGPUResourceName = "nvidia.com/gpu"
 	EC2NodeClassGroup      = "karpenter.k8s.aws"
 	// AWS capacity type: https://karpenter.sh/docs/concepts/scheduling/#well-known-labels
@@ -78,7 +77,7 @@ func NewKarpenterGPUNodeProvider(ctx context.Context, cfg tfv1.ComputingVendorCo
 		scheme := client.Scheme()
 		// Add Karpenter v1 types manually
 		gv := schema.GroupVersion{Group: KarpenterGroup, Version: KarpenterVersion}
-		if !scheme.Recognizes(gv.WithKind(kindNodeClaim)) {
+		if !scheme.Recognizes(gv.WithKind(constants.KarpenterNodeClaimKind)) {
 			scheme.AddKnownTypes(gv,
 				&karpv1.NodeClaim{}, &karpv1.NodeClaimList{},
 				&karpv1.NodePool{}, &karpv1.NodePoolList{},
@@ -335,7 +334,7 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *tfv
 	nodeClaim := &karpv1.NodeClaim{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: fmt.Sprintf("%s/%s", KarpenterGroup, KarpenterVersion),
-			Kind:       kindNodeClaim,
+			Kind:       constants.KarpenterNodeClaimKind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: param.NodeName,

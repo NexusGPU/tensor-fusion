@@ -113,6 +113,7 @@ const (
 	NamespaceDefaultVal = "tensor-fusion-sys"
 
 	KubernetesHostNameLabel = "kubernetes.io/hostname"
+	KarpenterExpansionLabel = Domain + "/expansion-source"
 
 	HypervisorServiceAccountName = "tensor-fusion-hypervisor-sa"
 
@@ -208,3 +209,4 @@ const SchedulerSimulationKey = "simulate-schedule"
 const MobileGpuClockSpeedMultiplier = 0.75
 const DefaultEvictionProtectionPriceRatio = 1.2
 const NodeCriticalPriorityClassName = "system-node-critical"
+const KarpenterNodeClaimKind = "NodeClaim"
