@@ -383,13 +383,12 @@ func (e *NodeExpander) createGPUNodeClaim(ctx context.Context, pod *corev1.Pod, 
 	owners := preparedNode.GetOwnerReferences()
 	controlledBy := &metav1.OwnerReference{}
 	for _, owner := range owners {
-		isTrue := owner.Controller
-		if owner.Controller != nil && *isTrue {
+		if owner.Controller != nil && *owner.Controller {
 			controlledBy = &owner
 			break
 		}
 	}
-	if controlledBy == nil {
+	if controlledBy.Kind == "" {
 		e.logger.Info("node is not owned by any provisioner, skip expansion", "node", preparedNode.Name)
 		return nil
 	}
