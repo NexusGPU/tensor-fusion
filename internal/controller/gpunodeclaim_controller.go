@@ -76,8 +76,8 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// When node really created, remove from in flight nodes
-	if claim.Status.Phase == tfv1.GPUNodeClaimBound {
-		r.Expander.RemoveInFlightNode(claim.Name)
+	if claim.Labels != nil && claim.Status.Phase == tfv1.GPUNodeClaimBound {
+		r.Expander.RemoveInFlightNode(claim.Labels[constants.KarpenterExpansionLabel])
 	}
 
 	provisioningMode := pool.Spec.NodeManagerConfig.ProvisioningMode
