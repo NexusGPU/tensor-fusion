@@ -117,7 +117,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 
 	// Check if DRA mode is enabled for this pod
 	if isDRAEnabled(pod) && hasDRAClaim(pod) {
-		return nil, framework.NewStatus(framework.Skip, "DRA mode enabled, skipping custom GPU prefilter")
+		return nil, fwk.NewStatus(fwk.Skip, "DRA mode enabled, skipping custom GPU prefilter")
 	}
 
 	// Skip non tensor-fusion mode
@@ -294,7 +294,7 @@ func (s *GPUFit) RemovePod(ctx context.Context, state fwk.CycleState, pod *v1.Po
 func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeInfo fwk.NodeInfo) *fwk.Status {
 	// Check if DRA mode is enabled for this pod
 	if isDRAEnabled(pod) && hasDRAClaim(pod) {
-		return framework.NewStatus(framework.Skip, "DRA mode enabled, skipping custom GPU filter")
+		return fwk.NewStatus(fwk.Skip, "DRA mode enabled, skipping custom GPU filter")
 	}
 
 	if !utils.IsTensorFusionWorker(pod) {
@@ -338,8 +338,8 @@ func (s *GPUFit) Score(
 	ctx context.Context,
 	state fwk.CycleState,
 	pod *v1.Pod,
-	nodeInfo *framework.NodeInfo,
-) (int64, *framework.Status) {
+	nodeInfo fwk.NodeInfo,
+) (int64, *fwk.Status) {
 	// Skip non tensor-fusion mode scheduling
 	if !utils.IsTensorFusionWorker(pod) {
 		return 0, fwk.NewStatus(fwk.Success, "")
@@ -377,7 +377,7 @@ func (s *GPUFit) ScoreExtensions() framework.ScoreExtensions {
 	return nil
 }
 
-func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
+func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) *fwk.Status {
 	if !utils.IsTensorFusionWorker(pod) {
 		return fwk.NewStatus(fwk.Success, "skip for non tensor-fusion mode")
 	}
@@ -423,7 +423,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state *framework.CycleState, pod *
 	return fwk.NewStatus(fwk.Success, "")
 }
 
-func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
+func (s *GPUFit) Unreserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) {
 	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}
@@ -442,7 +442,7 @@ func (s *GPUFit) Unreserve(ctx context.Context, state *framework.CycleState, pod
 	}, schedulingResult.FinalGPUs, pod.ObjectMeta)
 }
 
-func (s *GPUFit) PostBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) {
+func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) {
 	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}
