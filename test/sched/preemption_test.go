@@ -107,13 +107,6 @@ func (pts *PreemptionTestSuite) TearDownSuite() {
 	}
 }
 
-// discardWriter implements io.Writer to discard log output during tests
-type discardWriter struct{}
-
-func (discardWriter) Write(p []byte) (n int, err error) {
-	return len(p), nil
-}
-
 // TestPreemption tests comprehensive preemption scenarios
 func TestPreemption(t *testing.T) {
 	suiteConfig, reporterConfig := GinkgoConfiguration()

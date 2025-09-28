@@ -41,6 +41,7 @@ jobs:
       - name: Running Tests
         run: |
           go mod tidy
+          bash ./scripts/patch-scheduler.sh
           make test
         env:
           ENVTEST_K8S_VERSION: ${{ matrix.envtest_k8s_version }}
