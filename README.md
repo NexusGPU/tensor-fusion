@@ -42,8 +42,6 @@ Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** 
 
 <!-- (TODO: Asciinema) -->
 
-<!-- ### Playground
-
 ### 💬 Discussion
 
 - Discord channel: [https://discord.gg/2bybv9yQNk](https://discord.gg/2bybv9yQNk)
