@@ -33,6 +33,10 @@ jobs:
         with:
           go-version: '~1.24'
 
+      - name: Install Deps
+        run: |
+          go mod vendor
+          bash ./scripts/patch-scheduler.sh
       - name: Run linter
         uses: golangci/golangci-lint-action@v8
         with:
