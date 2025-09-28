@@ -31,7 +31,7 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 		expectUpdate   bool
 	}{
 		{
-			name: "ResourceClaim not found",
+			name:           "ResourceClaim not found",
 			expectedResult: ctrl.Result{},
 			expectError:    false,
 		},
@@ -535,7 +535,14 @@ func TestResourceClaimReconciler_updateResourceClaimCEL(t *testing.T) {
 				Scheme: scheme,
 			}
 
-			err := reconciler.updateResourceClaimCEL(context.Background(), tt.resourceClaim, tt.celExpression)
+			mockPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						constants.DRACelExpressionAnnotation: tt.celExpression,
+					},
+				},
+			}
+			err := reconciler.updateResourceClaimCEL(tt.resourceClaim, mockPod)
 
 			if tt.expectError {
 				require.Error(t, err)

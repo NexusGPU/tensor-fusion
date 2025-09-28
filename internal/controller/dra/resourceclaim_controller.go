@@ -20,8 +20,9 @@ import (
 	"context"
 	"fmt"
 
-	resourcev1beta2 "k8s.io/api/resource/v1beta2"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
+	resourcev1beta2 "k8s.io/api/resource/v1beta2"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -88,20 +89,23 @@ func (r *ResourceClaimReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
-	// Get CEL expression from Pod annotation
-	celExpression := ownerPod.Annotations[constants.DRACelExpressionAnnotation]
-	if celExpression == "" {
-		log.Info("No CEL expression found in Pod annotation", "pod", ownerPod.Name)
-		return ctrl.Result{}, nil
-	}
-
 	// Update ResourceClaim with CEL expression
-	if err := r.updateResourceClaimCEL(ctx, resourceClaim, celExpression); err != nil {
+	if err := r.updateResourceClaimCEL(resourceClaim, ownerPod); err != nil {
 		log.Error(err, "Failed to update ResourceClaim CEL expression")
 		return ctrl.Result{}, err
 	}
+	// Update ResourceClaim with capacity request
+	if err := r.updateCapacityRequest(resourceClaim, ownerPod); err != nil {
+		log.Error(err, "Failed to update ResourceClaim capacity request")
+		return ctrl.Result{}, err
+	}
 
-	log.Info("Successfully updated ResourceClaim with CEL expression", "cel", celExpression)
+	if err := r.Update(ctx, resourceClaim); err != nil {
+		log.Error(err, "Failed to update ResourceClaim")
+		return ctrl.Result{}, err
+	}
+
+	log.Info("Successfully updated ResourceClaim")
 	return ctrl.Result{}, nil
 }
 
@@ -142,7 +146,7 @@ func (r *ResourceClaimReconciler) findOwnerPod(ctx context.Context, resourceClai
 }
 
 // updateResourceClaimCEL updates the ResourceClaim's CEL selector expression
-func (r *ResourceClaimReconciler) updateResourceClaimCEL(ctx context.Context, resourceClaim *resourcev1beta2.ResourceClaim, celExpression string) error {
+func (r *ResourceClaimReconciler) updateResourceClaimCEL(resourceClaim *resourcev1beta2.ResourceClaim, pod *corev1.Pod) error {
 	// Check if we need to update
 	if len(resourceClaim.Spec.Devices.Requests) == 0 {
 		return fmt.Errorf("no device requests found in ResourceClaim")
@@ -151,6 +155,13 @@ func (r *ResourceClaimReconciler) updateResourceClaimCEL(ctx context.Context, re
 	deviceReq := &resourceClaim.Spec.Devices.Requests[0]
 	if deviceReq.Exactly == nil {
 		return fmt.Errorf("no ExactDeviceRequest found")
+	}
+
+	// Get CEL expression from Pod annotation
+	celExpression := pod.Annotations[constants.DRACelExpressionAnnotation]
+
+	if celExpression == "" {
+		return nil
 	}
 
 	// Check if CEL expression is already set correctly
@@ -172,8 +183,27 @@ func (r *ResourceClaimReconciler) updateResourceClaimCEL(ctx context.Context, re
 
 	deviceReq.Exactly.Selectors[0].CEL.Expression = celExpression
 
-	// Update the ResourceClaim
-	return r.Update(ctx, resourceClaim)
+	return nil
+}
+
+func (r *ResourceClaimReconciler) updateCapacityRequest(resourceClaim *resourcev1beta2.ResourceClaim, pod *corev1.Pod) error {
+	if len(resourceClaim.Spec.Devices.Requests) == 0 {
+		return fmt.Errorf("no device requests found in ResourceClaim")
+	}
+
+	deviceReq := &resourceClaim.Spec.Devices.Requests[0]
+	if deviceReq.Exactly == nil {
+		return fmt.Errorf("no ExactDeviceRequest found")
+	}
+	gpuRequestResource, err := utils.GetGPUResource(pod, true)
+	if err != nil {
+		return fmt.Errorf("failed to get GPU resource: %w", err)
+	}
+	//TODO extract to constants
+	deviceReq.Exactly.Capacity.Requests["tflops"] = gpuRequestResource.Tflops
+	deviceReq.Exactly.Capacity.Requests["vram"] = gpuRequestResource.Vram
+
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

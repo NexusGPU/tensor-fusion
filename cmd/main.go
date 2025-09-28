@@ -67,25 +67,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/version"
 	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	k8sVer "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/client-go/kubernetes"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
-	"k8s.io/client-go/rest"
-	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/cmd/kube-scheduler/app"
-	"k8s.io/kubernetes/pkg/scheduler"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
-	"sigs.k8s.io/yaml"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -435,6 +418,14 @@ func startCustomResourceController(
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ResourceClaim")
+		os.Exit(1)
+	}
+	// Setup ResourceSlice controller for DRA Phase 2
+	if err = (&dra.ResourceSliceReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ResourceSlice")
 		os.Exit(1)
 	}
 	if err = (&controller.NodeReconciler{

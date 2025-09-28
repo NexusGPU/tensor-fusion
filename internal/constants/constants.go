@@ -140,6 +140,10 @@ const (
 
 	// ResourceClaimTemplate related constants
 	DRAResourceClaimTemplateName = "tensor-fusion-gpu-template"
+
+	// ResourceSlice related constants
+	DRAResourceSliceName = "tensor-fusion-resource-slice-%s"
+	DRAResourceSlicePool = "tensor-fusion-resource-slice-pool-%s"
 )
 
 // for avoid golang lint issues
