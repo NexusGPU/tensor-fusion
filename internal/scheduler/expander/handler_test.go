@@ -555,6 +555,7 @@ func createTestGPU(name, nodeName, tflops, vram string) *tfv1.GPU {
 	}
 }
 
+// nolint:unparam
 func createTestTensorFusionPod(name, namespace, tflops, vram string) *corev1.Pod {
 	pod := st.MakePod().
 		Namespace(namespace).

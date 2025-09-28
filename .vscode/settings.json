@@ -162,6 +162,7 @@
         "Tmpl",
         "tokenreviews",
         "Tolerations",
+        "unparam",
         "unsched",
         "utilerrors",
         "utilruntime",
