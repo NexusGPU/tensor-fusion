@@ -220,13 +220,13 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 			}
 		}
 
-		if coreNode.Labels != nil && coreNode.Labels[constants.KarpenterExpansionLabel] != "" {
-			r.Expander.RemoveInFlightNode(coreNode.Labels[constants.KarpenterExpansionLabel])
-		}
-
 		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhaseRunning)
 		if err != nil {
 			return err
+		}
+
+		if coreNode.Labels != nil && coreNode.Labels[constants.KarpenterExpansionLabel] != "" {
+			r.Expander.RemoveInFlightNode(coreNode.Labels[constants.KarpenterExpansionLabel])
 		}
 		return nil
 	}

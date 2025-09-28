@@ -78,7 +78,9 @@ func TestControllers(t *testing.T) {
 	SetDefaultEventuallyPollingInterval(200 * time.Millisecond)
 	SetDefaultConsistentlyDuration(5 * time.Second)
 	SetDefaultConsistentlyPollingInterval(250 * time.Millisecond)
-	RunSpecs(t, "Controller Suite")
+	suiteConfig, reporterConfig := GinkgoConfiguration()
+	suiteConfig.Timeout = 5 * time.Minute
+	RunSpecs(t, "Controller Suite", suiteConfig, reporterConfig)
 }
 
 var _ = BeforeSuite(func() {

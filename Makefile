@@ -74,7 +74,11 @@ test-serial: manifests generate fmt vet envtest ## Run tests.
 
 .PHONY: ut
 ut: manifests generate ## Run unit tests by make ut F=<focus-file>
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" cd internal/controller && GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 0 --focus-file $F && cd ../../
+	cd internal/controller && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 0 --focus-file $F && cd ../../
+
+.PHONY: ut-sched
+ut-sched: manifests generate ## Run unit tests by make ut F=<focus-file>
+	cd test/sched && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 0 --focus-file $F && cd ../../
 
 .PHONY: test-e2e
 test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
