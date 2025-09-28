@@ -11,9 +11,10 @@ const (
 )
 
 var (
-	PendingRequeueDuration = time.Second * 3
-	StatusCheckInterval    = time.Second * 6
-	GracefulPeriodSeconds  = ptr.To(int64(5))
+	PendingRequeueDuration     = time.Second * 3
+	StatusCheckInterval        = time.Second * 6
+	GracefulPeriodSeconds      = ptr.To(int64(5))
+	UnschedQueueBufferDuration = 10 * time.Second
 )
 
 const (

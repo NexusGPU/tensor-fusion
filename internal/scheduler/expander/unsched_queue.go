@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
@@ -14,11 +15,6 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-)
-
-const (
-	// BufferDuration is the time to wait before processing expansion
-	BufferDuration = 10 * time.Second
 )
 
 type queuedPod struct {
@@ -40,7 +36,7 @@ func NewUnscheduledPodHandler(ctx context.Context, scheduler *scheduler.Schedule
 	nodeExpander := NewNodeExpander(ctx, allocator, scheduler, recorder)
 	h := &UnscheduledPodHandler{
 		pending:      make(map[string]*corev1.Pod),
-		queue:        make(chan *queuedPod, 100), // Buffered channel for queue
+		queue:        make(chan *queuedPod, 256),
 		logger:       log.FromContext(ctx).WithValues("component", "expander"),
 		ctx:          ctx,
 		nodeExpander: nodeExpander,
@@ -62,6 +58,10 @@ func (h *UnscheduledPodHandler) HandleRejectedPod(ctx context.Context, podInfo *
 	pod = pod.DeepCopy()
 
 	h.mu.Lock()
+	if _, ok := h.pending[string(pod.UID)]; ok {
+		h.mu.Unlock()
+		return
+	}
 	h.pending[string(pod.UID)] = pod
 	h.mu.Unlock()
 
@@ -106,7 +106,7 @@ func (h *UnscheduledPodHandler) processQueue() {
 func (h *UnscheduledPodHandler) processQueuedPod(qp *queuedPod) {
 	// Calculate remaining buffer time
 	elapsed := time.Since(qp.queueTime)
-	remainingBuffer := BufferDuration - elapsed
+	remainingBuffer := constants.UnschedQueueBufferDuration - elapsed
 
 	if remainingBuffer > 0 {
 		h.logger.V(2).Info("Buffering pod before expansion",

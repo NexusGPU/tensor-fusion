@@ -53,14 +53,15 @@ func NewNodeExpander(
 ) *NodeExpander {
 
 	expander := &NodeExpander{
-		client:          allocator.Client,
-		scheduler:       scheduler,
-		allocator:       allocator,
-		logger:          log.FromContext(ctx).WithValues("component", "NodeExpander"),
-		inFlightNodes:   make(map[string][]*tfv1.GPU, 10),
-		preSchedulePods: make(map[string]*tfv1.AllocRequest, 20),
-		eventRecorder:   recorder,
-		ctx:             ctx,
+		client:            allocator.Client,
+		scheduler:         scheduler,
+		allocator:         allocator,
+		logger:            log.FromContext(ctx).WithValues("component", "NodeExpander"),
+		inFlightNodes:     make(map[string][]*tfv1.GPU, 10),
+		preSchedulePods:   make(map[string]*tfv1.AllocRequest, 20),
+		preScheduleTimers: make(map[string]*time.Timer, 20),
+		eventRecorder:     recorder,
+		ctx:               ctx,
 	}
 	allocator.RegisterBindHandler(func(req *tfv1.AllocRequest) {
 		obj := &corev1.ObjectReference{
