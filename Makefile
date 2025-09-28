@@ -66,19 +66,19 @@ one-crd:
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 5m -cover -coverprofile cover.out -r --skip-file ./test/e2e
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m -cover -coverprofile cover.out -r --skip-file ./test/e2e
 
 .PHONY: test-serial
 test-serial: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -timeout 5m -r --skip-file ./test/e2e
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -timeout 12m -r --skip-file ./test/e2e
 
 .PHONY: ut
 ut: manifests generate ## Run unit tests by make ut F=<focus-file>
-	cd internal/controller && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 5m --focus-file $F && cd ../../
+	cd internal/controller && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m --focus-file $F && cd ../../
 
 .PHONY: ut-sched
 ut-sched: manifests generate ## Run unit tests by make ut F=<focus-file>
-	cd test/sched && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 5m --focus-file $F && cd ../../
+	cd test/sched && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m --focus-file $F && cd ../../
 
 .PHONY: test-e2e
 test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.

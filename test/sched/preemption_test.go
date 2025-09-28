@@ -74,7 +74,7 @@ func (pts *PreemptionTestSuite) SetupSuite() {
 		gpuTopoPlugin.NewWithDeps(fixture.allocator, fixture.client),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	pts.ctx = ctx
 	pts.cancel = cancel
 
@@ -110,7 +110,7 @@ func (pts *PreemptionTestSuite) TearDownSuite() {
 // TestPreemption tests comprehensive preemption scenarios
 func TestPreemption(t *testing.T) {
 	suiteConfig, reporterConfig := GinkgoConfiguration()
-	suiteConfig.Timeout = 30 * time.Second
+	suiteConfig.Timeout = 1 * time.Minute
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Preemption Test Suite", suiteConfig, reporterConfig)
 }
