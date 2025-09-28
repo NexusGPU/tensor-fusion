@@ -40,7 +40,7 @@ jobs:
 
       - name: Running Tests
         run: |
-          go mod tidy
+          go mod vendor
           bash ./scripts/patch-scheduler.sh
           make test
         env:
