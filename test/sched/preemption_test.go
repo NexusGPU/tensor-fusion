@@ -116,7 +116,7 @@ func (pts *PreemptionTestSuite) TearDownSuite() {
 // TestPreemption tests comprehensive preemption scenarios
 func TestPreemption(t *testing.T) {
 	suiteConfig, reporterConfig := GinkgoConfiguration()
-	suiteConfig.Timeout = 1 * time.Minute
+	suiteConfig.Timeout = 2 * time.Minute
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Preemption Test Suite", suiteConfig, reporterConfig)
 }

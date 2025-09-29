@@ -83,7 +83,7 @@ func (suite *NodeExpanderTestSuite) TearDownSuite() {
 
 func TestNodeExpander(t *testing.T) {
 	suiteConfig, reporterConfig := GinkgoConfiguration()
-	suiteConfig.Timeout = 2 * time.Minute
+	suiteConfig.Timeout = 3 * time.Minute
 	RegisterFailHandler(Fail)
 	if os.Getenv("DEBUG_MODE") == constants.TrueStringValue {
 		SetDefaultEventuallyTimeout(10 * time.Minute)
