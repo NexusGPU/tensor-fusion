@@ -59,13 +59,14 @@ func (p *SimulateSchedulingFilterDetail) Clone() fwk.StateData {
 }
 
 // NewStrategy creates a strategy based on the placement mode
-func NewStrategy(placementMode tfv1.PlacementMode, cfg *config.GPUFitConfig) Strategy {
+func NewStrategy(placementMode tfv1.PlacementMode, cfg *config.GPUFitConfig, nodeGpuStore map[string]map[string]*tfv1.GPU) Strategy {
 	switch placementMode {
 	case tfv1.PlacementModeLowLoadFirst:
-		return LowLoadFirst{cfg: cfg}
+		return LowLoadFirst{cfg: cfg, nodeGpuStore: nodeGpuStore}
+	case tfv1.PlacementModeCompactFirst:
+		return CompactFirst{cfg: cfg, nodeGpuStore: nodeGpuStore}
 	default:
-		// CompactFirst is the default strategy
-		return CompactFirst{cfg: cfg}
+		return NodeCompactGPULowLoad{cfg: cfg, nodeGpuStore: nodeGpuStore}
 	}
 }
 
@@ -182,12 +183,14 @@ func (s *GpuAllocator) Filter(
 		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
 	}
 
-	if req.Count > 1 {
-		filterRegistry = filterRegistry.With(filter.NewSameNodeFilter(req.Count))
-	}
-	// Add NodeAffinityFilter if specified
+	// NOTE: deprecated, use Kubernetes native spec template affinity way
 	if req.NodeAffinity != nil {
 		filterRegistry = filterRegistry.With(filter.NewNodeAffinityFilter(s.Client, req.NodeAffinity))
+	}
+
+	// Same node filter must be applied at final step
+	if req.Count > 1 {
+		filterRegistry = filterRegistry.With(filter.NewSameNodeFilter(req.Count))
 	}
 
 	// Apply the filters in sequence
@@ -245,7 +248,7 @@ func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []*tfv1.GPU) 
 
 	strategy := NewStrategy(schedulingConfigTemplate.Spec.Placement.Mode, &config.GPUFitConfig{
 		MaxWorkerPerNode: s.maxWorkerPerNode,
-	})
+	}, s.nodeGpuStore)
 	selectedGPUs, err := strategy.SelectGPUs(filteredGPUs, req.Count)
 	if err != nil {
 		return nil, fmt.Errorf("select GPU: %w", err)
@@ -675,7 +678,7 @@ func (s *GpuAllocator) Score(
 	ctx context.Context, cfg *config.GPUFitConfig, req *tfv1.AllocRequest, nodeGPUs map[string][]*tfv1.GPU,
 ) map[string]map[string]int {
 	result := make(map[string]map[string]int, len(nodeGPUs))
-	strategy := NewStrategy(s.getPlacementMode(ctx, req.PoolName), cfg)
+	strategy := NewStrategy(s.getPlacementMode(ctx, req.PoolName), cfg, s.nodeGpuStore)
 
 	allScores := make([]scoredGPU, 0, len(nodeGPUs))
 

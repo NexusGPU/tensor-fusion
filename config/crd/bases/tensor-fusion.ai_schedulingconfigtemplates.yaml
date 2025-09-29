@@ -277,10 +277,11 @@ spec:
                       type: object
                     type: array
                   mode:
-                    default: CompactFirst
+                    default: NodeCompactGPULowLoad
                     enum:
                     - CompactFirst
                     - LowLoadFirst
+                    - NodeCompactGPULowLoad
                     type: string
                 required:
                 - mode

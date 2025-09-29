@@ -42,7 +42,7 @@ type SchedulingConfigTemplateSpec struct {
 }
 
 type PlacementConfig struct {
-	// +kubebuilder:default=CompactFirst
+	// +kubebuilder:default=NodeCompactGPULowLoad
 	Mode PlacementMode `json:"mode"`
 
 	// +kubebuilder:default=true
@@ -53,7 +53,7 @@ type PlacementConfig struct {
 	GPUFilters []GPUFilter `json:"gpuFilters,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=CompactFirst;LowLoadFirst
+// +kubebuilder:validation:Enum=CompactFirst;LowLoadFirst;NodeCompactGPULowLoad
 type PlacementMode string
 
 const (
@@ -62,6 +62,9 @@ const (
 
 	// in some cases, use lowLoadFirst for balance and fairness
 	PlacementModeLowLoadFirst PlacementMode = "LowLoadFirst"
+
+	// in some cases, use nodeCompactGPULowLoad for balance and fairness
+	PlacementModeNodeCompactGPULowLoad PlacementMode = "NodeCompactGPULowLoad"
 )
 
 // GPUFilter is to select eligible GPUs for scheduling.
