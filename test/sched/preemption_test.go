@@ -1,9 +1,10 @@
+//go:build !nobench
+
 package sched
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -24,17 +25,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
-
-// isRunningInGitHubActions checks if the tests are running in GitHub Actions environment
-func isRunningInGitHubActions() bool {
-	if os.Getenv("GITHUB_ACTIONS") == "true" {
-		return true
-	}
-	if os.Getenv("CI") == "true" {
-		return true
-	}
-	return false
-}
 
 // PreemptionTestSuite holds common test setup for preemption tests
 type PreemptionTestSuite struct {
@@ -95,6 +85,9 @@ func (pts *PreemptionTestSuite) SetupSuite() {
 	Expect(err).To(Succeed())
 	pts.scheduler = scheduler
 	scheduler.SchedulingQueue.Run(klog.FromContext(ctx))
+	if scheduler.APIDispatcher != nil {
+		scheduler.APIDispatcher.Run(klog.FromContext(ctx))
+	}
 
 	// Start scheduler components
 	cc.EventBroadcaster.StartRecordingToSink(ctx.Done())
@@ -105,6 +98,7 @@ func (pts *PreemptionTestSuite) SetupSuite() {
 
 // TearDownSuite cleans up the test environment
 func (pts *PreemptionTestSuite) TearDownSuite() {
+	time.Sleep(300 * time.Millisecond)
 	if pts.cancel != nil {
 		pts.cancel()
 	}
@@ -140,16 +134,10 @@ var _ = Describe("GPU Resource Preemption", func() {
 	})
 
 	It("should preempt lower priority pods for higher priority ones", func() {
-		if isRunningInGitHubActions() {
-			Skip("Skipping preemption test in GitHub Actions environment")
-		}
 		testGPUResourcePreemption(suite)
 	})
 
 	It("should respect eviction protection periods", func() {
-		if isRunningInGitHubActions() {
-			Skip("Skipping eviction protection test in GitHub Actions environment")
-		}
 		testGPUResourceEvictProtection(suite)
 	})
 })
@@ -193,6 +181,8 @@ func testGPUResourcePreemption(suite *PreemptionTestSuite) {
 	defer func() {
 		_ = suite.k8sClient.Delete(suite.ctx, criticalPriorityPod)
 	}()
+	time.Sleep(10 * time.Millisecond)
+	suite.scheduler.SchedulingQueue.Add(klog.FromContext(suite.ctx), criticalPriorityPod)
 	suite.scheduler.ScheduleOne(suite.ctx)
 
 	// Preemption should be triggered and victims deleted, wait informer sync
