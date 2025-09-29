@@ -211,3 +211,4 @@ const MobileGpuClockSpeedMultiplier = 0.75
 const DefaultEvictionProtectionPriceRatio = 1.2
 const NodeCriticalPriorityClassName = "system-node-critical"
 const KarpenterNodeClaimKind = "NodeClaim"
+const KarpenterNodePoolKind = "NodePool"

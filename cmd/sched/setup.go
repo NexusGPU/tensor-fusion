@@ -156,6 +156,8 @@ func SetupScheduler(
 			mgr.GetEventRecorderFor("TensorFusionScheduler"),
 		)
 
+		// Save the original failure handler to avoid infinite recursion
+		originalFailureHandler := sched.FailureHandler
 		sched.FailureHandler = func(
 			ctx context.Context, fwk framework.Framework, podInfo *framework.QueuedPodInfo,
 			status *fwk.Status, nominatingInfo *framework.NominatingInfo, start time.Time,
@@ -165,7 +167,8 @@ func SetupScheduler(
 				// The unschedHandler will queue the pod and process expansion after buffer delay
 				unschedHandler.HandleRejectedPod(ctx, podInfo, status)
 			}
-			sched.FailureHandler(ctx, fwk, podInfo, status, nominatingInfo, start)
+			// Call the original failure handler to avoid infinite recursion
+			originalFailureHandler(ctx, fwk, podInfo, status, nominatingInfo, start)
 		}
 		return &cc, sched, nodeExpander, nil
 	}

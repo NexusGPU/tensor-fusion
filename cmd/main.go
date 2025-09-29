@@ -47,6 +47,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/version"
 	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	k8sVer "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apiserver/pkg/util/feature"
@@ -63,7 +64,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	schemeBuilder "sigs.k8s.io/controller-runtime/pkg/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/yaml"
 	// +kubebuilder:scaffold:imports
 )
@@ -100,6 +103,13 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(tfv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
+
+	karpenterScheme := &schemeBuilder.Builder{
+		GroupVersion: schema.GroupVersion{Group: "karpenter.sh", Version: "v1"},
+	}
+	karpenterScheme.Register(&karpv1.NodeClaim{}, &karpv1.NodeClaimList{})
+	karpenterScheme.Register(&karpv1.NodePool{}, &karpv1.NodePoolList{})
+	karpenterScheme.AddToScheme(scheme)
 }
 
 //nolint:gocyclo

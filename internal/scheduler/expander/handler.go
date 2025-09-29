@@ -11,6 +11,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo/mutable"
 	corev1 "k8s.io/api/core/v1"
 	errors "k8s.io/apimachinery/pkg/api/errors"
@@ -277,12 +278,15 @@ func (e *NodeExpander) simulateSchedulingWithoutGPU(ctx context.Context, pod *co
 		return nil, fmt.Errorf("pod labels is nil, pod: %s", pod.Name)
 	}
 
-	// Disable the tensor fusion label to simulate scheduling without GPU plugins
+	// Disable the tensor fusion component label to simulate scheduling without GPU plugins
 	// NOTE: must apply patch after `go mod vendor`, FindNodesThatFitPod is not exported from Kubernetes
 	// Run `git apply ./patches/scheduler-sched-one.patch` once or `bash scripts/patch-scheduler.sh`
-	pod.Labels[constants.TensorFusionEnabledLabelKey] = constants.FalseStringValue
+	if !utils.IsTensorFusionPod(pod) {
+		return nil, fmt.Errorf("pod to check expansion is not a tensor fusion worker pod: %s", pod.Name)
+	}
+	delete(pod.Labels, constants.LabelComponent)
 	scheduleResult, _, err := e.scheduler.FindNodesThatFitPod(ctx, fwkInstance, state, pod)
-	pod.Labels[constants.TensorFusionEnabledLabelKey] = constants.TrueStringValue
+	pod.Labels[constants.LabelComponent] = constants.ComponentWorker
 	if len(scheduleResult) == 0 {
 		return nil, err
 	}
@@ -382,32 +386,34 @@ func (e *NodeExpander) checkGPUFitForNewNode(pod *corev1.Pod, gpus []*tfv1.GPU) 
 
 func (e *NodeExpander) createGPUNodeClaim(ctx context.Context, pod *corev1.Pod, preparedNode *corev1.Node) error {
 	owners := preparedNode.GetOwnerReferences()
+	isKarpenterNodeClaim := false
+	isGPUNodeClaim := false
 	controlledBy := &metav1.OwnerReference{}
 	for _, owner := range owners {
-		if owner.Controller != nil && *owner.Controller {
-			controlledBy = &owner
+		controlledBy = &owner
+		// Karpenter owner reference is not controller reference
+		if owner.Kind == constants.KarpenterNodeClaimKind {
+			isKarpenterNodeClaim = true
+			break
+		} else if owner.Kind == tfv1.GPUNodeClaimKind {
+			isGPUNodeClaim = true
 			break
 		}
 	}
-	if controlledBy.Kind == "" {
-		e.logger.Info("node is not owned by any provisioner, skip expansion", "node", preparedNode.Name)
+	if !isKarpenterNodeClaim && !isGPUNodeClaim {
+		e.logger.Info("node is not owned by any known provisioner, skip expansion", "node", preparedNode.Name)
 		return nil
 	}
 	e.logger.Info("start expanding node from existing template node", "tmplNode", preparedNode.Name)
-
-	switch controlledBy.Kind {
-	case constants.KarpenterNodeClaimKind:
+	if isKarpenterNodeClaim {
 		// Check if controllerMeta's parent is GPUNodeClaim using unstructured object
 		return e.handleKarpenterNodeClaim(ctx, pod, preparedNode, controlledBy)
-	case tfv1.GPUNodeClaimKind:
+	} else if isGPUNodeClaim {
 		// Running in Provisioning mode, clone the parent GPUNodeClaim and apply
 		e.logger.Info("node is controlled by GPUNodeClaim, cloning another to expand node", "tmplNode", preparedNode.Name)
 		return e.cloneGPUNodeClaim(ctx, pod, preparedNode, controlledBy)
-	default:
-		e.logger.Info("node is not controlled by any known provisioner, skip expansion", "tmplNode", preparedNode.Name,
-			"controller", controlledBy.Kind)
-		return nil
 	}
+	return nil
 }
 
 // handleKarpenterNodeClaim handles the case where the controller is a Karpenter NodeClaim
@@ -424,8 +430,12 @@ func (e *NodeExpander) handleKarpenterNodeClaim(ctx context.Context, pod *corev1
 	// Check if the NodeClaim has owner references
 	ownerRefs := nodeClaim.GetOwnerReferences()
 	var nodeClaimParent *metav1.OwnerReference
+	hasNodePoolParent := false
 
 	for _, owner := range ownerRefs {
+		if owner.Kind == constants.KarpenterNodePoolKind {
+			hasNodePoolParent = true
+		}
 		if owner.Controller != nil && *owner.Controller {
 			nodeClaimParent = &owner
 			break
@@ -437,13 +447,13 @@ func (e *NodeExpander) handleKarpenterNodeClaim(ctx context.Context, pod *corev1
 		e.logger.Info("NodeClaim parent is GPUNodeClaim, cloning another to expand node",
 			"nodeClaimName", controlledBy.Name, "gpuNodeClaimParent", nodeClaimParent.Name)
 		return e.cloneGPUNodeClaim(ctx, pod, preparedNode, nodeClaimParent)
-	} else if nodeClaimParent != nil {
-		// No GPUNodeClaim parent, create karpenter NodeClaim directly with special label identifier
+	} else if hasNodePoolParent {
+		// owned by Karpenter node pool, create NodeClaim directly with special label identifier
 		e.logger.Info("NodeClaim owned by Karpenter Pool, creating Karpenter NodeClaim to expand node",
 			"nodeClaimName", controlledBy.Name)
 		return e.createKarpenterNodeClaimDirect(ctx, pod, preparedNode, nodeClaim)
 	} else {
-		return fmt.Errorf("NodeClaim has no parent, can not expand node, should not happen")
+		return fmt.Errorf("NodeClaim has no valid parent, can not expand node, should not happen")
 	}
 }
 
