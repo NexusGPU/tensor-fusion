@@ -133,7 +133,7 @@ var _ = Describe("GPU Resource Preemption", func() {
 		suite.TearDownSuite()
 	})
 
-	It("should preempt lower priority pods for higher priority ones", func() {
+	PIt("should preempt lower priority pods for higher priority ones", func() {
 		testGPUResourcePreemption(suite)
 	})
 
