@@ -40,6 +40,7 @@ import (
 const MaxGPUCounterPerAllocation = 128
 const CleanUpCheckInterval = 3 * time.Minute
 
+var mu sync.Mutex
 var GPUCapacityMap = map[string]tfv1.Resource{}
 
 type Strategy interface {
@@ -921,9 +922,11 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 
 	if s.gpuStore[key] != nil {
 		if gpu.Status.GPUModel != "" {
+			mu.Lock()
 			if _, exists := GPUCapacityMap[gpu.Status.GPUModel]; !exists {
 				GPUCapacityMap[gpu.Status.GPUModel] = *gpu.Status.Capacity
 			}
+			mu.Unlock()
 		}
 		syncGPUMetadataAndStatusFromCluster(s.gpuStore[key], gpu)
 		log.V(6).Info("GPU already exists in store", "name", key.Name)
@@ -1019,7 +1022,9 @@ func (s *GpuAllocator) addOrUpdateGPUMaps(gpuInMem *tfv1.GPU) {
 	}
 
 	if gpuInMem.Status.GPUModel != "" {
+		mu.Lock()
 		GPUCapacityMap[gpuInMem.Status.GPUModel] = *gpuInMem.Status.Capacity
+		mu.Unlock()
 	}
 }
 
