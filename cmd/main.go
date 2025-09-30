@@ -109,7 +109,7 @@ func init() {
 	}
 	karpenterScheme.Register(&karpv1.NodeClaim{}, &karpv1.NodeClaimList{})
 	karpenterScheme.Register(&karpv1.NodePool{}, &karpv1.NodePoolList{})
-	karpenterScheme.AddToScheme(scheme)
+	utilruntime.Must(karpenterScheme.AddToScheme(scheme))
 }
 
 //nolint:gocyclo

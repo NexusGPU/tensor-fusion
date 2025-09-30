@@ -3,7 +3,7 @@ package gpuresources
 import (
 	"context"
 	"encoding/json"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,6 +65,9 @@ type GPUSchedulingStateData struct {
 
 	// IsPreemption
 	IsPreemption bool
+
+	// ScoringStrategy
+	ScoringStrategy gpuallocator.Strategy
 }
 
 func (p *GPUSchedulingStateData) Clone() fwk.StateData {
@@ -203,11 +206,11 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 	}
 	s.logger.Info("filtered valid node GPUs", "nodes count", cnt, "pod", pod.Name)
 
+	strategy := s.allocator.GetScoringStrategy(s.cfg, allocRequest)
 	// assign score based on different strategies
-	score := s.allocator.Score(ctx, s.cfg, allocRequest, validNodesValidGPUs)
-
+	score := s.allocator.Score(ctx, strategy, allocRequest, validNodesValidGPUs)
 	// if some GPUs are filtered out but Node is valid, assign score for calculating node average score
-	notMatchingGPUScore := s.allocator.Score(ctx, s.cfg, allocRequest, validNodeNonMatchingGPUs)
+	notMatchingGPUScore := s.allocator.Score(ctx, strategy, allocRequest, validNodeNonMatchingGPUs)
 
 	s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "PreScheduleDone", "pre filter for TensorFusion workload",
 		"TensorFusion pre schedule done, valid GPU node count: "+strconv.Itoa(cnt))
@@ -224,6 +227,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 		ValidNodeNotMatchingGPUScore: notMatchingGPUScore,
 		FinalGPUs:                    []string{},
 		PreemptPods:                  sync.Map{},
+		ScoringStrategy:              strategy,
 		IsPreemption:                 false,
 	})
 
@@ -384,7 +388,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 
 	// set final GPUs and try update GPU allocator cache
 	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
-	gpuScoreMap, ok := schedulingResult.ValidNodeGPUScore[nodeName]
+	validGPUs, ok := schedulingResult.NodeGPUs[nodeName]
 	if !ok {
 		return fwk.NewStatus(fwk.Unschedulable, "not valid node")
 	}
@@ -392,16 +396,30 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	// find top N score GPUs in this node
 	neededGPUs := allocRequest.(*tfv1.AllocRequest).Count
 
-	gpuScoreEntries := lo.Entries(gpuScoreMap)
-	sort.Slice(gpuScoreEntries, func(i, j int) bool {
-		return gpuScoreEntries[i].Value < gpuScoreEntries[j].Value
-	})
+	// when needed GPUs equals to valid GPUs, just return all GPUs on this node
+	if neededGPUs == uint(len(validGPUs)) {
+		schedulingResult.FinalGPUs = lo.Map(validGPUs, func(gpu *tfv1.GPU, _ int) string {
+			return gpu.Name
+		})
+	} else if neededGPUs < uint(len(validGPUs)) {
+		// try scoring GPU from single node level
+		// TODO: consider NUMA topology on one node when neededGPUs > 1
+		gpuScoreEntries := make([]lo.Entry[string, int], 0, len(validGPUs))
+		for _, gpu := range validGPUs {
+			score := schedulingResult.ScoringStrategy.Score(gpu, false)
+			gpuScoreEntries = append(gpuScoreEntries, lo.Entry[string, int]{Key: gpu.Name, Value: score})
+		}
+		slices.SortFunc(gpuScoreEntries, func(i, j lo.Entry[string, int]) int {
+			return j.Value - i.Value
+		})
+		schedulingResult.FinalGPUs = lo.Map(gpuScoreEntries[:neededGPUs], func(entry lo.Entry[string, int], _ int) string {
+			return entry.Key
+		})
+	} else {
+		return fwk.NewStatus(fwk.Error, "not enough GPUs on nominated node:"+nodeName)
+	}
 
-	schedulingResult.FinalGPUs = lo.Map(gpuScoreEntries[:neededGPUs], func(entry lo.Entry[string, int], _ int) string {
-		return entry.Key
-	})
-	state.Write(CycleStateGPUSchedulingResult, schedulingResult)
-
+	// reserve GPU resources inside memory and asynchronously update GPU custom resource
 	_, err = s.allocator.Bind(
 		schedulingResult.FinalGPUs,
 		allocRequest.(*tfv1.AllocRequest),

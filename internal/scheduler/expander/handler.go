@@ -507,12 +507,12 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 
 	// Pass through labels and annotations
 	for k, v := range nodeClaim.Labels {
-		if !strings.HasPrefix(k, "karpenter.") {
+		if isNotAutoAddedKarpenterKeys(k) {
 			newNodeClaim.Labels[k] = v
 		}
 	}
 	for k, v := range nodeClaim.Annotations {
-		if !strings.HasPrefix(k, "karpenter.") {
+		if isNotAutoAddedKarpenterKeys(k) {
 			newNodeClaim.Annotations[k] = v
 		}
 	}
@@ -526,4 +526,12 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 	e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCompleted", "created new NodeClaim for node expansion: %s", newNodeClaim.Name)
 	e.logger.Info("created new NodeClaim for node expansion", "pod", pod.Name, "namespace", pod.Namespace, "nodeClaim", newNodeClaim.Name)
 	return nil
+}
+
+func isNotAutoAddedKarpenterKeys(k string) bool {
+	if strings.HasPrefix(k, "karpenter.") {
+		// others are cloud provider's label and annotation, should not copy, wait for cloud provider to add
+		return strings.HasPrefix(k, "karpenter.sh") || strings.HasPrefix(k, "karpenter.k8s.io")
+	}
+	return true
 }

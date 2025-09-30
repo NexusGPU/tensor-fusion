@@ -110,6 +110,7 @@
         "nodeclassref",
         "noderesources",
         "nolint",
+        "NUMA",
         "Nvlink",
         "NVML",
         "objs",
