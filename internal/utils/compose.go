@@ -4,6 +4,7 @@ import (
 	context "context"
 	"fmt"
 	"maps"
+	"os"
 	"strconv"
 	"strings"
 
@@ -183,7 +184,7 @@ func AddTFDefaultClientConfBeforePatch(
 			Requests: injectLibResource,
 			Limits:   injectLibResource,
 		},
-		Env: convertDisabledFeatures4InjectLib(pod.Annotations[constants.DisableFeaturesAnnotation]),
+		Env: configureFeatures4InjectLib(tfInfo.Profile.IsLocalGPU, pod.Annotations[constants.DisableFeaturesAnnotation]),
 	})
 	pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 		Name: constants.TFLibsVolumeName,
@@ -196,17 +197,20 @@ func AddTFDefaultClientConfBeforePatch(
 		pod.Spec.Containers[injectContainerIndex].Env = append(pod.Spec.Containers[injectContainerIndex].Env, v1.EnvVar{
 			Name:  constants.PrependPathEnv,
 			Value: constants.TFLibsVolumeMountPath,
-		}, v1.EnvVar{
-			Name:  constants.PrependLDLibraryPathEnv,
-			Value: constants.TFLibsVolumeMountPath,
 		})
 
+		// Known issue: glibc ldd config style, does NOT support musl, fortunately, musl rarely used in AI workloads
 		pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 			pod.Spec.Containers[injectContainerIndex].VolumeMounts,
 			v1.VolumeMount{
 				Name:      constants.TFLibsVolumeName,
 				MountPath: constants.LdPreloadFile,
 				SubPath:   constants.LdPreloadFileName,
+				ReadOnly:  true,
+			}, v1.VolumeMount{
+				Name:      constants.TFLibsVolumeName,
+				MountPath: constants.LdLibraryPathFile,
+				SubPath:   constants.LdLibraryPathFileName,
 				ReadOnly:  true,
 			}, v1.VolumeMount{
 				Name:      constants.TFLibsVolumeName,
@@ -326,24 +330,31 @@ func convertDisabledFeaturesToEnvs(disabledFeatures string, envList []v1.EnvVar)
 	return envList
 }
 
-func convertDisabledFeatures4InjectLib(disabledFeatures string) []v1.EnvVar {
+func configureFeatures4InjectLib(isLocalGPU bool, disabledFeatures string) []v1.EnvVar {
+	envList := make([]v1.EnvVar, 0, 1)
+	if isLocalGPU {
+		// when tensor-fusion client already in GPU node, nvidia-smi and cuda are available, no need to copy
+		// for remote mode, should copy nvidia-smi since we don't know if nvidia-container-runtime is installed
+		return append(envList, v1.EnvVar{
+			Name:  constants.RunInsideGPUEnv,
+			Value: constants.TrueStringValue,
+		})
+	}
 	if disabledFeatures == "" {
-		return []v1.EnvVar{}
+		return envList
 	}
 	disabledFeaturesList := strings.SplitSeq(disabledFeatures, ",")
 
 	// GPU limiter by-pass take effect in bootstrap stage, add special handling here
 	for feature := range disabledFeaturesList {
 		if feature == constants.BuiltInFeaturesGpuLimiter {
-			return []v1.EnvVar{
-				{
-					Name:  featureShortcutMap[feature].EnvName,
-					Value: featureShortcutMap[feature].EnvValue,
-				},
-			}
+			envList = append(envList, v1.EnvVar{
+				Name:  featureShortcutMap[feature].EnvName,
+				Value: featureShortcutMap[feature].EnvValue,
+			})
 		}
 	}
-	return []v1.EnvVar{}
+	return envList
 }
 
 func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool) {
@@ -488,6 +499,17 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 				constants.SystemPtraceCapability,
 			},
 		},
+	}
+
+	// When k8s version >= 1.30, avoid AppArmor level limit of writing shared memory and reading /proc
+	minorVersionStr := os.Getenv(constants.KubeApiVersionMinorEnv)
+	if minorVersionStr != "" {
+		minorVersion, err := strconv.Atoi(minorVersionStr)
+		if err != nil || minorVersion >= 30 {
+			spec.Containers[0].SecurityContext.AppArmorProfile = &v1.AppArmorProfile{
+				Type: v1.AppArmorProfileTypeUnconfined,
+			}
+		}
 	}
 
 	port := getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor)

@@ -67,11 +67,15 @@ const (
 	RealNvmlLibPathValue = "/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
 	RealCUDALibPathValue = "/lib/x86_64-linux-gnu/libcuda.so"
 
-	PrependPathEnv          = "TF_PREPEND_PATH"
-	PrependLDLibraryPathEnv = "TF_PREPEND_LD_LIBRARY_PATH"
+	PrependPathEnv = "TF_PREPEND_PATH"
+
+	RunInsideGPUEnv = "RUN_INSIDE_GPU_NODE"
 
 	LdPreloadFileName = "ld.so.preload"
 	LdPreloadFile     = "/etc/ld.so.preload"
+
+	LdLibraryPathFileName = "zz_tensor-fusion.conf"
+	LdLibraryPathFile     = "/etc/ld.so.conf.d/zz_tensor-fusion.conf"
 
 	TFLibsVolumeName         = "tf-libs"
 	TFLibsVolumeMountPath    = "/tensor-fusion"
