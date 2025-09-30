@@ -45,7 +45,10 @@ var DefaultGPUSelector = func(
 		score := 0
 		allGPUs := nodeGPUMap[node]
 		for _, gpu := range allGPUs {
-			score += strategy.Score(gpu)
+			if gpu == nil || gpu.Status.Available == nil || gpu.Status.Capacity == nil {
+				return nil, fmt.Errorf("gpu %s has no available or capacity, unexpected state", gpu.Name)
+			}
+			score += strategy.Score(gpu, true)
 		}
 		nodeScores = append(nodeScores, struct {
 			node  string
@@ -67,7 +70,7 @@ var DefaultGPUSelector = func(
 		if len(gpus) >= int(count) {
 			// choose highest score GPUs
 			slices.SortFunc(gpus, func(a, b *tfv1.GPU) int {
-				return strategy.Score(b) - strategy.Score(a)
+				return strategy.Score(b, false) - strategy.Score(a, false)
 			})
 			return gpus[:count], nil
 		}
@@ -82,9 +85,15 @@ func (l NodeCompactGPULowLoad) SelectGPUs(gpus []*tfv1.GPU, count uint) ([]*tfv1
 }
 
 // Score function is using by Kubernetes scheduler framework
-func (l NodeCompactGPULowLoad) Score(gpu *tfv1.GPU) int {
-	// TODO: should consider node level score, and GPU score is second level
-	// probably Add ScoreNode function (with all GPU score context)
+func (l NodeCompactGPULowLoad) Score(gpu *tfv1.GPU, isForNode bool) int {
+	// when its score for Node, higher allocation ratio gets higher score
+	if isForNode {
+		tflopsUsedPercentage := 100 - gpu.Status.Available.Tflops.AsApproximateFloat64()/gpu.Status.Capacity.Tflops.AsApproximateFloat64()*100
+		vramUsedPercentage := 100 - gpu.Status.Available.Vram.AsApproximateFloat64()/gpu.Status.Capacity.Vram.AsApproximateFloat64()*100
+		return normalizeScore(l.cfg, vramUsedPercentage, tflopsUsedPercentage)
+	}
+
+	// when its score for single GPU, lower allocation ratio gets higher score
 	tflopsAvailablePercentage := gpu.Status.Available.Tflops.AsApproximateFloat64() / gpu.Status.Capacity.Tflops.AsApproximateFloat64() * 100
 	vramAvailablePercentage := gpu.Status.Available.Vram.AsApproximateFloat64() / gpu.Status.Capacity.Vram.AsApproximateFloat64() * 100
 	return normalizeScore(l.cfg, vramAvailablePercentage, tflopsAvailablePercentage)

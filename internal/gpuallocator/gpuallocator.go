@@ -44,7 +44,9 @@ var mu sync.Mutex
 var GPUCapacityMap = map[string]tfv1.Resource{}
 
 type Strategy interface {
-	Score(gpu *tfv1.GPU) int
+	// When isForNode = true, indicates each GPU's node level score
+	// otherwise it's single GPU score inside one node
+	Score(gpu *tfv1.GPU, isForNode bool) int
 
 	SelectGPUs(gpus []*tfv1.GPU, count uint) ([]*tfv1.GPU, error)
 }
@@ -673,18 +675,20 @@ type scoredGPU struct {
 	score    int
 }
 
+func (s *GpuAllocator) GetScoringStrategy(cfg *config.GPUFitConfig, req *tfv1.AllocRequest) Strategy {
+	return NewStrategy(s.getPlacementMode(s.ctx, req.PoolName), cfg, s.nodeGpuStore)
+}
+
 // First level is k8s node name, second level is GPU name, value is score
 func (s *GpuAllocator) Score(
-	ctx context.Context, cfg *config.GPUFitConfig, req *tfv1.AllocRequest, nodeGPUs map[string][]*tfv1.GPU,
+	ctx context.Context, strategy Strategy, req *tfv1.AllocRequest, nodeGPUs map[string][]*tfv1.GPU,
 ) map[string]map[string]int {
 	result := make(map[string]map[string]int, len(nodeGPUs))
-	strategy := NewStrategy(s.getPlacementMode(ctx, req.PoolName), cfg, s.nodeGpuStore)
-
 	allScores := make([]scoredGPU, 0, len(nodeGPUs))
 
 	for nodeName, gpus := range nodeGPUs {
 		for _, gpu := range gpus {
-			res := strategy.Score(gpu)
+			res := strategy.Score(gpu, true)
 
 			// making Pending GPU to lower score, prefer not scheduling to them
 			if gpu.Status.Phase == tfv1.TensorFusionGPUPhasePending {
@@ -1480,18 +1484,18 @@ func (s *GpuAllocator) getPlacementMode(ctx context.Context, poolName string) tf
 	pool := &tfv1.GPUPool{}
 	if err := s.Get(ctx, client.ObjectKey{Name: poolName}, pool); err != nil {
 		// if failed to get pool, default to compact first
-		return tfv1.PlacementModeCompactFirst
+		return tfv1.PlacementModeNodeCompactGPULowLoad
 	}
 
 	if pool.Spec.SchedulingConfigTemplate == nil || *pool.Spec.SchedulingConfigTemplate == "" {
-		return tfv1.PlacementModeCompactFirst
+		return tfv1.PlacementModeNodeCompactGPULowLoad
 	}
 
 	// get scheduling config template
 	schedulingConfigTemplate := &tfv1.SchedulingConfigTemplate{}
 	if err := s.Get(ctx, client.ObjectKey{Name: *pool.Spec.SchedulingConfigTemplate}, schedulingConfigTemplate); err != nil {
 		// if failed to get scheduling config template, default to compact first
-		return tfv1.PlacementModeCompactFirst
+		return tfv1.PlacementModeNodeCompactGPULowLoad
 	}
 	return schedulingConfigTemplate.Spec.Placement.Mode
 }

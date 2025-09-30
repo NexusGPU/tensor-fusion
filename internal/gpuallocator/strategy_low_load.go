@@ -20,7 +20,7 @@ func (l LowLoadFirst) SelectGPUs(gpus []*tfv1.GPU, count uint) ([]*tfv1.GPU, err
 }
 
 // Score function is using by Kubernetes scheduler framework
-func (l LowLoadFirst) Score(gpu *tfv1.GPU) int {
+func (l LowLoadFirst) Score(gpu *tfv1.GPU, _ bool) int {
 	tflopsAvailablePercentage := gpu.Status.Available.Tflops.AsApproximateFloat64() /
 		gpu.Status.Capacity.Tflops.AsApproximateFloat64() * 100
 	vramAvailablePercentage := gpu.Status.Available.Vram.AsApproximateFloat64() /

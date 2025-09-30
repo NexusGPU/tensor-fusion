@@ -20,7 +20,7 @@ func (c CompactFirst) SelectGPUs(gpus []*tfv1.GPU, count uint) ([]*tfv1.GPU, err
 }
 
 // Score function is using by Kubernetes scheduler framework
-func (c CompactFirst) Score(gpu *tfv1.GPU) int {
+func (c CompactFirst) Score(gpu *tfv1.GPU, _ bool) int {
 	tflopsUsedPercentage := 100 - gpu.Status.Available.Tflops.AsApproximateFloat64()/gpu.Status.Capacity.Tflops.AsApproximateFloat64()*100
 	vramUsedPercentage := 100 - gpu.Status.Available.Vram.AsApproximateFloat64()/gpu.Status.Capacity.Vram.AsApproximateFloat64()*100
 	return normalizeScore(c.cfg, vramUsedPercentage, tflopsUsedPercentage)
