@@ -595,6 +595,57 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(tfInfo.Profile.Qos).To(Equal(tfv1.QoSHigh))
 			Expect(*tfInfo.EnabledReplicas).To(Equal(int32(3)))
 		})
+
+		It("should treat generateName as workload name if the pod has no controllerRef", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:    "default",
+					GenerateName: "test-name",
+					Annotations: map[string]string{
+						constants.GpuPoolKey: "mock",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "test-container",
+						},
+					},
+				},
+			}
+			tfInfo, _ := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			Expect(tfInfo.WorkloadName).To(HavePrefix("test-name"))
+		})
+
+		It("should treat controller name as workload name if the pod has controllerRef", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:    "default",
+					GenerateName: "test-name",
+					Annotations: map[string]string{
+						constants.GpuPoolKey: "mock",
+					},
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: "apps/v1",
+							Kind:       "ReplicaSet",
+							Name:       "test-rs",
+							UID:        "rs-uid",
+							Controller: ptr.To(true),
+						},
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: "test-container",
+						},
+					},
+				},
+			}
+			tfInfo, _ := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			Expect(tfInfo.WorkloadName).To(Equal("test-rs"))
+		})
 	})
 
 	Context("patchTFClient", func() {
@@ -620,6 +671,139 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(patch).NotTo(BeEmpty())
 			// There should be at least 2 patches (initContainers and the container env patches)
 			Expect(len(patch)).To(BeNumerically(">=", 2))
+		})
+	})
+
+	Context("when handling workload", func() {
+		It("should update workload's controllerRef same with Pod's controllerRef", func() {
+			expectedRef := metav1.OwnerReference{
+				APIVersion: "apps/v1",
+				Kind:       "ReplicaSet",
+				Name:       "test-rs",
+				UID:        "rs-uid",
+				Controller: ptr.To(true),
+			}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: "test-name",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.GpuPoolKey: "mock",
+					},
+					OwnerReferences: []metav1.OwnerReference{expectedRef},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "main",
+						Image: "test-image",
+					}},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+			Expect(pod.Annotations[constants.SetPendingOwnedWorkloadAnnotation]).To(BeEmpty())
+
+			Eventually(func(g Gomega) {
+				workload := &tfv1.TensorFusionWorkload{}
+				g.Expect(k8sClient.Get(ctx,
+					client.ObjectKey{
+						Name:      expectedRef.Name,
+						Namespace: "default",
+					}, workload)).To(Succeed())
+				gotRef := metav1.GetControllerOfNoCopy(workload)
+				g.Expect(*gotRef).To(Equal(expectedRef))
+			}).Should(Succeed())
+
+			newExpectedRef := metav1.OwnerReference{
+				APIVersion: "apps/v1",
+				Kind:       "ReplicaSet",
+				Name:       "new-test-rs",
+				UID:        "new-rs-uid",
+				Controller: ptr.To(true),
+			}
+			pod.OwnerReferences = []metav1.OwnerReference{newExpectedRef}
+			podBytes, err = json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			req = admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+
+			resp = mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+			Expect(pod.Annotations[constants.SetPendingOwnedWorkloadAnnotation]).To(BeEmpty())
+
+			Eventually(func(g Gomega) {
+				workload := &tfv1.TensorFusionWorkload{}
+				g.Expect(k8sClient.Get(ctx,
+					client.ObjectKey{
+						Name:      newExpectedRef.Name,
+						Namespace: "default",
+					}, workload)).To(Succeed())
+				gotRef := metav1.GetControllerOfNoCopy(workload)
+				g.Expect(*gotRef).To(Equal(newExpectedRef))
+			}).Should(Succeed())
+		})
+
+		It("should add SetPendingOwnedWorkload annotation to pod when workload has no controllerRef", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: "test-name",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.GpuPoolKey: "mock",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "main",
+						Image: "test-image",
+					}},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+			annotation, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return patch.Path == "/metadata/annotations/tensor-fusion.ai~1pending-owned-workload"
+			})
+			Expect(found).To(BeTrue())
+			Expect(annotation.Value).To(HavePrefix("test-name"))
 		})
 	})
 })

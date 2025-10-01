@@ -96,3 +96,43 @@ func FindFirstLevelOwnerReference(obj metav1.Object) *metav1.OwnerReference {
 	}
 	return &ownerRef
 }
+
+// FindRootControllerRef recursively finds the root controller reference for a given object (e.g. Pod).
+func FindRootControllerRef(ctx context.Context, c client.Client, obj metav1.Object) (*metav1.OwnerReference, error) {
+	if metav1.GetControllerOfNoCopy(obj) == nil {
+		return nil, nil
+	}
+
+	namespace := obj.GetNamespace()
+	current := obj
+	for {
+		controllerRef := metav1.GetControllerOf(current)
+		if controllerRef == nil {
+			if rObj, ok := current.(runtime.Object); ok {
+				gvk := rObj.GetObjectKind().GroupVersionKind()
+				return metav1.NewControllerRef(current, gvk), nil
+			} else {
+				return nil, fmt.Errorf("not a runtime.Object")
+			}
+		}
+
+		unObj := &unstructured.Unstructured{}
+		unObj.SetAPIVersion(controllerRef.APIVersion)
+		unObj.SetKind(controllerRef.Kind)
+		err := c.Get(ctx, client.ObjectKey{Name: controllerRef.Name, Namespace: namespace}, unObj)
+		if err != nil {
+			// if not found, return controllerRef as root
+			if errors.IsNotFound(err) {
+				return controllerRef, nil
+			}
+			return nil, fmt.Errorf("get controller object: %w", err)
+		}
+
+		// Cast back to metav1.Object if possible
+		if metaObj, ok := any(unObj).(metav1.Object); ok {
+			current = metaObj
+		} else {
+			return nil, fmt.Errorf("unexpected type for controller object %s/%s", controllerRef.Kind, controllerRef.Name)
+		}
+	}
+}
