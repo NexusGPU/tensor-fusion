@@ -9,6 +9,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
+	dracel "k8s.io/dynamic-resource-allocation/cel"
 )
 
 // Test constants for repeated strings
@@ -140,6 +141,46 @@ func BenchmarkFilterPerformance(b *testing.B) {
 			}
 
 			filteredGPUs, err := celFilter.Filter(ctx, workerPodKey, gpus)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = filteredGPUs
+		}
+	})
+
+	// Benchmark DRA CEL filter - basic filtering
+	b.Run("DRACELFilter_Basic", func(b *testing.B) {
+		request := createTestAllocRequest("A100", "")
+		cache := dracel.NewCache(100, dracel.Features{})
+
+		draFilter, err := NewDRACELFilter(request, cache)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			filteredGPUs, err := draFilter.Filter(ctx, workerPodKey, gpus)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = filteredGPUs
+		}
+	})
+
+	// Benchmark DRA CEL filter - complex expression
+	b.Run("DRACELFilter_Complex", func(b *testing.B) {
+		request := createTestAllocRequest("", "device.attributes['model'].string == 'A100' && device.attributes['label.environment'].string == '"+testEnvironmentProduction+"'")
+		cache := dracel.NewCache(100, dracel.Features{})
+
+		draFilter, err := NewDRACELFilter(request, cache)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			filteredGPUs, err := draFilter.Filter(ctx, workerPodKey, gpus)
 			if err != nil {
 				b.Fatal(err)
 			}

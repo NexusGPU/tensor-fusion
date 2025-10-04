@@ -122,6 +122,7 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 			resourceSlice.Labels = make(map[string]string)
 		}
 		resourceSlice.Labels[constants.LabelKeyOwner] = gpuNode.Name
+		resourceSlice.Labels[constants.KubernetesHostNameLabel] = gpuNode.Name
 		return nil
 	})
 
@@ -144,6 +145,7 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpus []tfv1
 			continue
 		}
 		//TODO extract to constants
+		//TODO quota support
 		poolName := gpu.Labels[constants.GpuPoolKey]
 		device := resourcev1beta2.Device{
 			Name: gpu.Status.UUID,
