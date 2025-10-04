@@ -39,6 +39,10 @@ type SchedulingConfigTemplateSpec struct {
 	// single GPU device multi-process queuing and fair scheduling with QoS constraint
 	// +optional
 	Hypervisor *HypervisorScheduling `json:"hypervisor,omitempty"`
+
+	// enable Dynamic Resource Allocation (DRA) for GPU resource management
+	// +optional
+	DRA *DRAConfig `json:"dra,omitempty"`
 }
 
 type PlacementConfig struct {
@@ -204,6 +208,17 @@ type MultiProcessQueuing struct {
 	Interval string `json:"interval,omitempty"`
 
 	QueueLevelTimeSlices []string `json:"queueLevelTimeSlices,omitempty"`
+}
+
+// DRAConfig configures Dynamic Resource Allocation support
+type DRAConfig struct {
+	// Enable DRA mode for all workloads in this configuration template
+	// +optional
+	Enable *bool `json:"enable,omitempty"`
+
+	// ResourceClaimTemplateName specifies the ResourceClaim template name to use
+	// +optional
+	ResourceClaimTemplateName string `json:"resourceClaimTemplateName,omitempty"`
 }
 
 // SchedulingConfigTemplateStatus defines the observed state of SchedulingConfigTemplate.

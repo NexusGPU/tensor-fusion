@@ -347,7 +347,6 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 		readyCondition.Status = metav1.ConditionFalse
 		readyCondition.Reason = "WorkerFailed"
 		readyCondition.Message = fmt.Sprintf("Failed workers num: %d", failedWorkers)
-		r.Recorder.Eventf(workload, corev1.EventTypeWarning, "WorkerFailed", "Failed workers num: %d", failedWorkers)
 	} else if workload.Spec.IsDynamicReplica() {
 		// for dynamic replicas, if no worker failed, indicate workload is running
 		phase = tfv1.TensorFusionWorkloadPhaseRunning

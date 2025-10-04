@@ -97,7 +97,7 @@ var _ = Describe("GPU Allocator", func() {
 			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-pool"}, pool); err != nil {
 				Expect(err).NotTo(HaveOccurred())
 			}
-			_, _ = RefreshGPUNodeCapacity(ctx, k8sClient, gpuNode, pool)
+			_, _ = RefreshGPUNodeCapacity(ctx, k8sClient, gpuNode, pool, allocator)
 
 			// Verify resources were reduced on the allocated GPU
 			gpu := getGPU(gpus[0].Name)
@@ -107,8 +107,14 @@ var _ = Describe("GPU Allocator", func() {
 			node := getGPUNode(gpu)
 			diffTflops := node.Status.TotalTFlops.Value() - node.Status.AvailableTFlops.Value()
 			diffVRAM := node.Status.TotalVRAM.Value() - node.Status.AvailableVRAM.Value()
+
+			diffVirtualTflops := node.Status.VirtualTFlops.Value() - node.Status.VirtualAvailableTFlops.Value()
+			diffVirtualVRAM := node.Status.VirtualVRAM.Value() - node.Status.VirtualAvailableVRAM.Value()
 			Expect(diffTflops).To(BeEquivalentTo(50))
 			Expect(diffVRAM).To(BeEquivalentTo(8 * 1024 * 1024 * 1024))
+
+			Expect(diffVirtualTflops).To(BeEquivalentTo(50))
+			Expect(diffVirtualVRAM).To(BeEquivalentTo(8 * 1024 * 1024 * 1024))
 		})
 
 		It("should allocate multiple GPUs from the same node", func() {

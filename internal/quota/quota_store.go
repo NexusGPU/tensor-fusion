@@ -79,7 +79,16 @@ func (qs *QuotaStore) CheckQuotaAvailable(namespace string, req *tfv1.AllocReque
 	if err := qs.checkSingleQuotas(entry, req); err != nil {
 		return err
 	}
-	return qs.checkTotalQuotas(entry, req)
+	return qs.checkTotalQuotas(entry, req, nil)
+}
+
+func (qs *QuotaStore) CheckTotalQuotaRelaxed(req *tfv1.AllocRequest, toReleaseResource *tfv1.GPUResourceUsage) error {
+	entry, exists := qs.QuotaStore[req.WorkloadNameNamespace.Namespace]
+	if !exists {
+		// No quota defined for this namespace, allow allocation
+		return nil
+	}
+	return qs.checkTotalQuotas(entry, req, toReleaseResource)
 }
 
 func (qs *QuotaStore) AdjustQuota(namespace string, reqDelta tfv1.Resource, limitDelta tfv1.Resource) {
@@ -103,41 +112,51 @@ func (qs *QuotaStore) checkSingleQuotas(entry *QuotaStoreEntry, req *tfv1.AllocR
 	if single.MaxLimits != nil {
 		if !single.MaxLimits.Tflops.IsZero() && req.Limit.Tflops.Cmp(single.MaxLimits.Tflops) > 0 {
 			return &QuotaExceededError{
-				Namespace: entry.Quota.Namespace,
-				Resource:  MaxTFlopsLimitResource,
-				Requested: req.Limit.Tflops,
-				Limit:     single.MaxLimits.Tflops,
+				Namespace:    entry.Quota.Namespace,
+				Resource:     MaxTFlopsLimitResource,
+				Requested:    req.Limit.Tflops,
+				Limit:        single.MaxLimits.Tflops,
+				Unresolvable: true,
 			}
 		}
 
 		// Check single VRAM limit (per GPU)
 		if !single.MaxLimits.Vram.IsZero() && req.Request.Vram.Cmp(single.MaxLimits.Vram) > 0 {
 			return &QuotaExceededError{
-				Namespace: entry.Quota.Namespace,
-				Resource:  MaxVRAMLimitResource,
-				Requested: req.Request.Vram,
-				Limit:     single.MaxLimits.Vram,
+				Namespace:    entry.Quota.Namespace,
+				Resource:     MaxVRAMLimitResource,
+				Requested:    req.Request.Vram,
+				Limit:        single.MaxLimits.Vram,
+				Unresolvable: true,
 			}
 		}
 
 		// Check single GPU count limit (per worker)
 		if single.MaxGPUCount != nil && int32(req.Count) > *single.MaxGPUCount {
 			return &QuotaExceededError{
-				Namespace: entry.Quota.Namespace,
-				Resource:  MaxGPULimitResource,
-				Requested: *resource.NewQuantity(int64(req.Count), resource.DecimalSI),
-				Limit:     *resource.NewQuantity(int64(*single.MaxGPUCount), resource.DecimalSI),
+				Namespace:    entry.Quota.Namespace,
+				Resource:     MaxGPULimitResource,
+				Requested:    *resource.NewQuantity(int64(req.Count), resource.DecimalSI),
+				Limit:        *resource.NewQuantity(int64(*single.MaxGPUCount), resource.DecimalSI),
+				Unresolvable: true,
 			}
 		}
 	}
 	return nil
 }
 
-func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRequest) error {
+func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRequest, toReleaseResource *tfv1.GPUResourceUsage) error {
 	quotaNs := entry.Quota.Namespace
+
+	// Check total requests
 	if entry.Quota.Spec.Total.Requests != nil {
 		total := entry.Quota.Spec.Total.Requests
-		current := entry.CurrentUsage.Requests
+		current := *entry.CurrentUsage.Requests.DeepCopy()
+
+		if toReleaseResource != nil {
+			current.Tflops.Sub(toReleaseResource.Requests.Tflops)
+			current.Vram.Sub(toReleaseResource.Requests.Vram)
+		}
 		err := checkTotalExceeded(req, total, current, quotaNs, true)
 		if err != nil {
 			return err
@@ -147,11 +166,22 @@ func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRe
 	// Check total limits
 	if entry.Quota.Spec.Total.Limits != nil {
 		total := entry.Quota.Spec.Total.Limits
-		usage := entry.CurrentUsage.Limits
+		usage := *entry.CurrentUsage.Limits.DeepCopy()
+
+		if toReleaseResource != nil {
+			usage.Tflops.Sub(toReleaseResource.Limits.Tflops)
+			usage.Vram.Sub(toReleaseResource.Limits.Vram)
+		}
 		err := checkTotalExceeded(req, total, usage, quotaNs, false)
 		if err != nil {
 			return err
 		}
+	}
+
+	// If it's preempt case, skip checking total workers since it's
+	// replacing existing workers rather than creating new ones
+	if toReleaseResource != nil {
+		return nil
 	}
 
 	// Check total workers, each allocation will create one worker instance
@@ -451,10 +481,11 @@ func (qs *QuotaStore) SyncQuotasToK8s(ctx context.Context) {
 
 // QuotaExceededError represents a quota exceeded error with detailed information
 type QuotaExceededError struct {
-	Namespace string
-	Resource  string
-	Requested resource.Quantity
-	Limit     resource.Quantity
+	Namespace    string
+	Resource     string
+	Requested    resource.Quantity
+	Limit        resource.Quantity
+	Unresolvable bool
 }
 
 func (e *QuotaExceededError) Error() string {

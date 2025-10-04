@@ -318,7 +318,11 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *tfv
 
 	// Add GPU resources if specified (Karpenter supports nvidia.com/gpu)
 	if param.GPUDeviceOffered > 0 {
-		resourceRequests[karpenterConfig.GPUResourceName] = resource.MustParse(fmt.Sprintf("%d", param.GPUDeviceOffered))
+		quantity, err := resource.ParseQuantity(fmt.Sprintf("%d", param.GPUDeviceOffered))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse GPUDeviceOffered: %v", err)
+		}
+		resourceRequests[karpenterConfig.GPUResourceName] = quantity
 	}
 
 	// query nodeClass and build NodeClassRef
