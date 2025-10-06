@@ -33,7 +33,7 @@ require (
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
 	k8s.io/apiserver v0.34.1
-	k8s.io/autoscaler/vertical-pod-autoscaler v1.4.1
+	k8s.io/autoscaler/vertical-pod-autoscaler v1.5.1
 	k8s.io/client-go v0.34.1
 	k8s.io/component-base v0.34.1
 	k8s.io/component-helpers v0.34.1
@@ -157,7 +157,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.8.0 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
-	go.uber.org/mock v0.5.0 // indirect
+	go.uber.org/mock v0.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
