@@ -53,6 +53,11 @@ type WorkloadProfileSpec struct {
 	IsLocalGPU bool `json:"isLocalGPU,omitempty"`
 
 	// +optional
+	// When set to sidecar worker mode, its always Local GPU mode, and hard-isolated with shared memory
+	// default to false, indicates the workload's embedded worker is same process, soft-isolated
+	SidecarWorker bool `json:"sidecarWorker,omitempty"`
+
+	// +optional
 	// GPUModel specifies the required GPU model (e.g., "A100", "H100")
 	GPUModel string `json:"gpuModel,omitempty"`
 
@@ -68,6 +73,10 @@ type WorkloadProfileSpec struct {
 	// +optional
 	// NodeAffinity specifies the node affinity requirements for the workload
 	NodeAffinity *v1.NodeAffinity `json:"nodeAffinity,omitempty"`
+
+	// +optional
+	// WorkerPodTemplate is the template for the worker pod, only take effect in remote vGPU mode
+	WorkerPodTemplate *v1.PodTemplateSpec `json:"workerPodTemplate,omitempty"`
 }
 
 func (t WorkloadProfileSpec) IsDynamicReplica() bool {

@@ -58,9 +58,13 @@ const (
 
 // TensorFusion client related envs
 const (
-	GetConnectionURLEnv    = "TENSOR_FUSION_OPERATOR_GET_CONNECTION_URL"
-	ConnectionNameEnv      = "TENSOR_FUSION_CONNECTION_NAME"
-	ConnectionNamespaceEnv = "TENSOR_FUSION_CONNECTION_NAMESPACE"
+	GetConnectionURLEnv     = "TENSOR_FUSION_OPERATOR_GET_CONNECTION_URL"
+	ConnectionInfoEnv       = "TENSOR_FUSION_OPERATOR_CONNECTION_INFO"
+	ConnectionNameEnv       = "TENSOR_FUSION_CONNECTION_NAME"
+	ConnectionNamespaceEnv  = "TENSOR_FUSION_CONNECTION_NAMESPACE"
+	DisableVMSharedMemEnv   = "TF_USE_IVSHMEM"
+	ConnectionSharedMemSize = "256"
+	ConnectionSharedMemName = "tf_shm"
 
 	RealNvmlLibPathEnv   = "TF_NVML_LIB_PATH"
 	RealCUDALibPathEnv   = "TF_CUDA_LIB_PATH"
