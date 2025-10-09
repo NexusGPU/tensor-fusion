@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 )
 
 type TFResource struct {
@@ -79,6 +80,27 @@ func ParseTensorFusionInfo(
 	localGPU, ok := pod.Annotations[constants.IsLocalGPUAnnotation]
 	if ok && localGPU == constants.TrueStringValue {
 		workloadProfile.Spec.IsLocalGPU = true
+	}
+
+	// check if its sidecar worker mode
+	sidecarWorker, ok := pod.Annotations[constants.SidecarWorkerAnnotation]
+	if ok && sidecarWorker == constants.TrueStringValue {
+		workloadProfile.Spec.IsLocalGPU = true
+		workloadProfile.Spec.SidecarWorker = true
+	}
+
+	workerPodTemplate, ok := pod.Annotations[constants.WorkerPodTemplateAnnotation]
+	if ok && workerPodTemplate != "" {
+		if workloadProfile.Spec.IsLocalGPU {
+			return info, fmt.Errorf("worker pod template is not supported in localGPU mode")
+		} else if workloadProfile.Spec.SidecarWorker {
+			return info, fmt.Errorf("worker pod template is not supported in SidecarWorker mode")
+		}
+		workerPodTemplateSpec := &corev1.PodTemplateSpec{}
+		if err := yaml.Unmarshal([]byte(workerPodTemplate), workerPodTemplateSpec); err != nil {
+			return info, fmt.Errorf("unmarshal worker pod template from annotation: %w", err)
+		}
+		workloadProfile.Spec.WorkerPodTemplate = workerPodTemplateSpec
 	}
 
 	if poolName, err := getGPUPoolNameAndVerify(ctx, k8sClient, pod); err != nil {

@@ -54,6 +54,7 @@ var workerDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("50m"),
 	v1.ResourceMemory: resource.MustParse("128Mi"),
 }
+var sharedMemMaxSize = resource.NewQuantity(512*1024*1024, resource.DecimalSI)
 
 var featureShortcutMap = map[string]struct {
 	EnvName  string
@@ -116,6 +117,7 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 		pod.Annotations[constants.GPUModelAnnotation] = tfInfo.Profile.GPUModel
 	}
 	pod.Annotations[constants.IsLocalGPUAnnotation] = strconv.FormatBool(tfInfo.Profile.IsLocalGPU)
+	pod.Annotations[constants.SidecarWorkerAnnotation] = strconv.FormatBool(tfInfo.Profile.SidecarWorker)
 	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
 }
@@ -168,7 +170,7 @@ func AddTFDefaultClientConfBeforePatch(
 ) {
 	clientConfig := pool.Spec.ComponentConfig.Client
 	image := clientConfig.RemoteModeImage
-	if tfInfo.Profile.IsLocalGPU {
+	if tfInfo.Profile.IsLocalGPU && !tfInfo.Profile.SidecarWorker {
 		image = clientConfig.EmbeddedModeImage
 	}
 	pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
@@ -219,6 +221,7 @@ func AddTFDefaultClientConfBeforePatch(
 	}
 
 	if tfInfo.Profile.IsLocalGPU {
+		// shm to communicate between worker and hypervisor
 		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 			Name: constants.DataVolumeName,
 			VolumeSource: v1.VolumeSource{
@@ -229,7 +232,47 @@ func AddTFDefaultClientConfBeforePatch(
 			},
 		})
 
+		if tfInfo.Profile.SidecarWorker {
+			// Add shared memory for worker-client communication
+			pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+				Name: constants.TransportShmVolumeName,
+				VolumeSource: v1.VolumeSource{
+					EmptyDir: &v1.EmptyDirVolumeSource{
+						SizeLimit: sharedMemMaxSize,
+						Medium:    v1.StorageMediumMemory,
+					},
+				},
+			})
+
+			pod.Spec.Containers = append(pod.Spec.Containers, v1.Container{
+				Name: constants.TFContainerNameWorker,
+				VolumeMounts: []v1.VolumeMount{
+					{
+						Name:      constants.TransportShmVolumeName,
+						MountPath: constants.TransportShmPath,
+					},
+				},
+			})
+
+			lastContainer := &pod.Spec.Containers[len(pod.Spec.Containers)-1]
+			SetWorkerContainerSpec(lastContainer,
+				pool.Spec.ComponentConfig.Worker, pool.Spec.ComponentConfig.Hypervisor,
+				pod.Annotations[constants.DisableFeaturesAnnotation], true)
+		}
+
 		for _, injectContainerIndex := range injectContainerIndices {
+			if tfInfo.Profile.SidecarWorker {
+				// add transport shm for client container to communicate with sidecar worker
+				pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
+					pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+					v1.VolumeMount{
+						Name:      constants.TransportShmVolumeName,
+						MountPath: constants.TransportShmPath,
+					})
+				continue
+			}
+
+			// add ngpu spec, client is the same as worker, in same process
 			pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
 				v1.VolumeMount{
@@ -693,22 +736,29 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 	}
 }
 
-func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig, hypervisorConfig *tfv1.HypervisorConfig, workload *tfv1.TensorFusionWorkload) string {
+// SetWorkerContainerSpec configures the worker container with required settings
+func SetWorkerContainerSpec(
+	container *v1.Container,
+	workerConfig *tfv1.WorkerConfig,
+	hypervisorConfig *tfv1.HypervisorConfig,
+	disabledFeatures string,
+	sharedMemMode bool,
+) {
 	// NOTE: need to set environment variable to make all GPUs visible to the worker,
 	// vgpu.rs limiter will limit to specific devices after Pod started
-	spec.Containers[0].Name = constants.TFContainerNameWorker
+	container.Name = constants.TFContainerNameWorker
 	if workerConfig.Image != "" {
-		spec.Containers[0].Image = workerConfig.Image
+		container.Image = workerConfig.Image
 	}
-	spec.Containers[0].VolumeMounts = append(
-		spec.Containers[0].VolumeMounts,
+	container.VolumeMounts = append(
+		container.VolumeMounts,
 		v1.VolumeMount{
 			Name:             constants.DataVolumeName,
 			MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
 			SubPathExpr:      constants.TFDataPathWorkerExpr,
 			MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 		})
-	spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
+	container.Env = append(container.Env, v1.EnvVar{
 		Name:  constants.NvidiaVisibleAllDeviceEnv,
 		Value: constants.NvidiaVisibleAllDeviceValue,
 	}, v1.EnvVar{
@@ -743,10 +793,58 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 		},
 	})
 
-	disabledFeatures := workload.Annotations[constants.DisableFeaturesAnnotation]
 	if disabledFeatures != "" {
-		spec.Containers[0].Env = convertDisabledFeaturesToEnvs(disabledFeatures, spec.Containers[0].Env)
+		container.Env = convertDisabledFeaturesToEnvs(disabledFeatures, container.Env)
 	}
+
+	// TODO support hostNetwork mode and InfiniBand for higher performance
+	container.Ports = append(container.Ports, v1.ContainerPort{
+		ContainerPort: constants.TensorFusionRemoteWorkerPortNumber,
+		Name:          constants.TensorFusionRemoteWorkerPortName,
+		Protocol:      v1.ProtocolTCP,
+	})
+
+	if len(container.Command) == 0 {
+		if strings.Contains(disabledFeatures, constants.BuiltInFeatureStartWorker) {
+			container.Command = []string{
+				"sleep",
+				"infinity",
+			}
+		} else {
+			if sharedMemMode {
+				container.Command = []string{
+					"./tensor-fusion-worker",
+					"-n",
+					"shmem",
+					"-m",
+					constants.ConnectionSharedMemName,
+					"-M",
+					constants.ConnectionSharedMemSize,
+				}
+			} else {
+				container.Command = []string{
+					"./tensor-fusion-worker",
+					"-p",
+					strconv.Itoa(int(constants.TensorFusionRemoteWorkerPortNumber)),
+				}
+			}
+		}
+	}
+
+	if len(container.Resources.Requests) == 0 {
+		container.Resources.Requests = workerDefaultRequests
+	}
+}
+
+func AddWorkerConfAfterTemplate(
+	ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig,
+	hypervisorConfig *tfv1.HypervisorConfig, workload *tfv1.TensorFusionWorkload,
+) string {
+	disabledFeatures := workload.Annotations[constants.DisableFeaturesAnnotation]
+
+	// Configure worker container
+	SetWorkerContainerSpec(&spec.Containers[0], workerConfig, hypervisorConfig, disabledFeatures, false)
+
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{
 		Name: constants.DataVolumeName,
@@ -758,32 +856,7 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 		},
 	})
 
-	// TODO support hostNetwork mode and InfiniBand for higher performance
-	spec.Containers[0].Ports = append(spec.Containers[0].Ports, v1.ContainerPort{
-		ContainerPort: constants.TensorFusionRemoteWorkerPortNumber,
-		Name:          constants.TensorFusionRemoteWorkerPortName,
-		Protocol:      v1.ProtocolTCP,
-	})
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
-
-	if len(spec.Containers[0].Command) == 0 {
-		if strings.Contains(disabledFeatures, constants.BuiltInFeatureStartWorker) {
-			spec.Containers[0].Command = []string{
-				"sleep",
-				"infinity",
-			}
-		} else {
-			spec.Containers[0].Command = []string{
-				"./tensor-fusion-worker",
-				"-p",
-				strconv.Itoa(int(constants.TensorFusionRemoteWorkerPortNumber)),
-			}
-		}
-	}
-
-	if len(spec.Containers[0].Resources.Requests) == 0 {
-		spec.Containers[0].Resources.Requests = workerDefaultRequests
-	}
 
 	return spec.Containers[0].Name
 }
