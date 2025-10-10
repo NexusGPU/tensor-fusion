@@ -10,11 +10,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -50,13 +47,11 @@ func ParseTensorFusionInfo(
 		info.EnabledReplicas = &val32
 	}
 
-	// Generate the workload name:
-	// If the Pod has no controller, use the Pod's name;
-	// if it is controlled by a Deployment, return the Deployment's name;
-	// otherwise, return the name of the first-level controller.
-	if controllerRef, err := getPodControllerRef(ctx, k8sClient, pod); err == nil {
+	// Generate the workload name
+	if controllerRef, err := utils.GetPodControllerRef(ctx, k8sClient, pod); err == nil {
 		if controllerRef != nil {
 			info.WorkloadName = controllerRef.Name
+			info.PodControllerRef = controllerRef
 		} else {
 			if pod.Name == "" {
 				info.WorkloadName = pod.GenerateName + "-" + utils.NewShortID(8)
@@ -259,35 +254,4 @@ func handleDedicatedGPU(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) 
 	workloadProfile.Spec.Resources.Limits.Tflops = resource.Tflops
 	workloadProfile.Spec.Resources.Limits.Vram = resource.Vram
 	return nil
-}
-
-func getPodControllerRef(ctx context.Context, c client.Client, pod *corev1.Pod) (*metav1.OwnerReference, error) {
-	podControllerRef := metav1.GetControllerOf(pod)
-	if podControllerRef == nil {
-		return nil, nil
-	}
-
-	switch podControllerRef.Kind {
-	case "ReplicaSet":
-		{
-			// Special handling for Deployment resources
-			rs := &appsv1.ReplicaSet{}
-			if err := c.Get(ctx, client.ObjectKey{
-				Namespace: pod.Namespace,
-				Name:      podControllerRef.Name,
-			}, rs); err != nil {
-				if errors.IsNotFound(err) {
-					return podControllerRef, nil
-				}
-				return nil, fmt.Errorf("failed to get ReplicaSet: %w", err)
-			}
-			rsContollerRef := metav1.GetControllerOf(rs)
-			if rsContollerRef != nil && rsContollerRef.Kind == "Deployment" {
-				// If controlled by a Deployment, return the controllerRef of rs
-				return rsContollerRef, nil
-			}
-		}
-	}
-
-	return podControllerRef, nil
 }

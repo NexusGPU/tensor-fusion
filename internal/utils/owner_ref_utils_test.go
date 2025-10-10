@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -262,5 +263,132 @@ func TestFindRootControllerRef(t *testing.T) {
 		require.NotNil(t, rootRef)
 		require.Equal(t, "missing-rs", rootRef.Name)
 		require.Equal(t, "ReplicaSet", rootRef.Kind)
+	})
+}
+
+func TestGetPodControllerRef(t *testing.T) {
+	// Prepare the scheme
+	sch := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(sch))
+	require.NoError(t, appsv1.AddToScheme(sch))
+	require.NoError(t, batchv1.AddToScheme(sch))
+
+	t.Run("pod with no controller returns nil", func(t *testing.T) {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "mypod",
+				Namespace: "default",
+			},
+		}
+
+		c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod).Build()
+
+		ref, err := utils.GetPodControllerRef(context.TODO(), c, pod)
+		require.NoError(t, err)
+		require.Nil(t, ref)
+	})
+
+	t.Run("pod owned by replicaset owned by deployment returns deployment ref", func(t *testing.T) {
+		controller := true
+		deployment := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "mydeploy",
+				Namespace: "default",
+				UID:       "uid-deploy",
+			},
+		}
+
+		rs := &appsv1.ReplicaSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "myrs",
+				Namespace: "default",
+				UID:       "uid-rs",
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion: "apps/v1",
+						Kind:       "Deployment",
+						Name:       "mydeploy",
+						UID:        deployment.UID,
+						Controller: &controller,
+					},
+				},
+			},
+		}
+
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "mypod",
+				Namespace: "default",
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion: "apps/v1",
+						Kind:       "ReplicaSet",
+						Name:       "myrs",
+						UID:        rs.UID,
+						Controller: &controller,
+					},
+				},
+			},
+		}
+
+		c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod, rs, deployment).Build()
+
+		ref, err := utils.GetPodControllerRef(context.TODO(), c, pod)
+		require.NoError(t, err)
+		require.NotNil(t, ref)
+		require.Equal(t, "mydeploy", ref.Name)
+		require.Equal(t, "Deployment", ref.Kind)
+	})
+
+	t.Run("pod owned by job owned by cronjob returns cronjob ref", func(t *testing.T) {
+		controller := true
+		cronjob := &batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "mycronjob",
+				Namespace: "default",
+				UID:       "uid-cronjob",
+			},
+		}
+
+		job := &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "myjob",
+				Namespace: "default",
+				UID:       "uid-job",
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion: "batch/v1",
+						Kind:       "CronJob",
+						Name:       "mycronjob",
+						UID:        cronjob.UID,
+						Controller: &controller,
+					},
+				},
+			},
+		}
+
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "mypod",
+				Namespace: "default",
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion: "batch/v1",
+						Kind:       "Job",
+						Name:       "myjob",
+						UID:        job.UID,
+						Controller: &controller,
+					},
+				},
+			},
+		}
+
+		c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod, job, cronjob).Build()
+
+		ref, err := utils.GetPodControllerRef(context.TODO(), c, pod)
+		require.NoError(t, err)
+		require.NotNil(t, ref)
+		require.Equal(t, "mycronjob", ref.Name)
+		require.Equal(t, "CronJob", ref.Kind)
 	})
 }

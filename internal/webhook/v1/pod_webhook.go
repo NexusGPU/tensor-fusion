@@ -243,8 +243,8 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(
 			workload.Annotations[constants.DisableFeaturesAnnotation] = pod.Labels[constants.DisableFeaturesAnnotation]
 		}
 
-		if controllerRef := metav1.GetControllerOf(pod); controllerRef != nil {
-			workload.OwnerReferences = []metav1.OwnerReference{*controllerRef}
+		if tfInfo.PodControllerRef != nil {
+			workload.OwnerReferences = []metav1.OwnerReference{*tfInfo.PodControllerRef}
 		}
 
 		if err := m.Client.Create(ctx, workload); err != nil {
@@ -253,32 +253,14 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(
 		return workload, nil
 	}
 
-	podControllerRef := metav1.GetControllerOf(pod)
-	workloadControllerRef := metav1.GetControllerOf(workload)
-	if !isSameControllerRef(podControllerRef, workloadControllerRef) ||
-		!equality.Semantic.DeepEqual(workload.Spec, desiredSpec) {
+	if !equality.Semantic.DeepEqual(workload.Spec, desiredSpec) {
 		patch := client.MergeFrom(workload.DeepCopy())
-		if podControllerRef != nil {
-			workload.OwnerReferences = []metav1.OwnerReference{*podControllerRef}
-		} else {
-			workload.OwnerReferences = []metav1.OwnerReference{}
-		}
 		workload.Spec = desiredSpec
 		if err := m.Client.Patch(ctx, workload, patch); err != nil {
 			return nil, fmt.Errorf("failed to patch workload: %w", err)
 		}
 	}
 	return workload, nil
-}
-
-func isSameControllerRef(a, b *metav1.OwnerReference) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return a.UID == b.UID
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(

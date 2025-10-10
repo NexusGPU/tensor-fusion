@@ -12,6 +12,7 @@ import (
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 )
@@ -73,11 +74,12 @@ var featureShortcutMap = map[string]struct {
 }
 
 type TensorFusionInfo struct {
-	Profile         *tfv1.WorkloadProfileSpec
-	DynamicReplicas bool
-	EnabledReplicas *int32
-	WorkloadName    string
-	ContainerNames  []string
+	Profile          *tfv1.WorkloadProfileSpec
+	DynamicReplicas  bool
+	EnabledReplicas  *int32
+	WorkloadName     string
+	PodControllerRef *metav1.OwnerReference
+	ContainerNames   []string
 }
 
 func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo TensorFusionInfo) {
