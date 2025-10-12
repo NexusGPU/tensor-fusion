@@ -144,6 +144,29 @@ const (
 	// ResourceSlice related constants
 	DRAResourceSliceName = "tensor-fusion-resource-slice-%s"
 	DRAResourceSlicePool = "tensor-fusion-resource-slice-pool-%s"
+
+	// DRA Device Attribute names
+	DRAAttributeModel       = "model"
+	DRAAttributePoolName    = "pool_name"
+	DRAAttributePodNamespace = "pod_namespace"
+	DRAAttributeUUID        = "uuid"
+	DRAAttributePhase       = "phase"
+	DRAAttributeUsedBy      = "used_by"
+	DRAAttributeNodeName    = "node_name"
+
+	// DRA Node-level Attribute names
+	DRAAttributeNodeTotalTFlops   = "node_total_tflops"
+	DRAAttributeNodeTotalVRAM     = "node_total_vram"
+	DRAAttributeNodeTotalGPUs     = "node_total_gpus"
+	DRAAttributeNodeManagedGPUs   = "node_managed_gpus"
+	DRAAttributeNodeVirtualTFlops = "node_virtual_tflops"
+	DRAAttributeNodeVirtualVRAM   = "node_virtual_vram"
+
+	// DRA Device Capacity names
+	DRACapacityTFlops        = "tflops"
+	DRACapacityVRAM          = "vram"
+	DRACapacityVirtualTFlops = "virtual_tflops"
+	DRACapacityVirtualVRAM   = "virtual_vram"
 )
 
 // for avoid golang lint issues
