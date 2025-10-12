@@ -48,25 +48,20 @@ func ParseTensorFusionInfo(
 		info.EnabledReplicas = &val32
 	}
 
-	workloadName, ok := pod.Annotations[constants.WorkloadKey]
-	if !ok {
-		// auto generate a workload with owner name
-		info.GenWorkload = true
-		owner := utils.FindFirstLevelOwnerReference(pod)
-		if owner == nil {
+	// Generate the workload name
+	if controllerRef, err := utils.GetPodControllerRef(ctx, k8sClient, pod); err == nil {
+		if controllerRef != nil {
+			info.WorkloadName = controllerRef.Name
+			info.PodControllerRef = controllerRef
+		} else {
 			if pod.Name == "" {
 				info.WorkloadName = pod.GenerateName + "-" + utils.NewShortID(8)
 			} else {
 				info.WorkloadName = pod.Name
 			}
-			info.PendingSetPodAsOwner = true
-		} else {
-			info.WorkloadName = owner.Name
 		}
 	} else {
-		// when workload is manually created, user can specify workload's replicas
-		// it remotely connects to lease connection worker when SelectWorker
-		info.WorkloadName = workloadName
+		return info, err
 	}
 
 	workloadProfileName, ok := pod.Annotations[constants.WorkloadProfileAnnotation]
