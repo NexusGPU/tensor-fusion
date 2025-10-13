@@ -117,21 +117,27 @@ func (p *DRAProcessor) HandleDRAAdmission(ctx context.Context, pod *corev1.Pod, 
 		return fmt.Errorf("failed to load DRA config: %w", err)
 	}
 
-	// Convert GPU resources to ResourceClaimTemplate reference and store CEL in annotation
-	celSelector, err := BuildCELSelector(pod, tfInfo)
-	if err != nil {
-		return fmt.Errorf("failed to build CEL selector: %w", err)
+	// Check if user has provided a custom CEL expression
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+
+	userCEL := pod.Annotations[constants.DRACelExpressionAnnotation]
+
+	// Only generate default CEL if user hasn't provided one
+	if userCEL == "" {
+		celSelector, err := BuildCELSelector(pod, tfInfo)
+		if err != nil {
+			return fmt.Errorf("failed to build CEL selector: %w", err)
+		}
+		pod.Annotations[constants.DRACelExpressionAnnotation] = celSelector
 	}
 
 	// Inject ResourceClaimTemplate reference to Pod
 	p.injectResourceClaimTemplateRef(pod)
 
 	// Mark pod with DRA enabled annotation
-	if pod.Annotations == nil {
-		pod.Annotations = make(map[string]string)
-	}
 	pod.Annotations[constants.DRAEnabledAnnotation] = constants.TrueStringValue
-	pod.Annotations[constants.DRACelExpressionAnnotation] = celSelector
 
 	return nil
 }
@@ -140,30 +146,58 @@ func (p *DRAProcessor) HandleDRAAdmission(ctx context.Context, pod *corev1.Pod, 
 func BuildCELSelector(pod *corev1.Pod, tfInfo *utils.TensorFusionInfo) (string, error) {
 	var conditions []string
 
-	// 1. GPU model filter (if specified - basic attribute that should be widely supported)
+	// 1. GPU model filter (if specified)
 	if tfInfo.Profile.GPUModel != "" {
-		conditions = append(conditions, fmt.Sprintf(`device.attributes["model"] == "%s"`, tfInfo.Profile.GPUModel))
+		conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == "%s"`, constants.DRAAttributeModel, tfInfo.Profile.GPUModel))
 	}
 
-	// 2. GPU count requirement (important for multi-GPU workloads)
-	if tfInfo.Profile.GPUCount > 0 {
-		conditions = append(conditions, fmt.Sprintf(`size(devices) >= %d`, tfInfo.Profile.GPUCount))
-	}
-
-	// 3. Pool name filter (for resource isolation and scheduling preferences)
+	// 2. Pool name filter (for resource isolation and scheduling preferences)
 	if tfInfo.Profile.PoolName != "" {
-		conditions = append(conditions, fmt.Sprintf(`device.attributes["pool_name"] == "%s"`, tfInfo.Profile.PoolName))
+		conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == "%s"`, constants.DRAAttributePoolName, tfInfo.Profile.PoolName))
 	}
 
-	// 4. Pod namespace filter (for namespace-based device isolation)
-	if pod.Namespace != "" {
-		conditions = append(conditions, fmt.Sprintf(`device.attributes["pod_namespace"] == "%s"`, pod.Namespace))
+	// 3. TFlops capacity requirement (if specified)
+	if !tfInfo.Profile.Resources.Requests.Tflops.IsZero() {
+		tflopsValue := tfInfo.Profile.Resources.Requests.Tflops.AsApproximateFloat64()
+		conditions = append(conditions, fmt.Sprintf(`device.capacity["%s"].AsApproximateFloat64() >= %f`, constants.DRACapacityTFlops, tflopsValue))
 	}
+
+	// 4. VRAM capacity requirement (if specified)
+	if !tfInfo.Profile.Resources.Requests.Vram.IsZero() {
+		vramValue := tfInfo.Profile.Resources.Requests.Vram.AsApproximateFloat64()
+		conditions = append(conditions, fmt.Sprintf(`device.capacity["%s"].AsApproximateFloat64() >= %f`, constants.DRACapacityVRAM, vramValue))
+	}
+
+	// 5. QoS level filter (if specified and not default)
+	// This can be used for priority-based scheduling
+	if tfInfo.Profile.Qos != "" {
+		// QoS is not currently a device attribute, but could be added in the future
+		// Commented out for now as device attributes don't include QoS yet
+		// conditions = append(conditions, fmt.Sprintf(`device.attributes["qos"] == "%s"`, tfInfo.Profile.Qos))
+	}
+
+	// 6. IsLocalGPU filter (if specified)
+	// This helps distinguish between local and remote GPU allocations
+	if tfInfo.Profile.IsLocalGPU {
+		// Local GPU workloads may require specific node placement
+		// This could be used to filter devices on the same node as the pod
+		// However, this is typically handled by node affinity rather than DRA CEL
+		// Commented out as device attributes don't include locality yet
+		// conditions = append(conditions, `device.attributes["is_local"] == "true"`)
+	}
+
+	// 7. GPU phase filter (only select Running GPUs)
+	conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == "%s"`, constants.DRAAttributePhase, constants.PhaseRunning))
+
+	// 8. GPU used_by filter (only select unused GPUs)
+	conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == ""`, constants.DRAAttributeUsedBy))
 
 	// Return a basic condition if no specific requirements
 	if len(conditions) == 0 {
-		// Simple condition that should work with most DRA drivers
-		return `device.attributes.exists("type")`, nil
+		// Default: select available devices
+		return fmt.Sprintf(`device.attributes["%s"] == "%s" && device.attributes["%s"] == ""`,
+			constants.DRAAttributePhase, constants.PhaseRunning,
+			constants.DRAAttributeUsedBy), nil
 	}
 
 	return strings.Join(conditions, " && "), nil

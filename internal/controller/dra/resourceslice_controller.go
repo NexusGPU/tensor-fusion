@@ -102,11 +102,17 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, resourceSlice, func() error {
+		// Validate pool name exists
+		poolName := gpuNode.Labels[constants.GpuPoolKey]
+		if poolName == "" {
+			return fmt.Errorf("GPUNode %s missing pool label %s", gpuNode.Name, constants.GpuPoolKey)
+		}
+
 		// Set basic spec fields
 		resourceSlice.Spec.Driver = constants.DRADriverName
 		resourceSlice.Spec.NodeName = &gpuNode.Name
 		resourceSlice.Spec.Pool = resourcev1beta2.ResourcePool{
-			Name:               gpuNode.Labels[constants.GpuPoolKey],
+			Name:               poolName,
 			Generation:         gpuNode.Generation,
 			ResourceSliceCount: 1,
 		}
@@ -153,7 +159,7 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tf
 
 	// Calculate per-GPU virtual capacity (equal distribution)
 	var virtualTFlopsPerGPU, virtualVRAMPerGPU *resource.Quantity
-	if nodeManagedGPUs > 0 {
+	if nodeManagedGPUs > 0 && !nodeVirtualTFlops.IsZero() && !nodeVirtualVRAM.IsZero() {
 		// Virtual TFlops per GPU - equally distributed
 		vTFlopsFloat := float64(nodeVirtualTFlops.AsApproximateFloat64()) / float64(nodeManagedGPUs)
 		virtualTFlopsPerGPU = resource.NewQuantity(int64(vTFlopsFloat), resource.DecimalSI)
@@ -168,8 +174,19 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tf
 			continue
 		}
 
+		// Validate required fields
 		poolName := gpu.Labels[constants.GpuPoolKey]
+		if poolName == "" {
+			// Skip GPUs without pool label - they may not be fully initialized
+			continue
+		}
+
 		nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if nodeName == "" {
+			// Skip GPUs without node selector - they may not be fully initialized
+			continue
+		}
+
 		gpuPhase := string(gpu.Status.Phase)
 		usedBy := string(gpu.Status.UsedBy)
 

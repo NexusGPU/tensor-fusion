@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	resourcev1beta2 "k8s.io/api/resource/v1beta2"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -77,6 +78,12 @@ func (r *ResourceClaimReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	log.Info("Processing TensorFusion ResourceClaim", "name", resourceClaim.Name, "namespace", resourceClaim.Namespace)
 
+	// Check if ResourceClaim is already allocated (idempotency check)
+	if resourceClaim.Status.Allocation != nil {
+		log.Info("ResourceClaim already allocated, skipping update", "name", resourceClaim.Name)
+		return ctrl.Result{}, nil
+	}
+
 	// Find the owner Pod to get the CEL expression annotation
 	ownerPod, err := r.findOwnerPod(ctx, resourceClaim)
 	if err != nil {
@@ -89,23 +96,44 @@ func (r *ResourceClaimReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
+	// Track if any changes were made
+	needsUpdate := false
+
 	// Update ResourceClaim with CEL expression
-	if err := r.updateResourceClaimCEL(resourceClaim, ownerPod); err != nil {
+	celUpdated, err := r.updateResourceClaimCEL(resourceClaim, ownerPod)
+	if err != nil {
 		log.Error(err, "Failed to update ResourceClaim CEL expression")
 		return ctrl.Result{}, err
 	}
+	needsUpdate = needsUpdate || celUpdated
+
 	// Update ResourceClaim with capacity request
-	if err := r.updateCapacityRequest(resourceClaim, ownerPod); err != nil {
+	capacityUpdated, err := r.updateCapacityRequest(resourceClaim, ownerPod)
+	if err != nil {
 		log.Error(err, "Failed to update ResourceClaim capacity request")
 		return ctrl.Result{}, err
 	}
+	needsUpdate = needsUpdate || capacityUpdated
 
-	if err := r.Update(ctx, resourceClaim); err != nil {
-		log.Error(err, "Failed to update ResourceClaim")
+	// Update ResourceClaim with GPU count
+	countUpdated, err := r.updateDeviceCount(resourceClaim, ownerPod)
+	if err != nil {
+		log.Error(err, "Failed to update ResourceClaim device count")
 		return ctrl.Result{}, err
 	}
+	needsUpdate = needsUpdate || countUpdated
 
-	log.Info("Successfully updated ResourceClaim")
+	// Only update if there were actual changes
+	if needsUpdate {
+		if err := r.Update(ctx, resourceClaim); err != nil {
+			log.Error(err, "Failed to update ResourceClaim")
+			return ctrl.Result{}, err
+		}
+		log.Info("Successfully updated ResourceClaim")
+	} else {
+		log.Info("No updates needed for ResourceClaim")
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -146,22 +174,23 @@ func (r *ResourceClaimReconciler) findOwnerPod(ctx context.Context, resourceClai
 }
 
 // updateResourceClaimCEL updates the ResourceClaim's CEL selector expression
-func (r *ResourceClaimReconciler) updateResourceClaimCEL(resourceClaim *resourcev1beta2.ResourceClaim, pod *corev1.Pod) error {
+// Returns true if changes were made, false otherwise
+func (r *ResourceClaimReconciler) updateResourceClaimCEL(resourceClaim *resourcev1beta2.ResourceClaim, pod *corev1.Pod) (bool, error) {
 	// Check if we need to update
 	if len(resourceClaim.Spec.Devices.Requests) == 0 {
-		return fmt.Errorf("no device requests found in ResourceClaim")
+		return false, fmt.Errorf("no device requests found in ResourceClaim")
 	}
 
 	deviceReq := &resourceClaim.Spec.Devices.Requests[0]
 	if deviceReq.Exactly == nil {
-		return fmt.Errorf("no ExactDeviceRequest found")
+		return false, fmt.Errorf("no ExactDeviceRequest found")
 	}
 
 	// Get CEL expression from Pod annotation
 	celExpression := pod.Annotations[constants.DRACelExpressionAnnotation]
 
 	if celExpression == "" {
-		return nil
+		return false, nil
 	}
 
 	// Check if CEL expression is already set correctly
@@ -169,7 +198,7 @@ func (r *ResourceClaimReconciler) updateResourceClaimCEL(resourceClaim *resource
 		deviceReq.Exactly.Selectors[0].CEL != nil &&
 		deviceReq.Exactly.Selectors[0].CEL.Expression == celExpression {
 		// Already updated
-		return nil
+		return false, nil
 	}
 
 	// Update the CEL expression
@@ -183,27 +212,99 @@ func (r *ResourceClaimReconciler) updateResourceClaimCEL(resourceClaim *resource
 
 	deviceReq.Exactly.Selectors[0].CEL.Expression = celExpression
 
-	return nil
+	return true, nil
 }
 
-func (r *ResourceClaimReconciler) updateCapacityRequest(resourceClaim *resourcev1beta2.ResourceClaim, pod *corev1.Pod) error {
+// updateCapacityRequest updates the ResourceClaim's capacity requests
+// Returns true if changes were made, false otherwise
+func (r *ResourceClaimReconciler) updateCapacityRequest(resourceClaim *resourcev1beta2.ResourceClaim, pod *corev1.Pod) (bool, error) {
 	if len(resourceClaim.Spec.Devices.Requests) == 0 {
-		return fmt.Errorf("no device requests found in ResourceClaim")
+		return false, fmt.Errorf("no device requests found in ResourceClaim")
 	}
 
 	deviceReq := &resourceClaim.Spec.Devices.Requests[0]
 	if deviceReq.Exactly == nil {
-		return fmt.Errorf("no ExactDeviceRequest found")
+		return false, fmt.Errorf("no ExactDeviceRequest found")
 	}
+
 	gpuRequestResource, err := utils.GetGPUResource(pod, true)
 	if err != nil {
-		return fmt.Errorf("failed to get GPU resource: %w", err)
+		return false, fmt.Errorf("failed to get GPU resource: %w", err)
 	}
-	//TODO extract to constants
-	deviceReq.Exactly.Capacity.Requests["tflops"] = gpuRequestResource.Tflops
-	deviceReq.Exactly.Capacity.Requests["vram"] = gpuRequestResource.Vram
 
-	return nil
+	// Initialize Capacity if nil
+	if deviceReq.Exactly.Capacity == nil {
+		deviceReq.Exactly.Capacity = &resourcev1beta2.CapacityRequirements{}
+	}
+
+	// Initialize Capacity.Requests map if nil
+	if deviceReq.Exactly.Capacity.Requests == nil {
+		deviceReq.Exactly.Capacity.Requests = make(map[resourcev1beta2.QualifiedName]resource.Quantity)
+	}
+
+	// Check if capacity requests are already set correctly
+	tflopsAlreadySet := false
+	vramAlreadySet := false
+
+	if existingTflops, ok := deviceReq.Exactly.Capacity.Requests[constants.DRACapacityTFlops]; ok {
+		tflopsAlreadySet = existingTflops.Equal(gpuRequestResource.Tflops)
+	}
+
+	if existingVram, ok := deviceReq.Exactly.Capacity.Requests[constants.DRACapacityVRAM]; ok {
+		vramAlreadySet = existingVram.Equal(gpuRequestResource.Vram)
+	}
+
+	// If already set correctly, no need to update
+	if tflopsAlreadySet && vramAlreadySet {
+		return false, nil
+	}
+
+	// Update capacity requests using constants
+	deviceReq.Exactly.Capacity.Requests[constants.DRACapacityTFlops] = gpuRequestResource.Tflops
+	deviceReq.Exactly.Capacity.Requests[constants.DRACapacityVRAM] = gpuRequestResource.Vram
+
+	return true, nil
+}
+
+// updateDeviceCount updates the ResourceClaim's device count based on Pod's GPU count annotation
+// Returns true if changes were made, false otherwise
+func (r *ResourceClaimReconciler) updateDeviceCount(resourceClaim *resourcev1beta2.ResourceClaim, pod *corev1.Pod) (bool, error) {
+	if len(resourceClaim.Spec.Devices.Requests) == 0 {
+		return false, fmt.Errorf("no device requests found in ResourceClaim")
+	}
+
+	deviceReq := &resourceClaim.Spec.Devices.Requests[0]
+	if deviceReq.Exactly == nil {
+		return false, fmt.Errorf("no ExactDeviceRequest found")
+	}
+
+	// Get GPU count from Pod annotation (defaults to 1 if not specified)
+	gpuCountStr, exists := pod.Annotations[constants.GpuCountAnnotation]
+	if !exists || gpuCountStr == "" {
+		// No GPU count annotation, default to 1
+		gpuCountStr = "1"
+	}
+
+	// Parse GPU count
+	var gpuCount int64
+	if _, err := fmt.Sscanf(gpuCountStr, "%d", &gpuCount); err != nil {
+		return false, fmt.Errorf("invalid GPU count annotation value %q: %w", gpuCountStr, err)
+	}
+
+	// Validate GPU count (must be positive)
+	if gpuCount <= 0 {
+		return false, fmt.Errorf("GPU count must be positive, got %d", gpuCount)
+	}
+
+	// Check if count is already set correctly (idempotency)
+	if deviceReq.Exactly.Count == gpuCount {
+		return false, nil
+	}
+
+	// Update device count
+	deviceReq.Exactly.Count = gpuCount
+
+	return true, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
