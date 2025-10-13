@@ -7,6 +7,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"gorm.io/gorm"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -142,9 +143,11 @@ func (g *greptimeDBProvider) LoadHistoryMetrics(ctx context.Context, processMetr
 	if err != nil {
 		return err
 	}
-	if rows != nil {
-		defer rows.Close()
-	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.FromContext(ctx).Error(err, "failed to close rows")
+		}
+	}()
 
 	for rows.Next() {
 		var usage hypervisorWorkerUsageMetrics
