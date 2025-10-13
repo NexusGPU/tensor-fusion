@@ -134,22 +134,9 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 }
 
 func (s *Autoscaler) loadHistoryMetrics(ctx context.Context) error {
-	// workersMetrics, err := s.metricsProvider.GetHistoryMetrics(ctx)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to get history metrics: %v", err)
-	// }
-	// for _, sample := range workersMetrics {
-	// 	s.findOrCreateWorkloadState(sample.Namespace, sample.WorkloadName).AddSample(sample)
-	// }
-
-	// if metricsCount := len(workersMetrics); metricsCount > 0 {
-	// 	log.FromContext(ctx).Info("historical metrics loaded", "from",
-	// 		workersMetrics[0].Timestamp, "to", workersMetrics[metricsCount-1].Timestamp, "metricsCount", metricsCount)
-	// }
-	s.metricsProvider.LoadHistoryMetrics(ctx, func(sample *metrics.WorkerUsage) {
+	return s.metricsProvider.LoadHistoryMetrics(ctx, func(sample *metrics.WorkerUsage) {
 		s.findOrCreateWorkloadState(sample.Namespace, sample.WorkloadName).AddSample(sample)
 	})
-	return nil
 }
 
 func (s *Autoscaler) loadRealTimeMetrics(ctx context.Context) {
