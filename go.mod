@@ -1,6 +1,6 @@
 module github.com/NexusGPU/tensor-fusion
 
-go 1.24.5
+go 1.24.6
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -42,7 +42,7 @@ require (
 	k8s.io/kubernetes v1.34.1
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4
 	sigs.k8s.io/controller-runtime v0.22.2
-	sigs.k8s.io/karpenter v1.6.2
+	sigs.k8s.io/karpenter v1.8.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -181,9 +181,9 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apiextensions-apiserver v0.34.1 // indirect
-	k8s.io/cloud-provider v0.34.0 // indirect
-	k8s.io/controller-manager v0.34.0 // indirect
-	k8s.io/csi-translation-lib v0.34.0 // indirect
+	k8s.io/cloud-provider v0.34.1 // indirect
+	k8s.io/controller-manager v0.34.1 // indirect
+	k8s.io/csi-translation-lib v0.34.1 // indirect
 	k8s.io/dynamic-resource-allocation v0.34.0 // indirect
 	k8s.io/kms v0.34.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20250905212525-66792eed8611 // indirect
