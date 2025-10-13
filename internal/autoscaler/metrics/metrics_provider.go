@@ -142,7 +142,9 @@ func (g *greptimeDBProvider) LoadHistoryMetrics(ctx context.Context, processMetr
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	if rows != nil {
+		defer rows.Close()
+	}
 
 	for rows.Next() {
 		var usage hypervisorWorkerUsageMetrics
