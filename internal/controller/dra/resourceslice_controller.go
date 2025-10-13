@@ -136,55 +136,36 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 }
 
 // generateDevices creates the device list for ResourceSlice based on physical GPUs
-func (r *ResourceSliceReconciler) generateDevices(ctx context.Context, gpuNode *tfv1.GPUNode, gpus []tfv1.GPU) ([]resourcev1beta2.Device, error) {
+func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tfv1.GPUNode, gpus []tfv1.GPU) ([]resourcev1beta2.Device, error) {
 	devices := make([]resourcev1beta2.Device, 0, len(gpus))
 
 	if len(gpus) == 0 {
 		return devices, nil
 	}
 
-	// Get GPUPool for virtual capacity calculation
-	poolName := gpuNode.Labels[constants.GpuPoolKey]
-	pool := &tfv1.GPUPool{}
-	if err := r.Get(ctx, client.ObjectKey{Name: poolName}, pool); err != nil {
-		return nil, fmt.Errorf("failed to get GPUPool %s: %w", poolName, err)
-	}
-
-	// Calculate node-level totals and virtual capacities
+	// Get node-level totals and virtual capacities from GPUNode Status
 	nodeTotalTFlops := gpuNode.Status.TotalTFlops
 	nodeTotalVRAM := gpuNode.Status.TotalVRAM
 	nodeTotalGPUs := gpuNode.Status.TotalGPUs
 	nodeManagedGPUs := gpuNode.Status.ManagedGPUs
+	nodeVirtualTFlops := gpuNode.Status.VirtualTFlops
+	nodeVirtualVRAM := gpuNode.Status.VirtualVRAM
 
-	// Calculate node-level virtual capacities
-	nodeVirtualVRAM, nodeVirtualTFlops := r.calculateNodeVirtualCapacity(gpuNode, pool)
-
-	// Calculate per-GPU virtual capacity (proportional allocation)
+	// Calculate per-GPU virtual capacity (equal distribution)
 	var virtualTFlopsPerGPU, virtualVRAMPerGPU *resource.Quantity
 	if nodeManagedGPUs > 0 {
-		// Virtual TFlops per GPU
+		// Virtual TFlops per GPU - equally distributed
 		vTFlopsFloat := float64(nodeVirtualTFlops.AsApproximateFloat64()) / float64(nodeManagedGPUs)
-		vTFlopsPerGPU := resource.NewQuantity(int64(vTFlopsFloat), resource.DecimalSI)
-		virtualTFlopsPerGPU = vTFlopsPerGPU
+		virtualTFlopsPerGPU = resource.NewQuantity(int64(vTFlopsFloat), resource.DecimalSI)
 
-		// Virtual VRAM per GPU (proportional to physical capacity)
-		// VRAM expansion is distributed proportionally based on each GPU's physical VRAM
-		virtualVRAMPerGPU = &resource.Quantity{}
+		// Virtual VRAM per GPU - equally distributed
+		vramFloat := float64(nodeVirtualVRAM.AsApproximateFloat64()) / float64(nodeManagedGPUs)
+		virtualVRAMPerGPU = resource.NewQuantity(int64(vramFloat), resource.DecimalSI)
 	}
 
 	for _, gpu := range gpus {
 		if gpu.Status.Capacity == nil {
 			continue
-		}
-
-		// Calculate this GPU's proportional virtual VRAM
-		var gpuVirtualVRAM *resource.Quantity
-		if virtualVRAMPerGPU != nil && nodeTotalVRAM.Value() > 0 {
-			// Calculate this GPU's share of total node VRAM
-			gpuShare := float64(gpu.Status.Capacity.Vram.AsApproximateFloat64()) / float64(nodeTotalVRAM.AsApproximateFloat64())
-			// Apply the share to virtual VRAM
-			vramFloat := nodeVirtualVRAM.AsApproximateFloat64() * gpuShare
-			gpuVirtualVRAM = resource.NewQuantity(int64(vramFloat), resource.DecimalSI)
 		}
 
 		poolName := gpu.Labels[constants.GpuPoolKey]
@@ -257,9 +238,9 @@ func (r *ResourceSliceReconciler) generateDevices(ctx context.Context, gpuNode *
 				Value: *virtualTFlopsPerGPU,
 			}
 		}
-		if gpuVirtualVRAM != nil {
+		if virtualVRAMPerGPU != nil {
 			device.Capacity[constants.DRACapacityVirtualVRAM] = resourcev1beta2.DeviceCapacity{
-				Value: *gpuVirtualVRAM,
+				Value: *virtualVRAMPerGPU,
 			}
 		}
 
@@ -267,36 +248,6 @@ func (r *ResourceSliceReconciler) generateDevices(ctx context.Context, gpuNode *
 	}
 
 	return devices, nil
-}
-
-// calculateNodeVirtualCapacity calculates the virtual capacity for a node based on oversubscription config
-func (r *ResourceSliceReconciler) calculateNodeVirtualCapacity(node *tfv1.GPUNode, pool *tfv1.GPUPool) (resource.Quantity, resource.Quantity) {
-	diskSize, _ := node.Status.NodeInfo.DataDiskSize.AsInt64()
-	ramSize, _ := node.Status.NodeInfo.RAMSize.AsInt64()
-
-	virtualVRAM := node.Status.TotalVRAM.DeepCopy()
-
-	// If no oversubscription config, return physical capacity
-	if pool.Spec.CapacityConfig == nil || pool.Spec.CapacityConfig.Oversubscription == nil {
-		return virtualVRAM, node.Status.TotalTFlops.DeepCopy()
-	}
-
-	// Calculate virtual TFlops with oversell ratio
-	vTFlops := node.Status.TotalTFlops.AsApproximateFloat64() * (float64(pool.Spec.CapacityConfig.Oversubscription.TFlopsOversellRatio) / 100.0)
-
-	// Expand VRAM to host disk
-	virtualVRAM.Add(*resource.NewQuantity(
-		int64(float64(diskSize)*float64(pool.Spec.CapacityConfig.Oversubscription.VRAMExpandToHostDisk)/100.0),
-		resource.DecimalSI),
-	)
-
-	// Expand VRAM to host memory
-	virtualVRAM.Add(*resource.NewQuantity(
-		int64(float64(ramSize)*float64(pool.Spec.CapacityConfig.Oversubscription.VRAMExpandToHostMem)/100.0),
-		resource.DecimalSI),
-	)
-
-	return virtualVRAM, *resource.NewQuantity(int64(vTFlops), resource.DecimalSI)
 }
 
 // cleanupResourceSlice removes the ResourceSlice associated with a deleted GPUNode
