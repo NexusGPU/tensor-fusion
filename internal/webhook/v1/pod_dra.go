@@ -171,25 +171,13 @@ func BuildCELSelector(pod *corev1.Pod, tfInfo *utils.TensorFusionInfo) (string, 
 	// 5. QoS level filter (if specified and not default)
 	// This can be used for priority-based scheduling
 	if tfInfo.Profile.Qos != "" {
-		// QoS is not currently a device attribute, but could be added in the future
-		// Commented out for now as device attributes don't include QoS yet
-		// conditions = append(conditions, fmt.Sprintf(`device.attributes["qos"] == "%s"`, tfInfo.Profile.Qos))
+		conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == "%s"`, constants.DRAAttributeQoS, tfInfo.Profile.Qos))
 	}
 
-	// 6. IsLocalGPU filter (if specified)
-	// This helps distinguish between local and remote GPU allocations
-	if tfInfo.Profile.IsLocalGPU {
-		// Local GPU workloads may require specific node placement
-		// This could be used to filter devices on the same node as the pod
-		// However, this is typically handled by node affinity rather than DRA CEL
-		// Commented out as device attributes don't include locality yet
-		// conditions = append(conditions, `device.attributes["is_local"] == "true"`)
-	}
-
-	// 7. GPU phase filter (only select Running GPUs)
+	// 6. GPU phase filter (only select Running GPUs)
 	conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == "%s"`, constants.DRAAttributePhase, constants.PhaseRunning))
 
-	// 8. GPU used_by filter (only select unused GPUs)
+	// 7. GPU used_by filter (only select unused GPUs)
 	conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == ""`, constants.DRAAttributeUsedBy))
 
 	// Return a basic condition if no specific requirements

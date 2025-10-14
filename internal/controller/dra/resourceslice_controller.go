@@ -108,6 +108,13 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 			return fmt.Errorf("GPUNode %s missing pool label %s", gpuNode.Name, constants.GpuPoolKey)
 		}
 
+		// Get GPUPool to retrieve default QoS
+		gpuPool := &tfv1.GPUPool{}
+		if err := r.Get(ctx, client.ObjectKey{Name: poolName}, gpuPool); err != nil {
+			log.V(1).Info("Failed to get GPUPool for default QoS, will skip QoS attribute", "pool", poolName, "error", err)
+			// Continue without QoS - it's optional
+		}
+
 		// Set basic spec fields
 		resourceSlice.Spec.Driver = constants.DRADriverName
 		resourceSlice.Spec.NodeName = &gpuNode.Name
@@ -117,8 +124,8 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 			ResourceSliceCount: 1,
 		}
 
-		// Generate devices list
-		devices, err := r.generateDevices(ctx, gpuNode, gpus)
+		// Generate devices list with QoS information
+		devices, err := r.generateDevices(ctx, gpuNode, gpus, gpuPool)
 		if err != nil {
 			return fmt.Errorf("failed to generate devices: %w", err)
 		}
@@ -142,11 +149,17 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 }
 
 // generateDevices creates the device list for ResourceSlice based on physical GPUs
-func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tfv1.GPUNode, gpus []tfv1.GPU) ([]resourcev1beta2.Device, error) {
+func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tfv1.GPUNode, gpus []tfv1.GPU, gpuPool *tfv1.GPUPool) ([]resourcev1beta2.Device, error) {
 	devices := make([]resourcev1beta2.Device, 0, len(gpus))
 
 	if len(gpus) == 0 {
 		return devices, nil
+	}
+
+	// Get default QoS from GPUPool (if available)
+	defaultQoS := string(tfv1.QoSMedium) // Default to medium if not specified
+	if gpuPool != nil && gpuPool.Spec.QosConfig != nil && gpuPool.Spec.QosConfig.DefaultQoS != "" {
+		defaultQoS = string(gpuPool.Spec.QosConfig.DefaultQoS)
 	}
 
 	// Get node-level totals and virtual capacities from GPUNode Status
@@ -187,6 +200,12 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tf
 			continue
 		}
 
+		// Get QoS from GPU labels, fall back to pool default
+		qosLevel := defaultQoS
+		if gpuQoS, exists := gpu.Labels[constants.QoSLevelAnnotation]; exists && gpuQoS != "" {
+			qosLevel = gpuQoS
+		}
+
 		gpuPhase := string(gpu.Status.Phase)
 		usedBy := string(gpu.Status.UsedBy)
 
@@ -215,6 +234,10 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tf
 				},
 				constants.DRAAttributeNodeName: {
 					StringValue: &nodeName,
+				},
+				// QoS level attribute (from GPU labels or pool default)
+				constants.DRAAttributeQoS: {
+					StringValue: &qosLevel,
 				},
 				// Node-level total capacity attributes
 				constants.DRAAttributeNodeTotalTFlops: {

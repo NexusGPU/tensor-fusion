@@ -146,13 +146,14 @@ const (
 	DRAResourceSlicePool = "tensor-fusion-resource-slice-pool-%s"
 
 	// DRA Device Attribute names
-	DRAAttributeModel       = "model"
-	DRAAttributePoolName    = "pool_name"
+	DRAAttributeModel        = "model"
+	DRAAttributePoolName     = "pool_name"
 	DRAAttributePodNamespace = "pod_namespace"
-	DRAAttributeUUID        = "uuid"
-	DRAAttributePhase       = "phase"
-	DRAAttributeUsedBy      = "used_by"
-	DRAAttributeNodeName    = "node_name"
+	DRAAttributeUUID         = "uuid"
+	DRAAttributePhase        = "phase"
+	DRAAttributeUsedBy       = "used_by"
+	DRAAttributeNodeName     = "node_name"
+	DRAAttributeQoS          = "qos"
 
 	// DRA Node-level Attribute names
 	DRAAttributeNodeTotalTFlops   = "node_total_tflops"
