@@ -487,6 +487,28 @@ func (f *FakeMetricsProvider) GetWorkersMetrics(ctx context.Context) ([]*metrics
 	return f.Metrics, nil
 }
 
+func (f *FakeMetricsProvider) LoadHistoryMetrics(ctx context.Context, processMetricsFunc func(*metrics.WorkerUsage)) error {
+	startTime := time.Now().Add(-7 * 24 * time.Hour)
+	for day := 0; day < 7; day++ {
+		for hour := 0; hour < 1; hour++ {
+			for minute := 0; minute < 60; minute++ {
+				// idx := day*24 + hour
+				sample := &metrics.WorkerUsage{
+					Namespace:    "default",
+					WorkloadName: "workload-0",
+					WorkerName:   fmt.Sprintf("worker-%d", 1),
+					TflopsUsage:  100.0,
+					VramUsage:    1 * 1000 * 1000 * 1000,
+					Timestamp:    startTime.Add(time.Duration(day*24+hour)*time.Hour + time.Duration(minute)*time.Minute),
+				}
+				processMetricsFunc(sample)
+			}
+		}
+	}
+
+	return nil
+}
+
 func (f *FakeMetricsProvider) GetHistoryMetrics(ctx context.Context) ([]*metrics.WorkerUsage, error) {
 	sample := []*metrics.WorkerUsage{}
 	startTime := time.Now().Add(-8 * 24 * time.Hour)

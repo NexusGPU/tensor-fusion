@@ -27,6 +27,7 @@ type WorkerUsage struct {
 type Provider interface {
 	GetWorkersMetrics(context.Context) ([]*WorkerUsage, error)
 	GetHistoryMetrics(context.Context) ([]*WorkerUsage, error)
+	LoadHistoryMetrics(context.Context, func(*WorkerUsage)) error
 }
 
 type greptimeDBProvider struct {
@@ -46,12 +47,6 @@ func NewProvider() (Provider, error) {
 
 func (g *greptimeDBProvider) GetWorkersMetrics(ctx context.Context) ([]*WorkerUsage, error) {
 	now := time.Now()
-
-	log := log.FromContext(ctx)
-	log.V(6).Info("Started querying workers metrics", "startTime", now)
-	defer func() {
-		log.V(6).Info("Finished querying workers metrics", "duration", time.Since(now))
-	}()
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
 	defer cancel()
@@ -99,17 +94,9 @@ type hypervisorWorkerUsageMetrics struct {
 func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUsage, error) {
 	now := time.Now()
 
-	log := log.FromContext(ctx)
-	log.V(6).Info("Started querying history metrics", "startTime", now)
-	defer func() {
-		log.V(6).Info("Finished querying history metrics", "duration", time.Since(now))
-	}()
-
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultHistoryQueryTimeout)
 	defer cancel()
 
-	// TODO: replace using iteration for handling large datasets efficiently
-	// TODO: supply history resolution to config time window
 	data := []*hypervisorWorkerUsageMetrics{}
 	err := g.db.WithContext(timeoutCtx).
 		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
@@ -138,6 +125,47 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 	}
 
 	return workersMetrics, nil
+}
+
+func (g *greptimeDBProvider) LoadHistoryMetrics(ctx context.Context, processMetricsFunc func(*WorkerUsage)) error {
+	now := time.Now()
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, defaultHistoryQueryTimeout)
+	defer cancel()
+
+	rows, err := g.db.WithContext(timeoutCtx).
+		Model(&hypervisorWorkerUsageMetrics{}).
+		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
+		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24*7).UnixNano(), now.UnixNano()).
+		Group("namespace, workload, worker, time_window").
+		Order("time_window asc").
+		Rows()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.FromContext(ctx).Error(err, "failed to close rows")
+		}
+	}()
+
+	for rows.Next() {
+		var usage hypervisorWorkerUsageMetrics
+		if err := g.db.ScanRows(rows, &usage); err != nil {
+			return err
+		}
+		processMetricsFunc(&WorkerUsage{
+			Namespace:    usage.Namespace,
+			WorkloadName: usage.WorkloadName,
+			WorkerName:   usage.WorkerName,
+			TflopsUsage:  usage.ComputeTflops,
+			VramUsage:    usage.VRAMBytes,
+			Timestamp:    usage.TimeWindow,
+		})
+	}
+
+	g.lastQueryTime = now
+	return nil
 }
 
 // Setup GreptimeDB connection
