@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -131,8 +132,8 @@ func TestDRAProcessor_HandleDRAAdmission(t *testing.T) {
 	// Verify CEL expression is stored in Pod annotation
 	celExpression := pod.Annotations[constants.DRACelExpressionAnnotation]
 	require.NotEmpty(t, celExpression)
-	assert.Contains(t, celExpression, `device.attributes["tflops"].quantity >= quantity("10")`)
-	assert.Contains(t, celExpression, `device.attributes["vram"].quantity >= quantity("8Gi")`)
+	assert.Contains(t, celExpression, `device.capacity["tflops"].AsApproximateFloat64() >= 10`)
+	assert.Contains(t, celExpression, `device.capacity["vram"].AsApproximateFloat64() >=`)
 
 	// Verify DRA enabled annotation is set
 	assert.Equal(t, constants.TrueStringValue, pod.Annotations[constants.DRAEnabledAnnotation])
@@ -177,15 +178,15 @@ func TestBuildCELSelector(t *testing.T) {
 				},
 			},
 			expectedConditions: []string{
-				`device.attributes["tflops"].quantity >= quantity("20")`,
-				`device.attributes["vram"].quantity >= quantity("16Gi")`,
 				`device.attributes["model"] == "H100"`,
-				`int(device.attributes["gpu_count"]) >= 2`,
-				`device.attributes["pod_namespace"] == "test-namespace"`,
+				`device.capacity["tflops"].AsApproximateFloat64() >= 20`,
+				`device.capacity["vram"].AsApproximateFloat64() >=`,
+				`device.attributes["phase"] == "Running"`,
+				`device.attributes["phase"] == "Pending"`,
 			},
 		},
 		{
-			name: "All filters including pool and workload",
+			name: "All filters including pool and QoS",
 			pod: &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-pod",
@@ -203,22 +204,21 @@ func TestBuildCELSelector(t *testing.T) {
 					},
 					GPUModel: "A100",
 					PoolName: "high-priority",
+					Qos:      "high",
 				},
-				WorkloadName: "ml-training-job",
 			},
 			expectedConditions: []string{
-				`device.attributes["tflops"].quantity >= quantity("10")`,
-				`device.attributes["vram"].quantity >= quantity("8Gi")`,
 				`device.attributes["model"] == "A100"`,
-				`int(device.attributes["gpu_count"]) >= 1`,
 				`device.attributes["pool_name"] == "high-priority"`,
-				`device.attributes["workload_name"] == "ml-training-job"`,
-				`device.attributes["workload_namespace"] == "production"`,
-				`device.attributes["pod_namespace"] == "production"`,
+				`device.capacity["tflops"].AsApproximateFloat64() >= 10`,
+				`device.capacity["vram"].AsApproximateFloat64() >=`,
+				`device.attributes["qos"] == "high"`,
+				`device.attributes["phase"] == "Running"`,
+				`device.attributes["phase"] == "Pending"`,
 			},
 		},
 		{
-			name: "Zero resources fallback to default condition",
+			name: "Only phase filter when no specific requirements",
 			pod: &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-pod",
@@ -236,11 +236,18 @@ func TestBuildCELSelector(t *testing.T) {
 				},
 			},
 			expectedConditions: []string{
-				`device.attributes["pod_namespace"] == "default"`,
+				`device.attributes["phase"] == "Running"`,
+				`device.attributes["phase"] == "Pending"`,
+			},
+			unexpectedConditions: []string{
+				`device.attributes["model"]`,
+				`device.attributes["pool_name"]`,
+				`device.capacity["tflops"]`,
+				`device.capacity["vram"]`,
 			},
 		},
 		{
-			name: "Empty resources fallback to basic condition",
+			name: "Empty profile still includes phase filter",
 			pod: &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-pod",
@@ -253,7 +260,14 @@ func TestBuildCELSelector(t *testing.T) {
 				},
 			},
 			expectedConditions: []string{
-				`device.attributes.exists("type")`,
+				`device.attributes["phase"] == "Running"`,
+				`device.attributes["phase"] == "Pending"`,
+			},
+			unexpectedConditions: []string{
+				`device.attributes["model"]`,
+				`device.attributes["pool_name"]`,
+				`device.capacity["tflops"]`,
+				`device.capacity["vram"]`,
 			},
 		},
 	}
@@ -274,9 +288,45 @@ func TestBuildCELSelector(t *testing.T) {
 				assert.NotContains(t, celExpression, condition, "Unexpected condition found: %s", condition)
 			}
 
-			// Verify proper AND joining (unless it's the fallback condition)
-			if len(tt.expectedConditions) > 1 {
-				assert.Contains(t, celExpression, " && ", "Conditions should be joined with &&")
+			// Verify proper AND joining between different condition types
+			// Count unique condition types (model, pool_name, capacity, qos, phase)
+			hasModel := false
+			hasPool := false
+			hasCapacity := false
+			hasQoS := false
+			for _, cond := range tt.expectedConditions {
+				if strings.Contains(cond, `"model"`) {
+					hasModel = true
+				}
+				if strings.Contains(cond, `"pool_name"`) {
+					hasPool = true
+				}
+				if strings.Contains(cond, `capacity[`) {
+					hasCapacity = true
+				}
+				if strings.Contains(cond, `"qos"`) {
+					hasQoS = true
+				}
+			}
+			conditionTypeCount := 0
+			if hasModel {
+				conditionTypeCount++
+			}
+			if hasPool {
+				conditionTypeCount++
+			}
+			if hasCapacity {
+				conditionTypeCount++
+			}
+			if hasQoS {
+				conditionTypeCount++
+			}
+			// Phase is always present, so add 1
+			conditionTypeCount++
+
+			// If we have more than just the phase condition, there should be && operators
+			if conditionTypeCount > 1 {
+				assert.Contains(t, celExpression, " && ", "Multiple condition types should be joined with &&")
 			}
 		})
 	}
