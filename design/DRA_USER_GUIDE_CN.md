@@ -23,7 +23,6 @@
 4. [Pod 注解字段说明](#4-pod-注解字段说明)
 5. [CEL 表达式编写指南](#5-cel-表达式编写指南)
 6. [DRA Driver 对接指南](#6-dra-driver-对接指南)
-7. [常见问题 FAQ](#7-常见问题-faq)
 
 ---
 
@@ -706,7 +705,7 @@ metadata:
     tensor-fusion.ai/resource-claim-template: "true"
 ```
 
-**用途**: ResourceClaim Controller 通过此 label 识别需要处理的 ResourceClaim。
+**用途**: Tensorfusion 的 ResourceClaim Controller 通过此 label 识别需要处理的 ResourceClaim。
 
 #### 6.3.2 模板结构
 
@@ -733,17 +732,6 @@ spec:
             capacity:
               requests: {}  # 由 Controller 填充
 ```
-
-### 6.4 DeviceClass（说明： 该device class 和 dra driver的名称对应，请重写）
-
-**重要**: Tensor Fusion 当前**不使用** `DeviceClass` 资源。
-
-**原因**:
-- ResourceClaimTemplate 已足够灵活
-- 减少用户需要管理的资源类型
-- 设备配置高度动态，不适合预定义
-
-**未来规划**: 如有需求，可能引入 DeviceClass 用于标准化配置。
 
 ---
 
