@@ -12,6 +12,7 @@ import (
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -39,6 +40,15 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal pod template: %w", err)
 	}
+
+	// Merge workload.Spec.WorkerPodTemplate into podTmpl.Template if provided
+	if workload.Spec.WorkerPodTemplate != nil {
+		err = mergePodTemplateSpec(&podTmpl.Template, workload.Spec.WorkerPodTemplate)
+		if err != nil {
+			return nil, fmt.Errorf("failed to merge worker pod template: %w", err)
+		}
+	}
+
 	spec := podTmpl.Template.Spec
 
 	containerName := utils.AddWorkerConfAfterTemplate(ctx, &spec, wg.WorkerConfig, wg.HypervisorConfig, workload)
@@ -115,4 +125,33 @@ func SelectWorker(
 		WorkerIp:        selectedWorker.Status.PodIP,
 		ResourceVersion: selectedWorker.ResourceVersion,
 	}, nil
+}
+
+// mergePodTemplateSpec merges the override template into the base template using strategic merge patch
+func mergePodTemplateSpec(base *v1.PodTemplateSpec, override *v1.PodTemplateSpec) error {
+	// Marshal base template to JSON
+	baseJSON, err := json.Marshal(base)
+	if err != nil {
+		return fmt.Errorf("marshal base template: %w", err)
+	}
+
+	// Marshal override template to JSON
+	overrideJSON, err := json.Marshal(override)
+	if err != nil {
+		return fmt.Errorf("marshal override template: %w", err)
+	}
+
+	// Apply strategic merge patch
+	mergedJSON, err := strategicpatch.StrategicMergePatch(baseJSON, overrideJSON, v1.PodTemplateSpec{})
+	if err != nil {
+		return fmt.Errorf("apply strategic merge patch: %w", err)
+	}
+
+	// Unmarshal merged result back to base
+	err = json.Unmarshal(mergedJSON, base)
+	if err != nil {
+		return fmt.Errorf("unmarshal merged template: %w", err)
+	}
+
+	return nil
 }

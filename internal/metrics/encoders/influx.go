@@ -4,6 +4,7 @@ import (
 	"time"
 
 	metricsProto "github.com/influxdata/line-protocol/v2/lineprotocol"
+	"k8s.io/klog/v2"
 )
 
 // InfluxStrategy implements InfluxDB line protocol encoding
@@ -28,7 +29,12 @@ func (s *InfluxStrategy) AddTag(key, value string) {
 }
 
 func (s *InfluxStrategy) AddField(key string, value any) {
-	s.enc.AddField(key, metricsProto.MustNewValue(value))
+	v, parsed := metricsProto.NewValue(value)
+	if !parsed {
+		klog.Error("metrics influx encoder failed to parse value: ", key, value)
+		return
+	}
+	s.enc.AddField(key, v)
 }
 
 func (s *InfluxStrategy) EndLine(timestamp time.Time) {

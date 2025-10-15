@@ -31,6 +31,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -39,11 +40,17 @@ const (
 	providerAzure = "azure"
 )
 
+// CompleteGPUInfo combines GpuInfo with VRAM information from instance data
+type CompleteGPUInfo struct {
+	*config.GpuInfo
+	VRAMGigabytes int32
+}
+
 // Global data initialized at package load time
 var (
 	globalAWSGPUInstanceData   map[string]GPUNodeInstanceInfoAndPrice
 	globalAzureGPUInstanceData map[string]GPUNodeInstanceInfoAndPrice
-	tflopsMap                  map[string]*config.GpuInfo
+	tflopsMap                  map[string]*CompleteGPUInfo
 )
 
 var readyCh = make(chan struct{})
@@ -51,8 +58,9 @@ var initOnce sync.Once
 
 // PricingProvider provides pricing information and calculations for instance types
 type PricingProvider interface {
-	GetPricing(instanceType, capacityType tfv1.CapacityTypeEnum) (float64, bool)
-	GetGPUNodeInstanceTypeInfo(region string) ([]string, bool)
+	GetPricing(instanceType string, capacityType tfv1.CapacityTypeEnum, region string) (float64, bool)
+	GetRegionalGPUNodeInstanceTypes(region string) ([]types.GPUNodeInstanceInfo, bool)
+	GetGPUCapacityByModel(gpuModel string) (resource.Quantity, resource.Quantity, bool)
 }
 
 type GPUNodeInstanceInfoAndPrice struct {
@@ -77,7 +85,7 @@ var awsCSV string
 var azureCSV string
 
 func init() {
-	tflopsMap = make(map[string]*config.GpuInfo, 100)
+	tflopsMap = make(map[string]*CompleteGPUInfo, 100)
 }
 
 func SetTflopsMapAndInitGPUPricingInfo(ctx context.Context, gpuInfos *[]config.GpuInfo) {
@@ -86,8 +94,14 @@ func SetTflopsMapAndInitGPUPricingInfo(ctx context.Context, gpuInfos *[]config.G
 		return
 	}
 	for _, gpuInfo := range *gpuInfos {
-		tflopsMap[gpuInfo.FullModelName] = &gpuInfo
-		tflopsMap[gpuInfo.Model] = &gpuInfo
+		if tflopsMap[gpuInfo.FullModelName] != nil {
+			continue
+		}
+		completeInfo := &CompleteGPUInfo{
+			GpuInfo: &gpuInfo,
+		}
+		tflopsMap[gpuInfo.FullModelName] = completeInfo
+		tflopsMap[gpuInfo.Model] = completeInfo
 	}
 
 	initOnce.Do(func() {
@@ -150,6 +164,11 @@ func loadCSVInstanceDataFromPath(ctx context.Context, data []byte, provider stri
 			continue
 		}
 		instanceInfo.FP16TFlopsPerGPU = gpuInfo.Fp16TFlops.AsApproximateFloat64()
+
+		// Fill VRAM information if not already set
+		if gpuInfo.VRAMGigabytes == 0 {
+			gpuInfo.VRAMGigabytes = instanceInfo.VRAMGigabytesPerGPU
+		}
 
 		instanceInfoAndPrice := GPUNodeInstanceInfoAndPrice{
 			GPUNodeInstanceInfo: instanceInfo,
@@ -415,4 +434,20 @@ func (p *StaticPricingProvider) GetRegionalGPUNodeInstanceTypes(region string) (
 	// }
 
 	return instanceTypes, len(instanceTypes) > 0
+}
+
+// GetGPUCapacityByModel gets the full capacity (TFlops and VRAM) for a GPU model
+// Returns TFlops, VRAM, and whether found
+func (p *StaticPricingProvider) GetGPUCapacityByModel(gpuModel string) (resource.Quantity, resource.Quantity, bool) {
+	<-readyCh
+
+	gpuInfo, exists := tflopsMap[gpuModel]
+	if !exists {
+		return resource.Quantity{}, resource.Quantity{}, false
+	}
+
+	tflops := gpuInfo.Fp16TFlops
+	vram := *resource.NewQuantity(int64(gpuInfo.VRAMGigabytes)*constants.GiBToBytes, resource.BinarySI)
+
+	return tflops, vram, true
 }

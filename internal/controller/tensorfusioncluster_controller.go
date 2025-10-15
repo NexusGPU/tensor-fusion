@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"sync"
 
 	"golang.org/x/time/rate"
@@ -43,7 +42,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	utils "github.com/NexusGPU/tensor-fusion/internal/utils"
-	corev1 "k8s.io/api/core/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -305,7 +303,7 @@ func (r *TensorFusionClusterReconciler) reconcileGPUPool(ctx context.Context, tf
 			}
 			err = r.Create(ctx, gpupool)
 			anyPoolChanged = true
-			r.updateMetricsRecorder(ctx, gpupool)
+			r.MetricsRecorder.UpdateMetricsRecorder(gpupool, true)
 			if err != nil {
 				errors = append(errors, fmt.Errorf("failed to create GPUPool %s: %w", key, err))
 				continue
@@ -328,7 +326,7 @@ func (r *TensorFusionClusterReconciler) reconcileGPUPool(ctx context.Context, tf
 				}
 				anyPoolChanged = true
 			}
-			r.updateMetricsRecorder(ctx, existingPool)
+			r.MetricsRecorder.UpdateMetricsRecorder(existingPool, specChanged)
 		}
 	}
 
@@ -382,7 +380,6 @@ func (r *TensorFusionClusterReconciler) checkTFClusterComponentsReady(ctx contex
 		constants.LabelKeyOwner: tfc.GetName(),
 	}))
 	if err != nil {
-		r.Recorder.Eventf(tfc, corev1.EventTypeWarning, "CheckComponentStatusError", err.Error())
 		return false, nil, fmt.Errorf("failed to list GPUPools: %w", err)
 	}
 	if len(pools.Items) != len(tfc.Spec.GPUPools) {
@@ -411,7 +408,6 @@ func (r *TensorFusionClusterReconciler) updateTFClusterStatus(ctx context.Contex
 		}
 	}
 	if err := r.Status().Update(ctx, tfc); err != nil {
-		r.Recorder.Eventf(tfc, corev1.EventTypeWarning, "UpdateClusterStatusError", err.Error())
 		return err
 	}
 	return nil
@@ -442,35 +438,4 @@ func (r *TensorFusionClusterReconciler) SetupWithManager(mgr ctrl.Manager, addLi
 		Named("tensorfusioncluster").
 		Owns(&tfv1.GPUPool{}).
 		Complete(r)
-}
-
-// Update metrics recorder's raw billing map
-func (r *TensorFusionClusterReconciler) updateMetricsRecorder(ctx context.Context, pool *tfv1.GPUPool) {
-	const dollarSign = "$"
-	log := log.FromContext(ctx)
-	if pool.Spec.QosConfig == nil {
-		log.Info("QosConfig is nil, skip updating metrics recorder", "pool", pool.Name)
-		return
-	}
-
-	qosConfig := pool.Spec.QosConfig
-	if _, ok := r.MetricsRecorder.WorkerUnitPriceMap[pool.Name]; !ok {
-		r.MetricsRecorder.WorkerUnitPriceMap[pool.Name] = make(map[string]metrics.RawBillingPricing)
-	}
-	pricingDetail := r.MetricsRecorder.WorkerUnitPriceMap[pool.Name]
-	for _, pricing := range qosConfig.Pricing {
-		tflopsPerHour, _ := strconv.ParseFloat(strings.TrimPrefix(pricing.Requests.PerFP16TFlopsPerHour, dollarSign), 64)
-		vramPerHour, _ := strconv.ParseFloat(strings.TrimPrefix(pricing.Requests.PerGBOfVRAMPerHour, dollarSign), 64)
-		limitOverRequestChargingRatio, _ := strconv.ParseFloat(pricing.LimitsOverRequestsChargingRatio, 64)
-
-		pricingDetail[string(pricing.Qos)] = metrics.RawBillingPricing{
-			TflopsPerSecond: tflopsPerHour / float64(3600),
-			VramPerSecond:   vramPerHour / float64(3600),
-
-			TflopsOverRequestPerSecond: tflopsPerHour / float64(3600) * limitOverRequestChargingRatio,
-			VramOverRequestPerSecond:   vramPerHour / float64(3600) * limitOverRequestChargingRatio,
-		}
-	}
-
-	log.V(5).Info("Updated metrics recorder", "pool", pool.Name, "pricing", pricingDetail)
 }

@@ -83,22 +83,22 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 			continue
 		}
 
-		availableTFlops, _ := gpu.Status.Available.Tflops.AsInt64()
+		availableTFlops := gpu.Status.Available.Tflops.Value()
 		poolAvailableTFlops += availableTFlops
-		availableVRAM, _ := gpu.Status.Available.Vram.AsInt64()
+		availableVRAM := gpu.Status.Available.Vram.Value()
 		poolAvailableVRAM += availableVRAM
 
-		tflops, _ := gpu.Status.Capacity.Tflops.AsInt64()
+		tflops := gpu.Status.Capacity.Tflops.Value()
 		poolTotalTFlops += tflops
-		vram, _ := gpu.Status.Capacity.Vram.AsInt64()
+		vram := gpu.Status.Capacity.Vram.Value()
 		poolTotalVRAM += vram
 	}
 
-	poolWarmUpTFlops, _ := pool.Spec.CapacityConfig.WarmResources.TFlops.AsInt64()
-	poolWarmUpVRAM, _ := pool.Spec.CapacityConfig.WarmResources.VRAM.AsInt64()
+	poolWarmUpTFlops := pool.Spec.CapacityConfig.WarmResources.TFlops.Value()
+	poolWarmUpVRAM := pool.Spec.CapacityConfig.WarmResources.VRAM.Value()
 
-	poolMinTFlops, _ := pool.Spec.CapacityConfig.MinResources.TFlops.AsInt64()
-	poolMinVRAM, _ := pool.Spec.CapacityConfig.MinResources.VRAM.AsInt64()
+	poolMinTFlops := pool.Spec.CapacityConfig.MinResources.TFlops.Value()
+	poolMinVRAM := pool.Spec.CapacityConfig.MinResources.VRAM.Value()
 
 	log.Info("Found latest pool capacity constraints before compaction", "pool", pool.Name, "warmUpTFlops", poolWarmUpTFlops, "warmUpVRAM", poolWarmUpVRAM, "minTFlops", poolMinTFlops, "minVRAM", poolMinVRAM, "totalTFlops", poolTotalTFlops, "totalVRAM", poolTotalVRAM)
 
@@ -124,8 +124,8 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 			continue
 		}
 
-		nodeCapTFlops, _ := gpuNode.Status.TotalTFlops.AsInt64()
-		nodeCapVRAM, _ := gpuNode.Status.TotalVRAM.AsInt64()
+		nodeCapTFlops := gpuNode.Status.TotalTFlops.Value()
+		nodeCapVRAM := gpuNode.Status.TotalVRAM.Value()
 		if nodeCapTFlops <= 0 || nodeCapVRAM <= 0 {
 			continue
 		}

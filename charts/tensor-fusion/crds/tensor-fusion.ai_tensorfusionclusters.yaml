@@ -321,11 +321,14 @@ spec:
                               type: object
                             nodePoolRollingUpdatePolicy:
                               properties:
-                                autoUpdate:
-                                  default: true
+                                autoUpdateClient:
+                                  type: boolean
+                                autoUpdateHypervisor:
+                                  type: boolean
+                                autoUpdateWorker:
                                   type: boolean
                                 batchInterval:
-                                  default: 10m
+                                  default: 1s
                                   type: string
                                 batchPercentage:
                                   default: 100
@@ -629,6 +632,12 @@ spec:
                                     type: integer
                                 type: object
                               type: array
+                            evictionProtectionPriceRatio:
+                              default: "1.2"
+                              description: |-
+                                Eviction protection price ratio applied to cost calculation during protection period
+                                This multiplier increases pricing for protected workloads to discourage preemption
+                              type: string
                             pricing:
                               items:
                                 properties:

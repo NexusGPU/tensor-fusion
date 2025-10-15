@@ -58,24 +58,33 @@ const (
 
 // TensorFusion client related envs
 const (
-	GetConnectionURLEnv    = "TENSOR_FUSION_OPERATOR_GET_CONNECTION_URL"
-	ConnectionNameEnv      = "TENSOR_FUSION_CONNECTION_NAME"
-	ConnectionNamespaceEnv = "TENSOR_FUSION_CONNECTION_NAMESPACE"
+	GetConnectionURLEnv     = "TENSOR_FUSION_OPERATOR_GET_CONNECTION_URL"
+	ConnectionInfoEnv       = "TENSOR_FUSION_OPERATOR_CONNECTION_INFO"
+	ConnectionNameEnv       = "TENSOR_FUSION_CONNECTION_NAME"
+	ConnectionNamespaceEnv  = "TENSOR_FUSION_CONNECTION_NAMESPACE"
+	DisableVMSharedMemEnv   = "TF_USE_IVSHMEM"
+	ConnectionSharedMemSize = "256"
+	ConnectionSharedMemName = "tf_shm"
 
 	RealNvmlLibPathEnv   = "TF_NVML_LIB_PATH"
 	RealCUDALibPathEnv   = "TF_CUDA_LIB_PATH"
 	RealNvmlLibPathValue = "/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
 	RealCUDALibPathValue = "/lib/x86_64-linux-gnu/libcuda.so"
 
-	PrependPathEnv          = "TF_PREPEND_PATH"
-	PrependLDLibraryPathEnv = "TF_PREPEND_LD_LIBRARY_PATH"
+	PrependPathEnv = "TF_PREPEND_PATH"
+
+	RunInsideGPUEnv = "RUN_INSIDE_GPU_NODE"
 
 	LdPreloadFileName = "ld.so.preload"
 	LdPreloadFile     = "/etc/ld.so.preload"
 
-	TFLibsVolumeName       = "tf-libs"
-	TFLibsVolumeMountPath  = "/tensor-fusion"
-	TFConnectionNamePrefix = "-tf-vgpu-"
+	LdLibraryPathFileName = "zz_tensor-fusion.conf"
+	LdLibraryPathFile     = "/etc/ld.so.conf.d/zz_tensor-fusion.conf"
+
+	TFLibsVolumeName         = "tf-libs"
+	TFLibsVolumeMountPath    = "/tensor-fusion"
+	TFConnectionNamePrefix   = "-tf-vgpu-"
+	TFConnectionNameNoPrefix = "tf-vgpu-"
 
 	HostIPFieldRef       = "status.hostIP"
 	NodeNameFieldRef     = "spec.nodeName"
@@ -98,8 +107,7 @@ const (
 	LdPreloadEnv     = "LD_PRELOAD"
 	LdPreloadLimiter = "/home/app/libcuda_limiter.so"
 
-	SharedMemDeviceName   = "/dev/shm"
-	SharedMemMountSubPath = "shm"
+	SharedMemMountSubPath = "/shm"
 
 	// disable GPU limiter, for emergency use
 	DisableGpuLimiterEnv = "DISABLE_GPU_LIMITER"

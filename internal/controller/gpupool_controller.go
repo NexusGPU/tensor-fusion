@@ -30,13 +30,16 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	utils "github.com/NexusGPU/tensor-fusion/internal/utils"
 	"golang.org/x/time/rate"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
+	schedulingcorev1 "k8s.io/component-helpers/scheduling/corev1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -83,6 +86,9 @@ type GPUPoolReconciler struct {
 // and requeue until current time after that, start provisioning loop
 var provisioningInitializationMinTime = map[string]time.Time{}
 
+// When GPU nodeSelector changed, trigger all node update
+var poolSelectorChangeMap = map[string]string{}
+
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools/finalizers,verbs=update
@@ -114,6 +120,10 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	if shouldReturn || !pool.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
+	}
+
+	if err := r.reconcilePoolSelectorChange(ctx, pool); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if err := r.reconcilePoolCurrentCapacityAndReadiness(ctx, pool); err != nil {
@@ -330,8 +340,8 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(
 
 	allowScaleToZero := true
 	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MinResources != nil {
-		minTFlops, _ := pool.Spec.CapacityConfig.MinResources.TFlops.AsInt64()
-		minVRAM, _ := pool.Spec.CapacityConfig.MinResources.VRAM.AsInt64()
+		minTFlops := pool.Spec.CapacityConfig.MinResources.TFlops.Value()
+		minVRAM := pool.Spec.CapacityConfig.MinResources.VRAM.Value()
 
 		allowScaleToZero = minTFlops == 0 && minVRAM == 0
 	}
@@ -384,7 +394,7 @@ func (r *GPUPoolReconciler) reconcilePoolComponents(ctx context.Context, pool *t
 	errs := []error{}
 	ctrlResults := []*ctrl.Result{}
 	for _, c := range components {
-		ctrlResult, err := component.ManageUpdate(r.Client, ctx, pool, c)
+		ctrlResult, err := component.ManageUpdate(ctx, r.Client, pool, c)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -402,6 +412,59 @@ func (r *GPUPoolReconciler) reconcilePoolComponents(ctx context.Context, pool *t
 	}
 
 	return ctrlResult, utilerrors.NewAggregate(errs)
+}
+
+func (r *GPUPoolReconciler) reconcilePoolSelectorChange(ctx context.Context, pool *tfv1.GPUPool) error {
+	if pool.Spec.NodeManagerConfig != nil && pool.Spec.NodeManagerConfig.NodeSelector != nil {
+		hash := utils.GetObjectHash(pool.Spec.NodeManagerConfig.NodeSelector)
+		if poolSelectorChangeMap[pool.Name] == hash {
+			return nil
+		}
+
+		// hash has changed, or first reconcile, should check all k8s nodes
+		nodes := &corev1.NodeList{}
+		selectors := utils.GetInitialGPUNodeSelector()
+		if err := r.List(ctx, nodes, client.MatchingLabels{selectors[0]: selectors[1]}); err != nil {
+			return err
+		}
+		for _, node := range nodes.Items {
+			// skip no label or deleting nodes
+			if node.Labels == nil || !node.DeletionTimestamp.IsZero() {
+				continue
+			}
+			matches, err := schedulingcorev1.MatchNodeSelectorTerms(&node, pool.Spec.NodeManagerConfig.NodeSelector)
+			if err != nil {
+				return err
+			}
+			if matches {
+				if err := UpdateK8SNodeSelectorHash(ctx, r.Client, &node, hash); err != nil {
+					return err
+				}
+			}
+		}
+		poolSelectorChangeMap[pool.Name] = hash
+		return nil
+	}
+	return nil
+}
+
+func UpdateK8SNodeSelectorHash(ctx context.Context, k8sClient client.Client, node *corev1.Node, hash string) error {
+	// skip nodes that already injected the hash
+	if node.Labels[constants.LabelNodeSelectorHash] == hash {
+		return nil
+	}
+	// update label to trigger the GPUNode reconcile
+	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		latest := &corev1.Node{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: node.Name}, latest); err != nil {
+			return err
+		}
+		latest.Labels[constants.LabelNodeSelectorHash] = hash
+		return k8sClient.Update(ctx, latest)
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *GPUPoolReconciler) cleanUpPool(ctx context.Context, pool *tfv1.GPUPool) (bool, error) {

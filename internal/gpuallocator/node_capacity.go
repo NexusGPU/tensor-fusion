@@ -11,7 +11,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func RefreshGPUNodeCapacity(ctx context.Context, k8sClient client.Client, node *tfv1.GPUNode, pool *tfv1.GPUPool) ([]string, error) {
+func RefreshGPUNodeCapacity(
+	ctx context.Context, k8sClient client.Client,
+	node *tfv1.GPUNode, pool *tfv1.GPUPool,
+	allocator *GpuAllocator,
+) ([]string, error) {
 	gpuList := &tfv1.GPUList{}
 	if err := k8sClient.List(ctx, gpuList, client.MatchingLabels{constants.LabelKeyOwner: node.Name}); err != nil {
 		return nil, fmt.Errorf("failed to list GPUs: %w", err)
@@ -54,6 +58,17 @@ func RefreshGPUNodeCapacity(ctx context.Context, k8sClient client.Client, node *
 	node.Status.VirtualTFlops = virtualTFlops
 	node.Status.VirtualVRAM = virtualVRAM
 
+	vramAvailable := virtualVRAM.DeepCopy()
+	tflopsAvailable := virtualTFlops.DeepCopy()
+
+	allocRequests := allocator.GetAllocationReqByNodeName(node.Name)
+	for _, allocRequest := range allocRequests {
+		vramAvailable.Sub(allocRequest.Limit.Vram)
+		tflopsAvailable.Sub(allocRequest.Limit.Tflops)
+	}
+	node.Status.VirtualAvailableVRAM = &vramAvailable
+	node.Status.VirtualAvailableTFlops = &tflopsAvailable
+
 	node.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
 
 	if !equality.Semantic.DeepEqual(node.Status, statusCopy) {
@@ -66,8 +81,8 @@ func RefreshGPUNodeCapacity(ctx context.Context, k8sClient client.Client, node *
 }
 
 func calculateVirtualCapacity(node *tfv1.GPUNode, pool *tfv1.GPUPool) (resource.Quantity, resource.Quantity) {
-	diskSize, _ := node.Status.NodeInfo.DataDiskSize.AsInt64()
-	ramSize, _ := node.Status.NodeInfo.RAMSize.AsInt64()
+	diskSize := node.Status.NodeInfo.DataDiskSize.Value()
+	ramSize := node.Status.NodeInfo.RAMSize.Value()
 
 	virtualVRAM := node.Status.TotalVRAM.DeepCopy()
 	if pool.Spec.CapacityConfig == nil || pool.Spec.CapacityConfig.Oversubscription == nil {

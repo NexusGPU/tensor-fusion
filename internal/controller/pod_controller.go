@@ -20,12 +20,14 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	v1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
 	"github.com/samber/lo"
@@ -48,6 +50,7 @@ type PodReconciler struct {
 	Scheme        *runtime.Scheme
 	Allocator     *gpuallocator.GpuAllocator
 	PortAllocator *portallocator.PortAllocator
+	Expander      *expander.NodeExpander
 }
 
 // +kubebuilder:rbac:groups=core,resources=*,verbs=get;list;watch
@@ -65,7 +68,9 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	pod := &corev1.Pod{}
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
 		if errors.IsNotFound(err) {
+			r.Expander.RemovePreSchedulePod(req.Name, true)
 			r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
+			metrics.RemoveWorkerMetrics(req.Name, time.Now())
 			log.Info("Released GPU resources when pod deleted", "pod", req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
@@ -106,8 +111,9 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
-		metrics.SetWorkerMetricsByWorkload(pod)
-
+		if pod.DeletionTimestamp.IsZero() {
+			metrics.SetWorkerMetricsByWorkload(pod)
+		}
 		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -148,7 +154,8 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 func (r *PodReconciler) handleWorkerPodFinalizer(ctx context.Context, pod *corev1.Pod) (bool, error) {
 	// Handle our GPU resource cleanup finalizer
 	shouldReturn, err := utils.HandleFinalizer(ctx, pod, r.Client, func(ctx context.Context, obj *corev1.Pod) (bool, error) {
-		metrics.RemoveWorkerMetrics(pod.Name, pod.DeletionTimestamp.Time)
+		// if the Pod keep terminating, should update deletion timestamp for raw cost calculation
+		metrics.RemoveWorkerMetrics(pod.Name, time.Now())
 		counter := &v1.TensorFusionPodCounter{Client: r.Client}
 		if err := counter.Decrease(ctx, pod); err != nil {
 			return false, err

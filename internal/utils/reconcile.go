@@ -39,6 +39,7 @@ func init() {
 		constants.PendingRequeueDuration = time.Millisecond * 150
 		constants.StatusCheckInterval = time.Millisecond * 200
 		constants.GracefulPeriodSeconds = ptr.To(int64(0))
+		constants.UnschedQueueBufferDuration = time.Millisecond * 50
 	}
 }
 
@@ -212,6 +213,15 @@ func IsTensorFusionPod(pod *corev1.Pod) bool {
 
 func IsTensorFusionWorker(pod *corev1.Pod) bool {
 	return pod.Labels[constants.LabelComponent] == constants.ComponentWorker
+}
+
+func GetInitialGPUNodeSelector() []string {
+	selector := os.Getenv("INITIAL_GPU_NODE_LABEL_SELECTOR")
+	if selector == "" {
+		selector = constants.InitialGPUNodeSelector
+	}
+	selectors := strings.Split(selector, "=")
+	return selectors
 }
 
 var GPUResourceNames = []corev1.ResourceName{

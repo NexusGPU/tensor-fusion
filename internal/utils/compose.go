@@ -4,6 +4,7 @@ import (
 	context "context"
 	"fmt"
 	"maps"
+	"os"
 	"strconv"
 	"strings"
 
@@ -16,6 +17,10 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+var injectLibResource v1.ResourceList = v1.ResourceList{
+	v1.ResourceCPU:    resource.MustParse("20m"),
+	v1.ResourceMemory: resource.MustParse("64Mi"),
+}
 var nodeDiscoveryDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("20m"),
 	v1.ResourceMemory: resource.MustParse("64Mi"),
@@ -49,6 +54,7 @@ var workerDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("50m"),
 	v1.ResourceMemory: resource.MustParse("128Mi"),
 }
+var sharedMemMaxSize = resource.NewQuantity(512*1024*1024, resource.DecimalSI)
 
 var featureShortcutMap = map[string]struct {
 	EnvName  string
@@ -79,6 +85,8 @@ type TensorFusionInfo struct {
 	// Pod mutating webhook can not get Pod UID sometimes,
 	// thus need pod controller to set the owner reference
 	PendingSetPodAsOwner bool
+	// DRA support
+	DRAEnabled bool
 }
 
 func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo TensorFusionInfo) {
@@ -111,8 +119,13 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 		pod.Annotations[constants.GPUModelAnnotation] = tfInfo.Profile.GPUModel
 	}
 	pod.Annotations[constants.IsLocalGPUAnnotation] = strconv.FormatBool(tfInfo.Profile.IsLocalGPU)
+	pod.Annotations[constants.SidecarWorkerAnnotation] = strconv.FormatBool(tfInfo.Profile.SidecarWorker)
 	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
+	// add DRA enabled annotation
+	if tfInfo.DRAEnabled {
+		pod.Annotations[constants.DRAEnabledAnnotation] = constants.TrueStringValue
+	}
 }
 
 func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
@@ -163,7 +176,7 @@ func AddTFDefaultClientConfBeforePatch(
 ) {
 	clientConfig := pool.Spec.ComponentConfig.Client
 	image := clientConfig.RemoteModeImage
-	if tfInfo.Profile.IsLocalGPU {
+	if tfInfo.Profile.IsLocalGPU && !tfInfo.Profile.SidecarWorker {
 		image = clientConfig.EmbeddedModeImage
 	}
 	pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
@@ -175,6 +188,11 @@ func AddTFDefaultClientConfBeforePatch(
 				MountPath: constants.TFLibsVolumeMountPath,
 			},
 		},
+		Resources: v1.ResourceRequirements{
+			Requests: injectLibResource,
+			Limits:   injectLibResource,
+		},
+		Env: configureFeatures4InjectLib(tfInfo.Profile.IsLocalGPU, pod.Annotations[constants.DisableFeaturesAnnotation]),
 	})
 	pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 		Name: constants.TFLibsVolumeName,
@@ -187,11 +205,9 @@ func AddTFDefaultClientConfBeforePatch(
 		pod.Spec.Containers[injectContainerIndex].Env = append(pod.Spec.Containers[injectContainerIndex].Env, v1.EnvVar{
 			Name:  constants.PrependPathEnv,
 			Value: constants.TFLibsVolumeMountPath,
-		}, v1.EnvVar{
-			Name:  constants.PrependLDLibraryPathEnv,
-			Value: constants.TFLibsVolumeMountPath,
 		})
 
+		// Known issue: glibc ldd config style, does NOT support musl, fortunately, musl rarely used in AI workloads
 		pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 			pod.Spec.Containers[injectContainerIndex].VolumeMounts,
 			v1.VolumeMount{
@@ -201,11 +217,17 @@ func AddTFDefaultClientConfBeforePatch(
 				ReadOnly:  true,
 			}, v1.VolumeMount{
 				Name:      constants.TFLibsVolumeName,
+				MountPath: constants.LdLibraryPathFile,
+				SubPath:   constants.LdLibraryPathFileName,
+				ReadOnly:  true,
+			}, v1.VolumeMount{
+				Name:      constants.TFLibsVolumeName,
 				MountPath: constants.TFLibsVolumeMountPath,
 			})
 	}
 
 	if tfInfo.Profile.IsLocalGPU {
+		// shm to communicate between worker and hypervisor
 		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 			Name: constants.DataVolumeName,
 			VolumeSource: v1.VolumeSource{
@@ -216,14 +238,53 @@ func AddTFDefaultClientConfBeforePatch(
 			},
 		})
 
+		if tfInfo.Profile.SidecarWorker {
+			// Add shared memory for worker-client communication
+			pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+				Name: constants.TransportShmVolumeName,
+				VolumeSource: v1.VolumeSource{
+					EmptyDir: &v1.EmptyDirVolumeSource{
+						SizeLimit: sharedMemMaxSize,
+						Medium:    v1.StorageMediumMemory,
+					},
+				},
+			})
+
+			pod.Spec.Containers = append(pod.Spec.Containers, v1.Container{
+				Name: constants.TFContainerNameWorker,
+				VolumeMounts: []v1.VolumeMount{
+					{
+						Name:      constants.TransportShmVolumeName,
+						MountPath: constants.TransportShmPath,
+					},
+				},
+			})
+
+			lastContainer := &pod.Spec.Containers[len(pod.Spec.Containers)-1]
+			SetWorkerContainerSpec(lastContainer,
+				pool.Spec.ComponentConfig.Worker, pool.Spec.ComponentConfig.Hypervisor,
+				pod.Annotations[constants.DisableFeaturesAnnotation], true)
+		}
+
 		for _, injectContainerIndex := range injectContainerIndices {
+			if tfInfo.Profile.SidecarWorker {
+				// add transport shm for client container to communicate with sidecar worker
+				pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
+					pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+					v1.VolumeMount{
+						Name:      constants.TransportShmVolumeName,
+						MountPath: constants.TransportShmPath,
+					})
+				continue
+			}
+
+			// add ngpu spec, client is the same as worker, in same process
 			pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
 				v1.VolumeMount{
-					Name:      constants.DataVolumeName,
-					MountPath: constants.SharedMemDeviceName,
-					SubPath:   constants.SharedMemMountSubPath,
-					//  + constants.TFLibsVolumeMountPath, SubPathExpr:      constants.TFDataPathWorkerExpr,
+					Name:             constants.DataVolumeName,
+					MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
+					SubPathExpr:      constants.TFDataPathWorkerExpr,
 					MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 				})
 
@@ -302,12 +363,43 @@ func AddTFDefaultClientConfBeforePatch(
 }
 
 func convertDisabledFeaturesToEnvs(disabledFeatures string, envList []v1.EnvVar) []v1.EnvVar {
-	disabledFeaturesList := strings.Split(disabledFeatures, ",")
-	for _, feature := range disabledFeaturesList {
+	disabledFeaturesList := strings.SplitSeq(disabledFeatures, ",")
+	for feature := range disabledFeaturesList {
 		if feat, ok := featureShortcutMap[feature]; ok {
+			if !lo.ContainsBy(envList, func(item v1.EnvVar) bool {
+				return item.Name == feat.EnvName
+			}) {
+				envList = append(envList, v1.EnvVar{
+					Name:  feat.EnvName,
+					Value: feat.EnvValue,
+				})
+			}
+		}
+	}
+	return envList
+}
+
+func configureFeatures4InjectLib(isLocalGPU bool, disabledFeatures string) []v1.EnvVar {
+	envList := make([]v1.EnvVar, 0, 1)
+	if isLocalGPU {
+		// when tensor-fusion client already in GPU node, nvidia-smi and cuda are available, no need to copy
+		// for remote mode, should copy nvidia-smi since we don't know if nvidia-container-runtime is installed
+		return append(envList, v1.EnvVar{
+			Name:  constants.RunInsideGPUEnv,
+			Value: constants.TrueStringValue,
+		})
+	}
+	if disabledFeatures == "" {
+		return envList
+	}
+	disabledFeaturesList := strings.SplitSeq(disabledFeatures, ",")
+
+	// GPU limiter by-pass take effect in bootstrap stage, add special handling here
+	for feature := range disabledFeaturesList {
+		if feature == constants.BuiltInFeaturesGpuLimiter {
 			envList = append(envList, v1.EnvVar{
-				Name:  feat.EnvName,
-				Value: feat.EnvValue,
+				Name:  featureShortcutMap[feature].EnvName,
+				Value: featureShortcutMap[feature].EnvValue,
 			})
 		}
 	}
@@ -318,6 +410,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	// Hypervisor needs to read /proc to map pod with processID
 	spec.HostPID = true
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
+	spec.PriorityClassName = constants.NodeCriticalPriorityClassName
 
 	enableVector := pool.Spec.ComponentConfig.Hypervisor != nil && pool.Spec.ComponentConfig.Hypervisor.EnableVector
 
@@ -430,8 +523,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
 		Name:      constants.DataVolumeName,
 		ReadOnly:  false,
-		MountPath: constants.SharedMemDeviceName,
-		SubPath:   constants.SharedMemMountSubPath,
+		MountPath: constants.TFDataPath,
 	}, v1.VolumeMount{
 		Name:      constants.TensorFusionGPUInfoConfigVolumeName,
 		MountPath: constants.TensorFusionGPUInfoConfigMountPath,
@@ -456,6 +548,17 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 				constants.SystemPtraceCapability,
 			},
 		},
+	}
+
+	// When k8s version >= 1.30, avoid AppArmor level limit of writing shared memory and reading /proc
+	minorVersionStr := os.Getenv(constants.KubeApiVersionMinorEnv)
+	if minorVersionStr != "" {
+		minorVersion, err := strconv.Atoi(minorVersionStr)
+		if err != nil || minorVersion >= 30 {
+			spec.Containers[0].SecurityContext.AppArmorProfile = &v1.AppArmorProfile{
+				Type: v1.AppArmorProfileTypeUnconfined,
+			}
+		}
 	}
 
 	port := getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor)
@@ -639,25 +742,29 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 	}
 }
 
-func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig, hypervisorConfig *tfv1.HypervisorConfig, workload *tfv1.TensorFusionWorkload) string {
+// SetWorkerContainerSpec configures the worker container with required settings
+func SetWorkerContainerSpec(
+	container *v1.Container,
+	workerConfig *tfv1.WorkerConfig,
+	hypervisorConfig *tfv1.HypervisorConfig,
+	disabledFeatures string,
+	sharedMemMode bool,
+) {
 	// NOTE: need to set environment variable to make all GPUs visible to the worker,
 	// vgpu.rs limiter will limit to specific devices after Pod started
-	spec.Containers[0].Name = constants.TFContainerNameWorker
+	container.Name = constants.TFContainerNameWorker
 	if workerConfig.Image != "" {
-		spec.Containers[0].Image = workerConfig.Image
+		container.Image = workerConfig.Image
 	}
-	spec.Containers[0].VolumeMounts = append(
-		spec.Containers[0].VolumeMounts,
+	container.VolumeMounts = append(
+		container.VolumeMounts,
 		v1.VolumeMount{
-			Name:      constants.DataVolumeName,
-			MountPath: constants.SharedMemDeviceName,
-			// TODO not working.
-			// + constants.TFLibsVolumeMountPath
-			// SubPathExpr: constants.TFDataPathWorkerExpr,
-			SubPath:          constants.SharedMemMountSubPath,
+			Name:             constants.DataVolumeName,
+			MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
+			SubPathExpr:      constants.TFDataPathWorkerExpr,
 			MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 		})
-	spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
+	container.Env = append(container.Env, v1.EnvVar{
 		Name:  constants.NvidiaVisibleAllDeviceEnv,
 		Value: constants.NvidiaVisibleAllDeviceValue,
 	}, v1.EnvVar{
@@ -692,10 +799,58 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 		},
 	})
 
-	disabledFeatures := workload.Annotations[constants.DisableFeaturesAnnotation]
 	if disabledFeatures != "" {
-		spec.Containers[0].Env = convertDisabledFeaturesToEnvs(disabledFeatures, spec.Containers[0].Env)
+		container.Env = convertDisabledFeaturesToEnvs(disabledFeatures, container.Env)
 	}
+
+	// TODO support hostNetwork mode and InfiniBand for higher performance
+	container.Ports = append(container.Ports, v1.ContainerPort{
+		ContainerPort: constants.TensorFusionRemoteWorkerPortNumber,
+		Name:          constants.TensorFusionRemoteWorkerPortName,
+		Protocol:      v1.ProtocolTCP,
+	})
+
+	if len(container.Command) == 0 {
+		if strings.Contains(disabledFeatures, constants.BuiltInFeatureStartWorker) {
+			container.Command = []string{
+				"sleep",
+				"infinity",
+			}
+		} else {
+			if sharedMemMode {
+				container.Command = []string{
+					"./tensor-fusion-worker",
+					"-n",
+					"shmem",
+					"-m",
+					constants.ConnectionSharedMemName,
+					"-M",
+					constants.ConnectionSharedMemSize,
+				}
+			} else {
+				container.Command = []string{
+					"./tensor-fusion-worker",
+					"-p",
+					strconv.Itoa(int(constants.TensorFusionRemoteWorkerPortNumber)),
+				}
+			}
+		}
+	}
+
+	if len(container.Resources.Requests) == 0 {
+		container.Resources.Requests = workerDefaultRequests
+	}
+}
+
+func AddWorkerConfAfterTemplate(
+	ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig,
+	hypervisorConfig *tfv1.HypervisorConfig, workload *tfv1.TensorFusionWorkload,
+) string {
+	disabledFeatures := workload.Annotations[constants.DisableFeaturesAnnotation]
+
+	// Configure worker container
+	SetWorkerContainerSpec(&spec.Containers[0], workerConfig, hypervisorConfig, disabledFeatures, false)
+
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{
 		Name: constants.DataVolumeName,
@@ -707,32 +862,7 @@ func AddWorkerConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, workerCon
 		},
 	})
 
-	// TODO support hostNetwork mode and InfiniBand for higher performance
-	spec.Containers[0].Ports = append(spec.Containers[0].Ports, v1.ContainerPort{
-		ContainerPort: constants.TensorFusionRemoteWorkerPortNumber,
-		Name:          constants.TensorFusionRemoteWorkerPortName,
-		Protocol:      v1.ProtocolTCP,
-	})
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
-
-	if len(spec.Containers[0].Command) == 0 {
-		if strings.Contains(disabledFeatures, constants.BuiltInFeatureStartWorker) {
-			spec.Containers[0].Command = []string{
-				"sleep",
-				"infinity",
-			}
-		} else {
-			spec.Containers[0].Command = []string{
-				"./tensor-fusion-worker",
-				"-p",
-				strconv.Itoa(int(constants.TensorFusionRemoteWorkerPortNumber)),
-			}
-		}
-	}
-
-	if len(spec.Containers[0].Resources.Requests) == 0 {
-		spec.Containers[0].Resources.Requests = workerDefaultRequests
-	}
 
 	return spec.Containers[0].Name
 }

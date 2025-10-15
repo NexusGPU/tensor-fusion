@@ -31,7 +31,7 @@ controller:
   image:
     repository: tensorfusion/tensor-fusion-operator
     # Overrides the image tag whose default is the chart appVersion.
-    tag: "latest"
+    tag: "1.43.4"
   # This is for setting Kubernetes Annotations to a Pod.
   # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/ 
   
@@ -45,6 +45,7 @@ controller:
     - -leader-elect
     - -enable-auto-scale
     - -enable-alert
+    - -enable-auto-expander
 
   podAnnotations: {}
   tolerations: []
@@ -120,7 +121,7 @@ agent:
   
   image:
     repository: tensorfusion/tensor-fusion-agent
-    tag: "latest"
+    tag: "1.0.0"
   
   resources:
     requests:
@@ -169,8 +170,8 @@ schedulerConfig:
   kind: KubeSchedulerConfiguration
   clientConnection:
     kubeconfig: ""
-    qps: 50
-    burst: 100
+    qps: 1000
+    burst: 2000
   profiles:
   # Refer: https://kubernetes.io/docs/reference/scheduling/config/
   - schedulerName: tensor-fusion-scheduler

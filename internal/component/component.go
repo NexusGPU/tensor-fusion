@@ -27,18 +27,19 @@ type Interface interface {
 	PerformBatchUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, delta int) (bool, error)
 }
 
-func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, component Interface) (*ctrl.Result, error) {
+func ManageUpdate(ctx context.Context, r client.Client, pool *tfv1.GPUPool, component Interface) (*ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	autoUpdate, batchInterval := getUpdatePolicy(pool)
 	newStatus := pool.Status.ComponentStatus.DeepCopy()
+	autoUpdateEnabled := isAutoUpdateEnable(component, pool)
+	batchInterval, batchPercentage := getBatchUpdatePolicy(pool)
 
 	changed, configHash, oldHash := component.DetectConfigChange(pool, newStatus)
 	if changed {
 		log.Info("component configuration changed", "component", component.GetName(), "old hash", oldHash, "new hash", configHash)
 		component.SetConfigHash(newStatus, configHash)
 		component.SetUpdateProgress(newStatus, 0)
-		if oldHash == "" || !autoUpdate {
+		if oldHash == "" || !autoUpdateEnabled {
 			return nil, patchComponentStatus(r, ctx, pool, newStatus)
 		}
 		if pool.Annotations == nil {
@@ -51,7 +52,7 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 			return nil, fmt.Errorf("failed to patch pool: %w", err)
 		}
 	} else {
-		if !autoUpdate || component.GetUpdateInProgressInfo(pool) != configHash {
+		if !autoUpdateEnabled || component.GetUpdateInProgressInfo(pool) != configHash {
 			return nil, nil
 		}
 		if timeInfo := component.GetBatchUpdateLastTimeInfo(pool); len(timeInfo) != 0 {
@@ -77,7 +78,6 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 		return nil, nil
 	}
 
-	batchPercentage := pool.Spec.NodeManagerConfig.NodePoolRollingUpdatePolicy.BatchPercentage
 	updateProgress := component.GetUpdateProgress(newStatus)
 	delta, newUpdateProgress, currentBatchIndex := calculateDesiredUpdatedDelta(totalSize, updatedSize, batchPercentage, updateProgress)
 	component.SetUpdateProgress(newStatus, newUpdateProgress)
@@ -94,7 +94,9 @@ func ManageUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, comp
 			component.SetBatchUpdateLastTimeInfo(pool, time.Now().Format(time.RFC3339))
 			interval := max(batchInterval, constants.PendingRequeueDuration)
 			ctrlResult = &ctrl.Result{RequeueAfter: interval}
-			log.Info("current batch update has completed", "progress", newUpdateProgress, "currentBatchIndex", currentBatchIndex, "nextUpdateTime", time.Now().Add(interval))
+			log.Info("current batch update has completed",
+				"progress", newUpdateProgress, "currentBatchIndex", currentBatchIndex,
+				"nextUpdateTime", time.Now().Add(interval))
 		} else {
 			component.SetUpdateInProgressInfo(pool, "")
 			component.SetBatchUpdateLastTimeInfo(pool, "")
@@ -124,25 +126,40 @@ func patchComponentStatus(r client.Client, ctx context.Context, pool *tfv1.GPUPo
 	return nil
 }
 
-func getUpdatePolicy(pool *tfv1.GPUPool) (bool, time.Duration) {
-	autoUpdate := false
-	batchInterval := time.Duration(600) * time.Second
+func getBatchUpdatePolicy(pool *tfv1.GPUPool) (time.Duration, int32) {
+	batchInterval := time.Second
+	batchPercentage := int32(100)
 
 	if pool.Spec.NodeManagerConfig != nil {
 		updatePolicy := pool.Spec.NodeManagerConfig.NodePoolRollingUpdatePolicy
 		if updatePolicy != nil {
-			if updatePolicy.AutoUpdate != nil {
-				autoUpdate = *updatePolicy.AutoUpdate
-			}
-
 			duration, err := time.ParseDuration(updatePolicy.BatchInterval)
 			if err == nil {
 				batchInterval = duration
 			}
+			percentage := updatePolicy.BatchPercentage
+			if percentage >= 0 && percentage <= 100 {
+				batchPercentage = percentage
+			}
 		}
 	}
 
-	return autoUpdate, batchInterval
+	return batchInterval, batchPercentage
+}
+
+func isAutoUpdateEnable(component Interface, pool *tfv1.GPUPool) bool {
+	if pool.Spec.NodeManagerConfig != nil {
+		updatePolicy := pool.Spec.NodeManagerConfig.NodePoolRollingUpdatePolicy
+		switch component.GetName() {
+		case "hypervisor":
+			return updatePolicy.AutoUpdateHypervisor
+		case "worker":
+			return updatePolicy.AutoUpdateWorker
+		case "client":
+			return updatePolicy.AutoUpdateClient
+		}
+	}
+	return false
 }
 
 func calculateDesiredUpdatedDelta(total int, updatedSize int, batchPercentage int32, updateProgress int32) (int32, int32, int32) {

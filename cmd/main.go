@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
+	resourcev1beta2 "k8s.io/api/resource/v1beta2"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -51,13 +52,16 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/cmd/sched"
 	"github.com/NexusGPU/tensor-fusion/internal/alert"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaler"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/controller"
+	"github.com/NexusGPU/tensor-fusion/internal/controller/dra"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	gpuResourceFitPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	gpuTopoPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gputopo"
 	"github.com/NexusGPU/tensor-fusion/internal/server"
@@ -65,14 +69,18 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/version"
 	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8sVer "k8s.io/apimachinery/pkg/util/version"
+	"k8s.io/apiserver/pkg/util/feature"
+	schemeBuilder "sigs.k8s.io/controller-runtime/pkg/scheme"
+	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	// +kubebuilder:scaffold:imports
 )
 
 var (
-	scheme                = runtime.NewScheme()
-	setupLog              = ctrl.Log.WithName("setup")
-	autoScaleCanBeEnabled = false
-	alertCanBeEnabled     = false
+	scheme            = runtime.NewScheme()
+	setupLog          = ctrl.Log.WithName("setup")
+	alertCanBeEnabled = false
 )
 
 const LeaderElectionID = "85104305.tensor-fusion.ai"
@@ -95,11 +103,20 @@ var dynamicConfigPath string
 var alertEvaluator *alert.AlertEvaluator
 var schedulerConfigPath string
 var alertEvaluatorReady chan struct{}
+var enableAutoExpander bool
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(tfv1.AddToScheme(scheme))
+	utilruntime.Must(resourcev1beta2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
+
+	karpenterScheme := &schemeBuilder.Builder{
+		GroupVersion: schema.GroupVersion{Group: "karpenter.sh", Version: "v1"},
+	}
+	karpenterScheme.Register(&karpv1.NodeClaim{}, &karpv1.NodeClaimList{})
+	karpenterScheme.Register(&karpv1.NodePool{}, &karpv1.NodePoolList{})
+	utilruntime.Must(karpenterScheme.AddToScheme(scheme))
 }
 
 //nolint:gocyclo
@@ -137,6 +154,8 @@ func main() {
 			"built-in rules if enabled alert, you can configure routers and receivers "+
 			"in your own alertmanager config, "+
 			"refer https://prometheus.io/docs/alerting/latest/configuration")
+	flag.BoolVar(&enableAutoExpander, "enable-auto-expander", false, "if turn on auto expander, "+
+		"TensorFusion will auto expand Nodes then Pending Pods which caused by insufficient GPU resources found")
 
 	klog.InitFlags(nil)
 	flag.Parse()
@@ -204,24 +223,31 @@ func main() {
 	_ = os.Setenv(constants.KubeApiVersionMajorEnv, version.Major)
 	_ = os.Setenv(constants.KubeApiVersionMinorEnv, version.Minor)
 
+	// TODO: there will still be risk after FeatureGate removed when the feature is stable for a long time
+	// To be compatible with long-term k8s version, need to patch Kubernetes source code
+	k8sVersion := k8sVer.MustParseSemantic(version.String())
+	err = feature.DefaultMutableFeatureGate.SetEmulationVersion(k8sVersion)
+	if err != nil {
+		setupLog.Error(err, "unable to set k8s version for feature gating")
+	}
+
 	alertEvaluatorReady = make(chan struct{})
 	setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
-
-	if autoScaleCanBeEnabled && enableAutoScale {
-		// TODO init auto scale module
-		setupLog.Info("auto scale enabled")
-	}
 
 	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, gpuPricingMap)
 
 	// Initialize GPU allocator and set up watches
 	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr)
 
-	startWebhook(mgr, portAllocator)
+	startAutoScaler(mgr, allocator)
 
-	scheduler := startScheduler(ctx, allocator, mgr)
+	// Create pricing provider for webhook
+	pricingProvider := pricing.NewStaticPricingProvider()
+	startWebhook(mgr, portAllocator, pricingProvider)
 
-	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator)
+	scheduler, nodeExpander := startScheduler(ctx, allocator, mgr, k8sVersion)
+
+	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator, nodeExpander)
 
 	startHttpServerForTFClient(ctx, kc, portAllocator, allocator, scheduler, mgr.Elected())
 
@@ -312,6 +338,7 @@ func startCustomResourceController(
 	metricsRecorder metrics.MetricsRecorder,
 	allocator *gpuallocator.GpuAllocator,
 	portAllocator *portallocator.PortAllocator,
+	nodeExpander *expander.NodeExpander,
 ) {
 	if os.Getenv(constants.EnableCustomResourceControllerEnv) == constants.FalseStringValue {
 		return
@@ -356,9 +383,11 @@ func startCustomResourceController(
 	}
 
 	if err = (&controller.GPUNodeReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("GPUNode"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("GPUNode"),
+		Allocator: allocator,
+		Expander:  nodeExpander,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUNode")
 		os.Exit(1)
@@ -391,8 +420,26 @@ func startCustomResourceController(
 		Scheme:        mgr.GetScheme(),
 		Allocator:     allocator,
 		PortAllocator: portAllocator,
+		Expander:      nodeExpander,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod")
+		os.Exit(1)
+	}
+
+	// Setup ResourceClaim controller for DRA Phase 2
+	if err = (&dra.ResourceClaimReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ResourceClaim")
+		os.Exit(1)
+	}
+	// Setup ResourceSlice controller for DRA Phase 2
+	if err = (&dra.ResourceSliceReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ResourceSlice")
 		os.Exit(1)
 	}
 	if err = (&controller.NodeReconciler{
@@ -434,6 +481,7 @@ func startCustomResourceController(
 	if err := (&controller.GPUNodeClaimReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
+		Expander: nodeExpander,
 		Recorder: mgr.GetEventRecorderFor("GPUNodeClaim"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUNodeClaim")
@@ -441,11 +489,15 @@ func startCustomResourceController(
 	}
 }
 
-func startWebhook(mgr manager.Manager, portAllocator *portallocator.PortAllocator) {
+func startWebhook(
+	mgr manager.Manager,
+	portAllocator *portallocator.PortAllocator,
+	pricingProvider pricing.PricingProvider,
+) {
 	if os.Getenv(constants.EnableWebhookEnv) == constants.FalseStringValue {
 		return
 	}
-	if err := webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator); err != nil {
+	if err := webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator, pricingProvider); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
 		os.Exit(1)
 	}
@@ -455,9 +507,10 @@ func startScheduler(
 	ctx context.Context,
 	allocator *gpuallocator.GpuAllocator,
 	mgr manager.Manager,
-) *scheduler.Scheduler {
+	k8sVersion *k8sVer.Version,
+) (*scheduler.Scheduler, *expander.NodeExpander) {
 	if os.Getenv(constants.EnableSchedulerEnv) == constants.FalseStringValue {
-		return nil
+		return nil, nil
 	}
 	if schedulerConfigPath == "" {
 		setupLog.Error(nil, "scheduler config path is empty, please and --scheduler-config in command line")
@@ -473,7 +526,10 @@ func startScheduler(
 		gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
 	)
 
-	cc, scheduler, err := sched.SetupScheduler(ctx, mgr, schedulerConfigPath, false, gpuResourceFitOpt, gpuTopoOpt)
+	cc, scheduler, nodeExpander, err := sched.SetupScheduler(
+		ctx, mgr, schedulerConfigPath, false, k8sVersion,
+		allocator, enableAutoExpander, gpuResourceFitOpt, gpuTopoOpt,
+	)
 	if err != nil {
 		setupLog.Error(err, "unable to create tensor fusion scheduler")
 		os.Exit(1)
@@ -483,7 +539,7 @@ func startScheduler(
 		setupLog.Error(err, "unable to run tensor fusion scheduler")
 		os.Exit(1)
 	}
-	return scheduler
+	return scheduler, nodeExpander
 }
 
 func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager.Manager) {
@@ -503,7 +559,6 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 		}
 		timeSeriesDB = setupTimeSeriesDB()
 		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
-		autoScaleCanBeEnabled = true
 		alertCanBeEnabled = true
 		close(alertEvaluatorReady)
 		setupLog.Info("time series db setup successfully.")
@@ -570,7 +625,7 @@ func startMetricsRecorder(
 
 		// Worker level map will be updated by cluster reconcile
 		// Key is poolName, second level key is QoS level
-		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
+		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing, 8),
 	}
 	if enableLeaderElection {
 		go func() {
@@ -581,6 +636,16 @@ func startMetricsRecorder(
 		go metricsRecorder.Start()
 	}
 	return metricsRecorder
+}
+
+func startAutoScaler(mgr manager.Manager, allocator *gpuallocator.GpuAllocator) {
+	if enableAutoScale {
+		setupLog.Info("auto scale enabled")
+		if err := autoscaler.SetupWithManager(mgr, allocator); err != nil {
+			setupLog.Error(err, "unable to start auto scaler")
+			os.Exit(1)
+		}
+	}
 }
 
 func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, gpuPricingMap map[string]float64) {

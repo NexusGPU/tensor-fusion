@@ -8,10 +8,12 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 )
 
 type TFResource struct {
@@ -28,6 +30,7 @@ type TFResource struct {
 func ParseTensorFusionInfo(
 	ctx context.Context,
 	k8sClient client.Client,
+	draProcessor *DRAProcessor,
 	pod *corev1.Pod,
 ) (utils.TensorFusionInfo, error) {
 	var info utils.TensorFusionInfo
@@ -80,6 +83,27 @@ func ParseTensorFusionInfo(
 		workloadProfile.Spec.IsLocalGPU = true
 	}
 
+	// check if its sidecar worker mode
+	sidecarWorker, ok := pod.Annotations[constants.SidecarWorkerAnnotation]
+	if ok && sidecarWorker == constants.TrueStringValue {
+		workloadProfile.Spec.IsLocalGPU = true
+		workloadProfile.Spec.SidecarWorker = true
+	}
+
+	workerPodTemplate, ok := pod.Annotations[constants.WorkerPodTemplateAnnotation]
+	if ok && workerPodTemplate != "" {
+		if workloadProfile.Spec.IsLocalGPU {
+			return info, fmt.Errorf("worker pod template is not supported in localGPU mode")
+		} else if workloadProfile.Spec.SidecarWorker {
+			return info, fmt.Errorf("worker pod template is not supported in SidecarWorker mode")
+		}
+		workerPodTemplateSpec := &corev1.PodTemplateSpec{}
+		if err := yaml.Unmarshal([]byte(workerPodTemplate), workerPodTemplateSpec); err != nil {
+			return info, fmt.Errorf("unmarshal worker pod template from annotation: %w", err)
+		}
+		workloadProfile.Spec.WorkerPodTemplate = workerPodTemplateSpec
+	}
+
 	if poolName, err := getGPUPoolNameAndVerify(ctx, k8sClient, pod); err != nil {
 		return info, err
 	} else {
@@ -115,19 +139,29 @@ func ParseTensorFusionInfo(
 		workloadProfile.Spec.GPUModel = gpuModel
 	}
 
+	// Parse DRA enabled annotation
+	if draProcessor.IsDRAEnabled(ctx, pod) {
+		info.DRAEnabled = true
+	}
+	// Handle dedicated GPU logic
+	err = handleDedicatedGPU(pod, workloadProfile)
+	if err != nil {
+		return info, fmt.Errorf("handle dedicated GPU: %w", err)
+	}
+
 	info.Profile = &workloadProfile.Spec
 	info.ContainerNames = containerNames
 	return info, nil
 }
 
 func parseAutoScalingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) {
-	autoLimits, ok := pod.Annotations[constants.AutoScaleLimitsAnnotation]
-	if ok && autoLimits == constants.TrueStringValue {
-		workloadProfile.Spec.AutoScalingConfig.AutoSetLimits.Enable = true
+	autoResources, ok := pod.Annotations[constants.AutoScaleResourcesAnnotation]
+	if ok && autoResources == constants.TrueStringValue {
+		workloadProfile.Spec.AutoScalingConfig.AutoSetResources.Enable = true
 	}
-	autoRequests, ok := pod.Annotations[constants.AutoScaleRequestsAnnotation]
-	if ok && autoRequests == constants.TrueStringValue {
-		workloadProfile.Spec.AutoScalingConfig.AutoSetRequests.Enable = true
+	targetResource, ok := pod.Annotations[constants.AutoScaleTargetResourceAnnotation]
+	if ok {
+		workloadProfile.Spec.AutoScalingConfig.AutoSetResources.TargetResource = targetResource
 	}
 	autoReplicas, ok := pod.Annotations[constants.AutoScaleReplicasAnnotation]
 	if ok && autoReplicas == constants.TrueStringValue {
@@ -226,4 +260,30 @@ func setDefaultQuotasIfExists(workloadProfile *tfv1.WorkloadProfile, single tfv1
 			workloadProfile.Spec.Resources.Limits.Vram = defaultLimit.Vram
 		}
 	}
+}
+
+// handleDedicatedGPU handles dedicated GPU annotation by setting full GPU capacity
+func handleDedicatedGPU(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) error {
+	dedicatedGPU, ok := pod.Annotations[constants.DedicatedGPUAnnotation]
+	if !ok || dedicatedGPU != constants.TrueStringValue {
+		return nil // Not a dedicated GPU request
+	}
+
+	// Must have GPU model specified for dedicated GPU
+	if workloadProfile.Spec.GPUModel == "" {
+		return fmt.Errorf("dedicated GPU requires gpu-model annotation to be specified")
+	}
+
+	// Get full GPU capacity from pricing provider
+	resource, found := gpuallocator.GPUCapacityMap[workloadProfile.Spec.GPUModel]
+	if !found {
+		return fmt.Errorf("could not find capacity information for GPU model: %s", workloadProfile.Spec.GPUModel)
+	}
+
+	// Set full capacity for both requests and limits
+	workloadProfile.Spec.Resources.Requests.Tflops = resource.Tflops
+	workloadProfile.Spec.Resources.Requests.Vram = resource.Vram
+	workloadProfile.Spec.Resources.Limits.Tflops = resource.Tflops
+	workloadProfile.Spec.Resources.Limits.Vram = resource.Vram
+	return nil
 }

@@ -208,16 +208,21 @@ type NodeRollingUpdatePolicy struct {
 	// If set to false, updates will be pending in status, and user needs to manually approve updates.
 	// Updates will occur immediately or during the next maintenance window.
 
-	// +kubebuilder:default=true
 	// +optional
-	AutoUpdate *bool `json:"autoUpdate,omitempty"`
+	AutoUpdateHypervisor bool `json:"autoUpdateHypervisor,omitempty"`
+
+	// +optional
+	AutoUpdateWorker bool `json:"autoUpdateWorker,omitempty"`
+
+	// +optional
+	AutoUpdateClient bool `json:"autoUpdateClient,omitempty"`
 
 	// +kubebuilder:default=100
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	BatchPercentage int32 `json:"batchPercentage,omitempty"`
 
-	// +kubebuilder:default="10m"
+	// +kubebuilder:default="1s"
 	BatchInterval string `json:"batchInterval,omitempty"`
 
 	// +optional
@@ -238,6 +243,12 @@ type QosConfig struct {
 	Definitions []QosDefinition `json:"definitions,omitempty"`
 	DefaultQoS  QoSLevel        `json:"defaultQoS,omitempty"`
 	Pricing     []QosPricing    `json:"pricing,omitempty"`
+
+	// Eviction protection price ratio applied to cost calculation during protection period
+	// This multiplier increases pricing for protected workloads to discourage preemption
+	// +optional
+	// +kubebuilder:default="1.2"
+	EvictionProtectionPriceRatio string `json:"evictionProtectionPriceRatio,omitempty"`
 }
 
 type QosDefinition struct {
