@@ -174,19 +174,12 @@ func BuildCELSelector(pod *corev1.Pod, tfInfo *utils.TensorFusionInfo) (string, 
 		conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == "%s"`, constants.DRAAttributeQoS, tfInfo.Profile.Qos))
 	}
 
-	// 6. GPU phase filter (only select Running GPUs)
-	conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == "%s"`, constants.DRAAttributePhase, constants.PhaseRunning))
-
-	// 7. GPU used_by filter (only select unused GPUs)
-	conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == ""`, constants.DRAAttributeUsedBy))
-
-	// Return a basic condition if no specific requirements
-	if len(conditions) == 0 {
-		// Default: select available devices
-		return fmt.Sprintf(`device.attributes["%s"] == "%s" && device.attributes["%s"] == ""`,
-			constants.DRAAttributePhase, constants.PhaseRunning,
-			constants.DRAAttributeUsedBy), nil
-	}
+	// 6. GPU phase filter (select Running or Pending GPUs, consistent with PhaseFilter)
+	conditions = append(conditions, fmt.Sprintf(
+		`(device.attributes["%s"] == "%s" || device.attributes["%s"] == "%s")`,
+		constants.DRAAttributePhase, constants.PhaseRunning,
+		constants.DRAAttributePhase, constants.PhasePending,
+	))
 
 	return strings.Join(conditions, " && "), nil
 }
