@@ -43,10 +43,10 @@ type ResourceSliceReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=resource.k8s.io,resources=resourceslices,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch
-//+kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpus,verbs=get;list;watch
-//+kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceslices,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpus,verbs=get;list;watch
+// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools,verbs=get;list;watch
 
 // Reconcile processes GPUNode changes and generates/updates corresponding ResourceSlices
 func (r *ResourceSliceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -125,10 +125,7 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 		}
 
 		// Generate devices list with QoS information
-		devices, err := r.generateDevices(ctx, gpuNode, gpus, gpuPool)
-		if err != nil {
-			return fmt.Errorf("failed to generate devices: %w", err)
-		}
+		devices := r.generateDevices(ctx, gpuNode, gpus, gpuPool)
 		resourceSlice.Spec.Devices = devices
 
 		// Set labels for easy identification
@@ -149,11 +146,11 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 }
 
 // generateDevices creates the device list for ResourceSlice based on physical GPUs
-func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tfv1.GPUNode, gpus []tfv1.GPU, gpuPool *tfv1.GPUPool) ([]resourcev1beta2.Device, error) {
+func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tfv1.GPUNode, gpus []tfv1.GPU, gpuPool *tfv1.GPUPool) []resourcev1beta2.Device {
 	devices := make([]resourcev1beta2.Device, 0, len(gpus))
 
 	if len(gpus) == 0 {
-		return devices, nil
+		return devices
 	}
 
 	// Get default QoS from GPUPool (if available)
@@ -287,7 +284,7 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tf
 		devices = append(devices, device)
 	}
 
-	return devices, nil
+	return devices
 }
 
 // cleanupResourceSlice removes the ResourceSlice associated with a deleted GPUNode

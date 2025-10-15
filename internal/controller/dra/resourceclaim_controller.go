@@ -41,8 +41,8 @@ type ResourceClaimReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -167,7 +167,7 @@ func (r *ResourceClaimReconciler) findOwnerPod(ctx context.Context, resourceClai
 
 	// Verify the UID matches (additional safety check)
 	if pod.UID != podOwnerRef.UID {
-		return nil, fmt.Errorf("Pod UID mismatch: expected %s, got %s", podOwnerRef.UID, pod.UID)
+		return nil, fmt.Errorf("pod UID mismatch: expected %s, got %s", podOwnerRef.UID, pod.UID)
 	}
 
 	return pod, nil

@@ -284,7 +284,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(
-	ctx context.Context,
+	_ context.Context,
 	pod *corev1.Pod,
 	pool *tfv1.GPUPool,
 	isLocalGPU bool,
