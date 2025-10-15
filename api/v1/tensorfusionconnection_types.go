@@ -21,6 +21,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+type ResourceName string
+
+const (
+	ResourceTflops ResourceName = "tflops"
+	ResourceVram   ResourceName = "vram"
+)
+
 type Resource struct {
 	Tflops resource.Quantity `json:"tflops"`
 	Vram   resource.Quantity `json:"vram"`
@@ -29,6 +36,23 @@ type Resource struct {
 type Resources struct {
 	Requests Resource `json:"requests"`
 	Limits   Resource `json:"limits"`
+}
+
+func (r Resources) Equal(target *Resources) bool {
+	if target == nil {
+		return false
+	}
+	return r.Requests.Tflops.Equal(target.Requests.Tflops) &&
+		r.Requests.Vram.Equal(target.Requests.Vram) &&
+		r.Limits.Tflops.Equal(target.Limits.Tflops) &&
+		r.Limits.Vram.Equal(target.Limits.Vram)
+}
+
+func (r Resources) IsZero() bool {
+	return r.Requests.Tflops.IsZero() &&
+		r.Requests.Vram.IsZero() &&
+		r.Limits.Tflops.IsZero() &&
+		r.Limits.Vram.IsZero()
 }
 
 // TensorFusionConnectionSpec defines the desired state of TensorFusionConnection.

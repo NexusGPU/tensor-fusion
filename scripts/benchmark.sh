@@ -1,8 +1,8 @@
 # Code level benchmark 
 # go test -bench=BenchmarkPodWebhookQPS -benchmem -v ./internal/webhook/v1/
 
-# go test -bench=BenchmarkGPUFitPlugin -benchmem ./test/sched/ --benchtime=3s
-# go test -bench=BenchmarkScheduler    -benchmem ./test/sched/ --benchtime=5s
+# go test -bench=BenchmarkGPUFitPlugin -benchmem ./test/sched/ --benchtime=3s -tags=nobench
+# go test -bench=BenchmarkScheduler    -benchmem ./test/sched/ --benchtime=5s -tags=nobench
 
 # Real world benchmark for Mutating Webhook
 cat > /tmp/webhook-body.json << 'EOF'

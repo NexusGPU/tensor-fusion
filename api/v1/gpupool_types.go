@@ -208,16 +208,21 @@ type NodeRollingUpdatePolicy struct {
 	// If set to false, updates will be pending in status, and user needs to manually approve updates.
 	// Updates will occur immediately or during the next maintenance window.
 
-	// +kubebuilder:default=true
 	// +optional
-	AutoUpdate *bool `json:"autoUpdate,omitempty"`
+	AutoUpdateHypervisor bool `json:"autoUpdateHypervisor,omitempty"`
+
+	// +optional
+	AutoUpdateWorker bool `json:"autoUpdateWorker,omitempty"`
+
+	// +optional
+	AutoUpdateClient bool `json:"autoUpdateClient,omitempty"`
 
 	// +kubebuilder:default=100
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	BatchPercentage int32 `json:"batchPercentage,omitempty"`
 
-	// +kubebuilder:default="10m"
+	// +kubebuilder:default="1s"
 	BatchInterval string `json:"batchInterval,omitempty"`
 
 	// +optional

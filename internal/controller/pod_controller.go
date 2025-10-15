@@ -27,6 +27,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	v1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
 	"github.com/samber/lo"
@@ -49,6 +50,7 @@ type PodReconciler struct {
 	Scheme        *runtime.Scheme
 	Allocator     *gpuallocator.GpuAllocator
 	PortAllocator *portallocator.PortAllocator
+	Expander      *expander.NodeExpander
 }
 
 // +kubebuilder:rbac:groups=core,resources=*,verbs=get;list;watch
@@ -66,6 +68,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	pod := &corev1.Pod{}
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
 		if errors.IsNotFound(err) {
+			r.Expander.RemovePreSchedulePod(req.Name, true)
 			r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
 			metrics.RemoveWorkerMetrics(req.Name, time.Now())
 			log.Info("Released GPU resources when pod deleted", "pod", req.NamespacedName)

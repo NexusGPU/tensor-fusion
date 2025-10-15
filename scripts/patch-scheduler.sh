@@ -8,3 +8,6 @@ git apply ./patches/scheduler-pdb-1.patch
 
 # diff -u original_file.go modified_file.go > changes.patch
 git apply ./patches/scheduler-pdb-2.patch
+
+# change `findNodesThatFitPod` to public method for scheduler simulation 
+git apply ./patches/scheduler-sched-one.patch

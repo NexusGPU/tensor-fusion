@@ -321,11 +321,14 @@ spec:
                               type: object
                             nodePoolRollingUpdatePolicy:
                               properties:
-                                autoUpdate:
-                                  default: true
+                                autoUpdateClient:
+                                  type: boolean
+                                autoUpdateHypervisor:
+                                  type: boolean
+                                autoUpdateWorker:
                                   type: boolean
                                 batchInterval:
-                                  default: 10m
+                                  default: 1s
                                   type: string
                                 batchPercentage:
                                   default: 100

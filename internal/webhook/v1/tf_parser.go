@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 )
 
 type TFResource struct {
@@ -82,6 +83,27 @@ func ParseTensorFusionInfo(
 		workloadProfile.Spec.IsLocalGPU = true
 	}
 
+	// check if its sidecar worker mode
+	sidecarWorker, ok := pod.Annotations[constants.SidecarWorkerAnnotation]
+	if ok && sidecarWorker == constants.TrueStringValue {
+		workloadProfile.Spec.IsLocalGPU = true
+		workloadProfile.Spec.SidecarWorker = true
+	}
+
+	workerPodTemplate, ok := pod.Annotations[constants.WorkerPodTemplateAnnotation]
+	if ok && workerPodTemplate != "" {
+		if workloadProfile.Spec.IsLocalGPU {
+			return info, fmt.Errorf("worker pod template is not supported in localGPU mode")
+		} else if workloadProfile.Spec.SidecarWorker {
+			return info, fmt.Errorf("worker pod template is not supported in SidecarWorker mode")
+		}
+		workerPodTemplateSpec := &corev1.PodTemplateSpec{}
+		if err := yaml.Unmarshal([]byte(workerPodTemplate), workerPodTemplateSpec); err != nil {
+			return info, fmt.Errorf("unmarshal worker pod template from annotation: %w", err)
+		}
+		workloadProfile.Spec.WorkerPodTemplate = workerPodTemplateSpec
+	}
+
 	if poolName, err := getGPUPoolNameAndVerify(ctx, k8sClient, pod); err != nil {
 		return info, err
 	} else {
@@ -133,13 +155,13 @@ func ParseTensorFusionInfo(
 }
 
 func parseAutoScalingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) {
-	autoLimits, ok := pod.Annotations[constants.AutoScaleLimitsAnnotation]
-	if ok && autoLimits == constants.TrueStringValue {
-		workloadProfile.Spec.AutoScalingConfig.AutoSetLimits.Enable = true
+	autoResources, ok := pod.Annotations[constants.AutoScaleResourcesAnnotation]
+	if ok && autoResources == constants.TrueStringValue {
+		workloadProfile.Spec.AutoScalingConfig.AutoSetResources.Enable = true
 	}
-	autoRequests, ok := pod.Annotations[constants.AutoScaleRequestsAnnotation]
-	if ok && autoRequests == constants.TrueStringValue {
-		workloadProfile.Spec.AutoScalingConfig.AutoSetRequests.Enable = true
+	targetResource, ok := pod.Annotations[constants.AutoScaleTargetResourceAnnotation]
+	if ok {
+		workloadProfile.Spec.AutoScalingConfig.AutoSetResources.TargetResource = targetResource
 	}
 	autoReplicas, ok := pod.Annotations[constants.AutoScaleReplicasAnnotation]
 	if ok && autoReplicas == constants.TrueStringValue {

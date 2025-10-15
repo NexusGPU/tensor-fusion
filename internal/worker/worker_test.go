@@ -9,6 +9,7 @@ import (
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
@@ -390,5 +391,248 @@ func generateWorkerPodList(workloadStatus []tfv1.WorkerStatus) *v1.PodList {
 				},
 			}
 		}),
+	}
+}
+
+// TestMergePodTemplateSpec tests the mergePodTemplateSpec function
+func TestMergePodTemplateSpec(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     *v1.PodTemplateSpec
+		override *v1.PodTemplateSpec
+		validate func(t *testing.T, merged *v1.PodTemplateSpec)
+	}{
+		{
+			name: "merge labels",
+			base: &v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app": "base",
+					},
+				},
+			},
+			override: &v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"env": "prod",
+					},
+				},
+			},
+			validate: func(t *testing.T, merged *v1.PodTemplateSpec) {
+				assert.Equal(t, "base", merged.Labels["app"])
+				assert.Equal(t, "prod", merged.Labels["env"])
+			},
+		},
+		{
+			name: "override existing labels",
+			base: &v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app": "base",
+						"env": "dev",
+					},
+				},
+			},
+			override: &v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"env": "prod",
+					},
+				},
+			},
+			validate: func(t *testing.T, merged *v1.PodTemplateSpec) {
+				assert.Equal(t, "base", merged.Labels["app"])
+				assert.Equal(t, "prod", merged.Labels["env"])
+			},
+		},
+		{
+			name: "merge annotations",
+			base: &v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"base-annotation": "value1",
+					},
+				},
+			},
+			override: &v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"override-annotation": "value2",
+					},
+				},
+			},
+			validate: func(t *testing.T, merged *v1.PodTemplateSpec) {
+				assert.Equal(t, "value1", merged.Annotations["base-annotation"])
+				assert.Equal(t, "value2", merged.Annotations["override-annotation"])
+			},
+		},
+		{
+			name: "merge container env vars",
+			base: &v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:  "worker",
+							Image: "base-image:v1",
+							Env: []v1.EnvVar{
+								{Name: "BASE_VAR", Value: "base"},
+							},
+						},
+					},
+				},
+			},
+			override: &v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name: "worker",
+							Env: []v1.EnvVar{
+								{Name: "OVERRIDE_VAR", Value: "override"},
+							},
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, merged *v1.PodTemplateSpec) {
+				assert.Len(t, merged.Spec.Containers, 1)
+				assert.Equal(t, "base-image:v1", merged.Spec.Containers[0].Image)
+				assert.Len(t, merged.Spec.Containers[0].Env, 2)
+				envMap := make(map[string]string)
+				for _, env := range merged.Spec.Containers[0].Env {
+					envMap[env.Name] = env.Value
+				}
+				assert.Equal(t, "base", envMap["BASE_VAR"])
+				assert.Equal(t, "override", envMap["OVERRIDE_VAR"])
+			},
+		},
+		{
+			name: "override container image",
+			base: &v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:  "worker",
+							Image: "base-image:v1",
+						},
+					},
+				},
+			},
+			override: &v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:  "worker",
+							Image: "override-image:v2",
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, merged *v1.PodTemplateSpec) {
+				assert.Len(t, merged.Spec.Containers, 1)
+				assert.Equal(t, "override-image:v2", merged.Spec.Containers[0].Image)
+			},
+		},
+		{
+			name: "merge resource requests",
+			base: &v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:  "worker",
+							Image: "base-image:v1",
+						},
+					},
+				},
+			},
+			override: &v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name: "worker",
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									v1.ResourceMemory: *ptr.To(resource.MustParse("2Gi")),
+								},
+							},
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, merged *v1.PodTemplateSpec) {
+				assert.Len(t, merged.Spec.Containers, 1)
+				memRequest := merged.Spec.Containers[0].Resources.Requests[v1.ResourceMemory]
+				assert.Equal(t, "2Gi", memRequest.String())
+			},
+		},
+		{
+			name: "add new container",
+			base: &v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:  "worker",
+							Image: "base-image:v1",
+						},
+					},
+				},
+			},
+			override: &v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:  "sidecar",
+							Image: "sidecar-image:v1",
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, merged *v1.PodTemplateSpec) {
+				assert.Len(t, merged.Spec.Containers, 2)
+				containerNames := []string{merged.Spec.Containers[0].Name, merged.Spec.Containers[1].Name}
+				assert.Contains(t, containerNames, "worker")
+				assert.Contains(t, containerNames, "sidecar")
+			},
+		},
+		{
+			name: "merge volumes",
+			base: &v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Volumes: []v1.Volume{
+						{
+							Name: "base-volume",
+							VolumeSource: v1.VolumeSource{
+								EmptyDir: &v1.EmptyDirVolumeSource{},
+							},
+						},
+					},
+				},
+			},
+			override: &v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Volumes: []v1.Volume{
+						{
+							Name: "override-volume",
+							VolumeSource: v1.VolumeSource{
+								EmptyDir: &v1.EmptyDirVolumeSource{},
+							},
+						},
+					},
+				},
+			},
+			validate: func(t *testing.T, merged *v1.PodTemplateSpec) {
+				assert.Len(t, merged.Spec.Volumes, 2)
+				volumeNames := []string{merged.Spec.Volumes[0].Name, merged.Spec.Volumes[1].Name}
+				assert.Contains(t, volumeNames, "base-volume")
+				assert.Contains(t, volumeNames, "override-volume")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := mergePodTemplateSpec(tt.base, tt.override)
+			assert.NoError(t, err)
+			tt.validate(t, tt.base)
+		})
 	}
 }

@@ -81,8 +81,8 @@ func RefreshGPUNodeCapacity(
 }
 
 func calculateVirtualCapacity(node *tfv1.GPUNode, pool *tfv1.GPUPool) (resource.Quantity, resource.Quantity) {
-	diskSize, _ := node.Status.NodeInfo.DataDiskSize.AsInt64()
-	ramSize, _ := node.Status.NodeInfo.RAMSize.AsInt64()
+	diskSize := node.Status.NodeInfo.DataDiskSize.Value()
+	ramSize := node.Status.NodeInfo.RAMSize.Value()
 
 	virtualVRAM := node.Status.TotalVRAM.DeepCopy()
 	if pool.Spec.CapacityConfig == nil || pool.Spec.CapacityConfig.Oversubscription == nil {

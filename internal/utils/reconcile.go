@@ -39,6 +39,7 @@ func init() {
 		constants.PendingRequeueDuration = time.Millisecond * 150
 		constants.StatusCheckInterval = time.Millisecond * 200
 		constants.GracefulPeriodSeconds = ptr.To(int64(0))
+		constants.UnschedQueueBufferDuration = time.Millisecond * 50
 	}
 }
 

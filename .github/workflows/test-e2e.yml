@@ -33,5 +33,6 @@ jobs:
 
       - name: Running Test e2e
         run: |
-          go mod tidy
+          go mod vendor
+          bash ./scripts/patch-scheduler.sh
           make test-e2e

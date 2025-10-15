@@ -20,19 +20,24 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	k8sVer "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/component-base/configz"
 	"k8s.io/klog/v2"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	schedulerserverconfig "k8s.io/kubernetes/cmd/kube-scheduler/app/config"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app/options"
 	"k8s.io/kubernetes/pkg/scheduler"
 	kubeschedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/latest"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -53,8 +58,10 @@ func SetupScheduler(
 	schedulerConfigPath string,
 	disableHttpEndpoint bool,
 	k8sVersion *k8sVer.Version,
+	allocator *gpuallocator.GpuAllocator,
+	enableNodeExpander bool,
 	outOfTreeRegistryOptions ...app.Option,
-) (*schedulerserverconfig.CompletedConfig, *scheduler.Scheduler, error) {
+) (*schedulerserverconfig.CompletedConfig, *scheduler.Scheduler, *expander.NodeExpander, error) {
 	opts := options.NewOptions()
 	schedulerConfigFlag := opts.Flags.FlagSet(schedulerConfigFlagSet).Lookup(schedulerConfigFlag)
 	schedulerConfigFlag.Changed = true
@@ -65,36 +72,36 @@ func SetupScheduler(
 
 	cfgPath, err := preHandleConfig(schedulerConfigPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	err = schedulerConfigFlag.Value.Set(cfgPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	err = opts.ComponentGlobalsRegistry.Set()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Setup enumerationVersion again since it's overridden by the config
 	err = feature.DefaultMutableFeatureGate.SetEmulationVersion(k8sVersion)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if cfg, err := latest.Default(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	} else {
 		opts.ComponentConfig = cfg
 	}
 
 	if errs := opts.Validate(); len(errs) > 0 {
-		return nil, nil, utilerrors.NewAggregate(errs)
+		return nil, nil, nil, utilerrors.NewAggregate(errs)
 	}
 
 	c, err := opts.Config(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Get the completed config
@@ -103,7 +110,7 @@ func SetupScheduler(
 	outOfTreeRegistry := make(runtime.Registry)
 	for _, option := range outOfTreeRegistryOptions {
 		if err := option(outOfTreeRegistry); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
@@ -130,18 +137,42 @@ func SetupScheduler(
 		}),
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+
 	if err := options.LogOrWriteConfig(
 		klog.FromContext(ctx),
 		opts.WriteConfigTo,
 		&cc.ComponentConfig,
 		completedProfiles,
 	); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	return &cc, sched, nil
+	// Initialize node expander
+	if enableNodeExpander {
+		unschedHandler, nodeExpander := expander.NewUnscheduledPodHandler(
+			ctx, sched, allocator,
+			mgr.GetEventRecorderFor("TensorFusionScheduler"),
+		)
+
+		// Save the original failure handler to avoid infinite recursion
+		originalFailureHandler := sched.FailureHandler
+		sched.FailureHandler = func(
+			ctx context.Context, fwk framework.Framework, podInfo *framework.QueuedPodInfo,
+			status *fwk.Status, nominatingInfo *framework.NominatingInfo, start time.Time,
+		) {
+			if status.IsRejected() {
+				// Handle TensorFusion pods that are rejected due to lack of GPU resources
+				// The unschedHandler will queue the pod and process expansion after buffer delay
+				unschedHandler.HandleRejectedPod(ctx, podInfo, status)
+			}
+			// Call the original failure handler to avoid infinite recursion
+			originalFailureHandler(ctx, fwk, podInfo, status, nominatingInfo, start)
+		}
+		return &cc, sched, nodeExpander, nil
+	}
+	return &cc, sched, nil, nil
 }
 
 func RunScheduler(ctx context.Context,

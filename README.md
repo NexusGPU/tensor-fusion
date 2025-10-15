@@ -30,34 +30,17 @@ Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** 
 #### 📊 GPU Oversubscription and VRAM Expansion
 #### 🛫 GPU Pooling, Monitoring, Live Migration, Model Preloading and more
 
-## 🎬 Demo
-
-### Fractional vGPU & GPU-over-IP & Distributed Allocation
-
-![Fractional vGPU & GPU-over-IP & Distributed Allocation](https://cdn.tensor-fusion.ai//demo/overall-demo.gif)
-
-
-### AI Infra Console
-
-![AI Infra Console](https://cdn.tensor-fusion.ai//demo/ai-infra-console.gif)
-
-### GPU Live-migration [End-to-end feature WIP]
-
-https://cdn.tensor-fusion.ai/GPU_Content_Migration.mp4
-
 ## 🚀 Quick Start
 
 ### Onboard Your Own AI Infra
 
-- [Deploy in Kubernetes cluster](https://tensor-fusion.ai/guide/getting-started/deployment-k8s)
+- [Deploy in Kubernetes with Cloud Console](https://tensor-fusion.ai/guide/getting-started/deployment-k8s)
+- [Deploy in Kubernetes with Helm chart](https://tensor-fusion.ai/guide/recipes/deploy-k8s-local-mode)
 - [Create new cluster in VM/BareMetal](https://tensor-fusion.ai/guide/getting-started/deployment-vm)
+- [Run vGPU in VM Hypervisor](https://tensor-fusion.ai/guide/getting-started/deployment-vm)
 - [Learn Essential Concepts & Architecture](https://tensor-fusion.ai/guide/getting-started/architecture)
 
 <!-- (TODO: Asciinema) -->
-
-<!-- ### Playground
-
-- Explore the demo account: [Demo Console - Working in progress](https://app.tensor-fusion.ai?hint=demo) -->
 
 ### 💬 Discussion
 

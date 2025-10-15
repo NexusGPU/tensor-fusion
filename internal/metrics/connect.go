@@ -53,7 +53,7 @@ func (m *TimeSeriesDB) Setup(connection GreptimeDBConnection) error {
 	}
 	logger := logger.New(golog.New(logFile, "\r\n", golog.LstdFlags), logger.Config{
 		SlowThreshold:             200 * time.Millisecond,
-		LogLevel:                  logger.Warn,
+		LogLevel:                  logger.Info,
 		IgnoreRecordNotFoundError: false,
 		Colorful:                  true,
 	})

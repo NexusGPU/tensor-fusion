@@ -188,7 +188,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 
 	// Inject initContainer and env variables
 	patches, err := m.patchTFClient(
-		ctx, pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices,
+		ctx, pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices, tfInfo.Profile.SidecarWorker,
 	)
 	if err != nil {
 		mode := "regular"
@@ -222,7 +222,17 @@ func (m *TensorFusionPodMutator) InjectDecoder(d admission.Decoder) error {
 }
 
 func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod *corev1.Pod, tfInfo *utils.TensorFusionInfo, workload *tfv1.TensorFusionWorkload, pool *tfv1.GPUPool) error {
-	qos := calculateQoSLevel(tfInfo.Profile, pool)
+	// Create the desired spec for comparison
+	desiredSpec := tfv1.WorkloadProfileSpec{
+		Replicas:          nil,
+		PoolName:          tfInfo.Profile.PoolName,
+		Resources:         tfInfo.Profile.Resources,
+		Qos:               calculateQoSLevel(tfInfo.Profile, pool),
+		IsLocalGPU:        tfInfo.Profile.IsLocalGPU,
+		GPUCount:          tfInfo.Profile.GPUCount,
+		GPUModel:          tfInfo.Profile.GPUModel,
+		AutoScalingConfig: tfInfo.Profile.AutoScalingConfig,
+	}
 
 	err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.WorkloadName, Namespace: pod.Namespace}, workload)
 	if err != nil {
@@ -244,15 +254,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 					constants.WorkloadModeAnnotation: constants.WorkloadModeDynamic,
 				},
 			},
-			Spec: tfv1.WorkloadProfileSpec{
-				Replicas:   nil,
-				PoolName:   tfInfo.Profile.PoolName,
-				Resources:  tfInfo.Profile.Resources,
-				GPUCount:   tfInfo.Profile.GPUCount,
-				Qos:        qos,
-				GPUModel:   tfInfo.Profile.GPUModel,
-				IsLocalGPU: tfInfo.Profile.IsLocalGPU,
-			},
+			Spec: desiredSpec,
 		}
 
 		// Pass through disable features annotation
@@ -268,17 +270,6 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(ctx context.Context, pod
 			return fmt.Errorf("failed to create workload: %w", err)
 		}
 		return nil
-	}
-
-	// Create the desired spec for comparison
-	desiredSpec := tfv1.WorkloadProfileSpec{
-		Replicas:   nil,
-		PoolName:   tfInfo.Profile.PoolName,
-		Resources:  tfInfo.Profile.Resources,
-		Qos:        qos,
-		IsLocalGPU: tfInfo.Profile.IsLocalGPU,
-		GPUCount:   tfInfo.Profile.GPUCount,
-		GPUModel:   tfInfo.Profile.GPUModel,
 	}
 
 	// Compare the entire spec at once
@@ -299,6 +290,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	isLocalGPU bool,
 	currentBytes []byte,
 	containerIndices []int,
+	isSidecarWorker bool,
 ) ([]jsonpatch.JsonPatchOperation, error) {
 	clientConfig := pool.Spec.ComponentConfig.Client
 
@@ -337,6 +329,17 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 		if !isLocalGPU {
 			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
+		} else if isSidecarWorker {
+			// Hard-isolation mode in container, use tensor-fusion worker as sidecar and communicate thru /dev/shm/tf_shm
+			container.Env = append(container.Env, corev1.EnvVar{
+				Name: constants.ConnectionInfoEnv,
+				// protocol+identifier+size+initVersion
+				Value: fmt.Sprintf("shmem+%s+%s+1",
+					constants.ConnectionSharedMemName, constants.ConnectionSharedMemSize),
+			}, corev1.EnvVar{
+				Name:  constants.DisableVMSharedMemEnv,
+				Value: "0",
+			})
 		}
 
 		pod.Spec.Containers[containerIndex] = *container

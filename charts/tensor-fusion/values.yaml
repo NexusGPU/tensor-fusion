@@ -45,6 +45,7 @@ controller:
     - -leader-elect
     - -enable-auto-scale
     - -enable-alert
+    - -enable-auto-expander
 
   podAnnotations: {}
   tolerations: []

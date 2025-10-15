@@ -39,14 +39,14 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 		if err := r.Get(ctx, client.ObjectKey{Name: claimName}, &gpuNodeClaim); err != nil {
 			return nil, err
 		}
-		pendingTflops, _ := gpuNodeClaim.Spec.TFlopsOffered.AsInt64()
-		pendingVRAM, _ := gpuNodeClaim.Spec.VRAMOffered.AsInt64()
+		pendingTflops := gpuNodeClaim.Spec.TFlopsOffered.Value()
+		pendingVRAM := gpuNodeClaim.Spec.VRAMOffered.Value()
 		assumedTflops += pendingTflops
 		assumedVRAM += pendingVRAM
 	}
 
-	totalTFlops, _ := pool.Status.TotalTFlops.AsInt64()
-	totalVRAM, _ := pool.Status.TotalVRAM.AsInt64()
+	totalTFlops := pool.Status.TotalTFlops.Value()
+	totalVRAM := pool.Status.TotalVRAM.Value()
 	totalTFlops += assumedTflops
 	totalVRAM += assumedVRAM
 
@@ -54,13 +54,13 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	warmUpTFlops := int64(0)
 	warmUpVRAM := int64(0)
 	if pool.Spec.CapacityConfig.WarmResources != nil {
-		warmUpTFlops, _ = pool.Spec.CapacityConfig.WarmResources.TFlops.AsInt64()
-		warmUpVRAM, _ = pool.Spec.CapacityConfig.WarmResources.VRAM.AsInt64()
+		warmUpTFlops = pool.Spec.CapacityConfig.WarmResources.TFlops.Value()
+		warmUpVRAM = pool.Spec.CapacityConfig.WarmResources.VRAM.Value()
 	}
 
 	if pool.Spec.CapacityConfig.MinResources != nil {
-		minTFlops, _ := pool.Spec.CapacityConfig.MinResources.TFlops.AsInt64()
-		minVRAM, _ := pool.Spec.CapacityConfig.MinResources.VRAM.AsInt64()
+		minTFlops := pool.Spec.CapacityConfig.MinResources.TFlops.Value()
+		minVRAM := pool.Spec.CapacityConfig.MinResources.VRAM.Value()
 
 		tflopsGap = minTFlops - totalTFlops
 		vramGap = minVRAM - totalVRAM
@@ -73,8 +73,8 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 
 	// Only check warm-up when everything is ready, otherwise it will cause duplicated resource creation
 	if !shouldScaleUp && pool.Status.Phase == tfv1.TensorFusionPoolPhaseRunning {
-		availableTFlops, _ := pool.Status.AvailableTFlops.AsInt64()
-		availableVRAM, _ := pool.Status.AvailableVRAM.AsInt64()
+		availableTFlops := pool.Status.AvailableTFlops.Value()
+		availableVRAM := pool.Status.AvailableVRAM.Value()
 		availableTFlops += assumedTflops
 		availableVRAM += assumedVRAM
 
@@ -88,8 +88,8 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	}
 
 	if shouldScaleUp && pool.Spec.CapacityConfig.MaxResources != nil {
-		maxTFlops, _ := pool.Spec.CapacityConfig.MaxResources.TFlops.AsInt64()
-		maxVRAM, _ := pool.Spec.CapacityConfig.MaxResources.VRAM.AsInt64()
+		maxTFlops := pool.Spec.CapacityConfig.MaxResources.TFlops.Value()
+		maxVRAM := pool.Spec.CapacityConfig.MaxResources.VRAM.Value()
 
 		if totalTFlops >= maxTFlops || totalVRAM >= maxVRAM {
 			shouldScaleUp = false

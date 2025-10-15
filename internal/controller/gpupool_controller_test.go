@@ -27,7 +27,6 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -369,14 +368,18 @@ func updateRollingUpdatePolicy(tfEnv *TensorFusionEnv, autoUpdate bool, batchPer
 	GinkgoHelper()
 	tfc := tfEnv.GetCluster()
 	policy := tfc.Spec.GPUPools[0].SpecTemplate.NodeManagerConfig.NodePoolRollingUpdatePolicy
-	policy.AutoUpdate = ptr.To(autoUpdate)
+	policy.AutoUpdateHypervisor = autoUpdate
+	policy.AutoUpdateWorker = autoUpdate
+	policy.AutoUpdateClient = autoUpdate
 	policy.BatchPercentage = batchPercentage
 	policy.BatchInterval = batchInterval
 	tfEnv.UpdateCluster(tfc)
 	Eventually(func(g Gomega) {
 		pool := tfEnv.GetGPUPool(0)
 		newPolicy := pool.Spec.NodeManagerConfig.NodePoolRollingUpdatePolicy
-		g.Expect(newPolicy.AutoUpdate).Should(Equal(policy.AutoUpdate))
+		g.Expect(newPolicy.AutoUpdateHypervisor).Should(Equal(policy.AutoUpdateHypervisor))
+		g.Expect(newPolicy.AutoUpdateWorker).Should(Equal(policy.AutoUpdateWorker))
+		g.Expect(newPolicy.AutoUpdateClient).Should(Equal(policy.AutoUpdateClient))
 		g.Expect(newPolicy.BatchPercentage).Should(Equal(policy.BatchPercentage))
 		g.Expect(newPolicy.BatchInterval).Should(Equal(policy.BatchInterval))
 	}).Should(Succeed())

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"strings"
-	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -26,11 +25,8 @@ import (
 )
 
 var (
-	initSchemaOnce sync.Once
-
 	KarpenterGroup         = "karpenter.sh"
 	KarpenterVersion       = "v1"
-	kindNodeClaim          = "NodeClaim"
 	DefaultGPUResourceName = "nvidia.com/gpu"
 	EC2NodeClassGroup      = "karpenter.k8s.aws"
 	// AWS capacity type: https://karpenter.sh/docs/concepts/scheduling/#well-known-labels
@@ -73,19 +69,6 @@ func NewKarpenterGPUNodeProvider(ctx context.Context, cfg tfv1.ComputingVendorCo
 	if client == nil {
 		return KarpenterGPUNodeProvider{}, fmt.Errorf("kubernetes client cannot be nil")
 	}
-
-	initSchemaOnce.Do(func() {
-		scheme := client.Scheme()
-		// Add Karpenter v1 types manually
-		gv := schema.GroupVersion{Group: KarpenterGroup, Version: KarpenterVersion}
-		if !scheme.Recognizes(gv.WithKind(kindNodeClaim)) {
-			scheme.AddKnownTypes(gv,
-				&karpv1.NodeClaim{}, &karpv1.NodeClaimList{},
-				&karpv1.NodePool{}, &karpv1.NodePoolList{},
-			)
-			metav1.AddToGroupVersion(scheme, gv)
-		}
-	})
 
 	pricingProvider := pricing.NewStaticPricingProvider()
 	// Initialize the Karpenter GPU Node Provider with the provided client
@@ -335,7 +318,7 @@ func (p KarpenterGPUNodeProvider) buildNodeClaim(ctx context.Context, param *tfv
 	nodeClaim := &karpv1.NodeClaim{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: fmt.Sprintf("%s/%s", KarpenterGroup, KarpenterVersion),
-			Kind:       kindNodeClaim,
+			Kind:       constants.KarpenterNodeClaimKind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: param.NodeName,
