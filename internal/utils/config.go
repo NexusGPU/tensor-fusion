@@ -168,6 +168,18 @@ func GetSelfServiceAccountNameShort() string {
 
 var nvidiaOperatorProgressiveMigrationEnv = os.Getenv(constants.NvidiaOperatorProgressiveMigrationEnv) == "true"
 
+var isLicensedEnv = os.Getenv(constants.UsingCommercialComponentEnv) == "true"
+
+func init() {
+	if isLicensedEnv {
+		ctrl.Log.Info("Enabling none open source components, please make sure you are in trial stage or have bought commercial license. Contact us: support@tensor-fusion.com")
+	}
+}
+
+func IsLicensed() bool {
+	return isLicensedEnv
+}
+
 func IsProgressiveMigration() bool {
 	return nvidiaOperatorProgressiveMigrationEnv
 }

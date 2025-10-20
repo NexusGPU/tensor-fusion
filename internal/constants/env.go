@@ -16,6 +16,8 @@ const (
 
 	NvidiaOperatorProgressiveMigrationEnv = "NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION"
 	RunHypervisorUtilGPUAllocatable       = "RUN_HYPERVISOR_UTIL_GPU_ALLOCATABLE"
+
+	UsingCommercialComponentEnv           ="COMMERCIAL_PLAN"
 )
 
 // General envs used in compose components manifest
