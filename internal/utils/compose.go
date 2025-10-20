@@ -338,10 +338,14 @@ func AddTFDefaultClientConfBeforePatch(
 			}, v1.EnvVar{
 				Name:  constants.HypervisorPortEnv,
 				Value: strconv.Itoa(int(getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor))),
-			}, v1.EnvVar{
-				Name:  constants.NGPUPathEnv,
-				Value: constants.NGPUPathValue,
 			})
+
+			if IsLicensed() {
+				envList = append(envList, v1.EnvVar{
+					Name:  constants.NGPUPathEnv,
+					Value: constants.NGPUPathValue,
+				})
+			}
 
 			// disable GPU limiter killer switch
 			if pod.Annotations[constants.DisableFeaturesAnnotation] != "" {
