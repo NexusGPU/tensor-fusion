@@ -8,7 +8,7 @@ require (
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107
 	github.com/aws/aws-sdk-go-v2 v1.39.2
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.254.1
-	github.com/aws/smithy-go v1.23.0
+	github.com/aws/smithy-go v1.23.1
 	github.com/awslabs/operatorpkg v0.0.0-20250916074601-4250f4c35c6b
 	github.com/gin-contrib/gzip v1.2.4
 	github.com/gin-gonic/gin v1.11.0
