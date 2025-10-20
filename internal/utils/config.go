@@ -166,9 +166,9 @@ func GetSelfServiceAccountNameShort() string {
 	return parts[len(parts)-1]
 }
 
-var nvidiaOperatorProgressiveMigrationEnv = os.Getenv(constants.NvidiaOperatorProgressiveMigrationEnv) == "true"
+var nvidiaOperatorProgressiveMigrationEnv = os.Getenv(constants.NvidiaOperatorProgressiveMigrationEnv) == constants.TrueStringValue
 
-var isLicensedEnv = os.Getenv(constants.UsingCommercialComponentEnv) == "true"
+var isLicensedEnv = os.Getenv(constants.UsingCommercialComponentEnv) == constants.TrueStringValue
 
 func init() {
 	if isLicensedEnv {
