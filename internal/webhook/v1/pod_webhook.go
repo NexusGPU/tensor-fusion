@@ -429,9 +429,7 @@ func removeNativeGPULimitsAndAddCountToAnnotation(pod *corev1.Pod, container *co
 		delete(container.Resources.Requests, constants.NvidiaGPUKey)
 	}
 	if container.Resources.Limits != nil {
-		if _, ok := container.Resources.Limits[constants.NvidiaGPUKey]; ok {
-			// parse the gpu number to annotation
-			quantity := container.Resources.Limits[constants.NvidiaGPUKey]
+		if quantity, ok := container.Resources.Limits[constants.NvidiaGPUKey]; ok {
 			gpuNumber, err := strconv.Atoi(quantity.String())
 			if err != nil || gpuNumber <= 0 {
 				ctrl.Log.Error(err, "unrecognized nvidia.com/gpu in resources, not a valid number", "pod", pod.Name, "container", container.Name)
