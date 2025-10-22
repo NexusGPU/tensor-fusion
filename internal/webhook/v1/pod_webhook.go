@@ -304,7 +304,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 			return nil, fmt.Errorf("unmarshal patched container, invalid container patch: %w", err)
 		}
 
-		removeNativeGPUResourceClaim(container)
+		removeNativeGPULimitsAndAddCountToAnnotation(pod, container)
 
 		if !isLocalGPU {
 			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
@@ -423,13 +423,23 @@ func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *co
 	})
 }
 
-// remove nvidia.com/gpu in resources
-func removeNativeGPUResourceClaim(container *corev1.Container) {
+// remove nvidia.com/gpu in resources, add the GPU number into annotation
+func removeNativeGPULimitsAndAddCountToAnnotation(pod *corev1.Pod, container *corev1.Container) {
 	if container.Resources.Requests != nil {
 		delete(container.Resources.Requests, constants.NvidiaGPUKey)
 	}
 	if container.Resources.Limits != nil {
-		delete(container.Resources.Limits, constants.NvidiaGPUKey)
+		if _, ok := container.Resources.Limits[constants.NvidiaGPUKey]; ok {
+			// parse the gpu number to annotation
+			quantity := container.Resources.Limits[constants.NvidiaGPUKey]
+			gpuNumber, err := strconv.Atoi(quantity.String())
+			if err != nil || gpuNumber <= 0 {
+				ctrl.Log.Error(err, "unrecognized nvidia.com/gpu in resources, not a valid number", "pod", pod.Name, "container", container.Name)
+			} else {
+				pod.Annotations[constants.GpuCountAnnotation] = strconv.Itoa(gpuNumber)
+			}
+			delete(container.Resources.Limits, constants.NvidiaGPUKey)
+		}
 	}
 }
 
