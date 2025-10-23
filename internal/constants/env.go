@@ -73,7 +73,8 @@ const (
 	RealNvmlLibPathValue = "/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
 	RealCUDALibPathValue = "/lib/x86_64-linux-gnu/libcuda.so"
 
-	PrependPathEnv = "TF_PREPEND_PATH"
+	PrependPathEnv    = "TF_PREPEND_PATH"
+	PrependLibPathEnv = "TF_LD_LIBRARY_PATH"
 
 	RunInsideGPUEnv = "RUN_INSIDE_GPU_NODE"
 
