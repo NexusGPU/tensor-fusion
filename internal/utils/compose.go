@@ -196,6 +196,9 @@ func AddTFDefaultClientConfBeforePatch(
 		pod.Spec.Containers[injectContainerIndex].Env = append(pod.Spec.Containers[injectContainerIndex].Env, v1.EnvVar{
 			Name:  constants.PrependPathEnv,
 			Value: constants.TFLibsVolumeMountPath,
+		}, v1.EnvVar{
+			Name:  constants.PrependLibPathEnv,
+			Value: constants.TFLibsVolumeMountPath,
 		})
 
 		// Known issue: glibc ldd config style, does NOT support musl, fortunately, musl rarely used in AI workloads
