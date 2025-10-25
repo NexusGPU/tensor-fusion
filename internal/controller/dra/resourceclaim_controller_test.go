@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	resourcev1beta2 "k8s.io/api/resource/v1beta2"
+	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -19,12 +19,12 @@ import (
 
 func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 	scheme := runtime.NewScheme()
-	require.NoError(t, resourcev1beta2.AddToScheme(scheme))
+	require.NoError(t, resourcev1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
 
 	tests := []struct {
 		name           string
-		resourceClaim  *resourcev1beta2.ResourceClaim
+		resourceClaim  *resourcev1.ResourceClaim
 		pod            *corev1.Pod
 		expectedResult ctrl.Result
 		expectError    bool
@@ -37,7 +37,7 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			name: "ResourceClaim without TensorFusion label",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
@@ -48,7 +48,7 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			name: "ResourceClaim with wrong label value",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
@@ -62,7 +62,7 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			name: "ResourceClaim without owner Pod",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
@@ -70,12 +70,12 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 						constants.TensorFusionResourceClaimTemplateLabel: constants.TrueStringValue,
 					},
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
 								},
 							},
@@ -88,7 +88,7 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			name: "Owner Pod without CEL annotation",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
@@ -104,12 +104,12 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 						},
 					},
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
 								},
 							},
@@ -133,7 +133,7 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			name: "Successful CEL expression update",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
@@ -149,12 +149,12 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 						},
 					},
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
 								},
 							},
@@ -219,7 +219,7 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 
 			// Check if ResourceClaim was updated with CEL expression
 			if tt.expectUpdate && tt.resourceClaim != nil {
-				updatedClaim := &resourcev1beta2.ResourceClaim{}
+				updatedClaim := &resourcev1.ResourceClaim{}
 				err := fakeClient.Get(context.Background(), types.NamespacedName{
 					Name:      tt.resourceClaim.Name,
 					Namespace: tt.resourceClaim.Namespace,
@@ -240,18 +240,18 @@ func TestResourceClaimReconciler_Reconcile(t *testing.T) {
 func TestResourceClaimReconciler_findOwnerPod(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(scheme))
-	require.NoError(t, resourcev1beta2.AddToScheme(scheme))
+	require.NoError(t, resourcev1.AddToScheme(scheme))
 
 	tests := []struct {
 		name          string
-		resourceClaim *resourcev1beta2.ResourceClaim
+		resourceClaim *resourcev1.ResourceClaim
 		pod           *corev1.Pod
 		expectedPod   *corev1.Pod
 		expectError   bool
 	}{
 		{
 			name: "No owner references",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
@@ -262,7 +262,7 @@ func TestResourceClaimReconciler_findOwnerPod(t *testing.T) {
 		},
 		{
 			name: "No Pod owner reference",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
@@ -281,7 +281,7 @@ func TestResourceClaimReconciler_findOwnerPod(t *testing.T) {
 		},
 		{
 			name: "Pod owner not found",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
@@ -300,7 +300,7 @@ func TestResourceClaimReconciler_findOwnerPod(t *testing.T) {
 		},
 		{
 			name: "Pod UID mismatch",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
@@ -326,7 +326,7 @@ func TestResourceClaimReconciler_findOwnerPod(t *testing.T) {
 		},
 		{
 			name: "Successful Pod lookup",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
@@ -397,25 +397,25 @@ func TestResourceClaimReconciler_findOwnerPod(t *testing.T) {
 
 func TestResourceClaimReconciler_updateResourceClaimCEL(t *testing.T) {
 	scheme := runtime.NewScheme()
-	require.NoError(t, resourcev1beta2.AddToScheme(scheme))
+	require.NoError(t, resourcev1.AddToScheme(scheme))
 
 	tests := []struct {
 		name          string
-		resourceClaim *resourcev1beta2.ResourceClaim
+		resourceClaim *resourcev1.ResourceClaim
 		celExpression string
 		expectError   bool
 		expectUpdate  bool
 	}{
 		{
 			name: "No device requests",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{},
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{},
 					},
 				},
 			},
@@ -424,14 +424,14 @@ func TestResourceClaimReconciler_updateResourceClaimCEL(t *testing.T) {
 		},
 		{
 			name: "No ExactDeviceRequest",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
 								// Exactly is nil
@@ -445,21 +445,21 @@ func TestResourceClaimReconciler_updateResourceClaimCEL(t *testing.T) {
 		},
 		{
 			name: "CEL expression already set correctly",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
-									Selectors: []resourcev1beta2.DeviceSelector{
+									Selectors: []resourcev1.DeviceSelector{
 										{
-											CEL: &resourcev1beta2.CELDeviceSelector{
+											CEL: &resourcev1.CELDeviceSelector{
 												Expression: `device.attributes["tflops"].quantity >= quantity("10")`,
 											},
 										},
@@ -476,17 +476,17 @@ func TestResourceClaimReconciler_updateResourceClaimCEL(t *testing.T) {
 		},
 		{
 			name: "Successful CEL expression update - empty selectors",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
 								},
 							},
@@ -500,19 +500,19 @@ func TestResourceClaimReconciler_updateResourceClaimCEL(t *testing.T) {
 		},
 		{
 			name: "Successful CEL expression update - nil CEL",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
-									Selectors: []resourcev1beta2.DeviceSelector{
+									Selectors: []resourcev1.DeviceSelector{
 										{
 											// CEL is nil
 										},
@@ -573,26 +573,26 @@ func TestResourceClaimReconciler_updateResourceClaimCEL(t *testing.T) {
 
 func TestResourceClaimReconciler_updateCapacityRequest(t *testing.T) {
 	scheme := runtime.NewScheme()
-	require.NoError(t, resourcev1beta2.AddToScheme(scheme))
+	require.NoError(t, resourcev1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
 
 	tests := []struct {
 		name          string
-		resourceClaim *resourcev1beta2.ResourceClaim
+		resourceClaim *resourcev1.ResourceClaim
 		pod           *corev1.Pod
 		expectError   bool
 		expectUpdate  bool
 	}{
 		{
 			name: "No device requests",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{},
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{},
 					},
 				},
 			},
@@ -610,14 +610,14 @@ func TestResourceClaimReconciler_updateCapacityRequest(t *testing.T) {
 		},
 		{
 			name: "No ExactDeviceRequest",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
 								// Exactly is nil
@@ -640,17 +640,17 @@ func TestResourceClaimReconciler_updateCapacityRequest(t *testing.T) {
 		},
 		{
 			name: "Successful capacity request update - nil Requests map",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
 									// Capacity.Requests is nil
 								},
@@ -731,11 +731,11 @@ func TestResourceClaimReconciler_updateCapacityRequest(t *testing.T) {
 
 func TestResourceClaimReconciler_IdempotencyCheck(t *testing.T) {
 	scheme := runtime.NewScheme()
-	require.NoError(t, resourcev1beta2.AddToScheme(scheme))
+	require.NoError(t, resourcev1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
 
 	// Create a ResourceClaim that is already allocated
-	resourceClaim := &resourcev1beta2.ResourceClaim{
+	resourceClaim := &resourcev1.ResourceClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-claim",
 			Namespace: "default",
@@ -743,22 +743,22 @@ func TestResourceClaimReconciler_IdempotencyCheck(t *testing.T) {
 				constants.TensorFusionResourceClaimTemplateLabel: constants.TrueStringValue,
 			},
 		},
-		Spec: resourcev1beta2.ResourceClaimSpec{
-			Devices: resourcev1beta2.DeviceClaim{
-				Requests: []resourcev1beta2.DeviceRequest{
+		Spec: resourcev1.ResourceClaimSpec{
+			Devices: resourcev1.DeviceClaim{
+				Requests: []resourcev1.DeviceRequest{
 					{
 						Name: "gpu-request",
-						Exactly: &resourcev1beta2.ExactDeviceRequest{
+						Exactly: &resourcev1.ExactDeviceRequest{
 							Count: 1,
 						},
 					},
 				},
 			},
 		},
-		Status: resourcev1beta2.ResourceClaimStatus{
-			Allocation: &resourcev1beta2.AllocationResult{
-				Devices: resourcev1beta2.DeviceAllocationResult{
-					Results: []resourcev1beta2.DeviceRequestAllocationResult{
+		Status: resourcev1.ResourceClaimStatus{
+			Allocation: &resourcev1.AllocationResult{
+				Devices: resourcev1.DeviceAllocationResult{
+					Results: []resourcev1.DeviceRequestAllocationResult{
 						{
 							Request: "gpu-request",
 							Device:  "gpu-0",
@@ -793,7 +793,7 @@ func TestResourceClaimReconciler_IdempotencyCheck(t *testing.T) {
 	assert.Equal(t, ctrl.Result{}, result)
 
 	// Verify ResourceClaim was not modified
-	updatedClaim := &resourcev1beta2.ResourceClaim{}
+	updatedClaim := &resourcev1.ResourceClaim{}
 	err = fakeClient.Get(context.Background(), types.NamespacedName{
 		Name:      resourceClaim.Name,
 		Namespace: resourceClaim.Namespace,
@@ -806,10 +806,10 @@ func TestResourceClaimReconciler_IdempotencyCheck(t *testing.T) {
 
 func TestResourceClaimReconciler_EmptyCELAnnotation(t *testing.T) {
 	scheme := runtime.NewScheme()
-	require.NoError(t, resourcev1beta2.AddToScheme(scheme))
+	require.NoError(t, resourcev1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
 
-	resourceClaim := &resourcev1beta2.ResourceClaim{
+	resourceClaim := &resourcev1.ResourceClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-claim",
 			Namespace: "default",
@@ -825,12 +825,12 @@ func TestResourceClaimReconciler_EmptyCELAnnotation(t *testing.T) {
 				},
 			},
 		},
-		Spec: resourcev1beta2.ResourceClaimSpec{
-			Devices: resourcev1beta2.DeviceClaim{
-				Requests: []resourcev1beta2.DeviceRequest{
+		Spec: resourcev1.ResourceClaimSpec{
+			Devices: resourcev1.DeviceClaim{
+				Requests: []resourcev1.DeviceRequest{
 					{
 						Name: "gpu-request",
-						Exactly: &resourcev1beta2.ExactDeviceRequest{
+						Exactly: &resourcev1.ExactDeviceRequest{
 							Count: 1,
 						},
 					},
@@ -884,7 +884,7 @@ func TestResourceClaimReconciler_EmptyCELAnnotation(t *testing.T) {
 	assert.Equal(t, ctrl.Result{}, result)
 
 	// Verify ResourceClaim was updated (capacity should be set even without CEL)
-	updatedClaim := &resourcev1beta2.ResourceClaim{}
+	updatedClaim := &resourcev1.ResourceClaim{}
 	err = fakeClient.Get(context.Background(), types.NamespacedName{
 		Name:      resourceClaim.Name,
 		Namespace: resourceClaim.Namespace,
@@ -907,12 +907,12 @@ func TestResourceClaimReconciler_EmptyCELAnnotation(t *testing.T) {
 
 func TestResourceClaimReconciler_updateDeviceCount(t *testing.T) {
 	scheme := runtime.NewScheme()
-	require.NoError(t, resourcev1beta2.AddToScheme(scheme))
+	require.NoError(t, resourcev1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
 
 	tests := []struct {
 		name          string
-		resourceClaim *resourcev1beta2.ResourceClaim
+		resourceClaim *resourcev1.ResourceClaim
 		pod           *corev1.Pod
 		expectError   bool
 		expectUpdate  bool
@@ -920,14 +920,14 @@ func TestResourceClaimReconciler_updateDeviceCount(t *testing.T) {
 	}{
 		{
 			name: "No device requests",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{},
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{},
 					},
 				},
 			},
@@ -942,14 +942,14 @@ func TestResourceClaimReconciler_updateDeviceCount(t *testing.T) {
 		},
 		{
 			name: "No ExactDeviceRequest",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
 								// Exactly is nil
@@ -969,17 +969,17 @@ func TestResourceClaimReconciler_updateDeviceCount(t *testing.T) {
 		},
 		{
 			name: "GPU count defaults to 1 when annotation missing",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 0, // Will be updated to 1
 								},
 							},
@@ -1000,17 +1000,17 @@ func TestResourceClaimReconciler_updateDeviceCount(t *testing.T) {
 		},
 		{
 			name: "GPU count already set correctly - no update",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 2,
 								},
 							},
@@ -1031,17 +1031,17 @@ func TestResourceClaimReconciler_updateDeviceCount(t *testing.T) {
 		},
 		{
 			name: "Successful GPU count update",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
 								},
 							},
@@ -1062,17 +1062,17 @@ func TestResourceClaimReconciler_updateDeviceCount(t *testing.T) {
 		},
 		{
 			name: "Invalid GPU count - not a number",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
 								},
 							},
@@ -1091,17 +1091,17 @@ func TestResourceClaimReconciler_updateDeviceCount(t *testing.T) {
 		},
 		{
 			name: "Invalid GPU count - zero",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
 								},
 							},
@@ -1120,17 +1120,17 @@ func TestResourceClaimReconciler_updateDeviceCount(t *testing.T) {
 		},
 		{
 			name: "Invalid GPU count - negative",
-			resourceClaim: &resourcev1beta2.ResourceClaim{
+			resourceClaim: &resourcev1.ResourceClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
 					Namespace: "default",
 				},
-				Spec: resourcev1beta2.ResourceClaimSpec{
-					Devices: resourcev1beta2.DeviceClaim{
-						Requests: []resourcev1beta2.DeviceRequest{
+				Spec: resourcev1.ResourceClaimSpec{
+					Devices: resourcev1.DeviceClaim{
+						Requests: []resourcev1.DeviceRequest{
 							{
 								Name: "gpu-request",
-								Exactly: &resourcev1beta2.ExactDeviceRequest{
+								Exactly: &resourcev1.ExactDeviceRequest{
 									Count: 1,
 								},
 							},

@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 
-	resourcev1beta2 "k8s.io/api/resource/v1beta2"
+	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -95,7 +95,7 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 	log := log.FromContext(ctx)
 
 	resourceSliceName := fmt.Sprintf(constants.DRAResourceSliceName, gpuNode.Name)
-	resourceSlice := &resourcev1beta2.ResourceSlice{
+	resourceSlice := &resourcev1.ResourceSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: resourceSliceName,
 		},
@@ -118,7 +118,7 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 		// Set basic spec fields
 		resourceSlice.Spec.Driver = constants.DRADriverName
 		resourceSlice.Spec.NodeName = &gpuNode.Name
-		resourceSlice.Spec.Pool = resourcev1beta2.ResourcePool{
+		resourceSlice.Spec.Pool = resourcev1.ResourcePool{
 			Name:               poolName,
 			Generation:         gpuNode.Generation,
 			ResourceSliceCount: 1,
@@ -146,8 +146,8 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 }
 
 // generateDevices creates the device list for ResourceSlice based on physical GPUs
-func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tfv1.GPUNode, gpus []tfv1.GPU, gpuPool *tfv1.GPUPool) []resourcev1beta2.Device {
-	devices := make([]resourcev1beta2.Device, 0, len(gpus))
+func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tfv1.GPUNode, gpus []tfv1.GPU, gpuPool *tfv1.GPUPool) []resourcev1.Device {
+	devices := make([]resourcev1.Device, 0, len(gpus))
 
 	if len(gpus) == 0 {
 		return devices
@@ -206,9 +206,9 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tf
 		gpuPhase := string(gpu.Status.Phase)
 		usedBy := string(gpu.Status.UsedBy)
 
-		device := resourcev1beta2.Device{
+		device := resourcev1.Device{
 			Name: gpu.Name,
-			Attributes: map[resourcev1beta2.QualifiedName]resourcev1beta2.DeviceAttribute{
+			Attributes: map[resourcev1.QualifiedName]resourcev1.DeviceAttribute{
 				// Existing attributes
 				constants.DRAAttributeModel: {
 					StringValue: &gpu.Status.GPUModel,
@@ -257,7 +257,7 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tf
 					StringValue: func() *string { s := nodeVirtualVRAM.String(); return &s }(),
 				},
 			},
-			Capacity: map[resourcev1beta2.QualifiedName]resourcev1beta2.DeviceCapacity{
+			Capacity: map[resourcev1.QualifiedName]resourcev1.DeviceCapacity{
 				// Physical capacity
 				constants.DRACapacityTFlops: {
 					Value: gpu.Status.Capacity.Tflops,
@@ -271,12 +271,12 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tf
 
 		// Add virtual capacity if available
 		if virtualTFlopsPerGPU != nil {
-			device.Capacity[constants.DRACapacityVirtualTFlops] = resourcev1beta2.DeviceCapacity{
+			device.Capacity[constants.DRACapacityVirtualTFlops] = resourcev1.DeviceCapacity{
 				Value: *virtualTFlopsPerGPU,
 			}
 		}
 		if virtualVRAMPerGPU != nil {
-			device.Capacity[constants.DRACapacityVirtualVRAM] = resourcev1beta2.DeviceCapacity{
+			device.Capacity[constants.DRACapacityVirtualVRAM] = resourcev1.DeviceCapacity{
 				Value: *virtualVRAMPerGPU,
 			}
 		}
@@ -292,7 +292,7 @@ func (r *ResourceSliceReconciler) cleanupResourceSlice(ctx context.Context, node
 	log := log.FromContext(ctx)
 
 	resourceSliceName := fmt.Sprintf(constants.DRAResourceSliceName, nodeName)
-	resourceSlice := &resourcev1beta2.ResourceSlice{
+	resourceSlice := &resourcev1.ResourceSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: resourceSliceName,
 		},
@@ -313,10 +313,10 @@ func (r *ResourceSliceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Setup field indexer for ResourceSlice by nodeName to enable efficient queries
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
-		&resourcev1beta2.ResourceSlice{},
+		&resourcev1.ResourceSlice{},
 		"spec.nodeName",
 		func(obj client.Object) []string {
-			rs := obj.(*resourcev1beta2.ResourceSlice)
+			rs := obj.(*resourcev1.ResourceSlice)
 			if rs.Spec.NodeName != nil && *rs.Spec.NodeName != "" {
 				return []string{*rs.Spec.NodeName}
 			}
