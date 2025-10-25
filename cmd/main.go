@@ -33,7 +33,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
-	resourcev1beta2 "k8s.io/api/resource/v1beta2"
+	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -108,7 +108,7 @@ var enableAutoExpander bool
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(tfv1.AddToScheme(scheme))
-	utilruntime.Must(resourcev1beta2.AddToScheme(scheme))
+	utilruntime.Must(resourcev1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 
 	karpenterScheme := &schemeBuilder.Builder{
