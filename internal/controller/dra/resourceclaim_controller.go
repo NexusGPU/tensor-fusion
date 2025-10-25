@@ -22,7 +22,7 @@ import (
 
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
-	resourcev1beta2 "k8s.io/api/resource/v1beta2"
+	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,7 +50,7 @@ func (r *ResourceClaimReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	log := log.FromContext(ctx)
 
 	// Fetch the ResourceClaim instance
-	resourceClaim := &resourcev1beta2.ResourceClaim{}
+	resourceClaim := &resourcev1.ResourceClaim{}
 	if err := r.Get(ctx, req.NamespacedName, resourceClaim); err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
@@ -138,7 +138,7 @@ func (r *ResourceClaimReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 }
 
 // findOwnerPod finds the Pod that owns this ResourceClaim
-func (r *ResourceClaimReconciler) findOwnerPod(ctx context.Context, resourceClaim *resourcev1beta2.ResourceClaim) (*corev1.Pod, error) {
+func (r *ResourceClaimReconciler) findOwnerPod(ctx context.Context, resourceClaim *resourcev1.ResourceClaim) (*corev1.Pod, error) {
 	// Find the Pod OwnerReference (there should be exactly one)
 	var podOwnerRef *metav1.OwnerReference
 	for i, ownerRef := range resourceClaim.OwnerReferences {
@@ -175,7 +175,7 @@ func (r *ResourceClaimReconciler) findOwnerPod(ctx context.Context, resourceClai
 
 // updateResourceClaimCEL updates the ResourceClaim's CEL selector expression
 // Returns true if changes were made, false otherwise
-func (r *ResourceClaimReconciler) updateResourceClaimCEL(resourceClaim *resourcev1beta2.ResourceClaim, pod *corev1.Pod) (bool, error) {
+func (r *ResourceClaimReconciler) updateResourceClaimCEL(resourceClaim *resourcev1.ResourceClaim, pod *corev1.Pod) (bool, error) {
 	// Check if we need to update
 	if len(resourceClaim.Spec.Devices.Requests) == 0 {
 		return false, fmt.Errorf("no device requests found in ResourceClaim")
@@ -203,11 +203,11 @@ func (r *ResourceClaimReconciler) updateResourceClaimCEL(resourceClaim *resource
 
 	// Update the CEL expression
 	if len(deviceReq.Exactly.Selectors) == 0 {
-		deviceReq.Exactly.Selectors = []resourcev1beta2.DeviceSelector{{}}
+		deviceReq.Exactly.Selectors = []resourcev1.DeviceSelector{{}}
 	}
 
 	if deviceReq.Exactly.Selectors[0].CEL == nil {
-		deviceReq.Exactly.Selectors[0].CEL = &resourcev1beta2.CELDeviceSelector{}
+		deviceReq.Exactly.Selectors[0].CEL = &resourcev1.CELDeviceSelector{}
 	}
 
 	deviceReq.Exactly.Selectors[0].CEL.Expression = celExpression
@@ -217,7 +217,7 @@ func (r *ResourceClaimReconciler) updateResourceClaimCEL(resourceClaim *resource
 
 // updateCapacityRequest updates the ResourceClaim's capacity requests
 // Returns true if changes were made, false otherwise
-func (r *ResourceClaimReconciler) updateCapacityRequest(resourceClaim *resourcev1beta2.ResourceClaim, pod *corev1.Pod) (bool, error) {
+func (r *ResourceClaimReconciler) updateCapacityRequest(resourceClaim *resourcev1.ResourceClaim, pod *corev1.Pod) (bool, error) {
 	if len(resourceClaim.Spec.Devices.Requests) == 0 {
 		return false, fmt.Errorf("no device requests found in ResourceClaim")
 	}
@@ -234,12 +234,12 @@ func (r *ResourceClaimReconciler) updateCapacityRequest(resourceClaim *resourcev
 
 	// Initialize Capacity if nil
 	if deviceReq.Exactly.Capacity == nil {
-		deviceReq.Exactly.Capacity = &resourcev1beta2.CapacityRequirements{}
+		deviceReq.Exactly.Capacity = &resourcev1.CapacityRequirements{}
 	}
 
 	// Initialize Capacity.Requests map if nil
 	if deviceReq.Exactly.Capacity.Requests == nil {
-		deviceReq.Exactly.Capacity.Requests = make(map[resourcev1beta2.QualifiedName]resource.Quantity)
+		deviceReq.Exactly.Capacity.Requests = make(map[resourcev1.QualifiedName]resource.Quantity)
 	}
 
 	// Check if capacity requests are already set correctly
@@ -268,7 +268,7 @@ func (r *ResourceClaimReconciler) updateCapacityRequest(resourceClaim *resourcev
 
 // updateDeviceCount updates the ResourceClaim's device count based on Pod's GPU count annotation
 // Returns true if changes were made, false otherwise
-func (r *ResourceClaimReconciler) updateDeviceCount(resourceClaim *resourcev1beta2.ResourceClaim, pod *corev1.Pod) (bool, error) {
+func (r *ResourceClaimReconciler) updateDeviceCount(resourceClaim *resourcev1.ResourceClaim, pod *corev1.Pod) (bool, error) {
 	if len(resourceClaim.Spec.Devices.Requests) == 0 {
 		return false, fmt.Errorf("no device requests found in ResourceClaim")
 	}
@@ -310,6 +310,6 @@ func (r *ResourceClaimReconciler) updateDeviceCount(resourceClaim *resourcev1bet
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&resourcev1beta2.ResourceClaim{}).
+		For(&resourcev1.ResourceClaim{}).
 		Complete(r)
 }
