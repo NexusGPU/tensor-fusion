@@ -328,6 +328,7 @@ func (r *ResourceSliceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.GPUNode{}).
+		Named("resourceslice").
 		Watches(&tfv1.GPU{}, handler.EnqueueRequestsFromMapFunc(
 			func(ctx context.Context, obj client.Object) []reconcile.Request {
 				// Get the owner GPUNode name from GPU labels
