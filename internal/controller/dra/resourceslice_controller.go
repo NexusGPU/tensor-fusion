@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -103,16 +104,24 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, resourceSlice, func() error {
 		// Validate pool name exists
-		poolName := gpuNode.Labels[constants.GpuPoolKey]
+		poolName := gpuNode.Labels[constants.LabelKeyOwner]
 		if poolName == "" {
-			return fmt.Errorf("GPUNode %s missing pool label %s", gpuNode.Name, constants.GpuPoolKey)
+			return fmt.Errorf("GPUNode %s missing pool label %s", gpuNode.Name, constants.LabelKeyOwner)
 		}
 
-		// Get GPUPool to retrieve default QoS
+		// Get GPUPool to retrieve default QoS and taints
 		gpuPool := &tfv1.GPUPool{}
 		if err := r.Get(ctx, client.ObjectKey{Name: poolName}, gpuPool); err != nil {
 			log.V(1).Info("Failed to get GPUPool for default QoS, will skip QoS attribute", "pool", poolName, "error", err)
-			// Continue without QoS - it's optional
+		}
+
+		// Get Kubernetes Node to retrieve taints
+		k8sNode := &corev1.Node{}
+		var nodeTaints []corev1.Taint
+		if err := r.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, k8sNode); err != nil {
+			log.V(1).Info("Failed to get Kubernetes Node for taints", "node", gpuNode.Name, "error", err)
+		} else {
+			nodeTaints = k8sNode.Spec.Taints
 		}
 
 		// Set basic spec fields
@@ -124,8 +133,8 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 			ResourceSliceCount: 1,
 		}
 
-		// Generate devices list with QoS information
-		devices := r.generateDevices(ctx, gpuNode, gpus, gpuPool)
+		// Generate devices list with QoS and taints information
+		devices := r.generateDevices(ctx, gpuNode, gpus, gpuPool, nodeTaints)
 		resourceSlice.Spec.Devices = devices
 
 		// Set labels for easy identification
@@ -146,7 +155,8 @@ func (r *ResourceSliceReconciler) reconcileResourceSlice(ctx context.Context, gp
 }
 
 // generateDevices creates the device list for ResourceSlice based on physical GPUs
-func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tfv1.GPUNode, gpus []tfv1.GPU, gpuPool *tfv1.GPUPool) []resourcev1.Device {
+func (r *ResourceSliceReconciler) generateDevices(ctx context.Context, gpuNode *tfv1.GPUNode, gpus []tfv1.GPU, gpuPool *tfv1.GPUPool, nodeTaints []corev1.Taint) []resourcev1.Device {
+	log := log.FromContext(ctx)
 	devices := make([]resourcev1.Device, 0, len(gpus))
 
 	if len(gpus) == 0 {
@@ -178,6 +188,35 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tf
 		vramFloat := float64(nodeVirtualVRAM.AsApproximateFloat64()) / float64(nodeManagedGPUs)
 		virtualVRAMPerGPU = resource.NewQuantity(int64(vramFloat), resource.DecimalSI)
 	}
+
+	// Convert node taints to device taints
+	deviceTaints := make([]resourcev1.DeviceTaint, 0, len(nodeTaints))
+	log.V(1).Info("Processing node taints", "nodeTaints", nodeTaints, "count", len(nodeTaints))
+
+	for _, nodeTaint := range nodeTaints {
+		// DeviceTaint only supports NoSchedule and NoExecute (not PreferNoSchedule)
+		var deviceEffect resourcev1.DeviceTaintEffect
+		switch nodeTaint.Effect {
+		case corev1.TaintEffectNoSchedule:
+			deviceEffect = resourcev1.DeviceTaintEffectNoSchedule
+		case corev1.TaintEffectNoExecute:
+			deviceEffect = resourcev1.DeviceTaintEffectNoExecute
+		case corev1.TaintEffectPreferNoSchedule:
+			// Convert PreferNoSchedule to NoSchedule for device taints (closest match)
+			deviceEffect = resourcev1.DeviceTaintEffectNoSchedule
+		default:
+			// Skip unknown effects
+			continue
+		}
+
+		deviceTaints = append(deviceTaints, resourcev1.DeviceTaint{
+			Key:    nodeTaint.Key,
+			Value:  nodeTaint.Value,
+			Effect: deviceEffect,
+		})
+	}
+
+	log.V(1).Info("Converted device taints", "deviceTaints", deviceTaints, "count", len(deviceTaints))
 
 	for _, gpu := range gpus {
 		if gpu.Status.Capacity == nil {
@@ -257,17 +296,24 @@ func (r *ResourceSliceReconciler) generateDevices(_ context.Context, gpuNode *tf
 					StringValue: func() *string { s := nodeVirtualVRAM.String(); return &s }(),
 				},
 			},
-			Capacity: map[resourcev1.QualifiedName]resourcev1.DeviceCapacity{
-				// Physical capacity
-				constants.DRACapacityTFlops: {
-					Value: gpu.Status.Capacity.Tflops,
-				},
-				constants.DRACapacityVRAM: {
-					Value: gpu.Status.Capacity.Vram,
-				},
-			},
-			AllowMultipleAllocations: func() *bool { b := true; return &b }(),
 		}
+
+		// Set device taints from node taints
+		if len(deviceTaints) > 0 {
+			device.Taints = deviceTaints
+			log.Info("Setting device taints", "gpu", gpu.Name, "taints", deviceTaints)
+		}
+
+		device.Capacity = map[resourcev1.QualifiedName]resourcev1.DeviceCapacity{
+			// Physical capacity
+			constants.DRACapacityTFlops: {
+				Value: gpu.Status.Capacity.Tflops,
+			},
+			constants.DRACapacityVRAM: {
+				Value: gpu.Status.Capacity.Vram,
+			},
+		}
+		device.AllowMultipleAllocations = func() *bool { b := true; return &b }()
 
 		// Add virtual capacity if available
 		if virtualTFlopsPerGPU != nil {
