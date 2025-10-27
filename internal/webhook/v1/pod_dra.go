@@ -29,67 +29,79 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 )
 
+// PoolDRAConfig holds DRA configuration for a specific pool
+type PoolDRAConfig struct {
+	EnableDRA                 bool
+	ResourceClaimTemplateName string
+}
+
 // DRAProcessor handles all DRA-related operations for pod admission
 type DRAProcessor struct {
 	client.Client
-	enableDRA                 bool
-	resourceClaimTemplateName string // cached ResourceClaimTemplate name
-	configLoaded              bool   // tracks if configuration has been loaded
+	poolConfigs map[string]*PoolDRAConfig // cached configurations per pool
 }
 
 // NewDRAProcessor creates a new DRA processor
 func NewDRAProcessor(client client.Client) *DRAProcessor {
 	return &DRAProcessor{
-		Client:    client,
-		enableDRA: false,
+		Client:      client,
+		poolConfigs: make(map[string]*PoolDRAConfig),
 	}
 }
 
-// InitializeDRAConfig is kept for backward compatibility but now does nothing
-// Configuration is loaded lazily on first use
-func (p *DRAProcessor) InitializeDRAConfig(ctx context.Context) error {
-	// No-op - configuration is now loaded lazily
-	if p.configLoaded {
+// InitializeDRAConfig loads DRA configuration from the specified GPUPool
+// This provides pool-level DRA control instead of global configuration
+// Configuration is cached per pool for performance
+func (p *DRAProcessor) InitializeDRAConfig(ctx context.Context, poolName string) error {
+	// If no poolName specified, return error
+	if poolName == "" {
+		return fmt.Errorf("poolName is required for DRA configuration")
+	}
+
+	// Check if configuration is already cached for this pool
+	if _, exists := p.poolConfigs[poolName]; exists {
 		return nil
 	}
 
-	// Set defaults first
-	p.enableDRA = false
-	p.resourceClaimTemplateName = constants.DRAResourceClaimTemplateName
-
-	templateList := &tfv1.SchedulingConfigTemplateList{}
-	// Use the provided context to respect cancellation
-	err := p.List(ctx, templateList)
-	if err != nil {
-		// Log error but don't fail - fall back to defaults
-		// This allows webhook to work even if templates are unavailable
-		p.configLoaded = true
+	// Get the specific GPUPool
+	pool := &tfv1.GPUPool{}
+	poolKey := client.ObjectKey{Name: poolName}
+	if err := p.Get(ctx, poolKey, pool); err != nil {
+		// Log error but don't fail - cache default config
+		// This allows webhook to work even if pool is unavailable
+		p.poolConfigs[poolName] = &PoolDRAConfig{
+			EnableDRA:                 false,
+			ResourceClaimTemplateName: constants.DRAResourceClaimTemplateName,
+		}
 		return nil
 	}
 
-	// Check if any template has DRA enabled and cache the ResourceClaimTemplateName
-	for _, template := range templateList.Items {
-		if template.Spec.DRA != nil {
-			if template.Spec.DRA.Enable != nil && *template.Spec.DRA.Enable {
-				p.enableDRA = true
-			}
-			// Cache the ResourceClaimTemplateName from the template
-			if template.Spec.DRA.ResourceClaimTemplateName != "" {
-				p.resourceClaimTemplateName = template.Spec.DRA.ResourceClaimTemplateName
-			}
+	// Create config with defaults
+	config := &PoolDRAConfig{
+		EnableDRA:                 false,
+		ResourceClaimTemplateName: constants.DRAResourceClaimTemplateName,
+	}
+
+	// Read DRA configuration from GPUPool
+	if pool.Spec.DRAConfig != nil {
+		if pool.Spec.DRAConfig.Enable != nil && *pool.Spec.DRAConfig.Enable {
+			config.EnableDRA = true
+		}
+		// Override ResourceClaimTemplateName if specified in pool
+		if pool.Spec.DRAConfig.ResourceClaimTemplateName != "" {
+			config.ResourceClaimTemplateName = pool.Spec.DRAConfig.ResourceClaimTemplateName
 		}
 	}
 
-	p.configLoaded = true
+	// Cache the configuration for this pool
+	p.poolConfigs[poolName] = config
 	return nil
 }
 
-// IsDRAEnabled checks if DRA is enabled for a specific pod
-func (p *DRAProcessor) IsDRAEnabled(ctx context.Context, pod *corev1.Pod) bool {
+// IsDRAEnabled checks if DRA is enabled for a specific pod based on the GPUPool configuration
+func (p *DRAProcessor) IsDRAEnabled(ctx context.Context, pod *corev1.Pod, poolName string) bool {
 	// Load configuration if not yet loaded (lazy loading)
-	if !p.configLoaded {
-		_ = p.InitializeDRAConfig(ctx) // Ignore error to maintain backward compatibility
-	}
+	_ = p.InitializeDRAConfig(ctx, poolName) // Ignore error to maintain backward compatibility
 
 	// Check pod-level annotation first (explicit override)
 	if val, ok := pod.Annotations[constants.DRAEnabledAnnotation]; ok && val == constants.TrueStringValue {
@@ -101,8 +113,13 @@ func (p *DRAProcessor) IsDRAEnabled(ctx context.Context, pod *corev1.Pod) bool {
 		return false
 	}
 
-	// Fall back to global configuration
-	return p.enableDRA
+	// Fall back to pool-level configuration
+	if config, exists := p.poolConfigs[poolName]; exists {
+		return config.EnableDRA
+	}
+
+	// Default to false if no configuration found
+	return false
 }
 
 // HasDRAClaim checks if a pod has DRA ResourceClaim references
@@ -110,10 +127,10 @@ func HasDRAClaim(pod *corev1.Pod) bool {
 	return len(pod.Spec.ResourceClaims) > 0
 }
 
-// HandleDRAAdmission handles the complete DRA admission process
+// HandleDRAAdmission handles the complete DRA admission process for a specific pool
 func (p *DRAProcessor) HandleDRAAdmission(ctx context.Context, pod *corev1.Pod, tfInfo *utils.TensorFusionInfo, containerIndices []int) error {
-	// Load DRA configuration if needed
-	if err := p.InitializeDRAConfig(ctx); err != nil {
+	// Load DRA configuration if needed (using pool name from tfInfo)
+	if err := p.InitializeDRAConfig(ctx, tfInfo.Profile.PoolName); err != nil {
 		return fmt.Errorf("failed to load DRA config: %w", err)
 	}
 
@@ -134,7 +151,7 @@ func (p *DRAProcessor) HandleDRAAdmission(ctx context.Context, pod *corev1.Pod, 
 	}
 
 	// Inject ResourceClaimTemplate reference to Pod
-	p.injectResourceClaimTemplateRef(pod)
+	p.injectResourceClaimTemplateRef(pod, tfInfo.Profile.PoolName)
 
 	// Mark pod with DRA enabled annotation
 	pod.Annotations[constants.DRAEnabledAnnotation] = constants.TrueStringValue
@@ -185,16 +202,22 @@ func BuildCELSelector(pod *corev1.Pod, tfInfo *utils.TensorFusionInfo) (string, 
 }
 
 // injectResourceClaimTemplateRef adds ResourceClaimTemplate reference to Pod spec
-func (p *DRAProcessor) injectResourceClaimTemplateRef(pod *corev1.Pod) {
+func (p *DRAProcessor) injectResourceClaimTemplateRef(pod *corev1.Pod, poolName string) {
 	// Add ResourceClaimTemplate reference to pod.Spec.ResourceClaims
 	if pod.Spec.ResourceClaims == nil {
 		pod.Spec.ResourceClaims = []corev1.PodResourceClaim{}
 	}
 
+	// Get the ResourceClaimTemplate name from pool config
+	templateName := constants.DRAResourceClaimTemplateName
+	if config, exists := p.poolConfigs[poolName]; exists {
+		templateName = config.ResourceClaimTemplateName
+	}
+
 	// Use ResourceClaimTemplate instead of direct ResourceClaim
 	claimRef := corev1.PodResourceClaim{
 		Name:                      constants.DRAClaimDefineName,
-		ResourceClaimTemplateName: &p.resourceClaimTemplateName,
+		ResourceClaimTemplateName: &templateName,
 	}
 
 	// Check if the claim reference already exists to maintain idempotency

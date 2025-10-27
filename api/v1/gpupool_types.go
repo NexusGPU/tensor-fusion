@@ -41,6 +41,11 @@ type GPUPoolSpec struct {
 
 	// +optional
 	SchedulingConfigTemplate *string `json:"schedulingConfigTemplate,omitempty"`
+
+	// DRA configuration for this GPU pool
+	// Dynamic Resource Allocation (DRA) provides native Kubernetes resource management for GPUs
+	// +optional
+	DRAConfig *DRAConfig `json:"draConfig,omitempty"`
 }
 
 type CapacityConfig struct {

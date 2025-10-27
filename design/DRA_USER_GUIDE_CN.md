@@ -85,47 +85,53 @@ spec:
 --feature-gates=DynamicResourceAllocation=true
 ```
 
-## 2. DRA 配置步骤
+## 3. DRA 配置步骤
 
-### 2.1 步骤 1: 创建 SchedulingConfigTemplate（全局配置）
+### 3.1 步骤 1: 配置 GPUPool 启用 DRA
 
-创建文件 `scheduling-config.yaml`:
+创建或更新 GPUPool 配置文件 `gpupool.yaml`:
 
 ```yaml
 apiVersion: tensor-fusion.ai/v1
-kind: SchedulingConfigTemplate
+kind: GPUPool
 metadata:
-  name: default-scheduling-config
+  name: my-gpu-pool
 spec:
-  # 启用 DRA
-  dra:
+  # DRA 配置
+  draConfig:
     enable: true
     # 可选：指定 ResourceClaimTemplate 名称
     resourceClaimTemplateName: "tensor-fusion-gpu-template"
+
   # 其他配置
-  placement:
-    mode: CompactFirst
+  nodeManagerConfig:
+    provisioningMode: Provisioned
+    # ...
+  componentConfig:
+    # ...
 ```
 
 应用配置：
 ```bash
-kubectl apply -f scheduling-config.yaml
+kubectl apply -f gpupool.yaml
 ```
 
 **说明**:
-- `dra.enable: true` 为该配置模板启用 DRA
-- 所有使用此模板的 GPUPool 下的 Pod 将默认使用 DRA
+- `draConfig.enable: true` 为该 GPUPool 启用 DRA
+- 所有使用此 Pool 的 Pod 将默认使用 DRA 模式
 - `resourceClaimTemplateName` 默认为 `"tensor-fusion-gpu-template"`，通常无需修改
+- **重要**: DRA 配置是 Pool 级别的，不同的 Pool 可以有不同的 DRA 配置
 
 ### 3.2 步骤 2: 创建 ResourceClaimTemplate
 
 创建文件 `resourceclaim-template.yaml`:
 
 ```yaml
-apiVersion: resource.k8s.io/v1beta2
+apiVersion: resource.k8s.io/v1
 kind: ResourceClaimTemplate
 metadata:
   name: tensor-fusion-gpu-template
+  namespace: default
   labels:
     # 必须设置此 label
     tensor-fusion.ai/resource-claim-template: "true"
@@ -133,14 +139,11 @@ spec:
   spec:
     devices:
       requests:
-        - name: gpu-request
-          allocationMode: ExactCount
+        - name: gpu
           exactly:
             count: 1
-            selector:
-              cel:
-                # 默认值，由 Controller 自动更新
-                expression: "true"
+            deviceClassName: tensor-fusion.ai
+            # CEL selector 由 Webhook 和 Controller 自动填充
 ```
 
 应用配置：
@@ -150,23 +153,10 @@ kubectl apply -f resourceclaim-template.yaml
 
 **重要**:
 - 必须设置 label `tensor-fusion.ai/resource-claim-template: "true"`
-- `count` 和 `cel.expression` 会由 ResourceClaim Controller 自动更新，无需手动修改
+- `count` 和 CEL selector 会由 Webhook 和 ResourceClaim Controller 自动更新
+- 使用 Kubernetes DRA v1 API
 
-### 3.3 步骤 3: 将 GPUPool 关联到 SchedulingConfigTemplate
-
-```yaml
-apiVersion: tensor-fusion.ai/v1
-kind: GPUPool
-metadata:
-  name: my-gpu-pool
-spec:
-  # 关联 SchedulingConfigTemplate
-  schedulingConfigTemplate: "default-scheduling-config"
-
-  # 其他配置...
-```
-
-### 3.4 步骤 4: 提交 DRA Pod
+### 3.3 步骤 3: 提交 DRA Pod
 
 ```yaml
 apiVersion: v1
@@ -199,7 +189,7 @@ spec:
       image: my-app:latest
 ```
 
-### 3.5 验证 DRA 是否生效
+### 3.4 验证 DRA 是否生效
 
 ```bash
 # 1. 检查 Pod 状态

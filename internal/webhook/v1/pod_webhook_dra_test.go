@@ -22,31 +22,36 @@ import (
 func TestDRAProcessor_IsDRAEnabled(t *testing.T) {
 	tests := []struct {
 		name           string
-		processorDRA   bool
+		poolDRAEnabled bool
+		poolName       string
 		podAnnotations map[string]string
 		expected       bool
 	}{
 		{
-			name:         "global DRA enabled, no pod annotation",
-			processorDRA: true,
-			expected:     true,
+			name:           "pool DRA enabled, no pod annotation",
+			poolDRAEnabled: true,
+			poolName:       "test-pool",
+			expected:       true,
 		},
 		{
-			name:         "global DRA disabled, no pod annotation",
-			processorDRA: false,
-			expected:     false,
+			name:           "pool DRA disabled, no pod annotation",
+			poolDRAEnabled: false,
+			poolName:       "test-pool",
+			expected:       false,
 		},
 		{
-			name:         "global DRA disabled, pod annotation enabled",
-			processorDRA: false,
+			name:           "pool DRA disabled, pod annotation enabled",
+			poolDRAEnabled: false,
+			poolName:       "test-pool",
 			podAnnotations: map[string]string{
 				constants.DRAEnabledAnnotation: constants.TrueStringValue,
 			},
 			expected: true,
 		},
 		{
-			name:         "global DRA enabled, pod annotation disabled",
-			processorDRA: true,
+			name:           "pool DRA enabled, pod annotation disabled",
+			poolDRAEnabled: true,
+			poolName:       "test-pool",
 			podAnnotations: map[string]string{
 				constants.DRAEnabledAnnotation: constants.FalseStringValue,
 			},
@@ -57,8 +62,12 @@ func TestDRAProcessor_IsDRAEnabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			processor := &DRAProcessor{
-				enableDRA:    tt.processorDRA,
-				configLoaded: true, // Skip config loading in tests
+				poolConfigs: map[string]*PoolDRAConfig{
+					tt.poolName: {
+						EnableDRA:                 tt.poolDRAEnabled,
+						ResourceClaimTemplateName: "test-template",
+					},
+				},
 			}
 
 			pod := &corev1.Pod{
@@ -67,7 +76,7 @@ func TestDRAProcessor_IsDRAEnabled(t *testing.T) {
 				},
 			}
 
-			result := processor.IsDRAEnabled(context.Background(), pod)
+			result := processor.IsDRAEnabled(context.Background(), pod, tt.poolName)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -76,14 +85,15 @@ func TestDRAProcessor_IsDRAEnabled(t *testing.T) {
 func TestDRAProcessor_HandleDRAAdmission(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, tfv1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
 
-	// Create a SchedulingConfigTemplate with DRA config
-	template := &tfv1.SchedulingConfigTemplate{
+	// Create a GPUPool with DRA config
+	pool := &tfv1.GPUPool{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-template",
+			Name: "test-pool",
 		},
-		Spec: tfv1.SchedulingConfigTemplateSpec{
-			DRA: &tfv1.DRAConfig{
+		Spec: tfv1.GPUPoolSpec{
+			DRAConfig: &tfv1.DRAConfig{
 				Enable:                    &[]bool{true}[0],
 				ResourceClaimTemplateName: "custom-gpu-template",
 			},
@@ -92,12 +102,10 @@ func TestDRAProcessor_HandleDRAAdmission(t *testing.T) {
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(template).
+		WithObjects(pool).
 		Build()
 
-	processor := &DRAProcessor{
-		Client: fakeClient,
-	}
+	processor := NewDRAProcessor(fakeClient)
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -113,6 +121,7 @@ func TestDRAProcessor_HandleDRAAdmission(t *testing.T) {
 
 	tfInfo := &utils.TensorFusionInfo{
 		Profile: &tfv1.WorkloadProfileSpec{
+			PoolName: "test-pool",
 			GPUCount: 1,
 			Resources: tfv1.Resources{
 				Requests: tfv1.Resource{
@@ -145,8 +154,11 @@ func TestDRAProcessor_HandleDRAAdmission(t *testing.T) {
 	require.NotNil(t, podClaim.ResourceClaimTemplateName)
 	assert.Equal(t, "custom-gpu-template", *podClaim.ResourceClaimTemplateName)
 
-	// Verify processor has cached the ResourceClaimTemplateName
-	assert.Equal(t, "custom-gpu-template", processor.resourceClaimTemplateName)
+	// Verify processor has cached the pool configuration
+	config, exists := processor.poolConfigs["test-pool"]
+	require.True(t, exists)
+	assert.Equal(t, "custom-gpu-template", config.ResourceClaimTemplateName)
+	assert.True(t, config.EnableDRA)
 }
 
 func TestBuildCELSelector(t *testing.T) {
@@ -369,52 +381,57 @@ func TestHasDRAClaim(t *testing.T) {
 func TestDRAProcessor_LazyConfigLoading(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, tfv1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
 
 	tests := []struct {
-		name      string
-		templates []tfv1.SchedulingConfigTemplate
-		expected  bool
+		name     string
+		pools    []tfv1.GPUPool
+		poolName string
+		expected bool
 	}{
 		{
-			name: "DRA enabled in template",
-			templates: []tfv1.SchedulingConfigTemplate{
+			name: "DRA enabled in pool",
+			pools: []tfv1.GPUPool{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "template1"},
-					Spec: tfv1.SchedulingConfigTemplateSpec{
-						DRA: &tfv1.DRAConfig{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-pool"},
+					Spec: tfv1.GPUPoolSpec{
+						DRAConfig: &tfv1.DRAConfig{
 							Enable:                    &[]bool{true}[0],
 							ResourceClaimTemplateName: "test-gpu-template",
 						},
 					},
 				},
 			},
+			poolName: "test-pool",
 			expected: true,
 		},
 		{
-			name: "DRA disabled in template",
-			templates: []tfv1.SchedulingConfigTemplate{
+			name: "DRA disabled in pool",
+			pools: []tfv1.GPUPool{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "template1"},
-					Spec: tfv1.SchedulingConfigTemplateSpec{
-						DRA: &tfv1.DRAConfig{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-pool"},
+					Spec: tfv1.GPUPoolSpec{
+						DRAConfig: &tfv1.DRAConfig{
 							Enable: &[]bool{false}[0],
 						},
 					},
 				},
 			},
+			poolName: "test-pool",
 			expected: false,
 		},
 		{
-			name:     "no templates",
+			name:     "no pool found",
+			poolName: "nonexistent-pool",
 			expected: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			objects := make([]client.Object, len(tt.templates))
-			for i, template := range tt.templates {
-				objects[i] = &template
+			objects := make([]client.Object, len(tt.pools))
+			for i := range tt.pools {
+				objects[i] = &tt.pools[i]
 			}
 
 			fakeClient := fake.NewClientBuilder().
@@ -422,9 +439,7 @@ func TestDRAProcessor_LazyConfigLoading(t *testing.T) {
 				WithObjects(objects...).
 				Build()
 
-			processor := &DRAProcessor{
-				Client: fakeClient,
-			}
+			processor := NewDRAProcessor(fakeClient)
 
 			// Test lazy loading by calling a method that triggers config loading
 			pod := &corev1.Pod{
@@ -433,11 +448,12 @@ func TestDRAProcessor_LazyConfigLoading(t *testing.T) {
 				},
 			}
 
-			result := processor.IsDRAEnabled(context.Background(), pod)
+			result := processor.IsDRAEnabled(context.Background(), pod, tt.poolName)
 			assert.Equal(t, tt.expected, result)
 
-			// Verify config was loaded
-			assert.True(t, processor.configLoaded)
+			// Verify config was loaded and cached
+			_, exists := processor.poolConfigs[tt.poolName]
+			assert.True(t, exists, "pool config should be cached")
 		})
 	}
 }
