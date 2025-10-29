@@ -85,7 +85,9 @@ const (
 	LdLibraryPathFile     = "/etc/ld.so.conf.d/zz_tensor-fusion.conf"
 
 	TFLibsVolumeName         = "tf-libs"
+	TFConfVolumeName         = "tf-conf-lib-paths"
 	TFLibsVolumeMountPath    = "/tensor-fusion"
+	TFConfVolumeMountPath    = "/tensor-fusion-conf"
 	TFConnectionNamePrefix   = "-tf-vgpu-"
 	TFConnectionNameNoPrefix = "tf-vgpu-"
 

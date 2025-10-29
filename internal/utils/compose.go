@@ -178,6 +178,10 @@ func AddTFDefaultClientConfBeforePatch(
 				Name:      constants.TFLibsVolumeName,
 				MountPath: constants.TFLibsVolumeMountPath,
 			},
+			{
+				Name:      constants.TFConfVolumeName,
+				MountPath: constants.TFConfVolumeMountPath,
+			},
 		},
 		Resources: v1.ResourceRequirements{
 			Requests: injectLibResource,
@@ -187,6 +191,12 @@ func AddTFDefaultClientConfBeforePatch(
 	})
 	pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 		Name: constants.TFLibsVolumeName,
+		VolumeSource: v1.VolumeSource{
+			EmptyDir: &v1.EmptyDirVolumeSource{},
+		},
+	})
+	pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+		Name: constants.TFConfVolumeName,
 		VolumeSource: v1.VolumeSource{
 			EmptyDir: &v1.EmptyDirVolumeSource{},
 		},
@@ -205,12 +215,12 @@ func AddTFDefaultClientConfBeforePatch(
 		pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 			pod.Spec.Containers[injectContainerIndex].VolumeMounts,
 			v1.VolumeMount{
-				Name:      constants.TFLibsVolumeName,
+				Name:      constants.TFConfVolumeName,
 				MountPath: constants.LdPreloadFile,
 				SubPath:   constants.LdPreloadFileName,
 				ReadOnly:  true,
 			}, v1.VolumeMount{
-				Name:      constants.TFLibsVolumeName,
+				Name:      constants.TFConfVolumeName,
 				MountPath: constants.LdLibraryPathFile,
 				SubPath:   constants.LdLibraryPathFileName,
 				ReadOnly:  true,
