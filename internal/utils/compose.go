@@ -108,6 +108,13 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	}
 	pod.Annotations[constants.TFLOPSRequestAnnotation] = tfInfo.Profile.Resources.Requests.Tflops.String()
 	pod.Annotations[constants.VRAMRequestAnnotation] = tfInfo.Profile.Resources.Requests.Vram.String()
+
+	if !tfInfo.Profile.Resources.Requests.ComputePercent.IsZero() {
+		pod.Annotations[constants.ComputeRequestAnnotation] = tfInfo.Profile.Resources.Requests.ComputePercent.String()
+	}
+	if !tfInfo.Profile.Resources.Limits.ComputePercent.IsZero() {
+		pod.Annotations[constants.ComputeLimitAnnotation] = tfInfo.Profile.Resources.Limits.ComputePercent.String()
+	}
 	pod.Annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", tfInfo.Profile.GPUCount)
 	pod.Annotations[constants.GpuPoolKey] = tfInfo.Profile.PoolName
 	if tfInfo.Profile.GPUModel != "" {
@@ -117,6 +124,7 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	pod.Annotations[constants.SidecarWorkerAnnotation] = strconv.FormatBool(tfInfo.Profile.SidecarWorker)
 	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
+	pod.Annotations[constants.ComputingIsolationModeAnnotation] = string(tfInfo.Profile.ComputeIsolation)
 }
 
 func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
@@ -265,7 +273,7 @@ func AddTFDefaultClientConfBeforePatch(
 			})
 
 			lastContainer := &pod.Spec.Containers[len(pod.Spec.Containers)-1]
-			SetWorkerContainerSpec(lastContainer,
+			SetWorkerContainerSpec(lastContainer, tfInfo.Profile,
 				pool.Spec.ComponentConfig.Worker, pool.Spec.ComponentConfig.Hypervisor,
 				pod.Annotations[constants.DisableFeaturesAnnotation], true)
 		}
@@ -753,6 +761,7 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 // SetWorkerContainerSpec configures the worker container with required settings
 func SetWorkerContainerSpec(
 	container *v1.Container,
+	workloadProfile *tfv1.WorkloadProfileSpec,
 	workerConfig *tfv1.WorkerConfig,
 	hypervisorConfig *tfv1.HypervisorConfig,
 	disabledFeatures string,
@@ -811,6 +820,14 @@ func SetWorkerContainerSpec(
 		container.Env = convertDisabledFeaturesToEnvs(disabledFeatures, container.Env)
 	}
 
+	// TODO should calculate and set by hypervisor before container created
+	if workloadProfile.ComputeIsolation == constants.ComputingIsolationModeHard {
+		container.Env = append(container.Env, v1.EnvVar{
+			Name:  constants.HardSMLimiterEnv,
+			Value: workloadProfile.Resources.Limits.ComputePercent.String(),
+		})
+	}
+
 	// TODO support hostNetwork mode and InfiniBand for higher performance
 	container.Ports = append(container.Ports, v1.ContainerPort{
 		ContainerPort: constants.TensorFusionRemoteWorkerPortNumber,
@@ -851,13 +868,13 @@ func SetWorkerContainerSpec(
 }
 
 func AddWorkerConfAfterTemplate(
-	ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig,
+	ctx context.Context, spec *v1.PodSpec, workloadProfile *tfv1.WorkloadProfileSpec, workerConfig *tfv1.WorkerConfig,
 	hypervisorConfig *tfv1.HypervisorConfig, workload *tfv1.TensorFusionWorkload,
 ) string {
 	disabledFeatures := workload.Annotations[constants.DisableFeaturesAnnotation]
 
 	// Configure worker container
-	SetWorkerContainerSpec(&spec.Containers[0], workerConfig, hypervisorConfig, disabledFeatures, false)
+	SetWorkerContainerSpec(&spec.Containers[0], workloadProfile, workerConfig, hypervisorConfig, disabledFeatures, false)
 
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{

@@ -311,7 +311,13 @@ func (s *GpuAllocator) Bind(
 		}
 
 		// reduce available resource on the GPU status
-		gpu.Status.Available.Tflops.Sub(req.Request.Tflops)
+
+		if !req.Request.ComputePercent.IsZero() {
+			requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
+			gpu.Status.Available.Tflops.Sub(*requiredTflops)
+		} else {
+			gpu.Status.Available.Tflops.Sub(req.Request.Tflops)
+		}
 		gpu.Status.Available.Vram.Sub(req.Request.Vram)
 
 		addRunningApp(s.ctx, gpu, req.WorkloadNameNamespace)
@@ -374,6 +380,9 @@ func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 
 func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocRequest, isSimulateSchedule bool) ([]*tfv1.GPU, []filter.FilterDetail, error) {
 	<-s.initializedCh
+
+	// TODO not support compute percent quota check yet, percent is related to GPU capacity, will bypass all quota check
+	// Using Percent to configure GPU computing request is NOT Recommended way, should offer a toggle to enable/disable it
 	if err := s.quotaStore.CheckQuotaAvailable(req); err != nil {
 		return nil, nil, err
 	}
@@ -479,7 +488,12 @@ func (s *GpuAllocator) Dealloc(
 		}
 
 		// Add resources back to the GPU
-		storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+		if !request.Request.ComputePercent.IsZero() {
+			requiredTflops := utils.ComputePercentToTflops(storeGPU.Status.Capacity.Tflops, request.Request)
+			storeGPU.Status.Available.Tflops.Add(*requiredTflops)
+		} else {
+			storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+		}
 		storeGPU.Status.Available.Vram.Add(request.Request.Vram)
 
 		if nodeName == "" {

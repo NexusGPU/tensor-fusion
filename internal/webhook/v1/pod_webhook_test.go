@@ -41,6 +41,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
+func isAddOperation(patch jsonpatch.JsonPatchOperation) bool {
+	return patch.Operation == "add"
+}
+
 var _ = Describe("TensorFusionPodMutator", func() {
 	var (
 		mutator *TensorFusionPodMutator
@@ -77,6 +81,8 @@ var _ = Describe("TensorFusionPodMutator", func() {
 					Annotations: map[string]string{
 						constants.GpuPoolKey:                "mock",
 						constants.InjectContainerAnnotation: "main",
+						constants.TFLOPSLimitAnnotation:     "100",
+						constants.VRAMLimitAnnotation:       "16Gi",
 					},
 					OwnerReferences: []metav1.OwnerReference{
 						{
@@ -284,11 +290,123 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(resp.Allowed).To(BeTrue())
 
 			op, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
-				return patch.Operation == "add" &&
+				return isAddOperation(patch) &&
 					patch.Path == "/metadata/annotations/tensor-fusion.ai~1tflops-request"
 			})
 			Expect(found).To(BeTrue())
 			Expect(op.Value).To(Equal("312"))
+		})
+
+		It("should handle gpu resource limits and fill requests from annotation limits", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod-local-gpu",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.TFLOPSLimitAnnotation: "100",
+						constants.VRAMLimitAnnotation:   "16Gi",
+						constants.GpuPoolKey:            "mock",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main",
+							Image: "test-image",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceName(constants.NvidiaGPUKey): resource.MustParse("3"),
+								},
+							},
+						},
+					},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+
+			op, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1tflops-request"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("100"))
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1vram-request"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("16Gi"))
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1gpu-count"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("3"))
+		})
+
+		It("should handle ignore gpu resource limits when annotation is present", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod-local-gpu",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.TFLOPSLimitAnnotation: "100",
+						constants.VRAMLimitAnnotation:   "16Gi",
+						constants.GpuCountAnnotation:    "2",
+						constants.GpuPoolKey:            "mock",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main",
+							Image: "test-image",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceName(constants.NvidiaGPUKey): resource.MustParse("3"),
+								},
+							},
+						},
+					},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+
+			_, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1gpu-count"
+			})
+			Expect(found).To(BeFalse())
 		})
 
 		It("should handle invalid pod specification", func() {
@@ -690,7 +808,9 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.TensorFusionEnabledLabelKey: "true",
 					},
 					Annotations: map[string]string{
-						constants.GpuPoolKey: "mock",
+						constants.GpuPoolKey:            "mock",
+						constants.TFLOPSLimitAnnotation: "100",
+						constants.VRAMLimitAnnotation:   "16Gi",
 					},
 					OwnerReferences: []metav1.OwnerReference{expectedRef},
 				},
@@ -777,7 +897,9 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.TensorFusionEnabledLabelKey: "true",
 					},
 					Annotations: map[string]string{
-						constants.GpuPoolKey: "mock",
+						constants.GpuPoolKey:            "mock",
+						constants.TFLOPSLimitAnnotation: "100",
+						constants.VRAMLimitAnnotation:   "16Gi",
 					},
 					OwnerReferences: []metav1.OwnerReference{
 						{
@@ -835,7 +957,9 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.TensorFusionEnabledLabelKey: "true",
 					},
 					Annotations: map[string]string{
-						constants.GpuPoolKey: "mock",
+						constants.GpuPoolKey:            "mock",
+						constants.TFLOPSLimitAnnotation: "100",
+						constants.VRAMLimitAnnotation:   "16Gi",
 					},
 				},
 				Spec: corev1.PodSpec{

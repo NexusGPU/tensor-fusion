@@ -4,6 +4,7 @@ import (
 	"context"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 )
 
@@ -27,8 +28,16 @@ func (f *ResourceFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNames
 			return false
 		}
 
-		// Check TFlops and VRAM availability
+		// Check TFlops availability
 		hasTflops := gpu.Status.Available.Tflops.Cmp(f.requiredResource.Tflops) >= 0
+
+		// When using percent way, convert to TFLOPs and check dynamically
+		if !f.requiredResource.ComputePercent.IsZero() {
+			requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, f.requiredResource)
+			hasTflops = gpu.Status.Available.Tflops.Cmp(*requiredTflops) >= 0
+		}
+
+		// Check VRAM availability
 		hasVram := gpu.Status.Available.Vram.Cmp(f.requiredResource.Vram) >= 0
 
 		return hasTflops && hasVram

@@ -123,9 +123,11 @@ func GetEnvOrDefault(key, defaultValue string) string {
 func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
 	tflopsKey := constants.TFLOPSRequestAnnotation
 	vramKey := constants.VRAMRequestAnnotation
+	computePercentKey := constants.ComputeRequestAnnotation
 	if !isRequest {
 		tflopsKey = constants.TFLOPSLimitAnnotation
 		vramKey = constants.VRAMLimitAnnotation
+		computePercentKey = constants.ComputeLimitAnnotation
 	}
 	tflops, err := resource.ParseQuantity(pod.Annotations[tflopsKey])
 	if err != nil {
@@ -135,9 +137,14 @@ func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
 	if err != nil {
 		return tfv1.Resource{}, err
 	}
+	computePercent, err := resource.ParseQuantity(pod.Annotations[computePercentKey])
+	if err != nil {
+		return tfv1.Resource{}, err
+	}
 	return tfv1.Resource{
-		Tflops: tflops,
-		Vram:   vram,
+		Tflops:         tflops,
+		Vram:           vram,
+		ComputePercent: computePercent,
 	}, nil
 }
 

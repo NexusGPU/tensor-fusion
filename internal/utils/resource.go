@@ -43,3 +43,8 @@ func GPUResourcesToAnnotations(resources *tfv1.Resources) map[string]string {
 		constants.VRAMLimitAnnotation:     resources.Limits.Vram.String(),
 	}
 }
+
+func ComputePercentToTflops(gpuCapacity resource.Quantity, gpuResRequest tfv1.Resource) *resource.Quantity {
+	requiredTflops := gpuResRequest.ComputePercent.AsApproximateFloat64() * gpuCapacity.AsApproximateFloat64() / 100
+	return resource.NewQuantity(int64(requiredTflops), resource.DecimalSI)
+}

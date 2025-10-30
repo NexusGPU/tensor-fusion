@@ -55,11 +55,18 @@ const (
 	GpuPoolKey = Domain + "/gpupool"
 
 	// Annotation key constants
-	GpuCountAnnotation        = Domain + "/gpu-count"
-	TFLOPSRequestAnnotation   = Domain + "/tflops-request"
-	VRAMRequestAnnotation     = Domain + "/vram-request"
-	TFLOPSLimitAnnotation     = Domain + "/tflops-limit"
-	VRAMLimitAnnotation       = Domain + "/vram-limit"
+	GpuCountAnnotation      = Domain + "/gpu-count"
+	TFLOPSRequestAnnotation = Domain + "/tflops-request"
+	VRAMRequestAnnotation   = Domain + "/vram-request"
+	TFLOPSLimitAnnotation   = Domain + "/tflops-limit"
+	VRAMLimitAnnotation     = Domain + "/vram-limit"
+
+	// StreamMultiProcessor/AICore percentage, alternative to TFLOPs request and limit, NOT Recommended way
+	// NOTE: using percent will cause namespace level quota check impossible, will bypass all quota check
+	// thus, percent should only be used when tenant quota is not needed, and only one type of GPU in cluster
+	ComputeRequestAnnotation = Domain + "/compute-percent-request"
+	ComputeLimitAnnotation   = Domain + "/compute-percent-limit"
+
 	WorkloadProfileAnnotation = Domain + "/workload-profile"
 	InjectContainerAnnotation = Domain + "/inject-container"
 	IsLocalGPUAnnotation      = Domain + "/is-local-gpu"
@@ -67,6 +74,8 @@ const (
 	EmbeddedWorkerAnnotation  = Domain + "/embedded-worker"
 	DedicatedWorkerAnnotation = Domain + "/dedicated-worker"
 	SidecarWorkerAnnotation   = Domain + "/sidecar-worker"
+	// How to isolate computing resources, default to `soft`` mode, could be `shared` or `hard`
+	ComputingIsolationModeAnnotation = Domain + "/compute-isolation"
 	// GPUModelAnnotation specifies the required GPU model (e.g., "A100", "H100")
 	GPUModelAnnotation = Domain + "/gpu-model"
 	// GPU ID list is assigned by scheduler, should not specified by user
@@ -82,6 +91,22 @@ const (
 	WorkloadModeAnnotation = Domain + "/workload-mode"
 	WorkloadModeDynamic    = "dynamic"
 	WorkloadModeFixed      = "fixed"
+
+	// no computing limit, just isolate vram memory, rely on GPU built-in time-slicing, each process gets equal share of GPU
+	// Pros: simple and stable, no performance overhead, maximize GPU utilization when well-scheduled
+	// Cons: can not auto-scale and differentiate QoS levels, TFLOPs limit does not take effect, may cause resource contention
+	ComputingIsolationModeShared = "shared"
+
+	// default isolation mode, use Proportional-Integral-Derivative controller to isolate computing resources and assign time slices
+	// Pros: can set QoS levels for different workloads, TFLOPs limit is relatively accurate
+	// Cons: ~1% performance overhead, when burst credits are consumed,
+	ComputingIsolationModeSoft = "soft"
+
+	// use SM partitioning to isolate computing resources, each Pod get dedicated SMs depends on GPU driver support
+	// Pros: better performance isolation, no performance overhead
+	// Cons: can not auto-scale dynamically, percent may not 1%/1TFLOPs accuracy, coupled with GPU vendor's SM partitioning implementation
+	// NOTE: this can only be used in Remote or Local+SidecarWorker mode, not supported in LocalGPU mode (because no TensorFusion Worker)
+	ComputingIsolationModeHard = "hard"
 
 	// Annotations for killer switch: disable features
 	// ['gpu-opt', 'mem-manager', 'gpu-limiter']
