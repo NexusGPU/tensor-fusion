@@ -426,14 +426,9 @@ func startCustomResourceController(
 		os.Exit(1)
 	}
 
-	// Setup ResourceClaim controller for DRA Phase 2
-	if err = (&dra.ResourceClaimReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ResourceClaim")
-		os.Exit(1)
-	}
+	// NOTE: ResourceClaim controller removed - using resourceclaim_webhook instead for better performance
+	// ResourceClaim mutations are handled by the mutating webhook at creation time
+
 	// Setup ResourceSlice controller for DRA Phase 2
 	if err = (&dra.ResourceSliceReconciler{
 		Client: mgr.GetClient(),
@@ -499,6 +494,11 @@ func startWebhook(
 	}
 	if err := webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator, pricingProvider); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
+		os.Exit(1)
+	}
+	// Setup ResourceClaim webhook for DRA
+	if err := webhookcorev1.SetupResourceClaimWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "ResourceClaim")
 		os.Exit(1)
 	}
 }

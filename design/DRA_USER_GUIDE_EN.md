@@ -9,9 +9,9 @@ This document is intended for **Tensor Fusion users** and **DRA Driver developer
 - **Application Developers**: Need to write Pod definitions that support DRA
 - **DRA Driver Developers**: Need to integrate with Tensor Fusion DRA
 
-**Document Version**: 1.0
-**Last Updated**: 2025-10-14
-**Kubernetes Version Requirements**: 1.34+ (DRA v1beta2)
+**Document Version**: 1.1
+**Last Updated**: 2025-10-28
+**Kubernetes Version Requirements**: 1.31+ (DRA v1)
 
 ---
 
@@ -66,77 +66,130 @@ spec:
 
 | Item | Requirement | Description |
 |------|-------------|-------------|
-| **Kubernetes Version** | ≥ 1.34 | DRA v1beta2 API |
-| **Feature Gate** | `DynamicResourceAllocation=true` | Must be enabled on kube-apiserver, kube-scheduler, kubelet |
+| **Kubernetes Version** | ≥ 1.31 | DRA v1 API |
+| **Feature Gate** | See detailed explanation below | Must be enabled on kube-apiserver, kube-scheduler, kubelet |
 | **Scheduler** | Native kube-scheduler | Supports DRA resource scheduling |
 
-#### 2.1.1 Enable Feature Gate
+#### 2.1.1 Enable Feature Gates
 
-Add to Kubernetes cluster startup parameters:
+Tensor Fusion DRA requires the following Feature Gates:
 
-```bash
-# kube-apiserver
---feature-gates=DynamicResourceAllocation=true
+##### Core Feature Gates
 
-# kube-scheduler
---feature-gates=DynamicResourceAllocation=true
+| Feature Gate | Components | Status | Description |
+|-------------|-----------|--------|-------------|
+| `DynamicResourceAllocation` | kube-apiserver<br>kube-scheduler<br>kubelet<br>kube-controller-manager | **Required** (Beta in 1.31+) | Enables DRA core functionality, supporting ResourceClaim, ResourceSlice and other APIs |
 
-# kubelet
---feature-gates=DynamicResourceAllocation=true
+##### Optional Feature Gates (Recommended)
+
+| Feature Gate | Components | Status | Description |
+|-------------|-----------|--------|-------------|
+| `DRAConsumableCapacity` | kube-apiserver<br>kube-scheduler<br>kube-controller-manager | **Recommended** (Alpha in 1.34+) | Supports device capacity sharing, allowing multiple Pods to share capacity resources of the same device |
+| `DRADeviceTaints` | kube-apiserver<br>kube-scheduler<br>kube-controller-manager | **Recommended** (Alpha in 1.34+) | Supports device taints and tolerations, allowing devices to be marked as unavailable and controlling Pod scheduling and eviction |
+
+##### Feature Gate Detailed Explanation
+
+**1. DRAConsumableCapacity (Required)**
+- **Purpose**: Supports fine-grained sharing of device capacity
+  - Allows multiple ResourceClaims or DeviceRequests to share the same device or device slice
+  - Scheduler ensures that total allocated capacity never exceeds the device's total capacity
+  - Similar to Node resource sharing mechanism, but applied at the device level
+- **Version**: Kubernetes 1.34+ (Alpha)
+- **Use Cases**:
+  - GPU virtualization (vGPU)
+  - Multiple small workloads sharing a single large GPU
+  - Resource oversubscription
+- **Tensor Fusion Support**: Fully supported, recommended to enable for optimal GPU resource utilization
+
+**2. DRADeviceTaints (Recommended)**
+- **Purpose**: Adds Taint and Toleration mechanisms for devices
+  - Mark devices as unavailable (e.g., hardware failure, under maintenance)
+  - Prevent new Pods from using tainted devices
+  - Supports `NoSchedule` and `NoExecute` effects
+  - `NoSchedule`: Prevents new Pods from being scheduled to the device
+  - `NoExecute`: Evicts Pods currently using the device
+- **Version**: Kubernetes 1.34+ (Alpha)
+- **Use Cases**:
+  - Automatic isolation of GPU hardware failures
+  - Blocking new tasks during device maintenance
+  - Automatic Pod eviction based on device health status
+- **Tensor Fusion Support**: Fully supported, recommended to enable for improved system reliability
+
+##### Configuration Examples
+
+**K3s Configuration** (`/etc/rancher/k3s/config.yaml`):
+```yaml
+kube-apiserver-arg:
+  - "feature-gates=DRAConsumableCapacity=true,DRADeviceTaints=true"
+kube-scheduler-arg:
+  - "feature-gates=DRAConsumableCapacity=true,DRADeviceTaints=true"
+kube-controller-manager-arg:
+  - "feature-gates=DRAConsumableCapacity=true,DRADeviceTaints=true"
 ```
+
+**Important Notes**:
+- `DynamicResourceAllocation` is enabled by default in Kubernetes 1.31+, but explicit configuration is recommended for compatibility
+- `DRAConsumableCapacity` and `DRADeviceTaints` are Alpha features and must be explicitly enabled
+- All related components must enable the same Feature Gates to work properly
+- Kubernetes components must be restarted after modifying Feature Gates
 
 ## 3. DRA Configuration Steps
 
-### 3.1 Step 1: Create SchedulingConfigTemplate (Global Configuration)
+### 3.1 Step 1: Configure GPUPool to Enable DRA
 
-Create file `scheduling-config.yaml`:
+Create or update GPUPool configuration file `gpupool.yaml`:
 
 ```yaml
 apiVersion: tensor-fusion.ai/v1
-kind: SchedulingConfigTemplate
+kind: GPUPool
 metadata:
-  name: default-scheduling-config
+  name: my-gpu-pool
 spec:
-  # Enable DRA
-  dra:
+  # DRA configuration
+  draConfig:
     enable: true
     # Optional: specify ResourceClaimTemplate name
     resourceClaimTemplateName: "tensor-fusion-gpu-template"
+
   # Other configurations
-  placement:
-    mode: CompactFirst
+  nodeManagerConfig:
+    provisioningMode: Provisioned
+    # ... node selector and other configs
 ```
 
 Apply configuration:
 ```bash
-kubectl apply -f scheduling-config.yaml
+kubectl apply -f gpupool.yaml
 ```
 
 **Notes**:
-- `dra.enable: true` enables DRA for this configuration template
-- All Pods under GPUPools using this template will use DRA by default
-- `resourceClaimTemplateName` defaults to `"tensor-fusion-gpu-template"`, usually no need to modify
+- `draConfig.enable: true` enables DRA for this GPUPool
+- All Pods using this Pool will use DRA mode by default
+- **Important**: DRA configuration is at the Pool level, different Pools can have different DRA configurations
 
 ### 3.2 Step 2: Create ResourceClaimTemplate
 
 Create file `resourceclaim-template.yaml`:
 
 ```yaml
-apiVersion: resource.k8s.io/v1beta2
+apiVersion: resource.k8s.io/v1
 kind: ResourceClaimTemplate
 metadata:
   name: tensor-fusion-gpu-template
-  labels:
-    # Must set this label
-    tensor-fusion.ai/resource-claim-template: "true"
+  namespace: default
 spec:
+  metadata:
+    # These labels will be copied to generated ResourceClaims
+    # Required by ResourceClaimReconciler to identify TensorFusion claims
+    labels:
+      tensor-fusion.ai/resource-claim-template: "true"
   spec:
     devices:
       requests:
-        - name: gpu-request
-          allocationMode: ExactCount
+        - name: gpu
           exactly:
             count: 1
+            deviceClassName: tensor-fusion.ai
             selector:
               cel:
                 # Default value, automatically updated by Controller
@@ -149,24 +202,12 @@ kubectl apply -f resourceclaim-template.yaml
 ```
 
 **Important**:
+- API version uses `resource.k8s.io/v1` (not v1beta2)
 - Must set label `tensor-fusion.ai/resource-claim-template: "true"`
+- Must include `deviceClassName: tensor-fusion.ai` in the `exactly` field
 - `count` and `cel.expression` will be automatically updated by ResourceClaim Controller, no manual modification needed
 
-### 3.3 Step 3: Associate GPUPool with SchedulingConfigTemplate
-
-```yaml
-apiVersion: tensor-fusion.ai/v1
-kind: GPUPool
-metadata:
-  name: my-gpu-pool
-spec:
-  # Associate SchedulingConfigTemplate
-  schedulingConfigTemplate: "default-scheduling-config"
-
-  # Other configurations...
-```
-
-### 3.4 Step 4: Submit DRA Pod
+### 3.3 Step 3: Submit DRA Pod
 
 ```yaml
 apiVersion: v1
@@ -199,7 +240,7 @@ spec:
       image: my-app:latest
 ```
 
-### 3.5 Verify DRA is Working
+### 3.4 Verify DRA is Working
 
 ```bash
 # 1. Check Pod status
@@ -233,7 +274,7 @@ kubectl describe pod my-workload
 
 **Type**: String
 **Valid Values**: `"true"`, `"false"`
-**Default Value**: Based on SchedulingConfigTemplate configuration
+**Default Value**: Based on GPUPool.spec.draConfig configuration
 
 **Description**: Controls whether to enable DRA mode for this Pod.
 
@@ -249,7 +290,7 @@ annotations:
 
 **Priority**:
 ```
-Pod annotation > SchedulingConfigTemplate.spec.dra.enable > Default disabled
+Pod annotation > GPUPool.spec.draConfig.enable > Default disabled
 ```
 
 #### 4.1.2 `tensor-fusion.ai/tflops-request`
@@ -299,7 +340,7 @@ annotations:
 
 **Notes**:
 - Must be an existing GPUPool name
-- Pool must be associated with a SchedulingConfigTemplate that supports DRA
+- Pool must have DRA enabled via `draConfig` configuration
 
 ### 4.2 Optional Fields
 
@@ -618,7 +659,7 @@ device.capacity["tflops"].AsApproximateFloat64() >= 100
 #### 6.1.1 Driver Name
 
 ```
-tensor-fusion.ai.dra-driver
+tensor-fusion.ai
 ```
 
 **Purpose**:
@@ -631,7 +672,7 @@ tensor-fusion.ai.dra-driver
 #### 6.2.1 ResourceSlice Structure Example
 
 ```yaml
-apiVersion: resource.k8s.io/v1beta2
+apiVersion: resource.k8s.io/v1
 kind: ResourceSlice
 metadata:
   name: tensor-fusion-resource-slice-node-01
@@ -640,7 +681,7 @@ metadata:
     kubernetes.io/hostname: node-01
 spec:
   # Driver name
-  driver: tensor-fusion.ai.dra-driver
+  driver: tensor-fusion.ai
 
   # Node name
   nodeName: node-01
@@ -687,7 +728,7 @@ spec:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `spec.driver` | ✅ | Must be `tensor-fusion.ai.dra-driver` |
+| `spec.driver` | ✅ | Must be `tensor-fusion.ai` |
 | `spec.nodeName` | ✅ | Kubernetes node name where GPU is located |
 | `spec.pool.name` | ✅ | GPU pool name |
 | `spec.devices[].name` | ✅ | GPU unique name |
@@ -710,21 +751,22 @@ metadata:
 #### 6.3.2 Template Structure
 
 ```yaml
-apiVersion: resource.k8s.io/v1beta2
+apiVersion: resource.k8s.io/v1
 kind: ResourceClaimTemplate
 metadata:
   name: tensor-fusion-gpu-template
+  namespace: default
   labels:
     tensor-fusion.ai/resource-claim-template: "true"
 spec:
   spec:
     devices:
       requests:
-        - name: gpu-request
-          allocationMode: ExactCount
+        - name: gpu
           exactly:
             # Default value, updated by Controller
             count: 1
+            deviceClassName: tensor-fusion.ai
             selector:
               cel:
                 # Default value, updated by Controller
@@ -740,48 +782,44 @@ spec:
 ### Example 1: Basic DRA Configuration
 
 ```yaml
-# 1. SchedulingConfigTemplate
+# 1. GPUPool with DRA enabled
 apiVersion: tensor-fusion.ai/v1
-kind: SchedulingConfigTemplate
+kind: GPUPool
 metadata:
-  name: default-config
+  name: default-pool
 spec:
-  dra:
+  # DRA configuration
+  draConfig:
     enable: true
-  placement:
-    mode: CompactFirst
+    resourceClaimTemplateName: tensor-fusion-gpu-template
+
+  # Node manager configuration
+  nodeManagerConfig:
+    provisioningMode: Provisioned
 
 ---
 # 2. ResourceClaimTemplate
-apiVersion: resource.k8s.io/v1beta2
+apiVersion: resource.k8s.io/v1
 kind: ResourceClaimTemplate
 metadata:
   name: tensor-fusion-gpu-template
+  namespace: default
   labels:
     tensor-fusion.ai/resource-claim-template: "true"
 spec:
   spec:
     devices:
       requests:
-        - name: gpu-request
-          allocationMode: ExactCount
+        - name: gpu
           exactly:
             count: 1
+            deviceClassName: tensor-fusion.ai
             selector:
               cel:
                 expression: "true"
 
 ---
-# 3. GPUPool
-apiVersion: tensor-fusion.ai/v1
-kind: GPUPool
-metadata:
-  name: default-pool
-spec:
-  schedulingConfigTemplate: "default-config"
-
----
-# 4. Pod
+# 3. Pod
 apiVersion: v1
 kind: Pod
 metadata:

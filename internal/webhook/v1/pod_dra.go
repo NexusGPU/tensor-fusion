@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -165,40 +166,57 @@ func BuildCELSelector(pod *corev1.Pod, tfInfo *utils.TensorFusionInfo) (string, 
 
 	// 1. GPU model filter (if specified)
 	if tfInfo.Profile.GPUModel != "" {
-		conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == "%s"`, constants.DRAAttributeModel, tfInfo.Profile.GPUModel))
+		condition := fmt.Sprintf(`device.attributes["%s"].string == "%s"`, constants.DRAAttributeModel, tfInfo.Profile.GPUModel)
+		conditions = append(conditions, condition)
+		log.FromContext(context.Background()).Info("Adding GPU model filter", "condition", condition)
 	}
 
 	// 2. Pool name filter (for resource isolation and scheduling preferences)
 	if tfInfo.Profile.PoolName != "" {
-		conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == "%s"`, constants.DRAAttributePoolName, tfInfo.Profile.PoolName))
+		condition := fmt.Sprintf(`device.attributes["%s"].string == "%s"`, constants.DRAAttributePoolName, tfInfo.Profile.PoolName)
+		conditions = append(conditions, condition)
+		log.FromContext(context.Background()).Info("Adding pool name filter", "condition", condition)
 	}
 
 	// 3. TFlops capacity requirement (if specified)
 	if !tfInfo.Profile.Resources.Requests.Tflops.IsZero() {
-		tflopsValue := tfInfo.Profile.Resources.Requests.Tflops.AsApproximateFloat64()
-		conditions = append(conditions, fmt.Sprintf(`device.capacity["%s"].AsApproximateFloat64() >= %f`, constants.DRACapacityTFlops, tflopsValue))
+		tflopsStr := tfInfo.Profile.Resources.Requests.Tflops.String()
+		// Use compareTo method for Quantity comparison
+		condition := fmt.Sprintf(`device.capacity["%s"].value.compareTo(quantity("%s")) >= 0`, constants.DRACapacityTFlops, tflopsStr)
+		conditions = append(conditions, condition)
+		log.FromContext(context.Background()).Info("Adding TFlops capacity filter", "condition", condition, "requestedTFlops", tflopsStr)
 	}
 
 	// 4. VRAM capacity requirement (if specified)
 	if !tfInfo.Profile.Resources.Requests.Vram.IsZero() {
-		vramValue := tfInfo.Profile.Resources.Requests.Vram.AsApproximateFloat64()
-		conditions = append(conditions, fmt.Sprintf(`device.capacity["%s"].AsApproximateFloat64() >= %f`, constants.DRACapacityVRAM, vramValue))
+		vramStr := tfInfo.Profile.Resources.Requests.Vram.String()
+		// Use compareTo method for Quantity comparison
+		condition := fmt.Sprintf(`device.capacity["%s"].value.compareTo(quantity("%s")) >= 0`, constants.DRACapacityVRAM, vramStr)
+		conditions = append(conditions, condition)
+		log.FromContext(context.Background()).Info("Adding VRAM capacity filter", "condition", condition, "requestedVRAM", vramStr)
 	}
 
 	// 5. QoS level filter (if specified and not default)
 	// This can be used for priority-based scheduling
 	if tfInfo.Profile.Qos != "" {
-		conditions = append(conditions, fmt.Sprintf(`device.attributes["%s"] == "%s"`, constants.DRAAttributeQoS, tfInfo.Profile.Qos))
+		condition := fmt.Sprintf(`device.attributes["%s"].string == "%s"`, constants.DRAAttributeQoS, tfInfo.Profile.Qos)
+		conditions = append(conditions, condition)
+		log.FromContext(context.Background()).Info("Adding QoS filter", "condition", condition)
 	}
 
 	// 6. GPU phase filter (select Running or Pending GPUs, consistent with PhaseFilter)
-	conditions = append(conditions, fmt.Sprintf(
-		`(device.attributes["%s"] == "%s" || device.attributes["%s"] == "%s")`,
+	condition := fmt.Sprintf(
+		`(device.attributes["%s"].string == "%s" || device.attributes["%s"].string == "%s")`,
 		constants.DRAAttributePhase, constants.PhaseRunning,
 		constants.DRAAttributePhase, constants.PhasePending,
-	))
+	)
+	conditions = append(conditions, condition)
+	log.FromContext(context.Background()).Info("Adding phase filter", "condition", condition)
 
-	return strings.Join(conditions, " && "), nil
+	celExpression := strings.Join(conditions, " && ")
+	log.FromContext(context.Background()).Info("Generated complete CEL expression", "expression", celExpression, "pod", pod.Name, "namespace", pod.Namespace)
+
+	return celExpression, nil
 }
 
 // injectResourceClaimTemplateRef adds ResourceClaimTemplate reference to Pod spec
