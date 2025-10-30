@@ -1877,6 +1877,7 @@ func (in *Requirement) DeepCopy() *Requirement {
 func (in *Resource) DeepCopyInto(out *Resource) {
 	*out = *in
 	out.Tflops = in.Tflops.DeepCopy()
+	out.ComputePercent = in.ComputePercent.DeepCopy()
 	out.Vram = in.Vram.DeepCopy()
 }
 

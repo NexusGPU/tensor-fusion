@@ -62,6 +62,13 @@ spec:
                     description: Default requests applied to workloads without explicit
                       requests
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -75,6 +82,7 @@ spec:
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
                     required:
+                    - compute
                     - tflops
                     - vram
                     type: object
@@ -82,6 +90,13 @@ spec:
                     description: Default limits applied to workloads without explicit
                       limits
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -95,6 +110,7 @@ spec:
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
                     required:
+                    - compute
                     - tflops
                     - vram
                     type: object
@@ -103,6 +119,13 @@ spec:
                     type: integer
                   maxLimits:
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -116,12 +139,20 @@ spec:
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
                     required:
+                    - compute
                     - tflops
                     - vram
                     type: object
                   maxRequests:
                     description: Maximum resources per workload
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -135,6 +166,7 @@ spec:
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
                     required:
+                    - compute
                     - tflops
                     - vram
                     type: object
@@ -154,6 +186,13 @@ spec:
                   limits:
                     description: Total limits for the namespace
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -167,6 +206,7 @@ spec:
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
                     required:
+                    - compute
                     - tflops
                     - vram
                     type: object
@@ -178,6 +218,13 @@ spec:
                   requests:
                     description: Total requests limits for the namespace
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -191,6 +238,7 @@ spec:
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
                     required:
+                    - compute
                     - tflops
                     - vram
                     type: object
@@ -281,6 +329,13 @@ spec:
                   limits:
                     description: Current limits usage
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -294,12 +349,20 @@ spec:
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
                     required:
+                    - compute
                     - tflops
                     - vram
                     type: object
                   requests:
                     description: Current requests usage
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -313,6 +376,7 @@ spec:
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
                     required:
+                    - compute
                     - tflops
                     - vram
                     type: object

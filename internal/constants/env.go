@@ -122,6 +122,9 @@ const (
 	DisableVRAMManagerEnv      = "TF_DISABLE_MEMORY_MANAGER"
 	DisableWorkerFeatureEnvVal = "1"
 
+	// hard limiter mode
+	HardSMLimiterEnv = "TF_CUDA_SM_PERCENT_LIMIT"
+
 	TensorFusionRemoteWorkerPortNumber = 8000
 	TensorFusionRemoteWorkerPortName   = "remote-vgpu"
 )

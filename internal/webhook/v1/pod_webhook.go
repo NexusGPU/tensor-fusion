@@ -158,6 +158,16 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		return admission.Allowed("no valid container to inject tensor-fusion, skipped")
 	}
 
+	// Check if final profile is valid and contains valid GPU resource requests
+	if tfInfo.Profile.Resources.Limits.Tflops.IsZero() && tfInfo.Profile.Resources.Limits.ComputePercent.IsZero() {
+		return admission.Errored(http.StatusInternalServerError,
+			fmt.Errorf("tflops limit is not set, please set tensor-fusion.ai/tflops-limit or tensor-fusion.ai/compute-percent-limit annotation on Pod"))
+	}
+	if tfInfo.Profile.Resources.Limits.Vram.IsZero() {
+		return admission.Errored(http.StatusInternalServerError,
+			fmt.Errorf("vram limit is not set, please set tensor-fusion.ai/vram-limit annotation on Pod"))
+	}
+
 	// Add defaults and tensor-fusion injection logic
 	utils.AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod, tfInfo)
 	utils.AddTFDefaultClientConfBeforePatch(ctx, pod, pool, tfInfo, containerIndices)
@@ -304,7 +314,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 			return nil, fmt.Errorf("unmarshal patched container, invalid container patch: %w", err)
 		}
 
-		removeNativeGPULimitsAndAddCountToAnnotation(pod, container)
+		removeNativeGPULimits(container)
 
 		if !isLocalGPU {
 			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
@@ -423,21 +433,12 @@ func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *co
 	})
 }
 
-// remove nvidia.com/gpu in resources, add the GPU number into annotation
-func removeNativeGPULimitsAndAddCountToAnnotation(pod *corev1.Pod, container *corev1.Container) {
+func removeNativeGPULimits(container *corev1.Container) {
 	if container.Resources.Requests != nil {
 		delete(container.Resources.Requests, constants.NvidiaGPUKey)
 	}
 	if container.Resources.Limits != nil {
-		if quantity, ok := container.Resources.Limits[constants.NvidiaGPUKey]; ok {
-			gpuNumber, err := strconv.Atoi(quantity.String())
-			if err != nil || gpuNumber <= 0 {
-				ctrl.Log.Error(err, "unrecognized nvidia.com/gpu in resources, not a valid number", "pod", pod.Name, "container", container.Name)
-			} else {
-				pod.Annotations[constants.GpuCountAnnotation] = strconv.Itoa(gpuNumber)
-			}
-			delete(container.Resources.Limits, constants.NvidiaGPUKey)
-		}
+		delete(container.Resources.Limits, constants.NvidiaGPUKey)
 	}
 }
 

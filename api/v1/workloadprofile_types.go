@@ -58,6 +58,11 @@ type WorkloadProfileSpec struct {
 	SidecarWorker bool `json:"sidecarWorker,omitempty"`
 
 	// +optional
+	// +kubebuilder:default=soft
+	// How to isolate computing resources, could be `shared` or `soft` or `hard`
+	ComputeIsolation ComputingIsolationMode `json:"computeIsolation,omitempty"`
+
+	// +optional
 	// GPUModel specifies the required GPU model (e.g., "A100", "H100")
 	GPUModel string `json:"gpuModel,omitempty"`
 
@@ -78,6 +83,15 @@ type WorkloadProfileSpec struct {
 	// WorkerPodTemplate is the template for the worker pod, only take effect in remote vGPU mode
 	WorkerPodTemplate *v1.PodTemplateSpec `json:"workerPodTemplate,omitempty"`
 }
+
+// +kubebuilder:validation:Enum=shared;soft;hard
+type ComputingIsolationMode string
+
+const (
+	ComputingIsolationModeShared = "shared"
+	ComputingIsolationModeSoft   = "soft"
+	ComputingIsolationModeHard   = "hard"
+)
 
 func (t WorkloadProfileSpec) IsDynamicReplica() bool {
 	return t.Replicas == nil
