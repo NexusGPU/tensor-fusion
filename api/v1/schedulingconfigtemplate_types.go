@@ -272,7 +272,10 @@ type MultiProcessQueuingParameters struct {
 	CoefficientMedium string `json:"coefficientMedium,omitempty"`
 	CoefficientHigh   string `json:"coefficientHigh,omitempty"`
 
-	// When avg utilization < ComputingThresholdForResume, use reciprocal of Coefficient * SlowStartRatio
+	// When avg utilization < ComputingThresholdForResume and last for more than TriggerResumeDuration
+	// Use following formula to scale up:
+	// Case #1 If all process has same QoS level, and cur_limit <= limit, fast resume to limit
+	// Case #2 Else, Max(limit, Min(cur_limit * 1/CoEfficient * SlowStartRatio, cur_limit * 1.2))
 	SlowStartRatio string `json:"slowStartRatio,omitempty"`
 }
 
