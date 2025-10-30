@@ -2526,7 +2526,7 @@ func (in *WorkloadProfileSpec) DeepCopyInto(out *WorkloadProfileSpec) {
 	}
 	if in.WorkerPodTemplate != nil {
 		in, out := &in.WorkerPodTemplate, &out.WorkerPodTemplate
-		*out = new(corev1.PodTemplateSpec)
+		*out = new(runtime.RawExtension)
 		(*in).DeepCopyInto(*out)
 	}
 }

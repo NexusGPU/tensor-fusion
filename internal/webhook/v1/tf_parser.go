@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -112,7 +114,12 @@ func ParseTensorFusionInfo(
 		if err := yaml.Unmarshal([]byte(workerPodTemplate), workerPodTemplateSpec); err != nil {
 			return info, fmt.Errorf("unmarshal worker pod template from annotation: %w", err)
 		}
-		workloadProfile.Spec.WorkerPodTemplate = workerPodTemplateSpec
+		// Marshal to JSON and store as RawExtension to keep generic object while preserving content
+		raw, err := json.Marshal(workerPodTemplateSpec)
+		if err != nil {
+			return info, fmt.Errorf("marshal worker pod template to json: %w", err)
+		}
+		workloadProfile.Spec.WorkerPodTemplate = &runtime.RawExtension{Raw: raw}
 	}
 
 	nsQuotas := &tfv1.GPUResourceQuotaList{}

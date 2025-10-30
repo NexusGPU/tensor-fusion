@@ -19,6 +19,7 @@ package v1
 import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:validation:Enum=low;medium;high;critical
@@ -87,7 +88,7 @@ type WorkloadProfileSpec struct {
 
 	// +optional
 	// WorkerPodTemplate is the template for the worker pod, only take effect in remote vGPU mode
-	WorkerPodTemplate *v1.PodTemplateSpec `json:"workerPodTemplate,omitempty"`
+	WorkerPodTemplate *runtime.RawExtension `json:"workerPodTemplate,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=shared;soft;hard
