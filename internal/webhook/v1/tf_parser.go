@@ -30,6 +30,7 @@ type TFResource struct {
 	GPUModel            string // Required GPU model (e.g., A100, H100)
 }
 
+// nolint:gocyclo
 func ParseTensorFusionInfo(
 	ctx context.Context,
 	k8sClient client.Client,
