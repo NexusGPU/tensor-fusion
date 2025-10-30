@@ -105,6 +105,9 @@ const (
 	PodNamespaceEnv  = "POD_NAMESPACE"
 	ContainerNameEnv = "CONTAINER_NAME"
 
+	EnableWorkerLogEnv   = "TF_ENABLE_LOG"
+	EnableWorkerLogValue = "1"
+
 	// the path of nGPU lib for limiter to load
 	NGPUPathEnv   = "TENSOR_FUSION_NGPU_PATH"
 	NGPUPathValue = TFLibsVolumeMountPath + "/libcuda.so"

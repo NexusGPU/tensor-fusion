@@ -143,10 +143,24 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 		annotations = map[string]string{}
 	}
 	res := workload.Spec.Resources
-	annotations[constants.TFLOPSLimitAnnotation] = res.Limits.Tflops.String()
+
+	// TFLOPs and compute percent are mutually exclusive, if TFLOPs is set, compute percent will be ignored
+	if !res.Limits.Tflops.IsZero() {
+		annotations[constants.TFLOPSLimitAnnotation] = res.Limits.Tflops.String()
+	}
+	if !res.Requests.Tflops.IsZero() {
+		annotations[constants.TFLOPSRequestAnnotation] = res.Requests.Tflops.String()
+	}
+	if !res.Requests.ComputePercent.IsZero() {
+		annotations[constants.ComputeRequestAnnotation] = res.Requests.ComputePercent.String()
+	}
+	if !res.Limits.ComputePercent.IsZero() {
+		annotations[constants.ComputeLimitAnnotation] = res.Limits.ComputePercent.String()
+	}
+
 	annotations[constants.VRAMLimitAnnotation] = res.Limits.Vram.String()
-	annotations[constants.TFLOPSRequestAnnotation] = res.Requests.Tflops.String()
 	annotations[constants.VRAMRequestAnnotation] = res.Requests.Vram.String()
+
 	annotations[constants.InjectContainerAnnotation] = containerName
 	if workload.Spec.Qos == "" {
 		annotations[constants.QoSLevelAnnotation] = string(tfv1.QoSMedium)
@@ -804,6 +818,9 @@ func SetWorkerContainerSpec(
 	}, v1.EnvVar{
 		Name:  constants.ContainerNameEnv,
 		Value: constants.TFContainerNameWorker,
+	}, v1.EnvVar{
+		Name:  constants.EnableWorkerLogEnv,
+		Value: constants.EnableWorkerLogValue,
 	}, v1.EnvVar{
 		Name: constants.PodNamespaceEnv,
 		ValueFrom: &v1.EnvVarSource{
