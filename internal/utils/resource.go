@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -62,6 +63,10 @@ func ParseIndicesAnnotation(gpuIndicesStr string) ([]int32, bool) {
 		indexInt, err := strconv.Atoi(strings.TrimSpace(index))
 		if err != nil {
 			ctrl.Log.Error(err, "Invalid GPU index annotation", "index", index)
+			return 0
+		}
+		if indexInt < math.MinInt32 || indexInt > math.MaxInt32 {
+			ctrl.Log.Error(fmt.Errorf("out of range int32"), "Invalid GPU index range", "index", indexInt)
 			return 0
 		}
 		return int32(indexInt)

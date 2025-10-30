@@ -84,8 +84,10 @@ func ParseTensorFusionInfo(
 	localGPU, ok := pod.Annotations[constants.IsLocalGPUAnnotation]
 	if ok && localGPU == constants.TrueStringValue {
 		workloadProfile.Spec.IsLocalGPU = true
+	} else if ok && localGPU == constants.FalseStringValue {
+		workloadProfile.Spec.IsLocalGPU = false
 	} else {
-		workloadProfile.Spec.IsLocalGPU = pool.Spec.DefaultUsingLocalGPU != nil && *pool.Spec.DefaultUsingLocalGPU
+		workloadProfile.Spec.IsLocalGPU = pool.Spec.DefaultUsingLocalGPU == nil || *pool.Spec.DefaultUsingLocalGPU
 	}
 
 	// check if its sidecar worker mode
