@@ -137,9 +137,14 @@ func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
 	if err != nil {
 		return tfv1.Resource{}, err
 	}
-	computePercent, err := resource.ParseQuantity(pod.Annotations[computePercentKey])
-	if err != nil {
-		return tfv1.Resource{}, err
+
+	// TFLOPs and compute percent are mutually exclusive, if TFLOPs is set, compute percent will be ignored
+	computePercent := resource.Quantity{}
+	if tflops.IsZero() {
+		computePercent, err = resource.ParseQuantity(pod.Annotations[computePercentKey])
+		if err != nil {
+			return tfv1.Resource{}, err
+		}
 	}
 	return tfv1.Resource{
 		Tflops:         tflops,
