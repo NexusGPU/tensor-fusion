@@ -69,6 +69,12 @@ type WorkloadProfileSpec struct {
 	// The number of GPUs to be used by the workload, default to 1
 	GPUCount uint32 `json:"gpuCount,omitempty"`
 
+	// Specify GPU indices for precise control of scheduling
+	GPUIndices []int32 `json:"gpuIndices,omitempty"`
+
+	// Specify GPU vendor for precise control of scheduling
+	GPUVendor string `json:"vendor,omitempty"`
+
 	// +optional
 	// AutoScalingConfig configured here will override Pool's schedulingConfig
 	// This field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,

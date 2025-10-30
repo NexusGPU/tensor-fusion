@@ -121,13 +121,23 @@ spec:
                 type: object
               gpuModel:
                 type: string
+              index:
+                format: int32
+                type: integer
               message:
+                type: string
+              model:
                 type: string
               nodeSelector:
                 additionalProperties:
                   type: string
                 description: The host match selector to schedule worker pods
                 type: object
+              numaNode:
+                description: When it's -1, it means the GPU is not assigned to any
+                  NUMA node
+                format: int32
+                type: integer
               phase:
                 default: Pending
                 enum:
@@ -166,6 +176,9 @@ spec:
                 type: string
               uuid:
                 type: string
+              vendor:
+                default: NVIDIA
+                type: string
             required:
             - available
             - capacity
@@ -174,6 +187,7 @@ spec:
             - nodeSelector
             - phase
             - uuid
+            - vendor
             type: object
         type: object
     served: true

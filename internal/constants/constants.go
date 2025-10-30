@@ -55,7 +55,11 @@ const (
 	GpuPoolKey = Domain + "/gpupool"
 
 	// Annotation key constants
-	GpuCountAnnotation      = Domain + "/gpu-count"
+	GpuCountAnnotation = Domain + "/gpu-count"
+	// Specify which GPU index to use, when multiple GPUs are available, comma separated list of GPU indices
+	GpuIndicesAnnotation = Domain + "/gpu-indices"
+	// Specify which GPU/NPU/XPU vendor to use, default to any vendors in cluster
+	GpuVendorAnnotation     = Domain + "/vendor"
 	TFLOPSRequestAnnotation = Domain + "/tflops-request"
 	VRAMRequestAnnotation   = Domain + "/vram-request"
 	TFLOPSLimitAnnotation   = Domain + "/tflops-limit"

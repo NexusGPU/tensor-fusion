@@ -177,6 +177,14 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 	if workload.Spec.GPUModel != "" {
 		annotations[constants.GPUModelAnnotation] = workload.Spec.GPUModel
 	}
+	if workload.Spec.GPUVendor != "" {
+		annotations[constants.GpuVendorAnnotation] = workload.Spec.GPUVendor
+	}
+	if len(workload.Spec.GPUIndices) > 0 {
+		annotations[constants.GpuIndicesAnnotation] = strings.Join(lo.Map(workload.Spec.GPUIndices, func(index int32, _ int) string {
+			return strconv.Itoa(int(index))
+		}), ",")
+	}
 	return labels, annotations
 }
 

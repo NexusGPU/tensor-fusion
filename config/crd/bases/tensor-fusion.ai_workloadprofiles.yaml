@@ -241,6 +241,12 @@ spec:
                   to 1
                 format: int32
                 type: integer
+              gpuIndices:
+                description: Specify GPU indices for precise control of scheduling
+                items:
+                  format: int32
+                  type: integer
+                type: array
               gpuModel:
                 description: GPUModel specifies the required GPU model (e.g., "A100",
                   "H100")
@@ -527,6 +533,9 @@ spec:
                   When set to sidecar worker mode, its always Local GPU mode, and hard-isolated with shared memory
                   default to false, indicates the workload's embedded worker is same process, soft-isolated
                 type: boolean
+              vendor:
+                description: Specify GPU vendor for precise control of scheduling
+                type: string
               workerPodTemplate:
                 description: WorkerPodTemplate is the template for the worker pod,
                   only take effect in remote vGPU mode

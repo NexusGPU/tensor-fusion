@@ -173,10 +173,16 @@ type AllocRequest struct {
 	// Resource requirements for the allocation
 	Request Resource
 	Limit   Resource
+	// Specific GPU indices to allocate, empty slice means any index
+	GPUIndices []int32
 	// Number of GPUs to allocate
 	Count uint
 	// Specific GPU model to allocate, empty string means any model
 	GPUModel string
+
+	// Specific GPU vendor to allocate, default to any if empty
+	GPUVendor string
+
 	// Node affinity requirements
 	NodeAffinity *v1.NodeAffinity
 
