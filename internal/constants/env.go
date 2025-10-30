@@ -122,8 +122,11 @@ const (
 	DisableVRAMManagerEnv      = "TF_DISABLE_MEMORY_MANAGER"
 	DisableWorkerFeatureEnvVal = "1"
 
-	// hard limiter mode
+	// hard limiter mode (not open sourced) in percent, only take effect on worker container yet
 	HardSMLimiterEnv = "TF_CUDA_SM_PERCENT_LIMIT"
+	// hard limiter (not open sourced) in megabytes, only take effect on worker container and when open source vgpu.rs gpu-limiter is disabled
+	// when use this mode, memory request can not autoscale dynamically
+	HardMemLimiterEnv = "TF_CUDA_MEMORY_LIMIT"
 
 	TensorFusionRemoteWorkerPortNumber = 8000
 	TensorFusionRemoteWorkerPortName   = "remote-vgpu"

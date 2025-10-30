@@ -805,9 +805,6 @@ func SetWorkerContainerSpec(
 		Name:  constants.ContainerNameEnv,
 		Value: constants.TFContainerNameWorker,
 	}, v1.EnvVar{
-		Name:  constants.LdPreloadEnv,
-		Value: constants.LdPreloadLimiter,
-	}, v1.EnvVar{
 		Name: constants.PodNamespaceEnv,
 		ValueFrom: &v1.EnvVarSource{
 			FieldRef: &v1.ObjectFieldSelector{
@@ -816,15 +813,28 @@ func SetWorkerContainerSpec(
 		},
 	})
 
+	if !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) &&
+		workloadProfile.ComputeIsolation != constants.ComputingIsolationModeHard {
+		container.Env = append(container.Env, v1.EnvVar{
+			Name:  constants.LdPreloadEnv,
+			Value: constants.LdPreloadLimiter,
+		})
+	}
+
 	if disabledFeatures != "" {
 		container.Env = convertDisabledFeaturesToEnvs(disabledFeatures, container.Env)
 	}
 
 	// TODO should calculate and set by hypervisor before container created
+	// when compute isolation mode is hard-isolation, memory limit also change to hard-mode
+	// open source vgpu.rs memory limiter is feedback-loop based, potentially cause resource contention
 	if workloadProfile.ComputeIsolation == constants.ComputingIsolationModeHard {
 		container.Env = append(container.Env, v1.EnvVar{
 			Name:  constants.HardSMLimiterEnv,
 			Value: workloadProfile.Resources.Limits.ComputePercent.String(),
+		}, v1.EnvVar{
+			Name:  constants.HardMemLimiterEnv,
+			Value: strconv.FormatInt(workloadProfile.Resources.Limits.Vram.Value()/(1024*1024), 10),
 		})
 	}
 
