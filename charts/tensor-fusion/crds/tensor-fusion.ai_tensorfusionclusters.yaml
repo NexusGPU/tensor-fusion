@@ -311,6 +311,8 @@ spec:
                                   x-kubernetes-preserve-unknown-fields: true
                               type: object
                           type: object
+                        defaultUsingLocalGPU:
+                          type: boolean
                         nodeManagerConfig:
                           properties:
                             nodeCompaction:

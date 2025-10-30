@@ -178,11 +178,11 @@ func (s *GpuAllocator) Filter(
 	isSimulateSchedule bool,
 ) ([]*tfv1.GPU, []filter.FilterDetail, error) {
 	// Add SameNodeFilter if count > 1 to ensure GPUs are from the same node
-	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request))
+	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request, req.GPUIndices))
 
 	// Add GPU model filter if specified
 	if req.GPUModel != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
+		filterRegistry = filterRegistry.With(filter.NewGPUModelAndVendorFilter(req.GPUModel, req.GPUVendor))
 	}
 
 	// NOTE: deprecated, use Kubernetes native spec template affinity way
@@ -222,10 +222,10 @@ func (s *GpuAllocator) FilterWithPreempt(
 		}
 	}
 
-	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request))
+	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request, req.GPUIndices))
 	// Add GPU model filter if specified
 	if req.GPUModel != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
+		filterRegistry = filterRegistry.With(filter.NewGPUModelAndVendorFilter(req.GPUModel, req.GPUVendor))
 	}
 	// No need to check count and other filters since it's always in the same node during each preempt trial
 	filteredGPUs, filterDetails, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs, false)
@@ -1462,13 +1462,23 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 		qosLevel = tfv1.QoSMedium
 	}
 
+	gpuVendor := pod.Annotations[constants.GpuVendorAnnotation]
+
+	gpuIndices, hasError := utils.ParseIndicesAnnotation(pod.Annotations[constants.GpuIndicesAnnotation])
+	if hasError {
+		return &tfv1.AllocRequest{}, "invalid gpu-indices annotation",
+			fmt.Errorf("can not parse gpu indices annotation")
+	}
+
 	allocRequest := tfv1.AllocRequest{
 		PoolName: pod.Annotations[constants.GpuPoolKey],
 		Request:  gpuRequestResource,
 		Limit:    gpuLimitResource,
 
-		Count:    uint(count),
-		GPUModel: pod.Annotations[constants.GPUModelAnnotation],
+		Count:      uint(count),
+		GPUModel:   pod.Annotations[constants.GPUModelAnnotation],
+		GPUIndices: gpuIndices,
+		GPUVendor:  gpuVendor,
 		WorkloadNameNamespace: tfv1.NameNamespace{
 			Name:      pod.Labels[constants.WorkloadKey],
 			Namespace: pod.Namespace,

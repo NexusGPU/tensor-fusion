@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -28,6 +30,7 @@ type TFResource struct {
 	GPUModel            string // Required GPU model (e.g., A100, H100)
 }
 
+// nolint:gocyclo
 func ParseTensorFusionInfo(
 	ctx context.Context,
 	k8sClient client.Client,
@@ -73,9 +76,19 @@ func ParseTensorFusionInfo(
 		}
 	}
 
+	pool, err := checkAndGetValidGPUPool(ctx, k8sClient, pod)
+	if err != nil {
+		return info, err
+	}
+	workloadProfile.Spec.PoolName = pool.Name
+
 	localGPU, ok := pod.Annotations[constants.IsLocalGPUAnnotation]
 	if ok && localGPU == constants.TrueStringValue {
 		workloadProfile.Spec.IsLocalGPU = true
+	} else if ok && localGPU == constants.FalseStringValue {
+		workloadProfile.Spec.IsLocalGPU = false
+	} else {
+		workloadProfile.Spec.IsLocalGPU = pool.Spec.DefaultUsingLocalGPU == nil || *pool.Spec.DefaultUsingLocalGPU
 	}
 
 	// check if its sidecar worker mode
@@ -104,13 +117,12 @@ func ParseTensorFusionInfo(
 		if err := yaml.Unmarshal([]byte(workerPodTemplate), workerPodTemplateSpec); err != nil {
 			return info, fmt.Errorf("unmarshal worker pod template from annotation: %w", err)
 		}
-		workloadProfile.Spec.WorkerPodTemplate = workerPodTemplateSpec
-	}
-
-	if poolName, err := getGPUPoolNameAndVerify(ctx, k8sClient, pod); err != nil {
-		return info, err
-	} else {
-		workloadProfile.Spec.PoolName = poolName
+		// Marshal to JSON and store as RawExtension to keep generic object while preserving content
+		raw, err := json.Marshal(workerPodTemplateSpec)
+		if err != nil {
+			return info, fmt.Errorf("marshal worker pod template to json: %w", err)
+		}
+		workloadProfile.Spec.WorkerPodTemplate = &runtime.RawExtension{Raw: raw}
 	}
 
 	nsQuotas := &tfv1.GPUResourceQuotaList{}
@@ -119,7 +131,7 @@ func ParseTensorFusionInfo(
 		setDefaultQuotasIfExists(workloadProfile, nsQuotas.Items[0].Spec.Single)
 	}
 
-	err := parseGPUResourcesAnnotations(pod, workloadProfile)
+	err = parseGPUResourcesAnnotations(pod, workloadProfile)
 	if err != nil {
 		return info, err
 	}
@@ -232,6 +244,22 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 			}
 		}
 	}
+
+	gpuVendor, hasValue := pod.Annotations[constants.GpuVendorAnnotation]
+	if hasValue {
+		workloadProfile.Spec.GPUVendor = gpuVendor
+	}
+
+	// parse GPU indices
+	gpuIndices, hasError := utils.ParseIndicesAnnotation(pod.Annotations[constants.GpuIndicesAnnotation])
+	if hasError {
+		return fmt.Errorf("tensor-fusion.ai/gpu-indices annotation is not valid for Pod %s", pod.Name)
+	}
+	workloadProfile.Spec.GPUIndices = gpuIndices
+	if len(gpuIndices) > 0 {
+		workloadProfile.Spec.GPUCount = uint32(len(gpuIndices))
+	}
+
 	// finally add default GPU count when not specified
 	if workloadProfile.Spec.GPUCount == 0 {
 		workloadProfile.Spec.GPUCount = 1
@@ -251,31 +279,30 @@ func parseResourceQuantity(pod *corev1.Pod, annotationKey string) (resource.Quan
 	return quantity, true
 }
 
-func getGPUPoolNameAndVerify(ctx context.Context, k8sClient client.Client, pod *corev1.Pod) (string, error) {
+func checkAndGetValidGPUPool(ctx context.Context, k8sClient client.Client, pod *corev1.Pod) (*tfv1.GPUPool, error) {
 	gpuPoolList := &tfv1.GPUPoolList{}
 	if err := k8sClient.List(ctx, gpuPoolList); err != nil {
-		return "", fmt.Errorf("list gpu pools: %w", err)
+		return nil, fmt.Errorf("list gpu pools: %w", err)
 	}
 
-	poolName, ok := pod.Annotations[constants.GpuPoolKey]
-	validPool := false
+	poolName, poolSpecified := pod.Annotations[constants.GpuPoolKey]
+	validPool := tfv1.GPUPool{}
 	// verify gpu pool name or assign default pool when not specified
 	for _, gpuPool := range gpuPoolList.Items {
-		if !ok && gpuPool.Annotations != nil &&
+		if !poolSpecified && gpuPool.Annotations != nil &&
 			gpuPool.Annotations[constants.TensorFusionDefaultPoolKeyAnnotation] == constants.TrueStringValue {
-			poolName = gpuPool.Name
-			validPool = true
+			validPool = gpuPool
 			break
 		}
-		if ok && gpuPool.Name == poolName {
-			validPool = true
+		if poolSpecified && gpuPool.Name == poolName {
+			validPool = gpuPool
 			break
 		}
 	}
-	if !validPool {
-		return "", fmt.Errorf("gpu pool not found")
+	if validPool.Name == "" {
+		return nil, fmt.Errorf("gpu pool not found")
 	}
-	return poolName, nil
+	return &validPool, nil
 }
 
 func setDefaultQuotasIfExists(workloadProfile *tfv1.WorkloadProfile, single tfv1.GPUResourceQuotaSingle) {

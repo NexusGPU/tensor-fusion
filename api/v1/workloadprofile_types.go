@@ -19,6 +19,7 @@ package v1
 import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:validation:Enum=low;medium;high;critical
@@ -69,6 +70,12 @@ type WorkloadProfileSpec struct {
 	// The number of GPUs to be used by the workload, default to 1
 	GPUCount uint32 `json:"gpuCount,omitempty"`
 
+	// Specify GPU indices for precise control of scheduling
+	GPUIndices []int32 `json:"gpuIndices,omitempty"`
+
+	// Specify GPU vendor for precise control of scheduling
+	GPUVendor string `json:"vendor,omitempty"`
+
 	// +optional
 	// AutoScalingConfig configured here will override Pool's schedulingConfig
 	// This field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,
@@ -81,7 +88,7 @@ type WorkloadProfileSpec struct {
 
 	// +optional
 	// WorkerPodTemplate is the template for the worker pod, only take effect in remote vGPU mode
-	WorkerPodTemplate *v1.PodTemplateSpec `json:"workerPodTemplate,omitempty"`
+	WorkerPodTemplate *runtime.RawExtension `json:"workerPodTemplate,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=shared;soft;hard

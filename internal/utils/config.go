@@ -11,7 +11,6 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	constants "github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/lithammer/shortuuid/v4"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	ctrl "sigs.k8s.io/controller-runtime"

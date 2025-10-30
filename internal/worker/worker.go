@@ -43,8 +43,11 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 
 	// Merge workload.Spec.WorkerPodTemplate into podTmpl.Template if provided
 	if workload.Spec.WorkerPodTemplate != nil {
-		err = mergePodTemplateSpec(&podTmpl.Template, workload.Spec.WorkerPodTemplate)
-		if err != nil {
+		override := &v1.PodTemplateSpec{}
+		if err := json.Unmarshal(workload.Spec.WorkerPodTemplate.Raw, override); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal worker pod template override: %w", err)
+		}
+		if err := mergePodTemplateSpec(&podTmpl.Template, override); err != nil {
 			return nil, fmt.Errorf("failed to merge worker pod template: %w", err)
 		}
 	}

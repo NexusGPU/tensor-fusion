@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 var testPodKey = tfv1.NameNamespace{
@@ -30,6 +31,8 @@ func TestFilters(t *testing.T) {
 			Status: tfv1.GPUStatus{
 				Phase:    tfv1.TensorFusionGPUPhaseRunning,
 				GPUModel: "A100",
+				Index:    ptr.To(int32(0)),
+				Vendor:   constants.AcceleratorVendorNvidia,
 				Available: &tfv1.Resource{
 					Tflops: resource.MustParse("10"),
 					Vram:   resource.MustParse("40Gi"),
@@ -46,6 +49,8 @@ func TestFilters(t *testing.T) {
 			Status: tfv1.GPUStatus{
 				Phase:    tfv1.TensorFusionGPUPhaseRunning,
 				GPUModel: "A100",
+				Index:    ptr.To(int32(1)),
+				Vendor:   constants.AcceleratorVendorNvidia,
 				Available: &tfv1.Resource{
 					Tflops: resource.MustParse("5"),
 					Vram:   resource.MustParse("20Gi"),
@@ -62,6 +67,8 @@ func TestFilters(t *testing.T) {
 			Status: tfv1.GPUStatus{
 				Phase:    tfv1.TensorFusionGPUPhasePending,
 				GPUModel: "H100",
+				Index:    ptr.To(int32(2)),
+				Vendor:   constants.AcceleratorVendorNvidia,
 				Available: &tfv1.Resource{
 					Tflops: resource.MustParse("20"),
 					Vram:   resource.MustParse("80Gi"),
@@ -78,6 +85,8 @@ func TestFilters(t *testing.T) {
 			Status: tfv1.GPUStatus{
 				Phase:    tfv1.TensorFusionGPUPhaseRunning,
 				GPUModel: "RTX4090",
+				Index:    ptr.To(int32(3)),
+				Vendor:   constants.AcceleratorVendorNvidia,
 				Available: &tfv1.Resource{
 					Tflops: resource.MustParse("3"),
 					Vram:   resource.MustParse("24Gi"),
@@ -102,7 +111,7 @@ func TestFilters(t *testing.T) {
 		filter := NewResourceFilter(tfv1.Resource{
 			Tflops: resource.MustParse("8"),
 			Vram:   resource.MustParse("30Gi"),
-		})
+		}, nil)
 		result, err := filter.Filter(ctx, testPodKey, gpus)
 		assert.NoError(t, err)
 		assert.Len(t, result, 2)
@@ -117,13 +126,28 @@ func TestFilters(t *testing.T) {
 			With(NewResourceFilter(tfv1.Resource{
 				Tflops: resource.MustParse("8"),
 				Vram:   resource.MustParse("30Gi"),
-			}))
+			}, nil))
 
 		// Apply filters
 		result, _, err := registry.Apply(ctx, testPodKey, gpus, false)
 		assert.NoError(t, err)
 		assert.Len(t, result, 1)
 		assert.Equal(t, "gpu-1", result[0].Name)
+	})
+
+	t.Run("FilterRegistry with gpu indices filtering", func(t *testing.T) {
+		registry := NewFilterRegistry().
+			With(NewResourceFilter(tfv1.Resource{
+				Tflops: resource.MustParse("1"),
+				Vram:   resource.MustParse("1Gi"),
+			}, []int32{2, 3}))
+
+		// Apply filters
+		result, _, err := registry.Apply(ctx, testPodKey, gpus, false)
+		assert.NoError(t, err)
+		assert.Len(t, result, 2)
+		assert.Equal(t, "gpu-3", result[0].Name)
+		assert.Equal(t, "gpu-4", result[1].Name)
 	})
 
 	t.Run("FilterRegistry immutability", func(t *testing.T) {
@@ -136,7 +160,7 @@ func TestFilters(t *testing.T) {
 			With(NewResourceFilter(tfv1.Resource{
 				Tflops: resource.MustParse("8"),
 				Vram:   resource.MustParse("30Gi"),
-			}))
+			}, nil))
 
 		// Apply base registry filters
 		baseResult, _, err := baseRegistry.Apply(ctx, testPodKey, gpus, false)

@@ -44,7 +44,8 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&tfv1.GPU{}).Build()
 
-	gpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops)
+	gpu, err := createOrUpdateTensorFusionGPU(
+		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1)
 	assert.NoError(t, err)
 
 	// Assertions
@@ -75,7 +76,7 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 
 	tflops.Add(resource.MustParse("100"))
 	updatedGpu, err := createOrUpdateTensorFusionGPU(
-		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops,
+		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1,
 	)
 	assert.NoError(t, err)
 	assert.NotEqual(t, updatedGpu.Status.Capacity, gpu.Status.Capacity, "GPU capacity should not match")
@@ -122,7 +123,8 @@ func TestGPUControllerReference(t *testing.T) {
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&tfv1.GPU{}).Build()
 
-	gpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops)
+	gpu, err := createOrUpdateTensorFusionGPU(
+		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1)
 	assert.NoError(t, err)
 	assert.True(t, metav1.IsControlledBy(gpu, gpuNode))
 
@@ -138,7 +140,8 @@ func TestGPUControllerReference(t *testing.T) {
 		},
 	}
 
-	gpu, err = createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, newGpuNode, uuid, deviceName, memInfo, tflops)
+	gpu, err = createOrUpdateTensorFusionGPU(
+		k8sClient, ctx, k8sNodeName, newGpuNode, uuid, deviceName, memInfo, tflops, 1, -1)
 	assert.NoError(t, err)
 	assert.NotNil(t, gpu.OwnerReferences[0].Kind)
 	assert.NotNil(t, gpu.OwnerReferences[0].APIVersion)
