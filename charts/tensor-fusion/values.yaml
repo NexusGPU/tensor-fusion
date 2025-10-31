@@ -51,14 +51,16 @@ controller:
   tolerations: []
   affinity:
     podAntiAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        - topologyKey: kubernetes.io/hostname
-          labelSelector:
-            matchExpressions:
-              - key: tensor-fusion.ai/component
-                operator: In
-                values:
-                  - operator
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchExpressions:
+                - key: tensor-fusion.ai/component
+                  operator: In
+                  values:
+                    - operator
 
   livenessProbe:
     httpGet:

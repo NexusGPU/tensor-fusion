@@ -149,8 +149,8 @@ func main() {
 
 		numaNodeId, ret := device.GetNumaNodeId()
 		if ret != nvml.SUCCESS {
-			ctrl.Log.Error(errors.New(nvml.ErrorString(ret)), "unable to get NUMA node ID of device", "index", i)
-			os.Exit(1)
+			ctrl.Log.Info("unable to get NUMA node ID of device, will set to -1", "index", i, "msg", nvml.ErrorString(ret))
+			numaNodeId = -1
 		}
 
 		// Nvidia mobile series GPU chips are the same as desktop series GPU, but clock speed is lower
