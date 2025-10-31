@@ -185,6 +185,7 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 			return strconv.Itoa(int(index))
 		}), ",")
 	}
+	annotations[constants.ComputingIsolationModeAnnotation] = string(workload.Spec.ComputeIsolation)
 	return labels, annotations
 }
 

@@ -181,49 +181,8 @@ func parseAutoScalingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workload
 }
 
 func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) error {
-	if tflopsLimit, hasValue := parseResourceQuantity(pod, constants.TFLOPSLimitAnnotation); hasValue {
-		workloadProfile.Spec.Resources.Limits.Tflops = tflopsLimit
-	}
-	if vramLimit, hasValue := parseResourceQuantity(pod, constants.VRAMLimitAnnotation); hasValue {
-		workloadProfile.Spec.Resources.Limits.Vram = vramLimit
-	}
-
-	computeRequest, hasValue := parseResourceQuantity(pod, constants.ComputeLimitAnnotation)
-	if hasValue {
-		workloadProfile.Spec.Resources.Limits.ComputePercent = computeRequest
-	}
-	computeLimit, hasValue := parseResourceQuantity(pod, constants.ComputeRequestAnnotation)
-	if hasValue {
-		workloadProfile.Spec.Resources.Requests.ComputePercent = computeLimit
-	} else {
-		workloadProfile.Spec.Resources.Requests.ComputePercent = workloadProfile.Spec.Resources.Limits.ComputePercent
-	}
-
-	// tflops - computePercent are mutually exclusive
-	if !workloadProfile.Spec.Resources.Requests.Tflops.IsZero() && !workloadProfile.Spec.Resources.Requests.ComputePercent.IsZero() {
-		return fmt.Errorf("tflops- and computePercent request are mutually exclusive, please specify only one")
-	}
-	if !workloadProfile.Spec.Resources.Limits.Tflops.IsZero() && !workloadProfile.Spec.Resources.Limits.ComputePercent.IsZero() {
-		return fmt.Errorf("tflops- and computePercent limit are mutually exclusive, please specify only one")
-	}
-
-	if tflopsRequest, hasValue := parseResourceQuantity(pod, constants.TFLOPSRequestAnnotation); hasValue {
-		workloadProfile.Spec.Resources.Requests.Tflops = tflopsRequest
-	} else if workloadProfile.Spec.Resources.Requests.Tflops.IsZero() {
-		workloadProfile.Spec.Resources.Requests.Tflops = workloadProfile.Spec.Resources.Limits.Tflops
-	}
-	if vramRequest, hasValue := parseResourceQuantity(pod, constants.VRAMRequestAnnotation); hasValue {
-		workloadProfile.Spec.Resources.Requests.Vram = vramRequest
-	} else if workloadProfile.Spec.Resources.Requests.Vram.IsZero() {
-		workloadProfile.Spec.Resources.Requests.Vram = workloadProfile.Spec.Resources.Limits.Vram
-	}
-
-	qosLevel, hasValue := pod.Annotations[constants.QoSLevelAnnotation]
-	if hasValue {
-		workloadProfile.Spec.Qos = tfv1.QoSLevel(qosLevel)
-	}
-
 	// extract any containers has GPU count limits and set to annotation
+	isMigratedFromContainerLimits := false
 	gpuCount, hasValue := pod.Annotations[constants.GpuCountAnnotation]
 	if hasValue {
 		val, err := strconv.ParseInt(gpuCount, 10, 32)
@@ -239,10 +198,61 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 					ctrl.Log.Error(err, "unrecognized nvidia.com/gpu in resources, not a valid number", "pod", pod.Name, "container", container.Name)
 				} else {
 					workloadProfile.Spec.GPUCount = uint32(gpuNumber)
+					// For seamless migration with only one tensor-fusion.ai/enabled label
+					// and one tensor-fusion.ai/vram-limit annotation, convert this to 100% computing-percent
+					workloadProfile.Spec.Resources.Limits.ComputePercent = resource.MustParse("100")
+					isMigratedFromContainerLimits = true
 					break
 				}
 			}
 		}
+	}
+
+	if tflopsLimit, hasValue := parseResourceQuantity(pod, constants.TFLOPSLimitAnnotation); hasValue {
+		workloadProfile.Spec.Resources.Limits.Tflops = tflopsLimit
+		// clean compute percent limit when tflops limit is set in annotation
+		if isMigratedFromContainerLimits {
+			workloadProfile.Spec.Resources.Limits.ComputePercent = resource.Quantity{}
+		}
+	}
+	if vramLimit, hasValue := parseResourceQuantity(pod, constants.VRAMLimitAnnotation); hasValue {
+		workloadProfile.Spec.Resources.Limits.Vram = vramLimit
+	}
+
+	if tflopsRequest, hasValue := parseResourceQuantity(pod, constants.TFLOPSRequestAnnotation); hasValue {
+		workloadProfile.Spec.Resources.Requests.Tflops = tflopsRequest
+	} else if workloadProfile.Spec.Resources.Requests.Tflops.IsZero() {
+		workloadProfile.Spec.Resources.Requests.Tflops = workloadProfile.Spec.Resources.Limits.Tflops
+	}
+	if vramRequest, hasValue := parseResourceQuantity(pod, constants.VRAMRequestAnnotation); hasValue {
+		workloadProfile.Spec.Resources.Requests.Vram = vramRequest
+	} else if workloadProfile.Spec.Resources.Requests.Vram.IsZero() {
+		workloadProfile.Spec.Resources.Requests.Vram = workloadProfile.Spec.Resources.Limits.Vram
+	}
+
+	// Percentage way to specify GPU resource request, not recommended, should use TFLOPs instead
+	computeLimit, hasValue := parseResourceQuantity(pod, constants.ComputeLimitAnnotation)
+	if hasValue {
+		workloadProfile.Spec.Resources.Limits.ComputePercent = computeLimit
+	}
+	computeRequest, hasValue := parseResourceQuantity(pod, constants.ComputeRequestAnnotation)
+	if hasValue {
+		workloadProfile.Spec.Resources.Requests.ComputePercent = computeRequest
+	} else if workloadProfile.Spec.Resources.Requests.Tflops.IsZero() && workloadProfile.Spec.Resources.Requests.ComputePercent.IsZero() {
+		workloadProfile.Spec.Resources.Requests.ComputePercent = workloadProfile.Spec.Resources.Limits.ComputePercent
+	}
+
+	// tflops - computePercent are mutually exclusive
+	if !workloadProfile.Spec.Resources.Requests.Tflops.IsZero() && !workloadProfile.Spec.Resources.Requests.ComputePercent.IsZero() {
+		return fmt.Errorf("tflops- and computePercent request are mutually exclusive, please specify only one")
+	}
+	if !workloadProfile.Spec.Resources.Limits.Tflops.IsZero() && !workloadProfile.Spec.Resources.Limits.ComputePercent.IsZero() {
+		return fmt.Errorf("tflops- and computePercent limit are mutually exclusive, please specify only one")
+	}
+
+	qosLevel, hasValue := pod.Annotations[constants.QoSLevelAnnotation]
+	if hasValue {
+		workloadProfile.Spec.Qos = tfv1.QoSLevel(qosLevel)
 	}
 
 	gpuVendor, hasValue := pod.Annotations[constants.GpuVendorAnnotation]
