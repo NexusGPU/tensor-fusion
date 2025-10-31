@@ -1063,6 +1063,9 @@ func syncGPUMetadataAndStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
 	old.Status.NodeSelector = gpu.Status.NodeSelector
 	old.Status.GPUModel = gpu.Status.GPUModel
 	old.Status.UsedBy = gpu.Status.UsedBy
+	old.Status.Vendor = gpu.Status.Vendor
+	old.Status.NUMANode = gpu.Status.NUMANode
+	old.Status.Index = gpu.Status.Index
 }
 
 func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {

@@ -65,7 +65,9 @@ spec:
           metadata:
             type: object
           status:
-            description: GPUStatus defines the observed state of GPU.
+            description: |-
+              GPUStatus defines the observed state of GPU.
+              NOTE: When new fields added, remember to update syncGPUMetadataAndStatusFromCluster
             properties:
               available:
                 properties:

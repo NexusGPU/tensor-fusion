@@ -22,6 +22,7 @@ import (
 )
 
 // GPUStatus defines the observed state of GPU.
+// NOTE: When new fields added, remember to update syncGPUMetadataAndStatusFromCluster
 type GPUStatus struct {
 	// +kubebuilder:default=Pending
 	Phase TensorFusionGPUPhase `json:"phase"`
