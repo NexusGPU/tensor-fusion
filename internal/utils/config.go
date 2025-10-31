@@ -4,6 +4,7 @@ import (
 	context "context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -128,23 +129,20 @@ func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
 		vramKey = constants.VRAMLimitAnnotation
 		computePercentKey = constants.ComputeLimitAnnotation
 	}
-	tflops, err := resource.ParseQuantity(pod.Annotations[tflopsKey])
-	if err != nil {
-		return tfv1.Resource{}, err
-	}
-	vram, err := resource.ParseQuantity(pod.Annotations[vramKey])
-	if err != nil {
-		return tfv1.Resource{}, err
+
+	tflops, tflopsErr := resource.ParseQuantity(pod.Annotations[tflopsKey])
+	computePercent, percentErr := resource.ParseQuantity(pod.Annotations[computePercentKey])
+	if tflopsErr == nil && percentErr == nil {
+		return tfv1.Resource{}, fmt.Errorf("tflops and compute-percent are mutually exclusive, please specify only one")
+	} else if tflopsErr != nil && percentErr != nil {
+		return tfv1.Resource{}, fmt.Errorf("failed to parse tflops or compute-percent, must specify one: %w", tflopsErr)
 	}
 
-	// TFLOPs and compute percent are mutually exclusive, if TFLOPs is set, compute percent will be ignored
-	computePercent := resource.Quantity{}
-	if tflops.IsZero() {
-		computePercent, err = resource.ParseQuantity(pod.Annotations[computePercentKey])
-		if err != nil {
-			return tfv1.Resource{}, err
-		}
+	vram, vramErr := resource.ParseQuantity(pod.Annotations[vramKey])
+	if vramErr != nil {
+		return tfv1.Resource{}, vramErr
 	}
+
 	return tfv1.Resource{
 		Tflops:         tflops,
 		Vram:           vram,
