@@ -246,9 +246,6 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 	if !workloadProfile.Spec.Resources.Requests.Tflops.IsZero() && !workloadProfile.Spec.Resources.Requests.ComputePercent.IsZero() {
 		return fmt.Errorf("tflops- and computePercent request are mutually exclusive, please specify only one")
 	}
-	if !workloadProfile.Spec.Resources.Limits.Tflops.IsZero() && !workloadProfile.Spec.Resources.Limits.ComputePercent.IsZero() {
-		return fmt.Errorf("tflops- and computePercent limit are mutually exclusive, please specify only one")
-	}
 
 	qosLevel, hasValue := pod.Annotations[constants.QoSLevelAnnotation]
 	if hasValue {

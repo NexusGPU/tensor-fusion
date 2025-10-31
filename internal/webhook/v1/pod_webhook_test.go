@@ -45,6 +45,7 @@ func isAddOperation(patch jsonpatch.JsonPatchOperation) bool {
 	return patch.Operation == "add"
 }
 
+// nolint:goconst
 var _ = Describe("TensorFusionPodMutator", func() {
 	var (
 		mutator *TensorFusionPodMutator
@@ -351,6 +352,60 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			})
 			Expect(found).To(BeTrue())
 			Expect(op.Value).To(Equal("16Gi"))
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1gpu-count"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("3"))
+		})
+
+		It("should handle gpu resource limits with only one label", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod-local-gpu",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.GpuPoolKey: "mock",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main",
+							Image: "test-image",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceName(constants.NvidiaGPUKey): resource.MustParse("3"),
+								},
+							},
+						},
+					},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+
+			op, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1compute-percent-request"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("100"))
 			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
 				return isAddOperation(patch) &&
 					patch.Path == "/metadata/annotations/tensor-fusion.ai~1gpu-count"
