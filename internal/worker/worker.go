@@ -43,15 +43,18 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 
 	// Merge workload.Spec.WorkerPodTemplate into podTmpl.Template if provided
 	if workload.Spec.WorkerPodTemplate != nil {
-		err = mergePodTemplateSpec(&podTmpl.Template, workload.Spec.WorkerPodTemplate)
-		if err != nil {
+		override := &v1.PodTemplateSpec{}
+		if err := json.Unmarshal(workload.Spec.WorkerPodTemplate.Raw, override); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal worker pod template override: %w", err)
+		}
+		if err := mergePodTemplateSpec(&podTmpl.Template, override); err != nil {
 			return nil, fmt.Errorf("failed to merge worker pod template: %w", err)
 		}
 	}
 
 	spec := podTmpl.Template.Spec
 
-	containerName := utils.AddWorkerConfAfterTemplate(ctx, &spec, wg.WorkerConfig, wg.HypervisorConfig, workload)
+	containerName := utils.AddWorkerConfAfterTemplate(ctx, &spec, &workload.Spec, wg.WorkerConfig, wg.HypervisorConfig, workload)
 
 	// performance optimization, service link will cause high CPU usage when service number is large
 	spec.EnableServiceLinks = ptr.To(false)

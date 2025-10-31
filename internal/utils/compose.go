@@ -13,6 +13,7 @@ import (
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 )
@@ -75,16 +76,12 @@ var featureShortcutMap = map[string]struct {
 }
 
 type TensorFusionInfo struct {
-	Profile         *tfv1.WorkloadProfileSpec
-	DynamicReplicas bool
-	EnabledReplicas *int32
-	WorkloadName    string
-	ContainerNames  []string
-	GenWorkload     bool
-
-	// Pod mutating webhook can not get Pod UID sometimes,
-	// thus need pod controller to set the owner reference
-	PendingSetPodAsOwner bool
+	Profile          *tfv1.WorkloadProfileSpec
+	DynamicReplicas  bool
+	EnabledReplicas  *int32
+	WorkloadName     string
+	PodControllerRef *metav1.OwnerReference
+	ContainerNames   []string
 }
 
 func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo TensorFusionInfo) {
@@ -111,6 +108,13 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	}
 	pod.Annotations[constants.TFLOPSRequestAnnotation] = tfInfo.Profile.Resources.Requests.Tflops.String()
 	pod.Annotations[constants.VRAMRequestAnnotation] = tfInfo.Profile.Resources.Requests.Vram.String()
+
+	if !tfInfo.Profile.Resources.Requests.ComputePercent.IsZero() {
+		pod.Annotations[constants.ComputeRequestAnnotation] = tfInfo.Profile.Resources.Requests.ComputePercent.String()
+	}
+	if !tfInfo.Profile.Resources.Limits.ComputePercent.IsZero() {
+		pod.Annotations[constants.ComputeLimitAnnotation] = tfInfo.Profile.Resources.Limits.ComputePercent.String()
+	}
 	pod.Annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", tfInfo.Profile.GPUCount)
 	pod.Annotations[constants.GpuPoolKey] = tfInfo.Profile.PoolName
 	if tfInfo.Profile.GPUModel != "" {
@@ -120,6 +124,7 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	pod.Annotations[constants.SidecarWorkerAnnotation] = strconv.FormatBool(tfInfo.Profile.SidecarWorker)
 	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
+	pod.Annotations[constants.ComputingIsolationModeAnnotation] = string(tfInfo.Profile.ComputeIsolation)
 }
 
 func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
@@ -138,10 +143,24 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 		annotations = map[string]string{}
 	}
 	res := workload.Spec.Resources
-	annotations[constants.TFLOPSLimitAnnotation] = res.Limits.Tflops.String()
+
+	// TFLOPs and compute percent are mutually exclusive, if TFLOPs is set, compute percent will be ignored
+	if !res.Limits.Tflops.IsZero() {
+		annotations[constants.TFLOPSLimitAnnotation] = res.Limits.Tflops.String()
+	}
+	if !res.Requests.Tflops.IsZero() {
+		annotations[constants.TFLOPSRequestAnnotation] = res.Requests.Tflops.String()
+	}
+	if !res.Requests.ComputePercent.IsZero() {
+		annotations[constants.ComputeRequestAnnotation] = res.Requests.ComputePercent.String()
+	}
+	if !res.Limits.ComputePercent.IsZero() {
+		annotations[constants.ComputeLimitAnnotation] = res.Limits.ComputePercent.String()
+	}
+
 	annotations[constants.VRAMLimitAnnotation] = res.Limits.Vram.String()
-	annotations[constants.TFLOPSRequestAnnotation] = res.Requests.Tflops.String()
 	annotations[constants.VRAMRequestAnnotation] = res.Requests.Vram.String()
+
 	annotations[constants.InjectContainerAnnotation] = containerName
 	if workload.Spec.Qos == "" {
 		annotations[constants.QoSLevelAnnotation] = string(tfv1.QoSMedium)
@@ -157,6 +176,14 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 	annotations[constants.GpuPoolKey] = workload.Spec.PoolName
 	if workload.Spec.GPUModel != "" {
 		annotations[constants.GPUModelAnnotation] = workload.Spec.GPUModel
+	}
+	if workload.Spec.GPUVendor != "" {
+		annotations[constants.GpuVendorAnnotation] = workload.Spec.GPUVendor
+	}
+	if len(workload.Spec.GPUIndices) > 0 {
+		annotations[constants.GpuIndicesAnnotation] = strings.Join(lo.Map(workload.Spec.GPUIndices, func(index int32, _ int) string {
+			return strconv.Itoa(int(index))
+		}), ",")
 	}
 	return labels, annotations
 }
@@ -181,6 +208,10 @@ func AddTFDefaultClientConfBeforePatch(
 				Name:      constants.TFLibsVolumeName,
 				MountPath: constants.TFLibsVolumeMountPath,
 			},
+			{
+				Name:      constants.TFConfVolumeName,
+				MountPath: constants.TFConfVolumeMountPath,
+			},
 		},
 		Resources: v1.ResourceRequirements{
 			Requests: injectLibResource,
@@ -194,10 +225,19 @@ func AddTFDefaultClientConfBeforePatch(
 			EmptyDir: &v1.EmptyDirVolumeSource{},
 		},
 	})
+	pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+		Name: constants.TFConfVolumeName,
+		VolumeSource: v1.VolumeSource{
+			EmptyDir: &v1.EmptyDirVolumeSource{},
+		},
+	})
 
 	for _, injectContainerIndex := range injectContainerIndices {
 		pod.Spec.Containers[injectContainerIndex].Env = append(pod.Spec.Containers[injectContainerIndex].Env, v1.EnvVar{
 			Name:  constants.PrependPathEnv,
+			Value: constants.TFLibsVolumeMountPath,
+		}, v1.EnvVar{
+			Name:  constants.PrependLibPathEnv,
 			Value: constants.TFLibsVolumeMountPath,
 		})
 
@@ -205,12 +245,12 @@ func AddTFDefaultClientConfBeforePatch(
 		pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 			pod.Spec.Containers[injectContainerIndex].VolumeMounts,
 			v1.VolumeMount{
-				Name:      constants.TFLibsVolumeName,
+				Name:      constants.TFConfVolumeName,
 				MountPath: constants.LdPreloadFile,
 				SubPath:   constants.LdPreloadFileName,
 				ReadOnly:  true,
 			}, v1.VolumeMount{
-				Name:      constants.TFLibsVolumeName,
+				Name:      constants.TFConfVolumeName,
 				MountPath: constants.LdLibraryPathFile,
 				SubPath:   constants.LdLibraryPathFileName,
 				ReadOnly:  true,
@@ -255,7 +295,7 @@ func AddTFDefaultClientConfBeforePatch(
 			})
 
 			lastContainer := &pod.Spec.Containers[len(pod.Spec.Containers)-1]
-			SetWorkerContainerSpec(lastContainer,
+			SetWorkerContainerSpec(lastContainer, tfInfo.Profile,
 				pool.Spec.ComponentConfig.Worker, pool.Spec.ComponentConfig.Hypervisor,
 				pod.Annotations[constants.DisableFeaturesAnnotation], true)
 		}
@@ -341,10 +381,14 @@ func AddTFDefaultClientConfBeforePatch(
 			}, v1.EnvVar{
 				Name:  constants.HypervisorPortEnv,
 				Value: strconv.Itoa(int(getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor))),
-			}, v1.EnvVar{
-				Name:  constants.NGPUPathEnv,
-				Value: constants.NGPUPathValue,
 			})
+
+			if IsLicensed() {
+				envList = append(envList, v1.EnvVar{
+					Name:  constants.NGPUPathEnv,
+					Value: constants.NGPUPathValue,
+				})
+			}
 
 			// disable GPU limiter killer switch
 			if pod.Annotations[constants.DisableFeaturesAnnotation] != "" {
@@ -739,6 +783,7 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 // SetWorkerContainerSpec configures the worker container with required settings
 func SetWorkerContainerSpec(
 	container *v1.Container,
+	workloadProfile *tfv1.WorkloadProfileSpec,
 	workerConfig *tfv1.WorkerConfig,
 	hypervisorConfig *tfv1.HypervisorConfig,
 	disabledFeatures string,
@@ -782,8 +827,8 @@ func SetWorkerContainerSpec(
 		Name:  constants.ContainerNameEnv,
 		Value: constants.TFContainerNameWorker,
 	}, v1.EnvVar{
-		Name:  constants.LdPreloadEnv,
-		Value: constants.LdPreloadLimiter,
+		Name:  constants.EnableWorkerLogEnv,
+		Value: constants.EnableWorkerLogValue,
 	}, v1.EnvVar{
 		Name: constants.PodNamespaceEnv,
 		ValueFrom: &v1.EnvVarSource{
@@ -793,8 +838,29 @@ func SetWorkerContainerSpec(
 		},
 	})
 
+	if !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) &&
+		workloadProfile.ComputeIsolation != constants.ComputingIsolationModeHard {
+		container.Env = append(container.Env, v1.EnvVar{
+			Name:  constants.LdPreloadEnv,
+			Value: constants.LdPreloadLimiter,
+		})
+	}
+
 	if disabledFeatures != "" {
 		container.Env = convertDisabledFeaturesToEnvs(disabledFeatures, container.Env)
+	}
+
+	// TODO should calculate and set by hypervisor before container created
+	// when compute isolation mode is hard-isolation, memory limit also change to hard-mode
+	// open source vgpu.rs memory limiter is feedback-loop based, potentially cause resource contention
+	if workloadProfile.ComputeIsolation == constants.ComputingIsolationModeHard {
+		container.Env = append(container.Env, v1.EnvVar{
+			Name:  constants.HardSMLimiterEnv,
+			Value: workloadProfile.Resources.Limits.ComputePercent.String(),
+		}, v1.EnvVar{
+			Name:  constants.HardMemLimiterEnv,
+			Value: strconv.FormatInt(workloadProfile.Resources.Limits.Vram.Value()/(1024*1024), 10),
+		})
 	}
 
 	// TODO support hostNetwork mode and InfiniBand for higher performance
@@ -837,13 +903,13 @@ func SetWorkerContainerSpec(
 }
 
 func AddWorkerConfAfterTemplate(
-	ctx context.Context, spec *v1.PodSpec, workerConfig *tfv1.WorkerConfig,
+	ctx context.Context, spec *v1.PodSpec, workloadProfile *tfv1.WorkloadProfileSpec, workerConfig *tfv1.WorkerConfig,
 	hypervisorConfig *tfv1.HypervisorConfig, workload *tfv1.TensorFusionWorkload,
 ) string {
 	disabledFeatures := workload.Annotations[constants.DisableFeaturesAnnotation]
 
 	// Configure worker container
-	SetWorkerContainerSpec(&spec.Containers[0], workerConfig, hypervisorConfig, disabledFeatures, false)
+	SetWorkerContainerSpec(&spec.Containers[0], workloadProfile, workerConfig, hypervisorConfig, disabledFeatures, false)
 
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{

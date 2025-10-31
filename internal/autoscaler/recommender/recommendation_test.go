@@ -43,7 +43,7 @@ var _ = Describe("Recommender", func() {
 			},
 		}
 
-		final := getResourcesFromRecResults(recs)
+		final := recommenderToRecResult(recs).generateRecommendation()
 		Expect(final.Equal(&tfv1.Resources{
 			Requests: tfv1.Resource{
 				Tflops: resource.MustParse("10"),
@@ -88,7 +88,7 @@ var _ = Describe("Recommender", func() {
 			},
 		}
 
-		Expect(getResourcesFromRecResults(recs)).To(BeNil())
+		Expect(recommenderToRecResult(recs).generateRecommendation()).To(BeNil())
 	})
 
 	It("should return recommendation that replaced with the current maximum allowable GPU resource", func() {

@@ -178,11 +178,11 @@ func (s *GpuAllocator) Filter(
 	isSimulateSchedule bool,
 ) ([]*tfv1.GPU, []filter.FilterDetail, error) {
 	// Add SameNodeFilter if count > 1 to ensure GPUs are from the same node
-	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request))
+	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request, req.GPUIndices))
 
 	// Add GPU model filter if specified
 	if req.GPUModel != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
+		filterRegistry = filterRegistry.With(filter.NewGPUModelAndVendorFilter(req.GPUModel, req.GPUVendor))
 	}
 
 	// NOTE: deprecated, use Kubernetes native spec template affinity way
@@ -222,10 +222,10 @@ func (s *GpuAllocator) FilterWithPreempt(
 		}
 	}
 
-	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request))
+	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request, req.GPUIndices))
 	// Add GPU model filter if specified
 	if req.GPUModel != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
+		filterRegistry = filterRegistry.With(filter.NewGPUModelAndVendorFilter(req.GPUModel, req.GPUVendor))
 	}
 	// No need to check count and other filters since it's always in the same node during each preempt trial
 	filteredGPUs, filterDetails, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs, false)
@@ -311,7 +311,13 @@ func (s *GpuAllocator) Bind(
 		}
 
 		// reduce available resource on the GPU status
-		gpu.Status.Available.Tflops.Sub(req.Request.Tflops)
+
+		if !req.Request.ComputePercent.IsZero() {
+			requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
+			gpu.Status.Available.Tflops.Sub(*requiredTflops)
+		} else {
+			gpu.Status.Available.Tflops.Sub(req.Request.Tflops)
+		}
 		gpu.Status.Available.Vram.Sub(req.Request.Vram)
 
 		addRunningApp(s.ctx, gpu, req.WorkloadNameNamespace)
@@ -374,6 +380,9 @@ func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 
 func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocRequest, isSimulateSchedule bool) ([]*tfv1.GPU, []filter.FilterDetail, error) {
 	<-s.initializedCh
+
+	// TODO not support compute percent quota check yet, percent is related to GPU capacity, will bypass all quota check
+	// Using Percent to configure GPU computing request is NOT Recommended way, should offer a toggle to enable/disable it
 	if err := s.quotaStore.CheckQuotaAvailable(req); err != nil {
 		return nil, nil, err
 	}
@@ -479,7 +488,12 @@ func (s *GpuAllocator) Dealloc(
 		}
 
 		// Add resources back to the GPU
-		storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+		if !request.Request.ComputePercent.IsZero() {
+			requiredTflops := utils.ComputePercentToTflops(storeGPU.Status.Capacity.Tflops, request.Request)
+			storeGPU.Status.Available.Tflops.Add(*requiredTflops)
+		} else {
+			storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+		}
 		storeGPU.Status.Available.Vram.Add(request.Request.Vram)
 
 		if nodeName == "" {
@@ -1448,13 +1462,23 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 		qosLevel = tfv1.QoSMedium
 	}
 
+	gpuVendor := pod.Annotations[constants.GpuVendorAnnotation]
+
+	gpuIndices, hasError := utils.ParseIndicesAnnotation(pod.Annotations[constants.GpuIndicesAnnotation])
+	if hasError {
+		return &tfv1.AllocRequest{}, "invalid gpu-indices annotation",
+			fmt.Errorf("can not parse gpu indices annotation")
+	}
+
 	allocRequest := tfv1.AllocRequest{
 		PoolName: pod.Annotations[constants.GpuPoolKey],
 		Request:  gpuRequestResource,
 		Limit:    gpuLimitResource,
 
-		Count:    uint(count),
-		GPUModel: pod.Annotations[constants.GPUModelAnnotation],
+		Count:      uint(count),
+		GPUModel:   pod.Annotations[constants.GPUModelAnnotation],
+		GPUIndices: gpuIndices,
+		GPUVendor:  gpuVendor,
 		WorkloadNameNamespace: tfv1.NameNamespace{
 			Name:      pod.Labels[constants.WorkloadKey],
 			Namespace: pod.Namespace,

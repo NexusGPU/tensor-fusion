@@ -29,6 +29,10 @@ import (
 
 // GPUPoolSpec defines the desired state of GPUPool.
 type GPUPoolSpec struct {
+
+	// +optional
+	DefaultUsingLocalGPU *bool `json:"defaultUsingLocalGPU,omitempty"`
+
 	CapacityConfig *CapacityConfig `json:"capacityConfig,omitempty"`
 
 	NodeManagerConfig *NodeManagerConfig `json:"nodeManagerConfig,omitempty"`

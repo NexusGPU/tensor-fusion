@@ -85,7 +85,7 @@ func TestGPUModelFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filter := NewGPUModelFilter(tt.requiredModel)
+			filter := NewGPUModelAndVendorFilter(tt.requiredModel, "")
 			got, err := filter.Filter(context.Background(), testPodKey, tt.gpus)
 			if tt.wantErr {
 				assert.Error(t, err)

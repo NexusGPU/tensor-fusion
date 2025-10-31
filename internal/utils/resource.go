@@ -2,10 +2,16 @@ package utils
 
 import (
 	"fmt"
+	"math"
+	"slices"
+	"strconv"
+	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 func GPUResourcesFromAnnotations(annotations map[string]string) (*tfv1.Resources, error) {
@@ -42,4 +48,28 @@ func GPUResourcesToAnnotations(resources *tfv1.Resources) map[string]string {
 		constants.VRAMRequestAnnotation:   resources.Requests.Vram.String(),
 		constants.VRAMLimitAnnotation:     resources.Limits.Vram.String(),
 	}
+}
+
+func ComputePercentToTflops(gpuCapacity resource.Quantity, gpuResRequest tfv1.Resource) *resource.Quantity {
+	requiredTflops := gpuResRequest.ComputePercent.AsApproximateFloat64() * gpuCapacity.AsApproximateFloat64() / 100
+	return resource.NewQuantity(int64(requiredTflops), resource.DecimalSI)
+}
+
+func ParseIndicesAnnotation(gpuIndicesStr string) ([]int32, bool) {
+	if gpuIndicesStr == "" {
+		return nil, false
+	}
+	gpuIndices := lo.Map(slices.Collect(strings.SplitSeq(gpuIndicesStr, ",")), func(index string, _ int) int32 {
+		indexInt, err := strconv.Atoi(strings.TrimSpace(index))
+		if err != nil {
+			ctrl.Log.Error(err, "Invalid GPU index annotation", "index", index)
+			return 0
+		}
+		if indexInt < math.MinInt32 || indexInt > math.MaxInt32 {
+			ctrl.Log.Error(fmt.Errorf("out of range int32"), "Invalid GPU index range", "index", indexInt)
+			return 0
+		}
+		return int32(indexInt)
+	})
+	return gpuIndices, false
 }

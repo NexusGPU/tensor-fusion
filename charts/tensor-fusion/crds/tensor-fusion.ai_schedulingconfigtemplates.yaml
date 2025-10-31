@@ -145,6 +145,14 @@ spec:
                           properties:
                             limits:
                               properties:
+                                compute:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: 0-100 percentage, mutually exclusive
+                                    with TFLOPs
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
                                 tflops:
                                   anyOf:
                                   - type: integer
@@ -163,6 +171,14 @@ spec:
                               type: object
                             requests:
                               properties:
+                                compute:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: 0-100 percentage, mutually exclusive
+                                    with TFLOPs
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
                                 tflops:
                                   anyOf:
                                   - type: integer
@@ -240,19 +256,69 @@ spec:
                             type: string
                         type: object
                     type: object
-                  multiProcessQueuing:
+                  elasticRateLimitParameters:
                     description: |-
                       Hypervisor will move low priority jobs to pending queue if GPU is full
                       This config can adjust hypervisor's queueing behavior to balance the co-scheduling CUDA calls
                     properties:
-                      enable:
-                        type: boolean
-                      interval:
+                      burstWindow:
+                        description: Burst window to control token bucket Min/Max
+                          (currentCapacity = burstWindow x currentRefillRate)
                         type: string
-                      queueLevelTimeSlices:
-                        items:
-                          type: string
-                        type: array
+                      capacityMax:
+                        type: string
+                      capacityMin:
+                        description: token bucket min and max
+                        type: string
+                      filterAlpha:
+                        description: Filter ineffective requests from rate limit,
+                          0.0 to 1.0
+                        type: string
+                      kd:
+                        type: string
+                      ki:
+                        description: PID controller parameters
+                        type: string
+                      kp:
+                        type: string
+                      maxRefillRate:
+                        description: Refill rate is controlled by PID controller,
+                          adjusted by current utilization
+                        type: string
+                      minRefillRate:
+                        type: string
+                    type: object
+                  multiProcessQueuingParameters:
+                    description: For differentiate QoS levels, ensure critical and
+                      high QoS workloads on same GPU card getting more computing resources
+                    properties:
+                      coefficientHigh:
+                        type: string
+                      coefficientLow:
+                        description: Coefficient for scale down when resource contention
+                          happens
+                        type: string
+                      coefficientMedium:
+                        type: string
+                      computingThresholdForPreempt:
+                        description: Condition for triggering scale down when usage
+                          is above ComputingThresholdForPreempt
+                        type: string
+                      computingThresholdForResume:
+                        description: Condition for triggering scale up when usage
+                          is below ComputingThresholdForResume
+                        type: string
+                      slowStartRatio:
+                        description: |-
+                          When avg utilization < ComputingThresholdForResume and last for more than TriggerResumeDuration
+                          Use following formula to scale up:
+                          Case #1 If all process has same QoS level, and cur_limit <= limit, fast resume to limit
+                          Case #2 Else, Max(limit, Min(cur_limit * 1/CoEfficient * SlowStartRatio, cur_limit * 1.2))
+                        type: string
+                      triggerPreemptDuration:
+                        type: string
+                      triggerResumeDuration:
+                        type: string
                     type: object
                 type: object
               placement:

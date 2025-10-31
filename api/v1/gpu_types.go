@@ -26,10 +26,23 @@ type GPUStatus struct {
 	// +kubebuilder:default=Pending
 	Phase TensorFusionGPUPhase `json:"phase"`
 
+	// +kubebuilder:default="NVIDIA"
+	Vendor string `json:"vendor"`
+
+	// +optional
+	Model string `json:"model,omitempty"`
+
 	Capacity  *Resource `json:"capacity"`
 	Available *Resource `json:"available"`
 
 	UUID string `json:"uuid"`
+
+	// +optional
+	Index *int32 `json:"index,omitempty"`
+
+	// When it's -1, it means the GPU is not assigned to any NUMA node
+	// +optional
+	NUMANode *int32 `json:"numaNode,omitempty"`
 
 	// The host match selector to schedule worker pods
 	NodeSelector map[string]string `json:"nodeSelector"`

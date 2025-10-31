@@ -4,6 +4,7 @@ import (
 	context "context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -11,7 +12,6 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	constants "github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/lithammer/shortuuid/v4"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -123,21 +123,30 @@ func GetEnvOrDefault(key, defaultValue string) string {
 func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
 	tflopsKey := constants.TFLOPSRequestAnnotation
 	vramKey := constants.VRAMRequestAnnotation
+	computePercentKey := constants.ComputeRequestAnnotation
 	if !isRequest {
 		tflopsKey = constants.TFLOPSLimitAnnotation
 		vramKey = constants.VRAMLimitAnnotation
+		computePercentKey = constants.ComputeLimitAnnotation
 	}
-	tflops, err := resource.ParseQuantity(pod.Annotations[tflopsKey])
-	if err != nil {
-		return tfv1.Resource{}, err
+
+	tflops, tflopsErr := resource.ParseQuantity(pod.Annotations[tflopsKey])
+	computePercent, percentErr := resource.ParseQuantity(pod.Annotations[computePercentKey])
+	if tflopsErr == nil && percentErr == nil {
+		return tfv1.Resource{}, fmt.Errorf("tflops and compute-percent are mutually exclusive, please specify only one")
+	} else if tflopsErr != nil && percentErr != nil {
+		return tfv1.Resource{}, fmt.Errorf("failed to parse tflops or compute-percent, must specify one: %w", tflopsErr)
 	}
-	vram, err := resource.ParseQuantity(pod.Annotations[vramKey])
-	if err != nil {
-		return tfv1.Resource{}, err
+
+	vram, vramErr := resource.ParseQuantity(pod.Annotations[vramKey])
+	if vramErr != nil {
+		return tfv1.Resource{}, vramErr
 	}
+
 	return tfv1.Resource{
-		Tflops: tflops,
-		Vram:   vram,
+		Tflops:         tflops,
+		Vram:           vram,
+		ComputePercent: computePercent,
 	}, nil
 }
 
@@ -166,7 +175,19 @@ func GetSelfServiceAccountNameShort() string {
 	return parts[len(parts)-1]
 }
 
-var nvidiaOperatorProgressiveMigrationEnv = os.Getenv(constants.NvidiaOperatorProgressiveMigrationEnv) == "true"
+var nvidiaOperatorProgressiveMigrationEnv = os.Getenv(constants.NvidiaOperatorProgressiveMigrationEnv) == constants.TrueStringValue
+
+var isLicensedEnv = os.Getenv(constants.UsingCommercialComponentEnv) == constants.TrueStringValue
+
+func init() {
+	if isLicensedEnv {
+		ctrl.Log.Info("Enabling none open source components, please make sure you are in trial stage or have bought commercial license. Contact us: support@tensor-fusion.com")
+	}
+}
+
+func IsLicensed() bool {
+	return isLicensedEnv
+}
 
 func IsProgressiveMigration() bool {
 	return nvidiaOperatorProgressiveMigrationEnv

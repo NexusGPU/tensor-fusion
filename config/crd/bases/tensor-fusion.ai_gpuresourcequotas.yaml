@@ -62,6 +62,13 @@ spec:
                     description: Default requests applied to workloads without explicit
                       requests
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -82,6 +89,13 @@ spec:
                     description: Default limits applied to workloads without explicit
                       limits
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -103,6 +117,13 @@ spec:
                     type: integer
                   maxLimits:
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -122,6 +143,13 @@ spec:
                   maxRequests:
                     description: Maximum resources per workload
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -154,6 +182,13 @@ spec:
                   limits:
                     description: Total limits for the namespace
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -178,6 +213,13 @@ spec:
                   requests:
                     description: Total requests limits for the namespace
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -281,6 +323,13 @@ spec:
                   limits:
                     description: Current limits usage
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer
@@ -300,6 +349,13 @@ spec:
                   requests:
                     description: Current requests usage
                     properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       tflops:
                         anyOf:
                         - type: integer

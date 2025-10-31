@@ -19,6 +19,7 @@ package v1
 import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:validation:Enum=low;medium;high;critical
@@ -58,11 +59,22 @@ type WorkloadProfileSpec struct {
 	SidecarWorker bool `json:"sidecarWorker,omitempty"`
 
 	// +optional
+	// +kubebuilder:default=soft
+	// How to isolate computing resources, could be `shared` or `soft` or `hard`
+	ComputeIsolation ComputingIsolationMode `json:"computeIsolation,omitempty"`
+
+	// +optional
 	// GPUModel specifies the required GPU model (e.g., "A100", "H100")
 	GPUModel string `json:"gpuModel,omitempty"`
 
 	// The number of GPUs to be used by the workload, default to 1
 	GPUCount uint32 `json:"gpuCount,omitempty"`
+
+	// Specify GPU indices for precise control of scheduling
+	GPUIndices []int32 `json:"gpuIndices,omitempty"`
+
+	// Specify GPU vendor for precise control of scheduling
+	GPUVendor string `json:"vendor,omitempty"`
 
 	// +optional
 	// AutoScalingConfig configured here will override Pool's schedulingConfig
@@ -76,8 +88,17 @@ type WorkloadProfileSpec struct {
 
 	// +optional
 	// WorkerPodTemplate is the template for the worker pod, only take effect in remote vGPU mode
-	WorkerPodTemplate *v1.PodTemplateSpec `json:"workerPodTemplate,omitempty"`
+	WorkerPodTemplate *runtime.RawExtension `json:"workerPodTemplate,omitempty"`
 }
+
+// +kubebuilder:validation:Enum=shared;soft;hard
+type ComputingIsolationMode string
+
+const (
+	ComputingIsolationModeShared = "shared"
+	ComputingIsolationModeSoft   = "soft"
+	ComputingIsolationModeHard   = "hard"
+)
 
 func (t WorkloadProfileSpec) IsDynamicReplica() bool {
 	return t.Replicas == nil

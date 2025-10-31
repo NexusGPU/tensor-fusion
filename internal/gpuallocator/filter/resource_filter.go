@@ -2,20 +2,24 @@ package filter
 
 import (
 	"context"
+	"slices"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 )
 
 // ResourceFilter filters GPUs based on available resources
 type ResourceFilter struct {
 	requiredResource tfv1.Resource
+	requiredIndices  []int32
 }
 
 // NewResourceFilter creates a new ResourceFilter with the specified resource requirements
-func NewResourceFilter(required tfv1.Resource) *ResourceFilter {
+func NewResourceFilter(required tfv1.Resource, requiredIndices []int32) *ResourceFilter {
 	return &ResourceFilter{
 		requiredResource: required,
+		requiredIndices:  requiredIndices,
 	}
 }
 
@@ -27,8 +31,23 @@ func (f *ResourceFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNames
 			return false
 		}
 
-		// Check TFlops and VRAM availability
+		// Check GPU indices range
+		if len(f.requiredIndices) > 0 {
+			if gpu.Status.Index != nil && !slices.Contains(f.requiredIndices, *gpu.Status.Index) {
+				return false
+			}
+		}
+
+		// Check TFlops availability
 		hasTflops := gpu.Status.Available.Tflops.Cmp(f.requiredResource.Tflops) >= 0
+
+		// When using percent way, convert to TFLOPs and check dynamically
+		if !f.requiredResource.ComputePercent.IsZero() {
+			requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, f.requiredResource)
+			hasTflops = gpu.Status.Available.Tflops.Cmp(*requiredTflops) >= 0
+		}
+
+		// Check VRAM availability
 		hasVram := gpu.Status.Available.Vram.Cmp(f.requiredResource.Vram) >= 0
 
 		return hasTflops && hasVram

@@ -159,11 +159,16 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	// Step 4: Caused by insufficient GPU resources, try find node util it satisfies the pod
 	preScheduled := false
 	for _, gpuNode := range gpuNodes {
+		// when node is not owned by any known provisioner, skip check, util find a node can be expanded
+		if len(gpuNode.OwnerReferences) == 0 {
+			continue
+		}
 		preparedNode, preparedGPUs := e.prepareNewNodesForScheduleAttempt(gpuNode, nodeGPUs[gpuNode.Name])
 		if !e.checkGPUFitForNewNode(pod, preparedGPUs) {
 			continue
 		}
 
+		e.logger.Info("prepare new node for schedule attempt from existing node", "existingNode", gpuNode.Name, "newNode", preparedNode.Name)
 		err = e.createGPUNodeClaim(ctx, pod, preparedNode)
 		if err != nil {
 			return err
@@ -402,7 +407,7 @@ func (e *NodeExpander) createGPUNodeClaim(ctx context.Context, pod *corev1.Pod, 
 	}
 	if !isKarpenterNodeClaim && !isGPUNodeClaim {
 		e.logger.Info("node is not owned by any known provisioner, skip expansion", "node", preparedNode.Name)
-		return nil
+		return fmt.Errorf("node is not owned by any known provisioner, skip expansion")
 	}
 	e.logger.Info("start expanding node from existing template node", "tmplNode", preparedNode.Name)
 	if isKarpenterNodeClaim {

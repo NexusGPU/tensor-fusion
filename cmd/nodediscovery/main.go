@@ -44,6 +44,7 @@ func init() {
 	utilruntime.Must(tfv1.AddToScheme(Scheme))
 }
 
+// TODO: refactor this to support multiple GPU vendors using different xpu-ml/xpu-smi libs
 func main() {
 	var k8sNodeName string
 
@@ -146,6 +147,12 @@ func main() {
 			os.Exit(1)
 		}
 
+		numaNodeId, ret := device.GetNumaNodeId()
+		if ret != nvml.SUCCESS {
+			ctrl.Log.Info("unable to get NUMA node ID of device, will set to -1", "index", i, "msg", nvml.ErrorString(ret))
+			numaNodeId = -1
+		}
+
 		// Nvidia mobile series GPU chips are the same as desktop series GPU, but clock speed is lower
 		// so we can use desktop series GPU info to represent mobile series GPU, and set available TFlops with a multiplier
 		isLaptopGPU := strings.HasSuffix(deviceName, LAPTOP_GPU_SUFFIX)
@@ -173,7 +180,8 @@ func main() {
 		}
 		ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
 
-		gpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpunode, uuid, deviceName, memInfo, tflops)
+		gpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpunode, uuid,
+			deviceName, memInfo, tflops, int32(i), int32(numaNodeId))
 		if err != nil {
 			ctrl.Log.Error(err, "failed to create or update GPU", "uuid", uuid)
 			os.Exit(1)
@@ -182,6 +190,7 @@ func main() {
 		totalVRAM.Add(gpu.Status.Capacity.Vram)
 		availableTFlops.Add(gpu.Status.Available.Tflops)
 		availableVRAM.Add(gpu.Status.Available.Vram)
+
 	}
 
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -209,7 +218,8 @@ func patchGPUNodeStatus(k8sClient client.Client, ctx context.Context,
 
 func createOrUpdateTensorFusionGPU(
 	k8sClient client.Client, ctx context.Context, k8sNodeName string, gpunode *tfv1.GPUNode,
-	uuid string, deviceName string, memInfo nvml.Memory_v2, tflops resource.Quantity) (*tfv1.GPU, error) {
+	uuid string, deviceName string, memInfo nvml.Memory_v2, tflops resource.Quantity,
+	index int32, numaNodeId int32) (*tfv1.GPU, error) {
 	gpu := &tfv1.GPU{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: uuid,
@@ -276,6 +286,9 @@ func createOrUpdateTensorFusionGPU(
 		}
 		gpu.Status.UUID = uuid
 		gpu.Status.GPUModel = deviceName
+		gpu.Status.Index = ptr.To(index)
+		gpu.Status.Vendor = constants.AcceleratorVendorNvidia
+		gpu.Status.NUMANode = ptr.To(numaNodeId)
 		gpu.Status.NodeSelector = map[string]string{
 			constants.KubernetesHostNameLabel: k8sNodeName,
 		}

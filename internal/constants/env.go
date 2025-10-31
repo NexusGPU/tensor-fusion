@@ -16,6 +16,8 @@ const (
 
 	NvidiaOperatorProgressiveMigrationEnv = "NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION"
 	RunHypervisorUtilGPUAllocatable       = "RUN_HYPERVISOR_UTIL_GPU_ALLOCATABLE"
+
+	UsingCommercialComponentEnv = "COMMERCIAL_PLAN"
 )
 
 // General envs used in compose components manifest
@@ -71,7 +73,8 @@ const (
 	RealNvmlLibPathValue = "/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
 	RealCUDALibPathValue = "/lib/x86_64-linux-gnu/libcuda.so"
 
-	PrependPathEnv = "TF_PREPEND_PATH"
+	PrependPathEnv    = "TF_PREPEND_PATH"
+	PrependLibPathEnv = "TF_LD_LIBRARY_PATH"
 
 	RunInsideGPUEnv = "RUN_INSIDE_GPU_NODE"
 
@@ -82,7 +85,9 @@ const (
 	LdLibraryPathFile     = "/etc/ld.so.conf.d/zz_tensor-fusion.conf"
 
 	TFLibsVolumeName         = "tf-libs"
+	TFConfVolumeName         = "tf-conf-lib-paths"
 	TFLibsVolumeMountPath    = "/tensor-fusion"
+	TFConfVolumeMountPath    = "/tensor-fusion-conf"
 	TFConnectionNamePrefix   = "-tf-vgpu-"
 	TFConnectionNameNoPrefix = "tf-vgpu-"
 
@@ -100,6 +105,9 @@ const (
 	PodNamespaceEnv  = "POD_NAMESPACE"
 	ContainerNameEnv = "CONTAINER_NAME"
 
+	EnableWorkerLogEnv   = "TF_ENABLE_LOG"
+	EnableWorkerLogValue = "1"
+
 	// the path of nGPU lib for limiter to load
 	NGPUPathEnv   = "TENSOR_FUSION_NGPU_PATH"
 	NGPUPathValue = TFLibsVolumeMountPath + "/libcuda.so"
@@ -116,6 +124,12 @@ const (
 	// disable vram manager, for emergency use
 	DisableVRAMManagerEnv      = "TF_DISABLE_MEMORY_MANAGER"
 	DisableWorkerFeatureEnvVal = "1"
+
+	// hard limiter mode (not open sourced) in percent, only take effect on worker container yet
+	HardSMLimiterEnv = "TF_CUDA_SM_PERCENT_LIMIT"
+	// hard limiter (not open sourced) in megabytes, only take effect on worker container and when open source vgpu.rs gpu-limiter is disabled
+	// when use this mode, memory request can not autoscale dynamically
+	HardMemLimiterEnv = "TF_CUDA_MEMORY_LIMIT"
 
 	TensorFusionRemoteWorkerPortNumber = 8000
 	TensorFusionRemoteWorkerPortName   = "remote-vgpu"

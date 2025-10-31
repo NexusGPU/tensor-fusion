@@ -30,7 +30,12 @@ const (
 
 type Resource struct {
 	Tflops resource.Quantity `json:"tflops"`
-	Vram   resource.Quantity `json:"vram"`
+
+	// +optional
+	// 0-100 percentage, mutually exclusive with TFLOPs
+	ComputePercent resource.Quantity `json:"compute,omitempty"`
+
+	Vram resource.Quantity `json:"vram"`
 }
 
 type Resources struct {

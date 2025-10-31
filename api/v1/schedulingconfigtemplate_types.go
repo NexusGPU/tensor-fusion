@@ -251,16 +251,52 @@ type HypervisorScheduling struct {
 
 	// Hypervisor will move low priority jobs to pending queue if GPU is full
 	// This config can adjust hypervisor's queueing behavior to balance the co-scheduling CUDA calls
-	MultiProcessQueuing MultiProcessQueuing `json:"multiProcessQueuing,omitempty"`
+	ElasticRateLimitParameters ElasticRateLimitParameters `json:"elasticRateLimitParameters,omitempty"`
+
+	// +optional
+	// For differentiate QoS levels, ensure critical and high QoS workloads on same GPU card getting more computing resources
+	MultiProcessQueuingParameters MultiProcessQueuingParameters `json:"multiProcessQueuingParameters,omitempty"`
 }
 
-type MultiProcessQueuing struct {
-	// +optional
-	Enable *bool `json:"enable,omitempty"`
+type MultiProcessQueuingParameters struct {
+	// Condition for triggering scale down when usage is above ComputingThresholdForPreempt
+	ComputingThresholdForPreempt string `json:"computingThresholdForPreempt,omitempty"`
+	TriggerPreemptDuration       string `json:"triggerPreemptDuration,omitempty"`
 
-	Interval string `json:"interval,omitempty"`
+	// Condition for triggering scale up when usage is below ComputingThresholdForResume
+	ComputingThresholdForResume string `json:"computingThresholdForResume,omitempty"`
+	TriggerResumeDuration       string `json:"triggerResumeDuration,omitempty"`
 
-	QueueLevelTimeSlices []string `json:"queueLevelTimeSlices,omitempty"`
+	// Coefficient for scale down when resource contention happens
+	CoefficientLow    string `json:"coefficientLow,omitempty"`
+	CoefficientMedium string `json:"coefficientMedium,omitempty"`
+	CoefficientHigh   string `json:"coefficientHigh,omitempty"`
+
+	// When avg utilization < ComputingThresholdForResume and last for more than TriggerResumeDuration
+	// Use following formula to scale up:
+	// Case #1 If all process has same QoS level, and cur_limit <= limit, fast resume to limit
+	// Case #2 Else, Max(limit, Min(cur_limit * 1/CoEfficient * SlowStartRatio, cur_limit * 1.2))
+	SlowStartRatio string `json:"slowStartRatio,omitempty"`
+}
+
+type ElasticRateLimitParameters struct {
+	// Refill rate is controlled by PID controller, adjusted by current utilization
+	MaxRefillRate string `json:"maxRefillRate,omitempty"`
+	MinRefillRate string `json:"minRefillRate,omitempty"`
+
+	// Filter ineffective requests from rate limit, 0.0 to 1.0
+	FilterAlpha string `json:"filterAlpha,omitempty"`
+
+	// PID controller parameters
+	Ki string `json:"ki,omitempty"`
+	Kd string `json:"kd,omitempty"`
+	Kp string `json:"kp,omitempty"`
+
+	// Burst window to control token bucket Min/Max (currentCapacity = burstWindow x currentRefillRate)
+	BurstWindow string `json:"burstWindow,omitempty"`
+	// token bucket min and max
+	CapacityMin string `json:"capacityMin,omitempty"`
+	CapacityMax string `json:"capacityMax,omitempty"`
 }
 
 // SchedulingConfigTemplateStatus defines the observed state of SchedulingConfigTemplate.
