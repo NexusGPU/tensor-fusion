@@ -125,8 +125,9 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	if err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.Profile.PoolName}, pool); err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("gpu pool(%s) does not exist", tfInfo.Profile.PoolName))
 	}
+	tfInfo.Profile.Qos = calculateQoSLevel(tfInfo.Profile, pool)
 
-	if workload, err := m.createOrUpdateWorkload(ctx, pod, &tfInfo, pool); err != nil {
+	if workload, err := m.createOrUpdateWorkload(ctx, pod, &tfInfo); err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("create tf workload: %w", err))
 	} else {
 		// Pod mutating webhook can not get Pod UID,
@@ -159,13 +160,12 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	}
 
 	// Check if final profile is valid and contains valid GPU resource requests
-	if tfInfo.Profile.Resources.Limits.Tflops.IsZero() && tfInfo.Profile.Resources.Limits.ComputePercent.IsZero() {
+	if tfInfo.Profile.Resources.Requests.Tflops.IsZero() &&
+		tfInfo.Profile.Resources.Requests.ComputePercent.IsZero() &&
+		tfInfo.Profile.Resources.Requests.Vram.IsZero() {
 		return admission.Errored(http.StatusInternalServerError,
-			fmt.Errorf("tflops limit is not set, please set tensor-fusion.ai/tflops-limit or tensor-fusion.ai/compute-percent-limit annotation on Pod"))
-	}
-	if tfInfo.Profile.Resources.Limits.Vram.IsZero() {
-		return admission.Errored(http.StatusInternalServerError,
-			fmt.Errorf("vram limit is not set, please set tensor-fusion.ai/vram-limit annotation on Pod"))
+			fmt.Errorf("tflops request is not set, please set tensor-fusion.ai/tflops-request or/and tensor-fusion.ai/compute-percent-request"+
+				" or/and tensor-fusion.ai/vram-request annotation on Pod"))
 	}
 
 	// Add defaults and tensor-fusion injection logic
@@ -213,18 +213,9 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(
 	ctx context.Context,
 	pod *corev1.Pod,
 	tfInfo *utils.TensorFusionInfo,
-	pool *tfv1.GPUPool) (*tfv1.TensorFusionWorkload, error) {
+) (*tfv1.TensorFusionWorkload, error) {
 	// Create the desired spec for comparison
-	desiredSpec := tfv1.WorkloadProfileSpec{
-		Replicas:          nil,
-		PoolName:          tfInfo.Profile.PoolName,
-		Resources:         tfInfo.Profile.Resources,
-		Qos:               calculateQoSLevel(tfInfo.Profile, pool),
-		IsLocalGPU:        tfInfo.Profile.IsLocalGPU,
-		GPUCount:          tfInfo.Profile.GPUCount,
-		GPUModel:          tfInfo.Profile.GPUModel,
-		AutoScalingConfig: tfInfo.Profile.AutoScalingConfig,
-	}
+	desiredSpec := *tfInfo.Profile.DeepCopy()
 
 	workload := &tfv1.TensorFusionWorkload{}
 	err := m.Client.Get(ctx, client.ObjectKey{Name: tfInfo.WorkloadName, Namespace: pod.Namespace}, workload)

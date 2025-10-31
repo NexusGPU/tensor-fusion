@@ -99,26 +99,36 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	}
 
 	// add full annotations
-	pod.Annotations[constants.TFLOPSLimitAnnotation] = tfInfo.Profile.Resources.Limits.Tflops.String()
-	pod.Annotations[constants.VRAMLimitAnnotation] = tfInfo.Profile.Resources.Limits.Vram.String()
-	if tfInfo.Profile.Qos == "" {
-		pod.Annotations[constants.QoSLevelAnnotation] = string(tfv1.QoSMedium)
-	} else {
-		pod.Annotations[constants.QoSLevelAnnotation] = string(tfInfo.Profile.Qos)
+	if !tfInfo.Profile.Resources.Limits.Tflops.IsZero() {
+		pod.Annotations[constants.TFLOPSLimitAnnotation] = tfInfo.Profile.Resources.Limits.Tflops.String()
 	}
-	pod.Annotations[constants.TFLOPSRequestAnnotation] = tfInfo.Profile.Resources.Requests.Tflops.String()
-	pod.Annotations[constants.VRAMRequestAnnotation] = tfInfo.Profile.Resources.Requests.Vram.String()
-
+	if !tfInfo.Profile.Resources.Limits.Vram.IsZero() {
+		pod.Annotations[constants.VRAMLimitAnnotation] = tfInfo.Profile.Resources.Limits.Vram.String()
+	}
+	if !tfInfo.Profile.Resources.Requests.Tflops.IsZero() {
+		pod.Annotations[constants.TFLOPSRequestAnnotation] = tfInfo.Profile.Resources.Requests.Tflops.String()
+	}
+	if !tfInfo.Profile.Resources.Requests.Vram.IsZero() {
+		pod.Annotations[constants.VRAMRequestAnnotation] = tfInfo.Profile.Resources.Requests.Vram.String()
+	}
 	if !tfInfo.Profile.Resources.Requests.ComputePercent.IsZero() {
 		pod.Annotations[constants.ComputeRequestAnnotation] = tfInfo.Profile.Resources.Requests.ComputePercent.String()
 	}
 	if !tfInfo.Profile.Resources.Limits.ComputePercent.IsZero() {
 		pod.Annotations[constants.ComputeLimitAnnotation] = tfInfo.Profile.Resources.Limits.ComputePercent.String()
 	}
+	if tfInfo.Profile.Qos == "" {
+		pod.Annotations[constants.QoSLevelAnnotation] = string(tfv1.QoSMedium)
+	} else {
+		pod.Annotations[constants.QoSLevelAnnotation] = string(tfInfo.Profile.Qos)
+	}
 	pod.Annotations[constants.GpuCountAnnotation] = fmt.Sprintf("%d", tfInfo.Profile.GPUCount)
 	pod.Annotations[constants.GpuPoolKey] = tfInfo.Profile.PoolName
 	if tfInfo.Profile.GPUModel != "" {
 		pod.Annotations[constants.GPUModelAnnotation] = tfInfo.Profile.GPUModel
+	}
+	if tfInfo.Profile.GPUVendor != "" {
+		pod.Annotations[constants.GpuVendorAnnotation] = tfInfo.Profile.GPUVendor
 	}
 	pod.Annotations[constants.IsLocalGPUAnnotation] = strconv.FormatBool(tfInfo.Profile.IsLocalGPU)
 	pod.Annotations[constants.SidecarWorkerAnnotation] = strconv.FormatBool(tfInfo.Profile.SidecarWorker)
@@ -185,6 +195,7 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 			return strconv.Itoa(int(index))
 		}), ",")
 	}
+	annotations[constants.ComputingIsolationModeAnnotation] = string(workload.Spec.ComputeIsolation)
 	return labels, annotations
 }
 

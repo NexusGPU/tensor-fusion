@@ -1063,6 +1063,9 @@ func syncGPUMetadataAndStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
 	old.Status.NodeSelector = gpu.Status.NodeSelector
 	old.Status.GPUModel = gpu.Status.GPUModel
 	old.Status.UsedBy = gpu.Status.UsedBy
+	old.Status.Vendor = gpu.Status.Vendor
+	old.Status.NUMANode = gpu.Status.NUMANode
+	old.Status.Index = gpu.Status.Index
 }
 
 func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
@@ -1437,13 +1440,14 @@ func removeRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace 
 }
 
 func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest, string, error) {
+	// allow Pods with no requests/limits to use TensorFusion, Pod webhook will ensure at least one request/limit is set
 	gpuRequestResource, err := utils.GetGPUResource(pod, true)
 	if err != nil {
-		return &tfv1.AllocRequest{}, "invalid gpu request annotation", err
+		log.FromContext(s.ctx).Error(err, "Invalid gpu request annotation", "pod", pod.Name, "namespace", pod.Namespace)
 	}
 	gpuLimitResource, err := utils.GetGPUResource(pod, false)
 	if err != nil {
-		return &tfv1.AllocRequest{}, "invalid gpu limit annotation", err
+		log.FromContext(s.ctx).Error(err, "Invalid gpu limit annotation", "pod", pod.Name, "namespace", pod.Namespace)
 	}
 
 	count := 1
