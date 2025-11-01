@@ -50,13 +50,10 @@ var httpClient = &http.Client{Timeout: 10 * time.Second}
 func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator, pricingProvider pricing.PricingProvider) error {
 	webhookServer := mgr.GetWebhookServer()
 
-	// Initialize DRA processor
+	// Initialize DRA processor (configuration loaded lazily per-pod based on GPUPool)
 	draProcessor := NewDRAProcessor(mgr.GetClient())
-	if err := draProcessor.InitializeDRAConfig(context.Background()); err != nil {
-		return fmt.Errorf("failed to initialize DRA config: %w", err)
-	}
 
-	// Initialize DRA setting from global configuration
+	// Initialize mutator
 	mutator := &TensorFusionPodMutator{
 		decoder:       admission.NewDecoder(runtime.NewScheme()),
 		Client:        mgr.GetClient(),

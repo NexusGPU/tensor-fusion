@@ -66,81 +66,134 @@ spec:
 
 | 项目 | 要求 | 说明 |
 |------|------|------|
-| **Kubernetes 版本** | ≥ 1.34 | DRA v1beta2 API |
-| **Feature Gate** | `DynamicResourceAllocation=true` | 需在 kube-apiserver、kube-scheduler、kubelet 启用 |
+| **Kubernetes 版本** | ≥ 1.31 | DRA v1 API |
+| **Feature Gate** | 见下方详细说明 | 需在 kube-apiserver、kube-scheduler、kubelet 启用 |
 | **调度器** | 原生 kube-scheduler | 支持 DRA 资源调度 |
 
 #### 2.1.1 启用 Feature Gate
 
-在 Kubernetes 集群启动参数中添加：
+Tensor Fusion DRA 需要启用以下 Feature Gates：
 
-```bash
-# kube-apiserver
---feature-gates=DynamicResourceAllocation=true
+##### 核心 Feature Gates
 
-# kube-scheduler
---feature-gates=DynamicResourceAllocation=true
+| Feature Gate | 组件 | 状态 | 说明 |
+|-------------|------|------|------|
+| `DynamicResourceAllocation` | kube-apiserver<br>kube-scheduler<br>kubelet<br>kube-controller-manager | **必需** (Beta in 1.31+) | 启用 DRA 核心功能，支持 ResourceClaim、ResourceSlice 等 API |
 
-# kubelet
---feature-gates=DynamicResourceAllocation=true
+##### 可选 Feature Gates (推荐启用)
+
+| Feature Gate | 组件 | 状态 | 说明 |
+|-------------|------|------|------|
+| `DRAConsumableCapacity` | kube-apiserver<br>kube-scheduler<br>kube-controller-manager | **推荐** (Alpha in 1.34+) | 支持设备容量共享，允许多个 Pod 共享同一设备的容量资源 |
+| `DRADeviceTaints` | kube-apiserver<br>kube-scheduler<br>kube-controller-manager | **推荐** (Alpha in 1.34+) | 支持设备污点和容忍，允许标记设备为不可用并控制 Pod 调度和驱逐 |
+
+##### Feature Gate 详细说明
+
+**1. DRAConsumableCapacity (必需)**
+- **作用**：支持设备容量的细粒度共享
+  - 允许多个 ResourceClaim 或 DeviceRequest 共享同一设备或设备切片
+  - 调度器会确保分配的总容量不超过设备的总容量
+  - 类似于 Node 资源共享机制，但应用于设备级别
+- **版本**：Kubernetes 1.34+ (Alpha)
+- **使用场景**：
+  - GPU 虚拟化 (vGPU)
+  - 多个小型工作负载共享一个大型 GPU
+  - 资源超卖 (oversubscription)
+- **Tensor Fusion 支持**：完全支持，推荐启用以充分利用 GPU 资源
+
+**2. DRADeviceTaints (推荐)**
+- **作用**：为设备添加污点 (Taint) 和容忍 (Toleration) 机制
+  - 标记设备为不可用状态（例如硬件故障、维护中）
+  - 防止新 Pod 使用被污点标记的设备
+  - 支持 `NoSchedule` 和 `NoExecute` 效果
+  - `NoSchedule`：阻止新 Pod 调度到该设备
+  - `NoExecute`：驱逐正在使用该设备的 Pod
+- **版本**：Kubernetes 1.34+ (Alpha)
+- **使用场景**：
+  - GPU 硬件故障自动隔离
+  - 设备维护期间阻止新任务
+  - 根据设备健康状态自动驱逐 Pod
+- **Tensor Fusion 支持**：完全支持，推荐启用以提高系统可靠性
+
+##### 配置示例
+
+**K3s 配置** (`/etc/rancher/k3s/config.yaml`):
+```yaml
+kube-apiserver-arg:
+  - "feature-gates=DRAConsumableCapacity=true,DRADeviceTaints=true"
+kube-scheduler-arg:
+  - "feature-gates=DRAConsumableCapacity=true,DRADeviceTaints=true"
+kube-controller-manager-arg:
+  - "feature-gates=DRAConsumableCapacity=true,DRADeviceTaints=true"
 ```
 
-## 2. DRA 配置步骤
+**注意事项**：
+- `DynamicResourceAllocation` 在 Kubernetes 1.31+ 默认启用，但建议显式配置以确保兼容性
+- `DRAConsumableCapacity` 和 `DRADeviceTaints` 是 Alpha 功能，需要显式启用
+- 所有相关组件必须启用相同的 Feature Gates 才能正常工作
+- 修改 Feature Gates 后需要重启 Kubernetes 组件
 
-### 2.1 步骤 1: 创建 SchedulingConfigTemplate（全局配置）
+## 3. DRA 配置步骤
 
-创建文件 `scheduling-config.yaml`:
+### 3.1 步骤 1: 配置 GPUPool 启用 DRA
+
+创建或更新 GPUPool 配置文件 `gpupool.yaml`:
 
 ```yaml
 apiVersion: tensor-fusion.ai/v1
-kind: SchedulingConfigTemplate
+kind: GPUPool
 metadata:
-  name: default-scheduling-config
+  name: my-gpu-pool
 spec:
-  # 启用 DRA
-  dra:
+  # DRA 配置
+  draConfig:
     enable: true
     # 可选：指定 ResourceClaimTemplate 名称
     resourceClaimTemplateName: "tensor-fusion-gpu-template"
+
   # 其他配置
-  placement:
-    mode: CompactFirst
+  nodeManagerConfig:
+    provisioningMode: Provisioned
+    # ...
+  componentConfig:
+    # ...
 ```
 
 应用配置：
 ```bash
-kubectl apply -f scheduling-config.yaml
+kubectl apply -f gpupool.yaml
 ```
 
 **说明**:
-- `dra.enable: true` 为该配置模板启用 DRA
-- 所有使用此模板的 GPUPool 下的 Pod 将默认使用 DRA
+- `draConfig.enable: true` 为该 GPUPool 启用 DRA
+- 所有使用此 Pool 的 Pod 将默认使用 DRA 模式
 - `resourceClaimTemplateName` 默认为 `"tensor-fusion-gpu-template"`，通常无需修改
+- **重要**: DRA 配置是 Pool 级别的，不同的 Pool 可以有不同的 DRA 配置
 
 ### 3.2 步骤 2: 创建 ResourceClaimTemplate
 
 创建文件 `resourceclaim-template.yaml`:
 
 ```yaml
-apiVersion: resource.k8s.io/v1beta2
+apiVersion: resource.k8s.io/v1
 kind: ResourceClaimTemplate
 metadata:
   name: tensor-fusion-gpu-template
-  labels:
-    # 必须设置此 label
-    tensor-fusion.ai/resource-claim-template: "true"
+  namespace: default
 spec:
+  metadata:
+    # These labels will be copied to generated ResourceClaims
+    # Required by ResourceClaimReconciler to identify TensorFusion claims
+    labels:
+      tensor-fusion.ai/resource-claim-template: "true"
   spec:
     devices:
       requests:
-        - name: gpu-request
-          allocationMode: ExactCount
+        - name: gpu
           exactly:
             count: 1
-            selector:
-              cel:
-                # 默认值，由 Controller 自动更新
-                expression: "true"
+            deviceClassName: tensor-fusion.ai
+            # CEL selector 由 Webhook 和 Controller 自动填充
 ```
 
 应用配置：
@@ -150,23 +203,10 @@ kubectl apply -f resourceclaim-template.yaml
 
 **重要**:
 - 必须设置 label `tensor-fusion.ai/resource-claim-template: "true"`
-- `count` 和 `cel.expression` 会由 ResourceClaim Controller 自动更新，无需手动修改
+- `count` 和 CEL selector 会由 Webhook 和 ResourceClaim Controller 自动更新
+- 使用 Kubernetes DRA v1 API
 
-### 3.3 步骤 3: 将 GPUPool 关联到 SchedulingConfigTemplate
-
-```yaml
-apiVersion: tensor-fusion.ai/v1
-kind: GPUPool
-metadata:
-  name: my-gpu-pool
-spec:
-  # 关联 SchedulingConfigTemplate
-  schedulingConfigTemplate: "default-scheduling-config"
-
-  # 其他配置...
-```
-
-### 3.4 步骤 4: 提交 DRA Pod
+### 3.3 步骤 3: 提交 DRA Pod
 
 ```yaml
 apiVersion: v1
@@ -199,7 +239,7 @@ spec:
       image: my-app:latest
 ```
 
-### 3.5 验证 DRA 是否生效
+### 3.4 验证 DRA 是否生效
 
 ```bash
 # 1. 检查 Pod 状态

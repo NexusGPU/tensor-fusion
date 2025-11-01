@@ -139,8 +139,8 @@ func ParseTensorFusionInfo(
 		workloadProfile.Spec.GPUModel = gpuModel
 	}
 
-	// Parse DRA enabled annotation
-	if draProcessor.IsDRAEnabled(ctx, pod) {
+	// Parse DRA enabled annotation (check pool-level DRA configuration)
+	if draProcessor.IsDRAEnabled(ctx, pod, workloadProfile.Spec.PoolName) {
 		info.DRAEnabled = true
 	}
 	// Handle dedicated GPU logic
