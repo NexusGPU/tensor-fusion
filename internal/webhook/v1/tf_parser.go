@@ -99,11 +99,11 @@ func ParseTensorFusionInfo(
 	}
 
 	// check if its compute isolation mode
-	computeIsolation, ok := pod.Annotations[constants.ComputingIsolationModeAnnotation]
+	computeIsolation, ok := pod.Annotations[constants.IsolationModeAnnotation]
 	if ok {
-		workloadProfile.Spec.ComputeIsolation = tfv1.ComputingIsolationMode(computeIsolation)
+		workloadProfile.Spec.Isolation = tfv1.IsolationModeType(computeIsolation)
 	} else {
-		workloadProfile.Spec.ComputeIsolation = tfv1.ComputingIsolationModeSoft
+		workloadProfile.Spec.Isolation = tfv1.IsolationModeSoft
 	}
 
 	workerPodTemplate, ok := pod.Annotations[constants.WorkerPodTemplateAnnotation]
