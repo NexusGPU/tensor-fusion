@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -141,8 +142,19 @@ func TestDRAProcessor_HandleDRAAdmission(t *testing.T) {
 	// Verify CEL expression is stored in Pod annotation
 	celExpression := pod.Annotations[constants.DRACelExpressionAnnotation]
 	require.NotEmpty(t, celExpression)
-	assert.Contains(t, celExpression, `device.capacity["tflops"].AsApproximateFloat64() >= 10`)
-	assert.Contains(t, celExpression, `device.capacity["vram"].AsApproximateFloat64() >=`)
+	driverDomain := constants.DRADriverName
+	assert.Contains(t, celExpression, fmt.Sprintf(`"%s" in device.capacity["%s"] && device.capacity["%s"]["%s"].compareTo(quantity("10")) >= 0`,
+		constants.DRACapacityTFlops,
+		driverDomain,
+		driverDomain,
+		constants.DRACapacityTFlops,
+	))
+	assert.Contains(t, celExpression, fmt.Sprintf(`"%s" in device.capacity["%s"] && device.capacity["%s"]["%s"].compareTo(quantity("8Gi")) >= 0`,
+		constants.DRACapacityVRAM,
+		driverDomain,
+		driverDomain,
+		constants.DRACapacityVRAM,
+	))
 
 	// Verify DRA enabled annotation is set
 	assert.Equal(t, constants.TrueStringValue, pod.Annotations[constants.DRAEnabledAnnotation])
@@ -162,6 +174,22 @@ func TestDRAProcessor_HandleDRAAdmission(t *testing.T) {
 }
 
 func TestBuildCELSelector(t *testing.T) {
+	driverDomain := constants.DRADriverName
+	attrEquals := func(attr, value string) string {
+		return fmt.Sprintf(`"%s" in device.attributes["%s"] && device.attributes["%s"]["%s"] == "%s"`, attr, driverDomain, driverDomain, attr, value)
+	}
+	capacityGte := func(capacity, value string) string {
+		return fmt.Sprintf(`"%s" in device.capacity["%s"] && device.capacity["%s"]["%s"].compareTo(quantity("%s")) >= 0`, capacity, driverDomain, driverDomain, capacity, value)
+	}
+	phaseCondition := fmt.Sprintf(`"%s" in device.attributes["%s"] && device.attributes["%s"]["%s"] in ["%s", "%s"]`,
+		constants.DRAAttributePhase,
+		driverDomain,
+		driverDomain,
+		constants.DRAAttributePhase,
+		constants.PhaseRunning,
+		constants.PhasePending,
+	)
+
 	tests := []struct {
 		name                 string
 		pod                  *corev1.Pod
@@ -190,11 +218,10 @@ func TestBuildCELSelector(t *testing.T) {
 				},
 			},
 			expectedConditions: []string{
-				`device.attributes["model"] == "H100"`,
-				`device.capacity["tflops"].AsApproximateFloat64() >= 20`,
-				`device.capacity["vram"].AsApproximateFloat64() >=`,
-				`device.attributes["phase"] == "Running"`,
-				`device.attributes["phase"] == "Pending"`,
+				attrEquals(constants.DRAAttributeModel, "H100"),
+				capacityGte(constants.DRACapacityTFlops, "20"),
+				capacityGte(constants.DRACapacityVRAM, "16Gi"),
+				phaseCondition,
 			},
 		},
 		{
@@ -220,13 +247,12 @@ func TestBuildCELSelector(t *testing.T) {
 				},
 			},
 			expectedConditions: []string{
-				`device.attributes["model"] == "A100"`,
-				`device.attributes["pool_name"] == "high-priority"`,
-				`device.capacity["tflops"].AsApproximateFloat64() >= 10`,
-				`device.capacity["vram"].AsApproximateFloat64() >=`,
-				`device.attributes["qos"] == "high"`,
-				`device.attributes["phase"] == "Running"`,
-				`device.attributes["phase"] == "Pending"`,
+				attrEquals(constants.DRAAttributeModel, "A100"),
+				attrEquals(constants.DRAAttributePoolName, "high-priority"),
+				capacityGte(constants.DRACapacityTFlops, "10"),
+				capacityGte(constants.DRACapacityVRAM, "8Gi"),
+				attrEquals(constants.DRAAttributeQoS, "high"),
+				phaseCondition,
 			},
 		},
 		{
@@ -248,14 +274,13 @@ func TestBuildCELSelector(t *testing.T) {
 				},
 			},
 			expectedConditions: []string{
-				`device.attributes["phase"] == "Running"`,
-				`device.attributes["phase"] == "Pending"`,
+				phaseCondition,
 			},
 			unexpectedConditions: []string{
-				`device.attributes["model"]`,
-				`device.attributes["pool_name"]`,
-				`device.capacity["tflops"]`,
-				`device.capacity["vram"]`,
+				fmt.Sprintf(`"%s" in device.attributes["%s"]`, constants.DRAAttributeModel, driverDomain),
+				fmt.Sprintf(`"%s" in device.attributes["%s"]`, constants.DRAAttributePoolName, driverDomain),
+				fmt.Sprintf(`"%s" in device.capacity["%s"]`, constants.DRACapacityTFlops, driverDomain),
+				fmt.Sprintf(`"%s" in device.capacity["%s"]`, constants.DRACapacityVRAM, driverDomain),
 			},
 		},
 		{
@@ -272,14 +297,13 @@ func TestBuildCELSelector(t *testing.T) {
 				},
 			},
 			expectedConditions: []string{
-				`device.attributes["phase"] == "Running"`,
-				`device.attributes["phase"] == "Pending"`,
+				phaseCondition,
 			},
 			unexpectedConditions: []string{
-				`device.attributes["model"]`,
-				`device.attributes["pool_name"]`,
-				`device.capacity["tflops"]`,
-				`device.capacity["vram"]`,
+				fmt.Sprintf(`"%s" in device.attributes["%s"]`, constants.DRAAttributeModel, driverDomain),
+				fmt.Sprintf(`"%s" in device.attributes["%s"]`, constants.DRAAttributePoolName, driverDomain),
+				fmt.Sprintf(`"%s" in device.capacity["%s"]`, constants.DRACapacityTFlops, driverDomain),
+				fmt.Sprintf(`"%s" in device.capacity["%s"]`, constants.DRACapacityVRAM, driverDomain),
 			},
 		},
 	}

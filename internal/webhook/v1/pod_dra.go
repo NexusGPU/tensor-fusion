@@ -19,9 +19,11 @@ package v1
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -164,54 +166,65 @@ func (p *DRAProcessor) HandleDRAAdmission(ctx context.Context, pod *corev1.Pod, 
 func BuildCELSelector(pod *corev1.Pod, tfInfo *utils.TensorFusionInfo) (string, error) {
 	var conditions []string
 
+	driverDomain := constants.DRADriverName
+
+	quote := func(val string) string {
+		return strconv.Quote(val)
+	}
+
+	stringAttrCondition := func(attr, value string) string {
+		quotedValue := quote(value)
+		condition := fmt.Sprintf(`"%s" in device.attributes["%s"] && device.attributes["%s"]["%s"] == %s`, attr, driverDomain, driverDomain, attr, quotedValue)
+		log.FromContext(context.Background()).Info("Adding string attribute filter", "attribute", attr, "value", value, "condition", condition)
+		return condition
+	}
+
+	capacityCondition := func(capacityName string, requested resource.Quantity) string {
+		valueStr := requested.String()
+		quotedValue := quote(valueStr)
+		condition := fmt.Sprintf(`"%s" in device.capacity["%s"] && device.capacity["%s"]["%s"].compareTo(quantity(%s)) >= 0`, capacityName, driverDomain, driverDomain, capacityName, quotedValue)
+		log.FromContext(context.Background()).Info("Adding capacity filter", "capacity", capacityName, "requested", valueStr, "condition", condition)
+		return condition
+	}
+
 	// 1. GPU model filter (if specified)
 	if tfInfo.Profile.GPUModel != "" {
-		condition := fmt.Sprintf(`device.attributes["%s"].string == "%s"`, constants.DRAAttributeModel, tfInfo.Profile.GPUModel)
-		conditions = append(conditions, condition)
-		log.FromContext(context.Background()).Info("Adding GPU model filter", "condition", condition)
+		conditions = append(conditions, stringAttrCondition(constants.DRAAttributeModel, tfInfo.Profile.GPUModel))
 	}
 
 	// 2. Pool name filter (for resource isolation and scheduling preferences)
 	if tfInfo.Profile.PoolName != "" {
-		condition := fmt.Sprintf(`device.attributes["%s"].string == "%s"`, constants.DRAAttributePoolName, tfInfo.Profile.PoolName)
-		conditions = append(conditions, condition)
-		log.FromContext(context.Background()).Info("Adding pool name filter", "condition", condition)
+		conditions = append(conditions, stringAttrCondition(constants.DRAAttributePoolName, tfInfo.Profile.PoolName))
 	}
 
 	// 3. TFlops capacity requirement (if specified)
 	if !tfInfo.Profile.Resources.Requests.Tflops.IsZero() {
-		tflopsStr := tfInfo.Profile.Resources.Requests.Tflops.String()
-		// Use compareTo method for Quantity comparison
-		condition := fmt.Sprintf(`device.capacity["%s"].value.compareTo(quantity("%s")) >= 0`, constants.DRACapacityTFlops, tflopsStr)
-		conditions = append(conditions, condition)
-		log.FromContext(context.Background()).Info("Adding TFlops capacity filter", "condition", condition, "requestedTFlops", tflopsStr)
+		conditions = append(conditions, capacityCondition(constants.DRACapacityTFlops, tfInfo.Profile.Resources.Requests.Tflops))
 	}
 
 	// 4. VRAM capacity requirement (if specified)
 	if !tfInfo.Profile.Resources.Requests.Vram.IsZero() {
-		vramStr := tfInfo.Profile.Resources.Requests.Vram.String()
-		// Use compareTo method for Quantity comparison
-		condition := fmt.Sprintf(`device.capacity["%s"].value.compareTo(quantity("%s")) >= 0`, constants.DRACapacityVRAM, vramStr)
-		conditions = append(conditions, condition)
-		log.FromContext(context.Background()).Info("Adding VRAM capacity filter", "condition", condition, "requestedVRAM", vramStr)
+		conditions = append(conditions, capacityCondition(constants.DRACapacityVRAM, tfInfo.Profile.Resources.Requests.Vram))
 	}
 
 	// 5. QoS level filter (if specified and not default)
 	// This can be used for priority-based scheduling
 	if tfInfo.Profile.Qos != "" {
-		condition := fmt.Sprintf(`device.attributes["%s"].string == "%s"`, constants.DRAAttributeQoS, tfInfo.Profile.Qos)
-		conditions = append(conditions, condition)
-		log.FromContext(context.Background()).Info("Adding QoS filter", "condition", condition)
+		conditions = append(conditions, stringAttrCondition(constants.DRAAttributeQoS, string(tfInfo.Profile.Qos)))
 	}
 
 	// 6. GPU phase filter (select Running or Pending GPUs, consistent with PhaseFilter)
-	condition := fmt.Sprintf(
-		`(device.attributes["%s"].string == "%s" || device.attributes["%s"].string == "%s")`,
-		constants.DRAAttributePhase, constants.PhaseRunning,
-		constants.DRAAttributePhase, constants.PhasePending,
+	phaseCondition := fmt.Sprintf(
+		`"%s" in device.attributes["%s"] && device.attributes["%s"]["%s"] in [%s, %s]`,
+		constants.DRAAttributePhase,
+		driverDomain,
+		driverDomain,
+		constants.DRAAttributePhase,
+		quote(constants.PhaseRunning),
+		quote(constants.PhasePending),
 	)
-	conditions = append(conditions, condition)
-	log.FromContext(context.Background()).Info("Adding phase filter", "condition", condition)
+	conditions = append(conditions, phaseCondition)
+	log.FromContext(context.Background()).Info("Adding phase filter", "condition", phaseCondition)
 
 	celExpression := strings.Join(conditions, " && ")
 	log.FromContext(context.Background()).Info("Generated complete CEL expression", "expression", celExpression, "pod", pod.Name, "namespace", pod.Namespace)

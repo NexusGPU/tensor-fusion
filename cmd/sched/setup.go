@@ -60,6 +60,7 @@ func SetupScheduler(
 	k8sVersion *k8sVer.Version,
 	allocator *gpuallocator.GpuAllocator,
 	enableNodeExpander bool,
+	enableDRADeviceTaints bool,
 	outOfTreeRegistryOptions ...app.Option,
 ) (*schedulerserverconfig.CompletedConfig, *scheduler.Scheduler, *expander.NodeExpander, error) {
 	opts := options.NewOptions()
@@ -87,6 +88,38 @@ func SetupScheduler(
 	err = feature.DefaultMutableFeatureGate.SetEmulationVersion(k8sVersion)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+
+	// Enable DRA feature gates based on Kubernetes version
+	minVersionForDRA := k8sVer.MustParseGeneric("1.34.0")
+	enabledFeatures := []string{}
+
+	// Enable DRAConsumableCapacity for K8s >= 1.34
+	if k8sVersion.AtLeast(minVersionForDRA) {
+		if err := feature.DefaultMutableFeatureGate.Set("DRAConsumableCapacity=true"); err != nil {
+			klog.Warningf("Failed to enable DRAConsumableCapacity feature gate: %v", err)
+		} else {
+			enabledFeatures = append(enabledFeatures, "DRAConsumableCapacity")
+		}
+	} else {
+		klog.Infof("Skipping DRAConsumableCapacity: requires Kubernetes >= 1.34, current version: %s", k8sVersion.String())
+	}
+
+	// Enable DRADeviceTaints only if explicitly requested via flag and K8s >= 1.34
+	if enableDRADeviceTaints && k8sVersion.AtLeast(minVersionForDRA) {
+		if err := feature.DefaultMutableFeatureGate.Set("DRADeviceTaints=true"); err != nil {
+			klog.Warningf("Failed to enable DRADeviceTaints feature gate: %v", err)
+		} else {
+			enabledFeatures = append(enabledFeatures, "DRADeviceTaints")
+		}
+	} else if enableDRADeviceTaints {
+		klog.Warningf("DRADeviceTaints requested but skipped: requires Kubernetes >= 1.34, current version: %s", k8sVersion.String())
+	}
+
+	if len(enabledFeatures) > 0 {
+		klog.Infof("DRA feature gates enabled: %v", enabledFeatures)
+	} else {
+		klog.Info("No DRA feature gates enabled")
 	}
 
 	if cfg, err := latest.Default(); err != nil {

@@ -104,6 +104,7 @@ var alertEvaluator *alert.AlertEvaluator
 var schedulerConfigPath string
 var alertEvaluatorReady chan struct{}
 var enableAutoExpander bool
+var enableDRADeviceTaints bool
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -156,6 +157,8 @@ func main() {
 			"refer https://prometheus.io/docs/alerting/latest/configuration")
 	flag.BoolVar(&enableAutoExpander, "enable-auto-expander", false, "if turn on auto expander, "+
 		"TensorFusion will auto expand Nodes then Pending Pods which caused by insufficient GPU resources found")
+	flag.BoolVar(&enableDRADeviceTaints, "enable-dra-device-taints", false, "if turn on DRA device taints feature gate, "+
+		"requires Kubernetes version >= 1.34 and DeviceTaintRule API support")
 
 	klog.InitFlags(nil)
 	flag.Parse()
@@ -528,7 +531,7 @@ func startScheduler(
 
 	cc, scheduler, nodeExpander, err := sched.SetupScheduler(
 		ctx, mgr, schedulerConfigPath, false, k8sVersion,
-		allocator, enableAutoExpander, gpuResourceFitOpt, gpuTopoOpt,
+		allocator, enableAutoExpander, enableDRADeviceTaints, gpuResourceFitOpt, gpuTopoOpt,
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create tensor fusion scheduler")
