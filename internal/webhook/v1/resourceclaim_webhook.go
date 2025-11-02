@@ -208,7 +208,8 @@ func (m *ResourceClaimMutator) updateCapacityRequest(resourceClaim *resourcev1.R
 	// Update capacity requests using constants
 	deviceReq.Exactly.Capacity.Requests[constants.DRACapacityTFlops] = gpuRequestResource.Tflops
 	deviceReq.Exactly.Capacity.Requests[constants.DRACapacityVRAM] = gpuRequestResource.Vram
-
+	deviceReq.Exactly.Capacity.Requests[constants.DRACapacityVirtualTFlops] = gpuRequestResource.Tflops
+	deviceReq.Exactly.Capacity.Requests[constants.DRACapacityVirtualVRAM] = gpuRequestResource.Vram
 	return nil
 }
 
