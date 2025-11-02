@@ -134,7 +134,7 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	pod.Annotations[constants.SidecarWorkerAnnotation] = strconv.FormatBool(tfInfo.Profile.SidecarWorker)
 	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
-	pod.Annotations[constants.ComputingIsolationModeAnnotation] = string(tfInfo.Profile.ComputeIsolation)
+	pod.Annotations[constants.IsolationModeAnnotation] = string(tfInfo.Profile.Isolation)
 }
 
 func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
@@ -195,7 +195,7 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 			return strconv.Itoa(int(index))
 		}), ",")
 	}
-	annotations[constants.ComputingIsolationModeAnnotation] = string(workload.Spec.ComputeIsolation)
+	annotations[constants.IsolationModeAnnotation] = string(workload.Spec.Isolation)
 	return labels, annotations
 }
 
@@ -850,7 +850,7 @@ func SetWorkerContainerSpec(
 	})
 
 	if !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) &&
-		workloadProfile.ComputeIsolation != constants.ComputingIsolationModeHard {
+		workloadProfile.Isolation != tfv1.IsolationModeHard {
 		container.Env = append(container.Env, v1.EnvVar{
 			Name:  constants.LdPreloadEnv,
 			Value: constants.LdPreloadLimiter,
@@ -864,7 +864,7 @@ func SetWorkerContainerSpec(
 	// TODO should calculate and set by hypervisor before container created
 	// when compute isolation mode is hard-isolation, memory limit also change to hard-mode
 	// open source vgpu.rs memory limiter is feedback-loop based, potentially cause resource contention
-	if workloadProfile.ComputeIsolation == constants.ComputingIsolationModeHard {
+	if workloadProfile.Isolation == tfv1.IsolationModeHard {
 		container.Env = append(container.Env, v1.EnvVar{
 			Name:  constants.HardSMLimiterEnv,
 			Value: workloadProfile.Resources.Limits.ComputePercent.String(),

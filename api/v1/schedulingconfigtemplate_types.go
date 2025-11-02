@@ -297,6 +297,9 @@ type ElasticRateLimitParameters struct {
 	// token bucket min and max
 	CapacityMin string `json:"capacityMin,omitempty"`
 	CapacityMax string `json:"capacityMax,omitempty"`
+
+	// Decay factor for integral term in PID controller, to avoid integral windup
+	IntegralDecayFactor string `json:"integralDecayFactor,omitempty"`
 }
 
 // SchedulingConfigTemplateStatus defines the observed state of SchedulingConfigTemplate.

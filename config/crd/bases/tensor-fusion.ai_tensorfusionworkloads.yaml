@@ -238,15 +238,6 @@ spec:
                       type: object
                     type: array
                 type: object
-              computeIsolation:
-                default: soft
-                description: How to isolate computing resources, could be `shared`
-                  or `soft` or `hard`
-                enum:
-                - shared
-                - soft
-                - hard
-                type: string
               gpuCount:
                 description: The number of GPUs to be used by the workload, default
                   to 1
@@ -266,6 +257,16 @@ spec:
                 description: Schedule the workload to the same GPU server that runs
                   vGPU worker for best performance, default to false
                 type: boolean
+              isolation:
+                default: soft
+                description: How to isolate resources, could be `shared` or `soft`
+                  or `hard` or `partitioned`
+                enum:
+                - shared
+                - soft
+                - hard
+                - partitioned
+                type: string
               nodeAffinity:
                 description: NodeAffinity specifies the node affinity requirements
                   for the workload

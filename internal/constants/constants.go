@@ -78,8 +78,8 @@ const (
 	EmbeddedWorkerAnnotation  = Domain + "/embedded-worker"
 	DedicatedWorkerAnnotation = Domain + "/dedicated-worker"
 	SidecarWorkerAnnotation   = Domain + "/sidecar-worker"
-	// How to isolate computing resources, default to `soft`` mode, could be `shared` or `hard`
-	ComputingIsolationModeAnnotation = Domain + "/compute-isolation"
+	// How to isolate resources, default to `soft`` mode, could be `shared` or `hard` or `partitioned`
+	IsolationModeAnnotation = Domain + "/isolation"
 	// GPUModelAnnotation specifies the required GPU model (e.g., "A100", "H100")
 	GPUModelAnnotation = Domain + "/gpu-model"
 	// GPU ID list is assigned by scheduler, should not specified by user
@@ -95,22 +95,6 @@ const (
 	WorkloadModeAnnotation = Domain + "/workload-mode"
 	WorkloadModeDynamic    = "dynamic"
 	WorkloadModeFixed      = "fixed"
-
-	// no computing limit, just isolate vram memory, rely on GPU built-in time-slicing, each process gets equal share of GPU
-	// Pros: simple and stable, no performance overhead, maximize GPU utilization when well-scheduled
-	// Cons: can not auto-scale and differentiate QoS levels, TFLOPs limit does not take effect, may cause resource contention
-	ComputingIsolationModeShared = "shared"
-
-	// default isolation mode, use Proportional-Integral-Derivative controller to isolate computing resources and assign time slices
-	// Pros: can set QoS levels for different workloads, TFLOPs limit is relatively accurate
-	// Cons: ~1% performance overhead, when burst credits are consumed,
-	ComputingIsolationModeSoft = "soft"
-
-	// use SM partitioning to isolate computing resources, each Pod get dedicated SMs depends on GPU driver support
-	// Pros: better performance isolation, no performance overhead
-	// Cons: can not auto-scale dynamically, percent may not 1%/1TFLOPs accuracy, coupled with GPU vendor's SM partitioning implementation
-	// NOTE: this can only be used in Remote or Local+SidecarWorker mode, not supported in LocalGPU mode (because no TensorFusion Worker)
-	ComputingIsolationModeHard = "hard"
 
 	// Annotations for killer switch: disable features
 	// ['gpu-opt', 'mem-manager', 'gpu-limiter']

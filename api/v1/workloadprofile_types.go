@@ -60,8 +60,8 @@ type WorkloadProfileSpec struct {
 
 	// +optional
 	// +kubebuilder:default=soft
-	// How to isolate computing resources, could be `shared` or `soft` or `hard`
-	ComputeIsolation ComputingIsolationMode `json:"computeIsolation,omitempty"`
+	// How to isolate resources, could be `shared` or `soft` or `hard` or `partitioned`
+	Isolation IsolationModeType `json:"isolation,omitempty"`
 
 	// +optional
 	// GPUModel specifies the required GPU model (e.g., "A100", "H100")
@@ -91,13 +91,30 @@ type WorkloadProfileSpec struct {
 	WorkerPodTemplate *runtime.RawExtension `json:"workerPodTemplate,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=shared;soft;hard
-type ComputingIsolationMode string
+// +kubebuilder:validation:Enum=shared;soft;hard;partitioned
+type IsolationModeType string
 
 const (
-	ComputingIsolationModeShared = "shared"
-	ComputingIsolationModeSoft   = "soft"
-	ComputingIsolationModeHard   = "hard"
+	// no limits, rely on GPU built-in time-slicing, each process gets equal share of GPU
+	// Pros: simple and stable, no performance overhead, maximize GPU utilization when well-scheduled
+	// Cons: can not auto-scale and differentiate QoS levels, TFLOPs limit does not take effect, may cause resource contention
+	IsolationModeShared = "shared"
+
+	// default isolation mode, use Proportional-Integral-Derivative controller to isolate computing resources and assign time slices
+	// Pros: can set QoS levels for different workloads, TFLOPs limit is relatively accurate
+	// Cons: ~1% performance overhead, resource contention may occur when burst credits are consumed
+	IsolationModeSoft = "soft"
+
+	// use dedicated SMs to isolate computing resources
+	// Pros: better performance isolation, no performance overhead, oversubscription is possible
+	// Cons: can not auto-scale dynamically, percent may not 1%/1TFLOPs accuracy, coupled with GPU vendor's SM partitioning implementation
+	// NOTE: this can only be used in Remote or Local+SidecarWorker mode, not supported in LocalGPU mode (because no TensorFusion Worker)
+	IsolationModeHard = "hard"
+
+	// use GPU driver level partitioning to isolate resources, need hardware support
+	// Pros: no performance overhead, no resource contention, fully-isolated
+	// Cons: not supported by all GPUs/XPUs, oversubscription is not possible
+	IsolationModePartitioned = "partitioned"
 )
 
 func (t WorkloadProfileSpec) IsDynamicReplica() bool {

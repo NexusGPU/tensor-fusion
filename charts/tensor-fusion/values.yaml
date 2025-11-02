@@ -31,7 +31,7 @@ controller:
   image:
     repository: tensorfusion/tensor-fusion-operator
     # Overrides the image tag whose default is the chart appVersion.
-    tag: "1.48.2"
+    tag: "1.48.5"
   # This is for setting Kubernetes Annotations to a Pod.
   # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/ 
   
