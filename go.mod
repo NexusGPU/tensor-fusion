@@ -1,22 +1,22 @@
 module github.com/NexusGPU/tensor-fusion
 
-go 1.24.5
+go 1.24.6
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/NVIDIA/go-nvml v0.13.0-1
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107
-	github.com/aws/aws-sdk-go-v2 v1.39.4
-	github.com/aws/aws-sdk-go-v2/service/ec2 v1.259.0
+	github.com/aws/aws-sdk-go-v2 v1.39.5
+	github.com/aws/aws-sdk-go-v2/service/ec2 v1.260.0
 	github.com/aws/smithy-go v1.23.1
-	github.com/awslabs/operatorpkg v0.0.0-20250916074601-4250f4c35c6b
-	github.com/gin-contrib/gzip v1.2.4
+	github.com/awslabs/operatorpkg v0.0.0-20251024191238-14554b75b88a
+	github.com/gin-contrib/gzip v1.2.5
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/influxdata/line-protocol/v2 v2.2.1
 	github.com/lithammer/shortuuid/v4 v4.2.0
 	github.com/mitchellh/mapstructure v1.5.0
-	github.com/onsi/ginkgo/v2 v2.27.1
+	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	github.com/pkg/errors v0.9.1
 	github.com/robfig/cron/v3 v3.0.1
@@ -42,7 +42,7 @@ require (
 	k8s.io/kubernetes v1.34.1
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4
 	sigs.k8s.io/controller-runtime v0.22.3
-	sigs.k8s.io/karpenter v1.6.2
+	sigs.k8s.io/karpenter v1.8.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -53,10 +53,10 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/NYTimes/gziphandler v1.1.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.11 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.11 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.12 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.12 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.2 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.11 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.12 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
@@ -156,7 +156,6 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0 // indirect
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.8.0 // indirect
-	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
@@ -181,9 +180,9 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apiextensions-apiserver v0.34.1 // indirect
-	k8s.io/cloud-provider v0.34.0 // indirect
-	k8s.io/controller-manager v0.34.0 // indirect
-	k8s.io/csi-translation-lib v0.34.0 // indirect
+	k8s.io/cloud-provider v0.34.1 // indirect
+	k8s.io/controller-manager v0.34.1 // indirect
+	k8s.io/csi-translation-lib v0.34.1 // indirect
 	k8s.io/dynamic-resource-allocation v0.34.0 // indirect
 	k8s.io/kms v0.34.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20250905212525-66792eed8611 // indirect
