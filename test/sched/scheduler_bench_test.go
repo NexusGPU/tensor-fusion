@@ -113,7 +113,7 @@ func BenchmarkScheduler(b *testing.B) {
 	testCtx := ctx
 
 	cc, scheduler, _, err := sched.SetupScheduler(testCtx, nil,
-		"../../config/samples/scheduler-config.yaml", true, ver, fixture.allocator, false, gpuResourceFitOpt, gpuTopoOpt)
+		"../../config/samples/scheduler-config.yaml", true, ver, fixture.allocator, false, false, gpuResourceFitOpt, gpuTopoOpt)
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -81,7 +81,7 @@ func (pts *PreemptionTestSuite) SetupSuite() {
 	pts.cancel = cancel
 
 	cc, scheduler, _, err := sched.SetupScheduler(ctx, nil,
-		"../../config/samples/scheduler-config.yaml", true, ver, fixture.allocator, false, gpuResourceFitOpt, gpuTopoOpt)
+		"../../config/samples/scheduler-config.yaml", true, ver, fixture.allocator, false, false, gpuResourceFitOpt, gpuTopoOpt)
 	Expect(err).To(Succeed())
 	pts.scheduler = scheduler
 	scheduler.SchedulingQueue.Run(klog.FromContext(ctx))
