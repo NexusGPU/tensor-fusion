@@ -84,6 +84,9 @@ var _ = Describe("TensorFusionPodMutator", func() {
 						constants.InjectContainerAnnotation: "main",
 						constants.TFLOPSLimitAnnotation:     "100",
 						constants.VRAMLimitAnnotation:       "16Gi",
+
+						constants.TFLOPSRequestAnnotation: "10",
+						constants.VRAMRequestAnnotation:   "1Gi",
 					},
 					OwnerReferences: []metav1.OwnerReference{
 						{
@@ -119,6 +122,30 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			// Call mutator.Handle to process the admission request
 			resp := mutator.Handle(ctx, req)
 			Expect(resp.Allowed).To(BeTrue())
+			Expect(resp.Patches).NotTo(BeEmpty())
+
+			op, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1tflops-request"
+			})
+			Expect(found).To(BeFalse())
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1vram-request"
+			})
+			Expect(found).To(BeFalse())
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1isolation"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("soft"))
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/spec/schedulerName"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("tensor-fusion-scheduler"))
 		})
 
 		It("should successfully mutate a pod with TF resources", func() {
@@ -143,7 +170,6 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, workloadProfile)).To(Succeed())
-
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-pod",
@@ -202,6 +228,37 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			resp := mutator.Handle(ctx, req)
 			Expect(resp.Allowed).To(BeTrue())
 			Expect(resp.Patches).NotTo(BeEmpty())
+
+			op, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1tflops-request"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("10"))
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1vram-request"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("1Gi"))
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1tflops-limit"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("100"))
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1vram-limit"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("16Gi"))
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1gpu-count"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("1"))
 
 			// Check workload created
 			Eventually(func(g Gomega) error {
