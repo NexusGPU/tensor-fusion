@@ -92,7 +92,15 @@ func (pts *PreemptionTestSuite) SetupSuite() {
 	// Start scheduler components
 	cc.EventBroadcaster.StartRecordingToSink(ctx.Done())
 	cc.InformerFactory.Start(ctx.Done())
+	// DynInformerFactory can be nil in tests, but if it exists, we need to start it
+	// for EnqueueExtensions handlers to work properly
+	if cc.DynInformerFactory != nil {
+		cc.DynInformerFactory.Start(ctx.Done())
+	}
 	cc.InformerFactory.WaitForCacheSync(ctx.Done())
+	if cc.DynInformerFactory != nil {
+		cc.DynInformerFactory.WaitForCacheSync(ctx.Done())
+	}
 	Expect(scheduler.WaitForHandlersSync(ctx)).To(Succeed())
 }
 
