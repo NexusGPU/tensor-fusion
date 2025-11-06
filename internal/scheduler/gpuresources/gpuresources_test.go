@@ -737,3 +737,135 @@ func getPreFilterResult(state *framework.CycleState) []string {
 	}
 	return lo.Keys(data.(*GPUSchedulingStateData).NodeGPUs)
 }
+
+func (s *GPUResourcesSuite) TestEventsToRegister() {
+	log.FromContext(s.ctx).Info("Running TestEventsToRegister")
+	events, err := s.plugin.EventsToRegister(s.ctx)
+	s.NoError(err)
+	s.Len(events, 1)
+	s.Equal(fwk.EventResource("gpus.v1.tensor-fusion.ai"), events[0].Event.Resource)
+	s.Equal(fwk.Add|fwk.Update, events[0].Event.ActionType)
+	s.NotNil(events[0].QueueingHintFn)
+}
+
+func (s *GPUResourcesSuite) TestQueueingHint_ResourceDecrease() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_ResourceDecrease")
+	pod := s.makePod("test-pod", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "1",
+	})
+
+	oldGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("500"),
+				Vram:   resource.MustParse("10Gi"),
+			},
+		},
+	}
+	newGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("400"),
+				Vram:   resource.MustParse("8Gi"),
+			},
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.QueueSkip, hint)
+}
+
+func (s *GPUResourcesSuite) TestQueueingHint_ResourceIncrease_Sufficient() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_ResourceIncrease_Sufficient")
+
+	// Create a pending pod
+	pendingPod := s.makePod("pending-pod", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "1",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	pendingPod.Spec.NodeName = "" // Make it pending
+
+	oldGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("50"),
+				Vram:   resource.MustParse("5Gi"),
+			},
+		},
+	}
+	newGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("150"),  // Increase by 100
+				Vram:   resource.MustParse("15Gi"), // Increase by 10Gi
+			},
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pendingPod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.Queue, hint)
+}
+
+func (s *GPUResourcesSuite) TestQueueingHint_NonTensorFusionPod() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_NonTensorFusionPod")
+	nonTFPod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "non-tf-pod",
+			Namespace: "default",
+		},
+	}
+
+	oldGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("50"),
+				Vram:   resource.MustParse("5Gi"),
+			},
+		},
+	}
+	newGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("150"),
+				Vram:   resource.MustParse("15Gi"),
+			},
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, nonTFPod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.QueueSkip, hint)
+}
+
+func (s *GPUResourcesSuite) TestQueueingHint_GPUAdd() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_GPUAdd")
+
+	// Create a pending pod
+	pendingPod := s.makePod("pending-pod-2", map[string]string{
+		constants.TFLOPSRequestAnnotation: "50",
+		constants.VRAMRequestAnnotation:   "5Gi",
+		constants.GpuCountAnnotation:      "1",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	pendingPod.Spec.NodeName = ""
+
+	// New GPU added with available resources
+	newGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("100"),  // More than pod request (50)
+				Vram:   resource.MustParse("10Gi"), // More than pod request (5Gi)
+			},
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pendingPod, nil, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.Queue, hint)
+}
