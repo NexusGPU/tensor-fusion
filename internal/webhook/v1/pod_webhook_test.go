@@ -124,17 +124,17 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(resp.Allowed).To(BeTrue())
 			Expect(resp.Patches).NotTo(BeEmpty())
 
-			op, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+			_, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
 				return isAddOperation(patch) &&
 					patch.Path == "/metadata/annotations/tensor-fusion.ai~1tflops-request"
 			})
 			Expect(found).To(BeFalse())
-			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+			_, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
 				return isAddOperation(patch) &&
 					patch.Path == "/metadata/annotations/tensor-fusion.ai~1vram-request"
 			})
 			Expect(found).To(BeFalse())
-			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+			op, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
 				return isAddOperation(patch) &&
 					patch.Path == "/metadata/annotations/tensor-fusion.ai~1isolation"
 			})

@@ -3,6 +3,7 @@ package gpuresources
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,6 +18,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -36,6 +39,7 @@ var _ framework.FilterPlugin = &GPUFit{}
 var _ framework.ScorePlugin = &GPUFit{}
 var _ framework.ReservePlugin = &GPUFit{}
 var _ framework.PostBindPlugin = &GPUFit{}
+var _ framework.EnqueueExtensions = &GPUFit{}
 
 type GPUFit struct {
 	logger    *klog.Logger
@@ -477,4 +481,109 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
 			"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
 	}
+}
+
+func (s *GPUFit) EventsToRegister(_ context.Context) ([]fwk.ClusterEventWithHint, error) {
+	// EventResource format must be: <plural-resource-name>.<version>.<group>
+	// Example: gpus.v1.tensor-fusion.ai
+	// The scheduler's eventhandlers.go will use DynInformerFactory to watch this resource
+	gpuResource := fwk.EventResource("gpus.v1.tensor-fusion.ai")
+	return []fwk.ClusterEventWithHint{
+		{
+			Event: fwk.ClusterEvent{
+				Resource:   gpuResource,
+				ActionType: fwk.Add | fwk.Update,
+			},
+			QueueingHintFn: s.queueingHint,
+		},
+	}, nil
+}
+
+// convertToGPU converts an interface{} to *tfv1.GPU, handling both typed and unstructured objects
+func convertToGPU(obj interface{}) (*tfv1.GPU, error) {
+	if obj == nil {
+		return nil, nil
+	}
+
+	// Try direct type assertion first (fastest path)
+	if gpu, ok := obj.(*tfv1.GPU); ok {
+		return gpu, nil
+	}
+
+	// Try to convert from unstructured.Unstructured using DefaultUnstructuredConverter
+	if unstructuredObj, ok := obj.(*unstructured.Unstructured); ok {
+		gpu := &tfv1.GPU{}
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(unstructuredObj.Object, gpu); err != nil {
+			return nil, fmt.Errorf("failed to convert unstructured to GPU: %w", err)
+		}
+		return gpu, nil
+	}
+	return nil, fmt.Errorf("cannot convert %T to *tfv1.GPU", obj)
+}
+
+func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (fwk.QueueingHint, error) {
+	// Only process TensorFusion worker pods
+	if !utils.IsTensorFusionWorker(pod) {
+		return fwk.QueueSkip, nil
+	}
+
+	oldGPU, err := convertToGPU(oldObj)
+	if err != nil {
+		logger.V(5).Info("Failed to convert oldObj to GPU, skip", "error", err)
+		return fwk.QueueSkip, nil
+	}
+
+	newGPU, err := convertToGPU(newObj)
+	if err != nil {
+		logger.V(5).Info("Failed to convert newObj to GPU, skip", "error", err)
+		return fwk.QueueSkip, nil
+	}
+
+	// Calculate resource increase
+	var increaseTflops, increaseVram resource.Quantity
+	if oldGPU == nil && newGPU != nil {
+		// Add event: use available resources as increase
+		if newGPU.Status.Available != nil {
+			increaseTflops = newGPU.Status.Available.Tflops.DeepCopy()
+			increaseVram = newGPU.Status.Available.Vram.DeepCopy()
+		}
+	} else if oldGPU != nil && newGPU != nil {
+		// Update event: calculate difference in available resources
+		if oldGPU.Status.Available != nil && newGPU.Status.Available != nil {
+			increaseTflops := newGPU.Status.Available.Tflops.DeepCopy()
+			increaseVram := newGPU.Status.Available.Vram.DeepCopy()
+			increaseTflops.Sub(oldGPU.Status.Available.Tflops)
+			increaseVram.Sub(oldGPU.Status.Available.Vram)
+		}
+	}
+
+	// If resource decreased, skip
+	if increaseTflops.Cmp(resource.MustParse("0")) <= 0 && increaseVram.Cmp(resource.MustParse("0")) <= 0 {
+		return fwk.QueueSkip, nil
+	}
+
+	// Compose allocation request for the pod passed in by scheduler framework
+	allocRequest, _, err := s.allocator.ComposeAllocationRequest(pod)
+	if err != nil {
+		logger.V(5).Info("Failed to compose allocation request for pod, skip",
+			"pod", klog.KObj(pod), "error", err)
+		return fwk.QueueSkip, nil
+	}
+
+	// Calculate total request for this pod (multiply by count)
+	podTotalTflops := allocRequest.Request.Tflops
+	podTotalVram := allocRequest.Request.Vram
+
+	// Queue if resource increase >= pod's request
+	if increaseTflops.Cmp(podTotalTflops) >= 0 && increaseVram.Cmp(podTotalVram) >= 0 {
+		logger.V(4).Info("GPU resource increase sufficient for pod, requeue unscheduled pod",
+			"pod", klog.KObj(pod),
+			"increaseTflops", increaseTflops.String(),
+			"increaseVram", increaseVram.String(),
+			"podRequestTflops", podTotalTflops.String(),
+			"podRequestVram", podTotalVram.String())
+		return fwk.Queue, nil
+	}
+
+	return fwk.QueueSkip, nil
 }
