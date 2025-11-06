@@ -550,8 +550,8 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 	} else if oldGPU != nil && newGPU != nil {
 		// Update event: calculate difference in available resources
 		if oldGPU.Status.Available != nil && newGPU.Status.Available != nil {
-			increaseTflops := newGPU.Status.Available.Tflops.DeepCopy()
-			increaseVram := newGPU.Status.Available.Vram.DeepCopy()
+			increaseTflops = newGPU.Status.Available.Tflops.DeepCopy()
+			increaseVram = newGPU.Status.Available.Vram.DeepCopy()
 			increaseTflops.Sub(oldGPU.Status.Available.Tflops)
 			increaseVram.Sub(oldGPU.Status.Available.Vram)
 		}
