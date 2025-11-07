@@ -13,6 +13,7 @@ import (
 func NewHTTPServer(
 	cr *router.ConnectionRouter,
 	ahp *router.AssignHostPortRouter,
+	ai *router.AssignIndexRouter,
 	alc *router.AllocatorInfoRouter,
 	leaderChan <-chan struct{},
 ) *gin.Engine {
@@ -38,6 +39,19 @@ func NewHTTPServer(
 		}
 		// suspend API call utils it becomes leader
 		ahp.AssignHostPort(ctx)
+	})
+	apiGroup.GET("/assign-index", func(ctx *gin.Context) {
+		if leaderChan == nil {
+			ctx.String(http.StatusServiceUnavailable, "current instance is not the leader")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-leaderChan:
+		}
+		// suspend API call utils it becomes leader
+		ai.AssignIndex(ctx)
 	})
 	apiGroup.GET("/provision", func(ctx *gin.Context) {
 		controller.ProvisioningToggle = ctx.Query("enable") == "true"

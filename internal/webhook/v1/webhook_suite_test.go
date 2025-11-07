@@ -141,7 +141,7 @@ var _ = BeforeSuite(func() {
 		PortRangeStartCluster: 42000,
 		PortRangeEndCluster:   62000,
 		BitmapCluster:         make([]uint64, (62000-42000)/64+1),
-	}, mockPricingProvider)
+	}, nil, mockPricingProvider)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:webhook

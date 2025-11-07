@@ -92,6 +92,9 @@ const (
 	// Additional worker pod template is set by user with /worker-pod-template annotation
 	WorkerPodTemplateAnnotation = Domain + "/worker-pod-template"
 
+	// Pod index annotation for Device Plugin communication (1-512)
+	PodIndexAnnotation = Domain + "/index"
+
 	WorkloadModeAnnotation = Domain + "/workload-mode"
 	WorkloadModeDynamic    = "dynamic"
 	WorkloadModeFixed      = "fixed"

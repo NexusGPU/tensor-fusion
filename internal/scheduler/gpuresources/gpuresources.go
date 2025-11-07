@@ -13,6 +13,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/quota"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -42,12 +43,13 @@ var _ framework.PostBindPlugin = &GPUFit{}
 var _ framework.EnqueueExtensions = &GPUFit{}
 
 type GPUFit struct {
-	logger    *klog.Logger
-	fh        framework.Handle
-	client    client.Client
-	allocator *gpuallocator.GpuAllocator
-	ctx       context.Context
-	cfg       *config.GPUFitConfig
+	logger         *klog.Logger
+	fh             framework.Handle
+	client         client.Client
+	allocator      *gpuallocator.GpuAllocator
+	indexAllocator *indexallocator.IndexAllocator
+	ctx            context.Context
+	cfg            *config.GPUFitConfig
 }
 
 type GPUSchedulingStateData struct {
@@ -80,7 +82,7 @@ func (p *GPUSchedulingStateData) Clone() fwk.StateData {
 
 type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
 
-func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) PluginFactoryFunc {
+func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client, indexAllocator *indexallocator.IndexAllocator) PluginFactoryFunc {
 	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 		target := &config.GPUFitConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
@@ -91,12 +93,13 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) Plu
 		lh := klog.FromContext(ctx).WithValues("plugin", Name)
 		lh.Info("Creating new GPUFit plugin")
 		c := &GPUFit{
-			logger:    &lh,
-			fh:        handle,
-			cfg:       target,
-			allocator: allocator,
-			ctx:       ctx,
-			client:    client,
+			logger:         &lh,
+			fh:             handle,
+			cfg:            target,
+			allocator:      allocator,
+			indexAllocator: indexAllocator,
+			ctx:            ctx,
+			client:         client,
 		}
 		lh.Info("Created new GPUFit plugin", "plugin", c)
 
@@ -431,6 +434,15 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	if err != nil {
 		return fwk.NewStatus(fwk.Error, err.Error())
 	}
+
+	// Index is already assigned in webhook stage, scheduler cannot modify Pod
+	// Just verify that index annotation exists for logging
+	if pod.Annotations != nil {
+		if indexStr, exists := pod.Annotations[constants.PodIndexAnnotation]; exists && indexStr != "" {
+			s.logger.V(5).Info("Pod index already assigned in webhook", "pod", pod.Name, "index", indexStr)
+		}
+	}
+
 	return fwk.NewStatus(fwk.Success, "")
 }
 
@@ -467,12 +479,36 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 	// write the allocated GPU info to Pod in bindingCycle, before default binder changing the Pod nodeName info
 	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
 	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
-	patch := []byte(`[{
-		"op": "add",
-		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
-		"value": "` + gpuIDs + `"}]`)
 
-	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patch))
+	// Prepare patches for both GPU IDs and index cleanup
+	patches := []string{
+		`{
+			"op": "add",
+			"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
+			"value": "` + gpuIDs + `"
+		}`,
+	}
+
+	// Remove index annotation after Device Plugin allocation is complete
+	// This releases the temporary index for reuse
+	if pod.Annotations != nil {
+		if indexStr, exists := pod.Annotations[constants.PodIndexAnnotation]; exists && indexStr != "" {
+			index, parseErr := strconv.Atoi(indexStr)
+			if parseErr == nil && s.indexAllocator != nil {
+				// Release index asynchronously (will be cleaned up when Pod is deleted)
+				_ = s.indexAllocator.ReleaseIndex(pod.Name, index, false)
+
+				// Remove annotation immediately to prevent matching in next cycle
+				patches = append(patches, `{
+					"op": "remove",
+					"path": "/metadata/annotations/`+utils.EscapeJSONPointer(constants.PodIndexAnnotation)+`"
+				}`)
+			}
+		}
+	}
+
+	patchJSON := "[" + strings.Join(patches, ",") + "]"
+	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, []byte(patchJSON)))
 	if err != nil {
 		s.logger.Error(err, "failed to patch gpu device ids", "pod", pod.Name)
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUDeviceAllocatedFailed",

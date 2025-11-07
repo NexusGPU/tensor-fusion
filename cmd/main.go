@@ -36,6 +36,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/controller"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
@@ -232,17 +233,25 @@ func main() {
 	// Initialize GPU allocator and set up watches
 	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr)
 
+	// Initialize Index allocator for Device Plugin communication
+	indexAllocator, err := indexallocator.NewIndexAllocator(ctx, mgr.GetClient())
+	if err != nil {
+		setupLog.Error(err, "unable to set up index allocator")
+		os.Exit(1)
+	}
+	_ = indexAllocator.SetupWithManager(ctx, mgr)
+
 	startAutoScaler(mgr, allocator)
 
 	// Create pricing provider for webhook
 	pricingProvider := pricing.NewStaticPricingProvider()
-	startWebhook(mgr, portAllocator, pricingProvider)
+	startWebhook(mgr, portAllocator, indexAllocator, pricingProvider)
 
-	scheduler, nodeExpander := startScheduler(ctx, allocator, mgr, k8sVersion)
+	scheduler, nodeExpander := startScheduler(ctx, allocator, indexAllocator, mgr, k8sVersion)
 
 	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator, nodeExpander)
 
-	startHttpServerForTFClient(ctx, kc, portAllocator, allocator, scheduler, mgr.Elected())
+	startHttpServerForTFClient(ctx, kc, portAllocator, indexAllocator, allocator, scheduler, mgr.Elected())
 
 	// +kubebuilder:scaffold:builder
 	addHealthCheckAPI(mgr)
@@ -291,6 +300,7 @@ func startHttpServerForTFClient(
 	ctx context.Context,
 	kc *rest.Config,
 	portAllocator *portallocator.PortAllocator,
+	indexAllocator *indexallocator.IndexAllocator,
 	allocator *gpuallocator.GpuAllocator,
 	scheduler *scheduler.Scheduler,
 	leaderChan <-chan struct{},
@@ -310,12 +320,17 @@ func startHttpServerForTFClient(
 		setupLog.Error(err, "failed to create assign host port router")
 		os.Exit(1)
 	}
+	assignIndexRouter, err := router.NewAssignIndexRouter(ctx, indexAllocator)
+	if err != nil {
+		setupLog.Error(err, "failed to create assign index router")
+		os.Exit(1)
+	}
 	allocatorInfoRouter, err := router.NewAllocatorInfoRouter(ctx, allocator, scheduler)
 	if err != nil {
 		setupLog.Error(err, "failed to create allocator info router")
 		os.Exit(1)
 	}
-	httpServer := server.NewHTTPServer(connectionRouter, assignHostPortRouter, allocatorInfoRouter, leaderChan)
+	httpServer := server.NewHTTPServer(connectionRouter, assignHostPortRouter, assignIndexRouter, allocatorInfoRouter, leaderChan)
 	go func() {
 		err := httpServer.Run()
 		if err != nil {
@@ -468,12 +483,13 @@ func startCustomResourceController(
 func startWebhook(
 	mgr manager.Manager,
 	portAllocator *portallocator.PortAllocator,
+	indexAllocator *indexallocator.IndexAllocator,
 	pricingProvider pricing.PricingProvider,
 ) {
 	if os.Getenv(constants.EnableWebhookEnv) == constants.FalseStringValue {
 		return
 	}
-	if err := webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator, pricingProvider); err != nil {
+	if err := webhookcorev1.SetupPodWebhookWithManager(mgr, portAllocator, indexAllocator, pricingProvider); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "Pod")
 		os.Exit(1)
 	}
@@ -482,6 +498,7 @@ func startWebhook(
 func startScheduler(
 	ctx context.Context,
 	allocator *gpuallocator.GpuAllocator,
+	indexAllocator *indexallocator.IndexAllocator,
 	mgr manager.Manager,
 	k8sVersion *k8sVer.Version,
 ) (*scheduler.Scheduler, *expander.NodeExpander) {
@@ -495,7 +512,7 @@ func startScheduler(
 
 	gpuResourceFitOpt := app.WithPlugin(
 		gpuResourceFitPlugin.Name,
-		gpuResourceFitPlugin.NewWithDeps(allocator, mgr.GetClient()),
+		gpuResourceFitPlugin.NewWithDeps(allocator, mgr.GetClient(), indexAllocator),
 	)
 	gpuTopoOpt := app.WithPlugin(
 		gpuTopoPlugin.Name,
