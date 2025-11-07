@@ -642,7 +642,11 @@ func (s *GpuAllocator) DeallocByPodIdentifier(ctx context.Context, podIdentifier
 
 func (s *GpuAllocator) GetAllocationReqByNodeName(nodeName string) []*tfv1.AllocRequest {
 	allocRequests := make([]*tfv1.AllocRequest, 0, 8)
-	for workerName := range s.nodeWorkerStore[nodeName] {
+	workers, exists := s.nodeWorkerStore[nodeName]
+	if !exists || workers == nil {
+		return allocRequests
+	}
+	for workerName := range workers {
 		podUID := s.podNamespaceNsToPodUID[workerName.String()]
 		if podUID == "" {
 			continue
