@@ -13,6 +13,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/quota"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -42,12 +43,13 @@ var _ framework.PostBindPlugin = &GPUFit{}
 var _ framework.EnqueueExtensions = &GPUFit{}
 
 type GPUFit struct {
-	logger    *klog.Logger
-	fh        framework.Handle
-	client    client.Client
-	allocator *gpuallocator.GpuAllocator
-	ctx       context.Context
-	cfg       *config.GPUFitConfig
+	logger         *klog.Logger
+	fh             framework.Handle
+	client         client.Client
+	allocator      *gpuallocator.GpuAllocator
+	indexAllocator *indexallocator.IndexAllocator
+	ctx            context.Context
+	cfg            *config.GPUFitConfig
 }
 
 type GPUSchedulingStateData struct {
@@ -80,7 +82,7 @@ func (p *GPUSchedulingStateData) Clone() fwk.StateData {
 
 type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
 
-func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) PluginFactoryFunc {
+func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client, indexAllocator *indexallocator.IndexAllocator) PluginFactoryFunc {
 	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 		target := &config.GPUFitConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
@@ -91,12 +93,13 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) Plu
 		lh := klog.FromContext(ctx).WithValues("plugin", Name)
 		lh.Info("Creating new GPUFit plugin")
 		c := &GPUFit{
-			logger:    &lh,
-			fh:        handle,
-			cfg:       target,
-			allocator: allocator,
-			ctx:       ctx,
-			client:    client,
+			logger:         &lh,
+			fh:             handle,
+			cfg:            target,
+			allocator:      allocator,
+			indexAllocator: indexAllocator,
+			ctx:            ctx,
+			client:         client,
 		}
 		lh.Info("Created new GPUFit plugin", "plugin", c)
 

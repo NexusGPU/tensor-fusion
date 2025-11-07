@@ -263,7 +263,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 	s.allocator.ReconcileAllocationState()
 	s.allocator.SetAllocatorReady()
 
-	pluginFactory := NewWithDeps(s.allocator, s.client)
+	pluginFactory := NewWithDeps(s.allocator, s.client, nil)
 	pluginConfig := &runtime.Unknown{
 		Raw: []byte(`{
 			"maxWorkerPerNode": 3,
@@ -597,7 +597,7 @@ func (s *GPUResourcesSuite) makePod(name string, annotations map[string]string) 
 
 func (s *GPUResourcesSuite) TestNewWithDeps() {
 	log.FromContext(s.ctx).Info("Running TestNewWithDeps")
-	pluginFactory := NewWithDeps(s.allocator, s.client)
+	pluginFactory := NewWithDeps(s.allocator, s.client, nil)
 	s.NotNil(pluginFactory)
 
 	// Test with valid config
