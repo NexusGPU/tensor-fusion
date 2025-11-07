@@ -377,12 +377,6 @@ func AddTFDefaultClientConfBeforePatch(
 			}
 
 			envList = append(envList, v1.EnvVar{
-				Name:  constants.RealNvmlLibPathEnv,
-				Value: constants.RealNvmlLibPathValue,
-			}, v1.EnvVar{
-				Name:  constants.RealCUDALibPathEnv,
-				Value: constants.RealCUDALibPathValue,
-			}, v1.EnvVar{
 				Name: constants.HypervisorIPEnv,
 				ValueFrom: &v1.EnvVarSource{
 					FieldRef: &v1.ObjectFieldSelector{
