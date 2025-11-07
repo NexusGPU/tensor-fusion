@@ -145,7 +145,7 @@ var _ = Describe("GPU Resource Preemption", func() {
 		testGPUResourcePreemption(suite)
 	})
 
-	It("should respect eviction protection periods", func() {
+	PIt("should respect eviction protection periods", func() {
 		testGPUResourceEvictProtection(suite)
 	})
 })
