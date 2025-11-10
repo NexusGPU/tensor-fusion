@@ -291,42 +291,8 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	// Index must be assigned in webhook stage since scheduler cannot modify Pod
 	// This is a special index resource (1-512), not a real device resource
 	// Index is assigned in ascending order (1, 2, 3, ...) via distributed lock (leader election)
-	var index int
-	var indexErr error
-	podIdentifier := pod.Name
-	if podIdentifier == "" {
-		// For Deployment/StatefulSet created pods, Name might be empty, use GenerateName + UID
-		podIdentifier = pod.GenerateName + string(pod.UID)
-	}
-
-	if m.indexAllocator != nil && m.indexAllocator.IsLeader {
-		index, indexErr = m.indexAllocator.AssignIndex(podIdentifier)
-		if indexErr != nil {
-			log := log.FromContext(ctx)
-			log.Error(indexErr, "failed to assign index for pod", "pod", podIdentifier)
-			index = 0
-		}
-	} else if m.indexAllocator != nil && !m.indexAllocator.IsLeader {
-		// If not leader, get index from leader via HTTP API (similar to port allocation)
-		// This ensures global increment across distributed webhook instances
-		index, indexErr = m.assignIndexFromLeader(ctx, pod)
-		if indexErr != nil {
-			log := log.FromContext(ctx)
-			log.Error(indexErr, "failed to assign index from leader", "pod", podIdentifier)
-			index = 0
-		}
-	} else {
-		// No allocator available, use 0 as fallback
-		index = 0
-	}
-
-	// Set annotation for matching in Device Plugin
-	if pod.Annotations == nil {
-		pod.Annotations = make(map[string]string)
-	}
-	if index > 0 {
-		pod.Annotations[constants.PodIndexAnnotation] = strconv.Itoa(index)
-	}
+	index := m.assignDeviceAllocationIndex(ctx, pod)
+	log.FromContext(ctx).Info("assigned device allocation index successfully", "index", index, "pod", pod.Name)
 
 	for _, containerIndex := range containerIndices {
 		container := &pod.Spec.Containers[containerIndex]
@@ -409,6 +375,46 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	}
 	patches = append(patches, strategicpatches...)
 	return patches, nil
+}
+
+func (m *TensorFusionPodMutator) assignDeviceAllocationIndex(ctx context.Context, pod *corev1.Pod) int {
+	var index int
+	var indexErr error
+	podIdentifier := pod.Name
+	if podIdentifier == "" {
+		// For Deployment/StatefulSet created pods, Name might be empty, use GenerateName + UID
+		podIdentifier = pod.GenerateName + string(pod.UID)
+	}
+
+	if m.indexAllocator != nil && m.indexAllocator.IsLeader {
+		index, indexErr = m.indexAllocator.AssignIndex(podIdentifier)
+		if indexErr != nil {
+			log := log.FromContext(ctx)
+			log.Error(indexErr, "failed to assign index for pod", "pod", podIdentifier)
+			index = 0
+		}
+	} else if m.indexAllocator != nil && !m.indexAllocator.IsLeader {
+		// If not leader, get index from leader via HTTP API (similar to port allocation)
+		// This ensures global increment across distributed webhook instances
+		index, indexErr = m.assignIndexFromLeader(ctx, pod)
+		if indexErr != nil {
+			log := log.FromContext(ctx)
+			log.Error(indexErr, "failed to assign index from leader", "pod", podIdentifier)
+			index = 0
+		}
+	} else {
+		// No allocator available, use 0 as fallback
+		index = 0
+	}
+
+	// Set annotation for matching in Device Plugin
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+	if index > 0 {
+		pod.Annotations[constants.PodIndexAnnotation] = strconv.Itoa(index)
+	}
+	return index
 }
 
 // Convert the strategic merge patch to JSON
