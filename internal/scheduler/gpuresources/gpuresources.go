@@ -480,35 +480,12 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
 	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
 
-	// Prepare patches for both GPU IDs and index cleanup
-	patches := []string{
-		`{
-			"op": "add",
-			"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
-			"value": "` + gpuIDs + `"
-		}`,
-	}
-
-	// Remove index annotation after Device Plugin allocation is complete
-	// This releases the temporary index for reuse
-	if pod.Annotations != nil {
-		if indexStr, exists := pod.Annotations[constants.PodIndexAnnotation]; exists && indexStr != "" {
-			index, parseErr := strconv.Atoi(indexStr)
-			if parseErr == nil && s.indexAllocator != nil {
-				// Release index asynchronously (will be cleaned up when Pod is deleted)
-				_ = s.indexAllocator.ReleaseIndex(pod.Name, index, false)
-
-				// Remove annotation immediately to prevent matching in next cycle
-				patches = append(patches, `{
-					"op": "remove",
-					"path": "/metadata/annotations/`+utils.EscapeJSONPointer(constants.PodIndexAnnotation)+`"
-				}`)
-			}
-		}
-	}
-
-	patchJSON := "[" + strings.Join(patches, ",") + "]"
-	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, []byte(patchJSON)))
+	// Patch GPU device IDs annotation
+	patch := []byte(`[{
+		"op": "add",
+		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
+		"value": "` + gpuIDs + `"}]`)
+	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patch))
 	if err != nil {
 		s.logger.Error(err, "failed to patch gpu device ids", "pod", pod.Name)
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUDeviceAllocatedFailed",

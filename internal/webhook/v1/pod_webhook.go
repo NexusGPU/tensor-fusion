@@ -553,8 +553,7 @@ func (m *TensorFusionPodMutator) getPortNumber(pod *corev1.Pod) int {
 }
 
 func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod) (int, error) {
-
-	leaderIP := m.portAllocator.GetLeaderIP()
+	leaderIP := utils.GetLeaderIP(m.Client)
 	if leaderIP == "" {
 		return 0, fmt.Errorf("operator leader IP not found")
 	}
@@ -586,7 +585,7 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 }
 
 func (m *TensorFusionPodMutator) assignIndexFromLeader(ctx context.Context, pod *corev1.Pod) (int, error) {
-	leaderIP := m.indexAllocator.GetLeaderIP()
+	leaderIP := utils.GetLeaderIP(m.Client)
 	if leaderIP == "" {
 		return 0, fmt.Errorf("operator leader IP not found")
 	}

@@ -8,22 +8,22 @@ const (
 
 	// DSA vendors - Global
 	AcceleratorVendorQualcomm  = "Qualcomm"
-	AcceleratorVendorAWSNeuron = "AWS-Neuron"
-	AcceleratorVendorGoogleTPU = "Google-TPU"
+	AcceleratorVendorAWSNeuron = "AWSNeuron"
+	AcceleratorVendorGoogleTPU = "Google"
 	AcceleratorVendorCerebras  = "Cerebras"
 
 	// GPGPU vendors - CN
-	AcceleratorVendorHygon        = "Hygon-DCU"
-	AcceleratorVendorMetaX        = "Meta-X"
+	AcceleratorVendorHygon        = "Hygon"
+	AcceleratorVendorMetaX        = "MetaX"
 	AcceleratorVendorMThreads     = "MThreads"
-	AcceleratorVendorBiren        = "BirenGPU"
-	AcceleratorVendorAlibabaTHead = "THead-PPU"
+	AcceleratorVendorBiren        = "Biren"
+	AcceleratorVendorAlibabaTHead = "THead"
 
 	// DSA vendors - CN
-	AcceleratorVendorHuaweiAscendNPU = "Ascend-NPU"
-	AcceleratorVendorCambricon       = "Cambricon-MLU"
-	AcceleratorVendorEnflame         = "Enflame-XPU"
-	AcceleratorVendorKunlunX         = "KunlunXin-XPU"
+	AcceleratorVendorHuaweiAscendNPU = "Ascend"
+	AcceleratorVendorCambricon       = "Cambricon"
+	AcceleratorVendorEnflame         = "Enflame"
+	AcceleratorVendorKunlunX         = "KunlunXin"
 
 	AcceleratorVendorUnknown = "Unknown"
 )

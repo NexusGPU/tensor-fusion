@@ -152,19 +152,7 @@ func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manage
 }
 
 func (s *PortAllocator) GetLeaderIP() string {
-	leaderInfo := &v1.ConfigMap{}
-	err := s.Client.Get(context.Background(), client.ObjectKey{
-		Name:      constants.LeaderInfoConfigMapName,
-		Namespace: utils.CurrentNamespace(),
-	}, leaderInfo)
-	if err != nil {
-		log.FromContext(context.Background()).Error(err, "Failed to get leader IP info from ConfigMap")
-		return ""
-	}
-	if leaderInfo.Data == nil {
-		return ""
-	}
-	return leaderInfo.Data[constants.LeaderInfoConfigMapLeaderIPKey]
+	return utils.GetLeaderIP(s.Client)
 }
 
 // AssignHostPort always called by operator itself, thus no Leader-Follower inconsistency issue
