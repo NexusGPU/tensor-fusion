@@ -61,4 +61,3 @@ func (r *AssignIndexRouter) AssignIndex(ctx *gin.Context) {
 	log.FromContext(ctx).Info("assigned index successfully", "podName", podName, "index", index)
 	ctx.String(http.StatusOK, fmt.Sprintf("%d", index))
 }
-

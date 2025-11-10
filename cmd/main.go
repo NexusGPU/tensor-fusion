@@ -247,7 +247,7 @@ func main() {
 	pricingProvider := pricing.NewStaticPricingProvider()
 	startWebhook(mgr, portAllocator, indexAllocator, pricingProvider)
 
-	scheduler, nodeExpander := startScheduler(ctx, allocator, indexAllocator, mgr, k8sVersion)
+	scheduler, nodeExpander := startScheduler(ctx, allocator, mgr, k8sVersion)
 
 	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator, nodeExpander)
 
@@ -330,7 +330,9 @@ func startHttpServerForTFClient(
 		setupLog.Error(err, "failed to create allocator info router")
 		os.Exit(1)
 	}
-	httpServer := server.NewHTTPServer(connectionRouter, assignHostPortRouter, assignIndexRouter, allocatorInfoRouter, leaderChan)
+	httpServer := server.NewHTTPServer(
+		connectionRouter, assignHostPortRouter, assignIndexRouter, allocatorInfoRouter, leaderChan,
+	)
 	go func() {
 		err := httpServer.Run()
 		if err != nil {
@@ -498,7 +500,6 @@ func startWebhook(
 func startScheduler(
 	ctx context.Context,
 	allocator *gpuallocator.GpuAllocator,
-	indexAllocator *indexallocator.IndexAllocator,
 	mgr manager.Manager,
 	k8sVersion *k8sVer.Version,
 ) (*scheduler.Scheduler, *expander.NodeExpander) {
@@ -512,7 +513,7 @@ func startScheduler(
 
 	gpuResourceFitOpt := app.WithPlugin(
 		gpuResourceFitPlugin.Name,
-		gpuResourceFitPlugin.NewWithDeps(allocator, mgr.GetClient(), indexAllocator),
+		gpuResourceFitPlugin.NewWithDeps(allocator, mgr.GetClient()),
 	)
 	gpuTopoOpt := app.WithPlugin(
 		gpuTopoPlugin.Name,
