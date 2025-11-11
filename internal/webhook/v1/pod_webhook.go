@@ -458,6 +458,14 @@ func assignPodLabelsAndAnnotations(isLocalGPU bool, pod *corev1.Pod, pool *tfv1.
 		pod.Labels[constants.LabelComponent] = constants.ComponentWorker
 		pod.Annotations[constants.EmbeddedWorkerAnnotation] = constants.TrueStringValue
 		// no need to add port in local gpu mode, communication is done through shared memory in the same process
+
+		// Add toleration for TensorFusion nodes
+		pod.Spec.Tolerations = append(pod.Spec.Tolerations, corev1.Toleration{
+			Key:      constants.NodeUsedByAnnotation,
+			Operator: corev1.TolerationOpEqual,
+			Value:    constants.TensorFusionSystemName,
+			Effect:   corev1.TaintEffectNoSchedule,
+		})
 	} else {
 		pod.Labels[constants.LabelComponent] = constants.ComponentClient
 	}
