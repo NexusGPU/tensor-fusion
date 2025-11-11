@@ -328,8 +328,6 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		if container.Resources.Limits == nil {
 			container.Resources.Limits = make(corev1.ResourceList)
 		}
-		// Request is 0 to prevent scheduler resource sum calculation issues
-		container.Resources.Requests[constants.PodIndexAnnotation] = resource.MustParse("0")
 		// Limit is set to actual index value (1-512) for Device Plugin to match Pod
 		container.Resources.Limits[constants.PodIndexAnnotation] = resource.MustParse(strconv.Itoa(index))
 
