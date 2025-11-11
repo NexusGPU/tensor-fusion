@@ -459,7 +459,7 @@ func assignPodLabelsAndAnnotations(isLocalGPU bool, pod *corev1.Pod, pool *tfv1.
 
 		// Add toleration for TensorFusion nodes
 		pod.Spec.Tolerations = append(pod.Spec.Tolerations, corev1.Toleration{
-			Key:      constants.NodeUsedByAnnotation,
+			Key:      constants.NodeUsedByTaintKey,
 			Operator: corev1.TolerationOpEqual,
 			Value:    constants.TensorFusionSystemName,
 			Effect:   corev1.TaintEffectNoSchedule,

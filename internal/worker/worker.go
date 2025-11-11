@@ -62,7 +62,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 
 	// tolerate the nodes that used by TensorFusion system
 	spec.Tolerations = append(spec.Tolerations, v1.Toleration{
-		Key:      constants.NodeUsedByAnnotation,
+		Key:      constants.NodeUsedByTaintKey,
 		Operator: v1.TolerationOpEqual,
 		Value:    constants.TensorFusionSystemName,
 		Effect:   v1.TaintEffectNoSchedule,

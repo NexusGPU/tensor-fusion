@@ -85,8 +85,9 @@ func RefreshGPUNodeCapacity(
 		// check if need to update K8S node label
 		if utils.IsProgressiveMigration() && coreNode != nil {
 			taint := &corev1.Taint{
-				Key:    constants.NodeUsedByAnnotation,
+				Key:    constants.NodeUsedByTaintKey,
 				Effect: corev1.TaintEffectNoSchedule,
+				Value:  constants.TensorFusionSystemName,
 			}
 			needUpdateNode := false
 			if node.Status.AvailableVRAM.Equal(node.Status.TotalVRAM) && node.Status.AvailableTFlops.Equal(node.Status.TotalTFlops) {

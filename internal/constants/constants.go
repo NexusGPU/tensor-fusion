@@ -122,7 +122,7 @@ const (
 	TensorFusionPodCounterKeyAnnotation = Domain + "/pod-counter-key"
 	TensorFusionPodCountAnnotation      = Domain + "/tf-pod-count"
 	TensorFusionWorkerSuffix            = "-tf"
-	NodeUsedByAnnotation                = Domain + "/used-by"
+	NodeUsedByTaintKey                  = Domain + "/used-by"
 
 	// For grey release
 	TensorFusionEnabledReplicasAnnotation = Domain + "/enabled-replicas"
