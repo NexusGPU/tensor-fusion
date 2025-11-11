@@ -188,7 +188,7 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 
 		return nil
 	} else {
-		gpuModels, err := gpuallocator.RefreshGPUNodeCapacity(ctx, r.Client, node, poolObj, r.Allocator)
+		gpuModels, err := gpuallocator.RefreshGPUNodeCapacity(ctx, r.Client, node, poolObj, r.Allocator, coreNode)
 		if err != nil {
 			return err
 		}

@@ -6,15 +6,20 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/kubernetes/pkg/util/taints"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 func RefreshGPUNodeCapacity(
 	ctx context.Context, k8sClient client.Client,
 	node *tfv1.GPUNode, pool *tfv1.GPUPool,
 	allocator *GpuAllocator,
+	coreNode *corev1.Node,
 ) ([]string, error) {
 	gpuList := &tfv1.GPUList{}
 	if err := k8sClient.List(ctx, gpuList, client.MatchingLabels{constants.LabelKeyOwner: node.Name}); err != nil {
@@ -75,6 +80,30 @@ func RefreshGPUNodeCapacity(
 		err := k8sClient.Status().Update(ctx, node)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update GPU node status: %w", err)
+		}
+
+		// check if need to update K8S node label
+		if utils.IsProgressiveMigration() && coreNode != nil {
+			taint := &corev1.Taint{
+				Key:    constants.NodeUsedByAnnotation,
+				Effect: corev1.TaintEffectNoSchedule,
+			}
+			needUpdateNode := false
+			if node.Status.AvailableVRAM.Equal(node.Status.TotalVRAM) && node.Status.AvailableTFlops.Equal(node.Status.TotalTFlops) {
+				// check if need to remove the taint
+				coreNode, needUpdateNode, _ = taints.RemoveTaint(coreNode, taint)
+			} else if !taints.TaintExists(coreNode.Spec.Taints, taint) {
+				// check if need to add the taint
+				coreNode, needUpdateNode, _ = taints.AddOrUpdateTaint(coreNode, taint)
+			}
+			if needUpdateNode {
+				log.FromContext(ctx).Info("Updating K8S node taints for isolation of tensor-fusion and non-tensor-fusion used nodes",
+					"node", coreNode.Name, "taint", taint.Key)
+				err := k8sClient.Update(ctx, coreNode)
+				if err != nil {
+					return nil, fmt.Errorf("failed to update K8S node: %w", err)
+				}
+			}
 		}
 	}
 	return gpuModels, nil
