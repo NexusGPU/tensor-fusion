@@ -60,6 +60,14 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	spec.EnableServiceLinks = ptr.To(false)
 	spec.SchedulerName = constants.SchedulerName
 
+	// tolerate the nodes that used by TensorFusion system
+	spec.Tolerations = append(spec.Tolerations, v1.Toleration{
+		Key:      constants.NodeUsedByTaintKey,
+		Operator: v1.TolerationOpEqual,
+		Value:    constants.TensorFusionSystemName,
+		Effect:   v1.TaintEffectNoSchedule,
+	})
+
 	// Add labels to identify this pod as part of the workload
 	labels, annotations := utils.AppendTFWorkerLabelsAndAnnotationsAfterTemplate(podTmpl, workload, containerName)
 

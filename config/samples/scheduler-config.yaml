@@ -40,6 +40,8 @@ profiles:
       totalIntranetBandWidthGBps: 100
   - name: NodeResourcesFit
     args:
+      ignoredResourceGroups:
+        - "tensor-fusion.ai"
       scoringStrategy:
         resources:
         - name: cpu

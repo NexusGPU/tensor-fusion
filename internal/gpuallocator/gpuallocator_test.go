@@ -97,7 +97,7 @@ var _ = Describe("GPU Allocator", func() {
 			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-pool"}, pool); err != nil {
 				Expect(err).NotTo(HaveOccurred())
 			}
-			_, _ = RefreshGPUNodeCapacity(ctx, k8sClient, gpuNode, pool, allocator)
+			_, _ = RefreshGPUNodeCapacity(ctx, k8sClient, gpuNode, pool, allocator, nil)
 
 			// Verify resources were reduced on the allocated GPU
 			gpu := getGPU(gpus[0].Name)

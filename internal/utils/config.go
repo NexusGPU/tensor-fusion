@@ -1,7 +1,7 @@
 package utils
 
 import (
-	context "context"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,7 +14,9 @@ import (
 	"github.com/lithammer/shortuuid/v4"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 )
 
@@ -196,4 +198,22 @@ func IsProgressiveMigration() bool {
 // For test purpose only
 func SetProgressiveMigration(isProgressiveMigration bool) {
 	nvidiaOperatorProgressiveMigrationEnv = isProgressiveMigration
+}
+
+// GetLeaderIP retrieves the leader IP from the ConfigMap
+// This is used by both PortAllocator and IndexAllocator for distributed allocation
+func GetLeaderIP(client client.Client) string {
+	leaderInfo := &corev1.ConfigMap{}
+	err := client.Get(context.Background(), types.NamespacedName{
+		Name:      constants.LeaderInfoConfigMapName,
+		Namespace: CurrentNamespace(),
+	}, leaderInfo)
+	if err != nil {
+		ctrl.Log.V(5).Info("Failed to get leader IP info from ConfigMap", "error", err)
+		return ""
+	}
+	if leaderInfo.Data == nil {
+		return ""
+	}
+	return leaderInfo.Data[constants.LeaderInfoConfigMapLeaderIPKey]
 }

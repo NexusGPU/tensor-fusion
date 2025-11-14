@@ -431,6 +431,15 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	if err != nil {
 		return fwk.NewStatus(fwk.Error, err.Error())
 	}
+
+	// Index is already assigned in webhook stage, scheduler cannot modify Pod
+	// Just verify that index annotation exists for logging
+	if pod.Annotations != nil {
+		if indexStr, exists := pod.Annotations[constants.PodIndexAnnotation]; exists && indexStr != "" {
+			s.logger.V(5).Info("Pod index already assigned in webhook", "pod", pod.Name, "index", indexStr)
+		}
+	}
+
 	return fwk.NewStatus(fwk.Success, "")
 }
 
@@ -467,11 +476,12 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 	// write the allocated GPU info to Pod in bindingCycle, before default binder changing the Pod nodeName info
 	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
 	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
+
+	// Patch GPU device IDs annotation
 	patch := []byte(`[{
 		"op": "add",
 		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
 		"value": "` + gpuIDs + `"}]`)
-
 	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patch))
 	if err != nil {
 		s.logger.Error(err, "failed to patch gpu device ids", "pod", pod.Name)

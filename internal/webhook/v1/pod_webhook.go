@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,6 +39,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,24 +48,26 @@ import (
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // SetupPodWebhookWithManager registers the webhook for Pod in the manager.
-func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator, pricingProvider pricing.PricingProvider) error {
+func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator, indexAllocator *indexallocator.IndexAllocator, pricingProvider pricing.PricingProvider) error {
 	webhookServer := mgr.GetWebhookServer()
 
 	webhookServer.Register("/mutate-v1-pod",
 		&admission.Webhook{
 			Handler: &TensorFusionPodMutator{
-				decoder:       admission.NewDecoder(mgr.GetScheme()),
-				Client:        mgr.GetClient(),
-				portAllocator: portAllocator,
+				decoder:        admission.NewDecoder(mgr.GetScheme()),
+				Client:         mgr.GetClient(),
+				portAllocator:  portAllocator,
+				indexAllocator: indexAllocator,
 			},
 		})
 	return nil
 }
 
 type TensorFusionPodMutator struct {
-	Client        client.Client
-	decoder       admission.Decoder
-	portAllocator *portallocator.PortAllocator
+	Client         client.Client
+	decoder        admission.Decoder
+	portAllocator  *portallocator.PortAllocator
+	indexAllocator *indexallocator.IndexAllocator
 }
 
 // Handle implements admission.Handler interface.
@@ -175,12 +179,16 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	// Add priorityClass if contains higher QoS level and Pod priority class not specified
 	if pod.Spec.PriorityClassName == "" &&
 		(tfInfo.Profile.Qos == tfv1.QoSHigh || tfInfo.Profile.Qos == tfv1.QoSCritical) {
-		pod.Spec.PriorityClassName = constants.TensorFusionSystemName + string(tfInfo.Profile.Qos)
+		pod.Spec.PriorityClassName = fmt.Sprintf("%s-%s",
+			constants.TensorFusionSystemName, string(tfInfo.Profile.Qos))
+		// Remove priority field if PriorityClassName is set, as Kubernetes Priority admission controller
+		// will compute priority from PriorityClassName and doesn't allow both fields to be set
+		pod.Spec.Priority = nil
 	}
 
 	// Inject initContainer and env variables
 	patches, err := m.patchTFClient(
-		pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices, tfInfo.Profile.SidecarWorker,
+		ctx, pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices, tfInfo.Profile.SidecarWorker,
 	)
 	if err != nil {
 		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
@@ -265,6 +273,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(
+	ctx context.Context,
 	pod *corev1.Pod,
 	pool *tfv1.GPUPool,
 	isLocalGPU bool,
@@ -280,6 +289,13 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(clientConfig)
 
 	assignPodLabelsAndAnnotations(isLocalGPU, pod, pool)
+
+	// Assign index once per pod (before processing containers)
+	// Index must be assigned in webhook stage since scheduler cannot modify Pod
+	// This is a special index resource (1-512), not a real device resource
+	// Index is assigned in ascending order (1, 2, 3, ...) via distributed lock (leader election)
+	index := m.assignDeviceAllocationIndex(ctx, pod)
+	log.FromContext(ctx).Info("assigned device allocation index successfully", "index", index, "pod", pod.Name)
 
 	for _, containerIndex := range containerIndices {
 		container := &pod.Spec.Containers[containerIndex]
@@ -306,6 +322,17 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		}
 
 		removeNativeGPULimits(container)
+
+		// Inject tensor-fusion.ai/index resource for Device Plugin communication
+		// This is a special index resource (not a real device), used for Pod-to-DevicePlugin communication
+		if container.Resources.Requests == nil {
+			container.Resources.Requests = make(corev1.ResourceList)
+		}
+		if container.Resources.Limits == nil {
+			container.Resources.Limits = make(corev1.ResourceList)
+		}
+		// Limit is set to actual index value (1-512) for Device Plugin to match Pod
+		container.Resources.Limits[constants.PodIndexAnnotation] = resource.MustParse(strconv.Itoa(index))
 
 		if !isLocalGPU {
 			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
@@ -351,6 +378,46 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	return patches, nil
 }
 
+func (m *TensorFusionPodMutator) assignDeviceAllocationIndex(ctx context.Context, pod *corev1.Pod) int {
+	var index int
+	var indexErr error
+	podIdentifier := pod.Name
+	if podIdentifier == "" {
+		// For Deployment/StatefulSet created pods, Name might be empty, use GenerateName + UID
+		podIdentifier = pod.GenerateName + string(pod.UID)
+	}
+
+	if m.indexAllocator != nil && m.indexAllocator.IsLeader {
+		index, indexErr = m.indexAllocator.AssignIndex(podIdentifier)
+		if indexErr != nil {
+			log := log.FromContext(ctx)
+			log.Error(indexErr, "failed to assign index for pod", "pod", podIdentifier)
+			index = 0
+		}
+	} else if m.indexAllocator != nil && !m.indexAllocator.IsLeader {
+		// If not leader, get index from leader via HTTP API (similar to port allocation)
+		// This ensures global increment across distributed webhook instances
+		index, indexErr = m.assignIndexFromLeader(ctx, pod)
+		if indexErr != nil {
+			log := log.FromContext(ctx)
+			log.Error(indexErr, "failed to assign index from leader", "pod", podIdentifier)
+			index = 0
+		}
+	} else {
+		// No allocator available, use 0 as fallback
+		index = 0
+	}
+
+	// Set annotation for matching in Device Plugin
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+	if index > 0 {
+		pod.Annotations[constants.PodIndexAnnotation] = strconv.Itoa(index)
+	}
+	return index
+}
+
 // Convert the strategic merge patch to JSON
 func calculatePodPatch(currentBytes []byte, pod *corev1.Pod, clientConfig *tfv1.ClientConfig, isLocalGPU bool) ([]jsonpatch.JsonPatchOperation, error) {
 	var patchBytes []byte
@@ -392,6 +459,14 @@ func assignPodLabelsAndAnnotations(isLocalGPU bool, pod *corev1.Pod, pool *tfv1.
 		pod.Labels[constants.LabelComponent] = constants.ComponentWorker
 		pod.Annotations[constants.EmbeddedWorkerAnnotation] = constants.TrueStringValue
 		// no need to add port in local gpu mode, communication is done through shared memory in the same process
+
+		// Add toleration for TensorFusion nodes
+		pod.Spec.Tolerations = append(pod.Spec.Tolerations, corev1.Toleration{
+			Key:      constants.NodeUsedByTaintKey,
+			Operator: corev1.TolerationOpEqual,
+			Value:    constants.TensorFusionSystemName,
+			Effect:   corev1.TaintEffectNoSchedule,
+		})
 	} else {
 		pod.Labels[constants.LabelComponent] = constants.ComponentClient
 	}
@@ -493,8 +568,7 @@ func (m *TensorFusionPodMutator) getPortNumber(pod *corev1.Pod) int {
 }
 
 func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod) (int, error) {
-
-	leaderIP := m.portAllocator.GetLeaderIP()
+	leaderIP := utils.GetLeaderIP(m.Client)
 	if leaderIP == "" {
 		return 0, fmt.Errorf("operator leader IP not found")
 	}
@@ -515,6 +589,42 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("host port allocation failed: %s", resp.Status)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read allocation response: %w", err)
+	}
+
+	return strconv.Atoi(string(body))
+}
+
+func (m *TensorFusionPodMutator) assignIndexFromLeader(ctx context.Context, pod *corev1.Pod) (int, error) {
+	leaderIP := utils.GetLeaderIP(m.Client)
+	if leaderIP == "" {
+		return 0, fmt.Errorf("operator leader IP not found")
+	}
+
+	podIdentifier := pod.Name
+	if podIdentifier == "" {
+		podIdentifier = pod.GenerateName + string(pod.UID)
+	}
+	urlStr := fmt.Sprintf("http://%s:8080/assign-index?podName=%s", leaderIP, podIdentifier)
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set(constants.AuthorizationHeader, "Bearer "+utils.ReadServiceAccountToken())
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("failed to assign index: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("index allocation failed: %s", resp.Status)
 	}
 
 	body, err := io.ReadAll(resp.Body)
