@@ -181,6 +181,9 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		(tfInfo.Profile.Qos == tfv1.QoSHigh || tfInfo.Profile.Qos == tfv1.QoSCritical) {
 		pod.Spec.PriorityClassName = fmt.Sprintf("%s-%s",
 			constants.TensorFusionSystemName, string(tfInfo.Profile.Qos))
+		// Remove priority field if PriorityClassName is set, as Kubernetes Priority admission controller
+		// will compute priority from PriorityClassName and doesn't allow both fields to be set
+		pod.Spec.Priority = nil
 	}
 
 	// Inject initContainer and env variables
