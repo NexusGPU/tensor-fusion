@@ -36,10 +36,10 @@ func RefreshGPUNodeCapacity(
 	node.Status.AvailableTFlops = resource.Quantity{}
 	node.Status.TotalTFlops = resource.Quantity{}
 	node.Status.TotalVRAM = resource.Quantity{}
-	node.Status.AllocationInfo = []*tfv1.RunningAppDetail{}
+	node.Status.AllocatedPods = make(map[string][]*tfv1.PodGPUInfo)
 
+	nodeGPUPodSet := make(map[string]struct{})
 	gpuModels := []string{}
-	deduplicationMap := make(map[string]struct{})
 
 	for _, gpu := range gpuList.Items {
 		if gpu.Status.Available == nil || gpu.Status.Capacity == nil {
@@ -51,10 +51,15 @@ func RefreshGPUNodeCapacity(
 		node.Status.TotalTFlops.Add(gpu.Status.Capacity.Tflops)
 		gpuModels = append(gpuModels, gpu.Status.GPUModel)
 
+		if _, ok := node.Status.AllocatedPods[gpu.Name]; !ok {
+			node.Status.AllocatedPods[gpu.Name] = []*tfv1.PodGPUInfo{}
+		}
 		for _, runningApp := range gpu.Status.RunningApps {
-			if _, ok := deduplicationMap[runningApp.Name+"_"+runningApp.Namespace]; !ok {
-				node.Status.AllocationInfo = append(node.Status.AllocationInfo, runningApp.DeepCopy())
-				deduplicationMap[runningApp.Name+"_"+runningApp.Namespace] = struct{}{}
+			for _, pod := range runningApp.Pods {
+				if _, ok := nodeGPUPodSet[pod.UID]; !ok {
+					nodeGPUPodSet[pod.UID] = struct{}{}
+				}
+				node.Status.AllocatedPods[gpu.Name] = append(node.Status.AllocatedPods[gpu.Name], pod)
 			}
 		}
 	}
@@ -62,6 +67,7 @@ func RefreshGPUNodeCapacity(
 	virtualVRAM, virtualTFlops := calculateVirtualCapacity(node, pool)
 	node.Status.VirtualTFlops = virtualTFlops
 	node.Status.VirtualVRAM = virtualVRAM
+	node.Status.TotalGPUPods = int32(len(nodeGPUPodSet))
 
 	vramAvailable := virtualVRAM.DeepCopy()
 	tflopsAvailable := virtualTFlops.DeepCopy()

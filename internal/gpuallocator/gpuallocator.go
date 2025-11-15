@@ -23,6 +23,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -320,7 +321,7 @@ func (s *GpuAllocator) Bind(
 		}
 		gpu.Status.Available.Vram.Sub(req.Request.Vram)
 
-		addRunningApp(s.ctx, gpu, req.WorkloadNameNamespace)
+		addRunningApp(s.ctx, gpu, req)
 
 		s.markGPUDirty(key)
 	}
@@ -500,7 +501,7 @@ func (s *GpuAllocator) Dealloc(
 			nodeName = storeGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		}
 
-		removeRunningApp(s.ctx, storeGPU, workloadNameNamespace)
+		removeRunningApp(s.ctx, storeGPU, request)
 
 		s.markGPUDirty(gpuNameNs)
 	}
@@ -1321,6 +1322,7 @@ func (s *GpuAllocator) reconcileAllocationState() {
 	})
 
 	actualAvailableMap := make(map[types.NamespacedName]*tfv1.Resource)
+	actualRunningAppsMap := make(map[types.NamespacedName][]*tfv1.RunningAppDetail)
 
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
@@ -1328,7 +1330,9 @@ func (s *GpuAllocator) reconcileAllocationState() {
 	for gpuKey, gpu := range s.gpuStore {
 		if gpu.Status.Capacity != nil {
 			actualAvailableMap[gpuKey] = gpu.Status.Capacity.DeepCopy()
+			actualRunningAppsMap[gpuKey] = gpu.Status.RunningApps
 			gpu.Status.RunningApps = []*tfv1.RunningAppDetail{}
+
 		}
 
 		// This is important for progressive migration mode
@@ -1351,7 +1355,7 @@ func (s *GpuAllocator) reconcileAllocationState() {
 				gpuAvailableRes.Tflops.Sub(allocRequest.Request.Tflops)
 				gpuAvailableRes.Vram.Sub(allocRequest.Request.Vram)
 			}
-			addRunningApp(ctx, s.gpuStore[gpuKey], tfv1.NameNamespace{Namespace: worker.Namespace, Name: worker.Labels[constants.WorkloadKey]})
+			addRunningApp(ctx, s.gpuStore[gpuKey], allocRequest)
 		}
 	}
 
@@ -1367,6 +1371,11 @@ func (s *GpuAllocator) reconcileAllocationState() {
 			gpu.Status.Available.Vram = actualAvailableMap[gpuKey].Vram
 			s.markGPUDirtyLocked(gpuKey)
 			log.FromContext(ctx).Info("Correcting gpu available resources", "gpu", gpuKey.Name, "tflops", gpu.Status.Available.Tflops.String(), "vram", gpu.Status.Available.Vram.String())
+		}
+
+		if !equality.Semantic.DeepEqual(gpu.Status.RunningApps, actualRunningAppsMap[gpuKey]) {
+			s.markGPUDirtyLocked(gpuKey)
+			log.FromContext(ctx).Info("Correcting gpu running apps", "gpu", gpuKey.Name, "runningApps", len(gpu.Status.RunningApps))
 		}
 	}
 
@@ -1401,7 +1410,8 @@ func (s *GpuAllocator) startWorkerCleanUpChecker() {
 	}
 }
 
-func addRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace tfv1.NameNamespace) {
+func addRunningApp(ctx context.Context, gpu *tfv1.GPU, allocRequest *tfv1.AllocRequest) {
+	workloadNameNamespace := allocRequest.WorkloadNameNamespace
 	if gpu == nil {
 		log.FromContext(ctx).Info("[Warning] GPU is nil, skip adding running app", "workload", workloadNameNamespace.Name, "namespace", workloadNameNamespace.Namespace)
 		return
@@ -1416,16 +1426,35 @@ func addRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace tfv
 
 	if found {
 		item.Count++
+		item.Pods = append(item.Pods, &tfv1.PodGPUInfo{
+			Name:      allocRequest.PodMeta.Name,
+			Namespace: allocRequest.PodMeta.Namespace,
+			UID:       string(allocRequest.PodMeta.UID),
+			Requests:  allocRequest.Request,
+			Limits:    allocRequest.Limit,
+			QoS:       allocRequest.QoS,
+		})
 	} else {
 		gpu.Status.RunningApps = append(gpu.Status.RunningApps, &tfv1.RunningAppDetail{
 			Name:      workloadNameNamespace.Name,
 			Namespace: workloadNameNamespace.Namespace,
 			Count:     1,
+			Pods: []*tfv1.PodGPUInfo{
+				{
+					Name:      allocRequest.PodMeta.Name,
+					Namespace: allocRequest.PodMeta.Namespace,
+					UID:       string(allocRequest.PodMeta.UID),
+					Requests:  allocRequest.Request,
+					Limits:    allocRequest.Limit,
+					QoS:       allocRequest.QoS,
+				},
+			},
 		})
 	}
 }
 
-func removeRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace tfv1.NameNamespace) {
+func removeRunningApp(ctx context.Context, gpu *tfv1.GPU, allocRequest *tfv1.AllocRequest) {
+	workloadNameNamespace := allocRequest.WorkloadNameNamespace
 	item, found := lo.Find(gpu.Status.RunningApps, func(app *tfv1.RunningAppDetail) bool {
 		return app.Name == workloadNameNamespace.Name && app.Namespace == workloadNameNamespace.Namespace
 	})
@@ -1435,6 +1464,10 @@ func removeRunningApp(ctx context.Context, gpu *tfv1.GPU, workloadNameNamespace 
 			// scale down to zero, not running any more
 			gpu.Status.RunningApps = lo.Filter(gpu.Status.RunningApps, func(app *tfv1.RunningAppDetail, _ int) bool {
 				return app.Name != workloadNameNamespace.Name && app.Namespace != workloadNameNamespace.Namespace
+			})
+		} else {
+			item.Pods = lo.Filter(item.Pods, func(pod *tfv1.PodGPUInfo, _ int) bool {
+				return pod.UID != string(allocRequest.PodMeta.UID)
 			})
 		}
 	} else {
