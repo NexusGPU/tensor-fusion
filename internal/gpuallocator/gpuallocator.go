@@ -1135,24 +1135,31 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 
 		dirtyNodes[gpu.Labels[constants.LabelKeyOwner]] = struct{}{}
 
-		// Update the GPU status in Kubernetes
-		// using raw patch to avoid outdated revision conflicts
-		gpuToPatch := &tfv1.GPU{}
-		gpuToPatch.SetName(gpu.GetName())
-		gpuToPatch.Status.Available = gpu.Status.Available
-		gpuToPatch.Status.RunningApps = gpu.Status.RunningApps
-
-		if err := s.Status().Patch(s.ctx, gpuToPatch, client.MergeFrom(&tfv1.GPU{})); err != nil {
-			if errors.IsNotFound(err) {
-				// skip not existing resource to avoid infinite loop
-				log.V(6).Info("GPU not found, skipping update", "gpu", key.String())
-				continue
+		// Update the GPU status in Kubernetes with retry on conflict
+		// Get the latest version, update status, and retry on conflict
+		if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			// Get the latest version before attempting an update
+			latest := &tfv1.GPU{}
+			if err := s.Get(s.ctx, key, latest); err != nil {
+				if errors.IsNotFound(err) {
+					// skip not existing resource to avoid infinite loop
+					log.V(6).Info("GPU not found, skipping update", "gpu", key.String())
+					return nil // return nil to stop retry
+				}
+				return err
 			}
-			// If update fails, put the GPU back in the dirty queue
+			// Apply our status updates to the latest version
+			latest.Status.Available = gpu.Status.Available
+			latest.Status.RunningApps = gpu.Status.RunningApps
+
+			// Attempt to update with the latest version
+			return s.Status().Update(s.ctx, latest)
+		}); err != nil {
+			// If update fails after retries, put the GPU back in the dirty queue
 			s.dirtyQueueLock.Lock()
 			s.dirtyQueue[key] = struct{}{}
 			s.dirtyQueueLock.Unlock()
-			log.Error(err, "Failed to patch GPU status, will retry later", "gpu", key.String())
+			log.Error(err, "Failed to update GPU status after retries, will retry later", "gpu", key.String())
 		}
 	}
 
@@ -1446,7 +1453,6 @@ func addRunningApp(ctx context.Context, gpu *tfv1.GPU, allocRequest *tfv1.AllocR
 					UID:       string(allocRequest.PodMeta.UID),
 					Requests:  allocRequest.Request,
 					Limits:    allocRequest.Limit,
-					QoS:       allocRequest.QoS,
 				},
 			},
 		})
