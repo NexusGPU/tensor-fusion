@@ -96,7 +96,10 @@ type GPUNodeStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// +optional
-	AllocationInfo []*RunningAppDetail `json:"allocationInfo,omitempty"`
+	TotalGPUPods int32 `json:"totalGPUPods,omitempty"`
+
+	// +optional
+	AllocatedPods map[string][]*PodGPUInfo `json:"allocatedPods,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Provisioning;Migrating;Running;Succeeded;Failed;Unknown;Destroying
