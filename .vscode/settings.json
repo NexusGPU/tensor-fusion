@@ -86,6 +86,7 @@
         "imageutils",
         "indexallocator",
         "influxdata",
+        "Infof",
         "internalcache",
         "internalqueue",
         "jsonpatch",
@@ -177,5 +178,9 @@
         "workloadprofiles",
         "workqueue",
         "Xlarge"
-    ]
+    ],
+    "files.associations": {
+        "__locale": "cpp",
+        "bitset": "cpp"
+    }
 }
