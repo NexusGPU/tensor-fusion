@@ -182,10 +182,11 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&GPUNodeReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("GPUNode"),
-		Allocator: allocator,
+		Client:                              mgr.GetClient(),
+		Scheme:                              mgr.GetScheme(),
+		Recorder:                            mgr.GetEventRecorderFor("GPUNode"),
+		Allocator:                           allocator,
+		CompatibleWithNvidiaContainerToolkit: false,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 

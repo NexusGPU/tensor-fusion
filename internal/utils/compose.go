@@ -724,7 +724,7 @@ func composeVectorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 	}
 }
 
-func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTemplateSpec, pool *tfv1.GPUPool, gpuNodeName string) {
+func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTemplateSpec, pool *tfv1.GPUPool, gpuNodeName string, compatibleWithNvidiaContainerToolkit bool) {
 	tmpl.Spec.RestartPolicy = v1.RestartPolicyOnFailure
 	serviceAccountName := GetSelfServiceAccountNameShort()
 	if serviceAccountName == "" {
@@ -745,8 +745,8 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 		tmpl.Spec.Containers[0].Image = pool.Spec.ComponentConfig.NodeDiscovery.Image
 	}
 
-	// Add initContainer to wait for NVIDIA GPU Operator toolkit-ready validation
-	if IsCompatibleWithNvidiaOperator() {
+	// Add initContainer to wait for NVIDIA Container Toolkit toolkit-ready validation
+	if compatibleWithNvidiaContainerToolkit {
 		initContainerImage := pool.Spec.ComponentConfig.NodeDiscovery.Image
 		if initContainerImage == "" {
 			// Use the same image as the main container if not specified

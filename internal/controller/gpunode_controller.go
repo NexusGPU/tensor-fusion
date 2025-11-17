@@ -48,10 +48,11 @@ import (
 // GPUNodeReconciler reconciles a GPUNode object
 type GPUNodeReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
-	Allocator *gpuallocator.GpuAllocator
-	Expander  *expander.NodeExpander
+	Scheme                               *runtime.Scheme
+	Recorder                             record.EventRecorder
+	Allocator                            *gpuallocator.GpuAllocator
+	Expander                             *expander.NodeExpander
+	CompatibleWithNvidiaContainerToolkit bool
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch;create;update;patch;delete
@@ -287,7 +288,7 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 	})
 	tmpl.Spec.EnableServiceLinks = ptr.To(false)
 
-	utils.AddTFNodeDiscoveryConfAfterTemplate(ctx, &tmpl, pool, gpunode.Name)
+	utils.AddTFNodeDiscoveryConfAfterTemplate(ctx, &tmpl, pool, gpunode.Name, r.CompatibleWithNvidiaContainerToolkit)
 
 	// create node-discovery job
 	job := &batchv1.Job{
