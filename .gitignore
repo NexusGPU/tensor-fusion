@@ -41,3 +41,8 @@ vendor
 logs
 
 *.prof
+
+provider/build
+
+cmd/hypervisor/hypervisor
+*.o
