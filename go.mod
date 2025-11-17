@@ -7,7 +7,7 @@ require (
 	github.com/NVIDIA/go-nvml v0.13.0-1
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107
 	github.com/aws/aws-sdk-go-v2 v1.39.6
-	github.com/aws/aws-sdk-go-v2/service/ec2 v1.264.0
+	github.com/aws/aws-sdk-go-v2/service/ec2 v1.269.0
 	github.com/aws/smithy-go v1.23.2
 	github.com/awslabs/operatorpkg v0.0.0-20251024191238-14554b75b88a
 	github.com/gin-contrib/gzip v1.2.5
@@ -39,7 +39,7 @@ require (
 	k8s.io/component-helpers v0.34.1
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/kube-scheduler v0.34.1
-	k8s.io/kubernetes v1.34.1
+	k8s.io/kubernetes v1.34.2
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4
 	sigs.k8s.io/controller-runtime v0.22.4
 	sigs.k8s.io/karpenter v1.8.0
