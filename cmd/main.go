@@ -99,7 +99,7 @@ var alertEvaluator *alert.AlertEvaluator
 var schedulerConfigPath string
 var alertEvaluatorReady chan struct{}
 var enableAutoExpander bool
-var compatibleWithNvidiaOperator bool
+var compatibleWithNvidiaContainerToolkit bool
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -151,16 +151,11 @@ func main() {
 			"refer https://prometheus.io/docs/alerting/latest/configuration")
 	flag.BoolVar(&enableAutoExpander, "enable-auto-expander", false, "if turn on auto expander, "+
 		"TensorFusion will auto expand Nodes then Pending Pods which caused by insufficient GPU resources found")
-	flag.BoolVar(&compatibleWithNvidiaOperator, "compatible-with-nvidia-operator", false,
-		"if enabled, node discovery will wait for NVIDIA GPU Operator toolkit-ready validation before starting")
+	flag.BoolVar(&compatibleWithNvidiaContainerToolkit, "compatible-with-nvidia-container-toolkit", false,
+		"if enabled, node discovery will wait for NVIDIA Container Toolkit toolkit-ready validation before starting")
 
 	klog.InitFlags(nil)
 	flag.Parse()
-
-	// Set environment variable for utils package to read
-	if compatibleWithNvidiaOperator {
-		_ = os.Setenv(constants.CompatibleWithNvidiaOperatorEnv, constants.TrueStringValue)
-	}
 	ctrl.SetLogger(klog.NewKlogr())
 	ctx := context.Background()
 
@@ -401,11 +396,12 @@ func startCustomResourceController(
 	}
 
 	if err = (&controller.GPUNodeReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("GPUNode"),
-		Allocator: allocator,
-		Expander:  nodeExpander,
+		Client:                               mgr.GetClient(),
+		Scheme:                               mgr.GetScheme(),
+		Recorder:                             mgr.GetEventRecorderFor("GPUNode"),
+		Allocator:                            allocator,
+		Expander:                             nodeExpander,
+		CompatibleWithNvidiaContainerToolkit: compatibleWithNvidiaContainerToolkit,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUNode")
 		os.Exit(1)

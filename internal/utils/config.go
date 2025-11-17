@@ -181,8 +181,6 @@ var nvidiaOperatorProgressiveMigrationEnv = os.Getenv(constants.NvidiaOperatorPr
 
 var isLicensedEnv = os.Getenv(constants.UsingCommercialComponentEnv) == constants.TrueStringValue
 
-var compatibleWithNvidiaOperatorEnv = os.Getenv(constants.CompatibleWithNvidiaOperatorEnv) == constants.TrueStringValue
-
 func init() {
 	if isLicensedEnv {
 		ctrl.Log.Info("Enabling none open source components, please make sure you are in trial stage or have bought commercial license. Contact us: support@tensor-fusion.com")
@@ -195,10 +193,6 @@ func IsLicensed() bool {
 
 func IsProgressiveMigration() bool {
 	return nvidiaOperatorProgressiveMigrationEnv
-}
-
-func IsCompatibleWithNvidiaOperator() bool {
-	return compatibleWithNvidiaOperatorEnv
 }
 
 // For test purpose only
