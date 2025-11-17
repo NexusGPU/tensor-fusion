@@ -745,6 +745,47 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 		tmpl.Spec.Containers[0].Image = pool.Spec.ComponentConfig.NodeDiscovery.Image
 	}
 
+	// Add initContainer to wait for NVIDIA GPU Operator toolkit-ready validation
+	if IsCompatibleWithNvidiaOperator() {
+		initContainerImage := pool.Spec.ComponentConfig.NodeDiscovery.Image
+		if initContainerImage == "" {
+			// Use the same image as the main container if not specified
+			initContainerImage = tmpl.Spec.Containers[0].Image
+		}
+
+		initContainer := v1.Container{
+			Name:    "toolkit-validation",
+			Image:   initContainerImage,
+			Command: []string{"sh", "-c"},
+			Args: []string{
+				"until [ -f /run/nvidia/validations/toolkit-ready ]; do echo waiting for nvidia container stack to be setup; sleep 5; done",
+			},
+			SecurityContext: &v1.SecurityContext{
+				Privileged: ptr.To(true),
+			},
+			VolumeMounts: []v1.VolumeMount{
+				{
+					Name:             "run-nvidia-validations",
+					MountPath:        "/run/nvidia/validations",
+					MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
+				},
+			},
+		}
+
+		tmpl.Spec.InitContainers = append(tmpl.Spec.InitContainers, initContainer)
+
+		// Add volume for NVIDIA validations
+		tmpl.Spec.Volumes = append(tmpl.Spec.Volumes, v1.Volume{
+			Name: "run-nvidia-validations",
+			VolumeSource: v1.VolumeSource{
+				HostPath: &v1.HostPathVolumeSource{
+					Path: "/run/nvidia/validations",
+					Type: ptr.To(v1.HostPathDirectoryOrCreate),
+				},
+			},
+		})
+	}
+
 	tmpl.Spec.Containers[0].Env = append(tmpl.Spec.Containers[0].Env, v1.EnvVar{
 		Name:  constants.NodeDiscoveryReportGPUNodeEnvName,
 		Value: gpuNodeName,
