@@ -289,7 +289,6 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(
 	virtualAvailableTFlops := resource.Quantity{}
 
 	runningAppsCnt := int32(0)
-	deduplicationMap := make(map[string]struct{})
 
 	for _, node := range nodes.Items {
 		totalGPUs = totalGPUs + node.Status.TotalGPUs
@@ -304,19 +303,13 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(
 		availableVRAM.Add(node.Status.AvailableVRAM)
 		availableTFlops.Add(node.Status.AvailableTFlops)
 
+		runningAppsCnt += node.Status.TotalGPUPods
+
 		if node.Status.VirtualAvailableVRAM != nil {
 			virtualAvailableVRAM.Add(*node.Status.VirtualAvailableVRAM)
 		}
 		if node.Status.VirtualAvailableTFlops != nil {
 			virtualAvailableTFlops.Add(*node.Status.VirtualAvailableTFlops)
-		}
-
-		for _, runningApp := range node.Status.AllocationInfo {
-			workloadIdentifier := runningApp.Name + "_" + runningApp.Namespace
-			if _, ok := deduplicationMap[workloadIdentifier]; !ok {
-				runningAppsCnt++
-				deduplicationMap[workloadIdentifier] = struct{}{}
-			}
 		}
 	}
 

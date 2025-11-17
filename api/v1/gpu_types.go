@@ -79,6 +79,19 @@ type RunningAppDetail struct {
 
 	// Worker count
 	Count int `json:"count"`
+
+	// Pod names that are running this workload
+	// +optional
+	Pods []*PodGPUInfo `json:"pods,omitempty"`
+}
+
+type PodGPUInfo struct {
+	Name      string   `json:"name,omitempty"`
+	Namespace string   `json:"namespace,omitempty"`
+	UID       string   `json:"uid,omitempty"`
+	Requests  Resource `json:"requests,omitempty"`
+	Limits    Resource `json:"limits,omitempty"`
+	QoS       QoSLevel `json:"qos,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Provisioning;Running;Unknown;Destroying;Migrating

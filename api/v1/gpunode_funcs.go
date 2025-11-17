@@ -10,7 +10,7 @@ func (node *GPUNode) InitializeStatus(initTFlops, initVRAM resource.Quantity, in
 		TotalTFlops:         initTFlops,
 		TotalVRAM:           initVRAM,
 		TotalGPUs:           initGPUs,
-		AllocationInfo:      []*RunningAppDetail{},
+		AllocatedPods:       make(map[string][]*PodGPUInfo),
 		LoadedModels:        &[]string{},
 		ManagedGPUDeviceIDs: []string{},
 		ObservedGeneration:  node.Generation,
