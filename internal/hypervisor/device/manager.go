@@ -28,9 +28,8 @@ import (
 type Manager struct {
 	mu                sync.RWMutex
 	devices           map[string]*DeviceInfo       // key: device UUID
-	allocations       map[string]*DeviceAllocation // key: pod UID
-	deviceToAlloc     map[string][]string          // device UUID -> []pod UID
-	pools             map[string]*DevicePool
+	allocations       map[string]*DeviceAllocation // key: worker UID
+	deviceToAlloc     map[string][]string          // device UUID -> []worker UID
 	accelerator       *AcceleratorInterface
 	discoveryInterval time.Duration
 	stopCh            chan struct{}
@@ -44,7 +43,6 @@ func NewManager(acceleratorLibPath string, discoveryInterval time.Duration) (*Ma
 		devices:           make(map[string]*DeviceInfo),
 		allocations:       make(map[string]*DeviceAllocation),
 		deviceToAlloc:     make(map[string][]string),
-		pools:             make(map[string]*DevicePool),
 		accelerator:       accel,
 		discoveryInterval: discoveryInterval,
 		stopCh:            make(chan struct{}),
@@ -60,9 +58,13 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("initial device discovery failed: %w", err)
 	}
 
+	// TODO new framework
+
+	// TODO new backend
+	// TODO start backend
+
 	// Start periodic discovery
 	go m.periodicDiscovery()
-
 	return nil
 }
 
@@ -129,113 +131,15 @@ func (m *Manager) GetDevice(uuid string) (*DeviceInfo, bool) {
 	return device, exists
 }
 
-// RegisterPool registers a device pool
-func (m *Manager) RegisterPool(pool *DevicePool) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Validate pool devices exist
-	for _, uuid := range pool.DeviceUUIDs {
-		if _, exists := m.devices[uuid]; !exists {
-			return fmt.Errorf("device %s not found", uuid)
-		}
-	}
-
-	m.pools[pool.Name] = pool
-	return nil
-}
-
 // Allocate allocates devices for a pod request
-func (m *Manager) Allocate(req *AllocateRequest) (*AllocateResponse, error) {
+func (m *Manager) Allocate(req *DeviceAllocateRequest) (*DeviceAllocateResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	// Get pool
-	pool, exists := m.pools[req.PoolName]
-	if !exists {
-		return &AllocateResponse{
-			Success: false,
-			Error:   fmt.Sprintf("pool %s not found", req.PoolName),
-		}, nil
-	}
-
-	// Find available devices in pool
-	availableDevices := m.findAvailableDevices(pool, req.DeviceCount)
-	if len(availableDevices) < req.DeviceCount {
-		return &AllocateResponse{
-			Success: false,
-			Error:   fmt.Sprintf("not enough available devices: need %d, found %d", req.DeviceCount, len(availableDevices)),
-		}, nil
-	}
-
-	// Allocate devices
-	allocations := make([]DeviceAllocation, 0, req.DeviceCount)
-	for i := 0; i < req.DeviceCount; i++ {
-		device := availableDevices[i]
-		allocation := &DeviceAllocation{
-			DeviceUUID:    device.UUID,
-			PodUID:        req.PodUID,
-			PodName:       req.PodName,
-			Namespace:     req.Namespace,
-			IsolationMode: req.IsolationMode,
-			WorkerID:      fmt.Sprintf("%s-%s-%d", req.PodUID, device.UUID, i),
-			AllocatedAt:   time.Now(),
-		}
-
-		// Handle different isolation modes
-		switch req.IsolationMode {
-		case IsolationModePartitioned:
-			if req.TemplateID == "" {
-				return &AllocateResponse{
-					Success: false,
-					Error:   "templateID required for partitioned mode",
-				}, nil
-			}
-			partitionUUID, _, err := m.accelerator.AssignPartition(req.TemplateID, device.UUID)
-			if err != nil {
-				return &AllocateResponse{
-					Success: false,
-					Error:   fmt.Sprintf("failed to assign partition: %v", err),
-				}, nil
-			}
-			allocation.PartitionUUID = partitionUUID
-			allocation.TemplateID = req.TemplateID
-			// Note: partition overhead could be used to adjust available memory
-
-		case IsolationModeHard:
-			if req.MemoryBytes > 0 {
-				if err := m.accelerator.SetMemHardLimit(allocation.WorkerID, device.UUID, req.MemoryBytes); err != nil {
-					return &AllocateResponse{
-						Success: false,
-						Error:   fmt.Sprintf("failed to set memory limit: %v", err),
-					}, nil
-				}
-				allocation.MemoryLimit = req.MemoryBytes
-			}
-			if req.ComputeUnits > 0 {
-				if err := m.accelerator.SetComputeUnitHardLimit(allocation.WorkerID, device.UUID, req.ComputeUnits); err != nil {
-					return &AllocateResponse{
-						Success: false,
-						Error:   fmt.Sprintf("failed to set compute limit: %v", err),
-					}, nil
-				}
-				allocation.ComputeLimit = req.ComputeUnits
-			}
-
-		case IsolationModeSoft, IsolationModeShared:
-			// No immediate action needed, handled by limiter.so at runtime
-		}
-
-		allocations = append(allocations, *allocation)
-		m.allocations[req.PodUID] = allocation
-		if m.deviceToAlloc[device.UUID] == nil {
-			m.deviceToAlloc[device.UUID] = make([]string, 0)
-		}
-		m.deviceToAlloc[device.UUID] = append(m.deviceToAlloc[device.UUID], req.PodUID)
-	}
-
-	return &AllocateResponse{
-		Allocations: allocations,
+	return &DeviceAllocateResponse{
+		DeviceNodes: req.DeviceUUIDs,
+		Annotations: make(map[string]string),
+		Mounts:      make(map[string]string),
+		EnvVars:     make(map[string]string),
 		Success:     true,
 	}, nil
 }
@@ -274,34 +178,11 @@ func (m *Manager) Deallocate(podUID string) error {
 	return nil
 }
 
-// findAvailableDevices finds available devices in a pool
-func (m *Manager) findAvailableDevices(pool *DevicePool, count int) []*DeviceInfo {
-	available := make([]*DeviceInfo, 0)
-
-	for _, uuid := range pool.DeviceUUIDs {
-		device, exists := m.devices[uuid]
-		if !exists {
-			continue
-		}
-
-		// Check if device has capacity (simple check: not too many allocations)
-		allocCount := len(m.deviceToAlloc[uuid])
-		if uint32(allocCount) < device.Capabilities.MaxWorkersPerDevice {
-			available = append(available, device)
-			if len(available) >= count {
-				break
-			}
-		}
-	}
-
-	return available
-}
-
 // GetAllocation returns allocation for a pod
-func (m *Manager) GetAllocation(podUID string) (*DeviceAllocation, bool) {
+func (m *Manager) GetAllocation(workerUID string) (*DeviceAllocation, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	allocation, exists := m.allocations[podUID]
+	allocation, exists := m.allocations[workerUID]
 	return allocation, exists
 }

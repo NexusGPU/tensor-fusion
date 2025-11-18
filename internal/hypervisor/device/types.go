@@ -100,50 +100,42 @@ type DeviceAllocation struct {
 	AllocatedAt   time.Time
 }
 
-// DevicePool represents a pool of devices with configuration
-type DevicePool struct {
-	Name           string
-	Vendor         string // "NVIDIA", "Ascend", etc.
-	IsolationMode  IsolationMode
-	DeviceUUIDs    []string
-	AcceleratorLib string // Path to accelerator.so library
-}
-
-// AllocateRequest represents a request to allocate devices
-type AllocateRequest struct {
-	PodUID        string
-	PodName       string
-	Namespace     string
-	PoolName      string
-	DeviceCount   int
+// DeviceAllocateRequest represents a request to allocate devices
+type DeviceAllocateRequest struct {
+	WorkerUID     string
+	DeviceUUIDs   []string
 	IsolationMode IsolationMode
-	MemoryBytes   uint64
-	ComputeUnits  uint32
-	TemplateID    string // For partitioned mode
+
+	MemoryLimitBytes  uint64
+	ComputeLimitUnits uint32
+	TemplateID        string
 }
 
-// AllocateResponse represents the response from device allocation
-type AllocateResponse struct {
-	Allocations []DeviceAllocation
+// DeviceAllocateResponse represents the response from device allocation
+type DeviceAllocateResponse struct {
+	DeviceNodes []string
+	Annotations map[string]string
+	Mounts      map[string]string
+	EnvVars     map[string]string
 	Success     bool
-	Error       string
+	ErrMsg      string
 }
 
 // ComputeUtilization represents compute utilization for a process on a device
 type ComputeUtilization struct {
-	ProcessID         string
-	DeviceUUID        string
+	ProcessID          string
+	DeviceUUID         string
 	UtilizationPercent float64
-	ActiveSMs         uint64
-	TotalSMs          uint64
-	TflopsUsed        float64
+	ActiveSMs          uint64
+	TotalSMs           uint64
+	TflopsUsed         float64
 }
 
 // MemoryUtilization represents memory utilization for a process on a device
 type MemoryUtilization struct {
-	ProcessID         string
-	DeviceUUID        string
-	UsedBytes         uint64
-	ReservedBytes     uint64
+	ProcessID          string
+	DeviceUUID         string
+	UsedBytes          uint64
+	ReservedBytes      uint64
 	UtilizationPercent float64
 }
