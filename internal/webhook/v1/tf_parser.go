@@ -182,7 +182,7 @@ func parseAutoScalingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workload
 
 func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) error {
 	// extract any containers has GPU count limits and set to annotation
-	migratedContainerLimits := []string{}
+	isMigratedFromContainerLimits := false
 	gpuCount, hasValue := pod.Annotations[constants.GpuCountAnnotation]
 	if hasValue {
 		val, err := strconv.ParseInt(gpuCount, 10, 32)
@@ -215,10 +215,8 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 	if tflopsLimit, hasValue := parseResourceQuantity(pod, constants.TFLOPSLimitAnnotation); hasValue {
 		workloadProfile.Spec.Resources.Limits.Tflops = tflopsLimit
 		// clean compute percent limit when tflops limit is set in annotation
-		if len(migratedContainerLimits) > 0 {
+		if isMigratedFromContainerLimits {
 			workloadProfile.Spec.Resources.Limits.ComputePercent = resource.Quantity{}
-			// convert limits containers to annotation for inject container
-			pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(migratedContainerLimits, ",")
 		}
 	}
 	if vramLimit, hasValue := parseResourceQuantity(pod, constants.VRAMLimitAnnotation); hasValue {
