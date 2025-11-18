@@ -202,6 +202,10 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 					// and one tensor-fusion.ai/vram-limit annotation, convert this to 100% computing-percent
 					workloadProfile.Spec.Resources.Limits.ComputePercent = resource.MustParse("100")
 					isMigratedFromContainerLimits = true
+					// convert limits containers to annotation for inject container when not specified
+					if pod.Annotations[constants.InjectContainerAnnotation] == "" {
+						pod.Annotations[constants.InjectContainerAnnotation] = container.Name
+					}
 					break
 				}
 			}
