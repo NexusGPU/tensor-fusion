@@ -91,11 +91,11 @@ var _ = Describe("Autoscaler", func() {
 
 			// create two workloads
 			pool := tfEnv.GetGPUPool(0)
-			// with two replias
+			// with two replicas
 			workload0 := createWorkload(pool, 0, 2)
 			workload0Workers := getWorkers(workload0)
 			key0 := WorkloadID{workload0.Namespace, workload0.Name}
-			// with one replia
+			// with one replica
 			workload1 := createWorkload(pool, 1, 1)
 			workload1Workers := getWorkers(workload1)
 			key1 := WorkloadID{workload1.Namespace, workload1.Name}
@@ -539,8 +539,8 @@ func (f *FakeRecommender) Name() string {
 	return "fake"
 }
 
-func (f *FakeRecommender) Recommend(ctx context.Context, workoad *workload.State) (*recommender.RecResult, error) {
-	meta.SetStatusCondition(&workoad.Status.Conditions, metav1.Condition{
+func (f *FakeRecommender) Recommend(ctx context.Context, workload *workload.State) (*recommender.RecResult, error) {
+	meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
 		Type:               constants.ConditionStatusTypeRecommendationProvided,
 		Status:             metav1.ConditionTrue,
 		LastTransitionTime: metav1.Now(),

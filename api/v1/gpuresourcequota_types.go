@@ -196,6 +196,10 @@ type AllocRequest struct {
 	QoS QoSLevel
 
 	Isolation IsolationModeType
+
+	// PartitionTemplateID is the template ID used for partitioned mode allocation
+	// This is set by the scheduler when a partition is matched, or read from pod annotation
+	PartitionTemplateID string
 }
 
 func (p *AllocRequest) Clone() fwk.StateData {
