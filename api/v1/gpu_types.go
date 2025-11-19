@@ -65,6 +65,16 @@ type GPUStatus struct {
 
 	// +optional
 	RunningApps []*RunningAppDetail `json:"runningApps,omitempty"`
+
+	// +optional
+	// PartitionTemplates contains available partition templates for this GPU (e.g., MIG profiles)
+	// Reported from discovery, each template has fixed resource allocation
+	PartitionTemplates []PartitionTemplate `json:"partitionTemplates,omitempty"`
+
+	// +optional
+	// AllocatedPartitions tracks allocated partitions on this GPU
+	// Key is partitionUUID, value contains template info and allocated resources
+	AllocatedPartitions map[string]AllocatedPartition `json:"allocatedPartitions,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=tensor-fusion;nvidia-device-plugin
@@ -96,6 +106,36 @@ type PodGPUInfo struct {
 	Requests  Resource `json:"requests,omitempty"`
 	Limits    Resource `json:"limits,omitempty"`
 	QoS       QoSLevel `json:"qos,omitempty"`
+}
+
+// PartitionTemplate represents a hardware partition template (e.g., MIG profile)
+// Only stores template ID and name in GPU status. Detailed resource information
+// is stored in public GPU info config.
+type PartitionTemplate struct {
+	// TemplateID is the unique identifier for this partition template (e.g., "1g.24gb", "4g.94gb")
+	TemplateID string `json:"templateId"`
+
+	// Name is a human-readable name for this template
+	Name string `json:"name"`
+}
+
+// AllocatedPartition represents an allocated partition on a GPU
+// Key in AllocatedPartitions map is podUID
+type AllocatedPartition struct {
+	// TemplateID is the template used to create this partition
+	TemplateID string `json:"templateId"`
+
+	// PodUID is the UID of the pod using this partition (used as map key)
+	PodUID string `json:"podUid"`
+
+	// PodName is the name of the pod using this partition
+	PodName string `json:"podName"`
+
+	// Namespace is the namespace of the pod using this partition
+	Namespace string `json:"namespace"`
+
+	// AllocatedAt is when this partition was allocated
+	AllocatedAt metav1.Time `json:"allocatedAt"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Provisioning;Running;Unknown;Destroying;Migrating

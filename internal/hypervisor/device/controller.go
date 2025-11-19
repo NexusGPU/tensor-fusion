@@ -112,6 +112,54 @@ func (m *Controller) getDevice(uuid string) (*api.DeviceInfo, bool) {
 func (m *Controller) Allocate(req *api.DeviceAllocateRequest) (*api.DeviceAllocateResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Validate devices exist
+	for _, deviceUUID := range req.DeviceUUIDs {
+		if _, exists := m.devices[deviceUUID]; !exists {
+			return &api.DeviceAllocateResponse{
+				Success: false,
+				ErrMsg:  fmt.Sprintf("device not found: %s", deviceUUID),
+			}, nil
+		}
+	}
+
+	// Create allocation record
+	allocation := &api.DeviceAllocation{
+		DeviceUUID:    req.DeviceUUIDs[0], // Use first device for now
+		PodUID:        req.WorkerUID,
+		WorkerID:      req.WorkerUID,
+		IsolationMode: req.IsolationMode,
+		TemplateID:    req.TemplateID,
+		MemoryLimit:   req.MemoryLimitBytes,
+		ComputeLimit:  req.ComputeLimitUnits,
+		AllocatedAt:   time.Now(),
+	}
+
+	// Handle partitioned mode
+	if req.IsolationMode == api.IsolationModePartitioned && req.TemplateID != "" {
+		deviceUUID := req.DeviceUUIDs[0]
+		partitionUUID, overhead, err := m.accelerator.AssignPartition(req.TemplateID, deviceUUID)
+		if err != nil {
+			return &api.DeviceAllocateResponse{
+				Success: false,
+				ErrMsg:  fmt.Sprintf("failed to assign partition: %v", err),
+			}, nil
+		}
+		allocation.PartitionUUID = partitionUUID
+		// Adjust memory limit if needed
+		if allocation.MemoryLimit > 0 && overhead > 0 {
+			allocation.MemoryLimit -= overhead
+		}
+	}
+
+	// Store allocation
+	m.allocations[req.WorkerUID] = allocation
+
+	// Update device to allocation mapping
+	for _, deviceUUID := range req.DeviceUUIDs {
+		m.deviceToAlloc[deviceUUID] = append(m.deviceToAlloc[deviceUUID], req.WorkerUID)
+	}
+
 	return &api.DeviceAllocateResponse{
 		DeviceNodes: req.DeviceUUIDs,
 		Annotations: make(map[string]string),
@@ -237,19 +285,81 @@ func (m *Controller) GetDeviceAllocationUpdates(ctx context.Context, deviceUUID 
 func (m *Controller) GetGPUMetrics(ctx context.Context) (map[string]*api.GPUUsageMetrics, error) {
 	m.mu.RLock()
 	devices := make([]*api.DeviceInfo, 0, len(m.devices))
+	deviceUUIDs := make([]string, 0, len(m.devices))
 	for _, device := range m.devices {
 		devices = append(devices, device)
+		deviceUUIDs = append(deviceUUIDs, device.UUID)
 	}
 	m.mu.RUnlock()
 
-	// TODO: Get actual GPU metrics from accelerator interface
-	// For now, return empty metrics
+	// Get device metrics from accelerator interface
+	// Note: This requires GetDeviceMetrics from accelerator.h which needs to be implemented
+	// For now, we'll use process-level metrics to aggregate
 	result := make(map[string]*api.GPUUsageMetrics)
+
+	// Get memory utilization from processes
+	memUtils, err := m.accelerator.GetProcessMemoryUtilization()
+	if err != nil {
+		// If we can't get metrics, return empty metrics for each device
+		for _, device := range devices {
+			result[device.UUID] = &api.GPUUsageMetrics{
+				DeviceUUID: device.UUID,
+			}
+		}
+		return result, nil
+	}
+
+	// Aggregate memory usage per device
+	deviceMemoryUsed := make(map[string]uint64)
+	for _, memUtil := range memUtils {
+		deviceMemoryUsed[memUtil.DeviceUUID] += memUtil.UsedBytes
+	}
+
+	// Get compute utilization
+	computeUtils, err := m.accelerator.GetProcessComputeUtilization()
+	if err != nil {
+		// Continue with memory metrics only
+	}
+
+	// Aggregate compute usage per device
+	deviceComputePercent := make(map[string]float64)
+	deviceComputeTflops := make(map[string]float64)
+	for _, computeUtil := range computeUtils {
+		deviceComputePercent[computeUtil.DeviceUUID] += computeUtil.UtilizationPercent
+		deviceComputeTflops[computeUtil.DeviceUUID] += computeUtil.TflopsUsed
+	}
+
+	// Build metrics for each device
 	for _, device := range devices {
+		memoryUsed := deviceMemoryUsed[device.UUID]
+		memoryPercent := 0.0
+		if device.TotalMemory > 0 {
+			memoryPercent = float64(memoryUsed) / float64(device.TotalMemory) * 100.0
+		}
+
 		result[device.UUID] = &api.GPUUsageMetrics{
-			DeviceUUID: device.UUID,
-			// TODO: Populate with actual metrics from accelerator
+			DeviceUUID:        device.UUID,
+			MemoryBytes:       memoryUsed,
+			MemoryPercentage:  memoryPercent,
+			ComputePercentage: deviceComputePercent[device.UUID],
+			ComputeTflops:     deviceComputeTflops[device.UUID],
 		}
 	}
+
 	return result, nil
+}
+
+// GetProcessComputeUtilization exposes accelerator interface method
+func (m *Controller) GetProcessComputeUtilization() ([]api.ComputeUtilization, error) {
+	return m.accelerator.GetProcessComputeUtilization()
+}
+
+// GetProcessMemoryUtilization exposes accelerator interface method
+func (m *Controller) GetProcessMemoryUtilization() ([]api.MemoryUtilization, error) {
+	return m.accelerator.GetProcessMemoryUtilization()
+}
+
+// Close closes the device controller and unloads the accelerator library
+func (m *Controller) Close() error {
+	return m.accelerator.Close()
 }

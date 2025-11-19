@@ -44,6 +44,39 @@ const CleanUpCheckInterval = 3 * time.Minute
 var mu sync.Mutex
 var GPUCapacityMap = map[string]tfv1.Resource{}
 
+// PartitionTemplateMap stores partition template info by GPU model
+// Key: GPU model (e.g., "A100_SXM_80G"), Value: map of templateID -> template info
+var PartitionTemplateMap = map[string]map[string]config.PartitionTemplateInfo{}
+
+// MaxPartitionsMap stores max partitions by GPU model
+// Key: GPU model, Value: max partitions (e.g., 7 for MIG)
+var MaxPartitionsMap = map[string]uint32{}
+
+// LoadPartitionTemplatesFromConfig loads partition templates and max partitions from GPU info config
+// This should be called when GPU info config is loaded/updated
+func LoadPartitionTemplatesFromConfig(gpuInfos []config.GpuInfo) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, gpuInfo := range gpuInfos {
+		// Store max partitions
+		if gpuInfo.MaxPartitions > 0 {
+			MaxPartitionsMap[gpuInfo.Model] = gpuInfo.MaxPartitions
+			MaxPartitionsMap[gpuInfo.FullModelName] = gpuInfo.MaxPartitions
+		}
+
+		// Store partition templates
+		if len(gpuInfo.PartitionTemplates) > 0 {
+			templateMap := make(map[string]config.PartitionTemplateInfo, len(gpuInfo.PartitionTemplates))
+			for _, template := range gpuInfo.PartitionTemplates {
+				templateMap[template.TemplateID] = template
+			}
+			PartitionTemplateMap[gpuInfo.Model] = templateMap
+			PartitionTemplateMap[gpuInfo.FullModelName] = templateMap
+		}
+	}
+}
+
 type Strategy interface {
 	// When isForNode = true, indicates each GPU's node level score
 	// otherwise it's single GPU score inside one node
@@ -178,30 +211,43 @@ func (s *GpuAllocator) Filter(
 	toFilterGPUs []*tfv1.GPU,
 	isSimulateSchedule bool,
 ) ([]*tfv1.GPU, []filter.FilterDetail, error) {
-	// Add SameNodeFilter if count > 1 to ensure GPUs are from the same node
-	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request, req.GPUIndices))
+	// Filter order: index -> isolation -> partition -> resource -> (model, vendor, nodeAffinity) -> sameNode
+	filterRegistry := s.filterRegistry
 
-	// Add GPU model filter if specified
-	if req.GPUModel != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
+	// 1. GPU index filter (extracted from resource filter)
+	if len(req.GPUIndices) > 0 {
+		filterRegistry = filterRegistry.With(filter.NewGPUIndexFilter(req.GPUIndices))
 	}
 
-	// Add GPU vendor filter if specified
-	if req.GPUVendor != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUVendorFilter(req.GPUVendor))
-	}
-
-	// Add GPU isolation mode filter if specified
+	// 2. GPU isolation mode filter
 	if req.Isolation != "" {
 		filterRegistry = filterRegistry.With(filter.NewGPUIsolationModeFilter(req.Isolation))
 	}
 
-	// NOTE: deprecated, use Kubernetes native spec template affinity way
+	// 3. Partition template filter (only for partitioned mode)
+	if req.Isolation == tfv1.IsolationModePartitioned {
+		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, MaxPartitionsMap))
+	}
+
+	// 4. Resource filter (moved after isolation/partition filters)
+	filterRegistry = filterRegistry.With(filter.NewResourceFilter(req.Request))
+
+	// 5. GPU model filter if specified
+	if req.GPUModel != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
+	}
+
+	// 6. GPU vendor filter if specified
+	if req.GPUVendor != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUVendorFilter(req.GPUVendor))
+	}
+
+	// 7. NOTE: deprecated, use Kubernetes native spec template affinity way
 	if req.NodeAffinity != nil {
 		filterRegistry = filterRegistry.With(filter.NewNodeAffinityFilter(s.Client, req.NodeAffinity))
 	}
 
-	// Same node filter must be applied at final step
+	// 8. Same node filter must be applied at final step
 	if req.Count > 1 {
 		filterRegistry = filterRegistry.With(filter.NewSameNodeFilter(req.Count))
 	}
@@ -234,26 +280,58 @@ func (s *GpuAllocator) FilterWithPreempt(
 			} else {
 				reqTflops = preemptAllocRequest.Request.Tflops
 			}
-			gpuCopy.Status.Available.Tflops.Add(reqTflops)
-			gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
+
+			// Handle partitioned mode: add back partition resources from config
+			if preemptAllocRequest.Isolation == tfv1.IsolationModePartitioned && preemptAllocRequest.PartitionTemplateID != "" {
+				partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(gpuCopy.Status.GPUModel, preemptAllocRequest.PartitionTemplateID)
+				if err == nil {
+					gpuCopy.Status.Available.Tflops.Add(partitionTflops)
+					gpuCopy.Status.Available.Vram.Add(partitionVram)
+				} else {
+					// Fallback to request resources
+					gpuCopy.Status.Available.Tflops.Add(reqTflops)
+					gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
+				}
+			} else {
+				// Non-partitioned mode
+				gpuCopy.Status.Available.Tflops.Add(reqTflops)
+				gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
+			}
 			toFilterGPUs = append(toFilterGPUs, gpuCopy)
 		}
 	}
 
-	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request, req.GPUIndices))
-	// Add GPU model filter if specified
+	// Use same filter order as regular Filter
+	filterRegistry := s.filterRegistry
+
+	// 1. GPU index filter
+	if len(req.GPUIndices) > 0 {
+		filterRegistry = filterRegistry.With(filter.NewGPUIndexFilter(req.GPUIndices))
+	}
+
+	// 2. GPU isolation mode filter
+	if req.Isolation != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUIsolationModeFilter(req.Isolation))
+	}
+
+	// 3. Partition template filter (only for partitioned mode)
+	if req.Isolation == tfv1.IsolationModePartitioned {
+		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, MaxPartitionsMap))
+	}
+
+	// 4. Resource filter
+	filterRegistry = filterRegistry.With(filter.NewResourceFilter(req.Request))
+
+	// 5. GPU model filter if specified
 	if req.GPUModel != "" {
 		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
 	}
 
-	// Add GPU vendor filter if specified
+	// 6. GPU vendor filter if specified
 	if req.GPUVendor != "" {
 		filterRegistry = filterRegistry.With(filter.NewGPUVendorFilter(req.GPUVendor))
 	}
-	// Add GPU isolation mode filter if specified
-	if req.Isolation != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUIsolationModeFilter(req.Isolation))
-	}
+
 	// No need to check count and other filters since it's always in the same node during each preempt trial
 	filteredGPUs, filterDetails, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs, false)
 	if err != nil {
@@ -290,6 +368,83 @@ func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []*tfv1.GPU) 
 	}
 
 	return result, nil
+}
+
+// GetMatchedPartition finds the best matching partition template for a request in partitioned mode.
+// Returns the GPU, matched partition template, and partition UUID if a match is found.
+// In partitioned mode, GPUs must have partition templates available, and we select the smallest
+// template that can satisfy the request to minimize resource waste.
+func (s *GpuAllocator) GetMatchedPartition(
+	req *tfv1.AllocRequest,
+	filteredGPUs []*tfv1.GPU,
+) (*tfv1.GPU, *PartitionMatchResult, error) {
+	// Only process partitioned mode requests
+	if req.Isolation != tfv1.IsolationModePartitioned {
+		return nil, nil, fmt.Errorf("GetMatchedPartition only supports partitioned isolation mode")
+	}
+
+	if len(filteredGPUs) == 0 {
+		return nil, nil, fmt.Errorf("no GPUs available for partition matching")
+	}
+
+	var bestGPU *tfv1.GPU
+	var bestMatch *PartitionMatchResult
+	bestScore := math.MaxFloat64
+
+	s.storeMutex.RLock()
+	defer s.storeMutex.RUnlock()
+
+	// Find the best GPU with the best matching partition template
+	for _, gpu := range filteredGPUs {
+		// Get partition templates from GPU status
+		if len(gpu.Status.PartitionTemplates) == 0 {
+			continue // Skip GPUs without partition templates
+		}
+
+		// Get allocated partitions for this GPU
+		allocatedPartitions := make(map[string]tfv1.AllocatedPartition)
+		if gpu.Status.AllocatedPartitions != nil {
+			allocatedPartitions = gpu.Status.AllocatedPartitions
+		}
+
+		// Match partition template (gets template info from config)
+		match, err := MatchPartitionTemplate(
+			gpu.Status.GPUModel,
+			gpu.Status.PartitionTemplates,
+			req,
+			allocatedPartitions,
+		)
+		if err != nil {
+			log.FromContext(s.ctx).V(5).Info("Failed to match partition template for GPU",
+				"gpu", gpu.Name, "error", err)
+			continue
+		}
+
+		if !match.CanAllocate {
+			continue
+		}
+
+		// Check if GPU has enough resources (gets template info from config)
+		if err := CheckPartitionAvailability(gpu, match.TemplateID, allocatedPartitions); err != nil {
+			log.FromContext(s.ctx).V(5).Info("GPU does not have available resources for partition",
+				"gpu", gpu.Name, "error", err)
+			continue
+		}
+
+		// Update best match if this is better (lower score = less waste)
+		if match.Score < bestScore {
+			bestGPU = gpu
+			bestMatch = match
+			bestScore = match.Score
+		}
+	}
+
+	if bestGPU == nil || bestMatch == nil {
+		return nil, nil, fmt.Errorf("no suitable partition template found for request: TFLOPs=%s, VRAM=%s",
+			req.Request.Tflops.String(), req.Request.Vram.String())
+	}
+
+	return bestGPU, bestMatch, nil
 }
 
 // Bind allocates resources on the provided GPUs for the given request.
@@ -344,15 +499,79 @@ func (s *GpuAllocator) Bind(
 				selectedGPU, gpu.Status.Available.Vram.String(), req.Request.Vram.String())
 		}
 
-		// reduce available resource on the GPU status
+		// Handle partitioned mode differently
+		if req.Isolation == tfv1.IsolationModePartitioned && req.PartitionTemplateID != "" {
+			// Verify template exists in GPU status
+			templateExists := false
+			for _, template := range gpu.Status.PartitionTemplates {
+				if template.TemplateID == req.PartitionTemplateID {
+					templateExists = true
+					break
+				}
+			}
+			if !templateExists {
+				return nil, fmt.Errorf("partition template %s not found on GPU %s", req.PartitionTemplateID, selectedGPU)
+			}
 
-		if !req.Request.ComputePercent.IsZero() {
-			requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
-			gpu.Status.Available.Tflops.Sub(*requiredTflops)
+			// Calculate partition resource usage from config (no overhead)
+			partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(gpu.Status.GPUModel, req.PartitionTemplateID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get partition template info for GPU %s template %s: %w", selectedGPU, req.PartitionTemplateID, err)
+			}
+
+			// Check availability for partition resources
+			if gpu.Status.Available.Tflops.Cmp(partitionTflops) < 0 {
+				return nil, fmt.Errorf("GPU %s insufficient TFLOPs for partition: available %s, required %s",
+					selectedGPU, gpu.Status.Available.Tflops.String(), partitionTflops.String())
+			}
+			if gpu.Status.Available.Vram.Cmp(partitionVram) < 0 {
+				return nil, fmt.Errorf("GPU %s insufficient VRAM for partition: available %s, required %s",
+					selectedGPU, gpu.Status.Available.Vram.String(), partitionVram.String())
+			}
+
+			// Subtract partition resources (no overhead)
+			gpu.Status.Available.Tflops.Sub(partitionTflops)
+			gpu.Status.Available.Vram.Sub(partitionVram)
+
+			// Initialize AllocatedPartitions map if needed
+			if gpu.Status.AllocatedPartitions == nil {
+				gpu.Status.AllocatedPartitions = make(map[string]tfv1.AllocatedPartition)
+			}
+
+			// Store partition allocation info using podUID as key
+			podUID := string(req.PodMeta.UID)
+			gpu.Status.AllocatedPartitions[podUID] = tfv1.AllocatedPartition{
+				TemplateID:  req.PartitionTemplateID,
+				PodUID:      podUID,
+				PodName:     req.PodMeta.Name,
+				Namespace:   req.PodMeta.Namespace,
+				AllocatedAt: metav1.Now(),
+			}
+
+			log.FromContext(s.ctx).Info("Allocated partition on GPU",
+				"gpu", selectedGPU,
+				"template", req.PartitionTemplateID,
+				"podUID", podUID)
 		} else {
-			gpu.Status.Available.Tflops.Sub(req.Request.Tflops)
+			// Non-partitioned mode: subtract request resources
+			if gpu.Status.Available.Tflops.Cmp(req.Request.Tflops) < 0 {
+				return nil, fmt.Errorf("GPU %s insufficient TFLOPs: available %s, requested %s",
+					selectedGPU, gpu.Status.Available.Tflops.String(), req.Request.Tflops.String())
+			}
+			if gpu.Status.Available.Vram.Cmp(req.Request.Vram) < 0 {
+				return nil, fmt.Errorf("GPU %s insufficient VRAM: available %s, requested %s",
+					selectedGPU, gpu.Status.Available.Vram.String(), req.Request.Vram.String())
+			}
+
+			// reduce available resource on the GPU status
+			if !req.Request.ComputePercent.IsZero() {
+				requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
+				gpu.Status.Available.Tflops.Sub(*requiredTflops)
+			} else {
+				gpu.Status.Available.Tflops.Sub(req.Request.Tflops)
+			}
+			gpu.Status.Available.Vram.Sub(req.Request.Vram)
 		}
-		gpu.Status.Available.Vram.Sub(req.Request.Vram)
 
 		addRunningApp(s.ctx, gpu, req)
 
@@ -523,14 +742,55 @@ func (s *GpuAllocator) Dealloc(
 			continue
 		}
 
-		// Add resources back to the GPU
-		if !request.Request.ComputePercent.IsZero() {
-			requiredTflops := utils.ComputePercentToTflops(storeGPU.Status.Capacity.Tflops, request.Request)
-			storeGPU.Status.Available.Tflops.Add(*requiredTflops)
+		// Handle partitioned mode deallocation
+		if request.Isolation == tfv1.IsolationModePartitioned && request.PartitionTemplateID != "" {
+			// Find and remove the allocated partition using podUID as key
+			podUID := string(request.PodMeta.UID)
+			if storeGPU.Status.AllocatedPartitions != nil {
+				allocatedPartition, exists := storeGPU.Status.AllocatedPartitions[podUID]
+				if exists {
+					// Calculate partition resource usage from config (no overhead)
+					partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(storeGPU.Status.GPUModel, allocatedPartition.TemplateID)
+					if err != nil {
+						// Fallback: add back request resources if template not found in config
+						log.Info("Partition template not found in config during deallocation, using request resources",
+							"gpu", gpu, "template", allocatedPartition.TemplateID, "error", err)
+						storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+						storeGPU.Status.Available.Vram.Add(request.Request.Vram)
+					} else {
+						// Add back partition resources (no overhead)
+						storeGPU.Status.Available.Tflops.Add(partitionTflops)
+						storeGPU.Status.Available.Vram.Add(partitionVram)
+					}
+
+					// Remove partition from allocated partitions map using podUID
+					delete(storeGPU.Status.AllocatedPartitions, podUID)
+					log.Info("Removed partition allocation",
+						"gpu", gpu,
+						"podUID", podUID,
+						"template", allocatedPartition.TemplateID)
+				} else {
+					log.Info("Partition not found in allocated partitions during deallocation",
+						"gpu", gpu, "podUID", podUID)
+					// Fallback: add back request resources
+					storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+					storeGPU.Status.Available.Vram.Add(request.Request.Vram)
+				}
+			} else {
+				// No allocated partitions map, fallback to request resources
+				storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+				storeGPU.Status.Available.Vram.Add(request.Request.Vram)
+			}
 		} else {
-			storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+			// Non-partitioned mode: add back request resources
+			if !request.Request.ComputePercent.IsZero() {
+				requiredTflops := utils.ComputePercentToTflops(storeGPU.Status.Capacity.Tflops, request.Request)
+				storeGPU.Status.Available.Tflops.Add(*requiredTflops)
+			} else {
+				storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+			}
+			storeGPU.Status.Available.Vram.Add(request.Request.Vram)
 		}
-		storeGPU.Status.Available.Vram.Add(request.Request.Vram)
 
 		if nodeName == "" {
 			nodeName = storeGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
@@ -1126,6 +1386,9 @@ func syncGPUMetadataAndStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
 	old.Status.Vendor = gpu.Status.Vendor
 	old.Status.NUMANode = gpu.Status.NUMANode
 	old.Status.Index = gpu.Status.Index
+	// Sync partition templates from cluster (discovered by node discovery)
+	// Don't overwrite AllocatedPartitions as that's managed by the allocator
+	old.Status.PartitionTemplates = gpu.Status.PartitionTemplates
 }
 
 func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
@@ -1206,6 +1469,7 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 			// Apply our status updates to the latest version
 			latest.Status.Available = gpu.Status.Available
 			latest.Status.RunningApps = gpu.Status.RunningApps
+			latest.Status.AllocatedPartitions = gpu.Status.AllocatedPartitions
 
 			// Attempt to update with the latest version
 			return s.Status().Update(s.ctx, latest)
@@ -1423,6 +1687,8 @@ func (s *GpuAllocator) reconcileAllocationState() {
 			actualRunningAppsMap[gpuKey] = gpu.Status.RunningApps
 			gpu.Status.RunningApps = []*tfv1.RunningAppDetail{}
 
+			// Clear AllocatedPartitions - will be rebuilt from workers
+			gpu.Status.AllocatedPartitions = make(map[string]tfv1.AllocatedPartition)
 		}
 
 		// This is important for progressive migration mode
@@ -1440,20 +1706,51 @@ func (s *GpuAllocator) reconcileAllocationState() {
 
 		for gpuId := range gpuIdsList {
 			gpuKey := types.NamespacedName{Name: gpuId}
+			gpu := s.gpuStore[gpuKey]
+			if gpu == nil {
+				continue
+			}
+
 			gpuAvailableRes, ok := actualAvailableMap[gpuKey]
 			if ok {
-				var reqTflops resource.Quantity
-				gpu := s.gpuStore[gpuKey]
-				if gpu != nil && gpu.Status.Capacity != nil && !allocRequest.Request.ComputePercent.IsZero() {
-					requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, allocRequest.Request)
-					reqTflops = *requiredTflops
+				// Handle partitioned mode differently
+				if allocRequest.Isolation == tfv1.IsolationModePartitioned && allocRequest.PartitionTemplateID != "" {
+					// Calculate partition resource usage from config
+					partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(gpu.Status.GPUModel, allocRequest.PartitionTemplateID)
+					if err == nil {
+						gpuAvailableRes.Tflops.Sub(partitionTflops)
+						gpuAvailableRes.Vram.Sub(partitionVram)
+
+						// Rebuild AllocatedPartitions using podUID as key
+						if gpu.Status.AllocatedPartitions == nil {
+							gpu.Status.AllocatedPartitions = make(map[string]tfv1.AllocatedPartition)
+						}
+						podUID := string(worker.UID)
+						gpu.Status.AllocatedPartitions[podUID] = tfv1.AllocatedPartition{
+							TemplateID:  allocRequest.PartitionTemplateID,
+							PodUID:      podUID,
+							PodName:     worker.Name,
+							Namespace:   worker.Namespace,
+							AllocatedAt: metav1.Now(), // Use current time for reconciliation
+						}
+					} else {
+						logger.Info("[WARNING] Partition template not found in config during reconciliation, can not calculate correct resource usage",
+							"gpu", gpuId, "template", allocRequest.PartitionTemplateID, "error", err)
+					}
 				} else {
-					reqTflops = allocRequest.Request.Tflops
+					// Non-partitioned mode
+					var reqTflops resource.Quantity
+					if !allocRequest.Request.ComputePercent.IsZero() {
+						requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, allocRequest.Request)
+						reqTflops = *requiredTflops
+					} else {
+						reqTflops = allocRequest.Request.Tflops
+					}
+					gpuAvailableRes.Tflops.Sub(reqTflops)
+					gpuAvailableRes.Vram.Sub(allocRequest.Request.Vram)
 				}
-				gpuAvailableRes.Tflops.Sub(reqTflops)
-				gpuAvailableRes.Vram.Sub(allocRequest.Request.Vram)
 			}
-			addRunningApp(ctx, s.gpuStore[gpuKey], allocRequest)
+			addRunningApp(ctx, gpu, allocRequest)
 		}
 	}
 
@@ -1474,6 +1771,12 @@ func (s *GpuAllocator) reconcileAllocationState() {
 		if !equality.Semantic.DeepEqual(gpu.Status.RunningApps, actualRunningAppsMap[gpuKey]) {
 			s.markGPUDirtyLocked(gpuKey)
 			log.FromContext(ctx).Info("Correcting gpu running apps", "gpu", gpuKey.Name, "runningApps", len(gpu.Status.RunningApps))
+		}
+
+		// Mark GPU dirty if AllocatedPartitions need to be synced
+		// (they are already updated in the loop above, just need to sync to K8s)
+		if len(gpu.Status.AllocatedPartitions) > 0 {
+			s.markGPUDirtyLocked(gpuKey)
 		}
 	}
 
@@ -1608,6 +1911,12 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 			fmt.Errorf("can not parse gpu indices annotation")
 	}
 
+	// Read isolation mode
+	isolationMode := tfv1.IsolationModeType(pod.Annotations[constants.IsolationModeAnnotation])
+	if isolationMode == "" {
+		isolationMode = tfv1.IsolationModeSoft
+	}
+
 	allocRequest := tfv1.AllocRequest{
 		PoolName: pod.Annotations[constants.GpuPoolKey],
 		Request:  gpuRequestResource,
@@ -1617,12 +1926,20 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 		GPUModel:   pod.Annotations[constants.GPUModelAnnotation],
 		GPUIndices: gpuIndices,
 		GPUVendor:  gpuVendor,
+		Isolation:  isolationMode,
 		WorkloadNameNamespace: tfv1.NameNamespace{
 			Name:      pod.Labels[constants.WorkloadKey],
 			Namespace: pod.Namespace,
 		},
 		PodMeta: pod.ObjectMeta,
 		QoS:     qosLevel,
+	}
+
+	// Read partition template ID annotation if in partitioned mode
+	if allocRequest.Isolation == tfv1.IsolationModePartitioned {
+		if partitionTemplateID, ok := pod.Annotations[constants.PartitionTemplateIDAnnotation]; ok && partitionTemplateID != "" {
+			allocRequest.PartitionTemplateID = partitionTemplateID
+		}
 	}
 
 	// for already allocated workers, set the GPU device IDs for further scaling and retrieval

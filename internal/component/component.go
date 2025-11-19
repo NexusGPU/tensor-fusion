@@ -170,7 +170,7 @@ func calculateDesiredUpdatedDelta(total int, updatedSize int, batchPercentage in
 		currentBatchIndex = newUpdateProgress / batchPercentage
 		desiredSize = min((currentBatchIndex+1)*int32(batchSize), int32(total))
 		delta = desiredSize - int32(updatedSize)
-		// if rolling udpate policy changed or new nodes were added during update, we need to update progress
+		// if rolling update policy changed or new nodes were added during update, we need to update progress
 		if delta < 0 {
 			newUpdateProgress = min(newUpdateProgress+batchPercentage, 100)
 		} else {
