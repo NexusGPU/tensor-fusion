@@ -183,7 +183,17 @@ func (s *GpuAllocator) Filter(
 
 	// Add GPU model filter if specified
 	if req.GPUModel != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUModelAndVendorFilter(req.GPUModel, req.GPUVendor))
+		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
+	}
+
+	// Add GPU vendor filter if specified
+	if req.GPUVendor != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUVendorFilter(req.GPUVendor))
+	}
+
+	// Add GPU isolation mode filter if specified
+	if req.Isolation != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUIsolationModeFilter(req.Isolation))
 	}
 
 	// NOTE: deprecated, use Kubernetes native spec template affinity way
@@ -226,7 +236,16 @@ func (s *GpuAllocator) FilterWithPreempt(
 	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request, req.GPUIndices))
 	// Add GPU model filter if specified
 	if req.GPUModel != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUModelAndVendorFilter(req.GPUModel, req.GPUVendor))
+		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
+	}
+
+	// Add GPU vendor filter if specified
+	if req.GPUVendor != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUVendorFilter(req.GPUVendor))
+	}
+	// Add GPU isolation mode filter if specified
+	if req.Isolation != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUIsolationModeFilter(req.Isolation))
 	}
 	// No need to check count and other filters since it's always in the same node during each preempt trial
 	filteredGPUs, filterDetails, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs, false)

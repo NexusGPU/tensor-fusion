@@ -115,6 +115,14 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
+	// If node changed to other AI accelerator hardware vendor, update gpuNode label vendor and trigger hypervisor update
+	if gpuNode.Labels[constants.AcceleratorLabelVendor] != node.Labels[constants.AcceleratorLabelVendor] {
+		gpuNode.Labels[constants.AcceleratorLabelVendor] = node.Labels[constants.AcceleratorLabelVendor]
+		if err := r.Update(ctx, gpuNode); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update GPU node vendor: %w", err)
+		}
+	}
+
 	if !node.DeletionTimestamp.IsZero() {
 		log.Info("GPU node is being deleted, mark related GPUNode resource as destroying", "node", node.Name)
 		gpuNode.Status.Phase = tfv1.TensorFusionGPUNodePhaseDestroying
@@ -125,9 +133,14 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	// update k8s node hash
-	hash := utils.GetObjectHash(pool.Spec.NodeManagerConfig.NodeSelector)
+	hash := ""
+	if len(pool.Spec.NodeManagerConfig.MultiVendorNodeSelector) > 0 {
+		hash = utils.GetObjectHash(pool.Spec.NodeManagerConfig.MultiVendorNodeSelector)
+	} else {
+		hash = utils.GetObjectHash(pool.Spec.NodeManagerConfig.NodeSelector)
+	}
 	if node.Labels[constants.LabelNodeSelectorHash] != hash {
-		if err := UpdateK8SNodeSelectorHash(ctx, r.Client, node, hash); err != nil {
+		if err := UpdateK8SNodeSelectorHashAndVendor(ctx, r.Client, node, hash, node.Labels[constants.AcceleratorLabelVendor]); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update k8s node hash: %w", err)
 		}
 	}
@@ -203,25 +216,34 @@ func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool, 
 	if provisioner != "" {
 		gpuNode.Labels[constants.ProvisionerLabelKey] = provisioner
 	}
+	// Copy vendor label from k8s node to GPUNode
+	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
+		gpuNode.Labels[constants.AcceleratorLabelVendor] = node.Labels[constants.AcceleratorLabelVendor]
+	}
 	_ = controllerutil.SetControllerReference(pool, gpuNode, r.Scheme)
 	return gpuNode
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// must choose an initial label selector to avoid performance impact in large Kubernetes clusters
+	ctr := ctrl.NewControllerManagedBy(mgr)
+	// Prefer to choose an initial label selector to avoid performance impact in large Kubernetes clusters that has lots of CPU nodes
 	selectors := utils.GetInitialGPUNodeSelector()
-	p, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
-		MatchLabels: map[string]string{
-			selectors[0]: selectors[1],
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("unable to create predicate: %w", err)
+	if len(selectors) == 2 {
+		p, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				selectors[0]: selectors[1],
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("unable to create predicate: %w", err)
+		}
+		ctr.For(&corev1.Node{}, builder.WithPredicates(p))
+	} else {
+		ctr.For(&corev1.Node{})
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Node{}, builder.WithPredicates(p)).
+	return ctr.
 		Named("node").
 		Watches(&tfv1.GPUPool{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 			nodelist := &tfv1.GPUNodeList{}

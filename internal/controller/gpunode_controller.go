@@ -30,7 +30,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -103,7 +102,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	poolObj := &tfv1.GPUPool{}
 	err = r.Get(ctx, client.ObjectKey{Name: poolName}, poolObj)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to get tensor-fusion pool, can not create node discovery job, pool: %s", poolName)
+		return ctrl.Result{}, fmt.Errorf("failed to get tensor-fusion pool, pool: %s", poolName)
 	}
 
 	// Check if the Kubernetes node exists; if not, the GPUNode should delete itself.
@@ -133,15 +132,6 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			log.Info("GPU resource not allocatable, node still in init phase", "node", node.Name)
 			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 		}
-	}
-
-	if err := r.reconcileNodeDiscoveryJob(ctx, node, poolObj); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	if node.Status.TotalGPUs == 0 {
-		log.Info("GPU on this node has not been discovered, wait next loop", "node", node.Name)
-		return ctrl.Result{}, nil
 	}
 
 	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj, coreNode)
@@ -259,77 +249,6 @@ func (r *GPUNodeReconciler) fetchAllOwnedGPUDevices(ctx context.Context, node *t
 	return gpuList.Items, nil
 }
 
-func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
-	ctx context.Context,
-	gpunode *tfv1.GPUNode,
-	pool *tfv1.GPUPool,
-) error {
-	log := log.FromContext(ctx)
-	log.Info("starting node discovery job")
-
-	if pool.Spec.ComponentConfig == nil || pool.Spec.ComponentConfig.NodeDiscovery.PodTemplate == nil {
-		return fmt.Errorf(`missing node discovery pod template in pool spec`)
-	}
-	podTmpl := &corev1.PodTemplate{}
-	err := json.Unmarshal(pool.Spec.ComponentConfig.NodeDiscovery.PodTemplate.Raw, podTmpl)
-	if err != nil {
-		return fmt.Errorf("unmarshal pod template: %w", err)
-	}
-	tmpl := podTmpl.Template
-	if tmpl.Labels == nil {
-		tmpl.Labels = map[string]string{}
-	}
-	tmpl.Labels[constants.LabelComponent] = constants.ComponentNodeDiscovery
-	tmpl.Spec.NodeName = gpunode.Name
-	// allow job to run at any taint Nodes that marked as NoSchedule
-	tmpl.Spec.Tolerations = append(tmpl.Spec.Tolerations, corev1.Toleration{
-		Key:      string(corev1.TaintEffectNoSchedule),
-		Operator: corev1.TolerationOpExists,
-	})
-	tmpl.Spec.EnableServiceLinks = ptr.To(false)
-
-	utils.AddTFNodeDiscoveryConfAfterTemplate(ctx, &tmpl, pool, gpunode.Name, r.CompatibleWithNvidiaContainerToolkit)
-
-	// create node-discovery job
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        getDiscoveryJobName(gpunode.Name),
-			Namespace:   utils.CurrentNamespace(),
-			Labels:      tmpl.Labels,
-			Annotations: tmpl.Annotations,
-		},
-		Spec: batchv1.JobSpec{
-			TTLSecondsAfterFinished: ptr.To[int32](3600 * 10),
-			Template:                tmpl,
-		},
-	}
-
-	if err := r.Get(ctx, client.ObjectKeyFromObject(job), job); err != nil {
-		if errors.IsNotFound(err) {
-			if err := ctrl.SetControllerReference(gpunode, job, r.Scheme); err != nil {
-				return fmt.Errorf("set owner reference %w", err)
-			}
-			if err := r.Create(ctx, job); err != nil {
-				return fmt.Errorf("create node discovery job %w", err)
-			}
-		} else {
-			return fmt.Errorf("create node discovery job %w", err)
-		}
-	}
-
-	if job.Status.Failed > 0 {
-		log.Info("node discovery job failed, update GPU node status to failed", "node", gpunode.Name)
-		// Update phase to failed, require manual address why it failed and restart of node discovery job
-		gpunode.Status.Phase = tfv1.TensorFusionGPUNodePhaseFailed
-		if err := r.Status().Update(ctx, gpunode); err != nil {
-			return fmt.Errorf("failed to update GPU node status to failed: %w", err)
-		}
-		metrics.SetNodeMetrics(gpunode, pool, nil)
-	}
-
-	return nil
-}
-
 func (r *GPUNodeReconciler) reconcileHypervisorPod(
 	ctx context.Context,
 	node *tfv1.GPUNode,
@@ -414,7 +333,21 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 
 	// add must-have tensor-fusion hypervisor manifest
 	log.Info("adding must-have tensor-fusion hypervisor manifest", "node", node.Name)
-	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool)
+	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool, r.CompatibleWithNvidiaContainerToolkit)
+
+	// add vendor-specific env vars for multi-vendor support
+	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
+		vendor := node.Labels[constants.AcceleratorLabelVendor]
+		acceleratorLibPath := constants.GetAcceleratorLibPath(vendor)
+		spec.Containers[0].Env = utils.AppendEnvVarsIfNotExists(spec.Containers[0].Env, corev1.EnvVar{
+			Name:  constants.TFHardwareVendorEnv,
+			Value: vendor,
+		}, corev1.EnvVar{
+			Name:  constants.TFAcceleratorLibPathEnv,
+			Value: acceleratorLibPath,
+		})
+		log.Info("added vendor env vars to hypervisor pod", "node", node.Name, "vendor", vendor, "libPath", acceleratorLibPath)
+	}
 
 	// add scheduling config for hypervisor
 	if pool.Spec.SchedulingConfigTemplate != nil {
@@ -495,12 +428,7 @@ func (r *GPUNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					{NamespacedName: client.ObjectKey{Name: obj.GetName()}},
 				}
 			})).
-		Owns(&batchv1.Job{}).
 		Owns(&corev1.Pod{}).
 		Owns(&tfv1.GPU{}).
 		Complete(r)
-}
-
-func getDiscoveryJobName(gpunodeName string) string {
-	return fmt.Sprintf("node-discovery-%s", gpunodeName)
 }

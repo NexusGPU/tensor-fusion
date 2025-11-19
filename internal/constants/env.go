@@ -160,6 +160,10 @@ const (
 	// but k3s and some K8S distribution may not support, need to find some way to get SA token JWT pub key
 	HypervisorVerifyServiceAccountEnabledEnvVar   = "SA_TOKEN_VERIFY_ENABLED"
 	HypervisorVerifyServiceAccountPublicKeyEnvVar = "SA_TOKEN_VERIFY_PUBLIC_KEY"
+
+	// Hardware vendor and accelerator library path for multi-vendor support
+	TFHardwareVendorEnv     = "TF_HARDWARE_VENDOR"
+	TFAcceleratorLibPathEnv = "TF_ACCELERATOR_LIB_PATH"
 )
 
 // Node discovery related envs
