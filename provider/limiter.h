@@ -26,20 +26,6 @@ extern "C" {
 #endif
 
 // ============================================================================
-// Common Types
-// ============================================================================
-
-typedef enum {
-    RESULT_SUCCESS = 0,
-    RESULT_ERROR_INVALID_PARAM = 1,
-    RESULT_ERROR_NOT_FOUND = 2,
-    RESULT_ERROR_NOT_SUPPORTED = 3,
-    RESULT_ERROR_RESOURCE_EXHAUSTED = 4,
-    RESULT_ERROR_OPERATION_FAILED = 5,
-    RESULT_ERROR_INTERNAL = 6
-} Result;
-
-// ============================================================================
 // Limiter Types
 // ============================================================================
 

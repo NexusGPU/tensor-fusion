@@ -1,64 +1,144 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/NexusGPU/tensor-fusion/cmd/hypervisor/shm_init"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/backend/kubernetes"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/backend/single_node"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/device"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/server"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/worker"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 )
 
-func main() {
-	var (
-		acceleratorLibPath = flag.String("accelerator-lib",
-			"../provider/build/libaccelerator_stub.so", "Path to accelerator library")
-		discoveryInterval = flag.Duration("discovery-interval",
-			30*time.Second, "Device discovery interval")
-		isolationMode = flag.String("isolation-mode", "shared",
-			"Isolation mode: shared, soft, hard, partitioned")
-	)
-	flag.Parse()
+var (
+	hardwareVendor     = flag.String("hardware-vendor", "", "Hardware vendor: NVIDIA, AMD, Intel, etc.")
+	acceleratorLibPath = flag.String("accelerator-lib",
+		"../provider/build/libaccelerator_stub.so", "Path to accelerator library")
+	isolationMode = flag.String("isolation-mode", "shared",
+		"Isolation mode: shared, soft, hard, partitioned")
+	backendType       = flag.String("backend-type", "kubernetes", "Backend type: kubernetes, simple")
+	discoveryInterval = flag.Duration("discovery-interval",
+		12*time.Hour, "Device discovery interval")
+	metricsPath = flag.String("metrics-output-path", "metrics.log", "Path to metrics output file")
 
+	httpPort = flag.Int("port", 8000, "HTTP port for hypervisor API")
+)
+
+const (
+	MOUNT_SHM_SUBCOMMAND    = "mount-shm"
+	TFHardwareVendorEnv     = "TF_HARDWARE_VENDOR"
+	TFAcceleratorLibPathEnv = "TF_ACCELERATOR_LIB_PATH"
+)
+
+func main() {
+	// Check for subcommands (used inside init container for initializing shared memory of limiter of soft isolation)
+	if len(os.Args) > 1 && os.Args[1] == MOUNT_SHM_SUBCOMMAND {
+		shm_init.RunMountShm()
+		return
+	}
+
+	flag.Parse()
 	klog.InitFlags(nil)
 	defer klog.Flush()
 
-	// Create device manager
-	mgr, err := device.NewManager(*acceleratorLibPath, *discoveryInterval)
-	if err != nil {
-		klog.Fatalf("Failed to create device manager: %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Determine accelerator library path from env var or flag
+	libPath := *acceleratorLibPath
+	if envLibPath := os.Getenv(TFAcceleratorLibPathEnv); envLibPath != "" {
+		libPath = envLibPath
+		klog.Infof("Using accelerator library path from env: %s", libPath)
+	}
+	if vendor := os.Getenv(TFHardwareVendorEnv); vendor != "" {
+		hardwareVendor = &vendor
+		klog.Infof("Hardware vendor from env: %s", vendor)
 	}
 
-	// Start device manager
-	if err := mgr.Start(); err != nil {
+	// Create and start device controller
+	deviceController, err := device.NewController(ctx, libPath, *discoveryInterval)
+	if err != nil {
+		klog.Fatalf("Failed to create device controller: %v", err)
+	}
+	if err := deviceController.Start(); err != nil {
 		klog.Fatalf("Failed to start device manager: %v", err)
 	}
-	defer mgr.Stop()
 	klog.Info("Device manager started")
 
-	devices := mgr.GetDevices()
-	if len(devices) == 0 {
-		klog.Fatalf("No devices found")
-	}
-
 	// Parse isolation mode
-	var mode device.IsolationMode
+	var mode api.IsolationMode
 	switch *isolationMode {
 	case "shared":
-		mode = device.IsolationModeShared
+		mode = api.IsolationModeShared
 	case "soft":
-		mode = device.IsolationModeSoft
+		mode = api.IsolationModeSoft
 	case "hard":
-		mode = device.IsolationModeHard
+		mode = api.IsolationModeHard
 	case "partitioned":
-		mode = device.IsolationModePartitioned
+		mode = api.IsolationModePartitioned
 	default:
 		klog.Fatalf("Invalid isolation mode: %s", *isolationMode)
 	}
 
-	klog.Infof("Registered devices: %s with %d devices, isolation mode: %s", devices[0].Vendor, len(devices), mode)
+	// initialize data backend
+	var backend framework.Backend
+	switch *backendType {
+	case "kubernetes":
+		// Get Kubernetes rest config
+		var restConfig *rest.Config
+		kubeconfig := os.Getenv("KUBECONFIG")
+		if kubeconfig != "" {
+			restConfig, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		} else {
+			restConfig, err = rest.InClusterConfig()
+		}
+		if err != nil {
+			klog.Fatalf("Failed to get Kubernetes config: %v", err)
+		}
+		backend, err = kubernetes.NewKubeletBackend(ctx, deviceController, restConfig)
+		if err != nil {
+			klog.Fatalf("Failed to create Kubernetes backend: %v", err)
+		}
+	case "simple":
+		backend = single_node.NewSingleNodeBackend(ctx, deviceController)
+	default:
+		klog.Fatalf("Invalid backend type: %s", *backendType)
+	}
+
+	// initialize worker controller
+	workerController := worker.NewWorkerController(deviceController, mode, backend)
+	err = workerController.Start()
+	if err != nil {
+		klog.Fatalf("Failed to start worker controller: %v", err)
+	}
+	defer workerController.Stop()
+	klog.Info("Worker controller started")
+
+	// initialize metrics recorder
+	metricsRecorder := metrics.NewHypervisorMetricsRecorder(ctx, *metricsPath, deviceController, workerController)
+	metricsRecorder.Start()
+	klog.Info("Metrics recorder started")
+
+	// initialize and start HTTP server
+	httpServer := server.NewServer(ctx, deviceController, workerController, metricsRecorder, backend, *httpPort)
+	go func() {
+		if err := httpServer.Start(); err != nil && err != http.ErrServerClosed {
+			klog.Fatalf("Failed to start HTTP server: %v", err)
+		}
+	}()
+	klog.Info("HTTP server started")
 
 	// Wait for interrupt signal
 	sigCh := make(chan os.Signal, 1)
@@ -66,5 +146,15 @@ func main() {
 
 	klog.Info("Hypervisor running")
 	<-sigCh
-	klog.Info("Shutting down...")
+	klog.Info("Stopping hypervisor...")
+
+	// Shutdown HTTP server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := httpServer.Stop(shutdownCtx); err != nil {
+		klog.Errorf("Error shutting down HTTP server: %v", err)
+	}
+
+	cancel()
+	klog.Info("Hypervisor stopped")
 }

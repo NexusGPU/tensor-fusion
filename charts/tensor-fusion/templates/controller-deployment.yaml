@@ -57,7 +57,7 @@ spec:
                   fieldPath: metadata.namespace
             # when deploy with AutoSelect mode, GPU node is managed by Kubernetes rather than TensorFusion, thus, need to specify the label selector to generate the GPUNode custom resource
             - name: INITIAL_GPU_NODE_LABEL_SELECTOR
-              value: "{{ default "nvidia.com/gpu.present=true" .Values.initialGpuNodeLabelSelector }}"
+              value: "{{ .Values.initialGpuNodeLabelSelector }}"
             - name: TSDB_MYSQL_HOST
               value: "{{ .Values.greptime.host }}"
             - name: TSDB_MYSQL_PORT
