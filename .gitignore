@@ -46,3 +46,5 @@ provider/build
 
 cmd/hypervisor/hypervisor
 *.o
+
+_obj

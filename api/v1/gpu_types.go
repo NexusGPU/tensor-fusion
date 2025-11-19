@@ -39,6 +39,10 @@ type GPUStatus struct {
 	UUID string `json:"uuid"`
 
 	// +optional
+	// +kubebuilder:default=soft
+	IsolationMode IsolationModeType `json:"isolationMode,omitempty"`
+
+	// +optional
 	Index *int32 `json:"index,omitempty"`
 
 	// When it's -1, it means the GPU is not assigned to any NUMA node

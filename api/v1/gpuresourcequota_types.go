@@ -194,6 +194,8 @@ type AllocRequest struct {
 	PodMeta metav1.ObjectMeta
 
 	QoS QoSLevel
+
+	Isolation IsolationModeType
 }
 
 func (p *AllocRequest) Clone() fwk.StateData {

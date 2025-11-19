@@ -233,3 +233,6 @@ const DefaultEvictionProtectionPriceRatio = 1.2
 const NodeCriticalPriorityClassName = "system-node-critical"
 const KarpenterNodeClaimKind = "NodeClaim"
 const KarpenterNodePoolKind = "NodePool"
+
+// Vendor label key for multi-vendor support
+const AcceleratorLabelVendor = Domain + "/hardware-vendor"
