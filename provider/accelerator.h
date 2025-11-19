@@ -409,5 +409,8 @@ Result Log(const char* level, const char* message);
 }
 #endif
 
+// Include limiter.h after defining Result enum
+#include "limiter.h"
+
 #endif // ACCELERATOR_H
 
