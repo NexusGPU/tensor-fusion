@@ -111,7 +111,7 @@ func TestFilters(t *testing.T) {
 		filter := NewResourceFilter(tfv1.Resource{
 			Tflops: resource.MustParse("8"),
 			Vram:   resource.MustParse("30Gi"),
-		}, nil)
+		})
 		result, err := filter.Filter(ctx, testPodKey, gpus)
 		assert.NoError(t, err)
 		assert.Len(t, result, 2)
@@ -126,7 +126,7 @@ func TestFilters(t *testing.T) {
 			With(NewResourceFilter(tfv1.Resource{
 				Tflops: resource.MustParse("8"),
 				Vram:   resource.MustParse("30Gi"),
-			}, nil))
+			}))
 
 		// Apply filters
 		result, _, err := registry.Apply(ctx, testPodKey, gpus, false)
@@ -137,10 +137,11 @@ func TestFilters(t *testing.T) {
 
 	t.Run("FilterRegistry with gpu indices filtering", func(t *testing.T) {
 		registry := NewFilterRegistry().
+			With(NewGPUIndexFilter([]int32{2, 3})).
 			With(NewResourceFilter(tfv1.Resource{
 				Tflops: resource.MustParse("1"),
 				Vram:   resource.MustParse("1Gi"),
-			}, []int32{2, 3}))
+			}))
 
 		// Apply filters
 		result, _, err := registry.Apply(ctx, testPodKey, gpus, false)
@@ -160,7 +161,7 @@ func TestFilters(t *testing.T) {
 			With(NewResourceFilter(tfv1.Resource{
 				Tflops: resource.MustParse("8"),
 				Vram:   resource.MustParse("30Gi"),
-			}, nil))
+			}))
 
 		// Apply base registry filters
 		baseResult, _, err := baseRegistry.Apply(ctx, testPodKey, gpus, false)

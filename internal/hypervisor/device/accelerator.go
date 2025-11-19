@@ -77,9 +77,10 @@ func (a *AcceleratorInterface) Load() error {
 			errMsg = "unknown error"
 		}
 
-		if result == -1 {
+		switch result {
+		case -1:
 			return fmt.Errorf("failed to load library: %s", errMsg)
-		} else if result == -2 {
+		case -2:
 			return fmt.Errorf("missing required symbols in library: %s", errMsg)
 		}
 		return fmt.Errorf("failed to load library (code %d): %s", result, errMsg)
