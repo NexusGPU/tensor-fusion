@@ -162,6 +162,29 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 		}
 	}
 
+	// For partitioned mode, match partition template if not already specified
+	if allocRequest.Isolation == tfv1.IsolationModePartitioned && allocRequest.PartitionTemplateID == "" {
+		matchedGPU, partitionMatch, err := s.allocator.GetMatchedPartition(allocRequest, filteredGPUs)
+		if err != nil {
+			metrics.SetSchedulerMetrics(allocRequest.PoolName, false)
+			s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "PartitionTemplateMatchFailed",
+				"match partition template", "Failed to match partition template: "+err.Error())
+			s.logger.Error(err, "failed to match partition template", "pod", pod.Name)
+			return nil, fwk.NewStatus(fwk.Unschedulable, fmt.Sprintf("no suitable partition template: %v", err))
+		}
+
+		// Set partition template ID in alloc request
+		allocRequest.PartitionTemplateID = partitionMatch.TemplateID
+		s.logger.Info("Matched partition template in PreFilter",
+			"pod", pod.Name,
+			"gpu", matchedGPU.Name,
+			"template", allocRequest.PartitionTemplateID,
+			"score", partitionMatch.Score)
+
+		// Update state with the updated alloc request
+		state.Write(CycleStateAllocateRequest, allocRequest)
+	}
+
 	validNodesValidGPUs := lo.GroupBy(filteredGPUs, func(gpu *tfv1.GPU) string {
 		return gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 	})
@@ -424,9 +447,10 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	}
 
 	// reserve GPU resources inside memory and asynchronously update GPU custom resource
+	allocReq := allocRequest.(*tfv1.AllocRequest)
 	_, err = s.allocator.Bind(
 		schedulingResult.FinalGPUs,
-		allocRequest.(*tfv1.AllocRequest),
+		allocReq,
 	)
 	if err != nil {
 		return fwk.NewStatus(fwk.Error, err.Error())
@@ -477,14 +501,40 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
 	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
 
-	// Patch GPU device IDs annotation
-	patch := []byte(`[{
-		"op": "add",
-		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
-		"value": "` + gpuIDs + `"}]`)
-	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patch))
+	// Build patch operations
+	patchOps := []map[string]interface{}{
+		{
+			"op":    "add",
+			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation),
+			"value": gpuIDs,
+		},
+	}
+
+	// Add partition template ID annotation if in partitioned mode
+	allocRequestRaw, err := state.Read(CycleStateAllocateRequest)
+	if err == nil {
+		allocRequest := allocRequestRaw.(*tfv1.AllocRequest)
+		if allocRequest.Isolation == tfv1.IsolationModePartitioned && allocRequest.PartitionTemplateID != "" {
+			patchOps = append(patchOps, map[string]interface{}{
+				"op":    "add",
+				"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PartitionTemplateIDAnnotation),
+				"value": allocRequest.PartitionTemplateID,
+			})
+			s.logger.Info("Adding partition template ID annotation", "pod", pod.Name, "templateID", allocRequest.PartitionTemplateID)
+		}
+	}
+
+	// Convert patch operations to JSON
+	patchBytes, err := json.Marshal(patchOps)
 	if err != nil {
-		s.logger.Error(err, "failed to patch gpu device ids", "pod", pod.Name)
+		s.logger.Error(err, "failed to marshal patch operations", "pod", pod.Name)
+		return
+	}
+
+	// Patch pod annotations
+	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patchBytes))
+	if err != nil {
+		s.logger.Error(err, "failed to patch pod annotations", "pod", pod.Name)
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUDeviceAllocatedFailed",
 			"Attach GPU device ID info failed", "Can not add GPU device IDs: "+gpuIDs)
 	} else {

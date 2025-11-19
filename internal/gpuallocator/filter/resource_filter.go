@@ -2,7 +2,6 @@ package filter
 
 import (
 	"context"
-	"slices"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -12,14 +11,12 @@ import (
 // ResourceFilter filters GPUs based on available resources
 type ResourceFilter struct {
 	requiredResource tfv1.Resource
-	requiredIndices  []int32
 }
 
 // NewResourceFilter creates a new ResourceFilter with the specified resource requirements
-func NewResourceFilter(required tfv1.Resource, requiredIndices []int32) *ResourceFilter {
+func NewResourceFilter(required tfv1.Resource) *ResourceFilter {
 	return &ResourceFilter{
 		requiredResource: required,
-		requiredIndices:  requiredIndices,
 	}
 }
 
@@ -29,13 +26,6 @@ func (f *ResourceFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNames
 		// Check if GPU has enough resources available
 		if gpu.Status.Available == nil {
 			return false
-		}
-
-		// Check GPU indices range
-		if len(f.requiredIndices) > 0 {
-			if gpu.Status.Index != nil && !slices.Contains(f.requiredIndices, *gpu.Status.Index) {
-				return false
-			}
 		}
 
 		// Check TFlops availability

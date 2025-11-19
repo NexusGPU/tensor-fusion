@@ -158,14 +158,6 @@ func (b *KubeletBackend) GetWorkerChangedChan(ctx context.Context) <-chan struct
 	return b.workerChanged
 }
 
-func (b *KubeletBackend) configure(ctx context.Context) error {
-	// from flag.CommandLine, get the k8s
-
-	// parse config and set private fields
-
-	return nil
-}
-
 // kubeletClientAdapter adapts KubeletClient to external_dp.KubeletClientInterface
 type kubeletClientAdapter struct {
 	kubeletClient *KubeletClient

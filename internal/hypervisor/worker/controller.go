@@ -72,9 +72,120 @@ func (w *WorkerController) GetWorkerMetricsUpdates(ctx context.Context) (<-chan 
 }
 
 func (w *WorkerController) GetWorkerMetrics(ctx context.Context) (map[string]map[string]map[string]*api.WorkerMetrics, error) {
-	// TODO: Implement worker metrics collection from device controller
-	// This should collect metrics from all devices for all workers
+	// Get all allocations to know which workers exist
+	allocations, err := w.deviceController.GetDeviceAllocations(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+
+	// Get process compute and memory utilization from device controller
+	// Try to cast to concrete type to access accelerator methods
+	type acceleratorExposer interface {
+		GetProcessComputeUtilization() ([]api.ComputeUtilization, error)
+		GetProcessMemoryUtilization() ([]api.MemoryUtilization, error)
+	}
+
+	var computeUtils []api.ComputeUtilization
+	var memUtils []api.MemoryUtilization
+
+	if exposer, ok := w.deviceController.(acceleratorExposer); ok {
+		var err error
+		computeUtils, err = exposer.GetProcessComputeUtilization()
+		if err != nil {
+			computeUtils = []api.ComputeUtilization{}
+		}
+		memUtils, err = exposer.GetProcessMemoryUtilization()
+		if err != nil {
+			memUtils = []api.MemoryUtilization{}
+		}
+	} else {
+		// Fallback to empty metrics if interface not available
+		computeUtils = []api.ComputeUtilization{}
+		memUtils = []api.MemoryUtilization{}
+	}
+
+	// Build worker to process mapping
+	workerToProcesses, err := w.backend.GetWorkerToProcessMap(ctx)
+	if err != nil {
+		workerToProcesses = make(map[string][]string)
+	}
+
+	// Build process to metrics mapping
+	processMetrics := make(map[string]map[string]*api.WorkerMetrics) // processID -> deviceUUID -> metrics
+
+	// Aggregate compute metrics by process
+	for _, computeUtil := range computeUtils {
+		if processMetrics[computeUtil.ProcessID] == nil {
+			processMetrics[computeUtil.ProcessID] = make(map[string]*api.WorkerMetrics)
+		}
+		if processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID] == nil {
+			processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID] = &api.WorkerMetrics{
+				DeviceUUID:        computeUtil.DeviceUUID,
+				ProcessID:         computeUtil.ProcessID,
+				ComputePercentage: computeUtil.UtilizationPercent,
+				ComputeTflops:     computeUtil.TflopsUsed,
+			}
+		} else {
+			processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID].ComputePercentage += computeUtil.UtilizationPercent
+			processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID].ComputeTflops += computeUtil.TflopsUsed
+		}
+	}
+
+	// Aggregate memory metrics by process
+	for _, memUtil := range memUtils {
+		if processMetrics[memUtil.ProcessID] == nil {
+			processMetrics[memUtil.ProcessID] = make(map[string]*api.WorkerMetrics)
+		}
+		if processMetrics[memUtil.ProcessID][memUtil.DeviceUUID] == nil {
+			processMetrics[memUtil.ProcessID][memUtil.DeviceUUID] = &api.WorkerMetrics{
+				DeviceUUID:  memUtil.DeviceUUID,
+				ProcessID:   memUtil.ProcessID,
+				MemoryBytes: memUtil.UsedBytes,
+			}
+		} else {
+			processMetrics[memUtil.ProcessID][memUtil.DeviceUUID].MemoryBytes += memUtil.UsedBytes
+		}
+	}
+
+	// Build result: deviceUUID -> workerUID -> processID -> metrics
 	result := make(map[string]map[string]map[string]*api.WorkerMetrics)
+
+	// Map processes to workers
+	for workerUID, processIDs := range workerToProcesses {
+		for _, processID := range processIDs {
+			if deviceMetrics, exists := processMetrics[processID]; exists {
+				for deviceUUID, metrics := range deviceMetrics {
+					if result[deviceUUID] == nil {
+						result[deviceUUID] = make(map[string]map[string]*api.WorkerMetrics)
+					}
+					if result[deviceUUID][workerUID] == nil {
+						result[deviceUUID][workerUID] = make(map[string]*api.WorkerMetrics)
+					}
+					result[deviceUUID][workerUID][processID] = metrics
+					metrics.WorkerUID = workerUID
+				}
+			}
+		}
+	}
+
+	// Also include allocations that might not have process mappings yet
+	for _, allocation := range allocations {
+		workerUID := allocation.WorkerID
+		if workerUID == "" {
+			workerUID = allocation.PodUID
+		}
+		if workerUID == "" {
+			continue
+		}
+
+		if result[allocation.DeviceUUID] == nil {
+			result[allocation.DeviceUUID] = make(map[string]map[string]*api.WorkerMetrics)
+		}
+		if result[allocation.DeviceUUID][workerUID] == nil {
+			result[allocation.DeviceUUID][workerUID] = make(map[string]*api.WorkerMetrics)
+		}
+	}
+
 	return result, nil
 }
 
