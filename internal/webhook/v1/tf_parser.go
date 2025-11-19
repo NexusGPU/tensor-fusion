@@ -106,6 +106,15 @@ func ParseTensorFusionInfo(
 		workloadProfile.Spec.Isolation = tfv1.IsolationModeSoft
 	}
 
+	// Read partition template ID annotation if in partitioned mode
+	if workloadProfile.Spec.Isolation == tfv1.IsolationModePartitioned {
+		if partitionTemplateID, ok := pod.Annotations[constants.PartitionTemplateIDAnnotation]; ok && partitionTemplateID != "" {
+			// Store in a custom field or annotation for later use in ComposeAllocateRequest
+			// We'll need to add this to WorkloadProfile or pass it through annotations
+			// For now, we'll store it in pod annotations and read it in ComposeAllocateRequest
+		}
+	}
+
 	workerPodTemplate, ok := pod.Annotations[constants.WorkerPodTemplateAnnotation]
 	if ok && workerPodTemplate != "" {
 		if workloadProfile.Spec.IsLocalGPU {

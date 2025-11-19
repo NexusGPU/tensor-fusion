@@ -31,6 +31,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -103,6 +104,9 @@ func SetTflopsMapAndInitGPUPricingInfo(ctx context.Context, gpuInfos *[]config.G
 		tflopsMap[gpuInfo.FullModelName] = completeInfo
 		tflopsMap[gpuInfo.Model] = completeInfo
 	}
+
+	// Load partition templates from config
+	gpuallocator.LoadPartitionTemplatesFromConfig(*gpuInfos)
 
 	initOnce.Do(func() {
 		globalAWSGPUInstanceData = make(map[string]GPUNodeInstanceInfoAndPrice)
