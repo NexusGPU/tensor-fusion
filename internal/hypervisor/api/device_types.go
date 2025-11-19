@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package device
+package api
 
 import (
 	"time"
@@ -138,4 +138,33 @@ type MemoryUtilization struct {
 	UsedBytes          uint64
 	ReservedBytes      uint64
 	UtilizationPercent float64
+}
+
+// GPUUsageMetrics represents GPU device metrics
+type GPUUsageMetrics struct {
+	DeviceUUID        string
+	MemoryBytes       uint64
+	MemoryPercentage  float64
+	ComputePercentage float64
+	ComputeTflops     float64
+	Rx                float64 // PCIe RX in KB
+	Tx                float64 // PCIe TX in KB
+	Temperature       float64
+	GraphicsClockMHz  float64
+	SMClockMHz        float64
+	MemoryClockMHz    float64
+	VideoClockMHz     float64
+	PowerUsage        int64 // in watts
+	NvlinkRxBandwidth int64 // in bytes/s
+	NvlinkTxBandwidth int64 // in bytes/s
+}
+
+// WorkerMetrics represents worker process metrics on a device
+type WorkerMetrics struct {
+	DeviceUUID        string
+	WorkerUID         string
+	ProcessID         string
+	MemoryBytes       uint64
+	ComputePercentage float64
+	ComputeTflops     float64
 }

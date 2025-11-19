@@ -110,6 +110,21 @@ build: manifests generate fmt vet ## Build manager binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
 
+.PHONY: build-provider
+build-provider: ## Build accelerator stub library.
+	$(MAKE) -C provider stub
+
+.PHONY: build-hypervisor
+build-hypervisor: build-provider ## Build hypervisor binary with CGO enabled.
+	@PROVIDER_DIR=$$(pwd)/provider; \
+	CGO_ENABLED=1 \
+	CGO_CFLAGS="-I$$PROVIDER_DIR" \
+	go build -o bin/hypervisor ./cmd/hypervisor
+
+.PHONY: clean-cache
+clean-cache: ## Clean Go build cache.
+	go clean -cache -testcache
+
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/

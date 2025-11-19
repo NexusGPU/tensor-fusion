@@ -15,7 +15,6 @@
  */
 
 #include "../accelerator.h"
-#include "../limiter.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -67,6 +66,9 @@ static void* limiterThreadFunc(void* arg __attribute__((unused))) {
         
         // Update global variable
         g_lastComputeCallTimeMs = currentTimeMs;
+        
+        // Sleep for 1 second
+        sleep(1);
     }
 
     return NULL;
@@ -94,6 +96,80 @@ __attribute__((destructor))
 static void cleanupLimiterThread(void) {
     g_threadRunning = 0;
     // Thread will exit on next iteration
+}
+
+// ============================================================================
+// Stub Implementation - Limiter APIs
+// ============================================================================
+
+Result AddWorkerProcess(const char* deviceUUID, const char* processId) {
+    (void)deviceUUID;  // Unused in stub
+    (void)processId;   // Unused in stub
+    return RESULT_SUCCESS;
+}
+
+Result CheckAndRecordMemoryOps(const char* processId, const char* deviceUUID, int64_t bytesDiff, MemoryOpRecord* record) {
+    (void)processId;   // Unused in stub
+    (void)deviceUUID;  // Unused in stub
+    (void)bytesDiff;   // Unused in stub
+    
+    if (!record) {
+        return RESULT_ERROR_INVALID_PARAM;
+    }
+    
+    // Stub: always allow, set available bytes to a large value
+    record->shouldBlock = false;
+    record->availableBytes = 16ULL * 1024 * 1024 * 1024; // 16GB
+    return RESULT_SUCCESS;
+}
+
+Result CheckAndRecordComputeOps(const char* processId, const char* deviceUUID, uint64_t computeTokens, ComputeOpRecord* record) {
+    (void)processId;      // Unused in stub
+    (void)deviceUUID;     // Unused in stub
+    (void)computeTokens;  // Unused in stub
+    
+    if (!record) {
+        return RESULT_ERROR_INVALID_PARAM;
+    }
+    
+    // Stub: always allow, set available tokens to a large value
+    record->shouldBlock = false;
+    record->availableTokens = 1000000; // Large token pool
+    return RESULT_SUCCESS;
+}
+
+Result FreezeWorker(const char* workerId, WorkerFreezeState* state) {
+    (void)workerId;  // Unused in stub
+    if (!state) {
+        return RESULT_ERROR_INVALID_PARAM;
+    }
+    state->isFrozen = false;
+    state->freezeTimeMs = 0;
+    return RESULT_SUCCESS;
+}
+
+Result ResumeWorker(const char* workerId, WorkerFreezeState* state) {
+    (void)workerId;  // Unused in stub
+    if (!state) {
+        return RESULT_ERROR_INVALID_PARAM;
+    }
+    state->isFrozen = false;
+    state->freezeTimeMs = 0;
+    return RESULT_SUCCESS;
+}
+
+Result AutoFreeze(const char* workerId, const char* deviceUUID, const char* resourceType) {
+    (void)workerId;      // Unused in stub
+    (void)deviceUUID;   // Unused in stub
+    (void)resourceType; // Unused in stub
+    return RESULT_SUCCESS;
+}
+
+Result AutoResume(const char* workerId, const char* deviceUUID, const char* resourceType) {
+    (void)workerId;      // Unused in stub
+    (void)deviceUUID;   // Unused in stub
+    (void)resourceType; // Unused in stub
+    return RESULT_SUCCESS;
 }
 
 // ============================================================================
