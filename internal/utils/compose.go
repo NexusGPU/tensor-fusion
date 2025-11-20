@@ -135,6 +135,10 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
 	pod.Annotations[constants.IsolationModeAnnotation] = string(tfInfo.Profile.Isolation)
+	// add partition template ID if in partitioned mode
+	if tfInfo.Profile.Isolation == tfv1.IsolationModePartitioned && tfInfo.Profile.PartitionTemplateID != "" {
+		pod.Annotations[constants.PartitionTemplateIDAnnotation] = tfInfo.Profile.PartitionTemplateID
+	}
 }
 
 func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
@@ -196,6 +200,10 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 		}), ",")
 	}
 	annotations[constants.IsolationModeAnnotation] = string(workload.Spec.Isolation)
+	// add partition template ID if in partitioned mode
+	if workload.Spec.Isolation == tfv1.IsolationModePartitioned && workload.Spec.PartitionTemplateID != "" {
+		annotations[constants.PartitionTemplateIDAnnotation] = workload.Spec.PartitionTemplateID
+	}
 	return labels, annotations
 }
 

@@ -479,57 +479,9 @@ func (s *GpuAllocator) Bind(
 
 		// Handle partitioned mode differently
 		if req.Isolation == tfv1.IsolationModePartitioned && req.PartitionTemplateID != "" {
-			// Verify template exists in GPU status
-			templateExists := false
-			for _, template := range gpu.Status.PartitionTemplates {
-				if template.TemplateID == req.PartitionTemplateID {
-					templateExists = true
-					break
-				}
+			if err := s.bindPartition(gpu, req, selectedGPU); err != nil {
+				return nil, err
 			}
-			if !templateExists {
-				return nil, fmt.Errorf("partition template %s not found on GPU %s", req.PartitionTemplateID, selectedGPU)
-			}
-
-			// Calculate partition resource usage from config (no overhead)
-			partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(gpu.Status.GPUModel, req.PartitionTemplateID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get partition template info for GPU %s template %s: %w", selectedGPU, req.PartitionTemplateID, err)
-			}
-
-			// Check availability for partition resources
-			if gpu.Status.Available.Tflops.Cmp(partitionTflops) < 0 {
-				return nil, fmt.Errorf("GPU %s insufficient TFLOPs for partition: available %s, required %s",
-					selectedGPU, gpu.Status.Available.Tflops.String(), partitionTflops.String())
-			}
-			if gpu.Status.Available.Vram.Cmp(partitionVram) < 0 {
-				return nil, fmt.Errorf("GPU %s insufficient VRAM for partition: available %s, required %s",
-					selectedGPU, gpu.Status.Available.Vram.String(), partitionVram.String())
-			}
-
-			// Subtract partition resources (no overhead)
-			gpu.Status.Available.Tflops.Sub(partitionTflops)
-			gpu.Status.Available.Vram.Sub(partitionVram)
-
-			// Initialize AllocatedPartitions map if needed
-			if gpu.Status.AllocatedPartitions == nil {
-				gpu.Status.AllocatedPartitions = make(map[string]tfv1.AllocatedPartition)
-			}
-
-			// Store partition allocation info using podUID as key
-			podUID := string(req.PodMeta.UID)
-			gpu.Status.AllocatedPartitions[podUID] = tfv1.AllocatedPartition{
-				TemplateID:  req.PartitionTemplateID,
-				PodUID:      podUID,
-				PodName:     req.PodMeta.Name,
-				Namespace:   req.PodMeta.Namespace,
-				AllocatedAt: metav1.Now(),
-			}
-
-			log.FromContext(s.ctx).Info("Allocated partition on GPU",
-				"gpu", selectedGPU,
-				"template", req.PartitionTemplateID,
-				"podUID", podUID)
 		} else {
 			// Non-partitioned mode: subtract request resources
 			if gpu.Status.Available.Tflops.Cmp(req.Request.Tflops) < 0 {
@@ -690,18 +642,18 @@ func (s *GpuAllocator) Dealloc(
 ) {
 	<-s.initializedCh
 	podUID := string(podMeta.UID)
-	log := log.FromContext(s.ctx)
+	logger := log.FromContext(s.ctx)
 
 	request, exists := s.uniqueAllocation[podUID]
 	if !exists || request == nil {
 		// should not block finalizer
-		log.Error(fmt.Errorf("pod has not allocated GPUs"), "pod", podUID)
+		logger.Error(fmt.Errorf("pod has not allocated GPUs"), "pod", podUID)
 		return
 	}
 
 	if _, exists := s.uniqueDeallocation[podUID]; exists {
 		// should not block finalizer
-		log.Error(fmt.Errorf("pod has already deallocated GPUs"), "pod", podUID)
+		logger.Error(fmt.Errorf("pod has already deallocated GPUs"), "pod", podUID)
 		return
 	}
 
@@ -714,49 +666,13 @@ func (s *GpuAllocator) Dealloc(
 		gpuNameNs := types.NamespacedName{Name: gpu}
 		storeGPU, exists := s.gpuStore[gpuNameNs]
 		if !exists {
-			log.Error(fmt.Errorf("GPU not found in store"), "Failed to deallocate GPU", "name", gpu)
+			logger.Error(fmt.Errorf("GPU not found in store"), "Failed to deallocate GPU", "name", gpu)
 			continue
 		}
 
 		// Handle partitioned mode deallocation
 		if request.Isolation == tfv1.IsolationModePartitioned && request.PartitionTemplateID != "" {
-			// Find and remove the allocated partition using podUID as key
-			podUID := string(request.PodMeta.UID)
-			if storeGPU.Status.AllocatedPartitions != nil {
-				allocatedPartition, exists := storeGPU.Status.AllocatedPartitions[podUID]
-				if exists {
-					// Calculate partition resource usage from config (no overhead)
-					partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(storeGPU.Status.GPUModel, allocatedPartition.TemplateID)
-					if err != nil {
-						// Fallback: add back request resources if template not found in config
-						log.Info("Partition template not found in config during deallocation, using request resources",
-							"gpu", gpu, "template", allocatedPartition.TemplateID, "error", err)
-						storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
-						storeGPU.Status.Available.Vram.Add(request.Request.Vram)
-					} else {
-						// Add back partition resources (no overhead)
-						storeGPU.Status.Available.Tflops.Add(partitionTflops)
-						storeGPU.Status.Available.Vram.Add(partitionVram)
-					}
-
-					// Remove partition from allocated partitions map using podUID
-					delete(storeGPU.Status.AllocatedPartitions, podUID)
-					log.Info("Removed partition allocation",
-						"gpu", gpu,
-						"podUID", podUID,
-						"template", allocatedPartition.TemplateID)
-				} else {
-					log.Info("Partition not found in allocated partitions during deallocation",
-						"gpu", gpu, "podUID", podUID)
-					// Fallback: add back request resources
-					storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
-					storeGPU.Status.Available.Vram.Add(request.Request.Vram)
-				}
-			} else {
-				// No allocated partitions map, fallback to request resources
-				storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
-				storeGPU.Status.Available.Vram.Add(request.Request.Vram)
-			}
+			s.deallocPartition(storeGPU, request, gpu)
 		} else {
 			// Non-partitioned mode: add back request resources
 			if !request.Request.ComputePercent.IsZero() {
@@ -786,7 +702,7 @@ func (s *GpuAllocator) Dealloc(
 	// Deallocate quota resources in memory (atomic operation)
 	s.quotaStore.DeallocateQuota(workloadNameNamespace.Namespace, request)
 
-	log.Info("GPU deallocation successful",
+	logger.Info("GPU deallocation successful",
 		"namespace", workloadNameNamespace.Namespace,
 		"workload", workloadNameNamespace.Name,
 		"gpu_count", len(gpus),
@@ -1873,6 +1789,104 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 	}
 
 	return &allocRequest, "", nil
+}
+
+// bindPartition handles partition allocation for a single GPU in partitioned mode
+func (s *GpuAllocator) bindPartition(gpu *tfv1.GPU, req *tfv1.AllocRequest, selectedGPU string) error {
+	// Verify template exists in GPU status
+	templateExists := false
+	for _, template := range gpu.Status.PartitionTemplates {
+		if template.TemplateID == req.PartitionTemplateID {
+			templateExists = true
+			break
+		}
+	}
+	if !templateExists {
+		return fmt.Errorf("partition template %s not found on GPU %s", req.PartitionTemplateID, selectedGPU)
+	}
+
+	// Calculate partition resource usage from config (no overhead)
+	partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(gpu.Status.GPUModel, req.PartitionTemplateID)
+	if err != nil {
+		return fmt.Errorf("failed to get partition template info for GPU %s template %s: %w", selectedGPU, req.PartitionTemplateID, err)
+	}
+
+	// Check availability for partition resources
+	if gpu.Status.Available.Tflops.Cmp(partitionTflops) < 0 {
+		return fmt.Errorf("GPU %s insufficient TFLOPs for partition: available %s, required %s",
+			selectedGPU, gpu.Status.Available.Tflops.String(), partitionTflops.String())
+	}
+	if gpu.Status.Available.Vram.Cmp(partitionVram) < 0 {
+		return fmt.Errorf("GPU %s insufficient VRAM for partition: available %s, required %s",
+			selectedGPU, gpu.Status.Available.Vram.String(), partitionVram.String())
+	}
+
+	// Subtract partition resources (no overhead)
+	gpu.Status.Available.Tflops.Sub(partitionTflops)
+	gpu.Status.Available.Vram.Sub(partitionVram)
+
+	// Initialize AllocatedPartitions map if needed
+	if gpu.Status.AllocatedPartitions == nil {
+		gpu.Status.AllocatedPartitions = make(map[string]tfv1.AllocatedPartition)
+	}
+
+	// Store partition allocation info using podUID as key
+	podUID := string(req.PodMeta.UID)
+	gpu.Status.AllocatedPartitions[podUID] = tfv1.AllocatedPartition{
+		TemplateID:  req.PartitionTemplateID,
+		PodUID:      podUID,
+		PodName:     req.PodMeta.Name,
+		Namespace:   req.PodMeta.Namespace,
+		AllocatedAt: metav1.Now(),
+	}
+
+	log.FromContext(s.ctx).Info("Allocated partition on GPU",
+		"gpu", selectedGPU,
+		"template", req.PartitionTemplateID,
+		"podUID", podUID)
+	return nil
+}
+
+// deallocPartition handles partition deallocation for a single GPU in partitioned mode
+func (s *GpuAllocator) deallocPartition(storeGPU *tfv1.GPU, request *tfv1.AllocRequest, gpu string) {
+	logger := log.FromContext(s.ctx)
+	// Find and remove the allocated partition using podUID as key
+	podUID := string(request.PodMeta.UID)
+	if storeGPU.Status.AllocatedPartitions != nil {
+		allocatedPartition, exists := storeGPU.Status.AllocatedPartitions[podUID]
+		if exists {
+			// Calculate partition resource usage from config (no overhead)
+			partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(storeGPU.Status.GPUModel, allocatedPartition.TemplateID)
+			if err != nil {
+				// Fallback: add back request resources if template not found in config
+				logger.Info("Partition template not found in config during deallocation, using request resources",
+					"gpu", gpu, "template", allocatedPartition.TemplateID, "error", err)
+				storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+				storeGPU.Status.Available.Vram.Add(request.Request.Vram)
+			} else {
+				// Add back partition resources (no overhead)
+				storeGPU.Status.Available.Tflops.Add(partitionTflops)
+				storeGPU.Status.Available.Vram.Add(partitionVram)
+			}
+
+			// Remove partition from allocated partitions map using podUID
+			delete(storeGPU.Status.AllocatedPartitions, podUID)
+			logger.Info("Removed partition allocation",
+				"gpu", gpu,
+				"podUID", podUID,
+				"template", allocatedPartition.TemplateID)
+		} else {
+			logger.Info("Partition not found in allocated partitions during deallocation",
+				"gpu", gpu, "podUID", podUID)
+			// Fallback: add back request resources
+			storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+			storeGPU.Status.Available.Vram.Add(request.Request.Vram)
+		}
+	} else {
+		// No allocated partitions map, fallback to request resources
+		storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
+		storeGPU.Status.Available.Vram.Add(request.Request.Vram)
+	}
 }
 
 func (s *GpuAllocator) addAllocationMap(gpuNodeName string, podMeta metav1.ObjectMeta) {
