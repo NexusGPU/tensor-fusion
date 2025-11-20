@@ -45,4 +45,3 @@ func (h *HealthHandler) HandleReadyz(c *gin.Context, deviceController framework.
 	}
 	c.JSON(http.StatusOK, api.HealthResponse{Status: "ready"})
 }
-

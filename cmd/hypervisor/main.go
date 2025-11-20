@@ -24,7 +24,6 @@ import (
 )
 
 var (
-	hardwareVendor     = flag.String("hardware-vendor", "", "Hardware vendor: NVIDIA, AMD, Intel, etc.")
 	acceleratorLibPath = flag.String("accelerator-lib",
 		"../provider/build/libaccelerator_stub.so", "Path to accelerator library")
 	isolationMode = flag.String("isolation-mode", "shared",
@@ -63,7 +62,6 @@ func main() {
 		klog.Infof("Using accelerator library path from env: %s", libPath)
 	}
 	if vendor := os.Getenv(TFHardwareVendorEnv); vendor != "" {
-		hardwareVendor = &vendor
 		klog.Infof("Hardware vendor from env: %s", vendor)
 	}
 
@@ -123,7 +121,9 @@ func main() {
 	if err != nil {
 		klog.Fatalf("Failed to start worker controller: %v", err)
 	}
-	defer workerController.Stop()
+	defer func() {
+		_ = workerController.Stop()
+	}()
 	klog.Info("Worker controller started")
 
 	// initialize metrics recorder

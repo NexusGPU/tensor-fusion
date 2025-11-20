@@ -153,13 +153,15 @@ func TestSharedMemoryHandleCreateAndOpen(t *testing.T) {
 
 	podPath := identifier.ToPath(testShmBasePath)
 	defer func() {
-		os.RemoveAll(podPath)
+		_ = os.RemoveAll(podPath)
 	}()
 
 	// Create shared memory
 	handle1, err := CreateSharedMemoryHandle(podPath, configs)
 	require.NoError(t, err)
-	defer handle1.Close()
+	defer func() {
+		_ = handle1.Close()
+	}()
 
 	state1 := handle1.GetState()
 	assert.Equal(t, uint32(2), state1.Version())
@@ -171,7 +173,9 @@ func TestSharedMemoryHandleCreateAndOpen(t *testing.T) {
 	// Open existing shared memory
 	handle2, err := OpenSharedMemoryHandle(podPath)
 	require.NoError(t, err)
-	defer handle2.Close()
+	defer func() {
+		_ = handle2.Close()
+	}()
 
 	state2 := handle2.GetState()
 	assert.Equal(t, uint32(2), state2.Version())
@@ -194,12 +198,14 @@ func TestConcurrentDeviceAccess(t *testing.T) {
 	identifier := NewPodIdentifier("concurrent_access", "test")
 	podPath := identifier.ToPath(testShmBasePath)
 	defer func() {
-		os.RemoveAll(podPath)
+		_ = os.RemoveAll(podPath)
 	}()
 
 	handle, err := CreateSharedMemoryHandle(podPath, configs)
 	require.NoError(t, err)
-	defer handle.Close()
+	defer func() {
+		_ = handle.Close()
+	}()
 
 	deviceIdx := int(configs[0].DeviceIdx)
 	var wg sync.WaitGroup
@@ -332,7 +338,9 @@ func TestCleanupEmptyParentDirectories(t *testing.T) {
 	// Create a temporary directory structure
 	tempDir, err := os.MkdirTemp("", "test_cleanup_*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		_ = os.RemoveAll(tempDir)
+	}()
 
 	// Create nested directory structure: base/namespace/podname/
 	namespaceDir := filepath.Join(tempDir, "test-namespace")
@@ -368,7 +376,9 @@ func TestCleanupEmptyParentDirectoriesWithStopAtPath(t *testing.T) {
 	// Create a temporary directory structure
 	tempDir, err := os.MkdirTemp("", "test_cleanup_*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		_ = os.RemoveAll(tempDir)
+	}()
 
 	// Create nested directory structure: base/namespace/podname/
 	namespaceDir := filepath.Join(tempDir, "test-namespace")
@@ -402,7 +412,9 @@ func TestCleanupEmptyParentDirectoriesStopsAtNonEmptyDir(t *testing.T) {
 	// Create a temporary directory structure
 	tempDir, err := os.MkdirTemp("", "test_cleanup_*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		_ = os.RemoveAll(tempDir)
+	}()
 
 	// Create nested directory structure: base/namespace/podname/
 	namespaceDir := filepath.Join(tempDir, "test-namespace")
@@ -597,7 +609,7 @@ func TestSharedMemoryHandleCleanup(t *testing.T) {
 	identifier := NewPodIdentifier("cleanup_test", "test")
 	podPath := identifier.ToPath(testShmBasePath)
 	defer func() {
-		os.RemoveAll(testShmBasePath)
+		_ = os.RemoveAll(testShmBasePath)
 	}()
 
 	handle, err := CreateSharedMemoryHandle(podPath, configs)

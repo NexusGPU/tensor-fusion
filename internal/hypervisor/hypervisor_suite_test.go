@@ -40,15 +40,15 @@ import (
 
 var _ = Describe("Hypervisor Integration Tests", func() {
 	var (
-		ctx                context.Context
-		cancel             context.CancelFunc
-		deviceController   framework.DeviceController
-		backend            framework.Backend
-		workerController   framework.WorkerController
-		metricsRecorder    *metrics.HypervisorMetricsRecorder
-		httpServer         *server.Server
-		stubLibPath        string
-		tempMetricsFile    string
+		ctx              context.Context
+		cancel           context.CancelFunc
+		deviceController framework.DeviceController
+		backend          framework.Backend
+		workerController framework.WorkerController
+		metricsRecorder  *metrics.HypervisorMetricsRecorder
+		httpServer       *server.Server
+		stubLibPath      string
+		tempMetricsFile  string
 	)
 
 	BeforeEach(func() {
@@ -73,7 +73,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 		tempFile, err := os.CreateTemp("", "hypervisor-metrics-*.log")
 		Expect(err).NotTo(HaveOccurred())
 		tempMetricsFile = tempFile.Name()
-		tempFile.Close()
+		_ = tempFile.Close()
 	})
 
 	AfterEach(func() {
@@ -83,20 +83,20 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 		if httpServer != nil {
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer shutdownCancel()
-			httpServer.Stop(shutdownCtx)
+			_ = httpServer.Stop(shutdownCtx)
 		}
 		if workerController != nil {
-			workerController.Stop()
+			_ = workerController.Stop()
 		}
 		if backend != nil {
-			backend.Stop()
+			_ = backend.Stop()
 		}
 		if deviceController != nil {
 			if closer, ok := deviceController.(interface{ Close() error }); ok {
-				closer.Close()
+				_ = closer.Close()
 			}
 		}
-		os.Remove(tempMetricsFile)
+		_ = os.Remove(tempMetricsFile)
 	})
 
 	Context("With stub device library", func() {
@@ -134,7 +134,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// Test device discovery through C library
 				devices, err := accel.GetAllDevices()
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(devices)).To(BeNumerically(">", 0))
+				Expect(devices).ToNot(BeEmpty())
 
 				// Verify stub device properties
 				device := devices[0]
@@ -142,14 +142,15 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(device.Vendor).To(Equal("STUB"))
 				Expect(device.TotalMemory).To(Equal(uint64(16 * 1024 * 1024 * 1024))) // 16GB
 
-				err = accel.Close()
-				Expect(err).NotTo(HaveOccurred())
+				_ = accel.Close()
 			})
 
 			It("should get process utilization from stub library", func() {
 				accel, err := device.NewAcceleratorInterface(stubLibPath)
 				Expect(err).NotTo(HaveOccurred())
-				defer accel.Close()
+				defer func() {
+					_ = accel.Close()
+				}()
 
 				// Get compute utilization (may be empty for stub)
 				computeUtils, err := accel.GetProcessComputeUtilization()
@@ -173,7 +174,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 				devices, err := deviceController.ListDevices(ctx)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(devices)).To(BeNumerically(">", 0), "Should discover at least one stub device")
+				Expect(devices).ToNot(BeEmpty(), "Should discover at least one stub device")
 
 				// Verify device properties
 				device := devices[0]
@@ -190,12 +191,12 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 				devices, err := deviceController.ListDevices(ctx)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(devices)).To(BeNumerically(">", 0))
+				Expect(devices).ToNot(BeEmpty())
 
 				deviceUUID := devices[0].UUID
 				req := &api.DeviceAllocateRequest{
 					WorkerUID:     "test-worker-1",
-					DeviceUUIDs:    []string{deviceUUID},
+					DeviceUUIDs:   []string{deviceUUID},
 					IsolationMode: api.IsolationModeShared,
 				}
 
@@ -207,7 +208,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// Verify allocation exists
 				allocations, err := deviceController.GetDeviceAllocations(ctx, deviceUUID)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(allocations)).To(Equal(1))
+				Expect(allocations).To(HaveLen(1))
 				Expect(allocations[0].WorkerID).To(Equal("test-worker-1"))
 			})
 
@@ -224,7 +225,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// Should have metrics for all discovered devices
 				devices, err := deviceController.ListDevices(ctx)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(metrics)).To(Equal(len(devices)))
+				Expect(metrics).To(HaveLen(len(devices)))
 			})
 		})
 
@@ -246,11 +247,11 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// Create an allocation
 				devices, err := deviceController.ListDevices(ctx)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(devices)).To(BeNumerically(">", 0))
+				Expect(devices).ToNot(BeEmpty())
 
 				req := &api.DeviceAllocateRequest{
 					WorkerUID:     "test-worker-1",
-					DeviceUUIDs:    []string{devices[0].UUID},
+					DeviceUUIDs:   []string{devices[0].UUID},
 					IsolationMode: api.IsolationModeShared,
 				}
 				_, err = deviceController.AllocateDevice(req)
@@ -293,11 +294,11 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// Create an allocation
 				devices, err := deviceController.ListDevices(ctx)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(devices)).To(BeNumerically(">", 0))
+				Expect(devices).ToNot(BeEmpty())
 
 				req := &api.DeviceAllocateRequest{
 					WorkerUID:     "test-worker-1",
-					DeviceUUIDs:    []string{devices[0].UUID},
+					DeviceUUIDs:   []string{devices[0].UUID},
 					IsolationMode: api.IsolationModeShared,
 				}
 				_, err = deviceController.AllocateDevice(req)
@@ -312,11 +313,11 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// Create an allocation
 				devices, err := deviceController.ListDevices(ctx)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(devices)).To(BeNumerically(">", 0))
+				Expect(devices).ToNot(BeEmpty())
 
 				req := &api.DeviceAllocateRequest{
 					WorkerUID:     "test-worker-1",
-					DeviceUUIDs:    []string{devices[0].UUID},
+					DeviceUUIDs:   []string{devices[0].UUID},
 					IsolationMode: api.IsolationModeShared,
 				}
 				_, err = deviceController.AllocateDevice(req)
@@ -332,11 +333,11 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// Create an allocation
 				devices, err := deviceController.ListDevices(ctx)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(devices)).To(BeNumerically(">", 0))
+				Expect(devices).ToNot(BeEmpty())
 
 				req := &api.DeviceAllocateRequest{
 					WorkerUID:     "test-worker-1",
-					DeviceUUIDs:    []string{devices[0].UUID},
+					DeviceUUIDs:   []string{devices[0].UUID},
 					IsolationMode: api.IsolationModeShared,
 				}
 				_, err = deviceController.AllocateDevice(req)
@@ -424,14 +425,14 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// 1. Discover devices
 				devices, err := deviceController.ListDevices(ctx)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(devices)).To(BeNumerically(">", 0))
+				Expect(devices).ToNot(BeEmpty())
 				deviceUUID := devices[0].UUID
 
 				// 2. Allocate device
 				req := &api.DeviceAllocateRequest{
-					WorkerUID:     "integration-worker-1",
-					DeviceUUIDs:    []string{deviceUUID},
-					IsolationMode: api.IsolationModeShared,
+					WorkerUID:        "integration-worker-1",
+					DeviceUUIDs:      []string{deviceUUID},
+					IsolationMode:    api.IsolationModeShared,
 					MemoryLimitBytes: 1024 * 1024 * 1024, // 1GB
 				}
 				resp, err := deviceController.AllocateDevice(req)
@@ -441,7 +442,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// 3. Verify allocation
 				allocations, err := deviceController.GetDeviceAllocations(ctx, deviceUUID)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(allocations)).To(Equal(1))
+				Expect(allocations).To(HaveLen(1))
 
 				// 4. Backend should discover worker
 				time.Sleep(2 * time.Second)
@@ -479,7 +480,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// 9. Verify deallocation
 				allocations, err = deviceController.GetDeviceAllocations(ctx, deviceUUID)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(allocations)).To(Equal(0))
+				Expect(allocations).To(BeEmpty())
 			})
 		})
 	})

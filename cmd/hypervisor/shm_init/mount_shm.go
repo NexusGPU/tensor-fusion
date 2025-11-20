@@ -20,7 +20,9 @@ func RunMountShm() {
 	sizeMB := mountShmFlags.Int("size", 0, "Size in MB (required)")
 
 	klog.InitFlags(nil)
-	mountShmFlags.Parse(os.Args[2:])
+	if err := mountShmFlags.Parse(os.Args[2:]); err != nil {
+		klog.Fatalf("Failed to parse flags: %v", err)
+	}
 
 	if *mountPoint == "" {
 		klog.Fatalf("mount-point is required")

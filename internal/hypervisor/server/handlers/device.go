@@ -65,4 +65,3 @@ func (h *DeviceHandler) HandleDiscoverDevices(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, api.DiscoverDevicesResponse{Message: "device discovery triggered"})
 }
-

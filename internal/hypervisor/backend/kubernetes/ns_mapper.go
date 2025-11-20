@@ -92,7 +92,9 @@ func getContainerPIDFromStatus(procDir string) (uint32, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to open status file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {

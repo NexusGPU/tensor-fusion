@@ -195,6 +195,7 @@ func tick() tea.Cmd {
 	})
 }
 
+//nolint:gocyclo // Complex state machine with many message types and view transitions
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -297,11 +298,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		updateDeviceList(&m.deviceList, m.devices)
 		updateWorkerList(&m.workerList, m.workers)
-		if m.currentView == viewDeviceDetail {
+		switch m.currentView {
+		case viewDeviceDetail:
 			updateDeviceDetail(m.ctx, m.client, &m.deviceDetail, m.selectedDeviceUUID, m.devices, m.metrics, m.deviceMetricsHistory)
-		} else if m.currentView == viewWorkerDetail {
+		case viewWorkerDetail:
 			updateWorkerDetail(&m.workerDetail, m.selectedWorkerUID, m.workers, m.workerMetrics, m.workerMetricsHistory)
-		} else if m.currentView == viewMetrics {
+		case viewMetrics:
 			updateMetricsView(&m.metricsView, m.devices, m.workers, m.metrics, m.workerMetrics, m.lastUpdate)
 		}
 		return m, nil

@@ -55,4 +55,3 @@ func renderBarChart(percentage float64, width int) string {
 
 	return bar.String()
 }
-
