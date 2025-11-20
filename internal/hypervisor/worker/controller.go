@@ -10,10 +10,8 @@ import (
 )
 
 type WorkerController struct {
-	workerToProcesses  map[string]string // worker UID -> process ID
-	processToNsProcess map[string]string // process ID -> linux Namespaced process ID in container
-	mode               api.IsolationMode
-	backend            framework.Backend
+	mode    api.IsolationMode
+	backend framework.Backend
 
 	deviceController framework.DeviceController
 	quotaController  framework.QuotaController
@@ -46,8 +44,8 @@ func (w *WorkerController) Start() error {
 }
 
 func (w *WorkerController) Stop() error {
-	w.backend.Stop()
-	w.quotaController.StopSoftQuotaLimiter()
+	_ = w.backend.Stop()
+	_ = w.quotaController.StopSoftQuotaLimiter()
 	return nil
 }
 

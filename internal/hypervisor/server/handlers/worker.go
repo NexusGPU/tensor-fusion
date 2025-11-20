@@ -121,4 +121,3 @@ func (h *WorkerHandler) HandleResumeWorker(c *gin.Context) {
 		WorkerID: workerID,
 	})
 }
-

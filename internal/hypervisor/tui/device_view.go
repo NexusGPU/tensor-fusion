@@ -107,7 +107,7 @@ func updateDeviceDetail(
 	if hasMetrics && deviceMetrics != nil {
 		content.WriteString(TitleStyle.Render("Current Metrics\n\n"))
 		content.WriteString(fmt.Sprintf("%s: %.1f%%\n", MetricLabelStyle.Render("Memory Usage"), deviceMetrics.MemoryPercentage))
-		content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Memory Used"), formatBytes(uint64(deviceMetrics.MemoryBytes))))
+		content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Memory Used"), formatBytes(deviceMetrics.MemoryBytes)))
 		content.WriteString(fmt.Sprintf("%s: %.1f%%\n", MetricLabelStyle.Render("Compute Usage"), deviceMetrics.ComputePercentage))
 		content.WriteString(fmt.Sprintf("%s: %.2f TFLOPS\n", MetricLabelStyle.Render("Compute TFLOPS"), deviceMetrics.ComputeTflops))
 		content.WriteString(fmt.Sprintf("%s: %.1f°C\n", MetricLabelStyle.Render("Temperature"), deviceMetrics.Temperature))

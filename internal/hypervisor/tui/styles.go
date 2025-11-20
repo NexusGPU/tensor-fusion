@@ -21,14 +21,13 @@ import (
 )
 
 var (
-	TitleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63"))
-	SubtitleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	BorderStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62"))
-	SelectedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
-	NormalStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	MetricLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Width(20)
-	MetricValueStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-	ChartBarStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
-	ChartEmptyStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	TitleStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63"))
+	SubtitleStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	BorderStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62"))
+	SelectedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
+	NormalStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	MetricLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Width(20)
+	MetricValueStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+	ChartBarStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
+	ChartEmptyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 )
-

@@ -110,7 +110,7 @@ func (dp *DevicePlugin) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to dial device plugin socket: %w", err)
 	}
-	conn.Close()
+	_ = conn.Close()
 
 	// Register with kubelet
 	if err := dp.register(); err != nil {
@@ -138,7 +138,9 @@ func (dp *DevicePlugin) register() error {
 	if err != nil {
 		return fmt.Errorf("failed to dial kubelet: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	client := pluginapi.NewRegistrationClient(conn)
 	req := &pluginapi.RegisterRequest{
@@ -162,12 +164,8 @@ func (dp *DevicePlugin) register() error {
 
 // dial establishes a connection to a Unix socket
 func (dp *DevicePlugin) dial(unixSocketPath string, timeout time.Duration) (*grpc.ClientConn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	conn, err := grpc.DialContext(ctx, unixSocketPath,
+	conn, err := grpc.NewClient(unixSocketPath,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 			return net.DialTimeout("unix", addr, timeout)
 		}),
@@ -290,9 +288,7 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 
 		// Compose allocation request
 		deviceUUIDs := make([]string, 0, len(containerReq.DevicesIds))
-		for _, deviceID := range containerReq.DevicesIds {
-			deviceUUIDs = append(deviceUUIDs, deviceID)
-		}
+		deviceUUIDs = append(deviceUUIDs, containerReq.DevicesIds...)
 
 		allocReq := &api.DeviceAllocateRequest{
 			WorkerUID:         podUID,
