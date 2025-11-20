@@ -332,7 +332,10 @@ func (m *TensorFusionPodMutator) patchTFClient(
 			container.Resources.Limits = make(corev1.ResourceList)
 		}
 		// Limit is set to actual index value (1-512) for Device Plugin to match Pod
+		// ResourceFit of dummy device already ignored in TF scheduler
 		container.Resources.Limits[constants.PodIndexAnnotation] = resource.MustParse(strconv.Itoa(index))
+		// Request set to zero to avoid Karpenter node provision issues when pre-scheduling
+		container.Resources.Requests[constants.PodIndexAnnotation] = resource.MustParse("0")
 
 		if !isLocalGPU {
 			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
