@@ -21,15 +21,14 @@
             ]
         },
         {
-            "name": "Debug Discovery",
+            "name": "Debug Hypervisor",
             "type": "go",
             "request": "launch",
             "mode": "auto",
             "env": {
-                "HOSTNAME": "mocknode",
                 "KUBECONFIG": "~/.kube/config",
             },
-            "program": "${workspaceFolder}/cmd/nodediscovery/main.go",
+            "program": "${workspaceFolder}/cmd/hypervisor/main.go",
         },
         {
             "name": "Debug Dev Env Operator",
