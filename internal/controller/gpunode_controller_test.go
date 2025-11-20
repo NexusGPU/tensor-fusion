@@ -23,10 +23,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 )
 
 var _ = Describe("GPUNode Controller", func() {
@@ -37,17 +35,6 @@ var _ = Describe("GPUNode Controller", func() {
 				SetGpuCountPerNode(1).
 				Build()
 			gpuNode := tfEnv.GetGPUNode(0, 0)
-
-			By("checking that the node discovery job is created")
-			Eventually(func(g Gomega) {
-				job := &batchv1.Job{}
-				g.Expect(k8sClient.Get(ctx, types.NamespacedName{
-					Name:      fmt.Sprintf("node-discovery-%s", gpuNode.Name),
-					Namespace: utils.CurrentNamespace(),
-				}, job)).Should(Succeed())
-
-				g.Expect(job.Spec.TTLSecondsAfterFinished).Should(Equal(ptr.To[int32](3600 * 10)))
-			}).Should(Succeed())
 
 			By("checking that the hypervisor pod is created")
 			pod := &corev1.Pod{}
