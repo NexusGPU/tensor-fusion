@@ -24,6 +24,11 @@ type HypervisorMetricsRecorder struct {
 	gpuCapacityMap   map[string]float64 // GPU UUID -> MaxTflops
 }
 
+const (
+	defaultNodeName = "unknown"
+	defaultGPUPool  = "unknown"
+)
+
 func NewHypervisorMetricsRecorder(
 	ctx context.Context, outputPath string,
 	deviceController framework.DeviceController,
@@ -31,11 +36,11 @@ func NewHypervisorMetricsRecorder(
 ) *HypervisorMetricsRecorder {
 	nodeName := os.Getenv(constants.HypervisorGPUNodeNameEnv)
 	if nodeName == "" {
-		nodeName = "unknown"
+		nodeName = defaultNodeName
 	}
 	gpuPool := os.Getenv(constants.HypervisorPoolNameEnv)
 	if gpuPool == "" {
-		gpuPool = "unknown"
+		gpuPool = defaultGPUPool
 	}
 
 	return &HypervisorMetricsRecorder{
@@ -120,7 +125,7 @@ func (h *HypervisorMetricsRecorder) RecordDeviceMetrics(writer io.Writer) {
 	}
 
 	if err := enc.Err(); err == nil {
-		writer.Write(enc.Bytes())
+		_, _ = writer.Write(enc.Bytes())
 	}
 }
 
@@ -146,7 +151,7 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 
 	// Get extra labels config
 	extraLabelsConfig := config.GetGlobalConfig().MetricsExtraPodLabels
-	hasDynamicMetricsLabels := len(extraLabelsConfig) > 0
+	_ = len(extraLabelsConfig) > 0 // hasDynamicMetricsLabels - reserved for future use
 
 	// Output worker metrics directly
 	now := time.Now()
@@ -194,11 +199,10 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 			enc.AddTag("worker", workerUID)
 
 			// Add extra labels if configured
-			if hasDynamicMetricsLabels {
-				// Note: In Rust code, labels come from pod_state.info.labels
-				// Here we would need to get pod labels from allocation or another source
-				// For now, we'll skip extra labels as we don't have access to pod labels
-			}
+			// Note: In Rust code, labels come from pod_state.info.labels
+			// Here we would need to get pod labels from allocation or another source
+			// For now, we'll skip extra labels as we don't have access to pod labels
+			_ = extraLabelsConfig // Reserved for future use
 
 			enc.AddField("memory_bytes", int64(memoryBytes))
 			enc.AddField("compute_percentage", computePercentage)
@@ -210,6 +214,6 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 	}
 
 	if err := enc.Err(); err == nil {
-		writer.Write(enc.Bytes())
+		_, _ = writer.Write(enc.Bytes())
 	}
 }

@@ -67,11 +67,13 @@ func TestReadCheckpointFile(t *testing.T) {
 
 	tmpFile, err := os.CreateTemp("", "checkpoint-*.json")
 	assert.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
+	defer func() {
+		_ = os.Remove(tmpFile.Name())
+	}()
 
 	_, err = tmpFile.WriteString(testData)
 	assert.NoError(t, err)
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	detector := &DevicePluginDetector{
 		checkpointPath: tmpFile.Name(),
@@ -109,8 +111,7 @@ func TestExtractDeviceIDs(t *testing.T) {
 		},
 	}
 
-	allocated, registered, err := detector.extractDeviceIDs(checkpoint)
-	assert.NoError(t, err)
+	allocated, registered := detector.extractDeviceIDs(checkpoint)
 	assert.Contains(t, allocated, "gpu-7d8429d5-531d-d6a6-6510-3b662081a75a")
 	assert.Contains(t, registered, "gpu-7d8429d5-531d-d6a6-6510-3b662081a75a")
 }
@@ -153,11 +154,13 @@ func TestProcessDeviceState_DeviceAdded(t *testing.T) {
 
 	tmpFile, err := os.CreateTemp("", "checkpoint-*.json")
 	assert.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
+	defer func() {
+		_ = os.Remove(tmpFile.Name())
+	}()
 
 	_, err = tmpFile.WriteString(checkpointData)
 	assert.NoError(t, err)
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	// Mock GPU resource
 	gpu := &tfv1.GPU{
@@ -205,11 +208,13 @@ func TestProcessDeviceState_DeviceRemoved(t *testing.T) {
 
 	tmpFile, err := os.CreateTemp("", "checkpoint-*.json")
 	assert.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
+	defer func() {
+		_ = os.Remove(tmpFile.Name())
+	}()
 
 	_, err = tmpFile.WriteString(checkpointData)
 	assert.NoError(t, err)
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	// Mock GPU resource that was previously allocated
 	gpu := &tfv1.GPU{

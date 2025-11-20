@@ -32,13 +32,13 @@ func TestPartitionTemplateFilter(t *testing.T) {
 	}
 
 	tests := []struct {
-		name              string
-		isolationMode     tfv1.IsolationModeType
-		requiredTemplate  string
-		maxPartitionsMap  map[string]uint32
-		gpus              []*tfv1.GPU
-		expectedCount     int
-		expectedGPUNames  []string
+		name             string
+		isolationMode    tfv1.IsolationModeType
+		requiredTemplate string
+		maxPartitionsMap map[string]uint32
+		gpus             []*tfv1.GPU
+		expectedCount    int
+		expectedGPUNames []string
 	}{
 		{
 			name:             "non-partitioned mode should pass all GPUs",
@@ -67,7 +67,7 @@ func TestPartitionTemplateFilter(t *testing.T) {
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 					Status: tfv1.GPUStatus{
-						GPUModel:          "A100",
+						GPUModel:           "A100",
 						PartitionTemplates: []tfv1.PartitionTemplate{},
 					},
 				},
@@ -173,4 +173,3 @@ func TestPartitionTemplateFilter(t *testing.T) {
 		})
 	}
 }
-

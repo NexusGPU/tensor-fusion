@@ -175,4 +175,3 @@ func (h *LegacyHandler) HandleGetProcesses(c *gin.Context) {
 
 	c.JSON(http.StatusOK, api.ListProcessesResponse{Processes: processInfos})
 }
-

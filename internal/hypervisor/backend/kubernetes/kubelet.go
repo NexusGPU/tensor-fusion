@@ -110,6 +110,7 @@ func (kc *KubeletClient) Start() error {
 	}
 
 	// Create informer
+	//nolint:staticcheck // NewInformer is deprecated but NewInformerWithOptions has incompatible signature
 	_, controller := cache.NewInformer(
 		lw,
 		&corev1.Pod{},

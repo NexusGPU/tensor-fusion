@@ -285,10 +285,8 @@ func (m *Controller) GetDeviceAllocationUpdates(ctx context.Context, deviceUUID 
 func (m *Controller) GetGPUMetrics(ctx context.Context) (map[string]*api.GPUUsageMetrics, error) {
 	m.mu.RLock()
 	devices := make([]*api.DeviceInfo, 0, len(m.devices))
-	deviceUUIDs := make([]string, 0, len(m.devices))
 	for _, device := range m.devices {
 		devices = append(devices, device)
-		deviceUUIDs = append(deviceUUIDs, device.UUID)
 	}
 	m.mu.RUnlock()
 
@@ -319,6 +317,7 @@ func (m *Controller) GetGPUMetrics(ctx context.Context) (map[string]*api.GPUUsag
 	computeUtils, err := m.accelerator.GetProcessComputeUtilization()
 	if err != nil {
 		// Continue with memory metrics only
+		computeUtils = []api.ComputeUtilization{}
 	}
 
 	// Aggregate compute usage per device

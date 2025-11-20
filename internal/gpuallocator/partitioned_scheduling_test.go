@@ -26,9 +26,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const testGPUModel = "A100_SXM_80G"
+
 func TestMatchPartitionTemplate(t *testing.T) {
 	// Setup: Initialize partition template map
-	gpuModel := "A100_SXM_80G"
+	gpuModel := testGPUModel
 	PartitionTemplateMap[gpuModel] = map[string]config.PartitionTemplateInfo{
 		"1g.24gb": {
 			TemplateID:   "1g.24gb",
@@ -218,7 +220,7 @@ func TestMatchPartitionTemplate(t *testing.T) {
 
 func TestCalculatePartitionResourceUsage(t *testing.T) {
 	// Setup
-	gpuModel := "A100_SXM_80G"
+	gpuModel := testGPUModel
 	templateID := "1g.24gb"
 	PartitionTemplateMap[gpuModel] = map[string]config.PartitionTemplateInfo{
 		templateID: {
@@ -240,7 +242,7 @@ func TestCalculatePartitionResourceUsage(t *testing.T) {
 
 func TestCheckPartitionAvailability(t *testing.T) {
 	// Setup
-	gpuModel := "A100_SXM_80G"
+	gpuModel := testGPUModel
 	templateID := "1g.24gb"
 	PartitionTemplateMap[gpuModel] = map[string]config.PartitionTemplateInfo{
 		templateID: {
