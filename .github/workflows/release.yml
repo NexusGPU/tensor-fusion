@@ -84,7 +84,7 @@ jobs:
           build-args: |
             GO_LDFLAGS=-X 'github.com/NexusGPU/tensor-fusion/internal/version.BuildVersion=${{ needs.release.outputs.version }}'
 
-  publish_node_discovery_image:
+  publish_hypervisor_image:
     needs:
       - release
     if: needs.release.outputs.published == 'true' || github.event_name == 'workflow_dispatch'
@@ -108,7 +108,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: tensorfusion/tensor-fusion-node-discovery
+          images: tensorfusion/tensor-fusion-hypervisor
           tags: ${{ github.event_name == 'workflow_dispatch' && steps.set_tag.outputs.tag || format('type=semver,pattern={{{{version}}}},value={0}', needs.release.outputs.version) }}
 
       - name: Login to DockerHub
@@ -117,13 +117,13 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push node discovery
+      - name: Build and push hypervisor
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          file: dockerfile/node-discovery.Dockerfile
+          file: dockerfile/hypervisor.Dockerfile
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           no-cache: true
