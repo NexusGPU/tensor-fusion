@@ -34,11 +34,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	schedulingcorev1 "k8s.io/component-helpers/scheduling/corev1"
 )
@@ -263,31 +260,6 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctr.
 		Named("node").
-		Watches(&tfv1.GPUPool{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-			nodelist := &tfv1.GPUNodeList{}
-			if err := mgr.GetClient().List(ctx, nodelist, client.MatchingLabels{
-				selectors[0]: selectors[1],
-			}); err != nil {
-				log.FromContext(ctx).Error(err, "failed to list GPUNode")
-				return []reconcile.Request{}
-			}
-			var requests []reconcile.Request
-			for _, n := range nodelist.Items {
-				requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKey{Name: n.Name}})
-			}
-			return requests
-		}), builder.WithPredicates(predicate.Funcs{
-			UpdateFunc: func(e event.UpdateEvent) bool {
-				oldObj, ok1 := e.ObjectOld.(*tfv1.GPUPool)
-				newObj, ok2 := e.ObjectNew.(*tfv1.GPUPool)
-				if !ok1 || !ok2 {
-					return false
-				}
-				oldNodeSelector := oldObj.Spec.NodeManagerConfig.NodeSelector
-				newNodeSelector := newObj.Spec.NodeManagerConfig.NodeSelector
-				return utils.GetObjectHash(oldNodeSelector) != utils.GetObjectHash(newNodeSelector)
-			},
-		})).
 		Complete(r)
 }
 
