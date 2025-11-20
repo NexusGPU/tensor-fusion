@@ -81,7 +81,7 @@ func (h *HypervisorMetricsRecorder) Start() {
 }
 
 func (h *HypervisorMetricsRecorder) initGPUCapacityMap() {
-	devices, err := h.deviceController.ListDevices(h.ctx)
+	devices, err := h.deviceController.ListDevices()
 	if err != nil {
 		return
 	}
@@ -91,7 +91,7 @@ func (h *HypervisorMetricsRecorder) initGPUCapacityMap() {
 }
 
 func (h *HypervisorMetricsRecorder) RecordDeviceMetrics(writer io.Writer) {
-	gpuMetrics, err := h.deviceController.GetGPUMetrics(h.ctx)
+	gpuMetrics, err := h.deviceController.GetGPUMetrics()
 	if err != nil {
 		return
 	}
@@ -130,12 +130,12 @@ func (h *HypervisorMetricsRecorder) RecordDeviceMetrics(writer io.Writer) {
 }
 
 func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
-	workerMetrics, err := h.workerController.GetWorkerMetrics(h.ctx)
+	workerMetrics, err := h.workerController.GetWorkerMetrics()
 	if err != nil {
 		return
 	}
 
-	workerUIDs, err := h.workerController.ListWorkers(h.ctx)
+	workerUIDs, err := h.workerController.ListWorkers()
 	if err != nil {
 		return
 	}
@@ -143,7 +143,7 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 	// Get worker allocations for metadata
 	workerAllocations := make(map[string]*api.DeviceAllocation)
 	for _, workerUID := range workerUIDs {
-		allocation, err := h.workerController.GetWorkerAllocation(h.ctx, workerUID)
+		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
 		if err == nil && allocation != nil {
 			workerAllocations[workerUID] = allocation
 		}
