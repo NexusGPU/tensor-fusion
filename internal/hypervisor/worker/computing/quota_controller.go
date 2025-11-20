@@ -17,7 +17,6 @@ limitations under the License.
 package computing
 
 import (
-	"context"
 	"sync"
 
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
@@ -38,7 +37,7 @@ func NewQuotaController(deviceController framework.DeviceController) framework.Q
 	}
 }
 
-func (c *Controller) SetQuota(ctx context.Context, workerUID string) error {
+func (c *Controller) SetQuota(workerUID string) error {
 	// TODO: Implement quota setting
 	return nil
 }
@@ -67,7 +66,7 @@ func (c *Controller) StopSoftQuotaLimiter() error {
 	return nil
 }
 
-func (c *Controller) GetWorkerQuotaStatus(ctx context.Context, workerUID string) error {
+func (c *Controller) GetWorkerQuotaStatus(workerUID string) error {
 	// TODO: Implement quota status retrieval
 	return nil
 }

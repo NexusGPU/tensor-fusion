@@ -40,7 +40,7 @@ func NewLegacyHandler(workerController framework.WorkerController, backend frame
 
 // HandleGetLimiter handles GET /api/v1/limiter
 func (h *LegacyHandler) HandleGetLimiter(c *gin.Context) {
-	workers, err := h.workerController.ListWorkers(c.Request.Context())
+	workers, err := h.workerController.ListWorkers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
 		return
@@ -48,7 +48,7 @@ func (h *LegacyHandler) HandleGetLimiter(c *gin.Context) {
 
 	limiterInfos := make([]api.LimiterInfo, 0, len(workers))
 	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(c.Request.Context(), workerUID)
+		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
 		if err != nil || allocation == nil {
 			continue
 		}
@@ -80,7 +80,7 @@ func (h *LegacyHandler) HandleGetLimiter(c *gin.Context) {
 // HandleTrap handles POST /api/v1/trap
 func (h *LegacyHandler) HandleTrap(c *gin.Context) {
 	// Trap endpoint: start snapshot low QoS workers to release VRAM
-	workers, err := h.workerController.ListWorkers(c.Request.Context())
+	workers, err := h.workerController.ListWorkers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
 		return
@@ -88,7 +88,7 @@ func (h *LegacyHandler) HandleTrap(c *gin.Context) {
 
 	snapshotCount := 0
 	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(c.Request.Context(), workerUID)
+		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
 		if err != nil || allocation == nil {
 			continue
 		}
@@ -112,7 +112,7 @@ func (h *LegacyHandler) HandleGetPods(c *gin.Context) {
 		return
 	}
 
-	workers, err := h.workerController.ListWorkers(c.Request.Context())
+	workers, err := h.workerController.ListWorkers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
 		return
@@ -120,7 +120,7 @@ func (h *LegacyHandler) HandleGetPods(c *gin.Context) {
 
 	pods := make([]api.PodInfo, 0)
 	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(c.Request.Context(), workerUID)
+		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
 		if err != nil || allocation == nil {
 			continue
 		}
@@ -153,7 +153,7 @@ func (h *LegacyHandler) HandleGetPods(c *gin.Context) {
 // HandleGetProcesses handles GET /api/v1/process
 func (h *LegacyHandler) HandleGetProcesses(c *gin.Context) {
 	// Get worker to process mapping
-	processMap, err := h.backend.GetWorkerToProcessMap(c.Request.Context())
+	processMap, err := h.backend.GetWorkerToProcessMap()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
 		return
