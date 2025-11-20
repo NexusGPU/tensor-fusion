@@ -69,6 +69,42 @@ spec:
               GPUStatus defines the observed state of GPU.
               NOTE: When new fields added, remember to update syncGPUMetadataAndStatusFromCluster
             properties:
+              allocatedPartitions:
+                additionalProperties:
+                  description: |-
+                    AllocatedPartition represents an allocated partition on a GPU
+                    Key in AllocatedPartitions map is podUID
+                  properties:
+                    allocatedAt:
+                      description: AllocatedAt is when this partition was allocated
+                      format: date-time
+                      type: string
+                    namespace:
+                      description: Namespace is the namespace of the pod using this
+                        partition
+                      type: string
+                    podName:
+                      description: PodName is the name of the pod using this partition
+                      type: string
+                    podUid:
+                      description: PodUID is the UID of the pod using this partition
+                        (used as map key)
+                      type: string
+                    templateId:
+                      description: TemplateID is the template used to create this
+                        partition
+                      type: string
+                  required:
+                  - allocatedAt
+                  - namespace
+                  - podName
+                  - podUid
+                  - templateId
+                  type: object
+                description: |-
+                  AllocatedPartitions tracks allocated partitions on this GPU
+                  Key is partitionUUID, value contains template info and allocated resources
+                type: object
               available:
                 properties:
                   compute:
@@ -124,6 +160,14 @@ spec:
               index:
                 format: int32
                 type: integer
+              isolationMode:
+                default: soft
+                enum:
+                - shared
+                - soft
+                - hard
+                - partitioned
+                type: string
               message:
                 type: string
               model:
@@ -138,6 +182,28 @@ spec:
                   NUMA node
                 format: int32
                 type: integer
+              partitionTemplates:
+                description: |-
+                  PartitionTemplates contains available partition templates for this GPU (e.g., MIG profiles)
+                  Reported from discovery, each template has fixed resource allocation
+                items:
+                  description: |-
+                    PartitionTemplate represents a hardware partition template (e.g., MIG profile)
+                    Only stores template ID and name in GPU status. Detailed resource information
+                    is stored in public GPU info config.
+                  properties:
+                    name:
+                      description: Name is a human-readable name for this template
+                      type: string
+                    templateId:
+                      description: TemplateID is the unique identifier for this partition
+                        template (e.g., "1g.24gb", "4g.94gb")
+                      type: string
+                  required:
+                  - name
+                  - templateId
+                  type: object
+                type: array
               phase:
                 default: Pending
                 enum:
