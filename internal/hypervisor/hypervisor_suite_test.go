@@ -263,7 +263,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				workerCh, _, err := backend.ListAndWatchWorkers()
 				Expect(err).NotTo(HaveOccurred())
 				// Note: stopCh is receive-only, backend will close it when stopped
-				
+
 				// Read initial worker list from channel
 				select {
 				case workers := <-workerCh:
@@ -457,7 +457,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				workerCh, _, err := backend.ListAndWatchWorkers()
 				Expect(err).NotTo(HaveOccurred())
 				// Note: stopCh is receive-only, backend will close it when stopped
-				
+
 				// Read initial worker list from channel
 				select {
 				case workers := <-workerCh:
