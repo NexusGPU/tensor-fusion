@@ -1,8 +1,6 @@
 package framework
 
 import (
-	"context"
-
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 )
 
@@ -13,24 +11,32 @@ type DeviceController interface {
 
 	AllocateDevice(request *api.DeviceAllocateRequest) (*api.DeviceAllocateResponse, error)
 
-	ListDevices(ctx context.Context) ([]*api.DeviceInfo, error)
+	// ListDevices returns all discovered devices
+	ListDevices() ([]*api.DeviceInfo, error)
 
-	DevicesUpdates(ctx context.Context) (<-chan []*api.DeviceInfo, error)
+	// DevicesUpdates returns a channel that receives device list updates
+	// The channel should be closed when Stop() is called
+	DevicesUpdates() (<-chan []*api.DeviceInfo, error)
 
-	GetDevice(ctx context.Context, deviceUUID string) (*api.DeviceInfo, error)
+	// GetDevice returns device information by UUID
+	GetDevice(deviceUUID string) (*api.DeviceInfo, error)
 
-	GetDeviceAllocations(ctx context.Context, deviceUUID string) ([]*api.DeviceAllocation, error)
+	// GetDeviceAllocations returns device allocations
+	// If deviceUUID is empty, returns all allocations
+	GetDeviceAllocations(deviceUUID string) ([]*api.DeviceAllocation, error)
 
-	GetDeviceAllocationUpdates(ctx context.Context, deviceUUID string, allocationID string) (<-chan []*api.DeviceAllocation, error)
+	// GetDeviceAllocationUpdates returns a channel that receives allocation updates
+	// The channel should be closed when Stop() is called
+	GetDeviceAllocationUpdates(deviceUUID string, allocationID string) (<-chan []*api.DeviceAllocation, error)
 
 	// GetGPUMetrics returns current GPU metrics for all devices
-	GetGPUMetrics(ctx context.Context) (map[string]*api.GPUUsageMetrics, error)
+	GetGPUMetrics() (map[string]*api.GPUUsageMetrics, error)
 }
 
 type DeviceInterface interface {
-	SplitDevice(ctx context.Context, deviceUUID string) error
+	SplitDevice(deviceUUID string) error
 
-	GetDeviceMetrics(ctx context.Context) (*api.MemoryUtilization, error)
+	GetDeviceMetrics() (*api.MemoryUtilization, error)
 }
 
 type WorkerController interface {
@@ -38,26 +44,31 @@ type WorkerController interface {
 
 	Stop() error
 
-	GetWorkerAllocation(ctx context.Context, workerUID string) (*api.DeviceAllocation, error)
+	// GetWorkerAllocation returns allocation information for a worker
+	GetWorkerAllocation(workerUID string) (*api.DeviceAllocation, error)
 
-	GetWorkerMetricsUpdates(ctx context.Context) (<-chan *api.DeviceAllocation, error)
+	// GetWorkerMetricsUpdates returns a channel that receives worker metrics updates
+	// The channel should be closed when Stop() is called
+	GetWorkerMetricsUpdates() (<-chan *api.DeviceAllocation, error)
 
 	// GetWorkerMetrics returns current worker metrics for all workers
 	// Returns map keyed by device UUID, then by worker UID, then by process ID
-	GetWorkerMetrics(ctx context.Context) (map[string]map[string]map[string]*api.WorkerMetrics, error)
+	GetWorkerMetrics() (map[string]map[string]map[string]*api.WorkerMetrics, error)
 
 	// ListWorkers returns list of all worker UIDs
-	ListWorkers(ctx context.Context) ([]string, error)
+	ListWorkers() ([]string, error)
 }
 
 type QuotaController interface {
-	SetQuota(ctx context.Context, workerUID string) error
+	// SetQuota sets quota for a worker
+	SetQuota(workerUID string) error
 
 	StartSoftQuotaLimiter() error
 
 	StopSoftQuotaLimiter() error
 
-	GetWorkerQuotaStatus(ctx context.Context, workerUID string) error
+	// GetWorkerQuotaStatus gets quota status for a worker
+	GetWorkerQuotaStatus(workerUID string) error
 }
 
 // The backend interface for the hypervisor to interact with the underlying infrastructure
@@ -66,18 +77,20 @@ type Backend interface {
 
 	Stop() error
 
-	// Get GPU workers from the workload orchestration platform
-	ListAndWatchWorkers(ctx context.Context, stopCh <-chan struct{}) ([]string, error)
+	// ListAndWatchWorkers gets GPU workers from the workload orchestration platform
+	// Returns a channel that receives worker UID lists and a stop channel
+	// The channel should be closed when Stop() is called
+	ListAndWatchWorkers() (<-chan []string, <-chan struct{}, error)
 
-	// Link workers to actual running process list on OS
-	GetWorkerToProcessMap(ctx context.Context) (map[string][]string, error)
+	// GetWorkerToProcessMap links workers to actual running process list on OS
+	GetWorkerToProcessMap() (map[string][]string, error)
 
-	// Spawn worker process
-	StartWorker(ctx context.Context, workerUID string) error
+	// StartWorker spawns worker process
+	StartWorker(workerUID string) error
 
-	// Stop worker process
-	StopWorker(ctx context.Context, workerUID string) error
+	// StopWorker stops worker process
+	StopWorker(workerUID string) error
 
-	// Report devices to backend orchestration and O&M platform
-	ReconcileDevices(ctx context.Context, devices []string) error
+	// ReconcileDevices reports devices to backend orchestration and O&M platform
+	ReconcileDevices(devices []string) error
 }

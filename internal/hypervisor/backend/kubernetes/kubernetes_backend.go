@@ -19,6 +19,8 @@ type KubeletBackend struct {
 	deviceDetector   *external_dp.DevicePluginDetector
 
 	workerChanged chan struct{}
+	workerCh      chan []string
+	workerStopCh  chan struct{}
 }
 
 func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceController, restConfig *rest.Config) (*KubeletBackend, error) {
@@ -88,6 +90,16 @@ func (b *KubeletBackend) Start() error {
 }
 
 func (b *KubeletBackend) Stop() error {
+	// Close worker watch stop channel (safe to close even if nil)
+	if b.workerStopCh != nil {
+		select {
+		case <-b.workerStopCh:
+			// Already closed
+		default:
+			close(b.workerStopCh)
+		}
+	}
+
 	if b.devicePlugin != nil {
 		if err := b.devicePlugin.Stop(); err != nil {
 			klog.Errorf("Failed to stop device plugin: %v", err)
@@ -121,36 +133,80 @@ func (b *KubeletBackend) watchWorkerChanges() {
 	}
 }
 
-func (b *KubeletBackend) ListAndWatchWorkers(ctx context.Context, stopCh <-chan struct{}) ([]string, error) {
-	// Return worker UIDs from kubelet client pod cache
-	if b.kubeletClient == nil {
-		return []string{}, nil
+func (b *KubeletBackend) ListAndWatchWorkers() (<-chan []string, <-chan struct{}, error) {
+	// Initialize channels if not already created
+	if b.workerCh == nil {
+		b.workerCh = make(chan []string, 1)
+		b.workerStopCh = make(chan struct{})
 	}
 
-	b.kubeletClient.mu.RLock()
-	defer b.kubeletClient.mu.RUnlock()
+	// Send initial worker list and start watching
+	go func() {
+		defer close(b.workerCh)
 
-	workers := make([]string, 0, len(b.kubeletClient.podCache))
-	for podUID := range b.kubeletClient.podCache {
-		workers = append(workers, podUID)
-	}
+		// Send initial list
+		if b.kubeletClient != nil {
+			b.kubeletClient.mu.RLock()
+			workers := make([]string, 0, len(b.kubeletClient.podCache))
+			for podUID := range b.kubeletClient.podCache {
+				workers = append(workers, podUID)
+			}
+			b.kubeletClient.mu.RUnlock()
 
-	return workers, nil
+			select {
+			case b.workerCh <- workers:
+			case <-b.ctx.Done():
+				return
+			case <-b.workerStopCh:
+				return
+			}
+		}
+
+		// Watch for worker changes
+		workerChangedCh := b.kubeletClient.GetWorkerChangedChan()
+		for {
+			select {
+			case <-b.ctx.Done():
+				return
+			case <-b.workerStopCh:
+				return
+			case <-workerChangedCh:
+				if b.kubeletClient != nil {
+					b.kubeletClient.mu.RLock()
+					workers := make([]string, 0, len(b.kubeletClient.podCache))
+					for podUID := range b.kubeletClient.podCache {
+						workers = append(workers, podUID)
+					}
+					b.kubeletClient.mu.RUnlock()
+
+					select {
+					case b.workerCh <- workers:
+					case <-b.ctx.Done():
+						return
+					case <-b.workerStopCh:
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	return b.workerCh, b.workerStopCh, nil
 }
 
-func (b *KubeletBackend) GetWorkerToProcessMap(ctx context.Context) (map[string][]string, error) {
+func (b *KubeletBackend) GetWorkerToProcessMap() (map[string][]string, error) {
 	return make(map[string][]string), nil
 }
 
-func (b *KubeletBackend) StartWorker(ctx context.Context, workerUID string) error {
+func (b *KubeletBackend) StartWorker(workerUID string) error {
 	return nil
 }
 
-func (b *KubeletBackend) StopWorker(ctx context.Context, workerUID string) error {
+func (b *KubeletBackend) StopWorker(workerUID string) error {
 	return nil
 }
 
-func (b *KubeletBackend) ReconcileDevices(ctx context.Context, devices []string) error {
+func (b *KubeletBackend) ReconcileDevices(devices []string) error {
 	return nil
 }
 
