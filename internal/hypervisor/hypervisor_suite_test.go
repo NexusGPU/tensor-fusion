@@ -172,7 +172,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// Wait a bit for discovery
 				time.Sleep(100 * time.Millisecond)
 
-				devices, err := deviceController.ListDevices(ctx)
+				devices, err := deviceController.ListDevices()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(devices).ToNot(BeEmpty(), "Should discover at least one stub device")
 
@@ -189,7 +189,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 				time.Sleep(100 * time.Millisecond)
 
-				devices, err := deviceController.ListDevices(ctx)
+				devices, err := deviceController.ListDevices()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(devices).ToNot(BeEmpty())
 
@@ -206,7 +206,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(resp.Success).To(BeTrue())
 
 				// Verify allocation exists
-				allocations, err := deviceController.GetDeviceAllocations(ctx, deviceUUID)
+				allocations, err := deviceController.GetDeviceAllocations(deviceUUID)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(allocations).To(HaveLen(1))
 				Expect(allocations[0].WorkerID).To(Equal("test-worker-1"))
@@ -218,12 +218,12 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 				time.Sleep(100 * time.Millisecond)
 
-				metrics, err := deviceController.GetGPUMetrics(ctx)
+				metrics, err := deviceController.GetGPUMetrics()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(metrics).NotTo(BeNil())
 
 				// Should have metrics for all discovered devices
-				devices, err := deviceController.ListDevices(ctx)
+				devices, err := deviceController.ListDevices()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(metrics).To(HaveLen(len(devices)))
 			})
@@ -245,7 +245,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 			It("should list workers from allocations", func() {
 				// Create an allocation
-				devices, err := deviceController.ListDevices(ctx)
+				devices, err := deviceController.ListDevices()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(devices).ToNot(BeEmpty())
 
@@ -260,17 +260,25 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// Wait for backend to discover
 				time.Sleep(2 * time.Second)
 
-				workers, err := backend.ListAndWatchWorkers(ctx, make(chan struct{}))
+				workerCh, _, err := backend.ListAndWatchWorkers()
 				Expect(err).NotTo(HaveOccurred())
-				Expect(workers).To(ContainElement("test-worker-1"))
+				// Note: stopCh is receive-only, backend will close it when stopped
+				
+				// Read initial worker list from channel
+				select {
+				case workers := <-workerCh:
+					Expect(workers).To(ContainElement("test-worker-1"))
+				case <-time.After(5 * time.Second):
+					Fail("timeout waiting for workers")
+				}
 			})
 
 			It("should track worker to process mapping", func() {
 				// Start a worker
-				err := backend.StartWorker(ctx, "test-worker-1")
+				err := backend.StartWorker("test-worker-1")
 				Expect(err).NotTo(HaveOccurred())
 
-				processMap, err := backend.GetWorkerToProcessMap(ctx)
+				processMap, err := backend.GetWorkerToProcessMap()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(processMap).NotTo(BeNil())
 			})
@@ -292,7 +300,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 			It("should list workers", func() {
 				// Create an allocation
-				devices, err := deviceController.ListDevices(ctx)
+				devices, err := deviceController.ListDevices()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(devices).ToNot(BeEmpty())
 
@@ -304,14 +312,14 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				_, err = deviceController.AllocateDevice(req)
 				Expect(err).NotTo(HaveOccurred())
 
-				workers, err := workerController.ListWorkers(ctx)
+				workers, err := workerController.ListWorkers()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(workers).To(ContainElement("test-worker-1"))
 			})
 
 			It("should get worker allocation", func() {
 				// Create an allocation
-				devices, err := deviceController.ListDevices(ctx)
+				devices, err := deviceController.ListDevices()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(devices).ToNot(BeEmpty())
 
@@ -323,7 +331,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				_, err = deviceController.AllocateDevice(req)
 				Expect(err).NotTo(HaveOccurred())
 
-				allocation, err := workerController.GetWorkerAllocation(ctx, "test-worker-1")
+				allocation, err := workerController.GetWorkerAllocation("test-worker-1")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(allocation).NotTo(BeNil())
 				Expect(allocation.WorkerID).To(Equal("test-worker-1"))
@@ -331,7 +339,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 			It("should get worker metrics", func() {
 				// Create an allocation
-				devices, err := deviceController.ListDevices(ctx)
+				devices, err := deviceController.ListDevices()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(devices).ToNot(BeEmpty())
 
@@ -343,7 +351,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				_, err = deviceController.AllocateDevice(req)
 				Expect(err).NotTo(HaveOccurred())
 
-				metrics, err := workerController.GetWorkerMetrics(ctx)
+				metrics, err := workerController.GetWorkerMetrics()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(metrics).NotTo(BeNil())
 			})
@@ -423,7 +431,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 			It("should handle complete workflow: discover -> allocate -> track -> metrics", func() {
 				// 1. Discover devices
-				devices, err := deviceController.ListDevices(ctx)
+				devices, err := deviceController.ListDevices()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(devices).ToNot(BeEmpty())
 				deviceUUID := devices[0].UUID
@@ -440,34 +448,42 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(resp.Success).To(BeTrue())
 
 				// 3. Verify allocation
-				allocations, err := deviceController.GetDeviceAllocations(ctx, deviceUUID)
+				allocations, err := deviceController.GetDeviceAllocations(deviceUUID)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(allocations).To(HaveLen(1))
 
 				// 4. Backend should discover worker
 				time.Sleep(2 * time.Second)
-				workers, err := backend.ListAndWatchWorkers(ctx, make(chan struct{}))
+				workerCh, _, err := backend.ListAndWatchWorkers()
 				Expect(err).NotTo(HaveOccurred())
-				Expect(workers).To(ContainElement("integration-worker-1"))
+				// Note: stopCh is receive-only, backend will close it when stopped
+				
+				// Read initial worker list from channel
+				select {
+				case workers := <-workerCh:
+					Expect(workers).To(ContainElement("integration-worker-1"))
+				case <-time.After(5 * time.Second):
+					Fail("timeout waiting for workers")
+				}
 
 				// 5. Worker controller should list worker
-				workerList, err := workerController.ListWorkers(ctx)
+				workerList, err := workerController.ListWorkers()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(workerList).To(ContainElement("integration-worker-1"))
 
 				// 6. Get worker allocation
-				allocation, err := workerController.GetWorkerAllocation(ctx, "integration-worker-1")
+				allocation, err := workerController.GetWorkerAllocation("integration-worker-1")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(allocation).NotTo(BeNil())
 				Expect(allocation.DeviceUUID).To(Equal(deviceUUID))
 
 				// 7. Get metrics
-				gpuMetrics, err := deviceController.GetGPUMetrics(ctx)
+				gpuMetrics, err := deviceController.GetGPUMetrics()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(gpuMetrics).NotTo(BeNil())
 				Expect(gpuMetrics[deviceUUID]).NotTo(BeNil())
 
-				workerMetrics, err := workerController.GetWorkerMetrics(ctx)
+				workerMetrics, err := workerController.GetWorkerMetrics()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(workerMetrics).NotTo(BeNil())
 
@@ -478,7 +494,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				}
 
 				// 9. Verify deallocation
-				allocations, err = deviceController.GetDeviceAllocations(ctx, deviceUUID)
+				allocations, err = deviceController.GetDeviceAllocations(deviceUUID)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(allocations).To(BeEmpty())
 			})

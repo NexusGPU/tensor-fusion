@@ -229,19 +229,28 @@ func (m *Controller) AllocateDevice(request *api.DeviceAllocateRequest) (*api.De
 }
 
 // ListDevices implements framework.DeviceController
-func (m *Controller) ListDevices(ctx context.Context) ([]*api.DeviceInfo, error) {
+func (m *Controller) ListDevices() ([]*api.DeviceInfo, error) {
 	return m.GetDevices(), nil
 }
 
 // DevicesUpdates implements framework.DeviceController
-func (m *Controller) DevicesUpdates(ctx context.Context) (<-chan []*api.DeviceInfo, error) {
-	ch := make(chan []*api.DeviceInfo)
-	// TODO: Implement proper device updates channel
+func (m *Controller) DevicesUpdates() (<-chan []*api.DeviceInfo, error) {
+	ch := make(chan []*api.DeviceInfo, 1)
+	// Send initial device list
+	go func() {
+		devices := m.GetDevices()
+		select {
+		case ch <- devices:
+		default:
+		}
+		// TODO: Implement proper device updates channel with periodic updates
+		// Channel will be closed when controller is stopped
+	}()
 	return ch, nil
 }
 
 // GetDevice implements framework.DeviceController
-func (m *Controller) GetDevice(ctx context.Context, deviceUUID string) (*api.DeviceInfo, error) {
+func (m *Controller) GetDevice(deviceUUID string) (*api.DeviceInfo, error) {
 	device, exists := m.getDevice(deviceUUID)
 	if !exists {
 		return nil, fmt.Errorf("device not found: %s", deviceUUID)
@@ -250,7 +259,7 @@ func (m *Controller) GetDevice(ctx context.Context, deviceUUID string) (*api.Dev
 }
 
 // GetDeviceAllocations implements framework.DeviceController
-func (m *Controller) GetDeviceAllocations(ctx context.Context, deviceUUID string) ([]*api.DeviceAllocation, error) {
+func (m *Controller) GetDeviceAllocations(deviceUUID string) ([]*api.DeviceAllocation, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -275,14 +284,25 @@ func (m *Controller) GetDeviceAllocations(ctx context.Context, deviceUUID string
 }
 
 // GetDeviceAllocationUpdates implements framework.DeviceController
-func (m *Controller) GetDeviceAllocationUpdates(ctx context.Context, deviceUUID string, allocationID string) (<-chan []*api.DeviceAllocation, error) {
-	ch := make(chan []*api.DeviceAllocation)
-	// TODO: Implement proper allocation updates channel
+func (m *Controller) GetDeviceAllocationUpdates(deviceUUID string, allocationID string) (<-chan []*api.DeviceAllocation, error) {
+	ch := make(chan []*api.DeviceAllocation, 1)
+	// Send initial allocation list
+	go func() {
+		allocations, err := m.GetDeviceAllocations(deviceUUID)
+		if err == nil {
+			select {
+			case ch <- allocations:
+			default:
+			}
+		}
+		// TODO: Implement proper allocation updates channel with periodic updates
+		// Channel will be closed when controller is stopped
+	}()
 	return ch, nil
 }
 
 // GetGPUMetrics implements framework.DeviceController
-func (m *Controller) GetGPUMetrics(ctx context.Context) (map[string]*api.GPUUsageMetrics, error) {
+func (m *Controller) GetGPUMetrics() (map[string]*api.GPUUsageMetrics, error) {
 	m.mu.RLock()
 	devices := make([]*api.DeviceInfo, 0, len(m.devices))
 	for _, device := range m.devices {
