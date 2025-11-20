@@ -75,6 +75,8 @@ func (c *TimeSeriesChart) SetDimensions(width, height int) {
 }
 
 // Render renders the time-series chart as a string
+//
+//nolint:gocyclo // Complex rendering logic with multiple conditional branches
 func (c *TimeSeriesChart) Render() string {
 	if len(c.data) == 0 {
 		return fmt.Sprintf("%s: No data\n", c.label)

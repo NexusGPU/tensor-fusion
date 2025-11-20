@@ -180,7 +180,8 @@ type DeviceEntryV1 struct {
 	UUID          [MaxUUIDLen]byte
 	DeviceInfo    SharedDeviceInfoV1
 	IsActiveField uint32
-	_padding      [4]byte // padding for alignment
+	//nolint:unused // Padding field for memory alignment in shared memory structures
+	_padding [4]byte
 }
 
 // DeviceEntryV2 is the V2 device entry with ERL
@@ -188,7 +189,6 @@ type DeviceEntryV2 struct {
 	UUID          [MaxUUIDLen]byte
 	DeviceInfo    SharedDeviceInfoV2
 	IsActiveField uint32
-	_padding      [4]byte // padding for alignment
 }
 
 // DeviceEntry is a type alias for backward compatibility
@@ -309,7 +309,6 @@ type SharedDeviceStateV1 struct {
 	DeviceCountField uint32
 	LastHeartbeat    uint64
 	PIDs             *ShmMutex[*PIDSet]
-	_padding         [512]byte
 }
 
 // SharedDeviceStateV2 is the V2 shared device state with ERL
@@ -318,7 +317,6 @@ type SharedDeviceStateV2 struct {
 	DeviceCountField uint32
 	LastHeartbeat    uint64
 	PIDs             *ShmMutex[*PIDSet]
-	_padding         [512]byte
 }
 
 // SharedDeviceState is a versioned enum for compatibility
@@ -726,7 +724,7 @@ func (d *SharedDeviceInfoV2) FetchAddERLTokens(amount float64) float64 {
 // PIDSet is a set of process IDs with a fixed capacity
 type PIDSet struct {
 	values []int
-	mu     sync.Mutex
+	mu     sync.Mutex //nolint:unused // Used via ShmMutex wrapper
 }
 
 // NewPIDSet creates a new PID set
@@ -826,22 +824,22 @@ func CreateSharedMemoryHandle(podPath string, configs []DeviceConfig) (*SharedMe
 
 	// Truncate to the required size
 	if err := file.Truncate(int64(stateSize)); err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("failed to truncate file: %w", err)
 	}
 
 	// Memory map the file
 	data, err := syscall.Mmap(int(file.Fd()), 0, stateSize, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("failed to mmap: %w", err)
 	}
 
 	// Initialize the state
 	state, err := NewSharedDeviceStateV2(configs)
 	if err != nil {
-		syscall.Munmap(data)
-		file.Close()
+		_ = syscall.Munmap(data)
+		_ = file.Close()
 		return nil, err
 	}
 
@@ -879,7 +877,7 @@ func OpenSharedMemoryHandle(podPath string) (*SharedMemoryHandle, error) {
 	// Get file size
 	stat, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("failed to stat file: %w", err)
 	}
 
@@ -888,7 +886,7 @@ func OpenSharedMemoryHandle(podPath string) (*SharedMemoryHandle, error) {
 	// Memory map the file
 	data, err := syscall.Mmap(int(file.Fd()), 0, int(fileSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("failed to mmap: %w", err)
 	}
 
@@ -912,11 +910,11 @@ func (h *SharedMemoryHandle) GetState() *SharedDeviceState {
 // Close closes the shared memory handle
 func (h *SharedMemoryHandle) Close() error {
 	if h.data != nil {
-		syscall.Munmap(h.data)
+		_ = syscall.Munmap(h.data)
 		h.data = nil
 	}
 	if h.file != nil {
-		h.file.Close()
+		_ = h.file.Close()
 		h.file = nil
 	}
 	return nil
