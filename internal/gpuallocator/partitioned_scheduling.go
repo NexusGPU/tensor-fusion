@@ -22,6 +22,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -54,7 +55,21 @@ func MatchPartitionTemplate(
 	}
 
 	// Convert request to comparable values
-	requestTflops := req.Request.Tflops.AsApproximateFloat64()
+	// Handle ComputePercent: convert to TFLOPs if specified
+	var requestTflops float64
+	if !req.Request.ComputePercent.IsZero() {
+		// Get GPU capacity from global map to convert ComputePercent to TFLOPs
+		mu.Lock()
+		gpuCapacity, exists := GPUCapacityMap[gpuModel]
+		mu.Unlock()
+		if !exists {
+			return nil, fmt.Errorf("GPU capacity not found for model %s, cannot convert ComputePercent to TFLOPs", gpuModel)
+		}
+		requiredTflops := utils.ComputePercentToTflops(gpuCapacity.Tflops, req.Request)
+		requestTflops = requiredTflops.AsApproximateFloat64()
+	} else {
+		requestTflops = req.Request.Tflops.AsApproximateFloat64()
+	}
 	requestVramBytes := req.Request.Vram.Value()
 
 	// Get max partitions from config
