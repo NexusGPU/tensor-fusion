@@ -64,6 +64,11 @@ type WorkloadProfileSpec struct {
 	Isolation IsolationModeType `json:"isolation,omitempty"`
 
 	// +optional
+	// PartitionTemplateID specifies the partition template ID for partitioned isolation mode
+	// This is read from pod annotation tensor-fusion.ai/partition if specified
+	PartitionTemplateID string `json:"partitionTemplateId,omitempty"`
+
+	// +optional
 	// GPUModel specifies the required GPU model (e.g., "A100", "H100")
 	GPUModel string `json:"gpuModel,omitempty"`
 
