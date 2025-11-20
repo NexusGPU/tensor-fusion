@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+// Feature test macros for POSIX functions (required on Linux)
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
+
 #include "../accelerator.h"
 #include <stdio.h>
 #include <string.h>
@@ -364,8 +368,10 @@ bool AssignPartition(PartitionAssignment* assignment) {
     }
 
     // Stub: generate a partition UUID
+    // Limit string lengths to ensure output fits in 64-byte buffer:
+    // "partition-" (9) + templateId (26) + "-" (1) + deviceUUID (26) + null (1) = 63 bytes
     snprintf(assignment->partitionUUID, sizeof(assignment->partitionUUID),
-             "partition-%s-%s", assignment->templateId, assignment->deviceUUID);
+             "partition-%.26s-%.26s", assignment->templateId, assignment->deviceUUID);
 
     // Stub: set partition overhead (e.g., 100MB)
     assignment->partitionOverheadBytes = 100ULL * 1024 * 1024;

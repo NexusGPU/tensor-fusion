@@ -15,6 +15,7 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY api/ api/
 COPY internal/ internal/
+COPY provider/ provider/
 
 
 # Build
@@ -22,13 +23,13 @@ COPY internal/ internal/
 # was called. For example, if we call make docker-build in a local env which has the Apple Silicon M1 SO
 # the docker BUILDPLATFORM arg will be linux/arm64 when for Apple x86 it will be linux/amd64. Therefore,
 # by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
-RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o nodediscovery cmd/nodediscovery/main.go
+RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o hypervisor cmd/hypervisor/main.go
  
-# Use distroless as minimal base image to package the nodediscovery binary
+# Use distroless as minimal base image to package the hypervisor binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM ubuntu:24.04
 WORKDIR /
-COPY --from=builder /workspace/nodediscovery .
+COPY --from=builder /workspace/hypervisor .
 USER 65532:65532
 
-ENTRYPOINT ["/nodediscovery"]
+ENTRYPOINT ["/hypervisor"]
