@@ -38,7 +38,7 @@ func NewWorkerHandler(workerController framework.WorkerController) *WorkerHandle
 
 // HandleGetWorkers handles GET /api/v1/workers
 func (h *WorkerHandler) HandleGetWorkers(c *gin.Context) {
-	workers, err := h.workerController.ListWorkers(c.Request.Context())
+	workers, err := h.workerController.ListWorkers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
 		return
@@ -47,7 +47,7 @@ func (h *WorkerHandler) HandleGetWorkers(c *gin.Context) {
 	// Get worker details
 	workerDetails := make([]api.WorkerDetail, 0, len(workers))
 	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(c.Request.Context(), workerUID)
+		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
 		if err != nil {
 			continue
 		}
@@ -63,7 +63,7 @@ func (h *WorkerHandler) HandleGetWorkers(c *gin.Context) {
 // HandleGetWorker handles GET /api/v1/workers/:id
 func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 	workerID := c.Param("id")
-	allocation, err := h.workerController.GetWorkerAllocation(c.Request.Context(), workerID)
+	allocation, err := h.workerController.GetWorkerAllocation(workerID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, api.ErrorResponse{Error: err.Error()})
 		return
@@ -74,7 +74,7 @@ func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 	}
 
 	// Get worker metrics
-	metrics, err := h.workerController.GetWorkerMetrics(c.Request.Context())
+	metrics, err := h.workerController.GetWorkerMetrics()
 	if err != nil {
 		c.JSON(http.StatusOK, api.GetWorkerResponse{
 			WorkerUID:  workerID,

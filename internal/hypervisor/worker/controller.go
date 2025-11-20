@@ -1,7 +1,7 @@
 package worker
 
 import (
-	"context"
+	"sync"
 
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
@@ -15,15 +15,23 @@ type WorkerController struct {
 
 	deviceController framework.DeviceController
 	quotaController  framework.QuotaController
-	// TODO: Add worker store to track workers and their allocations
+
+	mu                  sync.RWMutex
+	workers             map[string]bool // worker UID -> exists
+	workerWatchStop     chan struct{}
+	workerWatchStopOnce sync.Once
 }
 
 func NewWorkerController(
 	deviceController framework.DeviceController, mode api.IsolationMode, backend framework.Backend) framework.WorkerController {
 	quotaController := computing.NewQuotaController(deviceController)
 	return &WorkerController{
-		deviceController: deviceController, mode: mode, backend: backend,
-		quotaController: quotaController,
+		deviceController: deviceController,
+		mode:             mode,
+		backend:          backend,
+		quotaController:  quotaController,
+		workers:          make(map[string]bool),
+		workerWatchStop:  make(chan struct{}),
 	}
 }
 
@@ -33,6 +41,36 @@ func (w *WorkerController) Start() error {
 		return err
 	}
 	klog.Info("Worker backend started")
+
+	// Start watching workers from backend
+	workerCh, stopCh, err := w.backend.ListAndWatchWorkers()
+	if err != nil {
+		return err
+	}
+
+	// Start worker watcher goroutine
+	go func() {
+		for {
+			select {
+			case <-w.workerWatchStop:
+				return
+			case <-stopCh:
+				return
+			case workers, ok := <-workerCh:
+				if !ok {
+					return
+				}
+				// Update worker cache
+				w.mu.Lock()
+				w.workers = make(map[string]bool)
+				for _, workerUID := range workers {
+					w.workers[workerUID] = true
+				}
+				w.mu.Unlock()
+				klog.V(4).Infof("Updated worker list: %d workers", len(workers))
+			}
+		}
+	}()
 
 	// Start soft quota limiter
 	if err := w.quotaController.StartSoftQuotaLimiter(); err != nil {
@@ -44,13 +82,16 @@ func (w *WorkerController) Start() error {
 }
 
 func (w *WorkerController) Stop() error {
+	w.workerWatchStopOnce.Do(func() {
+		close(w.workerWatchStop)
+	})
 	_ = w.backend.Stop()
 	_ = w.quotaController.StopSoftQuotaLimiter()
 	return nil
 }
 
-func (w *WorkerController) GetWorkerAllocation(ctx context.Context, workerUID string) (*api.DeviceAllocation, error) {
-	allocations, err := w.deviceController.GetDeviceAllocations(ctx, "")
+func (w *WorkerController) GetWorkerAllocation(workerUID string) (*api.DeviceAllocation, error) {
+	allocations, err := w.deviceController.GetDeviceAllocations("")
 	if err != nil {
 		return nil, err
 	}
@@ -63,15 +104,16 @@ func (w *WorkerController) GetWorkerAllocation(ctx context.Context, workerUID st
 	return nil, nil
 }
 
-func (w *WorkerController) GetWorkerMetricsUpdates(ctx context.Context) (<-chan *api.DeviceAllocation, error) {
-	// TODO: Implement proper worker metrics updates channel
-	ch := make(chan *api.DeviceAllocation)
+func (w *WorkerController) GetWorkerMetricsUpdates() (<-chan *api.DeviceAllocation, error) {
+	ch := make(chan *api.DeviceAllocation, 1)
+	// TODO: Implement proper worker metrics updates channel with periodic updates
+	// Channel will be closed when controller is stopped
 	return ch, nil
 }
 
-func (w *WorkerController) GetWorkerMetrics(ctx context.Context) (map[string]map[string]map[string]*api.WorkerMetrics, error) {
+func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]*api.WorkerMetrics, error) {
 	// Get all allocations to know which workers exist
-	allocations, err := w.deviceController.GetDeviceAllocations(ctx, "")
+	allocations, err := w.deviceController.GetDeviceAllocations("")
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +145,7 @@ func (w *WorkerController) GetWorkerMetrics(ctx context.Context) (map[string]map
 	}
 
 	// Build worker to process mapping
-	workerToProcesses, err := w.backend.GetWorkerToProcessMap(ctx)
+	workerToProcesses, err := w.backend.GetWorkerToProcessMap()
 	if err != nil {
 		workerToProcesses = make(map[string][]string)
 	}
@@ -187,22 +229,47 @@ func (w *WorkerController) GetWorkerMetrics(ctx context.Context) (map[string]map
 	return result, nil
 }
 
-func (w *WorkerController) ListWorkers(ctx context.Context) ([]string, error) {
-	// TODO: Implement worker listing from device controller
-	// Get all allocations and extract unique worker UIDs
-	allocations, err := w.deviceController.GetDeviceAllocations(ctx, "")
-	if err != nil {
-		return nil, err
+func (w *WorkerController) ListWorkers() ([]string, error) {
+	// First check cache (updated by ListAndWatchWorkers)
+	w.mu.RLock()
+	cachedWorkers := make([]string, 0, len(w.workers))
+	for workerUID := range w.workers {
+		cachedWorkers = append(cachedWorkers, workerUID)
 	}
+	w.mu.RUnlock()
+
+	// If cache has workers, return them
+	if len(cachedWorkers) > 0 {
+		return cachedWorkers, nil
+	}
+
+	// If cache is empty, directly query device allocations to get immediate results
+	// This ensures we hit the key logic path and return accurate results
+	allocations, err := w.deviceController.GetDeviceAllocations("")
+	if err != nil {
+		return cachedWorkers, err
+	}
+
+	// Extract unique worker UIDs from allocations
 	workerSet := make(map[string]bool)
 	for _, allocation := range allocations {
-		if allocation.PodUID != "" {
-			workerSet[allocation.PodUID] = true
+		workerUID := allocation.WorkerID
+		if workerUID == "" {
+			workerUID = allocation.PodUID
 		}
-		if allocation.WorkerID != "" {
-			workerSet[allocation.WorkerID] = true
+		if workerUID != "" {
+			workerSet[workerUID] = true
 		}
 	}
+
+	// Update cache with discovered workers
+	w.mu.Lock()
+	for workerUID := range workerSet {
+		w.workers[workerUID] = true
+	}
+	w.mu.Unlock()
+
+	// Return list of workers
 	workers := make([]string, 0, len(workerSet))
 	for workerUID := range workerSet {
 		workers = append(workers, workerUID)

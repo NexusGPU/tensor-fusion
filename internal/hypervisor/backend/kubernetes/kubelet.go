@@ -197,31 +197,111 @@ func (kc *KubeletClient) notifyWorkerChanged() {
 }
 
 // GetWorkerInfoForAllocation extracts worker info from pod annotations for allocation
+// DEPRECATED: Use GetWorkerInfoForAllocationByIndex instead
 func (kc *KubeletClient) GetWorkerInfoForAllocation(ctx context.Context, containerReq *pluginapi.ContainerAllocateRequest) (*WorkerInfo, error) {
-	// Extract pod UID from environment variables or device IDs
-	// In practice, kubelet may pass pod info differently
-	// For now, we'll search through our pod cache
+	// Extract pod index from container request
+	podIndex := ""
+	if len(containerReq.DevicesIds) > 0 {
+		podIndex = containerReq.DevicesIds[0]
+	}
+	if podIndex == "" {
+		return nil, fmt.Errorf("no pod index found in container request")
+	}
+	return kc.GetWorkerInfoForAllocationByIndex(ctx, podIndex)
+}
 
+// GetWorkerInfoForAllocationByIndex finds a pod by its index annotation and extracts worker info
+func (kc *KubeletClient) GetWorkerInfoForAllocationByIndex(ctx context.Context, podIndex string) (*WorkerInfo, error) {
 	kc.mu.RLock()
 	defer kc.mu.RUnlock()
 
-	// If not found by device IDs, try to find by pod index annotation
-	// The device plugin may use pod index to identify pods
+	// Find pod with matching index annotation
 	for _, pod := range kc.podCache {
 		if pod.Annotations == nil {
 			continue
 		}
 
-		// Check if pod has index annotation and matches resource request
-		if podIndex, exists := pod.Annotations[constants.PodIndexAnnotation]; exists {
-			// Try to match based on resource name and index
-			// This is a fallback mechanism
-
+		// Check if pod has matching index annotation
+		if podIndexAnno, exists := pod.Annotations[constants.PodIndexAnnotation]; exists && podIndexAnno == podIndex {
 			return kc.extractWorkerInfo(pod, podIndex), nil
 		}
 	}
 
-	return nil, fmt.Errorf("worker info not found for allocation request")
+	return nil, fmt.Errorf("worker info not found for pod index %s", podIndex)
+}
+
+// CheckDuplicateIndex checks if multiple pods have the same index annotation
+// Returns error if duplicate found (excluding the specified podUID)
+func (kc *KubeletClient) CheckDuplicateIndex(ctx context.Context, podIndex string, excludePodUID string) error {
+	kc.mu.RLock()
+	defer kc.mu.RUnlock()
+
+	var matchingPods []string
+	for podUID, pod := range kc.podCache {
+		if pod.Annotations == nil {
+			continue
+		}
+
+		if podIndexAnno, exists := pod.Annotations[constants.PodIndexAnnotation]; exists && podIndexAnno == podIndex {
+			if string(pod.UID) != excludePodUID {
+				matchingPods = append(matchingPods, fmt.Sprintf("%s/%s (UID: %s)", pod.Namespace, pod.Name, podUID))
+			}
+		}
+	}
+
+	if len(matchingPods) > 0 {
+		return fmt.Errorf("duplicate index %s found in pods: %v", podIndex, matchingPods)
+	}
+
+	return nil
+}
+
+// RemovePodIndexAnnotation removes the PodIndexAnnotation from a pod after successful allocation
+func (kc *KubeletClient) RemovePodIndexAnnotation(ctx context.Context, podUID string, namespace string, podName string) error {
+	kc.mu.RLock()
+	pod, exists := kc.podCache[podUID]
+	kc.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("pod %s/%s not found in cache", namespace, podName)
+	}
+
+	// Check if annotation exists
+	if pod.Annotations == nil {
+		return nil // Nothing to remove
+	}
+
+	if _, exists := pod.Annotations[constants.PodIndexAnnotation]; !exists {
+		return nil // Annotation already removed
+	}
+
+	// Use API client to patch pod and remove annotation
+	// Get fresh pod from API server
+	currentPod, err := kc.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get pod %s/%s: %w", namespace, podName, err)
+	}
+
+	// Create patch to remove annotation
+	if currentPod.Annotations == nil {
+		return nil // No annotations to remove
+	}
+
+	if _, exists := currentPod.Annotations[constants.PodIndexAnnotation]; !exists {
+		return nil // Annotation already removed
+	}
+
+	// Remove annotation
+	delete(currentPod.Annotations, constants.PodIndexAnnotation)
+
+	// Update pod
+	_, err = kc.clientset.CoreV1().Pods(namespace).Update(ctx, currentPod, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to update pod %s/%s: %w", namespace, podName, err)
+	}
+
+	klog.Infof("Successfully removed PodIndexAnnotation from pod %s/%s", namespace, podName)
+	return nil
 }
 
 // extractWorkerInfo extracts worker information from pod annotations
@@ -273,7 +353,11 @@ func (kc *KubeletClient) extractWorkerInfo(pod *corev1.Pod, podIndex string) *Wo
 	}
 
 	// Extract template ID (for partitioned mode)
-	if templateID, exists := pod.Annotations[constants.WorkloadProfileAnnotation]; exists {
+	// First check PartitionTemplateIDAnnotation (set by scheduler)
+	if templateID, exists := pod.Annotations[constants.PartitionTemplateIDAnnotation]; exists {
+		info.TemplateID = templateID
+	} else if templateID, exists := pod.Annotations[constants.WorkloadProfileAnnotation]; exists {
+		// Fallback to WorkloadProfileAnnotation
 		info.TemplateID = templateID
 	}
 

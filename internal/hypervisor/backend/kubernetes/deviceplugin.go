@@ -22,9 +22,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
 	"google.golang.org/grpc"
@@ -117,6 +119,9 @@ func (dp *DevicePlugin) Start() error {
 		return fmt.Errorf("failed to register with kubelet: %w", err)
 	}
 
+	// Initialize device list with dummy index devices (1-512)
+	dp.updateDeviceList()
+
 	// Start device monitoring
 	go dp.monitorDevices()
 
@@ -194,21 +199,20 @@ func (dp *DevicePlugin) monitorDevices() {
 	}
 }
 
-// updateDeviceList updates the list of available devices
+// updateDeviceList updates the list of available dummy index devices
+// This device plugin registers tensor-fusion.ai/index resource, not real GPU devices.
+// We advertise 512 dummy devices (indices 1-512) for pod identification.
+// Real GPU devices are allocated by scheduler and set in pod annotations.
 func (dp *DevicePlugin) updateDeviceList() {
-	devices, err := dp.deviceController.ListDevices(dp.ctx)
-	if err != nil {
-		klog.Errorf("Failed to list devices: %v", err)
-		return
-	}
-
 	dp.mu.Lock()
 	defer dp.mu.Unlock()
 
-	pluginDevices := make([]*pluginapi.Device, 0, len(devices))
-	for _, device := range devices {
+	// Advertise 512 dummy index devices (1-512) for pod identification
+	// These are NOT real GPU devices - they're just used to match pods by index
+	pluginDevices := make([]*pluginapi.Device, 0, 512)
+	for i := 1; i <= 512; i++ {
 		pluginDevices = append(pluginDevices, &pluginapi.Device{
-			ID:     device.UUID,
+			ID:     fmt.Sprintf("%d", i), // Index as device ID
 			Health: pluginapi.Healthy,
 		})
 	}
@@ -259,44 +263,91 @@ func (dp *DevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.Devi
 }
 
 // Allocate handles device allocation requests from kubelet
+// IMPORTANT: This device plugin registers tensor-fusion.ai/index as a dummy resource.
+// The pod index (1-512) is used to identify which pod is requesting allocation.
+// The actual GPU device UUIDs are already set by the centralized scheduler in pod annotations:
+//   - tensor-fusion.ai/gpu-ids: comma-separated GPU UUIDs (for all isolation modes)
+//   - tensor-fusion.ai/partition: partition template ID (only for partitioned isolation mode)
+//
+// The len(req.ContainerRequests) is just the number of containers in the pod requesting
+// tensor-fusion.ai/index resource - it's NOT the pod index. The pod index comes from
+// DevicesIds[0] which contains the index value from resource limits.
+//
+// We do NOT allocate the fake tensor-fusion.ai/index device - it's only used for pod identification.
+// CDIDevices in the response is kept empty to prevent kubelet from allocating the dummy device.
 func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
-	klog.Infof("Allocate called with %d container requests", len(req.ContainerRequests))
+	// len(req.ContainerRequests) identifies how many containers in the pod are requesting
+	// tensor-fusion.ai/index resource - this is for logging/identification only
+	klog.Infof("Allocate called with %d container requests (pod may have multiple containers)", len(req.ContainerRequests))
 
 	responses := make([]*pluginapi.ContainerAllocateResponse, 0, len(req.ContainerRequests))
 
-	for _, containerReq := range req.ContainerRequests {
-		// Extract pod UID and namespace from environment variables or annotations
-		// The kubelet passes these in the container request
-		podUID := ""
-		podName := ""
-		namespace := ""
+	for containerIdx, containerReq := range req.ContainerRequests {
+		// Extract pod index from DevicesIds - this contains the index value (1-512) from resource limits
+		// Resource limit: tensor-fusion.ai/index: 3 -> DevicesIds: ["3"]
+		// This is the actual pod index used to match the pod in the pod cache
+		if len(containerReq.DevicesIds) == 0 {
+			return nil, fmt.Errorf("container request %d has no DevicesIds (expected pod index value 1-512)", containerIdx)
+		}
 
-		// Get worker info from kubelet client
-		workerInfo, err := dp.kubeletClient.GetWorkerInfoForAllocation(ctx, containerReq)
+		// The DevicesIds contains the pod index value (1-512) from resource limits
+		// This is NOT the device to allocate - it's just the pod identifier
+		podIndex := containerReq.DevicesIds[0]
+		if podIndex == "" {
+			return nil, fmt.Errorf("container request %d has empty DevicesIds (expected pod index)", containerIdx)
+		}
+
+		// Validate index is in valid range (1-512)
+		indexNum, err := strconv.Atoi(podIndex)
 		if err != nil {
-			klog.Errorf("Failed to get worker info: %v", err)
-			return nil, fmt.Errorf("failed to get worker info: %w", err)
+			return nil, fmt.Errorf("container request %d has invalid index format: %s (expected number 1-512)", containerIdx, podIndex)
+		}
+		if indexNum < 1 || indexNum > 512 {
+			return nil, fmt.Errorf("container request %d has index out of range: %d (expected 1-512)", containerIdx, indexNum)
+		}
+
+		klog.V(4).Infof("Processing allocation for container index %d, pod index %s (from DevicesIds)", containerIdx, podIndex)
+
+		// Get worker info from kubelet client using pod index
+		workerInfo, err := dp.kubeletClient.GetWorkerInfoForAllocationByIndex(ctx, podIndex)
+		if err != nil {
+			klog.Errorf("Failed to get worker info for pod index %s: %v", podIndex, err)
+			return nil, fmt.Errorf("failed to get worker info for pod index %s: %w", podIndex, err)
 		}
 
 		if workerInfo == nil {
-			return nil, fmt.Errorf("worker info not found for allocation request")
+			return nil, fmt.Errorf("worker info not found for pod index %s", podIndex)
 		}
 
-		podUID = workerInfo.PodUID
-		podName = workerInfo.PodName
-		namespace = workerInfo.Namespace
+		// Check for duplicate index annotations (multiple pods with same index)
+		if err := dp.kubeletClient.CheckDuplicateIndex(ctx, podIndex, workerInfo.PodUID); err != nil {
+			klog.Errorf("Duplicate index detected for pod index %s: %v", podIndex, err)
+			return nil, fmt.Errorf("duplicate index detected: %w", err)
+		}
+
+		// Device UUIDs are already set by scheduler in annotations, not from DevicesIds
+		// DevicesIds is just the dummy tensor-fusion.ai/index resource
+		deviceUUIDs := workerInfo.DeviceUUIDs
+		if len(deviceUUIDs) == 0 {
+			return nil, fmt.Errorf("no device UUIDs found in pod annotations for pod %s/%s", workerInfo.Namespace, workerInfo.PodName)
+		}
+
+		// Extract partition template ID if in partitioned mode
+		templateID := workerInfo.TemplateID
+		if workerInfo.IsolationMode == api.IsolationModePartitioned {
+			if partitionID, exists := workerInfo.Annotations[constants.PartitionTemplateIDAnnotation]; exists {
+				templateID = partitionID
+			}
+		}
 
 		// Compose allocation request
-		deviceUUIDs := make([]string, 0, len(containerReq.DevicesIds))
-		deviceUUIDs = append(deviceUUIDs, containerReq.DevicesIds...)
-
 		allocReq := &api.DeviceAllocateRequest{
-			WorkerUID:         podUID,
+			WorkerUID:         workerInfo.PodUID,
 			DeviceUUIDs:       deviceUUIDs,
 			IsolationMode:     workerInfo.IsolationMode,
 			MemoryLimitBytes:  workerInfo.MemoryLimitBytes,
 			ComputeLimitUnits: workerInfo.ComputeLimitUnits,
-			TemplateID:        workerInfo.TemplateID,
+			TemplateID:        templateID,
 		}
 
 		// Call device controller to allocate
@@ -310,10 +361,13 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 		}
 
 		// Build container response
+		// IMPORTANT: CdiDevices must be empty to prevent dummy tensor-fusion.ai/index device
+		// from being allocated by kubelet
 		containerResp := &pluginapi.ContainerAllocateResponse{
-			Envs:    allocResp.EnvVars,
-			Mounts:  make([]*pluginapi.Mount, 0),
-			Devices: make([]*pluginapi.DeviceSpec, 0),
+			Envs:       allocResp.EnvVars,
+			Mounts:     make([]*pluginapi.Mount, 0),
+			Devices:    make([]*pluginapi.DeviceSpec, 0),
+			CdiDevices: []*pluginapi.CDIDevice{}, // Empty to prevent dummy device allocation
 		}
 
 		// Add device nodes
@@ -341,20 +395,27 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 
 		// Store allocation info in kubelet client
 		allocation := &api.DeviceAllocation{
-			DeviceUUID:    deviceUUIDs[0], // Assuming single device for now
-			PodUID:        podUID,
-			PodName:       podName,
-			Namespace:     namespace,
+			DeviceUUID:    deviceUUIDs[0], // Use first device UUID
+			PodUID:        workerInfo.PodUID,
+			PodName:       workerInfo.PodName,
+			Namespace:     workerInfo.Namespace,
 			IsolationMode: workerInfo.IsolationMode,
-			TemplateID:    workerInfo.TemplateID,
+			TemplateID:    templateID,
 			MemoryLimit:   workerInfo.MemoryLimitBytes,
 			ComputeLimit:  workerInfo.ComputeLimitUnits,
-			WorkerID:      podUID,
+			WorkerID:      workerInfo.PodUID,
 			AllocatedAt:   time.Now(),
 		}
 
-		if err := dp.kubeletClient.StoreAllocation(podUID, allocation); err != nil {
+		if err := dp.kubeletClient.StoreAllocation(workerInfo.PodUID, allocation); err != nil {
 			klog.Warningf("Failed to store allocation: %v", err)
+		}
+
+		// Remove PodIndexAnnotation after successful allocation to release the index
+		// This prevents the index from being matched to this pod in future allocation cycles
+		if err := dp.kubeletClient.RemovePodIndexAnnotation(ctx, workerInfo.PodUID, workerInfo.Namespace, workerInfo.PodName); err != nil {
+			klog.Warningf("Failed to remove pod index annotation for pod %s/%s: %v", workerInfo.Namespace, workerInfo.PodName, err)
+			// Don't fail allocation if annotation removal fails
 		}
 
 		responses = append(responses, containerResp)

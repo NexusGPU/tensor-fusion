@@ -38,7 +38,7 @@ func NewDeviceHandler(deviceController framework.DeviceController) *DeviceHandle
 
 // HandleGetDevices handles GET /api/v1/devices
 func (h *DeviceHandler) HandleGetDevices(c *gin.Context) {
-	devices, err := h.deviceController.ListDevices(c.Request.Context())
+	devices, err := h.deviceController.ListDevices()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
 		return
@@ -49,7 +49,7 @@ func (h *DeviceHandler) HandleGetDevices(c *gin.Context) {
 // HandleGetDevice handles GET /api/v1/devices/:uuid
 func (h *DeviceHandler) HandleGetDevice(c *gin.Context) {
 	uuid := c.Param("uuid")
-	device, err := h.deviceController.GetDevice(c.Request.Context(), uuid)
+	device, err := h.deviceController.GetDevice(uuid)
 	if err != nil {
 		c.JSON(http.StatusNotFound, api.ErrorResponse{Error: err.Error()})
 		return
