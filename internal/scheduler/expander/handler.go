@@ -175,15 +175,15 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	gpuNodesPassedOtherFilters, err := e.simulateSchedulingWithoutGPU(ctx, pod)
 	if err != nil {
 		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
-			"can not schedule on any nodes even without GPU constraints, manual check required. error: %w", err)
-		e.logger.Info("Pod schedulable but no GPU nodes available, manual check required",
+			"can not schedule on any nodes even without GPU constraints, karpenter should take over expansion. error: %w", err)
+		e.logger.Info("Pod schedulable but no GPU nodes available, karpenter should take over expansion",
 			"namespace", pod.Namespace, "pod", pod.Name, "error", err)
 		return nil
 	}
 	if len(gpuNodesPassedOtherFilters) == 0 {
 		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
-			"can not schedule on any nodes, manual check required, 0 fit nodes")
-		e.logger.Info("Pod schedulable but no GPU nodes available, manual check required",
+			"can not schedule on any nodes even without GPU constraints, karpenter should take over expansion, 0 fit nodes")
+		e.logger.Info("Pod schedulable but no GPU nodes available, karpenter should take over expansion",
 			"namespace", pod.Namespace, "pod", pod.Name)
 		return nil
 	}
