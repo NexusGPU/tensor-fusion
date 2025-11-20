@@ -466,6 +466,11 @@ spec:
                     type: object
                     x-kubernetes-map-type: atomic
                 type: object
+              partitionTemplateId:
+                description: |-
+                  PartitionTemplateID specifies the partition template ID for partitioned isolation mode
+                  This is read from pod annotation tensor-fusion.ai/partition if specified
+                type: string
               poolName:
                 type: string
               qos:
