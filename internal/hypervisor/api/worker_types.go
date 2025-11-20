@@ -1,8 +1,8 @@
 package api
 
 type Worker struct {
-	WorkerUID string
+	WorkerUID        string
 	AllocatedDevices []string
-	Status string
-	IsolationMode IsolationMode
+	Status           string
+	IsolationMode    IsolationMode
 }

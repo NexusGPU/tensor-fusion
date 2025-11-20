@@ -138,7 +138,7 @@ func (d *DevicePluginDetector) Start() error {
 func (d *DevicePluginDetector) Stop() {
 	close(d.stopCh)
 	if d.watcher != nil {
-		d.watcher.Close()
+		_ = d.watcher.Close()
 	}
 }
 
@@ -238,10 +238,7 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 	}
 
 	// Extract registered device IDs (for comparison)
-	_, registeredDeviceIDs, err := d.extractDeviceIDs(checkpoint)
-	if err != nil {
-		return fmt.Errorf("failed to extract device IDs: %w", err)
-	}
+	_, registeredDeviceIDs := d.extractDeviceIDs(checkpoint)
 
 	// Get current pods to check for deleted pods
 	currentPods := d.kubeletClient.GetAllPods()
@@ -424,7 +421,7 @@ func (d *DevicePluginDetector) readCheckpointFile() (*KubeletCheckpoint, error) 
 }
 
 // extractDeviceIDs extracts allocated and registered device IDs from checkpoint
-func (d *DevicePluginDetector) extractDeviceIDs(checkpoint *KubeletCheckpoint) (allocated, registered map[string]bool, err error) {
+func (d *DevicePluginDetector) extractDeviceIDs(checkpoint *KubeletCheckpoint) (allocated, registered map[string]bool) {
 	allocated = make(map[string]bool)
 	registered = make(map[string]bool)
 
@@ -455,7 +452,7 @@ func (d *DevicePluginDetector) extractDeviceIDs(checkpoint *KubeletCheckpoint) (
 		}
 	}
 
-	return allocated, registered, nil
+	return allocated, registered
 }
 
 // findEntryForDevice finds the pod device entry for a given device ID

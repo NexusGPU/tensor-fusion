@@ -182,7 +182,9 @@ func (m *ShmDialogModel) updateContent() {
 		m.viewport.SetContent(m.content)
 		return
 	}
-	defer handle.Close()
+	defer func() {
+		_ = handle.Close()
+	}()
 
 	// Get the state
 	state := handle.GetState()
