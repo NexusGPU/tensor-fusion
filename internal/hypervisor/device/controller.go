@@ -133,6 +133,8 @@ func (m *Controller) Allocate(req *api.DeviceAllocateRequest) (*api.DeviceAlloca
 		MemoryLimit:   req.MemoryLimitBytes,
 		ComputeLimit:  req.ComputeLimitUnits,
 		AllocatedAt:   time.Now(),
+		Labels:        make(map[string]string), // Set by backend if available
+		Annotations:   make(map[string]string), // Set by backend if available
 	}
 
 	// Handle partitioned mode
@@ -210,6 +212,24 @@ func (m *Controller) GetAllocation(workerUID string) (*api.DeviceAllocation, boo
 
 	allocation, exists := m.allocations[workerUID]
 	return allocation, exists
+}
+
+// UpdateAllocationLabelsAndAnnotations updates labels and annotations for an existing allocation
+func (m *Controller) UpdateAllocationLabelsAndAnnotations(workerUID string, labels, annotations map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	allocation, exists := m.allocations[workerUID]
+	if !exists {
+		return
+	}
+
+	if labels != nil {
+		allocation.Labels = labels
+	}
+	if annotations != nil {
+		allocation.Annotations = annotations
+	}
 }
 
 // Start implements framework.DeviceController

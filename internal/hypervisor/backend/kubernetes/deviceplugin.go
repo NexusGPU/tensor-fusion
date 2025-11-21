@@ -52,7 +52,7 @@ type DevicePlugin struct {
 
 	ctx              context.Context
 	deviceController framework.DeviceController
-	kubeletClient    *KubeletClient
+	kubeletClient    *PodCacheManager
 
 	server       *grpc.Server
 	socketPath   string
@@ -65,7 +65,7 @@ type DevicePlugin struct {
 }
 
 // NewDevicePlugin creates a new device plugin instance
-func NewDevicePlugin(ctx context.Context, deviceController framework.DeviceController, kubeletClient *KubeletClient) *DevicePlugin {
+func NewDevicePlugin(ctx context.Context, deviceController framework.DeviceController, kubeletClient *PodCacheManager) *DevicePlugin {
 	return &DevicePlugin{
 		ctx:              ctx,
 		deviceController: deviceController,
@@ -80,8 +80,16 @@ func NewDevicePlugin(ctx context.Context, deviceController framework.DeviceContr
 // Start starts the device plugin gRPC server and registers with kubelet
 func (dp *DevicePlugin) Start() error {
 	// Clean up any existing socket
-	if err := os.Remove(dp.socketPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove existing socket: %w", err)
+	// Check if file exists first to avoid permission errors on non-existent files
+	if _, err := os.Stat(dp.socketPath); err == nil {
+		// File exists, try to remove it
+		if err := os.Remove(dp.socketPath); err != nil {
+			return fmt.Errorf("failed to remove existing socket: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		// Some other error checking file existence (e.g., permission denied on parent directory)
+		// Log warning but continue - net.Listen will handle it
+		klog.Warningf("Could not check socket file existence: %v", err)
 	}
 
 	// Create directory if it doesn't exist
@@ -139,7 +147,16 @@ func (dp *DevicePlugin) Stop() error {
 
 // register registers the device plugin with kubelet
 func (dp *DevicePlugin) register() error {
-	conn, err := dp.dial(filepath.Join(DevicePluginPath, KubeletSocket), 5*time.Second)
+	kubeletSocketPath := filepath.Join(DevicePluginPath, KubeletSocket)
+
+	// Check if kubelet socket exists
+	if _, err := os.Stat(kubeletSocketPath); os.IsNotExist(err) {
+		return fmt.Errorf("kubelet socket does not exist at %s (kubelet may not be running or device plugin support not enabled)", kubeletSocketPath)
+	} else if err != nil {
+		return fmt.Errorf("failed to check kubelet socket: %w", err)
+	}
+
+	conn, err := dp.dial(kubeletSocketPath, 5*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to dial kubelet: %w", err)
 	}
@@ -169,10 +186,18 @@ func (dp *DevicePlugin) register() error {
 
 // dial establishes a connection to a Unix socket
 func (dp *DevicePlugin) dial(unixSocketPath string, timeout time.Duration) (*grpc.ClientConn, error) {
-	conn, err := grpc.NewClient(unixSocketPath,
+	// Use unix:// prefix for gRPC to recognize it as a Unix socket
+	// The dialer will receive the full address, so we need to strip the prefix
+	target := "unix://" + unixSocketPath
+	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			return net.DialTimeout("unix", addr, timeout)
+			// Strip unix:// prefix to get the actual socket path
+			socketPath := addr
+			if len(addr) > 7 && addr[:7] == "unix://" {
+				socketPath = addr[7:]
+			}
+			return net.DialTimeout("unix", socketPath, timeout)
 		}),
 	)
 	return conn, err
@@ -393,7 +418,28 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 			containerResp.Envs[key] = value
 		}
 
-		// Store allocation info in kubelet client
+		// Get pod to extract labels and annotations
+		pod := dp.kubeletClient.GetPodByUID(workerInfo.PodUID)
+		labels := make(map[string]string)
+		annotations := make(map[string]string)
+		if pod != nil {
+			if pod.Labels != nil {
+				labels = pod.Labels
+			}
+			if pod.Annotations != nil {
+				annotations = pod.Annotations
+			}
+		}
+
+		// Update allocation in device controller with labels and annotations
+		// Use type assertion to access the concrete implementation
+		if deviceCtrl, ok := dp.deviceController.(interface {
+			UpdateAllocationLabelsAndAnnotations(workerUID string, labels, annotations map[string]string)
+		}); ok {
+			deviceCtrl.UpdateAllocationLabelsAndAnnotations(workerInfo.PodUID, labels, annotations)
+		}
+
+		// Store allocation info in kubelet client (for backward compatibility)
 		allocation := &api.DeviceAllocation{
 			DeviceUUID:    deviceUUIDs[0], // Use first device UUID
 			PodUID:        workerInfo.PodUID,
@@ -405,6 +451,8 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 			ComputeLimit:  workerInfo.ComputeLimitUnits,
 			WorkerID:      workerInfo.PodUID,
 			AllocatedAt:   time.Now(),
+			Labels:        labels,
+			Annotations:   annotations,
 		}
 
 		if err := dp.kubeletClient.StoreAllocation(workerInfo.PodUID, allocation); err != nil {

@@ -20,9 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
-	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -189,7 +187,7 @@ func main() {
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
-	normalizeKubeConfigEnv()
+	utils.NormalizeKubeConfigEnv()
 	kc := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(kc, ctrl.Options{
 		Scheme:                  scheme,
@@ -679,19 +677,6 @@ func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, g
 			pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, gpuInfos)
 		}
 	}()
-}
-
-// only for local development, won't set KUBECONFIG env var in none local environments
-func normalizeKubeConfigEnv() {
-	cfgPath := os.Getenv("KUBECONFIG")
-	if cfgPath != "" && strings.HasPrefix(cfgPath, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		_ = os.Setenv("KUBECONFIG", strings.Replace(cfgPath, "~", home, 1))
-	}
 }
 
 // Setup GreptimeDB connection

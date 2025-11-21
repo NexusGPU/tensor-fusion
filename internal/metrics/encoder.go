@@ -37,6 +37,9 @@ type MultiProtocolEncoder struct {
 }
 
 func NewEncoder(encoderType string) Encoder {
+	if encoderType == "" {
+		encoderType = config.MetricsFormatInflux
+	}
 	encoderEnum, exists := stringToEncoderType[encoderType]
 	if !exists {
 		// Default to influx for unknown types

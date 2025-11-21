@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/cmd/hypervisor/shm_init"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/backend/kubernetes"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/backend/single_node"
@@ -18,6 +20,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/server"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/worker"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
@@ -25,7 +28,7 @@ import (
 
 var (
 	acceleratorLibPath = flag.String("accelerator-lib",
-		"../provider/build/libaccelerator_stub.so", "Path to accelerator library")
+		"./provider/build/libaccelerator_stub.so", "Path to accelerator library")
 	isolationMode = flag.String("isolation-mode", "shared",
 		"Isolation mode: shared, soft, hard, partitioned")
 	backendType       = flag.String("backend-type", "kubernetes", "Backend type: kubernetes, simple")
@@ -54,6 +57,8 @@ func main() {
 	defer klog.Flush()
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	utils.NormalizeKubeConfigEnv()
 
 	// Determine accelerator library path from env var or flag
 	libPath := *acceleratorLibPath
@@ -132,7 +137,14 @@ func main() {
 	klog.Info("Metrics recorder started")
 
 	// initialize and start HTTP server
-	httpServer := server.NewServer(ctx, deviceController, workerController, metricsRecorder, backend, *httpPort)
+	httpPortNum := *httpPort
+	if httpPortEnv := os.Getenv(constants.HypervisorPortEnv); httpPortEnv != "" {
+		httpPortNum, err = strconv.Atoi(httpPortEnv)
+		if err != nil {
+			klog.Fatalf("Failed to convert HTTP port from env: %v", err)
+		}
+	}
+	httpServer := server.NewServer(ctx, deviceController, workerController, metricsRecorder, backend, httpPortNum)
 	go func() {
 		if err := httpServer.Start(); err != nil && err != http.ErrServerClosed {
 			klog.Fatalf("Failed to start HTTP server: %v", err)

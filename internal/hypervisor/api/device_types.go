@@ -98,6 +98,8 @@ type DeviceAllocation struct {
 	ComputeLimit  uint32 // For hard isolation (percentage)
 	WorkerID      string
 	AllocatedAt   time.Time
+	Labels        map[string]string // Pod labels for metrics tagging
+	Annotations   map[string]string // Pod annotations
 }
 
 // DeviceAllocateRequest represents a request to allocate devices
