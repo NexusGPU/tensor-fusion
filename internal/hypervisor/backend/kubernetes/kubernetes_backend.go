@@ -2,8 +2,10 @@ package kubernetes
 
 import (
 	"context"
+	"fmt"
 	"os"
 
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/backend/kubernetes/external_dp"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
 	"k8s.io/client-go/rest"
@@ -14,7 +16,7 @@ type KubeletBackend struct {
 	ctx context.Context
 
 	deviceController framework.DeviceController
-	kubeletClient    *KubeletClient
+	kubeletClient    *PodCacheManager
 	devicePlugin     *DevicePlugin
 	deviceDetector   *external_dp.DevicePluginDetector
 
@@ -25,13 +27,13 @@ type KubeletBackend struct {
 
 func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceController, restConfig *rest.Config) (*KubeletBackend, error) {
 	// Get node name from environment or config
-	nodeName := os.Getenv("NODE_NAME")
+	nodeName := os.Getenv(constants.HypervisorGPUNodeNameEnv)
 	if nodeName == "" {
-		nodeName = os.Getenv("HOSTNAME")
+		return nil, fmt.Errorf("node name env var 'GPU_NODE_NAME' for this hypervisor not set")
 	}
 
 	// Create kubelet client
-	kubeletClient, err := NewKubeletClient(ctx, restConfig, nodeName)
+	kubeletClient, err := NewPodCacheManager(ctx, restConfig, nodeName)
 	if err != nil {
 		return nil, err
 	}
@@ -43,12 +45,15 @@ func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceCon
 	}
 
 	// Create device plugin detector
-	checkpointPath := os.Getenv("KUBELET_CHECKPOINT_PATH")
-	// Create adapter for kubelet client to match interface
-	kubeletAdapter := &kubeletClientAdapter{kubeletClient: kubeletClient}
-	deviceDetector, err := external_dp.NewDevicePluginDetector(ctx, checkpointPath, apiServer, kubeletAdapter)
-	if err != nil {
-		return nil, err
+	var deviceDetector *external_dp.DevicePluginDetector
+	if os.Getenv(constants.HypervisorDetectUsedGPUEnv) == constants.TrueStringValue {
+		checkpointPath := os.Getenv(constants.HypervisorKubeletCheckpointPathEnv)
+		// Create adapter for kubelet client to match interface
+		kubeletAdapter := &kubeletClientAdapter{kubeletClient: kubeletClient}
+		deviceDetector, err = external_dp.NewDevicePluginDetector(ctx, checkpointPath, apiServer, kubeletAdapter)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &KubeletBackend{
@@ -216,7 +221,7 @@ func (b *KubeletBackend) GetWorkerChangedChan(ctx context.Context) <-chan struct
 
 // kubeletClientAdapter adapts KubeletClient to external_dp.KubeletClientInterface
 type kubeletClientAdapter struct {
-	kubeletClient *KubeletClient
+	kubeletClient *PodCacheManager
 }
 
 func (k *kubeletClientAdapter) GetAllPods() map[string]interface{} {
