@@ -35,7 +35,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
-	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
 // WorkerInfo contains information about a worker pod
@@ -52,8 +51,8 @@ type WorkerInfo struct {
 	PodIndex          string
 }
 
-// KubeletClient manages pod watching and worker information extraction
-type KubeletClient struct {
+// PodCacheManager manages pod watching and worker information extraction
+type PodCacheManager struct {
 	ctx        context.Context
 	clientset  *kubernetes.Clientset
 	restConfig *rest.Config
@@ -66,14 +65,14 @@ type KubeletClient struct {
 	workerChangedCh chan struct{}
 }
 
-// NewKubeletClient creates a new kubelet client
-func NewKubeletClient(ctx context.Context, restConfig *rest.Config, nodeName string) (*KubeletClient, error) {
+// NewPodCacheManager creates a new pod cache manager
+func NewPodCacheManager(ctx context.Context, restConfig *rest.Config, nodeName string) (*PodCacheManager, error) {
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes clientset: %w", err)
 	}
 
-	return &KubeletClient{
+	return &PodCacheManager{
 		ctx:             ctx,
 		clientset:       clientset,
 		restConfig:      restConfig,
@@ -86,7 +85,7 @@ func NewKubeletClient(ctx context.Context, restConfig *rest.Config, nodeName str
 }
 
 // Start starts watching pods on this node
-func (kc *KubeletClient) Start() error {
+func (kc *PodCacheManager) Start() error {
 	// Create a field selector to watch only pods on this node
 	fieldSelector := fields.OneTermEqualSelector("spec.nodeName", kc.nodeName).String()
 
@@ -110,17 +109,16 @@ func (kc *KubeletClient) Start() error {
 	}
 
 	// Create informer
-	//nolint:staticcheck // NewInformer is deprecated but NewInformerWithOptions has incompatible signature
-	_, controller := cache.NewInformer(
-		lw,
-		&corev1.Pod{},
-		0, // resync period
-		cache.ResourceEventHandlerFuncs{
+	_, controller := cache.NewInformerWithOptions(cache.InformerOptions{
+		ListerWatcher: lw,
+		ObjectType:    &corev1.Pod{},
+		ResyncPeriod:  0,
+		Handler: cache.ResourceEventHandlerFuncs{
 			AddFunc:    kc.onPodAdd,
 			UpdateFunc: kc.onPodUpdate,
 			DeleteFunc: kc.onPodDelete,
 		},
-	)
+	})
 
 	// Start the informer
 	go controller.Run(kc.stopCh)
@@ -129,13 +127,13 @@ func (kc *KubeletClient) Start() error {
 	return nil
 }
 
-// Stop stops the kubelet client
-func (kc *KubeletClient) Stop() {
+// Stop stops the pod cache manager
+func (kc *PodCacheManager) Stop() {
 	close(kc.stopCh)
 }
 
 // onPodAdd handles pod addition events
-func (kc *KubeletClient) onPodAdd(obj interface{}) {
+func (kc *PodCacheManager) onPodAdd(obj interface{}) {
 	pod := obj.(*corev1.Pod)
 	kc.mu.Lock()
 	kc.podCache[string(pod.UID)] = pod
@@ -146,7 +144,7 @@ func (kc *KubeletClient) onPodAdd(obj interface{}) {
 }
 
 // onPodUpdate handles pod update events
-func (kc *KubeletClient) onPodUpdate(oldObj, newObj interface{}) {
+func (kc *PodCacheManager) onPodUpdate(oldObj, newObj interface{}) {
 	oldPod := oldObj.(*corev1.Pod)
 	newPod := newObj.(*corev1.Pod)
 
@@ -163,7 +161,7 @@ func (kc *KubeletClient) onPodUpdate(oldObj, newObj interface{}) {
 }
 
 // onPodDelete handles pod deletion events
-func (kc *KubeletClient) onPodDelete(obj interface{}) {
+func (kc *PodCacheManager) onPodDelete(obj interface{}) {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
 		// Handle deleted final state unknown
@@ -189,29 +187,15 @@ func (kc *KubeletClient) onPodDelete(obj interface{}) {
 }
 
 // notifyWorkerChanged notifies that worker information has changed
-func (kc *KubeletClient) notifyWorkerChanged() {
+func (kc *PodCacheManager) notifyWorkerChanged() {
 	select {
 	case kc.workerChangedCh <- struct{}{}:
 	default:
 	}
 }
 
-// GetWorkerInfoForAllocation extracts worker info from pod annotations for allocation
-// DEPRECATED: Use GetWorkerInfoForAllocationByIndex instead
-func (kc *KubeletClient) GetWorkerInfoForAllocation(ctx context.Context, containerReq *pluginapi.ContainerAllocateRequest) (*WorkerInfo, error) {
-	// Extract pod index from container request
-	podIndex := ""
-	if len(containerReq.DevicesIds) > 0 {
-		podIndex = containerReq.DevicesIds[0]
-	}
-	if podIndex == "" {
-		return nil, fmt.Errorf("no pod index found in container request")
-	}
-	return kc.GetWorkerInfoForAllocationByIndex(ctx, podIndex)
-}
-
 // GetWorkerInfoForAllocationByIndex finds a pod by its index annotation and extracts worker info
-func (kc *KubeletClient) GetWorkerInfoForAllocationByIndex(ctx context.Context, podIndex string) (*WorkerInfo, error) {
+func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(ctx context.Context, podIndex string) (*WorkerInfo, error) {
 	kc.mu.RLock()
 	defer kc.mu.RUnlock()
 
@@ -230,9 +214,16 @@ func (kc *KubeletClient) GetWorkerInfoForAllocationByIndex(ctx context.Context, 
 	return nil, fmt.Errorf("worker info not found for pod index %s", podIndex)
 }
 
+// GetPodByUID retrieves a pod from the cache by its UID
+func (kc *PodCacheManager) GetPodByUID(podUID string) *corev1.Pod {
+	kc.mu.RLock()
+	defer kc.mu.RUnlock()
+	return kc.podCache[podUID]
+}
+
 // CheckDuplicateIndex checks if multiple pods have the same index annotation
 // Returns error if duplicate found (excluding the specified podUID)
-func (kc *KubeletClient) CheckDuplicateIndex(ctx context.Context, podIndex string, excludePodUID string) error {
+func (kc *PodCacheManager) CheckDuplicateIndex(ctx context.Context, podIndex string, excludePodUID string) error {
 	kc.mu.RLock()
 	defer kc.mu.RUnlock()
 
@@ -257,7 +248,7 @@ func (kc *KubeletClient) CheckDuplicateIndex(ctx context.Context, podIndex strin
 }
 
 // RemovePodIndexAnnotation removes the PodIndexAnnotation from a pod after successful allocation
-func (kc *KubeletClient) RemovePodIndexAnnotation(ctx context.Context, podUID string, namespace string, podName string) error {
+func (kc *PodCacheManager) RemovePodIndexAnnotation(ctx context.Context, podUID string, namespace string, podName string) error {
 	kc.mu.RLock()
 	pod, exists := kc.podCache[podUID]
 	kc.mu.RUnlock()
@@ -305,7 +296,7 @@ func (kc *KubeletClient) RemovePodIndexAnnotation(ctx context.Context, podUID st
 }
 
 // extractWorkerInfo extracts worker information from pod annotations
-func (kc *KubeletClient) extractWorkerInfo(pod *corev1.Pod, podIndex string) *WorkerInfo {
+func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod, podIndex string) *WorkerInfo {
 	info := &WorkerInfo{
 		PodUID:      string(pod.UID),
 		PodName:     pod.Name,
@@ -416,7 +407,7 @@ func parseMemoryBytes(quantityStr string) (uint64, error) {
 }
 
 // StoreAllocation stores allocation information
-func (kc *KubeletClient) StoreAllocation(podUID string, allocation *api.DeviceAllocation) error {
+func (kc *PodCacheManager) StoreAllocation(podUID string, allocation *api.DeviceAllocation) error {
 	kc.mu.Lock()
 	defer kc.mu.Unlock()
 	kc.allocations[podUID] = allocation
@@ -424,7 +415,7 @@ func (kc *KubeletClient) StoreAllocation(podUID string, allocation *api.DeviceAl
 }
 
 // GetAllocation retrieves allocation information
-func (kc *KubeletClient) GetAllocation(podUID string) (*api.DeviceAllocation, bool) {
+func (kc *PodCacheManager) GetAllocation(podUID string) (*api.DeviceAllocation, bool) {
 	kc.mu.RLock()
 	defer kc.mu.RUnlock()
 	allocation, exists := kc.allocations[podUID]
@@ -432,12 +423,12 @@ func (kc *KubeletClient) GetAllocation(podUID string) (*api.DeviceAllocation, bo
 }
 
 // GetWorkerChangedChan returns the channel for worker change notifications
-func (kc *KubeletClient) GetWorkerChangedChan() <-chan struct{} {
+func (kc *PodCacheManager) GetWorkerChangedChan() <-chan struct{} {
 	return kc.workerChangedCh
 }
 
 // GetAllPods returns all pods currently in the cache
-func (kc *KubeletClient) GetAllPods() map[string]*corev1.Pod {
+func (kc *PodCacheManager) GetAllPods() map[string]*corev1.Pod {
 	kc.mu.RLock()
 	defer kc.mu.RUnlock()
 

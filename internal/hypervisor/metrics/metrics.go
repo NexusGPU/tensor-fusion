@@ -2,11 +2,11 @@ package metrics
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"time"
 
-	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
@@ -22,6 +22,7 @@ type HypervisorMetricsRecorder struct {
 	deviceController framework.DeviceController
 	workerController framework.WorkerController
 	gpuCapacityMap   map[string]float64 // GPU UUID -> MaxTflops
+	extraLabelsMap   map[string]string  // podLabelKey -> tagName mapping from env config
 }
 
 const (
@@ -43,6 +44,16 @@ func NewHypervisorMetricsRecorder(
 		gpuPool = defaultGPUPool
 	}
 
+	// Parse extra labels config once at initialization
+	extraLabelsMap := make(map[string]string)
+	extraLabelsConfig := os.Getenv(constants.HypervisorMetricsExtraLabelsEnv)
+	if extraLabelsConfig != "" {
+		if err := json.Unmarshal([]byte(extraLabelsConfig), &extraLabelsMap); err != nil {
+			// Log error but continue without extra labels
+			extraLabelsMap = make(map[string]string)
+		}
+	}
+
 	return &HypervisorMetricsRecorder{
 		ctx:              ctx,
 		outputPath:       outputPath,
@@ -51,6 +62,7 @@ func NewHypervisorMetricsRecorder(
 		deviceController: deviceController,
 		workerController: workerController,
 		gpuCapacityMap:   make(map[string]float64),
+		extraLabelsMap:   extraLabelsMap,
 	}
 }
 
@@ -98,7 +110,7 @@ func (h *HypervisorMetricsRecorder) RecordDeviceMetrics(writer io.Writer) {
 
 	// Output GPU metrics directly
 	now := time.Now()
-	enc := metrics.NewEncoder(config.GetGlobalConfig().MetricsFormat)
+	enc := metrics.NewEncoder(os.Getenv(constants.HypervisorMetricsFormatEnv))
 
 	for gpuUUID, metrics := range gpuMetrics {
 		enc.StartLine("tf_gpu_usage")
@@ -149,14 +161,9 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 		}
 	}
 
-	// Get extra labels config
-	extraLabelsConfig := config.GetGlobalConfig().MetricsExtraPodLabels
-	_ = len(extraLabelsConfig) > 0 // hasDynamicMetricsLabels - reserved for future use
-
 	// Output worker metrics directly
 	now := time.Now()
-	// TODO: use config from flag parser, not global config
-	enc := metrics.NewEncoder("influx")
+	enc := metrics.NewEncoder(os.Getenv(constants.HypervisorMetricsFormatEnv))
 
 	for deviceUUID, workerMap := range workerMetrics {
 		for workerUID, processMap := range workerMap {
@@ -199,10 +206,7 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 			enc.AddTag("worker", workerUID)
 
 			// Add extra labels if configured
-			// Note: In Rust code, labels come from pod_state.info.labels
-			// Here we would need to get pod labels from allocation or another source
-			// For now, we'll skip extra labels as we don't have access to pod labels
-			_ = extraLabelsConfig // Reserved for future use
+			h.addExtraLabels(enc, allocation)
 
 			enc.AddField("memory_bytes", int64(memoryBytes))
 			enc.AddField("compute_percentage", computePercentage)
@@ -215,5 +219,25 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 
 	if err := enc.Err(); err == nil {
 		_, _ = writer.Write(enc.Bytes())
+	}
+}
+
+// addExtraLabels adds dynamic tags based on HypervisorMetricsExtraLabelsEnv configuration
+// The config is a JSON map where keys are tag names and values are pod label keys to extract
+// Labels are read directly from allocation.Labels which is populated by the backend
+func (h *HypervisorMetricsRecorder) addExtraLabels(enc metrics.Encoder, allocation *api.DeviceAllocation) {
+	if len(h.extraLabelsMap) == 0 {
+		return
+	}
+
+	if len(allocation.Labels) == 0 {
+		return
+	}
+
+	// Add tags based on the mapping
+	for podLabelKey, tagName := range h.extraLabelsMap {
+		if labelValue, exists := allocation.Labels[podLabelKey]; exists && labelValue != "" {
+			enc.AddTag(tagName, labelValue)
+		}
 	}
 }

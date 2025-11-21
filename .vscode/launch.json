@@ -25,9 +25,13 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
+            "console": "integratedTerminal",
             "env": {
                 "KUBECONFIG": "~/.kube/config",
+                "HYPERVISOR_PORT": "8042",
+                "GPU_NODE_NAME": "ubuntu",
             },
+            "cwd": "${workspaceFolder}",
             "program": "${workspaceFolder}/cmd/hypervisor/main.go",
         },
         {
