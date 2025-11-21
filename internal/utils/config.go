@@ -226,3 +226,16 @@ func GetLeaderIP(client client.Client) string {
 	}
 	return leaderInfo.Data[constants.LeaderInfoConfigMapLeaderIPKey]
 }
+
+// only for local development, won't set KUBECONFIG env var in none local environments
+func NormalizeKubeConfigEnv() {
+	cfgPath := os.Getenv("KUBECONFIG")
+	if cfgPath != "" && strings.HasPrefix(cfgPath, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		_ = os.Setenv("KUBECONFIG", strings.Replace(cfgPath, "~", home, 1))
+	}
+}
