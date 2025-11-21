@@ -57,30 +57,34 @@ Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** 
 
 - [x] Fractional GPU and flexible oversubscription
 - [x] Remote GPU sharing with SOTA GPU-over-IP technology, less than 4% performance loss
-- [x] GPU VRAM expansion and hot/warm/cold tiering
-- [ ] None NVIDIA GPU/NPU vendor support
+- [x] GPU VRAM expansion and hot/cold tiering
+- [x] None NVIDIA GPU/NPU vendor support
 
 ### Pooling & Scheduling & Management
 
 - [x] GPU/NPU pool management in Kubernetes
-- [x] GPU-first scheduling and allocation, with single TFlops/MB precision
-- [x] GPU node auto provisioning/termination
+- [x] GPU-first scheduling and allocation, with 1 TFLOPs, 1% Computing, 1 MB precision
+- [x] GPU node auto provisioning/termination, Karpenter integration
 - [x] GPU compaction/bin-packing
+- [x] Take full control of GPU allocation with precision targeting by vendor, model, device index, and more
 - [x] Seamless onboarding experience for Pytorch, TensorFlow, llama.cpp, vLLM, Tensor-RT, SGlang and all popular AI training/serving frameworks
+- [x] Seamless migration from existing NVIDIA operator and device-plugin stack
 - [x] Centralized Dashboard & Control Plane
 - [x] GPU-first autoscaling policies, auto set requests/limits/replicas
 - [x] Request multiple vGPUs with group scheduling for large models
 - [x] Support different QoS levels
+- [x] Hardware partitioned mode isolation like NVIDIA Dynamic MIG
+- [x] Support Kubernetes dynamic resource allocation (DRA) API
 
 ### Enterprise Features
 
 - [x] GPU live-migration, snapshot and restore GPU context cross cluster
 - [ ] AI model registry and preloading, build your own private MaaS(Model-as-a-Service)
-- [ ] Advanced auto-scaling policies, scale to zero, rebalance of hot GPUs
+- [x] Advanced auto-scaling policies, scale to zero, rebalance of hot GPUs
 - [ ] Advanced observability features, detailed metrics & tracing/profiling of CUDA calls
-- [ ] Monetize your GPU cluster by multi-tenancy usage measurement & billing report
-- [ ] Enterprise level high availability and resilience, support topology aware scheduling, GPU node auto failover etc.
-- [ ] Enterprise level security, complete on-premise deployment support
+- [x] Monetize your GPU cluster by multi-tenancy usage measurement & billing report
+- [x] Enterprise level high availability and resilience, support topology aware scheduling, GPU node auto failover etc.
+- [x] Enterprise level security, complete on-premise deployment support
 - [ ] Enterprise level compliance, SSO/SAML support, advanced audit, ReBAC control, SOC2 and other compliance reports available
 
 ### 🗳️ Platform Support

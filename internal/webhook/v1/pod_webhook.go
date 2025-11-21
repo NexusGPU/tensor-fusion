@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -293,8 +294,8 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	// Index must be assigned in webhook stage since scheduler cannot modify Pod
 	// This is a special index resource (1-512), not a real device resource
 	// Index is assigned in ascending order (1, 2, 3, ...) via distributed lock (leader election)
-	// index := m.assignDeviceAllocationIndex(ctx, pod)
-	// log.FromContext(ctx).Info("assigned device allocation index successfully", "index", index, "pod", pod.Name)
+	index := m.assignDeviceAllocationIndex(ctx, pod)
+	log.FromContext(ctx).Info("assigned device allocation index successfully", "index", index, "pod", pod.Name)
 
 	for _, containerIndex := range containerIndices {
 		container := &pod.Spec.Containers[containerIndex]
@@ -331,7 +332,10 @@ func (m *TensorFusionPodMutator) patchTFClient(
 			container.Resources.Limits = make(corev1.ResourceList)
 		}
 		// Limit is set to actual index value (1-512) for Device Plugin to match Pod
-		// container.Resources.Limits[constants.PodIndexAnnotation] = resource.MustParse(strconv.Itoa(index))
+		// ResourceFit of dummy device already ignored in TF scheduler
+		container.Resources.Limits[constants.PodIndexAnnotation] = resource.MustParse(strconv.Itoa(index))
+		// Request set to zero to avoid Karpenter node provision issues when pre-scheduling
+		container.Resources.Requests[constants.PodIndexAnnotation] = resource.MustParse("0")
 
 		if !isLocalGPU {
 			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)

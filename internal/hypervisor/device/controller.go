@@ -1,0 +1,404 @@
+package device
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
+	"k8s.io/klog/v2"
+)
+
+// Controller manages GPU device discovery, allocation, and lifecycle
+type Controller struct {
+	ctx               context.Context
+	mu                sync.RWMutex
+	devices           map[string]*api.DeviceInfo       // key: device UUID
+	allocations       map[string]*api.DeviceAllocation // key: worker UID
+	deviceToAlloc     map[string][]string              // device UUID -> []worker UID
+	accelerator       *AcceleratorInterface
+	discoveryInterval time.Duration
+}
+
+// NewController creates a new device manager
+func NewController(ctx context.Context, acceleratorLibPath string, discoveryInterval time.Duration) (framework.DeviceController, error) {
+	accel, err := NewAcceleratorInterface(acceleratorLibPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create accelerator interface: %w", err)
+	}
+
+	return &Controller{
+		ctx:               ctx,
+		devices:           make(map[string]*api.DeviceInfo),
+		allocations:       make(map[string]*api.DeviceAllocation),
+		deviceToAlloc:     make(map[string][]string),
+		accelerator:       accel,
+		discoveryInterval: discoveryInterval,
+	}, nil
+}
+
+// DiscoverDevices discovers all available GPU devices
+func (m *Controller) StartDiscoverDevices() error {
+	// Initial device discovery
+	if err := m.discoverDevices(); err != nil {
+		return fmt.Errorf("initial device discovery failed: %w", err)
+	}
+
+	go m.periodicDiscovery()
+	return nil
+}
+
+// discoverDevices discovers all available GPU devices
+func (m *Controller) discoverDevices() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Get all devices at once
+	devices, err := m.accelerator.GetAllDevices()
+	if err != nil {
+		return fmt.Errorf("failed to get all devices: %w", err)
+	}
+
+	// Update device map
+	for _, device := range devices {
+		m.devices[device.UUID] = device
+	}
+
+	return nil
+}
+
+// periodicDiscovery periodically discovers devices
+func (m *Controller) periodicDiscovery() {
+	ticker := time.NewTicker(m.discoveryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			if err := m.discoverDevices(); err != nil {
+				// Log error but continue
+				continue
+			}
+		}
+	}
+}
+
+// GetDevices returns all discovered devices
+func (m *Controller) GetDevices() []*api.DeviceInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	devices := make([]*api.DeviceInfo, 0, len(m.devices))
+	for _, device := range m.devices {
+		devices = append(devices, device)
+	}
+	return devices
+}
+
+// getDevice returns a device by UUID (internal method)
+func (m *Controller) getDevice(uuid string) (*api.DeviceInfo, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	device, exists := m.devices[uuid]
+	return device, exists
+}
+
+// Allocate allocates devices for a pod request
+func (m *Controller) Allocate(req *api.DeviceAllocateRequest) (*api.DeviceAllocateResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Validate devices exist
+	for _, deviceUUID := range req.DeviceUUIDs {
+		if _, exists := m.devices[deviceUUID]; !exists {
+			return &api.DeviceAllocateResponse{
+				Success: false,
+				ErrMsg:  fmt.Sprintf("device not found: %s", deviceUUID),
+			}, nil
+		}
+	}
+
+	// Create allocation record
+	allocation := &api.DeviceAllocation{
+		DeviceUUID:    req.DeviceUUIDs[0], // Use first device for now
+		PodUID:        req.WorkerUID,
+		WorkerID:      req.WorkerUID,
+		IsolationMode: req.IsolationMode,
+		TemplateID:    req.TemplateID,
+		MemoryLimit:   req.MemoryLimitBytes,
+		ComputeLimit:  req.ComputeLimitUnits,
+		AllocatedAt:   time.Now(),
+		Labels:        make(map[string]string), // Set by backend if available
+		Annotations:   make(map[string]string), // Set by backend if available
+	}
+
+	// Handle partitioned mode
+	if req.IsolationMode == api.IsolationModePartitioned && req.TemplateID != "" {
+		deviceUUID := req.DeviceUUIDs[0]
+		partitionUUID, overhead, err := m.accelerator.AssignPartition(req.TemplateID, deviceUUID)
+		if err != nil {
+			return &api.DeviceAllocateResponse{
+				Success: false,
+				ErrMsg:  fmt.Sprintf("failed to assign partition: %v", err),
+			}, nil
+		}
+		allocation.PartitionUUID = partitionUUID
+		// Adjust memory limit if needed
+		if allocation.MemoryLimit > 0 && overhead > 0 {
+			allocation.MemoryLimit -= overhead
+		}
+	}
+
+	// Store allocation
+	m.allocations[req.WorkerUID] = allocation
+
+	// Update device to allocation mapping
+	for _, deviceUUID := range req.DeviceUUIDs {
+		m.deviceToAlloc[deviceUUID] = append(m.deviceToAlloc[deviceUUID], req.WorkerUID)
+	}
+
+	return &api.DeviceAllocateResponse{
+		DeviceNodes: req.DeviceUUIDs,
+		Annotations: make(map[string]string),
+		Mounts:      make(map[string]string),
+		EnvVars:     make(map[string]string),
+		Success:     true,
+	}, nil
+}
+
+// Deallocate de-allocates devices for a pod
+func (m *Controller) Deallocate(podUID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	allocation, exists := m.allocations[podUID]
+	if !exists {
+		return fmt.Errorf("allocation not found for pod %s", podUID)
+	}
+
+	// Handle partitioned mode cleanup
+	if allocation.IsolationMode == api.IsolationModePartitioned && allocation.TemplateID != "" {
+		if err := m.accelerator.RemovePartition(allocation.TemplateID, allocation.DeviceUUID); err != nil {
+			// Log error but continue
+			klog.Errorf("failed to remove partition: %v", err)
+		}
+	}
+
+	// Remove from allocations
+	delete(m.allocations, podUID)
+
+	// Remove from device mapping
+	if podUIDs, exists := m.deviceToAlloc[allocation.DeviceUUID]; exists {
+		for i, uid := range podUIDs {
+			if uid == podUID {
+				m.deviceToAlloc[allocation.DeviceUUID] = append(podUIDs[:i], podUIDs[i+1:]...)
+				break
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetAllocation returns allocation for a pod
+func (m *Controller) GetAllocation(workerUID string) (*api.DeviceAllocation, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	allocation, exists := m.allocations[workerUID]
+	return allocation, exists
+}
+
+// UpdateAllocationLabelsAndAnnotations updates labels and annotations for an existing allocation
+func (m *Controller) UpdateAllocationLabelsAndAnnotations(workerUID string, labels, annotations map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	allocation, exists := m.allocations[workerUID]
+	if !exists {
+		return
+	}
+
+	if labels != nil {
+		allocation.Labels = labels
+	}
+	if annotations != nil {
+		allocation.Annotations = annotations
+	}
+}
+
+// Start implements framework.DeviceController
+func (m *Controller) Start() error {
+	// Start device discovery
+	return m.StartDiscoverDevices()
+}
+
+// DiscoverDevices implements framework.DeviceController
+func (m *Controller) DiscoverDevices() error {
+	return m.discoverDevices()
+}
+
+// AllocateDevice implements framework.DeviceController
+func (m *Controller) AllocateDevice(request *api.DeviceAllocateRequest) (*api.DeviceAllocateResponse, error) {
+	return m.Allocate(request)
+}
+
+// ListDevices implements framework.DeviceController
+func (m *Controller) ListDevices() ([]*api.DeviceInfo, error) {
+	return m.GetDevices(), nil
+}
+
+// DevicesUpdates implements framework.DeviceController
+func (m *Controller) DevicesUpdates() (<-chan []*api.DeviceInfo, error) {
+	ch := make(chan []*api.DeviceInfo, 1)
+	// Send initial device list
+	go func() {
+		devices := m.GetDevices()
+		select {
+		case ch <- devices:
+		default:
+		}
+		// TODO: Implement proper device updates channel with periodic updates
+		// Channel will be closed when controller is stopped
+	}()
+	return ch, nil
+}
+
+// GetDevice implements framework.DeviceController
+func (m *Controller) GetDevice(deviceUUID string) (*api.DeviceInfo, error) {
+	device, exists := m.getDevice(deviceUUID)
+	if !exists {
+		return nil, fmt.Errorf("device not found: %s", deviceUUID)
+	}
+	return device, nil
+}
+
+// GetDeviceAllocations implements framework.DeviceController
+func (m *Controller) GetDeviceAllocations(deviceUUID string) ([]*api.DeviceAllocation, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if deviceUUID == "" {
+		// Return all allocations
+		allocations := make([]*api.DeviceAllocation, 0, len(m.allocations))
+		for _, allocation := range m.allocations {
+			allocations = append(allocations, allocation)
+		}
+		return allocations, nil
+	}
+
+	// Return allocations for specific device
+	workerUIDs := m.deviceToAlloc[deviceUUID]
+	allocations := make([]*api.DeviceAllocation, 0, len(workerUIDs))
+	for _, workerUID := range workerUIDs {
+		if allocation, exists := m.allocations[workerUID]; exists {
+			allocations = append(allocations, allocation)
+		}
+	}
+	return allocations, nil
+}
+
+// GetDeviceAllocationUpdates implements framework.DeviceController
+func (m *Controller) GetDeviceAllocationUpdates(deviceUUID string, allocationID string) (<-chan []*api.DeviceAllocation, error) {
+	ch := make(chan []*api.DeviceAllocation, 1)
+	// Send initial allocation list
+	go func() {
+		allocations, err := m.GetDeviceAllocations(deviceUUID)
+		if err == nil {
+			select {
+			case ch <- allocations:
+			default:
+			}
+		}
+		// TODO: Implement proper allocation updates channel with periodic updates
+		// Channel will be closed when controller is stopped
+	}()
+	return ch, nil
+}
+
+// GetGPUMetrics implements framework.DeviceController
+func (m *Controller) GetGPUMetrics() (map[string]*api.GPUUsageMetrics, error) {
+	m.mu.RLock()
+	devices := make([]*api.DeviceInfo, 0, len(m.devices))
+	for _, device := range m.devices {
+		devices = append(devices, device)
+	}
+	m.mu.RUnlock()
+
+	// Get device metrics from accelerator interface
+	// Note: This requires GetDeviceMetrics from accelerator.h which needs to be implemented
+	// For now, we'll use process-level metrics to aggregate
+	result := make(map[string]*api.GPUUsageMetrics)
+
+	// Get memory utilization from processes
+	memUtils, err := m.accelerator.GetProcessMemoryUtilization()
+	if err != nil {
+		// If we can't get metrics, return empty metrics for each device
+		for _, device := range devices {
+			result[device.UUID] = &api.GPUUsageMetrics{
+				DeviceUUID: device.UUID,
+			}
+		}
+		return result, nil
+	}
+
+	// Aggregate memory usage per device
+	deviceMemoryUsed := make(map[string]uint64)
+	for _, memUtil := range memUtils {
+		deviceMemoryUsed[memUtil.DeviceUUID] += memUtil.UsedBytes
+	}
+
+	// Get compute utilization
+	computeUtils, err := m.accelerator.GetProcessComputeUtilization()
+	if err != nil {
+		// Continue with memory metrics only
+		computeUtils = []api.ComputeUtilization{}
+	}
+
+	// Aggregate compute usage per device
+	deviceComputePercent := make(map[string]float64)
+	deviceComputeTflops := make(map[string]float64)
+	for _, computeUtil := range computeUtils {
+		deviceComputePercent[computeUtil.DeviceUUID] += computeUtil.UtilizationPercent
+		deviceComputeTflops[computeUtil.DeviceUUID] += computeUtil.TflopsUsed
+	}
+
+	// Build metrics for each device
+	for _, device := range devices {
+		memoryUsed := deviceMemoryUsed[device.UUID]
+		memoryPercent := 0.0
+		if device.TotalMemory > 0 {
+			memoryPercent = float64(memoryUsed) / float64(device.TotalMemory) * 100.0
+		}
+
+		result[device.UUID] = &api.GPUUsageMetrics{
+			DeviceUUID:        device.UUID,
+			MemoryBytes:       memoryUsed,
+			MemoryPercentage:  memoryPercent,
+			ComputePercentage: deviceComputePercent[device.UUID],
+			ComputeTflops:     deviceComputeTflops[device.UUID],
+		}
+	}
+
+	return result, nil
+}
+
+// GetProcessComputeUtilization exposes accelerator interface method
+func (m *Controller) GetProcessComputeUtilization() ([]api.ComputeUtilization, error) {
+	return m.accelerator.GetProcessComputeUtilization()
+}
+
+// GetProcessMemoryUtilization exposes accelerator interface method
+func (m *Controller) GetProcessMemoryUtilization() ([]api.MemoryUtilization, error) {
+	return m.accelerator.GetProcessMemoryUtilization()
+}
+
+// Close closes the device controller and unloads the accelerator library
+func (m *Controller) Close() error {
+	return m.accelerator.Close()
+}

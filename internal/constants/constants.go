@@ -83,7 +83,10 @@ const (
 	// GPUModelAnnotation specifies the required GPU model (e.g., "A100", "H100")
 	GPUModelAnnotation = Domain + "/gpu-model"
 	// GPU ID list is assigned by scheduler, should not specified by user
-	GPUDeviceIDsAnnotation            = Domain + "/gpu-ids"
+	GPUDeviceIDsAnnotation = Domain + "/gpu-ids"
+	// PartitionTemplateIDAnnotation is the partition UUID assigned to a pod in partitioned mode
+	// This is read by accelerator.c to mock slice GPU like MIG does
+	PartitionTemplateIDAnnotation     = Domain + "/partition"
 	DedicatedGPUAnnotation            = Domain + "/dedicated-gpu"
 	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
 	PricingAnnotation                 = Domain + "/hourly-pricing"
@@ -233,3 +236,6 @@ const DefaultEvictionProtectionPriceRatio = 1.2
 const NodeCriticalPriorityClassName = "system-node-critical"
 const KarpenterNodeClaimKind = "NodeClaim"
 const KarpenterNodePoolKind = "NodePool"
+
+// Vendor label key for multi-vendor support
+const AcceleratorLabelVendor = Domain + "/hardware-vendor"

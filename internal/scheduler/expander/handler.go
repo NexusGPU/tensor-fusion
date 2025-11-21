@@ -97,18 +97,18 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	}
 
 	// Step 1: Simulate scheduling without GPU plugins
-	gpuNodes, err := e.simulateSchedulingWithoutGPU(ctx, pod)
+	suitableNodes, err := e.simulateSchedulingWithoutGPU(ctx, pod)
 	if err != nil {
 		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
-			"can not schedule on any nodes even without GPU constraints, manual check required. error: %w", err)
-		e.logger.Info("Pod schedulable but no GPU nodes available, manual check required",
+			"can not schedule on any nodes even without GPU constraints, karpenter should take over expansion. error: %w", err)
+		e.logger.Info("Pod schedulable but no GPU nodes available, karpenter should take over expansion",
 			"namespace", pod.Namespace, "pod", pod.Name, "error", err)
 		return nil
 	}
-	if len(gpuNodes) == 0 {
+	if len(suitableNodes) == 0 {
 		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
-			"can not schedule on any nodes, manual check required, 0 fit nodes")
-		e.logger.Info("Pod schedulable but no GPU nodes available, manual check required",
+			"can not schedule on any nodes even without GPU constraints, karpenter should take over expansion, 0 fit nodes")
+		e.logger.Info("Pod schedulable but no GPU nodes available, karpenter should take over expansion",
 			"namespace", pod.Namespace, "pod", pod.Name)
 		return nil
 	}
@@ -117,8 +117,8 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	nodeGPUs := e.allocator.GetNodeGpuStore()
 	allGpus := []*tfv1.GPU{}
 	// Shuffle gpuNodes to avoid always using the same node in the same region
-	mutable.Shuffle(gpuNodes)
-	for _, gpuNode := range gpuNodes {
+	mutable.Shuffle(suitableNodes)
+	for _, gpuNode := range suitableNodes {
 		if gpus, ok := nodeGPUs[gpuNode.Name]; ok {
 			for _, gpu := range gpus {
 				allGpus = append(allGpus, gpu)
@@ -158,7 +158,7 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 
 	// Step 4: Caused by insufficient GPU resources, try find node util it satisfies the pod
 	preScheduled := false
-	for _, gpuNode := range gpuNodes {
+	for _, gpuNode := range suitableNodes {
 		// when node is not owned by any known provisioner, skip check, util find a node can be expanded
 		if len(gpuNode.OwnerReferences) == 0 {
 			continue
