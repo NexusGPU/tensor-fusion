@@ -166,7 +166,7 @@ func getAllocationNamespace(allocation *api.WorkerAllocation) string {
 }
 
 func getDeviceUUIDs(allocation *api.WorkerAllocation) []string {
-	var uuids []string
+	uuids := make([]string, 0, len(allocation.DeviceInfos))
 	for _, device := range allocation.DeviceInfos {
 		uuids = append(uuids, device.UUID)
 	}
