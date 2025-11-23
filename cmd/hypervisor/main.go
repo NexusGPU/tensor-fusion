@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/cmd/hypervisor/shm_init"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
-	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/backend/kubernetes"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/backend/single_node"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/device"
@@ -36,18 +36,21 @@ var (
 		12*time.Hour, "Device discovery interval")
 	metricsPath = flag.String("metrics-output-path", "metrics.log", "Path to metrics output file")
 
-	httpPort = flag.Int("port", 8000, "HTTP port for hypervisor API")
+	httpPort = flag.Int("port", int(constants.HypervisorDefaultPortNumber), "HTTP port for hypervisor API")
 )
 
 const (
-	MOUNT_SHM_SUBCOMMAND    = "mount-shm"
 	TFHardwareVendorEnv     = "TF_HARDWARE_VENDOR"
 	TFAcceleratorLibPathEnv = "TF_ACCELERATOR_LIB_PATH"
 )
 
+const (
+	MountShmSubcommand = "mount-shm"
+)
+
 func main() {
 	// Check for subcommands (used inside init container for initializing shared memory of limiter of soft isolation)
-	if len(os.Args) > 1 && os.Args[1] == MOUNT_SHM_SUBCOMMAND {
+	if len(os.Args) > 1 && os.Args[1] == MountShmSubcommand {
 		shm_init.RunMountShm()
 		return
 	}
@@ -81,18 +84,16 @@ func main() {
 	klog.Info("Device manager started")
 
 	// Parse isolation mode
-	var mode api.IsolationMode
+	var mode tfv1.IsolationModeType
 	switch *isolationMode {
-	case "shared":
-		mode = api.IsolationModeShared
-	case "soft":
-		mode = api.IsolationModeSoft
-	case "hard":
-		mode = api.IsolationModeHard
-	case "partitioned":
-		mode = api.IsolationModePartitioned
-	default:
-		klog.Fatalf("Invalid isolation mode: %s", *isolationMode)
+	case string(tfv1.IsolationModeShared):
+		mode = tfv1.IsolationModeShared
+	case string(tfv1.IsolationModeSoft):
+		mode = tfv1.IsolationModeSoft
+	case string(tfv1.IsolationModeHard):
+		mode = tfv1.IsolationModeHard
+	case string(tfv1.IsolationModePartitioned):
+		mode = tfv1.IsolationModePartitioned
 	}
 
 	// initialize data backend

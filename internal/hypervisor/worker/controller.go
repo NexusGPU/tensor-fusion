@@ -97,7 +97,7 @@ func (w *WorkerController) GetWorkerAllocation(workerUID string) (*api.DeviceAll
 	}
 	// Find allocation for this worker
 	for _, allocation := range allocations {
-		if allocation.PodUID == workerUID || allocation.WorkerID == workerUID {
+		if allocation.PodUID == workerUID || allocation.WorkerUID == workerUID {
 			return allocation, nil
 		}
 	}
@@ -163,11 +163,11 @@ func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]
 				DeviceUUID:        computeUtil.DeviceUUID,
 				ProcessID:         computeUtil.ProcessID,
 				ComputePercentage: computeUtil.UtilizationPercent,
-				ComputeTflops:     computeUtil.TflopsUsed,
+				ComputeTflops:     computeUtil.TFLOPsUsed,
 			}
 		} else {
 			processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID].ComputePercentage += computeUtil.UtilizationPercent
-			processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID].ComputeTflops += computeUtil.TflopsUsed
+			processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID].ComputeTflops += computeUtil.TFLOPsUsed
 		}
 	}
 
@@ -210,7 +210,7 @@ func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]
 
 	// Also include allocations that might not have process mappings yet
 	for _, allocation := range allocations {
-		workerUID := allocation.WorkerID
+		workerUID := allocation.WorkerUID
 		if workerUID == "" {
 			workerUID = allocation.PodUID
 		}
@@ -253,7 +253,7 @@ func (w *WorkerController) ListWorkers() ([]string, error) {
 	// Extract unique worker UIDs from allocations
 	workerSet := make(map[string]bool)
 	for _, allocation := range allocations {
-		workerUID := allocation.WorkerID
+		workerUID := allocation.WorkerUID
 		if workerUID == "" {
 			workerUID = allocation.PodUID
 		}

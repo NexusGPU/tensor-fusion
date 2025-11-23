@@ -149,18 +149,13 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 	for i := 0; i < int(cCount); i++ {
 		cInfo := &stackDevices[i]
 		devices[i] = &api.DeviceInfo{
-			UUID:            C.GoString(&cInfo.basic.uuid[0]),
-			Vendor:          C.GoString(&cInfo.basic.vendor[0]),
-			Model:           C.GoString(&cInfo.basic.model[0]),
-			Index:           int32(cInfo.basic.index),
-			NUMANode:        int32(cInfo.basic.numaNode),
-			TotalMemory:     uint64(cInfo.basic.totalMemoryBytes),
-			TotalCompute:    uint64(cInfo.basic.totalComputeUnits),
-			MaxTflops:       float64(cInfo.basic.maxTflops),
-			PCIEGen:         uint32(cInfo.basic.pcieGen),
-			PCIEWidth:       uint32(cInfo.basic.pcieWidth),
-			DriverVersion:   C.GoString(&cInfo.basic.driverVersion[0]),
-			FirmwareVersion: C.GoString(&cInfo.basic.firmwareVersion[0]),
+			UUID:      C.GoString(&cInfo.basic.uuid[0]),
+			Vendor:    C.GoString(&cInfo.basic.vendor[0]),
+			Model:     C.GoString(&cInfo.basic.model[0]),
+			Index:     int32(cInfo.basic.index),
+			NUMANode:  int32(cInfo.basic.numaNode),
+			Bytes:     uint64(cInfo.basic.totalMemoryBytes),
+			MaxTflops: float64(cInfo.basic.maxTflops),
 			Capabilities: api.DeviceCapabilities{
 				SupportsPartitioning:  bool(cInfo.capabilities.supportsPartitioning),
 				SupportsSoftIsolation: bool(cInfo.capabilities.supportsSoftIsolation),
@@ -170,57 +165,11 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 				MaxPartitions:         uint32(cInfo.capabilities.maxPartitions),
 				MaxWorkersPerDevice:   uint32(cInfo.capabilities.maxWorkersPerDevice),
 			},
-			Properties: api.DeviceProperties{
-				ClockGraphics:          uint32(cInfo.props.clockGraphics),
-				ClockSM:                uint32(cInfo.props.clockSM),
-				ClockMem:               uint32(cInfo.props.clockMem),
-				ClockAI:                uint32(cInfo.props.clockAI),
-				PowerLimit:             uint32(cInfo.props.powerLimit),
-				TemperatureThreshold:   uint32(cInfo.props.temperatureThreshold),
-				ECCEnabled:             bool(cInfo.props.eccEnabled),
-				PersistenceModeEnabled: bool(cInfo.props.persistenceModeEnabled),
-				ComputeCapability:      C.GoString(&cInfo.props.computeCapability[0]),
-				ChipType:               C.GoString(&cInfo.props.chipType[0]),
-			},
+			Properties: make(map[string]string, 0),
 		}
 	}
 
 	return devices, nil
-}
-
-// GetPartitionTemplates retrieves partition templates from the accelerator library
-func (a *AcceleratorInterface) GetPartitionTemplates(deviceIndex int32) ([]api.PartitionTemplate, error) {
-	// Allocate stack buffer for templates (max 64 templates)
-	const maxTemplates = 64
-	var cTemplates [maxTemplates]C.PartitionTemplate
-	var cCount C.size_t
-
-	//nolint:staticcheck
-	result := C.GetPartitionTemplatesWrapper(C.int32_t(deviceIndex), &cTemplates[0], C.size_t(maxTemplates), &cCount)
-	if result != C.RESULT_SUCCESS {
-		return nil, fmt.Errorf("failed to get partition templates: %d", result)
-	}
-
-	if cCount == 0 {
-		return []api.PartitionTemplate{}, nil
-	}
-
-	templates := make([]api.PartitionTemplate, int(cCount))
-
-	for i := 0; i < int(cCount); i++ {
-		templates[i] = api.PartitionTemplate{
-			TemplateID:   C.GoString(&cTemplates[i].templateId[0]),
-			Name:         C.GoString(&cTemplates[i].name[0]),
-			MemoryBytes:  uint64(cTemplates[i].memoryBytes),
-			ComputeUnits: uint64(cTemplates[i].computeUnits),
-			Tflops:       float64(cTemplates[i].tflops),
-			SliceCount:   uint32(cTemplates[i].sliceCount),
-			IsDefault:    bool(cTemplates[i].isDefault),
-			Description:  C.GoString(&cTemplates[i].description[0]),
-		}
-	}
-
-	return templates, nil
 }
 
 // AssignPartition assigns a partition to a device
@@ -334,7 +283,7 @@ func (a *AcceleratorInterface) GetProcessComputeUtilization() ([]api.ComputeUtil
 			UtilizationPercent: float64(cu.utilizationPercent),
 			ActiveSMs:          uint64(cu.activeSMs),
 			TotalSMs:           uint64(cu.totalSMs),
-			TflopsUsed:         float64(cu.tflopsUsed),
+			TFLOPsUsed:         float64(cu.tflopsUsed),
 		}
 	}
 

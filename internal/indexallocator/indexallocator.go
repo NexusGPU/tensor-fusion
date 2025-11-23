@@ -17,11 +17,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
-const (
-	IndexRangeStart = 1
-	IndexRangeEnd   = 512
-)
-
 // IndexAllocator manages allocation of 1-512 temporary indices for Pod-to-DevicePlugin communication
 // Uses a simple atomic counter that increments from 1 to 512, then wraps around to 1
 // No bitmap tracking needed - index reuse is acceptable after 512 cycles
@@ -91,7 +86,8 @@ func (s *IndexAllocator) AssignIndex(podName string) (int, error) {
 	}
 	// Atomic increment and wrap around
 	next := atomic.AddInt64(&s.currentIndex, 1)
-	index := int((next-1)%IndexRangeEnd) + IndexRangeStart
 	log.FromContext(s.ctx).Info("assigned index successfully", "podName", podName, "index", index)
+	index := int((next-1)%constants.IndexRangeEnd) + constants.IndexRangeStart
+
 	return index, nil
 }

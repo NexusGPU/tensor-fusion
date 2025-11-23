@@ -136,6 +136,14 @@ type AllocatedPartition struct {
 
 	// AllocatedAt is when this partition was allocated
 	AllocatedAt metav1.Time `json:"allocatedAt"`
+
+	// AllocatedSlotStart is the starting slot position where this partition is allocated
+	// This is the actual hardware slot position (0-based index)
+	AllocatedSlotStart *uint32 `json:"allocatedSlotStart,omitempty"`
+
+	// AllocatedSlotEnd is the ending slot position (exclusive) where this partition is allocated
+	// The partition occupies slots [AllocatedSlotStart, AllocatedSlotEnd)
+	AllocatedSlotEnd *uint32 `json:"allocatedSlotEnd,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Provisioning;Running;Unknown;Destroying;Migrating
