@@ -98,12 +98,12 @@ func (w *WorkerController) AllocateWorker(request *api.WorkerInfo) (*api.WorkerA
 	if err != nil {
 		return nil, fmt.Errorf("failed to list devices: %w", err)
 	}
-	
+
 	deviceMap := make(map[string]*api.DeviceInfo)
 	for _, device := range devices {
 		deviceMap[device.UUID] = device
 	}
-	
+
 	for _, deviceUUID := range request.AllocatedDevices {
 		if _, exists := deviceMap[deviceUUID]; !exists {
 			return nil, fmt.Errorf("device not found: %s", deviceUUID)
@@ -112,7 +112,7 @@ func (w *WorkerController) AllocateWorker(request *api.WorkerInfo) (*api.WorkerA
 
 	// Store allocation (this logic would ideally be in device controller's state management)
 	// For now, we'll create the allocation and let device controller track it
-	
+
 	// Create WorkerAllocation with WorkerInfo and DeviceInfos
 	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
 	for _, deviceUUID := range request.AllocatedDevices {

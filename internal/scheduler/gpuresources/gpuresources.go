@@ -623,7 +623,7 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 	}
 
 	// Compose allocation request for the pod passed in by scheduler framework
-	allocRequest, _, err := s.allocator.ComposeAllocationRequest(pod)
+	allocRequest, _, err := utils.ComposeAllocationRequest(s.ctx, pod)
 	if err != nil {
 		logger.V(5).Info("Failed to compose allocation request for pod, skip",
 			"pod", klog.KObj(pod), "error", err)
