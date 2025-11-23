@@ -79,6 +79,18 @@ spec:
                       description: AllocatedAt is when this partition was allocated
                       format: date-time
                       type: string
+                    allocatedSlotEnd:
+                      description: |-
+                        AllocatedSlotEnd is the ending slot position (exclusive) where this partition is allocated
+                        The partition occupies slots [AllocatedSlotStart, AllocatedSlotEnd)
+                      format: int32
+                      type: integer
+                    allocatedSlotStart:
+                      description: |-
+                        AllocatedSlotStart is the starting slot position where this partition is allocated
+                        This is the actual hardware slot position (0-based index)
+                      format: int32
+                      type: integer
                     namespace:
                       description: Namespace is the namespace of the pod using this
                         partition
