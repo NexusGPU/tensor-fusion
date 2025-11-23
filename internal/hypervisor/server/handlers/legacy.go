@@ -54,13 +54,13 @@ func (h *LegacyHandler) HandleGetLimiter(c *gin.Context) {
 		}
 
 		var requests, limits *api.ResourceInfo
-		if allocation.MemoryLimit > 0 {
+		if allocation.WorkerInfo != nil && allocation.WorkerInfo.MemoryLimitBytes > 0 {
 			limits = &api.ResourceInfo{
-				Vram: &allocation.MemoryLimit,
+				Vram: &allocation.WorkerInfo.MemoryLimitBytes,
 			}
 		}
-		if allocation.ComputeLimit > 0 {
-			computeLimit := float64(allocation.ComputeLimit)
+		if allocation.WorkerInfo != nil && allocation.WorkerInfo.ComputeLimitUnits > 0 {
+			computeLimit := float64(allocation.WorkerInfo.ComputeLimitUnits)
 			if limits == nil {
 				limits = &api.ResourceInfo{}
 			}
@@ -129,8 +129,8 @@ func (h *LegacyHandler) HandleGetPods(c *gin.Context) {
 		var vramLimit *uint64
 		var qosLevel *string
 
-		if allocation.MemoryLimit > 0 {
-			vramLimit = &allocation.MemoryLimit
+		if allocation.WorkerInfo != nil && allocation.WorkerInfo.MemoryLimitBytes > 0 {
+			vramLimit = &allocation.WorkerInfo.MemoryLimitBytes
 		}
 
 		// Try to get QoS from allocation or default to medium
@@ -138,9 +138,9 @@ func (h *LegacyHandler) HandleGetPods(c *gin.Context) {
 		qosLevel = &qos
 
 		pods = append(pods, api.PodInfo{
-			PodName:     allocation.PodName,
-			Namespace:   allocation.Namespace,
-			GPUIDs:      []string{allocation.DeviceUUID},
+			PodName:     getAllocationPodName(allocation),
+			Namespace:   getAllocationNamespace(allocation),
+			GPUIDs:      getDeviceUUIDs(allocation),
 			TflopsLimit: tflopsLimit,
 			VramLimit:   vramLimit,
 			QoSLevel:    qosLevel,
@@ -148,6 +148,29 @@ func (h *LegacyHandler) HandleGetPods(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, api.ListPodsResponse{Pods: pods})
+}
+
+// Helper functions for WorkerAllocation field access
+func getAllocationPodName(allocation *api.WorkerAllocation) string {
+	if allocation.WorkerInfo != nil {
+		return allocation.WorkerInfo.PodName
+	}
+	return ""
+}
+
+func getAllocationNamespace(allocation *api.WorkerAllocation) string {
+	if allocation.WorkerInfo != nil {
+		return allocation.WorkerInfo.Namespace
+	}
+	return ""
+}
+
+func getDeviceUUIDs(allocation *api.WorkerAllocation) []string {
+	var uuids []string
+	for _, device := range allocation.DeviceInfos {
+		uuids = append(uuids, device.UUID)
+	}
+	return uuids
 }
 
 // HandleGetProcesses handles GET /api/v1/process

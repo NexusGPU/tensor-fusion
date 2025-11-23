@@ -4,6 +4,9 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
+// IsolationMode represents the isolation mode for worker processes
+type IsolationMode = tfv1.IsolationModeType
+
 type WorkerInfo struct {
 	WorkerUID         string
 	AllocatedDevices  []string
