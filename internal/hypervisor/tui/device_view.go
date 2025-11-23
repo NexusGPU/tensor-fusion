@@ -132,11 +132,11 @@ func updateDeviceDetail(
 	if err == nil && len(allocations) > 0 {
 		content.WriteString(TitleStyle.Render("Allocations\n\n"))
 		for _, alloc := range allocations {
-			content.WriteString(fmt.Sprintf("  Worker: %s\n", alloc.WorkerUID))
-			content.WriteString(fmt.Sprintf("  Pod: %s/%s\n", alloc.Namespace, alloc.PodName))
-			content.WriteString(fmt.Sprintf("  Mode: %s\n", alloc.IsolationMode))
-			if alloc.MemoryLimit > 0 {
-				content.WriteString(fmt.Sprintf("  Memory Limit: %s\n", formatBytes(alloc.MemoryLimit)))
+			content.WriteString(fmt.Sprintf("  Worker: %s\n", alloc.WorkerInfo.WorkerUID))
+			content.WriteString(fmt.Sprintf("  Pod: %s/%s\n", alloc.WorkerInfo.Namespace, alloc.WorkerInfo.PodName))
+			content.WriteString(fmt.Sprintf("  Mode: %s\n", alloc.WorkerInfo.IsolationMode))
+			if alloc.WorkerInfo.MemoryLimitBytes > 0 {
+				content.WriteString(fmt.Sprintf("  Memory Limit: %s\n", formatBytes(alloc.WorkerInfo.MemoryLimitBytes)))
 			}
 			content.WriteString("\n")
 		}
