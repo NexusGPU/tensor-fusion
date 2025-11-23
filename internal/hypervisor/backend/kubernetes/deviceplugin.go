@@ -51,6 +51,7 @@ type DevicePlugin struct {
 
 	ctx              context.Context
 	deviceController framework.DeviceController
+	workerController framework.WorkerController
 	kubeletClient    *PodCacheManager
 
 	server       *grpc.Server
@@ -64,10 +65,11 @@ type DevicePlugin struct {
 }
 
 // NewDevicePlugin creates a new device plugin instance
-func NewDevicePlugin(ctx context.Context, deviceController framework.DeviceController, kubeletClient *PodCacheManager) *DevicePlugin {
+func NewDevicePlugin(ctx context.Context, deviceController framework.DeviceController, workerController framework.WorkerController, kubeletClient *PodCacheManager) *DevicePlugin {
 	return &DevicePlugin{
 		ctx:              ctx,
 		deviceController: deviceController,
+		workerController: workerController,
 		kubeletClient:    kubeletClient,
 		socketPath:       filepath.Join(DevicePluginPath, DevicePluginEndpoint),
 		resourceName:     ResourceName,
@@ -339,47 +341,37 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 			return nil, fmt.Errorf("no device UUIDs found in pod annotations for pod %s/%s", workerInfo.Namespace, workerInfo.PodName)
 		}
 
-		// Call device controller to allocate
-		allocResp, err := dp.deviceController.AllocateDevice(workerInfo)
+		// Call worker controller to allocate
+		allocResp, err := dp.workerController.AllocateWorker(workerInfo)
 		if err != nil {
 			return nil, fmt.Errorf("failed to allocate device: %w", err)
 		}
 
-		if !allocResp.Success {
-			return nil, fmt.Errorf("device allocation failed: %s", allocResp.ErrMsg)
-		}
+		// WorkerAllocation doesn't need Success/ErrMsg check - if no error, allocation succeeded
 
-		// Build container response
+		// Build container response - create minimal response since allocation details are tracked separately
 		// IMPORTANT: CdiDevices must be empty to prevent dummy tensor-fusion.ai/index device
 		// from being allocated by kubelet
 		containerResp := &pluginapi.ContainerAllocateResponse{
-			Envs:       allocResp.EnvVars,
-			Mounts:     allocResp.Mounts,
-			Devices:    allocResp.Devices,
+			Envs:       make(map[string]string),
+			Mounts:     []*pluginapi.Mount{},
+			Devices:    []*pluginapi.DeviceSpec{},
 			CdiDevices: []*pluginapi.CDIDevice{}, // Empty to prevent dummy device allocation
 		}
 
-		// Add device nodes
-		for _, deviceNode := range allocResp.DeviceNodes {
-			containerResp.Devices = append(containerResp.Devices, &pluginapi.DeviceSpec{
-				ContainerPath: deviceNode,
-				HostPath:      deviceNode,
-				Permissions:   "rw",
-			})
-		}
-
-		// Add mounts
-		for hostPath, containerPath := range allocResp.Mounts {
-			containerResp.Mounts = append(containerResp.Mounts, &pluginapi.Mount{
-				ContainerPath: containerPath,
-				HostPath:      hostPath,
-				ReadOnly:      false,
-			})
-		}
-
-		// Add annotations as environment variables
-		for key, value := range allocResp.Annotations {
-			containerResp.Envs[key] = value
+		// Add basic environment variables for worker info
+		if allocResp.WorkerInfo != nil {
+			containerResp.Envs["TF_WORKER_UID"] = allocResp.WorkerInfo.WorkerUID
+			containerResp.Envs["TF_POD_UID"] = allocResp.WorkerInfo.PodUID
+			
+			// Add device UUIDs as environment variable
+			if len(allocResp.DeviceInfos) > 0 {
+				deviceUUIDs := make([]string, 0, len(allocResp.DeviceInfos))
+				for _, device := range allocResp.DeviceInfos {
+					deviceUUIDs = append(deviceUUIDs, device.UUID)
+				}
+				containerResp.Envs["TF_DEVICE_UUIDS"] = fmt.Sprintf("%v", deviceUUIDs)
+			}
 		}
 
 		// Get pod to extract labels and annotations
@@ -404,12 +396,12 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 		}
 
 		// Store allocation info in kubelet client (for backward compatibility)
-		allocation := &api.WorkerAllocation{
-			WorkerInfo:  workerInfo,
-			DeviceInfos: nil,
+		workerDetail := &api.WorkerDetail{
+			WorkerUID:  workerInfo.WorkerUID,
+			Allocation: allocResp,
 		}
 
-		if err := dp.kubeletClient.StoreAllocation(workerInfo.PodUID, allocation); err != nil {
+		if err := dp.kubeletClient.StoreAllocation(workerInfo.PodUID, workerDetail); err != nil {
 			klog.Warningf("Failed to store allocation: %v", err)
 		}
 

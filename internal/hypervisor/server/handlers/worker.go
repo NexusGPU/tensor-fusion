@@ -85,10 +85,14 @@ func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 
 	// Filter metrics for this worker
 	workerMetrics := make(map[string]map[string]map[string]*api.WorkerMetrics)
-	if allMetrics, exists := metrics[allocation.DeviceUUID]; exists {
-		if wm, exists := allMetrics[workerID]; exists {
-			workerMetrics[allocation.DeviceUUID] = map[string]map[string]*api.WorkerMetrics{
-				workerID: wm,
+	// Get metrics for all devices in the allocation
+	for _, device := range allocation.DeviceInfos {
+		if allMetrics, exists := metrics[device.UUID]; exists {
+			if wm, exists := allMetrics[workerID]; exists {
+				if workerMetrics[device.UUID] == nil {
+					workerMetrics[device.UUID] = make(map[string]map[string]*api.WorkerMetrics)
+				}
+				workerMetrics[device.UUID][workerID] = wm
 			}
 		}
 	}

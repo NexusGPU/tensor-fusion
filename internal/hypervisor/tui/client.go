@@ -100,8 +100,14 @@ func (c *Client) GetDeviceAllocations(ctx context.Context, uuid string) ([]*api.
 
 	allocations := make([]*api.DeviceAllocation, 0)
 	for _, worker := range workers {
-		if worker.Allocation != nil && worker.Allocation.DeviceUUID == uuid {
-			allocations = append(allocations, worker.Allocation)
+		if worker.Allocation != nil {
+			// Check if any device in the allocation matches the UUID
+			for _, device := range worker.Allocation.DeviceInfos {
+				if device.UUID == uuid {
+					allocations = append(allocations, worker.Allocation)
+					break
+				}
+			}
 		}
 	}
 

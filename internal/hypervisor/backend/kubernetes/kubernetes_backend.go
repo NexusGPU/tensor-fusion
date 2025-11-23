@@ -16,6 +16,7 @@ type KubeletBackend struct {
 	ctx context.Context
 
 	deviceController framework.DeviceController
+	workerController framework.WorkerController
 	kubeletClient    *PodCacheManager
 	devicePlugin     *DevicePlugin
 	deviceDetector   *external_dp.DevicePluginDetector
@@ -25,7 +26,7 @@ type KubeletBackend struct {
 	workerStopCh  chan struct{}
 }
 
-func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceController, restConfig *rest.Config) (*KubeletBackend, error) {
+func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceController, workerController framework.WorkerController, restConfig *rest.Config) (*KubeletBackend, error) {
 	// Get node name from environment or config
 	nodeName := os.Getenv(constants.HypervisorGPUNodeNameEnv)
 	if nodeName == "" {
@@ -59,6 +60,7 @@ func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceCon
 	return &KubeletBackend{
 		ctx:              ctx,
 		deviceController: deviceController,
+		workerController: workerController,
 		kubeletClient:    kubeletClient,
 		deviceDetector:   deviceDetector,
 		workerChanged:    make(chan struct{}),
@@ -73,7 +75,7 @@ func (b *KubeletBackend) Start() error {
 	klog.Info("Kubelet client started, watching pods")
 
 	// Create and start device plugin
-	b.devicePlugin = NewDevicePlugin(b.ctx, b.deviceController, b.kubeletClient)
+	b.devicePlugin = NewDevicePlugin(b.ctx, b.deviceController, b.workerController, b.kubeletClient)
 	if err := b.devicePlugin.Start(); err != nil {
 		return err
 	}

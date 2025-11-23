@@ -96,8 +96,10 @@ func main() {
 		mode = tfv1.IsolationModePartitioned
 	}
 
-	// initialize data backend
+	// initialize data backend and worker controller
 	var backend framework.Backend
+	var workerController framework.WorkerController
+	
 	switch *backendType {
 	case "kubernetes":
 		// Get Kubernetes rest config
@@ -111,18 +113,20 @@ func main() {
 		if err != nil {
 			klog.Fatalf("Failed to get Kubernetes config: %v", err)
 		}
-		backend, err = kubernetes.NewKubeletBackend(ctx, deviceController, restConfig)
+		
+		// For Kubernetes backend, create a temporary backend first, then worker controller, then final backend
+		tempBackend := single_node.NewSingleNodeBackend(ctx, deviceController)
+		workerController = worker.NewWorkerController(deviceController, mode, tempBackend)
+		backend, err = kubernetes.NewKubeletBackend(ctx, deviceController, workerController, restConfig)
 		if err != nil {
 			klog.Fatalf("Failed to create Kubernetes backend: %v", err)
 		}
 	case "simple":
 		backend = single_node.NewSingleNodeBackend(ctx, deviceController)
+		workerController = worker.NewWorkerController(deviceController, mode, backend)
 	default:
 		klog.Fatalf("Invalid backend type: %s", *backendType)
 	}
-
-	// initialize worker controller
-	workerController := worker.NewWorkerController(deviceController, mode, backend)
 	err = workerController.Start()
 	if err != nil {
 		klog.Fatalf("Failed to start worker controller: %v", err)

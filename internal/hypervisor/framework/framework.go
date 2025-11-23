@@ -9,7 +9,6 @@ type DeviceController interface {
 
 	DiscoverDevices() error
 
-	AllocateDevice(request *api.WorkerInfo) (*api.WorkerAllocation, error)
 
 	// ListDevices returns all discovered devices
 	ListDevices() ([]*api.DeviceInfo, error)
@@ -19,7 +18,7 @@ type DeviceController interface {
 
 	// GetDeviceAllocations returns device allocations
 	// If deviceUUID is empty, returns all allocations
-	GetDeviceAllocations(deviceUUID string) ([]*api.WorkerInfo, error)
+	GetDeviceAllocations(deviceUUID string) ([]*api.WorkerAllocation, error)
 
 	// DevicesUpdates returns a channel that receives device list updates
 	// The channel should be closed when Stop() is called
@@ -27,7 +26,7 @@ type DeviceController interface {
 
 	// GetDeviceAllocationUpdates returns a channel that receives allocation updates
 	// The channel should be closed when Stop() is called
-	GetDeviceAllocationUpdates(deviceUUID string, allocationID string) (<-chan []*api.WorkerInfo, error)
+	GetDeviceAllocationUpdates(deviceUUID string, allocationID string) (<-chan []*api.WorkerAllocation, error)
 
 	// GetGPUMetrics returns current GPU metrics for all devices
 	GetGPUMetrics() (map[string]*api.GPUUsageMetrics, error)
@@ -44,12 +43,15 @@ type WorkerController interface {
 
 	Stop() error
 
+	// AllocateWorker allocates devices for a worker
+	AllocateWorker(request *api.WorkerInfo) (*api.WorkerAllocation, error)
+
 	// GetWorkerAllocation returns allocation information for a worker
-	GetWorkerAllocation(workerUID string) (*api.DeviceAllocation, error)
+	GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, error)
 
 	// GetWorkerMetricsUpdates returns a channel that receives worker metrics updates
 	// The channel should be closed when Stop() is called
-	GetWorkerMetricsUpdates() (<-chan *api.DeviceAllocation, error)
+	GetWorkerMetricsUpdates() (<-chan *api.WorkerAllocation, error)
 
 	// GetWorkerMetrics returns current worker metrics for all workers
 	// Returns map keyed by device UUID, then by worker UID, then by process ID
