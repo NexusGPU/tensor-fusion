@@ -110,60 +110,6 @@ func (m *Controller) getDevice(uuid string) (*api.DeviceInfo, bool) {
 	return device, exists
 }
 
-// Allocate allocates devices for a worker request
-func (m *Controller) Allocate(req *api.WorkerInfo) (*api.DeviceAllocateResponse, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Validate devices exist
-	for _, deviceUUID := range req.AllocatedDevices {
-		if _, exists := m.devices[deviceUUID]; !exists {
-			return &api.DeviceAllocateResponse{
-				Success: false,
-				ErrMsg:  fmt.Sprintf("device not found: %s", deviceUUID),
-			}, nil
-		}
-	}
-
-	// Handle partitioned mode
-	if req.IsolationMode == tfv1.IsolationModePartitioned && req.TemplateID != "" {
-		partitionUUID, overhead, err := m.accelerator.AssignPartition(req.TemplateID, req.AllocatedDevices[0])
-		if err != nil {
-			return &api.DeviceAllocateResponse{
-				Success: false,
-				ErrMsg:  fmt.Sprintf("failed to assign partition: %v", err),
-			}, nil
-		}
-		req.PartitionUUID = partitionUUID
-		// Adjust memory limit if needed
-		if req.MemoryLimitBytes > 0 && overhead > 0 {
-			req.MemoryLimitBytes -= overhead
-		}
-	}
-
-	// Store allocation
-	m.allocations[req.WorkerUID] = &api.WorkerInfo{
-		WorkerUID:        req.WorkerUID,
-		AllocatedDevices: req.AllocatedDevices,
-		IsolationMode:    req.IsolationMode,
-		TemplateID:       req.TemplateID,
-		MemoryLimit:      req.MemoryLimitBytes,
-		ComputeLimit:     req.ComputeLimitUnits,
-	}
-
-	// Update device to allocation mapping
-	for _, deviceUUID := range req.AllocatedDevices {
-		m.deviceToAlloc[deviceUUID] = append(m.deviceToAlloc[deviceUUID], req.WorkerUID)
-	}
-
-	return &api.DeviceAllocateResponse{
-		DeviceNodes: req.AllocatedDevices,
-		Annotations: make(map[string]string),
-		Mounts:      make(map[string]string),
-		EnvVars:     make(map[string]string),
-		Success:     true,
-	}, nil
-}
 
 // Deallocate de-allocates devices for a pod
 func (m *Controller) Deallocate(workerUID string) error {
@@ -187,11 +133,13 @@ func (m *Controller) Deallocate(workerUID string) error {
 	delete(m.allocations, workerUID)
 
 	// Remove from device mapping
-	if workerUIDs, exists := m.deviceToAlloc[allocation.DeviceUUID]; exists {
-		for i, uid := range workerUIDs {
-			if uid == workerUID {
-				m.deviceToAlloc[allocation.DeviceUUID] = append(workerUIDs[:i], workerUIDs[i+1:]...)
-				break
+	for _, deviceUUID := range allocation.AllocatedDevices {
+		if workerUIDs, exists := m.deviceToAlloc[deviceUUID]; exists {
+			for i, uid := range workerUIDs {
+				if uid == workerUID {
+					m.deviceToAlloc[deviceUUID] = append(workerUIDs[:i], workerUIDs[i+1:]...)
+					break
+				}
 			}
 		}
 	}
@@ -219,10 +167,6 @@ func (m *Controller) DiscoverDevices() error {
 	return m.discoverDevices()
 }
 
-// AllocateDevice implements framework.DeviceController
-func (m *Controller) AllocateDevice(request *api.WorkerInfo) (*api.DeviceAllocateResponse, error) {
-	return m.Allocate(request)
-}
 
 // ListDevices implements framework.DeviceController
 func (m *Controller) ListDevices() ([]*api.DeviceInfo, error) {
@@ -255,24 +199,37 @@ func (m *Controller) GetDevice(deviceUUID string) (*api.DeviceInfo, error) {
 }
 
 // GetDeviceAllocations implements framework.DeviceController
-func (m *Controller) GetDeviceAllocations(deviceUUID string) ([]*api.DeviceAllocation, error) {
+func (m *Controller) GetDeviceAllocations(deviceUUID string) ([]*api.WorkerAllocation, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
+	
+	var workerUIDs []string
 	if deviceUUID == "" {
 		// Return all allocations
-		allocations := make([]*api.DeviceAllocation, 0, len(m.allocations))
-		for _, allocation := range m.allocations {
-			allocations = append(allocations, allocation)
+		workerUIDs = make([]string, 0, len(m.allocations))
+		for workerUID := range m.allocations {
+			workerUIDs = append(workerUIDs, workerUID)
 		}
-		return allocations, nil
+	} else {
+		// Return allocations for specific device
+		workerUIDs = m.deviceToAlloc[deviceUUID]
 	}
-
-	// Return allocations for specific device
-	workerUIDs := m.deviceToAlloc[deviceUUID]
-	allocations := make([]*api.DeviceAllocation, 0, len(workerUIDs))
+	
+	allocations := make([]*api.WorkerAllocation, 0, len(workerUIDs))
 	for _, workerUID := range workerUIDs {
-		if allocation, exists := m.allocations[workerUID]; exists {
+		if workerInfo, exists := m.allocations[workerUID]; exists {
+			// Create WorkerAllocation with WorkerInfo and DeviceInfos
+			deviceInfos := make([]*api.DeviceInfo, 0, len(workerInfo.AllocatedDevices))
+			for _, devUUID := range workerInfo.AllocatedDevices {
+				if device, devExists := m.devices[devUUID]; devExists {
+					deviceInfos = append(deviceInfos, device)
+				}
+			}
+			
+			allocation := &api.WorkerAllocation{
+				WorkerInfo:  workerInfo,
+				DeviceInfos: deviceInfos,
+			}
 			allocations = append(allocations, allocation)
 		}
 	}
@@ -280,8 +237,8 @@ func (m *Controller) GetDeviceAllocations(deviceUUID string) ([]*api.DeviceAlloc
 }
 
 // GetDeviceAllocationUpdates implements framework.DeviceController
-func (m *Controller) GetDeviceAllocationUpdates(deviceUUID string, allocationID string) (<-chan []*api.DeviceAllocation, error) {
-	ch := make(chan []*api.DeviceAllocation, 1)
+func (m *Controller) GetDeviceAllocationUpdates(deviceUUID string, allocationID string) (<-chan []*api.WorkerAllocation, error) {
+	ch := make(chan []*api.WorkerAllocation, 1)
 	// Send initial allocation list
 	go func() {
 		allocations, err := m.GetDeviceAllocations(deviceUUID)
@@ -341,15 +298,15 @@ func (m *Controller) GetGPUMetrics() (map[string]*api.GPUUsageMetrics, error) {
 	deviceComputeTflops := make(map[string]float64)
 	for _, computeUtil := range computeUtils {
 		deviceComputePercent[computeUtil.DeviceUUID] += computeUtil.UtilizationPercent
-		deviceComputeTflops[computeUtil.DeviceUUID] += computeUtil.TFLOPsUsed
+		// Note: TFLOPs calculation will be implemented separately based on device capabilities
 	}
 
 	// Build metrics for each device
 	for _, device := range devices {
 		memoryUsed := deviceMemoryUsed[device.UUID]
 		memoryPercent := 0.0
-		if device.Bytes > 0 {
-			memoryPercent = float64(memoryUsed) / float64(device.Bytes) * 100.0
+		if device.TotalMemoryBytes > 0 {
+			memoryPercent = float64(memoryUsed) / float64(device.TotalMemoryBytes) * 100.0
 		}
 
 		result[device.UUID] = &api.GPUUsageMetrics{

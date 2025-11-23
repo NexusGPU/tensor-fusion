@@ -120,8 +120,12 @@ func (h *HypervisorMetricsRecorder) RecordDeviceMetrics(writer io.Writer) {
 
 		enc.AddField("rx", metrics.Rx)
 		enc.AddField("tx", metrics.Tx)
-		enc.AddField("nvlink_rx", float64(metrics.NvlinkRxBandwidth))
-		enc.AddField("nvlink_tx", float64(metrics.NvlinkTxBandwidth))
+		// Add vendor-specific metrics from ExtraMetrics map
+		if metrics.ExtraMetrics != nil {
+			for key, value := range metrics.ExtraMetrics {
+				enc.AddField(key, value)
+			}
+		}
 		enc.AddField("temperature", metrics.Temperature)
 		enc.AddField("graphics_clock_mhz", metrics.GraphicsClockMHz)
 		enc.AddField("sm_clock_mhz", metrics.SMClockMHz)
@@ -184,7 +188,10 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 				computeTflops += metrics.ComputeTflops
 
 				// Calculate memory percentage
-				vramLimit := float64(allocation.MemoryLimit)
+				vramLimit := float64(0)
+				if allocation.WorkerInfo != nil {
+					vramLimit = float64(allocation.WorkerInfo.MemoryLimitBytes)
+				}
 				if vramLimit > 0 {
 					memoryPercentage += float64(metrics.MemoryBytes) / vramLimit * 100.0
 				}
@@ -194,13 +201,15 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 			enc.AddTag("uuid", deviceUUID)
 			enc.AddTag("node", h.nodeName)
 			enc.AddTag("pool", h.gpuPool)
-			enc.AddTag("pod_name", allocation.PodName)
-			enc.AddTag("namespace", allocation.Namespace)
+			if allocation.WorkerInfo != nil {
+				enc.AddTag("pod_name", allocation.WorkerInfo.PodName)
+				enc.AddTag("namespace", allocation.WorkerInfo.Namespace)
+			}
 
 			workloadName := "unknown"
 			// Try to get workload name from worker ID or pod name
-			if allocation.WorkerUID != "" {
-				workloadName = allocation.WorkerUID
+			if allocation.WorkerInfo != nil && allocation.WorkerInfo.WorkerUID != "" {
+				workloadName = allocation.WorkerInfo.WorkerUID
 			}
 			enc.AddTag("workload", workloadName)
 			enc.AddTag("worker", workerUID)
@@ -230,13 +239,13 @@ func (h *HypervisorMetricsRecorder) addExtraLabels(enc metrics.Encoder, allocati
 		return
 	}
 
-	if len(allocation.Labels) == 0 {
+	if allocation.WorkerInfo == nil || len(allocation.WorkerInfo.Annotations) == 0 {
 		return
 	}
 
 	// Add tags based on the mapping
 	for podLabelKey, tagName := range h.extraLabelsMap {
-		if labelValue, exists := allocation.Labels[podLabelKey]; exists && labelValue != "" {
+		if labelValue, exists := allocation.WorkerInfo.Annotations[podLabelKey]; exists && labelValue != "" {
 			enc.AddTag(tagName, labelValue)
 		}
 	}

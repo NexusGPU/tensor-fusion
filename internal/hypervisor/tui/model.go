@@ -161,11 +161,16 @@ func (m *Model) updateData() tea.Cmd {
 			if wd.Allocation == nil {
 				continue
 			}
+			// Extract device UUID from the first device in allocation
+			deviceUUID := ""
+			if len(wd.Allocation.DeviceInfos) > 0 {
+				deviceUUID = wd.Allocation.DeviceInfos[0].UUID
+			}
 			workers = append(workers, WorkerInfo{
 				UID:        wd.WorkerUID,
-				PodName:    wd.Allocation.PodName,
-				Namespace:  wd.Allocation.Namespace,
-				DeviceUUID: wd.Allocation.DeviceUUID,
+				PodName:    wd.Allocation.WorkerInfo.PodName,
+				Namespace:  wd.Allocation.WorkerInfo.Namespace,
+				DeviceUUID: deviceUUID,
 				Allocation: wd.Allocation,
 			})
 		}
@@ -276,7 +281,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						break
 					}
 				}
-				if worker != nil && worker.Allocation != nil && worker.Allocation.IsolationMode == api.IsolationModeSoft {
+				if worker != nil && worker.Allocation != nil && worker.Allocation.WorkerInfo != nil {
 					m.shmDialog.Show(worker)
 					return m, nil
 				}
@@ -514,8 +519,8 @@ func (m *Model) updateMetricsHistory() {
 			// Calculate percentage if we have allocation info
 			var memPercent float64
 			for _, worker := range m.workers {
-				if worker.UID == workerUID && worker.Allocation != nil && worker.Allocation.MemoryLimit > 0 {
-					memPercent = float64(totalMemory) / float64(worker.Allocation.MemoryLimit) * 100.0
+				if worker.UID == workerUID && worker.Allocation != nil && worker.Allocation.WorkerInfo != nil && worker.Allocation.WorkerInfo.MemoryLimitBytes > 0 {
+					memPercent = float64(totalMemory) / float64(worker.Allocation.WorkerInfo.MemoryLimitBytes) * 100.0
 					break
 				}
 			}

@@ -19,7 +19,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/charmbracelet/bubbles/list"
@@ -32,7 +31,7 @@ type WorkerInfo struct {
 	PodName    string
 	Namespace  string
 	DeviceUUID string
-	Allocation *api.DeviceAllocation
+	Allocation *api.WorkerAllocation
 }
 
 // workerItem represents a worker in the list
@@ -104,15 +103,16 @@ func updateWorkerDetail(
 	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Namespace"), MetricValueStyle.Render(worker.Namespace)))
 	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Device UUID"), MetricValueStyle.Render(worker.DeviceUUID)))
 
-	if worker.Allocation != nil {
-		content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Isolation Mode"), MetricValueStyle.Render(string(worker.Allocation.IsolationMode))))
-		if worker.Allocation.MemoryLimit > 0 {
-			content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Memory Limit"), formatBytes(worker.Allocation.MemoryLimit)))
+	if worker.Allocation != nil && worker.Allocation.WorkerInfo != nil {
+		content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Isolation Mode"), MetricValueStyle.Render(string(worker.Allocation.WorkerInfo.IsolationMode))))
+		if worker.Allocation.WorkerInfo.MemoryLimitBytes > 0 {
+			content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Memory Limit"), formatBytes(worker.Allocation.WorkerInfo.MemoryLimitBytes)))
 		}
-		if worker.Allocation.ComputeLimit > 0 {
-			content.WriteString(fmt.Sprintf("%s: %d%%\n", MetricLabelStyle.Render("Compute Limit"), worker.Allocation.ComputeLimit))
+		if worker.Allocation.WorkerInfo.ComputeLimitUnits > 0 {
+			content.WriteString(fmt.Sprintf("%s: %d\n", MetricLabelStyle.Render("Compute Limit Units"), worker.Allocation.WorkerInfo.ComputeLimitUnits))
 		}
-		content.WriteString(fmt.Sprintf("%s: %s\n\n", MetricLabelStyle.Render("Allocated At"), worker.Allocation.AllocatedAt.Format(time.RFC3339)))
+		// Note: AllocatedAt timestamp will be added to WorkerInfo if needed for business logic
+		content.WriteString("\n")
 	}
 
 	// Get worker metrics

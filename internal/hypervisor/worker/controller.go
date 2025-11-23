@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
@@ -90,22 +91,60 @@ func (w *WorkerController) Stop() error {
 	return nil
 }
 
-func (w *WorkerController) GetWorkerAllocation(workerUID string) (*api.DeviceAllocation, error) {
+// AllocateWorker implements framework.WorkerController
+func (w *WorkerController) AllocateWorker(request *api.WorkerInfo) (*api.WorkerAllocation, error) {
+	// Validate devices exist
+	devices, err := w.deviceController.ListDevices()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list devices: %w", err)
+	}
+	
+	deviceMap := make(map[string]*api.DeviceInfo)
+	for _, device := range devices {
+		deviceMap[device.UUID] = device
+	}
+	
+	for _, deviceUUID := range request.AllocatedDevices {
+		if _, exists := deviceMap[deviceUUID]; !exists {
+			return nil, fmt.Errorf("device not found: %s", deviceUUID)
+		}
+	}
+
+	// Store allocation (this logic would ideally be in device controller's state management)
+	// For now, we'll create the allocation and let device controller track it
+	
+	// Create WorkerAllocation with WorkerInfo and DeviceInfos
+	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
+	for _, deviceUUID := range request.AllocatedDevices {
+		if device, exists := deviceMap[deviceUUID]; exists {
+			deviceInfos = append(deviceInfos, device)
+		}
+	}
+
+	allocation := &api.WorkerAllocation{
+		WorkerInfo:  request,
+		DeviceInfos: deviceInfos,
+	}
+
+	return allocation, nil
+}
+
+func (w *WorkerController) GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, error) {
 	allocations, err := w.deviceController.GetDeviceAllocations("")
 	if err != nil {
 		return nil, err
 	}
 	// Find allocation for this worker
 	for _, allocation := range allocations {
-		if allocation.PodUID == workerUID || allocation.WorkerUID == workerUID {
+		if allocation.WorkerInfo.PodUID == workerUID || allocation.WorkerInfo.WorkerUID == workerUID {
 			return allocation, nil
 		}
 	}
 	return nil, nil
 }
 
-func (w *WorkerController) GetWorkerMetricsUpdates() (<-chan *api.DeviceAllocation, error) {
-	ch := make(chan *api.DeviceAllocation, 1)
+func (w *WorkerController) GetWorkerMetricsUpdates() (<-chan *api.WorkerAllocation, error) {
+	ch := make(chan *api.WorkerAllocation, 1)
 	// TODO: Implement proper worker metrics updates channel with periodic updates
 	// Channel will be closed when controller is stopped
 	return ch, nil
@@ -163,11 +202,11 @@ func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]
 				DeviceUUID:        computeUtil.DeviceUUID,
 				ProcessID:         computeUtil.ProcessID,
 				ComputePercentage: computeUtil.UtilizationPercent,
-				ComputeTflops:     computeUtil.TFLOPsUsed,
+				ComputeTflops:     0, // ComputeTflops calculation will be implemented separately
 			}
 		} else {
 			processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID].ComputePercentage += computeUtil.UtilizationPercent
-			processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID].ComputeTflops += computeUtil.TFLOPsUsed
+			// ComputeTflops calculation will be implemented separately
 		}
 	}
 
@@ -210,19 +249,22 @@ func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]
 
 	// Also include allocations that might not have process mappings yet
 	for _, allocation := range allocations {
-		workerUID := allocation.WorkerUID
+		workerUID := allocation.WorkerInfo.WorkerUID
 		if workerUID == "" {
-			workerUID = allocation.PodUID
+			workerUID = allocation.WorkerInfo.PodUID
 		}
 		if workerUID == "" {
 			continue
 		}
 
-		if result[allocation.DeviceUUID] == nil {
-			result[allocation.DeviceUUID] = make(map[string]map[string]*api.WorkerMetrics)
-		}
-		if result[allocation.DeviceUUID][workerUID] == nil {
-			result[allocation.DeviceUUID][workerUID] = make(map[string]*api.WorkerMetrics)
+		// Process all devices in the allocation
+		for _, deviceInfo := range allocation.DeviceInfos {
+			if result[deviceInfo.UUID] == nil {
+				result[deviceInfo.UUID] = make(map[string]map[string]*api.WorkerMetrics)
+			}
+			if result[deviceInfo.UUID][workerUID] == nil {
+				result[deviceInfo.UUID][workerUID] = make(map[string]*api.WorkerMetrics)
+			}
 		}
 	}
 
@@ -253,9 +295,9 @@ func (w *WorkerController) ListWorkers() ([]string, error) {
 	// Extract unique worker UIDs from allocations
 	workerSet := make(map[string]bool)
 	for _, allocation := range allocations {
-		workerUID := allocation.WorkerUID
+		workerUID := allocation.WorkerInfo.WorkerUID
 		if workerUID == "" {
-			workerUID = allocation.PodUID
+			workerUID = allocation.WorkerInfo.PodUID
 		}
 		if workerUID != "" {
 			workerSet[workerUID] = true
