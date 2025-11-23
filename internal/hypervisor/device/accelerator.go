@@ -149,13 +149,13 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 	for i := 0; i < int(cCount); i++ {
 		cInfo := &stackDevices[i]
 		devices[i] = &api.DeviceInfo{
-			UUID:      C.GoString(&cInfo.basic.uuid[0]),
-			Vendor:    C.GoString(&cInfo.basic.vendor[0]),
-			Model:     C.GoString(&cInfo.basic.model[0]),
-			Index:     int32(cInfo.basic.index),
-			NUMANode:  int32(cInfo.basic.numaNode),
+			UUID:             C.GoString(&cInfo.basic.uuid[0]),
+			Vendor:           C.GoString(&cInfo.basic.vendor[0]),
+			Model:            C.GoString(&cInfo.basic.model[0]),
+			Index:            int32(cInfo.basic.index),
+			NUMANode:         int32(cInfo.basic.numaNode),
 			TotalMemoryBytes: uint64(cInfo.basic.totalMemoryBytes),
-			MaxTflops: float64(cInfo.basic.maxTflops),
+			MaxTflops:        float64(cInfo.basic.maxTflops),
 			Capabilities: api.DeviceCapabilities{
 				SupportsPartitioning:  bool(cInfo.capabilities.supportsPartitioning),
 				SupportsSoftIsolation: bool(cInfo.capabilities.supportsSoftIsolation),
@@ -319,10 +319,10 @@ func (a *AcceleratorInterface) GetProcessMemoryUtilization() ([]api.MemoryUtiliz
 	for i := 0; i < int(cCount); i++ {
 		mu := &stackUtilizations[i]
 		utilizations[i] = api.MemoryUtilization{
-			ProcessID:          C.GoString(&mu.processId[0]),
-			DeviceUUID:         C.GoString(&mu.deviceUUID[0]),
-			UsedBytes:          uint64(mu.usedBytes),
-			ReservedBytes:      uint64(mu.reservedBytes),
+			ProcessID:     C.GoString(&mu.processId[0]),
+			DeviceUUID:    C.GoString(&mu.deviceUUID[0]),
+			UsedBytes:     uint64(mu.usedBytes),
+			ReservedBytes: uint64(mu.reservedBytes),
 			// Note: UtilizationPercent will be calculated separately if needed
 		}
 	}

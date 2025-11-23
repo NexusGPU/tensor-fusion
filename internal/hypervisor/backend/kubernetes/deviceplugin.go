@@ -363,7 +363,7 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 		if allocResp.WorkerInfo != nil {
 			containerResp.Envs["TF_WORKER_UID"] = allocResp.WorkerInfo.WorkerUID
 			containerResp.Envs["TF_POD_UID"] = allocResp.WorkerInfo.PodUID
-			
+
 			// Add device UUIDs as environment variable
 			if len(allocResp.DeviceInfos) > 0 {
 				deviceUUIDs := make([]string, 0, len(allocResp.DeviceInfos))

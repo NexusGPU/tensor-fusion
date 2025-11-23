@@ -9,7 +9,6 @@ type DeviceController interface {
 
 	DiscoverDevices() error
 
-
 	// ListDevices returns all discovered devices
 	ListDevices() ([]*api.DeviceInfo, error)
 

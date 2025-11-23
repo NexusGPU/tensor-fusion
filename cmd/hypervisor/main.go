@@ -99,7 +99,7 @@ func main() {
 	// initialize data backend and worker controller
 	var backend framework.Backend
 	var workerController framework.WorkerController
-	
+
 	switch *backendType {
 	case "kubernetes":
 		// Get Kubernetes rest config
@@ -113,7 +113,7 @@ func main() {
 		if err != nil {
 			klog.Fatalf("Failed to get Kubernetes config: %v", err)
 		}
-		
+
 		// For Kubernetes backend, create a temporary backend first, then worker controller, then final backend
 		tempBackend := single_node.NewSingleNodeBackend(ctx, deviceController)
 		workerController = worker.NewWorkerController(deviceController, mode, tempBackend)
