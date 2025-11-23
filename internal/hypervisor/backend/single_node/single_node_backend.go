@@ -72,7 +72,7 @@ func (b *SingleNodeBackend) discoverWorkers() {
 
 	// Update worker states from allocations
 	for _, allocation := range allocations {
-		workerUID := allocation.WorkerID
+		workerUID := allocation.WorkerUID
 		if workerUID == "" {
 			workerUID = allocation.PodUID
 		}
@@ -95,7 +95,7 @@ func (b *SingleNodeBackend) discoverWorkers() {
 	// Remove workers that no longer have allocations
 	activeWorkers := make(map[string]bool)
 	for _, allocation := range allocations {
-		workerUID := allocation.WorkerID
+		workerUID := allocation.WorkerUID
 		if workerUID == "" {
 			workerUID = allocation.PodUID
 		}

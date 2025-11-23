@@ -19,37 +19,27 @@ package kubernetes
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
-	"strings"
 	"sync"
+	"time"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 )
-
-// WorkerInfo contains information about a worker pod
-type WorkerInfo struct {
-	PodUID            string
-	PodName           string
-	Namespace         string
-	DeviceUUIDs       []string
-	IsolationMode     api.IsolationMode
-	MemoryLimitBytes  uint64
-	ComputeLimitUnits uint32
-	TemplateID        string
-	Annotations       map[string]string
-	PodIndex          string
-}
 
 // PodCacheManager manages pod watching and worker information extraction
 type PodCacheManager struct {
@@ -58,11 +48,13 @@ type PodCacheManager struct {
 	restConfig *rest.Config
 	nodeName   string
 
-	mu              sync.RWMutex
-	podCache        map[string]*corev1.Pod           // key: pod UID
-	allocations     map[string]*api.DeviceAllocation // key: pod UID
-	stopCh          chan struct{}
-	workerChangedCh chan struct{}
+	mu                sync.RWMutex
+	podCache          map[string]*corev1.Pod           // key: pod UID
+	allocations       map[string]*api.DeviceAllocation // key: pod UID
+	indexToWorkerInfo map[int]*api.WorkerInfo          // key: pod index annotation
+	indexToPodList    map[int][]string                 // key: pod index annotation, value: list of pod UIDs
+	stopCh            chan struct{}
+	workerChangedCh   chan struct{}
 }
 
 // NewPodCacheManager creates a new pod cache manager
@@ -73,14 +65,16 @@ func NewPodCacheManager(ctx context.Context, restConfig *rest.Config, nodeName s
 	}
 
 	return &PodCacheManager{
-		ctx:             ctx,
-		clientset:       clientset,
-		restConfig:      restConfig,
-		nodeName:        nodeName,
-		podCache:        make(map[string]*corev1.Pod),
-		allocations:     make(map[string]*api.DeviceAllocation),
-		stopCh:          make(chan struct{}),
-		workerChangedCh: make(chan struct{}, 1),
+		ctx:               ctx,
+		clientset:         clientset,
+		restConfig:        restConfig,
+		nodeName:          nodeName,
+		podCache:          make(map[string]*corev1.Pod),
+		allocations:       make(map[string]*api.WorkerInfo),
+		indexToWorkerInfo: make(map[int]*api.WorkerInfo),
+		indexToPodList:    make(map[int][]string),
+		stopCh:            make(chan struct{}),
+		workerChangedCh:   make(chan struct{}, 1),
 	}, nil
 }
 
@@ -137,6 +131,17 @@ func (kc *PodCacheManager) onPodAdd(obj interface{}) {
 	pod := obj.(*corev1.Pod)
 	kc.mu.Lock()
 	kc.podCache[string(pod.UID)] = pod
+	if podIndexAnno, exists := pod.Annotations[constants.PodIndexAnnotation]; exists {
+		if podIndex, err := strconv.Atoi(podIndexAnno); err == nil {
+			// Parse and store WorkerInfo
+			workerInfo := kc.extractWorkerInfo(pod, podIndexAnno)
+			kc.indexToWorkerInfo[podIndex] = workerInfo
+			// Add pod UID to indexToPodList
+			kc.indexToPodList[podIndex] = append(kc.indexToPodList[podIndex], string(pod.UID))
+		}
+	} else {
+		klog.Errorf("Pod %s/%s has no index annotation", pod.Namespace, pod.Name)
+	}
 	kc.mu.Unlock()
 
 	klog.V(4).Infof("Pod added: %s/%s (UID: %s)", pod.Namespace, pod.Name, pod.UID)
@@ -150,6 +155,32 @@ func (kc *PodCacheManager) onPodUpdate(oldObj, newObj interface{}) {
 
 	kc.mu.Lock()
 	kc.podCache[string(newPod.UID)] = newPod
+
+	// Handle old index if it changed
+	oldPodIndexAnno, oldExists := oldPod.Annotations[constants.PodIndexAnnotation]
+	newPodIndexAnno, newExists := newPod.Annotations[constants.PodIndexAnnotation]
+
+	if oldExists {
+		if oldPodIndex, err := strconv.Atoi(oldPodIndexAnno); err == nil {
+			// Remove pod UID from old index
+			kc.removePodFromIndex(oldPodIndex, string(newPod.UID))
+		}
+	}
+
+	// Update WorkerInfo cache if pod has index annotation
+	if newExists {
+		if podIndex, err := strconv.Atoi(newPodIndexAnno); err == nil {
+			// Parse and store WorkerInfo
+			workerInfo := kc.extractWorkerInfo(newPod, newPodIndexAnno)
+			kc.indexToWorkerInfo[podIndex] = workerInfo
+			// Add pod UID to indexToPodList if not already present
+			podUID := string(newPod.UID)
+			found := slices.Contains(kc.indexToPodList[podIndex], podUID)
+			if !found {
+				kc.indexToPodList[podIndex] = append(kc.indexToPodList[podIndex], podUID)
+			}
+		}
+	}
 	kc.mu.Unlock()
 
 	klog.V(4).Infof("Pod updated: %s/%s (UID: %s)", newPod.Namespace, newPod.Name, newPod.UID)
@@ -178,12 +209,36 @@ func (kc *PodCacheManager) onPodDelete(obj interface{}) {
 	}
 
 	kc.mu.Lock()
-	delete(kc.podCache, string(pod.UID))
-	delete(kc.allocations, string(pod.UID))
+	podUID := string(pod.UID)
+	delete(kc.podCache, podUID)
+	delete(kc.allocations, podUID)
+	// Clean up WorkerInfo cache and indexToPodList if pod had index annotation
+	if podIndexAnno, exists := pod.Annotations[constants.PodIndexAnnotation]; exists {
+		if podIndex, err := strconv.Atoi(podIndexAnno); err == nil {
+			delete(kc.indexToWorkerInfo, podIndex)
+			kc.removePodFromIndex(podIndex, podUID)
+		}
+	}
 	kc.mu.Unlock()
 
 	klog.V(4).Infof("Pod deleted: %s/%s (UID: %s)", pod.Namespace, pod.Name, pod.UID)
 	kc.notifyWorkerChanged()
+}
+
+// removePodFromIndex removes a pod UID from the indexToPodList for a given index
+func (kc *PodCacheManager) removePodFromIndex(podIndex int, podUID string) {
+	podList := kc.indexToPodList[podIndex]
+	newList := make([]string, 0, len(podList))
+	for _, uid := range podList {
+		if uid != podUID {
+			newList = append(newList, uid)
+		}
+	}
+	if len(newList) == 0 {
+		delete(kc.indexToPodList, podIndex)
+	} else {
+		kc.indexToPodList[podIndex] = newList
+	}
 }
 
 // notifyWorkerChanged notifies that worker information has changed
@@ -195,23 +250,58 @@ func (kc *PodCacheManager) notifyWorkerChanged() {
 }
 
 // GetWorkerInfoForAllocationByIndex finds a pod by its index annotation and extracts worker info
-func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(ctx context.Context, podIndex string) (*WorkerInfo, error) {
-	kc.mu.RLock()
-	defer kc.mu.RUnlock()
+func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(ctx context.Context, podIndex int) (*api.WorkerInfo, error) {
+	var workerInfo *api.WorkerInfo
+	var lastErr error
 
-	// Find pod with matching index annotation
-	for _, pod := range kc.podCache {
-		if pod.Annotations == nil {
-			continue
+	// Retry for at most 5 seconds using k8s retry utility with 10ms backoff
+	startTime := time.Now()
+	err := retry.OnError(wait.Backoff{
+		Duration: 10 * time.Millisecond,
+		Factor:   1.4,
+		Jitter:   0.1,
+		Cap:      5 * time.Second,
+	}, func(err error) bool {
+		// Check if we've exceeded 5 seconds
+		if time.Since(startTime) >= 5*time.Second {
+			return false
+		}
+		// Retry if worker info not found
+		return true
+	}, func() error {
+		kc.mu.RLock()
+		defer kc.mu.RUnlock()
+
+		// Check for duplicate index - fast fail if multiple pods have same index
+		if podList, exists := kc.indexToPodList[podIndex]; exists {
+			if len(podList) > 1 {
+				// Build error message with pod details
+				var matchingPods []string
+				for _, podUID := range podList {
+					if pod := kc.podCache[podUID]; pod != nil {
+						matchingPods = append(matchingPods, fmt.Sprintf("%s/%s (UID: %s)", pod.Namespace, pod.Name, podUID))
+					}
+				}
+				lastErr = fmt.Errorf("duplicate index %d found in pods: %v", podIndex, matchingPods)
+				return lastErr
+			}
 		}
 
-		// Check if pod has matching index annotation
-		if podIndexAnno, exists := pod.Annotations[constants.PodIndexAnnotation]; exists && podIndexAnno == podIndex {
-			return kc.extractWorkerInfo(pod, podIndex), nil
+		// Find worker info with matching index annotation
+		if info, exists := kc.indexToWorkerInfo[podIndex]; exists {
+			workerInfo = info
+			return nil // Success, stop retrying
 		}
+
+		lastErr = fmt.Errorf("worker info not found for pod index %d", podIndex)
+		return lastErr // Return error to trigger retry
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("worker info not found for pod index %d after retrying for 5 seconds: %w", podIndex, err)
 	}
 
-	return nil, fmt.Errorf("worker info not found for pod index %s", podIndex)
+	return workerInfo, nil
 }
 
 // GetPodByUID retrieves a pod from the cache by its UID
@@ -221,37 +311,13 @@ func (kc *PodCacheManager) GetPodByUID(podUID string) *corev1.Pod {
 	return kc.podCache[podUID]
 }
 
-// CheckDuplicateIndex checks if multiple pods have the same index annotation
-// Returns error if duplicate found (excluding the specified podUID)
-func (kc *PodCacheManager) CheckDuplicateIndex(ctx context.Context, podIndex string, excludePodUID string) error {
-	kc.mu.RLock()
-	defer kc.mu.RUnlock()
-
-	var matchingPods []string
-	for podUID, pod := range kc.podCache {
-		if pod.Annotations == nil {
-			continue
-		}
-
-		if podIndexAnno, exists := pod.Annotations[constants.PodIndexAnnotation]; exists && podIndexAnno == podIndex {
-			if string(pod.UID) != excludePodUID {
-				matchingPods = append(matchingPods, fmt.Sprintf("%s/%s (UID: %s)", pod.Namespace, pod.Name, podUID))
-			}
-		}
-	}
-
-	if len(matchingPods) > 0 {
-		return fmt.Errorf("duplicate index %s found in pods: %v", podIndex, matchingPods)
-	}
-
-	return nil
-}
-
 // RemovePodIndexAnnotation removes the PodIndexAnnotation from a pod after successful allocation
 func (kc *PodCacheManager) RemovePodIndexAnnotation(ctx context.Context, podUID string, namespace string, podName string) error {
 	kc.mu.RLock()
 	pod, exists := kc.podCache[podUID]
 	kc.mu.RUnlock()
+
+	// TODO: too complex, just a raw patch should work! and delete pod_cache before calling apiserver API
 
 	if !exists {
 		return fmt.Errorf("pod %s/%s not found in cache", namespace, podName)
@@ -295,131 +361,36 @@ func (kc *PodCacheManager) RemovePodIndexAnnotation(ctx context.Context, podUID 
 	return nil
 }
 
-// extractWorkerInfo extracts worker information from pod annotations
-func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod, podIndex string) *WorkerInfo {
-	info := &WorkerInfo{
-		PodUID:      string(pod.UID),
-		PodName:     pod.Name,
-		Namespace:   pod.Namespace,
-		Annotations: make(map[string]string),
-		PodIndex:    podIndex,
+// extractWorkerInfo extracts worker information from pod annotations using the common utility function
+func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod, podIndex string) *api.WorkerInfo {
+	// Use common utility function to extract pod worker info
+	allocRequest, msg, err := utils.ComposeAllocationRequest(kc.ctx, pod)
+	if err != nil {
+		klog.Errorf("Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", pod.Name, "msg", msg)
+		return nil
 	}
-
-	if pod.Annotations == nil {
-		return info
-	}
-
-	// Copy annotations
-	for k, v := range pod.Annotations {
-		info.Annotations[k] = v
-	}
-
-	// Extract GPU device IDs
-	if gpuIDsStr, exists := pod.Annotations[constants.GPUDeviceIDsAnnotation]; exists {
-		info.DeviceUUIDs = parseGPUIDs(gpuIDsStr)
-	}
-
-	// Extract isolation mode
-	if isolationMode, exists := pod.Annotations[constants.IsolationModeAnnotation]; exists {
-		info.IsolationMode = api.IsolationMode(isolationMode)
-	} else {
-		info.IsolationMode = api.IsolationModeSoft // default
-	}
-
-	// Extract pod index
-	info.PodIndex = podIndex
-
-	// Extract memory limit
-	if vramLimit, exists := pod.Annotations[constants.VRAMLimitAnnotation]; exists {
-		if bytes, err := parseMemoryBytes(vramLimit); err == nil {
-			info.MemoryLimitBytes = bytes
-		}
-	}
-
-	// Extract compute limit (compute percent)
-	if computeLimit, exists := pod.Annotations[constants.ComputeLimitAnnotation]; exists {
-		if percent, err := strconv.ParseUint(strings.TrimSuffix(computeLimit, "%"), 10, 32); err == nil {
-			info.ComputeLimitUnits = uint32(percent)
-		}
-	}
-
-	// Extract template ID (for partitioned mode)
-	// First check PartitionTemplateIDAnnotation (set by scheduler)
-	if templateID, exists := pod.Annotations[constants.PartitionTemplateIDAnnotation]; exists {
-		info.TemplateID = templateID
-	} else if templateID, exists := pod.Annotations[constants.WorkloadProfileAnnotation]; exists {
-		// Fallback to WorkloadProfileAnnotation
-		info.TemplateID = templateID
+	info := &api.WorkerInfo{
+		PodUID:            string(pod.UID),
+		PodName:           pod.Name,
+		Namespace:         pod.Namespace,
+		Annotations:       pod.Annotations,
+		PodIndex:          podIndex,
+		AllocatedDevices:  allocRequest.GPUNames,
+		IsolationMode:     allocRequest.Isolation,
+		MemoryLimitBytes:  uint64(allocRequest.Limit.Vram.Value()),
+		ComputeLimitUnits: uint32(allocRequest.Limit.ComputePercent.Value()),
+		TemplateID:        allocRequest.PartitionTemplateID,
 	}
 
 	return info
 }
 
-// parseGPUIDs parses GPU IDs from annotation string
-func parseGPUIDs(gpuIDsStr string) []string {
-	if gpuIDsStr == "" {
-		return nil
-	}
-
-	ids := strings.Split(gpuIDsStr, ",")
-	result := make([]string, 0, len(ids))
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id != "" {
-			result = append(result, id)
-		}
-	}
-	return result
-}
-
-// parseMemoryBytes parses memory bytes from quantity string (e.g., "1Gi", "1024Mi")
-func parseMemoryBytes(quantityStr string) (uint64, error) {
-	// Simple parsing - in production, use k8s.io/apimachinery/pkg/api/resource
-	quantityStr = strings.TrimSpace(quantityStr)
-
-	if strings.HasSuffix(quantityStr, "Gi") {
-		val, err := strconv.ParseFloat(strings.TrimSuffix(quantityStr, "Gi"), 64)
-		if err != nil {
-			return 0, err
-		}
-		return uint64(val * 1024 * 1024 * 1024), nil
-	}
-
-	if strings.HasSuffix(quantityStr, "Mi") {
-		val, err := strconv.ParseFloat(strings.TrimSuffix(quantityStr, "Mi"), 64)
-		if err != nil {
-			return 0, err
-		}
-		return uint64(val * 1024 * 1024), nil
-	}
-
-	if strings.HasSuffix(quantityStr, "Ki") {
-		val, err := strconv.ParseFloat(strings.TrimSuffix(quantityStr, "Ki"), 64)
-		if err != nil {
-			return 0, err
-		}
-		return uint64(val * 1024), nil
-	}
-
-	// Assume bytes
-	val, err := strconv.ParseUint(quantityStr, 10, 64)
-	return val, err
-}
-
 // StoreAllocation stores allocation information
-func (kc *PodCacheManager) StoreAllocation(podUID string, allocation *api.DeviceAllocation) error {
+func (kc *PodCacheManager) StoreAllocation(podUID string, allocation *api.WorkerDetail) error {
 	kc.mu.Lock()
 	defer kc.mu.Unlock()
 	kc.allocations[podUID] = allocation
 	return nil
-}
-
-// GetAllocation retrieves allocation information
-func (kc *PodCacheManager) GetAllocation(podUID string) (*api.DeviceAllocation, bool) {
-	kc.mu.RLock()
-	defer kc.mu.RUnlock()
-	allocation, exists := kc.allocations[podUID]
-	return allocation, exists
 }
 
 // GetWorkerChangedChan returns the channel for worker change notifications

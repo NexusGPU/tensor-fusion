@@ -199,8 +199,8 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 
 			workloadName := "unknown"
 			// Try to get workload name from worker ID or pod name
-			if allocation.WorkerID != "" {
-				workloadName = allocation.WorkerID
+			if allocation.WorkerUID != "" {
+				workloadName = allocation.WorkerUID
 			}
 			enc.AddTag("workload", workloadName)
 			enc.AddTag("worker", workerUID)

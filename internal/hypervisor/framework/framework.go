@@ -9,25 +9,25 @@ type DeviceController interface {
 
 	DiscoverDevices() error
 
-	AllocateDevice(request *api.DeviceAllocateRequest) (*api.DeviceAllocateResponse, error)
+	AllocateDevice(request *api.WorkerInfo) (*api.WorkerAllocation, error)
 
 	// ListDevices returns all discovered devices
 	ListDevices() ([]*api.DeviceInfo, error)
-
-	// DevicesUpdates returns a channel that receives device list updates
-	// The channel should be closed when Stop() is called
-	DevicesUpdates() (<-chan []*api.DeviceInfo, error)
 
 	// GetDevice returns device information by UUID
 	GetDevice(deviceUUID string) (*api.DeviceInfo, error)
 
 	// GetDeviceAllocations returns device allocations
 	// If deviceUUID is empty, returns all allocations
-	GetDeviceAllocations(deviceUUID string) ([]*api.DeviceAllocation, error)
+	GetDeviceAllocations(deviceUUID string) ([]*api.WorkerInfo, error)
+
+	// DevicesUpdates returns a channel that receives device list updates
+	// The channel should be closed when Stop() is called
+	DevicesUpdates() (<-chan []*api.DeviceInfo, error)
 
 	// GetDeviceAllocationUpdates returns a channel that receives allocation updates
 	// The channel should be closed when Stop() is called
-	GetDeviceAllocationUpdates(deviceUUID string, allocationID string) (<-chan []*api.DeviceAllocation, error)
+	GetDeviceAllocationUpdates(deviceUUID string, allocationID string) (<-chan []*api.WorkerInfo, error)
 
 	// GetGPUMetrics returns current GPU metrics for all devices
 	GetGPUMetrics() (map[string]*api.GPUUsageMetrics, error)

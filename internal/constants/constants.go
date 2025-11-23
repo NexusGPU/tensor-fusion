@@ -89,9 +89,12 @@ const (
 	GPUModelAnnotation = Domain + "/gpu-model"
 	// GPU ID list is assigned by scheduler, should not specified by user
 	GPUDeviceIDsAnnotation = Domain + "/gpu-ids"
+	// User can specify the partition name to designate the partition template to use, e.g. 1g.20gb+me
+	// TODO: parse and pre-set in scheduler plugin to avoid find matched partition.
+	PartitionNameAnnotation = Domain + "/partition"
 	// PartitionTemplateIDAnnotation is the partition UUID assigned to a pod in partitioned mode
 	// This is read by accelerator.c to mock slice GPU like MIG does
-	PartitionTemplateIDAnnotation     = Domain + "/partition"
+	PartitionTemplateIDAnnotation     = Domain + "/partition-id"
 	DedicatedGPUAnnotation            = Domain + "/dedicated-gpu"
 	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
 	PricingAnnotation                 = Domain + "/hourly-pricing"
@@ -246,3 +249,8 @@ const KarpenterNodePoolKind = "NodePool"
 
 // Vendor label key for multi-vendor support
 const AcceleratorLabelVendor = Domain + "/hardware-vendor"
+
+const (
+	IndexRangeStart = 1
+	IndexRangeEnd   = 512
+)

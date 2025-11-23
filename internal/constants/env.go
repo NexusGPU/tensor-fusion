@@ -154,7 +154,7 @@ const (
 	// Add ptrace capability to hypervisor container, to trace all host PID using GPU
 	SystemPtraceCapability = "SYS_PTRACE"
 
-	HypervisorDefaultPortNumber int32  = 8000
+	HypervisorDefaultPortNumber int32  = 8001
 	HypervisorPortName          string = "http"
 
 	// For security enhancement, there are 2 types of endpoints to protect
