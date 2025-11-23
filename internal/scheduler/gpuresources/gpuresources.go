@@ -128,7 +128,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 
 	// Handle tensor-fusion mode scheduling
 	s.logger.Info("checking GPU node resources for pod", "pod", pod.Name)
-	allocRequest, reason, err := s.allocator.ComposeAllocationRequest(pod)
+	allocRequest, reason, err := utils.ComposeAllocationRequest(s.ctx, pod)
 	if err != nil {
 		return nil, fwk.NewStatus(fwk.Error, reason)
 	}

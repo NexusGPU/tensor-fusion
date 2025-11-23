@@ -237,17 +237,6 @@ Result GetDeviceCount(size_t* deviceCount);
 Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount);
 
 /**
- * Get partition templates available for hardware partitioning.
- * 
- * @param deviceIndex Device index (0-based)
- * @param templates Output buffer for partition templates (allocated by caller)
- * @param maxCount Maximum number of templates that can fit in the buffer
- * @param templateCount Output parameter for number of templates actually returned
- * @return RESULT_SUCCESS on success, error code otherwise
- */
-Result GetPartitionTemplates(int32_t deviceIndex, PartitionTemplate* templates, size_t maxCount, size_t* templateCount);
-
-/**
  * Get device topology including NVLink, IB NIC, and other interconnects.
  * 
  * @param deviceIndexArray Array of device indices to query
