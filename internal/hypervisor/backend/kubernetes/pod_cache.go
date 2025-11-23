@@ -49,10 +49,10 @@ type PodCacheManager struct {
 	nodeName   string
 
 	mu                sync.RWMutex
-	podCache          map[string]*corev1.Pod           // key: pod UID
+	podCache          map[string]*corev1.Pod       // key: pod UID
 	allocations       map[string]*api.WorkerDetail // key: pod UID
-	indexToWorkerInfo map[int]*api.WorkerInfo          // key: pod index annotation
-	indexToPodList    map[int][]string                 // key: pod index annotation, value: list of pod UIDs
+	indexToWorkerInfo map[int]*api.WorkerInfo      // key: pod index annotation
+	indexToPodList    map[int][]string             // key: pod index annotation, value: list of pod UIDs
 	stopCh            chan struct{}
 	workerChangedCh   chan struct{}
 }
@@ -366,7 +366,7 @@ func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod, podIndex string) *
 	// Use common utility function to extract pod worker info
 	allocRequest, msg, err := utils.ComposeAllocationRequest(kc.ctx, pod)
 	if err != nil {
-		klog.Errorf("Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", pod.Name, "msg", msg)
+		klog.Error(err, "Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", pod.Name, "msg", msg)
 		return nil
 	}
 	info := &api.WorkerInfo{

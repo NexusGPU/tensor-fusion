@@ -110,7 +110,6 @@ func (m *Controller) getDevice(uuid string) (*api.DeviceInfo, bool) {
 	return device, exists
 }
 
-
 // Deallocate de-allocates devices for a pod
 func (m *Controller) Deallocate(workerUID string) error {
 	m.mu.Lock()
@@ -167,7 +166,6 @@ func (m *Controller) DiscoverDevices() error {
 	return m.discoverDevices()
 }
 
-
 // ListDevices implements framework.DeviceController
 func (m *Controller) ListDevices() ([]*api.DeviceInfo, error) {
 	return m.GetDevices(), nil
@@ -202,7 +200,7 @@ func (m *Controller) GetDevice(deviceUUID string) (*api.DeviceInfo, error) {
 func (m *Controller) GetDeviceAllocations(deviceUUID string) ([]*api.WorkerAllocation, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	var workerUIDs []string
 	if deviceUUID == "" {
 		// Return all allocations
@@ -214,7 +212,7 @@ func (m *Controller) GetDeviceAllocations(deviceUUID string) ([]*api.WorkerAlloc
 		// Return allocations for specific device
 		workerUIDs = m.deviceToAlloc[deviceUUID]
 	}
-	
+
 	allocations := make([]*api.WorkerAllocation, 0, len(workerUIDs))
 	for _, workerUID := range workerUIDs {
 		if workerInfo, exists := m.allocations[workerUID]; exists {
@@ -225,7 +223,7 @@ func (m *Controller) GetDeviceAllocations(deviceUUID string) ([]*api.WorkerAlloc
 					deviceInfos = append(deviceInfos, device)
 				}
 			}
-			
+
 			allocation := &api.WorkerAllocation{
 				WorkerInfo:  workerInfo,
 				DeviceInfos: deviceInfos,
