@@ -437,7 +437,7 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 	// Get allocation request
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	allocRequest, _, err := e.allocator.ComposeAllocationRequest(pod)
+	allocRequest, _, err := utils.ComposeAllocationRequest(e.ctx, pod)
 	if err != nil {
 		return nil, false, true, false
 	}
@@ -488,7 +488,7 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 }
 
 func (e *NodeExpander) checkGPUFitForNewNode(pod *corev1.Pod, gpus []*tfv1.GPU) bool {
-	allocRequest, _, err := e.allocator.ComposeAllocationRequest(pod)
+	allocRequest, _, err := utils.ComposeAllocationRequest(e.ctx, pod)
 	if err != nil {
 		return false
 	}
