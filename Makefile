@@ -126,6 +126,11 @@ build-hypervisor: build-provider ## Build hypervisor binary with CGO enabled.
 	CGO_CFLAGS="-I$$PROVIDER_DIR" \
 	go build -o bin/hypervisor ./cmd/hypervisor
 
+.PHONY: build-hypervisor-tui
+build-hypervisor-tui: 
+	go build -o bin/hypervisor-tui ./cmd/hypervisor-tui
+
+
 .PHONY: clean-cache
 clean-cache: ## Clean Go build cache.
 	go clean -cache -testcache
