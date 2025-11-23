@@ -127,6 +127,67 @@ func GetEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
+// PodWorkerInfo contains extracted worker information from pod annotations
+type PodWorkerInfo struct {
+	DeviceUUIDs       []string
+	IsolationMode     string
+	MemoryLimitBytes  uint64
+	ComputeLimitUnits uint32
+	TemplateID        string
+}
+
+// ExtractPodWorkerInfo extracts worker information from pod annotations
+// This is a common utility function used by both GpuAllocator and PodCacheManager
+func ExtractPodWorkerInfo(pod *corev1.Pod) PodWorkerInfo {
+	info := PodWorkerInfo{}
+
+	// Extract GPU device IDs
+	if gpuIDsStr, exists := pod.Annotations[constants.GPUDeviceIDsAnnotation]; exists {
+		ids := strings.Split(gpuIDsStr, ",")
+		info.DeviceUUIDs = make([]string, 0, len(ids))
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				info.DeviceUUIDs = append(info.DeviceUUIDs, id)
+			}
+		}
+	}
+
+	// Extract isolation mode
+	if isolationMode, exists := pod.Annotations[constants.IsolationModeAnnotation]; exists {
+		info.IsolationMode = isolationMode
+	} else {
+		info.IsolationMode = string(tfv1.IsolationModeSoft) // default
+	}
+
+	// Extract memory limit (VRAM)
+	if vramLimit, exists := pod.Annotations[constants.VRAMLimitAnnotation]; exists {
+		if qty, err := resource.ParseQuantity(vramLimit); err == nil {
+			info.MemoryLimitBytes = uint64(qty.Value())
+		}
+	}
+
+	// Extract compute limit (compute percent)
+	if computeLimit, exists := pod.Annotations[constants.ComputeLimitAnnotation]; exists {
+		if qty, err := resource.ParseQuantity(computeLimit); err == nil {
+			// Convert to percentage units (e.g., "50" -> 50, "100" -> 100)
+			percent := qty.AsApproximateFloat64()
+			info.ComputeLimitUnits = uint32(percent)
+		}
+	}
+
+	// Extract template ID (for partitioned mode)
+	// First check PartitionTemplateIDAnnotation (set by scheduler)
+	if templateID, exists := pod.Annotations[constants.PartitionTemplateIDAnnotation]; exists {
+		info.TemplateID = templateID
+	} else if templateID, exists := pod.Annotations[constants.WorkloadProfileAnnotation]; exists {
+		// Fallback to WorkloadProfileAnnotation
+		info.TemplateID = templateID
+	}
+
+	return info
+}
+
 func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
 	tflopsKey := constants.TFLOPSRequestAnnotation
 	vramKey := constants.VRAMRequestAnnotation

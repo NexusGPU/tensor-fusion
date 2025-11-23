@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
 	"k8s.io/klog/v2"
@@ -15,12 +16,14 @@ import (
 type Controller struct {
 	ctx               context.Context
 	mu                sync.RWMutex
-	devices           map[string]*api.DeviceInfo       // key: device UUID
-	allocations       map[string]*api.DeviceAllocation // key: worker UID
-	deviceToAlloc     map[string][]string              // device UUID -> []worker UID
+	devices           map[string]*api.DeviceInfo // key: device UUID
+	allocations       map[string]*api.WorkerInfo // key: worker UID
+	deviceToAlloc     map[string][]string        // device UUID -> []worker UID
 	accelerator       *AcceleratorInterface
 	discoveryInterval time.Duration
 }
+
+var _ framework.DeviceController = &Controller{}
 
 // NewController creates a new device manager
 func NewController(ctx context.Context, acceleratorLibPath string, discoveryInterval time.Duration) (framework.DeviceController, error) {
@@ -28,11 +31,10 @@ func NewController(ctx context.Context, acceleratorLibPath string, discoveryInte
 	if err != nil {
 		return nil, fmt.Errorf("failed to create accelerator interface: %w", err)
 	}
-
 	return &Controller{
 		ctx:               ctx,
 		devices:           make(map[string]*api.DeviceInfo),
-		allocations:       make(map[string]*api.DeviceAllocation),
+		allocations:       make(map[string]*api.WorkerInfo),
 		deviceToAlloc:     make(map[string][]string),
 		accelerator:       accel,
 		discoveryInterval: discoveryInterval,
@@ -108,13 +110,13 @@ func (m *Controller) getDevice(uuid string) (*api.DeviceInfo, bool) {
 	return device, exists
 }
 
-// Allocate allocates devices for a pod request
-func (m *Controller) Allocate(req *api.DeviceAllocateRequest) (*api.DeviceAllocateResponse, error) {
+// Allocate allocates devices for a worker request
+func (m *Controller) Allocate(req *api.WorkerInfo) (*api.DeviceAllocateResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Validate devices exist
-	for _, deviceUUID := range req.DeviceUUIDs {
+	for _, deviceUUID := range req.AllocatedDevices {
 		if _, exists := m.devices[deviceUUID]; !exists {
 			return &api.DeviceAllocateResponse{
 				Success: false,
@@ -123,47 +125,39 @@ func (m *Controller) Allocate(req *api.DeviceAllocateRequest) (*api.DeviceAlloca
 		}
 	}
 
-	// Create allocation record
-	allocation := &api.DeviceAllocation{
-		DeviceUUID:    req.DeviceUUIDs[0], // Use first device for now
-		PodUID:        req.WorkerUID,
-		WorkerID:      req.WorkerUID,
-		IsolationMode: req.IsolationMode,
-		TemplateID:    req.TemplateID,
-		MemoryLimit:   req.MemoryLimitBytes,
-		ComputeLimit:  req.ComputeLimitUnits,
-		AllocatedAt:   time.Now(),
-		Labels:        make(map[string]string), // Set by backend if available
-		Annotations:   make(map[string]string), // Set by backend if available
-	}
-
 	// Handle partitioned mode
-	if req.IsolationMode == api.IsolationModePartitioned && req.TemplateID != "" {
-		deviceUUID := req.DeviceUUIDs[0]
-		partitionUUID, overhead, err := m.accelerator.AssignPartition(req.TemplateID, deviceUUID)
+	if req.IsolationMode == tfv1.IsolationModePartitioned && req.TemplateID != "" {
+		partitionUUID, overhead, err := m.accelerator.AssignPartition(req.TemplateID, req.AllocatedDevices[0])
 		if err != nil {
 			return &api.DeviceAllocateResponse{
 				Success: false,
 				ErrMsg:  fmt.Sprintf("failed to assign partition: %v", err),
 			}, nil
 		}
-		allocation.PartitionUUID = partitionUUID
+		req.PartitionUUID = partitionUUID
 		// Adjust memory limit if needed
-		if allocation.MemoryLimit > 0 && overhead > 0 {
-			allocation.MemoryLimit -= overhead
+		if req.MemoryLimitBytes > 0 && overhead > 0 {
+			req.MemoryLimitBytes -= overhead
 		}
 	}
 
 	// Store allocation
-	m.allocations[req.WorkerUID] = allocation
+	m.allocations[req.WorkerUID] = &api.WorkerInfo{
+		WorkerUID:        req.WorkerUID,
+		AllocatedDevices: req.AllocatedDevices,
+		IsolationMode:    req.IsolationMode,
+		TemplateID:       req.TemplateID,
+		MemoryLimit:      req.MemoryLimitBytes,
+		ComputeLimit:     req.ComputeLimitUnits,
+	}
 
 	// Update device to allocation mapping
-	for _, deviceUUID := range req.DeviceUUIDs {
+	for _, deviceUUID := range req.AllocatedDevices {
 		m.deviceToAlloc[deviceUUID] = append(m.deviceToAlloc[deviceUUID], req.WorkerUID)
 	}
 
 	return &api.DeviceAllocateResponse{
-		DeviceNodes: req.DeviceUUIDs,
+		DeviceNodes: req.AllocatedDevices,
 		Annotations: make(map[string]string),
 		Mounts:      make(map[string]string),
 		EnvVars:     make(map[string]string),
@@ -172,31 +166,31 @@ func (m *Controller) Allocate(req *api.DeviceAllocateRequest) (*api.DeviceAlloca
 }
 
 // Deallocate de-allocates devices for a pod
-func (m *Controller) Deallocate(podUID string) error {
+func (m *Controller) Deallocate(workerUID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	allocation, exists := m.allocations[podUID]
+	allocation, exists := m.allocations[workerUID]
 	if !exists {
-		return fmt.Errorf("allocation not found for pod %s", podUID)
+		return fmt.Errorf("allocation not found for pod %s", workerUID)
 	}
 
 	// Handle partitioned mode cleanup
-	if allocation.IsolationMode == api.IsolationModePartitioned && allocation.TemplateID != "" {
-		if err := m.accelerator.RemovePartition(allocation.TemplateID, allocation.DeviceUUID); err != nil {
+	if allocation.IsolationMode == tfv1.IsolationModePartitioned && allocation.TemplateID != "" {
+		if err := m.accelerator.RemovePartition(allocation.TemplateID, allocation.AllocatedDevices[0]); err != nil {
 			// Log error but continue
 			klog.Errorf("failed to remove partition: %v", err)
 		}
 	}
 
 	// Remove from allocations
-	delete(m.allocations, podUID)
+	delete(m.allocations, workerUID)
 
 	// Remove from device mapping
-	if podUIDs, exists := m.deviceToAlloc[allocation.DeviceUUID]; exists {
-		for i, uid := range podUIDs {
-			if uid == podUID {
-				m.deviceToAlloc[allocation.DeviceUUID] = append(podUIDs[:i], podUIDs[i+1:]...)
+	if workerUIDs, exists := m.deviceToAlloc[allocation.DeviceUUID]; exists {
+		for i, uid := range workerUIDs {
+			if uid == workerUID {
+				m.deviceToAlloc[allocation.DeviceUUID] = append(workerUIDs[:i], workerUIDs[i+1:]...)
 				break
 			}
 		}
@@ -206,30 +200,12 @@ func (m *Controller) Deallocate(podUID string) error {
 }
 
 // GetAllocation returns allocation for a pod
-func (m *Controller) GetAllocation(workerUID string) (*api.DeviceAllocation, bool) {
+func (m *Controller) GetAllocation(workerUID string) (*api.WorkerInfo, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	allocation, exists := m.allocations[workerUID]
 	return allocation, exists
-}
-
-// UpdateAllocationLabelsAndAnnotations updates labels and annotations for an existing allocation
-func (m *Controller) UpdateAllocationLabelsAndAnnotations(workerUID string, labels, annotations map[string]string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	allocation, exists := m.allocations[workerUID]
-	if !exists {
-		return
-	}
-
-	if labels != nil {
-		allocation.Labels = labels
-	}
-	if annotations != nil {
-		allocation.Annotations = annotations
-	}
 }
 
 // Start implements framework.DeviceController
@@ -244,7 +220,7 @@ func (m *Controller) DiscoverDevices() error {
 }
 
 // AllocateDevice implements framework.DeviceController
-func (m *Controller) AllocateDevice(request *api.DeviceAllocateRequest) (*api.DeviceAllocateResponse, error) {
+func (m *Controller) AllocateDevice(request *api.WorkerInfo) (*api.DeviceAllocateResponse, error) {
 	return m.Allocate(request)
 }
 
@@ -365,15 +341,15 @@ func (m *Controller) GetGPUMetrics() (map[string]*api.GPUUsageMetrics, error) {
 	deviceComputeTflops := make(map[string]float64)
 	for _, computeUtil := range computeUtils {
 		deviceComputePercent[computeUtil.DeviceUUID] += computeUtil.UtilizationPercent
-		deviceComputeTflops[computeUtil.DeviceUUID] += computeUtil.TflopsUsed
+		deviceComputeTflops[computeUtil.DeviceUUID] += computeUtil.TFLOPsUsed
 	}
 
 	// Build metrics for each device
 	for _, device := range devices {
 		memoryUsed := deviceMemoryUsed[device.UUID]
 		memoryPercent := 0.0
-		if device.TotalMemory > 0 {
-			memoryPercent = float64(memoryUsed) / float64(device.TotalMemory) * 100.0
+		if device.Bytes > 0 {
+			memoryPercent = float64(memoryUsed) / float64(device.Bytes) * 100.0
 		}
 
 		result[device.UUID] = &api.GPUUsageMetrics{

@@ -22,7 +22,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 
@@ -311,72 +310,37 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 		// Extract pod index from DevicesIds - this contains the index value (1-512) from resource limits
 		// Resource limit: tensor-fusion.ai/index: 3 -> DevicesIds: ["3"]
 		// This is the actual pod index used to match the pod in the pod cache
-		if len(containerReq.DevicesIds) == 0 {
+		podIndex := len(containerReq.DevicesIds)
+		if podIndex == 0 {
 			return nil, fmt.Errorf("container request %d has no DevicesIds (expected pod index value 1-512)", containerIdx)
 		}
 
-		// The DevicesIds contains the pod index value (1-512) from resource limits
-		// This is NOT the device to allocate - it's just the pod identifier
-		podIndex := containerReq.DevicesIds[0]
-		if podIndex == "" {
-			return nil, fmt.Errorf("container request %d has empty DevicesIds (expected pod index)", containerIdx)
+		if podIndex < constants.IndexRangeStart || podIndex > constants.IndexRangeEnd {
+			return nil, fmt.Errorf("container request %d has index out of range: %d (expected 1-512)", containerIdx, podIndex)
 		}
 
-		// Validate index is in valid range (1-512)
-		indexNum, err := strconv.Atoi(podIndex)
-		if err != nil {
-			return nil, fmt.Errorf("container request %d has invalid index format: %s (expected number 1-512)", containerIdx, podIndex)
-		}
-		if indexNum < 1 || indexNum > 512 {
-			return nil, fmt.Errorf("container request %d has index out of range: %d (expected 1-512)", containerIdx, indexNum)
-		}
-
-		klog.V(4).Infof("Processing allocation for container index %d, pod index %s (from DevicesIds)", containerIdx, podIndex)
+		klog.V(4).Infof("Processing allocation for container index %d, pod index %d (from DevicesIds)", containerIdx, podIndex)
 
 		// Get worker info from kubelet client using pod index
+		// This will automatically check for duplicate indices and fail fast if found
 		workerInfo, err := dp.kubeletClient.GetWorkerInfoForAllocationByIndex(ctx, podIndex)
 		if err != nil {
-			klog.Errorf("Failed to get worker info for pod index %s: %v", podIndex, err)
-			return nil, fmt.Errorf("failed to get worker info for pod index %s: %w", podIndex, err)
+			klog.Errorf("Failed to get worker info for pod index %d: %v", podIndex, err)
+			return nil, fmt.Errorf("failed to get worker info for pod index %d: %w", podIndex, err)
 		}
 
 		if workerInfo == nil {
-			return nil, fmt.Errorf("worker info not found for pod index %s", podIndex)
-		}
-
-		// Check for duplicate index annotations (multiple pods with same index)
-		if err := dp.kubeletClient.CheckDuplicateIndex(ctx, podIndex, workerInfo.PodUID); err != nil {
-			klog.Errorf("Duplicate index detected for pod index %s: %v", podIndex, err)
-			return nil, fmt.Errorf("duplicate index detected: %w", err)
+			return nil, fmt.Errorf("worker info not found for pod index %d", podIndex)
 		}
 
 		// Device UUIDs are already set by scheduler in annotations, not from DevicesIds
-		// DevicesIds is just the dummy tensor-fusion.ai/index resource
-		deviceUUIDs := workerInfo.DeviceUUIDs
+		deviceUUIDs := workerInfo.AllocatedDevices
 		if len(deviceUUIDs) == 0 {
 			return nil, fmt.Errorf("no device UUIDs found in pod annotations for pod %s/%s", workerInfo.Namespace, workerInfo.PodName)
 		}
 
-		// Extract partition template ID if in partitioned mode
-		templateID := workerInfo.TemplateID
-		if workerInfo.IsolationMode == api.IsolationModePartitioned {
-			if partitionID, exists := workerInfo.Annotations[constants.PartitionTemplateIDAnnotation]; exists {
-				templateID = partitionID
-			}
-		}
-
-		// Compose allocation request
-		allocReq := &api.DeviceAllocateRequest{
-			WorkerUID:         workerInfo.PodUID,
-			DeviceUUIDs:       deviceUUIDs,
-			IsolationMode:     workerInfo.IsolationMode,
-			MemoryLimitBytes:  workerInfo.MemoryLimitBytes,
-			ComputeLimitUnits: workerInfo.ComputeLimitUnits,
-			TemplateID:        templateID,
-		}
-
 		// Call device controller to allocate
-		allocResp, err := dp.deviceController.AllocateDevice(allocReq)
+		allocResp, err := dp.deviceController.AllocateDevice(workerInfo)
 		if err != nil {
 			return nil, fmt.Errorf("failed to allocate device: %w", err)
 		}
@@ -390,8 +354,8 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 		// from being allocated by kubelet
 		containerResp := &pluginapi.ContainerAllocateResponse{
 			Envs:       allocResp.EnvVars,
-			Mounts:     make([]*pluginapi.Mount, 0),
-			Devices:    make([]*pluginapi.DeviceSpec, 0),
+			Mounts:     allocResp.Mounts,
+			Devices:    allocResp.Devices,
 			CdiDevices: []*pluginapi.CDIDevice{}, // Empty to prevent dummy device allocation
 		}
 
@@ -440,19 +404,9 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 		}
 
 		// Store allocation info in kubelet client (for backward compatibility)
-		allocation := &api.DeviceAllocation{
-			DeviceUUID:    deviceUUIDs[0], // Use first device UUID
-			PodUID:        workerInfo.PodUID,
-			PodName:       workerInfo.PodName,
-			Namespace:     workerInfo.Namespace,
-			IsolationMode: workerInfo.IsolationMode,
-			TemplateID:    templateID,
-			MemoryLimit:   workerInfo.MemoryLimitBytes,
-			ComputeLimit:  workerInfo.ComputeLimitUnits,
-			WorkerID:      workerInfo.PodUID,
-			AllocatedAt:   time.Now(),
-			Labels:        labels,
-			Annotations:   annotations,
+		allocation := &api.WorkerAllocation{
+			WorkerInfo:  workerInfo,
+			DeviceInfos: nil,
 		}
 
 		if err := dp.kubeletClient.StoreAllocation(workerInfo.PodUID, allocation); err != nil {

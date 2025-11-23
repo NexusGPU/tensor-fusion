@@ -263,7 +263,7 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 
 	key := client.ObjectKey{
 		Namespace: utils.CurrentNamespace(),
-		Name:      fmt.Sprintf("hypervisor-%s", node.Name),
+		Name:      fmt.Sprintf("tf-hypervisor-%s", node.Name),
 	}
 
 	currentPod := &corev1.Pod{}
