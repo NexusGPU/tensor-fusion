@@ -140,7 +140,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				device := devices[0]
 				Expect(device.UUID).To(ContainSubstring("stub-device"))
 				Expect(device.Vendor).To(Equal("STUB"))
-				Expect(device.TotalMemory).To(Equal(uint64(16 * 1024 * 1024 * 1024))) // 16GB
+				Expect(device.Bytes).To(Equal(uint64(16 * 1024 * 1024 * 1024))) // 16GB
 
 				_ = accel.Close()
 			})
@@ -180,7 +180,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				device := devices[0]
 				Expect(device.UUID).NotTo(BeEmpty())
 				Expect(device.Vendor).To(Equal("STUB"))
-				Expect(device.TotalMemory).To(BeNumerically(">", 0))
+				Expect(device.Bytes).To(BeNumerically(">", 0))
 			})
 
 			It("should allocate devices", func() {
@@ -209,7 +209,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				allocations, err := deviceController.GetDeviceAllocations(deviceUUID)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(allocations).To(HaveLen(1))
-				Expect(allocations[0].WorkerID).To(Equal("test-worker-1"))
+				Expect(allocations[0].WorkerUID).To(Equal("test-worker-1"))
 			})
 
 			It("should get GPU metrics", func() {
@@ -334,7 +334,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				allocation, err := workerController.GetWorkerAllocation("test-worker-1")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(allocation).NotTo(BeNil())
-				Expect(allocation.WorkerID).To(Equal("test-worker-1"))
+				Expect(allocation.WorkerUID).To(Equal("test-worker-1"))
 			})
 
 			It("should get worker metrics", func() {

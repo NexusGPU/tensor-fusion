@@ -28,11 +28,6 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// MessageResponse represents a message response
-type MessageResponse struct {
-	Message string `json:"message"`
-}
-
 // ListDevicesResponse represents the response from GET /api/v1/devices
 type ListDevicesResponse struct {
 	Devices []*DeviceInfo `json:"devices"`
@@ -51,7 +46,7 @@ type DiscoverDevicesResponse struct {
 // WorkerDetail represents a worker with its allocation
 type WorkerDetail struct {
 	WorkerUID  string            `json:"worker_uid"`
-	Allocation *DeviceAllocation `json:"allocation"`
+	Allocation *WorkerAllocation `json:"allocation"`
 }
 
 // ListWorkersResponse represents the response from GET /api/v1/workers
@@ -62,7 +57,7 @@ type ListWorkersResponse struct {
 // GetWorkerResponse represents the response from GET /api/v1/workers/:id
 type GetWorkerResponse struct {
 	WorkerUID  string                                          `json:"worker_uid"`
-	Allocation *DeviceAllocation                               `json:"allocation"`
+	Allocation *WorkerAllocation                               `json:"allocation"`
 	Metrics    map[string]map[string]map[string]*WorkerMetrics `json:"metrics,omitempty"`
 }
 

@@ -310,7 +310,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(
-	_ctx context.Context,
+	ctx context.Context,
 	pod *corev1.Pod,
 	pool *tfv1.GPUPool,
 	isLocalGPU bool,
@@ -331,8 +331,17 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	// Index must be assigned in webhook stage since scheduler cannot modify Pod
 	// This is a special index resource (1-512), not a real device resource
 	// Index is assigned in ascending order (1, 2, 3, ...) via distributed lock (leader election)
-	// index := m.assignDeviceAllocationIndex(ctx, pod)
-	// log.FromContext(ctx).Info("assigned device allocation index successfully", "index", index, "pod", pod.Name)
+	index := 0
+	if pod.Annotations[constants.PodIndexAnnotation] == "" {
+		index = m.assignDeviceAllocationIndex(ctx, pod)
+		log.FromContext(ctx).Info("assigned device allocation index successfully", "index", index, "pod", pod.Name)
+	} else {
+		var err error
+		index, err = strconv.Atoi(pod.Annotations[constants.PodIndexAnnotation])
+		if err != nil {
+			return nil, fmt.Errorf("invalid pod index annotation: %w", err)
+		}
+	}
 
 	for _, containerIndex := range containerIndices {
 		container := &pod.Spec.Containers[containerIndex]

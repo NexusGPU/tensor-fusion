@@ -18,6 +18,7 @@ package gpuallocator
 
 import (
 	"testing"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -33,20 +34,16 @@ func TestMatchPartitionTemplate(t *testing.T) {
 	gpuModel := testGPUModel
 	PartitionTemplateMap[gpuModel] = map[string]config.PartitionTemplateInfo{
 		"1g.24gb": {
-			TemplateID:   "1g.24gb",
-			Name:         "1g.24gb",
-			MemoryBytes:  24 * 1024 * 1024 * 1024, // 24GB
-			Tflops:       50.0,
-			ComputeUnits: 14,
-			SliceCount:   7,
+			TemplateID:      "19",
+			Name:            "1g.24gb",
+			MemoryGigabytes: 24, // 24GB (function converts to bytes)
+			ComputePercent:  1.0 / 7.0 * 100,
 		},
 		"4g.94gb": {
-			TemplateID:   "4g.94gb",
-			Name:         "4g.94gb",
-			MemoryBytes:  94 * 1024 * 1024 * 1024, // 94GB
-			Tflops:       200.0,
-			ComputeUnits: 56,
-			SliceCount:   7,
+			TemplateID:      "9",
+			Name:            "4g.94gb",
+			MemoryGigabytes: 94, // 94GB (function converts to bytes)
+			ComputePercent:  4.0 / 7.0 * 100,
 		},
 	}
 	// Setup: Initialize GPU capacity map for ComputePercent conversion
@@ -199,10 +196,16 @@ func TestMatchPartitionTemplate(t *testing.T) {
 			}
 
 			result, err := MatchPartitionTemplate(
-				testGPUModel,
-				tt.gpuTemplates,
+				tfv1.GPUStatus{
+					GPUModel:            testGPUModel,
+					PartitionTemplates:  tt.gpuTemplates,
+					AllocatedPartitions: tt.allocatedPartitions,
+					Capacity: &tfv1.Resource{
+						Tflops: resource.MustParse("312"),
+						Vram:   resource.MustParse("80Gi"),
+					},
+				},
 				tt.req,
-				tt.allocatedPartitions,
 			)
 
 			if tt.expectError {
@@ -224,60 +227,215 @@ func TestCalculatePartitionResourceUsage(t *testing.T) {
 	templateID := "1g.24gb"
 	PartitionTemplateMap[gpuModel] = map[string]config.PartitionTemplateInfo{
 		templateID: {
-			TemplateID:   templateID,
-			Name:         "1g.24gb",
-			MemoryBytes:  24 * 1024 * 1024 * 1024, // 24GB
-			Tflops:       50.0,
-			ComputeUnits: 14,
+			TemplateID:      templateID,
+			Name:            "1g.24gb",
+			MemoryGigabytes: 24, // 24GB (function converts to bytes)
+			ComputePercent:  1.0 / 7.0 * 100,
 		},
 	}
 
-	tflops, vram, err := CalculatePartitionResourceUsage(gpuModel, templateID)
+	tflops, vram, err := CalculatePartitionResourceUsage(resource.MustParse("312"), gpuModel, templateID)
 
 	assert.NoError(t, err)
-	// Compare using Cmp to handle different formatting (50 vs 50.00)
-	assert.Equal(t, 0, tflops.Cmp(resource.MustParse("50")))
-	assert.Equal(t, resource.MustParse("24Gi"), vram)
+	// Compare using Cmp to handle different formatting
+	// 1/7 of 312 TFLOPs = 44.57 TFLOPs
+	expectedTflops := resource.MustParse("44.57")
+	assert.Equal(t, 0, tflops.Cmp(expectedTflops), "TFLOPs: got %s, expected %s", tflops.String(), expectedTflops.String())
+	// Compare VRAM using Cmp to handle quantity representation differences
+	assert.Equal(t, 0, vram.Cmp(resource.MustParse("24Gi")), "VRAM: got %s, expected 24Gi", vram.String())
 }
 
 func TestCheckPartitionAvailability(t *testing.T) {
-	// Setup
+	// Setup: A100 MIG constraints based on nvidia-smi mig -lgipp output
+	// Profile 19 (1g.24gb): Placements {0,1,2,3,4,5,6}:1 - can start at any of 7 positions, occupies 1 slot each
+	// Profile 9 (4g.94gb): Placements {0,4}:4 - can start at position 0 or 4, occupies 4 slots each
 	gpuModel := testGPUModel
-	templateID := "1g.24gb"
+	template1g := "1g.24gb" // Profile 19
+	template4g := "4g.94gb" // Profile 9
+
+	// Clear and setup maps for this test
+	mu.Lock()
 	PartitionTemplateMap[gpuModel] = map[string]config.PartitionTemplateInfo{
-		templateID: {
-			TemplateID:   templateID,
-			Name:         "1g.24gb",
-			MemoryBytes:  24 * 1024 * 1024 * 1024, // 24GB
-			Tflops:       50.0,
-			ComputeUnits: 14,
+		template1g: {
+			TemplateID:      template1g,
+			Name:            "1g.24gb",
+			MemoryGigabytes: 24, // 24GB
+			ComputePercent:  1.0 / 7.0 * 100,
+			MaxPartition:    7,                             // Can allocate up to 7 instances
+			PlacementLimit:  []uint32{0, 1, 2, 3, 4, 5, 6}, // Can start at any of these positions
+			PlacementOffSet: 1,                             // Occupies 1 slot
+		},
+		template4g: {
+			TemplateID:      template4g,
+			Name:            "4g.94gb",
+			MemoryGigabytes: 94, // 94GB
+			ComputePercent:  4.0 / 7.0 * 100,
+			MaxPartition:    2,              // Can only allocate 2 instances
+			PlacementLimit:  []uint32{0, 4}, // Can start at position 0 or 4
+			PlacementOffSet: 4,              // Occupies 4 slots (0-3 or 4-7)
 		},
 	}
 	MaxPartitionsMap[gpuModel] = 7
+	MaxPlacementSlotsMap[gpuModel] = 8 // A100 has 8 placement slots (0-7)
+	mu.Unlock()
 
 	tests := []struct {
-		name                string
-		gpu                 *tfv1.GPU
-		templateID          string
-		allocatedPartitions map[string]tfv1.AllocatedPartition
-		expectError         bool
-		errorContains       string
+		name          string
+		gpu           *tfv1.GPU
+		templateID    string
+		expectError   bool
+		errorContains string
 	}{
 		{
-			name: "sufficient resources available",
+			name: "happy path - 1g.24gb allocation succeeds",
 			gpu: &tfv1.GPU{
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Capacity: &tfv1.Resource{
+						Tflops: resource.MustParse("312"),
+						Vram:   resource.MustParse("80Gi"),
+					},
 					Available: &tfv1.Resource{
 						Tflops: resource.MustParse("100"),
 						Vram:   resource.MustParse("50Gi"),
 					},
+					AllocatedPartitions: map[string]tfv1.AllocatedPartition{},
 				},
 			},
-			templateID:          templateID,
-			allocatedPartitions: map[string]tfv1.AllocatedPartition{},
-			expectError:         false,
+			templateID:  template1g,
+			expectError: false,
+		},
+		{
+			name: "Profile 19 * 4 should fail - all valid positions occupied",
+			gpu: &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
+				Status: tfv1.GPUStatus{
+					GPUModel: gpuModel,
+					Capacity: &tfv1.Resource{
+						Tflops: resource.MustParse("312"),
+						Vram:   resource.MustParse("80Gi"),
+					},
+					Available: &tfv1.Resource{
+						Tflops: resource.MustParse("200"),
+						Vram:   resource.MustParse("96Gi"),
+					},
+					AllocatedPartitions: map[string]tfv1.AllocatedPartition{
+						"pod-1": {TemplateID: template1g, PodUID: "pod-1"}, // Profile 19 at position 0 (slot 0)
+						"pod-2": {TemplateID: template1g, PodUID: "pod-2"}, // Profile 19 at position 1 (slot 1)
+						"pod-3": {TemplateID: template1g, PodUID: "pod-3"}, // Profile 19 at position 2 (slot 2)
+						"pod-4": {TemplateID: template1g, PodUID: "pod-4"}, // Profile 19 at position 3 (slot 3)
+						// Positions 4,5,6 are still free, but trying to allocate 5th instance
+						// Actually wait, if we have 4 instances, we need to check if 5th can fit
+						// Let me change this to have Profile 9 at position 0, then Profile 19 * 3, then try 4th
+					},
+				},
+			},
+			templateID:  template1g,
+			expectError: false, // Actually 4 instances can fit at positions 0,1,2,3, leaving 4,5,6 free
+		},
+		{
+			name: "Profile 9 at 0 + Profile 19 * 4 should fail",
+			gpu: &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
+				Status: tfv1.GPUStatus{
+					GPUModel: gpuModel,
+					Capacity: &tfv1.Resource{
+						Tflops: resource.MustParse("312"),
+						Vram:   resource.MustParse("80Gi"),
+					},
+					Available: &tfv1.Resource{
+						Tflops: resource.MustParse("200"),
+						Vram:   resource.MustParse("96Gi"),
+					},
+					AllocatedPartitions: map[string]tfv1.AllocatedPartition{
+						"pod-p9": {TemplateID: template4g, PodUID: "pod-p9", AllocatedAt: metav1.NewTime(metav1.Now().Add(-3 * time.Hour))}, // Profile 9 allocated first at position 0, occupies slots 0,1,2,3
+						"pod-1":  {TemplateID: template1g, PodUID: "pod-1", AllocatedAt: metav1.NewTime(metav1.Now().Add(-2 * time.Hour))},  // Profile 19 at position 4 (slot 4)
+						"pod-2":  {TemplateID: template1g, PodUID: "pod-2", AllocatedAt: metav1.NewTime(metav1.Now().Add(-1 * time.Hour))},  // Profile 19 at position 5 (slot 5)
+						"pod-3":  {TemplateID: template1g, PodUID: "pod-3", AllocatedAt: metav1.Now()},                                      // Profile 19 at position 6 (slot 6)
+						// Trying to allocate 4th Profile 19 instance - should fail
+						// All valid positions {0,1,2,3,4,5,6} are either occupied or conflict
+					},
+				},
+			},
+			templateID:    template1g,
+			expectError:   true,
+			errorContains: "placement slots",
+		},
+		{
+			name: "Profile 9 * 1 + Profile 19 * 3 should work",
+			gpu: &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
+				Status: tfv1.GPUStatus{
+					GPUModel: gpuModel,
+					Capacity: &tfv1.Resource{
+						Tflops: resource.MustParse("312"),
+						Vram:   resource.MustParse("80Gi"),
+					},
+					Available: &tfv1.Resource{
+						Tflops: resource.MustParse("150"),
+						Vram:   resource.MustParse("118Gi"),
+					},
+					AllocatedPartitions: map[string]tfv1.AllocatedPartition{
+						"pod-p9": {TemplateID: template4g, PodUID: "pod-p9"}, // Profile 9 at position 0, occupies slots 0,1,2,3
+						"pod-1":  {TemplateID: template1g, PodUID: "pod-1"},  // Profile 19 at slot 4
+						"pod-2":  {TemplateID: template1g, PodUID: "pod-2"},  // Profile 19 at slot 5
+						// Trying to allocate 3rd Profile 19 instance - should succeed at slot 6
+					},
+				},
+			},
+			templateID:  template1g,
+			expectError: false, // 3rd Profile 19 instance should succeed
+		},
+		{
+			name: "Profile 9 * 1 + Profile 19 * 3 should work (happy case)",
+			gpu: &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
+				Status: tfv1.GPUStatus{
+					GPUModel: gpuModel,
+					Capacity: &tfv1.Resource{
+						Tflops: resource.MustParse("312"),
+						Vram:   resource.MustParse("80Gi"),
+					},
+					Available: &tfv1.Resource{
+						Tflops: resource.MustParse("150"),
+						Vram:   resource.MustParse("118Gi"),
+					},
+					AllocatedPartitions: map[string]tfv1.AllocatedPartition{
+						"pod-p9": {TemplateID: template4g, PodUID: "pod-p9"}, // Profile 9 at position 0, occupies slots 0,1,2,3
+						"pod-1":  {TemplateID: template1g, PodUID: "pod-1"},  // Profile 19 at slot 4
+						"pod-2":  {TemplateID: template1g, PodUID: "pod-2"},  // Profile 19 at slot 5
+						// Trying to allocate 3rd Profile 19 instance - should succeed at slot 6
+					},
+				},
+			},
+			templateID:  template1g,
+			expectError: false,
+		},
+		{
+			name: "Profile 9 - all placement positions occupied",
+			gpu: &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
+				Status: tfv1.GPUStatus{
+					GPUModel: gpuModel,
+					Capacity: &tfv1.Resource{
+						Tflops: resource.MustParse("312"),
+						Vram:   resource.MustParse("80Gi"),
+					},
+					Available: &tfv1.Resource{
+						Tflops: resource.MustParse("200"),
+						Vram:   resource.MustParse("94Gi"),
+					},
+					AllocatedPartitions: map[string]tfv1.AllocatedPartition{
+						"pod-1": {TemplateID: template4g, PodUID: "pod-1"}, // Profile 9 at position 0, occupies slots 0,1,2,3
+						"pod-2": {TemplateID: template4g, PodUID: "pod-2"}, // Profile 9 at position 4, occupies slots 4,5,6,7
+						// Both positions {0,4} are now occupied
+					},
+				},
+			},
+			templateID:    template4g,
+			expectError:   true,
+			errorContains: "maximum partition count", // MaxPartition check happens first (2/2)
 		},
 		{
 			name: "insufficient TFLOPs",
@@ -285,16 +443,20 @@ func TestCheckPartitionAvailability(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Capacity: &tfv1.Resource{
+						Tflops: resource.MustParse("312"),
+						Vram:   resource.MustParse("80Gi"),
+					},
 					Available: &tfv1.Resource{
 						Tflops: resource.MustParse("10"), // Too low
 						Vram:   resource.MustParse("50Gi"),
 					},
+					AllocatedPartitions: map[string]tfv1.AllocatedPartition{},
 				},
 			},
-			templateID:          templateID,
-			allocatedPartitions: map[string]tfv1.AllocatedPartition{},
-			expectError:         true,
-			errorContains:       "insufficient TFLOPs",
+			templateID:    template1g,
+			expectError:   true,
+			errorContains: "insufficient TFLOPs",
 		},
 		{
 			name: "insufficient VRAM",
@@ -302,60 +464,59 @@ func TestCheckPartitionAvailability(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Capacity: &tfv1.Resource{
+						Tflops: resource.MustParse("312"),
+						Vram:   resource.MustParse("80Gi"),
+					},
 					Available: &tfv1.Resource{
 						Tflops: resource.MustParse("100"),
-						Vram:   resource.MustParse("10Gi"), // Too low
+						Vram:   resource.MustParse("10Gi"), // Too low for 24Gi required
 					},
+					AllocatedPartitions: map[string]tfv1.AllocatedPartition{},
 				},
 			},
-			templateID:          templateID,
-			allocatedPartitions: map[string]tfv1.AllocatedPartition{},
-			expectError:         true,
-			errorContains:       "insufficient VRAM",
+			templateID:    template1g,
+			expectError:   true,
+			errorContains: "insufficient VRAM",
 		},
 		{
-			name: "max partitions reached",
+			name: "Profile 9 can allocate at position 4 when Profile 19 uses slots 0-2",
 			gpu: &tfv1.GPU{
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Capacity: &tfv1.Resource{
+						Tflops: resource.MustParse("312"),
+						Vram:   resource.MustParse("80Gi"),
+					},
 					Available: &tfv1.Resource{
-						Tflops: resource.MustParse("100"),
-						Vram:   resource.MustParse("50Gi"),
+						Tflops: resource.MustParse("200"),
+						Vram:   resource.MustParse("94Gi"),
 					},
 					AllocatedPartitions: map[string]tfv1.AllocatedPartition{
-						"pod-1": {TemplateID: templateID, PodUID: "pod-1"},
-						"pod-2": {TemplateID: templateID, PodUID: "pod-2"},
-						"pod-3": {TemplateID: templateID, PodUID: "pod-3"},
-						"pod-4": {TemplateID: templateID, PodUID: "pod-4"},
-						"pod-5": {TemplateID: templateID, PodUID: "pod-5"},
-						"pod-6": {TemplateID: templateID, PodUID: "pod-6"},
-						"pod-7": {TemplateID: templateID, PodUID: "pod-7"},
+						"pod-1": {TemplateID: template1g, PodUID: "pod-1"}, // Slot 0
+						"pod-2": {TemplateID: template1g, PodUID: "pod-2"}, // Slot 1
+						"pod-3": {TemplateID: template1g, PodUID: "pod-3"}, // Slot 2
+						// Slots 3,4,5,6,7 are free
+						// Profile 9 can use position 4 (slots 4,5,6,7) or position 0 (slots 0,1,2,3)
+						// Position 0 conflicts, but position 4 is free
 					},
 				},
 			},
-			templateID: templateID,
-			allocatedPartitions: map[string]tfv1.AllocatedPartition{
-				"pod-1": {TemplateID: templateID, PodUID: "pod-1"},
-				"pod-2": {TemplateID: templateID, PodUID: "pod-2"},
-				"pod-3": {TemplateID: templateID, PodUID: "pod-3"},
-				"pod-4": {TemplateID: templateID, PodUID: "pod-4"},
-				"pod-5": {TemplateID: templateID, PodUID: "pod-5"},
-				"pod-6": {TemplateID: templateID, PodUID: "pod-6"},
-				"pod-7": {TemplateID: templateID, PodUID: "pod-7"},
-			},
-			expectError:   true,
-			errorContains: "maximum partition count",
+			templateID:  template4g,
+			expectError: false, // Profile 9 can use position 4
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := CheckPartitionAvailability(tt.gpu, tt.templateID, tt.allocatedPartitions)
+			err := CheckPartitionAvailability(tt.gpu, tt.templateID)
 
 			if tt.expectError {
-				assert.Error(t, err)
-				if tt.errorContains != "" {
+				if !assert.Error(t, err) {
+					return // Stop if no error when one is expected
+				}
+				if tt.errorContains != "" && err != nil {
 					assert.Contains(t, err.Error(), tt.errorContains)
 				}
 			} else {

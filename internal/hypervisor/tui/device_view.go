@@ -99,7 +99,7 @@ func updateDeviceDetail(
 	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Model"), MetricValueStyle.Render(device.Model)))
 	content.WriteString(fmt.Sprintf("%s: %d\n", MetricLabelStyle.Render("Index"), device.Index))
 	content.WriteString(fmt.Sprintf("%s: %d\n", MetricLabelStyle.Render("NUMA Node"), device.NUMANode))
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Total Memory"), formatBytes(device.TotalMemory)))
+	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Total Memory"), formatBytes(device.Bytes)))
 	content.WriteString(fmt.Sprintf("%s: %.2f TFLOPS\n", MetricLabelStyle.Render("Max TFLOPS"), device.MaxTflops))
 	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Driver Version"), device.DriverVersion))
 	content.WriteString(fmt.Sprintf("%s: %s\n\n", MetricLabelStyle.Render("Firmware Version"), device.FirmwareVersion))
@@ -134,7 +134,7 @@ func updateDeviceDetail(
 	if err == nil && len(allocations) > 0 {
 		content.WriteString(TitleStyle.Render("Allocations\n\n"))
 		for _, alloc := range allocations {
-			content.WriteString(fmt.Sprintf("  Worker: %s\n", alloc.WorkerID))
+			content.WriteString(fmt.Sprintf("  Worker: %s\n", alloc.WorkerUID))
 			content.WriteString(fmt.Sprintf("  Pod: %s/%s\n", alloc.Namespace, alloc.PodName))
 			content.WriteString(fmt.Sprintf("  Mode: %s\n", alloc.IsolationMode))
 			if alloc.MemoryLimit > 0 {
