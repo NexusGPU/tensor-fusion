@@ -123,3 +123,6 @@ type ProcessInfo struct {
 type ListProcessesResponse struct {
 	Processes []ProcessInfo `json:"processes"`
 }
+
+// DeviceAllocation represents device allocation response (backward compatibility)
+type DeviceAllocation = WorkerAllocation

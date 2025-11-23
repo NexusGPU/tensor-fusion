@@ -99,10 +99,8 @@ func updateDeviceDetail(
 	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Model"), MetricValueStyle.Render(device.Model)))
 	content.WriteString(fmt.Sprintf("%s: %d\n", MetricLabelStyle.Render("Index"), device.Index))
 	content.WriteString(fmt.Sprintf("%s: %d\n", MetricLabelStyle.Render("NUMA Node"), device.NUMANode))
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Total Memory"), formatBytes(device.Bytes)))
-	content.WriteString(fmt.Sprintf("%s: %.2f TFLOPS\n", MetricLabelStyle.Render("Max TFLOPS"), device.MaxTflops))
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Driver Version"), device.DriverVersion))
-	content.WriteString(fmt.Sprintf("%s: %s\n\n", MetricLabelStyle.Render("Firmware Version"), device.FirmwareVersion))
+	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Total Memory"), formatBytes(device.TotalMemoryBytes)))
+	content.WriteString(fmt.Sprintf("%s: %.2f TFLOPS\n\n", MetricLabelStyle.Render("Max TFLOPS"), device.MaxTflops))
 
 	if hasMetrics && deviceMetrics != nil {
 		content.WriteString(TitleStyle.Render("Current Metrics\n\n"))
