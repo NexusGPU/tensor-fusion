@@ -50,7 +50,7 @@ type PodCacheManager struct {
 
 	mu                sync.RWMutex
 	podCache          map[string]*corev1.Pod           // key: pod UID
-	allocations       map[string]*api.DeviceAllocation // key: pod UID
+	allocations       map[string]*api.WorkerDetail // key: pod UID
 	indexToWorkerInfo map[int]*api.WorkerInfo          // key: pod index annotation
 	indexToPodList    map[int][]string                 // key: pod index annotation, value: list of pod UIDs
 	stopCh            chan struct{}
@@ -70,7 +70,7 @@ func NewPodCacheManager(ctx context.Context, restConfig *rest.Config, nodeName s
 		restConfig:        restConfig,
 		nodeName:          nodeName,
 		podCache:          make(map[string]*corev1.Pod),
-		allocations:       make(map[string]*api.WorkerInfo),
+		allocations:       make(map[string]*api.WorkerDetail),
 		indexToWorkerInfo: make(map[int]*api.WorkerInfo),
 		indexToPodList:    make(map[int][]string),
 		stopCh:            make(chan struct{}),

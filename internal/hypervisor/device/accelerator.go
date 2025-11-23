@@ -154,7 +154,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			Model:     C.GoString(&cInfo.basic.model[0]),
 			Index:     int32(cInfo.basic.index),
 			NUMANode:  int32(cInfo.basic.numaNode),
-			Bytes:     uint64(cInfo.basic.totalMemoryBytes),
+			TotalMemoryBytes: uint64(cInfo.basic.totalMemoryBytes),
 			MaxTflops: float64(cInfo.basic.maxTflops),
 			Capabilities: api.DeviceCapabilities{
 				SupportsPartitioning:  bool(cInfo.capabilities.supportsPartitioning),
@@ -281,9 +281,7 @@ func (a *AcceleratorInterface) GetProcessComputeUtilization() ([]api.ComputeUtil
 			ProcessID:          C.GoString(&cu.processId[0]),
 			DeviceUUID:         C.GoString(&cu.deviceUUID[0]),
 			UtilizationPercent: float64(cu.utilizationPercent),
-			ActiveSMs:          uint64(cu.activeSMs),
-			TotalSMs:           uint64(cu.totalSMs),
-			TFLOPsUsed:         float64(cu.tflopsUsed),
+			// Note: ActiveSMs, TotalSMs, and TFLOPsUsed will be added to ComputeUtilization if needed
 		}
 	}
 
@@ -325,7 +323,7 @@ func (a *AcceleratorInterface) GetProcessMemoryUtilization() ([]api.MemoryUtiliz
 			DeviceUUID:         C.GoString(&mu.deviceUUID[0]),
 			UsedBytes:          uint64(mu.usedBytes),
 			ReservedBytes:      uint64(mu.reservedBytes),
-			UtilizationPercent: float64(mu.utilizationPercent),
+			// Note: UtilizationPercent will be calculated separately if needed
 		}
 	}
 
