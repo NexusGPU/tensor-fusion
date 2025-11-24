@@ -2,7 +2,9 @@
 # Supports both stub and vendor-specific implementations (NVIDIA, Ascend, etc.)
 
 CC ?= gcc
+CXX ?= g++
 CFLAGS ?= -Wall -Wextra -std=c11 -fPIC -O2
+CXXFLAGS ?= -Wall -Wextra -std=c++17 -fPIC -O2
 LDFLAGS ?= -shared
 
 # Directories
@@ -12,13 +14,20 @@ ASCEND_DIR := $(PROVIDER_DIR)/ascend
 BUILD_DIR := $(PROVIDER_DIR)/build
 TEST_DIR := $(PROVIDER_DIR)/test
 
+# Extra flags for Ascend implementation
+ASCEND_CFLAGS += -pthread -I/usr/local/dcmi
+ASCEND_LDFLAGS += -pthread -ldl
+
+# Test binary for Ascend fake validation
+TEST_ASCEND_BIN := $(BUILD_DIR)/test_ascend_fake
+
 # Output libraries
 STUB_LIB := $(BUILD_DIR)/libaccelerator_stub.so
 ASCEND_LIB := $(BUILD_DIR)/libaccelerator_ascend.so
 
 # Source files
 STUB_SRC := $(STUB_DIR)/accelerator.c
-ASCEND_SRC := $(ASCEND_DIR)/accelerator.c
+ASCEND_SRC := $(ASCEND_DIR)/accelerator.cpp
 
 # Object files
 STUB_OBJ := $(BUILD_DIR)/accelerator_stub.o
@@ -44,10 +53,10 @@ $(STUB_OBJ): $(STUB_SRC) | $(BUILD_DIR)
 ascend: $(ASCEND_LIB)
 
 $(ASCEND_LIB): $(ASCEND_OBJ) | $(BUILD_DIR)
-	$(CC) $(LDFLAGS) -o $@ $< $(ASCEND_LDFLAGS)
+	$(CXX) $(LDFLAGS) -o $@ $< $(ASCEND_LDFLAGS)
 
 $(ASCEND_OBJ): $(ASCEND_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -I$(PROVIDER_DIR) $(ASCEND_CFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -I$(PROVIDER_DIR) $(ASCEND_CFLAGS) -c -o $@ $<
 
 # Build test executable
 test: $(TEST_BIN)
@@ -55,9 +64,18 @@ test: $(TEST_BIN)
 $(TEST_BIN): $(TEST_DIR)/test_accelerator.c $(STUB_LIB) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(PROVIDER_DIR) -o $@ $(TEST_DIR)/test_accelerator.c -L$(BUILD_DIR) -laccelerator_stub -Wl,-rpath,$(BUILD_DIR)
 
+# Build Ascend fake test (links ascend lib)
+test-ascend: $(TEST_ASCEND_BIN)
+
+$(TEST_ASCEND_BIN): $(TEST_DIR)/ascend_partition_fake.c $(ASCEND_LIB) | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -I$(PROVIDER_DIR) -o $@ $(TEST_DIR)/ascend_partition_fake.c -L$(BUILD_DIR) -laccelerator_ascend $(ASCEND_LDFLAGS) -Wl,-rpath,$(BUILD_DIR)
+
 # Run tests
 test-run: test
 	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_BIN)
+
+test-ascend-run: test-ascend
+	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_ASCEND_BIN)
 
 # Create build directory
 $(BUILD_DIR):
@@ -86,4 +104,3 @@ help:
 	@echo "  clean     - Remove build artifacts"
 	@echo "  install   - Install libraries to system path"
 	@echo "  help      - Show this help message"
-

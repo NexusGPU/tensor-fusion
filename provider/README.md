@@ -21,9 +21,11 @@ provider/
 ├── stub/
 │   └── accelerator.c     # Stub implementation for testing
 ├── ascend/
-│   └── accelerator.c     # Huawei Ascend implementation
+│   ├── accelerator.cpp   # Huawei Ascend implementation (dcmi vNPU flow)
+│   └── tests/test_ascend.cpp
 └── test/
-    └── test_accelerator.c # Test suite
+    ├── ascend_partition_fake.c # C sanity check for Ascend lib
+    └── test_accelerator.c     # Stub test suite
 ```
 
 ## Building
@@ -47,36 +49,46 @@ make ascend
 ```bash
 cd provider
 make test-run
+# Ascend fake vNPU path
+make test-ascend-run
+# Hypervisor integration smoke test (loads stub .so)
+cd ..
+go test ./internal/hypervisor/device -run TestControllerLoadsStubLibrary -count=1
 ```
+
+> NOTE: `make ascend`/`test-ascend-run` require libdcmi built for the current architecture (e.g., aarch64 on Ascend hosts). The sample libdcmi shipped under `/usr/local/dcmi` in this environment is aarch64 and cannot be linked on x86; run the build on the target Ascend node.
+>
+> The Ascend provider dlopens libdcmi at runtime. Override the path with `DCMI_LIB_PATH=/path/to/libdcmi.so` if needed; when the library cannot be loaded, device count is reported as zero so tests will skip.
 
 ## Interface Categories
 
 ### 1. DeviceInfo APIs
 
-- `getDeviceInfo()`: Get device information (capabilities, basic info, NUMA, etc.)
-- `getPartitionTemplates()`: Get hardware partition templates (e.g., MIG)
-- `getDeviceTopology()`: Get device topology (NVLink, IB NIC, etc.)
+- `GetDeviceCount()`: Number of accelerators
+- `GetAllDevices()`: Enumerate accelerators and capabilities
+- `GetPartitionTemplates()`: Hardware partition templates (MIG/vNPU)
+- `GetDeviceTopology()`: Device topology (NVLink, IB NIC, etc.)
 
 ### 2. Virtualization APIs
 
 #### Partitioned Isolation
-- `assignPartition()`: Assign hardware partition (returns partitionOverhead)
-- `removePartition()`: Remove partition
+- `AssignPartition()`: Assign hardware partition (returns partitionOverhead)
+- `RemovePartition()`: Remove partition
 
 #### Hard Isolation
-- `setMemHardLimit()`: Set hard memory limit (one-time)
-- `setComputeUnitHardLimit()`: Set hard compute limit (one-time)
+- `SetMemHardLimit()`: Set hard memory limit (one-time)
+- `SetComputeUnitHardLimit()`: Set hard compute limit (one-time)
 
 #### Snapshot/Migration
-- `snapshot()`: Snapshot device state for processes
-- `resume()`: Resume device state for processes
+- `Snapshot()`: Snapshot device state for processes
+- `Resume()`: Resume device state for processes
 
 ### 3. Metrics APIs
 
-- `getProcessComputeUtilization()`: Get compute utilization per process
-- `getProcessMemoryUtilization()`: Get memory utilization per process
-- `getDeviceMetrics()`: Get basic device metrics (power, PCIe, SM active, TC usage)
-- `getExtendedDeviceMetrics()`: Get extended metrics (NVLink bandwidth, etc.)
+- `GetProcessComputeUtilization()`: Get compute utilization per process
+- `GetProcessMemoryUtilization()`: Get memory utilization per process
+- `GetDeviceMetrics()`: Basic device metrics (power, PCIe, SM active, TC usage)
+- `GetExtendedDeviceMetrics()`: Extended metrics (NVLink bandwidth, etc.)
 
 ## Vendor Implementations
 
@@ -86,12 +98,12 @@ The stub implementation (`stub/accelerator.c`) provides a reference implementati
 
 ### Ascend Implementation
 
-The Ascend implementation (`ascend/accelerator.c`) provides support for Huawei Ascend accelerators:
+The Ascend implementation (`ascend/accelerator.cpp`) uses libdcmi to enumerate devices and create/destroy vNPU partitions:
 
-- Supports Soft and Hard isolation modes
-- Does not support hardware partitioning (MIG-like features)
-- Uses HCCS (Huawei Cache Coherent System) for device interconnects
-- Typical device: Ascend 910 with 32GB memory, 2 AI cores, 320 TFLOPS (FP16)
+- Enumerates devices via `dcmi_get_all_device_count` + logicId→card/device mapping
+- Returns vir01/vir02/vir02_1c/vir04/vir04_3c/vir04_3c_ndvpp/vir04_4c_dvpp templates
+- Creates/destroys vnpu via `dcmi_create_vdevice` / `dcmi_set_destroy_vdevice` (vgroup from `ASCEND_VGROUP`, default 0)
+- Metrics/Hard/Snapshot remain stubbed; swap to real APIs as needed
 
 ## Usage in Hypervisor
 
@@ -107,18 +119,10 @@ See `internal/hypervisor/device/` for the Go bindings and device manager impleme
 
 ## Testing
 
-All tests pass successfully:
-
-```bash
-$ make test-run
-========================================
-Accelerator Library Test Suite
-========================================
-Total tests:  47
-Passed:       47
-Failed:       0
-All tests passed! ✓
-```
+- `make test-run`: runs the stub C test suite against `libaccelerator_stub.so`
+- `make test-ascend-run`: builds and runs the Ascend fake vNPU checks
+- `meson test -C build`: runs the gtest-based Ascend provider tests (if you built with Meson)
+- `go test ./internal/hypervisor/device -run TestControllerLoadsStubLibrary`: loads the stub .so through the hypervisor controller to validate the vendor-agnostic path
 
 ## Notes
 
@@ -126,4 +130,3 @@ All tests passed! ✓
 - Memory management: Use provided cleanup functions to free allocated memory
 - Thread safety: Vendor implementations should be thread-safe
 - Error handling: All APIs return Result enum for error handling
-

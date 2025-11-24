@@ -1,0 +1,1 @@
+option('with_fake', type : 'boolean', value : false, description : 'Build with fake implementation for testing')
