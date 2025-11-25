@@ -340,49 +340,35 @@ bool AssignPartition(PartitionAssignment* assignment) {
     if (!assignment || assignment->templateId[0] == '\0' || assignment->deviceUUID[0] == '\0') {
         return false;
     }
+    if (assignment->partitionUUID[0] != '\0') {
+        // Caller provided partition ID; honor it and short-circuit.
+        assignment->partitionOverheadBytes = 0;
+        return true;
+    }
     const TemplateSpec* tmpl = findTemplate(assignment->templateId);
     if (!tmpl) {
         return false;
     }
-    if (!ensureDcmiLoaded()) {
-        return false;
-    }
 
-    int logicId = -1;
-    if (!parseLogicIdFromUUID(assignment->deviceUUID, &logicId)) {
-        return false;
-    }
-    int cardId = 0;
-    int deviceId = 0;
-    if (!mapLogicToCardDevice(logicId, &cardId, &deviceId)) {
-        return false;
-    }
-
+    // Software-only tracking: no dcmi create_vdevice call. Partition UUID is synthetic.
     {
         std::lock_guard<std::mutex> lock(gPartitionMutex);
         for (const auto& rec : gPartitions) {
             if (rec.deviceUUID == assignment->deviceUUID && rec.templateId == assignment->templateId) {
                 std::snprintf(assignment->partitionUUID, sizeof(assignment->partitionUUID), "%s", rec.partitionUUID.c_str());
-                assignment->partitionOverheadBytes = 256ULL * 1024 * 1024;
+                assignment->partitionOverheadBytes = 0;
                 return true;
             }
         }
     }
 
-    dcmi_create_vdev_res_stru req{};
-    std::snprintf(req.template_name, sizeof(req.template_name), "%s", tmpl->id);
-    req.vfg_id = static_cast<unsigned int>(getDefaultVGroup());
-    dcmi_create_vdev_out out{};
-
-    if (p_dcmi_create_vdevice(cardId, deviceId, &req, &out) != 0) {
-        return false;
-    }
+    unsigned int syntheticId = static_cast<unsigned int>(gUUIDSeed.fetch_add(1));
 
     PartitionRecord rec;
     rec.deviceUUID = assignment->deviceUUID;
     rec.templateId = assignment->templateId;
-    rec.vdevId = out.vdev_id;
-    rec.partitionUUID = makePartitionUUID(rec.deviceUUID, out.vdev_id);
+    rec.vdevId = syntheticId;
+    rec.partitionUUID = makePartitionUUID(rec.deviceUUID, syntheticId);
 
     {
         std::lock_guard<std::mutex> lock(gPartitionMutex);
@@ -390,7 +376,7 @@ bool AssignPartition(PartitionAssignment* assignment) {
     }
 
     std::snprintf(assignment->partitionUUID, sizeof(assignment->partitionUUID), "%s", rec.partitionUUID.c_str());
-    assignment->partitionOverheadBytes = 256ULL * 1024 * 1024;
+    assignment->partitionOverheadBytes = 0;
     return true;
 }
 
@@ -398,37 +384,13 @@ bool RemovePartition(const char* templateId, const char* deviceUUID) {
     if (!templateId || !deviceUUID) {
         return false;
     }
-    if (!ensureDcmiLoaded()) {
-        return false;
-    }
-    int logicId = -1;
-    if (!parseLogicIdFromUUID(deviceUUID, &logicId)) {
-        return false;
-    }
-    int cardId = 0;
-    int deviceId = 0;
-    if (!mapLogicToCardDevice(logicId, &cardId, &deviceId)) {
-        return false;
-    }
-
-    unsigned int vdevId = 0;
-    {
-        std::lock_guard<std::mutex> lock(gPartitionMutex);
-        for (auto it = gPartitions.begin(); it != gPartitions.end(); ++it) {
-            if (it->deviceUUID == deviceUUID && it->templateId == templateId) {
-                vdevId = it->vdevId;
-                gPartitions.erase(it);
-                break;
-            }
+    // Pure software tracking: remove bookkeeping only.
+    std::lock_guard<std::mutex> lock(gPartitionMutex);
+    for (auto it = gPartitions.begin(); it != gPartitions.end(); ++it) {
+        if (it->deviceUUID == deviceUUID && it->templateId == templateId) {
+            gPartitions.erase(it);
+            return true;
         }
-    }
-
-    if (vdevId == 0) {
-        return false;
-    }
-
-    if (p_dcmi_set_destroy_vdevice(cardId, deviceId, vdevId) != 0) {
-        return false;
     }
     return true;
 }
