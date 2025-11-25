@@ -230,38 +230,55 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         return RESULT_SUCCESS;
     }
 
-    size_t toFill = std::min(maxCount, total);
-    *deviceCount = 0;
+    struct Probe {
+        int logic;
+        int card;
+        int device;
+    };
+    std::vector<Probe> probes;
+    probes.reserve(total);
 
-    for (size_t logicId = 0; logicId < toFill; ++logicId) {
+    const int maxProbe = 128; // wider than device count to handle sparse logic IDs
+    for (int logic = 0; logic < maxProbe && probes.size() < total; ++logic) {
         int cardId = 0;
         int deviceId = 0;
-        if (!mapLogicToCardDevice(static_cast<int>(logicId), &cardId, &deviceId)) {
-            continue;
+        if (mapLogicToCardDevice(logic, &cardId, &deviceId)) {
+            probes.push_back(Probe{logic, cardId, deviceId});
         }
+    }
 
+    if (probes.empty()) {
+        *deviceCount = 0;
+        return RESULT_SUCCESS;
+    }
+
+    size_t toFill = std::min(maxCount, probes.size());
+    *deviceCount = 0;
+
+    for (size_t i = 0; i < toFill; ++i) {
+        const Probe& p = probes[i];
         ExtendedDeviceInfo* info = &devices[*deviceCount];
         std::memset(info, 0, sizeof(ExtendedDeviceInfo));
 
         dcmi_chip_info_v2 chipInfo{};
-        if (p_dcmi_get_device_chip_info_v2(cardId, deviceId, &chipInfo) != 0) {
+        if (p_dcmi_get_device_chip_info_v2(p.card, p.device, &chipInfo) != 0) {
             continue;
         }
 
         dcmi_get_memory_info_stru memInfo{};
         uint64_t totalMem = 0;
-        if (p_dcmi_get_device_memory_info_v3(cardId, deviceId, &memInfo) == 0) {
+        if (p_dcmi_get_device_memory_info_v3(p.card, p.device, &memInfo) == 0) {
             totalMem = memInfo.memory_size * 1024ULL * 1024ULL; // MB -> bytes
-        } else if (p_dcmi_get_memory_info(cardId, deviceId, reinterpret_cast<dcmi_memory_info_stru*>(&memInfo)) == 0) {
+        } else if (p_dcmi_get_memory_info(p.card, p.device, reinterpret_cast<dcmi_memory_info_stru*>(&memInfo)) == 0) {
             totalMem = memInfo.memory_size * 1024ULL * 1024ULL;
         }
 
-        std::snprintf(info->basic.uuid, sizeof(info->basic.uuid), "npu-%zu-chip-%d", logicId, deviceId);
+        std::snprintf(info->basic.uuid, sizeof(info->basic.uuid), "npu-%d-chip-%d", p.logic, p.device);
         std::snprintf(info->basic.vendor, sizeof(info->basic.vendor), "Huawei");
         std::snprintf(info->basic.model, sizeof(info->basic.model), "%s", chipInfo.npu_name);
         std::snprintf(info->basic.driverVersion, sizeof(info->basic.driverVersion), "dcmi");
         std::snprintf(info->basic.firmwareVersion, sizeof(info->basic.firmwareVersion), "unknown");
-        info->basic.index = static_cast<int32_t>(logicId);
+        info->basic.index = static_cast<int32_t>(p.logic);
         info->basic.numaNode = -1;
         info->basic.totalMemoryBytes = totalMem;
         info->basic.totalComputeUnits = chipInfo.aicore_cnt;
