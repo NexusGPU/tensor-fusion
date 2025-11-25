@@ -4,6 +4,8 @@
 // so editors can parse the file without installing Ascend SDK locally.
 #if __has_include(<dcmi_interface_api.h>)
 #include <dcmi_interface_api.h>
+#elif __has_include("/usr/local/dcmi/dcmi_interface_api.h")
+#include "/usr/local/dcmi/dcmi_interface_api.h"
 #else
 #define MAX_CHIP_NAME_LEN 32
 
