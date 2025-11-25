@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -83,6 +84,28 @@ bool loadSym(void* handle, const char* name, T& fn) {
     return fn != nullptr;
 }
 
+void parseIdList(const char* env, std::vector<int>& out) {
+    if (!env) {
+        return;
+    }
+    const char* ptr = env;
+    while (*ptr) {
+        while (*ptr && std::isspace(static_cast<unsigned char>(*ptr))) {
+            ptr++;
+        }
+        char* end = nullptr;
+        long v = std::strtol(ptr, &end, 10);
+        if (end == ptr) {
+            break;
+        }
+        out.push_back(static_cast<int>(v));
+        ptr = end;
+        if (*ptr == ',') {
+            ptr++;
+        }
+    }
+}
+
 bool ensureDcmiLoaded() {
     std::lock_guard<std::mutex> lock(gDcmiMutex);
     if (gDcmiTried) {
@@ -90,12 +113,33 @@ bool ensureDcmiLoaded() {
     }
     gDcmiTried = true;
 
-    const char* libPath = std::getenv("DCMI_LIB_PATH");
-    if (!libPath) {
-        libPath = "/usr/local/dcmi/libdcmi.so";
+    const char* envPath = std::getenv("DCMI_LIB_PATH");
+    const char* candidates[] = {
+        envPath,
+        "/usr/local/dcmi/libdcmi.so",
+        "/usr/local/Ascend/driver/lib64/libdcmi.so",
+        "/usr/lib64/libdcmi.so",
+        nullptr,
+    };
+
+    std::fprintf(stderr, "[ascend] attempting to load dcmi\n");
+    for (size_t i = 0; candidates[i] != nullptr; ++i) {
+        const char* libPath = candidates[i];
+        if (!libPath) {
+            continue;
+        }
+        gDcmiHandle = dlopen(libPath, RTLD_LAZY | RTLD_LOCAL);
+        if (gDcmiHandle) {
+            std::fprintf(stderr, "[ascend] loaded dcmi from %s\n", libPath);
+            break;
+        } else {
+            const char* err = dlerror();
+            std::fprintf(stderr, "[ascend] dlopen failed for %s: %s\n", libPath, err ? err : "unknown");
+        }
     }
-    gDcmiHandle = dlopen(libPath, RTLD_LAZY | RTLD_LOCAL);
+
     if (!gDcmiHandle) {
+        std::fprintf(stderr, "[ascend] dcmi handle remains null after dlopen attempts\n");
         return false;
     }
 
@@ -160,6 +204,7 @@ Result GetDeviceCount(size_t* deviceCount) {
     }
     int count = 0;
     int ret = p_dcmi_get_all_device_count(&count);
+    std::fprintf(stderr, "[ascend] dcmi_get_all_device_count ret=%d count=%d\n", ret, count);
     if (ret != 0) {
         std::fprintf(stderr, "[ascend] dcmi_get_all_device_count ret=%d\n", ret);
         *deviceCount = 0;
@@ -193,12 +238,21 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
 
     const int maxLogic = 256;
     size_t filled = 0;
+    std::vector<int> logicIds;
+    parseIdList(std::getenv("ASCEND_LOGIC_IDS"), logicIds);
+    if (logicIds.empty()) {
+        for (int logic = 0; logic < maxLogic; ++logic) {
+            logicIds.push_back(logic);
+        }
+    }
 
-    for (int logic = 0; logic < maxLogic && filled < maxCount; ++logic) {
+    for (size_t idx = 0; idx < logicIds.size() && filled < maxCount; ++idx) {
+        int logic = logicIds[idx];
         int card = 0;
         int dev = 0;
         int mapRet = p_dcmi_get_card_id_device_id_from_logicid(&card, &dev, static_cast<unsigned int>(logic));
         if (mapRet != 0) {
+            std::fprintf(stderr, "[ascend] map logic=%d failed ret=%d\n", logic, mapRet);
             continue;
         }
 
@@ -207,19 +261,19 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
 
         dcmi_chip_info_v2 chipInfo{};
         if (p_dcmi_get_device_chip_info_v2(card, dev, &chipInfo) != 0) {
-                std::fprintf(stderr, "[ascend] skip card=%d device=%d chip_info failed\n", card, dev);
-                continue;
-            }
+            std::fprintf(stderr, "[ascend] skip card=%d device=%d chip_info failed\n", card, dev);
+            continue;
+        }
 
-            dcmi_get_memory_info_stru memInfo{};
-            uint64_t totalMem = 0;
-            if (p_dcmi_get_device_memory_info_v3(card, dev, &memInfo) == 0) {
-                totalMem = memInfo.memory_size * 1024ULL * 1024ULL; // MB -> bytes
-            } else if (p_dcmi_get_memory_info(card, dev, reinterpret_cast<dcmi_memory_info_stru*>(&memInfo)) == 0) {
-                totalMem = memInfo.memory_size * 1024ULL * 1024ULL;
-            } else {
-                std::fprintf(stderr, "[ascend] card=%d dev=%d mem_info failed\n", card, dev);
-            }
+        dcmi_get_memory_info_stru memInfo{};
+        uint64_t totalMem = 0;
+        if (p_dcmi_get_device_memory_info_v3(card, dev, &memInfo) == 0) {
+            totalMem = memInfo.memory_size * 1024ULL * 1024ULL; // MB -> bytes
+        } else if (p_dcmi_get_memory_info(card, dev, reinterpret_cast<dcmi_memory_info_stru*>(&memInfo)) == 0) {
+            totalMem = memInfo.memory_size * 1024ULL * 1024ULL;
+        } else {
+            std::fprintf(stderr, "[ascend] card=%d dev=%d mem_info failed\n", card, dev);
+        }
 
         std::snprintf(info->basic.uuid, sizeof(info->basic.uuid), "npu-%zu-chip-%d", filled, dev);
         std::snprintf(info->basic.vendor, sizeof(info->basic.vendor), "Huawei");
@@ -258,6 +312,78 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
 
         (*deviceCount)++;
         filled++;
+    }
+
+    if (*deviceCount == 0) {
+        // Fallback: scan cards/devices directly if mapping failed.
+        std::vector<int> cardIds;
+        parseIdList(std::getenv("ASCEND_CARD_IDS"), cardIds);
+        if (cardIds.empty()) {
+            for (int c = 0; c < 8; ++c) {
+                cardIds.push_back(c);
+            }
+        }
+        for (size_t ci = 0; ci < cardIds.size() && filled < maxCount; ++ci) {
+            int card = cardIds[ci];
+            for (int dev = 0; dev < 4 && filled < maxCount; ++dev) {
+                dcmi_chip_info_v2 chipInfo{};
+                int chipRc = p_dcmi_get_device_chip_info_v2(card, dev, &chipInfo);
+                if (chipRc != 0) {
+                    std::fprintf(stderr, "[ascend] fallback chip_info card=%d dev=%d rc=%d\n", card, dev, chipRc);
+                    continue;
+                }
+
+                dcmi_get_memory_info_stru memInfo{};
+                uint64_t totalMem = 0;
+                if (p_dcmi_get_device_memory_info_v3(card, dev, &memInfo) == 0) {
+                    totalMem = memInfo.memory_size * 1024ULL * 1024ULL; // MB -> bytes
+                } else if (p_dcmi_get_memory_info(card, dev, reinterpret_cast<dcmi_memory_info_stru*>(&memInfo)) == 0) {
+                    totalMem = memInfo.memory_size * 1024ULL * 1024ULL;
+                } else {
+                    std::fprintf(stderr, "[ascend] fallback mem_info card=%d dev=%d failed\n", card, dev);
+                }
+
+                ExtendedDeviceInfo* info = &devices[*deviceCount];
+                std::memset(info, 0, sizeof(ExtendedDeviceInfo));
+                std::snprintf(info->basic.uuid, sizeof(info->basic.uuid), "npu-%zu-card-%d-dev-%d", filled, card, dev);
+                std::snprintf(info->basic.vendor, sizeof(info->basic.vendor), "Huawei");
+                std::snprintf(info->basic.model, sizeof(info->basic.model), "%s", chipInfo.npu_name);
+                std::snprintf(info->basic.driverVersion, sizeof(info->basic.driverVersion), "dcmi");
+                std::snprintf(info->basic.firmwareVersion, sizeof(info->basic.firmwareVersion), "unknown");
+                info->basic.index = static_cast<int32_t>(filled);
+                info->basic.numaNode = -1;
+                info->basic.totalMemoryBytes = totalMem;
+                info->basic.totalComputeUnits = chipInfo.aicore_cnt;
+                info->basic.maxTflops = 0.0;
+                info->basic.pcieGen = 0;
+                info->basic.pcieWidth = 0;
+
+                info->props.clockGraphics = 0;
+                info->props.clockSM = 0;
+                info->props.clockMem = 0;
+                info->props.clockAI = 0;
+                info->props.powerLimit = 0;
+                info->props.temperatureThreshold = 0;
+                info->props.eccEnabled = false;
+                info->props.persistenceModeEnabled = false;
+                std::snprintf(info->props.computeCapability, sizeof(info->props.computeCapability), "%.15s", chipInfo.chip_name);
+                std::snprintf(info->props.chipType, sizeof(info->props.chipType), "Ascend");
+
+                info->capabilities.supportsPartitioning = true;
+                info->capabilities.supportsSoftIsolation = false;
+                info->capabilities.supportsHardIsolation = false;
+                info->capabilities.supportsSnapshot = false;
+                info->capabilities.supportsMetrics = true;
+                info->capabilities.maxPartitions = 32;
+                info->capabilities.maxWorkersPerDevice = 32;
+
+                info->relatedDevices = NULL;
+                info->relatedDeviceCount = 0;
+
+                (*deviceCount)++;
+                filled++;
+            }
+        }
     }
 
     if (*deviceCount == 0) {
