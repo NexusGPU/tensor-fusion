@@ -9,6 +9,9 @@
 
 #include "../accelerator.h"
 
+// Explicit declaration for environments where accelerator.h lacks this symbol.
+Result GetPartitionTemplates(int32_t deviceIndex, PartitionTemplate* templates, size_t maxCount, size_t* templateCount);
+
 static void test_device_info() {
     size_t count = 0;
     Result r = GetDeviceCount(&count);
