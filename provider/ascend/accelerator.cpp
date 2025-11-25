@@ -199,12 +199,14 @@ Result GetDeviceCount(size_t* deviceCount) {
         return RESULT_ERROR_INVALID_PARAM;
     }
     if (!ensureDcmiLoaded()) {
+        std::fprintf(stderr, "[ascend] dcmi not loaded, returning 0 devices\n");
         *deviceCount = 0;
         return RESULT_SUCCESS;
     }
     int count = 0;
     int ret = p_dcmi_get_all_device_count(&count);
     if (ret != 0) {
+        std::fprintf(stderr, "[ascend] dcmi_get_all_device_count ret=%d\n", ret);
         *deviceCount = 0;
         return RESULT_ERROR_OPERATION_FAILED;
     }
@@ -227,58 +229,41 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
     }
     if (!ensureDcmiLoaded()) {
         *deviceCount = 0;
+        std::fprintf(stderr, "[ascend] dcmi not loaded in GetAllDevices\n");
         return RESULT_SUCCESS;
     }
 
-    struct Probe {
-        int logic;
-        int card;
-        int device;
-    };
-    std::vector<Probe> probes;
-    probes.reserve(total);
+    const int maxCard = 8;
+    const int maxDevicePerCard = 4;
+    size_t filled = 0;
 
-    const int maxProbe = 128; // wider than device count to handle sparse logic IDs
-    for (int logic = 0; logic < maxProbe && probes.size() < total; ++logic) {
-        int cardId = 0;
-        int deviceId = 0;
-        if (mapLogicToCardDevice(logic, &cardId, &deviceId)) {
-            probes.push_back(Probe{logic, cardId, deviceId});
-        }
-    }
+    for (int card = 0; card < maxCard && filled < maxCount; ++card) {
+        for (int dev = 0; dev < maxDevicePerCard && filled < maxCount; ++dev) {
+            ExtendedDeviceInfo* info = &devices[*deviceCount];
+            std::memset(info, 0, sizeof(ExtendedDeviceInfo));
 
-    if (probes.empty()) {
-        *deviceCount = 0;
-        return RESULT_SUCCESS;
-    }
+            dcmi_chip_info_v2 chipInfo{};
+            if (p_dcmi_get_device_chip_info_v2(card, dev, &chipInfo) != 0) {
+                std::fprintf(stderr, "[ascend] skip card=%d device=%d chip_info failed\n", card, dev);
+                continue;
+            }
 
-    size_t toFill = std::min(maxCount, probes.size());
-    *deviceCount = 0;
+            dcmi_get_memory_info_stru memInfo{};
+            uint64_t totalMem = 0;
+            if (p_dcmi_get_device_memory_info_v3(card, dev, &memInfo) == 0) {
+                totalMem = memInfo.memory_size * 1024ULL * 1024ULL; // MB -> bytes
+            } else if (p_dcmi_get_memory_info(card, dev, reinterpret_cast<dcmi_memory_info_stru*>(&memInfo)) == 0) {
+                totalMem = memInfo.memory_size * 1024ULL * 1024ULL;
+            } else {
+                std::fprintf(stderr, "[ascend] card=%d dev=%d mem_info failed\n", card, dev);
+            }
 
-    for (size_t i = 0; i < toFill; ++i) {
-        const Probe& p = probes[i];
-        ExtendedDeviceInfo* info = &devices[*deviceCount];
-        std::memset(info, 0, sizeof(ExtendedDeviceInfo));
-
-        dcmi_chip_info_v2 chipInfo{};
-        if (p_dcmi_get_device_chip_info_v2(p.card, p.device, &chipInfo) != 0) {
-            continue;
-        }
-
-        dcmi_get_memory_info_stru memInfo{};
-        uint64_t totalMem = 0;
-        if (p_dcmi_get_device_memory_info_v3(p.card, p.device, &memInfo) == 0) {
-            totalMem = memInfo.memory_size * 1024ULL * 1024ULL; // MB -> bytes
-        } else if (p_dcmi_get_memory_info(p.card, p.device, reinterpret_cast<dcmi_memory_info_stru*>(&memInfo)) == 0) {
-            totalMem = memInfo.memory_size * 1024ULL * 1024ULL;
-        }
-
-        std::snprintf(info->basic.uuid, sizeof(info->basic.uuid), "npu-%d-chip-%d", p.logic, p.device);
+            std::snprintf(info->basic.uuid, sizeof(info->basic.uuid), "npu-%d-chip-%d", filled, dev);
         std::snprintf(info->basic.vendor, sizeof(info->basic.vendor), "Huawei");
         std::snprintf(info->basic.model, sizeof(info->basic.model), "%s", chipInfo.npu_name);
         std::snprintf(info->basic.driverVersion, sizeof(info->basic.driverVersion), "dcmi");
         std::snprintf(info->basic.firmwareVersion, sizeof(info->basic.firmwareVersion), "unknown");
-        info->basic.index = static_cast<int32_t>(p.logic);
+            info->basic.index = static_cast<int32_t>(filled);
         info->basic.numaNode = -1;
         info->basic.totalMemoryBytes = totalMem;
         info->basic.totalComputeUnits = chipInfo.aicore_cnt;
@@ -308,7 +293,9 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         info->relatedDevices = NULL;
         info->relatedDeviceCount = 0;
 
-        (*deviceCount)++;
+            (*deviceCount)++;
+            filled++;
+        }
     }
 
     return RESULT_SUCCESS;
