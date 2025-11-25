@@ -24,7 +24,7 @@ require (
 	github.com/shirou/gopsutil v3.21.11+incompatible
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel v1.38.0
-	go.uber.org/zap v1.27.0
+	go.uber.org/zap v1.27.1
 	golang.org/x/time v0.14.0
 	gomodules.xyz/jsonpatch/v2 v2.5.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
