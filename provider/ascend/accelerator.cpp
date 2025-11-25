@@ -70,7 +70,6 @@ using dcmi_get_memory_info_fn = int (*)(int, int, struct dcmi_memory_info_stru*)
 using dcmi_create_vdevice_fn = int (*)(int, int, struct dcmi_create_vdev_res_stru*, struct dcmi_create_vdev_out*);
 using dcmi_set_destroy_vdevice_fn = int (*)(int, int, unsigned int);
 using dcmi_init_fn = int (*)(void);
-using dcmi_init_fn = int (*)(void);
 
 dcmi_get_all_device_count_fn p_dcmi_get_all_device_count = nullptr;
 dcmi_get_card_id_device_id_from_logicid_fn p_dcmi_get_card_id_device_id_from_logicid = nullptr;
@@ -79,7 +78,6 @@ dcmi_get_device_memory_info_v3_fn p_dcmi_get_device_memory_info_v3 = nullptr;
 dcmi_get_memory_info_fn p_dcmi_get_memory_info = nullptr;
 dcmi_create_vdevice_fn p_dcmi_create_vdevice = nullptr;
 dcmi_set_destroy_vdevice_fn p_dcmi_set_destroy_vdevice = nullptr;
-dcmi_init_fn p_dcmi_init = nullptr;
 dcmi_init_fn p_dcmi_init = nullptr;
 
 template <typename T>
@@ -158,17 +156,20 @@ bool ensureDcmiLoaded() {
     ok &= loadSym(gDcmiHandle, "dcmi_init", p_dcmi_init);
 
     if (ok && p_dcmi_init) {
-        int initRet = p_dcmi_init();
-        if (initRet != 0) {
-            std::fprintf(stderr, "[ascend] dcmi_init failed ret=%d\n", initRet);
-            ok = false;
-        }
+      int initRet = p_dcmi_init();
+      if (initRet != 0) {
+          std::fprintf(stderr, "[ascend] dcmi_init failed ret=%d\n", initRet);
+          ok = false;
+          dlclose(gDcmiHandle);
+          gDcmiHandle = nullptr;
+      }
     }
 
     gDcmiLoaded = ok;
     if (!ok) {
-        dlclose(gDcmiHandle);
-        gDcmiHandle = nullptr;
+      // 关闭句柄保持空
+      dlclose(gDcmiHandle);
+      gDcmiHandle = nullptr;
     }
     return gDcmiLoaded;
 }
