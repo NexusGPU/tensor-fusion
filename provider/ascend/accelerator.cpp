@@ -254,7 +254,9 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
     std::vector<int> logicIds;
     parseIdList(std::getenv("ASCEND_LOGIC_IDS"), logicIds);
     if (logicIds.empty()) {
-        for (int logic = 0; logic < maxLogic; ++logic) {
+        // Default: probe logic IDs 0 to min(maxLogic, total*4) to reduce noise
+        int probeLimit = std::min(maxLogic, static_cast<int>(total * 4));
+        for (int logic = 0; logic < probeLimit; ++logic) {
             logicIds.push_back(logic);
         }
     }
@@ -265,7 +267,10 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         int dev = 0;
         int mapRet = p_dcmi_get_card_id_device_id_from_logicid(&card, &dev, static_cast<unsigned int>(logic));
         if (mapRet != 0) {
-            std::fprintf(stderr, "[ascend] map logic=%d failed ret=%d\n", logic, mapRet);
+            // Only log first few failures to reduce noise
+            if (idx < 5 || (logicIds.size() > 0 && idx == logicIds.size() - 1)) {
+                std::fprintf(stderr, "[ascend] map logic=%d failed ret=%d\n", logic, mapRet);
+            }
             continue;
         }
 
