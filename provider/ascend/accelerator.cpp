@@ -156,20 +156,19 @@ bool ensureDcmiLoaded() {
     ok &= loadSym(gDcmiHandle, "dcmi_init", p_dcmi_init);
 
     if (ok && p_dcmi_init) {
-      int initRet = p_dcmi_init();
-      if (initRet != 0) {
-          std::fprintf(stderr, "[ascend] dcmi_init failed ret=%d\n", initRet);
-          ok = false;
-          dlclose(gDcmiHandle);
-          gDcmiHandle = nullptr;
-      }
+        int initRet = p_dcmi_init();
+        if (initRet != 0) {
+            std::fprintf(stderr, "[ascend] dcmi_init failed ret=%d\n", initRet);
+            ok = false;
+            dlclose(gDcmiHandle);
+            gDcmiHandle = nullptr;
+        }
     }
 
     gDcmiLoaded = ok;
     if (!ok) {
-      // 关闭句柄保持空
-      dlclose(gDcmiHandle);
-      gDcmiHandle = nullptr;
+        dlclose(gDcmiHandle);
+        gDcmiHandle = nullptr;
     }
     return gDcmiLoaded;
 }
