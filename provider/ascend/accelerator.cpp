@@ -22,19 +22,6 @@
 
 namespace {
 
-// Default vgroup when creating vdevice; can be overridden via env.
-int getDefaultVGroup() {
-    const char* env = std::getenv("ASCEND_VGROUP");
-    if (!env) {
-        return 0;
-    }
-    int v = std::atoi(env);
-    if (v < 0 || v > 3) {
-        return 0;
-    }
-    return v;
-}
-
 struct TemplateSpec {
     const char* id;
     uint64_t memoryBytes;
@@ -147,38 +134,6 @@ std::string makePartitionUUID(const std::string& deviceUUID, unsigned int vdevId
     return std::string(buf);
 }
 
-bool parseLogicIdFromUUID(const char* uuid, int* logicId) {
-    if (!uuid || !logicId) {
-        return false;
-    }
-    // Expected format: npu-<logic>-chip-<chip>
-    int logic = -1;
-    int chip = -1;
-    if (std::sscanf(uuid, "npu-%d-chip-%d", &logic, &chip) != 2) {
-        return false;
-    }
-    *logicId = logic;
-    return true;
-}
-
-bool mapLogicToCardDevice(int logicId, int* cardId, int* deviceId) {
-    if (!cardId || !deviceId) {
-        return false;
-    }
-    int c = 0;
-    int d = 0;
-    if (!ensureDcmiLoaded()) {
-        return false;
-    }
-    int ret = p_dcmi_get_card_id_device_id_from_logicid(&c, &d, static_cast<unsigned int>(logicId));
-    if (ret != 0) {
-        return false;
-    }
-    *cardId = c;
-    *deviceId = d;
-    return true;
-}
-
 void fillTemplate(const TemplateSpec& spec, PartitionTemplate* out) {
     std::snprintf(out->templateId, sizeof(out->templateId), "%s", spec.id);
     std::snprintf(out->name, sizeof(out->name), "%s", spec.id);
@@ -214,6 +169,9 @@ Result GetDeviceCount(size_t* deviceCount) {
         count = 0;
     }
     *deviceCount = static_cast<size_t>(count);
+    if (*deviceCount == 0) {
+        std::fprintf(stderr, "[ascend] no devices discovered via dcmi logic-id mapping\n");
+    }
     return RESULT_SUCCESS;
 }
 
@@ -233,17 +191,22 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         return RESULT_SUCCESS;
     }
 
-    const int maxCard = 8;
-    const int maxDevicePerCard = 4;
+    const int maxLogic = 256;
     size_t filled = 0;
 
-    for (int card = 0; card < maxCard && filled < maxCount; ++card) {
-        for (int dev = 0; dev < maxDevicePerCard && filled < maxCount; ++dev) {
-            ExtendedDeviceInfo* info = &devices[*deviceCount];
-            std::memset(info, 0, sizeof(ExtendedDeviceInfo));
+    for (int logic = 0; logic < maxLogic && filled < maxCount; ++logic) {
+        int card = 0;
+        int dev = 0;
+        int mapRet = p_dcmi_get_card_id_device_id_from_logicid(&card, &dev, static_cast<unsigned int>(logic));
+        if (mapRet != 0) {
+            continue;
+        }
 
-            dcmi_chip_info_v2 chipInfo{};
-            if (p_dcmi_get_device_chip_info_v2(card, dev, &chipInfo) != 0) {
+        ExtendedDeviceInfo* info = &devices[*deviceCount];
+        std::memset(info, 0, sizeof(ExtendedDeviceInfo));
+
+        dcmi_chip_info_v2 chipInfo{};
+        if (p_dcmi_get_device_chip_info_v2(card, dev, &chipInfo) != 0) {
                 std::fprintf(stderr, "[ascend] skip card=%d device=%d chip_info failed\n", card, dev);
                 continue;
             }
@@ -258,12 +221,12 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
                 std::fprintf(stderr, "[ascend] card=%d dev=%d mem_info failed\n", card, dev);
             }
 
-            std::snprintf(info->basic.uuid, sizeof(info->basic.uuid), "npu-%d-chip-%d", filled, dev);
+        std::snprintf(info->basic.uuid, sizeof(info->basic.uuid), "npu-%zu-chip-%d", filled, dev);
         std::snprintf(info->basic.vendor, sizeof(info->basic.vendor), "Huawei");
         std::snprintf(info->basic.model, sizeof(info->basic.model), "%s", chipInfo.npu_name);
         std::snprintf(info->basic.driverVersion, sizeof(info->basic.driverVersion), "dcmi");
         std::snprintf(info->basic.firmwareVersion, sizeof(info->basic.firmwareVersion), "unknown");
-            info->basic.index = static_cast<int32_t>(filled);
+        info->basic.index = static_cast<int32_t>(filled);
         info->basic.numaNode = -1;
         info->basic.totalMemoryBytes = totalMem;
         info->basic.totalComputeUnits = chipInfo.aicore_cnt;
@@ -293,11 +256,13 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         info->relatedDevices = NULL;
         info->relatedDeviceCount = 0;
 
-            (*deviceCount)++;
-            filled++;
-        }
+        (*deviceCount)++;
+        filled++;
     }
 
+    if (*deviceCount == 0) {
+        std::fprintf(stderr, "[ascend] no devices discovered via dcmi logic-id mapping\n");
+    }
     return RESULT_SUCCESS;
 }
 
