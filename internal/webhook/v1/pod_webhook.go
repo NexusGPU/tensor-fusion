@@ -272,7 +272,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(
-	ctx context.Context,
+	_ctx context.Context,
 	pod *corev1.Pod,
 	pool *tfv1.GPUPool,
 	isLocalGPU bool,
@@ -377,6 +377,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	return patches, nil
 }
 
+//nolint:unused
 func (m *TensorFusionPodMutator) assignDeviceAllocationIndex(ctx context.Context, pod *corev1.Pod) int {
 	var index int
 	var indexErr error
@@ -598,6 +599,7 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 	return strconv.Atoi(string(body))
 }
 
+//nolint:unused
 func (m *TensorFusionPodMutator) assignIndexFromLeader(ctx context.Context, pod *corev1.Pod) (int, error) {
 	leaderIP := utils.GetLeaderIP(m.Client)
 	if leaderIP == "" {
