@@ -36,8 +36,9 @@ ASCEND_OBJ := $(BUILD_DIR)/accelerator_ascend.o
 # Test executables
 TEST_BIN := $(BUILD_DIR)/test_accelerator
 TEST_LOGIC_PROBE_BIN := $(BUILD_DIR)/test_logic_id_probe
+TEST_ASCEND_DEBUG_BIN := $(BUILD_DIR)/test_ascend_debug
 
-.PHONY: all clean stub ascend test install probe-logic
+.PHONY: all clean stub ascend test install probe-logic debug-ascend
 
 all: stub
 
@@ -86,6 +87,15 @@ $(TEST_LOGIC_PROBE_BIN): $(ASCEND_DIR)/tests/test_logic_id_probe.cpp | $(BUILD_D
 
 probe-logic-run: probe-logic
 	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_LOGIC_PROBE_BIN)
+
+# Build Ascend debug tool
+debug-ascend: $(TEST_ASCEND_DEBUG_BIN)
+
+$(TEST_ASCEND_DEBUG_BIN): $(ASCEND_DIR)/tests/test_ascend_debug.cpp $(ASCEND_LIB) | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -I$(PROVIDER_DIR) $(ASCEND_CFLAGS) -o $@ $< -L$(BUILD_DIR) -laccelerator_ascend $(ASCEND_LDFLAGS) -Wl,-rpath,$(BUILD_DIR)
+
+debug-ascend-run: debug-ascend
+	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_ASCEND_DEBUG_BIN)
 
 # Create build directory
 $(BUILD_DIR):
