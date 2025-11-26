@@ -681,11 +681,29 @@ Result GetDeviceMetrics(const char** deviceUUIDArray, size_t deviceCount, Device
             metrics[i].temperatureCelsius = 0;
         }
 
-        // Get AICore utilization (type 0 = AICore)
-        unsigned int aiCoreUtil = 0;
-        if (p_dcmi_get_device_utilization_rate && p_dcmi_get_device_utilization_rate(card, dev, 0, &aiCoreUtil) == 0) {
-            metrics[i].smActivePercent = aiCoreUtil;
-            metrics[i].tensorCoreUsagePercent = aiCoreUtil;  // Use same value for tensor cores
+        // Get utilization rate
+        // Type 0 (AICore) may not be supported on some models (e.g., 310P3)
+        // Try type 1 (AICpu) as fallback, then type 3 (VectorCore)
+        unsigned int util = 0;
+        if (p_dcmi_get_device_utilization_rate) {
+            // Try AICore first (type 0)
+            if (p_dcmi_get_device_utilization_rate(card, dev, 0, &util) == 0) {
+                metrics[i].smActivePercent = util;
+                metrics[i].tensorCoreUsagePercent = util;
+            }
+            // Fallback to AICpu (type 1)
+            else if (p_dcmi_get_device_utilization_rate(card, dev, 1, &util) == 0) {
+                metrics[i].smActivePercent = util;
+                metrics[i].tensorCoreUsagePercent = util;
+            }
+            // Last resort: VectorCore (type 3)
+            else if (p_dcmi_get_device_utilization_rate(card, dev, 3, &util) == 0) {
+                metrics[i].smActivePercent = util;
+                metrics[i].tensorCoreUsagePercent = util;
+            } else {
+                metrics[i].smActivePercent = 0;
+                metrics[i].tensorCoreUsagePercent = 0;
+            }
         } else {
             metrics[i].smActivePercent = 0;
             metrics[i].tensorCoreUsagePercent = 0;
