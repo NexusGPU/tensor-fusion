@@ -49,8 +49,16 @@ struct PartitionRecord {
     std::string partitionUUID;
 };
 
+struct DeviceIdMapping {
+    std::string uuid;
+    int cardId;
+    int deviceId;
+};
+
 std::vector<PartitionRecord> gPartitions;
+std::vector<DeviceIdMapping> gDeviceMappings;
 std::mutex gPartitionMutex;
+std::mutex gMappingMutex;
 std::atomic<uint64_t> gUUIDSeed{1};
 
 // ---------------------------------------------------------------------------
@@ -70,6 +78,10 @@ using dcmi_get_memory_info_fn = int (*)(int, int, struct dcmi_memory_info_stru*)
 using dcmi_create_vdevice_fn = int (*)(int, int, struct dcmi_create_vdev_res_stru*, struct dcmi_create_vdev_out*);
 using dcmi_set_destroy_vdevice_fn = int (*)(int, int, unsigned int);
 using dcmi_init_fn = int (*)(void);
+using dcmi_get_device_power_info_fn = int (*)(int, int, int*);
+using dcmi_get_device_temperature_fn = int (*)(int, int, int*);
+using dcmi_get_device_utilization_rate_fn = int (*)(int, int, int, unsigned int*);
+using dcmi_get_device_pcie_info_fn = int (*)(int, int, void*);
 
 dcmi_get_all_device_count_fn p_dcmi_get_all_device_count = nullptr;
 dcmi_get_card_id_device_id_from_logicid_fn p_dcmi_get_card_id_device_id_from_logicid = nullptr;
@@ -79,6 +91,10 @@ dcmi_get_memory_info_fn p_dcmi_get_memory_info = nullptr;
 dcmi_create_vdevice_fn p_dcmi_create_vdevice = nullptr;
 dcmi_set_destroy_vdevice_fn p_dcmi_set_destroy_vdevice = nullptr;
 dcmi_init_fn p_dcmi_init = nullptr;
+dcmi_get_device_power_info_fn p_dcmi_get_device_power_info = nullptr;
+dcmi_get_device_temperature_fn p_dcmi_get_device_temperature = nullptr;
+dcmi_get_device_utilization_rate_fn p_dcmi_get_device_utilization_rate = nullptr;
+dcmi_get_device_pcie_info_fn p_dcmi_get_device_pcie_info = nullptr;
 
 template <typename T>
 bool loadSym(void* handle, const char* name, T& fn) {
@@ -154,6 +170,12 @@ bool ensureDcmiLoaded() {
     ok &= loadSym(gDcmiHandle, "dcmi_create_vdevice", p_dcmi_create_vdevice);
     ok &= loadSym(gDcmiHandle, "dcmi_set_destroy_vdevice", p_dcmi_set_destroy_vdevice);
     ok &= loadSym(gDcmiHandle, "dcmi_init", p_dcmi_init);
+
+    // Optional metrics APIs (don't fail if not available)
+    loadSym(gDcmiHandle, "dcmi_get_device_power_info", p_dcmi_get_device_power_info);
+    loadSym(gDcmiHandle, "dcmi_get_device_temperature", p_dcmi_get_device_temperature);
+    loadSym(gDcmiHandle, "dcmi_get_device_utilization_rate", p_dcmi_get_device_utilization_rate);
+    loadSym(gDcmiHandle, "dcmi_get_device_pcie_info", p_dcmi_get_device_pcie_info);
 
     if (ok && p_dcmi_init) {
         int initRet = p_dcmi_init();
@@ -294,6 +316,17 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         }
 
         std::snprintf(info->basic.uuid, sizeof(info->basic.uuid), "npu-%zu-chip-%d", filled, dev);
+
+        // Store UUID to card/device mapping for metrics queries
+        {
+            std::lock_guard<std::mutex> lock(gMappingMutex);
+            DeviceIdMapping mapping;
+            mapping.uuid = info->basic.uuid;
+            mapping.cardId = card;
+            mapping.deviceId = dev;
+            gDeviceMappings.push_back(mapping);
+        }
+
         std::snprintf(info->basic.vendor, sizeof(info->basic.vendor), "Huawei");
         std::snprintf(info->basic.model, sizeof(info->basic.model), "%s", chipInfo.npu_name);
         std::snprintf(info->basic.driverVersion, sizeof(info->basic.driverVersion), "dcmi");
@@ -303,8 +336,27 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         info->basic.totalMemoryBytes = totalMem;
         info->basic.totalComputeUnits = chipInfo.aicore_cnt;
         info->basic.maxTflops = 0.0;
+
+        // Try to get PCIe info
         info->basic.pcieGen = 0;
         info->basic.pcieWidth = 0;
+        if (p_dcmi_get_device_pcie_info) {
+            struct {
+                unsigned int deviceid;
+                unsigned int venderid;
+                unsigned int subvenderid;
+                unsigned int subdeviceid;
+                unsigned int bdf_deviceid;
+                unsigned int bdf_busid;
+                unsigned int bdf_funcid;
+            } pcieInfo{};
+            if (p_dcmi_get_device_pcie_info(card, dev, &pcieInfo) == 0) {
+                // PCIe gen/width not directly available from basic pcie_info
+                // These would need additional DCMI calls or parsing
+                info->basic.pcieGen = 0;  // TODO: get from dcmi_get_device_pcie_info_v2
+                info->basic.pcieWidth = 0;
+            }
+        }
 
         info->props.clockGraphics = 0;
         info->props.clockSM = 0;
@@ -364,6 +416,17 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
                 ExtendedDeviceInfo* info = &devices[*deviceCount];
                 std::memset(info, 0, sizeof(ExtendedDeviceInfo));
                 std::snprintf(info->basic.uuid, sizeof(info->basic.uuid), "npu-%zu-card-%d-dev-%d", filled, card, dev);
+
+                // Store UUID to card/device mapping for metrics queries
+                {
+                    std::lock_guard<std::mutex> lock(gMappingMutex);
+                    DeviceIdMapping mapping;
+                    mapping.uuid = info->basic.uuid;
+                    mapping.cardId = card;
+                    mapping.deviceId = dev;
+                    gDeviceMappings.push_back(mapping);
+                }
+
                 std::snprintf(info->basic.vendor, sizeof(info->basic.vendor), "Huawei");
                 std::snprintf(info->basic.model, sizeof(info->basic.model), "%s", chipInfo.npu_name);
                 std::snprintf(info->basic.driverVersion, sizeof(info->basic.driverVersion), "dcmi");
@@ -556,17 +619,94 @@ Result GetDeviceMetrics(const char** deviceUUIDArray, size_t deviceCount, Device
     if (!deviceUUIDArray || deviceCount == 0 || !metrics) {
         return RESULT_ERROR_INVALID_PARAM;
     }
+
+    if (!ensureDcmiLoaded()) {
+        // Return zeroed metrics if DCMI not available
+        for (size_t i = 0; i < deviceCount; i++) {
+            std::snprintf(metrics[i].deviceUUID, sizeof(metrics[i].deviceUUID), "%s", deviceUUIDArray[i]);
+            metrics[i].powerUsageWatts = 0;
+            metrics[i].temperatureCelsius = 0;
+            metrics[i].pcieRxBytes = 0;
+            metrics[i].pcieTxBytes = 0;
+            metrics[i].smActivePercent = 0;
+            metrics[i].tensorCoreUsagePercent = 0;
+            metrics[i].memoryUsedBytes = 0;
+            metrics[i].memoryTotalBytes = 0;
+        }
+        return RESULT_SUCCESS;
+    }
+
+    std::lock_guard<std::mutex> lock(gMappingMutex);
+
     for (size_t i = 0; i < deviceCount; i++) {
         std::snprintf(metrics[i].deviceUUID, sizeof(metrics[i].deviceUUID), "%s", deviceUUIDArray[i]);
-        metrics[i].powerUsageWatts = 0;
-        metrics[i].temperatureCelsius = 0;
+
+        // Find card_id and device_id from UUID
+        int card = -1;
+        int dev = -1;
+        for (const auto& mapping : gDeviceMappings) {
+            if (mapping.uuid == deviceUUIDArray[i]) {
+                card = mapping.cardId;
+                dev = mapping.deviceId;
+                break;
+            }
+        }
+
+        if (card == -1 || dev == -1) {
+            // UUID not found, return zeros
+            metrics[i].powerUsageWatts = 0;
+            metrics[i].temperatureCelsius = 0;
+            metrics[i].pcieRxBytes = 0;
+            metrics[i].pcieTxBytes = 0;
+            metrics[i].smActivePercent = 0;
+            metrics[i].tensorCoreUsagePercent = 0;
+            metrics[i].memoryUsedBytes = 0;
+            metrics[i].memoryTotalBytes = 0;
+            continue;
+        }
+
+        // Get power info (in mW, convert to W)
+        int powerMw = 0;
+        if (p_dcmi_get_device_power_info && p_dcmi_get_device_power_info(card, dev, &powerMw) == 0) {
+            metrics[i].powerUsageWatts = powerMw / 1000.0;
+        } else {
+            metrics[i].powerUsageWatts = 0;
+        }
+
+        // Get temperature (in °C)
+        int tempC = 0;
+        if (p_dcmi_get_device_temperature && p_dcmi_get_device_temperature(card, dev, &tempC) == 0) {
+            metrics[i].temperatureCelsius = static_cast<double>(tempC);
+        } else {
+            metrics[i].temperatureCelsius = 0;
+        }
+
+        // Get AICore utilization (type 0 = AICore)
+        unsigned int aiCoreUtil = 0;
+        if (p_dcmi_get_device_utilization_rate && p_dcmi_get_device_utilization_rate(card, dev, 0, &aiCoreUtil) == 0) {
+            metrics[i].smActivePercent = aiCoreUtil;
+            metrics[i].tensorCoreUsagePercent = aiCoreUtil;  // Use same value for tensor cores
+        } else {
+            metrics[i].smActivePercent = 0;
+            metrics[i].tensorCoreUsagePercent = 0;
+        }
+
+        // Get memory info
+        dcmi_memory_info_stru memInfo{};
+        if (p_dcmi_get_memory_info && p_dcmi_get_memory_info(card, dev, &memInfo) == 0) {
+            metrics[i].memoryTotalBytes = memInfo.memory_size * 1024ULL * 1024ULL;  // MB to bytes
+            // memory utilization is a percentage (0-100)
+            metrics[i].memoryUsedBytes = (metrics[i].memoryTotalBytes * memInfo.utiliza) / 100;
+        } else {
+            metrics[i].memoryUsedBytes = 0;
+            metrics[i].memoryTotalBytes = 0;
+        }
+
+        // PCIe RX/TX bytes not directly available from DCMI
         metrics[i].pcieRxBytes = 0;
         metrics[i].pcieTxBytes = 0;
-        metrics[i].smActivePercent = 0;
-        metrics[i].tensorCoreUsagePercent = 0;
-        metrics[i].memoryUsedBytes = 0;
-        metrics[i].memoryTotalBytes = 0;
     }
+
     return RESULT_SUCCESS;
 }
 
