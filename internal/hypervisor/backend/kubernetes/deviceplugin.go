@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
-	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -395,13 +394,7 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 			deviceCtrl.UpdateAllocationLabelsAndAnnotations(workerInfo.PodUID, labels, annotations)
 		}
 
-		// Store allocation info in kubelet client (for backward compatibility)
-		workerDetail := &api.WorkerDetail{
-			WorkerUID:  workerInfo.WorkerUID,
-			Allocation: allocResp,
-		}
-
-		if err := dp.kubeletClient.StoreAllocation(workerInfo.PodUID, workerDetail); err != nil {
+		if err := dp.kubeletClient.StoreAllocation(workerInfo.PodUID, allocResp); err != nil {
 			klog.Warningf("Failed to store allocation: %v", err)
 		}
 

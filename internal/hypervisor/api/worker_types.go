@@ -15,7 +15,7 @@ type WorkerInfo struct {
 	PodName           string
 	Namespace         string
 	PartitionUUID     string
-	IsolationMode     tfv1.IsolationModeType
+	IsolationMode     IsolationMode
 	MemoryLimitBytes  uint64
 	ComputeLimitUnits uint32
 	TemplateID        string

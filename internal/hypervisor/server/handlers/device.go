@@ -43,7 +43,7 @@ func (h *DeviceHandler) HandleGetDevices(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, api.ListDevicesResponse{Devices: devices})
+	c.JSON(http.StatusOK, api.DataResponse[[]*api.DeviceInfo]{Data: devices})
 }
 
 // HandleGetDevice handles GET /api/v1/devices/:uuid
@@ -54,7 +54,7 @@ func (h *DeviceHandler) HandleGetDevice(c *gin.Context) {
 		c.JSON(http.StatusNotFound, api.ErrorResponse{Error: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, api.GetDeviceResponse{DeviceInfo: device})
+	c.JSON(http.StatusOK, api.DataResponse[*api.DeviceInfo]{Data: device})
 }
 
 // HandleDiscoverDevices handles POST /api/v1/devices/discover
@@ -63,5 +63,5 @@ func (h *DeviceHandler) HandleDiscoverDevices(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, api.DiscoverDevicesResponse{Message: "device discovery triggered"})
+	c.JSON(http.StatusOK, api.StatusResponse{Status: "Device discovery triggered"})
 }
