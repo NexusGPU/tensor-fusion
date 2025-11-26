@@ -45,19 +45,16 @@ func (h *WorkerHandler) HandleGetWorkers(c *gin.Context) {
 	}
 
 	// Get worker details
-	workerDetails := make([]api.WorkerDetail, 0, len(workers))
+	workerDetails := make([]*api.WorkerAllocation, 0, len(workers))
 	for _, workerUID := range workers {
 		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
 		if err != nil {
 			continue
 		}
-		workerDetails = append(workerDetails, api.WorkerDetail{
-			WorkerUID:  workerUID,
-			Allocation: allocation,
-		})
+		workerDetails = append(workerDetails, allocation)
 	}
 
-	c.JSON(http.StatusOK, api.ListWorkersResponse{Workers: workerDetails})
+	c.JSON(http.StatusOK, api.DataResponse[[]*api.WorkerAllocation]{Data: workerDetails})
 }
 
 // HandleGetWorker handles GET /api/v1/workers/:id
@@ -76,9 +73,11 @@ func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 	// Get worker metrics
 	metrics, err := h.workerController.GetWorkerMetrics()
 	if err != nil {
-		c.JSON(http.StatusOK, api.GetWorkerResponse{
-			WorkerUID:  workerID,
-			Allocation: allocation,
+		c.JSON(http.StatusOK, api.DataResponse[map[string]interface{}]{
+			Data: map[string]interface{}{
+				"worker_uid": workerID,
+				"allocation": allocation,
+			},
 		})
 		return
 	}
@@ -97,10 +96,18 @@ func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, api.GetWorkerResponse{
-		WorkerUID:  workerID,
-		Allocation: allocation,
-		Metrics:    workerMetrics,
+	type WorkerDetail struct {
+		WorkerUID  string                                              `json:"worker_uid"`
+		Allocation *api.WorkerAllocation                               `json:"allocation"`
+		Metrics    map[string]map[string]map[string]*api.WorkerMetrics `json:"metrics,omitempty"`
+	}
+
+	c.JSON(http.StatusOK, api.DataResponse[WorkerDetail]{
+		Data: WorkerDetail{
+			WorkerUID:  workerID,
+			Allocation: allocation,
+			Metrics:    workerMetrics,
+		},
 	})
 }
 
@@ -109,9 +116,9 @@ func (h *WorkerHandler) HandleSnapshotWorker(c *gin.Context) {
 	workerID := c.Param("id")
 	// TODO: Implement actual snapshot logic using accelerator interface
 	// For now, return success
-	c.JSON(http.StatusOK, api.SnapshotWorkerResponse{
-		Message:  "worker snapshot initiated",
-		WorkerID: workerID,
+	c.JSON(http.StatusOK, api.MessageAndDataResponse[string]{
+		Message: "worker snapshot initiated",
+		Data:    workerID,
 	})
 }
 
@@ -120,8 +127,8 @@ func (h *WorkerHandler) HandleResumeWorker(c *gin.Context) {
 	workerID := c.Param("id")
 	// TODO: Implement actual resume logic using accelerator interface
 	// For now, return success
-	c.JSON(http.StatusOK, api.ResumeWorkerResponse{
-		Message:  "worker resume initiated",
-		WorkerID: workerID,
+	c.JSON(http.StatusOK, api.MessageAndDataResponse[string]{
+		Message: "worker resume initiated",
+		Data:    workerID,
 	})
 }

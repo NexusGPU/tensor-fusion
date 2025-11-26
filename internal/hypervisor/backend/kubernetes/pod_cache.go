@@ -49,10 +49,10 @@ type PodCacheManager struct {
 	nodeName   string
 
 	mu                sync.RWMutex
-	podCache          map[string]*corev1.Pod       // key: pod UID
-	allocations       map[string]*api.WorkerDetail // key: pod UID
-	indexToWorkerInfo map[int]*api.WorkerInfo      // key: pod index annotation
-	indexToPodList    map[int][]string             // key: pod index annotation, value: list of pod UIDs
+	podCache          map[string]*corev1.Pod           // key: pod UID
+	allocations       map[string]*api.WorkerAllocation // key: pod UID
+	indexToWorkerInfo map[int]*api.WorkerInfo          // key: pod index annotation
+	indexToPodList    map[int][]string                 // key: pod index annotation, value: list of pod UIDs
 	stopCh            chan struct{}
 	workerChangedCh   chan struct{}
 }
@@ -70,7 +70,7 @@ func NewPodCacheManager(ctx context.Context, restConfig *rest.Config, nodeName s
 		restConfig:        restConfig,
 		nodeName:          nodeName,
 		podCache:          make(map[string]*corev1.Pod),
-		allocations:       make(map[string]*api.WorkerDetail),
+		allocations:       make(map[string]*api.WorkerAllocation),
 		indexToWorkerInfo: make(map[int]*api.WorkerInfo),
 		indexToPodList:    make(map[int][]string),
 		stopCh:            make(chan struct{}),
@@ -386,7 +386,7 @@ func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod, podIndex string) *
 }
 
 // StoreAllocation stores allocation information
-func (kc *PodCacheManager) StoreAllocation(podUID string, allocation *api.WorkerDetail) error {
+func (kc *PodCacheManager) StoreAllocation(podUID string, allocation *api.WorkerAllocation) error {
 	kc.mu.Lock()
 	defer kc.mu.Unlock()
 	kc.allocations[podUID] = allocation

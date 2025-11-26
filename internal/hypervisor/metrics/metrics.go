@@ -157,7 +157,7 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 	}
 
 	// Get worker allocations for metadata
-	workerAllocations := make(map[string]*api.DeviceAllocation)
+	workerAllocations := make(map[string]*api.WorkerAllocation)
 	for _, workerUID := range workerUIDs {
 		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
 		if err == nil && allocation != nil {
@@ -234,7 +234,7 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 // addExtraLabels adds dynamic tags based on HypervisorMetricsExtraLabelsEnv configuration
 // The config is a JSON map where keys are tag names and values are pod label keys to extract
 // Labels are read directly from allocation.Labels which is populated by the backend
-func (h *HypervisorMetricsRecorder) addExtraLabels(enc metrics.Encoder, allocation *api.DeviceAllocation) {
+func (h *HypervisorMetricsRecorder) addExtraLabels(enc metrics.Encoder, allocation *api.WorkerAllocation) {
 	if len(h.extraLabelsMap) == 0 {
 		return
 	}
