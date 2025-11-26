@@ -83,4 +83,5 @@ type WorkerMetrics struct {
 	MemoryPercentage  float64
 	ComputeTflops     float64
 	ComputePercentage float64
+	ExtraMetrics      map[string]float64
 }

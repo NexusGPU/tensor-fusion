@@ -16,89 +16,54 @@ limitations under the License.
 
 package api
 
-// HTTP API Response Types
+import (
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+)
 
-// HealthResponse represents health check response
-type HealthResponse struct {
-	Status string `json:"status"`
-}
+// HTTP API Response Types
 
 // ErrorResponse represents an error response
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// ListDevicesResponse represents the response from GET /api/v1/devices
-type ListDevicesResponse struct {
-	Devices []*DeviceInfo `json:"devices"`
+// DataResponse is a generic response wrapper for data-only responses
+type DataResponse[T any] struct {
+	Data T `json:"data"`
 }
 
-// GetDeviceResponse represents the response from GET /api/v1/devices/:uuid
-type GetDeviceResponse struct {
-	*DeviceInfo
-}
-
-// DiscoverDevicesResponse represents the response from POST /api/v1/devices/discover
-type DiscoverDevicesResponse struct {
+// MessageAndDataResponse is a generic response wrapper for responses with message and data
+type MessageAndDataResponse[T any] struct {
 	Message string `json:"message"`
+	Data    T      `json:"data"`
 }
 
-// WorkerDetail represents a worker with its allocation
-type WorkerDetail struct {
-	WorkerUID  string            `json:"worker_uid"`
-	Allocation *WorkerAllocation `json:"allocation"`
+// StatusResponse represents a simple status response
+type StatusResponse struct {
+	Status string `json:"status"`
 }
 
-// ListWorkersResponse represents the response from GET /api/v1/workers
-type ListWorkersResponse struct {
-	Workers []WorkerDetail `json:"workers"`
-}
+// Types to be compatible with legacy APIs
 
-// GetWorkerResponse represents the response from GET /api/v1/workers/:id
-type GetWorkerResponse struct {
-	WorkerUID  string                                          `json:"worker_uid"`
-	Allocation *WorkerAllocation                               `json:"allocation"`
-	Metrics    map[string]map[string]map[string]*WorkerMetrics `json:"metrics,omitempty"`
-}
-
-// SnapshotWorkerResponse represents the response from POST /api/v1/workers/:id/snapshot
-type SnapshotWorkerResponse struct {
-	Message  string `json:"message"`
-	WorkerID string `json:"worker_id"`
-}
-
-// ResumeWorkerResponse represents the response from POST /api/v1/workers/:id/resume
-type ResumeWorkerResponse struct {
-	Message  string `json:"message"`
-	WorkerID string `json:"worker_id"`
-}
-
-// ResourceInfo represents resource requests/limits
-type ResourceInfo struct {
-	Tflops         *float64 `json:"tflops,omitempty"`
-	Vram           *uint64  `json:"vram,omitempty"`
-	ComputePercent *float64 `json:"compute_percent,omitempty"`
-}
-
-// LimiterInfo represents worker limiter information
+// LimiterInfo represents worker limiter information (used in legacy.go)
 type LimiterInfo struct {
-	WorkerUID string        `json:"worker_uid"`
-	Requests  *ResourceInfo `json:"requests,omitempty"`
-	Limits    *ResourceInfo `json:"limits,omitempty"`
+	WorkerUID string         `json:"worker_uid"`
+	Requests  *tfv1.Resource `json:"requests,omitempty"`
+	Limits    *tfv1.Resource `json:"limits,omitempty"`
 }
 
-// ListLimitersResponse represents the response from GET /api/v1/limiter
+// ListLimitersResponse represents the response from GET /api/v1/limiter (used in legacy.go)
 type ListLimitersResponse struct {
 	Limiters []LimiterInfo `json:"limiters"`
 }
 
-// TrapResponse represents the response from POST /api/v1/trap
+// TrapResponse represents the response from POST /api/v1/trap (used in legacy.go)
 type TrapResponse struct {
 	Message       string `json:"message"`
 	SnapshotCount int    `json:"snapshot_count"`
 }
 
-// PodInfo represents pod information for the /api/v1/pod endpoint
+// PodInfo represents pod information for the /api/v1/pod endpoint (used in legacy.go)
 type PodInfo struct {
 	PodName     string   `json:"pod_name"`
 	Namespace   string   `json:"namespace"`
@@ -108,21 +73,18 @@ type PodInfo struct {
 	QoSLevel    *string  `json:"qos_level,omitempty"`
 }
 
-// ListPodsResponse represents the response from GET /api/v1/pod
+// ListPodsResponse represents the response from GET /api/v1/pod (used in legacy.go)
 type ListPodsResponse struct {
 	Pods []PodInfo `json:"pods"`
 }
 
-// ProcessInfo represents process mapping information
+// ProcessInfo represents process mapping information (used in legacy.go)
 type ProcessInfo struct {
 	WorkerUID      string            `json:"worker_uid"`
 	ProcessMapping map[string]string `json:"process_mapping"` // container PID -> host PID
 }
 
-// ListProcessesResponse represents the response from GET /api/v1/process
+// ListProcessesResponse represents the response from GET /api/v1/process (used in legacy.go)
 type ListProcessesResponse struct {
 	Processes []ProcessInfo `json:"processes"`
 }
-
-// DeviceAllocation represents device allocation response (backward compatibility)
-type DeviceAllocation = WorkerAllocation

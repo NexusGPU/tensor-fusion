@@ -35,7 +35,7 @@ type MockKubeletClient struct {
 	pods map[string]interface{}
 }
 
-func (m *MockKubeletClient) GetAllPods() map[string]interface{} {
+func (m *MockKubeletClient) GetAllPods() map[string]any {
 	return m.pods
 }
 

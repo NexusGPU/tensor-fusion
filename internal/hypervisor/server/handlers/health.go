@@ -34,14 +34,14 @@ func NewHealthHandler() *HealthHandler {
 
 // HandleHealthz handles GET /healthz
 func (h *HealthHandler) HandleHealthz(c *gin.Context) {
-	c.JSON(http.StatusOK, api.HealthResponse{Status: "ok"})
+	c.JSON(http.StatusOK, api.StatusResponse{Status: "ok"})
 }
 
 // HandleReadyz handles GET /readyz
 func (h *HealthHandler) HandleReadyz(c *gin.Context, deviceController framework.DeviceController, workerController framework.WorkerController) {
 	if deviceController == nil || workerController == nil {
-		c.JSON(http.StatusServiceUnavailable, api.HealthResponse{Status: "not ready"})
+		c.JSON(http.StatusServiceUnavailable, api.StatusResponse{Status: "not ready"})
 		return
 	}
-	c.JSON(http.StatusOK, api.HealthResponse{Status: "ready"})
+	c.JSON(http.StatusOK, api.StatusResponse{Status: "ready"})
 }

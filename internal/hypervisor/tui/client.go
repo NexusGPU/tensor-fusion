@@ -75,38 +75,36 @@ func (c *Client) doRequest(ctx context.Context, method, path string, result inte
 
 // ListDevices fetches all devices from the hypervisor
 func (c *Client) ListDevices(ctx context.Context) ([]*api.DeviceInfo, error) {
-	var result api.ListDevicesResponse
+	var result api.DataResponse[[]*api.DeviceInfo]
 	if err := c.doRequest(ctx, "GET", "devices", &result); err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
 	}
-	return result.Devices, nil
+	return result.Data, nil
 }
 
 // GetDevice fetches a specific device by UUID
 func (c *Client) GetDevice(ctx context.Context, uuid string) (*api.DeviceInfo, error) {
-	var result api.GetDeviceResponse
+	var result api.DataResponse[*api.DeviceInfo]
 	if err := c.doRequest(ctx, "GET", fmt.Sprintf("devices/%s", uuid), &result); err != nil {
 		return nil, fmt.Errorf("get device %s: %w", uuid, err)
 	}
-	return result.DeviceInfo, nil
+	return result.Data, nil
 }
 
 // GetDeviceAllocations fetches allocations for a specific device
-func (c *Client) GetDeviceAllocations(ctx context.Context, uuid string) ([]*api.DeviceAllocation, error) {
+func (c *Client) GetDeviceAllocations(ctx context.Context, uuid string) ([]*api.WorkerAllocation, error) {
 	workers, err := c.ListWorkers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list workers: %w", err)
 	}
 
-	allocations := make([]*api.DeviceAllocation, 0)
+	allocations := make([]*api.WorkerAllocation, 0)
 	for _, worker := range workers {
-		if worker.Allocation != nil {
-			// Check if any device in the allocation matches the UUID
-			for _, device := range worker.Allocation.DeviceInfos {
-				if device.UUID == uuid {
-					allocations = append(allocations, worker.Allocation)
-					break
-				}
+		// Check if any device in the allocation matches the UUID
+		for _, device := range worker.DeviceInfos {
+			if device.UUID == uuid {
+				allocations = append(allocations, worker)
+				break
 			}
 		}
 	}
@@ -123,21 +121,27 @@ func (c *Client) GetGPUMetrics(ctx context.Context) (map[string]*api.GPUUsageMet
 }
 
 // ListWorkers fetches all workers from the hypervisor
-func (c *Client) ListWorkers(ctx context.Context) ([]api.WorkerDetail, error) {
-	var result api.ListWorkersResponse
+func (c *Client) ListWorkers(ctx context.Context) ([]*api.WorkerAllocation, error) {
+	var result api.DataResponse[[]*api.WorkerAllocation]
 	if err := c.doRequest(ctx, "GET", "workers", &result); err != nil {
 		return nil, fmt.Errorf("list workers: %w", err)
 	}
-	return result.Workers, nil
+	return result.Data, nil
 }
 
 // GetWorker fetches a specific worker by ID
-func (c *Client) GetWorker(ctx context.Context, workerID string) (*api.GetWorkerResponse, error) {
-	var result api.GetWorkerResponse
-	if err := c.doRequest(ctx, "GET", fmt.Sprintf("workers/%s", workerID), &result); err != nil {
-		return nil, fmt.Errorf("get worker %s: %w", workerID, err)
+func (c *Client) GetWorker(ctx context.Context, workerID string) (*api.WorkerAllocation, map[string]map[string]map[string]*api.WorkerMetrics, error) {
+	type WorkerDetail struct {
+		WorkerUID  string                                              `json:"worker_uid"`
+		Allocation *api.WorkerAllocation                               `json:"allocation"`
+		Metrics    map[string]map[string]map[string]*api.WorkerMetrics `json:"metrics,omitempty"`
 	}
-	return &result, nil
+
+	var result api.DataResponse[WorkerDetail]
+	if err := c.doRequest(ctx, "GET", fmt.Sprintf("workers/%s", workerID), &result); err != nil {
+		return nil, nil, fmt.Errorf("get worker %s: %w", workerID, err)
+	}
+	return result.Data.Allocation, result.Data.Metrics, nil
 }
 
 // GetWorkerMetrics fetches worker metrics for all workers
@@ -150,22 +154,25 @@ func (c *Client) GetWorkerMetrics(ctx context.Context) (map[string]map[string]ma
 
 	metrics := make(map[string]map[string]map[string]*api.WorkerMetrics)
 	for _, worker := range workers {
-		workerDetail, err := c.GetWorker(ctx, worker.WorkerUID)
+		// Get WorkerUID from WorkerInfo
+		if worker.WorkerInfo == nil {
+			continue
+		}
+		workerUID := worker.WorkerInfo.WorkerUID
+		_, workerMetrics, err := c.GetWorker(ctx, workerUID)
 		if err != nil {
 			// Continue on individual worker errors to get as much data as possible
 			continue
 		}
 
-		if workerDetail.Metrics != nil {
-			// Merge metrics by device UUID
-			for deviceUUID, deviceMetrics := range workerDetail.Metrics {
-				if metrics[deviceUUID] == nil {
-					metrics[deviceUUID] = make(map[string]map[string]*api.WorkerMetrics)
-				}
-				// Copy worker metrics for this device
-				for workerUID, workerMetrics := range deviceMetrics {
-					metrics[deviceUUID][workerUID] = workerMetrics
-				}
+		// Merge metrics by device UUID
+		for deviceUUID, deviceMetrics := range workerMetrics {
+			if metrics[deviceUUID] == nil {
+				metrics[deviceUUID] = make(map[string]map[string]*api.WorkerMetrics)
+			}
+			// Copy worker metrics for this device
+			for wUID, wMetrics := range deviceMetrics {
+				metrics[deviceUUID][wUID] = wMetrics
 			}
 		}
 	}

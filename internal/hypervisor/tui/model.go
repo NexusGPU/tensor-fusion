@@ -153,25 +153,25 @@ func (m *Model) updateData() tea.Cmd {
 		// Get workers
 		workerDetails, err := m.client.ListWorkers(ctx)
 		if err != nil {
-			workerDetails = []api.WorkerDetail{}
+			workerDetails = []*api.WorkerAllocation{}
 		}
 
 		workers := make([]WorkerInfo, 0, len(workerDetails))
-		for _, wd := range workerDetails {
-			if wd.Allocation == nil {
+		for _, worker := range workerDetails {
+			if worker == nil {
 				continue
 			}
 			// Extract device UUID from the first device in allocation
 			deviceUUID := ""
-			if len(wd.Allocation.DeviceInfos) > 0 {
-				deviceUUID = wd.Allocation.DeviceInfos[0].UUID
+			if len(worker.DeviceInfos) > 0 {
+				deviceUUID = worker.DeviceInfos[0].UUID
 			}
 			workers = append(workers, WorkerInfo{
-				UID:        wd.WorkerUID,
-				PodName:    wd.Allocation.WorkerInfo.PodName,
-				Namespace:  wd.Allocation.WorkerInfo.Namespace,
+				UID:        worker.WorkerInfo.WorkerUID,
+				PodName:    worker.WorkerInfo.PodName,
+				Namespace:  worker.WorkerInfo.Namespace,
 				DeviceUUID: deviceUUID,
-				Allocation: wd.Allocation,
+				Allocation: worker,
 			})
 		}
 
