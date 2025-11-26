@@ -82,6 +82,8 @@ using dcmi_get_device_power_info_fn = int (*)(int, int, int*);
 using dcmi_get_device_temperature_fn = int (*)(int, int, int*);
 using dcmi_get_device_utilization_rate_fn = int (*)(int, int, int, unsigned int*);
 using dcmi_get_device_pcie_info_fn = int (*)(int, int, void*);
+using dcmi_get_topo_info_by_device_id_fn = int (*)(int, int, int, int, int*);
+using dcmi_get_hccs_link_bandwidth_info_fn = int (*)(int, int, void*);
 
 dcmi_get_all_device_count_fn p_dcmi_get_all_device_count = nullptr;
 dcmi_get_card_id_device_id_from_logicid_fn p_dcmi_get_card_id_device_id_from_logicid = nullptr;
@@ -95,6 +97,8 @@ dcmi_get_device_power_info_fn p_dcmi_get_device_power_info = nullptr;
 dcmi_get_device_temperature_fn p_dcmi_get_device_temperature = nullptr;
 dcmi_get_device_utilization_rate_fn p_dcmi_get_device_utilization_rate = nullptr;
 dcmi_get_device_pcie_info_fn p_dcmi_get_device_pcie_info = nullptr;
+dcmi_get_topo_info_by_device_id_fn p_dcmi_get_topo_info_by_device_id = nullptr;
+dcmi_get_hccs_link_bandwidth_info_fn p_dcmi_get_hccs_link_bandwidth_info = nullptr;
 
 template <typename T>
 bool loadSym(void* handle, const char* name, T& fn) {
@@ -122,6 +126,17 @@ void parseIdList(const char* env, std::vector<int>& out) {
             ptr++;
         }
     }
+}
+
+// Force reload DCMI (for testing/debugging when environment changes)
+void resetDcmiLoader() {
+    std::lock_guard<std::mutex> lock(gDcmiMutex);
+    if (gDcmiHandle) {
+        dlclose(gDcmiHandle);
+        gDcmiHandle = nullptr;
+    }
+    gDcmiTried = false;
+    gDcmiLoaded = false;
 }
 
 bool ensureDcmiLoaded() {
@@ -161,21 +176,29 @@ bool ensureDcmiLoaded() {
         return false;
     }
 
+    // Load required symbols for device discovery and metrics
+    // Don't fail if partition-related symbols (create/destroy_vdevice) are missing
     bool ok = true;
     ok &= loadSym(gDcmiHandle, "dcmi_get_all_device_count", p_dcmi_get_all_device_count);
     ok &= loadSym(gDcmiHandle, "dcmi_get_card_id_device_id_from_logicid", p_dcmi_get_card_id_device_id_from_logicid);
     ok &= loadSym(gDcmiHandle, "dcmi_get_device_chip_info_v2", p_dcmi_get_device_chip_info_v2);
     ok &= loadSym(gDcmiHandle, "dcmi_get_device_memory_info_v3", p_dcmi_get_device_memory_info_v3);
     ok &= loadSym(gDcmiHandle, "dcmi_get_memory_info", p_dcmi_get_memory_info);
-    ok &= loadSym(gDcmiHandle, "dcmi_create_vdevice", p_dcmi_create_vdevice);
-    ok &= loadSym(gDcmiHandle, "dcmi_set_destroy_vdevice", p_dcmi_set_destroy_vdevice);
     ok &= loadSym(gDcmiHandle, "dcmi_init", p_dcmi_init);
+
+    // Optional partition management APIs (don't fail if missing)
+    loadSym(gDcmiHandle, "dcmi_create_vdevice", p_dcmi_create_vdevice);
+    loadSym(gDcmiHandle, "dcmi_set_destroy_vdevice", p_dcmi_set_destroy_vdevice);
 
     // Optional metrics APIs (don't fail if not available)
     loadSym(gDcmiHandle, "dcmi_get_device_power_info", p_dcmi_get_device_power_info);
     loadSym(gDcmiHandle, "dcmi_get_device_temperature", p_dcmi_get_device_temperature);
     loadSym(gDcmiHandle, "dcmi_get_device_utilization_rate", p_dcmi_get_device_utilization_rate);
     loadSym(gDcmiHandle, "dcmi_get_device_pcie_info", p_dcmi_get_device_pcie_info);
+
+    // Optional topology APIs (don't fail if not available)
+    loadSym(gDcmiHandle, "dcmi_get_topo_info_by_device_id", p_dcmi_get_topo_info_by_device_id);
+    loadSym(gDcmiHandle, "dcmi_get_hccs_link_bandwidth_info", p_dcmi_get_hccs_link_bandwidth_info);
 
     if (ok && p_dcmi_init) {
         int initRet = p_dcmi_init();
@@ -260,13 +283,21 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         return RESULT_ERROR_INVALID_PARAM;
     }
 
+    // Reset deviceCount to avoid caller's stale value causing issues
+    *deviceCount = 0;
+
+    // Clear stale device mappings to avoid hot-plug/re-enumeration issues
+    {
+        std::lock_guard<std::mutex> lock(gMappingMutex);
+        gDeviceMappings.clear();
+    }
+
     size_t total = 0;
     Result rc = GetDeviceCount(&total);
     if (rc != RESULT_SUCCESS) {
         return rc;
     }
     if (!ensureDcmiLoaded()) {
-        *deviceCount = 0;
         std::fprintf(stderr, "[ascend] dcmi not loaded in GetAllDevices\n");
         return RESULT_SUCCESS;
     }
@@ -276,8 +307,9 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
     std::vector<int> logicIds;
     parseIdList(std::getenv("ASCEND_LOGIC_IDS"), logicIds);
     if (logicIds.empty()) {
-        // Default: probe logic IDs 0 to min(maxLogic, total*4) to reduce noise
-        int probeLimit = std::min(maxLogic, static_cast<int>(total * 4));
+        // Default: probe more logic IDs to handle sparse/non-contiguous IDs
+        // Use total*16 to be safe, or max 64 to limit noise
+        int probeLimit = std::min(maxLogic, std::max(static_cast<int>(total * 16), 64));
         for (int logic = 0; logic < probeLimit; ++logic) {
             logicIds.push_back(logic);
         }
@@ -497,18 +529,108 @@ Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, Extended
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    topology->deviceCount = deviceCount;
-    for (size_t i = 0; i < deviceCount; i++) {
-        DeviceTopology* dt = &topology->devices[i];
-        std::snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "npu-%d-chip-%d", deviceIndexArray[i], 0);
-        dt->numaNode = -1;
-        dt->connectionCount = 0;
-        dt->connections = nullptr;
+    if (!ensureDcmiLoaded()) {
+        return RESULT_ERROR_INTERNAL;
     }
+
+    // Retrieve UUIDs and card/device mappings
+    std::lock_guard<std::mutex> lock(gMappingMutex);
+
+    topology->deviceCount = deviceCount;
     topology->nvlinkBandwidthMBps = 0;
     topology->ibNicCount = 0;
     std::snprintf(topology->topologyType, sizeof(topology->topologyType), "HCCS");
-    (void)maxConnectionsPerDevice;
+
+    // For each device, populate UUID and detect connections
+    for (size_t i = 0; i < deviceCount; i++) {
+        DeviceTopology* dt = &topology->devices[i];
+        int32_t devIdx = deviceIndexArray[i];
+
+        // Set UUID to align with GetAllDevices
+        if (static_cast<size_t>(devIdx) < gDeviceMappings.size()) {
+            std::snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "%s",
+                         gDeviceMappings[devIdx].uuid.c_str());
+        } else {
+            std::snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "npu-%d-chip-0", devIdx);
+        }
+
+        dt->numaNode = -1;
+        dt->connectionCount = 0;
+        dt->connections = nullptr;
+
+        // If topology API unavailable, skip connection detection
+        if (!p_dcmi_get_topo_info_by_device_id) {
+            continue;
+        }
+
+        // Get card_id and device_id for this device
+        if (static_cast<size_t>(devIdx) >= gDeviceMappings.size()) {
+            continue;
+        }
+        int card1 = gDeviceMappings[devIdx].cardId;
+        int dev1 = gDeviceMappings[devIdx].deviceId;
+
+        // Probe connections to all other devices
+        std::vector<RelatedDevice> connections;
+        for (size_t j = 0; j < deviceCount; j++) {
+            if (i == j) continue;  // Skip self
+
+            int32_t otherIdx = deviceIndexArray[j];
+            if (static_cast<size_t>(otherIdx) >= gDeviceMappings.size()) {
+                continue;
+            }
+            int card2 = gDeviceMappings[otherIdx].cardId;
+            int dev2 = gDeviceMappings[otherIdx].deviceId;
+
+            // Query topology relationship
+            int topoType = 0;
+            int ret = p_dcmi_get_topo_info_by_device_id(card1, dev1, card2, dev2, &topoType);
+            if (ret != 0) {
+                continue;  // No connection or query failed
+            }
+
+            // Only include HCCS connections (type 3 and 7)
+            // Type 3: DCMI_TOPO_TYPE_HCCS (direct HCCS link)
+            // Type 7: DCMI_TOPO_TYPE_HCCS_SW (HCCS via switch)
+            if (topoType != 3 && topoType != 7) {
+                continue;
+            }
+
+            // Create connection entry
+            RelatedDevice conn;
+            if (static_cast<size_t>(otherIdx) < gDeviceMappings.size()) {
+                std::snprintf(conn.deviceUUID, sizeof(conn.deviceUUID), "%s",
+                             gDeviceMappings[otherIdx].uuid.c_str());
+            } else {
+                std::snprintf(conn.deviceUUID, sizeof(conn.deviceUUID), "npu-%d-chip-0", otherIdx);
+            }
+
+            if (topoType == 7) {
+                std::snprintf(conn.connectionType, sizeof(conn.connectionType), "HCCS-SW");
+            } else {
+                std::snprintf(conn.connectionType, sizeof(conn.connectionType), "HCCS");
+            }
+
+            // TODO: Get actual bandwidth using dcmi_get_hccs_link_bandwidth_info
+            // For now, use default HCCS bandwidth (assume 400 Gbps = 50000 MB/s)
+            conn.bandwidthMBps = 50000;
+            conn.latencyNs = 0;  // Unknown
+
+            connections.push_back(conn);
+
+            if (connections.size() >= maxConnectionsPerDevice) {
+                break;  // Respect caller's buffer limit
+            }
+        }
+
+        // Allocate and populate connections array if any found
+        if (!connections.empty()) {
+            dt->connections = new RelatedDevice[connections.size()];
+            dt->connectionCount = connections.size();
+            std::memcpy(dt->connections, connections.data(), connections.size() * sizeof(RelatedDevice));
+        }
+    }
+
     return RESULT_SUCCESS;
 }
 

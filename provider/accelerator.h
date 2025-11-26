@@ -252,6 +252,17 @@ Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, Extended
 // ============================================================================
 
 /**
+ * Get supported hardware partition templates for a device (e.g., MIG/vNPU).
+ *
+ * @param deviceIndex Device index to query (implementation may ignore)
+ * @param templates Output buffer for templates (allocated by caller)
+ * @param maxCount Maximum number of templates that fit in the buffer
+ * @param templateCount Output parameter for number of templates returned
+ * @return RESULT_SUCCESS on success, error code otherwise
+ */
+Result GetPartitionTemplates(int32_t deviceIndex, PartitionTemplate* templates, size_t maxCount, size_t* templateCount);
+
+/**
  * Assign a partition to a device using a template (e.g., create MIG instance).
  * 
  * @param assignment Partition assignment request (templateId, deviceUUID)
@@ -402,4 +413,3 @@ Result Log(const char* level, const char* message);
 #include "limiter.h"
 
 #endif // ACCELERATOR_H
-
