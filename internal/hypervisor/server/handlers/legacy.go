@@ -19,9 +19,11 @@ package handlers
 import (
 	"net/http"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
 	"github.com/gin-gonic/gin"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // LegacyHandler handles legacy endpoints
@@ -53,18 +55,20 @@ func (h *LegacyHandler) HandleGetLimiter(c *gin.Context) {
 			continue
 		}
 
-		var requests, limits *api.ResourceInfo
+		var requests, limits *tfv1.Resource
 		if allocation.WorkerInfo != nil && allocation.WorkerInfo.MemoryLimitBytes > 0 {
-			limits = &api.ResourceInfo{
-				Vram: &allocation.WorkerInfo.MemoryLimitBytes,
+			vramQty := resource.NewQuantity(int64(allocation.WorkerInfo.MemoryLimitBytes), resource.BinarySI)
+			limits = &tfv1.Resource{
+				Vram: *vramQty,
 			}
 		}
 		if allocation.WorkerInfo != nil && allocation.WorkerInfo.ComputeLimitUnits > 0 {
 			computeLimit := float64(allocation.WorkerInfo.ComputeLimitUnits)
+			computeQty := resource.NewQuantity(int64(computeLimit), resource.DecimalSI)
 			if limits == nil {
-				limits = &api.ResourceInfo{}
+				limits = &tfv1.Resource{}
 			}
-			limits.ComputePercent = &computeLimit
+			limits.ComputePercent = *computeQty
 		}
 
 		limiterInfos = append(limiterInfos, api.LimiterInfo{
