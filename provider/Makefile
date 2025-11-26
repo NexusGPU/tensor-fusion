@@ -35,10 +35,10 @@ ASCEND_OBJ := $(BUILD_DIR)/accelerator_ascend.o
 
 # Test executables
 TEST_BIN := $(BUILD_DIR)/test_accelerator
-TEST_LOGIC_PROBE_BIN := $(BUILD_DIR)/test_logic_id_probe
-TEST_ASCEND_DEBUG_BIN := $(BUILD_DIR)/test_ascend_debug
+TEST_ASCEND_BIN := $(BUILD_DIR)/test_ascend_fake
+TEST_ASCEND_COMPREHENSIVE_BIN := $(BUILD_DIR)/test_ascend_comprehensive
 
-.PHONY: all clean stub ascend test install probe-logic debug-ascend
+.PHONY: all clean stub ascend test test-ascend test-comprehensive install help
 
 all: stub
 
@@ -60,42 +60,34 @@ $(ASCEND_LIB): $(ASCEND_OBJ) | $(BUILD_DIR)
 $(ASCEND_OBJ): $(ASCEND_SRC) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -I$(PROVIDER_DIR) $(ASCEND_CFLAGS) -c -o $@ $<
 
-# Build test executable
+# Build stub test executable
 test: $(TEST_BIN)
 
 $(TEST_BIN): $(TEST_DIR)/test_accelerator.c $(STUB_LIB) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(PROVIDER_DIR) -o $@ $(TEST_DIR)/test_accelerator.c -L$(BUILD_DIR) -laccelerator_stub -Wl,-rpath,$(BUILD_DIR)
 
-# Build Ascend fake test (links ascend lib)
+test-run: test
+	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_BIN)
+
+# Build Ascend fake partition test
 test-ascend: $(TEST_ASCEND_BIN)
 
 $(TEST_ASCEND_BIN): $(TEST_DIR)/ascend_partition_fake.c $(ASCEND_LIB) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -I$(PROVIDER_DIR) -o $@ $(TEST_DIR)/ascend_partition_fake.c -L$(BUILD_DIR) -laccelerator_ascend $(ASCEND_LDFLAGS) -Wl,-rpath,$(BUILD_DIR)
 
-# Run tests
-test-run: test
-	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_BIN)
-
 test-ascend-run: test-ascend
 	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_ASCEND_BIN)
 
-# Build logic ID probe tool
-probe-logic: $(TEST_LOGIC_PROBE_BIN)
+# Build comprehensive Ascend test tool (all-in-one test suite)
+test-comprehensive: $(TEST_ASCEND_COMPREHENSIVE_BIN)
 
-$(TEST_LOGIC_PROBE_BIN): $(ASCEND_DIR)/tests/test_logic_id_probe.cpp | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) -I$(PROVIDER_DIR) $(ASCEND_CFLAGS) -o $@ $< $(ASCEND_LDFLAGS)
-
-probe-logic-run: probe-logic
-	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_LOGIC_PROBE_BIN)
-
-# Build Ascend debug tool
-debug-ascend: $(TEST_ASCEND_DEBUG_BIN)
-
-$(TEST_ASCEND_DEBUG_BIN): $(ASCEND_DIR)/tests/test_ascend_debug.cpp $(ASCEND_LIB) | $(BUILD_DIR)
+$(TEST_ASCEND_COMPREHENSIVE_BIN): $(ASCEND_DIR)/tests/test_ascend_comprehensive.cpp $(ASCEND_LIB) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -I$(PROVIDER_DIR) $(ASCEND_CFLAGS) -o $@ $< -L$(BUILD_DIR) -laccelerator_ascend $(ASCEND_LDFLAGS) -Wl,-rpath,$(BUILD_DIR)
 
-debug-ascend-run: debug-ascend
-	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_ASCEND_DEBUG_BIN)
+test-comprehensive-run: test-comprehensive
+	@echo "Note: You may need to set DCMI_LIB_PATH and run with sudo -E"
+	@echo "Example: sudo -E DCMI_LIB_PATH=/usr/local/dcmi/libdcmi.so make test-comprehensive-run"
+	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_ASCEND_COMPREHENSIVE_BIN)
 
 # Create build directory
 $(BUILD_DIR):
@@ -116,11 +108,19 @@ install: $(STUB_LIB)
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all       - Build stub implementation (default)"
-	@echo "  stub      - Build stub accelerator library"
-	@echo "  ascend    - Build Ascend accelerator library (requires CANN SDK)"
-	@echo "  test      - Build test executable"
-	@echo "  test-run  - Build and run tests"
-	@echo "  clean     - Remove build artifacts"
-	@echo "  install   - Install libraries to system path"
-	@echo "  help      - Show this help message"
+	@echo "  all                  - Build stub implementation (default)"
+	@echo "  stub                 - Build stub accelerator library"
+	@echo "  ascend               - Build Ascend accelerator library (requires CANN SDK)"
+	@echo ""
+	@echo "Test targets:"
+	@echo "  test                 - Build stub test executable"
+	@echo "  test-run             - Build and run stub tests"
+	@echo "  test-ascend          - Build Ascend fake partition test"
+	@echo "  test-ascend-run      - Build and run Ascend fake partition test"
+	@echo "  test-comprehensive   - Build comprehensive Ascend test suite (recommended)"
+	@echo "  test-comprehensive-run - Build and run comprehensive test"
+	@echo ""
+	@echo "Other targets:"
+	@echo "  clean                - Remove build artifacts"
+	@echo "  install              - Install libraries to system path"
+	@echo "  help                 - Show this help message"
