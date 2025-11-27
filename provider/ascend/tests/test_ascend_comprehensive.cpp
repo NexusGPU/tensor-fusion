@@ -164,7 +164,9 @@ void testDcmiDirectAccess() {
         std::fprintf(stderr, "\nLogic ID Probe Summary: Found %d device(s)\n", successCount);
     }
 
-    dlclose(handle);
+    // Note: Don't dlclose here - leave DCMI loaded for Phase 2
+    // This allows accelerator.cpp to work with the already-initialized DCMI
+    // dlclose(handle);  // Commented out to fix Phase 2 loading issue
 }
 
 // ============================================================================
