@@ -145,6 +145,7 @@ const (
 	HypervisorMetricsFormatEnv      = "TF_HYPERVISOR_METRICS_FORMAT"
 	HypervisorMetricsExtraLabelsEnv = "TF_HYPERVISOR_METRICS_EXTRA_LABELS"
 	HypervisorDetectUsedGPUEnv      = "DETECT_IN_USED_GPUS"
+	HypervisorDevicePluginPathEnv   = "DEVICE_PLUGIN_PATH"
 
 	// Add ptrace capability to hypervisor container, to trace all host PID using GPU
 	SystemPtraceCapability = "SYS_PTRACE"
