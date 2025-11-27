@@ -156,11 +156,18 @@ bool ensureDcmiLoaded() {
     };
 
     std::fprintf(stderr, "[ascend] attempting to load dcmi\n");
+    std::fprintf(stderr, "[ascend] DCMI_LIB_PATH env: %s\n", envPath ? envPath : "(not set)");
+    std::fflush(stderr);  // Force flush to see output immediately
+
     for (size_t i = 0; candidates[i] != nullptr; ++i) {
         const char* libPath = candidates[i];
         if (!libPath) {
+            std::fprintf(stderr, "[ascend] candidate[%zu] is null, skipping\n", i);
             continue;
         }
+        std::fprintf(stderr, "[ascend] trying dlopen(%s)...\n", libPath);
+        std::fflush(stderr);
+
         gDcmiHandle = dlopen(libPath, RTLD_LAZY | RTLD_LOCAL);
         if (gDcmiHandle) {
             std::fprintf(stderr, "[ascend] loaded dcmi from %s\n", libPath);
@@ -168,6 +175,7 @@ bool ensureDcmiLoaded() {
         } else {
             const char* err = dlerror();
             std::fprintf(stderr, "[ascend] dlopen failed for %s: %s\n", libPath, err ? err : "unknown");
+            std::fflush(stderr);
         }
     }
 
