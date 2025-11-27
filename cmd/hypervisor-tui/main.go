@@ -28,7 +28,7 @@ import (
 
 var (
 	host = flag.String("host", "localhost", "Hypervisor server host")
-	port = flag.Int("port", 8000, "Hypervisor server port")
+	port = flag.Int("port", 8001, "Hypervisor server port")
 )
 
 func main() {

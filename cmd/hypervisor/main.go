@@ -83,18 +83,7 @@ func main() {
 	}
 	klog.Info("Device manager started")
 
-	// Parse isolation mode
-	var mode tfv1.IsolationModeType
-	switch *isolationMode {
-	case string(tfv1.IsolationModeShared):
-		mode = tfv1.IsolationModeShared
-	case string(tfv1.IsolationModeSoft):
-		mode = tfv1.IsolationModeSoft
-	case string(tfv1.IsolationModeHard):
-		mode = tfv1.IsolationModeHard
-	case string(tfv1.IsolationModePartitioned):
-		mode = tfv1.IsolationModePartitioned
-	}
+	mode := tfv1.IsolationModeType(*isolationMode)
 
 	// initialize data backend and worker controller
 	var backend framework.Backend
@@ -114,13 +103,11 @@ func main() {
 			klog.Fatalf("Failed to get Kubernetes config: %v", err)
 		}
 
-		// For Kubernetes backend, create a temporary backend first, then worker controller, then final backend
-		tempBackend := single_node.NewSingleNodeBackend(ctx, deviceController)
-		workerController = worker.NewWorkerController(deviceController, mode, tempBackend)
 		backend, err = kubernetes.NewKubeletBackend(ctx, deviceController, workerController, restConfig)
 		if err != nil {
 			klog.Fatalf("Failed to create Kubernetes backend: %v", err)
 		}
+		workerController = worker.NewWorkerController(deviceController, mode, backend)
 	case "simple":
 		backend = single_node.NewSingleNodeBackend(ctx, deviceController)
 		workerController = worker.NewWorkerController(deviceController, mode, backend)
