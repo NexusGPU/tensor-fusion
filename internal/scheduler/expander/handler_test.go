@@ -273,7 +273,7 @@ func testPreScheduledPodManagement(suite *NodeExpanderTestSuite) {
 	Expect(exists).To(BeTrue())
 
 	// Test removing pre-scheduled pod
-	suite.nodeExpander.RemovePreSchedulePod("test-pod", true)
+	_ = suite.nodeExpander.RemovePreSchedulePod("test-pod", true)
 
 	// Verify pre-scheduled pod is removed
 	suite.nodeExpander.mu.RLock()

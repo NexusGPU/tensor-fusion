@@ -15,6 +15,7 @@ func NewHTTPServer(
 	ahp *router.AssignHostPortRouter,
 	ai *router.AssignIndexRouter,
 	alc *router.AllocatorInfoRouter,
+	nsi *router.NodeScalerInfoRouter,
 	leaderChan <-chan struct{},
 ) *gin.Engine {
 
@@ -59,5 +60,6 @@ func NewHTTPServer(
 	apiGroup.GET("/config", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{"config": config.GetGlobalConfig()})
 	})
+	apiGroup.GET("/node-scaler", nsi.Get)
 	return r
 }
