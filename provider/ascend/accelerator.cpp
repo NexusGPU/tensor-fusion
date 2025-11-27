@@ -159,15 +159,15 @@ bool ensureDcmiLoaded() {
         "/usr/local/dcmi/libdcmi.so",
         "/usr/local/Ascend/driver/lib64/libdcmi.so",
         "/usr/lib64/libdcmi.so",
-        nullptr,
     };
+    const size_t numCandidates = sizeof(candidates) / sizeof(candidates[0]);
 
     std::fprintf(stderr, "[ascend] attempting to load dcmi (FIRST TIME)\n");
     std::fprintf(stderr, "[ascend] DCMI_LIB_PATH env: %s\n", envPath ? envPath : "(not set)");
     std::fflush(stderr);
 
     int candidateCount = 0;
-    for (size_t i = 0; candidates[i] != nullptr; ++i) {
+    for (size_t i = 0; i < numCandidates; ++i) {
         candidateCount++;
         const char* libPath = candidates[i];
         if (!libPath) {
