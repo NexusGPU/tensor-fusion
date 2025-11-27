@@ -84,6 +84,7 @@ using dcmi_get_device_utilization_rate_fn = int (*)(int, int, int, unsigned int*
 using dcmi_get_device_pcie_info_fn = int (*)(int, int, void*);
 using dcmi_get_topo_info_by_device_id_fn = int (*)(int, int, int, int, int*);
 using dcmi_get_hccs_link_bandwidth_info_fn = int (*)(int, int, void*);
+using dcmi_get_device_aicpu_info_fn = int (*)(int, int, struct dcmi_aicpu_info*);
 
 dcmi_get_all_device_count_fn p_dcmi_get_all_device_count = nullptr;
 dcmi_get_card_id_device_id_from_logicid_fn p_dcmi_get_card_id_device_id_from_logicid = nullptr;
@@ -99,6 +100,7 @@ dcmi_get_device_utilization_rate_fn p_dcmi_get_device_utilization_rate = nullptr
 dcmi_get_device_pcie_info_fn p_dcmi_get_device_pcie_info = nullptr;
 dcmi_get_topo_info_by_device_id_fn p_dcmi_get_topo_info_by_device_id = nullptr;
 dcmi_get_hccs_link_bandwidth_info_fn p_dcmi_get_hccs_link_bandwidth_info = nullptr;
+dcmi_get_device_aicpu_info_fn p_dcmi_get_device_aicpu_info = nullptr;
 
 template <typename T>
 bool loadSym(void* handle, const char* name, T& fn) {
@@ -181,6 +183,7 @@ bool ensureDcmiLoaded() {
     loadSym(gDcmiHandle, "dcmi_get_device_temperature", p_dcmi_get_device_temperature);
     loadSym(gDcmiHandle, "dcmi_get_device_utilization_rate", p_dcmi_get_device_utilization_rate);
     loadSym(gDcmiHandle, "dcmi_get_device_pcie_info", p_dcmi_get_device_pcie_info);
+    loadSym(gDcmiHandle, "dcmi_get_device_aicpu_info", p_dcmi_get_device_aicpu_info);
 
     // Optional topology APIs (don't fail if not available)
     loadSym(gDcmiHandle, "dcmi_get_topo_info_by_device_id", p_dcmi_get_topo_info_by_device_id);
@@ -392,8 +395,21 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         info->capabilities.supportsHardIsolation = false;
         info->capabilities.supportsSnapshot = false;
         info->capabilities.supportsMetrics = true;
-        info->capabilities.maxPartitions = 32;
-        info->capabilities.maxWorkersPerDevice = 32;
+
+        // Query AI CPU count to determine max partitions
+        // Each vNPU partition requires at least 1 AI CPU
+        unsigned int maxPartitions = 7;  // Default fallback
+        if (p_dcmi_get_device_aicpu_info) {
+            struct dcmi_aicpu_info aicpuInfo;
+            std::memset(&aicpuInfo, 0, sizeof(aicpuInfo));
+            int ret = p_dcmi_get_device_aicpu_info(card, dev, &aicpuInfo);
+            if (ret == 0 && aicpuInfo.aicpu_num > 0) {
+                maxPartitions = aicpuInfo.aicpu_num;
+            }
+        }
+
+        info->capabilities.maxPartitions = maxPartitions;
+        info->capabilities.maxWorkersPerDevice = maxPartitions;
 
         info->relatedDevices = NULL;
         info->relatedDeviceCount = 0;
@@ -473,8 +489,21 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
                 info->capabilities.supportsHardIsolation = false;
                 info->capabilities.supportsSnapshot = false;
                 info->capabilities.supportsMetrics = true;
-                info->capabilities.maxPartitions = 32;
-                info->capabilities.maxWorkersPerDevice = 32;
+
+                // Query AI CPU count to determine max partitions
+                // Each vNPU partition requires at least 1 AI CPU
+                unsigned int maxPartitions = 7;  // Default fallback
+                if (p_dcmi_get_device_aicpu_info) {
+                    struct dcmi_aicpu_info aicpuInfo;
+                    std::memset(&aicpuInfo, 0, sizeof(aicpuInfo));
+                    int ret = p_dcmi_get_device_aicpu_info(card, dev, &aicpuInfo);
+                    if (ret == 0 && aicpuInfo.aicpu_num > 0) {
+                        maxPartitions = aicpuInfo.aicpu_num;
+                    }
+                }
+
+                info->capabilities.maxPartitions = maxPartitions;
+                info->capabilities.maxWorkersPerDevice = maxPartitions;
 
                 info->relatedDevices = NULL;
                 info->relatedDeviceCount = 0;
@@ -629,10 +658,6 @@ bool AssignPartition(PartitionAssignment* assignment) {
         assignment->partitionOverheadBytes = 0;
         return true;
     }
-    const TemplateSpec* tmpl = findTemplate(assignment->templateId);
-    if (!tmpl) {
-        return false;
-    }
 
     // Software-only tracking: no dcmi create_vdevice call. Partition UUID is synthetic.
     {
@@ -665,17 +690,7 @@ bool AssignPartition(PartitionAssignment* assignment) {
 }
 
 bool RemovePartition(const char* templateId, const char* deviceUUID) {
-    if (!templateId || !deviceUUID) {
-        return false;
-    }
-    // Pure software tracking: remove bookkeeping only.
-    std::lock_guard<std::mutex> lock(gPartitionMutex);
-    for (auto it = gPartitions.begin(); it != gPartitions.end(); ++it) {
-        if (it->deviceUUID == deviceUUID && it->templateId == templateId) {
-            gPartitions.erase(it);
-            return true;
-        }
-    }
+    // Software-only tracking: no dcmi destroy_vdevice call.
     return true;
 }
 
