@@ -34,16 +34,17 @@ const (
 )
 
 type NodeExpander struct {
-	client            client.Client
-	scheduler         *scheduler.Scheduler
-	allocator         *gpuallocator.GpuAllocator
-	logger            klog.Logger
-	inFlightNodes     map[string][]*tfv1.GPU
-	preSchedulePods   map[string]*tfv1.AllocRequest
-	preScheduleTimers map[string]*time.Timer
-	eventRecorder     record.EventRecorder
-	mu                sync.RWMutex
-	ctx               context.Context
+	client             client.Client
+	scheduler          *scheduler.Scheduler
+	allocator          *gpuallocator.GpuAllocator
+	logger             klog.Logger
+	inFlightNodes      map[string][]*tfv1.GPU
+	inFlightNodeClaims sync.Map
+	preSchedulePods    map[string]*tfv1.AllocRequest
+	preScheduleTimers  map[string]*time.Timer
+	eventRecorder      record.EventRecorder
+	mu                 sync.RWMutex
+	ctx                context.Context
 }
 
 func NewNodeExpander(
@@ -54,15 +55,16 @@ func NewNodeExpander(
 ) *NodeExpander {
 
 	expander := &NodeExpander{
-		client:            allocator.Client,
-		scheduler:         scheduler,
-		allocator:         allocator,
-		logger:            log.FromContext(ctx).WithValues("component", "NodeExpander"),
-		inFlightNodes:     make(map[string][]*tfv1.GPU, 10),
-		preSchedulePods:   make(map[string]*tfv1.AllocRequest, 20),
-		preScheduleTimers: make(map[string]*time.Timer, 20),
-		eventRecorder:     recorder,
-		ctx:               ctx,
+		client:             allocator.Client,
+		scheduler:          scheduler,
+		allocator:          allocator,
+		logger:             log.FromContext(ctx).WithValues("component", "NodeExpander"),
+		inFlightNodes:      make(map[string][]*tfv1.GPU, 10),
+		preSchedulePods:    make(map[string]*tfv1.AllocRequest, 20),
+		preScheduleTimers:  make(map[string]*time.Timer, 20),
+		inFlightNodeClaims: sync.Map{},
+		eventRecorder:      recorder,
+		ctx:                ctx,
 	}
 	allocator.RegisterBindHandler(func(req *tfv1.AllocRequest) {
 		obj := &corev1.ObjectReference{
@@ -80,7 +82,59 @@ func NewNodeExpander(
 				"new node provisioned and pod scheduled successfully")
 		}
 	})
+
+	// Start checking inFlightNodeClaims every minute to avoid stuck in inFlightNodes
+	go func() {
+		for {
+			time.Sleep(time.Minute)
+			expander.inFlightNodeClaims.Range(func(key, _ interface{}) bool {
+				karpenterNodeClaim := &karpv1.NodeClaim{}
+				if err := expander.client.Get(expander.ctx, client.ObjectKey{Name: key.(string)}, karpenterNodeClaim); err != nil {
+					if errors.IsNotFound(err) {
+						expander.inFlightNodeClaims.Delete(key)
+						expander.RemoveInFlightNode(key.(string))
+						expander.logger.Info("karpenter node claim not found, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", key.(string))
+						return true
+					}
+					expander.logger.Error(err, "failed to get karpenter node claim", "nodeClaimName", key.(string))
+					return true
+				}
+				if !karpenterNodeClaim.DeletionTimestamp.IsZero() {
+					expander.inFlightNodeClaims.Delete(key)
+					expander.RemoveInFlightNode(key.(string))
+					expander.logger.Info("karpenter node claim is deleted, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", key.(string))
+					return true
+				}
+				expander.mu.RLock()
+				defer expander.mu.RUnlock()
+				if _, ok := expander.inFlightNodes[karpenterNodeClaim.Status.NodeName]; !ok {
+					expander.inFlightNodeClaims.Delete(key)
+					expander.logger.Info("karpenter node claim has been provisioned, remove from inFlightNodeClaims", "nodeClaimName", key.(string))
+					return true
+				}
+				return true
+			})
+		}
+	}()
+
 	return expander
+}
+
+func (e *NodeExpander) GetNodeScalerInfo() any {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	inFlightNodeClaimSnapshot := make(map[string]any)
+	e.inFlightNodeClaims.Range(func(key, value interface{}) bool {
+		inFlightNodeClaimSnapshot[key.(string)] = value
+		return true
+	})
+	return map[string]any{
+		"inFlightNodes":       e.inFlightNodes,
+		"inFlightNodeClaims":  inFlightNodeClaimSnapshot,
+		"preSchedulePods":     e.preSchedulePods,
+		"preScheduleTimerNum": len(e.preScheduleTimers),
+	}
 }
 
 func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) error {
@@ -417,13 +471,13 @@ func (e *NodeExpander) createGPUNodeClaim(ctx context.Context, pod *corev1.Pod, 
 		e.logger.Info("node is not owned by any known provisioner, skip expansion", "node", preparedNode.Name)
 		return fmt.Errorf("node is not owned by any known provisioner, skip expansion")
 	}
-	e.logger.Info("start expanding node from existing template node", "tmplNode", preparedNode.Name)
+	e.logger.Info("start expanding node from existing template node", "newNodeClaimName", preparedNode.Name)
 	if isKarpenterNodeClaim {
 		// Check if controllerMeta's parent is GPUNodeClaim using unstructured object
 		return e.handleKarpenterNodeClaim(ctx, pod, preparedNode, controlledBy)
 	} else if isGPUNodeClaim {
 		// Running in Provisioning mode, clone the parent GPUNodeClaim and apply
-		e.logger.Info("node is controlled by GPUNodeClaim, cloning another to expand node", "tmplNode", preparedNode.Name)
+		e.logger.Info("node is controlled by GPUNodeClaim, cloning another to expand node", "newNode", preparedNode.Name)
 		return e.cloneGPUNodeClaim(ctx, pod, preparedNode, controlledBy)
 	}
 	return nil
@@ -458,12 +512,12 @@ func (e *NodeExpander) handleKarpenterNodeClaim(ctx context.Context, pod *corev1
 	if nodeClaimParent != nil && nodeClaimParent.Kind == tfv1.GPUNodeClaimKind {
 		// Parent is GPUNodeClaim, clone it and let cloudprovider module create real GPUNode
 		e.logger.Info("NodeClaim parent is GPUNodeClaim, cloning another to expand node",
-			"nodeClaimName", controlledBy.Name, "gpuNodeClaimParent", nodeClaimParent.Name)
+			"controlledBy", controlledBy.Name, "gpuNodeClaimParent", nodeClaimParent.Name)
 		return e.cloneGPUNodeClaim(ctx, pod, preparedNode, nodeClaimParent)
 	} else if hasNodePoolParent {
 		// owned by Karpenter node pool, create NodeClaim directly with special label identifier
 		e.logger.Info("NodeClaim owned by Karpenter Pool, creating Karpenter NodeClaim to expand node",
-			"nodeClaimName", controlledBy.Name)
+			"controlledBy", controlledBy.Name)
 		return e.createKarpenterNodeClaimDirect(ctx, pod, preparedNode, nodeClaim)
 	} else {
 		return fmt.Errorf("NodeClaim has no valid parent, can not expand node, should not happen")
@@ -535,9 +589,10 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 		e.eventRecorder.Eventf(pod, corev1.EventTypeWarning, "NodeExpansionFailed", "failed to create new NodeClaim: %v", err)
 		return fmt.Errorf("failed to create NodeClaim: %w", err)
 	}
-
+	e.inFlightNodeClaims.Store(newNodeClaim.Name, true)
 	e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCompleted", "created new NodeClaim for node expansion: %s", newNodeClaim.Name)
 	e.logger.Info("created new NodeClaim for node expansion", "pod", pod.Name, "namespace", pod.Namespace, "nodeClaim", newNodeClaim.Name)
+
 	return nil
 }
 

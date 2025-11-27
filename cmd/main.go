@@ -254,7 +254,7 @@ func main() {
 
 	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator, nodeExpander)
 
-	startHttpServerForTFClient(ctx, kc, portAllocator, indexAllocator, allocator, scheduler, mgr.Elected())
+	startHttpServerForTFClient(ctx, kc, portAllocator, indexAllocator, allocator, scheduler, nodeExpander, mgr.Elected())
 
 	// +kubebuilder:scaffold:builder
 	addHealthCheckAPI(mgr)
@@ -306,6 +306,7 @@ func startHttpServerForTFClient(
 	indexAllocator *indexallocator.IndexAllocator,
 	allocator *gpuallocator.GpuAllocator,
 	scheduler *scheduler.Scheduler,
+	nodeExpander *expander.NodeExpander,
 	leaderChan <-chan struct{},
 ) {
 	client, err := client.NewWithWatch(kc, client.Options{Scheme: scheme})
@@ -333,8 +334,13 @@ func startHttpServerForTFClient(
 		setupLog.Error(err, "failed to create allocator info router")
 		os.Exit(1)
 	}
+	nodeScalerInfoRouter, err := router.NewNodeScalerInfoRouter(ctx, nodeExpander)
+	if err != nil {
+		setupLog.Error(err, "failed to create node scaler info router")
+		os.Exit(1)
+	}
 	httpServer := server.NewHTTPServer(
-		connectionRouter, assignHostPortRouter, assignIndexRouter, allocatorInfoRouter, leaderChan,
+		connectionRouter, assignHostPortRouter, assignIndexRouter, allocatorInfoRouter, nodeScalerInfoRouter, leaderChan,
 	)
 	go func() {
 		err := httpServer.Run()
