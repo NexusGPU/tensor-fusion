@@ -73,11 +73,12 @@ func NewNodeExpander(
 			UID:             req.PodMeta.UID,
 			ResourceVersion: req.PodMeta.ResourceVersion,
 		}
-		recorder.Eventf(obj, corev1.EventTypeNormal, "NodeExpansionCheck",
-			"new node provisioned and pod scheduled successfully")
-		expander.logger.Info("new node provisioned and pod scheduled successfully",
-			"namespace", req.PodMeta.Namespace, "pod", req.PodMeta.Name)
-		expander.RemovePreSchedulePod(req.PodMeta.Name, true)
+
+		removed := expander.RemovePreSchedulePod(req.PodMeta.Name, true)
+		if removed {
+			recorder.Eventf(obj, corev1.EventTypeNormal, "NodeExpansionCheck",
+				"new node provisioned and pod scheduled successfully")
+		}
 	})
 	return expander
 }
@@ -196,11 +197,11 @@ func (e *NodeExpander) addInFlightNodeAndPreSchedulePod(allocRequest *tfv1.Alloc
 		err := e.client.Get(e.ctx, client.ObjectKey{Name: podMeta.Name, Namespace: podMeta.Namespace}, currentPod)
 		if err != nil {
 			if errors.IsNotFound(err) || !currentPod.DeletionTimestamp.IsZero() {
-				e.RemovePreSchedulePod(podMeta.Name, false)
+				_ = e.RemovePreSchedulePod(podMeta.Name, false)
 			}
 			e.logger.Error(err, "failed to get pod for node expansion check",
 				"namespace", podMeta.Namespace, "pod", podMeta.Name)
-			e.RemovePreSchedulePod(podMeta.Name, false)
+			_ = e.RemovePreSchedulePod(podMeta.Name, false)
 			return
 		}
 		if currentPod.Spec.NodeName != "" {
@@ -209,14 +210,14 @@ func (e *NodeExpander) addInFlightNodeAndPreSchedulePod(allocRequest *tfv1.Alloc
 				"new node provisioned and pod scheduled successfully")
 			e.logger.Info("new node provisioned and pod scheduled successfully",
 				"namespace", podMeta.Namespace, "pod", podMeta.Name)
-			e.RemovePreSchedulePod(podMeta.Name, false)
+			_ = e.RemovePreSchedulePod(podMeta.Name, false)
 		} else {
 			// not scheduled, record warning event and remove pre-scheduled pod
 			e.eventRecorder.Eventf(currentPod, corev1.EventTypeWarning, "NodeExpansionCheck",
 				"failed to schedule pod after 10 minutes")
 			e.logger.Info("failed to schedule pod after 10 minutes",
 				"namespace", podMeta.Namespace, "pod", podMeta.Name)
-			e.RemovePreSchedulePod(podMeta.Name, false)
+			_ = e.RemovePreSchedulePod(podMeta.Name, false)
 		}
 	})
 	e.preScheduleTimers[podMeta.Name] = timer
@@ -228,25 +229,32 @@ func (e *NodeExpander) RemoveInFlightNode(nodeName string) {
 		return
 	}
 	e.mu.Lock()
-	delete(e.inFlightNodes, nodeName)
-	e.logger.Info("Removed in-flight node", "node", nodeName, "remaining inflight nodes", len(e.inFlightNodes))
+	if _, ok := e.inFlightNodes[nodeName]; ok {
+		delete(e.inFlightNodes, nodeName)
+		e.logger.Info("Removed in-flight node", "node", nodeName, "remaining inflight nodes", len(e.inFlightNodes))
+	}
 	e.mu.Unlock()
 }
 
-func (e *NodeExpander) RemovePreSchedulePod(podName string, stopTimer bool) {
+func (e *NodeExpander) RemovePreSchedulePod(podName string, stopTimer bool) bool {
 	if e == nil {
-		return
+		return false
 	}
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if stopTimer {
 		if timer, ok := e.preScheduleTimers[podName]; ok {
 			timer.Stop()
 		}
 	}
 	delete(e.preScheduleTimers, podName)
-	delete(e.preSchedulePods, podName)
-	e.logger.Info("Removed pre-scheduled pod", "pod", podName, "remaining pre-scheduled pods", len(e.preSchedulePods))
-	e.mu.Unlock()
+
+	if _, ok := e.preSchedulePods[podName]; ok {
+		delete(e.preSchedulePods, podName)
+		e.logger.Info("Removed pre-scheduled pod", "pod", podName, "remaining pre-scheduled pods", len(e.preSchedulePods))
+		return true
+	}
+	return false
 }
 
 func (e *NodeExpander) prepareNewNodesForScheduleAttempt(
@@ -327,7 +335,7 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, gpus []*tfv
 		if !preScheduledPodPreAllocated {
 			e.logger.Info("[Warning] pre-scheduled pod can not set into InFlight node anymore, remove queue and retry later",
 				"pod", alloc.PodMeta.Name, "namespace", alloc.PodMeta.Namespace)
-			e.RemovePreSchedulePod(alloc.PodMeta.Name, true)
+			_ = e.RemovePreSchedulePod(alloc.PodMeta.Name, true)
 		}
 	}
 

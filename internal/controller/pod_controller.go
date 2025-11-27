@@ -68,7 +68,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	pod := &corev1.Pod{}
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
 		if errors.IsNotFound(err) {
-			r.Expander.RemovePreSchedulePod(req.Name, true)
+			_ = r.Expander.RemovePreSchedulePod(req.Name, true)
 			r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
 			metrics.RemoveWorkerMetrics(req.Name, time.Now())
 			log.Info("Released GPU resources when pod deleted", "pod", req.NamespacedName)
