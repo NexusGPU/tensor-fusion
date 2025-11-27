@@ -1,1 +1,23 @@
-option('with_fake', type : 'boolean', value : false, description : 'Build with fake implementation for testing')
+option('build_stub',
+  type : 'boolean',
+  value : true,
+  description : 'Build stub accelerator library (for testing without hardware)'
+)
+
+option('build_ascend',
+  type : 'boolean',
+  value : false,
+  description : 'Build Ascend accelerator library (requires Ascend CANN SDK)'
+)
+
+option('build_tests',
+  type : 'boolean',
+  value : true,
+  description : 'Build test executables'
+)
+
+option('dcmi_include_dir',
+  type : 'string',
+  value : '',
+  description : 'Path to DCMI headers (default: /usr/local/dcmi)'
+)
