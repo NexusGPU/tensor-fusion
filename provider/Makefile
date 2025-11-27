@@ -46,7 +46,7 @@ all: stub
 stub: $(STUB_LIB)
 
 $(STUB_LIB): $(STUB_OBJ) | $(BUILD_DIR)
-	$(CC) $(LDFLAGS) -o $@ $<
+	$(CC) $(LDFLAGS) -o $@ $< -pthread
 
 $(STUB_OBJ): $(STUB_SRC) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(PROVIDER_DIR) -c -o $@ $<
@@ -64,7 +64,7 @@ $(ASCEND_OBJ): $(ASCEND_SRC) | $(BUILD_DIR)
 test: $(TEST_BIN)
 
 $(TEST_BIN): $(TEST_DIR)/test_accelerator.c $(STUB_LIB) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -I$(PROVIDER_DIR) -o $@ $(TEST_DIR)/test_accelerator.c -L$(BUILD_DIR) -laccelerator_stub -Wl,-rpath,$(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(PROVIDER_DIR) -o $@ $(TEST_DIR)/test_accelerator.c -L$(BUILD_DIR) -laccelerator_stub -pthread -Wl,-rpath,$(BUILD_DIR)
 
 test-run: test
 	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_BIN)
