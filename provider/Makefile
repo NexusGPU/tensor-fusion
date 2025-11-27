@@ -83,6 +83,7 @@ test-comprehensive: $(TEST_ASCEND_COMPREHENSIVE_BIN)
 
 $(TEST_ASCEND_COMPREHENSIVE_BIN): $(ASCEND_DIR)/tests/test_ascend_comprehensive.cpp $(ASCEND_LIB) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -I$(PROVIDER_DIR) $(ASCEND_CFLAGS) -o $@ $< -L$(BUILD_DIR) -laccelerator_ascend $(ASCEND_LDFLAGS) -Wl,-rpath,$(BUILD_DIR)
+	chmod +x $@
 
 test-comprehensive-run: test-comprehensive
 	@echo "Note: You may need to set DCMI_LIB_PATH and run with sudo -E"
