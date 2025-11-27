@@ -141,7 +141,14 @@ void resetDcmiLoader() {
 
 bool ensureDcmiLoaded() {
     std::lock_guard<std::mutex> lock(gDcmiMutex);
+
+    std::fprintf(stderr, "[ascend] DEBUG: ensureDcmiLoaded() called, gDcmiTried=%d, gDcmiLoaded=%d\n",
+                 gDcmiTried, gDcmiLoaded);
+    std::fflush(stderr);
+
     if (gDcmiTried) {
+        std::fprintf(stderr, "[ascend] DEBUG: Already tried before, returning cached result: %d\n", gDcmiLoaded);
+        std::fflush(stderr);
         return gDcmiLoaded;
     }
     gDcmiTried = true;
@@ -155,29 +162,37 @@ bool ensureDcmiLoaded() {
         nullptr,
     };
 
-    std::fprintf(stderr, "[ascend] attempting to load dcmi\n");
+    std::fprintf(stderr, "[ascend] attempting to load dcmi (FIRST TIME)\n");
     std::fprintf(stderr, "[ascend] DCMI_LIB_PATH env: %s\n", envPath ? envPath : "(not set)");
-    std::fflush(stderr);  // Force flush to see output immediately
+    std::fflush(stderr);
 
+    int candidateCount = 0;
     for (size_t i = 0; candidates[i] != nullptr; ++i) {
+        candidateCount++;
         const char* libPath = candidates[i];
         if (!libPath) {
             std::fprintf(stderr, "[ascend] candidate[%zu] is null, skipping\n", i);
+            std::fflush(stderr);
             continue;
         }
-        std::fprintf(stderr, "[ascend] trying dlopen(%s)...\n", libPath);
+        std::fprintf(stderr, "[ascend] [%d] trying dlopen(%s)...\n", candidateCount, libPath);
         std::fflush(stderr);
 
         gDcmiHandle = dlopen(libPath, RTLD_LAZY | RTLD_LOCAL);
         if (gDcmiHandle) {
-            std::fprintf(stderr, "[ascend] loaded dcmi from %s\n", libPath);
+            std::fprintf(stderr, "[ascend] SUCCESS! loaded dcmi from %s (handle=%p)\n", libPath, gDcmiHandle);
+            std::fflush(stderr);
             break;
         } else {
             const char* err = dlerror();
-            std::fprintf(stderr, "[ascend] dlopen failed for %s: %s\n", libPath, err ? err : "unknown");
+            std::fprintf(stderr, "[ascend] FAILED: dlopen(%s): %s\n", libPath, err ? err : "unknown");
             std::fflush(stderr);
         }
     }
+
+    std::fprintf(stderr, "[ascend] DEBUG: Tried %d candidates, final gDcmiHandle=%p\n",
+                 candidateCount, gDcmiHandle);
+    std::fflush(stderr);
 
     if (!gDcmiHandle) {
         std::fprintf(stderr, "[ascend] dcmi handle remains null after dlopen attempts\n");
