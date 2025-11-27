@@ -641,6 +641,11 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 		spec.Containers[0].Image = pool.Spec.ComponentConfig.Hypervisor.Image
 	}
 
+	spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
+		Name:  constants.HypervisorDevicePluginPathEnv,
+		Value: constants.KubeletDevicePluginPath,
+	})
+
 	if len(spec.Containers[0].Resources.Requests) == 0 {
 		spec.Containers[0].Resources.Requests = hypervisorDefaultRequests
 	}
