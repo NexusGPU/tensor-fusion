@@ -97,6 +97,7 @@ func (s *Server) setupRoutes() {
 	})
 
 	// RESTful API routes
+	// TODO: add authentication and authorization for worker APIs
 	apiV1 := s.router.Group("/api/v1")
 	{
 		// Device routes
