@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/gin-gonic/gin"
@@ -26,9 +25,8 @@ func NewAssignHostPortRouter(ctx context.Context, allocator *portallocator.PortA
 
 func (r *AssignHostPortRouter) AssignHostPort(ctx *gin.Context) {
 	podName := ctx.Query("podName")
-	token := ctx.Request.Header.Get(constants.AuthorizationHeader)
-
-	if token == "" {
+	token, ok := utils.ExtractBearerToken(ctx)
+	if !ok {
 		log.FromContext(ctx).Error(nil, "assigned host port failed, missing token", "podName", podName)
 		ctx.String(http.StatusUnauthorized, "missing authorization header")
 		return

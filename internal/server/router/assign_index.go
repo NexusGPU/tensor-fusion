@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/gin-gonic/gin"
@@ -26,9 +25,8 @@ func NewAssignIndexRouter(ctx context.Context, allocator *indexallocator.IndexAl
 
 func (r *AssignIndexRouter) AssignIndex(ctx *gin.Context) {
 	podName := ctx.Query("podName")
-	token := ctx.Request.Header.Get(constants.AuthorizationHeader)
-
-	if token == "" {
+	token, ok := utils.ExtractBearerToken(ctx)
+	if !ok {
 		log.FromContext(ctx).Error(nil, "assigned index failed, missing token", "podName", podName)
 		ctx.String(http.StatusUnauthorized, "missing authorization header")
 		return
@@ -47,7 +45,8 @@ func (r *AssignIndexRouter) AssignIndex(ctx *gin.Context) {
 		return
 	}
 	if !tokenReview.Status.Authenticated || tokenReview.Status.User.Username != utils.GetSelfServiceAccountNameFull() {
-		log.FromContext(ctx).Error(nil, "assigned index failed, token invalid", "podName", podName)
+		log.FromContext(ctx).Error(nil, "assigned index failed, token invalid", "podName", podName,
+			"authPassed", tokenReview.Status.Authenticated, "username", tokenReview.Status.User.Username)
 		ctx.String(http.StatusUnauthorized, "token authentication failed")
 		return
 	}

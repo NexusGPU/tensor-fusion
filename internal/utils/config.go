@@ -29,6 +29,11 @@ const (
 var selfServiceAccountName string
 
 func InitServiceAccountConfig() {
+	if os.Getenv("IMPERSONATE_SERVICE_ACCOUNT") != "" {
+		selfServiceAccountName = os.Getenv("IMPERSONATE_SERVICE_ACCOUNT")
+		ctrl.Log.Info("impersonate service account mode detected", "name", selfServiceAccountName)
+		return
+	}
 	data, err := os.ReadFile(ServiceAccountTokenPath)
 	if err != nil {
 		ctrl.Log.Info("service account token not found, run outside of Kubernetes cluster")
