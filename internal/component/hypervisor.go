@@ -88,7 +88,7 @@ func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool
 		}
 		key := client.ObjectKey{
 			Namespace: utils.CurrentNamespace(),
-			Name:      fmt.Sprintf("hypervisor-%s", node.Name),
+			Name:      fmt.Sprintf("tf-hypervisor-%s", node.Name),
 		}
 		pod := &corev1.Pod{}
 		err := r.Get(ctx, key, pod)
