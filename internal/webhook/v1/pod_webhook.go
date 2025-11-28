@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -46,6 +47,13 @@ import (
 )
 
 var httpClient = &http.Client{Timeout: 10 * time.Second}
+var operatorPort = "8080"
+
+func init() {
+	if port := os.Getenv("PORT"); port != "" {
+		operatorPort = port
+	}
+}
 
 // SetupPodWebhookWithManager registers the webhook for Pod in the manager.
 func SetupPodWebhookWithManager(mgr ctrl.Manager, portAllocator *portallocator.PortAllocator, indexAllocator *indexallocator.IndexAllocator, pricingProvider pricing.PricingProvider) error {
@@ -386,7 +394,7 @@ func (m *TensorFusionPodMutator) assignDeviceAllocationIndex(ctx context.Context
 	var indexErr error
 	podIdentifier := pod.Name
 	if podIdentifier == "" {
-		// For Deployment/StatefulSet created pods, Name might be empty, use GenerateName + UID
+		// For Deployment/StatefulSet created pods, Name might be empty, use GenerateName + UID(maybe empty)
 		podIdentifier = pod.GenerateName + string(pod.UID)
 	}
 
@@ -576,7 +584,7 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 		return 0, fmt.Errorf("operator leader IP not found")
 	}
 
-	urlStr := fmt.Sprintf("http://%s:8080/assign-host-port?podName=%s", leaderIP, pod.Name)
+	urlStr := fmt.Sprintf("http://%s:%s/api/assign-host-port?podName=%s", leaderIP, operatorPort, pod.Name)
 	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
 		return 0, err
@@ -613,7 +621,7 @@ func (m *TensorFusionPodMutator) assignIndexFromLeader(ctx context.Context, pod 
 	if podIdentifier == "" {
 		podIdentifier = pod.GenerateName + string(pod.UID)
 	}
-	urlStr := fmt.Sprintf("http://%s:8080/assign-index?podName=%s", leaderIP, podIdentifier)
+	urlStr := fmt.Sprintf("http://%s:%s/api/assign-index?podName=%s", leaderIP, operatorPort, podIdentifier)
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return 0, err
