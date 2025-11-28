@@ -27,7 +27,7 @@
             "mode": "auto",
             "console": "integratedTerminal",
             "env": {
-                "KUBECONFIG": "~/.kube/config",
+                "KUBECONFIG": "~/.kube/config-local-studio",
                 "HYPERVISOR_PORT": "8042",
                 "GPU_NODE_NAME": "ubuntu",
             },
@@ -64,8 +64,9 @@
                 "KUBECONFIG": "~/.kube/config-local-studio",
                 "ENABLE_WEBHOOKS": "false",
                 "ENABLE_SCHEDULER": "true",
-                "ENABLE_CR_CONTROLLER": "false",
-                "NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION": "true"
+                "ENABLE_CR_CONTROLLER": "true",
+                "NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION": "true",
+                "IMPERSONATE_SERVICE_ACCOUNT": "system:serviceaccount:tensor-fusion-sys:tensor-fusion-sys"
             },
             "args": [
                 "--metrics-path", "${workspaceFolder}/logs/metrics.log",
