@@ -46,8 +46,8 @@ func (h *WorkerHandler) HandleGetWorkers(c *gin.Context) {
 
 	// Get worker details
 	workerDetails := make([]*api.WorkerAllocation, 0, len(workers))
-	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
+	for _, worker := range workers {
+		allocation, err := h.workerController.GetWorkerAllocation(worker.WorkerUID)
 		if err != nil {
 			continue
 		}

@@ -12,6 +12,7 @@
         "apimachinery",
         "apimachineryruntime",
         "apiruntime",
+        "apiserver",
         "apiutil",
         "automount",
         "AWSGPU",

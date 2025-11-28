@@ -56,8 +56,8 @@ type WorkerController interface {
 	// Returns map keyed by device UUID, then by worker UID, then by process ID
 	GetWorkerMetrics() (map[string]map[string]map[string]*api.WorkerMetrics, error)
 
-	// ListWorkers returns list of all worker UIDs
-	ListWorkers() ([]string, error)
+	// ListWorkers returns list of all worker infos
+	ListWorkers() ([]*api.WorkerInfo, error)
 }
 
 type QuotaController interface {
@@ -79,9 +79,9 @@ type Backend interface {
 	Stop() error
 
 	// ListAndWatchWorkers gets GPU workers from the workload orchestration platform
-	// Returns a channel that receives worker UID lists and a stop channel
+	// Returns a channel that receives worker info lists and a stop channel
 	// The channel should be closed when Stop() is called
-	ListAndWatchWorkers() (<-chan []string, <-chan struct{}, error)
+	ListAndWatchWorkers() (<-chan []*api.WorkerInfo, <-chan struct{}, error)
 
 	// GetWorkerToProcessMap links workers to actual running process list on OS
 	GetWorkerToProcessMap() (map[string][]string, error)

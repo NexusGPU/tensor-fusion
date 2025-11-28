@@ -21,6 +21,9 @@ type WorkerInfo struct {
 	TemplateID        string
 	Annotations       map[string]string
 	PodIndex          string
+
+	// Tombstone field to indicate if the worker is deleted
+	Deleted bool
 }
 
 type WorkerAllocation struct {

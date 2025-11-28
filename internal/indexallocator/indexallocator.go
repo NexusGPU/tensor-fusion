@@ -86,7 +86,7 @@ func (s *IndexAllocator) AssignIndex(podName string) (int, error) {
 	}
 	// Atomic increment and wrap around
 	next := atomic.AddInt64(&s.currentIndex, 1)
-	index := int((next-1)%IndexRangeEnd) + IndexRangeStart
+	index := int((next-1)%constants.IndexRangeEnd) + constants.IndexRangeStart
 	log.FromContext(s.ctx).Info("assigned index successfully", "podName", podName, "index", index)
 	return index, nil
 }

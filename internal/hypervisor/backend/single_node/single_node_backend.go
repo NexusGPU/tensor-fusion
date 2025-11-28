@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
 	"k8s.io/klog/v2"
 )
@@ -16,7 +17,7 @@ type SingleNodeBackend struct {
 	workers           map[string]*WorkerState // worker UID -> state
 	stopCh            chan struct{}
 	stopOnce          sync.Once
-	workerCh          chan []string
+	workerCh          chan []*api.WorkerInfo
 	workerChCloseOnce sync.Once
 	workerStopCh      chan struct{}
 	workerStopOnce    sync.Once
@@ -130,10 +131,10 @@ func (b *SingleNodeBackend) periodicWorkerDiscovery() {
 	}
 }
 
-func (b *SingleNodeBackend) ListAndWatchWorkers() (<-chan []string, <-chan struct{}, error) {
+func (b *SingleNodeBackend) ListAndWatchWorkers() (<-chan []*api.WorkerInfo, <-chan struct{}, error) {
 	// Initialize channels if not already created
 	if b.workerCh == nil {
-		b.workerCh = make(chan []string, 1)
+		b.workerCh = make(chan []*api.WorkerInfo, 1)
 		b.workerStopCh = make(chan struct{})
 	}
 
@@ -148,9 +149,11 @@ func (b *SingleNodeBackend) ListAndWatchWorkers() (<-chan []string, <-chan struc
 
 		// Send initial list
 		b.mu.RLock()
-		workers := make([]string, 0, len(b.workers))
+		workers := make([]*api.WorkerInfo, 0, len(b.workers))
 		for workerUID := range b.workers {
-			workers = append(workers, workerUID)
+			workers = append(workers, &api.WorkerInfo{
+				WorkerUID: workerUID,
+			})
 		}
 		b.mu.RUnlock()
 
@@ -179,9 +182,12 @@ func (b *SingleNodeBackend) ListAndWatchWorkers() (<-chan []string, <-chan struc
 				b.discoverWorkers()
 
 				b.mu.RLock()
-				workers := make([]string, 0, len(b.workers))
+				workers := make([]*api.WorkerInfo, 0, len(b.workers))
 				for workerUID := range b.workers {
-					workers = append(workers, workerUID)
+					workers = append(workers, &api.WorkerInfo{
+						WorkerUID:        workerUID,
+						AllocatedDevices: []string{"dummy"},
+					})
 				}
 				b.mu.RUnlock()
 

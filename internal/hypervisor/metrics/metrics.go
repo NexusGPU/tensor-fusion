@@ -151,17 +151,17 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 		return
 	}
 
-	workerUIDs, err := h.workerController.ListWorkers()
+	workerInfos, err := h.workerController.ListWorkers()
 	if err != nil {
 		return
 	}
 
 	// Get worker allocations for metadata
 	workerAllocations := make(map[string]*api.WorkerAllocation)
-	for _, workerUID := range workerUIDs {
-		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
+	for _, worker := range workerInfos {
+		allocation, err := h.workerController.GetWorkerAllocation(worker.WorkerUID)
 		if err == nil && allocation != nil {
-			workerAllocations[workerUID] = allocation
+			workerAllocations[worker.WorkerUID] = allocation
 		}
 	}
 

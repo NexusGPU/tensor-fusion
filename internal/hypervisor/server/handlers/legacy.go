@@ -49,8 +49,8 @@ func (h *LegacyHandler) HandleGetLimiter(c *gin.Context) {
 	}
 
 	limiterInfos := make([]api.LimiterInfo, 0, len(workers))
-	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
+	for _, worker := range workers {
+		allocation, err := h.workerController.GetWorkerAllocation(worker.WorkerUID)
 		if err != nil || allocation == nil {
 			continue
 		}
@@ -72,7 +72,7 @@ func (h *LegacyHandler) HandleGetLimiter(c *gin.Context) {
 		}
 
 		limiterInfos = append(limiterInfos, api.LimiterInfo{
-			WorkerUID: workerUID,
+			WorkerUID: worker.WorkerUID,
 			Requests:  requests,
 			Limits:    limits,
 		})
@@ -91,8 +91,8 @@ func (h *LegacyHandler) HandleTrap(c *gin.Context) {
 	}
 
 	snapshotCount := 0
-	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
+	for _, worker := range workers {
+		allocation, err := h.workerController.GetWorkerAllocation(worker.WorkerUID)
 		if err != nil || allocation == nil {
 			continue
 		}
@@ -123,8 +123,8 @@ func (h *LegacyHandler) HandleGetPods(c *gin.Context) {
 	}
 
 	pods := make([]api.PodInfo, 0)
-	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
+	for _, worker := range workers {
+		allocation, err := h.workerController.GetWorkerAllocation(worker.WorkerUID)
 		if err != nil || allocation == nil {
 			continue
 		}

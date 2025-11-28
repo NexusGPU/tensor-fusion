@@ -18,7 +18,7 @@ type WorkerController struct {
 	quotaController  framework.QuotaController
 
 	mu                  sync.RWMutex
-	workers             map[string]bool // worker UID -> exists
+	workers             map[string]*api.WorkerInfo
 	workerWatchStop     chan struct{}
 	workerWatchStopOnce sync.Once
 }
@@ -31,7 +31,7 @@ func NewWorkerController(
 		mode:             mode,
 		backend:          backend,
 		quotaController:  quotaController,
-		workers:          make(map[string]bool),
+		workers:          make(map[string]*api.WorkerInfo, 16),
 		workerWatchStop:  make(chan struct{}),
 	}
 }
@@ -63,9 +63,8 @@ func (w *WorkerController) Start() error {
 				}
 				// Update worker cache
 				w.mu.Lock()
-				w.workers = make(map[string]bool)
-				for _, workerUID := range workers {
-					w.workers[workerUID] = true
+				for _, worker := range workers {
+					w.workers[worker.WorkerUID] = worker
 				}
 				w.mu.Unlock()
 				klog.V(4).Infof("Updated worker list: %d workers", len(workers))
@@ -271,50 +270,15 @@ func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]
 	return result, nil
 }
 
-func (w *WorkerController) ListWorkers() ([]string, error) {
-	// First check cache (updated by ListAndWatchWorkers)
+func (w *WorkerController) ListWorkers() ([]*api.WorkerInfo, error) {
 	w.mu.RLock()
-	cachedWorkers := make([]string, 0, len(w.workers))
-	for workerUID := range w.workers {
-		cachedWorkers = append(cachedWorkers, workerUID)
-	}
-	w.mu.RUnlock()
-
-	// If cache has workers, return them
-	if len(cachedWorkers) > 0 {
-		return cachedWorkers, nil
-	}
-
-	// If cache is empty, directly query device allocations to get immediate results
-	// This ensures we hit the key logic path and return accurate results
-	allocations, err := w.deviceController.GetDeviceAllocations("")
-	if err != nil {
-		return cachedWorkers, err
-	}
-
-	// Extract unique worker UIDs from allocations
-	workerSet := make(map[string]bool)
-	for _, allocation := range allocations {
-		workerUID := allocation.WorkerInfo.WorkerUID
-		if workerUID == "" {
-			workerUID = allocation.WorkerInfo.PodUID
+	defer w.mu.RUnlock()
+	workerSnapshot := make([]*api.WorkerInfo, 0, len(w.workers))
+	for _, worker := range w.workers {
+		if worker.Deleted {
+			continue
 		}
-		if workerUID != "" {
-			workerSet[workerUID] = true
-		}
+		workerSnapshot = append(workerSnapshot, worker)
 	}
-
-	// Update cache with discovered workers
-	w.mu.Lock()
-	for workerUID := range workerSet {
-		w.workers[workerUID] = true
-	}
-	w.mu.Unlock()
-
-	// Return list of workers
-	workers := make([]string, 0, len(workerSet))
-	for workerUID := range workerSet {
-		workers = append(workers, workerUID)
-	}
-	return workers, nil
+	return workerSnapshot, nil
 }

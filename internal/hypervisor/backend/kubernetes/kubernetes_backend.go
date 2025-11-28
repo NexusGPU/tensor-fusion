@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/backend/kubernetes/external_dp"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
 	"k8s.io/client-go/rest"
@@ -22,7 +23,7 @@ type KubeletBackend struct {
 	deviceDetector   *external_dp.DevicePluginDetector
 
 	workerChanged chan struct{}
-	workerCh      chan []string
+	workerCh      chan []*api.WorkerInfo
 	workerStopCh  chan struct{}
 }
 
@@ -140,10 +141,10 @@ func (b *KubeletBackend) watchWorkerChanges() {
 	}
 }
 
-func (b *KubeletBackend) ListAndWatchWorkers() (<-chan []string, <-chan struct{}, error) {
+func (b *KubeletBackend) ListAndWatchWorkers() (<-chan []*api.WorkerInfo, <-chan struct{}, error) {
 	// Initialize channels if not already created
 	if b.workerCh == nil {
-		b.workerCh = make(chan []string, 1)
+		b.workerCh = make(chan []*api.WorkerInfo, 1)
 		b.workerStopCh = make(chan struct{})
 	}
 
@@ -154,9 +155,11 @@ func (b *KubeletBackend) ListAndWatchWorkers() (<-chan []string, <-chan struct{}
 		// Send initial list
 		if b.kubeletClient != nil {
 			b.kubeletClient.mu.RLock()
-			workers := make([]string, 0, len(b.kubeletClient.podCache))
+			workers := make([]*api.WorkerInfo, 0, len(b.kubeletClient.podCache))
 			for podUID := range b.kubeletClient.podCache {
-				workers = append(workers, podUID)
+				workers = append(workers, &api.WorkerInfo{
+					WorkerUID: podUID,
+				})
 			}
 			b.kubeletClient.mu.RUnlock()
 
@@ -180,9 +183,11 @@ func (b *KubeletBackend) ListAndWatchWorkers() (<-chan []string, <-chan struct{}
 			case <-workerChangedCh:
 				if b.kubeletClient != nil {
 					b.kubeletClient.mu.RLock()
-					workers := make([]string, 0, len(b.kubeletClient.podCache))
+					workers := make([]*api.WorkerInfo, 0, len(b.kubeletClient.podCache))
 					for podUID := range b.kubeletClient.podCache {
-						workers = append(workers, podUID)
+						workers = append(workers, &api.WorkerInfo{
+							WorkerUID: podUID,
+						})
 					}
 					b.kubeletClient.mu.RUnlock()
 
