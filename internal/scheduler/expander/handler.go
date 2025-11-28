@@ -230,8 +230,6 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 			continue
 		}
 
-		e.simulateSchedulingWithoutGPU(ctx, pod)
-
 		e.logger.Info("prepare new node for schedule attempt from existing node", "existingNode", gpuNode.Name, "newNode", preparedNode.Name)
 		err = e.createGPUNodeClaim(ctx, pod, preparedNode)
 		if err != nil {
