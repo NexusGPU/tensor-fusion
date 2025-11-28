@@ -215,6 +215,33 @@ func IsTensorFusionWorker(pod *corev1.Pod) bool {
 	return pod.Labels[constants.LabelComponent] == constants.ComponentWorker
 }
 
+func IsDesignatedNodePod(pod *corev1.Pod) bool {
+	if pod.Spec.NodeName != "" {
+		return true
+	}
+	if pod.Spec.NodeSelector != nil && pod.Spec.NodeSelector[constants.KubernetesHostNameLabel] != "" {
+		return true
+	}
+	if pod.Spec.Affinity != nil && pod.Spec.Affinity.NodeAffinity != nil {
+		if pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution != nil {
+			terms := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+			for _, term := range terms {
+				for _, field := range term.MatchFields {
+					if field.Key == constants.ResourceNameFieldRef && field.Operator == corev1.NodeSelectorOpIn {
+						return true
+					}
+				}
+				for _, expr := range term.MatchExpressions {
+					if expr.Key == constants.KubernetesHostNameLabel && expr.Operator == corev1.NodeSelectorOpIn {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 func GetInitialGPUNodeSelector() []string {
 	selector := os.Getenv("INITIAL_GPU_NODE_LABEL_SELECTOR")
 	if selector == "" {

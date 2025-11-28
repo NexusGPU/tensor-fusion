@@ -87,7 +87,7 @@ func NewNodeExpander(
 	go func() {
 		for {
 			time.Sleep(time.Minute)
-			expander.inFlightNodeClaims.Range(func(key, _ interface{}) bool {
+			expander.inFlightNodeClaims.Range(func(key, _ any) bool {
 				karpenterNodeClaim := &karpv1.NodeClaim{}
 				if err := expander.client.Get(expander.ctx, client.ObjectKey{Name: key.(string)}, karpenterNodeClaim); err != nil {
 					if errors.IsNotFound(err) {
@@ -105,9 +105,9 @@ func NewNodeExpander(
 					expander.logger.Info("karpenter node claim is deleted, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", key.(string))
 					return true
 				}
-				expander.mu.RLock()
-				defer expander.mu.RUnlock()
-				if _, ok := expander.inFlightNodes[karpenterNodeClaim.Status.NodeName]; !ok {
+				expander.mu.Lock()
+				defer expander.mu.Unlock()
+				if _, ok := expander.inFlightNodes[karpenterNodeClaim.Name]; !ok {
 					expander.inFlightNodeClaims.Delete(key)
 					expander.logger.Info("karpenter node claim has been provisioned, remove from inFlightNodeClaims", "nodeClaimName", key.(string))
 					return true
@@ -152,7 +152,7 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	}
 
 	// Step 1: Simulate scheduling without GPU plugins
-	gpuNodes, err := e.simulateSchedulingWithoutGPU(ctx, pod)
+	gpuNodesPassedOtherFilters, err := e.simulateSchedulingWithoutGPU(ctx, pod)
 	if err != nil {
 		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
 			"can not schedule on any nodes even without GPU constraints, manual check required. error: %w", err)
@@ -160,7 +160,7 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 			"namespace", pod.Namespace, "pod", pod.Name, "error", err)
 		return nil
 	}
-	if len(gpuNodes) == 0 {
+	if len(gpuNodesPassedOtherFilters) == 0 {
 		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
 			"can not schedule on any nodes, manual check required, 0 fit nodes")
 		e.logger.Info("Pod schedulable but no GPU nodes available, manual check required",
@@ -172,19 +172,19 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	nodeGPUs := e.allocator.GetNodeGpuStore()
 	allGpus := []*tfv1.GPU{}
 	// Shuffle gpuNodes to avoid always using the same node in the same region
-	mutable.Shuffle(gpuNodes)
-	for _, gpuNode := range gpuNodes {
+	mutable.Shuffle(gpuNodesPassedOtherFilters)
+	for _, gpuNode := range gpuNodesPassedOtherFilters {
 		if gpus, ok := nodeGPUs[gpuNode.Name]; ok {
 			for _, gpu := range gpus {
 				allGpus = append(allGpus, gpu)
 			}
 		}
 	}
-	inFlightGPUSnapshot := make([]*tfv1.GPU, 0, len(e.inFlightNodes)*4)
+	inFlightGPUSnapshot := make(map[string]*tfv1.GPU, len(e.inFlightNodes)*4)
 	for _, inFlightGPUs := range e.inFlightNodes {
 		for _, gpu := range inFlightGPUs {
 			snapshot := gpu.DeepCopy()
-			inFlightGPUSnapshot = append(inFlightGPUSnapshot, snapshot)
+			inFlightGPUSnapshot[gpu.Name] = snapshot
 			allGpus = append(allGpus, snapshot)
 		}
 	}
@@ -196,11 +196,18 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	}
 
 	// Step 3: Check if it's a GPU resource issue, include inFlightNodes
-	allocRequest, satisfied, isResourceIssue := e.checkGPUFitWithInflightNodes(pod, allGpus, inFlightGPUSnapshot)
+	allocRequest, satisfied, isResourceIssue, onlyCanBeFlightGPU := e.checkGPUFitWithInflightNodes(pod, allGpus, inFlightGPUSnapshot)
 	if satisfied {
-		// GPU free-up during expansion, or satisfied by in-flight nodes, pod can be scheduled now or whiles later
-		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
-			"fit GPU resources, pod should be scheduled now or whiles later")
+		if onlyCanBeFlightGPU {
+			e.addPreSchedulePod(allocRequest)
+			// Pod should be scheduled after new node is provisioned
+			e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
+				"fit in-flight GPU resources, pod should be scheduled after new node is provisioned")
+		} else {
+			// GPU free-up during expansion, or satisfied by in-flight nodes, pod can be scheduled now or whiles later
+			e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
+				"fit GPU resources, pod should be scheduled now or whiles later on existing/provisioning nodes")
+		}
 		return nil
 	}
 	if !isResourceIssue {
@@ -213,7 +220,7 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 
 	// Step 4: Caused by insufficient GPU resources, try find node util it satisfies the pod
 	preScheduled := false
-	for _, gpuNode := range gpuNodes {
+	for _, gpuNode := range gpuNodesPassedOtherFilters {
 		// when node is not owned by any known provisioner, skip check, util find a node can be expanded
 		if len(gpuNode.OwnerReferences) == 0 {
 			continue
@@ -223,13 +230,16 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 			continue
 		}
 
+		e.simulateSchedulingWithoutGPU(ctx, pod)
+
 		e.logger.Info("prepare new node for schedule attempt from existing node", "existingNode", gpuNode.Name, "newNode", preparedNode.Name)
 		err = e.createGPUNodeClaim(ctx, pod, preparedNode)
 		if err != nil {
 			return err
 		}
 
-		e.addInFlightNodeAndPreSchedulePod(allocRequest, preparedNode, preparedGPUs)
+		e.addInFlightNode(preparedNode, preparedGPUs)
+		e.addPreSchedulePod(allocRequest)
 		preScheduled = true
 		break
 	}
@@ -240,9 +250,15 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	return nil
 }
 
-func (e *NodeExpander) addInFlightNodeAndPreSchedulePod(allocRequest *tfv1.AllocRequest, node *corev1.Node, gpus []*tfv1.GPU) {
+func (e *NodeExpander) addInFlightNode(node *corev1.Node, gpus []*tfv1.GPU) {
 	e.mu.Lock()
 	e.inFlightNodes[node.Name] = gpus
+	e.mu.Unlock()
+}
+
+func (e *NodeExpander) addPreSchedulePod(allocRequest *tfv1.AllocRequest) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	podMeta := allocRequest.PodMeta
 	e.preSchedulePods[podMeta.Name] = allocRequest
 	// Add timer for each pre-scheduled pod, if not scheduled for 10 minutes, make warning event and remove from mem
@@ -275,7 +291,6 @@ func (e *NodeExpander) addInFlightNodeAndPreSchedulePod(allocRequest *tfv1.Alloc
 		}
 	})
 	e.preScheduleTimers[podMeta.Name] = timer
-	e.mu.Unlock()
 }
 
 func (e *NodeExpander) RemoveInFlightNode(nodeName string) {
@@ -316,6 +331,9 @@ func (e *NodeExpander) prepareNewNodesForScheduleAttempt(
 ) (*corev1.Node, []*tfv1.GPU) {
 	newPreparedNode := templateNode.DeepCopy()
 	newPreparedNode.Name = constants.TensorFusionSystemName + "-" + rand.String(10)
+	if newPreparedNode.Labels != nil {
+		newPreparedNode.Labels[constants.KubernetesHostNameLabel] = newPreparedNode.Name
+	}
 	newPreparedGPUs := []*tfv1.GPU{}
 	for _, gpu := range templateGPUs {
 		gpuCopy := gpu.DeepCopy()
@@ -364,10 +382,11 @@ func (e *NodeExpander) simulateSchedulingWithoutGPU(ctx context.Context, pod *co
 	return result, nil
 }
 
-func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, gpus []*tfv1.GPU, inflightSnapshot []*tfv1.GPU) (
+func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGpus []*tfv1.GPU, inflightSnapshot map[string]*tfv1.GPU) (
 	allocRequest *tfv1.AllocRequest,
 	satisfied bool,
 	isResourceIssue bool,
+	onlyCanBeFlightGPU bool,
 ) {
 	// NOTE: a known issue, if cpu/mem not enough or affinity not satisfied for pre-scheduled pods inside inFlightNodes,
 	// it will not be considered, when inflight created and the Pod still not be able to schedule on new node,
@@ -375,9 +394,13 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, gpus []*tfv
 	for _, alloc := range e.preSchedulePods {
 		preScheduledPodPreAllocated := false
 		for _, gpu := range inflightSnapshot {
-			if gpu.Status.Available.Tflops.Cmp(alloc.Request.Tflops) > 0 &&
-				gpu.Status.Available.Vram.Cmp(alloc.Request.Vram) > 0 {
-				gpu.Status.Available.Tflops.Sub(alloc.Request.Tflops)
+			reqTflops := alloc.Request.Tflops
+			if !alloc.Request.ComputePercent.IsZero() {
+				reqTflops = *utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, alloc.Request)
+			}
+			if gpu.Status.Available.Tflops.Cmp(reqTflops) >= 0 &&
+				gpu.Status.Available.Vram.Cmp(alloc.Request.Vram) >= 0 {
+				gpu.Status.Available.Tflops.Sub(reqTflops)
 				gpu.Status.Available.Vram.Sub(alloc.Request.Vram)
 				preScheduledPodPreAllocated = true
 				break
@@ -398,13 +421,13 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, gpus []*tfv
 	defer e.mu.RUnlock()
 	allocRequest, _, err := e.allocator.ComposeAllocationRequest(pod)
 	if err != nil {
-		return nil, false, true
+		return nil, false, true, false
 	}
 
 	quotaStore := e.allocator.GetQuotaStore()
 	if err := quotaStore.CheckSingleQuotaAvailable(allocRequest); err != nil {
 		e.logger.Error(err, "can not schedule pod due to single workload quotas issue")
-		return allocRequest, false, false
+		return allocRequest, false, false, false
 	}
 
 	// Check total quota with pre-scheduled pods
@@ -427,15 +450,23 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, gpus []*tfv
 	}
 	if err := quotaStore.CheckTotalQuotaWithPreScheduled(allocRequest, toScheduleResource); err != nil {
 		e.logger.Error(err, "can not schedule pod due to namespace level quotas issue")
-		return allocRequest, false, false
+		return allocRequest, false, false, false
 	}
 
 	// Check if existing + inflight nodes can satisfy the request
-	filteredGPUs, _, err := e.allocator.Filter(allocRequest, gpus, false)
+	filteredGPUs, _, err := e.allocator.Filter(allocRequest, potentialGpus, false)
 	if err != nil || len(filteredGPUs) == 0 {
-		return allocRequest, false, true
+		return allocRequest, false, true, false
 	}
-	return allocRequest, true, false
+
+	onlyCanBeFlightGPU = true
+	for _, gpu := range filteredGPUs {
+		if _, ok := inflightSnapshot[gpu.Name]; !ok {
+			onlyCanBeFlightGPU = false
+			break
+		}
+	}
+	return allocRequest, true, false, onlyCanBeFlightGPU
 }
 
 func (e *NodeExpander) checkGPUFitForNewNode(pod *corev1.Pod, gpus []*tfv1.GPU) bool {
