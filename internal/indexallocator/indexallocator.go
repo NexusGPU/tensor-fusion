@@ -86,12 +86,12 @@ func (s *IndexAllocator) SetupWithManager(ctx context.Context, mgr manager.Manag
 // Index wraps around from 512 to 1 (simple modulo operation)
 func (s *IndexAllocator) AssignIndex(podName string) (int, error) {
 	if !s.IsLeader {
+		log.FromContext(s.ctx).Error(nil, "only leader can assign index", "podName", podName)
 		return 0, fmt.Errorf("only leader can assign index")
 	}
-
 	// Atomic increment and wrap around
 	next := atomic.AddInt64(&s.currentIndex, 1)
 	index := int((next-1)%IndexRangeEnd) + IndexRangeStart
-
+	log.FromContext(s.ctx).Info("assigned index successfully", "podName", podName, "index", index)
 	return index, nil
 }

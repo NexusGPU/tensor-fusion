@@ -343,6 +343,7 @@ func startHttpServerForTFClient(
 		connectionRouter, assignHostPortRouter, assignIndexRouter, allocatorInfoRouter, nodeScalerInfoRouter, leaderChan,
 	)
 	go func() {
+		// Port defaults to 8080, set with env var `PORT`
 		err := httpServer.Run()
 		if err != nil {
 			setupLog.Error(err, "problem running HTTP server")

@@ -84,6 +84,7 @@
         "Hygon",
         "iface",
         "imageutils",
+        "indexallocator",
         "influxdata",
         "internalcache",
         "internalqueue",
