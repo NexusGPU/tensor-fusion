@@ -264,7 +264,8 @@ func testPreScheduledPodManagement(suite *NodeExpanderTestSuite) {
 	}
 
 	// Test adding pre-scheduled pod
-	suite.nodeExpander.addInFlightNodeAndPreSchedulePod(allocReq, node, []*tfv1.GPU{gpu})
+	suite.nodeExpander.addInFlightNode(node, []*tfv1.GPU{gpu})
+	suite.nodeExpander.addPreSchedulePod(allocReq)
 
 	// Verify pre-scheduled pod exists
 	suite.nodeExpander.mu.RLock()

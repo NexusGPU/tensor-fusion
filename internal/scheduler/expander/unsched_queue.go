@@ -54,6 +54,11 @@ func (h *UnscheduledPodHandler) HandleRejectedPod(ctx context.Context, podInfo *
 		return
 	}
 
+	if utils.IsDesignatedNodePod(pod) {
+		h.logger.Info("Pod has selected the fixed node in nodeSelector/nodeName/nodeAffinity, skipping expansion", "pod", klog.KObj(pod))
+		return
+	}
+
 	// take snapshot to avoid modify origin Pod info
 	pod = pod.DeepCopy()
 
