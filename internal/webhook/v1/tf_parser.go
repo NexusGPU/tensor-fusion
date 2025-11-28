@@ -106,6 +106,13 @@ func ParseTensorFusionInfo(
 		workloadProfile.Spec.Isolation = tfv1.IsolationModeSoft
 	}
 
+	// Read partition template ID annotation if in partitioned mode
+	if workloadProfile.Spec.Isolation == tfv1.IsolationModePartitioned {
+		if partitionTemplateID, ok := pod.Annotations[constants.PartitionTemplateIDAnnotation]; ok && partitionTemplateID != "" {
+			workloadProfile.Spec.PartitionTemplateID = partitionTemplateID
+		}
+	}
+
 	workerPodTemplate, ok := pod.Annotations[constants.WorkerPodTemplateAnnotation]
 	if ok && workerPodTemplate != "" {
 		if workloadProfile.Spec.IsLocalGPU {

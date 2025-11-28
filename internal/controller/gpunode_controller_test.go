@@ -23,37 +23,24 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 )
 
 var _ = Describe("GPUNode Controller", func() {
 	Context("When reconciling gpunodes", func() {
-		It("should create the node discovery job and the hypervisor pod", func() {
+		It("should create the hypervisor pod", func() {
 			tfEnv := NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).
 				SetGpuCountPerNode(1).
 				Build()
 			gpuNode := tfEnv.GetGPUNode(0, 0)
 
-			By("checking that the node discovery job is created")
-			Eventually(func(g Gomega) {
-				job := &batchv1.Job{}
-				g.Expect(k8sClient.Get(ctx, types.NamespacedName{
-					Name:      fmt.Sprintf("node-discovery-%s", gpuNode.Name),
-					Namespace: utils.CurrentNamespace(),
-				}, job)).Should(Succeed())
-
-				g.Expect(job.Spec.TTLSecondsAfterFinished).Should(Equal(ptr.To[int32](3600 * 10)))
-			}).Should(Succeed())
-
 			By("checking that the hypervisor pod is created")
 			pod := &corev1.Pod{}
 			Eventually(func(g Gomega) {
 				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      fmt.Sprintf("hypervisor-%s", gpuNode.Name),
+					Name:      fmt.Sprintf("tf-hypervisor-%s", gpuNode.Name),
 					Namespace: utils.CurrentNamespace(),
 				}, pod)
 				g.Expect(err).ShouldNot(HaveOccurred())
@@ -72,7 +59,7 @@ var _ = Describe("GPUNode Controller", func() {
 			Eventually(func(g Gomega) {
 				newPod := &corev1.Pod{}
 				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      fmt.Sprintf("hypervisor-%s", gpuNode.Name),
+					Name:      fmt.Sprintf("tf-hypervisor-%s", gpuNode.Name),
 					Namespace: utils.CurrentNamespace(),
 				}, newPod)
 				g.Expect(err).ShouldNot(HaveOccurred())

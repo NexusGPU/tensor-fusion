@@ -408,16 +408,21 @@ func (r *GPUPoolReconciler) reconcilePoolComponents(ctx context.Context, pool *t
 }
 
 func (r *GPUPoolReconciler) reconcilePoolSelectorChange(ctx context.Context, pool *tfv1.GPUPool) error {
-	if pool.Spec.NodeManagerConfig != nil && pool.Spec.NodeManagerConfig.NodeSelector != nil {
-		hash := utils.GetObjectHash(pool.Spec.NodeManagerConfig.NodeSelector)
+	nodeManagerConfig := pool.Spec.NodeManagerConfig
+	if nodeManagerConfig == nil {
+		return nil
+	}
+
+	// Handle MultiVendorNodeSelector mode
+	if len(nodeManagerConfig.MultiVendorNodeSelector) > 0 {
+		hash := utils.GetObjectHash(nodeManagerConfig.MultiVendorNodeSelector)
 		if poolSelectorChangeMap[pool.Name] == hash {
 			return nil
 		}
 
 		// hash has changed, or first reconcile, should check all k8s nodes
 		nodes := &corev1.NodeList{}
-		selectors := utils.GetInitialGPUNodeSelector()
-		if err := r.List(ctx, nodes, client.MatchingLabels{selectors[0]: selectors[1]}); err != nil {
+		if err := r.List(ctx, nodes); err != nil {
 			return err
 		}
 		for _, node := range nodes.Items {
@@ -425,12 +430,64 @@ func (r *GPUPoolReconciler) reconcilePoolSelectorChange(ctx context.Context, poo
 			if node.Labels == nil || !node.DeletionTimestamp.IsZero() {
 				continue
 			}
-			matches, err := schedulingcorev1.MatchNodeSelectorTerms(&node, pool.Spec.NodeManagerConfig.NodeSelector)
+			// Loop through vendor keys, when any key matched, set vendor label and break
+			vendorMatched := false
+			for vendor, nodeSelector := range nodeManagerConfig.MultiVendorNodeSelector {
+				if nodeSelector == nil {
+					continue
+				}
+				matches, err := schedulingcorev1.MatchNodeSelectorTerms(&node, nodeSelector)
+				if err != nil {
+					return err
+				}
+				if matches {
+					if err := UpdateK8SNodeSelectorHashAndVendor(ctx, r.Client, &node, hash, vendor); err != nil {
+						return err
+					}
+					vendorMatched = true
+					break
+				}
+			}
+			// If no vendor matched but node was previously matched, remove vendor label
+			if !vendorMatched && node.Labels[constants.AcceleratorLabelVendor] != "" {
+				if err := UpdateK8SNodeSelectorHashAndVendor(ctx, r.Client, &node, hash, ""); err != nil {
+					return err
+				}
+			}
+		}
+		poolSelectorChangeMap[pool.Name] = hash
+		return nil
+	}
+
+	// Handle default NodeSelector mode
+	if nodeManagerConfig.NodeSelector != nil {
+		hash := utils.GetObjectHash(nodeManagerConfig.NodeSelector)
+		if poolSelectorChangeMap[pool.Name] == hash {
+			return nil
+		}
+
+		// Determine default vendor: use defaultVendor if set, otherwise NVIDIA
+		defaultVendor := constants.AcceleratorVendorNvidia
+		if nodeManagerConfig.DefaultVendor != "" {
+			defaultVendor = nodeManagerConfig.DefaultVendor
+		}
+
+		// hash has changed, or first reconcile, should check all k8s nodes
+		nodes := &corev1.NodeList{}
+		if err := r.List(ctx, nodes); err != nil {
+			return err
+		}
+		for _, node := range nodes.Items {
+			// skip no label or deleting nodes
+			if node.Labels == nil || !node.DeletionTimestamp.IsZero() {
+				continue
+			}
+			matches, err := schedulingcorev1.MatchNodeSelectorTerms(&node, nodeManagerConfig.NodeSelector)
 			if err != nil {
 				return err
 			}
 			if matches {
-				if err := UpdateK8SNodeSelectorHash(ctx, r.Client, &node, hash); err != nil {
+				if err := UpdateK8SNodeSelectorHashAndVendor(ctx, r.Client, &node, hash, defaultVendor); err != nil {
 					return err
 				}
 			}
@@ -441,9 +498,9 @@ func (r *GPUPoolReconciler) reconcilePoolSelectorChange(ctx context.Context, poo
 	return nil
 }
 
-func UpdateK8SNodeSelectorHash(ctx context.Context, k8sClient client.Client, node *corev1.Node, hash string) error {
-	// skip nodes that already injected the hash
-	if node.Labels[constants.LabelNodeSelectorHash] == hash {
+func UpdateK8SNodeSelectorHashAndVendor(ctx context.Context, k8sClient client.Client, node *corev1.Node, hash string, vendor string) error {
+	// skip nodes that already have the same hash and vendor
+	if node.Labels[constants.LabelNodeSelectorHash] == hash && node.Labels[constants.AcceleratorLabelVendor] == vendor {
 		return nil
 	}
 	// update label to trigger the GPUNode reconcile
@@ -452,7 +509,15 @@ func UpdateK8SNodeSelectorHash(ctx context.Context, k8sClient client.Client, nod
 		if err := k8sClient.Get(ctx, client.ObjectKey{Name: node.Name}, latest); err != nil {
 			return err
 		}
+		if latest.Labels == nil {
+			latest.Labels = make(map[string]string)
+		}
 		latest.Labels[constants.LabelNodeSelectorHash] = hash
+		if vendor != "" {
+			latest.Labels[constants.AcceleratorLabelVendor] = vendor
+		} else {
+			delete(latest.Labels, constants.AcceleratorLabelVendor)
+		}
 		return k8sClient.Update(ctx, latest)
 	}); err != nil {
 		return err
