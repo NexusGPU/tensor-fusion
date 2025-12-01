@@ -177,22 +177,9 @@ rules:
 - apiGroups:
   - karpenter.sh
   resources:
-  - nodeclaims
-  verbs:
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - karpenter.*
-  resources:
   - '*'
   verbs:
-  - get
-  - list
-  - watch
+  - '*'
 - apiGroups:
     - authentication.k8s.io
   resources:
