@@ -22,11 +22,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
+	"github.com/samber/lo"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"k8s.io/klog/v2"
@@ -38,10 +39,8 @@ const (
 	DevicePluginPath = "/var/lib/kubelet/device-plugins"
 	// KubeletSocket is the kubelet registration socket
 	KubeletSocket = "kubelet.sock"
-	// ResourceName is the resource name advertised to kubelet
-	ResourceName = "tensor-fusion.ai/index"
 	// DevicePluginEndpoint is the endpoint name for this device plugin
-	DevicePluginEndpoint = "tensor-fusion-index.sock"
+	DevicePluginEndpoint = "tensor-fusion-index-%d.sock"
 )
 
 // DevicePlugin implements the Kubernetes device plugin interface
@@ -53,28 +52,25 @@ type DevicePlugin struct {
 	workerController framework.WorkerController
 	kubeletClient    *PodCacheManager
 
-	server       *grpc.Server
-	socketPath   string
-	resourceName string
-
-	mu       sync.RWMutex
-	devices  []*pluginapi.Device
-	stopCh   chan struct{}
-	updateCh chan []*pluginapi.Device
+	server            *grpc.Server
+	socketPath        string
+	resourceNameIndex int
 }
 
-// NewDevicePlugin creates a new device plugin instance
-func NewDevicePlugin(ctx context.Context, deviceController framework.DeviceController, workerController framework.WorkerController, kubeletClient *PodCacheManager) *DevicePlugin {
-	return &DevicePlugin{
-		ctx:              ctx,
-		deviceController: deviceController,
-		workerController: workerController,
-		kubeletClient:    kubeletClient,
-		socketPath:       filepath.Join(DevicePluginPath, DevicePluginEndpoint),
-		resourceName:     ResourceName,
-		stopCh:           make(chan struct{}),
-		updateCh:         make(chan []*pluginapi.Device, 1),
+// NewDevicePlugins creates a new device plugin instance
+func NewDevicePlugins(ctx context.Context, deviceController framework.DeviceController, workerController framework.WorkerController, kubeletClient *PodCacheManager) []*DevicePlugin {
+	devicePlugins := make([]*DevicePlugin, constants.IndexKeyLength)
+	for i := range constants.IndexKeyLength {
+		devicePlugins[i] = &DevicePlugin{
+			ctx:               ctx,
+			deviceController:  deviceController,
+			workerController:  workerController,
+			kubeletClient:     kubeletClient,
+			socketPath:        filepath.Join(DevicePluginPath, fmt.Sprintf(DevicePluginEndpoint, i)),
+			resourceNameIndex: i,
+		}
 	}
+	return devicePlugins
 }
 
 // Start starts the device plugin gRPC server and registers with kubelet
@@ -126,19 +122,11 @@ func (dp *DevicePlugin) Start() error {
 	if err := dp.register(); err != nil {
 		return fmt.Errorf("failed to register with kubelet: %w", err)
 	}
-
-	// Initialize device list with dummy index devices (1-512)
-	dp.updateDeviceList()
-
-	// Start device monitoring
-	go dp.monitorDevices()
-
 	return nil
 }
 
 // Stop stops the device plugin
 func (dp *DevicePlugin) Stop() error {
-	close(dp.stopCh)
 	if dp.server != nil {
 		dp.server.Stop()
 	}
@@ -167,8 +155,8 @@ func (dp *DevicePlugin) register() error {
 	client := pluginapi.NewRegistrationClient(conn)
 	req := &pluginapi.RegisterRequest{
 		Version:      pluginapi.Version,
-		Endpoint:     DevicePluginEndpoint,
-		ResourceName: dp.resourceName,
+		Endpoint:     fmt.Sprintf(DevicePluginEndpoint, dp.resourceNameIndex),
+		ResourceName: fmt.Sprintf("%s%s%d", constants.PodIndexAnnotation, constants.PodIndexDelimiter, dp.resourceNameIndex),
 		Options: &pluginapi.DevicePluginOptions{
 			PreStartRequired:                false,
 			GetPreferredAllocationAvailable: false,
@@ -180,7 +168,7 @@ func (dp *DevicePlugin) register() error {
 		return fmt.Errorf("failed to register: %w", err)
 	}
 
-	klog.Infof("Successfully registered device plugin with kubelet: %s", dp.resourceName)
+	klog.Infof("Successfully registered device plugin with kubelet: tensor-fusion.ai/index_%d", dp.resourceNameIndex)
 	return nil
 }
 
@@ -203,52 +191,6 @@ func (dp *DevicePlugin) dial(unixSocketPath string, timeout time.Duration) (*grp
 	return conn, err
 }
 
-// monitorDevices periodically updates the device list
-func (dp *DevicePlugin) monitorDevices() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-dp.ctx.Done():
-			return
-		case <-dp.stopCh:
-			return
-		case <-ticker.C:
-			dp.updateDeviceList()
-		case devices := <-dp.updateCh:
-			dp.mu.Lock()
-			dp.devices = devices
-			dp.mu.Unlock()
-		}
-	}
-}
-
-// updateDeviceList updates the list of available dummy index devices
-// This device plugin registers tensor-fusion.ai/index resource, not real GPU devices.
-// We advertise 512 dummy devices (indices 1-512) for pod identification.
-// Real GPU devices are allocated by scheduler and set in pod annotations.
-func (dp *DevicePlugin) updateDeviceList() {
-	dp.mu.Lock()
-	defer dp.mu.Unlock()
-
-	// Advertise 512 dummy index devices (1-512) for pod identification
-	// These are NOT real GPU devices - they're just used to match pods by index
-	pluginDevices := make([]*pluginapi.Device, 0, 512)
-	for i := 1; i <= 512; i++ {
-		pluginDevices = append(pluginDevices, &pluginapi.Device{
-			ID:     fmt.Sprintf("%d", i), // Index as device ID
-			Health: pluginapi.Healthy,
-		})
-	}
-
-	dp.devices = pluginDevices
-	select {
-	case dp.updateCh <- pluginDevices:
-	default:
-	}
-}
-
 // GetDevicePluginOptions returns options for the device plugin
 func (dp *DevicePlugin) GetDevicePluginOptions(ctx context.Context, req *pluginapi.Empty) (*pluginapi.DevicePluginOptions, error) {
 	return &pluginapi.DevicePluginOptions{
@@ -260,151 +202,65 @@ func (dp *DevicePlugin) GetDevicePluginOptions(ctx context.Context, req *plugina
 // ListAndWatch streams device list and health updates
 func (dp *DevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
 	klog.Info("ListAndWatch called")
-
-	// Send initial device list
-	dp.updateDeviceList()
-	dp.mu.RLock()
-	devices := make([]*pluginapi.Device, len(dp.devices))
-	copy(devices, dp.devices)
-	dp.mu.RUnlock()
-
+	devices := make([]*pluginapi.Device, constants.IndexModLength)
+	for i := range constants.IndexModLength {
+		devices[i] = &pluginapi.Device{
+			ID:     fmt.Sprintf("%d", i+1),
+			Health: pluginapi.Healthy,
+		}
+	}
 	if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: devices}); err != nil {
 		return fmt.Errorf("failed to send device list: %w", err)
 	}
-
-	// Watch for updates
-	for {
-		select {
-		case <-dp.ctx.Done():
-			return nil
-		case <-dp.stopCh:
-			return nil
-		case devices := <-dp.updateCh:
-			if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: devices}); err != nil {
-				return fmt.Errorf("failed to send device update: %w", err)
-			}
-		}
-	}
+	return nil
 }
 
 // Allocate handles device allocation requests from kubelet
-// IMPORTANT: This device plugin registers tensor-fusion.ai/index as a dummy resource.
-// The pod index (1-512) is used to identify which pod is requesting allocation.
-// The actual GPU device UUIDs are already set by the centralized scheduler in pod annotations:
-//   - tensor-fusion.ai/gpu-ids: comma-separated GPU UUIDs (for all isolation modes)
-//   - tensor-fusion.ai/partition: partition template ID (only for partitioned isolation mode)
-//
-// The len(req.ContainerRequests) is just the number of containers in the pod requesting
-// tensor-fusion.ai/index resource - it's NOT the pod index. The pod index comes from
-// DevicesIds[0] which contains the index value from resource limits.
-//
-// We do NOT allocate the fake tensor-fusion.ai/index device - it's only used for pod identification.
-// CDIDevices in the response is kept empty to prevent kubelet from allocating the dummy device.
 func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
-	// len(req.ContainerRequests) identifies how many containers in the pod are requesting
-	// tensor-fusion.ai/index resource - this is for logging/identification only
-	klog.Infof("Allocate called with %d container requests (pod may have multiple containers)", len(req.ContainerRequests))
-
 	responses := make([]*pluginapi.ContainerAllocateResponse, 0, len(req.ContainerRequests))
 
 	for containerIdx, containerReq := range req.ContainerRequests {
-		// Extract pod index from DevicesIds - this contains the index value (1-512) from resource limits
-		// Resource limit: tensor-fusion.ai/index: 3 -> DevicesIds: ["3"]
-		// This is the actual pod index used to match the pod in the pod cache
 		podIndex := len(containerReq.DevicesIds)
-		if podIndex == 0 {
-			return nil, fmt.Errorf("container request %d has no DevicesIds (expected pod index value 1-512)", containerIdx)
+		if podIndex <= 0 || podIndex > constants.IndexModLength {
+			return nil, fmt.Errorf("container request %d dummy device requests is not valid: (expected index value 1-%d)", containerIdx, constants.IndexModLength)
 		}
 
-		if podIndex < constants.IndexRangeStart || podIndex > constants.IndexRangeEnd {
-			return nil, fmt.Errorf("container request %d has index out of range: %d (expected 1-512)", containerIdx, podIndex)
-		}
+		podIndexFull := podIndex + (dp.resourceNameIndex * constants.IndexModLength)
 
-		klog.V(4).Infof("Processing allocation for container index %d, pod index %d (from DevicesIds)", containerIdx, podIndex)
-
+		klog.V(4).Infof("Processing allocation for container index %d, pod index %d (from DevicesIds)", containerIdx, podIndexFull)
 		// Get worker info from kubelet client using pod index
 		// This will automatically check for duplicate indices and fail fast if found
-		workerInfo, err := dp.kubeletClient.GetWorkerInfoForAllocationByIndex(ctx, podIndex)
+		workerInfo, err := dp.kubeletClient.GetWorkerInfoForAllocationByIndex(podIndexFull)
 		if err != nil {
-			klog.Errorf("Failed to get worker info for pod index %d: %v", podIndex, err)
-			return nil, fmt.Errorf("failed to get worker info for pod index %d: %w", podIndex, err)
+			klog.Errorf("Failed to get worker info for pod index %d: %v", podIndexFull, err)
+			return nil, fmt.Errorf("failed to get worker info for pod index %d: %w", podIndexFull, err)
 		}
-
 		if workerInfo == nil {
-			return nil, fmt.Errorf("worker info not found for pod index %d", podIndex)
+			return nil, fmt.Errorf("worker info not found for pod index %d", podIndexFull)
 		}
-
-		// Device UUIDs are already set by scheduler in annotations, not from DevicesIds
-		deviceUUIDs := workerInfo.AllocatedDevices
-		if len(deviceUUIDs) == 0 {
-			return nil, fmt.Errorf("no device UUIDs found in pod annotations for pod %s/%s", workerInfo.Namespace, workerInfo.PodName)
-		}
-
 		// Call worker controller to allocate
 		allocResp, err := dp.workerController.AllocateWorker(workerInfo)
 		if err != nil {
-			return nil, fmt.Errorf("failed to allocate device: %w", err)
+			return nil, fmt.Errorf("failed to allocate devices for worker %s %s: %w", workerInfo.PodName, workerInfo.WorkerUID, err)
 		}
 
-		// WorkerAllocation doesn't need Success/ErrMsg check - if no error, allocation succeeded
-
-		// Build container response - create minimal response since allocation details are tracked separately
-		// IMPORTANT: CdiDevices must be empty to prevent dummy tensor-fusion.ai/index device
-		// from being allocated by kubelet
 		containerResp := &pluginapi.ContainerAllocateResponse{
-			Envs:       make(map[string]string),
-			Mounts:     []*pluginapi.Mount{},
-			Devices:    []*pluginapi.DeviceSpec{},
-			CdiDevices: []*pluginapi.CDIDevice{}, // Empty to prevent dummy device allocation
-		}
-
-		// Add basic environment variables for worker info
-		if allocResp.WorkerInfo != nil {
-			containerResp.Envs["TF_WORKER_UID"] = allocResp.WorkerInfo.WorkerUID
-			containerResp.Envs["TF_POD_UID"] = allocResp.WorkerInfo.PodUID
-
-			// Add device UUIDs as environment variable
-			if len(allocResp.DeviceInfos) > 0 {
-				deviceUUIDs := make([]string, 0, len(allocResp.DeviceInfos))
-				for _, device := range allocResp.DeviceInfos {
-					deviceUUIDs = append(deviceUUIDs, device.UUID)
+			Envs: allocResp.Envs,
+			Mounts: lo.Map(allocResp.Mounts, func(mount *api.Mount, _ int) *pluginapi.Mount {
+				return &pluginapi.Mount{
+					ContainerPath: mount.GuestPath,
+					HostPath:      mount.HostPath,
 				}
-				containerResp.Envs["TF_DEVICE_UUIDS"] = fmt.Sprintf("%v", deviceUUIDs)
-			}
+			}),
+			Devices: lo.Map(allocResp.Devices, func(device *api.DeviceSpec, _ int) *pluginapi.DeviceSpec {
+				return &pluginapi.DeviceSpec{
+					ContainerPath: device.GuestPath,
+					HostPath:      device.HostPath,
+					Permissions:   device.Permissions,
+				}
+			}),
+			CdiDevices: []*pluginapi.CDIDevice{},
 		}
-
-		// Get pod to extract labels and annotations
-		pod := dp.kubeletClient.GetPodByUID(workerInfo.PodUID)
-		labels := make(map[string]string)
-		annotations := make(map[string]string)
-		if pod != nil {
-			if pod.Labels != nil {
-				labels = pod.Labels
-			}
-			if pod.Annotations != nil {
-				annotations = pod.Annotations
-			}
-		}
-
-		// Update allocation in device controller with labels and annotations
-		// Use type assertion to access the concrete implementation
-		if deviceCtrl, ok := dp.deviceController.(interface {
-			UpdateAllocationLabelsAndAnnotations(workerUID string, labels, annotations map[string]string)
-		}); ok {
-			deviceCtrl.UpdateAllocationLabelsAndAnnotations(workerInfo.PodUID, labels, annotations)
-		}
-
-		if err := dp.kubeletClient.StoreAllocation(workerInfo.PodUID, allocResp); err != nil {
-			klog.Warningf("Failed to store allocation: %v", err)
-		}
-
-		// Remove PodIndexAnnotation after successful allocation to release the index
-		// This prevents the index from being matched to this pod in future allocation cycles
-		if err := dp.kubeletClient.RemovePodIndexAnnotation(ctx, workerInfo.PodUID, workerInfo.Namespace, workerInfo.PodName); err != nil {
-			klog.Warningf("Failed to remove pod index annotation for pod %s/%s: %v", workerInfo.Namespace, workerInfo.PodName, err)
-			// Don't fail allocation if annotation removal fails
-		}
-
 		responses = append(responses, containerResp)
 	}
 
