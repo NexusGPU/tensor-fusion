@@ -329,19 +329,12 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 	// Assign index once per pod (before processing containers)
 	// Index must be assigned in webhook stage since scheduler cannot modify Pod
-	// This is a special index resource (1-512), not a real device resource
+	// This is a special index resource (1-32), not a real device resource
 	// Index is assigned in ascending order (1, 2, 3, ...) via distributed lock (leader election)
-	index := 0
-	if pod.Annotations[constants.PodIndexAnnotation] == "" {
-		index = m.assignDeviceAllocationIndex(ctx, pod)
-		log.FromContext(ctx).Info("assigned device allocation index successfully", "index", index, "pod", pod.Name)
-	} else {
-		var err error
-		index, err = strconv.Atoi(pod.Annotations[constants.PodIndexAnnotation])
-		if err != nil {
-			return nil, fmt.Errorf("invalid pod index annotation: %w", err)
-		}
-	}
+	index := m.assignDeviceAllocationIndex(ctx, pod)
+
+	// clean annotation if exists, must be assigned by scheduler to ensure lock of certain index on one node
+	utils.CleanUpExistingIndexAnnotationOnPod(pod)
 
 	for _, containerIndex := range containerIndices {
 		container := &pod.Spec.Containers[containerIndex]
@@ -371,16 +364,14 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 		// Inject tensor-fusion.ai/index resource for Device Plugin communication
 		// This is a special index resource (not a real device), used for Pod-to-DevicePlugin communication
-		if container.Resources.Requests == nil {
-			container.Resources.Requests = make(corev1.ResourceList)
-		}
 		if container.Resources.Limits == nil {
 			container.Resources.Limits = make(corev1.ResourceList)
 		}
-		// Limit is set to actual index value (1-512) for Device Plugin to match Pod
+		// Limit is set to actual index value (1-128) for Device Plugin to match Pod
 		// ResourceFit of dummy device already ignored in TF scheduler
-		indexQuantity := resource.MustParse(strconv.Itoa(index))
-		container.Resources.Limits[constants.PodIndexAnnotation] = indexQuantity
+		indexQuantity := resource.MustParse(strconv.Itoa((index % constants.IndexModLength) + 1))
+		indexKey := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, index/constants.IndexModLength)
+		container.Resources.Limits[corev1.ResourceName(indexKey)] = indexQuantity
 
 		if !isLocalGPU {
 			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
@@ -455,14 +446,6 @@ func (m *TensorFusionPodMutator) assignDeviceAllocationIndex(ctx context.Context
 	} else {
 		// No allocator available, use 0 as fallback
 		index = 0
-	}
-
-	// Set annotation for matching in Device Plugin
-	if pod.Annotations == nil {
-		pod.Annotations = make(map[string]string)
-	}
-	if index > 0 {
-		pod.Annotations[constants.PodIndexAnnotation] = strconv.Itoa(index)
 	}
 	return index
 }

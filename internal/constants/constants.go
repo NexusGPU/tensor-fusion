@@ -98,8 +98,11 @@ const (
 	// Additional worker pod template is set by user with /worker-pod-template annotation
 	WorkerPodTemplateAnnotation = Domain + "/worker-pod-template"
 
-	// Pod index annotation for Device Plugin communication (1-512)
-	PodIndexAnnotation = Domain + "/index"
+	// Pod index annotation for Device Plugin communication (1-128)
+	// When it's in annotation, use this string, when it's in resource limits, use it as prefix
+	PodIndexAnnotation           = Domain + "/index"
+	PodIndexDelimiter            = "_"
+	PodDeviceAllocatedAnnotation = Domain + "/allocated"
 
 	WorkloadModeAnnotation = Domain + "/workload-mode"
 	WorkloadModeDynamic    = "dynamic"
@@ -244,6 +247,8 @@ const KarpenterNodePoolKind = "NodePool"
 const AcceleratorLabelVendor = Domain + "/hardware-vendor"
 
 const (
-	IndexRangeStart = 1
-	IndexRangeEnd   = 512
+	// 16x8 dummy index device at max
+	// tensor-fusion.ai/index_0: 1 to tensor-fusion.ai/index_f: 8
+	IndexKeyLength = 16
+	IndexModLength = 8
 )

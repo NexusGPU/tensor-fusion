@@ -33,22 +33,22 @@ func init() {
 	utilruntime.Must(tfv1.AddToScheme(scheme))
 }
 
-// APIServer provides CRUD operations for GPU resources
-type APIServer struct {
+// APIClient provides CRUD operations for GPU resources
+type APIClient struct {
 	client client.Client
 	ctx    context.Context
 }
 
-// NewAPIServer creates a new API server instance with an existing client
-func NewAPIServer(ctx context.Context, k8sClient client.Client) *APIServer {
-	return &APIServer{
+// NewAPIClient creates a new API client instance with an existing client
+func NewAPIClient(ctx context.Context, k8sClient client.Client) *APIClient {
+	return &APIClient{
 		client: k8sClient,
 		ctx:    ctx,
 	}
 }
 
-// NewAPIServerFromConfig creates a new API server instance from a rest.Config
-func NewAPIServerFromConfig(ctx context.Context, restConfig *rest.Config) (*APIServer, error) {
+// NewAPIClientFromConfig creates a new API client instance from a rest.Config
+func NewAPIClientFromConfig(ctx context.Context, restConfig *rest.Config) (*APIClient, error) {
 	k8sClient, err := client.New(restConfig, client.Options{
 		Scheme: scheme,
 	})
@@ -56,7 +56,7 @@ func NewAPIServerFromConfig(ctx context.Context, restConfig *rest.Config) (*APIS
 		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
-	return &APIServer{
+	return &APIClient{
 		client: k8sClient,
 		ctx:    ctx,
 	}, nil
@@ -76,7 +76,7 @@ type GPUInfo struct {
 }
 
 // CreateOrUpdateGPU creates or updates a GPU resource with metadata and status
-func (a *APIServer) CreateOrUpdateGPU(gpuNode *tfv1.GPUNode, info GPUInfo) (*tfv1.GPU, error) {
+func (a *APIClient) CreateOrUpdateGPU(gpuNode *tfv1.GPUNode, info GPUInfo) (*tfv1.GPU, error) {
 	if len(gpuNode.OwnerReferences) == 0 {
 		return nil, fmt.Errorf("GPUNode %s has no owner references", gpuNode.Name)
 	}
@@ -144,7 +144,7 @@ func (a *APIServer) CreateOrUpdateGPU(gpuNode *tfv1.GPUNode, info GPUInfo) (*tfv
 }
 
 // setGPUStatus sets the GPU status fields from GPUInfo
-func (a *APIServer) setGPUStatus(gpu *tfv1.GPU, info GPUInfo) {
+func (a *APIClient) setGPUStatus(gpu *tfv1.GPU, info GPUInfo) {
 	gpu.Status.Capacity = &tfv1.Resource{
 		Vram:   resource.MustParse(fmt.Sprintf("%dMi", info.VRAMBytes/bytesPerMiB)),
 		Tflops: info.TFlops,
@@ -171,7 +171,7 @@ func (a *APIServer) setGPUStatus(gpu *tfv1.GPU, info GPUInfo) {
 }
 
 // GetGPU retrieves a GPU resource by UUID
-func (a *APIServer) GetGPU(uuid string) (*tfv1.GPU, error) {
+func (a *APIClient) GetGPU(uuid string) (*tfv1.GPU, error) {
 	gpu := &tfv1.GPU{}
 	if err := a.client.Get(a.ctx, client.ObjectKey{Name: uuid}, gpu); err != nil {
 		return nil, fmt.Errorf("failed to get GPU %s: %w", uuid, err)
@@ -180,7 +180,7 @@ func (a *APIServer) GetGPU(uuid string) (*tfv1.GPU, error) {
 }
 
 // ListGPUs lists all GPU resources
-func (a *APIServer) ListGPUs() (*tfv1.GPUList, error) {
+func (a *APIClient) ListGPUs() (*tfv1.GPUList, error) {
 	gpuList := &tfv1.GPUList{}
 	if err := a.client.List(a.ctx, gpuList); err != nil {
 		return nil, fmt.Errorf("failed to list GPUs: %w", err)
@@ -189,7 +189,7 @@ func (a *APIServer) ListGPUs() (*tfv1.GPUList, error) {
 }
 
 // UpdateGPUStatus updates the status of a GPU resource using merge patch
-func (a *APIServer) UpdateGPUStatus(gpu *tfv1.GPU) error {
+func (a *APIClient) UpdateGPUStatus(gpu *tfv1.GPU) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		current := &tfv1.GPU{}
 		if err := a.client.Get(a.ctx, client.ObjectKeyFromObject(gpu), current); err != nil {
@@ -203,7 +203,7 @@ func (a *APIServer) UpdateGPUStatus(gpu *tfv1.GPU) error {
 }
 
 // patchGPUStatus patches a specific GPU status field using a function
-func (a *APIServer) patchGPUStatus(uuid string, updateFn func(*tfv1.GPU)) error {
+func (a *APIClient) patchGPUStatus(uuid string, updateFn func(*tfv1.GPU)) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		gpu, err := a.GetGPU(uuid)
 		if err != nil {
@@ -217,21 +217,21 @@ func (a *APIServer) patchGPUStatus(uuid string, updateFn func(*tfv1.GPU)) error 
 }
 
 // UpdateGPUAvailableResources updates the available resources of a GPU
-func (a *APIServer) UpdateGPUAvailableResources(uuid string, available *tfv1.Resource) error {
+func (a *APIClient) UpdateGPUAvailableResources(uuid string, available *tfv1.Resource) error {
 	return a.patchGPUStatus(uuid, func(gpu *tfv1.GPU) {
 		gpu.Status.Available = available
 	})
 }
 
 // UpdateGPUPhase updates the phase of a GPU
-func (a *APIServer) UpdateGPUPhase(uuid string, phase tfv1.TensorFusionGPUPhase) error {
+func (a *APIClient) UpdateGPUPhase(uuid string, phase tfv1.TensorFusionGPUPhase) error {
 	return a.patchGPUStatus(uuid, func(gpu *tfv1.GPU) {
 		gpu.Status.Phase = phase
 	})
 }
 
 // GetGPUNode retrieves a GPUNode resource by name
-func (a *APIServer) GetGPUNode(name string) (*tfv1.GPUNode, error) {
+func (a *APIClient) GetGPUNode(name string) (*tfv1.GPUNode, error) {
 	gpuNode := &tfv1.GPUNode{}
 	if err := a.client.Get(a.ctx, client.ObjectKey{Name: name}, gpuNode); err != nil {
 		return nil, fmt.Errorf("failed to get GPUNode %s: %w", name, err)
@@ -240,7 +240,7 @@ func (a *APIServer) GetGPUNode(name string) (*tfv1.GPUNode, error) {
 }
 
 // UpdateGPUNodeStatus updates the status of a GPUNode resource
-func (a *APIServer) UpdateGPUNodeStatus(
+func (a *APIClient) UpdateGPUNodeStatus(
 	gpuNode *tfv1.GPUNode,
 	totalTFlops, totalVRAM resource.Quantity,
 	totalGPUs int32,
@@ -259,7 +259,7 @@ func (a *APIServer) UpdateGPUNodeStatus(
 }
 
 // updateGPUNodeStatus updates GPUNode status fields
-func (a *APIServer) updateGPUNodeStatus(
+func (a *APIClient) updateGPUNodeStatus(
 	status *tfv1.GPUNodeStatus,
 	totalTFlops, totalVRAM resource.Quantity,
 	totalGPUs int32,
@@ -277,7 +277,7 @@ func (a *APIServer) updateGPUNodeStatus(
 }
 
 // DeleteGPU deletes a GPU resource
-func (a *APIServer) DeleteGPU(uuid string) error {
+func (a *APIClient) DeleteGPU(uuid string) error {
 	gpu := &tfv1.GPU{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: uuid,

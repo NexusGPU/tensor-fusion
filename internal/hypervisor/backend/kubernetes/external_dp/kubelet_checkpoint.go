@@ -13,7 +13,11 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/fsnotify/fsnotify"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -25,6 +29,14 @@ const (
 	defaultPatchAllInterval = 120 * time.Second
 	patchAllIntervalJitter  = 0.15 // ±15% jitter
 )
+
+var (
+	scheme = runtime.NewScheme()
+)
+
+func init() {
+	utilruntime.Must(tfv1.AddToScheme(scheme))
+}
 
 // KubeletCheckpoint represents the structure of kubelet device checkpoint file
 type KubeletCheckpoint struct {
@@ -51,54 +63,54 @@ type VendorDetector interface {
 	GetUsedBySystem() string
 }
 
-// APIServerInterface defines the interface for GPU API operations
-type APIServerInterface interface {
+// APIClientInterface defines the interface for GPU API operations
+type APIClientInterface interface {
 	GetGPU(uuid string) (*tfv1.GPU, error)
 	UpdateGPUStatus(gpu *tfv1.GPU) error
-}
-
-// KubeletClientInterface defines the interface for pod listing
-type KubeletClientInterface interface {
-	GetAllPods() map[string]interface{} // Returns map of pod UID to pod (can be *corev1.Pod)
 }
 
 // DevicePluginDetector watches kubelet device checkpoint and manages GPU resource patching
 type DevicePluginDetector struct {
 	ctx               context.Context
 	checkpointPath    string
-	apiServer         APIServerInterface
-	kubeletClient     KubeletClientInterface
+	apiClient         APIClientInterface
 	vendorDetectors   map[string]VendorDetector // key: resource name
 	previousDeviceIDs map[string]bool
 	mu                sync.RWMutex
 	watcher           *fsnotify.Watcher
 	stopCh            chan struct{}
+
+	k8sClient client.Client
 }
 
 // NewDevicePluginDetector creates a new device plugin detector
 func NewDevicePluginDetector(
 	ctx context.Context,
 	checkpointPath string,
-	apiServer APIServerInterface,
-	kubeletClient KubeletClientInterface,
+	apiClient APIClientInterface,
+	restConfig *rest.Config,
 ) (*DevicePluginDetector, error) {
+	k8sClient, err := client.New(restConfig, client.Options{
+		Scheme: scheme,
+	})
+
 	if checkpointPath == "" {
 		checkpointPath = defaultKubeletCheckpointPath
 	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create filesystem watcher: %w", err)
+		klog.Errorf("failed to create filesystem watcher for kubelet CDI checkpoint file: %v", err)
 	}
 
 	detector := &DevicePluginDetector{
 		ctx:               ctx,
 		checkpointPath:    checkpointPath,
-		apiServer:         apiServer,
-		kubeletClient:     kubeletClient,
+		apiClient:         apiClient,
 		vendorDetectors:   make(map[string]VendorDetector),
 		previousDeviceIDs: make(map[string]bool),
 		watcher:           watcher,
+		k8sClient:         k8sClient,
 		stopCh:            make(chan struct{}),
 	}
 
@@ -241,11 +253,6 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 	_, registeredDeviceIDs := d.extractDeviceIDs(checkpoint)
 
 	// Get current pods to check for deleted pods
-	currentPods := d.kubeletClient.GetAllPods()
-	currentPodUIDs := make(map[string]bool, len(currentPods))
-	for uid := range currentPods {
-		currentPodUIDs[uid] = true
-	}
 
 	// Build device ID to entry mapping for vendor-specific processing
 	deviceToEntry := make(map[string]PodDeviceEntry)
@@ -372,7 +379,7 @@ func (d *DevicePluginDetector) patchGPUResource(deviceID, usedBySystem string) e
 
 	for i := 0; i < maxRetries; i++ {
 		// Get current GPU resource
-		gpu, err := d.apiServer.GetGPU(deviceID)
+		gpu, err := d.apiClient.GetGPU(deviceID)
 		if err != nil {
 			if i < maxRetries-1 {
 				backoff := time.Duration(200*(1<<i)) * time.Millisecond
@@ -389,7 +396,7 @@ func (d *DevicePluginDetector) patchGPUResource(deviceID, usedBySystem string) e
 
 		// Patch the GPU status
 		gpu.Status.UsedBy = tfv1.UsedBySystem(usedBySystem)
-		if err := d.apiServer.UpdateGPUStatus(gpu); err != nil {
+		if err := d.apiClient.UpdateGPUStatus(gpu); err != nil {
 			if i < maxRetries-1 {
 				backoff := time.Duration(200*(1<<i)) * time.Millisecond
 				time.Sleep(backoff)
