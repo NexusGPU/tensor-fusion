@@ -76,9 +76,9 @@ func (s *IndexAllocator) SetupWithManager(ctx context.Context, mgr manager.Manag
 	return readyCh
 }
 
-// AssignIndex assigns a temporary index (1-512) for Pod-to-DevicePlugin communication
+// AssignIndex assigns a temporary index (1-128) for Pod-to-DevicePlugin communication
 // Uses atomic increment to ensure thread-safe assignment
-// Index wraps around from 512 to 1 (simple modulo operation)
+// Index wraps around from 128 to 1 (simple modulo operation)
 func (s *IndexAllocator) AssignIndex(podName string) (int, error) {
 	if !s.IsLeader {
 		log.FromContext(s.ctx).Error(nil, "only leader can assign index", "podName", podName)
@@ -86,8 +86,7 @@ func (s *IndexAllocator) AssignIndex(podName string) (int, error) {
 	}
 	// Atomic increment and wrap around
 	next := atomic.AddInt64(&s.currentIndex, 1)
+	index := int((next-1)%(constants.IndexModLength*constants.IndexKeyLength)) + 1
 	log.FromContext(s.ctx).Info("assigned index successfully", "podName", podName, "index", index)
-	index := int((next-1)%constants.IndexRangeEnd) + constants.IndexRangeStart
-
 	return index, nil
 }

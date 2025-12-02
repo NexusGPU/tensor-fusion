@@ -81,7 +81,7 @@ type Backend interface {
 	// ListAndWatchWorkers gets GPU workers from the workload orchestration platform
 	// Returns a channel that receives worker UID lists and a stop channel
 	// The channel should be closed when Stop() is called
-	ListAndWatchWorkers() (<-chan []string, <-chan struct{}, error)
+	ListAndWatchWorkers() (<-chan []*api.WorkerInfo, <-chan struct{}, error)
 
 	// GetWorkerToProcessMap links workers to actual running process list on OS
 	GetWorkerToProcessMap() (map[string][]string, error)

@@ -456,14 +456,6 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 		return fwk.NewStatus(fwk.Error, err.Error())
 	}
 
-	// Index is already assigned in webhook stage, scheduler cannot modify Pod
-	// Just verify that index annotation exists for logging
-	if pod.Annotations != nil {
-		if indexStr, exists := pod.Annotations[constants.PodIndexAnnotation]; exists && indexStr != "" {
-			s.logger.V(5).Info("Pod index already assigned in webhook", "pod", pod.Name, "index", indexStr)
-		}
-	}
-
 	return fwk.NewStatus(fwk.Success, "")
 }
 
@@ -501,12 +493,26 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
 	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
 
+	index, err := utils.ParsePodIndexResourceClaim(pod)
+	if err != nil {
+		s.logger.Error(err, "failed to parse pod index annotation", "pod", pod.Name)
+		return
+	}
+
+	// TODO: check if this index is available (all same index pods already contain allocated annotation), if not, use a go routine to wait signal to assign it asynchronously until available
+	// add event on Pod to track signal waiting process
+
 	// Build patch operations
-	patchOps := []map[string]interface{}{
+	patchOps := []map[string]any{
 		{
 			"op":    "add",
 			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation),
 			"value": gpuIDs,
+		},
+		{
+			"op":    "add",
+			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PodIndexAnnotation),
+			"value": index,
 		},
 	}
 

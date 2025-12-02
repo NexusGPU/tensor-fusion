@@ -171,3 +171,22 @@ func ComposeAllocationRequest(ctx context.Context, pod *corev1.Pod) (*tfv1.Alloc
 
 	return &allocRequest, "", nil
 }
+
+func ParsePodIndexResourceClaim(pod *corev1.Pod) (int, error) {
+	for _, container := range pod.Spec.Containers {
+		for indexKey, indexValue := range container.Resources.Limits {
+			if strings.HasPrefix(string(indexKey), constants.PodIndexAnnotation+constants.PodIndexDelimiter) {
+				indexStr := strings.Split(string(indexKey), constants.PodIndexDelimiter)[1]
+				indexInt, err := strconv.ParseInt(indexStr, 16, 64)
+				if err != nil {
+					return 0, fmt.Errorf("failed to parse tensor fusion index of Pod resource limits: %v", err)
+				}
+				if indexInt < 0 || indexInt >= constants.IndexKeyLength {
+					return 0, fmt.Errorf("tensor fusion index of Pod resource limits out of range: %d", indexInt)
+				}
+				return int(indexValue.Value()) + int(indexInt)*constants.IndexModLength, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("tensor fusion index of Pod resource limits is missing in any container")
+}

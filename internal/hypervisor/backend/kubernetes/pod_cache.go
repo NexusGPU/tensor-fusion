@@ -19,7 +19,6 @@ package kubernetes
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -32,14 +31,19 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 )
+
+// workerInfoSubscriber represents a subscriber waiting for worker info for a specific pod index
+type workerInfoSubscriber struct {
+	ch chan *api.WorkerInfo
+}
+
+const subscriberTimeout = 10 * time.Minute
 
 // PodCacheManager manages pod watching and worker information extraction
 type PodCacheManager struct {
@@ -49,12 +53,18 @@ type PodCacheManager struct {
 	nodeName   string
 
 	mu                sync.RWMutex
-	podCache          map[string]*corev1.Pod           // key: pod UID
-	allocations       map[string]*api.WorkerAllocation // key: pod UID
-	indexToWorkerInfo map[int]*api.WorkerInfo          // key: pod index annotation
-	indexToPodList    map[int][]string                 // key: pod index annotation, value: list of pod UIDs
-	stopCh            chan struct{}
-	workerChangedCh   chan struct{}
+	cachedPod         map[string]*corev1.Pod  // key: pod UID
+	indexToWorkerInfo map[int]*api.WorkerInfo // key: pod index annotation
+
+	stopCh          chan struct{}
+	workerChangedCh chan struct{}
+
+	// Pub/Sub mechanism for waiting on worker info by index
+	subscribersMu    sync.RWMutex
+	indexSubscribers map[int]map[*workerInfoSubscriber]struct{} // key: pod index
+
+	podSubscribersMu sync.RWMutex
+	podSubscribers   map[string]chan<- *api.WorkerInfo
 }
 
 // NewPodCacheManager creates a new pod cache manager
@@ -64,18 +74,23 @@ func NewPodCacheManager(ctx context.Context, restConfig *rest.Config, nodeName s
 		return nil, fmt.Errorf("failed to create kubernetes clientset: %w", err)
 	}
 
-	return &PodCacheManager{
+	kc := &PodCacheManager{
 		ctx:               ctx,
 		clientset:         clientset,
 		restConfig:        restConfig,
 		nodeName:          nodeName,
-		podCache:          make(map[string]*corev1.Pod),
-		allocations:       make(map[string]*api.WorkerAllocation),
-		indexToWorkerInfo: make(map[int]*api.WorkerInfo),
-		indexToPodList:    make(map[int][]string),
+		cachedPod:         make(map[string]*corev1.Pod, 32),
+		indexToWorkerInfo: make(map[int]*api.WorkerInfo, 32),
 		stopCh:            make(chan struct{}),
 		workerChangedCh:   make(chan struct{}, 1),
-	}, nil
+		indexSubscribers:  make(map[int]map[*workerInfoSubscriber]struct{}),
+		podSubscribers:    make(map[string]chan<- *api.WorkerInfo),
+	}
+
+	// Start the Pub/Sub event bus goroutine
+	go kc.runWorkerChangeEventBus()
+
+	return kc, nil
 }
 
 // Start starts watching pods on this node
@@ -123,82 +138,74 @@ func (kc *PodCacheManager) Start() error {
 
 // Stop stops the pod cache manager
 func (kc *PodCacheManager) Stop() {
+	klog.Info("Stopping pod cache manager")
 	close(kc.stopCh)
 }
 
 // onPodAdd handles pod addition events
-func (kc *PodCacheManager) onPodAdd(obj interface{}) {
+func (kc *PodCacheManager) onPodAdd(obj any) {
 	pod := obj.(*corev1.Pod)
 	kc.mu.Lock()
-	kc.podCache[string(pod.UID)] = pod
+	defer kc.mu.Unlock()
+	kc.cachedPod[string(pod.UID)] = pod
+
+	_, deviceAllocated := pod.Annotations[constants.PodDeviceAllocatedAnnotation]
+
 	if podIndexAnno, exists := pod.Annotations[constants.PodIndexAnnotation]; exists {
 		if podIndex, err := strconv.Atoi(podIndexAnno); err == nil {
 			// Parse and store WorkerInfo
 			workerInfo := kc.extractWorkerInfo(pod, podIndexAnno)
-			kc.indexToWorkerInfo[podIndex] = workerInfo
-			// Add pod UID to indexToPodList
-			kc.indexToPodList[podIndex] = append(kc.indexToPodList[podIndex], string(pod.UID))
+			kc.notifyWorkerChanged(workerInfo)
+			if !deviceAllocated {
+				kc.indexToWorkerInfo[podIndex] = workerInfo
+				klog.Infof("Pod %s/%s added to pending allocation index %d", pod.Namespace, pod.Name, podIndex)
+			}
+		} else {
+			klog.Errorf("Pod %s/%s has invalid index annotation: %s", pod.Namespace, pod.Name, podIndexAnno)
 		}
 	} else {
-		klog.Errorf("Pod %s/%s has no index annotation", pod.Namespace, pod.Name)
+		klog.Infof("Pod %s/%s has no index annotation, waiting for index to be updated", pod.Namespace, pod.Name)
 	}
-	kc.mu.Unlock()
-
-	klog.V(4).Infof("Pod added: %s/%s (UID: %s)", pod.Namespace, pod.Name, pod.UID)
-	kc.notifyWorkerChanged()
+	kc.checkWorkerPendingIndexChanged()
 }
 
 // onPodUpdate handles pod update events
-func (kc *PodCacheManager) onPodUpdate(oldObj, newObj interface{}) {
-	oldPod := oldObj.(*corev1.Pod)
+func (kc *PodCacheManager) onPodUpdate(oldObj, newObj any) {
 	newPod := newObj.(*corev1.Pod)
 
 	kc.mu.Lock()
-	kc.podCache[string(newPod.UID)] = newPod
+	defer kc.mu.Unlock()
+	kc.cachedPod[string(newPod.UID)] = newPod
 
 	// Handle old index if it changed
-	oldPodIndexAnno, oldExists := oldPod.Annotations[constants.PodIndexAnnotation]
-	newPodIndexAnno, newExists := newPod.Annotations[constants.PodIndexAnnotation]
-
-	if oldExists {
-		if oldPodIndex, err := strconv.Atoi(oldPodIndexAnno); err == nil {
-			// Remove pod UID from old index
-			kc.removePodFromIndex(oldPodIndex, string(newPod.UID))
-		}
-	}
+	podIndexAnno, indexExists := newPod.Annotations[constants.PodIndexAnnotation]
+	_, alreadyAllocated := newPod.Annotations[constants.PodDeviceAllocatedAnnotation]
 
 	// Update WorkerInfo cache if pod has index annotation
-	if newExists {
-		if podIndex, err := strconv.Atoi(newPodIndexAnno); err == nil {
+	// scheduler PostBind will ensure this index only exists when no index conflict on same node
+	if indexExists {
+		if podIndex, err := strconv.Atoi(podIndexAnno); err == nil {
 			// Parse and store WorkerInfo
-			workerInfo := kc.extractWorkerInfo(newPod, newPodIndexAnno)
-			kc.indexToWorkerInfo[podIndex] = workerInfo
-			// Add pod UID to indexToPodList if not already present
-			podUID := string(newPod.UID)
-			found := slices.Contains(kc.indexToPodList[podIndex], podUID)
-			if !found {
-				kc.indexToPodList[podIndex] = append(kc.indexToPodList[podIndex], podUID)
+			workerInfo := kc.extractWorkerInfo(newPod, podIndexAnno)
+			kc.notifyWorkerChanged(workerInfo)
+			if !alreadyAllocated {
+				kc.indexToWorkerInfo[podIndex] = workerInfo
+				klog.Infof("Pod %s/%s (UID: %s) added to pending allocation index %d", newPod.Namespace, newPod.Name, newPod.UID, podIndex)
 			}
 		}
 	}
-	kc.mu.Unlock()
-
-	klog.V(4).Infof("Pod updated: %s/%s (UID: %s)", newPod.Namespace, newPod.Name, newPod.UID)
-
-	// Check if annotations changed (which might affect allocation)
-	if !podAnnotationsEqual(oldPod.Annotations, newPod.Annotations) {
-		kc.notifyWorkerChanged()
-	}
+	klog.Infof("Pod %s/%s (UID: %s) updated, index: %s, allocated: %t", newPod.Namespace, newPod.Name, newPod.UID, podIndexAnno, alreadyAllocated)
+	kc.checkWorkerPendingIndexChanged()
 }
 
 // onPodDelete handles pod deletion events
-func (kc *PodCacheManager) onPodDelete(obj interface{}) {
+func (kc *PodCacheManager) onPodDelete(obj any) {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
 		// Handle deleted final state unknown
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
-			klog.Errorf("Unexpected object type: %T", obj)
+			klog.Errorf("Unexpected object type, can not parsed to Pod: %T", obj)
 			return
 		}
 		pod, ok = tombstone.Obj.(*corev1.Pod)
@@ -209,156 +216,190 @@ func (kc *PodCacheManager) onPodDelete(obj interface{}) {
 	}
 
 	kc.mu.Lock()
+	defer kc.mu.Unlock()
 	podUID := string(pod.UID)
-	delete(kc.podCache, podUID)
-	delete(kc.allocations, podUID)
-	// Clean up WorkerInfo cache and indexToPodList if pod had index annotation
+	delete(kc.cachedPod, podUID)
+	// Clean up WorkerInfo cache if pod had index annotation
 	if podIndexAnno, exists := pod.Annotations[constants.PodIndexAnnotation]; exists {
 		if podIndex, err := strconv.Atoi(podIndexAnno); err == nil {
-			delete(kc.indexToWorkerInfo, podIndex)
-			kc.removePodFromIndex(podIndex, podUID)
+			workerInfo := kc.extractWorkerInfo(pod, podIndexAnno)
+			workerInfo.DeletedAt = time.Now()
+			kc.notifyWorkerChanged(workerInfo)
+
+			if _, exists := kc.indexToWorkerInfo[podIndex]; exists {
+				delete(kc.indexToWorkerInfo, podIndex)
+				klog.Infof("Pod %s/%s (UID: %s) removed from pending allocation index %d", pod.Namespace, pod.Name, pod.UID, podIndex)
+			}
 		}
 	}
-	kc.mu.Unlock()
-
 	klog.V(4).Infof("Pod deleted: %s/%s (UID: %s)", pod.Namespace, pod.Name, pod.UID)
-	kc.notifyWorkerChanged()
+	kc.checkWorkerPendingIndexChanged()
 }
 
-// removePodFromIndex removes a pod UID from the indexToPodList for a given index
-func (kc *PodCacheManager) removePodFromIndex(podIndex int, podUID string) {
-	podList := kc.indexToPodList[podIndex]
-	newList := make([]string, 0, len(podList))
-	for _, uid := range podList {
-		if uid != podUID {
-			newList = append(newList, uid)
-		}
-	}
-	if len(newList) == 0 {
-		delete(kc.indexToPodList, podIndex)
-	} else {
-		kc.indexToPodList[podIndex] = newList
-	}
-}
-
-// notifyWorkerChanged notifies that worker information has changed
-func (kc *PodCacheManager) notifyWorkerChanged() {
+// checkWorkerPendingIndexChanged notifies that worker information has changed
+func (kc *PodCacheManager) checkWorkerPendingIndexChanged() {
 	select {
 	case kc.workerChangedCh <- struct{}{}:
 	default:
+		// Channel is full, skip notification (non-blocking)
 	}
 }
 
-// GetWorkerInfoForAllocationByIndex finds a pod by its index annotation and extracts worker info
-func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(ctx context.Context, podIndex int) (*api.WorkerInfo, error) {
-	var workerInfo *api.WorkerInfo
-	var lastErr error
-
-	// Retry for at most 5 seconds using k8s retry utility with 10ms backoff
-	startTime := time.Now()
-	err := retry.OnError(wait.Backoff{
-		Duration: 10 * time.Millisecond,
-		Factor:   1.4,
-		Jitter:   0.1,
-		Cap:      5 * time.Second,
-	}, func(err error) bool {
-		// Check if we've exceeded 5 seconds
-		if time.Since(startTime) >= 5*time.Second {
-			return false
+// runWorkerChangeEventBus runs a standalone goroutine that consumes workerChangedCh
+// and notifies all subscribers when worker information changes for their requested index
+func (kc *PodCacheManager) runWorkerChangeEventBus() {
+	for {
+		select {
+		case <-kc.stopCh:
+			return
+		case <-kc.ctx.Done():
+			return
+		case <-kc.workerChangedCh:
+			// Worker information changed, check if any subscribers are waiting
+			kc.notifySubscribers()
 		}
-		// Retry if worker info not found
-		return true
-	}, func() error {
-		kc.mu.RLock()
-		defer kc.mu.RUnlock()
+	}
+}
 
-		// Check for duplicate index - fast fail if multiple pods have same index
-		if podList, exists := kc.indexToPodList[podIndex]; exists {
-			if len(podList) > 1 {
-				// Build error message with pod details
-				var matchingPods []string
-				for _, podUID := range podList {
-					if pod := kc.podCache[podUID]; pod != nil {
-						matchingPods = append(matchingPods, fmt.Sprintf("%s/%s (UID: %s)", pod.Namespace, pod.Name, podUID))
-					}
+// notifySubscribers checks all subscribers and sends worker info if available
+func (kc *PodCacheManager) notifySubscribers() {
+	kc.subscribersMu.Lock()
+	defer kc.subscribersMu.Unlock()
+
+	kc.mu.RLock()
+	defer kc.mu.RUnlock()
+
+	// Iterate through all subscribed indices
+	for podIndex, subs := range kc.indexSubscribers {
+		// Check if worker info is now available for this index
+		if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfo != nil {
+			// Notify all subscribers for this index
+			for sub := range subs {
+				select {
+				case sub.ch <- workerInfo:
+					// Successfully sent, remove subscriber
+					delete(subs, sub)
+					close(sub.ch)
+				default:
+					// Channel is full or closed, skip
 				}
-				lastErr = fmt.Errorf("duplicate index %d found in pods: %v", podIndex, matchingPods)
-				return lastErr
+			}
+			// Clean up empty subscriber set
+			if len(subs) == 0 {
+				delete(kc.indexSubscribers, podIndex)
 			}
 		}
+	}
+}
 
-		// Find worker info with matching index annotation
-		if info, exists := kc.indexToWorkerInfo[podIndex]; exists {
-			workerInfo = info
-			return nil // Success, stop retrying
+func (kc *PodCacheManager) notifyWorkerChanged(workerInfo *api.WorkerInfo) {
+	kc.podSubscribersMu.Lock()
+	defer kc.podSubscribersMu.Unlock()
+	for _, subscriber := range kc.podSubscribers {
+		select {
+		case subscriber <- workerInfo:
+			// Successfully sent, remove subscriber
+			delete(kc.podSubscribers, workerInfo.PodUID)
+			close(subscriber)
+		default:
+			// Channel is full or closed, skip
 		}
+	}
+}
 
-		lastErr = fmt.Errorf("worker info not found for pod index %d", podIndex)
-		return lastErr // Return error to trigger retry
-	})
+func (kc *PodCacheManager) RegisterWorkerInfoSubscriber(name string, subscriber chan<- *api.WorkerInfo) {
+	kc.podSubscribersMu.Lock()
+	defer kc.podSubscribersMu.Unlock()
+	if _, exists := kc.podSubscribers[name]; exists {
+		klog.Errorf("Worker info subscriber for %s already registered", name)
+		return
+	}
+	kc.podSubscribers[name] = subscriber
+	klog.Infof("Registered worker info subscriber for %s", name)
+}
 
-	if err != nil {
-		return nil, fmt.Errorf("worker info not found for pod index %d after retrying for 5 seconds: %w", podIndex, err)
+func (kc *PodCacheManager) UnregisterWorkerInfoSubscriber(name string) {
+	kc.podSubscribersMu.Lock()
+	defer kc.podSubscribersMu.Unlock()
+	delete(kc.podSubscribers, name)
+	klog.Infof("Unregistered worker info subscriber for %s", name)
+}
+
+// GetWorkerInfoForAllocationByIndex finds a pod by its index annotation and extracts worker info
+// It implements a Pub/Sub pattern where callers subscribe to worker info changes for a specific pod index.
+// If worker info is already available, it returns immediately. Otherwise, it waits for up to 10 minutes
+// for the worker info to become available.
+func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(podIndex int) (*api.WorkerInfo, error) {
+	kc.subscribersMu.Lock()
+	defer kc.subscribersMu.Unlock()
+	// First, check if worker info is already available (fast path)
+
+	kc.mu.RLock()
+	if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfo != nil {
+		kc.mu.RUnlock()
+		return workerInfo, nil
+	}
+	kc.mu.RUnlock()
+
+	// Worker info not available yet, subscribe to changes
+	subscriber := &workerInfoSubscriber{
+		ch: make(chan *api.WorkerInfo, 1),
 	}
 
-	return workerInfo, nil
+	// Register subscriber
+	if _, exists := kc.indexSubscribers[podIndex]; !exists {
+		kc.indexSubscribers[podIndex] = make(map[*workerInfoSubscriber]struct{})
+	}
+	kc.indexSubscribers[podIndex][subscriber] = struct{}{}
+
+	timeoutTimer := time.NewTimer(subscriberTimeout)
+	defer timeoutTimer.Stop()
+
+	select {
+	case workerInfo := <-subscriber.ch:
+		// Worker info received
+		if workerInfo == nil {
+			return nil, fmt.Errorf("worker info channel closed for pod index %d", podIndex)
+		}
+		return workerInfo, nil
+	case <-timeoutTimer.C:
+		// Timeout reached
+		kc.unregisterSubscriber(podIndex, subscriber)
+		return nil, fmt.Errorf("timeout waiting for worker info for pod index %d after %v", podIndex, subscriberTimeout)
+	case <-kc.ctx.Done():
+		// Context cancelled
+		kc.unregisterSubscriber(podIndex, subscriber)
+		return nil, fmt.Errorf("context cancelled while waiting for worker info for pod index %d", podIndex)
+	case <-kc.stopCh:
+		// Pod cache manager stopped
+		kc.unregisterSubscriber(podIndex, subscriber)
+		return nil, fmt.Errorf("pod cache manager stopped while waiting for worker info for pod index %d", podIndex)
+	}
+}
+
+// unregisterSubscriber removes a subscriber from the subscribers map
+func (kc *PodCacheManager) unregisterSubscriber(podIndex int, sub *workerInfoSubscriber) {
+	kc.subscribersMu.Lock()
+	defer kc.subscribersMu.Unlock()
+
+	if subs, exists := kc.indexSubscribers[podIndex]; exists {
+		if _, stillSubscribed := subs[sub]; stillSubscribed {
+			delete(subs, sub)
+			// Close channel - safe because we just removed it from map, so event bus won't close it
+			close(sub.ch)
+		}
+		// Clean up empty subscriber set
+		if len(subs) == 0 {
+			delete(kc.indexSubscribers, podIndex)
+		}
+	}
 }
 
 // GetPodByUID retrieves a pod from the cache by its UID
 func (kc *PodCacheManager) GetPodByUID(podUID string) *corev1.Pod {
 	kc.mu.RLock()
 	defer kc.mu.RUnlock()
-	return kc.podCache[podUID]
-}
-
-// RemovePodIndexAnnotation removes the PodIndexAnnotation from a pod after successful allocation
-func (kc *PodCacheManager) RemovePodIndexAnnotation(ctx context.Context, podUID string, namespace string, podName string) error {
-	kc.mu.RLock()
-	pod, exists := kc.podCache[podUID]
-	kc.mu.RUnlock()
-
-	// TODO: too complex, just a raw patch should work! and delete pod_cache before calling apiserver API
-
-	if !exists {
-		return fmt.Errorf("pod %s/%s not found in cache", namespace, podName)
-	}
-
-	// Check if annotation exists
-	if pod.Annotations == nil {
-		return nil // Nothing to remove
-	}
-
-	if _, exists := pod.Annotations[constants.PodIndexAnnotation]; !exists {
-		return nil // Annotation already removed
-	}
-
-	// Use API client to patch pod and remove annotation
-	// Get fresh pod from API server
-	currentPod, err := kc.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to get pod %s/%s: %w", namespace, podName, err)
-	}
-
-	// Create patch to remove annotation
-	if currentPod.Annotations == nil {
-		return nil // No annotations to remove
-	}
-
-	if _, exists := currentPod.Annotations[constants.PodIndexAnnotation]; !exists {
-		return nil // Annotation already removed
-	}
-
-	// Remove annotation
-	delete(currentPod.Annotations, constants.PodIndexAnnotation)
-
-	// Update pod
-	_, err = kc.clientset.CoreV1().Pods(namespace).Update(ctx, currentPod, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to update pod %s/%s: %w", namespace, podName, err)
-	}
-
-	klog.Infof("Successfully removed PodIndexAnnotation from pod %s/%s", namespace, podName)
-	return nil
+	return kc.cachedPod[podUID]
 }
 
 // extractWorkerInfo extracts worker information from pod annotations using the common utility function
@@ -385,54 +426,14 @@ func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod, podIndex string) *
 	return info
 }
 
-// StoreAllocation stores allocation information
-func (kc *PodCacheManager) StoreAllocation(podUID string, allocation *api.WorkerAllocation) error {
-	kc.mu.Lock()
-	defer kc.mu.Unlock()
-	kc.allocations[podUID] = allocation
-	return nil
-}
-
-// GetWorkerChangedChan returns the channel for worker change notifications
-func (kc *PodCacheManager) GetWorkerChangedChan() <-chan struct{} {
-	return kc.workerChangedCh
-}
-
 // GetAllPods returns all pods currently in the cache
 func (kc *PodCacheManager) GetAllPods() map[string]*corev1.Pod {
 	kc.mu.RLock()
 	defer kc.mu.RUnlock()
 
-	result := make(map[string]*corev1.Pod, len(kc.podCache))
-	for k, v := range kc.podCache {
+	result := make(map[string]*corev1.Pod, len(kc.cachedPod))
+	for k, v := range kc.cachedPod {
 		result[k] = v
 	}
 	return result
-}
-
-// podAnnotationsEqual checks if two annotation maps are equal (for relevant keys)
-func podAnnotationsEqual(old, new map[string]string) bool {
-	if old == nil && new == nil {
-		return true
-	}
-	if old == nil || new == nil {
-		return false
-	}
-
-	// Check relevant annotation keys
-	relevantKeys := []string{
-		constants.GPUDeviceIDsAnnotation,
-		constants.IsolationModeAnnotation,
-		constants.VRAMLimitAnnotation,
-		constants.ComputeLimitAnnotation,
-		constants.WorkloadProfileAnnotation,
-	}
-
-	for _, key := range relevantKeys {
-		if old[key] != new[key] {
-			return false
-		}
-	}
-
-	return true
 }
