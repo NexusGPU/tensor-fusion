@@ -239,7 +239,7 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 			return nil, fmt.Errorf("worker info not found for pod index %d", podIndexFull)
 		}
 		// Call worker controller to allocate
-		allocResp, err := dp.workerController.AllocateWorker(workerInfo)
+		allocResp, err := dp.workerController.AllocateWorkerDevices(workerInfo)
 		if err != nil {
 			return nil, fmt.Errorf("failed to allocate devices for worker %s %s: %w", workerInfo.PodName, workerInfo.WorkerUID, err)
 		}

@@ -9,22 +9,13 @@ import (
 	"strings"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
 )
-
-// ProcessWorkerInfo contains worker information extracted from a process
-type ProcessWorkerInfo struct {
-	HostPID       uint32
-	ContainerPID  uint32 // namespaced PID
-	ContainerName string
-	PodName       string
-	PodUID        string // workerUID
-	Namespace     string
-}
 
 // GetWorkerInfoFromHostPID extracts worker information from a process's environment
 // by reading /proc/{hostPID}/environ and /proc/{hostPID}/status
 // workerUID (podUID) is provided as input parameter, not extracted from environment
-func GetWorkerInfoFromHostPID(hostPID uint32, workerUID string) (*ProcessWorkerInfo, error) {
+func GetWorkerInfoFromHostPID(hostPID uint32, workerUID string) (*framework.ProcessMappingInfo, error) {
 	procDir := fmt.Sprintf("/proc/%d", hostPID)
 
 	// Check if process exists
@@ -75,13 +66,10 @@ func GetWorkerInfoFromHostPID(hostPID uint32, workerUID string) (*ProcessWorkerI
 		return nil, fmt.Errorf("CONTAINER_NAME not found in environment for process %d", hostPID)
 	}
 
-	return &ProcessWorkerInfo{
-		HostPID:       hostPID,
-		ContainerPID:  containerPID,
-		ContainerName: containerName,
-		PodName:       podName,
-		PodUID:        workerUID,
-		Namespace:     namespace,
+	return &framework.ProcessMappingInfo{
+		GuestID:  fmt.Sprintf("%s_%s_%s", namespace, podName, containerName),
+		HostPID:  hostPID,
+		GuestPID: containerPID,
 	}, nil
 }
 

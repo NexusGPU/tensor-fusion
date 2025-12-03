@@ -298,9 +298,6 @@ func (kc *PodCacheManager) notifyWorkerChanged(workerInfo *api.WorkerInfo) {
 	for _, subscriber := range kc.podSubscribers {
 		select {
 		case subscriber <- workerInfo:
-			// Successfully sent, remove subscriber
-			delete(kc.podSubscribers, workerInfo.PodUID)
-			close(subscriber)
 		default:
 			// Channel is full or closed, skip
 		}

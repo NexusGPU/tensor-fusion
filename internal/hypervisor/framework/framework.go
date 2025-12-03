@@ -1,40 +1,28 @@
 package framework
 
 import (
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 )
 
 type DeviceController interface {
 	Start() error
 
+	Stop() error
+
 	DiscoverDevices() error
 
-	// ListDevices returns all discovered devices
 	ListDevices() ([]*api.DeviceInfo, error)
 
-	// GetDevice returns device information by UUID
-	GetDevice(deviceUUID string) (*api.DeviceInfo, error)
+	GetDevice(deviceUUID string) (*api.DeviceInfo, bool)
 
-	// GetDeviceAllocations returns device allocations
-	// If deviceUUID is empty, returns all allocations
-	GetDeviceAllocations(deviceUUID string) ([]*api.WorkerAllocation, error)
+	SplitDevice(deviceUUID string, partitionID string) (*api.DeviceInfo, error)
 
-	// DevicesUpdates returns a channel that receives device list updates
-	// The channel should be closed when Stop() is called
-	DevicesUpdates() (<-chan []*api.DeviceInfo, error)
+	RemovePartitionedDevice(partitionUUID, deviceUUID string) error
 
-	// GetDeviceAllocationUpdates returns a channel that receives allocation updates
-	// The channel should be closed when Stop() is called
-	GetDeviceAllocationUpdates(deviceUUID string, allocationID string) (<-chan []*api.WorkerAllocation, error)
+	GetDeviceMetrics() (map[string]*api.GPUUsageMetrics, error)
 
-	// GetGPUMetrics returns current GPU metrics for all devices
-	GetGPUMetrics() (map[string]*api.GPUUsageMetrics, error)
-}
-
-type DeviceInterface interface {
-	SplitDevice(deviceUUID string) error
-
-	GetDeviceMetrics() (*api.MemoryUtilization, error)
+	GetVendorMountLibs() ([]*api.Mount, error)
 }
 
 type WorkerController interface {
@@ -42,22 +30,17 @@ type WorkerController interface {
 
 	Stop() error
 
-	// AllocateWorker allocates devices for a worker
-	AllocateWorker(request *api.WorkerInfo) (*api.WorkerAllocation, error)
+	AllocateWorkerDevices(request *api.WorkerInfo) (*api.WorkerAllocation, error)
 
-	// GetWorkerAllocation returns allocation information for a worker
-	GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, error)
+	DeallocateWorker(workerUID string) error
 
-	// GetWorkerMetricsUpdates returns a channel that receives worker metrics updates
-	// The channel should be closed when Stop() is called
-	GetWorkerMetricsUpdates() (<-chan *api.WorkerAllocation, error)
+	ListWorkers() ([]*api.WorkerInfo, error)
+
+	GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, bool)
 
 	// GetWorkerMetrics returns current worker metrics for all workers
 	// Returns map keyed by device UUID, then by worker UID, then by process ID
 	GetWorkerMetrics() (map[string]map[string]map[string]*api.WorkerMetrics, error)
-
-	// ListWorkers returns list of all worker UIDs
-	ListWorkers() ([]string, error)
 }
 
 type QuotaController interface {
@@ -79,12 +62,9 @@ type Backend interface {
 	Stop() error
 
 	// ListAndWatchWorkers gets GPU workers from the workload orchestration platform
-	// Returns a channel that receives worker UID lists and a stop channel
+	// Returns initial list of workers and a channel that receives worker UID lists and a stop channel
 	// The channel should be closed when Stop() is called
-	ListAndWatchWorkers() (<-chan []*api.WorkerInfo, <-chan struct{}, error)
-
-	// GetWorkerToProcessMap links workers to actual running process list on OS
-	GetWorkerToProcessMap() (map[string][]string, error)
+	ListAndWatchWorkers() ([]*api.WorkerInfo, chan *api.WorkerInfo, error)
 
 	// StartWorker spawns worker process
 	StartWorker(workerUID string) error
@@ -92,6 +72,15 @@ type Backend interface {
 	// StopWorker stops worker process
 	StopWorker(workerUID string) error
 
-	// ReconcileDevices reports devices to backend orchestration and O&M platform
-	ReconcileDevices(devices []string) error
+	// GetProcessMappingInfo gets process mapping information for a worker
+	GetProcessMappingInfo(workerUID string, hostPID uint32) (*ProcessMappingInfo, error)
+
+	CreateOrUpdateState(state *tfv1.GPU) error
+}
+
+// ProcessWorkerInfo contains worker information extracted from a process
+type ProcessMappingInfo struct {
+	GuestID  string
+	HostPID  uint32
+	GuestPID uint32
 }

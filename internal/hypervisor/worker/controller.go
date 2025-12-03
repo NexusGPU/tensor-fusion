@@ -1,12 +1,13 @@
 package worker
 
 import (
-	"fmt"
 	"sync"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/worker/computing"
+	"github.com/samber/lo"
 	"k8s.io/klog/v2"
 )
 
@@ -17,8 +18,11 @@ type WorkerController struct {
 	deviceController framework.DeviceController
 	quotaController  framework.QuotaController
 
-	mu                  sync.RWMutex
-	workers             map[string]bool // worker UID -> exists
+	mu                sync.RWMutex
+	workers           map[string]*api.WorkerInfo
+	workerAllocations map[string]*api.WorkerAllocation
+	deviceAllocations map[string][]*api.WorkerAllocation
+
 	workerWatchStop     chan struct{}
 	workerWatchStopOnce sync.Once
 }
@@ -31,7 +35,7 @@ func NewWorkerController(
 		mode:             mode,
 		backend:          backend,
 		quotaController:  quotaController,
-		workers:          make(map[string]bool),
+		workers:          make(map[string]*api.WorkerInfo, 32),
 		workerWatchStop:  make(chan struct{}),
 	}
 }
@@ -44,41 +48,37 @@ func (w *WorkerController) Start() error {
 	klog.Info("Worker backend started")
 
 	// Start watching workers from backend
-	workerCh, stopCh, err := w.backend.ListAndWatchWorkers()
+	initList, workerCh, err := w.backend.ListAndWatchWorkers()
 	if err != nil {
 		return err
 	}
 
-	// Start worker watcher goroutine
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, worker := range initList {
+		w.workers[worker.WorkerUID] = worker
+	}
+
 	go func() {
 		for {
 			select {
 			case <-w.workerWatchStop:
 				return
-			case <-stopCh:
-				return
-			case workers, ok := <-workerCh:
-				if !ok {
-					return
-				}
-				// Update worker cache
+			case worker := <-workerCh:
 				w.mu.Lock()
-				w.workers = make(map[string]bool)
-				for _, workerUID := range workers {
-					w.workers[workerUID] = true
-				}
+				w.workers[worker.WorkerUID] = worker
 				w.mu.Unlock()
-				klog.V(4).Infof("Updated worker list: %d workers", len(workers))
 			}
 		}
 	}()
 
 	// Start soft quota limiter
-	if err := w.quotaController.StartSoftQuotaLimiter(); err != nil {
-		klog.Fatalf("Failed to start soft quota limiter: %v", err)
+	if w.mode == tfv1.IsolationModeSoft {
+		if err := w.quotaController.StartSoftQuotaLimiter(); err != nil {
+			klog.Fatalf("Failed to start soft quota limiter: %v", err)
+		}
+		klog.Info("Soft quota limiter started")
 	}
-	klog.Info("Soft quota limiter started")
-
 	return nil
 }
 
@@ -92,229 +92,108 @@ func (w *WorkerController) Stop() error {
 }
 
 // AllocateWorker implements framework.WorkerController
-func (w *WorkerController) AllocateWorker(request *api.WorkerInfo) (*api.WorkerAllocation, error) {
+func (w *WorkerController) AllocateWorkerDevices(request *api.WorkerInfo) (*api.WorkerAllocation, error) {
 	// Validate devices exist
-	devices, err := w.deviceController.ListDevices()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list devices: %w", err)
-	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-	deviceMap := make(map[string]*api.DeviceInfo)
-	for _, device := range devices {
-		deviceMap[device.UUID] = device
-	}
+	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
+
+	// partitioned mode, call split device
+	isPartitioned := request.IsolationMode == tfv1.IsolationModePartitioned && request.TemplateID != ""
 
 	for _, deviceUUID := range request.AllocatedDevices {
-		if _, exists := deviceMap[deviceUUID]; !exists {
-			return nil, fmt.Errorf("device not found: %s", deviceUUID)
+		if device, exists := w.deviceController.GetDevice(deviceUUID); exists {
+			if isPartitioned {
+				deviceInfo, err := w.deviceController.SplitDevice(deviceUUID, request.TemplateID)
+				if err != nil {
+					return nil, err
+				}
+				deviceInfos = append(deviceInfos, deviceInfo)
+			} else {
+				deviceInfos = append(deviceInfos, device)
+			}
 		}
 	}
 
-	// Store allocation (this logic would ideally be in device controller's state management)
-	// For now, we'll create the allocation and let device controller track it
+	mounts, err := w.deviceController.GetVendorMountLibs()
+	if err != nil {
+		klog.Errorf("failed to get vendor mount libs for worker allocation of %s: %v,", request.WorkerUID, err)
+		return nil, err
+	}
 
-	// Create WorkerAllocation with WorkerInfo and DeviceInfos
-	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
-	for _, deviceUUID := range request.AllocatedDevices {
-		if device, exists := deviceMap[deviceUUID]; exists {
-			deviceInfos = append(deviceInfos, device)
+	envs := make(map[string]string, 8)
+	devices := make(map[string]*api.DeviceSpec, 8)
+	for _, deviceInfo := range deviceInfos {
+		for envKey, envValue := range deviceInfo.DeviceEnv {
+			envs[envKey] = envValue
+		}
+		for devNode, guestPath := range deviceInfo.DeviceNode {
+			if _, exists := devices[devNode]; exists {
+				continue
+			}
+			devices[devNode] = &api.DeviceSpec{
+				HostPath:    devNode,
+				GuestPath:   guestPath,
+				Permissions: "rwm",
+			}
 		}
 	}
 
 	allocation := &api.WorkerAllocation{
 		WorkerInfo:  request,
 		DeviceInfos: deviceInfos,
+		Envs:        envs,
+		Mounts:      mounts,
+		Devices:     lo.Values(devices),
 	}
 
+	w.workerAllocations[request.WorkerUID] = allocation
+	for _, deviceUUID := range request.AllocatedDevices {
+		if _, exists := w.deviceAllocations[deviceUUID]; !exists {
+			w.deviceAllocations[deviceUUID] = make([]*api.WorkerAllocation, 0, 8)
+		}
+		w.deviceAllocations[deviceUUID] = append(w.deviceAllocations[deviceUUID], allocation)
+	}
 	return allocation, nil
 }
 
-func (w *WorkerController) GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, error) {
-	allocations, err := w.deviceController.GetDeviceAllocations("")
-	if err != nil {
-		return nil, err
+func (w *WorkerController) DeallocateWorker(workerUID string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	allocation, exists := w.workerAllocations[workerUID]
+	if !exists {
+		klog.Errorf("worker allocation not found for worker, can not deallocate worker %s", workerUID)
+		return nil
 	}
-	// Find allocation for this worker
-	for _, allocation := range allocations {
-		if allocation.WorkerInfo.PodUID == workerUID || allocation.WorkerInfo.WorkerUID == workerUID {
-			return allocation, nil
+	for _, deviceUUID := range allocation.WorkerInfo.AllocatedDevices {
+		if workerAllocations := w.deviceAllocations[deviceUUID]; len(workerAllocations) > 0 {
+			w.deviceAllocations[deviceUUID] = lo.Filter(workerAllocations, func(wa *api.WorkerAllocation, _ int) bool {
+				return wa.WorkerInfo.WorkerUID != workerUID
+			})
 		}
 	}
-	return nil, nil
+	delete(w.workerAllocations, workerUID)
+	return nil
 }
 
-func (w *WorkerController) GetWorkerMetricsUpdates() (<-chan *api.WorkerAllocation, error) {
-	ch := make(chan *api.WorkerAllocation, 1)
-	// TODO: Implement proper worker metrics updates channel with periodic updates
-	// Channel will be closed when controller is stopped
-	return ch, nil
+func (w *WorkerController) ListWorkers() ([]*api.WorkerInfo, error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return lo.Values(w.workers), nil
+}
+
+func (w *WorkerController) GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	allocation, exists := w.workerAllocations[workerUID]
+	return allocation, exists
 }
 
 func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]*api.WorkerMetrics, error) {
+	// TODO: implement this
 	// Get all allocations to know which workers exist
-	allocations, err := w.deviceController.GetDeviceAllocations("")
-	if err != nil {
-		return nil, err
-	}
-
-	// Get process compute and memory utilization from device controller
-	// Try to cast to concrete type to access accelerator methods
-	type acceleratorExposer interface {
-		GetProcessComputeUtilization() ([]api.ComputeUtilization, error)
-		GetProcessMemoryUtilization() ([]api.MemoryUtilization, error)
-	}
-
-	var computeUtils []api.ComputeUtilization
-	var memUtils []api.MemoryUtilization
-
-	if exposer, ok := w.deviceController.(acceleratorExposer); ok {
-		var err error
-		computeUtils, err = exposer.GetProcessComputeUtilization()
-		if err != nil {
-			computeUtils = []api.ComputeUtilization{}
-		}
-		memUtils, err = exposer.GetProcessMemoryUtilization()
-		if err != nil {
-			memUtils = []api.MemoryUtilization{}
-		}
-	} else {
-		// Fallback to empty metrics if interface not available
-		computeUtils = []api.ComputeUtilization{}
-		memUtils = []api.MemoryUtilization{}
-	}
-
-	// Build worker to process mapping
-	workerToProcesses, err := w.backend.GetWorkerToProcessMap()
-	if err != nil {
-		workerToProcesses = make(map[string][]string)
-	}
-
-	// Build process to metrics mapping
-	processMetrics := make(map[string]map[string]*api.WorkerMetrics) // processID -> deviceUUID -> metrics
-
-	// Aggregate compute metrics by process
-	for _, computeUtil := range computeUtils {
-		if processMetrics[computeUtil.ProcessID] == nil {
-			processMetrics[computeUtil.ProcessID] = make(map[string]*api.WorkerMetrics)
-		}
-		if processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID] == nil {
-			processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID] = &api.WorkerMetrics{
-				DeviceUUID:        computeUtil.DeviceUUID,
-				ProcessID:         computeUtil.ProcessID,
-				ComputePercentage: computeUtil.UtilizationPercent,
-				ComputeTflops:     0, // ComputeTflops calculation will be implemented separately
-			}
-		} else {
-			processMetrics[computeUtil.ProcessID][computeUtil.DeviceUUID].ComputePercentage += computeUtil.UtilizationPercent
-			// ComputeTflops calculation will be implemented separately
-		}
-	}
-
-	// Aggregate memory metrics by process
-	for _, memUtil := range memUtils {
-		if processMetrics[memUtil.ProcessID] == nil {
-			processMetrics[memUtil.ProcessID] = make(map[string]*api.WorkerMetrics)
-		}
-		if processMetrics[memUtil.ProcessID][memUtil.DeviceUUID] == nil {
-			processMetrics[memUtil.ProcessID][memUtil.DeviceUUID] = &api.WorkerMetrics{
-				DeviceUUID:  memUtil.DeviceUUID,
-				ProcessID:   memUtil.ProcessID,
-				MemoryBytes: memUtil.UsedBytes,
-			}
-		} else {
-			processMetrics[memUtil.ProcessID][memUtil.DeviceUUID].MemoryBytes += memUtil.UsedBytes
-		}
-	}
-
-	// Build result: deviceUUID -> workerUID -> processID -> metrics
-	result := make(map[string]map[string]map[string]*api.WorkerMetrics)
-
-	// Map processes to workers
-	for workerUID, processIDs := range workerToProcesses {
-		for _, processID := range processIDs {
-			if deviceMetrics, exists := processMetrics[processID]; exists {
-				for deviceUUID, metrics := range deviceMetrics {
-					if result[deviceUUID] == nil {
-						result[deviceUUID] = make(map[string]map[string]*api.WorkerMetrics)
-					}
-					if result[deviceUUID][workerUID] == nil {
-						result[deviceUUID][workerUID] = make(map[string]*api.WorkerMetrics)
-					}
-					result[deviceUUID][workerUID][processID] = metrics
-					metrics.WorkerUID = workerUID
-				}
-			}
-		}
-	}
-
-	// Also include allocations that might not have process mappings yet
-	for _, allocation := range allocations {
-		workerUID := allocation.WorkerInfo.WorkerUID
-		if workerUID == "" {
-			workerUID = allocation.WorkerInfo.PodUID
-		}
-		if workerUID == "" {
-			continue
-		}
-
-		// Process all devices in the allocation
-		for _, deviceInfo := range allocation.DeviceInfos {
-			if result[deviceInfo.UUID] == nil {
-				result[deviceInfo.UUID] = make(map[string]map[string]*api.WorkerMetrics)
-			}
-			if result[deviceInfo.UUID][workerUID] == nil {
-				result[deviceInfo.UUID][workerUID] = make(map[string]*api.WorkerMetrics)
-			}
-		}
-	}
-
-	return result, nil
-}
-
-func (w *WorkerController) ListWorkers() ([]string, error) {
-	// First check cache (updated by ListAndWatchWorkers)
-	w.mu.RLock()
-	cachedWorkers := make([]string, 0, len(w.workers))
-	for workerUID := range w.workers {
-		cachedWorkers = append(cachedWorkers, workerUID)
-	}
-	w.mu.RUnlock()
-
-	// If cache has workers, return them
-	if len(cachedWorkers) > 0 {
-		return cachedWorkers, nil
-	}
-
-	// If cache is empty, directly query device allocations to get immediate results
-	// This ensures we hit the key logic path and return accurate results
-	allocations, err := w.deviceController.GetDeviceAllocations("")
-	if err != nil {
-		return cachedWorkers, err
-	}
-
-	// Extract unique worker UIDs from allocations
-	workerSet := make(map[string]bool)
-	for _, allocation := range allocations {
-		workerUID := allocation.WorkerInfo.WorkerUID
-		if workerUID == "" {
-			workerUID = allocation.WorkerInfo.PodUID
-		}
-		if workerUID != "" {
-			workerSet[workerUID] = true
-		}
-	}
-
-	// Update cache with discovered workers
-	w.mu.Lock()
-	for workerUID := range workerSet {
-		w.workers[workerUID] = true
-	}
-	w.mu.Unlock()
-
-	// Return list of workers
-	workers := make([]string, 0, len(workerSet))
-	for workerUID := range workerSet {
-		workers = append(workers, workerUID)
-	}
-	return workers, nil
+	// find process and then get metrics by host processes
+	// w.deviceController.GetProcessMetrics()
+	return nil, nil
 }

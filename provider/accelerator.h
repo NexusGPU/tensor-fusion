@@ -147,7 +147,6 @@ typedef struct {
     char templateId[64];             // Template ID to use
     char deviceUUID[64];             // Target device UUID
     char partitionUUID[64];         // Output: assigned partition UUID
-    uint64_t partitionOverheadBytes; // Memory overhead for partition (output)
 } PartitionAssignment;
 
 // Worker information for isolation
@@ -170,6 +169,12 @@ typedef struct {
 // ============================================================================
 // Metrics Types
 // ============================================================================
+
+// Extra metric key-value pair
+typedef struct {
+    char key[64];              // Metric key name
+    double value;              // Metric value
+} ExtraMetric;
 
 // Compute utilization
 typedef struct {
@@ -201,6 +206,8 @@ typedef struct {
     uint32_t tensorCoreUsagePercent; // Tensor Core usage percentage
     uint64_t memoryUsedBytes;         // Memory used
     uint64_t memoryTotalBytes;        // Memory total
+    ExtraMetric* extraMetrics;        // Array of extra metrics (key-value pairs)
+    size_t extraMetricsCount;         // Number of extra metrics
 } DeviceMetrics;
 
 // Extended device metrics (NVLink, etc.)
@@ -353,12 +360,18 @@ Result GetProcessMemoryUtilization(
  * @param deviceUUIDArray Array of device UUIDs
  * @param deviceCount Number of devices
  * @param metrics Output buffer for device metrics (allocated by caller, size >= deviceCount)
+ * @param maxExtraMetricsPerDevice Maximum number of extra metrics per device
  * @return RESULT_SUCCESS on success, error code otherwise
+ * 
+ * Note: Caller must allocate extraMetrics arrays for each device metric.
+ *       Each metrics[i].extraMetrics should point to an array of size maxExtraMetricsPerDevice.
+ *       The function will fill in the metrics and set extraMetricsCount for each device.
  */
 Result GetDeviceMetrics(
     const char** deviceUUIDArray,
     size_t deviceCount,
-    DeviceMetrics* metrics
+    DeviceMetrics* metrics,
+    size_t maxExtraMetricsPerDevice
 );
 
 /**
@@ -380,6 +393,21 @@ Result GetExtendedDeviceMetrics(
     size_t maxIbNicPerDevice,
     size_t maxPciePerDevice
 );
+
+
+typedef struct {
+    char* hostPath;              // Host path
+    char* guestPath;             // Guest path
+} Mount;
+/**
+ * Get vendor mount libs.
+ * 
+ * @param mounts Output buffer for vendor mount libs (allocated by caller)
+ * @param maxCount Maximum number of mounts that can fit in the buffer
+ * @param mountCount Output parameter for number of mounts actually returned
+ * @return RESULT_SUCCESS on success, error code otherwise
+ */
+Result GetVendorMountLibs(Mount* mounts, size_t maxCount, size_t* mountCount);
 
 // ============================================================================
 // Utility APIs

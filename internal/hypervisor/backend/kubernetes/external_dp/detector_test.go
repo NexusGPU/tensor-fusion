@@ -124,11 +124,6 @@ func TestNvidiaDevicePluginDetector(t *testing.T) {
 
 func TestProcessDeviceState_DeviceAdded(t *testing.T) {
 	mockAPI := new(MockAPIServer)
-	mockKubelet := &MockKubeletClient{
-		pods: map[string]interface{}{
-			"a7461dc1-023a-4bd5-a403-c738bb1d7db4": struct{}{}, // Pod exists
-		},
-	}
 
 	checkpointData := `{
   "Data": {
@@ -178,8 +173,7 @@ func TestProcessDeviceState_DeviceAdded(t *testing.T) {
 	detector := &DevicePluginDetector{
 		ctx:               context.Background(),
 		checkpointPath:    tmpFile.Name(),
-		apiServer:         mockAPI,
-		kubeletClient:     mockKubelet,
+		apiClient:         mockAPI,
 		vendorDetectors:   map[string]VendorDetector{"nvidia.com/gpu": NewNvidiaDevicePluginDetector()},
 		previousDeviceIDs: make(map[string]bool),
 	}
@@ -191,9 +185,6 @@ func TestProcessDeviceState_DeviceAdded(t *testing.T) {
 
 func TestProcessDeviceState_DeviceRemoved(t *testing.T) {
 	mockAPI := new(MockAPIServer)
-	mockKubelet := &MockKubeletClient{
-		pods: map[string]interface{}{}, // No pods - device should be removed
-	}
 
 	checkpointData := `{
   "Data": {
@@ -232,8 +223,7 @@ func TestProcessDeviceState_DeviceRemoved(t *testing.T) {
 	detector := &DevicePluginDetector{
 		ctx:               context.Background(),
 		checkpointPath:    tmpFile.Name(),
-		apiServer:         mockAPI,
-		kubeletClient:     mockKubelet,
+		apiClient:         mockAPI,
 		vendorDetectors:   map[string]VendorDetector{"nvidia.com/gpu": NewNvidiaDevicePluginDetector()},
 		previousDeviceIDs: map[string]bool{"gpu-7d8429d5-531d-d6a6-6510-3b662081a75a": true},
 	}
