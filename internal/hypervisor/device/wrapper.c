@@ -36,6 +36,8 @@ typedef Result (*SetMemHardLimitFunc)(const char*, const char*, uint64_t);
 typedef Result (*SetComputeUnitHardLimitFunc)(const char*, const char*, uint32_t);
 typedef Result (*GetProcessComputeUtilizationFunc)(ComputeUtilization*, size_t, size_t*);
 typedef Result (*GetProcessMemoryUtilizationFunc)(MemoryUtilization*, size_t, size_t*);
+typedef Result (*GetDeviceMetricsFunc)(const char**, size_t, DeviceMetrics*, size_t);
+typedef Result (*GetVendorMountLibsFunc)(Mount*, size_t, size_t*);
 typedef Result (*LogFunc)(const char*, const char*);
 
 // Global handle for the loaded library
@@ -51,6 +53,8 @@ static SetMemHardLimitFunc setMemHardLimitFunc = NULL;
 static SetComputeUnitHardLimitFunc setComputeUnitHardLimitFunc = NULL;
 static GetProcessComputeUtilizationFunc getProcessComputeUtilizationFunc = NULL;
 static GetProcessMemoryUtilizationFunc getProcessMemoryUtilizationFunc = NULL;
+static GetDeviceMetricsFunc getDeviceMetricsFunc = NULL;
+static GetVendorMountLibsFunc getVendorMountLibsFunc = NULL;
 static LogFunc logFunc = NULL;
 
 // Load library dynamically
@@ -74,13 +78,15 @@ int loadAcceleratorLibrary(const char* libPath) {
     setComputeUnitHardLimitFunc = (SetComputeUnitHardLimitFunc)dlsym(libHandle, "SetComputeUnitHardLimit");
     getProcessComputeUtilizationFunc = (GetProcessComputeUtilizationFunc)dlsym(libHandle, "GetProcessComputeUtilization");
     getProcessMemoryUtilizationFunc = (GetProcessMemoryUtilizationFunc)dlsym(libHandle, "GetProcessMemoryUtilization");
+    getDeviceMetricsFunc = (GetDeviceMetricsFunc)dlsym(libHandle, "GetDeviceMetrics");
+    getVendorMountLibsFunc = (GetVendorMountLibsFunc)dlsym(libHandle, "GetVendorMountLibs");
     logFunc = (LogFunc)dlsym(libHandle, "Log");
     
     // Check if all required functions are loaded (Log is optional)
     if (!getDeviceCountFunc || !getAllDevicesFunc || !getPartitionTemplatesFunc ||
         !assignPartitionFunc || !removePartitionFunc || !setMemHardLimitFunc ||
         !setComputeUnitHardLimitFunc || !getProcessComputeUtilizationFunc ||
-        !getProcessMemoryUtilizationFunc) {
+        !getProcessMemoryUtilizationFunc || !getDeviceMetricsFunc || !getVendorMountLibsFunc) {
         dlclose(libHandle);
         libHandle = NULL;
         return -2; // Missing symbols
@@ -109,6 +115,8 @@ void unloadAcceleratorLibrary(void) {
         setComputeUnitHardLimitFunc = NULL;
         getProcessComputeUtilizationFunc = NULL;
         getProcessMemoryUtilizationFunc = NULL;
+        getDeviceMetricsFunc = NULL;
+        getVendorMountLibsFunc = NULL;
         logFunc = NULL;
     }
 }
@@ -175,6 +183,20 @@ Result GetProcessMemoryUtilizationWrapper(MemoryUtilization* utilizations, size_
         return RESULT_ERROR_INTERNAL;
     }
     return getProcessMemoryUtilizationFunc(utilizations, maxCount, utilizationCount);
+}
+
+Result GetDeviceMetricsWrapper(const char** deviceUUIDArray, size_t deviceCount, DeviceMetrics* metrics, size_t maxExtraMetricsPerDevice) {
+    if (getDeviceMetricsFunc == NULL) {
+        return RESULT_ERROR_INTERNAL;
+    }
+    return getDeviceMetricsFunc(deviceUUIDArray, deviceCount, metrics, maxExtraMetricsPerDevice);
+}
+
+Result GetVendorMountLibsWrapper(Mount* mounts, size_t maxCount, size_t* mountCount) {
+    if (getVendorMountLibsFunc == NULL) {
+        return RESULT_ERROR_INTERNAL;
+    }
+    return getVendorMountLibsFunc(mounts, maxCount, mountCount);
 }
 
 // Get error message from dlopen

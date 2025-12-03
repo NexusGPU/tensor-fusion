@@ -269,6 +269,7 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 			}
 
 			// Check if pod still exists
+			// TODO
 			if !currentPodUIDs[entry.PodUID] {
 				// Pod was deleted, but checkpoint may still have it
 				// We'll handle this in the removed devices logic

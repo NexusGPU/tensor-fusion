@@ -16,7 +16,6 @@ type WorkerInfo struct {
 	PodUID            string
 	PodName           string
 	Namespace         string
-	PartitionUUID     string
 	IsolationMode     IsolationMode
 	MemoryLimitBytes  uint64
 	ComputeLimitUnits uint32

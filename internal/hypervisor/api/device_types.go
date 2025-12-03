@@ -28,6 +28,15 @@ type DeviceInfo struct {
 	Capabilities     DeviceCapabilities
 	Properties       map[string]string
 	Healthy          bool
+
+	ParentUUID string
+
+	// Host - Guest device node mapping, eg /dev/nvidia0 -> /dev/nvidia0
+	// When multiple device allocated, deduplicated by device node
+	DeviceNode map[string]string
+
+	// Env to inject to guest
+	DeviceEnv map[string]string
 }
 
 // DeviceCapabilities represents device capabilities
@@ -66,10 +75,6 @@ type GPUUsageMetrics struct {
 	Rx                float64 // PCIe RX in KB
 	Tx                float64 // PCIe TX in KB
 	Temperature       float64
-	GraphicsClockMHz  float64
-	SMClockMHz        float64
-	MemoryClockMHz    float64
-	VideoClockMHz     float64
 	PowerUsage        int64 // in watts
 	ExtraMetrics      map[string]float64
 }

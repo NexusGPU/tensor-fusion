@@ -373,9 +373,6 @@ bool AssignPartition(PartitionAssignment* assignment) {
     snprintf(assignment->partitionUUID, sizeof(assignment->partitionUUID),
              "partition-%.26s-%.26s", assignment->templateId, assignment->deviceUUID);
 
-    // Stub: set partition overhead (e.g., 100MB)
-    assignment->partitionOverheadBytes = 100ULL * 1024 * 1024;
-
     return true;
 }
 
@@ -479,9 +476,10 @@ Result GetProcessMemoryUtilization(
 Result GetDeviceMetrics(
     const char** deviceUUIDArray,
     size_t deviceCount,
-    DeviceMetrics* metrics
+    DeviceMetrics* metrics,
+    size_t maxExtraMetricsPerDevice
 ) {
-    if (!deviceUUIDArray || deviceCount == 0 || !metrics) {
+    if (!deviceUUIDArray || deviceCount == 0 || !metrics || maxExtraMetricsPerDevice == 0) {
         return RESULT_ERROR_INVALID_PARAM;
     }
 
@@ -497,6 +495,40 @@ Result GetDeviceMetrics(
         dm->tensorCoreUsagePercent = 30 + (i * 5); // Stub: 30-50%
         dm->memoryUsedBytes = 8ULL * 1024 * 1024 * 1024; // Stub: 8GB
         dm->memoryTotalBytes = 16ULL * 1024 * 1024 * 1024; // Stub: 16GB
+
+        // Fill extra metrics
+        if (dm->extraMetrics != NULL && maxExtraMetricsPerDevice > 0) {
+            size_t extraCount = 0;
+
+            // Add some example extra metrics
+            if (extraCount < maxExtraMetricsPerDevice) {
+                snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "gpuUtilization");
+                dm->extraMetrics[extraCount].value = 75.0 + (i * 5.0); // Stub: 75-95%
+                extraCount++;
+            }
+
+            if (extraCount < maxExtraMetricsPerDevice) {
+                snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "memoryBandwidthMBps");
+                dm->extraMetrics[extraCount].value = 800.0 + (i * 50.0); // Stub: 800-1200 MB/s
+                extraCount++;
+            }
+
+            if (extraCount < maxExtraMetricsPerDevice) {
+                snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "encoderUtilization");
+                dm->extraMetrics[extraCount].value = 10.0 + (i * 2.0); // Stub: 10-20%
+                extraCount++;
+            }
+
+            if (extraCount < maxExtraMetricsPerDevice) {
+                snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "decoderUtilization");
+                dm->extraMetrics[extraCount].value = 15.0 + (i * 3.0); // Stub: 15-30%
+                extraCount++;
+            }
+
+            dm->extraMetricsCount = extraCount;
+        } else {
+            dm->extraMetricsCount = 0;
+        }
     }
 
     return RESULT_SUCCESS;
@@ -557,19 +589,10 @@ Result GetExtendedDeviceMetrics(
     return RESULT_SUCCESS;
 }
 
-// ============================================================================
-// Stub Implementation - Utility APIs
-// ============================================================================
-
-Result Log(const char* level, const char* message) {
-    if (!level || !message) {
+Result GetVendorMountLibs(Mount* mounts, size_t maxCount, size_t* mountCount) {
+    if (!mounts || maxCount == 0 || !mountCount) {
         return RESULT_ERROR_INVALID_PARAM;
     }
-
-    // Stub: print to stderr
-    fprintf(stderr, "[%s] %s\n", level, message);
-    fflush(stderr);
-
+    *mountCount = 0;
     return RESULT_SUCCESS;
 }
-

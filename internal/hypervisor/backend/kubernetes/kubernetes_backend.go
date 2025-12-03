@@ -20,13 +20,14 @@ type KubeletBackend struct {
 
 	deviceController framework.DeviceController
 	workerController framework.WorkerController
-	podCacher        *PodCacheManager
-	devicePlugins    []*DevicePlugin
-	deviceDetector   *external_dp.DevicePluginDetector
 
-	workerChanged chan<- *api.WorkerInfo
-	workerCh      chan []*api.WorkerInfo
-	workerStopCh  chan struct{}
+	apiClient      *APIClient
+	podCacher      *PodCacheManager
+	devicePlugins  []*DevicePlugin
+	deviceDetector *external_dp.DevicePluginDetector
+
+	workers       map[string]*api.WorkerInfo
+	workerChanged chan *api.WorkerInfo
 }
 
 var k8sBackend framework.Backend = &KubeletBackend{}
@@ -67,16 +68,17 @@ func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceCon
 		workerController: workerController,
 		podCacher:        podCacher,
 		deviceDetector:   deviceDetector,
-		workerChanged:    make(chan<- *api.WorkerInfo),
+		apiClient:        apiClient,
+		workerChanged:    make(chan *api.WorkerInfo),
 	}, nil
 }
 
 func (b *KubeletBackend) Start() error {
 	// Start kubelet client to watch pods
+	b.podCacher.RegisterWorkerInfoSubscriber(watcherName, b.workerChanged)
 	if err := b.podCacher.Start(); err != nil {
 		return err
 	}
-	b.podCacher.RegisterWorkerInfoSubscriber(watcherName, b.workerChanged)
 	klog.Info("Kubelet client started, watching pods")
 
 	// Create and start device plugin
@@ -85,8 +87,8 @@ func (b *KubeletBackend) Start() error {
 		if err := devicePlugin.Start(); err != nil {
 			return err
 		}
-		klog.Infof("Device plugin %d started and registered with kubelet", devicePlugin.resourceNameIndex)
 	}
+	klog.Infof("Device plugins started and registered with kubelet")
 
 	// Start device plugin detector to watch external device plugins
 	if b.deviceDetector != nil {
@@ -100,16 +102,6 @@ func (b *KubeletBackend) Start() error {
 }
 
 func (b *KubeletBackend) Stop() error {
-	// Close worker watch stop channel (safe to close even if nil)
-	if b.workerStopCh != nil {
-		select {
-		case <-b.workerStopCh:
-			// Already closed
-		default:
-			close(b.workerStopCh)
-		}
-	}
-
 	if b.devicePlugins != nil {
 		for i, devicePlugin := range b.devicePlugins {
 			if err := devicePlugin.Stop(); err != nil {
@@ -130,70 +122,11 @@ func (b *KubeletBackend) Stop() error {
 	return nil
 }
 
-func (b *KubeletBackend) ListAndWatchWorkers() (<-chan []*api.WorkerInfo, <-chan struct{}, error) {
+// Returns data channel and stop channel
+func (b *KubeletBackend) ListAndWatchWorkers() (initList []*api.WorkerInfo, changedWorker chan *api.WorkerInfo, err error) {
 	// Initialize channels if not already created
-	if b.workerCh == nil {
-		b.workerCh = make(chan []*api.WorkerInfo, 1)
-		b.workerStopCh = make(chan struct{})
-	}
 
-	// Send initial worker list and start watching
-	go func() {
-		defer close(b.workerCh)
-
-		// Send initial list
-		if b.podCacher != nil {
-			b.podCacher.mu.RLock()
-			workers := make([]string, 0, len(b.podCacher.cachedPod))
-			for podUID := range b.podCacher.cachedPod {
-				workers = append(workers, podUID)
-			}
-			b.podCacher.mu.RUnlock()
-
-			select {
-			case b.workerCh <- workers:
-			case <-b.ctx.Done():
-				return
-			case <-b.workerStopCh:
-				return
-			}
-		}
-
-		// Watch for worker changes
-		// TODO
-		for {
-			select {
-			case <-b.ctx.Done():
-				return
-			case <-b.workerStopCh:
-				return
-			case <-workerChangedCh:
-				if b.podCacher != nil {
-					b.podCacher.mu.RLock()
-					workers := make([]string, 0, len(b.podCacher.cachedPod))
-					for podUID := range b.podCacher.cachedPod {
-						workers = append(workers, podUID)
-					}
-					b.podCacher.mu.RUnlock()
-
-					select {
-					case b.workerCh <- workers:
-					case <-b.ctx.Done():
-						return
-					case <-b.workerStopCh:
-						return
-					}
-				}
-			}
-		}
-	}()
-
-	return b.workerCh, b.workerStopCh, nil
-}
-
-// TODO use ns_mapper to impl this
-func (b *KubeletBackend) GetWorkerToProcessMap() (map[string][]string, error) {
-	return make(map[string][]string), nil
+	return b.workers, dataChan, nil
 }
 
 func (b *KubeletBackend) StartWorker(workerUID string) error {
@@ -206,6 +139,6 @@ func (b *KubeletBackend) StopWorker(workerUID string) error {
 	return nil
 }
 
-func (b *KubeletBackend) ReconcileDevices(devices []string) error {
-	return nil
+func (b *KubeletBackend) GetProcessMappingInfo(workerUID string, hostPID uint32) (*framework.ProcessMappingInfo, error) {
+	return GetWorkerInfoFromHostPID(hostPID, workerUID)
 }
