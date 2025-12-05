@@ -387,7 +387,7 @@ func setupFrameworkAndPlugin(
 func setupAllocator(
 	b *testing.B, ctx context.Context, client client.Client,
 ) *gpuallocator.GpuAllocator {
-	allocator := gpuallocator.NewGpuAllocator(ctx, client, time.Second)
+	allocator := gpuallocator.NewGpuAllocator(ctx, nil, client, time.Second)
 	require.NoError(b, allocator.InitGPUAndQuotaStore())
 	allocator.ReconcileAllocationState()
 	allocator.SetAllocatorReady()

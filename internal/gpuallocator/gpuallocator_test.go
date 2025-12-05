@@ -66,7 +66,7 @@ var _ = Describe("GPU Allocator", func() {
 	}
 
 	BeforeEach(func() {
-		allocator = NewGpuAllocator(ctx, k8sClient, 150*time.Millisecond)
+		allocator = NewGpuAllocator(ctx, nil, k8sClient, 150*time.Millisecond)
 		err := allocator.SetupWithManager(ctx, mgr)
 		Expect(err).NotTo(HaveOccurred())
 		<-allocator.initializedCh
