@@ -296,11 +296,3 @@ func NormalizeKubeConfigEnv() {
 		_ = os.Setenv("KUBECONFIG", strings.Replace(cfgPath, "~", home, 1))
 	}
 }
-
-func CleanUpExistingIndexAnnotationOnPod(pod *corev1.Pod) {
-	for key := range pod.Annotations {
-		if strings.HasPrefix(key, constants.PodIndexAnnotation) {
-			delete(pod.Annotations, key)
-		}
-	}
-}

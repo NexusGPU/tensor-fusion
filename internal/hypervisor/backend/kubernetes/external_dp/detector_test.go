@@ -118,8 +118,18 @@ func TestExtractDeviceIDs(t *testing.T) {
 
 func TestNvidiaDevicePluginDetector(t *testing.T) {
 	detector := NewNvidiaDevicePluginDetector()
-	assert.Equal(t, "nvidia.com/gpu", detector.GetResourceName())
-	assert.Equal(t, string(tfv1.UsedByNvidiaDevicePlugin), detector.GetUsedBySystem())
+	assert.Equal(t, []string{"nvidia.com/gpu", "nvidia.com/mig"}, detector.GetResourceNamePrefixes())
+	system, realDeviceID := detector.GetUsedBySystemAndRealDeviceID("GPU-8511dc03-7592-b8b7-1a92-582d40da52fb", "nvidia.com/gpu")
+	assert.Equal(t, string(UsedByNvidiaDevicePlugin), system)
+	assert.Equal(t, "GPU-8511dc03-7592-b8b7-1a92-582d40da52fb", realDeviceID)
+	// External device plugin detection only works for nvidia.com/gpu resources with device IDs longer than 40 characters
+	system, realDeviceID = detector.GetUsedBySystemAndRealDeviceID("GPU-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea-1", "nvidia.com/gpu")
+	assert.Equal(t, string(UsedBy3rdPartyDevicePlugin), system)
+	assert.Equal(t, "GPU-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea", realDeviceID)
+	// nvidia.com/mig always returns nvidia-device-plugin
+	system, realDeviceID = detector.GetUsedBySystemAndRealDeviceID("MIG-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea", "nvidia.com/mig-1g.5gb")
+	assert.Equal(t, string(UsedByNvidiaDevicePlugin), system)
+	assert.Equal(t, "MIG-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea", realDeviceID)
 }
 
 func TestProcessDeviceState_DeviceAdded(t *testing.T) {
@@ -168,15 +178,28 @@ func TestProcessDeviceState_DeviceAdded(t *testing.T) {
 	}
 
 	mockAPI.On("GetGPU", "gpu-7d8429d5-531d-d6a6-6510-3b662081a75a").Return(gpu, nil)
-	mockAPI.On("UpdateGPUStatus", mock.AnythingOfType("*v1.GPU")).Return(nil)
+	mockAPI.On("UpdateGPUStatus", mock.MatchedBy(func(gpu *tfv1.GPU) bool {
+		return gpu.Status.UsedBy == UsedByNvidiaDevicePlugin
+	})).Return(nil)
 
 	detector := &DevicePluginDetector{
 		ctx:               context.Background(),
 		checkpointPath:    tmpFile.Name(),
 		apiClient:         mockAPI,
-		vendorDetectors:   map[string]VendorDetector{"nvidia.com/gpu": NewNvidiaDevicePluginDetector()},
-		previousDeviceIDs: make(map[string]bool),
+		vendorDetectors:   make(map[string]VendorDetector),
+		previousDeviceIDs: make(map[string]string),
 	}
+	// Register vendor detectors properly - use the same pattern as registerVendorDetectors
+	nvdpDetector := NewNvidiaDevicePluginDetector()
+	for _, prefix := range nvdpDetector.GetResourceNamePrefixes() {
+		detector.vendorDetectors[prefix] = nvdpDetector
+	}
+
+	// Verify checkpoint can be read and devices extracted
+	checkpoint, err := detector.readCheckpointFile()
+	assert.NoError(t, err)
+	allocated, _ := detector.extractDeviceIDs(checkpoint)
+	assert.Contains(t, allocated, "gpu-7d8429d5-531d-d6a6-6510-3b662081a75a", "Device should be in allocated map")
 
 	err = detector.processDeviceState(false)
 	assert.NoError(t, err)
@@ -213,19 +236,26 @@ func TestProcessDeviceState_DeviceRemoved(t *testing.T) {
 			Name: "GPU-7d8429d5-531d-d6a6-6510-3b662081a75a",
 		},
 		Status: tfv1.GPUStatus{
-			UsedBy: tfv1.UsedByNvidiaDevicePlugin,
+			UsedBy: UsedByNvidiaDevicePlugin,
 		},
 	}
 
 	mockAPI.On("GetGPU", "gpu-7d8429d5-531d-d6a6-6510-3b662081a75a").Return(gpu, nil)
-	mockAPI.On("UpdateGPUStatus", mock.AnythingOfType("*v1.GPU")).Return(nil)
+	mockAPI.On("UpdateGPUStatus", mock.MatchedBy(func(gpu *tfv1.GPU) bool {
+		return gpu.Status.UsedBy == tfv1.UsedByTensorFusion
+	})).Return(nil)
 
 	detector := &DevicePluginDetector{
 		ctx:               context.Background(),
 		checkpointPath:    tmpFile.Name(),
 		apiClient:         mockAPI,
-		vendorDetectors:   map[string]VendorDetector{"nvidia.com/gpu": NewNvidiaDevicePluginDetector()},
-		previousDeviceIDs: map[string]bool{"gpu-7d8429d5-531d-d6a6-6510-3b662081a75a": true},
+		vendorDetectors:   make(map[string]VendorDetector),
+		previousDeviceIDs: map[string]string{"gpu-7d8429d5-531d-d6a6-6510-3b662081a75a": "nvidia.com/gpu"},
+	}
+	// Register vendor detectors properly - use the same pattern as registerVendorDetectors
+	nvdpDetector := NewNvidiaDevicePluginDetector()
+	for _, prefix := range nvdpDetector.GetResourceNamePrefixes() {
+		detector.vendorDetectors[prefix] = nvdpDetector
 	}
 
 	err = detector.processDeviceState(false)

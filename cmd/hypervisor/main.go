@@ -21,12 +21,15 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/server"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/worker"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	"github.com/NexusGPU/tensor-fusion/internal/version"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 )
 
 var (
+	acceleratorVendor  = flag.String("vendor", "NVIDIA", "Accelerator vendor: NVIDIA, AMD, Intel, etc.")
 	acceleratorLibPath = flag.String("accelerator-lib",
 		"./provider/build/libaccelerator_stub.so", "Path to accelerator library")
 	isolationMode = flag.String("isolation-mode", "shared",
@@ -39,18 +42,9 @@ var (
 	httpPort = flag.Int("port", int(constants.HypervisorDefaultPortNumber), "HTTP port for hypervisor API")
 )
 
-const (
-	TFHardwareVendorEnv     = "TF_HARDWARE_VENDOR"
-	TFAcceleratorLibPathEnv = "TF_ACCELERATOR_LIB_PATH"
-)
-
-const (
-	MountShmSubcommand = "mount-shm"
-)
-
 func main() {
 	// Check for subcommands (used inside init container for initializing shared memory of limiter of soft isolation)
-	if len(os.Args) > 1 && os.Args[1] == MountShmSubcommand {
+	if len(os.Args) > 1 && os.Args[1] == constants.MountShmSubcommand {
 		shm_init.RunMountShm()
 		return
 	}
@@ -60,21 +54,23 @@ func main() {
 	defer klog.Flush()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	klog.Info("tensor fusion hypervisor starting. ", version.VersionInfo())
 
 	utils.NormalizeKubeConfigEnv()
 
 	// Determine accelerator library path from env var or flag
 	libPath := *acceleratorLibPath
-	if envLibPath := os.Getenv(TFAcceleratorLibPathEnv); envLibPath != "" {
+	if envLibPath := os.Getenv(constants.TFAcceleratorLibPathEnv); envLibPath != "" {
 		libPath = envLibPath
 		klog.Infof("Using accelerator library path from env: %s", libPath)
 	}
-	if vendor := os.Getenv(TFHardwareVendorEnv); vendor != "" {
+	if vendor := os.Getenv(constants.TFHardwareVendorEnv); vendor != "" {
+		acceleratorVendor = ptr.To(vendor)
 		klog.Infof("Hardware vendor from env: %s", vendor)
 	}
 
 	// Create and start device controller
-	deviceController, err := device.NewController(ctx, libPath, *discoveryInterval)
+	deviceController, err := device.NewController(ctx, libPath, *acceleratorVendor, *discoveryInterval, *isolationMode)
 	if err != nil {
 		klog.Fatalf("Failed to create device controller: %v", err)
 	}
@@ -114,6 +110,9 @@ func main() {
 	default:
 		klog.Fatalf("Invalid backend type: %s", *backendType)
 	}
+	deviceController.RegisterDeviceUpdateHandler(backend.GetDeviceChangeHandler())
+	klog.Info("Device change handler registered from backend", "backend", *backendType)
+
 	err = workerController.Start()
 	if err != nil {
 		klog.Fatalf("Failed to start worker controller: %v", err)
@@ -121,6 +120,7 @@ func main() {
 	defer func() {
 		_ = workerController.Stop()
 	}()
+
 	klog.Info("Worker controller started")
 
 	// initialize metrics recorder

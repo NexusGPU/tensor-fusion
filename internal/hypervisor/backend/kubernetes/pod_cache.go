@@ -149,53 +149,30 @@ func (kc *PodCacheManager) onPodAdd(obj any) {
 	defer kc.mu.Unlock()
 	kc.cachedPod[string(pod.UID)] = pod
 
-	_, deviceAllocated := pod.Annotations[constants.PodDeviceAllocatedAnnotation]
-
-	if podIndexAnno, exists := pod.Annotations[constants.PodIndexAnnotation]; exists {
-		if podIndex, err := strconv.Atoi(podIndexAnno); err == nil {
-			// Parse and store WorkerInfo
-			workerInfo := kc.extractWorkerInfo(pod, podIndexAnno)
-			kc.notifyWorkerChanged(workerInfo)
-			if !deviceAllocated {
-				kc.indexToWorkerInfo[podIndex] = workerInfo
-				klog.Infof("Pod %s/%s added to pending allocation index %d", pod.Namespace, pod.Name, podIndex)
-			}
-		} else {
-			klog.Errorf("Pod %s/%s has invalid index annotation: %s", pod.Namespace, pod.Name, podIndexAnno)
-		}
-	} else {
-		klog.Infof("Pod %s/%s has no index annotation, waiting for index to be updated", pod.Namespace, pod.Name)
+	workerInfo, index, err := kc.extractWorkerInfo(pod)
+	if err != nil {
+		klog.Error(err, "Failed to extract worker info for pod", "pod", pod.Name, "namespace", pod.Namespace)
+		return
 	}
-	kc.checkWorkerPendingIndexChanged()
+	if index != "" {
+		podIndex, err := strconv.Atoi(index)
+		if err != nil {
+			klog.Error(err, "Failed to convert node index to int", "node index", index)
+			return
+		}
+		// Make sure indexToWorker only contains device allocating pods (Pod is pending and index was assigned)
+		if workerInfo.Status == api.WorkerStatusDeviceAllocating {
+			kc.indexToWorkerInfo[podIndex] = workerInfo
+		}
+	}
+	kc.notifyWorkerChanged(workerInfo)
+	klog.Infof("Pod %s/%s added to pending, state: %s node index: %s", pod.Namespace, pod.Name, workerInfo.Status, index)
 }
 
 // onPodUpdate handles pod update events
 func (kc *PodCacheManager) onPodUpdate(oldObj, newObj any) {
 	newPod := newObj.(*corev1.Pod)
-
-	kc.mu.Lock()
-	defer kc.mu.Unlock()
-	kc.cachedPod[string(newPod.UID)] = newPod
-
-	// Handle old index if it changed
-	podIndexAnno, indexExists := newPod.Annotations[constants.PodIndexAnnotation]
-	_, alreadyAllocated := newPod.Annotations[constants.PodDeviceAllocatedAnnotation]
-
-	// Update WorkerInfo cache if pod has index annotation
-	// scheduler PostBind will ensure this index only exists when no index conflict on same node
-	if indexExists {
-		if podIndex, err := strconv.Atoi(podIndexAnno); err == nil {
-			// Parse and store WorkerInfo
-			workerInfo := kc.extractWorkerInfo(newPod, podIndexAnno)
-			kc.notifyWorkerChanged(workerInfo)
-			if !alreadyAllocated {
-				kc.indexToWorkerInfo[podIndex] = workerInfo
-				klog.Infof("Pod %s/%s (UID: %s) added to pending allocation index %d", newPod.Namespace, newPod.Name, newPod.UID, podIndex)
-			}
-		}
-	}
-	klog.Infof("Pod %s/%s (UID: %s) updated, index: %s, allocated: %t", newPod.Namespace, newPod.Name, newPod.UID, podIndexAnno, alreadyAllocated)
-	kc.checkWorkerPendingIndexChanged()
+	kc.onPodAdd(newPod)
 }
 
 // onPodDelete handles pod deletion events
@@ -219,30 +196,24 @@ func (kc *PodCacheManager) onPodDelete(obj any) {
 	defer kc.mu.Unlock()
 	podUID := string(pod.UID)
 	delete(kc.cachedPod, podUID)
-	// Clean up WorkerInfo cache if pod had index annotation
-	if podIndexAnno, exists := pod.Annotations[constants.PodIndexAnnotation]; exists {
-		if podIndex, err := strconv.Atoi(podIndexAnno); err == nil {
-			workerInfo := kc.extractWorkerInfo(pod, podIndexAnno)
-			workerInfo.DeletedAt = time.Now()
-			kc.notifyWorkerChanged(workerInfo)
+	workerInfo, index, err := kc.extractWorkerInfo(pod)
+	if err != nil {
+		klog.Error(err, "Failed to extract worker info for pod", "pod", pod.Name, "namespace", pod.Namespace)
+		return
+	}
+	workerInfo.DeletedAt = time.Now().UnixMilli()
+	kc.notifyWorkerChanged(workerInfo)
 
-			if _, exists := kc.indexToWorkerInfo[podIndex]; exists {
-				delete(kc.indexToWorkerInfo, podIndex)
-				klog.Infof("Pod %s/%s (UID: %s) removed from pending allocation index %d", pod.Namespace, pod.Name, pod.UID, podIndex)
-			}
+	if index != "" {
+		podIndex, err := strconv.Atoi(index)
+		if err != nil {
+			klog.Error(err, "Failed to convert node index to int", "node index", index)
+			return
 		}
+		delete(kc.indexToWorkerInfo, podIndex)
 	}
-	klog.V(4).Infof("Pod deleted: %s/%s (UID: %s)", pod.Namespace, pod.Name, pod.UID)
-	kc.checkWorkerPendingIndexChanged()
-}
+	klog.Infof("Pod %s/%s (UID: %s) deleted. state: %s node index: %s", pod.Namespace, pod.Name, pod.UID, workerInfo.Status, index)
 
-// checkWorkerPendingIndexChanged notifies that worker information has changed
-func (kc *PodCacheManager) checkWorkerPendingIndexChanged() {
-	select {
-	case kc.workerChangedCh <- struct{}{}:
-	default:
-		// Channel is full, skip notification (non-blocking)
-	}
 }
 
 // runWorkerChangeEventBus runs a standalone goroutine that consumes workerChangedCh
@@ -299,7 +270,7 @@ func (kc *PodCacheManager) notifyWorkerChanged(workerInfo *api.WorkerInfo) {
 		select {
 		case subscriber <- workerInfo:
 		default:
-			// Channel is full or closed, skip
+			klog.Warningf("Channel is full, skipping notification for worker change %s", workerInfo.WorkerUID)
 		}
 	}
 }
@@ -400,27 +371,49 @@ func (kc *PodCacheManager) GetPodByUID(podUID string) *corev1.Pod {
 }
 
 // extractWorkerInfo extracts worker information from pod annotations using the common utility function
-func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod, podIndex string) *api.WorkerInfo {
+func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod) (*api.WorkerInfo, string, error) {
 	// Use common utility function to extract pod worker info
+	index := ""
 	allocRequest, msg, err := utils.ComposeAllocationRequest(kc.ctx, pod)
 	if err != nil {
 		klog.Error(err, "Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", pod.Name, "msg", msg)
-		return nil
-	}
-	info := &api.WorkerInfo{
-		PodUID:            string(pod.UID),
-		PodName:           pod.Name,
-		Namespace:         pod.Namespace,
-		Annotations:       pod.Annotations,
-		PodIndex:          podIndex,
-		AllocatedDevices:  allocRequest.GPUNames,
-		IsolationMode:     allocRequest.Isolation,
-		MemoryLimitBytes:  uint64(allocRequest.Limit.Vram.Value()),
-		ComputeLimitUnits: uint32(allocRequest.Limit.ComputePercent.Value()),
-		TemplateID:        allocRequest.PartitionTemplateID,
+		return nil, index, err
 	}
 
-	return info
+	status := api.WorkerStatusPending
+	if utils.IsPodRunning(pod) {
+		status = api.WorkerStatusRunning
+	} else if utils.IsPodStopped(pod) {
+		status = api.WorkerStatusTerminated
+	} else {
+		// Must be PodPending state, check if can allocate device (use annotation index to check if index-lock released)
+		if nodeIndex, exists := pod.Annotations[constants.PodIndexAnnotation]; exists {
+			index = nodeIndex
+			status = api.WorkerStatusDeviceAllocating
+		}
+	}
+	info := &api.WorkerInfo{
+		WorkerUID:  string(pod.UID),
+		Status:     status,
+		WorkerName: pod.Name,
+		Namespace:  pod.Namespace,
+
+		AllocatedDevices: allocRequest.GPUNames,
+		IsolationMode:    allocRequest.Isolation,
+		QoS:              allocRequest.QoS,
+
+		Requests: allocRequest.Request,
+		Limits:   allocRequest.Limit,
+
+		PartitionTemplateID: allocRequest.PartitionTemplateID,
+
+		WorkloadName:      allocRequest.WorkloadNameNamespace.Name,
+		WorkloadNamespace: allocRequest.WorkloadNameNamespace.Namespace,
+
+		Labels:      pod.Labels,
+		Annotations: pod.Annotations,
+	}
+	return info, index, nil
 }
 
 // GetAllPods returns all pods currently in the cache

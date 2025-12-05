@@ -23,7 +23,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
 	"github.com/gin-gonic/gin"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/utils/ptr"
 )
 
 // LegacyHandler handles legacy endpoints
@@ -49,30 +49,20 @@ func (h *LegacyHandler) HandleGetLimiter(c *gin.Context) {
 	}
 
 	limiterInfos := make([]api.LimiterInfo, 0, len(workers))
-	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
-		if err != nil || allocation == nil {
+	for _, worker := range workers {
+		allocation, exists := h.workerController.GetWorkerAllocation(worker.WorkerUID)
+		if !exists || allocation == nil {
 			continue
 		}
 
 		var requests, limits *tfv1.Resource
-		if allocation.WorkerInfo != nil && allocation.WorkerInfo.MemoryLimitBytes > 0 {
-			vramQty := resource.NewQuantity(int64(allocation.WorkerInfo.MemoryLimitBytes), resource.BinarySI)
-			limits = &tfv1.Resource{
-				Vram: *vramQty,
-			}
-		}
-		if allocation.WorkerInfo != nil && allocation.WorkerInfo.ComputeLimitUnits > 0 {
-			computeLimit := float64(allocation.WorkerInfo.ComputeLimitUnits)
-			computeQty := resource.NewQuantity(int64(computeLimit), resource.DecimalSI)
-			if limits == nil {
-				limits = &tfv1.Resource{}
-			}
-			limits.ComputePercent = *computeQty
+		if allocation.WorkerInfo != nil {
+			requests = &allocation.WorkerInfo.Requests
+			limits = &allocation.WorkerInfo.Limits
 		}
 
 		limiterInfos = append(limiterInfos, api.LimiterInfo{
-			WorkerUID: workerUID,
+			WorkerUID: worker.WorkerUID,
 			Requests:  requests,
 			Limits:    limits,
 		})
@@ -91,9 +81,9 @@ func (h *LegacyHandler) HandleTrap(c *gin.Context) {
 	}
 
 	snapshotCount := 0
-	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
-		if err != nil || allocation == nil {
+	for _, worker := range workers {
+		allocation, exists := h.workerController.GetWorkerAllocation(worker.WorkerUID)
+		if !exists || allocation == nil {
 			continue
 		}
 
@@ -123,31 +113,29 @@ func (h *LegacyHandler) HandleGetPods(c *gin.Context) {
 	}
 
 	pods := make([]api.PodInfo, 0)
-	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
-		if err != nil || allocation == nil {
+	for _, worker := range workers {
+		allocation, exists := h.workerController.GetWorkerAllocation(worker.WorkerUID)
+		if !exists || allocation == nil {
 			continue
 		}
 
-		var tflopsLimit *float64
 		var vramLimit *uint64
-		var qosLevel *string
-
-		if allocation.WorkerInfo != nil && allocation.WorkerInfo.MemoryLimitBytes > 0 {
-			vramLimit = &allocation.WorkerInfo.MemoryLimitBytes
+		var tflopsLimit *float64
+		if allocation.WorkerInfo != nil {
+			if allocation.WorkerInfo.Limits.Vram.Value() > 0 {
+				vramLimit = ptr.To(uint64(allocation.WorkerInfo.Limits.Vram.Value()))
+			}
+			if allocation.WorkerInfo.Limits.Tflops.Value() > 0 {
+				tflopsLimit = ptr.To(allocation.WorkerInfo.Limits.Tflops.AsApproximateFloat64())
+			}
 		}
-
-		// Try to get QoS from allocation or default to medium
-		qos := "medium"
-		qosLevel = &qos
-
 		pods = append(pods, api.PodInfo{
 			PodName:     getAllocationPodName(allocation),
 			Namespace:   getAllocationNamespace(allocation),
 			GPUIDs:      getDeviceUUIDs(allocation),
 			TflopsLimit: tflopsLimit,
 			VramLimit:   vramLimit,
-			QoSLevel:    qosLevel,
+			QoSLevel:    allocation.WorkerInfo.QoS,
 		})
 	}
 
@@ -157,7 +145,7 @@ func (h *LegacyHandler) HandleGetPods(c *gin.Context) {
 // Helper functions for WorkerAllocation field access
 func getAllocationPodName(allocation *api.WorkerAllocation) string {
 	if allocation.WorkerInfo != nil {
-		return allocation.WorkerInfo.PodName
+		return allocation.WorkerInfo.WorkerName
 	}
 	return ""
 }
@@ -175,30 +163,4 @@ func getDeviceUUIDs(allocation *api.WorkerAllocation) []string {
 		uuids = append(uuids, device.UUID)
 	}
 	return uuids
-}
-
-// HandleGetProcesses handles GET /api/v1/process
-func (h *LegacyHandler) HandleGetProcesses(c *gin.Context) {
-	// Get worker to process mapping
-	processMap, err := h.backend.GetWorkerToProcessMap()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
-		return
-	}
-
-	processInfos := make([]api.ProcessInfo, 0, len(processMap))
-	for workerUID, pids := range processMap {
-		mapping := make(map[string]string)
-		for _, pid := range pids {
-			// In a real implementation, this would map container PID to host PID
-			// For now, use the same PID
-			mapping[pid] = pid
-		}
-		processInfos = append(processInfos, api.ProcessInfo{
-			WorkerUID:      workerUID,
-			ProcessMapping: mapping,
-		})
-	}
-
-	c.JSON(http.StatusOK, api.ListProcessesResponse{Processes: processInfos})
 }

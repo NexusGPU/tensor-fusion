@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// set by GO_LDFLAGS in release.yaml
 var (
 	BuildVersion string
 )

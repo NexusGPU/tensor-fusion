@@ -2,43 +2,53 @@ package single_node
 
 import (
 	"context"
+	"os"
 	"sync"
 	"time"
 
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
+	"github.com/google/uuid"
+	"github.com/samber/lo"
 	"k8s.io/klog/v2"
 )
 
 type SingleNodeBackend struct {
-	ctx               context.Context
-	deviceController  framework.DeviceController
-	mu                sync.RWMutex
-	workers           map[string]*WorkerState // worker UID -> state
-	stopCh            chan struct{}
-	stopOnce          sync.Once
-	workerCh          chan []string
-	workerChCloseOnce sync.Once
-	workerStopCh      chan struct{}
-	workerStopOnce    sync.Once
-}
+	ctx              context.Context
+	deviceController framework.DeviceController
+	fileState        *FileStateManager
+	mu               sync.RWMutex
+	workers          map[string]*api.WorkerInfo
+	stopCh           chan struct{}
+	stopOnce         sync.Once
 
-type WorkerState struct {
-	UID         string
-	ProcessIDs  []string
-	CreatedAt   time.Time
-	LastUpdated time.Time
+	// Worker watching
+	subscribersMu sync.RWMutex
+	subscribers   map[string]chan *api.WorkerInfo
+	workerHandler *framework.WorkerChangeHandler
 }
 
 func NewSingleNodeBackend(ctx context.Context, deviceController framework.DeviceController) *SingleNodeBackend {
+	stateDir := os.Getenv("TENSOR_FUSION_STATE_DIR")
+	if stateDir == "" {
+		stateDir = "/tmp/tensor-fusion-state"
+	}
 	return &SingleNodeBackend{
 		ctx:              ctx,
 		deviceController: deviceController,
-		workers:          make(map[string]*WorkerState),
+		fileState:        NewFileStateManager(stateDir),
+		workers:          make(map[string]*api.WorkerInfo),
 		stopCh:           make(chan struct{}),
+		subscribers:      make(map[string]chan *api.WorkerInfo),
 	}
 }
 
 func (b *SingleNodeBackend) Start() error {
+	// Load initial state from files
+	if err := b.loadState(); err != nil {
+		klog.Warningf("Failed to load initial state: %v", err)
+	}
+
 	// Start periodic worker discovery
 	go b.periodicWorkerDiscovery()
 	return nil
@@ -49,66 +59,93 @@ func (b *SingleNodeBackend) Stop() error {
 	b.stopOnce.Do(func() {
 		close(b.stopCh)
 	})
-	// Close worker watch stop channel (safe to close even if nil)
-	if b.workerStopCh != nil {
-		b.workerStopOnce.Do(func() {
-			close(b.workerStopCh)
-		})
+
+	// Close all subscriber channels
+	b.subscribersMu.Lock()
+	for id, ch := range b.subscribers {
+		close(ch)
+		delete(b.subscribers, id)
 	}
+	b.subscribersMu.Unlock()
+
 	return nil
 }
 
-// discoverWorkers discovers workers from device allocations and updates the internal state
-func (b *SingleNodeBackend) discoverWorkers() {
-	// Discover workers from device allocations
-	allocations, err := b.deviceController.GetDeviceAllocations("")
+// loadState loads workers and devices from file state
+func (b *SingleNodeBackend) loadState() error {
+	workers, err := b.fileState.LoadWorkers()
 	if err != nil {
-		klog.Errorf("Failed to get device allocations: %v", err)
+		return err
+	}
+
+	b.mu.Lock()
+	b.workers = workers
+	b.mu.Unlock()
+
+	return nil
+}
+
+// discoverWorkers discovers workers from file state and notifies subscribers of changes
+func (b *SingleNodeBackend) discoverWorkers() {
+	workers, err := b.fileState.LoadWorkers()
+	if err != nil {
+		klog.Errorf("Failed to load workers from file state: %v", err)
 		return
 	}
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	// Update worker states from allocations
-	for _, allocation := range allocations {
-		workerUID := allocation.WorkerInfo.WorkerUID
-		if workerUID == "" {
-			workerUID = allocation.WorkerInfo.PodUID
-		}
-		if workerUID == "" {
-			continue
-		}
-
-		if _, exists := b.workers[workerUID]; !exists {
-			b.workers[workerUID] = &WorkerState{
-				UID:         workerUID,
-				ProcessIDs:  []string{},
-				CreatedAt:   time.Now(),
-				LastUpdated: time.Now(),
-			}
-		} else {
-			b.workers[workerUID].LastUpdated = time.Now()
+	// Find new and updated workers
+	for uid, worker := range workers {
+		oldWorker, exists := b.workers[uid]
+		if !exists {
+			// New worker
+			b.workers[uid] = worker
+			b.mu.Unlock()
+			b.notifySubscribers(worker)
+			b.mu.Lock()
+		} else if !workersEqual(oldWorker, worker) {
+			// Updated worker
+			b.workers[uid] = worker
+			b.mu.Unlock()
+			b.notifySubscribers(worker)
+			b.mu.Lock()
 		}
 	}
 
-	// Remove workers that no longer have allocations
-	activeWorkers := make(map[string]bool)
-	for _, allocation := range allocations {
-		workerUID := allocation.WorkerInfo.WorkerUID
-		if workerUID == "" {
-			workerUID = allocation.WorkerInfo.PodUID
-		}
-		if workerUID != "" {
-			activeWorkers[workerUID] = true
+	// Find removed workers
+	for uid := range b.workers {
+		if _, exists := workers[uid]; !exists {
+			delete(b.workers, uid)
 		}
 	}
+	b.mu.Unlock()
+}
 
-	for workerUID := range b.workers {
-		if !activeWorkers[workerUID] {
-			delete(b.workers, workerUID)
+// notifySubscribers notifies all subscribers of a worker change
+func (b *SingleNodeBackend) notifySubscribers(worker *api.WorkerInfo) {
+	b.subscribersMu.RLock()
+	defer b.subscribersMu.RUnlock()
+
+	for _, ch := range b.subscribers {
+		select {
+		case ch <- worker:
+		default:
+			klog.Warningf("Channel is full, skipping notification for worker change %s", worker.WorkerUID)
 		}
 	}
+}
+
+// workersEqual checks if two workers are equal (simple comparison)
+func workersEqual(w1, w2 *api.WorkerInfo) bool {
+	if w1 == nil && w2 == nil {
+		return true
+	}
+	if w1 == nil || w2 == nil {
+		return false
+	}
+	return w1.WorkerUID == w2.WorkerUID &&
+		w1.Status == w2.Status &&
+		len(w1.AllocatedDevices) == len(w2.AllocatedDevices)
 }
 
 func (b *SingleNodeBackend) periodicWorkerDiscovery() {
@@ -130,111 +167,133 @@ func (b *SingleNodeBackend) periodicWorkerDiscovery() {
 	}
 }
 
-func (b *SingleNodeBackend) ListAndWatchWorkers() (<-chan []string, <-chan struct{}, error) {
-	// Initialize channels if not already created
-	if b.workerCh == nil {
-		b.workerCh = make(chan []string, 1)
-		b.workerStopCh = make(chan struct{})
-	}
+func (b *SingleNodeBackend) RegisterWorkerUpdateHandler(handler framework.WorkerChangeHandler) error {
+	b.workerHandler = &handler
 
-	// Send initial worker list and watch for changes
+	// Create channel for this subscriber
+	workerCh := make(chan *api.WorkerInfo, 16)
+	subscriberID := uuid.NewString()
+
+	// Register subscriber
+	b.subscribersMu.Lock()
+	b.subscribers[subscriberID] = workerCh
+	b.subscribersMu.Unlock()
+
+	// Start bridge goroutine to convert channel messages to handler calls
 	go func() {
-		defer b.workerChCloseOnce.Do(func() {
-			close(b.workerCh)
-		})
-
-		// Trigger immediate discovery before sending initial list
-		b.discoverWorkers()
-
-		// Send initial list
-		b.mu.RLock()
-		workers := make([]string, 0, len(b.workers))
-		for workerUID := range b.workers {
-			workers = append(workers, workerUID)
-		}
-		b.mu.RUnlock()
-
-		select {
-		case b.workerCh <- workers:
-		case <-b.ctx.Done():
-			return
-		case <-b.workerStopCh:
-			return
-		}
-
-		// Watch for changes via periodic discovery (already running in background)
-		// The periodic discovery will update b.workers, but we don't have a direct
-		// notification mechanism, so we'll poll periodically
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
+		defer func() {
+			b.subscribersMu.Lock()
+			delete(b.subscribers, subscriberID)
+			b.subscribersMu.Unlock()
+		}()
 
 		for {
 			select {
 			case <-b.ctx.Done():
 				return
-			case <-b.workerStopCh:
+			case <-b.stopCh:
 				return
-			case <-ticker.C:
-				// Trigger discovery before sending update
-				b.discoverWorkers()
-
-				b.mu.RLock()
-				workers := make([]string, 0, len(b.workers))
-				for workerUID := range b.workers {
-					workers = append(workers, workerUID)
-				}
-				b.mu.RUnlock()
-
-				select {
-				case b.workerCh <- workers:
-				case <-b.ctx.Done():
-					return
-				case <-b.workerStopCh:
+			case worker, ok := <-workerCh:
+				if !ok {
 					return
 				}
+				if worker == nil {
+					continue
+				}
+
+				// Determine if this is add, update, or remove
+				b.mu.Lock()
+				oldWorker, exists := b.workers[worker.WorkerUID]
+
+				if worker.DeletedAt > 0 {
+					// Worker was deleted
+					if exists && handler.OnRemove != nil {
+						handler.OnRemove(worker)
+					}
+					delete(b.workers, worker.WorkerUID)
+				} else if !exists {
+					// New worker
+					b.workers[worker.WorkerUID] = worker
+					if handler.OnAdd != nil {
+						handler.OnAdd(worker)
+					}
+				} else {
+					// Updated worker
+					b.workers[worker.WorkerUID] = worker
+					if handler.OnUpdate != nil {
+						handler.OnUpdate(oldWorker, worker)
+					}
+				}
+				b.mu.Unlock()
 			}
 		}
 	}()
-
-	return b.workerCh, b.workerStopCh, nil
+	return nil
 }
 
-func (b *SingleNodeBackend) GetWorkerToProcessMap() (map[string][]string, error) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	result := make(map[string][]string)
-	for workerUID, state := range b.workers {
-		result[workerUID] = append([]string{}, state.ProcessIDs...)
+func (b *SingleNodeBackend) StartWorker(worker *api.WorkerInfo) error {
+	if err := b.fileState.AddWorker(worker); err != nil {
+		return err
 	}
-	return result, nil
-}
 
-func (b *SingleNodeBackend) StartWorker(workerUID string) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.workers[worker.WorkerUID] = worker
+	b.mu.Unlock()
 
-	if _, exists := b.workers[workerUID]; !exists {
-		b.workers[workerUID] = &WorkerState{
-			UID:         workerUID,
-			ProcessIDs:  []string{},
-			CreatedAt:   time.Now(),
-			LastUpdated: time.Now(),
-		}
-	}
+	b.notifySubscribers(worker)
+	klog.Infof("Worker started: %s", worker.WorkerUID)
 	return nil
 }
 
 func (b *SingleNodeBackend) StopWorker(workerUID string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	if err := b.fileState.RemoveWorker(workerUID); err != nil {
+		return err
+	}
 
+	b.mu.Lock()
 	delete(b.workers, workerUID)
+	b.mu.Unlock()
+
+	klog.Infof("Worker stopped: %s", workerUID)
 	return nil
 }
 
-func (b *SingleNodeBackend) ReconcileDevices(devices []string) error {
-	// In single node mode, we don't need to reconcile with external systems
-	// Devices are managed locally
-	return nil
+func (b *SingleNodeBackend) GetProcessMappingInfo(workerUID string, hostPID uint32) (*framework.ProcessMappingInfo, error) {
+	return &framework.ProcessMappingInfo{
+		GuestID:  workerUID,
+		HostPID:  hostPID,
+		GuestPID: hostPID,
+	}, nil
+}
+
+func (b *SingleNodeBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler {
+	return framework.DeviceChangeHandler{
+		OnAdd: func(device *api.DeviceInfo) {
+			if err := b.fileState.AddDevice(device); err != nil {
+				klog.Errorf("Failed to save device to file state: %v", err)
+			} else {
+				klog.Infof("Device added: %s", device.UUID)
+			}
+		},
+		OnRemove: func(device *api.DeviceInfo) {
+			if err := b.fileState.RemoveDevice(device.UUID); err != nil {
+				klog.Errorf("Failed to remove device from file state: %v", err)
+			} else {
+				klog.Infof("Device removed: %s", device.UUID)
+			}
+		},
+		OnUpdate: func(oldDevice, newDevice *api.DeviceInfo) {
+			if err := b.fileState.UpdateDevice(newDevice); err != nil {
+				klog.Errorf("Failed to update device in file state: %v", err)
+			} else {
+				klog.Infof("Device updated: %s", newDevice.UUID)
+			}
+		},
+	}
+}
+
+func (b *SingleNodeBackend) ListWorkers() []*api.WorkerInfo {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return lo.Values(b.workers)
 }

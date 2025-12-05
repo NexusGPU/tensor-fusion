@@ -29,7 +29,7 @@ import (
 func updateMetricsView(
 	metricsView *viewport.Model,
 	devices []*api.DeviceInfo,
-	workers []WorkerInfo,
+	workers []*api.WorkerInfo,
 	metrics map[string]*api.GPUUsageMetrics,
 	workerMetrics map[string]map[string]map[string]*api.WorkerMetrics,
 	lastUpdate time.Time,
@@ -56,20 +56,27 @@ func updateMetricsView(
 	// Worker metrics overview
 	content.WriteString(TitleStyle.Render("Worker Metrics Overview\n\n"))
 	for _, worker := range workers {
-		content.WriteString(fmt.Sprintf("%s/%s\n", worker.Namespace, worker.PodName))
-		if workerMetrics, exists := workerMetrics[worker.DeviceUUID]; exists {
-			if wm, exists := workerMetrics[worker.UID]; exists {
-				var totalMemory uint64
-				var totalCompute float64
-				for _, metrics := range wm {
-					totalMemory += metrics.MemoryBytes
-					totalCompute += metrics.ComputePercentage
+		content.WriteString(fmt.Sprintf("%s/%s\n", worker.Namespace, worker.WorkerName))
+		for _, deviceUUID := range worker.AllocatedDevices {
+			content.WriteString(fmt.Sprintf("  Device: %s\n", deviceUUID))
+			if workerMetrics, exists := workerMetrics[deviceUUID]; exists {
+				if wm, exists := workerMetrics[worker.WorkerUID]; exists {
+					var totalMemory uint64
+					var totalCompute float64
+					for _, metrics := range wm {
+						totalMemory += metrics.MemoryBytes
+						totalCompute += metrics.ComputePercentage
+					}
+					content.WriteString(fmt.Sprintf("  Memory: %s\n", formatBytes(totalMemory)))
+					content.WriteString(fmt.Sprintf("  Compute: %.1f%% %s\n", totalCompute, renderBarChart(totalCompute, 20)))
+				} else {
+					content.WriteString("  No metrics available\n")
 				}
-				content.WriteString(fmt.Sprintf("  Memory: %s\n", formatBytes(totalMemory)))
-				content.WriteString(fmt.Sprintf("  Compute: %.1f%% %s\n", totalCompute, renderBarChart(totalCompute, 20)))
+			} else {
+				content.WriteString("  No metrics available\n")
 			}
+			content.WriteString("\n")
 		}
-		content.WriteString("\n")
 	}
 
 	metricsView.SetContent(content.String())

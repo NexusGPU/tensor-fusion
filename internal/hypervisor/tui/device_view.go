@@ -110,8 +110,7 @@ func updateDeviceDetail(
 		content.WriteString(fmt.Sprintf("%s: %.2f TFLOPS\n", MetricLabelStyle.Render("Compute TFLOPS"), deviceMetrics.ComputeTflops))
 		content.WriteString(fmt.Sprintf("%s: %.1f°C\n", MetricLabelStyle.Render("Temperature"), deviceMetrics.Temperature))
 		content.WriteString(fmt.Sprintf("%s: %d W\n", MetricLabelStyle.Render("Power Usage"), deviceMetrics.PowerUsage))
-		content.WriteString(fmt.Sprintf("%s: %.1f MHz\n", MetricLabelStyle.Render("Graphics Clock"), deviceMetrics.GraphicsClockMHz))
-		content.WriteString(fmt.Sprintf("%s: %.1f MHz\n\n", MetricLabelStyle.Render("SM Clock"), deviceMetrics.SMClockMHz))
+		// TODO: handle extra metrics
 
 		// Time-series charts
 		if history, exists := deviceMetricsHistory[selectedDeviceUUID]; exists && history != nil {
@@ -133,10 +132,13 @@ func updateDeviceDetail(
 		content.WriteString(TitleStyle.Render("Allocations\n\n"))
 		for _, alloc := range allocations {
 			content.WriteString(fmt.Sprintf("  Worker: %s\n", alloc.WorkerInfo.WorkerUID))
-			content.WriteString(fmt.Sprintf("  Pod: %s/%s\n", alloc.WorkerInfo.Namespace, alloc.WorkerInfo.PodName))
+			content.WriteString(fmt.Sprintf("  Pod: %s/%s\n", alloc.WorkerInfo.Namespace, alloc.WorkerInfo.WorkerName))
 			content.WriteString(fmt.Sprintf("  Mode: %s\n", alloc.WorkerInfo.IsolationMode))
-			if alloc.WorkerInfo.MemoryLimitBytes > 0 {
-				content.WriteString(fmt.Sprintf("  Memory Limit: %s\n", formatBytes(alloc.WorkerInfo.MemoryLimitBytes)))
+			if alloc.WorkerInfo.Limits.Vram.Value() > 0 {
+				content.WriteString(fmt.Sprintf("  Memory Limit: %s\n", formatBytes(uint64(alloc.WorkerInfo.Limits.Vram.Value()))))
+			}
+			if alloc.WorkerInfo.Limits.Tflops.Value() > 0 {
+				content.WriteString(fmt.Sprintf("  Compute Limit: %.2f\n", alloc.WorkerInfo.Limits.Tflops.AsApproximateFloat64()))
 			}
 			content.WriteString("\n")
 		}

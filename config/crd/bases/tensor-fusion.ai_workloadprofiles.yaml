@@ -100,11 +100,11 @@ spec:
                         description: 'Resolution at which TSDB is queried for historical
                           metrics. Default: 1m'
                         type: string
-                      lowerboundtflopspercentile:
+                      lowerBoundTflopsPercentile:
                         description: 'Tflops usage percentile that will be used for
                           the lower bound on tflops recommendation. Default: 0.5'
                         type: string
-                      lowerboundvrampercentile:
+                      lowerBoundVramPercentile:
                         description: 'Vram usage percentile that will be used for
                           the lower bound on vram recommendation. Default: 0.5'
                         type: string
@@ -116,19 +116,19 @@ spec:
                         description: Target resource to scale, such as "tflops", "vram",
                           or "all" by default
                         type: string
-                      targettflopspercentile:
+                      targetTFlopsPercentile:
                         description: 'Tflops usage percentile that will be used as
                           a base for tflops target recommendation. Default: 0.9'
                         type: string
-                      targetvrampercentile:
+                      targetVramPercentile:
                         description: 'Vram usage percentile that will be used as a
                           base for vram target recommendation. Default: 0.9'
                         type: string
-                      upperboundtflopspercentile:
+                      upperBoundTflopsPercentile:
                         description: 'Tflops usage percentile that will be used for
                           the upper bound on tflops recommendation. Default: 0.95'
                         type: string
-                      upperboundvrampercentile:
+                      upperBoundVramPercentile:
                         description: 'Vram usage percentile that will be used for
                           the upper bound on vram recommendation. Default: 0.95'
                         type: string

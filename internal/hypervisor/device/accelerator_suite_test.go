@@ -11,4 +11,3 @@ func TestAccelerator(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Accelerator Suite")
 }
-

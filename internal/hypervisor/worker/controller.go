@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"maps"
 	"sync"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -21,10 +22,6 @@ type WorkerController struct {
 	mu                sync.RWMutex
 	workers           map[string]*api.WorkerInfo
 	workerAllocations map[string]*api.WorkerAllocation
-	deviceAllocations map[string][]*api.WorkerAllocation
-
-	workerWatchStop     chan struct{}
-	workerWatchStopOnce sync.Once
 }
 
 func NewWorkerController(
@@ -35,42 +32,36 @@ func NewWorkerController(
 		mode:             mode,
 		backend:          backend,
 		quotaController:  quotaController,
-		workers:          make(map[string]*api.WorkerInfo, 32),
-		workerWatchStop:  make(chan struct{}),
+
+		workers:           make(map[string]*api.WorkerInfo, 32),
+		workerAllocations: make(map[string]*api.WorkerAllocation, 32),
 	}
 }
 
 func (w *WorkerController) Start() error {
-	err := w.backend.Start()
+	// Register worker update handler
+	handler := framework.WorkerChangeHandler{
+		OnAdd: func(worker *api.WorkerInfo) {
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			w.workers[worker.WorkerUID] = worker
+		},
+		OnRemove: func(worker *api.WorkerInfo) {
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			delete(w.workers, worker.WorkerUID)
+		},
+		OnUpdate: func(oldWorker, newWorker *api.WorkerInfo) {
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			w.workers[newWorker.WorkerUID] = newWorker
+		},
+	}
+
+	err := w.backend.RegisterWorkerUpdateHandler(handler)
 	if err != nil {
 		return err
 	}
-	klog.Info("Worker backend started")
-
-	// Start watching workers from backend
-	initList, workerCh, err := w.backend.ListAndWatchWorkers()
-	if err != nil {
-		return err
-	}
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, worker := range initList {
-		w.workers[worker.WorkerUID] = worker
-	}
-
-	go func() {
-		for {
-			select {
-			case <-w.workerWatchStop:
-				return
-			case worker := <-workerCh:
-				w.mu.Lock()
-				w.workers[worker.WorkerUID] = worker
-				w.mu.Unlock()
-			}
-		}
-	}()
 
 	// Start soft quota limiter
 	if w.mode == tfv1.IsolationModeSoft {
@@ -79,13 +70,17 @@ func (w *WorkerController) Start() error {
 		}
 		klog.Info("Soft quota limiter started")
 	}
+
+	// Start backend after all handlers are registered
+	err = w.backend.Start()
+	if err != nil {
+		return err
+	}
+	klog.Info("Worker backend started")
 	return nil
 }
 
 func (w *WorkerController) Stop() error {
-	w.workerWatchStopOnce.Do(func() {
-		close(w.workerWatchStop)
-	})
 	_ = w.backend.Stop()
 	_ = w.quotaController.StopSoftQuotaLimiter()
 	return nil
@@ -100,12 +95,12 @@ func (w *WorkerController) AllocateWorkerDevices(request *api.WorkerInfo) (*api.
 	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
 
 	// partitioned mode, call split device
-	isPartitioned := request.IsolationMode == tfv1.IsolationModePartitioned && request.TemplateID != ""
+	isPartitioned := request.IsolationMode == tfv1.IsolationModePartitioned && request.PartitionTemplateID != ""
 
 	for _, deviceUUID := range request.AllocatedDevices {
 		if device, exists := w.deviceController.GetDevice(deviceUUID); exists {
 			if isPartitioned {
-				deviceInfo, err := w.deviceController.SplitDevice(deviceUUID, request.TemplateID)
+				deviceInfo, err := w.deviceController.SplitDevice(deviceUUID, request.PartitionTemplateID)
 				if err != nil {
 					return nil, err
 				}
@@ -125,9 +120,7 @@ func (w *WorkerController) AllocateWorkerDevices(request *api.WorkerInfo) (*api.
 	envs := make(map[string]string, 8)
 	devices := make(map[string]*api.DeviceSpec, 8)
 	for _, deviceInfo := range deviceInfos {
-		for envKey, envValue := range deviceInfo.DeviceEnv {
-			envs[envKey] = envValue
-		}
+		maps.Copy(envs, deviceInfo.DeviceEnv)
 		for devNode, guestPath := range deviceInfo.DeviceNode {
 			if _, exists := devices[devNode]; exists {
 				continue
@@ -150,10 +143,7 @@ func (w *WorkerController) AllocateWorkerDevices(request *api.WorkerInfo) (*api.
 
 	w.workerAllocations[request.WorkerUID] = allocation
 	for _, deviceUUID := range request.AllocatedDevices {
-		if _, exists := w.deviceAllocations[deviceUUID]; !exists {
-			w.deviceAllocations[deviceUUID] = make([]*api.WorkerAllocation, 0, 8)
-		}
-		w.deviceAllocations[deviceUUID] = append(w.deviceAllocations[deviceUUID], allocation)
+		w.deviceController.AddDeviceAllocation(deviceUUID, allocation)
 	}
 	return allocation, nil
 }
@@ -166,14 +156,10 @@ func (w *WorkerController) DeallocateWorker(workerUID string) error {
 		klog.Errorf("worker allocation not found for worker, can not deallocate worker %s", workerUID)
 		return nil
 	}
-	for _, deviceUUID := range allocation.WorkerInfo.AllocatedDevices {
-		if workerAllocations := w.deviceAllocations[deviceUUID]; len(workerAllocations) > 0 {
-			w.deviceAllocations[deviceUUID] = lo.Filter(workerAllocations, func(wa *api.WorkerAllocation, _ int) bool {
-				return wa.WorkerInfo.WorkerUID != workerUID
-			})
-		}
-	}
 	delete(w.workerAllocations, workerUID)
+	for _, deviceUUID := range allocation.WorkerInfo.AllocatedDevices {
+		w.deviceController.RemoveDeviceAllocation(deviceUUID, allocation)
+	}
 	return nil
 }
 

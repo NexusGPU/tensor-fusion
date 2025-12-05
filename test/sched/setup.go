@@ -11,6 +11,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	gpuResourceFitPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
@@ -49,14 +50,15 @@ type BenchmarkConfig struct {
 
 // BenchmarkFixture holds pre-initialized benchmark data
 type BenchmarkFixture struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	plugin    *gpuResourceFitPlugin.GPUFit
-	nodes     []*v1.Node
-	pods      []*v1.Pod
-	allocator *gpuallocator.GpuAllocator
-	client    client.Client
-	fwk       framework.Framework
+	ctx            context.Context
+	cancel         context.CancelFunc
+	plugin         *gpuResourceFitPlugin.GPUFit
+	nodes          []*v1.Node
+	pods           []*v1.Pod
+	allocator      *gpuallocator.GpuAllocator
+	indexAllocator *indexallocator.IndexAllocator
+	client         client.Client
+	fwk            framework.Framework
 }
 
 // NewBenchmarkFixture creates and initializes a benchmark fixture
@@ -94,30 +96,33 @@ func NewBenchmarkFixture(
 
 	// Setup allocator
 	allocator := setupAllocator(b, ctx, client)
-
+	indexAllocator, err := indexallocator.NewIndexAllocator(ctx, client)
+	require.NoError(b, err)
 	// Setup framework and plugin
 	if !realAPIServer {
-		fwk, plugin := setupFrameworkAndPlugin(b, ctx, client, allocator, k8sNativeObjects)
+		fwk, plugin := setupFrameworkAndPlugin(b, ctx, client, allocator, indexAllocator, k8sNativeObjects)
 		return &BenchmarkFixture{
-			ctx:       ctx,
-			cancel:    cancel,
-			plugin:    plugin,
-			nodes:     nodes,
-			pods:      pods,
-			allocator: allocator,
-			client:    client,
-			fwk:       fwk,
+			ctx:            ctx,
+			cancel:         cancel,
+			plugin:         plugin,
+			nodes:          nodes,
+			pods:           pods,
+			allocator:      allocator,
+			indexAllocator: indexAllocator,
+			client:         client,
+			fwk:            fwk,
 		}
 	} else {
 		return &BenchmarkFixture{
-			ctx:       ctx,
-			cancel:    cancel,
-			plugin:    nil,
-			nodes:     nodes,
-			pods:      pods,
-			allocator: allocator,
-			client:    client,
-			fwk:       nil,
+			ctx:            ctx,
+			cancel:         cancel,
+			plugin:         nil,
+			nodes:          nodes,
+			pods:           pods,
+			allocator:      allocator,
+			indexAllocator: indexAllocator,
+			client:         client,
+			fwk:            nil,
 		}
 	}
 }
@@ -352,7 +357,7 @@ func batchCreateResources(
 
 func setupFrameworkAndPlugin(
 	b *testing.B, ctx context.Context, client client.Client,
-	allocator *gpuallocator.GpuAllocator, k8sObjs []runtime.Object,
+	allocator *gpuallocator.GpuAllocator, indexAllocator *indexallocator.IndexAllocator, k8sObjs []runtime.Object,
 ) (framework.Framework, *gpuResourceFitPlugin.GPUFit) {
 	// Register plugins including our GPU plugin
 	registeredPlugins := []tf.RegisterPluginFunc{
@@ -374,7 +379,7 @@ func setupFrameworkAndPlugin(
 	require.NoError(b, err)
 
 	// Create plugin directly
-	plugin := createPlugin(b, ctx, fwk, allocator, client)
+	plugin := createPlugin(b, ctx, fwk, allocator, indexAllocator, client)
 
 	return fwk, plugin
 }
@@ -391,9 +396,9 @@ func setupAllocator(
 
 func createPlugin(
 	b *testing.B, ctx context.Context, fwk framework.Framework,
-	allocator *gpuallocator.GpuAllocator, client client.Client,
+	allocator *gpuallocator.GpuAllocator, indexAllocator *indexallocator.IndexAllocator, client client.Client,
 ) *gpuResourceFitPlugin.GPUFit {
-	pluginFactory := gpuResourceFitPlugin.NewWithDeps(allocator, client)
+	pluginFactory := gpuResourceFitPlugin.NewWithDeps(allocator, indexAllocator, client)
 	pluginConfig := &runtime.Unknown{
 		Raw: []byte(`{"maxWorkerPerNode": 256, "vramWeight": 0.7, "tflopsWeight": 0.3}`),
 	}

@@ -334,7 +334,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	index := m.assignDeviceAllocationIndex(ctx, pod)
 
 	// clean annotation if exists, must be assigned by scheduler to ensure lock of certain index on one node
-	utils.CleanUpExistingIndexAnnotationOnPod(pod)
+	delete(pod.Annotations, constants.PodIndexAnnotation)
 
 	for _, containerIndex := range containerIndices {
 		container := &pod.Spec.Containers[containerIndex]

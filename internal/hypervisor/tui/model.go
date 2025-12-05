@@ -42,7 +42,7 @@ type Model struct {
 
 	currentView   int
 	devices       []*api.DeviceInfo
-	workers       []WorkerInfo
+	workers       []*api.WorkerInfo
 	metrics       map[string]*api.GPUUsageMetrics
 	workerMetrics map[string]map[string]map[string]*api.WorkerMetrics
 
@@ -84,7 +84,7 @@ type WorkerMetricsHistory struct {
 type tickMsg time.Time
 type updateDataMsg struct {
 	devices       []*api.DeviceInfo
-	workers       []WorkerInfo
+	workers       []*api.WorkerInfo
 	metrics       map[string]*api.GPUUsageMetrics
 	workerMetrics map[string]map[string]map[string]*api.WorkerMetrics
 }
@@ -156,23 +156,12 @@ func (m *Model) updateData() tea.Cmd {
 			workerDetails = []*api.WorkerAllocation{}
 		}
 
-		workers := make([]WorkerInfo, 0, len(workerDetails))
+		workers := make([]*api.WorkerInfo, 0, len(workerDetails))
 		for _, worker := range workerDetails {
 			if worker == nil {
 				continue
 			}
-			// Extract device UUID from the first device in allocation
-			deviceUUID := ""
-			if len(worker.DeviceInfos) > 0 {
-				deviceUUID = worker.DeviceInfos[0].UUID
-			}
-			workers = append(workers, WorkerInfo{
-				UID:        worker.WorkerInfo.WorkerUID,
-				PodName:    worker.WorkerInfo.PodName,
-				Namespace:  worker.WorkerInfo.Namespace,
-				DeviceUUID: deviceUUID,
-				Allocation: worker,
-			})
+			workers = append(workers, worker.WorkerInfo)
 		}
 
 		// Get GPU metrics - for now, we'll need to add a metrics endpoint
@@ -243,7 +232,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "enter":
-			if m.currentView == viewDevices {
+			switch m.currentView {
+			case viewDevices:
 				if selectedItem := m.deviceList.SelectedItem(); selectedItem != nil {
 					item := selectedItem.(deviceItem)
 					m.selectedDeviceUUID = item.uuid
@@ -255,10 +245,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					updateDeviceDetail(m.ctx, m.client, &m.deviceDetail, m.selectedDeviceUUID, m.devices, m.metrics, m.deviceMetricsHistory)
 					return m, nil
 				}
-			} else if m.currentView == viewWorkers {
+			case viewWorkers:
 				if selectedItem := m.workerList.SelectedItem(); selectedItem != nil {
-					item := selectedItem.(workerItem)
-					m.selectedWorkerUID = item.uid
+					item := selectedItem.(*api.WorkerInfo)
+					m.selectedWorkerUID = item.WorkerUID
 					m.currentView = viewWorkerDetail
 					// Initialize history if needed
 					if m.workerMetricsHistory[m.selectedWorkerUID] == nil {
@@ -267,21 +257,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					updateWorkerDetail(&m.workerDetail, m.selectedWorkerUID, m.workers, m.workerMetrics, m.workerMetricsHistory)
 					return m, nil
 				}
-			} else if m.currentView == viewWorkerDetail {
+			case viewWorkerDetail:
 				// Check if SHM dialog is visible, if so, close it
 				if m.shmDialog != nil && m.shmDialog.IsVisible() {
 					m.shmDialog.Hide()
 					return m, nil
 				}
 				// Otherwise, show SHM dialog if isolation mode is soft
-				var worker *WorkerInfo
+				var worker *api.WorkerInfo
 				for _, w := range m.workers {
-					if w.UID == m.selectedWorkerUID {
-						worker = &w
-						break
+					if w.WorkerUID == m.selectedWorkerUID {
+						worker = w
 					}
 				}
-				if worker != nil && worker.Allocation != nil && worker.Allocation.WorkerInfo != nil {
+				if worker != nil {
 					m.shmDialog.Show(worker)
 					return m, nil
 				}
@@ -302,7 +291,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateMetricsHistory()
 
 		updateDeviceList(&m.deviceList, m.devices)
-		updateWorkerList(&m.workerList, m.workers)
+
+		workerItems := make([]list.Item, len(m.workers))
+		for i, worker := range m.workers {
+			workerItems[i] = worker
+		}
+		m.workerList.SetItems(workerItems)
 		switch m.currentView {
 		case viewDeviceDetail:
 			updateDeviceDetail(m.ctx, m.client, &m.deviceDetail, m.selectedDeviceUUID, m.devices, m.metrics, m.deviceMetricsHistory)
@@ -519,8 +513,8 @@ func (m *Model) updateMetricsHistory() {
 			// Calculate percentage if we have allocation info
 			var memPercent float64
 			for _, worker := range m.workers {
-				if worker.UID == workerUID && worker.Allocation != nil && worker.Allocation.WorkerInfo != nil && worker.Allocation.WorkerInfo.MemoryLimitBytes > 0 {
-					memPercent = float64(totalMemory) / float64(worker.Allocation.WorkerInfo.MemoryLimitBytes) * 100.0
+				if worker.WorkerUID == workerUID && worker.Limits.Vram.Value() > 0 {
+					memPercent = float64(totalMemory) / float64(worker.Limits.Vram.Value()) * 100.0
 					break
 				}
 			}

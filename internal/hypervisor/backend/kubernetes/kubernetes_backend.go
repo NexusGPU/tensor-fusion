@@ -4,16 +4,23 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
+	"time"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/backend/kubernetes/external_dp"
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
+	"github.com/google/uuid"
+	"github.com/samber/lo"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
-
-const watcherName = "backend_watcher"
 
 type KubeletBackend struct {
 	ctx context.Context
@@ -26,11 +33,16 @@ type KubeletBackend struct {
 	devicePlugins  []*DevicePlugin
 	deviceDetector *external_dp.DevicePluginDetector
 
-	workers       map[string]*api.WorkerInfo
-	workerChanged chan *api.WorkerInfo
+	nodeName string
+
+	workers   map[string]*api.WorkerInfo
+	workersMu sync.RWMutex
+
+	subscribers   map[string]struct{}
+	workerHandler *framework.WorkerChangeHandler
 }
 
-var k8sBackend framework.Backend = &KubeletBackend{}
+var _ framework.Backend = &KubeletBackend{}
 
 func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceController, workerController framework.WorkerController, restConfig *rest.Config) (*KubeletBackend, error) {
 	// Get node name from environment or config
@@ -69,13 +81,13 @@ func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceCon
 		podCacher:        podCacher,
 		deviceDetector:   deviceDetector,
 		apiClient:        apiClient,
-		workerChanged:    make(chan *api.WorkerInfo),
+		nodeName:         nodeName,
+		workers:          make(map[string]*api.WorkerInfo),
+		subscribers:      make(map[string]struct{}),
 	}, nil
 }
 
 func (b *KubeletBackend) Start() error {
-	// Start kubelet client to watch pods
-	b.podCacher.RegisterWorkerInfoSubscriber(watcherName, b.workerChanged)
 	if err := b.podCacher.Start(); err != nil {
 		return err
 	}
@@ -115,21 +127,76 @@ func (b *KubeletBackend) Stop() error {
 	}
 
 	if b.podCacher != nil {
-		b.podCacher.UnregisterWorkerInfoSubscriber(watcherName)
+		for subscriberID := range b.subscribers {
+			b.podCacher.UnregisterWorkerInfoSubscriber(subscriberID)
+		}
+		b.subscribers = make(map[string]struct{})
 		b.podCacher.Stop()
 	}
 
 	return nil
 }
 
-// Returns data channel and stop channel
-func (b *KubeletBackend) ListAndWatchWorkers() (initList []*api.WorkerInfo, changedWorker chan *api.WorkerInfo, err error) {
-	// Initialize channels if not already created
+// RegisterWorkerUpdateHandler registers a handler for worker updates
+func (b *KubeletBackend) RegisterWorkerUpdateHandler(handler framework.WorkerChangeHandler) error {
+	b.workerHandler = &handler
 
-	return b.workers, dataChan, nil
+	// Create a channel bridge to convert channel messages to handler calls
+	workerCh := make(chan *api.WorkerInfo, 16)
+	subscriberID := uuid.NewString()
+	b.podCacher.RegisterWorkerInfoSubscriber(subscriberID, workerCh)
+	b.subscribers[subscriberID] = struct{}{}
+
+	// Start bridge goroutine
+	go func() {
+		defer func() {
+			b.podCacher.UnregisterWorkerInfoSubscriber(subscriberID)
+			delete(b.subscribers, subscriberID)
+		}()
+
+		for {
+			select {
+			case <-b.ctx.Done():
+				return
+			case worker, ok := <-workerCh:
+				if !ok {
+					return
+				}
+				if worker == nil {
+					continue
+				}
+
+				// Determine if this is add, update, or remove
+				b.workersMu.Lock()
+				oldWorker, exists := b.workers[worker.WorkerUID]
+
+				if worker.DeletedAt > 0 {
+					// Worker was deleted
+					if exists && handler.OnRemove != nil {
+						handler.OnRemove(worker)
+					}
+					delete(b.workers, worker.WorkerUID)
+				} else if !exists {
+					// New worker
+					b.workers[worker.WorkerUID] = worker
+					if handler.OnAdd != nil {
+						handler.OnAdd(worker)
+					}
+				} else {
+					// Updated worker
+					b.workers[worker.WorkerUID] = worker
+					if handler.OnUpdate != nil {
+						handler.OnUpdate(oldWorker, worker)
+					}
+				}
+				b.workersMu.Unlock()
+			}
+		}
+	}()
+	return nil
 }
 
-func (b *KubeletBackend) StartWorker(workerUID string) error {
+func (b *KubeletBackend) StartWorker(worker *api.WorkerInfo) error {
 	klog.Warningf("StartWorker not implemented, should be managed by operator")
 	return nil
 }
@@ -141,4 +208,100 @@ func (b *KubeletBackend) StopWorker(workerUID string) error {
 
 func (b *KubeletBackend) GetProcessMappingInfo(workerUID string, hostPID uint32) (*framework.ProcessMappingInfo, error) {
 	return GetWorkerInfoFromHostPID(hostPID, workerUID)
+}
+
+func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler {
+	return framework.DeviceChangeHandler{
+		OnAdd: func(device *api.DeviceInfo) {
+			if err := b.apiClient.CreateOrUpdateGPU(b.nodeName, device.UUID,
+				func(gpuNode *tfv1.GPUNode, gpu *tfv1.GPU) error {
+					return b.mutateGPUResourceState(device, gpuNode, gpu)
+				}); err != nil {
+				klog.Errorf("Failed to create or update GPU: %v", err)
+			} else {
+				klog.Infof("Device added: %s", device.UUID)
+			}
+			klog.Infof("Device added: %s", device.UUID)
+		},
+		OnRemove: func(device *api.DeviceInfo) {
+			if err := b.apiClient.DeleteGPU(device.UUID); err != nil {
+				klog.Errorf("Failed to delete GPU: %v", err)
+			} else {
+				klog.Infof("Device removed: %s", device.UUID)
+			}
+		},
+		OnUpdate: func(oldDevice, newDevice *api.DeviceInfo) {
+			if err := b.apiClient.CreateOrUpdateGPU(b.nodeName, newDevice.UUID,
+				func(gpuNode *tfv1.GPUNode, gpu *tfv1.GPU) error {
+					return b.mutateGPUResourceState(newDevice, gpuNode, gpu)
+				}); err != nil {
+				klog.Errorf("Failed to update GPU: %v", err)
+			} else {
+				klog.Infof("Device updated: %s", newDevice.UUID)
+			}
+		},
+		OnDiscoveryComplete: func(nodeInfo *api.NodeInfo) {
+			if err := b.apiClient.UpdateGPUNodeStatus(nodeInfo); err != nil {
+				klog.Errorf("Failed to update GPUNode status: %v", err)
+			}
+		},
+	}
+}
+
+func (b *KubeletBackend) ListWorkers() []*api.WorkerInfo {
+	b.workersMu.RLock()
+	defer b.workersMu.RUnlock()
+	return lo.Values(b.workers)
+}
+
+func (b *KubeletBackend) mutateGPUResourceState(device *api.DeviceInfo, gpuNode *tfv1.GPUNode, gpu *tfv1.GPU) error {
+	// Set metadata fields
+	gpu.Labels = map[string]string{
+		constants.LabelKeyOwner: gpuNode.Name,
+		constants.GpuPoolKey:    gpuNode.OwnerReferences[0].Name,
+	}
+	gpu.Annotations = map[string]string{
+		constants.LastSyncTimeAnnotationKey: time.Now().Format(time.RFC3339),
+	}
+
+	if !metav1.IsControlledBy(gpu, gpuNode) {
+		// Create a new controller ref.
+		gvk, err := apiutil.GVKForObject(gpuNode, scheme)
+		if err != nil {
+			return err
+		}
+		ref := metav1.OwnerReference{
+			APIVersion:         gvk.GroupVersion().String(),
+			Kind:               gvk.Kind,
+			Name:               gpuNode.GetName(),
+			UID:                gpuNode.GetUID(),
+			BlockOwnerDeletion: ptr.To(true),
+			Controller:         ptr.To(true),
+		}
+		gpu.OwnerReferences = []metav1.OwnerReference{ref}
+	}
+
+	// Set status fields
+	gpu.Status.Capacity = &tfv1.Resource{
+		Vram:   resource.MustParse(fmt.Sprintf("%dMi", device.TotalMemoryBytes/1024/1024)),
+		Tflops: resource.MustParse(fmt.Sprintf("%f", device.MaxTflops)),
+	}
+	gpu.Status.UUID = device.UUID
+	gpu.Status.GPUModel = device.Model
+	gpu.Status.Index = ptr.To(device.Index)
+	gpu.Status.Vendor = device.Vendor
+	gpu.Status.NUMANode = ptr.To(device.NUMANode)
+	gpu.Status.NodeSelector = map[string]string{
+		constants.KubernetesHostNameLabel: b.nodeName,
+	}
+	if gpu.Status.Available == nil {
+		gpu.Status.Available = gpu.Status.Capacity.DeepCopy()
+	}
+	if gpu.Status.UsedBy == "" {
+		gpu.Status.UsedBy = tfv1.UsedByTensorFusion
+	}
+	if gpu.Status.Phase == "" {
+		gpu.Status.Phase = tfv1.TensorFusionGPUPhasePending
+	}
+	return nil
 }
