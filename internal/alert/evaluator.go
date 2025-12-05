@@ -108,7 +108,7 @@ func renderQueryTemplate(rule *config.AlertRule) (string, error) {
 	}
 
 	var buf bytes.Buffer
-	data := map[string]interface{}{
+	data := map[string]any{
 		"Threshold":  rule.Threshold,
 		"Conditions": fmt.Sprintf("ts >= now() - '%s'::INTERVAL", rule.EvaluationInterval),
 		"Severity":   rule.Severity,
@@ -169,8 +169,8 @@ func (e *AlertEvaluator) processQueryResults(rows *sql.Rows, rule *config.AlertR
 			return nil, fmt.Errorf("failed to get columns: %w", err)
 		}
 
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
+		values := make([]any, len(columns))
+		valuePtrs := make([]any, len(columns))
 		for i := range values {
 			valuePtrs[i] = &values[i]
 		}
@@ -178,7 +178,7 @@ func (e *AlertEvaluator) processQueryResults(rows *sql.Rows, rule *config.AlertR
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 
-		rowData := make(map[string]interface{})
+		rowData := make(map[string]any)
 		for i, col := range columns {
 			rowData[col] = values[i]
 		}

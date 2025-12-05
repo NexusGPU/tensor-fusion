@@ -74,6 +74,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			_ = r.Expander.RemovePreSchedulePod(req.Name, true)
 			r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
 			metrics.RemoveWorkerMetrics(req.Name, time.Now())
+			r.IndexAllocator.RemoveNodeIndexQueueForPod(req.NamespacedName)
 			log.Info("Released GPU resources when pod deleted", "pod", req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
@@ -113,7 +114,12 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 	}
 
+	if utils.IsPodStopped(pod) {
+		r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
+	}
+
 	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
+		r.IndexAllocator.ReconcileLockState(pod)
 		if pod.DeletionTimestamp.IsZero() {
 			metrics.SetWorkerMetricsByWorkload(pod)
 		}

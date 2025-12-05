@@ -75,8 +75,8 @@ func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 
 	metrics, exists := workerMetrics[workerID]
 	if !exists || metrics == nil {
-		c.JSON(http.StatusOK, api.DataResponse[map[string]interface{}]{
-			Data: map[string]interface{}{
+		c.JSON(http.StatusOK, api.DataResponse[map[string]any]{
+			Data: map[string]any{
 				"worker_uid": workerID,
 				"allocation": allocation,
 			},
