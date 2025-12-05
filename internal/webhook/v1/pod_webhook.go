@@ -79,6 +79,8 @@ type TensorFusionPodMutator struct {
 }
 
 // Handle implements admission.Handler interface.
+//
+//nolint:gocyclo
 func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	pod := &corev1.Pod{}
 	if err := m.decoder.Decode(req, pod); err != nil {
