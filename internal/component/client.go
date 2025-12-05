@@ -13,7 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-const (
+var (
 	ClientUpdateInProgressAnnotation    = constants.Domain + "/client-update-in-progress"
 	ClientBatchUpdateLastTimeAnnotation = constants.Domain + "/client-batch-update-last-time"
 )
@@ -23,7 +23,7 @@ type Client struct {
 }
 
 func (c *Client) GetName() string {
-	return "client"
+	return constants.ComponentClient
 }
 
 func (c *Client) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string) {

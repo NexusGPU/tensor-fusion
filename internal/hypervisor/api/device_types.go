@@ -17,6 +17,7 @@ limitations under the License.
 package api
 
 // DeviceInfo represents discovered GPU device information
+// +k8s:deepcopy-gen=true
 type DeviceInfo struct {
 	UUID             string
 	Vendor           string
@@ -39,7 +40,23 @@ type DeviceInfo struct {
 	DeviceEnv map[string]string
 }
 
+type NodeInfo struct {
+	// Extra metadata for centralized management
+	RAMSizeBytes  int64
+	DataDiskBytes int64
+
+	// Aggregated info of whole Node
+	TotalTFlops    float64
+	TotalVRAMBytes int64
+	DeviceIDs      []string
+
+	// TODO: discover and merge extra devices and topology info like:
+	// Nvlink/IB NICs, etc.
+	// CXL available or not, PCIe generation etc.
+}
+
 // DeviceCapabilities represents device capabilities
+// +k8s:deepcopy-gen=true
 type DeviceCapabilities struct {
 	SupportsPartitioning  bool
 	SupportsSoftIsolation bool
@@ -66,6 +83,7 @@ type MemoryUtilization struct {
 }
 
 // GPUUsageMetrics represents GPU device metrics
+// +k8s:deepcopy-gen=true
 type GPUUsageMetrics struct {
 	DeviceUUID        string
 	MemoryBytes       uint64
@@ -80,6 +98,7 @@ type GPUUsageMetrics struct {
 }
 
 // WorkerMetrics represents worker process metrics on a device
+// +k8s:deepcopy-gen=true
 type WorkerMetrics struct {
 	DeviceUUID        string
 	WorkerUID         string

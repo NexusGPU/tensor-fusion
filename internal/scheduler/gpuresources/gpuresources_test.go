@@ -34,6 +34,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	internalcache "k8s.io/kubernetes/pkg/scheduler/backend/cache"
 	internalqueue "k8s.io/kubernetes/pkg/scheduler/backend/queue"
@@ -41,12 +42,13 @@ import (
 
 type GPUResourcesSuite struct {
 	suite.Suite
-	client    client.Client
-	fwk       framework.Framework
-	allocator *gpuallocator.GpuAllocator
-	plugin    *GPUFit
-	ctx       context.Context
-	cancel    context.CancelFunc
+	client         client.Client
+	fwk            framework.Framework
+	allocator      *gpuallocator.GpuAllocator
+	indexAllocator *indexallocator.IndexAllocator
+	plugin         *GPUFit
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 func (s *GPUResourcesSuite) SetupTest() {
@@ -169,7 +171,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 			Status: tfv1.GPUStatus{
 				Phase:        tfv1.TensorFusionGPUPhaseRunning,
 				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-c"},
-				UsedBy:       tfv1.UsedByNvidiaDevicePlugin,
+				UsedBy:       "nvidia-device-plugin",
 				Capacity: &tfv1.Resource{
 					Tflops: resource.MustParse("2000"),
 					Vram:   resource.MustParse("40Gi"),
@@ -263,7 +265,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 	s.allocator.ReconcileAllocationState()
 	s.allocator.SetAllocatorReady()
 
-	pluginFactory := NewWithDeps(s.allocator, s.client)
+	pluginFactory := NewWithDeps(s.allocator, s.indexAllocator, s.client)
 	pluginConfig := &runtime.Unknown{
 		Raw: []byte(`{
 			"maxWorkerPerNode": 3,
@@ -597,7 +599,7 @@ func (s *GPUResourcesSuite) makePod(name string, annotations map[string]string) 
 
 func (s *GPUResourcesSuite) TestNewWithDeps() {
 	log.FromContext(s.ctx).Info("Running TestNewWithDeps")
-	pluginFactory := NewWithDeps(s.allocator, s.client)
+	pluginFactory := NewWithDeps(s.allocator, s.indexAllocator, s.client)
 	s.NotNil(pluginFactory)
 
 	// Test with valid config

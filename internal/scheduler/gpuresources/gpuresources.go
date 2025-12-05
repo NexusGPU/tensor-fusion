@@ -13,6 +13,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/quota"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -42,12 +43,13 @@ var _ framework.PostBindPlugin = &GPUFit{}
 var _ framework.EnqueueExtensions = &GPUFit{}
 
 type GPUFit struct {
-	logger    *klog.Logger
-	fh        framework.Handle
-	client    client.Client
-	allocator *gpuallocator.GpuAllocator
-	ctx       context.Context
-	cfg       *config.GPUFitConfig
+	logger         *klog.Logger
+	fh             framework.Handle
+	client         client.Client
+	allocator      *gpuallocator.GpuAllocator
+	indexAllocator *indexallocator.IndexAllocator
+	ctx            context.Context
+	cfg            *config.GPUFitConfig
 }
 
 type GPUSchedulingStateData struct {
@@ -80,7 +82,7 @@ func (p *GPUSchedulingStateData) Clone() fwk.StateData {
 
 type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
 
-func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) PluginFactoryFunc {
+func NewWithDeps(allocator *gpuallocator.GpuAllocator, indexAllocator *indexallocator.IndexAllocator, client client.Client) PluginFactoryFunc {
 	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 		target := &config.GPUFitConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
@@ -91,12 +93,13 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) Plu
 		lh := klog.FromContext(ctx).WithValues("plugin", Name)
 		lh.Info("Creating new GPUFit plugin")
 		c := &GPUFit{
-			logger:    &lh,
-			fh:        handle,
-			cfg:       target,
-			allocator: allocator,
-			ctx:       ctx,
-			client:    client,
+			logger:         &lh,
+			fh:             handle,
+			cfg:            target,
+			allocator:      allocator,
+			indexAllocator: indexAllocator,
+			ctx:            ctx,
+			client:         client,
 		}
 		lh.Info("Created new GPUFit plugin", "plugin", c)
 
@@ -499,8 +502,7 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 		return
 	}
 
-	// TODO: check if this index is available (all same index pods already contain allocated annotation), if not, use a go routine to wait signal to assign it asynchronously until available
-	// add event on Pod to track signal waiting process
+	indexAvailable := s.indexAllocator.CheckNodeIndexAvailableForPod(pod, index)
 
 	// Build patch operations
 	patchOps := []map[string]any{
@@ -509,11 +511,19 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation),
 			"value": gpuIDs,
 		},
-		{
+	}
+	if indexAvailable {
+		patchOps = append(patchOps, map[string]interface{}{
 			"op":    "add",
 			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PodIndexAnnotation),
 			"value": index,
-		},
+		})
+	} else {
+		s.logger.Info("Index is not available on node, spawn a goroutine to patch it asynchronously", "pod", pod.Name, "node", nodeName, "index", index)
+		// spawn a goroutine to patch
+		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "PodIndexAllocationPending", "Pod index allocation pending",
+			fmt.Sprintf("Index %d will be patched into pod after released by other pod on the same node: %s", index, nodeName))
+		s.indexAllocator.CheckNodeIndexAvailableAndAssign(pod, index)
 	}
 
 	// Add partition template ID annotation if in partitioned mode

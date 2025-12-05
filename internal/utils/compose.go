@@ -554,7 +554,7 @@ func composeHypervisorInitContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, compat
 	spec.InitContainers = append(spec.InitContainers, v1.Container{
 		Name:    "init-shm",
 		Image:   pool.Spec.ComponentConfig.Hypervisor.Image,
-		Command: []string{"hypervisor", "mount-shm"},
+		Command: []string{constants.ComponentHypervisor, constants.MountShmSubcommand},
 		SecurityContext: &v1.SecurityContext{
 			Privileged: ptr.To(true),
 		},

@@ -23,14 +23,15 @@ import (
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
 	workerstate "github.com/NexusGPU/tensor-fusion/internal/hypervisor/worker/state"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
-const (
-	shmBasePath = constants.TFDataPath + constants.SharedMemMountSubPath
+var (
+	shmBasePath = filepath.Join(constants.TFDataPath, constants.SharedMemMountSubPath)
 )
 
 // ShmDialogModel represents the shared memory detail dialog
@@ -40,7 +41,7 @@ type ShmDialogModel struct {
 	width      int
 	height     int
 	isVisible  bool
-	workerInfo *WorkerInfo
+	workerInfo *api.WorkerInfo
 }
 
 // NewShmDialogModel creates a new SHM dialog model
@@ -115,7 +116,7 @@ func (m *ShmDialogModel) View() string {
 }
 
 // Show displays the dialog with SHM details for the given worker
-func (m *ShmDialogModel) Show(workerInfo *WorkerInfo) {
+func (m *ShmDialogModel) Show(workerInfo *api.WorkerInfo) {
 	m.workerInfo = workerInfo
 	m.isVisible = true
 	m.resize()
@@ -167,7 +168,7 @@ func (m *ShmDialogModel) updateContent() {
 	content.WriteString(TitleStyle.Render("Shared Memory Details\n\n"))
 
 	// Construct pod identifier and path
-	podIdentifier := workerstate.NewPodIdentifier(m.workerInfo.Namespace, m.workerInfo.PodName)
+	podIdentifier := workerstate.NewPodIdentifier(m.workerInfo.Namespace, m.workerInfo.WorkerName)
 	podPath := podIdentifier.ToPath(shmBasePath)
 	shmPath := filepath.Join(podPath, workerstate.ShmPathSuffix)
 

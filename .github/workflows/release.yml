@@ -127,3 +127,5 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           no-cache: true
+          build-args: |
+            GO_LDFLAGS=-X 'github.com/NexusGPU/tensor-fusion/internal/version.BuildVersion=${{ needs.release.outputs.version }}'

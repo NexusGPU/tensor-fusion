@@ -46,9 +46,9 @@ func (h *WorkerHandler) HandleGetWorkers(c *gin.Context) {
 
 	// Get worker details
 	workerDetails := make([]*api.WorkerAllocation, 0, len(workers))
-	for _, workerUID := range workers {
-		allocation, err := h.workerController.GetWorkerAllocation(workerUID)
-		if err != nil {
+	for _, worker := range workers {
+		allocation, exists := h.workerController.GetWorkerAllocation(worker.WorkerUID)
+		if !exists || allocation == nil {
 			continue
 		}
 		workerDetails = append(workerDetails, allocation)
@@ -60,19 +60,21 @@ func (h *WorkerHandler) HandleGetWorkers(c *gin.Context) {
 // HandleGetWorker handles GET /api/v1/workers/:id
 func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 	workerID := c.Param("id")
-	allocation, err := h.workerController.GetWorkerAllocation(workerID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, api.ErrorResponse{Error: err.Error()})
-		return
-	}
-	if allocation == nil {
+	allocation, exists := h.workerController.GetWorkerAllocation(workerID)
+	if !exists || allocation == nil {
 		c.JSON(http.StatusNotFound, api.ErrorResponse{Error: "worker not found"})
 		return
 	}
 
 	// Get worker metrics
-	metrics, err := h.workerController.GetWorkerMetrics()
+	workerMetrics, err := h.workerController.GetWorkerMetrics()
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	metrics, exists := workerMetrics[workerID]
+	if !exists || metrics == nil {
 		c.JSON(http.StatusOK, api.DataResponse[map[string]interface{}]{
 			Data: map[string]interface{}{
 				"worker_uid": workerID,
@@ -81,34 +83,7 @@ func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 		})
 		return
 	}
-
-	// Filter metrics for this worker
-	workerMetrics := make(map[string]map[string]map[string]*api.WorkerMetrics)
-	// Get metrics for all devices in the allocation
-	for _, device := range allocation.DeviceInfos {
-		if allMetrics, exists := metrics[device.UUID]; exists {
-			if wm, exists := allMetrics[workerID]; exists {
-				if workerMetrics[device.UUID] == nil {
-					workerMetrics[device.UUID] = make(map[string]map[string]*api.WorkerMetrics)
-				}
-				workerMetrics[device.UUID][workerID] = wm
-			}
-		}
-	}
-
-	type WorkerDetail struct {
-		WorkerUID  string                                              `json:"worker_uid"`
-		Allocation *api.WorkerAllocation                               `json:"allocation"`
-		Metrics    map[string]map[string]map[string]*api.WorkerMetrics `json:"metrics,omitempty"`
-	}
-
-	c.JSON(http.StatusOK, api.DataResponse[WorkerDetail]{
-		Data: WorkerDetail{
-			WorkerUID:  workerID,
-			Allocation: allocation,
-			Metrics:    workerMetrics,
-		},
-	})
+	// TODO
 }
 
 // HandleSnapshotWorker handles POST /api/v1/workers/:id/snapshot

@@ -6,20 +6,20 @@ metadata:
 spec:
   requirements: []
   capacity:
-    tensor-fusion.ai/index_0: 28
-    tensor-fusion.ai/index_1: 28
-    tensor-fusion.ai/index_2: 28
-    tensor-fusion.ai/index_3: 28
-    tensor-fusion.ai/index_4: 28
-    tensor-fusion.ai/index_5: 28
-    tensor-fusion.ai/index_6: 28
-    tensor-fusion.ai/index_7: 28
-    tensor-fusion.ai/index_8: 28
-    tensor-fusion.ai/index_9: 28
-    tensor-fusion.ai/index_a: 28
-    tensor-fusion.ai/index_b: 28
-    tensor-fusion.ai/index_c: 28
-    tensor-fusion.ai/index_d: 28
-    tensor-fusion.ai/index_e: 28
-    tensor-fusion.ai/index_f: 28
+    tensor-fusion.ai/index_0: 36
+    tensor-fusion.ai/index_1: 36
+    tensor-fusion.ai/index_2: 36
+    tensor-fusion.ai/index_3: 36
+    tensor-fusion.ai/index_4: 36
+    tensor-fusion.ai/index_5: 36
+    tensor-fusion.ai/index_6: 36
+    tensor-fusion.ai/index_7: 36
+    tensor-fusion.ai/index_8: 36
+    tensor-fusion.ai/index_9: 36
+    tensor-fusion.ai/index_a: 36
+    tensor-fusion.ai/index_b: 36
+    tensor-fusion.ai/index_c: 36
+    tensor-fusion.ai/index_d: 36
+    tensor-fusion.ai/index_e: 36
+    tensor-fusion.ai/index_f: 36
 {{- end }}

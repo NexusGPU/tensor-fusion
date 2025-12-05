@@ -166,6 +166,10 @@ func IsPodStopped(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded
 }
 
+func IsPodRunning(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodRunning
+}
+
 func ExtractPoolNameFromNodeLabel(node *tfv1.GPUNode) string {
 	var poolName string
 	for labelKey := range node.Labels {

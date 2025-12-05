@@ -1,31 +1,53 @@
 package api
 
 import (
-	"time"
-
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
 // IsolationMode represents the isolation mode for worker processes
 type IsolationMode = tfv1.IsolationModeType
 
+// +k8s:deepcopy-gen=true
 type WorkerInfo struct {
-	WorkerUID         string
-	AllocatedDevices  []string
-	Status            string
-	PodUID            string
-	PodName           string
-	Namespace         string
-	IsolationMode     IsolationMode
-	MemoryLimitBytes  uint64
-	ComputeLimitUnits uint32
-	TemplateID        string
-	Annotations       map[string]string
-	PodIndex          string
+	WorkerUID        string
+	Namespace        string
+	WorkerName       string
+	AllocatedDevices []string
+	Status           WorkerStatus
 
-	DeletedAt time.Time
+	QoS           tfv1.QoSLevel
+	IsolationMode IsolationMode
+
+	Requests tfv1.Resource
+	Limits   tfv1.Resource
+
+	WorkloadName      string
+	WorkloadNamespace string
+
+	// Only set for partitioned mode
+	PartitionTemplateID string
+
+	// Extra information from backend
+	Labels      map[string]string
+	Annotations map[string]string
+
+	DeletedAt int64
 }
 
+func (w *WorkerInfo) FilterValue() string {
+	return w.WorkerUID + " " + w.WorkerName + " " + w.Namespace
+}
+
+type WorkerStatus string
+
+const (
+	WorkerStatusPending          WorkerStatus = "Pending"
+	WorkerStatusDeviceAllocating WorkerStatus = "DeviceAllocating"
+	WorkerStatusRunning          WorkerStatus = "Running"
+	WorkerStatusTerminated       WorkerStatus = "Terminated"
+)
+
+// +k8s:deepcopy-gen=true
 type WorkerAllocation struct {
 	WorkerInfo *WorkerInfo
 
@@ -40,6 +62,7 @@ type WorkerAllocation struct {
 }
 
 // DeviceSpec specifies a host device to mount into a container.
+// +k8s:deepcopy-gen=true
 type DeviceSpec struct {
 	GuestPath string `json:"guestPath,omitempty"`
 
@@ -50,6 +73,7 @@ type DeviceSpec struct {
 
 // Mount specifies a host volume to mount into a container.
 // where device library or tools are installed on host and container
+// +k8s:deepcopy-gen=true
 type Mount struct {
 	GuestPath string `json:"guestPath,omitempty"`
 

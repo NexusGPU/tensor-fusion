@@ -28,6 +28,7 @@ type ErrorResponse struct {
 }
 
 // DataResponse is a generic response wrapper for data-only responses
+// +k8s:deepcopy-gen=false
 type DataResponse[T any] struct {
 	Data T `json:"data"`
 }
@@ -65,12 +66,12 @@ type TrapResponse struct {
 
 // PodInfo represents pod information for the /api/v1/pod endpoint (used in legacy.go)
 type PodInfo struct {
-	PodName     string   `json:"pod_name"`
-	Namespace   string   `json:"namespace"`
-	GPUIDs      []string `json:"gpu_uuids"`
-	TflopsLimit *float64 `json:"tflops_limit,omitempty"`
-	VramLimit   *uint64  `json:"vram_limit,omitempty"`
-	QoSLevel    *string  `json:"qos_level,omitempty"`
+	PodName     string        `json:"pod_name"`
+	Namespace   string        `json:"namespace"`
+	GPUIDs      []string      `json:"gpu_uuids"`
+	TflopsLimit *float64      `json:"tflops_limit,omitempty"`
+	VramLimit   *uint64       `json:"vram_limit,omitempty"`
+	QoSLevel    tfv1.QoSLevel `json:"qos_level,omitempty"`
 }
 
 // ListPodsResponse represents the response from GET /api/v1/pod (used in legacy.go)

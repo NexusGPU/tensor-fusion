@@ -16,6 +16,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/quota"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -123,11 +124,12 @@ type GpuAllocator struct {
 	nodeGpuStore    map[string]map[string]*tfv1.GPU
 	poolGpuStore    map[string]map[string]*tfv1.GPU
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{}
-	storeMutex      sync.RWMutex
-	allocateMutex   sync.Mutex
-	syncInterval    time.Duration
-	cancel          context.CancelFunc
-	ctx             context.Context
+
+	storeMutex    sync.RWMutex
+	allocateMutex sync.Mutex
+	syncInterval  time.Duration
+	cancel        context.CancelFunc
+	ctx           context.Context
 
 	// Queue for tracking modified GPUs that need to be synced
 	dirtyQueue     map[types.NamespacedName]struct{}
@@ -144,7 +146,8 @@ type GpuAllocator struct {
 	reconcileWorkerOnce sync.Once
 	initializedCh       chan struct{}
 
-	bindHandlers []func(req *tfv1.AllocRequest)
+	bindHandlers   []func(req *tfv1.AllocRequest)
+	indexAllocator *indexallocator.IndexAllocator
 }
 
 func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval time.Duration) *GpuAllocator {
@@ -1113,6 +1116,7 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 }
 
 func (s *GpuAllocator) SetAllocatorReady() {
+	s.indexAllocator.SetReady()
 	close(s.initializedCh)
 }
 

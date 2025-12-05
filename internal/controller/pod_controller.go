@@ -25,6 +25,8 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/framework"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
@@ -47,10 +49,11 @@ import (
 // PodReconciler reconciles a Pod object
 type PodReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	Allocator     *gpuallocator.GpuAllocator
-	PortAllocator *portallocator.PortAllocator
-	Expander      *expander.NodeExpander
+	Scheme         *runtime.Scheme
+	Allocator      *gpuallocator.GpuAllocator
+	PortAllocator  *portallocator.PortAllocator
+	Expander       *expander.NodeExpander
+	IndexAllocator *indexallocator.IndexAllocator
 }
 
 // +kubebuilder:rbac:groups=core,resources=endpoints,verbs=create
@@ -257,6 +260,10 @@ func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&corev1.Pod{}, builder.WithPredicates(p)).
 		Named("pod").
 		Complete(r)
+}
+
+func (r *PodReconciler) RegisterBackendWorkerChangeHandler(handler framework.WorkerChangeHandler) {
+
 }
 
 // findConnectionNameNamespace extracts the connection name and namespace from the container's environment variables

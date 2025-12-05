@@ -30,9 +30,6 @@ type GPUStatus struct {
 	// +kubebuilder:default="NVIDIA"
 	Vendor string `json:"vendor"`
 
-	// +optional
-	Model string `json:"model,omitempty"`
-
 	Capacity  *Resource `json:"capacity"`
 	Available *Resource `json:"available"`
 
@@ -77,13 +74,11 @@ type GPUStatus struct {
 	AllocatedPartitions map[string]AllocatedPartition `json:"allocatedPartitions,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=tensor-fusion;nvidia-device-plugin
 // +default="tensor-fusion"
 type UsedBySystem string
 
-const (
-	UsedByTensorFusion       UsedBySystem = "tensor-fusion"
-	UsedByNvidiaDevicePlugin UsedBySystem = "nvidia-device-plugin"
+var (
+	UsedByTensorFusion UsedBySystem = UsedBySystem(constants.Domain)
 )
 
 type RunningAppDetail struct {

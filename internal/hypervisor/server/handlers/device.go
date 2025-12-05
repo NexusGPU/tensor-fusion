@@ -49,9 +49,9 @@ func (h *DeviceHandler) HandleGetDevices(c *gin.Context) {
 // HandleGetDevice handles GET /api/v1/devices/:uuid
 func (h *DeviceHandler) HandleGetDevice(c *gin.Context) {
 	uuid := c.Param("uuid")
-	device, err := h.deviceController.GetDevice(uuid)
-	if err != nil {
-		c.JSON(http.StatusNotFound, api.ErrorResponse{Error: err.Error()})
+	device, exists := h.deviceController.GetDevice(uuid)
+	if !exists {
+		c.JSON(http.StatusNotFound, api.ErrorResponse{Error: "Device not found"})
 		return
 	}
 	c.JSON(http.StatusOK, api.DataResponse[*api.DeviceInfo]{Data: device})

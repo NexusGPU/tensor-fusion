@@ -241,7 +241,7 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 		// Call worker controller to allocate
 		allocResp, err := dp.workerController.AllocateWorkerDevices(workerInfo)
 		if err != nil {
-			return nil, fmt.Errorf("failed to allocate devices for worker %s %s: %w", workerInfo.PodName, workerInfo.WorkerUID, err)
+			return nil, fmt.Errorf("failed to allocate devices for worker %s %s: %w", workerInfo.WorkerName, workerInfo.WorkerUID, err)
 		}
 
 		containerResp := &pluginapi.ContainerAllocateResponse{
