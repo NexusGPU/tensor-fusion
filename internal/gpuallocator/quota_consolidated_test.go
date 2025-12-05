@@ -576,7 +576,7 @@ var _ = Describe("GPUAllocator Quota Deallocation", func() {
 			Build()
 
 		ctx := context.Background()
-		allocator := NewGpuAllocator(ctx, client, 0)
+		allocator := NewGpuAllocator(ctx, nil, client, 0)
 
 		initAllocator(allocator)
 
