@@ -1,13 +1,34 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
 
 type GlobalConfig struct {
 	MetricsTTL            string            `yaml:"metricsTTL"`
 	MetricsFormat         string            `yaml:"metricsFormat"`
 	MetricsExtraPodLabels map[string]string `yaml:"metricsExtraPodLabels"`
 
-	AlertRules []AlertRule `yaml:"alertRules"`
+	AlertRules    []AlertRule          `yaml:"alertRules"`
+	AutoMigration *AutoMigrationConfig `yaml:"autoMigration"`
+}
+
+type AutoMigrationConfig struct {
+	Enable bool                `yaml:"enable"`
+	Scope  *AutoMigrationScope `yaml:"scope"`
+}
+
+type AutoMigrationScope struct {
+	Includes *AutoMigrationRules `yaml:"includes"`
+	Excludes *AutoMigrationRules `yaml:"excludes"`
+}
+
+type AutoMigrationRules struct {
+	NamespaceNames    []string              `yaml:"namespaceNames"`
+	NamespaceSelector *metav1.LabelSelector `yaml:"namespaceSelector"`
+	PodSelector       *metav1.LabelSelector `yaml:"podSelector"`
 }
 
 var globalConfig *GlobalConfig
