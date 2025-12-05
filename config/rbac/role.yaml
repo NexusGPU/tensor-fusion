@@ -126,6 +126,12 @@ rules:
   - update
   - watch
 - apiGroups:
+  - karpenter.sh
+  resources:
+  - '*'
+  verbs:
+  - '*'
+- apiGroups:
   - tensor-fusion.ai
   resources:
   - gpunodeclaims

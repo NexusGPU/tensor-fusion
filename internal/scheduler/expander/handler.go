@@ -125,7 +125,7 @@ func (e *NodeExpander) GetNodeScalerInfo() any {
 	defer e.mu.RUnlock()
 
 	inFlightNodeClaimSnapshot := make(map[string]any)
-	e.inFlightNodeClaims.Range(func(key, value interface{}) bool {
+	e.inFlightNodeClaims.Range(func(key, value any) bool {
 		inFlightNodeClaimSnapshot[key.(string)] = value
 		return true
 	})
@@ -155,15 +155,15 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	gpuNodesPassedOtherFilters, err := e.simulateSchedulingWithoutGPU(ctx, pod)
 	if err != nil {
 		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
-			"can not schedule on any nodes even without GPU constraints, manual check required. error: %w", err)
-		e.logger.Info("Pod schedulable but no GPU nodes available, manual check required",
+			"can not schedule on any nodes even without GPU constraints, karpenter should take over expansion. error: %w", err)
+		e.logger.Info("Pod schedulable but no GPU nodes available, karpenter should take over expansion",
 			"namespace", pod.Namespace, "pod", pod.Name, "error", err)
 		return nil
 	}
 	if len(gpuNodesPassedOtherFilters) == 0 {
 		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
-			"can not schedule on any nodes, manual check required, 0 fit nodes")
-		e.logger.Info("Pod schedulable but no GPU nodes available, manual check required",
+			"can not schedule on any nodes even without GPU constraints, karpenter should take over expansion, 0 fit nodes")
+		e.logger.Info("Pod schedulable but no GPU nodes available, karpenter should take over expansion",
 			"namespace", pod.Namespace, "pod", pod.Name)
 		return nil
 	}
@@ -417,7 +417,7 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 	// Get allocation request
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	allocRequest, _, err := e.allocator.ComposeAllocationRequest(pod)
+	allocRequest, _, err := utils.ComposeAllocationRequest(e.ctx, pod)
 	if err != nil {
 		return nil, false, true, false
 	}
@@ -468,7 +468,7 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 }
 
 func (e *NodeExpander) checkGPUFitForNewNode(pod *corev1.Pod, gpus []*tfv1.GPU) bool {
-	allocRequest, _, err := e.allocator.ComposeAllocationRequest(pod)
+	allocRequest, _, err := utils.ComposeAllocationRequest(e.ctx, pod)
 	if err != nil {
 		return false
 	}

@@ -51,11 +51,11 @@ type OtelStrategy struct {
 
 // otelMetric represents a single OTLP metric point with all its associated data
 type otelMetric struct {
-	name       string                 // Metric name
-	attributes []attribute.KeyValue   // OpenTelemetry attributes (tags)
-	value      interface{}            // Primary metric value
-	timestamp  time.Time              // Metric timestamp
-	fields     map[string]interface{} // All field values
+	name       string               // Metric name
+	attributes []attribute.KeyValue // OpenTelemetry attributes (tags)
+	value      any                  // Primary metric value
+	timestamp  time.Time            // Metric timestamp
+	fields     map[string]any       // All field values
 }
 
 // NewOtelStrategy creates a new optimized OTEL strategy with pre-allocated slices
@@ -72,7 +72,7 @@ func (s *OtelStrategy) StartLine(measurement string) {
 	s.currentMetric = &otelMetric{
 		name:       measurement,
 		attributes: make([]attribute.KeyValue, 0, defaultAttributeCapacity),
-		fields:     make(map[string]interface{}, defaultFieldCapacity),
+		fields:     make(map[string]any, defaultFieldCapacity),
 	}
 }
 
@@ -205,7 +205,7 @@ func (s *OtelStrategy) writeAttribute(attr attribute.KeyValue) {
 }
 
 // writeTimestampsAndValue writes timestamp fields and the metric value
-func (s *OtelStrategy) writeTimestampsAndValue(timestamp time.Time, value interface{}) {
+func (s *OtelStrategy) writeTimestampsAndValue(timestamp time.Time, value any) {
 	timestampNanos := strconv.FormatInt(timestamp.UnixNano(), 10)
 	s.buffer.WriteString(timestampStart)
 	s.buffer.WriteString(timestampNanos)
@@ -218,7 +218,7 @@ func (s *OtelStrategy) writeTimestampsAndValue(timestamp time.Time, value interf
 
 // writeFieldMetricJSON writes a field metric in OTLP JSON format.
 // Field metrics have names suffixed with the field key (e.g., "cpu_usage_percent").
-func (s *OtelStrategy) writeFieldMetricJSON(metric *otelMetric, fieldKey string, fieldValue interface{}) {
+func (s *OtelStrategy) writeFieldMetricJSON(metric *otelMetric, fieldKey string, fieldValue any) {
 	// Write metric name with field suffix
 	s.buffer.WriteString(metricStart)
 	s.buffer.WriteString(metric.name)
@@ -237,7 +237,7 @@ func (s *OtelStrategy) writeFieldMetricJSON(metric *otelMetric, fieldKey string,
 
 // writeValueJSON writes a value in the appropriate OTLP format.
 // Integer types use "asInt" field, floating point types use "asDouble" field.
-func (s *OtelStrategy) writeValueJSON(value interface{}) {
+func (s *OtelStrategy) writeValueJSON(value any) {
 	switch v := value.(type) {
 	// Integer types - all use "asInt" with string values in OTLP
 	case int:

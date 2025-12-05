@@ -21,15 +21,18 @@
             ]
         },
         {
-            "name": "Debug Discovery",
+            "name": "Debug Hypervisor",
             "type": "go",
             "request": "launch",
             "mode": "auto",
+            "console": "integratedTerminal",
             "env": {
-                "HOSTNAME": "mocknode",
-                "KUBECONFIG": "~/.kube/config",
+                "KUBECONFIG": "~/.kube/config-local-studio",
+                "HYPERVISOR_PORT": "8042",
+                "GPU_NODE_NAME": "ubuntu",
             },
-            "program": "${workspaceFolder}/cmd/nodediscovery/main.go",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/cmd/hypervisor/main.go",
         },
         {
             "name": "Debug Dev Env Operator",
@@ -62,7 +65,8 @@
                 "ENABLE_WEBHOOKS": "false",
                 "ENABLE_SCHEDULER": "true",
                 "ENABLE_CR_CONTROLLER": "true",
-                "NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION": "true"
+                "NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION": "true",
+                "IMPERSONATE_SERVICE_ACCOUNT": "system:serviceaccount:tensor-fusion-sys:tensor-fusion-sys"
             },
             "args": [
                 "--metrics-path", "${workspaceFolder}/logs/metrics.log",

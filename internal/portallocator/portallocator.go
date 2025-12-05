@@ -15,10 +15,8 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
@@ -115,25 +113,6 @@ func (s *PortAllocator) SetupWithManager(ctx context.Context, mgr manager.Manage
 	_ = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		<-mgr.Elected()
 		s.IsLeader = true
-		leaderInfo := &v1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      constants.LeaderInfoConfigMapName,
-				Namespace: utils.CurrentNamespace(),
-			},
-		}
-		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-			_, err := controllerutil.CreateOrUpdate(ctx, s.Client, leaderInfo, func() error {
-				leaderInfo.Data = map[string]string{
-					constants.LeaderInfoConfigMapLeaderIPKey: utils.CurrentIP(),
-				}
-				return nil
-			})
-			return err
-		})
-		if err != nil {
-			log.FromContext(ctx).Error(err, "Failed to update leader IP info in ConfigMap")
-		}
-
 		s.storeMutexNode.Lock()
 		s.storeMutexCluster.Lock()
 		defer s.storeMutexNode.Unlock()

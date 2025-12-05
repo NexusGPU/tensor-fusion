@@ -20,9 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
-	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -47,6 +45,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/version"
 	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -56,11 +56,13 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	"k8s.io/kubernetes/pkg/scheduler"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -189,7 +191,7 @@ func main() {
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
-	normalizeKubeConfigEnv()
+	utils.NormalizeKubeConfigEnv()
 	kc := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(kc, ctrl.Options{
 		Scheme:                  scheme,
@@ -233,9 +235,6 @@ func main() {
 
 	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, gpuPricingMap)
 
-	// Initialize GPU allocator and set up watches
-	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr)
-
 	// Initialize Index allocator for Device Plugin communication
 	indexAllocator, err := indexallocator.NewIndexAllocator(ctx, mgr.GetClient())
 	if err != nil {
@@ -244,15 +243,20 @@ func main() {
 	}
 	_ = indexAllocator.SetupWithManager(ctx, mgr)
 
+	// Initialize GPU allocator and set up watches
+	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr, indexAllocator)
+
+	ensureLeaderInfoConfigMap(mgr)
+
 	startAutoScaler(mgr, allocator)
 
 	// Create pricing provider for webhook
 	pricingProvider := pricing.NewStaticPricingProvider()
 	startWebhook(mgr, portAllocator, indexAllocator, pricingProvider)
 
-	scheduler, nodeExpander := startScheduler(ctx, allocator, mgr, k8sVersion)
+	scheduler, nodeExpander := startScheduler(ctx, allocator, indexAllocator, mgr, k8sVersion)
 
-	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator, nodeExpander)
+	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator, indexAllocator, nodeExpander)
 
 	startHttpServerForTFClient(ctx, kc, portAllocator, indexAllocator, allocator, scheduler, nodeExpander, mgr.Elected())
 
@@ -282,8 +286,9 @@ func addHealthCheckAPI(mgr manager.Manager) {
 func startTensorFusionAllocators(
 	ctx context.Context,
 	mgr manager.Manager,
+	indexAllocator *indexallocator.IndexAllocator,
 ) (*gpuallocator.GpuAllocator, *portallocator.PortAllocator) {
-	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 10*time.Second)
+	allocator := gpuallocator.NewGpuAllocator(ctx, indexAllocator, mgr.GetClient(), 10*time.Second)
 	if err := allocator.SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to set up GPU allocator watches")
 		os.Exit(1)
@@ -358,6 +363,7 @@ func startCustomResourceController(
 	metricsRecorder metrics.MetricsRecorder,
 	allocator *gpuallocator.GpuAllocator,
 	portAllocator *portallocator.PortAllocator,
+	indexAllocator *indexallocator.IndexAllocator,
 	nodeExpander *expander.NodeExpander,
 ) {
 	if os.Getenv(constants.EnableCustomResourceControllerEnv) == constants.FalseStringValue {
@@ -437,11 +443,12 @@ func startCustomResourceController(
 		os.Exit(1)
 	}
 	if err = (&controller.PodReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Allocator:     allocator,
-		PortAllocator: portAllocator,
-		Expander:      nodeExpander,
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Allocator:      allocator,
+		PortAllocator:  portAllocator,
+		Expander:       nodeExpander,
+		IndexAllocator: indexAllocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pod")
 		os.Exit(1)
@@ -511,6 +518,7 @@ func startWebhook(
 func startScheduler(
 	ctx context.Context,
 	allocator *gpuallocator.GpuAllocator,
+	indexAllocator *indexallocator.IndexAllocator,
 	mgr manager.Manager,
 	k8sVersion *k8sVer.Version,
 ) (*scheduler.Scheduler, *expander.NodeExpander) {
@@ -524,7 +532,7 @@ func startScheduler(
 
 	gpuResourceFitOpt := app.WithPlugin(
 		gpuResourceFitPlugin.Name,
-		gpuResourceFitPlugin.NewWithDeps(allocator, mgr.GetClient()),
+		gpuResourceFitPlugin.NewWithDeps(allocator, indexAllocator, mgr.GetClient()),
 	)
 	gpuTopoOpt := app.WithPlugin(
 		gpuTopoPlugin.Name,
@@ -688,19 +696,6 @@ func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, g
 	}()
 }
 
-// only for local development, won't set KUBECONFIG env var in none local environments
-func normalizeKubeConfigEnv() {
-	cfgPath := os.Getenv("KUBECONFIG")
-	if cfgPath != "" && strings.HasPrefix(cfgPath, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		_ = os.Setenv("KUBECONFIG", strings.Replace(cfgPath, "~", home, 1))
-	}
-}
-
 // Setup GreptimeDB connection
 func setupTimeSeriesDB() *metrics.TimeSeriesDB {
 	timeSeriesDB := &metrics.TimeSeriesDB{}
@@ -732,6 +727,35 @@ func addStopHandlers(mgr manager.Manager, allocator *gpuallocator.GpuAllocator) 
 	}))
 	if err != nil {
 		setupLog.Error(err, "unable to add allocator cleanup to manager")
+		os.Exit(1)
+	}
+}
+
+func ensureLeaderInfoConfigMap(mgr manager.Manager) {
+	err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		<-mgr.Elected()
+		leaderInfo := &v1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      constants.LeaderInfoConfigMapName,
+				Namespace: utils.CurrentNamespace(),
+			},
+		}
+		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			_, err := controllerutil.CreateOrUpdate(ctx, mgr.GetClient(), leaderInfo, func() error {
+				leaderInfo.Data = map[string]string{
+					constants.LeaderInfoConfigMapLeaderIPKey: utils.CurrentIP(),
+				}
+				return nil
+			})
+			return err
+		})
+		if err != nil {
+			setupLog.Error(err, "Failed to update leader IP info in ConfigMap")
+		}
+		return nil
+	}))
+	if err != nil {
+		setupLog.Error(err, "unable to add leader info config map to manager")
 		os.Exit(1)
 	}
 }

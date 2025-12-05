@@ -126,22 +126,22 @@ type AutoSetResources struct {
 	TargetResource string `json:"targetResource,omitempty"`
 
 	// Tflops usage percentile that will be used as a base for tflops target recommendation. Default: 0.9
-	TargetTflopsPercentile string `json:"targettflopspercentile,omitempty"`
+	TargetTflopsPercentile string `json:"targetTFlopsPercentile,omitempty"`
 
 	// Tflops usage percentile that will be used for the lower bound on tflops recommendation. Default: 0.5
-	LowerBoundTflopsPercentile string `json:"lowerboundtflopspercentile,omitempty"`
+	LowerBoundTflopsPercentile string `json:"lowerBoundTflopsPercentile,omitempty"`
 
 	// Tflops usage percentile that will be used for the upper bound on tflops recommendation. Default: 0.95
-	UpperBoundTflopsPercentile string `json:"upperboundtflopspercentile,omitempty"`
+	UpperBoundTflopsPercentile string `json:"upperBoundTflopsPercentile,omitempty"`
 
 	// Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.9
-	TargetVramPercentile string `json:"targetvrampercentile,omitempty"`
+	TargetVramPercentile string `json:"targetVramPercentile,omitempty"`
 
 	// Vram usage percentile that will be used for the lower bound on vram recommendation. Default: 0.5
-	LowerBoundVramPercentile string `json:"lowerboundvrampercentile,omitempty"`
+	LowerBoundVramPercentile string `json:"lowerBoundVramPercentile,omitempty"`
 
 	// Vram usage percentile that will be used for the upper bound on vram recommendation. Default: 0.95
-	UpperBoundVramPercentile string `json:"upperboundvrampercentile,omitempty"`
+	UpperBoundVramPercentile string `json:"upperBoundVramPercentile,omitempty"`
 
 	// Fraction of usage added as the safety margin to the recommended request. Default: 0.15
 	RequestMarginFraction string `json:"requestMarginFraction,omitempty"`

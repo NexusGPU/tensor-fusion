@@ -60,7 +60,7 @@ func (r *AlertRule) String() string {
 		r.Name, r.Query, r.Threshold, r.EvaluationInterval, r.ConsecutiveCount, r.Severity)
 }
 
-func (r *AlertRule) AddFiringAlertAndCheckResolved(alertQueryResult map[string]interface{}) (*PostableAlert, bool, string) {
+func (r *AlertRule) AddFiringAlertAndCheckResolved(alertQueryResult map[string]any) (*PostableAlert, bool, string) {
 	if r.FiringAlerts == nil {
 		r.FiringAlerts = make(map[string]*FiringAlertCache)
 	}
@@ -122,7 +122,7 @@ func (r *AlertRule) IsTestMode() bool {
 	return r.TestMode
 }
 
-func (r *AlertRule) toPostableAlert(alertQueryResult map[string]interface{}, startsAt time.Time, isResolved bool) PostableAlert {
+func (r *AlertRule) toPostableAlert(alertQueryResult map[string]any, startsAt time.Time, isResolved bool) PostableAlert {
 	summary, description, instance, err := r.renderAlertContentTemplate(alertQueryResult)
 
 	if err != nil {
@@ -147,7 +147,7 @@ func (r *AlertRule) toPostableAlert(alertQueryResult map[string]interface{}, sta
 	return alert
 }
 
-func (rule *AlertRule) renderAlertContentTemplate(data interface{}) (string, string, string, error) {
+func (rule *AlertRule) renderAlertContentTemplate(data any) (string, string, string, error) {
 	if rule.summaryTmplParsed == nil {
 		summaryTmplParsed, err := template.New("summary").Parse(rule.Summary)
 		rule.summaryTmplParsed = summaryTmplParsed
