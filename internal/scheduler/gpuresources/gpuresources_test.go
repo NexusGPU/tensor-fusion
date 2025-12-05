@@ -259,7 +259,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 	s.NoError(err)
 	s.fwk = fwk
 
-	s.allocator = gpuallocator.NewGpuAllocator(s.ctx, s.client, time.Second)
+	s.allocator = gpuallocator.NewGpuAllocator(s.ctx, nil, s.client, time.Second)
 	err = s.allocator.InitGPUAndQuotaStore()
 	s.NoError(err)
 	s.allocator.ReconcileAllocationState()

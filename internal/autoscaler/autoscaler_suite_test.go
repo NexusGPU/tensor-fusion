@@ -155,7 +155,7 @@ var _ = BeforeSuite(func() {
 		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
 	}
 
-	allocator = gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 150*time.Millisecond)
+	allocator = gpuallocator.NewGpuAllocator(ctx, nil, mgr.GetClient(), 150*time.Millisecond)
 	err = allocator.SetupWithManager(ctx, mgr)
 	Expect(err).ToNot(HaveOccurred())
 

@@ -310,7 +310,7 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(
-	_ctx context.Context,
+	ctx context.Context,
 	pod *corev1.Pod,
 	pool *tfv1.GPUPool,
 	isLocalGPU bool,

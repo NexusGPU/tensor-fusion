@@ -235,9 +235,6 @@ func main() {
 
 	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, gpuPricingMap)
 
-	// Initialize GPU allocator and set up watches
-	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr)
-
 	// Initialize Index allocator for Device Plugin communication
 	indexAllocator, err := indexallocator.NewIndexAllocator(ctx, mgr.GetClient())
 	if err != nil {
@@ -245,6 +242,9 @@ func main() {
 		os.Exit(1)
 	}
 	_ = indexAllocator.SetupWithManager(ctx, mgr)
+
+	// Initialize GPU allocator and set up watches
+	allocator, portAllocator := startTensorFusionAllocators(ctx, mgr, indexAllocator)
 
 	ensureLeaderInfoConfigMap(mgr)
 
@@ -286,8 +286,9 @@ func addHealthCheckAPI(mgr manager.Manager) {
 func startTensorFusionAllocators(
 	ctx context.Context,
 	mgr manager.Manager,
+	indexAllocator *indexallocator.IndexAllocator,
 ) (*gpuallocator.GpuAllocator, *portallocator.PortAllocator) {
-	allocator := gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 10*time.Second)
+	allocator := gpuallocator.NewGpuAllocator(ctx, indexAllocator, mgr.GetClient(), 10*time.Second)
 	if err := allocator.SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to set up GPU allocator watches")
 		os.Exit(1)

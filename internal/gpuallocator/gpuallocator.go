@@ -150,7 +150,12 @@ type GpuAllocator struct {
 	indexAllocator *indexallocator.IndexAllocator
 }
 
-func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval time.Duration) *GpuAllocator {
+func NewGpuAllocator(
+	ctx context.Context,
+	indexAllocator *indexallocator.IndexAllocator,
+	client client.Client,
+	syncInterval time.Duration,
+) *GpuAllocator {
 	log := log.FromContext(ctx)
 
 	if client == nil {
@@ -166,6 +171,15 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 	// Create quota store
 	quotaStore := quota.NewQuotaStore(client, ctx)
 
+	if indexAllocator == nil {
+		newIndexAllocator, err := indexallocator.NewIndexAllocator(ctx, client)
+		if err != nil {
+			log.Error(err, "Failed to create index allocator")
+			return nil
+		}
+		indexAllocator = newIndexAllocator
+	}
+
 	allocator := &GpuAllocator{
 		Client:          client,
 		filterRegistry:  baseRegistry,
@@ -178,6 +192,7 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 		dirtyQueue:      make(map[types.NamespacedName]struct{}),
 		ctx:             ctx,
 
+		indexAllocator:         indexAllocator,
 		uniqueAllocation:       make(map[string]*tfv1.AllocRequest, 512),
 		uniqueDeallocation:     make(map[string]struct{}, 512),
 		podNamespaceNsToPodUID: make(map[string]string, 512),
