@@ -93,29 +93,56 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	log := log.FromContext(ctx)
 	log.Info("Mutating pod", "generateName", pod.GenerateName, "namespace", pod.Namespace)
 
+	var currentBytes []byte
+
 	// for non tensor fusion pod, check if there are any GPU resource request,
 	// when there is, set scheduler to tensor-fusion-scheduler to trigger proxied scheduling
 	// this is to ensure that non tensor fusion pod can be scheduled to nodes not conflict with tensor fusion
 	if !utils.IsTensorFusionPod(pod) {
-		if utils.IsProgressiveMigration() && utils.HasGPUResourceRequest(pod) {
-			return admission.Patched("set scheduler to tensor-fusion-scheduler", jsonpatch.JsonPatchOperation{
-				Operation: "replace",
-				Path:      "/spec/schedulerName",
-				Value:     constants.SchedulerName,
-			})
+		hasGPUResource := utils.HasGPUResourceRequest(pod)
+		if !hasGPUResource {
+			return admission.Allowed("non tensor fusion pod nor GPU resource request, skipped")
 		}
-		return admission.Allowed("non tensor fusion pod nor GPU resource request, skipped")
-	}
 
-	currentBytes, err := json.Marshal(pod)
-	if err != nil {
-		return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to marshal current pod: %w", err))
+		shouldMigrate, err := ShouldAutoMigrateGPUPod(ctx, m.Client, pod)
+		if err != nil {
+			log.Error(err, "failed to check auto migration rules", "pod", pod.Name, "namespace", pod.Namespace)
+			return admission.Allowed("non tensor fusion pod and invalid migration rule, skipped")
+		}
+		if shouldMigrate {
+			// set original Pod bytes before mutate it, so that patch compare can be done correctly
+			currentBytes, err = json.Marshal(pod)
+			// Add tensor-fusion.ai/enabled label to mark pod for TensorFusion injection
+			if pod.Labels == nil {
+				pod.Labels = make(map[string]string)
+			}
+			if err != nil {
+				return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to marshal current pod: %w", err))
+			}
+			pod.Labels[constants.TensorFusionEnabledLabelKey] = constants.TrueStringValue
+		} else {
+			if utils.IsProgressiveMigration() {
+				return admission.Patched("set scheduler to tensor-fusion-scheduler", jsonpatch.JsonPatchOperation{
+					Operation: "replace",
+					Path:      "/spec/schedulerName",
+					Value:     constants.SchedulerName,
+				})
+			}
+			return admission.Allowed("GPU pod found, skip since NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION not set")
+		}
+	} else {
+		currentBytesOriginal, err := json.Marshal(pod)
+		if err != nil {
+			return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to marshal current pod: %w", err))
+		}
+		currentBytes = currentBytesOriginal
 	}
 
 	tfInfo, err := ParseTensorFusionInfo(ctx, m.Client, pod)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("parse tf resources: %w", err))
 	}
+
 	counter := &TensorFusionPodCounter{Client: m.Client}
 	enabledReplicas := tfInfo.EnabledReplicas
 
