@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +39,15 @@ type IndexAllocator struct {
 	// in use index from 0x01 -> 0xf8, indicates the pod using this index
 	// When pod completed CDI and started or pending image pulling, should be removed from the queue
 	nodeIndexQueue map[string]map[int]types.NamespacedName
+
+	podIndexMap map[types.NamespacedName]indexIdentifier
+
+	asyncCheckingMap map[types.NamespacedName]struct{}
+}
+
+type indexIdentifier struct {
+	nodeName string
+	index    int
 }
 
 func NewIndexAllocator(ctx context.Context, client client.Client) (*IndexAllocator, error) {
@@ -53,6 +61,10 @@ func NewIndexAllocator(ctx context.Context, client client.Client) (*IndexAllocat
 		currentIndex:  0, // Will start from 1 on first assignment
 		ctx:           ctx,
 		initializedCh: make(chan struct{}),
+
+		nodeIndexQueue: make(map[string]map[int]types.NamespacedName, 128),
+
+		podIndexMap: make(map[types.NamespacedName]indexIdentifier, 128),
 	}
 
 	return allocator, nil
@@ -85,44 +97,102 @@ func (s *IndexAllocator) AssignIndex(podName string) (int, error) {
 }
 
 // ReconcileLockState maintains memory state for node level index assign and release queue
-func (s *IndexAllocator) ReconcileLockState(pod *v1.Pod) bool {
+func (s *IndexAllocator) ReconcileLockState(pod *v1.Pod) {
 	if pod.Labels[constants.LabelComponent] != constants.ComponentWorker {
-		return false
+		return
 	}
 	// Check if it's TF indexed Pod by container resource limits
 	// If isIndex But PodIndex not set, check phase, if pending, should assign index, next check
 	if pod.Spec.NodeName == "" {
-		return false
+		return
 	}
 
-	index := pod.Annotations[constants.PodIndexAnnotation]
-	if index == "" {
-		return false
-	}
-	indexInt, err := strconv.Atoi(index)
+	index, err := utils.ParsePodIndexResourceClaim(pod)
 	if err != nil {
-		return false
+		log.FromContext(s.ctx).Error(err, "not TF indexed Pod, skip reconcile lock state", "pod", pod.Name)
+		return
 	}
+	_, indexAllocated := pod.Annotations[constants.PodIndexAnnotation]
 
+	// Only pending pods can occupy the node level index
+	if utils.IsPodPending(pod) {
+		s.storeMutex.Lock()
+		indexQueue := s.nodeIndexQueue[pod.Spec.NodeName]
+		if indexQueue == nil {
+			indexQueue = make(map[int]types.NamespacedName)
+			s.nodeIndexQueue[pod.Spec.NodeName] = indexQueue
+		}
+
+		// If just started and missing in memory, should complement the index queue and pod index map
+		if indexAllocated {
+			// occupy the index if missing (when scheduler restarted)
+			if _, exists := indexQueue[index]; !exists {
+				podMeta := types.NamespacedName{
+					Namespace: pod.Namespace,
+					Name:      pod.Name,
+				}
+				indexQueue[index] = podMeta
+				s.podIndexMap[podMeta] = indexIdentifier{
+					nodeName: pod.Spec.NodeName,
+					index:    index,
+				}
+			}
+			s.storeMutex.Unlock()
+			return
+		}
+
+		if podMeta, exists := indexQueue[index]; exists {
+			// If already occupied by other Pod, check if it's the same Pod
+			if podMeta.Namespace != pod.Namespace || podMeta.Name != pod.Name {
+				log.FromContext(s.ctx).Error(fmt.Errorf("pod index conflict"), "can not reconcile index lock, more than one pending pods occupy the same index", "pod", pod.Name, "index", index)
+				s.storeMutex.Unlock()
+				return
+			}
+		} else {
+			// new Pod occupy the index, add to index queue
+			indexQueue[index] = types.NamespacedName{
+				Namespace: pod.Namespace,
+				Name:      pod.Name,
+			}
+			s.podIndexMap[types.NamespacedName{
+				Namespace: pod.Namespace,
+				Name:      pod.Name,
+			}] = indexIdentifier{
+				nodeName: pod.Spec.NodeName,
+				index:    index,
+			}
+			s.storeMutex.Unlock()
+			// Brand new pending pod, ensure the async checking loop for assigning index annotation
+			s.AsyncCheckNodeIndexAvailableAndAssign(pod, index)
+		}
+	} else if utils.IsPodRunning(pod) {
+		s.RemoveNodeIndexQueueForPod(types.NamespacedName{
+			Namespace: pod.Namespace,
+			Name:      pod.Name,
+		})
+	}
+}
+
+func (s *IndexAllocator) RemoveNodeIndexQueueForPod(namespacedName types.NamespacedName) {
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
 
-	// Check Pod status
-	// TODO: call in Pod controller and gpu Allocator init stage
-
-	indexQueue := s.nodeIndexQueue[pod.Spec.NodeName]
-	if indexQueue == nil {
-		indexQueue = make(map[int]types.NamespacedName)
-		s.nodeIndexQueue[pod.Spec.NodeName] = indexQueue
+	indexIdentifier, exists := s.podIndexMap[namespacedName]
+	if !exists {
+		return
 	}
-	indexQueue[indexInt] = types.NamespacedName{
-		Namespace: pod.Namespace,
-		Name:      pod.Name,
+	if indexQueue, exists := s.nodeIndexQueue[indexIdentifier.nodeName]; exists {
+		if val, exists := indexQueue[indexIdentifier.index]; exists {
+			if val.Namespace == namespacedName.Namespace && val.Name == namespacedName.Name {
+				delete(indexQueue, indexIdentifier.index)
+				log.FromContext(s.ctx).Info("Removed pod from node index queue after pod running/stopped/deleted", "pod", namespacedName, "index", indexIdentifier.index)
+			}
+			delete(s.podIndexMap, namespacedName)
+		}
 	}
-	return true
 }
 
-func (s *IndexAllocator) CheckNodeIndexAvailableForPod(pod *v1.Pod, index int) bool {
+func (s *IndexAllocator) CheckNodeIndexAndTryOccupy(pod *v1.Pod, index int) bool {
 	<-s.initializedCh
 	nodeName := pod.Spec.NodeName
 	if nodeName == "" {
@@ -130,21 +200,53 @@ func (s *IndexAllocator) CheckNodeIndexAvailableForPod(pod *v1.Pod, index int) b
 		return false
 	}
 	s.storeMutex.RLock()
-	defer s.storeMutex.RUnlock()
 	indexQueue := s.nodeIndexQueue[nodeName]
 	if len(indexQueue) == 0 {
+		s.storeMutex.RUnlock()
 		return false
 	}
 	_, exists := indexQueue[index]
-	return !exists
+	s.storeMutex.RUnlock()
+	// Occupy index for node
+	if !exists {
+		s.storeMutex.Lock()
+		indexQueue[index] = types.NamespacedName{
+			Namespace: pod.Namespace,
+			Name:      pod.Name,
+		}
+		s.storeMutex.Unlock()
+		return true
+	}
+	return false
 }
 
 func (s *IndexAllocator) SetReady() {
 	close(s.initializedCh)
 }
 
-func (s *IndexAllocator) CheckNodeIndexAvailableAndAssign(pod *v1.Pod, index int) {
+func (s *IndexAllocator) AsyncCheckNodeIndexAvailableAndAssign(pod *v1.Pod, index int) {
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+	podMeta := types.NamespacedName{
+		Namespace: pod.Namespace,
+		Name:      pod.Name,
+	}
+	if _, exists := s.asyncCheckingMap[podMeta]; exists {
+		// already started checking loop, skip
+		return
+	}
+	s.asyncCheckingMap[podMeta] = struct{}{}
+
 	go func() {
+		defer func() {
+			s.storeMutex.Lock()
+			delete(s.asyncCheckingMap, types.NamespacedName{
+				Namespace: pod.Namespace,
+				Name:      pod.Name,
+			})
+			s.storeMutex.Unlock()
+		}()
+
 		// Infinity backoff retry until index is available, and also reconcile started
 		_ = retry.OnError(wait.Backoff{
 			Duration: 3 * time.Second,
@@ -173,9 +275,10 @@ func (s *IndexAllocator) CheckNodeIndexAvailableAndAssign(pod *v1.Pod, index int
 						"pod", pod.Name, "node", pod.Spec.NodeName)
 					return nil
 				}
+				// else do nothing, may caused by duplicated reconciling
 			}
 
-			if !s.CheckNodeIndexAvailableForPod(pod, index) {
+			if !s.CheckNodeIndexAndTryOccupy(pod, index) {
 				return fmt.Errorf("index is not available")
 			}
 			// Index available, patch annotation to transit Pod from Pending to DeviceAllocating in hypervisor

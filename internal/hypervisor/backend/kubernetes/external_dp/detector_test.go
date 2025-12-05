@@ -32,7 +32,7 @@ func (m *MockAPIServer) UpdateGPUStatus(gpu *tfv1.GPU) error {
 // MockKubeletClient is a mock implementation of KubeletClientInterface
 type MockKubeletClient struct {
 	mock.Mock
-	pods map[string]interface{}
+	pods map[string]any
 }
 
 func (m *MockKubeletClient) GetAllPods() map[string]any {

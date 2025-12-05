@@ -1587,6 +1587,10 @@ func (s *GpuAllocator) reconcileAllocationState() {
 			s.uniqueAllocation[string(worker.UID)] = allocRequest
 			s.podNamespaceNsToPodUID[worker.Namespace+"/"+worker.Name] = string(worker.UID)
 			s.addAllocationMap(worker.Spec.NodeName, worker.ObjectMeta)
+
+			if utils.IsPodPending(&worker) {
+				s.indexAllocator.ReconcileLockState(&worker)
+			}
 		}
 		return scheduled && !deletedAndDeAllocated
 	})

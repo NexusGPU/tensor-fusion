@@ -170,6 +170,10 @@ func IsPodRunning(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodRunning
 }
 
+func IsPodPending(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodPending && pod.DeletionTimestamp.IsZero()
+}
+
 func ExtractPoolNameFromNodeLabel(node *tfv1.GPUNode) string {
 	var poolName string
 	for labelKey := range node.Labels {

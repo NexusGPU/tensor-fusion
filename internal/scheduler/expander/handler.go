@@ -145,7 +145,7 @@ func (e *NodeExpander) GetNodeScalerInfo() any {
 	defer e.mu.RUnlock()
 
 	inFlightNodeClaimSnapshot := make(map[string]any)
-	e.inFlightNodeClaims.Range(func(key, value interface{}) bool {
+	e.inFlightNodeClaims.Range(func(key, value any) bool {
 		inFlightNodeClaimSnapshot[key.(string)] = value
 		return true
 	})

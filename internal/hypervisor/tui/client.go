@@ -46,7 +46,7 @@ func NewClient(host string, port int) *Client {
 // doRequest performs an HTTP request and decodes the JSON response
 //
 //nolint:unparam // method parameter is kept for API consistency, even though it's always "GET"
-func (c *Client) doRequest(ctx context.Context, method, path string, result interface{}) error {
+func (c *Client) doRequest(ctx context.Context, method, path string, result any) error {
 	url := fmt.Sprintf("%s/%s", c.baseURL, path)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
