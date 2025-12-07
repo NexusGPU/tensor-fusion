@@ -24,9 +24,11 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -85,11 +87,31 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 			// Clean up connection
 			connection := &tfv1.TensorFusionConnection{}
 			err := k8sClient.Get(ctx, typeNamespacedName, connection)
-			Expect(err).NotTo(HaveOccurred())
+			if err == nil {
+				By("Cleanup the specific resource instance TensorFusionConnection")
+				Expect(k8sClient.Delete(ctx, connection)).To(Succeed())
+				// Wait for connection to be fully deleted
+				Eventually(func() error {
+					return k8sClient.Get(ctx, typeNamespacedName, &tfv1.TensorFusionConnection{})
+				}).Should(Satisfy(errors.IsNotFound))
+			}
 
-			By("Cleanup the specific resource instance TensorFusionConnection")
-			Expect(k8sClient.Delete(ctx, connection)).To(Succeed())
-
+			// Remove finalizers from worker pods before cleaning up workload
+			By("Removing finalizers from worker pods")
+			podList := &corev1.PodList{}
+			if err := k8sClient.List(ctx, podList,
+				client.InNamespace(workloadNamespacedName.Namespace),
+				client.MatchingLabels{constants.WorkloadKey: workloadNamespacedName.Name}); err == nil {
+				for i := range podList.Items {
+					pod := &podList.Items[i]
+					if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
+						if controllerutil.ContainsFinalizer(pod, constants.Finalizer) {
+							controllerutil.RemoveFinalizer(pod, constants.Finalizer)
+							_ = k8sClient.Update(ctx, pod)
+						}
+					}
+				}
+			}
 			// Clean up workload
 			cleanupWorkload(workloadNamespacedName)
 
