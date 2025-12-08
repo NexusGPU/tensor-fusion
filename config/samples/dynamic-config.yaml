@@ -3,6 +3,8 @@ metricsTTL: 30d
 # default to 'influx', influx v2 line protocol
 metricsFormat: influx
 
+autoScalingInterval: 10s
+
 alertRules:    
   # Worker TFlops throttled alert
   - name: WorkerTFlopsThrottled

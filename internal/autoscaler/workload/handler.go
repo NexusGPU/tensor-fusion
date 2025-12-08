@@ -156,6 +156,7 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 	patch := client.MergeFrom(worker.DeepCopy())
 	maps.Copy(worker.Annotations, annotationsToUpdate)
 	if err := h.Patch(ctx, worker, patch); err != nil {
+		// TODO should reconcile rollback the annotation update
 		return fmt.Errorf("failed to patch worker %s: %v", worker.Name, err)
 	}
 

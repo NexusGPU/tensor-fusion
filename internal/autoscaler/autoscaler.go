@@ -10,6 +10,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/recommender"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -20,6 +21,8 @@ import (
 var (
 	_ manager.Runnable               = (*Autoscaler)(nil)
 	_ manager.LeaderElectionRunnable = (*Autoscaler)(nil)
+
+	DefaultAutoScalingInterval = "30s"
 )
 
 type WorkloadID struct {
@@ -77,7 +80,16 @@ func (s *Autoscaler) Start(ctx context.Context) error {
 		log.Error(err, "failed to load history metrics")
 	}
 
-	ticker := time.NewTicker(time.Minute)
+	autoScalingInterval := config.GetGlobalConfig().AutoScalingInterval
+	if autoScalingInterval == "" {
+		autoScalingInterval = DefaultAutoScalingInterval
+	}
+	interval, err := time.ParseDuration(autoScalingInterval)
+	if err != nil {
+		log.Error(err, "failed to parse auto scaling interval")
+		return err
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
