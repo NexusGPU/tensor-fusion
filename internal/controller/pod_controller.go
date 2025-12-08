@@ -81,6 +81,18 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	// Release GPU resources when pod is in Failed or Succeeded (Complete) state
+	// Only for worker pods that have allocated GPU resources
+	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker && utils.IsPodStopped(pod) {
+		_ = r.Expander.RemovePreSchedulePod(pod.Name, true)
+		r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
+		metrics.RemoveWorkerMetrics(pod.Name, time.Now())
+		log.Info("Released GPU resources when pod in terminal state", "pod", req.NamespacedName, "phase", pod.Status.Phase)
+		return ctrl.Result{}, nil
+	}
 
 	// check if need to set owner reference, when standalone Pod created and no owner,
 	// the related workload's owner should be the Pod so that to be deleted automatically along with Pod deletion

@@ -89,9 +89,17 @@ var _ = Describe("Pod Controller", func() {
 
 		AfterEach(func() {
 			if workerPod != nil {
+				// Remove finalizer if exists to allow deletion
+				pod := &corev1.Pod{}
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), pod); err == nil {
+					if controllerutil.ContainsFinalizer(pod, constants.Finalizer) {
+						controllerutil.RemoveFinalizer(pod, constants.Finalizer)
+						_ = k8sClient.Update(ctx, pod)
+					}
+				}
 				_ = k8sClient.Delete(ctx, workerPod)
 				Eventually(func() error {
-					return k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), workerPod)
+					return k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), &corev1.Pod{})
 				}).Should(Satisfy(errors.IsNotFound))
 			}
 		})
@@ -134,6 +142,172 @@ var _ = Describe("Pod Controller", func() {
 				}
 				return !controllerutil.ContainsFinalizer(updatedPod, constants.Finalizer)
 			}).Should(BeTrue())
+		})
+
+		It("should release GPU resources when worker pod is in Failed state", func() {
+			// Use a unique pod name for this test
+			workerPod.Name = "test-worker-pod-failed"
+			By("creating a worker pod")
+			Expect(k8sClient.Create(ctx, workerPod)).To(Succeed())
+
+			By("waiting for pod to be created and get UID")
+			Eventually(func() error {
+				return k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), workerPod)
+			}).Should(Succeed())
+			Expect(workerPod.UID).NotTo(BeEmpty())
+
+			By("getting a GPU pool and GPU for allocation")
+			pool := tfEnv.GetGPUPool(0)
+			gpuList := tfEnv.GetPoolGpuList(0)
+			Expect(gpuList.Items).NotTo(BeEmpty())
+			testGPU := gpuList.Items[0]
+
+			By("storing initial GPU available resources before allocation")
+			initialGPU := &tfv1.GPU{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testGPU.Name}, initialGPU)).To(Succeed())
+			initialAvailableTflops := initialGPU.Status.Available.Tflops.DeepCopy()
+			initialAvailableVram := initialGPU.Status.Available.Vram.DeepCopy()
+
+			By("allocating GPU resources for the pod")
+			allocRequest := &tfv1.AllocRequest{
+				PoolName:              pool.Name,
+				WorkloadNameNamespace: tfv1.NameNamespace{Name: workerPod.Labels[constants.WorkloadKey], Namespace: workerPod.Namespace},
+				Request: tfv1.Resource{
+					Tflops: resource.MustParse("50"),
+					Vram:   resource.MustParse("8Gi"),
+				},
+				Limit: tfv1.Resource{
+					Tflops: resource.MustParse("50"),
+					Vram:   resource.MustParse("8Gi"),
+				},
+				Count:   1,
+				PodMeta: workerPod.ObjectMeta,
+			}
+			gpus, err := allocator.Alloc(allocRequest)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gpus).To(HaveLen(1))
+
+			By("syncing GPU allocation to Kubernetes")
+			allocator.SyncGPUsToK8s()
+
+			By("verifying GPU resources were allocated (available decreased)")
+			Eventually(func() bool {
+				gpu := &tfv1.GPU{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: gpus[0].Name}, gpu); err != nil {
+					return false
+				}
+				// Available resources should be less than initial after allocation
+				return gpu.Status.Available.Tflops.Cmp(initialAvailableTflops) < 0 &&
+					gpu.Status.Available.Vram.Cmp(initialAvailableVram) < 0
+			}).Should(BeTrue())
+
+			By("setting pod status to Failed")
+			updatedPod := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), updatedPod)).To(Succeed())
+			updatedPod.Status.Phase = corev1.PodFailed
+			Expect(k8sClient.Status().Update(ctx, updatedPod)).To(Succeed())
+
+			By("waiting for controller to reconcile and release GPU resources")
+			// Wait for controller to process the pod status change
+			time.Sleep(500 * time.Millisecond)
+
+			By("verifying GPU resources were released")
+			Eventually(func() bool {
+				// Verify that DeallocByPodIdentifier was called by checking if GPU resources were released
+				gpu := &tfv1.GPU{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: gpus[0].Name}, gpu)
+				if err != nil {
+					return false
+				}
+				// After deallocation, available resources should be restored to initial levels
+				// Allow some tolerance for floating point comparison
+				tflopsRestored := gpu.Status.Available.Tflops.Cmp(initialAvailableTflops) >= 0
+				vramRestored := gpu.Status.Available.Vram.Cmp(initialAvailableVram) >= 0
+				return tflopsRestored && vramRestored
+			}, 10*time.Second).Should(BeTrue(), "GPU resources should be released when pod is in Failed state")
+		})
+
+		It("should release GPU resources when worker pod is in Succeeded state", func() {
+			// Use a unique pod name for this test
+			workerPod.Name = "test-worker-pod-succeeded"
+			By("creating a worker pod")
+			Expect(k8sClient.Create(ctx, workerPod)).To(Succeed())
+
+			By("waiting for pod to be created and get UID")
+			Eventually(func() error {
+				return k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), workerPod)
+			}).Should(Succeed())
+			Expect(workerPod.UID).NotTo(BeEmpty())
+
+			By("getting a GPU pool and GPU for allocation")
+			pool := tfEnv.GetGPUPool(0)
+			gpuList := tfEnv.GetPoolGpuList(0)
+			Expect(gpuList.Items).NotTo(BeEmpty())
+			testGPU := gpuList.Items[0]
+
+			By("storing initial GPU available resources before allocation")
+			initialGPU := &tfv1.GPU{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: testGPU.Name}, initialGPU)).To(Succeed())
+			initialAvailableTflops := initialGPU.Status.Available.Tflops.DeepCopy()
+			initialAvailableVram := initialGPU.Status.Available.Vram.DeepCopy()
+
+			By("allocating GPU resources for the pod")
+			allocRequest := &tfv1.AllocRequest{
+				PoolName:              pool.Name,
+				WorkloadNameNamespace: tfv1.NameNamespace{Name: workerPod.Labels[constants.WorkloadKey], Namespace: workerPod.Namespace},
+				Request: tfv1.Resource{
+					Tflops: resource.MustParse("50"),
+					Vram:   resource.MustParse("8Gi"),
+				},
+				Limit: tfv1.Resource{
+					Tflops: resource.MustParse("50"),
+					Vram:   resource.MustParse("8Gi"),
+				},
+				Count:   1,
+				PodMeta: workerPod.ObjectMeta,
+			}
+			gpus, err := allocator.Alloc(allocRequest)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gpus).To(HaveLen(1))
+
+			By("syncing GPU allocation to Kubernetes")
+			allocator.SyncGPUsToK8s()
+
+			By("verifying GPU resources were allocated (available decreased)")
+			Eventually(func() bool {
+				gpu := &tfv1.GPU{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: gpus[0].Name}, gpu); err != nil {
+					return false
+				}
+				// Available resources should be less than initial after allocation
+				return gpu.Status.Available.Tflops.Cmp(initialAvailableTflops) < 0 &&
+					gpu.Status.Available.Vram.Cmp(initialAvailableVram) < 0
+			}).Should(BeTrue())
+
+			By("setting pod status to Succeeded")
+			updatedPod := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), updatedPod)).To(Succeed())
+			updatedPod.Status.Phase = corev1.PodSucceeded
+			Expect(k8sClient.Status().Update(ctx, updatedPod)).To(Succeed())
+
+			By("waiting for controller to reconcile and release GPU resources")
+			// Wait for controller to process the pod status change
+			time.Sleep(500 * time.Millisecond)
+
+			By("verifying GPU resources were released")
+			Eventually(func() bool {
+				// Verify that GPU resources were released
+				gpu := &tfv1.GPU{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: gpus[0].Name}, gpu)
+				if err != nil {
+					return false
+				}
+				// After deallocation, available resources should be restored to initial levels
+				// Allow some tolerance for floating point comparison
+				tflopsRestored := gpu.Status.Available.Tflops.Cmp(initialAvailableTflops) >= 0
+				vramRestored := gpu.Status.Available.Vram.Cmp(initialAvailableVram) >= 0
+				return tflopsRestored && vramRestored
+			}, 10*time.Second).Should(BeTrue(), "GPU resources should be released when pod is in Succeeded state")
 		})
 	})
 
