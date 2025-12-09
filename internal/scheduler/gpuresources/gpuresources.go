@@ -38,7 +38,7 @@ var _ framework.PreFilterPlugin = &GPUFit{}
 var _ framework.FilterPlugin = &GPUFit{}
 var _ framework.ScorePlugin = &GPUFit{}
 var _ framework.ReservePlugin = &GPUFit{}
-var _ framework.PostBindPlugin = &GPUFit{}
+var _ framework.PreBindPlugin = &GPUFit{}
 var _ framework.EnqueueExtensions = &GPUFit{}
 
 type GPUFit struct {
@@ -462,35 +462,38 @@ func (s *GPUFit) Unreserve(ctx context.Context, state fwk.CycleState, pod *v1.Po
 	}, schedulingResult.FinalGPUs, pod.ObjectMeta)
 }
 
-func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) {
+func (s *GPUFit) PreBindPreFlight(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) *fwk.Status {
 	if !utils.IsTensorFusionWorker(pod) {
-		return
+		return fwk.NewStatus(fwk.Skip, "skip for non tensor-fusion worker")
 	}
+	return fwk.NewStatus(fwk.Success, "")
+}
 
-	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName)
+func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) *fwk.Status {
+
 	gpuSchedulingResult, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
 		s.logger.Error(err, "failed to read gpu scheduling result", "pod", pod.Name)
-		return
+		return fwk.NewStatus(fwk.Error, "failed to read gpu scheduling result: "+err.Error())
 	}
-	// write the allocated GPU info to Pod in bindingCycle, before default binder changing the Pod nodeName info
-	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
-	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
 
-	// Patch GPU device IDs annotation
+	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
+	s.logger.Info("PreBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
+
 	patch := []byte(`[{
 		"op": "add",
 		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
 		"value": "` + gpuIDs + `"}]`)
-	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patch))
-	if err != nil {
+	if err := s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patch)); err != nil {
 		s.logger.Error(err, "failed to patch gpu device ids", "pod", pod.Name)
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUDeviceAllocatedFailed",
 			"Attach GPU device ID info failed", "Can not add GPU device IDs: "+gpuIDs)
-	} else {
-		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
-			"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
+		return fwk.NewStatus(fwk.Error, "failed to patch gpu device ids: "+err.Error())
 	}
+
+	s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
+		"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
+	return fwk.NewStatus(fwk.Success, "")
 }
 
 func (s *GPUFit) EventsToRegister(_ context.Context) ([]fwk.ClusterEventWithHint, error) {

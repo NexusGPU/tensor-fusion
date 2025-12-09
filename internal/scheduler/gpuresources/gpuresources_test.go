@@ -511,8 +511,8 @@ func (s *GPUResourcesSuite) TestReserveAndUnreserve() {
 	s.Len(gpu.Status.RunningApps, 1)
 }
 
-func (s *GPUResourcesSuite) TestPostBind() {
-	log.FromContext(s.ctx).Info("Running TestPostBind")
+func (s *GPUResourcesSuite) TestPreBind() {
+	log.FromContext(s.ctx).Info("Running TestPreBind")
 	state := framework.NewCycleState()
 	pod := s.makePod("p1",
 		map[string]string{
@@ -528,7 +528,8 @@ func (s *GPUResourcesSuite) TestPostBind() {
 	reserveStatus := s.plugin.Reserve(s.ctx, state, pod, "node-a")
 	s.Require().True(reserveStatus.IsSuccess())
 
-	s.plugin.PostBind(s.ctx, state, pod, "node-a")
+	preBindStatus := s.plugin.PreBind(s.ctx, state, pod, "node-a")
+	s.Require().True(preBindStatus.IsSuccess())
 
 	updatedPod := &v1.Pod{}
 	s.NoError(s.client.Get(s.ctx, types.NamespacedName{Name: "p1", Namespace: "ns1"}, updatedPod))
@@ -669,8 +670,27 @@ func (s *GPUResourcesSuite) TestUnreserve_ErrorHandling() {
 	})
 }
 
-func (s *GPUResourcesSuite) TestPostBind_ErrorHandling() {
-	log.FromContext(s.ctx).Info("Running TestPostBind_ErrorHandling")
+func (s *GPUResourcesSuite) TestPreBindPreFlight() {
+	log.FromContext(s.ctx).Info("Running TestPreBindPreFlight")
+	state := framework.NewCycleState()
+
+	// TensorFusion worker pod should return Success
+	tfPod := s.makePod("tf-pod", map[string]string{
+		constants.GpuCountAnnotation:      "1",
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+	})
+	status := s.plugin.PreBindPreFlight(s.ctx, state, tfPod, "node-a")
+	s.Equal(fwk.Success, status.Code())
+
+	// Non-TensorFusion pod should return Skip
+	nonTFPod := s.makeNonTensorFusionPod("non-tf-pod", 1)
+	status = s.plugin.PreBindPreFlight(s.ctx, state, nonTFPod, "node-a")
+	s.Equal(fwk.Skip, status.Code())
+}
+
+func (s *GPUResourcesSuite) TestPreBind_ErrorHandling() {
+	log.FromContext(s.ctx).Info("Running TestPreBind_ErrorHandling")
 	state := framework.NewCycleState()
 	pod := s.makePod("p1",
 		map[string]string{
@@ -680,7 +700,8 @@ func (s *GPUResourcesSuite) TestPostBind_ErrorHandling() {
 		})
 
 	// No pre-filter call, so state is empty
-	s.plugin.PostBind(s.ctx, state, pod, "node-a")
+	status := s.plugin.PreBind(s.ctx, state, pod, "node-a")
+	s.Equal(fwk.Error, status.Code())
 
 	// Test with a pod that doesn't exist in the client
 	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
@@ -690,7 +711,8 @@ func (s *GPUResourcesSuite) TestPostBind_ErrorHandling() {
 
 	nonExistentPod := pod.DeepCopy()
 	nonExistentPod.Name = "p-non-existent"
-	s.plugin.PostBind(s.ctx, state, nonExistentPod, "node-a")
+	status = s.plugin.PreBind(s.ctx, state, nonExistentPod, "node-a")
+	s.Equal(fwk.Error, status.Code())
 }
 
 func (s *GPUResourcesSuite) TestFilter_ErrorHandling() {
