@@ -8,6 +8,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type State struct {
@@ -15,6 +16,7 @@ type State struct {
 	Name                  string
 	Spec                  tfv1.WorkloadProfileSpec
 	Status                tfv1.TensorFusionWorkloadStatus
+	CreationTimestamp     metav1.Time
 	CurrentActiveWorkers  map[string]*corev1.Pod
 	WorkerUsageSamplers   map[string]*metrics.WorkerUsageSampler
 	WorkerUsageAggregator *metrics.WorkerUsageAggregator
@@ -44,9 +46,24 @@ func (w *State) IsAutoSetResourcesEnabled() bool {
 }
 
 func (w *State) ShouldScaleResource(name tfv1.ResourceName) bool {
-	target := w.Spec.AutoScalingConfig.AutoSetResources.TargetResource
-	// Do not scale when TargetResouce is empty
-	return strings.EqualFold(target, "all") || strings.EqualFold(string(name), target)
+	asr := w.Spec.AutoScalingConfig.AutoSetResources
+	if asr == nil {
+		return false
+	}
+	target := asr.TargetResource
+	// Do not scale when TargetResource is empty
+	if target == "" {
+		return false
+	}
+	if strings.EqualFold(string(target), "all") {
+		return true
+	}
+	// Map ResourceName to ScalingTargetResource: "tflops" -> "compute"
+	resourceNameStr := string(name)
+	if resourceNameStr == "tflops" {
+		resourceNameStr = "compute"
+	}
+	return strings.EqualFold(resourceNameStr, string(target))
 }
 
 func (w *State) IsRecommendationAppliedToAllWorkers() bool {

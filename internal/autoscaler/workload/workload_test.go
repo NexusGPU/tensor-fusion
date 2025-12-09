@@ -14,20 +14,20 @@ var _ = Describe("Workload", func() {
 		Expect(ws.ShouldScaleResource(tfv1.ResourceVram)).To(BeFalse())
 
 		ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{TargetResource: "all"},
+			AutoSetResources: &tfv1.AutoSetResources{TargetResource: tfv1.ScalingTargetResourceAll},
 		}
 
 		Expect(ws.ShouldScaleResource(tfv1.ResourceTflops)).To(BeTrue())
 		Expect(ws.ShouldScaleResource(tfv1.ResourceVram)).To(BeTrue())
 
 		ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{TargetResource: "tflops"},
+			AutoSetResources: &tfv1.AutoSetResources{TargetResource: tfv1.ScalingTargetResourceCompute},
 		}
 		Expect(ws.ShouldScaleResource(tfv1.ResourceTflops)).To(BeTrue())
 		Expect(ws.ShouldScaleResource(tfv1.ResourceVram)).To(BeFalse())
 
 		ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{TargetResource: "vram"},
+			AutoSetResources: &tfv1.AutoSetResources{TargetResource: tfv1.ScalingTargetResourceVRAM},
 		}
 		Expect(ws.ShouldScaleResource(tfv1.ResourceTflops)).To(BeFalse())
 		Expect(ws.ShouldScaleResource(tfv1.ResourceVram)).To(BeTrue())
@@ -36,15 +36,15 @@ var _ = Describe("Workload", func() {
 	It("should correctly determine if auto set resources is enabled based on config", func() {
 		ws := NewWorkloadState()
 		ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{Enable: true, TargetResource: "all"},
+			AutoSetResources: &tfv1.AutoSetResources{Enable: true, TargetResource: tfv1.ScalingTargetResourceAll},
 		}
 		Expect(ws.IsAutoSetResourcesEnabled()).To(BeTrue())
 		ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{Enable: false, TargetResource: "all"},
+			AutoSetResources: &tfv1.AutoSetResources{Enable: false, TargetResource: tfv1.ScalingTargetResourceAll},
 		}
 		Expect(ws.IsAutoSetResourcesEnabled()).To(BeFalse())
 		ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
-			AutoSetResources: tfv1.AutoSetResources{Enable: true, TargetResource: ""},
+			AutoSetResources: &tfv1.AutoSetResources{Enable: true, TargetResource: ""},
 		}
 		Expect(ws.IsAutoSetResourcesEnabled()).To(BeFalse())
 	})

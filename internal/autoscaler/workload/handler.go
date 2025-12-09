@@ -12,7 +12,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -22,11 +25,14 @@ type Handler interface {
 	ApplyRecommendationToWorkload(ctx context.Context, workloadState *State, recommendation *tfv1.Resources) error
 	UpdateWorkloadStatus(ctx context.Context, state *State, recommendation *tfv1.Resources) error
 	GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, error)
+	SetEventRecorder(recorder record.EventRecorder, scheme *runtime.Scheme)
 }
 
 type handler struct {
 	client.Client
-	allocator *gpuallocator.GpuAllocator
+	allocator     *gpuallocator.GpuAllocator
+	eventRecorder record.EventRecorder
+	scheme        *runtime.Scheme
 }
 
 func NewHandler(client client.Client, allocator *gpuallocator.GpuAllocator) Handler {
@@ -36,11 +42,26 @@ func NewHandler(client client.Client, allocator *gpuallocator.GpuAllocator) Hand
 	}
 }
 
+func NewHandlerWithRecorder(client client.Client, allocator *gpuallocator.GpuAllocator, recorder record.EventRecorder, scheme *runtime.Scheme) Handler {
+	return &handler{
+		Client:        client,
+		allocator:     allocator,
+		eventRecorder: recorder,
+		scheme:        scheme,
+	}
+}
+
+func (h *handler) SetEventRecorder(recorder record.EventRecorder, scheme *runtime.Scheme) {
+	h.eventRecorder = recorder
+	h.scheme = scheme
+}
+
 func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload) error {
 	workloadState.Namespace = workload.Namespace
 	workloadState.Name = workload.Name
 	workloadState.Spec = workload.Spec
 	workloadState.Status = *workload.Status.DeepCopy()
+	workloadState.CreationTimestamp = workload.CreationTimestamp
 
 	workerList := &corev1.PodList{}
 	if err := h.List(ctx, workerList,
@@ -89,15 +110,45 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recomm
 	}
 
 	patch := client.MergeFrom(workload.DeepCopy())
+	hasChanges := false
+
 	if isRecommendationChanged(&workload.Status, recommendation) {
-		workload.Status.Recommendation = recommendation.DeepCopy()
+		workload.Status.Recommendation = recommendation
 		workload.Status.ActiveCronScalingRule = state.Status.ActiveCronScalingRule.DeepCopy()
-		if condition := meta.FindStatusCondition(state.Status.Conditions,
-			constants.ConditionStatusTypeRecommendationProvided); condition != nil {
+		hasChanges = true
+	}
+
+	if workload.Status.AppliedRecommendedReplicas != state.Status.AppliedRecommendedReplicas {
+		workload.Status.AppliedRecommendedReplicas = state.Status.AppliedRecommendedReplicas
+		hasChanges = true
+	}
+
+	// Update condition - check for both old and new condition types
+	if condition := meta.FindStatusCondition(state.Status.Conditions,
+		constants.ConditionStatusTypeResourceUpdate); condition != nil {
+		oldCondition := meta.FindStatusCondition(workload.Status.Conditions,
+			constants.ConditionStatusTypeResourceUpdate)
+		if oldCondition == nil || !isConditionEqual(oldCondition, condition) {
 			meta.SetStatusCondition(&workload.Status.Conditions, *condition)
+			hasChanges = true
+		}
+	} else if condition := meta.FindStatusCondition(state.Status.Conditions,
+		constants.ConditionStatusTypeRecommendationProvided); condition != nil {
+		// Migrate old condition to new type
+		oldCondition := meta.FindStatusCondition(workload.Status.Conditions,
+			constants.ConditionStatusTypeResourceUpdate)
+		if oldCondition == nil || oldCondition.Status != condition.Status ||
+			oldCondition.Reason != condition.Reason || oldCondition.Message != condition.Message {
+			condition.Type = constants.ConditionStatusTypeResourceUpdate
+			meta.SetStatusCondition(&workload.Status.Conditions, *condition)
+			hasChanges = true
 		}
 	}
-	workload.Status.AppliedRecommendedReplicas = state.Status.AppliedRecommendedReplicas
+
+	if !hasChanges {
+		return nil
+	}
+
 	if err := h.Status().Patch(ctx, workload, patch); err != nil {
 		return fmt.Errorf("failed to patch workload status %s: %v", workload.Name, err)
 	}
@@ -115,6 +166,19 @@ func isAppliedRecommendedReplicasChanged(workload *tfv1.TensorFusionWorkload, st
 	return workload.Status.AppliedRecommendedReplicas != state.Status.AppliedRecommendedReplicas
 }
 
+func isConditionEqual(c1, c2 *metav1.Condition) bool {
+	if c1 == nil && c2 == nil {
+		return true
+	}
+	if c1 == nil || c2 == nil {
+		return false
+	}
+	return c1.Type == c2.Type &&
+		c1.Status == c2.Status &&
+		c1.Reason == c2.Reason &&
+		c1.Message == c2.Message
+}
+
 func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *State, worker *corev1.Pod, recommendation *tfv1.Resources) error {
 	log := log.FromContext(ctx)
 
@@ -125,6 +189,33 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 
 	if recommendation.Equal(curRes) {
 		return nil
+	}
+
+	// Record event when scaling happens
+	if h.eventRecorder != nil && h.scheme != nil {
+		workloadObj := &tfv1.TensorFusionWorkload{}
+		workloadObj.Namespace = workload.Namespace
+		workloadObj.Name = workload.Name
+		workloadObj.Kind = "TensorFusionWorkload"
+		workloadObj.APIVersion = tfv1.GroupVersion.String()
+
+		isScaleUp := recommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
+			recommendation.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
+
+		eventType := "Normal"
+		reason := "ResourceScaledDown"
+		message := fmt.Sprintf("Resources scaled down: Compute %s->%s, VRAM %s->%s",
+			curRes.Requests.Tflops.String(), recommendation.Requests.Tflops.String(),
+			curRes.Requests.Vram.String(), recommendation.Requests.Vram.String())
+
+		if isScaleUp {
+			reason = "ResourceScaledUp"
+			message = fmt.Sprintf("Resources scaled up: Compute %s->%s, VRAM %s->%s",
+				curRes.Requests.Tflops.String(), recommendation.Requests.Tflops.String(),
+				curRes.Requests.Vram.String(), recommendation.Requests.Vram.String())
+		}
+
+		h.eventRecorder.Event(workloadObj, eventType, reason, message)
 	}
 
 	annotationsToUpdate := utils.GPUResourcesToAnnotations(recommendation)
@@ -144,19 +235,48 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 	isScaleUp := recommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
 		recommendation.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
 
-	if _, err := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+	_, deltaRes, err := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
 		PodUID:     string(worker.UID),
 		IsScaleUp:  isScaleUp,
 		NewRequest: recommendation.Requests,
 		NewLimit:   recommendation.Limits,
-	}, true); err != nil {
+	}, false)
+	if err != nil {
 		return fmt.Errorf("failed to adjust allocation: %v", err)
 	}
 
 	patch := client.MergeFrom(worker.DeepCopy())
 	maps.Copy(worker.Annotations, annotationsToUpdate)
 	if err := h.Patch(ctx, worker, patch); err != nil {
-		// TODO should reconcile rollback the annotation update
+		// Rollback the allocation change by calculating original values from current state and delta
+		// After AdjustAllocation, the allocator state is now recommendation, so we need to subtract deltaRes
+		// to get back to the original curRes values
+		originalRequest := tfv1.Resource{
+			Tflops: recommendation.Requests.Tflops.DeepCopy(),
+			Vram:   recommendation.Requests.Vram.DeepCopy(),
+		}
+		originalRequest.Tflops.Sub(deltaRes.Tflops)
+		originalRequest.Vram.Sub(deltaRes.Vram)
+
+		originalLimit := tfv1.Resource{
+			Tflops: recommendation.Limits.Tflops.DeepCopy(),
+			Vram:   recommendation.Limits.Vram.DeepCopy(),
+		}
+		originalLimit.Tflops.Sub(deltaRes.Tflops)
+		originalLimit.Vram.Sub(deltaRes.Vram)
+
+		if _, _, rollbackErr := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+			PodUID:     string(worker.UID),
+			IsScaleUp:  !isScaleUp,
+			NewRequest: originalRequest,
+			NewLimit:   originalLimit,
+		}, false); rollbackErr != nil {
+			log.Error(rollbackErr, "failed to rollback allocation after patch failure",
+				"worker", worker.Name, "originalError", err)
+		} else {
+			log.Info("rolled back allocation after patch failure",
+				"worker", worker.Name, "originalError", err)
+		}
 		return fmt.Errorf("failed to patch worker %s: %v", worker.Name, err)
 	}
 

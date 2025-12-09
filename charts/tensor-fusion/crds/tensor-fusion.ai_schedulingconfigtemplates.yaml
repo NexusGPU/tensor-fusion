@@ -50,173 +50,6 @@ spec:
           spec:
             description: Place the workload to right nodes and scale smart.
             properties:
-              autoScaling:
-                description: scale the workload based on the usage and traffic
-                properties:
-                  autoSetReplicas:
-                    description: |-
-                      layer 2 horizontal auto-scaling, scale up to more GPU cards if max limits threshold hit
-                      HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
-                    properties:
-                      enable:
-                        type: boolean
-                      evaluationPeriod:
-                        type: string
-                      scaleDownCoolDownTime:
-                        type: string
-                      scaleDownStep:
-                        type: string
-                      scaleUpCoolDownTime:
-                        type: string
-                      scaleUpStep:
-                        type: string
-                      targetTFlopsOfLimits:
-                        type: string
-                    type: object
-                  autoSetResources:
-                    description: |-
-                      layer 1 adjusting, to match the actual usage in the long run, only for N:M remote vGPU mode
-                      Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
-                    properties:
-                      confidenceInterval:
-                        description: 'The time interval used for computing the confidence
-                          multiplier for the lower and upper bound. Default: 24h'
-                        type: string
-                      enable:
-                        type: boolean
-                      historyLength:
-                        description: 'How much time back TSDB have to be queried to
-                          get historical metrics. Default: 1d'
-                        type: string
-                      historyResolution:
-                        description: 'Resolution at which TSDB is queried for historical
-                          metrics. Default: 1m'
-                        type: string
-                      lowerboundtflopspercentile:
-                        description: 'Tflops usage percentile that will be used for
-                          the lower bound on tflops recommendation. Default: 0.5'
-                        type: string
-                      lowerboundvrampercentile:
-                        description: 'Vram usage percentile that will be used for
-                          the lower bound on vram recommendation. Default: 0.5'
-                        type: string
-                      requestMarginFraction:
-                        description: 'Fraction of usage added as the safety margin
-                          to the recommended request. Default: 0.15'
-                        type: string
-                      targetResource:
-                        description: Target resource to scale, such as "tflops", "vram",
-                          or "all" by default
-                        type: string
-                      targettflopspercentile:
-                        description: 'Tflops usage percentile that will be used as
-                          a base for tflops target recommendation. Default: 0.9'
-                        type: string
-                      targetvrampercentile:
-                        description: 'Vram usage percentile that will be used as a
-                          base for vram target recommendation. Default: 0.9'
-                        type: string
-                      upperboundtflopspercentile:
-                        description: 'Tflops usage percentile that will be used for
-                          the upper bound on tflops recommendation. Default: 0.95'
-                        type: string
-                      upperboundvrampercentile:
-                        description: 'Vram usage percentile that will be used for
-                          the upper bound on vram recommendation. Default: 0.95'
-                        type: string
-                    type: object
-                  cronScalingRules:
-                    description: CronScalingRules defines a list of CronScaling rules
-                      used to schedule scaling actions based on cron expressions.
-                    items:
-                      description: |-
-                        CronScalingRule defines the rule for scaling resources based on a cron schedule.
-                        It allows enabling/disabling the scaler, specifying the time window for scaling,
-                        and configuring the desired resources and replicas during the scheduled period.
-                      properties:
-                        desiredReplicas:
-                          description: DesiredReplicas is the target number of replicas
-                            during the schedule.
-                          format: int32
-                          type: integer
-                        desiredResources:
-                          description: DesiredResources specifies the target resources
-                            to scale to during the schedule.
-                          properties:
-                            limits:
-                              properties:
-                                compute:
-                                  anyOf:
-                                  - type: integer
-                                  - type: string
-                                  description: 0-100 percentage, mutually exclusive
-                                    with TFLOPs
-                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                  x-kubernetes-int-or-string: true
-                                tflops:
-                                  anyOf:
-                                  - type: integer
-                                  - type: string
-                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                  x-kubernetes-int-or-string: true
-                                vram:
-                                  anyOf:
-                                  - type: integer
-                                  - type: string
-                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                  x-kubernetes-int-or-string: true
-                              required:
-                              - tflops
-                              - vram
-                              type: object
-                            requests:
-                              properties:
-                                compute:
-                                  anyOf:
-                                  - type: integer
-                                  - type: string
-                                  description: 0-100 percentage, mutually exclusive
-                                    with TFLOPs
-                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                  x-kubernetes-int-or-string: true
-                                tflops:
-                                  anyOf:
-                                  - type: integer
-                                  - type: string
-                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                  x-kubernetes-int-or-string: true
-                                vram:
-                                  anyOf:
-                                  - type: integer
-                                  - type: string
-                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                  x-kubernetes-int-or-string: true
-                              required:
-                              - tflops
-                              - vram
-                              type: object
-                          required:
-                          - limits
-                          - requests
-                          type: object
-                        enable:
-                          description: Enable specifies whether the cron scaler is
-                            enabled.
-                          type: boolean
-                        end:
-                          description: End is the end time for the scaling schedule,
-                            in cron format.
-                          type: string
-                        name:
-                          description: Name is the identifier for the cron scaler.
-                          type: string
-                        start:
-                          description: Start is the start time for the scaling schedule,
-                            in cron format.
-                          type: string
-                      type: object
-                    type: array
-                type: object
               hypervisor:
                 description: single GPU device multi-process queuing and fair scheduling
                   with QoS constraint
@@ -359,7 +192,8 @@ spec:
               reBalancer:
                 description: |-
                   avoid hot GPU devices and continuously balance the workload
-                  implemented by trigger a simulation scheduling and advise better GPU nodes for scheduler
+                  implemented by mark GPU as hot and trigger evict for re-scheduling
+                  The hot GPUs will get lower priority for scheduling
                 properties:
                   enable:
                     type: boolean
@@ -374,6 +208,261 @@ spec:
                         x-kubernetes-preserve-unknown-fields: true
                     type: object
                 type: object
+              verticalScalingRules:
+                description: scale the workload based on the usage and traffic
+                items:
+                  properties:
+                    autoScaling:
+                      properties:
+                        autoSetResources:
+                          description: Adjust baseline requests and limits to match
+                            the actual usage using recent metrics
+                          properties:
+                            enable:
+                              type: boolean
+                            historyDataPeriod:
+                              description: 'How much time back TSDB have to be queried
+                                to get historical metrics. Default: 2h'
+                              type: string
+                            initialDelayPeriod:
+                              description: 'When workload is created, wait for this
+                                period to collect enough metrics before scaling, default:
+                                30m'
+                              type: string
+                            interval:
+                              description: 'How often to evaluate the scaling operation,
+                                default: same as global config''s auto scaling interval'
+                              type: string
+                            lowerBoundComputePercentile:
+                              description: 'Tflops usage percentile that will be used
+                                for the lower bound on tflops recommendation. Default:
+                                0.5'
+                              type: string
+                            lowerBoundVRAMPercentile:
+                              description: 'Vram usage percentile that will be used
+                                for the lower bound on vram recommendation. Default:
+                                0.5'
+                              type: string
+                            marginFraction:
+                              description: 'Fraction of usage added as the safety
+                                margin to the recommended request. Default: 0.15'
+                              type: string
+                            maxComputeResourcesRatio:
+                              description: 'Max scaling ratio to original resources,
+                                e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi,
+                                default: 10.0'
+                              type: string
+                            maxVRAMResourcesRatio:
+                              description: 'Max scaling ratio to original resources,
+                                e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi,
+                                default: 5.0'
+                              type: string
+                            minComputeResourcesRatio:
+                              description: 'Min scaling ratio to original resources,
+                                e.g. request 10Gi, ratio 0.5, scale down limit to
+                                5Gi, default: 0.1'
+                              type: string
+                            minVRAMResourcesRatio:
+                              description: 'Min scaling ratio to original resources,
+                                e.g. request 10Gi, ratio 0.5, scale down limit to
+                                5Gi, default: 0.2'
+                              type: string
+                            targetComputePercentile:
+                              description: 'Tflops usage percentile that will be used
+                                as a base for tflops target recommendation. Default:
+                                0.95'
+                              type: string
+                            targetResource:
+                              description: Target resource to scale, such as "compute",
+                                "vram", or "all" by default
+                              type: string
+                            targetVRAMPercentile:
+                              description: |-
+                                Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.95
+                                The requests will be set to match this percentile of the actual usage, but won't change when current requests is in lower and upper bounds
+                              type: string
+                            updateThreshold:
+                              description: |-
+                                Only when the difference between the recommended request and the current request is greater than this threshold, the request will be updated. Default: 0.1
+                                This value can't greater than MarginFraction, otherwise no update will be made since always inside the threshold after multiplying MarginFraction.
+                              type: string
+                            upperBoundComputePercentile:
+                              description: 'Tflops usage percentile that will be used
+                                for the upper bound on tflops recommendation. Default:
+                                0.98'
+                              type: string
+                            upperBoundVRAMPercentile:
+                              description: 'Vram usage percentile that will be used
+                                for the upper bound on vram recommendation. Default:
+                                0.99'
+                              type: string
+                          type: object
+                        cronScalingRules:
+                          description: CronScalingRules defines a list of CronScaling
+                            rules used to schedule scaling actions based on cron expressions.
+                          items:
+                            description: |-
+                              CronScalingRule defines the rule for scaling resources based on a cron schedule.
+                              It allows enabling/disabling the scaler, specifying the time window for scaling,
+                              and configuring the desired resources and replicas during the scheduled period.
+                            properties:
+                              desiredResources:
+                                description: DesiredResources specifies the target
+                                  resources to scale to during the schedule.
+                                properties:
+                                  limits:
+                                    properties:
+                                      compute:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        description: 0-100 percentage, mutually exclusive
+                                          with TFLOPs
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      tflops:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      vram:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    required:
+                                    - tflops
+                                    - vram
+                                    type: object
+                                  requests:
+                                    properties:
+                                      compute:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        description: 0-100 percentage, mutually exclusive
+                                          with TFLOPs
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      tflops:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      vram:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    required:
+                                    - tflops
+                                    - vram
+                                    type: object
+                                required:
+                                - limits
+                                - requests
+                                type: object
+                              enable:
+                                description: Enable specifies whether the cron scaler
+                                  is enabled.
+                                type: boolean
+                              end:
+                                description: End is the end time for the scaling schedule,
+                                  in cron format.
+                                type: string
+                              name:
+                                description: Name is the identifier for the cron scaler.
+                                type: string
+                              start:
+                                description: Start is the start time for the scaling
+                                  schedule, in cron format.
+                                type: string
+                            type: object
+                          type: array
+                        externalScaler:
+                          properties:
+                            apiKeySecretRef:
+                              description: 'API key will be set into the request header
+                                as "Authorization: Bearer <api key>"'
+                              properties:
+                                name:
+                                  description: name is unique within a namespace to
+                                    reference a secret resource.
+                                  type: string
+                                namespace:
+                                  description: namespace defines the space within
+                                    which the secret name must be unique.
+                                  type: string
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            enable:
+                              type: boolean
+                            initialDelayPeriod:
+                              type: string
+                            interval:
+                              description: 'How often to evaluate the scaling operation,
+                                default: same as global config''s auto scaling interval'
+                              type: string
+                            url:
+                              type: string
+                          type: object
+                      type: object
+                    name:
+                      type: string
+                    selector:
+                      description: |-
+                        Rule auto applied in webhook, when pod matches the selector,
+                        the rule will be added into workload profile's autoScalingConfig and annotation
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                  type: object
+                type: array
             required:
             - placement
             type: object

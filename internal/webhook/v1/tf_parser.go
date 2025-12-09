@@ -13,6 +13,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -138,6 +140,11 @@ func ParseTensorFusionInfo(
 
 	parseAutoScalingAnnotations(pod, workloadProfile)
 
+	// Apply pool-level vertical scaling rules if SchedulingConfigTemplate is configured
+	if err := applyVerticalScalingRules(ctx, k8sClient, pod, pool, workloadProfile); err != nil {
+		return info, fmt.Errorf("apply vertical scaling rules: %w", err)
+	}
+
 	injectContainer, ok := pod.Annotations[constants.InjectContainerAnnotation]
 	containerNames := strings.Split(injectContainer, ",")
 	if len(pod.Spec.Containers) > 1 {
@@ -168,15 +175,71 @@ func ParseTensorFusionInfo(
 func parseAutoScalingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) {
 	autoResources, ok := pod.Annotations[constants.AutoScaleResourcesAnnotation]
 	if ok && autoResources == constants.TrueStringValue {
+		if workloadProfile.Spec.AutoScalingConfig.AutoSetResources == nil {
+			workloadProfile.Spec.AutoScalingConfig.AutoSetResources = &tfv1.AutoSetResources{}
+		}
 		workloadProfile.Spec.AutoScalingConfig.AutoSetResources.Enable = true
+
+		targetResource, ok := pod.Annotations[constants.AutoScaleTargetResourceAnnotation]
+		if ok {
+			workloadProfile.Spec.AutoScalingConfig.AutoSetResources.TargetResource = tfv1.ScalingTargetResource(targetResource)
+		} else {
+			workloadProfile.Spec.AutoScalingConfig.AutoSetResources.TargetResource = tfv1.ScalingTargetResourceAll
+		}
 	}
-	targetResource, ok := pod.Annotations[constants.AutoScaleTargetResourceAnnotation]
-	if ok {
-		workloadProfile.Spec.AutoScalingConfig.AutoSetResources.TargetResource = targetResource
+}
+
+// applyVerticalScalingRules applies pool-level vertical scaling rules from SchedulingConfigTemplate
+// to the workload profile if the pod matches any rule's selector
+func applyVerticalScalingRules(ctx context.Context, k8sClient client.Client, pod *corev1.Pod, pool *tfv1.GPUPool, workloadProfile *tfv1.WorkloadProfile) error {
+	if pool.Spec.SchedulingConfigTemplate == nil || *pool.Spec.SchedulingConfigTemplate == "" {
+		return nil
 	}
-	autoReplicas, ok := pod.Annotations[constants.AutoScaleReplicasAnnotation]
-	if ok && autoReplicas == constants.TrueStringValue {
-		workloadProfile.Spec.AutoScalingConfig.AutoSetReplicas.Enable = true
+
+	schedulingConfigTemplate := &tfv1.SchedulingConfigTemplate{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: *pool.Spec.SchedulingConfigTemplate}, schedulingConfigTemplate); err != nil {
+		// If template not found, just skip
+		return nil
+	}
+
+	// Check if pod matches any vertical scaling rule
+	for _, rule := range schedulingConfigTemplate.Spec.VerticalScalingRules {
+		if rule.Rule == nil {
+			continue
+		}
+
+		selector, err := metav1.LabelSelectorAsSelector(&rule.Selector)
+		if err != nil {
+			continue
+		}
+
+		if selector.Matches(labels.Set(pod.Labels)) {
+			// Merge the rule's AutoScalingConfig into workload profile
+			mergeAutoScalingConfig(workloadProfile, rule.Rule)
+			break // Apply first matching rule
+		}
+	}
+
+	return nil
+}
+
+// mergeAutoScalingConfig merges the rule's AutoScalingConfig into workload profile
+func mergeAutoScalingConfig(workloadProfile *tfv1.WorkloadProfile, ruleConfig *tfv1.AutoScalingConfig) {
+	if ruleConfig.AutoSetResources != nil {
+		if workloadProfile.Spec.AutoScalingConfig.AutoSetResources == nil {
+			workloadProfile.Spec.AutoScalingConfig.AutoSetResources = &tfv1.AutoSetResources{}
+		}
+		utils.MergeStructFields(workloadProfile.Spec.AutoScalingConfig.AutoSetResources, ruleConfig.AutoSetResources)
+	}
+
+	// Merge CronScalingRules
+	if len(ruleConfig.CronScalingRules) > 0 {
+		workloadProfile.Spec.AutoScalingConfig.CronScalingRules = append(workloadProfile.Spec.AutoScalingConfig.CronScalingRules, ruleConfig.CronScalingRules...)
+	}
+
+	// Merge ExternalScaler
+	if ruleConfig.ExternalScaler != nil {
+		workloadProfile.Spec.AutoScalingConfig.ExternalScaler = ruleConfig.ExternalScaler
 	}
 }
 

@@ -20,19 +20,27 @@ const (
 	// Fraction of usage added as the safety margin to the recommended request
 	defaultRequestMarginFraction = 0.15
 	// Vram usage percentile that will be used as a base for vram target recommendation. Doesn't affect vram lower bound nor vram upper bound.
-	defaultTargetVramPercentile = 0.9
+	defaultTargetVramPercentile = 0.98
 	// Vram usage percentile that will be used for the lower bound on vram recommendation.
 	defaultLowerBoundVramPercentile = 0.5
 	// Vram usage percentile that will be used for the upper bound on vram recommendation.
-	defaultUpperBoundVramPercentile = 0.95
+	defaultUpperBoundVramPercentile = 0.99
 	// Tflops usage percentile that will be used as a base for tflops target recommendation. Doesn't affect tflops lower bound nor tflops upper bound.
-	defaultTargetTflopsPercentile = 0.9
+	defaultTargetTflopsPercentile = 0.95
 	// Tflops usage percentile that will be used for the lower bound on tflops recommendation.
 	defaultLowerBoundTflopsPercentile = 0.5
 	// Tflops usage percentile that will be used for the upper bound on tflops recommendation.
-	defaultUpperBoundTflopsPercentile = 0.95
-	// The time interval used for computing the confidence multiplier for the lower and upper bound. Default: 24h
-	defaultConfidenceInterval = time.Hour * 24
+	defaultUpperBoundTflopsPercentile = 0.98
+	// Default update threshold
+	defaultUpdateThreshold = 0.1
+	// Default min/max scaling ratios
+	defaultMinVRAMResourcesRatio    = 0.2
+	defaultMaxVRAMResourcesRatio    = 5.0
+	defaultMinComputeResourcesRatio = 0.1
+	defaultMaxComputeResourcesRatio = 10.0
+	// Minimum resource values
+	minComputeResource = 1.0  // 1 TFlops
+	minVRAMResource    = 1024 // 1Gi in MiB
 )
 
 var defaultPercentileConfig = PercentileConfig{
@@ -43,7 +51,11 @@ var defaultPercentileConfig = PercentileConfig{
 	LowerBoundVramPercentile:   defaultLowerBoundVramPercentile,
 	UpperBoundVramPercentile:   defaultUpperBoundVramPercentile,
 	RequestMarginFraction:      defaultRequestMarginFraction,
-	ConfidenceInterval:         defaultConfidenceInterval,
+	UpdateThreshold:            defaultUpdateThreshold,
+	MinVRAMResourcesRatio:      defaultMinVRAMResourcesRatio,
+	MaxVRAMResourcesRatio:      defaultMaxVRAMResourcesRatio,
+	MinComputeResourcesRatio:   defaultMinComputeResourcesRatio,
+	MaxComputeResourcesRatio:   defaultMaxComputeResourcesRatio,
 }
 
 type ResourcesEstimator interface {
@@ -58,7 +70,11 @@ type PercentileConfig struct {
 	LowerBoundVramPercentile   float64
 	UpperBoundVramPercentile   float64
 	RequestMarginFraction      float64
-	ConfidenceInterval         time.Duration
+	UpdateThreshold            float64
+	MinVRAMResourcesRatio      float64
+	MaxVRAMResourcesRatio      float64
+	MinComputeResourcesRatio   float64
+	MaxComputeResourcesRatio   float64
 }
 
 type PercentileRecommender struct {
@@ -80,6 +96,40 @@ func (p *PercentileRecommender) Name() string {
 func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workload.State) (*RecResult, error) {
 	log := log.FromContext(ctx)
 
+	// Check InitialDelayPeriod
+	asr := workload.Spec.AutoScalingConfig.AutoSetResources
+	if asr == nil {
+		return nil, nil
+	}
+	config := getPercentileConfig(asr)
+	initialDelay, err := parseDurationOrDefault(asr.InitialDelayPeriod, 30*time.Minute)
+	if err != nil {
+		log.Error(err, "failed to parse initial delay period, using default")
+		initialDelay = 30 * time.Minute
+	}
+
+	workloadCreationTime := workload.CreationTimestamp.Time
+	if workloadCreationTime.IsZero() {
+		// Fallback: use current time if creation timestamp is not set
+		workloadCreationTime = time.Now()
+	}
+
+	timeSinceCreation := time.Since(workloadCreationTime)
+	if timeSinceCreation < initialDelay {
+		meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
+			Type:               constants.ConditionStatusTypeResourceUpdate,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Now(),
+			Reason:             "LowConfidence",
+			Message:            fmt.Sprintf("Workload created time less than InitialDelayPeriod %v, no update performed", initialDelay),
+		})
+		return &RecResult{
+			Resources:        tfv1.Resources{},
+			HasApplied:       true,
+			ScaleDownLocking: false,
+		}, nil
+	}
+
 	estimations := p.GetResourcesEstimation(workload)
 	if estimations == nil {
 		return nil, nil
@@ -88,21 +138,29 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 	log.Info("estimated resources", "workload", workload.Name, "estimations", estimations)
 
 	curRes := workload.GetCurrentResourcesSpec()
+	originalRes := workload.GetOriginalResourcesSpec()
 	recommendation := tfv1.Resources{}
 	message := ""
 
+	// Apply min/max scaling ratio constraints - config already set above
+
 	// Handle TFLOPS scaling
 	if result := p.handleResourceScaling(
-		"TFLOPS",
+		"Compute",
 		&curRes.Requests.Tflops,
 		&curRes.Limits.Tflops,
 		&estimations.TargetTflops,
 		&estimations.LowerBoundTflops,
 		&estimations.UpperBoundTflops,
+		&originalRes.Requests.Tflops,
+		config,
 	); result != nil {
 		message = result.message
 		recommendation.Requests.Tflops = result.targetRequest
 		recommendation.Limits.Tflops = result.targetLimit
+	} else {
+		recommendation.Requests.Tflops = curRes.Requests.Tflops
+		recommendation.Limits.Tflops = curRes.Limits.Tflops
 	}
 
 	// Handle VRAM scaling
@@ -113,6 +171,8 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		&estimations.TargetVram,
 		&estimations.LowerBoundVram,
 		&estimations.UpperBoundVram,
+		&originalRes.Requests.Vram,
+		config,
 	); result != nil {
 		if len(message) > 0 {
 			message += fmt.Sprintf(", %s", result.message)
@@ -121,6 +181,57 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		}
 		recommendation.Requests.Vram = result.targetRequest
 		recommendation.Limits.Vram = result.targetLimit
+	} else {
+		recommendation.Requests.Vram = curRes.Requests.Vram
+		recommendation.Limits.Vram = curRes.Limits.Vram
+	}
+
+	// Check UpdateThreshold
+	if !recommendation.IsZero() {
+		updateThreshold := config.UpdateThreshold
+		shouldUpdate := false
+		thresholdMessage := ""
+
+		// Check if change exceeds threshold
+		if !curRes.Requests.Tflops.IsZero() && !recommendation.Requests.Tflops.IsZero() {
+			diff := absDiff(curRes.Requests.Tflops, recommendation.Requests.Tflops)
+			threshold := multiplyQuantity(curRes.Requests.Tflops, updateThreshold)
+			if diff.Cmp(threshold) > 0 {
+				shouldUpdate = true
+			} else {
+				thresholdMessage += fmt.Sprintf("Compute change (%s) within threshold (%s), ", diff.String(), threshold.String())
+			}
+		}
+
+		if !curRes.Requests.Vram.IsZero() && !recommendation.Requests.Vram.IsZero() {
+			diff := absDiff(curRes.Requests.Vram, recommendation.Requests.Vram)
+			threshold := multiplyQuantity(curRes.Requests.Vram, updateThreshold)
+			if diff.Cmp(threshold) > 0 {
+				shouldUpdate = true
+			} else {
+				if thresholdMessage == "" {
+					thresholdMessage = "VRAM change within threshold, "
+				} else {
+					thresholdMessage += "VRAM change within threshold, "
+				}
+			}
+		}
+
+		if !shouldUpdate && thresholdMessage != "" {
+			meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
+				Type:               constants.ConditionStatusTypeResourceUpdate,
+				Status:             metav1.ConditionTrue,
+				LastTransitionTime: metav1.Now(),
+				Reason:             "InsideUpdateThreshold",
+				Message:            thresholdMessage + "no update performed",
+			})
+			// Still update recommendation in status
+			return &RecResult{
+				Resources:        recommendation,
+				HasApplied:       false,
+				ScaleDownLocking: false,
+			}, nil
+		}
 	}
 
 	if recommendation.IsZero() {
@@ -143,10 +254,10 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 	hasApplied := recommendation.Equal(curRes)
 	if !hasApplied {
 		meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
-			Type:               constants.ConditionStatusTypeRecommendationProvided,
+			Type:               constants.ConditionStatusTypeResourceUpdate,
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),
-			Reason:             "OutOfEstimatedBound",
+			Reason:             "Updated",
 			Message:            message,
 		})
 	}
@@ -166,33 +277,84 @@ type scalingResult struct {
 
 func (p *PercentileRecommender) handleResourceScaling(
 	resourceName string,
-	currentRequest, currentLimit, targetRequest, lowerBound, upperBound *resource.Quantity,
+	currentRequest, currentLimit, targetRequest, lowerBound, upperBound, originalRequest *resource.Quantity,
+	config *PercentileConfig,
 ) *scalingResult {
-	isScaleUp := currentRequest.Cmp(*lowerBound) < 0
-	isScaleDown := currentRequest.Cmp(*upperBound) > 0
+	// UpperBound becomes limit, Target becomes request
+	targetReq := *targetRequest
+	targetLim := *upperBound
+
+	// Apply min/max scaling ratio constraints
+	var minRatio, maxRatio float64
+	if resourceName == "Compute" {
+		minRatio = config.MinComputeResourcesRatio
+		maxRatio = config.MaxComputeResourcesRatio
+	} else {
+		minRatio = config.MinVRAMResourcesRatio
+		maxRatio = config.MaxVRAMResourcesRatio
+	}
+
+	// Calculate min and max allowed values based on original request
+	originalValue := originalRequest.Value()
+	minAllowed := int64(float64(originalValue) * minRatio)
+	maxAllowed := int64(float64(originalValue) * maxRatio)
+
+	// Apply minimum resource constraints
+	var minResource int64
+	if resourceName == "Compute" {
+		minResource = int64(minComputeResource * 1e12) // Convert TFlops to base units
+	} else {
+		minResource = int64(minVRAMResource * 1024 * 1024) // Convert GiB to bytes
+	}
+
+	// Use original value if it's smaller than minimum
+	if originalValue < minResource {
+		minResource = originalValue
+	}
+
+	// Clamp target request to min/max bounds
+	if targetReq.Value() < minAllowed {
+		targetReq = *resource.NewQuantity(minAllowed, targetReq.Format)
+	}
+	if targetReq.Value() > maxAllowed {
+		targetReq = *resource.NewQuantity(maxAllowed, targetReq.Format)
+	}
+	if targetReq.Value() < minResource {
+		targetReq = *resource.NewQuantity(minResource, targetReq.Format)
+	}
+
+	// Clamp target limit to min/max bounds
+	if targetLim.Value() < minAllowed {
+		targetLim = *resource.NewQuantity(minAllowed, targetLim.Format)
+	}
+	if targetLim.Value() > maxAllowed {
+		targetLim = *resource.NewQuantity(maxAllowed, targetLim.Format)
+	}
+	if targetLim.Value() < minResource {
+		targetLim = *resource.NewQuantity(minResource, targetLim.Format)
+	}
+
+	// Check if scaling is needed
+	isScaleUp := currentRequest.Cmp(targetReq) < 0
+	isScaleDown := currentRequest.Cmp(targetReq) > 0
 
 	if !isScaleUp && !isScaleDown {
 		return nil
 	}
 
-	targetLimit := getProportionalLimit(currentLimit, currentRequest, targetRequest)
-	if targetLimit == nil {
-		return nil
-	}
-
 	var message string
 	if isScaleUp {
-		message = fmt.Sprintf("%s scaled up due to (%s) below lower bound (%s)",
-			resourceName, currentRequest.String(), lowerBound.String())
+		message = fmt.Sprintf("%s scaled up: request %s -> %s, limit %s -> %s",
+			resourceName, currentRequest.String(), targetReq.String(), currentLimit.String(), targetLim.String())
 	} else {
-		message = fmt.Sprintf("%s scaled down due to (%s) above upper bound (%s)",
-			resourceName, currentRequest.String(), upperBound.String())
+		message = fmt.Sprintf("%s scaled down: request %s -> %s, limit %s -> %s",
+			resourceName, currentRequest.String(), targetReq.String(), currentLimit.String(), targetLim.String())
 	}
 
 	return &scalingResult{
 		message:       message,
-		targetRequest: *targetRequest,
-		targetLimit:   *targetLimit,
+		targetRequest: targetReq,
+		targetLimit:   targetLim,
 	}
 }
 
@@ -216,6 +378,18 @@ func getProportionalLimit(originalLimit, originalRequest, recommendedRequest *re
 	return nil
 }
 
+func absDiff(a, b resource.Quantity) resource.Quantity {
+	if a.Cmp(b) > 0 {
+		return *resource.NewQuantity(a.Value()-b.Value(), a.Format)
+	}
+	return *resource.NewQuantity(b.Value()-a.Value(), a.Format)
+}
+
+func multiplyQuantity(q resource.Quantity, multiplier float64) resource.Quantity {
+	value := float64(q.Value()) * multiplier
+	return *resource.NewQuantity(int64(value), q.Format)
+}
+
 type EstimatedResources struct {
 	LowerBoundTflops resource.Quantity
 	TargetTflops     resource.Quantity
@@ -234,15 +408,17 @@ type resourcesEstimator struct {
 	upperBoundVram   VramEstimator
 }
 
-// var percentileConfigToEstimatorsMap map[PercentileConfig]resourcesEstimator
-
 func (r *resourcesEstimator) GetResourcesEstimation(workload *workload.State) *EstimatedResources {
 	aggregator := workload.WorkerUsageAggregator
 	if aggregator.IsEmpty() {
 		return nil
 	}
 	// TODO: cache config
-	r.createEstimatorsFromConfig(getPercentileConfig(&workload.Spec.AutoScalingConfig.AutoSetResources))
+	asr := workload.Spec.AutoScalingConfig.AutoSetResources
+	if asr == nil {
+		return nil
+	}
+	r.createEstimatorsFromConfig(getPercentileConfig(asr))
 	return &EstimatedResources{
 		LowerBoundTflops: QuantityFromAmount(r.lowerBoundTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
 		TargetTflops:     QuantityFromAmount(r.targetTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
@@ -254,6 +430,7 @@ func (r *resourcesEstimator) GetResourcesEstimation(workload *workload.State) *E
 }
 
 func (r *resourcesEstimator) createEstimatorsFromConfig(config *PercentileConfig) {
+	// Simplified: no confidence multiplier, just percentile + margin
 	targetTflops := NewPercentileTflopsEstimator(config.TargetTflopsPercentile)
 	lowerBoundTflops := NewPercentileTflopsEstimator(config.LowerBoundTflopsPercentile)
 	upperBoundTflops := NewPercentileTflopsEstimator(config.UpperBoundTflopsPercentile)
@@ -262,9 +439,6 @@ func (r *resourcesEstimator) createEstimatorsFromConfig(config *PercentileConfig
 	lowerBoundTflops = WithTflopsMargin(config.RequestMarginFraction, lowerBoundTflops)
 	upperBoundTflops = WithTflopsMargin(config.RequestMarginFraction, upperBoundTflops)
 
-	upperBoundTflops = WithTflopsConfidenceMultiplier(1.0, 1.0, upperBoundTflops, config.ConfidenceInterval)
-	lowerBoundTflops = WithTflopsConfidenceMultiplier(0.001, -2.0, lowerBoundTflops, config.ConfidenceInterval)
-
 	targetVram := NewPercentileVramEstimator(config.TargetVramPercentile)
 	lowerBoundVram := NewPercentileVramEstimator(config.LowerBoundVramPercentile)
 	upperBoundVram := NewPercentileVramEstimator(config.UpperBoundVramPercentile)
@@ -272,9 +446,6 @@ func (r *resourcesEstimator) createEstimatorsFromConfig(config *PercentileConfig
 	targetVram = WithVramMargin(config.RequestMarginFraction, targetVram)
 	lowerBoundVram = WithVramMargin(config.RequestMarginFraction, lowerBoundVram)
 	upperBoundVram = WithVramMargin(config.RequestMarginFraction, upperBoundVram)
-
-	upperBoundVram = WithVramConfidenceMultiplier(1.0, 1.0, upperBoundVram, config.ConfidenceInterval)
-	lowerBoundVram = WithVramConfidenceMultiplier(0.001, -2.0, lowerBoundVram, config.ConfidenceInterval)
 
 	*r = resourcesEstimator{
 		lowerBoundTflops: lowerBoundTflops,
@@ -297,13 +468,18 @@ func getPercentileConfig(asr *tfv1.AutoSetResources) *PercentileConfig {
 		val string
 		dst *float64
 	}{
-		{asr.TargetTflopsPercentile, &cfg.TargetTflopsPercentile},
-		{asr.LowerBoundTflopsPercentile, &cfg.LowerBoundTflopsPercentile},
-		{asr.UpperBoundTflopsPercentile, &cfg.UpperBoundTflopsPercentile},
-		{asr.TargetVramPercentile, &cfg.TargetVramPercentile},
-		{asr.LowerBoundVramPercentile, &cfg.LowerBoundVramPercentile},
-		{asr.UpperBoundVramPercentile, &cfg.UpperBoundVramPercentile},
-		{asr.RequestMarginFraction, &cfg.RequestMarginFraction},
+		{asr.TargetComputePercentile, &cfg.TargetTflopsPercentile},
+		{asr.LowerBoundComputePercentile, &cfg.LowerBoundTflopsPercentile},
+		{asr.UpperBoundComputePercentile, &cfg.UpperBoundTflopsPercentile},
+		{asr.TargetVRAMPercentile, &cfg.TargetVramPercentile},
+		{asr.LowerBoundVRAMPercentile, &cfg.LowerBoundVramPercentile},
+		{asr.UpperBoundVRAMPercentile, &cfg.UpperBoundVramPercentile},
+		{asr.MarginFraction, &cfg.RequestMarginFraction},
+		{asr.UpdateThreshold, &cfg.UpdateThreshold},
+		{asr.MinVRAMResourcesRatio, &cfg.MinVRAMResourcesRatio},
+		{asr.MaxVRAMResourcesRatio, &cfg.MaxVRAMResourcesRatio},
+		{asr.MinComputeResourcesRatio, &cfg.MinComputeResourcesRatio},
+		{asr.MaxComputeResourcesRatio, &cfg.MaxComputeResourcesRatio},
 	}
 	for _, f := range fields {
 		if f.val == "" {
@@ -314,11 +490,12 @@ func getPercentileConfig(asr *tfv1.AutoSetResources) *PercentileConfig {
 		}
 	}
 
-	if asr.ConfidenceInterval != "" {
-		if d, err := time.ParseDuration(asr.ConfidenceInterval); err == nil {
-			cfg.ConfidenceInterval = d
-		}
-	}
-
 	return &cfg
+}
+
+func parseDurationOrDefault(durationStr string, defaultDuration time.Duration) (time.Duration, error) {
+	if durationStr == "" {
+		return defaultDuration, nil
+	}
+	return time.ParseDuration(durationStr)
 }

@@ -113,9 +113,10 @@ const (
 	GenHostPortNameLabel    = Domain + "/port-name"
 	GenPortNumberAnnotation = Domain + "/port-number"
 
-	AutoScaleResourcesAnnotation      = Domain + "/auto-resources"
-	AutoScaleReplicasAnnotation       = Domain + "/auto-replicas"
-	AutoScaleTargetResourceAnnotation = Domain + "/auto-scale-target-resource"
+	// Enable autoscale, configure in workload or simply enable default rule with annotation
+	AutoScaleResourcesAnnotation = Domain + "/autoscale"
+	// Target resource to autoscale, such as "compute", "vram", or "all" by default
+	AutoScaleTargetResourceAnnotation = Domain + "/autoscale-target"
 
 	GpuReleasedAnnotation = Domain + "/gpu-released"
 
@@ -163,6 +164,7 @@ const (
 	ConditionStatusTypeCloudVendorConnection = "CloudVendorConnectionReady"
 
 	ConditionStatusTypeRecommendationProvided = "RecommendationProvided"
+	ConditionStatusTypeResourceUpdate         = "ResourceUpdate"
 )
 
 const (
@@ -219,6 +221,11 @@ const (
 	LowFrequencyObjFailureMaxRPS              = 1
 	LowFrequencyObjFailureMaxBurst            = 1
 	LowFrequencyObjFailureConcurrentReconcile = 5
+)
+
+const (
+	// MaxConcurrentWorkloadProcessing is the maximum number of workloads processed concurrently in autoscaler
+	MaxConcurrentWorkloadProcessing = 10
 )
 
 const GiBToBytes = 1024 * 1024 * 1024

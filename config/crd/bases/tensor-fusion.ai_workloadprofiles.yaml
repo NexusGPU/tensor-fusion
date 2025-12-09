@@ -59,78 +59,83 @@ spec:
                 description: |-
                   AutoScalingConfig configured here will override Pool's schedulingConfig
                   This field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,
-                  user can set tensor-fusion.ai/auto-resources|replicas: 'true'
+                  user can set tensor-fusion.ai/autoscale: 'true'
                 properties:
-                  autoSetReplicas:
-                    description: |-
-                      layer 2 horizontal auto-scaling, scale up to more GPU cards if max limits threshold hit
-                      HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
-                    properties:
-                      enable:
-                        type: boolean
-                      evaluationPeriod:
-                        type: string
-                      scaleDownCoolDownTime:
-                        type: string
-                      scaleDownStep:
-                        type: string
-                      scaleUpCoolDownTime:
-                        type: string
-                      scaleUpStep:
-                        type: string
-                      targetTFlopsOfLimits:
-                        type: string
-                    type: object
                   autoSetResources:
-                    description: |-
-                      layer 1 adjusting, to match the actual usage in the long run, only for N:M remote vGPU mode
-                      Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
+                    description: Adjust baseline requests and limits to match the
+                      actual usage using recent metrics
                     properties:
-                      confidenceInterval:
-                        description: 'The time interval used for computing the confidence
-                          multiplier for the lower and upper bound. Default: 24h'
-                        type: string
                       enable:
                         type: boolean
-                      historyLength:
+                      historyDataPeriod:
                         description: 'How much time back TSDB have to be queried to
-                          get historical metrics. Default: 1d'
+                          get historical metrics. Default: 2h'
                         type: string
-                      historyResolution:
-                        description: 'Resolution at which TSDB is queried for historical
-                          metrics. Default: 1m'
+                      initialDelayPeriod:
+                        description: 'When workload is created, wait for this period
+                          to collect enough metrics before scaling, default: 30m'
                         type: string
-                      lowerboundtflopspercentile:
+                      interval:
+                        description: 'How often to evaluate the scaling operation,
+                          default: same as global config''s auto scaling interval'
+                        type: string
+                      lowerBoundComputePercentile:
                         description: 'Tflops usage percentile that will be used for
                           the lower bound on tflops recommendation. Default: 0.5'
                         type: string
-                      lowerboundvrampercentile:
+                      lowerBoundVRAMPercentile:
                         description: 'Vram usage percentile that will be used for
                           the lower bound on vram recommendation. Default: 0.5'
                         type: string
-                      requestMarginFraction:
+                      marginFraction:
                         description: 'Fraction of usage added as the safety margin
                           to the recommended request. Default: 0.15'
                         type: string
-                      targetResource:
-                        description: Target resource to scale, such as "tflops", "vram",
-                          or "all" by default
+                      maxComputeResourcesRatio:
+                        description: 'Max scaling ratio to original resources, e.g.
+                          request 10Gi, ratio 2.0, scale up limit to 20Gi, default:
+                          10.0'
                         type: string
-                      targettflopspercentile:
+                      maxVRAMResourcesRatio:
+                        description: 'Max scaling ratio to original resources, e.g.
+                          request 10Gi, ratio 2.0, scale up limit to 20Gi, default:
+                          5.0'
+                        type: string
+                      minComputeResourcesRatio:
+                        description: 'Min scaling ratio to original resources, e.g.
+                          request 10Gi, ratio 0.5, scale down limit to 5Gi, default:
+                          0.1'
+                        type: string
+                      minVRAMResourcesRatio:
+                        description: 'Min scaling ratio to original resources, e.g.
+                          request 10Gi, ratio 0.5, scale down limit to 5Gi, default:
+                          0.2'
+                        type: string
+                      targetComputePercentile:
                         description: 'Tflops usage percentile that will be used as
-                          a base for tflops target recommendation. Default: 0.9'
+                          a base for tflops target recommendation. Default: 0.95'
                         type: string
-                      targetvrampercentile:
-                        description: 'Vram usage percentile that will be used as a
-                          base for vram target recommendation. Default: 0.9'
+                      targetResource:
+                        description: Target resource to scale, such as "compute",
+                          "vram", or "all" by default
                         type: string
-                      upperboundtflopspercentile:
+                      targetVRAMPercentile:
+                        description: |-
+                          Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.95
+                          The requests will be set to match this percentile of the actual usage, but won't change when current requests is in lower and upper bounds
+                        type: string
+                      updateThreshold:
+                        description: |-
+                          Only when the difference between the recommended request and the current request is greater than this threshold, the request will be updated. Default: 0.1
+                          This value can't greater than MarginFraction, otherwise no update will be made since always inside the threshold after multiplying MarginFraction.
+                        type: string
+                      upperBoundComputePercentile:
                         description: 'Tflops usage percentile that will be used for
-                          the upper bound on tflops recommendation. Default: 0.95'
+                          the upper bound on tflops recommendation. Default: 0.98'
                         type: string
-                      upperboundvrampercentile:
+                      upperBoundVRAMPercentile:
                         description: 'Vram usage percentile that will be used for
-                          the upper bound on vram recommendation. Default: 0.95'
+                          the upper bound on vram recommendation. Default: 0.99'
                         type: string
                     type: object
                   cronScalingRules:
@@ -142,11 +147,6 @@ spec:
                         It allows enabling/disabling the scaler, specifying the time window for scaling,
                         and configuring the desired resources and replicas during the scheduled period.
                       properties:
-                        desiredReplicas:
-                          description: DesiredReplicas is the target number of replicas
-                            during the schedule.
-                          format: int32
-                          type: integer
                         desiredResources:
                           description: DesiredResources specifies the target resources
                             to scale to during the schedule.
@@ -224,6 +224,33 @@ spec:
                           type: string
                       type: object
                     type: array
+                  externalScaler:
+                    properties:
+                      apiKeySecretRef:
+                        description: 'API key will be set into the request header
+                          as "Authorization: Bearer <api key>"'
+                        properties:
+                          name:
+                            description: name is unique within a namespace to reference
+                              a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which
+                              the secret name must be unique.
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      enable:
+                        type: boolean
+                      initialDelayPeriod:
+                        type: string
+                      interval:
+                        description: 'How often to evaluate the scaling operation,
+                          default: same as global config''s auto scaling interval'
+                        type: string
+                      url:
+                        type: string
+                    type: object
                 type: object
               gpuCount:
                 description: The number of GPUs to be used by the workload, default
