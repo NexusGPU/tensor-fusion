@@ -595,7 +595,9 @@ func verifyRecommendationStatus(workload *tfv1.TensorFusionWorkload, expectedRes
 		g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
 		g.Expect(workload.Status.Recommendation.Equal(expectedRes)).To(BeTrue())
 		g.Expect(workload.Status.AppliedRecommendedReplicas).To(Equal(*workload.Spec.Replicas))
-		condition := meta.FindStatusCondition(workload.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
+		// Check for migrated condition type (ConditionStatusTypeResourceUpdate)
+		// The handler migrates ConditionStatusTypeRecommendationProvided to ConditionStatusTypeResourceUpdate
+		condition := meta.FindStatusCondition(workload.Status.Conditions, constants.ConditionStatusTypeResourceUpdate)
 		g.Expect(condition).ToNot(BeNil())
 		if condition != nil {
 			switch condition.Reason {

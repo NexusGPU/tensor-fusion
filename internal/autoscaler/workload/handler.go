@@ -104,11 +104,6 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recomm
 		return fmt.Errorf("failed to get workload: %v", err)
 	}
 
-	if recommendation == nil &&
-		!isAppliedRecommendedReplicasChanged(workload, state) {
-		return nil
-	}
-
 	patch := client.MergeFrom(workload.DeepCopy())
 	hasChanges := false
 
@@ -124,6 +119,7 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recomm
 	}
 
 	// Update condition - check for both old and new condition types
+	// Always check conditions even if recommendation is nil, as conditions may need to be updated
 	if condition := meta.FindStatusCondition(state.Status.Conditions,
 		constants.ConditionStatusTypeResourceUpdate); condition != nil {
 		oldCondition := meta.FindStatusCondition(workload.Status.Conditions,
@@ -139,10 +135,18 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recomm
 			constants.ConditionStatusTypeResourceUpdate)
 		if oldCondition == nil || oldCondition.Status != condition.Status ||
 			oldCondition.Reason != condition.Reason || oldCondition.Message != condition.Message {
-			condition.Type = constants.ConditionStatusTypeResourceUpdate
-			meta.SetStatusCondition(&workload.Status.Conditions, *condition)
+			// Deep copy condition before modifying to avoid mutating state
+			migratedCondition := condition.DeepCopy()
+			migratedCondition.Type = constants.ConditionStatusTypeResourceUpdate
+			meta.SetStatusCondition(&workload.Status.Conditions, *migratedCondition)
 			hasChanges = true
 		}
+	}
+
+	// Only return early if there are no changes and recommendation is nil and appliedRecommendedReplicas hasn't changed
+	if !hasChanges && recommendation == nil &&
+		!isAppliedRecommendedReplicasChanged(workload, state) {
+		return nil
 	}
 
 	if !hasChanges {
