@@ -33,6 +33,10 @@ type GPUPoolSpec struct {
 	// +optional
 	DefaultUsingLocalGPU *bool `json:"defaultUsingLocalGPU,omitempty"`
 
+	// +optional
+	// +kubebuilder:default=NVIDIA
+	Vendor string `json:"vendor,omitempty"`
+
 	CapacityConfig *CapacityConfig `json:"capacityConfig,omitempty"`
 
 	NodeManagerConfig *NodeManagerConfig `json:"nodeManagerConfig,omitempty"`
@@ -89,10 +93,21 @@ type NodeManagerConfig struct {
 	ProvisioningMode ProvisioningMode `json:"provisioningMode,omitempty"`
 
 	// +optional
+	// +kubebuilder:default=NVIDIA
+	// In single AI accelerator hardware vendor mode, when default vendor set
+	// All nodes provisioned by NodeProvisioner or selected by NodeSelector will be set with vendor label
+	DefaultVendor string `json:"defaultVendor,omitempty"`
+
+	// +optional
 	NodeProvisioner *NodeProvisioner `json:"nodeProvisioner,omitempty"`
 
 	// +optional
 	NodeSelector *corev1.NodeSelector `json:"nodeSelector,omitempty"`
+
+	// +optional
+	// When this field set, the GPU pool will be in multi AI accelerator vendor mode
+	// each GPU node's vendor name is set to map key, e.g. { AMD: { nodeSelectorTerms }}
+	MultiVendorNodeSelector map[string]*corev1.NodeSelector `json:"multiVendorNodeSelector,omitempty"`
 
 	// +optional
 	NodeCompaction *NodeCompaction `json:"nodeCompaction,omitempty"`

@@ -83,7 +83,13 @@ const (
 	// GPUModelAnnotation specifies the required GPU model (e.g., "A100", "H100")
 	GPUModelAnnotation = Domain + "/gpu-model"
 	// GPU ID list is assigned by scheduler, should not specified by user
-	GPUDeviceIDsAnnotation            = Domain + "/gpu-ids"
+	GPUDeviceIDsAnnotation = Domain + "/gpu-ids"
+	// User can specify the partition name to designate the partition template to use, e.g. 1g.20gb+me
+	// TODO: parse and pre-set in scheduler plugin to avoid find matched partition.
+	PartitionNameAnnotation = Domain + "/partition"
+	// PartitionTemplateIDAnnotation is the partition UUID assigned to a pod in partitioned mode
+	// This is read by accelerator.c to mock slice GPU like MIG does
+	PartitionTemplateIDAnnotation     = Domain + "/partition-id"
 	DedicatedGPUAnnotation            = Domain + "/dedicated-gpu"
 	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
 	PricingAnnotation                 = Domain + "/hourly-pricing"
@@ -92,8 +98,11 @@ const (
 	// Additional worker pod template is set by user with /worker-pod-template annotation
 	WorkerPodTemplateAnnotation = Domain + "/worker-pod-template"
 
-	// Pod index annotation for Device Plugin communication (1-512)
-	PodIndexAnnotation = Domain + "/index"
+	// Pod index annotation for Device Plugin communication (1-128)
+	// When it's in annotation, use this string, when it's in resource limits, use it as prefix
+	PodIndexAnnotation           = Domain + "/index"
+	PodIndexDelimiter            = "_"
+	PodDeviceAllocatedAnnotation = Domain + "/allocated"
 
 	WorkloadModeAnnotation = Domain + "/workload-mode"
 	WorkloadModeDynamic    = "dynamic"
@@ -233,3 +242,13 @@ const DefaultEvictionProtectionPriceRatio = 1.2
 const NodeCriticalPriorityClassName = "system-node-critical"
 const KarpenterNodeClaimKind = "NodeClaim"
 const KarpenterNodePoolKind = "NodePool"
+
+// Vendor label key for multi-vendor support
+const AcceleratorLabelVendor = Domain + "/hardware-vendor"
+
+const (
+	// 16x8 dummy index device at max
+	// tensor-fusion.ai/index_0: 1 to tensor-fusion.ai/index_f: 8
+	IndexKeyLength = 16
+	IndexModLength = 8
+)
