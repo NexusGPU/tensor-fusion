@@ -2,12 +2,14 @@ package workload
 
 import (
 	"strings"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type State struct {
@@ -15,15 +17,19 @@ type State struct {
 	Name                  string
 	Spec                  tfv1.WorkloadProfileSpec
 	Status                tfv1.TensorFusionWorkloadStatus
+	CreationTimestamp     metav1.Time
 	CurrentActiveWorkers  map[string]*corev1.Pod
 	WorkerUsageSamplers   map[string]*metrics.WorkerUsageSampler
 	WorkerUsageAggregator *metrics.WorkerUsageAggregator
+	HistoryPeriod         time.Duration
 }
 
 func NewWorkloadState() *State {
 	return &State{
+		// Default history period is 2 hours, decay to half in 1 hour
+		HistoryPeriod:         2 * time.Hour,
 		WorkerUsageSamplers:   make(map[string]*metrics.WorkerUsageSampler),
-		WorkerUsageAggregator: metrics.NewWorkerUsageAggregator(),
+		WorkerUsageAggregator: metrics.NewWorkerUsageAggregator(time.Hour),
 	}
 }
 
@@ -44,9 +50,24 @@ func (w *State) IsAutoSetResourcesEnabled() bool {
 }
 
 func (w *State) ShouldScaleResource(name tfv1.ResourceName) bool {
-	target := w.Spec.AutoScalingConfig.AutoSetResources.TargetResource
-	// Do not scale when TargetResouce is empty
-	return strings.EqualFold(target, "all") || strings.EqualFold(string(name), target)
+	asr := w.Spec.AutoScalingConfig.AutoSetResources
+	if asr == nil {
+		return false
+	}
+	target := asr.TargetResource
+	// Do not scale when TargetResource is empty
+	if target == "" {
+		return false
+	}
+	if strings.EqualFold(string(target), "all") {
+		return true
+	}
+	// Map ResourceName to ScalingTargetResource: "tflops" -> "compute"
+	resourceNameStr := string(name)
+	if resourceNameStr == "tflops" {
+		resourceNameStr = "compute"
+	}
+	return strings.EqualFold(resourceNameStr, string(target))
 }
 
 func (w *State) IsRecommendationAppliedToAllWorkers() bool {
@@ -70,6 +91,21 @@ func (w *State) IsRecommendationAppliedToAllWorkers() bool {
 	}
 
 	return true
+}
+
+func (w *State) updateHistoryPeriod(historyDataPeriod string) {
+	if historyDataPeriod == "" {
+		return
+	}
+	period, err := time.ParseDuration(historyDataPeriod)
+	if err != nil {
+		return
+	}
+	if w.HistoryPeriod == period {
+		return
+	}
+	w.HistoryPeriod = period
+	w.WorkerUsageAggregator = metrics.NewWorkerUsageAggregator(period / 2)
 }
 
 func (w *State) updateCurrentActiveWorkers(podList *corev1.PodList) {

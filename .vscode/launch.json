@@ -61,7 +61,7 @@
                 "KUBECONFIG": "~/.kube/config-local-studio",
                 "ENABLE_WEBHOOKS": "false",
                 "ENABLE_SCHEDULER": "true",
-                "ENABLE_CR_CONTROLLER": "true",
+                "ENABLE_CR_CONTROLLER": "false",
                 "NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION": "true"
             },
             "args": [
@@ -70,7 +70,7 @@
                 "--dynamic-config", "${workspaceFolder}/config/samples/dynamic-config.yaml",
                 "--scheduler-config", "${workspaceFolder}/config/samples/scheduler-config.yaml",
                 // "--enable-alert",
-                // "--enable-auto-scale",
+                "--enable-auto-scale",
                 "--enable-auto-expander",
                 "-v", "4"
             ],

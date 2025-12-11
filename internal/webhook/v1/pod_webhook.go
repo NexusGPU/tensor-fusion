@@ -168,15 +168,19 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	}
 	tfInfo.Profile.Qos = calculateQoSLevel(tfInfo.Profile, pool)
 
-	if workload, err := m.createOrUpdateWorkload(ctx, pod, &tfInfo); err != nil {
+	workload, err := m.createOrUpdateWorkload(ctx, pod, &tfInfo)
+	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("create tf workload: %w", err))
-	} else {
-		// Pod mutating webhook can not get Pod UID,
-		// thus need pod controller to set the controller reference
-		if controllerRef := metav1.GetControllerOfNoCopy(workload); controllerRef == nil {
-			pod.Annotations[constants.SetPendingOwnedWorkloadAnnotation] = tfInfo.WorkloadName
-		}
 	}
+
+	// Pod mutating webhook can not get Pod UID,
+	// thus need pod controller to set the controller reference
+	if controllerRef := metav1.GetControllerOfNoCopy(workload); controllerRef == nil {
+		pod.Annotations[constants.SetPendingOwnedWorkloadAnnotation] = tfInfo.WorkloadName
+	}
+
+	// Task 5: If workload already exists and has autoscaling enabled, set recommended annotations
+	m.applyRecommendedAnnotations(pod, workload)
 
 	// make sure required Pod info has been changed before generating patches
 	if tfInfo.Profile.IsLocalGPU {
@@ -307,6 +311,52 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(
 		}
 	}
 	return workload, nil
+}
+
+// applyRecommendedAnnotations applies recommended resource annotations to the pod
+// if the workload already exists and has autoscaling enabled with a recommendation
+func (m *TensorFusionPodMutator) applyRecommendedAnnotations(
+	pod *corev1.Pod,
+	workload *tfv1.TensorFusionWorkload,
+) {
+	// Only apply if autoscaling is enabled
+	asr := workload.Spec.AutoScalingConfig.AutoSetResources
+	if asr == nil || !asr.Enable {
+		return
+	}
+
+	// Only apply if there's a recommendation
+	if workload.Status.Recommendation == nil {
+		return
+	}
+
+	recommendation := workload.Status.Recommendation
+
+	// Set recommended annotations similar to VPA logic
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+
+	// Apply compute (TFlops) recommendations if target includes compute
+	targetResource := asr.TargetResource
+	if targetResource == "" || targetResource == tfv1.ScalingTargetResourceAll || targetResource == tfv1.ScalingTargetResourceCompute {
+		if !recommendation.Requests.Tflops.IsZero() {
+			pod.Annotations[constants.TFLOPSRequestAnnotation] = recommendation.Requests.Tflops.String()
+		}
+		if !recommendation.Limits.Tflops.IsZero() {
+			pod.Annotations[constants.TFLOPSLimitAnnotation] = recommendation.Limits.Tflops.String()
+		}
+	}
+
+	// Apply VRAM recommendations if target includes vram
+	if targetResource == "" || targetResource == tfv1.ScalingTargetResourceAll || targetResource == tfv1.ScalingTargetResourceVRAM {
+		if !recommendation.Requests.Vram.IsZero() {
+			pod.Annotations[constants.VRAMRequestAnnotation] = recommendation.Requests.Vram.String()
+		}
+		if !recommendation.Limits.Vram.IsZero() {
+			pod.Annotations[constants.VRAMLimitAnnotation] = recommendation.Limits.Vram.String()
+		}
+	}
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(

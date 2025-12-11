@@ -196,6 +196,10 @@ func IsLicensed() bool {
 	return isLicensedEnv
 }
 
+func IsDebugMode() bool {
+	return os.Getenv("DEBUG") == "true"
+}
+
 func IsProgressiveMigration() bool {
 	return nvidiaOperatorProgressiveMigrationEnv
 }

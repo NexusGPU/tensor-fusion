@@ -9,7 +9,7 @@ import (
 
 var _ = Describe("MetricsAggregator", func() {
 	It("should return the correct boolean value based on whether the histograms are empty", func() {
-		aggregator := NewWorkerUsageAggregator()
+		aggregator := NewWorkerUsageAggregator(24 * time.Hour)
 		Expect(aggregator.IsEmpty()).To(BeTrue())
 		sample := WorkerUsage{
 			Namespace:    "test",

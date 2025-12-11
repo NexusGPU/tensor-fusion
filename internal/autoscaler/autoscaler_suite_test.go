@@ -68,7 +68,7 @@ var cancel context.CancelFunc
 var allocator *gpuallocator.GpuAllocator
 var metricsRecorder *metrics.MetricsRecorder
 
-func TestControllers(t *testing.T) {
+func TestAutoScaler(t *testing.T) {
 	RegisterFailHandler(Fail)
 
 	if os.Getenv("DEBUG_MODE") == constants.TrueStringValue {

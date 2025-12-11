@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -29,10 +30,12 @@ type SchedulingConfigTemplateSpec struct {
 
 	// scale the workload based on the usage and traffic
 	// +optional
-	AutoScaling *AutoScalingConfig `json:"autoScaling,omitempty"`
+	VerticalScalingRules []VerticalScalingRule `json:"verticalScalingRules,omitempty"`
 
 	// avoid hot GPU devices and continuously balance the workload
-	// implemented by trigger a simulation scheduling and advise better GPU nodes for scheduler
+	// implemented by mark GPU as hot and trigger evict for re-scheduling
+	// The hot GPUs will get lower priority for scheduling
+	// TODO: not implemented yet
 	// +optional
 	ReBalancer *ReBalancerConfig `json:"reBalancer,omitempty"`
 
@@ -41,6 +44,14 @@ type SchedulingConfigTemplateSpec struct {
 	Hypervisor *HypervisorScheduling `json:"hypervisor,omitempty"`
 }
 
+type VerticalScalingRule struct {
+	Name string `json:"name,omitempty"`
+
+	// Rule auto applied in webhook, when pod matches the selector,
+	// the rule will be added into workload profile's autoScalingConfig and annotation
+	Selector metav1.LabelSelector `json:"selector,omitempty"`
+	Rule     *AutoScalingConfig   `json:"autoScaling,omitempty"`
+}
 type PlacementConfig struct {
 	// +kubebuilder:default=NodeCompactGPULowLoad
 	Mode PlacementMode `json:"mode"`
@@ -89,16 +100,13 @@ type GPUFilter struct {
 }
 
 type AutoScalingConfig struct {
-	// layer 1 adjusting, to match the actual usage in the long run, only for N:M remote vGPU mode
-	// Adjust baseline requests to match the actual usage in longer period, such as 1day - 2weeks
-	AutoSetResources AutoSetResources `json:"autoSetResources,omitempty"`
-
-	// layer 2 horizontal auto-scaling, scale up to more GPU cards if max limits threshold hit
-	// HPA-like, aggregate metrics data 1m-1h (when tf-worker scaled-up, should also trigger client pod's owner[Deployment etc.]'s replica increasing, check if KNative works)
-	AutoSetReplicas AutoSetReplicas `json:"autoSetReplicas,omitempty"`
+	// Adjust baseline requests and limits to match the actual usage using recent metrics
+	AutoSetResources *AutoSetResources `json:"autoSetResources,omitempty"`
 
 	// CronScalingRules defines a list of CronScaling rules used to schedule scaling actions based on cron expressions.
 	CronScalingRules []CronScalingRule `json:"cronScalingRules,omitempty"`
+
+	ExternalScaler *ExternalScalerConfig `json:"externalScaler,omitempty"`
 }
 
 // CronScalingRule defines the rule for scaling resources based on a cron schedule.
@@ -115,102 +123,103 @@ type CronScalingRule struct {
 	End string `json:"end,omitempty"`
 	// DesiredResources specifies the target resources to scale to during the schedule.
 	DesiredResources Resources `json:"desiredResources,omitempty"`
-	// DesiredReplicas is the target number of replicas during the schedule.
-	DesiredReplicas *int32 `json:"desiredReplicas,omitempty"`
 }
 
 type AutoSetResources struct {
 	Enable bool `json:"enable,omitempty"`
 
-	// Target resource to scale, such as "tflops", "vram", or "all" by default
-	TargetResource string `json:"targetResource,omitempty"`
+	// Target resource to scale, such as "compute", "vram", or "all" by default
+	TargetResource ScalingTargetResource `json:"targetResource,omitempty"`
 
-	// Tflops usage percentile that will be used as a base for tflops target recommendation. Default: 0.9
-	TargetTflopsPercentile string `json:"targettflopspercentile,omitempty"`
+	// Tflops usage percentile that will be used as a base for tflops target recommendation. Default: 0.95
+	TargetComputePercentile string `json:"targetComputePercentile,omitempty"`
 
 	// Tflops usage percentile that will be used for the lower bound on tflops recommendation. Default: 0.5
-	LowerBoundTflopsPercentile string `json:"lowerboundtflopspercentile,omitempty"`
+	// When QoS is low or medium, request set to lower bound
+	LowerBoundComputePercentile string `json:"lowerBoundComputePercentile,omitempty"`
 
-	// Tflops usage percentile that will be used for the upper bound on tflops recommendation. Default: 0.95
-	UpperBoundTflopsPercentile string `json:"upperboundtflopspercentile,omitempty"`
+	// Tflops usage percentile that will be used for the upper bound on tflops recommendation. Default: 0.99
+	// Limit will be set to upper bound, when QoS is critical, also set limit request to upper bound
+	UpperBoundComputePercentile string `json:"upperBoundComputePercentile,omitempty"`
 
-	// Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.9
-	TargetVramPercentile string `json:"targetvrampercentile,omitempty"`
+	// Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.95
+	// The requests will be set to match this percentile of the actual usage, but won't change when current requests is in lower and upper bounds
+	// When QoS is high, set request to target
+	TargetVRAMPercentile string `json:"targetVRAMPercentile,omitempty"`
 
 	// Vram usage percentile that will be used for the lower bound on vram recommendation. Default: 0.5
-	LowerBoundVramPercentile string `json:"lowerboundvrampercentile,omitempty"`
+	LowerBoundVRAMPercentile string `json:"lowerBoundVRAMPercentile,omitempty"`
 
-	// Vram usage percentile that will be used for the upper bound on vram recommendation. Default: 0.95
-	UpperBoundVramPercentile string `json:"upperboundvrampercentile,omitempty"`
+	// Vram usage percentile that will be used for the upper bound on vram recommendation. Default: 0.99
+	UpperBoundVRAMPercentile string `json:"upperBoundVRAMPercentile,omitempty"`
 
 	// Fraction of usage added as the safety margin to the recommended request. Default: 0.15
-	RequestMarginFraction string `json:"requestMarginFraction,omitempty"`
+	MarginFraction string `json:"marginFraction,omitempty"`
 
-	// The time interval used for computing the confidence multiplier for the lower and upper bound. Default: 24h
-	ConfidenceInterval string `json:"confidenceInterval,omitempty"`
+	// Only when the difference between the recommended request and the current request is greater than this threshold, the request will be updated. Default: 0.1
+	// This value can't greater than MarginFraction, otherwise no update will be made since always inside the threshold after multiplying MarginFraction.
+	UpdateThreshold string `json:"updateThreshold,omitempty"`
 
-	// How much time back TSDB have to be queried to get historical metrics. Default: 1d
-	HistoryLength string `json:"historyLength,omitempty"`
+	// How much time back TSDB have to be queried to get historical metrics. Default: 2h
+	HistoryDataPeriod string `json:"historyDataPeriod,omitempty"`
 
-	// Resolution at which TSDB is queried for historical metrics. Default: 1m
-	HistoryResolution string `json:"historyResolution,omitempty"`
+	// Min scaling ratio to original resources, e.g. request 10Gi, ratio 0.5, scale down limit to 5Gi, default: 0.2
+	MinVRAMResourcesRatio string `json:"minVRAMResourcesRatio,omitempty"`
+
+	// Max scaling ratio to original resources, e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi, default: 5.0
+	MaxVRAMResourcesRatio string `json:"maxVRAMResourcesRatio,omitempty"`
+
+	// Min scaling ratio to original resources, e.g. request 10Gi, ratio 0.5, scale down limit to 5Gi, default: 0.1
+	// This ratio only apply to tflops/compute request rather than limit, to avoid performance downgrade when not used for a long time
+	MinComputeResourcesRatio string `json:"minComputeResourcesRatio,omitempty"`
+
+	// Max scaling ratio to original resources, e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi, default: 10.0
+	MaxComputeResourcesRatio string `json:"maxComputeResourcesRatio,omitempty"`
+
+	// When workload is created, wait for this period to collect enough metrics before scaling, default: 30m
+	InitialDelayPeriod string `json:"initialDelayPeriod,omitempty"`
+
+	// How often to evaluate the scaling operation, default: same as global config's auto scaling interval
+	Interval string `json:"interval,omitempty"`
 }
 
-// A typical autoLimits algorithm could be checking every 5m, look back 1 day data,
-// select 99% of actual usage as preferredLimits,
-// calculate finalPreferredLimits, which is preferredLimits*(1+extraBufferRatio)
-// if they are equal with each other within a range (eg. 5%), do nothing
-// if finalPreferredLimits is less than current limits and exceeded error range,
-// set current limits to finalPreferredLimits
-// if finalPreferredLimits > current limits and exceeded error range,
-// set current limits to max(finalPreferredLimits, current limits * scaleUpStep)
-// if AI prediction enabled, it helps to detect history pattern, and set more reasonable, explainable limit value
-// the final set limits should be max(finalPreferredLimits, last(predict_value * (1 + extraTFlopsBufferRatio)))
-type AutoSetLimits struct {
+type ScalingTargetResource string
+
+const (
+	ScalingTargetResourceCompute ScalingTargetResource = "compute"
+	ScalingTargetResourceVRAM    ScalingTargetResource = "vram"
+	ScalingTargetResourceAll     ScalingTargetResource = "all"
+)
+
+type ExternalScalerConfig struct {
 	Enable bool `json:"enable,omitempty"`
 
-	// target resource to scale limits, such as "tflops", "vram", or "all" by default
-	TargetResource string `json:"targetResource,omitempty"`
+	URL string `json:"url,omitempty"`
 
-	EvaluationPeriod string `json:"evaluationPeriod,omitempty"`
+	// API key will be set into the request header as "Authorization: Bearer <api key>"
+	APIKeySecretRef *v1.SecretReference `json:"apiKeySecretRef,omitempty"`
 
-	ExtraTFlopsBufferRatio string `json:"extraTFlopsBufferRatio,omitempty"`
+	InitialDelayPeriod string `json:"initialDelayPeriod,omitempty"`
 
-	IgnoredDeltaRange string `json:"ignoredDeltaRange,omitempty"`
-
-	ScaleUpStep string `json:"scaleUpStep,omitempty"`
-
-	// the multiplier of requests, to avoid limit set too high, like 5.0
-	MaxRatioToRequests string `json:"maxRatioToRequests,omitempty"`
-
-	Prediction *SmartSchedulerModelInput `json:"prediction,omitempty"`
+	// How often to evaluate the scaling operation, default: same as global config's auto scaling interval
+	Interval string `json:"interval,omitempty"`
 }
 
-// To handle burst traffic, scale up in short time (this feature requires GPU context migration & replication, not available yet)
-type AutoSetReplicas struct {
-	Enable                bool   `json:"enable,omitempty"`
-	TargetTFlopsOfLimits  string `json:"targetTFlopsOfLimits,omitempty"`
-	EvaluationPeriod      string `json:"evaluationPeriod,omitempty"`
-	ScaleUpStep           string `json:"scaleUpStep,omitempty"`
-	ScaleDownStep         string `json:"scaleDownStep,omitempty"`
-	ScaleUpCoolDownTime   string `json:"scaleUpCoolDownTime,omitempty"`
-	ScaleDownCoolDownTime string `json:"scaleDownCoolDownTime,omitempty"`
+type ExternalScalerRequest struct {
+	WorkloadName     string    `json:"workloadName,omitempty"`
+	Namespace        string    `json:"namespace,omitempty"`
+	CurrentResources Resources `json:"currentResources,omitempty"`
 }
 
-type AutoSetRequests struct {
-	Enable bool `json:"enable,omitempty"`
+type ExternalScalerResponse struct {
+	NeedScaleUp   bool `json:"needScaleUp,omitempty"`
+	NeedScaleDown bool `json:"needScaleDown,omitempty"`
 
-	// target resource to scale requests, such as "tflops", "vram", or "all" by default
-	TargetResource string `json:"targetResource,omitempty"`
+	// Explain why the scaling operation is needed or not needed, recorded to event and workload status
+	Reason string `json:"reason,omitempty"`
 
-	PercentileForAutoRequests string `json:"percentileForAutoRequests,omitempty"`
-
-	// the request buffer ratio, for example actual usage is 1.0, 10% buffer will be 1.1 as final preferred requests
-	ExtraBufferRatio string `json:"extraBufferRatio,omitempty"`
-
-	EvaluationPeriod  string                   `json:"evaluationPeriod,omitempty"`
-	AggregationPeriod string                   `json:"aggregationPeriod,omitempty"`
-	Prediction        SmartSchedulerModelInput `json:"prediction,omitempty"`
+	// If no scaling operation needed, this could be zero value
+	RecommendedResources Resources `json:"recommendedResources,omitempty"`
 }
 
 type AutoFreezeAndResume struct {

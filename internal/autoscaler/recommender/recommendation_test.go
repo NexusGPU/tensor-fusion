@@ -108,8 +108,8 @@ var _ = Describe("Recommender", func() {
 				Vram:   resource.MustParse("100Gi"),
 			},
 			Limits: tfv1.Resource{
-				Tflops: resource.MustParse("200"),
-				Vram:   resource.MustParse("200Gi"),
+				Tflops: resource.MustParse("400"),   // Limits are not modified by processor
+				Vram:   resource.MustParse("400Gi"), // Limits are not modified by processor
 			},
 		}
 		maxAllowedRes := tfv1.Resource{
@@ -117,10 +117,21 @@ var _ = Describe("Recommender", func() {
 			Vram:   resource.MustParse("100Gi"),
 		}
 		workload := workload.NewWorkloadState()
+		// Set current resources to be less than recommendation to trigger scale-up check
+		workload.Spec.Resources = tfv1.Resources{
+			Requests: tfv1.Resource{
+				Tflops: resource.MustParse("50"),
+				Vram:   resource.MustParse("50Gi"),
+			},
+			Limits: tfv1.Resource{
+				Tflops: resource.MustParse("100"),
+				Vram:   resource.MustParse("100Gi"),
+			},
+		}
 		processor := &recommendationProcessor{&fakeWorkloadHandler{Resource: maxAllowedRes}}
 		got, msg, _ := processor.Apply(context.Background(), workload, &recommendation)
 		Expect(got.Equal(&expectedRec)).To(BeTrue())
-		Expect(msg).To(Equal("TFLOPS reduced due to target (200) exceed max allowed (100), VRAM reduced due to target (200Gi) exceed max allowed (100Gi)"))
+		Expect(msg).To(Equal("TFlops request set to max allowed: (100), VRAM request set to max allowed: (100Gi)"))
 	})
 
 	It("should return the original recommendation if it does not exceed maximum allowable GPU resource", func() {

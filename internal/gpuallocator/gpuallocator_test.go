@@ -275,7 +275,7 @@ var _ = Describe("GPU Allocator", func() {
 			Expect(gpus).To(HaveLen(1))
 
 			gpu := getGPU(gpus[0].Name)
-			remain, err := allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+			remain, _, err := allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
 				PodUID:    string(testPodMeta.UID),
 				IsScaleUp: true,
 				NewRequest: tfv1.Resource{
@@ -292,7 +292,7 @@ var _ = Describe("GPU Allocator", func() {
 			Expect(remain.Tflops.Value()).To(BeEquivalentTo(gpu.Status.Available.Tflops.Value()))
 			Expect(remain.Vram.Value()).To(BeEquivalentTo(gpu.Status.Available.Vram.Value()))
 
-			_, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+			_, _, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
 				PodUID:    string(testPodMeta.UID),
 				IsScaleUp: true,
 				NewRequest: tfv1.Resource{
@@ -312,7 +312,7 @@ var _ = Describe("GPU Allocator", func() {
 				To(BeEquivalentTo(5 * 1024 * 1024 * 1024))
 
 			// test scale down
-			_, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+			_, _, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
 				PodUID:    string(testPodMeta.UID),
 				IsScaleUp: false,
 				NewRequest: tfv1.Resource{

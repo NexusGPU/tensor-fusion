@@ -13,6 +13,8 @@ type GlobalConfig struct {
 
 	AlertRules    []AlertRule          `yaml:"alertRules"`
 	AutoMigration *AutoMigrationConfig `yaml:"autoMigration"`
+
+	AutoScalingInterval string `yaml:"autoScalingInterval"`
 }
 
 type AutoMigrationConfig struct {

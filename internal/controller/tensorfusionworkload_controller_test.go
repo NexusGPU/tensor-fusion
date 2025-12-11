@@ -238,16 +238,23 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				return ok
 			}).Should(BeTrue())
 
-			Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
-			workloadCopy := workload.DeepCopy()
-			workloadCopy.Spec.Replicas = ptr.To(int32(0))
-			Expect(k8sClient.Update(ctx, workloadCopy)).To(Succeed())
+			Eventually(func() error {
+				if err := k8sClient.Get(ctx, key, workload); err != nil {
+					return err
+				}
+				workload.Spec.Replicas = ptr.To(int32(0))
+				return k8sClient.Update(ctx, workload)
+			}).Should(Succeed())
 			Eventually(func(g Gomega) {
 				podList := &corev1.PodList{}
 				g.Expect(k8sClient.List(ctx, podList,
 					client.InNamespace(key.Namespace),
 					client.MatchingLabels{constants.WorkloadKey: key.Name})).To(Succeed())
-				g.Expect(podList.Items).Should(BeEmpty())
+				// Filter out pods that are being deleted
+				activePods := lo.Filter(podList.Items, func(pod corev1.Pod, _ int) bool {
+					return pod.DeletionTimestamp == nil
+				})
+				g.Expect(activePods).Should(BeEmpty())
 			}).Should(Succeed())
 
 			Eventually(func(g Gomega) {

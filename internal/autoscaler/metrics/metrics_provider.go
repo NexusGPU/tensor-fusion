@@ -7,7 +7,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"gorm.io/gorm"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -25,9 +24,12 @@ type WorkerUsage struct {
 }
 
 type Provider interface {
+	// Deprecated, for test only
 	GetWorkersMetrics(context.Context) ([]*WorkerUsage, error)
-	GetHistoryMetrics(context.Context) ([]*WorkerUsage, error)
-	LoadHistoryMetrics(context.Context, func(*WorkerUsage)) error
+
+	// Per-workload metrics queries
+	GetWorkloadHistoryMetrics(ctx context.Context, namespace, workloadName string, startTime, endTime time.Time) ([]*WorkerUsage, error)
+	GetWorkloadRealtimeMetrics(ctx context.Context, namespace, workloadName string, startTime, endTime time.Time) ([]*WorkerUsage, error)
 }
 
 type greptimeDBProvider struct {
@@ -91,6 +93,7 @@ type hypervisorWorkerUsageMetrics struct {
 	TimeWindow time.Time `gorm:"column:time_window;index:,class:TIME"`
 }
 
+// Deprecated
 func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUsage, error) {
 	now := time.Now()
 
@@ -127,47 +130,6 @@ func (g *greptimeDBProvider) GetHistoryMetrics(ctx context.Context) ([]*WorkerUs
 	return workersMetrics, nil
 }
 
-func (g *greptimeDBProvider) LoadHistoryMetrics(ctx context.Context, processMetricsFunc func(*WorkerUsage)) error {
-	now := time.Now()
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, defaultHistoryQueryTimeout)
-	defer cancel()
-
-	rows, err := g.db.WithContext(timeoutCtx).
-		Model(&hypervisorWorkerUsageMetrics{}).
-		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
-		Where("ts > ? and ts <= ?", now.Add(-time.Hour*24*7).UnixNano(), now.UnixNano()).
-		Group("namespace, workload, worker, time_window").
-		Order("time_window asc").
-		Rows()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := rows.Close(); err != nil {
-			log.FromContext(ctx).Error(err, "failed to close rows")
-		}
-	}()
-
-	for rows.Next() {
-		var usage hypervisorWorkerUsageMetrics
-		if err := g.db.ScanRows(rows, &usage); err != nil {
-			return err
-		}
-		processMetricsFunc(&WorkerUsage{
-			Namespace:    usage.Namespace,
-			WorkloadName: usage.WorkloadName,
-			WorkerName:   usage.WorkerName,
-			TflopsUsage:  usage.ComputeTflops,
-			VramUsage:    usage.VRAMBytes,
-			Timestamp:    usage.TimeWindow,
-		})
-	}
-
-	g.lastQueryTime = now
-	return nil
-}
-
 // Setup GreptimeDB connection
 func setupTimeSeriesDB() (*metrics.TimeSeriesDB, error) {
 	timeSeriesDB := &metrics.TimeSeriesDB{}
@@ -182,4 +144,70 @@ func setupTimeSeriesDB() (*metrics.TimeSeriesDB, error) {
 		return nil, err
 	}
 	return timeSeriesDB, nil
+}
+
+func (g *greptimeDBProvider) GetWorkloadHistoryMetrics(ctx context.Context, namespace, workloadName string, startTime, endTime time.Time) ([]*WorkerUsage, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, defaultHistoryQueryTimeout)
+	defer cancel()
+
+	data := []*hypervisorWorkerUsageMetrics{}
+	err := g.db.WithContext(timeoutCtx).
+		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, date_bin('1 minute'::INTERVAL, ts) as time_window").
+		Where("ts > ? and ts <= ? and namespace = ? and workload = ?",
+			startTime.UnixNano(), endTime.UnixNano(), namespace, workloadName).
+		Group("namespace, workload, worker, time_window").
+		Order("time_window asc").
+		Find(&data).
+		Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	workersMetrics := make([]*WorkerUsage, 0, len(data))
+	for _, row := range data {
+		workersMetrics = append(workersMetrics, &WorkerUsage{
+			Namespace:    row.Namespace,
+			WorkloadName: row.WorkloadName,
+			WorkerName:   row.WorkerName,
+			TflopsUsage:  row.ComputeTflops,
+			VramUsage:    row.VRAMBytes,
+			Timestamp:    row.TimeWindow,
+		})
+	}
+
+	return workersMetrics, nil
+}
+
+func (g *greptimeDBProvider) GetWorkloadRealtimeMetrics(ctx context.Context, namespace, workloadName string, startTime, endTime time.Time) ([]*WorkerUsage, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
+	defer cancel()
+
+	data := []*metrics.HypervisorWorkerUsageMetrics{}
+	err := g.db.WithContext(timeoutCtx).
+		Select("namespace, workload, worker, max(compute_tflops) as compute_tflops, max(memory_bytes) as memory_bytes, max(ts) as ts").
+		Where("ts > ? and ts <= ? and namespace = ? and workload = ?",
+			startTime.UnixNano(), endTime.UnixNano(), namespace, workloadName).
+		Group("namespace, workload, worker").
+		Order("ts asc").
+		Find(&data).
+		Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	workersMetrics := make([]*WorkerUsage, 0, len(data))
+	for _, row := range data {
+		workersMetrics = append(workersMetrics, &WorkerUsage{
+			Namespace:    row.Namespace,
+			WorkloadName: row.WorkloadName,
+			WorkerName:   row.WorkerName,
+			TflopsUsage:  row.ComputeTflops,
+			VramUsage:    row.VRAMBytes,
+			Timestamp:    row.Timestamp,
+		})
+	}
+
+	return workersMetrics, nil
 }

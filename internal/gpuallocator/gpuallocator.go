@@ -531,11 +531,13 @@ func (s *GpuAllocator) Dealloc(
 // it means the allocation is invalid, and it should scale up with another AdjustRequest
 // to make sure not exceed quota, which returns in the first returned result
 // retry until AdjustAllocation returns nil error, at most pre-configured maxRetry times
-func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.AdjustRequest, dryRun bool) (tfv1.Resource, error) {
+// returns remaining resource, delta resource, error
+func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.AdjustRequest, dryRun bool) (tfv1.Resource, tfv1.Resource, error) {
+
 	<-s.initializedCh
 	request, exists := s.uniqueAllocation[adjustRequest.PodUID]
 	if !exists || request == nil {
-		return tfv1.Resource{}, fmt.Errorf("pod %s has not allocated GPUs", adjustRequest.PodUID)
+		return tfv1.Resource{}, tfv1.Resource{}, fmt.Errorf("pod %s has not allocated GPUs", adjustRequest.PodUID)
 	}
 
 	deltaTFlopsRequest := adjustRequest.NewRequest.Tflops
@@ -555,10 +557,10 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 			gpuNameNs := types.NamespacedName{Name: gpuName}
 			gpu, exists := s.gpuStore[gpuNameNs]
 			if !exists {
-				return tfv1.Resource{}, fmt.Errorf("GPU not found in allocator store %s", gpuName)
+				return tfv1.Resource{}, tfv1.Resource{}, fmt.Errorf("GPU not found in allocator store %s", gpuName)
 			}
 			if remain, err := s.checkGPUCapacityAndQuota(gpu, request.Request, adjustRequest.NewRequest); err != nil {
-				return remain, err
+				return remain, tfv1.Resource{}, err
 			}
 		}
 
@@ -578,7 +580,7 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 			GPUNames: request.GPUNames,
 			PodMeta:  request.PodMeta,
 		}); err != nil {
-			return tfv1.Resource{}, err
+			return tfv1.Resource{}, tfv1.Resource{}, err
 		}
 	}
 
@@ -617,7 +619,10 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 			"limit tflops", request.Limit.Tflops.String(),
 			"limit vram", request.Limit.Vram.String())
 	}
-	return tfv1.Resource{}, nil
+	return tfv1.Resource{}, tfv1.Resource{
+		Tflops: deltaTFlopsRequest,
+		Vram:   deltaVRAMRequest,
+	}, nil
 }
 
 func (s *GpuAllocator) ListNonUsingNodes() sets.Set[string] {

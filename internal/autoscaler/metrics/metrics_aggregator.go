@@ -16,8 +16,6 @@ const (
 	DefaultAggregationInterval = time.Hour * 24
 	// DefaultHistogramBucketSizeGrowth is the default value for HistogramBucketSizeGrowth.
 	DefaultHistogramBucketSizeGrowth = 0.05 // Make each bucket 5% larger than the previous one.
-	// DefaultHistogramDecayHalfLife is the default value for HistogramDecayHalfLife.
-	DefaultHistogramDecayHalfLife = time.Hour * 24
 )
 
 type WorkerUsageAggregator struct {
@@ -28,10 +26,10 @@ type WorkerUsageAggregator struct {
 	TotalSamplesCount int
 }
 
-func NewWorkerUsageAggregator() *WorkerUsageAggregator {
+func NewWorkerUsageAggregator(decayHalfTime time.Duration) *WorkerUsageAggregator {
 	return &WorkerUsageAggregator{
-		TflopsHistogram: vpa.NewDecayingHistogram(histogramOptions(10000.0, 0.1), DefaultHistogramDecayHalfLife),
-		VramHistogram:   vpa.NewDecayingHistogram(histogramOptions(1e12, 1e7), DefaultHistogramDecayHalfLife),
+		TflopsHistogram: vpa.NewDecayingHistogram(histogramOptions(10000.0, 0.1), decayHalfTime),
+		VramHistogram:   vpa.NewDecayingHistogram(histogramOptions(1e12, 1e7), decayHalfTime),
 	}
 }
 
