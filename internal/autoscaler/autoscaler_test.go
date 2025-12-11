@@ -88,8 +88,6 @@ var _ = Describe("Autoscaler", func() {
 			// create two workloads
 			pool := tfEnv.GetGPUPool(0)
 			// Use unique IDs to avoid conflicts
-			cleanupWorkload(client.ObjectKey{Namespace: "default", Name: getWorkloadName(200)})
-			cleanupWorkload(client.ObjectKey{Namespace: "default", Name: getWorkloadName(201)})
 			// with two replicas
 			workload0 := createWorkload(pool, 200, 2)
 			workload0Workers := getWorkers(workload0)
@@ -139,7 +137,6 @@ var _ = Describe("Autoscaler", func() {
 			defer tfEnv.Cleanup()
 			pool := tfEnv.GetGPUPool(0)
 			// Use unique ID to avoid conflicts
-			cleanupWorkload(client.ObjectKey{Namespace: "default", Name: getWorkloadName(202)})
 			workload := createWorkload(pool, 202, 1)
 			worker := getWorkers(workload)[0]
 			key := WorkloadID{workload.Namespace, workload.Name}
@@ -611,9 +608,9 @@ func (f *FakeMetricsProvider) GetWorkloadRealtimeMetrics(ctx context.Context, na
 
 func (f *FakeMetricsProvider) LoadHistoryMetrics(ctx context.Context, processMetricsFunc func(*metrics.WorkerUsage)) error {
 	startTime := time.Now().Add(-7 * 24 * time.Hour)
-	for day := 0; day < 7; day++ {
-		for hour := 0; hour < 1; hour++ {
-			for minute := 0; minute < 60; minute++ {
+	for day := range 7 {
+		for hour := range 24 {
+			for minute := range 60 {
 				// idx := day*24 + hour
 				sample := &metrics.WorkerUsage{
 					Namespace:    "default",
@@ -661,8 +658,8 @@ func (f *FakeRecommender) Name() string {
 	return "fake"
 }
 
-func (f *FakeRecommender) Recommend(ctx context.Context, workoad *workload.State) (*recommender.RecResult, error) {
-	meta.SetStatusCondition(&workoad.Status.Conditions, metav1.Condition{
+func (f *FakeRecommender) Recommend(ctx context.Context, workload *workload.State) (*recommender.RecResult, error) {
+	meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
 		Type:               constants.ConditionStatusTypeRecommendationProvided,
 		Status:             metav1.ConditionTrue,
 		LastTransitionTime: metav1.Now(),
