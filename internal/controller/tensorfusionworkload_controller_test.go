@@ -250,7 +250,11 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 				g.Expect(k8sClient.List(ctx, podList,
 					client.InNamespace(key.Namespace),
 					client.MatchingLabels{constants.WorkloadKey: key.Name})).To(Succeed())
-				g.Expect(podList.Items).Should(BeEmpty())
+				// Filter out pods that are being deleted
+				activePods := lo.Filter(podList.Items, func(pod corev1.Pod, _ int) bool {
+					return pod.DeletionTimestamp == nil
+				})
+				g.Expect(activePods).Should(BeEmpty())
 			}).Should(Succeed())
 
 			Eventually(func(g Gomega) {
