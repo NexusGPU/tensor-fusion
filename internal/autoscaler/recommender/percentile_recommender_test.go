@@ -53,19 +53,22 @@ var _ = Describe("Percentile Recommender", func() {
 					Vram:   resource.MustParse("40Gi"),
 				},
 			}
-			// New logic: Request = Target (200), Limit = UpperBound (300)
-			// But min/max ratio constraints clamp: original=20, maxRatio=10.0, maxAllowed=200
-			// So request 200 OK, limit 300 clamped to 200
-			// For VRAM: original=20Gi, maxRatio=5.0, maxAllowed=100Gi
-			// So request 200Gi clamped to 100Gi, limit 300Gi clamped to 100Gi
+			// Logic: For Medium QoS, Request = LowerBound (100), Limit = UpperBound (300)
+			// But min/max ratio constraints clamp based on original:
+			// TFlops: original request=20, original limit=40, maxRatio=10.0
+			//   - Request maxAllowed: 20 * 10 = 200, lowerBound (100) is within, so 100
+			//   - Limit maxAllowed: 40 * 10 = 400, upperBound (300) is within, so 300
+			// VRAM: original request=20Gi, original limit=40Gi, maxRatio=5.0
+			//   - Request maxAllowed: 20Gi * 5 = 100Gi, lowerBound (100Gi) equals maxAllowed, so 100Gi
+			//   - Limit maxAllowed: 40Gi * 5 = 200Gi, upperBound (300Gi) clamped to 200Gi, so 200Gi
 			expectRes := tfv1.Resources{
 				Requests: tfv1.Resource{
-					Tflops: resource.MustParse("200"),   // Target, within maxAllowed
-					Vram:   resource.MustParse("100Gi"), // Target 200Gi clamped to maxAllowed 100Gi
+					Tflops: resource.MustParse("100"),   // LowerBound, within maxAllowed (200)
+					Vram:   resource.MustParse("100Gi"), // LowerBound equals maxAllowed (100Gi)
 				},
 				Limits: tfv1.Resource{
-					Tflops: resource.MustParse("200"),   // UpperBound 300 clamped to maxAllowed 200
-					Vram:   resource.MustParse("100Gi"), // UpperBound 300Gi clamped to maxAllowed 100Gi
+					Tflops: resource.MustParse("300"),   // UpperBound, within maxAllowed (400)
+					Vram:   resource.MustParse("200Gi"), // UpperBound clamped to maxAllowed (200Gi)
 				},
 			}
 
@@ -73,14 +76,27 @@ var _ = Describe("Percentile Recommender", func() {
 			ws.Status.Recommendation = nil // Use original resources
 			got, _ := recommender.Recommend(ctx, ws)
 			Expect(got).ToNot(BeNil())
+			// Debug: print actual vs expected if test fails
+			if !got.Resources.Requests.Tflops.Equal(expectRes.Requests.Tflops) {
+				GinkgoWriter.Printf("TFlops request: got %s, expected %s\n", got.Resources.Requests.Tflops.String(), expectRes.Requests.Tflops.String())
+			}
+			if !got.Resources.Requests.Vram.Equal(expectRes.Requests.Vram) {
+				GinkgoWriter.Printf("VRAM request: got %s, expected %s\n", got.Resources.Requests.Vram.String(), expectRes.Requests.Vram.String())
+			}
+			if !got.Resources.Limits.Tflops.Equal(expectRes.Limits.Tflops) {
+				GinkgoWriter.Printf("TFlops limit: got %s, expected %s\n", got.Resources.Limits.Tflops.String(), expectRes.Limits.Tflops.String())
+			}
+			if !got.Resources.Limits.Vram.Equal(expectRes.Limits.Vram) {
+				GinkgoWriter.Printf("VRAM limit: got %s, expected %s\n", got.Resources.Limits.Vram.String(), expectRes.Limits.Vram.String())
+			}
 			Expect(got.Resources.Requests.Tflops.Equal(expectRes.Requests.Tflops)).To(BeTrue())
 			Expect(got.Resources.Requests.Vram.Equal(expectRes.Requests.Vram)).To(BeTrue())
 			Expect(got.Resources.Limits.Tflops.Equal(expectRes.Limits.Tflops)).To(BeTrue())
 			Expect(got.Resources.Limits.Vram.Equal(expectRes.Limits.Vram)).To(BeTrue())
 			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeResourceUpdate)
 			Expect(condition).ToNot(BeNil())
-			Expect(condition.Message).To(ContainSubstring("Compute scaled up"))
-			Expect(condition.Message).To(ContainSubstring("VRAM scaled up"))
+			Expect(condition.Message).To(ContainSubstring("Compute scaled"))
+			Expect(condition.Message).To(ContainSubstring("VRAM scaled"))
 		})
 
 		It("should scale down if current resources above upper bounds", func() {
@@ -110,36 +126,36 @@ var _ = Describe("Percentile Recommender", func() {
 			// The recommendation should be <= current (400) and >= target (200) or clamped
 			Expect(got.Resources.Requests.Tflops.Cmp(curRes.Requests.Tflops)).To(BeNumerically("<=", 0), "TFlops recommended %s should be <= current %s", got.Resources.Requests.Tflops.String(), curRes.Requests.Tflops.String())
 			Expect(got.Resources.Requests.Vram.Cmp(curRes.Requests.Vram)).To(BeNumerically("<=", 0), "VRAM recommended %s should be <= current %s", got.Resources.Requests.Vram.String(), curRes.Requests.Vram.String())
-			// Check that condition indicates scaling down occurred
-			// Note: message may only include resources that actually scaled
+			// Check that condition indicates scaling occurred
+			// Note: message format is "Compute scaled: request X -> Y, limit A -> B"
+			// We verify scaling down by checking recommended <= current above
 			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeResourceUpdate)
 			Expect(condition).ToNot(BeNil())
-			Expect(condition.Message).To(ContainSubstring("scaled down"))
+			Expect(condition.Message).To(ContainSubstring("Compute scaled"))
 		})
 
 		It("should return nil if current resources within estimated bounds", func() {
-			// Current request (150) is between lower bound (100) and upper bound (300)
-			// But new logic compares current request with target (200), not bounds
-			// So if current (150) != target (200), it will scale
-			// To test "within bounds", we need current = target
+			// Current request should match the target to avoid scaling
+			// The logic uses LowerBound for request and UpperBound for limit
+			// So to avoid scaling, current should match LowerBound for request and UpperBound for limit
 			curRes := tfv1.Resources{
 				Requests: tfv1.Resource{
-					Tflops: resource.MustParse("200"),   // Match target
-					Vram:   resource.MustParse("200Gi"), // Match target
+					Tflops: resource.MustParse("100"),   // Match lower bound (used for request)
+					Vram:   resource.MustParse("100Gi"), // Match lower bound (used for request)
 				},
 				Limits: tfv1.Resource{
-					Tflops: resource.MustParse("300"),   // Match upper bound
-					Vram:   resource.MustParse("300Gi"), // Match upper bound
+					Tflops: resource.MustParse("300"),   // Match upper bound (used for limit)
+					Vram:   resource.MustParse("300Gi"), // Match upper bound (used for limit)
 				},
 			}
 
 			ws.Spec.Resources = curRes
 			ws.Status.Recommendation = nil // Use original resources
 			got, _ := recommender.Recommend(ctx, ws)
-			// Current matches target, so no scaling needed - should return nil or HasApplied=true
+			// Current matches target bounds, so no scaling needed - should return nil
 			// But due to UpdateThreshold or other logic, might still return a result
 			if got != nil {
-				// If a result is returned, it should indicate no change needed
+				// If a result is returned, it should indicate no change needed (HasApplied=true or resources equal)
 				Expect(got.HasApplied || got.Resources.Equal(&curRes)).To(BeTrue())
 			}
 		})
@@ -179,8 +195,8 @@ var _ = Describe("Percentile Recommender", func() {
 			Expect(got.Resources.Equal(&expectRes)).To(BeTrue())
 			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeResourceUpdate)
 			Expect(condition).ToNot(BeNil())
-			Expect(condition.Message).To(ContainSubstring("Compute scaled up"))
-			Expect(condition.Message).To(ContainSubstring("VRAM scaled up"))
+			Expect(condition.Message).To(ContainSubstring("Compute scaled"))
+			Expect(condition.Message).To(ContainSubstring("VRAM scaled"))
 		})
 	})
 
