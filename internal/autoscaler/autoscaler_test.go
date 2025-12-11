@@ -199,7 +199,7 @@ var _ = Describe("Autoscaler", func() {
 		var key WorkloadID
 		var scaler *Autoscaler
 		var targetRes tfv1.Resources
-		var workloadIDCounter int = 100 // Start from 100 to avoid conflicts with other tests
+		var workloadIDCounter = 100 // Start from 100 to avoid conflicts with other tests
 		BeforeEach(func() {
 			// Clean up any existing workload with the same ID first
 			cleanupWorkload(client.ObjectKey{Namespace: "default", Name: getWorkloadName(workloadIDCounter)})
