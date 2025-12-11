@@ -9,7 +9,7 @@ import (
 
 var _ = Describe("MetricsSampler", func() {
 	It("should update peak vram based on the vram usage size", func() {
-		aggregator := NewWorkerUsageAggregator()
+		aggregator := NewWorkerUsageAggregator(24 * time.Hour)
 		sampler := NewWorkerUsageSampler()
 		now := time.Now()
 		workerUsage := WorkerUsage{

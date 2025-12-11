@@ -21,15 +21,13 @@ import (
 
 type ExternalRecommender struct {
 	client                  client.Client
-	config                  *tfv1.ExternalScalerConfig
 	recommendationProcessor RecommendationProcessor
 	httpClient              *http.Client
 }
 
-func NewExternalRecommender(client client.Client, config *tfv1.ExternalScalerConfig, recommendationProcessor RecommendationProcessor) *ExternalRecommender {
+func NewExternalRecommender(client client.Client, recommendationProcessor RecommendationProcessor) *ExternalRecommender {
 	return &ExternalRecommender{
 		client:                  client,
-		config:                  config,
 		recommendationProcessor: recommendationProcessor,
 		httpClient:              &http.Client{Timeout: 10 * time.Second},
 	}
@@ -41,15 +39,16 @@ func (e *ExternalRecommender) Name() string {
 
 func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *workload.State) (*RecResult, error) {
 	log := log.FromContext(ctx)
+	config := workloadState.Spec.AutoScalingConfig.ExternalScaler
 
-	if e.config == nil || !e.config.Enable {
+	if config == nil || !config.Enable {
 		return nil, nil
 	}
 
 	// Check InitialDelayPeriod
 	initialDelay := 30 * time.Minute
-	if e.config.InitialDelayPeriod != "" {
-		if d, parseErr := time.ParseDuration(e.config.InitialDelayPeriod); parseErr == nil {
+	if config.InitialDelayPeriod != "" {
+		if d, parseErr := time.ParseDuration(config.InitialDelayPeriod); parseErr == nil {
 			initialDelay = d
 		} else {
 			log.Error(parseErr, "failed to parse initial delay period, using default")
@@ -86,15 +85,15 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 	}
 
 	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", e.config.URL, bytes.NewBuffer(requestBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", config.URL, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	// Add API key if configured
-	if e.config.APIKeySecretRef != nil {
-		apiKey, err := e.getAPIKey(ctx, e.config.APIKeySecretRef)
+	if config.APIKeySecretRef != nil {
+		apiKey, err := e.getAPIKey(ctx, config.APIKeySecretRef)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get API key: %w", err)
 		}
@@ -106,7 +105,11 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Error(err, "failed to close response body")
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
+	"os"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -12,8 +12,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/recommender"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -24,8 +24,20 @@ var (
 	_ manager.Runnable               = (*Autoscaler)(nil)
 	_ manager.LeaderElectionRunnable = (*Autoscaler)(nil)
 
-	DefaultAutoScalingInterval = "30s"
+	DefaultAutoScalingInterval      = "30s"
+	MaxConcurrentWorkloadProcessing = 10
+	FocusWorkloadName               = ""
 )
+
+func init() {
+	if utils.IsDebugMode() {
+		MaxConcurrentWorkloadProcessing = 1
+	}
+	focusWorkloadName := os.Getenv("AUTOSCALER_FOCUS_WORKLOAD_NAME")
+	if focusWorkloadName != "" {
+		FocusWorkloadName = focusWorkloadName
+	}
+}
 
 type WorkloadID struct {
 	Namespace string
@@ -63,10 +75,10 @@ func NewAutoscaler(
 	recommenders := []recommender.Interface{
 		recommender.NewPercentileRecommender(recommendationProcessor),
 		recommender.NewCronRecommender(recommendationProcessor),
-		// ExternalRecommender will be added per-workload if configured
+		recommender.NewExternalRecommender(client, recommendationProcessor),
 	}
 
-	return &Autoscaler{
+	scaler := &Autoscaler{
 		Client:          client,
 		allocator:       allocator,
 		metricsProvider: metricsProvider,
@@ -74,7 +86,9 @@ func NewAutoscaler(
 		workloadHandler: workloadHandler,
 		workloads:       map[WorkloadID]*workload.State{},
 		metricsLoader:   newWorkloadMetricsLoader(client, metricsProvider),
-	}, nil
+	}
+	scaler.metricsLoader.setProcessFunc(scaler.processSingleWorkload)
+	return scaler, nil
 }
 
 func (s *Autoscaler) Start(ctx context.Context) error {
@@ -112,8 +126,6 @@ func (s *Autoscaler) NeedLeaderElection() bool {
 
 func (s *Autoscaler) Run(ctx context.Context) {
 	s.loadWorkloads(ctx)
-	// Metrics loading is now handled per-workload in goroutines
-	s.processWorkloads(ctx)
 }
 
 func (s *Autoscaler) loadWorkloads(ctx context.Context) {
@@ -132,6 +144,15 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 		}
 
 		workloadID := WorkloadID{workload.Namespace, workload.Name}
+		if workload.Status.WorkerCount == 0 {
+			continue
+		}
+
+		// focus to certain name workload (for verification test or debug)
+		if FocusWorkloadName != "" && workload.Name != FocusWorkloadName {
+			continue
+		}
+
 		activeWorkloads[workloadID] = true
 		workloadState := s.findOrCreateWorkloadState(workloadID.Namespace, workloadID.Name)
 		if err := s.workloadHandler.UpdateWorkloadState(ctx, workloadState, &workload); err != nil {
@@ -153,50 +174,9 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 	log.Info("workloads loaded", "workloadCount", len(s.workloads))
 }
 
-// loadHistoryMetrics and loadRealTimeMetrics are now handled per-workload
-// in workloadMetricsLoader goroutines
-
-func (s *Autoscaler) processWorkloads(ctx context.Context) {
-	workloadList := make([]*workload.State, 0, len(s.workloads))
-	for _, w := range s.workloads {
-		workloadList = append(workloadList, w)
-	}
-
-	if len(workloadList) == 0 {
-		return
-	}
-
-	maxWorkers := min(len(workloadList), constants.MaxConcurrentWorkloadProcessing)
-	chunkSize := (len(workloadList) + maxWorkers - 1) / maxWorkers
-
-	var wg sync.WaitGroup
-	for i := 0; i < len(workloadList); i += chunkSize {
-		end := min(i+chunkSize, len(workloadList))
-		chunk := workloadList[i:end]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for _, w := range chunk {
-				s.processSingleWorkload(ctx, w)
-			}
-		}()
-	}
-	wg.Wait()
-}
-
 func (s *Autoscaler) processSingleWorkload(ctx context.Context, workload *workload.State) {
 	log := log.FromContext(ctx)
-
-	// Build recommenders list - add external recommender if configured
-	recommenders := s.recommenders
-	externalScalerConfig := workload.Spec.AutoScalingConfig.ExternalScaler
-	if externalScalerConfig != nil && externalScalerConfig.Enable {
-		recommendationProcessor := recommender.NewRecommendationProcessor(s.workloadHandler)
-		externalRecommender := recommender.NewExternalRecommender(s.Client, externalScalerConfig, recommendationProcessor)
-		recommenders = append(recommenders, externalRecommender)
-	}
-
-	recommendation, err := recommender.GetRecommendation(ctx, workload, recommenders)
+	recommendation, err := recommender.GetRecommendation(ctx, workload, s.recommenders)
 	if err != nil {
 		log.Error(err, "failed to get recommendation", "workload", workload.Name)
 		return

@@ -3,7 +3,6 @@ package recommender
 import (
 	"context"
 	"fmt"
-	"math/big"
 	"strconv"
 	"time"
 
@@ -30,7 +29,7 @@ const (
 	// Tflops usage percentile that will be used for the lower bound on tflops recommendation.
 	defaultLowerBoundTflopsPercentile = 0.5
 	// Tflops usage percentile that will be used for the upper bound on tflops recommendation.
-	defaultUpperBoundTflopsPercentile = 0.98
+	defaultUpperBoundTflopsPercentile = 0.99
 	// Default update threshold
 	defaultUpdateThreshold = 0.1
 	// Default min/max scaling ratios
@@ -39,8 +38,14 @@ const (
 	defaultMinComputeResourcesRatio = 0.1
 	defaultMaxComputeResourcesRatio = 10.0
 	// Minimum resource values
-	minComputeResource = 1.0  // 1 TFlops
-	minVRAMResource    = 1024 // 1Gi in MiB
+
+	scaleResourceCompute = "Compute"
+	scaleResourceVram    = "VRAM"
+)
+
+var (
+	minComputeResource = resource.MustParse("1")
+	minVRAMResource    = resource.MustParse("1Gi")
 )
 
 var defaultPercentileConfig = PercentileConfig{
@@ -135,25 +140,25 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		return nil, nil
 	}
 
-	log.Info("estimated resources", "workload", workload.Name, "estimations", estimations)
+	log.V(4).Info("estimated resources", "workload", workload.Name, "estimations", estimations)
 
 	curRes := workload.GetCurrentResourcesSpec()
 	originalRes := workload.GetOriginalResourcesSpec()
 	recommendation := tfv1.Resources{}
 	message := ""
 
-	// Apply min/max scaling ratio constraints - config already set above
-
 	// Handle TFLOPS scaling
 	if result := p.handleResourceScaling(
-		"Compute",
+		scaleResourceCompute,
 		&curRes.Requests.Tflops,
 		&curRes.Limits.Tflops,
 		&estimations.TargetTflops,
 		&estimations.LowerBoundTflops,
 		&estimations.UpperBoundTflops,
 		&originalRes.Requests.Tflops,
+		&originalRes.Limits.Tflops,
 		config,
+		workload.Spec.Qos,
 	); result != nil {
 		message = result.message
 		recommendation.Requests.Tflops = result.targetRequest
@@ -165,14 +170,16 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 
 	// Handle VRAM scaling
 	if result := p.handleResourceScaling(
-		"VRAM",
+		scaleResourceVram,
 		&curRes.Requests.Vram,
 		&curRes.Limits.Vram,
 		&estimations.TargetVram,
 		&estimations.LowerBoundVram,
 		&estimations.UpperBoundVram,
 		&originalRes.Requests.Vram,
+		&originalRes.Limits.Vram,
 		config,
+		workload.Spec.Qos,
 	); result != nil {
 		if len(message) > 0 {
 			message += fmt.Sprintf(", %s", result.message)
@@ -209,14 +216,11 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 			if diff.Cmp(threshold) > 0 {
 				shouldUpdate = true
 			} else {
-				if thresholdMessage == "" {
-					thresholdMessage = "VRAM change within threshold, "
-				} else {
-					thresholdMessage += "VRAM change within threshold, "
-				}
+				thresholdMessage += fmt.Sprintf("VRAM change (%s) within threshold (%s), ", diff.String(), threshold.String())
 			}
 		}
 
+		// Avoid fluctuation when scale up/down is too small
 		if !shouldUpdate && thresholdMessage != "" {
 			meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
 				Type:               constants.ConditionStatusTypeResourceUpdate,
@@ -277,16 +281,23 @@ type scalingResult struct {
 
 func (p *PercentileRecommender) handleResourceScaling(
 	resourceName string,
-	currentRequest, currentLimit, targetRequest, lowerBound, upperBound, originalRequest *resource.Quantity,
+	currentRequest, currentLimit, targetRequest, lowerBound, upperBound, originalRequest, originalLimit *resource.Quantity,
 	config *PercentileConfig,
+	qos tfv1.QoSLevel,
 ) *scalingResult {
 	// UpperBound becomes limit, Target becomes request
-	targetReq := *targetRequest
 	targetLim := *upperBound
+	targetReq := *lowerBound
+	switch qos {
+	case tfv1.QoSCritical:
+		targetReq = *upperBound
+	case tfv1.QoSHigh:
+		targetReq = *targetRequest
+	}
 
 	// Apply min/max scaling ratio constraints
 	var minRatio, maxRatio float64
-	if resourceName == "Compute" {
+	if resourceName == scaleResourceCompute {
 		minRatio = config.MinComputeResourcesRatio
 		maxRatio = config.MaxComputeResourcesRatio
 	} else {
@@ -295,87 +306,68 @@ func (p *PercentileRecommender) handleResourceScaling(
 	}
 
 	// Calculate min and max allowed values based on original request
-	originalValue := originalRequest.Value()
-	minAllowed := int64(float64(originalValue) * minRatio)
-	maxAllowed := int64(float64(originalValue) * maxRatio)
+	originalRequestValue := originalRequest.AsApproximateFloat64()
+	originalLimitValue := originalLimit.AsApproximateFloat64()
+	minAllowedReq := originalRequestValue * minRatio
+	maxAllowedReq := originalRequestValue * maxRatio
+	minAllowedLim := originalLimitValue * minRatio
+	maxAllowedLim := originalLimitValue * maxRatio
 
 	// Apply minimum resource constraints
-	var minResource int64
+	minResource := minVRAMResource
+	if resourceName == scaleResourceCompute {
+		minResource = minComputeResource
+	}
+
+	// Must assign a minimum value to target request and limit
+	if targetLim.Cmp(minResource) < 0 {
+		targetLim = minResource
+	}
+	if targetReq.Cmp(minResource) < 0 {
+		targetReq = minResource
+	}
+
+	// Must inside scaling range
+	targetReqValue := targetReq.AsApproximateFloat64()
+	if targetReqValue < minAllowedReq {
+		targetReqValue = minAllowedReq
+		targetReq = *resource.NewQuantity(int64(targetReqValue), targetReq.Format)
+	}
+	if targetReqValue > maxAllowedReq {
+		targetReqValue = maxAllowedReq
+		targetReq = *resource.NewQuantity(int64(targetReqValue), targetReq.Format)
+	}
+	targetLimValue := targetLim.AsApproximateFloat64()
+	if targetLimValue < minAllowedLim {
+		targetLimValue = minAllowedLim
+		targetLim = *resource.NewQuantity(int64(targetLimValue), targetLim.Format)
+	}
+	if targetLimValue > maxAllowedLim {
+		targetLimValue = maxAllowedLim
+		targetLim = *resource.NewQuantity(int64(targetLimValue), targetLim.Format)
+	}
+
+	// Make sure compute limit is not less than original to avoid performance downgrade
 	if resourceName == "Compute" {
-		minResource = int64(minComputeResource * 1e12) // Convert TFlops to base units
-	} else {
-		minResource = int64(minVRAMResource * 1024 * 1024) // Convert GiB to bytes
-	}
-
-	// Use original value if it's smaller than minimum
-	if originalValue < minResource {
-		minResource = originalValue
-	}
-
-	// Clamp target request to min/max bounds
-	if targetReq.Value() < minAllowed {
-		targetReq = *resource.NewQuantity(minAllowed, targetReq.Format)
-	}
-	if targetReq.Value() > maxAllowed {
-		targetReq = *resource.NewQuantity(maxAllowed, targetReq.Format)
-	}
-	if targetReq.Value() < minResource {
-		targetReq = *resource.NewQuantity(minResource, targetReq.Format)
-	}
-
-	// Clamp target limit to min/max bounds
-	if targetLim.Value() < minAllowed {
-		targetLim = *resource.NewQuantity(minAllowed, targetLim.Format)
-	}
-	if targetLim.Value() > maxAllowed {
-		targetLim = *resource.NewQuantity(maxAllowed, targetLim.Format)
-	}
-	if targetLim.Value() < minResource {
-		targetLim = *resource.NewQuantity(minResource, targetLim.Format)
+		if targetLimValue < originalLimitValue {
+			targetLimValue = originalLimitValue
+			targetLim = *resource.NewQuantity(int64(targetLimValue), targetLim.Format)
+		}
 	}
 
 	// Check if scaling is needed
-	isScaleUp := currentRequest.Cmp(targetReq) < 0
-	isScaleDown := currentRequest.Cmp(targetReq) > 0
-
-	if !isScaleUp && !isScaleDown {
+	isReqNoChange := currentRequest.Cmp(targetReq) == 0
+	isLimNoChange := currentLimit.Cmp(targetLim) == 0
+	if isReqNoChange && isLimNoChange {
 		return nil
-	}
-
-	var message string
-	if isScaleUp {
-		message = fmt.Sprintf("%s scaled up: request %s -> %s, limit %s -> %s",
-			resourceName, currentRequest.String(), targetReq.String(), currentLimit.String(), targetLim.String())
-	} else {
-		message = fmt.Sprintf("%s scaled down: request %s -> %s, limit %s -> %s",
-			resourceName, currentRequest.String(), targetReq.String(), currentLimit.String(), targetLim.String())
 	}
 
 	return &scalingResult{
-		message:       message,
+		message: fmt.Sprintf("%s scaled: request %s -> %s, limit %s -> %s",
+			resourceName, currentRequest.String(), targetReq.String(), currentLimit.String(), targetLim.String()),
 		targetRequest: targetReq,
 		targetLimit:   targetLim,
 	}
-}
-
-func getProportionalLimit(originalLimit, originalRequest, recommendedRequest *resource.Quantity) *resource.Quantity {
-	if originalLimit == nil || originalLimit.IsZero() ||
-		originalRequest == nil || originalRequest.IsZero() ||
-		recommendedRequest == nil || recommendedRequest.IsZero() {
-		return nil
-	}
-
-	originalValue := big.NewInt(originalLimit.Value())
-	scaleBaseValue := big.NewInt(originalRequest.Value())
-	scaleResultValue := big.NewInt(recommendedRequest.Value())
-	var scaledOriginal big.Int
-	scaledOriginal.Mul(originalValue, scaleResultValue)
-	scaledOriginal.Div(&scaledOriginal, scaleBaseValue)
-	if scaledOriginal.IsInt64() {
-		return resource.NewQuantity(scaledOriginal.Int64(), originalLimit.Format)
-	}
-
-	return nil
 }
 
 func absDiff(a, b resource.Quantity) resource.Quantity {

@@ -180,10 +180,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	}
 
 	// Task 5: If workload already exists and has autoscaling enabled, set recommended annotations
-	if err := m.applyRecommendedAnnotations(pod, workload); err != nil {
-		log.Error(err, "failed to apply recommended annotations", "pod", pod.Name)
-		// Don't fail the webhook, just log the error
-	}
+	m.applyRecommendedAnnotations(pod, workload)
 
 	// make sure required Pod info has been changed before generating patches
 	if tfInfo.Profile.IsLocalGPU {
@@ -321,16 +318,16 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(
 func (m *TensorFusionPodMutator) applyRecommendedAnnotations(
 	pod *corev1.Pod,
 	workload *tfv1.TensorFusionWorkload,
-) error {
+) {
 	// Only apply if autoscaling is enabled
 	asr := workload.Spec.AutoScalingConfig.AutoSetResources
 	if asr == nil || !asr.Enable {
-		return nil
+		return
 	}
 
 	// Only apply if there's a recommendation
 	if workload.Status.Recommendation == nil {
-		return nil
+		return
 	}
 
 	recommendation := workload.Status.Recommendation
@@ -360,8 +357,6 @@ func (m *TensorFusionPodMutator) applyRecommendedAnnotations(
 			pod.Annotations[constants.VRAMLimitAnnotation] = recommendation.Limits.Vram.String()
 		}
 	}
-
-	return nil
 }
 
 func (m *TensorFusionPodMutator) patchTFClient(

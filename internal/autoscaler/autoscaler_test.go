@@ -209,11 +209,11 @@ var _ = Describe("Autoscaler", func() {
 
 		It("should scale up if the recommended resources exceed the current allocation", func() {
 			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &targetRes})
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			verifyRecommendationStatus(workload, &targetRes)
 
 			// Upon reprocessing the workload, it should skip resource updates
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			verifyRecommendationStatusConsistently(workload, &targetRes)
 		})
 
@@ -226,7 +226,7 @@ var _ = Describe("Autoscaler", func() {
 			workloadState.Spec.AutoScalingConfig.AutoSetResources = &tfv1.AutoSetResources{
 				Enable: false,
 			}
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			verifyWorkerResources(workload, &oldRes)
 
 			// verify IsTargetResource
@@ -234,7 +234,7 @@ var _ = Describe("Autoscaler", func() {
 				Enable:         true,
 				TargetResource: tfv1.ScalingTargetResourceCompute,
 			}
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			expect := tfv1.Resources{
 				Requests: tfv1.Resource{
 					Tflops: resource.MustParse("110"),
@@ -255,7 +255,7 @@ var _ = Describe("Autoscaler", func() {
 			workloadState := scaler.workloads[key]
 			workloadState.CurrentActiveWorkers[worker.Name].Annotations[constants.DedicatedGPUAnnotation] = constants.TrueStringValue
 			oldRes := workloadState.Spec.Resources
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			// verify the worker's resources have not been altered
 			verifyWorkerResources(workload, &oldRes)
 		})
@@ -276,7 +276,7 @@ var _ = Describe("Autoscaler", func() {
 
 			workloadState := scaler.workloads[key]
 			oldRes := workloadState.Spec.Resources
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			verifyWorkerResources(workload, &oldRes)
 		})
 
@@ -302,7 +302,7 @@ var _ = Describe("Autoscaler", func() {
 					DesiredResources: resourcesInRule,
 				},
 			}
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			verifyRecommendationStatus(workload, &resourcesInRule)
 
 			// invalidate the rule by updating start and end fields
@@ -316,12 +316,12 @@ var _ = Describe("Autoscaler", func() {
 				},
 			}
 
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			originalResources := workloadState.Spec.Resources
 			verifyRecommendationStatus(workload, &originalResources)
 
 			// should not change after cron scaling rule inactive
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			verifyRecommendationStatus(workload, &originalResources)
 		})
 
@@ -347,7 +347,7 @@ var _ = Describe("Autoscaler", func() {
 				},
 			}
 
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			verifyRecommendationStatus(workload, &resourcesInRule)
 
 			fakeRes := tfv1.Resources{
@@ -363,7 +363,7 @@ var _ = Describe("Autoscaler", func() {
 
 			scaler.recommenders = append(scaler.recommenders, &FakeRecommender{Resources: &fakeRes})
 
-			scaler.processWorkloads(ctx)
+			scaler.processSingleWorkload(ctx, scaler.workloads[key])
 			verifyRecommendationStatusConsistently(workload, &resourcesInRule)
 		})
 

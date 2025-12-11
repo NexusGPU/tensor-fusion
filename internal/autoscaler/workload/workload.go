@@ -2,6 +2,7 @@ package workload
 
 import (
 	"strings"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
@@ -20,12 +21,15 @@ type State struct {
 	CurrentActiveWorkers  map[string]*corev1.Pod
 	WorkerUsageSamplers   map[string]*metrics.WorkerUsageSampler
 	WorkerUsageAggregator *metrics.WorkerUsageAggregator
+	HistoryPeriod         time.Duration
 }
 
 func NewWorkloadState() *State {
 	return &State{
+		// Default history period is 2 hours, decay to half in 1 hour
+		HistoryPeriod:         2 * time.Hour,
 		WorkerUsageSamplers:   make(map[string]*metrics.WorkerUsageSampler),
-		WorkerUsageAggregator: metrics.NewWorkerUsageAggregator(),
+		WorkerUsageAggregator: metrics.NewWorkerUsageAggregator(time.Hour),
 	}
 }
 
@@ -87,6 +91,21 @@ func (w *State) IsRecommendationAppliedToAllWorkers() bool {
 	}
 
 	return true
+}
+
+func (w *State) updateHistoryPeriod(historyDataPeriod string) {
+	if historyDataPeriod == "" {
+		return
+	}
+	period, err := time.ParseDuration(historyDataPeriod)
+	if err != nil {
+		return
+	}
+	if w.HistoryPeriod == period {
+		return
+	}
+	w.HistoryPeriod = period
+	w.WorkerUsageAggregator = metrics.NewWorkerUsageAggregator(period / 2)
 }
 
 func (w *State) updateCurrentActiveWorkers(podList *corev1.PodList) {

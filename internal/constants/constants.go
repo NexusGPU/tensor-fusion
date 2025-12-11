@@ -223,11 +223,6 @@ const (
 	LowFrequencyObjFailureConcurrentReconcile = 5
 )
 
-const (
-	// MaxConcurrentWorkloadProcessing is the maximum number of workloads processed concurrently in autoscaler
-	MaxConcurrentWorkloadProcessing = 10
-)
-
 const GiBToBytes = 1024 * 1024 * 1024
 
 const AuthorizationHeader = "Authorization"

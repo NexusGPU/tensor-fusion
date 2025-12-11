@@ -131,7 +131,7 @@ spec:
                         type: string
                       upperBoundComputePercentile:
                         description: 'Tflops usage percentile that will be used for
-                          the upper bound on tflops recommendation. Default: 0.98'
+                          the upper bound on tflops recommendation. Default: 0.99'
                         type: string
                       upperBoundVRAMPercentile:
                         description: 'Vram usage percentile that will be used for

@@ -63,6 +63,10 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 	workloadState.Status = *workload.Status.DeepCopy()
 	workloadState.CreationTimestamp = workload.CreationTimestamp
 
+	if workload.Spec.AutoScalingConfig.AutoSetResources != nil {
+		workloadState.updateHistoryPeriod(workload.Spec.AutoScalingConfig.AutoSetResources.HistoryDataPeriod)
+	}
+
 	workerList := &corev1.PodList{}
 	if err := h.List(ctx, workerList,
 		client.InNamespace(workloadState.Namespace),
@@ -144,8 +148,7 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recomm
 	}
 
 	// Only return early if there are no changes and recommendation is nil and appliedRecommendedReplicas hasn't changed
-	if !hasChanges && recommendation == nil &&
-		!isAppliedRecommendedReplicasChanged(workload, state) {
+	if !hasChanges && !isAppliedRecommendedReplicasChanged(workload, state) {
 		return nil
 	}
 
@@ -313,33 +316,37 @@ func (h *handler) GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, e
 	}
 
 	var (
-		maxTflops int64 = -1
-		maxVram   int64 = -1
+		allowedTflops int64 = -1
+		allowedVram   int64 = -1
 	)
 	for gpu, workers := range gpuToWorkers {
 		if gpu.Status.Available == nil {
 			return nil, fmt.Errorf("GPU available is nil")
 		}
-		avaiableTflops := gpu.Status.Available.Tflops.DeepCopy()
-		avaiableVram := gpu.Status.Available.Vram.DeepCopy()
+		// gpu.Status.Available = Capacity - all allocated resources (including this workload and others)
+		// To calculate this workload's max allowed resources, we need to add back this workload's
+		// allocated resources, so: available = Capacity - other workloads' allocations
+		availableTflops := gpu.Status.Available.Tflops.DeepCopy()
+		availableVram := gpu.Status.Available.Vram.DeepCopy()
 		for _, worker := range workers {
-			avaiableTflops.Add(allocRequests[string(worker.UID)].Request.Tflops)
-			avaiableVram.Add(allocRequests[string(worker.UID)].Request.Vram)
+			// Add back this workload's allocated resources to get the total available for this workload
+			availableTflops.Add(allocRequests[string(worker.UID)].Request.Tflops)
+			availableVram.Add(allocRequests[string(worker.UID)].Request.Vram)
 		}
 
 		workerCount := int64(len(workers))
-		tflopsPerWorker := int64(avaiableTflops.AsApproximateFloat64()) / workerCount
-		vramPerWorker := avaiableVram.Value() / workerCount
-		if maxTflops == -1 || tflopsPerWorker < maxTflops {
-			maxTflops = tflopsPerWorker
+		tflopsPerWorker := int64(availableTflops.AsApproximateFloat64()) / workerCount
+		vramPerWorker := availableVram.Value() / workerCount
+		if allowedTflops == -1 || tflopsPerWorker < allowedTflops {
+			allowedTflops = tflopsPerWorker
 		}
-		if maxVram == -1 || vramPerWorker < maxVram {
-			maxVram = vramPerWorker
+		if allowedVram == -1 || vramPerWorker < allowedVram {
+			allowedVram = vramPerWorker
 		}
 	}
 
 	return &tfv1.Resource{
-		Tflops: *resource.NewQuantity(maxTflops, resource.DecimalSI),
-		Vram:   *resource.NewQuantity(maxVram, resource.BinarySI),
+		Tflops: *resource.NewQuantity(allowedTflops, resource.DecimalSI),
+		Vram:   *resource.NewQuantity(allowedVram, resource.BinarySI),
 	}, nil
 }

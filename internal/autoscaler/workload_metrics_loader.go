@@ -23,6 +23,7 @@ type workloadMetricsLoader struct {
 	metricsProvider metrics.Provider
 	workloads       map[WorkloadID]*workloadMetricsState
 	mu              sync.RWMutex
+	processFunc     func(ctx context.Context, state *workload.State)
 }
 
 type workloadMetricsState struct {
@@ -45,6 +46,10 @@ func newWorkloadMetricsLoader(client client.Client, metricsProvider metrics.Prov
 		metricsProvider: metricsProvider,
 		workloads:       make(map[WorkloadID]*workloadMetricsState),
 	}
+}
+
+func (l *workloadMetricsLoader) setProcessFunc(processFunc func(ctx context.Context, state *workload.State)) {
+	l.processFunc = processFunc
 }
 
 func (l *workloadMetricsLoader) addWorkload(ctx context.Context, workloadID WorkloadID, state *workload.State) {
@@ -148,6 +153,7 @@ func (l *workloadMetricsLoader) startWorkloadMetricsLoading(loaderState *workloa
 				if err := l.loadRealtimeMetricsForWorkload(loaderState); err != nil {
 					logger.Error(err, "failed to load realtime metrics", "workload", loaderState.workloadID.Name)
 				}
+				l.processFunc(loaderState.ctx, loaderState.state)
 			case <-loaderState.ctx.Done():
 				return
 			}
@@ -208,6 +214,7 @@ func (l *workloadMetricsLoader) loadRealtimeMetricsForWorkload(loaderState *work
 	}
 
 	loaderState.lastQueryTime = now
+
 	return nil
 }
 

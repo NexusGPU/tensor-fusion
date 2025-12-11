@@ -108,8 +108,8 @@ var _ = Describe("Percentile Recommender", func() {
 			// But due to UpdateThreshold or other constraints, the recommended might equal current
 			// So just check that a recommendation was made and it's reasonable
 			// The recommendation should be <= current (400) and >= target (200) or clamped
-			Expect(got.Resources.Requests.Tflops.Cmp(curRes.Requests.Tflops) <= 0).To(BeTrue(), "TFlops recommended %s should be <= current %s", got.Resources.Requests.Tflops.String(), curRes.Requests.Tflops.String())
-			Expect(got.Resources.Requests.Vram.Cmp(curRes.Requests.Vram) <= 0).To(BeTrue(), "VRAM recommended %s should be <= current %s", got.Resources.Requests.Vram.String(), curRes.Requests.Vram.String())
+			Expect(got.Resources.Requests.Tflops.Cmp(curRes.Requests.Tflops)).To(BeNumerically("<=", 0), "TFlops recommended %s should be <= current %s", got.Resources.Requests.Tflops.String(), curRes.Requests.Tflops.String())
+			Expect(got.Resources.Requests.Vram.Cmp(curRes.Requests.Vram)).To(BeNumerically("<=", 0), "VRAM recommended %s should be <= current %s", got.Resources.Requests.Vram.String(), curRes.Requests.Vram.String())
 			// Check that condition indicates scaling down occurred
 			// Note: message may only include resources that actually scaled
 			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeResourceUpdate)

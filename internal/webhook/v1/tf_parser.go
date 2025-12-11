@@ -141,9 +141,7 @@ func ParseTensorFusionInfo(
 	parseAutoScalingAnnotations(pod, workloadProfile)
 
 	// Apply pool-level vertical scaling rules if SchedulingConfigTemplate is configured
-	if err := applyVerticalScalingRules(ctx, k8sClient, pod, pool, workloadProfile); err != nil {
-		return info, fmt.Errorf("apply vertical scaling rules: %w", err)
-	}
+	applyVerticalScalingRules(ctx, k8sClient, pod, pool, workloadProfile)
 
 	injectContainer, ok := pod.Annotations[constants.InjectContainerAnnotation]
 	containerNames := strings.Split(injectContainer, ",")
@@ -191,15 +189,15 @@ func parseAutoScalingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workload
 
 // applyVerticalScalingRules applies pool-level vertical scaling rules from SchedulingConfigTemplate
 // to the workload profile if the pod matches any rule's selector
-func applyVerticalScalingRules(ctx context.Context, k8sClient client.Client, pod *corev1.Pod, pool *tfv1.GPUPool, workloadProfile *tfv1.WorkloadProfile) error {
+func applyVerticalScalingRules(ctx context.Context, k8sClient client.Client, pod *corev1.Pod, pool *tfv1.GPUPool, workloadProfile *tfv1.WorkloadProfile) {
 	if pool.Spec.SchedulingConfigTemplate == nil || *pool.Spec.SchedulingConfigTemplate == "" {
-		return nil
+		return
 	}
 
 	schedulingConfigTemplate := &tfv1.SchedulingConfigTemplate{}
 	if err := k8sClient.Get(ctx, client.ObjectKey{Name: *pool.Spec.SchedulingConfigTemplate}, schedulingConfigTemplate); err != nil {
 		// If template not found, just skip
-		return nil
+		return
 	}
 
 	// Check if pod matches any vertical scaling rule
@@ -219,8 +217,6 @@ func applyVerticalScalingRules(ctx context.Context, k8sClient client.Client, pod
 			break // Apply first matching rule
 		}
 	}
-
-	return nil
 }
 
 // mergeAutoScalingConfig merges the rule's AutoScalingConfig into workload profile

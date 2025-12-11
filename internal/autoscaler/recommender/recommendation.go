@@ -35,35 +35,24 @@ func (r *recommendationProcessor) Apply(
 		return result, msg, nil
 	}
 
+	// Get max allowed considering the node with min available resources
 	allowedRes, err := r.workloadHandler.GetMaxAllowedResourcesSpec(workload)
 	if err != nil || allowedRes == nil {
 		return result, msg, err
 	}
-	log.FromContext(ctx).Info("max allowed resources", "workload", workload.Name, "resources", allowedRes)
+	log.FromContext(ctx).V(4).Info("fetched max allowed resources", "workload", workload.Name, "resources", allowedRes)
 
 	if isScaleUpTflops && rec.Requests.Tflops.Cmp(allowedRes.Tflops) > 0 {
-		maxTflopsLimit := getProportionalLimit(&rec.Limits.Tflops, &rec.Requests.Tflops, &allowedRes.Tflops)
-		if maxTflopsLimit == nil {
-			return result, msg, fmt.Errorf("failed to get tflops limit")
-		}
 		result.Requests.Tflops = allowedRes.Tflops
-		result.Limits.Tflops = *maxTflopsLimit
-		msg = fmt.Sprintf("TFLOPS reduced due to target (%s) exceed max allowed (%s)",
-			rec.Requests.Tflops.String(), result.Requests.Tflops.String())
+		msg = fmt.Sprintf("TFlops request set to max allowed: (%s)", result.Requests.Tflops.String())
 	}
 
 	if isScaleUpVram && rec.Requests.Vram.Cmp(allowedRes.Vram) > 0 {
-		maxVramLimit := getProportionalLimit(&rec.Limits.Vram, &rec.Requests.Vram, &allowedRes.Vram)
-		if maxVramLimit == nil {
-			return result, msg, fmt.Errorf("failed to get vram limit")
-		}
 		result.Requests.Vram = allowedRes.Vram
-		result.Limits.Vram = *maxVramLimit
 		if msg != "" {
 			msg += ", "
 		}
-		msg += fmt.Sprintf("VRAM reduced due to target (%s) exceed max allowed (%s)",
-			rec.Requests.Vram.String(), result.Requests.Vram.String())
+		msg += fmt.Sprintf("VRAM request set to max allowed: (%s)", result.Requests.Vram.String())
 	}
 
 	return result, msg, nil

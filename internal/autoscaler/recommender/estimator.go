@@ -10,7 +10,7 @@ const (
 	MaxResourceAmount = ResourceAmount(1e14)
 )
 
-type ResourceAmount int64
+type ResourceAmount float64
 
 type VramEstimator interface {
 	GetVramEstimation(w *metrics.WorkerUsageAggregator) ResourceAmount

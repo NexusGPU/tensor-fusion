@@ -135,13 +135,16 @@ type AutoSetResources struct {
 	TargetComputePercentile string `json:"targetComputePercentile,omitempty"`
 
 	// Tflops usage percentile that will be used for the lower bound on tflops recommendation. Default: 0.5
+	// When QoS is low or medium, request set to lower bound
 	LowerBoundComputePercentile string `json:"lowerBoundComputePercentile,omitempty"`
 
-	// Tflops usage percentile that will be used for the upper bound on tflops recommendation. Default: 0.98
+	// Tflops usage percentile that will be used for the upper bound on tflops recommendation. Default: 0.99
+	// Limit will be set to upper bound, when QoS is critical, also set limit request to upper bound
 	UpperBoundComputePercentile string `json:"upperBoundComputePercentile,omitempty"`
 
 	// Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.95
 	// The requests will be set to match this percentile of the actual usage, but won't change when current requests is in lower and upper bounds
+	// When QoS is high, set request to target
 	TargetVRAMPercentile string `json:"targetVRAMPercentile,omitempty"`
 
 	// Vram usage percentile that will be used for the lower bound on vram recommendation. Default: 0.5
@@ -167,6 +170,7 @@ type AutoSetResources struct {
 	MaxVRAMResourcesRatio string `json:"maxVRAMResourcesRatio,omitempty"`
 
 	// Min scaling ratio to original resources, e.g. request 10Gi, ratio 0.5, scale down limit to 5Gi, default: 0.1
+	// This ratio only apply to tflops/compute request rather than limit, to avoid performance downgrade when not used for a long time
 	MinComputeResourcesRatio string `json:"minComputeResourcesRatio,omitempty"`
 
 	// Max scaling ratio to original resources, e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi, default: 10.0
