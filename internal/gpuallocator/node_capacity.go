@@ -75,7 +75,31 @@ func RefreshGPUNodeCapacity(
 	allocRequests := allocator.GetAllocationReqByNodeName(node.Name)
 	for _, allocRequest := range allocRequests {
 		vramAvailable.Sub(allocRequest.Limit.Vram)
-		tflopsAvailable.Sub(allocRequest.Limit.Tflops)
+		// Get actual TFLOPs value, converting from ComputePercent if needed
+		var limitTflops resource.Quantity
+		if len(allocRequest.GPUNames) > 0 {
+			// Try to find the GPU to get capacity for conversion
+			for _, gpu := range gpuList.Items {
+				if gpu.Name == allocRequest.GPUNames[0] && gpu.Status.Capacity != nil {
+					if !allocRequest.Limit.ComputePercent.IsZero() {
+						requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, allocRequest.Limit)
+						limitTflops = *requiredTflops
+					} else {
+						limitTflops = allocRequest.Limit.Tflops
+					}
+					break
+				}
+			}
+			// If GPU not found, fallback to direct TFLOPs
+			if limitTflops.IsZero() && !allocRequest.Limit.Tflops.IsZero() {
+				limitTflops = allocRequest.Limit.Tflops
+			}
+		} else {
+			limitTflops = allocRequest.Limit.Tflops
+		}
+		if !limitTflops.IsZero() {
+			tflopsAvailable.Sub(limitTflops)
+		}
 	}
 	node.Status.VirtualAvailableVRAM = &vramAvailable
 	node.Status.VirtualAvailableTFlops = &tflopsAvailable

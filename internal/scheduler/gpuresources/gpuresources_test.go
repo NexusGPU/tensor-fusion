@@ -869,3 +869,362 @@ func (s *GPUResourcesSuite) TestQueueingHint_GPUAdd() {
 	s.NoError(err)
 	s.Equal(fwk.Queue, hint)
 }
+
+func (s *GPUResourcesSuite) TestReconcileAllocationState_ComputePercent() {
+	log.FromContext(s.ctx).Info("Running TestReconcileAllocationState_ComputePercent")
+
+	// Create a GPU with capacity 1000 TFLOPs
+	gpu := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gpu-test-percent",
+			Labels: map[string]string{
+				constants.GpuPoolKey:    "pool-a",
+				constants.LabelKeyOwner: "node-a",
+			},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:        tfv1.TensorFusionGPUPhaseRunning,
+			NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-a"},
+			UsedBy:       tfv1.UsedByTensorFusion,
+			Capacity: &tfv1.Resource{
+				Tflops: resource.MustParse("1000"),
+				Vram:   resource.MustParse("20Gi"),
+			},
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("1000"),
+				Vram:   resource.MustParse("20Gi"),
+			},
+		},
+	}
+	s.NoError(s.client.Create(s.ctx, gpu))
+
+	// Create a worker pod using compute-percent-request (10% = 100 TFLOPs)
+	workerPod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-percent",
+			Namespace: "ns1",
+			UID:       "worker-percent-uid",
+			Labels: map[string]string{
+				constants.LabelComponent: constants.ComponentWorker,
+				constants.WorkloadKey:    "workload-percent",
+			},
+			Annotations: map[string]string{
+				constants.ComputeRequestAnnotation: "10", // 10% of 1000 = 100 TFLOPs
+				constants.VRAMRequestAnnotation:    "2Gi",
+				constants.ComputeLimitAnnotation:   "10",
+				constants.VRAMLimitAnnotation:      "4Gi",
+				constants.GpuCountAnnotation:       "1",
+				constants.GPUDeviceIDsAnnotation:   "gpu-test-percent",
+				constants.GpuPoolKey:               "pool-a",
+			},
+		},
+		Spec: v1.PodSpec{
+			NodeName: "node-a",
+		},
+	}
+	s.NoError(s.client.Create(s.ctx, workerPod))
+
+	// Manually add GPU to allocator store
+	// Since InitGPUAndQuotaStore uses sync.Once, we need to manually add the GPU to the store
+	gpuStore, _, _ := s.allocator.GetAllocationInfo()
+	key := types.NamespacedName{Name: "gpu-test-percent"}
+	gpuCopy := gpu.DeepCopy()
+	if gpuCopy.Status.Available == nil {
+		gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
+	}
+	gpuStore[key] = gpuCopy
+
+	// Reconcile allocation state
+	s.allocator.ReconcileAllocationStateForTesting()
+	s.allocator.SyncGPUsToK8s()
+
+	// Verify GPU available resources are correctly deducted
+	updatedGPU := &tfv1.GPU{}
+	s.NoError(s.client.Get(s.ctx, types.NamespacedName{Name: "gpu-test-percent"}, updatedGPU))
+
+	// Expected: 1000 - 100 (10% of 1000) = 900 TFLOPs
+	expectedTflops := resource.MustParse("900")
+	s.True(updatedGPU.Status.Available.Tflops.Equal(expectedTflops),
+		"Expected TFLOPs: %s, Got: %s", expectedTflops.String(), updatedGPU.Status.Available.Tflops.String())
+
+	// Expected: 20Gi - 2Gi = 18Gi VRAM
+	expectedVram := resource.MustParse("18Gi")
+	s.True(updatedGPU.Status.Available.Vram.Equal(expectedVram),
+		"Expected VRAM: %s, Got: %s", expectedVram.String(), updatedGPU.Status.Available.Vram.String())
+
+	// Verify running apps
+	s.Len(updatedGPU.Status.RunningApps, 1)
+	s.Equal("workload-percent", updatedGPU.Status.RunningApps[0].Name)
+}
+
+func (s *GPUResourcesSuite) TestReconcileAllocationState_MixedTflopsAndComputePercent() {
+	log.FromContext(s.ctx).Info("Running TestReconcileAllocationState_MixedTflopsAndComputePercent")
+
+	// Create a GPU with capacity 2000 TFLOPs
+	gpu := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gpu-test-mixed",
+			Labels: map[string]string{
+				constants.GpuPoolKey:    "pool-a",
+				constants.LabelKeyOwner: "node-a",
+			},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:        tfv1.TensorFusionGPUPhaseRunning,
+			NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-a"},
+			UsedBy:       tfv1.UsedByTensorFusion,
+			Capacity: &tfv1.Resource{
+				Tflops: resource.MustParse("2000"),
+				Vram:   resource.MustParse("40Gi"),
+			},
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("2000"),
+				Vram:   resource.MustParse("40Gi"),
+			},
+		},
+	}
+	s.NoError(s.client.Create(s.ctx, gpu))
+
+	// Create first worker pod using TFLOPs directly (300 TFLOPs)
+	workerPod1 := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-tflops",
+			Namespace: "ns1",
+			UID:       "worker-tflops-uid",
+			Labels: map[string]string{
+				constants.LabelComponent: constants.ComponentWorker,
+				constants.WorkloadKey:    "workload-tflops",
+			},
+			Annotations: map[string]string{
+				constants.TFLOPSRequestAnnotation: "300",
+				constants.VRAMRequestAnnotation:   "5Gi",
+				constants.TFLOPSLimitAnnotation:   "300",
+				constants.VRAMLimitAnnotation:     "10Gi",
+				constants.GpuCountAnnotation:      "1",
+				constants.GPUDeviceIDsAnnotation:  "gpu-test-mixed",
+				constants.GpuPoolKey:              "pool-a",
+			},
+		},
+		Spec: v1.PodSpec{
+			NodeName: "node-a",
+		},
+	}
+	s.NoError(s.client.Create(s.ctx, workerPod1))
+
+	// Create second worker pod using compute-percent-request (15% = 300 TFLOPs)
+	workerPod2 := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-percent-mixed",
+			Namespace: "ns1",
+			UID:       "worker-percent-mixed-uid",
+			Labels: map[string]string{
+				constants.LabelComponent: constants.ComponentWorker,
+				constants.WorkloadKey:    "workload-percent-mixed",
+			},
+			Annotations: map[string]string{
+				constants.ComputeRequestAnnotation: "15", // 15% of 2000 = 300 TFLOPs
+				constants.VRAMRequestAnnotation:    "3Gi",
+				constants.ComputeLimitAnnotation:   "15",
+				constants.VRAMLimitAnnotation:      "6Gi",
+				constants.GpuCountAnnotation:       "1",
+				constants.GPUDeviceIDsAnnotation:   "gpu-test-mixed",
+				constants.GpuPoolKey:               "pool-a",
+			},
+		},
+		Spec: v1.PodSpec{
+			NodeName: "node-a",
+		},
+	}
+	s.NoError(s.client.Create(s.ctx, workerPod2))
+
+	// Manually add GPU to allocator store
+	gpuStore, _, _ := s.allocator.GetAllocationInfo()
+	key := types.NamespacedName{Name: "gpu-test-mixed"}
+	gpuCopy := gpu.DeepCopy()
+	if gpuCopy.Status.Available == nil {
+		gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
+	}
+	gpuStore[key] = gpuCopy
+
+	// Reconcile allocation state
+	s.allocator.ReconcileAllocationStateForTesting()
+	s.allocator.SyncGPUsToK8s()
+
+	// Verify GPU available resources are correctly deducted
+	updatedGPU := &tfv1.GPU{}
+	s.NoError(s.client.Get(s.ctx, types.NamespacedName{Name: "gpu-test-mixed"}, updatedGPU))
+
+	// Expected: 2000 - 300 (direct TFLOPs) - 300 (15% of 2000) = 1400 TFLOPs
+	expectedTflops := resource.MustParse("1400")
+	s.True(updatedGPU.Status.Available.Tflops.Equal(expectedTflops),
+		"Expected TFLOPs: %s, Got: %s", expectedTflops.String(), updatedGPU.Status.Available.Tflops.String())
+
+	// Expected: 40Gi - 5Gi - 3Gi = 32Gi VRAM
+	expectedVram := resource.MustParse("32Gi")
+	s.True(updatedGPU.Status.Available.Vram.Equal(expectedVram),
+		"Expected VRAM: %s, Got: %s", expectedVram.String(), updatedGPU.Status.Available.Vram.String())
+
+	// Verify running apps - should have both workloads
+	s.Len(updatedGPU.Status.RunningApps, 2)
+
+	// Check both workloads are present
+	workloadNames := []string{
+		updatedGPU.Status.RunningApps[0].Name,
+		updatedGPU.Status.RunningApps[1].Name,
+	}
+	s.Contains(workloadNames, "workload-tflops")
+	s.Contains(workloadNames, "workload-percent-mixed")
+}
+
+func (s *GPUResourcesSuite) TestReconcileAllocationState_MultipleGPUsWithComputePercent() {
+	log.FromContext(s.ctx).Info("Running TestReconcileAllocationState_MultipleGPUsWithComputePercent")
+
+	// Create two GPUs with different capacities
+	gpu1 := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gpu-mixed-1",
+			Labels: map[string]string{
+				constants.GpuPoolKey:    "pool-a",
+				constants.LabelKeyOwner: "node-a",
+			},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:        tfv1.TensorFusionGPUPhaseRunning,
+			NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-a"},
+			UsedBy:       tfv1.UsedByTensorFusion,
+			Capacity: &tfv1.Resource{
+				Tflops: resource.MustParse("1000"),
+				Vram:   resource.MustParse("20Gi"),
+			},
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("1000"),
+				Vram:   resource.MustParse("20Gi"),
+			},
+		},
+	}
+	s.NoError(s.client.Create(s.ctx, gpu1))
+
+	gpu2 := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gpu-mixed-2",
+			Labels: map[string]string{
+				constants.GpuPoolKey:    "pool-a",
+				constants.LabelKeyOwner: "node-a",
+			},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:        tfv1.TensorFusionGPUPhaseRunning,
+			NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-a"},
+			UsedBy:       tfv1.UsedByTensorFusion,
+			Capacity: &tfv1.Resource{
+				Tflops: resource.MustParse("2000"),
+				Vram:   resource.MustParse("40Gi"),
+			},
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("2000"),
+				Vram:   resource.MustParse("40Gi"),
+			},
+		},
+	}
+	s.NoError(s.client.Create(s.ctx, gpu2))
+
+	// Create worker pod 1 using compute-percent on GPU 1 (20% of 1000 = 200 TFLOPs)
+	workerPod1 := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-mixed-1",
+			Namespace: "ns1",
+			UID:       "worker-mixed-1-uid",
+			Labels: map[string]string{
+				constants.LabelComponent: constants.ComponentWorker,
+				constants.WorkloadKey:    "workload-mixed-1",
+			},
+			Annotations: map[string]string{
+				constants.ComputeRequestAnnotation: "20", // 20% of 1000 = 200 TFLOPs
+				constants.VRAMRequestAnnotation:    "4Gi",
+				constants.ComputeLimitAnnotation:   "20",
+				constants.VRAMLimitAnnotation:      "8Gi",
+				constants.GpuCountAnnotation:       "1",
+				constants.GPUDeviceIDsAnnotation:   "gpu-mixed-1",
+				constants.GpuPoolKey:               "pool-a",
+			},
+		},
+		Spec: v1.PodSpec{
+			NodeName: "node-a",
+		},
+	}
+	s.NoError(s.client.Create(s.ctx, workerPod1))
+
+	// Create worker pod 2 using compute-percent on GPU 2 (10% of 2000 = 200 TFLOPs)
+	workerPod2 := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-mixed-2",
+			Namespace: "ns1",
+			UID:       "worker-mixed-2-uid",
+			Labels: map[string]string{
+				constants.LabelComponent: constants.ComponentWorker,
+				constants.WorkloadKey:    "workload-mixed-2",
+			},
+			Annotations: map[string]string{
+				constants.ComputeRequestAnnotation: "10", // 10% of 2000 = 200 TFLOPs
+				constants.VRAMRequestAnnotation:    "6Gi",
+				constants.ComputeLimitAnnotation:   "10",
+				constants.VRAMLimitAnnotation:      "12Gi",
+				constants.GpuCountAnnotation:       "1",
+				constants.GPUDeviceIDsAnnotation:   "gpu-mixed-2",
+				constants.GpuPoolKey:               "pool-a",
+			},
+		},
+		Spec: v1.PodSpec{
+			NodeName: "node-a",
+		},
+	}
+	s.NoError(s.client.Create(s.ctx, workerPod2))
+
+	// Manually add GPUs to allocator store
+	gpuStore, _, _ := s.allocator.GetAllocationInfo()
+	key1 := types.NamespacedName{Name: "gpu-mixed-1"}
+	gpuCopy1 := gpu1.DeepCopy()
+	if gpuCopy1.Status.Available == nil {
+		gpuCopy1.Status.Available = gpuCopy1.Status.Capacity.DeepCopy()
+	}
+	gpuStore[key1] = gpuCopy1
+
+	key2 := types.NamespacedName{Name: "gpu-mixed-2"}
+	gpuCopy2 := gpu2.DeepCopy()
+	if gpuCopy2.Status.Available == nil {
+		gpuCopy2.Status.Available = gpuCopy2.Status.Capacity.DeepCopy()
+	}
+	gpuStore[key2] = gpuCopy2
+
+	// Reconcile allocation state
+	s.allocator.ReconcileAllocationStateForTesting()
+	s.allocator.SyncGPUsToK8s()
+
+	// Verify GPU 1 available resources
+	updatedGPU1 := &tfv1.GPU{}
+	s.NoError(s.client.Get(s.ctx, types.NamespacedName{Name: "gpu-mixed-1"}, updatedGPU1))
+
+	// Expected: 1000 - 200 (20% of 1000) = 800 TFLOPs
+	expectedTflops1 := resource.MustParse("800")
+	s.True(updatedGPU1.Status.Available.Tflops.Equal(expectedTflops1),
+		"GPU1 Expected TFLOPs: %s, Got: %s", expectedTflops1.String(), updatedGPU1.Status.Available.Tflops.String())
+
+	// Expected: 20Gi - 4Gi = 16Gi VRAM
+	expectedVram1 := resource.MustParse("16Gi")
+	s.True(updatedGPU1.Status.Available.Vram.Equal(expectedVram1),
+		"GPU1 Expected VRAM: %s, Got: %s", expectedVram1.String(), updatedGPU1.Status.Available.Vram.String())
+
+	// Verify GPU 2 available resources
+	updatedGPU2 := &tfv1.GPU{}
+	s.NoError(s.client.Get(s.ctx, types.NamespacedName{Name: "gpu-mixed-2"}, updatedGPU2))
+
+	// Expected: 2000 - 200 (10% of 2000) = 1800 TFLOPs
+	expectedTflops2 := resource.MustParse("1800")
+	s.True(updatedGPU2.Status.Available.Tflops.Equal(expectedTflops2),
+		"GPU2 Expected TFLOPs: %s, Got: %s", expectedTflops2.String(), updatedGPU2.Status.Available.Tflops.String())
+
+	// Expected: 40Gi - 6Gi = 34Gi VRAM
+	expectedVram2 := resource.MustParse("34Gi")
+	s.True(updatedGPU2.Status.Available.Vram.Equal(expectedVram2),
+		"GPU2 Expected VRAM: %s, Got: %s", expectedVram2.String(), updatedGPU2.Status.Available.Vram.String())
+}
