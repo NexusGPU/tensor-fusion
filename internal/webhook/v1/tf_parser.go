@@ -239,6 +239,7 @@ func mergeAutoScalingConfig(workloadProfile *tfv1.WorkloadProfile, ruleConfig *t
 	}
 }
 
+//nolint:gocyclo
 func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) error {
 	// extract any containers has GPU count limits and set to annotation
 	isMigratedFromContainerLimits := false
