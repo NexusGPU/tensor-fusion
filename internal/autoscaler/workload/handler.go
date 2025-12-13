@@ -330,8 +330,16 @@ func (h *handler) GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, e
 		availableVram := gpu.Status.Available.Vram.DeepCopy()
 		for _, worker := range workers {
 			// Add back this workload's allocated resources to get the total available for this workload
-			availableTflops.Add(allocRequests[string(worker.UID)].Request.Tflops)
-			availableVram.Add(allocRequests[string(worker.UID)].Request.Vram)
+			allocReq := allocRequests[string(worker.UID)]
+			var reqTflops resource.Quantity
+			if gpu.Status.Capacity != nil && !allocReq.Request.ComputePercent.IsZero() {
+				requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, allocReq.Request)
+				reqTflops = *requiredTflops
+			} else {
+				reqTflops = allocReq.Request.Tflops
+			}
+			availableTflops.Add(reqTflops)
+			availableVram.Add(allocReq.Request.Vram)
 		}
 
 		workerCount := int64(len(workers))
