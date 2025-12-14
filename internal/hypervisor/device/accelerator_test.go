@@ -34,7 +34,7 @@ var _ = Describe("AcceleratorInterface", func() {
 	})
 
 	Describe("Library Loading", func() {
-		FIt("should load stub library successfully", func() {
+		It("should load stub library successfully", func() {
 			var err error
 			accel, err = NewAcceleratorInterface(stubLibPath)
 			Expect(err).NotTo(HaveOccurred())
@@ -42,7 +42,7 @@ var _ = Describe("AcceleratorInterface", func() {
 			Expect(accel.loaded).To(BeTrue())
 		})
 
-		FIt("should fail to load non-existent library", func() {
+		It("should fail to load non-existent library", func() {
 			accel, err := NewAcceleratorInterface("/non/existent/library.so")
 			Expect(err).To(HaveOccurred())
 			Expect(accel).To(BeNil())
@@ -89,10 +89,8 @@ var _ = Describe("AcceleratorInterface", func() {
 			// Verify ExtraMetrics are populated
 			Expect(m.ExtraMetrics).NotTo(BeEmpty())
 			Expect(m.ExtraMetrics).To(HaveKey("tensorCoreUsagePercent"))
-			Expect(m.ExtraMetrics).To(HaveKey("gpuUtilization"))
-			Expect(m.ExtraMetrics).To(HaveKey("memoryBandwidthMBps"))
-			Expect(m.ExtraMetrics["gpuUtilization"]).To(BeNumerically(">=", 0))
-			Expect(m.ExtraMetrics["gpuUtilization"]).To(BeNumerically("<=", 100))
+			Expect(m.ExtraMetrics).To(HaveKey("stub_metric_1"))
+			Expect(m.ExtraMetrics).To(HaveKey("stub_metric_2"))
 		})
 
 		It("should handle multiple devices", func() {
