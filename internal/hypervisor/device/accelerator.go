@@ -16,16 +16,16 @@ extern int loadAcceleratorLibrary(const char* libPath);
 extern void unloadAcceleratorLibrary(void);
 extern Result GetDeviceCountWrapper(size_t* deviceCount);
 extern Result GetAllDevicesWrapper(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount);
-extern Result GetPartitionTemplatesWrapper(int32_t deviceIndex, PartitionTemplate* templates, size_t maxCount, size_t* templateCount);
 extern bool AssignPartitionWrapper(PartitionAssignment* assignment);
 extern bool RemovePartitionWrapper(const char* templateId, const char* deviceUUID);
 extern Result SetMemHardLimitWrapper(const char* workerId, const char* deviceUUID, uint64_t memoryLimitBytes);
 extern Result SetComputeUnitHardLimitWrapper(const char* workerId, const char* deviceUUID, uint32_t computeUnitLimit);
-extern Result GetProcessComputeUtilizationWrapper(ComputeUtilization* utilizations, size_t maxCount, size_t* utilizationCount);
-extern Result GetProcessMemoryUtilizationWrapper(MemoryUtilization* utilizations, size_t maxCount, size_t* utilizationCount);
-extern Result GetDeviceMetricsWrapper(const char** deviceUUIDArray, size_t deviceCount, DeviceMetrics* metrics, size_t maxExtraMetricsPerDevice);
-extern Result GetVendorMountLibsWrapper(Mount* mounts, size_t maxCount, size_t* mountCount);
-extern const char* getDlError(void);
+	extern Result GetProcessComputeUtilizationWrapper(ComputeUtilization* utilizations, size_t maxCount, size_t maxEnginesPerProcess, size_t* utilizationCount);
+	extern Result GetProcessMemoryUtilizationWrapper(MemoryUtilization* utilizations, size_t maxCount, size_t* utilizationCount);
+	extern Result GetDeviceMetricsWrapper(const char** deviceUUIDArray, size_t deviceCount, DeviceMetrics* metrics, size_t maxComputeEnginesPerDevice, size_t maxMemoryPoolsPerDevice, size_t maxExtraMetricsPerDevice);
+	extern Result GetExtendedDeviceMetricsWrapper(const char** deviceUUIDArray, size_t deviceCount, ExtendedDeviceMetrics* metrics, size_t maxInterconnectPerDevice);
+	extern Result GetVendorMountLibsWrapper(Mount* mounts, size_t maxCount, size_t* mountCount);
+	extern const char* getDlError(void);
 */
 import "C"
 import (
@@ -139,50 +139,152 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 	}()
 
 	// Convert Go slice to C array pointer
-	// In CGO, we can directly use the slice's underlying array pointer
 	var cUUIDArray **C.char
 	if deviceCount > 0 {
 		cUUIDArray = (**C.char)(unsafe.Pointer(&cDeviceUUIDs[0]))
 	}
 
-	// Allocate stack buffer for metrics
+	// Allocate C buffers for metrics (required by cgo pointer rules: we can't pass Go memory
+	// that contains pointers to other Go memory into C).
+	const maxComputeEnginesPerDevice = 8
+	const maxMemoryPoolsPerDevice = 4
 	const maxExtraMetricsPerDevice = 32
-	var cMetrics [maxStackDevices]C.DeviceMetrics
-	var cExtraMetrics [maxStackDevices][maxExtraMetricsPerDevice]C.ExtraMetric
+	const maxInterconnectPerDevice = 16
 
-	// Initialize extraMetrics pointers
+	cMetrics := make([]C.DeviceMetrics, deviceCount)
+	cExtMetrics := make([]C.ExtendedDeviceMetrics, deviceCount)
+
+	totalCompute := deviceCount * maxComputeEnginesPerDevice
+	computeBuf := (*C.ComputeEngineUtilization)(C.calloc(C.size_t(totalCompute), C.size_t(unsafe.Sizeof(C.ComputeEngineUtilization{}))))
+	if computeBuf == nil {
+		return nil, fmt.Errorf("failed to allocate compute metrics buffer")
+	}
+	defer C.free(unsafe.Pointer(computeBuf))
+	computeAll := unsafe.Slice(computeBuf, totalCompute)
+
+	totalPools := deviceCount * maxMemoryPoolsPerDevice
+	poolBuf := (*C.MemoryPoolMetrics)(C.calloc(C.size_t(totalPools), C.size_t(unsafe.Sizeof(C.MemoryPoolMetrics{}))))
+	if poolBuf == nil {
+		return nil, fmt.Errorf("failed to allocate memory pool metrics buffer")
+	}
+	defer C.free(unsafe.Pointer(poolBuf))
+	poolAll := unsafe.Slice(poolBuf, totalPools)
+
+	totalExtras := deviceCount * maxExtraMetricsPerDevice
+	extraBuf := (*C.ExtraMetric)(C.calloc(C.size_t(totalExtras), C.size_t(unsafe.Sizeof(C.ExtraMetric{}))))
+	if extraBuf == nil {
+		return nil, fmt.Errorf("failed to allocate extra metrics buffer")
+	}
+	defer C.free(unsafe.Pointer(extraBuf))
+	extraAll := unsafe.Slice(extraBuf, totalExtras)
+
+	totalLinks := deviceCount * maxInterconnectPerDevice
+	linkBuf := (*C.InterconnectMetrics)(C.calloc(C.size_t(totalLinks), C.size_t(unsafe.Sizeof(C.InterconnectMetrics{}))))
+	if linkBuf == nil {
+		return nil, fmt.Errorf("failed to allocate interconnect metrics buffer")
+	}
+	defer C.free(unsafe.Pointer(linkBuf))
+	linkAll := unsafe.Slice(linkBuf, totalLinks)
+
+	// Initialize pointers
 	for i := 0; i < deviceCount; i++ {
-		cMetrics[i].extraMetrics = &cExtraMetrics[i][0]
+		cMetrics[i].compute = &computeAll[i*maxComputeEnginesPerDevice]
+		cMetrics[i].computeCount = 0
+		cMetrics[i].memoryPools = &poolAll[i*maxMemoryPoolsPerDevice]
+		cMetrics[i].memoryPoolCount = 0
+		cMetrics[i].extraMetrics = &extraAll[i*maxExtraMetricsPerDevice]
 		cMetrics[i].extraMetricsCount = 0
+
+		cExtMetrics[i].interconnects = &linkAll[i*maxInterconnectPerDevice]
+		cExtMetrics[i].interconnectCount = 0
 	}
 
 	//nolint:staticcheck
-	result := C.GetDeviceMetricsWrapper(cUUIDArray, C.size_t(deviceCount), &cMetrics[0], C.size_t(maxExtraMetricsPerDevice))
+	result := C.GetDeviceMetricsWrapper(cUUIDArray, C.size_t(deviceCount), &cMetrics[0],
+		C.size_t(maxComputeEnginesPerDevice), C.size_t(maxMemoryPoolsPerDevice), C.size_t(maxExtraMetricsPerDevice))
 	if result != C.RESULT_SUCCESS {
 		return nil, fmt.Errorf("failed to get device metrics: %d", result)
 	}
+
+	// Extended metrics are optional for callers, but required by the provider ABI; if it fails,
+	// keep Rx/Tx at 0 and still return basic metrics.
+	//nolint:staticcheck
+	_ = C.GetExtendedDeviceMetricsWrapper(cUUIDArray, C.size_t(deviceCount), &cExtMetrics[0], C.size_t(maxInterconnectPerDevice))
 
 	// Convert C metrics to Go metrics
 	metrics := make([]*api.GPUUsageMetrics, deviceCount)
 	for i := 0; i < deviceCount; i++ {
 		cm := &cMetrics[i]
-		memoryTotal := uint64(cm.memoryTotalBytes)
-		memoryUsed := uint64(cm.memoryUsedBytes)
+		ce := &cExtMetrics[i]
+
+		// Calculate memory from memory pools
+		var memoryTotal, memoryUsed uint64
+		if cm.memoryPools != nil && cm.memoryPoolCount > 0 {
+			poolsSlice := unsafe.Slice(cm.memoryPools, maxMemoryPoolsPerDevice)
+			count := int(cm.memoryPoolCount)
+			if count > maxMemoryPoolsPerDevice {
+				count = maxMemoryPoolsPerDevice
+			}
+			for j := 0; j < count; j++ {
+				memoryTotal += uint64(poolsSlice[j].totalBytes)
+				memoryUsed += uint64(poolsSlice[j].usedBytes)
+			}
+		}
 		var memoryPercentage float64
 		if memoryTotal > 0 {
 			memoryPercentage = float64(memoryUsed) / float64(memoryTotal) * 100.0
 		}
 
+		// Calculate compute percentage from compute engines
+		var computePercentage float64
+		var tensorCorePercentage float64
+		if cm.compute != nil && cm.computeCount > 0 {
+			computeSlice := unsafe.Slice(cm.compute, maxComputeEnginesPerDevice)
+			count := int(cm.computeCount)
+			if count > maxComputeEnginesPerDevice {
+				count = maxComputeEnginesPerDevice
+			}
+			for j := 0; j < count; j++ {
+				eng := &computeSlice[j]
+				util := float64(eng.utilizationPercent)
+				if eng.engineType != C.COMPUTE_ENGINE_COPY && util > computePercentage {
+					computePercentage = util
+				}
+				if eng.engineType == C.COMPUTE_ENGINE_MATRIX && util > tensorCorePercentage {
+					tensorCorePercentage = util
+				}
+			}
+		}
+
+		// Calculate PCIe Rx/Tx (KB) from extended interconnect metrics
+		var rxBytes uint64
+		var txBytes uint64
+		if ce.interconnects != nil && ce.interconnectCount > 0 {
+			linksSlice := unsafe.Slice(ce.interconnects, maxInterconnectPerDevice)
+			count := int(ce.interconnectCount)
+			if count > maxInterconnectPerDevice {
+				count = maxInterconnectPerDevice
+			}
+			for j := 0; j < count; j++ {
+				link := &linksSlice[j]
+				if link.linkType == C.INTERCONNECT_PCIE {
+					rxBytes += uint64(link.rxBytes)
+					txBytes += uint64(link.txBytes)
+				}
+			}
+		}
+
 		// Convert extra metrics from C to Go map
 		extraMetrics := make(map[string]float64, int(cm.extraMetricsCount)+1)
-		// Always include tensorCoreUsagePercent as it's a standard field
-		extraMetrics["tensorCoreUsagePercent"] = float64(cm.tensorCoreUsagePercent)
+		extraMetrics["tensorCoreUsagePercent"] = tensorCorePercentage
 
-		// Add other extra metrics from C array
 		if cm.extraMetrics != nil && cm.extraMetricsCount > 0 {
-			// Convert C pointer to Go slice for indexing
-			extraMetricsSlice := (*[maxExtraMetricsPerDevice]C.ExtraMetric)(unsafe.Pointer(cm.extraMetrics))
-			for j := 0; j < int(cm.extraMetricsCount); j++ {
+			extraMetricsSlice := unsafe.Slice(cm.extraMetrics, maxExtraMetricsPerDevice)
+			count := int(cm.extraMetricsCount)
+			if count > maxExtraMetricsPerDevice {
+				count = maxExtraMetricsPerDevice
+			}
+			for j := 0; j < count; j++ {
 				em := &extraMetricsSlice[j]
 				key := C.GoString(&em.key[0])
 				if key != "" {
@@ -195,10 +297,10 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 			DeviceUUID:        C.GoString(&cm.deviceUUID[0]),
 			MemoryBytes:       memoryUsed,
 			MemoryPercentage:  memoryPercentage,
-			ComputePercentage: float64(cm.smActivePercent),
-			ComputeTflops:     0,                                // Not available in DeviceMetrics
-			Rx:                float64(cm.pcieRxBytes) / 1024.0, // Convert bytes to KB
-			Tx:                float64(cm.pcieTxBytes) / 1024.0, // Convert bytes to KB
+			ComputePercentage: computePercentage,
+			ComputeTflops:     0,                         // Not available in DeviceMetrics
+			Rx:                float64(rxBytes) / 1024.0, // Bytes to KB
+			Tx:                float64(txBytes) / 1024.0, // Bytes to KB
 			Temperature:       float64(cm.temperatureCelsius),
 			PowerUsage:        int64(cm.powerUsageWatts),
 			ExtraMetrics:      extraMetrics,
@@ -352,15 +454,35 @@ func (a *AcceleratorInterface) GetProcessComputeUtilization() ([]api.ComputeUtil
 
 	// Allocate stack buffer (max 1024 to avoid stack overflow)
 	const maxStackUtilizations = 1024
-	var stackUtilizations [maxStackUtilizations]C.ComputeUtilization
+	const maxEnginesPerProcess = 8
 	maxCount := totalCount
 	if maxCount > maxStackUtilizations {
 		maxCount = maxStackUtilizations
 	}
 
+	utilBuf := (*C.ComputeUtilization)(C.calloc(C.size_t(maxCount), C.size_t(unsafe.Sizeof(C.ComputeUtilization{}))))
+	if utilBuf == nil {
+		return nil, fmt.Errorf("failed to allocate process utilization buffer")
+	}
+	defer C.free(unsafe.Pointer(utilBuf))
+	utilAll := unsafe.Slice(utilBuf, maxCount)
+
+	totalEngines := maxCount * maxEnginesPerProcess
+	engineBuf := (*C.ComputeEngineUtilization)(C.calloc(C.size_t(totalEngines), C.size_t(unsafe.Sizeof(C.ComputeEngineUtilization{}))))
+	if engineBuf == nil {
+		return nil, fmt.Errorf("failed to allocate process engine buffer")
+	}
+	defer C.free(unsafe.Pointer(engineBuf))
+	engineAll := unsafe.Slice(engineBuf, totalEngines)
+
+	for i := 0; i < maxCount; i++ {
+		utilAll[i].engines = &engineAll[i*maxEnginesPerProcess]
+		utilAll[i].engineCount = 0
+	}
+
 	var cCount C.size_t
 	//nolint:staticcheck
-	result := C.GetProcessComputeUtilizationWrapper(&stackUtilizations[0], C.size_t(maxCount), &cCount)
+	result := C.GetProcessComputeUtilizationWrapper(utilBuf, C.size_t(maxCount), C.size_t(maxEnginesPerProcess), &cCount)
 	if result != C.RESULT_SUCCESS {
 		return nil, fmt.Errorf("failed to get process compute utilization: %d", result)
 	}
@@ -371,12 +493,11 @@ func (a *AcceleratorInterface) GetProcessComputeUtilization() ([]api.ComputeUtil
 
 	utilizations := make([]api.ComputeUtilization, int(cCount))
 	for i := 0; i < int(cCount); i++ {
-		cu := &stackUtilizations[i]
+		cu := &utilAll[i]
 		utilizations[i] = api.ComputeUtilization{
 			ProcessID:          C.GoString(&cu.processId[0]),
 			DeviceUUID:         C.GoString(&cu.deviceUUID[0]),
-			UtilizationPercent: float64(cu.utilizationPercent),
-			// Note: ActiveSMs, TotalSMs, and TFLOPsUsed will be added to ComputeUtilization if needed
+			UtilizationPercent: float64(cu.overallUtilizationPercent),
 		}
 	}
 

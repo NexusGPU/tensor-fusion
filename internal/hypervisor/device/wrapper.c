@@ -29,14 +29,14 @@ extern void GoLog(const char* level, const char* message);
 // Function pointer types for dynamic loading
 typedef Result (*GetDeviceCountFunc)(size_t*);
 typedef Result (*GetAllDevicesFunc)(ExtendedDeviceInfo*, size_t, size_t*);
-typedef Result (*GetPartitionTemplatesFunc)(int32_t, PartitionTemplate*, size_t, size_t*);
 typedef bool (*AssignPartitionFunc)(PartitionAssignment*);
 typedef bool (*RemovePartitionFunc)(const char*, const char*);
 typedef Result (*SetMemHardLimitFunc)(const char*, const char*, uint64_t);
 typedef Result (*SetComputeUnitHardLimitFunc)(const char*, const char*, uint32_t);
-typedef Result (*GetProcessComputeUtilizationFunc)(ComputeUtilization*, size_t, size_t*);
+typedef Result (*GetProcessComputeUtilizationFunc)(ComputeUtilization*, size_t, size_t, size_t*);
 typedef Result (*GetProcessMemoryUtilizationFunc)(MemoryUtilization*, size_t, size_t*);
-typedef Result (*GetDeviceMetricsFunc)(const char**, size_t, DeviceMetrics*, size_t);
+typedef Result (*GetDeviceMetricsFunc)(const char**, size_t, DeviceMetrics*, size_t, size_t, size_t);
+typedef Result (*GetExtendedDeviceMetricsFunc)(const char**, size_t, ExtendedDeviceMetrics*, size_t);
 typedef Result (*GetVendorMountLibsFunc)(Mount*, size_t, size_t*);
 typedef Result (*LogFunc)(const char*, const char*);
 
@@ -46,7 +46,6 @@ static void* libHandle = NULL;
 // Function pointers
 static GetDeviceCountFunc getDeviceCountFunc = NULL;
 static GetAllDevicesFunc getAllDevicesFunc = NULL;
-static GetPartitionTemplatesFunc getPartitionTemplatesFunc = NULL;
 static AssignPartitionFunc assignPartitionFunc = NULL;
 static RemovePartitionFunc removePartitionFunc = NULL;
 static SetMemHardLimitFunc setMemHardLimitFunc = NULL;
@@ -54,6 +53,7 @@ static SetComputeUnitHardLimitFunc setComputeUnitHardLimitFunc = NULL;
 static GetProcessComputeUtilizationFunc getProcessComputeUtilizationFunc = NULL;
 static GetProcessMemoryUtilizationFunc getProcessMemoryUtilizationFunc = NULL;
 static GetDeviceMetricsFunc getDeviceMetricsFunc = NULL;
+static GetExtendedDeviceMetricsFunc getExtendedDeviceMetricsFunc = NULL;
 static GetVendorMountLibsFunc getVendorMountLibsFunc = NULL;
 static LogFunc logFunc = NULL;
 
@@ -71,7 +71,6 @@ int loadAcceleratorLibrary(const char* libPath) {
     // Load function symbols
     getDeviceCountFunc = (GetDeviceCountFunc)dlsym(libHandle, "GetDeviceCount");
     getAllDevicesFunc = (GetAllDevicesFunc)dlsym(libHandle, "GetAllDevices");
-    getPartitionTemplatesFunc = (GetPartitionTemplatesFunc)dlsym(libHandle, "GetPartitionTemplates");
     assignPartitionFunc = (AssignPartitionFunc)dlsym(libHandle, "AssignPartition");
     removePartitionFunc = (RemovePartitionFunc)dlsym(libHandle, "RemovePartition");
     setMemHardLimitFunc = (SetMemHardLimitFunc)dlsym(libHandle, "SetMemHardLimit");
@@ -79,14 +78,16 @@ int loadAcceleratorLibrary(const char* libPath) {
     getProcessComputeUtilizationFunc = (GetProcessComputeUtilizationFunc)dlsym(libHandle, "GetProcessComputeUtilization");
     getProcessMemoryUtilizationFunc = (GetProcessMemoryUtilizationFunc)dlsym(libHandle, "GetProcessMemoryUtilization");
     getDeviceMetricsFunc = (GetDeviceMetricsFunc)dlsym(libHandle, "GetDeviceMetrics");
+    getExtendedDeviceMetricsFunc = (GetExtendedDeviceMetricsFunc)dlsym(libHandle, "GetExtendedDeviceMetrics");
     getVendorMountLibsFunc = (GetVendorMountLibsFunc)dlsym(libHandle, "GetVendorMountLibs");
     logFunc = (LogFunc)dlsym(libHandle, "Log");
-    
+
     // Check if all required functions are loaded (Log is optional)
-    if (!getDeviceCountFunc || !getAllDevicesFunc || !getPartitionTemplatesFunc ||
+    if (!getDeviceCountFunc || !getAllDevicesFunc ||
         !assignPartitionFunc || !removePartitionFunc || !setMemHardLimitFunc ||
         !setComputeUnitHardLimitFunc || !getProcessComputeUtilizationFunc ||
-        !getProcessMemoryUtilizationFunc || !getDeviceMetricsFunc || !getVendorMountLibsFunc) {
+        !getProcessMemoryUtilizationFunc || !getDeviceMetricsFunc || !getExtendedDeviceMetricsFunc ||
+        !getVendorMountLibsFunc) {
         dlclose(libHandle);
         libHandle = NULL;
         return -2; // Missing symbols
@@ -108,7 +109,6 @@ void unloadAcceleratorLibrary(void) {
         libHandle = NULL;
         getDeviceCountFunc = NULL;
         getAllDevicesFunc = NULL;
-        getPartitionTemplatesFunc = NULL;
         assignPartitionFunc = NULL;
         removePartitionFunc = NULL;
         setMemHardLimitFunc = NULL;
@@ -116,6 +116,7 @@ void unloadAcceleratorLibrary(void) {
         getProcessComputeUtilizationFunc = NULL;
         getProcessMemoryUtilizationFunc = NULL;
         getDeviceMetricsFunc = NULL;
+        getExtendedDeviceMetricsFunc = NULL;
         getVendorMountLibsFunc = NULL;
         logFunc = NULL;
     }
@@ -134,13 +135,6 @@ Result GetAllDevicesWrapper(ExtendedDeviceInfo* devices, size_t maxCount, size_t
         return RESULT_ERROR_INTERNAL;
     }
     return getAllDevicesFunc(devices, maxCount, deviceCount);
-}
-
-Result GetPartitionTemplatesWrapper(int32_t deviceIndex, PartitionTemplate* templates, size_t maxCount, size_t* templateCount) {
-    if (getPartitionTemplatesFunc == NULL) {
-        return RESULT_ERROR_INTERNAL;
-    }
-    return getPartitionTemplatesFunc(deviceIndex, templates, maxCount, templateCount);
 }
 
 bool AssignPartitionWrapper(PartitionAssignment* assignment) {
@@ -171,11 +165,11 @@ Result SetComputeUnitHardLimitWrapper(const char* workerId, const char* deviceUU
     return setComputeUnitHardLimitFunc(workerId, deviceUUID, computeUnitLimit);
 }
 
-Result GetProcessComputeUtilizationWrapper(ComputeUtilization* utilizations, size_t maxCount, size_t* utilizationCount) {
+Result GetProcessComputeUtilizationWrapper(ComputeUtilization* utilizations, size_t maxCount, size_t maxEnginesPerProcess, size_t* utilizationCount) {
     if (getProcessComputeUtilizationFunc == NULL) {
         return RESULT_ERROR_INTERNAL;
     }
-    return getProcessComputeUtilizationFunc(utilizations, maxCount, utilizationCount);
+    return getProcessComputeUtilizationFunc(utilizations, maxCount, maxEnginesPerProcess, utilizationCount);
 }
 
 Result GetProcessMemoryUtilizationWrapper(MemoryUtilization* utilizations, size_t maxCount, size_t* utilizationCount) {
@@ -185,11 +179,18 @@ Result GetProcessMemoryUtilizationWrapper(MemoryUtilization* utilizations, size_
     return getProcessMemoryUtilizationFunc(utilizations, maxCount, utilizationCount);
 }
 
-Result GetDeviceMetricsWrapper(const char** deviceUUIDArray, size_t deviceCount, DeviceMetrics* metrics, size_t maxExtraMetricsPerDevice) {
+Result GetDeviceMetricsWrapper(const char** deviceUUIDArray, size_t deviceCount, DeviceMetrics* metrics, size_t maxComputeEnginesPerDevice, size_t maxMemoryPoolsPerDevice, size_t maxExtraMetricsPerDevice) {
     if (getDeviceMetricsFunc == NULL) {
         return RESULT_ERROR_INTERNAL;
     }
-    return getDeviceMetricsFunc(deviceUUIDArray, deviceCount, metrics, maxExtraMetricsPerDevice);
+    return getDeviceMetricsFunc(deviceUUIDArray, deviceCount, metrics, maxComputeEnginesPerDevice, maxMemoryPoolsPerDevice, maxExtraMetricsPerDevice);
+}
+
+Result GetExtendedDeviceMetricsWrapper(const char** deviceUUIDArray, size_t deviceCount, ExtendedDeviceMetrics* metrics, size_t maxInterconnectPerDevice) {
+    if (getExtendedDeviceMetricsFunc == NULL) {
+        return RESULT_ERROR_INTERNAL;
+    }
+    return getExtendedDeviceMetricsFunc(deviceUUIDArray, deviceCount, metrics, maxInterconnectPerDevice);
 }
 
 Result GetVendorMountLibsWrapper(Mount* mounts, size_t maxCount, size_t* mountCount) {
@@ -224,4 +225,3 @@ Result LogWrapper(const char* level, const char* message) {
 Result Log(const char* level, const char* message) {
     return LogWrapper(level, message);
 }
-
