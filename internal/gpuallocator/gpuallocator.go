@@ -217,7 +217,14 @@ func (s *GpuAllocator) FilterWithPreempt(
 				return nil, nil, fmt.Errorf("gpu %s not found", gpuName)
 			}
 			gpuCopy := gpu.DeepCopy()
-			gpuCopy.Status.Available.Tflops.Add(preemptAllocRequest.Request.Tflops)
+			var reqTflops resource.Quantity
+			if !preemptAllocRequest.Request.ComputePercent.IsZero() {
+				requiredTflops := utils.ComputePercentToTflops(gpuCopy.Status.Capacity.Tflops, preemptAllocRequest.Request)
+				reqTflops = *requiredTflops
+			} else {
+				reqTflops = preemptAllocRequest.Request.Tflops
+			}
+			gpuCopy.Status.Available.Tflops.Add(reqTflops)
 			gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
 			toFilterGPUs = append(toFilterGPUs, gpuCopy)
 		}
@@ -302,9 +309,16 @@ func (s *GpuAllocator) Bind(
 		if gpu.Status.Available == nil {
 			return nil, fmt.Errorf("GPU %s has nil available resources", selectedGPU)
 		}
-		if gpu.Status.Available.Tflops.Cmp(req.Request.Tflops) < 0 {
+		var reqTflops resource.Quantity
+		if !req.Request.ComputePercent.IsZero() {
+			requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
+			reqTflops = *requiredTflops
+		} else {
+			reqTflops = req.Request.Tflops
+		}
+		if gpu.Status.Available.Tflops.Cmp(reqTflops) < 0 {
 			return nil, fmt.Errorf("GPU %s insufficient TFLOPs: available %s, requested %s",
-				selectedGPU, gpu.Status.Available.Tflops.String(), req.Request.Tflops.String())
+				selectedGPU, gpu.Status.Available.Tflops.String(), reqTflops.String())
 		}
 		if gpu.Status.Available.Vram.Cmp(req.Request.Vram) < 0 {
 			return nil, fmt.Errorf("GPU %s insufficient VRAM: available %s, requested %s",
@@ -347,6 +361,7 @@ func (s *GpuAllocator) Bind(
 	}
 	req.GPUNames = gpuNames
 	s.uniqueAllocation[string(req.PodMeta.UID)] = req
+	delete(s.uniqueDeallocation, string(req.PodMeta.UID))
 	s.podNamespaceNsToPodUID[req.PodMeta.Namespace+"/"+req.PodMeta.Name] = string(req.PodMeta.UID)
 
 	for _, handler := range s.bindHandlers {
@@ -470,6 +485,7 @@ func (s *GpuAllocator) Dealloc(
 	}
 
 	if _, exists := s.uniqueDeallocation[podUID]; exists {
+		delete(s.uniqueAllocation, podUID)
 		// should not block finalizer
 		log.Error(fmt.Errorf("pod has already deallocated GPUs"), "pod", podUID)
 		return
@@ -675,8 +691,23 @@ func (s *GpuAllocator) checkGPUCapacityAndQuota(gpu *tfv1.GPU, oldRes, newRes tf
 		Vram:   remainVram,
 	}
 
-	remainTflops.Add(oldRes.Tflops)
-	remainTflops.Sub(newRes.Tflops)
+	// Get actual TFLOPs values, converting from ComputePercent if needed
+	var oldTflops, newTflops resource.Quantity
+	if !oldRes.ComputePercent.IsZero() {
+		requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, oldRes)
+		oldTflops = *requiredTflops
+	} else {
+		oldTflops = oldRes.Tflops
+	}
+	if !newRes.ComputePercent.IsZero() {
+		requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, newRes)
+		newTflops = *requiredTflops
+	} else {
+		newTflops = newRes.Tflops
+	}
+
+	remainTflops.Add(oldTflops)
+	remainTflops.Sub(newTflops)
 	if remainTflops.Cmp(resource.Quantity{}) < 0 {
 		return remainRes, ScalingQuotaExceededError
 	}
@@ -1272,9 +1303,37 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 		if existingAllocation == nil {
 			continue
 		}
-		toPreemptUsage.Requests.Tflops.Add(existingAllocation.Request.Tflops)
+		// Get actual TFLOPs values, converting from ComputePercent if needed
+		// We need GPU capacity to convert, so we get it from the first GPU of the allocation
+		var reqTflops, limitTflops resource.Quantity
+		if len(existingAllocation.GPUNames) > 0 {
+			gpuNameNs := types.NamespacedName{Name: existingAllocation.GPUNames[0]}
+			if gpu, exists := s.gpuStore[gpuNameNs]; exists && gpu.Status.Capacity != nil {
+				if !existingAllocation.Request.ComputePercent.IsZero() {
+					requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, existingAllocation.Request)
+					reqTflops = *requiredTflops
+				} else {
+					reqTflops = existingAllocation.Request.Tflops
+				}
+				if !existingAllocation.Limit.ComputePercent.IsZero() {
+					requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, existingAllocation.Limit)
+					limitTflops = *requiredTflops
+				} else {
+					limitTflops = existingAllocation.Limit.Tflops
+				}
+			} else {
+				// Fallback to direct TFLOPs if GPU not found
+				reqTflops = existingAllocation.Request.Tflops
+				limitTflops = existingAllocation.Limit.Tflops
+			}
+		} else {
+			// Fallback to direct TFLOPs if no GPUs
+			reqTflops = existingAllocation.Request.Tflops
+			limitTflops = existingAllocation.Limit.Tflops
+		}
+		toPreemptUsage.Requests.Tflops.Add(reqTflops)
 		toPreemptUsage.Requests.Vram.Add(existingAllocation.Request.Vram)
-		toPreemptUsage.Limits.Tflops.Add(existingAllocation.Limit.Tflops)
+		toPreemptUsage.Limits.Tflops.Add(limitTflops)
 		toPreemptUsage.Limits.Vram.Add(existingAllocation.Limit.Vram)
 		preemptAllocRequests = append(preemptAllocRequests, existingAllocation)
 	}
@@ -1364,7 +1423,15 @@ func (s *GpuAllocator) reconcileAllocationState() {
 			gpuKey := types.NamespacedName{Name: gpuId}
 			gpuAvailableRes, ok := actualAvailableMap[gpuKey]
 			if ok {
-				gpuAvailableRes.Tflops.Sub(allocRequest.Request.Tflops)
+				var reqTflops resource.Quantity
+				gpu := s.gpuStore[gpuKey]
+				if gpu != nil && gpu.Status.Capacity != nil && !allocRequest.Request.ComputePercent.IsZero() {
+					requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, allocRequest.Request)
+					reqTflops = *requiredTflops
+				} else {
+					reqTflops = allocRequest.Request.Tflops
+				}
+				gpuAvailableRes.Tflops.Sub(reqTflops)
 				gpuAvailableRes.Vram.Sub(allocRequest.Request.Vram)
 			}
 			addRunningApp(ctx, s.gpuStore[gpuKey], allocRequest)

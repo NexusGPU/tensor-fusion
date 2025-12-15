@@ -239,6 +239,7 @@ func mergeAutoScalingConfig(workloadProfile *tfv1.WorkloadProfile, ruleConfig *t
 	}
 }
 
+//nolint:gocyclo
 func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) error {
 	// extract any containers has GPU count limits and set to annotation
 	isMigratedFromContainerLimits := false
@@ -271,21 +272,35 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 		}
 	}
 
+	// Parse TFLOPs annotations first (higher priority than compute-percent)
+	hasTflopsLimit := false
 	if tflopsLimit, hasValue := parseResourceQuantity(pod, constants.TFLOPSLimitAnnotation); hasValue {
 		workloadProfile.Spec.Resources.Limits.Tflops = tflopsLimit
-		// clean compute percent limit when tflops limit is set in annotation
-		if isMigratedFromContainerLimits {
-			workloadProfile.Spec.Resources.Limits.ComputePercent = resource.Quantity{}
-		}
+		hasTflopsLimit = true
+		// TFLOPs has higher priority: clear compute percent limit when tflops limit is set
+		workloadProfile.Spec.Resources.Limits.ComputePercent = resource.Quantity{}
 	}
 	if vramLimit, hasValue := parseResourceQuantity(pod, constants.VRAMLimitAnnotation); hasValue {
 		workloadProfile.Spec.Resources.Limits.Vram = vramLimit
 	}
 
+	hasTflopsRequest := false
 	if tflopsRequest, hasValue := parseResourceQuantity(pod, constants.TFLOPSRequestAnnotation); hasValue {
 		workloadProfile.Spec.Resources.Requests.Tflops = tflopsRequest
+		hasTflopsRequest = true
+		// TFLOPs has higher priority: clear compute percent request when tflops request is set
+		workloadProfile.Spec.Resources.Requests.ComputePercent = resource.Quantity{}
+		// If user explicitly uses TFLOPs for request but limit is still using compute-percent from migration,
+		// clear the migrated compute-percent limit to maintain consistency (user should explicitly set limit)
+		if isMigratedFromContainerLimits && !hasTflopsLimit {
+			workloadProfile.Spec.Resources.Limits.ComputePercent = resource.Quantity{}
+		}
 	} else if workloadProfile.Spec.Resources.Requests.Tflops.IsZero() {
 		workloadProfile.Spec.Resources.Requests.Tflops = workloadProfile.Spec.Resources.Limits.Tflops
+		// If request inherits from limit and limit is TFLOPs, ensure compute percent is cleared
+		if hasTflopsLimit {
+			workloadProfile.Spec.Resources.Requests.ComputePercent = resource.Quantity{}
+		}
 	}
 	if vramRequest, hasValue := parseResourceQuantity(pod, constants.VRAMRequestAnnotation); hasValue {
 		workloadProfile.Spec.Resources.Requests.Vram = vramRequest
@@ -294,20 +309,37 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 	}
 
 	// Percentage way to specify GPU resource request, not recommended, should use TFLOPs instead
-	computeLimit, hasValue := parseResourceQuantity(pod, constants.ComputeLimitAnnotation)
-	if hasValue {
-		workloadProfile.Spec.Resources.Limits.ComputePercent = computeLimit
+	// Only process compute-percent if TFLOPs is not set (TFLOPs has higher priority)
+	computeLimit, hasComputeLimit := parseResourceQuantity(pod, constants.ComputeLimitAnnotation)
+	if hasComputeLimit {
+		if hasTflopsLimit {
+			// TFLOPs limit has higher priority, ignore compute-percent-limit
+			workloadProfile.Spec.Resources.Limits.ComputePercent = resource.Quantity{}
+		} else {
+			workloadProfile.Spec.Resources.Limits.ComputePercent = computeLimit
+		}
 	}
-	computeRequest, hasValue := parseResourceQuantity(pod, constants.ComputeRequestAnnotation)
-	if hasValue {
-		workloadProfile.Spec.Resources.Requests.ComputePercent = computeRequest
+	computeRequest, hasComputeRequest := parseResourceQuantity(pod, constants.ComputeRequestAnnotation)
+	if hasComputeRequest {
+		if hasTflopsRequest || hasTflopsLimit {
+			// TFLOPs has higher priority, ignore compute-percent-request
+			workloadProfile.Spec.Resources.Requests.ComputePercent = resource.Quantity{}
+		} else {
+			workloadProfile.Spec.Resources.Requests.ComputePercent = computeRequest
+		}
 	} else if workloadProfile.Spec.Resources.Requests.Tflops.IsZero() && workloadProfile.Spec.Resources.Requests.ComputePercent.IsZero() {
-		workloadProfile.Spec.Resources.Requests.ComputePercent = workloadProfile.Spec.Resources.Limits.ComputePercent
+		// Only inherit compute percent if TFLOPs is not set
+		if !hasTflopsLimit && !workloadProfile.Spec.Resources.Limits.ComputePercent.IsZero() {
+			workloadProfile.Spec.Resources.Requests.ComputePercent = workloadProfile.Spec.Resources.Limits.ComputePercent
+		}
 	}
 
 	// tflops - computePercent are mutually exclusive
 	if !workloadProfile.Spec.Resources.Requests.Tflops.IsZero() && !workloadProfile.Spec.Resources.Requests.ComputePercent.IsZero() {
 		return fmt.Errorf("tflops- and computePercent request are mutually exclusive, please specify only one")
+	}
+	if !workloadProfile.Spec.Resources.Limits.Tflops.IsZero() && !workloadProfile.Spec.Resources.Limits.ComputePercent.IsZero() {
+		return fmt.Errorf("tflops- and computePercent limit are mutually exclusive, please specify only one")
 	}
 
 	qosLevel, hasValue := pod.Annotations[constants.QoSLevelAnnotation]

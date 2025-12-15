@@ -53,13 +53,24 @@ type PodReconciler struct {
 	Expander      *expander.NodeExpander
 }
 
-// +kubebuilder:rbac:groups=core,resources=*,verbs=get;list;watch
-// +kubebuilder:rbac:groups=storage.k8s.io,resources=*,verbs=get;list;watch
-// +kubebuilder:rbac:groups=policy,resources=*,verbs=get;list;watch
-// +kubebuilder:rbac:groups=core,resources=pods/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create;get;update;patch
-// +kubebuilder:rbac:groups=core,resources=pods/finalizers,verbs=create;get;update;patch
-// +kubebuilder:rbac:groups=core,resources=pods/binding,verbs=create;get;update;patch
+// +kubebuilder:rbac:groups=core,resources=endpoints,verbs=create
+// +kubebuilder:rbac:groups=core,resources=endpoints,verbs=get;update,resourceNames=kube-scheduler
+// +kubebuilder:rbac:groups=core,resources=nodes;pods,verbs=create;delete;get;list;patch;update;watch
+// +kubebuilder:rbac:groups=core,resources=bindings,verbs=create
+// +kubebuilder:rbac:groups=core,resources=nodes/finalizers;pods/binding;pods/exec,verbs=create;get;patch;update
+// +kubebuilder:rbac:groups=core,resources=pods/finalizers,verbs=create;get;list;patch;update;watch
+// +kubebuilder:rbac:groups=core,resources=nodes/status;pods/status,verbs=get;patch;update
+// +kubebuilder:rbac:groups=core,resources=replicationcontrollers;services,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims;persistentvolumes,verbs=get;list;patch;update;watch
+// +kubebuilder:rbac:groups=apps;extensions,resources=replicasets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;update;watch,resourceNames=kube-scheduler
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leasecandidates,verbs=create;delete;deletecollection;get;list;patch;update;watch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=csinodes;csidrivers;csistoragecapacities;storageclasses;volumeattachments,verbs=get;list;watch
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=deviceclasses;devicetaintrules;resourceclaims;resourceslices,verbs=get;list;watch
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims,verbs=patch;update
+// +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims/status,verbs=get;list;patch;update;watch
 
 // Add GPU connection for Pods using GPU
 // Have to create TensorFusion connection here because pod UID not available in MutatingWebhook
@@ -91,7 +102,6 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
 		metrics.RemoveWorkerMetrics(pod.Name, time.Now())
 		log.Info("Released GPU resources when pod in terminal state", "pod", req.NamespacedName, "phase", pod.Status.Phase)
-		return ctrl.Result{}, nil
 	}
 
 	// check if need to set owner reference, when standalone Pod created and no owner,

@@ -329,20 +329,20 @@ func (p *PercentileRecommender) handleResourceScaling(
 
 	// Must inside scaling range
 	targetReqValue := targetReq.AsApproximateFloat64()
-	if targetReqValue < minAllowedReq {
+	if minAllowedReq != 0 && targetReqValue < minAllowedReq {
 		targetReqValue = minAllowedReq
 		targetReq = *resource.NewQuantity(int64(targetReqValue), targetReq.Format)
 	}
-	if targetReqValue > maxAllowedReq {
+	if maxAllowedReq != 0 && targetReqValue > maxAllowedReq {
 		targetReqValue = maxAllowedReq
 		targetReq = *resource.NewQuantity(int64(targetReqValue), targetReq.Format)
 	}
 	targetLimValue := targetLim.AsApproximateFloat64()
-	if targetLimValue < minAllowedLim {
+	if minAllowedLim != 0 && targetLimValue < minAllowedLim {
 		targetLimValue = minAllowedLim
 		targetLim = *resource.NewQuantity(int64(targetLimValue), targetLim.Format)
 	}
-	if targetLimValue > maxAllowedLim {
+	if maxAllowedLim != 0 && targetLimValue > maxAllowedLim {
 		targetLimValue = maxAllowedLim
 		targetLim = *resource.NewQuantity(int64(targetLimValue), targetLim.Format)
 	}
