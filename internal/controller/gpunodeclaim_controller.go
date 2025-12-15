@@ -47,6 +47,7 @@ type GPUNodeClaimReconciler struct {
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodeclaims/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodeclaims/finalizers,verbs=update
+// +kubebuilder:rbac:groups=karpenter.sh,resources=nodeclaims,verbs=create;delete;get;list;patch;update;watch
 
 // GPUNodeClaim is responsible for creating cloud vendor GPU nodes
 func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
