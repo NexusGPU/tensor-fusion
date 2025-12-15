@@ -184,6 +184,7 @@ var _ = BeforeSuite(func() {
 		Client:                               mgr.GetClient(),
 		Scheme:                               mgr.GetScheme(),
 		Recorder:                             mgr.GetEventRecorderFor("GPUNode"),
+		Allocator:                            allocator,
 		CompatibleWithNvidiaContainerToolkit: false,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
