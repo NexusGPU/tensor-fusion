@@ -361,6 +361,7 @@ func (s *GpuAllocator) Bind(
 	}
 	req.GPUNames = gpuNames
 	s.uniqueAllocation[string(req.PodMeta.UID)] = req
+	delete(s.uniqueDeallocation, string(req.PodMeta.UID))
 	s.podNamespaceNsToPodUID[req.PodMeta.Namespace+"/"+req.PodMeta.Name] = string(req.PodMeta.UID)
 
 	for _, handler := range s.bindHandlers {
@@ -484,6 +485,7 @@ func (s *GpuAllocator) Dealloc(
 	}
 
 	if _, exists := s.uniqueDeallocation[podUID]; exists {
+		delete(s.uniqueAllocation, podUID)
 		// should not block finalizer
 		log.Error(fmt.Errorf("pod has already deallocated GPUs"), "pod", podUID)
 		return
