@@ -7,9 +7,17 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - bindings
+  - endpoints
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
   - configmaps
   - events
   - namespaces
+  - pods/finalizers
   verbs:
   - create
   - get
@@ -17,6 +25,15 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - ""
+  resourceNames:
+  - kube-scheduler
+  resources:
+  - endpoints
+  verbs:
+  - get
+  - update
 - apiGroups:
   - ""
   resources:
@@ -36,7 +53,6 @@ rules:
   - nodes/finalizers
   - pods/binding
   - pods/exec
-  - pods/finalizers
   verbs:
   - create
   - get
@@ -53,10 +69,20 @@ rules:
   - update
 - apiGroups:
   - ""
-  - policy
-  - storage.k8s.io
   resources:
-  - '*'
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - replicationcontrollers
+  - services
   verbs:
   - get
   - list
@@ -77,9 +103,24 @@ rules:
   - update
   - watch
 - apiGroups:
+  - apps
+  - extensions
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - authentication.k8s.io
   resources:
   - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
   verbs:
   - create
 - apiGroups:
@@ -105,6 +146,19 @@ rules:
 - apiGroups:
   - coordination.k8s.io
   resources:
+  - leasecandidates
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
   - leases
   verbs:
   - create
@@ -112,6 +166,17 @@ rules:
   - get
   - list
   - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resourceNames:
+  - kube-scheduler
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
   - update
   - watch
 - apiGroups:
@@ -124,6 +189,47 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - deviceclasses
+  - devicetaintrules
+  - resourceslices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - resourceclaims
+  - resourceclaims/status
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - csidrivers
+  - csinodes
+  - csistoragecapacities
+  - storageclasses
+  - volumeattachments
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - tensor-fusion.ai
