@@ -138,6 +138,7 @@ rules:
   resources:
   - daemonsets
   - deployments
+  - replicasets
   - statefulsets
   verbs:
   - create
@@ -272,6 +273,7 @@ rules:
   resources:
   - nodeclaims
   verbs:
+  - create
   - delete
   - get
   - list
