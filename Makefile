@@ -60,24 +60,29 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+.PHONY: vendor
+vendor: ## Vendor dependencies and apply scheduler patches.
+	go mod vendor
+	bash ./scripts/patch-scheduler.sh
+
 .PHONY: one-crd
 one-crd:
 	bash scripts/generate-crd.sh
 
 .PHONY: test
-test: manifests generate fmt vet envtest ## Run tests.
+test: manifests generate fmt vet vendor envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m -cover -coverprofile cover.out -r --skip-file ./test/e2e
 
 .PHONY: test-serial
-test-serial: manifests generate fmt vet envtest ## Run tests.
+test-serial: manifests generate fmt vet vendor envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -timeout 12m -r --skip-file ./test/e2e
 
 .PHONY: ut
-ut: manifests generate ## Run unit tests by make ut F=<focus-file>
+ut: manifests generate vendor ## Run unit tests by make ut F=<focus-file>
 	cd internal/controller && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m --focus-file $F && cd ../../
 
 .PHONY: ut-sched
-ut-sched: manifests generate ## Run unit tests by make ut F=<focus-file>
+ut-sched: manifests generate vendor ## Run unit tests by make ut F=<focus-file>
 	cd test/sched && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m --focus-file $F && cd ../../
 
 .PHONY: test-e2e
@@ -103,11 +108,11 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet ## Build manager binary.
+build: manifests generate fmt vet vendor ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
 .PHONY: run
-run: manifests generate fmt vet ## Run a controller from your host.
+run: manifests generate fmt vet vendor ## Run a controller from your host.
 	go run ./cmd/main.go
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
