@@ -116,7 +116,7 @@ func RefreshGPUNodeCapacity(
 		if utils.IsProgressiveMigration() && coreNode != nil {
 			taint := &corev1.Taint{
 				Key:    constants.NodeUsedByTaintKey,
-				Effect: corev1.TaintEffectNoSchedule,
+				Effect: corev1.TaintEffectPreferNoSchedule,
 				Value:  constants.TensorFusionSystemName,
 			}
 			needUpdateNode := false
