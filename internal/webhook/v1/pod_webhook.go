@@ -556,7 +556,7 @@ func assignPodLabelsAndAnnotations(isLocalGPU bool, pod *corev1.Pod, pool *tfv1.
 			Key:      constants.NodeUsedByTaintKey,
 			Operator: corev1.TolerationOpEqual,
 			Value:    constants.TensorFusionSystemName,
-			Effect:   corev1.TaintEffectNoSchedule,
+			Effect:   corev1.TaintEffectPreferNoSchedule,
 		})
 	} else {
 		pod.Labels[constants.LabelComponent] = constants.ComponentClient
