@@ -65,7 +65,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 		Key:      constants.NodeUsedByTaintKey,
 		Operator: v1.TolerationOpEqual,
 		Value:    constants.TensorFusionSystemName,
-		Effect:   v1.TaintEffectNoSchedule,
+		Effect:   v1.TaintEffectPreferNoSchedule,
 	})
 
 	// Add labels to identify this pod as part of the workload
