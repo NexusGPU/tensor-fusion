@@ -283,7 +283,7 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 	tmpl.Spec.NodeName = gpunode.Name
 	// allow job to run at any taint Nodes that marked as NoSchedule
 	tmpl.Spec.Tolerations = append(tmpl.Spec.Tolerations, corev1.Toleration{
-		Key:      string(corev1.TaintEffectNoSchedule),
+		Key:      string(corev1.TaintEffectPreferNoSchedule),
 		Operator: corev1.TolerationOpExists,
 	})
 	tmpl.Spec.EnableServiceLinks = ptr.To(false)
@@ -464,7 +464,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 		newPod.Spec.Tolerations = []corev1.Toleration{}
 	}
 	newPod.Spec.Tolerations = append(newPod.Spec.Tolerations, corev1.Toleration{
-		Key:      string(corev1.TaintEffectNoSchedule),
+		Key:      string(corev1.TaintEffectPreferNoSchedule),
 		Operator: corev1.TolerationOpExists,
 	})
 	err = controllerutil.SetControllerReference(node, newPod, r.Scheme)
