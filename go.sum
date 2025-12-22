@@ -24,8 +24,8 @@ github.com/antlr4-go/antlr/v4 v4.13.1 h1:SqQKkuVZ+zWkMMNkjy5FZe5mr5WURWnlpmOuzYW
 github.com/antlr4-go/antlr/v4 v4.13.1/go.mod h1:GKmUxMtwp6ZgGwZSva4eWPC5mS6vUAmOABFgjdkM7Nw=
 github.com/avast/retry-go v3.0.0+incompatible h1:4SOWQ7Qs+oroOTQOYnAHqelpCO0biHSxpiH9JdtuBj0=
 github.com/avast/retry-go v3.0.0+incompatible/go.mod h1:XtSnn+n/sHqQIpZ10K1qAevBhOOCWBLXXy3hyiqqBrY=
-github.com/aws/aws-sdk-go-v2 v1.40.1 h1:difXb4maDZkRH0x//Qkwcfpdg1XQVXEAEs2DdXldFFc=
-github.com/aws/aws-sdk-go-v2 v1.40.1/go.mod h1:MayyLB8y+buD9hZqkCW3kX1AKq07Y5pXxtgB+rRFhz0=
+github.com/aws/aws-sdk-go-v2 v1.41.0 h1:tNvqh1s+v0vFYdA1xq0aOJH+Y5cRyZ5upu6roPgPKd4=
+github.com/aws/aws-sdk-go-v2 v1.41.0/go.mod h1:MayyLB8y+buD9hZqkCW3kX1AKq07Y5pXxtgB+rRFhz0=
 github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.15 h1:Y5YXgygXwDI5P4RkteB5yF7v35neH7LfJKBG+hzIons=
 github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.15/go.mod h1:K+/1EpG42dFSY7CBj+Fruzm8PsCGWTXJ3jdeJ659oGQ=
 github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.15 h1:AvltKnW9ewxX2hFmQS0FyJH93aSvJVUEFvXfU+HWtSE=
