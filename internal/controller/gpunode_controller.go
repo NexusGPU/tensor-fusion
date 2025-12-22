@@ -281,9 +281,9 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 	}
 	tmpl.Labels[constants.LabelComponent] = constants.ComponentNodeDiscovery
 	tmpl.Spec.NodeName = gpunode.Name
-	// allow job to run at any taint Nodes that marked as NoSchedule
+	// tolerate the nodes that used by TensorFusion system
 	tmpl.Spec.Tolerations = append(tmpl.Spec.Tolerations, corev1.Toleration{
-		Key:      string(corev1.TaintEffectPreferNoSchedule),
+		Key:      constants.NodeUsedByTaintKey,
 		Operator: corev1.TolerationOpExists,
 	})
 	tmpl.Spec.EnableServiceLinks = ptr.To(false)
@@ -463,8 +463,9 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	if newPod.Spec.Tolerations == nil {
 		newPod.Spec.Tolerations = []corev1.Toleration{}
 	}
+	// tolerate the nodes that used by TensorFusion system
 	newPod.Spec.Tolerations = append(newPod.Spec.Tolerations, corev1.Toleration{
-		Key:      string(corev1.TaintEffectPreferNoSchedule),
+		Key:      constants.NodeUsedByTaintKey,
 		Operator: corev1.TolerationOpExists,
 	})
 	err = controllerutil.SetControllerReference(node, newPod, r.Scheme)

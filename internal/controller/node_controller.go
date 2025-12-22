@@ -28,6 +28,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
+	"k8s.io/kubernetes/pkg/util/taints"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -69,6 +71,22 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if node.Spec.Unschedulable {
 		log.Info("Node is unschedulable, skip reconciling", "node", node.Name)
 		return ctrl.Result{}, nil
+	}
+
+	// Remove TensorFusion taint if exists (TODO: Remove after version 1.50)
+	// Skip taint removal if node is being deleted or evicted
+	if node.DeletionTimestamp.IsZero() {
+		taintRemoved, err := r.removeTensorFusionTaint(ctx, node)
+		if err != nil {
+			log.Error(err, "Failed to remove TensorFusion taint from node", "node", node.Name)
+			// Continue processing even if taint removal fails
+		} else if taintRemoved {
+			// Re-fetch node to get latest resourceVersion after taint removal
+			if err := r.Get(ctx, req.NamespacedName, node); err != nil {
+				log.Error(err, "Failed to re-fetch node after taint removal", "node", node.Name)
+				return ctrl.Result{}, err
+			}
+		}
 	}
 
 	if node.Labels == nil {
@@ -249,6 +267,58 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			},
 		})).
 		Complete(r)
+}
+
+// Remove TensorFusion taint if exists (TODO: Remove after version 1.50)
+func (r *NodeReconciler) removeTensorFusionTaint(ctx context.Context, node *corev1.Node) (bool, error) {
+	taintKey := constants.NodeUsedByTaintKey
+	taintValue := constants.TensorFusionSystemName
+
+	taint := &corev1.Taint{
+		Key:    taintKey,
+		Effect: corev1.TaintEffectNoSchedule,
+		Value:  taintValue,
+	}
+
+	// Check if taint exists first
+	if !taints.TaintExists(node.Spec.Taints, taint) {
+		return false, nil // No update needed, taint doesn't exist
+	}
+
+	// Use retry mechanism to handle concurrent updates
+	var updated bool
+	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		latest := &corev1.Node{}
+		if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, latest); err != nil {
+			return err
+		}
+
+		// Check if taint still exists
+		if !taints.TaintExists(latest.Spec.Taints, taint) {
+			updated = false
+			return nil // Taint already removed, no update needed
+		}
+
+		var changed bool
+		latest, changed, _ = taints.RemoveTaint(latest, taint)
+		if !changed {
+			updated = false
+			return nil // No update needed, taint removal didn't change anything
+		}
+
+		if err := r.Update(ctx, latest); err != nil {
+			return err
+		}
+		updated = true
+		return nil
+	}); err != nil {
+		return false, err
+	}
+
+	if updated {
+		log.FromContext(ctx).Info("removed TensorFusion taint from node", "node", node.Name)
+	}
+	return updated, nil
 }
 
 func getMatchedPoolName(node *corev1.Node, poolList []tfv1.GPUPool) (*tfv1.GPUPool, bool, error) {

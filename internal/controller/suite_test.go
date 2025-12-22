@@ -102,8 +102,31 @@ var _ = BeforeSuite(func() {
 		// default path defined in controller-runtime which is /usr/local/kubebuilder/.
 		// Note that you must have the required binaries setup under the bin directory to perform
 		// the tests directly. When we run make test it will be setup and used automatically.
-		BinaryAssetsDirectory: filepath.Join("..", "..", "bin", "k8s",
-			fmt.Sprintf("1.31.0-%s-%s", runtime.GOOS, runtime.GOARCH)),
+		// If KUBEBUILDER_ASSETS is set (from make test), use it; otherwise check if binaries exist,
+		// if not, let envtest auto-download them.
+		BinaryAssetsDirectory: func() string {
+			// If KUBEBUILDER_ASSETS is set, don't set BinaryAssetsDirectory
+			if os.Getenv("KUBEBUILDER_ASSETS") != "" {
+				return ""
+			}
+			// Check if binaries exist in the expected location
+			binDir := filepath.Join("..", "..", "bin", "k8s",
+				fmt.Sprintf("1.31.0-%s-%s", runtime.GOOS, runtime.GOARCH))
+			absBinDir, err := filepath.Abs(binDir)
+			if err == nil {
+				etcdPath := filepath.Join(absBinDir, "etcd")
+				if _, err := os.Stat(etcdPath); err == nil {
+					return absBinDir
+				}
+			}
+			// Return empty string to let envtest auto-download binaries
+			return ""
+		}(),
+		// Auto-download binaries if not found and KUBEBUILDER_ASSETS is not set
+		DownloadBinaryAssets: func() bool {
+			return os.Getenv("KUBEBUILDER_ASSETS") == ""
+		}(),
+		DownloadBinaryAssetsVersion: "1.31.0",
 	}
 
 	var err error
@@ -275,10 +298,16 @@ var _ = BeforeSuite(func() {
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
-	allocator.Stop()
-	cancel()
-	err := testEnv.Stop()
-	Expect(err).NotTo(HaveOccurred())
+	if allocator != nil {
+		allocator.Stop()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	if testEnv != nil {
+		err := testEnv.Stop()
+		Expect(err).NotTo(HaveOccurred())
+	}
 	// Expect(os.Unsetenv("USE_EXISTING_CLUSTER")).To(Succeed())
 })
 
