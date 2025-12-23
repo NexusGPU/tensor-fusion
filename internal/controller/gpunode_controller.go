@@ -135,6 +135,14 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
+	// Check if the node is undergoing NVIDIA GPU driver upgrade
+	if isNodeUnderGPUDriverUpgrade(coreNode) {
+		log.Info("Node is undergoing GPU driver upgrade, skip reconciling",
+			"node", node.Name,
+			"upgradeState", coreNode.Labels[constants.NvidiaGPUDriverUpgradeStateLabel])
+		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
+	}
+
 	if err := r.reconcileNodeDiscoveryJob(ctx, node, poolObj); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -504,4 +512,14 @@ func (r *GPUNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func getDiscoveryJobName(gpunodeName string) string {
 	return fmt.Sprintf("node-discovery-%s", gpunodeName)
+}
+
+// isNodeUnderGPUDriverUpgrade checks if the node is undergoing NVIDIA GPU driver upgrade
+func isNodeUnderGPUDriverUpgrade(node *corev1.Node) bool {
+	if node == nil || node.Labels == nil {
+		return false
+	}
+	state := node.Labels[constants.NvidiaGPUDriverUpgradeStateLabel]
+	// Empty state or "upgrade-done" means the node is not upgrading
+	return state != "" && state != constants.NvidiaGPUDriverUpgradeStateDone
 }
