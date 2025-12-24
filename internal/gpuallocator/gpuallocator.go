@@ -117,7 +117,7 @@ func NewGpuAllocator(ctx context.Context, client client.Client, syncInterval tim
 
 	// Create base filter store with common filters
 	baseRegistry := filter.NewFilterRegistry().With(
-		filter.NewPhaseFilter(tfv1.TensorFusionGPUPhaseRunning, tfv1.TensorFusionGPUPhasePending),
+		filter.NewPhaseFilter(tfv1.TensorFusionGPUPhaseRunning),
 	)
 
 	// Create quota store
