@@ -449,7 +449,7 @@ func configureFeatures4InjectLib(isLocalGPU bool, disabledFeatures string) []v1.
 	return envList
 }
 
-func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool) {
+func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool, compatibleWithNvidiaContainerToolkit bool) {
 	// Hypervisor needs to read /proc to map pod with processID
 	spec.HostPID = true
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
@@ -533,6 +533,46 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 			},
 		},
 	})
+
+	// Add initContainer to wait for NVIDIA Container Toolkit toolkit-ready validation
+	if compatibleWithNvidiaContainerToolkit {
+		initContainerImage := pool.Spec.ComponentConfig.Hypervisor.Image
+		if initContainerImage == "" && len(spec.Containers) > 0 {
+			initContainerImage = spec.Containers[0].Image
+		}
+
+		initContainer := v1.Container{
+			Name:    constants.TFInitContainerNameToolkitValidation,
+			Image:   initContainerImage,
+			Command: []string{"sh", "-c"},
+			Args: []string{
+				"until [ -f /run/nvidia/validations/toolkit-ready ]; do echo waiting for nvidia container stack to be setup; sleep 5; done",
+			},
+			SecurityContext: &v1.SecurityContext{
+				Privileged: ptr.To(true),
+			},
+			VolumeMounts: []v1.VolumeMount{
+				{
+					Name:             "run-nvidia-validations",
+					MountPath:        "/run/nvidia/validations",
+					MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
+				},
+			},
+		}
+
+		spec.InitContainers = append(spec.InitContainers, initContainer)
+
+		// Add volume for NVIDIA validations
+		spec.Volumes = append(spec.Volumes, v1.Volume{
+			Name: "run-nvidia-validations",
+			VolumeSource: v1.VolumeSource{
+				HostPath: &v1.HostPathVolumeSource{
+					Path: "/run/nvidia/validations",
+					Type: ptr.To(v1.HostPathDirectoryOrCreate),
+				},
+			},
+		})
+	}
 
 	composeHypervisorInitContainer(spec, pool)
 	composeHypervisorContainer(spec, pool, enableVector)
@@ -759,7 +799,7 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 		}
 
 		initContainer := v1.Container{
-			Name:    "toolkit-validation",
+			Name:    constants.TFInitContainerNameToolkitValidation,
 			Image:   initContainerImage,
 			Command: []string{"sh", "-c"},
 			Args: []string{
