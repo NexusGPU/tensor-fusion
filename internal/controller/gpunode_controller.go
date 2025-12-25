@@ -422,7 +422,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 
 	// add must-have tensor-fusion hypervisor manifest
 	log.Info("adding must-have tensor-fusion hypervisor manifest", "node", node.Name)
-	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool)
+	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool, r.CompatibleWithNvidiaContainerToolkit)
 
 	// add scheduling config for hypervisor
 	if pool.Spec.SchedulingConfigTemplate != nil {

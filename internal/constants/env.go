@@ -57,6 +57,9 @@ const (
 	TFContainerNameHypervisor    = "tensorfusion-hypervisor"
 	TFContainerNameNodeDiscovery = "tensorfusion-node-discovery"
 	TFContainerVector            = "vector"
+
+	// Init container names
+	TFInitContainerNameToolkitValidation = "toolkit-validation"
 )
 
 // TensorFusion client related envs
