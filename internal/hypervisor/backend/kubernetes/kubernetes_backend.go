@@ -99,6 +99,7 @@ func (b *KubeletBackend) Start() error {
 		if err := devicePlugin.Start(); err != nil {
 			return err
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	klog.Infof("Device plugins started and registered with kubelet")
 

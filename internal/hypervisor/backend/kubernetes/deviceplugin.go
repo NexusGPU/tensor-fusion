@@ -112,7 +112,7 @@ func (dp *DevicePlugin) Start() error {
 	}()
 
 	// Wait for server to be ready
-	conn, err := dp.dial(dp.socketPath, 5*time.Second)
+	conn, err := dp.dial(dp.socketPath, 3*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to dial device plugin socket: %w", err)
 	}
@@ -201,17 +201,34 @@ func (dp *DevicePlugin) GetDevicePluginOptions(ctx context.Context, req *plugina
 
 // ListAndWatch streams device list and health updates
 func (dp *DevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
-	klog.Info("ListAndWatch called")
+	klog.Infof("ListAndWatch called for device plugin index %d", dp.resourceNameIndex)
+
+	// Build initial device list
 	devices := make([]*pluginapi.Device, constants.IndexModLength)
 	for i := range constants.IndexModLength {
 		devices[i] = &pluginapi.Device{
-			ID:     fmt.Sprintf("%d", i+1),
+			ID:     fmt.Sprintf("%d-%d", dp.resourceNameIndex, i+1),
 			Health: pluginapi.Healthy,
 		}
 	}
+
+	// Send initial device list
 	if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: devices}); err != nil {
-		return fmt.Errorf("failed to send device list: %w", err)
+		return fmt.Errorf("failed to send initial device list: %w", err)
 	}
+
+	// Keep the stream alive by blocking until context is cancelled or connection is closed
+	// This is required by Kubernetes device plugin API - the stream must remain open
+	// to allow kubelet to receive device health updates
+	<-stream.Context().Done()
+
+	// Check if context was cancelled due to error or normal shutdown
+	if err := stream.Context().Err(); err != nil {
+		klog.Infof("ListAndWatch stream ended for device plugin index %d: %v", dp.resourceNameIndex, err)
+		return err
+	}
+
+	klog.Infof("ListAndWatch stream closed normally for device plugin index %d", dp.resourceNameIndex)
 	return nil
 }
 
