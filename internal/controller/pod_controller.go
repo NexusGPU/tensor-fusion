@@ -82,6 +82,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			_ = r.Expander.RemovePreSchedulePod(req.Name, true)
 			r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
 			metrics.RemoveWorkerMetrics(req.Name, time.Now())
+			metrics.RemoveGPUAllocationMetrics(req.Name)
 			log.Info("Released GPU resources when pod deleted", "pod", req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
@@ -101,6 +102,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		_ = r.Expander.RemovePreSchedulePod(pod.Name, true)
 		r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
 		metrics.RemoveWorkerMetrics(pod.Name, time.Now())
+		metrics.RemoveGPUAllocationMetrics(pod.Name)
 		log.Info("Released GPU resources when pod in terminal state", "pod", req.NamespacedName, "phase", pod.Status.Phase)
 	}
 
@@ -135,6 +137,8 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
 		if pod.DeletionTimestamp.IsZero() {
 			metrics.SetWorkerMetricsByWorkload(pod)
+			gpuStore, _, _ := r.Allocator.GetAllocationInfo()
+			metrics.SetGPUAllocationMetrics(gpuStore, pod)
 		}
 		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
 		if err != nil {
@@ -178,6 +182,7 @@ func (r *PodReconciler) handleWorkerPodFinalizer(ctx context.Context, pod *corev
 	shouldReturn, err := utils.HandleFinalizer(ctx, pod, r.Client, func(ctx context.Context, obj *corev1.Pod) (bool, error) {
 		// if the Pod keep terminating, should update deletion timestamp for raw cost calculation
 		metrics.RemoveWorkerMetrics(pod.Name, time.Now())
+		metrics.RemoveGPUAllocationMetrics(pod.Name)
 		counter := &v1.TensorFusionPodCounter{Client: r.Client}
 		if err := counter.Decrease(ctx, pod); err != nil {
 			return false, err

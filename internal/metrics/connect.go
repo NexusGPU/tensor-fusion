@@ -133,6 +133,7 @@ func (t *TimeSeriesDB) SetTableTTL(ttl string) error {
 		&HypervisorWorkerUsageMetrics{},
 		&HypervisorGPUUsageMetrics{},
 		&PoolResourceMetrics{},
+		&GPUAllocationMetrics{},
 	}
 	if t == nil || t.DB == nil {
 		return nil
