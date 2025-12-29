@@ -929,8 +929,9 @@ func SetWorkerContainerSpec(
 		},
 	})
 
-	if !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) &&
-		workloadProfile.Isolation != tfv1.IsolationModeHard {
+	if !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) {
+		// TODO: In hard isolation mode, current implementation relies on limiter to set CUDA_VISIBLE_DEVICES env.
+		// In next hypervisor versions, device allocation will be handled by device-plugin, so LD_PRELOAD should be removed.
 		container.Env = append(container.Env, v1.EnvVar{
 			Name:  constants.LdPreloadEnv,
 			Value: constants.LdPreloadLimiter,
