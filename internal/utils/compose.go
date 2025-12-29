@@ -969,14 +969,11 @@ func SetWorkerContainerSpec(
 			}
 		} else {
 			if sharedMemMode {
+				shmPath := constants.TransportShmPath + "/" + constants.ConnectionSharedMemName
 				container.Command = []string{
-					"./tensor-fusion-worker",
-					"-n",
-					"shmem",
-					"-m",
-					constants.ConnectionSharedMemName,
-					"-M",
-					constants.ConnectionSharedMemSize,
+					"/bin/bash",
+					"-c",
+					"touch " + shmPath + " && chmod 666 " + shmPath + " && exec ./tensor-fusion-worker -n shmem -m " + constants.ConnectionSharedMemName + " -M " + constants.ConnectionSharedMemSize,
 				}
 			} else {
 				container.Command = []string{

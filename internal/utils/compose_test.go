@@ -208,18 +208,39 @@ func TestSetWorkerContainerSpec(t *testing.T) {
 		workerImage      string
 		disabledFeatures string
 		sharedMemMode    bool
+		expectCommand    []string
 	}{
 		{
 			name:             "basic worker config",
 			workerImage:      "worker:latest",
 			disabledFeatures: "",
 			sharedMemMode:    false,
+			expectCommand: []string{
+				"./tensor-fusion-worker",
+				"-p",
+				"8000",
+			},
 		},
 		{
-			name:             "worker with shared memory",
+			name:             "worker with shared memory mode",
 			workerImage:      "worker:latest",
 			disabledFeatures: "",
 			sharedMemMode:    true,
+			expectCommand: []string{
+				"/bin/bash",
+				"-c",
+				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 256",
+			},
+		},
+		{
+			name:             "worker with disabled start-worker feature",
+			workerImage:      "worker:latest",
+			disabledFeatures: "start-worker",
+			sharedMemMode:    false,
+			expectCommand: []string{
+				"sleep",
+				"infinity",
+			},
 		},
 	}
 
@@ -237,6 +258,23 @@ func TestSetWorkerContainerSpec(t *testing.T) {
 			require.NotEmpty(t, container.Name)
 			if tt.workerImage != "" {
 				require.Equal(t, tt.workerImage, container.Image)
+			}
+
+			// Verify command is set correctly
+			require.NotEmpty(t, container.Command, "container command should not be empty")
+			require.Equal(t, tt.expectCommand, container.Command, "container command should match expected value")
+
+			// Verify shared memory mode specific setup
+			if tt.sharedMemMode && tt.disabledFeatures == "" {
+				require.Len(t, container.Command, 3, "shared memory mode should use bash -c with script")
+				require.Equal(t, "/bin/bash", container.Command[0], "should use bash")
+				require.Equal(t, "-c", container.Command[1], "should use -c flag")
+				require.Contains(t, container.Command[2], "touch /dev/shm/tf_shm", "should create shared memory file")
+				require.Contains(t, container.Command[2], "chmod 666 /dev/shm/tf_shm", "should set file permissions")
+				require.Contains(t, container.Command[2], "exec ./tensor-fusion-worker", "should exec worker")
+				require.Contains(t, container.Command[2], "-n shmem", "should use shmem mode")
+				require.Contains(t, container.Command[2], "-m tf_shm", "should specify shared memory name")
+				require.Contains(t, container.Command[2], "-M 256", "should specify shared memory size")
 			}
 		})
 	}
