@@ -30,6 +30,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -385,6 +386,14 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 	}
 
 	log.Info("hypervisor pod not found, creating new one", "node", node.Name)
+	ready, err := r.ensureDriverProbeReady(ctx, node, pool)
+	if err != nil {
+		return "", fmt.Errorf("failed to ensure driver probe ready: %w", err)
+	}
+	if !ready {
+		log.Info("driver probe job not ready yet, requeue hypervisor creation", "node", node.Name)
+		return "", nil
+	}
 	if err := r.createHypervisorPod(ctx, key, node, pool, k8sNode); err != nil {
 		if errors.IsAlreadyExists(err) {
 			log.Info("hypervisor pod already exists, skip creation", "node", node.Name)
@@ -422,7 +431,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 
 	// add must-have tensor-fusion hypervisor manifest
 	log.Info("adding must-have tensor-fusion hypervisor manifest", "node", node.Name)
-	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool, r.CompatibleWithNvidiaContainerToolkit)
+	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool)
 
 	// add scheduling config for hypervisor
 	if pool.Spec.SchedulingConfigTemplate != nil {
@@ -510,8 +519,123 @@ func (r *GPUNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+func (r *GPUNodeReconciler) ensureDriverProbeReady(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) (bool, error) {
+	vendor, err := r.resolveNodeVendor(ctx, node)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve node vendor: %w", err)
+	}
+
+	probe := r.getDriverProbe(vendor)
+	if probe == nil {
+		return true, nil
+	}
+
+	jobTemplate, err := probe.ComposeJob(ctx, node, pool)
+	if err != nil {
+		return false, fmt.Errorf("failed to compose driver probe job: %w", err)
+	}
+	if jobTemplate == nil {
+		return true, nil
+	}
+
+	return r.reconcileDriverProbeJob(ctx, node, jobTemplate)
+}
+
+func (r *GPUNodeReconciler) reconcileDriverProbeJob(ctx context.Context, node *tfv1.GPUNode, jobTemplate *batchv1.Job) (bool, error) {
+	jobTemplate.SetNamespace(utils.CurrentNamespace())
+	jobTemplate.SetName(getDriverProbeJobName(node.Name))
+	if jobTemplate.Labels == nil {
+		jobTemplate.Labels = map[string]string{}
+	}
+	jobTemplate.Labels[constants.LabelComponent] = constants.ComponentDriverProbe
+
+	log := log.FromContext(ctx)
+	currentJob := &batchv1.Job{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(jobTemplate), currentJob); err != nil {
+		if errors.IsNotFound(err) {
+			return r.createDriverProbeJob(ctx, node, jobTemplate, log)
+		}
+		return false, fmt.Errorf("failed to get driver probe job: %w", err)
+	}
+
+	return r.checkDriverProbeJobStatus(currentJob, log)
+}
+
+func (r *GPUNodeReconciler) createDriverProbeJob(ctx context.Context, node *tfv1.GPUNode, jobTemplate *batchv1.Job, log logr.Logger) (bool, error) {
+	if err := ctrl.SetControllerReference(node, jobTemplate, r.Scheme); err != nil {
+		return false, fmt.Errorf("failed to set owner reference for driver probe: %w", err)
+	}
+	if err := r.Create(ctx, jobTemplate); err != nil {
+		return false, fmt.Errorf("failed to create driver probe job: %w", err)
+	}
+	log.Info("driver probe job created", "node", node.Name, "job", jobTemplate.Name)
+	return false, nil
+}
+
+func (r *GPUNodeReconciler) checkDriverProbeJobStatus(job *batchv1.Job, log logr.Logger) (bool, error) {
+	if job.Status.Succeeded > 0 {
+		return true, nil
+	}
+
+	if job.Status.Failed > 0 {
+		log.Error(fmt.Errorf("driver probe job failed"), "job status indicates failure",
+			"job", job.Name,
+			"failedAttempts", job.Status.Failed)
+
+		if job.Status.Failed >= *job.Spec.BackoffLimit {
+			r.Recorder.Eventf(job, corev1.EventTypeWarning, "DriverProbeFailed",
+				"Driver probe job failed after %d attempts", job.Status.Failed)
+			return false, fmt.Errorf("driver probe job %s exhausted all retry attempts", job.Name)
+		}
+		return false, nil
+	}
+
+	log.V(1).Info("driver probe job still running", "job", job.Name)
+	return false, nil
+}
+
+func (r *GPUNodeReconciler) resolveNodeVendor(_ctx context.Context, _node *tfv1.GPUNode) (string, error) {
+	// TODO: Implement this
+	return constants.AcceleratorVendorNvidia, nil
+}
+
+type driverProbe interface {
+	ComposeJob(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) (*batchv1.Job, error)
+}
+
+func (r *GPUNodeReconciler) getDriverProbe(vendor string) driverProbe {
+	if vendor == "" {
+		return nil
+	}
+	if vendor == constants.AcceleratorVendorNvidia {
+		return &nvidiaDriverProbe{
+			CompatibleWithNvidiaContainerToolkit: r.CompatibleWithNvidiaContainerToolkit,
+		}
+	}
+	return nil
+}
+
+type nvidiaDriverProbe struct {
+	CompatibleWithNvidiaContainerToolkit bool
+}
+
+func (n *nvidiaDriverProbe) ComposeJob(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) (*batchv1.Job, error) {
+	if !n.CompatibleWithNvidiaContainerToolkit {
+		return nil, nil
+	}
+	job, err := utils.ComposeNvidiaDriverProbeJob(node, pool)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compose NVIDIA driver probe job: %w", err)
+	}
+	return job, nil
+}
+
 func getDiscoveryJobName(gpunodeName string) string {
 	return fmt.Sprintf("node-discovery-%s", gpunodeName)
+}
+
+func getDriverProbeJobName(gpuNodeName string) string {
+	return fmt.Sprintf("driver-probe-%s", gpuNodeName)
 }
 
 // isNodeUnderGPUDriverUpgrade checks if the node is undergoing NVIDIA GPU driver upgrade

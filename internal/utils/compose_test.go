@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -14,40 +15,25 @@ import (
 
 func TestAddTFHypervisorConfAfterTemplate(t *testing.T) {
 	tests := []struct {
-		name                                 string
-		compatibleWithNvidiaContainerToolkit bool
-		enableVector                         bool
-		hypervisorImage                      string
-		expectInitContainers                 int
-		expectVolumes                        int
-		validateToolkitInit                  bool
+		name              string
+		enableVector      bool
+		hypervisorImage   string
+		expectInitCount   int
+		expectVolumeCount int
 	}{
 		{
-			name:                                 "with nvidia toolkit validation",
-			compatibleWithNvidiaContainerToolkit: true,
-			enableVector:                         false,
-			hypervisorImage:                      "test-image:latest",
-			expectInitContainers:                 2, // init-shm + toolkit-validation
-			expectVolumes:                        8, // 7 base volumes + run-nvidia-validations
-			validateToolkitInit:                  true,
+			name:              "without vector",
+			enableVector:      false,
+			hypervisorImage:   "test-image:latest",
+			expectInitCount:   1,
+			expectVolumeCount: 7,
 		},
 		{
-			name:                                 "without nvidia toolkit validation",
-			compatibleWithNvidiaContainerToolkit: false,
-			enableVector:                         false,
-			hypervisorImage:                      "test-image:latest",
-			expectInitContainers:                 1, // init-shm only
-			expectVolumes:                        7, // 7 base volumes
-			validateToolkitInit:                  false,
-		},
-		{
-			name:                                 "with nvidia toolkit and vector enabled",
-			compatibleWithNvidiaContainerToolkit: true,
-			enableVector:                         true,
-			hypervisorImage:                      "test-image:latest",
-			expectInitContainers:                 2, // init-shm + toolkit-validation
-			expectVolumes:                        8, // 7 base volumes + run-nvidia-validations
-			validateToolkitInit:                  true,
+			name:              "with vector",
+			enableVector:      true,
+			hypervisorImage:   "test-image:latest",
+			expectInitCount:   1,
+			expectVolumeCount: 7,
 		},
 	}
 
@@ -66,50 +52,10 @@ func TestAddTFHypervisorConfAfterTemplate(t *testing.T) {
 				},
 			}
 
-			utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool, tt.compatibleWithNvidiaContainerToolkit)
+			utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool)
 
-			require.Len(t, spec.InitContainers, tt.expectInitContainers, "unexpected number of init containers")
-			require.Len(t, spec.Volumes, tt.expectVolumes, "unexpected number of volumes")
-
-			if tt.validateToolkitInit {
-				// Find the toolkit-validation init container
-				var toolkitInit *corev1.Container
-				for i := range spec.InitContainers {
-					if spec.InitContainers[i].Name == constants.TFInitContainerNameToolkitValidation {
-						toolkitInit = &spec.InitContainers[i]
-						break
-					}
-				}
-				require.NotNil(t, toolkitInit, "toolkit-validation init container not found")
-				require.Equal(t, tt.hypervisorImage, toolkitInit.Image)
-				require.Equal(t, []string{"sh", "-c"}, toolkitInit.Command)
-				require.Contains(t, toolkitInit.Args[0], "/run/nvidia/validations/toolkit-ready")
-				require.NotNil(t, toolkitInit.SecurityContext)
-				require.True(t, *toolkitInit.SecurityContext.Privileged)
-
-				// Verify volume mount
-				require.Len(t, toolkitInit.VolumeMounts, 1)
-				require.Equal(t, "run-nvidia-validations", toolkitInit.VolumeMounts[0].Name)
-				require.Equal(t, "/run/nvidia/validations", toolkitInit.VolumeMounts[0].MountPath)
-				require.NotNil(t, toolkitInit.VolumeMounts[0].MountPropagation)
-				require.Equal(t, corev1.MountPropagationHostToContainer, *toolkitInit.VolumeMounts[0].MountPropagation)
-
-				// Verify volume exists
-				var nvidiaVolume *corev1.Volume
-				for i := range spec.Volumes {
-					if spec.Volumes[i].Name == "run-nvidia-validations" {
-						nvidiaVolume = &spec.Volumes[i]
-						break
-					}
-				}
-				require.NotNil(t, nvidiaVolume, "run-nvidia-validations volume not found")
-				require.NotNil(t, nvidiaVolume.HostPath)
-				require.Equal(t, "/run/nvidia/validations", nvidiaVolume.HostPath.Path)
-				require.NotNil(t, nvidiaVolume.HostPath.Type)
-				require.Equal(t, corev1.HostPathDirectoryOrCreate, *nvidiaVolume.HostPath.Type)
-			}
-
-			// Verify basic hypervisor settings
+			require.Len(t, spec.InitContainers, tt.expectInitCount, "unexpected number of init containers")
+			require.Len(t, spec.Volumes, tt.expectVolumeCount, "unexpected number of volumes")
 			require.True(t, spec.HostPID)
 			require.NotNil(t, spec.TerminationGracePeriodSeconds)
 		})
@@ -280,67 +226,6 @@ func TestSetWorkerContainerSpec(t *testing.T) {
 	}
 }
 
-func TestHypervisorInitContainerImageFallback(t *testing.T) {
-	t.Run("use hypervisor image when specified", func(t *testing.T) {
-		ctx := context.Background()
-		spec := &corev1.PodSpec{}
-		pool := &tfv1.GPUPool{
-			Spec: tfv1.GPUPoolSpec{
-				ComponentConfig: &tfv1.ComponentConfig{
-					Hypervisor: &tfv1.HypervisorConfig{
-						Image: "hypervisor:v1.0",
-					},
-				},
-			},
-		}
-
-		utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool, true)
-
-		var toolkitInit *corev1.Container
-		for i := range spec.InitContainers {
-			if spec.InitContainers[i].Name == constants.TFInitContainerNameToolkitValidation {
-				toolkitInit = &spec.InitContainers[i]
-				break
-			}
-		}
-		require.NotNil(t, toolkitInit)
-		require.Equal(t, "hypervisor:v1.0", toolkitInit.Image)
-	})
-
-	t.Run("fallback to main container image when hypervisor image is empty", func(t *testing.T) {
-		ctx := context.Background()
-		spec := &corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name:  "hypervisor",
-					Image: "fallback-image:v2.0",
-				},
-			},
-		}
-		pool := &tfv1.GPUPool{
-			Spec: tfv1.GPUPoolSpec{
-				ComponentConfig: &tfv1.ComponentConfig{
-					Hypervisor: &tfv1.HypervisorConfig{
-						Image: "",
-					},
-				},
-			},
-		}
-
-		utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool, true)
-
-		var toolkitInit *corev1.Container
-		for i := range spec.InitContainers {
-			if spec.InitContainers[i].Name == constants.TFInitContainerNameToolkitValidation {
-				toolkitInit = &spec.InitContainers[i]
-				break
-			}
-		}
-		require.NotNil(t, toolkitInit)
-		require.Equal(t, "fallback-image:v2.0", toolkitInit.Image)
-	})
-}
-
 func TestNodeDiscoveryInitContainerImageFallback(t *testing.T) {
 	t.Run("use node discovery image when specified", func(t *testing.T) {
 		ctx := context.Background()
@@ -392,4 +277,32 @@ func TestNodeDiscoveryInitContainerImageFallback(t *testing.T) {
 		require.Equal(t, constants.TFInitContainerNameToolkitValidation, tmpl.Spec.InitContainers[0].Name)
 		require.Equal(t, "fallback-discovery:v2.0", tmpl.Spec.InitContainers[0].Image)
 	})
+}
+
+func TestComposeNvidiaDriverProbeJob(t *testing.T) {
+	node := &tfv1.GPUNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "node-1",
+		},
+	}
+	pool := &tfv1.GPUPool{
+		Spec: tfv1.GPUPoolSpec{
+			ComponentConfig: &tfv1.ComponentConfig{
+				Hypervisor: &tfv1.HypervisorConfig{
+					Image: "hypervisor:latest",
+				},
+			},
+		},
+	}
+
+	job, err := utils.ComposeNvidiaDriverProbeJob(node, pool)
+	require.NoError(t, err)
+	require.NotNil(t, job)
+	require.Equal(t, corev1.RestartPolicyOnFailure, job.Spec.Template.Spec.RestartPolicy)
+	require.Equal(t, "node-1", job.Spec.Template.Spec.NodeName)
+	require.Len(t, job.Spec.Template.Spec.Containers, 1)
+	container := job.Spec.Template.Spec.Containers[0]
+	require.Equal(t, "hypervisor:latest", container.Image)
+	require.NotEmpty(t, container.Args)
+	require.Contains(t, container.Args[0], "toolkit-ready")
 }

@@ -17,16 +17,22 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 var _ = Describe("GPUNode Controller", func() {
@@ -81,6 +87,71 @@ var _ = Describe("GPUNode Controller", func() {
 
 			tfEnv.Cleanup()
 
+		})
+	})
+
+	Context("Driver probe readiness", func() {
+		It("should wait for job success before allowing hypervisor creation", func() {
+			scheme := runtime.NewScheme()
+			Expect(tfv1.AddToScheme(scheme)).To(Succeed())
+			Expect(batchv1.AddToScheme(scheme)).To(Succeed())
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+
+			node := &tfv1.GPUNode{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "node-1",
+				},
+			}
+			gpu := &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "gpu-1",
+					Labels: map[string]string{constants.LabelKeyOwner: node.Name},
+				},
+				Status: tfv1.GPUStatus{
+					Vendor: constants.AcceleratorVendorNvidia,
+				},
+			}
+			client := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(node.DeepCopy(), gpu).
+				Build()
+
+			pool := &tfv1.GPUPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "pool-1",
+				},
+				Spec: tfv1.GPUPoolSpec{
+					ComponentConfig: &tfv1.ComponentConfig{
+						Hypervisor: &tfv1.HypervisorConfig{
+							Image: "hypervisor:latest",
+						},
+					},
+				},
+			}
+
+			reconciler := &GPUNodeReconciler{
+				Client:                               client,
+				Scheme:                               scheme,
+				CompatibleWithNvidiaContainerToolkit: true,
+			}
+
+			ctx := context.Background()
+			ready, err := reconciler.ensureDriverProbeReady(ctx, node, pool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ready).To(BeFalse())
+
+			job := &batchv1.Job{}
+			Expect(client.Get(ctx, ctrlclient.ObjectKey{
+				Name:      getDriverProbeJobName(node.Name),
+				Namespace: utils.CurrentNamespace(),
+			}, job)).To(Succeed())
+
+			job.Status.Succeeded = 1
+			Expect(client.Status().Update(ctx, job)).To(Succeed())
+
+			ready, err = reconciler.ensureDriverProbeReady(ctx, node, pool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ready).To(BeTrue())
 		})
 	})
 })

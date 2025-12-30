@@ -2,6 +2,7 @@ package utils
 
 import (
 	context "context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -11,6 +12,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	constants "github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/samber/lo"
+	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -449,7 +451,7 @@ func configureFeatures4InjectLib(isLocalGPU bool, disabledFeatures string) []v1.
 	return envList
 }
 
-func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool, compatibleWithNvidiaContainerToolkit bool) {
+func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool) {
 	// Hypervisor needs to read /proc to map pod with processID
 	spec.HostPID = true
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
@@ -533,46 +535,6 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 			},
 		},
 	})
-
-	// Add initContainer to wait for NVIDIA Container Toolkit toolkit-ready validation
-	if compatibleWithNvidiaContainerToolkit {
-		initContainerImage := pool.Spec.ComponentConfig.Hypervisor.Image
-		if initContainerImage == "" && len(spec.Containers) > 0 {
-			initContainerImage = spec.Containers[0].Image
-		}
-
-		initContainer := v1.Container{
-			Name:    constants.TFInitContainerNameToolkitValidation,
-			Image:   initContainerImage,
-			Command: []string{"sh", "-c"},
-			Args: []string{
-				"until [ -f /run/nvidia/validations/toolkit-ready ]; do echo waiting for nvidia container stack to be setup; sleep 5; done",
-			},
-			SecurityContext: &v1.SecurityContext{
-				Privileged: ptr.To(true),
-			},
-			VolumeMounts: []v1.VolumeMount{
-				{
-					Name:             "run-nvidia-validations",
-					MountPath:        "/run/nvidia/validations",
-					MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
-				},
-			},
-		}
-
-		spec.InitContainers = append(spec.InitContainers, initContainer)
-
-		// Add volume for NVIDIA validations
-		spec.Volumes = append(spec.Volumes, v1.Volume{
-			Name: "run-nvidia-validations",
-			VolumeSource: v1.VolumeSource{
-				HostPath: &v1.HostPathVolumeSource{
-					Path: "/run/nvidia/validations",
-					Type: ptr.To(v1.HostPathDirectoryOrCreate),
-				},
-			},
-		})
-	}
 
 	composeHypervisorInitContainer(spec, pool)
 	composeHypervisorContainer(spec, pool, enableVector)
@@ -868,6 +830,89 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 	}
 	if len(tmpl.Spec.Containers[0].Resources.Requests) == 0 {
 		tmpl.Spec.Containers[0].Resources.Requests = nodeDiscoveryDefaultRequests
+	}
+}
+
+func ComposeNvidiaDriverProbeJob(node *tfv1.GPUNode, pool *tfv1.GPUPool) (*batchv1.Job, error) {
+	image, err := resolveHypervisorImage(pool)
+	if err != nil {
+		return nil, err
+	}
+
+	container := v1.Container{
+		Name:    constants.TFInitContainerNameToolkitValidation,
+		Image:   image,
+		Command: []string{"sh", "-c"},
+		Args: []string{
+			"until [ -f /run/nvidia/validations/toolkit-ready ]; do echo waiting for nvidia container stack to be setup; sleep 5; done",
+		},
+		SecurityContext: &v1.SecurityContext{
+			Privileged: ptr.To(true),
+		},
+		VolumeMounts: []v1.VolumeMount{
+			{
+				Name:             "run-nvidia-validations",
+				MountPath:        "/run/nvidia/validations",
+				MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
+			},
+		},
+	}
+
+	podSpec := v1.PodSpec{
+		NodeName:           node.Name,
+		RestartPolicy:      v1.RestartPolicyOnFailure,
+		EnableServiceLinks: ptr.To(false),
+		ServiceAccountName: constants.HypervisorServiceAccountName,
+		Tolerations: []v1.Toleration{
+			{Key: constants.NodeUsedByTaintKey, Operator: v1.TolerationOpExists},
+		},
+		Containers: []v1.Container{container},
+		Volumes:    []v1.Volume{nvidiaValidationVolume()},
+		HostPID:    true,
+	}
+
+	return &batchv1.Job{
+		Spec: batchv1.JobSpec{
+			Template: v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						constants.LabelComponent: constants.ComponentDriverProbe,
+					},
+				},
+				Spec: podSpec,
+			},
+			TTLSecondsAfterFinished: ptr.To[int32](60), // 1 minute
+			BackoffLimit:            ptr.To[int32](6),
+		},
+	}, nil
+}
+
+func resolveHypervisorImage(pool *tfv1.GPUPool) (string, error) {
+	if pool.Spec.ComponentConfig != nil && pool.Spec.ComponentConfig.Hypervisor != nil {
+		if pool.Spec.ComponentConfig.Hypervisor.Image != "" {
+			return pool.Spec.ComponentConfig.Hypervisor.Image, nil
+		}
+		if pool.Spec.ComponentConfig.Hypervisor.PodTemplate != nil {
+			podTmpl := &v1.PodTemplate{}
+			if err := json.Unmarshal(pool.Spec.ComponentConfig.Hypervisor.PodTemplate.Raw, podTmpl); err == nil {
+				if len(podTmpl.Template.Spec.Containers) > 0 && podTmpl.Template.Spec.Containers[0].Image != "" {
+					return podTmpl.Template.Spec.Containers[0].Image, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("failed to resolve hypervisor image for pool %s", pool.Name)
+}
+
+func nvidiaValidationVolume() v1.Volume {
+	return v1.Volume{
+		Name: "run-nvidia-validations",
+		VolumeSource: v1.VolumeSource{
+			HostPath: &v1.HostPathVolumeSource{
+				Path: "/run/nvidia/validations",
+				Type: ptr.To(v1.HostPathDirectoryOrCreate),
+			},
+		},
 	}
 }
 

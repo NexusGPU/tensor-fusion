@@ -45,6 +45,7 @@ const (
 	ComponentHypervisor    = "hypervisor"
 	ComponentNodeDiscovery = "node-discovery"
 	ComponentOperator      = "operator"
+	ComponentDriverProbe   = "driver-probe"
 
 	GPUNodePoolIdentifierLabelPrefix = Domain + "/pool-"
 	GPUNodePoolIdentifierLabelFormat = Domain + "/pool-%s"
