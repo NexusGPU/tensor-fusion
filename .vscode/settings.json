@@ -228,5 +228,8 @@
     "files.associations": {
         "__locale": "cpp",
         "bitset": "cpp"
+    },
+    "go.toolsEnvVars": {
+        "CGO_ENABLED": "0"
     }
 }

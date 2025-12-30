@@ -228,7 +228,7 @@ static void initDeviceInfo(ExtendedDeviceInfo* info, int32_t deviceIndex) {
     info->capabilities.maxWorkersPerDevice = 16;
 
     // Initialize related devices (stub: no related devices)
-    info->relatedDevices = NULL;
+    // relatedDevices is now a fixed-size array, just set count to 0
     info->relatedDeviceCount = 0;
 }
 
@@ -306,15 +306,13 @@ Result GetPartitionTemplates(int32_t deviceIndex __attribute__((unused)), Partit
     return RESULT_SUCCESS;
 }
 
-Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, ExtendedDeviceTopology* topology, size_t maxConnectionsPerDevice) {
-    if (!deviceIndexArray || deviceCount == 0 || !topology || maxConnectionsPerDevice == 0) {
+Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, ExtendedDeviceTopology* topology) {
+    if (!deviceIndexArray || deviceCount == 0 || !topology) {
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Note: topology->devices must be pre-allocated by caller with size >= deviceCount
-    // topology->devices[i].connections must be pre-allocated by caller with size >= maxConnectionsPerDevice
-    if (!topology->devices) {
-        return RESULT_ERROR_INVALID_PARAM;
+    if (deviceCount > MAX_TOPOLOGY_DEVICES) {
+        deviceCount = MAX_TOPOLOGY_DEVICES;
     }
     topology->deviceCount = deviceCount;
 
@@ -324,15 +322,14 @@ Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, Extended
         snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "stub-device-%d", deviceIndexArray[i]);
         dt->numaNode = deviceIndexArray[i] % 2;
 
-        // Stub: create connections to other devices
+        // Stub: create connections to other devices (using fixed-size array)
         size_t connectionCount = (deviceCount > 1) ? (deviceCount - 1) : 0;
-        if (connectionCount > maxConnectionsPerDevice) {
-            connectionCount = maxConnectionsPerDevice;
+        if (connectionCount > MAX_CONNECTIONS_PER_DEVICE) {
+            connectionCount = MAX_CONNECTIONS_PER_DEVICE;
         }
         
-        if (connectionCount > 0 && dt->connections) {
-            dt->connectionCount = connectionCount;
-
+        dt->connectionCount = connectionCount;
+        if (connectionCount > 0) {
             size_t connIdx = 0;
             for (size_t j = 0; j < deviceCount && connIdx < connectionCount; j++) {
                 if (j != i) {
@@ -344,9 +341,6 @@ Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, Extended
                     connIdx++;
                 }
             }
-        } else {
-            dt->connections = NULL;
-            dt->connectionCount = 0;
         }
     }
 
@@ -412,7 +406,7 @@ Result SetComputeUnitHardLimit(const char* workerId, const char* deviceUUID, uin
 // ============================================================================
 
 Result Snapshot(ProcessArray* processes) {
-    if (!processes || !processes->processIds || processes->processCount == 0) {
+    if (!processes || processes->processCount == 0 || processes->processCount > MAX_PROCESSES) {
         return RESULT_ERROR_INVALID_PARAM;
     }
 
@@ -429,7 +423,7 @@ Result Snapshot(ProcessArray* processes) {
 }
 
 Result Resume(ProcessArray* processes) {
-    if (!processes || !processes->processIds || processes->processCount == 0) {
+    if (!processes || processes->processCount == 0 || processes->processCount > MAX_PROCESSES) {
         return RESULT_ERROR_INVALID_PARAM;
     }
 
@@ -474,19 +468,21 @@ Result GetProcessMemoryUtilization(
 }
 
 Result GetDeviceMetrics(
-    const char** deviceUUIDArray,
+    const DeviceUUIDEntry* deviceUUIDs,
     size_t deviceCount,
-    DeviceMetrics* metrics,
-    size_t maxExtraMetricsPerDevice
+    DeviceMetrics* metrics
 ) {
-    if (!deviceUUIDArray || deviceCount == 0 || !metrics || maxExtraMetricsPerDevice == 0) {
+    if (!deviceUUIDs || deviceCount == 0 || !metrics) {
         return RESULT_ERROR_INVALID_PARAM;
     }
 
     // Fill stub data
     for (size_t i = 0; i < deviceCount; i++) {
         DeviceMetrics* dm = &metrics[i];
-        snprintf(dm->deviceUUID, sizeof(dm->deviceUUID), "%s", deviceUUIDArray[i]);
+        // Copy UUID from DeviceUUIDEntry
+        strncpy(dm->deviceUUID, deviceUUIDs[i].uuid, sizeof(dm->deviceUUID) - 1);
+        dm->deviceUUID[sizeof(dm->deviceUUID) - 1] = '\0';
+        
         dm->powerUsageWatts = 200.0 + (i * 10.0); // Stub: 200-300W
         dm->temperatureCelsius = 45.0 + (i * 5.0); // Stub: 45-50C
         dm->pcieRxBytes = 1024ULL * 1024 * 1024 * (i + 1); // Stub: 1-4GB
@@ -496,92 +492,81 @@ Result GetDeviceMetrics(
         dm->memoryUsedBytes = 8ULL * 1024 * 1024 * 1024; // Stub: 8GB
         dm->memoryTotalBytes = 16ULL * 1024 * 1024 * 1024; // Stub: 16GB
 
-        // Fill extra metrics
-        if (dm->extraMetrics != NULL && maxExtraMetricsPerDevice > 0) {
-            size_t extraCount = 0;
+        // Fill extra metrics (using fixed-size array)
+        size_t extraCount = 0;
+        const size_t maxExtraMetrics = MAX_EXTRA_METRICS;
 
-            // Add some example extra metrics
-            if (extraCount < maxExtraMetricsPerDevice) {
-                snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "gpuUtilization");
-                dm->extraMetrics[extraCount].value = 75.0 + (i * 5.0); // Stub: 75-95%
-                extraCount++;
-            }
-
-            if (extraCount < maxExtraMetricsPerDevice) {
-                snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "memoryBandwidthMBps");
-                dm->extraMetrics[extraCount].value = 800.0 + (i * 50.0); // Stub: 800-1200 MB/s
-                extraCount++;
-            }
-
-            if (extraCount < maxExtraMetricsPerDevice) {
-                snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "encoderUtilization");
-                dm->extraMetrics[extraCount].value = 10.0 + (i * 2.0); // Stub: 10-20%
-                extraCount++;
-            }
-
-            if (extraCount < maxExtraMetricsPerDevice) {
-                snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "decoderUtilization");
-                dm->extraMetrics[extraCount].value = 15.0 + (i * 3.0); // Stub: 15-30%
-                extraCount++;
-            }
-
-            dm->extraMetricsCount = extraCount;
-        } else {
-            dm->extraMetricsCount = 0;
+        // Add some example extra metrics
+        if (extraCount < maxExtraMetrics) {
+            snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "gpuUtilization");
+            dm->extraMetrics[extraCount].value = 75.0 + (i * 5.0); // Stub: 75-95%
+            extraCount++;
         }
+
+        if (extraCount < maxExtraMetrics) {
+            snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "memoryBandwidthMBps");
+            dm->extraMetrics[extraCount].value = 800.0 + (i * 50.0); // Stub: 800-1200 MB/s
+            extraCount++;
+        }
+
+        if (extraCount < maxExtraMetrics) {
+            snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "encoderUtilization");
+            dm->extraMetrics[extraCount].value = 10.0 + (i * 2.0); // Stub: 10-20%
+            extraCount++;
+        }
+
+        if (extraCount < maxExtraMetrics) {
+            snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "decoderUtilization");
+            dm->extraMetrics[extraCount].value = 15.0 + (i * 3.0); // Stub: 15-30%
+            extraCount++;
+        }
+
+        dm->extraMetricsCount = extraCount;
     }
 
     return RESULT_SUCCESS;
 }
 
 Result GetExtendedDeviceMetrics(
-    const char** deviceUUIDArray,
+    const DeviceUUIDEntry* deviceUUIDs,
     size_t deviceCount,
-    ExtendedDeviceMetrics* metrics,
-    size_t maxNvlinkPerDevice,
-    size_t maxIbNicPerDevice,
-    size_t maxPciePerDevice
+    ExtendedDeviceMetrics* metrics
 ) {
-    if (!deviceUUIDArray || deviceCount == 0 || !metrics || 
-        maxNvlinkPerDevice == 0 || maxIbNicPerDevice == 0 || maxPciePerDevice == 0) {
+    if (!deviceUUIDs || deviceCount == 0 || !metrics) {
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Fill stub data
-    // Note: metrics[i].nvlinkBandwidthMBps, ibNicBandwidthMBps, pcieBandwidthMBps
-    // must be pre-allocated by caller with appropriate sizes
+    // Fill stub data using fixed-size arrays
     for (size_t i = 0; i < deviceCount; i++) {
         ExtendedDeviceMetrics* edm = &metrics[i];
-        snprintf(edm->deviceUUID, sizeof(edm->deviceUUID), "%s", deviceUUIDArray[i]);
+        // Copy UUID from DeviceUUIDEntry
+        strncpy(edm->deviceUUID, deviceUUIDs[i].uuid, sizeof(edm->deviceUUID) - 1);
+        edm->deviceUUID[sizeof(edm->deviceUUID) - 1] = '\0';
 
-        // Stub: 6 NVLink connections per device (but not more than max)
+        // Stub: 6 NVLink connections per device
         edm->nvlinkCount = 6;
-        if (edm->nvlinkCount > maxNvlinkPerDevice) {
-            edm->nvlinkCount = maxNvlinkPerDevice;
+        if (edm->nvlinkCount > MAX_NVLINK_PER_DEVICE) {
+            edm->nvlinkCount = MAX_NVLINK_PER_DEVICE;
         }
-        if (edm->nvlinkBandwidthMBps) {
-            for (size_t j = 0; j < edm->nvlinkCount; j++) {
-                edm->nvlinkBandwidthMBps[j] = 500000 + (j * 10000); // Stub: 500-550 GB/s
-            }
+        for (size_t j = 0; j < edm->nvlinkCount; j++) {
+            edm->nvlinkBandwidthMBps[j] = 500000 + (j * 10000); // Stub: 500-550 GB/s
         }
 
-        // Stub: 2 IB NICs per device (but not more than max)
+        // Stub: 2 IB NICs per device
         edm->ibNicCount = 2;
-        if (edm->ibNicCount > maxIbNicPerDevice) {
-            edm->ibNicCount = maxIbNicPerDevice;
+        if (edm->ibNicCount > MAX_IB_NIC_PER_DEVICE) {
+            edm->ibNicCount = MAX_IB_NIC_PER_DEVICE;
         }
-        if (edm->ibNicBandwidthMBps) {
-            for (size_t j = 0; j < edm->ibNicCount; j++) {
-                edm->ibNicBandwidthMBps[j] = 200000; // Stub: 200 GB/s per NIC
-            }
+        for (size_t j = 0; j < edm->ibNicCount; j++) {
+            edm->ibNicBandwidthMBps[j] = 200000; // Stub: 200 GB/s per NIC
         }
 
-        // Stub: 1 PCIe link (but not more than max)
+        // Stub: 1 PCIe link
         edm->pcieLinkCount = 1;
-        if (edm->pcieLinkCount > maxPciePerDevice) {
-            edm->pcieLinkCount = maxPciePerDevice;
+        if (edm->pcieLinkCount > MAX_PCIE_PER_DEVICE) {
+            edm->pcieLinkCount = MAX_PCIE_PER_DEVICE;
         }
-        if (edm->pcieBandwidthMBps && edm->pcieLinkCount > 0) {
+        if (edm->pcieLinkCount > 0) {
             edm->pcieBandwidthMBps[0] = 32000; // Stub: 32 GB/s (PCIe 4.0 x16)
         }
     }
@@ -594,5 +579,13 @@ Result GetVendorMountLibs(Mount* mounts, size_t maxCount, size_t* mountCount) {
         return RESULT_ERROR_INVALID_PARAM;
     }
     *mountCount = 0;
+    return RESULT_SUCCESS;
+}
+
+// Log callback storage
+static LogCallbackFunc g_logCallback = NULL;
+
+Result RegisterLogCallback(LogCallbackFunc callback) {
+    g_logCallback = callback;
     return RESULT_SUCCESS;
 }
