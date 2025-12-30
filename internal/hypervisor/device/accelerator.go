@@ -1,45 +1,233 @@
+/*
+ * Copyright 2024.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package device
 
-/*
-#cgo CFLAGS: -I../../../provider
-#cgo LDFLAGS: -ldl
-#include "../../../provider/accelerator.h"
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
-#include <sys/types.h>
-
-// Forward declarations from wrapper.c
-extern int loadAcceleratorLibrary(const char* libPath);
-extern void unloadAcceleratorLibrary(void);
-extern Result GetDeviceCountWrapper(size_t* deviceCount);
-extern Result GetAllDevicesWrapper(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount);
-extern Result GetPartitionTemplatesWrapper(int32_t deviceIndex, PartitionTemplate* templates, size_t maxCount, size_t* templateCount);
-extern bool AssignPartitionWrapper(PartitionAssignment* assignment);
-extern bool RemovePartitionWrapper(const char* templateId, const char* deviceUUID);
-extern Result SetMemHardLimitWrapper(const char* workerId, const char* deviceUUID, uint64_t memoryLimitBytes);
-extern Result SetComputeUnitHardLimitWrapper(const char* workerId, const char* deviceUUID, uint32_t computeUnitLimit);
-extern Result GetProcessComputeUtilizationWrapper(ComputeUtilization* utilizations, size_t maxCount, size_t* utilizationCount);
-extern Result GetProcessMemoryUtilizationWrapper(MemoryUtilization* utilizations, size_t maxCount, size_t* utilizationCount);
-extern Result GetDeviceMetricsWrapper(const char** deviceUUIDArray, size_t deviceCount, DeviceMetrics* metrics, size_t maxExtraMetricsPerDevice);
-extern Result GetVendorMountLibsWrapper(Mount* mounts, size_t maxCount, size_t* mountCount);
-extern const char* getDlError(void);
-*/
-import "C"
 import (
 	"fmt"
 	"sync"
 	"unsafe"
 
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/api"
+	"github.com/ebitengine/purego"
+	"k8s.io/klog/v2"
 )
 
-// AcceleratorInterface provides Go bindings for the C accelerator library
+// C structure definitions matching accelerator.h
+// These must match the C struct definitions exactly
+
+type Result int32
+
+const (
+	ResultSuccess                Result = 0
+	ResultErrorInvalidParam      Result = 1
+	ResultErrorNotFound          Result = 2
+	ResultErrorNotSupported      Result = 3
+	ResultErrorResourceExhausted Result = 4
+	ResultErrorOperationFailed   Result = 5
+	ResultErrorInternal          Result = 6
+)
+
+type IsolationMode int32
+
+const (
+	IsolationModeShared      IsolationMode = 0
+	IsolationModeSoft        IsolationMode = 1
+	IsolationModeHard        IsolationMode = 2
+	IsolationModePartitioned IsolationMode = 3
+)
+
+type DeviceCapabilities struct {
+	SupportsPartitioning  bool
+	SupportsSoftIsolation bool
+	SupportsHardIsolation bool
+	SupportsSnapshot      bool
+	SupportsMetrics       bool
+	MaxPartitions         uint32
+	MaxWorkersPerDevice   uint32
+}
+
+type DeviceBasicInfo struct {
+	UUID              [64]byte
+	Vendor            [32]byte
+	Model             [128]byte
+	DriverVersion     [64]byte
+	FirmwareVersion   [64]byte
+	Index             int32
+	NUMANode          int32
+	TotalMemoryBytes  uint64
+	TotalComputeUnits uint64
+	MaxTflops         float64
+	PCIeGen           uint32
+	PCIeWidth         uint32
+}
+
+type DeviceProperties struct {
+	ClockGraphics          uint32
+	ClockSM                uint32
+	ClockMem               uint32
+	ClockAI                uint32
+	PowerLimit             uint32
+	TemperatureThreshold   uint32
+	ECCEnabled             bool
+	PersistenceModeEnabled bool
+	ComputeCapability      [16]byte
+	ChipType               [32]byte
+}
+
+type RelatedDevice struct {
+	DeviceUUID     [64]byte
+	ConnectionType [32]byte
+	BandwidthMBps  uint32
+	LatencyNs      uint32
+}
+
+const MaxRelatedDevices = 32
+
+type ExtendedDeviceInfo struct {
+	Basic              DeviceBasicInfo
+	Props              DeviceProperties
+	RelatedDevices     [MaxRelatedDevices]RelatedDevice
+	RelatedDeviceCount uintptr
+	Capabilities       DeviceCapabilities
+}
+
+type PartitionAssignment struct {
+	TemplateID    [64]byte
+	DeviceUUID    [64]byte
+	PartitionUUID [64]byte
+}
+
+type ExtraMetric struct {
+	Key   [64]byte
+	Value float64
+}
+
+const MaxExtraMetrics = 64
+
+type ComputeUtilization struct {
+	ProcessID          [32]byte
+	DeviceUUID         [64]byte
+	UtilizationPercent float64
+	ActiveSMs          uint64
+	TotalSMs           uint64
+	TflopsUsed         float64
+}
+
+type MemoryUtilization struct {
+	ProcessID          [32]byte
+	DeviceUUID         [64]byte
+	UsedBytes          uint64
+	ReservedBytes      uint64
+	UtilizationPercent float64
+}
+
+type DeviceMetrics struct {
+	DeviceUUID             [64]byte
+	PowerUsageWatts        float64
+	TemperatureCelsius     float64
+	PCIeRxBytes            uint64
+	PCIeTxBytes            uint64
+	SMActivePercent        uint32
+	TensorCoreUsagePercent uint32
+	MemoryUsedBytes        uint64
+	MemoryTotalBytes       uint64
+	ExtraMetrics           [MaxExtraMetrics]ExtraMetric
+	ExtraMetricsCount      uintptr
+}
+
+const (
+	MaxNvlinkPerDevice      = 18
+	MaxIbNicPerDevice       = 8
+	MaxPciePerDevice        = 4
+	MaxConnectionsPerDevice = 32
+	MaxTopologyDevices      = 64
+)
+
+type DeviceTopology struct {
+	DeviceUUID      [64]byte
+	NUMANode        int32
+	Connections     [MaxConnectionsPerDevice]RelatedDevice
+	ConnectionCount uintptr
+}
+
+type ExtendedDeviceTopology struct {
+	Devices             [MaxTopologyDevices]DeviceTopology
+	DeviceCount         uintptr
+	NvlinkBandwidthMBps uint32
+	IbNicCount          uint32
+	TopologyType        [32]byte
+}
+
+type ExtendedDeviceMetrics struct {
+	DeviceUUID          [64]byte
+	NvlinkBandwidthMBps [MaxNvlinkPerDevice]uint32
+	NvlinkCount         uintptr
+	IbNicBandwidthMBps  [MaxIbNicPerDevice]uint64
+	IbNicCount          uintptr
+	PCIeBandwidthMBps   [MaxPciePerDevice]uint32
+	PCIeLinkCount       uintptr
+}
+
+type DeviceUUIDEntry struct {
+	UUID [64]byte
+}
+
+const MaxMountPath = 512
+
+type Mount struct {
+	HostPath  [MaxMountPath]byte
+	GuestPath [MaxMountPath]byte
+}
+
+const MaxProcesses = 1024
+
+type ProcessArray struct {
+	ProcessIDs   [MaxProcesses]int32
+	ProcessCount uintptr
+	DeviceUUID   [64]byte
+}
+
+// Function pointer types for purego
+var (
+	libHandle uintptr
+	// DeviceInfo APIs
+	getDeviceCount    func(*uintptr) Result
+	getAllDevices     func(*ExtendedDeviceInfo, uintptr, *uintptr) Result
+	getDeviceTopology func(*int32, uintptr, *ExtendedDeviceTopology) Result
+	// Virtualization APIs
+	assignPartition         func(*PartitionAssignment) bool
+	removePartition         func(*byte, *byte) bool
+	setMemHardLimit         func(*byte, *byte, uint64) Result
+	setComputeUnitHardLimit func(*byte, *byte, uint32) Result
+	snapshot                func(*ProcessArray) Result
+	resume                  func(*ProcessArray) Result
+	// Metrics APIs
+	getProcessComputeUtilization func(*ComputeUtilization, uintptr, *uintptr) Result
+	getProcessMemoryUtilization  func(*MemoryUtilization, uintptr, *uintptr) Result
+	getDeviceMetrics             func(*DeviceUUIDEntry, uintptr, *DeviceMetrics) Result
+	getExtendedDeviceMetrics     func(*DeviceUUIDEntry, uintptr, *ExtendedDeviceMetrics) Result
+	getVendorMountLibs           func(*Mount, uintptr, *uintptr) Result
+	// Utility APIs
+	registerLogCallback func(uintptr) Result
+)
+
+// AcceleratorInterface provides Go bindings for the C accelerator library using purego
 type AcceleratorInterface struct {
-	libPath string
-	// deviceProcesses maps device UUID to list of process IDs
+	libPath         string
 	deviceProcesses map[string][]string
 	mu              sync.RWMutex
 	loaded          bool
@@ -61,32 +249,50 @@ func NewAcceleratorInterface(libPath string) (*AcceleratorInterface, error) {
 	return accel, nil
 }
 
-// Load loads the accelerator library dynamically
+// Load loads the accelerator library dynamically using purego
 func (a *AcceleratorInterface) Load() error {
 	if a.libPath == "" {
 		return fmt.Errorf("library path is empty")
 	}
 
-	cLibPath := C.CString(a.libPath)
-	defer C.free(unsafe.Pointer(cLibPath))
-
-	result := C.loadAcceleratorLibrary(cLibPath)
-	if result != 0 {
-		var errMsg string
-		if dlErr := C.getDlError(); dlErr != nil {
-			errMsg = C.GoString(dlErr)
-		} else {
-			errMsg = "unknown error"
-		}
-
-		switch result {
-		case -1:
-			return fmt.Errorf("failed to load library: %s", errMsg)
-		case -2:
-			return fmt.Errorf("missing required symbols in library: %s", errMsg)
-		}
-		return fmt.Errorf("failed to load library (code %d): %s", result, errMsg)
+	handle, err := purego.Dlopen(a.libPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	if err != nil {
+		return fmt.Errorf("failed to open library: %w", err)
 	}
+	libHandle = handle
+
+	// Register all required functions
+	purego.RegisterLibFunc(&getDeviceCount, handle, "GetDeviceCount")
+	purego.RegisterLibFunc(&getAllDevices, handle, "GetAllDevices")
+	purego.RegisterLibFunc(&getDeviceTopology, handle, "GetDeviceTopology")
+	purego.RegisterLibFunc(&assignPartition, handle, "AssignPartition")
+	purego.RegisterLibFunc(&removePartition, handle, "RemovePartition")
+	purego.RegisterLibFunc(&setMemHardLimit, handle, "SetMemHardLimit")
+	purego.RegisterLibFunc(&setComputeUnitHardLimit, handle, "SetComputeUnitHardLimit")
+	purego.RegisterLibFunc(&snapshot, handle, "Snapshot")
+	purego.RegisterLibFunc(&resume, handle, "Resume")
+	purego.RegisterLibFunc(&getProcessComputeUtilization, handle, "GetProcessComputeUtilization")
+	purego.RegisterLibFunc(&getProcessMemoryUtilization, handle, "GetProcessMemoryUtilization")
+	purego.RegisterLibFunc(&getDeviceMetrics, handle, "GetDeviceMetrics")
+	purego.RegisterLibFunc(&getExtendedDeviceMetrics, handle, "GetExtendedDeviceMetrics")
+	purego.RegisterLibFunc(&getVendorMountLibs, handle, "GetVendorMountLibs")
+
+	// Register log callback (optional - may not exist in stub libraries)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// RegisterLogCallback not available in this library, skip callback registration
+				klog.V(4).Info("RegisterLogCallback not available in library, skipping log callback registration")
+			}
+		}()
+		purego.RegisterLibFunc(&registerLogCallback, handle, "RegisterLogCallback")
+
+		// If registration succeeded, register the callback
+		logCallbackPtr := purego.NewCallback(goLogCallback)
+		if registerLogCallback(logCallbackPtr) != ResultSuccess {
+			klog.Warning("Failed to register log callback")
+		}
+	}()
 
 	a.loaded = true
 	return nil
@@ -94,11 +300,73 @@ func (a *AcceleratorInterface) Load() error {
 
 // Close unloads the accelerator library
 func (a *AcceleratorInterface) Close() error {
-	if a.loaded {
-		C.unloadAcceleratorLibrary()
+	if a.loaded && libHandle != 0 {
+		// Unregister log callback if it was registered
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// registerLogCallback not available or already unregistered
+				}
+			}()
+			if registerLogCallback != nil {
+				registerLogCallback(0)
+			}
+		}()
+		// Note: purego doesn't provide Dlclose, but the library will be unloaded when process exits
 		a.loaded = false
 	}
 	return nil
+}
+
+// goLogCallback is the Go callback function called by C library for logging
+func goLogCallback(level *byte, message *byte) {
+	var levelStr, messageStr string
+	if level != nil {
+		levelStr = cStringToGoString(level)
+	}
+	if message != nil {
+		messageStr = cStringToGoString(message)
+	}
+
+	// Map C log levels to klog levels
+	switch levelStr {
+	case "DEBUG", "debug":
+		klog.V(4).Info(messageStr)
+	case "INFO", "info":
+		klog.Info(messageStr)
+	case "WARN", "warn", "WARNING", "warning":
+		klog.Warning(messageStr)
+	case "ERROR", "error":
+		klog.Error(messageStr)
+	case "FATAL", "fatal":
+		klog.Fatal(messageStr)
+	default:
+		klog.Info(messageStr)
+	}
+}
+
+// cStringToGoString converts a C string (null-terminated byte array) to Go string
+func cStringToGoString(cstr *byte) string {
+	if cstr == nil {
+		return ""
+	}
+	ptr := unsafe.Pointer(cstr)
+	length := 0
+	for *(*byte)(unsafe.Add(ptr, uintptr(length))) != 0 {
+		length++
+	}
+	return string(unsafe.Slice(cstr, length))
+}
+
+// byteArrayToString converts a fixed-size byte array to Go string
+func byteArrayToString(arr []byte) string {
+	// Find null terminator
+	for i, b := range arr {
+		if b == 0 {
+			return string(arr[:i])
+		}
+	}
+	return string(arr)
 }
 
 // GetTotalProcessCount returns the total number of processes across all devices
@@ -125,40 +393,21 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 		deviceCount = maxStackDevices
 	}
 
-	// Allocate C strings for device UUIDs
-	cDeviceUUIDs := make([]*C.char, deviceCount)
+	// Convert Go strings to DeviceUUIDEntry array
+	uuidEntries := make([]DeviceUUIDEntry, deviceCount)
 	for i := 0; i < deviceCount; i++ {
-		cDeviceUUIDs[i] = C.CString(deviceUUIDs[i])
-	}
-	defer func() {
-		for _, cDeviceUUID := range cDeviceUUIDs {
-			if cDeviceUUID != nil {
-				C.free(unsafe.Pointer(cDeviceUUID))
-			}
+		uuidBytes := []byte(deviceUUIDs[i])
+		copy(uuidEntries[i].UUID[:], uuidBytes)
+		if len(uuidBytes) < len(uuidEntries[i].UUID) {
+			uuidEntries[i].UUID[len(uuidBytes)] = 0 // null terminator
 		}
-	}()
-
-	// Convert Go slice to C array pointer
-	// In CGO, we can directly use the slice's underlying array pointer
-	var cUUIDArray **C.char
-	if deviceCount > 0 {
-		cUUIDArray = (**C.char)(unsafe.Pointer(&cDeviceUUIDs[0]))
 	}
 
 	// Allocate stack buffer for metrics
-	const maxExtraMetricsPerDevice = 32
-	var cMetrics [maxStackDevices]C.DeviceMetrics
-	var cExtraMetrics [maxStackDevices][maxExtraMetricsPerDevice]C.ExtraMetric
+	var cMetrics [maxStackDevices]DeviceMetrics
 
-	// Initialize extraMetrics pointers
-	for i := 0; i < deviceCount; i++ {
-		cMetrics[i].extraMetrics = &cExtraMetrics[i][0]
-		cMetrics[i].extraMetricsCount = 0
-	}
-
-	//nolint:staticcheck
-	result := C.GetDeviceMetricsWrapper(cUUIDArray, C.size_t(deviceCount), &cMetrics[0], C.size_t(maxExtraMetricsPerDevice))
-	if result != C.RESULT_SUCCESS {
+	result := getDeviceMetrics(&uuidEntries[0], uintptr(deviceCount), &cMetrics[0])
+	if result != ResultSuccess {
 		return nil, fmt.Errorf("failed to get device metrics: %d", result)
 	}
 
@@ -166,41 +415,37 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 	metrics := make([]*api.GPUUsageMetrics, deviceCount)
 	for i := 0; i < deviceCount; i++ {
 		cm := &cMetrics[i]
-		memoryTotal := uint64(cm.memoryTotalBytes)
-		memoryUsed := uint64(cm.memoryUsedBytes)
+		memoryTotal := uint64(cm.MemoryTotalBytes)
+		memoryUsed := uint64(cm.MemoryUsedBytes)
 		var memoryPercentage float64
 		if memoryTotal > 0 {
 			memoryPercentage = float64(memoryUsed) / float64(memoryTotal) * 100.0
 		}
 
-		// Convert extra metrics from C to Go map
-		extraMetrics := make(map[string]float64, int(cm.extraMetricsCount)+1)
+		// Convert extra metrics from C array to Go map
+		extraMetrics := make(map[string]float64, int(cm.ExtraMetricsCount)+1)
 		// Always include tensorCoreUsagePercent as it's a standard field
-		extraMetrics["tensorCoreUsagePercent"] = float64(cm.tensorCoreUsagePercent)
+		extraMetrics["tensorCoreUsagePercent"] = float64(cm.TensorCoreUsagePercent)
 
 		// Add other extra metrics from C array
-		if cm.extraMetrics != nil && cm.extraMetricsCount > 0 {
-			// Convert C pointer to Go slice for indexing
-			extraMetricsSlice := (*[maxExtraMetricsPerDevice]C.ExtraMetric)(unsafe.Pointer(cm.extraMetrics))
-			for j := 0; j < int(cm.extraMetricsCount); j++ {
-				em := &extraMetricsSlice[j]
-				key := C.GoString(&em.key[0])
-				if key != "" {
-					extraMetrics[key] = float64(em.value)
-				}
+		for j := 0; j < int(cm.ExtraMetricsCount); j++ {
+			em := &cm.ExtraMetrics[j]
+			key := byteArrayToString(em.Key[:])
+			if key != "" {
+				extraMetrics[key] = em.Value
 			}
 		}
 
 		metrics[i] = &api.GPUUsageMetrics{
-			DeviceUUID:        C.GoString(&cm.deviceUUID[0]),
+			DeviceUUID:        byteArrayToString(cm.DeviceUUID[:]),
 			MemoryBytes:       memoryUsed,
 			MemoryPercentage:  memoryPercentage,
-			ComputePercentage: float64(cm.smActivePercent),
+			ComputePercentage: float64(cm.SMActivePercent),
 			ComputeTflops:     0,                                // Not available in DeviceMetrics
-			Rx:                float64(cm.pcieRxBytes) / 1024.0, // Convert bytes to KB
-			Tx:                float64(cm.pcieTxBytes) / 1024.0, // Convert bytes to KB
-			Temperature:       float64(cm.temperatureCelsius),
-			PowerUsage:        int64(cm.powerUsageWatts),
+			Rx:                float64(cm.PCIeRxBytes) / 1024.0, // Convert bytes to KB
+			Tx:                float64(cm.PCIeTxBytes) / 1024.0, // Convert bytes to KB
+			Temperature:       float64(cm.TemperatureCelsius),
+			PowerUsage:        int64(cm.PowerUsageWatts),
 			ExtraMetrics:      extraMetrics,
 		}
 	}
@@ -211,10 +456,9 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 // GetAllDevices retrieves all available devices from the accelerator library
 func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 	// First, get the device count
-	var cDeviceCount C.size_t
-	//nolint:staticcheck
-	result := C.GetDeviceCountWrapper(&cDeviceCount)
-	if result != C.RESULT_SUCCESS {
+	var cDeviceCount uintptr
+	result := getDeviceCount(&cDeviceCount)
+	if result != ResultSuccess {
 		return nil, fmt.Errorf("failed to get device count: %d", result)
 	}
 
@@ -224,16 +468,15 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 
 	// Allocate stack buffer (max 64 devices to avoid stack overflow)
 	const maxStackDevices = 64
-	var stackDevices [maxStackDevices]C.ExtendedDeviceInfo
+	var stackDevices [maxStackDevices]ExtendedDeviceInfo
 	maxDevices := int(cDeviceCount)
 	if maxDevices > maxStackDevices {
 		maxDevices = maxStackDevices
 	}
 
-	var cCount C.size_t
-	//nolint:staticcheck
-	result = C.GetAllDevicesWrapper(&stackDevices[0], C.size_t(maxDevices), &cCount)
-	if result != C.RESULT_SUCCESS {
+	var cCount uintptr
+	result = getAllDevices(&stackDevices[0], uintptr(maxDevices), &cCount)
+	if result != ResultSuccess {
 		return nil, fmt.Errorf("failed to get all devices: %d", result)
 	}
 
@@ -246,21 +489,21 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 	for i := 0; i < int(cCount); i++ {
 		cInfo := &stackDevices[i]
 		devices[i] = &api.DeviceInfo{
-			UUID:             C.GoString(&cInfo.basic.uuid[0]),
-			Vendor:           C.GoString(&cInfo.basic.vendor[0]),
-			Model:            C.GoString(&cInfo.basic.model[0]),
-			Index:            int32(cInfo.basic.index),
-			NUMANode:         int32(cInfo.basic.numaNode),
-			TotalMemoryBytes: uint64(cInfo.basic.totalMemoryBytes),
-			MaxTflops:        float64(cInfo.basic.maxTflops),
+			UUID:             byteArrayToString(cInfo.Basic.UUID[:]),
+			Vendor:           byteArrayToString(cInfo.Basic.Vendor[:]),
+			Model:            byteArrayToString(cInfo.Basic.Model[:]),
+			Index:            cInfo.Basic.Index,
+			NUMANode:         cInfo.Basic.NUMANode,
+			TotalMemoryBytes: uint64(cInfo.Basic.TotalMemoryBytes),
+			MaxTflops:        float64(cInfo.Basic.MaxTflops),
 			Capabilities: api.DeviceCapabilities{
-				SupportsPartitioning:  bool(cInfo.capabilities.supportsPartitioning),
-				SupportsSoftIsolation: bool(cInfo.capabilities.supportsSoftIsolation),
-				SupportsHardIsolation: bool(cInfo.capabilities.supportsHardIsolation),
-				SupportsSnapshot:      bool(cInfo.capabilities.supportsSnapshot),
-				SupportsMetrics:       bool(cInfo.capabilities.supportsMetrics),
-				MaxPartitions:         uint32(cInfo.capabilities.maxPartitions),
-				MaxWorkersPerDevice:   uint32(cInfo.capabilities.maxWorkersPerDevice),
+				SupportsPartitioning:  bool(cInfo.Capabilities.SupportsPartitioning),
+				SupportsSoftIsolation: bool(cInfo.Capabilities.SupportsSoftIsolation),
+				SupportsHardIsolation: bool(cInfo.Capabilities.SupportsHardIsolation),
+				SupportsSnapshot:      bool(cInfo.Capabilities.SupportsSnapshot),
+				SupportsMetrics:       bool(cInfo.Capabilities.SupportsMetrics),
+				MaxPartitions:         uint32(cInfo.Capabilities.MaxPartitions),
+				MaxWorkersPerDevice:   uint32(cInfo.Capabilities.MaxWorkersPerDevice),
 			},
 			Properties: make(map[string]string, 0),
 		}
@@ -271,36 +514,54 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 
 // AssignPartition assigns a partition to a device
 func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (string, error) {
-	cTemplateID := C.CString(templateID)
-	defer C.free(unsafe.Pointer(cTemplateID))
+	// Validate input lengths
+	const maxIDLength = 64
+	if len(templateID) >= maxIDLength {
+		return "", fmt.Errorf("template ID is too long (max %d bytes)", maxIDLength-1)
+	}
+	if len(deviceUUID) >= maxIDLength {
+		return "", fmt.Errorf("device UUID is too long (max %d bytes)", maxIDLength-1)
+	}
 
-	cDeviceUUID := C.CString(deviceUUID)
-	defer C.free(unsafe.Pointer(cDeviceUUID))
+	var assignment PartitionAssignment
+	templateBytes := []byte(templateID)
+	deviceBytes := []byte(deviceUUID)
+	copy(assignment.TemplateID[:], templateBytes)
+	copy(assignment.DeviceUUID[:], deviceBytes)
+	if len(templateBytes) < len(assignment.TemplateID) {
+		assignment.TemplateID[len(templateBytes)] = 0
+	}
+	if len(deviceBytes) < len(assignment.DeviceUUID) {
+		assignment.DeviceUUID[len(deviceBytes)] = 0
+	}
 
-	var assignment C.PartitionAssignment
-	C.strncpy(&assignment.templateId[0], cTemplateID, C.size_t(len(templateID)))
-	C.strncpy(&assignment.deviceUUID[0], cDeviceUUID, C.size_t(len(deviceUUID)))
-
-	//nolint:staticcheck
-	result := C.AssignPartitionWrapper(&assignment)
+	result := assignPartition(&assignment)
 	if !result {
 		return "", fmt.Errorf("failed to assign partition")
 	}
 
-	partitionUUID := C.GoString(&assignment.partitionUUID[0])
+	partitionUUID := byteArrayToString(assignment.PartitionUUID[:])
 	return partitionUUID, nil
 }
 
 // RemovePartition removes a partition from a device
 func (a *AcceleratorInterface) RemovePartition(partitionUUID, deviceUUID string) error {
-	cPartitionUUID := C.CString(partitionUUID)
-	defer C.free(unsafe.Pointer(cPartitionUUID))
+	partitionBytes := []byte(partitionUUID)
+	deviceBytes := []byte(deviceUUID)
 
-	cDeviceUUID := C.CString(deviceUUID)
-	defer C.free(unsafe.Pointer(cDeviceUUID))
+	// Create temporary arrays with null terminators
+	var partitionArr [64]byte
+	var deviceArr [64]byte
+	copy(partitionArr[:], partitionBytes)
+	copy(deviceArr[:], deviceBytes)
+	if len(partitionBytes) < len(partitionArr) {
+		partitionArr[len(partitionBytes)] = 0
+	}
+	if len(deviceBytes) < len(deviceArr) {
+		deviceArr[len(deviceBytes)] = 0
+	}
 
-	//nolint:staticcheck
-	result := C.RemovePartitionWrapper(cPartitionUUID, cDeviceUUID)
+	result := removePartition(&partitionArr[0], &deviceArr[0])
 	if !result {
 		return fmt.Errorf("failed to remove partition")
 	}
@@ -310,15 +571,22 @@ func (a *AcceleratorInterface) RemovePartition(partitionUUID, deviceUUID string)
 
 // SetMemHardLimit sets hard memory limit for a worker
 func (a *AcceleratorInterface) SetMemHardLimit(workerID, deviceUUID string, memoryLimitBytes uint64) error {
-	cWorkerID := C.CString(workerID)
-	defer C.free(unsafe.Pointer(cWorkerID))
+	workerBytes := []byte(workerID)
+	deviceBytes := []byte(deviceUUID)
 
-	cDeviceUUID := C.CString(deviceUUID)
-	defer C.free(unsafe.Pointer(cDeviceUUID))
+	var workerArr [64]byte
+	var deviceArr [64]byte
+	copy(workerArr[:], workerBytes)
+	copy(deviceArr[:], deviceBytes)
+	if len(workerBytes) < len(workerArr) {
+		workerArr[len(workerBytes)] = 0
+	}
+	if len(deviceBytes) < len(deviceArr) {
+		deviceArr[len(deviceBytes)] = 0
+	}
 
-	//nolint:staticcheck
-	result := C.SetMemHardLimitWrapper(cWorkerID, cDeviceUUID, C.uint64_t(memoryLimitBytes))
-	if result != C.RESULT_SUCCESS {
+	result := setMemHardLimit(&workerArr[0], &deviceArr[0], memoryLimitBytes)
+	if result != ResultSuccess {
 		return fmt.Errorf("failed to set memory hard limit: %d", result)
 	}
 
@@ -327,15 +595,22 @@ func (a *AcceleratorInterface) SetMemHardLimit(workerID, deviceUUID string, memo
 
 // SetComputeUnitHardLimit sets hard compute unit limit for a worker
 func (a *AcceleratorInterface) SetComputeUnitHardLimit(workerID, deviceUUID string, computeUnitLimit uint32) error {
-	cWorkerID := C.CString(workerID)
-	defer C.free(unsafe.Pointer(cWorkerID))
+	workerBytes := []byte(workerID)
+	deviceBytes := []byte(deviceUUID)
 
-	cDeviceUUID := C.CString(deviceUUID)
-	defer C.free(unsafe.Pointer(cDeviceUUID))
+	var workerArr [64]byte
+	var deviceArr [64]byte
+	copy(workerArr[:], workerBytes)
+	copy(deviceArr[:], deviceBytes)
+	if len(workerBytes) < len(workerArr) {
+		workerArr[len(workerBytes)] = 0
+	}
+	if len(deviceBytes) < len(deviceArr) {
+		deviceArr[len(deviceBytes)] = 0
+	}
 
-	//nolint:staticcheck
-	result := C.SetComputeUnitHardLimitWrapper(cWorkerID, cDeviceUUID, C.uint32_t(computeUnitLimit))
-	if result != C.RESULT_SUCCESS {
+	result := setComputeUnitHardLimit(&workerArr[0], &deviceArr[0], computeUnitLimit)
+	if result != ResultSuccess {
 		return fmt.Errorf("failed to set compute unit hard limit: %d", result)
 	}
 
@@ -352,16 +627,15 @@ func (a *AcceleratorInterface) GetProcessComputeUtilization() ([]api.ComputeUtil
 
 	// Allocate stack buffer (max 1024 to avoid stack overflow)
 	const maxStackUtilizations = 1024
-	var stackUtilizations [maxStackUtilizations]C.ComputeUtilization
+	var stackUtilizations [maxStackUtilizations]ComputeUtilization
 	maxCount := totalCount
 	if maxCount > maxStackUtilizations {
 		maxCount = maxStackUtilizations
 	}
 
-	var cCount C.size_t
-	//nolint:staticcheck
-	result := C.GetProcessComputeUtilizationWrapper(&stackUtilizations[0], C.size_t(maxCount), &cCount)
-	if result != C.RESULT_SUCCESS {
+	var cCount uintptr
+	result := getProcessComputeUtilization(&stackUtilizations[0], uintptr(maxCount), &cCount)
+	if result != ResultSuccess {
 		return nil, fmt.Errorf("failed to get process compute utilization: %d", result)
 	}
 
@@ -373,10 +647,9 @@ func (a *AcceleratorInterface) GetProcessComputeUtilization() ([]api.ComputeUtil
 	for i := 0; i < int(cCount); i++ {
 		cu := &stackUtilizations[i]
 		utilizations[i] = api.ComputeUtilization{
-			ProcessID:          C.GoString(&cu.processId[0]),
-			DeviceUUID:         C.GoString(&cu.deviceUUID[0]),
-			UtilizationPercent: float64(cu.utilizationPercent),
-			// Note: ActiveSMs, TotalSMs, and TFLOPsUsed will be added to ComputeUtilization if needed
+			ProcessID:          byteArrayToString(cu.ProcessID[:]),
+			DeviceUUID:         byteArrayToString(cu.DeviceUUID[:]),
+			UtilizationPercent: float64(cu.UtilizationPercent),
 		}
 	}
 
@@ -393,16 +666,15 @@ func (a *AcceleratorInterface) GetProcessMemoryUtilization() ([]api.MemoryUtiliz
 
 	// Allocate stack buffer (max 1024 to avoid stack overflow)
 	const maxStackUtilizations = 1024
-	var stackUtilizations [maxStackUtilizations]C.MemoryUtilization
+	var stackUtilizations [maxStackUtilizations]MemoryUtilization
 	maxCount := totalCount
 	if maxCount > maxStackUtilizations {
 		maxCount = maxStackUtilizations
 	}
 
-	var cCount C.size_t
-	//nolint:staticcheck
-	result := C.GetProcessMemoryUtilizationWrapper(&stackUtilizations[0], C.size_t(maxCount), &cCount)
-	if result != C.RESULT_SUCCESS {
+	var cCount uintptr
+	result := getProcessMemoryUtilization(&stackUtilizations[0], uintptr(maxCount), &cCount)
+	if result != ResultSuccess {
 		return nil, fmt.Errorf("failed to get process memory utilization: %d", result)
 	}
 
@@ -414,11 +686,10 @@ func (a *AcceleratorInterface) GetProcessMemoryUtilization() ([]api.MemoryUtiliz
 	for i := 0; i < int(cCount); i++ {
 		mu := &stackUtilizations[i]
 		utilizations[i] = api.MemoryUtilization{
-			ProcessID:     C.GoString(&mu.processId[0]),
-			DeviceUUID:    C.GoString(&mu.deviceUUID[0]),
-			UsedBytes:     uint64(mu.usedBytes),
-			ReservedBytes: uint64(mu.reservedBytes),
-			// Note: UtilizationPercent will be calculated separately if needed
+			ProcessID:     byteArrayToString(mu.ProcessID[:]),
+			DeviceUUID:    byteArrayToString(mu.DeviceUUID[:]),
+			UsedBytes:     uint64(mu.UsedBytes),
+			ReservedBytes: uint64(mu.ReservedBytes),
 		}
 	}
 
@@ -428,11 +699,11 @@ func (a *AcceleratorInterface) GetProcessMemoryUtilization() ([]api.MemoryUtiliz
 // GetVendorMountLibs retrieves vendor mount libs
 func (a *AcceleratorInterface) GetVendorMountLibs() ([]*api.Mount, error) {
 	const maxStackMounts = 64
-	var stackMounts [maxStackMounts]C.Mount
-	var cCount C.size_t
+	var stackMounts [maxStackMounts]Mount
+	var cCount uintptr
 
-	result := C.GetVendorMountLibsWrapper(&stackMounts[0], C.size_t(maxStackMounts), &cCount)
-	if result != C.RESULT_SUCCESS {
+	result := getVendorMountLibs(&stackMounts[0], uintptr(maxStackMounts), &cCount)
+	if result != ResultSuccess {
 		return nil, fmt.Errorf("failed to get vendor mount libs: %d", result)
 	}
 
@@ -443,16 +714,9 @@ func (a *AcceleratorInterface) GetVendorMountLibs() ([]*api.Mount, error) {
 	mounts := make([]*api.Mount, int(cCount))
 	for i := 0; i < int(cCount); i++ {
 		cm := &stackMounts[i]
-		var hostPath, guestPath string
-		if cm.hostPath != nil {
-			hostPath = C.GoString(cm.hostPath)
-		}
-		if cm.guestPath != nil {
-			guestPath = C.GoString(cm.guestPath)
-		}
 		mounts[i] = &api.Mount{
-			HostPath:  hostPath,
-			GuestPath: guestPath,
+			HostPath:  byteArrayToString(cm.HostPath[:]),
+			GuestPath: byteArrayToString(cm.GuestPath[:]),
 		}
 	}
 

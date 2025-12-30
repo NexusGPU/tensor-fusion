@@ -48,6 +48,15 @@ typedef enum {
 } IsolationMode;
 
 // ============================================================================
+// Callback Types
+// ============================================================================
+
+// Log callback function type
+// Called by the library to log messages
+// Parameters: level (log level string), message (log message string)
+typedef void (*LogCallbackFunc)(const char* level, const char* message);
+
+// ============================================================================
 // DeviceInfo Types
 // ============================================================================
 
@@ -100,12 +109,15 @@ typedef struct {
     uint32_t latencyNs;              // Latency in nanoseconds
 } RelatedDevice;
 
+// Maximum number of related devices per device
+#define MAX_RELATED_DEVICES 32
+
 // Extended device information
 typedef struct {
     DeviceBasicInfo basic;
     DeviceProperties props;
-    RelatedDevice* relatedDevices;   // Array of related devices
-    size_t relatedDeviceCount;       // Number of related devices
+    RelatedDevice relatedDevices[MAX_RELATED_DEVICES];  // Array of related devices
+    size_t relatedDeviceCount;       // Number of related devices (0 to MAX_RELATED_DEVICES)
     DeviceCapabilities capabilities;
 } ExtendedDeviceInfo;
 
@@ -122,17 +134,21 @@ typedef struct {
 } PartitionTemplate;
 
 // Device topology information
+#define MAX_CONNECTIONS_PER_DEVICE 32
+
 typedef struct {
     char deviceUUID[64];             // Device UUID
     int32_t numaNode;                // NUMA node
-    RelatedDevice* connections;      // Array of connections
-    size_t connectionCount;          // Number of connections
+    RelatedDevice connections[MAX_CONNECTIONS_PER_DEVICE];  // Array of connections
+    size_t connectionCount;          // Number of connections (0 to MAX_CONNECTIONS_PER_DEVICE)
 } DeviceTopology;
 
 // Extended topology (includes NVLink, IB NIC, etc.)
+#define MAX_TOPOLOGY_DEVICES 64
+
 typedef struct {
-    DeviceTopology* devices;         // Array of device topologies
-    size_t deviceCount;              // Number of devices
+    DeviceTopology devices[MAX_TOPOLOGY_DEVICES];  // Array of device topologies
+    size_t deviceCount;              // Number of devices (0 to MAX_TOPOLOGY_DEVICES)
     uint32_t nvlinkBandwidthMBps;    // NVLink total bandwidth
     uint32_t ibNicCount;             // InfiniBand NIC count
     char topologyType[32];           // Topology type (e.g., "NVLink", "PCIe")
@@ -160,9 +176,11 @@ typedef struct {
 } WorkerInfo;
 
 // Process array for snapshot/resume
+#define MAX_PROCESSES 1024
+
 typedef struct {
-    pid_t* processIds;               // Array of process IDs
-    size_t processCount;             // Number of processes
+    pid_t processIds[MAX_PROCESSES];  // Array of process IDs
+    size_t processCount;             // Number of processes (0 to MAX_PROCESSES)
     char deviceUUID[64];             // Device UUID
 } ProcessArray;
 
@@ -175,6 +193,9 @@ typedef struct {
     char key[64];              // Metric key name
     double value;              // Metric value
 } ExtraMetric;
+
+// Maximum number of extra metrics per device
+#define MAX_EXTRA_METRICS 64
 
 // Compute utilization
 typedef struct {
@@ -206,20 +227,40 @@ typedef struct {
     uint32_t tensorCoreUsagePercent; // Tensor Core usage percentage
     uint64_t memoryUsedBytes;         // Memory used
     uint64_t memoryTotalBytes;        // Memory total
-    ExtraMetric* extraMetrics;        // Array of extra metrics (key-value pairs)
-    size_t extraMetricsCount;         // Number of extra metrics
+    ExtraMetric extraMetrics[MAX_EXTRA_METRICS];  // Array of extra metrics
+    size_t extraMetricsCount;         // Number of extra metrics (0 to MAX_EXTRA_METRICS)
 } DeviceMetrics;
 
 // Extended device metrics (NVLink, etc.)
+#define MAX_NVLINK_PER_DEVICE 18
+#define MAX_IB_NIC_PER_DEVICE 8
+#define MAX_PCIE_PER_DEVICE 4
+
 typedef struct {
     char deviceUUID[64];             // Device UUID
-    uint32_t* nvlinkBandwidthMBps;   // NVLink bandwidth per link (MB/s)
-    size_t nvlinkCount;              // Number of NVLink connections
-    uint64_t* ibNicBandwidthMBps;    // IB NIC bandwidth per NIC (MB/s)
-    size_t ibNicCount;               // Number of IB NICs
-    uint32_t* pcieBandwidthMBps;     // PCIe bandwidth per link (MB/s)
-    size_t pcieLinkCount;            // Number of PCIe links
+    uint32_t nvlinkBandwidthMBps[MAX_NVLINK_PER_DEVICE];   // NVLink bandwidth per link (MB/s)
+    size_t nvlinkCount;              // Number of NVLink connections (0 to MAX_NVLINK_PER_DEVICE)
+    uint64_t ibNicBandwidthMBps[MAX_IB_NIC_PER_DEVICE];    // IB NIC bandwidth per NIC (MB/s)
+    size_t ibNicCount;               // Number of IB NICs (0 to MAX_IB_NIC_PER_DEVICE)
+    uint32_t pcieBandwidthMBps[MAX_PCIE_PER_DEVICE];     // PCIe bandwidth per link (MB/s)
+    size_t pcieLinkCount;            // Number of PCIe links (0 to MAX_PCIE_PER_DEVICE)
 } ExtendedDeviceMetrics;
+
+// Device UUID array entry (for passing multiple UUIDs)
+#define MAX_DEVICE_UUIDS 64
+#define UUID_STRING_LENGTH 64
+
+typedef struct {
+    char uuid[UUID_STRING_LENGTH];   // Device UUID string
+} DeviceUUIDEntry;
+
+// Mount structure for vendor libraries
+#define MAX_MOUNT_PATH 512
+
+typedef struct {
+    char hostPath[MAX_MOUNT_PATH];   // Host path
+    char guestPath[MAX_MOUNT_PATH];  // Guest path
+} Mount;
 
 // ============================================================================
 // DeviceInfo APIs
@@ -249,10 +290,9 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
  * @param deviceIndexArray Array of device indices to query
  * @param deviceCount Number of devices in array
  * @param topology Output parameter for extended topology (allocated by caller)
- * @param maxConnectionsPerDevice Maximum number of connections per device in topology buffer
  * @return RESULT_SUCCESS on success, error code otherwise
  */
-Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, ExtendedDeviceTopology* topology, size_t maxConnectionsPerDevice);
+Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, ExtendedDeviceTopology* topology);
 
 // ============================================================================
 // Virtualization APIs - Partitioned Isolation
@@ -262,7 +302,7 @@ Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, Extended
  * Assign a partition to a device using a template (e.g., create MIG instance).
  * 
  * @param assignment Partition assignment request (templateId, deviceUUID)
- *                   Output: partitionUUID and partitionOverheadBytes
+ *                   Output: partitionUUID
  * @return true on success, false otherwise
  */
 bool AssignPartition(PartitionAssignment* assignment);
@@ -357,48 +397,31 @@ Result GetProcessMemoryUtilization(
 /**
  * Get basic device metrics (power, PCIe, SM active, TC usage, etc.).
  * 
- * @param deviceUUIDArray Array of device UUIDs
+ * @param deviceUUIDs Array of device UUID entries
  * @param deviceCount Number of devices
  * @param metrics Output buffer for device metrics (allocated by caller, size >= deviceCount)
- * @param maxExtraMetricsPerDevice Maximum number of extra metrics per device
  * @return RESULT_SUCCESS on success, error code otherwise
- * 
- * Note: Caller must allocate extraMetrics arrays for each device metric.
- *       Each metrics[i].extraMetrics should point to an array of size maxExtraMetricsPerDevice.
- *       The function will fill in the metrics and set extraMetricsCount for each device.
  */
 Result GetDeviceMetrics(
-    const char** deviceUUIDArray,
+    const DeviceUUIDEntry* deviceUUIDs,
     size_t deviceCount,
-    DeviceMetrics* metrics,
-    size_t maxExtraMetricsPerDevice
+    DeviceMetrics* metrics
 );
 
 /**
  * Get extended device metrics (NVLink bandwidth, etc.).
  * 
- * @param deviceUUIDArray Array of device UUIDs
+ * @param deviceUUIDs Array of device UUID entries
  * @param deviceCount Number of devices
  * @param metrics Output buffer for extended device metrics (allocated by caller, size >= deviceCount)
- * @param maxNvlinkPerDevice Maximum number of NVLink connections per device
- * @param maxIbNicPerDevice Maximum number of IB NICs per device
- * @param maxPciePerDevice Maximum number of PCIe links per device
  * @return RESULT_SUCCESS on success, error code otherwise
  */
 Result GetExtendedDeviceMetrics(
-    const char** deviceUUIDArray,
+    const DeviceUUIDEntry* deviceUUIDs,
     size_t deviceCount,
-    ExtendedDeviceMetrics* metrics,
-    size_t maxNvlinkPerDevice,
-    size_t maxIbNicPerDevice,
-    size_t maxPciePerDevice
+    ExtendedDeviceMetrics* metrics
 );
 
-
-typedef struct {
-    char* hostPath;              // Host path
-    char* guestPath;             // Guest path
-} Mount;
 /**
  * Get vendor mount libs.
  * 
@@ -414,13 +437,13 @@ Result GetVendorMountLibs(Mount* mounts, size_t maxCount, size_t* mountCount);
 // ============================================================================
 
 /**
- * Log a message (for debugging and diagnostics).
+ * Register a log callback function.
+ * The callback will be called by the library to log messages.
  * 
- * @param level Log level (e.g., "DEBUG", "INFO", "WARN", "ERROR")
- * @param message Log message
+ * @param callback Log callback function pointer (can be NULL to unregister)
  * @return RESULT_SUCCESS on success, error code otherwise
  */
-Result Log(const char* level, const char* message);
+Result RegisterLogCallback(LogCallbackFunc callback);
 
 #ifdef __cplusplus
 }
@@ -430,4 +453,3 @@ Result Log(const char* level, const char* message);
 #include "limiter.h"
 
 #endif // ACCELERATOR_H
-

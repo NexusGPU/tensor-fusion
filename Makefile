@@ -120,10 +120,8 @@ build-provider: ## Build accelerator stub library.
 	$(MAKE) -C provider stub
 
 .PHONY: build-hypervisor
-build-hypervisor: build-provider ## Build hypervisor binary with CGO enabled.
-	@PROVIDER_DIR=$$(pwd)/provider; \
-	CGO_ENABLED=1 \
-	CGO_CFLAGS="-I$$PROVIDER_DIR" \
+build-hypervisor: ## Build hypervisor binary with CGO disabled using purego.
+	CGO_ENABLED=0 \
 	go build -o bin/hypervisor ./cmd/hypervisor
 
 .PHONY: build-hypervisor-tui

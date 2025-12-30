@@ -225,3 +225,9 @@ Result Log(const char* level, const char* message) {
     return LogWrapper(level, message);
 }
 
+// Helper function to allocate memory for char* array
+// This is needed to avoid CGO pointer restrictions when passing Go slices to C
+void* allocateCharPtrArray(size_t count) {
+    return malloc(count * sizeof(char*));
+}
+
