@@ -38,6 +38,20 @@ static pthread_t g_limiterThread;
 static volatile int g_threadRunning = 0;
 
 // ============================================================================
+// Log Callback
+// ============================================================================
+
+// Log callback storage (declared early so it can be used throughout the file)
+static LogCallbackFunc Log = NULL;
+
+// Helper function to safely call the log callback
+static void logMessage(const char* level, const char* message) {
+    if (Log != NULL) {
+        Log(level, message);
+    }
+}
+
+// ============================================================================
 // Limiter Thread Function
 // ============================================================================
 
@@ -206,30 +220,74 @@ static void initDeviceInfo(ExtendedDeviceInfo* info, int32_t deviceIndex) {
     info->basic.pcieGen = 4;
     info->basic.pcieWidth = 16;
 
-    // Initialize properties
-    info->props.clockGraphics = 1410; // MHz
-    info->props.clockSM = 1410; // MHz
-    info->props.clockMem = 1215; // MHz
-    info->props.powerLimit = 400; // W
-    info->props.temperatureThreshold = 83; // C
-    info->props.eccEnabled = true;
-    info->props.persistenceModeEnabled = false;
-    snprintf(info->props.computeCapability, sizeof(info->props.computeCapability), "8.0");
-    info->props.clockAI = 0; // Not applicable for stub
-    snprintf(info->props.chipType, sizeof(info->props.chipType), "STUB");
+    // Initialize properties as key-value pairs
+    size_t propCount = 0;
+    
+    if (propCount < MAX_DEVICE_PROPERTIES) {
+        snprintf(info->props.properties[propCount].key, sizeof(info->props.properties[propCount].key), "clockGraphics");
+        snprintf(info->props.properties[propCount].value, sizeof(info->props.properties[propCount].value), "1410");
+        propCount++;
+    }
+    
+    if (propCount < MAX_DEVICE_PROPERTIES) {
+        snprintf(info->props.properties[propCount].key, sizeof(info->props.properties[propCount].key), "clockSM");
+        snprintf(info->props.properties[propCount].value, sizeof(info->props.properties[propCount].value), "1410");
+        propCount++;
+    }
+    
+    if (propCount < MAX_DEVICE_PROPERTIES) {
+        snprintf(info->props.properties[propCount].key, sizeof(info->props.properties[propCount].key), "clockMem");
+        snprintf(info->props.properties[propCount].value, sizeof(info->props.properties[propCount].value), "1215");
+        propCount++;
+    }
+    
+    if (propCount < MAX_DEVICE_PROPERTIES) {
+        snprintf(info->props.properties[propCount].key, sizeof(info->props.properties[propCount].key), "powerLimit");
+        snprintf(info->props.properties[propCount].value, sizeof(info->props.properties[propCount].value), "400");
+        propCount++;
+    }
+    
+    if (propCount < MAX_DEVICE_PROPERTIES) {
+        snprintf(info->props.properties[propCount].key, sizeof(info->props.properties[propCount].key), "temperatureThreshold");
+        snprintf(info->props.properties[propCount].value, sizeof(info->props.properties[propCount].value), "83");
+        propCount++;
+    }
+    
+    if (propCount < MAX_DEVICE_PROPERTIES) {
+        snprintf(info->props.properties[propCount].key, sizeof(info->props.properties[propCount].key), "eccEnabled");
+        snprintf(info->props.properties[propCount].value, sizeof(info->props.properties[propCount].value), "true");
+        propCount++;
+    }
+    
+    if (propCount < MAX_DEVICE_PROPERTIES) {
+        snprintf(info->props.properties[propCount].key, sizeof(info->props.properties[propCount].key), "persistenceModeEnabled");
+        snprintf(info->props.properties[propCount].value, sizeof(info->props.properties[propCount].value), "false");
+        propCount++;
+    }
+    
+    if (propCount < MAX_DEVICE_PROPERTIES) {
+        snprintf(info->props.properties[propCount].key, sizeof(info->props.properties[propCount].key), "computeCapability");
+        snprintf(info->props.properties[propCount].value, sizeof(info->props.properties[propCount].value), "8.0");
+        propCount++;
+    }
+    
+    if (propCount < MAX_DEVICE_PROPERTIES) {
+        snprintf(info->props.properties[propCount].key, sizeof(info->props.properties[propCount].key), "chipType");
+        snprintf(info->props.properties[propCount].value, sizeof(info->props.properties[propCount].value), "STUB");
+        propCount++;
+    }
+    
+    info->props.count = propCount;
 
-    // Initialize capabilities
-    info->capabilities.supportsPartitioning = true;
-    info->capabilities.supportsSoftIsolation = true;
-    info->capabilities.supportsHardIsolation = true;
-    info->capabilities.supportsSnapshot = true;
-    info->capabilities.supportsMetrics = true;
-    info->capabilities.maxPartitions = 7;
-    info->capabilities.maxWorkersPerDevice = 16;
-
-    // Initialize related devices (stub: no related devices)
-    // relatedDevices is now a fixed-size array, just set count to 0
-    info->relatedDeviceCount = 0;
+    // Initialize virtualization capabilities
+    info->virtualizationCapabilities.supportsPartitioning = true;
+    info->virtualizationCapabilities.supportsSoftIsolation = true;
+    info->virtualizationCapabilities.supportsHardIsolation = true;
+    info->virtualizationCapabilities.supportsSnapshot = true;
+    info->virtualizationCapabilities.supportsMetrics = true;
+    info->virtualizationCapabilities.supportsRemoting = false;
+    info->virtualizationCapabilities.maxPartitions = 7;
+    info->virtualizationCapabilities.maxWorkersPerDevice = 16;
 }
 
 Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount) {
@@ -248,7 +306,7 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
     for (size_t i = 0; i < actualCount; i++) {
         initDeviceInfo(&devices[i], (int32_t)i);
     }
-
+    logMessage("INFO", "GetAllDevices called from provider stub");
     return RESULT_SUCCESS;
 }
 
@@ -303,6 +361,8 @@ Result GetPartitionTemplates(int32_t deviceIndex __attribute__((unused)), Partit
         snprintf(t3->description, sizeof(t3->description), "3/7 GPU slice with 21GB memory");
     }
 
+    logMessage("INFO", "GetPartitionTemplates called from provider stub");
+
     return RESULT_SUCCESS;
 }
 
@@ -321,34 +381,12 @@ Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, Extended
         DeviceTopology* dt = &topology->devices[i];
         snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "stub-device-%d", deviceIndexArray[i]);
         dt->numaNode = deviceIndexArray[i] % 2;
-
-        // Stub: create connections to other devices (using fixed-size array)
-        size_t connectionCount = (deviceCount > 1) ? (deviceCount - 1) : 0;
-        if (connectionCount > MAX_CONNECTIONS_PER_DEVICE) {
-            connectionCount = MAX_CONNECTIONS_PER_DEVICE;
-        }
-        
-        dt->connectionCount = connectionCount;
-        if (connectionCount > 0) {
-            size_t connIdx = 0;
-            for (size_t j = 0; j < deviceCount && connIdx < connectionCount; j++) {
-                if (j != i) {
-                    RelatedDevice* rd = &dt->connections[connIdx];
-                    snprintf(rd->deviceUUID, sizeof(rd->deviceUUID), "stub-device-%d", deviceIndexArray[j]);
-                    snprintf(rd->connectionType, sizeof(rd->connectionType), "NVLink");
-                    rd->bandwidthMBps = 600000; // 600 GB/s (stub)
-                    rd->latencyNs = 100; // 100ns (stub)
-                    connIdx++;
-                }
-            }
-        }
     }
 
     // Set extended topology info
-    topology->nvlinkBandwidthMBps = 600000 * deviceCount; // Total bandwidth
-    topology->ibNicCount = 0; // Stub: no IB NICs
     snprintf(topology->topologyType, sizeof(topology->topologyType), "NVLink");
 
+    logMessage("INFO", "GetDeviceTopology called from provider stub");
     return RESULT_SUCCESS;
 }
 
@@ -367,6 +405,7 @@ bool AssignPartition(PartitionAssignment* assignment) {
     snprintf(assignment->partitionUUID, sizeof(assignment->partitionUUID),
              "partition-%.26s-%.26s", assignment->templateId, assignment->deviceUUID);
 
+    logMessage("INFO", "AssignPartition called from provider stub");
     return true;
 }
 
@@ -376,6 +415,7 @@ bool RemovePartition(const char* templateId, const char* deviceUUID) {
     }
 
     // Stub: always succeed
+    logMessage("INFO", "RemovePartition called from provider stub");
     return true;
 }
 
@@ -389,6 +429,7 @@ Result SetMemHardLimit(const char* workerId, const char* deviceUUID, uint64_t me
     }
 
     // Stub: always succeed
+    logMessage("INFO", "SetMemHardLimit called from provider stub");
     return RESULT_SUCCESS;
 }
 
@@ -398,6 +439,7 @@ Result SetComputeUnitHardLimit(const char* workerId, const char* deviceUUID, uin
     }
 
     // Stub: always succeed
+    logMessage("INFO", "SetComputeUnitHardLimit called from provider stub");
     return RESULT_SUCCESS;
 }
 
@@ -419,6 +461,7 @@ Result Snapshot(ProcessArray* processes) {
     }
 
     // Stub: always succeed (no actual snapshot implementation)
+    logMessage("INFO", "Snapshot called from provider stub");
     return RESULT_SUCCESS;
 }
 
@@ -428,6 +471,7 @@ Result Resume(ProcessArray* processes) {
     }
 
     // Stub: always succeed (no actual resume implementation)
+    logMessage("INFO", "Resume called from provider stub");
     return RESULT_SUCCESS;
 }
 
@@ -448,6 +492,7 @@ Result GetProcessComputeUtilization(
     // For now, stub implementation returns empty
     // The actual implementation should query limiter for all tracked processes
     *utilizationCount = 0;
+    logMessage("INFO", "GetProcessComputeUtilization called from provider stub");
     return RESULT_SUCCESS;
 }
 
@@ -464,6 +509,7 @@ Result GetProcessMemoryUtilization(
     // For now, stub implementation returns empty
     // The actual implementation should query limiter for all tracked processes
     *utilizationCount = 0;
+    logMessage("INFO", "GetProcessMemoryUtilization called from provider stub");
     return RESULT_SUCCESS;
 }
 
@@ -487,10 +533,8 @@ Result GetDeviceMetrics(
         dm->temperatureCelsius = 45.0 + (i * 5.0); // Stub: 45-50C
         dm->pcieRxBytes = 1024ULL * 1024 * 1024 * (i + 1); // Stub: 1-4GB
         dm->pcieTxBytes = 512ULL * 1024 * 1024 * (i + 1); // Stub: 0.5-2GB
-        dm->smActivePercent = 50 + (i * 10); // Stub: 50-90%
-        dm->tensorCoreUsagePercent = 30 + (i * 5); // Stub: 30-50%
+        dm->utilizationPercent = 50 + (i * 10); // Stub: 50-90%
         dm->memoryUsedBytes = 8ULL * 1024 * 1024 * 1024; // Stub: 8GB
-        dm->memoryTotalBytes = 16ULL * 1024 * 1024 * 1024; // Stub: 16GB
 
         // Fill extra metrics (using fixed-size array)
         size_t extraCount = 0;
@@ -510,6 +554,12 @@ Result GetDeviceMetrics(
         }
 
         if (extraCount < maxExtraMetrics) {
+            snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "tensorCoreUsagePercent");
+            dm->extraMetrics[extraCount].value = 30.0 + (i * 5.0); // Stub: 30-50%
+            extraCount++;
+        }
+
+        if (extraCount < maxExtraMetrics) {
             snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "encoderUtilization");
             dm->extraMetrics[extraCount].value = 10.0 + (i * 2.0); // Stub: 10-20%
             extraCount++;
@@ -524,68 +574,21 @@ Result GetDeviceMetrics(
         dm->extraMetricsCount = extraCount;
     }
 
+    logMessage("INFO", "GetDeviceMetrics called from provider stub");
     return RESULT_SUCCESS;
 }
 
-Result GetExtendedDeviceMetrics(
-    const DeviceUUIDEntry* deviceUUIDs,
-    size_t deviceCount,
-    ExtendedDeviceMetrics* metrics
-) {
-    if (!deviceUUIDs || deviceCount == 0 || !metrics) {
-        return RESULT_ERROR_INVALID_PARAM;
-    }
-
-    // Fill stub data using fixed-size arrays
-    for (size_t i = 0; i < deviceCount; i++) {
-        ExtendedDeviceMetrics* edm = &metrics[i];
-        // Copy UUID from DeviceUUIDEntry
-        strncpy(edm->deviceUUID, deviceUUIDs[i].uuid, sizeof(edm->deviceUUID) - 1);
-        edm->deviceUUID[sizeof(edm->deviceUUID) - 1] = '\0';
-
-        // Stub: 6 NVLink connections per device
-        edm->nvlinkCount = 6;
-        if (edm->nvlinkCount > MAX_NVLINK_PER_DEVICE) {
-            edm->nvlinkCount = MAX_NVLINK_PER_DEVICE;
-        }
-        for (size_t j = 0; j < edm->nvlinkCount; j++) {
-            edm->nvlinkBandwidthMBps[j] = 500000 + (j * 10000); // Stub: 500-550 GB/s
-        }
-
-        // Stub: 2 IB NICs per device
-        edm->ibNicCount = 2;
-        if (edm->ibNicCount > MAX_IB_NIC_PER_DEVICE) {
-            edm->ibNicCount = MAX_IB_NIC_PER_DEVICE;
-        }
-        for (size_t j = 0; j < edm->ibNicCount; j++) {
-            edm->ibNicBandwidthMBps[j] = 200000; // Stub: 200 GB/s per NIC
-        }
-
-        // Stub: 1 PCIe link
-        edm->pcieLinkCount = 1;
-        if (edm->pcieLinkCount > MAX_PCIE_PER_DEVICE) {
-            edm->pcieLinkCount = MAX_PCIE_PER_DEVICE;
-        }
-        if (edm->pcieLinkCount > 0) {
-            edm->pcieBandwidthMBps[0] = 32000; // Stub: 32 GB/s (PCIe 4.0 x16)
-        }
-    }
-
-    return RESULT_SUCCESS;
-}
 
 Result GetVendorMountLibs(Mount* mounts, size_t maxCount, size_t* mountCount) {
     if (!mounts || maxCount == 0 || !mountCount) {
         return RESULT_ERROR_INVALID_PARAM;
     }
     *mountCount = 0;
+    logMessage("INFO", "GetVendorMountLibs called from provider stub");
     return RESULT_SUCCESS;
 }
 
-// Log callback storage
-static LogCallbackFunc g_logCallback = NULL;
-
 Result RegisterLogCallback(LogCallbackFunc callback) {
-    g_logCallback = callback;
+    Log = callback;
     return RESULT_SUCCESS;
 }

@@ -40,12 +40,6 @@ typedef enum {
     RESULT_ERROR_INTERNAL = 6
 } Result;
 
-typedef enum {
-    ISOLATION_MODE_SHARED = 0,      // Timeslicing, no resource control
-    ISOLATION_MODE_SOFT = 1,        // Hook-based, token-based limiting
-    ISOLATION_MODE_HARD = 2,        // One-time resource limits
-    ISOLATION_MODE_PARTITIONED = 3  // Hardware/driver-level partitioning (MIG)
-} IsolationMode;
 
 // ============================================================================
 // Callback Types
@@ -60,16 +54,17 @@ typedef void (*LogCallbackFunc)(const char* level, const char* message);
 // DeviceInfo Types
 // ============================================================================
 
-// Device capabilities
+// Virtualization capabilities
 typedef struct {
     bool supportsPartitioning;      // e.g., MIG support
     bool supportsSoftIsolation;     // Hook-based isolation support
     bool supportsHardIsolation;     // One-time limit support
     bool supportsSnapshot;          // Process snapshot/resume support
     bool supportsMetrics;           // Metrics collection support
+    bool supportsRemoting;          // Remote device access support
     uint32_t maxPartitions;         // Maximum number of partitions
     uint32_t maxWorkersPerDevice;   // Maximum workers per device
-} DeviceCapabilities;
+} VirtualizationCapabilities;
 
 // Basic device information
 typedef struct {
@@ -87,38 +82,26 @@ typedef struct {
     uint32_t pcieWidth;             // PCIe width (lanes)
 } DeviceBasicInfo;
 
-// Device properties
+// Device property key-value pair
 typedef struct {
-    uint32_t clockGraphics;         // Graphics clock (MHz)
-    uint32_t clockSM;                // SM clock (MHz) - for NVIDIA
-    uint32_t clockMem;               // Memory clock (MHz)
-    uint32_t clockAI;                // AI core clock (MHz) - for Ascend
-    uint32_t powerLimit;             // Power limit (W)
-    uint32_t temperatureThreshold;  // Temperature threshold (C)
-    bool eccEnabled;                 // ECC enabled
-    bool persistenceModeEnabled;    // Persistence mode
-    char computeCapability[16];      // Compute capability (e.g., "8.0", "9.0" for NVIDIA, "Ascend310" for Ascend)
-    char chipType[32];               // Chip type (e.g., "NVIDIA", "Ascend", "AMD")
+    char key[64];                   // Property key
+    char value[256];                // Property value
+} DevicePropertyKV;
+
+// Maximum number of device properties
+#define MAX_DEVICE_PROPERTIES 64
+
+// Device properties (key-value pairs)
+typedef struct {
+    DevicePropertyKV properties[MAX_DEVICE_PROPERTIES];  // Array of property key-value pairs
+    size_t count;                   // Number of properties (0 to MAX_DEVICE_PROPERTIES)
 } DeviceProperties;
-
-// Related device information (for topology)
-typedef struct {
-    char deviceUUID[64];             // Related device UUID
-    char connectionType[32];         // Connection type (e.g., "NVLink", "PCIe", "IB")
-    uint32_t bandwidthMBps;          // Bandwidth in MB/s
-    uint32_t latencyNs;              // Latency in nanoseconds
-} RelatedDevice;
-
-// Maximum number of related devices per device
-#define MAX_RELATED_DEVICES 32
 
 // Extended device information
 typedef struct {
     DeviceBasicInfo basic;
     DeviceProperties props;
-    RelatedDevice relatedDevices[MAX_RELATED_DEVICES];  // Array of related devices
-    size_t relatedDeviceCount;       // Number of related devices (0 to MAX_RELATED_DEVICES)
-    DeviceCapabilities capabilities;
+    VirtualizationCapabilities virtualizationCapabilities;
 } ExtendedDeviceInfo;
 
 // Partition template for hardware partitioning (e.g., MIG)
@@ -134,23 +117,17 @@ typedef struct {
 } PartitionTemplate;
 
 // Device topology information
-#define MAX_CONNECTIONS_PER_DEVICE 32
-
 typedef struct {
     char deviceUUID[64];             // Device UUID
     int32_t numaNode;                // NUMA node
-    RelatedDevice connections[MAX_CONNECTIONS_PER_DEVICE];  // Array of connections
-    size_t connectionCount;          // Number of connections (0 to MAX_CONNECTIONS_PER_DEVICE)
 } DeviceTopology;
 
-// Extended topology (includes NVLink, IB NIC, etc.)
+// Extended topology
 #define MAX_TOPOLOGY_DEVICES 64
 
 typedef struct {
     DeviceTopology devices[MAX_TOPOLOGY_DEVICES];  // Array of device topologies
     size_t deviceCount;              // Number of devices (0 to MAX_TOPOLOGY_DEVICES)
-    uint32_t nvlinkBandwidthMBps;    // NVLink total bandwidth
-    uint32_t ibNicCount;             // InfiniBand NIC count
     char topologyType[32];           // Topology type (e.g., "NVLink", "PCIe")
 } ExtendedDeviceTopology;
 
@@ -172,7 +149,6 @@ typedef struct {
     pid_t processId;                 // Process ID
     uint64_t memoryLimitBytes;       // Memory limit (for hard isolation)
     uint32_t computeUnitLimit;       // Compute unit limit (for hard isolation)
-    IsolationMode isolationMode;     // Isolation mode
 } WorkerInfo;
 
 // Process array for snapshot/resume
@@ -204,7 +180,6 @@ typedef struct {
     double utilizationPercent;      // Utilization percentage (0-100)
     uint64_t activeSMs;              // Active SMs/Compute Units
     uint64_t totalSMs;               // Total SMs/Compute Units
-    double tflopsUsed;               // TFLOPS currently used
 } ComputeUtilization;
 
 // Memory utilization
@@ -223,28 +198,12 @@ typedef struct {
     double temperatureCelsius;        // Temperature (C)
     uint64_t pcieRxBytes;             // PCIe RX bytes
     uint64_t pcieTxBytes;             // PCIe TX bytes
-    uint32_t smActivePercent;        // SM active percentage
-    uint32_t tensorCoreUsagePercent; // Tensor Core usage percentage
+    uint32_t utilizationPercent;      // Utilization percentage (0-100)
     uint64_t memoryUsedBytes;         // Memory used
-    uint64_t memoryTotalBytes;        // Memory total
     ExtraMetric extraMetrics[MAX_EXTRA_METRICS];  // Array of extra metrics
     size_t extraMetricsCount;         // Number of extra metrics (0 to MAX_EXTRA_METRICS)
 } DeviceMetrics;
 
-// Extended device metrics (NVLink, etc.)
-#define MAX_NVLINK_PER_DEVICE 18
-#define MAX_IB_NIC_PER_DEVICE 8
-#define MAX_PCIE_PER_DEVICE 4
-
-typedef struct {
-    char deviceUUID[64];             // Device UUID
-    uint32_t nvlinkBandwidthMBps[MAX_NVLINK_PER_DEVICE];   // NVLink bandwidth per link (MB/s)
-    size_t nvlinkCount;              // Number of NVLink connections (0 to MAX_NVLINK_PER_DEVICE)
-    uint64_t ibNicBandwidthMBps[MAX_IB_NIC_PER_DEVICE];    // IB NIC bandwidth per NIC (MB/s)
-    size_t ibNicCount;               // Number of IB NICs (0 to MAX_IB_NIC_PER_DEVICE)
-    uint32_t pcieBandwidthMBps[MAX_PCIE_PER_DEVICE];     // PCIe bandwidth per link (MB/s)
-    size_t pcieLinkCount;            // Number of PCIe links (0 to MAX_PCIE_PER_DEVICE)
-} ExtendedDeviceMetrics;
 
 // Device UUID array entry (for passing multiple UUIDs)
 #define MAX_DEVICE_UUIDS 64
@@ -408,22 +367,9 @@ Result GetDeviceMetrics(
     DeviceMetrics* metrics
 );
 
-/**
- * Get extended device metrics (NVLink bandwidth, etc.).
- * 
- * @param deviceUUIDs Array of device UUID entries
- * @param deviceCount Number of devices
- * @param metrics Output buffer for extended device metrics (allocated by caller, size >= deviceCount)
- * @return RESULT_SUCCESS on success, error code otherwise
- */
-Result GetExtendedDeviceMetrics(
-    const DeviceUUIDEntry* deviceUUIDs,
-    size_t deviceCount,
-    ExtendedDeviceMetrics* metrics
-);
 
 /**
- * Get vendor mount libs.
+ * Get vendor mount libs returns the mount paths for additional device driver or runtime libraries.
  * 
  * @param mounts Output buffer for vendor mount libs (allocated by caller)
  * @param maxCount Maximum number of mounts that can fit in the buffer

@@ -19,16 +19,16 @@ package api
 // DeviceInfo represents discovered GPU device information
 // +k8s:deepcopy-gen=true
 type DeviceInfo struct {
-	UUID             string
-	Vendor           string
-	Model            string
-	Index            int32
-	NUMANode         int32
-	TotalMemoryBytes uint64
-	MaxTflops        float64
-	Capabilities     DeviceCapabilities
-	Properties       map[string]string
-	Healthy          bool
+	UUID                       string
+	Vendor                     string
+	Model                      string
+	Index                      int32
+	NUMANode                   int32
+	TotalMemoryBytes           uint64
+	MaxTflops                  float64
+	VirtualizationCapabilities VirtualizationCapabilities
+	Properties                 map[string]string
+	Healthy                    bool
 
 	ParentUUID string
 
@@ -55,9 +55,9 @@ type NodeInfo struct {
 	// CXL available or not, PCIe generation etc.
 }
 
-// DeviceCapabilities represents device capabilities
+// VirtualizationCapabilities represents virtualization capabilities
 // +k8s:deepcopy-gen=true
-type DeviceCapabilities struct {
+type VirtualizationCapabilities struct {
 	SupportsPartitioning  bool
 	SupportsSoftIsolation bool
 	SupportsHardIsolation bool
