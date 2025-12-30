@@ -14,6 +14,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"gopkg.in/natefinch/lumberjack.v2"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -29,6 +30,10 @@ var nodeMetricsMap = make(map[string]*NodeResourceMetrics, 100)
 // Pool level metrics, include pool allocation/costs status
 var poolMetricsLock sync.RWMutex
 var poolMetricsMap = make(map[string]*PoolResourceMetrics, 4)
+
+// GPU allocation metrics, key is podName (one record per pod, aggregated from all GPUs)
+var gpuAllocationMetricsLock sync.RWMutex
+var gpuAllocationMetricsMap = make(map[string]*GPUAllocationMetrics, 200)
 
 var settingLock sync.RWMutex
 
@@ -236,6 +241,90 @@ func RemovePoolMetrics(poolName string) {
 	delete(poolMetricsMap, poolName)
 }
 
+func RemoveGPUAllocationMetrics(podName string) {
+	gpuAllocationMetricsLock.Lock()
+	defer gpuAllocationMetricsLock.Unlock()
+	delete(gpuAllocationMetricsMap, podName)
+}
+
+// SetGPUAllocationMetrics sets aggregated GPU allocation metrics for a pod
+func SetGPUAllocationMetrics(gpuStore map[types.NamespacedName]*tfv1.GPU, pod *corev1.Pod) {
+	gpuAllocationMetricsLock.Lock()
+	defer gpuAllocationMetricsLock.Unlock()
+	// Get GPU device IDs from pod annotations
+	gpuDeviceIDs, exists := pod.Annotations[constants.GPUDeviceIDsAnnotation]
+	if !exists || gpuDeviceIDs == "" {
+		return
+	}
+
+	gpuIDList := strings.Split(gpuDeviceIDs, ",")
+
+	// Collect information from all GPUs
+	var allGPUModelIndices []string
+
+	for _, gpuID := range gpuIDList {
+		gpuID = strings.TrimSpace(gpuID)
+		if gpuID == "" {
+			continue
+		}
+		key := types.NamespacedName{Name: gpuID}
+		gpu, exists := gpuStore[key]
+		if !exists || gpu == nil {
+			log.V(5).Info("GPU not found in store for GPU allocation metrics", "gpuID", gpuID, "pod", pod.Name)
+			continue
+		}
+
+		// Get GPU model
+		var gpuModel string
+		if gpu.Status.GPUModel != "" {
+			gpuModel = gpu.Status.GPUModel
+		} else if gpu.Status.Model != "" {
+			gpuModel = gpu.Status.Model
+		}
+
+		// Get GPU index
+		var gpuIndex int32
+		if gpu.Status.Index != nil {
+			gpuIndex = *gpu.Status.Index
+		}
+
+		// Build GPU model with index: "Model:Index"
+		var gpuModelIndex string
+		if gpuModel != "" {
+			if gpuIndex >= 0 {
+				gpuModelIndex = gpuModel + ":" + strconv.Itoa(int(gpuIndex))
+			} else {
+				gpuModelIndex = gpuModel
+			}
+		} else if gpuIndex >= 0 {
+			gpuModelIndex = ":" + strconv.Itoa(int(gpuIndex))
+		}
+
+		// Collect model:index
+		if gpuModelIndex != "" {
+			allGPUModelIndices = append(allGPUModelIndices, gpuModelIndex)
+		}
+	}
+
+	// Create aggregated metric (one record per pod)
+	gpuCount := len(allGPUModelIndices)
+	if gpuCount == 0 {
+		// If no valid GPU model indices, use the count of GPU IDs from annotation
+		gpuCount = len(gpuIDList)
+	}
+
+	gpuAllocationMetricsMap[pod.Name] = &GPUAllocationMetrics{
+		PodName:       pod.Name,
+		Namespace:     pod.Namespace,
+		PodUUID:       string(pod.UID),
+		NodeName:      pod.Spec.NodeName,
+		GPUModelIndex: strings.Join(allGPUModelIndices, ","),
+		GPUName:       gpuDeviceIDs,
+		GPUCount:      gpuCount,
+		Timestamp:     time.Now(),
+	}
+}
+
 func SetSchedulerMetrics(poolName string, isSuccess bool) {
 	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
 		TensorFusionSystemMetricsMap[poolName] = &TensorFusionSystemMetrics{
@@ -439,6 +528,21 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("gpu_count", int64(metrics.GPUCount))
 		enc.EndLine(now)
 	}
+
+	// GPU allocation metrics
+	gpuAllocationMetricsLock.RLock()
+	for _, metrics := range gpuAllocationMetricsMap {
+		enc.StartLine("tf_gpu_allocation")
+		enc.AddTag("pod", metrics.PodName)
+		enc.AddTag("namespace", metrics.Namespace)
+		enc.AddTag("pod_uuid", metrics.PodUUID)
+		enc.AddTag("node", metrics.NodeName)
+		enc.AddTag("gpu_model_index", metrics.GPUModelIndex)
+		enc.AddTag("gpu_name", metrics.GPUName)
+		enc.AddField("gpu_count", int64(metrics.GPUCount))
+		enc.EndLine(now)
+	}
+	gpuAllocationMetricsLock.RUnlock()
 
 	nodeMetricsLock.RUnlock()
 

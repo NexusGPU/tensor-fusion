@@ -218,4 +218,23 @@ func (nu HypervisorGPUUsageMetrics) TableName() string {
 	return "tf_gpu_usage"
 }
 
+// GPUAllocationMetrics records GPU allocation information for a pod (aggregated from all GPUs)
+type GPUAllocationMetrics struct {
+	PodName       string `json:"podName" gorm:"column:pod;index:,class:SKIPPING"`
+	Namespace     string `json:"namespace" gorm:"column:namespace;index:,class:INVERTED"`
+	PodUUID       string `json:"podUUID" gorm:"column:pod_uuid;index:,class:INVERTED"`
+	NodeName      string `json:"nodeName" gorm:"column:node"`
+	GPUModelIndex string `json:"gpuModelIndex" gorm:"column:gpu_model_index"`
+	GPUName       string `json:"gpuName" gorm:"column:gpu_name;index:,class:INVERTED"`
+	GPUCount      int    `json:"gpuCount" gorm:"column:gpu_count"`
+
+	// NOTE: make sure new fields will be migrated in SetupTable function
+
+	Timestamp time.Time `json:"ts" gorm:"column:ts;index:,class:TIME"`
+}
+
+func (gam GPUAllocationMetrics) TableName() string {
+	return "tf_gpu_allocation"
+}
+
 // NOTE: make sure new metrics will be migrated in SetupTable function
