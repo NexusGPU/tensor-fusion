@@ -82,7 +82,7 @@ func (a *APIClient) CreateOrUpdateGPU(
 
 	// Create or update GPU metadata
 	err := retry.OnError(wait.Backoff{
-		Steps:    7,
+		Steps:    3,
 		Duration: time.Second,
 		Factor:   1.0,
 		Jitter:   0.1,

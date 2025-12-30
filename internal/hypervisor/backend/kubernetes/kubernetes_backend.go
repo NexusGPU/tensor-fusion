@@ -304,5 +304,6 @@ func (b *KubeletBackend) mutateGPUResourceState(device *api.DeviceInfo, gpuNode 
 	if gpu.Status.Phase == "" {
 		gpu.Status.Phase = tfv1.TensorFusionGPUPhasePending
 	}
+	gpu.Status.Message = "managed"
 	return nil
 }

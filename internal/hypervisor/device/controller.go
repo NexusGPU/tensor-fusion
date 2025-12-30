@@ -312,6 +312,21 @@ func (m *Controller) RegisterDeviceUpdateHandler(handler framework.DeviceChangeH
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.deviceUpdateHandlers = append(m.deviceUpdateHandlers, handler)
+
+	// Notify the newly registered handler about existing devices without triggering a new discovery
+	// This ensures handlers get notified of devices that were discovered before they were registered
+	if len(m.devices) > 0 {
+		for _, device := range m.devices {
+			if handler.OnAdd != nil {
+				handler.OnAdd(device)
+			}
+		}
+		// Also notify about discovery completion if there are existing devices
+		if handler.OnDiscoveryComplete != nil {
+			nodeInfo := m.AggregateNodeInfo()
+			handler.OnDiscoveryComplete(nodeInfo)
+		}
+	}
 }
 
 func (m *Controller) GetAcceleratorVendor() string {

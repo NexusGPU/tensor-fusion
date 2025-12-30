@@ -41,21 +41,13 @@ const (
 	ResultErrorInternal          Result = 6
 )
 
-type IsolationMode int32
-
-const (
-	IsolationModeShared      IsolationMode = 0
-	IsolationModeSoft        IsolationMode = 1
-	IsolationModeHard        IsolationMode = 2
-	IsolationModePartitioned IsolationMode = 3
-)
-
-type DeviceCapabilities struct {
+type VirtualizationCapabilities struct {
 	SupportsPartitioning  bool
 	SupportsSoftIsolation bool
 	SupportsHardIsolation bool
 	SupportsSnapshot      bool
 	SupportsMetrics       bool
+	SupportsRemoting      bool
 	MaxPartitions         uint32
 	MaxWorkersPerDevice   uint32
 }
@@ -75,34 +67,22 @@ type DeviceBasicInfo struct {
 	PCIeWidth         uint32
 }
 
+type DevicePropertyKV struct {
+	Key   [64]byte
+	Value [256]byte
+}
+
+const MaxDeviceProperties = 64
+
 type DeviceProperties struct {
-	ClockGraphics          uint32
-	ClockSM                uint32
-	ClockMem               uint32
-	ClockAI                uint32
-	PowerLimit             uint32
-	TemperatureThreshold   uint32
-	ECCEnabled             bool
-	PersistenceModeEnabled bool
-	ComputeCapability      [16]byte
-	ChipType               [32]byte
+	Properties [MaxDeviceProperties]DevicePropertyKV
+	Count      uintptr
 }
-
-type RelatedDevice struct {
-	DeviceUUID     [64]byte
-	ConnectionType [32]byte
-	BandwidthMBps  uint32
-	LatencyNs      uint32
-}
-
-const MaxRelatedDevices = 32
 
 type ExtendedDeviceInfo struct {
-	Basic              DeviceBasicInfo
-	Props              DeviceProperties
-	RelatedDevices     [MaxRelatedDevices]RelatedDevice
-	RelatedDeviceCount uintptr
-	Capabilities       DeviceCapabilities
+	Basic        DeviceBasicInfo
+	Props        DeviceProperties
+	Capabilities VirtualizationCapabilities
 }
 
 type PartitionAssignment struct {
@@ -124,7 +104,6 @@ type ComputeUtilization struct {
 	UtilizationPercent float64
 	ActiveSMs          uint64
 	TotalSMs           uint64
-	TflopsUsed         float64
 }
 
 type MemoryUtilization struct {
@@ -136,50 +115,30 @@ type MemoryUtilization struct {
 }
 
 type DeviceMetrics struct {
-	DeviceUUID             [64]byte
-	PowerUsageWatts        float64
-	TemperatureCelsius     float64
-	PCIeRxBytes            uint64
-	PCIeTxBytes            uint64
-	SMActivePercent        uint32
-	TensorCoreUsagePercent uint32
-	MemoryUsedBytes        uint64
-	MemoryTotalBytes       uint64
-	ExtraMetrics           [MaxExtraMetrics]ExtraMetric
-	ExtraMetricsCount      uintptr
+	DeviceUUID         [64]byte
+	PowerUsageWatts    float64
+	TemperatureCelsius float64
+	PCIeRxBytes        uint64
+	PCIeTxBytes        uint64
+	UtilizationPercent uint32
+	MemoryUsedBytes    uint64
+	ExtraMetrics       [MaxExtraMetrics]ExtraMetric
+	ExtraMetricsCount  uintptr
 }
 
 const (
-	MaxNvlinkPerDevice      = 18
-	MaxIbNicPerDevice       = 8
-	MaxPciePerDevice        = 4
-	MaxConnectionsPerDevice = 32
-	MaxTopologyDevices      = 64
+	MaxTopologyDevices = 64
 )
 
 type DeviceTopology struct {
-	DeviceUUID      [64]byte
-	NUMANode        int32
-	Connections     [MaxConnectionsPerDevice]RelatedDevice
-	ConnectionCount uintptr
+	DeviceUUID [64]byte
+	NUMANode   int32
 }
 
 type ExtendedDeviceTopology struct {
-	Devices             [MaxTopologyDevices]DeviceTopology
-	DeviceCount         uintptr
-	NvlinkBandwidthMBps uint32
-	IbNicCount          uint32
-	TopologyType        [32]byte
-}
-
-type ExtendedDeviceMetrics struct {
-	DeviceUUID          [64]byte
-	NvlinkBandwidthMBps [MaxNvlinkPerDevice]uint32
-	NvlinkCount         uintptr
-	IbNicBandwidthMBps  [MaxIbNicPerDevice]uint64
-	IbNicCount          uintptr
-	PCIeBandwidthMBps   [MaxPciePerDevice]uint32
-	PCIeLinkCount       uintptr
+	Devices      [MaxTopologyDevices]DeviceTopology
+	DeviceCount  uintptr
+	TopologyType [32]byte
 }
 
 type DeviceUUIDEntry struct {
@@ -219,7 +178,6 @@ var (
 	getProcessComputeUtilization func(*ComputeUtilization, uintptr, *uintptr) Result
 	getProcessMemoryUtilization  func(*MemoryUtilization, uintptr, *uintptr) Result
 	getDeviceMetrics             func(*DeviceUUIDEntry, uintptr, *DeviceMetrics) Result
-	getExtendedDeviceMetrics     func(*DeviceUUIDEntry, uintptr, *ExtendedDeviceMetrics) Result
 	getVendorMountLibs           func(*Mount, uintptr, *uintptr) Result
 	// Utility APIs
 	registerLogCallback func(uintptr) Result
@@ -274,7 +232,6 @@ func (a *AcceleratorInterface) Load() error {
 	purego.RegisterLibFunc(&getProcessComputeUtilization, handle, "GetProcessComputeUtilization")
 	purego.RegisterLibFunc(&getProcessMemoryUtilization, handle, "GetProcessMemoryUtilization")
 	purego.RegisterLibFunc(&getDeviceMetrics, handle, "GetDeviceMetrics")
-	purego.RegisterLibFunc(&getExtendedDeviceMetrics, handle, "GetExtendedDeviceMetrics")
 	purego.RegisterLibFunc(&getVendorMountLibs, handle, "GetVendorMountLibs")
 
 	// Register log callback (optional - may not exist in stub libraries)
@@ -388,14 +345,11 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 	}
 
 	const maxStackDevices = 64
-	deviceCount := len(deviceUUIDs)
-	if deviceCount > maxStackDevices {
-		deviceCount = maxStackDevices
-	}
+	deviceCount := min(len(deviceUUIDs), maxStackDevices)
 
 	// Convert Go strings to DeviceUUIDEntry array
 	uuidEntries := make([]DeviceUUIDEntry, deviceCount)
-	for i := 0; i < deviceCount; i++ {
+	for i := range deviceCount {
 		uuidBytes := []byte(deviceUUIDs[i])
 		copy(uuidEntries[i].UUID[:], uuidBytes)
 		if len(uuidBytes) < len(uuidEntries[i].UUID) {
@@ -413,21 +367,17 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 
 	// Convert C metrics to Go metrics
 	metrics := make([]*api.GPUUsageMetrics, deviceCount)
-	for i := 0; i < deviceCount; i++ {
+	for i := range deviceCount {
 		cm := &cMetrics[i]
-		memoryTotal := uint64(cm.MemoryTotalBytes)
 		memoryUsed := uint64(cm.MemoryUsedBytes)
 		var memoryPercentage float64
-		if memoryTotal > 0 {
-			memoryPercentage = float64(memoryUsed) / float64(memoryTotal) * 100.0
-		}
+		// Memory percentage calculation would need total memory from device info
+		// For now, set to 0 if we don't have total memory
+		memoryPercentage = 0
 
 		// Convert extra metrics from C array to Go map
-		extraMetrics := make(map[string]float64, int(cm.ExtraMetricsCount)+1)
-		// Always include tensorCoreUsagePercent as it's a standard field
-		extraMetrics["tensorCoreUsagePercent"] = float64(cm.TensorCoreUsagePercent)
-
-		// Add other extra metrics from C array
+		extraMetrics := make(map[string]float64, int(cm.ExtraMetricsCount))
+		// Add extra metrics from C array
 		for j := 0; j < int(cm.ExtraMetricsCount); j++ {
 			em := &cm.ExtraMetrics[j]
 			key := byteArrayToString(em.Key[:])
@@ -440,10 +390,10 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 			DeviceUUID:        byteArrayToString(cm.DeviceUUID[:]),
 			MemoryBytes:       memoryUsed,
 			MemoryPercentage:  memoryPercentage,
-			ComputePercentage: float64(cm.SMActivePercent),
-			ComputeTflops:     0,                                // Not available in DeviceMetrics
-			Rx:                float64(cm.PCIeRxBytes) / 1024.0, // Convert bytes to KB
-			Tx:                float64(cm.PCIeTxBytes) / 1024.0, // Convert bytes to KB
+			ComputePercentage: float64(cm.UtilizationPercent),
+			ComputeTflops:     0,
+			Rx:                float64(cm.PCIeRxBytes),
+			Tx:                float64(cm.PCIeTxBytes),
 			Temperature:       float64(cm.TemperatureCelsius),
 			PowerUsage:        int64(cm.PowerUsageWatts),
 			ExtraMetrics:      extraMetrics,
@@ -469,12 +419,10 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 	// Allocate stack buffer (max 64 devices to avoid stack overflow)
 	const maxStackDevices = 64
 	var stackDevices [maxStackDevices]ExtendedDeviceInfo
-	maxDevices := int(cDeviceCount)
-	if maxDevices > maxStackDevices {
-		maxDevices = maxStackDevices
-	}
+	maxDevices := min(int(cDeviceCount), maxStackDevices)
 
 	var cCount uintptr
+	klog.Infof("Getting all devices, max devices count: %d", maxDevices)
 	result = getAllDevices(&stackDevices[0], uintptr(maxDevices), &cCount)
 	if result != ResultSuccess {
 		return nil, fmt.Errorf("failed to get all devices: %d", result)
@@ -488,6 +436,17 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 
 	for i := 0; i < int(cCount); i++ {
 		cInfo := &stackDevices[i]
+
+		// Convert DeviceProperties KV array to map
+		properties := make(map[string]string, int(cInfo.Props.Count))
+		for j := 0; j < int(cInfo.Props.Count) && j < MaxDeviceProperties; j++ {
+			key := byteArrayToString(cInfo.Props.Properties[j].Key[:])
+			value := byteArrayToString(cInfo.Props.Properties[j].Value[:])
+			if key != "" {
+				properties[key] = value
+			}
+		}
+
 		devices[i] = &api.DeviceInfo{
 			UUID:             byteArrayToString(cInfo.Basic.UUID[:]),
 			Vendor:           byteArrayToString(cInfo.Basic.Vendor[:]),
@@ -496,7 +455,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			NUMANode:         cInfo.Basic.NUMANode,
 			TotalMemoryBytes: uint64(cInfo.Basic.TotalMemoryBytes),
 			MaxTflops:        float64(cInfo.Basic.MaxTflops),
-			Capabilities: api.DeviceCapabilities{
+			VirtualizationCapabilities: api.VirtualizationCapabilities{
 				SupportsPartitioning:  bool(cInfo.Capabilities.SupportsPartitioning),
 				SupportsSoftIsolation: bool(cInfo.Capabilities.SupportsSoftIsolation),
 				SupportsHardIsolation: bool(cInfo.Capabilities.SupportsHardIsolation),
@@ -505,7 +464,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 				MaxPartitions:         uint32(cInfo.Capabilities.MaxPartitions),
 				MaxWorkersPerDevice:   uint32(cInfo.Capabilities.MaxWorkersPerDevice),
 			},
-			Properties: make(map[string]string, 0),
+			Properties: properties,
 		}
 	}
 
