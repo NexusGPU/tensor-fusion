@@ -70,6 +70,7 @@ func (m *Controller) discoverDevices() error {
 	defer m.mu.Unlock()
 
 	// Get all devices at once
+	klog.Infof("Start discovering devices using provider lib")
 	devices, err := m.accelerator.GetAllDevices()
 	if err != nil {
 		return fmt.Errorf("failed to get all devices: %w", err)
@@ -273,14 +274,17 @@ func (m *Controller) GetVendorMountLibs() ([]*api.Mount, error) {
 	return m.accelerator.GetVendorMountLibs()
 }
 
-func (m *Controller) SplitDevice(partitionTemplateID string, deviceUUID string) (*api.DeviceInfo, error) {
+func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) (*api.DeviceInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	existingDevice, exists := m.devices[deviceUUID]
-	newPartitionedDevice := *existingDevice
 	if !exists {
 		return nil, fmt.Errorf("device %s not found, can not partition", deviceUUID)
 	}
+	if existingDevice == nil {
+		return nil, fmt.Errorf("device %s is nil, can not partition", deviceUUID)
+	}
+	newPartitionedDevice := *existingDevice
 	partitionUUID, err := m.accelerator.AssignPartition(partitionTemplateID, deviceUUID)
 	if err != nil {
 		return nil, err

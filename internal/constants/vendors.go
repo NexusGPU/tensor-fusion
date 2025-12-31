@@ -83,6 +83,6 @@ func GetAcceleratorLibPath(vendor string) string {
 		return "libaccelerator_ascend.so"
 	default:
 		// Default to stub library for unknown vendors
-		return "libaccelerator_stub.so"
+		return "libaccelerator_example.so"
 	}
 }

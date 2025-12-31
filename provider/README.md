@@ -18,8 +18,8 @@ provider/
 ├── accelerator.h          # Main interface definition
 ├── limiter.h             # Limiter.so API (not vendor-implemented)
 ├── Makefile              # Build scripts
-├── stub/
-│   └── accelerator.c     # Stub implementation for testing
+├── example/
+│   └── accelerator.c     # Example implementation for testing
 ├── ascend/
 │   └── accelerator.c     # Huawei Ascend implementation
 └── test/
@@ -28,11 +28,11 @@ provider/
 
 ## Building
 
-### Build Stub Implementation
+### Build Example Implementation
 
 ```bash
 cd provider
-make stub
+make example
 ```
 
 ### Build Ascend Implementation
@@ -80,9 +80,9 @@ make test-run
 
 ## Vendor Implementations
 
-### Stub Implementation
+### Example Implementation
 
-The stub implementation (`stub/accelerator.c`) provides a reference implementation for testing and development.
+The stub implementation (`example/accelerator.c`) provides a reference implementation for testing and development.
 
 ### Ascend Implementation
 

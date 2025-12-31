@@ -31,7 +31,7 @@ import (
 var (
 	acceleratorVendor  = flag.String("vendor", "NVIDIA", "Accelerator vendor: NVIDIA, AMD, Intel, etc.")
 	acceleratorLibPath = flag.String("accelerator-lib",
-		"./provider/build/libaccelerator_stub.so", "Path to accelerator library")
+		"./provider/build/libaccelerator_example.so", "Path to accelerator library")
 	isolationMode = flag.String("isolation-mode", "shared",
 		"Isolation mode: shared, soft, hard, partitioned")
 	backendType       = flag.String("backend-type", "kubernetes", "Backend type: kubernetes, simple")

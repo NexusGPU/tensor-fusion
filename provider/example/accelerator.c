@@ -19,6 +19,7 @@
 #define _DEFAULT_SOURCE
 
 #include "../accelerator.h"
+#include "device_mock/driver_mock.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -32,7 +33,7 @@
 // Global Variables for Limiter Thread
 // ============================================================================
 
-static const char* g_processId = "stub-process-0";
+static const char* g_processId = "example-process-0";
 static _Atomic uint64_t g_lastComputeCallTimeMs = 0; // Last call time in milliseconds
 static pthread_t g_limiterThread;
 static volatile int g_threadRunning = 0;
@@ -117,47 +118,47 @@ static void cleanupLimiterThread(void) {
 }
 
 // ============================================================================
-// Stub Implementation - Limiter APIs
+// Example Implementation - Limiter APIs
 // ============================================================================
 
 Result AddWorkerProcess(const char* deviceUUID, const char* processId) {
-    (void)deviceUUID;  // Unused in stub
-    (void)processId;   // Unused in stub
+    (void)deviceUUID;  
+    (void)processId;   
     return RESULT_SUCCESS;
 }
 
 Result CheckAndRecordMemoryOps(const char* processId, const char* deviceUUID, int64_t bytesDiff, MemoryOpRecord* record) {
-    (void)processId;   // Unused in stub
-    (void)deviceUUID;  // Unused in stub
-    (void)bytesDiff;   // Unused in stub
+    (void)processId;   
+    (void)deviceUUID;  
+    (void)bytesDiff;   
     
     if (!record) {
         return RESULT_ERROR_INVALID_PARAM;
     }
     
-    // Stub: always allow, set available bytes to a large value
+    // Example: always allow, set available bytes to a large value
     record->shouldBlock = false;
     record->availableBytes = 16ULL * 1024 * 1024 * 1024; // 16GB
     return RESULT_SUCCESS;
 }
 
 Result CheckAndRecordComputeOps(const char* processId, const char* deviceUUID, uint64_t computeTokens, ComputeOpRecord* record) {
-    (void)processId;      // Unused in stub
-    (void)deviceUUID;     // Unused in stub
-    (void)computeTokens;  // Unused in stub
+    (void)processId;      
+    (void)deviceUUID;     
+    (void)computeTokens;  
     
     if (!record) {
         return RESULT_ERROR_INVALID_PARAM;
     }
     
-    // Stub: always allow, set available tokens to a large value
+    // Example: always allow, set available tokens to a large value
     record->shouldBlock = false;
     record->availableTokens = 1000000; // Large token pool
     return RESULT_SUCCESS;
 }
 
 Result FreezeWorker(const char* workerId, WorkerFreezeState* state) {
-    (void)workerId;  // Unused in stub
+    (void)workerId;  
     if (!state) {
         return RESULT_ERROR_INVALID_PARAM;
     }
@@ -167,7 +168,7 @@ Result FreezeWorker(const char* workerId, WorkerFreezeState* state) {
 }
 
 Result ResumeWorker(const char* workerId, WorkerFreezeState* state) {
-    (void)workerId;  // Unused in stub
+    (void)workerId;  
     if (!state) {
         return RESULT_ERROR_INVALID_PARAM;
     }
@@ -177,29 +178,34 @@ Result ResumeWorker(const char* workerId, WorkerFreezeState* state) {
 }
 
 Result AutoFreeze(const char* workerId, const char* deviceUUID, const char* resourceType) {
-    (void)workerId;      // Unused in stub
-    (void)deviceUUID;   // Unused in stub
-    (void)resourceType; // Unused in stub
+    (void)workerId;      
+    (void)deviceUUID;   
+    (void)resourceType; 
     return RESULT_SUCCESS;
 }
 
 Result AutoResume(const char* workerId, const char* deviceUUID, const char* resourceType) {
-    (void)workerId;      // Unused in stub
-    (void)deviceUUID;   // Unused in stub
-    (void)resourceType; // Unused in stub
+    (void)workerId;      
+    (void)deviceUUID;   
+    (void)resourceType; 
     return RESULT_SUCCESS;
 }
 
 // ============================================================================
-// Stub Implementation - DeviceInfo APIs
+// Example Implementation - DeviceInfo APIs
 // ============================================================================
+
+Result VirtualGPUInit(void) {
+    logMessage("INFO", "VirtualGPUInit called from provider example");
+    return RESULT_SUCCESS;
+}
 
 Result GetDeviceCount(size_t* deviceCount) {
     if (!deviceCount) {
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Stub: return 4 devices
+    // Example: return 4 devices
     *deviceCount = 4;
     return RESULT_SUCCESS;
 }
@@ -207,16 +213,16 @@ Result GetDeviceCount(size_t* deviceCount) {
 // Helper function to initialize a single device info
 static void initDeviceInfo(ExtendedDeviceInfo* info, int32_t deviceIndex) {
     // Initialize basic info
-    snprintf(info->basic.uuid, sizeof(info->basic.uuid), "stub-device-%d", deviceIndex);
+    snprintf(info->basic.uuid, sizeof(info->basic.uuid), "example-device-%d", deviceIndex);
     snprintf(info->basic.vendor, sizeof(info->basic.vendor), "STUB");
-    snprintf(info->basic.model, sizeof(info->basic.model), "Stub-GPU-Model");
-    snprintf(info->basic.driverVersion, sizeof(info->basic.driverVersion), "1.0.0-stub");
-    snprintf(info->basic.firmwareVersion, sizeof(info->basic.firmwareVersion), "1.0.0-stub");
+    snprintf(info->basic.model, sizeof(info->basic.model), "Example-GPU-Model");
+    snprintf(info->basic.driverVersion, sizeof(info->basic.driverVersion), "1.0.0-example");
+    snprintf(info->basic.firmwareVersion, sizeof(info->basic.firmwareVersion), "1.0.0-example");
     info->basic.index = deviceIndex;
-    info->basic.numaNode = deviceIndex % 2; // Stub: alternate NUMA nodes
+    info->basic.numaNode = deviceIndex % 2;
     info->basic.totalMemoryBytes = 16ULL * 1024 * 1024 * 1024; // 16GB
-    info->basic.totalComputeUnits = 108; // Stub: 108 SMs
-    info->basic.maxTflops = 312.0; // Stub: 312 TFLOPS
+    info->basic.totalComputeUnits = 108;
+    info->basic.maxTflops = 312.0;
     info->basic.pcieGen = 4;
     info->basic.pcieWidth = 16;
 
@@ -295,7 +301,7 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Stub: return 4 devices (but not more than maxCount)
+    // Example: return 4 devices (but not more than maxCount)
     size_t actualCount = 4;
     if (actualCount > maxCount) {
         actualCount = maxCount;
@@ -306,7 +312,7 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
     for (size_t i = 0; i < actualCount; i++) {
         initDeviceInfo(&devices[i], (int32_t)i);
     }
-    logMessage("INFO", "GetAllDevices called from provider stub");
+    logMessage("INFO", "GetAllDevices called from provider example");
     return RESULT_SUCCESS;
 }
 
@@ -315,7 +321,7 @@ Result GetPartitionTemplates(int32_t deviceIndex __attribute__((unused)), Partit
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Stub: return 3 example templates (but not more than maxCount)
+    // Example: return 3 example templates (but not more than maxCount)
     size_t actualCount = 3;
     if (actualCount > maxCount) {
         actualCount = maxCount;
@@ -353,7 +359,7 @@ Result GetPartitionTemplates(int32_t deviceIndex __attribute__((unused)), Partit
         PartitionTemplate* t3 = &templates[2];
         snprintf(t3->templateId, sizeof(t3->templateId), "mig-3g.21gb");
         snprintf(t3->name, sizeof(t3->name), "3/7 GPU Slice");
-        t3->memoryBytes = 21ULL * 1024 * 1024 * 1024; // 21GB (stub, exceeds total)
+        t3->memoryBytes = 21ULL * 1024 * 1024 * 1024; // 21GB (example, exceeds total)
         t3->computeUnits = 42; // 3/7 of 108 SMs
         t3->tflops = 312.0 * 3.0 / 7.0; // ~133.7 TFLOPS
         t3->sliceCount = 3;
@@ -361,7 +367,7 @@ Result GetPartitionTemplates(int32_t deviceIndex __attribute__((unused)), Partit
         snprintf(t3->description, sizeof(t3->description), "3/7 GPU slice with 21GB memory");
     }
 
-    logMessage("INFO", "GetPartitionTemplates called from provider stub");
+    logMessage("INFO", "GetPartitionTemplates called from provider example");
 
     return RESULT_SUCCESS;
 }
@@ -379,19 +385,19 @@ Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, Extended
     // Initialize each device topology
     for (size_t i = 0; i < deviceCount; i++) {
         DeviceTopology* dt = &topology->devices[i];
-        snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "stub-device-%d", deviceIndexArray[i]);
+        snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "example-device-%d", deviceIndexArray[i]);
         dt->numaNode = deviceIndexArray[i] % 2;
     }
 
     // Set extended topology info
     snprintf(topology->topologyType, sizeof(topology->topologyType), "NVLink");
 
-    logMessage("INFO", "GetDeviceTopology called from provider stub");
+    logMessage("INFO", "GetDeviceTopology called from provider example");
     return RESULT_SUCCESS;
 }
 
 // ============================================================================
-// Stub Implementation - Virtualization APIs - Partitioned Isolation
+// Example Implementation - Virtualization APIs - Partitioned Isolation
 // ============================================================================
 
 bool AssignPartition(PartitionAssignment* assignment) {
@@ -399,13 +405,13 @@ bool AssignPartition(PartitionAssignment* assignment) {
         return false;
     }
 
-    // Stub: generate a partition UUID
+    // Example: generate a partition UUID
     // Limit string lengths to ensure output fits in 64-byte buffer:
     // "partition-" (9) + templateId (26) + "-" (1) + deviceUUID (26) + null (1) = 63 bytes
     snprintf(assignment->partitionUUID, sizeof(assignment->partitionUUID),
              "partition-%.26s-%.26s", assignment->templateId, assignment->deviceUUID);
 
-    logMessage("INFO", "AssignPartition called from provider stub");
+    logMessage("INFO", "AssignPartition called from provider example");
     return true;
 }
 
@@ -414,13 +420,13 @@ bool RemovePartition(const char* templateId, const char* deviceUUID) {
         return false;
     }
 
-    // Stub: always succeed
-    logMessage("INFO", "RemovePartition called from provider stub");
+    // Example: always succeed
+    logMessage("INFO", "RemovePartition called from provider example");
     return true;
 }
 
 // ============================================================================
-// Stub Implementation - Virtualization APIs - Hard Isolation
+// Example Implementation - Virtualization APIs - Hard Isolation
 // ============================================================================
 
 Result SetMemHardLimit(const char* workerId, const char* deviceUUID, uint64_t memoryLimitBytes) {
@@ -428,8 +434,8 @@ Result SetMemHardLimit(const char* workerId, const char* deviceUUID, uint64_t me
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Stub: always succeed
-    logMessage("INFO", "SetMemHardLimit called from provider stub");
+    // Example: always succeed
+    logMessage("INFO", "SetMemHardLimit called from provider example");
     return RESULT_SUCCESS;
 }
 
@@ -438,13 +444,13 @@ Result SetComputeUnitHardLimit(const char* workerId, const char* deviceUUID, uin
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Stub: always succeed
-    logMessage("INFO", "SetComputeUnitHardLimit called from provider stub");
+    // Example: always succeed
+    logMessage("INFO", "SetComputeUnitHardLimit called from provider example");
     return RESULT_SUCCESS;
 }
 
 // ============================================================================
-// Stub Implementation - Virtualization APIs - Device Snapshot/Migration
+// Example Implementation - Virtualization APIs - Device Snapshot/Migration
 // ============================================================================
 
 Result Snapshot(ProcessArray* processes) {
@@ -452,7 +458,7 @@ Result Snapshot(ProcessArray* processes) {
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Stub: verify processes exist (basic check)
+    // Example: verify processes exist (basic check)
     for (size_t i = 0; i < processes->processCount; i++) {
         if (kill(processes->processIds[i], 0) != 0) {
             // Process doesn't exist or no permission
@@ -460,8 +466,8 @@ Result Snapshot(ProcessArray* processes) {
         }
     }
 
-    // Stub: always succeed (no actual snapshot implementation)
-    logMessage("INFO", "Snapshot called from provider stub");
+    // Example: always succeed (no actual snapshot implementation)
+    logMessage("INFO", "Snapshot called from provider example");
     return RESULT_SUCCESS;
 }
 
@@ -470,13 +476,13 @@ Result Resume(ProcessArray* processes) {
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Stub: always succeed (no actual resume implementation)
-    logMessage("INFO", "Resume called from provider stub");
+    // Example: always succeed (no actual resume implementation)
+    logMessage("INFO", "Resume called from provider example");
     return RESULT_SUCCESS;
 }
 
 // ============================================================================
-// Stub Implementation - Metrics APIs
+// Example Implementation - Metrics APIs
 // ============================================================================
 
 Result GetProcessComputeUtilization(
@@ -488,11 +494,32 @@ Result GetProcessComputeUtilization(
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // TODO: Get actual device and process list from limiter
-    // For now, stub implementation returns empty
-    // The actual implementation should query limiter for all tracked processes
-    *utilizationCount = 0;
-    logMessage("INFO", "GetProcessComputeUtilization called from provider stub");
+    // Use driver_mock to get process utilization
+    ProcessUtilization mockUtils[256];
+    size_t mockCount = 0;
+    hipError_t err = hipGetProcessUtilization(mockUtils, 256, &mockCount);
+    if (err != hipSuccess) {
+        *utilizationCount = 0;
+        return RESULT_SUCCESS;  // Return empty if driver_mock not initialized
+    }
+
+    // Convert driver_mock ProcessUtilization to ComputeUtilization
+    size_t actualCount = mockCount;
+    if (actualCount > maxCount) {
+        actualCount = maxCount;
+    }
+
+    for (size_t i = 0; i < actualCount; i++) {
+        snprintf(utilizations[i].processId, sizeof(utilizations[i].processId), "%d", (int)mockUtils[i].processId);
+        strncpy(utilizations[i].deviceUUID, mockUtils[i].deviceUUID, sizeof(utilizations[i].deviceUUID) - 1);
+        utilizations[i].deviceUUID[sizeof(utilizations[i].deviceUUID) - 1] = '\0';
+        utilizations[i].utilizationPercent = mockUtils[i].utilizationPercent;
+        utilizations[i].activeSMs = 0;  // Not tracked in mock
+        utilizations[i].totalSMs = 108; // Example value
+    }
+
+    *utilizationCount = actualCount;
+    logMessage("INFO", "GetProcessComputeUtilization called from provider example");
     return RESULT_SUCCESS;
 }
 
@@ -505,16 +532,43 @@ Result GetProcessMemoryUtilization(
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // TODO: Get actual device and process list from limiter
-    // For now, stub implementation returns empty
-    // The actual implementation should query limiter for all tracked processes
-    *utilizationCount = 0;
-    logMessage("INFO", "GetProcessMemoryUtilization called from provider stub");
+    // Use driver_mock to get process VRAM usage
+    ProcessVRAMUsage mockUsages[256];
+    size_t mockCount = 0;
+    hipError_t err = hipGetProcessVRAMUsage(mockUsages, 256, &mockCount);
+    if (err != hipSuccess) {
+        *utilizationCount = 0;
+        return RESULT_SUCCESS;  // Return empty if driver_mock not initialized
+    }
+
+    // Convert driver_mock ProcessVRAMUsage to MemoryUtilization
+    size_t actualCount = mockCount;
+    if (actualCount > maxCount) {
+        actualCount = maxCount;
+    }
+
+    for (size_t i = 0; i < actualCount; i++) {
+        snprintf(utilizations[i].processId, sizeof(utilizations[i].processId), "%d", (int)mockUsages[i].processId);
+        strncpy(utilizations[i].deviceUUID, mockUsages[i].deviceUUID, sizeof(utilizations[i].deviceUUID) - 1);
+        utilizations[i].deviceUUID[sizeof(utilizations[i].deviceUUID) - 1] = '\0';
+        utilizations[i].usedBytes = mockUsages[i].usedBytes;
+        utilizations[i].reservedBytes = mockUsages[i].reservedBytes;
+        // Calculate utilization percentage (assuming 16GB total per device)
+        uint64_t totalBytes = 16ULL * 1024 * 1024 * 1024;
+        if (totalBytes > 0) {
+            utilizations[i].utilizationPercent = ((double)mockUsages[i].usedBytes / (double)totalBytes) * 100.0;
+        } else {
+            utilizations[i].utilizationPercent = 0.0;
+        }
+    }
+
+    *utilizationCount = actualCount;
+    logMessage("INFO", "GetProcessMemoryUtilization called from provider example");
     return RESULT_SUCCESS;
 }
 
 Result GetDeviceMetrics(
-    const DeviceUUIDEntry* deviceUUIDs,
+    const char** deviceUUIDs,
     size_t deviceCount,
     DeviceMetrics* metrics
 ) {
@@ -522,19 +576,37 @@ Result GetDeviceMetrics(
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Fill stub data
+    // Try to get real metrics from driver_mock for first device
+    DeviceUtilization deviceUtil;
+    DeviceVRAMUsage deviceVRAM;
+    hipError_t errUtil = hipGetDeviceUtilization(&deviceUtil);
+    hipError_t errVRAM = hipGetDeviceVRAMUsage(&deviceVRAM);
+    bool hasMockData = (errUtil == hipSuccess && errVRAM == hipSuccess);
+
+    // Fill metrics for all requested devices
     for (size_t i = 0; i < deviceCount; i++) {
         DeviceMetrics* dm = &metrics[i];
-        // Copy UUID from DeviceUUIDEntry
-        strncpy(dm->deviceUUID, deviceUUIDs[i].uuid, sizeof(dm->deviceUUID) - 1);
-        dm->deviceUUID[sizeof(dm->deviceUUID) - 1] = '\0';
+        // Copy UUID from string pointer
+        if (deviceUUIDs[i] != NULL) {
+            strncpy(dm->deviceUUID, deviceUUIDs[i], sizeof(dm->deviceUUID) - 1);
+            dm->deviceUUID[sizeof(dm->deviceUUID) - 1] = '\0';
+        } else {
+            dm->deviceUUID[0] = '\0';
+        }
         
-        dm->powerUsageWatts = 200.0 + (i * 10.0); // Stub: 200-300W
-        dm->temperatureCelsius = 45.0 + (i * 5.0); // Stub: 45-50C
-        dm->pcieRxBytes = 1024ULL * 1024 * 1024 * (i + 1); // Stub: 1-4GB
-        dm->pcieTxBytes = 512ULL * 1024 * 1024 * (i + 1); // Stub: 0.5-2GB
-        dm->utilizationPercent = 50 + (i * 10); // Stub: 50-90%
-        dm->memoryUsedBytes = 8ULL * 1024 * 1024 * 1024; // Stub: 8GB
+        // Use mock data if available, otherwise use example data
+        if (hasMockData && deviceUUIDs[i] != NULL && strcmp(deviceUtil.deviceUUID, deviceUUIDs[i]) == 0) {
+            dm->utilizationPercent = (uint32_t)deviceUtil.utilizationPercent;
+            dm->memoryUsedBytes = deviceVRAM.usedBytes;
+        } else {
+            dm->utilizationPercent = 50 + (i * 10); // Example: 50-90%
+            dm->memoryUsedBytes = 8ULL * 1024 * 1024 * 1024; // Example: 8GB
+        }
+        
+        dm->powerUsageWatts = 200.0 + (i * 10.0); // Example: 200-300W
+        dm->temperatureCelsius = 45.0 + (i * 5.0); // Example: 45-50C
+        dm->pcieRxBytes = 1024ULL * 1024 * 1024 * (i + 1); // Example: 1-4GB
+        dm->pcieTxBytes = 512ULL * 1024 * 1024 * (i + 1); // Example: 0.5-2GB
 
         // Fill extra metrics (using fixed-size array)
         size_t extraCount = 0;
@@ -543,38 +615,38 @@ Result GetDeviceMetrics(
         // Add some example extra metrics
         if (extraCount < maxExtraMetrics) {
             snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "gpuUtilization");
-            dm->extraMetrics[extraCount].value = 75.0 + (i * 5.0); // Stub: 75-95%
+            dm->extraMetrics[extraCount].value = 75.0 + (i * 5.0); // Example: 75-95%
             extraCount++;
         }
 
         if (extraCount < maxExtraMetrics) {
             snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "memoryBandwidthMBps");
-            dm->extraMetrics[extraCount].value = 800.0 + (i * 50.0); // Stub: 800-1200 MB/s
+            dm->extraMetrics[extraCount].value = 800.0 + (i * 50.0); // Example: 800-1200 MB/s
             extraCount++;
         }
 
         if (extraCount < maxExtraMetrics) {
             snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "tensorCoreUsagePercent");
-            dm->extraMetrics[extraCount].value = 30.0 + (i * 5.0); // Stub: 30-50%
+            dm->extraMetrics[extraCount].value = 30.0 + (i * 5.0); // Example: 30-50%
             extraCount++;
         }
 
         if (extraCount < maxExtraMetrics) {
             snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "encoderUtilization");
-            dm->extraMetrics[extraCount].value = 10.0 + (i * 2.0); // Stub: 10-20%
+            dm->extraMetrics[extraCount].value = 10.0 + (i * 2.0); // Example: 10-20%
             extraCount++;
         }
 
         if (extraCount < maxExtraMetrics) {
             snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "decoderUtilization");
-            dm->extraMetrics[extraCount].value = 15.0 + (i * 3.0); // Stub: 15-30%
+            dm->extraMetrics[extraCount].value = 15.0 + (i * 3.0); // Example: 15-30%
             extraCount++;
         }
 
         dm->extraMetricsCount = extraCount;
     }
 
-    logMessage("INFO", "GetDeviceMetrics called from provider stub");
+    logMessage("INFO", "GetDeviceMetrics called from provider example");
     return RESULT_SUCCESS;
 }
 
@@ -584,7 +656,7 @@ Result GetVendorMountLibs(Mount* mounts, size_t maxCount, size_t* mountCount) {
         return RESULT_ERROR_INVALID_PARAM;
     }
     *mountCount = 0;
-    logMessage("INFO", "GetVendorMountLibs called from provider stub");
+    logMessage("INFO", "GetVendorMountLibs called from provider example");
     return RESULT_SUCCESS;
 }
 

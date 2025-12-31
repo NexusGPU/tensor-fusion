@@ -5,4 +5,4 @@ export GPU_NODE_NAME="ubuntu"
 make build-provider
 make build-hypervisor
 
-./bin/hypervisor -accelerator-lib ./provider/build/libaccelerator_stub.so -vendor Stub -isolation-mode shared
+./bin/hypervisor -accelerator-lib ./provider/build/libaccelerator_example.so -vendor Stub -isolation-mode shared
