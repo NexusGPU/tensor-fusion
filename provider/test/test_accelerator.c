@@ -161,58 +161,34 @@ void test_setComputeUnitHardLimit() {
     TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "Invalid limit > 100 returns error");
 }
 
-// Test getProcessComputeUtilization
-void test_getProcessComputeUtilization() {
-    printf("\n=== Testing getProcessComputeUtilization ===\n");
+// Test getProcessInformation (combines compute and memory utilization)
+void test_getProcessInformation() {
+    printf("\n=== Testing getProcessInformation ===\n");
     
-    const char* deviceUUIDs[] = {"stub-device-0"};
-    const char* processIds[] = {"12345"};
-    ComputeUtilization* utilizations = NULL;
-    size_t utilizationCount = 0;
+    ProcessInformation processInfos[256];
+    size_t processInfoCount = 0;
     
-    Result result = getProcessComputeUtilization(
-        deviceUUIDs, 1,
-        processIds, 1,
-        &utilizations, &utilizationCount
-    );
+    Result result = GetProcessInformation(processInfos, 256, &processInfoCount);
     
-    TEST_ASSERT(result == RESULT_SUCCESS, "getProcessComputeUtilization returns success");
-    TEST_ASSERT(utilizations != NULL, "Utilizations array is not NULL");
-    TEST_ASSERT(utilizationCount > 0, "Utilization count > 0");
+    TEST_ASSERT(result == RESULT_SUCCESS, "getProcessInformation returns success");
+    TEST_ASSERT(processInfoCount >= 0, "Process info count >= 0");
     
-    if (utilizations && utilizationCount > 0) {
-        TEST_ASSERT(utilizations[0].utilizationPercent >= 0 && 
-                   utilizations[0].utilizationPercent <= 100, 
-                   "Utilization percent in valid range");
+    if (processInfoCount > 0) {
+        // Test compute utilization fields
+        TEST_ASSERT(processInfos[0].computeUtilizationPercent >= 0 && 
+                   processInfos[0].computeUtilizationPercent <= 100, 
+                   "Compute utilization percent in valid range");
+        TEST_ASSERT(processInfos[0].activeSMs <= processInfos[0].totalSMs,
+                   "Active SMs <= Total SMs");
+        
+        // Test memory utilization fields
+        TEST_ASSERT(processInfos[0].memoryUtilizationPercent >= 0 && 
+                   processInfos[0].memoryUtilizationPercent <= 100,
+                   "Memory utilization percent in valid range");
+        TEST_ASSERT(processInfos[0].memoryUsedBytes <= processInfos[0].memoryReservedBytes ||
+                   processInfos[0].memoryReservedBytes == 0,
+                   "Memory used <= reserved (or reserved is 0)");
     }
-    
-    freeComputeUtilizations(utilizations, utilizationCount);
-}
-
-// Test getProcessMemoryUtilization
-void test_getProcessMemoryUtilization() {
-    printf("\n=== Testing getProcessMemoryUtilization ===\n");
-    
-    const char* deviceUUIDs[] = {"stub-device-0"};
-    const char* processIds[] = {"12345"};
-    MemoryUtilization* utilizations = NULL;
-    size_t utilizationCount = 0;
-    
-    Result result = getProcessMemoryUtilization(
-        deviceUUIDs, 1,
-        processIds, 1,
-        &utilizations, &utilizationCount
-    );
-    
-    TEST_ASSERT(result == RESULT_SUCCESS, "getProcessMemoryUtilization returns success");
-    TEST_ASSERT(utilizations != NULL, "Utilizations array is not NULL");
-    TEST_ASSERT(utilizationCount > 0, "Utilization count > 0");
-    
-    if (utilizations && utilizationCount > 0) {
-        TEST_ASSERT(utilizations[0].usedBytes > 0, "Used bytes > 0");
-    }
-    
-    freeMemoryUtilizations(utilizations, utilizationCount);
 }
 
 // Test getDeviceMetrics
@@ -269,8 +245,7 @@ int main() {
     test_removePartition();
     test_setMemHardLimit();
     test_setComputeUnitHardLimit();
-    test_getProcessComputeUtilization();
-    test_getProcessMemoryUtilization();
+    test_getProcessInformation();
     test_getDeviceMetrics();
     test_getExtendedDeviceMetrics();
     

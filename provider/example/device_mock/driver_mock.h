@@ -26,7 +26,10 @@
 extern "C" {
 #endif
 
-// HIP-like API types
+// Mock HIP and AMD SMI APIs matching real API signatures
+// References: ROCm amdsmi.h and hip_runtime_api.h
+
+// HIP API types
 typedef int hipError_t;
 typedef int hipDevice_t;
 typedef void* hipDevicePtr_t;
@@ -58,7 +61,7 @@ typedef struct {
     size_t allocationCount;             // Number of active allocations
 } ProcessRecord;
 
-// Device-level metrics (internal to driver_mock, not to be confused with accelerator.h DeviceMetrics)
+// Device-level metrics (internal to driver_mock)
 typedef struct {
     char deviceUUID[64];
     double gpuUtilizationPercent;       // Total device GPU utilization (0-100)
@@ -77,12 +80,12 @@ typedef struct {
     pthread_mutex_t mutex;  // For synchronization
 } SharedMemoryHeader;
 
-// HIP-like API functions
+// HIP-like API functions (AMD style)
 hipError_t hipInit(unsigned int flags);
-hipError_t hipDeviceGetCount(int* count);
-hipError_t hipDeviceGet(hipDevice_t* device, int deviceId);
-hipError_t hipMalloc(hipDevicePtr_t* ptr, size_t size);
-hipError_t hipFree(hipDevicePtr_t ptr);
+hipError_t hipGetDeviceCount(int* count);
+hipError_t hipGetDevice(int* deviceId);
+hipError_t hipMalloc(void** ptr, size_t size);
+hipError_t hipFree(void* ptr);
 hipError_t hipLaunchKernel(const void* func, 
                           uint32_t gridDimX, uint32_t gridDimY, uint32_t gridDimZ,
                           uint32_t blockDimX, uint32_t blockDimY, uint32_t blockDimZ,
@@ -97,44 +100,114 @@ int driver_mock_unregister_process(pid_t pid);
 int driver_mock_update_memory(pid_t pid, int64_t bytesDiff);
 int driver_mock_record_kernel_launch(pid_t pid, uint32_t gridSize);
 
-// Metrics API functions (HIP-like)
-typedef struct {
-    pid_t processId;
-    char deviceUUID[64];
-    double utilizationPercent;  // GPU utilization (0-100)
-} ProcessUtilization;
+// AMD SMI API types (matching real API)
+#define AMDSMI_MAX_STRING_LENGTH 256
+
+typedef void* amdsmi_processor_handle;
+typedef int amdsmi_status_t;
+#define AMDSMI_STATUS_SUCCESS 0
+#define AMDSMI_STATUS_INVAL 1
+#define AMDSMI_STATUS_NOT_SUPPORTED 2
+#define AMDSMI_STATUS_OUT_OF_RESOURCES 15
+
+typedef uint32_t amdsmi_process_handle_t;
 
 typedef struct {
-    pid_t processId;
-    char deviceUUID[64];
-    uint64_t usedBytes;          // VRAM used in bytes
-    uint64_t reservedBytes;      // VRAM reserved in bytes (same as used for mock)
-} ProcessVRAMUsage;
+    uint32_t gfx_activity;  //!< In %
+    uint32_t umc_activity;  //!< In %
+    uint32_t mm_activity;   //!< In %
+    uint32_t reserved[13];
+} amdsmi_engine_usage_t;
 
 typedef struct {
-    char deviceUUID[64];
-    double utilizationPercent;   // Total GPU utilization (0-100)
-} DeviceUtilization;
+    char name[AMDSMI_MAX_STRING_LENGTH];
+    amdsmi_process_handle_t pid;
+    uint64_t mem;  //!< In Bytes
+    struct engine_usage_ {
+        uint64_t gfx;  //!< In nano-secs
+        uint64_t enc;  //!< In nano-secs
+        uint32_t reserved[12];
+    } engine_usage; //!< time the process spends using these engines in ns
+    struct memory_usage_ {
+        uint64_t gtt_mem;   //!< In Bytes
+        uint64_t cpu_mem;   //!< In Bytes
+        uint64_t vram_mem;  //!< In Bytes
+        uint32_t reserved[10];
+    } memory_usage;  //!< In Bytes
+    char container_name[AMDSMI_MAX_STRING_LENGTH];
+    uint32_t cu_occupancy;  //!< Num CUs utilized
+    uint32_t evicted_time;    //!< Time that queues are evicted on a GPU in milliseconds
+    uint32_t reserved[10];
+} amdsmi_proc_info_t;
 
 typedef struct {
-    char deviceUUID[64];
-    uint64_t totalBytes;         // Total VRAM capacity
-    uint64_t usedBytes;          // Total VRAM used
-    uint64_t freeBytes;          // Total VRAM free
-    double utilizationPercent;    // VRAM utilization (0-100)
-} DeviceVRAMUsage;
+    uint32_t vram_total;  //!< In MB
+    uint32_t vram_used;   //!< In MB
+    uint32_t reserved[2];
+} amdsmi_vram_usage_t;
 
-// Get process GPU utilization
-hipError_t hipGetProcessUtilization(ProcessUtilization* utilizations, size_t maxCount, size_t* count);
+typedef enum {
+    AMDSMI_TEMPERATURE_TYPE_EDGE = 0,
+    AMDSMI_TEMPERATURE_TYPE_FIRST = AMDSMI_TEMPERATURE_TYPE_EDGE,
+    AMDSMI_TEMPERATURE_TYPE_HOTSPOT,
+    AMDSMI_TEMPERATURE_TYPE_JUNCTION = AMDSMI_TEMPERATURE_TYPE_HOTSPOT,
+    AMDSMI_TEMPERATURE_TYPE_VRAM,
+    AMDSMI_TEMPERATURE_TYPE__MAX
+} amdsmi_temperature_type_t;
 
-// Get process VRAM usage
-hipError_t hipGetProcessVRAMUsage(ProcessVRAMUsage* usages, size_t maxCount, size_t* count);
+typedef enum {
+    AMDSMI_TEMP_CURRENT = 0x0,
+    AMDSMI_TEMP_FIRST = AMDSMI_TEMP_CURRENT,
+    AMDSMI_TEMP_MAX,
+    AMDSMI_TEMP_MIN,
+    AMDSMI_TEMP_LAST
+} amdsmi_temperature_metric_t;
 
-// Get device GPU utilization
-hipError_t hipGetDeviceUtilization(DeviceUtilization* utilization);
+typedef struct {
+    uint64_t socket_power;          //!< Socket power in W
+    uint32_t current_socket_power;  //!< Current socket power in W, Mi 300+ Series cards
+    uint32_t average_socket_power;  //!< Average socket power in W, Navi + Mi 200 and earlier Series cards
+    uint64_t gfx_voltage;           //!< GFX voltage measurement in mV
+    uint64_t soc_voltage;           //!< SOC voltage measurement in mV
+    uint64_t mem_voltage;           //!< MEM voltage measurement in mV
+    uint32_t power_limit;           //!< The power limit in W
+    uint64_t reserved[18];
+} amdsmi_power_info_t;
 
-// Get device VRAM usage
-hipError_t hipGetDeviceVRAMUsage(DeviceVRAMUsage* usage);
+amdsmi_status_t amdsmi_get_gpu_process_list(
+    amdsmi_processor_handle processor_handle,
+    uint32_t* max_processes,
+    amdsmi_proc_info_t* list
+);
+
+amdsmi_status_t amdsmi_get_gpu_activity(
+    amdsmi_processor_handle processor_handle,
+    amdsmi_engine_usage_t* info
+);
+
+amdsmi_status_t amdsmi_get_gpu_vram_usage(
+    amdsmi_processor_handle processor_handle,
+    amdsmi_vram_usage_t* info
+);
+
+amdsmi_status_t amdsmi_get_power_info(
+    amdsmi_processor_handle processor_handle,
+    amdsmi_power_info_t* info
+);
+
+amdsmi_status_t amdsmi_get_temp_metric(
+    amdsmi_processor_handle processor_handle,
+    amdsmi_temperature_type_t sensor_type,
+    amdsmi_temperature_metric_t metric,
+    int64_t* temperature
+);
+
+amdsmi_status_t amdsmi_get_gpu_pci_throughput(
+    amdsmi_processor_handle processor_handle,
+    uint64_t* sent,
+    uint64_t* received,
+    uint64_t* max_pkt_sz
+);
 
 #ifdef __cplusplus
 }

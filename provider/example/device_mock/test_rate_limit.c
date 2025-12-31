@@ -31,7 +31,7 @@ int main(void) {
         return 1;
     }
     
-    DeviceUtilization deviceUtil;
+    amdsmi_engine_usage_t gpuActivity;
     
     printf("Testing rate limiting:\n");
     printf("- Each kernel launch = 1%% GPU utilization\n");
@@ -71,15 +71,15 @@ int main(void) {
     printf("  Blocked launches: %d\n", blockedCount);
     printf("  Launches per second: %.2f\n", successCount / elapsed);
     
-    // Check device utilization
-    err = hipGetDeviceUtilization(&deviceUtil);
-    if (err == hipSuccess) {
-        printf("\nDevice GPU Utilization: %.2f%%\n", deviceUtil.utilizationPercent);
-        if (deviceUtil.utilizationPercent >= 100.0) {
+    // Check device utilization (AMD SMI API)
+    amdsmi_status_t status = amdsmi_get_gpu_activity(NULL, &gpuActivity);
+    if (status == AMDSMI_STATUS_SUCCESS) {
+        printf("\nDevice GPU Utilization (GFX): %u%%\n", gpuActivity.gfx_activity);
+        if (gpuActivity.gfx_activity >= 100) {
             printf("✓ Correctly reached 100%% utilization\n");
         } else {
-            printf("  Note: Utilization is %.2f%%, expected 100%% if rate limit was hit\n",
-                   deviceUtil.utilizationPercent);
+            printf("  Note: Utilization is %u%%, expected 100%% if rate limit was hit\n",
+                   gpuActivity.gfx_activity);
         }
     }
     
@@ -88,9 +88,9 @@ int main(void) {
     struct timespec delay = {1, 500000000};  // 1.5 seconds
     nanosleep(&delay, NULL);
     
-    err = hipGetDeviceUtilization(&deviceUtil);
-    if (err == hipSuccess) {
-        printf("Device GPU Utilization after reset: %.2f%%\n", deviceUtil.utilizationPercent);
+    status = amdsmi_get_gpu_activity(NULL, &gpuActivity);
+    if (status == AMDSMI_STATUS_SUCCESS) {
+        printf("Device GPU Utilization after reset (GFX): %u%%\n", gpuActivity.gfx_activity);
     }
     
     // Try launching again (should work now)

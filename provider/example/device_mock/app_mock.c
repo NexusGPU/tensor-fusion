@@ -61,7 +61,7 @@ int main(int argc, char* argv[]) {
     size_t memorySizeMB = 100;
     uint32_t kernelGridSize = 1024;
     double launchFrequencyHz = 10.0;
-    int durationSeconds = 60;
+    int durationSeconds = 120;
 
     // Parse command line arguments
     int opt;
@@ -100,113 +100,73 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    // Initialize HIP (this will register the process in shared memory)
-    printf("Calling hipInit()...\n");
     hipError_t err = hipInit(0);
     if (err != hipSuccess) {
-        fprintf(stderr, "Error: hipInit failed with code %d\n", err);
+        fprintf(stderr, "Error: hipInit failed (%d)\n", err);
         return 1;
     }
-    printf("hipInit() succeeded\n");
 
-    // Get device count
-    int deviceCount = 0;
-    err = hipDeviceGetCount(&deviceCount);
-    if (err != hipSuccess) {
-        fprintf(stderr, "Error: hipDeviceGetCount failed\n");
-        return 1;
-    }
-    printf("Found %d device(s)\n", deviceCount);
-
-    // Get device
-    hipDevice_t device = 0;
-    err = hipDeviceGet(&device, 0);
-    if (err != hipSuccess) {
-        fprintf(stderr, "Error: hipDeviceGet failed\n");
+    int deviceCount = 0, device = 0;
+    if ((err = hipGetDeviceCount(&deviceCount)) != hipSuccess ||
+        (err = hipGetDevice(&device)) != hipSuccess) {
+        fprintf(stderr, "Error: device query failed (%d)\n", err);
         return 1;
     }
     printf("Using device %d\n", device);
 
-    // Allocate memory
     size_t memorySizeBytes = memorySizeMB * 1024 * 1024;
-    printf("Allocating %zu bytes (%.2f MB)...\n", memorySizeBytes, (double)memorySizeMB);
-    err = hipMalloc(&g_devicePtr, memorySizeBytes);
-    if (err != hipSuccess) {
-        fprintf(stderr, "Error: hipMalloc failed with code %d\n", err);
+    if ((err = hipMalloc(&g_devicePtr, memorySizeBytes)) != hipSuccess) {
+        fprintf(stderr, "Error: hipMalloc failed (%d)\n", err);
         return 1;
     }
     g_allocatedSize = memorySizeBytes;
-    printf("Memory allocated successfully at %p\n", g_devicePtr);
+    printf("Allocated %zu MB at %p\n", memorySizeMB, g_devicePtr);
 
-    // Calculate sleep interval based on frequency
-    struct timespec sleepInterval;
+    struct timespec sleepInterval = {0};
     if (launchFrequencyHz > 0.0) {
-        double intervalSeconds = 1.0 / launchFrequencyHz;
-        sleepInterval.tv_sec = (time_t)intervalSeconds;
-        sleepInterval.tv_nsec = (long)((intervalSeconds - (double)sleepInterval.tv_sec) * 1e9);
+        double interval = 1.0 / launchFrequencyHz;
+        sleepInterval.tv_sec = (time_t)interval;
+        sleepInterval.tv_nsec = (long)((interval - sleepInterval.tv_sec) * 1e9);
     } else {
         sleepInterval.tv_sec = 1;
-        sleepInterval.tv_nsec = 0;
     }
 
-    // Launch kernels at specified frequency
-    printf("\nStarting kernel launches...\n");
-    printf("Press Ctrl+C to stop\n\n");
-
-    struct timespec startTime, currentTime;
+    printf("\nStarting kernel launches (Ctrl+C to stop)...\n\n");
+    struct timespec startTime;
     clock_gettime(CLOCK_MONOTONIC, &startTime);
     uint64_t launchCount = 0;
 
     while (g_running) {
-        // Check duration limit
         if (durationSeconds > 0) {
+            struct timespec currentTime;
             clock_gettime(CLOCK_MONOTONIC, &currentTime);
             double elapsed = (double)(currentTime.tv_sec - startTime.tv_sec) +
                            (double)(currentTime.tv_nsec - startTime.tv_nsec) / 1e9;
             if (elapsed >= durationSeconds) {
-                printf("\nDuration limit reached, stopping...\n");
+                printf("\nDuration limit reached\n");
                 break;
             }
         }
 
-        // Launch kernel
-        err = hipLaunchKernel((const void*)mock_kernel,
-                              kernelGridSize, 1, 1,  // gridDim
-                              256, 1, 1,            // blockDim
-                              0,                     // sharedMemBytes
-                              NULL,                  // stream
-                              NULL,                  // kernelParams
-                              NULL);                 // extra
-
-        if (err != hipSuccess) {
-            fprintf(stderr, "Error: hipLaunchKernel failed with code %d\n", err);
+        if ((err = hipLaunchKernel((const void*)mock_kernel, kernelGridSize, 1, 1,
+                                    256, 1, 1, 0, NULL, NULL, NULL)) != hipSuccess) {
+            fprintf(stderr, "Error: hipLaunchKernel failed (%d)\n", err);
             break;
         }
 
-        launchCount++;
-        if (launchCount % 100 == 0) {
+        if (++launchCount % 100 == 0) {
             printf("Launched %lu kernels...\n", launchCount);
         }
-
-        // Sleep for the calculated interval
         nanosleep(&sleepInterval, NULL);
     }
 
     printf("\n=== Summary ===\n");
-    printf("Total kernels launched: %lu\n", launchCount);
-    printf("Memory allocated: %zu bytes (%.2f MB)\n", g_allocatedSize, g_allocatedSize / (1024.0 * 1024.0));
+    printf("Kernels launched: %lu\n", launchCount);
+    printf("Memory allocated: %.2f MB\n", g_allocatedSize / (1024.0 * 1024.0));
 
-    // Cleanup: free memory
-    if (g_devicePtr) {
-        printf("Freeing memory...\n");
-        err = hipFree(g_devicePtr);
-        if (err != hipSuccess) {
-            fprintf(stderr, "Warning: hipFree failed with code %d\n", err);
-        }
-        g_devicePtr = NULL;
+    if (g_devicePtr && hipFree(g_devicePtr) != hipSuccess) {
+        fprintf(stderr, "Warning: hipFree failed\n");
     }
-
-    printf("App mock completed successfully\n");
     return 0;
 }
 

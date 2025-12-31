@@ -19,6 +19,7 @@
 #include "driver_mock.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <time.h>
 
@@ -65,69 +66,69 @@ int main(void) {
     }
     printf("✓ Launched 50 kernels\n");
     
-    // Test Process VRAM Usage
-    printf("\n--- Process VRAM Usage ---\n");
-    ProcessVRAMUsage vramUsages[10];
-    size_t vramCount = 0;
-    err = hipGetProcessVRAMUsage(vramUsages, 10, &vramCount);
-    if (err == hipSuccess) {
-        printf("Found %zu process(es):\n", vramCount);
-        for (size_t i = 0; i < vramCount; i++) {
-            printf("  PID %d: %lu bytes (%.2f MB), Reserved: %lu bytes\n",
-                   vramUsages[i].processId,
-                   vramUsages[i].usedBytes,
-                   vramUsages[i].usedBytes / (1024.0 * 1024.0),
-                   vramUsages[i].reservedBytes);
+    // Test Mock AMD SMI Process List (includes both VRAM and utilization info)
+    printf("\n--- Mock AMD SMI Process List ---\n");
+    amdsmi_proc_info_t procInfos[10];
+    uint32_t maxProcs = 10;
+    amdsmi_status_t status = amdsmi_get_gpu_process_list(0, &maxProcs, procInfos);
+    if (status == AMDSMI_STATUS_SUCCESS || status == AMDSMI_STATUS_OUT_OF_RESOURCES) {
+        printf("Found %u process(es):\n", maxProcs);
+        for (uint32_t i = 0; i < maxProcs && i < 10; i++) {
+            printf("  Process: %s (PID %d)\n", procInfos[i].name, (int)procInfos[i].pid);
+            printf("    Memory: VRAM=%lu bytes (%.2f MB), GTT=%lu bytes, CPU=%lu bytes\n",
+                   procInfos[i].memory_usage.vram_mem,
+                   procInfos[i].memory_usage.vram_mem / (1024.0 * 1024.0),
+                   procInfos[i].memory_usage.gtt_mem,
+                   procInfos[i].memory_usage.cpu_mem);
+            printf("    Engine Usage: GFX=%lu ns, ENC=%lu ns\n",
+                   procInfos[i].engine_usage.gfx,
+                   procInfos[i].engine_usage.enc);
+            printf("    CU Occupancy: %u CUs\n", procInfos[i].cu_occupancy);
+            if (procInfos[i].cu_occupancy > 0) {
+                double utilPercent = ((double)procInfos[i].cu_occupancy / 108.0) * 100.0;
+                printf("    Estimated GPU Utilization: %.2f%%\n", utilPercent);
+            }
         }
     } else {
-        printf("✗ hipGetProcessVRAMUsage failed\n");
+        printf("✗ amdsmi_get_gpu_process_list failed (status: %d)\n", status);
     }
     
-    // Test Process Utilization
-    printf("\n--- Process GPU Utilization ---\n");
-    ProcessUtilization utilizations[10];
-    size_t utilCount = 0;
-    err = hipGetProcessUtilization(utilizations, 10, &utilCount);
-    if (err == hipSuccess) {
-        printf("Found %zu process(es):\n", utilCount);
-        for (size_t i = 0; i < utilCount; i++) {
-            printf("  PID %d: %.2f%% GPU utilization\n",
-                   utilizations[i].processId,
-                   utilizations[i].utilizationPercent);
-        }
-    } else {
-        printf("✗ hipGetProcessUtilization failed\n");
-    }
-    
-    // Test Device VRAM Usage
-    printf("\n--- Device VRAM Usage ---\n");
-    DeviceVRAMUsage deviceVRAM;
-    err = hipGetDeviceVRAMUsage(&deviceVRAM);
-    if (err == hipSuccess) {
-        printf("Device: %s\n", deviceVRAM.deviceUUID);
-        printf("  Total: %lu bytes (%.2f GB)\n",
-               deviceVRAM.totalBytes,
-               deviceVRAM.totalBytes / (1024.0 * 1024.0 * 1024.0));
-        printf("  Used: %lu bytes (%.2f GB)\n",
-               deviceVRAM.usedBytes,
-               deviceVRAM.usedBytes / (1024.0 * 1024.0 * 1024.0));
+    // Test Device VRAM Usage (AMD SMI API)
+    printf("\n--- Device VRAM Usage (AMD SMI) ---\n");
+    amdsmi_vram_usage_t vramUsage;
+    amdsmi_status_t statusVRAM = amdsmi_get_gpu_vram_usage(NULL, &vramUsage);
+    if (statusVRAM == AMDSMI_STATUS_SUCCESS) {
+        // Note: Real API returns values in MB (uint32_t)
+        uint64_t totalBytes = (uint64_t)vramUsage.vram_total * 1024ULL * 1024ULL;
+        uint64_t usedBytes = (uint64_t)vramUsage.vram_used * 1024ULL * 1024ULL;
+        uint64_t freeBytes = totalBytes - usedBytes;
+        printf("  Total: %u MB (%.2f GB)\n",
+               vramUsage.vram_total,
+               totalBytes / (1024.0 * 1024.0 * 1024.0));
+        printf("  Used: %u MB (%.2f GB)\n",
+               vramUsage.vram_used,
+               usedBytes / (1024.0 * 1024.0 * 1024.0));
         printf("  Free: %lu bytes (%.2f GB)\n",
-               deviceVRAM.freeBytes,
-               deviceVRAM.freeBytes / (1024.0 * 1024.0 * 1024.0));
-        printf("  Utilization: %.2f%%\n", deviceVRAM.utilizationPercent);
+               freeBytes,
+               freeBytes / (1024.0 * 1024.0 * 1024.0));
+        if (vramUsage.vram_total > 0) {
+            double utilPercent = ((double)vramUsage.vram_used / (double)vramUsage.vram_total) * 100.0;
+            printf("  Utilization: %.2f%%\n", utilPercent);
+        }
     } else {
-        printf("✗ hipGetDeviceVRAMUsage failed\n");
+        printf("✗ amdsmi_get_gpu_vram_usage failed (status: %d)\n", status);
     }
     
-    // Test Device Utilization
-    printf("\n--- Device GPU Utilization ---\n");
-    DeviceUtilization deviceUtil;
-    err = hipGetDeviceUtilization(&deviceUtil);
-    if (err == hipSuccess) {
-        printf("Device: %s\n", deviceUtil.deviceUUID);
-        printf("  GPU Utilization: %.2f%%\n", deviceUtil.utilizationPercent);
+    // Test Device GPU Utilization (AMD SMI API)
+    printf("\n--- Device GPU Utilization (AMD SMI) ---\n");
+    amdsmi_engine_usage_t gpuActivity;
+    amdsmi_status_t statusActivity = amdsmi_get_gpu_activity(NULL, &gpuActivity);
+    if (statusActivity == AMDSMI_STATUS_SUCCESS) {
+        printf("  GFX Utilization: %u%%\n", gpuActivity.gfx_activity);
+        printf("  UMC Utilization: %u%%\n", gpuActivity.umc_activity);
+        printf("  MM Utilization: %u%%\n", gpuActivity.mm_activity);
     } else {
-        printf("✗ hipGetDeviceUtilization failed\n");
+        printf("✗ amdsmi_get_gpu_activity failed (status: %d)\n", statusActivity);
     }
     
     // Free memory
@@ -147,13 +148,18 @@ int main(void) {
     }
     
     // Check VRAM after free
-    printf("\n--- Device VRAM Usage After Free ---\n");
-    err = hipGetDeviceVRAMUsage(&deviceVRAM);
-    if (err == hipSuccess) {
-        printf("  Used: %lu bytes (%.2f MB)\n",
-               deviceVRAM.usedBytes,
-               deviceVRAM.usedBytes / (1024.0 * 1024.0));
-        printf("  Utilization: %.2f%%\n", deviceVRAM.utilizationPercent);
+    printf("\n--- Device VRAM Usage After Free (AMD SMI) ---\n");
+    statusVRAM = amdsmi_get_gpu_vram_usage(NULL, &vramUsage);
+    if (statusVRAM == AMDSMI_STATUS_SUCCESS) {
+        // Note: Real API returns values in MB (uint32_t)
+        uint64_t usedBytes = (uint64_t)vramUsage.vram_used * 1024ULL * 1024ULL;
+        printf("  Used: %u MB (%.2f MB)\n",
+               vramUsage.vram_used,
+               usedBytes / (1024.0 * 1024.0));
+        if (vramUsage.vram_total > 0) {
+            double utilPercent = ((double)vramUsage.vram_used / (double)vramUsage.vram_total) * 100.0;
+            printf("  Utilization: %.2f%%\n", utilPercent);
+        }
     }
     
     printf("\n=== Test Complete ===\n");

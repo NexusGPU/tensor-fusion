@@ -34,8 +34,7 @@ typedef bool (*AssignPartitionFunc)(PartitionAssignment*);
 typedef bool (*RemovePartitionFunc)(const char*, const char*);
 typedef Result (*SetMemHardLimitFunc)(const char*, const char*, uint64_t);
 typedef Result (*SetComputeUnitHardLimitFunc)(const char*, const char*, uint32_t);
-typedef Result (*GetProcessComputeUtilizationFunc)(ComputeUtilization*, size_t, size_t*);
-typedef Result (*GetProcessMemoryUtilizationFunc)(MemoryUtilization*, size_t, size_t*);
+typedef Result (*GetProcessInformationFunc)(ProcessInformation*, size_t, size_t*);
 typedef Result (*GetDeviceMetricsFunc)(const char**, size_t, DeviceMetrics*, size_t);
 typedef Result (*GetVendorMountLibsFunc)(Mount*, size_t, size_t*);
 typedef Result (*LogFunc)(const char*, const char*);
@@ -51,8 +50,7 @@ static AssignPartitionFunc assignPartitionFunc = NULL;
 static RemovePartitionFunc removePartitionFunc = NULL;
 static SetMemHardLimitFunc setMemHardLimitFunc = NULL;
 static SetComputeUnitHardLimitFunc setComputeUnitHardLimitFunc = NULL;
-static GetProcessComputeUtilizationFunc getProcessComputeUtilizationFunc = NULL;
-static GetProcessMemoryUtilizationFunc getProcessMemoryUtilizationFunc = NULL;
+static GetProcessInformationFunc getProcessInformationFunc = NULL;
 static GetDeviceMetricsFunc getDeviceMetricsFunc = NULL;
 static GetVendorMountLibsFunc getVendorMountLibsFunc = NULL;
 static LogFunc logFunc = NULL;
@@ -76,8 +74,7 @@ int loadAcceleratorLibrary(const char* libPath) {
     removePartitionFunc = (RemovePartitionFunc)dlsym(libHandle, "RemovePartition");
     setMemHardLimitFunc = (SetMemHardLimitFunc)dlsym(libHandle, "SetMemHardLimit");
     setComputeUnitHardLimitFunc = (SetComputeUnitHardLimitFunc)dlsym(libHandle, "SetComputeUnitHardLimit");
-    getProcessComputeUtilizationFunc = (GetProcessComputeUtilizationFunc)dlsym(libHandle, "GetProcessComputeUtilization");
-    getProcessMemoryUtilizationFunc = (GetProcessMemoryUtilizationFunc)dlsym(libHandle, "GetProcessMemoryUtilization");
+    getProcessInformationFunc = (GetProcessInformationFunc)dlsym(libHandle, "GetProcessInformation");
     getDeviceMetricsFunc = (GetDeviceMetricsFunc)dlsym(libHandle, "GetDeviceMetrics");
     getVendorMountLibsFunc = (GetVendorMountLibsFunc)dlsym(libHandle, "GetVendorMountLibs");
     logFunc = (LogFunc)dlsym(libHandle, "Log");
@@ -85,8 +82,8 @@ int loadAcceleratorLibrary(const char* libPath) {
     // Check if all required functions are loaded (Log is optional)
     if (!getDeviceCountFunc || !getAllDevicesFunc || !getPartitionTemplatesFunc ||
         !assignPartitionFunc || !removePartitionFunc || !setMemHardLimitFunc ||
-        !setComputeUnitHardLimitFunc || !getProcessComputeUtilizationFunc ||
-        !getProcessMemoryUtilizationFunc || !getDeviceMetricsFunc || !getVendorMountLibsFunc) {
+        !setComputeUnitHardLimitFunc || !getProcessInformationFunc ||
+        !getDeviceMetricsFunc || !getVendorMountLibsFunc) {
         dlclose(libHandle);
         libHandle = NULL;
         return -2; // Missing symbols
@@ -113,8 +110,7 @@ void unloadAcceleratorLibrary(void) {
         removePartitionFunc = NULL;
         setMemHardLimitFunc = NULL;
         setComputeUnitHardLimitFunc = NULL;
-        getProcessComputeUtilizationFunc = NULL;
-        getProcessMemoryUtilizationFunc = NULL;
+        getProcessInformationFunc = NULL;
         getDeviceMetricsFunc = NULL;
         getVendorMountLibsFunc = NULL;
         logFunc = NULL;
@@ -171,18 +167,11 @@ Result SetComputeUnitHardLimitWrapper(const char* workerId, const char* deviceUU
     return setComputeUnitHardLimitFunc(workerId, deviceUUID, computeUnitLimit);
 }
 
-Result GetProcessComputeUtilizationWrapper(ComputeUtilization* utilizations, size_t maxCount, size_t* utilizationCount) {
-    if (getProcessComputeUtilizationFunc == NULL) {
+Result GetProcessInformationWrapper(ProcessInformation* processInfos, size_t maxCount, size_t* processInfoCount) {
+    if (getProcessInformationFunc == NULL) {
         return RESULT_ERROR_INTERNAL;
     }
-    return getProcessComputeUtilizationFunc(utilizations, maxCount, utilizationCount);
-}
-
-Result GetProcessMemoryUtilizationWrapper(MemoryUtilization* utilizations, size_t maxCount, size_t* utilizationCount) {
-    if (getProcessMemoryUtilizationFunc == NULL) {
-        return RESULT_ERROR_INTERNAL;
-    }
-    return getProcessMemoryUtilizationFunc(utilizations, maxCount, utilizationCount);
+    return getProcessInformationFunc(processInfos, maxCount, processInfoCount);
 }
 
 Result GetDeviceMetricsWrapper(const char** deviceUUIDArray, size_t deviceCount, DeviceMetrics* metrics, size_t maxExtraMetricsPerDevice) {

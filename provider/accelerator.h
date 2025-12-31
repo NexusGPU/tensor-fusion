@@ -173,23 +173,20 @@ typedef struct {
 // Maximum number of extra metrics per device
 #define MAX_EXTRA_METRICS 64
 
-// Compute utilization
+// Process information (combines compute and memory utilization)
+// Based on AMD SMI amdsmi_proc_info_t structure
 typedef struct {
     char processId[32];              // Process ID as string
     char deviceUUID[64];             // Device UUID
-    double utilizationPercent;      // Utilization percentage (0-100)
+    // Compute utilization
+    double computeUtilizationPercent; // Compute utilization percentage (0-100)
     uint64_t activeSMs;              // Active SMs/Compute Units
     uint64_t totalSMs;               // Total SMs/Compute Units
-} ComputeUtilization;
-
-// Memory utilization
-typedef struct {
-    char processId[32];              // Process ID as string
-    char deviceUUID[64];             // Device UUID
-    uint64_t usedBytes;              // Memory used in bytes
-    uint64_t reservedBytes;          // Memory reserved in bytes
-    double utilizationPercent;      // Utilization percentage (0-100)
-} MemoryUtilization;
+    // Memory utilization
+    uint64_t memoryUsedBytes;        // Memory used in bytes
+    uint64_t memoryReservedBytes;    // Memory reserved in bytes
+    double memoryUtilizationPercent; // Memory utilization percentage (0-100)
+} ProcessInformation;
 
 // Basic device metrics
 typedef struct {
@@ -329,31 +326,19 @@ Result Resume(ProcessArray* processes);
 // ============================================================================
 
 /**
- * Get compute utilization for all processes on all devices.
+ * Get process information (compute and memory utilization) for all processes on all devices.
+ * This combines the functionality of GetProcessComputeUtilization and GetProcessMemoryUtilization
+ * into a single call, following AMD SMI style API design.
  * 
- * @param utilizations Output buffer for compute utilizations (allocated by caller)
- * @param maxCount Maximum number of utilizations that can fit in the buffer
- * @param utilizationCount Output parameter for number of utilizations actually returned
+ * @param processInfos Output buffer for process information (allocated by caller)
+ * @param maxCount Maximum number of process infos that can fit in the buffer
+ * @param processInfoCount Output parameter for number of process infos actually returned
  * @return RESULT_SUCCESS on success, error code otherwise
  */
-Result GetProcessComputeUtilization(
-    ComputeUtilization* utilizations,
+Result GetProcessInformation(
+    ProcessInformation* processInfos,
     size_t maxCount,
-    size_t* utilizationCount
-);
-
-/**
- * Get memory utilization for all processes on all devices.
- * 
- * @param utilizations Output buffer for memory utilizations (allocated by caller)
- * @param maxCount Maximum number of utilizations that can fit in the buffer
- * @param utilizationCount Output parameter for number of utilizations actually returned
- * @return RESULT_SUCCESS on success, error code otherwise
- */
-Result GetProcessMemoryUtilization(
-    MemoryUtilization* utilizations,
-    size_t maxCount,
-    size_t* utilizationCount
+    size_t* processInfoCount
 );
 
 /**

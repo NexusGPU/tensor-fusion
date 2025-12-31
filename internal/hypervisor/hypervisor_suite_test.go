@@ -169,22 +169,17 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				_ = accel.Close()
 			})
 
-			It("should get process utilization from stub library", func() {
+			It("should get process information from stub library", func() {
 				accel, err := device.NewAcceleratorInterface(stubLibPath)
 				Expect(err).NotTo(HaveOccurred())
 				defer func() {
 					_ = accel.Close()
 				}()
 
-				// Get compute utilization (may be empty for stub)
-				computeUtils, err := accel.GetProcessComputeUtilization()
+				// Get process information (combines compute and memory utilization)
+				processInfos, err := accel.GetProcessInformation()
 				Expect(err).NotTo(HaveOccurred())
-				Expect(computeUtils).NotTo(BeNil())
-
-				// Get memory utilization (may be empty for stub)
-				memUtils, err := accel.GetProcessMemoryUtilization()
-				Expect(err).NotTo(HaveOccurred())
-				Expect(memUtils).NotTo(BeNil())
+				Expect(processInfos).NotTo(BeNil())
 			})
 		})
 
@@ -767,35 +762,31 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 						return 0
 					}
 					defer accel.Close()
-					memUtils, err := accel.GetProcessMemoryUtilization()
+					processInfos, err := accel.GetProcessInformation()
 					if err != nil {
 						return 0
 					}
-					return len(memUtils)
+					return len(processInfos)
 				}, 5*time.Second).Should(BeNumerically(">=", 0))
 
-				// Get process compute utilization
+				// Get process information (combines compute and memory utilization)
 				accel, err := device.NewAcceleratorInterface(stubLibPath)
 				Expect(err).NotTo(HaveOccurred())
 				defer func() {
 					_ = accel.Close()
 				}()
 
-				computeUtils, err := accel.GetProcessComputeUtilization()
+				processInfos, err := accel.GetProcessInformation()
 				Expect(err).NotTo(HaveOccurred())
-				Expect(computeUtils).NotTo(BeNil())
+				Expect(processInfos).NotTo(BeNil())
 				// Should have at least some processes tracked
-				Expect(len(computeUtils)).To(BeNumerically(">=", 0))
+				Expect(len(processInfos)).To(BeNumerically(">=", 0))
 
-				// Get process memory utilization
-				memUtils, err := accel.GetProcessMemoryUtilization()
-				Expect(err).NotTo(HaveOccurred())
-				Expect(memUtils).NotTo(BeNil())
 				// Should track memory for the processes
-				if len(memUtils) > 0 {
+				if len(processInfos) > 0 {
 					totalMemory := uint64(0)
-					for _, mem := range memUtils {
-						totalMemory += mem.UsedBytes
+					for _, info := range processInfos {
+						totalMemory += info.MemoryUsedBytes
 					}
 					// Total should be around 450MB (100+200+150)
 					Expect(totalMemory).To(BeNumerically(">=", 400*1024*1024))
@@ -844,11 +835,11 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 						return 0
 					}
 					defer accel.Close()
-					memUtils, err := accel.GetProcessMemoryUtilization()
+					processInfos, err := accel.GetProcessInformation()
 					if err != nil {
 						return 0
 					}
-					return len(memUtils)
+					return len(processInfos)
 				}, 8*time.Second).Should(BeNumerically(">=", 0))
 
 				accel, err := device.NewAcceleratorInterface(stubLibPath)
@@ -857,21 +848,18 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					_ = accel.Close()
 				}()
 
-				// Get process metrics
-				computeUtils, err := accel.GetProcessComputeUtilization()
+				// Get process information (combines compute and memory metrics)
+				processInfos, err := accel.GetProcessInformation()
 				Expect(err).NotTo(HaveOccurred())
 				// Should track multiple processes (may be 0 if processes haven't launched kernels yet)
 				// Just verify the API works, don't enforce exact count
-				_ = computeUtils
+				_ = processInfos
 
-				memUtils, err := accel.GetProcessMemoryUtilization()
-				Expect(err).NotTo(HaveOccurred())
-				// Should track memory for multiple processes
 				// Verify API works - memory tracking should be present if processes allocated VRAM
-				if len(memUtils) > 0 {
+				if len(processInfos) > 0 {
 					totalMemory := uint64(0)
-					for _, mem := range memUtils {
-						totalMemory += mem.UsedBytes
+					for _, info := range processInfos {
+						totalMemory += info.MemoryUsedBytes
 					}
 					// Total should be significant (10 processes * ~100MB average)
 					// But allow for some variance
