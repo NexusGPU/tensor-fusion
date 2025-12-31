@@ -131,6 +131,32 @@
             },
             "program": "${workspaceFolder}/test/sched",
             "console": "integratedTerminal"
+        },
+        {
+            "name": "Debug Mock Device App",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/provider/build/app_mock",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/provider/build",
+            "environment": [
+                {
+                    "name": "LD_LIBRARY_PATH",
+                    "value": "${workspaceFolder}/provider/build:${env:LD_LIBRARY_PATH}"
+                }
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "preLaunchTask": "build-app-mock-debug",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
         }
     ]
 }

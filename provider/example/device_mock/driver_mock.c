@@ -38,9 +38,41 @@
 #define MOCK_DEVICE_TOTAL_VRAM_BYTES (16ULL * 1024 * 1024 * 1024)  // 16GB VRAM
 
 static SharedMemoryHeader* g_shm = NULL;
-#define DeviceMetrics MockDeviceMetrics  // Use MockDeviceMetrics internally
 static int g_shm_fd = -1;
 static int g_shm_initialized = 0;
+
+// Helper: Validate processor handle (mock accepts NULL or (void*)0)
+static inline int validate_processor_handle(amdsmi_processor_handle handle) {
+    return (handle == NULL || handle == (void*)0) ? 0 : -1;
+}
+
+// Helper: Ensure shared memory is initialized
+static inline int ensure_shm_init(void) {
+    return (!g_shm_initialized && driver_mock_init_shm() < 0) ? -1 : 0;
+}
+
+// Helper: Find process record by PID
+static ProcessRecord* find_process_record(pid_t pid) {
+    for (size_t i = 0; i < g_shm->processCount; i++) {
+        if (g_shm->processes[i].processId == pid) {
+            return &g_shm->processes[i];
+        }
+    }
+    return NULL;
+}
+
+// Helper: Get current time in milliseconds
+static inline uint64_t get_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+// Helper: Calculate scaled value (base + (max - base) * percent / 100)
+static inline double scale_value(double base, double max, double percent) {
+    if (percent > 100.0) percent = 100.0;
+    return base + (max - base) * percent / 100.0;
+}
 
 // Initialize shared memory
 int driver_mock_init_shm(void) {
@@ -116,57 +148,37 @@ void driver_mock_cleanup_shm(void) {
     g_shm_initialized = 0;
 }
 
-// Register a process in shared memory
 int driver_mock_register_process(pid_t pid) {
-    if (!g_shm_initialized && driver_mock_init_shm() < 0) {
+    if (ensure_shm_init() < 0) return -1;
+
+    pthread_mutex_lock(&g_shm->mutex);
+    if (find_process_record(pid)) {
+        pthread_mutex_unlock(&g_shm->mutex);
+        return 0;  // Already registered
+    }
+
+    if (g_shm->processCount >= MAX_TRACKED_PROCESSES) {
+        pthread_mutex_unlock(&g_shm->mutex);
         return -1;
     }
 
-    pthread_mutex_lock(&g_shm->mutex);
-
-    // Check if process already exists
-    for (size_t i = 0; i < g_shm->processCount; i++) {
-        if (g_shm->processes[i].processId == pid) {
-            pthread_mutex_unlock(&g_shm->mutex);
-            return 0;  // Already registered
-        }
-    }
-
-    // Add new process
-    if (g_shm->processCount >= MAX_TRACKED_PROCESSES) {
-        pthread_mutex_unlock(&g_shm->mutex);
-        return -1;  // Too many processes
-    }
-
-    ProcessRecord* record = &g_shm->processes[g_shm->processCount];
+    ProcessRecord* record = &g_shm->processes[g_shm->processCount++];
+    memset(record, 0, sizeof(ProcessRecord));
     record->processId = pid;
-    record->memoryAllocatedBytes = 0;
-    record->kernelLaunchCount = 0;
-    record->lastKernelLaunchTimeMs = 0;
-    record->gpuUtilizationPercent = 0.0;
-    record->allocationCount = 0;
-    memset(record->allocations, 0, sizeof(record->allocations));
     snprintf(record->deviceUUID, sizeof(record->deviceUUID), "mock-device-0");
-
-    g_shm->processCount++;
     pthread_mutex_unlock(&g_shm->mutex);
     return 0;
 }
 
-// Unregister a process
 int driver_mock_unregister_process(pid_t pid) {
-    if (!g_shm_initialized) {
-        return -1;
-    }
+    if (!g_shm_initialized) return -1;
 
     pthread_mutex_lock(&g_shm->mutex);
     for (size_t i = 0; i < g_shm->processCount; i++) {
         if (g_shm->processes[i].processId == pid) {
-            // Move last element to this position
-            if (i < g_shm->processCount - 1) {
-                g_shm->processes[i] = g_shm->processes[g_shm->processCount - 1];
+            if (i < --g_shm->processCount) {
+                g_shm->processes[i] = g_shm->processes[g_shm->processCount];
             }
-            g_shm->processCount--;
             pthread_mutex_unlock(&g_shm->mutex);
             return 0;
         }
@@ -175,113 +187,88 @@ int driver_mock_unregister_process(pid_t pid) {
     return -1;
 }
 
-// Update memory allocation for a process
 int driver_mock_update_memory(pid_t pid, int64_t bytesDiff) {
-    if (!g_shm_initialized) {
+    if (!g_shm_initialized) return -1;
+
+    pthread_mutex_lock(&g_shm->mutex);
+    ProcessRecord* record = find_process_record(pid);
+    if (!record) {
+        pthread_mutex_unlock(&g_shm->mutex);
         return -1;
     }
 
-    pthread_mutex_lock(&g_shm->mutex);
-    for (size_t i = 0; i < g_shm->processCount; i++) {
-        if (g_shm->processes[i].processId == pid) {
-            if (bytesDiff > 0) {
-                uint64_t newTotal = g_shm->processes[i].memoryAllocatedBytes + (uint64_t)bytesDiff;
-                // Check if allocation exceeds device capacity
-                if (newTotal > MOCK_DEVICE_TOTAL_VRAM_BYTES) {
-                    pthread_mutex_unlock(&g_shm->mutex);
-                    return -1;  // Out of VRAM
-                }
-                g_shm->processes[i].memoryAllocatedBytes = newTotal;
-                g_shm->device.usedVRAMBytes += (uint64_t)bytesDiff;
-            } else {
-                uint64_t diff = (uint64_t)(-bytesDiff);
-                if (g_shm->processes[i].memoryAllocatedBytes >= diff) {
-                    g_shm->processes[i].memoryAllocatedBytes -= diff;
-                    if (g_shm->device.usedVRAMBytes >= diff) {
-                        g_shm->device.usedVRAMBytes -= diff;
-                    } else {
-                        g_shm->device.usedVRAMBytes = 0;
-                    }
-                } else {
-                    g_shm->device.usedVRAMBytes -= g_shm->processes[i].memoryAllocatedBytes;
-                    g_shm->processes[i].memoryAllocatedBytes = 0;
-                }
-            }
+    if (bytesDiff > 0) {
+        uint64_t newTotal = record->memoryAllocatedBytes + (uint64_t)bytesDiff;
+        if (newTotal > MOCK_DEVICE_TOTAL_VRAM_BYTES) {
             pthread_mutex_unlock(&g_shm->mutex);
-            return 0;
+            return -1;
+        }
+        record->memoryAllocatedBytes = newTotal;
+        g_shm->device.usedVRAMBytes += (uint64_t)bytesDiff;
+    } else {
+        uint64_t diff = (uint64_t)(-bytesDiff);
+        if (record->memoryAllocatedBytes > diff) {
+            record->memoryAllocatedBytes -= diff;
+        } else {
+            diff = record->memoryAllocatedBytes;
+            record->memoryAllocatedBytes = 0;
+        }
+        if (g_shm->device.usedVRAMBytes > diff) {
+            g_shm->device.usedVRAMBytes -= diff;
+        } else {
+            g_shm->device.usedVRAMBytes = 0;
         }
     }
     pthread_mutex_unlock(&g_shm->mutex);
-    return -1;
+    return 0;
 }
 
-// Record kernel launch and update GPU utilization (pub-sub pattern)
 int driver_mock_record_kernel_launch(pid_t pid, uint32_t gridSize __attribute__((unused))) {
-    if (!g_shm_initialized) {
-        return -1;
-    }
+    if (!g_shm_initialized) return -1;
 
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    uint64_t currentTimeMs = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
-
+    uint64_t currentTimeMs = get_time_ms();
     pthread_mutex_lock(&g_shm->mutex);
     
-    // Reset second window if needed (sliding 1-second window)
+    // Reset 1-second window if expired
     if (g_shm->device.lastSecondStartTimeMs == 0 || 
         (currentTimeMs - g_shm->device.lastSecondStartTimeMs) >= 1000) {
-        // Reset the window
         g_shm->device.kernelLaunchesLastSecond = 0;
         g_shm->device.lastSecondStartTimeMs = currentTimeMs;
         g_shm->device.gpuUtilizationPercent = 0.0;
     }
     
-    // Check rate limit: if >= 100 launches in current second, block and show 100% utilization
     if (g_shm->device.kernelLaunchesLastSecond >= MAX_KERNEL_LAUNCHES_PER_SECOND) {
-        // Device is at 100% utilization, block this launch
         g_shm->device.gpuUtilizationPercent = 100.0;
         pthread_mutex_unlock(&g_shm->mutex);
-        return -1;  // Blocked due to 100% utilization
+        return -1;  // Rate limited
     }
     
-    // Increment launch count for current second
     g_shm->device.kernelLaunchesLastSecond++;
-    
-    // Update device-level utilization (simple: launches/sec * 1% per launch)
     double deviceUtil = (double)g_shm->device.kernelLaunchesLastSecond * GPU_UTIL_PER_KERNEL_LAUNCH;
-    if (deviceUtil > 100.0) {
-        deviceUtil = 100.0;
-    }
+    if (deviceUtil > 100.0) deviceUtil = 100.0;
     g_shm->device.gpuUtilizationPercent = deviceUtil;
     
-    // Find and update process record
-    for (size_t i = 0; i < g_shm->processCount; i++) {
-        if (g_shm->processes[i].processId == pid) {
-            g_shm->processes[i].kernelLaunchCount++;
-            g_shm->processes[i].lastKernelLaunchTimeMs = currentTimeMs;
-            
-            // Update process-level utilization (distribute device utilization proportionally)
-            // Simple approach: each process gets utilization based on its contribution
-            // For now, distribute evenly among active processes
-            size_t activeProcesses = 0;
-            for (size_t j = 0; j < g_shm->processCount; j++) {
-                if (g_shm->processes[j].lastKernelLaunchTimeMs > 0 &&
-                    (currentTimeMs - g_shm->processes[j].lastKernelLaunchTimeMs) < 2000) {
-                    activeProcesses++;
-                }
-            }
-            if (activeProcesses > 0) {
-                g_shm->processes[i].gpuUtilizationPercent = deviceUtil / (double)activeProcesses;
-            } else {
-                g_shm->processes[i].gpuUtilizationPercent = GPU_UTIL_PER_KERNEL_LAUNCH;
-            }
-            
-            pthread_mutex_unlock(&g_shm->mutex);
-            return 0;
+    ProcessRecord* record = find_process_record(pid);
+    if (!record) {
+        pthread_mutex_unlock(&g_shm->mutex);
+        return -1;
+    }
+    
+    record->kernelLaunchCount++;
+    record->lastKernelLaunchTimeMs = currentTimeMs;
+    
+    // Count active processes (launched in last 2 seconds)
+    size_t activeProcesses = 0;
+    for (size_t j = 0; j < g_shm->processCount; j++) {
+        if (g_shm->processes[j].lastKernelLaunchTimeMs > 0 &&
+            (currentTimeMs - g_shm->processes[j].lastKernelLaunchTimeMs) < 2000) {
+            activeProcesses++;
         }
     }
+    record->gpuUtilizationPercent = activeProcesses > 0 ? deviceUtil / (double)activeProcesses : GPU_UTIL_PER_KERNEL_LAUNCH;
+    
     pthread_mutex_unlock(&g_shm->mutex);
-    return -1;
+    return 0;
 }
 
 // HIP-like API implementations
@@ -300,7 +287,7 @@ hipError_t hipInit(unsigned int flags) {
     return hipSuccess;
 }
 
-hipError_t hipDeviceGetCount(int* count) {
+hipError_t hipGetDeviceCount(int* count) {
     if (!count) {
         return hipErrorInvalidValue;
     }
@@ -308,104 +295,54 @@ hipError_t hipDeviceGetCount(int* count) {
     return hipSuccess;
 }
 
-hipError_t hipDeviceGet(hipDevice_t* device, int deviceId) {
-    if (!device || deviceId != 0) {
+hipError_t hipGetDevice(int* deviceId) {
+    if (!deviceId) {
         return hipErrorInvalidValue;
     }
-    *device = 0;
+    *deviceId = 0;  // Mock device always returns device 0
     return hipSuccess;
 }
 
-hipError_t hipMalloc(hipDevicePtr_t* ptr, size_t size) {
-    if (!ptr || size == 0) {
-        return hipErrorInvalidValue;
-    }
-    
-    // Mock VRAM allocation: just track in shared memory, return a fake pointer
-    // No actual host memory allocation - this is GPU VRAM
+hipError_t hipMalloc(void** ptr, size_t size) {
+    if (!ptr || size == 0) return hipErrorInvalidValue;
+    if (ensure_shm_init() < 0) return hipErrorInvalidValue;
+
     pid_t pid = getpid();
-    
-    if (!g_shm_initialized && driver_mock_init_shm() < 0) {
-        return hipErrorInvalidValue;
-    }
-    
     pthread_mutex_lock(&g_shm->mutex);
     
-    // Find process record
-    ProcessRecord* record = NULL;
-    for (size_t i = 0; i < g_shm->processCount; i++) {
-        if (g_shm->processes[i].processId == pid) {
-            record = &g_shm->processes[i];
-            break;
-        }
-    }
-    
-    if (!record) {
+    ProcessRecord* record = find_process_record(pid);
+    if (!record || record->allocationCount >= MAX_ALLOCATIONS_PER_PROCESS ||
+        g_shm->device.usedVRAMBytes + size > MOCK_DEVICE_TOTAL_VRAM_BYTES) {
         pthread_mutex_unlock(&g_shm->mutex);
-        return hipErrorInvalidValue;
+        return record ? hipErrorOutOfMemory : hipErrorInvalidValue;
     }
     
-    // Check if allocation would exceed device capacity
-    if (g_shm->device.usedVRAMBytes + size > MOCK_DEVICE_TOTAL_VRAM_BYTES) {
-        pthread_mutex_unlock(&g_shm->mutex);
-        return hipErrorOutOfMemory;
-    }
-    
-    // Check if we have space for allocation record
-    if (record->allocationCount >= MAX_ALLOCATIONS_PER_PROCESS) {
-        pthread_mutex_unlock(&g_shm->mutex);
-        return hipErrorOutOfMemory;
-    }
-    
-    // Generate a fake pointer (use process ID and allocation count for uniqueness)
-    // This ensures uniqueness across processes
     uint64_t fakePtrValue = ((uint64_t)pid << 32) | (uint64_t)record->allocationCount;
-    hipDevicePtr_t fakePtr = (hipDevicePtr_t)(uintptr_t)fakePtrValue;
+    void* fakePtr = (void*)(uintptr_t)fakePtrValue;
     
-    // Record allocation
-    AllocationRecord* alloc = &record->allocations[record->allocationCount];
-    alloc->ptr = fakePtr;
+    AllocationRecord* alloc = &record->allocations[record->allocationCount++];
+    alloc->ptr = (hipDevicePtr_t)fakePtr;
     alloc->size = size;
-    record->allocationCount++;
-    
-    // Update memory tracking
     record->memoryAllocatedBytes += size;
     g_shm->device.usedVRAMBytes += size;
     
     *ptr = fakePtr;
     pthread_mutex_unlock(&g_shm->mutex);
-    
     return hipSuccess;
 }
 
-hipError_t hipFree(hipDevicePtr_t ptr) {
-    if (!ptr) {
-        return hipErrorInvalidValue;
-    }
-    
+hipError_t hipFree(void* ptr) {
+    if (!ptr || !g_shm_initialized) return hipErrorInvalidValue;
+
     pid_t pid = getpid();
-    
-    if (!g_shm_initialized) {
-        return hipErrorInvalidValue;
-    }
-    
     pthread_mutex_lock(&g_shm->mutex);
     
-    // Find process record
-    ProcessRecord* record = NULL;
-    for (size_t i = 0; i < g_shm->processCount; i++) {
-        if (g_shm->processes[i].processId == pid) {
-            record = &g_shm->processes[i];
-            break;
-        }
-    }
-    
+    ProcessRecord* record = find_process_record(pid);
     if (!record) {
         pthread_mutex_unlock(&g_shm->mutex);
         return hipErrorInvalidValue;
     }
     
-    // Find allocation by pointer
     size_t allocIndex = SIZE_MAX;
     for (size_t i = 0; i < record->allocationCount; i++) {
         if (record->allocations[i].ptr == ptr) {
@@ -416,33 +353,27 @@ hipError_t hipFree(hipDevicePtr_t ptr) {
     
     if (allocIndex == SIZE_MAX) {
         pthread_mutex_unlock(&g_shm->mutex);
-        return hipErrorInvalidValue;  // Pointer not found
+        return hipErrorInvalidValue;
     }
     
-    // Get size before removing
     size_t size = record->allocations[allocIndex].size;
-    
-    // Remove allocation (move last to this position)
-    if (allocIndex < record->allocationCount - 1) {
-        record->allocations[allocIndex] = record->allocations[record->allocationCount - 1];
+    if (allocIndex < --record->allocationCount) {
+        record->allocations[allocIndex] = record->allocations[record->allocationCount];
     }
-    record->allocationCount--;
     
-    // Update memory tracking
-    if (record->memoryAllocatedBytes >= size) {
+    if (record->memoryAllocatedBytes > size) {
         record->memoryAllocatedBytes -= size;
     } else {
         record->memoryAllocatedBytes = 0;
     }
     
-    if (g_shm->device.usedVRAMBytes >= size) {
+    if (g_shm->device.usedVRAMBytes > size) {
         g_shm->device.usedVRAMBytes -= size;
     } else {
         g_shm->device.usedVRAMBytes = 0;
     }
     
     pthread_mutex_unlock(&g_shm->mutex);
-    
     return hipSuccess;
 }
 
@@ -451,159 +382,167 @@ hipError_t hipLaunchKernel(const void* func,
                           uint32_t blockDimX, uint32_t blockDimY, uint32_t blockDimZ,
                           uint32_t sharedMemBytes, void* stream,
                           void** kernelParams, void** extra) {
-    (void)func;
-    (void)gridDimY;
-    (void)gridDimZ;
-    (void)blockDimX;
-    (void)blockDimY;
-    (void)blockDimZ;
-    (void)sharedMemBytes;
-    (void)stream;
-    (void)kernelParams;
-    (void)extra;
+    (void)func; (void)gridDimY; (void)gridDimZ; (void)blockDimX; (void)blockDimY;
+    (void)blockDimZ; (void)sharedMemBytes; (void)stream; (void)kernelParams; (void)extra;
     
-    // Calculate total grid size
-    uint32_t gridSize = gridDimX * gridDimY * gridDimZ;
-    
-    // Record kernel launch
-    pid_t pid = getpid();
-    driver_mock_record_kernel_launch(pid, gridSize);
-    
-    return hipSuccess;
+    return driver_mock_record_kernel_launch(getpid(), gridDimX * gridDimY * gridDimZ) == 0 
+           ? hipSuccess : hipErrorInvalidValue;
 }
 
-// ============================================================================
-// Metrics API Implementations
-// ============================================================================
-
-hipError_t hipGetProcessUtilization(ProcessUtilization* utilizations, size_t maxCount, size_t* count) {
-    if (!utilizations || !count || maxCount == 0) {
-        return hipErrorInvalidValue;
-    }
-    
-    if (!g_shm_initialized && driver_mock_init_shm() < 0) {
-        return hipErrorInvalidValue;
+// Mock AMD SMI API Implementations
+amdsmi_status_t amdsmi_get_gpu_process_list(
+    amdsmi_processor_handle processor_handle __attribute__((unused)),
+    uint32_t* max_processes,
+    amdsmi_proc_info_t* list
+) {
+    if (!max_processes || !list || ensure_shm_init() < 0) {
+        return AMDSMI_STATUS_INVAL;
     }
     
     pthread_mutex_lock(&g_shm->mutex);
+    uint32_t actualCount = (uint32_t)g_shm->processCount;
     
-    size_t actualCount = g_shm->processCount;
-    if (actualCount > maxCount) {
-        actualCount = maxCount;
+    if (*max_processes == 0) {
+        *max_processes = actualCount;
+        pthread_mutex_unlock(&g_shm->mutex);
+        return AMDSMI_STATUS_SUCCESS;
     }
     
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    uint64_t currentTimeMs = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+    uint32_t countToReturn = (actualCount > *max_processes) ? *max_processes : actualCount;
     
-    for (size_t i = 0; i < actualCount; i++) {
+    for (uint32_t i = 0; i < countToReturn; i++) {
         ProcessRecord* proc = &g_shm->processes[i];
-        // Only include processes that were active in the last 2 seconds
-        if (proc->lastKernelLaunchTimeMs > 0 && 
-            (currentTimeMs - proc->lastKernelLaunchTimeMs) < 2000) {
-            utilizations[i].processId = proc->processId;
-            strncpy(utilizations[i].deviceUUID, proc->deviceUUID, sizeof(utilizations[i].deviceUUID) - 1);
-            utilizations[i].deviceUUID[sizeof(utilizations[i].deviceUUID) - 1] = '\0';
-            utilizations[i].utilizationPercent = proc->gpuUtilizationPercent;
-        } else {
-            utilizations[i].processId = proc->processId;
-            strncpy(utilizations[i].deviceUUID, proc->deviceUUID, sizeof(utilizations[i].deviceUUID) - 1);
-            utilizations[i].deviceUUID[sizeof(utilizations[i].deviceUUID) - 1] = '\0';
-            utilizations[i].utilizationPercent = 0.0;
+        amdsmi_proc_info_t* info = &list[i];
+        memset(info, 0, sizeof(amdsmi_proc_info_t));
+        
+        snprintf(info->name, sizeof(info->name), "mock-process-%d", (int)proc->processId);
+        info->pid = (uint32_t)proc->processId;
+        info->mem = proc->memoryAllocatedBytes;
+        info->engine_usage.gfx = proc->kernelLaunchCount * 1000000ULL;  // 1ms per launch in ns
+        info->memory_usage.vram_mem = proc->memoryAllocatedBytes;
+        info->cu_occupancy = proc->gpuUtilizationPercent > 0.0 
+            ? (uint32_t)((proc->gpuUtilizationPercent / 100.0) * 108.0) : 0;
+        if (info->cu_occupancy == 0 && proc->gpuUtilizationPercent > 0.0) {
+            info->cu_occupancy = 1;
         }
     }
     
-    *count = actualCount;
+    *max_processes = actualCount;
+    amdsmi_status_t status = (actualCount > countToReturn) ? AMDSMI_STATUS_OUT_OF_RESOURCES : AMDSMI_STATUS_SUCCESS;
     pthread_mutex_unlock(&g_shm->mutex);
-    
-    return hipSuccess;
+    return status;
 }
 
-hipError_t hipGetProcessVRAMUsage(ProcessVRAMUsage* usages, size_t maxCount, size_t* count) {
-    if (!usages || !count || maxCount == 0) {
-        return hipErrorInvalidValue;
-    }
-    
-    if (!g_shm_initialized && driver_mock_init_shm() < 0) {
-        return hipErrorInvalidValue;
-    }
-    
-    pthread_mutex_lock(&g_shm->mutex);
-    
-    size_t actualCount = g_shm->processCount;
-    if (actualCount > maxCount) {
-        actualCount = maxCount;
-    }
-    
-    for (size_t i = 0; i < actualCount; i++) {
-        ProcessRecord* proc = &g_shm->processes[i];
-        usages[i].processId = proc->processId;
-        strncpy(usages[i].deviceUUID, proc->deviceUUID, sizeof(usages[i].deviceUUID) - 1);
-        usages[i].deviceUUID[sizeof(usages[i].deviceUUID) - 1] = '\0';
-        usages[i].usedBytes = proc->memoryAllocatedBytes;
-        usages[i].reservedBytes = proc->memoryAllocatedBytes;  // For mock, reserved = used
-    }
-    
-    *count = actualCount;
-    pthread_mutex_unlock(&g_shm->mutex);
-    
-    return hipSuccess;
-}
+amdsmi_status_t amdsmi_get_gpu_activity(
+    amdsmi_processor_handle processor_handle __attribute__((unused)),
+    amdsmi_engine_usage_t* info
+) {
+    if (!info || ensure_shm_init() < 0) return AMDSMI_STATUS_INVAL;
 
-hipError_t hipGetDeviceUtilization(DeviceUtilization* utilization) {
-    if (!utilization) {
-        return hipErrorInvalidValue;
-    }
-    
-    if (!g_shm_initialized && driver_mock_init_shm() < 0) {
-        return hipErrorInvalidValue;
-    }
-    
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    uint64_t currentTimeMs = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
-    
+    uint64_t currentTimeMs = get_time_ms();
     pthread_mutex_lock(&g_shm->mutex);
     
-    // Check if window needs reset (utilization should decay if no launches in last second)
     if (g_shm->device.lastSecondStartTimeMs > 0 &&
         (currentTimeMs - g_shm->device.lastSecondStartTimeMs) >= 1000) {
-        // Window expired, reset utilization
         g_shm->device.kernelLaunchesLastSecond = 0;
         g_shm->device.gpuUtilizationPercent = 0.0;
-        g_shm->device.lastSecondStartTimeMs = 0;  // Mark as needing reset
+        g_shm->device.lastSecondStartTimeMs = 0;
     }
     
-    strncpy(utilization->deviceUUID, g_shm->device.deviceUUID, sizeof(utilization->deviceUUID) - 1);
-    utilization->deviceUUID[sizeof(utilization->deviceUUID) - 1] = '\0';
-    utilization->utilizationPercent = g_shm->device.gpuUtilizationPercent;
-    pthread_mutex_unlock(&g_shm->mutex);
+    uint32_t utilPercent = (uint32_t)g_shm->device.gpuUtilizationPercent;
+    if (utilPercent > 100) utilPercent = 100;
     
-    return hipSuccess;
+    info->gfx_activity = utilPercent;
+    info->umc_activity = info->mm_activity = 0;
+    memset(info->reserved, 0, sizeof(info->reserved));
+    
+    pthread_mutex_unlock(&g_shm->mutex);
+    return AMDSMI_STATUS_SUCCESS;
 }
 
-hipError_t hipGetDeviceVRAMUsage(DeviceVRAMUsage* usage) {
-    if (!usage) {
-        return hipErrorInvalidValue;
-    }
-    
-    if (!g_shm_initialized && driver_mock_init_shm() < 0) {
-        return hipErrorInvalidValue;
+amdsmi_status_t amdsmi_get_gpu_vram_usage(
+    amdsmi_processor_handle processor_handle __attribute__((unused)),
+    amdsmi_vram_usage_t* info
+) {
+    if (!info || ensure_shm_init() < 0) return AMDSMI_STATUS_INVAL;
+
+    pthread_mutex_lock(&g_shm->mutex);
+    uint64_t totalMB = g_shm->device.totalVRAMBytes / (1024 * 1024);
+    uint64_t usedMB = g_shm->device.usedVRAMBytes / (1024 * 1024);
+    info->vram_total = (totalMB > UINT32_MAX) ? UINT32_MAX : (uint32_t)totalMB;
+    info->vram_used = (usedMB > UINT32_MAX) ? UINT32_MAX : (uint32_t)usedMB;
+    memset(info->reserved, 0, sizeof(info->reserved));
+    pthread_mutex_unlock(&g_shm->mutex);
+    return AMDSMI_STATUS_SUCCESS;
+}
+
+amdsmi_status_t amdsmi_get_power_info(
+    amdsmi_processor_handle processor_handle,
+    amdsmi_power_info_t* info
+) {
+    if (!info || validate_processor_handle(processor_handle) < 0 || ensure_shm_init() < 0) {
+        return AMDSMI_STATUS_INVAL;
     }
     
     pthread_mutex_lock(&g_shm->mutex);
-    strncpy(usage->deviceUUID, g_shm->device.deviceUUID, sizeof(usage->deviceUUID) - 1);
-    usage->deviceUUID[sizeof(usage->deviceUUID) - 1] = '\0';
-    usage->totalBytes = g_shm->device.totalVRAMBytes;
-    usage->usedBytes = g_shm->device.usedVRAMBytes;
-    usage->freeBytes = (g_shm->device.totalVRAMBytes > g_shm->device.usedVRAMBytes) ?
-                       (g_shm->device.totalVRAMBytes - g_shm->device.usedVRAMBytes) : 0;
-    if (g_shm->device.totalVRAMBytes > 0) {
-        usage->utilizationPercent = ((double)g_shm->device.usedVRAMBytes / (double)g_shm->device.totalVRAMBytes) * 100.0;
-    } else {
-        usage->utilizationPercent = 0.0;
-    }
-    pthread_mutex_unlock(&g_shm->mutex);
+    uint64_t socketPower = (uint64_t)scale_value(150.0, 300.0, g_shm->device.gpuUtilizationPercent);
     
-    return hipSuccess;
+    info->socket_power = socketPower;
+    info->current_socket_power = info->average_socket_power = (uint32_t)socketPower;
+    info->gfx_voltage = 1150;  // 1.15V in mV
+    info->soc_voltage = 1000;  // 1.0V in mV
+    info->mem_voltage = 1200;  // 1.2V in mV
+    info->power_limit = 300;  // 300W
+    memset(info->reserved, 0, sizeof(info->reserved));
+    pthread_mutex_unlock(&g_shm->mutex);
+    return AMDSMI_STATUS_SUCCESS;
+}
+
+amdsmi_status_t amdsmi_get_temp_metric(
+    amdsmi_processor_handle processor_handle,
+    amdsmi_temperature_type_t sensor_type,
+    amdsmi_temperature_metric_t metric,
+    int64_t* temperature
+) {
+    if (!temperature || validate_processor_handle(processor_handle) < 0 || ensure_shm_init() < 0) {
+        return AMDSMI_STATUS_INVAL;
+    }
+    
+    if (metric != AMDSMI_TEMP_CURRENT) return AMDSMI_STATUS_NOT_SUPPORTED;
+    if (sensor_type != AMDSMI_TEMPERATURE_TYPE_EDGE && 
+        sensor_type != AMDSMI_TEMPERATURE_TYPE_HOTSPOT &&
+        sensor_type != AMDSMI_TEMPERATURE_TYPE_JUNCTION) {
+        return AMDSMI_STATUS_NOT_SUPPORTED;
+    }
+    
+    pthread_mutex_lock(&g_shm->mutex);
+    int64_t tempCelsius = (int64_t)scale_value(40.0, 80.0, g_shm->device.gpuUtilizationPercent);
+    if (sensor_type == AMDSMI_TEMPERATURE_TYPE_HOTSPOT || 
+        sensor_type == AMDSMI_TEMPERATURE_TYPE_JUNCTION) {
+        tempCelsius += 8;  // Hotspot offset
+    }
+    *temperature = tempCelsius;
+    pthread_mutex_unlock(&g_shm->mutex);
+    return AMDSMI_STATUS_SUCCESS;
+}
+
+amdsmi_status_t amdsmi_get_gpu_pci_throughput(
+    amdsmi_processor_handle processor_handle,
+    uint64_t* sent,
+    uint64_t* received,
+    uint64_t* max_pkt_sz
+) {
+    if (!sent || !received || !max_pkt_sz || 
+        validate_processor_handle(processor_handle) < 0 || ensure_shm_init() < 0) {
+        return AMDSMI_STATUS_INVAL;
+    }
+    
+    pthread_mutex_lock(&g_shm->mutex);
+    double throughputMBps = scale_value(100.0, 1000.0, g_shm->device.gpuUtilizationPercent);
+    uint64_t throughputBytes = (uint64_t)(throughputMBps * 1024.0 * 1024.0);
+    *sent = throughputBytes * 2;  // TX = 2x RX
+    *received = throughputBytes;
+    *max_pkt_sz = 4096;  // 4KB
+    pthread_mutex_unlock(&g_shm->mutex);
+    return AMDSMI_STATUS_SUCCESS;
 }

@@ -67,7 +67,22 @@ type VirtualizationCapabilities struct {
 	MaxWorkersPerDevice   uint32
 }
 
+// ProcessInformation represents combined compute and memory utilization for a process on a device
+// This follows AMD SMI style API design, combining both metrics in a single structure
+// +k8s:deepcopy-gen=true
+type ProcessInformation struct {
+	ProcessID                 string
+	DeviceUUID                string
+	ComputeUtilizationPercent float64
+	ActiveSMs                 uint64
+	TotalSMs                  uint64
+	MemoryUsedBytes           uint64
+	MemoryReservedBytes       uint64
+	MemoryUtilizationPercent  float64
+}
+
 // ComputeUtilization represents compute utilization for a process on a device
+// DEPRECATED: Use ProcessInformation instead
 type ComputeUtilization struct {
 	ProcessID          string
 	DeviceUUID         string
@@ -75,6 +90,7 @@ type ComputeUtilization struct {
 }
 
 // MemoryUtilization represents memory utilization for a process on a device
+// DEPRECATED: Use ProcessInformation instead
 type MemoryUtilization struct {
 	ProcessID     string
 	DeviceUUID    string

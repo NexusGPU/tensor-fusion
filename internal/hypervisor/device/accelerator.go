@@ -98,20 +98,16 @@ type ExtraMetric struct {
 
 const MaxExtraMetrics = 64
 
-type ComputeUtilization struct {
-	ProcessID          [32]byte
-	DeviceUUID         [64]byte
-	UtilizationPercent float64
-	ActiveSMs          uint64
-	TotalSMs           uint64
-}
-
-type MemoryUtilization struct {
-	ProcessID          [32]byte
-	DeviceUUID         [64]byte
-	UsedBytes          uint64
-	ReservedBytes      uint64
-	UtilizationPercent float64
+// ProcessInformation combines compute and memory utilization (AMD SMI style)
+type ProcessInformation struct {
+	ProcessID                 [32]byte
+	DeviceUUID                [64]byte
+	ComputeUtilizationPercent float64
+	ActiveSMs                 uint64
+	TotalSMs                  uint64
+	MemoryUsedBytes           uint64
+	MemoryReservedBytes       uint64
+	MemoryUtilizationPercent  float64
 }
 
 type DeviceMetrics struct {
@@ -172,10 +168,9 @@ var (
 	snapshot                func(*ProcessArray) Result
 	resume                  func(*ProcessArray) Result
 	// Metrics APIs
-	getProcessComputeUtilization func(*ComputeUtilization, uintptr, *uintptr) Result
-	getProcessMemoryUtilization  func(*MemoryUtilization, uintptr, *uintptr) Result
-	getDeviceMetrics             func(**byte, uintptr, *DeviceMetrics) Result
-	getVendorMountLibs           func(*Mount, uintptr, *uintptr) Result
+	getProcessInformation func(*ProcessInformation, uintptr, *uintptr) Result
+	getDeviceMetrics      func(**byte, uintptr, *DeviceMetrics) Result
+	getVendorMountLibs    func(*Mount, uintptr, *uintptr) Result
 	// Utility APIs
 	registerLogCallback func(uintptr) Result
 )
@@ -227,8 +222,7 @@ func (a *AcceleratorInterface) Load() error {
 	purego.RegisterLibFunc(&setComputeUnitHardLimit, handle, "SetComputeUnitHardLimit")
 	purego.RegisterLibFunc(&snapshot, handle, "Snapshot")
 	purego.RegisterLibFunc(&resume, handle, "Resume")
-	purego.RegisterLibFunc(&getProcessComputeUtilization, handle, "GetProcessComputeUtilization")
-	purego.RegisterLibFunc(&getProcessMemoryUtilization, handle, "GetProcessMemoryUtilization")
+	purego.RegisterLibFunc(&getProcessInformation, handle, "GetProcessInformation")
 	purego.RegisterLibFunc(&getDeviceMetrics, handle, "GetDeviceMetrics")
 	purego.RegisterLibFunc(&getVendorMountLibs, handle, "GetVendorMountLibs")
 
@@ -580,83 +574,50 @@ func (a *AcceleratorInterface) SetComputeUnitHardLimit(workerID, deviceUUID stri
 	return nil
 }
 
-// GetProcessComputeUtilization retrieves compute utilization for all tracked processes
-func (a *AcceleratorInterface) GetProcessComputeUtilization() ([]api.ComputeUtilization, error) {
+// GetProcessInformation retrieves process information (compute and memory utilization) for all tracked processes
+// This combines the functionality of GetProcessComputeUtilization and GetProcessMemoryUtilization
+// following AMD SMI style API design
+func (a *AcceleratorInterface) GetProcessInformation() ([]api.ProcessInformation, error) {
 	// Get total process count from the map
 	totalCount := a.GetTotalProcessCount()
 	if totalCount == 0 {
-		return []api.ComputeUtilization{}, nil
+		return []api.ProcessInformation{}, nil
 	}
 
 	// Allocate stack buffer (max 1024 to avoid stack overflow)
-	const maxStackUtilizations = 1024
-	var stackUtilizations [maxStackUtilizations]ComputeUtilization
+	const maxStackProcessInfos = 1024
+	var stackProcessInfos [maxStackProcessInfos]ProcessInformation
 	maxCount := totalCount
-	if maxCount > maxStackUtilizations {
-		maxCount = maxStackUtilizations
+	if maxCount > maxStackProcessInfos {
+		maxCount = maxStackProcessInfos
 	}
 
 	var cCount uintptr
-	result := getProcessComputeUtilization(&stackUtilizations[0], uintptr(maxCount), &cCount)
+	result := getProcessInformation(&stackProcessInfos[0], uintptr(maxCount), &cCount)
 	if result != ResultSuccess {
-		return nil, fmt.Errorf("failed to get process compute utilization: %d", result)
+		return nil, fmt.Errorf("failed to get process information: %d", result)
 	}
 
 	if cCount == 0 {
-		return []api.ComputeUtilization{}, nil
+		return []api.ProcessInformation{}, nil
 	}
 
-	utilizations := make([]api.ComputeUtilization, int(cCount))
+	processInfos := make([]api.ProcessInformation, int(cCount))
 	for i := 0; i < int(cCount); i++ {
-		cu := &stackUtilizations[i]
-		utilizations[i] = api.ComputeUtilization{
-			ProcessID:          byteArrayToString(cu.ProcessID[:]),
-			DeviceUUID:         byteArrayToString(cu.DeviceUUID[:]),
-			UtilizationPercent: float64(cu.UtilizationPercent),
+		pi := &stackProcessInfos[i]
+		processInfos[i] = api.ProcessInformation{
+			ProcessID:                 byteArrayToString(pi.ProcessID[:]),
+			DeviceUUID:                byteArrayToString(pi.DeviceUUID[:]),
+			ComputeUtilizationPercent: float64(pi.ComputeUtilizationPercent),
+			ActiveSMs:                 uint64(pi.ActiveSMs),
+			TotalSMs:                  uint64(pi.TotalSMs),
+			MemoryUsedBytes:           uint64(pi.MemoryUsedBytes),
+			MemoryReservedBytes:       uint64(pi.MemoryReservedBytes),
+			MemoryUtilizationPercent:  float64(pi.MemoryUtilizationPercent),
 		}
 	}
 
-	return utilizations, nil
-}
-
-// GetProcessMemoryUtilization retrieves memory utilization for all tracked processes
-func (a *AcceleratorInterface) GetProcessMemoryUtilization() ([]api.MemoryUtilization, error) {
-	// Get total process count from the map
-	totalCount := a.GetTotalProcessCount()
-	if totalCount == 0 {
-		return []api.MemoryUtilization{}, nil
-	}
-
-	// Allocate stack buffer (max 1024 to avoid stack overflow)
-	const maxStackUtilizations = 1024
-	var stackUtilizations [maxStackUtilizations]MemoryUtilization
-	maxCount := totalCount
-	if maxCount > maxStackUtilizations {
-		maxCount = maxStackUtilizations
-	}
-
-	var cCount uintptr
-	result := getProcessMemoryUtilization(&stackUtilizations[0], uintptr(maxCount), &cCount)
-	if result != ResultSuccess {
-		return nil, fmt.Errorf("failed to get process memory utilization: %d", result)
-	}
-
-	if cCount == 0 {
-		return []api.MemoryUtilization{}, nil
-	}
-
-	utilizations := make([]api.MemoryUtilization, int(cCount))
-	for i := 0; i < int(cCount); i++ {
-		mu := &stackUtilizations[i]
-		utilizations[i] = api.MemoryUtilization{
-			ProcessID:     byteArrayToString(mu.ProcessID[:]),
-			DeviceUUID:    byteArrayToString(mu.DeviceUUID[:]),
-			UsedBytes:     uint64(mu.UsedBytes),
-			ReservedBytes: uint64(mu.ReservedBytes),
-		}
-	}
-
-	return utilizations, nil
+	return processInfos, nil
 }
 
 // GetVendorMountLibs retrieves vendor mount libs

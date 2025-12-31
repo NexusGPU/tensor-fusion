@@ -485,85 +485,79 @@ Result Resume(ProcessArray* processes) {
 // Example Implementation - Metrics APIs
 // ============================================================================
 
-Result GetProcessComputeUtilization(
-    ComputeUtilization* utilizations,
+Result GetProcessInformation(
+    ProcessInformation* processInfos,
     size_t maxCount,
-    size_t* utilizationCount
+    size_t* processInfoCount
 ) {
-    if (!utilizations || !utilizationCount || maxCount == 0) {
+    if (!processInfos || !processInfoCount || maxCount == 0) {
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Use driver_mock to get process utilization
-    ProcessUtilization mockUtils[256];
-    size_t mockCount = 0;
-    hipError_t err = hipGetProcessUtilization(mockUtils, 256, &mockCount);
-    if (err != hipSuccess) {
-        *utilizationCount = 0;
+    // Use mock AMD SMI-like API to get process information
+    // This follows AMD SMI style: amdsmi_get_gpu_process_list
+    amdsmi_proc_info_t procInfos[256];
+    uint32_t maxProcs = 256;
+    amdsmi_status_t status = amdsmi_get_gpu_process_list(0, &maxProcs, procInfos);
+    if (status != AMDSMI_STATUS_SUCCESS && status != AMDSMI_STATUS_OUT_OF_RESOURCES) {
+        *processInfoCount = 0;
         return RESULT_SUCCESS;  // Return empty if driver_mock not initialized
     }
 
-    // Convert driver_mock ProcessUtilization to ComputeUtilization
-    size_t actualCount = mockCount;
+    // Convert mock AMD SMI process info to ProcessInformation
+    // This combines compute and memory utilization in a single structure
+    size_t actualCount = (size_t)maxProcs;
     if (actualCount > maxCount) {
         actualCount = maxCount;
     }
 
-    for (size_t i = 0; i < actualCount; i++) {
-        snprintf(utilizations[i].processId, sizeof(utilizations[i].processId), "%d", (int)mockUtils[i].processId);
-        strncpy(utilizations[i].deviceUUID, mockUtils[i].deviceUUID, sizeof(utilizations[i].deviceUUID) - 1);
-        utilizations[i].deviceUUID[sizeof(utilizations[i].deviceUUID) - 1] = '\0';
-        utilizations[i].utilizationPercent = mockUtils[i].utilizationPercent;
-        utilizations[i].activeSMs = 0;  // Not tracked in mock
-        utilizations[i].totalSMs = 108; // Example value
-    }
-
-    *utilizationCount = actualCount;
-    logMessage("INFO", "GetProcessComputeUtilization called from provider example");
-    return RESULT_SUCCESS;
-}
-
-Result GetProcessMemoryUtilization(
-    MemoryUtilization* utilizations,
-    size_t maxCount,
-    size_t* utilizationCount
-) {
-    if (!utilizations || !utilizationCount || maxCount == 0) {
-        return RESULT_ERROR_INVALID_PARAM;
-    }
-
-    // Use driver_mock to get process VRAM usage
-    ProcessVRAMUsage mockUsages[256];
-    size_t mockCount = 0;
-    hipError_t err = hipGetProcessVRAMUsage(mockUsages, 256, &mockCount);
-    if (err != hipSuccess) {
-        *utilizationCount = 0;
-        return RESULT_SUCCESS;  // Return empty if driver_mock not initialized
-    }
-
-    // Convert driver_mock ProcessVRAMUsage to MemoryUtilization
-    size_t actualCount = mockCount;
-    if (actualCount > maxCount) {
-        actualCount = maxCount;
+    // Get device info to calculate percentages
+    ExtendedDeviceInfo devices[256];
+    size_t deviceCount = 0;
+    uint64_t totalMemoryBytes = 16ULL * 1024 * 1024 * 1024; // Default 16GB
+    uint64_t totalCUs = 108; // Default 108 CUs
+    
+    if (GetAllDevices(devices, 256, &deviceCount) == RESULT_SUCCESS && deviceCount > 0) {
+        totalMemoryBytes = devices[0].basic.totalMemoryBytes;
+        totalCUs = devices[0].basic.totalComputeUnits;
     }
 
     for (size_t i = 0; i < actualCount; i++) {
-        snprintf(utilizations[i].processId, sizeof(utilizations[i].processId), "%d", (int)mockUsages[i].processId);
-        strncpy(utilizations[i].deviceUUID, mockUsages[i].deviceUUID, sizeof(utilizations[i].deviceUUID) - 1);
-        utilizations[i].deviceUUID[sizeof(utilizations[i].deviceUUID) - 1] = '\0';
-        utilizations[i].usedBytes = mockUsages[i].usedBytes;
-        utilizations[i].reservedBytes = mockUsages[i].reservedBytes;
-        // Calculate utilization percentage (assuming 16GB total per device)
-        uint64_t totalBytes = 16ULL * 1024 * 1024 * 1024;
-        if (totalBytes > 0) {
-            utilizations[i].utilizationPercent = ((double)mockUsages[i].usedBytes / (double)totalBytes) * 100.0;
+        ProcessInformation* info = &processInfos[i];
+        memset(info, 0, sizeof(ProcessInformation));
+        
+        // Process ID
+        snprintf(info->processId, sizeof(info->processId), "%d", (int)procInfos[i].pid);
+        
+        // Device UUID - try to get from device info, fallback to mock-device-0
+        if (deviceCount > 0) {
+            snprintf(info->deviceUUID, sizeof(info->deviceUUID), "%.63s", devices[0].basic.uuid);
         } else {
-            utilizations[i].utilizationPercent = 0.0;
+            snprintf(info->deviceUUID, sizeof(info->deviceUUID), "%.63s", "mock-device-0");
+        }
+        
+        // Compute utilization from CU occupancy (AMD SMI style)
+        info->activeSMs = procInfos[i].cu_occupancy;
+        info->totalSMs = totalCUs;
+        if (totalCUs > 0) {
+            info->computeUtilizationPercent = ((double)procInfos[i].cu_occupancy / (double)totalCUs) * 100.0;
+        } else {
+            info->computeUtilizationPercent = 0.0;
+        }
+        
+        // Memory utilization (AMD SMI style: memory_usage.used and memory_usage.reserved)
+        // Use vram_mem from memory_usage (real API has gtt_mem, cpu_mem, vram_mem)
+        info->memoryUsedBytes = procInfos[i].memory_usage.vram_mem;
+        info->memoryReservedBytes = 0;  // Reserved is an array in real API, not a single value
+        if (totalMemoryBytes > 0) {
+            info->memoryUtilizationPercent = ((double)procInfos[i].memory_usage.vram_mem / (double)totalMemoryBytes) * 100.0;
+        } else {
+            info->memoryUtilizationPercent = 0.0;
         }
     }
 
-    *utilizationCount = actualCount;
-    logMessage("INFO", "GetProcessMemoryUtilization called from provider example");
+    *processInfoCount = actualCount;
+    logMessage("INFO", "GetProcessInformation called from provider example (AMD SMI style)");
     return RESULT_SUCCESS;
 }
 
@@ -576,12 +570,20 @@ Result GetDeviceMetrics(
         return RESULT_ERROR_INVALID_PARAM;
     }
 
-    // Try to get real metrics from driver_mock for first device
-    DeviceUtilization deviceUtil;
-    DeviceVRAMUsage deviceVRAM;
-    hipError_t errUtil = hipGetDeviceUtilization(&deviceUtil);
-    hipError_t errVRAM = hipGetDeviceVRAMUsage(&deviceVRAM);
-    bool hasMockData = (errUtil == hipSuccess && errVRAM == hipSuccess);
+    // Try to get real metrics from driver_mock for first device using AMD SMI APIs
+    amdsmi_engine_usage_t gpuActivity;
+    amdsmi_vram_usage_t vramUsage;
+    amdsmi_power_info_t powerInfo;
+    int64_t temperature;
+    uint64_t pcieSent, pcieReceived, pcieMaxPktSz;
+    amdsmi_status_t statusActivity = amdsmi_get_gpu_activity(NULL, &gpuActivity);
+    amdsmi_status_t statusVRAM = amdsmi_get_gpu_vram_usage(NULL, &vramUsage);
+    amdsmi_status_t statusPower = amdsmi_get_power_info(NULL, &powerInfo);
+    amdsmi_status_t statusTemp = amdsmi_get_temp_metric(NULL, AMDSMI_TEMPERATURE_TYPE_EDGE, AMDSMI_TEMP_CURRENT, &temperature);
+    amdsmi_status_t statusPCIe = amdsmi_get_gpu_pci_throughput(NULL, &pcieSent, &pcieReceived, &pcieMaxPktSz);
+    bool hasMockData = (statusActivity == AMDSMI_STATUS_SUCCESS && statusVRAM == AMDSMI_STATUS_SUCCESS &&
+                       statusPower == AMDSMI_STATUS_SUCCESS && statusTemp == AMDSMI_STATUS_SUCCESS &&
+                       statusPCIe == AMDSMI_STATUS_SUCCESS);
 
     // Fill metrics for all requested devices
     for (size_t i = 0; i < deviceCount; i++) {
@@ -595,30 +597,32 @@ Result GetDeviceMetrics(
         }
         
         // Use mock data if available, otherwise use example data
-        if (hasMockData && deviceUUIDs[i] != NULL && strcmp(deviceUtil.deviceUUID, deviceUUIDs[i]) == 0) {
-            dm->utilizationPercent = (uint32_t)deviceUtil.utilizationPercent;
-            dm->memoryUsedBytes = deviceVRAM.usedBytes;
+        if (hasMockData && deviceUUIDs[i] != NULL) {
+            // Use GFX utilization from AMD SMI activity counter (gfx_activity is in %)
+            dm->utilizationPercent = gpuActivity.gfx_activity;
+            // Convert MB to bytes (real API returns MB, but DeviceMetrics expects bytes)
+            dm->memoryUsedBytes = (uint64_t)vramUsage.vram_used * 1024ULL * 1024ULL;
+            // Use power from AMD SMI (socket_power is in W, convert to double)
+            dm->powerUsageWatts = (double)powerInfo.socket_power;
+            // Use temperature from AMD SMI (temperature is in Celsius, convert to double)
+            dm->temperatureCelsius = (double)temperature;
+            // Use PCIe throughput from AMD SMI (received = RX, sent = TX, both in bytes)
+            dm->pcieRxBytes = pcieReceived;
+            dm->pcieTxBytes = pcieSent;
         } else {
-            dm->utilizationPercent = 50 + (i * 10); // Example: 50-90%
-            dm->memoryUsedBytes = 8ULL * 1024 * 1024 * 1024; // Example: 8GB
+            dm->utilizationPercent = 0;
+            dm->memoryUsedBytes = 0;
+            dm->powerUsageWatts = 200.0 + (i * 10.0); // Example: 200-300W
+            dm->temperatureCelsius = 45.0 + (i * 5.0); // Example: 45-50C
+            dm->pcieRxBytes = 1024ULL * 1024 * 1024 * (i + 1); // Example: 1-4GB
+            dm->pcieTxBytes = 512ULL * 1024 * 1024 * (i + 1); // Example: 0.5-2GB
         }
-        
-        dm->powerUsageWatts = 200.0 + (i * 10.0); // Example: 200-300W
-        dm->temperatureCelsius = 45.0 + (i * 5.0); // Example: 45-50C
-        dm->pcieRxBytes = 1024ULL * 1024 * 1024 * (i + 1); // Example: 1-4GB
-        dm->pcieTxBytes = 512ULL * 1024 * 1024 * (i + 1); // Example: 0.5-2GB
 
         // Fill extra metrics (using fixed-size array)
         size_t extraCount = 0;
         const size_t maxExtraMetrics = MAX_EXTRA_METRICS;
 
-        // Add some example extra metrics
-        if (extraCount < maxExtraMetrics) {
-            snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "gpuUtilization");
-            dm->extraMetrics[extraCount].value = 75.0 + (i * 5.0); // Example: 75-95%
-            extraCount++;
-        }
-
+        // Add some example extra metrics for example
         if (extraCount < maxExtraMetrics) {
             snprintf(dm->extraMetrics[extraCount].key, sizeof(dm->extraMetrics[extraCount].key), "memoryBandwidthMBps");
             dm->extraMetrics[extraCount].value = 800.0 + (i * 50.0); // Example: 800-1200 MB/s

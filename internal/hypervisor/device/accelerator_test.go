@@ -158,15 +158,11 @@ var _ = Describe("AcceleratorInterface", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
-		It("should return empty slices when no processes tracked", func() {
-			// Test both compute and memory utilization
-			computeUtil, err := accel.GetProcessComputeUtilization()
+		It("should return empty slice when no processes tracked", func() {
+			// Test process information (combines compute and memory utilization)
+			processInfos, err := accel.GetProcessInformation()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(computeUtil).To(BeEmpty())
-
-			memoryUtil, err := accel.GetProcessMemoryUtilization()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(memoryUtil).To(BeEmpty())
+			Expect(processInfos).To(BeEmpty())
 
 			// Verify GetTotalProcessCount returns 0
 			Expect(accel.GetTotalProcessCount()).To(Equal(0))

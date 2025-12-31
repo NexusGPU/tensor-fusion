@@ -111,7 +111,7 @@ func main() {
 		klog.Fatalf("Invalid backend type: %s", *backendType)
 	}
 	deviceController.RegisterDeviceUpdateHandler(backend.GetDeviceChangeHandler())
-	klog.Info("Device change handler registered from backend", "backend", *backendType)
+	klog.Infof("Device change handler registered from backend: %s", *backendType)
 
 	err = workerController.Start()
 	if err != nil {
