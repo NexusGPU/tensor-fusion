@@ -101,7 +101,7 @@ func (b *KubeletBackend) Start() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	klog.Infof("Device plugins started and registered with kubelet")
+	klog.Infof("All device plugins started and registered with kubelet")
 
 	// Start device plugin detector to watch external device plugins
 	if b.deviceDetector != nil {
@@ -218,15 +218,14 @@ func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler 
 				func(gpuNode *tfv1.GPUNode, gpu *tfv1.GPU) error {
 					return b.mutateGPUResourceState(device, gpuNode, gpu)
 				}); err != nil {
-				klog.Errorf("Failed to create or update GPU: %v", err)
+				klog.Errorf("Failed to create or update GPU when device added: %v", err)
 			} else {
 				klog.Infof("Device added: %s", device.UUID)
 			}
-			klog.Infof("Device added: %s", device.UUID)
 		},
 		OnRemove: func(device *api.DeviceInfo) {
 			if err := b.apiClient.DeleteGPU(device.UUID); err != nil {
-				klog.Errorf("Failed to delete GPU: %v", err)
+				klog.Errorf("Failed to delete GPU when device removed: %v", err)
 			} else {
 				klog.Infof("Device removed: %s", device.UUID)
 			}
@@ -236,14 +235,16 @@ func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler 
 				func(gpuNode *tfv1.GPUNode, gpu *tfv1.GPU) error {
 					return b.mutateGPUResourceState(newDevice, gpuNode, gpu)
 				}); err != nil {
-				klog.Errorf("Failed to update GPU: %v", err)
+				klog.Errorf("Failed to update GPU when device updated: %v", err)
 			} else {
 				klog.Infof("Device updated: %s", newDevice.UUID)
 			}
 		},
 		OnDiscoveryComplete: func(nodeInfo *api.NodeInfo) {
-			if err := b.apiClient.UpdateGPUNodeStatus(nodeInfo); err != nil {
+			if err := b.apiClient.UpdateGPUNodeStatus(b.nodeName, nodeInfo); err != nil {
 				klog.Errorf("Failed to update GPUNode status: %v", err)
+			} else {
+				klog.Infof("GPUNode status updated: %s", b.nodeName)
 			}
 		},
 	}

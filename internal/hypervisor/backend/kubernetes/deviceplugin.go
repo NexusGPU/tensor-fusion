@@ -105,7 +105,7 @@ func (dp *DevicePlugin) Start() error {
 
 	// Start gRPC server
 	go func() {
-		klog.Infof("Starting device plugin gRPC server on %s", dp.socketPath)
+		klog.V(4).Infof("Starting device plugin gRPC server on %s", dp.socketPath)
 		if err := dp.server.Serve(listener); err != nil {
 			klog.Errorf("Device plugin gRPC server error: %v", err)
 		}
@@ -168,7 +168,7 @@ func (dp *DevicePlugin) register() error {
 		return fmt.Errorf("failed to register: %w", err)
 	}
 
-	klog.Infof("Successfully registered device plugin with kubelet: tensor-fusion.ai/index_%d", dp.resourceNameIndex)
+	klog.V(4).Infof("Successfully registered device plugin with kubelet: tensor-fusion.ai/index_%d", dp.resourceNameIndex)
 	return nil
 }
 
@@ -201,7 +201,7 @@ func (dp *DevicePlugin) GetDevicePluginOptions(ctx context.Context, req *plugina
 
 // ListAndWatch streams device list and health updates
 func (dp *DevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
-	klog.Infof("ListAndWatch called for device plugin index %d", dp.resourceNameIndex)
+	klog.V(4).Infof("ListAndWatch called for device plugin index %d", dp.resourceNameIndex)
 
 	// Build initial device list
 	devices := make([]*pluginapi.Device, constants.IndexModLength)

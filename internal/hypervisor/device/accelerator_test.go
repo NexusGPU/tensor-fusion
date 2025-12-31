@@ -17,10 +17,10 @@ var _ = Describe("AcceleratorInterface", func() {
 
 	BeforeEach(func() {
 		// Try to find stub library
-		stubLibPath = "./provider/build/libaccelerator_stub.so"
+		stubLibPath = "./provider/build/libaccelerator_example.so"
 		if _, err := os.Stat(stubLibPath); os.IsNotExist(err) {
 			// Try alternative path
-			stubLibPath = filepath.Join("..", "..", "..", "provider", "build", "libaccelerator_stub.so")
+			stubLibPath = filepath.Join("..", "..", "..", "provider", "build", "libaccelerator_example.so")
 			if _, err := os.Stat(stubLibPath); os.IsNotExist(err) {
 				Skip("Stub library not found, skipping tests")
 			}

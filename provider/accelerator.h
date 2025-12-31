@@ -206,6 +206,7 @@ typedef struct {
 
 
 // Device UUID array entry (for passing multiple UUIDs)
+// DEPRECATED: This struct is no longer used. GetDeviceMetrics now uses const char** instead.
 #define MAX_DEVICE_UUIDS 64
 #define UUID_STRING_LENGTH 64
 
@@ -220,6 +221,8 @@ typedef struct {
     char hostPath[MAX_MOUNT_PATH];   // Host path
     char guestPath[MAX_MOUNT_PATH];  // Guest path
 } Mount;
+
+Result VirtualGPUInit(void);
 
 // ============================================================================
 // DeviceInfo APIs
@@ -356,13 +359,13 @@ Result GetProcessMemoryUtilization(
 /**
  * Get basic device metrics (power, PCIe, SM active, TC usage, etc.).
  * 
- * @param deviceUUIDs Array of device UUID entries
+ * @param deviceUUIDs Array of device UUID strings (null-terminated C strings)
  * @param deviceCount Number of devices
  * @param metrics Output buffer for device metrics (allocated by caller, size >= deviceCount)
  * @return RESULT_SUCCESS on success, error code otherwise
  */
 Result GetDeviceMetrics(
-    const DeviceUUIDEntry* deviceUUIDs,
+    const char** deviceUUIDs,
     size_t deviceCount,
     DeviceMetrics* metrics
 );

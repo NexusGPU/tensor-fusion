@@ -141,10 +141,6 @@ type ExtendedDeviceTopology struct {
 	TopologyType [32]byte
 }
 
-type DeviceUUIDEntry struct {
-	UUID [64]byte
-}
-
 const MaxMountPath = 512
 
 type Mount struct {
@@ -164,6 +160,7 @@ type ProcessArray struct {
 var (
 	libHandle uintptr
 	// DeviceInfo APIs
+	virtualGPUInit    func() Result
 	getDeviceCount    func(*uintptr) Result
 	getAllDevices     func(*ExtendedDeviceInfo, uintptr, *uintptr) Result
 	getDeviceTopology func(*int32, uintptr, *ExtendedDeviceTopology) Result
@@ -177,7 +174,7 @@ var (
 	// Metrics APIs
 	getProcessComputeUtilization func(*ComputeUtilization, uintptr, *uintptr) Result
 	getProcessMemoryUtilization  func(*MemoryUtilization, uintptr, *uintptr) Result
-	getDeviceMetrics             func(*DeviceUUIDEntry, uintptr, *DeviceMetrics) Result
+	getDeviceMetrics             func(**byte, uintptr, *DeviceMetrics) Result
 	getVendorMountLibs           func(*Mount, uintptr, *uintptr) Result
 	// Utility APIs
 	registerLogCallback func(uintptr) Result
@@ -220,6 +217,7 @@ func (a *AcceleratorInterface) Load() error {
 	libHandle = handle
 
 	// Register all required functions
+	purego.RegisterLibFunc(&virtualGPUInit, handle, "VirtualGPUInit")
 	purego.RegisterLibFunc(&getDeviceCount, handle, "GetDeviceCount")
 	purego.RegisterLibFunc(&getAllDevices, handle, "GetAllDevices")
 	purego.RegisterLibFunc(&getDeviceTopology, handle, "GetDeviceTopology")
@@ -250,6 +248,11 @@ func (a *AcceleratorInterface) Load() error {
 			klog.Warning("Failed to register log callback")
 		}
 	}()
+
+	result := virtualGPUInit()
+	if result != ResultSuccess {
+		return fmt.Errorf("failed to initialize virtual GPU: %d", result)
+	}
 
 	a.loaded = true
 	return nil
@@ -347,20 +350,21 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 	const maxStackDevices = 64
 	deviceCount := min(len(deviceUUIDs), maxStackDevices)
 
-	// Convert Go strings to DeviceUUIDEntry array
-	uuidEntries := make([]DeviceUUIDEntry, deviceCount)
+	// Convert Go strings to C string pointers array
+	// Allocate C strings with null terminators
+	cStrings := make([]*byte, deviceCount)
+	cStringData := make([][]byte, deviceCount)
 	for i := range deviceCount {
-		uuidBytes := []byte(deviceUUIDs[i])
-		copy(uuidEntries[i].UUID[:], uuidBytes)
-		if len(uuidBytes) < len(uuidEntries[i].UUID) {
-			uuidEntries[i].UUID[len(uuidBytes)] = 0 // null terminator
-		}
+		// Convert Go string to null-terminated C string
+		cStringData[i] = []byte(deviceUUIDs[i])
+		cStringData[i] = append(cStringData[i], 0) // null terminator
+		cStrings[i] = &cStringData[i][0]
 	}
 
 	// Allocate stack buffer for metrics
 	var cMetrics [maxStackDevices]DeviceMetrics
 
-	result := getDeviceMetrics(&uuidEntries[0], uintptr(deviceCount), &cMetrics[0])
+	result := getDeviceMetrics(&cStrings[0], uintptr(deviceCount), &cMetrics[0])
 	if result != ResultSuccess {
 		return nil, fmt.Errorf("failed to get device metrics: %d", result)
 	}

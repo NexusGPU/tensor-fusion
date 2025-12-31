@@ -116,8 +116,8 @@ run: manifests generate fmt vet vendor ## Run a controller from your host.
 	go run ./cmd/main.go
 
 .PHONY: build-provider
-build-provider: ## Build accelerator stub library.
-	$(MAKE) -C provider stub
+build-provider: ## Build accelerator example library.
+	$(MAKE) -C provider example
 
 .PHONY: build-hypervisor
 build-hypervisor: ## Build hypervisor binary with CGO disabled using purego.

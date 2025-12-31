@@ -129,13 +129,16 @@ func (a *APIClient) UpdateGPUStatus(gpu *tfv1.GPU) error {
 }
 
 // UpdateGPUNodeStatus updates the status of a GPUNode resource
-func (a *APIClient) UpdateGPUNodeStatus(nodeInfo *api.NodeInfo) error {
+func (a *APIClient) UpdateGPUNodeStatus(nodeName string, nodeInfo *api.NodeInfo) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		current := &tfv1.GPUNode{}
+		current := &tfv1.GPUNode{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: nodeName,
+			},
+		}
 		if err := a.client.Get(a.ctx, client.ObjectKeyFromObject(current), current); err != nil {
 			return err
 		}
-
 		original := current.DeepCopy()
 		patch := client.MergeFrom(original)
 
