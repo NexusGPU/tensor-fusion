@@ -91,7 +91,7 @@ var _ = Describe("GPUNode Controller", func() {
 	})
 
 	Context("Driver probe readiness", func() {
-		It("should wait for job success before allowing hypervisor creation", func() {
+		It("should return ready when driver probe job is not needed for NVIDIA", func() {
 			scheme := runtime.NewScheme()
 			Expect(tfv1.AddToScheme(scheme)).To(Succeed())
 			Expect(batchv1.AddToScheme(scheme)).To(Succeed())
@@ -138,20 +138,12 @@ var _ = Describe("GPUNode Controller", func() {
 			ctx := context.Background()
 			ready, err := reconciler.ensureDriverProbeReady(ctx, node, pool)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(ready).To(BeFalse())
-
-			job := &batchv1.Job{}
-			Expect(client.Get(ctx, ctrlclient.ObjectKey{
-				Name:      getDriverProbeJobName(node.Name),
-				Namespace: utils.CurrentNamespace(),
-			}, job)).To(Succeed())
-
-			job.Status.Succeeded = 1
-			Expect(client.Status().Update(ctx, job)).To(Succeed())
-
-			ready, err = reconciler.ensureDriverProbeReady(ctx, node, pool)
-			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeTrue())
+
+			// Verify no job is created since driver probe is not needed for NVIDIA
+			jobList := &batchv1.JobList{}
+			Expect(client.List(ctx, jobList)).To(Succeed())
+			Expect(jobList.Items).To(BeEmpty())
 		})
 	})
 
@@ -207,9 +199,15 @@ var _ = Describe("GPUNode Controller", func() {
 					compatibleWithNvidiaContainerToolkit: true,
 				}
 
-				client := fake.NewClientBuilder().WithScheme(scheme).Build()
+				fakeClient := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+						pod := obj.(*corev1.Pod)
+						return []string{pod.Spec.NodeName}
+					}).
+					Build()
 				reconciler := &GPUNodeReconciler{
-					Client: client,
+					Client: fakeClient,
 					Scheme: scheme,
 				}
 
@@ -240,13 +238,17 @@ var _ = Describe("GPUNode Controller", func() {
 					},
 				}
 
-				client := fake.NewClientBuilder().
+				fakeClient := fake.NewClientBuilder().
 					WithScheme(scheme).
+					WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+						pod := obj.(*corev1.Pod)
+						return []string{pod.Spec.NodeName}
+					}).
 					WithObjects(devicePluginPod).
 					Build()
 
 				reconciler := &GPUNodeReconciler{
-					Client: client,
+					Client: fakeClient,
 					Scheme: scheme,
 				}
 
@@ -297,13 +299,17 @@ var _ = Describe("GPUNode Controller", func() {
 					},
 				}
 
-				client := fake.NewClientBuilder().
+				fakeClient := fake.NewClientBuilder().
 					WithScheme(scheme).
+					WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+						pod := obj.(*corev1.Pod)
+						return []string{pod.Spec.NodeName}
+					}).
 					WithObjects(pendingPod, runningPod).
 					Build()
 
 				reconciler := &GPUNodeReconciler{
-					Client: client,
+					Client: fakeClient,
 					Scheme: scheme,
 				}
 
@@ -338,13 +344,17 @@ var _ = Describe("GPUNode Controller", func() {
 					},
 				}
 
-				client := fake.NewClientBuilder().
+				fakeClient := fake.NewClientBuilder().
 					WithScheme(scheme).
+					WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+						pod := obj.(*corev1.Pod)
+						return []string{pod.Spec.NodeName}
+					}).
 					WithObjects(otherNodePod).
 					Build()
 
 				reconciler := &GPUNodeReconciler{
-					Client: client,
+					Client: fakeClient,
 					Scheme: scheme,
 				}
 
@@ -375,13 +385,17 @@ var _ = Describe("GPUNode Controller", func() {
 					},
 				}
 
-				client := fake.NewClientBuilder().
+				fakeClient := fake.NewClientBuilder().
 					WithScheme(scheme).
+					WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+						pod := obj.(*corev1.Pod)
+						return []string{pod.Spec.NodeName}
+					}).
 					WithObjects(pendingPod).
 					Build()
 
 				reconciler := &GPUNodeReconciler{
-					Client: client,
+					Client: fakeClient,
 					Scheme: scheme,
 				}
 
@@ -402,6 +416,7 @@ var _ = Describe("GPUNode Controller", func() {
 						Name:              "nvidia-device-plugin-deleting",
 						Namespace:         "default",
 						DeletionTimestamp: &now,
+						Finalizers:        []string{"test-finalizer"},
 						Labels: map[string]string{
 							"app": "nvidia-device-plugin-daemonset",
 						},
@@ -414,13 +429,17 @@ var _ = Describe("GPUNode Controller", func() {
 					},
 				}
 
-				client := fake.NewClientBuilder().
+				fakeClient := fake.NewClientBuilder().
 					WithScheme(scheme).
+					WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+						pod := obj.(*corev1.Pod)
+						return []string{pod.Spec.NodeName}
+					}).
 					WithObjects(deletingPod).
 					Build()
 
 				reconciler := &GPUNodeReconciler{
-					Client: client,
+					Client: fakeClient,
 					Scheme: scheme,
 				}
 
@@ -451,13 +470,17 @@ var _ = Describe("GPUNode Controller", func() {
 					},
 				}
 
-				client := fake.NewClientBuilder().
+				fakeClient := fake.NewClientBuilder().
 					WithScheme(scheme).
+					WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj ctrlclient.Object) []string {
+						pod := obj.(*corev1.Pod)
+						return []string{pod.Spec.NodeName}
+					}).
 					WithObjects(failedPod).
 					Build()
 
 				reconciler := &GPUNodeReconciler{
-					Client: client,
+					Client: fakeClient,
 					Scheme: scheme,
 				}
 
