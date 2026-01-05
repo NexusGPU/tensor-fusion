@@ -6,7 +6,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -277,32 +276,4 @@ func TestNodeDiscoveryInitContainerImageFallback(t *testing.T) {
 		require.Equal(t, constants.TFInitContainerNameToolkitValidation, tmpl.Spec.InitContainers[0].Name)
 		require.Equal(t, "fallback-discovery:v2.0", tmpl.Spec.InitContainers[0].Image)
 	})
-}
-
-func TestComposeNvidiaDriverProbeJob(t *testing.T) {
-	node := &tfv1.GPUNode{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "node-1",
-		},
-	}
-	pool := &tfv1.GPUPool{
-		Spec: tfv1.GPUPoolSpec{
-			ComponentConfig: &tfv1.ComponentConfig{
-				Hypervisor: &tfv1.HypervisorConfig{
-					Image: "hypervisor:latest",
-				},
-			},
-		},
-	}
-
-	job, err := utils.ComposeNvidiaDriverProbeJob(node, pool)
-	require.NoError(t, err)
-	require.NotNil(t, job)
-	require.Equal(t, corev1.RestartPolicyOnFailure, job.Spec.Template.Spec.RestartPolicy)
-	require.Equal(t, "node-1", job.Spec.Template.Spec.NodeName)
-	require.Len(t, job.Spec.Template.Spec.Containers, 1)
-	container := job.Spec.Template.Spec.Containers[0]
-	require.Equal(t, "hypervisor:latest", container.Image)
-	require.NotEmpty(t, container.Args)
-	require.Contains(t, container.Args[0], "toolkit-ready")
 }

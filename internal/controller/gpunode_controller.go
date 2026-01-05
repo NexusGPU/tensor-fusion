@@ -394,7 +394,27 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 		log.Info("driver probe job not ready yet, requeue hypervisor creation", "node", node.Name)
 		return "", nil
 	}
-	if err := r.createHypervisorPod(ctx, key, node, pool, k8sNode); err != nil {
+
+	// Check hypervisor prerequisites (e.g., device plugin pod for NVIDIA)
+	var additionalOwners []client.Object
+	vendor, err := r.resolveNodeVendor(ctx, node)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve node vendor: %w", err)
+	}
+	handler := r.getVendorHandler(vendor)
+	if handler != nil {
+		prereqs, err := handler.CheckHypervisorPrerequisites(ctx, r, node.Name)
+		if err != nil {
+			return "", fmt.Errorf("failed to check hypervisor prerequisites: %w", err)
+		}
+		if !prereqs.Ready {
+			log.Info("hypervisor prerequisites not ready, will retry", "node", node.Name)
+			return "", nil
+		}
+		additionalOwners = prereqs.AdditionalOwners
+	}
+
+	if err := r.createHypervisorPod(ctx, key, node, pool, k8sNode, additionalOwners); err != nil {
 		if errors.IsAlreadyExists(err) {
 			log.Info("hypervisor pod already exists, skip creation", "node", node.Name)
 			return "", nil
@@ -411,6 +431,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	node *tfv1.GPUNode,
 	pool *tfv1.GPUPool,
 	k8sNode *corev1.Node,
+	additionalOwners []client.Object,
 ) error {
 	log := log.FromContext(ctx)
 
@@ -493,6 +514,12 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	if err := controllerutil.SetOwnerReference(k8sNode, newPod, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set owner reference for hypervisor: %w", err)
 	}
+	// set vendor-specific additional owner references (e.g., device-plugin pod for cascade deletion)
+	for _, owner := range additionalOwners {
+		if err := controllerutil.SetOwnerReference(owner, newPod, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set additional owner reference for hypervisor: %w", err)
+		}
+	}
 
 	// create hypervisor pod
 	if err = r.Create(ctx, newPod); err != nil {
@@ -504,6 +531,14 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *GPUNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Index Pod by spec.nodeName for efficient queries
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Pod{}, "spec.nodeName", func(obj client.Object) []string {
+		pod := obj.(*corev1.Pod)
+		return []string{pod.Spec.NodeName}
+	}); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.GPUNode{}).
 		Named("gpunode").
@@ -525,12 +560,12 @@ func (r *GPUNodeReconciler) ensureDriverProbeReady(ctx context.Context, node *tf
 		return false, fmt.Errorf("failed to resolve node vendor: %w", err)
 	}
 
-	probe := r.getDriverProbe(vendor)
-	if probe == nil {
+	handler := r.getVendorHandler(vendor)
+	if handler == nil {
 		return true, nil
 	}
 
-	jobTemplate, err := probe.ComposeJob(ctx, node, pool)
+	jobTemplate, err := handler.ComposeDriverProbeJob(ctx, node, pool)
 	if err != nil {
 		return false, fmt.Errorf("failed to compose driver probe job: %w", err)
 	}
@@ -599,35 +634,112 @@ func (r *GPUNodeReconciler) resolveNodeVendor(_ctx context.Context, _node *tfv1.
 	return constants.AcceleratorVendorNvidia, nil
 }
 
-type driverProbe interface {
-	ComposeJob(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) (*batchv1.Job, error)
+// HypervisorPrerequisites contains the prerequisites for creating a hypervisor pod
+type HypervisorPrerequisites struct {
+	Ready            bool            // Whether the prerequisites are ready
+	AdditionalOwners []client.Object // Additional owner references to set on the hypervisor pod
 }
 
-func (r *GPUNodeReconciler) getDriverProbe(vendor string) driverProbe {
+type vendorSpecificHandler interface {
+	// ComposeDriverProbeJob composes a driver probe job for the vendor
+	ComposeDriverProbeJob(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) (*batchv1.Job, error)
+
+	// CheckHypervisorPrerequisites checks and returns prerequisites for creating hypervisor pod
+	CheckHypervisorPrerequisites(ctx context.Context, r *GPUNodeReconciler, nodeName string) (*HypervisorPrerequisites, error)
+}
+
+func (r *GPUNodeReconciler) getVendorHandler(vendor string) vendorSpecificHandler {
 	if vendor == "" {
 		return nil
 	}
 	if vendor == constants.AcceleratorVendorNvidia {
-		return &nvidiaDriverProbe{
-			CompatibleWithNvidiaContainerToolkit: r.CompatibleWithNvidiaContainerToolkit,
+		return &nvidiaHandler{
+			compatibleWithNvidiaContainerToolkit: r.CompatibleWithNvidiaContainerToolkit,
 		}
 	}
 	return nil
 }
 
-type nvidiaDriverProbe struct {
-	CompatibleWithNvidiaContainerToolkit bool
+type nvidiaHandler struct {
+	compatibleWithNvidiaContainerToolkit bool
 }
 
-func (n *nvidiaDriverProbe) ComposeJob(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) (*batchv1.Job, error) {
-	if !n.CompatibleWithNvidiaContainerToolkit {
+func (n *nvidiaHandler) ComposeDriverProbeJob(ctx context.Context, node *tfv1.GPUNode, pool *tfv1.GPUPool) (*batchv1.Job, error) {
+	// DriverProbeJob is not needed for NVIDIA
+	return nil, nil
+}
+
+func (n *nvidiaHandler) CheckHypervisorPrerequisites(ctx context.Context, r *GPUNodeReconciler, nodeName string) (*HypervisorPrerequisites, error) {
+	if !n.compatibleWithNvidiaContainerToolkit {
+		return &HypervisorPrerequisites{Ready: true}, nil
+	}
+
+	pod, err := n.findDevicePluginPod(ctx, r, nodeName)
+	if err != nil {
+		return nil, err
+	}
+	if pod == nil {
+		return &HypervisorPrerequisites{Ready: false}, nil
+	}
+
+	// Only consider Running pods as ready to avoid premature hypervisor creation
+	if pod.Status.Phase != corev1.PodRunning {
+		return &HypervisorPrerequisites{Ready: false}, nil
+	}
+
+	return &HypervisorPrerequisites{
+		Ready:            true,
+		AdditionalOwners: []client.Object{pod},
+	}, nil
+}
+
+func (n *nvidiaHandler) findDevicePluginPod(ctx context.Context, r *GPUNodeReconciler, nodeName string) (*corev1.Pod, error) {
+	log := log.FromContext(ctx)
+
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList,
+		client.MatchingLabels{
+			"app": "nvidia-device-plugin-daemonset",
+		},
+		client.MatchingFields{
+			"spec.nodeName": nodeName,
+		}); err != nil {
+		log.Error(err, "failed to list nvidia-device-plugin pods")
+		return nil, err
+	}
+
+	candidatePods := podList.Items
+	if len(candidatePods) == 0 {
+		log.Info("no nvidia-device-plugin pod found on node, waiting", "node", nodeName)
 		return nil, nil
 	}
-	job, err := utils.ComposeNvidiaDriverProbeJob(node, pool)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compose NVIDIA driver probe job: %w", err)
+
+	var bestPod *corev1.Pod
+	// Prefer Running pods, fallback to Pending pods, skip deleting/failed pods
+	for i := range candidatePods {
+		pod := &candidatePods[i]
+		if !pod.DeletionTimestamp.IsZero() {
+			continue
+		}
+
+		switch pod.Status.Phase {
+		case corev1.PodRunning:
+			return pod, nil
+		case corev1.PodPending:
+			if bestPod == nil {
+				bestPod = pod
+			}
+		}
 	}
-	return job, nil
+
+	if bestPod != nil {
+		log.Info("nvidia-device-plugin pod is pending, waiting for it to be ready", "node", nodeName, "pod", bestPod.Name)
+		return bestPod, nil
+	}
+
+	// All pods are in Failed/Unknown state or being deleted
+	log.Info("nvidia-device-plugin pods exist but none are healthy", "node", nodeName, "count", len(candidatePods))
+	return nil, nil
 }
 
 func getDiscoveryJobName(gpunodeName string) string {
