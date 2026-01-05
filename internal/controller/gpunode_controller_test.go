@@ -154,4 +154,351 @@ var _ = Describe("GPUNode Controller", func() {
 			Expect(ready).To(BeTrue())
 		})
 	})
+
+	Context("Vendor specific handler", func() {
+		var (
+			scheme *runtime.Scheme
+			ctx    context.Context
+		)
+
+		BeforeEach(func() {
+			scheme = runtime.NewScheme()
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+			ctx = context.Background()
+		})
+
+		Describe("nvidiaHandler", func() {
+			It("should return nil job when compatible mode is disabled", func() {
+				handler := &nvidiaHandler{
+					compatibleWithNvidiaContainerToolkit: false,
+				}
+
+				node := &tfv1.GPUNode{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-node"},
+				}
+				pool := &tfv1.GPUPool{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-pool"},
+				}
+
+				job, err := handler.ComposeDriverProbeJob(ctx, node, pool)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(job).To(BeNil())
+			})
+
+			It("should return prerequisites as ready when compatible mode is disabled", func() {
+				handler := &nvidiaHandler{
+					compatibleWithNvidiaContainerToolkit: false,
+				}
+
+				client := fake.NewClientBuilder().WithScheme(scheme).Build()
+				reconciler := &GPUNodeReconciler{
+					Client: client,
+					Scheme: scheme,
+				}
+
+				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(prereqs.Ready).To(BeTrue())
+				Expect(prereqs.AdditionalOwners).To(BeNil())
+			})
+
+			It("should return prerequisites as not ready when device plugin pod not found", func() {
+				handler := &nvidiaHandler{
+					compatibleWithNvidiaContainerToolkit: true,
+				}
+
+				client := fake.NewClientBuilder().WithScheme(scheme).Build()
+				reconciler := &GPUNodeReconciler{
+					Client: client,
+					Scheme: scheme,
+				}
+
+				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(prereqs.Ready).To(BeFalse())
+				Expect(prereqs.AdditionalOwners).To(BeNil())
+			})
+
+			It("should return device plugin pod as additional owner when found", func() {
+				handler := &nvidiaHandler{
+					compatibleWithNvidiaContainerToolkit: true,
+				}
+
+				devicePluginPod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "nvidia-device-plugin-test",
+						Namespace: "default",
+						Labels: map[string]string{
+							"app": "nvidia-device-plugin-daemonset",
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "test-node",
+					},
+					Status: corev1.PodStatus{
+						Phase: corev1.PodRunning,
+					},
+				}
+
+				client := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithObjects(devicePluginPod).
+					Build()
+
+				reconciler := &GPUNodeReconciler{
+					Client: client,
+					Scheme: scheme,
+				}
+
+				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(prereqs.Ready).To(BeTrue())
+				Expect(prereqs.AdditionalOwners).To(HaveLen(1))
+
+				ownerPod, ok := prereqs.AdditionalOwners[0].(*corev1.Pod)
+				Expect(ok).To(BeTrue())
+				Expect(ownerPod.Name).To(Equal("nvidia-device-plugin-test"))
+			})
+
+			It("should prefer running pod over pending pod", func() {
+				handler := &nvidiaHandler{
+					compatibleWithNvidiaContainerToolkit: true,
+				}
+
+				pendingPod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "nvidia-device-plugin-pending",
+						Namespace: "default",
+						Labels: map[string]string{
+							"app": "nvidia-device-plugin-daemonset",
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "test-node",
+					},
+					Status: corev1.PodStatus{
+						Phase: corev1.PodPending,
+					},
+				}
+
+				runningPod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "nvidia-device-plugin-running",
+						Namespace: "default",
+						Labels: map[string]string{
+							"app": "nvidia-device-plugin-daemonset",
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "test-node",
+					},
+					Status: corev1.PodStatus{
+						Phase: corev1.PodRunning,
+					},
+				}
+
+				client := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithObjects(pendingPod, runningPod).
+					Build()
+
+				reconciler := &GPUNodeReconciler{
+					Client: client,
+					Scheme: scheme,
+				}
+
+				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(prereqs.Ready).To(BeTrue())
+				Expect(prereqs.AdditionalOwners).To(HaveLen(1))
+
+				ownerPod, ok := prereqs.AdditionalOwners[0].(*corev1.Pod)
+				Expect(ok).To(BeTrue())
+				Expect(ownerPod.Name).To(Equal("nvidia-device-plugin-running"))
+			})
+
+			It("should filter pods by node name", func() {
+				handler := &nvidiaHandler{
+					compatibleWithNvidiaContainerToolkit: true,
+				}
+
+				otherNodePod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "nvidia-device-plugin-other-node",
+						Namespace: "default",
+						Labels: map[string]string{
+							"app": "nvidia-device-plugin-daemonset",
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "other-node",
+					},
+					Status: corev1.PodStatus{
+						Phase: corev1.PodRunning,
+					},
+				}
+
+				client := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithObjects(otherNodePod).
+					Build()
+
+				reconciler := &GPUNodeReconciler{
+					Client: client,
+					Scheme: scheme,
+				}
+
+				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(prereqs.Ready).To(BeFalse())
+				Expect(prereqs.AdditionalOwners).To(BeNil())
+			})
+
+			It("should return not ready when only pending pod exists", func() {
+				handler := &nvidiaHandler{
+					compatibleWithNvidiaContainerToolkit: true,
+				}
+
+				pendingPod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "nvidia-device-plugin-pending",
+						Namespace: "default",
+						Labels: map[string]string{
+							"app": "nvidia-device-plugin-daemonset",
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "test-node",
+					},
+					Status: corev1.PodStatus{
+						Phase: corev1.PodPending,
+					},
+				}
+
+				client := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithObjects(pendingPod).
+					Build()
+
+				reconciler := &GPUNodeReconciler{
+					Client: client,
+					Scheme: scheme,
+				}
+
+				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(prereqs.Ready).To(BeFalse())
+				Expect(prereqs.AdditionalOwners).To(BeNil())
+			})
+
+			It("should skip pods with deletion timestamp", func() {
+				handler := &nvidiaHandler{
+					compatibleWithNvidiaContainerToolkit: true,
+				}
+
+				now := metav1.Now()
+				deletingPod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:              "nvidia-device-plugin-deleting",
+						Namespace:         "default",
+						DeletionTimestamp: &now,
+						Labels: map[string]string{
+							"app": "nvidia-device-plugin-daemonset",
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "test-node",
+					},
+					Status: corev1.PodStatus{
+						Phase: corev1.PodRunning,
+					},
+				}
+
+				client := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithObjects(deletingPod).
+					Build()
+
+				reconciler := &GPUNodeReconciler{
+					Client: client,
+					Scheme: scheme,
+				}
+
+				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(prereqs.Ready).To(BeFalse())
+				Expect(prereqs.AdditionalOwners).To(BeNil())
+			})
+
+			It("should skip failed pods", func() {
+				handler := &nvidiaHandler{
+					compatibleWithNvidiaContainerToolkit: true,
+				}
+
+				failedPod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "nvidia-device-plugin-failed",
+						Namespace: "default",
+						Labels: map[string]string{
+							"app": "nvidia-device-plugin-daemonset",
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "test-node",
+					},
+					Status: corev1.PodStatus{
+						Phase: corev1.PodFailed,
+					},
+				}
+
+				client := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithObjects(failedPod).
+					Build()
+
+				reconciler := &GPUNodeReconciler{
+					Client: client,
+					Scheme: scheme,
+				}
+
+				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(prereqs.Ready).To(BeFalse())
+				Expect(prereqs.AdditionalOwners).To(BeNil())
+			})
+		})
+
+		Describe("getVendorHandler", func() {
+			It("should return nvidia handler for NVIDIA vendor", func() {
+				reconciler := &GPUNodeReconciler{
+					CompatibleWithNvidiaContainerToolkit: true,
+				}
+
+				handler := reconciler.getVendorHandler(constants.AcceleratorVendorNvidia)
+				Expect(handler).NotTo(BeNil())
+
+				nvidiaHandler, ok := handler.(*nvidiaHandler)
+				Expect(ok).To(BeTrue())
+				Expect(nvidiaHandler.compatibleWithNvidiaContainerToolkit).To(BeTrue())
+			})
+
+			It("should return nil for empty vendor", func() {
+				reconciler := &GPUNodeReconciler{
+					CompatibleWithNvidiaContainerToolkit: true,
+				}
+
+				handler := reconciler.getVendorHandler("")
+				Expect(handler).To(BeNil())
+			})
+
+			It("should return nil for unknown vendor", func() {
+				reconciler := &GPUNodeReconciler{
+					CompatibleWithNvidiaContainerToolkit: true,
+				}
+
+				handler := reconciler.getVendorHandler("amd")
+				Expect(handler).To(BeNil())
+			})
+		})
+	})
 })
