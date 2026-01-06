@@ -14,7 +14,8 @@ type GlobalConfig struct {
 	AlertRules    []AlertRule          `yaml:"alertRules"`
 	AutoMigration *AutoMigrationConfig `yaml:"autoMigration"`
 
-	AutoScalingInterval string `yaml:"autoScalingInterval"`
+	AutoScalingInterval  string `yaml:"autoScalingInterval"`
+	GPUOperatorNamespace string `yaml:"gpuOperatorNamespace"`
 }
 
 type AutoMigrationConfig struct {
@@ -57,7 +58,19 @@ const (
 
 	// Open telemetry format
 	MetricsFormatOTel = "otel"
+
+	// Default GPU operator namespace
+	DefaultGPUOperatorNamespace = "gpu-operator"
 )
+
+// GetGPUOperatorNamespace returns the configured GPU operator namespace or default value
+func GetGPUOperatorNamespace() string {
+	cfg := GetGlobalConfig()
+	if cfg.GPUOperatorNamespace == "" {
+		return DefaultGPUOperatorNamespace
+	}
+	return cfg.GPUOperatorNamespace
+}
 
 func MockGlobalConfig() *GlobalConfig {
 	return &GlobalConfig{
@@ -76,5 +89,6 @@ func MockGlobalConfig() *GlobalConfig {
 				Description:        "mock",
 			},
 		},
+		GPUOperatorNamespace: DefaultGPUOperatorNamespace,
 	}
 }
