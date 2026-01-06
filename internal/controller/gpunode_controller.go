@@ -39,10 +39,13 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -396,7 +399,6 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 	}
 
 	// Check hypervisor prerequisites (e.g., device plugin pod for NVIDIA)
-	var additionalOwners []client.Object
 	vendor, err := r.resolveNodeVendor(ctx, node)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve node vendor: %w", err)
@@ -408,13 +410,23 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 			return "", fmt.Errorf("failed to check hypervisor prerequisites: %w", err)
 		}
 		if !prereqs.Ready {
-			log.Info("hypervisor prerequisites not ready, will retry", "node", node.Name)
+			log.Info("hypervisor prerequisites not ready, deleting existing hypervisor if any", "node", node.Name)
+			// Delete existing hypervisor pod if it exists
+			existingPod := &corev1.Pod{}
+			if err := r.Get(ctx, key, existingPod); err == nil {
+				if err := r.Delete(ctx, existingPod); err != nil {
+					log.Error(err, "failed to delete existing hypervisor pod", "node", node.Name)
+					return "", fmt.Errorf("failed to delete existing hypervisor pod: %w", err)
+				}
+				log.Info("deleted hypervisor pod due to prerequisites not ready", "node", node.Name, "pod", key.Name)
+			} else if !errors.IsNotFound(err) {
+				return "", fmt.Errorf("failed to get existing hypervisor pod: %w", err)
+			}
 			return "", nil
 		}
-		additionalOwners = prereqs.AdditionalOwners
 	}
 
-	if err := r.createHypervisorPod(ctx, key, node, pool, k8sNode, additionalOwners); err != nil {
+	if err := r.createHypervisorPod(ctx, key, node, pool, k8sNode); err != nil {
 		if errors.IsAlreadyExists(err) {
 			log.Info("hypervisor pod already exists, skip creation", "node", node.Name)
 			return "", nil
@@ -431,7 +443,6 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	node *tfv1.GPUNode,
 	pool *tfv1.GPUPool,
 	k8sNode *corev1.Node,
-	additionalOwners []client.Object,
 ) error {
 	log := log.FromContext(ctx)
 
@@ -514,12 +525,6 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	if err := controllerutil.SetOwnerReference(k8sNode, newPod, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set owner reference for hypervisor: %w", err)
 	}
-	// set vendor-specific additional owner references (e.g., device-plugin pod for cascade deletion)
-	for _, owner := range additionalOwners {
-		if err := controllerutil.SetOwnerReference(owner, newPod, r.Scheme); err != nil {
-			return fmt.Errorf("failed to set additional owner reference for hypervisor: %w", err)
-		}
-	}
 
 	// create hypervisor pod
 	if err = r.Create(ctx, newPod); err != nil {
@@ -548,6 +553,11 @@ func (r *GPUNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					{NamespacedName: client.ObjectKey{Name: obj.GetName()}},
 				}
 			})).
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.mapDevicePluginPodToGPUNode),
+			builder.WithPredicates(r.devicePluginPodPredicate()),
+		).
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Pod{}).
 		Owns(&tfv1.GPU{}).
@@ -636,8 +646,7 @@ func (r *GPUNodeReconciler) resolveNodeVendor(_ctx context.Context, _node *tfv1.
 
 // HypervisorPrerequisites contains the prerequisites for creating a hypervisor pod
 type HypervisorPrerequisites struct {
-	Ready            bool            // Whether the prerequisites are ready
-	AdditionalOwners []client.Object // Additional owner references to set on the hypervisor pod
+	Ready bool // Whether the prerequisites are ready
 }
 
 type vendorSpecificHandler interface {
@@ -687,10 +696,7 @@ func (n *nvidiaHandler) CheckHypervisorPrerequisites(ctx context.Context, r *GPU
 		return &HypervisorPrerequisites{Ready: false}, nil
 	}
 
-	return &HypervisorPrerequisites{
-		Ready:            true,
-		AdditionalOwners: []client.Object{pod},
-	}, nil
+	return &HypervisorPrerequisites{Ready: true}, nil
 }
 
 func (n *nvidiaHandler) findDevicePluginPod(ctx context.Context, r *GPUNodeReconciler, nodeName string) (*corev1.Pod, error) {
@@ -698,6 +704,7 @@ func (n *nvidiaHandler) findDevicePluginPod(ctx context.Context, r *GPUNodeRecon
 
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList,
+		client.InNamespace(config.GetGPUOperatorNamespace()),
 		client.MatchingLabels{
 			"app": "nvidia-device-plugin-daemonset",
 		},
@@ -758,4 +765,31 @@ func isNodeUnderGPUDriverUpgrade(node *corev1.Node) bool {
 	state := node.Labels[constants.NvidiaGPUDriverUpgradeStateLabel]
 	// Empty state or "upgrade-done" means the node is not upgrading
 	return state != "" && state != constants.NvidiaGPUDriverUpgradeStateDone
+}
+
+// devicePluginPodPredicate filters device-plugin pods in gpu-operator namespace
+func (r *GPUNodeReconciler) devicePluginPodPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool { return false },
+		UpdateFunc: func(e event.UpdateEvent) bool { return false },
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			pod, ok := e.Object.(*corev1.Pod)
+			if !ok {
+				return false
+			}
+			return pod.Namespace == config.GetGPUOperatorNamespace() &&
+				pod.Labels != nil &&
+				pod.Labels["app"] == "nvidia-device-plugin-daemonset"
+		},
+		GenericFunc: func(e event.GenericEvent) bool { return false },
+	}
+}
+
+// mapDevicePluginPodToGPUNode maps device-plugin pod to GPUNode
+func (r *GPUNodeReconciler) mapDevicePluginPodToGPUNode(ctx context.Context, obj client.Object) []ctrl.Request {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok || pod.Spec.NodeName == "" {
+		return nil
+	}
+	return []ctrl.Request{{NamespacedName: client.ObjectKey{Name: pod.Spec.NodeName}}}
 }

@@ -191,7 +191,6 @@ var _ = Describe("GPUNode Controller", func() {
 				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(prereqs.Ready).To(BeTrue())
-				Expect(prereqs.AdditionalOwners).To(BeNil())
 			})
 
 			It("should return prerequisites as not ready when device plugin pod not found", func() {
@@ -214,7 +213,6 @@ var _ = Describe("GPUNode Controller", func() {
 				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(prereqs.Ready).To(BeFalse())
-				Expect(prereqs.AdditionalOwners).To(BeNil())
 			})
 
 			It("should return device plugin pod as additional owner when found", func() {
@@ -225,7 +223,7 @@ var _ = Describe("GPUNode Controller", func() {
 				devicePluginPod := &corev1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "nvidia-device-plugin-test",
-						Namespace: "default",
+						Namespace: "gpu-operator",
 						Labels: map[string]string{
 							"app": "nvidia-device-plugin-daemonset",
 						},
@@ -255,11 +253,6 @@ var _ = Describe("GPUNode Controller", func() {
 				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(prereqs.Ready).To(BeTrue())
-				Expect(prereqs.AdditionalOwners).To(HaveLen(1))
-
-				ownerPod, ok := prereqs.AdditionalOwners[0].(*corev1.Pod)
-				Expect(ok).To(BeTrue())
-				Expect(ownerPod.Name).To(Equal("nvidia-device-plugin-test"))
 			})
 
 			It("should prefer running pod over pending pod", func() {
@@ -270,7 +263,7 @@ var _ = Describe("GPUNode Controller", func() {
 				pendingPod := &corev1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "nvidia-device-plugin-pending",
-						Namespace: "default",
+						Namespace: "gpu-operator",
 						Labels: map[string]string{
 							"app": "nvidia-device-plugin-daemonset",
 						},
@@ -286,7 +279,7 @@ var _ = Describe("GPUNode Controller", func() {
 				runningPod := &corev1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "nvidia-device-plugin-running",
-						Namespace: "default",
+						Namespace: "gpu-operator",
 						Labels: map[string]string{
 							"app": "nvidia-device-plugin-daemonset",
 						},
@@ -316,11 +309,6 @@ var _ = Describe("GPUNode Controller", func() {
 				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(prereqs.Ready).To(BeTrue())
-				Expect(prereqs.AdditionalOwners).To(HaveLen(1))
-
-				ownerPod, ok := prereqs.AdditionalOwners[0].(*corev1.Pod)
-				Expect(ok).To(BeTrue())
-				Expect(ownerPod.Name).To(Equal("nvidia-device-plugin-running"))
 			})
 
 			It("should filter pods by node name", func() {
@@ -331,7 +319,7 @@ var _ = Describe("GPUNode Controller", func() {
 				otherNodePod := &corev1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "nvidia-device-plugin-other-node",
-						Namespace: "default",
+						Namespace: "gpu-operator",
 						Labels: map[string]string{
 							"app": "nvidia-device-plugin-daemonset",
 						},
@@ -361,7 +349,6 @@ var _ = Describe("GPUNode Controller", func() {
 				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(prereqs.Ready).To(BeFalse())
-				Expect(prereqs.AdditionalOwners).To(BeNil())
 			})
 
 			It("should return not ready when only pending pod exists", func() {
@@ -372,7 +359,7 @@ var _ = Describe("GPUNode Controller", func() {
 				pendingPod := &corev1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "nvidia-device-plugin-pending",
-						Namespace: "default",
+						Namespace: "gpu-operator",
 						Labels: map[string]string{
 							"app": "nvidia-device-plugin-daemonset",
 						},
@@ -402,7 +389,6 @@ var _ = Describe("GPUNode Controller", func() {
 				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(prereqs.Ready).To(BeFalse())
-				Expect(prereqs.AdditionalOwners).To(BeNil())
 			})
 
 			It("should skip pods with deletion timestamp", func() {
@@ -446,7 +432,6 @@ var _ = Describe("GPUNode Controller", func() {
 				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(prereqs.Ready).To(BeFalse())
-				Expect(prereqs.AdditionalOwners).To(BeNil())
 			})
 
 			It("should skip failed pods", func() {
@@ -457,7 +442,7 @@ var _ = Describe("GPUNode Controller", func() {
 				failedPod := &corev1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "nvidia-device-plugin-failed",
-						Namespace: "default",
+						Namespace: "gpu-operator",
 						Labels: map[string]string{
 							"app": "nvidia-device-plugin-daemonset",
 						},
@@ -487,7 +472,6 @@ var _ = Describe("GPUNode Controller", func() {
 				prereqs, err := handler.CheckHypervisorPrerequisites(ctx, reconciler, "test-node")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(prereqs.Ready).To(BeFalse())
-				Expect(prereqs.AdditionalOwners).To(BeNil())
 			})
 		})
 
