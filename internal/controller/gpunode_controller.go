@@ -359,20 +359,61 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 		Name:      fmt.Sprintf("hypervisor-%s", node.Name),
 	}
 
+	// Get current hypervisor pod once to avoid duplicate API calls
 	currentPod := &corev1.Pod{}
+	podExists := false
 	if err := r.Get(ctx, key, currentPod); err != nil {
 		if !errors.IsNotFound(err) {
 			return "", fmt.Errorf("failed to get current hypervisor pod: %w", err)
 		}
 	} else {
-		// hypervisor pod found, verify status and podTemplateHash
+		podExists = true
+	}
+
+	// Check hypervisor prerequisites (e.g., device plugin pod for NVIDIA)
+	// Must be checked continuously even if hypervisor exists to maintain consistency
+	vendor, err := r.resolveNodeVendor(ctx, node)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve node vendor: %w", err)
+	}
+
+	handler := r.getVendorHandler(vendor)
+	if handler != nil {
+		log.V(1).Info("checking hypervisor prerequisites", "node", node.Name, "vendor", vendor)
+		prereqs, err := handler.CheckHypervisorPrerequisites(ctx, r, node.Name)
+		if err != nil {
+			return "", fmt.Errorf("failed to check hypervisor prerequisites: %w", err)
+		}
+
+		if !prereqs.Ready {
+			if podExists {
+				log.Info("hypervisor prerequisites not ready, deleting existing hypervisor pod",
+					"node", node.Name,
+					"pod", currentPod.Name,
+					"podPhase", currentPod.Status.Phase)
+				if err := r.Delete(ctx, currentPod); err != nil {
+					return "", fmt.Errorf("failed to delete existing hypervisor pod: %w", err)
+				}
+				log.Info("deleted hypervisor pod due to prerequisites not ready", "node", node.Name, "pod", key.Name)
+			} else {
+				log.V(1).Info("hypervisor prerequisites not ready, no existing pod to delete", "node", node.Name)
+			}
+			// Return error to trigger requeue, ensuring eventual creation when prerequisites are met
+			return "", fmt.Errorf("waiting for hypervisor prerequisites (device plugin)")
+		}
+		log.V(1).Info("hypervisor prerequisites are ready", "node", node.Name)
+	}
+
+	// If pod exists and prerequisites are satisfied, verify its status
+	if podExists {
+		// If node is already running, no need to recreate
 		if node.Status.Phase == tfv1.TensorFusionGPUNodePhaseRunning {
 			return key.Name, nil
 		}
 
 		oldHash := currentPod.Labels[constants.LabelKeyPodTemplateHash]
 		if !currentPod.DeletionTimestamp.IsZero() {
-			log.Info("hypervisor pod is still being deleting", "name", key.Name, "hash", oldHash)
+			log.Info("hypervisor pod is still being deleted", "name", key.Name, "hash", oldHash)
 			return "", nil
 		}
 
@@ -383,11 +424,11 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 			}
 			log.Info("old hypervisor pod deleted", "name", currentPod.Name, "oldHash", oldHash, "newHash", newHash)
 			return "", nil
-		} else {
-			return key.Name, nil
 		}
+		return key.Name, nil
 	}
 
+	// Create new hypervisor pod
 	log.Info("hypervisor pod not found, creating new one", "node", node.Name)
 	ready, err := r.ensureDriverProbeReady(ctx, node, pool)
 	if err != nil {
@@ -398,41 +439,12 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 		return "", nil
 	}
 
-	// Check hypervisor prerequisites (e.g., device plugin pod for NVIDIA)
-	vendor, err := r.resolveNodeVendor(ctx, node)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve node vendor: %w", err)
-	}
-	handler := r.getVendorHandler(vendor)
-	if handler != nil {
-		prereqs, err := handler.CheckHypervisorPrerequisites(ctx, r, node.Name)
-		if err != nil {
-			return "", fmt.Errorf("failed to check hypervisor prerequisites: %w", err)
-		}
-		if !prereqs.Ready {
-			log.Info("hypervisor prerequisites not ready, deleting existing hypervisor if any", "node", node.Name)
-			// Delete existing hypervisor pod if it exists
-			existingPod := &corev1.Pod{}
-			if err := r.Get(ctx, key, existingPod); err == nil {
-				if err := r.Delete(ctx, existingPod); err != nil {
-					log.Error(err, "failed to delete existing hypervisor pod", "node", node.Name)
-					return "", fmt.Errorf("failed to delete existing hypervisor pod: %w", err)
-				}
-				log.Info("deleted hypervisor pod due to prerequisites not ready", "node", node.Name, "pod", key.Name)
-			} else if !errors.IsNotFound(err) {
-				return "", fmt.Errorf("failed to get existing hypervisor pod: %w", err)
-			}
-			return "", nil
-		}
-	}
-
 	if err := r.createHypervisorPod(ctx, key, node, pool, k8sNode); err != nil {
 		if errors.IsAlreadyExists(err) {
 			log.Info("hypervisor pod already exists, skip creation", "node", node.Name)
 			return "", nil
-		} else {
-			return "", fmt.Errorf("failed to create hypervisor pod: %w", err)
 		}
+		return "", fmt.Errorf("failed to create hypervisor pod: %w", err)
 	}
 	return key.Name, nil
 }
@@ -679,7 +691,11 @@ func (n *nvidiaHandler) ComposeDriverProbeJob(ctx context.Context, node *tfv1.GP
 }
 
 func (n *nvidiaHandler) CheckHypervisorPrerequisites(ctx context.Context, r *GPUNodeReconciler, nodeName string) (*HypervisorPrerequisites, error) {
+	log := log.FromContext(ctx)
+
 	if !n.compatibleWithNvidiaContainerToolkit {
+		log.V(1).Info("compatible-with-nvidia-container-toolkit is disabled, skipping device plugin check",
+			"node", nodeName)
 		return &HypervisorPrerequisites{Ready: true}, nil
 	}
 
@@ -688,14 +704,23 @@ func (n *nvidiaHandler) CheckHypervisorPrerequisites(ctx context.Context, r *GPU
 		return nil, err
 	}
 	if pod == nil {
+		log.Info("device plugin pod not found, hypervisor prerequisites not ready",
+			"node", nodeName)
 		return &HypervisorPrerequisites{Ready: false}, nil
 	}
 
 	// Only consider Running pods as ready to avoid premature hypervisor creation
 	if pod.Status.Phase != corev1.PodRunning {
+		log.Info("device plugin pod not running, hypervisor prerequisites not ready",
+			"node", nodeName,
+			"pod", pod.Name,
+			"phase", pod.Status.Phase)
 		return &HypervisorPrerequisites{Ready: false}, nil
 	}
 
+	log.V(1).Info("device plugin pod is running, hypervisor prerequisites ready",
+		"node", nodeName,
+		"pod", pod.Name)
 	return &HypervisorPrerequisites{Ready: true}, nil
 }
 
@@ -717,7 +742,7 @@ func (n *nvidiaHandler) findDevicePluginPod(ctx context.Context, r *GPUNodeRecon
 
 	candidatePods := podList.Items
 	if len(candidatePods) == 0 {
-		log.Info("no nvidia-device-plugin pod found on node, waiting", "node", nodeName)
+		log.V(1).Info("no nvidia-device-plugin pod found on node, waiting", "node", nodeName)
 		return nil, nil
 	}
 
@@ -777,9 +802,20 @@ func (r *GPUNodeReconciler) devicePluginPodPredicate() predicate.Predicate {
 			if !ok {
 				return false
 			}
-			return pod.Namespace == config.GetGPUOperatorNamespace() &&
+
+			expectedNamespace := config.GetGPUOperatorNamespace()
+			matched := pod.Namespace == expectedNamespace &&
 				pod.Labels != nil &&
 				pod.Labels["app"] == "nvidia-device-plugin-daemonset"
+
+			if matched {
+				log.Log.V(1).Info("device plugin pod deletion detected, will trigger GPUNode reconcile",
+					"pod", pod.Name,
+					"namespace", pod.Namespace,
+					"nodeName", pod.Spec.NodeName)
+			}
+
+			return matched
 		},
 		GenericFunc: func(e event.GenericEvent) bool { return false },
 	}
@@ -789,7 +825,14 @@ func (r *GPUNodeReconciler) devicePluginPodPredicate() predicate.Predicate {
 func (r *GPUNodeReconciler) mapDevicePluginPodToGPUNode(ctx context.Context, obj client.Object) []ctrl.Request {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok || pod.Spec.NodeName == "" {
+		log.FromContext(ctx).V(1).Info("mapDevicePluginPodToGPUNode: invalid pod or no nodeName", "ok", ok)
 		return nil
 	}
+
+	log.FromContext(ctx).V(1).Info("device plugin pod deleted, mapping to GPUNode for reconciliation",
+		"pod", pod.Name,
+		"namespace", pod.Namespace,
+		"nodeName", pod.Spec.NodeName)
+
 	return []ctrl.Request{{NamespacedName: client.ObjectKey{Name: pod.Spec.NodeName}}}
 }
