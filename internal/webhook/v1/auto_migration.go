@@ -22,6 +22,7 @@ import (
 	"slices"
 
 	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -31,6 +32,12 @@ import (
 // ShouldAutoMigrateGPUPod determines if a Pod should be automatically migrated to TensorFusion
 // based on the auto migration configuration.
 func ShouldAutoMigrateGPUPod(ctx context.Context, c client.Client, pod *corev1.Pod) (bool, error) {
+
+	// Skip migration if pod explicitly disables TensorFusion via tensor-fusion.ai/enabled=false label
+	if utils.IsTensorFusionPodDisabled(pod) {
+		return false, nil
+	}
+
 	globalConfig := config.GetGlobalConfig()
 	if globalConfig == nil || globalConfig.AutoMigration == nil {
 		return false, nil
