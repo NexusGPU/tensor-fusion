@@ -208,9 +208,12 @@ func HasGPUResourceRequest(pod *corev1.Pod) bool {
 }
 
 func IsTensorFusionPod(pod *corev1.Pod) bool {
-	return pod.Labels[constants.TensorFusionEnabledLabelKey] == constants.TrueStringValue
+	return pod.Labels != nil && pod.Labels[constants.TensorFusionEnabledLabelKey] == constants.TrueStringValue
 }
 
+func IsTensorFusionPodDisabled(pod *corev1.Pod) bool {
+	return pod.Labels != nil && pod.Labels[constants.TensorFusionEnabledLabelKey] == constants.FalseStringValue
+}
 func IsTensorFusionWorker(pod *corev1.Pod) bool {
 	return pod.Labels[constants.LabelComponent] == constants.ComponentWorker
 }
