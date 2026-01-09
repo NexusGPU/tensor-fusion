@@ -9,6 +9,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/awslabs/operatorpkg/status"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -113,6 +114,14 @@ var _ = Describe("NodeExpander Unit Tests", func() {
 			testKarpenterNodeClaimCreation(suite)
 		})
 
+		It("should set expansion label to new node claim name without override", func() {
+			testExpansionLabelNotOverridden(suite)
+		})
+
+		It("should cleanup inflight node claim when node is ready", func() {
+			testCleanupReadyInFlightNodeClaim(suite)
+		})
+
 		It("should handle inflight node management correctly", func() {
 			testInflightNodeManagement(suite)
 		})
@@ -189,6 +198,68 @@ func testKarpenterNodeClaimCreation(suite *NodeExpanderTestSuite) {
 		}
 		return len(nodeClaimList.Items)
 	}, 10*time.Second, 200*time.Millisecond).Should(Equal(2))
+}
+
+func testExpansionLabelNotOverridden(suite *NodeExpanderTestSuite) {
+	origNodeClaim := &karpv1.NodeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "orig-claim",
+			Labels: map[string]string{
+				constants.KarpenterExpansionLabel: "old-expansion",
+				"env":                             "prod",
+			},
+		},
+	}
+	Expect(suite.k8sClient.Create(suite.ctx, origNodeClaim)).To(Succeed())
+	defer func() { _ = suite.k8sClient.Delete(suite.ctx, origNodeClaim) }()
+
+	pod := createTestTensorFusionPod("worker-expansion", suite.namespace, "100", "1Gi")
+	preparedNode := createTestNode("new-expansion", origNodeClaim)
+
+	err := suite.nodeExpander.createKarpenterNodeClaimDirect(suite.ctx, pod, preparedNode, origNodeClaim)
+	Expect(err).To(Succeed())
+
+	newClaim := &karpv1.NodeClaim{}
+	Expect(suite.k8sClient.Get(suite.ctx, client.ObjectKey{Name: preparedNode.Name}, newClaim)).To(Succeed())
+	Expect(newClaim.Labels[constants.KarpenterExpansionLabel]).To(Equal(preparedNode.Name))
+	Expect(newClaim.Labels["env"]).To(Equal("prod"))
+}
+
+func testCleanupReadyInFlightNodeClaim(suite *NodeExpanderTestSuite) {
+	nodeClaim := &karpv1.NodeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ready-nodeclaim",
+		},
+	}
+	nodeClaim.Status.NodeName = "ready-node"
+	nodeClaim.StatusConditions().SetTrue(status.ConditionReady)
+
+	gpu := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-ready"},
+		Status: tfv1.GPUStatus{
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("10"),
+				Vram:   resource.MustParse("10Gi"),
+			},
+			Capacity: &tfv1.Resource{
+				Tflops: resource.MustParse("10"),
+				Vram:   resource.MustParse("10Gi"),
+			},
+		},
+	}
+
+	suite.nodeExpander.inFlightNodeClaims.Store(nodeClaim.Name, true)
+	suite.nodeExpander.addInFlightNode(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeClaim.Name}}, []*tfv1.GPU{gpu})
+
+	suite.nodeExpander.cleanupInFlightNodeClaim(nodeClaim)
+
+	_, ok := suite.nodeExpander.inFlightNodeClaims.Load(nodeClaim.Name)
+	Expect(ok).To(BeFalse())
+
+	suite.nodeExpander.mu.RLock()
+	_, exists := suite.nodeExpander.inFlightNodes[nodeClaim.Name]
+	suite.nodeExpander.mu.RUnlock()
+	Expect(exists).To(BeFalse())
 }
 
 // Test inflight node management
