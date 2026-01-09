@@ -62,7 +62,8 @@ func NewIndexAllocator(ctx context.Context, client client.Client) (*IndexAllocat
 		ctx:           ctx,
 		initializedCh: make(chan struct{}),
 
-		nodeIndexQueue: make(map[string]map[int]types.NamespacedName, 128),
+		nodeIndexQueue:   make(map[string]map[int]types.NamespacedName, 128),
+		asyncCheckingMap: make(map[types.NamespacedName]struct{}, 128),
 
 		podIndexMap: make(map[types.NamespacedName]indexIdentifier, 128),
 	}
@@ -119,7 +120,7 @@ func (s *IndexAllocator) ReconcileLockState(pod *v1.Pod) {
 		s.storeMutex.Lock()
 		indexQueue := s.nodeIndexQueue[pod.Spec.NodeName]
 		if indexQueue == nil {
-			indexQueue = make(map[int]types.NamespacedName)
+			indexQueue = make(map[int]types.NamespacedName, 8)
 			s.nodeIndexQueue[pod.Spec.NodeName] = indexQueue
 		}
 
@@ -199,12 +200,23 @@ func (s *IndexAllocator) CheckNodeIndexAndTryOccupy(pod *v1.Pod, index int) bool
 		// should not happen, unscheduled pod
 		return false
 	}
+
+	// DEAD LOCK POSSIBLE
 	s.storeMutex.RLock()
 	indexQueue := s.nodeIndexQueue[nodeName]
-	if len(indexQueue) == 0 {
+	if indexQueue == nil {
 		s.storeMutex.RUnlock()
-		return false
+		// if index queue is not initialized, initialize it
+		s.storeMutex.Lock()
+		indexQueue = make(map[int]types.NamespacedName, 8)
+		s.nodeIndexQueue[nodeName] = indexQueue
+		s.storeMutex.Unlock()
+
+		// re-lock for read operation (just for logic consistency)
+		s.storeMutex.RLock()
 	}
+
+	// Read if index is available
 	_, exists := indexQueue[index]
 	s.storeMutex.RUnlock()
 	// Occupy index for node
