@@ -12,6 +12,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	"github.com/awslabs/operatorpkg/status"
 	"github.com/samber/lo/mutable"
 	corev1 "k8s.io/api/core/v1"
 	errors "k8s.io/apimachinery/pkg/api/errors"
@@ -85,39 +86,58 @@ func NewNodeExpander(
 
 	// Start checking inFlightNodeClaims every minute to avoid stuck in inFlightNodes
 	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
 		for {
-			time.Sleep(time.Minute)
+			select {
+			case <-expander.ctx.Done():
+				return
+			case <-ticker.C:
+			}
 			expander.inFlightNodeClaims.Range(func(key, _ any) bool {
 				karpenterNodeClaim := &karpv1.NodeClaim{}
-				if err := expander.client.Get(expander.ctx, client.ObjectKey{Name: key.(string)}, karpenterNodeClaim); err != nil {
+				name := key.(string)
+				if err := expander.client.Get(expander.ctx, client.ObjectKey{Name: name}, karpenterNodeClaim); err != nil {
 					if errors.IsNotFound(err) {
 						expander.inFlightNodeClaims.Delete(key)
-						expander.RemoveInFlightNode(key.(string))
-						expander.logger.Info("karpenter node claim not found, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", key.(string))
+						expander.RemoveInFlightNode(name)
+						expander.logger.Info("karpenter node claim not found, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", name)
 						return true
 					}
-					expander.logger.Error(err, "failed to get karpenter node claim", "nodeClaimName", key.(string))
+					expander.logger.Error(err, "failed to get karpenter node claim", "nodeClaimName", name)
 					return true
 				}
-				if !karpenterNodeClaim.DeletionTimestamp.IsZero() {
-					expander.inFlightNodeClaims.Delete(key)
-					expander.RemoveInFlightNode(key.(string))
-					expander.logger.Info("karpenter node claim is deleted, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", key.(string))
-					return true
-				}
-				expander.mu.Lock()
-				defer expander.mu.Unlock()
-				if _, ok := expander.inFlightNodes[karpenterNodeClaim.Name]; !ok {
-					expander.inFlightNodeClaims.Delete(key)
-					expander.logger.Info("karpenter node claim has been provisioned, remove from inFlightNodeClaims", "nodeClaimName", key.(string))
-					return true
-				}
+				expander.cleanupInFlightNodeClaim(karpenterNodeClaim)
 				return true
 			})
 		}
 	}()
 
 	return expander
+}
+
+func (e *NodeExpander) cleanupInFlightNodeClaim(nodeClaim *karpv1.NodeClaim) {
+	if nodeClaim == nil {
+		return
+	}
+	if !nodeClaim.DeletionTimestamp.IsZero() {
+		e.inFlightNodeClaims.Delete(nodeClaim.Name)
+		e.RemoveInFlightNode(nodeClaim.Name)
+		e.logger.Info("karpenter node claim is deleted, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", nodeClaim.Name)
+		return
+	}
+	if nodeClaim.StatusConditions().IsTrue(status.ConditionReady) || nodeClaim.Status.NodeName != "" {
+		e.inFlightNodeClaims.Delete(nodeClaim.Name)
+		e.RemoveInFlightNode(nodeClaim.Name)
+		e.logger.Info("karpenter node claim ready, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", nodeClaim.Name)
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.inFlightNodes[nodeClaim.Name]; !ok {
+		e.inFlightNodeClaims.Delete(nodeClaim.Name)
+		e.logger.Info("karpenter node claim has been provisioned, remove from inFlightNodeClaims", "nodeClaimName", nodeClaim.Name)
+	}
 }
 
 func (e *NodeExpander) GetNodeScalerInfo() any {
@@ -603,6 +623,9 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 
 	// Pass through labels and annotations
 	for k, v := range nodeClaim.Labels {
+		if k == constants.KarpenterExpansionLabel {
+			continue
+		}
 		if isNotAutoAddedKarpenterKeys(k) {
 			newNodeClaim.Labels[k] = v
 		}
