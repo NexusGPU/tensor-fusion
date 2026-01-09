@@ -59,6 +59,21 @@ type GPUNodeReconciler struct {
 	CompatibleWithNvidiaContainerToolkit bool
 }
 
+// For test or troubleshooting purpose, using env var to force GPUNode state
+var forceGPUNodeStateMap = make(map[string]tfv1.TensorFusionGPUNodePhase, 4)
+
+func init() {
+	if state := os.Getenv("DEBUG_FORCE_GPUNODE_STATE"); state != "" {
+		log := log.FromContext(context.Background())
+		err := json.Unmarshal([]byte(state), &forceGPUNodeStateMap)
+		if err != nil {
+			log.Error(err, "failed to unmarshal DEBUG_FORCE_GPUNODE_STATE")
+		} else {
+			log.Info("DEBUG_FORCE_GPUNODE_STATE set, will force GPUNode state to", "state", state)
+		}
+	}
+}
+
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes/finalizers,verbs=update
@@ -185,7 +200,22 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 	}
 
 	// Reconcile GPUNode status with hypervisor pod status, when changed
-	if pod.Status.Phase != corev1.PodRunning || !utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady) {
+	hypervisorNotReady := pod.Status.Phase != corev1.PodRunning || !utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady)
+
+	forceGPUNodePhase, exists := forceGPUNodeStateMap[node.Name]
+	if exists {
+		// Use env var forced value
+		switch forceGPUNodePhase {
+		case tfv1.TensorFusionGPUNodePhasePending:
+			hypervisorNotReady = true
+		case tfv1.TensorFusionGPUNodePhaseRunning:
+			hypervisorNotReady = false
+		default:
+			// ignore other values
+		}
+	}
+
+	if hypervisorNotReady {
 		if node.Status.Phase != tfv1.TensorFusionGPUNodePhasePending {
 			node.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
 			err := r.Status().Update(ctx, node)
