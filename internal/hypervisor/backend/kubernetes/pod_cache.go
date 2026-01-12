@@ -146,26 +146,39 @@ func (kc *PodCacheManager) Stop() {
 func (kc *PodCacheManager) onPodAdd(obj any) {
 	pod := obj.(*corev1.Pod)
 	kc.mu.Lock()
-	defer kc.mu.Unlock()
 	kc.cachedPod[string(pod.UID)] = pod
 
 	workerInfo, index, err := kc.extractWorkerInfo(pod)
 	if err != nil {
+		kc.mu.Unlock()
 		klog.Error(err, "Failed to extract worker info for pod", "pod", pod.Name, "namespace", pod.Namespace)
 		return
 	}
+	shouldNotifyIndexSubscribers := false
 	if index != "" {
 		podIndex, err := strconv.Atoi(index)
 		if err != nil {
+			kc.mu.Unlock()
 			klog.Error(err, "Failed to convert node index to int", "node index", index)
 			return
 		}
 		// Make sure indexToWorker only contains device allocating pods (Pod is pending and index was assigned)
 		if workerInfo.Status == api.WorkerStatusDeviceAllocating {
 			kc.indexToWorkerInfo[podIndex] = workerInfo
+			shouldNotifyIndexSubscribers = true
 		}
 	}
+	kc.mu.Unlock()
+
 	kc.notifyWorkerChanged(workerInfo)
+	// Notify indexSubscribers via workerChangedCh (non-blocking send)
+	if shouldNotifyIndexSubscribers {
+		select {
+		case kc.workerChangedCh <- struct{}{}:
+		default:
+			// Channel already has a pending notification, no need to send another
+		}
+	}
 	klog.Infof("Pod %s/%s added to pending, state: %s node index: %s", pod.Namespace, pod.Name, workerInfo.Status, index)
 }
 
@@ -298,10 +311,7 @@ func (kc *PodCacheManager) UnregisterWorkerInfoSubscriber(name string) {
 // If worker info is already available, it returns immediately. Otherwise, it waits for up to 10 minutes
 // for the worker info to become available.
 func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(podIndex int) (*api.WorkerInfo, error) {
-	kc.subscribersMu.Lock()
-	defer kc.subscribersMu.Unlock()
 	// First, check if worker info is already available (fast path)
-
 	kc.mu.RLock()
 	if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfo != nil {
 		kc.mu.RUnlock()
@@ -314,11 +324,23 @@ func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(podIndex int) (*api
 		ch: make(chan *api.WorkerInfo, 1),
 	}
 
-	// Register subscriber
+	// Register subscriber (hold lock only during registration, not during wait)
+	kc.subscribersMu.Lock()
 	if _, exists := kc.indexSubscribers[podIndex]; !exists {
 		kc.indexSubscribers[podIndex] = make(map[*workerInfoSubscriber]struct{})
 	}
 	kc.indexSubscribers[podIndex][subscriber] = struct{}{}
+	kc.subscribersMu.Unlock()
+
+	// Double-check after registration to avoid race condition where pod arrived
+	// between our first check and subscriber registration
+	kc.mu.RLock()
+	if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfo != nil {
+		kc.mu.RUnlock()
+		kc.unregisterSubscriber(podIndex, subscriber)
+		return workerInfo, nil
+	}
+	kc.mu.RUnlock()
 
 	timeoutTimer := time.NewTimer(subscriberTimeout)
 	defer timeoutTimer.Stop()
