@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -149,6 +150,9 @@ func (s *IndexAllocator) ReconcileLockState(pod *v1.Pod) {
 				s.storeMutex.Unlock()
 				return
 			}
+			// Same pod already exists in the queue, no need to do anything
+			s.storeMutex.Unlock()
+			return
 		} else {
 			// new Pod occupy the index, add to index queue
 			indexQueue[index] = types.NamespacedName{
@@ -201,32 +205,26 @@ func (s *IndexAllocator) CheckNodeIndexAndTryOccupy(pod *v1.Pod, index int) bool
 		return false
 	}
 
-	// DEAD LOCK POSSIBLE
-	s.storeMutex.RLock()
+	// Use write lock to ensure atomic check-and-occupy operation
+	// This prevents race condition where another goroutine occupies the index
+	// between the check and occupy operations
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+
+	// Initialize index queue if not exists
 	indexQueue := s.nodeIndexQueue[nodeName]
 	if indexQueue == nil {
-		s.storeMutex.RUnlock()
-		// if index queue is not initialized, initialize it
-		s.storeMutex.Lock()
 		indexQueue = make(map[int]types.NamespacedName, 8)
 		s.nodeIndexQueue[nodeName] = indexQueue
-		s.storeMutex.Unlock()
-
-		// re-lock for read operation (just for logic consistency)
-		s.storeMutex.RLock()
 	}
 
-	// Read if index is available
+	// Atomically check and occupy index
 	_, exists := indexQueue[index]
-	s.storeMutex.RUnlock()
-	// Occupy index for node
 	if !exists {
-		s.storeMutex.Lock()
 		indexQueue[index] = types.NamespacedName{
 			Namespace: pod.Namespace,
 			Name:      pod.Name,
 		}
-		s.storeMutex.Unlock()
 		return true
 	}
 	return false
@@ -237,17 +235,19 @@ func (s *IndexAllocator) SetReady() {
 }
 
 func (s *IndexAllocator) AsyncCheckNodeIndexAvailableAndAssign(pod *v1.Pod, index int) {
-	s.storeMutex.Lock()
-	defer s.storeMutex.Unlock()
 	podMeta := types.NamespacedName{
 		Namespace: pod.Namespace,
 		Name:      pod.Name,
 	}
+
+	s.storeMutex.Lock()
 	if _, exists := s.asyncCheckingMap[podMeta]; exists {
 		// already started checking loop, skip
+		s.storeMutex.Unlock()
 		return
 	}
 	s.asyncCheckingMap[podMeta] = struct{}{}
+	s.storeMutex.Unlock()
 
 	go func() {
 		defer func() {
@@ -297,7 +297,7 @@ func (s *IndexAllocator) AsyncCheckNodeIndexAvailableAndAssign(pod *v1.Pod, inde
 			patchOps := map[string]any{
 				"op":    "add",
 				"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PodIndexAnnotation),
-				"value": index,
+				"value": strconv.Itoa(index),
 			}
 			patchBytes, err := json.Marshal(patchOps)
 			if err != nil {

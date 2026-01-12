@@ -519,7 +519,7 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 		patchOps = append(patchOps, map[string]any{
 			"op":    "add",
 			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PodIndexAnnotation),
-			"value": index,
+			"value": strconv.Itoa(index),
 		})
 	} else {
 		s.logger.Info("Index is not available on node, spawn a goroutine to patch it asynchronously", "pod", pod.Name, "node", nodeName, "index", index)
