@@ -74,7 +74,7 @@ func RemoveNodeMetrics(nodeName string) {
 	delete(nodeMetricsMap, nodeName)
 }
 
-func SetWorkerMetricsByWorkload(pod *corev1.Pod) {
+func SetWorkerMetricsByWorkload(pod *corev1.Pod, gpuCapacityMap map[string]tfv1.Resource) {
 	workerMetricsLock.Lock()
 	defer workerMetricsLock.Unlock()
 
@@ -106,8 +106,7 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod) {
 
 	// Update metrics fields that are mutable
 	metricsItem := workerMetricsMap[pod.Name]
-	metricsItem.TflopsRequest = gpuRequestResource.Tflops.AsApproximateFloat64()
-	metricsItem.TflopsLimit = gpuLimitResource.Tflops.AsApproximateFloat64()
+	metricsItem.TflopsRequest, metricsItem.TflopsLimit = getWorkerTflopsRequestLimit(pod, gpuCapacityMap, gpuRequestResource, gpuLimitResource)
 	metricsItem.VramBytesRequest = gpuRequestResource.Vram.AsApproximateFloat64()
 	metricsItem.VramBytesLimit = gpuLimitResource.Vram.AsApproximateFloat64()
 	metricsItem.Ready = utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady)
@@ -118,6 +117,50 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod) {
 		metricsItem.GPUCount = int(count)
 	}
 	metricsItem.WorkloadName = pod.Labels[constants.WorkloadKey]
+}
+
+func getWorkerTflopsRequestLimit(pod *corev1.Pod, gpuCapacityMap map[string]tfv1.Resource, request tfv1.Resource, limit tfv1.Resource) (float64, float64) {
+	reqTflops := request.Tflops.AsApproximateFloat64()
+	limitTflops := limit.Tflops.AsApproximateFloat64()
+
+	// if both request and limit already have explicit TFLOPs, return as-is.
+	if reqTflops > 0 || limitTflops > 0 {
+		return reqTflops, limitTflops
+	}
+
+	if request.ComputePercent.IsZero() && limit.ComputePercent.IsZero() {
+		return 0, 0
+	}
+
+	gpuModel := strings.TrimSpace(pod.Annotations[constants.GPUModelAnnotation])
+	if gpuModel == "" {
+		ctrl.Log.Info("compute-percent is set but gpu-model annotation is missing, cannot derive TFLOPs; tflops metrics will be 0",
+			"pod", pod.Name, "namespace", pod.Namespace)
+		return 0, 0
+	}
+
+	gpuCap, found := gpuCapacityMap[gpuModel]
+	if !found || gpuCap.Tflops.IsZero() {
+		ctrl.Log.V(4).Info("compute-percent is set but gpu model capacity not found, cannot derive TFLOPs", "pod", pod.Name, "namespace", pod.Namespace, "gpuModel", gpuModel)
+		return 0, 0
+	}
+	capTflops := gpuCap.Tflops.AsApproximateFloat64()
+	if capTflops <= 0 {
+		return 0, 0
+	}
+
+	derive := func(res tfv1.Resource) float64 {
+		// Prefer explicit TFLOPs when present.
+		if !res.Tflops.IsZero() {
+			return res.Tflops.AsApproximateFloat64()
+		}
+		if res.ComputePercent.IsZero() {
+			return 0
+		}
+		return res.ComputePercent.AsApproximateFloat64() * capTflops / 100
+	}
+
+	return derive(request), derive(limit)
 }
 
 func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []string) {
