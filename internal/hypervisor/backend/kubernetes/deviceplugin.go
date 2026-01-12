@@ -156,7 +156,7 @@ func (dp *DevicePlugin) register() error {
 	req := &pluginapi.RegisterRequest{
 		Version:      pluginapi.Version,
 		Endpoint:     fmt.Sprintf(DevicePluginEndpoint, dp.resourceNameIndex),
-		ResourceName: fmt.Sprintf("%s%s%d", constants.PodIndexAnnotation, constants.PodIndexDelimiter, dp.resourceNameIndex),
+		ResourceName: fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, dp.resourceNameIndex),
 		Options: &pluginapi.DevicePluginOptions{
 			PreStartRequired:                false,
 			GetPreferredAllocationAvailable: false,
@@ -168,7 +168,7 @@ func (dp *DevicePlugin) register() error {
 		return fmt.Errorf("failed to register: %w", err)
 	}
 
-	klog.V(4).Infof("Successfully registered device plugin with kubelet: tensor-fusion.ai/index_%d", dp.resourceNameIndex)
+	klog.V(4).Infof("Successfully registered device plugin with kubelet: %s", fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, dp.resourceNameIndex))
 	return nil
 }
 
@@ -204,8 +204,9 @@ func (dp *DevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.Devi
 	klog.V(4).Infof("ListAndWatch called for device plugin index %d", dp.resourceNameIndex)
 
 	// Build initial device list
-	devices := make([]*pluginapi.Device, constants.IndexModLength)
-	for i := range constants.IndexModLength {
+	total := constants.IndexModLength * (constants.IndexModLength + 1) / 2
+	devices := make([]*pluginapi.Device, total)
+	for i := range total {
 		devices[i] = &pluginapi.Device{
 			ID:     fmt.Sprintf("%d-%d", dp.resourceNameIndex, i+1),
 			Health: pluginapi.Healthy,
