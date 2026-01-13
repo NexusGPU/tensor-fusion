@@ -37,7 +37,8 @@ var (
 	backendType       = flag.String("backend-type", "kubernetes", "Backend type: kubernetes, simple")
 	discoveryInterval = flag.Duration("discovery-interval",
 		12*time.Hour, "Device discovery interval")
-	metricsPath = flag.String("metrics-output-path", "metrics.log", "Path to metrics output file")
+	metricsPath     = flag.String("metrics-output-path", "metrics.log", "Path to metrics output file")
+	metricsInterval = flag.Duration("metrics-interval", 60*time.Second, "Metrics interval")
 
 	httpPort = flag.Int("port", int(constants.HypervisorDefaultPortNumber), "HTTP port for hypervisor API")
 )
@@ -129,7 +130,9 @@ func main() {
 	klog.Info("Worker controller started")
 
 	// initialize metrics recorder
-	metricsRecorder := metrics.NewHypervisorMetricsRecorder(ctx, *metricsPath, deviceController, workerController, allocationController)
+	metricsRecorder := metrics.NewHypervisorMetricsRecorder(
+		ctx, *metricsPath, deviceController, workerController, allocationController, *metricsInterval,
+	)
 	metricsRecorder.Start()
 	klog.Info("Metrics recorder started")
 
