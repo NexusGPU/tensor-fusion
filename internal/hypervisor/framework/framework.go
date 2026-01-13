@@ -26,12 +26,22 @@ type DeviceController interface {
 	RegisterDeviceUpdateHandler(handler DeviceChangeHandler)
 
 	GetAcceleratorVendor() string
+}
 
+// WorkerAllocationController manages worker device allocations
+// This is a shared dependency between DeviceController, WorkerController, and Backend
+type WorkerAllocationController interface {
+	// AllocateWorkerDevices allocates devices for a worker request
+	AllocateWorkerDevices(request *api.WorkerInfo) (*api.WorkerAllocation, error)
+
+	// DeallocateWorker deallocates devices for a worker
+	DeallocateWorker(workerUID string) error
+
+	// GetWorkerAllocation returns the allocation for a specific worker
+	GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, bool)
+
+	// GetDeviceAllocations returns all device allocations keyed by device UUID
 	GetDeviceAllocations() map[string][]*api.WorkerAllocation
-
-	AddDeviceAllocation(deviceUUID string, allocation *api.WorkerAllocation)
-
-	RemoveDeviceAllocation(workerUID string, allocation *api.WorkerAllocation)
 }
 
 type WorkerController interface {
@@ -39,13 +49,7 @@ type WorkerController interface {
 
 	Stop() error
 
-	AllocateWorkerDevices(request *api.WorkerInfo) (*api.WorkerAllocation, error)
-
-	DeallocateWorker(workerUID string) error
-
 	ListWorkers() ([]*api.WorkerInfo, error)
-
-	GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, bool)
 
 	// GetWorkerMetrics returns current worker metrics for all workers
 	// Returns map keyed by device UUID, then by worker UID, then by process ID

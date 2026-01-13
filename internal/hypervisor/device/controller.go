@@ -3,7 +3,6 @@ package device
 import (
 	"context"
 	"fmt"
-	"maps"
 	"os"
 	"strings"
 	"sync"
@@ -19,24 +18,27 @@ import (
 
 var tmpDir = os.TempDir()
 
-// Controller manages GPU device discovery, allocation, and lifecycle
+// Controller manages GPU device discovery and lifecycle
 type Controller struct {
-	ctx               context.Context
-	mu                sync.RWMutex
-	devices           map[string]*api.DeviceInfo // key: device UUID
-	deviceAllocations map[string][]*api.WorkerAllocation
+	ctx context.Context
+	mu  sync.RWMutex
+
+	devices map[string]*api.DeviceInfo // key: device UUID
 
 	accelerator          *AcceleratorInterface
 	acceleratorVendor    string
 	discoveryInterval    time.Duration
 	deviceUpdateHandlers []framework.DeviceChangeHandler
-	isolationMode        string
+	isolationMode        api.IsolationMode
+
+	// allocationController is set after creation to provide allocation data for telemetry
+	allocationController framework.WorkerAllocationController
 }
 
 var _ framework.DeviceController = &Controller{}
 
 // NewController creates a new device manager
-func NewController(ctx context.Context, acceleratorLibPath string, acceleratorVendor string, discoveryInterval time.Duration, isolationMode string) (framework.DeviceController, error) {
+func NewController(ctx context.Context, acceleratorLibPath string, acceleratorVendor string, discoveryInterval time.Duration, isolationMode string) (*Controller, error) {
 	accel, err := NewAcceleratorInterface(acceleratorLibPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create accelerator interface: %w", err)
@@ -44,13 +46,17 @@ func NewController(ctx context.Context, acceleratorLibPath string, acceleratorVe
 	return &Controller{
 		ctx:                  ctx,
 		devices:              make(map[string]*api.DeviceInfo),
-		deviceAllocations:    make(map[string][]*api.WorkerAllocation, 32),
 		accelerator:          accel,
 		acceleratorVendor:    acceleratorVendor,
 		discoveryInterval:    discoveryInterval,
 		deviceUpdateHandlers: make([]framework.DeviceChangeHandler, 2),
-		isolationMode:        isolationMode,
+		isolationMode:        api.IsolationMode(isolationMode),
 	}, nil
+}
+
+// SetAllocationController sets the allocation controller for telemetry purposes
+func (m *Controller) SetAllocationController(allocationController framework.WorkerAllocationController) {
+	m.allocationController = allocationController
 }
 
 // DiscoverDevices discovers all available GPU devices
@@ -82,6 +88,7 @@ func (m *Controller) discoverDevices() error {
 		// Convert UUID to lowercase for case-insensitive comparison
 		// Kubernetes resource name has to be lowercase
 		device.UUID = strings.ToLower(device.UUID)
+		device.IsolationMode = m.isolationMode
 		newDevicesMap[device.UUID] = device
 	}
 
@@ -173,8 +180,10 @@ func (m *Controller) discoverDevices() error {
 			}
 		}
 		workersCount := 0
-		for _, allocations := range m.deviceAllocations {
-			workersCount += len(allocations)
+		if m.allocationController != nil {
+			for _, allocations := range m.allocationController.GetDeviceAllocations() {
+				workersCount += len(allocations)
+			}
 		}
 
 		go metrics.SendAnonymousTelemetry(
@@ -348,30 +357,4 @@ func (m *Controller) AggregateNodeInfo() *api.NodeInfo {
 		info.DeviceIDs = append(info.DeviceIDs, device.UUID)
 	}
 	return info
-}
-
-func (m *Controller) GetDeviceAllocations() map[string][]*api.WorkerAllocation {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return maps.Clone(m.deviceAllocations)
-}
-
-func (m *Controller) AddDeviceAllocation(deviceUUID string, allocation *api.WorkerAllocation) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, exists := m.deviceAllocations[deviceUUID]; !exists {
-		m.deviceAllocations[deviceUUID] = make([]*api.WorkerAllocation, 0, 8)
-	}
-	m.deviceAllocations[deviceUUID] = append(m.deviceAllocations[deviceUUID], allocation)
-}
-
-func (m *Controller) RemoveDeviceAllocation(deviceUUID string, allocation *api.WorkerAllocation) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, exists := m.deviceAllocations[deviceUUID]; !exists {
-		return
-	}
-	m.deviceAllocations[deviceUUID] = lo.Filter(m.deviceAllocations[deviceUUID], func(wa *api.WorkerAllocation, _ int) bool {
-		return wa.WorkerInfo.WorkerUID != allocation.WorkerInfo.WorkerUID
-	})
 }

@@ -28,15 +28,17 @@ import (
 
 // LegacyHandler handles legacy endpoints
 type LegacyHandler struct {
-	workerController framework.WorkerController
-	backend          framework.Backend
+	workerController     framework.WorkerController
+	allocationController framework.WorkerAllocationController
+	backend              framework.Backend
 }
 
 // NewLegacyHandler creates a new legacy handler
-func NewLegacyHandler(workerController framework.WorkerController, backend framework.Backend) *LegacyHandler {
+func NewLegacyHandler(workerController framework.WorkerController, allocationController framework.WorkerAllocationController, backend framework.Backend) *LegacyHandler {
 	return &LegacyHandler{
-		workerController: workerController,
-		backend:          backend,
+		workerController:     workerController,
+		allocationController: allocationController,
+		backend:              backend,
 	}
 }
 
@@ -50,7 +52,7 @@ func (h *LegacyHandler) HandleGetLimiter(c *gin.Context) {
 
 	limiterInfos := make([]api.LimiterInfo, 0, len(workers))
 	for _, worker := range workers {
-		allocation, exists := h.workerController.GetWorkerAllocation(worker.WorkerUID)
+		allocation, exists := h.allocationController.GetWorkerAllocation(worker.WorkerUID)
 		if !exists || allocation == nil {
 			continue
 		}
@@ -82,7 +84,7 @@ func (h *LegacyHandler) HandleTrap(c *gin.Context) {
 
 	snapshotCount := 0
 	for _, worker := range workers {
-		allocation, exists := h.workerController.GetWorkerAllocation(worker.WorkerUID)
+		allocation, exists := h.allocationController.GetWorkerAllocation(worker.WorkerUID)
 		if !exists || allocation == nil {
 			continue
 		}
@@ -114,7 +116,7 @@ func (h *LegacyHandler) HandleGetPods(c *gin.Context) {
 
 	pods := make([]api.PodInfo, 0)
 	for _, worker := range workers {
-		allocation, exists := h.workerController.GetWorkerAllocation(worker.WorkerUID)
+		allocation, exists := h.allocationController.GetWorkerAllocation(worker.WorkerUID)
 		if !exists || allocation == nil {
 			continue
 		}

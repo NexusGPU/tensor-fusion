@@ -63,15 +63,16 @@ func waitForDeviceDiscovery(deviceController framework.DeviceController) []*api.
 
 var _ = Describe("Hypervisor Integration Tests", func() {
 	var (
-		ctx              context.Context
-		cancel           context.CancelFunc
-		deviceController framework.DeviceController
-		backend          framework.Backend
-		workerController framework.WorkerController
-		metricsRecorder  *metrics.HypervisorMetricsRecorder
-		httpServer       *server.Server
-		stubLibPath      string
-		tempMetricsFile  string
+		ctx                  context.Context
+		cancel               context.CancelFunc
+		deviceController     *device.Controller
+		backend              framework.Backend
+		workerController     framework.WorkerController
+		allocationController framework.WorkerAllocationController
+		metricsRecorder      *metrics.HypervisorMetricsRecorder
+		httpServer           *server.Server
+		stubLibPath          string
+		tempMetricsFile      string
 	)
 
 	BeforeEach(func() {
@@ -134,16 +135,21 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deviceController).NotTo(BeNil())
 
+			// Create allocation controller first - it's a shared dependency
+			allocationController = worker.NewAllocationController(deviceController)
+			Expect(allocationController).NotTo(BeNil())
+			deviceController.SetAllocationController(allocationController)
+
 			backend = single_node.NewSingleNodeBackend(ctx, deviceController)
 			Expect(backend).NotTo(BeNil())
 
-			workerController = worker.NewWorkerController(deviceController, tfv1.IsolationModeShared, backend)
+			workerController = worker.NewWorkerController(deviceController, allocationController, tfv1.IsolationModeShared, backend)
 			Expect(workerController).NotTo(BeNil())
 
-			metricsRecorder = metrics.NewHypervisorMetricsRecorder(ctx, tempMetricsFile, deviceController, workerController)
+			metricsRecorder = metrics.NewHypervisorMetricsRecorder(ctx, tempMetricsFile, deviceController, workerController, allocationController)
 			Expect(metricsRecorder).NotTo(BeNil())
 
-			httpServer = server.NewServer(ctx, deviceController, workerController, metricsRecorder, backend, 0)
+			httpServer = server.NewServer(ctx, deviceController, workerController, allocationController, metricsRecorder, backend, 0)
 			Expect(httpServer).NotTo(BeNil())
 		})
 
@@ -214,7 +220,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
 
-				resp, err := workerController.AllocateWorkerDevices(req)
+				resp, err := allocationController.AllocateWorkerDevices(req)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp).NotTo(BeNil())
 				Expect(resp.WorkerInfo.WorkerUID).To(Equal("test-worker-1"))
@@ -225,8 +231,8 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(resp.Envs).ToNot(BeNil())
 				Expect(resp.Devices).ToNot(BeNil())
 
-				// Verify allocation exists through worker controller
-				allocation, found := workerController.GetWorkerAllocation("test-worker-1")
+				// Verify allocation exists through allocation controller
+				allocation, found := allocationController.GetWorkerAllocation("test-worker-1")
 				Expect(found).To(BeTrue())
 				Expect(allocation).NotTo(BeNil())
 				Expect(allocation.WorkerInfo.WorkerUID).To(Equal("test-worker-1"))
@@ -346,7 +352,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				}
 
 				// Allocation should fail or skip non-existent devices
-				resp, err := workerController.AllocateWorkerDevices(req)
+				resp, err := allocationController.AllocateWorkerDevices(req)
 				// Behavior may vary - either error or empty device list
 				if err != nil {
 					Expect(err).ToNot(BeNil())
@@ -404,7 +410,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					AllocatedDevices: []string{devices[0].UUID},
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
-				_, err = workerController.AllocateWorkerDevices(req)
+				_, err = allocationController.AllocateWorkerDevices(req)
 				Expect(err).NotTo(HaveOccurred())
 
 				// Start the worker in the backend
@@ -461,7 +467,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					AllocatedDevices: []string{devices[0].UUID},
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
-				_, err = workerController.AllocateWorkerDevices(req)
+				_, err = allocationController.AllocateWorkerDevices(req)
 				Expect(err).NotTo(HaveOccurred())
 
 				// Start worker in backend so it appears in the worker list
@@ -494,10 +500,10 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					AllocatedDevices: []string{devices[0].UUID},
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
-				_, err = workerController.AllocateWorkerDevices(req)
+				_, err = allocationController.AllocateWorkerDevices(req)
 				Expect(err).NotTo(HaveOccurred())
 
-				allocation, found := workerController.GetWorkerAllocation("test-worker-1")
+				allocation, found := allocationController.GetWorkerAllocation("test-worker-1")
 				Expect(found).To(BeTrue())
 				Expect(allocation).NotTo(BeNil())
 				Expect(allocation.WorkerInfo.WorkerUID).To(Equal("test-worker-1"))
@@ -514,7 +520,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					AllocatedDevices: []string{devices[0].UUID},
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
-				_, err = workerController.AllocateWorkerDevices(req)
+				_, err = allocationController.AllocateWorkerDevices(req)
 				Expect(err).NotTo(HaveOccurred())
 
 				metrics, err := workerController.GetWorkerMetrics()
@@ -544,7 +550,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					PartitionTemplateID: partitionTemplateID,
 				}
 
-				resp, err := workerController.AllocateWorkerDevices(req)
+				resp, err := allocationController.AllocateWorkerDevices(req)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp).NotTo(BeNil())
 				Expect(resp.DeviceInfos).ToNot(BeEmpty())
@@ -553,16 +559,16 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(resp.DeviceInfos[0].ParentUUID).To(Equal(deviceUUID))
 
 				// Verify allocation
-				allocation, found := workerController.GetWorkerAllocation("test-worker-partitioned")
+				allocation, found := allocationController.GetWorkerAllocation("test-worker-partitioned")
 				Expect(found).To(BeTrue())
 				Expect(allocation).NotTo(BeNil())
 
 				// Deallocate should clean up partition
-				err = workerController.DeallocateWorker("test-worker-partitioned")
+				err = allocationController.DeallocateWorker("test-worker-partitioned")
 				Expect(err).NotTo(HaveOccurred())
 
 				// Verify deallocation
-				_, found = workerController.GetWorkerAllocation("test-worker-partitioned")
+				_, found = allocationController.GetWorkerAllocation("test-worker-partitioned")
 				Expect(found).To(BeFalse())
 			})
 
@@ -578,29 +584,29 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
 
-				_, err = workerController.AllocateWorkerDevices(req)
+				_, err = allocationController.AllocateWorkerDevices(req)
 				Expect(err).NotTo(HaveOccurred())
 
 				// Verify allocation exists
-				allocation, found := workerController.GetWorkerAllocation("test-worker-cleanup")
+				allocation, found := allocationController.GetWorkerAllocation("test-worker-cleanup")
 				Expect(found).To(BeTrue())
 				Expect(allocation).NotTo(BeNil())
 				Expect(allocation.WorkerInfo.WorkerUID).To(Equal("test-worker-cleanup"))
 
 				// Verify device allocation tracking
-				deviceAllocations := deviceController.GetDeviceAllocations()
+				deviceAllocations := allocationController.GetDeviceAllocations()
 				Expect(deviceAllocations[deviceUUID]).ToNot(BeEmpty())
 
 				// Deallocate
-				err = workerController.DeallocateWorker("test-worker-cleanup")
+				err = allocationController.DeallocateWorker("test-worker-cleanup")
 				Expect(err).NotTo(HaveOccurred())
 
 				// Verify allocation removed
-				_, found = workerController.GetWorkerAllocation("test-worker-cleanup")
+				_, found = allocationController.GetWorkerAllocation("test-worker-cleanup")
 				Expect(found).To(BeFalse())
 
 				// Verify device allocation cleaned up
-				deviceAllocations = deviceController.GetDeviceAllocations()
+				deviceAllocations = allocationController.GetDeviceAllocations()
 				allocationsForDevice := deviceAllocations[deviceUUID]
 				foundInDeviceAllocations := false
 				for _, alloc := range allocationsForDevice {
@@ -1013,7 +1019,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 						Vram:   resource.MustParse("1Gi"),
 					},
 				}
-				resp, err := workerController.AllocateWorkerDevices(req)
+				resp, err := allocationController.AllocateWorkerDevices(req)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp).To(Not(BeNil()))
 
@@ -1021,8 +1027,8 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				err = backend.StartWorker(req)
 				Expect(err).NotTo(HaveOccurred())
 
-				// 3. Verify allocation through worker controller
-				allocation, found := workerController.GetWorkerAllocation("integration-worker-1")
+				// 3. Verify allocation through allocation controller
+				allocation, found := allocationController.GetWorkerAllocation("integration-worker-1")
 				Expect(found).To(BeTrue())
 				Expect(allocation).NotTo(BeNil())
 				Expect(allocation.WorkerInfo.WorkerUID).To(Equal("integration-worker-1"))
@@ -1045,7 +1051,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(foundInWorkerList).To(BeTrue())
 
 				// 6. Get worker allocation
-				allocation, found = workerController.GetWorkerAllocation("integration-worker-1")
+				allocation, found = allocationController.GetWorkerAllocation("integration-worker-1")
 				Expect(found).To(BeTrue())
 				Expect(allocation).NotTo(BeNil())
 				Expect(allocation.WorkerInfo.WorkerUID).To(Equal("integration-worker-1"))
@@ -1063,11 +1069,11 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				_ = workerMetrics
 
 				// 8. Deallocate worker
-				err = workerController.DeallocateWorker("integration-worker-1")
+				err = allocationController.DeallocateWorker("integration-worker-1")
 				Expect(err).NotTo(HaveOccurred())
 
 				// 9. Verify deallocation
-				_, found = workerController.GetWorkerAllocation("integration-worker-1")
+				_, found = allocationController.GetWorkerAllocation("integration-worker-1")
 				Expect(found).To(BeFalse())
 			})
 		})

@@ -47,10 +47,10 @@ const (
 type DevicePlugin struct {
 	pluginapi.UnimplementedDevicePluginServer
 
-	ctx              context.Context
-	deviceController framework.DeviceController
-	workerController framework.WorkerController
-	kubeletClient    *PodCacheManager
+	ctx                  context.Context
+	deviceController     framework.DeviceController
+	allocationController framework.WorkerAllocationController
+	kubeletClient        *PodCacheManager
 
 	server            *grpc.Server
 	socketPath        string
@@ -58,16 +58,16 @@ type DevicePlugin struct {
 }
 
 // NewDevicePlugins creates a new device plugin instance
-func NewDevicePlugins(ctx context.Context, deviceController framework.DeviceController, workerController framework.WorkerController, kubeletClient *PodCacheManager) []*DevicePlugin {
+func NewDevicePlugins(ctx context.Context, deviceController framework.DeviceController, allocationController framework.WorkerAllocationController, kubeletClient *PodCacheManager) []*DevicePlugin {
 	devicePlugins := make([]*DevicePlugin, constants.IndexKeyLength)
 	for i := range constants.IndexKeyLength {
 		devicePlugins[i] = &DevicePlugin{
-			ctx:               ctx,
-			deviceController:  deviceController,
-			workerController:  workerController,
-			kubeletClient:     kubeletClient,
-			socketPath:        filepath.Join(DevicePluginPath, fmt.Sprintf(DevicePluginEndpoint, i)),
-			resourceNameIndex: i,
+			ctx:                  ctx,
+			deviceController:     deviceController,
+			allocationController: allocationController,
+			kubeletClient:        kubeletClient,
+			socketPath:           filepath.Join(DevicePluginPath, fmt.Sprintf(DevicePluginEndpoint, i)),
+			resourceNameIndex:    i,
 		}
 	}
 	return devicePlugins
@@ -257,8 +257,8 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 		if workerInfo == nil {
 			return nil, fmt.Errorf("worker info not found for pod index %d", podIndexFull)
 		}
-		// Call worker controller to allocate
-		allocResp, err := dp.workerController.AllocateWorkerDevices(workerInfo)
+		// Call allocation controller to allocate
+		allocResp, err := dp.allocationController.AllocateWorkerDevices(workerInfo)
 		if err != nil {
 			return nil, fmt.Errorf("failed to allocate devices for worker %s %s: %w", workerInfo.WorkerName, workerInfo.WorkerUID, err)
 		}

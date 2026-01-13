@@ -81,6 +81,11 @@ func main() {
 
 	mode := tfv1.IsolationModeType(*isolationMode)
 
+	// Create allocation controller first - it's a shared dependency
+	allocationController := worker.NewAllocationController(deviceController)
+	deviceController.SetAllocationController(allocationController)
+	klog.Info("Allocation controller created")
+
 	// initialize data backend and worker controller
 	var backend framework.Backend
 	var workerController framework.WorkerController
@@ -99,14 +104,14 @@ func main() {
 			klog.Fatalf("Failed to get Kubernetes config: %v", err)
 		}
 
-		backend, err = kubernetes.NewKubeletBackend(ctx, deviceController, workerController, restConfig)
+		backend, err = kubernetes.NewKubeletBackend(ctx, deviceController, allocationController, restConfig)
 		if err != nil {
 			klog.Fatalf("Failed to create Kubernetes backend: %v", err)
 		}
-		workerController = worker.NewWorkerController(deviceController, mode, backend)
+		workerController = worker.NewWorkerController(deviceController, allocationController, mode, backend)
 	case "simple":
-		backend = single_node.NewSingleNodeBackend(ctx, deviceController)
-		workerController = worker.NewWorkerController(deviceController, mode, backend)
+		backend = single_node.NewSingleNodeBackend(ctx, deviceController, allocationController)
+		workerController = worker.NewWorkerController(deviceController, allocationController, mode, backend)
 	default:
 		klog.Fatalf("Invalid backend type: %s", *backendType)
 	}
@@ -124,7 +129,7 @@ func main() {
 	klog.Info("Worker controller started")
 
 	// initialize metrics recorder
-	metricsRecorder := metrics.NewHypervisorMetricsRecorder(ctx, *metricsPath, deviceController, workerController)
+	metricsRecorder := metrics.NewHypervisorMetricsRecorder(ctx, *metricsPath, deviceController, workerController, allocationController)
 	metricsRecorder.Start()
 	klog.Info("Metrics recorder started")
 
@@ -136,7 +141,7 @@ func main() {
 			klog.Fatalf("Failed to convert HTTP port from env: %v", err)
 		}
 	}
-	httpServer := server.NewServer(ctx, deviceController, workerController, metricsRecorder, backend, httpPortNum)
+	httpServer := server.NewServer(ctx, deviceController, workerController, allocationController, metricsRecorder, backend, httpPortNum)
 	go func() {
 		if err := httpServer.Start(); err != nil && err != http.ErrServerClosed {
 			klog.Fatalf("Failed to start HTTP server: %v", err)

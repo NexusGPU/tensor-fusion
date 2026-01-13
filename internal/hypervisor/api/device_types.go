@@ -38,6 +38,8 @@ type DeviceInfo struct {
 
 	// Env to inject to guest
 	DeviceEnv map[string]string
+
+	IsolationMode IsolationMode
 }
 
 type NodeInfo struct {
