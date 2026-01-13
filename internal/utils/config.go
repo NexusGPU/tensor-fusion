@@ -203,12 +203,12 @@ func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
 	if tflopsErr == nil && percentErr == nil {
 		return tfv1.Resource{}, fmt.Errorf("tflops and compute-percent are mutually exclusive, please specify only one")
 	} else if tflopsErr != nil && percentErr != nil {
-		ctrl.Log.Info("failed to parse tflops and compute-percent, no computing limit/request set", "pod", pod.Name, "namespace", pod.Namespace)
+		ctrl.Log.Info("tflops/compute-percent not set and parsed", "pod", pod.Name, "namespace", pod.Namespace)
 	}
 
 	vram, vramErr := resource.ParseQuantity(pod.Annotations[vramKey])
 	if vramErr != nil {
-		ctrl.Log.Info("failed to parse vram, annotation not found", "pod", pod.Name, "namespace", pod.Namespace, "annotation", vramKey)
+		ctrl.Log.Info("vram not set and parsed", "pod", pod.Name, "namespace", pod.Namespace, "annotation", vramKey)
 	}
 
 	return tfv1.Resource{

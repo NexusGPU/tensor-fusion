@@ -64,11 +64,6 @@ type GPUStatus struct {
 	RunningApps []*RunningAppDetail `json:"runningApps,omitempty"`
 
 	// +optional
-	// PartitionTemplates contains available partition templates for this GPU (e.g., MIG profiles)
-	// Reported from discovery, each template has fixed resource allocation
-	PartitionTemplates []PartitionTemplate `json:"partitionTemplates,omitempty"`
-
-	// +optional
 	// AllocatedPartitions tracks allocated partitions on this GPU
 	// Key is partitionUUID, value contains template info and allocated resources
 	AllocatedPartitions map[string]AllocatedPartition `json:"allocatedPartitions,omitempty"`

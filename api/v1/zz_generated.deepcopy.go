@@ -1380,11 +1380,6 @@ func (in *GPUStatus) DeepCopyInto(out *GPUStatus) {
 			}
 		}
 	}
-	if in.PartitionTemplates != nil {
-		in, out := &in.PartitionTemplates, &out.PartitionTemplates
-		*out = make([]PartitionTemplate, len(*in))
-		copy(*out, *in)
-	}
 	if in.AllocatedPartitions != nil {
 		in, out := &in.AllocatedPartitions, &out.AllocatedPartitions
 		*out = make(map[string]AllocatedPartition, len(*in))

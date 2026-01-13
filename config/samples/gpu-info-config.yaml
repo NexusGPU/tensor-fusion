@@ -21,3 +21,76 @@
   vendor: NVIDIA
   costPerHour: 0.25
   fp16TFlops: 66
+
+# Example GPU Model mocking NVIDIA A100 with MIG partition support
+- model: Example-GPU-Model
+  fullModelName: "Example GPU Model 80GB"
+  vendor: STUB
+  costPerHour: 2.0
+  fp16TFlops: 312
+  maxPartitions: 7
+  maxPlacementSlots: 8
+  partitionTemplates:
+    # 1g.10gb - smallest partition, 7 instances max
+    - templateId: "19"
+      name: "1g.10gb"
+      memoryGigabytes: 10
+      computePercent: 14.28
+      description: "1/7 GPU slice with 10GB memory"
+      maxPartition: 7
+      placementLimit: [0, 1, 2, 3, 4, 5, 6]
+      placementOffSet: 1
+    # 1g.10gb+me - with memory extension
+    - templateId: "20"
+      name: "1g.10gb+me"
+      memoryGigabytes: 20
+      computePercent: 14.28
+      description: "1/7 GPU slice with 20GB extended memory"
+      maxPartition: 1
+      placementLimit: [0, 1, 2, 3, 4, 5, 6]
+      placementOffSet: 1
+    # 2g.20gb - 2/7 GPU slice
+    - templateId: "15"
+      name: "2g.20gb"
+      memoryGigabytes: 20
+      computePercent: 28.57
+      description: "2/7 GPU slice with 20GB memory"
+      maxPartition: 3
+      placementLimit: [0, 2, 4, 6]
+      placementOffSet: 2
+    # 3g.40gb - 3/7 GPU slice
+    - templateId: "14"
+      name: "3g.40gb"
+      memoryGigabytes: 40
+      computePercent: 42.86
+      description: "3/7 GPU slice with 40GB memory"
+      maxPartition: 2
+      placementLimit: [0, 2, 4]
+      placementOffSet: 2
+    # 4g.40gb - 4/7 GPU slice
+    - templateId: "9"
+      name: "4g.40gb"
+      memoryGigabytes: 40
+      computePercent: 57.14
+      description: "4/7 GPU slice with 40GB memory"
+      maxPartition: 1
+      placementLimit: [0, 4]
+      placementOffSet: 4
+    # 7g.80gb - full GPU
+    - templateId: "5"
+      name: "7g.80gb"
+      memoryGigabytes: 80
+      computePercent: 100
+      description: "Full GPU with 80GB memory"
+      maxPartition: 1
+      placementLimit: [0]
+      placementOffSet: 4
+    # Full profile
+    - templateId: "0"
+      name: "full"
+      memoryGigabytes: 80
+      computePercent: 100
+      description: "Full GPU profile"
+      maxPartition: 1
+      placementLimit: [0]
+      placementOffSet: 8

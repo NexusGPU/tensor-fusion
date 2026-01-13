@@ -251,7 +251,7 @@ func (s *GpuAllocator) Filter(
 
 	// 3. Partition template filter (only for partitioned mode)
 	if req.Isolation == tfv1.IsolationModePartitioned {
-		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, MaxPartitionsMap))
+		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, MaxPartitionsMap, PartitionTemplateMap))
 	}
 
 	// 4. Resource filter (moved after isolation/partition filters)
@@ -342,7 +342,7 @@ func (s *GpuAllocator) FilterWithPreempt(
 
 	// 3. Partition template filter (only for partitioned mode)
 	if req.Isolation == tfv1.IsolationModePartitioned {
-		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, MaxPartitionsMap))
+		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, MaxPartitionsMap, PartitionTemplateMap))
 	}
 
 	// 4. Resource filter
@@ -422,9 +422,10 @@ func (s *GpuAllocator) GetMatchedPartition(
 
 	// Find the best GPU with the best matching partition template
 	for _, gpu := range filteredGPUs {
-		// Get partition templates from GPU status
-		if len(gpu.Status.PartitionTemplates) == 0 {
-			continue // Skip GPUs without partition templates
+		// Get partition templates from global config by GPU model
+		templateConfigs, hasTemplates := PartitionTemplateMap[gpu.Status.GPUModel]
+		if !hasTemplates || len(templateConfigs) == 0 {
+			continue // Skip GPUs without partition templates in config
 		}
 		// Match partition template (gets template info from config)
 		match, err := MatchPartitionTemplate(gpu.Status, req)
@@ -1317,9 +1318,8 @@ func syncGPUMetadataAndStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
 	old.Status.Vendor = gpu.Status.Vendor
 	old.Status.NUMANode = gpu.Status.NUMANode
 	old.Status.Index = gpu.Status.Index
-	// Sync partition templates from cluster (discovered by node discovery)
+	old.Status.IsolationMode = gpu.Status.IsolationMode
 	// Don't overwrite AllocatedPartitions as that's managed by the allocator
-	old.Status.PartitionTemplates = gpu.Status.PartitionTemplates
 }
 
 func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
@@ -1658,7 +1658,7 @@ func (s *GpuAllocator) reconcileAllocationState() {
 
 						// Rebuild AllocatedPartitions using podUID as key
 						if gpu.Status.AllocatedPartitions == nil {
-							gpu.Status.AllocatedPartitions = make(map[string]tfv1.AllocatedPartition)
+							gpu.Status.AllocatedPartitions = make(map[string]tfv1.AllocatedPartition, 4)
 						}
 						podUID := string(worker.UID)
 						// During reconciliation, preserve existing slot assignments if available
@@ -1821,16 +1821,13 @@ func removeRunningApp(ctx context.Context, gpu *tfv1.GPU, allocRequest *tfv1.All
 
 // bindPartition handles partition allocation for a single GPU in partitioned mode
 func (s *GpuAllocator) bindPartition(gpu *tfv1.GPU, req *tfv1.AllocRequest, selectedGPU string) error {
-	// Verify template exists in GPU status
-	templateExists := false
-	for _, template := range gpu.Status.PartitionTemplates {
-		if template.TemplateID == req.PartitionTemplateID {
-			templateExists = true
-			break
-		}
+	// Verify template exists in global config for this GPU model
+	templateConfigs, hasTemplates := PartitionTemplateMap[gpu.Status.GPUModel]
+	if !hasTemplates {
+		return fmt.Errorf("no partition templates configured for GPU model %s", gpu.Status.GPUModel)
 	}
-	if !templateExists {
-		return fmt.Errorf("partition template %s not found on GPU %s", req.PartitionTemplateID, selectedGPU)
+	if _, templateExists := templateConfigs[req.PartitionTemplateID]; !templateExists {
+		return fmt.Errorf("partition template %s not found in config for GPU model %s", req.PartitionTemplateID, gpu.Status.GPUModel)
 	}
 
 	// Calculate partition resource usage from config (no overhead)
