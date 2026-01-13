@@ -32,6 +32,7 @@ type HypervisorMetricsRecorder struct {
 	workerController     framework.WorkerController
 	allocationController framework.WorkerAllocationController
 	extraLabelsMap       map[string]string // podLabelKey -> tagName mapping from env config
+	metricsInterval      time.Duration
 }
 
 const (
@@ -52,6 +53,7 @@ func NewHypervisorMetricsRecorder(
 	deviceController framework.DeviceController,
 	workerController framework.WorkerController,
 	allocationController framework.WorkerAllocationController,
+	metricsInterval time.Duration,
 ) *HypervisorMetricsRecorder {
 	nodeName := os.Getenv(constants.HypervisorGPUNodeNameEnv)
 	if nodeName == "" {
@@ -81,6 +83,7 @@ func NewHypervisorMetricsRecorder(
 		workerController:     workerController,
 		allocationController: allocationController,
 		extraLabelsMap:       extraLabelsMap,
+		metricsInterval:      metricsInterval,
 	}
 }
 
@@ -93,7 +96,7 @@ func (h *HypervisorMetricsRecorder) Start() {
 	}
 
 	// Record device and worker metrics
-	deviceMetricsTicker := time.NewTicker(10 * time.Second)
+	deviceMetricsTicker := time.NewTicker(h.metricsInterval)
 	go func() {
 		for {
 			select {
