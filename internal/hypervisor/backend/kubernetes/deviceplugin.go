@@ -236,6 +236,7 @@ func (dp *DevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.Devi
 // Allocate handles device allocation requests from kubelet
 func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
 	responses := make([]*pluginapi.ContainerAllocateResponse, 0, len(req.ContainerRequests))
+	klog.Infof("Allocate called for device plugin index %d, container requests: %d", dp.resourceNameIndex, len(req.ContainerRequests))
 
 	for containerIdx, containerReq := range req.ContainerRequests {
 		podIndex := len(containerReq.DevicesIds)
