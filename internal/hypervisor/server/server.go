@@ -34,13 +34,14 @@ type MetricsRecorder interface {
 
 // Server represents the hypervisor HTTP server
 type Server struct {
-	deviceController framework.DeviceController
-	workerController framework.WorkerController
-	metricsRecorder  MetricsRecorder
-	backend          framework.Backend
-	ctx              context.Context
-	router           *gin.Engine
-	httpServer       *http.Server
+	deviceController     framework.DeviceController
+	workerController     framework.WorkerController
+	allocationController framework.WorkerAllocationController
+	metricsRecorder      MetricsRecorder
+	backend              framework.Backend
+	ctx                  context.Context
+	router               *gin.Engine
+	httpServer           *http.Server
 
 	// Handlers
 	healthHandler *handlers.HealthHandler
@@ -54,6 +55,7 @@ func NewServer(
 	ctx context.Context,
 	deviceController framework.DeviceController,
 	workerController framework.WorkerController,
+	allocationController framework.WorkerAllocationController,
 	metricsRecorder MetricsRecorder,
 	backend framework.Backend,
 	port int,
@@ -65,16 +67,17 @@ func NewServer(
 	// Initialize handlers
 	healthHandler := handlers.NewHealthHandler()
 	deviceHandler := handlers.NewDeviceHandler(deviceController)
-	workerHandler := handlers.NewWorkerHandler(workerController)
-	legacyHandler := handlers.NewLegacyHandler(workerController, backend)
+	workerHandler := handlers.NewWorkerHandler(workerController, allocationController)
+	legacyHandler := handlers.NewLegacyHandler(workerController, allocationController, backend)
 
 	s := &Server{
-		deviceController: deviceController,
-		workerController: workerController,
-		metricsRecorder:  metricsRecorder,
-		backend:          backend,
-		ctx:              ctx,
-		router:           router,
+		deviceController:     deviceController,
+		workerController:     workerController,
+		allocationController: allocationController,
+		metricsRecorder:      metricsRecorder,
+		backend:              backend,
+		ctx:                  ctx,
+		router:               router,
 		httpServer: &http.Server{
 			Addr:    fmt.Sprintf(":%d", port),
 			Handler: router,

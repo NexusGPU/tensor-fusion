@@ -24,13 +24,14 @@ import (
 )
 
 type HypervisorMetricsRecorder struct {
-	ctx              context.Context
-	outputPath       string
-	nodeName         string
-	gpuPool          string
-	deviceController framework.DeviceController
-	workerController framework.WorkerController
-	extraLabelsMap   map[string]string // podLabelKey -> tagName mapping from env config
+	ctx                  context.Context
+	outputPath           string
+	nodeName             string
+	gpuPool              string
+	deviceController     framework.DeviceController
+	workerController     framework.WorkerController
+	allocationController framework.WorkerAllocationController
+	extraLabelsMap       map[string]string // podLabelKey -> tagName mapping from env config
 }
 
 const (
@@ -50,6 +51,7 @@ func NewHypervisorMetricsRecorder(
 	ctx context.Context, outputPath string,
 	deviceController framework.DeviceController,
 	workerController framework.WorkerController,
+	allocationController framework.WorkerAllocationController,
 ) *HypervisorMetricsRecorder {
 	nodeName := os.Getenv(constants.HypervisorGPUNodeNameEnv)
 	if nodeName == "" {
@@ -71,13 +73,14 @@ func NewHypervisorMetricsRecorder(
 	}
 
 	return &HypervisorMetricsRecorder{
-		ctx:              ctx,
-		outputPath:       outputPath,
-		nodeName:         nodeName,
-		gpuPool:          gpuPool,
-		deviceController: deviceController,
-		workerController: workerController,
-		extraLabelsMap:   extraLabelsMap,
+		ctx:                  ctx,
+		outputPath:           outputPath,
+		nodeName:             nodeName,
+		gpuPool:              gpuPool,
+		deviceController:     deviceController,
+		workerController:     workerController,
+		allocationController: allocationController,
+		extraLabelsMap:       extraLabelsMap,
 	}
 }
 
@@ -155,7 +158,7 @@ func (h *HypervisorMetricsRecorder) RecordWorkerMetrics(writer io.Writer) {
 	// Get worker allocations for metadata
 	workerAllocations := make(map[string]*api.WorkerAllocation)
 	for _, worker := range workers {
-		allocation, found := h.workerController.GetWorkerAllocation(worker.WorkerUID)
+		allocation, found := h.allocationController.GetWorkerAllocation(worker.WorkerUID)
 		if found && allocation != nil {
 			workerAllocations[worker.WorkerUID] = allocation
 		}
@@ -360,7 +363,7 @@ func ShouldSendTelemetry() bool {
 }
 
 // SendAnonymousTelemetry sends Anonymous telemetry data without ANY sensitive data
-func SendAnonymousTelemetry(nodeInfo *api.NodeInfo, hardwareVendor string, sampleGPUModel string, workersCount int, isolationMode string) {
+func SendAnonymousTelemetry(nodeInfo *api.NodeInfo, hardwareVendor string, sampleGPUModel string, workersCount int, isolationMode api.IsolationMode) {
 	// Get PostHog client
 	client := getPostHogClient()
 	if client == nil {
@@ -378,7 +381,7 @@ func SendAnonymousTelemetry(nodeInfo *api.NodeInfo, hardwareVendor string, sampl
 		Set("version", version.BuildVersion).
 		Set("uptime", time.Since(startTime).String()).
 		Set("workersCount", workersCount).
-		Set("isolationMode", isolationMode).
+		Set("isolationMode", string(isolationMode)).
 		Set("vendor", hardwareVendor).
 		Set("sampleGPUModel", sampleGPUModel)
 

@@ -14,13 +14,14 @@ import (
 )
 
 type SingleNodeBackend struct {
-	ctx              context.Context
-	deviceController framework.DeviceController
-	fileState        *FileStateManager
-	mu               sync.RWMutex
-	workers          map[string]*api.WorkerInfo
-	stopCh           chan struct{}
-	stopOnce         sync.Once
+	ctx                  context.Context
+	deviceController     framework.DeviceController
+	allocationController framework.WorkerAllocationController
+	fileState            *FileStateManager
+	mu                   sync.RWMutex
+	workers              map[string]*api.WorkerInfo
+	stopCh               chan struct{}
+	stopOnce             sync.Once
 
 	// Worker watching
 	subscribersMu sync.RWMutex
@@ -28,18 +29,19 @@ type SingleNodeBackend struct {
 	workerHandler *framework.WorkerChangeHandler
 }
 
-func NewSingleNodeBackend(ctx context.Context, deviceController framework.DeviceController) *SingleNodeBackend {
+func NewSingleNodeBackend(ctx context.Context, deviceController framework.DeviceController, allocationController framework.WorkerAllocationController) *SingleNodeBackend {
 	stateDir := os.Getenv("TENSOR_FUSION_STATE_DIR")
 	if stateDir == "" {
 		stateDir = "/tmp/tensor-fusion-state"
 	}
 	return &SingleNodeBackend{
-		ctx:              ctx,
-		deviceController: deviceController,
-		fileState:        NewFileStateManager(stateDir),
-		workers:          make(map[string]*api.WorkerInfo),
-		stopCh:           make(chan struct{}),
-		subscribers:      make(map[string]chan *api.WorkerInfo),
+		ctx:                  ctx,
+		deviceController:     deviceController,
+		allocationController: allocationController,
+		fileState:            NewFileStateManager(stateDir),
+		workers:              make(map[string]*api.WorkerInfo),
+		stopCh:               make(chan struct{}),
+		subscribers:          make(map[string]chan *api.WorkerInfo),
 	}
 }
 

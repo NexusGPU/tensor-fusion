@@ -25,8 +25,8 @@ import (
 type KubeletBackend struct {
 	ctx context.Context
 
-	deviceController framework.DeviceController
-	workerController framework.WorkerController
+	deviceController     framework.DeviceController
+	allocationController framework.WorkerAllocationController
 
 	apiClient      *APIClient
 	podCacher      *PodCacheManager
@@ -44,7 +44,7 @@ type KubeletBackend struct {
 
 var _ framework.Backend = &KubeletBackend{}
 
-func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceController, workerController framework.WorkerController, restConfig *rest.Config) (*KubeletBackend, error) {
+func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceController, allocationController framework.WorkerAllocationController, restConfig *rest.Config) (*KubeletBackend, error) {
 	// Get node name from environment or config
 	nodeName := os.Getenv(constants.HypervisorGPUNodeNameEnv)
 	if nodeName == "" {
@@ -75,15 +75,15 @@ func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceCon
 	}
 
 	return &KubeletBackend{
-		ctx:              ctx,
-		deviceController: deviceController,
-		workerController: workerController,
-		podCacher:        podCacher,
-		deviceDetector:   deviceDetector,
-		apiClient:        apiClient,
-		nodeName:         nodeName,
-		workers:          make(map[string]*api.WorkerInfo),
-		subscribers:      make(map[string]struct{}),
+		ctx:                  ctx,
+		deviceController:     deviceController,
+		allocationController: allocationController,
+		podCacher:            podCacher,
+		deviceDetector:       deviceDetector,
+		apiClient:            apiClient,
+		nodeName:             nodeName,
+		workers:              make(map[string]*api.WorkerInfo),
+		subscribers:          make(map[string]struct{}),
 	}, nil
 }
 
@@ -94,7 +94,7 @@ func (b *KubeletBackend) Start() error {
 	klog.Info("Kubelet client started, watching pods")
 
 	// Create and start device plugin
-	b.devicePlugins = NewDevicePlugins(b.ctx, b.deviceController, b.workerController, b.podCacher)
+	b.devicePlugins = NewDevicePlugins(b.ctx, b.deviceController, b.allocationController, b.podCacher)
 	for _, devicePlugin := range b.devicePlugins {
 		if err := devicePlugin.Start(); err != nil {
 			return err
@@ -214,8 +214,10 @@ func (b *KubeletBackend) GetProcessMappingInfo(workerUID string, hostPID uint32)
 func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler {
 	return framework.DeviceChangeHandler{
 		OnAdd: func(device *api.DeviceInfo) {
+
 			if err := b.apiClient.CreateOrUpdateGPU(b.nodeName, device.UUID,
 				func(gpuNode *tfv1.GPUNode, gpu *tfv1.GPU) error {
+
 					return b.mutateGPUResourceState(device, gpuNode, gpu)
 				}); err != nil {
 				klog.Errorf("Failed to create or update GPU when device added: %v", err)
@@ -256,7 +258,9 @@ func (b *KubeletBackend) ListWorkers() []*api.WorkerInfo {
 	return lo.Values(b.workers)
 }
 
-func (b *KubeletBackend) mutateGPUResourceState(device *api.DeviceInfo, gpuNode *tfv1.GPUNode, gpu *tfv1.GPU) error {
+func (b *KubeletBackend) mutateGPUResourceState(
+	device *api.DeviceInfo, gpuNode *tfv1.GPUNode, gpu *tfv1.GPU,
+) error {
 	// Set metadata fields
 	gpu.Labels = map[string]string{
 		constants.LabelKeyOwner: gpuNode.Name,
@@ -293,6 +297,7 @@ func (b *KubeletBackend) mutateGPUResourceState(device *api.DeviceInfo, gpuNode 
 	gpu.Status.Index = ptr.To(device.Index)
 	gpu.Status.Vendor = device.Vendor
 	gpu.Status.NUMANode = ptr.To(device.NUMANode)
+	gpu.Status.IsolationMode = device.IsolationMode
 	gpu.Status.NodeSelector = map[string]string{
 		constants.KubernetesHostNameLabel: b.nodeName,
 	}

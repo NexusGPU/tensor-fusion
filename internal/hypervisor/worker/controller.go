@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"maps"
 	"sync"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -16,25 +15,29 @@ type WorkerController struct {
 	mode    api.IsolationMode
 	backend framework.Backend
 
-	deviceController framework.DeviceController
-	quotaController  framework.QuotaController
+	deviceController     framework.DeviceController
+	allocationController framework.WorkerAllocationController
+	quotaController      framework.QuotaController
 
-	mu                sync.RWMutex
-	workers           map[string]*api.WorkerInfo
-	workerAllocations map[string]*api.WorkerAllocation
+	mu      sync.RWMutex
+	workers map[string]*api.WorkerInfo
 }
 
 func NewWorkerController(
-	deviceController framework.DeviceController, mode api.IsolationMode, backend framework.Backend) framework.WorkerController {
+	deviceController framework.DeviceController,
+	allocationController framework.WorkerAllocationController,
+	mode api.IsolationMode,
+	backend framework.Backend,
+) framework.WorkerController {
 	quotaController := computing.NewQuotaController(deviceController)
 	return &WorkerController{
-		deviceController: deviceController,
-		mode:             mode,
-		backend:          backend,
-		quotaController:  quotaController,
+		deviceController:     deviceController,
+		allocationController: allocationController,
+		mode:                 mode,
+		backend:              backend,
+		quotaController:      quotaController,
 
-		workers:           make(map[string]*api.WorkerInfo, 32),
-		workerAllocations: make(map[string]*api.WorkerAllocation, 32),
+		workers: make(map[string]*api.WorkerInfo, 32),
 	}
 }
 
@@ -47,6 +50,10 @@ func (w *WorkerController) Start() error {
 			w.workers[worker.WorkerUID] = worker
 		},
 		OnRemove: func(worker *api.WorkerInfo) {
+			// Deallocate worker devices first
+			if err := w.allocationController.DeallocateWorker(worker.WorkerUID); err != nil {
+				klog.Errorf("Failed to deallocate worker %s: %v", worker.WorkerUID, err)
+			}
 			w.mu.Lock()
 			defer w.mu.Unlock()
 			delete(w.workers, worker.WorkerUID)
@@ -86,94 +93,10 @@ func (w *WorkerController) Stop() error {
 	return nil
 }
 
-// AllocateWorker implements framework.WorkerController
-func (w *WorkerController) AllocateWorkerDevices(request *api.WorkerInfo) (*api.WorkerAllocation, error) {
-	// Validate devices exist
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
-
-	// partitioned mode, call split device
-	isPartitioned := request.IsolationMode == tfv1.IsolationModePartitioned && request.PartitionTemplateID != ""
-
-	for _, deviceUUID := range request.AllocatedDevices {
-		if device, exists := w.deviceController.GetDevice(deviceUUID); exists {
-			if isPartitioned {
-				deviceInfo, err := w.deviceController.SplitDevice(deviceUUID, request.PartitionTemplateID)
-				if err != nil {
-					return nil, err
-				}
-				deviceInfos = append(deviceInfos, deviceInfo)
-			} else {
-				deviceInfos = append(deviceInfos, device)
-			}
-		}
-	}
-
-	mounts, err := w.deviceController.GetVendorMountLibs()
-	if err != nil {
-		klog.Errorf("failed to get vendor mount libs for worker allocation of %s: %v,", request.WorkerUID, err)
-		return nil, err
-	}
-
-	envs := make(map[string]string, 8)
-	devices := make(map[string]*api.DeviceSpec, 8)
-	for _, deviceInfo := range deviceInfos {
-		maps.Copy(envs, deviceInfo.DeviceEnv)
-		for devNode, guestPath := range deviceInfo.DeviceNode {
-			if _, exists := devices[devNode]; exists {
-				continue
-			}
-			devices[devNode] = &api.DeviceSpec{
-				HostPath:    devNode,
-				GuestPath:   guestPath,
-				Permissions: "rwm",
-			}
-		}
-	}
-
-	allocation := &api.WorkerAllocation{
-		WorkerInfo:  request,
-		DeviceInfos: deviceInfos,
-		Envs:        envs,
-		Mounts:      mounts,
-		Devices:     lo.Values(devices),
-	}
-
-	w.workerAllocations[request.WorkerUID] = allocation
-	for _, deviceUUID := range request.AllocatedDevices {
-		w.deviceController.AddDeviceAllocation(deviceUUID, allocation)
-	}
-	return allocation, nil
-}
-
-func (w *WorkerController) DeallocateWorker(workerUID string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	allocation, exists := w.workerAllocations[workerUID]
-	if !exists {
-		klog.Errorf("worker allocation not found for worker, can not deallocate worker %s", workerUID)
-		return nil
-	}
-	delete(w.workerAllocations, workerUID)
-	for _, deviceUUID := range allocation.WorkerInfo.AllocatedDevices {
-		w.deviceController.RemoveDeviceAllocation(deviceUUID, allocation)
-	}
-	return nil
-}
-
 func (w *WorkerController) ListWorkers() ([]*api.WorkerInfo, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return lo.Values(w.workers), nil
-}
-
-func (w *WorkerController) GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, bool) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	allocation, exists := w.workerAllocations[workerUID]
-	return allocation, exists
 }
 
 func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]*api.WorkerMetrics, error) {

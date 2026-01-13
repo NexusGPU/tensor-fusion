@@ -26,13 +26,15 @@ import (
 
 // WorkerHandler handles worker-related endpoints
 type WorkerHandler struct {
-	workerController framework.WorkerController
+	workerController     framework.WorkerController
+	allocationController framework.WorkerAllocationController
 }
 
 // NewWorkerHandler creates a new worker handler
-func NewWorkerHandler(workerController framework.WorkerController) *WorkerHandler {
+func NewWorkerHandler(workerController framework.WorkerController, allocationController framework.WorkerAllocationController) *WorkerHandler {
 	return &WorkerHandler{
-		workerController: workerController,
+		workerController:     workerController,
+		allocationController: allocationController,
 	}
 }
 
@@ -47,7 +49,7 @@ func (h *WorkerHandler) HandleGetWorkers(c *gin.Context) {
 	// Get worker details
 	workerDetails := make([]*api.WorkerAllocation, 0, len(workers))
 	for _, worker := range workers {
-		allocation, exists := h.workerController.GetWorkerAllocation(worker.WorkerUID)
+		allocation, exists := h.allocationController.GetWorkerAllocation(worker.WorkerUID)
 		if !exists || allocation == nil {
 			continue
 		}
@@ -60,7 +62,7 @@ func (h *WorkerHandler) HandleGetWorkers(c *gin.Context) {
 // HandleGetWorker handles GET /api/v1/workers/:id
 func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 	workerID := c.Param("id")
-	allocation, exists := h.workerController.GetWorkerAllocation(workerID)
+	allocation, exists := h.allocationController.GetWorkerAllocation(workerID)
 	if !exists || allocation == nil {
 		c.JSON(http.StatusNotFound, api.ErrorResponse{Error: "worker not found"})
 		return
