@@ -219,8 +219,8 @@ func (s *IndexAllocator) CheckNodeIndexAndTryOccupy(pod *v1.Pod, index int) bool
 	}
 
 	// Atomically check and occupy index
-	_, exists := indexQueue[index]
-	if !exists {
+	occupiedPod, exists := indexQueue[index]
+	if !exists || (occupiedPod.Namespace == pod.Namespace && occupiedPod.Name == pod.Name) {
 		indexQueue[index] = types.NamespacedName{
 			Namespace: pod.Namespace,
 			Name:      pod.Name,
@@ -269,28 +269,28 @@ func (s *IndexAllocator) AsyncCheckNodeIndexAvailableAndAssign(pod *v1.Pod, inde
 		}, func(err error) bool {
 			return true
 		}, func() error {
-			pod := &v1.Pod{}
-			if err := s.Client.Get(s.ctx, client.ObjectKeyFromObject(pod), pod); err != nil {
+			latestPod := &v1.Pod{}
+			if err := s.Client.Get(s.ctx, client.ObjectKeyFromObject(pod), latestPod); err != nil {
 				if errors.IsNotFound(err) {
 					// pod is deleted, stop retrying
 					return nil
 				}
 				return err
 			}
-			if utils.IsPodStopped(pod) {
+			if utils.IsPodStopped(latestPod) {
 				return nil
 			}
 			// Skip if index is already assigned or no annotation
-			if pod.Annotations == nil || pod.Annotations[constants.PodIndexAnnotation] != "" {
-				if utils.IsPodRunning(pod) {
+			if latestPod.Annotations == nil || latestPod.Annotations[constants.PodIndexAnnotation] != "" {
+				if utils.IsPodRunning(latestPod) {
 					log.FromContext(s.ctx).Info("[WARNING] pod is running without index allocation hypervisor may not working",
-						"pod", pod.Name, "node", pod.Spec.NodeName)
+						"pod", latestPod.Name, "node", latestPod.Spec.NodeName)
 					return nil
 				}
 				// else do nothing, may caused by duplicated reconciling
 			}
 
-			if !s.CheckNodeIndexAndTryOccupy(pod, index) {
+			if !s.CheckNodeIndexAndTryOccupy(latestPod, index) {
 				return fmt.Errorf("index is not available")
 			}
 			// Index available, patch annotation to transit Pod from Pending to DeviceAllocating in hypervisor
@@ -303,9 +303,9 @@ func (s *IndexAllocator) AsyncCheckNodeIndexAvailableAndAssign(pod *v1.Pod, inde
 			if err != nil {
 				return err
 			}
-			err = s.Client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patchBytes))
+			err = s.Client.Patch(s.ctx, latestPod, client.RawPatch(types.JSONPatchType, patchBytes))
 			if err != nil {
-				log.FromContext(s.ctx).Error(err, "failed to patch pod index annotation", "pod", pod.Name, "index", index)
+				log.FromContext(s.ctx).Error(err, "failed to patch pod index annotation", "pod", latestPod.Name, "index", index)
 				return err
 			}
 			return nil
