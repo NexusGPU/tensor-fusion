@@ -45,15 +45,24 @@ type PartitionMatchResult struct {
 // In partitioned mode, we find the smallest template that can satisfy the request.
 func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*PartitionMatchResult, error) {
 	gpuModel := gpuStatus.GPUModel
-	gpuTemplates := gpuStatus.PartitionTemplates
-	if len(gpuTemplates) == 0 {
-		return nil, fmt.Errorf("no partition templates available for GPU model %s", gpuModel)
-	}
 
 	// Get template configs from global map
 	templateConfigs, exists := PartitionTemplateMap[gpuModel]
 	if !exists || len(templateConfigs) == 0 {
 		return nil, fmt.Errorf("no partition template configs found for GPU model %s", gpuModel)
+	}
+
+	if req.PartitionTemplateID != "" {
+		templateInfo, exists := templateConfigs[req.PartitionTemplateID]
+		if !exists {
+			return nil, fmt.Errorf("specified partition template %s not found for GPU model %s", req.PartitionTemplateID, gpuModel)
+		}
+		return &PartitionMatchResult{
+			Template:    &templateInfo,
+			TemplateID:  req.PartitionTemplateID,
+			CanAllocate: true,
+			Reason:      "partition template is specified in request",
+		}, nil
 	}
 
 	// Convert request to comparable values
@@ -84,21 +93,16 @@ func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*
 	var bestMatch *PartitionMatchResult
 	bestScore := math.MaxFloat64 // Lower is better (we want smallest that fits)
 
-	for _, gpuTemplate := range gpuTemplates {
-		// Get detailed template info from config
-		templateInfo, exists := templateConfigs[gpuTemplate.TemplateID]
-		if !exists {
-			continue // Skip if template not found in config
-		}
-
+	for templateID, templateInfo := range templateConfigs {
 		// If a specific template is required, only consider that one
-		if req.PartitionTemplateID != "" && gpuTemplate.TemplateID != req.PartitionTemplateID {
+		if req.PartitionTemplateID != "" && templateID != req.PartitionTemplateID {
 			continue
 		}
 
+		templateInfoCopy := templateInfo // Create a copy to avoid pointer issues
 		result := &PartitionMatchResult{
-			Template:    &templateInfo,
-			TemplateID:  gpuTemplate.TemplateID,
+			Template:    &templateInfoCopy,
+			TemplateID:  templateID,
 			CanAllocate: false,
 		}
 
@@ -109,13 +113,13 @@ func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*
 		// Check if template has enough resources
 		if templateTflops < requestTflops {
 			result.Reason = fmt.Sprintf("template %s has insufficient TFLOPs: %.2f < %.2f",
-				gpuTemplate.TemplateID, templateTflops, requestTflops)
+				templateID, templateTflops, requestTflops)
 			continue
 		}
 
 		if templateVramBytes < requestVramBytes {
 			result.Reason = fmt.Sprintf("template %s has insufficient VRAM: %d < %d",
-				gpuTemplate.TemplateID, templateVramBytes, requestVramBytes)
+				templateID, templateVramBytes, requestVramBytes)
 			continue
 		}
 

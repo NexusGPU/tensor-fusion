@@ -57,18 +57,14 @@ func TestMatchPartitionTemplate(t *testing.T) {
 
 	tests := []struct {
 		name                string
-		gpuTemplates        []tfv1.PartitionTemplate
 		req                 *tfv1.AllocRequest
 		allocatedPartitions map[string]tfv1.AllocatedPartition
+		useUnknownModel     bool // Use unknown GPU model to test missing config
 		expectError         bool
 		expectedTemplateID  string
 	}{
 		{
 			name: "match smallest template that fits",
-			gpuTemplates: []tfv1.PartitionTemplate{
-				{TemplateID: "1g.24gb", Name: "1g.24gb"},
-				{TemplateID: "4g.94gb", Name: "4g.94gb"},
-			},
 			req: &tfv1.AllocRequest{
 				Request: tfv1.Resource{
 					Tflops: resource.MustParse("30"),
@@ -81,10 +77,6 @@ func TestMatchPartitionTemplate(t *testing.T) {
 		},
 		{
 			name: "match specific template when required",
-			gpuTemplates: []tfv1.PartitionTemplate{
-				{TemplateID: "1g.24gb", Name: "1g.24gb"},
-				{TemplateID: "4g.94gb", Name: "4g.94gb"},
-			},
 			req: &tfv1.AllocRequest{
 				Request: tfv1.Resource{
 					Tflops: resource.MustParse("30"),
@@ -98,9 +90,6 @@ func TestMatchPartitionTemplate(t *testing.T) {
 		},
 		{
 			name: "no template matches request",
-			gpuTemplates: []tfv1.PartitionTemplate{
-				{TemplateID: "1g.24gb", Name: "1g.24gb"},
-			},
 			req: &tfv1.AllocRequest{
 				Request: tfv1.Resource{
 					Tflops: resource.MustParse("300"), // Too large
@@ -111,8 +100,8 @@ func TestMatchPartitionTemplate(t *testing.T) {
 			expectError:         true,
 		},
 		{
-			name:         "no templates available",
-			gpuTemplates: []tfv1.PartitionTemplate{},
+			name:            "no templates available (unknown GPU model)",
+			useUnknownModel: true,
 			req: &tfv1.AllocRequest{
 				Request: tfv1.Resource{
 					Tflops: resource.MustParse("30"),
@@ -124,10 +113,6 @@ func TestMatchPartitionTemplate(t *testing.T) {
 		},
 		{
 			name: "match with ComputePercent - smallest template that fits",
-			gpuTemplates: []tfv1.PartitionTemplate{
-				{TemplateID: "1g.24gb", Name: "1g.24gb"},
-				{TemplateID: "4g.94gb", Name: "4g.94gb"},
-			},
 			req: &tfv1.AllocRequest{
 				Request: tfv1.Resource{
 					// 10% of 312 TFLOPs = 31.2 TFLOPs, should match 1g.24gb (50 TFLOPs)
@@ -141,10 +126,6 @@ func TestMatchPartitionTemplate(t *testing.T) {
 		},
 		{
 			name: "match with ComputePercent - requires larger template",
-			gpuTemplates: []tfv1.PartitionTemplate{
-				{TemplateID: "1g.24gb", Name: "1g.24gb"},
-				{TemplateID: "4g.94gb", Name: "4g.94gb"},
-			},
 			req: &tfv1.AllocRequest{
 				Request: tfv1.Resource{
 					// 50% of 312 TFLOPs = 156 TFLOPs, should match 4g.94gb (200 TFLOPs)
@@ -158,12 +139,9 @@ func TestMatchPartitionTemplate(t *testing.T) {
 		},
 		{
 			name: "match with ComputePercent - no template matches",
-			gpuTemplates: []tfv1.PartitionTemplate{
-				{TemplateID: "1g.24gb", Name: "1g.24gb"},
-			},
 			req: &tfv1.AllocRequest{
 				Request: tfv1.Resource{
-					// 80% of 312 TFLOPs = 249.6 TFLOPs, too large for 1g.24gb (50 TFLOPs)
+					// 80% of 312 TFLOPs = 249.6 TFLOPs, too large for both templates
 					ComputePercent: resource.MustParse("80"),
 					Vram:           resource.MustParse("100Gi"),
 				},
@@ -172,10 +150,8 @@ func TestMatchPartitionTemplate(t *testing.T) {
 			expectError:         true,
 		},
 		{
-			name: "match with ComputePercent - missing GPU capacity",
-			gpuTemplates: []tfv1.PartitionTemplate{
-				{TemplateID: "1g.24gb", Name: "1g.24gb"},
-			},
+			name:            "match with ComputePercent - missing GPU capacity",
+			useUnknownModel: true, // Unknown GPU model has no capacity in config
 			req: &tfv1.AllocRequest{
 				Request: tfv1.Resource{
 					ComputePercent: resource.MustParse("10"),
@@ -189,16 +165,15 @@ func TestMatchPartitionTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Use different GPU model for missing capacity test
-			testGPUModel := gpuModel
-			if tt.name == "match with ComputePercent - missing GPU capacity" {
-				testGPUModel = "UNKNOWN_GPU_MODEL"
+			// Use different GPU model for unknown model tests
+			testModel := gpuModel
+			if tt.useUnknownModel {
+				testModel = "UNKNOWN_GPU_MODEL"
 			}
 
 			result, err := MatchPartitionTemplate(
 				tfv1.GPUStatus{
-					GPUModel:            testGPUModel,
-					PartitionTemplates:  tt.gpuTemplates,
+					GPUModel:            testModel,
 					AllocatedPartitions: tt.allocatedPartitions,
 					Capacity: &tfv1.Resource{
 						Tflops: resource.MustParse("312"),
@@ -307,7 +282,7 @@ func TestCheckPartitionAvailability(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "Profile 19 * 4 should fail - all valid positions occupied",
+			name: "Profile 19 * 4 should succeed - positions 0-3 occupied, 4-6 free",
 			gpu: &tfv1.GPU{
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
@@ -325,17 +300,15 @@ func TestCheckPartitionAvailability(t *testing.T) {
 						"pod-2": {TemplateID: template1g, PodUID: "pod-2"}, // Profile 19 at position 1 (slot 1)
 						"pod-3": {TemplateID: template1g, PodUID: "pod-3"}, // Profile 19 at position 2 (slot 2)
 						"pod-4": {TemplateID: template1g, PodUID: "pod-4"}, // Profile 19 at position 3 (slot 3)
-						// Positions 4,5,6 are still free, but trying to allocate 5th instance
-						// Actually wait, if we have 4 instances, we need to check if 5th can fit
-						// Let me change this to have Profile 9 at position 0, then Profile 19 * 3, then try 4th
+						// Positions 4,5,6 are still free
 					},
 				},
 			},
 			templateID:  template1g,
-			expectError: false, // Actually 4 instances can fit at positions 0,1,2,3, leaving 4,5,6 free
+			expectError: false, // 5th instance can fit at positions 4,5,6
 		},
 		{
-			name: "Profile 9 at 0 + Profile 19 * 4 should fail",
+			name: "Profile 9 at 0 + Profile 19 * 3 should fail",
 			gpu: &tfv1.GPU{
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
@@ -363,32 +336,7 @@ func TestCheckPartitionAvailability(t *testing.T) {
 			errorContains: "placement slots",
 		},
 		{
-			name: "Profile 9 * 1 + Profile 19 * 3 should work",
-			gpu: &tfv1.GPU{
-				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
-				Status: tfv1.GPUStatus{
-					GPUModel: gpuModel,
-					Capacity: &tfv1.Resource{
-						Tflops: resource.MustParse("312"),
-						Vram:   resource.MustParse("80Gi"),
-					},
-					Available: &tfv1.Resource{
-						Tflops: resource.MustParse("150"),
-						Vram:   resource.MustParse("118Gi"),
-					},
-					AllocatedPartitions: map[string]tfv1.AllocatedPartition{
-						"pod-p9": {TemplateID: template4g, PodUID: "pod-p9"}, // Profile 9 at position 0, occupies slots 0,1,2,3
-						"pod-1":  {TemplateID: template1g, PodUID: "pod-1"},  // Profile 19 at slot 4
-						"pod-2":  {TemplateID: template1g, PodUID: "pod-2"},  // Profile 19 at slot 5
-						// Trying to allocate 3rd Profile 19 instance - should succeed at slot 6
-					},
-				},
-			},
-			templateID:  template1g,
-			expectError: false, // 3rd Profile 19 instance should succeed
-		},
-		{
-			name: "Profile 9 * 1 + Profile 19 * 3 should work (happy case)",
+			name: "Profile 9 * 1 + Profile 19 * 2 should succeed for 3rd instance",
 			gpu: &tfv1.GPU{
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{

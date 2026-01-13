@@ -20,6 +20,7 @@ import (
 	"context"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/samber/lo"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -27,17 +28,24 @@ import (
 // PartitionTemplateFilter filters GPUs based on partition template availability
 // Only applies when isolation mode is partitioned
 type PartitionTemplateFilter struct {
-	isolationMode      tfv1.IsolationModeType
-	requiredTemplateID string
-	maxPartitionsMap   map[string]uint32 // GPU model -> max partitions
+	isolationMode        tfv1.IsolationModeType
+	requiredTemplateID   string
+	maxPartitionsMap     map[string]uint32                                  // GPU model -> max partitions
+	partitionTemplateMap map[string]map[string]config.PartitionTemplateInfo // GPU model -> templateID -> template info
 }
 
 // NewPartitionTemplateFilter creates a new PartitionTemplateFilter
-func NewPartitionTemplateFilter(isolationMode tfv1.IsolationModeType, requiredTemplateID string, maxPartitionsMap map[string]uint32) *PartitionTemplateFilter {
+func NewPartitionTemplateFilter(
+	isolationMode tfv1.IsolationModeType,
+	requiredTemplateID string,
+	maxPartitionsMap map[string]uint32,
+	partitionTemplateMap map[string]map[string]config.PartitionTemplateInfo,
+) *PartitionTemplateFilter {
 	return &PartitionTemplateFilter{
-		isolationMode:      isolationMode,
-		requiredTemplateID: requiredTemplateID,
-		maxPartitionsMap:   maxPartitionsMap,
+		isolationMode:        isolationMode,
+		requiredTemplateID:   requiredTemplateID,
+		maxPartitionsMap:     maxPartitionsMap,
+		partitionTemplateMap: partitionTemplateMap,
 	}
 }
 
@@ -51,24 +59,17 @@ func (f *PartitionTemplateFilter) Filter(ctx context.Context, workerPodKey tfv1.
 	logger := log.FromContext(ctx)
 
 	return lo.Filter(gpus, func(gpu *tfv1.GPU, _ int) bool {
-		// Check if GPU has partition templates
-		if len(gpu.Status.PartitionTemplates) == 0 {
-			logger.V(5).Info("GPU has no partition templates", "gpu", gpu.Name)
-			return false
-		}
-
-		// If a specific template ID is required, check if GPU has it
+		// If a specific template ID is required, check if GPU model has it in config
 		if f.requiredTemplateID != "" {
-			hasTemplate := false
-			for _, template := range gpu.Status.PartitionTemplates {
-				if template.TemplateID == f.requiredTemplateID {
-					hasTemplate = true
-					break
-				}
+			templateConfigs, hasTemplates := f.partitionTemplateMap[gpu.Status.GPUModel]
+			if !hasTemplates {
+				logger.V(5).Info("GPU model has no partition templates configured",
+					"gpu", gpu.Name, "model", gpu.Status.GPUModel)
+				return false
 			}
-			if !hasTemplate {
-				logger.V(5).Info("GPU does not have required partition template",
-					"gpu", gpu.Name, "template", f.requiredTemplateID)
+			if _, hasTemplate := templateConfigs[f.requiredTemplateID]; !hasTemplate {
+				logger.V(5).Info("GPU model does not have required partition template",
+					"gpu", gpu.Name, "model", gpu.Status.GPUModel, "template", f.requiredTemplateID)
 				return false
 			}
 		}

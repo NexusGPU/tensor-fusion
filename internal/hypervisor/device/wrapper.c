@@ -29,7 +29,6 @@ extern void GoLog(const char* level, const char* message);
 // Function pointer types for dynamic loading
 typedef Result (*GetDeviceCountFunc)(size_t*);
 typedef Result (*GetAllDevicesFunc)(ExtendedDeviceInfo*, size_t, size_t*);
-typedef Result (*GetPartitionTemplatesFunc)(int32_t, PartitionTemplate*, size_t, size_t*);
 typedef bool (*AssignPartitionFunc)(PartitionAssignment*);
 typedef bool (*RemovePartitionFunc)(const char*, const char*);
 typedef Result (*SetMemHardLimitFunc)(const char*, const char*, uint64_t);
@@ -45,7 +44,6 @@ static void* libHandle = NULL;
 // Function pointers
 static GetDeviceCountFunc getDeviceCountFunc = NULL;
 static GetAllDevicesFunc getAllDevicesFunc = NULL;
-static GetPartitionTemplatesFunc getPartitionTemplatesFunc = NULL;
 static AssignPartitionFunc assignPartitionFunc = NULL;
 static RemovePartitionFunc removePartitionFunc = NULL;
 static SetMemHardLimitFunc setMemHardLimitFunc = NULL;
@@ -69,7 +67,6 @@ int loadAcceleratorLibrary(const char* libPath) {
     // Load function symbols
     getDeviceCountFunc = (GetDeviceCountFunc)dlsym(libHandle, "GetDeviceCount");
     getAllDevicesFunc = (GetAllDevicesFunc)dlsym(libHandle, "GetAllDevices");
-    getPartitionTemplatesFunc = (GetPartitionTemplatesFunc)dlsym(libHandle, "GetPartitionTemplates");
     assignPartitionFunc = (AssignPartitionFunc)dlsym(libHandle, "AssignPartition");
     removePartitionFunc = (RemovePartitionFunc)dlsym(libHandle, "RemovePartition");
     setMemHardLimitFunc = (SetMemHardLimitFunc)dlsym(libHandle, "SetMemHardLimit");
@@ -80,7 +77,7 @@ int loadAcceleratorLibrary(const char* libPath) {
     logFunc = (LogFunc)dlsym(libHandle, "Log");
     
     // Check if all required functions are loaded (Log is optional)
-    if (!getDeviceCountFunc || !getAllDevicesFunc || !getPartitionTemplatesFunc ||
+    if (!getDeviceCountFunc || !getAllDevicesFunc ||
         !assignPartitionFunc || !removePartitionFunc || !setMemHardLimitFunc ||
         !setComputeUnitHardLimitFunc || !getProcessInformationFunc ||
         !getDeviceMetricsFunc || !getVendorMountLibsFunc) {
@@ -105,7 +102,6 @@ void unloadAcceleratorLibrary(void) {
         libHandle = NULL;
         getDeviceCountFunc = NULL;
         getAllDevicesFunc = NULL;
-        getPartitionTemplatesFunc = NULL;
         assignPartitionFunc = NULL;
         removePartitionFunc = NULL;
         setMemHardLimitFunc = NULL;
@@ -130,13 +126,6 @@ Result GetAllDevicesWrapper(ExtendedDeviceInfo* devices, size_t maxCount, size_t
         return RESULT_ERROR_INTERNAL;
     }
     return getAllDevicesFunc(devices, maxCount, deviceCount);
-}
-
-Result GetPartitionTemplatesWrapper(int32_t deviceIndex, PartitionTemplate* templates, size_t maxCount, size_t* templateCount) {
-    if (getPartitionTemplatesFunc == NULL) {
-        return RESULT_ERROR_INTERNAL;
-    }
-    return getPartitionTemplatesFunc(deviceIndex, templates, maxCount, templateCount);
 }
 
 bool AssignPartitionWrapper(PartitionAssignment* assignment) {
