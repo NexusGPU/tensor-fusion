@@ -52,19 +52,24 @@ type VirtualizationCapabilities struct {
 	MaxWorkersPerDevice   uint32
 }
 
+// DeviceBasicInfo matches the C struct DeviceBasicInfo in vgpu-provider/accelerator.h
+// Field names in Go are capitalized for export, but memory layout must match C struct exactly
+// C struct fields: uuid, vendor, model, driverVersion, firmwareVersion, index, numaNode,
+//
+//	totalMemoryBytes, totalComputeUnits, maxTflops, pcieGen, pcieWidth
 type DeviceBasicInfo struct {
-	UUID              [64]byte
-	Vendor            [32]byte
-	Model             [128]byte
-	DriverVersion     [64]byte
-	FirmwareVersion   [64]byte
-	Index             int32
-	NUMANode          int32
-	TotalMemoryBytes  uint64
-	TotalComputeUnits uint64
-	MaxTflops         float64
-	PCIeGen           uint32
-	PCIeWidth         uint32
+	UUID              [64]byte  // C: char uuid[64]
+	Vendor            [32]byte  // C: char vendor[32]
+	Model             [128]byte // C: char model[128]
+	DriverVersion     [64]byte  // C: char driverVersion[64]
+	FirmwareVersion   [64]byte  // C: char firmwareVersion[64]
+	Index             int32     // C: int32_t index
+	NUMANode          int32     // C: int32_t numaNode
+	TotalMemoryBytes  uint64    // C: uint64_t totalMemoryBytes
+	TotalComputeUnits uint64    // C: uint64_t totalComputeUnits
+	MaxTflops         float64   // C: double maxTflops
+	PCIeGen           uint32    // C: uint32_t pcieGen
+	PCIeWidth         uint32    // C: uint32_t pcieWidth
 }
 
 type DevicePropertyKV struct {
@@ -465,7 +470,6 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			Properties: properties,
 		}
 	}
-
 	return devices, nil
 }
 
