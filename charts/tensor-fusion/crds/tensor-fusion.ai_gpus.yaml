@@ -192,28 +192,6 @@ spec:
                   NUMA node
                 format: int32
                 type: integer
-              partitionTemplates:
-                description: |-
-                  PartitionTemplates contains available partition templates for this GPU (e.g., MIG profiles)
-                  Reported from discovery, each template has fixed resource allocation
-                items:
-                  description: |-
-                    PartitionTemplate represents a hardware partition template (e.g., MIG profile)
-                    Only stores template ID and name in GPU status. Detailed resource information
-                    is stored in public GPU info config.
-                  properties:
-                    name:
-                      description: Name is a human-readable name for this template
-                      type: string
-                    templateId:
-                      description: TemplateID is the unique identifier for this partition
-                        template (e.g., "1g.24gb", "4g.94gb")
-                      type: string
-                  required:
-                  - name
-                  - templateId
-                  type: object
-                type: array
               phase:
                 default: Pending
                 enum:
