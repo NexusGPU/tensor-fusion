@@ -279,6 +279,12 @@ func (m *Controller) GetDeviceMetrics() (map[string]*api.GPUUsageMetrics, error)
 	return result, nil
 }
 
+// GetProcessInformation implements framework.DeviceController
+// Returns process-level GPU metrics for all processes on all devices
+func (m *Controller) GetProcessInformation() ([]api.ProcessInformation, error) {
+	return m.accelerator.GetProcessInformation()
+}
+
 func (m *Controller) GetVendorMountLibs() ([]*api.Mount, error) {
 	return m.accelerator.GetVendorMountLibs()
 }

@@ -90,7 +90,7 @@ func updateWorkerDetail(
 				content.WriteString(fmt.Sprintf("%s: %.2f TFLOPS\n\n", MetricLabelStyle.Render("Compute TFLOPS"), totalTflops))
 
 				// Time-series charts
-				if history, exists := workerMetricsHistory[deviceUUID]; exists && history != nil {
+				if history, exists := workerMetricsHistory[selectedWorkerUID]; exists && history != nil {
 					content.WriteString("\n")
 					content.WriteString(history.MemoryChart.Render())
 					content.WriteString("\n")

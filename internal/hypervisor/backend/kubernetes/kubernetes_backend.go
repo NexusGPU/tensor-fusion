@@ -207,8 +207,8 @@ func (b *KubeletBackend) StopWorker(workerUID string) error {
 	return nil
 }
 
-func (b *KubeletBackend) GetProcessMappingInfo(workerUID string, hostPID uint32) (*framework.ProcessMappingInfo, error) {
-	return GetWorkerInfoFromHostPID(hostPID, workerUID)
+func (b *KubeletBackend) GetProcessMappingInfo(hostPID uint32) (*framework.ProcessMappingInfo, error) {
+	return GetWorkerInfoFromHostPID(hostPID)
 }
 
 func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler {
