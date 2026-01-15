@@ -19,7 +19,6 @@ package gpuallocator
 import (
 	"fmt"
 	"math"
-	"sort"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -172,100 +171,6 @@ func CalculatePartitionResourceUsage(capacityTflops resource.Quantity, gpuModel,
 	vram = resource.MustParse(fmt.Sprintf("%dGi", templateInfo.MemoryGigabytes))
 
 	return tflops, vram, nil
-}
-
-// areSlotsFree checks if slots starting from startPos for offset slots are all free.
-func areSlotsFree(occupiedSlots map[uint32]bool, startPos, offset uint32) bool {
-	for i := range offset {
-		if occupiedSlots[startPos+i] {
-			return false
-		}
-	}
-	return true
-}
-
-// buildSlotOccupancyMap builds a map of occupied slots from existing partitions.
-// Uses AllocatedSlotStart/End if available, otherwise falls back to greedy assignment.
-func buildSlotOccupancyMap(
-	gpu *tfv1.GPU,
-	templateConfigs map[string]config.PartitionTemplateInfo,
-) map[uint32]bool {
-	occupiedSlots := make(map[uint32]bool)
-
-	// First, use explicit slot assignments if available
-	for _, partition := range gpu.Status.AllocatedPartitions {
-		if partition.AllocatedSlotStart != nil && partition.AllocatedSlotEnd != nil {
-			start := *partition.AllocatedSlotStart
-			end := *partition.AllocatedSlotEnd
-			for slot := start; slot < end; slot++ {
-				occupiedSlots[slot] = true
-			}
-		}
-	}
-
-	// For partitions without explicit slot assignments, use greedy approach
-	// Convert map to slice and sort by AllocatedAt timestamp (ASC)
-	partitions := make([]tfv1.AllocatedPartition, 0, len(gpu.Status.AllocatedPartitions))
-	for _, partition := range gpu.Status.AllocatedPartitions {
-		// Skip if already has explicit slot assignment
-		if partition.AllocatedSlotStart != nil && partition.AllocatedSlotEnd != nil {
-			continue
-		}
-		partitions = append(partitions, partition)
-	}
-
-	if len(partitions) > 0 {
-		sort.Slice(partitions, func(i, j int) bool {
-			// If both have valid timestamps, compare by time
-			if !partitions[i].AllocatedAt.IsZero() && !partitions[j].AllocatedAt.IsZero() {
-				if !partitions[i].AllocatedAt.Equal(&partitions[j].AllocatedAt) {
-					return partitions[i].AllocatedAt.Before(&partitions[j].AllocatedAt)
-				}
-			}
-			// Fallback to PodUID for stable ordering when timestamps are zero or equal
-			return partitions[i].PodUID < partitions[j].PodUID
-		})
-
-		// Process each partition without explicit slots in allocation order
-		for _, partition := range partitions {
-			templateInfo, exists := templateConfigs[partition.TemplateID]
-			if !exists || len(templateInfo.PlacementLimit) == 0 || templateInfo.PlacementOffSet == 0 {
-				continue
-			}
-
-			// Find first available starting position for this partition
-			for _, startPos := range templateInfo.PlacementLimit {
-				if areSlotsFree(occupiedSlots, startPos, templateInfo.PlacementOffSet) {
-					// Assign this partition to this position
-					for i := uint32(0); i < templateInfo.PlacementOffSet; i++ {
-						occupiedSlots[startPos+i] = true
-					}
-					break
-				}
-			}
-		}
-	}
-
-	return occupiedSlots
-}
-
-// findAvailableSlotPosition finds the first available slot position for a template.
-// Returns the starting position and true if found, 0 and false otherwise.
-func findAvailableSlotPosition(
-	templateInfo config.PartitionTemplateInfo,
-	occupiedSlots map[uint32]bool,
-) (uint32, bool) {
-	if len(templateInfo.PlacementLimit) == 0 || templateInfo.PlacementOffSet == 0 {
-		return 0, false
-	}
-
-	for _, startPos := range templateInfo.PlacementLimit {
-		if areSlotsFree(occupiedSlots, startPos, templateInfo.PlacementOffSet) {
-			return startPos, true
-		}
-	}
-
-	return 0, false
 }
 
 // CheckPartitionAvailability checks if a GPU has enough resources to allocate a partition.

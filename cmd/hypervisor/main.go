@@ -144,7 +144,9 @@ func main() {
 			klog.Fatalf("Failed to convert HTTP port from env: %v", err)
 		}
 	}
-	httpServer := server.NewServer(ctx, deviceController, workerController, allocationController, metricsRecorder, backend, httpPortNum)
+	httpServer := server.NewServer(
+		ctx, deviceController, workerController, allocationController, metricsRecorder, backend, httpPortNum,
+	)
 	go func() {
 		if err := httpServer.Start(); err != nil && err != http.ErrServerClosed {
 			klog.Fatalf("Failed to start HTTP server: %v", err)
