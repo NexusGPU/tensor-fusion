@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"strconv"
+	"strings"
 	"sync"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -99,10 +101,97 @@ func (w *WorkerController) ListWorkers() ([]*api.WorkerInfo, error) {
 	return lo.Values(w.workers), nil
 }
 
+// GetWorkerMetrics returns current worker metrics for all workers
+// Returns map keyed by device UUID, then by worker UID, then by process ID
 func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]*api.WorkerMetrics, error) {
-	// TODO: implement this
-	// Get all allocations to know which workers exist
-	// find process and then get metrics by host processes
-	// w.deviceController.GetProcessMetrics()
-	return nil, nil
+	// Step 1: Build worker lookup map: "namespace/podName" -> WorkerUID
+	workerLookup := w.buildWorkerLookupMap()
+
+	// Step 2: Get all process information from device controller
+	processInfos, err := w.deviceController.GetProcessInformation()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(processInfos) == 0 {
+		return make(map[string]map[string]map[string]*api.WorkerMetrics), nil
+	}
+
+	// Step 3: Map processes to workers and build result
+	// Result structure: map[DeviceUUID]map[WorkerUID]map[ProcessID]*WorkerMetrics
+	result := make(map[string]map[string]map[string]*api.WorkerMetrics)
+
+	for _, procInfo := range processInfos {
+		// Parse hostPID from ProcessID string
+		hostPID, err := strconv.ParseUint(procInfo.ProcessID, 10, 32)
+		if err != nil {
+			klog.V(4).Infof("Failed to parse process ID %s: %v", procInfo.ProcessID, err)
+			continue
+		}
+
+		// Get pod identifier from process environment using backend
+		mappingInfo, err := w.backend.GetProcessMappingInfo(uint32(hostPID))
+		if err != nil {
+			// Process may not be a TensorFusion worker, skip silently
+			klog.V(5).Infof("Failed to get process mapping info for process %d: %v", hostPID, err)
+			continue
+		}
+
+		// Skip if namespace or podName is empty (not a TensorFusion worker)
+		if mappingInfo.GuestID == "" {
+			continue
+		}
+
+		// Look up WorkerUID using namespace/podName
+		workerKey := mappingInfo.Namespace + "/" + mappingInfo.PodName
+		workerUID, found := workerLookup[workerKey]
+		if !found {
+			// Process belongs to a pod not tracked by this hypervisor
+			klog.V(5).Infof("Worker not found for key %s (process %d)", workerKey, hostPID)
+			continue
+		}
+
+		// Normalize device UUID to lowercase for consistency
+		deviceUUID := strings.ToLower(procInfo.DeviceUUID)
+
+		// Initialize nested maps if needed
+		if result[deviceUUID] == nil {
+			result[deviceUUID] = make(map[string]map[string]*api.WorkerMetrics)
+		}
+		if result[deviceUUID][workerUID] == nil {
+			result[deviceUUID][workerUID] = make(map[string]*api.WorkerMetrics)
+		}
+
+		// Create WorkerMetrics for this process
+		// Use container PID as the process ID for display (more meaningful to users)
+		processIDStr := strconv.FormatUint(uint64(mappingInfo.GuestPID), 10)
+		result[deviceUUID][workerUID][processIDStr] = &api.WorkerMetrics{
+			DeviceUUID:        deviceUUID,
+			WorkerUID:         workerUID,
+			ProcessID:         processIDStr,
+			MemoryBytes:       procInfo.MemoryUsedBytes,
+			MemoryPercentage:  procInfo.MemoryUtilizationPercent,
+			ComputePercentage: procInfo.ComputeUtilizationPercent,
+			// ComputeTflops can be calculated if we have device max TFlops and utilization
+			// For now, leave it as 0 since we don't have that info here
+			ComputeTflops: 0,
+		}
+	}
+
+	return result, nil
+}
+
+// buildWorkerLookupMap builds a map from "namespace/podName" to WorkerUID
+// This is used to map processes back to workers
+func (w *WorkerController) buildWorkerLookupMap() map[string]string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	lookup := make(map[string]string, len(w.workers))
+	for _, worker := range w.workers {
+		// Use namespace/podName as key to look up WorkerUID
+		key := worker.Namespace + "/" + worker.WorkerName
+		lookup[key] = worker.WorkerUID
+	}
+	return lookup
 }

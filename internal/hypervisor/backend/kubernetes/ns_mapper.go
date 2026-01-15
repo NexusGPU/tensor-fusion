@@ -14,8 +14,8 @@ import (
 
 // GetWorkerInfoFromHostPID extracts worker information from a process's environment
 // by reading /proc/{hostPID}/environ and /proc/{hostPID}/status
-// workerUID (podUID) is provided as input parameter, not extracted from environment
-func GetWorkerInfoFromHostPID(hostPID uint32, workerUID string) (*framework.ProcessMappingInfo, error) {
+// Returns ProcessMappingInfo with Namespace, PodName, ContainerName for worker lookup
+func GetWorkerInfoFromHostPID(hostPID uint32) (*framework.ProcessMappingInfo, error) {
 	procDir := fmt.Sprintf("/proc/%d", hostPID)
 
 	// Check if process exists
@@ -32,8 +32,8 @@ func GetWorkerInfoFromHostPID(hostPID uint32, workerUID string) (*framework.Proc
 
 	// Parse environment variables (null-separated)
 	envMap := make(map[string]string)
-	envPairs := strings.Split(string(envData), "\x00")
-	for _, pair := range envPairs {
+	envPairs := strings.SplitSeq(string(envData), "\x00")
+	for pair := range envPairs {
 		if pair == "" {
 			continue
 		}
@@ -55,21 +55,13 @@ func GetWorkerInfoFromHostPID(hostPID uint32, workerUID string) (*framework.Proc
 		containerPID = hostPID
 	}
 
-	// Validate required fields (must exist as they are injected by webhook)
-	if podName == "" {
-		return nil, fmt.Errorf("POD_NAME not found in environment for process %d", hostPID)
-	}
-	if namespace == "" {
-		return nil, fmt.Errorf("POD_NAMESPACE not found in environment for process %d", hostPID)
-	}
-	if containerName == "" {
-		return nil, fmt.Errorf("CONTAINER_NAME not found in environment for process %d", hostPID)
-	}
-
 	return &framework.ProcessMappingInfo{
-		GuestID:  fmt.Sprintf("%s_%s_%s", namespace, podName, containerName),
-		HostPID:  hostPID,
-		GuestPID: containerPID,
+		Namespace:     namespace,
+		PodName:       podName,
+		ContainerName: containerName,
+		GuestID:       fmt.Sprintf("%s_%s_%s", namespace, podName, containerName),
+		HostPID:       hostPID,
+		GuestPID:      containerPID,
 	}, nil
 }
 

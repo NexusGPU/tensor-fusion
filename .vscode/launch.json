@@ -31,6 +31,9 @@
                 "HYPERVISOR_PORT": "8042",
                 "GPU_NODE_NAME": "ubuntu",
             },
+            "args": [
+                "--isolation-mode", "partitioned",
+            ],
             "cwd": "${workspaceFolder}",
             "program": "${workspaceFolder}/cmd/hypervisor/main.go",
         },
@@ -66,6 +69,7 @@
                 "ENABLE_SCHEDULER": "true",
                 "ENABLE_CR_CONTROLLER": "true",
                 "NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION": "true",
+                // "DEBUG_FORCE_GPUNODE_STATE": "{\"ubuntu\": \"Running\"}",
                 "IMPERSONATE_SERVICE_ACCOUNT": "system:serviceaccount:tensor-fusion-sys:tensor-fusion-sys"
             },
             "args": [

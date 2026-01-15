@@ -38,6 +38,19 @@ func (w *WorkerInfo) FilterValue() string {
 	return w.WorkerUID + " " + w.WorkerName + " " + w.Namespace
 }
 
+// Title returns the display title for the worker in list views
+func (w *WorkerInfo) Title() string {
+	if w.WorkerName != "" {
+		return w.WorkerName
+	}
+	return w.WorkerUID
+}
+
+// Description returns the display description for the worker in list views
+func (w *WorkerInfo) Description() string {
+	return w.Namespace + "/" + w.WorkerUID
+}
+
 type WorkerStatus string
 
 const (

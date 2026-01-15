@@ -578,26 +578,18 @@ func (a *AcceleratorInterface) SetComputeUnitHardLimit(workerID, deviceUUID stri
 	return nil
 }
 
-// GetProcessInformation retrieves process information (compute and memory utilization) for all tracked processes
-// This combines the functionality of GetProcessComputeUtilization and GetProcessMemoryUtilization
-// following AMD SMI style API design
+// GetProcessInformation retrieves process information (compute and memory utilization) for all processes
+// on all devices. This combines the functionality of GetProcessComputeUtilization and GetProcessMemoryUtilization
+// following AMD SMI style API design.
+// Note: This directly calls the C API which returns all GPU processes, regardless of what Go tracks internally.
 func (a *AcceleratorInterface) GetProcessInformation() ([]api.ProcessInformation, error) {
-	// Get total process count from the map
-	totalCount := a.GetTotalProcessCount()
-	if totalCount == 0 {
-		return []api.ProcessInformation{}, nil
-	}
-
 	// Allocate stack buffer (max 1024 to avoid stack overflow)
+	// The C API GetProcessInformation returns all processes on all devices
 	const maxStackProcessInfos = 1024
 	var stackProcessInfos [maxStackProcessInfos]ProcessInformation
-	maxCount := totalCount
-	if maxCount > maxStackProcessInfos {
-		maxCount = maxStackProcessInfos
-	}
 
 	var cCount uintptr
-	result := getProcessInformation(&stackProcessInfos[0], uintptr(maxCount), &cCount)
+	result := getProcessInformation(&stackProcessInfos[0], uintptr(maxStackProcessInfos), &cCount)
 	if result != ResultSuccess {
 		return nil, fmt.Errorf("failed to get process information: %d", result)
 	}

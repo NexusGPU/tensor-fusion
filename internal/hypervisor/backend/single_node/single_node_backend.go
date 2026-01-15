@@ -260,9 +260,10 @@ func (b *SingleNodeBackend) StopWorker(workerUID string) error {
 	return nil
 }
 
-func (b *SingleNodeBackend) GetProcessMappingInfo(workerUID string, hostPID uint32) (*framework.ProcessMappingInfo, error) {
+func (b *SingleNodeBackend) GetProcessMappingInfo(hostPID uint32) (*framework.ProcessMappingInfo, error) {
+	// For single node mode, we don't have Kubernetes pod info
+	// Return minimal info with hostPID
 	return &framework.ProcessMappingInfo{
-		GuestID:  workerUID,
 		HostPID:  hostPID,
 		GuestPID: hostPID,
 	}, nil

@@ -21,6 +21,11 @@ type DeviceController interface {
 
 	GetDeviceMetrics() (map[string]*api.GPUUsageMetrics, error)
 
+	// GetProcessInformation returns process-level GPU metrics for all processes on all devices
+	// Returns ProcessInformation for each process using GPU, including ProcessID, DeviceUUID,
+	// compute utilization, and memory usage
+	GetProcessInformation() ([]api.ProcessInformation, error)
+
 	GetVendorMountLibs() ([]*api.Mount, error)
 
 	RegisterDeviceUpdateHandler(handler DeviceChangeHandler)
@@ -84,18 +89,27 @@ type Backend interface {
 	// StopWorker stops worker process
 	StopWorker(workerUID string) error
 
-	// GetProcessMappingInfo gets process mapping information for a worker
-	GetProcessMappingInfo(workerUID string, hostPID uint32) (*ProcessMappingInfo, error)
+	// GetProcessMappingInfo gets process mapping information from a host process
+	GetProcessMappingInfo(hostPID uint32) (*ProcessMappingInfo, error)
 
 	GetDeviceChangeHandler() DeviceChangeHandler
 
 	ListWorkers() []*api.WorkerInfo
 }
 
-// ProcessWorkerInfo contains worker information extracted from a process
+// ProcessMappingInfo contains worker information extracted from a process
 type ProcessMappingInfo struct {
-	GuestID  string
-	HostPID  uint32
+	// Namespace is the Kubernetes namespace of the pod
+	Namespace string
+	// PodName is the name of the pod
+	PodName string
+	// ContainerName is the name of the container within the pod
+	ContainerName string
+	// GuestID is a composite identifier: namespace_podName_containerName
+	GuestID string
+	// HostPID is the process ID in the host namespace
+	HostPID uint32
+	// GuestPID is the process ID in the container namespace
 	GuestPID uint32
 }
 
