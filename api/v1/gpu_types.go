@@ -129,11 +129,18 @@ type AllocatedPartition struct {
 
 	// AllocatedSlotStart is the starting slot position where this partition is allocated
 	// This is the actual hardware slot position (0-based index)
+	// For NVIDIA MIG: physical slot position (0-7)
 	AllocatedSlotStart *uint32 `json:"allocatedSlotStart,omitempty"`
 
 	// AllocatedSlotEnd is the ending slot position (exclusive) where this partition is allocated
 	// The partition occupies slots [AllocatedSlotStart, AllocatedSlotEnd)
 	AllocatedSlotEnd *uint32 `json:"allocatedSlotEnd,omitempty"`
+
+	// IsolationGroupID is the isolation group where this partition is allocated
+	// For Ascend NPU: vGroup ID (0-3)
+	// For NVIDIA MIG: this is derived from slot position, not used separately
+	// +optional
+	IsolationGroupID *uint32 `json:"isolationGroupId,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Provisioning;Running;Unknown;Destroying;Migrating

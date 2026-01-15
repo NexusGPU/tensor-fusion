@@ -269,7 +269,7 @@ func findAvailableSlotPosition(
 }
 
 // CheckPartitionAvailability checks if a GPU has enough resources to allocate a partition.
-// Gets template info from config.
+// Gets template info from config. Uses vendor-specific strategy for slot/group checking.
 func CheckPartitionAvailability(
 	gpu *tfv1.GPU,
 	templateID string,
@@ -285,43 +285,13 @@ func CheckPartitionAvailability(
 		return fmt.Errorf("partition template %s not found for GPU model %s", templateID, gpu.Status.GPUModel)
 	}
 
-	currentCount := len(gpu.Status.AllocatedPartitions)
+	// Get GPU config for strategy
+	gpuConfig := getGpuConfigFromMaps(gpu.Status.GPUModel)
 
-	// Check general partition count limit first (cheaper check)
-	maxPartitions := MaxPartitionsMap[gpu.Status.GPUModel]
-	if maxPartitions == 0 {
-		maxPartitions = 7 // Default MIG limit
-	}
-	if maxPartitions > 0 && uint32(currentCount) >= maxPartitions {
-		return fmt.Errorf("GPU %s has reached maximum partition count: %d/%d",
-			gpu.Name, currentCount, maxPartitions)
-	}
-
-	// Count how many partitions of this template are already allocated
-	templateCount := uint32(0)
-	for _, partition := range gpu.Status.AllocatedPartitions {
-		if partition.TemplateID == templateID {
-			templateCount++
-		}
-	}
-
-	// Check MaxPartition limit for this specific template
-	if templateInfo.MaxPartition > 0 && templateCount >= templateInfo.MaxPartition {
-		return fmt.Errorf("GPU %s has reached maximum partition count for template %s: %d/%d",
-			gpu.Name, templateID, templateCount, templateInfo.MaxPartition)
-	}
-
-	// Check placement slots using bitmask-based tracking
-	if len(templateInfo.PlacementLimit) > 0 && templateInfo.PlacementOffSet > 0 {
-		// Build slot occupancy map from existing partitions
-		occupiedSlots := buildSlotOccupancyMap(gpu, templateConfigs)
-
-		// Check if the new template can find a valid placement
-		_, found := findAvailableSlotPosition(templateInfo, occupiedSlots)
-		if !found {
-			return fmt.Errorf("GPU %s has no available placement slots for template %s: required %d slots starting from positions %v",
-				gpu.Name, templateID, templateInfo.PlacementOffSet, templateInfo.PlacementLimit)
-		}
+	// Use vendor-specific strategy for slot/group checking
+	strategy := GetPartitionStrategy(gpu.Status.Vendor)
+	if err := strategy.CheckAvailability(gpu, templateInfo, gpuConfig); err != nil {
+		return err
 	}
 
 	// Calculate required resources from config
@@ -343,4 +313,38 @@ func CheckPartitionAvailability(
 	}
 
 	return nil
+}
+
+// getGpuConfigFromMaps constructs a GpuInfo from the global maps for strategy use
+func getGpuConfigFromMaps(gpuModel string) *config.GpuInfo {
+	gpuConfig := &config.GpuInfo{
+		Model:         gpuModel,
+		MaxPartitions: MaxPartitionsMap[gpuModel],
+	}
+
+	// Get MaxPlacementSlots
+	if slots, exists := MaxPlacementSlotsMap[gpuModel]; exists {
+		gpuConfig.MaxPlacementSlots = slots
+	}
+
+	// Get MaxIsolationGroups (defaults to MaxPlacementSlots if not set)
+	if groups, exists := MaxIsolationGroupsMap[gpuModel]; exists {
+		gpuConfig.MaxIsolationGroups = groups
+	} else if gpuConfig.MaxPlacementSlots > 0 {
+		gpuConfig.MaxIsolationGroups = gpuConfig.MaxPlacementSlots
+	}
+
+	// Get TotalExtendedResources
+	if resources, exists := TotalExtendedResourcesMap[gpuModel]; exists {
+		gpuConfig.TotalExtendedResources = resources
+	}
+
+	// Convert template map to slice
+	if templates, exists := PartitionTemplateMap[gpuModel]; exists {
+		for _, t := range templates {
+			gpuConfig.PartitionTemplates = append(gpuConfig.PartitionTemplates, t)
+		}
+	}
+
+	return gpuConfig
 }

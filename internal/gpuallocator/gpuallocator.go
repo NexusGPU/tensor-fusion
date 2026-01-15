@@ -54,6 +54,15 @@ var MaxPartitionsMap = map[string]uint32{}
 // Key: GPU model, Value: max placement slots (e.g., 8 for MIG)
 var MaxPlacementSlotsMap = map[string]uint32{}
 
+// MaxIsolationGroupsMap stores max isolation groups by GPU model
+// Key: GPU model, Value: max isolation groups (e.g., 4 for Ascend vGroups)
+var MaxIsolationGroupsMap = map[string]uint32{}
+
+// TotalExtendedResourcesMap stores total extended resources by GPU model
+// Key: GPU model, Value: map of resource name -> total capacity
+// For Ascend NPU: {"AICORE": 8, "AICPU": 7, "VPC": 12, ...}
+var TotalExtendedResourcesMap = map[string]map[string]uint32{}
+
 // LoadPartitionTemplatesFromConfig loads partition templates and max partitions from GPU info config
 // This should be called when GPU info config is loaded/updated
 func LoadPartitionTemplatesFromConfig(gpuInfos []config.GpuInfo) {
@@ -73,11 +82,27 @@ func LoadPartitionTemplatesFromConfig(gpuInfos []config.GpuInfo) {
 			MaxPlacementSlotsMap[gpuInfo.FullModelName] = gpuInfo.MaxPlacementSlots
 		}
 
+		// Store max isolation groups (for Ascend vGroups)
+		if gpuInfo.MaxIsolationGroups > 0 {
+			MaxIsolationGroupsMap[gpuInfo.Model] = gpuInfo.MaxIsolationGroups
+			MaxIsolationGroupsMap[gpuInfo.FullModelName] = gpuInfo.MaxIsolationGroups
+		}
+
+		// Store total extended resources (for Ascend AICORE, AICPU, etc.)
+		if len(gpuInfo.TotalExtendedResources) > 0 {
+			TotalExtendedResourcesMap[gpuInfo.Model] = gpuInfo.TotalExtendedResources
+			TotalExtendedResourcesMap[gpuInfo.FullModelName] = gpuInfo.TotalExtendedResources
+		}
+
 		// Store partition templates
 		if len(gpuInfo.PartitionTemplates) > 0 {
 			templateMap := make(map[string]config.PartitionTemplateInfo, len(gpuInfo.PartitionTemplates))
 			for _, template := range gpuInfo.PartitionTemplates {
 				templateMap[template.TemplateID] = template
+				// Also index by Name for convenience (e.g., "vir01")
+				if template.Name != "" && template.Name != template.TemplateID {
+					templateMap[template.Name] = template
+				}
 			}
 			PartitionTemplateMap[gpuInfo.Model] = templateMap
 			PartitionTemplateMap[gpuInfo.FullModelName] = templateMap
@@ -1826,7 +1851,8 @@ func (s *GpuAllocator) bindPartition(gpu *tfv1.GPU, req *tfv1.AllocRequest, sele
 	if !hasTemplates {
 		return fmt.Errorf("no partition templates configured for GPU model %s", gpu.Status.GPUModel)
 	}
-	if _, templateExists := templateConfigs[req.PartitionTemplateID]; !templateExists {
+	templateInfo, templateExists := templateConfigs[req.PartitionTemplateID]
+	if !templateExists {
 		return fmt.Errorf("partition template %s not found in config for GPU model %s", req.PartitionTemplateID, gpu.Status.GPUModel)
 	}
 
@@ -1855,22 +1881,15 @@ func (s *GpuAllocator) bindPartition(gpu *tfv1.GPU, req *tfv1.AllocRequest, sele
 		gpu.Status.AllocatedPartitions = make(map[string]tfv1.AllocatedPartition)
 	}
 
-	// Find and assign slot position
-	var slotStart, slotEnd *uint32
-	templateConfigs, exists := PartitionTemplateMap[gpu.Status.GPUModel]
-	if exists {
-		if templateInfo, found := templateConfigs[req.PartitionTemplateID]; found {
-			if len(templateInfo.PlacementLimit) > 0 && templateInfo.PlacementOffSet > 0 {
-				// Build slot occupancy map from existing partitions
-				occupiedSlots := buildSlotOccupancyMap(gpu, templateConfigs)
-				// Find available slot position
-				if startPos, found := findAvailableSlotPosition(templateInfo, occupiedSlots); found {
-					slotStart = &startPos
-					endPos := startPos + templateInfo.PlacementOffSet
-					slotEnd = &endPos
-				}
-			}
-		}
+	// Use vendor-specific strategy to allocate slot/isolation group
+	gpuConfig := getGpuConfigFromMaps(gpu.Status.GPUModel)
+	strategy := GetPartitionStrategy(gpu.Status.Vendor)
+	isolationGroupID, slotStart, slotEnd, err := strategy.AllocateSlot(gpu, templateInfo, gpuConfig)
+	if err != nil {
+		// Rollback resource subtraction
+		gpu.Status.Available.Tflops.Add(partitionTflops)
+		gpu.Status.Available.Vram.Add(partitionVram)
+		return fmt.Errorf("failed to allocate slot for GPU %s template %s: %w", selectedGPU, req.PartitionTemplateID, err)
 	}
 
 	// Store partition allocation info using podUID as key
@@ -1883,12 +1902,15 @@ func (s *GpuAllocator) bindPartition(gpu *tfv1.GPU, req *tfv1.AllocRequest, sele
 		AllocatedAt:        metav1.Now(),
 		AllocatedSlotStart: slotStart,
 		AllocatedSlotEnd:   slotEnd,
+		IsolationGroupID:   isolationGroupID,
 	}
 
 	log.FromContext(s.ctx).Info("Allocated partition on GPU",
 		"gpu", selectedGPU,
 		"template", req.PartitionTemplateID,
 		"podUID", podUID,
+		"vendor", gpu.Status.Vendor,
+		"isolationGroupID", isolationGroupID,
 		"slotStart", slotStart,
 		"slotEnd", slotEnd)
 	return nil

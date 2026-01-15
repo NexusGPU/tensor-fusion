@@ -147,6 +147,7 @@
         "nolint",
         "NUMA",
         "nvdp",
+        "NVIDIAMIG",
         "Nvlink",
         "NVML",
         "objs",
