@@ -39,6 +39,11 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/worker"
 )
 
+const (
+	testWorkerUID1        = "test-worker-1"
+	integrationWorkerUID1 = "integration-worker-1"
+)
+
 func TestHypervisor(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Hypervisor Suite")
@@ -173,7 +178,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(devices).ToNot(BeEmpty())
 
 				// Verify stub device properties - should have 4 devices
-				Expect(len(devices)).To(Equal(4), "Should return 4 example devices")
+				Expect(devices).To(HaveLen(4), "Should return 4 example devices")
 				device := devices[0]
 				Expect(device.UUID).To(ContainSubstring("example-device"))
 				Expect(device.Vendor).To(Equal("STUB"))
@@ -203,7 +208,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 				devices := waitForDeviceDiscovery(deviceController)
 				Expect(devices).ToNot(BeEmpty(), "Should discover at least one stub device")
-				Expect(len(devices)).To(Equal(4), "Should discover exactly 4 example devices")
+				Expect(devices).To(HaveLen(4), "Should discover exactly 4 example devices")
 
 				// Verify device properties
 				device := devices[0]
@@ -222,7 +227,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 				deviceUUID := devices[0].UUID
 				req := &api.WorkerInfo{
-					WorkerUID:        "test-worker-1",
+					WorkerUID:        testWorkerUID1,
 					AllocatedDevices: []string{deviceUUID},
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
@@ -230,7 +235,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				resp, err := allocationController.AllocateWorkerDevices(req)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp).NotTo(BeNil())
-				Expect(resp.WorkerInfo.WorkerUID).To(Equal("test-worker-1"))
+				Expect(resp.WorkerInfo.WorkerUID).To(Equal(testWorkerUID1))
 				Expect(resp.DeviceInfos).ToNot(BeEmpty())
 				Expect(resp.DeviceInfos[0].UUID).To(Equal(deviceUUID))
 				// Verify mounts and envs are populated (may be empty for stub, but structure should exist)
@@ -239,10 +244,10 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(resp.Devices).ToNot(BeNil())
 
 				// Verify allocation exists through allocation controller
-				allocation, found := allocationController.GetWorkerAllocation("test-worker-1")
+				allocation, found := allocationController.GetWorkerAllocation(testWorkerUID1)
 				Expect(found).To(BeTrue())
 				Expect(allocation).NotTo(BeNil())
-				Expect(allocation.WorkerInfo.WorkerUID).To(Equal("test-worker-1"))
+				Expect(allocation.WorkerInfo.WorkerUID).To(Equal(testWorkerUID1))
 			})
 
 			It("should get GPU metrics", func() {
@@ -362,7 +367,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				resp, err := allocationController.AllocateWorkerDevices(req)
 				// Behavior may vary - either error or empty device list
 				if err != nil {
-					Expect(err).ToNot(BeNil())
+					Expect(err).To(HaveOccurred())
 				} else {
 					Expect(resp).NotTo(BeNil())
 					Expect(resp.DeviceInfos).To(BeEmpty(), "Should not allocate non-existent device")
@@ -389,14 +394,14 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				var found bool
 				handler := framework.WorkerChangeHandler{
 					OnAdd: func(worker *api.WorkerInfo) {
-						if worker.WorkerUID == "test-worker-1" {
+						if worker.WorkerUID == testWorkerUID1 {
 							found = true
 						}
 					},
 					OnRemove: func(worker *api.WorkerInfo) {},
 					OnUpdate: func(oldWorker, newWorker *api.WorkerInfo) {
 						// StartWorker adds worker to map before notifying, so it may trigger OnUpdate
-						if newWorker.WorkerUID == "test-worker-1" {
+						if newWorker.WorkerUID == testWorkerUID1 {
 							found = true
 						}
 					},
@@ -413,7 +418,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(devices).ToNot(BeEmpty())
 
 				req := &api.WorkerInfo{
-					WorkerUID:        "test-worker-1",
+					WorkerUID:        testWorkerUID1,
 					AllocatedDevices: []string{devices[0].UUID},
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
@@ -433,7 +438,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 			It("should track worker to process mapping", func() {
 				// Start a worker
 				worker := &api.WorkerInfo{
-					WorkerUID:        "test-worker-1",
+					WorkerUID:        testWorkerUID1,
 					AllocatedDevices: []string{},
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
@@ -476,7 +481,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(devices).ToNot(BeEmpty())
 
 				req := &api.WorkerInfo{
-					WorkerUID:        "test-worker-1",
+					WorkerUID:        testWorkerUID1,
 					AllocatedDevices: []string{devices[0].UUID},
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
@@ -494,7 +499,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 						return false
 					}
 					for _, worker := range workers {
-						if worker.WorkerUID == "test-worker-1" {
+						if worker.WorkerUID == testWorkerUID1 {
 							return true
 						}
 					}
@@ -509,17 +514,17 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(devices).ToNot(BeEmpty())
 
 				req := &api.WorkerInfo{
-					WorkerUID:        "test-worker-1",
+					WorkerUID:        testWorkerUID1,
 					AllocatedDevices: []string{devices[0].UUID},
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
 				_, err = allocationController.AllocateWorkerDevices(req)
 				Expect(err).NotTo(HaveOccurred())
 
-				allocation, found := allocationController.GetWorkerAllocation("test-worker-1")
+				allocation, found := allocationController.GetWorkerAllocation(testWorkerUID1)
 				Expect(found).To(BeTrue())
 				Expect(allocation).NotTo(BeNil())
-				Expect(allocation.WorkerInfo.WorkerUID).To(Equal("test-worker-1"))
+				Expect(allocation.WorkerInfo.WorkerUID).To(Equal(testWorkerUID1))
 			})
 
 			It("should get worker metrics", func() {
@@ -529,7 +534,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(devices).ToNot(BeEmpty())
 
 				req := &api.WorkerInfo{
-					WorkerUID:        "test-worker-1",
+					WorkerUID:        testWorkerUID1,
 					AllocatedDevices: []string{devices[0].UUID},
 					IsolationMode:    tfv1.IsolationModeSoft,
 				}
@@ -656,7 +661,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// Read and verify metrics file content
 				content, err := os.ReadFile(tempMetricsFile)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(len(content)).To(BeNumerically(">", 0), "Metrics file should have content")
+				Expect(content).ToNot(BeEmpty(), "Metrics file should have content")
 
 				// Verify metrics contain expected fields (GPU usage metrics)
 				contentStr := string(content)
@@ -785,7 +790,9 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					if err != nil {
 						return 0
 					}
-					defer accel.Close()
+					defer func() {
+						_ = accel.Close()
+					}()
 					processInfos, err := accel.GetProcessInformation()
 					if err != nil {
 						return 0
@@ -831,7 +838,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(gpuMetrics).NotTo(BeNil())
 				// Should have metrics for all devices
-				Expect(len(gpuMetrics)).To(Equal(len(devices)))
+				Expect(gpuMetrics).To(HaveLen(len(devices)))
 			})
 
 			It("should handle high load scenario with many processes", func() {
@@ -858,7 +865,9 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					if err != nil {
 						return 0
 					}
-					defer accel.Close()
+					defer func() {
+						_ = accel.Close()
+					}()
 					processInfos, err := accel.GetProcessInformation()
 					if err != nil {
 						return 0
@@ -903,7 +912,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(gpuMetrics).NotTo(BeNil())
 
 				// Check that we have 4 devices as expected
-				Expect(len(gpuMetrics)).To(Equal(4), "Should return metrics for 4 devices")
+				Expect(gpuMetrics).To(HaveLen(4), "Should return metrics for 4 devices")
 
 				// Note: Stub library may not accurately track compute utilization from app_mock processes
 				// since the stub implementation uses simulated metrics. Just verify the API works.
@@ -937,7 +946,9 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 					if err != nil {
 						return err
 					}
-					defer accel.Close()
+					defer func() {
+						_ = accel.Close()
+					}()
 					devices, err := deviceController.ListDevices()
 					if err != nil {
 						return err
@@ -965,7 +976,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				gpuMetrics, err := accel.GetDeviceMetrics(deviceUUIDs)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(gpuMetrics).NotTo(BeNil())
-				Expect(len(gpuMetrics)).To(Equal(1))
+				Expect(gpuMetrics).To(HaveLen(1))
 
 				// Utilization might be at or near 100% due to rate limiting
 				// Allow some variance as the window resets
@@ -1008,14 +1019,14 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				var foundInList bool
 				handler := framework.WorkerChangeHandler{
 					OnAdd: func(worker *api.WorkerInfo) {
-						if worker.WorkerUID == "integration-worker-1" {
+						if worker.WorkerUID == integrationWorkerUID1 {
 							foundInList = true
 						}
 					},
 					OnRemove: func(worker *api.WorkerInfo) {},
 					OnUpdate: func(oldWorker, newWorker *api.WorkerInfo) {
 						// StartWorker adds worker to map before notifying, so it may trigger OnUpdate
-						if newWorker.WorkerUID == "integration-worker-1" {
+						if newWorker.WorkerUID == integrationWorkerUID1 {
 							foundInList = true
 						}
 					},
@@ -1028,7 +1039,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 				// 2. Allocate device
 				req := &api.WorkerInfo{
-					WorkerUID:        "integration-worker-1",
+					WorkerUID:        integrationWorkerUID1,
 					AllocatedDevices: []string{deviceUUID},
 					IsolationMode:    tfv1.IsolationModeSoft,
 					Requests: tfv1.Resource{
@@ -1045,10 +1056,10 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(err).NotTo(HaveOccurred())
 
 				// 3. Verify allocation through allocation controller
-				allocation, found := allocationController.GetWorkerAllocation("integration-worker-1")
+				allocation, found := allocationController.GetWorkerAllocation(integrationWorkerUID1)
 				Expect(found).To(BeTrue())
 				Expect(allocation).NotTo(BeNil())
-				Expect(allocation.WorkerInfo.WorkerUID).To(Equal("integration-worker-1"))
+				Expect(allocation.WorkerInfo.WorkerUID).To(Equal(integrationWorkerUID1))
 
 				// 4. Backend should list worker - wait for OnAdd callback to be invoked
 				Eventually(func() bool {
@@ -1060,7 +1071,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(err).NotTo(HaveOccurred())
 				foundInWorkerList := false
 				for _, worker := range workerList {
-					if worker.WorkerUID == "integration-worker-1" {
+					if worker.WorkerUID == integrationWorkerUID1 {
 						foundInWorkerList = true
 						break
 					}
@@ -1068,10 +1079,10 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				Expect(foundInWorkerList).To(BeTrue())
 
 				// 6. Get worker allocation
-				allocation, found = allocationController.GetWorkerAllocation("integration-worker-1")
+				allocation, found = allocationController.GetWorkerAllocation(integrationWorkerUID1)
 				Expect(found).To(BeTrue())
 				Expect(allocation).NotTo(BeNil())
-				Expect(allocation.WorkerInfo.WorkerUID).To(Equal("integration-worker-1"))
+				Expect(allocation.WorkerInfo.WorkerUID).To(Equal(integrationWorkerUID1))
 
 				// 7. Get metrics
 				gpuMetrics, err := deviceController.GetDeviceMetrics()
@@ -1086,11 +1097,11 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				_ = workerMetrics
 
 				// 8. Deallocate worker
-				err = allocationController.DeallocateWorker("integration-worker-1")
+				err = allocationController.DeallocateWorker(integrationWorkerUID1)
 				Expect(err).NotTo(HaveOccurred())
 
 				// 9. Verify deallocation
-				_, found = allocationController.GetWorkerAllocation("integration-worker-1")
+				_, found = allocationController.GetWorkerAllocation(integrationWorkerUID1)
 				Expect(found).To(BeFalse())
 			})
 		})

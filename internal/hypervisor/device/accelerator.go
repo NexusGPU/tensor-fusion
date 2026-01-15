@@ -265,6 +265,7 @@ func (a *AcceleratorInterface) Close() error {
 			defer func() {
 				if r := recover(); r != nil {
 					// registerLogCallback not available or already unregistered
+					_ = r // ignore recovery value
 				}
 			}()
 			if registerLogCallback != nil {
@@ -372,11 +373,8 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 	metrics := make([]*api.GPUUsageMetrics, deviceCount)
 	for i := range deviceCount {
 		cm := &cMetrics[i]
-		memoryUsed := uint64(cm.MemoryUsedBytes)
-		var memoryPercentage float64
-		// Memory percentage calculation would need total memory from device info
-		// For now, set to 0 if we don't have total memory
-		memoryPercentage = 0
+		memoryUsed := cm.MemoryUsedBytes
+		var memoryPercentage float64 = 0
 
 		// Convert extra metrics from C array to Go map
 		extraMetrics := make(map[string]float64, int(cm.ExtraMetricsCount))
@@ -456,16 +454,16 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			Model:            byteArrayToString(cInfo.Basic.Model[:]),
 			Index:            cInfo.Basic.Index,
 			NUMANode:         cInfo.Basic.NUMANode,
-			TotalMemoryBytes: uint64(cInfo.Basic.TotalMemoryBytes),
+			TotalMemoryBytes: cInfo.Basic.TotalMemoryBytes,
 			MaxTflops:        float64(cInfo.Basic.MaxTflops),
 			VirtualizationCapabilities: api.VirtualizationCapabilities{
-				SupportsPartitioning:  bool(cInfo.Capabilities.SupportsPartitioning),
-				SupportsSoftIsolation: bool(cInfo.Capabilities.SupportsSoftIsolation),
-				SupportsHardIsolation: bool(cInfo.Capabilities.SupportsHardIsolation),
-				SupportsSnapshot:      bool(cInfo.Capabilities.SupportsSnapshot),
-				SupportsMetrics:       bool(cInfo.Capabilities.SupportsMetrics),
-				MaxPartitions:         uint32(cInfo.Capabilities.MaxPartitions),
-				MaxWorkersPerDevice:   uint32(cInfo.Capabilities.MaxWorkersPerDevice),
+				SupportsPartitioning:  cInfo.Capabilities.SupportsPartitioning,
+				SupportsSoftIsolation: cInfo.Capabilities.SupportsSoftIsolation,
+				SupportsHardIsolation: cInfo.Capabilities.SupportsHardIsolation,
+				SupportsSnapshot:      cInfo.Capabilities.SupportsSnapshot,
+				SupportsMetrics:       cInfo.Capabilities.SupportsMetrics,
+				MaxPartitions:         cInfo.Capabilities.MaxPartitions,
+				MaxWorkersPerDevice:   cInfo.Capabilities.MaxWorkersPerDevice,
 			},
 			Properties: properties,
 		}
@@ -605,11 +603,11 @@ func (a *AcceleratorInterface) GetProcessInformation() ([]api.ProcessInformation
 			ProcessID:                 byteArrayToString(pi.ProcessID[:]),
 			DeviceUUID:                byteArrayToString(pi.DeviceUUID[:]),
 			ComputeUtilizationPercent: float64(pi.ComputeUtilizationPercent),
-			ActiveSMs:                 uint64(pi.ActiveSMs),
-			TotalSMs:                  uint64(pi.TotalSMs),
-			MemoryUsedBytes:           uint64(pi.MemoryUsedBytes),
-			MemoryReservedBytes:       uint64(pi.MemoryReservedBytes),
-			MemoryUtilizationPercent:  float64(pi.MemoryUtilizationPercent),
+			ActiveSMs:                 pi.ActiveSMs,
+			TotalSMs:                  pi.TotalSMs,
+			MemoryUsedBytes:           pi.MemoryUsedBytes,
+			MemoryReservedBytes:       pi.MemoryReservedBytes,
+			MemoryUtilizationPercent:  pi.MemoryUtilizationPercent,
 		}
 	}
 

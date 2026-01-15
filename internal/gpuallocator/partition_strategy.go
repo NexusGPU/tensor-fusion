@@ -46,7 +46,7 @@ func GetPartitionStrategy(vendor string) PartitionStrategy {
 	switch vendor {
 	case constants.AcceleratorVendorHuaweiAscendNPU:
 		return &AscendPartitionStrategy{}
-	case constants.AcceleratorVendorNvidia:
+	case constants.AcceleratorVendorNvidia, constants.AcceleratorVendorExample:
 		// Default to NVIDIA MIG strategy for backward compatibility
 		return &NVIDIAMIGStrategy{}
 	default:

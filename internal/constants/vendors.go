@@ -25,6 +25,9 @@ const (
 	AcceleratorVendorEnflame         = "Enflame"
 	AcceleratorVendorKunlunX         = "KunlunXin"
 
+	// The mock vendor for example implementation
+	AcceleratorVendorExample = "Example"
+
 	AcceleratorVendorUnknown = "Unknown"
 )
 
