@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -100,6 +101,7 @@ func ParseTensorFusionInfo(
 
 	// check if its compute isolation mode
 	computeIsolation, ok := pod.Annotations[constants.IsolationModeAnnotation]
+	klog.Info("computeIsolation", "computeIsolation", computeIsolation)
 	if ok {
 		workloadProfile.Spec.Isolation = tfv1.IsolationModeType(computeIsolation)
 	} else {
