@@ -317,13 +317,39 @@ func (r *NodeReconciler) removeTensorFusionTaint(ctx context.Context, node *core
 
 func getMatchedPoolName(node *corev1.Node, poolList []tfv1.GPUPool) (*tfv1.GPUPool, bool, error) {
 	for _, pool := range poolList {
-		matches, err := schedulingcorev1.MatchNodeSelectorTerms(node, pool.Spec.NodeManagerConfig.NodeSelector)
-		if err != nil {
-			return nil, false, err
+		nodeManagerConfig := pool.Spec.NodeManagerConfig
+		if nodeManagerConfig == nil {
+			continue
 		}
 
-		if matches {
-			return &pool, true, nil
+		// Prioritize MultiVendorNodeSelector if it has entries
+		// TODO(Finn): Regarding the sorting problem of selector, if there are more types of selector in the later stage
+		// the selector selection in all code logic can be merged into one function call.
+		if len(nodeManagerConfig.MultiVendorNodeSelector) > 0 {
+			for _, nodeSelector := range nodeManagerConfig.MultiVendorNodeSelector {
+				if nodeSelector == nil {
+					continue
+				}
+				matches, err := schedulingcorev1.MatchNodeSelectorTerms(node, nodeSelector)
+				if err != nil {
+					return nil, false, err
+				}
+				if matches {
+					return &pool, true, nil
+				}
+			}
+			continue
+		}
+
+		// Fall back to NodeSelector
+		if nodeManagerConfig.NodeSelector != nil {
+			matches, err := schedulingcorev1.MatchNodeSelectorTerms(node, nodeManagerConfig.NodeSelector)
+			if err != nil {
+				return nil, false, err
+			}
+			if matches {
+				return &pool, true, nil
+			}
 		}
 	}
 	return nil, false, nil
