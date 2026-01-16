@@ -744,10 +744,6 @@ func (n *nvidiaHandler) findDevicePluginPod(ctx context.Context, r *GPUNodeRecon
 	return nil, nil
 }
 
-func getDiscoveryJobName(gpunodeName string) string {
-	return fmt.Sprintf("node-discovery-%s", gpunodeName)
-}
-
 func getDriverProbeJobName(gpuNodeName string) string {
 	return fmt.Sprintf("driver-probe-%s", gpuNodeName)
 }
