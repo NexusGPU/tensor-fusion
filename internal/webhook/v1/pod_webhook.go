@@ -377,12 +377,16 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 	assignPodLabelsAndAnnotations(isLocalGPU, pod, pool)
 
-	// Assign index once per pod (before processing containers)
-	// Index must be assigned in webhook stage since scheduler cannot modify Pod
-	// This is a special index resource (1-32), not a real device resource
-	// Index is assigned in ascending order (1, 2, 3, ...) via distributed lock (leader election)
-	index := m.assignDeviceAllocationIndex(ctx, pod)
-
+	// Index allocation only for worker pods
+	// Index is used for Device Plugin communication to match Pod with CDI device
+	var index int
+	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
+		// Assign index once per pod (before processing containers)
+		// Index must be assigned in webhook stage since scheduler cannot modify Pod
+		// This is a special index resource (1-32), not a real device resource
+		// Index is assigned in ascending order (1, 2, 3, ...) via distributed lock (leader election)
+		index = m.assignDeviceAllocationIndex(ctx, pod)
+	}
 	// clean annotation if exists, must be assigned by scheduler to ensure lock of certain index on one node
 	delete(pod.Annotations, constants.PodIndexAnnotation)
 
@@ -412,16 +416,18 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 		removeNativeGPULimits(container)
 
-		// Inject tensor-fusion.ai/index resource for Device Plugin communication
+		// Inject tensor-fusion.ai/index resource for Device Plugin communication (worker pods only)
 		// This is a special index resource (not a real device), used for Pod-to-DevicePlugin communication
-		if container.Resources.Limits == nil {
-			container.Resources.Limits = make(corev1.ResourceList)
+		if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
+			if container.Resources.Limits == nil {
+				container.Resources.Limits = make(corev1.ResourceList)
+			}
+			// Limit is set to actual index value (1-128) for Device Plugin to match Pod
+			// ResourceFit of dummy device already ignored in TF scheduler
+			indexQuantity := resource.MustParse(strconv.Itoa((index % constants.IndexModLength) + 1))
+			indexKey := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, index/constants.IndexModLength)
+			container.Resources.Limits[corev1.ResourceName(indexKey)] = indexQuantity
 		}
-		// Limit is set to actual index value (1-128) for Device Plugin to match Pod
-		// ResourceFit of dummy device already ignored in TF scheduler
-		indexQuantity := resource.MustParse(strconv.Itoa((index % constants.IndexModLength) + 1))
-		indexKey := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, index/constants.IndexModLength)
-		container.Resources.Limits[corev1.ResourceName(indexKey)] = indexQuantity
 
 		if !isLocalGPU {
 			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)

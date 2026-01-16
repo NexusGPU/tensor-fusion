@@ -19,6 +19,7 @@ package gpuallocator
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -67,8 +68,22 @@ var _ = BeforeSuite(func() {
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: false,
-		BinaryAssetsDirectory: filepath.Join("..", "..", "bin", "k8s",
-			fmt.Sprintf("1.31.0-%s-%s", runtime.GOOS, runtime.GOARCH)),
+		// If KUBEBUILDER_ASSETS is set, don't set BinaryAssetsDirectory
+		BinaryAssetsDirectory: func() string {
+			if os.Getenv("KUBEBUILDER_ASSETS") != "" {
+				return ""
+			}
+			binDir := filepath.Join("..", "..", "bin", "k8s",
+				fmt.Sprintf("1.31.0-%s-%s", runtime.GOOS, runtime.GOARCH))
+			absBinDir, err := filepath.Abs(binDir)
+			if err == nil {
+				etcdPath := filepath.Join(absBinDir, "etcd")
+				if _, err := os.Stat(etcdPath); err == nil {
+					return absBinDir
+				}
+			}
+			return ""
+		}(),
 	}
 
 	var err error

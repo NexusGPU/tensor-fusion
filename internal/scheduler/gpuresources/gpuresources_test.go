@@ -265,6 +265,11 @@ func (s *GPUResourcesSuite) SetupTest() {
 	s.allocator.ReconcileAllocationState()
 	s.allocator.SetAllocatorReady()
 
+	s.indexAllocator, err = indexallocator.NewIndexAllocator(s.ctx, s.client)
+	s.NoError(err)
+	s.indexAllocator.IsLeader = true
+	s.indexAllocator.SetReady()
+
 	pluginFactory := NewWithDeps(s.allocator, s.indexAllocator, s.client)
 	pluginConfig := &runtime.Unknown{
 		Raw: []byte(`{
@@ -586,6 +591,21 @@ func (s *GPUResourcesSuite) makePod(name string, annotations map[string]string) 
 	}
 	if annotations[constants.GpuCountAnnotation] == "" {
 		pod.Annotations[constants.GpuCountAnnotation] = "1"
+	}
+	// Add container with index resource limits for ParsePodIndexResourceClaim
+	// The index resource key format is: tensor-fusion.ai/index_<hex-key> with value <mod-value>
+	// This simulates what the mutating webhook sets up
+	indexResourceKey := v1.ResourceName(constants.PodIndexAnnotation + constants.PodIndexDelimiter + "0")
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name:  "worker",
+			Image: "test-image",
+			Resources: v1.ResourceRequirements{
+				Limits: v1.ResourceList{
+					indexResourceKey: *resource.NewQuantity(1, resource.DecimalSI), // index 1
+				},
+			},
+		},
 	}
 
 	existingPod := &v1.Pod{}
