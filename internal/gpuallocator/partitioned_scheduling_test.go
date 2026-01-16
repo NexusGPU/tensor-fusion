@@ -22,6 +22,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -267,6 +268,7 @@ func TestCheckPartitionAvailability(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Vendor:   constants.AcceleratorVendorNvidia,
 					Capacity: &tfv1.Resource{
 						Tflops: resource.MustParse("312"),
 						Vram:   resource.MustParse("80Gi"),
@@ -287,6 +289,7 @@ func TestCheckPartitionAvailability(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Vendor:   constants.AcceleratorVendorNvidia,
 					Capacity: &tfv1.Resource{
 						Tflops: resource.MustParse("312"),
 						Vram:   resource.MustParse("80Gi"),
@@ -313,6 +316,7 @@ func TestCheckPartitionAvailability(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Vendor:   constants.AcceleratorVendorNvidia,
 					Capacity: &tfv1.Resource{
 						Tflops: resource.MustParse("312"),
 						Vram:   resource.MustParse("80Gi"),
@@ -341,6 +345,7 @@ func TestCheckPartitionAvailability(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Vendor:   constants.AcceleratorVendorNvidia,
 					Capacity: &tfv1.Resource{
 						Tflops: resource.MustParse("312"),
 						Vram:   resource.MustParse("80Gi"),
@@ -366,6 +371,7 @@ func TestCheckPartitionAvailability(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Vendor:   constants.AcceleratorVendorNvidia,
 					Capacity: &tfv1.Resource{
 						Tflops: resource.MustParse("312"),
 						Vram:   resource.MustParse("80Gi"),
@@ -391,6 +397,7 @@ func TestCheckPartitionAvailability(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Vendor:   constants.AcceleratorVendorNvidia,
 					Capacity: &tfv1.Resource{
 						Tflops: resource.MustParse("312"),
 						Vram:   resource.MustParse("80Gi"),
@@ -412,6 +419,7 @@ func TestCheckPartitionAvailability(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Vendor:   constants.AcceleratorVendorNvidia,
 					Capacity: &tfv1.Resource{
 						Tflops: resource.MustParse("312"),
 						Vram:   resource.MustParse("80Gi"),
@@ -433,6 +441,7 @@ func TestCheckPartitionAvailability(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
 				Status: tfv1.GPUStatus{
 					GPUModel: gpuModel,
+					Vendor:   constants.AcceleratorVendorNvidia,
 					Capacity: &tfv1.Resource{
 						Tflops: resource.MustParse("312"),
 						Vram:   resource.MustParse("80Gi"),
