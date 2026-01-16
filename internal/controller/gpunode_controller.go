@@ -163,10 +163,6 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 	}
 
-	if err := r.reconcileNodeDiscoveryJob(ctx, node, poolObj); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	if node.Status.TotalGPUs == 0 {
 		log.Info("GPU on this node has not been discovered, wait next loop", "node", node.Name)
 		return ctrl.Result{}, nil

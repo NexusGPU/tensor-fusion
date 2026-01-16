@@ -17,10 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -150,6 +152,8 @@ var _ = Describe("Node Controller", func() {
 				}
 				g.Expect(taintExists).To(BeFalse(), "TensorFusion taint should be removed with retry mechanism")
 			}).Should(Succeed())
+		})
+	})
 	Context("getMatchedPoolName", func() {
 		var (
 			node     *corev1.Node

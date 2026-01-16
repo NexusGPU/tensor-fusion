@@ -80,9 +80,8 @@ spec:
                           default: same as global config''s auto scaling interval'
                         type: string
                       lowerBoundComputePercentile:
-                        description: |-
-                          Tflops usage percentile that will be used for the lower bound on tflops recommendation. Default: 0.5
-                          When QoS is low or medium, request set to lower bound
+                        description: 'Tflops usage percentile that will be used for
+                          the lower bound on tflops recommendation. Default: 0.5'
                         type: string
                       lowerBoundVRAMPercentile:
                         description: 'Vram usage percentile that will be used for
@@ -114,17 +113,15 @@ spec:
                         type: string
                       targetComputePercentile:
                         description: 'Tflops usage percentile that will be used as
-                          a base for tflops target recommendation. Default: 0.95'
+                          a base for tflops target recommendation. Default: 0.9'
                         type: string
                       targetResource:
                         description: Target resource to scale, such as "compute",
                           "vram", or "all" by default
                         type: string
                       targetVRAMPercentile:
-                        description: |-
-                          Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.95
-                          The requests will be set to match this percentile of the actual usage, but won't change when current requests is in lower and upper bounds
-                          When QoS is high, set request to target
+                        description: 'Vram usage percentile that will be used as a
+                          base for vram target recommendation. Default: 0.9'
                         type: string
                       updateThreshold:
                         description: |-
@@ -132,13 +129,12 @@ spec:
                           This value can't greater than MarginFraction, otherwise no update will be made since always inside the threshold after multiplying MarginFraction.
                         type: string
                       upperBoundComputePercentile:
-                        description: |-
-                          Tflops usage percentile that will be used for the upper bound on tflops recommendation. Default: 0.99
-                          Limit will be set to upper bound, when QoS is critical, also set limit request to upper bound
+                        description: 'Tflops usage percentile that will be used for
+                          the upper bound on tflops recommendation. Default: 0.95'
                         type: string
                       upperBoundVRAMPercentile:
                         description: 'Vram usage percentile that will be used for
-                          the upper bound on vram recommendation. Default: 0.99'
+                          the upper bound on vram recommendation. Default: 0.95'
                         type: string
                     type: object
                   cronScalingRules:

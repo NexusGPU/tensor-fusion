@@ -89,6 +89,14 @@ spec:
                       description: |-
                         AllocatedSlotStart is the starting slot position where this partition is allocated
                         This is the actual hardware slot position (0-based index)
+                        For NVIDIA MIG: physical slot position (0-7)
+                      format: int32
+                      type: integer
+                    isolationGroupId:
+                      description: |-
+                        IsolationGroupID is the isolation group where this partition is allocated
+                        For Ascend NPU: vGroup ID (0-3)
+                        For NVIDIA MIG: this is derived from slot position, not used separately
                       format: int32
                       type: integer
                     namespace:
