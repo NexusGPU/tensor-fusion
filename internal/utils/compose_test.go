@@ -51,7 +51,7 @@ func TestAddTFHypervisorConfAfterTemplate(t *testing.T) {
 				},
 			}
 
-			utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool)
+			utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool, false)
 
 			require.Len(t, spec.InitContainers, tt.expectInitCount, "unexpected number of init containers")
 			require.Len(t, spec.Volumes, tt.expectVolumeCount, "unexpected number of volumes")

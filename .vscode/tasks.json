@@ -1,0 +1,21 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-app-mock-debug",
+            "type": "shell",
+            "command": "rm -f build/driver_mock.o build/libdriver_mock.a && make mock CFLAGS='-Wall -Wextra -std=c11 -fPIC -g -O0'",
+            "options": {
+                "cwd": "${workspaceFolder}/provider"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        }
+    ]
+}
+

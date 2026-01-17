@@ -25,6 +25,9 @@ const (
 	AcceleratorVendorEnflame         = "Enflame"
 	AcceleratorVendorKunlunX         = "KunlunXin"
 
+	// The mock vendor for example implementation
+	AcceleratorVendorExample = "Example"
+
 	AcceleratorVendorUnknown = "Unknown"
 )
 
@@ -69,4 +72,20 @@ var L3VirtualizationSupportedVendors = []map[string]bool{
 		AcceleratorVendorMetaX:           false,
 		AcceleratorVendorHuaweiAscendNPU: false,
 	},
+}
+
+// GetAcceleratorLibPath returns the accelerator library path based on vendor
+// Vendor string should match constants from internal/constants/vendors.go
+func GetAcceleratorLibPath(vendor string) string {
+	switch vendor {
+	case AcceleratorVendorNvidia:
+		return "libaccelerator_nvidia.so"
+	case AcceleratorVendorAMD:
+		return "libaccelerator_amd.so"
+	case AcceleratorVendorHuaweiAscendNPU:
+		return "libaccelerator_ascend.so"
+	default:
+		// Default to stub library for unknown vendors
+		return "libaccelerator_example.so"
+	}
 }

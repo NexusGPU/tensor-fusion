@@ -14,6 +14,9 @@ Dockerfile.cross
 *.out
 cover.out.*
 
+e2e_*.log
+e2e_*.txt
+
 # Go workspace file
 go.work
 
@@ -41,3 +44,12 @@ vendor
 logs
 
 *.prof
+
+provider/build
+
+cmd/hypervisor/hypervisor
+*.o
+
+_obj
+
+metrics.log

@@ -17,10 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -150,6 +152,287 @@ var _ = Describe("Node Controller", func() {
 				}
 				g.Expect(taintExists).To(BeFalse(), "TensorFusion taint should be removed with retry mechanism")
 			}).Should(Succeed())
+		})
+	})
+	Context("getMatchedPoolName", func() {
+		var (
+			node     *corev1.Node
+			poolList []tfv1.GPUPool
+		)
+
+		BeforeEach(func() {
+			node = &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-node",
+					Labels: map[string]string{
+						"gpu-vendor": "nvidia",
+						"gpu-type":   "a100",
+					},
+				},
+			}
+		})
+
+		It("should return false when NodeManagerConfig is nil", func() {
+			poolList = []tfv1.GPUPool{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pool-nil-config"},
+					Spec: tfv1.GPUPoolSpec{
+						NodeManagerConfig: nil,
+					},
+				},
+			}
+			pool, matched, err := getMatchedPoolName(node, poolList)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeFalse())
+			Expect(pool).To(BeNil())
+		})
+
+		It("should return false when both NodeSelector and MultiVendorNodeSelector are nil", func() {
+			poolList = []tfv1.GPUPool{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pool-empty-selectors"},
+					Spec: tfv1.GPUPoolSpec{
+						NodeManagerConfig: &tfv1.NodeManagerConfig{
+							NodeSelector:            nil,
+							MultiVendorNodeSelector: nil,
+						},
+					},
+				},
+			}
+			pool, matched, err := getMatchedPoolName(node, poolList)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeFalse())
+			Expect(pool).To(BeNil())
+		})
+
+		It("should match node using NodeSelector", func() {
+			poolList = []tfv1.GPUPool{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pool-node-selector"},
+					Spec: tfv1.GPUPoolSpec{
+						NodeManagerConfig: &tfv1.NodeManagerConfig{
+							NodeSelector: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{
+									{
+										MatchExpressions: []corev1.NodeSelectorRequirement{
+											{
+												Key:      "gpu-vendor",
+												Operator: corev1.NodeSelectorOpIn,
+												Values:   []string{"nvidia"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			pool, matched, err := getMatchedPoolName(node, poolList)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeTrue())
+			Expect(pool.Name).To(Equal("pool-node-selector"))
+		})
+
+		It("should match node using MultiVendorNodeSelector", func() {
+			poolList = []tfv1.GPUPool{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pool-multi-vendor"},
+					Spec: tfv1.GPUPoolSpec{
+						NodeManagerConfig: &tfv1.NodeManagerConfig{
+							MultiVendorNodeSelector: map[string]*corev1.NodeSelector{
+								"NVIDIA": {
+									NodeSelectorTerms: []corev1.NodeSelectorTerm{
+										{
+											MatchExpressions: []corev1.NodeSelectorRequirement{
+												{
+													Key:      "gpu-vendor",
+													Operator: corev1.NodeSelectorOpIn,
+													Values:   []string{"nvidia"},
+												},
+											},
+										},
+									},
+								},
+								"AMD": {
+									NodeSelectorTerms: []corev1.NodeSelectorTerm{
+										{
+											MatchExpressions: []corev1.NodeSelectorRequirement{
+												{
+													Key:      "gpu-vendor",
+													Operator: corev1.NodeSelectorOpIn,
+													Values:   []string{"amd"},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			pool, matched, err := getMatchedPoolName(node, poolList)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeTrue())
+			Expect(pool.Name).To(Equal("pool-multi-vendor"))
+		})
+
+		It("should prioritize MultiVendorNodeSelector over NodeSelector", func() {
+			poolList = []tfv1.GPUPool{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pool-both-selectors"},
+					Spec: tfv1.GPUPoolSpec{
+						NodeManagerConfig: &tfv1.NodeManagerConfig{
+							NodeSelector: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{
+									{
+										MatchExpressions: []corev1.NodeSelectorRequirement{
+											{
+												Key:      "non-existent-label",
+												Operator: corev1.NodeSelectorOpIn,
+												Values:   []string{"value"},
+											},
+										},
+									},
+								},
+							},
+							MultiVendorNodeSelector: map[string]*corev1.NodeSelector{
+								"NVIDIA": {
+									NodeSelectorTerms: []corev1.NodeSelectorTerm{
+										{
+											MatchExpressions: []corev1.NodeSelectorRequirement{
+												{
+													Key:      "gpu-vendor",
+													Operator: corev1.NodeSelectorOpIn,
+													Values:   []string{"nvidia"},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			pool, matched, err := getMatchedPoolName(node, poolList)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeTrue())
+			Expect(pool.Name).To(Equal("pool-both-selectors"))
+		})
+
+		It("should skip nil NodeSelector entries in MultiVendorNodeSelector", func() {
+			poolList = []tfv1.GPUPool{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pool-with-nil-vendor"},
+					Spec: tfv1.GPUPoolSpec{
+						NodeManagerConfig: &tfv1.NodeManagerConfig{
+							MultiVendorNodeSelector: map[string]*corev1.NodeSelector{
+								"NVIDIA": nil,
+								"AMD": {
+									NodeSelectorTerms: []corev1.NodeSelectorTerm{
+										{
+											MatchExpressions: []corev1.NodeSelectorRequirement{
+												{
+													Key:      "gpu-vendor",
+													Operator: corev1.NodeSelectorOpIn,
+													Values:   []string{"nvidia"},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			pool, matched, err := getMatchedPoolName(node, poolList)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeTrue())
+			Expect(pool.Name).To(Equal("pool-with-nil-vendor"))
+		})
+
+		It("should return false when node does not match any selector", func() {
+			node.Labels = map[string]string{
+				"some-other-label": "value",
+			}
+			poolList = []tfv1.GPUPool{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pool-no-match"},
+					Spec: tfv1.GPUPoolSpec{
+						NodeManagerConfig: &tfv1.NodeManagerConfig{
+							NodeSelector: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{
+									{
+										MatchExpressions: []corev1.NodeSelectorRequirement{
+											{
+												Key:      "gpu-vendor",
+												Operator: corev1.NodeSelectorOpIn,
+												Values:   []string{"nvidia"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			pool, matched, err := getMatchedPoolName(node, poolList)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeFalse())
+			Expect(pool).To(BeNil())
+		})
+
+		It("should match the first pool when multiple pools match", func() {
+			poolList = []tfv1.GPUPool{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pool-first"},
+					Spec: tfv1.GPUPoolSpec{
+						NodeManagerConfig: &tfv1.NodeManagerConfig{
+							NodeSelector: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{
+									{
+										MatchExpressions: []corev1.NodeSelectorRequirement{
+											{
+												Key:      "gpu-vendor",
+												Operator: corev1.NodeSelectorOpIn,
+												Values:   []string{"nvidia"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pool-second"},
+					Spec: tfv1.GPUPoolSpec{
+						NodeManagerConfig: &tfv1.NodeManagerConfig{
+							NodeSelector: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{
+									{
+										MatchExpressions: []corev1.NodeSelectorRequirement{
+											{
+												Key:      "gpu-vendor",
+												Operator: corev1.NodeSelectorOpIn,
+												Values:   []string{"nvidia"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			pool, matched, err := getMatchedPoolName(node, poolList)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeTrue())
+			Expect(pool.Name).To(Equal("pool-first"))
 		})
 	})
 })

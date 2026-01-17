@@ -66,7 +66,7 @@ var _ = Describe("GPU Allocator", func() {
 	}
 
 	BeforeEach(func() {
-		allocator = NewGpuAllocator(ctx, k8sClient, 150*time.Millisecond)
+		allocator = NewGpuAllocator(ctx, nil, k8sClient, 150*time.Millisecond)
 		err := allocator.SetupWithManager(ctx, mgr)
 		Expect(err).NotTo(HaveOccurred())
 		<-allocator.initializedCh
@@ -362,6 +362,11 @@ var _ = Describe("GPU Allocator", func() {
 			// Save to API server
 			err := k8sClient.Create(ctx, newGPU)
 			Expect(err).NotTo(HaveOccurred())
+
+			// Cleanup: delete the GPU after test completes
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, newGPU)
+			})
 
 			// Handle the creation event
 			allocator.handleGPUCreate(ctx, newGPU)

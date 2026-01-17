@@ -166,6 +166,14 @@ func IsPodStopped(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded
 }
 
+func IsPodRunning(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodRunning
+}
+
+func IsPodPending(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodPending && pod.DeletionTimestamp.IsZero()
+}
+
 func ExtractPoolNameFromNodeLabel(node *tfv1.GPUNode) string {
 	var poolName string
 	for labelKey := range node.Labels {
@@ -248,9 +256,12 @@ func IsDesignatedNodePod(pod *corev1.Pod) bool {
 func GetInitialGPUNodeSelector() []string {
 	selector := os.Getenv("INITIAL_GPU_NODE_LABEL_SELECTOR")
 	if selector == "" {
-		selector = constants.InitialGPUNodeSelector
+		return nil
 	}
 	selectors := strings.Split(selector, "=")
+	if len(selectors) != 2 {
+		return nil
+	}
 	return selectors
 }
 
@@ -267,4 +278,22 @@ func containsGPUResources(res corev1.ResourceList) bool {
 		}
 	}
 	return false
+}
+
+// AppendEnvVarsIfNotExists appends environment variables to the slice only if they don't already exist (by name).
+// It returns the updated slice with new env vars appended.
+func AppendEnvVarsIfNotExists(envVars []corev1.EnvVar, newEnvVars ...corev1.EnvVar) []corev1.EnvVar {
+	existingNames := make(map[string]bool)
+	for _, env := range envVars {
+		existingNames[env.Name] = true
+	}
+
+	for _, newEnv := range newEnvVars {
+		if !existingNames[newEnv.Name] {
+			envVars = append(envVars, newEnv)
+			existingNames[newEnv.Name] = true
+		}
+	}
+
+	return envVars
 }

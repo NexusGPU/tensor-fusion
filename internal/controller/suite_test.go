@@ -34,6 +34,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -179,7 +180,7 @@ var _ = BeforeSuite(func() {
 		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),
 	}
 
-	allocator = gpuallocator.NewGpuAllocator(ctx, mgr.GetClient(), 150*time.Millisecond)
+	allocator = gpuallocator.NewGpuAllocator(ctx, nil, mgr.GetClient(), 150*time.Millisecond)
 	err = allocator.SetupWithManager(ctx, mgr)
 	Expect(err).ToNot(HaveOccurred())
 
@@ -234,11 +235,14 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
+	indexAllocator, err := indexallocator.NewIndexAllocator(ctx, mgr.GetClient())
+	Expect(err).ToNot(HaveOccurred())
 	err = (&PodReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Allocator:     allocator,
-		PortAllocator: portAllocator,
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Allocator:      allocator,
+		PortAllocator:  portAllocator,
+		IndexAllocator: indexAllocator,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 

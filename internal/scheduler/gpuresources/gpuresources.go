@@ -8,11 +8,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/quota"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -23,6 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
@@ -42,12 +46,13 @@ var _ framework.PostBindPlugin = &GPUFit{}
 var _ framework.EnqueueExtensions = &GPUFit{}
 
 type GPUFit struct {
-	logger    *klog.Logger
-	fh        framework.Handle
-	client    client.Client
-	allocator *gpuallocator.GpuAllocator
-	ctx       context.Context
-	cfg       *config.GPUFitConfig
+	logger         *klog.Logger
+	fh             framework.Handle
+	client         client.Client
+	allocator      *gpuallocator.GpuAllocator
+	indexAllocator *indexallocator.IndexAllocator
+	ctx            context.Context
+	cfg            *config.GPUFitConfig
 }
 
 type GPUSchedulingStateData struct {
@@ -80,7 +85,7 @@ func (p *GPUSchedulingStateData) Clone() fwk.StateData {
 
 type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
 
-func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) PluginFactoryFunc {
+func NewWithDeps(allocator *gpuallocator.GpuAllocator, indexAllocator *indexallocator.IndexAllocator, client client.Client) PluginFactoryFunc {
 	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 		target := &config.GPUFitConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
@@ -91,12 +96,13 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) Plu
 		lh := klog.FromContext(ctx).WithValues("plugin", Name)
 		lh.Info("Creating new GPUFit plugin")
 		c := &GPUFit{
-			logger:    &lh,
-			fh:        handle,
-			cfg:       target,
-			allocator: allocator,
-			ctx:       ctx,
-			client:    client,
+			logger:         &lh,
+			fh:             handle,
+			cfg:            target,
+			allocator:      allocator,
+			indexAllocator: indexAllocator,
+			ctx:            ctx,
+			client:         client,
 		}
 		lh.Info("Created new GPUFit plugin", "plugin", c)
 
@@ -128,7 +134,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 
 	// Handle tensor-fusion mode scheduling
 	s.logger.Info("checking GPU node resources for pod", "pod", pod.Name)
-	allocRequest, reason, err := s.allocator.ComposeAllocationRequest(pod)
+	allocRequest, reason, err := utils.ComposeAllocationRequest(s.ctx, pod)
 	if err != nil {
 		return nil, fwk.NewStatus(fwk.Error, reason)
 	}
@@ -160,6 +166,29 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 		} else {
 			return nil, fwk.NewStatus(fwk.Unschedulable, err.Error())
 		}
+	}
+
+	// For partitioned mode, match partition template if not already specified
+	if allocRequest.Isolation == tfv1.IsolationModePartitioned && allocRequest.PartitionTemplateID == "" {
+		matchedGPU, partitionMatch, err := s.allocator.GetMatchedPartition(allocRequest, filteredGPUs)
+		if err != nil {
+			metrics.SetSchedulerMetrics(allocRequest.PoolName, false)
+			s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "PartitionTemplateMatchFailed",
+				"match partition template", "Failed to match partition template: "+err.Error())
+			s.logger.Error(err, "failed to match partition template", "pod", pod.Name)
+			return nil, fwk.NewStatus(fwk.Unschedulable, fmt.Sprintf("no suitable partition template: %v", err))
+		}
+
+		// Set partition template ID in alloc request
+		allocRequest.PartitionTemplateID = partitionMatch.TemplateID
+		s.logger.Info("Matched partition template in PreFilter",
+			"pod", pod.Name,
+			"gpu", matchedGPU.Name,
+			"template", allocRequest.PartitionTemplateID,
+			"score", partitionMatch.Score)
+
+		// Update state with the updated alloc request
+		state.Write(CycleStateAllocateRequest, allocRequest)
 	}
 
 	validNodesValidGPUs := lo.GroupBy(filteredGPUs, func(gpu *tfv1.GPU) string {
@@ -424,20 +453,13 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	}
 
 	// reserve GPU resources inside memory and asynchronously update GPU custom resource
+	allocReq := allocRequest.(*tfv1.AllocRequest)
 	_, err = s.allocator.Bind(
 		schedulingResult.FinalGPUs,
-		allocRequest.(*tfv1.AllocRequest),
+		allocReq,
 	)
 	if err != nil {
 		return fwk.NewStatus(fwk.Error, err.Error())
-	}
-
-	// Index is already assigned in webhook stage, scheduler cannot modify Pod
-	// Just verify that index annotation exists for logging
-	if pod.Annotations != nil {
-		if indexStr, exists := pod.Annotations[constants.PodIndexAnnotation]; exists && indexStr != "" {
-			s.logger.V(5).Info("Pod index already assigned in webhook", "pod", pod.Name, "index", indexStr)
-		}
 	}
 
 	return fwk.NewStatus(fwk.Success, "")
@@ -477,19 +499,86 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
 	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
 
-	// Patch GPU device IDs annotation
-	patch := []byte(`[{
-		"op": "add",
-		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
-		"value": "` + gpuIDs + `"}]`)
-	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patch))
+	index, err := utils.ParsePodIndexResourceClaim(pod)
 	if err != nil {
-		s.logger.Error(err, "failed to patch gpu device ids", "pod", pod.Name)
-		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUDeviceAllocatedFailed",
-			"Attach GPU device ID info failed", "Can not add GPU device IDs: "+gpuIDs)
+		s.logger.Error(err, "failed to parse pod index annotation", "pod", pod.Name)
+		return
+	}
+
+	indexAvailable := s.indexAllocator.CheckNodeIndexAndTryOccupy(pod, index)
+
+	// Build patch operations
+	patchOps := []map[string]any{
+		{
+			"op":    "add",
+			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation),
+			"value": gpuIDs,
+		},
+	}
+	if indexAvailable {
+		patchOps = append(patchOps, map[string]any{
+			"op":    "add",
+			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PodIndexAnnotation),
+			"value": strconv.Itoa(index),
+		})
 	} else {
-		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
-			"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
+		s.logger.Info("Index is not available on node, spawn a goroutine to patch it asynchronously", "pod", pod.Name, "node", nodeName, "index", index)
+		// spawn a goroutine to patch
+		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "PodIndexAllocationPending", "Pod index allocation pending",
+			fmt.Sprintf("Index %d will be patched into pod after released by other pod on the same node: %s", index, nodeName))
+		s.indexAllocator.AsyncCheckNodeIndexAvailableAndAssign(pod, index)
+	}
+
+	// Add partition template ID annotation if in partitioned mode
+	allocRequestRaw, err := state.Read(CycleStateAllocateRequest)
+	if err == nil {
+		allocRequest := allocRequestRaw.(*tfv1.AllocRequest)
+		if allocRequest.Isolation == tfv1.IsolationModePartitioned && allocRequest.PartitionTemplateID != "" {
+			patchOps = append(patchOps, map[string]any{
+				"op":    "add",
+				"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PartitionTemplateIDAnnotation),
+				"value": allocRequest.PartitionTemplateID,
+			})
+			s.logger.Info("Adding partition template ID annotation", "pod", pod.Name, "templateID", allocRequest.PartitionTemplateID)
+		}
+	}
+
+	// Convert patch operations to JSON
+	patchBytes, err := json.Marshal(patchOps)
+	if err != nil {
+		s.logger.Error(err, "failed to marshal patch operations", "pod", pod.Name)
+		return
+	}
+
+	// Patch pod annotations with retry
+	err = retry.OnError(wait.Backoff{
+		Duration: 1 * time.Second,
+		Factor:   2,
+		Jitter:   0.1,
+		Steps:    3,
+	}, func(err error) bool {
+		return true
+	}, func() error {
+		err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patchBytes))
+		if err != nil {
+			s.logger.Error(err, "failed to patch pod annotations", "pod", pod.Name)
+			s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUDeviceAllocatedFailed",
+				"Attach GPU device ID info failed", "Can not add GPU device IDs: "+gpuIDs)
+		} else {
+			s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
+				"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
+		}
+		return nil
+	})
+	if err != nil {
+		if indexAvailable {
+			s.indexAllocator.RemoveNodeIndexQueueForPod(types.NamespacedName{
+				Namespace: pod.Namespace,
+				Name:      pod.Name,
+			})
+		}
+		s.logger.Error(err, "failed to patch pod annotations in post binding stage", "pod", pod.Name)
+		return
 	}
 }
 
@@ -509,8 +598,8 @@ func (s *GPUFit) EventsToRegister(_ context.Context) ([]fwk.ClusterEventWithHint
 	}, nil
 }
 
-// convertToGPU converts an interface{} to *tfv1.GPU, handling both typed and unstructured objects
-func convertToGPU(obj interface{}) (*tfv1.GPU, error) {
+// convertToGPU converts an any to *tfv1.GPU, handling both typed and unstructured objects
+func convertToGPU(obj any) (*tfv1.GPU, error) {
 	if obj == nil {
 		return nil, nil
 	}
@@ -531,7 +620,7 @@ func convertToGPU(obj interface{}) (*tfv1.GPU, error) {
 	return nil, fmt.Errorf("cannot convert %T to *tfv1.GPU", obj)
 }
 
-func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (fwk.QueueingHint, error) {
+func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj any) (fwk.QueueingHint, error) {
 	// Only process TensorFusion worker pods
 	if !utils.IsTensorFusionWorker(pod) {
 		return fwk.QueueSkip, nil
@@ -573,7 +662,7 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 	}
 
 	// Compose allocation request for the pod passed in by scheduler framework
-	allocRequest, _, err := s.allocator.ComposeAllocationRequest(pod)
+	allocRequest, _, err := utils.ComposeAllocationRequest(s.ctx, pod)
 	if err != nil {
 		logger.V(5).Info("Failed to compose allocation request for pod, skip",
 			"pod", klog.KObj(pod), "error", err)

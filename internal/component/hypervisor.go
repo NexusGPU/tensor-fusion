@@ -14,7 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-const (
+var (
 	HypervisorUpdateInProgressAnnotation    = constants.Domain + "/hypervisor-update-in-progress"
 	HypervisorBatchUpdateLastTimeAnnotation = constants.Domain + "/hypervisor-batch-update-last-time"
 )
@@ -24,7 +24,7 @@ type Hypervisor struct {
 }
 
 func (h *Hypervisor) GetName() string {
-	return "hypervisor"
+	return constants.ComponentHypervisor
 }
 
 func (h *Hypervisor) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string) {
@@ -88,7 +88,7 @@ func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool
 		}
 		key := client.ObjectKey{
 			Namespace: utils.CurrentNamespace(),
-			Name:      fmt.Sprintf("hypervisor-%s", node.Name),
+			Name:      fmt.Sprintf("tf-hypervisor-%s", node.Name),
 		}
 		pod := &corev1.Pod{}
 		err := r.Get(ctx, key, pod)

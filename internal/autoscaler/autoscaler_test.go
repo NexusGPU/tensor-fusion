@@ -835,7 +835,7 @@ func mockSchedulerLoop(ctx context.Context, cfg *rest.Config) {
 
 func scheduleAndStartPod(pod *corev1.Pod, clientset *kubernetes.Clientset) {
 	// simulate scheduling cycle Filter and Reserve
-	allocRequest, _, err := allocator.ComposeAllocationRequest(pod)
+	allocRequest, _, err := utils.ComposeAllocationRequest(ctx, pod)
 	Expect(err).To(Succeed())
 	gpus, err := allocator.Alloc(allocRequest)
 	if err != nil {

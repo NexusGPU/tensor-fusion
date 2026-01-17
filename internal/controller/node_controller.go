@@ -34,11 +34,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	schedulingcorev1 "k8s.io/component-helpers/scheduling/corev1"
 )
@@ -133,6 +130,14 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
+	// If node changed to other AI accelerator hardware vendor, update gpuNode label vendor and trigger hypervisor update
+	if gpuNode.Labels[constants.AcceleratorLabelVendor] != node.Labels[constants.AcceleratorLabelVendor] {
+		gpuNode.Labels[constants.AcceleratorLabelVendor] = node.Labels[constants.AcceleratorLabelVendor]
+		if err := r.Update(ctx, gpuNode); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update GPU node vendor: %w", err)
+		}
+	}
+
 	if !node.DeletionTimestamp.IsZero() {
 		log.Info("GPU node is being deleted, mark related GPUNode resource as destroying", "node", node.Name)
 		gpuNode.Status.Phase = tfv1.TensorFusionGPUNodePhaseDestroying
@@ -143,9 +148,14 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	// update k8s node hash
-	hash := utils.GetObjectHash(pool.Spec.NodeManagerConfig.NodeSelector)
+	hash := ""
+	if len(pool.Spec.NodeManagerConfig.MultiVendorNodeSelector) > 0 {
+		hash = utils.GetObjectHash(pool.Spec.NodeManagerConfig.MultiVendorNodeSelector)
+	} else {
+		hash = utils.GetObjectHash(pool.Spec.NodeManagerConfig.NodeSelector)
+	}
 	if node.Labels[constants.LabelNodeSelectorHash] != hash {
-		if err := UpdateK8SNodeSelectorHash(ctx, r.Client, node, hash); err != nil {
+		if err := UpdateK8SNodeSelectorHashAndVendor(ctx, r.Client, node, hash, node.Labels[constants.AcceleratorLabelVendor]); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update k8s node hash: %w", err)
 		}
 	}
@@ -221,51 +231,35 @@ func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool, 
 	if provisioner != "" {
 		gpuNode.Labels[constants.ProvisionerLabelKey] = provisioner
 	}
+	// Copy vendor label from k8s node to GPUNode
+	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
+		gpuNode.Labels[constants.AcceleratorLabelVendor] = node.Labels[constants.AcceleratorLabelVendor]
+	}
 	_ = controllerutil.SetControllerReference(pool, gpuNode, r.Scheme)
 	return gpuNode
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// must choose an initial label selector to avoid performance impact in large Kubernetes clusters
+	ctr := ctrl.NewControllerManagedBy(mgr)
+	// Prefer to choose an initial label selector to avoid performance impact in large Kubernetes clusters that has lots of CPU nodes
 	selectors := utils.GetInitialGPUNodeSelector()
-	p, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
-		MatchLabels: map[string]string{
-			selectors[0]: selectors[1],
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("unable to create predicate: %w", err)
+	if len(selectors) == 2 {
+		p, err := predicate.LabelSelectorPredicate(metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				selectors[0]: selectors[1],
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("unable to create predicate: %w", err)
+		}
+		ctr.For(&corev1.Node{}, builder.WithPredicates(p))
+	} else {
+		ctr.For(&corev1.Node{})
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Node{}, builder.WithPredicates(p)).
+	return ctr.
 		Named("node").
-		Watches(&tfv1.GPUPool{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-			nodelist := &tfv1.GPUNodeList{}
-			if err := mgr.GetClient().List(ctx, nodelist, client.MatchingLabels{
-				selectors[0]: selectors[1],
-			}); err != nil {
-				log.FromContext(ctx).Error(err, "failed to list GPUNode")
-				return []reconcile.Request{}
-			}
-			var requests []reconcile.Request
-			for _, n := range nodelist.Items {
-				requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKey{Name: n.Name}})
-			}
-			return requests
-		}), builder.WithPredicates(predicate.Funcs{
-			UpdateFunc: func(e event.UpdateEvent) bool {
-				oldObj, ok1 := e.ObjectOld.(*tfv1.GPUPool)
-				newObj, ok2 := e.ObjectNew.(*tfv1.GPUPool)
-				if !ok1 || !ok2 {
-					return false
-				}
-				oldNodeSelector := oldObj.Spec.NodeManagerConfig.NodeSelector
-				newNodeSelector := newObj.Spec.NodeManagerConfig.NodeSelector
-				return utils.GetObjectHash(oldNodeSelector) != utils.GetObjectHash(newNodeSelector)
-			},
-		})).
 		Complete(r)
 }
 
@@ -323,13 +317,39 @@ func (r *NodeReconciler) removeTensorFusionTaint(ctx context.Context, node *core
 
 func getMatchedPoolName(node *corev1.Node, poolList []tfv1.GPUPool) (*tfv1.GPUPool, bool, error) {
 	for _, pool := range poolList {
-		matches, err := schedulingcorev1.MatchNodeSelectorTerms(node, pool.Spec.NodeManagerConfig.NodeSelector)
-		if err != nil {
-			return nil, false, err
+		nodeManagerConfig := pool.Spec.NodeManagerConfig
+		if nodeManagerConfig == nil {
+			continue
 		}
 
-		if matches {
-			return &pool, true, nil
+		// Prioritize MultiVendorNodeSelector if it has entries
+		// TODO(Finn): Regarding the sorting problem of selector, if there are more types of selector in the later stage
+		// the selector selection in all code logic can be merged into one function call.
+		if len(nodeManagerConfig.MultiVendorNodeSelector) > 0 {
+			for _, nodeSelector := range nodeManagerConfig.MultiVendorNodeSelector {
+				if nodeSelector == nil {
+					continue
+				}
+				matches, err := schedulingcorev1.MatchNodeSelectorTerms(node, nodeSelector)
+				if err != nil {
+					return nil, false, err
+				}
+				if matches {
+					return &pool, true, nil
+				}
+			}
+			continue
+		}
+
+		// Fall back to NodeSelector
+		if nodeManagerConfig.NodeSelector != nil {
+			matches, err := schedulingcorev1.MatchNodeSelectorTerms(node, nodeManagerConfig.NodeSelector)
+			if err != nil {
+				return nil, false, err
+			}
+			if matches {
+				return &pool, true, nil
+			}
 		}
 	}
 	return nil, false, nil

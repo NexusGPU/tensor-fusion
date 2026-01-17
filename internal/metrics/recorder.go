@@ -321,8 +321,6 @@ func SetGPUAllocationMetrics(gpuStore map[types.NamespacedName]*tfv1.GPU, pod *c
 		var gpuModel string
 		if gpu.Status.GPUModel != "" {
 			gpuModel = gpu.Status.GPUModel
-		} else if gpu.Status.Model != "" {
-			gpuModel = gpu.Status.Model
 		}
 
 		// Get GPU index

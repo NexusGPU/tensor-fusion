@@ -139,21 +139,22 @@ const (
 
 // TensorFusion hypervisor related envs
 const (
-	HypervisorPoolNameEnv           = "TENSOR_FUSION_POOL_NAME"
-	PodNameEnv                      = "POD_NAME"
-	VectorPodNodeNameEnv            = "NODE_NAME"
-	HypervisorGPUNodeNameEnv        = "GPU_NODE_NAME"
-	HypervisorSchedulingConfigEnv   = "TF_HYPERVISOR_SCHEDULING_CONFIG"
-	HypervisorListenAddrEnv         = "API_LISTEN_ADDR"
-	HypervisorMetricsFormatEnv      = "TF_HYPERVISOR_METRICS_FORMAT"
-	HypervisorMetricsExtraLabelsEnv = "TF_HYPERVISOR_METRICS_EXTRA_LABELS"
-	HypervisorDetectUsedGPUEnv      = "DETECT_IN_USED_GPUS"
-	HypervisorDevicePluginPathEnv   = "DEVICE_PLUGIN_PATH"
+	HypervisorPoolNameEnv              = "TENSOR_FUSION_POOL_NAME"
+	PodNameEnv                         = "POD_NAME"
+	VectorPodNodeNameEnv               = "NODE_NAME"
+	HypervisorGPUNodeNameEnv           = "GPU_NODE_NAME"
+	HypervisorSchedulingConfigEnv      = "TF_HYPERVISOR_SCHEDULING_CONFIG"
+	HypervisorListenAddrEnv            = "API_LISTEN_ADDR"
+	HypervisorMetricsFormatEnv         = "TF_HYPERVISOR_METRICS_FORMAT"
+	HypervisorMetricsExtraLabelsEnv    = "TF_HYPERVISOR_METRICS_EXTRA_LABELS"
+	HypervisorDetectUsedGPUEnv         = "DETECT_IN_USED_GPUS"
+	HypervisorDevicePluginPathEnv      = "DEVICE_PLUGIN_PATH"
+	HypervisorKubeletCheckpointPathEnv = "KUBELET_CHECKPOINT_PATH"
 
 	// Add ptrace capability to hypervisor container, to trace all host PID using GPU
 	SystemPtraceCapability = "SYS_PTRACE"
 
-	HypervisorDefaultPortNumber int32  = 8000
+	HypervisorDefaultPortNumber int32  = 8001
 	HypervisorPortName          string = "http"
 
 	// For security enhancement, there are 2 types of endpoints to protect
@@ -164,6 +165,10 @@ const (
 	// but k3s and some K8S distribution may not support, need to find some way to get SA token JWT pub key
 	HypervisorVerifyServiceAccountEnabledEnvVar   = "SA_TOKEN_VERIFY_ENABLED"
 	HypervisorVerifyServiceAccountPublicKeyEnvVar = "SA_TOKEN_VERIFY_PUBLIC_KEY"
+
+	// Hardware vendor and accelerator library path for multi-vendor support
+	TFHardwareVendorEnv     = "TF_HARDWARE_VENDOR"
+	TFAcceleratorLibPathEnv = "TF_ACCELERATOR_LIB_PATH"
 )
 
 // Node discovery related envs

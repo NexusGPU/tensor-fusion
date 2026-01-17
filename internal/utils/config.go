@@ -127,6 +127,67 @@ func GetEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
+// PodWorkerInfo contains extracted worker information from pod annotations
+type PodWorkerInfo struct {
+	DeviceUUIDs       []string
+	IsolationMode     string
+	MemoryLimitBytes  uint64
+	ComputeLimitUnits uint32
+	TemplateID        string
+}
+
+// ExtractPodWorkerInfo extracts worker information from pod annotations
+// This is a common utility function used by both GpuAllocator and PodCacheManager
+func ExtractPodWorkerInfo(pod *corev1.Pod) PodWorkerInfo {
+	info := PodWorkerInfo{}
+
+	// Extract GPU device IDs
+	if gpuIDsStr, exists := pod.Annotations[constants.GPUDeviceIDsAnnotation]; exists {
+		ids := strings.Split(gpuIDsStr, ",")
+		info.DeviceUUIDs = make([]string, 0, len(ids))
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				info.DeviceUUIDs = append(info.DeviceUUIDs, id)
+			}
+		}
+	}
+
+	// Extract isolation mode
+	if isolationMode, exists := pod.Annotations[constants.IsolationModeAnnotation]; exists {
+		info.IsolationMode = isolationMode
+	} else {
+		info.IsolationMode = string(tfv1.IsolationModeSoft) // default
+	}
+
+	// Extract memory limit (VRAM)
+	if vramLimit, exists := pod.Annotations[constants.VRAMLimitAnnotation]; exists {
+		if qty, err := resource.ParseQuantity(vramLimit); err == nil {
+			info.MemoryLimitBytes = uint64(qty.Value())
+		}
+	}
+
+	// Extract compute limit (compute percent)
+	if computeLimit, exists := pod.Annotations[constants.ComputeLimitAnnotation]; exists {
+		if qty, err := resource.ParseQuantity(computeLimit); err == nil {
+			// Convert to percentage units (e.g., "50" -> 50, "100" -> 100)
+			percent := qty.AsApproximateFloat64()
+			info.ComputeLimitUnits = uint32(percent)
+		}
+	}
+
+	// Extract template ID (for partitioned mode)
+	// First check PartitionTemplateIDAnnotation (set by scheduler)
+	if templateID, exists := pod.Annotations[constants.PartitionTemplateIDAnnotation]; exists {
+		info.TemplateID = templateID
+	} else if templateID, exists := pod.Annotations[constants.WorkloadProfileAnnotation]; exists {
+		// Fallback to WorkloadProfileAnnotation
+		info.TemplateID = templateID
+	}
+
+	return info
+}
+
 func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
 	tflopsKey := constants.TFLOPSRequestAnnotation
 	vramKey := constants.VRAMRequestAnnotation
@@ -142,12 +203,12 @@ func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
 	if tflopsErr == nil && percentErr == nil {
 		return tfv1.Resource{}, fmt.Errorf("tflops and compute-percent are mutually exclusive, please specify only one")
 	} else if tflopsErr != nil && percentErr != nil {
-		ctrl.Log.Info("failed to parse tflops and compute-percent, no computing limit/request set", "pod", pod.Name, "namespace", pod.Namespace)
+		ctrl.Log.Info("tflops/compute-percent not set and parsed", "pod", pod.Name, "namespace", pod.Namespace)
 	}
 
 	vram, vramErr := resource.ParseQuantity(pod.Annotations[vramKey])
 	if vramErr != nil {
-		ctrl.Log.Info("failed to parse vram, annotation not found", "pod", pod.Name, "namespace", pod.Namespace, "annotation", vramKey)
+		ctrl.Log.Info("vram not set and parsed", "pod", pod.Name, "namespace", pod.Namespace, "annotation", vramKey)
 	}
 
 	return tfv1.Resource{
@@ -225,4 +286,17 @@ func GetLeaderIP(client client.Client) string {
 		return ""
 	}
 	return leaderInfo.Data[constants.LeaderInfoConfigMapLeaderIPKey]
+}
+
+// only for local development, won't set KUBECONFIG env var in none local environments
+func NormalizeKubeConfigEnv() {
+	cfgPath := os.Getenv("KUBECONFIG")
+	if cfgPath != "" && strings.HasPrefix(cfgPath, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		_ = os.Setenv("KUBECONFIG", strings.Replace(cfgPath, "~", home, 1))
+	}
 }

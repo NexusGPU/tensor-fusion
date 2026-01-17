@@ -193,6 +193,12 @@ rules:
 - apiGroups:
   - karpenter.sh
   resources:
+  - '*'
+  verbs:
+  - '*'
+- apiGroups:
+  - karpenter.sh
+  resources:
   - nodeclaims
   verbs:
   - create

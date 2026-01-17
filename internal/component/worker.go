@@ -13,7 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-const (
+var (
 	WorkerUpdateInProgressAnnotation    = constants.Domain + "/worker-update-in-progress"
 	WorkerBatchUpdateLastTimeAnnotation = constants.Domain + "/worker-batch-update-last-time"
 )
@@ -23,7 +23,7 @@ type Worker struct {
 }
 
 func (w *Worker) GetName() string {
-	return "worker"
+	return constants.ComponentWorker
 }
 
 func (w *Worker) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string) {

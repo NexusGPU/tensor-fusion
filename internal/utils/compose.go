@@ -135,6 +135,10 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
 	pod.Annotations[constants.IsolationModeAnnotation] = string(tfInfo.Profile.Isolation)
+	// add partition template ID if in partitioned mode
+	if tfInfo.Profile.Isolation == tfv1.IsolationModePartitioned && tfInfo.Profile.PartitionTemplateID != "" {
+		pod.Annotations[constants.PartitionTemplateIDAnnotation] = tfInfo.Profile.PartitionTemplateID
+	}
 }
 
 func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
@@ -196,6 +200,10 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 		}), ",")
 	}
 	annotations[constants.IsolationModeAnnotation] = string(workload.Spec.Isolation)
+	// add partition template ID if in partitioned mode
+	if workload.Spec.Isolation == tfv1.IsolationModePartitioned && workload.Spec.PartitionTemplateID != "" {
+		annotations[constants.PartitionTemplateIDAnnotation] = workload.Spec.PartitionTemplateID
+	}
 	return labels, annotations
 }
 
@@ -449,7 +457,7 @@ func configureFeatures4InjectLib(isLocalGPU bool, disabledFeatures string) []v1.
 	return envList
 }
 
-func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool) {
+func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool, compatibleWithNvidiaContainerToolkit bool) {
 	// Hypervisor needs to read /proc to map pod with processID
 	spec.HostPID = true
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
@@ -534,7 +542,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 		},
 	})
 
-	composeHypervisorInitContainer(spec, pool)
+	composeHypervisorInitContainer(spec, pool, compatibleWithNvidiaContainerToolkit)
 	composeHypervisorContainer(spec, pool, enableVector)
 
 	if enableVector {
@@ -542,11 +550,11 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	}
 }
 
-func composeHypervisorInitContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
+func composeHypervisorInitContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, compatibleWithNvidiaContainerToolkit bool) {
 	spec.InitContainers = append(spec.InitContainers, v1.Container{
 		Name:    "init-shm",
 		Image:   pool.Spec.ComponentConfig.Hypervisor.Image,
-		Command: []string{"hypervisor", "mount-shm"},
+		Command: []string{constants.ComponentHypervisor, constants.MountShmSubcommand},
 		SecurityContext: &v1.SecurityContext{
 			Privileged: ptr.To(true),
 		},
@@ -559,6 +567,49 @@ func composeHypervisorInitContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 			},
 		},
 	})
+
+	// Add initContainer to wait for NVIDIA Container Toolkit toolkit-ready validation
+	if compatibleWithNvidiaContainerToolkit {
+		initContainerImage := pool.Spec.ComponentConfig.Hypervisor.Image
+		if initContainerImage == "" {
+			// Use the same image as the main container if not specified
+			if len(spec.Containers) > 0 {
+				initContainerImage = spec.Containers[0].Image
+			}
+		}
+
+		initContainer := v1.Container{
+			Name:    "toolkit-validation",
+			Image:   initContainerImage,
+			Command: []string{"sh", "-c"},
+			Args: []string{
+				"until [ -f /run/nvidia/validations/toolkit-ready ]; do echo waiting for nvidia container stack to be setup; sleep 5; done",
+			},
+			SecurityContext: &v1.SecurityContext{
+				Privileged: ptr.To(true),
+			},
+			VolumeMounts: []v1.VolumeMount{
+				{
+					Name:             "run-nvidia-validations",
+					MountPath:        "/run/nvidia/validations",
+					MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
+				},
+			},
+		}
+
+		spec.InitContainers = append(spec.InitContainers, initContainer)
+
+		// Add volume for NVIDIA validations
+		spec.Volumes = append(spec.Volumes, v1.Volume{
+			Name: "run-nvidia-validations",
+			VolumeSource: v1.VolumeSource{
+				HostPath: &v1.HostPathVolumeSource{
+					Path: "/run/nvidia/validations",
+					Type: ptr.To(v1.HostPathDirectoryOrCreate),
+				},
+			},
+		})
+	}
 }
 
 func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVector bool) {

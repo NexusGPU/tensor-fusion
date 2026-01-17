@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -64,15 +65,17 @@ func TestIndexAllocator_WrapAround(t *testing.T) {
 	require.NoError(t, err)
 	allocator.IsLeader = true
 
-	// Assign indices until we reach 512
-	for i := 1; i <= 512; i++ {
+	// Max index is IndexModLength * IndexKeyLength = 8 * 16 = 128
+	maxIndex := constants.IndexModLength * constants.IndexKeyLength
+	// Assign indices until we reach maxIndex (128)
+	for i := 1; i <= maxIndex; i++ {
 		index, err := allocator.AssignIndex("pod-" + string(rune(i)))
 		assert.NoError(t, err)
 		assert.Equal(t, i, index)
 	}
 
 	// Next assignment should wrap around to 1
-	index, err := allocator.AssignIndex("pod-513")
+	index, err := allocator.AssignIndex("pod-wrap")
 	assert.NoError(t, err)
-	assert.Equal(t, 1, index, "index should wrap around from 512 to 1")
+	assert.Equal(t, 1, index, "index should wrap around from 128 to 1")
 }

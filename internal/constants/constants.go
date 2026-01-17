@@ -1,6 +1,7 @@
 package constants
 
 import (
+	"os"
 	"time"
 
 	"k8s.io/utils/ptr"
@@ -21,15 +22,32 @@ var (
 	UnschedQueueBufferDuration = 10 * time.Second
 )
 
-const (
+var (
 	// Domain is the domain prefix used for all tensor-fusion.ai related annotations and finalizers
-	Domain = "tensor-fusion.ai"
+	// Change env var for enterprise's custom domain
+	DomainPrefix = func() string {
+		domainPrefix := os.Getenv("TENSOR_FUSION_CUSTOM_DOMAIN_PREFIX")
+		if domainPrefix == "" {
+			return "tensor-fusion"
+		}
+		return domainPrefix
+	}()
+
+	DomainSuffix = func() string {
+		domainSuffix := os.Getenv("TENSOR_FUSION_CUSTOM_DOMAIN_SUFFIX")
+		if domainSuffix == "" {
+			return "ai"
+		}
+		return domainSuffix
+	}()
+
+	Domain = DomainPrefix + "." + DomainSuffix
 
 	// Finalizer constants
 	FinalizerSuffix = "finalizer"
 	Finalizer       = Domain + "/" + FinalizerSuffix
 
-	SchedulerName = "tensor-fusion-scheduler"
+	SchedulerName = DomainPrefix + "-scheduler"
 
 	LabelKeyOwner           = Domain + "/managed-by"
 	LabelKeyClusterOwner    = Domain + "/cluster"
@@ -88,7 +106,13 @@ const (
 	// GPUModelAnnotation specifies the required GPU model (e.g., "A100", "H100")
 	GPUModelAnnotation = Domain + "/gpu-model"
 	// GPU ID list is assigned by scheduler, should not specified by user
-	GPUDeviceIDsAnnotation            = Domain + "/gpu-ids"
+	GPUDeviceIDsAnnotation = Domain + "/gpu-ids"
+	// User can specify the partition name to designate the partition template to use, e.g. 1g.20gb+me
+	// TODO: parse and pre-set in scheduler plugin to avoid find matched partition.
+	PartitionNameAnnotation = Domain + "/partition"
+	// PartitionTemplateIDAnnotation is the partition UUID assigned to a pod in partitioned mode
+	// This is read by accelerator.c to mock slice GPU like MIG does
+	PartitionTemplateIDAnnotation     = Domain + "/partition-id"
 	DedicatedGPUAnnotation            = Domain + "/dedicated-gpu"
 	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
 	PricingAnnotation                 = Domain + "/hourly-pricing"
@@ -97,8 +121,10 @@ const (
 	// Additional worker pod template is set by user with /worker-pod-template annotation
 	WorkerPodTemplateAnnotation = Domain + "/worker-pod-template"
 
-	// Pod index annotation for Device Plugin communication (1-512)
+	// Pod index annotation for Device Plugin communication (1-128)
+	// When it's in annotation, use this string, when it's in resource limits, use it as prefix
 	PodIndexAnnotation = Domain + "/index"
+	PodIndexDelimiter  = "_"
 
 	WorkloadModeAnnotation = Domain + "/workload-mode"
 	WorkloadModeDynamic    = "dynamic"
@@ -144,7 +170,9 @@ const (
 	HypervisorServiceAccountName = "tensor-fusion-hypervisor-sa"
 
 	TSDBVersionConfigMap = "tensor-fusion-tsdb-version"
+)
 
+const (
 	QoSLevelLow      = "low"
 	QoSLevelMedium   = "medium"
 	QoSLevelHigh     = "high"
@@ -185,7 +213,7 @@ const (
 	PhaseFailed    = "Failed"
 )
 
-const (
+var (
 	// No disrupt label, similar to Karpenter, avoid TFConnection/Worker/GPUNode to be moved to another node or destroying node.
 	// Refer: https://karpenter.sh/docs/concepts/disruption/
 	SchedulingDoNotDisruptLabel = Domain + "/do-not-disrupt"
@@ -198,27 +226,28 @@ const (
 )
 
 // To match GPUNode with K8S node, when creating from cloud vendor, must set a label from cloud-init userdata
-const (
+var (
 	ProvisionerLabelKey        = Domain + "/node-provisioner"
 	ProvisionerMissingLabel    = Domain + "/orphan"
 	ProvisionerNamePlaceholder = "__GPU_NODE_RESOURCE_NAME__"
 )
+var (
+	TFDataPath                       = "/run/tensor-fusion"
+	TFDataPathWorkerExpr             = "shm/$(POD_NAMESPACE)/$(POD_NAME)"
+	DataVolumeName                   = "tf-data"
+	TransportShmVolumeName           = "tf-transport-shm"
+	TransportShmPath                 = "/dev/shm"
+	TensorFusionPoolManualCompaction = Domain + "/manual-compaction"
+	TensorFusionSystemName           = DomainPrefix
 
-const TFDataPath = "/run/tensor-fusion"
-const TFDataPathWorkerExpr = "shm/$(POD_NAMESPACE)/$(POD_NAME)"
-const DataVolumeName = "tf-data"
-const TransportShmVolumeName = "tf-transport-shm"
-const TransportShmPath = "/dev/shm"
-const TensorFusionPoolManualCompaction = Domain + "/manual-compaction"
-const TensorFusionSystemName = "tensor-fusion"
-
-const (
 	LeaderInfoConfigMapName        = "tensor-fusion-operator-leader-info"
 	LeaderInfoConfigMapLeaderIPKey = "leader-ip"
+	AcceleratorLabelVendor         = Domain + "/hardware-vendor"
 )
 
 const ShortUUIDAlphabet = "123456789abcdefghijkmnopqrstuvwxy"
 const SpotInstanceAssumedDiscountRatio = 0.3
+const MountShmSubcommand = "mount-shm"
 
 const (
 	LowFrequencyObjFailureInitialDelay        = 300 * time.Millisecond
@@ -226,6 +255,13 @@ const (
 	LowFrequencyObjFailureMaxRPS              = 1
 	LowFrequencyObjFailureMaxBurst            = 1
 	LowFrequencyObjFailureConcurrentReconcile = 5
+)
+
+const (
+	TelemetryEndpointEnvVar   = "TELEMETRY_ENDPOINT"
+	TelemetryPublicKeyEnvVar  = "TELEMETRY_PUBLIC_KEY"
+	DefaultTelemetryEndpoint  = "https://us.i.posthog.com"
+	DefaultTelemetryPublicKey = "phc_qd1mhrtK35PpXx0bYQAYcscTJNnno73mC9qMwioTCi7"
 )
 
 const GiBToBytes = 1024 * 1024 * 1024
@@ -240,3 +276,10 @@ const DefaultEvictionProtectionPriceRatio = 1.2
 const NodeCriticalPriorityClassName = "system-node-critical"
 const KarpenterNodeClaimKind = "NodeClaim"
 const KarpenterNodePoolKind = "NodePool"
+
+const (
+	// 16x8 dummy index device at max
+	// tensor-fusion.ai/index_0: 1 to tensor-fusion.ai/index_f: 8
+	IndexKeyLength = 16
+	IndexModLength = 8
+)

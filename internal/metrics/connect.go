@@ -154,7 +154,7 @@ func (t *TimeSeriesDB) SetTableTTL(ttl string) error {
 
 func (t *TimeSeriesDB) FindRecentNodeMetrics() ([]NodeResourceMetrics, error) {
 	var monitors []NodeResourceMetrics
-	err := t.DB.Find(&monitors, map[string]interface{}{
+	err := t.DB.Find(&monitors, map[string]any{
 		"ts": gorm.Expr("now() - interval 1 hour"),
 	}).Error
 	return monitors, err

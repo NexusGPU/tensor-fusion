@@ -57,7 +57,7 @@ func (suite *NodeExpanderTestSuite) SetupSuite() {
 	Expect(suite.k8sClient.Create(ctx, ns)).To(Succeed())
 
 	// Setup proper allocator for testing
-	suite.allocator = gpuallocator.NewGpuAllocator(ctx, suite.k8sClient, time.Second)
+	suite.allocator = gpuallocator.NewGpuAllocator(ctx, nil, suite.k8sClient, time.Second)
 	err := suite.allocator.InitGPUAndQuotaStore()
 	if err != nil {
 		// For test environments, we can ignore some initialization errors

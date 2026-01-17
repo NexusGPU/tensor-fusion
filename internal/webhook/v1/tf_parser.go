@@ -108,6 +108,13 @@ func ParseTensorFusionInfo(
 		workloadProfile.Spec.Isolation = tfv1.IsolationModeSoft
 	}
 
+	// Read partition template ID annotation if in partitioned mode
+	if workloadProfile.Spec.Isolation == tfv1.IsolationModePartitioned {
+		if partitionTemplateID, ok := pod.Annotations[constants.PartitionTemplateIDAnnotation]; ok && partitionTemplateID != "" {
+			workloadProfile.Spec.PartitionTemplateID = partitionTemplateID
+		}
+	}
+
 	workerPodTemplate, ok := pod.Annotations[constants.WorkerPodTemplateAnnotation]
 	if ok && workerPodTemplate != "" {
 		if workloadProfile.Spec.IsLocalGPU {
@@ -277,8 +284,10 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 	if tflopsLimit, hasValue := parseResourceQuantity(pod, constants.TFLOPSLimitAnnotation); hasValue {
 		workloadProfile.Spec.Resources.Limits.Tflops = tflopsLimit
 		hasTflopsLimit = true
-		// TFLOPs has higher priority: clear compute percent limit when tflops limit is set
-		workloadProfile.Spec.Resources.Limits.ComputePercent = resource.Quantity{}
+		// clean compute percent limit when tflops limit is set in annotation
+		if isMigratedFromContainerLimits {
+			workloadProfile.Spec.Resources.Limits.ComputePercent = resource.Quantity{}
+		}
 	}
 	if vramLimit, hasValue := parseResourceQuantity(pod, constants.VRAMLimitAnnotation); hasValue {
 		workloadProfile.Spec.Resources.Limits.Vram = vramLimit

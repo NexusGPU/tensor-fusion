@@ -69,6 +69,62 @@ spec:
               GPUStatus defines the observed state of GPU.
               NOTE: When new fields added, remember to update syncGPUMetadataAndStatusFromCluster
             properties:
+              allocatedPartitions:
+                additionalProperties:
+                  description: |-
+                    AllocatedPartition represents an allocated partition on a GPU
+                    Key in AllocatedPartitions map is podUID
+                  properties:
+                    allocatedAt:
+                      description: AllocatedAt is when this partition was allocated
+                      format: date-time
+                      type: string
+                    allocatedSlotEnd:
+                      description: |-
+                        AllocatedSlotEnd is the ending slot position (exclusive) where this partition is allocated
+                        The partition occupies slots [AllocatedSlotStart, AllocatedSlotEnd)
+                      format: int32
+                      type: integer
+                    allocatedSlotStart:
+                      description: |-
+                        AllocatedSlotStart is the starting slot position where this partition is allocated
+                        This is the actual hardware slot position (0-based index)
+                        For NVIDIA MIG: physical slot position (0-7)
+                      format: int32
+                      type: integer
+                    isolationGroupId:
+                      description: |-
+                        IsolationGroupID is the isolation group where this partition is allocated
+                        For Ascend NPU: vGroup ID (0-3)
+                        For NVIDIA MIG: this is derived from slot position, not used separately
+                      format: int32
+                      type: integer
+                    namespace:
+                      description: Namespace is the namespace of the pod using this
+                        partition
+                      type: string
+                    podName:
+                      description: PodName is the name of the pod using this partition
+                      type: string
+                    podUid:
+                      description: PodUID is the UID of the pod using this partition
+                        (used as map key)
+                      type: string
+                    templateId:
+                      description: TemplateID is the template used to create this
+                        partition
+                      type: string
+                  required:
+                  - allocatedAt
+                  - namespace
+                  - podName
+                  - podUid
+                  - templateId
+                  type: object
+                description: |-
+                  AllocatedPartitions tracks allocated partitions on this GPU
+                  Key is partitionUUID, value contains template info and allocated resources
+                type: object
               available:
                 properties:
                   compute:
@@ -124,9 +180,15 @@ spec:
               index:
                 format: int32
                 type: integer
-              message:
+              isolationMode:
+                default: soft
+                enum:
+                - shared
+                - soft
+                - hard
+                - partitioned
                 type: string
-              model:
+              message:
                 type: string
               nodeSelector:
                 additionalProperties:
@@ -241,9 +303,6 @@ spec:
                   Hypervisor will watch kubelet device plugin to report all GPUs already used by nvidia-device-plugin
                   GPUs will be grouped by usedBy to be used by different Pods,
                   tensor-fusion annotation or nvidia-device-plugin resource block
-                enum:
-                - tensor-fusion
-                - nvidia-device-plugin
                 type: string
               uuid:
                 type: string
