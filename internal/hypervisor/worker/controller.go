@@ -61,6 +61,13 @@ func (w *WorkerController) Start() error {
 			delete(w.workers, worker.WorkerUID)
 		},
 		OnUpdate: func(oldWorker, newWorker *api.WorkerInfo) {
+			// Check if worker transitioned to Terminated state (Succeeded or Failed)
+			// If so, deallocate devices including partitions
+			if oldWorker.Status != api.WorkerStatusTerminated && newWorker.Status == api.WorkerStatusTerminated {
+				if err := w.allocationController.DeallocateWorker(newWorker.WorkerUID); err != nil {
+					klog.Errorf("Failed to deallocate worker %s on termination: %v", newWorker.WorkerUID, err)
+				}
+			}
 			w.mu.Lock()
 			defer w.mu.Unlock()
 			w.workers[newWorker.WorkerUID] = newWorker

@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 	"sync"
@@ -299,15 +300,26 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 	if existingDevice == nil {
 		return nil, fmt.Errorf("device %s is nil, can not partition", deviceUUID)
 	}
-	newPartitionedDevice := *existingDevice
-	partitionUUID, err := m.accelerator.AssignPartition(partitionTemplateID, deviceUUID)
+	newPartitionedDevice := existingDevice.DeepCopy()
+	partitionResult, err := m.accelerator.AssignPartition(partitionTemplateID, deviceUUID)
 	if err != nil {
 		return nil, err
 	}
 	newPartitionedDevice.ParentUUID = newPartitionedDevice.UUID
-	newPartitionedDevice.UUID = partitionUUID
-	m.devices[partitionUUID] = &newPartitionedDevice
-	return &newPartitionedDevice, nil
+	newPartitionedDevice.UUID = partitionResult.PartitionUUID
+
+	// Merge vendor-specific env vars from partition assignment
+	// Some vendors (e.g., NVIDIA MIG) return env vars like CUDA_VISIBLE_DEVICES
+	if len(partitionResult.EnvVars) > 0 {
+		if newPartitionedDevice.DeviceEnv == nil {
+			newPartitionedDevice.DeviceEnv = make(map[string]string, len(partitionResult.EnvVars))
+		}
+		maps.Copy(newPartitionedDevice.DeviceEnv, partitionResult.EnvVars)
+		klog.V(4).Infof("Partition %s assigned with env vars: %v", partitionResult.PartitionUUID, partitionResult.EnvVars)
+	}
+
+	m.devices[partitionResult.PartitionUUID] = newPartitionedDevice
+	return newPartitionedDevice, nil
 }
 
 func (m *Controller) RemovePartitionedDevice(partitionUUID, deviceUUID string) error {

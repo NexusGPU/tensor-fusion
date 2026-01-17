@@ -135,11 +135,26 @@ typedef struct {
 // Virtualization Types
 // ============================================================================
 
+// Maximum environment variable entries per partition
+#define MAX_PARTITION_ENVS 16
+#define MAX_ENV_KEY_LENGTH 64
+#define MAX_ENV_VALUE_LENGTH 256
+
+// Environment variable key-value pair
+typedef struct {
+    char key[MAX_ENV_KEY_LENGTH];    // Environment variable key
+    char value[MAX_ENV_VALUE_LENGTH]; // Environment variable value
+} EnvVar;
+
 // Partition assignment request
 typedef struct {
     char templateId[64];             // Template ID to use
     char deviceUUID[64];             // Target device UUID
-    char partitionUUID[64];         // Output: assigned partition UUID
+    char partitionUUID[64];          // Output: assigned partition UUID
+    // Optional: Environment variables to inject to worker process (vendor-specific)
+    // Vendors can populate these to pass device-specific env vars (e.g., CUDA_VISIBLE_DEVICES)
+    EnvVar envVars[MAX_PARTITION_ENVS];
+    size_t envVarCount;              // Number of env vars (0 if not supported)
 } PartitionAssignment;
 
 // Worker information for isolation

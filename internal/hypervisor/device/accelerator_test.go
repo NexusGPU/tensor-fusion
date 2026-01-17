@@ -249,9 +249,12 @@ var _ = Describe("AcceleratorInterface", func() {
 		})
 
 		It("should assign partition successfully", func() {
-			partitionUUID, err := accel.AssignPartition("mig-1g.7gb", "stub-device-0")
+			result, err := accel.AssignPartition("mig-1g.7gb", "stub-device-0")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(partitionUUID).NotTo(BeEmpty())
+			Expect(result).NotTo(BeNil())
+			Expect(result.PartitionUUID).NotTo(BeEmpty())
+			// EnvVars is optional, may or may not be populated depending on vendor
+			Expect(result.EnvVars).NotTo(BeNil())
 		})
 
 		It("should reject template ID that is too long", func() {

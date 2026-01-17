@@ -90,10 +90,28 @@ type ExtendedDeviceInfo struct {
 	Capabilities VirtualizationCapabilities
 }
 
+// MaxPartitionEnvs must match MAX_PARTITION_ENVS in accelerator.h
+const MaxPartitionEnvs = 16
+
+// MaxEnvKeyLength must match MAX_ENV_KEY_LENGTH in accelerator.h
+const MaxEnvKeyLength = 64
+
+// MaxEnvValueLength must match MAX_ENV_VALUE_LENGTH in accelerator.h
+const MaxEnvValueLength = 256
+
+// EnvVar matches the C struct EnvVar in accelerator.h
+type EnvVar struct {
+	Key   [MaxEnvKeyLength]byte
+	Value [MaxEnvValueLength]byte
+}
+
 type PartitionAssignment struct {
 	TemplateID    [64]byte
 	DeviceUUID    [64]byte
 	PartitionUUID [64]byte
+	// Optional env vars returned by vendor-specific partition assignment
+	EnvVars     [MaxPartitionEnvs]EnvVar
+	EnvVarCount uintptr
 }
 
 type ExtraMetric struct {
@@ -471,15 +489,24 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 	return devices, nil
 }
 
+// PartitionResult contains the result of assigning a partition
+type PartitionResult struct {
+	PartitionUUID string
+	// EnvVars contains optional environment variables returned by vendor-specific partition assignment
+	// Some vendors (e.g., NVIDIA MIG) may return env vars like CUDA_VISIBLE_DEVICES
+	EnvVars map[string]string
+}
+
 // AssignPartition assigns a partition to a device
-func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (string, error) {
+// Returns partition UUID and optional env vars that should be injected to worker Pod/Process
+func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (*PartitionResult, error) {
 	// Validate input lengths
 	const maxIDLength = 64
 	if len(templateID) >= maxIDLength {
-		return "", fmt.Errorf("template ID is too long (max %d bytes)", maxIDLength-1)
+		return nil, fmt.Errorf("template ID is too long (max %d bytes)", maxIDLength-1)
 	}
 	if len(deviceUUID) >= maxIDLength {
-		return "", fmt.Errorf("device UUID is too long (max %d bytes)", maxIDLength-1)
+		return nil, fmt.Errorf("device UUID is too long (max %d bytes)", maxIDLength-1)
 	}
 
 	var assignment PartitionAssignment
@@ -496,11 +523,25 @@ func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (s
 
 	result := assignPartition(&assignment)
 	if !result {
-		return "", fmt.Errorf("failed to assign partition")
+		return nil, fmt.Errorf("failed to assign partition")
 	}
 
 	partitionUUID := byteArrayToString(assignment.PartitionUUID[:])
-	return partitionUUID, nil
+
+	// Parse optional env vars returned by vendor
+	envVars := make(map[string]string, int(assignment.EnvVarCount))
+	for i := 0; i < int(assignment.EnvVarCount) && i < MaxPartitionEnvs; i++ {
+		key := byteArrayToString(assignment.EnvVars[i].Key[:])
+		value := byteArrayToString(assignment.EnvVars[i].Value[:])
+		if key != "" {
+			envVars[key] = value
+		}
+	}
+
+	return &PartitionResult{
+		PartitionUUID: partitionUUID,
+		EnvVars:       envVars,
+	}, nil
 }
 
 // RemovePartition removes a partition from a device
