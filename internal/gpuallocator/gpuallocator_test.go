@@ -363,6 +363,11 @@ var _ = Describe("GPU Allocator", func() {
 			err := k8sClient.Create(ctx, newGPU)
 			Expect(err).NotTo(HaveOccurred())
 
+			// Cleanup: delete the GPU after test completes
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, newGPU)
+			})
+
 			// Handle the creation event
 			allocator.handleGPUCreate(ctx, newGPU)
 

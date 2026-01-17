@@ -1,11 +1,26 @@
+/*
+Copyright 2024.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package gpuallocator
 
 import (
-	"testing"
-
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
-	"github.com/stretchr/testify/assert"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -30,7 +45,16 @@ func setupAscendTestConfig() {
 }
 
 func createAscendGPU(partitions map[string]tfv1.AllocatedPartition) *tfv1.GPU {
-	return &tfv1.GPU{ObjectMeta: metav1.ObjectMeta{Name: "npu-0"}, Status: tfv1.GPUStatus{GPUModel: ascendGPUModel, Vendor: "Ascend", Capacity: &tfv1.Resource{Tflops: resource.MustParse("22"), Vram: resource.MustParse("21Gi")}, Available: &tfv1.Resource{Tflops: resource.MustParse("22"), Vram: resource.MustParse("21Gi")}, AllocatedPartitions: partitions}}
+	return &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{Name: "npu-0"},
+		Status: tfv1.GPUStatus{
+			GPUModel:            ascendGPUModel,
+			Vendor:              "Ascend",
+			Capacity:            &tfv1.Resource{Tflops: resource.MustParse("22"), Vram: resource.MustParse("21Gi")},
+			Available:           &tfv1.Resource{Tflops: resource.MustParse("22"), Vram: resource.MustParse("21Gi")},
+			AllocatedPartitions: partitions,
+		},
+	}
 }
 
 func getAscendGpuConfig() *config.GpuInfo {
@@ -38,80 +62,140 @@ func getAscendGpuConfig() *config.GpuInfo {
 	for _, t := range PartitionTemplateMap[ascendGPUModel] {
 		templates = append(templates, t)
 	}
-	return &config.GpuInfo{Model: ascendGPUModel, Vendor: "Ascend", MaxPartitions: 7, MaxIsolationGroups: 4, TotalExtendedResources: map[string]uint32{"AICORE": 8, "AICPU": 7}, PartitionTemplates: templates}
+	return &config.GpuInfo{
+		Model:                  ascendGPUModel,
+		Vendor:                 "Ascend",
+		MaxPartitions:          7,
+		MaxIsolationGroups:     4,
+		TotalExtendedResources: map[string]uint32{"AICORE": 8, "AICPU": 7},
+		PartitionTemplates:     templates,
+	}
 }
 
-func TestAscendPartitionStrategy_Name(t *testing.T) {
-	assert.Equal(t, "ascend-vnpu", (&AscendPartitionStrategy{}).Name())
-}
+var _ = Describe("Ascend Partition Strategy", func() {
+	var strategy *AscendPartitionStrategy
+	var gpuConfig *config.GpuInfo
 
-func TestGetPartitionStrategy_Ascend(t *testing.T) {
-	assert.Equal(t, "ascend-vnpu", GetPartitionStrategy("Ascend").Name())
-	assert.Equal(t, "nvidia-mig", GetPartitionStrategy("NVIDIA").Name())
-}
-
-func TestAscendPartitionStrategy_CheckAvailability(t *testing.T) {
-	setupAscendTestConfig()
-	strategy := &AscendPartitionStrategy{}
-	gpuConfig := getAscendGpuConfig()
-	t.Run("first vir01 succeeds", func(t *testing.T) {
-		assert.NoError(t, strategy.CheckAvailability(createAscendGPU(nil), PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig))
+	BeforeEach(func() {
+		setupAscendTestConfig()
+		strategy = &AscendPartitionStrategy{}
+		gpuConfig = getAscendGpuConfig()
 	})
-	t.Run("vir04+vir04_3c succeeds", func(t *testing.T) {
-		gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{"pod-1": {TemplateID: "vir04", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)}})
-		assert.NoError(t, strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir04_3c"], gpuConfig))
-	})
-	t.Run("all vGroups occupied fails", func(t *testing.T) {
-		gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{
-			"pod-1": {TemplateID: "vir02", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
-			"pod-2": {TemplateID: "vir02", PodUID: "pod-2", IsolationGroupID: ptrUint32(1)},
-			"pod-3": {TemplateID: "vir02", PodUID: "pod-3", IsolationGroupID: ptrUint32(2)},
-			"pod-4": {TemplateID: "vir02", PodUID: "pod-4", IsolationGroupID: ptrUint32(3)},
+
+	Describe("Name", func() {
+		It("should return ascend-vnpu", func() {
+			Expect(strategy.Name()).To(Equal("ascend-vnpu"))
 		})
-		err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir02"], gpuConfig)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "maximum partition count")
 	})
-	t.Run("exceed max vir04 partitions", func(t *testing.T) {
-		gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{"pod-1": {TemplateID: "vir04", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)}, "pod-2": {TemplateID: "vir04", PodUID: "pod-2", IsolationGroupID: ptrUint32(1)}})
-		err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir04"], gpuConfig)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "maximum partition count")
-	})
-	t.Run("vir01 sharing works", func(t *testing.T) {
-		gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{"pod-1": {TemplateID: "vir01", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)}})
-		assert.NoError(t, strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig))
-	})
-	t.Run("AICORE exhausted", func(t *testing.T) {
-		gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{"pod-1": {TemplateID: "vir04", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)}, "pod-2": {TemplateID: "vir04", PodUID: "pod-2", IsolationGroupID: ptrUint32(1)}})
-		err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "insufficient AICORE")
-	})
-}
 
-func TestAscendPartitionStrategy_AllocateSlot(t *testing.T) {
-	setupAscendTestConfig()
-	strategy := &AscendPartitionStrategy{}
-	gpuConfig := getAscendGpuConfig()
-	t.Run("first allocation gets vGroup 0", func(t *testing.T) {
-		groupID, slotStart, slotEnd, err := strategy.AllocateSlot(createAscendGPU(nil), PartitionTemplateMap[ascendGPUModel]["vir04"], gpuConfig)
-		assert.NoError(t, err)
-		assert.NotNil(t, groupID)
-		assert.Equal(t, uint32(0), *groupID)
-		assert.Nil(t, slotStart)
-		assert.Nil(t, slotEnd)
+	Describe("GetPartitionStrategy", func() {
+		It("should return Ascend strategy for Ascend vendor", func() {
+			Expect(GetPartitionStrategy("Ascend").Name()).To(Equal("ascend-vnpu"))
+		})
+
+		It("should return NVIDIA strategy for NVIDIA vendor", func() {
+			Expect(GetPartitionStrategy("NVIDIA").Name()).To(Equal("nvidia-mig"))
+		})
 	})
-	t.Run("shared vir01 joins existing group", func(t *testing.T) {
-		gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{"pod-1": {TemplateID: "vir01", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)}})
-		groupID, _, _, err := strategy.AllocateSlot(gpu, PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig)
-		assert.NoError(t, err)
-		assert.Equal(t, uint32(0), *groupID)
+
+	Describe("CheckAvailability", func() {
+		Context("when allocating first partition", func() {
+			It("should succeed for vir01", func() {
+				err := strategy.CheckAvailability(createAscendGPU(nil), PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		Context("when combining different templates", func() {
+			It("should succeed for vir04+vir04_3c", func() {
+				gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{
+					"pod-1": {TemplateID: "vir04", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
+				})
+				err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir04_3c"], gpuConfig)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		Context("when all vGroups are occupied", func() {
+			It("should fail when no isolation group available", func() {
+				gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{
+					"pod-1": {TemplateID: "vir02", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
+					"pod-2": {TemplateID: "vir02", PodUID: "pod-2", IsolationGroupID: ptrUint32(1)},
+					"pod-3": {TemplateID: "vir02", PodUID: "pod-3", IsolationGroupID: ptrUint32(2)},
+					"pod-4": {TemplateID: "vir02", PodUID: "pod-4", IsolationGroupID: ptrUint32(3)},
+				})
+				err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir02"], gpuConfig)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("maximum partition count"))
+			})
+		})
+
+		Context("when exceeding template-specific limits", func() {
+			It("should fail when max vir04 partitions exceeded", func() {
+				gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{
+					"pod-1": {TemplateID: "vir04", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
+					"pod-2": {TemplateID: "vir04", PodUID: "pod-2", IsolationGroupID: ptrUint32(1)},
+				})
+				err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir04"], gpuConfig)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("maximum partition count"))
+			})
+		})
+
+		Context("when using shared templates", func() {
+			It("should allow vir01 sharing within same group", func() {
+				gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{
+					"pod-1": {TemplateID: "vir01", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
+				})
+				err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		Context("when extended resources are exhausted", func() {
+			It("should fail when AICORE is insufficient", func() {
+				gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{
+					"pod-1": {TemplateID: "vir04", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
+					"pod-2": {TemplateID: "vir04", PodUID: "pod-2", IsolationGroupID: ptrUint32(1)},
+				})
+				err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("insufficient AICORE"))
+			})
+		})
 	})
-	t.Run("shared vir01 gets new group when full", func(t *testing.T) {
-		gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{"pod-1": {TemplateID: "vir01", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)}, "pod-2": {TemplateID: "vir01", PodUID: "pod-2", IsolationGroupID: ptrUint32(0)}})
-		groupID, _, _, err := strategy.AllocateSlot(gpu, PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig)
-		assert.NoError(t, err)
-		assert.Equal(t, uint32(1), *groupID)
+
+	Describe("AllocateSlot", func() {
+		Context("when allocating first partition", func() {
+			It("should allocate vGroup 0", func() {
+				groupID, slotStart, slotEnd, err := strategy.AllocateSlot(createAscendGPU(nil), PartitionTemplateMap[ascendGPUModel]["vir04"], gpuConfig)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(groupID).NotTo(BeNil())
+				Expect(*groupID).To(Equal(uint32(0)))
+				Expect(slotStart).To(BeNil())
+				Expect(slotEnd).To(BeNil())
+			})
+		})
+
+		Context("when using shared templates", func() {
+			It("should join existing group for shared vir01", func() {
+				gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{
+					"pod-1": {TemplateID: "vir01", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
+				})
+				groupID, _, _, err := strategy.AllocateSlot(gpu, PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(*groupID).To(Equal(uint32(0)))
+			})
+
+			It("should get new group when shared group is full", func() {
+				gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{
+					"pod-1": {TemplateID: "vir01", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
+					"pod-2": {TemplateID: "vir01", PodUID: "pod-2", IsolationGroupID: ptrUint32(0)},
+				})
+				groupID, _, _, err := strategy.AllocateSlot(gpu, PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(*groupID).To(Equal(uint32(1)))
+			})
+		})
 	})
-}
+})

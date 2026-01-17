@@ -367,8 +367,12 @@ var _ = BeforeSuite(func() {
 
 	go func() {
 		defer GinkgoRecover()
-		err = mgr.Start(ctx)
-		Expect(err).ToNot(HaveOccurred(), "failed to run manager")
+		if err := mgr.Start(ctx); err != nil {
+			// Context cancellation is expected during shutdown, don't fail for it
+			if ctx.Err() == nil {
+				Fail(fmt.Sprintf("failed to run manager: %v", err))
+			}
+		}
 	}()
 })
 
