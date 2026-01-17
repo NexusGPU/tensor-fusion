@@ -22,10 +22,149 @@
   costPerHour: 0.25
   fp16TFlops: 66
 
+# Ascend 310P3 NPU with vNPU partition support
+- model: Ascend_310P3
+  fullModelName: "Ascend 310P3"
+  vendor: Ascend
+  costPerHour: 1.0
+  fp16TFlops: 22
+  maxPartitions: 7
+  maxIsolationGroups: 4
+  totalExtendedResources:
+    AICORE: 8
+    AICPU: 7
+    VPC: 12
+    VENC: 3
+    VDEC: 12
+    JPEGD: 16
+    JPEGE: 8
+    PNGD: 0
+  partitionTemplates:
+    # vir01 - smallest partition, supports time-sharing (2 per vGroup)
+    - templateId: "vir01"
+      name: "vir01"
+      memoryGigabytes: 3
+      computePercent: 12.5
+      description: "1/8 NPU slice with 3GB memory, supports time-sharing"
+      maxPartition: 8
+      isolationGroupSharing: shared
+      maxPartitionsPerIsolationGroup: 2
+      extendedResources:
+        AICORE: 1
+        AICPU: 1
+        VPC: 1
+        VENC: 0
+        VDEC: 1
+        JPEGD: 2
+        JPEGE: 1
+        PNGD: 0
+    # vir02 - 2/8 NPU slice
+    - templateId: "vir02"
+      name: "vir02"
+      memoryGigabytes: 6
+      computePercent: 25.0
+      description: "2/8 NPU slice with 6GB memory"
+      maxPartition: 4
+      isolationGroupSharing: exclusive
+      extendedResources:
+        AICORE: 2
+        AICPU: 2
+        VPC: 3
+        VENC: 1
+        VDEC: 3
+        JPEGD: 4
+        JPEGE: 2
+        PNGD: 0
+    # vir02_1c - 2/8 NPU slice with 1 AICPU
+    - templateId: "vir02_1c"
+      name: "vir02_1c"
+      memoryGigabytes: 6
+      computePercent: 25.0
+      description: "2/8 NPU slice with 6GB memory and 1 AICPU"
+      maxPartition: 4
+      isolationGroupSharing: exclusive
+      extendedResources:
+        AICORE: 2
+        AICPU: 1
+        VPC: 3
+        VENC: 0
+        VDEC: 3
+        JPEGD: 4
+        JPEGE: 2
+        PNGD: 0
+    # vir04 - 4/8 NPU slice
+    - templateId: "vir04"
+      name: "vir04"
+      memoryGigabytes: 12
+      computePercent: 50.0
+      description: "4/8 NPU slice with 12GB memory"
+      maxPartition: 2
+      isolationGroupSharing: exclusive
+      extendedResources:
+        AICORE: 4
+        AICPU: 4
+        VPC: 6
+        VENC: 2
+        VDEC: 6
+        JPEGD: 8
+        JPEGE: 4
+        PNGD: 0
+    # vir04_3c - 4/8 NPU slice with 3 AICPU
+    - templateId: "vir04_3c"
+      name: "vir04_3c"
+      memoryGigabytes: 12
+      computePercent: 50.0
+      description: "4/8 NPU slice with 12GB memory and 3 AICPU"
+      maxPartition: 2
+      isolationGroupSharing: exclusive
+      extendedResources:
+        AICORE: 4
+        AICPU: 3
+        VPC: 6
+        VENC: 1
+        VDEC: 6
+        JPEGD: 8
+        JPEGE: 4
+        PNGD: 0
+    # vir04_3c_ndvpp - 4/8 NPU slice without DVPP resources
+    - templateId: "vir04_3c_ndvpp"
+      name: "vir04_3c_ndvpp"
+      memoryGigabytes: 12
+      computePercent: 50.0
+      description: "4/8 NPU slice with 12GB memory, no DVPP"
+      maxPartition: 2
+      isolationGroupSharing: exclusive
+      extendedResources:
+        AICORE: 4
+        AICPU: 3
+        VPC: 0
+        VENC: 0
+        VDEC: 0
+        JPEGD: 0
+        JPEGE: 0
+        PNGD: 0
+    # vir04_4c_dvpp - 4/8 NPU slice with enhanced DVPP
+    - templateId: "vir04_4c_dvpp"
+      name: "vir04_4c_dvpp"
+      memoryGigabytes: 12
+      computePercent: 50.0
+      description: "4/8 NPU slice with 12GB memory and enhanced DVPP"
+      maxPartition: 2
+      isolationGroupSharing: exclusive
+      extendedResources:
+        AICORE: 4
+        AICPU: 4
+        VPC: 12
+        VENC: 3
+        VDEC: 12
+        JPEGD: 16
+        JPEGE: 8
+        PNGD: 0
+
 # Example GPU Model mocking NVIDIA A100 with MIG partition support
 - model: Example-GPU-Model
   fullModelName: "Example GPU Model 80GB"
-  vendor: STUB
+  vendor: Example
   costPerHour: 2.0
   fp16TFlops: 312
   maxPartitions: 7

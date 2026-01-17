@@ -131,12 +131,14 @@ var _ = Describe("Ascend Partition Strategy", func() {
 		})
 
 		Context("when exceeding template-specific limits", func() {
-			It("should fail when max vir04 partitions exceeded", func() {
+			It("should fail when max vir04_3c partitions exceeded", func() {
+				// 2 vir04_3c: AICORE=8 (full), AICPU=6 (valid, total=7)
+				// Note: 2 vir04 is impossible because AICPU would be 8 > 7
 				gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{
-					"pod-1": {TemplateID: "vir04", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
-					"pod-2": {TemplateID: "vir04", PodUID: "pod-2", IsolationGroupID: ptrUint32(1)},
+					"pod-1": {TemplateID: "vir04_3c", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
+					"pod-2": {TemplateID: "vir04_3c", PodUID: "pod-2", IsolationGroupID: ptrUint32(1)},
 				})
-				err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir04"], gpuConfig)
+				err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir04_3c"], gpuConfig)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("maximum partition count"))
 			})
@@ -154,9 +156,14 @@ var _ = Describe("Ascend Partition Strategy", func() {
 
 		Context("when extended resources are exhausted", func() {
 			It("should fail when AICORE is insufficient", func() {
+				// 2 vir04_3c: AICORE=8 (full), AICPU=6 (has 1 remaining)
+				// Trying to allocate vir01 (needs AICORE=1, AICPU=1):
+				// - AICORE: 8+1=9 > 8 -> insufficient
+				// - AICPU: 6+1=7 <= 7 -> sufficient
+				// Only AICORE will fail, making test deterministic
 				gpu := createAscendGPU(map[string]tfv1.AllocatedPartition{
-					"pod-1": {TemplateID: "vir04", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
-					"pod-2": {TemplateID: "vir04", PodUID: "pod-2", IsolationGroupID: ptrUint32(1)},
+					"pod-1": {TemplateID: "vir04_3c", PodUID: "pod-1", IsolationGroupID: ptrUint32(0)},
+					"pod-2": {TemplateID: "vir04_3c", PodUID: "pod-2", IsolationGroupID: ptrUint32(1)},
 				})
 				err := strategy.CheckAvailability(gpu, PartitionTemplateMap[ascendGPUModel]["vir01"], gpuConfig)
 				Expect(err).To(HaveOccurred())
