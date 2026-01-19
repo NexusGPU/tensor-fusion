@@ -20,8 +20,6 @@ provider/
 ├── Makefile              # Build scripts
 ├── example/
 │   └── accelerator.c     # Example implementation for testing
-├── ascend/
-│   └── accelerator.c     # Huawei Ascend implementation
 └── test/
     └── test_accelerator.c # Test suite
 ```
@@ -35,13 +33,6 @@ cd provider
 make example
 ```
 
-### Build Ascend Implementation
-
-```bash
-cd provider
-make ascend
-```
-
 ### Run Tests
 
 ```bash
@@ -51,47 +42,72 @@ make test-run
 
 ## Interface Categories
 
+### 0. Initialization
+
+- `VirtualGPUInit()`: Initialize the virtual GPU library (must be called before other APIs)
+
 ### 1. DeviceInfo APIs
 
-- `getDeviceInfo()`: Get device information (capabilities, basic info, NUMA, etc.)
-- `getPartitionTemplates()`: Get hardware partition templates (e.g., MIG)
-- `getDeviceTopology()`: Get device topology (NVLink, IB NIC, etc.)
+- `GetDeviceCount()`: Get the number of available devices
+- `GetAllDevices()`: Get all available devices information (returns `ExtendedDeviceInfo` with basic info, properties, and virtualization capabilities)
+- `GetDeviceTopology()`: Get device topology including NVLink, IB NIC, and other interconnects
 
 ### 2. Virtualization APIs
 
 #### Partitioned Isolation
-- `assignPartition()`: Assign hardware partition (returns partitionOverhead)
-- `removePartition()`: Remove partition
+- `AssignPartition()`: Assign a partition to a device using a template (e.g., create MIG instance)
+- `RemovePartition()`: Remove a partition from a device
 
 #### Hard Isolation
-- `setMemHardLimit()`: Set hard memory limit (one-time)
-- `setComputeUnitHardLimit()`: Set hard compute limit (one-time)
+- `SetMemHardLimit()`: Set hard memory limit for a worker (one-time, called at worker start by limiter.so)
+- `SetComputeUnitHardLimit()`: Set hard compute unit limit for a worker (one-time, called at worker start)
 
 #### Snapshot/Migration
-- `snapshot()`: Snapshot device state for processes
-- `resume()`: Resume device state for processes
+- `Snapshot()`: Snapshot device state for processes (lock processes, checkpoint state)
+- `Resume()`: Resume device state for processes (unlock processes, restore state)
 
 ### 3. Metrics APIs
 
-- `getProcessComputeUtilization()`: Get compute utilization per process
-- `getProcessMemoryUtilization()`: Get memory utilization per process
-- `getDeviceMetrics()`: Get basic device metrics (power, PCIe, SM active, TC usage)
-- `getExtendedDeviceMetrics()`: Get extended metrics (NVLink bandwidth, etc.)
+- `GetProcessInformation()`: Get process information (compute and memory utilization) for all processes on all devices. Combines compute and memory utilization into a single call (AMD SMI style API design)
+- `GetDeviceMetrics()`: Get basic device metrics (power, temperature, PCIe bandwidth, utilization, memory usage, and extra vendor-specific metrics)
+- `GetVendorMountLibs()`: Get vendor mount paths for additional device driver or runtime libraries
+
+### 4. Utility APIs
+
+- `RegisterLogCallback()`: Register a log callback function for library logging
+
+## Key Data Structures
+
+### Device Information
+- `DeviceBasicInfo`: UUID, vendor, model, driver/firmware versions, memory, compute units, PCIe info
+- `VirtualizationCapabilities`: Partitioning, soft/hard isolation, snapshot, metrics, remoting support
+- `ExtendedDeviceInfo`: Combines basic info, properties, and capabilities
+
+### Virtualization
+- `PartitionAssignment`: Partition request with template ID, device UUID, and optional env vars
+- `WorkerInfo`: Worker identifier, device UUID, process ID, and resource limits
+- `ProcessArray`: Array of process IDs for snapshot/resume operations
+
+### Metrics
+- `ProcessInformation`: Per-process compute and memory utilization
+- `DeviceMetrics`: Device-level power, temperature, PCIe, utilization, and extra metrics
+
+## Result Codes
+
+All APIs return a `Result` enum:
+- `RESULT_SUCCESS`: Operation succeeded
+- `RESULT_ERROR_INVALID_PARAM`: Invalid parameter
+- `RESULT_ERROR_NOT_FOUND`: Resource not found
+- `RESULT_ERROR_NOT_SUPPORTED`: Operation not supported
+- `RESULT_ERROR_RESOURCE_EXHAUSTED`: Resource exhausted
+- `RESULT_ERROR_OPERATION_FAILED`: Operation failed
+- `RESULT_ERROR_INTERNAL`: Internal error
 
 ## Vendor Implementations
 
 ### Example Implementation
 
 The stub implementation (`example/accelerator.c`) provides a reference implementation for testing and development.
-
-### Ascend Implementation
-
-The Ascend implementation (`ascend/accelerator.c`) provides support for Huawei Ascend accelerators:
-
-- Supports Soft and Hard isolation modes
-- Does not support hardware partitioning (MIG-like features)
-- Uses HCCS (Huawei Cache Coherent System) for device interconnects
-- Typical device: Ascend 910 with 32GB memory, 2 AI cores, 320 TFLOPS (FP16)
 
 ## Usage in Hypervisor
 
@@ -111,19 +127,29 @@ All tests pass successfully:
 
 ```bash
 $ make test-run
-========================================
-Accelerator Library Test Suite
-========================================
-Total tests:  47
-Passed:       47
-Failed:       0
-All tests passed! ✓
+```
+
+## Vendor Artifacts
+
+- /build/vgpu/lib_{vendor}.so: Implements partitioned, soft, hard isolation, need to be loaded before app running, and used by hypervisor for GPU discovery and monitoring
+- /build/metadata.yaml: package metadata
+
+TensorFusion will create hostPath and mount to Hypervisor, copy vendor artifacts from /build/** to the host path, and then mount to worker containers.
+
+```yaml
+version: 1.2.3
+hardwareVendor: NVIDIA
+releaseDate: "2025-01-01"
+isolationModes:
+  - partitioned
+  - soft
+  - hard
 ```
 
 ## Notes
 
-- All struct parameters are carefully designed with key attributes
-- Memory management: Use provided cleanup functions to free allocated memory
+- All struct parameters are carefully designed with fixed-size arrays for ABI stability
+- Memory management: Caller allocates output buffers, library fills them
 - Thread safety: Vendor implementations should be thread-safe
-- Error handling: All APIs return Result enum for error handling
-
+- Error handling: All APIs return `Result` enum for error handling
+- Logging: Use `RegisterLogCallback()` to receive library log messages

@@ -89,28 +89,6 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 				)),
 			},
 		},
-		NodeDiscovery: &tfv1.NodeDiscoveryConfig{
-			Image: "node-discovery",
-			PodTemplate: &runtime.RawExtension{
-				Raw: lo.Must(json.Marshal(
-					corev1.PodTemplate{
-						Template: corev1.PodTemplateSpec{
-							Spec: corev1.PodSpec{
-								RestartPolicy:                 corev1.RestartPolicyOnFailure,
-								TerminationGracePeriodSeconds: ptr.To[int64](0),
-								Containers: []corev1.Container{
-									{
-										Name:    "tensorfusion-node-discovery",
-										Image:   "busybox:stable-glibc",
-										Command: []string{"sleep", "infinity"},
-									},
-								},
-							},
-						},
-					},
-				)),
-			},
-		},
 		Worker: &tfv1.WorkerConfig{
 			Image: "worker",
 			PodTemplate: &runtime.RawExtension{
@@ -133,9 +111,8 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 			},
 		},
 		Client: &tfv1.ClientConfig{
-			RemoteModeImage:   "client",
-			EmbeddedModeImage: "ngpu",
-			OperatorEndpoint:  "http://localhost:8080",
+			Image:            "client",
+			OperatorEndpoint: "http://localhost:8080",
 			PatchToPod: &runtime.RawExtension{
 				Raw: lo.Must(json.Marshal(map[string]any{
 					"spec": map[string]any{

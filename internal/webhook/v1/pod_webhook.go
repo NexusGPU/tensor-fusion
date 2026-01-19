@@ -510,9 +510,7 @@ func (m *TensorFusionPodMutator) assignDeviceAllocationIndex(ctx context.Context
 func calculatePodPatch(currentBytes []byte, pod *corev1.Pod, clientConfig *tfv1.ClientConfig, isLocalGPU bool) ([]jsonpatch.JsonPatchOperation, error) {
 	var patchBytes []byte
 	var err error
-	if isLocalGPU {
-		patchBytes, err = json.Marshal(clientConfig.PatchEmbeddedWorkerToPod)
-	} else {
+	if !isLocalGPU {
 		patchBytes, err = json.Marshal(clientConfig.PatchToPod)
 	}
 	if err != nil {
@@ -602,11 +600,6 @@ func serializeContainerInjectionPatchJson(clientConfig *tfv1.ClientConfig, patch
 		patchJSON, err = json.Marshal(clientConfig.PatchToContainer)
 		if err != nil {
 			return nil, fmt.Errorf("marshal patchToContainer: %w", err)
-		}
-	} else if isLocalGPU && clientConfig.PatchToEmbeddedWorkerContainer != nil {
-		patchJSON, err = json.Marshal(clientConfig.PatchToEmbeddedWorkerContainer)
-		if err != nil {
-			return nil, fmt.Errorf("marshal patchToEmbeddedWorkerContainer: %w", err)
 		}
 	}
 	return patchJSON, nil

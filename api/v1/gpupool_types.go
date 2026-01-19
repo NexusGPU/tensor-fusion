@@ -33,10 +33,6 @@ type GPUPoolSpec struct {
 	// +optional
 	DefaultUsingLocalGPU *bool `json:"defaultUsingLocalGPU,omitempty"`
 
-	// +optional
-	// +kubebuilder:default=NVIDIA
-	Vendor string `json:"vendor,omitempty"`
-
 	CapacityConfig *CapacityConfig `json:"capacityConfig,omitempty"`
 
 	NodeManagerConfig *NodeManagerConfig `json:"nodeManagerConfig,omitempty"`
@@ -328,9 +324,6 @@ type ComponentConfig struct {
 	Hypervisor *HypervisorConfig `json:"hypervisor,omitempty"`
 
 	// +optional
-	NodeDiscovery *NodeDiscoveryConfig `json:"nodeDiscovery,omitempty"`
-
-	// +optional
 	Client *ClientConfig `json:"client,omitempty"`
 }
 type NodeDiscoveryConfig struct {
@@ -342,6 +335,9 @@ type NodeDiscoveryConfig struct {
 
 type HypervisorConfig struct {
 	Image string `json:"image,omitempty"`
+
+	// The image configured per provider, e.g. { "NVIDIA": "tensorfusion/tf-nvidia:latest", "AMD": "tensorfusion/tf-amd:latest" }
+	ProviderImage map[string]string `json:"providerImage,omitempty"`
 
 	VectorImage string `json:"vectorImage,omitempty"`
 
@@ -359,15 +355,22 @@ type HypervisorConfig struct {
 }
 
 type WorkerConfig struct {
+	// Default image for any providers if ProviderImage is not set
 	Image string `json:"image,omitempty"`
+
+	// The image configured per provider, e.g. { "NVIDIA": "tensorfusion/tf-nvidia-worker:latest", "AMD": "tensorfusion/tf-amd-worker:latest" }
+	ProviderImage map[string]string `json:"providerImage,omitempty"`
+
 	// +optional
 	PodTemplate *runtime.RawExtension `json:"podTemplate,omitempty"`
 }
 
 type ClientConfig struct {
-	RemoteModeImage string `json:"remoteModeImage,omitempty"`
+	// Default image for any providers if ProviderImage is not set
+	Image string `json:"image,omitempty"`
 
-	EmbeddedModeImage string `json:"embeddedModeImage,omitempty"`
+	// The image configured per provider, e.g. { "NVIDIA": "tensorfusion/tf-nvidia-client:latest", "AMD": "tensorfusion/tf-amd-client:latest" }
+	ProviderImage map[string]string `json:"providerImage,omitempty"`
 
 	OperatorEndpoint string `json:"operatorEndpoint,omitempty"`
 
@@ -376,12 +379,6 @@ type ClientConfig struct {
 
 	// +optional
 	PatchToContainer *runtime.RawExtension `json:"patchToContainer,omitempty"`
-
-	// +optional
-	PatchToEmbeddedWorkerContainer *runtime.RawExtension `json:"patchToEmbeddedWorkerContainer,omitempty"`
-
-	// +optional
-	PatchEmbeddedWorkerToPod *runtime.RawExtension `json:"patchEmbeddedWorkerToPod,omitempty"`
 }
 
 // GPUPoolStatus defines the observed state of GPUPool.

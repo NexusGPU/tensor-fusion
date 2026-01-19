@@ -37,141 +37,160 @@ static int tests_failed = 0;
         } \
     } while (0)
 
-// Test getDeviceInfo
-void test_getDeviceInfo() {
-    printf("\n=== Testing getDeviceInfo ===\n");
+// Test VirtualGPUInit
+void test_virtualGPUInit() {
+    printf("\n=== Testing VirtualGPUInit ===\n");
     
-    ExtendedDeviceInfo info;
-    Result result = getDeviceInfo(0, &info);
-    
-    TEST_ASSERT(result == RESULT_SUCCESS, "getDeviceInfo returns success");
-    TEST_ASSERT(strlen(info.basic.uuid) > 0, "Device UUID is not empty");
-    TEST_ASSERT(strlen(info.basic.vendor) > 0, "Vendor is not empty");
-    TEST_ASSERT(strlen(info.basic.model) > 0, "Model is not empty");
-    TEST_ASSERT(info.basic.totalMemoryBytes > 0, "Total memory > 0");
-    TEST_ASSERT(info.basic.totalComputeUnits > 0, "Total compute units > 0");
-    TEST_ASSERT(info.basic.maxTflops > 0, "Max TFLOPS > 0");
-    TEST_ASSERT(info.capabilities.maxPartitions > 0, "Max partitions > 0");
-    
-    // Test invalid device index
-    result = getDeviceInfo(-1, &info);
-    TEST_ASSERT(result != RESULT_SUCCESS, "Invalid device index returns error");
-    
-    // Cleanup
-    freeExtendedDeviceInfo(&info);
+    Result result = VirtualGPUInit();
+    TEST_ASSERT(result == RESULT_SUCCESS, "VirtualGPUInit returns success");
 }
 
-// Test getPartitionTemplates
-void test_getPartitionTemplates() {
-    printf("\n=== Testing getPartitionTemplates ===\n");
+// Test GetDeviceCount
+void test_getDeviceCount() {
+    printf("\n=== Testing GetDeviceCount ===\n");
     
-    PartitionTemplate* templates = NULL;
-    size_t templateCount = 0;
-    Result result = getPartitionTemplates(0, &templates, &templateCount);
+    size_t deviceCount = 0;
+    Result result = GetDeviceCount(&deviceCount);
     
-    TEST_ASSERT(result == RESULT_SUCCESS, "getPartitionTemplates returns success");
-    TEST_ASSERT(templates != NULL, "Templates array is not NULL");
-    TEST_ASSERT(templateCount > 0, "Template count > 0");
+    TEST_ASSERT(result == RESULT_SUCCESS, "GetDeviceCount returns success");
+    TEST_ASSERT(deviceCount > 0, "Device count > 0");
     
-    if (templates && templateCount > 0) {
-        TEST_ASSERT(strlen(templates[0].templateId) > 0, "First template has ID");
-        TEST_ASSERT(strlen(templates[0].name) > 0, "First template has name");
-        TEST_ASSERT(templates[0].memoryBytes > 0, "First template has memory");
-        TEST_ASSERT(templates[0].computeUnits > 0, "First template has compute units");
+    // Test NULL parameter
+    result = GetDeviceCount(NULL);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "NULL parameter returns error");
+}
+
+// Test GetAllDevices
+void test_getAllDevices() {
+    printf("\n=== Testing GetAllDevices ===\n");
+    
+    ExtendedDeviceInfo devices[256];
+    size_t deviceCount = 0;
+    
+    Result result = GetAllDevices(devices, 256, &deviceCount);
+    
+    TEST_ASSERT(result == RESULT_SUCCESS, "GetAllDevices returns success");
+    TEST_ASSERT(deviceCount > 0, "Device count > 0");
+    
+    if (deviceCount > 0) {
+        TEST_ASSERT(strlen(devices[0].basic.uuid) > 0, "Device UUID is not empty");
+        TEST_ASSERT(strlen(devices[0].basic.vendor) > 0, "Vendor is not empty");
+        TEST_ASSERT(strlen(devices[0].basic.model) > 0, "Model is not empty");
+        TEST_ASSERT(devices[0].basic.totalMemoryBytes > 0, "Total memory > 0");
+        TEST_ASSERT(devices[0].basic.totalComputeUnits > 0, "Total compute units > 0");
+        TEST_ASSERT(devices[0].basic.maxTflops > 0, "Max TFLOPS > 0");
+        TEST_ASSERT(devices[0].virtualizationCapabilities.maxPartitions > 0, "Max partitions > 0");
     }
     
-    // Cleanup
-    freePartitionTemplates(templates, templateCount);
+    // Test invalid parameters
+    result = GetAllDevices(NULL, 256, &deviceCount);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "NULL devices returns error");
+    
+    result = GetAllDevices(devices, 0, &deviceCount);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "Zero maxCount returns error");
 }
 
-// Test getDeviceTopology
+// Test GetDeviceTopology
 void test_getDeviceTopology() {
-    printf("\n=== Testing getDeviceTopology ===\n");
+    printf("\n=== Testing GetDeviceTopology ===\n");
     
     int32_t deviceIndices[] = {0, 1};
     size_t deviceCount = 2;
     ExtendedDeviceTopology topology;
     
-    Result result = getDeviceTopology(deviceIndices, deviceCount, &topology);
+    Result result = GetDeviceTopology(deviceIndices, deviceCount, &topology);
     
-    TEST_ASSERT(result == RESULT_SUCCESS, "getDeviceTopology returns success");
-    TEST_ASSERT(topology.devices != NULL, "Devices array is not NULL");
+    TEST_ASSERT(result == RESULT_SUCCESS, "GetDeviceTopology returns success");
     TEST_ASSERT(topology.deviceCount == deviceCount, "Device count matches");
     
-    if (topology.devices && topology.deviceCount > 0) {
+    if (topology.deviceCount > 0) {
         TEST_ASSERT(strlen(topology.devices[0].deviceUUID) > 0, "First device has UUID");
     }
     
-    // Cleanup
-    freeExtendedDeviceTopology(&topology);
+    // Test invalid parameters
+    result = GetDeviceTopology(NULL, deviceCount, &topology);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "NULL deviceIndexArray returns error");
+    
+    result = GetDeviceTopology(deviceIndices, 0, &topology);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "Zero deviceCount returns error");
 }
 
-// Test assignPartition
+// Test AssignPartition
 void test_assignPartition() {
-    printf("\n=== Testing assignPartition ===\n");
+    printf("\n=== Testing AssignPartition ===\n");
     
     PartitionAssignment assignment;
+    memset(&assignment, 0, sizeof(assignment));
     snprintf(assignment.templateId, sizeof(assignment.templateId), "mig-1g.7gb");
     snprintf(assignment.deviceUUID, sizeof(assignment.deviceUUID), "stub-device-0");
     
-    bool result = assignPartition(&assignment);
+    bool result = AssignPartition(&assignment);
     
-    TEST_ASSERT(result == true, "assignPartition returns true");
+    TEST_ASSERT(result == true, "AssignPartition returns true");
     TEST_ASSERT(strlen(assignment.partitionUUID) > 0, "Partition UUID is assigned");
-    TEST_ASSERT(assignment.partitionOverheadBytes > 0, "Partition overhead > 0");
     
     // Test invalid input
     PartitionAssignment invalid;
-    invalid.templateId[0] = '\0';
-    invalid.deviceUUID[0] = '\0';
-    result = assignPartition(&invalid);
-    TEST_ASSERT(result == false, "Invalid assignment returns false");
+    memset(&invalid, 0, sizeof(invalid));
+    result = AssignPartition(&invalid);
+    TEST_ASSERT(result == false, "Empty assignment returns false");
+    
+    result = AssignPartition(NULL);
+    TEST_ASSERT(result == false, "NULL assignment returns false");
 }
 
-// Test removePartition
+// Test RemovePartition
 void test_removePartition() {
-    printf("\n=== Testing removePartition ===\n");
+    printf("\n=== Testing RemovePartition ===\n");
     
-    bool result = removePartition("mig-1g.7gb", "stub-device-0");
-    TEST_ASSERT(result == true, "removePartition returns true");
+    bool result = RemovePartition("mig-1g.7gb", "stub-device-0");
+    TEST_ASSERT(result == true, "RemovePartition returns true");
     
-    result = removePartition(NULL, "stub-device-0");
+    result = RemovePartition(NULL, "stub-device-0");
     TEST_ASSERT(result == false, "NULL templateId returns false");
+    
+    result = RemovePartition("mig-1g.7gb", NULL);
+    TEST_ASSERT(result == false, "NULL deviceUUID returns false");
 }
 
-// Test setMemHardLimit
+// Test SetMemHardLimit
 void test_setMemHardLimit() {
-    printf("\n=== Testing setMemHardLimit ===\n");
+    printf("\n=== Testing SetMemHardLimit ===\n");
     
-    Result result = setMemHardLimit("worker-1", "stub-device-0", 4ULL * 1024 * 1024 * 1024);
-    TEST_ASSERT(result == RESULT_SUCCESS, "setMemHardLimit returns success");
+    Result result = SetMemHardLimit("worker-1", "stub-device-0", 4ULL * 1024 * 1024 * 1024);
+    TEST_ASSERT(result == RESULT_SUCCESS, "SetMemHardLimit returns success");
     
-    result = setMemHardLimit(NULL, "stub-device-0", 4ULL * 1024 * 1024 * 1024);
+    result = SetMemHardLimit(NULL, "stub-device-0", 4ULL * 1024 * 1024 * 1024);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "NULL workerId returns error");
+    
+    result = SetMemHardLimit("worker-1", NULL, 4ULL * 1024 * 1024 * 1024);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "NULL deviceUUID returns error");
+}
+
+// Test SetComputeUnitHardLimit
+void test_setComputeUnitHardLimit() {
+    printf("\n=== Testing SetComputeUnitHardLimit ===\n");
+    
+    Result result = SetComputeUnitHardLimit("worker-1", "stub-device-0", 50);
+    TEST_ASSERT(result == RESULT_SUCCESS, "SetComputeUnitHardLimit returns success");
+    
+    result = SetComputeUnitHardLimit("worker-1", "stub-device-0", 150);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "Invalid limit > 100 returns error");
+    
+    result = SetComputeUnitHardLimit(NULL, "stub-device-0", 50);
     TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "NULL workerId returns error");
 }
 
-// Test setComputeUnitHardLimit
-void test_setComputeUnitHardLimit() {
-    printf("\n=== Testing setComputeUnitHardLimit ===\n");
-    
-    Result result = setComputeUnitHardLimit("worker-1", "stub-device-0", 50);
-    TEST_ASSERT(result == RESULT_SUCCESS, "setComputeUnitHardLimit returns success");
-    
-    result = setComputeUnitHardLimit("worker-1", "stub-device-0", 150);
-    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "Invalid limit > 100 returns error");
-}
-
-// Test getProcessInformation (combines compute and memory utilization)
+// Test GetProcessInformation (combines compute and memory utilization)
 void test_getProcessInformation() {
-    printf("\n=== Testing getProcessInformation ===\n");
+    printf("\n=== Testing GetProcessInformation ===\n");
     
     ProcessInformation processInfos[256];
     size_t processInfoCount = 0;
     
     Result result = GetProcessInformation(processInfos, 256, &processInfoCount);
     
-    TEST_ASSERT(result == RESULT_SUCCESS, "getProcessInformation returns success");
-    TEST_ASSERT(processInfoCount >= 0, "Process info count >= 0");
+    TEST_ASSERT(result == RESULT_SUCCESS, "GetProcessInformation returns success");
     
     if (processInfoCount > 0) {
         // Test compute utilization fields
@@ -185,51 +204,65 @@ void test_getProcessInformation() {
         TEST_ASSERT(processInfos[0].memoryUtilizationPercent >= 0 && 
                    processInfos[0].memoryUtilizationPercent <= 100,
                    "Memory utilization percent in valid range");
-        TEST_ASSERT(processInfos[0].memoryUsedBytes <= processInfos[0].memoryReservedBytes ||
-                   processInfos[0].memoryReservedBytes == 0,
-                   "Memory used <= reserved (or reserved is 0)");
     }
+    
+    // Test invalid parameters
+    result = GetProcessInformation(NULL, 256, &processInfoCount);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "NULL processInfos returns error");
+    
+    result = GetProcessInformation(processInfos, 0, &processInfoCount);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "Zero maxCount returns error");
 }
 
-// Test getDeviceMetrics
+// Test GetDeviceMetrics
 void test_getDeviceMetrics() {
-    printf("\n=== Testing getDeviceMetrics ===\n");
+    printf("\n=== Testing GetDeviceMetrics ===\n");
     
     const char* deviceUUIDs[] = {"stub-device-0"};
-    DeviceMetrics* metrics = NULL;
+    DeviceMetrics metrics[1];
     
-    Result result = getDeviceMetrics(deviceUUIDs, 1, &metrics);
+    Result result = GetDeviceMetrics(deviceUUIDs, 1, metrics);
     
-    TEST_ASSERT(result == RESULT_SUCCESS, "getDeviceMetrics returns success");
-    TEST_ASSERT(metrics != NULL, "Metrics array is not NULL");
+    TEST_ASSERT(result == RESULT_SUCCESS, "GetDeviceMetrics returns success");
+    TEST_ASSERT(strlen(metrics[0].deviceUUID) > 0, "Device UUID is not empty");
+    TEST_ASSERT(metrics[0].powerUsageWatts >= 0, "Power usage >= 0");
+    TEST_ASSERT(metrics[0].temperatureCelsius >= 0, "Temperature >= 0");
     
-    if (metrics) {
-        TEST_ASSERT(strlen(metrics[0].deviceUUID) > 0, "Device UUID is not empty");
-        TEST_ASSERT(metrics[0].powerUsageWatts >= 0, "Power usage >= 0");
-        TEST_ASSERT(metrics[0].temperatureCelsius >= 0, "Temperature >= 0");
-    }
+    // Test invalid parameters
+    result = GetDeviceMetrics(NULL, 1, metrics);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "NULL deviceUUIDs returns error");
     
-    freeDeviceMetrics(metrics, 1);
+    result = GetDeviceMetrics(deviceUUIDs, 0, metrics);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "Zero deviceCount returns error");
 }
 
-// Test getExtendedDeviceMetrics
-void test_getExtendedDeviceMetrics() {
-    printf("\n=== Testing getExtendedDeviceMetrics ===\n");
+// Test GetVendorMountLibs
+void test_getVendorMountLibs() {
+    printf("\n=== Testing GetVendorMountLibs ===\n");
     
-    const char* deviceUUIDs[] = {"stub-device-0"};
-    ExtendedDeviceMetrics* metrics = NULL;
+    Mount mounts[64];
+    size_t mountCount = 0;
     
-    Result result = getExtendedDeviceMetrics(deviceUUIDs, 1, &metrics);
+    Result result = GetVendorMountLibs(mounts, 64, &mountCount);
     
-    TEST_ASSERT(result == RESULT_SUCCESS, "getExtendedDeviceMetrics returns success");
-    TEST_ASSERT(metrics != NULL, "Metrics array is not NULL");
+    TEST_ASSERT(result == RESULT_SUCCESS, "GetVendorMountLibs returns success");
+    // mountCount can be 0 for example implementation
     
-    if (metrics) {
-        TEST_ASSERT(strlen(metrics[0].deviceUUID) > 0, "Device UUID is not empty");
-        TEST_ASSERT(metrics[0].nvlinkCount > 0, "NVLink count > 0");
-    }
+    // Test invalid parameters
+    result = GetVendorMountLibs(NULL, 64, &mountCount);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "NULL mounts returns error");
     
-    freeExtendedDeviceMetrics(metrics, 1);
+    result = GetVendorMountLibs(mounts, 0, &mountCount);
+    TEST_ASSERT(result == RESULT_ERROR_INVALID_PARAM, "Zero maxCount returns error");
+}
+
+// Test RegisterLogCallback
+void test_registerLogCallback() {
+    printf("\n=== Testing RegisterLogCallback ===\n");
+    
+    // Test with NULL callback (unregister)
+    Result result = RegisterLogCallback(NULL);
+    TEST_ASSERT(result == RESULT_SUCCESS, "RegisterLogCallback with NULL returns success");
 }
 
 // Main test runner
@@ -238,8 +271,9 @@ int main() {
     printf("Accelerator Library Test Suite\n");
     printf("========================================\n");
     
-    test_getDeviceInfo();
-    test_getPartitionTemplates();
+    test_virtualGPUInit();
+    test_getDeviceCount();
+    test_getAllDevices();
     test_getDeviceTopology();
     test_assignPartition();
     test_removePartition();
@@ -247,7 +281,8 @@ int main() {
     test_setComputeUnitHardLimit();
     test_getProcessInformation();
     test_getDeviceMetrics();
-    test_getExtendedDeviceMetrics();
+    test_getVendorMountLibs();
+    test_registerLogCallback();
     
     printf("\n========================================\n");
     printf("Test Summary\n");
@@ -265,4 +300,3 @@ int main() {
         return 1;
     }
 }
-

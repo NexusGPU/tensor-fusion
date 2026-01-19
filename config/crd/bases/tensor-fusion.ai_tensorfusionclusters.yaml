@@ -257,24 +257,25 @@ spec:
                           properties:
                             client:
                               properties:
-                                embeddedModeImage:
+                                image:
+                                  description: Default image for any providers if
+                                    ProviderImage is not set
                                   type: string
                                 operatorEndpoint:
                                   type: string
-                                patchEmbeddedWorkerToPod:
-                                  type: object
-                                  x-kubernetes-preserve-unknown-fields: true
                                 patchToContainer:
-                                  type: object
-                                  x-kubernetes-preserve-unknown-fields: true
-                                patchToEmbeddedWorkerContainer:
                                   type: object
                                   x-kubernetes-preserve-unknown-fields: true
                                 patchToPod:
                                   type: object
                                   x-kubernetes-preserve-unknown-fields: true
-                                remoteModeImage:
-                                  type: string
+                                providerImage:
+                                  additionalProperties:
+                                    type: string
+                                  description: 'The image configured per provider,
+                                    e.g. { "NVIDIA": "tensorfusion/tf-nvidia-client:latest",
+                                    "AMD": "tensorfusion/tf-amd-client:latest" }'
+                                  type: object
                               type: object
                             hypervisor:
                               properties:
@@ -291,24 +292,32 @@ spec:
                                   maximum: 65535
                                   minimum: 0
                                   type: integer
+                                providerImage:
+                                  additionalProperties:
+                                    type: string
+                                  description: 'The image configured per provider,
+                                    e.g. { "NVIDIA": "tensorfusion/tf-nvidia:latest",
+                                    "AMD": "tensorfusion/tf-amd:latest" }'
+                                  type: object
                                 vectorImage:
                                   type: string
-                              type: object
-                            nodeDiscovery:
-                              properties:
-                                image:
-                                  type: string
-                                podTemplate:
-                                  type: object
-                                  x-kubernetes-preserve-unknown-fields: true
                               type: object
                             worker:
                               properties:
                                 image:
+                                  description: Default image for any providers if
+                                    ProviderImage is not set
                                   type: string
                                 podTemplate:
                                   type: object
                                   x-kubernetes-preserve-unknown-fields: true
+                                providerImage:
+                                  additionalProperties:
+                                    type: string
+                                  description: 'The image configured per provider,
+                                    e.g. { "NVIDIA": "tensorfusion/tf-nvidia-worker:latest",
+                                    "AMD": "tensorfusion/tf-amd-worker:latest" }'
+                                  type: object
                               type: object
                           type: object
                         defaultUsingLocalGPU:
@@ -776,9 +785,6 @@ spec:
                               type: array
                           type: object
                         schedulingConfigTemplate:
-                          type: string
-                        vendor:
-                          default: NVIDIA
                           type: string
                       type: object
                   required:
