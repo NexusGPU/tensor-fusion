@@ -270,7 +270,7 @@ func (s *GPUResourcesSuite) SetupTest() {
 	s.indexAllocator.IsLeader = true
 	s.indexAllocator.SetReady()
 
-	pluginFactory := NewWithDeps(s.allocator, s.indexAllocator, s.client)
+	pluginFactory := NewWithDeps(s.allocator, s.indexAllocator, nil, s.client)
 	pluginConfig := &runtime.Unknown{
 		Raw: []byte(`{
 			"maxWorkerPerNode": 3,
@@ -619,7 +619,7 @@ func (s *GPUResourcesSuite) makePod(name string, annotations map[string]string) 
 
 func (s *GPUResourcesSuite) TestNewWithDeps() {
 	log.FromContext(s.ctx).Info("Running TestNewWithDeps")
-	pluginFactory := NewWithDeps(s.allocator, s.indexAllocator, s.client)
+	pluginFactory := NewWithDeps(s.allocator, s.indexAllocator, nil, s.client)
 	s.NotNil(pluginFactory)
 
 	// Test with valid config

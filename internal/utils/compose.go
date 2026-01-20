@@ -206,6 +206,15 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 	if workload.Spec.Isolation == tfv1.IsolationModePartitioned && workload.Spec.PartitionTemplateID != "" {
 		annotations[constants.PartitionTemplateIDAnnotation] = workload.Spec.PartitionTemplateID
 	}
+
+	// Add gang scheduling annotations if configured
+	if workload.Spec.GangScheduling != nil && workload.Spec.GangScheduling.MinMembers > 0 {
+		annotations[constants.GangMinMembersAnnotation] = strconv.Itoa(int(workload.Spec.GangScheduling.MinMembers))
+		if workload.Spec.GangScheduling.Timeout != nil && workload.Spec.GangScheduling.Timeout.Duration > 0 {
+			annotations[constants.GangTimeoutAnnotation] = workload.Spec.GangScheduling.Timeout.Duration.String()
+		}
+	}
+
 	return labels, annotations
 }
 

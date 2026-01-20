@@ -69,7 +69,7 @@ func (pts *PreemptionTestSuite) SetupSuite() {
 
 	gpuResourceFitOpt := app.WithPlugin(
 		gpuResourceFitPlugin.Name,
-		gpuResourceFitPlugin.NewWithDeps(fixture.allocator, fixture.indexAllocator, fixture.client),
+		gpuResourceFitPlugin.NewWithDeps(fixture.allocator, fixture.indexAllocator, nil, fixture.client),
 	)
 	gpuTopoOpt := app.WithPlugin(
 		gpuTopoPlugin.Name,

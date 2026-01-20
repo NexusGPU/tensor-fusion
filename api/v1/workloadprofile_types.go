@@ -94,6 +94,25 @@ type WorkloadProfileSpec struct {
 	// +optional
 	// WorkerPodTemplate is the template for the worker pod, only take effect in remote vGPU mode
 	WorkerPodTemplate *runtime.RawExtension `json:"workerPodTemplate,omitempty"`
+
+	// +optional
+	// GangScheduling configuration for scheduling multiple pods together
+	GangScheduling *GangSchedulingConfig `json:"gangScheduling,omitempty"`
+}
+
+// GangSchedulingConfig defines gang scheduling configuration
+type GangSchedulingConfig struct {
+	// MinMembers specifies the minimum number of pods that must be scheduled together
+	// When > 0, gang scheduling is enabled for this workload
+	// The gang group name is automatically derived from the workload name (namespace/workload-name)
+	// +kubebuilder:validation:Minimum=0
+	MinMembers int32 `json:"minMembers,omitempty"`
+
+	// Timeout specifies how long to wait for all gang members to be schedulable
+	// If not set or set to "0s", wait indefinitely until resources are available
+	// Example values: "5m", "10m", "1h"
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=shared;soft;hard;partitioned

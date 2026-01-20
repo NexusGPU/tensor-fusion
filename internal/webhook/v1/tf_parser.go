@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -172,9 +173,41 @@ func ParseTensorFusionInfo(
 		return info, fmt.Errorf("handle dedicated GPU: %w", err)
 	}
 
+	// Parse gang scheduling config from annotations
+	parseGangSchedulingAnnotations(pod, workloadProfile)
+
 	info.Profile = &workloadProfile.Spec
 	info.ContainerNames = containerNames
 	return info, nil
+}
+
+// parseGangSchedulingAnnotations parses gang scheduling configuration from pod annotations
+func parseGangSchedulingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) {
+	// Check for gang-min-members annotation
+	minMembersStr, hasMinMembers := pod.Annotations[constants.GangMinMembersAnnotation]
+	if !hasMinMembers || minMembersStr == "" {
+		return
+	}
+
+	minMembers, err := strconv.ParseInt(minMembersStr, 10, 32)
+	if err != nil || minMembers <= 0 {
+		return
+	}
+
+	// Initialize gang scheduling config if needed
+	if workloadProfile.Spec.GangScheduling == nil {
+		workloadProfile.Spec.GangScheduling = &tfv1.GangSchedulingConfig{}
+	}
+
+	workloadProfile.Spec.GangScheduling.MinMembers = int32(minMembers)
+
+	// Parse timeout (optional)
+	timeoutStr, hasTimeout := pod.Annotations[constants.GangTimeoutAnnotation]
+	if hasTimeout && timeoutStr != "" && timeoutStr != "0" && timeoutStr != "0s" {
+		if timeout, err := time.ParseDuration(timeoutStr); err == nil {
+			workloadProfile.Spec.GangScheduling.Timeout = &metav1.Duration{Duration: timeout}
+		}
+	}
 }
 
 func parseAutoScalingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) {

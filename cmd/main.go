@@ -33,12 +33,13 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/controller"
+	"github.com/NexusGPU/tensor-fusion/internal/gang"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
-	gpuResourceFitPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	gpuTopoPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gputopo"
 	"github.com/NexusGPU/tensor-fusion/internal/server"
 	"github.com/NexusGPU/tensor-fusion/internal/server/router"
@@ -530,9 +531,12 @@ func startScheduler(
 		os.Exit(1)
 	}
 
+	// Create gang scheduling manager
+	gangManager := gang.NewManager(nil, mgr.GetEventRecorderFor("GangScheduler"), gpuresources.Name)
+
 	gpuResourceFitOpt := app.WithPlugin(
-		gpuResourceFitPlugin.Name,
-		gpuResourceFitPlugin.NewWithDeps(allocator, indexAllocator, mgr.GetClient()),
+		gpuresources.Name,
+		gpuresources.NewWithDeps(allocator, indexAllocator, gangManager, mgr.GetClient()),
 	)
 	gpuTopoOpt := app.WithPlugin(
 		gpuTopoPlugin.Name,

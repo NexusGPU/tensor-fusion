@@ -264,6 +264,25 @@ spec:
                         type: string
                     type: object
                 type: object
+              gangScheduling:
+                description: GangScheduling configuration for scheduling multiple
+                  pods together
+                properties:
+                  minMembers:
+                    description: |-
+                      MinMembers specifies the minimum number of pods that must be scheduled together
+                      When > 0, gang scheduling is enabled for this workload
+                      The gang group name is automatically derived from the workload name (namespace/workload-name)
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  timeout:
+                    description: |-
+                      Timeout specifies how long to wait for all gang members to be schedulable
+                      If not set or set to "0s", wait indefinitely until resources are available
+                      Example values: "5m", "10m", "1h"
+                    type: string
+                type: object
               gpuCount:
                 description: The number of GPUs to be used by the workload, default
                   to 1
