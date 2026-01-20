@@ -144,14 +144,48 @@ func ParseTensorFusionInfo(
 	applyVerticalScalingRules(ctx, k8sClient, pod, pool, workloadProfile)
 
 	injectContainer, ok := pod.Annotations[constants.InjectContainerAnnotation]
-	containerNames := strings.Split(injectContainer, ",")
+	containerNames := []string{}
+	if ok && injectContainer != "" {
+		containerNames = strings.Split(injectContainer, ",")
+		// Trim whitespace from container names
+		for i := range containerNames {
+			containerNames[i] = strings.TrimSpace(containerNames[i])
+		}
+	}
+
+	// Find all containers with NvidiaGPUKey limits to ensure they are all processed
+	containersWithGPULimits := make(map[string]bool)
+	for _, container := range pod.Spec.Containers {
+		if _, ok := container.Resources.Limits[constants.NvidiaGPUKey]; ok {
+			containersWithGPULimits[container.Name] = true
+		}
+	}
+
+	// Merge user-specified containers with containers that have GPU limits
+	// This ensures all containers with GPU limits are processed to remove their limits
+	containerNamesMap := make(map[string]bool)
+	for _, name := range containerNames {
+		containerNamesMap[name] = true
+	}
+	for name := range containersWithGPULimits {
+		containerNamesMap[name] = true
+	}
+
+	// Convert back to slice
+	containerNames = make([]string, 0, len(containerNamesMap))
+	for name := range containerNamesMap {
+		containerNames = append(containerNames, name)
+	}
+
 	if len(pod.Spec.Containers) > 1 {
-		if !ok || len(containerNames) == 0 {
+		if len(containerNames) == 0 {
 			return info, fmt.Errorf("inject container has to be specified when Pod containers > 1")
 		}
 	} else {
-		// assign default container name when annotation not specified
-		containerNames = []string{pod.Spec.Containers[0].Name}
+		// assign default container name when annotation not specified and no GPU limits found
+		if len(containerNames) == 0 {
+			containerNames = []string{pod.Spec.Containers[0].Name}
+		}
 	}
 
 	gpuModel, ok := pod.Annotations[constants.GPUModelAnnotation]
@@ -243,6 +277,7 @@ func mergeAutoScalingConfig(workloadProfile *tfv1.WorkloadProfile, ruleConfig *t
 func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) error {
 	// extract any containers has GPU count limits and set to annotation
 	isMigratedFromContainerLimits := false
+	var containersWithGPULimits []string
 	gpuCount, hasValue := pod.Annotations[constants.GpuCountAnnotation]
 	if hasValue {
 		val, err := strconv.ParseInt(gpuCount, 10, 32)
@@ -257,18 +292,22 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 				if err != nil || gpuNumber <= 0 {
 					ctrl.Log.Error(err, "unrecognized nvidia.com/gpu in resources, not a valid number", "pod", pod.Name, "container", container.Name)
 				} else {
-					workloadProfile.Spec.GPUCount = uint32(gpuNumber)
-					// For seamless migration with only one tensor-fusion.ai/enabled label
-					// and one tensor-fusion.ai/vram-limit annotation, convert this to 100% computing-percent
-					workloadProfile.Spec.Resources.Limits.ComputePercent = resource.MustParse("100")
-					isMigratedFromContainerLimits = true
-					// convert limits containers to annotation for inject container when not specified
-					if pod.Annotations[constants.InjectContainerAnnotation] == "" {
-						pod.Annotations[constants.InjectContainerAnnotation] = container.Name
+					// Collect all containers with GPU limits
+					containersWithGPULimits = append(containersWithGPULimits, container.Name)
+					// Use the first valid GPU count for workload profile
+					if workloadProfile.Spec.GPUCount == 0 {
+						workloadProfile.Spec.GPUCount = uint32(gpuNumber)
+						// For seamless migration with only one tensor-fusion.ai/enabled label
+						// and one tensor-fusion.ai/vram-limit annotation, convert this to 100% computing-percent
+						workloadProfile.Spec.Resources.Limits.ComputePercent = resource.MustParse("100")
+						isMigratedFromContainerLimits = true
 					}
-					break
 				}
 			}
+		}
+		// If InjectContainerAnnotation is not specified, set all containers with GPU limits
+		if pod.Annotations[constants.InjectContainerAnnotation] == "" && len(containersWithGPULimits) > 0 {
+			pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(containersWithGPULimits, ",")
 		}
 	}
 
