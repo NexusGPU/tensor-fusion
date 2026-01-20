@@ -159,7 +159,8 @@ var (
 	// For grey release
 	TensorFusionEnabledReplicasAnnotation = Domain + "/enabled-replicas"
 	TensorFusionDefaultPoolKeyAnnotation  = Domain + "/is-default-pool"
-	// Eviction protection annotation for controlling pod eviction timing
+	// Eviction protection annotation for controlling pod eviction timing,
+	// implemented in scheduler-pdb-1.patch
 	EvictionProtectionAnnotation = Domain + "/eviction-protection"
 
 	// Gang Scheduling annotations
