@@ -32,6 +32,7 @@ var MockGPUPoolSpec = &tfv1.GPUPoolSpec{
 		},
 	},
 	NodeManagerConfig: &tfv1.NodeManagerConfig{
+		DefaultVendor: constants.AcceleratorVendorNvidia,
 		NodeSelector: &corev1.NodeSelector{
 			NodeSelectorTerms: []corev1.NodeSelectorTerm{
 				{

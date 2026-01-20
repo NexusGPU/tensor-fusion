@@ -430,12 +430,11 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	spec.NodeName = node.Name
 	spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
 
-	vendor, err := getMatchedVendor(k8sNode, pool.Spec.NodeManagerConfig.MultiVendorNodeSelector)
+	vendor, err := getMatchedVendor(k8sNode, pool.Spec.NodeManagerConfig)
 	if err != nil {
 		return fmt.Errorf("failed to get matched vendor: %w %s", err, k8sNode.Name)
-	} else {
-		log.Info("adding hypervisor manifest for GPU node", "node", node.Name, "vendor", vendor)
 	}
+	log.Info("adding hypervisor manifest for GPU node", "node", node.Name, "vendor", vendor)
 	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool, vendor, r.CompatibleWithNvidiaContainerToolkit)
 
 	// add vendor-specific env vars for multi-vendor support
@@ -808,18 +807,33 @@ func (r *GPUNodeReconciler) mapDevicePluginPodToGPUNode(ctx context.Context, obj
 	return []ctrl.Request{{NamespacedName: client.ObjectKey{Name: pod.Spec.NodeName}}}
 }
 
-func getMatchedVendor(node *corev1.Node, multiVendorNodeSelector map[string]*corev1.NodeSelector) (string, error) {
-	for vendor, nodeSelector := range multiVendorNodeSelector {
-		if nodeSelector == nil {
-			continue
-		}
-		matches, err := schedulingcorev1.MatchNodeSelectorTerms(node, nodeSelector)
-		if err != nil {
-			return "", err
-		}
-		if matches {
-			return vendor, nil
-		}
+func getMatchedVendor(node *corev1.Node, nodeManagerConfig *tfv1.NodeManagerConfig) (string, error) {
+	if nodeManagerConfig == nil {
+		return constants.AcceleratorVendorNvidia, nil
 	}
-	return "", fmt.Errorf("no vendor matched")
+
+	// Prioritize MultiVendorNodeSelector if it has entries
+	if len(nodeManagerConfig.MultiVendorNodeSelector) > 0 {
+		for vendor, nodeSelector := range nodeManagerConfig.MultiVendorNodeSelector {
+			if nodeSelector == nil {
+				continue
+			}
+			matches, err := schedulingcorev1.MatchNodeSelectorTerms(node, nodeSelector)
+			if err != nil {
+				return "", err
+			}
+			if matches {
+				return vendor, nil
+			}
+		}
+		return "", fmt.Errorf("no vendor matched in MultiVendorNodeSelector")
+	}
+
+	// Fall back to DefaultVendor
+	if nodeManagerConfig.DefaultVendor != "" {
+		return nodeManagerConfig.DefaultVendor, nil
+	}
+
+	// Default to NVIDIA if nothing is configured
+	return constants.AcceleratorVendorNvidia, nil
 }

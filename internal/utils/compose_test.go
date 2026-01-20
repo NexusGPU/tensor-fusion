@@ -23,14 +23,14 @@ func TestAddTFHypervisorConfAfterTemplate(t *testing.T) {
 			name:              "without vector",
 			enableVector:      false,
 			hypervisorImage:   "test-image:latest",
-			expectInitCount:   1,
+			expectInitCount:   2, // init-shm + init-runtime
 			expectVolumeCount: 7,
 		},
 		{
 			name:              "with vector",
 			enableVector:      true,
 			hypervisorImage:   "test-image:latest",
-			expectInitCount:   1,
+			expectInitCount:   2, // init-shm + init-runtime
 			expectVolumeCount: 7,
 		},
 	}
