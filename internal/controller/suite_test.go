@@ -621,18 +621,17 @@ func (b *TensorFusionEnvBuilder) SetProvisioningMode(provisionerConfig *tfv1.Com
 	return b
 }
 
-var testEnvId int = 0
-
 func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 	GinkgoHelper()
 	ProvisioningToggle = true
 	GenerateKarpenterEC2NodeClass()
 
+	// Use short UUID suffix to ensure test isolation and avoid conflicts between parallel tests
+	testEnvID := utils.NewShortID(8)
 	b.clusterKey = client.ObjectKey{
-		Name:      fmt.Sprintf("cluster-%d", testEnvId),
+		Name:      fmt.Sprintf("cluster-%s", testEnvID),
 		Namespace: "default",
 	}
-	testEnvId++
 
 	// generate cluster
 	tfc := &tfv1.TensorFusionCluster{

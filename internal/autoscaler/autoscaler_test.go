@@ -199,20 +199,19 @@ var _ = Describe("Autoscaler", func() {
 		var key WorkloadID
 		var scaler *Autoscaler
 		var targetRes tfv1.Resources
-		var workloadIDCounter = 100 // Start from 100 to avoid conflicts with other tests
+		var workloadID string // Use UUID-based ID for test isolation
 		var testCtx context.Context
 		var testCancel context.CancelFunc
 		BeforeEach(func() {
 			// Create independent context for each test to avoid context leakage
 			testCtx, testCancel = context.WithCancel(ctx)
-			// Clean up any existing workload with the same ID first
-			cleanupWorkload(client.ObjectKey{Namespace: "default", Name: getWorkloadName(workloadIDCounter)})
+			// Generate unique workload ID using short UUID for test isolation
+			workloadID = utils.NewShortID(8)
 			tfEnv = NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(1).
 				Build()
 			go mockSchedulerLoop(testCtx, cfg)
-			workload = createWorkload(tfEnv.GetGPUPool(0), workloadIDCounter, 1)
-			workloadIDCounter++
+			workload = createWorkloadWithID(tfEnv.GetGPUPool(0), workloadID, 1)
 			key = WorkloadID{workload.Namespace, workload.Name}
 			verifyGpuStatus(tfEnv)
 
@@ -505,7 +504,13 @@ var _ = Describe("Autoscaler", func() {
 	})
 })
 
+// createWorkload creates a workload with a numeric ID (for backwards compatibility)
 func createWorkload(pool *tfv1.GPUPool, id int, replicas int) *tfv1.TensorFusionWorkload {
+	return createWorkloadWithID(pool, fmt.Sprintf("%d", id), replicas)
+}
+
+// createWorkloadWithID creates a workload with a string-based ID for better test isolation
+func createWorkloadWithID(pool *tfv1.GPUPool, id string, replicas int) *tfv1.TensorFusionWorkload {
 	GinkgoHelper()
 	tflopsRequests := resource.MustParse("10")
 	vramRequests := resource.MustParse("8Gi")
@@ -513,7 +518,7 @@ func createWorkload(pool *tfv1.GPUPool, id int, replicas int) *tfv1.TensorFusion
 	vramLimits := resource.MustParse("16Gi")
 
 	poolName := pool.Name
-	key := client.ObjectKey{Namespace: "default", Name: getWorkloadName(id)}
+	key := client.ObjectKey{Namespace: "default", Name: fmt.Sprintf("workload-%s", id)}
 	workload := &tfv1.TensorFusionWorkload{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      key.Name,
