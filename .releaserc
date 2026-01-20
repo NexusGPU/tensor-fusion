@@ -1,7 +1,10 @@
 {
   "branches": [
     "main",
-    "v1"
+    {
+      "name": "v1",
+      "range": "1.54.x"
+    }
   ],
   "plugins": [
     "@semantic-release/release-notes-generator",
