@@ -326,12 +326,6 @@ type ComponentConfig struct {
 	// +optional
 	Client *ClientConfig `json:"client,omitempty"`
 }
-type NodeDiscoveryConfig struct {
-	Image string `json:"image,omitempty"`
-
-	// +optional
-	PodTemplate *runtime.RawExtension `json:"podTemplate,omitempty"`
-}
 
 type HypervisorConfig struct {
 	Image string `json:"image,omitempty"`
