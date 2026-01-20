@@ -2,6 +2,7 @@ package utils
 
 import (
 	context "context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -16,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 var injectLibResource v1.ResourceList = v1.ResourceList{
@@ -215,10 +217,7 @@ func AddTFDefaultClientConfBeforePatch(
 	injectContainerIndices []int,
 ) {
 	clientConfig := pool.Spec.ComponentConfig.Client
-	image := clientConfig.RemoteModeImage
-	if tfInfo.Profile.IsLocalGPU && !tfInfo.Profile.SidecarWorker {
-		image = clientConfig.EmbeddedModeImage
-	}
+	image := getProviderImageOrDefault(tfInfo.Profile.GPUVendor, clientConfig.ProviderImage, clientConfig.Image)
 	pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
 		Name:  constants.TFContainerNameClient,
 		Image: image,
@@ -457,7 +456,7 @@ func configureFeatures4InjectLib(isLocalGPU bool, disabledFeatures string) []v1.
 	return envList
 }
 
-func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool, compatibleWithNvidiaContainerToolkit bool) {
+func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool, vendor string, compatibleWithNvidiaContainerToolkit bool) {
 	// Hypervisor needs to read /proc to map pod with processID
 	spec.HostPID = true
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
@@ -542,7 +541,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 		},
 	})
 
-	composeHypervisorInitContainer(spec, pool, compatibleWithNvidiaContainerToolkit)
+	composeHypervisorInitContainer(ctx, spec, pool, vendor, compatibleWithNvidiaContainerToolkit)
 	composeHypervisorContainer(spec, pool, enableVector)
 
 	if enableVector {
@@ -550,11 +549,35 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	}
 }
 
-func composeHypervisorInitContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, compatibleWithNvidiaContainerToolkit bool) {
+func composeHypervisorInitContainer(
+	ctx context.Context, spec *v1.PodSpec, pool *tfv1.GPUPool,
+	vendor string, compatibleWithNvidiaContainerToolkit bool,
+) {
+	hypervisorConfig := pool.Spec.ComponentConfig.Hypervisor
+	if hypervisorConfig == nil {
+		log.FromContext(ctx).Error(errors.New("hypervisor config is nil"),
+			"hypervisor config is nil, can not add init container", "pool", pool.Name)
+		return
+	}
 	spec.InitContainers = append(spec.InitContainers, v1.Container{
 		Name:    "init-shm",
-		Image:   pool.Spec.ComponentConfig.Hypervisor.Image,
+		Image:   hypervisorConfig.Image,
 		Command: []string{constants.ComponentHypervisor, constants.MountShmSubcommand},
+		SecurityContext: &v1.SecurityContext{
+			Privileged: ptr.To(true),
+		},
+		VolumeMounts: []v1.VolumeMount{
+			{
+				Name:             constants.DataVolumeName,
+				ReadOnly:         false,
+				MountPath:        constants.TFDataPath,
+				MountPropagation: ptr.To(v1.MountPropagationBidirectional),
+			},
+		},
+	}, v1.Container{
+		Name:    "init-runtime",
+		Image:   getProviderImageOrDefault(vendor, hypervisorConfig.ProviderImage, hypervisorConfig.Image),
+		Command: []string{"cp", "-r", "/build/**", constants.TFDataPath},
 		SecurityContext: &v1.SecurityContext{
 			Privileged: ptr.To(true),
 		},
@@ -780,108 +803,6 @@ func composeVectorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 	}
 }
 
-func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTemplateSpec, pool *tfv1.GPUPool, gpuNodeName string, compatibleWithNvidiaContainerToolkit bool) {
-	tmpl.Spec.RestartPolicy = v1.RestartPolicyOnFailure
-	serviceAccountName := GetSelfServiceAccountNameShort()
-	if serviceAccountName == "" {
-		serviceAccountName = constants.NamespaceDefaultVal
-	}
-	tmpl.Spec.ServiceAccountName = serviceAccountName
-	tmpl.Spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
-
-	if len(tmpl.Spec.Containers) == 0 {
-		tmpl.Spec.Containers = []v1.Container{
-			{
-				Name: constants.TFContainerNameNodeDiscovery,
-			},
-		}
-	}
-
-	if pool.Spec.ComponentConfig.NodeDiscovery.Image != "" {
-		tmpl.Spec.Containers[0].Image = pool.Spec.ComponentConfig.NodeDiscovery.Image
-	}
-
-	// Add initContainer to wait for NVIDIA Container Toolkit toolkit-ready validation
-	if compatibleWithNvidiaContainerToolkit {
-		initContainerImage := pool.Spec.ComponentConfig.NodeDiscovery.Image
-		if initContainerImage == "" {
-			// Use the same image as the main container if not specified
-			initContainerImage = tmpl.Spec.Containers[0].Image
-		}
-
-		initContainer := v1.Container{
-			Name:    constants.TFInitContainerNameToolkitValidation,
-			Image:   initContainerImage,
-			Command: []string{"sh", "-c"},
-			Args: []string{
-				"until [ -f /run/nvidia/validations/toolkit-ready ]; do echo waiting for nvidia container stack to be setup; sleep 5; done",
-			},
-			SecurityContext: &v1.SecurityContext{
-				Privileged: ptr.To(true),
-			},
-			VolumeMounts: []v1.VolumeMount{
-				{
-					Name:             "run-nvidia-validations",
-					MountPath:        "/run/nvidia/validations",
-					MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
-				},
-			},
-		}
-
-		tmpl.Spec.InitContainers = append(tmpl.Spec.InitContainers, initContainer)
-
-		// Add volume for NVIDIA validations
-		tmpl.Spec.Volumes = append(tmpl.Spec.Volumes, v1.Volume{
-			Name: "run-nvidia-validations",
-			VolumeSource: v1.VolumeSource{
-				HostPath: &v1.HostPathVolumeSource{
-					Path: "/run/nvidia/validations",
-					Type: ptr.To(v1.HostPathDirectoryOrCreate),
-				},
-			},
-		})
-	}
-
-	tmpl.Spec.Containers[0].Env = append(tmpl.Spec.Containers[0].Env, v1.EnvVar{
-		Name:  constants.NodeDiscoveryReportGPUNodeEnvName,
-		Value: gpuNodeName,
-	}, v1.EnvVar{
-		Name: constants.NodeDiscoveryHostNameEnv,
-		ValueFrom: &v1.EnvVarSource{
-			FieldRef: &v1.ObjectFieldSelector{
-				FieldPath: constants.NodeNameFieldRef,
-			},
-		},
-	}, v1.EnvVar{
-		Name:  constants.NvidiaVisibleAllDeviceEnv,
-		Value: constants.NvidiaVisibleAllDeviceValue,
-	})
-
-	tmpl.Spec.Containers[0].VolumeMounts = append(tmpl.Spec.Containers[0].VolumeMounts, v1.VolumeMount{
-		Name:      constants.TensorFusionGPUInfoConfigVolumeName,
-		MountPath: constants.TensorFusionGPUInfoConfigMountPath,
-		SubPath:   constants.TensorFusionGPUInfoConfigSubPath,
-	})
-
-	tmpl.Spec.Volumes = append(tmpl.Spec.Volumes, v1.Volume{
-		Name: constants.TensorFusionGPUInfoConfigVolumeName,
-		VolumeSource: v1.VolumeSource{
-			ConfigMap: &v1.ConfigMapVolumeSource{
-				LocalObjectReference: v1.LocalObjectReference{
-					Name: constants.TensorFusionGPUInfoConfigName,
-				},
-			},
-		},
-	})
-
-	if len(tmpl.Spec.Containers[0].Resources.Limits) == 0 {
-		tmpl.Spec.Containers[0].Resources.Limits = nodeDiscoveryDefaultLimits
-	}
-	if len(tmpl.Spec.Containers[0].Resources.Requests) == 0 {
-		tmpl.Spec.Containers[0].Resources.Requests = nodeDiscoveryDefaultRequests
-	}
-}
-
 // SetWorkerContainerSpec configures the worker container with required settings
 func SetWorkerContainerSpec(
 	container *v1.Container,
@@ -894,9 +815,7 @@ func SetWorkerContainerSpec(
 	// NOTE: need to set environment variable to make all GPUs visible to the worker,
 	// vgpu.rs limiter will limit to specific devices after Pod started
 	container.Name = constants.TFContainerNameWorker
-	if workerConfig.Image != "" {
-		container.Image = workerConfig.Image
-	}
+	container.Image = getProviderImageOrDefault(workloadProfile.GPUVendor, workerConfig.ProviderImage, workerConfig.Image)
 	container.VolumeMounts = append(
 		container.VolumeMounts,
 		v1.VolumeMount{
@@ -1025,4 +944,11 @@ func AddWorkerConfAfterTemplate(
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
 
 	return spec.Containers[0].Name
+}
+
+func getProviderImageOrDefault(vendor string, providerImageMap map[string]string, defaultImage string) string {
+	if providerImageMap != nil && providerImageMap[vendor] != "" {
+		return providerImageMap[vendor]
+	}
+	return defaultImage
 }

@@ -94,6 +94,7 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 }
 
 // DeallocateWorker deallocates devices for a worker
+// For partitioned devices, this also calls RemovePartitionedDevice to release the partition
 func (a *AllocationController) DeallocateWorker(workerUID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -106,6 +107,19 @@ func (a *AllocationController) DeallocateWorker(workerUID string) error {
 	for _, deviceUUID := range allocation.WorkerInfo.AllocatedDevices {
 		a.removeDeviceAllocation(deviceUUID, allocation)
 	}
+
+	// For partitioned devices, release the partition via device controller
+	for _, deviceInfo := range allocation.DeviceInfos {
+		if deviceInfo.ParentUUID != "" {
+			// This is a partitioned device, release the partition
+			if err := a.deviceController.RemovePartitionedDevice(deviceInfo.UUID, deviceInfo.ParentUUID); err != nil {
+				klog.Errorf("failed to remove partition %s from device %s for worker %s: %v",
+					deviceInfo.UUID, deviceInfo.ParentUUID, workerUID, err)
+				// Continue deallocating other resources even if partition removal fails
+			}
+		}
+	}
+
 	klog.Infof("worker %s deallocated", workerUID)
 	return nil
 }

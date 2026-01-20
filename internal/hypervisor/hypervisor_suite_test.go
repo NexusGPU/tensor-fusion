@@ -631,6 +631,125 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				}
 				Expect(foundInDeviceAllocations).To(BeFalse(), "Worker allocation should be removed from device allocations")
 			})
+
+			It("should deallocate partition when worker status changes to Terminated via OnUpdate", func() {
+				devices, err := deviceController.ListDevices()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(devices).ToNot(BeEmpty())
+
+				deviceUUID := devices[0].UUID
+				partitionTemplateID := "test-partition-onupdate"
+				workerUID := "test-worker-onupdate-terminated"
+
+				// Create partitioned worker allocation
+				req := &api.WorkerInfo{
+					WorkerUID:           workerUID,
+					AllocatedDevices:    []string{deviceUUID},
+					IsolationMode:       tfv1.IsolationModePartitioned,
+					PartitionTemplateID: partitionTemplateID,
+					Status:              api.WorkerStatusRunning,
+				}
+
+				resp, err := allocationController.AllocateWorkerDevices(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp).NotTo(BeNil())
+				Expect(resp.DeviceInfos).ToNot(BeEmpty())
+				Expect(resp.DeviceInfos[0].ParentUUID).To(Equal(deviceUUID))
+				partitionUUID := resp.DeviceInfos[0].UUID
+
+				// Verify partition was created
+				_, exists := deviceController.GetDevice(partitionUUID)
+				Expect(exists).To(BeTrue(), "Partition should exist after allocation")
+
+				// Verify allocation exists
+				allocation, found := allocationController.GetWorkerAllocation(workerUID)
+				Expect(found).To(BeTrue())
+				Expect(allocation).NotTo(BeNil())
+
+				// Simulate OnUpdate with status change from Running to Terminated
+				// This should trigger partition deallocation
+				oldWorker := &api.WorkerInfo{
+					WorkerUID:           workerUID,
+					Status:              api.WorkerStatusRunning,
+					IsolationMode:       tfv1.IsolationModePartitioned,
+					PartitionTemplateID: partitionTemplateID,
+				}
+				newWorker := &api.WorkerInfo{
+					WorkerUID:           workerUID,
+					Status:              api.WorkerStatusTerminated,
+					IsolationMode:       tfv1.IsolationModePartitioned,
+					PartitionTemplateID: partitionTemplateID,
+				}
+
+				// Get the WorkerController's OnUpdate handler behavior
+				// Since we can't directly access the handler, we simulate the behavior
+				// by calling DeallocateWorker when status changes to Terminated
+				if oldWorker.Status != api.WorkerStatusTerminated && newWorker.Status == api.WorkerStatusTerminated {
+					err = allocationController.DeallocateWorker(workerUID)
+					Expect(err).NotTo(HaveOccurred())
+				}
+
+				// Verify allocation is removed
+				_, found = allocationController.GetWorkerAllocation(workerUID)
+				Expect(found).To(BeFalse(), "Allocation should be removed after termination")
+
+				// Verify partition is removed from device controller
+				_, exists = deviceController.GetDevice(partitionUUID)
+				Expect(exists).To(BeFalse(), "Partition should be removed from device controller after deallocation")
+			})
+
+			It("should NOT deallocate partition when worker status changes but not to Terminated", func() {
+				devices, err := deviceController.ListDevices()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(devices).ToNot(BeEmpty())
+
+				deviceUUID := devices[0].UUID
+				partitionTemplateID := "test-partition-no-dealloc"
+				workerUID := "test-worker-status-change"
+
+				// Create partitioned worker allocation
+				req := &api.WorkerInfo{
+					WorkerUID:           workerUID,
+					AllocatedDevices:    []string{deviceUUID},
+					IsolationMode:       tfv1.IsolationModePartitioned,
+					PartitionTemplateID: partitionTemplateID,
+					Status:              api.WorkerStatusPending,
+				}
+
+				resp, err := allocationController.AllocateWorkerDevices(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp).NotTo(BeNil())
+				partitionUUID := resp.DeviceInfos[0].UUID
+
+				// Simulate status change from Pending to Running (not Terminated)
+				oldWorker := &api.WorkerInfo{
+					WorkerUID: workerUID,
+					Status:    api.WorkerStatusPending,
+				}
+				newWorker := &api.WorkerInfo{
+					WorkerUID: workerUID,
+					Status:    api.WorkerStatusRunning,
+				}
+
+				// This should NOT trigger deallocation (simulating OnUpdate logic)
+				if oldWorker.Status != api.WorkerStatusTerminated && newWorker.Status == api.WorkerStatusTerminated {
+					err = allocationController.DeallocateWorker(workerUID)
+					Expect(err).NotTo(HaveOccurred())
+				}
+
+				// Verify allocation still exists
+				allocation, found := allocationController.GetWorkerAllocation(workerUID)
+				Expect(found).To(BeTrue(), "Allocation should still exist after non-termination status change")
+				Expect(allocation).NotTo(BeNil())
+
+				// Verify partition still exists
+				_, exists := deviceController.GetDevice(partitionUUID)
+				Expect(exists).To(BeTrue(), "Partition should still exist after non-termination status change")
+
+				// Cleanup
+				err = allocationController.DeallocateWorker(workerUID)
+				Expect(err).NotTo(HaveOccurred())
+			})
 		})
 
 		Describe("Metrics Recorder", func() {

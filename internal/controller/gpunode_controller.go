@@ -37,6 +37,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	schedulingcorev1 "k8s.io/component-helpers/scheduling/corev1"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -429,9 +430,12 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	spec.NodeName = node.Name
 	spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
 
-	// add must-have tensor-fusion hypervisor manifest
-	log.Info("adding must-have tensor-fusion hypervisor manifest", "node", node.Name)
-	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool, r.CompatibleWithNvidiaContainerToolkit)
+	vendor, err := getMatchedVendor(k8sNode, pool.Spec.NodeManagerConfig)
+	if err != nil {
+		return fmt.Errorf("failed to get matched vendor: %w %s", err, k8sNode.Name)
+	}
+	log.Info("adding hypervisor manifest for GPU node", "node", node.Name, "vendor", vendor)
+	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool, vendor, r.CompatibleWithNvidiaContainerToolkit)
 
 	// add vendor-specific env vars for multi-vendor support
 	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
@@ -801,4 +805,35 @@ func (r *GPUNodeReconciler) mapDevicePluginPodToGPUNode(ctx context.Context, obj
 		"nodeName", pod.Spec.NodeName)
 
 	return []ctrl.Request{{NamespacedName: client.ObjectKey{Name: pod.Spec.NodeName}}}
+}
+
+func getMatchedVendor(node *corev1.Node, nodeManagerConfig *tfv1.NodeManagerConfig) (string, error) {
+	if nodeManagerConfig == nil {
+		return constants.AcceleratorVendorNvidia, nil
+	}
+
+	// Prioritize MultiVendorNodeSelector if it has entries
+	if len(nodeManagerConfig.MultiVendorNodeSelector) > 0 {
+		for vendor, nodeSelector := range nodeManagerConfig.MultiVendorNodeSelector {
+			if nodeSelector == nil {
+				continue
+			}
+			matches, err := schedulingcorev1.MatchNodeSelectorTerms(node, nodeSelector)
+			if err != nil {
+				return "", err
+			}
+			if matches {
+				return vendor, nil
+			}
+		}
+		return "", fmt.Errorf("no vendor matched in MultiVendorNodeSelector")
+	}
+
+	// Fall back to DefaultVendor
+	if nodeManagerConfig.DefaultVendor != "" {
+		return nodeManagerConfig.DefaultVendor, nil
+	}
+
+	// Default to NVIDIA if nothing is configured
+	return constants.AcceleratorVendorNvidia, nil
 }
