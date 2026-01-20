@@ -398,7 +398,7 @@ func createPlugin(
 	b *testing.B, ctx context.Context, fwk framework.Framework,
 	allocator *gpuallocator.GpuAllocator, indexAllocator *indexallocator.IndexAllocator, client client.Client,
 ) *gpuResourceFitPlugin.GPUFit {
-	pluginFactory := gpuResourceFitPlugin.NewWithDeps(allocator, indexAllocator, client)
+	pluginFactory := gpuResourceFitPlugin.NewWithDeps(allocator, indexAllocator, nil, client)
 	pluginConfig := &runtime.Unknown{
 		Raw: []byte(`{"maxWorkerPerNode": 256, "vramWeight": 0.7, "tflopsWeight": 0.3}`),
 	}

@@ -24,14 +24,6 @@ var injectLibResource v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("20m"),
 	v1.ResourceMemory: resource.MustParse("64Mi"),
 }
-var nodeDiscoveryDefaultRequests v1.ResourceList = v1.ResourceList{
-	v1.ResourceCPU:    resource.MustParse("20m"),
-	v1.ResourceMemory: resource.MustParse("64Mi"),
-}
-var nodeDiscoveryDefaultLimits v1.ResourceList = v1.ResourceList{
-	v1.ResourceCPU:    resource.MustParse("500m"),
-	v1.ResourceMemory: resource.MustParse("128Mi"),
-}
 
 var hypervisorDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("50m"),
@@ -206,6 +198,15 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 	if workload.Spec.Isolation == tfv1.IsolationModePartitioned && workload.Spec.PartitionTemplateID != "" {
 		annotations[constants.PartitionTemplateIDAnnotation] = workload.Spec.PartitionTemplateID
 	}
+
+	// Add gang scheduling annotations if configured
+	if workload.Spec.GangScheduling != nil && workload.Spec.GangScheduling.MinMembers > 0 {
+		annotations[constants.GangMinMembersAnnotation] = strconv.Itoa(int(workload.Spec.GangScheduling.MinMembers))
+		if workload.Spec.GangScheduling.Timeout != nil && workload.Spec.GangScheduling.Timeout.Duration > 0 {
+			annotations[constants.GangTimeoutAnnotation] = workload.Spec.GangScheduling.Timeout.Duration.String()
+		}
+	}
+
 	return labels, annotations
 }
 

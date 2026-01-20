@@ -13,6 +13,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/gang"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
@@ -41,6 +42,7 @@ const SchedulerSimulationKey = "schedulerSimulation"
 var _ framework.PreFilterPlugin = &GPUFit{}
 var _ framework.FilterPlugin = &GPUFit{}
 var _ framework.ScorePlugin = &GPUFit{}
+var _ framework.PermitPlugin = &GPUFit{}
 var _ framework.ReservePlugin = &GPUFit{}
 var _ framework.PostBindPlugin = &GPUFit{}
 var _ framework.EnqueueExtensions = &GPUFit{}
@@ -51,6 +53,7 @@ type GPUFit struct {
 	client         client.Client
 	allocator      *gpuallocator.GpuAllocator
 	indexAllocator *indexallocator.IndexAllocator
+	gangManager    *gang.Manager
 	ctx            context.Context
 	cfg            *config.GPUFitConfig
 }
@@ -77,6 +80,9 @@ type GPUSchedulingStateData struct {
 
 	// ScoringStrategy
 	ScoringStrategy gpuallocator.Strategy
+
+	// Gang scheduling info for Permit stage
+	GangWaitingInfo *gang.WaitingPodInfo
 }
 
 func (p *GPUSchedulingStateData) Clone() fwk.StateData {
@@ -85,7 +91,7 @@ func (p *GPUSchedulingStateData) Clone() fwk.StateData {
 
 type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
 
-func NewWithDeps(allocator *gpuallocator.GpuAllocator, indexAllocator *indexallocator.IndexAllocator, client client.Client) PluginFactoryFunc {
+func NewWithDeps(allocator *gpuallocator.GpuAllocator, indexAllocator *indexallocator.IndexAllocator, gangManager *gang.Manager, client client.Client) PluginFactoryFunc {
 	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 		target := &config.GPUFitConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
@@ -101,10 +107,16 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator, indexAllocator *indexallo
 			cfg:            target,
 			allocator:      allocator,
 			indexAllocator: indexAllocator,
+			gangManager:    gangManager,
 			ctx:            ctx,
 			client:         client,
 		}
 		lh.Info("Created new GPUFit plugin", "plugin", c)
+
+		// Set framework handle on gang manager so it can call Allow/Reject on waiting pods
+		if gangManager != nil {
+			gangManager.SetFrameworkHandle(handle)
+		}
 
 		allocator.SetMaxWorkerPerNode(target.MaxWorkerPerNode)
 		return c, nil
@@ -130,6 +142,14 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 	// Skip non tensor-fusion mode
 	if !utils.IsTensorFusionWorker(pod) {
 		return nil, fwk.NewStatus(fwk.Skip, "skip for non tensor-fusion mode")
+	}
+
+	// Check gang scheduling pre-filter
+	if s.gangManager != nil {
+		if err := s.gangManager.PreFilter(ctx, pod); err != nil {
+			s.logger.Info("Gang scheduling PreFilter failed", "pod", pod.Name, "error", err)
+			return nil, fwk.NewStatus(fwk.Unschedulable, "gang scheduling pre-filter: "+err.Error())
+		}
 	}
 
 	// Handle tensor-fusion mode scheduling
@@ -465,6 +485,69 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	return fwk.NewStatus(fwk.Success, "")
 }
 
+// Permit implements the gang scheduling logic
+func (s *GPUFit) Permit(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) (*fwk.Status, time.Duration) {
+	if !utils.IsTensorFusionWorker(pod) {
+		return fwk.NewStatus(fwk.Success, "skip for non tensor-fusion mode"), 0
+	}
+
+	// Check if gang scheduling is enabled for this pod
+	if s.gangManager == nil {
+		return fwk.NewStatus(fwk.Success, "gang manager not initialized"), 0
+	}
+
+	gangConfig := s.gangManager.ParseGangConfig(pod)
+	if !gangConfig.Enabled {
+		return fwk.NewStatus(fwk.Success, "gang scheduling not enabled"), 0
+	}
+
+	s.logger.Info("Permit stage: checking gang scheduling", "pod", pod.Name, "node", nodeName, "group", gangConfig.GroupKey)
+
+	// Get alloc request for gang info
+	allocRequestRaw, err := state.Read(CycleStateAllocateRequest)
+	if err != nil {
+		return fwk.NewStatus(fwk.Error, "failed to read alloc request: "+err.Error()), 0
+	}
+	allocReq := allocRequestRaw.(*tfv1.AllocRequest)
+
+	// Get scheduling result for GPU info
+	schedulingResultRaw, err := state.Read(CycleStateGPUSchedulingResult)
+	if err != nil {
+		return fwk.NewStatus(fwk.Error, "failed to read scheduling result: "+err.Error()), 0
+	}
+	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
+
+	// Call gang manager Permit
+	status, waitTime, waitingInfo := s.gangManager.Permit(ctx, pod, nodeName, allocReq)
+
+	// Store waiting info in state for later use (e.g., Unreserve)
+	schedulingResult.GangWaitingInfo = waitingInfo
+	state.Write(CycleStateGPUSchedulingResult, schedulingResult)
+
+	switch status {
+	case gang.PermitAllow:
+		s.logger.Info("Gang scheduling: all members ready, proceeding", "pod", pod.Name, "group", gangConfig.GroupKey)
+		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, gang.EventReasonGangScheduled,
+			"Gang scheduling complete", "All gang members ready for group %s", gangConfig.GroupKey)
+		return fwk.NewStatus(fwk.Success, "gang scheduling complete"), 0
+
+	case gang.PermitWait:
+		s.logger.Info("Gang scheduling: waiting for members", "pod", pod.Name, "group", gangConfig.GroupKey, "waitTime", waitTime)
+		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, gang.EventReasonGangWaiting,
+			"Waiting for gang members", "Waiting for other members in group %s", gangConfig.GroupKey)
+		return fwk.NewStatus(fwk.Wait, "waiting for gang members"), waitTime
+
+	case gang.PermitReject:
+		s.logger.Info("Gang scheduling: rejected (timeout or insufficient members)", "pod", pod.Name, "group", gangConfig.GroupKey)
+		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, gang.EventReasonGangTimeout,
+			"Gang scheduling timeout", "Gang scheduling timeout for group %s", gangConfig.GroupKey)
+		return fwk.NewStatus(fwk.Unschedulable, "gang scheduling timeout"), 0
+
+	default:
+		return fwk.NewStatus(fwk.Error, "unknown permit status"), 0
+	}
+}
+
 func (s *GPUFit) Unreserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) {
 	if !utils.IsTensorFusionWorker(pod) {
 		return
@@ -477,6 +560,11 @@ func (s *GPUFit) Unreserve(ctx context.Context, state fwk.CycleState, pod *v1.Po
 		return
 	}
 	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
+
+	// Notify gang manager about unreserve
+	if s.gangManager != nil {
+		s.gangManager.Unreserve(ctx, pod)
+	}
 
 	s.allocator.Dealloc(tfv1.NameNamespace{
 		Name:      pod.Labels[constants.WorkloadKey],

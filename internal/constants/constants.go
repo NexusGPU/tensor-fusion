@@ -162,6 +162,14 @@ var (
 	// Eviction protection annotation for controlling pod eviction timing
 	EvictionProtectionAnnotation = Domain + "/eviction-protection"
 
+	// Gang Scheduling annotations
+	// GangMinMembersAnnotation specifies minimum number of pods that must be scheduled together
+	// When > 0, gang scheduling is enabled for this workload
+	GangMinMembersAnnotation = Domain + "/gang-min-members"
+	// GangTimeoutAnnotation specifies the timeout for waiting all gang members
+	// If not set or set to "0", wait indefinitely until resources are available
+	GangTimeoutAnnotation = Domain + "/gang-timeout"
+
 	NamespaceDefaultVal = "tensor-fusion-sys"
 
 	KubernetesHostNameLabel = "kubernetes.io/hostname"
