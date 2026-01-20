@@ -7,9 +7,9 @@ TensorFusion is building large scale heterogeneous GPU pooling and scheduling AI
 
 Underlying tech: in this repo: Kubebulder, Scheduler, CDI. not in this repo: user-space time-divided sharing based fractional GPU, API forwarding based GPU-over-IP.
 
-Critical Modules: 
+# Critical Modules
 - pod mutating webhook for augment user pods, add needed inputs and outputs
-- advanced scheduler with allocator/GPU-resource vertical scaler/bin-packing/rebalancer/quotas
+- advanced scheduler with allocator/GPU-resource vertical scaler/bin-packing/rebalancer/quotas, based on schedulerFramework
 - custom resource operator, GPU cluster -> pool -> gpunode -> gpu, gpunodeclaim -> node -> gpunode, maintain resources and TensorFusion components status, eval alerts etc.
 - hypervisor, works like kubelet, reconcile TensorFusion workers on each gpu node, discover and bin devices, multi-process priority and autoFreeze handlers, produce metrics etc.
 - server, for offering API to assign remote vGPU worker, expose system debug endpoints
@@ -18,19 +18,20 @@ Critical Modules:
 
 # Requirements
 
-You are professional cloudnative and AI infra engineer. High quality, robust codes with Golang and k8s best practices.
-Confirm the plan, then write code.
-Always be user-centric, think the whole user workflow and scenario and how a AI inference/training app running on this system for every task, no hidden logic, concise and strong type definition
-Define fields are in @api/v1 package, always think best data structure when CRD changes are needed.
-Don't abstract too much nor abstract nothing, extract interface based on business understanding, don't extract interface when not needed.
-extract function when its larger than 50-80 lines, otherwise prefer simple single function for one responsibility of codes.
-use modern latest golang features, eg any rather than interface{}, generic typing if needed etc.
-Never reinvent wheels, think how kubernetes source codes and kubernetes SIGs do, leverage utils and constants packages and introduced dependencies.
-Always prioritize security, scalability, and maintainability.
-Think reconcile loop, memory consistency pattern, kubebuilder framework.
-Think k8s tricky issues like resource conflicts, finalizers, deepCopy rather than one field by one assignment, use equality.semantic.DeepEqual rather than hard code comparing.
-Never write large task at once, break to smaller ones.
-Only write necessary comments, e.g for some complex algorithm and background info, never write stupid comment.
-Always remember to add events by kubernetes event recorder and logs for KEY code paths, which are important for user observability and troubleshooting, but events should not be too many.
-Always test-driven, write ginkgo based test cases, continue to run go/ginkgo test commands, review codes and refactor until test works, if test not work or perform, continue.
-When the task introduce some new memory state, consider expose it to server module for troubleshooting
+- You are professional cloudnative and AI infra engineer. High quality, robust codes with Golang and k8s best practices.
+- For complex tasks, ask user to confirm the plan, then write code.
+- Always be user-centric, think the whole user workflow and scenario and how a AI inference/training app running on this system for every task, no hidden logic, concise and strong type definition
+- Define fields are in @api/v1 package, always think best data structure when CRD changes are needed.
+- Don't abstract too much nor abstract nothing, extract interface based on business understanding.
+- extract function when its larger than 50-80 lines, otherwise prefer simple single function for one responsibility of codes.
+- use modern latest golang features, eg any rather than interface{}, generic typing if needed etc.
+- Never reinvent wheels, think how kubernetes source codes and kubernetes SIGs do, leverage utils and constants packages and introduced dependencies.
+- Always prioritize security, scalability, and maintainability.
+- Think reconcile loop, memory consistency pattern, kubebuilder framework.
+- Think k8s tricky issues like resource conflicts, finalizers, deepCopy rather than one field by one assignment, use equality.semantic.DeepEqual rather than hard code comparing.
+- Never write large task at once, break to smaller ones
+- For every task completed, run `golangci-lint run --fix` to check and fix lint issues, and run `make test` for parallel regression testing, if failed without useful debug info, try ginkgo Focused file mode or `make test-serial` to narrow down the issue
+- Only write necessary comments, e.g for some complex algorithm and background info, never write stupid comment.
+- Always remember to add events by kubernetes event recorder and logs for KEY code paths, which are important for user observability and troubleshooting, but events should not be too many.
+- Always test-driven, USE Ginkgo to write test cases, don't write native golang unit test, review codes and refactor until test works
+- When the task introduce some new memory state, consider expose it to server module for troubleshooting
