@@ -32,9 +32,9 @@ func createTestPod(name, namespace string, uid types.UID, labels map[string]stri
 	return pod
 }
 
-// createTensorFusionWorkerPod creates a TensorFusion worker pod
-func createTensorFusionWorkerPod(name, namespace string, uid types.UID) *corev1.Pod {
-	return createTestPod(name, namespace, uid, map[string]string{
+// createTensorFusionWorkerPod creates a TensorFusion worker pod in default namespace
+func createTensorFusionWorkerPod(name string, uid types.UID) *corev1.Pod {
+	return createTestPod(name, "default", uid, map[string]string{
 		constants.LabelComponent: constants.ComponentWorker,
 	}, "")
 }
@@ -116,7 +116,7 @@ var _ = Describe("UnscheduledPodHandler", func() {
 
 		It("should deduplicate pods with same UID", func() {
 			handler := createTestHandler(ctx)
-			pod := createTensorFusionWorkerPod("worker-pod", "default", "uid-3")
+			pod := createTensorFusionWorkerPod("worker-pod", "uid-3")
 			podInfo := &framework.QueuedPodInfo{
 				PodInfo: &framework.PodInfo{Pod: pod},
 			}
@@ -148,7 +148,7 @@ var _ = Describe("UnscheduledPodHandler", func() {
 
 		It("should add pod to queue and pending map", func() {
 			handler := createTestHandler(ctx)
-			pod := createTensorFusionWorkerPod("worker-pod", "default", "uid-4")
+			pod := createTensorFusionWorkerPod("worker-pod", "uid-4")
 			podInfo := &framework.QueuedPodInfo{
 				PodInfo: &framework.PodInfo{Pod: pod},
 			}
@@ -179,13 +179,13 @@ var _ = Describe("UnscheduledPodHandler", func() {
 			}
 
 			// Fill the queue
-			firstPod := createTensorFusionWorkerPod("worker-1", "default", "uid-fill")
+			firstPod := createTensorFusionWorkerPod("worker-1", "uid-fill")
 			handler.HandleRejectedPod(ctx, &framework.QueuedPodInfo{
 				PodInfo: &framework.PodInfo{Pod: firstPod},
 			}, nil)
 
 			// Try to add another pod when queue is full
-			secondPod := createTensorFusionWorkerPod("worker-2", "default", "uid-drop")
+			secondPod := createTensorFusionWorkerPod("worker-2", "uid-drop")
 			handler.HandleRejectedPod(ctx, &framework.QueuedPodInfo{
 				PodInfo: &framework.PodInfo{Pod: secondPod},
 			}, nil)
@@ -206,7 +206,7 @@ var _ = Describe("UnscheduledPodHandler", func() {
 				ctx:     cancelCtx,
 			}
 
-			pod := createTensorFusionWorkerPod("worker-pod", "default", "uid-ctx")
+			pod := createTensorFusionWorkerPod("worker-pod", "uid-ctx")
 
 			var wg sync.WaitGroup
 			wg.Add(1)
@@ -232,7 +232,7 @@ var _ = Describe("UnscheduledPodHandler", func() {
 		It("should remove pod from pending map", func() {
 			handler := createTestHandler(ctx)
 
-			pod := createTensorFusionWorkerPod("worker-pod", "default", "uid-remove")
+			pod := createTensorFusionWorkerPod("worker-pod", "uid-remove")
 			handler.mu.Lock()
 			handler.pending[string(pod.UID)] = pod
 			handler.mu.Unlock()
@@ -255,40 +255,40 @@ var _ = Describe("UnscheduledPodHandler", func() {
 		It("should calculate negative remaining buffer for old queue time", func() {
 			now := time.Now()
 			qp := &queuedPod{
-				pod:       createTensorFusionWorkerPod("worker-pod", "default", "uid-buffer"),
+				pod:       createTensorFusionWorkerPod("worker-pod", "uid-buffer"),
 				queueTime: now.Add(-constants.UnschedQueueBufferDuration - time.Second),
 			}
 
 			elapsed := time.Since(qp.queueTime)
 			remainingBuffer := constants.UnschedQueueBufferDuration - elapsed
 
-			Expect(remainingBuffer < 0).To(BeTrue(), "remaining buffer should be negative when queue time is old")
+			Expect(remainingBuffer).To(BeNumerically("<", 0), "remaining buffer should be negative when queue time is old")
 		})
 
 		It("should calculate positive remaining buffer for recent queue time", func() {
 			now := time.Now()
 			qp := &queuedPod{
-				pod:       createTensorFusionWorkerPod("worker-pod-2", "default", "uid-buffer-2"),
+				pod:       createTensorFusionWorkerPod("worker-pod-2", "uid-buffer-2"),
 				queueTime: now,
 			}
 
 			elapsed := time.Since(qp.queueTime)
 			remainingBuffer := constants.UnschedQueueBufferDuration - elapsed
 
-			Expect(remainingBuffer > 0).To(BeTrue(), "remaining buffer should be positive when queue time is recent")
+			Expect(remainingBuffer).To(BeNumerically(">", 0), "remaining buffer should be positive when queue time is recent")
 		})
 	})
 
 	Describe("BufferDurationConstant", func() {
 		It("should have reasonable buffer duration", func() {
-			Expect(constants.UnschedQueueBufferDuration > 0).To(BeTrue(), "buffer duration should be positive")
-			Expect(constants.UnschedQueueBufferDuration < time.Minute).To(BeTrue(), "buffer duration should be less than a minute")
+			Expect(constants.UnschedQueueBufferDuration).To(BeNumerically(">", 0), "buffer duration should be positive")
+			Expect(constants.UnschedQueueBufferDuration).To(BeNumerically("<", time.Minute), "buffer duration should be less than a minute")
 		})
 	})
 
 	Describe("queuedPod struct", func() {
 		It("should store pod and queue time correctly", func() {
-			pod := createTensorFusionWorkerPod("test-pod", "default", "uid-struct")
+			pod := createTensorFusionWorkerPod("test-pod", "uid-struct")
 			now := time.Now()
 
 			qp := &queuedPod{
@@ -313,7 +313,7 @@ var _ = Describe("UnscheduledPodHandler", func() {
 				go func(goroutineID int) {
 					defer wg.Done()
 					uid := types.UID(time.Now().String() + string(rune('a'+goroutineID)))
-					pod := createTensorFusionWorkerPod("worker", "default", uid)
+					pod := createTensorFusionWorkerPod("worker", uid)
 					handler.HandleRejectedPod(ctx, &framework.QueuedPodInfo{
 						PodInfo: &framework.PodInfo{Pod: pod},
 					}, nil)
@@ -333,7 +333,7 @@ var _ = Describe("UnscheduledPodHandler", func() {
 			}
 		done:
 
-			Expect(itemCount > 0).To(BeTrue(), "should have queued some pods")
+			Expect(itemCount).To(BeNumerically(">", 0), "should have queued some pods")
 			Expect(itemCount <= numGoroutines).To(BeTrue(), "should not have more items than goroutines")
 		})
 	})

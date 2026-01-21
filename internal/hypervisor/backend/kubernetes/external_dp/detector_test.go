@@ -69,11 +69,11 @@ var _ = Describe("DevicePluginDetector", func() {
 
 			tmpFile, err := os.CreateTemp("", "checkpoint-*.json")
 			Expect(err).NotTo(HaveOccurred())
-			defer os.Remove(tmpFile.Name())
+			defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 			_, err = tmpFile.WriteString(testData)
 			Expect(err).NotTo(HaveOccurred())
-			tmpFile.Close()
+			Expect(tmpFile.Close()).To(Succeed())
 
 			detector := &DevicePluginDetector{
 				checkpointPath: tmpFile.Name(),
@@ -177,11 +177,11 @@ var _ = Describe("DevicePluginDetector", func() {
 
 			tmpFile, err := os.CreateTemp("", "checkpoint-*.json")
 			Expect(err).NotTo(HaveOccurred())
-			defer os.Remove(tmpFile.Name())
+			defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 			_, err = tmpFile.WriteString(checkpointData)
 			Expect(err).NotTo(HaveOccurred())
-			tmpFile.Close()
+			Expect(tmpFile.Close()).To(Succeed())
 
 			gpu := &tfv1.GPU{
 				ObjectMeta: metav1.ObjectMeta{
@@ -235,11 +235,11 @@ var _ = Describe("DevicePluginDetector", func() {
 
 			tmpFile, err := os.CreateTemp("", "checkpoint-*.json")
 			Expect(err).NotTo(HaveOccurred())
-			defer os.Remove(tmpFile.Name())
+			defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 			_, err = tmpFile.WriteString(checkpointData)
 			Expect(err).NotTo(HaveOccurred())
-			tmpFile.Close()
+			Expect(tmpFile.Close()).To(Succeed())
 
 			gpu := &tfv1.GPU{
 				ObjectMeta: metav1.ObjectMeta{

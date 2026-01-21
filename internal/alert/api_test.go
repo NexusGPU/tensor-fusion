@@ -36,15 +36,18 @@ var _ = Describe("Alert API", func() {
 					defer server.Close()
 
 					// Replace the base URL with our test server
-					testURL := server.URL
-					if inputURL != "http://localhost:9093" && inputURL != "http://localhost:9093/" {
-						if inputURL == "http://localhost:9093/alertmanager" {
-							testURL = server.URL + "/alertmanager"
-						} else if inputURL == "http://localhost:9093/alertmanager/" {
-							testURL = server.URL + "/alertmanager/"
-						}
-					} else if inputURL == "http://localhost:9093/" {
+					var testURL string
+					switch inputURL {
+					case "http://localhost:9093":
+						testURL = server.URL
+					case "http://localhost:9093/":
 						testURL = server.URL + "/"
+					case "http://localhost:9093/alertmanager":
+						testURL = server.URL + "/alertmanager"
+					case "http://localhost:9093/alertmanager/":
+						testURL = server.URL + "/alertmanager/"
+					default:
+						testURL = server.URL
 					}
 
 					alerts := []config.PostableAlert{

@@ -284,15 +284,15 @@ var _ = Describe("Config Utils", func() {
 		const testEnvKey = "TEST_ENV_KEY_FOR_UTILS_TEST"
 
 		AfterEach(func() {
-			os.Unsetenv(testEnvKey)
+			_ = os.Unsetenv(testEnvKey)
 		})
 
 		DescribeTable("returns correct value",
 			func(envValue string, setEnv bool, defaultValue, expected string) {
-				os.Unsetenv(testEnvKey)
+				_ = os.Unsetenv(testEnvKey)
 
 				if setEnv {
-					os.Setenv(testEnvKey, envValue)
+					Expect(os.Setenv(testEnvKey, envValue)).To(Succeed())
 				}
 
 				result := utils.GetEnvOrDefault(testEnvKey, defaultValue)
@@ -342,26 +342,26 @@ var _ = Describe("Config Utils", func() {
 		const debugEnvKey = "DEBUG"
 
 		AfterEach(func() {
-			os.Unsetenv(debugEnvKey)
+			_ = os.Unsetenv(debugEnvKey)
 		})
 
 		It("should return false when debug mode not set", func() {
-			os.Unsetenv(debugEnvKey)
+			_ = os.Unsetenv(debugEnvKey)
 			Expect(utils.IsDebugMode()).To(BeFalse())
 		})
 
 		It("should return true when debug mode set to true", func() {
-			os.Setenv(debugEnvKey, "true")
+			Expect(os.Setenv(debugEnvKey, "true")).To(Succeed())
 			Expect(utils.IsDebugMode()).To(BeTrue())
 		})
 
 		It("should return false when debug mode set to false", func() {
-			os.Setenv(debugEnvKey, "false")
+			Expect(os.Setenv(debugEnvKey, "false")).To(Succeed())
 			Expect(utils.IsDebugMode()).To(BeFalse())
 		})
 
 		It("should return false when debug mode set to other value", func() {
-			os.Setenv(debugEnvKey, "1")
+			Expect(os.Setenv(debugEnvKey, "1")).To(Succeed())
 			Expect(utils.IsDebugMode()).To(BeFalse())
 		})
 	})

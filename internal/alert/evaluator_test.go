@@ -111,7 +111,7 @@ var _ = Describe("AlertEvaluator", func() {
 
 			alerts, err := evaluator.evaluate(rule)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(alerts).To(HaveLen(0))
+			Expect(alerts).To(BeEmpty())
 			Expect(rule.FiringAlerts).To(HaveLen(1))
 
 			// Second evaluation
@@ -120,7 +120,7 @@ var _ = Describe("AlertEvaluator", func() {
 
 			alerts, err = evaluator.evaluate(rule)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(alerts).To(HaveLen(0))
+			Expect(alerts).To(BeEmpty())
 			Expect(rule.FiringAlerts).To(HaveLen(1))
 
 			// Check that count increased
@@ -189,7 +189,7 @@ var _ = Describe("AlertEvaluator", func() {
 
 			sqlRows, err := tsdb.Raw("SELECT value, instance, job FROM metrics").Rows()
 			Expect(err).NotTo(HaveOccurred())
-			defer sqlRows.Close()
+			defer func() { _ = sqlRows.Close() }()
 
 			alerts, err := evaluator.processQueryResults(sqlRows, rule)
 			Expect(err).NotTo(HaveOccurred())

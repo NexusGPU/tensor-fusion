@@ -582,10 +582,6 @@ func checkWorkerPodCount(workload *tfv1.TensorFusionWorkload) {
 	}).Should(Succeed())
 }
 
-func getWorkloadName(index int) string {
-	return fmt.Sprintf("workload-%d", index)
-}
-
 func getWorkers(workload *tfv1.TensorFusionWorkload) []*corev1.Pod {
 	GinkgoHelper()
 	podList := &corev1.PodList{}
