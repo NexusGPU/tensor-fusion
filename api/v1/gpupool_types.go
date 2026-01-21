@@ -335,10 +335,9 @@ type NodeDiscoveryConfig struct {
 }
 
 type HypervisorConfig struct {
+	// Image is the default hypervisor image, used when no ProviderConfig is found for the vendor
+	// When ProviderConfig exists, middleware image from ProviderConfig takes precedence
 	Image string `json:"image,omitempty"`
-
-	// The image configured per provider, e.g. { "NVIDIA": "tensorfusion/tf-nvidia:latest", "AMD": "tensorfusion/tf-amd:latest" }
-	ProviderImage map[string]string `json:"providerImage,omitempty"`
 
 	VectorImage string `json:"vectorImage,omitempty"`
 
@@ -356,22 +355,18 @@ type HypervisorConfig struct {
 }
 
 type WorkerConfig struct {
-	// Default image for any providers if ProviderImage is not set
+	// Image is the default worker image, used when no ProviderConfig is found for the vendor
+	// When ProviderConfig exists, remoteWorker image from ProviderConfig takes precedence
 	Image string `json:"image,omitempty"`
-
-	// The image configured per provider, e.g. { "NVIDIA": "tensorfusion/tf-nvidia-worker:latest", "AMD": "tensorfusion/tf-amd-worker:latest" }
-	ProviderImage map[string]string `json:"providerImage,omitempty"`
 
 	// +optional
 	PodTemplate *runtime.RawExtension `json:"podTemplate,omitempty"`
 }
 
 type ClientConfig struct {
-	// Default image for any providers if ProviderImage is not set
+	// Image is the default client image, used when no ProviderConfig is found for the vendor
+	// When ProviderConfig exists, remoteClient image from ProviderConfig takes precedence
 	Image string `json:"image,omitempty"`
-
-	// The image configured per provider, e.g. { "NVIDIA": "tensorfusion/tf-nvidia-client:latest", "AMD": "tensorfusion/tf-amd-client:latest" }
-	ProviderImage map[string]string `json:"providerImage,omitempty"`
 
 	OperatorEndpoint string `json:"operatorEndpoint,omitempty"`
 

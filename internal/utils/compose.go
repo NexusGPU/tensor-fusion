@@ -226,7 +226,7 @@ func AddTFDefaultClientConfBeforePatch(
 	injectContainerIndices []int,
 ) {
 	clientConfig := pool.Spec.ComponentConfig.Client
-	image := getProviderImageOrDefault(tfInfo.Profile.GPUVendor, clientConfig.ProviderImage, clientConfig.Image)
+	image := GetClientImage(tfInfo.Profile.GPUVendor, clientConfig.Image)
 	pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
 		Name:  constants.TFContainerNameClient,
 		Image: image,
@@ -585,7 +585,7 @@ func composeHypervisorInitContainer(
 		},
 	}, v1.Container{
 		Name:    "init-runtime",
-		Image:   getProviderImageOrDefault(vendor, hypervisorConfig.ProviderImage, hypervisorConfig.Image),
+		Image:   GetMiddlewareImage(vendor, hypervisorConfig.Image),
 		Command: []string{"cp", "-r", "/build/**", constants.TFDataPath},
 		SecurityContext: &v1.SecurityContext{
 			Privileged: ptr.To(true),
@@ -824,7 +824,7 @@ func SetWorkerContainerSpec(
 	// NOTE: need to set environment variable to make all GPUs visible to the worker,
 	// vgpu.rs limiter will limit to specific devices after Pod started
 	container.Name = constants.TFContainerNameWorker
-	container.Image = getProviderImageOrDefault(workloadProfile.GPUVendor, workerConfig.ProviderImage, workerConfig.Image)
+	container.Image = GetWorkerImage(workloadProfile.GPUVendor, workerConfig.Image)
 	container.VolumeMounts = append(
 		container.VolumeMounts,
 		v1.VolumeMount{
@@ -955,9 +955,29 @@ func AddWorkerConfAfterTemplate(
 	return spec.Containers[0].Name
 }
 
-func getProviderImageOrDefault(vendor string, providerImageMap map[string]string, defaultImage string) string {
-	if providerImageMap != nil && providerImageMap[vendor] != "" {
-		return providerImageMap[vendor]
+// GetClientImage returns the client image for a vendor using Provider Manager
+// Falls back to defaultImage if Provider Manager is not initialized or vendor not found
+func GetClientImage(vendor string, defaultImage string) string {
+	if mgr := provider.GetManager(); mgr != nil {
+		return mgr.GetRemoteClientImage(vendor, defaultImage)
+	}
+	return defaultImage
+}
+
+// GetWorkerImage returns the worker image for a vendor using Provider Manager
+// Falls back to defaultImage if Provider Manager is not initialized or vendor not found
+func GetWorkerImage(vendor string, defaultImage string) string {
+	if mgr := provider.GetManager(); mgr != nil {
+		return mgr.GetRemoteWorkerImage(vendor, defaultImage)
+	}
+	return defaultImage
+}
+
+// GetMiddlewareImage returns the middleware/hypervisor image for a vendor using Provider Manager
+// Falls back to defaultImage if Provider Manager is not initialized or vendor not found
+func GetMiddlewareImage(vendor string, defaultImage string) string {
+	if mgr := provider.GetManager(); mgr != nil {
+		return mgr.GetMiddlewareImage(vendor, defaultImage)
 	}
 	return defaultImage
 }

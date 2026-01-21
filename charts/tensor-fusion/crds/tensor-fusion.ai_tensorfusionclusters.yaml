@@ -258,8 +258,9 @@ spec:
                             client:
                               properties:
                                 image:
-                                  description: Default image for any providers if
-                                    ProviderImage is not set
+                                  description: |-
+                                    Image is the default client image, used when no ProviderConfig is found for the vendor
+                                    When ProviderConfig exists, remoteClient image from ProviderConfig takes precedence
                                   type: string
                                 operatorEndpoint:
                                   type: string
@@ -269,19 +270,15 @@ spec:
                                 patchToPod:
                                   type: object
                                   x-kubernetes-preserve-unknown-fields: true
-                                providerImage:
-                                  additionalProperties:
-                                    type: string
-                                  description: 'The image configured per provider,
-                                    e.g. { "NVIDIA": "tensorfusion/tf-nvidia-client:latest",
-                                    "AMD": "tensorfusion/tf-amd-client:latest" }'
-                                  type: object
                               type: object
                             hypervisor:
                               properties:
                                 enableVector:
                                   type: boolean
                                 image:
+                                  description: |-
+                                    Image is the default hypervisor image, used when no ProviderConfig is found for the vendor
+                                    When ProviderConfig exists, middleware image from ProviderConfig takes precedence
                                   type: string
                                 podTemplate:
                                   type: object
@@ -292,32 +289,19 @@ spec:
                                   maximum: 65535
                                   minimum: 0
                                   type: integer
-                                providerImage:
-                                  additionalProperties:
-                                    type: string
-                                  description: 'The image configured per provider,
-                                    e.g. { "NVIDIA": "tensorfusion/tf-nvidia:latest",
-                                    "AMD": "tensorfusion/tf-amd:latest" }'
-                                  type: object
                                 vectorImage:
                                   type: string
                               type: object
                             worker:
                               properties:
                                 image:
-                                  description: Default image for any providers if
-                                    ProviderImage is not set
+                                  description: |-
+                                    Image is the default worker image, used when no ProviderConfig is found for the vendor
+                                    When ProviderConfig exists, remoteWorker image from ProviderConfig takes precedence
                                   type: string
                                 podTemplate:
                                   type: object
                                   x-kubernetes-preserve-unknown-fields: true
-                                providerImage:
-                                  additionalProperties:
-                                    type: string
-                                  description: 'The image configured per provider,
-                                    e.g. { "NVIDIA": "tensorfusion/tf-nvidia-worker:latest",
-                                    "AMD": "tensorfusion/tf-amd-worker:latest" }'
-                                  type: object
                               type: object
                           type: object
                         defaultUsingLocalGPU:

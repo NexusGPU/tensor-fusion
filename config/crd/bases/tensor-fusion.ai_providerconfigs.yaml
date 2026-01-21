@@ -1,0 +1,254 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: providerconfigs.tensor-fusion.ai
+spec:
+  group: tensor-fusion.ai
+  names:
+    kind: ProviderConfig
+    listKind: ProviderConfigList
+    plural: providerconfigs
+    singular: providerconfig
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.vendor
+      name: Vendor
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ProviderConfig is the Schema for managing hardware vendor specific configurations
+          Each ProviderConfig represents a single vendor (NVIDIA, AMD, Ascend, etc.)
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ProviderConfigSpec defines the desired state of ProviderConfig
+              ProviderConfig is used to manage hardware vendor specific configurations
+              including images, hardware metadata, virtualization templates and resource names
+            properties:
+              devicePluginDetection:
+                description: DevicePluginDetection contains settings for detecting
+                  existing device plugins
+                properties:
+                  resourceNamePrefixes:
+                    description: |-
+                      ResourceNamePrefixes are prefixes used to identify this vendor's device plugin resources
+                      e.g., ["nvidia.com/gpu", "nvidia.com/mig"] for NVIDIA
+                    items:
+                      type: string
+                    type: array
+                  usedBySystemName:
+                    description: UsedBySystemName is the identifier for workloads
+                      using this vendor's native device plugin
+                    type: string
+                type: object
+              hardwareMetadata:
+                description: HardwareMetadata contains GPU/accelerator model information
+                items:
+                  description: HardwareModelInfo contains information about a specific
+                    GPU/accelerator model
+                  properties:
+                    costPerHour:
+                      description: CostPerHour is the average cost per hour for this
+                        GPU model
+                      type: string
+                    fp16TFlops:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      description: Fp16TFlops is the FP16 performance in TFlops
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    fullModelName:
+                      description: FullModelName is the full human-readable name (e.g.,
+                        "NVIDIA A100-SXM4-80GB")
+                      type: string
+                    maxIsolationGroups:
+                      description: MaxIsolationGroups is the maximum number of isolation
+                        groups (e.g., 4 for Ascend vGroups)
+                      format: int32
+                      type: integer
+                    maxPartitions:
+                      description: MaxPartitions is the maximum number of partitions
+                        this GPU can support
+                      format: int32
+                      type: integer
+                    maxPlacementSlots:
+                      description: MaxPlacementSlots is the maximum number of placement
+                        slots (e.g., 8 for NVIDIA MIG)
+                      format: int32
+                      type: integer
+                    model:
+                      description: Model is the short model identifier (e.g., "A100_SXM_80G",
+                        "RTX4090")
+                      type: string
+                    partitionTemplateRefs:
+                      description: |-
+                        PartitionTemplateRefs contains references to virtualization templates
+                        Use template IDs defined in VirtualizationTemplates
+                      items:
+                        type: string
+                      type: array
+                    totalExtendedResources:
+                      additionalProperties:
+                        format: int32
+                        type: integer
+                      description: |-
+                        TotalExtendedResources defines the total capacity of extended resources
+                        For Ascend NPU: {"AICORE": 8, "AICPU": 7, "VPC": 12, ...}
+                      type: object
+                  required:
+                  - fp16TFlops
+                  - fullModelName
+                  - model
+                  type: object
+                type: array
+              images:
+                description: Images contains container images for different components
+                properties:
+                  middleware:
+                    description: |-
+                      Middleware is the hypervisor/middleware image that runs on GPU nodes
+                      This image contains vendor-specific GPU drivers and runtime
+                    type: string
+                  remoteClient:
+                    description: RemoteClient is the client library image injected
+                      into user pods
+                    type: string
+                  remoteWorker:
+                    description: RemoteWorker is the worker process image for remote
+                      GPU access
+                    type: string
+                required:
+                - middleware
+                type: object
+              inUseResourceNames:
+                description: |-
+                  InUseResourceNames contains resource names that should be removed from pods
+                  when TensorFusion takes over GPU management (e.g., "nvidia.com/gpu", "amd.com/gpu")
+                items:
+                  type: string
+                type: array
+              vendor:
+                description: Vendor is the hardware vendor name (e.g., NVIDIA, AMD,
+                  Ascend, Apple)
+                type: string
+              virtualizationTemplates:
+                description: |-
+                  VirtualizationTemplates contains partition/slice templates that can be referenced by hardware metadata
+                  This avoids duplicating template info across multiple GPU models
+                items:
+                  description: VirtualizationTemplate defines a partition/slice template
+                    for GPU virtualization
+                  properties:
+                    computePercent:
+                      description: ComputePercent is the percentage of compute allocated
+                        (0-100), serialized as string
+                      type: string
+                    description:
+                      description: Description provides additional information about
+                        this template
+                      type: string
+                    extendedResources:
+                      additionalProperties:
+                        format: int32
+                        type: integer
+                      description: |-
+                        ExtendedResources contains additional resource dimensions
+                        For Ascend NPU: {"AICORE": 1, "AICPU": 1, "VPC": 1, ...}
+                      type: object
+                    id:
+                      description: ID is the unique identifier for this template (e.g.,
+                        "mig-1g-10gb", "vir01")
+                      type: string
+                    isolationGroupSharing:
+                      default: exclusive
+                      description: |-
+                        IsolationGroupSharing defines how isolation groups are handled
+                        "exclusive" - each partition requires its own isolation group
+                        "shared" - multiple partitions can share an isolation group (time-sharing)
+                      enum:
+                      - exclusive
+                      - shared
+                      type: string
+                    isolationGroupSlots:
+                      description: IsolationGroupSlots defines minimum slots required
+                        by this template's isolation group
+                      format: int32
+                      type: integer
+                    maxInstances:
+                      description: MaxInstances is the maximum number of instances
+                        of this template per GPU
+                      format: int32
+                      type: integer
+                    maxPartitionsPerIsolationGroup:
+                      description: |-
+                        MaxPartitionsPerIsolationGroup limits partitions sharing one isolation group
+                        Only applicable when IsolationGroupSharing is "shared"
+                      format: int32
+                      type: integer
+                    memoryGigabytes:
+                      description: MemoryGigabytes is the memory allocated to this
+                        partition
+                      format: int64
+                      type: integer
+                    name:
+                      description: Name is the vendor-specific name (e.g., "1g.10gb",
+                        "vir01")
+                      type: string
+                    placementLimit:
+                      description: |-
+                        PlacementLimit defines valid placement positions using a bitmask
+                        For NVIDIA MIG: defines which slots can host this partition
+                      items:
+                        format: int32
+                        type: integer
+                      type: array
+                    placementOffset:
+                      description: PlacementOffset defines the slot offset for this
+                        template
+                      format: int32
+                      type: integer
+                  required:
+                  - computePercent
+                  - id
+                  - memoryGigabytes
+                  - name
+                  type: object
+                type: array
+            required:
+            - images
+            - vendor
+            type: object
+          status:
+            description: ProviderConfigStatus defines the observed state of ProviderConfig
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}

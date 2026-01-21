@@ -265,15 +265,18 @@ func GetInitialGPUNodeSelector() []string {
 	return selectors
 }
 
-var GPUResourceNames = []corev1.ResourceName{
-	"nvidia.com/gpu",
-	"amd.com/gpu",
+// GetGPUResourceNames returns all in-use GPU resource names from Provider Manager
+func GetGPUResourceNames() []corev1.ResourceName {
+	if mgr := provider.GetManager(); mgr != nil {
+		return mgr.GetAllInUseResourceNames()
+	}
+	return nil
 }
 
 func containsGPUResources(res corev1.ResourceList) bool {
-	for _, gpuResourceName := range GPUResourceNames {
-		quantity, ok := res[gpuResourceName]
-		if ok && quantity.Sign() > 0 {
+	for _, gpuResourceName := range GetGPUResourceNames() {
+		_, ok := res[gpuResourceName]
+		if ok {
 			return true
 		}
 	}

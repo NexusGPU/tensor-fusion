@@ -37,6 +37,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	gpuTopoPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gputopo"
@@ -177,9 +178,9 @@ func main() {
 		TLSOpts: tlsOpts,
 	})
 
-	gpuInfos := make([]config.GpuInfo, 0)
+	// Initialize GPU info from ConfigMap for backward compatibility
+	// ProviderConfig CRD takes precedence when available
 	gpuPricingMap := make(map[string]float64)
-	startWatchGPUInfoChanges(ctx, &gpuInfos, gpuPricingMap)
 	utils.InitServiceAccountConfig()
 
 	metricsServerOptions := metricsserver.Options{
@@ -234,7 +235,12 @@ func main() {
 	alertEvaluatorReady = make(chan struct{})
 	setupTimeSeriesAndWatchGlobalConfigChanges(ctx, mgr)
 
-	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, gpuPricingMap)
+	// Initialize Provider Manager for hardware vendor configurations
+	providerManager := startProviderManager(ctx, mgr)
+
+	// Merge pricing from ConfigMap (backward compat) with Provider Manager
+	mergedPricingMap := mergePricingMaps(gpuPricingMap, providerManager)
+	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, mergedPricingMap)
 
 	// Initialize Index allocator for Device Plugin communication
 	indexAllocator, err := indexallocator.NewIndexAllocator(ctx, mgr.GetClient())
@@ -358,6 +364,20 @@ func startHttpServerForTFClient(
 	}()
 }
 
+func startProviderManager(ctx context.Context, mgr manager.Manager) *provider.Manager {
+	// Initialize global Provider Manager
+	providerManager := provider.InitGlobalManager(mgr.GetClient())
+
+	// Load all existing ProviderConfigs
+	if err := providerManager.SetupWithManager(ctx, mgr); err != nil {
+		setupLog.Error(err, "unable to setup provider manager, will use default configurations")
+		// Not fatal - system can work with default configurations
+	}
+
+	setupLog.Info("provider manager initialized", "providerCount", providerManager.ProviderCount())
+	return providerManager
+}
+
 func startCustomResourceController(
 	ctx context.Context,
 	mgr manager.Manager,
@@ -372,6 +392,17 @@ func startCustomResourceController(
 	}
 
 	var err error
+
+	// ProviderConfig controller for hot-reload of provider configurations
+	if err = (&controller.ProviderConfigReconciler{
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		ProviderManager: provider.GetManager(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ProviderConfig")
+		os.Exit(1)
+	}
+
 	if err = (&controller.TensorFusionConnectionReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -665,39 +696,25 @@ func startAutoScaler(mgr manager.Manager, allocator *gpuallocator.GpuAllocator) 
 	}
 }
 
-func startWatchGPUInfoChanges(ctx context.Context, gpuInfos *[]config.GpuInfo, gpuPricingMap map[string]float64) {
-	initGpuInfos := make([]config.GpuInfo, 0)
-	err := utils.LoadConfigFromFile(gpuInfoConfig, &initGpuInfos)
-	if err != nil {
-		setupLog.Error(err, "unable to load gpuInfo file, "+
-			"file may not exist, this error will cause billing not working", "gpuInfoConfig", gpuInfoConfig)
-		return
-	}
-	*gpuInfos = initGpuInfos
-	pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, gpuInfos)
+// mergePricingMaps merges pricing from ConfigMap with Provider Manager
+// Provider Manager takes precedence for overlapping models
+func mergePricingMaps(configMapPricing map[string]float64, providerManager *provider.Manager) map[string]float64 {
+	merged := make(map[string]float64)
 
-	ch, err := utils.WatchConfigFileChanges(ctx, gpuInfoConfig)
-	if err != nil {
-		setupLog.Error(err, "unable to watch gpuInfo file, "+
-			"file may not exist, this error will cause billing not working", "gpuInfoConfig", gpuInfoConfig)
-		return
+	// First copy ConfigMap pricing
+	for k, v := range configMapPricing {
+		merged[k] = v
 	}
 
-	go func() {
-		for data := range ch {
-			updatedGpuInfos := make([]config.GpuInfo, 0)
-			err := yaml.Unmarshal(data, &updatedGpuInfos)
-			if err != nil {
-				setupLog.Error(err, "unable to reload gpuInfo file, file is not valid yaml", "gpuInfoConfig", gpuInfoConfig)
-				continue
-			}
-			*gpuInfos = updatedGpuInfos
-			for _, gpuInfo := range updatedGpuInfos {
-				gpuPricingMap[gpuInfo.FullModelName] = gpuInfo.CostPerHour
-			}
-			pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, gpuInfos)
+	// Override with Provider Manager pricing (takes precedence)
+	if providerManager != nil {
+		providerPricing := providerManager.GetGPUPricingMap()
+		for k, v := range providerPricing {
+			merged[k] = v
 		}
-	}()
+	}
+
+	return merged
 }
 
 // Setup GreptimeDB connection
