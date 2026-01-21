@@ -719,6 +719,8 @@ spec:
                 type: object
               schedulingConfigTemplate:
                 type: string
+            required:
+            - nodeManagerConfig
             type: object
           status:
             description: GPUPoolStatus defines the observed state of GPUPool.

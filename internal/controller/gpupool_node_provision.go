@@ -19,6 +19,32 @@ import (
 	cloudprovider "github.com/NexusGPU/tensor-fusion/internal/cloudprovider"
 )
 
+// getNodeClassRef resolves the node class reference based on provisioning mode
+func getNodeClassRef(pool *tfv1.GPUPool) (tfv1.GroupKindName, error) {
+	switch pool.Spec.NodeManagerConfig.ProvisioningMode {
+	case tfv1.ProvisioningModeProvisioned:
+		if pool.Spec.NodeManagerConfig.NodeProvisioner == nil {
+			return tfv1.GroupKindName{}, fmt.Errorf("failed to get node provisioner config for pool %s", pool.Name)
+		}
+		if pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass == "" {
+			return tfv1.GroupKindName{}, fmt.Errorf("failed to get node class for pool %s", pool.Name)
+		}
+		return tfv1.GroupKindName{
+			Name:    pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass,
+			Kind:    tfv1.GPUNodeClassKind,
+			Group:   tfv1.GroupVersion.Group,
+			Version: tfv1.GroupVersion.Version,
+		}, nil
+	case tfv1.ProvisioningModeKarpenter:
+		if pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef == nil {
+			return tfv1.GroupKindName{}, fmt.Errorf("failed to get karpenter node class ref for pool %s", pool.Name)
+		}
+		return *pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef, nil
+	default:
+		return tfv1.GroupKindName{}, nil
+	}
+}
+
 // Controller and trigger logic for abstract layer of node provisioning
 func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Context, pool *tfv1.GPUPool) (map[string]tfv1.Resource, error) {
 	if !ProvisioningToggle {
@@ -53,12 +79,12 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	// default warmUp is zero, only scale up when available < 0
 	warmUpTFlops := int64(0)
 	warmUpVRAM := int64(0)
-	if pool.Spec.CapacityConfig.WarmResources != nil {
+	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.WarmResources != nil {
 		warmUpTFlops = pool.Spec.CapacityConfig.WarmResources.TFlops.Value()
 		warmUpVRAM = pool.Spec.CapacityConfig.WarmResources.VRAM.Value()
 	}
 
-	if pool.Spec.CapacityConfig.MinResources != nil {
+	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MinResources != nil {
 		minTFlops := pool.Spec.CapacityConfig.MinResources.TFlops.Value()
 		minVRAM := pool.Spec.CapacityConfig.MinResources.VRAM.Value()
 
@@ -87,7 +113,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 		}
 	}
 
-	if shouldScaleUp && pool.Spec.CapacityConfig.MaxResources != nil {
+	if shouldScaleUp && pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MaxResources != nil {
 		maxTFlops := pool.Spec.CapacityConfig.MaxResources.TFlops.Value()
 		maxVRAM := pool.Spec.CapacityConfig.MaxResources.VRAM.Value()
 
@@ -110,26 +136,9 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 		return nil, err
 	}
 
-	var nodeClassRef tfv1.GroupKindName
-	switch pool.Spec.NodeManagerConfig.ProvisioningMode {
-	case tfv1.ProvisioningModeProvisioned:
-		if pool.Spec.NodeManagerConfig.NodeProvisioner == nil {
-			return nil, fmt.Errorf("failed to get node provisioner config for pool %s", pool.Name)
-		}
-		if pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass == "" {
-			return nil, fmt.Errorf("failed to get node class for pool %s", pool.Name)
-		}
-		nodeClassRef = tfv1.GroupKindName{
-			Name:    pool.Spec.NodeManagerConfig.NodeProvisioner.NodeClass,
-			Kind:    tfv1.GPUNodeClassKind,
-			Group:   tfv1.GroupVersion.Group,
-			Version: tfv1.GroupVersion.Version,
-		}
-	case tfv1.ProvisioningModeKarpenter:
-		if pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef == nil {
-			return nil, fmt.Errorf("failed to get karpenter node class ref for pool %s", pool.Name)
-		}
-		nodeClassRef = *pool.Spec.NodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef
+	nodeClassRef, err := getNodeClassRef(pool)
+	if err != nil {
+		return nil, err
 	}
 
 	// convert resource gap to least cost GPUNode creation param

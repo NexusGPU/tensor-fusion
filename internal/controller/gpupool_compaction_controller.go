@@ -51,6 +51,31 @@ var jobStarted sync.Map
 
 // Strategy #3: check if any node can be reduced to 1/2 size. for remaining nodes, check if allocated size < 1/2 * total size, if so, check if can buy smaller instance, note that the compaction MUST be GPU level, not node level
 
+// getGPUNodeClaimForCompaction returns the GPUNodeClaim name if the node can be compacted in provision mode.
+// Returns empty string if the node should be skipped.
+func (r *GPUPoolCompactionReconciler) getGPUNodeClaimForCompaction(ctx context.Context, gpuNode *tfv1.GPUNode) string {
+	log := log.FromContext(ctx)
+	gpuNodeClaimName := gpuNode.Labels[constants.ProvisionerLabelKey]
+	if gpuNodeClaimName == "" {
+		log.Info("skip existing nodes managed by other controller when compaction", "node", gpuNode.Name)
+		return ""
+	}
+	gpuNodeClaimObj := &tfv1.GPUNodeClaim{}
+	if err := r.Get(ctx, client.ObjectKey{Name: gpuNodeClaimName}, gpuNodeClaimObj); err != nil {
+		if errors.IsNotFound(err) {
+			log.Info("skip existing nodes managed by other controller when compaction", "node", gpuNode.Name)
+			return ""
+		}
+		log.Error(err, "get gpuNodeClaim failed", "gpuNodeClaimName", gpuNodeClaimName)
+		return ""
+	}
+	if !gpuNodeClaimObj.DeletionTimestamp.IsZero() {
+		log.Info("[Warn] GPUNode deleting during compaction loop, this should not happen", "node", gpuNode.Name)
+		return ""
+	}
+	return gpuNodeClaimName
+}
+
 // Strategy #4: check if any two same nodes can be merged into one larger node, and make the remained capacity bigger and node number less without violating the capacity constraint and saving the hidden management,license,monitoring costs, potentially schedule more workloads since remaining capacity is single cohesive piece rather than fragments
 func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, pool *tfv1.GPUPool) error {
 	log := log.FromContext(ctx)
@@ -94,11 +119,19 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 		poolTotalVRAM += vram
 	}
 
-	poolWarmUpTFlops := pool.Spec.CapacityConfig.WarmResources.TFlops.Value()
-	poolWarmUpVRAM := pool.Spec.CapacityConfig.WarmResources.VRAM.Value()
+	poolWarmUpTFlops := int64(0)
+	poolWarmUpVRAM := int64(0)
+	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.WarmResources != nil {
+		poolWarmUpTFlops = pool.Spec.CapacityConfig.WarmResources.TFlops.Value()
+		poolWarmUpVRAM = pool.Spec.CapacityConfig.WarmResources.VRAM.Value()
+	}
 
-	poolMinTFlops := pool.Spec.CapacityConfig.MinResources.TFlops.Value()
-	poolMinVRAM := pool.Spec.CapacityConfig.MinResources.VRAM.Value()
+	poolMinTFlops := int64(0)
+	poolMinVRAM := int64(0)
+	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MinResources != nil {
+		poolMinTFlops = pool.Spec.CapacityConfig.MinResources.TFlops.Value()
+		poolMinVRAM = pool.Spec.CapacityConfig.MinResources.VRAM.Value()
+	}
 
 	log.Info("Found latest pool capacity constraints before compaction", "pool", pool.Name, "warmUpTFlops", poolWarmUpTFlops, "warmUpVRAM", poolWarmUpVRAM, "minTFlops", poolMinTFlops, "minVRAM", poolMinVRAM, "totalTFlops", poolTotalTFlops, "totalVRAM", poolTotalVRAM)
 
@@ -137,24 +170,9 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 
 		if matchWarmUpCapacityConstraints && matchMinCapacityConstraint {
 			if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
-				// not managed by Kubernetes, managed by TensorFusion, safe to terminate, and finalizer will cause K8S node and related cloud resources to be deleted
-				gpuNodeClaimName := gpuNode.Labels[constants.ProvisionerLabelKey]
+				// not managed by Kubernetes, managed by TensorFusion, safe to terminate
+				gpuNodeClaimName := r.getGPUNodeClaimForCompaction(ctx, &gpuNode)
 				if gpuNodeClaimName == "" {
-					log.Info("skip existing nodes managed by other controller when compaction", "node", gpuNode.Name)
-					continue
-				}
-				gpuNodeClaimObj := &tfv1.GPUNodeClaim{}
-				if err := r.Get(ctx, client.ObjectKey{Name: gpuNodeClaimName}, gpuNodeClaimObj); err != nil {
-					if errors.IsNotFound(err) {
-						log.Info("skip existing nodes managed by other controller when compaction", "node", gpuNode.Name)
-						continue
-					}
-					log.Error(err, "get gpuNodeClaim failed", "gpuNodeClaimName", gpuNodeClaimName)
-					continue
-				}
-				// already deleting
-				if !gpuNodeClaimObj.DeletionTimestamp.IsZero() {
-					log.Info("[Warn] GPUNode deleting during compaction loop, this should not happen", "node", gpuNode.Name)
 					continue
 				}
 

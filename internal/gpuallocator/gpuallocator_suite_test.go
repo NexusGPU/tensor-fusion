@@ -134,6 +134,9 @@ var _ = BeforeSuite(func() {
 		},
 		Spec: tfv1.GPUPoolSpec{
 			SchedulingConfigTemplate: &schedulingConfigTemplate,
+			NodeManagerConfig: &tfv1.NodeManagerConfig{
+				ProvisioningMode: tfv1.ProvisioningModeAutoSelect,
+			},
 		},
 	}
 	err = k8sClient.Create(ctx, pool)
@@ -144,7 +147,11 @@ var _ = BeforeSuite(func() {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "other-pool",
 		},
-		Spec: tfv1.GPUPoolSpec{},
+		Spec: tfv1.GPUPoolSpec{
+			NodeManagerConfig: &tfv1.NodeManagerConfig{
+				ProvisioningMode: tfv1.ProvisioningModeAutoSelect,
+			},
+		},
 	}
 	err = k8sClient.Create(ctx, otherPool)
 	Expect(err).NotTo(HaveOccurred())

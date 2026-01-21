@@ -4,23 +4,22 @@ import (
 	"context"
 	"database/sql"
 	"strconv"
-	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/NexusGPU/tensor-fusion/internal/config"
-	"github.com/NexusGPU/tensor-fusion/internal/metrics"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 )
 
-// Mock data for testing
-func setupMockDB(t *testing.T) (sqlmock.Sqlmock, *metrics.TimeSeriesDB) {
+func setupMockDB() (sqlmock.Sqlmock, *metrics.TimeSeriesDB) {
 	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	Expect(err).NotTo(HaveOccurred())
 
 	gormDB, err := gorm.Open(mysql.New(mysql.Config{
 		Conn:                      db,
@@ -28,7 +27,7 @@ func setupMockDB(t *testing.T) (sqlmock.Sqlmock, *metrics.TimeSeriesDB) {
 	}), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
-	require.NoError(t, err)
+	Expect(err).NotTo(HaveOccurred())
 
 	tsdb := &metrics.TimeSeriesDB{DB: gormDB}
 	return mock, tsdb
@@ -46,186 +45,11 @@ func createTestRule(name string) *config.AlertRule {
 		Description:         "CPU usage is {{.value}}% on instance {{.instance}}",
 		RunBookURL:          "https://example.com/runbook",
 		AlertTargetInstance: "{{.instance}}",
-
-		TestMode: true,
+		TestMode:            true,
 	}
 }
 
-func TestAlertEvaluator(t *testing.T) {
-	mock, tsdb := setupMockDB(t)
-
-	evaluator := newAlertEvaluator(tsdb)
-
-	t.Run("evaluate no results", func(t *testing.T) {
-		rule := createTestRule("test-rule")
-
-		// Pre-populate firing alerts
-		rule.FiringAlerts = map[string]*config.FiringAlertCache{}
-
-		// Mock empty result set
-		mock.ExpectQuery("SELECT value, instance, job FROM metrics").
-			WillReturnRows(newAlertQueryRows(0, 0))
-
-		alerts, err := evaluator.evaluate(rule)
-		assert.NoError(t, err)
-		assert.Empty(t, alerts)
-
-		// Verify that firing alerts were resolved
-		assert.Empty(t, rule.FiringAlerts)
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	t.Run("evaluate with results", func(t *testing.T) {
-		rule := createTestRule("test-rule")
-
-		mock.ExpectQuery("SELECT value, instance, job FROM metrics").
-			WillReturnRows(newAlertQueryRows(2, 85.5))
-
-		alerts, err := evaluator.evaluate(rule)
-		assert.NoError(t, err)
-		assert.Len(t, alerts, 2)
-
-		// Verify that alerts were added to firing alerts
-		assert.NotEmpty(t, rule.FiringAlerts)
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	t.Run("evaluate consecutive count", func(t *testing.T) {
-		rule := createTestRule("test-rule")
-		rule.ConsecutiveCount = 3 // Require 3 consecutive alerts
-
-		// First evaluation - should not fire alert yet
-		mock.ExpectQuery("SELECT value, instance, job FROM metrics").
-			WillReturnRows(newAlertQueryRows(1, 85.5))
-
-		alerts, err := evaluator.evaluate(rule)
-		assert.NoError(t, err)
-		assert.Len(t, alerts, 0)
-		assert.Len(t, rule.FiringAlerts, 1)
-
-		mock.ExpectQuery("SELECT value, instance, job FROM metrics").
-			WillReturnRows(newAlertQueryRows(1, 85.5))
-
-		alerts, err = evaluator.evaluate(rule)
-		assert.NoError(t, err)
-		assert.Len(t, alerts, 0)
-		assert.Len(t, rule.FiringAlerts, 1)
-
-		// Check that count increased
-		for _, firingAlert := range rule.FiringAlerts {
-			assert.Equal(t, 2, firingAlert.Count)
-		}
-
-		mock.ExpectQuery("SELECT value, instance, job FROM metrics").
-			WillReturnRows(newAlertQueryRows(1, 85.5))
-
-		alerts, err = evaluator.evaluate(rule)
-		assert.NoError(t, err)
-		assert.Len(t, alerts, 1)
-		assert.Len(t, rule.FiringAlerts, 1)
-
-		// Check that count reached threshold
-		for _, firingAlert := range rule.FiringAlerts {
-			assert.Equal(t, 3, firingAlert.Count)
-		}
-
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	t.Run("render query template", func(t *testing.T) {
-		rule := createTestRule("test-rule")
-
-		query, err := renderQueryTemplate(rule)
-		assert.NoError(t, err)
-		assert.Contains(t, query, "80")
-		assert.Contains(t, query, "now() - '1m'::INTERVAL")
-		assert.Contains(t, query, "value > 80")
-	})
-
-	t.Run("render query template invalid template", func(t *testing.T) {
-		rule := createTestRule("test-rule")
-		rule.Query = "SELECT * FROM metrics WHERE value > {{ .InvalidField | invalid}}"
-
-		_, err := renderQueryTemplate(rule)
-		assert.Error(t, err)
-	})
-
-	t.Run("process query results empty results", func(t *testing.T) {
-		mock, tsdb := setupMockDB(t)
-		rule := createTestRule("test-rule")
-		evaluator := newAlertEvaluator(tsdb)
-
-		// Mock empty result set
-		mock.ExpectQuery("SELECT").WillReturnRows(newAlertQueryRows(0, 0))
-
-		sqlRows, err := tsdb.Raw("SELECT value, instance, job FROM metrics").Rows()
-		require.NoError(t, err)
-		defer func() {
-			if err := sqlRows.Close(); err != nil {
-				t.Error("failed to close sql rows", err)
-			}
-		}()
-
-		alerts, err := evaluator.processQueryResults(sqlRows, rule)
-		assert.NoError(t, err)
-		assert.Empty(t, alerts)
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	t.Run("start evaluate invalid interval", func(t *testing.T) {
-		rule := createTestRule("test-rule")
-		rule.EvaluationInterval = "invalid-interval"
-
-		evaluator := newAlertEvaluator(nil)
-		evaluator.Rules = []config.AlertRule{*rule}
-
-		err := evaluator.StartEvaluate()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid duration")
-	})
-
-	t.Run("update alert rules", func(t *testing.T) {
-		rule2 := createTestRule("rule2")
-
-		evaluator := newAlertEvaluator(nil)
-
-		// Update with new rules
-		err := evaluator.UpdateAlertRules([]config.AlertRule{*rule2})
-		assert.NoError(t, err)
-		assert.Len(t, evaluator.Rules, 1)
-		assert.Equal(t, "rule2", evaluator.Rules[0].Name)
-	})
-
-	t.Run("stop evaluate", func(t *testing.T) {
-		evaluator := newAlertEvaluator(nil)
-
-		// Add a mock ticker
-		evaluator.tickers["test"] = time.NewTicker(time.Second)
-
-		err := evaluator.StopEvaluate()
-		assert.NoError(t, err)
-	})
-
-	// Test edge cases
-	t.Run("evaluate database error", func(t *testing.T) {
-		mock, tsdb := setupMockDB(t)
-		rule := createTestRule("test-rule")
-
-		evaluator := newAlertEvaluator(tsdb)
-
-		// Mock database error
-		mock.ExpectQuery("SELECT value, instance, job FROM metrics").
-			WillReturnError(sql.ErrNoRows)
-
-		alerts, err := evaluator.evaluate(rule)
-		assert.Error(t, err)
-		assert.Empty(t, alerts)
-		assert.Contains(t, err.Error(), "failed to execute query")
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
-}
-
-func newAlertEvaluator(tsdb *metrics.TimeSeriesDB) *AlertEvaluator {
+func newTestAlertEvaluator(tsdb *metrics.TimeSeriesDB) *AlertEvaluator {
 	return NewAlertEvaluator(context.Background(), tsdb, nil, "http://localhost:9093")
 }
 
@@ -236,3 +60,178 @@ func newAlertQueryRows(num int, value float64) *sqlmock.Rows {
 	}
 	return rows
 }
+
+var _ = Describe("AlertEvaluator", func() {
+	var (
+		mock      sqlmock.Sqlmock
+		tsdb      *metrics.TimeSeriesDB
+		evaluator *AlertEvaluator
+	)
+
+	BeforeEach(func() {
+		mock, tsdb = setupMockDB()
+		evaluator = newTestAlertEvaluator(tsdb)
+	})
+
+	Describe("evaluate", func() {
+		It("should return empty alerts for no results", func() {
+			rule := createTestRule("test-rule")
+			rule.FiringAlerts = map[string]*config.FiringAlertCache{}
+
+			mock.ExpectQuery("SELECT value, instance, job FROM metrics").
+				WillReturnRows(newAlertQueryRows(0, 0))
+
+			alerts, err := evaluator.evaluate(rule)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(alerts).To(BeEmpty())
+			Expect(rule.FiringAlerts).To(BeEmpty())
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+
+		It("should return alerts for query results", func() {
+			rule := createTestRule("test-rule")
+
+			mock.ExpectQuery("SELECT value, instance, job FROM metrics").
+				WillReturnRows(newAlertQueryRows(2, 85.5))
+
+			alerts, err := evaluator.evaluate(rule)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(alerts).To(HaveLen(2))
+			Expect(rule.FiringAlerts).NotTo(BeEmpty())
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+
+		It("should respect consecutive count requirement", func() {
+			rule := createTestRule("test-rule")
+			rule.ConsecutiveCount = 3
+
+			// First evaluation - should not fire alert yet
+			mock.ExpectQuery("SELECT value, instance, job FROM metrics").
+				WillReturnRows(newAlertQueryRows(1, 85.5))
+
+			alerts, err := evaluator.evaluate(rule)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(alerts).To(BeEmpty())
+			Expect(rule.FiringAlerts).To(HaveLen(1))
+
+			// Second evaluation
+			mock.ExpectQuery("SELECT value, instance, job FROM metrics").
+				WillReturnRows(newAlertQueryRows(1, 85.5))
+
+			alerts, err = evaluator.evaluate(rule)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(alerts).To(BeEmpty())
+			Expect(rule.FiringAlerts).To(HaveLen(1))
+
+			// Check that count increased
+			for _, firingAlert := range rule.FiringAlerts {
+				Expect(firingAlert.Count).To(Equal(2))
+			}
+
+			// Third evaluation - should fire now
+			mock.ExpectQuery("SELECT value, instance, job FROM metrics").
+				WillReturnRows(newAlertQueryRows(1, 85.5))
+
+			alerts, err = evaluator.evaluate(rule)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(alerts).To(HaveLen(1))
+			Expect(rule.FiringAlerts).To(HaveLen(1))
+
+			// Check that count reached threshold
+			for _, firingAlert := range rule.FiringAlerts {
+				Expect(firingAlert.Count).To(Equal(3))
+			}
+
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+
+		It("should return error on database failure", func() {
+			rule := createTestRule("test-rule")
+
+			mock.ExpectQuery("SELECT value, instance, job FROM metrics").
+				WillReturnError(sql.ErrNoRows)
+
+			alerts, err := evaluator.evaluate(rule)
+			Expect(err).To(HaveOccurred())
+			Expect(alerts).To(BeEmpty())
+			Expect(err.Error()).To(ContainSubstring("failed to execute query"))
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+	})
+
+	Describe("renderQueryTemplate", func() {
+		It("should render query template correctly", func() {
+			rule := createTestRule("test-rule")
+
+			query, err := renderQueryTemplate(rule)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(query).To(ContainSubstring("80"))
+			Expect(query).To(ContainSubstring("now() - '1m'::INTERVAL"))
+			Expect(query).To(ContainSubstring("value > 80"))
+		})
+
+		It("should return error for invalid template", func() {
+			rule := createTestRule("test-rule")
+			rule.Query = "SELECT * FROM metrics WHERE value > {{ .InvalidField | invalid}}"
+
+			_, err := renderQueryTemplate(rule)
+			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("processQueryResults", func() {
+		It("should handle empty results", func() {
+			mock, tsdb := setupMockDB()
+			rule := createTestRule("test-rule")
+			evaluator := newTestAlertEvaluator(tsdb)
+
+			mock.ExpectQuery("SELECT").WillReturnRows(newAlertQueryRows(0, 0))
+
+			sqlRows, err := tsdb.Raw("SELECT value, instance, job FROM metrics").Rows()
+			Expect(err).NotTo(HaveOccurred())
+			defer func() { _ = sqlRows.Close() }()
+
+			alerts, err := evaluator.processQueryResults(sqlRows, rule)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(alerts).To(BeEmpty())
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+	})
+
+	Describe("StartEvaluate", func() {
+		It("should return error for invalid interval", func() {
+			rule := createTestRule("test-rule")
+			rule.EvaluationInterval = "invalid-interval"
+
+			evaluator := newTestAlertEvaluator(nil)
+			evaluator.Rules = []config.AlertRule{*rule}
+
+			err := evaluator.StartEvaluate()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("invalid duration"))
+		})
+	})
+
+	Describe("UpdateAlertRules", func() {
+		It("should update rules correctly", func() {
+			rule2 := createTestRule("rule2")
+
+			evaluator := newTestAlertEvaluator(nil)
+
+			err := evaluator.UpdateAlertRules([]config.AlertRule{*rule2})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(evaluator.Rules).To(HaveLen(1))
+			Expect(evaluator.Rules[0].Name).To(Equal("rule2"))
+		})
+	})
+
+	Describe("StopEvaluate", func() {
+		It("should stop tickers correctly", func() {
+			evaluator := newTestAlertEvaluator(nil)
+			evaluator.tickers["test"] = time.NewTicker(time.Second)
+
+			err := evaluator.StopEvaluate()
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+})

@@ -73,6 +73,18 @@ one-crd:
 test: manifests generate fmt vet vendor envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m -cover -coverprofile cover.out -r --skip-file ./test/e2e
 
+.PHONY: check-coverage
+check-coverage: ## Check if test coverage meets minimum threshold (default: 45%)
+	@if [ ! -f cover.out ]; then \
+		echo "Error: cover.out not found. Run 'make test' first."; \
+		exit 1; \
+	fi
+	@COVERAGE=$$(go tool cover -func=cover.out | grep "^total:" | awk '{print $$3}' | sed 's/%//'); \
+	echo "$${COVERAGE}%";
+
+.PHONY: test-with-coverage-check
+test-with-coverage-check: test check-coverage ## Run tests and verify coverage meets threshold
+
 .PHONY: test-serial
 test-serial: manifests generate fmt vet vendor envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -timeout 12m -r --skip-file ./test/e2e

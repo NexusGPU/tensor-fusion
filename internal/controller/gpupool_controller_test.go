@@ -309,6 +309,126 @@ var _ = Describe("GPUPool Controller", func() {
 			tfEnv.Cleanup()
 		})
 	})
+
+	Context("When CapacityConfig is nil", func() {
+		It("Should not panic and pool should reach running state", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(1).
+				SetGpuCountPerNode(1).
+				Build()
+
+			By("setting CapacityConfig to nil")
+			tfc := tfEnv.GetCluster()
+			tfc.Spec.GPUPools[0].SpecTemplate.CapacityConfig = nil
+			tfEnv.UpdateCluster(tfc)
+
+			By("verifying pool can still reconcile and reach running state")
+			Eventually(func(g Gomega) {
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Spec.CapacityConfig).Should(BeNil())
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
+			}).Should(Succeed())
+
+			tfEnv.Cleanup()
+		})
+
+		It("Should handle compaction correctly when CapacityConfig is nil", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(2).
+				SetGpuCountPerNode(1).
+				Build()
+
+			By("waiting for pool to be running")
+			Eventually(func(g Gomega) {
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
+			}).Should(Succeed())
+
+			By("setting CapacityConfig to nil")
+			tfc := tfEnv.GetCluster()
+			tfc.Spec.GPUPools[0].SpecTemplate.CapacityConfig = nil
+			tfEnv.UpdateCluster(tfc)
+
+			By("verifying pool still works after CapacityConfig set to nil")
+			Eventually(func(g Gomega) {
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Spec.CapacityConfig).Should(BeNil())
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
+			}).Should(Succeed())
+
+			By("verifying nodes are still present (compaction should not panic)")
+			Consistently(func(g Gomega) {
+				nodeList := tfEnv.GetGPUNodeList(0)
+				g.Expect(nodeList.Items).Should(HaveLen(2))
+			}, 2*time.Second).Should(Succeed())
+
+			tfEnv.Cleanup()
+		})
+
+		It("Should handle scale to zero check when CapacityConfig is nil", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(1).
+				SetGpuCountPerNode(1).
+				Build()
+
+			By("setting CapacityConfig to nil")
+			tfc := tfEnv.GetCluster()
+			tfc.Spec.GPUPools[0].SpecTemplate.CapacityConfig = nil
+			tfEnv.UpdateCluster(tfc)
+
+			By("verifying pool can reconcile without panic")
+			Eventually(func(g Gomega) {
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Spec.CapacityConfig).Should(BeNil())
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
+			}).Should(Succeed())
+
+			tfEnv.Cleanup()
+		})
+	})
+
+	Context("When NodeManagerConfig is nil", func() {
+		It("Should reject GPUPool creation when NodeManagerConfig is nil", func() {
+			pool := &tfv1.GPUPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-pool-nil-node-manager-config",
+				},
+				Spec: tfv1.GPUPoolSpec{
+					NodeManagerConfig: nil,
+				},
+			}
+
+			By("attempting to create GPUPool with nil NodeManagerConfig")
+			err := k8sClient.Create(ctx, pool)
+
+			By("verifying that creation is rejected due to required field validation")
+			Expect(err).Should(HaveOccurred())
+			Expect(err.Error()).Should(ContainSubstring("nodeManagerConfig"))
+		})
+
+		It("Should reject GPUPool update when NodeManagerConfig is set to nil", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(1).
+				SetGpuCountPerNode(1).
+				Build()
+
+			By("waiting for pool to be running")
+			Eventually(func(g Gomega) {
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
+			}).Should(Succeed())
+
+			By("attempting to update cluster with nil NodeManagerConfig")
+			tfc := tfEnv.GetCluster()
+			tfc.Spec.GPUPools[0].SpecTemplate.NodeManagerConfig = nil
+
+			err := k8sClient.Update(ctx, tfc)
+			Expect(err).Should(HaveOccurred())
+			Expect(err.Error()).Should(ContainSubstring("nodeManagerConfig"))
+
+			tfEnv.Cleanup()
+		})
+	})
 })
 
 func triggerHypervisorUpdate(tfEnv *TensorFusionEnv) (string, string) {
@@ -495,20 +615,6 @@ func verifyAllHypervisorPodHash(tfEnv *TensorFusionEnv, hash string) {
 	}).Should(Succeed())
 }
 
-// func verifyWorkerPodContainerName(workloadIndex int, name string) {
-// 	GinkgoHelper()
-// 	Eventually(func(g Gomega) {
-// 		podList := &corev1.PodList{}
-// 		g.Expect(k8sClient.List(ctx, podList,
-// 			client.InNamespace("default"),
-// 			client.MatchingLabels{constants.WorkloadKey: getWorkloadName(workloadIndex)})).Should(Succeed())
-// 		g.Expect(podList.Items).Should(HaveLen(1))
-// 		for _, pod := range podList.Items {
-// 			g.Expect(pod.Spec.Containers[0].Name).Should(Equal(name))
-// 		}
-// 	}).Should(Succeed())
-// }
-
 func verifyWorkerPodContainerNameConsistently(workloadIndex int, name string) {
 	GinkgoHelper()
 	Consistently(func(g Gomega) {
@@ -560,28 +666,6 @@ func verifyAllHypervisorPodHashConsistently(tfEnv *TensorFusionEnv, hash string)
 		}
 	}).Should(Succeed())
 }
-
-// func verifyAllWorkerPodContainerNameConsistently(tfEnv *TensorFusionEnv, name string) {
-// 	GinkgoHelper()
-// 	pool := tfEnv.GetGPUPool(0)
-// 	Consistently(func(g Gomega) {
-// 		workloadList := &tfv1.TensorFusionWorkloadList{}
-// 		g.Expect(k8sClient.List(ctx, workloadList, client.MatchingLabels(map[string]string{
-// 			constants.LabelKeyOwner: pool.Name,
-// 		}))).Should(Succeed())
-// 		for _, workload := range workloadList.Items {
-// 			podList := &corev1.PodList{}
-// 			g.Expect(k8sClient.List(ctx, podList,
-// 				client.InNamespace(workload.Namespace),
-// 				client.MatchingLabels{constants.WorkloadKey: workload.Name})).Should(Succeed())
-// 			g.Expect(podList.Items).Should(HaveLen(int(*workload.Spec.Replicas)))
-// 			for _, pod := range podList.Items {
-// 				g.Expect(pod.Spec.Containers[0].Name).Should(Equal(name))
-// 			}
-// 		}
-
-// 	}, duration, interval).Should(Succeed())
-// }
 
 func verifyHypervisorUpdateProgress(tfEnv *TensorFusionEnv, progress int32) {
 	GinkgoHelper()

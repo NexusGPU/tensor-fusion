@@ -35,6 +35,7 @@ type GPUPoolSpec struct {
 
 	CapacityConfig *CapacityConfig `json:"capacityConfig,omitempty"`
 
+	// +required
 	NodeManagerConfig *NodeManagerConfig `json:"nodeManagerConfig,omitempty"`
 
 	// +optional
