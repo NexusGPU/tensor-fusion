@@ -325,9 +325,130 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 	}
 
 	nodeName := nodeInfo.Node().Name
+
+	// Check if there are higher priority nominated pods waiting for this node's GPU resources
+	// This ensures that low priority pods don't steal GPU resources from pods that have already
+	// won preemption and are waiting for victims to terminate
+	if status := s.checkNominatedPodsGPUReservation(pod, nodeName, filterResult.(*GPUSchedulingStateData)); !status.IsSuccess() {
+		return status
+	}
+
 	if _, ok := filterResult.(*GPUSchedulingStateData).NodeGPUs[nodeName]; !ok {
 		return fwk.NewStatus(fwk.Unschedulable, "GPU not fit")
 	}
+	return fwk.NewStatus(fwk.Success, "")
+}
+
+// checkNominatedPodsGPUReservation checks if there are higher priority TensorFusion pods
+// that have nominated this node and are waiting for GPU resources.
+// If the current pod has lower priority, it should not be scheduled to avoid stealing
+// resources that are essentially "reserved" for the nominated pod.
+func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, schedulingData *GPUSchedulingStateData) *fwk.Status {
+	nominatedPodInfos := s.fh.NominatedPodsForNode(nodeName)
+	if len(nominatedPodInfos) == 0 {
+		return fwk.NewStatus(fwk.Success, "")
+	}
+
+	currentPodPriority := int32(0)
+	if pod.Spec.Priority != nil {
+		currentPodPriority = *pod.Spec.Priority
+	}
+
+	availableGPUs := schedulingData.NodeGPUs[nodeName]
+	if len(availableGPUs) == 0 {
+		return fwk.NewStatus(fwk.Success, "")
+	}
+
+	// Calculate total available GPU resources on this node
+	totalAvailableTflops := resource.Quantity{}
+	totalAvailableVram := resource.Quantity{}
+	for _, gpu := range availableGPUs {
+		if gpu.Status.Available != nil {
+			totalAvailableTflops.Add(gpu.Status.Available.Tflops)
+			totalAvailableVram.Add(gpu.Status.Available.Vram)
+		}
+	}
+
+	// Calculate resources needed by higher priority nominated pods
+	reservedTflops := resource.Quantity{}
+	reservedVram := resource.Quantity{}
+
+	for _, nominatedPodInfo := range nominatedPodInfos {
+		nominatedPod := nominatedPodInfo.GetPod()
+
+		// Skip if it's the same pod
+		if nominatedPod.UID == pod.UID {
+			continue
+		}
+
+		// Only consider TensorFusion worker pods
+		if !utils.IsTensorFusionWorker(nominatedPod) {
+			continue
+		}
+
+		nominatedPodPriority := int32(0)
+		if nominatedPod.Spec.Priority != nil {
+			nominatedPodPriority = *nominatedPod.Spec.Priority
+		}
+
+		// Only reserve resources for pods with higher or equal priority
+		if nominatedPodPriority < currentPodPriority {
+			continue
+		}
+
+		// Get the nominated pod's GPU resource requirements
+		nominatedAllocReq, _, err := s.allocator.ComposeAllocationRequest(nominatedPod)
+		if err != nil {
+			s.logger.V(4).Info("Failed to compose allocation request for nominated pod",
+				"nominatedPod", nominatedPod.Name, "error", err)
+			continue
+		}
+
+		// Add to reserved resources
+		reservedTflops.Add(nominatedAllocReq.Request.Tflops)
+		reservedVram.Add(nominatedAllocReq.Request.Vram)
+
+		s.logger.V(4).Info("Reserving GPU resources for nominated pod",
+			"currentPod", pod.Name,
+			"nominatedPod", nominatedPod.Name,
+			"nominatedPriority", nominatedPodPriority,
+			"currentPriority", currentPodPriority,
+			"reservedTflops", nominatedAllocReq.Request.Tflops.String(),
+			"reservedVram", nominatedAllocReq.Request.Vram.String())
+	}
+
+	// If no resources need to be reserved, allow scheduling
+	if reservedTflops.IsZero() && reservedVram.IsZero() {
+		return fwk.NewStatus(fwk.Success, "")
+	}
+
+	// Check if there are enough resources after reservation
+	remainingTflops := totalAvailableTflops.DeepCopy()
+	remainingVram := totalAvailableVram.DeepCopy()
+	remainingTflops.Sub(reservedTflops)
+	remainingVram.Sub(reservedVram)
+
+	// Get current pod's requirements
+	currentAllocReq, _, err := s.allocator.ComposeAllocationRequest(pod)
+	if err != nil {
+		return fwk.NewStatus(fwk.Error, "failed to compose allocation request: "+err.Error())
+	}
+
+	// Check if remaining resources are sufficient
+	if remainingTflops.Cmp(currentAllocReq.Request.Tflops) < 0 ||
+		remainingVram.Cmp(currentAllocReq.Request.Vram) < 0 {
+		s.logger.Info("GPU resources reserved for higher priority nominated pods",
+			"currentPod", pod.Name,
+			"node", nodeName,
+			"currentPriority", currentPodPriority,
+			"reservedTflops", reservedTflops.String(),
+			"reservedVram", reservedVram.String(),
+			"requiredTflops", currentAllocReq.Request.Tflops.String(),
+			"requiredVram", currentAllocReq.Request.Vram.String())
+		return fwk.NewStatus(fwk.Unschedulable,
+			fmt.Sprintf("GPU resources reserved for higher priority nominated pods on node %s", nodeName))
+	}
+
 	return fwk.NewStatus(fwk.Success, "")
 }
 
@@ -570,6 +691,22 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 	// If resource decreased, skip
 	if increaseTflops.Cmp(resource.MustParse("0")) <= 0 && increaseVram.Cmp(resource.MustParse("0")) <= 0 {
 		return fwk.QueueSkip, nil
+	}
+
+	// OPTIMIZATION: For nominated pods (pods that won preemption), immediately requeue
+	// when any GPU resource becomes available on their nominated node.
+	// This significantly reduces the delay after preemption.
+	if pod.Status.NominatedNodeName != "" && newGPU != nil {
+		gpuNodeName := newGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if gpuNodeName == pod.Status.NominatedNodeName {
+			logger.Info("GPU resource released on nominated node, immediately requeue preempting pod",
+				"pod", klog.KObj(pod),
+				"nominatedNode", pod.Status.NominatedNodeName,
+				"gpu", newGPU.Name,
+				"increaseTflops", increaseTflops.String(),
+				"increaseVram", increaseVram.String())
+			return fwk.Queue, nil
+		}
 	}
 
 	// Compose allocation request for the pod passed in by scheduler framework

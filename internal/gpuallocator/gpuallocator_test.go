@@ -392,4 +392,138 @@ var _ = Describe("GPU Allocator", func() {
 		})
 	})
 
+	Context("FilterWithPreempt", func() {
+		It("should include other available GPUs from same node for multi-GPU preemption", func() {
+			// Allocate GPU-1 to a workload first
+			request := tfv1.Resource{
+				Tflops: resource.MustParse("50"),
+				Vram:   resource.MustParse("10Gi"),
+			}
+			gpus, err := allocateAndSync("test-pool", request, 1, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gpus).To(HaveLen(1))
+
+			// Now test FilterWithPreempt for a 2-GPU requirement
+			// Simulate preempting the allocated GPU
+			preemptAllocRequest := &tfv1.AllocRequest{
+				WorkloadNameNamespace: workloadNameNs,
+				GPUNames:              []string{gpus[0].Name},
+				Request:               request,
+				PodMeta:               testPodMeta,
+			}
+
+			// Request 2 GPUs from the same node
+			allocReq := &tfv1.AllocRequest{
+				PoolName:              "test-pool",
+				WorkloadNameNamespace: tfv1.NameNamespace{Namespace: "default", Name: "test-workload-2"},
+				Request: tfv1.Resource{
+					Tflops: resource.MustParse("30"),
+					Vram:   resource.MustParse("8Gi"),
+				},
+				Count:   2,
+				PodMeta: metav1.ObjectMeta{UID: "test-pod-2", Namespace: "default", Name: "test-pod-2"},
+			}
+
+			// Call FilterWithPreempt
+			filteredGPUs, _, err := allocator.FilterWithPreempt(allocReq, []*tfv1.AllocRequest{preemptAllocRequest})
+			Expect(err).NotTo(HaveOccurred())
+			
+			// Should return 2 GPUs from the same node: one from preemption + one already available
+			Expect(filteredGPUs).To(HaveLen(2))
+			
+			// Verify all GPUs are from the same node
+			nodeName := filteredGPUs[0].Labels[constants.LabelKeyOwner]
+			for _, gpu := range filteredGPUs {
+				Expect(gpu.Labels[constants.LabelKeyOwner]).To(Equal(nodeName))
+			}
+		})
+
+		It("should apply SameNodeFilter for multi-GPU requirements", func() {
+			// Request 2 GPUs
+			allocReq := &tfv1.AllocRequest{
+				PoolName:              "test-pool",
+				WorkloadNameNamespace: tfv1.NameNamespace{Namespace: "default", Name: "test-workload-multi"},
+				Request: tfv1.Resource{
+					Tflops: resource.MustParse("20"),
+					Vram:   resource.MustParse("4Gi"),
+				},
+				Count:   2,
+				PodMeta: metav1.ObjectMeta{UID: "test-pod-multi", Namespace: "default", Name: "test-pod-multi"},
+			}
+
+			// Simulate preempting one GPU
+			preemptAllocRequest := &tfv1.AllocRequest{
+				WorkloadNameNamespace: workloadNameNs,
+				GPUNames:              []string{"gpu-1"},
+				Request: tfv1.Resource{
+					Tflops: resource.MustParse("10"),
+					Vram:   resource.MustParse("2Gi"),
+				},
+				PodMeta: testPodMeta,
+			}
+
+			// Call FilterWithPreempt
+			filteredGPUs, _, err := allocator.FilterWithPreempt(allocReq, []*tfv1.AllocRequest{preemptAllocRequest})
+			
+			// Should succeed if same node has enough GPUs, otherwise error
+			if err == nil {
+				Expect(filteredGPUs).To(HaveLen(2))
+				// Verify all GPUs are from the same node
+				nodeName := filteredGPUs[0].Labels[constants.LabelKeyOwner]
+				for _, gpu := range filteredGPUs {
+					Expect(gpu.Labels[constants.LabelKeyOwner]).To(Equal(nodeName))
+				}
+			}
+		})
+
+		It("should simulate resource release correctly during preemption", func() {
+			// Allocate a GPU first
+			request := tfv1.Resource{
+				Tflops: resource.MustParse("70"),
+				Vram:   resource.MustParse("15Gi"),
+			}
+			gpus, err := allocateAndSync("test-pool", request, 1, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gpus).To(HaveLen(1))
+
+			// Store the GPU's available resources before preemption
+			gpuBefore := getGPU(gpus[0].Name)
+			availableTflopsBefore := gpuBefore.Status.Available.Tflops.DeepCopy()
+			availableVramBefore := gpuBefore.Status.Available.Vram.DeepCopy()
+
+			// Simulate preemption
+			preemptAllocRequest := &tfv1.AllocRequest{
+				WorkloadNameNamespace: workloadNameNs,
+				GPUNames:              []string{gpus[0].Name},
+				Request:               request,
+				PodMeta:               testPodMeta,
+			}
+
+			allocReq := &tfv1.AllocRequest{
+				PoolName:              "test-pool",
+				WorkloadNameNamespace: tfv1.NameNamespace{Namespace: "default", Name: "new-workload"},
+				Request: tfv1.Resource{
+					Tflops: resource.MustParse("50"),
+					Vram:   resource.MustParse("10Gi"),
+				},
+				Count:   1,
+				PodMeta: metav1.ObjectMeta{UID: "new-pod", Namespace: "default", Name: "new-pod"},
+			}
+
+			// Call FilterWithPreempt
+			filteredGPUs, _, err := allocator.FilterWithPreempt(allocReq, []*tfv1.AllocRequest{preemptAllocRequest})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(filteredGPUs).To(HaveLen(1))
+
+			// Verify the filtered GPU has simulated the resource release
+			expectedTflops := availableTflopsBefore.DeepCopy()
+			expectedTflops.Add(request.Tflops)
+			expectedVram := availableVramBefore.DeepCopy()
+			expectedVram.Add(request.Vram)
+
+			Expect(filteredGPUs[0].Status.Available.Tflops.Cmp(expectedTflops)).To(Equal(0))
+			Expect(filteredGPUs[0].Status.Available.Vram.Cmp(expectedVram)).To(Equal(0))
+		})
+	})
+
 })

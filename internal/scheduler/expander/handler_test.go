@@ -129,6 +129,9 @@ var _ = Describe("NodeExpander Unit Tests", func() {
 		It("should manage pre-scheduled pods correctly", func() {
 			testPreScheduledPodManagement(suite)
 		})
+
+		// Note: Testing skip expansion for nominated pods is covered by integration tests
+		// as it requires the scheduler framework's QueuedPodInfo which is difficult to mock
 	})
 
 	Describe("Node Expansion Integration Tests", func() {

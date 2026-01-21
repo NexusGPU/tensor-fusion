@@ -1076,6 +1076,228 @@ func (s *GPUResourcesSuite) TestReconcileAllocationState_MixedTflopsAndComputePe
 	s.Contains(workloadNames, "workload-percent-mixed")
 }
 
+func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation() {
+	log.FromContext(s.ctx).Info("Running TestCheckNominatedPodsGPUReservation")
+
+	// Create a higher priority nominated pod
+	nominatedPod := s.makePod("nominated-pod", map[string]string{
+		constants.TFLOPSRequestAnnotation: "500",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.TFLOPSLimitAnnotation:   "500",
+		constants.VRAMLimitAnnotation:     "10Gi",
+		constants.GpuCountAnnotation:      "1",
+	})
+	highPriority := int32(100)
+	nominatedPod.Spec.Priority = &highPriority
+	nominatedPod.Status.NominatedNodeName = "node-a"
+	s.NoError(s.client.Update(s.ctx, nominatedPod))
+
+	// Create a lower priority pod trying to schedule on the same node
+	lowerPriorityPod := s.makePod("lower-priority-pod", map[string]string{
+		constants.TFLOPSRequestAnnotation: "600",
+		constants.VRAMRequestAnnotation:   "12Gi",
+		constants.TFLOPSLimitAnnotation:   "600",
+		constants.VRAMLimitAnnotation:     "12Gi",
+		constants.GpuCountAnnotation:      "1",
+	})
+	lowPriority := int32(50)
+	lowerPriorityPod.Spec.Priority = &lowPriority
+	s.NoError(s.client.Update(s.ctx, lowerPriorityPod))
+
+	// Run PreFilter for both pods
+	state := framework.NewCycleState()
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, lowerPriorityPod, []fwk.NodeInfo{})
+	s.Require().True(preFilterStatus.IsSuccess())
+
+	// Get scheduling data
+	data, err := state.Read(CycleStateGPUSchedulingResult)
+	s.NoError(err)
+	schedulingData := data.(*GPUSchedulingStateData)
+
+	// Test checkNominatedPodsGPUReservation
+	status := s.plugin.checkNominatedPodsGPUReservation(lowerPriorityPod, "node-a", schedulingData)
+	
+	// Should be unschedulable because resources are reserved for higher priority nominated pod
+	s.Equal(fwk.Unschedulable, status.Code())
+	s.Contains(status.Message(), "reserved for higher priority nominated pods")
+}
+
+func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation_SamePriority() {
+	log.FromContext(s.ctx).Info("Running TestCheckNominatedPodsGPUReservation_SamePriority")
+
+	// Create a nominated pod with priority 50
+	nominatedPod := s.makePod("nominated-pod-same-pri", map[string]string{
+		constants.TFLOPSRequestAnnotation: "400",
+		constants.VRAMRequestAnnotation:   "8Gi",
+		constants.TFLOPSLimitAnnotation:   "400",
+		constants.VRAMLimitAnnotation:     "8Gi",
+		constants.GpuCountAnnotation:      "1",
+	})
+	priority := int32(50)
+	nominatedPod.Spec.Priority = &priority
+	nominatedPod.Status.NominatedNodeName = "node-b"
+	s.NoError(s.client.Update(s.ctx, nominatedPod))
+
+	// Create another pod with same priority
+	samePriorityPod := s.makePod("same-priority-pod", map[string]string{
+		constants.TFLOPSRequestAnnotation: "500",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.TFLOPSLimitAnnotation:   "500",
+		constants.VRAMLimitAnnotation:     "10Gi",
+		constants.GpuCountAnnotation:      "1",
+	})
+	samePriorityPod.Spec.Priority = &priority
+	s.NoError(s.client.Update(s.ctx, samePriorityPod))
+
+	// Run PreFilter
+	state := framework.NewCycleState()
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, samePriorityPod, []fwk.NodeInfo{})
+	s.Require().True(preFilterStatus.IsSuccess())
+
+	// Get scheduling data
+	data, err := state.Read(CycleStateGPUSchedulingResult)
+	s.NoError(err)
+	schedulingData := data.(*GPUSchedulingStateData)
+
+	// Test checkNominatedPodsGPUReservation
+	status := s.plugin.checkNominatedPodsGPUReservation(samePriorityPod, "node-b", schedulingData)
+	
+	// Should reserve resources even for same priority pods (nominated pods have precedence)
+	s.Equal(fwk.Unschedulable, status.Code())
+}
+
+func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation_SufficientResources() {
+	log.FromContext(s.ctx).Info("Running TestCheckNominatedPodsGPUReservation_SufficientResources")
+
+	// Create a nominated pod requesting small resources
+	nominatedPod := s.makePod("nominated-pod-small", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "2Gi",
+		constants.TFLOPSLimitAnnotation:   "100",
+		constants.VRAMLimitAnnotation:     "2Gi",
+		constants.GpuCountAnnotation:      "1",
+	})
+	highPriority := int32(100)
+	nominatedPod.Spec.Priority = &highPriority
+	nominatedPod.Status.NominatedNodeName = "node-b"
+	s.NoError(s.client.Update(s.ctx, nominatedPod))
+
+	// Create a lower priority pod requesting resources that fit after reservation
+	lowerPriorityPod := s.makePod("lower-priority-pod-fit", map[string]string{
+		constants.TFLOPSRequestAnnotation: "800",
+		constants.VRAMRequestAnnotation:   "16Gi",
+		constants.TFLOPSLimitAnnotation:   "800",
+		constants.VRAMLimitAnnotation:     "16Gi",
+		constants.GpuCountAnnotation:      "1",
+	})
+	lowPriority := int32(50)
+	lowerPriorityPod.Spec.Priority = &lowPriority
+	s.NoError(s.client.Update(s.ctx, lowerPriorityPod))
+
+	// Run PreFilter
+	state := framework.NewCycleState()
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, lowerPriorityPod, []fwk.NodeInfo{})
+	s.Require().True(preFilterStatus.IsSuccess())
+
+	// Get scheduling data
+	data, err := state.Read(CycleStateGPUSchedulingResult)
+	s.NoError(err)
+	schedulingData := data.(*GPUSchedulingStateData)
+
+	// Test checkNominatedPodsGPUReservation
+	status := s.plugin.checkNominatedPodsGPUReservation(lowerPriorityPod, "node-b", schedulingData)
+	
+	// Should succeed because there are enough resources after reservation
+	// node-b has gpu-2 (1000 TFLOPs, 20Gi) + gpu-3 (2000 TFLOPs, 40Gi) = 3000 TFLOPs, 60Gi
+	// After reserving 100 TFLOPs, 2Gi for nominated pod, remaining is 2900 TFLOPs, 58Gi
+	// Lower priority pod needs 800 TFLOPs, 16Gi, which fits
+	s.Equal(fwk.Success, status.Code())
+}
+
+func (s *GPUResourcesSuite) TestQueueingHint_NominatedPodOptimization() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_NominatedPodOptimization")
+
+	// Create a nominated pod (pod that won preemption)
+	nominatedPod := s.makePod("nominated-pod-queue", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "1",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	nominatedPod.Status.NominatedNodeName = "node-a"
+	nominatedPod.Spec.NodeName = "" // Still pending
+	s.NoError(s.client.Update(s.ctx, nominatedPod))
+
+	// Simulate GPU resource release on the nominated node
+	oldGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
+		Status: tfv1.GPUStatus{
+			NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-a"},
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("50"),
+				Vram:   resource.MustParse("5Gi"),
+			},
+		},
+	}
+	newGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-1"},
+		Status: tfv1.GPUStatus{
+			NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-a"},
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("150"),  // Increase by 100
+				Vram:   resource.MustParse("15Gi"), // Increase by 10Gi
+			},
+		},
+	}
+
+	// Test queueingHint - should immediately queue the nominated pod
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, nominatedPod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.Queue, hint, "Nominated pod should be immediately queued when GPU resources are released on its nominated node")
+}
+
+func (s *GPUResourcesSuite) TestQueueingHint_NominatedPodDifferentNode() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_NominatedPodDifferentNode")
+
+	// Create a nominated pod for node-a
+	nominatedPod := s.makePod("nominated-pod-diff-node", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "1",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	nominatedPod.Status.NominatedNodeName = "node-a"
+	nominatedPod.Spec.NodeName = ""
+	s.NoError(s.client.Update(s.ctx, nominatedPod))
+
+	// Simulate GPU resource release on a different node (node-b)
+	oldGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-2"},
+		Status: tfv1.GPUStatus{
+			NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-b"},
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("50"),
+				Vram:   resource.MustParse("5Gi"),
+			},
+		},
+	}
+	newGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-2"},
+		Status: tfv1.GPUStatus{
+			NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-b"},
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("150"),
+				Vram:   resource.MustParse("15Gi"),
+			},
+		},
+	}
+
+	// Test queueingHint - should not queue because resource is on different node
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, nominatedPod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.Queue, hint, "Should still queue as normal pod benefit from resource increase")
+}
+
 func (s *GPUResourcesSuite) TestReconcileAllocationState_MultipleGPUsWithComputePercent() {
 	log.FromContext(s.ctx).Info("Running TestReconcileAllocationState_MultipleGPUsWithComputePercent")
 

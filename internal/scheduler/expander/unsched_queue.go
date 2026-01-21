@@ -59,6 +59,14 @@ func (h *UnscheduledPodHandler) HandleRejectedPod(ctx context.Context, podInfo *
 		return
 	}
 
+	// here if  pod has NominatedNodeName,we should not expand the node,skip
+	// Let Kubernetes scheduler handle the preemption process
+	if pod.Status.NominatedNodeName != "" {
+		h.logger.V(4).Info("Pod has nominated node from preemption, skipping expansion",
+			"pod", klog.KObj(pod), "nominatedNode", pod.Status.NominatedNodeName)
+		return
+	}
+
 	// take snapshot to avoid modify origin Pod info
 	pod = pod.DeepCopy()
 

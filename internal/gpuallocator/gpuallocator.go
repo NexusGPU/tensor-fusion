@@ -210,6 +210,9 @@ func (s *GpuAllocator) FilterWithPreempt(
 	preemptAllocRequests []*tfv1.AllocRequest,
 ) ([]*tfv1.GPU, []filter.FilterDetail, error) {
 	toFilterGPUs := []*tfv1.GPU{}
+
+	affectedNodes := make(map[string]bool)
+	// Step 1: Collect GPUs that will be released by preempted pods
 	for _, preemptAllocRequest := range preemptAllocRequests {
 		for _, gpuName := range preemptAllocRequest.GPUNames {
 			gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
@@ -217,6 +220,7 @@ func (s *GpuAllocator) FilterWithPreempt(
 				return nil, nil, fmt.Errorf("gpu %s not found", gpuName)
 			}
 			gpuCopy := gpu.DeepCopy()
+			// Simulate releasing resources
 			var reqTflops resource.Quantity
 			if !preemptAllocRequest.Request.ComputePercent.IsZero() {
 				requiredTflops := utils.ComputePercentToTflops(gpuCopy.Status.Capacity.Tflops, preemptAllocRequest.Request)
@@ -227,14 +231,54 @@ func (s *GpuAllocator) FilterWithPreempt(
 			gpuCopy.Status.Available.Tflops.Add(reqTflops)
 			gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
 			toFilterGPUs = append(toFilterGPUs, gpuCopy)
+
+			// Track affected nodes
+			nodeName := gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel]
+			if nodeName != "" {
+				affectedNodes[nodeName] = true
+			}
 		}
 	}
 
+	// Step 2: Add other available GPUs from the same node(s) in the pool
+	// This is critical for multi-GPU pods: preemption might release 1 GPU, but the node
+	// might already have other free GPUs that together satisfy the requirement
+	poolGPUs := s.listGPUsFromPool(req.PoolName)
+	for _, gpu := range poolGPUs {
+		nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+
+		// Only include GPUs from affected nodes
+		if !affectedNodes[nodeName] {
+			continue
+		}
+
+		// Avoid duplicates (GPU already in toFilterGPUs from preemption)
+		alreadyIncluded := false
+		for _, included := range toFilterGPUs {
+			if included.Name == gpu.Name {
+				alreadyIncluded = true
+				break
+			}
+		}
+
+		if !alreadyIncluded {
+			toFilterGPUs = append(toFilterGPUs, gpu.DeepCopy())
+		}
+	}
+
+	// Step 3: Apply filters including SameNodeFilter for multi-GPU requirements
 	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request, req.GPUIndices))
+
 	// Add GPU model filter if specified
 	if req.GPUModel != "" {
 		filterRegistry = filterRegistry.With(filter.NewGPUModelAndVendorFilter(req.GPUModel, req.GPUVendor))
 	}
+
+	// Apply SameNodeFilter for multi-GPU pods to ensure all GPUs are from the same node
+	if req.Count > 1 {
+		filterRegistry = filterRegistry.With(filter.NewSameNodeFilter(req.Count))
+	}
+
 	// No need to check count and other filters since it's always in the same node during each preempt trial
 	filteredGPUs, filterDetails, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs, false)
 	if err != nil {
