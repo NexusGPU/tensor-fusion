@@ -53,12 +53,12 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	// default warmUp is zero, only scale up when available < 0
 	warmUpTFlops := int64(0)
 	warmUpVRAM := int64(0)
-	if pool.Spec.CapacityConfig.WarmResources != nil {
+	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.WarmResources != nil {
 		warmUpTFlops = pool.Spec.CapacityConfig.WarmResources.TFlops.Value()
 		warmUpVRAM = pool.Spec.CapacityConfig.WarmResources.VRAM.Value()
 	}
 
-	if pool.Spec.CapacityConfig.MinResources != nil {
+	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MinResources != nil {
 		minTFlops := pool.Spec.CapacityConfig.MinResources.TFlops.Value()
 		minVRAM := pool.Spec.CapacityConfig.MinResources.VRAM.Value()
 
@@ -87,7 +87,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 		}
 	}
 
-	if shouldScaleUp && pool.Spec.CapacityConfig.MaxResources != nil {
+	if shouldScaleUp && pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MaxResources != nil {
 		maxTFlops := pool.Spec.CapacityConfig.MaxResources.TFlops.Value()
 		maxVRAM := pool.Spec.CapacityConfig.MaxResources.VRAM.Value()
 

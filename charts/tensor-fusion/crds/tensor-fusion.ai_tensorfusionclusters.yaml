@@ -786,6 +786,8 @@ spec:
                           type: object
                         schedulingConfigTemplate:
                           type: string
+                      required:
+                      - nodeManagerConfig
                       type: object
                   required:
                   - specTemplate

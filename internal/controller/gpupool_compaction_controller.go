@@ -94,11 +94,19 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 		poolTotalVRAM += vram
 	}
 
-	poolWarmUpTFlops := pool.Spec.CapacityConfig.WarmResources.TFlops.Value()
-	poolWarmUpVRAM := pool.Spec.CapacityConfig.WarmResources.VRAM.Value()
+	poolWarmUpTFlops := int64(0)
+	poolWarmUpVRAM := int64(0)
+	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.WarmResources != nil {
+		poolWarmUpTFlops = pool.Spec.CapacityConfig.WarmResources.TFlops.Value()
+		poolWarmUpVRAM = pool.Spec.CapacityConfig.WarmResources.VRAM.Value()
+	}
 
-	poolMinTFlops := pool.Spec.CapacityConfig.MinResources.TFlops.Value()
-	poolMinVRAM := pool.Spec.CapacityConfig.MinResources.VRAM.Value()
+	poolMinTFlops := int64(0)
+	poolMinVRAM := int64(0)
+	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MinResources != nil {
+		poolMinTFlops = pool.Spec.CapacityConfig.MinResources.TFlops.Value()
+		poolMinVRAM = pool.Spec.CapacityConfig.MinResources.VRAM.Value()
+	}
 
 	log.Info("Found latest pool capacity constraints before compaction", "pool", pool.Name, "warmUpTFlops", poolWarmUpTFlops, "warmUpVRAM", poolWarmUpVRAM, "minTFlops", poolMinTFlops, "minVRAM", poolMinVRAM, "totalTFlops", poolTotalTFlops, "totalVRAM", poolTotalVRAM)
 
