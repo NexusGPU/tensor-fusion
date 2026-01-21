@@ -176,6 +176,26 @@ var _ = BeforeSuite(func() {
 				},
 			},
 		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "gpu-5",
+				Namespace: "default",
+				Labels: map[string]string{
+					constants.GpuPoolKey:    "test-pool",
+					constants.LabelKeyOwner: "node-1",
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "gpu-6",
+				Namespace: "default",
+				Labels: map[string]string{
+					constants.GpuPoolKey:    "test-pool",
+					constants.LabelKeyOwner: "node-1",
+				},
+			},
+		},
 	}
 
 	// First create the GPUs without status
@@ -253,6 +273,38 @@ var _ = BeforeSuite(func() {
 				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-3"},
 			},
 		},
+		{
+			name: "gpu-5",
+			status: tfv1.GPUStatus{
+				Phase: tfv1.TensorFusionGPUPhaseRunning,
+				Available: &tfv1.Resource{
+					Tflops: resource.MustParse("100"),
+					Vram:   resource.MustParse("16Gi"),
+				},
+				Capacity: &tfv1.Resource{
+					Tflops: resource.MustParse("100"),
+					Vram:   resource.MustParse("16Gi"),
+				},
+				GPUModel:     "NVIDIA A100",
+				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-1"},
+			},
+		},
+		{
+			name: "gpu-6",
+			status: tfv1.GPUStatus{
+				Phase: tfv1.TensorFusionGPUPhaseRunning,
+				Available: &tfv1.Resource{
+					Tflops: resource.MustParse("100"),
+					Vram:   resource.MustParse("16Gi"),
+				},
+				Capacity: &tfv1.Resource{
+					Tflops: resource.MustParse("100"),
+					Vram:   resource.MustParse("16Gi"),
+				},
+				GPUModel:     "NVIDIA A100",
+				NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-1"},
+			},
+		},
 	}
 
 	for _, gs := range gpuStatuses {
@@ -313,10 +365,10 @@ var _ = BeforeSuite(func() {
 			name: "node-1",
 			status: tfv1.GPUNodeStatus{
 				Phase:           tfv1.TensorFusionGPUNodePhaseRunning,
-				TotalTFlops:     resource.MustParse("200"),
-				TotalVRAM:       resource.MustParse("48Gi"),
-				AvailableTFlops: resource.MustParse("180"),
-				AvailableVRAM:   resource.MustParse("48Gi"),
+				TotalTFlops:     resource.MustParse("400"),
+				TotalVRAM:       resource.MustParse("80Gi"),
+				AvailableTFlops: resource.MustParse("380"),
+				AvailableVRAM:   resource.MustParse("80Gi"),
 			},
 		},
 		{

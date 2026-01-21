@@ -27,6 +27,7 @@ import (
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -77,7 +78,9 @@ func setupKubernetes() (*version.Version, *rest.Config, error) {
 // Estimated Performance: 400-500 pods/second for 1K nodes, 10K Pods cluster on Mac M4 Pro
 // Adjust SchedulerConfig QPS/Burst, percentage of
 func BenchmarkScheduler(b *testing.B) {
+	// Initialize both klog and controller-runtime loggers
 	klog.SetLogger(zap.New(zap.WriteTo(os.Stderr), zap.UseDevMode(false), zap.Level(zapcore.ErrorLevel)))
+	logf.SetLogger(zap.New(zap.WriteTo(os.Stderr), zap.UseDevMode(false), zap.Level(zapcore.ErrorLevel)))
 	// Setup phase - runs once before all benchmark iterations
 	ver, cfg, err := setupKubernetes()
 	if err != nil {
