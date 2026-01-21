@@ -168,6 +168,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	}
 	tfInfo.Profile.Qos = calculateQoSLevel(tfInfo.Profile, pool)
 
+	// If tensor-fusion.ai/enabled is set to true, but both tflops-request/limit and gpu-resource are null (or not set), is it still necessary to create a new workload?
 	workload, err := m.createOrUpdateWorkload(ctx, pod, &tfInfo)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("create tf workload: %w", err))
