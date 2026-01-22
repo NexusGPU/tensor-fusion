@@ -272,8 +272,8 @@ var GPUResourceNames = []corev1.ResourceName{
 
 func containsGPUResources(res corev1.ResourceList) bool {
 	for _, gpuResourceName := range GPUResourceNames {
-		_, ok := res[gpuResourceName]
-		if ok {
+		quantity, ok := res[gpuResourceName]
+		if ok && quantity.Sign() > 0 {
 			return true
 		}
 	}
