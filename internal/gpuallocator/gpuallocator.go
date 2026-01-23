@@ -208,8 +208,21 @@ func (s *GpuAllocator) Filter(
 func (s *GpuAllocator) FilterWithPreempt(
 	req *tfv1.AllocRequest,
 	preemptAllocRequests []*tfv1.AllocRequest,
+	targetNodeNames ...string, // Optional: if provided, only consider GPUs from these nodes
 ) ([]*tfv1.GPU, []filter.FilterDetail, error) {
 	toFilterGPUs := []*tfv1.GPU{}
+
+	affectedNodes := make(map[string]bool)
+	//use map for O(1) duplicate check instead of O(M) array iteration
+	includedGPUs := make(map[string]bool)
+	//if specified target nodes, only consider these nodes
+	if len(targetNodeNames) > 0 {
+		for _, nodeName := range targetNodeNames {
+			affectedNodes[nodeName] = true
+		}
+	}
+
+	// Step 1: Collect GPUs that will be released by preempted pods
 	for _, preemptAllocRequest := range preemptAllocRequests {
 		for _, gpuName := range preemptAllocRequest.GPUNames {
 			gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
@@ -217,6 +230,7 @@ func (s *GpuAllocator) FilterWithPreempt(
 				return nil, nil, fmt.Errorf("gpu %s not found", gpuName)
 			}
 			gpuCopy := gpu.DeepCopy()
+			// Simulate releasing resources
 			var reqTflops resource.Quantity
 			if !preemptAllocRequest.Request.ComputePercent.IsZero() {
 				requiredTflops := utils.ComputePercentToTflops(gpuCopy.Status.Capacity.Tflops, preemptAllocRequest.Request)
@@ -227,15 +241,49 @@ func (s *GpuAllocator) FilterWithPreempt(
 			gpuCopy.Status.Available.Tflops.Add(reqTflops)
 			gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
 			toFilterGPUs = append(toFilterGPUs, gpuCopy)
+			includedGPUs[gpuCopy.Name] = true
+
+			// Add the node of the released GPU to affectedNodes if no target nodes are specified
+			if len(targetNodeNames) == 0 {
+				nodeName := gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel]
+				if nodeName != "" {
+					affectedNodes[nodeName] = true
+				}
+			}
+		}
+	}
+	// Step2: Add other available GPUs from the same node(s) in the pool
+	// This is critical for multi-GPU pods: preemption might release 1 GPU, but the node
+	// might already have other free GPUs that together satisfy the requirement
+	if len(affectedNodes) == 0 {
+		// This should not happen: FilterWithPreempt requires either targetNodeNames or preemptAllocRequests
+		return nil, nil, fmt.Errorf("FilterWithPreempt called with no affected nodes, invalid usage")
+	}
+	// only iterate the affected nodes, instead of the entire pool(O(N) instead of O(P))
+	for nodeName := range affectedNodes {
+		nodeGPUs := s.nodeGpuStore[nodeName]
+		for _, gpu := range nodeGPUs {
+			// Use map for O(1) duplicate check instead of O(M) array iteration
+			if !includedGPUs[gpu.Name] {
+				toFilterGPUs = append(toFilterGPUs, gpu.DeepCopy())
+				includedGPUs[gpu.Name] = true
+			}
 		}
 	}
 
+	// Step 3: Apply filters including SameNodeFilter for multi-GPU requirements
 	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request, req.GPUIndices))
+
 	// Add GPU model filter if specified
 	if req.GPUModel != "" {
 		filterRegistry = filterRegistry.With(filter.NewGPUModelAndVendorFilter(req.GPUModel, req.GPUVendor))
 	}
-	// No need to check count and other filters since it's always in the same node during each preempt trial
+
+	// Apply SameNodeFilter for multi-GPU pods to ensure all GPUs are from the same node
+	if req.Count > 1 {
+		filterRegistry = filterRegistry.With(filter.NewSameNodeFilter(req.Count))
+	}
+
 	filteredGPUs, filterDetails, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs, false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("apply filters: %w", err)
@@ -1331,10 +1379,22 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 			reqTflops = existingAllocation.Request.Tflops
 			limitTflops = existingAllocation.Limit.Tflops
 		}
+		// Multiply by Count because each GPU contributes to total usage
+		// For multi-GPU pods, all resources (TFLOPs and VRAM) should be multiplied by GPU count
+		// Note: value assignment in Go creates a copy, safe to Mul directly
+		count := int64(existingAllocation.Count)
+		reqTflops.Mul(count)
 		toPreemptUsage.Requests.Tflops.Add(reqTflops)
-		toPreemptUsage.Requests.Vram.Add(existingAllocation.Request.Vram)
+		limitTflops.Mul(count)
 		toPreemptUsage.Limits.Tflops.Add(limitTflops)
-		toPreemptUsage.Limits.Vram.Add(existingAllocation.Limit.Vram)
+		// Value assignment creates a copy, safe to modify
+		reqVram := existingAllocation.Request.Vram.DeepCopy()
+		reqVram.Mul(count)
+		toPreemptUsage.Requests.Vram.Add(reqVram)
+		limitVram := existingAllocation.Limit.Vram.DeepCopy()
+		limitVram.Mul(count)
+		toPreemptUsage.Limits.Vram.Add(limitVram)
+
 		preemptAllocRequests = append(preemptAllocRequests, existingAllocation)
 	}
 
@@ -1350,7 +1410,8 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 	if allocReq.PoolName == "" {
 		return fmt.Errorf("GPU Pool name is empty, can not find GPUs during preempt")
 	}
-	filteredGPUs, _, err := s.FilterWithPreempt(allocReq, preemptAllocRequests)
+	// Pass nodeName to FilterWithPreempt for optimization (avoid iterating entire pool)
+	filteredGPUs, _, err := s.FilterWithPreempt(allocReq, preemptAllocRequests, nodeName)
 	if err != nil {
 		return err
 	}
