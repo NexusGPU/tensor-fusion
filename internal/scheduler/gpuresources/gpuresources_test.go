@@ -1153,8 +1153,9 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation() {
 	status := s.plugin.checkNominatedPodsGPUReservation(lowerPriorityPod, "node-a", schedulingData)
 
 	// Should be unschedulable because resources are reserved for higher priority nominated pod
+	// NOTE: This is single-GPU nominated pod, so it uses resource calculation
 	s.Equal(fwk.Unschedulable, status.Code())
-	s.Contains(status.Message(), "reserved for higher priority nominated pods")
+	s.Contains(status.Message(), "reserved for nominated pods")
 }
 
 func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation_SamePriority() {
@@ -1207,8 +1208,11 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation_SamePriority() 
 	// Test checkNominatedPodsGPUReservation
 	status := s.plugin.checkNominatedPodsGPUReservation(samePriorityPod, "node-b", schedulingData)
 
-	// Should reserve resources even for same priority pods (nominated pods have precedence)
-	s.Equal(fwk.Unschedulable, status.Code())
+	// Should succeed because same priority nominated pods do NOT block current pod
+	// node-b total: gpu-2 (1000 TFLOPs, 20Gi) + gpu-3 (2000 TFLOPs, 40Gi) = 3000 TFLOPs, 60Gi
+	// Same priority pod needs 500 TFLOPs, 10Gi - should be schedulable
+	// Only HIGHER priority nominated pods reserve resources
+	s.Equal(fwk.Success, status.Code())
 }
 
 func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation_SufficientResources() {
@@ -1264,7 +1268,7 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation_SufficientResou
 	// Should succeed because there are enough resources after reservation
 	// node-b has gpu-2 (1000 TFLOPs, 20Gi) + gpu-3 (2000 TFLOPs, 40Gi) = 3000 TFLOPs, 60Gi
 	// After reserving 100 TFLOPs, 2Gi for nominated pod, remaining is 2900 TFLOPs, 58Gi
-	// Lower priority pod needs 800 TFLOPs, 16Gi, which fits
+	// Lower priority pod needs 800 TFLOPs, 16Gi, which fits comfortably
 	s.Equal(fwk.Success, status.Code())
 }
 

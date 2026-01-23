@@ -339,10 +339,12 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 	return fwk.NewStatus(fwk.Success, "")
 }
 
-// checkNominatedPodsGPUReservation checks if there are higher priority TensorFusion pods
-// that have nominated this node and are waiting for GPU resources.
-// If the current pod has lower priority, it should not be scheduled to avoid stealing
-// resources that are essentially "reserved" for the nominated pod.
+// checkNominatedPodsGPUReservation checks if there are nominated TensorFusion pods
+// on this node and reserves their resources to prevent scheduling conflicts.
+// Strategy:
+// - Only **higher** priority nominated pods will have their resources reserved
+// - Equal or lower priority nominated pods are ignored (current pod has equal/higher right)
+// - Current pod can be scheduled if remaining resources (after reservation) are sufficient
 func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, schedulingData *GPUSchedulingStateData) *fwk.Status {
 	nominatedPodInfos := s.fh.NominatedPodsForNode(nodeName)
 	if len(nominatedPodInfos) == 0 {
@@ -391,21 +393,10 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 			nominatedPodPriority = *nominatedPod.Spec.Priority
 		}
 
-		// Reserve resources for nominated pods with higher priority
-		// For equal priority: also reserve to give nominated pods precedence (they won preemption)
-		if nominatedPodPriority < currentPodPriority {
+		// Only reserve resources for higher priority nominated pods
+		// Equal or lower priority pods should not block the current pod
+		if nominatedPodPriority <= currentPodPriority {
 			continue
-		}
-
-		// CRITICAL: If nominated pod has higher priority, ALWAYS block lower priority pods
-		// This prevents preempted pods from restarting and stealing resources
-		if nominatedPodPriority > currentPodPriority {
-			s.logger.Info("Blocking lower priority pod to protect nominated pod's resources",
-				"currentPod", pod.Name,
-				"currentPriority", currentPodPriority,
-				"nominatedPod", nominatedPod.Name,
-				"nominatedPriority", nominatedPodPriority,
-				"node", nodeName)
 		}
 
 		// Get the nominated pod's GPU resource requirements
@@ -416,33 +407,24 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 			continue
 		}
 
-		// CRITICAL FIX: For multi-GPU nominated pods with higher priority,
-		// block ALL lower priority pods on this node to prevent partial resource stealing
-		// This prevents the issue where victim pods restart and occupy 1 GPU while
-		// the 2-GPU nominated pod is waiting for both GPUs
-		if nominatedAllocReq.Count > 1 && nominatedPodPriority > currentPodPriority {
-			s.logger.Info("Blocking lower priority pod completely for multi-GPU nominated pod",
-				"currentPod", pod.Name,
-				"currentPriority", currentPodPriority,
-				"nominatedPod", nominatedPod.Name,
-				"nominatedPriority", nominatedPodPriority,
-				"nominatedGPUCount", nominatedAllocReq.Count,
-				"node", nodeName)
-			return fwk.NewStatus(fwk.Unschedulable,
-				fmt.Sprintf("Node reserved for multi-GPU higher priority nominated pod %s (requires %d GPUs)", nominatedPod.Name, nominatedAllocReq.Count))
-		}
+		// Reserve resources for higher/equal priority nominated pods
+		// Calculate total resources needed (multiply by GPU count for multi-GPU pods)
+		nominatedTflopsTotal := nominatedAllocReq.Request.Tflops.DeepCopy()
+		nominatedTflopsTotal.Mul(int64(nominatedAllocReq.Count))
+		reservedTflops.Add(nominatedTflopsTotal)
 
-		// Add to reserved resources
-		reservedTflops.Add(nominatedAllocReq.Request.Tflops)
-		reservedVram.Add(nominatedAllocReq.Request.Vram)
+		nominatedVramTotal := nominatedAllocReq.Request.Vram.DeepCopy()
+		nominatedVramTotal.Mul(int64(nominatedAllocReq.Count))
+		reservedVram.Add(nominatedVramTotal)
 
-		s.logger.V(4).Info("Reserving GPU resources for nominated pod",
+		s.logger.V(4).Info("Reserving GPU resources for higher priority nominated pod",
 			"currentPod", pod.Name,
 			"nominatedPod", nominatedPod.Name,
 			"nominatedPriority", nominatedPodPriority,
 			"currentPriority", currentPodPriority,
-			"reservedTflops", nominatedAllocReq.Request.Tflops.String(),
-			"reservedVram", nominatedAllocReq.Request.Vram.String())
+			"gpuCount", nominatedAllocReq.Count,
+			"reservedTflopsTotal", nominatedTflopsTotal.String(),
+			"reservedVramTotal", nominatedVramTotal.String())
 	}
 
 	// If no resources need to be reserved, allow scheduling
@@ -462,19 +444,28 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 		return fwk.NewStatus(fwk.Error, "failed to compose allocation request: "+err.Error())
 	}
 
+	// IMPORTANT: Calculate total resources needed for multi-GPU pods
+	currentTflopsTotal := currentAllocReq.Request.Tflops.DeepCopy()
+	currentTflopsTotal.Mul(int64(currentAllocReq.Count))
+	currentVramTotal := currentAllocReq.Request.Vram.DeepCopy()
+	currentVramTotal.Mul(int64(currentAllocReq.Count))
+
 	// Check if remaining resources are sufficient
-	if remainingTflops.Cmp(currentAllocReq.Request.Tflops) < 0 ||
-		remainingVram.Cmp(currentAllocReq.Request.Vram) < 0 {
-		s.logger.Info("GPU resources reserved for higher priority nominated pods",
+	if remainingTflops.Cmp(currentTflopsTotal) < 0 ||
+		remainingVram.Cmp(currentVramTotal) < 0 {
+		s.logger.Info("Insufficient GPU resources after reserving for nominated pods",
 			"currentPod", pod.Name,
 			"node", nodeName,
 			"currentPriority", currentPodPriority,
+			"totalAvailableTflops", totalAvailableTflops.String(),
+			"totalAvailableVram", totalAvailableVram.String(),
 			"reservedTflops", reservedTflops.String(),
 			"reservedVram", reservedVram.String(),
-			"requiredTflops", currentAllocReq.Request.Tflops.String(),
-			"requiredVram", currentAllocReq.Request.Vram.String())
+			"requiredTflops", currentTflopsTotal.String(),
+			"requiredVram", currentVramTotal.String(),
+			"currentGPUCount", currentAllocReq.Count)
 		return fwk.NewStatus(fwk.Unschedulable,
-			fmt.Sprintf("GPU resources reserved for higher priority nominated pods on node %s", nodeName))
+			fmt.Sprintf("GPU resources reserved for nominated pods on node %s", nodeName))
 	}
 
 	return fwk.NewStatus(fwk.Success, "")
