@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
+const MaxGPUCounterPerAllocation = 128
 const CleanUpCheckInterval = 3 * time.Minute
 
 var mu sync.Mutex
@@ -314,8 +317,21 @@ func (s *GpuAllocator) Filter(
 func (s *GpuAllocator) FilterWithPreempt(
 	req *tfv1.AllocRequest,
 	preemptAllocRequests []*tfv1.AllocRequest,
+	targetNodeNames ...string,
 ) ([]*tfv1.GPU, []filter.FilterDetail, error) {
+
 	toFilterGPUs := []*tfv1.GPU{}
+
+	affectedNodes := make(map[string]bool)
+	// use map for O(1) duplicate check instead of O(M) array iteration
+	includedGPUs := make(map[string]bool)
+	// if specified target nodes, only consider these nodes
+	if len(targetNodeNames) > 0 {
+		for _, nodeName := range targetNodeNames {
+			affectedNodes[nodeName] = true
+		}
+	}
+
 	for _, preemptAllocRequest := range preemptAllocRequests {
 		for _, gpuName := range preemptAllocRequest.GPUNames {
 			gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
@@ -349,6 +365,31 @@ func (s *GpuAllocator) FilterWithPreempt(
 				gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
 			}
 			toFilterGPUs = append(toFilterGPUs, gpuCopy)
+
+			includedGPUs[gpuCopy.Name] = true
+			// Add the node of the released GPU to affectedNodes if no target nodes are specified
+			if len(targetNodeNames) == 0 {
+				nodeName := gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel]
+				if nodeName != "" {
+					affectedNodes[nodeName] = true
+				}
+			}
+		}
+	}
+
+	if len(affectedNodes) == 0 {
+		// This should not happen: FilterWithPreempt requires either targetNodeNames or preemptAllocRequests
+		return nil, nil, fmt.Errorf("FilterWithPreempt called with no affected nodes, invalid usage")
+	}
+	// only iterate the affected nodes, instead of the entire pool(O(N) instead of O(P))
+	for nodeName := range affectedNodes {
+		nodeGPUs := s.nodeGpuStore[nodeName]
+		for _, gpu := range nodeGPUs {
+			// Use map for O(1) duplicate check instead of O(M) array iteration
+			if !includedGPUs[gpu.Name] {
+				toFilterGPUs = append(toFilterGPUs, gpu.DeepCopy())
+				includedGPUs[gpu.Name] = true
+			}
 		}
 	}
 
@@ -378,7 +419,12 @@ func (s *GpuAllocator) FilterWithPreempt(
 		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
 	}
 
-	// 6. GPU vendor filter if specified
+	// 6. Same node filter must be applied at final step
+	if req.Count > 1 {
+		filterRegistry = filterRegistry.With(filter.NewSameNodeFilter(req.Count))
+	}
+
+	// 7. GPU vendor filter if specified
 	if req.GPUVendor != "" {
 		filterRegistry = filterRegistry.With(filter.NewGPUVendorFilter(req.GPUVendor))
 	}
@@ -1570,10 +1616,25 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 			reqTflops = existingAllocation.Request.Tflops
 			limitTflops = existingAllocation.Limit.Tflops
 		}
+
+		// Multiply by Count because each GPU contributes to total usage
+		// For multi-GPU pods, all resources (TFLOPs and VRAM) should be multiplied by GPU count
+		// Note: value assignment in Go creates a copy, safe to Mul directly
+		count := int64(existingAllocation.Count)
+		reqTflops.Mul(count)
 		toPreemptUsage.Requests.Tflops.Add(reqTflops)
-		toPreemptUsage.Requests.Vram.Add(existingAllocation.Request.Vram)
+
+		limitTflops.Mul(count)
 		toPreemptUsage.Limits.Tflops.Add(limitTflops)
-		toPreemptUsage.Limits.Vram.Add(existingAllocation.Limit.Vram)
+
+		// Value assignment creates a copy, safe to modify
+		reqVram := existingAllocation.Request.Vram.DeepCopy()
+		reqVram.Mul(count)
+		toPreemptUsage.Requests.Vram.Add(reqVram)
+		limitVram := existingAllocation.Limit.Vram.DeepCopy()
+		limitVram.Mul(count)
+		toPreemptUsage.Limits.Vram.Add(limitVram)
+
 		preemptAllocRequests = append(preemptAllocRequests, existingAllocation)
 	}
 
@@ -1589,7 +1650,7 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 	if allocReq.PoolName == "" {
 		return fmt.Errorf("GPU Pool name is empty, can not find GPUs during preempt")
 	}
-	filteredGPUs, _, err := s.FilterWithPreempt(allocReq, preemptAllocRequests)
+	filteredGPUs, _, err := s.FilterWithPreempt(allocReq, preemptAllocRequests, nodeName)
 	if err != nil {
 		return err
 	}
@@ -1956,6 +2017,66 @@ func (s *GpuAllocator) deallocPartition(storeGPU *tfv1.GPU, request *tfv1.AllocR
 		storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
 		storeGPU.Status.Available.Vram.Add(request.Request.Vram)
 	}
+}
+func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest, string, error) {
+	// allow Pods with no requests/limits to use TensorFusion, Pod webhook will ensure at least one request/limit is set
+	gpuRequestResource, err := utils.GetGPUResource(pod, true)
+	if err != nil {
+		log.FromContext(s.ctx).Error(err, "Invalid gpu request annotation", "pod", pod.Name, "namespace", pod.Namespace)
+	}
+	gpuLimitResource, err := utils.GetGPUResource(pod, false)
+	if err != nil {
+		log.FromContext(s.ctx).Error(err, "Invalid gpu limit annotation", "pod", pod.Name, "namespace", pod.Namespace)
+	}
+
+	count := 1
+	if gpuCountStr, exists := pod.Annotations[constants.GpuCountAnnotation]; exists {
+		count, err = strconv.Atoi(gpuCountStr)
+		if err != nil {
+			return &tfv1.AllocRequest{}, "invalid gpu count annotation", err
+		}
+	}
+	if count > MaxGPUCounterPerAllocation {
+		return &tfv1.AllocRequest{}, "gpu count annotation is too large", nil
+	}
+
+	qosLevel := tfv1.QoSLevel(pod.Annotations[constants.QoSLevelAnnotation])
+	if qosLevel == "" {
+		qosLevel = tfv1.QoSMedium
+	}
+
+	gpuVendor := pod.Annotations[constants.GpuVendorAnnotation]
+
+	gpuIndices, hasError := utils.ParseIndicesAnnotation(pod.Annotations[constants.GpuIndicesAnnotation])
+	if hasError {
+		return &tfv1.AllocRequest{}, "invalid gpu-indices annotation",
+			fmt.Errorf("can not parse gpu indices annotation")
+	}
+
+	allocRequest := tfv1.AllocRequest{
+		PoolName: pod.Annotations[constants.GpuPoolKey],
+		Request:  gpuRequestResource,
+		Limit:    gpuLimitResource,
+
+		Count:      uint(count),
+		GPUModel:   pod.Annotations[constants.GPUModelAnnotation],
+		GPUIndices: gpuIndices,
+		GPUVendor:  gpuVendor,
+		WorkloadNameNamespace: tfv1.NameNamespace{
+			Name:      pod.Labels[constants.WorkloadKey],
+			Namespace: pod.Namespace,
+		},
+		PodMeta: pod.ObjectMeta,
+		QoS:     qosLevel,
+	}
+
+	// for already allocated workers, set the GPU device IDs for further scaling and retrieval
+	if gpuIdStr, exists := pod.Annotations[constants.GPUDeviceIDsAnnotation]; exists {
+		gpuIds := strings.SplitSeq(gpuIdStr, ",")
+		allocRequest.GPUNames = slices.Collect(gpuIds)
+	}
+
+	return &allocRequest, "", nil
 }
 
 func (s *GpuAllocator) addAllocationMap(gpuNodeName string, podMeta metav1.ObjectMeta) {

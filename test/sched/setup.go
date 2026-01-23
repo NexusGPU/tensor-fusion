@@ -36,6 +36,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // BenchmarkConfig holds benchmark configuration
@@ -82,6 +83,9 @@ func NewBenchmarkFixture(
 
 	// Suppress verbose logging during benchmarks
 	suppressLogging()
+
+	// Set logger in context to avoid warnings from log.FromContext
+	ctx = log.IntoContext(ctx, klog.NewKlogr())
 
 	// Generate test data
 	nodes := generateNodes(config.NumNodes)
@@ -280,6 +284,21 @@ func generatePods(count int, namespace, poolName string) ([]*v1.Pod, float64, fl
 			constants.VRAMLimitAnnotation:     spec.vram,
 			constants.GpuCountAnnotation:      strconv.Itoa(spec.gpuCount),
 		}
+
+		// Add index resource to container limits for CDI device plugin
+		indexResourceKey := v1.ResourceName(constants.PodIndexAnnotation + constants.PodIndexDelimiter + "0")
+		if len(pod.Spec.Containers) == 0 {
+			pod.Spec.Containers = []v1.Container{
+				{
+					Name:  "worker",
+					Image: "test-image",
+				},
+			}
+		}
+		if pod.Spec.Containers[0].Resources.Limits == nil {
+			pod.Spec.Containers[0].Resources.Limits = make(v1.ResourceList)
+		}
+		pod.Spec.Containers[0].Resources.Limits[indexResourceKey] = *resource.NewQuantity(1, resource.DecimalSI)
 
 		podTflops := resource.MustParse(spec.tflops)
 		totalTflops += podTflops.AsApproximateFloat64() * float64(spec.gpuCount)
