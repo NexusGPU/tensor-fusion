@@ -9,6 +9,7 @@ import (
 
 const (
 	NvidiaGPUKey = "nvidia.com/gpu"
+	AmdGPUKey    = "amd.com/gpu"
 
 	// NVIDIA GPU driver upgrade state label
 	NvidiaGPUDriverUpgradeStateLabel = "nvidia.com/gpu-driver-upgrade-state"

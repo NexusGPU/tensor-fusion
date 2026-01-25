@@ -1,0 +1,147 @@
+# AMD GPU Configuration for TensorFusion
+# This file provides AMD-specific overrides for deploying TensorFusion with AMD GPUs
+
+# AMD GPU node label selector - nodes with AMD GPUs should have this label
+initialGpuNodeLabelSelector: "amd.com/gpu.product-name=AMD_Instinct_MI325_OAM"
+
+controller:
+  image:
+    repository: ghcr.io/saienduri/tensor-fusion-operator
+    tag: "amd-support"
+    pullPolicy: Always  # Force pull latest image for dev iteration
+  
+  # AMD-specific vector agent for metrics collection
+  vectorAgentImage: docker.io/timberio/vector:latest-alpine
+  
+  # Re-enable autoscaler now that we have storage
+  autoScaler:
+    enabled: true
+
+# GreptimeDB configuration with NFS storage
+greptime:
+  isCloud: false
+  host: greptimedb-standalone.greptimedb.svc.cluster.local
+  port: 4002
+  db: public
+  installStandalone: true  # Re-enabled with NFS storage
+  image:
+    repository: docker.io/greptime/greptimedb
+    tag: latest
+  persistence:
+    enabled: true
+    useNFS: true  # Enable NFS storage provisioning
+    size: 20Gi
+    storageClassName: "nfs-greptime"  # Custom storage class for GreptimeDB
+    # Use hostPath since NFS is already mounted at /home/z1_ossci on all nodes
+    hostPath: /home/z1_ossci/greptimedb
+    # Alternative: Direct NFS configuration (if you have NFS server details)
+    # nfs:
+    #   server: your-nfs-server.example.com
+    #   path: /export/greptimedb
+
+# Scheduler configuration with AMD GPU resource scoring
+schedulerConfig:
+  apiVersion: kubescheduler.config.k8s.io/v1
+  kind: KubeSchedulerConfiguration
+  clientConnection:
+    kubeconfig: ""
+    qps: 1000
+    burst: 2000
+  profiles:
+  - schedulerName: tensor-fusion-scheduler
+    plugins:
+      preFilter:
+        enabled:
+        - name: GPUResourcesFit
+      filter:
+        enabled:
+        - name: GPUResourcesFit
+        - name: GPUNetworkTopologyAware
+      score:
+        enabled:
+        - name: GPUResourcesFit
+          weight: 5
+      reserve:
+        enabled:
+        - name: GPUResourcesFit
+      postBind:
+        enabled:
+        - name: GPUResourcesFit
+    pluginConfig:
+    - name: GPUResourcesFit
+      args:
+        apiVersion: kubescheduler.config.k8s.io/v1
+        kind: GPUResourcesFitArgs
+    - name: NodeResourcesFit
+      args:
+        apiVersion: kubescheduler.config.k8s.io/v1
+        kind: NodeResourcesFitArgs
+        ignoredResourceGroups:
+        - "tensor-fusion.ai"
+        scoringStrategy:
+          type: LeastAllocated
+          resources:
+          - name: cpu
+            weight: 1
+          - name: memory
+            weight: 1
+          # AMD GPU resource weight
+          - name: amd.com/gpu
+            weight: 5
+
+# Example AMD GPUPool configuration
+# Uncomment and customize for your cluster
+# gpuPools:
+#   - name: amd-gpu-pool
+#     spec:
+#       # Use local GPUs (set to false for remote GPU execution)
+#       defaultUsingLocalGPU: true
+#       
+#       # Capacity configuration
+#       capacityConfig:
+#         minResources:
+#           gpu: 1
+#         maxResources:
+#           gpu: 8
+#         oversubscription:
+#           # Allow VRAM oversubscription by using host memory
+#           vramExpandToHostMem: 50
+#           # Allow TFLOPS overselling for better utilization
+#           tflopsOversellRatio: 200
+#       
+#       # Node manager configuration
+#       nodeManagerConfig:
+#         provisioningMode: AutoSelect
+#         defaultVendor: AMD
+#         nodeSelector:
+#           nodeSelectorTerms:
+#             - matchExpressions:
+#                 - key: amdgpu.com/gpu.present
+#                   operator: Exists
+#       
+#       # Component configuration with AMD provider images
+#       componentConfig:
+#         hypervisor:
+#           image: tensorfusion/tensor-fusion-operator:1.48.6
+#           providerImage:
+#             AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest
+#           enableVector: true
+#           resources:
+#             requests:
+#               cpu: 100m
+#               memory: 256Mi
+#             limits:
+#               cpu: 2000m
+#               memory: 2Gi
+#         
+#         worker:
+#           image: tensorfusion/tensor-fusion-operator:1.48.6
+#           providerImage:
+#             AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest
+#           resources:
+#             requests:
+#               cpu: 100m
+#               memory: 512Mi
+#             limits:
+#               cpu: 4000m
+#               memory: 4Gi

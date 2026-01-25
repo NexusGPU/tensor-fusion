@@ -58,7 +58,7 @@ func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceCon
 	}
 
 	// Create API server for device detector
-	apiClient, err := NewAPIClientFromConfig(ctx, restConfig)
+	apiClient, err := NewAPIClientFromConfig(ctx, restConfig, nodeName)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,6 @@ func (b *KubeletBackend) GetProcessMappingInfo(hostPID uint32) (*framework.Proce
 func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler {
 	return framework.DeviceChangeHandler{
 		OnAdd: func(device *api.DeviceInfo) {
-
 			if err := b.apiClient.CreateOrUpdateGPU(b.nodeName, device.UUID,
 				func(gpuNode *tfv1.GPUNode, gpu *tfv1.GPU) error {
 

@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <dirent.h>
 
 // ============================================================================
 // Global State
@@ -54,6 +55,102 @@ static void logError(const char* func, amdsmi_status_t status) {
 // Convert PCI bus info to UUID-like string
 static void generateUUID(uint32_t domain, uint32_t bus, uint32_t device, uint32_t function, char* uuid, size_t size) {
     snprintf(uuid, size, "AMD-GPU-%04x:%02x:%02x.%x", domain, bus, device, function);
+}
+
+// Find renderD device path for a given PCI slot address
+// Returns 0 on success with renderD path in output buffer, -1 on failure
+static int findRenderDevice(const char* pci_slot, char* output, size_t output_size) {
+    DIR* dir = opendir("/sys/class/drm");
+    if (!dir) {
+        return -1;
+    }
+    
+    struct dirent* entry;
+    int found = -1;
+    
+    while ((entry = readdir(dir)) != NULL) {
+        // Look for card* entries (not renderD* or controlD*)
+        if (strncmp(entry->d_name, "card", 4) != 0) {
+            continue;
+        }
+        
+        // Skip if not a plain card entry (e.g., card0-VGA-1)
+        char* dash = strchr(entry->d_name + 4, '-');
+        if (dash != NULL) {
+            continue;
+        }
+        
+        // Read the device symlink to get PCI address
+        char path[512];
+        char target[512];
+        snprintf(path, sizeof(path), "/sys/class/drm/%s/device", entry->d_name);
+        
+        ssize_t len = readlink(path, target, sizeof(target) - 1);
+        if (len > 0) {
+            target[len] = '\0';
+            
+            // Extract PCI address from symlink path
+            // Example: ../../devices/.../0000:85:00.0/drm/card41
+            // We need to find the component matching the PCI slot pattern
+            char target_copy[512];
+            strncpy(target_copy, target, sizeof(target_copy) - 1);
+            target_copy[sizeof(target_copy) - 1] = '\0';
+            
+            char* token = strtok(target_copy, "/");
+            int match_found = 0;
+            while (token != NULL) {
+                // Check if token matches PCI address pattern (contains ':' and '.')
+                if (strchr(token, ':') && strchr(token, '.') && strcmp(token, pci_slot) == 0) {
+                    match_found = 1;
+                    break;
+                }
+                token = strtok(NULL, "/");
+            }
+            
+            if (match_found) {
+                // Found matching card - now look for renderD device in its drm subdirectory
+                char drm_path[512];
+                snprintf(drm_path, sizeof(drm_path), "/sys/class/drm/%s/device/drm", entry->d_name);
+                
+                DIR* drm_dir = opendir(drm_path);
+                if (drm_dir) {
+                    struct dirent* drm_entry;
+                    while ((drm_entry = readdir(drm_dir)) != NULL) {
+                        if (strncmp(drm_entry->d_name, "renderD", 7) == 0) {
+                            snprintf(output, output_size, "/dev/dri/%s", drm_entry->d_name);
+                            found = 0;
+                            break;
+                        }
+                    }
+                    closedir(drm_dir);
+                }
+                break;
+            }
+        }
+    }
+    
+    closedir(dir);
+    return found;
+}
+
+// Helper to add a property to the properties array
+static void addProperty(DeviceProperties* props, const char* key, const char* value) {
+    if (props->count >= MAX_DEVICE_PROPERTIES) {
+        return; // No room for more properties
+    }
+    
+    size_t key_len = strlen(key);
+    size_t val_len = strlen(value);
+    
+    if (key_len >= sizeof(props->properties[0].key) || val_len >= sizeof(props->properties[0].value)) {
+        return; // Key or value too long
+    }
+    
+    strncpy(props->properties[props->count].key, key, sizeof(props->properties[0].key) - 1);
+    strncpy(props->properties[props->count].value, value, sizeof(props->properties[0].value) - 1);
+    props->properties[props->count].key[sizeof(props->properties[0].key) - 1] = '\0';
+    props->properties[props->count].value[sizeof(props->properties[0].value) - 1] = '\0';
+    props->count++;
 }
 
 // ============================================================================
@@ -183,11 +280,14 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         for (uint32_t procIdx = 0; procIdx < processor_count && totalDevices < maxCount; procIdx++) {
             ExtendedDeviceInfo* info = &devices[totalDevices];
             memset(info, 0, sizeof(ExtendedDeviceInfo));
+            // Initialize properties before adding any key-values
+            info->props.count = 0;
             
             amdsmi_processor_handle processor = processors[procIdx];
             
             // Get BDF (Bus/Device/Function) for UUID
             uint64_t bdfid = 0;
+            char renderDev[64] = {0};
             status = amdsmi_get_gpu_bdf_id(processor, &bdfid);
             if (status == AMDSMI_STATUS_SUCCESS) {
                 uint32_t domain = (bdfid >> 32) & 0xFFFF;
@@ -195,8 +295,18 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
                 uint32_t device = (bdfid >> 3) & 0x1F;
                 uint32_t function = bdfid & 0x7;
                 generateUUID(domain, bus, device, function, info->basic.uuid, sizeof(info->basic.uuid));
+                
+                // Look up renderD device from /sys/class/drm
+                char pci_slot[64];
+                snprintf(pci_slot, sizeof(pci_slot), "%04x:%02x:%02x.%d", domain, bus, device, function);
+                findRenderDevice(pci_slot, renderDev, sizeof(renderDev));
             } else {
                 snprintf(info->basic.uuid, sizeof(info->basic.uuid), "AMD-GPU-%zu", totalDevices);
+            }
+            
+            // Store render device path in properties if found
+            if (renderDev[0] != '\0') {
+                addProperty(&info->props, "renderDevice", renderDev);
             }
             
             // Set vendor
@@ -218,12 +328,13 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
                 snprintf(info->basic.model, sizeof(info->basic.model), "AMD GPU");
             }
             
-            // Get VRAM info
+            // Get VRAM info from AMD SMI
+            // AMD SMI returns vram_size in MEGABYTES, convert to bytes
             amdsmi_vram_info_t vram_info;
             memset(&vram_info, 0, sizeof(vram_info));
             status = amdsmi_get_gpu_vram_info(processor, &vram_info);
             if (status == AMDSMI_STATUS_SUCCESS) {
-                info->basic.totalMemoryBytes = vram_info.vram_size; // Already in bytes
+                info->basic.totalMemoryBytes = vram_info.vram_size * 1024ULL * 1024ULL;
             }
             
             // Get driver version
@@ -260,9 +371,16 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
                 info->basic.numaNode = -1;
             }
             
-            // Estimate max TFLOPS based on compute units and architecture
-            // This is a rough estimate - MI325X has ~1.3 PFLOPS FP16
-            info->basic.maxTflops = info->basic.totalComputeUnits * 2.0;
+            // Set TFLOPS based on GPU model
+            // These are FP16 peak TFLOPS from official AMD specs
+            // Model name from AMD SMI is like "AMD Instinct MI325X"
+            if (strstr(info->basic.model, "MI325X") != NULL) {
+                info->basic.maxTflops = 1307.0; // AMD Instinct MI325X FP16
+            } else {
+                // Fallback: rough estimate based on compute units
+                // Assumes ~4 TFLOPS per CU (very rough approximation)
+                info->basic.maxTflops = info->basic.totalComputeUnits * 4.0;
+            }
             
             // Set virtualization capabilities
             info->virtualizationCapabilities.supportsPartitioning = false;
@@ -273,9 +391,6 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
             info->virtualizationCapabilities.supportsRemoting = true;
             info->virtualizationCapabilities.maxPartitions = 0;
             info->virtualizationCapabilities.maxWorkersPerDevice = 32;
-            
-            // Add device properties
-            info->props.count = 0;
             
             totalDevices++;
         }

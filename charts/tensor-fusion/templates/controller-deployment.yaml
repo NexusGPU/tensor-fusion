@@ -36,6 +36,7 @@ spec:
       containers:
         - name: controller
           image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.controller.image.pullPolicy | default "IfNotPresent" }}
           command: 
             {{- toYaml .Values.controller.command | nindent 12 }}
           livenessProbe:

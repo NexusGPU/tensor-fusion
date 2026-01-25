@@ -266,8 +266,8 @@ func GetInitialGPUNodeSelector() []string {
 }
 
 var GPUResourceNames = []corev1.ResourceName{
-	"nvidia.com/gpu",
-	"amd.com/gpu",
+	constants.NvidiaGPUKey,
+	constants.AmdGPUKey,
 }
 
 func containsGPUResources(res corev1.ResourceList) bool {

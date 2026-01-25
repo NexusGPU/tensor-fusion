@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -414,13 +415,29 @@ func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod) (*api.WorkerInfo, 
 			status = api.WorkerStatusDeviceAllocating
 		}
 	}
+
+	allocatedDevices := allocRequest.GPUNames
+	var allocatedDeviceUUIDs []string
+	// For local GPU mode, scheduler annotates pods with GPU CR names, but device controller
+	// indexes devices by provider UUIDs (lowercased). Populate AllocatedDeviceUUIDs for device-plugin path.
+	if pod.Annotations[constants.IsLocalGPUAnnotation] == constants.TrueStringValue && len(allocatedDevices) > 0 {
+		if allocRequest.GPUVendor == constants.AcceleratorVendorAMD {
+			allocatedDeviceUUIDs = make([]string, 0, len(allocatedDevices))
+			for _, dev := range allocatedDevices {
+				if uuid, ok := translateAMDGPUNameToProviderUUID(dev); ok {
+					allocatedDeviceUUIDs = append(allocatedDeviceUUIDs, uuid)
+				}
+			}
+		}
+	}
 	info := &api.WorkerInfo{
 		WorkerUID:  string(pod.UID),
 		Status:     status,
 		WorkerName: pod.Name,
 		Namespace:  pod.Namespace,
 
-		AllocatedDevices: allocRequest.GPUNames,
+		AllocatedDevices: allocatedDevices,
+		AllocatedDeviceUUIDs: allocatedDeviceUUIDs,
 		IsolationMode:    allocRequest.Isolation,
 		QoS:              allocRequest.QoS,
 
@@ -436,6 +453,27 @@ func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod) (*api.WorkerInfo, 
 		Annotations: pod.Annotations,
 	}
 	return info, index, nil
+}
+
+func translateAMDGPUNameToProviderUUID(allocatedDevice string) (string, bool) {
+	// Expected Kubernetes GPU CR name suffix for AMD:
+	//   <nodeName>-amd-gpu-0000-85-00-0
+	// Provider UUID (device controller key) is lowercased:
+	//   amd-gpu-0000:85:00.0
+	const marker = "amd-gpu-"
+	idx := strings.Index(allocatedDevice, marker)
+	if idx < 0 {
+		return "", false
+	}
+	suffix := allocatedDevice[idx+len(marker):] // 0000-85-00-0
+	parts := strings.Split(suffix, "-")
+	if len(parts) != 4 {
+		return "", false
+	}
+	if len(parts[0]) != 4 || len(parts[1]) != 2 || len(parts[2]) != 2 || len(parts[3]) < 1 {
+		return "", false
+	}
+	return strings.ToLower("AMD-GPU-" + parts[0] + ":" + parts[1] + ":" + parts[2] + "." + parts[3]), true
 }
 
 // GetAllPods returns all pods currently in the cache

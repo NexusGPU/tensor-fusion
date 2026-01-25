@@ -209,6 +209,11 @@ func (in *WorkerInfo) DeepCopyInto(out *WorkerInfo) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.AllocatedDeviceUUIDs != nil {
+		in, out := &in.AllocatedDeviceUUIDs, &out.AllocatedDeviceUUIDs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	in.Requests.DeepCopyInto(&out.Requests)
 	in.Limits.DeepCopyInto(&out.Limits)
 	if in.Labels != nil {

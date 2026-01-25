@@ -148,7 +148,7 @@ func getBatchUpdatePolicy(pool *tfv1.GPUPool) (time.Duration, int32) {
 }
 
 func isAutoUpdateEnable(component Interface, pool *tfv1.GPUPool) bool {
-	if pool.Spec.NodeManagerConfig != nil {
+	if pool.Spec.NodeManagerConfig != nil && pool.Spec.NodeManagerConfig.NodePoolRollingUpdatePolicy != nil {
 		updatePolicy := pool.Spec.NodeManagerConfig.NodePoolRollingUpdatePolicy
 		switch component.GetName() {
 		case constants.ComponentHypervisor:

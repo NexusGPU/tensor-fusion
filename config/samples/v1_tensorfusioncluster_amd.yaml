@@ -1,0 +1,75 @@
+apiVersion: tensor-fusion.ai/v1
+kind: TensorFusionCluster
+metadata:
+  name: amd-tensor-fusion-cluster
+  namespace: tensor-fusion
+  labels:
+    app.kubernetes.io/name: tensor-fusion
+    tensor-fusion.ai/vendor: AMD
+spec:
+  # Define GPU pools for AMD GPUs
+  gpuPools:
+    - name: amd-gpu-pool
+      isDefault: true
+      specTemplate:
+        # Use local GPUs by default (set to false for remote GPU over IP)
+        defaultUsingLocalGPU: true
+        
+        # Capacity configuration for the pool
+        capacityConfig:
+          oversubscription:
+            # Allow VRAM expansion to host memory (percentage)
+            vramExpandToHostMem: 50
+            # TFLOPS oversell ratio for better utilization
+            tflopsOversellRatio: 200
+        
+        # Node manager configuration
+        nodeManagerConfig:
+          # Provisioning mode: AutoSelect, OnDemand, or Spot
+          provisioningMode: AutoSelect
+          # Default vendor for this pool
+          defaultVendor: AMD
+          # Node selector to target AMD GPU nodes
+          nodeSelector:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # Nodes must have AMD MI325X GPUs (from AMD device plugin)
+                  - key: amd.com/gpu.product-name
+                    operator: In
+                    values:
+                      - AMD_Instinct_MI325_OAM
+        
+        # Component configuration for hypervisor and worker
+        componentConfig:
+          # Hypervisor manages GPU resources on each node
+          hypervisor:
+            image: ghcr.io/saienduri/tensor-fusion-hypervisor:amd-support
+            # AMD provider image for device management and metrics
+            providerImage:
+              AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest
+            # Enable vector for metrics collection
+            enableVector: true
+            # Vector sidecar image for metrics aggregation
+            vectorImage: docker.io/timberio/vector:latest-alpine
+            portNumber: 8001
+          
+          # Worker handles actual GPU workload execution
+          worker:
+            # AMD provider image for worker pods
+            providerImage:
+              AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest
+          
+          # Client provides GPU libraries for application containers
+          client:
+            # AMD provider image for client init container
+            providerImage:
+              AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest
+
+  # Optional: Cloud vendor integration for node provisioning
+  # computingVendor:
+  #   type: AWS
+  #   config:
+  #     region: us-west-2
+  #     instanceTypes:
+  #       - g5.xlarge
+  #       - g5.2xlarge

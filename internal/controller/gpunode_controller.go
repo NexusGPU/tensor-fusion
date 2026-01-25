@@ -164,9 +164,47 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 	}
 
+	// Initialize TotalGPUs from device plugin if not yet set
 	if node.Status.TotalGPUs == 0 {
+		// Try to get GPU count from device plugin allocatable resources
+		vendor, err := r.resolveNodeVendor(ctx, node)
+		if err != nil {
+			log.Error(err, "failed to resolve node vendor", "node", node.Name)
+			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
+		}
+		
+		var gpuCount int32
+		switch vendor {
+		case constants.AcceleratorVendorNvidia:
+			if qty, ok := coreNode.Status.Allocatable[constants.NvidiaGPUKey]; ok {
+				gpuCount = int32(qty.Value())
+			}
+		case constants.AcceleratorVendorAMD:
+			// AMD device plugin uses amd.com/gpu
+			if qty, ok := coreNode.Status.Allocatable[constants.AmdGPUKey]; ok {
+				gpuCount = int32(qty.Value())
+			}
+		default:
+			log.Info("Unknown vendor, cannot detect GPU count from device plugin", "vendor", vendor, "node", node.Name)
+		}
+		
+		if gpuCount > 0 {
+			log.Info("Initializing TotalGPUs from device plugin", "node", node.Name, "vendor", vendor, "count", gpuCount)
+			node.Status.TotalGPUs = gpuCount
+			node.Status.ManagedGPUs = gpuCount
+			// Set phase to Pending if not already set (required by CRD validation)
+			if node.Status.Phase == "" {
+				node.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
+			}
+			if err := r.Status().Update(ctx, node); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update GPUNode TotalGPUs: %w", err)
+			}
+			// Requeue to proceed with hypervisor creation
+			return ctrl.Result{Requeue: true}, nil
+		}
+		
 		log.Info("GPU on this node has not been discovered, wait next loop", "node", node.Name)
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 	}
 
 	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj, coreNode)
@@ -415,14 +453,27 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 ) error {
 	log := log.FromContext(ctx)
 
-	podTmpl := &corev1.PodTemplate{}
-
-	// unmarshal pod template
-	err := json.Unmarshal(pool.Spec.ComponentConfig.Hypervisor.PodTemplate.Raw, podTmpl)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal pod template: %w", err)
+	var spec corev1.PodSpec
+	var templateLabels map[string]string
+	var templateAnnotations map[string]string
+	
+	// unmarshal pod template if provided, otherwise use empty spec
+	if pool.Spec.ComponentConfig.Hypervisor.PodTemplate != nil && len(pool.Spec.ComponentConfig.Hypervisor.PodTemplate.Raw) > 0 {
+		podTmpl := &corev1.PodTemplate{}
+		err := json.Unmarshal(pool.Spec.ComponentConfig.Hypervisor.PodTemplate.Raw, podTmpl)
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal pod template: %w", err)
+		}
+		spec = podTmpl.Template.Spec
+		templateLabels = podTmpl.Template.Labels
+		templateAnnotations = podTmpl.Template.Annotations
+	} else {
+		// Use default empty spec when PodTemplate is not provided
+		spec = corev1.PodSpec{}
+		templateLabels = make(map[string]string)
+		templateAnnotations = make(map[string]string)
 	}
-	spec := podTmpl.Template.Spec
+	
 	if spec.NodeSelector == nil {
 		spec.NodeSelector = make(map[string]string)
 	}
@@ -441,13 +492,44 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
 		vendor := node.Labels[constants.AcceleratorLabelVendor]
 		acceleratorLibPath := constants.GetAcceleratorLibPath(vendor)
-		spec.Containers[0].Env = utils.AppendEnvVarsIfNotExists(spec.Containers[0].Env, corev1.EnvVar{
-			Name:  constants.TFHardwareVendorEnv,
-			Value: vendor,
-		}, corev1.EnvVar{
-			Name:  constants.TFAcceleratorLibPathEnv,
-			Value: acceleratorLibPath,
-		})
+		
+		envVars := []corev1.EnvVar{
+			{
+				Name:  constants.TFHardwareVendorEnv,
+				Value: vendor,
+			},
+			{
+				Name:  constants.TFAcceleratorLibPathEnv,
+				Value: acceleratorLibPath,
+			},
+		}
+		
+		// Add vendor-specific environment variables
+		if vendor == constants.AcceleratorVendorAMD {
+			// ROCm-specific environment
+			envVars = append(envVars,
+				corev1.EnvVar{
+					Name:  "ROCM_PATH",
+					Value: "/opt/rocm",
+				},
+				corev1.EnvVar{
+					Name:  "PATH",
+					Value: "/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+				},
+				corev1.EnvVar{
+					Name:  "LD_LIBRARY_PATH",
+					Value: constants.TFDataPath + "/lib:/opt/rocm/lib:/usr/local/lib",
+				},
+			)
+		} else {
+			// Non-AMD vendors
+			envVars = append(envVars, corev1.EnvVar{
+				Name:  "LD_LIBRARY_PATH",
+				Value: constants.TFDataPath + "/lib:/usr/local/lib",
+			})
+		}
+		
+		spec.Containers[0].Env = utils.AppendEnvVarsIfNotExists(spec.Containers[0].Env, envVars...)
 		log.Info("added vendor env vars to hypervisor pod", "node", node.Name, "vendor", vendor, "libPath", acceleratorLibPath)
 	}
 
@@ -484,13 +566,13 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 			Namespace: key.Namespace,
 			Labels: func() map[string]string {
 				mergedLabels := make(map[string]string)
-				maps.Copy(mergedLabels, podTmpl.Template.Labels)
+				maps.Copy(mergedLabels, templateLabels)
 				mergedLabels[fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name)] = "true"
 				mergedLabels[constants.LabelKeyPodTemplateHash] = newHash
 				mergedLabels[constants.LabelComponent] = constants.ComponentHypervisor
 				return mergedLabels
 			}(),
-			Annotations: podTmpl.Template.Annotations,
+			Annotations: templateAnnotations,
 		},
 		Spec: spec,
 	}
@@ -625,8 +707,44 @@ func (r *GPUNodeReconciler) checkDriverProbeJobStatus(job *batchv1.Job, log logr
 	return false, nil
 }
 
-func (r *GPUNodeReconciler) resolveNodeVendor(_ctx context.Context, _node *tfv1.GPUNode) (string, error) {
-	// TODO: Implement this
+func (r *GPUNodeReconciler) resolveNodeVendor(ctx context.Context, node *tfv1.GPUNode) (string, error) {
+	log := log.FromContext(ctx)
+	
+	// Get the GPUPool that owns this GPUNode
+	poolName := ""
+	for _, ownerRef := range node.OwnerReferences {
+		if ownerRef.Kind == "GPUPool" {
+			poolName = ownerRef.Name
+			break
+		}
+	}
+	
+	if poolName == "" {
+		log.Error(fmt.Errorf("no GPUPool owner found"), "cannot resolve vendor", "node", node.Name)
+		return "", fmt.Errorf("GPUNode %s has no GPUPool owner reference", node.Name)
+	}
+	
+	// Fetch the GPUPool to get vendor configuration
+	pool := &tfv1.GPUPool{}
+	if err := r.Get(ctx, client.ObjectKey{Name: poolName}, pool); err != nil {
+		return "", fmt.Errorf("failed to get GPUPool %s: %w", poolName, err)
+	}
+	
+	// Check node labels for vendor info (e.g., tensor-fusion.ai/hardware-vendor)
+	if vendor, ok := node.Labels[constants.AcceleratorLabelVendor]; ok && vendor != "" {
+		log.V(1).Info("resolved vendor from node label", "node", node.Name, "vendor", vendor)
+		return vendor, nil
+	}
+	
+	// Fallback to GPUPool's defaultVendor
+	if pool.Spec.NodeManagerConfig != nil && pool.Spec.NodeManagerConfig.DefaultVendor != "" {
+		vendor := pool.Spec.NodeManagerConfig.DefaultVendor
+		log.V(1).Info("resolved vendor from GPUPool defaultVendor", "node", node.Name, "vendor", vendor)
+		return vendor, nil
+	}
+	
+	// Ultimate fallback to NVIDIA for backward compatibility
+	log.V(1).Info("no vendor specified, defaulting to NVIDIA", "node", node.Name)
 	return constants.AcceleratorVendorNvidia, nil
 }
 

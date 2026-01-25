@@ -1,0 +1,46 @@
+{{- if and .Values.greptime.installStandalone .Values.greptime.persistence.useNFS }}
+---
+# PersistentVolume for GreptimeDB using NFS
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Release.Name }}-greptimedb-pv
+  labels:
+    app.greptime.io/component: greptimedb-standalone
+    tensor-fusion.ai/component: greptimedb
+spec:
+  capacity:
+    storage: {{ .Values.greptime.persistence.size | default "20Gi" }}
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: {{ .Values.greptime.persistence.storageClassName | default "nfs-greptime" }}
+  {{- if .Values.greptime.persistence.nfs }}
+  nfs:
+    server: {{ .Values.greptime.persistence.nfs.server | required "NFS server is required" }}
+    path: {{ .Values.greptime.persistence.nfs.path | required "NFS path is required" }}
+  {{- else if .Values.greptime.persistence.hostPath }}
+  # Using hostPath with NFS mount
+  hostPath:
+    path: {{ .Values.greptime.persistence.hostPath }}
+    type: DirectoryOrCreate
+  {{- end }}
+---
+# PersistentVolumeClaim for GreptimeDB
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: datanode-{{ .Release.Name }}-greptimedb-standalone-0
+  namespace: greptimedb
+  labels:
+    app.greptime.io/component: greptimedb-standalone
+    tensor-fusion.ai/component: greptimedb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.greptime.persistence.storageClassName | default "nfs-greptime" }}
+  resources:
+    requests:
+      storage: {{ .Values.greptime.persistence.size | default "20Gi" }}
+  volumeName: {{ .Release.Name }}-greptimedb-pv
+{{- end }}

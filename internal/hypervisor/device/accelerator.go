@@ -466,9 +466,29 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			}
 		}
 
+		vendor := byteArrayToString(cInfo.Basic.Vendor[:])
+		
+		// Initialize device node mappings based on vendor
+		deviceNode := make(map[string]string)
+		
+		if vendor == "AMD" {
+			// AMD GPUs: Look for renderDevice in properties (set by provider)
+			// If found, use specific renderD device; otherwise fall back to whole /dev/dri
+			if renderDev, ok := properties["renderDevice"]; ok && renderDev != "" {
+				klog.Infof("GPU discovery: Found renderDevice=%s for UUID=%s", renderDev, byteArrayToString(cInfo.Basic.UUID[:]))
+				deviceNode[renderDev] = renderDev
+			} else {
+				klog.Warningf("GPU discovery: No renderDevice property for UUID=%s, falling back to /dev/dri", byteArrayToString(cInfo.Basic.UUID[:]))
+				// Fallback: mount all /dev/dri (less isolated but works)
+				deviceNode["/dev/dri"] = "/dev/dri"
+			}
+			// Always add /dev/kfd for ROCm
+			deviceNode["/dev/kfd"] = "/dev/kfd"
+		}
+		
 		devices[i] = &api.DeviceInfo{
 			UUID:             byteArrayToString(cInfo.Basic.UUID[:]),
-			Vendor:           byteArrayToString(cInfo.Basic.Vendor[:]),
+			Vendor:           vendor,
 			Model:            byteArrayToString(cInfo.Basic.Model[:]),
 			Index:            cInfo.Basic.Index,
 			NUMANode:         cInfo.Basic.NUMANode,
@@ -484,6 +504,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 				MaxWorkersPerDevice:   cInfo.Capabilities.MaxWorkersPerDevice,
 			},
 			Properties: properties,
+			DeviceNode: deviceNode,
 		}
 	}
 	return devices, nil

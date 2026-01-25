@@ -1,0 +1,52 @@
+apiVersion: tensor-fusion.ai/v1
+kind: GPUPool
+metadata:
+  name: amd-gpu-pool
+  namespace: tensor-fusion
+spec:
+  # Use local GPUs by default (set to false for remote GPU over IP)
+  defaultUsingLocalGPU: true
+  
+  # Capacity configuration for the pool
+  capacityConfig:
+    oversubscription:
+      # Allow VRAM expansion to host memory (percentage)
+      vramExpandToHostMem: 50
+      # TFLOPS oversell ratio for better utilization
+      tflopsOversellRatio: 200
+  
+  # Node manager configuration
+  nodeManagerConfig:
+    # Provisioning mode: AutoSelect, OnDemand, or Spot
+    provisioningMode: AutoSelect
+    # Default vendor for this pool
+    defaultVendor: AMD
+    # Node selector to target AMD GPU nodes
+    nodeSelector:
+      nodeSelectorTerms:
+        - matchExpressions:
+            # Nodes must have AMD MI325X GPUs (from AMD device plugin)
+            - key: amd.com/gpu.product-name
+              operator: In
+              values:
+                - AMD_Instinct_MI325_OAM
+            # Alternative: Target any AMD Instinct GPU
+            # - key: amd.com/gpu.product-name
+            #   operator: Exists
+  
+  # Component configuration for hypervisor and worker
+  componentConfig:
+    # Hypervisor manages GPU resources on each node
+    hypervisor:
+      image: ghcr.io/saienduri/tensor-fusion-hypervisor:amd-support
+      # AMD provider image for device management and metrics
+      providerImage:
+        AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest
+      # Enable vector for metrics collection
+      enableVector: true
+    
+    # Worker executes workloads on GPUs
+    worker:
+      # AMD provider image with ROCm runtime
+      providerImage:
+        AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest

@@ -76,6 +76,10 @@ COPY --from=builder /opt /opt
 COPY --from=builder /workspace/provider/build/libaccelerator_amd.so /build/lib/
 COPY --from=builder /workspace/provider/build/test_amd_provider /build/bin/
 
+# Copy init container entrypoint script
+COPY scripts/inject-libs.sh /build/bin/
+RUN chmod +x /build/bin/inject-libs.sh
+
 # Create metadata file
 ARG ROCM_VERSION=7.11.0rc0
 RUN echo "version: 1.0.0\n\
@@ -90,6 +94,8 @@ rocmVersion: ${ROCM_VERSION}" > /build/metadata.yaml
 ENV ROCM_PATH=/opt/rocm
 ENV PATH=${ROCM_PATH}/bin:${PATH}
 ENV LD_LIBRARY_PATH=/build/lib:${ROCM_PATH}/lib
+ENV HARDWARE_VENDOR=AMD
 
-# Default command - can be overridden
-CMD ["sleep", "infinity"]
+# Init container entrypoint - copies libraries to shared volumes
+# For hypervisor/standalone mode, can override to use default sleep
+ENTRYPOINT ["/build/bin/inject-libs.sh"]

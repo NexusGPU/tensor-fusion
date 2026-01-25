@@ -167,6 +167,13 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("gpu pool(%s) does not exist", tfInfo.Profile.PoolName))
 	}
 	tfInfo.Profile.Qos = calculateQoSLevel(tfInfo.Profile, pool)
+	
+	// Set GPU vendor from pool's DefaultVendor if not explicitly specified by user
+	// This allows pods to inherit the vendor from their selected pool
+	if tfInfo.Profile.GPUVendor == "" && pool.Spec.NodeManagerConfig != nil {
+		tfInfo.Profile.GPUVendor = pool.Spec.NodeManagerConfig.DefaultVendor
+		log.Info("Auto-detected GPU vendor from pool", "vendor", tfInfo.Profile.GPUVendor, "pool", pool.Name)
+	}
 
 	workload, err := m.createOrUpdateWorkload(ctx, pod, &tfInfo)
 	if err != nil {
@@ -588,9 +595,11 @@ func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *co
 func removeNativeGPULimits(container *corev1.Container) {
 	if container.Resources.Requests != nil {
 		delete(container.Resources.Requests, constants.NvidiaGPUKey)
+		delete(container.Resources.Requests, constants.AmdGPUKey)
 	}
 	if container.Resources.Limits != nil {
 		delete(container.Resources.Limits, constants.NvidiaGPUKey)
+		delete(container.Resources.Limits, constants.AmdGPUKey)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 )
 
@@ -47,7 +48,7 @@ var _ = Describe("Reconcile Utils", func() {
 							Name: "test-container",
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
-									"amd.com/gpu": resource.MustParse("2"),
+									constants.AmdGPUKey: resource.MustParse("2"),
 								},
 							},
 						},
@@ -119,7 +120,7 @@ var _ = Describe("Reconcile Utils", func() {
 							Name: "test-container",
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
-									"amd.com/gpu": resource.MustParse("0"),
+									constants.AmdGPUKey: resource.MustParse("0"),
 								},
 							},
 						},

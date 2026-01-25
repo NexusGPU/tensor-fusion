@@ -37,12 +37,18 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
+	deviceIDs := request.AllocatedDeviceUUIDs
+	// Backward compatibility: older callers may only populate AllocatedDevices (provider UUIDs).
+	if len(deviceIDs) == 0 {
+		deviceIDs = request.AllocatedDevices
+	}
+
+	deviceInfos := make([]*api.DeviceInfo, 0, len(deviceIDs))
 
 	// partitioned mode, call split device
 	isPartitioned := request.IsolationMode == tfv1.IsolationModePartitioned && request.PartitionTemplateID != ""
 
-	for _, deviceUUID := range request.AllocatedDevices {
+	for _, deviceUUID := range deviceIDs {
 		if device, exists := a.deviceController.GetDevice(deviceUUID); exists {
 			if isPartitioned {
 				deviceInfo, err := a.deviceController.SplitDevice(deviceUUID, request.PartitionTemplateID)
@@ -53,7 +59,9 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 			} else {
 				deviceInfos = append(deviceInfos, device)
 			}
+			continue
 		}
+		klog.Warningf("AllocateWorkerDevices: allocated device %q not found in device controller (after translation attempts)", deviceUUID)
 	}
 
 	mounts, err := a.deviceController.GetVendorMountLibs()
@@ -87,7 +95,7 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	}
 
 	a.workerAllocations[request.WorkerUID] = allocation
-	for _, deviceUUID := range request.AllocatedDevices {
+	for _, deviceUUID := range deviceIDs {
 		a.addDeviceAllocation(deviceUUID, allocation)
 	}
 	return allocation, nil
@@ -104,7 +112,11 @@ func (a *AllocationController) DeallocateWorker(workerUID string) error {
 		return nil
 	}
 	delete(a.workerAllocations, workerUID)
-	for _, deviceUUID := range allocation.WorkerInfo.AllocatedDevices {
+	deviceIDs := allocation.WorkerInfo.AllocatedDeviceUUIDs
+	if len(deviceIDs) == 0 {
+		deviceIDs = allocation.WorkerInfo.AllocatedDevices
+	}
+	for _, deviceUUID := range deviceIDs {
 		a.removeDeviceAllocation(deviceUUID, allocation)
 	}
 

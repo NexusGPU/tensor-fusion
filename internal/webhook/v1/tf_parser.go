@@ -77,6 +77,11 @@ func ParseTensorFusionInfo(
 		if err := k8sClient.Get(ctx, client.ObjectKey{Name: workloadProfileName, Namespace: pod.Namespace}, workloadProfile); err != nil {
 			return info, fmt.Errorf("get workload profile(%s) : %w", workloadProfileName, err)
 		}
+	} else {
+		// Initialize empty workload profile if not provided
+		workloadProfile = &tfv1.WorkloadProfile{
+			Spec: tfv1.WorkloadProfileSpec{},
+		}
 	}
 
 	pool, err := checkAndGetValidGPUPool(ctx, k8sClient, pod)

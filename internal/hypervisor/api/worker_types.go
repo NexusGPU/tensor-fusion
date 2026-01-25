@@ -12,7 +12,12 @@ type WorkerInfo struct {
 	WorkerUID        string
 	Namespace        string
 	WorkerName       string
+	// AllocatedDevices are Kubernetes GPU resource names (GPU CR names) assigned by scheduler,
+	// e.g. "<node>-amd-gpu-0000-85-00-0". This is useful for correlating with K8s objects.
 	AllocatedDevices []string
+	// AllocatedDeviceUUIDs are provider UUIDs used by device controller / device plugin,
+	// e.g. "amd-gpu-0000:85:00.0" (lowercased).
+	AllocatedDeviceUUIDs []string
 	Status           WorkerStatus
 
 	QoS           tfv1.QoSLevel

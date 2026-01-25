@@ -36,7 +36,7 @@ const (
 	KubeletDevicePluginPath       = "/var/lib/kubelet/device-plugins"
 
 	KubeletPodResourcesVolumeName = "pod-resources"
-	KubeletPodResourcesPath       = "/var/lib/kubelet/pod-resources"
+	KubeletPodResourcesPath       = "/nvme/kubelet/pod-resources"
 
 	TensorFusionVectorConfigName       = "tensor-fusion-sys-vector-config"
 	TensorFusionVectorConfigVolumeName = "vector-config"
