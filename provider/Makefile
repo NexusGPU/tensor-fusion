@@ -9,6 +9,7 @@ LDFLAGS ?= -shared
 PROVIDER_DIR := $(shell pwd)
 STUB_DIR := $(PROVIDER_DIR)/example
 ASCEND_DIR := $(PROVIDER_DIR)/ascend
+AMD_DIR := $(PROVIDER_DIR)/amd
 BUILD_DIR := $(PROVIDER_DIR)/build
 TEST_DIR := $(PROVIDER_DIR)/test
 MOCK_DIR := $(STUB_DIR)/device_mock
@@ -16,14 +17,17 @@ MOCK_DIR := $(STUB_DIR)/device_mock
 # Output libraries
 STUB_LIB := $(BUILD_DIR)/libaccelerator_example.so
 ASCEND_LIB := $(BUILD_DIR)/libaccelerator_ascend.so
+AMD_LIB := $(BUILD_DIR)/libaccelerator_amd.so
 
 # Source files
 STUB_SRC := $(STUB_DIR)/accelerator.c
 ASCEND_SRC := $(ASCEND_DIR)/accelerator.c
+AMD_SRC := $(AMD_DIR)/accelerator.c
 
 # Object files
 STUB_OBJ := $(BUILD_DIR)/accelerator_example.o
 ASCEND_OBJ := $(BUILD_DIR)/accelerator_ascend.o
+AMD_OBJ := $(BUILD_DIR)/accelerator_amd.o
 
 # Test executables
 TEST_BIN := $(BUILD_DIR)/test_accelerator
@@ -35,7 +39,12 @@ MOCK_DRIVER_LIB := $(BUILD_DIR)/libdriver_mock.a
 MOCK_APP_SRC := $(MOCK_DIR)/app_mock.c
 MOCK_APP_BIN := $(BUILD_DIR)/app_mock
 
-.PHONY: all clean example ascend test install mock mock-driver mock-app mock-run mock-test mock-test-run mock-rate-test
+# ROCm paths (TheRock installs to /opt/rocm via symlink)
+ROCM_PATH ?= /opt/rocm
+AMD_CFLAGS := -I$(ROCM_PATH)/include -D__HIP_PLATFORM_AMD__
+AMD_LDFLAGS := -L$(ROCM_PATH)/lib -lamd_smi -lamdhip64 -Wl,-rpath,$(ROCM_PATH)/lib
+
+.PHONY: all clean example ascend amd test test-amd-run install mock mock-driver mock-app mock-run mock-test mock-test-run mock-rate-test
 
 all: example
 
@@ -57,6 +66,15 @@ $(ASCEND_LIB): $(ASCEND_OBJ) | $(BUILD_DIR)
 $(ASCEND_OBJ): $(ASCEND_SRC) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(PROVIDER_DIR) $(ASCEND_CFLAGS) -c -o $@ $<
 
+# Build AMD implementation (requires ROCm/TheRock)
+amd: $(AMD_LIB)
+
+$(AMD_LIB): $(AMD_OBJ) | $(BUILD_DIR)
+	$(CC) $(LDFLAGS) -o $@ $< $(AMD_LDFLAGS)
+
+$(AMD_OBJ): $(AMD_SRC) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(AMD_CFLAGS) -I$(PROVIDER_DIR) -c -o $@ $<
+
 # Build test executable
 test: $(TEST_BIN)
 
@@ -66,6 +84,11 @@ $(TEST_BIN): $(TEST_DIR)/test_accelerator.c $(STUB_LIB) | $(BUILD_DIR)
 # Run tests
 test-run: test
 	LD_LIBRARY_PATH=$(BUILD_DIR):$$LD_LIBRARY_PATH $(TEST_BIN)
+
+# Test AMD provider
+test-amd-run: amd test
+	LD_LIBRARY_PATH=$(ROCM_PATH)/lib:$(BUILD_DIR):$$LD_LIBRARY_PATH \
+	$(TEST_BIN) $(AMD_LIB)
 
 # Create build directory
 $(BUILD_DIR):
@@ -132,8 +155,10 @@ help:
 	@echo "  all          - Build example implementation (default)"
 	@echo "  example      - Build example accelerator library"
 	@echo "  ascend       - Build Ascend accelerator library (requires CANN SDK)"
+	@echo "  amd          - Build AMD accelerator library (requires ROCm/TheRock)"
 	@echo "  test         - Build test executable"
 	@echo "  test-run     - Build and run tests"
+	@echo "  test-amd-run - Build and test AMD provider"
 	@echo "  mock         - Build device mock driver and app"
 	@echo "  mock-driver  - Build device mock driver library"
 	@echo "  mock-app     - Build device mock app"

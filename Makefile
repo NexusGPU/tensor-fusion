@@ -156,6 +156,21 @@ docker-build: ## Build docker image with the manager.
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
 
+# AMD Provider Image
+IMG_REGISTRY ?= tensorfusion
+VERSION ?= latest
+.PHONY: docker-build-amd-provider
+docker-build-amd-provider: ## Build AMD provider docker image with TheRock.
+	$(CONTAINER_TOOL) build -f dockerfile/amd-provider.Dockerfile \
+		--build-arg ROCM_VERSION=7.11.0rc0 \
+		--build-arg AMDGPU_FAMILY=gfx94X-dcgpu \
+		--build-arg RELEASE_TYPE=prereleases \
+		-t $(IMG_REGISTRY)/tensor-fusion-amd-provider:$(VERSION) .
+
+.PHONY: docker-push-amd-provider
+docker-push-amd-provider: ## Push AMD provider docker image.
+	$(CONTAINER_TOOL) push $(IMG_REGISTRY)/tensor-fusion-amd-provider:$(VERSION)
+
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
 # - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
