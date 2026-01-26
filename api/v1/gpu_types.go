@@ -92,6 +92,11 @@ type PodGPUInfo struct {
 	Requests  Resource `json:"requests,omitempty"`
 	Limits    Resource `json:"limits,omitempty"`
 	QoS       QoSLevel `json:"qos,omitempty"`
+
+	// IsExternal indicates if this allocation is from an external device plugin
+	// (e.g., nvidia-device-plugin) rather than TensorFusion scheduler
+	// +optional
+	IsExternal bool `json:"isExternal,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Provisioning;Running;Unknown;Destroying;Migrating

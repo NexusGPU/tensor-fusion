@@ -73,6 +73,19 @@ func GetActualTflops(gpuCapacity resource.Quantity, res tfv1.Resource) *resource
 	return &result
 }
 
+// GetActualTflopsFloat64 returns the actual TFLOPs value as float64 from a Resource.
+// Similar to GetActualTflops but returns float64 for precision-sensitive use cases like metrics.
+// Returns 0 if both Tflops and ComputePercent are zero, or if ComputePercent is set but gpuCapacity is zero.
+func GetActualTflopsFloat64(gpuCapacity resource.Quantity, res tfv1.Resource) float64 {
+	if !res.ComputePercent.IsZero() {
+		if gpuCapacity.IsZero() {
+			return 0
+		}
+		return res.ComputePercent.AsApproximateFloat64() * gpuCapacity.AsApproximateFloat64() / 100
+	}
+	return res.Tflops.AsApproximateFloat64()
+}
+
 func ParseIndicesAnnotation(gpuIndicesStr string) ([]int32, bool) {
 	if gpuIndicesStr == "" {
 		return nil, false

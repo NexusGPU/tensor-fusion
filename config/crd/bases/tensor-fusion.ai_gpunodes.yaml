@@ -90,6 +90,11 @@ spec:
                 additionalProperties:
                   items:
                     properties:
+                      isExternal:
+                        description: |-
+                          IsExternal indicates if this allocation is from an external device plugin
+                          (e.g., nvidia-device-plugin) rather than TensorFusion scheduler
+                        type: boolean
                       limits:
                         properties:
                           compute:

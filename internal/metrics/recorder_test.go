@@ -8,12 +8,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 var _ = Describe("SetWorkerMetricsByWorkload", func() {
 	var (
 		pod         *corev1.Pod
 		capacityMap map[string]tfv1.Resource
+		gpuStore    map[types.NamespacedName]*tfv1.GPU
 	)
 
 	BeforeEach(func() {
@@ -27,6 +29,42 @@ var _ = Describe("SetWorkerMetricsByWorkload", func() {
 				Vram:   resource.MustParse("80Gi"),
 			},
 		}
+
+		// Create GPU store with GPU ID to model mapping
+		gpuStore = make(map[types.NamespacedName]*tfv1.GPU)
+
+		// Create A100 GPU
+		gpuA100 := &tfv1.GPU{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "gpu-a100-1",
+			},
+			Status: tfv1.GPUStatus{
+				GPUModel: "A100",
+			},
+		}
+		gpuStore[types.NamespacedName{Name: "gpu-a100-1"}] = gpuA100
+
+		// Create H100 GPU
+		gpuH100 := &tfv1.GPU{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "gpu-h100-1",
+			},
+			Status: tfv1.GPUStatus{
+				GPUModel: "H100",
+			},
+		}
+		gpuStore[types.NamespacedName{Name: "gpu-h100-1"}] = gpuH100
+
+		// Create another A100 GPU for update test
+		gpuA100_2 := &tfv1.GPU{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "gpu-a100-2",
+			},
+			Status: tfv1.GPUStatus{
+				GPUModel: "A100",
+			},
+		}
+		gpuStore[types.NamespacedName{Name: "gpu-a100-2"}] = gpuA100_2
 
 		workerMetricsLock.Lock()
 		workerMetricsMap = make(map[string]*WorkerResourceMetrics, 8)
@@ -53,11 +91,12 @@ var _ = Describe("SetWorkerMetricsByWorkload", func() {
 						constants.VRAMLimitAnnotation:     "20Gi",
 						constants.GpuCountAnnotation:      "1",
 						constants.GpuPoolKey:              "default-pool",
+						constants.GPUDeviceIDsAnnotation:  "gpu-a100-1",
 					},
 				},
 			}
 
-			SetWorkerMetricsByWorkload(pod, capacityMap)
+			SetWorkerMetricsByWorkload(pod, capacityMap, gpuStore)
 
 			workerMetricsLock.RLock()
 			metrics, exists := workerMetricsMap[pod.Name]
@@ -86,11 +125,12 @@ var _ = Describe("SetWorkerMetricsByWorkload", func() {
 						constants.GpuCountAnnotation:       "1",
 						constants.GPUModelAnnotation:       "A100",
 						constants.GpuPoolKey:               "default-pool",
+						constants.GPUDeviceIDsAnnotation:   "gpu-a100-1",
 					},
 				},
 			}
 
-			SetWorkerMetricsByWorkload(pod, capacityMap)
+			SetWorkerMetricsByWorkload(pod, capacityMap, gpuStore)
 
 			workerMetricsLock.RLock()
 			metrics, exists := workerMetricsMap[pod.Name]
@@ -117,11 +157,12 @@ var _ = Describe("SetWorkerMetricsByWorkload", func() {
 						constants.GpuCountAnnotation:       "1",
 						constants.GPUModelAnnotation:       "H100",
 						constants.GpuPoolKey:               "default-pool",
+						constants.GPUDeviceIDsAnnotation:   "gpu-h100-1",
 					},
 				},
 			}
 
-			SetWorkerMetricsByWorkload(pod, capacityMap)
+			SetWorkerMetricsByWorkload(pod, capacityMap, gpuStore)
 
 			workerMetricsLock.RLock()
 			metrics, exists := workerMetricsMap[pod.Name]
@@ -149,11 +190,12 @@ var _ = Describe("SetWorkerMetricsByWorkload", func() {
 						constants.VRAMLimitAnnotation:      "80Gi",
 						constants.GpuCountAnnotation:       "1",
 						constants.GpuPoolKey:               "default-pool",
+						constants.GPUDeviceIDsAnnotation:   "gpu-missing-1",
 					},
 				},
 			}
 
-			SetWorkerMetricsByWorkload(pod, capacityMap)
+			SetWorkerMetricsByWorkload(pod, capacityMap, gpuStore)
 
 			workerMetricsLock.RLock()
 			metrics, exists := workerMetricsMap[pod.Name]
@@ -165,6 +207,17 @@ var _ = Describe("SetWorkerMetricsByWorkload", func() {
 		})
 
 		It("should set tflops to 0 when gpu-model is not found in capacity map", func() {
+			// Create a GPU with unknown model for this test
+			gpuUnknown := &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "gpu-unknown-1",
+				},
+				Status: tfv1.GPUStatus{
+					GPUModel: "UnknownGPU",
+				},
+			}
+			gpuStore[types.NamespacedName{Name: "gpu-unknown-1"}] = gpuUnknown
+
 			pod = &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-worker-unknown-model",
@@ -180,11 +233,12 @@ var _ = Describe("SetWorkerMetricsByWorkload", func() {
 						constants.GpuCountAnnotation:       "1",
 						constants.GPUModelAnnotation:       "UnknownGPU",
 						constants.GpuPoolKey:               "default-pool",
+						constants.GPUDeviceIDsAnnotation:   "gpu-unknown-1",
 					},
 				},
 			}
 
-			SetWorkerMetricsByWorkload(pod, capacityMap)
+			SetWorkerMetricsByWorkload(pod, capacityMap, gpuStore)
 
 			workerMetricsLock.RLock()
 			metrics, exists := workerMetricsMap[pod.Name]
@@ -211,11 +265,12 @@ var _ = Describe("SetWorkerMetricsByWorkload", func() {
 						constants.GpuCountAnnotation:       "1",
 						constants.GPUModelAnnotation:       "A100",
 						constants.GpuPoolKey:               "default-pool",
+						constants.GPUDeviceIDsAnnotation:   "gpu-a100-1",
 					},
 				},
 			}
 
-			SetWorkerMetricsByWorkload(pod, capacityMap)
+			SetWorkerMetricsByWorkload(pod, capacityMap, gpuStore)
 
 			workerMetricsLock.RLock()
 			metrics, exists := workerMetricsMap[pod.Name]
@@ -242,11 +297,12 @@ var _ = Describe("SetWorkerMetricsByWorkload", func() {
 						constants.GpuCountAnnotation:       "1",
 						constants.GPUModelAnnotation:       "A100",
 						constants.GpuPoolKey:               "default-pool",
+						constants.GPUDeviceIDsAnnotation:   "gpu-a100-2",
 					},
 				},
 			}
 
-			SetWorkerMetricsByWorkload(pod, capacityMap)
+			SetWorkerMetricsByWorkload(pod, capacityMap, gpuStore)
 
 			workerMetricsLock.RLock()
 			metrics1 := workerMetricsMap[pod.Name]
@@ -259,7 +315,7 @@ var _ = Describe("SetWorkerMetricsByWorkload", func() {
 			pod.Annotations[constants.ComputeRequestAnnotation] = "100"
 			pod.Annotations[constants.ComputeLimitAnnotation] = "100"
 
-			SetWorkerMetricsByWorkload(pod, capacityMap)
+			SetWorkerMetricsByWorkload(pod, capacityMap, gpuStore)
 
 			workerMetricsLock.RLock()
 			metrics2 := workerMetricsMap[pod.Name]
