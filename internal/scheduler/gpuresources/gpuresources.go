@@ -780,34 +780,7 @@ func (s *GPUFit) validatePreemption(state fwk.CycleState, pod *v1.Pod, nodeInfo 
 		return fwk.NewStatus(fwk.Error, "invalid type for preempt pods")
 	}
 
-	// VALIDATION 1: For multi-GPU pods, verify all victims are on the same node
-	// This is critical because multi-GPU pods require all GPUs on the same node.
-	// If Kubernetes selects victims across multiple nodes, preemption will be futile.
-	if allocReq.Count > 1 {
-		victimNodes := s.getVictimNodes(victims)
-		if victimNodes.Len() > 1 {
-			s.logger.Info("GPU preemption rejected: victims span multiple nodes",
-				"pod", pod.Name,
-				"namespace", pod.Namespace,
-				"node", nodeName,
-				"requiredGPUs", allocReq.Count,
-				"victimNodes", victimNodes.UnsortedList(),
-				"victimCount", victims.Len())
-			return fwk.NewStatus(fwk.Unschedulable,
-				fmt.Sprintf("multi-GPU preemption invalid: victims on %d nodes, require same-node", victimNodes.Len()))
-		}
-		// Also verify that the single victim node matches the current node being evaluated
-		if victimNodes.Len() == 1 && !victimNodes.Has(nodeName) {
-			s.logger.Info("GPU preemption rejected: victim node mismatch",
-				"pod", pod.Name,
-				"namespace", pod.Namespace,
-				"expectedNode", nodeName,
-				"victimNode", victimNodes.UnsortedList()[0])
-			return fwk.NewStatus(fwk.Unschedulable, "victim node does not match evaluation node")
-		}
-	}
-
-	// VALIDATION 2: Verify that preemption will release sufficient GPU resources
+	// Verify that preemption will release sufficient GPU resources
 	// This calls CheckQuotaAndFilterSingleNodePreempt which:
 	// - Simulates releasing victim GPU resources
 	// - Applies GPU filters (resource, model, vendor, affinity, same-node)

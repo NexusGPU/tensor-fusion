@@ -783,7 +783,7 @@ var _ = Describe("GPU Allocator", func() {
 			filteredGPUs, _, err := allocator.FilterWithPreempt(smallAllocReq, []*tfv1.AllocRequest{preemptAllocRequest})
 			Expect(err).NotTo(HaveOccurred())
 			// FilterWithPreempt returns all GPUs that satisfy the conditions, not limited to req.Count
-			Expect(len(filteredGPUs)).To(BeNumerically(">=", 1))
+			Expect(filteredGPUs).ToNot(BeEmpty())
 
 			// Deallocate
 			deallocateAndSync(largeGPUs)
