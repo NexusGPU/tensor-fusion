@@ -89,59 +89,15 @@ schedulerConfig:
           - name: amd.com/gpu
             weight: 5
 
-# Example AMD GPUPool configuration
-# Uncomment and customize for your cluster
-# gpuPools:
-#   - name: amd-gpu-pool
-#     spec:
-#       # Use local GPUs (set to false for remote GPU execution)
-#       defaultUsingLocalGPU: true
-#       
-#       # Capacity configuration
-#       capacityConfig:
-#         minResources:
-#           gpu: 1
-#         maxResources:
-#           gpu: 8
-#         oversubscription:
-#           # Allow VRAM oversubscription by using host memory
-#           vramExpandToHostMem: 50
-#           # Allow TFLOPS overselling for better utilization
-#           tflopsOversellRatio: 200
-#       
-#       # Node manager configuration
-#       nodeManagerConfig:
-#         provisioningMode: AutoSelect
-#         defaultVendor: AMD
-#         nodeSelector:
-#           nodeSelectorTerms:
-#             - matchExpressions:
-#                 - key: amdgpu.com/gpu.present
-#                   operator: Exists
-#       
-#       # Component configuration with AMD provider images
-#       componentConfig:
-#         hypervisor:
-#           image: tensorfusion/tensor-fusion-operator:1.48.6
-#           providerImage:
-#             AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest
-#           enableVector: true
-#           resources:
-#             requests:
-#               cpu: 100m
-#               memory: 256Mi
-#             limits:
-#               cpu: 2000m
-#               memory: 2Gi
-#         
-#         worker:
-#           image: tensorfusion/tensor-fusion-operator:1.48.6
-#           providerImage:
-#             AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest
-#           resources:
-#             requests:
-#               cpu: 100m
-#               memory: 512Mi
-#             limits:
-#               cpu: 4000m
-#               memory: 4Gi
+# ==============================================================================
+# Remote GPU Configuration
+# ==============================================================================
+# Remote GPU (GPU-over-IP) is configured via TensorFusionCluster CR, NOT here.
+#
+# See: config/samples/v1_tensorfusioncluster_amd_remote.yaml
+#
+# Key settings in TensorFusionCluster:
+#   - defaultUsingLocalGPU: false  (enables remote mode)
+#   - componentConfig.worker.image (HIP worker image)
+#   - componentConfig.client.providerImage (client stub image)
+# ==============================================================================

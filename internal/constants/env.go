@@ -135,6 +135,14 @@ const (
 
 	TensorFusionRemoteWorkerPortNumber = 8000
 	TensorFusionRemoteWorkerPortName   = "remote-vgpu"
+
+	// AMD HIP remote GPU configuration
+	// Environment variables for HIP client stub
+	TFWorkerHostEnv = "TF_WORKER_HOST"
+	TFWorkerPortEnv = "TF_WORKER_PORT"
+	TFDebugEnv      = "TF_DEBUG"
+	// Path to HIP client stub library (injected via LD_PRELOAD for AMD remote mode)
+	HIPClientStubPath = "/usr/lib/tensor-fusion/libhip_client_stub.so"
 )
 
 // TensorFusion hypervisor related envs

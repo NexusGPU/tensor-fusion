@@ -167,7 +167,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("gpu pool(%s) does not exist", tfInfo.Profile.PoolName))
 	}
 	tfInfo.Profile.Qos = calculateQoSLevel(tfInfo.Profile, pool)
-	
+
 	// Set GPU vendor from pool's DefaultVendor if not explicitly specified by user
 	// This allows pods to inherit the vendor from their selected pool
 	if tfInfo.Profile.GPUVendor == "" && pool.Spec.NodeManagerConfig != nil {

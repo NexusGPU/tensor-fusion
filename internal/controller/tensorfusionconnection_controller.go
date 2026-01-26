@@ -101,14 +101,14 @@ func (r *TensorFusionConnectionReconciler) Reconcile(ctx context.Context, req ct
 	log.Info("Selecting worker for connection", "connection", connection.Name, "namespace", connection.Namespace)
 	if workload.Spec.IsDynamicReplica() {
 		// 1st MODE: select the dedicated worker if it's running, otherwise wait utils it's becoming ready
-		return ctrl.Result{}, r.syncDedicatedWorkerStatus(ctx, connection)
+		return ctrl.Result{}, r.syncDedicatedWorkerStatus(ctx, connection, workload.Spec.GPUVendor)
 	} else {
 		// 2nd MODE: fixed worker replicas, select a worker from workload's all workers
 		return r.selectWorkerAndSyncStatusFromWorkerPool(ctx, connection, workload)
 	}
 }
 
-func (r *TensorFusionConnectionReconciler) syncDedicatedWorkerStatus(ctx context.Context, connection *tfv1.TensorFusionConnection) error {
+func (r *TensorFusionConnectionReconciler) syncDedicatedWorkerStatus(ctx context.Context, connection *tfv1.TensorFusionConnection, vendor string) error {
 	pod := &v1.Pod{}
 	if err := r.Get(ctx, client.ObjectKey{Name: connection.Name, Namespace: connection.Namespace}, pod); err != nil {
 		return fmt.Errorf("failed to get dedicated worker pod for connection %w", err)
@@ -124,7 +124,7 @@ func (r *TensorFusionConnectionReconciler) syncDedicatedWorkerStatus(ctx context
 		if revision == "" {
 			revision = "0"
 		}
-		setConnectionWorkerURL(connection, pod.Status.PodIP, pod.Name, revision)
+		setConnectionWorkerURL(connection, pod.Status.PodIP, pod.Name, revision, vendor)
 		if err := r.Status().Update(ctx, connection); err != nil {
 			return fmt.Errorf("failed to update connection status: %w", err)
 		}
@@ -132,8 +132,13 @@ func (r *TensorFusionConnectionReconciler) syncDedicatedWorkerStatus(ctx context
 	}
 }
 
-func setConnectionWorkerURL(connection *tfv1.TensorFusionConnection, podIp string, podName string, revision string) {
-	connection.Status.ConnectionURL = fmt.Sprintf("native+%s+%d+%s-%s", podIp, constants.TensorFusionRemoteWorkerPortNumber, podName, revision)
+func setConnectionWorkerURL(connection *tfv1.TensorFusionConnection, podIp string, podName string, revision string, vendor string) {
+	// Protocol indicates vendor for client to use correct stub
+	protocol := "native"
+	if vendor == constants.AcceleratorVendorAMD {
+		protocol = "hip"
+	}
+	connection.Status.ConnectionURL = fmt.Sprintf("%s+%s+%d+%s-%s", protocol, podIp, constants.TensorFusionRemoteWorkerPortNumber, podName, revision)
 }
 
 func (r *TensorFusionConnectionReconciler) selectWorkerAndSyncStatusFromWorkerPool(
@@ -166,7 +171,7 @@ func (r *TensorFusionConnectionReconciler) selectWorkerAndSyncStatusFromWorkerPo
 	if resourceVersion == "" {
 		resourceVersion = "0"
 	}
-	setConnectionWorkerURL(connection, s.WorkerIp, s.WorkerName, resourceVersion)
+	setConnectionWorkerURL(connection, s.WorkerIp, s.WorkerName, resourceVersion, workload.Spec.GPUVendor)
 	if err := r.Status().Update(ctx, connection); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update connection status: %w", err)
 	}
@@ -230,7 +235,9 @@ func (r *TensorFusionConnectionReconciler) shouldSelectWorker(
 		} else if connection.Status.Phase != tfv1.WorkerRunning {
 			// pod is running now, but connection is not running, update connection to running
 			connection.Status.Phase = tfv1.WorkerRunning
-			setConnectionWorkerURL(connection, pod.Status.PodIP, pod.Name, pod.ResourceVersion)
+			// Get vendor from pod annotation for connection URL
+			vendor := pod.Annotations[constants.GpuVendorAnnotation]
+			setConnectionWorkerURL(connection, pod.Status.PodIP, pod.Name, pod.ResourceVersion, vendor)
 			if updateErr := r.Status().Update(ctx, connection); updateErr != nil {
 				return false, fmt.Errorf("failed to update connection status: %w", updateErr)
 			}

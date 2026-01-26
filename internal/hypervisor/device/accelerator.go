@@ -467,10 +467,10 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 		}
 
 		vendor := byteArrayToString(cInfo.Basic.Vendor[:])
-		
+
 		// Initialize device node mappings based on vendor
 		deviceNode := make(map[string]string)
-		
+
 		if vendor == "AMD" {
 			// AMD GPUs: Look for renderDevice in properties (set by provider)
 			// If found, use specific renderD device; otherwise fall back to whole /dev/dri
@@ -485,7 +485,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			// Always add /dev/kfd for ROCm
 			deviceNode["/dev/kfd"] = "/dev/kfd"
 		}
-		
+
 		devices[i] = &api.DeviceInfo{
 			UUID:             byteArrayToString(cInfo.Basic.UUID[:]),
 			Vendor:           vendor,

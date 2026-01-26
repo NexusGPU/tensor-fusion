@@ -1,0 +1,64 @@
+apiVersion: tensor-fusion.ai/v1
+kind: TensorFusionCluster
+metadata:
+  name: amd-remote-cluster
+  namespace: tensor-fusion
+  labels:
+    app.kubernetes.io/name: tensor-fusion
+    tensor-fusion.ai/vendor: AMD
+    tensor-fusion.ai/mode: remote
+spec:
+  # Define GPU pools for AMD remote GPU mode
+  gpuPools:
+    - name: amd-remote-pool
+      isDefault: true
+      specTemplate:
+        # REMOTE GPU MODE - workers run on GPU nodes, clients can run anywhere
+        # HIP API calls are transparently forwarded over the network
+        defaultUsingLocalGPU: false
+        
+        # Capacity configuration
+        capacityConfig:
+          oversubscription:
+            vramExpandToHostMem: 50
+            tflopsOversellRatio: 200
+        
+        # Node manager configuration - where workers run
+        nodeManagerConfig:
+          provisioningMode: AutoSelect
+          defaultVendor: AMD
+          # Workers are scheduled on nodes with AMD GPUs
+          nodeSelector:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: amd.com/gpu.product-name
+                    operator: In
+                    values:
+                      - AMD_Instinct_MI325_OAM
+        
+        # Component configuration for remote GPU mode
+        componentConfig:
+          # Hypervisor manages GPU resources on GPU nodes
+          hypervisor:
+            image: ghcr.io/saienduri/tensor-fusion-hypervisor:amd-support
+            providerImage:
+              AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest
+            enableVector: true
+            vectorImage: docker.io/timberio/vector:latest-alpine
+            portNumber: 8001
+          
+          # Worker - runs HIP worker service on GPU nodes
+          # TensorFusion creates these pods automatically
+          worker:
+            # HIP worker image - handles remote HIP API calls
+            image: ghcr.io/saienduri/tensor-fusion-hip-worker:latest
+          
+          # Client - init container injected into user pods
+          # Copies HIP client stub library for API interception
+          client:
+            providerImage:
+              AMD: ghcr.io/saienduri/tensor-fusion-amd-provider:latest
+            # Operator endpoint for worker discovery
+            # NOTE: Service name is Helm release name (fullname). With `helm install tensor-fusion ...`,
+            # controller service becomes `tensor-fusion.tensor-fusion.svc.cluster.local:8080`.
+            operatorEndpoint: "http://tensor-fusion.tensor-fusion.svc.cluster.local:8080"

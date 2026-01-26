@@ -85,9 +85,34 @@ var _ = Describe("GPUNode Controller", func() {
 			Expect(batchv1.AddToScheme(scheme)).To(Succeed())
 			Expect(corev1.AddToScheme(scheme)).To(Succeed())
 
+			pool := &tfv1.GPUPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "pool-1",
+					UID:  "pool-1-uid",
+				},
+				Spec: tfv1.GPUPoolSpec{
+					ComponentConfig: &tfv1.ComponentConfig{
+						Hypervisor: &tfv1.HypervisorConfig{
+							Image: "hypervisor:latest",
+						},
+					},
+					NodeManagerConfig: &tfv1.NodeManagerConfig{
+						DefaultVendor: constants.AcceleratorVendorNvidia,
+					},
+				},
+			}
+
 			node := &tfv1.GPUNode{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "node-1",
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: tfv1.GroupVersion.String(),
+							Kind:       "GPUPool",
+							Name:       pool.Name,
+							UID:        pool.UID,
+						},
+					},
 				},
 			}
 			gpu := &tfv1.GPU{
@@ -101,21 +126,8 @@ var _ = Describe("GPUNode Controller", func() {
 			}
 			client := fake.NewClientBuilder().
 				WithScheme(scheme).
-				WithObjects(node.DeepCopy(), gpu).
+				WithObjects(node.DeepCopy(), gpu, pool.DeepCopy()).
 				Build()
-
-			pool := &tfv1.GPUPool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "pool-1",
-				},
-				Spec: tfv1.GPUPoolSpec{
-					ComponentConfig: &tfv1.ComponentConfig{
-						Hypervisor: &tfv1.HypervisorConfig{
-							Image: "hypervisor:latest",
-						},
-					},
-				},
-			}
 
 			reconciler := &GPUNodeReconciler{
 				Client:                               client,

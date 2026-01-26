@@ -243,7 +243,7 @@ func AddTFDefaultClientConfBeforePatch(
 			Requests: injectLibResource,
 			Limits:   injectLibResource,
 		},
-		Env: configureFeatures4InjectLib(tfInfo.Profile.IsLocalGPU, pod.Annotations[constants.DisableFeaturesAnnotation]),
+		Env: configureFeatures4InjectLib(tfInfo.Profile.IsLocalGPU, tfInfo.Profile.GPUVendor, pod.Annotations[constants.DisableFeaturesAnnotation]),
 	})
 	pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 		Name: constants.TFLibsVolumeName,
@@ -437,8 +437,23 @@ func convertDisabledFeaturesToEnvs(disabledFeatures string, envList []v1.EnvVar)
 	return envList
 }
 
-func configureFeatures4InjectLib(isLocalGPU bool, disabledFeatures string) []v1.EnvVar {
-	envList := make([]v1.EnvVar, 0, 1)
+func configureFeatures4InjectLib(isLocalGPU bool, vendor string, disabledFeatures string) []v1.EnvVar {
+	envList := make([]v1.EnvVar, 0, 4)
+
+	// Pass local GPU flag to init container for mode selection
+	envList = append(envList, v1.EnvVar{
+		Name:  "IS_LOCAL_GPU",
+		Value: strconv.FormatBool(isLocalGPU),
+	})
+
+	// Pass vendor information for vendor-specific init logic
+	if vendor != "" {
+		envList = append(envList, v1.EnvVar{
+			Name:  constants.TFHardwareVendorEnv,
+			Value: vendor,
+		})
+	}
+
 	if isLocalGPU {
 		// when tensor-fusion client already in GPU node, nvidia-smi and cuda are available, no need to copy
 		// for remote mode, should copy nvidia-smi since we don't know if nvidia-container-runtime is installed
@@ -564,7 +579,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 				},
 			},
 		})
-		
+
 		// Add /dev/kfd for AMD KFD (compute)
 		spec.Volumes = append(spec.Volumes, v1.Volume{
 			Name: "dev-kfd",
@@ -575,7 +590,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 				},
 			},
 		})
-		
+
 		// Mount devices into hypervisor container
 		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts,
 			v1.VolumeMount{
@@ -596,23 +611,23 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 
 func getInitShmCommand(vendor string) []string {
 	// Base command: mount shm
-	baseCmd := "/" + constants.ComponentHypervisor + " " + 
+	baseCmd := "/" + constants.ComponentHypervisor + " " +
 		constants.MountShmSubcommand + " " +
 		"--mount-point " + constants.TFDataPath + "/shm " +
 		"--size 1024"
-	
+
 	// For AMD, also create rocm directory placeholder for SubPath mount
 	if vendor == constants.AcceleratorVendorAMD {
 		return []string{"sh", "-c", baseCmd + " && mkdir -p " + constants.TFDataPath + "/rocm || true"}
 	}
-	
+
 	// For non-AMD vendors, just mount shm
 	return []string{"sh", "-c", baseCmd}
 }
 
 func getInitRuntimeCommand(vendor string) []string {
 	baseCmd := "cp -r /build/* " + constants.TFDataPath + "/"
-	
+
 	// AMD vendor needs ROCm runtime libraries
 	if vendor == constants.AcceleratorVendorAMD {
 		// Remove any existing rocm (symlink or directory) and copy fresh
@@ -621,7 +636,7 @@ func getInitRuntimeCommand(vendor string) []string {
 			"cp -r /opt/rocm-*/* " + constants.TFDataPath + "/rocm/"
 		return []string{"sh", "-c", baseCmd + " && " + rocmCopyCmd}
 	}
-	
+
 	// Other vendors only need provider library
 	return []string{"sh", "-c", baseCmd}
 }
@@ -719,7 +734,7 @@ func composeHypervisorInitContainer(
 
 func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor string, enableVector bool) {
 	spec.HostNetwork = true
-	
+
 	volumeMounts := []v1.VolumeMount{
 		{
 			Name:      constants.DataVolumeName,
@@ -727,7 +742,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 			MountPath: constants.TFDataPath,
 		},
 	}
-	
+
 	// Add ROCm mount for AMD vendor
 	if vendor == constants.AcceleratorVendorAMD {
 		volumeMounts = append(volumeMounts, v1.VolumeMount{
@@ -737,7 +752,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 			SubPath:   "rocm",
 		})
 	}
-	
+
 	volumeMounts = append(volumeMounts, v1.VolumeMount{
 		Name:      constants.TensorFusionGPUInfoConfigVolumeName,
 		MountPath: constants.TensorFusionGPUInfoConfigMountPath,
@@ -749,7 +764,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 		Name:      constants.KubeletPodResourcesVolumeName,
 		MountPath: constants.KubeletPodResourcesPath,
 	})
-	
+
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, volumeMounts...)
 	if enableVector {
 		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
@@ -768,7 +783,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 			},
 		},
 	}
-	
+
 	// AMD-specific security settings - use privileged mode for full GPU access
 	if vendor == constants.AcceleratorVendorAMD {
 		spec.Containers[0].SecurityContext.Privileged = ptr.To(true)
@@ -934,9 +949,6 @@ func SetWorkerContainerSpec(
 			MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 		})
 	container.Env = append(container.Env, v1.EnvVar{
-		Name:  constants.NvidiaVisibleAllDeviceEnv,
-		Value: constants.NvidiaVisibleAllDeviceValue,
-	}, v1.EnvVar{
 		Name: constants.HypervisorIPEnv,
 		ValueFrom: &v1.EnvVarSource{
 			FieldRef: &v1.ObjectFieldSelector{
@@ -968,7 +980,19 @@ func SetWorkerContainerSpec(
 		},
 	})
 
-	if !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) {
+	// NVIDIA_VISIBLE_DEVICES is only meaningful for NVIDIA.
+	// AMD uses /dev/kfd + /dev/dri + HIP runtime; this env is confusing and can lead to wrong assumptions.
+	if workloadProfile.GPUVendor != constants.AcceleratorVendorAMD {
+		container.Env = append(container.Env, v1.EnvVar{
+			Name:  constants.NvidiaVisibleAllDeviceEnv,
+			Value: constants.NvidiaVisibleAllDeviceValue,
+		})
+	}
+
+	// GPU limiter is currently CUDA-based (libcuda_limiter.so). Do NOT inject it for AMD workers.
+	// AMD remote HIP worker should run without CUDA LD_PRELOAD.
+	if workloadProfile.GPUVendor != constants.AcceleratorVendorAMD &&
+		!strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) {
 		// TODO: In hard isolation mode, current implementation relies on limiter to set CUDA_VISIBLE_DEVICES env.
 		// In next hypervisor versions, device allocation will be handled by device-plugin, so LD_PRELOAD should be removed.
 		container.Env = append(container.Env, v1.EnvVar{
@@ -1016,10 +1040,17 @@ func SetWorkerContainerSpec(
 					"touch " + shmPath + " && chmod 666 " + shmPath + " && exec ./tensor-fusion-worker -n shmem -m " + constants.ConnectionSharedMemName + " -M " + constants.ConnectionSharedMemSize,
 				}
 			} else {
-				container.Command = []string{
-					"./tensor-fusion-worker",
-					"-p",
-					strconv.Itoa(int(constants.TensorFusionRemoteWorkerPortNumber)),
+				// Vendor-specific worker command
+				if workloadProfile.GPUVendor == constants.AcceleratorVendorAMD {
+					// AMD HIP worker runs via image entrypoint
+					// The amd-worker.Dockerfile sets ENTRYPOINT to hip_worker_service
+					container.Command = nil
+				} else {
+					container.Command = []string{
+						"./tensor-fusion-worker",
+						"-p",
+						strconv.Itoa(int(constants.TensorFusionRemoteWorkerPortNumber)),
+					}
 				}
 			}
 		}
@@ -1038,6 +1069,44 @@ func AddWorkerConfAfterTemplate(
 
 	// Configure worker container
 	SetWorkerContainerSpec(&spec.Containers[0], workloadProfile, workerConfig, hypervisorConfig, disabledFeatures, false)
+
+	// AMD workers must have ROCm device nodes.
+	// Without /dev/kfd and /dev/dri, HIP reports "no ROCm-capable device is detected".
+	if workloadProfile.GPUVendor == constants.AcceleratorVendorAMD {
+		// NOTE: Mounting the device nodes is not enough on many container runtimes (device cgroup allowlist).
+		// Runtime evidence from our cluster:
+		//   rocminfo -> "Unable to open /dev/kfd read-write: Operation not permitted"
+		// Setting privileged is the simplest portable fix unless an AMD device plugin is installed.
+		if spec.Containers[0].SecurityContext == nil {
+			spec.Containers[0].SecurityContext = &v1.SecurityContext{}
+		}
+		spec.Containers[0].SecurityContext.Privileged = ptr.To(true)
+
+		spec.Volumes = append(spec.Volumes,
+			v1.Volume{
+				Name: "dev-dri",
+				VolumeSource: v1.VolumeSource{
+					HostPath: &v1.HostPathVolumeSource{
+						Path: "/dev/dri",
+						Type: ptr.To(v1.HostPathDirectory),
+					},
+				},
+			},
+			v1.Volume{
+				Name: "dev-kfd",
+				VolumeSource: v1.VolumeSource{
+					HostPath: &v1.HostPathVolumeSource{
+						Path: "/dev/kfd",
+						Type: ptr.To(v1.HostPathCharDev),
+					},
+				},
+			},
+		)
+		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts,
+			v1.VolumeMount{Name: "dev-dri", MountPath: "/dev/dri"},
+			v1.VolumeMount{Name: "dev-kfd", MountPath: "/dev/kfd"},
+		)
+	}
 
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{

@@ -35,10 +35,36 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	ctx context.Context,
 	workload *tfv1.TensorFusionWorkload,
 ) (*v1.Pod, error) {
+	if wg == nil || wg.WorkerConfig == nil {
+		return nil, fmt.Errorf("worker config is nil (gpupool.spec.componentConfig.worker missing)")
+	}
+
+	// If the pool didn't set a worker PodTemplate, synthesize a minimal one.
+	// This happens for some TensorFusionCluster-generated pools; we still want dynamic workers to be creatable.
 	podTmpl := &v1.PodTemplate{}
-	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal pod template: %w", err)
+	if wg.WorkerConfig.PodTemplate == nil || len(wg.WorkerConfig.PodTemplate.Raw) == 0 {
+		vendor := workload.Spec.GPUVendor
+		image := wg.WorkerConfig.Image
+		if wg.WorkerConfig.ProviderImage != nil && vendor != "" && wg.WorkerConfig.ProviderImage[vendor] != "" {
+			image = wg.WorkerConfig.ProviderImage[vendor]
+		}
+		if image == "" {
+			return nil, fmt.Errorf("worker image is empty (gpupool.spec.componentConfig.worker.image/providerImage missing)")
+		}
+
+		podTmpl.Template.Spec = v1.PodSpec{
+			Containers: []v1.Container{
+				{
+					Name:  "worker",
+					Image: image,
+				},
+			},
+		}
+	} else {
+		err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal pod template: %w", err)
+		}
 	}
 
 	// Merge workload.Spec.WorkerPodTemplate into podTmpl.Template if provided

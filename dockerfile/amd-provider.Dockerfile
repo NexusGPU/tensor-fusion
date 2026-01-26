@@ -1,5 +1,6 @@
 # AMD Provider Dockerfile
 # Builds the AMD accelerator provider library with TheRock ROCm distribution
+# Also includes the HIP client stub for remote GPU (GPU-over-IP) mode
 
 FROM ubuntu:24.04 AS builder
 
@@ -47,9 +48,12 @@ ENV LD_LIBRARY_PATH=${ROCM_PATH}/lib
 # Copy provider source and tests
 COPY provider/ provider/
 
-# Build AMD provider
+# Build AMD provider library
 WORKDIR /workspace/provider
 RUN make amd
+
+# Build HIP client stub for remote GPU mode (pure C, no ROCm dependencies)
+RUN make -C amd client
 
 # Build test binary
 RUN gcc -Wall -Wextra -std=c11 \
@@ -65,6 +69,7 @@ FROM ubuntu:24.04
 # Install runtime dependencies (python3 for amd-smi)
 RUN apt-get update && apt-get install -y \
     python3 \
+    libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -75,6 +80,10 @@ COPY --from=builder /opt /opt
 # Copy built provider library and test binary
 COPY --from=builder /workspace/provider/build/libaccelerator_amd.so /build/lib/
 COPY --from=builder /workspace/provider/build/test_amd_provider /build/bin/
+
+# Copy HIP client stub for remote GPU mode
+# Makefile outputs to current directory
+COPY --from=builder /workspace/provider/amd/libhip_client_stub.so /build/lib/
 
 # Copy init container entrypoint script
 COPY scripts/inject-libs.sh /build/bin/
@@ -87,6 +96,7 @@ hardwareVendor: AMD\n\
 releaseDate: \"$(date -I)\"\n\
 isolationModes:\n\
   - shared\n\
+  - remote\n\
 rocmDistribution: TheRock\n\
 rocmVersion: ${ROCM_VERSION}" > /build/metadata.yaml
 

@@ -436,10 +436,10 @@ func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod) (*api.WorkerInfo, 
 		WorkerName: pod.Name,
 		Namespace:  pod.Namespace,
 
-		AllocatedDevices: allocatedDevices,
+		AllocatedDevices:     allocatedDevices,
 		AllocatedDeviceUUIDs: allocatedDeviceUUIDs,
-		IsolationMode:    allocRequest.Isolation,
-		QoS:              allocRequest.QoS,
+		IsolationMode:        allocRequest.Isolation,
+		QoS:                  allocRequest.QoS,
 
 		Requests: allocRequest.Request,
 		Limits:   allocRequest.Limit,

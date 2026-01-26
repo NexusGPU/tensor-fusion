@@ -41,7 +41,7 @@ func sanitizeGPUName(nodeName, uuid string) string {
 	// Replace dots that aren't at the end of segments with hyphens
 	// This handles the PCI function separator (e.g., 00.0 -> 00-0)
 	name = strings.ReplaceAll(name, ".", "-")
-	
+
 	// Prepend node name to ensure global uniqueness for PCI addresses
 	// Node names are already RFC 1123 compliant
 	return nodeName + "-" + name
@@ -136,7 +136,7 @@ func (a *APIClient) CreateOrUpdateGPU(
 	if err != nil {
 		return err
 	}
-	
+
 	// Update status separately with the captured status (status is a subresource in Kubernetes)
 	gpu := &tfv1.GPU{
 		ObjectMeta: metav1.ObjectMeta{
