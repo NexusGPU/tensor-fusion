@@ -101,6 +101,10 @@ var _ = Describe("Pod Controller", func() {
 				Eventually(func() error {
 					return k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), &corev1.Pod{})
 				}).Should(Satisfy(errors.IsNotFound))
+
+				// Wait for GPU resources to be fully released
+				// This prevents resource conflicts between sequential tests
+				time.Sleep(1 * time.Second)
 			}
 		})
 
