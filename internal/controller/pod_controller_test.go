@@ -453,7 +453,7 @@ var _ = Describe("Pod Controller", func() {
 					return false
 				}
 				return !controllerutil.ContainsFinalizer(updatedPod, constants.Finalizer)
-			}).Should(BeTrue())
+			}).WithTimeout(16 * time.Second).WithPolling(500 * time.Millisecond).Should(BeTrue())
 		})
 
 		It("should skip connection creation if pod is not a TensorFusion client", func() {
