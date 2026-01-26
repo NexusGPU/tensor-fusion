@@ -2,6 +2,7 @@ package gpuresources
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strings"
 	"testing"
@@ -534,6 +535,57 @@ func (s *GPUResourcesSuite) TestPostBind() {
 	updatedPod := &v1.Pod{}
 	s.NoError(s.client.Get(s.ctx, types.NamespacedName{Name: "p1", Namespace: "ns1"}, updatedPod))
 	s.Equal("gpu-1", updatedPod.Annotations[constants.GPUDeviceIDsAnnotation])
+}
+
+func (s *GPUResourcesSuite) TestPostBind_MultiContainer() {
+	log.FromContext(s.ctx).Info("Running TestPostBind_MultiContainer")
+	state := framework.NewCycleState()
+
+	// Create pod with container-gpu-count annotation for multi-container scenario
+	// node-b has 2 GPUs (gpu-2, gpu-3), so we request 2 GPUs total
+	// Using lower VRAM to avoid quota limit (total limit is 80Gi, worker-1 already uses 4Gi)
+	pod := s.makePod("p-multi",
+		map[string]string{
+			constants.GpuCountAnnotation:          "2",
+			constants.TFLOPSRequestAnnotation:     "100",
+			constants.VRAMRequestAnnotation:       "10Gi",
+			constants.TFLOPSLimitAnnotation:       "100",
+			constants.VRAMLimitAnnotation:         "10Gi",
+			constants.ContainerGPUCountAnnotation: `{"container1":1,"container2":1}`,
+		})
+
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
+	s.Require().True(preFilterStatus.IsSuccess())
+
+	reserveStatus := s.plugin.Reserve(s.ctx, state, pod, "node-b")
+	s.Require().True(reserveStatus.IsSuccess())
+
+	s.plugin.PostBind(s.ctx, state, pod, "node-b")
+
+	updatedPod := &v1.Pod{}
+	s.NoError(s.client.Get(s.ctx, types.NamespacedName{Name: "p-multi", Namespace: "ns1"}, updatedPod))
+
+	// Verify gpu-ids annotation
+	s.Contains(updatedPod.Annotations, constants.GPUDeviceIDsAnnotation)
+	gpuIDs := updatedPod.Annotations[constants.GPUDeviceIDsAnnotation]
+	s.NotEmpty(gpuIDs)
+
+	// Verify container-gpus annotation
+	s.Contains(updatedPod.Annotations, constants.ContainerGPUsAnnotation)
+	containerGPUsJSON := updatedPod.Annotations[constants.ContainerGPUsAnnotation]
+	s.NotEmpty(containerGPUsJSON)
+
+	// Parse and verify container GPU allocation
+	var containerGPUs map[string][]string
+	err := json.Unmarshal([]byte(containerGPUsJSON), &containerGPUs)
+	s.NoError(err)
+	s.Len(containerGPUs, 2, "should have 2 containers")
+	s.Len(containerGPUs["container1"], 1, "container1 should get 1 GPU")
+	s.Len(containerGPUs["container2"], 1, "container2 should get 1 GPU")
+
+	log.FromContext(s.ctx).Info("Multi-container GPU allocation verified",
+		"gpuIDs", gpuIDs,
+		"containerGPUs", containerGPUsJSON)
 }
 
 func TestGPUResourcesSuite(t *testing.T) {

@@ -196,6 +196,15 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 		}), ",")
 	}
 	annotations[constants.IsolationModeAnnotation] = string(workload.Spec.Isolation)
+
+	// Pass through container-gpu-count annotation from workload to worker pod
+	// This preserves per-container GPU count information for multi-container scenarios
+	if workload.Annotations != nil {
+		if containerGPUCount, ok := workload.Annotations[constants.ContainerGPUCountAnnotation]; ok && containerGPUCount != "" {
+			annotations[constants.ContainerGPUCountAnnotation] = containerGPUCount
+		}
+	}
+
 	return labels, annotations
 }
 

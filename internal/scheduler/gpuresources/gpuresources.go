@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -601,15 +602,46 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 		return
 	}
 	// write the allocated GPU info to Pod in bindingCycle, before default binder changing the Pod nodeName info
-	gpuIDs := strings.Join(gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs, ",")
+	finalGPUs := gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs
+	gpuIDs := strings.Join(finalGPUs, ",")
 	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
 
-	// Patch GPU device IDs annotation
-	patch := []byte(`[{
-		"op": "add",
-		"path": "/metadata/annotations/` + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation) + `",
-		"value": "` + gpuIDs + `"}]`)
-	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patch))
+	// Prepare patches for GPU allocation annotations
+	patches := []map[string]interface{}{
+		{
+			"op":    "add",
+			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation),
+			"value": gpuIDs,
+		},
+	}
+
+	// By default, all containers share the same GPUs (PodLevelResources behavior)
+	// If container-gpu-count annotation exists, allocate GPUs per container
+	// Each container gets its specific GPU IDs, while percent/vram remain the same
+	if pod.Annotations != nil {
+		if containerGPUCountJSON, ok := pod.Annotations[constants.ContainerGPUCountAnnotation]; ok && containerGPUCountJSON != "" {
+			containerGPUsJSON, err := s.allocateGPUsToContainers(containerGPUCountJSON, finalGPUs)
+			if err != nil {
+				s.logger.Error(err, "failed to allocate GPUs to containers", "pod", pod.Name)
+			} else {
+				patches = append(patches, map[string]interface{}{
+					"op":    "add",
+					"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.ContainerGPUsAnnotation),
+					"value": containerGPUsJSON,
+				})
+				s.logger.Info("Allocated GPUs per container", "pod", pod.Name, "containerGPUs", containerGPUsJSON)
+			}
+		}
+	}
+
+	// Apply all patches
+	patchBytes, err := json.Marshal(patches)
+	if err != nil {
+		s.logger.Error(err, "failed to marshal patches", "pod", pod.Name)
+		return
+	}
+
+	err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patchBytes))
 	if err != nil {
 		s.logger.Error(err, "failed to patch gpu device ids", "pod", pod.Name)
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUDeviceAllocatedFailed",
@@ -618,6 +650,46 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
 			"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
 	}
+}
+
+// allocateGPUsToContainers allocates GPUs to containers based on their requirements
+// Returns JSON string: {"containerName1": ["gpu-id1", "gpu-id2"], "containerName2": ["gpu-id3"]}
+// By default (without this allocation), all containers share the same GPUs
+// When per-container allocation is needed, each container gets its specific GPU IDs
+func (s *GPUFit) allocateGPUsToContainers(containerGPUCountJSON string, gpuIDs []string) (string, error) {
+	// Parse container GPU count from annotation
+	var containerGPUCounts map[string]int
+	if err := json.Unmarshal([]byte(containerGPUCountJSON), &containerGPUCounts); err != nil {
+		return "", fmt.Errorf("failed to parse container GPU counts: %w", err)
+	}
+
+	// Allocate GPUs to containers
+	containerAllocation := make(map[string][]string)
+	gpuIndex := 0
+
+	// Sort container names for deterministic allocation
+	containerNames := make([]string, 0, len(containerGPUCounts))
+	for name := range containerGPUCounts {
+		containerNames = append(containerNames, name)
+	}
+	sort.Strings(containerNames)
+
+	for _, containerName := range containerNames {
+		count := containerGPUCounts[containerName]
+		if gpuIndex+count > len(gpuIDs) {
+			return "", fmt.Errorf("not enough GPUs: need %d more for container %s", count, containerName)
+		}
+		containerAllocation[containerName] = gpuIDs[gpuIndex : gpuIndex+count]
+		gpuIndex += count
+	}
+
+	// Marshal to JSON
+	allocationJSON, err := json.Marshal(containerAllocation)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal container allocation: %w", err)
+	}
+
+	return string(allocationJSON), nil
 }
 
 func (s *GPUFit) EventsToRegister(_ context.Context) ([]fwk.ClusterEventWithHint, error) {
