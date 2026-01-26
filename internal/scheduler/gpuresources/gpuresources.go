@@ -807,25 +807,3 @@ func (s *GPUFit) validatePreemption(state fwk.CycleState, pod *v1.Pod, nodeInfo 
 
 	return fwk.NewStatus(fwk.Success, "")
 }
-
-// getVictimNodes returns the set of node names where victim pods are currently scheduled.
-// Used to validate same-node constraints for multi-GPU preemption.
-func (s *GPUFit) getVictimNodes(victims sets.Set[types.NamespacedName]) sets.Set[string] {
-	nodeSet := sets.New[string]()
-
-	for victim := range victims {
-		pod := &v1.Pod{}
-		if err := s.client.Get(s.ctx, victim, pod); err != nil {
-			// If pod not found (already deleted), skip - validation will handle this
-			s.logger.V(5).Info("Failed to get victim pod for node check",
-				"victim", victim.String(), "error", err)
-			continue
-		}
-
-		if pod.Spec.NodeName != "" {
-			nodeSet.Insert(pod.Spec.NodeName)
-		}
-	}
-
-	return nodeSet
-}
