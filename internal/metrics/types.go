@@ -231,6 +231,9 @@ type GPUAllocationMetrics struct {
 	// NOTE: make sure new fields will be migrated in SetupTable function
 
 	Timestamp time.Time `json:"ts" gorm:"column:ts;index:,class:TIME"`
+
+	// Fields for extra pod labels tracking - private, not stored in TSDB
+	podLabels map[string]string
 }
 
 func (gam GPUAllocationMetrics) TableName() string {
