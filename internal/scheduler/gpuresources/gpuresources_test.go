@@ -257,7 +257,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 		)
 
-		fakeClientSet := clientsetfake.NewSimpleClientset(k8sObjs...)
+		fakeClientSet := clientsetfake.NewClientset(k8sObjs...)
 		informerFactory := informers.NewSharedInformerFactory(fakeClientSet, 0)
 		metrics.Register()
 		metricsRecorder := metrics.NewMetricsAsyncRecorder(1000, time.Second, ctx.Done())

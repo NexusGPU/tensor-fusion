@@ -352,7 +352,7 @@ func (e *NodeExpander) prepareNewNodesForScheduleAttempt(
 	if newPreparedNode.Labels != nil {
 		newPreparedNode.Labels[constants.KubernetesHostNameLabel] = newPreparedNode.Name
 	}
-	newPreparedGPUs := []*tfv1.GPU{}
+	newPreparedGPUs := make([]*tfv1.GPU, 0, len(templateGPUs))
 	for _, gpu := range templateGPUs {
 		gpuCopy := gpu.DeepCopy()
 		gpuCopy.Name = "gpu-" + rand.String(12)

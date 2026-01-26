@@ -58,7 +58,7 @@ func createAscendGPU(partitions map[string]tfv1.AllocatedPartition) *tfv1.GPU {
 }
 
 func getAscendGpuConfig() *config.GpuInfo {
-	templates := []config.PartitionTemplateInfo{}
+	templates := make([]config.PartitionTemplateInfo, 0, len(PartitionTemplateMap[ascendGPUModel]))
 	for _, t := range PartitionTemplateMap[ascendGPUModel] {
 		templates = append(templates, t)
 	}

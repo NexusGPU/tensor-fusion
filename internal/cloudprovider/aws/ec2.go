@@ -44,12 +44,13 @@ func (p AWSGPUNodeProvider) TestConnection() error {
 }
 
 func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeClaim) (*types.GPUNodeStatus, error) {
-	awsTags := []ec2Types.Tag{
+	nodeClass := p.nodeClass.Spec
+	awsTags := make([]ec2Types.Tag, 0, len(nodeClass.Tags)+3)
+	awsTags = append(awsTags, []ec2Types.Tag{
 		{Key: aws.String("managed-by"), Value: aws.String("tensor-fusion.ai")},
 		{Key: aws.String("tensor-fusion.ai/node-name"), Value: aws.String(param.Spec.NodeName)},
 		{Key: aws.String("tensor-fusion.ai/node-class"), Value: aws.String(p.nodeClass.Name)},
-	}
-	nodeClass := p.nodeClass.Spec
+	}...)
 
 	for k, v := range nodeClass.Tags {
 		awsTags = append(awsTags, ec2Types.Tag{

@@ -330,7 +330,7 @@ func batchCreateResources(
 		PreemptionPolicy: ptr.To(v1.PreemptNever),
 	}))
 
-	k8sObjs := []runtime.Object{}
+	k8sObjs := make([]runtime.Object, 0, len(nodes)+len(pods))
 	require.NoError(b, client.Create(ctx, &v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: namespace},
 	}))
@@ -384,7 +384,7 @@ func setupFrameworkAndPlugin(
 		tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 	}
 
-	fakeClientSet := clientsetfake.NewSimpleClientset(k8sObjs...)
+	fakeClientSet := clientsetfake.NewClientset(k8sObjs...)
 	informerFactory := informers.NewSharedInformerFactory(fakeClientSet, 0)
 	metrics.Register()
 	metricsRecorder := metrics.NewMetricsAsyncRecorder(1000, time.Second, ctx.Done())
