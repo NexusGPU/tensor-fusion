@@ -388,7 +388,7 @@ func (e *NodeExpander) simulateSchedulingWithoutGPU(ctx context.Context, pod *co
 		return nil, fmt.Errorf("pod to check expansion is not a tensor fusion worker pod: %s", pod.Name)
 	}
 	delete(pod.Labels, constants.LabelComponent)
-	scheduleResult, _, err := e.scheduler.FindNodesThatFitPod(ctx, fwkInstance, state, pod)
+	scheduleResult, _, _, _, err := e.scheduler.FindNodesThatFitPod(ctx, fwkInstance, state, pod)
 	pod.Labels[constants.LabelComponent] = constants.ComponentWorker
 	if len(scheduleResult) == 0 {
 		return nil, err

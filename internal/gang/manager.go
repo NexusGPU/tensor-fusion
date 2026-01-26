@@ -29,7 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	listerv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
+	"k8s.io/kube-scheduler/framework"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"

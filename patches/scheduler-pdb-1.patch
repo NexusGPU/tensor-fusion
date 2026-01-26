@@ -1,19 +1,14 @@
---- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2025-09-15 17:45:27
-+++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2025-09-15 17:45:19
-@@ -20,7 +20,10 @@
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2026-01-26 00:00:00
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2026-01-26 00:00:00
+@@ -20,6 +20,7 @@
  	"context"
  	"fmt"
  	"math/rand"
-+	"os"
  	"sort"
-+	"strconv"
-+	"time"
  
++	"time"
  	v1 "k8s.io/api/core/v1"
- 	policy "k8s.io/api/policy/v1"
-@@ -119,6 +122,20 @@
- 	// Default behavior: No additional filtering, beyond the internal requirement that the victim pod
- 	// have lower priority than the preemptor pod.
+@@ -108,3 +109,17 @@
  	pl.IsEligiblePod = func(nodeInfo fwk.NodeInfo, victim fwk.PodInfo, preemptor *v1.Pod) bool {
 +		victimAnnotation := victim.GetPod().Annotations
 +		if victimAnnotation == nil {
@@ -31,19 +26,3 @@
 +		}
  		return true
  	}
- 
-@@ -430,5 +447,13 @@
- }
- 
- func getPDBLister(informerFactory informers.SharedInformerFactory) policylisters.PodDisruptionBudgetLister {
-+	// FIX kubernetes 1.21 and lower version API missing issue
-+	minorVersionStr := os.Getenv("KUBE_API_VERSION_MINOR")
-+	if minorVersionStr != "" {
-+		minorVersion, err := strconv.Atoi(minorVersionStr)
-+		if err != nil || minorVersion < 21 {
-+			return nil
-+		}
-+	}
- 	return informerFactory.Policy().V1().PodDisruptionBudgets().Lister()
- }
- 

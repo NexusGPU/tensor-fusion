@@ -1,20 +1,20 @@
---- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/preemption/preemption.go	2025-08-06 17:48:23
-+++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/preemption/preemption.go	2025-08-06 17:48:13
-@@ -21,6 +21,8 @@
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/preemption/preemption.go	2026-01-26 00:00:00
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/preemption/preemption.go	2026-01-26 00:00:00
+@@ -20,9 +20,11 @@
+ 	"context"
  	"errors"
  	"fmt"
  	"math"
 +	"os"
-+	"strconv"
  	"sync"
  	"sync/atomic"
  	"time"
-@@ -148,8 +150,17 @@
++	"strconv"
  
- func NewEvaluator(pluginName string, fh framework.Handle, i Interface, enableAsyncPreemption bool) *Evaluator {
+ 	v1 "k8s.io/api/core/v1"
+@@ -158,4 +160,12 @@
  	podLister := fh.SharedInformerFactory().Core().V1().Pods().Lister()
 -	pdbLister := fh.SharedInformerFactory().Policy().V1().PodDisruptionBudgets().Lister()
- 
 +	// FIX kubernetes 1.21 and lower version API missing issue
 +	var pdbLister policylisters.PodDisruptionBudgetLister
 +	minorVersionStr := os.Getenv("KUBE_API_VERSION_MINOR")
@@ -24,7 +24,5 @@
 +			pdbLister = fh.SharedInformerFactory().Policy().V1().PodDisruptionBudgets().Lister()
 +		}
 +	}
-+
+ 
  	ev := &Evaluator{
- 		PluginName:            pluginName,
- 		Handler:               fh,

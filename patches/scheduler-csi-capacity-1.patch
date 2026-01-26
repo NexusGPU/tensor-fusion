@@ -1,6 +1,6 @@
---- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/volume_binding.go	2025-08-06 16:50:24
-+++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/volume_binding.go	2025-08-06 16:51:16
-@@ -20,6 +20,8 @@
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/volume_binding.go	2026-01-26 00:00:00
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/volume_binding.go	2026-01-26 00:00:00
+@@ -19,5 +19,7 @@
  	"context"
  	"errors"
  	"fmt"
@@ -8,8 +8,7 @@
 +	"strconv"
  	"sync"
  	"time"
- 
-@@ -603,9 +605,18 @@
+@@ -631,7 +633,16 @@
  	storageClassInformer := fh.SharedInformerFactory().Storage().V1().StorageClasses()
  	csiNodeInformer := fh.SharedInformerFactory().Storage().V1().CSINodes()
  	capacityCheck := CapacityCheck{
@@ -27,6 +26,4 @@
 +		}
 +	}
 +
- 	binder := NewVolumeBinder(klog.FromContext(ctx), fh.ClientSet(), fts, podInformer, nodeInformer, csiNodeInformer, pvcInformer, pvInformer, storageClassInformer, capacityCheck, time.Duration(args.BindTimeoutSeconds)*time.Second)
- 
- 	// build score function
+ 	binder, err := NewVolumeBinder(klog.FromContext(ctx), fh.ClientSet(), fts, podInformer, nodeInformer, csiNodeInformer, pvcInformer, pvInformer, storageClassInformer, capacityCheck, time.Duration(args.BindTimeoutSeconds)*time.Second)

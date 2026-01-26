@@ -160,7 +160,7 @@ func SetupScheduler(
 		originalFailureHandler := sched.FailureHandler
 		sched.FailureHandler = func(
 			ctx context.Context, fwk framework.Framework, podInfo *framework.QueuedPodInfo,
-			status *fwk.Status, nominatingInfo *framework.NominatingInfo, start time.Time,
+			status *fwk.Status, nominatingInfo *fwk.NominatingInfo, start time.Time,
 		) {
 			if status.IsRejected() {
 				// Handle TensorFusion pods that are rejected due to lack of GPU resources
