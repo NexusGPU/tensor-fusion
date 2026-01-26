@@ -1090,6 +1090,8 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation() {
 	s.T().Skip("Skipping: requires real scheduler framework with PodNominator support")
 	log.FromContext(s.ctx).Info("Running TestCheckNominatedPodsGPUReservation")
 
+	const testNodeName = "node-a"
+
 	// Create a higher priority nominated pod
 	nominatedPod := s.makePod("nominated-pod", map[string]string{
 		constants.TFLOPSRequestAnnotation: "500",
@@ -1100,7 +1102,7 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation() {
 	})
 	highPriority := int32(100)
 	nominatedPod.Spec.Priority = &highPriority
-	nominatedPod.Status.NominatedNodeName = "node-a"
+	nominatedPod.Status.NominatedNodeName = testNodeName
 	s.NoError(s.client.Update(s.ctx, nominatedPod))
 
 	// Re-get the pod to ensure it has the latest state
@@ -1110,7 +1112,7 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation() {
 	// Add nominated pod to framework's PodNominator
 	podInfo, _ := framework.NewPodInfo(updatedNominatedPod)
 	logger := klog.FromContext(s.ctx)
-	s.fwk.AddNominatedPod(logger, podInfo, &framework.NominatingInfo{NominatedNodeName: "node-a"})
+	s.fwk.AddNominatedPod(logger, podInfo, &framework.NominatingInfo{NominatedNodeName: testNodeName})
 
 	// Create a lower priority pod trying to schedule on the same node
 	lowerPriorityPod := s.makePod("lower-priority-pod", map[string]string{
@@ -1135,7 +1137,7 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation() {
 	schedulingData := data.(*GPUSchedulingStateData)
 
 	// Verify nominated pod is added to framework
-	nominatedPodInfos := s.fwk.NominatedPodsForNode("node-a")
+	nominatedPodInfos := s.fwk.NominatedPodsForNode(testNodeName)
 	s.Require().NotEmpty(nominatedPodInfos, "nominated pod should be added to framework")
 
 	// Verify nominated pod is a TensorFusion worker
@@ -1150,7 +1152,7 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation() {
 	s.True(found, "nominated pod should be found in NominatedPodsForNode")
 
 	// Test checkNominatedPodsGPUReservation
-	status := s.plugin.checkNominatedPodsGPUReservation(lowerPriorityPod, "node-a", schedulingData)
+	status := s.plugin.checkNominatedPodsGPUReservation(lowerPriorityPod, testNodeName, schedulingData)
 
 	// Should be unschedulable because resources are reserved for higher priority nominated pod
 	// NOTE: This is single-GPU nominated pod, so it uses resource calculation

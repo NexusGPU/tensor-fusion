@@ -213,9 +213,9 @@ func (s *GpuAllocator) FilterWithPreempt(
 	toFilterGPUs := []*tfv1.GPU{}
 
 	affectedNodes := make(map[string]bool)
-	//use map for O(1) duplicate check instead of O(M) array iteration
+	// use map for O(1) duplicate check instead of O(M) array iteration
 	includedGPUs := make(map[string]bool)
-	//if specified target nodes, only consider these nodes
+	// if specified target nodes, only consider these nodes
 	if len(targetNodeNames) > 0 {
 		for _, nodeName := range targetNodeNames {
 			affectedNodes[nodeName] = true
