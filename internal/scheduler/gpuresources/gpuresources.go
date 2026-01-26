@@ -303,25 +303,12 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 		return fwk.NewStatus(fwk.Error, err.Error())
 	}
 
-	// k8s will RemoveAll Pods, and run Filter for high priority pod,
-	// then Scheduler framework will reprieve victims one by one until filter returns unschedulable
+	// Preemption validation during Filter phase
+	// When Kubernetes DefaultPreemption runs PostFilter and selects victims,
+	// it then calls Filter again with RemovePod to verify preemption feasibility.
+	// This is where we validate GPU-specific constraints.
 	if filterResult.(*GPUSchedulingStateData).IsPreemption {
-		allocRequest, err := state.Read(CycleStateAllocateRequest)
-		allocRequestParsed := allocRequest.(*tfv1.AllocRequest)
-		if err != nil {
-			return fwk.NewStatus(fwk.Error, err.Error())
-		}
-		podsToPreempt, ok := filterResult.(*GPUSchedulingStateData).PreemptPods.Load(nodeInfo.Node().Name)
-		if !ok {
-			return fwk.NewStatus(fwk.Unschedulable, "no pods to preempt")
-		}
-		podsToPreemptParsed := podsToPreempt.(sets.Set[types.NamespacedName])
-		err = s.allocator.CheckQuotaAndFilterSingleNodePreempt(
-			nodeInfo.Node().Name, allocRequestParsed, podsToPreemptParsed)
-		if err != nil {
-			return fwk.NewStatus(fwk.Unschedulable, err.Error())
-		}
-		return fwk.NewStatus(fwk.Success, "")
+		return s.validatePreemption(state, pod, nodeInfo)
 	}
 
 	nodeName := nodeInfo.Node().Name
@@ -752,4 +739,120 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 	}
 
 	return fwk.QueueSkip, nil
+}
+
+// validatePreemption validates GPU-specific preemption constraints in Filter phase.
+// This is called when Kubernetes DefaultPreemption plugin runs PostFilter, selects victims,
+// and then re-runs Filter with victims removed (via RemovePod) to verify feasibility.
+//
+// Key validations:
+// 1. For multi-GPU pods: ensure all victims are on the same node (same-node requirement)
+// 2. Verify released GPU resources (TFLOPs, VRAM) are sufficient
+// 3. Check GPU model/vendor/affinity constraints
+// 4. Validate quota constraints
+//
+// This prevents "futile preemption" where Kubernetes selects victims but the high-priority
+// pod still cannot schedule due to GPU-specific constraints.
+func (s *GPUFit) validatePreemption(state fwk.CycleState, pod *v1.Pod, nodeInfo fwk.NodeInfo) *fwk.Status {
+	nodeName := nodeInfo.Node().Name
+
+	// Get allocation request from CycleState
+	allocRequest, err := state.Read(CycleStateAllocateRequest)
+	if err != nil {
+		return fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to read alloc request: %v", err))
+	}
+	allocReq := allocRequest.(*tfv1.AllocRequest)
+
+	// Get scheduling result data
+	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
+	if err != nil {
+		return fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to read scheduling result: %v", err))
+	}
+	schedData := filterResult.(*GPUSchedulingStateData)
+
+	// Get victims for this node
+	podsToPreempt, ok := schedData.PreemptPods.Load(nodeName)
+	if !ok {
+		return fwk.NewStatus(fwk.Unschedulable, "no pods to preempt on this node")
+	}
+	victims, ok := podsToPreempt.(sets.Set[types.NamespacedName])
+	if !ok {
+		return fwk.NewStatus(fwk.Error, "invalid type for preempt pods")
+	}
+
+	// VALIDATION 1: For multi-GPU pods, verify all victims are on the same node
+	// This is critical because multi-GPU pods require all GPUs on the same node.
+	// If Kubernetes selects victims across multiple nodes, preemption will be futile.
+	if allocReq.Count > 1 {
+		victimNodes := s.getVictimNodes(victims)
+		if victimNodes.Len() > 1 {
+			s.logger.Info("GPU preemption rejected: victims span multiple nodes",
+				"pod", pod.Name,
+				"namespace", pod.Namespace,
+				"node", nodeName,
+				"requiredGPUs", allocReq.Count,
+				"victimNodes", victimNodes.UnsortedList(),
+				"victimCount", victims.Len())
+			return fwk.NewStatus(fwk.Unschedulable,
+				fmt.Sprintf("multi-GPU preemption invalid: victims on %d nodes, require same-node", victimNodes.Len()))
+		}
+		// Also verify that the single victim node matches the current node being evaluated
+		if victimNodes.Len() == 1 && !victimNodes.Has(nodeName) {
+			s.logger.Info("GPU preemption rejected: victim node mismatch",
+				"pod", pod.Name,
+				"namespace", pod.Namespace,
+				"expectedNode", nodeName,
+				"victimNode", victimNodes.UnsortedList()[0])
+			return fwk.NewStatus(fwk.Unschedulable, "victim node does not match evaluation node")
+		}
+	}
+
+	// VALIDATION 2: Verify that preemption will release sufficient GPU resources
+	// This calls CheckQuotaAndFilterSingleNodePreempt which:
+	// - Simulates releasing victim GPU resources
+	// - Applies GPU filters (resource, model, vendor, affinity, same-node)
+	// - Checks quota constraints
+	err = s.allocator.CheckQuotaAndFilterSingleNodePreempt(nodeName, allocReq, victims)
+	if err != nil {
+		s.logger.Info("GPU preemption validation failed",
+			"pod", pod.Name,
+			"namespace", pod.Namespace,
+			"node", nodeName,
+			"requiredGPUs", allocReq.Count,
+			"victims", victims.Len(),
+			"error", err.Error())
+		return fwk.NewStatus(fwk.Unschedulable, fmt.Sprintf("preemption insufficient: %v", err))
+	}
+
+	// Preemption validated successfully
+	s.logger.Info("GPU preemption validated successfully",
+		"pod", pod.Name,
+		"namespace", pod.Namespace,
+		"node", nodeName,
+		"requiredGPUs", allocReq.Count,
+		"victims", victims.Len())
+
+	return fwk.NewStatus(fwk.Success, "")
+}
+
+// getVictimNodes returns the set of node names where victim pods are currently scheduled.
+// Used to validate same-node constraints for multi-GPU preemption.
+func (s *GPUFit) getVictimNodes(victims sets.Set[types.NamespacedName]) sets.Set[string] {
+	nodeSet := sets.New[string]()
+
+	for victim := range victims {
+		pod := &v1.Pod{}
+		if err := s.client.Get(s.ctx, victim, pod); err != nil {
+			// If pod not found (already deleted), skip - validation will handle this
+			s.logger.V(5).Info("Failed to get victim pod for node check",
+				"victim", victim.String(), "error", err)
+			continue
+		}
+
+		if pod.Spec.NodeName != "" {
+			nodeSet.Insert(pod.Spec.NodeName)
+		}
+	}
+
+	return nodeSet
 }

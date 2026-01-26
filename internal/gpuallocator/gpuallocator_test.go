@@ -517,7 +517,7 @@ var _ = Describe("GPU Allocator", func() {
 			filteredGPUs, _, err := allocator.FilterWithPreempt(allocReq, []*tfv1.AllocRequest{preemptAllocRequest})
 			Expect(err).NotTo(HaveOccurred())
 			// FilterWithPreempt returns all GPUs that satisfy the conditions, not limited to req.Count
-			Expect(len(filteredGPUs)).To(BeNumerically(">=", 1))
+			Expect(filteredGPUs).ToNot(BeEmpty())
 
 			// Find the preempted GPU in the results and verify it has simulated the resource release
 			var preemptedGPU *tfv1.GPU
@@ -573,7 +573,7 @@ var _ = Describe("GPU Allocator", func() {
 			filteredGPUs, _, err := allocator.FilterWithPreempt(allocReq, []*tfv1.AllocRequest{preemptAllocRequest}, targetNode)
 			Expect(err).NotTo(HaveOccurred())
 			// FilterWithPreempt returns all GPUs that satisfy the conditions, not limited to req.Count
-			Expect(len(filteredGPUs)).To(BeNumerically(">=", 1))
+			Expect(filteredGPUs).ToNot(BeEmpty())
 
 			// Verify all returned GPUs are from the target node
 			for _, gpu := range filteredGPUs {
@@ -704,7 +704,7 @@ var _ = Describe("GPU Allocator", func() {
 			filteredGPUs, _, err := allocator.FilterWithPreempt(allocReq, []*tfv1.AllocRequest{preemptAllocRequest})
 			Expect(err).NotTo(HaveOccurred())
 			// FilterWithPreempt returns all GPUs that satisfy the conditions, not limited to req.Count
-			Expect(len(filteredGPUs)).To(BeNumerically(">=", 1))
+			Expect(filteredGPUs).ToNot(BeEmpty())
 
 			// Verify at least one filtered GPU has correct available resources after simulated release
 			// Original available + 500m released should be enough for 300m request
