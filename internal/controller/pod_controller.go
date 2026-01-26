@@ -138,7 +138,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		if pod.DeletionTimestamp.IsZero() {
 			gpuStore, _, _ := r.Allocator.GetAllocationInfo()
 			metrics.SetGPUAllocationMetrics(gpuStore, pod)
-			metrics.SetWorkerMetricsByWorkload(pod, gpuallocator.GPUCapacityMap)
+			metrics.SetWorkerMetricsByWorkload(pod, gpuallocator.GPUCapacityMap, gpuStore)
 		}
 		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
 		if err != nil {

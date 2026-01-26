@@ -74,7 +74,10 @@ func RemoveNodeMetrics(nodeName string) {
 	delete(nodeMetricsMap, nodeName)
 }
 
-func SetWorkerMetricsByWorkload(pod *corev1.Pod, gpuCapacityMap map[string]tfv1.Resource) {
+func SetWorkerMetricsByWorkload(
+	pod *corev1.Pod, gpuCapacityMap map[string]tfv1.Resource,
+	gpuStore map[types.NamespacedName]*tfv1.GPU,
+) {
 	workerMetricsLock.Lock()
 	defer workerMetricsLock.Unlock()
 
@@ -106,7 +109,7 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod, gpuCapacityMap map[string]tfv1.
 
 	// Update metrics fields that are mutable
 	metricsItem := workerMetricsMap[pod.Name]
-	metricsItem.TflopsRequest, metricsItem.TflopsLimit = getWorkerTflopsRequestLimit(pod, gpuCapacityMap, gpuRequestResource, gpuLimitResource)
+	metricsItem.TflopsRequest, metricsItem.TflopsLimit = getWorkerTflopsRequestLimit(gpuStore, pod, gpuCapacityMap, gpuRequestResource, gpuLimitResource)
 	metricsItem.VramBytesRequest = gpuRequestResource.Vram.AsApproximateFloat64()
 	metricsItem.VramBytesLimit = gpuLimitResource.Vram.AsApproximateFloat64()
 	metricsItem.Ready = utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady)
@@ -119,7 +122,13 @@ func SetWorkerMetricsByWorkload(pod *corev1.Pod, gpuCapacityMap map[string]tfv1.
 	metricsItem.WorkloadName = pod.Labels[constants.WorkloadKey]
 }
 
-func getWorkerTflopsRequestLimit(pod *corev1.Pod, gpuCapacityMap map[string]tfv1.Resource, request tfv1.Resource, limit tfv1.Resource) (float64, float64) {
+func getWorkerTflopsRequestLimit(
+	gpuStore map[types.NamespacedName]*tfv1.GPU,
+	pod *corev1.Pod,
+	gpuCapacityMap map[string]tfv1.Resource,
+	request tfv1.Resource,
+	limit tfv1.Resource,
+) (float64, float64) {
 	reqTflops := request.Tflops.AsApproximateFloat64()
 	limitTflops := limit.Tflops.AsApproximateFloat64()
 
@@ -132,10 +141,22 @@ func getWorkerTflopsRequestLimit(pod *corev1.Pod, gpuCapacityMap map[string]tfv1
 		return 0, 0
 	}
 
-	gpuModel := strings.TrimSpace(pod.Annotations[constants.GPUModelAnnotation])
+	var gpuModel string
+	if gpuDeviceIDs, exists := pod.Annotations[constants.GPUDeviceIDsAnnotation]; exists && gpuDeviceIDs != "" {
+		gpuIDList := strings.Split(gpuDeviceIDs, ",")
+		sampleGPU := strings.TrimSpace(gpuIDList[0])
+		if sampleGPU != "" {
+			gpu, exists := gpuStore[types.NamespacedName{Name: sampleGPU}]
+			if !exists || gpu == nil {
+				log.V(5).Info("GPU not found in store for GPU allocation metrics", "gpuID", sampleGPU, "pod", pod.Name)
+				return 0, 0
+			}
+			gpuModel = gpu.Status.GPUModel
+		}
+	}
+
 	if gpuModel == "" {
-		ctrl.Log.Info("compute-percent is set but gpu-model annotation is missing, cannot derive TFLOPs; tflops metrics will be 0",
-			"pod", pod.Name, "namespace", pod.Namespace)
+		ctrl.Log.Info("[warning] worker metrics calculation failed, compute-percent is set but gpu model not found, cannot derive TFLOPs", "pod", pod.Name, "namespace", pod.Namespace)
 		return 0, 0
 	}
 
@@ -583,6 +604,12 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddTag("gpu_model_index", metrics.GPUModelIndex)
 		enc.AddTag("gpu_name", metrics.GPUName)
 		enc.AddField("gpu_count", int64(metrics.GPUCount))
+
+		if config.GetGlobalConfig().MetricsExtraPodLabels != nil {
+			for k, v := range config.GetGlobalConfig().MetricsExtraPodLabels {
+				enc.AddTag(v, metrics.podLabels[k])
+			}
+		}
 		enc.EndLine(now)
 	}
 	gpuAllocationMetricsLock.RUnlock()
