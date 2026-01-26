@@ -1,17 +1,13 @@
---- ../vendor/k8s.io/kubernetes/pkg/scheduler/eventhandlers.go	2025-08-06 17:55:42
-+++ ../vendor/k8s.io/kubernetes/pkg/scheduler/eventhandlers.go	2025-08-06 17:56:13
-@@ -19,6 +19,8 @@
- import (
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/eventhandlers.go	2026-01-26 00:00:00
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/eventhandlers.go	2026-01-26 00:00:00
+@@ -19,4 +19,6 @@
  	"context"
  	"fmt"
 +	"os"
 +	"strconv"
  	"strings"
  	"time"
- 
-@@ -543,6 +545,14 @@
- 			}
- 			handlers = append(handlers, handlerRegistration)
+@@ -600,3 +602,11 @@
  		case fwk.CSIStorageCapacity:
 +			// FIX kubernetes 1.23 and lower version API missing issue
 +			minorVersionStr := os.Getenv("KUBE_API_VERSION_MINOR")
@@ -23,10 +19,7 @@
 +			}
  			if handlerRegistration, err = informerFactory.Storage().V1().CSIStorageCapacities().Informer().AddEventHandler(
  				buildEvtResHandler(at, fwk.CSIStorageCapacity),
- 			); err != nil {
-@@ -578,6 +588,14 @@
- 			}
- 			handlers = append(handlers, handlerRegistration)
+@@ -635,3 +643,11 @@
  		case fwk.ResourceClaim:
 +			// FIX kubernetes lower version API missing issue
 +			minorVersionStr := os.Getenv("KUBE_API_VERSION_MINOR")
@@ -38,10 +31,7 @@
 +			}
  			if utilfeature.DefaultFeatureGate.Enabled(features.DynamicResourceAllocation) {
  				handlerRegistration = resourceClaimCache.AddEventHandler(
- 					buildEvtResHandler(at, fwk.ResourceClaim),
-@@ -585,6 +603,14 @@
- 				handlers = append(handlers, handlerRegistration)
- 			}
+@@ -642,3 +658,11 @@
  		case fwk.ResourceSlice:
 +			// FIX kubernetes lower version API missing issue
 +			minorVersionStr := os.Getenv("KUBE_API_VERSION_MINOR")
@@ -53,10 +43,7 @@
 +			}
  			if utilfeature.DefaultFeatureGate.Enabled(features.DynamicResourceAllocation) {
  				if handlerRegistration, err = resourceSliceTracker.AddEventHandler(
- 					buildEvtResHandler(at, fwk.ResourceSlice),
-@@ -594,6 +620,14 @@
- 				handlers = append(handlers, handlerRegistration)
- 			}
+@@ -651,3 +675,11 @@
  		case fwk.DeviceClass:
 +			// FIX kubernetes lower version API missing issue
 +			minorVersionStr := os.Getenv("KUBE_API_VERSION_MINOR")
@@ -67,5 +54,4 @@
 +				}
 +			}
  			if utilfeature.DefaultFeatureGate.Enabled(features.DynamicResourceAllocation) {
- 				if handlerRegistration, err = informerFactory.Resource().V1().DeviceClasses().Informer().AddEventHandler(
- 					buildEvtResHandler(at, fwk.DeviceClass),
+ 				handler := cache.ResourceEventHandler(buildEvtResHandler(at, fwk.DeviceClass))

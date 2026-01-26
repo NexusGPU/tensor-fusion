@@ -157,7 +157,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			}).Should(Succeed())
 
 			// Store the original pod template hash
-			var originalPodNames []string
+			originalPodNames := make([]string, 0, len(podList.Items))
 			var originalPodTemplateHash string
 			for _, pod := range podList.Items {
 				originalPodNames = append(originalPodNames, pod.Name)
@@ -181,7 +181,7 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 					client.MatchingLabels{constants.WorkloadKey: key.Name})).Should(Succeed())
 				g.Expect(podList.Items).Should(HaveLen(2))
 				// Verify new pods have different names and pod template hash
-				var newPodNames []string
+				newPodNames := make([]string, 0, len(podList.Items))
 				var newPodTemplateHash string
 				for _, pod := range podList.Items {
 					newPodNames = append(newPodNames, pod.Name)

@@ -257,7 +257,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 		)
 
-		fakeClientSet := clientsetfake.NewSimpleClientset(k8sObjs...)
+		fakeClientSet := clientsetfake.NewClientset(k8sObjs...)
 		informerFactory := informers.NewSharedInformerFactory(fakeClientSet, 0)
 		metrics.Register()
 		metricsRecorder := metrics.NewMetricsAsyncRecorder(1000, time.Second, ctx.Done())
@@ -1056,7 +1056,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			// Add nominated pod to framework's PodNominator
 			podInfo, _ := framework.NewPodInfo(updatedNominatedPod)
 			logger := klog.FromContext(ctx)
-			fwkInstance.AddNominatedPod(logger, podInfo, &framework.NominatingInfo{NominatedNodeName: testNodeName})
+			fwkInstance.AddNominatedPod(logger, podInfo, &fwk.NominatingInfo{NominatedNodeName: testNodeName})
 
 			// Create a lower priority pod trying to schedule on the same node
 			lowerPriorityPod := makePod("lower-priority-pod", map[string]string{
@@ -1127,7 +1127,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			// Add nominated pod to framework's PodNominator
 			podInfo, _ := framework.NewPodInfo(updatedNominatedPod)
 			logger := klog.FromContext(ctx)
-			fwkInstance.AddNominatedPod(logger, podInfo, &framework.NominatingInfo{NominatedNodeName: "node-b"})
+			fwkInstance.AddNominatedPod(logger, podInfo, &fwk.NominatingInfo{NominatedNodeName: "node-b"})
 
 			// Create another pod with same priority
 			samePriorityPod := makePod("same-priority-pod", map[string]string{
@@ -1180,7 +1180,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			// Add nominated pod to framework's PodNominator
 			podInfo, _ := framework.NewPodInfo(updatedNominatedPod)
 			logger := klog.FromContext(ctx)
-			fwkInstance.AddNominatedPod(logger, podInfo, &framework.NominatingInfo{NominatedNodeName: "node-b"})
+			fwkInstance.AddNominatedPod(logger, podInfo, &fwk.NominatingInfo{NominatedNodeName: "node-b"})
 
 			// Create a lower priority pod requesting resources that fit after reservation
 			lowerPriorityPod := makePod("lower-priority-pod-fit", map[string]string{

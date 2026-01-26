@@ -13,7 +13,6 @@ import (
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -48,8 +47,8 @@ func NewUnscheduledPodHandler(ctx context.Context, scheduler *scheduler.Schedule
 	return h, nodeExpander
 }
 
-func (h *UnscheduledPodHandler) HandleRejectedPod(ctx context.Context, podInfo *framework.QueuedPodInfo, status *fwk.Status) {
-	pod := podInfo.Pod
+func (h *UnscheduledPodHandler) HandleRejectedPod(ctx context.Context, podInfo fwk.QueuedPodInfo, status *fwk.Status) {
+	pod := podInfo.GetPodInfo().GetPod()
 	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}

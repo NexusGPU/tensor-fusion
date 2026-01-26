@@ -352,7 +352,7 @@ func (e *NodeExpander) prepareNewNodesForScheduleAttempt(
 	if newPreparedNode.Labels != nil {
 		newPreparedNode.Labels[constants.KubernetesHostNameLabel] = newPreparedNode.Name
 	}
-	newPreparedGPUs := []*tfv1.GPU{}
+	newPreparedGPUs := make([]*tfv1.GPU, 0, len(templateGPUs))
 	for _, gpu := range templateGPUs {
 		gpuCopy := gpu.DeepCopy()
 		gpuCopy.Name = "gpu-" + rand.String(12)
@@ -388,7 +388,7 @@ func (e *NodeExpander) simulateSchedulingWithoutGPU(ctx context.Context, pod *co
 		return nil, fmt.Errorf("pod to check expansion is not a tensor fusion worker pod: %s", pod.Name)
 	}
 	delete(pod.Labels, constants.LabelComponent)
-	scheduleResult, _, err := e.scheduler.FindNodesThatFitPod(ctx, fwkInstance, state, pod)
+	scheduleResult, _, _, _, err := e.scheduler.FindNodesThatFitPod(ctx, fwkInstance, state, pod)
 	pod.Labels[constants.LabelComponent] = constants.ComponentWorker
 	if len(scheduleResult) == 0 {
 		return nil, err

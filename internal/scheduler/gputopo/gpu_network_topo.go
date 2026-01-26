@@ -10,27 +10,26 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const Name = "GPUNetworkTopologyAware"
 
-var _ framework.FilterPlugin = &GPUNetworkTopologyAware{}
+var _ fwk.FilterPlugin = &GPUNetworkTopologyAware{}
 
 type GPUNetworkTopologyAware struct {
 	logger    *klog.Logger
-	fh        framework.Handle
+	fh        fwk.Handle
 	allocator *gpuallocator.GpuAllocator
 	client    client.Client
 	ctx       context.Context
 	cfg       *config.GPUNetworkTopologyAwareConfig
 }
 
-type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
+type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle fwk.Handle) (fwk.Plugin, error)
 
 func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) PluginFactoryFunc {
-	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+	return func(ctx context.Context, obj runtime.Object, handle fwk.Handle) (fwk.Plugin, error) {
 		target := &config.GPUNetworkTopologyAwareConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
 			if err := json.Unmarshal(unknown.Raw, target); err != nil {

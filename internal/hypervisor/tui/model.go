@@ -527,10 +527,11 @@ func (m *Model) updateMetricsHistory() {
 
 func (m *Model) renderHeader() string {
 	title := TitleStyle.Render("Tensor Fusion Hypervisor")
-	tabs := []string{}
-	tabs = append(tabs, m.renderTab("Devices [1]", m.currentView == viewDevices))
-	tabs = append(tabs, m.renderTab("Workers [2]", m.currentView == viewWorkers))
-	tabs = append(tabs, m.renderTab("Metrics [3]", m.currentView == viewMetrics))
+	tabs := []string{
+		m.renderTab("Devices [1]", m.currentView == viewDevices),
+		m.renderTab("Workers [2]", m.currentView == viewWorkers),
+		m.renderTab("Metrics [3]", m.currentView == viewMetrics),
+	}
 	tabLine := lipgloss.JoinHorizontal(lipgloss.Left, tabs...)
 	return lipgloss.JoinVertical(lipgloss.Left, title, tabLine)
 }

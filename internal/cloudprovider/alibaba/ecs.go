@@ -192,7 +192,7 @@ func (p AlibabaGPUNodeProvider) handleNodeClassAndExtraParams(request *ecs.RunIn
 		if param.ExtraParams["dataDiskPerformanceLevel"] != "" {
 			perfLevel = param.ExtraParams["dataDiskPerformanceLevel"]
 		}
-		dataDisks := []ecs.RunInstancesDataDisk{}
+		dataDisks := make([]ecs.RunInstancesDataDisk, 0, len(nodeClass.BlockDeviceMappings))
 		for _, ebsMapping := range nodeClass.BlockDeviceMappings {
 			dataDisks = append(dataDisks, ecs.RunInstancesDataDisk{
 				DiskName:           ebsMapping.DeviceName,
