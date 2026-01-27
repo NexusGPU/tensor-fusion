@@ -36,7 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	schedulingcorev1 "k8s.io/component-helpers/scheduling/corev1"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -54,7 +54,7 @@ import (
 type GPUNodeReconciler struct {
 	client.Client
 	Scheme                               *runtime.Scheme
-	Recorder                             record.EventRecorder
+	Recorder                             events.EventRecorder
 	Allocator                            *gpuallocator.GpuAllocator
 	Expander                             *expander.NodeExpander
 	CompatibleWithNvidiaContainerToolkit bool
@@ -614,7 +614,7 @@ func (r *GPUNodeReconciler) checkDriverProbeJobStatus(job *batchv1.Job, log logr
 			"failedAttempts", job.Status.Failed)
 
 		if job.Status.Failed >= *job.Spec.BackoffLimit {
-			r.Recorder.Eventf(job, corev1.EventTypeWarning, "DriverProbeFailed",
+			r.Recorder.Eventf(job, nil, corev1.EventTypeWarning, "DriverProbeFailed", "Failed",
 				"Driver probe job failed after %d attempts", job.Status.Failed)
 			return false, fmt.Errorf("driver probe job %s exhausted all retry attempts", job.Name)
 		}

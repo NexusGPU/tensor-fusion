@@ -36,7 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
 	schedulingcorev1 "k8s.io/component-helpers/scheduling/corev1"
@@ -78,7 +78,7 @@ type GPUPoolReconciler struct {
 	LastProcessedItems sync.Map
 
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // First round reconcile should build correct capacity, and then check provisioning

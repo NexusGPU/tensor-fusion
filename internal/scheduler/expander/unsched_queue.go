@@ -9,7 +9,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler"
@@ -31,7 +31,7 @@ type UnscheduledPodHandler struct {
 }
 
 func NewUnscheduledPodHandler(ctx context.Context, scheduler *scheduler.Scheduler,
-	allocator *gpuallocator.GpuAllocator, recorder record.EventRecorder) (*UnscheduledPodHandler, *NodeExpander) {
+	allocator *gpuallocator.GpuAllocator, recorder events.EventRecorder) (*UnscheduledPodHandler, *NodeExpander) {
 	nodeExpander := NewNodeExpander(ctx, allocator, scheduler, recorder)
 	h := &UnscheduledPodHandler{
 		pending:      make(map[string]*corev1.Pod),

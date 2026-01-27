@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	listerv1 "k8s.io/client-go/listers/core/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/kube-scheduler/framework"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -55,7 +55,7 @@ type Manager struct {
 	podLister listerv1.PodLister
 
 	// eventRecorder records events for gang scheduling
-	eventRecorder record.EventRecorder
+	eventRecorder events.EventRecorder
 
 	// frameworkHandle is used to access waiting pods in scheduler
 	frameworkHandle framework.Handle
@@ -74,7 +74,7 @@ type Manager struct {
 }
 
 // NewManager creates a new gang scheduling manager
-func NewManager(podLister listerv1.PodLister, eventRecorder record.EventRecorder, pluginName string) *Manager {
+func NewManager(podLister listerv1.PodLister, eventRecorder events.EventRecorder, pluginName string) *Manager {
 	return &Manager{
 		podLister:       podLister,
 		eventRecorder:   eventRecorder,
@@ -240,8 +240,8 @@ func (m *Manager) Permit(
 
 	// Record event
 	if m.eventRecorder != nil {
-		m.eventRecorder.Eventf(pod, corev1.EventTypeNormal, EventReasonGangWaiting,
-			"Waiting for gang members: %d/%d ready", len(pgInfo.WaitingPods), config.MinMembers)
+		m.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, EventReasonGangWaiting, "Waiting",
+			"Waiting for gang members: %d/%d ready", len(pgInfo.WaitingPods), int(config.MinMembers))
 	}
 
 	return PermitWait, waitTime, waitingInfo
@@ -381,9 +381,9 @@ func (m *Manager) handleTimeoutLocked(_ context.Context, pgInfo *PodGroupInfo) {
 
 	// Record event (on the first waiting pod if available)
 	if m.eventRecorder != nil {
-		m.eventRecorder.Eventf(nil, corev1.EventTypeWarning, EventReasonGangTimeout,
+		m.eventRecorder.Eventf(nil, nil, corev1.EventTypeWarning, EventReasonGangTimeout, "Timeout",
 			"Pod group %s timed out with %d/%d members ready",
-			pgInfo.Key, len(pgInfo.WaitingPods), pgInfo.MinMembers)
+			string(pgInfo.Key), len(pgInfo.WaitingPods), int(pgInfo.MinMembers))
 	}
 }
 
@@ -424,8 +424,8 @@ func (m *Manager) allowAllWaitingPodsViaSchedulerLocked(_ context.Context, pgInf
 
 	// Record event
 	if m.eventRecorder != nil {
-		m.eventRecorder.Eventf(nil, corev1.EventTypeNormal, EventReasonGangScheduled,
-			"Pod group %s scheduled with %d members", pgInfo.Key, len(pgInfo.WaitingPods))
+		m.eventRecorder.Eventf(nil, nil, corev1.EventTypeNormal, EventReasonGangScheduled, "Scheduled",
+			"Pod group %s scheduled with %d members", string(pgInfo.Key), len(pgInfo.WaitingPods))
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler"
@@ -43,7 +43,7 @@ type NodeExpander struct {
 	inFlightNodeClaims sync.Map
 	preSchedulePods    map[string]*tfv1.AllocRequest
 	preScheduleTimers  map[string]*time.Timer
-	eventRecorder      record.EventRecorder
+	eventRecorder      events.EventRecorder
 	mu                 sync.RWMutex
 	ctx                context.Context
 }
@@ -52,7 +52,7 @@ func NewNodeExpander(
 	ctx context.Context,
 	allocator *gpuallocator.GpuAllocator,
 	scheduler *scheduler.Scheduler,
-	recorder record.EventRecorder,
+	recorder events.EventRecorder,
 ) *NodeExpander {
 
 	expander := &NodeExpander{
@@ -79,7 +79,7 @@ func NewNodeExpander(
 
 		removed := expander.RemovePreSchedulePod(req.PodMeta.Name, true)
 		if removed {
-			recorder.Eventf(obj, corev1.EventTypeNormal, "NodeExpansionCheck",
+			recorder.Eventf(obj, nil, corev1.EventTypeNormal, "NodeExpansionCheck", "Scheduled",
 				"new node provisioned and pod scheduled successfully")
 		}
 	})
@@ -174,14 +174,14 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	// Step 1: Simulate scheduling without GPU plugins
 	gpuNodesPassedOtherFilters, err := e.simulateSchedulingWithoutGPU(ctx, pod)
 	if err != nil {
-		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
-			"can not schedule on any nodes even without GPU constraints, karpenter should take over expansion. error: %w", err)
+		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, "NodeExpansionCheck", "DelegateToKarpenter",
+			"can not schedule on any nodes even without GPU constraints, karpenter should take over expansion. error: %v", err)
 		e.logger.Info("Pod schedulable but no GPU nodes available, karpenter should take over expansion",
 			"namespace", pod.Namespace, "pod", pod.Name, "error", err)
 		return nil
 	}
 	if len(gpuNodesPassedOtherFilters) == 0 {
-		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
+		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, "NodeExpansionCheck", "DelegateToKarpenter",
 			"can not schedule on any nodes even without GPU constraints, karpenter should take over expansion, 0 fit nodes")
 		e.logger.Info("Pod schedulable but no GPU nodes available, karpenter should take over expansion",
 			"namespace", pod.Namespace, "pod", pod.Name)
@@ -209,7 +209,7 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 		}
 	}
 	if len(allGpus) == 0 {
-		e.eventRecorder.Eventf(pod, corev1.EventTypeWarning, "NodeExpansionCheck",
+		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCheck", "NoGPUNodes",
 			"all schedulable nodes are none GPU nodes, manual check required")
 		e.logger.Info("No GPU nodes can put the Pod, manual check required", "namespace", pod.Namespace, "pod", pod.Name)
 		return nil
@@ -221,17 +221,17 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 		if onlyCanBeFlightGPU {
 			e.addPreSchedulePod(allocRequest)
 			// Pod should be scheduled after new node is provisioned
-			e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
+			e.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, "NodeExpansionCheck", "PreScheduled",
 				"fit in-flight GPU resources, pod should be scheduled after new node is provisioned")
 		} else {
 			// GPU free-up during expansion, or satisfied by in-flight nodes, pod can be scheduled now or whiles later
-			e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
+			e.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, "NodeExpansionCheck", "Schedulable",
 				"fit GPU resources, pod should be scheduled now or whiles later on existing/provisioning nodes")
 		}
 		return nil
 	}
 	if !isResourceIssue {
-		e.eventRecorder.Eventf(pod, corev1.EventTypeWarning, "NodeExpansionCheck",
+		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCheck", "NonGPUIssue",
 			"pod scheduling failure not due to GPU resources, manual check required")
 		e.logger.Info("Pod scheduling failure not due to GPU resources, manual check required",
 			"namespace", pod.Namespace, "pod", pod.Name)
@@ -262,7 +262,8 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 		break
 	}
 	if !preScheduled {
-		e.eventRecorder.Eventf(pod, corev1.EventTypeWarning, "NodeExpansionFailed", "failed to satisfy the pending pod, no potential GPU nodes can fit")
+		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionFailed", "Failed",
+			"failed to satisfy the pending pod, no potential GPU nodes can fit")
 		return fmt.Errorf("failed to satisfy the pending pod, no potential GPU nodes can fit")
 	}
 	return nil
@@ -294,14 +295,14 @@ func (e *NodeExpander) addPreSchedulePod(allocRequest *tfv1.AllocRequest) {
 		}
 		if currentPod.Spec.NodeName != "" {
 			// already scheduled, remove pre-scheduled pod
-			e.eventRecorder.Eventf(currentPod, corev1.EventTypeNormal, "NodeExpansionCheck",
+			e.eventRecorder.Eventf(currentPod, nil, corev1.EventTypeNormal, "NodeExpansionCheck", "Scheduled",
 				"new node provisioned and pod scheduled successfully")
 			e.logger.Info("new node provisioned and pod scheduled successfully",
 				"namespace", podMeta.Namespace, "pod", podMeta.Name)
 			_ = e.RemovePreSchedulePod(podMeta.Name, false)
 		} else {
 			// not scheduled, record warning event and remove pre-scheduled pod
-			e.eventRecorder.Eventf(currentPod, corev1.EventTypeWarning, "NodeExpansionCheck",
+			e.eventRecorder.Eventf(currentPod, nil, corev1.EventTypeWarning, "NodeExpansionCheck", "ScheduleTimeout",
 				"failed to schedule pod after 10 minutes")
 			e.logger.Info("failed to schedule pod after 10 minutes",
 				"namespace", podMeta.Namespace, "pod", podMeta.Name)
@@ -596,10 +597,12 @@ func (e *NodeExpander) cloneGPUNodeClaim(ctx context.Context, pod *corev1.Pod, p
 
 	// Create the new GPUNodeClaim
 	if err := e.client.Create(ctx, newGPUNodeClaim); err != nil {
-		e.eventRecorder.Eventf(pod, corev1.EventTypeWarning, "NodeExpansionFailed", "failed to create new GPUNodeClaim: %v", err)
+		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionFailed", "CreateFailed",
+			"failed to create new GPUNodeClaim: %v", err)
 		return fmt.Errorf("failed to create new GPUNodeClaim: %w", err)
 	}
-	e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCompleted", "created new GPUNodeClaim for node expansion: %s", newGPUNodeClaim.Name)
+	e.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, "NodeExpansionCompleted", "Created",
+		"created new GPUNodeClaim for node expansion: %s", newGPUNodeClaim.Name)
 	e.logger.Info("created new GPUNodeClaim for node expansion", "pod", pod.Name, "namespace", pod.Namespace, "gpuNodeClaim", newGPUNodeClaim.Name, "sourceNode", preparedNode.Name)
 	return nil
 }
@@ -638,11 +641,13 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 
 	// Create the NodeClaim
 	if err := e.client.Create(ctx, newNodeClaim); err != nil {
-		e.eventRecorder.Eventf(pod, corev1.EventTypeWarning, "NodeExpansionFailed", "failed to create new NodeClaim: %v", err)
+		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionFailed", "CreateFailed",
+			"failed to create new NodeClaim: %v", err)
 		return fmt.Errorf("failed to create NodeClaim: %w", err)
 	}
 	e.inFlightNodeClaims.Store(newNodeClaim.Name, true)
-	e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCompleted", "created new NodeClaim for node expansion: %s", newNodeClaim.Name)
+	e.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, "NodeExpansionCompleted", "Created",
+		"created new NodeClaim for node expansion: %s", newNodeClaim.Name)
 	e.logger.Info("created new NodeClaim for node expansion", "pod", pod.Name, "namespace", pod.Namespace, "nodeClaim", newNodeClaim.Name)
 
 	return nil

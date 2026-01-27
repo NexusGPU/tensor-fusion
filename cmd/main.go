@@ -375,7 +375,7 @@ func startCustomResourceController(
 	if err = (&controller.TensorFusionConnectionReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("TensorFusionConnection"),
+		Recorder: mgr.GetEventRecorder("TensorFusionConnection"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionConnection")
 		os.Exit(1)
@@ -392,7 +392,7 @@ func startCustomResourceController(
 	if err = (&controller.TensorFusionClusterReconciler{
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
-		Recorder:        mgr.GetEventRecorderFor("TensorFusionCluster"),
+		Recorder:        mgr.GetEventRecorder("TensorFusionCluster"),
 		MetricsRecorder: &metricsRecorder,
 	}).SetupWithManager(mgr, true); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionCluster")
@@ -402,7 +402,7 @@ func startCustomResourceController(
 	GPUPoolReconciler := &controller.GPUPoolReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("GPUPool"),
+		Recorder: mgr.GetEventRecorder("GPUPool"),
 	}
 	if err = GPUPoolReconciler.SetupWithManager(mgr, true); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUPool")
@@ -412,7 +412,7 @@ func startCustomResourceController(
 	if err = (&controller.GPUNodeReconciler{
 		Client:                               mgr.GetClient(),
 		Scheme:                               mgr.GetScheme(),
-		Recorder:                             mgr.GetEventRecorderFor("GPUNode"),
+		Recorder:                             mgr.GetEventRecorder("GPUNode"),
 		Allocator:                            allocator,
 		Expander:                             nodeExpander,
 		CompatibleWithNvidiaContainerToolkit: compatibleWithNvidiaContainerToolkit,
@@ -423,7 +423,7 @@ func startCustomResourceController(
 	if err = (&controller.GPUPoolCompactionReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("GPUPoolCompaction"),
+		Recorder:  mgr.GetEventRecorder("GPUPoolCompaction"),
 		Allocator: allocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUPoolCompaction")
@@ -457,7 +457,7 @@ func startCustomResourceController(
 	if err = (&controller.NodeReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("Node"),
+		Recorder: mgr.GetEventRecorder("Node"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
 		os.Exit(1)
@@ -473,7 +473,7 @@ func startCustomResourceController(
 	if err = (&controller.TensorFusionWorkloadReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("tensorfusionworkload"),
+		Recorder:      mgr.GetEventRecorder("tensorfusionworkload"),
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionWorkload")
@@ -482,7 +482,7 @@ func startCustomResourceController(
 	if err = (&controller.GPUResourceQuotaReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("GPUResourceQuota"),
+		Recorder: mgr.GetEventRecorder("GPUResourceQuota"),
 
 		QuotaStore: allocator.GetQuotaStore(),
 	}).SetupWithManager(mgr); err != nil {
@@ -494,7 +494,7 @@ func startCustomResourceController(
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Expander: nodeExpander,
-		Recorder: mgr.GetEventRecorderFor("GPUNodeClaim"),
+		Recorder: mgr.GetEventRecorder("GPUNodeClaim"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUNodeClaim")
 		os.Exit(1)
@@ -532,7 +532,7 @@ func startScheduler(
 	}
 
 	// Create gang scheduling manager
-	gangManager := gang.NewManager(nil, mgr.GetEventRecorderFor("GangScheduler"), gpuresources.Name)
+	gangManager := gang.NewManager(nil, mgr.GetEventRecorder("GangScheduler"), gpuresources.Name)
 
 	gpuResourceFitOpt := app.WithPlugin(
 		gpuresources.Name,

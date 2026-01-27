@@ -153,7 +153,7 @@ func SetupScheduler(
 	if enableNodeExpander {
 		unschedHandler, nodeExpander := expander.NewUnscheduledPodHandler(
 			ctx, sched, allocator,
-			mgr.GetEventRecorderFor("TensorFusionScheduler"),
+			mgr.GetEventRecorder("TensorFusionScheduler"),
 		)
 
 		// Save the original failure handler to avoid infinite recursion

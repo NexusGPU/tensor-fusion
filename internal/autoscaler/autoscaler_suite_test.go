@@ -169,7 +169,7 @@ var _ = BeforeSuite(func() {
 	err = (&controller.TensorFusionClusterReconciler{
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
-		Recorder:        mgr.GetEventRecorderFor("TensorFusionCluster"),
+		Recorder:        mgr.GetEventRecorder("TensorFusionCluster"),
 		MetricsRecorder: metricsRecorder,
 	}).SetupWithManager(mgr, false)
 	Expect(err).ToNot(HaveOccurred())
@@ -177,14 +177,14 @@ var _ = BeforeSuite(func() {
 	err = (&controller.GPUPoolReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("GPUPool"),
+		Recorder: mgr.GetEventRecorder("GPUPool"),
 	}).SetupWithManager(mgr, false)
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&controller.GPUNodeReconciler{
 		Client:                               mgr.GetClient(),
 		Scheme:                               mgr.GetScheme(),
-		Recorder:                             mgr.GetEventRecorderFor("GPUNode"),
+		Recorder:                             mgr.GetEventRecorder("GPUNode"),
 		Allocator:                            allocator,
 		CompatibleWithNvidiaContainerToolkit: false,
 	}).SetupWithManager(mgr)
@@ -194,7 +194,7 @@ var _ = BeforeSuite(func() {
 	err = (&controller.GPUPoolCompactionReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("GPUPoolCompaction"),
+		Recorder:  mgr.GetEventRecorder("GPUPoolCompaction"),
 		Allocator: allocator,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
@@ -225,7 +225,7 @@ var _ = BeforeSuite(func() {
 	err = (&controller.NodeReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("Node"),
+		Recorder: mgr.GetEventRecorder("Node"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
@@ -238,7 +238,7 @@ var _ = BeforeSuite(func() {
 	err = (&controller.TensorFusionConnectionReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("TensorFusionConnection"),
+		Recorder: mgr.GetEventRecorder("TensorFusionConnection"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 
@@ -251,7 +251,7 @@ var _ = BeforeSuite(func() {
 	err = (&controller.TensorFusionWorkloadReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("TensorFusionWorkload"),
+		Recorder:      mgr.GetEventRecorder("TensorFusionWorkload"),
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
@@ -264,7 +264,7 @@ var _ = BeforeSuite(func() {
 	err = (&controller.GPUNodeClaimReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("GPUNodeClaim"),
+		Recorder: mgr.GetEventRecorder("GPUNodeClaim"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 

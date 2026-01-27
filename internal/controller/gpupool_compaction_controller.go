@@ -14,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,7 +26,7 @@ import (
 type GPUPoolCompactionReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 
 	Allocator *gpuallocator.GpuAllocator
 
@@ -192,9 +192,8 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 				)
 
 				toDeleteGPUNodes = append(toDeleteGPUNodes, gpuNodeClaimName)
-				r.Recorder.Eventf(pool, corev1.EventTypeNormal, "Compaction",
-					"Node %s is empty and deletion won't impact warm-up capacity, try terminating it", gpuNode.Name,
-				)
+				r.Recorder.Eventf(pool, nil, corev1.EventTypeNormal, "Compaction", "Compacting",
+					"Node %s is empty and deletion won't impact warm-up capacity, try terminating it", gpuNode.Name)
 			} else {
 				// managed by Kubernetes, mark it as destroying, GPUPool capacity should be reduced, and let K8S to delete it
 				if err := r.Patch(ctx, &corev1.Node{

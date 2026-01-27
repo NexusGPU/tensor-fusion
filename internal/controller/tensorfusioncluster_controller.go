@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -52,7 +52,7 @@ import (
 type TensorFusionClusterReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
-	Recorder        record.EventRecorder
+	Recorder        events.EventRecorder
 	MetricsRecorder *metrics.MetricsRecorder
 
 	LastProcessedItems sync.Map
