@@ -10,7 +10,7 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	constants "github.com/NexusGPU/tensor-fusion/internal/constants"
+	constants "github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/lithammer/shortuuid/v4"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"

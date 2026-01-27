@@ -114,7 +114,7 @@ The stub implementation (`example/accelerator.c`) provides a reference implement
 The hypervisor uses the accelerator library via CGO bindings:
 
 ```go
-import "github.com/NexusGPU/tensor-fusion/internal/hypervisor/device"
+import "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/device"
 
 mgr, err := device.NewManager("path/to/libaccelerator.so", 30*time.Second)
 ```

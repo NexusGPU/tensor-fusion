@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	constants "github.com/NexusGPU/tensor-fusion/internal/constants"
+	constants "github.com/NexusGPU/tensor-fusion/pkg/constants"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	corev1 "k8s.io/api/core/v1"

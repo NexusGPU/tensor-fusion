@@ -8,7 +8,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 )
 
 // offer API for managing user configured alert rules, stored in configMap
