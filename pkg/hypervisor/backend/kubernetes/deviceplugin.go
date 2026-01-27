@@ -58,7 +58,12 @@ type DevicePlugin struct {
 }
 
 // NewDevicePlugins creates a new device plugin instance
-func NewDevicePlugins(ctx context.Context, deviceController framework.DeviceController, allocationController framework.WorkerAllocationController, kubeletClient *PodCacheManager) []*DevicePlugin {
+func NewDevicePlugins(
+	ctx context.Context,
+	deviceController framework.DeviceController,
+	allocationController framework.WorkerAllocationController,
+	kubeletClient *PodCacheManager,
+) []*DevicePlugin {
 	devicePlugins := make([]*DevicePlugin, constants.IndexKeyLength)
 	for i := range constants.IndexKeyLength {
 		devicePlugins[i] = &DevicePlugin{
@@ -139,7 +144,10 @@ func (dp *DevicePlugin) register() error {
 
 	// Check if kubelet socket exists
 	if _, err := os.Stat(kubeletSocketPath); os.IsNotExist(err) {
-		return fmt.Errorf("kubelet socket does not exist at %s (kubelet may not be running or device plugin support not enabled)", kubeletSocketPath)
+		return fmt.Errorf(
+			"kubelet socket does not exist at %s (kubelet may not be running or device plugin support not enabled)",
+			kubeletSocketPath,
+		)
 	} else if err != nil {
 		return fmt.Errorf("failed to check kubelet socket: %w", err)
 	}
@@ -168,7 +176,8 @@ func (dp *DevicePlugin) register() error {
 		return fmt.Errorf("failed to register: %w", err)
 	}
 
-	klog.V(4).Infof("Successfully registered device plugin with kubelet: %s", fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, dp.resourceNameIndex))
+	resourceName := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, dp.resourceNameIndex)
+	klog.V(4).Infof("Successfully registered device plugin with kubelet: %s", resourceName)
 	return nil
 }
 
@@ -192,7 +201,10 @@ func (dp *DevicePlugin) dial(unixSocketPath string, timeout time.Duration) (*grp
 }
 
 // GetDevicePluginOptions returns options for the device plugin
-func (dp *DevicePlugin) GetDevicePluginOptions(ctx context.Context, req *pluginapi.Empty) (*pluginapi.DevicePluginOptions, error) {
+func (dp *DevicePlugin) GetDevicePluginOptions(
+	ctx context.Context,
+	req *pluginapi.Empty,
+) (*pluginapi.DevicePluginOptions, error) {
 	return &pluginapi.DevicePluginOptions{
 		PreStartRequired:                false,
 		GetPreferredAllocationAvailable: false,
@@ -234,19 +246,34 @@ func (dp *DevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.Devi
 }
 
 // Allocate handles device allocation requests from kubelet
-func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
+func (dp *DevicePlugin) Allocate(
+	ctx context.Context,
+	req *pluginapi.AllocateRequest,
+) (*pluginapi.AllocateResponse, error) {
 	responses := make([]*pluginapi.ContainerAllocateResponse, 0, len(req.ContainerRequests))
-	klog.Infof("Allocate called for device plugin index %d, container requests: %d", dp.resourceNameIndex, len(req.ContainerRequests))
+	klog.Infof(
+		"Allocate called for device plugin index %d, container requests: %d",
+		dp.resourceNameIndex,
+		len(req.ContainerRequests),
+	)
 
 	for containerIdx, containerReq := range req.ContainerRequests {
 		podIndex := len(containerReq.DevicesIds)
 		if podIndex <= 0 || podIndex > constants.IndexModLength {
-			return nil, fmt.Errorf("container request %d dummy device requests is not valid: (expected index value 1-%d)", containerIdx, constants.IndexModLength)
+			return nil, fmt.Errorf(
+				"container request %d dummy device requests is not valid: (expected index value 1-%d)",
+				containerIdx,
+				constants.IndexModLength,
+			)
 		}
 
 		podIndexFull := podIndex + (dp.resourceNameIndex * constants.IndexModLength)
 
-		klog.V(4).Infof("Processing allocation for container index %d, pod index %d (from DevicesIds)", containerIdx, podIndexFull)
+		klog.V(4).Infof(
+			"Processing allocation for container index %d, pod index %d (from DevicesIds)",
+			containerIdx,
+			podIndexFull,
+		)
 		// Get worker info from kubelet client using pod index
 		// This will automatically check for duplicate indices and fail fast if found
 		workerInfo, err := dp.kubeletClient.GetWorkerInfoForAllocationByIndex(podIndexFull)
@@ -260,7 +287,12 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 		// Call allocation controller to allocate
 		allocResp, err := dp.allocationController.AllocateWorkerDevices(workerInfo)
 		if err != nil {
-			return nil, fmt.Errorf("failed to allocate devices for worker %s %s: %w", workerInfo.WorkerName, workerInfo.WorkerUID, err)
+			return nil, fmt.Errorf(
+				"failed to allocate devices for worker %s %s: %w",
+				workerInfo.WorkerName,
+				workerInfo.WorkerUID,
+				err,
+			)
 		}
 
 		containerResp := &pluginapi.ContainerAllocateResponse{
@@ -289,12 +321,18 @@ func (dp *DevicePlugin) Allocate(ctx context.Context, req *pluginapi.AllocateReq
 }
 
 // PreStartContainer is called before container start (optional)
-func (dp *DevicePlugin) PreStartContainer(ctx context.Context, req *pluginapi.PreStartContainerRequest) (*pluginapi.PreStartContainerResponse, error) {
+func (dp *DevicePlugin) PreStartContainer(
+	ctx context.Context,
+	req *pluginapi.PreStartContainerRequest,
+) (*pluginapi.PreStartContainerResponse, error) {
 	return &pluginapi.PreStartContainerResponse{}, nil
 }
 
 // GetPreferredAllocation returns preferred device allocation (optional)
-func (dp *DevicePlugin) GetPreferredAllocation(ctx context.Context, req *pluginapi.PreferredAllocationRequest) (*pluginapi.PreferredAllocationResponse, error) {
+func (dp *DevicePlugin) GetPreferredAllocation(
+	ctx context.Context,
+	req *pluginapi.PreferredAllocationRequest,
+) (*pluginapi.PreferredAllocationResponse, error) {
 	return &pluginapi.PreferredAllocationResponse{
 		ContainerResponses: []*pluginapi.ContainerPreferredAllocationResponse{},
 	}, nil

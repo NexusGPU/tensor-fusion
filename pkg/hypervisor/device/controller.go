@@ -39,7 +39,13 @@ type Controller struct {
 var _ framework.DeviceController = &Controller{}
 
 // NewController creates a new device manager
-func NewController(ctx context.Context, acceleratorLibPath string, acceleratorVendor string, discoveryInterval time.Duration, isolationMode string) (*Controller, error) {
+func NewController(
+	ctx context.Context,
+	acceleratorLibPath string,
+	acceleratorVendor string,
+	discoveryInterval time.Duration,
+	isolationMode string,
+) (*Controller, error) {
 	accel, err := NewAcceleratorInterface(acceleratorLibPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create accelerator interface: %w", err)

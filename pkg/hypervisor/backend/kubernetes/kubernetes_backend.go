@@ -44,7 +44,12 @@ type KubeletBackend struct {
 
 var _ framework.Backend = &KubeletBackend{}
 
-func NewKubeletBackend(ctx context.Context, deviceController framework.DeviceController, allocationController framework.WorkerAllocationController, restConfig *rest.Config) (*KubeletBackend, error) {
+func NewKubeletBackend(
+	ctx context.Context,
+	deviceController framework.DeviceController,
+	allocationController framework.WorkerAllocationController,
+	restConfig *rest.Config,
+) (*KubeletBackend, error) {
 	// Get node name from environment or config
 	nodeName := os.Getenv(constants.HypervisorGPUNodeNameEnv)
 	if nodeName == "" {

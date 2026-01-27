@@ -242,7 +242,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.deviceMetricsHistory[m.selectedDeviceUUID] == nil {
 						m.initDeviceHistory(m.selectedDeviceUUID)
 					}
-					updateDeviceDetail(m.ctx, m.client, &m.deviceDetail, m.selectedDeviceUUID, m.devices, m.metrics, m.deviceMetricsHistory)
+					updateDeviceDetail(
+						m.ctx,
+						m.client,
+						&m.deviceDetail,
+						m.selectedDeviceUUID,
+						m.devices,
+						m.metrics,
+						m.deviceMetricsHistory,
+					)
 					return m, nil
 				}
 			case viewWorkers:
@@ -299,7 +307,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workerList.SetItems(workerItems)
 		switch m.currentView {
 		case viewDeviceDetail:
-			updateDeviceDetail(m.ctx, m.client, &m.deviceDetail, m.selectedDeviceUUID, m.devices, m.metrics, m.deviceMetricsHistory)
+			updateDeviceDetail(
+				m.ctx,
+				m.client,
+				&m.deviceDetail,
+				m.selectedDeviceUUID,
+				m.devices,
+				m.metrics,
+				m.deviceMetricsHistory,
+			)
 		case viewWorkerDetail:
 			updateWorkerDetail(&m.workerDetail, m.selectedWorkerUID, m.workers, m.workerMetrics, m.workerMetricsHistory)
 		case viewMetrics:

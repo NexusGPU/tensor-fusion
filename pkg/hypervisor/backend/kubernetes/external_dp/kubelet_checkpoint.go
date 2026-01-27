@@ -317,7 +317,13 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 			resourceNamePrefixes := detector.GetResourceNamePrefixes()
 			if slices.Contains(resourceNamePrefixes, resName) {
 				usedBySystem, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(deviceID, resName)
-				klog.V(4).Infof("Device added: %s, resource: %s, patching with usedBy: %s, realDeviceID: %s", deviceID, resName, usedBySystem, realDeviceID)
+				klog.V(4).Infof(
+					"Device added: %s, resource: %s, patching with usedBy: %s, realDeviceID: %s",
+					deviceID,
+					resName,
+					usedBySystem,
+					realDeviceID,
+				)
 				if err := d.patchGPUResource(realDeviceID, usedBySystem); err != nil {
 					klog.Errorf("Failed to patch GPU resource for added device %s: %v", deviceID, err)
 					hasError = true
@@ -331,7 +337,11 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 		for _, detector := range d.vendorDetectors {
 			resourceNamePrefixes := detector.GetResourceNamePrefixes()
 			if slices.Contains(resourceNamePrefixes, resName) {
-				klog.V(4).Infof("Device plugin allocated container removed: %s, resource: %s, patching usedBy field to tensor fusion", deviceID, resName)
+				klog.V(4).Infof(
+					"Device plugin allocated container removed: %s, resource: %s, patching usedBy field to tensor fusion",
+					deviceID,
+					resName,
+				)
 				if err := d.patchGPUResource(deviceID, string(tfv1.UsedByTensorFusion)); err != nil {
 					klog.Errorf("Failed to patch GPU resource usedBy field to tensor fusion for removed device %s: %v", deviceID, err)
 					hasError = true
@@ -402,7 +412,9 @@ func (d *DevicePluginDetector) readCheckpointFile() (*KubeletCheckpoint, error) 
 }
 
 // extractDeviceIDs extracts allocated and registered device IDs from checkpoint
-func (d *DevicePluginDetector) extractDeviceIDs(checkpoint *KubeletCheckpoint) (allocated, registered map[string]string) {
+func (d *DevicePluginDetector) extractDeviceIDs(
+	checkpoint *KubeletCheckpoint,
+) (allocated, registered map[string]string) {
 	allocated = make(map[string]string)
 	registered = make(map[string]string)
 
@@ -548,7 +560,10 @@ func (m *device) String() string { return "device" }
 func (*device) ProtoMessage()    {}
 
 // dialPodResourcesSocket establishes a gRPC connection to the kubelet pod-resources socket
-func (d *DevicePluginDetector) dialPodResourcesSocket(socketPath string, timeout time.Duration) (*grpc.ClientConn, error) {
+func (d *DevicePluginDetector) dialPodResourcesSocket(
+	socketPath string,
+	timeout time.Duration,
+) (*grpc.ClientConn, error) {
 	target := "unix://" + socketPath
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),

@@ -44,7 +44,12 @@ func TestDevicePluginAllocate_ExtractsIndexFromDevicesIds(t *testing.T) {
 
 	// Verify the structure: len(ContainerRequests) = 1, but index is "3" from DevicesIds[0]
 	assert.Len(t, req.ContainerRequests, 1, "Should have 1 container request")
-	assert.Equal(t, "3", req.ContainerRequests[0].DevicesIds[0], "Index should come from DevicesIds[0], not from len(ContainerRequests)")
+	assert.Equal(
+		t,
+		"3",
+		req.ContainerRequests[0].DevicesIds[0],
+		"Index should come from DevicesIds[0], not from len(ContainerRequests)",
+	)
 
 	// This demonstrates that len(req.ContainerRequests) is NOT the pod index
 	// The pod index is extracted from DevicesIds[0]

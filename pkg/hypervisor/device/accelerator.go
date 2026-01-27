@@ -18,6 +18,7 @@ package device
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -249,22 +250,15 @@ func (a *AcceleratorInterface) Load() error {
 	purego.RegisterLibFunc(&getDeviceMetrics, handle, "GetDeviceMetrics")
 	purego.RegisterLibFunc(&getVendorMountLibs, handle, "GetVendorMountLibs")
 
-	// Register log callback (optional - may not exist in stub libraries)
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				// RegisterLogCallback not available in this library, skip callback registration
-				klog.V(4).Info("RegisterLogCallback not available in library, skipping log callback registration")
-			}
-		}()
+	// Register log callback only on non-macOS platforms
+	// purego callback has issues on macOS ARM64, causing bus errors when C code calls back into Go
+	if runtime.GOOS != "darwin" {
 		purego.RegisterLibFunc(&registerLogCallback, handle, "RegisterLogCallback")
-
-		// If registration succeeded, register the callback
-		logCallbackPtr := purego.NewCallback(goLogCallback)
-		if registerLogCallback(logCallbackPtr) != ResultSuccess {
-			klog.Warning("Failed to register log callback")
+		callback := purego.NewCallback(goLogCallback)
+		if result := registerLogCallback(callback); result != ResultSuccess {
+			klog.Warningf("Failed to register log callback: %d", result)
 		}
-	}()
+	}
 
 	result := virtualGPUInit()
 	if result != ResultSuccess {
@@ -297,6 +291,7 @@ func (a *AcceleratorInterface) Close() error {
 }
 
 // goLogCallback is the Go callback function called by C library for logging
+// Note: Disabled on macOS due to purego callback issues on ARM64, causing bus errors.
 func goLogCallback(level *byte, message *byte) {
 	var levelStr, messageStr string
 	if level != nil {

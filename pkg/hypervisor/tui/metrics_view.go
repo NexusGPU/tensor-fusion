@@ -44,8 +44,16 @@ func updateMetricsView(
 		metrics, hasMetrics := metrics[device.UUID]
 		content.WriteString(fmt.Sprintf("%s [%s]\n", device.Model, device.UUID[:8]))
 		if hasMetrics && metrics != nil {
-			content.WriteString(fmt.Sprintf("  Memory: %.1f%% %s\n", metrics.MemoryPercentage, renderBarChart(metrics.MemoryPercentage, 20)))
-			content.WriteString(fmt.Sprintf("  Compute: %.1f%% %s\n", metrics.ComputePercentage, renderBarChart(metrics.ComputePercentage, 20)))
+			content.WriteString(fmt.Sprintf(
+				"  Memory: %.1f%% %s\n",
+				metrics.MemoryPercentage,
+				renderBarChart(metrics.MemoryPercentage, 20),
+			))
+			content.WriteString(fmt.Sprintf(
+				"  Compute: %.1f%% %s\n",
+				metrics.ComputePercentage,
+				renderBarChart(metrics.ComputePercentage, 20),
+			))
 			content.WriteString(fmt.Sprintf("  Temperature: %.1f°C  Power: %dW\n", metrics.Temperature, metrics.PowerUsage))
 		} else {
 			content.WriteString("  No metrics available\n")

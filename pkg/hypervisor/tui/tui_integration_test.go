@@ -360,7 +360,14 @@ func TestMetricsViewRendering(t *testing.T) {
 	model.lastUpdate = time.Now()
 
 	// Update metrics view - this sets the content
-	updateMetricsView(&model.metricsView, model.devices, model.workers, model.metrics, model.workerMetrics, model.lastUpdate)
+	updateMetricsView(
+		&model.metricsView,
+		model.devices,
+		model.workers,
+		model.metrics,
+		model.workerMetrics,
+		model.lastUpdate,
+	)
 
 	// Verify the view can be rendered without panic (viewport starts at position 0)
 	// The View() method may return empty if height is 0, so we verify the update function ran successfully

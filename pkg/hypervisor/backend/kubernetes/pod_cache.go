@@ -132,7 +132,12 @@ func (kc *PodCacheManager) Start() error {
 	// Start the informer
 	go controller.Run(kc.stopCh)
 
-	klog.Infof("Started watching pods on node %s with label %s=%s", kc.nodeName, constants.TensorFusionEnabledLabelKey, constants.TrueStringValue)
+	klog.Infof(
+		"Started watching pods on node %s with label %s=%s",
+		kc.nodeName,
+		constants.TensorFusionEnabledLabelKey,
+		constants.TrueStringValue,
+	)
 	return nil
 }
 
@@ -225,7 +230,14 @@ func (kc *PodCacheManager) onPodDelete(obj any) {
 		}
 		delete(kc.indexToWorkerInfo, podIndex)
 	}
-	klog.Infof("Pod %s/%s (UID: %s) deleted. state: %s node index: %s", pod.Namespace, pod.Name, pod.UID, workerInfo.Status, index)
+	klog.Infof(
+		"Pod %s/%s (UID: %s) deleted. state: %s node index: %s",
+		pod.Namespace,
+		pod.Name,
+		pod.UID,
+		workerInfo.Status,
+		index,
+	)
 
 }
 
@@ -398,7 +410,14 @@ func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod) (*api.WorkerInfo, 
 	index := ""
 	allocRequest, msg, err := utils.ComposeAllocationRequest(kc.ctx, pod)
 	if err != nil {
-		klog.Error(err, "Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", pod.Name, "msg", msg)
+		klog.Error(
+			err,
+			"Failed to compose allocation request for existing worker Pod, annotation may not be valid",
+			"pod",
+			pod.Name,
+			"msg",
+			msg,
+		)
 		return nil, index, err
 	}
 

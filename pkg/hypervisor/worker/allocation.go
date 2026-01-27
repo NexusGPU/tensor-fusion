@@ -152,7 +152,10 @@ func (a *AllocationController) removeDeviceAllocation(deviceUUID string, allocat
 	if _, exists := a.deviceAllocations[deviceUUID]; !exists {
 		return
 	}
-	a.deviceAllocations[deviceUUID] = lo.Filter(a.deviceAllocations[deviceUUID], func(wa *api.WorkerAllocation, _ int) bool {
-		return wa.WorkerInfo.WorkerUID != allocation.WorkerInfo.WorkerUID
-	})
+	a.deviceAllocations[deviceUUID] = lo.Filter(
+		a.deviceAllocations[deviceUUID],
+		func(wa *api.WorkerAllocation, _ int) bool {
+			return wa.WorkerInfo.WorkerUID != allocation.WorkerInfo.WorkerUID
+		},
+	)
 }

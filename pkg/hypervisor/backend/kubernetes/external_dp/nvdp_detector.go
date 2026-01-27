@@ -27,7 +27,10 @@ func (n *NvidiaDevicePluginDetector) GetResourceNamePrefixes() []string {
 }
 
 // GetUsedBySystem returns the UsedBy system name for NVIDIA
-func (n *NvidiaDevicePluginDetector) GetUsedBySystemAndRealDeviceID(deviceID, resourceName string) (system string, realDeviceID string) {
+func (n *NvidiaDevicePluginDetector) GetUsedBySystemAndRealDeviceID(
+	deviceID,
+	resourceName string,
+) (system string, realDeviceID string) {
 	if resourceName == resourceNvidiaGPU {
 		// Some external device plugin's device ID is GPU-(UUID)-0, 1, 2, 3 (e.g. HAMI)
 		// Need to recover to real device ID

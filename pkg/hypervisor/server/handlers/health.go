@@ -38,7 +38,11 @@ func (h *HealthHandler) HandleHealthz(c *gin.Context) {
 }
 
 // HandleReadyz handles GET /readyz
-func (h *HealthHandler) HandleReadyz(c *gin.Context, deviceController framework.DeviceController, workerController framework.WorkerController) {
+func (h *HealthHandler) HandleReadyz(
+	c *gin.Context,
+	deviceController framework.DeviceController,
+	workerController framework.WorkerController,
+) {
 	if deviceController == nil || workerController == nil {
 		c.JSON(http.StatusServiceUnavailable, api.StatusResponse{Status: "not ready"})
 		return

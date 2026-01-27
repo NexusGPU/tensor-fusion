@@ -34,7 +34,11 @@ type LegacyHandler struct {
 }
 
 // NewLegacyHandler creates a new legacy handler
-func NewLegacyHandler(workerController framework.WorkerController, allocationController framework.WorkerAllocationController, backend framework.Backend) *LegacyHandler {
+func NewLegacyHandler(
+	workerController framework.WorkerController,
+	allocationController framework.WorkerAllocationController,
+	backend framework.Backend,
+) *LegacyHandler {
 	return &LegacyHandler{
 		workerController:     workerController,
 		allocationController: allocationController,

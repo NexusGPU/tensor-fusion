@@ -57,17 +57,45 @@ func updateWorkerDetail(
 	var content strings.Builder
 	content.WriteString(TitleStyle.Render("Worker Details\n\n"))
 
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Worker UID"), MetricValueStyle.Render(worker.WorkerUID)))
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Pod Name"), MetricValueStyle.Render(worker.WorkerName)))
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Namespace"), MetricValueStyle.Render(worker.Namespace)))
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Device UUIDs"), MetricValueStyle.Render(strings.Join(worker.AllocatedDevices, ", "))))
+	content.WriteString(fmt.Sprintf(
+		"%s: %s\n",
+		MetricLabelStyle.Render("Worker UID"),
+		MetricValueStyle.Render(worker.WorkerUID),
+	))
+	content.WriteString(fmt.Sprintf(
+		"%s: %s\n",
+		MetricLabelStyle.Render("Pod Name"),
+		MetricValueStyle.Render(worker.WorkerName),
+	))
+	content.WriteString(fmt.Sprintf(
+		"%s: %s\n",
+		MetricLabelStyle.Render("Namespace"),
+		MetricValueStyle.Render(worker.Namespace),
+	))
+	content.WriteString(fmt.Sprintf(
+		"%s: %s\n",
+		MetricLabelStyle.Render("Device UUIDs"),
+		MetricValueStyle.Render(strings.Join(worker.AllocatedDevices, ", ")),
+	))
 
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Isolation Mode"), MetricValueStyle.Render(string(worker.IsolationMode))))
+	content.WriteString(fmt.Sprintf(
+		"%s: %s\n",
+		MetricLabelStyle.Render("Isolation Mode"),
+		MetricValueStyle.Render(string(worker.IsolationMode)),
+	))
 	if worker.Limits.Vram.Value() > 0 {
-		content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Memory Limit"), formatBytes(uint64(worker.Limits.Vram.Value()))))
+		content.WriteString(fmt.Sprintf(
+			"%s: %s\n",
+			MetricLabelStyle.Render("Memory Limit"),
+			formatBytes(uint64(worker.Limits.Vram.Value())),
+		))
 	}
 	if worker.Limits.Tflops.Value() > 0 {
-		content.WriteString(fmt.Sprintf("%s: %.2f\n", MetricLabelStyle.Render("Compute Limit"), worker.Limits.Tflops.AsApproximateFloat64()))
+		content.WriteString(fmt.Sprintf(
+			"%s: %.2f\n",
+			MetricLabelStyle.Render("Compute Limit"),
+			worker.Limits.Tflops.AsApproximateFloat64(),
+		))
 	}
 
 	// Get worker metrics

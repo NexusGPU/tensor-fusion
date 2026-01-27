@@ -222,7 +222,8 @@ const (
 )
 
 var (
-	// No disrupt label, similar to Karpenter, avoid TFConnection/Worker/GPUNode to be moved to another node or destroying node.
+	// No disrupt label, similar to Karpenter, avoid TFConnection/Worker/GPUNode to be moved
+	// to another node or destroying node.
 	// Refer: https://karpenter.sh/docs/concepts/disruption/
 	SchedulingDoNotDisruptLabel = Domain + "/do-not-disrupt"
 )

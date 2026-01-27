@@ -29,7 +29,11 @@ type SingleNodeBackend struct {
 	workerHandler *framework.WorkerChangeHandler
 }
 
-func NewSingleNodeBackend(ctx context.Context, deviceController framework.DeviceController, allocationController framework.WorkerAllocationController) *SingleNodeBackend {
+func NewSingleNodeBackend(
+	ctx context.Context,
+	deviceController framework.DeviceController,
+	allocationController framework.WorkerAllocationController,
+) *SingleNodeBackend {
 	stateDir := os.Getenv("TENSOR_FUSION_STATE_DIR")
 	if stateDir == "" {
 		stateDir = "/tmp/tensor-fusion-state"

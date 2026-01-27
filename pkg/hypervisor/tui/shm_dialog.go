@@ -172,7 +172,11 @@ func (m *ShmDialogModel) updateContent() {
 	podPath := podIdentifier.ToPath(shmBasePath)
 	shmPath := filepath.Join(podPath, workerstate.ShmPathSuffix)
 
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Pod"), MetricValueStyle.Render(podIdentifier.String())))
+	content.WriteString(fmt.Sprintf(
+		"%s: %s\n",
+		MetricLabelStyle.Render("Pod"),
+		MetricValueStyle.Render(podIdentifier.String()),
+	))
 	content.WriteString(fmt.Sprintf("%s: %s\n\n", MetricLabelStyle.Render("SHM Path"), MetricValueStyle.Render(shmPath)))
 
 	// Try to open the shared memory handle
@@ -190,7 +194,11 @@ func (m *ShmDialogModel) updateContent() {
 	// Get the state
 	state := handle.GetState()
 	if state == nil {
-		content.WriteString(fmt.Sprintf("%s: %s\n\n", MetricLabelStyle.Render("Error"), MetricValueStyle.Render("Shared memory state is null")))
+		content.WriteString(fmt.Sprintf(
+			"%s: %s\n\n",
+			MetricLabelStyle.Render("Error"),
+			MetricValueStyle.Render("Shared memory state is null"),
+		))
 		m.content = content.String()
 		m.viewport.SetContent(m.content)
 		return
@@ -202,7 +210,11 @@ func (m *ShmDialogModel) updateContent() {
 
 	lastHeartbeat := state.GetLastHeartbeat()
 	heartbeatTime := time.Unix(int64(lastHeartbeat), 0)
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Last Heartbeat"), heartbeatTime.Format(time.RFC3339)))
+	content.WriteString(fmt.Sprintf(
+		"%s: %s\n",
+		MetricLabelStyle.Render("Last Heartbeat"),
+		heartbeatTime.Format(time.RFC3339),
+	))
 
 	// Health check (2 seconds timeout)
 	isHealthy := state.IsHealthy(2 * time.Second)
@@ -210,7 +222,11 @@ func (m *ShmDialogModel) updateContent() {
 	if !isHealthy {
 		healthStatus = "Unhealthy"
 	}
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Health Status"), MetricValueStyle.Render(healthStatus)))
+	content.WriteString(fmt.Sprintf(
+		"%s: %s\n",
+		MetricLabelStyle.Render("Health Status"),
+		MetricValueStyle.Render(healthStatus),
+	))
 
 	// Version information
 	version := state.Version()

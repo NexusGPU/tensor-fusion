@@ -43,6 +43,7 @@ func (m *MockKubeletClient) GetAllPods() map[string]any {
 var _ = Describe("DevicePluginDetector", func() {
 	Describe("readCheckpointFile", func() {
 		It("should read checkpoint file correctly", func() {
+			//nolint:lll // test data contains long base64 string
 			testData := `{
   "Data": {
     "PodDeviceEntries": [
@@ -131,19 +132,28 @@ var _ = Describe("DevicePluginDetector", func() {
 		})
 
 		It("should identify nvidia device plugin for standard GPU", func() {
-			system, realDeviceID := detector.GetUsedBySystemAndRealDeviceID("GPU-8511dc03-7592-b8b7-1a92-582d40da52fb", "nvidia.com/gpu")
+			system, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(
+				"GPU-8511dc03-7592-b8b7-1a92-582d40da52fb",
+				"nvidia.com/gpu",
+			)
 			Expect(system).To(Equal(string(UsedByNvidiaDevicePlugin)))
 			Expect(realDeviceID).To(Equal("GPU-8511dc03-7592-b8b7-1a92-582d40da52fb"))
 		})
 
 		It("should identify 3rd party device plugin for modified GPU ID", func() {
-			system, realDeviceID := detector.GetUsedBySystemAndRealDeviceID("GPU-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea-1", "nvidia.com/gpu")
+			system, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(
+				"GPU-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea-1",
+				"nvidia.com/gpu",
+			)
 			Expect(system).To(Equal(string(UsedBy3rdPartyDevicePlugin)))
 			Expect(realDeviceID).To(Equal("GPU-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea"))
 		})
 
 		It("should return nvidia-device-plugin for MIG", func() {
-			system, realDeviceID := detector.GetUsedBySystemAndRealDeviceID("MIG-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea", "nvidia.com/mig-1g.5gb")
+			system, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(
+				"MIG-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea",
+				"nvidia.com/mig-1g.5gb",
+			)
 			Expect(system).To(Equal(string(UsedByNvidiaDevicePlugin)))
 			Expect(realDeviceID).To(Equal("MIG-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea"))
 		})

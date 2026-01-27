@@ -99,15 +99,35 @@ func updateDeviceDetail(
 	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Model"), MetricValueStyle.Render(device.Model)))
 	content.WriteString(fmt.Sprintf("%s: %d\n", MetricLabelStyle.Render("Index"), device.Index))
 	content.WriteString(fmt.Sprintf("%s: %d\n", MetricLabelStyle.Render("NUMA Node"), device.NUMANode))
-	content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Total Memory"), formatBytes(device.TotalMemoryBytes)))
+	content.WriteString(fmt.Sprintf(
+		"%s: %s\n",
+		MetricLabelStyle.Render("Total Memory"),
+		formatBytes(device.TotalMemoryBytes),
+	))
 	content.WriteString(fmt.Sprintf("%s: %.2f TFLOPS\n\n", MetricLabelStyle.Render("Max TFLOPS"), device.MaxTflops))
 
 	if hasMetrics && deviceMetrics != nil {
 		content.WriteString(TitleStyle.Render("Current Metrics\n\n"))
-		content.WriteString(fmt.Sprintf("%s: %.1f%%\n", MetricLabelStyle.Render("Memory Usage"), deviceMetrics.MemoryPercentage))
-		content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Memory Used"), formatBytes(deviceMetrics.MemoryBytes)))
-		content.WriteString(fmt.Sprintf("%s: %.1f%%\n", MetricLabelStyle.Render("Compute Usage"), deviceMetrics.ComputePercentage))
-		content.WriteString(fmt.Sprintf("%s: %.2f TFLOPS\n", MetricLabelStyle.Render("Compute TFLOPS"), deviceMetrics.ComputeTflops))
+		content.WriteString(fmt.Sprintf(
+			"%s: %.1f%%\n",
+			MetricLabelStyle.Render("Memory Usage"),
+			deviceMetrics.MemoryPercentage,
+		))
+		content.WriteString(fmt.Sprintf(
+			"%s: %s\n",
+			MetricLabelStyle.Render("Memory Used"),
+			formatBytes(deviceMetrics.MemoryBytes),
+		))
+		content.WriteString(fmt.Sprintf(
+			"%s: %.1f%%\n",
+			MetricLabelStyle.Render("Compute Usage"),
+			deviceMetrics.ComputePercentage,
+		))
+		content.WriteString(fmt.Sprintf(
+			"%s: %.2f TFLOPS\n",
+			MetricLabelStyle.Render("Compute TFLOPS"),
+			deviceMetrics.ComputeTflops,
+		))
 		content.WriteString(fmt.Sprintf("%s: %.1f°C\n", MetricLabelStyle.Render("Temperature"), deviceMetrics.Temperature))
 		content.WriteString(fmt.Sprintf("%s: %d W\n", MetricLabelStyle.Render("Power Usage"), deviceMetrics.PowerUsage))
 		// TODO: handle extra metrics

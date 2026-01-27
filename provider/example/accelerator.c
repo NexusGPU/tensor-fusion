@@ -58,14 +58,21 @@ static void logMessage(const char* level, const char* message) {
 
 static void* limiterThreadFunc(void* arg __attribute__((unused))) {
     // Get first device UUID for testing
-    ExtendedDeviceInfo devices[256]; // Stack-allocated buffer
+    // Use heap allocation instead of stack to avoid stack overflow
+    // ExtendedDeviceInfo is ~21KB, 256 of them would be ~5.4MB which exceeds thread stack size
+    ExtendedDeviceInfo* devices = (ExtendedDeviceInfo*)malloc(4 * sizeof(ExtendedDeviceInfo));
+    if (!devices) {
+        return NULL;
+    }
     size_t deviceCount = 0;
     char deviceUUID[64] = {0};
     
-    if (GetAllDevices(devices, 256, &deviceCount) != RESULT_SUCCESS || deviceCount == 0) {
+    if (GetAllDevices(devices, 4, &deviceCount) != RESULT_SUCCESS || deviceCount == 0) {
+        free(devices);
         return NULL;
     }
     snprintf(deviceUUID, sizeof(deviceUUID), "%s", devices[0].basic.uuid);
+    free(devices);  // Free after copying UUID
 
     // Add worker process to limiter tracking
     AddWorkerProcess(deviceUUID, g_processId);

@@ -155,13 +155,33 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 			backend = single_node.NewSingleNodeBackend(ctx, deviceController, allocationController)
 			Expect(backend).NotTo(BeNil())
 
-			workerController = worker.NewWorkerController(deviceController, allocationController, tfv1.IsolationModeShared, backend)
+			workerController = worker.NewWorkerController(
+				deviceController,
+				allocationController,
+				tfv1.IsolationModeShared,
+				backend,
+			)
 			Expect(workerController).NotTo(BeNil())
 
-			metricsRecorder = metrics.NewHypervisorMetricsRecorder(ctx, tempMetricsFile, deviceController, workerController, allocationController, 1*time.Second)
+			metricsRecorder = metrics.NewHypervisorMetricsRecorder(
+				ctx,
+				tempMetricsFile,
+				deviceController,
+				workerController,
+				allocationController,
+				1*time.Second,
+			)
 			Expect(metricsRecorder).NotTo(BeNil())
 
-			httpServer = server.NewServer(ctx, deviceController, workerController, allocationController, metricsRecorder, backend, 0)
+			httpServer = server.NewServer(
+				ctx,
+				deviceController,
+				workerController,
+				allocationController,
+				metricsRecorder,
+				backend,
+				0,
+			)
 			Expect(httpServer).NotTo(BeNil())
 		})
 
@@ -969,7 +989,17 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				for i := 0; i < 10; i++ {
 					freq := 5 + (i * 2)  // Varying frequencies from 5 to 23 Hz
 					mem := 50 + (i * 10) // Varying memory from 50 to 140 MB
-					cmd := exec.Command(appMockPath, "-m", fmt.Sprintf("%d", mem), "-k", "1024", "-f", fmt.Sprintf("%d", freq), "-d", "15")
+					cmd := exec.Command(
+						appMockPath,
+						"-m",
+						fmt.Sprintf("%d", mem),
+						"-k",
+						"1024",
+						"-f",
+						fmt.Sprintf("%d", freq),
+						"-d",
+						"15",
+					)
 					cmd.Dir = filepath.Dir(appMockPath)
 					err = cmd.Start()
 					Expect(err).NotTo(HaveOccurred())

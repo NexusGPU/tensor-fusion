@@ -366,7 +366,13 @@ func ShouldSendTelemetry() bool {
 }
 
 // SendAnonymousTelemetry sends Anonymous telemetry data without ANY sensitive data
-func SendAnonymousTelemetry(nodeInfo *api.NodeInfo, hardwareVendor string, sampleGPUModel string, workersCount int, isolationMode api.IsolationMode) {
+func SendAnonymousTelemetry(
+	nodeInfo *api.NodeInfo,
+	hardwareVendor string,
+	sampleGPUModel string,
+	workersCount int,
+	isolationMode api.IsolationMode,
+) {
 	// Get PostHog client
 	client := getPostHogClient()
 	if client == nil {

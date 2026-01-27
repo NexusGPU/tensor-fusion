@@ -130,7 +130,10 @@ func (c *Client) ListWorkers(ctx context.Context) ([]*api.WorkerAllocation, erro
 }
 
 // GetWorker fetches a specific worker by ID
-func (c *Client) GetWorker(ctx context.Context, workerID string) (*api.WorkerAllocation, map[string]map[string]map[string]*api.WorkerMetrics, error) {
+func (c *Client) GetWorker(
+	ctx context.Context,
+	workerID string,
+) (*api.WorkerAllocation, map[string]map[string]map[string]*api.WorkerMetrics, error) {
 	type WorkerDetail struct {
 		WorkerUID  string                                              `json:"worker_uid"`
 		Allocation *api.WorkerAllocation                               `json:"allocation"`

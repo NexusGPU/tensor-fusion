@@ -31,7 +31,10 @@ type WorkerHandler struct {
 }
 
 // NewWorkerHandler creates a new worker handler
-func NewWorkerHandler(workerController framework.WorkerController, allocationController framework.WorkerAllocationController) *WorkerHandler {
+func NewWorkerHandler(
+	workerController framework.WorkerController,
+	allocationController framework.WorkerAllocationController,
+) *WorkerHandler {
 	return &WorkerHandler{
 		workerController:     workerController,
 		allocationController: allocationController,

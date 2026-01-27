@@ -201,7 +201,10 @@ func (dc *DeviceController) Update(utilization float64, deltaTime float64) (*Dev
 }
 
 // UpdateWithTimestamp updates controller with timestamp (calculates delta automatically)
-func (dc *DeviceController) UpdateWithTimestamp(utilization float64, timestampMicros uint64) (*DeviceControllerState, error) {
+func (dc *DeviceController) UpdateWithTimestamp(
+	utilization float64,
+	timestampMicros uint64,
+) (*DeviceControllerState, error) {
 	seconds := float64(timestampMicros) / 1_000_000.0
 	var delta float64
 	if dc.lastTimestamp != nil {
