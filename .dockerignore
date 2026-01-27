@@ -1,3 +1,5 @@
 # More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
-# Ignore build and test binaries.
+# Ignore build and test binaries, except for pre-built Linux binaries used in CI.
 bin/
+!bin/manager-linux-*
+!bin/hypervisor-linux-*
