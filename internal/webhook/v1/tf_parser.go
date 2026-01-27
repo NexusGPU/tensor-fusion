@@ -291,24 +291,45 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 		}
 		workloadProfile.Spec.GPUCount = uint32(val)
 	} else if workloadProfile.Spec.GPUCount == 0 {
+		// Map to track GPU count per container: containerName -> gpuCount
+		containerGPUCounts := make(map[string]int)
+		injectContainerNames := []string{}
+
 		for _, container := range pod.Spec.Containers {
 			if quantity, ok := container.Resources.Limits[constants.NvidiaGPUKey]; ok {
 				gpuNumber, err := strconv.Atoi(quantity.String())
 				if err != nil || gpuNumber <= 0 {
 					ctrl.Log.Error(err, "unrecognized nvidia.com/gpu in resources, not a valid number", "pod", pod.Name, "container", container.Name)
 				} else {
-					workloadProfile.Spec.GPUCount = uint32(gpuNumber)
+					// Track GPU count per container
+					containerGPUCounts[container.Name] = gpuNumber
+					// Accumulate GPU count from all containers
+					workloadProfile.Spec.GPUCount += uint32(gpuNumber)
 					// For seamless migration with only one tensor-fusion.ai/enabled label
 					// and one tensor-fusion.ai/vram-limit annotation, convert this to 100% computing-percent
-					workloadProfile.Spec.Resources.Limits.ComputePercent = resource.MustParse("100")
-					isMigratedFromContainerLimits = true
-					// convert limits containers to annotation for inject container when not specified
-					if pod.Annotations[constants.InjectContainerAnnotation] == "" {
-						pod.Annotations[constants.InjectContainerAnnotation] = container.Name
+					if !isMigratedFromContainerLimits {
+						workloadProfile.Spec.Resources.Limits.ComputePercent = resource.MustParse("100")
+						isMigratedFromContainerLimits = true
 					}
-					break
+					// Collect container names for inject annotation
+					injectContainerNames = append(injectContainerNames, container.Name)
 				}
 			}
+		}
+
+		// Convert limits containers to annotation for inject container when not specified
+		if len(injectContainerNames) > 0 && pod.Annotations[constants.InjectContainerAnnotation] == "" {
+			pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(injectContainerNames, ",")
+		}
+
+		// Save per-container GPU count as annotation for later GPU allocation
+		// Format: JSON key-value map, e.g., {"container1": 1, "container2": 2}
+		if len(containerGPUCounts) > 0 {
+			containerGPUCountJSON, err := json.Marshal(containerGPUCounts)
+			if err != nil {
+				return fmt.Errorf("failed to marshal container GPU counts: %w", err)
+			}
+			pod.Annotations[constants.ContainerGPUCountAnnotation] = string(containerGPUCountJSON)
 		}
 	}
 
@@ -495,4 +516,24 @@ func handleDedicatedGPU(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) 
 	workloadProfile.Spec.Resources.Limits.Tflops = resource.Tflops
 	workloadProfile.Spec.Resources.Limits.Vram = resource.Vram
 	return nil
+}
+
+// ParseContainerGPUCounts parses the container GPU count annotation (JSON format)
+// Returns a map of container name to GPU count
+func ParseContainerGPUCounts(pod *corev1.Pod) (map[string]int, error) {
+	if pod.Annotations == nil {
+		return nil, nil
+	}
+
+	annotationValue := pod.Annotations[constants.ContainerGPUCountAnnotation]
+	if annotationValue == "" {
+		return nil, nil
+	}
+
+	var containerGPUCounts map[string]int
+	if err := json.Unmarshal([]byte(annotationValue), &containerGPUCounts); err != nil {
+		return nil, fmt.Errorf("failed to parse container GPU count annotation: %w", err)
+	}
+
+	return containerGPUCounts, nil
 }

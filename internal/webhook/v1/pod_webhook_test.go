@@ -1102,5 +1102,235 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(found).To(BeTrue())
 			Expect(annotation.Value).To(HavePrefix("test-name"))
 		})
+
+		It("should accumulate GPU count from multiple containers with nvidia.com/gpu limits", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "multi-container-gpu-pod",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.GpuPoolKey:            "mock",
+						constants.VRAMLimitAnnotation:   "16Gi",
+						constants.TFLOPSLimitAnnotation: "100",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "container1",
+							Image: "test-image1",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									constants.NvidiaGPUKey: *resource.NewQuantity(2, resource.DecimalSI),
+								},
+							},
+						},
+						{
+							Name:  "container2",
+							Image: "test-image2",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									constants.NvidiaGPUKey: *resource.NewQuantity(1, resource.DecimalSI),
+								},
+							},
+						},
+						{
+							Name:  "container3",
+							Image: "test-image3",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									constants.NvidiaGPUKey: *resource.NewQuantity(1, resource.DecimalSI),
+								},
+							},
+						},
+					},
+				},
+			}
+
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+
+			// Verify inject-container annotation includes all containers
+			injectContainerPatch, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return patch.Path == "/metadata/annotations/tensor-fusion.ai~1inject-container"
+			})
+			Expect(found).To(BeTrue())
+			injectContainers := injectContainerPatch.Value.(string)
+			Expect(injectContainers).To(ContainSubstring("container1"))
+			Expect(injectContainers).To(ContainSubstring("container2"))
+			Expect(injectContainers).To(ContainSubstring("container3"))
+
+			// Verify gpu-count annotation is set to total (2+1+1=4)
+			gpuCountPatch, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return patch.Path == "/metadata/annotations/tensor-fusion.ai~1gpu-count"
+			})
+			Expect(found).To(BeTrue())
+			Expect(gpuCountPatch.Value).To(Equal("4"))
+
+			// Verify container-gpu-count annotation is set
+			containerGPUCountPatch, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return patch.Path == "/metadata/annotations/tensor-fusion.ai~1container-gpu-count"
+			})
+			Expect(found).To(BeTrue())
+
+			// Parse and verify the container GPU count JSON
+			var containerGPUCounts map[string]int
+			err = json.Unmarshal([]byte(containerGPUCountPatch.Value.(string)), &containerGPUCounts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(containerGPUCounts["container1"]).To(Equal(2))
+			Expect(containerGPUCounts["container2"]).To(Equal(1))
+			Expect(containerGPUCounts["container3"]).To(Equal(1))
+		})
+
+		It("should not set container-gpu-count annotation for single container with GPU", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "single-container-gpu-pod",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.GpuPoolKey:            "mock",
+						constants.VRAMLimitAnnotation:   "16Gi",
+						constants.TFLOPSLimitAnnotation: "100",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main",
+							Image: "test-image",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									constants.NvidiaGPUKey: *resource.NewQuantity(2, resource.DecimalSI),
+								},
+							},
+						},
+					},
+				},
+			}
+
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+
+			// Verify container-gpu-count annotation IS set even for single container
+			// (the logic sets it whenever containerGPUCounts is not empty)
+			containerGPUCountPatch, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return patch.Path == "/metadata/annotations/tensor-fusion.ai~1container-gpu-count"
+			})
+			Expect(found).To(BeTrue())
+
+			// Verify the container GPU count content
+			var containerGPUCounts map[string]int
+			err = json.Unmarshal([]byte(containerGPUCountPatch.Value.(string)), &containerGPUCounts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(containerGPUCounts["main"]).To(Equal(2))
+
+			// Verify gpu-count is set to 2
+			gpuCountPatch, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return patch.Path == "/metadata/annotations/tensor-fusion.ai~1gpu-count"
+			})
+			Expect(found).To(BeTrue())
+			Expect(gpuCountPatch.Value).To(Equal("2"))
+		})
+	})
+
+	Context("ParseContainerGPUCounts", func() {
+		It("should parse valid container GPU count annotation", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						constants.ContainerGPUCountAnnotation: `{"container1": 2, "container2": 1}`,
+					},
+				},
+			}
+
+			counts, err := ParseContainerGPUCounts(pod)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(counts).To(HaveLen(2))
+			Expect(counts["container1"]).To(Equal(2))
+			Expect(counts["container2"]).To(Equal(1))
+		})
+
+		It("should return nil for pod without annotation", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{},
+				},
+			}
+
+			counts, err := ParseContainerGPUCounts(pod)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(counts).To(BeNil())
+		})
+
+		It("should return nil for pod with nil annotations", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: nil,
+				},
+			}
+
+			counts, err := ParseContainerGPUCounts(pod)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(counts).To(BeNil())
+		})
+
+		It("should return error for invalid JSON", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						constants.ContainerGPUCountAnnotation: `invalid json`,
+					},
+				},
+			}
+
+			counts, err := ParseContainerGPUCounts(pod)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to parse"))
+			Expect(counts).To(BeNil())
+		})
+
+		It("should parse empty JSON object", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						constants.ContainerGPUCountAnnotation: `{}`,
+					},
+				},
+			}
+
+			counts, err := ParseContainerGPUCounts(pod)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(counts).To(BeEmpty())
+		})
 	})
 })

@@ -199,6 +199,13 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 		annotations[constants.PartitionTemplateIDAnnotation] = workload.Spec.PartitionTemplateID
 	}
 
+	// Pass through container-gpu-count annotation from workload to worker pod
+	// This preserves per-container GPU count information for multi-container scenarios
+	if workload.Annotations != nil {
+		if containerGPUCount, ok := workload.Annotations[constants.ContainerGPUCountAnnotation]; ok && containerGPUCount != "" {
+			annotations[constants.ContainerGPUCountAnnotation] = containerGPUCount
+		}
+	}
 	// Add gang scheduling annotations if configured
 	if workload.Spec.GangScheduling != nil && workload.Spec.GangScheduling.MinMembers > 0 {
 		annotations[constants.GangMinMembersAnnotation] = strconv.Itoa(int(workload.Spec.GangScheduling.MinMembers))
@@ -206,7 +213,6 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 			annotations[constants.GangTimeoutAnnotation] = workload.Spec.GangScheduling.Timeout.Duration.String()
 		}
 	}
-
 	return labels, annotations
 }
 
