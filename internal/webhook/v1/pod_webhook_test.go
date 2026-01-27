@@ -521,6 +521,157 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(found).To(BeFalse())
 		})
 
+		It("should accumulate GPU count from multiple containers", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod-multi-container",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                "mock",
+						constants.InjectContainerAnnotation: "container1,container2",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "container1",
+							Image: "test-image",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceName(constants.NvidiaGPUKey): resource.MustParse("1"),
+								},
+							},
+						},
+						{
+							Name:  "container2",
+							Image: "test-image",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceName(constants.NvidiaGPUKey): resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+
+			op, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1gpu-count"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("2"), "GPU count should be accumulated from both containers (1+1=2)")
+
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1compute-percent-request"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("100"))
+
+			// Verify per-container GPU count annotation is set (JSON format)
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1container-gpu-count"
+			})
+			Expect(found).To(BeTrue())
+			// Parse JSON and verify the mapping
+			var containerGPUCounts map[string]int
+			err = json.Unmarshal([]byte(op.Value.(string)), &containerGPUCounts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(containerGPUCounts).To(HaveLen(2))
+			Expect(containerGPUCounts["container1"]).To(Equal(1))
+			Expect(containerGPUCounts["container2"]).To(Equal(1))
+		})
+
+		It("should track different GPU counts per container", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod-different-gpu-counts",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                "mock",
+						constants.InjectContainerAnnotation: "container1,container2",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "container1",
+							Image: "test-image",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceName(constants.NvidiaGPUKey): resource.MustParse("2"),
+								},
+							},
+						},
+						{
+							Name:  "container2",
+							Image: "test-image",
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceName(constants.NvidiaGPUKey): resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object: runtime.RawExtension{
+						Raw: podBytes,
+					},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+
+			op, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1gpu-count"
+			})
+			Expect(found).To(BeTrue())
+			Expect(op.Value).To(Equal("3"), "GPU count should be accumulated: 2+1=3")
+
+			// Verify per-container GPU count annotation preserves individual counts (JSON format)
+			op, found = lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return isAddOperation(patch) &&
+					patch.Path == "/metadata/annotations/tensor-fusion.ai~1container-gpu-count"
+			})
+			Expect(found).To(BeTrue())
+			// Parse JSON and verify different counts per container
+			var containerGPUCounts map[string]int
+			err = json.Unmarshal([]byte(op.Value.(string)), &containerGPUCounts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(containerGPUCounts).To(HaveLen(2))
+			Expect(containerGPUCounts["container1"]).To(Equal(2))
+			Expect(containerGPUCounts["container2"]).To(Equal(1))
+		})
+
 		It("should handle invalid pod specification", func() {
 			req := admission.Request{
 				AdmissionRequest: admissionv1.AdmissionRequest{
