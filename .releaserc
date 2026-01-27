@@ -3,7 +3,7 @@
     "main",
     {
       "name": "v1",
-      "range": "1.54.x"
+      "range": "1.55.x"
     }
   ],
   "plugins": [
