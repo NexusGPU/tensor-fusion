@@ -21,7 +21,7 @@ import (
 	"flag"
 	"os"
 
-	"github.com/NexusGPU/tensor-fusion/internal/hypervisor/tui"
+	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/tui"
 	tea "github.com/charmbracelet/bubbletea"
 	"k8s.io/klog/v2"
 )

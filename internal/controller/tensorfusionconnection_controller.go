@@ -38,9 +38,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 )
 
 // TensorFusionConnectionReconciler reconciles a TensorFusionConnection object

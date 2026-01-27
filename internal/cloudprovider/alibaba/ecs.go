@@ -11,7 +11,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	common "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/common"
 	types "github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 	"sigs.k8s.io/controller-runtime/pkg/log"

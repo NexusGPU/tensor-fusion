@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/cmd/sched"
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	gpuResourceFitPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	gpuTopoPlugin "github.com/NexusGPU/tensor-fusion/internal/scheduler/gputopo"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apiserver/pkg/util/feature"

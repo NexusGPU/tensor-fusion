@@ -7,10 +7,10 @@ import (
 
 	"time"
 
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/gin-gonic/gin"
 	"sigs.k8s.io/yaml"
 
