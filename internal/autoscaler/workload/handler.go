@@ -15,7 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -25,13 +25,13 @@ type Handler interface {
 	ApplyRecommendationToWorkload(ctx context.Context, workloadState *State, recommendation *tfv1.Resources) error
 	UpdateWorkloadStatus(ctx context.Context, state *State, recommendation *tfv1.Resources) error
 	GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, error)
-	SetEventRecorder(recorder record.EventRecorder, scheme *runtime.Scheme)
+	SetEventRecorder(recorder events.EventRecorder, scheme *runtime.Scheme)
 }
 
 type handler struct {
 	client.Client
 	allocator     *gpuallocator.GpuAllocator
-	eventRecorder record.EventRecorder
+	eventRecorder events.EventRecorder
 	scheme        *runtime.Scheme
 }
 
@@ -42,7 +42,7 @@ func NewHandler(client client.Client, allocator *gpuallocator.GpuAllocator) Hand
 	}
 }
 
-func NewHandlerWithRecorder(client client.Client, allocator *gpuallocator.GpuAllocator, recorder record.EventRecorder, scheme *runtime.Scheme) Handler {
+func NewHandlerWithRecorder(client client.Client, allocator *gpuallocator.GpuAllocator, recorder events.EventRecorder, scheme *runtime.Scheme) Handler {
 	return &handler{
 		Client:        client,
 		allocator:     allocator,
@@ -51,7 +51,7 @@ func NewHandlerWithRecorder(client client.Client, allocator *gpuallocator.GpuAll
 	}
 }
 
-func (h *handler) SetEventRecorder(recorder record.EventRecorder, scheme *runtime.Scheme) {
+func (h *handler) SetEventRecorder(recorder events.EventRecorder, scheme *runtime.Scheme) {
 	h.eventRecorder = recorder
 	h.scheme = scheme
 }
@@ -222,7 +222,8 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 				curRes.Requests.Vram.String(), recommendation.Requests.Vram.String())
 		}
 
-		h.eventRecorder.Event(workloadObj, eventType, reason, message)
+		action := "Scaled"
+		h.eventRecorder.Eventf(workloadObj, nil, eventType, reason, action, message)
 	}
 
 	annotationsToUpdate := utils.GPUResourcesToAnnotations(recommendation)

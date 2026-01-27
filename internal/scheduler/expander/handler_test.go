@@ -16,7 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -71,7 +71,7 @@ func (suite *NodeExpanderTestSuite) SetupSuite() {
 	suite.cancel = cancel
 
 	// Setup node expander and unscheduled pod handler
-	recorder := record.NewFakeRecorder(100)
+	recorder := &events.FakeRecorder{}
 	suite.unschedHandler, suite.nodeExpander = NewUnscheduledPodHandler(ctx, nil, suite.allocator, recorder)
 }
 

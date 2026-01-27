@@ -122,7 +122,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 
 			log.Info("Should NOT scale up GPU node due to max capacity constraint", "pool", pool.Name)
 
-			r.Recorder.Eventf(pool, corev1.EventTypeWarning, "MaxResourceConstraintReached", "Max resource constraint can not be satisfied, can not scale up: %v", pool.Spec.CapacityConfig.MaxResources)
+			r.Recorder.Eventf(pool, nil, corev1.EventTypeWarning, "MaxResourceConstraintReached", "ConstraintReached", "Max resource constraint can not be satisfied, can not scale up: %v", pool.Spec.CapacityConfig.MaxResources)
 		}
 	}
 

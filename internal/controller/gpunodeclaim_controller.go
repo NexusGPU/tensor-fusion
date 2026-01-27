@@ -23,7 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,7 +41,7 @@ type GPUNodeClaimReconciler struct {
 	client.Client
 	Expander *expander.NodeExpander
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodeclaims,verbs=get;list;watch;create;update;patch;delete
@@ -148,7 +148,7 @@ func (r *GPUNodeClaimReconciler) reconcileCloudVendorNode(ctx context.Context, c
 	if err != nil {
 		return err
 	}
-	r.Recorder.Eventf(pool, corev1.EventTypeNormal, "ManagedNodeCreated", "Created node: %s, IP: %s", status.InstanceID, status.PrivateIP)
+	r.Recorder.Eventf(pool, nil, corev1.EventTypeNormal, "ManagedNodeCreated", "Created", "Created node: %s, IP: %s", status.InstanceID, status.PrivateIP)
 	// Retry status update until success to handle version conflicts
 	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		// Get the latest version before attempting an update

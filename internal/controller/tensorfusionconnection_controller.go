@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,7 +47,7 @@ import (
 type TensorFusionConnectionReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
@@ -154,10 +154,10 @@ func (r *TensorFusionConnectionReconciler) selectWorkerAndSyncStatusFromWorkerPo
 			// no available worker, wait for it to be available
 			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 		}
-		r.Recorder.Eventf(connection, v1.EventTypeWarning, "WorkerSelectionFailed", "Failed to select worker: %v", err)
+		r.Recorder.Eventf(connection, nil, v1.EventTypeWarning, "WorkerSelectionFailed", "SelectionFailed", "Failed to select worker: %v", err)
 		return ctrl.Result{}, err
 	}
-	r.Recorder.Eventf(connection, v1.EventTypeNormal, "WorkerSelected", "Worker %s successfully selected for connection", s.WorkerName)
+	r.Recorder.Eventf(connection, nil, v1.EventTypeNormal, "WorkerSelected", "Selected", "Worker %s successfully selected for connection", s.WorkerName)
 	connection.Status.Phase = s.WorkerPhase
 	connection.Labels[constants.WorkloadKey] = workloadName
 	connection.Status.WorkerName = s.WorkerName
@@ -175,7 +175,7 @@ func (r *TensorFusionConnectionReconciler) selectWorkerAndSyncStatusFromWorkerPo
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	r.Recorder.Eventf(connection, v1.EventTypeNormal, "ConnectionReady", "Connection URL: %s", connection.Status.ConnectionURL)
+	r.Recorder.Eventf(connection, nil, v1.EventTypeNormal, "ConnectionReady", "Ready", "Connection URL: %s", connection.Status.ConnectionURL)
 	return ctrl.Result{}, nil
 }
 

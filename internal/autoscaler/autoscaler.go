@@ -218,7 +218,7 @@ func SetupWithManager(mgr ctrl.Manager, allocator *gpuallocator.GpuAllocator) er
 		return fmt.Errorf("failed to create auto scaler: %v", err)
 	}
 	// Update handler with event recorder
-	recorder := mgr.GetEventRecorderFor("autoscaler")
+	recorder := mgr.GetEventRecorder("autoscaler")
 	autoScaler.workloadHandler.SetEventRecorder(recorder, mgr.GetScheme())
 	return mgr.Add(autoScaler)
 }
