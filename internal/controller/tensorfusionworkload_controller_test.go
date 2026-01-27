@@ -288,34 +288,37 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			checkWorkloadStatus(workload)
 
 			// Verify pods got GPUs of the correct model
-			podList := &corev1.PodList{}
-			// First make sure the pod exists
+			// Check if the pod has the correct GPU allocation
 			Eventually(func(g Gomega) {
+				// Get the latest pod list to avoid stale references
+				podList := &corev1.PodList{}
 				g.Expect(k8sClient.List(ctx, podList,
 					client.InNamespace(key.Namespace),
 					client.MatchingLabels{constants.WorkloadKey: key.Name})).Should(Succeed())
 				// Filter out pods that are being deleted
-				podList.Items = lo.Filter(podList.Items, func(pod corev1.Pod, _ int) bool {
+				activePods := lo.Filter(podList.Items, func(pod corev1.Pod, _ int) bool {
 					return pod.DeletionTimestamp == nil
 				})
-				g.Expect(podList.Items).Should(HaveLen(1))
-			}).Should(Succeed())
+				g.Expect(activePods).Should(HaveLen(1), "Expected exactly one active pod")
 
-			// Now check if the pod has the correct GPU
-			Eventually(func(g Gomega) {
-				// Get the latest version of the pod
-				pod := &corev1.Pod{}
-				g.Expect(k8sClient.Get(ctx, client.ObjectKey{
-					Namespace: podList.Items[0].Namespace,
-					Name:      podList.Items[0].Name,
-				}, pod)).Should(Succeed())
-				gpuNames := strings.Split(pod.Annotations[constants.GPUDeviceIDsAnnotation], ",")
+				pod := &activePods[0]
+
+				// Check if GPU device IDs annotation exists
+				gpuIDsAnnotation, ok := pod.Annotations[constants.GPUDeviceIDsAnnotation]
+				g.Expect(ok).To(BeTrue(), "GPU device IDs annotation should exist")
+				g.Expect(gpuIDsAnnotation).NotTo(BeEmpty(), "GPU device IDs should not be empty")
+
+				// Parse GPU IDs
+				gpuNames := strings.Split(gpuIDsAnnotation, ",")
+				g.Expect(gpuNames).NotTo(BeEmpty(), "Should have at least one GPU allocated")
+
+				// Get the GPU list and verify the model
 				gpuList := tfEnv.GetPoolGpuList(0)
-				gpu, ok := lo.Find(gpuList.Items, func(gpu tfv1.GPU) bool {
+				gpu, found := lo.Find(gpuList.Items, func(gpu tfv1.GPU) bool {
 					return gpu.Name == gpuNames[0]
 				})
-				g.Expect(ok).To(BeTrue())
-				g.Expect(gpu.Status.GPUModel).To(Equal("mock"))
+				g.Expect(found).To(BeTrue(), "GPU %s should be found in the pool", gpuNames[0])
+				g.Expect(gpu.Status.GPUModel).To(Equal("mock"), "GPU model should match the requested model")
 			}).Should(Succeed())
 		})
 	})

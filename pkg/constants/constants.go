@@ -96,6 +96,14 @@ var (
 
 	WorkloadProfileAnnotation = Domain + "/workload-profile"
 	InjectContainerAnnotation = Domain + "/inject-container"
+
+	ContainerGPUCountAnnotation = Domain + "/container-gpu-count"
+	// ContainerGPUsAnnotation maps container name to GPU IDs for multi-container scenarios
+	// Format: {"containerName1": ["gpu-id1", "gpu-id2"], "containerName2": ["gpu-id3"]}
+	// By default, all containers share the same GPUs (PodLevelResources behavior)
+	// When this annotation exists, each container gets its specific GPU IDs, while percent/vram remain the same
+	ContainerGPUsAnnotation = Domain + "/container-gpus"
+
 	IsLocalGPUAnnotation      = Domain + "/is-local-gpu"
 	QoSLevelAnnotation        = Domain + "/qos"
 	EmbeddedWorkerAnnotation  = Domain + "/embedded-worker"

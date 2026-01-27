@@ -2,6 +2,7 @@ package gpuresources
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strings"
 	"time"
@@ -1309,3 +1310,106 @@ func getPreFilterResult(state *framework.CycleState) []string {
 	}
 	return lo.Keys(data.(*GPUSchedulingStateData).NodeGPUs)
 }
+
+var _ = Describe("allocateGPUsToContainers", func() {
+	var plugin *GPUFit
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		plugin = &GPUFit{
+			logger: lo.ToPtr(klog.FromContext(ctx)),
+		}
+	})
+
+	Context("when allocating GPUs to containers", func() {
+		It("should allocate GPUs correctly for multiple containers", func() {
+			containerGPUCountJSON := `{"container1": 2, "container2": 1}`
+			finalGPUs := []string{"gpu-1", "gpu-2", "gpu-3"}
+
+			result, err := plugin.allocateGPUsToContainers(containerGPUCountJSON, finalGPUs)
+			Expect(err).ToNot(HaveOccurred())
+
+			var containerGPUs map[string][]string
+			err = json.Unmarshal([]byte(result), &containerGPUs)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(containerGPUs["container1"]).To(HaveLen(2))
+			Expect(containerGPUs["container2"]).To(HaveLen(1))
+			Expect(containerGPUs["container1"]).To(Equal([]string{"gpu-1", "gpu-2"}))
+			Expect(containerGPUs["container2"]).To(Equal([]string{"gpu-3"}))
+		})
+
+		It("should handle single container", func() {
+			containerGPUCountJSON := `{"container1": 1}`
+			finalGPUs := []string{"gpu-1"}
+
+			result, err := plugin.allocateGPUsToContainers(containerGPUCountJSON, finalGPUs)
+			Expect(err).ToNot(HaveOccurred())
+
+			var containerGPUs map[string][]string
+			err = json.Unmarshal([]byte(result), &containerGPUs)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(containerGPUs["container1"]).To(Equal([]string{"gpu-1"}))
+		})
+
+		It("should handle container with zero GPU count", func() {
+			containerGPUCountJSON := `{"container1": 2, "container2": 0}`
+			finalGPUs := []string{"gpu-1", "gpu-2"}
+
+			result, err := plugin.allocateGPUsToContainers(containerGPUCountJSON, finalGPUs)
+			Expect(err).ToNot(HaveOccurred())
+
+			var containerGPUs map[string][]string
+			err = json.Unmarshal([]byte(result), &containerGPUs)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(containerGPUs["container1"]).To(Equal([]string{"gpu-1", "gpu-2"}))
+			Expect(containerGPUs["container2"]).To(BeEmpty())
+		})
+
+		It("should fail when requested GPU count exceeds available", func() {
+			containerGPUCountJSON := `{"container1": 2, "container2": 2}`
+			finalGPUs := []string{"gpu-1", "gpu-2"}
+
+			_, err := plugin.allocateGPUsToContainers(containerGPUCountJSON, finalGPUs)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not enough GPUs"))
+		})
+
+		It("should fail with invalid JSON", func() {
+			containerGPUCountJSON := `invalid json`
+			finalGPUs := []string{"gpu-1"}
+
+			_, err := plugin.allocateGPUsToContainers(containerGPUCountJSON, finalGPUs)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to parse"))
+		})
+
+		It("should fail with negative GPU count", func() {
+			containerGPUCountJSON := `{"container1": -1}`
+			finalGPUs := []string{"gpu-1"}
+
+			_, err := plugin.allocateGPUsToContainers(containerGPUCountJSON, finalGPUs)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("invalid GPU count"))
+		})
+
+		It("should allocate all GPUs when total matches", func() {
+			containerGPUCountJSON := `{"container1": 1, "container2": 1, "container3": 2}`
+			finalGPUs := []string{"gpu-1", "gpu-2", "gpu-3", "gpu-4"}
+
+			result, err := plugin.allocateGPUsToContainers(containerGPUCountJSON, finalGPUs)
+			Expect(err).ToNot(HaveOccurred())
+
+			var containerGPUs map[string][]string
+			err = json.Unmarshal([]byte(result), &containerGPUs)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(containerGPUs["container1"]).To(HaveLen(1))
+			Expect(containerGPUs["container2"]).To(HaveLen(1))
+			Expect(containerGPUs["container3"]).To(HaveLen(2))
+		})
+	})
+})
