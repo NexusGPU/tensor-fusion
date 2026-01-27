@@ -293,6 +293,14 @@ func (m *TensorFusionPodMutator) createOrUpdateWorkload(
 			workload.Annotations[constants.DisableFeaturesAnnotation] = pod.Labels[constants.DisableFeaturesAnnotation]
 		}
 
+		// Pass through container-gpu-count annotation from client pod to workload
+		// This preserves per-container GPU count information for multi-container scenarios
+		if pod.Annotations != nil {
+			if containerGPUCount, ok := pod.Annotations[constants.ContainerGPUCountAnnotation]; ok && containerGPUCount != "" {
+				workload.Annotations[constants.ContainerGPUCountAnnotation] = containerGPUCount
+			}
+		}
+
 		if tfInfo.PodControllerRef != nil {
 			workload.OwnerReferences = []metav1.OwnerReference{*tfInfo.PodControllerRef}
 		}
