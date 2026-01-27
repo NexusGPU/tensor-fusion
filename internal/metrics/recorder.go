@@ -75,8 +75,7 @@ func RemoveNodeMetrics(nodeName string) {
 }
 
 func SetWorkerMetricsByWorkload(
-	pod *corev1.Pod, gpuCapacityMap map[string]tfv1.Resource,
-	gpuStore map[types.NamespacedName]*tfv1.GPU,
+	pod *corev1.Pod, gpuStore map[types.NamespacedName]*tfv1.GPU,
 ) {
 	workerMetricsLock.Lock()
 	defer workerMetricsLock.Unlock()
@@ -109,9 +108,9 @@ func SetWorkerMetricsByWorkload(
 
 	// Update metrics fields that are mutable
 	metricsItem := workerMetricsMap[pod.Name]
-	metricsItem.TflopsRequest, metricsItem.TflopsLimit = getWorkerTflopsRequestLimit(gpuStore, pod, gpuCapacityMap, gpuRequestResource, gpuLimitResource)
+	metricsItem.TflopsRequest, metricsItem.TflopsLimit = getWorkerTflopsRequestLimit(gpuStore, pod, gpuRequestResource, gpuLimitResource)
 	metricsItem.VramBytesRequest = gpuRequestResource.Vram.AsApproximateFloat64()
-	metricsItem.VramBytesLimit = gpuLimitResource.Vram.AsApproximateFloat64()
+	metricsItem.VramBytesLimit = getWorkerVramBytesLimit(gpuStore, pod, gpuLimitResource)
 	metricsItem.Ready = utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady)
 	if count <= 0 || count > uint64(math.MaxInt32) {
 		// handle invalid or out-of-bounds data
@@ -125,7 +124,6 @@ func SetWorkerMetricsByWorkload(
 func getWorkerTflopsRequestLimit(
 	gpuStore map[types.NamespacedName]*tfv1.GPU,
 	pod *corev1.Pod,
-	gpuCapacityMap map[string]tfv1.Resource,
 	request tfv1.Resource,
 	limit tfv1.Resource,
 ) (float64, float64) {
@@ -141,35 +139,7 @@ func getWorkerTflopsRequestLimit(
 		return 0, 0
 	}
 
-	var gpuModel string
-	if gpuDeviceIDs, exists := pod.Annotations[constants.GPUDeviceIDsAnnotation]; exists && gpuDeviceIDs != "" {
-		gpuIDList := strings.Split(gpuDeviceIDs, ",")
-		sampleGPU := strings.TrimSpace(gpuIDList[0])
-		if sampleGPU != "" {
-			gpu, exists := gpuStore[types.NamespacedName{Name: sampleGPU}]
-			if !exists || gpu == nil {
-				log.V(5).Info("GPU not found in store for GPU allocation metrics", "gpuID", sampleGPU, "pod", pod.Name)
-				return 0, 0
-			}
-			gpuModel = gpu.Status.GPUModel
-		}
-	}
-
-	if gpuModel == "" {
-		ctrl.Log.Info("[warning] worker metrics calculation failed, compute-percent is set but gpu model not found, cannot derive TFLOPs", "pod", pod.Name, "namespace", pod.Namespace)
-		return 0, 0
-	}
-
-	gpuCap, found := gpuCapacityMap[gpuModel]
-	if !found || gpuCap.Tflops.IsZero() {
-		ctrl.Log.V(4).Info("compute-percent is set but gpu model capacity not found, cannot derive TFLOPs", "pod", pod.Name, "namespace", pod.Namespace, "gpuModel", gpuModel)
-		return 0, 0
-	}
-	capTflops := gpuCap.Tflops.AsApproximateFloat64()
-	if capTflops <= 0 {
-		return 0, 0
-	}
-
+	var capTflops float64
 	derive := func(res tfv1.Resource) float64 {
 		// Prefer explicit TFLOPs when present.
 		if !res.Tflops.IsZero() {
@@ -180,8 +150,44 @@ func getWorkerTflopsRequestLimit(
 		}
 		return res.ComputePercent.AsApproximateFloat64() * capTflops / 100
 	}
-
+	if gpuDeviceIDs, exists := pod.Annotations[constants.GPUDeviceIDsAnnotation]; exists && gpuDeviceIDs != "" {
+		gpuIDList := strings.Split(gpuDeviceIDs, ",")
+		sampleGPU := strings.TrimSpace(gpuIDList[0])
+		if sampleGPU != "" {
+			gpu, exists := gpuStore[types.NamespacedName{Name: sampleGPU}]
+			if !exists || gpu == nil {
+				log.V(5).Info("GPU not found in store for GPU allocation metrics", "gpuID", sampleGPU, "pod", pod.Name)
+				return 0, 0
+			}
+			if gpu.Status.Capacity == nil {
+				log.V(5).Info("GPU capacity not available", "gpuID", sampleGPU, "pod", pod.Name)
+				return 0, 0
+			}
+			capTflops = gpu.Status.Capacity.Tflops.AsApproximateFloat64()
+		}
+	}
 	return derive(request), derive(limit)
+}
+
+func getWorkerVramBytesLimit(gpuStore map[types.NamespacedName]*tfv1.GPU, pod *corev1.Pod, limit tfv1.Resource) float64 {
+	limitVram := limit.Vram.AsApproximateFloat64()
+	if limitVram > 0 {
+		return limitVram
+	}
+
+	if gpuDeviceIDs, exists := pod.Annotations[constants.GPUDeviceIDsAnnotation]; exists && gpuDeviceIDs != "" {
+		gpuIDList := strings.Split(gpuDeviceIDs, ",")
+		sampleGPU := strings.TrimSpace(gpuIDList[0])
+		if sampleGPU != "" {
+			gpu, exists := gpuStore[types.NamespacedName{Name: sampleGPU}]
+			if !exists || gpu == nil {
+				log.V(5).Info("GPU not found in store for GPU allocation metrics", "gpuID", sampleGPU, "pod", pod.Name)
+				return 0
+			}
+			return gpu.Status.Capacity.Vram.AsApproximateFloat64()
+		}
+	}
+	return 0
 }
 
 func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []string) {
