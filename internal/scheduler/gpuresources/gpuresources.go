@@ -354,22 +354,7 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 	// k8s will RemoveAll Pods, and run Filter for high priority pod,
 	// then Scheduler framework will reprieve victims one by one until filter returns unschedulable
 	if filterResult.(*GPUSchedulingStateData).IsPreemption {
-		allocRequest, err := state.Read(CycleStateAllocateRequest)
-		allocRequestParsed := allocRequest.(*tfv1.AllocRequest)
-		if err != nil {
-			return fwk.NewStatus(fwk.Error, err.Error())
-		}
-		podsToPreempt, ok := filterResult.(*GPUSchedulingStateData).PreemptPods.Load(nodeInfo.Node().Name)
-		if !ok {
-			return fwk.NewStatus(fwk.Unschedulable, "no pods to preempt")
-		}
-		podsToPreemptParsed := podsToPreempt.(sets.Set[types.NamespacedName])
-		err = s.allocator.CheckQuotaAndFilterSingleNodePreempt(
-			nodeInfo.Node().Name, allocRequestParsed, podsToPreemptParsed)
-		if err != nil {
-			return fwk.NewStatus(fwk.Unschedulable, err.Error())
-		}
-		return fwk.NewStatus(fwk.Success, "")
+		return s.validatePreemption(state, pod, nodeInfo)
 	}
 
 	nodeName := nodeInfo.Node().Name
@@ -387,10 +372,12 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 	return fwk.NewStatus(fwk.Success, "")
 }
 
-// checkNominatedPodsGPUReservation checks if there are higher priority TensorFusion pods
-// that have nominated this node and are waiting for GPU resources.
-// If the current pod has lower priority, it should not be scheduled to avoid stealing
-// resources that are essentially "reserved" for the nominated pod.
+// checkNominatedPodsGPUReservation checks if there are nominated TensorFusion pods
+// on this node and reserves their resources to prevent scheduling conflicts.
+// Strategy:
+// - Only **higher** priority nominated pods will have their resources reserved
+// - Equal or lower priority nominated pods are ignored (current pod has equal/higher right)
+// - Current pod can be scheduled if remaining resources (after reservation) are sufficient
 func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, schedulingData *GPUSchedulingStateData) *fwk.Status {
 	nominatedPodInfos := s.fh.NominatedPodsForNode(nodeName)
 	if len(nominatedPodInfos) == 0 {
@@ -439,21 +426,10 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 			nominatedPodPriority = *nominatedPod.Spec.Priority
 		}
 
-		// Reserve resources for nominated pods with higher priority
-		// For equal priority: also reserve to give nominated pods precedence (they won preemption)
-		if nominatedPodPriority < currentPodPriority {
+		// Only reserve resources for higher priority nominated pods
+		// Equal or lower priority pods should not block the current pod
+		if nominatedPodPriority <= currentPodPriority {
 			continue
-		}
-
-		// CRITICAL: If nominated pod has higher priority, ALWAYS block lower priority pods
-		// This prevents preempted pods from restarting and stealing resources
-		if nominatedPodPriority > currentPodPriority {
-			s.logger.Info("Blocking lower priority pod to protect nominated pod's resources",
-				"currentPod", pod.Name,
-				"currentPriority", currentPodPriority,
-				"nominatedPod", nominatedPod.Name,
-				"nominatedPriority", nominatedPodPriority,
-				"node", nodeName)
 		}
 
 		// Get the nominated pod's GPU resource requirements
@@ -464,33 +440,24 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 			continue
 		}
 
-		// CRITICAL FIX: For multi-GPU nominated pods with higher priority,
-		// block ALL lower priority pods on this node to prevent partial resource stealing
-		// This prevents the issue where victim pods restart and occupy 1 GPU while
-		// the 2-GPU nominated pod is waiting for both GPUs
-		if nominatedAllocReq.Count > 1 && nominatedPodPriority > currentPodPriority {
-			s.logger.Info("Blocking lower priority pod completely for multi-GPU nominated pod",
-				"currentPod", pod.Name,
-				"currentPriority", currentPodPriority,
-				"nominatedPod", nominatedPod.Name,
-				"nominatedPriority", nominatedPodPriority,
-				"nominatedGPUCount", nominatedAllocReq.Count,
-				"node", nodeName)
-			return fwk.NewStatus(fwk.Unschedulable,
-				fmt.Sprintf("Node reserved for multi-GPU higher priority nominated pod %s (requires %d GPUs)", nominatedPod.Name, nominatedAllocReq.Count))
-		}
+		// Reserve resources for higher/equal priority nominated pods
+		// Calculate total resources needed (multiply by GPU count for multi-GPU pods)
+		nominatedTflopsTotal := nominatedAllocReq.Request.Tflops.DeepCopy()
+		nominatedTflopsTotal.Mul(int64(nominatedAllocReq.Count))
+		reservedTflops.Add(nominatedTflopsTotal)
 
-		// Add to reserved resources
-		reservedTflops.Add(nominatedAllocReq.Request.Tflops)
-		reservedVram.Add(nominatedAllocReq.Request.Vram)
+		nominatedVramTotal := nominatedAllocReq.Request.Vram.DeepCopy()
+		nominatedVramTotal.Mul(int64(nominatedAllocReq.Count))
+		reservedVram.Add(nominatedVramTotal)
 
-		s.logger.V(4).Info("Reserving GPU resources for nominated pod",
+		s.logger.V(4).Info("Reserving GPU resources for higher priority nominated pod",
 			"currentPod", pod.Name,
 			"nominatedPod", nominatedPod.Name,
 			"nominatedPriority", nominatedPodPriority,
 			"currentPriority", currentPodPriority,
-			"reservedTflops", nominatedAllocReq.Request.Tflops.String(),
-			"reservedVram", nominatedAllocReq.Request.Vram.String())
+			"gpuCount", nominatedAllocReq.Count,
+			"reservedTflopsTotal", nominatedTflopsTotal.String(),
+			"reservedVramTotal", nominatedVramTotal.String())
 	}
 
 	// If no resources need to be reserved, allow scheduling
@@ -510,17 +477,26 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 		return fwk.NewStatus(fwk.Error, "failed to compose allocation request: "+err.Error())
 	}
 
+	// IMPORTANT: Calculate total resources needed for multi-GPU pods
+	currentTflopsTotal := currentAllocReq.Request.Tflops.DeepCopy()
+	currentTflopsTotal.Mul(int64(currentAllocReq.Count))
+	currentVramTotal := currentAllocReq.Request.Vram.DeepCopy()
+	currentVramTotal.Mul(int64(currentAllocReq.Count))
+
 	// Check if remaining resources are sufficient
-	if remainingTflops.Cmp(currentAllocReq.Request.Tflops) < 0 ||
-		remainingVram.Cmp(currentAllocReq.Request.Vram) < 0 {
-		s.logger.Info("GPU resources reserved for higher priority nominated pods",
+	if remainingTflops.Cmp(currentTflopsTotal) < 0 ||
+		remainingVram.Cmp(currentVramTotal) < 0 {
+		s.logger.Info("Insufficient GPU resources after reserving for nominated pods",
 			"currentPod", pod.Name,
 			"node", nodeName,
 			"currentPriority", currentPodPriority,
+			"totalAvailableTflops", totalAvailableTflops.String(),
+			"totalAvailableVram", totalAvailableVram.String(),
 			"reservedTflops", reservedTflops.String(),
 			"reservedVram", reservedVram.String(),
-			"requiredTflops", currentAllocReq.Request.Tflops.String(),
-			"requiredVram", currentAllocReq.Request.Vram.String())
+			"requiredTflops", currentTflopsTotal.String(),
+			"requiredVram", currentVramTotal.String(),
+			"currentGPUCount", currentAllocReq.Count)
 		return fwk.NewStatus(fwk.Unschedulable,
 			fmt.Sprintf("GPU resources reserved for higher priority nominated pods on node %s", nodeName))
 	}
@@ -937,4 +913,71 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 	}
 
 	return fwk.QueueSkip, nil
+}
+
+// validatePreemption validates GPU-specific preemption constraints in Filter phase.
+// This is called when Kubernetes DefaultPreemption plugin runs PostFilter, selects victims,
+// and then re-runs Filter with victims removed (via RemovePod) to verify feasibility.
+//
+// Key validations:
+// 1. For multi-GPU pods: ensure all victims are on the same node (same-node requirement)
+// 2. Verify released GPU resources (TFLOPs, VRAM) are sufficient
+// 3. Check GPU model/vendor/affinity constraints
+// 4. Validate quota constraints
+//
+// This prevents "futile preemption" where Kubernetes selects victims but the high-priority
+// pod still cannot schedule due to GPU-specific constraints.
+func (s *GPUFit) validatePreemption(state fwk.CycleState, pod *v1.Pod, nodeInfo fwk.NodeInfo) *fwk.Status {
+	nodeName := nodeInfo.Node().Name
+
+	// Get allocation request from CycleState
+	allocRequest, err := state.Read(CycleStateAllocateRequest)
+	if err != nil {
+		return fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to read alloc request: %v", err))
+	}
+	allocReq := allocRequest.(*tfv1.AllocRequest)
+
+	// Get scheduling result data
+	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
+	if err != nil {
+		return fwk.NewStatus(fwk.Error, fmt.Sprintf("failed to read scheduling result: %v", err))
+	}
+	schedData := filterResult.(*GPUSchedulingStateData)
+
+	// Get victims for this node
+	podsToPreempt, ok := schedData.PreemptPods.Load(nodeName)
+	if !ok {
+		return fwk.NewStatus(fwk.Unschedulable, "no pods to preempt on this node")
+	}
+	victims, ok := podsToPreempt.(sets.Set[types.NamespacedName])
+	if !ok {
+		return fwk.NewStatus(fwk.Error, "invalid type for preempt pods")
+	}
+
+	//  Verify that preemption will release sufficient GPU resources
+	// This calls CheckQuotaAndFilterSingleNodePreempt which:
+	// - Simulates releasing victim GPU resources
+	// - Applies GPU filters (resource, model, vendor, affinity, same-node)
+	// - Checks quota constraints
+	err = s.allocator.CheckQuotaAndFilterSingleNodePreempt(nodeName, allocReq, victims)
+	if err != nil {
+		s.logger.Info("GPU preemption validation failed",
+			"pod", pod.Name,
+			"namespace", pod.Namespace,
+			"node", nodeName,
+			"requiredGPUs", allocReq.Count,
+			"victims", victims.Len(),
+			"error", err.Error())
+		return fwk.NewStatus(fwk.Unschedulable, fmt.Sprintf("preemption insufficient: %v", err))
+	}
+
+	// Preemption validated successfully
+	s.logger.Info("GPU preemption validated successfully",
+		"pod", pod.Name,
+		"namespace", pod.Namespace,
+		"node", nodeName,
+		"requiredGPUs", allocReq.Count,
+		"victims", victims.Len())
+
+	return fwk.NewStatus(fwk.Success, "")
 }

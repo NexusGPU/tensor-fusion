@@ -38,7 +38,14 @@ var _ = Describe("AutoMigrationRules", func() {
 	// Create namespace once before all tests
 	BeforeEach(func() {
 		ctx = context.Background()
-		originalConfig = config.GetGlobalConfig()
+		// Save original config, initialize with empty config if not set to avoid warnings
+		cfg := config.GetGlobalConfig()
+		if cfg == nil || (cfg.AutoMigration == nil && cfg.MetricsTTL == "" && cfg.MetricsFormat == "") {
+			// Config is not initialized, use empty config
+			originalConfig = &config.GlobalConfig{}
+		} else {
+			originalConfig = cfg
+		}
 
 		// Mock pod - no k8s creation
 		pod = &corev1.Pod{
