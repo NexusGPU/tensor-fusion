@@ -392,6 +392,7 @@ func SetGPUAllocationMetrics(gpuStore map[types.NamespacedName]*tfv1.GPU, pod *c
 		GPUName:       gpuDeviceIDs,
 		GPUCount:      gpuCount,
 		Timestamp:     time.Now(),
+		podLabels:     pod.Labels,
 	}
 }
 
