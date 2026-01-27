@@ -46,10 +46,27 @@ jobs:
       image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v6
-      
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Build operator binaries
+        run: |
+          go mod vendor
+          bash ./scripts/patch-scheduler.sh
+          VERSION="${{ needs.release.outputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          GO_LDFLAGS="-X 'github.com/NexusGPU/tensor-fusion/internal/version.BuildVersion=${VERSION}'"
+          # Build for amd64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$GO_LDFLAGS" -a -o bin/manager-linux-amd64 ./cmd
+          # Build for arm64
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$GO_LDFLAGS" -a -o bin/manager-linux-arm64 ./cmd
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -80,9 +97,6 @@ jobs:
           file: dockerfile/operator.Dockerfile
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          no-cache: true
-          build-args: |
-            GO_LDFLAGS=-X 'github.com/NexusGPU/tensor-fusion/internal/version.BuildVersion=${{ needs.release.outputs.version }}'
 
   publish_hypervisor_image:
     needs:
@@ -93,10 +107,20 @@ jobs:
       image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v6
-      
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Build hypervisor binaries
+        run: |
+          # Build for amd64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o bin/hypervisor-linux-amd64 cmd/hypervisor/main.go
+          # Build for arm64
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -o bin/hypervisor-linux-arm64 cmd/hypervisor/main.go
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
@@ -126,6 +150,3 @@ jobs:
           file: dockerfile/hypervisor.Dockerfile
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          no-cache: true
-          build-args: |
-            GO_LDFLAGS=-X 'github.com/NexusGPU/tensor-fusion/internal/version.BuildVersion=${{ needs.release.outputs.version }}'
