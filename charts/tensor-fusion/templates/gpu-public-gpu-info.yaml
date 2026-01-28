@@ -709,36 +709,6 @@ data:
       fp16TFlops: 122.8
 
     # AMD Instinct MI Series (Datacenter GPUs)
-    - model: MI210
-      fullModelName: "AMD Instinct MI210"
-      vendor: AMD
-      costPerHour: 1.5
-      fp16TFlops: 362
-    
-    - model: MI250
-      fullModelName: "AMD Instinct MI250"
-      vendor: AMD
-      costPerHour: 2.0
-      fp16TFlops: 362
-    
-    - model: MI250X
-      fullModelName: "AMD Instinct MI250X"
-      vendor: AMD
-      costPerHour: 2.5
-      fp16TFlops: 383
-    
-    - model: MI300A
-      fullModelName: "AMD Instinct MI300A"
-      vendor: AMD
-      costPerHour: 3.5
-      fp16TFlops: 979
-    
-    - model: MI300X
-      fullModelName: "AMD Instinct MI300X"
-      vendor: AMD
-      costPerHour: 4.0
-      fp16TFlops: 1307
-    
     - model: MI325X
       fullModelName: "AMD Instinct MI325X"
       vendor: AMD
