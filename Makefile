@@ -1,7 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= tensorfusion/tensor-fusion-operator:latest
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION ?= 1.31.0
+ENVTEST_K8S_VERSION ?= 1.35.0
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -70,7 +70,7 @@ one-crd:
 	bash scripts/generate-crd.sh
 
 .PHONY: test
-test: manifests generate fmt vet vendor envtest ## Run tests.
+test: vendor manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m -cover -coverprofile cover.out -r --skip-file ./test/e2e
 
 .PHONY: check-coverage
@@ -86,15 +86,15 @@ check-coverage: ## Check if test coverage meets minimum threshold (default: 45%)
 test-with-coverage-check: test check-coverage ## Run tests and verify coverage meets threshold
 
 .PHONY: test-serial
-test-serial: manifests generate fmt vet vendor envtest ## Run tests.
+test-serial: vendor manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -timeout 12m -r --skip-file ./test/e2e
 
 .PHONY: ut
-ut: manifests generate vendor ## Run unit tests by make ut F=<focus-file>
+ut: vendor manifests generate ## Run unit tests by make ut F=<focus-file>
 	cd internal/controller && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m --focus-file $F && cd ../../
 
 .PHONY: ut-sched
-ut-sched: manifests generate vendor ## Run unit tests by make ut F=<focus-file>
+ut-sched: vendor manifests generate ## Run unit tests by make ut F=<focus-file>
 	cd test/sched && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m --focus-file $F && cd ../../
 
 .PHONY: test-e2e
@@ -120,11 +120,11 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet vendor ## Build manager binary.
+build: vendor manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
 .PHONY: run
-run: manifests generate fmt vet vendor ## Run a controller from your host.
+run: vendor manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
 
 .PHONY: build-provider
@@ -217,9 +217,9 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.5.0
-CONTROLLER_TOOLS_VERSION ?= v0.16.4
-ENVTEST_VERSION ?= release-0.19
+KUSTOMIZE_VERSION ?= v5.8.0
+CONTROLLER_TOOLS_VERSION ?= v0.20.0
+ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller-runtime | awk -F'[v.]' '{printf "release-%d.%d", $$2, $$3}')
 GOLANGCI_LINT_VERSION ?= v2.8.0
 
 .PHONY: kustomize
