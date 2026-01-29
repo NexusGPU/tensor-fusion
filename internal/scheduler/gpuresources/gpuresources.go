@@ -429,6 +429,11 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 		// Only reserve resources for higher priority nominated pods
 		// Equal or lower priority pods should not block the current pod
 		if nominatedPodPriority <= currentPodPriority {
+			s.logger.V(4).Info("Skipping equal/lower priority nominated pod (no reservation needed)",
+				"currentPod", pod.Name,
+				"nominatedPod", nominatedPod.Name,
+				"nominatedPriority", nominatedPodPriority,
+				"currentPriority", currentPodPriority)
 			continue
 		}
 
@@ -440,9 +445,18 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 			continue
 		}
 
-		// Reserve resources for higher/equal priority nominated pods
+		// Reserve resources for higher priority nominated pods
 		// Calculate total resources needed (multiply by GPU count for multi-GPU pods)
-		nominatedTflopsTotal := nominatedAllocReq.Request.Tflops.DeepCopy()
+		// Handle both Tflops and ComputePercent (use GPU capacity to convert)
+		var nominatedTflopsPerGPU *resource.Quantity
+		if len(availableGPUs) > 0 && availableGPUs[0].Status.Capacity != nil {
+			nominatedTflopsPerGPU = utils.GetActualTflops(availableGPUs[0].Status.Capacity.Tflops, nominatedAllocReq.Request)
+		}
+		if nominatedTflopsPerGPU == nil {
+			// Fallback: use Tflops directly (may be 0 if ComputePercent used without capacity)
+			nominatedTflopsPerGPU = &nominatedAllocReq.Request.Tflops
+		}
+		nominatedTflopsTotal := nominatedTflopsPerGPU.DeepCopy()
 		nominatedTflopsTotal.Mul(int64(nominatedAllocReq.Count))
 		reservedTflops.Add(nominatedTflopsTotal)
 
@@ -477,8 +491,17 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 		return fwk.NewStatus(fwk.Error, "failed to compose allocation request: "+err.Error())
 	}
 
+	// Handle both Tflops and ComputePercent (use GPU capacity to convert)
 	// IMPORTANT: Calculate total resources needed for multi-GPU pods
-	currentTflopsTotal := currentAllocReq.Request.Tflops.DeepCopy()
+	var currentTflopsPerGPU *resource.Quantity
+	if len(availableGPUs) > 0 && availableGPUs[0].Status.Capacity != nil {
+		currentTflopsPerGPU = utils.GetActualTflops(availableGPUs[0].Status.Capacity.Tflops, currentAllocReq.Request)
+	}
+	if currentTflopsPerGPU == nil {
+		currentTflopsPerGPU = &currentAllocReq.Request.Tflops
+	}
+
+	currentTflopsTotal := currentTflopsPerGPU.DeepCopy()
 	currentTflopsTotal.Mul(int64(currentAllocReq.Count))
 	currentVramTotal := currentAllocReq.Request.Vram.DeepCopy()
 	currentVramTotal.Mul(int64(currentAllocReq.Count))
@@ -840,14 +863,33 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 
 	oldGPU, err := convertToGPU(oldObj)
 	if err != nil {
-		logger.V(5).Info("Failed to convert oldObj to GPU, skip", "error", err)
+		logger.V(5).Info("Failed to convert oldObj to GPU, skip", "pod", klog.KObj(pod), "error", err)
 		return fwk.QueueSkip, nil
 	}
 
 	newGPU, err := convertToGPU(newObj)
 	if err != nil {
-		logger.V(5).Info("Failed to convert newObj to GPU, skip", "error", err)
+		logger.V(5).Info("Failed to convert newObj to GPU, skip", "pod", klog.KObj(pod), "error", err)
 		return fwk.QueueSkip, nil
+	}
+
+	// CRITICAL: For nominated pods (pods that won preemption), immediately requeue
+	// when ANY GPU CR update happens on their nominated node.
+	// This check MUST be BEFORE the resource increase check because:
+	// 1. In preemption scenarios, another pod may have already allocated resources
+	//    before the victim's resources are released
+	// 2. This causes the net resource change to be zero or negative
+	// 3. But the nominated pod should still be requeued because the preemption
+	//    has been decided and resources will eventually be available
+	if pod.Status.NominatedNodeName != "" && newGPU != nil {
+		gpuNodeName := newGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if gpuNodeName == pod.Status.NominatedNodeName {
+			logger.Info("GPU CR updated on nominated node, immediately requeue preempting pod",
+				"pod", klog.KObj(pod),
+				"nominatedNode", pod.Status.NominatedNodeName,
+				"gpu", newGPU.Name)
+			return fwk.Queue, nil
+		}
 	}
 
 	// Calculate resource increase
@@ -870,25 +912,12 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 
 	// If resource decreased, skip
 	if increaseTflops.Cmp(resource.MustParse("0")) <= 0 && increaseVram.Cmp(resource.MustParse("0")) <= 0 {
+		logger.V(4).Info("Resource decreased or unchanged, skip",
+			"pod", klog.KObj(pod),
+			"increaseTflops", increaseTflops.String(),
+			"increaseVram", increaseVram.String())
 		return fwk.QueueSkip, nil
 	}
-
-	// OPTIMIZATION: For nominated pods (pods that won preemption), immediately requeue
-	// when any GPU resource becomes available on their nominated node.
-	// This significantly reduces the delay after preemption.
-	if pod.Status.NominatedNodeName != "" && newGPU != nil {
-		gpuNodeName := newGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
-		if gpuNodeName == pod.Status.NominatedNodeName {
-			logger.Info("GPU resource released on nominated node, immediately requeue preempting pod",
-				"pod", klog.KObj(pod),
-				"nominatedNode", pod.Status.NominatedNodeName,
-				"gpu", newGPU.Name,
-				"increaseTflops", increaseTflops.String(),
-				"increaseVram", increaseVram.String())
-			return fwk.Queue, nil
-		}
-	}
-
 	// Compose allocation request for the pod passed in by scheduler framework
 	allocRequest, _, err := utils.ComposeAllocationRequest(s.ctx, pod)
 	if err != nil {
@@ -897,10 +926,23 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 		return fwk.QueueSkip, nil
 	}
 
-	// Calculate total request for this pod (multiply by count)
-	podTotalTflops := allocRequest.Request.Tflops
-	podTotalVram := allocRequest.Request.Vram
+	// Calculate total request for this pod (multiply by count for multi-GPU)
+	// Handle both TFLOPs and ComputePercent (use GPU capacity to convert percent to absolute value)
+	var gpuCapacity resource.Quantity
+	if newGPU.Status.Capacity != nil {
+		gpuCapacity = newGPU.Status.Capacity.Tflops
+	}
+	actualTflops := utils.GetActualTflops(gpuCapacity, allocRequest.Request)
+	if actualTflops == nil {
+		// Cannot determine TFLOPs requirement (e.g., ComputePercent used but GPU capacity unavailable)
+		logger.V(5).Info("Cannot determine pod TFLOPs requirement, skip", "pod", klog.KObj(pod))
+		return fwk.QueueSkip, nil
+	}
+	podTotalTflops := actualTflops.DeepCopy()
+	podTotalTflops.Mul(int64(allocRequest.Count))
 
+	podTotalVram := allocRequest.Request.Vram.DeepCopy()
+	podTotalVram.Mul(int64(allocRequest.Count))
 	// Queue if resource increase >= pod's request
 	if increaseTflops.Cmp(podTotalTflops) >= 0 && increaseVram.Cmp(podTotalVram) >= 0 {
 		logger.V(4).Info("GPU resource increase sufficient for pod, requeue unscheduled pod",
@@ -954,30 +996,51 @@ func (s *GPUFit) validatePreemption(state fwk.CycleState, pod *v1.Pod, nodeInfo 
 		return fwk.NewStatus(fwk.Error, "invalid type for preempt pods")
 	}
 
+	// When PreemptClusterWide is explicitly false, only use victims in the preemptor's namespace for subsequent checks.
+	victimsToUse := victims
+	if s.cfg != nil && s.cfg.PreemptClusterWide != nil && !*s.cfg.PreemptClusterWide {
+		victimsToUse = sets.New[types.NamespacedName]()
+		for v := range victims {
+			if v.Namespace == pod.Namespace {
+				victimsToUse.Insert(v)
+			}
+		}
+		if victimsToUse.Len() == 0 {
+			s.logger.Info("GPU preemption: no same-namespace victims on node",
+				"pod", klog.KObj(pod),
+				"node", nodeName)
+			return fwk.NewStatus(fwk.Unschedulable, "no victims in preemptor namespace on this node")
+		}
+	}
+
+	victimList := victims.UnsortedList()
 	//  Verify that preemption will release sufficient GPU resources
 	// This calls CheckQuotaAndFilterSingleNodePreempt which:
 	// - Simulates releasing victim GPU resources
 	// - Applies GPU filters (resource, model, vendor, affinity, same-node)
 	// - Checks quota constraints
-	err = s.allocator.CheckQuotaAndFilterSingleNodePreempt(nodeName, allocReq, victims)
+	err = s.allocator.CheckQuotaAndFilterSingleNodePreempt(nodeName, allocReq, victimsToUse)
 	if err != nil {
 		s.logger.Info("GPU preemption validation failed",
 			"pod", pod.Name,
 			"namespace", pod.Namespace,
 			"node", nodeName,
 			"requiredGPUs", allocReq.Count,
-			"victims", victims.Len(),
+			"victimsCount", victims.Len(),
+			"victimList", victimList,
 			"error", err.Error())
 		return fwk.NewStatus(fwk.Unschedulable, fmt.Sprintf("preemption insufficient: %v", err))
 	}
 
 	// Preemption validated successfully
+
 	s.logger.Info("GPU preemption validated successfully",
 		"pod", pod.Name,
 		"namespace", pod.Namespace,
 		"node", nodeName,
 		"requiredGPUs", allocReq.Count,
-		"victims", victims.Len())
+		"victimsCount", len(victimList),
+		"victimPods", victimList)
 
 	return fwk.NewStatus(fwk.Success, "")
 }
