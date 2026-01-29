@@ -594,11 +594,14 @@ func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *co
 }
 
 func removeNativeGPULimits(container *corev1.Container) {
-	if container.Resources.Requests != nil {
-		delete(container.Resources.Requests, constants.NvidiaGPUKey)
-	}
-	if container.Resources.Limits != nil {
-		delete(container.Resources.Limits, constants.NvidiaGPUKey)
+	resourceNames := utils.GetGPUResourceNames()
+	for _, resourceName := range resourceNames {
+		if container.Resources.Requests != nil {
+			delete(container.Resources.Requests, resourceName)
+		}
+		if container.Resources.Limits != nil {
+			delete(container.Resources.Limits, resourceName)
+		}
 	}
 }
 

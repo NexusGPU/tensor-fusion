@@ -1,0 +1,201 @@
+# Example ProviderConfig for NVIDIA GPUs
+# This replaces the centralized gpu-info ConfigMap with vendor-specific configuration
+apiVersion: tensor-fusion.ai/v1
+kind: ProviderConfig
+metadata:
+  name: nvidia-provider
+spec:
+  # Vendor name identifies which hardware this config applies to
+  vendor: NVIDIA
+
+  # Container images for TensorFusion components
+  # These vendor-specific images contain the appropriate drivers and runtimes
+  images:
+    middleware: tensorfusion/tensor-fusion-operator:latest
+    remoteClient: tensorfusion/tensor-fusion-client:latest
+    remoteWorker: tensorfusion/tensor-fusion-worker:latest
+
+  # Resource names that should be removed from pod specs when TensorFusion manages GPUs
+  # These are the standard Kubernetes resource names used by device plugins
+  inUseResourceNames:
+    - "nvidia.com/gpu"
+    - "nvidia.com/mig-1g.5gb"
+    - "nvidia.com/mig-2g.10gb"
+    - "nvidia.com/mig-3g.20gb"
+    - "nvidia.com/mig-4g.20gb"
+    - "nvidia.com/mig-7g.40gb"
+
+  # Device plugin detection settings
+  devicePluginDetection:
+    resourceNamePrefixes:
+      - "nvidia.com/gpu"
+      - "nvidia.com/mig"
+    usedBySystemName: "nvidia-device-plugin"
+
+  # Hardware metadata for GPU models
+  # This information is used for scheduling, pricing, and resource allocation
+  hardwareMetadata:
+    # Example: NVIDIA A100 with MIG support
+    - model: A100_SXM_80G
+      fullModelName: "NVIDIA A100-SXM4-80GB"
+      costPerHour: "1.89"
+      fp16TFlops: "312"
+      maxPartitions: 7
+      maxPlacementSlots: 8
+      # References to virtualization templates defined below
+      partitionTemplateRefs:
+        - mig-1g-10gb
+        - mig-2g-20gb
+        - mig-3g-40gb
+        - mig-7g-80gb
+
+    # Example: NVIDIA H100
+    - model: H100_SXM
+      fullModelName: "NVIDIA H100 80GB HBM3"
+      costPerHour: "2.99"
+      fp16TFlops: "989"
+      maxPartitions: 7
+      maxPlacementSlots: 8
+
+    # Example: Consumer GPU without MIG
+    - model: RTX4090
+      fullModelName: "NVIDIA GeForce RTX 4090"
+      costPerHour: "0.3"
+      fp16TFlops: "165.16"
+
+  # Virtualization templates for GPU partitioning (e.g., MIG profiles)
+  # Templates can be referenced by multiple hardware models
+  virtualizationTemplates:
+    - id: mig-1g-10gb
+      name: "1g.10gb"
+      memoryGigabytes: 10
+      computePercent: "14.2857"
+      description: "1/7 GPU slice with 10GB memory"
+      maxInstances: 7
+      placementLimit: [0, 1, 2, 3, 4, 5, 6]
+      placementOffset: 1
+      isolationGroupSharing: "exclusive"
+
+    - id: mig-2g-20gb
+      name: "2g.20gb"
+      memoryGigabytes: 20
+      computePercent: "28.5714"
+      description: "2/7 GPU slice with 20GB memory"
+      maxInstances: 3
+      placementLimit: [0, 2, 4]
+      placementOffset: 2
+      isolationGroupSharing: "exclusive"
+
+    - id: mig-3g-40gb
+      name: "3g.40gb"
+      memoryGigabytes: 40
+      computePercent: "42.8571"
+      description: "3/7 GPU slice with 40GB memory"
+      maxInstances: 2
+      placementLimit: [0, 4]
+      placementOffset: 4
+      isolationGroupSharing: "exclusive"
+
+    - id: mig-7g-80gb
+      name: "7g.80gb"
+      memoryGigabytes: 80
+      computePercent: "100"
+      description: "Full GPU with 80GB memory"
+      maxInstances: 1
+      placementLimit: [0]
+      placementOffset: 8
+      isolationGroupSharing: "exclusive"
+---
+# Example ProviderConfig for Ascend NPU
+apiVersion: tensor-fusion.ai/v1
+kind: ProviderConfig
+metadata:
+  name: ascend-provider
+spec:
+  vendor: Ascend
+
+  images:
+    middleware: tensorfusion/tensor-fusion-ascend-operator:latest
+    remoteClient: tensorfusion/tensor-fusion-ascend-client:latest
+    remoteWorker: tensorfusion/tensor-fusion-ascend-worker:latest
+
+  inUseResourceNames:
+    - "huawei.com/Ascend910"
+    - "huawei.com/Ascend310"
+    - "huawei.com/npu"
+
+  hardwareMetadata:
+    - model: Ascend910B
+      fullModelName: "Huawei Ascend 910B"
+      costPerHour: "2.0"
+      fp16TFlops: "320"
+      maxPartitions: 4
+      maxIsolationGroups: 4
+      totalExtendedResources:
+        AICORE: 8
+        AICPU: 7
+        VPC: 12
+        VENC: 3
+        VDEC: 12
+        JPEGD: 16
+        JPEGE: 8
+      partitionTemplateRefs:
+        - ascend-vir01
+        - ascend-vir02
+        - ascend-vir04
+
+  virtualizationTemplates:
+    # vir01: 1/8 NPU slice with time-sharing in vGroup
+    - id: ascend-vir01
+      name: "vir01"
+      memoryGigabytes: 8
+      computePercent: "12.5"
+      description: "1/8 NPU slice (vir01)"
+      maxInstances: 8
+      isolationGroupSharing: "shared"
+      maxPartitionsPerIsolationGroup: 2
+      isolationGroupSlots: 2
+      extendedResources:
+        AICORE: 1
+        AICPU: 1
+        VPC: 1
+        VENC: 0
+        VDEC: 1
+        JPEGD: 2
+        JPEGE: 1
+
+    # vir02: 1/4 NPU slice with exclusive vGroup
+    - id: ascend-vir02
+      name: "vir02"
+      memoryGigabytes: 16
+      computePercent: "25"
+      description: "1/4 NPU slice (vir02)"
+      maxInstances: 4
+      isolationGroupSharing: "exclusive"
+      isolationGroupSlots: 2
+      extendedResources:
+        AICORE: 2
+        AICPU: 2
+        VPC: 3
+        VENC: 1
+        VDEC: 3
+        JPEGD: 4
+        JPEGE: 2
+
+    # vir04: 1/2 NPU slice with exclusive vGroup
+    - id: ascend-vir04
+      name: "vir04"
+      memoryGigabytes: 32
+      computePercent: "50"
+      description: "1/2 NPU slice (vir04)"
+      maxInstances: 2
+      isolationGroupSharing: "exclusive"
+      isolationGroupSlots: 4
+      extendedResources:
+        AICORE: 4
+        AICPU: 4
+        VPC: 6
+        VENC: 2
+        VDEC: 6
+        JPEGD: 8
+        JPEGE: 4

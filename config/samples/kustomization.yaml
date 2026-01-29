@@ -10,4 +10,5 @@ resources:
 - v1_workloadprofile.yaml
 - v1_tensorfusionworkload.yaml
 - v1_gpunodeclaim.yaml
+- v1_providerconfig.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

@@ -37,6 +37,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/indexallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	internalcache "k8s.io/kubernetes/pkg/scheduler/backend/cache"
@@ -53,6 +54,22 @@ var _ = Describe("GPUFit Plugin", func() {
 		ctx            context.Context
 		cancel         context.CancelFunc
 	)
+
+	providerMgr := provider.NewManager(nil)
+	nvidiaProvider := &tfv1.ProviderConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvidia-provider",
+		},
+		Spec: tfv1.ProviderConfigSpec{
+			Vendor: "NVIDIA",
+			Images: tfv1.ProviderImages{
+				Middleware: "nvidia-hypervisor:latest",
+			},
+			InUseResourceNames: []string{"nvidia.com/gpu"},
+		},
+	}
+	providerMgr.UpdateProvider(nvidiaProvider)
+	provider.SetGlobalManagerForTesting(providerMgr)
 
 	// Helper functions
 	makeNonTensorFusionPod := func(name string, gpuCount int) *v1.Pod {

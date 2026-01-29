@@ -350,6 +350,10 @@ func (b *SingleNodeBackend) waitForProcess(workerUID string, cmd *exec.Cmd) {
 	worker, exists := b.workers[workerUID]
 	if !exists {
 		b.mu.Unlock()
+		// Worker was removed, clean up process state
+		b.processesMu.Lock()
+		delete(b.processes, workerUID)
+		b.processesMu.Unlock()
 		return
 	}
 
@@ -360,10 +364,7 @@ func (b *SingleNodeBackend) waitForProcess(workerUID string, cmd *exec.Cmd) {
 	}
 	b.mu.Unlock()
 
-	// Update file state
-	_ = b.fileState.AddWorker(worker)
-
-	// Check if worker still exists (not removed)
+	// Check again if worker still exists before updating file state and retry state
 	b.mu.RLock()
 	_, stillExists := b.workers[workerUID]
 	b.mu.RUnlock()
@@ -376,6 +377,9 @@ func (b *SingleNodeBackend) waitForProcess(workerUID string, cmd *exec.Cmd) {
 		klog.Infof("Process for removed worker %s exited, cleaning up", workerUID)
 		return
 	}
+
+	// Update file state only if worker still exists
+	_ = b.fileState.AddWorker(worker)
 
 	// Update retry state
 	ps.mu.Lock()
@@ -391,6 +395,11 @@ func (b *SingleNodeBackend) waitForProcess(workerUID string, cmd *exec.Cmd) {
 }
 
 func (b *SingleNodeBackend) StopWorker(workerUID string) error {
+	// First remove from workers map to prevent waitForProcess from updating retry state
+	b.mu.Lock()
+	delete(b.workers, workerUID)
+	b.mu.Unlock()
+
 	// Stop process if running
 	b.processesMu.Lock()
 	ps, exists := b.processes[workerUID]
@@ -411,10 +420,6 @@ func (b *SingleNodeBackend) StopWorker(workerUID string) error {
 	if err := b.fileState.RemoveWorker(workerUID); err != nil {
 		return err
 	}
-
-	b.mu.Lock()
-	delete(b.workers, workerUID)
-	b.mu.Unlock()
 
 	klog.Infof("Worker stopped: %s", workerUID)
 	return nil

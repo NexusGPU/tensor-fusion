@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
@@ -291,29 +293,36 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 		}
 		workloadProfile.Spec.GPUCount = uint32(val)
 	} else if workloadProfile.Spec.GPUCount == 0 {
-
 		// Map to track GPU count per container: containerName -> gpuCount
 		containerGPUCounts := make(map[string]int)
 		injectContainerNames := []string{}
 
+		// Check all GPU resource names from all providers
+		resourceNames := utils.GetGPUResourceNames()
 		for _, container := range pod.Spec.Containers {
-			if quantity, ok := container.Resources.Limits[constants.NvidiaGPUKey]; ok {
-				gpuNumber, err := strconv.Atoi(quantity.String())
-				if err != nil || gpuNumber <= 0 {
-					ctrl.Log.Error(err, "unrecognized nvidia.com/gpu in resources, not a valid number", "pod", pod.Name, "container", container.Name)
-				} else {
-					// Track GPU count per container
-					containerGPUCounts[container.Name] = gpuNumber
-					// Accumulate GPU count from all containers
-					workloadProfile.Spec.GPUCount += uint32(gpuNumber)
-					// For seamless migration with only one tensor-fusion.ai/enabled label
-					// and one tensor-fusion.ai/vram-limit annotation, convert this to 100% computing-percent
-					if !isMigratedFromContainerLimits {
-						workloadProfile.Spec.Resources.Limits.ComputePercent = resource.MustParse("100")
-						isMigratedFromContainerLimits = true
+			for _, resourceName := range resourceNames {
+				if quantity, ok := container.Resources.Limits[resourceName]; ok {
+					gpuNumber, err := strconv.Atoi(quantity.String())
+					if err != nil || gpuNumber <= 0 || gpuNumber > int(math.MaxUint32) {
+						ctrl.Log.Error(err, "unrecognized GPU resource in limits, not a valid number", "pod", pod.Name, "container", container.Name, "resource", resourceName)
+					} else {
+						// Track GPU count per container
+						containerGPUCounts[container.Name] = gpuNumber
+						// Accumulate GPU count from all containers
+						workloadProfile.Spec.GPUCount += uint32(gpuNumber)
+						// For seamless migration with only one tensor-fusion.ai/enabled label
+						// and one tensor-fusion.ai/vram-limit annotation, convert this to 100% computing-percent
+						if !isMigratedFromContainerLimits {
+							workloadProfile.Spec.Resources.Limits.ComputePercent = resource.MustParse("100")
+							isMigratedFromContainerLimits = true
+						}
+						// Collect container names for inject annotation
+						injectContainerNames = append(injectContainerNames, container.Name)
+						// Set GPU vendor from resource name
+						if vendor := getVendorFromResourceName(resourceName); vendor != "" && workloadProfile.Spec.GPUVendor == "" {
+							workloadProfile.Spec.GPUVendor = vendor
+						}
 					}
-					// Collect container names for inject annotation
-					injectContainerNames = append(injectContainerNames, container.Name)
 				}
 			}
 		}
@@ -537,4 +546,14 @@ func ParseContainerGPUCounts(pod *corev1.Pod) (map[string]int, error) {
 	}
 
 	return containerGPUCounts, nil
+}
+
+// getVendorFromResourceName finds the vendor that owns a given resource name
+func getVendorFromResourceName(resourceName corev1.ResourceName) string {
+	mgr := provider.GetManager()
+	if mgr == nil {
+		return ""
+	}
+
+	return mgr.GetVendorFromResourceName(resourceName)
 }

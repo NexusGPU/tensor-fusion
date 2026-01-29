@@ -38,6 +38,7 @@ type WorkerInfo struct {
 }
 
 // WorkerRunningInfo is the information for the worker running on the host
+// +k8s:deepcopy-gen=true
 type WorkerRunningInfo struct {
 	Type       WorkerRuntimeType `json:"type"`
 	Executable string            `json:"executable"`

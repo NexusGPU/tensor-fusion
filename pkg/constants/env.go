@@ -52,11 +52,10 @@ const (
 )
 
 const (
-	TFContainerNameClient        = "inject-lib"
-	TFContainerNameWorker        = "tensorfusion-worker"
-	TFContainerNameHypervisor    = "tensorfusion-hypervisor"
-	TFContainerNameNodeDiscovery = "tensorfusion-node-discovery"
-	TFContainerVector            = "vector"
+	TFContainerNameClient     = "inject-lib"
+	TFContainerNameWorker     = "tensorfusion-worker"
+	TFContainerNameHypervisor = "tensorfusion-hypervisor"
+	TFContainerVector         = "vector"
 
 	// Init container names
 	TFInitContainerNameToolkitValidation = "toolkit-validation"
@@ -170,12 +169,6 @@ const (
 	// Hardware vendor and accelerator library path for multi-vendor support
 	TFHardwareVendorEnv     = "TF_HARDWARE_VENDOR"
 	TFAcceleratorLibPathEnv = "TF_ACCELERATOR_LIB_PATH"
-)
-
-// Node discovery related envs
-const (
-	NodeDiscoveryReportGPUNodeEnvName = "NODE_DISCOVERY_REPORT_GPU_NODE"
-	NodeDiscoveryHostNameEnv          = "HOSTNAME"
 )
 
 const (

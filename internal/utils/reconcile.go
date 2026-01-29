@@ -12,10 +12,11 @@ import (
 	"strings"
 	"time"
 
-	constants "github.com/NexusGPU/tensor-fusion/pkg/constants"
-
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/provider"
+	constants "github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -265,16 +266,36 @@ func GetInitialGPUNodeSelector() []string {
 	return selectors
 }
 
-var GPUResourceNames = []corev1.ResourceName{
-	"nvidia.com/gpu",
-	"amd.com/gpu",
+// GetGPUResourceNames returns all in-use GPU resource names from Provider Manager
+func GetGPUResourceNames() []corev1.ResourceName {
+	if mgr := provider.GetManager(); mgr != nil {
+		return mgr.GetAllInUseResourceNames()
+	}
+	return nil
 }
 
 func containsGPUResources(res corev1.ResourceList) bool {
-	for _, gpuResourceName := range GPUResourceNames {
-		quantity, ok := res[gpuResourceName]
-		if ok && quantity.Sign() > 0 {
-			return true
+	if res == nil {
+		return false
+	}
+
+	// Get GPU resource names from provider manager, with fallback to common names
+	gpuResourceNames := GetGPUResourceNames()
+	if len(gpuResourceNames) == 0 {
+		// Fallback to common GPU resource names when provider manager is not initialized
+		gpuResourceNames = []corev1.ResourceName{
+			"nvidia.com/gpu",
+			"amd.com/gpu",
+		}
+	}
+
+	// Check if any GPU resource exists with positive quantity
+	for _, gpuResourceName := range gpuResourceNames {
+		if qty, ok := res[gpuResourceName]; ok {
+			// Check if quantity is positive (greater than zero)
+			if qty.Cmp(resource.MustParse("0")) > 0 {
+				return true
+			}
 		}
 	}
 	return false

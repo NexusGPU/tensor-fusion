@@ -220,6 +220,7 @@ rules:
   - gpupools
   - gpuresourcequotas
   - gpus
+  - providerconfigs
   - schedulingconfigtemplates
   - tensorfusionclusters
   - tensorfusionconnections

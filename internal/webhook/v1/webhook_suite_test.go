@@ -30,6 +30,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -120,6 +121,22 @@ var _ = BeforeSuite(func() {
 		Spec: *config.MockGPUPoolSpec,
 	}
 	Expect(k8sClient.Create(ctx, pool)).To(Succeed())
+
+	// Initialize provider manager with NVIDIA provider for tests
+	providerMgr := provider.InitGlobalManager(k8sClient)
+	nvidiaProvider := &tfv1.ProviderConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvidia-provider",
+		},
+		Spec: tfv1.ProviderConfigSpec{
+			Vendor: "NVIDIA",
+			Images: tfv1.ProviderImages{
+				Middleware: "test-middleware:latest",
+			},
+			InUseResourceNames: []string{"nvidia.com/gpu"},
+		},
+	}
+	providerMgr.UpdateProvider(nvidiaProvider)
 
 	// start webhook server using Manager.
 	webhookInstallOptions := &testEnv.WebhookInstallOptions

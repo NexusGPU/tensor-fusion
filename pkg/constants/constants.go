@@ -58,12 +58,11 @@ var (
 	// used by TF connection, for matching the related connections when worker Pod state changed
 	LabelWorkerName = Domain + "/worker-name"
 
-	ComponentClient        = "client"
-	ComponentWorker        = "worker"
-	ComponentHypervisor    = "hypervisor"
-	ComponentNodeDiscovery = "node-discovery"
-	ComponentOperator      = "operator"
-	ComponentDriverProbe   = "driver-probe"
+	ComponentClient      = "client"
+	ComponentWorker      = "worker"
+	ComponentHypervisor  = "hypervisor"
+	ComponentOperator    = "operator"
+	ComponentDriverProbe = "driver-probe"
 
 	GPUNodePoolIdentifierLabelPrefix = Domain + "/pool-"
 	GPUNodePoolIdentifierLabelFormat = Domain + "/pool-%s"
