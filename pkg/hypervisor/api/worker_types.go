@@ -31,8 +31,33 @@ type WorkerInfo struct {
 	Labels      map[string]string
 	Annotations map[string]string
 
+	// Worker Running Info (optional, for non kubernetes workers)
+	WorkerRunningInfo *WorkerRunningInfo
+
 	DeletedAt int64
 }
+
+// WorkerRunningInfo is the information for the worker running on the host
+type WorkerRunningInfo struct {
+	Type       WorkerRuntimeType `json:"type"`
+	Executable string            `json:"executable"`
+	Args       []string          `json:"args"`
+	Env        map[string]string `json:"env"`
+	WorkingDir string            `json:"workingDir"`
+
+	Restarts  int    `json:"restarts"`
+	PID       uint32 `json:"pid"`
+	IsRunning bool   `json:"isRunning"`
+	ExitCode  int    `json:"exitCode"`
+}
+
+type WorkerRuntimeType string
+
+const (
+	WorkerRuntimeTypeProcess    WorkerRuntimeType = "process"
+	WorkerRuntimeTypeSystemd    WorkerRuntimeType = "systemd"
+	WorkerRuntimeTypeContainerd WorkerRuntimeType = "containerd"
+)
 
 func (w *WorkerInfo) FilterValue() string {
 	return w.WorkerUID + " " + w.WorkerName + " " + w.Namespace
