@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -477,6 +478,220 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				// without Kubernetes environment variables
 				Expect(processInfo.HostPID).To(Equal(uint32(12345)))
 				Expect(processInfo.GuestPID).To(Equal(uint32(12345)))
+			})
+
+			It("should start and manage process worker", func() {
+				// Create a worker with process runtime info
+				worker := &api.WorkerInfo{
+					WorkerUID:        testWorkerUID1,
+					AllocatedDevices: []string{},
+					IsolationMode:    tfv1.IsolationModeSoft,
+					WorkerRunningInfo: &api.WorkerRunningInfo{
+						Type:       api.WorkerRuntimeTypeProcess,
+						Executable: "sleep",
+						Args:       []string{"10"},
+						Env:        map[string]string{"TEST_ENV": "test_value"},
+					},
+				}
+
+				err := backend.StartWorker(worker)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Wait for process to start
+				Eventually(func() bool {
+					workers := backend.ListWorkers()
+					for _, w := range workers {
+						if w.WorkerUID == testWorkerUID1 && w.WorkerRunningInfo != nil {
+							return w.WorkerRunningInfo.IsRunning && w.WorkerRunningInfo.PID > 0
+						}
+					}
+					return false
+				}, 5*time.Second).Should(BeTrue(), "Process should be running")
+
+				// Verify process is actually running
+				workers := backend.ListWorkers()
+				var foundWorker *api.WorkerInfo
+				for _, w := range workers {
+					if w.WorkerUID == testWorkerUID1 {
+						foundWorker = w
+						break
+					}
+				}
+				Expect(foundWorker).NotTo(BeNil())
+				Expect(foundWorker.WorkerRunningInfo).NotTo(BeNil())
+				Expect(foundWorker.WorkerRunningInfo.IsRunning).To(BeTrue())
+				Expect(foundWorker.WorkerRunningInfo.PID).To(BeNumerically(">", 0))
+
+				// Verify process exists
+				proc, err := os.FindProcess(int(foundWorker.WorkerRunningInfo.PID))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(proc).NotTo(BeNil())
+			})
+
+			It("should stop process worker", func() {
+				// Create and start a worker with process runtime info
+				worker := &api.WorkerInfo{
+					WorkerUID:        testWorkerUID1,
+					AllocatedDevices: []string{},
+					IsolationMode:    tfv1.IsolationModeSoft,
+					WorkerRunningInfo: &api.WorkerRunningInfo{
+						Type:       api.WorkerRuntimeTypeProcess,
+						Executable: "sleep",
+						Args:       []string{"30"},
+					},
+				}
+
+				err := backend.StartWorker(worker)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Wait for process to start
+				var pid uint32
+				Eventually(func() bool {
+					workers := backend.ListWorkers()
+					for _, w := range workers {
+						if w.WorkerUID == testWorkerUID1 && w.WorkerRunningInfo != nil && w.WorkerRunningInfo.IsRunning {
+							pid = w.WorkerRunningInfo.PID
+							return pid > 0
+						}
+					}
+					return false
+				}, 5*time.Second).Should(BeTrue(), "Process should be running")
+
+				// Stop the worker
+				err = backend.StopWorker(testWorkerUID1)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Wait for process to be killed
+				Eventually(func() bool {
+					proc, err := os.FindProcess(int(pid))
+					if err != nil {
+						return true // Process not found, already killed
+					}
+					// Try to signal the process to check if it's alive
+					err = proc.Signal(syscall.Signal(0))
+					return err != nil // If signal fails, process is dead
+				}, 5*time.Second).Should(BeTrue(), "Process should be killed")
+
+				// Verify worker is removed
+				workers := backend.ListWorkers()
+				for _, w := range workers {
+					Expect(w.WorkerUID).NotTo(Equal(testWorkerUID1))
+				}
+			})
+
+			It("should retry process with backoff on exit", func() {
+				// Create a worker that will exit quickly
+				worker := &api.WorkerInfo{
+					WorkerUID:        testWorkerUID1,
+					AllocatedDevices: []string{},
+					IsolationMode:    tfv1.IsolationModeSoft,
+					WorkerRunningInfo: &api.WorkerRunningInfo{
+						Type:       api.WorkerRuntimeTypeProcess,
+						Executable: "sh",
+						Args:       []string{"-c", "exit 1"},
+					},
+				}
+
+				err := backend.StartWorker(worker)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Wait for process to start and exit
+				var firstPID uint32
+				Eventually(func() bool {
+					workers := backend.ListWorkers()
+					for _, w := range workers {
+						if w.WorkerUID == testWorkerUID1 && w.WorkerRunningInfo != nil {
+							if w.WorkerRunningInfo.IsRunning && w.WorkerRunningInfo.PID > 0 {
+								firstPID = w.WorkerRunningInfo.PID
+								return true
+							}
+						}
+					}
+					return false
+				}, 5*time.Second).Should(BeTrue(), "Process should start")
+
+				// Wait for process to exit (it exits immediately with code 1)
+				time.Sleep(2 * time.Second)
+
+				// Verify process exited
+				Eventually(func() bool {
+					workers := backend.ListWorkers()
+					for _, w := range workers {
+						if w.WorkerUID == testWorkerUID1 && w.WorkerRunningInfo != nil {
+							return !w.WorkerRunningInfo.IsRunning && w.WorkerRunningInfo.ExitCode == 1
+						}
+					}
+					return false
+				}, 5*time.Second).Should(BeTrue(), "Process should exit")
+
+				// Wait for retry with backoff (should retry after ~3 seconds)
+				Eventually(func() bool {
+					workers := backend.ListWorkers()
+					for _, w := range workers {
+						if w.WorkerUID == testWorkerUID1 && w.WorkerRunningInfo != nil {
+							// Process should be retried (new PID, restarts > 0)
+							return w.WorkerRunningInfo.IsRunning && w.WorkerRunningInfo.PID != firstPID && w.WorkerRunningInfo.Restarts > 0
+						}
+					}
+					return false
+				}, 10*time.Second).Should(BeTrue(), "Process should be retried with new PID")
+
+				// Verify restart count increased
+				workers := backend.ListWorkers()
+				for _, w := range workers {
+					if w.WorkerUID == testWorkerUID1 && w.WorkerRunningInfo != nil {
+						Expect(w.WorkerRunningInfo.Restarts).To(BeNumerically(">=", 1))
+					}
+				}
+			})
+
+			It("should stop retrying when worker is removed", func() {
+				// Create a worker that will exit quickly
+				worker := &api.WorkerInfo{
+					WorkerUID:        testWorkerUID1,
+					AllocatedDevices: []string{},
+					IsolationMode:    tfv1.IsolationModeSoft,
+					WorkerRunningInfo: &api.WorkerRunningInfo{
+						Type:       api.WorkerRuntimeTypeProcess,
+						Executable: "sh",
+						Args:       []string{"-c", "exit 1"},
+					},
+				}
+
+				err := backend.StartWorker(worker)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Wait for process to start
+				Eventually(func() bool {
+					workers := backend.ListWorkers()
+					for _, w := range workers {
+						if w.WorkerUID == testWorkerUID1 && w.WorkerRunningInfo != nil {
+							return w.WorkerRunningInfo.IsRunning && w.WorkerRunningInfo.PID > 0
+						}
+					}
+					return false
+				}, 5*time.Second).Should(BeTrue(), "Process should start")
+
+				// Wait a bit for process to exit
+				time.Sleep(2 * time.Second)
+
+				// Remove the worker
+				err = backend.StopWorker(testWorkerUID1)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Wait a bit to ensure no retry happens
+				time.Sleep(5 * time.Second)
+
+				// Verify worker is gone and not retried
+				workers := backend.ListWorkers()
+				found := false
+				for _, w := range workers {
+					if w.WorkerUID == testWorkerUID1 {
+						found = true
+						break
+					}
+				}
+				Expect(found).To(BeFalse(), "Worker should be removed and not retried")
 			})
 		})
 
