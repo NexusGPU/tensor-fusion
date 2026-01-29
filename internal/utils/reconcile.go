@@ -16,6 +16,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	constants "github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -274,10 +275,27 @@ func GetGPUResourceNames() []corev1.ResourceName {
 }
 
 func containsGPUResources(res corev1.ResourceList) bool {
-	for _, gpuResourceName := range GetGPUResourceNames() {
-		_, ok := res[gpuResourceName]
-		if ok {
-			return true
+	if res == nil {
+		return false
+	}
+
+	// Get GPU resource names from provider manager, with fallback to common names
+	gpuResourceNames := GetGPUResourceNames()
+	if len(gpuResourceNames) == 0 {
+		// Fallback to common GPU resource names when provider manager is not initialized
+		gpuResourceNames = []corev1.ResourceName{
+			"nvidia.com/gpu",
+			"amd.com/gpu",
+		}
+	}
+
+	// Check if any GPU resource exists with positive quantity
+	for _, gpuResourceName := range gpuResourceNames {
+		if qty, ok := res[gpuResourceName]; ok {
+			// Check if quantity is positive (greater than zero)
+			if qty.Cmp(resource.MustParse("0")) > 0 {
+				return true
+			}
 		}
 	}
 	return false
