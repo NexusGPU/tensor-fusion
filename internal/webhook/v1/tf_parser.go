@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -302,7 +303,7 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 			for _, resourceName := range resourceNames {
 				if quantity, ok := container.Resources.Limits[resourceName]; ok {
 					gpuNumber, err := strconv.Atoi(quantity.String())
-					if err != nil || gpuNumber <= 0 {
+					if err != nil || gpuNumber <= 0 || gpuNumber > int(math.MaxUint32) {
 						ctrl.Log.Error(err, "unrecognized GPU resource in limits, not a valid number", "pod", pod.Name, "container", container.Name, "resource", resourceName)
 					} else {
 						// Track GPU count per container
