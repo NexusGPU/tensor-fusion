@@ -223,14 +223,43 @@ func (s *GpuAllocator) FilterWithPreempt(
 	}
 
 	// Step 1: Collect GPUs that will be released by preempted pods
-	for _, preemptAllocRequest := range preemptAllocRequests {
+	// Use a temporary map to accumulate releases for the same GPU (multiple victims on same GPU)
+	gpuReleasedMap := make(map[string]*tfv1.GPU)
+
+	log.FromContext(s.ctx).Info("[PREEMPT-DBG] FilterWithPreempt: starting to simulate release",
+		"preemptAllocRequestsCount", len(preemptAllocRequests))
+
+	for i, preemptAllocRequest := range preemptAllocRequests {
+		log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Processing victim allocation",
+			"victimIndex", i,
+			"workload", preemptAllocRequest.WorkloadNameNamespace.Name,
+			"gpuCount", preemptAllocRequest.Count,
+			"gpuNames", preemptAllocRequest.GPUNames,
+			"requestTflops", preemptAllocRequest.Request.Tflops.String(),
+			"requestComputePercent", preemptAllocRequest.Request.ComputePercent.String(),
+			"requestVram", preemptAllocRequest.Request.Vram.String())
+
 		for _, gpuName := range preemptAllocRequest.GPUNames {
-			gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
-			if gpu == nil {
-				return nil, nil, fmt.Errorf("gpu %s not found", gpuName)
+			// Get or create GPU copy for accumulating releases
+			gpuCopy, exists := gpuReleasedMap[gpuName]
+			var beforeTflops, beforeVram string
+			if !exists {
+				gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
+				if gpu == nil {
+					return nil, nil, fmt.Errorf("gpu %s not found", gpuName)
+				}
+				gpuCopy = gpu.DeepCopy()
+				gpuReleasedMap[gpuName] = gpuCopy
+				includedGPUs[gpuCopy.Name] = true
 			}
-			gpuCopy := gpu.DeepCopy()
-			// Simulate releasing resources
+
+			// Log GPU state before this release
+			if gpuCopy.Status.Available != nil {
+				beforeTflops = gpuCopy.Status.Available.Tflops.String()
+				beforeVram = gpuCopy.Status.Available.Vram.String()
+			}
+
+			// Simulate releasing resources (accumulate if this GPU already had releases)
 			var reqTflops resource.Quantity
 			if !preemptAllocRequest.Request.ComputePercent.IsZero() {
 				requiredTflops := utils.ComputePercentToTflops(gpuCopy.Status.Capacity.Tflops, preemptAllocRequest.Request)
@@ -240,8 +269,19 @@ func (s *GpuAllocator) FilterWithPreempt(
 			}
 			gpuCopy.Status.Available.Tflops.Add(reqTflops)
 			gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
-			toFilterGPUs = append(toFilterGPUs, gpuCopy)
-			includedGPUs[gpuCopy.Name] = true
+
+			// Log GPU state after simulated release
+			log.FromContext(s.ctx).Info("[PREEMPT-DBG] Simulated release on GPU",
+				"gpu", gpuName,
+				"node", gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel],
+				"victimWorkload", preemptAllocRequest.WorkloadNameNamespace.Name,
+				"releasedTflops", reqTflops.String(),
+				"releasedVram", preemptAllocRequest.Request.Vram.String(),
+				"beforeAvailableTflops", beforeTflops,
+				"afterAvailableTflops", gpuCopy.Status.Available.Tflops.String(),
+				"beforeAvailableVram", beforeVram,
+				"afterAvailableVram", gpuCopy.Status.Available.Vram.String(),
+				"capacityTflops", gpuCopy.Status.Capacity.Tflops.String())
 
 			// Add the node of the released GPU to affectedNodes if no target nodes are specified
 			if len(targetNodeNames) == 0 {
@@ -252,6 +292,11 @@ func (s *GpuAllocator) FilterWithPreempt(
 			}
 		}
 	}
+
+	// Convert map to slice for filtering
+	for _, gpuCopy := range gpuReleasedMap {
+		toFilterGPUs = append(toFilterGPUs, gpuCopy)
+	}
 	// Step2: Add other available GPUs from the same node(s) in the pool
 	// This is critical for multi-GPU pods: preemption might release 1 GPU, but the node
 	// might already have other free GPUs that together satisfy the requirement
@@ -259,9 +304,15 @@ func (s *GpuAllocator) FilterWithPreempt(
 		// This should not happen: FilterWithPreempt requires either targetNodeNames or preemptAllocRequests
 		return nil, nil, fmt.Errorf("FilterWithPreempt called with no affected nodes, invalid usage")
 	}
+
 	// only iterate the affected nodes, instead of the entire pool(O(N) instead of O(P))
 	for nodeName := range affectedNodes {
 		nodeGPUs := s.nodeGpuStore[nodeName]
+		log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Adding other GPUs from affected node",
+			"node", nodeName,
+			"totalGPUsOnNode", len(nodeGPUs),
+			"alreadyIncluded", len(includedGPUs))
+
 		for _, gpu := range nodeGPUs {
 			// Use map for O(1) duplicate check instead of O(M) array iteration
 			if !includedGPUs[gpu.Name] {
@@ -269,9 +320,24 @@ func (s *GpuAllocator) FilterWithPreempt(
 				includedGPUs[gpu.Name] = true
 			}
 		}
+
+		log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Finished adding GPUs from node",
+			"node", nodeName,
+			"addedGPUs", len(toFilterGPUs)-len(gpuReleasedMap),
+			"totalToFilterGPUs", len(toFilterGPUs))
 	}
 
 	// Step 3: Apply filters including SameNodeFilter for multi-GPU requirements
+	log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] FilterWithPreempt: applying filters",
+		"toFilterGPUsCount", len(toFilterGPUs),
+		"requiredGPUs", req.Count,
+		"requiredTflops", req.Request.Tflops.String(),
+		"requiredComputePercent", req.Request.ComputePercent.String(),
+		"requiredVram", req.Request.Vram.String(),
+		"gpuModel", req.GPUModel,
+		"gpuVendor", req.GPUVendor,
+		"gpuIndices", req.GPUIndices)
+
 	filterRegistry := s.filterRegistry.With(filter.NewResourceFilter(req.Request, req.GPUIndices))
 
 	// Add GPU model filter if specified
@@ -288,6 +354,12 @@ func (s *GpuAllocator) FilterWithPreempt(
 	if err != nil {
 		return nil, nil, fmt.Errorf("apply filters: %w", err)
 	}
+
+	log.FromContext(s.ctx).Info("[PREEMPT-DBG] FilterWithPreempt: filter results",
+		"filteredGPUsCount", len(filteredGPUs),
+		"toFilterGPUsCount", len(toFilterGPUs),
+		"filterDetailsCount", len(filterDetails))
+
 	return filteredGPUs, filterDetails, nil
 }
 
@@ -397,7 +469,10 @@ func (s *GpuAllocator) Bind(
 	log.FromContext(s.ctx).Info("GPU allocation successful",
 		"namespace", req.WorkloadNameNamespace.Namespace,
 		"workload", req.WorkloadNameNamespace.Name,
+		"podName", req.PodMeta.Name,
 		"gpu_count", req.Count,
+		"gpuNames", gpuNames,
+		"node", gpuNodeName,
 		"tflops", req.Request.Tflops.String(),
 		"vram", req.Request.Vram.String())
 
@@ -415,6 +490,7 @@ func (s *GpuAllocator) Bind(
 	for _, handler := range s.bindHandlers {
 		handler(req)
 	}
+
 	return result, nil
 }
 
@@ -582,7 +658,9 @@ func (s *GpuAllocator) Dealloc(
 	log.Info("GPU deallocation successful",
 		"namespace", workloadNameNamespace.Namespace,
 		"workload", workloadNameNamespace.Name,
+		"podName", podMeta.Name,
 		"gpu_count", len(gpus),
+		"gpuNames", gpus,
 		"tflops", request.Request.Tflops.String(),
 		"vram", request.Request.Vram.String())
 }
@@ -836,6 +914,8 @@ func (s *GpuAllocator) startSyncLoop(ctx context.Context) {
 	log := log.FromContext(ctx)
 	ticker := time.NewTicker(s.syncInterval)
 	defer ticker.Stop()
+
+	log.Info("GPU allocator sync loop started", "syncInterval", s.syncInterval)
 
 	for {
 		select {
@@ -1232,6 +1312,7 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 				}
 				return err
 			}
+
 			// Apply our status updates to the latest version
 			latest.Status.Available = gpu.Status.Available
 			latest.Status.RunningApps = gpu.Status.RunningApps
@@ -1303,6 +1384,7 @@ func (s *GpuAllocator) markGPUDirty(key types.NamespacedName) {
 	s.dirtyQueueLock.Lock()
 	defer s.dirtyQueueLock.Unlock()
 	s.dirtyQueue[key] = struct{}{}
+	log.FromContext(s.ctx).V(6).Info("[SYNC] GPU marked as dirty", "gpu", key.Name, "queueSize", len(s.dirtyQueue))
 }
 
 func (s *GpuAllocator) markGPUDirtyLocked(key types.NamespacedName) {
@@ -1326,6 +1408,14 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 	nodeName string, allocReq *tfv1.AllocRequest, toPreemptPods sets.Set[types.NamespacedName],
 ) error {
 	<-s.initializedCh
+
+	log.FromContext(s.ctx).V(4).Info("[PREEMPT] CheckQuotaAndFilterSingleNodePreempt start",
+		"node", nodeName,
+		"requiredGPUs", allocReq.Count,
+		"victimsFromScheduler", toPreemptPods.Len(),
+		"workersOnNode", len(s.nodeWorkerStore[nodeName]),
+		"victimNames", toPreemptPods.UnsortedList())
+
 	// Only need to check total quotas when preempting
 	toPreemptUsage := &tfv1.GPUResourceUsage{
 		Requests: tfv1.Resource{
@@ -1398,6 +1488,11 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 		preemptAllocRequests = append(preemptAllocRequests, existingAllocation)
 	}
 
+	log.FromContext(s.ctx).V(4).Info("[PREEMPT] preemptAllocRequests built",
+		"node", nodeName,
+		"preemptAllocRequestsCount", len(preemptAllocRequests),
+		"victimsFromScheduler", toPreemptPods.Len())
+
 	if log.FromContext(s.ctx).V(5).Enabled() {
 		log.FromContext(s.ctx).V(5).Info("Preempting node and check quotas", "nodeName", nodeName, "toPreemptUsage", toPreemptUsage)
 	}
@@ -1410,12 +1505,30 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 	if allocReq.PoolName == "" {
 		return fmt.Errorf("GPU Pool name is empty, can not find GPUs during preempt")
 	}
+
+	log.FromContext(s.ctx).V(4).Info("[PREEMPT] CheckQuotaAndFilterSingleNodePreempt: allocReq details",
+		"node", nodeName,
+		"count", allocReq.Count,
+		"requestTflops", allocReq.Request.Tflops.String(),
+		"requestComputePercent", allocReq.Request.ComputePercent.String(),
+		"requestVram", allocReq.Request.Vram.String(),
+		"limitTflops", allocReq.Limit.Tflops.String(),
+		"limitVram", allocReq.Limit.Vram.String(),
+		"poolName", allocReq.PoolName,
+		"gpuModel", allocReq.GPUModel,
+		"workload", allocReq.WorkloadNameNamespace.Name)
+
 	// Pass nodeName to FilterWithPreempt for optimization (avoid iterating entire pool)
 	filteredGPUs, _, err := s.FilterWithPreempt(allocReq, preemptAllocRequests, nodeName)
 	if err != nil {
 		return err
 	}
 	if len(filteredGPUs) < int(allocReq.Count) {
+		log.FromContext(s.ctx).Info("[PREEMPT] not enough GPUs after filter during preempt",
+			"node", nodeName,
+			"requiredGPUs", allocReq.Count,
+			"filteredGPUsCount", len(filteredGPUs),
+			"preemptAllocRequestsCount", len(preemptAllocRequests))
 		return fmt.Errorf("no gpus available or valid in pool %s after filtering during preempt", allocReq.PoolName)
 	}
 	return nil
