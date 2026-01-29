@@ -548,21 +548,11 @@ func ParseContainerGPUCounts(pod *corev1.Pod) (map[string]int, error) {
 }
 
 // getVendorFromResourceName finds the vendor that owns a given resource name
-// by checking all providers' InUseResourceNames
 func getVendorFromResourceName(resourceName corev1.ResourceName) string {
 	mgr := provider.GetManager()
 	if mgr == nil {
 		return ""
 	}
 
-	allProviders := mgr.GetAllProviders()
-	for vendor, providerConfig := range allProviders {
-		for _, inUseResourceName := range providerConfig.Spec.InUseResourceNames {
-			if corev1.ResourceName(inUseResourceName) == resourceName {
-				return vendor
-			}
-		}
-	}
-
-	return ""
+	return mgr.GetVendorFromResourceName(resourceName)
 }

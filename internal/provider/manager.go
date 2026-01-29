@@ -19,12 +19,13 @@ package provider
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"sync"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,6 +48,10 @@ type Manager struct {
 	// inUseResources maps vendor to resource names that should be removed
 	inUseResources map[string][]corev1.ResourceName
 	inUseMu        sync.RWMutex
+
+	// resourceNameToVendor maps resource name to vendor for fast lookup
+	resourceNameToVendor map[corev1.ResourceName]string
+	resourceNameMu       sync.RWMutex
 }
 
 var (
@@ -62,10 +67,11 @@ func GetManager() *Manager {
 // NewManager creates a new Provider Manager
 func NewManager(client client.Client) *Manager {
 	return &Manager{
-		client:         client,
-		providers:      make(map[string]*tfv1.ProviderConfig),
-		gpuInfoCache:   make(map[string][]config.GpuInfo),
-		inUseResources: make(map[string][]corev1.ResourceName),
+		client:               client,
+		providers:            make(map[string]*tfv1.ProviderConfig),
+		gpuInfoCache:         make(map[string][]config.GpuInfo),
+		inUseResources:       make(map[string][]corev1.ResourceName),
+		resourceNameToVendor: make(map[corev1.ResourceName]string),
 	}
 }
 
@@ -138,6 +144,15 @@ func (m *Manager) DeleteProvider(vendor string) {
 	m.inUseMu.Lock()
 	delete(m.inUseResources, vendor)
 	m.inUseMu.Unlock()
+
+	// Remove resource name mappings for this vendor
+	m.resourceNameMu.Lock()
+	for resourceName, v := range m.resourceNameToVendor {
+		if v == vendor {
+			delete(m.resourceNameToVendor, resourceName)
+		}
+	}
+	m.resourceNameMu.Unlock()
 }
 
 // updateCaches updates the derived caches from provider config
@@ -157,6 +172,20 @@ func (m *Manager) updateCaches(provider *tfv1.ProviderConfig) {
 	m.inUseMu.Lock()
 	m.inUseResources[provider.Spec.Vendor] = resources
 	m.inUseMu.Unlock()
+
+	// Update resource name to vendor reverse map
+	m.resourceNameMu.Lock()
+	// Remove old mappings for this vendor first
+	for resourceName, vendor := range m.resourceNameToVendor {
+		if vendor == provider.Spec.Vendor {
+			delete(m.resourceNameToVendor, resourceName)
+		}
+	}
+	// Add new mappings
+	for _, name := range provider.Spec.InUseResourceNames {
+		m.resourceNameToVendor[corev1.ResourceName(name)] = provider.Spec.Vendor
+	}
+	m.resourceNameMu.Unlock()
 }
 
 // convertToGpuInfos converts ProviderConfig hardware metadata to GpuInfo slice
@@ -247,14 +276,14 @@ func (m *Manager) GetProviderOrDefault(vendor string) *tfv1.ProviderConfig {
 }
 
 // GetAllProviders returns all cached ProviderConfigs
+// Note: Returns a shallow copy of the map. The map itself is new, but values are shared references.
+// Callers should not modify the returned ProviderConfig objects.
 func (m *Manager) GetAllProviders() map[string]*tfv1.ProviderConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	result := make(map[string]*tfv1.ProviderConfig, len(m.providers))
-	for k, v := range m.providers {
-		result[k] = v.DeepCopy()
-	}
+	maps.Copy(result, m.providers)
 	return result
 }
 
@@ -298,7 +327,11 @@ func (m *Manager) GetAllGpuInfos() []config.GpuInfo {
 	m.gpuInfoMu.RLock()
 	defer m.gpuInfoMu.RUnlock()
 
-	var all []config.GpuInfo
+	totalLen := 0
+	for _, infos := range m.gpuInfoCache {
+		totalLen += len(infos)
+	}
+	all := make([]config.GpuInfo, 0, totalLen)
 	for _, infos := range m.gpuInfoCache {
 		all = append(all, infos...)
 	}
@@ -401,6 +434,14 @@ func (m *Manager) ProviderCount() int {
 	return len(m.providers)
 }
 
+// GetVendorFromResourceName returns the vendor that owns a given resource name
+func (m *Manager) GetVendorFromResourceName(resourceName corev1.ResourceName) string {
+	m.resourceNameMu.RLock()
+	defer m.resourceNameMu.RUnlock()
+
+	return m.resourceNameToVendor[resourceName]
+}
+
 // Reload reloads all providers from the cluster
 func (m *Manager) Reload(ctx context.Context) error {
 	// Clear existing caches
@@ -415,6 +456,10 @@ func (m *Manager) Reload(ctx context.Context) error {
 	m.inUseMu.Lock()
 	m.inUseResources = make(map[string][]corev1.ResourceName)
 	m.inUseMu.Unlock()
+
+	m.resourceNameMu.Lock()
+	m.resourceNameToVendor = make(map[corev1.ResourceName]string)
+	m.resourceNameMu.Unlock()
 
 	return m.loadAllProviders(ctx)
 }
