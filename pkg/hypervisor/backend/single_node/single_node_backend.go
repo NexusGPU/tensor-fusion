@@ -2,6 +2,7 @@ package single_node
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -291,7 +292,7 @@ func (b *SingleNodeBackend) StartWorker(worker *api.WorkerInfo) error {
 func (b *SingleNodeBackend) startProcess(worker *api.WorkerInfo) error {
 	runningInfo := worker.WorkerRunningInfo
 	if runningInfo.Executable == "" {
-		return nil
+		return fmt.Errorf("executable is empty for worker %s", worker.WorkerUID)
 	}
 
 	cmd := exec.Command(runningInfo.Executable, runningInfo.Args...)
