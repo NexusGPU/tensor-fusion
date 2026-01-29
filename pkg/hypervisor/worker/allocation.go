@@ -37,6 +37,12 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	// idempotency check
+	if a.workerAllocations[request.WorkerUID] != nil {
+		klog.Infof("worker %s already allocated, skipping", request.WorkerUID)
+		return a.workerAllocations[request.WorkerUID], nil
+	}
+
 	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
 
 	// partitioned mode, call split device
