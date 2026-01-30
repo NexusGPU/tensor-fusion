@@ -175,3 +175,11 @@ const (
 	KubeApiVersionMajorEnv = "KUBE_API_VERSION_MAJOR"
 	KubeApiVersionMinorEnv = "KUBE_API_VERSION_MINOR"
 )
+
+// TensorFusion hypervisor related envs
+const (
+	TFProductNameEnv = "TF_PRODUCT_NAME"
+
+	TFLicenseEnv     = "TF_LICENSE"
+	TFLicenseHMacEnv = "TF_LICENSE_SIGN"
+)

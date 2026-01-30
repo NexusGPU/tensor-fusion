@@ -299,3 +299,21 @@ const (
 	IndexKeyLength = 16
 	IndexModLength = 8
 )
+
+const (
+	ProductNameGpuGoFree       = "gpu-go-free"
+	ProductNameGpuGoPaid       = "gpu-go-paid"
+	ProductNameTensorFusionEE  = "tensor-fusion-ee"
+	ProductNameTensorFusionOSS = "tensor-fusion-oss"
+	ProductNameTensorOS        = "tensor-os"
+	ProductNameUnknown         = "unknown"
+)
+
+var ProductNameMap = map[string]string{
+	ProductNameGpuGoFree:       ProductNameGpuGoFree,
+	ProductNameGpuGoPaid:       ProductNameGpuGoPaid,
+	ProductNameTensorFusionEE:  ProductNameTensorFusionEE,
+	ProductNameTensorFusionOSS: ProductNameTensorFusionOSS,
+	ProductNameTensorOS:        ProductNameTensorOS,
+	ProductNameUnknown:         ProductNameUnknown,
+}
