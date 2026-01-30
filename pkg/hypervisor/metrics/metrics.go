@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -321,18 +322,20 @@ func SendAnonymousTelemetry(
 
 	// Prepare event properties
 	properties := posthog.NewProperties().
-		Set("ramSizeBytes", nodeInfo.RAMSizeBytes).
-		Set("totalTFlops", nodeInfo.TotalTFlops).
-		Set("totalVRAMBytes", nodeInfo.TotalVRAMBytes).
-		Set("totalDevices", len(nodeInfo.DeviceIDs)).
+		Set("tflops", nodeInfo.TotalTFlops).
+		Set("vram", nodeInfo.TotalVRAMBytes).
+		Set("hostRam", nodeInfo.RAMSizeBytes).
+		Set("devicesCnt", len(nodeInfo.DeviceIDs)).
 		Set("brand", constants.Domain).
 		Set("version", version.BuildVersion).
 		Set("uptime", time.Since(startTime).String()).
-		Set("workersCount", workersCount).
-		Set("isolationMode", string(isolationMode)).
+		Set("workersCnt", workersCount).
+		Set("mode", string(isolationMode)).
 		Set("vendor", hardwareVendor).
-		Set("sampleGPUModel", sampleGPUModel).
-		Set("product", getProductName())
+		Set("gpuModel", sampleGPUModel).
+		Set("product", getProductName()).
+		Set("os", runtime.GOOS).
+		Set("arch", runtime.GOARCH)
 
 	// Send event to PostHog
 	err := client.Enqueue(posthog.Capture{

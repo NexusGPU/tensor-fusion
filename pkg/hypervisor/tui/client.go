@@ -48,7 +48,7 @@ func NewClient(host string, port int) *Client {
 //nolint:unparam // method parameter is kept for API consistency, even though it's always "GET"
 func (c *Client) doRequest(ctx context.Context, method, path string, result any) error {
 	url := fmt.Sprintf("%s/%s", c.baseURL, path)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
