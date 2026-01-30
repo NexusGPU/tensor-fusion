@@ -19,6 +19,19 @@
 #define _DEFAULT_SOURCE
 
 #include "../accelerator.h"
+
+// Define Result type for limiter.h compatibility (before including limiter.h)
+typedef enum {
+    RESULT_SUCCESS = ACCEL_SUCCESS,
+    RESULT_ERROR_INVALID_PARAM = ACCEL_ERROR_INVALID_PARAM,
+    RESULT_ERROR_NOT_FOUND = ACCEL_ERROR_NOT_FOUND,
+    RESULT_ERROR_NOT_SUPPORTED = ACCEL_ERROR_NOT_SUPPORTED,
+    RESULT_ERROR_RESOURCE_EXHAUSTED = ACCEL_ERROR_RESOURCE_EXHAUSTED,
+    RESULT_ERROR_OPERATION_FAILED = ACCEL_ERROR_OPERATION_FAILED,
+    RESULT_ERROR_INTERNAL = ACCEL_ERROR_INTERNAL
+} Result;
+
+#include "../limiter.h"
 #include "device_mock/driver_mock.h"
 #include <stdio.h>
 #include <string.h>
@@ -28,6 +41,7 @@
 #include <sys/types.h>
 #include <pthread.h>
 #include <time.h>
+#include <stdatomic.h>
 
 // ============================================================================
 // Global Variables for Limiter Thread
@@ -67,7 +81,7 @@ static void* limiterThreadFunc(void* arg __attribute__((unused))) {
     size_t deviceCount = 0;
     char deviceUUID[64] = {0};
     
-    if (GetAllDevices(devices, 4, &deviceCount) != RESULT_SUCCESS || deviceCount == 0) {
+    if (GetAllDevices(devices, 4, &deviceCount) != ACCEL_SUCCESS || deviceCount == 0) {
         free(devices);
         return NULL;
     }
@@ -126,6 +140,8 @@ static void cleanupLimiterThread(void) {
 
 // ============================================================================
 // Example Implementation - Limiter APIs
+// Note: These APIs are defined in limiter.h, not accelerator.h
+// They are kept here for the example implementation to work with limiter.so
 // ============================================================================
 
 Result AddWorkerProcess(const char* deviceUUID, const char* processId) {
@@ -202,19 +218,24 @@ Result AutoResume(const char* workerId, const char* deviceUUID, const char* reso
 // Example Implementation - DeviceInfo APIs
 // ============================================================================
 
-Result VirtualGPUInit(void) {
-    logMessage("INFO", "VirtualGPUInit called from provider example");
-    return RESULT_SUCCESS;
+AccelResult VGPUInit(void) {
+    logMessage("INFO", "VGPUInit called from provider example");
+    return ACCEL_SUCCESS;
 }
 
-Result GetDeviceCount(size_t* deviceCount) {
+AccelResult VGPUShutdown(void) {
+    logMessage("INFO", "VGPUShutdown called from provider example");
+    return ACCEL_SUCCESS;
+}
+
+AccelResult GetDeviceCount(size_t* deviceCount) {
     if (!deviceCount) {
-        return RESULT_ERROR_INVALID_PARAM;
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Example: return 4 devices
     *deviceCount = 4;
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
 // Helper function to initialize a single device info
@@ -303,9 +324,9 @@ static void initDeviceInfo(ExtendedDeviceInfo* info, int32_t deviceIndex) {
     info->virtualizationCapabilities.maxWorkersPerDevice = 16;
 }
 
-Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount) {
+AccelResult GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount) {
     if (!devices || !deviceCount || maxCount == 0) {
-        return RESULT_ERROR_INVALID_PARAM;
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Example: return 4 devices (but not more than maxCount)
@@ -320,68 +341,19 @@ Result GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* devic
         initDeviceInfo(&devices[i], (int32_t)i);
     }
     logMessage("INFO", "GetAllDevices called from provider example");
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result GetPartitionTemplates(int32_t deviceIndex __attribute__((unused)), PartitionTemplate* templates, size_t maxCount, size_t* templateCount) {
-    if (!templates || !templateCount || maxCount == 0) {
-        return RESULT_ERROR_INVALID_PARAM;
+AccelResult GetAllDevicesTopology(ExtendedDeviceTopology* topology) {
+    if (!topology) {
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
-    // Example: return 3 example templates (but not more than maxCount)
-    size_t actualCount = 3;
-    if (actualCount > maxCount) {
-        actualCount = maxCount;
-    }
-    *templateCount = actualCount;
-
-    // Template 1: 1/7 slice
-    if (actualCount > 0) {
-        PartitionTemplate* t1 = &templates[0];
-        snprintf(t1->templateId, sizeof(t1->templateId), "mig-1g.7gb");
-        snprintf(t1->name, sizeof(t1->name), "1/7 GPU Slice");
-        t1->memoryBytes = 7ULL * 1024 * 1024 * 1024; // 7GB
-        t1->computeUnits = 14; // 1/7 of 108 SMs
-        t1->tflops = 312.0 / 7.0; // ~44.6 TFLOPS
-        t1->sliceCount = 1;
-        t1->isDefault = false;
-        snprintf(t1->description, sizeof(t1->description), "1/7 GPU slice with 7GB memory");
-    }
-
-    // Template 2: 2/7 slice
-    if (actualCount > 1) {
-        PartitionTemplate* t2 = &templates[1];
-        snprintf(t2->templateId, sizeof(t2->templateId), "mig-2g.14gb");
-        snprintf(t2->name, sizeof(t2->name), "2/7 GPU Slice");
-        t2->memoryBytes = 14ULL * 1024 * 1024 * 1024; // 14GB
-        t2->computeUnits = 28; // 2/7 of 108 SMs
-        t2->tflops = 312.0 * 2.0 / 7.0; // ~89.1 TFLOPS
-        t2->sliceCount = 2;
-        t2->isDefault = true;
-        snprintf(t2->description, sizeof(t2->description), "2/7 GPU slice with 14GB memory");
-    }
-
-    // Template 3: 3/7 slice
-    if (actualCount > 2) {
-        PartitionTemplate* t3 = &templates[2];
-        snprintf(t3->templateId, sizeof(t3->templateId), "mig-3g.21gb");
-        snprintf(t3->name, sizeof(t3->name), "3/7 GPU Slice");
-        t3->memoryBytes = 21ULL * 1024 * 1024 * 1024; // 21GB (example, exceeds total)
-        t3->computeUnits = 42; // 3/7 of 108 SMs
-        t3->tflops = 312.0 * 3.0 / 7.0; // ~133.7 TFLOPS
-        t3->sliceCount = 3;
-        t3->isDefault = false;
-        snprintf(t3->description, sizeof(t3->description), "3/7 GPU slice with 21GB memory");
-    }
-
-    logMessage("INFO", "GetPartitionTemplates called from provider example");
-
-    return RESULT_SUCCESS;
-}
-
-Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, ExtendedDeviceTopology* topology) {
-    if (!deviceIndexArray || deviceCount == 0 || !topology) {
-        return RESULT_ERROR_INVALID_PARAM;
+    // Get device count first
+    size_t deviceCount = 0;
+    if (GetDeviceCount(&deviceCount) != ACCEL_SUCCESS || deviceCount == 0) {
+        topology->deviceCount = 0;
+        return ACCEL_ERROR_INTERNAL;
     }
 
     if (deviceCount > MAX_TOPOLOGY_DEVICES) {
@@ -389,116 +361,174 @@ Result GetDeviceTopology(int32_t* deviceIndexArray, size_t deviceCount, Extended
     }
     topology->deviceCount = deviceCount;
 
-    // Initialize each device topology
-    for (size_t i = 0; i < deviceCount; i++) {
-        DeviceTopology* dt = &topology->devices[i];
-        snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "example-device-%d", deviceIndexArray[i]);
-        dt->numaNode = deviceIndexArray[i] % 2;
+    // Get all devices to populate topology
+    ExtendedDeviceInfo devices[MAX_TOPOLOGY_DEVICES];
+    size_t actualDeviceCount = 0;
+    if (GetAllDevices(devices, deviceCount, &actualDeviceCount) != ACCEL_SUCCESS) {
+        topology->deviceCount = 0;
+        return ACCEL_ERROR_INTERNAL;
     }
 
-    // Set extended topology info
-    snprintf(topology->topologyType, sizeof(topology->topologyType), "NVLink");
+    // Initialize each device topology
+    for (size_t i = 0; i < actualDeviceCount && i < MAX_TOPOLOGY_DEVICES; i++) {
+        DeviceTopologyInfo* dt = &topology->devices[i];
+        snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "%s", devices[i].basic.uuid);
+        dt->deviceIndex = devices[i].basic.index;
+        dt->numaNode = devices[i].basic.numaNode;
+        dt->peerCount = 0;
 
-    logMessage("INFO", "GetDeviceTopology called from provider example");
-    return RESULT_SUCCESS;
+        // Initialize peer topology (simplified: all devices are at system level)
+        for (size_t j = 0; j < actualDeviceCount && j < MAX_TOPOLOGY_DEVICES; j++) {
+            if (i != j) {
+                if (dt->peerCount < MAX_TOPOLOGY_DEVICES) {
+                    DeviceTopoNode* peer = &dt->peers[dt->peerCount];
+                    snprintf(peer->peerUUID, sizeof(peer->peerUUID), "%s", devices[j].basic.uuid);
+                    peer->peerIndex = devices[j].basic.index;
+                    // Same NUMA node = NUMA level, different = system level
+                    if (devices[i].basic.numaNode == devices[j].basic.numaNode && devices[i].basic.numaNode >= 0) {
+                        peer->topoLevel = TOPO_LEVEL_NUMA_NODE;
+                    } else {
+                        peer->topoLevel = TOPO_LEVEL_SYSTEM;
+                    }
+                    dt->peerCount++;
+                }
+            }
+        }
+    }
+
+    logMessage("INFO", "GetAllDevicesTopology called from provider example");
+    return ACCEL_SUCCESS;
 }
 
 // ============================================================================
 // Example Implementation - Virtualization APIs - Partitioned Isolation
 // ============================================================================
 
-bool AssignPartition(PartitionAssignment* assignment) {
-    if (!assignment || assignment->templateId[0] == '\0' || assignment->deviceUUID[0] == '\0') {
-        return false;
+AccelResult AssignPartition(const char* templateId, const char* deviceUUID, PartitionResult* partitionResult) {
+    if (!templateId || !deviceUUID || !partitionResult) {
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
-    // Example: generate a partition UUID
-    // Limit string lengths to ensure output fits in 64-byte buffer:
-    // "partition-" (9) + templateId (26) + "-" (1) + deviceUUID (26) + null (1) = 63 bytes
-    snprintf(assignment->partitionUUID, sizeof(assignment->partitionUUID),
-             "partition-%.26s-%.26s", assignment->templateId, assignment->deviceUUID);
+    if (templateId[0] == '\0' || deviceUUID[0] == '\0') {
+        return ACCEL_ERROR_INVALID_PARAM;
+    }
+
+    // Example: set partition result type to environment variable
+    partitionResult->type = PARTITION_TYPE_ENVIRONMENT_VARIABLE;
+    snprintf(partitionResult->deviceUUID, sizeof(partitionResult->deviceUUID), "%s", deviceUUID);
+
+    // Set example environment variables
+    snprintf(partitionResult->envVars[0], sizeof(partitionResult->envVars[0]), "CUDA_VISIBLE_DEVICES=0");
+    snprintf(partitionResult->envVars[1], sizeof(partitionResult->envVars[1]), "GPU_UUID=%s", deviceUUID);
+    snprintf(partitionResult->envVars[2], sizeof(partitionResult->envVars[2]), "PARTITION_TEMPLATE=%s", templateId);
 
     logMessage("INFO", "AssignPartition called from provider example");
-    return true;
+    return ACCEL_SUCCESS;
 }
 
-bool RemovePartition(const char* templateId, const char* deviceUUID) {
+AccelResult RemovePartition(const char* templateId, const char* deviceUUID) {
     if (!templateId || !deviceUUID) {
-        return false;
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Example: always succeed
     logMessage("INFO", "RemovePartition called from provider example");
-    return true;
+    return ACCEL_SUCCESS;
 }
 
 // ============================================================================
 // Example Implementation - Virtualization APIs - Hard Isolation
 // ============================================================================
 
-Result SetMemHardLimit(const char* workerId, const char* deviceUUID, uint64_t memoryLimitBytes) {
-    if (!workerId || !deviceUUID || memoryLimitBytes == 0) {
-        return RESULT_ERROR_INVALID_PARAM;
+AccelResult SetMemHardLimit(const char* deviceUUID, uint64_t memoryLimitBytes) {
+    if (!deviceUUID || memoryLimitBytes == 0) {
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Example: always succeed
     logMessage("INFO", "SetMemHardLimit called from provider example");
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result SetComputeUnitHardLimit(const char* workerId, const char* deviceUUID, uint32_t computeUnitLimit) {
-    if (!workerId || !deviceUUID || computeUnitLimit == 0 || computeUnitLimit > 100) {
-        return RESULT_ERROR_INVALID_PARAM;
+AccelResult SetComputeUnitHardLimit(const char* deviceUUID, uint32_t computeUnitLimit) {
+    if (!deviceUUID || computeUnitLimit == 0 || computeUnitLimit > 100) {
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Example: always succeed
     logMessage("INFO", "SetComputeUnitHardLimit called from provider example");
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
 // ============================================================================
 // Example Implementation - Virtualization APIs - Device Snapshot/Migration
 // ============================================================================
 
-Result Snapshot(ProcessArray* processes) {
-    if (!processes || processes->processCount == 0 || processes->processCount > MAX_PROCESSES) {
-        return RESULT_ERROR_INVALID_PARAM;
+AccelResult Snapshot(SnapshotContext* context) {
+    if (!context) {
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
-    // Example: verify processes exist (basic check)
-    for (size_t i = 0; i < processes->processCount; i++) {
-        if (kill(processes->processIds[i], 0) != 0) {
-            // Process doesn't exist or no permission
-            return RESULT_ERROR_NOT_FOUND;
+    // Support both process-level and device-level snapshots
+    if (context->processIds != NULL && context->processCount > 0) {
+        // Process-level snapshot
+        if (context->processCount > MAX_PROCESSES) {
+            return ACCEL_ERROR_INVALID_PARAM;
         }
+
+        // Example: verify processes exist (basic check)
+        for (size_t i = 0; i < context->processCount; i++) {
+            if (kill(context->processIds[i], 0) != 0) {
+                // Process doesn't exist or no permission
+                return ACCEL_ERROR_NOT_FOUND;
+            }
+        }
+        logMessage("INFO", "Snapshot (process-level) called from provider example");
+    } else if (context->deviceUUID != NULL) {
+        // Device-level snapshot
+        logMessage("INFO", "Snapshot (device-level) called from provider example");
+    } else {
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Example: always succeed (no actual snapshot implementation)
-    logMessage("INFO", "Snapshot called from provider example");
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result Resume(ProcessArray* processes) {
-    if (!processes || processes->processCount == 0 || processes->processCount > MAX_PROCESSES) {
-        return RESULT_ERROR_INVALID_PARAM;
+AccelResult Resume(SnapshotContext* context) {
+    if (!context) {
+        return ACCEL_ERROR_INVALID_PARAM;
+    }
+
+    // Support both process-level and device-level resume
+    if (context->processIds != NULL && context->processCount > 0) {
+        // Process-level resume
+        if (context->processCount > MAX_PROCESSES) {
+            return ACCEL_ERROR_INVALID_PARAM;
+        }
+        logMessage("INFO", "Resume (process-level) called from provider example");
+    } else if (context->deviceUUID != NULL) {
+        // Device-level resume
+        logMessage("INFO", "Resume (device-level) called from provider example");
+    } else {
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Example: always succeed (no actual resume implementation)
-    logMessage("INFO", "Resume called from provider example");
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
 // ============================================================================
 // Example Implementation - Metrics APIs
 // ============================================================================
 
-Result GetProcessInformation(
+AccelResult GetProcessInformation(
     ProcessInformation* processInfos,
     size_t maxCount,
     size_t* processInfoCount
 ) {
     if (!processInfos || !processInfoCount || maxCount == 0) {
-        return RESULT_ERROR_INVALID_PARAM;
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Use mock AMD SMI-like API to get process information
@@ -508,7 +538,7 @@ Result GetProcessInformation(
     amdsmi_status_t status = amdsmi_get_gpu_process_list(0, &maxProcs, procInfos);
     if (status != AMDSMI_STATUS_SUCCESS && status != AMDSMI_STATUS_OUT_OF_RESOURCES) {
         *processInfoCount = 0;
-        return RESULT_SUCCESS;  // Return empty if driver_mock not initialized
+        return ACCEL_SUCCESS;  // Return empty if driver_mock not initialized
     }
 
     // Convert mock AMD SMI process info to ProcessInformation
@@ -524,7 +554,7 @@ Result GetProcessInformation(
     uint64_t totalMemoryBytes = 16ULL * 1024 * 1024 * 1024; // Default 16GB
     uint64_t totalCUs = 108; // Default 108 CUs
     
-    if (GetAllDevices(devices, 256, &deviceCount) == RESULT_SUCCESS && deviceCount > 0) {
+    if (GetAllDevices(devices, 256, &deviceCount) == ACCEL_SUCCESS && deviceCount > 0) {
         totalMemoryBytes = devices[0].basic.totalMemoryBytes;
         totalCUs = devices[0].basic.totalComputeUnits;
     }
@@ -565,16 +595,16 @@ Result GetProcessInformation(
 
     *processInfoCount = actualCount;
     logMessage("INFO", "GetProcessInformation called from provider example (AMD SMI style)");
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result GetDeviceMetrics(
+AccelResult GetDeviceMetrics(
     const char** deviceUUIDs,
     size_t deviceCount,
     DeviceMetrics* metrics
 ) {
     if (!deviceUUIDs || deviceCount == 0 || !metrics) {
-        return RESULT_ERROR_INVALID_PARAM;
+        return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Try to get real metrics from driver_mock for first device using AMD SMI APIs
@@ -658,20 +688,19 @@ Result GetDeviceMetrics(
     }
 
     logMessage("INFO", "GetDeviceMetrics called from provider example");
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-
-Result GetVendorMountLibs(Mount* mounts, size_t maxCount, size_t* mountCount) {
+AccelResult GetVendorMountLibs(MountPath* mounts, size_t maxCount, size_t* mountCount) {
     if (!mounts || maxCount == 0 || !mountCount) {
-        return RESULT_ERROR_INVALID_PARAM;
+        return ACCEL_ERROR_INVALID_PARAM;
     }
     *mountCount = 0;
     logMessage("INFO", "GetVendorMountLibs called from provider example");
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result RegisterLogCallback(LogCallbackFunc callback) {
+AccelResult RegisterLogCallback(LogCallbackFunc callback) {
     Log = callback;
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
