@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
+	"runtime"
 	"sync"
 	"time"
 
@@ -18,7 +16,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 	"github.com/posthog/posthog-go"
-	"golang.org/x/sys/unix"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"k8s.io/klog/v2"
 )
@@ -45,6 +42,7 @@ var (
 	telemetryClient      posthog.Client
 	telemetryClientMu    sync.Once
 	telemetryLockMu      sync.Mutex
+	telemetryLastSent    time.Time
 	telemetryMinInterval = 24 * time.Hour
 )
 
@@ -286,15 +284,6 @@ func getPostHogClient() posthog.Client {
 	return telemetryClient
 }
 
-// fileLock and fileUnlock use flock for file locking on Unix-like systems
-func fileLock(fd uintptr) error {
-	return unix.Flock(int(fd), unix.LOCK_EX|unix.LOCK_NB)
-}
-
-func fileUnlock(fd uintptr) error {
-	return unix.Flock(int(fd), unix.LOCK_UN)
-}
-
 func ShouldSendTelemetry() bool {
 	if os.Getenv("DISABLE_TENSOR_FUSION_TELEMETRY") != "" {
 		return false
@@ -306,62 +295,13 @@ func ShouldSendTelemetry() bool {
 	telemetryLockMu.Lock()
 	defer telemetryLockMu.Unlock()
 
-	// Try to open or create the lock file
-	telemetryLockFile := filepath.Join(os.TempDir(), "tensor-fusion-telemetry.lock")
-	file, err := os.OpenFile(telemetryLockFile, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		klog.V(4).Infof("Failed to open telemetry lock file: %v", err)
-		return false
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			klog.V(4).Infof("Failed to close telemetry lock file: %v", err)
-		}
-	}()
-
-	// Try to acquire an exclusive lock (non-blocking)
-	err = fileLock(file.Fd())
-	if err != nil {
-		klog.V(4).Infof("Failed to acquire telemetry lock: %v", err)
-		// Lock is already held by another process
-		return false
-	}
-	defer func() {
-		if err := fileUnlock(file.Fd()); err != nil {
-			klog.V(4).Infof("Failed to release telemetry lock: %v", err)
-		}
-	}()
-
-	// Read and parse the timestamp from the file
-	var lastSentTime time.Time
-	if data, err := io.ReadAll(file); err == nil {
-		if timestamp, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil {
-			lastSentTime = time.Unix(timestamp, 0)
-		}
-	}
-	if !lastSentTime.IsZero() && time.Since(lastSentTime) < telemetryMinInterval {
+	// Check if enough time has passed since last telemetry send
+	if !telemetryLastSent.IsZero() && time.Since(telemetryLastSent) < telemetryMinInterval {
 		return false
 	}
 
-	// Write current timestamp to the file
-	now := time.Now()
-	timestampStr := strconv.FormatInt(now.Unix(), 10)
-	if _, err := file.Seek(0, 0); err != nil {
-		klog.V(4).Infof("Failed to seek telemetry lock file: %v", err)
-		return false
-	}
-	if err := file.Truncate(0); err != nil {
-		klog.V(4).Infof("Failed to truncate telemetry lock file: %v", err)
-		return false
-	}
-	if _, err := file.WriteString(timestampStr); err != nil {
-		klog.V(4).Infof("Failed to write telemetry lock file: %v", err)
-		return false
-	}
-	if err := file.Sync(); err != nil {
-		klog.V(4).Infof("Failed to sync telemetry lock file: %v", err)
-		return false
-	}
+	// Update last sent time
+	telemetryLastSent = time.Now()
 	return true
 }
 
@@ -382,17 +322,20 @@ func SendAnonymousTelemetry(
 
 	// Prepare event properties
 	properties := posthog.NewProperties().
-		Set("ramSizeBytes", nodeInfo.RAMSizeBytes).
-		Set("totalTFlops", nodeInfo.TotalTFlops).
-		Set("totalVRAMBytes", nodeInfo.TotalVRAMBytes).
-		Set("totalDevices", len(nodeInfo.DeviceIDs)).
+		Set("tflops", nodeInfo.TotalTFlops).
+		Set("vram", nodeInfo.TotalVRAMBytes).
+		Set("hostRam", nodeInfo.RAMSizeBytes).
+		Set("devicesCnt", len(nodeInfo.DeviceIDs)).
 		Set("brand", constants.Domain).
 		Set("version", version.BuildVersion).
 		Set("uptime", time.Since(startTime).String()).
-		Set("workersCount", workersCount).
-		Set("isolationMode", string(isolationMode)).
+		Set("workersCnt", workersCount).
+		Set("mode", string(isolationMode)).
 		Set("vendor", hardwareVendor).
-		Set("sampleGPUModel", sampleGPUModel)
+		Set("gpuModel", sampleGPUModel).
+		Set("product", getProductName()).
+		Set("os", runtime.GOOS).
+		Set("arch", runtime.GOARCH)
 
 	// Send event to PostHog
 	err := client.Enqueue(posthog.Capture{
@@ -403,4 +346,14 @@ func SendAnonymousTelemetry(
 		klog.V(4).Infof("Failed to send telemetry: %v", err)
 		return
 	}
+}
+
+func getProductName() string {
+	productName := os.Getenv(constants.TFProductNameEnv)
+	if productName != "" {
+		if _, ok := constants.ProductNameMap[productName]; ok {
+			return constants.ProductNameMap[productName]
+		}
+	}
+	return constants.ProductNameUnknown
 }

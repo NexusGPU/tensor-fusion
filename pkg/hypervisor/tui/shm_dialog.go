@@ -1,3 +1,5 @@
+//go:build darwin || linux || freebsd || netbsd
+
 /*
 Copyright 2024.
 

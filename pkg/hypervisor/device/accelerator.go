@@ -18,12 +18,9 @@ package device
 
 import (
 	"fmt"
-	"runtime"
 	"sync"
-	"unsafe"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
-	"github.com/ebitengine/purego"
 	"k8s.io/klog/v2"
 )
 
@@ -53,7 +50,7 @@ type VirtualizationCapabilities struct {
 	MaxWorkersPerDevice   uint32
 }
 
-// DeviceBasicInfo matches the C struct DeviceBasicInfo in vgpu-provider/accelerator.h
+// DeviceBasicInfo matches the C struct DeviceBasicInfo in provider/accelerator.h
 // Field names in Go are capitalized for export, but memory layout must match C struct exactly
 // C struct fields: uuid, vendor, model, driverVersion, firmwareVersion, index, numaNode,
 //
@@ -62,7 +59,7 @@ type DeviceBasicInfo struct {
 	UUID              [64]byte  // C: char uuid[64]
 	Vendor            [32]byte  // C: char vendor[32]
 	Model             [128]byte // C: char model[128]
-	DriverVersion     [64]byte  // C: char driverVersion[64]
+	DriverVersion     [80]byte  // C: char driverVersion[80]
 	FirmwareVersion   [64]byte  // C: char firmwareVersion[64]
 	Index             int32     // C: int32_t index
 	NUMANode          int32     // C: int32_t numaNode
@@ -89,30 +86,6 @@ type ExtendedDeviceInfo struct {
 	Basic        DeviceBasicInfo
 	Props        DeviceProperties
 	Capabilities VirtualizationCapabilities
-}
-
-// MaxPartitionEnvs must match MAX_PARTITION_ENVS in accelerator.h
-const MaxPartitionEnvs = 16
-
-// MaxEnvKeyLength must match MAX_ENV_KEY_LENGTH in accelerator.h
-const MaxEnvKeyLength = 64
-
-// MaxEnvValueLength must match MAX_ENV_VALUE_LENGTH in accelerator.h
-const MaxEnvValueLength = 256
-
-// EnvVar matches the C struct EnvVar in accelerator.h
-type EnvVar struct {
-	Key   [MaxEnvKeyLength]byte
-	Value [MaxEnvValueLength]byte
-}
-
-type PartitionAssignment struct {
-	TemplateID    [64]byte
-	DeviceUUID    [64]byte
-	PartitionUUID [64]byte
-	// Optional env vars returned by vendor-specific partition assignment
-	EnvVars     [MaxPartitionEnvs]EnvVar
-	EnvVarCount uintptr
 }
 
 type ExtraMetric struct {
@@ -150,15 +123,40 @@ const (
 	MaxTopologyDevices = 64
 )
 
-type DeviceTopology struct {
-	DeviceUUID [64]byte
-	NUMANode   int32
+// TopoLevelType represents GPU-to-GPU connection type
+type TopoLevelType int32
+
+const (
+	TopoLevelInternal     TopoLevelType = 0 // e.g. Tesla K80 (same board)
+	TopoLevelSingleSwitch TopoLevelType = 1 // single PCIe switch
+	TopoLevelMultiSwitch  TopoLevelType = 2 // multiple PCIe switches (no host bridge traversal)
+	TopoLevelHostBridge   TopoLevelType = 3 // same host bridge
+	TopoLevelNUMANode     TopoLevelType = 4 // same NUMA node
+	TopoLevelSystem       TopoLevelType = 5 // cross NUMA (system level)
+	TopoLevelSelf         TopoLevelType = 6 // same device
+	TopoLevelUnknown      TopoLevelType = 7 // unknown or error
+)
+
+// DeviceTopoNode represents connection to another device
+type DeviceTopoNode struct {
+	PeerUUID  [64]byte      // Peer device UUID
+	PeerIndex int32         // Peer device index
+	TopoLevel TopoLevelType // Topology level to this peer
 }
 
+// DeviceTopologyInfo represents a device and its topology to all other devices
+type DeviceTopologyInfo struct {
+	DeviceUUID  [64]byte                           // This device's UUID
+	DeviceIndex int32                              // This device's index
+	NUMANode    int32                              // This device's NUMA node
+	Peers       [MaxTopologyDevices]DeviceTopoNode // Topology to all other devices
+	PeerCount   uintptr                            // Number of peers
+}
+
+// ExtendedDeviceTopology contains topology for all devices
 type ExtendedDeviceTopology struct {
-	Devices      [MaxTopologyDevices]DeviceTopology
-	DeviceCount  uintptr
-	TopologyType [32]byte
+	Devices     [MaxTopologyDevices]DeviceTopologyInfo // Array of device topology rows
+	DeviceCount uintptr                                // Number of devices
 }
 
 const MaxMountPath = 512
@@ -170,32 +168,58 @@ type Mount struct {
 
 const MaxProcesses = 1024
 
-type ProcessArray struct {
-	ProcessIDs   [MaxProcesses]int32
-	ProcessCount uintptr
-	DeviceUUID   [64]byte
+// PartitionResultType represents the type of partition result
+type PartitionResultType int32
+
+const (
+	PartitionTypeEnvironmentVariable PartitionResultType = 0
+	PartitionTypeDeviceNode          PartitionResultType = 1
+)
+
+// PartitionResult matches the C struct PartitionResult in provider/accelerator.h
+// Field names in Go are capitalized for export, but memory layout must match C struct exactly
+// C struct fields: type, deviceUUID, envVars
+type PartitionResult struct {
+	Type       PartitionResultType // C: PartitionResultType type
+	DeviceUUID [64]byte            // C: char deviceUUID[64]
+	EnvVars    [10][256]byte       // C: char envVars[10][256], key-value pairs like "A=B"
+}
+
+// SnapshotContext for snapshot/resume operations
+// Supports both process-level (CUDA) and device-level (other vendors) snapshots
+type SnapshotContext struct {
+	ProcessIDs   *int32  // Pointer to array of process IDs (for process-level snapshot, NULL for device-level)
+	ProcessCount uintptr // Number of processes (0 for device-level snapshot)
+	DeviceUUID   *byte   // Device UUID (for device-level snapshot, NULL for process-level)
 }
 
 // Function pointer types for purego
 var (
 	libHandle uintptr
 	// DeviceInfo APIs
-	virtualGPUInit    func() Result
-	getDeviceCount    func(*uintptr) Result
-	getAllDevices     func(*ExtendedDeviceInfo, uintptr, *uintptr) Result
-	getDeviceTopology func(*int32, uintptr, *ExtendedDeviceTopology) Result
-	// Virtualization APIs
-	assignPartition         func(*PartitionAssignment) bool
-	removePartition         func(*byte, *byte) bool
-	setMemHardLimit         func(*byte, *byte, uint64) Result
-	setComputeUnitHardLimit func(*byte, *byte, uint32) Result
-	snapshot                func(*ProcessArray) Result
-	resume                  func(*ProcessArray) Result
+	vgpuInit              func() Result
+	vgpuShutdown          func() Result
+	getDeviceCount        func(*uintptr) Result
+	getAllDevices         func(*ExtendedDeviceInfo, uintptr, *uintptr) Result
+	getAllDevicesTopology func(*ExtendedDeviceTopology) Result
+	// Virtualization APIs - signatures match C header exactly:
+	// AccelResult AssignPartition(const char* templateId, const char* deviceUUID, PartitionResult* partitionResult);
+	assignPartition func(*byte, *byte, *PartitionResult) Result
+	// AccelResult RemovePartition(const char* templateId, const char* deviceUUID);
+	removePartition func(*byte, *byte) Result
+	// AccelResult SetMemHardLimit(const char* deviceUUID, uint64_t memoryLimitBytes);
+	setMemHardLimit func(*byte, uint64) Result
+	// AccelResult SetComputeUnitHardLimit(const char* deviceUUID, uint32_t computeUnitLimit);
+	setComputeUnitHardLimit func(*byte, uint32) Result
+	// AccelResult Snapshot(SnapshotContext* context);
+	snapshot func(*SnapshotContext) Result
+	// AccelResult Resume(SnapshotContext* context);
+	resume func(*SnapshotContext) Result
 	// Metrics APIs
 	getProcessInformation func(*ProcessInformation, uintptr, *uintptr) Result
 	getDeviceMetrics      func(**byte, uintptr, *DeviceMetrics) Result
 	getVendorMountLibs    func(*Mount, uintptr, *uintptr) Result
-	// Utility APIs
+	// Utility APIs (Unix only, set by accelerator_unix.go)
 	registerLogCallback func(uintptr) Result
 )
 
@@ -223,56 +247,10 @@ func NewAcceleratorInterface(libPath string) (*AcceleratorInterface, error) {
 	return accel, nil
 }
 
-// Load loads the accelerator library dynamically using purego
-func (a *AcceleratorInterface) Load() error {
-	if a.libPath == "" {
-		return fmt.Errorf("library path is empty")
-	}
-
-	handle, err := purego.Dlopen(a.libPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-	if err != nil {
-		return fmt.Errorf("failed to open library: %w", err)
-	}
-	libHandle = handle
-
-	// Register all required functions
-	purego.RegisterLibFunc(&virtualGPUInit, handle, "VirtualGPUInit")
-	purego.RegisterLibFunc(&getDeviceCount, handle, "GetDeviceCount")
-	purego.RegisterLibFunc(&getAllDevices, handle, "GetAllDevices")
-	purego.RegisterLibFunc(&getDeviceTopology, handle, "GetDeviceTopology")
-	purego.RegisterLibFunc(&assignPartition, handle, "AssignPartition")
-	purego.RegisterLibFunc(&removePartition, handle, "RemovePartition")
-	purego.RegisterLibFunc(&setMemHardLimit, handle, "SetMemHardLimit")
-	purego.RegisterLibFunc(&setComputeUnitHardLimit, handle, "SetComputeUnitHardLimit")
-	purego.RegisterLibFunc(&snapshot, handle, "Snapshot")
-	purego.RegisterLibFunc(&resume, handle, "Resume")
-	purego.RegisterLibFunc(&getProcessInformation, handle, "GetProcessInformation")
-	purego.RegisterLibFunc(&getDeviceMetrics, handle, "GetDeviceMetrics")
-	purego.RegisterLibFunc(&getVendorMountLibs, handle, "GetVendorMountLibs")
-
-	// Register log callback only on non-macOS platforms
-	// purego callback has issues on macOS ARM64, causing bus errors when C code calls back into Go
-	if runtime.GOOS != "darwin" {
-		purego.RegisterLibFunc(&registerLogCallback, handle, "RegisterLogCallback")
-		callback := purego.NewCallback(goLogCallback)
-		if result := registerLogCallback(callback); result != ResultSuccess {
-			klog.Warningf("Failed to register log callback: %d", result)
-		}
-	}
-
-	result := virtualGPUInit()
-	if result != ResultSuccess {
-		return fmt.Errorf("failed to initialize virtual GPU: %d", result)
-	}
-
-	a.loaded = true
-	return nil
-}
-
 // Close unloads the accelerator library
 func (a *AcceleratorInterface) Close() error {
 	if a.loaded && libHandle != 0 {
-		// Unregister log callback if it was registered
+		// Unregister log callback if it was registered (Unix only)
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -280,55 +258,15 @@ func (a *AcceleratorInterface) Close() error {
 					_ = r // ignore recovery value
 				}
 			}()
+			vgpuShutdown()
 			if registerLogCallback != nil {
 				registerLogCallback(0)
 			}
 		}()
-		// Note: purego doesn't provide Dlclose, but the library will be unloaded when process exits
+		// Note: purego doesn't provide DlClose, but the library will be unloaded when process exits
 		a.loaded = false
 	}
 	return nil
-}
-
-// goLogCallback is the Go callback function called by C library for logging
-// Note: Disabled on macOS due to purego callback issues on ARM64, causing bus errors.
-func goLogCallback(level *byte, message *byte) {
-	var levelStr, messageStr string
-	if level != nil {
-		levelStr = cStringToGoString(level)
-	}
-	if message != nil {
-		messageStr = cStringToGoString(message)
-	}
-
-	// Map C log levels to klog levels
-	switch levelStr {
-	case "DEBUG", "debug":
-		klog.V(4).Info(messageStr)
-	case "INFO", "info":
-		klog.Info(messageStr)
-	case "WARN", "warn", "WARNING", "warning":
-		klog.Warning(messageStr)
-	case "ERROR", "error":
-		klog.Error(messageStr)
-	case "FATAL", "fatal":
-		klog.Fatal(messageStr)
-	default:
-		klog.Info(messageStr)
-	}
-}
-
-// cStringToGoString converts a C string (null-terminated byte array) to Go string
-func cStringToGoString(cstr *byte) string {
-	if cstr == nil {
-		return ""
-	}
-	ptr := unsafe.Pointer(cstr)
-	length := 0
-	for *(*byte)(unsafe.Add(ptr, uintptr(length))) != 0 {
-		length++
-	}
-	return string(unsafe.Slice(cstr, length))
 }
 
 // byteArrayToString converts a fixed-size byte array to Go string
@@ -484,17 +422,16 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 	return devices, nil
 }
 
-// PartitionResult contains the result of assigning a partition
-type PartitionResult struct {
+// AssignPartitionResult represents the result of assigning a partition
+type AssignPartitionResult struct {
 	PartitionUUID string
-	// EnvVars contains optional environment variables returned by vendor-specific partition assignment
-	// Some vendors (e.g., NVIDIA MIG) may return env vars like CUDA_VISIBLE_DEVICES
-	EnvVars map[string]string
+	EnvVars       map[string]string
+	Type          PartitionResultType
 }
 
-// AssignPartition assigns a partition to a device
-// Returns partition UUID and optional env vars that should be injected to worker Pod/Process
-func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (*PartitionResult, error) {
+// AssignPartition assigns a partition to a device using a template (e.g., create MIG instance)
+// Returns the assigned partition result including UUID and environment variables
+func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (*AssignPartitionResult, error) {
 	// Validate input lengths
 	const maxIDLength = 64
 	if len(templateID) >= maxIDLength {
@@ -504,83 +441,92 @@ func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (*
 		return nil, fmt.Errorf("device UUID is too long (max %d bytes)", maxIDLength-1)
 	}
 
-	var assignment PartitionAssignment
-	templateBytes := []byte(templateID)
-	deviceBytes := []byte(deviceUUID)
-	copy(assignment.TemplateID[:], templateBytes)
-	copy(assignment.DeviceUUID[:], deviceBytes)
-	if len(templateBytes) < len(assignment.TemplateID) {
-		assignment.TemplateID[len(templateBytes)] = 0
+	// Create null-terminated C strings
+	var templateArr [64]byte
+	var deviceArr [64]byte
+
+	copy(templateArr[:], templateID)
+	copy(deviceArr[:], deviceUUID)
+	if len(templateID) < len(templateArr) {
+		templateArr[len(templateID)] = 0
 	}
-	if len(deviceBytes) < len(assignment.DeviceUUID) {
-		assignment.DeviceUUID[len(deviceBytes)] = 0
+	if len(deviceUUID) < len(deviceArr) {
+		deviceArr[len(deviceUUID)] = 0
 	}
 
-	result := assignPartition(&assignment)
-	if !result {
-		return nil, fmt.Errorf("failed to assign partition")
+	// Allocate PartitionResult struct for C function to fill
+	var cResult PartitionResult
+
+	result := assignPartition(&templateArr[0], &deviceArr[0], &cResult)
+	if result != ResultSuccess {
+		return nil, fmt.Errorf("failed to assign partition: %d", result)
 	}
 
-	partitionUUID := byteArrayToString(assignment.PartitionUUID[:])
+	// Extract partition UUID from deviceUUID field
+	partitionUUID := byteArrayToString(cResult.DeviceUUID[:])
 
 	// Parse optional env vars returned by vendor
-	envVars := make(map[string]string, int(assignment.EnvVarCount))
-	for i := 0; i < int(assignment.EnvVarCount) && i < MaxPartitionEnvs; i++ {
-		key := byteArrayToString(assignment.EnvVars[i].Key[:])
-		value := byteArrayToString(assignment.EnvVars[i].Value[:])
-		if key != "" {
-			envVars[key] = value
+	envVars := make(map[string]string)
+	if cResult.Type == PartitionTypeEnvironmentVariable {
+		for i := range 10 {
+			envVarStr := byteArrayToString(cResult.EnvVars[i][:])
+			if envVarStr == "" {
+				continue
+			}
+			// Parse key-value pair in format "A=B"
+			for j := 0; j < len(envVarStr); j++ {
+				if envVarStr[j] == '=' {
+					key := envVarStr[:j]
+					value := envVarStr[j+1:]
+					if key != "" {
+						envVars[key] = value
+					}
+					break
+				}
+			}
 		}
 	}
 
-	return &PartitionResult{
+	return &AssignPartitionResult{
 		PartitionUUID: partitionUUID,
 		EnvVars:       envVars,
+		Type:          cResult.Type,
 	}, nil
 }
 
 // RemovePartition removes a partition from a device
-func (a *AcceleratorInterface) RemovePartition(partitionUUID, deviceUUID string) error {
-	partitionBytes := []byte(partitionUUID)
-	deviceBytes := []byte(deviceUUID)
-
-	// Create temporary arrays with null terminators
-	var partitionArr [64]byte
+// templateID is the template ID used to create the partition
+func (a *AcceleratorInterface) RemovePartition(templateID, deviceUUID string) error {
+	// Create null-terminated C strings
+	var templateArr [64]byte
 	var deviceArr [64]byte
-	copy(partitionArr[:], partitionBytes)
-	copy(deviceArr[:], deviceBytes)
-	if len(partitionBytes) < len(partitionArr) {
-		partitionArr[len(partitionBytes)] = 0
+
+	copy(templateArr[:], templateID)
+	copy(deviceArr[:], deviceUUID)
+	if len(templateID) < len(templateArr) {
+		templateArr[len(templateID)] = 0
 	}
-	if len(deviceBytes) < len(deviceArr) {
-		deviceArr[len(deviceBytes)] = 0
+	if len(deviceUUID) < len(deviceArr) {
+		deviceArr[len(deviceUUID)] = 0
 	}
 
-	result := removePartition(&partitionArr[0], &deviceArr[0])
-	if !result {
-		return fmt.Errorf("failed to remove partition")
+	result := removePartition(&templateArr[0], &deviceArr[0])
+	if result != ResultSuccess {
+		return fmt.Errorf("failed to remove partition: %d", result)
 	}
 
 	return nil
 }
 
-// SetMemHardLimit sets hard memory limit for a worker
-func (a *AcceleratorInterface) SetMemHardLimit(workerID, deviceUUID string, memoryLimitBytes uint64) error {
-	workerBytes := []byte(workerID)
-	deviceBytes := []byte(deviceUUID)
-
-	var workerArr [64]byte
+// SetMemHardLimit sets hard memory limit for a device (one-time, called at worker start by limiter.so)
+func (a *AcceleratorInterface) SetMemHardLimit(deviceUUID string, memoryLimitBytes uint64) error {
 	var deviceArr [64]byte
-	copy(workerArr[:], workerBytes)
-	copy(deviceArr[:], deviceBytes)
-	if len(workerBytes) < len(workerArr) {
-		workerArr[len(workerBytes)] = 0
-	}
-	if len(deviceBytes) < len(deviceArr) {
-		deviceArr[len(deviceBytes)] = 0
+	copy(deviceArr[:], deviceUUID)
+	if len(deviceUUID) < len(deviceArr) {
+		deviceArr[len(deviceUUID)] = 0
 	}
 
-	result := setMemHardLimit(&workerArr[0], &deviceArr[0], memoryLimitBytes)
+	result := setMemHardLimit(&deviceArr[0], memoryLimitBytes)
 	if result != ResultSuccess {
 		return fmt.Errorf("failed to set memory hard limit: %d", result)
 	}
@@ -588,23 +534,15 @@ func (a *AcceleratorInterface) SetMemHardLimit(workerID, deviceUUID string, memo
 	return nil
 }
 
-// SetComputeUnitHardLimit sets hard compute unit limit for a worker
-func (a *AcceleratorInterface) SetComputeUnitHardLimit(workerID, deviceUUID string, computeUnitLimit uint32) error {
-	workerBytes := []byte(workerID)
-	deviceBytes := []byte(deviceUUID)
-
-	var workerArr [64]byte
+// SetComputeUnitHardLimit sets hard compute unit limit for a device (one-time, called at worker start)
+func (a *AcceleratorInterface) SetComputeUnitHardLimit(deviceUUID string, computeUnitLimit uint32) error {
 	var deviceArr [64]byte
-	copy(workerArr[:], workerBytes)
-	copy(deviceArr[:], deviceBytes)
-	if len(workerBytes) < len(workerArr) {
-		workerArr[len(workerBytes)] = 0
-	}
-	if len(deviceBytes) < len(deviceArr) {
-		deviceArr[len(deviceBytes)] = 0
+	copy(deviceArr[:], deviceUUID)
+	if len(deviceUUID) < len(deviceArr) {
+		deviceArr[len(deviceUUID)] = 0
 	}
 
-	result := setComputeUnitHardLimit(&workerArr[0], &deviceArr[0], computeUnitLimit)
+	result := setComputeUnitHardLimit(&deviceArr[0], computeUnitLimit)
 	if result != ResultSuccess {
 		return fmt.Errorf("failed to set compute unit hard limit: %d", result)
 	}

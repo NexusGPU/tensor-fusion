@@ -719,6 +719,9 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 	}, v1.EnvVar{
 		Name:  constants.HypervisorDetectUsedGPUEnv,
 		Value: fmt.Sprintf("%t", IsProgressiveMigration()),
+	}, v1.EnvVar{
+		Name:  constants.TFProductNameEnv,
+		Value: constants.ProductNameTensorFusionOSS,
 	})
 
 	if pool.Spec.ComponentConfig.Hypervisor.Image != "" {

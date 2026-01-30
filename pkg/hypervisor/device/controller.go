@@ -314,14 +314,12 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 	newPartitionedDevice.ParentUUID = newPartitionedDevice.UUID
 	newPartitionedDevice.UUID = partitionResult.PartitionUUID
 
-	// Merge vendor-specific env vars from partition assignment
-	// Some vendors (e.g., NVIDIA MIG) return env vars like CUDA_VISIBLE_DEVICES
-	if len(partitionResult.EnvVars) > 0 {
+	// Store environment variables if partition type is environment variable mode
+	if partitionResult.Type == PartitionTypeEnvironmentVariable && len(partitionResult.EnvVars) > 0 {
 		if newPartitionedDevice.DeviceEnv == nil {
-			newPartitionedDevice.DeviceEnv = make(map[string]string, len(partitionResult.EnvVars))
+			newPartitionedDevice.DeviceEnv = make(map[string]string)
 		}
 		maps.Copy(newPartitionedDevice.DeviceEnv, partitionResult.EnvVars)
-		klog.V(4).Infof("Partition %s assigned with env vars: %v", partitionResult.PartitionUUID, partitionResult.EnvVars)
 	}
 
 	m.devices[partitionResult.PartitionUUID] = newPartitionedDevice

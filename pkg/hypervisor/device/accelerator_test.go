@@ -253,8 +253,6 @@ var _ = Describe("AcceleratorInterface", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).NotTo(BeNil())
 			Expect(result.PartitionUUID).NotTo(BeEmpty())
-			// EnvVars is optional, may or may not be populated depending on vendor
-			Expect(result.EnvVars).NotTo(BeNil())
 		})
 
 		It("should reject template ID that is too long", func() {
@@ -286,7 +284,8 @@ var _ = Describe("AcceleratorInterface", func() {
 		})
 
 		It("should remove partition successfully", func() {
-			err := accel.RemovePartition("partition-123", "stub-device-0")
+			// RemovePartition takes templateID (not partitionUUID) and deviceUUID
+			err := accel.RemovePartition("mig-1g.7gb", "stub-device-0")
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -299,12 +298,12 @@ var _ = Describe("AcceleratorInterface", func() {
 		})
 
 		It("should set memory hard limit successfully", func() {
-			err := accel.SetMemHardLimit("worker-1", "stub-device-0", 1024*1024*1024) // 1GB
+			err := accel.SetMemHardLimit("stub-device-0", 1024*1024*1024) // 1GB
 			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should set compute unit hard limit successfully", func() {
-			err := accel.SetComputeUnitHardLimit("worker-1", "stub-device-0", 50) // 50%
+			err := accel.SetComputeUnitHardLimit("stub-device-0", 50) // 50%
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
