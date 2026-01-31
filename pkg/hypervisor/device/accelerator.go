@@ -39,6 +39,34 @@ const (
 	ResultErrorInternal          Result = 6
 )
 
+// AcceleratorError wraps a Result code as an error for type checking
+type AcceleratorError struct {
+	Code    Result
+	Message string
+}
+
+func (e *AcceleratorError) Error() string {
+	return e.Message
+}
+
+// IsNonFatalAcceleratorError returns true if the error is a non-fatal accelerator error
+// that should not block the main flow (e.g., NOT_SUPPORTED, NOT_FOUND)
+func IsNonFatalAcceleratorError(err error) bool {
+	if err == nil {
+		return true
+	}
+	accelErr, ok := err.(*AcceleratorError)
+	if !ok {
+		return false
+	}
+	switch accelErr.Code {
+	case ResultErrorNotSupported, ResultErrorNotFound:
+		return true
+	default:
+		return false
+	}
+}
+
 type VirtualizationCapabilities struct {
 	SupportsPartitioning  bool
 	SupportsSoftIsolation bool
@@ -596,7 +624,10 @@ func (a *AcceleratorInterface) GetVendorMountLibs() ([]*api.Mount, error) {
 
 	result := getVendorMountLibs(&stackMounts[0], uintptr(maxStackMounts), &cCount)
 	if result != ResultSuccess {
-		return nil, fmt.Errorf("failed to get vendor mount libs: %d", result)
+		return nil, &AcceleratorError{
+			Code:    result,
+			Message: fmt.Sprintf("failed to get vendor mount libs: %d", result),
+		}
 	}
 
 	if cCount == 0 {
