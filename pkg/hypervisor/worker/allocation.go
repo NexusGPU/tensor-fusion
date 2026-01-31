@@ -6,6 +6,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
+	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/device"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 	"github.com/samber/lo"
 	"k8s.io/klog/v2"
@@ -64,8 +65,15 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 
 	mounts, err := a.deviceController.GetVendorMountLibs()
 	if err != nil {
-		klog.Errorf("failed to get vendor mount libs for worker allocation of %s: %v,", request.WorkerUID, err)
-		return nil, err
+		if device.IsNonFatalAcceleratorError(err) {
+			// NOT_SUPPORTED or NOT_FOUND are expected for some vendors (e.g., Nvidia)
+			klog.V(4).Infof("vendor mount libs not available for worker %s: %v", request.WorkerUID, err)
+			mounts = []*api.Mount{}
+		} else {
+			// Fatal errors (INTERNAL, OPERATION_FAILED, etc.) should block allocation
+			klog.Errorf("failed to get vendor mount libs for worker %s: %v", request.WorkerUID, err)
+			return nil, err
+		}
 	}
 
 	envs := make(map[string]string, 8)
