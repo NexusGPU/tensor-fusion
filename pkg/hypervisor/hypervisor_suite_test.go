@@ -89,6 +89,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 		httpServer           *server.Server
 		stubLibPath          string
 		tempMetricsFile      string
+		tempStateDir         string
 	)
 
 	BeforeEach(func() {
@@ -114,6 +115,10 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 		Expect(err).NotTo(HaveOccurred())
 		tempMetricsFile = tempFile.Name()
 		_ = tempFile.Close()
+
+		// Create isolated temp state directory for each test
+		tempStateDir, err = os.MkdirTemp("", "hypervisor-state-*")
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	AfterEach(func() {
@@ -135,6 +140,10 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 			_ = deviceController.Stop()
 		}
 		_ = os.Remove(tempMetricsFile)
+		// Cleanup temp state directory
+		if tempStateDir != "" {
+			_ = os.RemoveAll(tempStateDir)
+		}
 	})
 
 	Context("With stub device library", func() {
@@ -154,7 +163,9 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 			Expect(allocationController).NotTo(BeNil())
 			deviceController.SetAllocationController(allocationController)
 
-			backend = single_node.NewSingleNodeBackend(ctx, deviceController, allocationController)
+			// Use isolated state directory per test to avoid race conditions
+			backend = single_node.NewSingleNodeBackend(ctx, deviceController, allocationController,
+				single_node.WithStateDir(tempStateDir))
 			Expect(backend).NotTo(BeNil())
 
 			workerController = worker.NewWorkerController(

@@ -404,6 +404,9 @@ AccelResult GetAllDevicesTopology(ExtendedDeviceTopology* topology) {
 // Example Implementation - Virtualization APIs - Partitioned Isolation
 // ============================================================================
 
+// Counter for generating unique partition IDs
+static int partitionCounter = 0;
+
 AccelResult AssignPartition(const char* templateId, const char* deviceUUID, PartitionResult* partitionResult) {
     if (!templateId || !deviceUUID || !partitionResult) {
         return ACCEL_ERROR_INVALID_PARAM;
@@ -415,7 +418,9 @@ AccelResult AssignPartition(const char* templateId, const char* deviceUUID, Part
 
     // Example: set partition result type to environment variable
     partitionResult->type = PARTITION_TYPE_ENVIRONMENT_VARIABLE;
-    snprintf(partitionResult->deviceUUID, sizeof(partitionResult->deviceUUID), "%s", deviceUUID);
+    // Generate unique partition UUID by appending counter to device UUID
+    snprintf(partitionResult->deviceUUID, sizeof(partitionResult->deviceUUID), 
+             "%s-partition-%d", deviceUUID, partitionCounter++);
 
     // Set example environment variables
     snprintf(partitionResult->envVars[0], sizeof(partitionResult->envVars[0]), "CUDA_VISIBLE_DEVICES=0");

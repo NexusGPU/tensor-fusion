@@ -57,23 +57,62 @@ type SingleNodeBackend struct {
 	processesMu sync.RWMutex
 	processes   map[string]*processState
 	logDir      string
+	stateDir    string
+}
+
+// BackendOption is a functional option for configuring SingleNodeBackend
+type BackendOption func(*SingleNodeBackend)
+
+// WithStateDir sets a custom state directory for the backend
+func WithStateDir(stateDir string) BackendOption {
+	return func(b *SingleNodeBackend) {
+		b.stateDir = stateDir
+	}
 }
 
 func NewSingleNodeBackend(
 	ctx context.Context,
 	deviceController framework.DeviceController,
 	allocationController framework.WorkerAllocationController,
+	opts ...BackendOption,
 ) *SingleNodeBackend {
-	stateDir := os.Getenv("TENSOR_FUSION_STATE_DIR")
+	b := &SingleNodeBackend{
+		ctx:                  ctx,
+		deviceController:     deviceController,
+		allocationController: allocationController,
+		workers:              make(map[string]*api.WorkerInfo),
+		stopCh:               make(chan struct{}),
+		subscribers:          make(map[string]chan *api.WorkerInfo),
+		processes:            make(map[string]*processState),
+	}
+
+	// Apply options first to allow stateDir override
+	for _, opt := range opts {
+		opt(b)
+	}
+
+	// Determine state directory
+	stateDir := b.stateDir
+	if stateDir == "" {
+		stateDir = os.Getenv("TENSOR_FUSION_STATE_DIR")
+	}
 	if stateDir == "" {
 		stateDir = "/tmp/tensor-fusion-state"
 	}
+	b.stateDir = stateDir
+
+	// Determine log directory
 	logDir := os.Getenv(constants.TFLogPathEnv)
 	if logDir == "" {
 		logDir = filepath.Join(stateDir, "logs")
 	}
+	b.logDir = logDir
+
 	// Ensure log directory exists
 	_ = os.MkdirAll(logDir, 0755)
+
+	// Initialize file state manager
+	b.fileState = NewFileStateManager(stateDir)
 
 	if lvl := os.Getenv(constants.TFLogLevelEnv); lvl != "" {
 		var v string
@@ -98,17 +137,7 @@ func NewSingleNodeBackend(
 		}
 	}
 
-	return &SingleNodeBackend{
-		ctx:                  ctx,
-		deviceController:     deviceController,
-		allocationController: allocationController,
-		fileState:            NewFileStateManager(stateDir),
-		workers:              make(map[string]*api.WorkerInfo),
-		stopCh:               make(chan struct{}),
-		subscribers:          make(map[string]chan *api.WorkerInfo),
-		processes:            make(map[string]*processState),
-		logDir:               logDir,
-	}
+	return b
 }
 
 func (b *SingleNodeBackend) Start() error {
