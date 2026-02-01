@@ -109,7 +109,7 @@ const (
 	EnableWorkerLogEnv   = "TF_ENABLE_LOG"
 	EnableWorkerLogValue = "1"
 
-	TFLogPathEnv = "TF_LOG_PATH"
+	TFLogPathEnv  = "TF_LOG_PATH"
 	TFLogLevelEnv = "TF_LOG_LEVEL"
 
 	// the path of nGPU lib for limiter to load
