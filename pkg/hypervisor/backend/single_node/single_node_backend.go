@@ -90,7 +90,9 @@ func NewSingleNodeBackend(
 			v = "2"
 		}
 		if err := flag.Set("v", v); err != nil {
-			klog.Warningf("Failed to set klog level from env %s: %v (flag -v might be undefined or used for other purpose)", constants.TFLogLevelEnv, err)
+			klog.Warningf("Failed to set klog level from env %s: "+
+				"%v (flag -v might be undefined or used for other purpose)",
+				constants.TFLogLevelEnv, err)
 		} else {
 			klog.Infof("Set klog level to v=%s from env %s=%s", v, constants.TFLogLevelEnv, lvl)
 		}
