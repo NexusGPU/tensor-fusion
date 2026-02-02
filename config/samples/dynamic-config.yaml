@@ -4,7 +4,7 @@ metricsTTL: 30d
 metricsFormat: influx
 
 autoScalingInterval: 10s
-
+preemptClusterWideFromEnv: true
 alertRules:    
   # Worker TFlops throttled alert
   - name: WorkerTFlopsThrottled

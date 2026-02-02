@@ -201,8 +201,6 @@ schedulerConfig:
         maxWorkerPerNode: 256
         vramWeight: 0.7
         tflopsWeight: 0.3
-        # preemptClusterWide: true = preempt pods cluster-wide; false = only accept victims in preemptor's namespace
-        preemptClusterWide: true
     - name: GPUNetworkTopologyAware
       args:
         # Avoid the remote TFWorker RX/TX to avoid single node consume too much bandwidth
@@ -238,7 +236,7 @@ dynamicConfig:
   # extra pod labels to be added to metrics, 
   # you can map label keys to other measure tags
   metricsExtraPodLabels: {}
-
+  preemptClusterWideFromEnv: true
   # alert rules
   alertRules:    
     # Worker TFlops throttled alert
