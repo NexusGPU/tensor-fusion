@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strconv"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -597,7 +598,14 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 		os.Exit(1)
 	}
 	config.SetGlobalConfig(globalConfig)
-
+	// set env so scheduler default preemption reads effective preempt cluster-wide
+	preemptVal := strconv.FormatBool(globalConfig.PreemptClusterWideFromEnv)
+	if err := os.Setenv(constants.SchedulerPreemptClusterWideEnv, preemptVal); err != nil {
+		setupLog.Error(err, "failed to set preempt cluster-wide env")
+	}
+	// get env PreemptClusterWideFromEnv
+	preemptClusterWideFromEnv := os.Getenv(constants.SchedulerPreemptClusterWideEnv)
+	setupLog.Info("preempt cluster-wide from env", "preemptClusterWideFromEnv", preemptClusterWideFromEnv)
 	// only init TSDB and evaluator in leader
 	needTSDB := enableAlert || enableAutoScale
 
@@ -636,8 +644,16 @@ func watchAndHandleConfigChanges(ctx context.Context, mgr manager.Manager, needT
 				"configPath", dynamicConfigPath)
 			continue
 		}
+		// check if preemptClusterWideFromEnv is changed
+		if globalConfig.PreemptClusterWideFromEnv != config.GetGlobalConfig().PreemptClusterWideFromEnv {
+			preemptVal := strconv.FormatBool(globalConfig.PreemptClusterWideFromEnv)
+			if err := os.Setenv(constants.SchedulerPreemptClusterWideEnv, preemptVal); err != nil {
+				ctrl.Log.Error(err, "failed to set preempt cluster-wide env")
+			}
+			preemptClusterWideFromEnv := os.Getenv(constants.SchedulerPreemptClusterWideEnv)
+			ctrl.Log.Info("preempt cluster-wide from env", "preemptClusterWideFromEnv", preemptClusterWideFromEnv)
+		}
 		config.SetGlobalConfig(globalConfig)
-
 		// handle alert rules update
 		go func() {
 			<-alertEvaluatorReady

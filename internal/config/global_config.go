@@ -7,15 +7,15 @@ import (
 )
 
 type GlobalConfig struct {
-	MetricsTTL            string            `yaml:"metricsTTL"`
-	MetricsFormat         string            `yaml:"metricsFormat"`
-	MetricsExtraPodLabels map[string]string `yaml:"metricsExtraPodLabels"`
+	MetricsTTL            string               `yaml:"metricsTTL"`
+	MetricsFormat         string               `yaml:"metricsFormat"`
+	MetricsExtraPodLabels map[string]string    `yaml:"metricsExtraPodLabels"`
+	AlertRules            []AlertRule          `yaml:"alertRules"`
+	AutoMigration         *AutoMigrationConfig `yaml:"autoMigration"`
 
-	AlertRules    []AlertRule          `yaml:"alertRules"`
-	AutoMigration *AutoMigrationConfig `yaml:"autoMigration"`
-
-	AutoScalingInterval  string `yaml:"autoScalingInterval"`
-	GPUOperatorNamespace string `yaml:"gpuOperatorNamespace"`
+	AutoScalingInterval       string `yaml:"autoScalingInterval"`
+	GPUOperatorNamespace      string `yaml:"gpuOperatorNamespace"`
+	PreemptClusterWideFromEnv bool   `yaml:"preemptClusterWideFromEnv"`
 }
 
 type AutoMigrationConfig struct {

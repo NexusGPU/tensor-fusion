@@ -1,15 +1,23 @@
 --- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2026-01-26 00:00:00
 +++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption/default_preemption.go	2026-01-26 00:00:00
-@@ -20,6 +20,7 @@
- 	"context"
- 	"fmt"
+@@ -22,4 +22,7 @@
  	"math/rand"
  	"sort"
  
++	"os"
++	"strings"
 +	"time"
  	v1 "k8s.io/api/core/v1"
-@@ -108,3 +109,17 @@
+@@ -108,6 +111,26 @@
+ 	// Default behavior: No additional filtering, beyond the internal requirement that the victim pod
+ 	// have lower priority than the preemptor pod.
  	pl.IsEligiblePod = func(nodeInfo fwk.NodeInfo, victim fwk.PodInfo, preemptor *v1.Pod) bool {
++		// Cluster-wide when env is unset or "true"; "false" = same-tenant (same namespace) only.
++		v := strings.ToLower(strings.TrimSpace(os.Getenv("TF_SCHEDULER_PREEMPT_CLUSTER_WIDE")))
++		preemptClusterWide := v == "" || v == "true"
++		if !preemptClusterWide && victim.GetPod().Namespace != preemptor.Namespace {
++			return false
++		}
 +		victimAnnotation := victim.GetPod().Annotations
 +		if victimAnnotation == nil {
 +			return true
@@ -26,3 +34,4 @@
 +		}
  		return true
  	}
+ 

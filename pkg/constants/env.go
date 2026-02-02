@@ -3,6 +3,10 @@ package constants
 // Controller itself envs
 const NamespaceEnv = "OPERATOR_NAMESPACE"
 
+// Scheduler preemption: when PreemptClusterWideFromEnv is enabled, effective value is read from this env.
+// "true" = cluster-wide preemption; "false" = same-tenant (same namespace) only.
+const SchedulerPreemptClusterWideEnv = "TF_SCHEDULER_PREEMPT_CLUSTER_WIDE"
+
 // System feature toggles
 const (
 	EnableWebhookEnv                  = "ENABLE_WEBHOOKS"

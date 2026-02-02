@@ -1062,30 +1062,13 @@ func (s *GPUFit) validatePreemption(state fwk.CycleState, pod *v1.Pod, nodeInfo 
 		return fwk.NewStatus(fwk.Error, "invalid type for preempt pods")
 	}
 
-	// When PreemptClusterWide is explicitly false, only use victims in the preemptor's namespace for subsequent checks.
-	victimsToUse := victims
-	if s.cfg != nil && s.cfg.PreemptClusterWide != nil && !*s.cfg.PreemptClusterWide {
-		victimsToUse = sets.New[types.NamespacedName]()
-		for v := range victims {
-			if v.Namespace == pod.Namespace {
-				victimsToUse.Insert(v)
-			}
-		}
-		if victimsToUse.Len() == 0 {
-			s.logger.Info("GPU preemption: no same-namespace victims on node",
-				"pod", klog.KObj(pod),
-				"node", nodeName)
-			return fwk.NewStatus(fwk.Unschedulable, "no victims in preemptor namespace on this node")
-		}
-	}
-
 	victimList := victims.UnsortedList()
 	//  Verify that preemption will release sufficient GPU resources
 	// This calls CheckQuotaAndFilterSingleNodePreempt which:
 	// - Simulates releasing victim GPU resources
 	// - Applies GPU filters (resource, model, vendor, affinity, same-node)
 	// - Checks quota constraints
-	err = s.allocator.CheckQuotaAndFilterSingleNodePreempt(nodeName, allocReq, victimsToUse)
+	err = s.allocator.CheckQuotaAndFilterSingleNodePreempt(nodeName, allocReq, victims)
 	if err != nil {
 		s.logger.Info("GPU preemption validation failed",
 			"pod", pod.Name,
