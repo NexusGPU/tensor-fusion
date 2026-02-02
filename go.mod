@@ -1,6 +1,6 @@
 module github.com/NexusGPU/tensor-fusion
 
-go 1.25.0
+go 1.25.5
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -33,7 +33,6 @@ require (
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel v1.38.0
 	go.uber.org/zap v1.27.1
-	golang.org/x/sys v0.40.0
 	golang.org/x/time v0.14.0
 	gomodules.xyz/jsonpatch/v2 v2.5.0
 	google.golang.org/grpc v1.78.0
@@ -53,7 +52,7 @@ require (
 	k8s.io/kubernetes v1.35.0
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4
 	sigs.k8s.io/controller-runtime v0.23.0
-	sigs.k8s.io/karpenter v1.8.0
+	sigs.k8s.io/karpenter v1.8.2
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -191,6 +190,7 @@ require (
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/oauth2 v0.32.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/term v0.37.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	golang.org/x/tools v0.38.0 // indirect
