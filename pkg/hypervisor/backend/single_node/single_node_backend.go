@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -371,8 +372,22 @@ func (b *SingleNodeBackend) buildCmd(ps *processState) (*exec.Cmd, io.Closer, er
 	}
 
 	cmd := exec.Command(ps.executable, ps.args...)
-	cmd.Env = os.Environ()
+
+	// Build environment: start with current environment, then override with ps.env
+	envMap := make(map[string]string)
+	for _, env := range os.Environ() {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+	// Override with custom environment variables
 	for k, v := range ps.env {
+		envMap[k] = v
+	}
+	// Convert back to []string format
+	cmd.Env = make([]string, 0, len(envMap))
+	for k, v := range envMap {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	if ps.workingDir != "" {

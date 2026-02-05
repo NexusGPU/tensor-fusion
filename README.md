@@ -40,16 +40,13 @@ Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** 
 - [Run vGPU in VM Hypervisor](https://tensor-fusion.ai/guide/getting-started/deployment-vm)
 - [Learn Essential Concepts & Architecture](https://tensor-fusion.ai/guide/getting-started/architecture)
 
-<!-- (TODO: Asciinema) -->
-
 ### 💬 Discussion
 
 - Discord channel: [https://discord.gg/2bybv9yQNk](https://discord.gg/2bybv9yQNk)
 - Discuss anything about TensorFusion: [Github Discussions](https://github.com/NexusGPU/tensor-fusion/discussions)
-- Contact us with WeCom for Greater China region: [企业微信](https://work.weixin.qq.com/ca/cawcde42751d9f6a29) 
+- Contact us with WeCom for Greater China region: [企业微信](https://work.weixin.qq.com/ca/cawcde42751d9f6a29)
 - Email us: [support@tensor-fusion.com](mailto:support@tensor-fusion.com)
 - Schedule [1:1 meeting with TensorFusion founders](https://tensor-fusion.ai/book-demo)
-
 
 ## 🔮 Features & Roadmap
 
@@ -58,7 +55,7 @@ Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** 
 - [x] Fractional GPU and flexible oversubscription
 - [x] Remote GPU sharing with SOTA GPU-over-IP technology, less than 4% performance loss
 - [x] GPU VRAM expansion and hot/cold tiering
-- [x] None NVIDIA GPU/NPU vendor support
+- [x] Non-NVIDIA GPU/NPU vendor support
 
 ### Pooling & Scheduling & Management
 
@@ -67,7 +64,7 @@ Tensor Fusion is a state-of-the-art **GPU virtualization and pooling solution** 
 - [x] GPU node auto provisioning/termination, Karpenter integration
 - [x] GPU compaction/bin-packing
 - [x] Take full control of GPU allocation with precision targeting by vendor, model, device index, and more
-- [x] Seamless onboarding experience for Pytorch, TensorFlow, llama.cpp, vLLM, Tensor-RT, SGlang and all popular AI training/serving frameworks
+- [x] Seamless onboarding experience for PyTorch, TensorFlow, llama.cpp, vLLM, TensorRT, SGLang and all popular AI training/serving frameworks
 - [x] Seamless migration from existing NVIDIA operator and device-plugin stack
 - [x] Centralized Dashboard & Control Plane
 - [x] GPU-first autoscaling policies, auto set requests/limits/replicas
