@@ -22,11 +22,23 @@
  #include <stdint.h>
  #include <sys/types.h>
  
+ #if defined(_WIN32) && !defined(__MINGW32__) && !defined(__MINGW64__) && !defined(__CYGWIN__)
+ typedef int pid_t;
+ #endif
+ 
  #ifdef __cplusplus
  extern "C" {
  #endif
  
+ #if defined(_WIN32)
+ #if defined(ACCELERATOR_EXPORTS)
+ #define ACCELERATOR_API __declspec(dllexport)
+ #else
+ #define ACCELERATOR_API __declspec(dllimport)
+ #endif
+ #else
  #define ACCELERATOR_API __attribute__((visibility("default")))
+ #endif
  
  // ============================================================================
  // Common Types
@@ -119,21 +131,21 @@
  
  // Topology level type (GPU-to-GPU connection type)
  typedef enum {
-   TOPO_LEVEL_INTERNAL = 0,      // e.g. Tesla K80 (same board)
-   TOPO_LEVEL_SINGLE_SWITCH = 1, // single PCIe switch
-   TOPO_LEVEL_MULTI_SWITCH = 2,  // multiple PCIe switches (no host bridge traversal)
-   TOPO_LEVEL_HOST_BRIDGE = 3,   // same host bridge
-   TOPO_LEVEL_NUMA_NODE = 4,     // same NUMA node
-   TOPO_LEVEL_SYSTEM = 5,        // cross NUMA (system level)
-   TOPO_LEVEL_SELF = 6,          // same device
-   TOPO_LEVEL_UNKNOWN = 7        // unknown or error
+   TOPO_LEVEL_INTERNAL = 0,       // e.g. Tesla K80 (same board)
+   TOPO_LEVEL_SINGLE_SWITCH = 1,  // single PCIe switch
+   TOPO_LEVEL_MULTI_SWITCH = 2,   // multiple PCIe switches (no host bridge traversal)
+   TOPO_LEVEL_HOST_BRIDGE = 3,    // same host bridge
+   TOPO_LEVEL_NUMA_NODE = 4,      // same NUMA node
+   TOPO_LEVEL_SYSTEM = 5,         // cross NUMA (system level)
+   TOPO_LEVEL_SELF = 6,           // same device
+   TOPO_LEVEL_UNKNOWN = 7         // unknown or error
  } TopoLevelType;
  
  // Topology node: represents connection to another device
  typedef struct {
-   char peerUUID[64];       // Peer device UUID
-   int32_t peerIndex;       // Peer device index
-   TopoLevelType topoLevel; // Topology level to this peer
+   char peerUUID[64];        // Peer device UUID
+   int32_t peerIndex;        // Peer device index
+   TopoLevelType topoLevel;  // Topology level to this peer
  } DeviceTopoNode;
  
  // Maximum number of devices in topology matrix
@@ -141,17 +153,17 @@
  
  // Device topology row: a device and its topology to all other devices
  typedef struct {
-   char deviceUUID[64];                            // This device's UUID
-   int32_t deviceIndex;                            // This device's index
-   int32_t numaNode;                               // This device's NUMA node
-   DeviceTopoNode peers[MAX_TOPOLOGY_DEVICES];     // Topology to all other devices
-   size_t peerCount;                               // Number of peers
+   char deviceUUID[64];                         // This device's UUID
+   int32_t deviceIndex;                         // This device's index
+   int32_t numaNode;                            // This device's NUMA node
+   DeviceTopoNode peers[MAX_TOPOLOGY_DEVICES];  // Topology to all other devices
+   size_t peerCount;                            // Number of peers
  } DeviceTopologyInfo;
  
  // Extended topology
  typedef struct {
-   DeviceTopologyInfo devices[MAX_TOPOLOGY_DEVICES]; // Array of device topology rows
-   size_t deviceCount;                              // Number of devices
+   DeviceTopologyInfo devices[MAX_TOPOLOGY_DEVICES];  // Array of device topology rows
+   size_t deviceCount;                                // Number of devices
  } ExtendedDeviceTopology;
  
  // ============================================================================
@@ -216,7 +228,7 @@
  } DeviceMetrics;
  
  // Device UUID array entry (for passing multiple UUIDs)
- // DEPRECATED: This struct is no longer used. GetDeviceMetrics now uses const char** instead.
+ // DEPRECATED: This struct is no longer used. AccelGetDeviceMetrics now uses const char** instead.
  #define MAX_DEVICE_UUIDS 64
  #define UUID_STRING_LENGTH 64
  
@@ -235,8 +247,8 @@
  
  typedef struct {
    PartitionResultType type;
-   char deviceUUID[64]; // Device UUID
-   char envVars[10][256]; // Array of environment variable key-value pairs, A=B, C=D, etc.
+   char deviceUUID[64];    // Device UUID
+   char envVars[10][256];  // Array of environment variable key-value pairs, A=B, C=D, etc.
  } PartitionResult;
  
  // ============================================================================
@@ -246,16 +258,19 @@
  /**
   * Initialize the accelerator library.
   *
+  * This must be called before any other accelerator API. Calls to other APIs
+  * without a successful AccelInit will trigger a TF_PANIC.
+  *
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult VGPUInit(void);
+ ACCELERATOR_API AccelResult AccelInit(void);
  
  /**
   * Shutdown the accelerator library.
   *
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult VGPUShutdown(void);
+ ACCELERATOR_API AccelResult AccelShutdown(void);
  
  // ============================================================================
  // DeviceInfo APIs
@@ -267,7 +282,7 @@
   * @param deviceCount Output parameter for number of devices
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult GetDeviceCount(size_t* deviceCount);
+ ACCELERATOR_API AccelResult AccelGetDeviceCount(size_t* deviceCount);
  
  /**
   * Get all available devices information.
@@ -277,7 +292,7 @@
   * @param deviceCount Output parameter for number of devices actually returned
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount);
+ ACCELERATOR_API AccelResult AccelGetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount);
  
  /**
   * Get device topology for all devices, including NVLink and PCIe interconnects.
@@ -286,7 +301,7 @@
   * @param topology Output parameter for extended topology (allocated by caller)
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult GetAllDevicesTopology(ExtendedDeviceTopology* topology);
+ ACCELERATOR_API AccelResult AccelGetAllDevicesTopology(ExtendedDeviceTopology* topology);
  
  // ============================================================================
  // Virtualization APIs - Partitioned Isolation
@@ -300,7 +315,7 @@
   * @param partitionResult Output buffer for assigned partition result (callee allocates)
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult AssignPartition(const char* templateId, const char* deviceUUID, PartitionResult* partitionResult);
+ ACCELERATOR_API AccelResult AccelAssignPartition(const char* templateId, const char* deviceUUID, PartitionResult* partitionResult);
  
  /**
   * Remove a partition from a device.
@@ -309,7 +324,7 @@
   * @param deviceUUID Device UUID
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult RemovePartition(const char* templateId, const char* deviceUUID);
+ ACCELERATOR_API AccelResult AccelRemovePartition(const char* templateId, const char* deviceUUID);
  
  // ============================================================================
  // Virtualization APIs - Hard Isolation
@@ -322,7 +337,7 @@
   * @param memoryLimitBytes Memory limit in bytes
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult SetMemHardLimit(const char* deviceUUID, uint64_t memoryLimitBytes);
+ ACCELERATOR_API AccelResult AccelSetMemHardLimit(const char* deviceUUID, uint64_t memoryLimitBytes);
  
  /**
   * Set hard compute unit limit for a worker (one-time, called at worker start).
@@ -331,7 +346,7 @@
   * @param computeUnitLimit Compute unit limit (e.g., percentage 0-100)
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult SetComputeUnitHardLimit(const char* deviceUUID, uint32_t computeUnitLimit);
+ ACCELERATOR_API AccelResult AccelSetComputeUnitHardLimit(const char* deviceUUID, uint32_t computeUnitLimit);
  
  // ============================================================================
  // Virtualization APIs - Device Snapshot/Migration
@@ -349,7 +364,7 @@
   * @param context Snapshot context containing process IDs and/or device UUID
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult Snapshot(SnapshotContext* context);
+ ACCELERATOR_API AccelResult AccelSnapshot(SnapshotContext* context);
  
  /**
   * Resume device/process state (unlock and restore state).
@@ -363,7 +378,7 @@
   * @param context Snapshot context containing process IDs and/or device UUID
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult Resume(SnapshotContext* context);
+ ACCELERATOR_API AccelResult AccelResume(SnapshotContext* context);
  
  // ============================================================================
  // Metrics APIs
@@ -379,7 +394,7 @@
   * @param processInfoCount Output parameter for number of process infos actually returned
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult GetProcessInformation(ProcessInformation* processInfos, size_t maxCount, size_t* processInfoCount);
+ ACCELERATOR_API AccelResult AccelGetProcessInformation(ProcessInformation* processInfos, size_t maxCount, size_t* processInfoCount);
  
  /**
   * Get basic device metrics (power, PCIe, SM active, TC usage, etc.).
@@ -389,7 +404,7 @@
   * @param metrics Output buffer for device metrics (allocated by caller, size >= deviceCount)
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult GetDeviceMetrics(const char** deviceUUIDs, size_t deviceCount, DeviceMetrics* metrics);
+ ACCELERATOR_API AccelResult AccelGetDeviceMetrics(const char** deviceUUIDs, size_t deviceCount, DeviceMetrics* metrics);
  
  /**
   * Get vendor mount libs returns the mount paths for additional device driver or runtime libraries.
@@ -399,7 +414,7 @@
   * @param mountCount Output parameter for number of mounts actually returned
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult GetVendorMountLibs(MountPath* mounts, size_t maxCount, size_t* mountCount);
+ ACCELERATOR_API AccelResult AccelGetVendorMountLibs(MountPath* mounts, size_t maxCount, size_t* mountCount);
  
  // ============================================================================
  // Utility APIs
@@ -412,10 +427,11 @@
   * @param callback Log callback function pointer (can be NULL to unregister)
   * @return ACCEL_SUCCESS on success, error code otherwise
   */
- ACCELERATOR_API AccelResult RegisterLogCallback(LogCallbackFunc callback);
+ ACCELERATOR_API AccelResult AccelRegisterLogCallback(LogCallbackFunc callback);
  
  #ifdef __cplusplus
  }
  #endif
  
  #endif  // ACCELERATOR_H
+ 

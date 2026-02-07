@@ -40,34 +40,34 @@ func (a *AcceleratorInterface) Load() error {
 	libHandle = handle
 
 	// Register all required functions - names must match C header exactly
-	purego.RegisterLibFunc(&vgpuInit, handle, "VGPUInit")
-	purego.RegisterLibFunc(&vgpuShutdown, handle, "VGPUShutdown")
-	purego.RegisterLibFunc(&getDeviceCount, handle, "GetDeviceCount")
-	purego.RegisterLibFunc(&getAllDevices, handle, "GetAllDevices")
-	purego.RegisterLibFunc(&getAllDevicesTopology, handle, "GetAllDevicesTopology")
-	purego.RegisterLibFunc(&assignPartition, handle, "AssignPartition")
-	purego.RegisterLibFunc(&removePartition, handle, "RemovePartition")
-	purego.RegisterLibFunc(&setMemHardLimit, handle, "SetMemHardLimit")
-	purego.RegisterLibFunc(&setComputeUnitHardLimit, handle, "SetComputeUnitHardLimit")
-	purego.RegisterLibFunc(&snapshot, handle, "Snapshot")
-	purego.RegisterLibFunc(&resume, handle, "Resume")
-	purego.RegisterLibFunc(&getProcessInformation, handle, "GetProcessInformation")
-	purego.RegisterLibFunc(&getDeviceMetrics, handle, "GetDeviceMetrics")
-	purego.RegisterLibFunc(&getVendorMountLibs, handle, "GetVendorMountLibs")
+	purego.RegisterLibFunc(&accelInit, handle, "AccelInit")
+	purego.RegisterLibFunc(&accelShutdown, handle, "AccelShutdown")
+	purego.RegisterLibFunc(&getDeviceCount, handle, "AccelGetDeviceCount")
+	purego.RegisterLibFunc(&getAllDevices, handle, "AccelGetAllDevices")
+	purego.RegisterLibFunc(&getAllDevicesTopology, handle, "AccelGetAllDevicesTopology")
+	purego.RegisterLibFunc(&assignPartition, handle, "AccelAssignPartition")
+	purego.RegisterLibFunc(&removePartition, handle, "AccelRemovePartition")
+	purego.RegisterLibFunc(&setMemHardLimit, handle, "AccelSetMemHardLimit")
+	purego.RegisterLibFunc(&setComputeUnitHardLimit, handle, "AccelSetComputeUnitHardLimit")
+	purego.RegisterLibFunc(&snapshot, handle, "AccelSnapshot")
+	purego.RegisterLibFunc(&resume, handle, "AccelResume")
+	purego.RegisterLibFunc(&getProcessInformation, handle, "AccelGetProcessInformation")
+	purego.RegisterLibFunc(&getDeviceMetrics, handle, "AccelGetDeviceMetrics")
+	purego.RegisterLibFunc(&getVendorMountLibs, handle, "AccelGetVendorMountLibs")
 
 	// Register log callback only on non-macOS platforms
 	// purego callback has issues on macOS ARM64, causing bus errors when C code calls back into Go
 	if runtime.GOOS != "darwin" {
-		purego.RegisterLibFunc(&registerLogCallback, handle, "RegisterLogCallback")
+		purego.RegisterLibFunc(&registerLogCallback, handle, "AccelRegisterLogCallback")
 		callback := purego.NewCallback(goLogCallback)
 		if result := registerLogCallback(callback); result != ResultSuccess {
 			klog.Warningf("Failed to register log callback: %d", result)
 		}
 	}
 
-	result := vgpuInit()
+	result := accelInit()
 	if result != ResultSuccess {
-		return fmt.Errorf("failed to initialize VGPU: %d", result)
+		return fmt.Errorf("failed to initialize accelerator: %d", result)
 	}
 
 	a.loaded = true

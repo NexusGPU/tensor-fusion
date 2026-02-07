@@ -225,8 +225,8 @@ type SnapshotContext struct {
 var (
 	libHandle uintptr
 	// DeviceInfo APIs
-	vgpuInit              func() Result
-	vgpuShutdown          func() Result
+	accelInit              func() Result
+	accelShutdown          func() Result
 	getDeviceCount        func(*uintptr) Result
 	getAllDevices         func(*ExtendedDeviceInfo, uintptr, *uintptr) Result
 	getAllDevicesTopology func(*ExtendedDeviceTopology) Result
@@ -286,7 +286,7 @@ func (a *AcceleratorInterface) Close() error {
 					_ = r // ignore recovery value
 				}
 			}()
-			vgpuShutdown()
+			accelShutdown()
 			if registerLogCallback != nil {
 				registerLogCallback(0)
 			}
