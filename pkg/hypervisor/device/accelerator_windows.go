@@ -39,27 +39,27 @@ func (a *AcceleratorInterface) Load() error {
 	libHandle = uintptr(dll.Handle)
 
 	// purego.RegisterLibFunc works with Windows DLL handles - names must match C header exactly
-	purego.RegisterLibFunc(&vgpuInit, libHandle, "VGPUInit")
-	purego.RegisterLibFunc(&vgpuShutdown, libHandle, "VGPUShutdown")
-	purego.RegisterLibFunc(&getDeviceCount, libHandle, "GetDeviceCount")
-	purego.RegisterLibFunc(&getAllDevices, libHandle, "GetAllDevices")
-	purego.RegisterLibFunc(&getAllDevicesTopology, libHandle, "GetAllDevicesTopology")
-	purego.RegisterLibFunc(&assignPartition, libHandle, "AssignPartition")
-	purego.RegisterLibFunc(&removePartition, libHandle, "RemovePartition")
-	purego.RegisterLibFunc(&setMemHardLimit, libHandle, "SetMemHardLimit")
-	purego.RegisterLibFunc(&setComputeUnitHardLimit, libHandle, "SetComputeUnitHardLimit")
-	purego.RegisterLibFunc(&snapshot, libHandle, "Snapshot")
-	purego.RegisterLibFunc(&resume, libHandle, "Resume")
-	purego.RegisterLibFunc(&getProcessInformation, libHandle, "GetProcessInformation")
-	purego.RegisterLibFunc(&getDeviceMetrics, libHandle, "GetDeviceMetrics")
-	purego.RegisterLibFunc(&getVendorMountLibs, libHandle, "GetVendorMountLibs")
+	purego.RegisterLibFunc(&accelInit, libHandle, "AccelInit")
+	purego.RegisterLibFunc(&accelShutdown, libHandle, "AccelShutdown")
+	purego.RegisterLibFunc(&getDeviceCount, libHandle, "AccelGetDeviceCount")
+	purego.RegisterLibFunc(&getAllDevices, libHandle, "AccelGetAllDevices")
+	purego.RegisterLibFunc(&getAllDevicesTopology, libHandle, "AccelGetAllDevicesTopology")
+	purego.RegisterLibFunc(&assignPartition, libHandle, "AccelAssignPartition")
+	purego.RegisterLibFunc(&removePartition, libHandle, "AccelRemovePartition")
+	purego.RegisterLibFunc(&setMemHardLimit, libHandle, "AccelSetMemHardLimit")
+	purego.RegisterLibFunc(&setComputeUnitHardLimit, libHandle, "AccelSetComputeUnitHardLimit")
+	purego.RegisterLibFunc(&snapshot, libHandle, "AccelSnapshot")
+	purego.RegisterLibFunc(&resume, libHandle, "AccelResume")
+	purego.RegisterLibFunc(&getProcessInformation, libHandle, "AccelGetProcessInformation")
+	purego.RegisterLibFunc(&getDeviceMetrics, libHandle, "AccelGetDeviceMetrics")
+	purego.RegisterLibFunc(&getVendorMountLibs, libHandle, "AccelGetVendorMountLibs")
 
 	// Note: Log callback is not registered on Windows due to calling convention differences
 	// Windows uses stdcall/cdecl while Unix uses System V ABI
 
-	result := vgpuInit()
+	result := accelInit()
 	if result != ResultSuccess {
-		return fmt.Errorf("failed to initialize VGPU: %d", result)
+		return fmt.Errorf("failed to initialize accelerator: %d", result)
 	}
 
 	a.loaded = true

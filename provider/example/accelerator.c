@@ -81,7 +81,7 @@ static void* limiterThreadFunc(void* arg __attribute__((unused))) {
     size_t deviceCount = 0;
     char deviceUUID[64] = {0};
     
-    if (GetAllDevices(devices, 4, &deviceCount) != ACCEL_SUCCESS || deviceCount == 0) {
+    if (AccelGetAllDevices(devices, 4, &deviceCount) != ACCEL_SUCCESS || deviceCount == 0) {
         free(devices);
         return NULL;
     }
@@ -218,17 +218,17 @@ Result AutoResume(const char* workerId, const char* deviceUUID, const char* reso
 // Example Implementation - DeviceInfo APIs
 // ============================================================================
 
-AccelResult VGPUInit(void) {
-    logMessage("INFO", "VGPUInit called from provider example");
+AccelResult AccelInit(void) {
+    logMessage("INFO", "AccelInit called from provider example");
     return ACCEL_SUCCESS;
 }
 
-AccelResult VGPUShutdown(void) {
-    logMessage("INFO", "VGPUShutdown called from provider example");
+AccelResult AccelShutdown(void) {
+    logMessage("INFO", "AccelShutdown called from provider example");
     return ACCEL_SUCCESS;
 }
 
-AccelResult GetDeviceCount(size_t* deviceCount) {
+AccelResult AccelGetDeviceCount(size_t* deviceCount) {
     if (!deviceCount) {
         return ACCEL_ERROR_INVALID_PARAM;
     }
@@ -324,7 +324,7 @@ static void initDeviceInfo(ExtendedDeviceInfo* info, int32_t deviceIndex) {
     info->virtualizationCapabilities.maxWorkersPerDevice = 16;
 }
 
-AccelResult GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount) {
+AccelResult AccelGetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount) {
     if (!devices || !deviceCount || maxCount == 0) {
         return ACCEL_ERROR_INVALID_PARAM;
     }
@@ -340,18 +340,18 @@ AccelResult GetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* 
     for (size_t i = 0; i < actualCount; i++) {
         initDeviceInfo(&devices[i], (int32_t)i);
     }
-    logMessage("INFO", "GetAllDevices called from provider example");
+    logMessage("INFO", "AccelGetAllDevices called from provider example");
     return ACCEL_SUCCESS;
 }
 
-AccelResult GetAllDevicesTopology(ExtendedDeviceTopology* topology) {
+AccelResult AccelGetAllDevicesTopology(ExtendedDeviceTopology* topology) {
     if (!topology) {
         return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Get device count first
     size_t deviceCount = 0;
-    if (GetDeviceCount(&deviceCount) != ACCEL_SUCCESS || deviceCount == 0) {
+    if (AccelGetDeviceCount(&deviceCount) != ACCEL_SUCCESS || deviceCount == 0) {
         topology->deviceCount = 0;
         return ACCEL_ERROR_INTERNAL;
     }
@@ -364,7 +364,7 @@ AccelResult GetAllDevicesTopology(ExtendedDeviceTopology* topology) {
     // Get all devices to populate topology
     ExtendedDeviceInfo devices[MAX_TOPOLOGY_DEVICES];
     size_t actualDeviceCount = 0;
-    if (GetAllDevices(devices, deviceCount, &actualDeviceCount) != ACCEL_SUCCESS) {
+    if (AccelGetAllDevices(devices, deviceCount, &actualDeviceCount) != ACCEL_SUCCESS) {
         topology->deviceCount = 0;
         return ACCEL_ERROR_INTERNAL;
     }
@@ -396,7 +396,7 @@ AccelResult GetAllDevicesTopology(ExtendedDeviceTopology* topology) {
         }
     }
 
-    logMessage("INFO", "GetAllDevicesTopology called from provider example");
+    logMessage("INFO", "AccelGetAllDevicesTopology called from provider example");
     return ACCEL_SUCCESS;
 }
 
@@ -407,7 +407,7 @@ AccelResult GetAllDevicesTopology(ExtendedDeviceTopology* topology) {
 // Counter for generating unique partition IDs
 static int partitionCounter = 0;
 
-AccelResult AssignPartition(const char* templateId, const char* deviceUUID, PartitionResult* partitionResult) {
+AccelResult AccelAssignPartition(const char* templateId, const char* deviceUUID, PartitionResult* partitionResult) {
     if (!templateId || !deviceUUID || !partitionResult) {
         return ACCEL_ERROR_INVALID_PARAM;
     }
@@ -427,17 +427,17 @@ AccelResult AssignPartition(const char* templateId, const char* deviceUUID, Part
     snprintf(partitionResult->envVars[1], sizeof(partitionResult->envVars[1]), "GPU_UUID=%s", deviceUUID);
     snprintf(partitionResult->envVars[2], sizeof(partitionResult->envVars[2]), "PARTITION_TEMPLATE=%s", templateId);
 
-    logMessage("INFO", "AssignPartition called from provider example");
+    logMessage("INFO", "AccelAssignPartition called from provider example");
     return ACCEL_SUCCESS;
 }
 
-AccelResult RemovePartition(const char* templateId, const char* deviceUUID) {
+AccelResult AccelRemovePartition(const char* templateId, const char* deviceUUID) {
     if (!templateId || !deviceUUID) {
         return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Example: always succeed
-    logMessage("INFO", "RemovePartition called from provider example");
+    logMessage("INFO", "AccelRemovePartition called from provider example");
     return ACCEL_SUCCESS;
 }
 
@@ -445,23 +445,23 @@ AccelResult RemovePartition(const char* templateId, const char* deviceUUID) {
 // Example Implementation - Virtualization APIs - Hard Isolation
 // ============================================================================
 
-AccelResult SetMemHardLimit(const char* deviceUUID, uint64_t memoryLimitBytes) {
+AccelResult AccelSetMemHardLimit(const char* deviceUUID, uint64_t memoryLimitBytes) {
     if (!deviceUUID || memoryLimitBytes == 0) {
         return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Example: always succeed
-    logMessage("INFO", "SetMemHardLimit called from provider example");
+    logMessage("INFO", "AccelSetMemHardLimit called from provider example");
     return ACCEL_SUCCESS;
 }
 
-AccelResult SetComputeUnitHardLimit(const char* deviceUUID, uint32_t computeUnitLimit) {
+AccelResult AccelSetComputeUnitHardLimit(const char* deviceUUID, uint32_t computeUnitLimit) {
     if (!deviceUUID || computeUnitLimit == 0 || computeUnitLimit > 100) {
         return ACCEL_ERROR_INVALID_PARAM;
     }
 
     // Example: always succeed
-    logMessage("INFO", "SetComputeUnitHardLimit called from provider example");
+    logMessage("INFO", "AccelSetComputeUnitHardLimit called from provider example");
     return ACCEL_SUCCESS;
 }
 
@@ -469,7 +469,7 @@ AccelResult SetComputeUnitHardLimit(const char* deviceUUID, uint32_t computeUnit
 // Example Implementation - Virtualization APIs - Device Snapshot/Migration
 // ============================================================================
 
-AccelResult Snapshot(SnapshotContext* context) {
+AccelResult AccelSnapshot(SnapshotContext* context) {
     if (!context) {
         return ACCEL_ERROR_INVALID_PARAM;
     }
@@ -488,10 +488,10 @@ AccelResult Snapshot(SnapshotContext* context) {
                 return ACCEL_ERROR_NOT_FOUND;
             }
         }
-        logMessage("INFO", "Snapshot (process-level) called from provider example");
+        logMessage("INFO", "AccelSnapshot (process-level) called from provider example");
     } else if (context->deviceUUID != NULL) {
         // Device-level snapshot
-        logMessage("INFO", "Snapshot (device-level) called from provider example");
+        logMessage("INFO", "AccelSnapshot (device-level) called from provider example");
     } else {
         return ACCEL_ERROR_INVALID_PARAM;
     }
@@ -500,7 +500,7 @@ AccelResult Snapshot(SnapshotContext* context) {
     return ACCEL_SUCCESS;
 }
 
-AccelResult Resume(SnapshotContext* context) {
+AccelResult AccelResume(SnapshotContext* context) {
     if (!context) {
         return ACCEL_ERROR_INVALID_PARAM;
     }
@@ -511,10 +511,10 @@ AccelResult Resume(SnapshotContext* context) {
         if (context->processCount > MAX_PROCESSES) {
             return ACCEL_ERROR_INVALID_PARAM;
         }
-        logMessage("INFO", "Resume (process-level) called from provider example");
+        logMessage("INFO", "AccelResume (process-level) called from provider example");
     } else if (context->deviceUUID != NULL) {
         // Device-level resume
-        logMessage("INFO", "Resume (device-level) called from provider example");
+        logMessage("INFO", "AccelResume (device-level) called from provider example");
     } else {
         return ACCEL_ERROR_INVALID_PARAM;
     }
@@ -527,7 +527,7 @@ AccelResult Resume(SnapshotContext* context) {
 // Example Implementation - Metrics APIs
 // ============================================================================
 
-AccelResult GetProcessInformation(
+AccelResult AccelGetProcessInformation(
     ProcessInformation* processInfos,
     size_t maxCount,
     size_t* processInfoCount
@@ -559,7 +559,7 @@ AccelResult GetProcessInformation(
     uint64_t totalMemoryBytes = 16ULL * 1024 * 1024 * 1024; // Default 16GB
     uint64_t totalCUs = 108; // Default 108 CUs
     
-    if (GetAllDevices(devices, 256, &deviceCount) == ACCEL_SUCCESS && deviceCount > 0) {
+    if (AccelGetAllDevices(devices, 256, &deviceCount) == ACCEL_SUCCESS && deviceCount > 0) {
         totalMemoryBytes = devices[0].basic.totalMemoryBytes;
         totalCUs = devices[0].basic.totalComputeUnits;
     }
@@ -599,11 +599,11 @@ AccelResult GetProcessInformation(
     }
 
     *processInfoCount = actualCount;
-    logMessage("INFO", "GetProcessInformation called from provider example (AMD SMI style)");
+    logMessage("INFO", "AccelGetProcessInformation called from provider example (AMD SMI style)");
     return ACCEL_SUCCESS;
 }
 
-AccelResult GetDeviceMetrics(
+AccelResult AccelGetDeviceMetrics(
     const char** deviceUUIDs,
     size_t deviceCount,
     DeviceMetrics* metrics
@@ -692,20 +692,20 @@ AccelResult GetDeviceMetrics(
         dm->extraMetricsCount = extraCount;
     }
 
-    logMessage("INFO", "GetDeviceMetrics called from provider example");
+    logMessage("INFO", "AccelGetDeviceMetrics called from provider example");
     return ACCEL_SUCCESS;
 }
 
-AccelResult GetVendorMountLibs(MountPath* mounts, size_t maxCount, size_t* mountCount) {
+AccelResult AccelGetVendorMountLibs(MountPath* mounts, size_t maxCount, size_t* mountCount) {
     if (!mounts || maxCount == 0 || !mountCount) {
         return ACCEL_ERROR_INVALID_PARAM;
     }
     *mountCount = 0;
-    logMessage("INFO", "GetVendorMountLibs called from provider example");
+    logMessage("INFO", "AccelGetVendorMountLibs called from provider example");
     return ACCEL_SUCCESS;
 }
 
-AccelResult RegisterLogCallback(LogCallbackFunc callback) {
+AccelResult AccelRegisterLogCallback(LogCallbackFunc callback) {
     Log = callback;
     return ACCEL_SUCCESS;
 }
