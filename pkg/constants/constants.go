@@ -241,6 +241,23 @@ const (
 	GPUNodeOSMacOS   = "macos"
 )
 
+// Ascend driver/DCMI paths (common install locations)
+const (
+	AscendDriverHostPath  = "/usr/local/Ascend/driver"
+	AscendDCMIHostPath    = "/usr/local/dcmi"
+	AscendDriverLibDir    = "/usr/local/Ascend/driver/lib64/driver"
+	AscendDriverCommonDir = "/usr/local/Ascend/driver/lib64/common"
+	AscendDriverLibRoot   = "/usr/local/Ascend/driver/lib64"
+	AscendDCMILibDir      = "/usr/local/dcmi"
+	AscendLDLibraryPath   = AscendDriverLibRoot +
+		":" + AscendDriverLibDir +
+		":" + AscendDriverCommonDir +
+		":" + AscendDCMILibDir
+	AscendDriverVolumeName = "ascend-driver"
+	AscendDCMIVolumeName   = "ascend-dcmi"
+	AscendHostDevVolume    = "ascend-host-dev"
+)
+
 // To match GPUNode with K8S node, when creating from cloud vendor, must set a label from cloud-init userdata
 var (
 	ProvisionerLabelKey        = Domain + "/node-provisioner"

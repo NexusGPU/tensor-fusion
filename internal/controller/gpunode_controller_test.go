@@ -88,6 +88,9 @@ var _ = Describe("GPUNode Controller", func() {
 			node := &tfv1.GPUNode{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "node-1",
+					Labels: map[string]string{
+						constants.AcceleratorLabelVendor: constants.AcceleratorVendorNvidia,
+					},
 				},
 			}
 			gpu := &tfv1.GPU{

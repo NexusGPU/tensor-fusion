@@ -125,6 +125,24 @@ spec:
     - "huawei.com/npu"
 
   hardwareMetadata:
+    - model: Ascend 310P3
+      fullModelName: "Ascend 310P3"
+      costPerHour: "1.0"
+      fp16TFlops: "22"
+      maxPartitions: 7
+      maxIsolationGroups: 4
+      totalExtendedResources:
+        AICORE: 8
+        AICPU: 7
+        VPC: 12
+        VENC: 3
+        VDEC: 12
+        JPEGD: 16
+        JPEGE: 8
+      partitionTemplateRefs:
+        - ascend-vir01
+        - ascend-vir02
+        - ascend-vir04
     - model: Ascend910B
       fullModelName: "Huawei Ascend 910B"
       costPerHour: "2.0"

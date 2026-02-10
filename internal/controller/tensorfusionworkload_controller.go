@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/kubernetes/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -128,8 +129,17 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	if workload.Status.PodTemplateHash != podTemplateHash {
-		workload.Status.PodTemplateHash = podTemplateHash
-		if err := r.Status().Update(ctx, workload); err != nil {
+		if err := r.patchWorkloadStatus(ctx, client.ObjectKeyFromObject(workload), func(latest *tfv1.TensorFusionWorkload) bool {
+			if latest.Status.PodTemplateHash == podTemplateHash {
+				return false
+			}
+			latest.Status.PodTemplateHash = podTemplateHash
+			return true
+		}); err != nil {
+			if errors.IsConflict(err) {
+				log.V(1).Info("status patch conflict, requeue", "name", workload.Name)
+				return ctrl.Result{Requeue: true}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("update status: %w", err)
 		}
 		return ctrl.Result{}, nil
@@ -141,11 +151,19 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	if !workload.Spec.IsDynamicReplica() {
 		err := r.reconcileScaling(ctx, workload, activePods, workerGenerator, podTemplateHash)
 		if err != nil {
+			if errors.IsConflict(err) {
+				log.V(1).Info("scaling status conflict, requeue", "name", workload.Name)
+				return ctrl.Result{Requeue: true}, nil
+			}
 			return ctrl.Result{}, err
 		}
 	}
 
 	if err := r.updateStatus(ctx, workload, activePods); err != nil {
+		if errors.IsConflict(err) {
+			log.V(1).Info("workload status conflict, requeue", "name", workload.Name)
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -197,8 +215,13 @@ func (r *TensorFusionWorkloadReconciler) reconcileScaling(
 
 	// Update workload status
 	if workload.Status.WorkerCount != currentReplicas {
-		workload.Status.WorkerCount = currentReplicas
-		if err := r.Status().Update(ctx, workload); err != nil {
+		if err := r.patchWorkloadStatus(ctx, client.ObjectKeyFromObject(workload), func(latest *tfv1.TensorFusionWorkload) bool {
+			if latest.Status.WorkerCount == currentReplicas {
+				return false
+			}
+			latest.Status.WorkerCount = currentReplicas
+			return true
+		}); err != nil {
 			return fmt.Errorf("update status: %w", err)
 		}
 	}
@@ -378,13 +401,54 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 
 	if statusChanged {
 		log.Info("Updating workload status", "phase", phase, "readyReplicas", readyReplicas)
-		workload.Status.Phase = phase
-		workload.Status.ReadyWorkers = readyReplicas
-		if err := r.Status().Update(ctx, workload); err != nil {
+		if err := r.patchWorkloadStatus(ctx, client.ObjectKeyFromObject(workload), func(latest *tfv1.TensorFusionWorkload) bool {
+			changed := false
+
+			if latest.Spec.IsDynamicReplica() && latest.Status.WorkerCount != int32(len(pods)) {
+				latest.Status.WorkerCount = int32(len(pods))
+				changed = true
+			}
+			if latest.Status.ReadyWorkers != readyReplicas {
+				latest.Status.ReadyWorkers = readyReplicas
+				changed = true
+			}
+			if latest.Status.Phase != phase {
+				latest.Status.Phase = phase
+				changed = true
+			}
+			if meta.SetStatusCondition(&latest.Status.Conditions, readyCondition) {
+				changed = true
+			}
+
+			return changed
+		}); err != nil {
 			return fmt.Errorf("update workload status: %w", err)
 		}
 	}
 	return nil
+}
+
+func (r *TensorFusionWorkloadReconciler) patchWorkloadStatus(
+	ctx context.Context,
+	key client.ObjectKey,
+	mutate func(*tfv1.TensorFusionWorkload) bool,
+) error {
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		latest := &tfv1.TensorFusionWorkload{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			if errors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+
+		if !mutate(latest) {
+			return nil
+		}
+
+		// Use full status update so required status fields remain present.
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 func filterActivePods(podList *corev1.PodList) []*corev1.Pod {

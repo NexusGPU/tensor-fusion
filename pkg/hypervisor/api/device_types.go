@@ -65,6 +65,7 @@ type VirtualizationCapabilities struct {
 	SupportsHardIsolation bool
 	SupportsSnapshot      bool
 	SupportsMetrics       bool
+	SupportsRemoting      bool
 	MaxPartitions         uint32
 	MaxWorkersPerDevice   uint32
 }

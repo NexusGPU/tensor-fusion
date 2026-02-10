@@ -3,6 +3,8 @@ package kubernetes
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -31,7 +33,17 @@ func init() {
 type APIClient struct {
 	client client.Client
 	ctx    context.Context
+
+	providerCache providerConfigCache
 }
+
+type providerConfigCache struct {
+	mu        sync.Mutex
+	lastFetch time.Time
+	providers []tfv1.ProviderConfig
+}
+
+const providerConfigCacheTTL = time.Minute
 
 // NewAPIClient creates a new API client instance with an existing client
 func NewAPIClient(ctx context.Context, k8sClient client.Client) *APIClient {
@@ -94,10 +106,21 @@ func (a *APIClient) CreateOrUpdateGPU(
 				Name: gpuID,
 			},
 		}
+		var desiredStatus tfv1.GPUStatus
 		_, err := controllerutil.CreateOrPatch(a.ctx, a.client, gpu, func() error {
-			return mutateFn(gpuNode, gpu)
+			if err := mutateFn(gpuNode, gpu); err != nil {
+				return err
+			}
+			// Capture desired status before CreateOrPatch overwrites it with server response.
+			desiredStatus = gpu.Status
+			return nil
 		})
 		if err != nil {
+			return err
+		}
+		gpu.Status = desiredStatus
+		// Status is a subresource; update it explicitly after CreateOrPatch.
+		if err := a.UpdateGPUStatus(gpu); err != nil {
 			return err
 		}
 		return nil
@@ -160,6 +183,67 @@ func (a *APIClient) UpdateGPUNodeStatus(nodeName string, nodeInfo *api.NodeInfo)
 		}
 		return a.client.Status().Patch(a.ctx, current, patch)
 	})
+}
+
+// ResolveDeviceFp16TFlops tries to find FP16 TFLOPS from ProviderConfig by vendor + model (case-insensitive).
+func (a *APIClient) ResolveDeviceFp16TFlops(vendor, model string) (resource.Quantity, bool, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return resource.Quantity{}, false, nil
+	}
+
+	providers, err := a.getProviderConfigs()
+	if err != nil {
+		return resource.Quantity{}, false, err
+	}
+
+	modelsToMatch := []string{model}
+	if vendor != "" && len(model) >= len(vendor) {
+		if strings.EqualFold(model[:len(vendor)], vendor) {
+			trimmed := strings.TrimSpace(model[len(vendor):])
+			if trimmed != "" {
+				modelsToMatch = append(modelsToMatch, trimmed)
+			}
+		}
+	}
+
+	for _, provider := range providers {
+		if vendor != "" && !strings.EqualFold(provider.Spec.Vendor, vendor) {
+			continue
+		}
+		for _, hw := range provider.Spec.HardwareMetadata {
+			for _, candidate := range modelsToMatch {
+				if strings.EqualFold(hw.Model, candidate) {
+					if hw.Fp16TFlops.IsZero() {
+						return resource.Quantity{}, false, nil
+					}
+					return hw.Fp16TFlops.DeepCopy(), true, nil
+				}
+			}
+		}
+	}
+	return resource.Quantity{}, false, nil
+}
+
+func (a *APIClient) getProviderConfigs() ([]tfv1.ProviderConfig, error) {
+	a.providerCache.mu.Lock()
+	defer a.providerCache.mu.Unlock()
+
+	if time.Since(a.providerCache.lastFetch) < providerConfigCacheTTL && len(a.providerCache.providers) > 0 {
+		return append([]tfv1.ProviderConfig{}, a.providerCache.providers...), nil
+	}
+
+	var list tfv1.ProviderConfigList
+	if err := a.client.List(a.ctx, &list); err != nil {
+		if len(a.providerCache.providers) > 0 {
+			return append([]tfv1.ProviderConfig{}, a.providerCache.providers...), nil
+		}
+		return nil, err
+	}
+
+	a.providerCache.providers = list.Items
+	a.providerCache.lastFetch = time.Now()
+	return append([]tfv1.ProviderConfig{}, a.providerCache.providers...), nil
 }
 
 // DeleteGPU deletes a GPU resource

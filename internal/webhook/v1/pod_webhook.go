@@ -227,9 +227,9 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		pod.Spec.Priority = nil
 	}
 
-	// Inject initContainer and env variables
+	// Inject tensor-fusion patches
 	patches, err := m.patchTFClient(
-		ctx, pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices, tfInfo.Profile.SidecarWorker,
+		ctx, pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices,
 	)
 	if err != nil {
 		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
@@ -374,7 +374,6 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	isLocalGPU bool,
 	currentBytes []byte,
 	containerIndices []int,
-	isSidecarWorker bool,
 ) ([]jsonpatch.JsonPatchOperation, error) {
 	clientConfig := pool.Spec.ComponentConfig.Client
 
@@ -439,17 +438,6 @@ func (m *TensorFusionPodMutator) patchTFClient(
 
 		if !isLocalGPU {
 			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
-		} else if isSidecarWorker {
-			// Hard-isolation mode in container, use tensor-fusion worker as sidecar and communicate thru /dev/shm/tf_shm
-			container.Env = append(container.Env, corev1.EnvVar{
-				Name: constants.ConnectionInfoEnv,
-				// protocol+identifier+size+initVersion
-				Value: fmt.Sprintf("shmem+%s+%s+1",
-					constants.ConnectionSharedMemName, constants.ConnectionSharedMemSize),
-			}, corev1.EnvVar{
-				Name:  constants.DisableVMSharedMemEnv,
-				Value: "0",
-			})
 		}
 
 		pod.Spec.Containers[containerIndex] = *container

@@ -97,13 +97,22 @@ var _ = BeforeSuite(func() {
 		},
 		ErrorIfCRDPathMissing: true,
 
-		// The BinaryAssetsDirectory is only required if you want to run the tests directly
-		// without call the makefile target test. If not informed it will look for the
-		// default path defined in controller-runtime which is /usr/local/kubebuilder/.
-		// Note that you must have the required binaries setup under the bin directory to perform
-		// the tests directly. When we run make test it will be setup and used automatically.
-		BinaryAssetsDirectory: filepath.Join("..", "..", "bin", "k8s",
-			fmt.Sprintf("1.31.0-%s-%s", runtime.GOOS, runtime.GOARCH)),
+		// If KUBEBUILDER_ASSETS is set (e.g. by make test), envtest uses it; otherwise fallback to bin/k8s.
+		BinaryAssetsDirectory: func() string {
+			if os.Getenv("KUBEBUILDER_ASSETS") != "" {
+				return ""
+			}
+			binDir := filepath.Join("..", "..", "bin", "k8s",
+				fmt.Sprintf("1.31.0-%s-%s", runtime.GOOS, runtime.GOARCH))
+			absBinDir, err := filepath.Abs(binDir)
+			if err == nil {
+				etcdPath := filepath.Join(absBinDir, "etcd")
+				if _, err := os.Stat(etcdPath); err == nil {
+					return absBinDir
+				}
+			}
+			return ""
+		}(),
 	}
 
 	var err error

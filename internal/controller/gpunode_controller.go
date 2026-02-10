@@ -164,10 +164,10 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 	}
 
-	if node.Status.TotalGPUs == 0 {
-		log.Info("GPU on this node has not been discovered, wait next loop", "node", node.Name)
-		return ctrl.Result{}, nil
-	}
+	// if node.Status.TotalGPUs == 0 {
+	// 	log.Info("GPU on this node has not been discovered, wait next loop", "node", node.Name)
+	// 	return ctrl.Result{}, nil
+	// }
 
 	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj, coreNode)
 	if err != nil {

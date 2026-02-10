@@ -314,8 +314,16 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 	newPartitionedDevice.ParentUUID = newPartitionedDevice.UUID
 	newPartitionedDevice.UUID = partitionResult.PartitionUUID
 
-	// Store environment variables if partition type is environment variable mode
-	if partitionResult.Type == PartitionTypeEnvironmentVariable && len(partitionResult.EnvVars) > 0 {
+	if partitionResult.Type == PartitionTypeDeviceNode && len(partitionResult.DeviceNodes) > 0 {
+		// Hard partition mode mounts provider-returned device nodes while preserving shared ones.
+		if newPartitionedDevice.DeviceNode == nil {
+			newPartitionedDevice.DeviceNode = make(map[string]string)
+		}
+		maps.Copy(newPartitionedDevice.DeviceNode, partitionResult.DeviceNodes)
+	}
+
+	// Preserve provider-returned environment variables for both env/device-node modes.
+	if len(partitionResult.EnvVars) > 0 {
 		if newPartitionedDevice.DeviceEnv == nil {
 			newPartitionedDevice.DeviceEnv = make(map[string]string)
 		}

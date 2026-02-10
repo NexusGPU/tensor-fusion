@@ -104,16 +104,29 @@ type DevicePropertyKV struct {
 }
 
 const MaxDeviceProperties = 64
+const MaxDeviceNodes = 32
+const MaxDeviceNodePath = 512
 
 type DeviceProperties struct {
 	Properties [MaxDeviceProperties]DevicePropertyKV
 	Count      uintptr
 }
 
+type DeviceNodeKV struct {
+	HostPath  [MaxDeviceNodePath]byte
+	GuestPath [MaxDeviceNodePath]byte
+}
+
+type DeviceNodes struct {
+	Nodes [MaxDeviceNodes]DeviceNodeKV
+	Count uintptr
+}
+
 type ExtendedDeviceInfo struct {
 	Basic        DeviceBasicInfo
 	Props        DeviceProperties
 	Capabilities VirtualizationCapabilities
+	DeviceNodes  DeviceNodes
 }
 
 type ExtraMetric struct {
@@ -208,9 +221,10 @@ const (
 // Field names in Go are capitalized for export, but memory layout must match C struct exactly
 // C struct fields: type, deviceUUID, envVars
 type PartitionResult struct {
-	Type       PartitionResultType // C: PartitionResultType type
-	DeviceUUID [64]byte            // C: char deviceUUID[64]
-	EnvVars    [10][256]byte       // C: char envVars[10][256], key-value pairs like "A=B"
+	Type        PartitionResultType // C: PartitionResultType type
+	DeviceUUID  [64]byte            // C: char deviceUUID[64]
+	EnvVars     [10][256]byte       // C: char envVars[10][256], key-value pairs like "A=B"
+	DeviceNodes DeviceNodes         // C: DeviceNodes deviceNodes
 }
 
 // SnapshotContext for snapshot/resume operations
@@ -393,6 +407,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 	}
 
 	if cDeviceCount == 0 {
+		klog.Infof("GetAllDevices: device count is 0")
 		return []*api.DeviceInfo{}, nil
 	}
 
@@ -409,6 +424,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 	}
 
 	if cCount == 0 {
+		klog.Infof("GetAllDevices: returned 0 devices")
 		return []*api.DeviceInfo{}, nil
 	}
 
@@ -426,6 +442,37 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 				properties[key] = value
 			}
 		}
+		if driver := byteArrayToString(cInfo.Basic.DriverVersion[:]); driver != "" {
+			properties["driverVersion"] = driver
+		}
+		if fw := byteArrayToString(cInfo.Basic.FirmwareVersion[:]); fw != "" {
+			properties["firmwareVersion"] = fw
+		}
+		if cInfo.Basic.TotalComputeUnits != 0 {
+			properties["totalComputeUnits"] = fmt.Sprintf("%d", cInfo.Basic.TotalComputeUnits)
+		}
+		if cInfo.Basic.PCIeGen != 0 {
+			properties["pcieGen"] = fmt.Sprintf("%d", cInfo.Basic.PCIeGen)
+		}
+		if cInfo.Basic.PCIeWidth != 0 {
+			properties["pcieWidth"] = fmt.Sprintf("%d", cInfo.Basic.PCIeWidth)
+		}
+
+		deviceNodes := make(map[string]string, int(cInfo.DeviceNodes.Count))
+		for j := 0; j < int(cInfo.DeviceNodes.Count) && j < MaxDeviceNodes; j++ {
+			hostPath := byteArrayToString(cInfo.DeviceNodes.Nodes[j].HostPath[:])
+			guestPath := byteArrayToString(cInfo.DeviceNodes.Nodes[j].GuestPath[:])
+			if hostPath == "" {
+				continue
+			}
+			if guestPath == "" {
+				guestPath = hostPath
+			}
+			deviceNodes[hostPath] = guestPath
+		}
+		if len(deviceNodes) == 0 {
+			deviceNodes = nil
+		}
 
 		devices[i] = &api.DeviceInfo{
 			UUID:             byteArrayToString(cInfo.Basic.UUID[:]),
@@ -441,11 +488,26 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 				SupportsHardIsolation: cInfo.Capabilities.SupportsHardIsolation,
 				SupportsSnapshot:      cInfo.Capabilities.SupportsSnapshot,
 				SupportsMetrics:       cInfo.Capabilities.SupportsMetrics,
+				SupportsRemoting:      cInfo.Capabilities.SupportsRemoting,
 				MaxPartitions:         cInfo.Capabilities.MaxPartitions,
 				MaxWorkersPerDevice:   cInfo.Capabilities.MaxWorkersPerDevice,
 			},
 			Properties: properties,
+			DeviceNode: deviceNodes,
 		}
+
+		klog.Infof(
+			"GetAllDevices[%d]: uuid=%s vendor=%s model=%s index=%d numa=%d vram=%d tflops=%.2f props=%v",
+			i,
+			devices[i].UUID,
+			devices[i].Vendor,
+			devices[i].Model,
+			devices[i].Index,
+			devices[i].NUMANode,
+			devices[i].TotalMemoryBytes,
+			devices[i].MaxTflops,
+			devices[i].Properties,
+		)
 	}
 	return devices, nil
 }
@@ -454,6 +516,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 type AssignPartitionResult struct {
 	PartitionUUID string
 	EnvVars       map[string]string
+	DeviceNodes   map[string]string
 	Type          PartitionResultType
 }
 
@@ -495,29 +558,45 @@ func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (*
 
 	// Parse optional env vars returned by vendor
 	envVars := make(map[string]string)
-	if cResult.Type == PartitionTypeEnvironmentVariable {
-		for i := range 10 {
-			envVarStr := byteArrayToString(cResult.EnvVars[i][:])
-			if envVarStr == "" {
-				continue
-			}
-			// Parse key-value pair in format "A=B"
-			for j := 0; j < len(envVarStr); j++ {
-				if envVarStr[j] == '=' {
-					key := envVarStr[:j]
-					value := envVarStr[j+1:]
-					if key != "" {
-						envVars[key] = value
-					}
-					break
+	for i := range 10 {
+		envVarStr := byteArrayToString(cResult.EnvVars[i][:])
+		if envVarStr == "" {
+			continue
+		}
+		// Parse key-value pair in format "A=B"
+		for j := 0; j < len(envVarStr); j++ {
+			if envVarStr[j] == '=' {
+				key := envVarStr[:j]
+				value := envVarStr[j+1:]
+				if key != "" {
+					envVars[key] = value
 				}
+				break
 			}
 		}
+	}
+
+	// Parse optional device node mappings returned by vendor
+	deviceNodes := make(map[string]string)
+	for i := 0; i < int(cResult.DeviceNodes.Count) && i < MaxDeviceNodes; i++ {
+		hostPath := byteArrayToString(cResult.DeviceNodes.Nodes[i].HostPath[:])
+		if hostPath == "" {
+			continue
+		}
+		guestPath := byteArrayToString(cResult.DeviceNodes.Nodes[i].GuestPath[:])
+		if guestPath == "" {
+			guestPath = hostPath
+		}
+		deviceNodes[hostPath] = guestPath
+	}
+	if len(deviceNodes) == 0 {
+		deviceNodes = nil
 	}
 
 	return &AssignPartitionResult{
 		PartitionUUID: partitionUUID,
 		EnvVars:       envVars,
+		DeviceNodes:   deviceNodes,
 		Type:          cResult.Type,
 	}, nil
 }

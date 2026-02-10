@@ -72,7 +72,7 @@ type GPUStatus struct {
 type UsedBySystem string
 
 var (
-	UsedByTensorFusion UsedBySystem = UsedBySystem(Domain)
+	UsedByTensorFusion UsedBySystem = UsedBySystem(DomainPrefix)
 )
 
 type RunningAppDetail struct {
