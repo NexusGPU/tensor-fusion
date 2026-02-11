@@ -225,8 +225,8 @@ type SnapshotContext struct {
 var (
 	libHandle uintptr
 	// DeviceInfo APIs
-	accelInit              func() Result
-	accelShutdown          func() Result
+	accelInit             func() Result
+	accelShutdown         func() Result
 	getDeviceCount        func(*uintptr) Result
 	getAllDevices         func(*ExtendedDeviceInfo, uintptr, *uintptr) Result
 	getAllDevicesTopology func(*ExtendedDeviceTopology) Result
