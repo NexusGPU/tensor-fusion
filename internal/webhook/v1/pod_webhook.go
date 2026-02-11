@@ -740,9 +740,10 @@ func calculateQoSLevel(profile *tfv1.WorkloadProfileSpec, pool *tfv1.GPUPool) tf
 	// when not set, assign default QoS
 	if profile.Qos == "" {
 		sameReqLimits := profile.Resources.Limits.Tflops.Cmp(profile.Resources.Requests.Tflops) == 0 &&
-			profile.Resources.Limits.Vram.Cmp(profile.Resources.Requests.Vram) == 0
+			profile.Resources.Limits.Vram.Cmp(profile.Resources.Requests.Vram) == 0 &&
+			!profile.Resources.Requests.Tflops.IsZero() && !profile.Resources.Requests.Vram.IsZero()
 
-		// set to high if req == limits, same logic as Kubernetes QoS
+		// set to high if req == limits and both are not zero, same logic as Kubernetes QoS
 		// critical QoS can preempt other pods, have to be set manually
 		if sameReqLimits {
 			return constants.QoSLevelHigh

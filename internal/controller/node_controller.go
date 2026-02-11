@@ -323,6 +323,9 @@ func (r *NodeReconciler) removeTensorFusionTaint(ctx context.Context, node *core
 
 func getMatchedPoolName(node *corev1.Node, poolList []tfv1.GPUPool) (*tfv1.GPUPool, bool, error) {
 	for _, pool := range poolList {
+		if pool.Spec.NodeManagerConfig == nil || pool.Spec.NodeManagerConfig.NodeSelector == nil {
+			continue
+		}
 		matches, err := schedulingcorev1.MatchNodeSelectorTerms(node, pool.Spec.NodeManagerConfig.NodeSelector)
 		if err != nil {
 			return nil, false, err

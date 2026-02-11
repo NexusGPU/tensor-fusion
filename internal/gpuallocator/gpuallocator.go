@@ -4,6 +4,7 @@ package gpuallocator
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -84,7 +85,7 @@ type GpuAllocator struct {
 	poolGpuStore    map[string]map[string]*tfv1.GPU
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{}
 	storeMutex      sync.RWMutex
-	allocateMutex   sync.Mutex
+	allocateMutex   sync.Mutex // serializes legacy Alloc() calls (CheckQuotaAndFilter + Bind)
 	syncInterval    time.Duration
 	cancel          context.CancelFunc
 	ctx             context.Context
@@ -153,11 +154,24 @@ func (s *GpuAllocator) GetAllocationInfo() (
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{},
 	uniqueAllocation map[string]*tfv1.AllocRequest,
 ) {
+	s.storeMutex.RLock()
+	defer s.storeMutex.RUnlock()
 	return s.gpuStore, s.nodeWorkerStore, s.uniqueAllocation
 }
 
+// GetNodeGpuStore returns a snapshot (shallow copy) of the node-to-GPU map.
+// The caller can safely iterate the returned maps without holding any lock.
+// The *tfv1.GPU pointers are shared with the allocator's internal state.
 func (s *GpuAllocator) GetNodeGpuStore() map[string]map[string]*tfv1.GPU {
-	return s.nodeGpuStore
+	s.storeMutex.RLock()
+	defer s.storeMutex.RUnlock()
+	result := make(map[string]map[string]*tfv1.GPU, len(s.nodeGpuStore))
+	for nodeName, gpuMap := range s.nodeGpuStore {
+		innerCopy := make(map[string]*tfv1.GPU, len(gpuMap))
+		maps.Copy(innerCopy, gpuMap)
+		result[nodeName] = innerCopy
+	}
+	return result
 }
 
 // AllocRequest encapsulates all parameters needed for GPU allocation
@@ -404,12 +418,12 @@ func (s *GpuAllocator) Bind(
 		return nil, fmt.Errorf("no GPUs provided to bind")
 	}
 
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+
 	if _, exists := s.uniqueAllocation[string(req.PodMeta.UID)]; exists {
 		return nil, fmt.Errorf("pod %s has already allocated GPUs", req.PodMeta.UID)
 	}
-
-	s.storeMutex.Lock()
-	defer s.storeMutex.Unlock()
 
 	// Proceed with GPU allocation
 	gpuNodeName := ""
@@ -544,6 +558,7 @@ func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocR
 	}
 
 	if s.maxWorkerPerNode > 0 {
+		s.storeMutex.RLock()
 		// First pass: check if any filtering is needed
 		needsFiltering := false
 		for _, gpu := range filteredGPUs {
@@ -565,6 +580,7 @@ func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocR
 			}
 			filteredGPUs = finalFilteredGPUs
 		}
+		s.storeMutex.RUnlock()
 	}
 
 	return filteredGPUs, filterDetails, nil
@@ -601,6 +617,9 @@ func (s *GpuAllocator) Dealloc(
 	podUID := string(podMeta.UID)
 	log := log.FromContext(s.ctx)
 
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+
 	request, exists := s.uniqueAllocation[podUID]
 	if !exists || request == nil {
 		// should not block finalizer
@@ -614,9 +633,6 @@ func (s *GpuAllocator) Dealloc(
 		log.Error(fmt.Errorf("pod has already deallocated GPUs"), "pod", podUID)
 		return
 	}
-
-	s.storeMutex.Lock()
-	defer s.storeMutex.Unlock()
 
 	nodeName := ""
 	for _, gpu := range gpus {
@@ -677,6 +693,9 @@ func (s *GpuAllocator) Dealloc(
 func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.AdjustRequest, dryRun bool) (tfv1.Resource, tfv1.Resource, error) {
 
 	<-s.initializedCh
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+
 	request, exists := s.uniqueAllocation[adjustRequest.PodUID]
 	if !exists || request == nil {
 		return tfv1.Resource{}, tfv1.Resource{}, fmt.Errorf("pod %s has not allocated GPUs", adjustRequest.PodUID)
@@ -728,9 +747,6 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 
 	// pre check passed, change GPU request and QuotaStore and markDirty to sync to Kubernetes
 	if !dryRun {
-		s.storeMutex.Lock()
-		defer s.storeMutex.Unlock()
-
 		for _, gpuName := range request.GPUNames {
 			gpuNameNs := types.NamespacedName{Name: gpuName}
 			gpu := s.gpuStore[gpuNameNs]
@@ -769,6 +785,9 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 
 func (s *GpuAllocator) ListNonUsingNodes() sets.Set[string] {
 	<-s.initializedCh
+	s.storeMutex.RLock()
+	defer s.storeMutex.RUnlock()
+
 	set := sets.New[string]()
 	for nodeName, podNames := range s.nodeWorkerStore {
 		// If using by TF, the node can not be used by original scheduler
@@ -782,13 +801,21 @@ func (s *GpuAllocator) ListNonUsingNodes() sets.Set[string] {
 }
 
 func (s *GpuAllocator) DeallocByPodIdentifier(ctx context.Context, podIdentifier types.NamespacedName) {
+	// Read allocation info under RLock to avoid data race on maps
+	s.storeMutex.RLock()
 	podUID := s.podNamespaceNsToPodUID[podIdentifier.String()]
-	if request, exists := s.uniqueAllocation[podUID]; exists {
+	request, exists := s.uniqueAllocation[podUID]
+	s.storeMutex.RUnlock()
+
+	if exists && request != nil {
 		s.Dealloc(request.WorkloadNameNamespace, request.GPUNames, request.PodMeta)
 	}
 }
 
 func (s *GpuAllocator) GetAllocationReqByNodeName(nodeName string) []*tfv1.AllocRequest {
+	s.storeMutex.RLock()
+	defer s.storeMutex.RUnlock()
+
 	allocRequests := make([]*tfv1.AllocRequest, 0, 8)
 	workers, exists := s.nodeWorkerStore[nodeName]
 	if !exists || workers == nil {
@@ -1409,6 +1436,9 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 ) error {
 	<-s.initializedCh
 
+	// Read allocation maps under RLock to avoid data race
+	s.storeMutex.RLock()
+
 	log.FromContext(s.ctx).V(4).Info("[PREEMPT] CheckQuotaAndFilterSingleNodePreempt start",
 		"node", nodeName,
 		"requiredGPUs", allocReq.Count,
@@ -1497,6 +1527,9 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 		log.FromContext(s.ctx).V(5).Info("Preempting node and check quotas", "nodeName", nodeName, "toPreemptUsage", toPreemptUsage)
 	}
 
+	// Release RLock before calling FilterWithPreempt which acquires its own locks
+	s.storeMutex.RUnlock()
+
 	if err := s.quotaStore.CheckTotalQuotaRelaxed(allocReq, toPreemptUsage); err != nil {
 		return fmt.Errorf("quota check failed during preempt: %w", err)
 	}
@@ -1553,7 +1586,11 @@ func (s *GpuAllocator) reconcileAllocationState() {
 		deletedAndDeAllocated := !worker.DeletionTimestamp.IsZero() &&
 			!controllerutil.ContainsFinalizer(&worker, constants.Finalizer)
 
-		if scheduled {
+		// Only register active pods in uniqueAllocation.
+		// Pods that are deletedAndDeAllocated must NOT be registered: their resources
+		// are not counted in Available, so a late Dealloc would add resources back
+		// that were never subtracted, causing Available to exceed correct state.
+		if scheduled && !deletedAndDeAllocated {
 			allocRequest, msg, err := s.ComposeAllocationRequest(&worker)
 			if err != nil {
 				logger.Error(err, "Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", worker.Name, "msg", msg)
@@ -1642,21 +1679,40 @@ func (s *GpuAllocator) startWorkerCleanUpChecker() {
 	for {
 		select {
 		case <-ticker.C:
-			cleaned := 0
+			// Collect candidates under RLock to avoid data race on map iteration
+			type deallocCandidate struct {
+				workloadNameNs tfv1.NameNamespace
+				gpuNames       []string
+				podMeta        metav1.ObjectMeta
+			}
+			var candidates []deallocCandidate
+
+			s.storeMutex.RLock()
 			for _, allocRequest := range s.uniqueAllocation {
 				if allocRequest.PodMeta.Name == "" {
 					continue
 				}
+				candidates = append(candidates, deallocCandidate{
+					workloadNameNs: allocRequest.WorkloadNameNamespace,
+					gpuNames:       allocRequest.GPUNames,
+					podMeta:        allocRequest.PodMeta,
+				})
+			}
+			totalWorkers := len(s.uniqueAllocation)
+			s.storeMutex.RUnlock()
+
+			cleaned := 0
+			for _, c := range candidates {
 				pod := &v1.Pod{}
-				err := s.Get(s.ctx, types.NamespacedName{Namespace: allocRequest.PodMeta.Namespace, Name: allocRequest.PodMeta.Name}, pod)
+				err := s.Get(s.ctx, types.NamespacedName{Namespace: c.podMeta.Namespace, Name: c.podMeta.Name}, pod)
 				if errors.IsNotFound(err) {
-					log.FromContext(s.ctx).Info("Pod has been deleted, deallocate GPU", "pod", allocRequest.PodMeta.Name, "namespace", allocRequest.PodMeta.Namespace)
-					s.Dealloc(allocRequest.WorkloadNameNamespace, allocRequest.GPUNames, allocRequest.PodMeta)
+					log.FromContext(s.ctx).Info("Pod has been deleted, deallocate GPU", "pod", c.podMeta.Name, "namespace", c.podMeta.Namespace)
+					s.Dealloc(c.workloadNameNs, c.gpuNames, c.podMeta)
 					cleaned++
 				}
 			}
 			log.FromContext(s.ctx).Info("GPU allocation cleaned up check completed", "total workers",
-				len(s.uniqueAllocation), "backup cleaner cleaned", cleaned)
+				totalWorkers, "backup cleaner cleaned", cleaned)
 		case <-s.ctx.Done():
 			return
 		}
