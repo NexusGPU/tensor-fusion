@@ -240,7 +240,7 @@ func (s *GpuAllocator) FilterWithPreempt(
 	// Use a temporary map to accumulate releases for the same GPU (multiple victims on same GPU)
 	gpuReleasedMap := make(map[string]*tfv1.GPU)
 
-	log.FromContext(s.ctx).Info("[PREEMPT-DBG] FilterWithPreempt: starting to simulate release",
+	log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] FilterWithPreempt: starting to simulate release",
 		"preemptAllocRequestsCount", len(preemptAllocRequests))
 
 	for i, preemptAllocRequest := range preemptAllocRequests {
@@ -285,7 +285,7 @@ func (s *GpuAllocator) FilterWithPreempt(
 			gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
 
 			// Log GPU state after simulated release
-			log.FromContext(s.ctx).Info("[PREEMPT-DBG] Simulated release on GPU",
+			log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Simulated release on GPU",
 				"gpu", gpuName,
 				"node", gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel],
 				"victimWorkload", preemptAllocRequest.WorkloadNameNamespace.Name,
@@ -369,7 +369,7 @@ func (s *GpuAllocator) FilterWithPreempt(
 		return nil, nil, fmt.Errorf("apply filters: %w", err)
 	}
 
-	log.FromContext(s.ctx).Info("[PREEMPT-DBG] FilterWithPreempt: filter results",
+	log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] FilterWithPreempt: filter results",
 		"filteredGPUsCount", len(filteredGPUs),
 		"toFilterGPUsCount", len(toFilterGPUs),
 		"filterDetailsCount", len(filterDetails))
@@ -1557,7 +1557,7 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 		return err
 	}
 	if len(filteredGPUs) < int(allocReq.Count) {
-		log.FromContext(s.ctx).Info("[PREEMPT] not enough GPUs after filter during preempt",
+		log.FromContext(s.ctx).V(4).Info("[PREEMPT] not enough GPUs after filter during preempt",
 			"node", nodeName,
 			"requiredGPUs", allocReq.Count,
 			"filteredGPUsCount", len(filteredGPUs),
