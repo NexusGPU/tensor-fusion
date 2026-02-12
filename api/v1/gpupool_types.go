@@ -17,7 +17,6 @@ limitations under the License.
 package v1
 
 import (
-	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -428,11 +427,11 @@ type GPUPoolStatus struct {
 type TensorFusionPoolPhase string
 
 const (
-	TensorFusionPoolPhasePending    = TensorFusionPoolPhase(constants.PhasePending)
-	TensorFusionPoolPhaseRunning    = TensorFusionPoolPhase(constants.PhaseRunning)
-	TensorFusionPoolPhaseUpdating   = TensorFusionPoolPhase(constants.PhaseUpdating)
-	TensorFusionPoolPhaseUnknown    = TensorFusionPoolPhase(constants.PhaseUnknown)
-	TensorFusionPoolPhaseDestroying = TensorFusionPoolPhase(constants.PhaseDestroying)
+	TensorFusionPoolPhasePending    = TensorFusionPoolPhase(PhasePending)
+	TensorFusionPoolPhaseRunning    = TensorFusionPoolPhase(PhaseRunning)
+	TensorFusionPoolPhaseUpdating   = TensorFusionPoolPhase(PhaseUpdating)
+	TensorFusionPoolPhaseUnknown    = TensorFusionPoolPhase(PhaseUnknown)
+	TensorFusionPoolPhaseDestroying = TensorFusionPoolPhase(PhaseDestroying)
 )
 
 // +kubebuilder:validation:Enum=None;Initializing;Provisioning;Completed
