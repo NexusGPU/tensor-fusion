@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -22,6 +23,11 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// processState holds per-worker process info. All fields are protected by
+// SingleNodeBackend.processesMu — no per-process lock is needed because:
+//   - reconcileProcesses (the only RLock reader) runs on a single goroutine
+//   - waitForProcess and restartProcess acquire the exclusive Lock
+//   - StopWorker acquires the exclusive Lock
 type processState struct {
 	cmd           *exec.Cmd
 	retryCount    int64
@@ -29,9 +35,8 @@ type processState struct {
 	lastExitCode  int
 	lastExitError string
 	isRunning     bool
-	mu            sync.Mutex
 
-	// Copy of runtime info for restart, avoid race with worker map
+	// Set at creation; only env is updated (under processesMu) on restart.
 	executable string
 	args       []string
 	env        map[string]string
@@ -206,32 +211,26 @@ func (b *SingleNodeBackend) discoverWorkers() {
 		return
 	}
 
+	var changed []*api.WorkerInfo
+
 	b.mu.Lock()
-	// Find new and updated workers
 	for uid, worker := range workers {
 		oldWorker, exists := b.workers[uid]
-		if !exists {
-			// New worker
+		if !exists || !workersEqual(oldWorker, worker) {
 			b.workers[uid] = worker
-			b.mu.Unlock()
-			b.notifySubscribers(worker)
-			b.mu.Lock()
-		} else if !workersEqual(oldWorker, worker) {
-			// Updated worker
-			b.workers[uid] = worker
-			b.mu.Unlock()
-			b.notifySubscribers(worker)
-			b.mu.Lock()
+			changed = append(changed, worker)
 		}
 	}
-
-	// Find removed workers
 	for uid := range b.workers {
 		if _, exists := workers[uid]; !exists {
 			delete(b.workers, uid)
 		}
 	}
 	b.mu.Unlock()
+
+	for _, worker := range changed {
+		b.notifySubscribers(worker)
+	}
 }
 
 // notifySubscribers notifies all subscribers of a worker change
@@ -496,7 +495,7 @@ func (b *SingleNodeBackend) waitForProcess(workerUID string, cmd *exec.Cmd, logF
 		}
 	}
 
-	// Update process state atomically - this is the source of truth for process status
+	// Update process state - this is the source of truth for process status
 	b.processesMu.Lock()
 	ps, exists := b.processes[workerUID]
 	if !exists {
@@ -505,19 +504,18 @@ func (b *SingleNodeBackend) waitForProcess(workerUID string, cmd *exec.Cmd, logF
 		return
 	}
 
-	ps.mu.Lock()
 	ps.cmd = nil
 	ps.isRunning = false
 	ps.lastExitCode = exitCode
 	ps.lastExitError = exitError
 	ps.retryCount++
 	ps.lastRetry = time.Now()
-	ps.mu.Unlock()
+	retryCount := ps.retryCount
 	b.processesMu.Unlock()
 
 	// Log process exit prominently
 	klog.Warningf("═══════════════════════════════════════════════════════════════")
-	klog.Warningf("⛔ PROCESS EXITED: worker=%s exitCode=%d retryCount=%d", workerUID, exitCode, ps.retryCount)
+	klog.Warningf("⛔ PROCESS EXITED: worker=%s exitCode=%d retryCount=%d", workerUID, exitCode, retryCount)
 	if exitError != "" {
 		klog.Warningf("   Exit reason: %s", exitError)
 	}
@@ -548,11 +546,9 @@ func (b *SingleNodeBackend) StopWorker(workerUID string) error {
 	b.processesMu.Lock()
 	ps, exists := b.processes[workerUID]
 	if exists {
-		ps.mu.Lock()
 		if ps.cmd != nil && ps.cmd.Process != nil {
 			klog.Infof("Sending SIGTERM to process PID=%d for worker %s", ps.cmd.Process.Pid, workerUID)
 			_ = ps.cmd.Process.Signal(syscall.SIGTERM)
-			ps.mu.Unlock()
 			b.processesMu.Unlock()
 
 			// Wait outside lock for graceful shutdown
@@ -560,21 +556,13 @@ func (b *SingleNodeBackend) StopWorker(workerUID string) error {
 
 			// Check again and force kill if needed
 			b.processesMu.Lock()
-			ps, exists = b.processes[workerUID]
-			if exists {
-				ps.mu.Lock()
-				if ps.cmd != nil && ps.cmd.Process != nil {
-					if ps.cmd.ProcessState == nil || !ps.cmd.ProcessState.Exited() {
-						klog.Infof("Force killing process for worker %s", workerUID)
-						_ = ps.cmd.Process.Kill()
-					}
+			if ps, ok := b.processes[workerUID]; ok && ps.cmd != nil && ps.cmd.Process != nil {
+				if ps.cmd.ProcessState == nil || !ps.cmd.ProcessState.Exited() {
+					klog.Infof("Force killing process for worker %s", workerUID)
+					_ = ps.cmd.Process.Kill()
 				}
-				ps.mu.Unlock()
 			}
-		} else {
-			ps.mu.Unlock()
 		}
-		// Remove from processes map
 		delete(b.processes, workerUID)
 	}
 	b.processesMu.Unlock()
@@ -634,6 +622,30 @@ func (b *SingleNodeBackend) ListWorkers() []*api.WorkerInfo {
 	return lo.Values(b.workers)
 }
 
+// UpdateWorkerEnv updates environment variables for a worker without restarting its process.
+// The new env vars will take effect on next process restart (crash recovery).
+func (b *SingleNodeBackend) UpdateWorkerEnv(workerUID string, env map[string]string) error {
+	b.mu.Lock()
+	worker, exists := b.workers[workerUID]
+	if !exists {
+		b.mu.Unlock()
+		return fmt.Errorf("worker %s not found", workerUID)
+	}
+	if worker.WorkerRunningInfo == nil {
+		b.mu.Unlock()
+		return fmt.Errorf("worker %s has no running info", workerUID)
+	}
+	worker.WorkerRunningInfo.Env = env
+	b.mu.Unlock()
+
+	if err := b.fileState.AddWorker(worker); err != nil {
+		return fmt.Errorf("failed to persist worker env update: %w", err)
+	}
+
+	klog.Infof("Updated env vars for worker %s (will apply on next process restart)", workerUID)
+	return nil
+}
+
 func (b *SingleNodeBackend) processReconcileLoop() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -656,29 +668,18 @@ func (b *SingleNodeBackend) reconcileProcesses() {
 
 	b.processesMu.RLock()
 	for workerUID, ps := range b.processes {
-		ps.mu.Lock()
-		isRunning := ps.isRunning
-		cmd := ps.cmd
-		retryCount := ps.retryCount
-		lastRetry := ps.lastRetry
-		executable := ps.executable
-		ps.mu.Unlock()
-
 		// Skip if already running
-		if isRunning && cmd != nil {
+		if ps.isRunning && ps.cmd != nil {
 			continue
 		}
 
 		// Skip if no executable configured
-		if executable == "" {
+		if ps.executable == "" {
 			continue
 		}
 
 		// Calculate backoff delay
-		backoffDelay := calculateBackoffDelay(retryCount)
-		timeSinceLastRetry := time.Since(lastRetry)
-
-		if timeSinceLastRetry >= backoffDelay {
+		if time.Since(ps.lastRetry) >= calculateBackoffDelay(ps.retryCount) {
 			toRetry = append(toRetry, workerUID)
 		}
 	}
@@ -692,55 +693,82 @@ func (b *SingleNodeBackend) reconcileProcesses() {
 	}
 }
 
-// restartProcess restarts a process for the given worker
+// restartProcess restarts a process for the given worker.
+//
+// Lock ordering: b.mu.RLock -> release -> b.processesMu.Lock -> release -> cmd.Start -> b.processesMu.Lock -> b.mu.Lock
+// This avoids nesting b.mu inside processesMu (which would risk deadlock with waitForProcess).
 func (b *SingleNodeBackend) restartProcess(workerUID string) error {
+	// Step 1: Copy latest env from worker info (separate lock domain, no nesting)
+	var envUpdate map[string]string
+	b.mu.RLock()
+	if w, ok := b.workers[workerUID]; ok && w.WorkerRunningInfo != nil && w.WorkerRunningInfo.Env != nil {
+		envUpdate = make(map[string]string, len(w.WorkerRunningInfo.Env))
+		maps.Copy(envUpdate, w.WorkerRunningInfo.Env)
+	}
+	b.mu.RUnlock()
+
+	// Step 2: Under processesMu, verify state, merge env, and build cmd
 	b.processesMu.Lock()
 	ps, exists := b.processes[workerUID]
 	if !exists {
 		b.processesMu.Unlock()
 		return fmt.Errorf("process state not found for worker %s", workerUID)
 	}
-
-	ps.mu.Lock()
-	// Double check not already running
 	if ps.isRunning && ps.cmd != nil {
-		ps.mu.Unlock()
 		b.processesMu.Unlock()
 		return nil
 	}
-	ps.mu.Unlock()
-	b.processesMu.Unlock()
 
-	// Build and start new cmd
+	if envUpdate != nil {
+		maps.Copy(ps.env, envUpdate)
+	}
+
 	cmd, logFile, err := b.buildCmd(ps)
 	if err != nil {
+		b.processesMu.Unlock()
 		return fmt.Errorf("failed to build cmd: %w", err)
 	}
 
-	klog.Infof("Restarting process for worker %s: %s %v (retry #%d)", workerUID, ps.executable, ps.args, ps.retryCount)
+	retryCount := ps.retryCount
+	executable := ps.executable
+	args := ps.args
+	b.processesMu.Unlock()
+
+	// Step 3: Start process outside lock (may block briefly on exec)
+	klog.Infof("Restarting process for worker %s: %s %v (retry #%d)", workerUID, executable, args, retryCount)
 
 	if err := cmd.Start(); err != nil {
 		if logFile != nil {
 			_ = logFile.Close()
 		}
-		// Update lastRetry to trigger backoff
-		ps.mu.Lock()
-		ps.lastRetry = time.Now()
-		ps.mu.Unlock()
+		b.processesMu.Lock()
+		if ps, ok := b.processes[workerUID]; ok {
+			ps.lastRetry = time.Now()
+		}
+		b.processesMu.Unlock()
 		return fmt.Errorf("failed to start process: %w", err)
 	}
 
 	pid := uint32(cmd.Process.Pid)
 
-	// Update process state
-	ps.mu.Lock()
+	// Step 4: Update process state — re-check existence in case StopWorker ran concurrently
+	b.processesMu.Lock()
+	if _, stillExists := b.processes[workerUID]; !stillExists {
+		b.processesMu.Unlock()
+		// Worker was removed while we were starting — kill the orphaned process
+		_ = cmd.Process.Kill()
+		if logFile != nil {
+			_ = logFile.Close()
+		}
+		return nil
+	}
 	ps.cmd = cmd
 	ps.isRunning = true
 	ps.lastRetry = time.Now()
 	restartCount := ps.retryCount
-	ps.mu.Unlock()
+	b.processesMu.Unlock()
 
-	// Update worker running info
+	// Step 5: Update worker running info
 	b.mu.Lock()
 	worker, workerExists := b.workers[workerUID]
 	if workerExists && worker.WorkerRunningInfo != nil {

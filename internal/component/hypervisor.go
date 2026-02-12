@@ -98,7 +98,7 @@ func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool
 		}
 	}
 
-	// TODO: sort by creation time desc, need to adjust test
+	// Sort by creation time (ascending: oldest first for predictable batch order)
 	sort.Sort(GPUNodeByCreationTimestamp(h.nodesToUpdate))
 
 	return total, total - len(h.nodesToUpdate), false, nil

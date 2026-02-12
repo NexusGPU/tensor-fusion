@@ -35,7 +35,7 @@ type SchedulingConfigTemplateSpec struct {
 	// avoid hot GPU devices and continuously balance the workload
 	// implemented by mark GPU as hot and trigger evict for re-scheduling
 	// The hot GPUs will get lower priority for scheduling
-	// TODO: not implemented yet
+	// Future: implement rebalancer
 	// +optional
 	ReBalancer *ReBalancerConfig `json:"reBalancer,omitempty"`
 

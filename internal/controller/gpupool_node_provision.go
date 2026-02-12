@@ -152,7 +152,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 
 	var errList []error
 
-	// lock the pool before next node scaling up loop, add assumed scaling resources util all pending nodeClaims are running
+	// lock the pool before next node scaling up loop, add assumed scaling resources until all pending nodeClaims are running
 	newCreatedNodes := map[string]tfv1.Resource{}
 	for _, nodeClaim := range gpuNodeParams {
 		go func(nodeClaim tfv1.GPUNodeClaimSpec) {

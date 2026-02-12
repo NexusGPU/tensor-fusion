@@ -604,7 +604,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 		})
 	} else if neededGPUs < uint(len(validGPUs)) {
 		// try scoring GPU from single node level
-		// TODO: consider NUMA topology on one node when neededGPUs > 1
+		// Future: consider NUMA topology on one node when neededGPUs > 1
 		gpuScoreEntries := make([]lo.Entry[string, int], 0, len(validGPUs))
 		for _, gpu := range validGPUs {
 			score := schedulingResult.ScoringStrategy.Score(gpu, false)

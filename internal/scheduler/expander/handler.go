@@ -224,9 +224,9 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 			e.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, "NodeExpansionCheck", "PreScheduled",
 				"fit in-flight GPU resources, pod should be scheduled after new node is provisioned")
 		} else {
-			// GPU free-up during expansion, or satisfied by in-flight nodes, pod can be scheduled now or whiles later
+			// GPU free-up during expansion, or satisfied by in-flight nodes, pod can be scheduled now or a while later
 			e.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, "NodeExpansionCheck", "Schedulable",
-				"fit GPU resources, pod should be scheduled now or whiles later on existing/provisioning nodes")
+				"fit GPU resources, pod should be scheduled now or a while later on existing/provisioning nodes")
 		}
 		return nil
 	}
@@ -238,10 +238,10 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 		return nil
 	}
 
-	// Step 4: Caused by insufficient GPU resources, try find node util it satisfies the pod
+	// Step 4: Caused by insufficient GPU resources, try find node until it satisfies the pod
 	preScheduled := false
 	for _, gpuNode := range gpuNodesPassedOtherFilters {
-		// when node is not owned by any known provisioner, skip check, util find a node can be expanded
+		// when node is not owned by any known provisioner, skip check, until find a node can be expanded
 		if len(gpuNode.OwnerReferences) == 0 {
 			continue
 		}
