@@ -626,7 +626,7 @@ func (r *GPUNodeReconciler) checkDriverProbeJobStatus(job *batchv1.Job, log logr
 }
 
 func (r *GPUNodeReconciler) resolveNodeVendor(_ctx context.Context, _node *tfv1.GPUNode) (string, error) {
-	// TODO: Implement this
+	// Future: detect non-Nvidia GPU vendors (e.g. AMD, Ascend) from node labels or device plugin
 	return constants.AcceleratorVendorNvidia, nil
 }
 

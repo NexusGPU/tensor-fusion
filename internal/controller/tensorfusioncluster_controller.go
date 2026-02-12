@@ -155,7 +155,7 @@ func (r *TensorFusionClusterReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
-	// when updating, check util they are ready
+	// when updating, check until they are ready
 	// check status, if not ready, requeue after backoff delay, if all components are ready, set as ready
 	if ready, conditions, err := r.checkTFClusterComponentsReady(ctx, tfc); err != nil {
 		return ctrl.Result{}, err
@@ -198,7 +198,7 @@ func (r *TensorFusionClusterReconciler) listOwnedGPUPools(ctx context.Context, t
 }
 
 func (r *TensorFusionClusterReconciler) reconcileTimeSeriesDatabase(_ context.Context, _ *tfv1.TensorFusionCluster) (bool, error) {
-	// TODO: Not implemented yet
+	// Future: implement time series database reconciliation
 	return false, nil
 }
 

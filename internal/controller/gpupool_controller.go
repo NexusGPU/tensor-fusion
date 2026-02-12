@@ -155,7 +155,7 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		// Set phase to updating and let GPUNode event trigger the check and update capacity loop, util all nodes are ready
+		// Set phase to updating and let GPUNode event trigger the check and update capacity loop, until all nodes are ready
 		if len(newCreatedNodes) > 0 {
 			pendingGPUNodeStateLock.Lock()
 			for claimName := range newCreatedNodes {

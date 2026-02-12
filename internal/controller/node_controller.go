@@ -70,7 +70,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	// Remove TensorFusion taint if exists (TODO: Remove after version 1.50)
+	// Remove TensorFusion taint if exists (deprecated: backward compatibility for legacy deployments)
 	// Skip taint removal if node is being deleted or evicted
 	if node.DeletionTimestamp.IsZero() {
 		taintRemoved, err := r.removeTensorFusionTaint(ctx, node)
@@ -263,7 +263,7 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// Remove TensorFusion taint if exists (TODO: Remove after version 1.50)
+// Remove TensorFusion taint if exists (deprecated: backward compatibility for legacy deployments)
 func (r *NodeReconciler) removeTensorFusionTaint(ctx context.Context, node *corev1.Node) (bool, error) {
 	taintKey := constants.NodeUsedByTaintKey
 	taintValue := constants.TensorFusionSystemName

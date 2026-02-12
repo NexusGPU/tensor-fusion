@@ -510,7 +510,7 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 	// Check if remaining resources are sufficient
 	if remainingTflops.Cmp(currentTflopsTotal) < 0 ||
 		remainingVram.Cmp(currentVramTotal) < 0 {
-		s.logger.Info("Insufficient GPU resources after reserving for nominated pods",
+		s.logger.V(4).Info("Insufficient GPU resources after reserving for nominated pods",
 			"currentPod", pod.Name,
 			"node", nodeName,
 			"currentPriority", currentPodPriority,
@@ -604,7 +604,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 		})
 	} else if neededGPUs < uint(len(validGPUs)) {
 		// try scoring GPU from single node level
-		// TODO: consider NUMA topology on one node when neededGPUs > 1
+		// Future: consider NUMA topology on one node when neededGPUs > 1
 		gpuScoreEntries := make([]lo.Entry[string, int], 0, len(validGPUs))
 		for _, gpu := range validGPUs {
 			score := schedulingResult.ScoringStrategy.Score(gpu, false)
@@ -907,7 +907,7 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 	if pod.Status.NominatedNodeName != "" && newGPU != nil {
 		gpuNodeName := newGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		if gpuNodeName == pod.Status.NominatedNodeName {
-			logger.Info("GPU CR updated on nominated node, immediately requeue preempting pod",
+			logger.V(4).Info("GPU CR updated on nominated node, immediately requeue preempting pod",
 				"pod", klog.KObj(pod),
 				"nominatedNode", pod.Status.NominatedNodeName,
 				"gpu", newGPU.Name)
@@ -1070,7 +1070,7 @@ func (s *GPUFit) validatePreemption(state fwk.CycleState, pod *v1.Pod, nodeInfo 
 	// - Checks quota constraints
 	err = s.allocator.CheckQuotaAndFilterSingleNodePreempt(nodeName, allocReq, victims)
 	if err != nil {
-		s.logger.Info("GPU preemption validation failed",
+		s.logger.V(4).Info("GPU preemption validation failed",
 			"pod", pod.Name,
 			"namespace", pod.Namespace,
 			"node", nodeName,
@@ -1082,8 +1082,7 @@ func (s *GPUFit) validatePreemption(state fwk.CycleState, pod *v1.Pod, nodeInfo 
 	}
 
 	// Preemption validated successfully
-
-	s.logger.Info("GPU preemption validated successfully",
+	s.logger.V(4).Info("GPU preemption validated successfully",
 		"pod", pod.Name,
 		"namespace", pod.Namespace,
 		"node", nodeName,
