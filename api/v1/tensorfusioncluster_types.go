@@ -17,7 +17,6 @@ limitations under the License.
 package v1
 
 import (
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -86,11 +85,11 @@ type TensorFusionClusterStatus struct {
 type TensorFusionClusterPhase string
 
 const (
-	TensorFusionClusterPending    = TensorFusionClusterPhase(constants.PhasePending)
-	TensorFusionClusterRunning    = TensorFusionClusterPhase(constants.PhaseRunning)
-	TensorFusionClusterUpdating   = TensorFusionClusterPhase(constants.PhaseUpdating)
-	TensorFusionClusterDestroying = TensorFusionClusterPhase(constants.PhaseDestroying)
-	TensorFusionClusterUnknown    = TensorFusionClusterPhase(constants.PhaseUnknown)
+	TensorFusionClusterPending    = TensorFusionClusterPhase(PhasePending)
+	TensorFusionClusterRunning    = TensorFusionClusterPhase(PhaseRunning)
+	TensorFusionClusterUpdating   = TensorFusionClusterPhase(PhaseUpdating)
+	TensorFusionClusterDestroying = TensorFusionClusterPhase(PhaseDestroying)
+	TensorFusionClusterUnknown    = TensorFusionClusterPhase(PhaseUnknown)
 )
 
 // GPUPool defines how to create a GPU pool, could be URL or inline

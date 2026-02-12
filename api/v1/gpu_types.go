@@ -17,7 +17,6 @@ limitations under the License.
 package v1
 
 import (
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -103,12 +102,12 @@ type PodGPUInfo struct {
 type TensorFusionGPUPhase string
 
 const (
-	TensorFusionGPUPhasePending    TensorFusionGPUPhase = constants.PhasePending
-	TensorFusionGPUPhaseUpdating   TensorFusionGPUPhase = constants.PhaseUpdating
-	TensorFusionGPUPhaseRunning    TensorFusionGPUPhase = constants.PhaseRunning
-	TensorFusionGPUPhaseUnknown    TensorFusionGPUPhase = constants.PhaseUnknown
-	TensorFusionGPUPhaseDestroying TensorFusionGPUPhase = constants.PhaseDestroying
-	TensorFusionGPUPhaseMigrating  TensorFusionGPUPhase = constants.PhaseMigrating
+	TensorFusionGPUPhasePending    TensorFusionGPUPhase = PhasePending
+	TensorFusionGPUPhaseUpdating   TensorFusionGPUPhase = PhaseUpdating
+	TensorFusionGPUPhaseRunning    TensorFusionGPUPhase = PhaseRunning
+	TensorFusionGPUPhaseUnknown    TensorFusionGPUPhase = PhaseUnknown
+	TensorFusionGPUPhaseDestroying TensorFusionGPUPhase = PhaseDestroying
+	TensorFusionGPUPhaseMigrating  TensorFusionGPUPhase = PhaseMigrating
 )
 
 // +kubebuilder:object:root=true

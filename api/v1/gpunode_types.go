@@ -17,7 +17,6 @@ limitations under the License.
 package v1
 
 import (
-	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -106,13 +105,13 @@ type GPUNodeStatus struct {
 type TensorFusionGPUNodePhase string
 
 const (
-	TensorFusionGPUNodePhasePending    TensorFusionGPUNodePhase = constants.PhasePending
-	TensorFusionGPUNodePhaseMigrating  TensorFusionGPUNodePhase = constants.PhaseMigrating
-	TensorFusionGPUNodePhaseRunning    TensorFusionGPUNodePhase = constants.PhaseRunning
-	TensorFusionGPUNodePhaseSucceeded  TensorFusionGPUNodePhase = constants.PhaseSucceeded
-	TensorFusionGPUNodePhaseFailed     TensorFusionGPUNodePhase = constants.PhaseFailed
-	TensorFusionGPUNodePhaseUnknown    TensorFusionGPUNodePhase = constants.PhaseUnknown
-	TensorFusionGPUNodePhaseDestroying TensorFusionGPUNodePhase = constants.PhaseDestroying
+	TensorFusionGPUNodePhasePending    TensorFusionGPUNodePhase = PhasePending
+	TensorFusionGPUNodePhaseMigrating  TensorFusionGPUNodePhase = PhaseMigrating
+	TensorFusionGPUNodePhaseRunning    TensorFusionGPUNodePhase = PhaseRunning
+	TensorFusionGPUNodePhaseSucceeded  TensorFusionGPUNodePhase = PhaseSucceeded
+	TensorFusionGPUNodePhaseFailed     TensorFusionGPUNodePhase = PhaseFailed
+	TensorFusionGPUNodePhaseUnknown    TensorFusionGPUNodePhase = PhaseUnknown
+	TensorFusionGPUNodePhaseDestroying TensorFusionGPUNodePhase = PhaseDestroying
 )
 
 type GPUNodeInfo struct {
