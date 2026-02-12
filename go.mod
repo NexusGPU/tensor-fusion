@@ -2,6 +2,8 @@ module github.com/NexusGPU/tensor-fusion
 
 go 1.25.5
 
+require github.com/NexusGPU/tensor-fusion/api v0.0.0
+
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107
@@ -214,3 +216,5 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2-0.20260122202528-d9cc6641c482 // indirect
 )
+
+replace github.com/NexusGPU/tensor-fusion/api => ./api

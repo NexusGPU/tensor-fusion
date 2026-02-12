@@ -17,29 +17,28 @@ limitations under the License.
 package v1
 
 import (
-	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func (tfc *TensorFusionCluster) SetAsPending() {
-	tfc.Status.Phase = constants.PhasePending
+	tfc.Status.Phase = PhasePending
 
 	meta.SetStatusCondition(&tfc.Status.Conditions, metav1.Condition{
-		Type:   constants.ConditionStatusTypeReady,
+		Type:   ConditionStatusTypeReady,
 		Status: metav1.ConditionFalse,
 		Reason: "NewCreation",
 	})
 }
 
 func (tfc *TensorFusionCluster) SetAsUnknown(err error) bool {
-	changed := tfc.Status.Phase != constants.PhaseUnknown
+	changed := tfc.Status.Phase != PhaseUnknown
 
-	tfc.Status.Phase = constants.PhaseUnknown
+	tfc.Status.Phase = PhaseUnknown
 
 	readyChanged := meta.SetStatusCondition(&tfc.Status.Conditions, metav1.Condition{
-		Type:    constants.ConditionStatusTypeReady,
+		Type:    ConditionStatusTypeReady,
 		Status:  metav1.ConditionFalse,
 		Message: err.Error(),
 		Reason:  "UnknownState",
@@ -51,11 +50,11 @@ func (tfc *TensorFusionCluster) SetAsUnknown(err error) bool {
 }
 
 func (tfc *TensorFusionCluster) SetAsUpdating(conditions ...metav1.Condition) bool {
-	tfc.Status.Phase = constants.PhaseUpdating
+	tfc.Status.Phase = PhaseUpdating
 
 	changed := false
 	readyChanged := meta.SetStatusCondition(&tfc.Status.Conditions, metav1.Condition{
-		Type:   constants.ConditionStatusTypeReady,
+		Type:   ConditionStatusTypeReady,
 		Status: metav1.ConditionFalse,
 		Reason: "ResourcesUpdated",
 	})
@@ -76,12 +75,12 @@ func (tfc *TensorFusionCluster) SetAsUpdating(conditions ...metav1.Condition) bo
 }
 
 func (tfc *TensorFusionCluster) SetAsReady(conditions ...metav1.Condition) bool {
-	changed := tfc.Status.Phase != constants.PhaseRunning
+	changed := tfc.Status.Phase != PhaseRunning
 
-	tfc.Status.Phase = constants.PhaseRunning
+	tfc.Status.Phase = PhaseRunning
 
 	readyChanged := meta.SetStatusCondition(&tfc.Status.Conditions, metav1.Condition{
-		Type:   constants.ConditionStatusTypeReady,
+		Type:   ConditionStatusTypeReady,
 		Status: metav1.ConditionTrue,
 		Reason: "CheckPassed",
 	})
@@ -121,7 +120,7 @@ func (tfc *TensorFusionCluster) RefreshStatus(ownedPools []GPUPool) {
 	tfc.Status.VirtualAvailableVRAM = &resource.Quantity{}
 
 	for i, gpuPool := range ownedPools {
-		if gpuPool.Status.Phase != constants.PhaseRunning {
+		if gpuPool.Status.Phase != PhaseRunning {
 			tfc.Status.NotReadyGPUPools = append(tfc.Status.NotReadyGPUPools, gpuPool.Name)
 		} else {
 			tfc.Status.ReadyGPUPools[i] = gpuPool.Name
