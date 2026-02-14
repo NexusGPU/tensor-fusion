@@ -19,6 +19,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/rest"
@@ -500,7 +501,7 @@ func (d *DevicePluginDetector) getAllocatedDevices() (map[string]string, error) 
 	defer cancel()
 
 	var resp podResourcesResponse
-	if err := conn.Invoke(ctx, "/v1.PodResourcesLister/List", &struct{}{}, &resp); err != nil {
+	if err := conn.Invoke(ctx, "/v1.PodResourcesLister/List", &emptypb.Empty{}, &resp); err != nil {
 		return nil, fmt.Errorf("failed to list pod resources: %w", err)
 	}
 

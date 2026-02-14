@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -270,6 +271,72 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				return err
 			}).Should(Succeed())
 		})
+
+		DescribeTable("should mutate init/sidecar related patches based on mode",
+			func(annotations map[string]string, expectInitPatch, expectSidecarPatch, expectTransportPatch bool) {
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pod-mode-mutation",
+						Namespace: "default",
+						Labels: map[string]string{
+							constants.TensorFusionEnabledLabelKey: "true",
+						},
+						Annotations: annotations,
+					},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{
+							Name:  "main",
+							Image: "test-image",
+						}},
+					},
+				}
+
+				podBytes, err := json.Marshal(pod)
+				Expect(err).NotTo(HaveOccurred())
+
+				req := admission.Request{
+					AdmissionRequest: admissionv1.AdmissionRequest{
+						Object:    runtime.RawExtension{Raw: podBytes},
+						Operation: admissionv1.Create,
+					},
+				}
+
+				resp := mutator.Handle(ctx, req)
+				Expect(resp.Allowed).To(BeTrue())
+				Expect(resp.Patches).NotTo(BeEmpty())
+
+				hasInitContainerPatch := lo.ContainsBy(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+					return strings.HasPrefix(patch.Path, "/spec/initContainers")
+				})
+				Expect(hasInitContainerPatch).To(Equal(expectInitPatch))
+
+				hasSidecarContainerPatch := lo.ContainsBy(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+					return patch.Path == "/spec/containers/1" ||
+						patch.Path == "/spec/containers/-" ||
+						strings.HasPrefix(patch.Path, "/spec/containers/1/")
+				})
+				Expect(hasSidecarContainerPatch).To(Equal(expectSidecarPatch))
+
+				hasTransportShmPatch := lo.ContainsBy(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+					return strings.Contains(fmt.Sprintf("%v", patch), constants.TransportShmVolumeName)
+				})
+				Expect(hasTransportShmPatch).To(Equal(expectTransportPatch))
+			},
+			Entry("local sidecar-worker annotation", map[string]string{
+				constants.GpuPoolKey:                "mock",
+				constants.InjectContainerAnnotation: "main",
+				constants.SidecarWorkerAnnotation:   constants.TrueStringValue,
+				constants.TFLOPSLimitAnnotation:     "100",
+				constants.VRAMLimitAnnotation:       "16Gi",
+			}, false, false, false),
+			Entry("remote mode annotation", map[string]string{
+				constants.GpuPoolKey:                "mock",
+				constants.InjectContainerAnnotation: "main",
+				constants.IsLocalGPUAnnotation:      constants.FalseStringValue,
+				constants.TFLOPSLimitAnnotation:     "100",
+				constants.VRAMLimitAnnotation:       "16Gi",
+			}, true, false, false),
+		)
 
 		It("should handle pods without TF requirements", func() {
 			pod := &corev1.Pod{
@@ -631,6 +698,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(found).To(BeTrue())
 			Expect(workloadAnnotationMutation.Value).To(Equal("100"))
 		})
+
 	})
 
 	Context("Handle with EnabledReplicas", func() {
@@ -896,10 +964,10 @@ var _ = Describe("TensorFusionPodMutator", func() {
 
 			currentBytes, err := json.Marshal(pod)
 			Expect(err).NotTo(HaveOccurred())
-			patch, err := mutator.patchTFClient(context.Background(), pod, pool, false, currentBytes, []int{0}, false)
+			patch, err := mutator.patchTFClient(context.Background(), pod, pool, false, currentBytes, []int{0})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(patch).NotTo(BeEmpty())
-			// There should be at least 2 patches (initContainers and the container env patches)
+			// Should include multiple mutations (e.g. pod labels and container-level changes).
 			Expect(len(patch)).To(BeNumerically(">=", 2))
 		})
 	})

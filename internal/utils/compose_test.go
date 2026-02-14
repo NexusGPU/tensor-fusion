@@ -6,9 +6,11 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 )
 
 var _ = Describe("Compose Utils", func() {
@@ -38,6 +40,57 @@ var _ = Describe("Compose Utils", func() {
 			Entry("without vector", false, "test-image:latest", 2, 7),
 			Entry("with vector", true, "test-image:latest", 2, 7),
 		)
+	})
+
+	Describe("AddTFDefaultClientConfBeforePatch", func() {
+		newPool := func() *tfv1.GPUPool {
+			return &tfv1.GPUPool{
+				Spec: tfv1.GPUPoolSpec{
+					ComponentConfig: &tfv1.ComponentConfig{
+						Client: &tfv1.ClientConfig{Image: "client:latest"},
+					},
+				},
+			}
+		}
+
+		It("should not inject initContainer or sidecar container in local mode", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU:    true,
+					SidecarWorker: true,
+				},
+			}, []int{0})
+
+			Expect(pod.Spec.InitContainers).To(BeEmpty())
+			Expect(pod.Spec.Containers).To(HaveLen(1))
+
+			volumeNames := make([]string, 0, len(pod.Spec.Volumes))
+			for _, volume := range pod.Spec.Volumes {
+				volumeNames = append(volumeNames, volume.Name)
+			}
+			Expect(volumeNames).To(ContainElement(constants.DataVolumeName))
+			Expect(volumeNames).NotTo(ContainElement(constants.TransportShmVolumeName))
+		})
+
+		It("should inject client initContainer in remote mode", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{IsLocalGPU: false},
+			}, []int{0})
+
+			Expect(pod.Spec.InitContainers).To(HaveLen(1))
+			Expect(pod.Spec.InitContainers[0].Name).To(Equal(constants.TFContainerNameClient))
+			Expect(pod.Spec.Containers).To(HaveLen(1))
+		})
 	})
 
 	Describe("SetWorkerContainerSpec", func() {

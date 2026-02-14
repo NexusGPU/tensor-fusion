@@ -164,10 +164,10 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 	}
 
-	if node.Status.TotalGPUs == 0 {
-		log.Info("GPU on this node has not been discovered, wait next loop", "node", node.Name)
-		return ctrl.Result{}, nil
-	}
+	// if node.Status.TotalGPUs == 0 {
+	// 	log.Info("GPU on this node has not been discovered, wait next loop", "node", node.Name)
+	// 	return ctrl.Result{}, nil
+	// }
 
 	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj, coreNode)
 	if err != nil {
@@ -625,9 +625,41 @@ func (r *GPUNodeReconciler) checkDriverProbeJobStatus(job *batchv1.Job, log logr
 	return false, nil
 }
 
-func (r *GPUNodeReconciler) resolveNodeVendor(_ctx context.Context, _node *tfv1.GPUNode) (string, error) {
-	// Future: detect non-Nvidia GPU vendors (e.g. AMD, Ascend) from node labels or device plugin
-	return constants.AcceleratorVendorNvidia, nil
+func (r *GPUNodeReconciler) resolveNodeVendor(ctx context.Context, node *tfv1.GPUNode) (string, error) {
+	if node.Labels != nil {
+		if vendor := node.Labels[constants.AcceleratorLabelVendor]; vendor != "" {
+			return vendor, nil
+		}
+	}
+
+	poolName := utils.ExtractPoolNameFromNodeLabel(node)
+	if poolName == "" {
+		return "", fmt.Errorf("missing pool label for node %s", node.Name)
+	}
+
+	pool := &tfv1.GPUPool{}
+	if err := r.Get(ctx, client.ObjectKey{Name: poolName}, pool); err != nil {
+		return "", fmt.Errorf("failed to get pool %s: %w", poolName, err)
+	}
+
+	cfg := pool.Spec.NodeManagerConfig
+	if cfg == nil {
+		return constants.AcceleratorVendorNvidia, nil
+	}
+
+	if len(cfg.MultiVendorNodeSelector) == 0 && cfg.NodeSelector == nil {
+		if cfg.DefaultVendor != "" {
+			return cfg.DefaultVendor, nil
+		}
+		return constants.AcceleratorVendorNvidia, nil
+	}
+
+	k8sNode := &corev1.Node{}
+	if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, k8sNode); err != nil {
+		return "", fmt.Errorf("failed to get k8s node %s: %w", node.Name, err)
+	}
+
+	return getMatchedVendor(k8sNode, cfg)
 }
 
 // HypervisorPrerequisites contains the prerequisites for creating a hypervisor pod

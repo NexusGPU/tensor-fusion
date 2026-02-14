@@ -4,6 +4,47 @@ metadata:
   labels:
     app.kubernetes.io/name: tensor-fusion
     app.kubernetes.io/managed-by: kustomize
-  name: tensorfusioncluster-sample
+  name: tensor-fusion
 spec:
-  # TODO(user): Add fields here
+  gpuPools:
+    - name: shared
+      isDefault: true
+      specTemplate:
+        capacityConfig:
+          maxResources:
+            tflops: "100"
+            vram: "100Gi"
+          minResources:
+            tflops: "20"
+            vram: "10Gi"
+          oversubscription:
+            tflopsOversellRatio: 2000
+            vramExpandToHostDisk: 60
+            vramExpandToHostMem: 50
+          warmResources:
+            tflops: "10"
+            vram: "5Gi"
+        componentConfig:
+          hypervisor:
+            image: tensorfusion/tensor-fusion-hypervisor:latest
+            podTemplate:
+              template:
+                spec:
+                  containers:
+                    - name: tensor-fusion-hypervisor
+                      env:
+                        - name: TF_HARDWARE_VENDOR
+                          value: Ascend
+                        - name: TF_ACCELERATOR_LIB_PATH
+                          value: /run/tensor-fusion/vgpu/libaccelerator_ascend.so
+                        - name: LD_LIBRARY_PATH
+                          value: /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/dcmi
+        nodeManagerConfig:
+          defaultVendor: Ascend
+          nodeSelector:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: huawei.com/npu.present
+                    operator: In
+                    values:
+                      - "true"

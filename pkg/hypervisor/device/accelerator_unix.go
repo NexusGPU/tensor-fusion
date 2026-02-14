@@ -27,6 +27,17 @@ import (
 	"k8s.io/klog/v2"
 )
 
+func registerLibFunc(handle uintptr, name string, fptr any) error {
+	sym, err := purego.Dlsym(handle, name)
+	if err != nil || sym == 0 {
+		klog.Errorf("dlsym %s failed: sym=0x%x err=%v", name, sym, err)
+		return fmt.Errorf("symbol %s not found: %w", name, err)
+	}
+	klog.Infof("dlsym %s -> 0x%x err=%v", name, sym, err)
+	purego.RegisterFunc(fptr, sym)
+	return nil
+}
+
 // Load loads the accelerator library dynamically using purego on Unix systems
 func (a *AcceleratorInterface) Load() error {
 	if a.libPath == "" {
@@ -35,33 +46,71 @@ func (a *AcceleratorInterface) Load() error {
 
 	handle, err := purego.Dlopen(a.libPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 	if err != nil {
+		klog.Errorf("dlopen %s failed: %v", a.libPath, err)
 		return fmt.Errorf("failed to open library: %w", err)
 	}
+	klog.Infof("dlopen %s handle=0x%x", a.libPath, handle)
 	libHandle = handle
 
 	// Register all required functions - names must match C header exactly
-	purego.RegisterLibFunc(&accelInit, handle, "AccelInit")
-	purego.RegisterLibFunc(&accelShutdown, handle, "AccelShutdown")
-	purego.RegisterLibFunc(&getDeviceCount, handle, "AccelGetDeviceCount")
-	purego.RegisterLibFunc(&getAllDevices, handle, "AccelGetAllDevices")
-	purego.RegisterLibFunc(&getAllDevicesTopology, handle, "AccelGetAllDevicesTopology")
-	purego.RegisterLibFunc(&assignPartition, handle, "AccelAssignPartition")
-	purego.RegisterLibFunc(&removePartition, handle, "AccelRemovePartition")
-	purego.RegisterLibFunc(&setMemHardLimit, handle, "AccelSetMemHardLimit")
-	purego.RegisterLibFunc(&setComputeUnitHardLimit, handle, "AccelSetComputeUnitHardLimit")
-	purego.RegisterLibFunc(&snapshot, handle, "AccelSnapshot")
-	purego.RegisterLibFunc(&resume, handle, "AccelResume")
-	purego.RegisterLibFunc(&getProcessInformation, handle, "AccelGetProcessInformation")
-	purego.RegisterLibFunc(&getDeviceMetrics, handle, "AccelGetDeviceMetrics")
-	purego.RegisterLibFunc(&getVendorMountLibs, handle, "AccelGetVendorMountLibs")
 
-	// Register log callback only on non-macOS platforms
-	// purego callback has issues on macOS ARM64, causing bus errors when C code calls back into Go
+	if err := registerLibFunc(handle, "AccelInit", &accelInit); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelShutdown", &accelShutdown); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelGetDeviceCount", &getDeviceCount); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelGetAllDevices", &getAllDevices); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelGetAllDevicesTopology", &getAllDevicesTopology); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelAssignPartition", &assignPartition); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelRemovePartition", &removePartition); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelSetMemHardLimit", &setMemHardLimit); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelSetComputeUnitHardLimit", &setComputeUnitHardLimit); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelSnapshot", &snapshot); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelResume", &resume); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelGetProcessInformation", &getProcessInformation); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelGetDeviceMetrics", &getDeviceMetrics); err != nil {
+		return err
+	}
+	if err := registerLibFunc(handle, "AccelGetVendorMountLibs", &getVendorMountLibs); err != nil {
+		return err
+	}
+	// Register log callback only on non-macOS platforms.
+	// purego callback has issues on macOS ARM64, causing bus errors when C code calls back into Go.
+	// Prefer the current ABI symbol and keep compatibility with older providers.
 	if runtime.GOOS != "darwin" {
-		purego.RegisterLibFunc(&registerLogCallback, handle, "AccelRegisterLogCallback")
-		callback := purego.NewCallback(goLogCallback)
-		if result := registerLogCallback(callback); result != ResultSuccess {
-			klog.Warningf("Failed to register log callback: %d", result)
+		err := registerLibFunc(handle, "AccelRegisterLogCallback", &registerLogCallback)
+		if err != nil {
+			err = registerLibFunc(handle, "RegisterLogCallback", &registerLogCallback)
+		}
+		if err == nil {
+			callback := purego.NewCallback(goLogCallback)
+			if result := registerLogCallback(callback); result != ResultSuccess {
+				klog.Warningf("Failed to register log callback: %d", result)
+			}
+		} else {
+			klog.Warningf("RegisterLogCallback not available: %v", err)
 		}
 	}
 

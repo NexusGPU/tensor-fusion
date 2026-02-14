@@ -1,7 +1,12 @@
 package v1
 
-// Domain is the default domain for tensor-fusion.ai API group.
-const Domain = "tensor-fusion.ai"
+const (
+	// Domain is the default domain for tensor-fusion.ai API group.
+	Domain = "tensor-fusion.ai"
+
+	// DomainPrefix is the prefix of the domain for tensor-fusion.ai API group.
+	DomainPrefix = "tensor-fusion"
+)
 
 // Phase constants for resource lifecycle states.
 const (

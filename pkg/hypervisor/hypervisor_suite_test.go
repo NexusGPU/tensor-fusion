@@ -611,7 +611,8 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				err := backend.StartWorker(worker)
 				Expect(err).NotTo(HaveOccurred())
 
-				// Wait for process to start and get first PID
+				// Wait for process to start and get first PID.
+				// This worker exits almost immediately, so we may only observe ExitCode.
 				var firstPID uint32
 				Eventually(func() bool {
 					workers := backend.ListWorkers()
@@ -621,10 +622,13 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 								firstPID = w.WorkerRunningInfo.PID
 								return true
 							}
+							if w.WorkerRunningInfo.ExitCode == 1 {
+								return true
+							}
 						}
 					}
 					return false
-				}, 3*time.Second).Should(BeTrue(), "Process should start")
+				}, 3*time.Second).Should(BeTrue(), "Process should start or exit quickly")
 
 				// Wait for process to exit and be retried (backoff is ~3 seconds for first retry)
 				// Check for retry: Restarts > 0 indicates retry happened
@@ -676,16 +680,20 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 				err := backend.StartWorker(worker)
 				Expect(err).NotTo(HaveOccurred())
 
-				// Wait for process to start
+				// Wait for process to start.
+				// This worker exits almost immediately, so we may only observe ExitCode.
 				Eventually(func() bool {
 					workers := backend.ListWorkers()
 					for _, w := range workers {
 						if w.WorkerUID == testWorkerUID1 && w.WorkerRunningInfo != nil {
-							return w.WorkerRunningInfo.IsRunning && w.WorkerRunningInfo.PID > 0
+							if w.WorkerRunningInfo.IsRunning && w.WorkerRunningInfo.PID > 0 {
+								return true
+							}
+							return w.WorkerRunningInfo.ExitCode == 1
 						}
 					}
 					return false
-				}, 3*time.Second).Should(BeTrue(), "Process should start")
+				}, 3*time.Second).Should(BeTrue(), "Process should start or exit quickly")
 
 				// Wait for process to exit (it exits immediately)
 				Eventually(func() bool {

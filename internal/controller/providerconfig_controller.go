@@ -20,6 +20,7 @@ import (
 	"context"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -55,6 +56,9 @@ func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Update the provider manager cache
 	r.ProviderManager.UpdateProvider(&providerConfig)
+	gpuInfos := r.ProviderManager.GetAllGpuInfos()
+	gpuallocator.LoadPartitionTemplatesFromConfig(gpuInfos)
+	logger.Info("partition templates refreshed", "gpuInfoCount", len(gpuInfos))
 	logger.Info("ProviderConfig synced", "vendor", providerConfig.Spec.Vendor)
 
 	return ctrl.Result{}, nil

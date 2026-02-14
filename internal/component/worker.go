@@ -9,6 +9,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -108,8 +110,23 @@ func (w *Worker) PerformBatchUpdate(r client.Client, ctx context.Context, pool *
 
 	for i := range delta {
 		workload := w.workloadsToUpdate[i]
-		workload.Status.PodTemplateHash = ""
-		if err := r.Status().Update(ctx, workload); err != nil {
+		if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			latest := &tfv1.TensorFusionWorkload{}
+			if err := r.Get(ctx, client.ObjectKeyFromObject(workload), latest); err != nil {
+				if errors.IsNotFound(err) {
+					return nil
+				}
+				return err
+			}
+
+			if latest.Status.PodTemplateHash == "" {
+				return nil
+			}
+
+			base := latest.DeepCopy()
+			latest.Status.PodTemplateHash = ""
+			return r.Status().Patch(ctx, latest, client.MergeFrom(base))
+		}); err != nil {
 			return false, fmt.Errorf("failed to update workload status : %w", err)
 		}
 		log.Info("workload pod template hash in status has changed", "workload", workload.Name)
