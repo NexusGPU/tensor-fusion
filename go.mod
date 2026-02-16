@@ -8,7 +8,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107
 	github.com/aws/aws-sdk-go-v2 v1.41.1
-	github.com/aws/aws-sdk-go-v2/service/ec2 v1.285.0
+	github.com/aws/aws-sdk-go-v2/service/ec2 v1.289.0
 	github.com/aws/smithy-go v1.24.0
 	github.com/awslabs/operatorpkg v0.0.0-20251024191238-14554b75b88a
 	github.com/charmbracelet/bubbles v0.21.0
