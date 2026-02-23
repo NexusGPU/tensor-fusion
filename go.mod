@@ -51,7 +51,7 @@ require (
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/kube-scheduler v0.35.0
 	k8s.io/kubelet v0.35.1
-	k8s.io/kubernetes v1.35.0
+	k8s.io/kubernetes v1.35.1
 	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2
 	sigs.k8s.io/controller-runtime v0.23.1
 	sigs.k8s.io/karpenter v1.8.2
