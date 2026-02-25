@@ -337,9 +337,11 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 func (m *Controller) RemovePartitionedDevice(partitionUUID, deviceUUID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, exists := m.devices[partitionUUID]
-	if !exists {
-		return fmt.Errorf("partition %s not found, can not remove", partitionUUID)
+
+	if _, exists := m.devices[partitionUUID]; !exists {
+		// Keep cleanup idempotent: cache can be stale after periodic discovery/restart,
+		// but provider-side partition state may still require explicit removal.
+		klog.Warningf("partition %s not found in controller cache, trying provider-side cleanup", partitionUUID)
 	}
 
 	err := m.accelerator.RemovePartition(partitionUUID, deviceUUID)

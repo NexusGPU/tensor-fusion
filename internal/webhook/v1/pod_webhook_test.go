@@ -964,7 +964,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 
 			currentBytes, err := json.Marshal(pod)
 			Expect(err).NotTo(HaveOccurred())
-			patch, err := mutator.patchTFClient(context.Background(), pod, pool, false, currentBytes, []int{0})
+			patch, err := mutator.patchTFClient(context.Background(), pod, pool, false, false, currentBytes, []int{0})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(patch).NotTo(BeEmpty())
 			// Should include multiple mutations (e.g. pod labels and container-level changes).

@@ -2,12 +2,15 @@ package kubernetes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -34,7 +37,11 @@ type APIClient struct {
 	client client.Client
 	ctx    context.Context
 
-	providerCache providerConfigCache
+	providerCache  providerConfigCache
+	metadataOnce   sync.Once
+	metadataErr    error
+	metadata       []tfv1.HardwareModelInfo
+	metadataLoaded bool
 }
 
 type providerConfigCache struct {
@@ -185,18 +192,46 @@ func (a *APIClient) UpdateGPUNodeStatus(nodeName string, nodeInfo *api.NodeInfo)
 	})
 }
 
-// ResolveDeviceFp16TFlops tries to find FP16 TFLOPS from ProviderConfig by vendor + model (case-insensitive).
+// ResolveDeviceFp16TFlops tries to find FP16 TFLOPS from provider hardware metadata env (case-insensitive).
 func (a *APIClient) ResolveDeviceFp16TFlops(vendor, model string) (resource.Quantity, bool, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return resource.Quantity{}, false, nil
 	}
 
-	providers, err := a.getProviderConfigs()
+	metadata, err := a.getHardwareMetadataFromEnv()
 	if err != nil {
 		return resource.Quantity{}, false, err
 	}
+	if qty, found := matchFp16TFlops(model, vendor, metadata); found {
+		return qty, true, nil
+	}
+	return resource.Quantity{}, false, nil
+}
 
+func (a *APIClient) getHardwareMetadataFromEnv() ([]tfv1.HardwareModelInfo, error) {
+	a.metadataOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv(constants.TFProviderHardwareMetadataEnv))
+		if raw == "" {
+			a.metadataErr = fmt.Errorf("%s is not set", constants.TFProviderHardwareMetadataEnv)
+			return
+		}
+		if err := json.Unmarshal([]byte(raw), &a.metadata); err != nil {
+			a.metadataErr = err
+			return
+		}
+		a.metadataLoaded = true
+	})
+	if a.metadataErr != nil {
+		return nil, a.metadataErr
+	}
+	if !a.metadataLoaded {
+		return nil, fmt.Errorf("%s is not set", constants.TFProviderHardwareMetadataEnv)
+	}
+	return a.metadata, nil
+}
+
+func matchFp16TFlops(model, vendor string, metadata []tfv1.HardwareModelInfo) (resource.Quantity, bool) {
 	modelsToMatch := []string{model}
 	if vendor != "" && len(model) >= len(vendor) {
 		if strings.EqualFold(model[:len(vendor)], vendor) {
@@ -206,23 +241,17 @@ func (a *APIClient) ResolveDeviceFp16TFlops(vendor, model string) (resource.Quan
 			}
 		}
 	}
-
-	for _, provider := range providers {
-		if vendor != "" && !strings.EqualFold(provider.Spec.Vendor, vendor) {
-			continue
-		}
-		for _, hw := range provider.Spec.HardwareMetadata {
-			for _, candidate := range modelsToMatch {
-				if strings.EqualFold(hw.Model, candidate) {
-					if hw.Fp16TFlops.IsZero() {
-						return resource.Quantity{}, false, nil
-					}
-					return hw.Fp16TFlops.DeepCopy(), true, nil
+	for _, hw := range metadata {
+		for _, candidate := range modelsToMatch {
+			if strings.EqualFold(hw.Model, candidate) {
+				if hw.Fp16TFlops.IsZero() {
+					return resource.Quantity{}, false
 				}
+				return hw.Fp16TFlops.DeepCopy(), true
 			}
 		}
 	}
-	return resource.Quantity{}, false, nil
+	return resource.Quantity{}, false
 }
 
 func (a *APIClient) getProviderConfigs() ([]tfv1.ProviderConfig, error) {

@@ -229,7 +229,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 
 	// Inject tensor-fusion patches
 	patches, err := m.patchTFClient(
-		ctx, pod, pool, tfInfo.Profile.IsLocalGPU, currentBytes, containerIndices,
+		ctx, pod, pool, tfInfo.Profile.IsLocalGPU, tfInfo.Profile.SidecarWorker, currentBytes, containerIndices,
 	)
 	if err != nil {
 		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
@@ -372,6 +372,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	pod *corev1.Pod,
 	pool *tfv1.GPUPool,
 	isLocalGPU bool,
+	sidecarWorker bool,
 	currentBytes []byte,
 	containerIndices []int,
 ) ([]jsonpatch.JsonPatchOperation, error) {
@@ -382,7 +383,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	}
 	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(clientConfig)
 
-	assignPodLabelsAndAnnotations(isLocalGPU, pod, pool)
+	assignPodLabelsAndAnnotations(isLocalGPU, sidecarWorker, pod, pool)
 
 	// Index allocation only for worker pods
 	// Index is used for Device Plugin communication to match Pod with CDI device
@@ -530,7 +531,7 @@ func calculatePodPatch(currentBytes []byte, pod *corev1.Pod, clientConfig *tfv1.
 	return strategicpatches, nil
 }
 
-func assignPodLabelsAndAnnotations(isLocalGPU bool, pod *corev1.Pod, pool *tfv1.GPUPool) {
+func assignPodLabelsAndAnnotations(isLocalGPU bool, sidecarWorker bool, pod *corev1.Pod, pool *tfv1.GPUPool) {
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}
@@ -539,7 +540,11 @@ func assignPodLabelsAndAnnotations(isLocalGPU bool, pod *corev1.Pod, pool *tfv1.
 	}
 	if isLocalGPU {
 		pod.Labels[constants.LabelComponent] = constants.ComponentWorker
-		pod.Annotations[constants.EmbeddedWorkerAnnotation] = constants.TrueStringValue
+		if sidecarWorker {
+			delete(pod.Annotations, constants.EmbeddedWorkerAnnotation)
+		} else {
+			pod.Annotations[constants.EmbeddedWorkerAnnotation] = constants.TrueStringValue
+		}
 		// no need to add port in local gpu mode, communication is done through shared memory in the same process
 
 		// Add toleration for TensorFusion nodes

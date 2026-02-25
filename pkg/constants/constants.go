@@ -276,6 +276,7 @@ var (
 	LeaderInfoConfigMapName        = "tensor-fusion-operator-leader-info"
 	LeaderInfoConfigMapLeaderIPKey = "leader-ip"
 	AcceleratorLabelVendor         = Domain + "/hardware-vendor"
+	HypervisorIsolationModeLabel   = Domain + "/isolationMode"
 )
 
 const ShortUUIDAlphabet = "123456789abcdefghijkmnopqrstuvwxy"

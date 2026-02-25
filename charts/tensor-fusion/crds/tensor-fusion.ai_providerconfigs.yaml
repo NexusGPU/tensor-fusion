@@ -128,6 +128,43 @@ spec:
                   - model
                   type: object
                 type: array
+              hypervisor:
+                description: Hypervisor contains vendor-specific hypervisor settings
+                properties:
+                  hostPathMounts:
+                    description: HostPathMounts adds host path mounts to the hypervisor
+                      pod
+                    items:
+                      description: ProviderHypervisorHostPathMount defines a hostPath
+                        mount for hypervisor
+                      properties:
+                        hostPath:
+                          description: HostPath is the path on the host to mount
+                          type: string
+                        mountPath:
+                          description: MountPath is the path inside the container
+                          type: string
+                        name:
+                          description: Name is the volume name
+                          type: string
+                        readOnly:
+                          description: ReadOnly indicates if the mount should be read-only
+                          type: boolean
+                      required:
+                      - hostPath
+                      - mountPath
+                      - name
+                      type: object
+                    type: array
+                  ldLibraryPath:
+                    description: LDLibraryPath appends entries to LD_LIBRARY_PATH
+                      for the hypervisor container
+                    type: string
+                  privilegedHypervisor:
+                    description: PrivilegedHypervisor indicates the hypervisor container
+                      should run in privileged mode
+                    type: boolean
+                type: object
               images:
                 description: Images contains container images for different components
                 properties:

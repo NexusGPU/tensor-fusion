@@ -514,7 +514,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	})
 
 	composeHypervisorInitContainer(ctx, spec, pool, vendor, compatibleWithNvidiaContainerToolkit)
-	composeHypervisorContainer(spec, pool, enableVector)
+	composeHypervisorContainer(spec, pool, vendor, enableVector)
 
 	if enableVector {
 		composeVectorContainer(spec, pool)
@@ -620,7 +620,7 @@ func composeHypervisorInitContainer(
 	}
 }
 
-func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVector bool) {
+func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor string, enableVector bool) {
 	spec.HostNetwork = true
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
 		Name:      constants.DataVolumeName,
@@ -651,112 +651,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 			},
 		},
 	}
-
-	// Ascend needs host driver/DCMI libraries mounted into the hypervisor container.
-	// The mount paths follow common Ascend driver install locations.
-	for _, env := range spec.Containers[0].Env {
-		if env.Name == constants.TFHardwareVendorEnv && env.Value == constants.AcceleratorVendorHuaweiAscendNPU {
-			// Ensure LD_LIBRARY_PATH includes Ascend driver/DCMI lib dirs.
-			ldSet := false
-			for i := range spec.Containers[0].Env {
-				if spec.Containers[0].Env[i].Name == "LD_LIBRARY_PATH" {
-					if !strings.Contains(spec.Containers[0].Env[i].Value, constants.AscendDriverLibDir) {
-						if spec.Containers[0].Env[i].Value == "" {
-							spec.Containers[0].Env[i].Value = constants.AscendLDLibraryPath
-						} else {
-							spec.Containers[0].Env[i].Value += ":" + constants.AscendLDLibraryPath
-						}
-					}
-					ldSet = true
-					break
-				}
-			}
-			if !ldSet {
-				spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
-					Name:  "LD_LIBRARY_PATH",
-					Value: constants.AscendLDLibraryPath,
-				})
-			}
-
-			// Avoid duplicate mounts/volumes if user already configured them.
-			hasMount := func(name string) bool {
-				for _, m := range spec.Containers[0].VolumeMounts {
-					if m.Name == name {
-						return true
-					}
-				}
-				return false
-			}
-			hasVolume := func(name string) bool {
-				for _, v := range spec.Volumes {
-					if v.Name == name {
-						return true
-					}
-				}
-				return false
-			}
-
-			if !hasMount(constants.AscendDriverVolumeName) {
-				spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
-					Name:      constants.AscendDriverVolumeName,
-					MountPath: constants.AscendDriverHostPath,
-					ReadOnly:  true,
-				})
-			}
-			if !hasMount(constants.AscendDCMIVolumeName) {
-				spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
-					Name:      constants.AscendDCMIVolumeName,
-					MountPath: constants.AscendDCMIHostPath,
-					ReadOnly:  true,
-				})
-			}
-			if !hasMount(constants.AscendHostDevVolume) {
-				spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
-					Name:      constants.AscendHostDevVolume,
-					MountPath: "/dev",
-				})
-				// Ensure privileged for device access
-				if spec.Containers[0].SecurityContext == nil {
-					spec.Containers[0].SecurityContext = &v1.SecurityContext{}
-				}
-				spec.Containers[0].SecurityContext.Privileged = ptr.To(true)
-			}
-			if !hasVolume(constants.AscendDriverVolumeName) {
-				spec.Volumes = append(spec.Volumes, v1.Volume{
-					Name: constants.AscendDriverVolumeName,
-					VolumeSource: v1.VolumeSource{
-						HostPath: &v1.HostPathVolumeSource{
-							Path: constants.AscendDriverHostPath,
-							Type: ptr.To(v1.HostPathDirectory),
-						},
-					},
-				})
-			}
-			if !hasVolume(constants.AscendDCMIVolumeName) {
-				spec.Volumes = append(spec.Volumes, v1.Volume{
-					Name: constants.AscendDCMIVolumeName,
-					VolumeSource: v1.VolumeSource{
-						HostPath: &v1.HostPathVolumeSource{
-							Path: constants.AscendDCMIHostPath,
-							Type: ptr.To(v1.HostPathDirectory),
-						},
-					},
-				})
-			}
-			if !hasVolume(constants.AscendHostDevVolume) {
-				spec.Volumes = append(spec.Volumes, v1.Volume{
-					Name: constants.AscendHostDevVolume,
-					VolumeSource: v1.VolumeSource{
-						HostPath: &v1.HostPathVolumeSource{
-							Path: "/dev",
-							Type: ptr.To(v1.HostPathDirectory),
-						},
-					},
-				})
-			}
-			break
-		}
-	}
+	applyProviderHypervisorConfig(spec, vendor)
 
 	// When k8s version >= 1.30, avoid AppArmor level limit of writing shared memory and reading /proc
 	minorVersionStr := os.Getenv(constants.KubeApiVersionMinorEnv)
@@ -851,6 +746,92 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 	}
 
 	// TODO HypervisorVerifyServiceAccountEnabledEnvVar and Public Key
+}
+
+func applyProviderHypervisorConfig(spec *v1.PodSpec, vendor string) {
+	mgr := provider.GetManager()
+	if mgr == nil {
+		return
+	}
+	providerCfg, ok := mgr.GetProvider(vendor)
+	if !ok || providerCfg.Spec.Hypervisor == nil {
+		return
+	}
+
+	hypervisorCfg := providerCfg.Spec.Hypervisor
+	if hypervisorCfg.LDLibraryPath != "" {
+		spec.Containers[0].Env = appendLDLibraryPath(spec.Containers[0].Env, hypervisorCfg.LDLibraryPath)
+	}
+
+	if hypervisorCfg.PrivilegedHypervisor {
+		if spec.Containers[0].SecurityContext == nil {
+			spec.Containers[0].SecurityContext = &v1.SecurityContext{}
+		}
+		spec.Containers[0].SecurityContext.Privileged = ptr.To(true)
+	}
+
+	if len(hypervisorCfg.HostPathMounts) == 0 {
+		return
+	}
+
+	existingMounts := make(map[string]bool)
+	for _, mount := range spec.Containers[0].VolumeMounts {
+		existingMounts[mount.Name] = true
+	}
+	existingVolumes := make(map[string]bool)
+	for _, volume := range spec.Volumes {
+		existingVolumes[volume.Name] = true
+	}
+
+	for _, mount := range hypervisorCfg.HostPathMounts {
+		if mount.Name == "" || mount.HostPath == "" || mount.MountPath == "" {
+			continue
+		}
+		if !existingMounts[mount.Name] {
+			spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
+				Name:      mount.Name,
+				MountPath: mount.MountPath,
+				ReadOnly:  mount.ReadOnly,
+			})
+			existingMounts[mount.Name] = true
+		}
+		if !existingVolumes[mount.Name] {
+			spec.Volumes = append(spec.Volumes, v1.Volume{
+				Name: mount.Name,
+				VolumeSource: v1.VolumeSource{
+					HostPath: &v1.HostPathVolumeSource{
+						Path: mount.HostPath,
+						Type: ptr.To(v1.HostPathDirectory),
+					},
+				},
+			})
+			existingVolumes[mount.Name] = true
+		}
+	}
+}
+
+func appendLDLibraryPath(envs []v1.EnvVar, extra string) []v1.EnvVar {
+	ldSet := false
+	for i := range envs {
+		if envs[i].Name == "LD_LIBRARY_PATH" {
+			if !strings.Contains(envs[i].Value, extra) {
+				if envs[i].Value == "" {
+					envs[i].Value = extra
+				} else {
+					envs[i].Value += ":" + extra
+				}
+			}
+			ldSet = true
+			break
+		}
+	}
+	if !ldSet {
+		envs = append(envs, v1.EnvVar{
+			Name:  "LD_LIBRARY_PATH",
+			Value: extra,
+		})
+	}
+	return envs
 }
 
 func getHypervisorPortNumber(hypervisorConfig *tfv1.HypervisorConfig) int32 {

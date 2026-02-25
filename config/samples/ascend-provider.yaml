@@ -1,0 +1,122 @@
+apiVersion: tensor-fusion.ai/v1
+kind: ProviderConfig
+metadata:
+  name: ascend-provider
+spec:
+  vendor: Ascend
+
+  images:
+    middleware: tensorfusion/vgpu-provider-ascend:dev-local-npu-ser2
+    remoteClient: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-client:1.63.1
+    remoteWorker: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-worker:1.70.0
+
+  hypervisor:
+    privilegedHypervisor: true
+    ldLibraryPath: "/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/dcmi"
+    hostPathMounts:
+      - name: ascend-driver
+        hostPath: /usr/local/Ascend/driver
+        mountPath: /usr/local/Ascend/driver
+        readOnly: true
+      - name: ascend-dcmi
+        hostPath: /usr/local/dcmi
+        mountPath: /usr/local/dcmi
+        readOnly: true
+
+  devicePluginDetection:
+    resourceNamePrefixes:
+      - huawei.com/Ascend
+    usedBySystemName: ascend-device-plugin
+
+  inUseResourceNames:
+    - huawei.com/Ascend310
+    - huawei.com/Ascend310P
+    - huawei.com/npu
+
+  hardwareMetadata:
+    - costPerHour: "1.0"
+      fp16TFlops: "22"
+      fullModelName: Huawei Ascend 310P3
+      maxIsolationGroups: 5
+      maxPartitions: 7
+      model: Ascend 310P3
+      partitionTemplateRefs:
+        - vir01
+        - vir02
+        - vir04
+      totalExtendedResources:
+        AICORE: 8
+        AICPU: 7
+        JPEGD: 16
+        JPEGE: 8
+        VDEC: 12
+        VENC: 3
+        VPC: 12
+    - costPerHour: "1.0"
+      fp16TFlops: "340"
+      fullModelName: Huawei Ascend 910B
+      maxIsolationGroups: 5
+      maxPartitions: 7
+      model: Ascend910B
+      partitionTemplateRefs:
+        - vir01
+        - vir02
+        - vir04
+      totalExtendedResources:
+        AICORE: 8
+        AICPU: 7
+        JPEGD: 16
+        JPEGE: 8
+        VDEC: 12
+        VENC: 3
+        VPC: 12
+
+  virtualizationTemplates:
+    - computePercent: "12.5"
+      description: 1/8 NPU slice (vir01, 3GB)
+      extendedResources:
+        AICORE: 1
+        AICPU: 1
+        JPEGD: 2
+        JPEGE: 1
+        VDEC: 1
+        VPC: 1
+      id: vir01
+      isolationGroupSharing: shared
+      isolationGroupSlots: 2
+      maxInstances: 8
+      maxPartitionsPerIsolationGroup: 2
+      memoryGigabytes: 3
+      name: vir01
+    - computePercent: "25"
+      description: 1/4 NPU slice (vir02, 6GB)
+      extendedResources:
+        AICORE: 2
+        AICPU: 2
+        JPEGD: 4
+        JPEGE: 2
+        VDEC: 3
+        VENC: 1
+        VPC: 3
+      id: vir02
+      isolationGroupSharing: exclusive
+      isolationGroupSlots: 2
+      maxInstances: 4
+      memoryGigabytes: 6
+      name: vir02
+    - computePercent: "50"
+      description: 1/2 NPU slice (vir04, 12GB)
+      extendedResources:
+        AICORE: 4
+        AICPU: 4
+        JPEGD: 8
+        JPEGE: 4
+        VDEC: 6
+        VENC: 2
+        VPC: 6
+      id: vir04
+      isolationGroupSharing: exclusive
+      isolationGroupSlots: 4
+      maxInstances: 2
+      memoryGigabytes: 12
+      name: vir04

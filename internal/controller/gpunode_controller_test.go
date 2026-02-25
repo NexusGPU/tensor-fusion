@@ -138,6 +138,119 @@ var _ = Describe("GPUNode Controller", func() {
 		})
 	})
 
+	Context("Hypervisor isolation-mode label", func() {
+		It("should append partitioned isolation mode arg when label is set", func() {
+			spec := &corev1.PodSpec{
+				Containers: []corev1.Container{
+					{
+						Name: constants.TFContainerNameHypervisor,
+					},
+				},
+			}
+
+			applyHypervisorIsolationModeArg(spec, string(tfv1.IsolationModePartitioned))
+			Expect(spec.Containers[0].Args).To(ContainElement("--isolation-mode=partitioned"))
+		})
+
+		It("should replace existing isolation mode arg when label requires partitioned mode", func() {
+			spec := &corev1.PodSpec{
+				Containers: []corev1.Container{
+					{
+						Name: constants.TFContainerNameHypervisor,
+						Args: []string{"--foo=bar", "--isolation-mode=shared"},
+					},
+				},
+			}
+
+			applyHypervisorIsolationModeArg(spec, string(tfv1.IsolationModePartitioned))
+			Expect(spec.Containers[0].Args).To(ContainElement("--isolation-mode=partitioned"))
+			Expect(spec.Containers[0].Args).NotTo(ContainElement("--isolation-mode=shared"))
+		})
+
+		It("should require pod recreation when desired isolation mode is missing", func() {
+			pod := &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: constants.TFContainerNameHypervisor,
+							Args: []string{"--port=9000"},
+						},
+					},
+				},
+			}
+
+			Expect(isHypervisorIsolationModeConfigured(pod, string(tfv1.IsolationModePartitioned))).To(BeFalse())
+			Expect(isHypervisorIsolationModeConfigured(pod, "")).To(BeTrue())
+		})
+
+		It("should detect split-form isolation mode arg", func() {
+			pod := &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: constants.TFContainerNameHypervisor,
+							Args: []string{"--isolation-mode", "partitioned"},
+						},
+					},
+				},
+			}
+
+			Expect(isHypervisorIsolationModeConfigured(pod, string(tfv1.IsolationModePartitioned))).To(BeTrue())
+		})
+
+		It("should treat the last isolation mode arg as effective value", func() {
+			pod := &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: constants.TFContainerNameHypervisor,
+							Args: []string{"--isolation-mode=partitioned", "--isolation-mode", "shared"},
+						},
+					},
+				},
+			}
+
+			Expect(isHypervisorIsolationModeConfigured(pod, string(tfv1.IsolationModePartitioned))).To(BeFalse())
+			Expect(isHypervisorIsolationModeConfigured(pod, string(tfv1.IsolationModeShared))).To(BeTrue())
+		})
+
+		It("should treat malformed split-form arg as not configured", func() {
+			pod := &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: constants.TFContainerNameHypervisor,
+							Args: []string{"--isolation-mode", "--port=9000"},
+						},
+					},
+				},
+			}
+
+			Expect(isHypervisorIsolationModeConfigured(pod, string(tfv1.IsolationModePartitioned))).To(BeFalse())
+		})
+
+		It("should not change args when upsert isolation mode is empty", func() {
+			args := []string{"--port=9000"}
+			got := upsertHypervisorIsolationModeArg(args, "")
+			Expect(got).To(Equal(args))
+		})
+
+		It("should require pod recreation when label is removed but arg still exists", func() {
+			pod := &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name: constants.TFContainerNameHypervisor,
+							Args: []string{"--isolation-mode=partitioned"},
+						},
+					},
+				},
+			}
+
+			Expect(isHypervisorIsolationModeConfigured(pod, "")).To(BeFalse())
+		})
+	})
+
 	Context("Vendor specific handler", func() {
 		var (
 			scheme *runtime.Scheme
