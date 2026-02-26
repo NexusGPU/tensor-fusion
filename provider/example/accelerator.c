@@ -322,6 +322,13 @@ static void initDeviceInfo(ExtendedDeviceInfo* info, int32_t deviceIndex) {
     info->virtualizationCapabilities.supportsRemoting = false;
     info->virtualizationCapabilities.maxPartitions = 7;
     info->virtualizationCapabilities.maxWorkersPerDevice = 16;
+
+    // Initialize device node mappings
+    info->deviceNodes.count = 1;
+    snprintf(info->deviceNodes.nodes[0].hostPath, sizeof(info->deviceNodes.nodes[0].hostPath),
+             "/dev/example%d", deviceIndex);
+    snprintf(info->deviceNodes.nodes[0].guestPath, sizeof(info->deviceNodes.nodes[0].guestPath),
+             "/dev/example%d", deviceIndex);
 }
 
 AccelResult AccelGetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount) {
@@ -372,7 +379,7 @@ AccelResult AccelGetAllDevicesTopology(ExtendedDeviceTopology* topology) {
     // Initialize each device topology
     for (size_t i = 0; i < actualDeviceCount && i < MAX_TOPOLOGY_DEVICES; i++) {
         DeviceTopologyInfo* dt = &topology->devices[i];
-        snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "%s", devices[i].basic.uuid);
+        snprintf(dt->deviceUUID, sizeof(dt->deviceUUID), "%.63s", devices[i].basic.uuid);
         dt->deviceIndex = devices[i].basic.index;
         dt->numaNode = devices[i].basic.numaNode;
         dt->peerCount = 0;
@@ -382,7 +389,7 @@ AccelResult AccelGetAllDevicesTopology(ExtendedDeviceTopology* topology) {
             if (i != j) {
                 if (dt->peerCount < MAX_TOPOLOGY_DEVICES) {
                     DeviceTopoNode* peer = &dt->peers[dt->peerCount];
-                    snprintf(peer->peerUUID, sizeof(peer->peerUUID), "%s", devices[j].basic.uuid);
+                    snprintf(peer->peerUUID, sizeof(peer->peerUUID), "%.63s", devices[j].basic.uuid);
                     peer->peerIndex = devices[j].basic.index;
                     // Same NUMA node = NUMA level, different = system level
                     if (devices[i].basic.numaNode == devices[j].basic.numaNode && devices[i].basic.numaNode >= 0) {
@@ -418,6 +425,7 @@ AccelResult AccelAssignPartition(const char* templateId, const char* deviceUUID,
 
     // Example: set partition result type to environment variable
     partitionResult->type = PARTITION_TYPE_ENVIRONMENT_VARIABLE;
+    partitionResult->deviceNodes.count = 0;
     // Generate unique partition UUID by appending counter to device UUID
     snprintf(partitionResult->deviceUUID, sizeof(partitionResult->deviceUUID), 
              "%s-partition-%d", deviceUUID, partitionCounter++);
@@ -546,22 +554,29 @@ AccelResult AccelGetProcessInformation(
         return ACCEL_SUCCESS;  // Return empty if driver_mock not initialized
     }
 
-    // Convert mock AMD SMI process info to ProcessInformation
-    // This combines compute and memory utilization in a single structure
+    // Convert mock AMD SMI process info to ProcessInformation.
+    // amdsmi_get_gpu_process_list may return maxProcs > local procInfos capacity
+    // (e.g. OUT_OF_RESOURCES semantics), so always clamp to the fetched buffer size.
     size_t actualCount = (size_t)maxProcs;
+    const size_t fetchedCapacity = sizeof(procInfos) / sizeof(procInfos[0]);
+    if (actualCount > fetchedCapacity) {
+        actualCount = fetchedCapacity;
+    }
     if (actualCount > maxCount) {
         actualCount = maxCount;
     }
 
-    // Get device info to calculate percentages
-    ExtendedDeviceInfo devices[256];
+    // Get one device info sample to calculate percentages.
+    // Do not allocate a large ExtendedDeviceInfo array on stack:
+    // each entry is large and can overflow the thread stack.
+    ExtendedDeviceInfo device;
     size_t deviceCount = 0;
     uint64_t totalMemoryBytes = 16ULL * 1024 * 1024 * 1024; // Default 16GB
     uint64_t totalCUs = 108; // Default 108 CUs
     
-    if (AccelGetAllDevices(devices, 256, &deviceCount) == ACCEL_SUCCESS && deviceCount > 0) {
-        totalMemoryBytes = devices[0].basic.totalMemoryBytes;
-        totalCUs = devices[0].basic.totalComputeUnits;
+    if (AccelGetAllDevices(&device, 1, &deviceCount) == ACCEL_SUCCESS && deviceCount > 0) {
+        totalMemoryBytes = device.basic.totalMemoryBytes;
+        totalCUs = device.basic.totalComputeUnits;
     }
 
     for (size_t i = 0; i < actualCount; i++) {
@@ -573,7 +588,7 @@ AccelResult AccelGetProcessInformation(
         
         // Device UUID - try to get from device info, fallback to mock-device-0
         if (deviceCount > 0) {
-            snprintf(info->deviceUUID, sizeof(info->deviceUUID), "%.63s", devices[0].basic.uuid);
+            snprintf(info->deviceUUID, sizeof(info->deviceUUID), "%.63s", device.basic.uuid);
         } else {
             snprintf(info->deviceUUID, sizeof(info->deviceUUID), "%.63s", "mock-device-0");
         }

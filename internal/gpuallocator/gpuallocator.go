@@ -73,6 +73,13 @@ func LoadPartitionTemplatesFromConfig(gpuInfos []config.GpuInfo) {
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Rebuild maps on each refresh to avoid stale template/config entries.
+	PartitionTemplateMap = make(map[string]map[string]config.PartitionTemplateInfo, len(gpuInfos)*2)
+	MaxPartitionsMap = make(map[string]uint32, len(gpuInfos)*2)
+	MaxPlacementSlotsMap = make(map[string]uint32, len(gpuInfos)*2)
+	MaxIsolationGroupsMap = make(map[string]uint32, len(gpuInfos)*2)
+	TotalExtendedResourcesMap = make(map[string]map[string]uint32, len(gpuInfos)*2)
+
 	for _, gpuInfo := range gpuInfos {
 		// Store max partitions
 		if gpuInfo.MaxPartitions > 0 {

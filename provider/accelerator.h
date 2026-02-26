@@ -110,11 +110,28 @@
    size_t count;                                        // Number of properties (0 to MAX_DEVICE_PROPERTIES)
  } DeviceProperties;
  
+ // Device node host/guest path pair
+ #define MAX_DEVICE_NODES 32
+ #define MAX_DEVICE_PATH 512
+ 
+ typedef struct {
+   char hostPath[MAX_DEVICE_PATH];   // Host device path (e.g., /dev/davinci0)
+   char guestPath[MAX_DEVICE_PATH];  // Guest device path (e.g., /dev/davinci0)
+ } DeviceNodeKV;
+ 
+ // Device node list
+ // Used for exposing device node mappings from discovery to the Go layer.
+ typedef struct {
+   DeviceNodeKV nodes[MAX_DEVICE_NODES];  // Array of host/guest device node mappings
+   size_t count;                          // Number of mappings (0 to MAX_DEVICE_NODES)
+ } DeviceNodes;
+ 
  // Extended device information
  typedef struct {
    DeviceBasicInfo basic;
    DeviceProperties props;
    VirtualizationCapabilities virtualizationCapabilities;
+   DeviceNodes deviceNodes;
  } ExtendedDeviceInfo;
  
  // Partition template for hardware partitioning (e.g., MIG)
@@ -245,11 +262,14 @@
    PARTITION_TYPE_DEVICE_NODE = 1,
  } PartitionResultType;
  
- typedef struct {
-   PartitionResultType type;
-   char deviceUUID[64];    // Device UUID
-   char envVars[10][256];  // Array of environment variable key-value pairs, A=B, C=D, etc.
- } PartitionResult;
+typedef struct {
+  PartitionResultType type;
+  char deviceUUID[64];    // Device UUID
+  char envVars[10][256];  // Array of environment variable key-value pairs, A=B, C=D, etc.
+  // Optional device node mappings for PARTITION_TYPE_DEVICE_NODE mode.
+  // Host path is mounted from node, guest path is exposed inside container.
+  DeviceNodes deviceNodes;
+} PartitionResult;
  
  // ============================================================================
  // Initialization APIs

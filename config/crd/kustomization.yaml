@@ -13,6 +13,7 @@ resources:
 - bases/tensor-fusion.ai_tensorfusionworkloads.yaml
 - bases/tensor-fusion.ai_gpuresourcequotas.yaml
 - bases/tensor-fusion.ai_gpunodeclaims.yaml
+- bases/tensor-fusion.ai_providerconfigs.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

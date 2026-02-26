@@ -22,11 +22,13 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
+	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
@@ -141,21 +143,6 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	// Support a some special case: when OS image shipped with Nvidia Driver, and Nvidia Operator override it
-	// Need wait device-plugin to be ready and K8S Node GPU resource to be allocatable,
-	// so that to avoid potential version mismatch issues from nvidia container toolkit mounted libs
-	if os.Getenv(constants.RunHypervisorUtilGPUAllocatable) == constants.TrueStringValue {
-		if len(coreNode.Status.Allocatable) > 0 {
-			if _, ok := coreNode.Status.Allocatable[constants.NvidiaGPUKey]; !ok {
-				log.Info("GPU resource not allocatable, wait allocatable to be set", "node", node.Name)
-				return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
-			}
-		} else {
-			log.Info("GPU resource not allocatable, node still in init phase", "node", node.Name)
-			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
-		}
-	}
-
 	// Check if the node is undergoing NVIDIA GPU driver upgrade
 	if isNodeUnderGPUDriverUpgrade(coreNode) {
 		log.Info("Node is undergoing GPU driver upgrade, skip reconciling",
@@ -163,12 +150,6 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			"upgradeState", coreNode.Labels[constants.NvidiaGPUDriverUpgradeStateLabel])
 		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 	}
-
-	if node.Status.TotalGPUs == 0 {
-		log.Info("GPU on this node has not been discovered, wait next loop", "node", node.Name)
-		return ctrl.Result{}, nil
-	}
-
 	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj, coreNode)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -363,6 +344,17 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 
 	// If pod exists and prerequisites are satisfied, verify its status
 	if podExists {
+		desiredIsolationMode := getHypervisorIsolationModeFromNodeLabel(node)
+		if !isHypervisorIsolationModeConfigured(currentPod, desiredIsolationMode) {
+			if err := r.Delete(ctx, currentPod); err != nil {
+				return "", fmt.Errorf("failed to delete hypervisor pod with outdated isolation mode: %w", err)
+			}
+			log.Info("hypervisor pod deleted due to isolation mode label change",
+				"name", currentPod.Name,
+				"desiredIsolationMode", desiredIsolationMode)
+			return "", nil
+		}
+
 		// If node is already running, no need to recreate
 		if node.Status.Phase == tfv1.TensorFusionGPUNodePhaseRunning {
 			return key.Name, nil
@@ -436,20 +428,45 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	}
 	log.Info("adding hypervisor manifest for GPU node", "node", node.Name, "vendor", vendor)
 	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool, vendor, r.CompatibleWithNvidiaContainerToolkit)
+	applyHypervisorIsolationModeArg(&spec, getHypervisorIsolationModeFromNodeLabel(node))
 
 	// add vendor-specific env vars for multi-vendor support
 	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
-		vendor := node.Labels[constants.AcceleratorLabelVendor]
-		acceleratorLibPath := constants.GetAcceleratorLibPath(vendor)
+		nodeVendor := node.Labels[constants.AcceleratorLabelVendor]
+		acceleratorLibPath := constants.GetAcceleratorLibPath(nodeVendor)
 		spec.Containers[0].Env = utils.AppendEnvVarsIfNotExists(spec.Containers[0].Env, corev1.EnvVar{
 			Name:  constants.TFHardwareVendorEnv,
-			Value: vendor,
+			Value: nodeVendor,
 		}, corev1.EnvVar{
 			Name:  constants.TFAcceleratorLibPathEnv,
 			Value: acceleratorLibPath,
 		})
-		log.Info("added vendor env vars to hypervisor pod", "node", node.Name, "vendor", vendor, "libPath", acceleratorLibPath)
+		log.Info("added vendor env vars to hypervisor pod", "node", node.Name, "vendor", nodeVendor, "libPath", acceleratorLibPath)
 	}
+
+	// pass provider hardware metadata to hypervisor to avoid extra API server calls
+	metadataEnvValue := "[]"
+	if mgr := provider.GetManager(); mgr != nil {
+		if providerCfg, ok := mgr.GetProvider(vendor); ok {
+			metadata := providerCfg.Spec.HardwareMetadata
+			if metadata == nil {
+				metadata = []tfv1.HardwareModelInfo{}
+			}
+			if raw, err := json.Marshal(metadata); err == nil {
+				metadataEnvValue = string(raw)
+			} else {
+				log.Error(err, "failed to marshal provider hardware metadata", "vendor", vendor)
+			}
+		} else {
+			log.Info("provider config not found; injecting empty hardware metadata", "vendor", vendor)
+		}
+	} else {
+		log.Info("provider manager not initialized; injecting empty hardware metadata", "vendor", vendor)
+	}
+	spec.Containers[0].Env = utils.AppendEnvVarsIfNotExists(spec.Containers[0].Env, corev1.EnvVar{
+		Name:  constants.TFProviderHardwareMetadataEnv,
+		Value: metadataEnvValue,
+	})
 
 	// add scheduling config for hypervisor
 	if pool.Spec.SchedulingConfigTemplate != nil {
@@ -625,9 +642,41 @@ func (r *GPUNodeReconciler) checkDriverProbeJobStatus(job *batchv1.Job, log logr
 	return false, nil
 }
 
-func (r *GPUNodeReconciler) resolveNodeVendor(_ctx context.Context, _node *tfv1.GPUNode) (string, error) {
-	// Future: detect non-Nvidia GPU vendors (e.g. AMD, Ascend) from node labels or device plugin
-	return constants.AcceleratorVendorNvidia, nil
+func (r *GPUNodeReconciler) resolveNodeVendor(ctx context.Context, node *tfv1.GPUNode) (string, error) {
+	if node.Labels != nil {
+		if vendor := node.Labels[constants.AcceleratorLabelVendor]; vendor != "" {
+			return vendor, nil
+		}
+	}
+
+	poolName := utils.ExtractPoolNameFromNodeLabel(node)
+	if poolName == "" {
+		return "", fmt.Errorf("missing pool label for node %s", node.Name)
+	}
+
+	pool := &tfv1.GPUPool{}
+	if err := r.Get(ctx, client.ObjectKey{Name: poolName}, pool); err != nil {
+		return "", fmt.Errorf("failed to get pool %s: %w", poolName, err)
+	}
+
+	cfg := pool.Spec.NodeManagerConfig
+	if cfg == nil {
+		return constants.AcceleratorVendorNvidia, nil
+	}
+
+	if len(cfg.MultiVendorNodeSelector) == 0 && cfg.NodeSelector == nil {
+		if cfg.DefaultVendor != "" {
+			return cfg.DefaultVendor, nil
+		}
+		return constants.AcceleratorVendorNvidia, nil
+	}
+
+	k8sNode := &corev1.Node{}
+	if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, k8sNode); err != nil {
+		return "", fmt.Errorf("failed to get k8s node %s: %w", node.Name, err)
+	}
+
+	return getMatchedVendor(k8sNode, cfg)
 }
 
 // HypervisorPrerequisites contains the prerequisites for creating a hypervisor pod
@@ -750,6 +799,88 @@ func (n *nvidiaHandler) findDevicePluginPod(ctx context.Context, r *GPUNodeRecon
 
 func getDriverProbeJobName(gpuNodeName string) string {
 	return fmt.Sprintf("driver-probe-%s", gpuNodeName)
+}
+
+func getHypervisorIsolationModeFromNodeLabel(node *tfv1.GPUNode) string {
+	if node == nil || node.Labels == nil {
+		return ""
+	}
+	return node.Labels[constants.HypervisorIsolationModeLabel]
+}
+
+func applyHypervisorIsolationModeArg(spec *corev1.PodSpec, isolationMode string) {
+	if spec == nil || len(spec.Containers) == 0 || isolationMode == "" {
+		return
+	}
+	spec.Containers[0].Args = upsertHypervisorIsolationModeArg(spec.Containers[0].Args, isolationMode)
+}
+
+func upsertHypervisorIsolationModeArg(args []string, isolationMode string) []string {
+	const isolationModeFlag = "--isolation-mode"
+	if isolationMode == "" {
+		return args
+	}
+
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], isolationModeFlag+"=") {
+			args[i] = isolationModeFlag + "=" + isolationMode
+			return args
+		}
+		if args[i] == isolationModeFlag {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				args[i+1] = isolationMode
+			} else {
+				args = append(args, isolationMode)
+			}
+			return args
+		}
+	}
+	return append(args, isolationModeFlag+"="+isolationMode)
+}
+
+func isHypervisorIsolationModeConfigured(pod *corev1.Pod, desiredIsolationMode string) bool {
+	if pod == nil || len(pod.Spec.Containers) == 0 {
+		return false
+	}
+
+	actualIsolationMode, found, valid := extractHypervisorIsolationModeArg(pod.Spec.Containers[0].Args)
+	if desiredIsolationMode == "" {
+		// When label is absent, hypervisor args should not carry explicit isolation mode.
+		return !found
+	}
+	return found && valid && actualIsolationMode == desiredIsolationMode
+}
+
+func extractHypervisorIsolationModeArg(args []string) (string, bool, bool) {
+	const isolationModeFlag = "--isolation-mode"
+	actualIsolationMode := ""
+	found := false
+	valid := false
+
+	for i := 0; i < len(args); i++ {
+		// Form 1: --isolation-mode=partitioned
+		if strings.HasPrefix(args[i], isolationModeFlag+"=") {
+			actualIsolationMode = strings.TrimPrefix(args[i], isolationModeFlag+"=")
+			found = true
+			valid = true
+			continue
+		}
+
+		// Form 2: --isolation-mode partitioned
+		if args[i] == isolationModeFlag {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				actualIsolationMode = args[i+1]
+				found = true
+				valid = true
+				i++ // Skip consumed value.
+			} else {
+				return "", true, false
+			}
+			continue
+		}
+	}
+
+	return actualIsolationMode, found, valid
 }
 
 // isNodeUnderGPUDriverUpgrade checks if the node is undergoing NVIDIA GPU driver upgrade

@@ -367,13 +367,17 @@ func startHttpServerForTFClient(
 
 func startProviderManager(ctx context.Context, mgr manager.Manager) *provider.Manager {
 	// Initialize global Provider Manager
-	providerManager := provider.InitGlobalManager(mgr.GetClient())
+	providerManager := provider.InitGlobalManager(mgr.GetAPIReader())
 
 	// Load all existing ProviderConfigs
 	if err := providerManager.SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to setup provider manager, will use default configurations")
 		// Not fatal - system can work with default configurations
 	}
+
+	gpuInfos := providerManager.GetAllGpuInfos()
+	gpuallocator.LoadPartitionTemplatesFromConfig(gpuInfos)
+	setupLog.Info("partition templates loaded from provider configs", "gpuInfoCount", len(gpuInfos))
 
 	setupLog.Info("provider manager initialized", "providerCount", providerManager.ProviderCount())
 	return providerManager

@@ -2,10 +2,15 @@ package kubernetes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
+	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -31,7 +36,21 @@ func init() {
 type APIClient struct {
 	client client.Client
 	ctx    context.Context
+
+	providerCache  providerConfigCache
+	metadataOnce   sync.Once
+	metadataErr    error
+	metadata       []tfv1.HardwareModelInfo
+	metadataLoaded bool
 }
+
+type providerConfigCache struct {
+	mu        sync.Mutex
+	lastFetch time.Time
+	providers []tfv1.ProviderConfig
+}
+
+const providerConfigCacheTTL = time.Minute
 
 // NewAPIClient creates a new API client instance with an existing client
 func NewAPIClient(ctx context.Context, k8sClient client.Client) *APIClient {
@@ -94,10 +113,21 @@ func (a *APIClient) CreateOrUpdateGPU(
 				Name: gpuID,
 			},
 		}
+		var desiredStatus tfv1.GPUStatus
 		_, err := controllerutil.CreateOrPatch(a.ctx, a.client, gpu, func() error {
-			return mutateFn(gpuNode, gpu)
+			if err := mutateFn(gpuNode, gpu); err != nil {
+				return err
+			}
+			// Capture desired status before CreateOrPatch overwrites it with server response.
+			desiredStatus = gpu.Status
+			return nil
 		})
 		if err != nil {
+			return err
+		}
+		gpu.Status = desiredStatus
+		// Status is a subresource; update it explicitly after CreateOrPatch.
+		if err := a.UpdateGPUStatus(gpu); err != nil {
 			return err
 		}
 		return nil
@@ -160,6 +190,89 @@ func (a *APIClient) UpdateGPUNodeStatus(nodeName string, nodeInfo *api.NodeInfo)
 		}
 		return a.client.Status().Patch(a.ctx, current, patch)
 	})
+}
+
+// ResolveDeviceFp16TFlops tries to find FP16 TFLOPS from provider hardware metadata env (case-insensitive).
+func (a *APIClient) ResolveDeviceFp16TFlops(vendor, model string) (resource.Quantity, bool, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return resource.Quantity{}, false, nil
+	}
+
+	metadata, err := a.getHardwareMetadataFromEnv()
+	if err != nil {
+		return resource.Quantity{}, false, err
+	}
+	if qty, found := matchFp16TFlops(model, vendor, metadata); found {
+		return qty, true, nil
+	}
+	return resource.Quantity{}, false, nil
+}
+
+func (a *APIClient) getHardwareMetadataFromEnv() ([]tfv1.HardwareModelInfo, error) {
+	a.metadataOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv(constants.TFProviderHardwareMetadataEnv))
+		if raw == "" {
+			a.metadataErr = fmt.Errorf("%s is not set", constants.TFProviderHardwareMetadataEnv)
+			return
+		}
+		if err := json.Unmarshal([]byte(raw), &a.metadata); err != nil {
+			a.metadataErr = err
+			return
+		}
+		a.metadataLoaded = true
+	})
+	if a.metadataErr != nil {
+		return nil, a.metadataErr
+	}
+	if !a.metadataLoaded {
+		return nil, fmt.Errorf("%s is not set", constants.TFProviderHardwareMetadataEnv)
+	}
+	return a.metadata, nil
+}
+
+func matchFp16TFlops(model, vendor string, metadata []tfv1.HardwareModelInfo) (resource.Quantity, bool) {
+	modelsToMatch := []string{model}
+	if vendor != "" && len(model) >= len(vendor) {
+		if strings.EqualFold(model[:len(vendor)], vendor) {
+			trimmed := strings.TrimSpace(model[len(vendor):])
+			if trimmed != "" {
+				modelsToMatch = append(modelsToMatch, trimmed)
+			}
+		}
+	}
+	for _, hw := range metadata {
+		for _, candidate := range modelsToMatch {
+			if strings.EqualFold(hw.Model, candidate) {
+				if hw.Fp16TFlops.IsZero() {
+					return resource.Quantity{}, false
+				}
+				return hw.Fp16TFlops.DeepCopy(), true
+			}
+		}
+	}
+	return resource.Quantity{}, false
+}
+
+func (a *APIClient) getProviderConfigs() ([]tfv1.ProviderConfig, error) {
+	a.providerCache.mu.Lock()
+	defer a.providerCache.mu.Unlock()
+
+	if time.Since(a.providerCache.lastFetch) < providerConfigCacheTTL && len(a.providerCache.providers) > 0 {
+		return append([]tfv1.ProviderConfig{}, a.providerCache.providers...), nil
+	}
+
+	var list tfv1.ProviderConfigList
+	if err := a.client.List(a.ctx, &list); err != nil {
+		if len(a.providerCache.providers) > 0 {
+			return append([]tfv1.ProviderConfig{}, a.providerCache.providers...), nil
+		}
+		return nil, err
+	}
+
+	a.providerCache.providers = list.Items
+	a.providerCache.lastFetch = time.Now()
+	return append([]tfv1.ProviderConfig{}, a.providerCache.providers...), nil
 }
 
 // DeleteGPU deletes a GPU resource

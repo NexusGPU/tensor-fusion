@@ -43,6 +43,26 @@ var _ = Describe("Node Controller", func() {
 		})
 	})
 
+	Context("GPUNode label propagation", func() {
+		It("Should copy isolation-mode label when creating gpunode", func() {
+			reconciler := &NodeReconciler{Scheme: k8sClient.Scheme()}
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-node",
+					Labels: map[string]string{
+						constants.HypervisorIsolationModeLabel: string(tfv1.IsolationModePartitioned),
+					},
+				},
+			}
+			pool := &tfv1.GPUPool{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-pool"},
+			}
+
+			gpuNode := reconciler.generateGPUNode(node, pool, "")
+			Expect(gpuNode.Labels[constants.HypervisorIsolationModeLabel]).To(Equal(string(tfv1.IsolationModePartitioned)))
+		})
+	})
+
 	Context("When removing TensorFusion taint", func() {
 		var (
 			tfEnv      *TensorFusionEnv

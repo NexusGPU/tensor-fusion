@@ -355,9 +355,37 @@ func (b *SingleNodeBackend) StartWorker(worker *api.WorkerInfo) error {
 		return err
 	}
 
+	// Register worker after persistence to avoid periodic file-discovery replacing
+	// freshly added in-memory workers with stale snapshots.
 	b.mu.Lock()
 	b.workers[worker.WorkerUID] = worker
 	b.mu.Unlock()
+
+	// Handle fast-fail process race: process may exit before worker map registration.
+	// In that case waitForProcess cannot update worker status, so we sync from process state.
+	if worker.WorkerRunningInfo != nil && worker.WorkerRunningInfo.Type == api.WorkerRuntimeTypeProcess {
+		var (
+			exitedEarly bool
+			exitCode    int
+		)
+		b.processesMu.RLock()
+		if ps, exists := b.processes[worker.WorkerUID]; exists && !ps.isRunning {
+			exitedEarly = true
+			exitCode = ps.lastExitCode
+		}
+		b.processesMu.RUnlock()
+
+		if exitedEarly {
+			b.mu.Lock()
+			if w, exists := b.workers[worker.WorkerUID]; exists && w.WorkerRunningInfo != nil {
+				w.WorkerRunningInfo.IsRunning = false
+				w.WorkerRunningInfo.ExitCode = exitCode
+				w.WorkerRunningInfo.PID = 0
+			}
+			b.mu.Unlock()
+			_ = b.fileState.AddWorker(worker)
+		}
+	}
 
 	b.notifySubscribers(worker)
 	klog.Infof("Worker started: %s", worker.WorkerUID)

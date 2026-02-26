@@ -38,6 +38,9 @@ type KubeletBackend struct {
 	workers   map[string]*api.WorkerInfo
 	workersMu sync.RWMutex
 
+	deviceTflops   map[string]resource.Quantity
+	deviceTflopsMu sync.RWMutex
+
 	subscribers   map[string]struct{}
 	workerHandler *framework.WorkerChangeHandler
 }
@@ -88,6 +91,7 @@ func NewKubeletBackend(
 		apiClient:            apiClient,
 		nodeName:             nodeName,
 		workers:              make(map[string]*api.WorkerInfo),
+		deviceTflops:         make(map[string]resource.Quantity),
 		subscribers:          make(map[string]struct{}),
 	}, nil
 }
@@ -231,6 +235,9 @@ func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler 
 			}
 		},
 		OnRemove: func(device *api.DeviceInfo) {
+			if device != nil {
+				b.deleteDeviceTflops(device.UUID)
+			}
 			if err := b.apiClient.DeleteGPU(device.UUID); err != nil {
 				klog.Errorf("Failed to delete GPU when device removed: %v", err)
 			} else {
@@ -248,6 +255,11 @@ func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler 
 			}
 		},
 		OnDiscoveryComplete: func(nodeInfo *api.NodeInfo) {
+			if nodeInfo != nil {
+				if totalTflops, ok := b.getTotalDeviceTflops(); ok {
+					nodeInfo.TotalTFlops = totalTflops
+				}
+			}
 			if err := b.apiClient.UpdateGPUNodeStatus(b.nodeName, nodeInfo); err != nil {
 				klog.Errorf("Failed to update GPUNode status: %v", err)
 			} else {
@@ -293,9 +305,16 @@ func (b *KubeletBackend) mutateGPUResourceState(
 	}
 
 	// Set status fields
+	tflops := resource.MustParse(fmt.Sprintf("%f", device.MaxTflops))
+	if device.MaxTflops <= 0 {
+		if resolved, ok := b.resolveDeviceTflopsFromProviderConfig(device); ok {
+			tflops = resolved
+		}
+	}
+	b.setDeviceTflops(device.UUID, tflops)
 	gpu.Status.Capacity = &tfv1.Resource{
 		Vram:   resource.MustParse(fmt.Sprintf("%dMi", device.TotalMemoryBytes/1024/1024)),
-		Tflops: resource.MustParse(fmt.Sprintf("%f", device.MaxTflops)),
+		Tflops: tflops,
 	}
 	gpu.Status.UUID = device.UUID
 	gpu.Status.GPUModel = device.Model
@@ -306,7 +325,7 @@ func (b *KubeletBackend) mutateGPUResourceState(
 	gpu.Status.NodeSelector = map[string]string{
 		constants.KubernetesHostNameLabel: b.nodeName,
 	}
-	if gpu.Status.Available == nil {
+	if shouldResetAvailable(gpu) {
 		gpu.Status.Available = gpu.Status.Capacity.DeepCopy()
 	}
 	if gpu.Status.UsedBy == "" {
@@ -317,4 +336,64 @@ func (b *KubeletBackend) mutateGPUResourceState(
 	}
 	gpu.Status.Message = "managed"
 	return nil
+}
+
+func (b *KubeletBackend) resolveDeviceTflopsFromProviderConfig(device *api.DeviceInfo) (resource.Quantity, bool) {
+	resolved, ok, err := b.apiClient.ResolveDeviceFp16TFlops(device.Vendor, device.Model)
+	if err != nil {
+		klog.Warningf("Failed to resolve tflops from ProviderConfig: vendor=%s model=%s err=%v",
+			device.Vendor, device.Model, err)
+		return resource.Quantity{}, false
+	}
+	return resolved, ok
+}
+
+func shouldResetAvailable(gpu *tfv1.GPU) bool {
+	if gpu == nil || gpu.Status.Capacity == nil {
+		return false
+	}
+	if gpu.Status.Available == nil {
+		return true
+	}
+	if gpu.Status.Available.Tflops.IsZero() &&
+		gpu.Status.Available.Vram.IsZero() &&
+		gpu.Status.Available.ComputePercent.IsZero() &&
+		len(gpu.Status.RunningApps) == 0 &&
+		len(gpu.Status.AllocatedPartitions) == 0 {
+		return true
+	}
+	return false
+}
+
+func (b *KubeletBackend) setDeviceTflops(uuid string, tflops resource.Quantity) {
+	if uuid == "" {
+		return
+	}
+	b.deviceTflopsMu.Lock()
+	defer b.deviceTflopsMu.Unlock()
+	b.deviceTflops[uuid] = tflops
+}
+
+func (b *KubeletBackend) deleteDeviceTflops(uuid string) {
+	if uuid == "" {
+		return
+	}
+	b.deviceTflopsMu.Lock()
+	defer b.deviceTflopsMu.Unlock()
+	delete(b.deviceTflops, uuid)
+}
+
+func (b *KubeletBackend) getTotalDeviceTflops() (float64, bool) {
+	b.deviceTflopsMu.RLock()
+	defer b.deviceTflopsMu.RUnlock()
+	total := 0.0
+	found := false
+	for _, tflops := range b.deviceTflops {
+		if tflops.IsZero() {
+			continue
+		}
+		total += tflops.AsApproximateFloat64()
+		found = true
+	}
+	return total, found
 }

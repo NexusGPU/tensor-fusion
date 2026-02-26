@@ -50,8 +50,6 @@ var workerDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("50m"),
 	v1.ResourceMemory: resource.MustParse("128Mi"),
 }
-var sharedMemMaxSize = resource.NewQuantity(512*1024*1024, resource.DecimalSI)
-
 var featureShortcutMap = map[string]struct {
 	EnvName  string
 	EnvValue string
@@ -227,69 +225,72 @@ func AddTFDefaultClientConfBeforePatch(
 	injectContainerIndices []int,
 ) {
 	clientConfig := pool.Spec.ComponentConfig.Client
-	image := GetClientImage(tfInfo.Profile.GPUVendor, clientConfig.Image)
-	pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
-		Name:  constants.TFContainerNameClient,
-		Image: image,
-		VolumeMounts: []v1.VolumeMount{
-			{
-				Name:      constants.TFLibsVolumeName,
-				MountPath: constants.TFLibsVolumeMountPath,
+	if !tfInfo.Profile.IsLocalGPU {
+		// Remote mode still relies on the client initContainer to inject TF libs/config.
+		image := GetClientImage(tfInfo.Profile.GPUVendor, clientConfig.Image)
+		pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
+			Name:  constants.TFContainerNameClient,
+			Image: image,
+			VolumeMounts: []v1.VolumeMount{
+				{
+					Name:      constants.TFLibsVolumeName,
+					MountPath: constants.TFLibsVolumeMountPath,
+				},
+				{
+					Name:      constants.TFConfVolumeName,
+					MountPath: constants.TFConfVolumeMountPath,
+				},
 			},
-			{
-				Name:      constants.TFConfVolumeName,
-				MountPath: constants.TFConfVolumeMountPath,
+			Resources: v1.ResourceRequirements{
+				Requests: injectLibResource,
+				Limits:   injectLibResource,
 			},
-		},
-		Resources: v1.ResourceRequirements{
-			Requests: injectLibResource,
-			Limits:   injectLibResource,
-		},
-		Env: configureFeatures4InjectLib(tfInfo.Profile.IsLocalGPU, pod.Annotations[constants.DisableFeaturesAnnotation]),
-	})
-	pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-		Name: constants.TFLibsVolumeName,
-		VolumeSource: v1.VolumeSource{
-			EmptyDir: &v1.EmptyDirVolumeSource{},
-		},
-	})
-	pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-		Name: constants.TFConfVolumeName,
-		VolumeSource: v1.VolumeSource{
-			EmptyDir: &v1.EmptyDirVolumeSource{},
-		},
-	})
-
-	for _, injectContainerIndex := range injectContainerIndices {
-		pod.Spec.Containers[injectContainerIndex].Env = append(pod.Spec.Containers[injectContainerIndex].Env, v1.EnvVar{
-			Name:  constants.PrependPathEnv,
-			Value: constants.TFLibsVolumeMountPath,
-		}, v1.EnvVar{
-			Name:  constants.PrependLibPathEnv,
-			Value: constants.TFLibsVolumeMountPath,
+			Env: configureFeatures4InjectLib(tfInfo.Profile.IsLocalGPU, pod.Annotations[constants.DisableFeaturesAnnotation]),
+		})
+		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+			Name: constants.TFLibsVolumeName,
+			VolumeSource: v1.VolumeSource{
+				EmptyDir: &v1.EmptyDirVolumeSource{},
+			},
+		})
+		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+			Name: constants.TFConfVolumeName,
+			VolumeSource: v1.VolumeSource{
+				EmptyDir: &v1.EmptyDirVolumeSource{},
+			},
 		})
 
-		// Known issue: glibc ldd config style, does NOT support musl, fortunately, musl rarely used in AI workloads
-		pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
-			pod.Spec.Containers[injectContainerIndex].VolumeMounts,
-			v1.VolumeMount{
-				Name:      constants.TFConfVolumeName,
-				MountPath: constants.LdPreloadFile,
-				SubPath:   constants.LdPreloadFileName,
-				ReadOnly:  true,
-			}, v1.VolumeMount{
-				Name:      constants.TFConfVolumeName,
-				MountPath: constants.LdLibraryPathFile,
-				SubPath:   constants.LdLibraryPathFileName,
-				ReadOnly:  true,
-			}, v1.VolumeMount{
-				Name:      constants.TFLibsVolumeName,
-				MountPath: constants.TFLibsVolumeMountPath,
+		for _, injectContainerIndex := range injectContainerIndices {
+			pod.Spec.Containers[injectContainerIndex].Env = append(pod.Spec.Containers[injectContainerIndex].Env, v1.EnvVar{
+				Name:  constants.PrependPathEnv,
+				Value: constants.TFLibsVolumeMountPath,
+			}, v1.EnvVar{
+				Name:  constants.PrependLibPathEnv,
+				Value: constants.TFLibsVolumeMountPath,
 			})
+
+			// Known issue: glibc ldd config style, does NOT support musl, fortunately, musl rarely used in AI workloads
+			pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
+				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+				v1.VolumeMount{
+					Name:      constants.TFConfVolumeName,
+					MountPath: constants.LdPreloadFile,
+					SubPath:   constants.LdPreloadFileName,
+					ReadOnly:  true,
+				}, v1.VolumeMount{
+					Name:      constants.TFConfVolumeName,
+					MountPath: constants.LdLibraryPathFile,
+					SubPath:   constants.LdLibraryPathFileName,
+					ReadOnly:  true,
+				}, v1.VolumeMount{
+					Name:      constants.TFLibsVolumeName,
+					MountPath: constants.TFLibsVolumeMountPath,
+				})
+		}
 	}
 
 	if tfInfo.Profile.IsLocalGPU {
-		// shm to communicate between worker and hypervisor
+		// Local mode runs without sidecar/initContainer, and mounts shared data path directly.
 		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 			Name: constants.DataVolumeName,
 			VolumeSource: v1.VolumeSource{
@@ -300,46 +301,7 @@ func AddTFDefaultClientConfBeforePatch(
 			},
 		})
 
-		if tfInfo.Profile.SidecarWorker {
-			// Add shared memory for worker-client communication
-			pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-				Name: constants.TransportShmVolumeName,
-				VolumeSource: v1.VolumeSource{
-					EmptyDir: &v1.EmptyDirVolumeSource{
-						SizeLimit: sharedMemMaxSize,
-						Medium:    v1.StorageMediumMemory,
-					},
-				},
-			})
-
-			pod.Spec.Containers = append(pod.Spec.Containers, v1.Container{
-				Name: constants.TFContainerNameWorker,
-				VolumeMounts: []v1.VolumeMount{
-					{
-						Name:      constants.TransportShmVolumeName,
-						MountPath: constants.TransportShmPath,
-					},
-				},
-			})
-
-			lastContainer := &pod.Spec.Containers[len(pod.Spec.Containers)-1]
-			SetWorkerContainerSpec(lastContainer, tfInfo.Profile,
-				pool.Spec.ComponentConfig.Worker, pool.Spec.ComponentConfig.Hypervisor,
-				pod.Annotations[constants.DisableFeaturesAnnotation], true)
-		}
-
 		for _, injectContainerIndex := range injectContainerIndices {
-			if tfInfo.Profile.SidecarWorker {
-				// add transport shm for client container to communicate with sidecar worker
-				pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
-					pod.Spec.Containers[injectContainerIndex].VolumeMounts,
-					v1.VolumeMount{
-						Name:      constants.TransportShmVolumeName,
-						MountPath: constants.TransportShmPath,
-					})
-				continue
-			}
-
 			// add ngpu spec, client is the same as worker, in same process
 			pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
@@ -552,7 +514,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	})
 
 	composeHypervisorInitContainer(ctx, spec, pool, vendor, compatibleWithNvidiaContainerToolkit)
-	composeHypervisorContainer(spec, pool, enableVector)
+	composeHypervisorContainer(spec, pool, vendor, enableVector)
 
 	if enableVector {
 		composeVectorContainer(spec, pool)
@@ -570,11 +532,18 @@ func composeHypervisorInitContainer(
 		return
 	}
 	spec.InitContainers = append(spec.InitContainers, v1.Container{
-		Name:    "init-shm",
-		Image:   hypervisorConfig.Image,
-		Command: []string{constants.ComponentHypervisor, constants.MountShmSubcommand},
+		Name:  "init-shm",
+		Image: hypervisorConfig.Image,
+		Command: []string{
+			constants.ComponentHypervisor,
+			constants.MountShmSubcommand,
+			"--mount-point", constants.TFDataPath + constants.SharedMemMountSubPath,
+			"--size", constants.ConnectionSharedMemSize,
+		},
 		SecurityContext: &v1.SecurityContext{
 			Privileged: ptr.To(true),
+			RunAsUser:  ptr.To[int64](0),
+			RunAsGroup: ptr.To[int64](0),
 		},
 		VolumeMounts: []v1.VolumeMount{
 			{
@@ -585,11 +554,17 @@ func composeHypervisorInitContainer(
 			},
 		},
 	}, v1.Container{
-		Name:    "init-runtime",
-		Image:   GetMiddlewareImage(vendor, hypervisorConfig.Image),
-		Command: []string{"cp", "-r", "/build/**", constants.TFDataPath},
+		Name:  "init-runtime",
+		Image: GetMiddlewareImage(vendor, hypervisorConfig.Image),
+		Command: []string{
+			"sh",
+			"-c",
+			"if [ -d /build ]; then cp -r /build/. " + constants.TFDataPath + "; fi",
+		},
 		SecurityContext: &v1.SecurityContext{
 			Privileged: ptr.To(true),
+			RunAsUser:  ptr.To[int64](0),
+			RunAsGroup: ptr.To[int64](0),
 		},
 		VolumeMounts: []v1.VolumeMount{
 			{
@@ -645,7 +620,7 @@ func composeHypervisorInitContainer(
 	}
 }
 
-func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVector bool) {
+func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor string, enableVector bool) {
 	spec.HostNetwork = true
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
 		Name:      constants.DataVolumeName,
@@ -676,6 +651,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 			},
 		},
 	}
+	applyProviderHypervisorConfig(spec, vendor)
 
 	// When k8s version >= 1.30, avoid AppArmor level limit of writing shared memory and reading /proc
 	minorVersionStr := os.Getenv(constants.KubeApiVersionMinorEnv)
@@ -770,6 +746,92 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 	}
 
 	// TODO HypervisorVerifyServiceAccountEnabledEnvVar and Public Key
+}
+
+func applyProviderHypervisorConfig(spec *v1.PodSpec, vendor string) {
+	mgr := provider.GetManager()
+	if mgr == nil {
+		return
+	}
+	providerCfg, ok := mgr.GetProvider(vendor)
+	if !ok || providerCfg.Spec.Hypervisor == nil {
+		return
+	}
+
+	hypervisorCfg := providerCfg.Spec.Hypervisor
+	if hypervisorCfg.LDLibraryPath != "" {
+		spec.Containers[0].Env = appendLDLibraryPath(spec.Containers[0].Env, hypervisorCfg.LDLibraryPath)
+	}
+
+	if hypervisorCfg.PrivilegedHypervisor {
+		if spec.Containers[0].SecurityContext == nil {
+			spec.Containers[0].SecurityContext = &v1.SecurityContext{}
+		}
+		spec.Containers[0].SecurityContext.Privileged = ptr.To(true)
+	}
+
+	if len(hypervisorCfg.HostPathMounts) == 0 {
+		return
+	}
+
+	existingMounts := make(map[string]bool)
+	for _, mount := range spec.Containers[0].VolumeMounts {
+		existingMounts[mount.Name] = true
+	}
+	existingVolumes := make(map[string]bool)
+	for _, volume := range spec.Volumes {
+		existingVolumes[volume.Name] = true
+	}
+
+	for _, mount := range hypervisorCfg.HostPathMounts {
+		if mount.Name == "" || mount.HostPath == "" || mount.MountPath == "" {
+			continue
+		}
+		if !existingMounts[mount.Name] {
+			spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
+				Name:      mount.Name,
+				MountPath: mount.MountPath,
+				ReadOnly:  mount.ReadOnly,
+			})
+			existingMounts[mount.Name] = true
+		}
+		if !existingVolumes[mount.Name] {
+			spec.Volumes = append(spec.Volumes, v1.Volume{
+				Name: mount.Name,
+				VolumeSource: v1.VolumeSource{
+					HostPath: &v1.HostPathVolumeSource{
+						Path: mount.HostPath,
+						Type: ptr.To(v1.HostPathDirectory),
+					},
+				},
+			})
+			existingVolumes[mount.Name] = true
+		}
+	}
+}
+
+func appendLDLibraryPath(envs []v1.EnvVar, extra string) []v1.EnvVar {
+	ldSet := false
+	for i := range envs {
+		if envs[i].Name == "LD_LIBRARY_PATH" {
+			if !strings.Contains(envs[i].Value, extra) {
+				if envs[i].Value == "" {
+					envs[i].Value = extra
+				} else {
+					envs[i].Value += ":" + extra
+				}
+			}
+			ldSet = true
+			break
+		}
+	}
+	if !ldSet {
+		envs = append(envs, v1.EnvVar{
+			Name:  "LD_LIBRARY_PATH",
+			Value: extra,
+		})
+	}
+	return envs
 }
 
 func getHypervisorPortNumber(hypervisorConfig *tfv1.HypervisorConfig) int32 {

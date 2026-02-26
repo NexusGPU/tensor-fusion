@@ -3,8 +3,8 @@ FROM ubuntu:24.04
 ARG TARGETARCH
 
 WORKDIR /
-COPY bin/hypervisor-linux-${TARGETARCH} /hypervisor
+COPY bin/hypervisor-linux-${TARGETARCH} /usr/local/bin/hypervisor
 
 USER 65532:65532
 
-ENTRYPOINT ["/hypervisor"]
+ENTRYPOINT ["hypervisor"]

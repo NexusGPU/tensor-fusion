@@ -174,8 +174,9 @@ const (
 	HypervisorVerifyServiceAccountPublicKeyEnvVar = "SA_TOKEN_VERIFY_PUBLIC_KEY"
 
 	// Hardware vendor and accelerator library path for multi-vendor support
-	TFHardwareVendorEnv     = "TF_HARDWARE_VENDOR"
-	TFAcceleratorLibPathEnv = "TF_ACCELERATOR_LIB_PATH"
+	TFHardwareVendorEnv           = "TF_HARDWARE_VENDOR"
+	TFAcceleratorLibPathEnv       = "TF_ACCELERATOR_LIB_PATH"
+	TFProviderHardwareMetadataEnv = "TF_PROVIDER_HARDWARE_METADATA"
 )
 
 const (

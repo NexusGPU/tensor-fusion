@@ -35,7 +35,7 @@ import (
 
 // Manager handles ProviderConfig resources in memory with hot-reload support
 type Manager struct {
-	client client.Client
+	client client.Reader
 
 	// providers maps vendor name to ProviderConfig
 	providers map[string]*tfv1.ProviderConfig
@@ -65,7 +65,7 @@ func GetManager() *Manager {
 }
 
 // NewManager creates a new Provider Manager
-func NewManager(client client.Client) *Manager {
+func NewManager(client client.Reader) *Manager {
 	return &Manager{
 		client:               client,
 		providers:            make(map[string]*tfv1.ProviderConfig),
@@ -76,7 +76,7 @@ func NewManager(client client.Client) *Manager {
 }
 
 // InitGlobalManager initializes the global provider manager
-func InitGlobalManager(client client.Client) *Manager {
+func InitGlobalManager(client client.Reader) *Manager {
 	globalManagerOnce.Do(func() {
 		globalManager = NewManager(client)
 	})

@@ -119,13 +119,44 @@ spec:
     remoteClient: tensorfusion/tensor-fusion-ascend-client:latest
     remoteWorker: tensorfusion/tensor-fusion-ascend-worker:latest
 
+  hypervisor:
+    privilegedHypervisor: true
+    ldLibraryPath: "/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/dcmi"
+    hostPathMounts:
+      - name: ascend-driver
+        hostPath: /usr/local/Ascend/driver
+        mountPath: /usr/local/Ascend/driver
+        readOnly: true
+      - name: ascend-dcmi
+        hostPath: /usr/local/dcmi
+        mountPath: /usr/local/dcmi
+        readOnly: true
+
   inUseResourceNames:
     - "huawei.com/Ascend910"
     - "huawei.com/Ascend310"
     - "huawei.com/npu"
 
   hardwareMetadata:
-    - model: Ascend910B
+    - model: Ascend 310P3
+      fullModelName: "Ascend 310P3"
+      costPerHour: "1.0"
+      fp16TFlops: "22"
+      maxPartitions: 7
+      maxIsolationGroups: 4
+      totalExtendedResources:
+        AICORE: 8
+        AICPU: 7
+        VPC: 12
+        VENC: 3
+        VDEC: 12
+        JPEGD: 16
+        JPEGE: 8
+      partitionTemplateRefs:
+        - ascend-vir01
+        - ascend-vir02
+        - ascend-vir04
+    - model: Ascend 910B
       fullModelName: "Huawei Ascend 910B"
       costPerHour: "2.0"
       fp16TFlops: "320"

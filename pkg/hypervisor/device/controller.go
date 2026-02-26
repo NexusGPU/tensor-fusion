@@ -314,8 +314,16 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 	newPartitionedDevice.ParentUUID = newPartitionedDevice.UUID
 	newPartitionedDevice.UUID = partitionResult.PartitionUUID
 
-	// Store environment variables if partition type is environment variable mode
-	if partitionResult.Type == PartitionTypeEnvironmentVariable && len(partitionResult.EnvVars) > 0 {
+	if partitionResult.Type == PartitionTypeDeviceNode && len(partitionResult.DeviceNodes) > 0 {
+		// Hard partition mode mounts provider-returned device nodes while preserving shared ones.
+		if newPartitionedDevice.DeviceNode == nil {
+			newPartitionedDevice.DeviceNode = make(map[string]string)
+		}
+		maps.Copy(newPartitionedDevice.DeviceNode, partitionResult.DeviceNodes)
+	}
+
+	// Preserve provider-returned environment variables for both env/device-node modes.
+	if len(partitionResult.EnvVars) > 0 {
 		if newPartitionedDevice.DeviceEnv == nil {
 			newPartitionedDevice.DeviceEnv = make(map[string]string)
 		}
@@ -329,9 +337,11 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 func (m *Controller) RemovePartitionedDevice(partitionUUID, deviceUUID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, exists := m.devices[partitionUUID]
-	if !exists {
-		return fmt.Errorf("partition %s not found, can not remove", partitionUUID)
+
+	if _, exists := m.devices[partitionUUID]; !exists {
+		// Keep cleanup idempotent: cache can be stale after periodic discovery/restart,
+		// but provider-side partition state may still require explicit removal.
+		klog.Warningf("partition %s not found in controller cache, trying provider-side cleanup", partitionUUID)
 	}
 
 	err := m.accelerator.RemovePartition(partitionUUID, deviceUUID)

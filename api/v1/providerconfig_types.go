@@ -32,6 +32,10 @@ type ProviderConfigSpec struct {
 	// Images contains container images for different components
 	Images ProviderImages `json:"images"`
 
+	// Hypervisor contains vendor-specific hypervisor settings
+	// +optional
+	Hypervisor *ProviderHypervisorConfig `json:"hypervisor,omitempty"`
+
 	// HardwareMetadata contains GPU/accelerator model information
 	// +optional
 	HardwareMetadata []HardwareModelInfo `json:"hardwareMetadata,omitempty"`
@@ -49,6 +53,40 @@ type ProviderConfigSpec struct {
 	// DevicePluginDetection contains settings for detecting existing device plugins
 	// +optional
 	DevicePluginDetection *DevicePluginDetectionConfig `json:"devicePluginDetection,omitempty"`
+}
+
+// ProviderHypervisorConfig contains vendor-specific hypervisor configuration
+type ProviderHypervisorConfig struct {
+	// PrivilegedHypervisor indicates the hypervisor container should run in privileged mode
+	// +optional
+	PrivilegedHypervisor bool `json:"privilegedHypervisor,omitempty"`
+
+	// LDLibraryPath appends entries to LD_LIBRARY_PATH for the hypervisor container
+	// +optional
+	LDLibraryPath string `json:"ldLibraryPath,omitempty"`
+
+	// HostPathMounts adds host path mounts to the hypervisor pod
+	// +optional
+	HostPathMounts []ProviderHypervisorHostPathMount `json:"hostPathMounts,omitempty"`
+}
+
+// ProviderHypervisorHostPathMount defines a hostPath mount for hypervisor
+type ProviderHypervisorHostPathMount struct {
+	// Name is the volume name
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// HostPath is the path on the host to mount
+	// +kubebuilder:validation:Required
+	HostPath string `json:"hostPath"`
+
+	// MountPath is the path inside the container
+	// +kubebuilder:validation:Required
+	MountPath string `json:"mountPath"`
+
+	// ReadOnly indicates if the mount should be read-only
+	// +optional
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 // ProviderImages contains container images for TensorFusion components
