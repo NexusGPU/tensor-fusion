@@ -37,20 +37,11 @@ type APIClient struct {
 	client client.Client
 	ctx    context.Context
 
-	providerCache  providerConfigCache
 	metadataOnce   sync.Once
 	metadataErr    error
 	metadata       []tfv1.HardwareModelInfo
 	metadataLoaded bool
 }
-
-type providerConfigCache struct {
-	mu        sync.Mutex
-	lastFetch time.Time
-	providers []tfv1.ProviderConfig
-}
-
-const providerConfigCacheTTL = time.Minute
 
 // NewAPIClient creates a new API client instance with an existing client
 func NewAPIClient(ctx context.Context, k8sClient client.Client) *APIClient {
@@ -252,27 +243,6 @@ func matchFp16TFlops(model, vendor string, metadata []tfv1.HardwareModelInfo) (r
 		}
 	}
 	return resource.Quantity{}, false
-}
-
-func (a *APIClient) getProviderConfigs() ([]tfv1.ProviderConfig, error) {
-	a.providerCache.mu.Lock()
-	defer a.providerCache.mu.Unlock()
-
-	if time.Since(a.providerCache.lastFetch) < providerConfigCacheTTL && len(a.providerCache.providers) > 0 {
-		return append([]tfv1.ProviderConfig{}, a.providerCache.providers...), nil
-	}
-
-	var list tfv1.ProviderConfigList
-	if err := a.client.List(a.ctx, &list); err != nil {
-		if len(a.providerCache.providers) > 0 {
-			return append([]tfv1.ProviderConfig{}, a.providerCache.providers...), nil
-		}
-		return nil, err
-	}
-
-	a.providerCache.providers = list.Items
-	a.providerCache.lastFetch = time.Now()
-	return append([]tfv1.ProviderConfig{}, a.providerCache.providers...), nil
 }
 
 // DeleteGPU deletes a GPU resource
