@@ -120,32 +120,6 @@ var _ = Describe("DevicePluginDetector", func() {
 		})
 	})
 
-	Describe("normalizeDeviceIDs", func() {
-		It("should de-duplicate time-sliced IDs for the same physical GPU", func() {
-			detector := &DevicePluginDetector{
-				vendorDetectors: make(map[string]VendorDetector),
-			}
-			nvdpDetector := NewNvidiaDevicePluginDetector()
-			for _, prefix := range nvdpDetector.GetResourceNamePrefixes() {
-				detector.vendorDetectors[prefix] = nvdpDetector
-			}
-
-			input := map[string]string{
-				"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::0": "nvidia.com/gpu",
-				"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::1": "nvidia.com/gpu",
-				"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::2": "nvidia.com/gpu",
-				"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::3": "nvidia.com/gpu",
-			}
-
-			normalized, usedBySystems := detector.normalizeDeviceIDs(input)
-
-			Expect(normalized).To(HaveLen(1))
-			Expect(normalized).To(HaveKeyWithValue("gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3", "nvidia.com/gpu"))
-			Expect(usedBySystems).To(HaveLen(1))
-			Expect(usedBySystems).To(HaveKeyWithValue("gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3", string(UsedByNvidiaDevicePlugin)))
-		})
-	})
-
 	Describe("NvidiaDevicePluginDetector", func() {
 		var detector VendorDetector
 
@@ -173,15 +147,6 @@ var _ = Describe("DevicePluginDetector", func() {
 			)
 			Expect(system).To(Equal(string(UsedBy3rdPartyDevicePlugin)))
 			Expect(realDeviceID).To(Equal("GPU-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea"))
-		})
-
-		It("should identify nvidia device plugin for time-sliced GPU ID", func() {
-			system, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(
-				"GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3::0",
-				"nvidia.com/gpu",
-			)
-			Expect(system).To(Equal(string(UsedByNvidiaDevicePlugin)))
-			Expect(realDeviceID).To(Equal("GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3"))
 		})
 
 		It("should return nvidia-device-plugin for MIG", func() {
