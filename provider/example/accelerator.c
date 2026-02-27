@@ -323,12 +323,8 @@ static void initDeviceInfo(ExtendedDeviceInfo* info, int32_t deviceIndex) {
     info->virtualizationCapabilities.maxPartitions = 7;
     info->virtualizationCapabilities.maxWorkersPerDevice = 16;
 
-    // Initialize device node mappings
-    info->deviceNodes.count = 1;
-    snprintf(info->deviceNodes.nodes[0].hostPath, sizeof(info->deviceNodes.nodes[0].hostPath),
-             "/dev/example%d", deviceIndex);
-    snprintf(info->deviceNodes.nodes[0].guestPath, sizeof(info->deviceNodes.nodes[0].guestPath),
-             "/dev/example%d", deviceIndex);
+    // Initialize primary device node
+    snprintf(info->basic.deviceNode, sizeof(info->basic.deviceNode), "/dev/example%d", deviceIndex);
 }
 
 AccelResult AccelGetAllDevices(ExtendedDeviceInfo* devices, size_t maxCount, size_t* deviceCount) {
@@ -425,7 +421,6 @@ AccelResult AccelAssignPartition(const char* templateId, const char* deviceUUID,
 
     // Example: set partition result type to environment variable
     partitionResult->type = PARTITION_TYPE_ENVIRONMENT_VARIABLE;
-    partitionResult->deviceNodes.count = 0;
     // Generate unique partition UUID by appending counter to device UUID
     snprintf(partitionResult->deviceUUID, sizeof(partitionResult->deviceUUID), 
              "%s-partition-%d", deviceUUID, partitionCounter++);

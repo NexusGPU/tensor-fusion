@@ -315,11 +315,8 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 	newPartitionedDevice.UUID = partitionResult.PartitionUUID
 
 	if partitionResult.Type == PartitionTypeDeviceNode && len(partitionResult.DeviceNodes) > 0 {
-		// Hard partition mode mounts provider-returned device nodes while preserving shared ones.
-		if newPartitionedDevice.DeviceNode == nil {
-			newPartitionedDevice.DeviceNode = make(map[string]string)
-		}
-		maps.Copy(newPartitionedDevice.DeviceNode, partitionResult.DeviceNodes)
+		// Replace parent device nodes to avoid leaking physical /dev/davinci* into vNPU pods.
+		newPartitionedDevice.DeviceNode = maps.Clone(partitionResult.DeviceNodes)
 	}
 
 	// Preserve provider-returned environment variables for both env/device-node modes.
