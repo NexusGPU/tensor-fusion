@@ -120,6 +120,32 @@ var _ = Describe("DevicePluginDetector", func() {
 		})
 	})
 
+	Describe("normalizeDeviceIDs", func() {
+		It("should de-duplicate time-sliced IDs for the same physical GPU", func() {
+			detector := &DevicePluginDetector{
+				vendorDetectors: make(map[string]VendorDetector),
+			}
+			nvdpDetector := NewNvidiaDevicePluginDetector()
+			for _, prefix := range nvdpDetector.GetResourceNamePrefixes() {
+				detector.vendorDetectors[prefix] = nvdpDetector
+			}
+
+			input := map[string]string{
+				"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::0": "nvidia.com/gpu",
+				"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::1": "nvidia.com/gpu",
+				"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::2": "nvidia.com/gpu",
+				"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::3": "nvidia.com/gpu",
+			}
+
+			normalized, usedBySystems := detector.normalizeDeviceIDs(input)
+
+			Expect(normalized).To(HaveLen(1))
+			Expect(normalized).To(HaveKeyWithValue("gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3", "nvidia.com/gpu"))
+			Expect(usedBySystems).To(HaveLen(1))
+			Expect(usedBySystems).To(HaveKeyWithValue("gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3", string(UsedByNvidiaDevicePlugin)))
+		})
+	})
+
 	Describe("NvidiaDevicePluginDetector", func() {
 		var detector VendorDetector
 
@@ -147,6 +173,15 @@ var _ = Describe("DevicePluginDetector", func() {
 			)
 			Expect(system).To(Equal(string(UsedBy3rdPartyDevicePlugin)))
 			Expect(realDeviceID).To(Equal("GPU-422d6152-4d4b-5b0e-9d3a-b3b44e2742ea"))
+		})
+
+		It("should identify nvidia device plugin for time-sliced GPU ID", func() {
+			system, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(
+				"GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3::0",
+				"nvidia.com/gpu",
+			)
+			Expect(system).To(Equal(string(UsedByNvidiaDevicePlugin)))
+			Expect(realDeviceID).To(Equal("GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3"))
 		})
 
 		It("should return nvidia-device-plugin for MIG", func() {
@@ -275,6 +310,130 @@ var _ = Describe("DevicePluginDetector", func() {
 			nvdpDetector := NewNvidiaDevicePluginDetector()
 			for _, prefix := range nvdpDetector.GetResourceNamePrefixes() {
 				detector.vendorDetectors[prefix] = nvdpDetector
+			}
+
+			err = detector.processDeviceState(false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockAPI.AssertExpectations(GinkgoT())).To(BeTrue())
+		})
+
+		It("should de-duplicate time-sliced GPU IDs when device is added", func() {
+			mockAPI := new(MockAPIServer)
+
+			checkpointData := `{
+  "Data": {
+    "PodDeviceEntries": [
+      {
+        "PodUID": "a7461dc1-023a-4bd5-a403-c738bb1d7db4",
+        "ContainerName": "web",
+        "ResourceName": "nvidia.com/gpu",
+        "DeviceIDs": {
+          "-1": [
+            "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3::0",
+            "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3::1",
+            "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3::2",
+            "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3::3"
+          ]
+        }
+      }
+    ],
+    "RegisteredDevices": {
+      "nvidia.com/gpu": [
+        "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3"
+      ]
+    }
+  }
+}`
+
+			tmpFile, err := os.CreateTemp("", "checkpoint-*.json")
+			Expect(err).NotTo(HaveOccurred())
+			defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+			_, err = tmpFile.WriteString(checkpointData)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tmpFile.Close()).To(Succeed())
+
+			gpu := &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3",
+				},
+				Status: tfv1.GPUStatus{
+					UsedBy: tfv1.UsedByTensorFusion,
+				},
+			}
+
+			mockAPI.On("GetGPU", "gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3").Return(gpu, nil).Once()
+			mockAPI.On("UpdateGPUStatus", mock.MatchedBy(func(gpu *tfv1.GPU) bool {
+				return gpu.Status.UsedBy == UsedByNvidiaDevicePlugin
+			})).Return(nil).Once()
+
+			detector := &DevicePluginDetector{
+				ctx:               context.Background(),
+				checkpointPath:    tmpFile.Name(),
+				apiClient:         mockAPI,
+				vendorDetectors:   make(map[string]VendorDetector),
+				previousDeviceIDs: make(map[string]string),
+			}
+			nvdpDetector := NewNvidiaDevicePluginDetector()
+			for _, prefix := range nvdpDetector.GetResourceNamePrefixes() {
+				detector.vendorDetectors[prefix] = nvdpDetector
+			}
+
+			err = detector.processDeviceState(false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockAPI.AssertExpectations(GinkgoT())).To(BeTrue())
+		})
+
+		It("should normalize time-sliced GPU IDs when device is removed", func() {
+			mockAPI := new(MockAPIServer)
+
+			checkpointData := `{
+  "Data": {
+    "PodDeviceEntries": [],
+    "RegisteredDevices": {
+      "nvidia.com/gpu": [
+        "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3"
+      ]
+    }
+  }
+}`
+
+			tmpFile, err := os.CreateTemp("", "checkpoint-*.json")
+			Expect(err).NotTo(HaveOccurred())
+			defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+			_, err = tmpFile.WriteString(checkpointData)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tmpFile.Close()).To(Succeed())
+
+			gpu := &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3",
+				},
+				Status: tfv1.GPUStatus{
+					UsedBy: UsedByNvidiaDevicePlugin,
+				},
+			}
+
+			mockAPI.On("GetGPU", "gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3").Return(gpu, nil).Once()
+			mockAPI.On("UpdateGPUStatus", mock.MatchedBy(func(gpu *tfv1.GPU) bool {
+				return gpu.Status.UsedBy == tfv1.UsedByTensorFusion
+			})).Return(nil).Once()
+
+			detector := &DevicePluginDetector{
+				ctx:            context.Background(),
+				checkpointPath: tmpFile.Name(),
+				apiClient:      mockAPI,
+				vendorDetectors: map[string]VendorDetector{
+					"nvidia.com/gpu": NewNvidiaDevicePluginDetector(),
+					"nvidia.com/mig": NewNvidiaDevicePluginDetector(),
+				},
+				previousDeviceIDs: map[string]string{
+					"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::0": "nvidia.com/gpu",
+					"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::1": "nvidia.com/gpu",
+					"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::2": "nvidia.com/gpu",
+					"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::3": "nvidia.com/gpu",
+				},
 			}
 
 			err = detector.processDeviceState(false)
