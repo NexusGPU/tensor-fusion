@@ -89,6 +89,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 		}
 		metrics.RemoveNodeMetrics(node.Name)
+		metrics.RemoveGPUMetricsByNode(node.Name)
 		return true, nil
 	})
 	if err != nil {
@@ -194,9 +195,13 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 			metrics.SetNodeMetrics(node, poolObj, nil)
 		}
 
-		err := r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhasePending)
+		gpuList, err := r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhasePending)
 		if err != nil {
 			return err
+		}
+
+		if len(gpuList) > 0 {
+			metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
 		}
 
 		return nil
@@ -233,9 +238,13 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 			}
 		}
 
-		err = r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhaseRunning)
+		gpuList, err := r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhaseRunning)
 		if err != nil {
 			return err
+		}
+
+		if len(gpuList) > 0 {
+			metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
 		}
 
 		if coreNode.Labels != nil && coreNode.Labels[constants.KarpenterExpansionLabel] != "" {
@@ -245,22 +254,22 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 	}
 }
 
-func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tfv1.GPUNode, state tfv1.TensorFusionGPUPhase) error {
+func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tfv1.GPUNode, state tfv1.TensorFusionGPUPhase) ([]tfv1.GPU, error) {
 	gpuList, err := r.fetchAllOwnedGPUDevices(ctx, node)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	for _, gpu := range gpuList {
-		if gpu.Status.Phase != state {
-			patch := client.MergeFrom(gpu.DeepCopy())
-			gpu.Status.Phase = state
-			if err := r.Status().Patch(ctx, &gpu, patch); err != nil {
-				return fmt.Errorf("failed to patch GPU device status to %s: %w", state, err)
+	for i := range gpuList {
+		if gpuList[i].Status.Phase != state {
+			patch := client.MergeFrom(gpuList[i].DeepCopy())
+			gpuList[i].Status.Phase = state
+			if err := r.Status().Patch(ctx, &gpuList[i], patch); err != nil {
+				return nil, fmt.Errorf("failed to patch GPU device status to %s: %w", state, err)
 			}
 		}
 	}
-	return nil
+	return gpuList, nil
 }
 
 func (r *GPUNodeReconciler) fetchAllOwnedGPUDevices(ctx context.Context, node *tfv1.GPUNode) ([]tfv1.GPU, error) {
