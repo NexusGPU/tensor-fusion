@@ -1,0 +1,13 @@
+{
+  "name": "tensor-fusion",
+  "owner": {
+    "name": "TensorFusion"
+  },
+  "plugins": [
+    {
+      "name": "tensor-fusion",
+      "source": "./",
+      "description": "Tensor Fusion Kubernetes GPU 虚拟化/池化项目操作指南。用于安装/部署 operator 或 Helm chart、配置 CRDs（GPUPool/ProviderConfig/SchedulingConfigTemplate/WorkloadProfile 等）、理解 CR 之间的逻辑关系、创建/排障 TensorFusionWorkload/Connection 与带注解的 GPU 工作负载、调整调度/自动扩缩容与资源配额。"
+    }
+  ]
+}

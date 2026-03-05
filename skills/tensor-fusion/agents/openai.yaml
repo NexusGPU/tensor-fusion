@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tensor Fusion"
+  short_description: "Help with Tensor Fusion Kubernetes GPU workflows"
+  default_prompt: "Explain how to install, configure, and run Tensor Fusion workloads in this repo."
