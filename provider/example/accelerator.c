@@ -20,17 +20,6 @@
 
 #include "../accelerator.h"
 
-// Define Result type for limiter.h compatibility (before including limiter.h)
-typedef enum {
-    RESULT_SUCCESS = ACCEL_SUCCESS,
-    RESULT_ERROR_INVALID_PARAM = ACCEL_ERROR_INVALID_PARAM,
-    RESULT_ERROR_NOT_FOUND = ACCEL_ERROR_NOT_FOUND,
-    RESULT_ERROR_NOT_SUPPORTED = ACCEL_ERROR_NOT_SUPPORTED,
-    RESULT_ERROR_RESOURCE_EXHAUSTED = ACCEL_ERROR_RESOURCE_EXHAUSTED,
-    RESULT_ERROR_OPERATION_FAILED = ACCEL_ERROR_OPERATION_FAILED,
-    RESULT_ERROR_INTERNAL = ACCEL_ERROR_INTERNAL
-} Result;
-
 #include "../limiter.h"
 #include "device_mock/driver_mock.h"
 #include <stdio.h>
@@ -144,74 +133,74 @@ static void cleanupLimiterThread(void) {
 // They are kept here for the example implementation to work with limiter.so
 // ============================================================================
 
-Result AddWorkerProcess(const char* deviceUUID, const char* processId) {
+AccelResult AddWorkerProcess(const char* deviceUUID, const char* processId) {
     (void)deviceUUID;  
     (void)processId;   
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result CheckAndRecordMemoryOps(const char* processId, const char* deviceUUID, int64_t bytesDiff, MemoryOpRecord* record) {
+AccelResult CheckAndRecordMemoryOps(const char* processId, const char* deviceUUID, int64_t bytesDiff, MemoryOpRecord* record) {
     (void)processId;   
     (void)deviceUUID;  
     (void)bytesDiff;   
     
     if (!record) {
-        return RESULT_ERROR_INVALID_PARAM;
+        return ACCEL_ERROR_INVALID_PARAM;
     }
     
     // Example: always allow, set available bytes to a large value
     record->shouldBlock = false;
     record->availableBytes = 16ULL * 1024 * 1024 * 1024; // 16GB
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result CheckAndRecordComputeOps(const char* processId, const char* deviceUUID, uint64_t computeTokens, ComputeOpRecord* record) {
+AccelResult CheckAndRecordComputeOps(const char* processId, const char* deviceUUID, uint64_t computeTokens, ComputeOpRecord* record) {
     (void)processId;      
     (void)deviceUUID;     
     (void)computeTokens;  
     
     if (!record) {
-        return RESULT_ERROR_INVALID_PARAM;
+        return ACCEL_ERROR_INVALID_PARAM;
     }
     
     // Example: always allow, set available tokens to a large value
     record->shouldBlock = false;
     record->availableTokens = 1000000; // Large token pool
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result FreezeWorker(const char* workerId, WorkerFreezeState* state) {
+AccelResult FreezeWorker(const char* workerId, WorkerFreezeState* state) {
     (void)workerId;  
     if (!state) {
-        return RESULT_ERROR_INVALID_PARAM;
+        return ACCEL_ERROR_INVALID_PARAM;
     }
     state->isFrozen = false;
     state->freezeTimeMs = 0;
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result ResumeWorker(const char* workerId, WorkerFreezeState* state) {
+AccelResult ResumeWorker(const char* workerId, WorkerFreezeState* state) {
     (void)workerId;  
     if (!state) {
-        return RESULT_ERROR_INVALID_PARAM;
+        return ACCEL_ERROR_INVALID_PARAM;
     }
     state->isFrozen = false;
     state->freezeTimeMs = 0;
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result AutoFreeze(const char* workerId, const char* deviceUUID, const char* resourceType) {
+AccelResult AutoFreeze(const char* workerId, const char* deviceUUID, const char* resourceType) {
     (void)workerId;      
     (void)deviceUUID;   
     (void)resourceType; 
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
-Result AutoResume(const char* workerId, const char* deviceUUID, const char* resourceType) {
+AccelResult AutoResume(const char* workerId, const char* deviceUUID, const char* resourceType) {
     (void)workerId;      
     (void)deviceUUID;   
     (void)resourceType; 
-    return RESULT_SUCCESS;
+    return ACCEL_SUCCESS;
 }
 
 // ============================================================================
@@ -418,6 +407,8 @@ AccelResult AccelAssignPartition(const char* templateId, const char* deviceUUID,
     if (templateId[0] == '\0' || deviceUUID[0] == '\0') {
         return ACCEL_ERROR_INVALID_PARAM;
     }
+
+    memset(partitionResult, 0, sizeof(*partitionResult));
 
     // Example: set partition result type to environment variable
     partitionResult->type = PARTITION_TYPE_ENVIRONMENT_VARIABLE;

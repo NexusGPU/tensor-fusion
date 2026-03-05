@@ -110,6 +110,9 @@ func ParseTensorFusionInfo(
 	} else {
 		workloadProfile.Spec.Isolation = tfv1.IsolationModeSoft
 	}
+	if err := validateIsolationAndExecutionMode(&workloadProfile.Spec); err != nil {
+		return info, err
+	}
 
 	// Read partition template ID annotation if in partitioned mode
 	if workloadProfile.Spec.Isolation == tfv1.IsolationModePartitioned {
@@ -181,6 +184,17 @@ func ParseTensorFusionInfo(
 	info.Profile = &workloadProfile.Spec
 	info.ContainerNames = containerNames
 	return info, nil
+}
+
+func validateIsolationAndExecutionMode(profile *tfv1.WorkloadProfileSpec) error {
+	if profile == nil {
+		return nil
+	}
+	// Hard isolation needs worker runtime interception. Local-GPU mode without sidecar has no worker process.
+	if profile.Isolation == tfv1.IsolationModeHard && profile.IsLocalGPU && !profile.SidecarWorker {
+		return fmt.Errorf("hard isolation is only supported in remote mode or local sidecar-worker mode")
+	}
+	return nil
 }
 
 // parseGangSchedulingAnnotations parses gang scheduling configuration from pod annotations

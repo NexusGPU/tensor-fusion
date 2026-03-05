@@ -241,15 +241,23 @@
    char guestPath[MAX_MOUNT_PATH];  // Guest path
  } MountPath;
  
- typedef enum {
-   PARTITION_TYPE_ENVIRONMENT_VARIABLE = 0,
-   PARTITION_TYPE_DEVICE_NODE = 1,
- } PartitionResultType;
- 
+typedef enum {
+  PARTITION_TYPE_ENVIRONMENT_VARIABLE = 0,
+  PARTITION_TYPE_DEVICE_NODE = 1,
+} PartitionResultType;
+
+// Maximum device-node entries returned by partition APIs.
+#define MAX_PARTITION_DEVICE_NODES 16
+// Device-node entry format is "hostPath=guestPath".
+#define MAX_PARTITION_DEVICE_NODE_LENGTH (MAX_MOUNT_PATH * 2 + 2)
+
 typedef struct {
   PartitionResultType type;
-  char deviceUUID[64];    // Device UUID
-  char envVars[10][256];  // Array of environment variable key-value pairs, A=B, C=D, etc.
+  char deviceUUID[64];  // Device UUID
+  // Array of environment variable key-value pairs, A=B, C=D, etc.
+  char envVars[MAX_PARTITION_ENVS][MAX_ENV_VALUE_LENGTH];
+  // Array of device node mapping key-value pairs, hostPath=guestPath.
+  char deviceNodes[MAX_PARTITION_DEVICE_NODES][MAX_PARTITION_DEVICE_NODE_LENGTH];
 } PartitionResult;
  
  // ============================================================================

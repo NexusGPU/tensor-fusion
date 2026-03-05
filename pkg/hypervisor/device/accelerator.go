@@ -18,10 +18,6 @@ package device
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
@@ -115,15 +111,6 @@ type DeviceProperties struct {
 	Count      uintptr
 }
 
-const (
-	ascendManagerDevice       = "/dev/davinci_manager"
-	ascendManagerDeviceDocker = "/dev/davinci_manager_docker"
-	ascendSVMDevice           = "/dev/devmm_svm"
-	ascendHDCDevice           = "/dev/hisi_hdc"
-	ascendUBurmaDir           = "/dev/uburma"
-	ascendUmmuDir             = "/dev/ummu"
-)
-
 type ExtendedDeviceInfo struct {
 	Basic        DeviceBasicInfo
 	Props        DeviceProperties
@@ -208,6 +195,13 @@ type Mount struct {
 	GuestPath [MaxMountPath]byte
 }
 
+const (
+	MaxPartitionEnvs             = 16
+	MaxEnvValueLength            = 256
+	MaxPartitionDeviceNodes      = 16
+	MaxPartitionDeviceNodeLength = MaxMountPath*2 + 2
+)
+
 const MaxProcesses = 1024
 
 // PartitionResultType represents the type of partition result
@@ -220,11 +214,13 @@ const (
 
 // PartitionResult matches the C struct PartitionResult in provider/accelerator.h
 // Field names in Go are capitalized for export, but memory layout must match C struct exactly
-// C struct fields: type, deviceUUID, envVars
+// C struct fields: type, deviceUUID, envVars, deviceNodes
 type PartitionResult struct {
-	Type       PartitionResultType // C: PartitionResultType type
-	DeviceUUID [64]byte            // C: char deviceUUID[64]
-	EnvVars    [10][256]byte       // C: char envVars[10][256], key-value pairs like "A=B"
+	Type        PartitionResultType                       // C: PartitionResultType type
+	DeviceUUID  [64]byte                                  // C: char deviceUUID[64]
+	EnvVars     [MaxPartitionEnvs][MaxEnvValueLength]byte // C: char envVars[16][256], key-value pairs like "A=B"
+	DeviceNodes [MaxPartitionDeviceNodes][MaxPartitionDeviceNodeLength]byte
+	// C: char deviceNodes[16][MAX_MOUNT_PATH*2+2], key-value pairs like "host=guest"
 }
 
 // SnapshotContext for snapshot/resume operations
@@ -459,19 +455,20 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			properties["pcieWidth"] = fmt.Sprintf("%d", cInfo.Basic.PCIeWidth)
 		}
 
+		model := byteArrayToString(cInfo.Basic.Model[:])
 		var deviceNodes map[string]string
 		if hostPath := byteArrayToString(cInfo.Basic.DeviceNode[:]); hostPath != "" {
 			// Legacy ABI exposes only a single device node, use host==guest by default.
 			deviceNodes = map[string]string{hostPath: hostPath}
 		}
-		if strings.EqualFold(vendor, "Ascend") {
-			deviceNodes = addAscendSharedDeviceNodes(deviceNodes)
+		if nodes, applied := applyProviderDeviceMountPolicy(deviceNodes, vendor, model, false, nil); applied {
+			deviceNodes = nodes
 		}
 
 		devices[i] = &api.DeviceInfo{
 			UUID:             byteArrayToString(cInfo.Basic.UUID[:]),
 			Vendor:           vendor,
-			Model:            byteArrayToString(cInfo.Basic.Model[:]),
+			Model:            model,
 			Index:            cInfo.Basic.Index,
 			NUMANode:         cInfo.Basic.NUMANode,
 			TotalMemoryBytes: cInfo.Basic.TotalMemoryBytes,
@@ -552,25 +549,31 @@ func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (*
 
 	// Parse optional env vars returned by vendor
 	envVars := make(map[string]string)
-	for i := range 10 {
+	for i := range MaxPartitionEnvs {
 		envVarStr := byteArrayToString(cResult.EnvVars[i][:])
 		if envVarStr == "" {
 			continue
 		}
-		// Parse key-value pair in format "A=B"
-		for j := 0; j < len(envVarStr); j++ {
-			if envVarStr[j] == '=' {
-				key := envVarStr[:j]
-				value := envVarStr[j+1:]
-				if key != "" {
-					envVars[key] = value
-				}
-				break
-			}
+		// Parse key-value pair in format "A=B".
+		if key, value, ok := splitKeyValue(envVarStr); ok {
+			envVars[key] = value
 		}
 	}
 
-	deviceNodes := inferDeviceNodesFromPartitionEnv(cResult.Type, envVars)
+	// Parse optional device node mapping pairs returned by vendor in format "hostPath=guestPath".
+	deviceNodes := make(map[string]string)
+	for i := range MaxPartitionDeviceNodes {
+		deviceNodePair := byteArrayToString(cResult.DeviceNodes[i][:])
+		if deviceNodePair == "" {
+			continue
+		}
+		if hostPath, guestPath, ok := splitKeyValue(deviceNodePair); ok {
+			deviceNodes[hostPath] = guestPath
+		}
+	}
+	if len(deviceNodes) == 0 {
+		deviceNodes = nil
+	}
 
 	return &AssignPartitionResult{
 		PartitionUUID: partitionUUID,
@@ -580,77 +583,18 @@ func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (*
 	}, nil
 }
 
-func inferDeviceNodesFromPartitionEnv(
-	resultType PartitionResultType,
-	envVars map[string]string,
-) map[string]string {
-	if resultType != PartitionTypeDeviceNode {
-		return nil
-	}
-	if strings.ToUpper(envVars["ASCEND_RUNTIME_OPTIONS"]) != "VIRTUAL" {
-		return nil
-	}
-	visible := envVars["ASCEND_VISIBLE_DEVICES"]
-	if visible == "" {
-		return nil
-	}
-
-	deviceNodes := make(map[string]string)
-	for _, rawID := range strings.Split(visible, ",") {
-		id := strings.TrimSpace(rawID)
-		if id == "" {
-			continue
+func splitKeyValue(input string) (string, string, bool) {
+	separatorIndex := -1
+	for i := 0; i < len(input); i++ {
+		if input[i] == '=' {
+			separatorIndex = i
+			break
 		}
-		if _, err := strconv.Atoi(id); err != nil {
-			continue
-		}
-		hostPath := fmt.Sprintf("/dev/vdavinci%s", id)
-		guestPath := fmt.Sprintf("/dev/davinci%s", id)
-		deviceNodes[hostPath] = guestPath
 	}
-	if len(deviceNodes) == 0 {
-		return nil
+	if separatorIndex <= 0 || separatorIndex >= len(input)-1 {
+		return "", "", false
 	}
-	return addAscendSharedDeviceNodes(deviceNodes)
-}
-
-func addAscendSharedDeviceNodes(deviceNodes map[string]string) map[string]string {
-	if deviceNodes == nil {
-		deviceNodes = make(map[string]string)
-	}
-
-	if _, err := os.Stat(ascendManagerDevice); err == nil {
-		deviceNodes[ascendManagerDevice] = ascendManagerDevice
-	} else if _, err = os.Stat(ascendManagerDeviceDocker); err == nil {
-		deviceNodes[ascendManagerDeviceDocker] = ascendManagerDevice
-	}
-	if _, err := os.Stat(ascendSVMDevice); err == nil {
-		deviceNodes[ascendSVMDevice] = ascendSVMDevice
-	}
-	if _, err := os.Stat(ascendHDCDevice); err == nil {
-		deviceNodes[ascendHDCDevice] = ascendHDCDevice
-	}
-	addDeviceNodesInDir(deviceNodes, ascendUBurmaDir)
-	addDeviceNodesInDir(deviceNodes, ascendUmmuDir)
-
-	if len(deviceNodes) == 0 {
-		return nil
-	}
-	return deviceNodes
-}
-
-func addDeviceNodesInDir(deviceNodes map[string]string, dirPath string) {
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		fullDevicePath := filepath.Join(dirPath, entry.Name())
-		deviceNodes[fullDevicePath] = fullDevicePath
-	}
+	return input[:separatorIndex], input[separatorIndex+1:], true
 }
 
 // RemovePartition removes a partition from a device
