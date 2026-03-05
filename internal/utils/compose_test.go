@@ -13,6 +13,15 @@ import (
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 )
 
+func hasNvidiaVisibleEnv(envs []corev1.EnvVar) bool {
+	for _, env := range envs {
+		if env.Name == constants.NvidiaVisibleAllDeviceEnv {
+			return true
+		}
+	}
+	return false
+}
+
 var _ = Describe("Compose Utils", func() {
 	Describe("AddTFHypervisorConfAfterTemplate", func() {
 		DescribeTable("configures hypervisor correctly",
@@ -40,6 +49,27 @@ var _ = Describe("Compose Utils", func() {
 			Entry("without vector", false, "test-image:latest", 2, 7),
 			Entry("with vector", true, "test-image:latest", 2, 7),
 		)
+
+		It("should inject NVIDIA_VISIBLE_DEVICES only for NVIDIA vendor", func() {
+			ctx := context.Background()
+			pool := &tfv1.GPUPool{
+				Spec: tfv1.GPUPoolSpec{
+					ComponentConfig: &tfv1.ComponentConfig{
+						Hypervisor: &tfv1.HypervisorConfig{
+							Image: "test-image:latest",
+						},
+					},
+				},
+			}
+
+			nvidiaSpec := &corev1.PodSpec{}
+			utils.AddTFHypervisorConfAfterTemplate(ctx, nvidiaSpec, pool, "NVIDIA", false)
+			Expect(hasNvidiaVisibleEnv(nvidiaSpec.Containers[0].Env)).To(BeTrue())
+
+			ascendSpec := &corev1.PodSpec{}
+			utils.AddTFHypervisorConfAfterTemplate(ctx, ascendSpec, pool, "Ascend", false)
+			Expect(hasNvidiaVisibleEnv(ascendSpec.Containers[0].Env)).To(BeFalse())
+		})
 	})
 
 	Describe("AddTFDefaultClientConfBeforePatch", func() {
@@ -77,6 +107,22 @@ var _ = Describe("Compose Utils", func() {
 			Expect(volumeNames).NotTo(ContainElement(constants.TransportShmVolumeName))
 		})
 
+		It("should not inject NVIDIA_VISIBLE_DEVICES for non-NVIDIA local workloads", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: true,
+					GPUVendor:  "Ascend",
+				},
+			}, []int{0})
+
+			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeFalse())
+		})
+
 		It("should inject client initContainer in remote mode", func() {
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
@@ -95,9 +141,11 @@ var _ = Describe("Compose Utils", func() {
 
 	Describe("SetWorkerContainerSpec", func() {
 		DescribeTable("configures worker container correctly",
-			func(workerImage, disabledFeatures string, sharedMemMode bool, expectCommand []string) {
+			func(vendor, workerImage, disabledFeatures string, sharedMemMode bool, expectCommand []string, expectNvidiaVisibleEnv bool) {
 				container := &corev1.Container{}
-				workloadProfile := &tfv1.WorkloadProfileSpec{}
+				workloadProfile := &tfv1.WorkloadProfileSpec{
+					GPUVendor: vendor,
+				}
 				workerConfig := &tfv1.WorkerConfig{
 					Image: workerImage,
 				}
@@ -113,6 +161,7 @@ var _ = Describe("Compose Utils", func() {
 				// Verify command is set correctly
 				Expect(container.Command).NotTo(BeEmpty(), "container command should not be empty")
 				Expect(container.Command).To(Equal(expectCommand), "container command should match expected value")
+				Expect(hasNvidiaVisibleEnv(container.Env)).To(Equal(expectNvidiaVisibleEnv))
 
 				// Verify shared memory mode specific setup
 				if sharedMemMode && disabledFeatures == "" {
@@ -127,20 +176,25 @@ var _ = Describe("Compose Utils", func() {
 					Expect(container.Command[2]).To(ContainSubstring("-M 256"), "should specify shared memory size")
 				}
 			},
-			Entry("basic worker config", "worker:latest", "", false, []string{
+			Entry("basic worker config", "NVIDIA", "worker:latest", "", false, []string{
 				"./tensor-fusion-worker",
 				"-p",
 				"8000",
-			}),
-			Entry("worker with shared memory mode", "worker:latest", "", true, []string{
+			}, true),
+			Entry("worker with shared memory mode", "NVIDIA", "worker:latest", "", true, []string{
 				"/bin/bash",
 				"-c",
 				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 256",
-			}),
-			Entry("worker with disabled start-worker feature", "worker:latest", "start-worker", false, []string{
+			}, true),
+			Entry("worker with disabled start-worker feature", "NVIDIA", "worker:latest", "start-worker", false, []string{
 				"sleep",
 				"infinity",
-			}),
+			}, true),
+			Entry("worker without nvidia visible env for Ascend", "Ascend", "worker:latest", "", false, []string{
+				"./tensor-fusion-worker",
+				"-p",
+				"8000",
+			}, false),
 		)
 	})
 })

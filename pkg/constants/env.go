@@ -177,6 +177,7 @@ const (
 	TFHardwareVendorEnv           = "TF_HARDWARE_VENDOR"
 	TFAcceleratorLibPathEnv       = "TF_ACCELERATOR_LIB_PATH"
 	TFProviderHardwareMetadataEnv = "TF_PROVIDER_HARDWARE_METADATA"
+	TFProviderDeviceMountEnv      = "TF_PROVIDER_DEVICE_MOUNT"
 )
 
 const (

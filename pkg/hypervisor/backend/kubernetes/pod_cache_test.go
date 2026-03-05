@@ -82,6 +82,7 @@ func TestGetWorkerInfoForAllocationByIndex_NoDeadlock(t *testing.T) {
 	case workerInfo := <-resultCh:
 		if workerInfo == nil {
 			t.Fatal("Expected non-nil worker info")
+			return
 		}
 		if workerInfo.WorkerUID != string(pod.UID) {
 			t.Errorf("Expected WorkerUID %s, got %s", pod.UID, workerInfo.WorkerUID)
@@ -255,6 +256,7 @@ func TestGetWorkerInfoForAllocationByIndex_PodArrivesFirst(t *testing.T) {
 	}
 	if workerInfo == nil {
 		t.Fatal("Expected non-nil worker info")
+		return
 	}
 	if workerInfo.WorkerUID != string(pod.UID) {
 		t.Errorf("Expected WorkerUID %s, got %s", pod.UID, workerInfo.WorkerUID)

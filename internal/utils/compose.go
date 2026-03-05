@@ -346,7 +346,7 @@ func AddTFDefaultClientConfBeforePatch(
 				})
 			}
 
-			if !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
+			if shouldInjectNvidiaVisibleDevices(tfInfo.Profile.GPUVendor) && !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
 				return env.Name == constants.NvidiaVisibleAllDeviceEnv
 			}) {
 				envList = append(envList, v1.EnvVar{
@@ -670,9 +670,6 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 		Name:  constants.HypervisorPoolNameEnv,
 		Value: pool.Name,
 	}, v1.EnvVar{
-		Name:  constants.NvidiaVisibleAllDeviceEnv,
-		Value: constants.NvidiaVisibleAllDeviceValue,
-	}, v1.EnvVar{
 		Name:  constants.TensorFusionGPUInfoEnvVar,
 		Value: constants.TensorFusionGPUInfoConfigMountPath,
 	}, v1.EnvVar{
@@ -699,6 +696,12 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 		Name:  constants.TFProductNameEnv,
 		Value: constants.ProductNameTensorFusionOSS,
 	})
+	if shouldInjectNvidiaVisibleDevices(vendor) {
+		spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
+			Name:  constants.NvidiaVisibleAllDeviceEnv,
+			Value: constants.NvidiaVisibleAllDeviceValue,
+		})
+	}
 
 	if pool.Spec.ComponentConfig.Hypervisor.Image != "" {
 		spec.Containers[0].Image = pool.Spec.ComponentConfig.Hypervisor.Image
@@ -900,9 +903,6 @@ func SetWorkerContainerSpec(
 			MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 		})
 	container.Env = append(container.Env, v1.EnvVar{
-		Name:  constants.NvidiaVisibleAllDeviceEnv,
-		Value: constants.NvidiaVisibleAllDeviceValue,
-	}, v1.EnvVar{
 		Name: constants.HypervisorIPEnv,
 		ValueFrom: &v1.EnvVarSource{
 			FieldRef: &v1.ObjectFieldSelector{
@@ -933,6 +933,12 @@ func SetWorkerContainerSpec(
 			},
 		},
 	})
+	if shouldInjectNvidiaVisibleDevices(workloadProfile.GPUVendor) {
+		container.Env = append(container.Env, v1.EnvVar{
+			Name:  constants.NvidiaVisibleAllDeviceEnv,
+			Value: constants.NvidiaVisibleAllDeviceValue,
+		})
+	}
 
 	if !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) {
 		// TODO: In hard isolation mode, current implementation relies on limiter to set CUDA_VISIBLE_DEVICES env.
@@ -1046,4 +1052,13 @@ func GetMiddlewareImage(vendor string, defaultImage string) string {
 		return mgr.GetMiddlewareImage(vendor, defaultImage)
 	}
 	return defaultImage
+}
+
+func shouldInjectNvidiaVisibleDevices(vendor string) bool {
+	vendor = strings.TrimSpace(vendor)
+	if vendor == "" {
+		// Keep historical behavior for legacy workloads without explicit vendor.
+		return true
+	}
+	return strings.EqualFold(vendor, constants.AcceleratorVendorNvidia)
 }

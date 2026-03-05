@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -284,7 +285,8 @@ func (b *KubeletBackend) mutateGPUResourceState(
 		constants.GpuPoolKey:    gpuNode.OwnerReferences[0].Name,
 	}
 	gpu.Annotations = map[string]string{
-		constants.LastSyncTimeAnnotationKey: time.Now().Format(time.RFC3339),
+		constants.LastSyncTimeAnnotationKey:               time.Now().Format(time.RFC3339),
+		constants.GPUVirtualizationCapabilitiesAnnotation: buildVirtualizationCapabilitiesAnnotation(device),
 	}
 
 	if !metav1.IsControlledBy(gpu, gpuNode) {
@@ -336,6 +338,17 @@ func (b *KubeletBackend) mutateGPUResourceState(
 	}
 	gpu.Status.Message = "managed"
 	return nil
+}
+
+func buildVirtualizationCapabilitiesAnnotation(device *api.DeviceInfo) string {
+	if device == nil {
+		return ""
+	}
+	payload, err := json.Marshal(device.VirtualizationCapabilities)
+	if err != nil {
+		return ""
+	}
+	return string(payload)
 }
 
 func (b *KubeletBackend) resolveDeviceTflopsFromProviderConfig(device *api.DeviceInfo) (resource.Quantity, bool) {
