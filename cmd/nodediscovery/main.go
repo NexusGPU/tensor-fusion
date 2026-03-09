@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -37,6 +38,27 @@ import (
 
 const TMP_PATH = "/tmp"
 const LAPTOP_GPU_SUFFIX = " Laptop GPU"
+
+// Per-link theoretical bidirectional bandwidth (MB/s) by NVLink generation.
+// Values are intentionally conservative and can be adjusted without touching scheduler logic.
+var nvlinkBandwidthPerLinkMBps = map[uint32]int64{
+	1: 20000,
+	2: 25000,
+	3: 50000,
+	4: 50000,
+	5: 100000,
+}
+
+type discoveredGPU struct {
+	device     nvml.Device
+	uuid       string
+	deviceName string
+	memInfo    nvml.Memory_v2
+	tflops     resource.Quantity
+	index      int32
+	numaNodeID int32
+	nvlink     *tfv1.GPUNvLinkStatus
+}
 
 var Scheme = runtime.NewScheme()
 
@@ -119,6 +141,8 @@ func main() {
 	availableVRAM := resource.Quantity{}
 
 	allDeviceIDs := make([]string, 0)
+	allDiscoveredGPUs := make([]discoveredGPU, 0, count)
+	busIDToUUID := make(map[string]string, count)
 
 	for i := range count {
 		device, ret := nvml.DeviceGetHandleByIndex(i)
@@ -145,6 +169,15 @@ func main() {
 		if ret != nvml.SUCCESS {
 			ctrl.Log.Error(errors.New(nvml.ErrorString(ret)), "unable to get memory info of device", "index", i)
 			os.Exit(1)
+		}
+
+		pciInfo, ret := device.GetPciInfo()
+		if ret == nvml.SUCCESS {
+			if busID := pciBusIDToString(pciInfo); busID != "" {
+				busIDToUUID[busID] = uuid
+			}
+		} else {
+			ctrl.Log.Info("unable to get PCI info of device, skip bus id mapping", "index", i, "msg", nvml.ErrorString(ret))
 		}
 
 		numaNodeId, ret := device.GetNumaNodeId()
@@ -180,10 +213,30 @@ func main() {
 		}
 		ctrl.Log.Info("found GPU info from config", "deviceName", deviceName, "FP16 TFlops", tflops, "uuid", uuid)
 
-		gpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpunode, uuid,
-			deviceName, memInfo, tflops, int32(i), int32(numaNodeId))
+		allDiscoveredGPUs = append(allDiscoveredGPUs, discoveredGPU{
+			device:     device,
+			uuid:       uuid,
+			deviceName: deviceName,
+			memInfo:    memInfo,
+			tflops:     tflops,
+			index:      int32(i),
+			numaNodeID: int32(numaNodeId),
+		})
+	}
+
+	for i := range allDiscoveredGPUs {
+		allDiscoveredGPUs[i].nvlink = discoverNvLinkStatus(
+			allDiscoveredGPUs[i].device,
+			allDiscoveredGPUs[i].uuid,
+			busIDToUUID,
+		)
+	}
+
+	for _, d := range allDiscoveredGPUs {
+		gpu, err := createOrUpdateTensorFusionGPU(k8sClient, ctx, k8sNodeName, gpunode, d.uuid,
+			d.deviceName, d.memInfo, d.tflops, d.index, d.numaNodeID, d.nvlink)
 		if err != nil {
-			ctrl.Log.Error(err, "failed to create or update GPU", "uuid", uuid)
+			ctrl.Log.Error(err, "failed to create or update GPU", "uuid", d.uuid)
 			os.Exit(1)
 		}
 		totalTFlops.Add(gpu.Status.Capacity.Tflops)
@@ -219,7 +272,7 @@ func patchGPUNodeStatus(k8sClient client.Client, ctx context.Context,
 func createOrUpdateTensorFusionGPU(
 	k8sClient client.Client, ctx context.Context, k8sNodeName string, gpunode *tfv1.GPUNode,
 	uuid string, deviceName string, memInfo nvml.Memory_v2, tflops resource.Quantity,
-	index int32, numaNodeId int32) (*tfv1.GPU, error) {
+	index int32, numaNodeId int32, nvLinkStatus *tfv1.GPUNvLinkStatus) (*tfv1.GPU, error) {
 	gpu := &tfv1.GPU{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: uuid,
@@ -292,6 +345,7 @@ func createOrUpdateTensorFusionGPU(
 		gpu.Status.NodeSelector = map[string]string{
 			constants.KubernetesHostNameLabel: k8sNodeName,
 		}
+		gpu.Status.NvLink = cloneNvLinkStatus(nvLinkStatus)
 		if gpu.Status.Available == nil {
 			gpu.Status.Available = gpu.Status.Capacity.DeepCopy()
 		}
@@ -309,6 +363,109 @@ func createOrUpdateTensorFusionGPU(
 	}
 
 	return gpu, nil
+}
+
+func cloneNvLinkStatus(in *tfv1.GPUNvLinkStatus) *tfv1.GPUNvLinkStatus {
+	if in == nil {
+		return nil
+	}
+	out := &tfv1.GPUNvLinkStatus{
+		PeerCount:          in.PeerCount,
+		TotalLinkCount:     in.TotalLinkCount,
+		TotalBandwidthMBps: in.TotalBandwidthMBps,
+	}
+	if len(in.Peers) > 0 {
+		out.Peers = append([]tfv1.GPUNvLinkPeer(nil), in.Peers...)
+	}
+	return out
+}
+
+func discoverNvLinkStatus(device nvml.Device, selfUUID string, busIDToUUID map[string]string) *tfv1.GPUNvLinkStatus {
+	peerMap := make(map[string]*tfv1.GPUNvLinkPeer)
+	for link := range nvml.NVLINK_MAX_LINKS {
+		state, ret := device.GetNvLinkState(link)
+		if ret != nvml.SUCCESS || state != nvml.FEATURE_ENABLED {
+			continue
+		}
+
+		remotePci, ret := device.GetNvLinkRemotePciInfo(link)
+		if ret != nvml.SUCCESS {
+			continue
+		}
+		peerUUID := busIDToUUID[pciBusIDToString(remotePci)]
+		if peerUUID == "" || peerUUID == selfUUID {
+			continue
+		}
+
+		version, ret := device.GetNvLinkVersion(link)
+		if ret != nvml.SUCCESS {
+			version = 0
+		}
+
+		peer, ok := peerMap[peerUUID]
+		if !ok {
+			peer = &tfv1.GPUNvLinkPeer{
+				PeerUUID: peerUUID,
+			}
+			peerMap[peerUUID] = peer
+		}
+		peer.LinkCount++
+		if int32(version) > peer.LinkVersion {
+			peer.LinkVersion = int32(version)
+		}
+		peer.BandwidthMBps += estimateNvLinkBandwidthMBps(version)
+	}
+
+	if len(peerMap) == 0 {
+		return nil
+	}
+
+	peers := make([]tfv1.GPUNvLinkPeer, 0, len(peerMap))
+	totalLinks := int32(0)
+	totalBandwidth := int64(0)
+	for _, peer := range peerMap {
+		totalLinks += peer.LinkCount
+		totalBandwidth += peer.BandwidthMBps
+		peers = append(peers, *peer)
+	}
+	sort.Slice(peers, func(i, j int) bool {
+		return peers[i].PeerUUID < peers[j].PeerUUID
+	})
+
+	return &tfv1.GPUNvLinkStatus{
+		PeerCount:          int32(len(peers)),
+		TotalLinkCount:     totalLinks,
+		TotalBandwidthMBps: totalBandwidth,
+		Peers:              peers,
+	}
+}
+
+func estimateNvLinkBandwidthMBps(version uint32) int64 {
+	if bandwidth, ok := nvlinkBandwidthPerLinkMBps[version]; ok {
+		return bandwidth
+	}
+	// fallback for newer/unknown versions, keep non-zero signal and avoid hard-fail.
+	if version > 0 {
+		return 25000
+	}
+	return 0
+}
+
+func cStringFromUint8(raw []uint8) string {
+	n := 0
+	for ; n < len(raw); n++ {
+		if raw[n] == 0 {
+			break
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(string(raw[:n])))
+}
+
+func pciBusIDToString(pci nvml.PciInfo) string {
+	if busID := cStringFromUint8(pci.BusId[:]); busID != "" {
+		return busID
+	}
+	return cStringFromUint8(pci.BusIdLegacy[:])
 }
 
 func kubeClient() (client.Client, error) {

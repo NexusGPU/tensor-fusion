@@ -48,6 +48,15 @@ type NodeExpander struct {
 	ctx                context.Context
 }
 
+type schedulerFitPodAPI interface {
+	FindNodesThatFitPod(
+		ctx context.Context,
+		schedFramework framework.Framework,
+		state fwk.CycleState,
+		pod *corev1.Pod,
+	) ([]fwk.NodeInfo, framework.Diagnosis, error)
+}
+
 func NewNodeExpander(
 	ctx context.Context,
 	allocator *gpuallocator.GpuAllocator,
@@ -382,13 +391,17 @@ func (e *NodeExpander) simulateSchedulingWithoutGPU(ctx context.Context, pod *co
 	}
 
 	// Disable the tensor fusion component label to simulate scheduling without GPU plugins
-	// NOTE: must apply patch after `go mod vendor`, FindNodesThatFitPod is not exported from Kubernetes
-	// Run `git apply ./patches/scheduler-sched-one.patch` once or `bash scripts/patch-scheduler.sh`
+	// FindNodesThatFitPod is from our scheduler vendor patch.
+	// If patch is missing, return a clear remediation message.
 	if !utils.IsTensorFusionPod(pod) {
 		return nil, fmt.Errorf("pod to check expansion is not a tensor fusion worker pod: %s", pod.Name)
 	}
+	fitAPI, ok := any(e.scheduler).(schedulerFitPodAPI)
+	if !ok {
+		return nil, fmt.Errorf("scheduler patch missing: run `make vendor` or `bash scripts/patch-scheduler.sh`")
+	}
 	delete(pod.Labels, constants.LabelComponent)
-	scheduleResult, _, err := e.scheduler.FindNodesThatFitPod(ctx, fwkInstance, state, pod)
+	scheduleResult, _, err := fitAPI.FindNodesThatFitPod(ctx, fwkInstance, state, pod)
 	pod.Labels[constants.LabelComponent] = constants.ComponentWorker
 	if len(scheduleResult) == 0 {
 		return nil, err
