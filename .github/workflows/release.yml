@@ -68,7 +68,7 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$GO_LDFLAGS" -a -o bin/manager-linux-arm64 ./cmd
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Set Tag
         if: github.event_name == 'workflow_dispatch'
@@ -122,7 +122,7 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -o bin/hypervisor-linux-arm64 cmd/hypervisor/main.go
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
       
       - name: Set Tag
         if: github.event_name == 'workflow_dispatch'
