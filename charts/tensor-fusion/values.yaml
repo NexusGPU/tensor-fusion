@@ -201,6 +201,13 @@ schedulerConfig:
         maxWorkerPerNode: 256
         vramWeight: 0.7
         tflopsWeight: 0.3
+        # Topology-aware scheduling for NVLink:
+        # - single GPU: avoid breaking high-bandwidth NVLink groups
+        # - multi GPU: prefer connected NVLink groups
+        enableNvlinkAware: false
+        resourceScoreWeight: 0.7
+        topologyScoreWeight: 0.3
+        singleGpuProtectWeight: 0.6
     - name: GPUNetworkTopologyAware
       args:
         # Avoid the remote TFWorker RX/TX to avoid single node consume too much bandwidth

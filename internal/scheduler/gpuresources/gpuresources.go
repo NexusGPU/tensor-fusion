@@ -61,6 +61,12 @@ type GPUSchedulingStateData struct {
 
 	ValidNodeNotMatchingGPUScore map[string]map[string]int
 
+	// PreferredNodeGPUs keeps topology-aware GPU selections by node.
+	PreferredNodeGPUs map[string][]string
+
+	// NodeTopologyScore keeps topology score in [0,100] by node.
+	NodeTopologyScore map[string]int
+
 	// In Reserve stage, bind GPUs to pod, update allocator cache
 	// In PostBind stage, fetch final GPUs call Pod patch API to update annotation
 	FinalGPUs []string
@@ -217,6 +223,19 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 	// if some GPUs are filtered out but Node is valid, assign score for calculating node average score
 	notMatchingGPUScore := s.allocator.Score(ctx, strategy, allocRequest, validNodeNonMatchingGPUs)
 
+	preferredNodeGPUs := make(map[string][]string, len(validNodesValidGPUs))
+	nodeTopologyScore := make(map[string]int, len(validNodesValidGPUs))
+	if isNvLinkAwareEnabled(s.cfg) {
+		for nodeName, nodeValidGPUs := range validNodesValidGPUs {
+			preferred, topoScore, ok := selectPreferredGPUsWithTopology(nodeValidGPUs, int(allocRequest.Count), strategy, s.cfg)
+			if !ok {
+				continue
+			}
+			preferredNodeGPUs[nodeName] = preferred
+			nodeTopologyScore[nodeName] = topoScore
+		}
+	}
+
 	s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "PreScheduleDone", "pre filter for TensorFusion workload",
 		"TensorFusion pre schedule done, valid GPU node count: "+strconv.Itoa(cnt))
 
@@ -230,6 +249,8 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 		NodeGPUs:                     validNodesValidGPUs,
 		ValidNodeGPUScore:            score,
 		ValidNodeNotMatchingGPUScore: notMatchingGPUScore,
+		PreferredNodeGPUs:            preferredNodeGPUs,
+		NodeTopologyScore:            nodeTopologyScore,
 		FinalGPUs:                    []string{},
 		PreemptPods:                  sync.Map{},
 		ScoringStrategy:              strategy,
@@ -519,7 +540,16 @@ func (s *GPUFit) Score(
 			sum += score
 		}
 	}
-	return int64(sum / (len(gpuScoreMap) + len(notMatchingGPUScoreMap))), nil
+	resourceScore := sum / (len(gpuScoreMap) + len(notMatchingGPUScoreMap))
+	if !isNvLinkAwareEnabled(s.cfg) {
+		return int64(resourceScore), nil
+	}
+
+	topologyScore, hasTopologyScore := scheduledState.NodeTopologyScore[nodeInfo.Node().Name]
+	if !hasTopologyScore {
+		return int64(resourceScore), nil
+	}
+	return int64(mergeResourceAndTopologyScore(resourceScore, topologyScore, s.cfg)), nil
 }
 
 func (s *GPUFit) ScoreExtensions() framework.ScoreExtensions {
@@ -552,14 +582,17 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	// find top N score GPUs in this node
 	neededGPUs := allocRequest.(*tfv1.AllocRequest).Count
 
-	// when needed GPUs equals to valid GPUs, just return all GPUs on this node
-	if neededGPUs == uint(len(validGPUs)) {
+	if neededGPUs > uint(len(validGPUs)) {
+		return fwk.NewStatus(fwk.Error, "not enough GPUs on nominated node:"+nodeName)
+	}
+	if preferred, ok := schedulingResult.PreferredNodeGPUs[nodeName]; ok && len(preferred) == int(neededGPUs) {
+		schedulingResult.FinalGPUs = append([]string(nil), preferred...)
+	} else if neededGPUs == uint(len(validGPUs)) {
 		schedulingResult.FinalGPUs = lo.Map(validGPUs, func(gpu *tfv1.GPU, _ int) string {
 			return gpu.Name
 		})
-	} else if neededGPUs < uint(len(validGPUs)) {
-		// try scoring GPU from single node level
-		// TODO: consider NUMA topology on one node when neededGPUs > 1
+	} else {
+		// fallback to resource-only selection when topology data is missing.
 		gpuScoreEntries := make([]lo.Entry[string, int], 0, len(validGPUs))
 		for _, gpu := range validGPUs {
 			score := schedulingResult.ScoringStrategy.Score(gpu, false)
@@ -571,8 +604,6 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 		schedulingResult.FinalGPUs = lo.Map(gpuScoreEntries[:neededGPUs], func(entry lo.Entry[string, int], _ int) string {
 			return entry.Key
 		})
-	} else {
-		return fwk.NewStatus(fwk.Error, "not enough GPUs on nominated node:"+nodeName)
 	}
 
 	// reserve GPU resources inside memory and asynchronously update GPU custom resource

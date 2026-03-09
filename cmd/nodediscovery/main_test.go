@@ -45,7 +45,7 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&tfv1.GPU{}).Build()
 
 	gpu, err := createOrUpdateTensorFusionGPU(
-		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1)
+		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1, nil)
 	assert.NoError(t, err)
 
 	// Assertions
@@ -76,7 +76,7 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 
 	tflops.Add(resource.MustParse("100"))
 	updatedGpu, err := createOrUpdateTensorFusionGPU(
-		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1,
+		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1, nil,
 	)
 	assert.NoError(t, err)
 	assert.NotEqual(t, updatedGpu.Status.Capacity, gpu.Status.Capacity, "GPU capacity should not match")
@@ -124,7 +124,7 @@ func TestGPUControllerReference(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&tfv1.GPU{}).Build()
 
 	gpu, err := createOrUpdateTensorFusionGPU(
-		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1)
+		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1, nil)
 	assert.NoError(t, err)
 	assert.True(t, metav1.IsControlledBy(gpu, gpuNode))
 
@@ -141,7 +141,7 @@ func TestGPUControllerReference(t *testing.T) {
 	}
 
 	gpu, err = createOrUpdateTensorFusionGPU(
-		k8sClient, ctx, k8sNodeName, newGpuNode, uuid, deviceName, memInfo, tflops, 1, -1)
+		k8sClient, ctx, k8sNodeName, newGpuNode, uuid, deviceName, memInfo, tflops, 1, -1, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, gpu.OwnerReferences[0].Kind)
 	assert.NotNil(t, gpu.OwnerReferences[0].APIVersion)
@@ -364,6 +364,46 @@ func TestPatchGPUNodeStatus_ErrorScenarios(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.expectedErr, "Error message should contain expected text")
 		})
 	}
+}
+
+func TestEstimateNvLinkBandwidthMBps(t *testing.T) {
+	assert.Equal(t, int64(50000), estimateNvLinkBandwidthMBps(4))
+	assert.Equal(t, int64(25000), estimateNvLinkBandwidthMBps(99))
+	assert.Equal(t, int64(0), estimateNvLinkBandwidthMBps(0))
+}
+
+func TestPciBusIDToString(t *testing.T) {
+	pci := nvml.PciInfo{
+		BusId: [32]uint8{'0', '0', '0', '0', ':', '0', '1', ':', '0', '0', '.', '0'},
+	}
+	assert.Equal(t, "0000:01:00.0", pciBusIDToString(pci))
+
+	legacyOnly := nvml.PciInfo{
+		BusIdLegacy: [16]uint8{'0', '0', '0', '0', ':', '0', '2', ':', '0', '0', '.', '0'},
+	}
+	assert.Equal(t, "0000:02:00.0", pciBusIDToString(legacyOnly))
+}
+
+func TestCloneNvLinkStatus(t *testing.T) {
+	src := &tfv1.GPUNvLinkStatus{
+		PeerCount:          1,
+		TotalLinkCount:     2,
+		TotalBandwidthMBps: 200000,
+		Peers: []tfv1.GPUNvLinkPeer{
+			{
+				PeerUUID:      "gpu-1",
+				LinkCount:     2,
+				LinkVersion:   4,
+				BandwidthMBps: 200000,
+			},
+		},
+	}
+	cloned := cloneNvLinkStatus(src)
+	assert.NotNil(t, cloned)
+	assert.Equal(t, src, cloned)
+
+	src.Peers[0].PeerUUID = "changed"
+	assert.Equal(t, "gpu-1", cloned.Peers[0].PeerUUID, "clone should not share peers slice")
 }
 
 func TestPatchGPUNodeStatus_Integration(t *testing.T) {
