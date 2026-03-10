@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/provider"
@@ -50,6 +51,8 @@ var workerDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("50m"),
 	v1.ResourceMemory: resource.MustParse("128Mi"),
 }
+
+var workerPodIndexCounter uint32
 var featureShortcutMap = map[string]struct {
 	EnvName  string
 	EnvValue string
@@ -224,6 +227,8 @@ func AddTFDefaultClientConfBeforePatch(
 	tfInfo TensorFusionInfo,
 	injectContainerIndices []int,
 ) {
+	applyAscendRuntimeClassIfNeeded(&pod.Spec, tfInfo.Profile)
+
 	clientConfig := pool.Spec.ComponentConfig.Client
 	if !tfInfo.Profile.IsLocalGPU {
 		// Remote mode still relies on the client initContainer to inject TF libs/config.
@@ -752,11 +757,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 }
 
 func applyProviderHypervisorConfig(spec *v1.PodSpec, vendor string) {
-	mgr := provider.GetManager()
-	if mgr == nil {
-		return
-	}
-	providerCfg, ok := mgr.GetProvider(vendor)
+	providerCfg, ok := getProviderConfig(vendor)
 	if !ok || providerCfg.Spec.Hypervisor == nil {
 		return
 	}
@@ -773,12 +774,41 @@ func applyProviderHypervisorConfig(spec *v1.PodSpec, vendor string) {
 		spec.Containers[0].SecurityContext.Privileged = ptr.To(true)
 	}
 
-	if len(hypervisorCfg.HostPathMounts) == 0 {
+	applyProviderHostPathMounts(spec, 0, hypervisorCfg.HostPathMounts)
+}
+
+func applyProviderRemoteWorkerConfig(spec *v1.PodSpec, vendor string) {
+	if !strings.EqualFold(strings.TrimSpace(vendor), constants.AcceleratorVendorHuaweiAscendNPU) {
+		return
+	}
+
+	providerCfg, ok := getProviderConfig(vendor)
+	if !ok || providerCfg.Spec.Hypervisor == nil {
+		return
+	}
+
+	hypervisorCfg := providerCfg.Spec.Hypervisor
+	if hypervisorCfg.LDLibraryPath != "" {
+		spec.Containers[0].Env = appendLDLibraryPath(spec.Containers[0].Env, hypervisorCfg.LDLibraryPath)
+	}
+	applyProviderHostPathMounts(spec, 0, hypervisorCfg.HostPathMounts)
+}
+
+func getProviderConfig(vendor string) (*tfv1.ProviderConfig, bool) {
+	mgr := provider.GetManager()
+	if mgr == nil {
+		return nil, false
+	}
+	return mgr.GetProvider(vendor)
+}
+
+func applyProviderHostPathMounts(spec *v1.PodSpec, containerIndex int, mounts []tfv1.ProviderHypervisorHostPathMount) {
+	if len(mounts) == 0 {
 		return
 	}
 
 	existingMounts := make(map[string]bool)
-	for _, mount := range spec.Containers[0].VolumeMounts {
+	for _, mount := range spec.Containers[containerIndex].VolumeMounts {
 		existingMounts[mount.Name] = true
 	}
 	existingVolumes := make(map[string]bool)
@@ -786,12 +816,12 @@ func applyProviderHypervisorConfig(spec *v1.PodSpec, vendor string) {
 		existingVolumes[volume.Name] = true
 	}
 
-	for _, mount := range hypervisorCfg.HostPathMounts {
+	for _, mount := range mounts {
 		if mount.Name == "" || mount.HostPath == "" || mount.MountPath == "" {
 			continue
 		}
 		if !existingMounts[mount.Name] {
-			spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
+			spec.Containers[containerIndex].VolumeMounts = append(spec.Containers[containerIndex].VolumeMounts, v1.VolumeMount{
 				Name:      mount.Name,
 				MountPath: mount.MountPath,
 				ReadOnly:  mount.ReadOnly,
@@ -940,7 +970,7 @@ func SetWorkerContainerSpec(
 		})
 	}
 
-	if !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) {
+	if shouldInjectCudaLimiter(workloadProfile.GPUVendor) && !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) {
 		// TODO: In hard isolation mode, current implementation relies on limiter to set CUDA_VISIBLE_DEVICES env.
 		// In next hypervisor versions, device allocation will be handled by device-plugin, so LD_PRELOAD should be removed.
 		container.Env = append(container.Env, v1.EnvVar{
@@ -1010,6 +1040,8 @@ func AddWorkerConfAfterTemplate(
 
 	// Configure worker container
 	SetWorkerContainerSpec(&spec.Containers[0], workloadProfile, workerConfig, hypervisorConfig, disabledFeatures, false)
+	assignWorkerPodIndexResource(&spec.Containers[0])
+	applyProviderRemoteWorkerConfig(spec, workloadProfile.GPUVendor)
 
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{
@@ -1023,8 +1055,41 @@ func AddWorkerConfAfterTemplate(
 	})
 
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
+	applyAscendRuntimeClassIfNeeded(spec, workloadProfile)
 
 	return spec.Containers[0].Name
+}
+
+func assignWorkerPodIndexResource(container *v1.Container) {
+	if container == nil || hasPodIndexResourceClaim(container) {
+		return
+	}
+	if container.Resources.Limits == nil {
+		container.Resources.Limits = make(v1.ResourceList)
+	}
+
+	index := nextWorkerPodIndex()
+	indexKey := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, index/constants.IndexModLength)
+	indexQuantity := resource.MustParse(strconv.Itoa((index % constants.IndexModLength) + 1))
+	container.Resources.Limits[v1.ResourceName(indexKey)] = indexQuantity
+}
+
+func hasPodIndexResourceClaim(container *v1.Container) bool {
+	if container == nil || container.Resources.Limits == nil {
+		return false
+	}
+	for key := range container.Resources.Limits {
+		if strings.HasPrefix(string(key), constants.PodIndexAnnotation+constants.PodIndexDelimiter) {
+			return true
+		}
+	}
+	return false
+}
+
+func nextWorkerPodIndex() int {
+	maxIndex := uint32(constants.IndexKeyLength * constants.IndexModLength)
+	next := atomic.AddUint32(&workerPodIndexCounter, 1)
+	return int((next - 1) % maxIndex)
 }
 
 // GetClientImage returns the client image for a vendor using Provider Manager
@@ -1061,4 +1126,23 @@ func shouldInjectNvidiaVisibleDevices(vendor string) bool {
 		return true
 	}
 	return strings.EqualFold(vendor, constants.AcceleratorVendorNvidia)
+}
+
+func shouldInjectCudaLimiter(vendor string) bool {
+	return shouldInjectNvidiaVisibleDevices(vendor)
+}
+
+func applyAscendRuntimeClassIfNeeded(spec *v1.PodSpec, profile *tfv1.WorkloadProfileSpec) {
+	if spec == nil || profile == nil {
+		return
+	}
+	if spec.RuntimeClassName != nil && *spec.RuntimeClassName != "" {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(profile.GPUVendor), constants.AcceleratorVendorHuaweiAscendNPU) {
+		return
+	}
+	if !profile.IsLocalGPU || profile.Isolation == tfv1.IsolationModePartitioned {
+		spec.RuntimeClassName = ptr.To(constants.AscendRuntimeClassName)
+	}
 }

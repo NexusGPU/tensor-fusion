@@ -255,6 +255,7 @@ const (
 		":" + AscendDriverLibDir +
 		":" + AscendDriverCommonDir +
 		":" + AscendDCMILibDir
+	AscendRuntimeClassName = "ascend"
 	AscendDriverVolumeName = "ascend-driver"
 	AscendDCMIVolumeName   = "ascend-dcmi"
 	AscendHostDevVolume    = "ascend-host-dev"

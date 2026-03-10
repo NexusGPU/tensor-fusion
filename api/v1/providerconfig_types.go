@@ -61,7 +61,8 @@ type ProviderHypervisorConfig struct {
 	// +optional
 	PrivilegedHypervisor bool `json:"privilegedHypervisor,omitempty"`
 
-	// LDLibraryPath appends entries to LD_LIBRARY_PATH for the hypervisor container
+	// LDLibraryPath appends entries to LD_LIBRARY_PATH for the hypervisor container.
+	// Vendor remote workers may also reuse this when host driver libraries must be mounted.
 	// +optional
 	LDLibraryPath string `json:"ldLibraryPath,omitempty"`
 
@@ -71,7 +72,8 @@ type ProviderHypervisorConfig struct {
 	// +optional
 	ExtraEnv []ProviderHypervisorEnvVar `json:"extraEnv,omitempty"`
 
-	// HostPathMounts adds host path mounts to the hypervisor pod
+	// HostPathMounts adds host path mounts to the hypervisor pod.
+	// Vendor remote workers may also reuse these mounts when they depend on host driver libraries.
 	// +optional
 	HostPathMounts []ProviderHypervisorHostPathMount `json:"hostPathMounts,omitempty"`
 

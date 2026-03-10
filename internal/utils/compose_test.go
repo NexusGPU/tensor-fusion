@@ -2,6 +2,7 @@ package utils_test
 
 import (
 	"context"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -9,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 )
@@ -22,7 +24,51 @@ func hasNvidiaVisibleEnv(envs []corev1.EnvVar) bool {
 	return false
 }
 
+func envValue(envs []corev1.EnvVar, name string) (string, bool) {
+	for _, env := range envs {
+		if env.Name == name {
+			return env.Value, true
+		}
+	}
+	return "", false
+}
+
+func hasVolumeMount(mounts []corev1.VolumeMount, name, path string) bool {
+	for _, mount := range mounts {
+		if mount.Name == name && mount.MountPath == path {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHostPathVolume(volumes []corev1.Volume, name, path string) bool {
+	for _, volume := range volumes {
+		if volume.Name == name && volume.HostPath != nil && volume.HostPath.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func hasIndexResourceLimit(resources corev1.ResourceRequirements) bool {
+	for key := range resources.Limits {
+		if strings.HasPrefix(string(key), constants.PodIndexAnnotation+constants.PodIndexDelimiter) {
+			return true
+		}
+	}
+	return false
+}
+
+func ptr(s string) *string {
+	return &s
+}
+
 var _ = Describe("Compose Utils", func() {
+	AfterEach(func() {
+		provider.SetGlobalManagerForTesting(nil)
+	})
+
 	Describe("AddTFHypervisorConfAfterTemplate", func() {
 		DescribeTable("configures hypervisor correctly",
 			func(enableVector bool, hypervisorImage string, expectInitCount, expectVolumeCount int) {
@@ -137,11 +183,68 @@ var _ = Describe("Compose Utils", func() {
 			Expect(pod.Spec.InitContainers[0].Name).To(Equal(constants.TFContainerNameClient))
 			Expect(pod.Spec.Containers).To(HaveLen(1))
 		})
+
+		It("should auto set runtimeClassName for Ascend remote mode", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: false,
+					GPUVendor:  constants.AcceleratorVendorHuaweiAscendNPU,
+					Isolation:  tfv1.IsolationModeShared,
+				},
+			}, []int{0})
+
+			Expect(pod.Spec.RuntimeClassName).NotTo(BeNil())
+			Expect(*pod.Spec.RuntimeClassName).To(Equal(constants.AscendRuntimeClassName))
+		})
+
+		It("should auto set runtimeClassName for Ascend partitioned local mode", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: true,
+					GPUVendor:  constants.AcceleratorVendorHuaweiAscendNPU,
+					Isolation:  tfv1.IsolationModePartitioned,
+				},
+			}, []int{0})
+
+			Expect(pod.Spec.RuntimeClassName).NotTo(BeNil())
+			Expect(*pod.Spec.RuntimeClassName).To(Equal(constants.AscendRuntimeClassName))
+		})
+
+		It("should keep existing runtimeClassName", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec: corev1.PodSpec{
+					RuntimeClassName: ptr("custom-runtime"),
+					Containers:       []corev1.Container{{Name: "main"}},
+				},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: false,
+					GPUVendor:  constants.AcceleratorVendorHuaweiAscendNPU,
+					Isolation:  tfv1.IsolationModeShared,
+				},
+			}, []int{0})
+
+			Expect(pod.Spec.RuntimeClassName).NotTo(BeNil())
+			Expect(*pod.Spec.RuntimeClassName).To(Equal("custom-runtime"))
+		})
 	})
 
 	Describe("SetWorkerContainerSpec", func() {
 		DescribeTable("configures worker container correctly",
-			func(vendor, workerImage, disabledFeatures string, sharedMemMode bool, expectCommand []string, expectNvidiaVisibleEnv bool) {
+			func(vendor, workerImage, disabledFeatures string, sharedMemMode bool, expectCommand []string, expectNvidiaVisibleEnv, expectLdPreload bool) {
 				container := &corev1.Container{}
 				workloadProfile := &tfv1.WorkloadProfileSpec{
 					GPUVendor: vendor,
@@ -162,6 +265,8 @@ var _ = Describe("Compose Utils", func() {
 				Expect(container.Command).NotTo(BeEmpty(), "container command should not be empty")
 				Expect(container.Command).To(Equal(expectCommand), "container command should match expected value")
 				Expect(hasNvidiaVisibleEnv(container.Env)).To(Equal(expectNvidiaVisibleEnv))
+				_, hasLdPreload := envValue(container.Env, constants.LdPreloadEnv)
+				Expect(hasLdPreload).To(Equal(expectLdPreload))
 
 				// Verify shared memory mode specific setup
 				if sharedMemMode && disabledFeatures == "" {
@@ -180,21 +285,82 @@ var _ = Describe("Compose Utils", func() {
 				"./tensor-fusion-worker",
 				"-p",
 				"8000",
-			}, true),
+			}, true, true),
 			Entry("worker with shared memory mode", "NVIDIA", "worker:latest", "", true, []string{
 				"/bin/bash",
 				"-c",
 				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 256",
-			}, true),
+			}, true, true),
 			Entry("worker with disabled start-worker feature", "NVIDIA", "worker:latest", "start-worker", false, []string{
 				"sleep",
 				"infinity",
-			}, true),
+			}, true, true),
 			Entry("worker without nvidia visible env for Ascend", "Ascend", "worker:latest", "", false, []string{
 				"./tensor-fusion-worker",
 				"-p",
 				"8000",
-			}, false),
+			}, false, false),
 		)
+
+		It("should apply provider runtime mounts and ld library path for Ascend remote worker", func() {
+			providerMgr := provider.NewManager(nil)
+			providerMgr.UpdateProvider(&tfv1.ProviderConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: "ascend-provider"},
+				Spec: tfv1.ProviderConfigSpec{
+					Vendor: constants.AcceleratorVendorHuaweiAscendNPU,
+					Hypervisor: &tfv1.ProviderHypervisorConfig{
+						LDLibraryPath: constants.AscendLDLibraryPath,
+						HostPathMounts: []tfv1.ProviderHypervisorHostPathMount{
+							{
+								Name:      constants.AscendDriverVolumeName,
+								HostPath:  constants.AscendDriverHostPath,
+								MountPath: constants.AscendDriverHostPath,
+								ReadOnly:  true,
+							},
+							{
+								Name:      constants.AscendDCMIVolumeName,
+								HostPath:  constants.AscendDCMIHostPath,
+								MountPath: constants.AscendDCMIHostPath,
+								ReadOnly:  true,
+							},
+						},
+					},
+					Images: tfv1.ProviderImages{
+						Middleware:   "ascend-hypervisor:latest",
+						RemoteWorker: "ascend-worker:latest",
+					},
+				},
+			})
+			provider.SetGlobalManagerForTesting(providerMgr)
+
+			spec := corev1.PodSpec{Containers: []corev1.Container{{}}}
+			workload := &tfv1.TensorFusionWorkload{
+				Spec: tfv1.WorkloadProfileSpec{
+					GPUVendor: constants.AcceleratorVendorHuaweiAscendNPU,
+				},
+			}
+
+			utils.AddWorkerConfAfterTemplate(
+				context.Background(),
+				&spec,
+				&workload.Spec,
+				&tfv1.WorkerConfig{Image: "worker:latest"},
+				&tfv1.HypervisorConfig{},
+				workload,
+			)
+
+			ldLibraryPath, ok := envValue(spec.Containers[0].Env, "LD_LIBRARY_PATH")
+			Expect(ok).To(BeTrue())
+			Expect(ldLibraryPath).To(Equal(constants.AscendLDLibraryPath))
+			Expect(spec.RuntimeClassName).NotTo(BeNil())
+			Expect(*spec.RuntimeClassName).To(Equal(constants.AscendRuntimeClassName))
+			_, hasLdPreload := envValue(spec.Containers[0].Env, constants.LdPreloadEnv)
+			Expect(hasLdPreload).To(BeFalse())
+			Expect(hasIndexResourceLimit(spec.Containers[0].Resources)).To(BeTrue())
+			Expect(hasVolumeMount(spec.Containers[0].VolumeMounts, constants.AscendDriverVolumeName, constants.AscendDriverHostPath)).To(BeTrue())
+			Expect(hasVolumeMount(spec.Containers[0].VolumeMounts, constants.AscendDCMIVolumeName, constants.AscendDCMIHostPath)).To(BeTrue())
+			Expect(hasHostPathVolume(spec.Volumes, constants.AscendDriverVolumeName, constants.AscendDriverHostPath)).To(BeTrue())
+			Expect(hasHostPathVolume(spec.Volumes, constants.AscendDCMIVolumeName, constants.AscendDCMIHostPath)).To(BeTrue())
+		})
 	})
 })
