@@ -596,6 +596,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, enableVect
 	}
 
 	spec.Containers[0].SecurityContext = &v1.SecurityContext{
+		Privileged: ptr.To(true),
 		Capabilities: &v1.Capabilities{
 			Add: []v1.Capability{
 				constants.SystemPtraceCapability,
