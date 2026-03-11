@@ -2,6 +2,7 @@ package utils
 
 import (
 	context "context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -958,6 +959,51 @@ func SetWorkerContainerSpec(
 	if len(container.Resources.Requests) == 0 {
 		container.Resources.Requests = workerDefaultRequests
 	}
+}
+
+// HypervisorTemplateHash computes hash of the full hypervisor pod template
+// including code-level defaults from AddTFHypervisorConfAfterTemplate.
+func HypervisorTemplateHash(pool *tfv1.GPUPool) string {
+	podTmpl := &v1.PodTemplate{}
+	if pool.Spec.ComponentConfig.Hypervisor.PodTemplate != nil {
+		json.Unmarshal(pool.Spec.ComponentConfig.Hypervisor.PodTemplate.Raw, podTmpl) //nolint:errcheck
+	}
+	spec := podTmpl.Template.Spec
+	AddTFHypervisorConfAfterTemplate(context.Background(), &spec, pool)
+	return GetObjectHash(spec)
+}
+
+// WorkerTemplateHash computes hash of the base worker pod template
+// including code-level defaults from SetWorkerContainerSpec.
+// Only the hypervisor port number is included — other hypervisor config
+// changes should not cascade to worker pod recreation.
+func WorkerTemplateHash(workerConfig *tfv1.WorkerConfig, hypervisorConfig *tfv1.HypervisorConfig) string {
+	podTmpl := &v1.PodTemplate{}
+	if workerConfig.PodTemplate != nil {
+		json.Unmarshal(workerConfig.PodTemplate.Raw, podTmpl) //nolint:errcheck
+	}
+	spec := podTmpl.Template.Spec
+	if len(spec.Containers) == 0 {
+		spec.Containers = []v1.Container{{}}
+	}
+	// Use a minimal HypervisorConfig containing only the port number,
+	// so that unrelated hypervisor changes don't affect the worker hash.
+	portOnly := &tfv1.HypervisorConfig{}
+	if hypervisorConfig != nil && hypervisorConfig.PortNumber != nil {
+		portOnly.PortNumber = hypervisorConfig.PortNumber
+	}
+	SetWorkerContainerSpec(&spec.Containers[0], &tfv1.WorkloadProfileSpec{}, workerConfig, portOnly, "", false)
+	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
+	return GetObjectHash(spec)
+}
+
+// ClientTemplateHash computes hash of the base client injection template
+// including code-level defaults from AddTFDefaultClientConfBeforePatch.
+func ClientTemplateHash(pool *tfv1.GPUPool) string {
+	pod := &v1.Pod{Spec: v1.PodSpec{Containers: []v1.Container{{Name: "baseline"}}}}
+	tfInfo := TensorFusionInfo{Profile: &tfv1.WorkloadProfileSpec{}}
+	AddTFDefaultClientConfBeforePatch(context.Background(), pod, pool, tfInfo, []int{0})
+	return GetObjectHash(pod.Spec)
 }
 
 func AddWorkerConfAfterTemplate(

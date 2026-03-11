@@ -58,7 +58,7 @@ var _ = Describe("GPUPool Controller", func() {
 			tfEnv := NewTensorFusionEnvBuilder().AddPoolWithNodeCount(0).Build()
 			By("verifying hypervisor status should be initialized when the gpu pool is created")
 			pool := tfEnv.GetGPUPool(0)
-			oldHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
+			oldHash := utils.HypervisorTemplateHash(pool)
 			Eventually(func(g Gomega) {
 				pool := tfEnv.GetGPUPool(0)
 				g.Expect(pool.Status.ComponentStatus.HypervisorVersion).To(Equal(oldHash))
@@ -70,7 +70,7 @@ var _ = Describe("GPUPool Controller", func() {
 			updateHypervisorConfig(tfEnv)
 			Eventually(func(g Gomega) {
 				pool := tfEnv.GetGPUPool(0)
-				newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
+				newHash := utils.HypervisorTemplateHash(pool)
 				g.Expect(newHash).ShouldNot(Equal(oldHash))
 				g.Expect(pool.Status.ComponentStatus.HypervisorVersion).To(Equal(newHash))
 				g.Expect(pool.Status.ComponentStatus.HyperVisorUpdateProgress).To(BeZero())
@@ -161,7 +161,7 @@ var _ = Describe("GPUPool Controller", func() {
 			tfEnv := NewTensorFusionEnvBuilder().AddPoolWithNodeCount(0).Build()
 			By("verifying worker status should be initialized when the gpu pool is created")
 			pool := tfEnv.GetGPUPool(0)
-			oldHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Worker)
+			oldHash := utils.WorkerTemplateHash(pool.Spec.ComponentConfig.Worker, pool.Spec.ComponentConfig.Hypervisor)
 			Eventually(func(g Gomega) {
 				pool := tfEnv.GetGPUPool(0)
 				g.Expect(pool.Status.ComponentStatus.WorkerVersion).To(Equal(oldHash))
@@ -173,7 +173,7 @@ var _ = Describe("GPUPool Controller", func() {
 			updateWorkerConfig(tfEnv)
 			Eventually(func(g Gomega) {
 				pool := tfEnv.GetGPUPool(0)
-				newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Worker)
+				newHash := utils.WorkerTemplateHash(pool.Spec.ComponentConfig.Worker, pool.Spec.ComponentConfig.Hypervisor)
 				g.Expect(newHash).ShouldNot(Equal(oldHash))
 				g.Expect(pool.Status.ComponentStatus.WorkerVersion).To(Equal(newHash))
 				g.Expect(pool.Status.ComponentStatus.WorkerUpdateProgress).To(BeZero())
@@ -237,7 +237,7 @@ var _ = Describe("GPUPool Controller", func() {
 			tfEnv := NewTensorFusionEnvBuilder().AddPoolWithNodeCount(0).Build()
 			By("verifying client status should be initialized when the gpu pool is created")
 			pool := tfEnv.GetGPUPool(0)
-			oldHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Client)
+			oldHash := utils.ClientTemplateHash(pool)
 			Eventually(func(g Gomega) {
 				pool := tfEnv.GetGPUPool(0)
 				g.Expect(pool.Status.ComponentStatus.ClientVersion).To(Equal(oldHash))
@@ -249,7 +249,7 @@ var _ = Describe("GPUPool Controller", func() {
 			updateClientConfig(tfEnv)
 			Eventually(func(g Gomega) {
 				pool := tfEnv.GetGPUPool(0)
-				newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Client)
+				newHash := utils.ClientTemplateHash(pool)
 				g.Expect(newHash).ShouldNot(Equal(oldHash))
 				g.Expect(pool.Status.ComponentStatus.ClientVersion).To(Equal(newHash))
 				g.Expect(pool.Status.ComponentStatus.ClientUpdateProgress).To(BeZero())
@@ -390,7 +390,7 @@ func verifyGpuPoolClientHash(tfEnv *TensorFusionEnv, oldHash string) string {
 	pool := &tfv1.GPUPool{}
 	Eventually(func(g Gomega) {
 		pool = tfEnv.GetGPUPool(0)
-		newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Client)
+		newHash := utils.ClientTemplateHash(pool)
 		g.Expect(newHash).ShouldNot(Equal(oldHash))
 		g.Expect(pool.Status.ComponentStatus.ClientVersion).To(Equal(newHash))
 	}).Should(Succeed())
@@ -403,7 +403,7 @@ func verifyGpuPoolHypervisorHash(tfEnv *TensorFusionEnv, oldHash string) string 
 	pool := &tfv1.GPUPool{}
 	Eventually(func(g Gomega) {
 		pool = tfEnv.GetGPUPool(0)
-		newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
+		newHash := utils.HypervisorTemplateHash(pool)
 		g.Expect(newHash).ShouldNot(Equal(oldHash))
 		g.Expect(pool.Status.ComponentStatus.HypervisorVersion).To(Equal(newHash))
 	}).Should(Succeed())
@@ -416,7 +416,7 @@ func verifyGpuPoolWorkerHash(tfEnv *TensorFusionEnv, oldHash string) string {
 	pool := &tfv1.GPUPool{}
 	Eventually(func(g Gomega) {
 		pool = tfEnv.GetGPUPool(0)
-		newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Worker)
+		newHash := utils.WorkerTemplateHash(pool.Spec.ComponentConfig.Worker, pool.Spec.ComponentConfig.Hypervisor)
 		g.Expect(newHash).ShouldNot(Equal(oldHash))
 		g.Expect(pool.Status.ComponentStatus.WorkerVersion).To(Equal(newHash))
 	}).Should(Succeed())
@@ -691,7 +691,7 @@ func createClientPodByIndex(tfEnv *TensorFusionEnv, index int) {
 			Labels: map[string]string{
 				constants.TensorFusionEnabledLabelKey: constants.TrueStringValue,
 				constants.GpuPoolKey:                  pool.Name,
-				constants.LabelKeyPodTemplateHash:     utils.GetObjectHash(pool.Spec.ComponentConfig.Client),
+				constants.LabelKeyPodTemplateHash:     utils.ClientTemplateHash(pool),
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -723,7 +723,7 @@ func createClientPods(tfEnv *TensorFusionEnv, count int) {
 				Labels: map[string]string{
 					constants.TensorFusionEnabledLabelKey: constants.TrueStringValue,
 					constants.GpuPoolKey:                  pool.Name,
-					constants.LabelKeyPodTemplateHash:     utils.GetObjectHash(pool.Spec.ComponentConfig.Client),
+					constants.LabelKeyPodTemplateHash:     utils.ClientTemplateHash(pool),
 				},
 			},
 			Spec: corev1.PodSpec{

@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -275,5 +276,139 @@ func TestNodeDiscoveryInitContainerImageFallback(t *testing.T) {
 		require.Len(t, tmpl.Spec.InitContainers, 1)
 		require.Equal(t, constants.TFInitContainerNameToolkitValidation, tmpl.Spec.InitContainers[0].Name)
 		require.Equal(t, "fallback-discovery:v2.0", tmpl.Spec.InitContainers[0].Image)
+	})
+}
+
+func TestHypervisorTemplateHash(t *testing.T) {
+	basePool := func() *tfv1.GPUPool {
+		return &tfv1.GPUPool{
+			Spec: tfv1.GPUPoolSpec{
+				ComponentConfig: &tfv1.ComponentConfig{
+					Hypervisor: &tfv1.HypervisorConfig{
+						Image: "hypervisor:v1",
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("deterministic - same config produces same hash", func(t *testing.T) {
+		hash1 := utils.HypervisorTemplateHash(basePool())
+		hash2 := utils.HypervisorTemplateHash(basePool())
+		require.Equal(t, hash1, hash2)
+	})
+
+	t.Run("non-empty hash", func(t *testing.T) {
+		hash := utils.HypervisorTemplateHash(basePool())
+		require.NotEmpty(t, hash)
+	})
+
+	t.Run("changes when image changes", func(t *testing.T) {
+		pool1 := basePool()
+		pool2 := basePool()
+		pool2.Spec.ComponentConfig.Hypervisor.Image = "hypervisor:v2"
+		require.NotEqual(t, utils.HypervisorTemplateHash(pool1), utils.HypervisorTemplateHash(pool2))
+	})
+
+	t.Run("changes when enableVector changes", func(t *testing.T) {
+		pool1 := basePool()
+		pool2 := basePool()
+		pool2.Spec.ComponentConfig.Hypervisor.EnableVector = true
+		require.NotEqual(t, utils.HypervisorTemplateHash(pool1), utils.HypervisorTemplateHash(pool2))
+	})
+
+	t.Run("changes when port changes", func(t *testing.T) {
+		pool1 := basePool()
+		pool2 := basePool()
+		pool2.Spec.ComponentConfig.Hypervisor.PortNumber = ptr.To[int32](9999)
+		require.NotEqual(t, utils.HypervisorTemplateHash(pool1), utils.HypervisorTemplateHash(pool2))
+	})
+}
+
+func TestWorkerTemplateHash(t *testing.T) {
+	baseWorker := func() *tfv1.WorkerConfig {
+		return &tfv1.WorkerConfig{Image: "worker:v1"}
+	}
+	baseHypervisor := func() *tfv1.HypervisorConfig {
+		return &tfv1.HypervisorConfig{Image: "hypervisor:v1"}
+	}
+
+	t.Run("deterministic - same config produces same hash", func(t *testing.T) {
+		hash1 := utils.WorkerTemplateHash(baseWorker(), baseHypervisor())
+		hash2 := utils.WorkerTemplateHash(baseWorker(), baseHypervisor())
+		require.Equal(t, hash1, hash2)
+	})
+
+	t.Run("non-empty hash", func(t *testing.T) {
+		hash := utils.WorkerTemplateHash(baseWorker(), baseHypervisor())
+		require.NotEmpty(t, hash)
+	})
+
+	t.Run("changes when worker image changes", func(t *testing.T) {
+		w1 := baseWorker()
+		w2 := &tfv1.WorkerConfig{Image: "worker:v2"}
+		hv := baseHypervisor()
+		require.NotEqual(t, utils.WorkerTemplateHash(w1, hv), utils.WorkerTemplateHash(w2, hv))
+	})
+
+	t.Run("does NOT change when hypervisor image changes", func(t *testing.T) {
+		w := baseWorker()
+		hv1 := &tfv1.HypervisorConfig{Image: "hypervisor:v1"}
+		hv2 := &tfv1.HypervisorConfig{Image: "hypervisor:v2"}
+		require.Equal(t, utils.WorkerTemplateHash(w, hv1), utils.WorkerTemplateHash(w, hv2))
+	})
+
+	t.Run("does NOT change when hypervisor enableVector changes", func(t *testing.T) {
+		w := baseWorker()
+		hv1 := &tfv1.HypervisorConfig{Image: "hypervisor:v1", EnableVector: false}
+		hv2 := &tfv1.HypervisorConfig{Image: "hypervisor:v1", EnableVector: true}
+		require.Equal(t, utils.WorkerTemplateHash(w, hv1), utils.WorkerTemplateHash(w, hv2))
+	})
+
+	t.Run("changes when hypervisor port changes", func(t *testing.T) {
+		w := baseWorker()
+		hv1 := &tfv1.HypervisorConfig{PortNumber: ptr.To[int32](8000)}
+		hv2 := &tfv1.HypervisorConfig{PortNumber: ptr.To[int32](9000)}
+		require.NotEqual(t, utils.WorkerTemplateHash(w, hv1), utils.WorkerTemplateHash(w, hv2))
+	})
+
+	t.Run("nil hypervisor config is safe", func(t *testing.T) {
+		hash := utils.WorkerTemplateHash(baseWorker(), nil)
+		require.NotEmpty(t, hash)
+	})
+}
+
+func TestClientTemplateHash(t *testing.T) {
+	basePool := func() *tfv1.GPUPool {
+		return &tfv1.GPUPool{
+			Spec: tfv1.GPUPoolSpec{
+				ComponentConfig: &tfv1.ComponentConfig{
+					Client: &tfv1.ClientConfig{
+						RemoteModeImage: "client:v1",
+					},
+					Hypervisor: &tfv1.HypervisorConfig{
+						Image: "hypervisor:v1",
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("deterministic - same config produces same hash", func(t *testing.T) {
+		hash1 := utils.ClientTemplateHash(basePool())
+		hash2 := utils.ClientTemplateHash(basePool())
+		require.Equal(t, hash1, hash2)
+	})
+
+	t.Run("non-empty hash", func(t *testing.T) {
+		hash := utils.ClientTemplateHash(basePool())
+		require.NotEmpty(t, hash)
+	})
+
+	t.Run("changes when client image changes", func(t *testing.T) {
+		pool1 := basePool()
+		pool2 := basePool()
+		pool2.Spec.ComponentConfig.Client.RemoteModeImage = "client:v2"
+		require.NotEqual(t, utils.ClientTemplateHash(pool1), utils.ClientTemplateHash(pool2))
 	})
 }
