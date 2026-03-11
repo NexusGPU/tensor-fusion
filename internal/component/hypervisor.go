@@ -29,8 +29,8 @@ func (h *Hypervisor) GetName() string {
 
 func (h *Hypervisor) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string) {
 	oldHash := status.HypervisorVersion
-	changed, newHash := utils.CompareAndGetObjectHash(oldHash, pool.Spec.ComponentConfig.Hypervisor)
-	return changed, newHash, oldHash
+	newHash := utils.HypervisorTemplateHash(pool)
+	return oldHash != newHash, newHash, oldHash
 }
 
 func (h *Hypervisor) SetConfigHash(status *tfv1.PoolComponentStatus, hash string) {

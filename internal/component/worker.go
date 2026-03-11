@@ -28,8 +28,8 @@ func (w *Worker) GetName() string {
 
 func (w *Worker) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string) {
 	oldHash := status.WorkerVersion
-	changed, newHash := utils.CompareAndGetObjectHash(oldHash, pool.Spec.ComponentConfig.Worker)
-	return changed, newHash, oldHash
+	newHash := utils.WorkerTemplateHash(pool.Spec.ComponentConfig.Worker, pool.Spec.ComponentConfig.Hypervisor)
+	return oldHash != newHash, newHash, oldHash
 }
 
 func (w *Worker) SetConfigHash(status *tfv1.PoolComponentStatus, hash string) {
