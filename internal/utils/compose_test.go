@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -409,6 +410,28 @@ func TestClientTemplateHash(t *testing.T) {
 		pool1 := basePool()
 		pool2 := basePool()
 		pool2.Spec.ComponentConfig.Client.RemoteModeImage = "client:v2"
+		require.NotEqual(t, utils.ClientTemplateHash(pool1), utils.ClientTemplateHash(pool2))
+	})
+
+	t.Run("changes when operatorEndpoint changes", func(t *testing.T) {
+		pool1 := basePool()
+		pool1.Spec.ComponentConfig.Client.OperatorEndpoint = "http://localhost:8080"
+		pool2 := basePool()
+		pool2.Spec.ComponentConfig.Client.OperatorEndpoint = "http://localhost:8081"
+		require.NotEqual(t, utils.ClientTemplateHash(pool1), utils.ClientTemplateHash(pool2))
+	})
+
+	t.Run("changes when patchToContainer changes", func(t *testing.T) {
+		pool1 := basePool()
+		pool2 := basePool()
+		pool2.Spec.ComponentConfig.Client.PatchToContainer = &runtime.RawExtension{Raw: []byte(`{"resources":{"limits":{"cpu":"2"}}}`)}
+		require.NotEqual(t, utils.ClientTemplateHash(pool1), utils.ClientTemplateHash(pool2))
+	})
+
+	t.Run("changes when patchToPod changes", func(t *testing.T) {
+		pool1 := basePool()
+		pool2 := basePool()
+		pool2.Spec.ComponentConfig.Client.PatchToPod = &runtime.RawExtension{Raw: []byte(`{"metadata":{"labels":{"test":"true"}}}`)}
 		require.NotEqual(t, utils.ClientTemplateHash(pool1), utils.ClientTemplateHash(pool2))
 	})
 }

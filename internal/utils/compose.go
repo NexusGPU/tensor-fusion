@@ -998,12 +998,15 @@ func WorkerTemplateHash(workerConfig *tfv1.WorkerConfig, hypervisorConfig *tfv1.
 }
 
 // ClientTemplateHash computes hash of the base client injection template
-// including code-level defaults from AddTFDefaultClientConfBeforePatch.
+// including code-level defaults from AddTFDefaultClientConfBeforePatch,
+// plus webhook-stage fields (OperatorEndpoint, PatchToContainer, etc.)
+// that also affect the final injected pod spec.
 func ClientTemplateHash(pool *tfv1.GPUPool) string {
 	pod := &v1.Pod{Spec: v1.PodSpec{Containers: []v1.Container{{Name: "baseline"}}}}
 	tfInfo := TensorFusionInfo{Profile: &tfv1.WorkloadProfileSpec{}}
 	AddTFDefaultClientConfBeforePatch(context.Background(), pod, pool, tfInfo, []int{0})
-	return GetObjectHash(pod.Spec)
+	clientConfig := pool.Spec.ComponentConfig.Client
+	return GetObjectHash(pod.Spec, clientConfig.OperatorEndpoint, clientConfig.PatchToPod, clientConfig.PatchToContainer, clientConfig.PatchEmbeddedWorkerToPod, clientConfig.PatchToEmbeddedWorkerContainer)
 }
 
 func AddWorkerConfAfterTemplate(
