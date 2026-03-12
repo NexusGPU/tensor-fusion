@@ -122,6 +122,21 @@ spec:
   hypervisor:
     privilegedHypervisor: true
     ldLibraryPath: "/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/dcmi"
+    # 仅静态 vNPU 场景使用该开关（由 hypervisor 透传为 ASCEND_RUNTIME_OPTIONS）。
+    # 动态切分场景通常不需要配置该项。
+    extraEnv:
+      - name: TF_ASCEND_PARTITION_RUNTIME_OPTIONS
+        value: VIRTUAL
+    deviceMount:
+      deviceMountRule: "true"
+      partitionedDeviceMountRule: "true" #device["hostPath"].startsWith("/dev/vdavinci")
+      sharedDevices:
+        - /dev/davinci_manager
+        - /dev/davinci_manager_docker
+        - /dev/devmm_svm
+        - /dev/hisi_hdc
+        - /dev/uburma/*
+        - /dev/ummu/*
     hostPathMounts:
       - name: ascend-driver
         hostPath: /usr/local/Ascend/driver

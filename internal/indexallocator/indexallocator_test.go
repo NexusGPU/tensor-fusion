@@ -5,6 +5,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
@@ -79,6 +82,68 @@ var _ = Describe("IndexAllocator", func() {
 			index, err := allocator.AssignIndex("pod-wrap")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(index).To(Equal(1), "index should wrap around from 128 to 1")
+		})
+	})
+
+	Describe("AsyncCheckNodeIndexAvailableAndAssign", func() {
+		It("should patch the pod index annotation when annotations already exist", func() {
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "worker-pod",
+					Namespace: "default",
+					Annotations: map[string]string{
+						"existing": "value",
+					},
+				},
+				Spec: v1.PodSpec{
+					NodeName: "node-a",
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodPending,
+				},
+			}
+			Expect(allocator.Client.Create(ctx, pod)).To(Succeed())
+
+			allocator.SetReady()
+			allocator.AsyncCheckNodeIndexAvailableAndAssign(pod, 3)
+
+			Eventually(func(g Gomega) {
+				updated := &v1.Pod{}
+				g.Expect(allocator.Client.Get(ctx, types.NamespacedName{
+					Namespace: pod.Namespace,
+					Name:      pod.Name,
+				}, updated)).To(Succeed())
+				g.Expect(updated.Annotations).To(HaveKeyWithValue(constants.PodIndexAnnotation, "3"))
+				g.Expect(updated.Annotations).To(HaveKeyWithValue("existing", "value"))
+			}).Should(Succeed())
+		})
+
+		It("should patch the pod index annotation when annotations are nil", func() {
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "worker-pod-no-annotations",
+					Namespace: "default",
+				},
+				Spec: v1.PodSpec{
+					NodeName: "node-a",
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodPending,
+				},
+			}
+			Expect(allocator.Client.Create(ctx, pod)).To(Succeed())
+
+			allocator.SetReady()
+			allocator.AsyncCheckNodeIndexAvailableAndAssign(pod, 7)
+
+			Eventually(func(g Gomega) {
+				updated := &v1.Pod{}
+				g.Expect(allocator.Client.Get(ctx, types.NamespacedName{
+					Namespace: pod.Namespace,
+					Name:      pod.Name,
+				}, updated)).To(Succeed())
+				g.Expect(updated.Annotations).To(HaveKeyWithValue(constants.PodIndexAnnotation, "7"))
+			}).Should(Succeed())
 		})
 	})
 })

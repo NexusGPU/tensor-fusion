@@ -98,9 +98,10 @@ func (kc *PodCacheManager) Start() error {
 	// Create a field selector to watch only pods on this node
 	fieldSelector := fields.OneTermEqualSelector("spec.nodeName", kc.nodeName).String()
 
-	// Create a label selector for pods with tensor-fusion.ai/enabled=true
+	// Create a label selector for TensorFusion worker pods on this node.
+	// Worker pods are the source of allocation metadata for device plugin index lookup.
 	labelSelector := labels.Set{
-		constants.TensorFusionEnabledLabelKey: constants.TrueStringValue,
+		constants.LabelComponent: constants.ComponentWorker,
 	}.AsSelector().String()
 
 	// Create list watcher
@@ -133,10 +134,10 @@ func (kc *PodCacheManager) Start() error {
 	go controller.Run(kc.stopCh)
 
 	klog.Infof(
-		"Started watching pods on node %s with label %s=%s",
+		"Started watching worker pods on node %s with label %s=%s",
 		kc.nodeName,
-		constants.TensorFusionEnabledLabelKey,
-		constants.TrueStringValue,
+		constants.LabelComponent,
+		constants.ComponentWorker,
 	)
 	return nil
 }

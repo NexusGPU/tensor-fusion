@@ -61,6 +61,57 @@ var _ = Describe("Node Controller", func() {
 			gpuNode := reconciler.generateGPUNode(node, pool, "")
 			Expect(gpuNode.Labels[constants.HypervisorIsolationModeLabel]).To(Equal(string(tfv1.IsolationModePartitioned)))
 		})
+
+		It("Should sync vendor and isolation-mode labels from node to existing gpunode", func() {
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-node-sync",
+					Labels: map[string]string{
+						constants.AcceleratorLabelVendor:       "Ascend",
+						constants.HypervisorIsolationModeLabel: string(tfv1.IsolationModeShared),
+					},
+				},
+			}
+			gpuNode := &tfv1.GPUNode{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-node-sync",
+					Labels: map[string]string{
+						constants.AcceleratorLabelVendor:       "NVIDIA",
+						constants.HypervisorIsolationModeLabel: string(tfv1.IsolationModePartitioned),
+					},
+				},
+			}
+
+			changed := syncGPUNodeLabelsFromNode(node, gpuNode)
+			Expect(changed).To(BeTrue())
+			Expect(gpuNode.Labels[constants.AcceleratorLabelVendor]).To(Equal("Ascend"))
+			Expect(gpuNode.Labels[constants.HypervisorIsolationModeLabel]).To(Equal(string(tfv1.IsolationModeShared)))
+		})
+
+		It("Should remove vendor and isolation-mode labels on gpunode when absent on node", func() {
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "test-node-clear",
+					Labels: map[string]string{},
+				},
+			}
+			gpuNode := &tfv1.GPUNode{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-node-clear",
+					Labels: map[string]string{
+						constants.AcceleratorLabelVendor:       "Ascend",
+						constants.HypervisorIsolationModeLabel: string(tfv1.IsolationModeShared),
+					},
+				},
+			}
+
+			changed := syncGPUNodeLabelsFromNode(node, gpuNode)
+			Expect(changed).To(BeTrue())
+			_, hasVendor := gpuNode.Labels[constants.AcceleratorLabelVendor]
+			_, hasMode := gpuNode.Labels[constants.HypervisorIsolationModeLabel]
+			Expect(hasVendor).To(BeFalse())
+			Expect(hasMode).To(BeFalse())
+		})
 	})
 
 	Context("When removing TensorFusion taint", func() {

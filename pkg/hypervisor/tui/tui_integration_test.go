@@ -40,6 +40,7 @@ func TestTUIModelInitialization(t *testing.T) {
 	model := NewModel(ctx, client)
 	if model == nil {
 		t.Fatal("Expected non-nil model")
+		return
 	}
 
 	if model.currentView != viewDevices {
@@ -494,6 +495,7 @@ func TestDeviceHistoryInitialization(t *testing.T) {
 	history := model.deviceMetricsHistory["device-001"]
 	if history == nil {
 		t.Fatal("History should be initialized")
+		return
 	}
 
 	if history.MemoryChart == nil {
@@ -524,6 +526,7 @@ func TestWorkerHistoryInitialization(t *testing.T) {
 	history := model.workerMetricsHistory["worker-001"]
 	if history == nil {
 		t.Fatal("History should be initialized")
+		return
 	}
 
 	if history.MemoryChart == nil {

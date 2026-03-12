@@ -11,4 +11,7 @@ resources:
 - v1_tensorfusionworkload.yaml
 - v1_gpunodeclaim.yaml
 - v1_providerconfig.yaml
+# Optional Ascend runtime examples (apply manually when needed):
+# - ascend-runtimeclass.yaml
+# - ascend-partition-runtimeclass-deployment.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

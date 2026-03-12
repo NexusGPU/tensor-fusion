@@ -80,7 +80,7 @@ type VirtualizationCapabilities struct {
 
 // DeviceBasicInfo matches the C struct DeviceBasicInfo in provider/accelerator.h
 // Field names in Go are capitalized for export, but memory layout must match C struct exactly
-// C struct fields: uuid, vendor, model, driverVersion, firmwareVersion, index, numaNode,
+// C struct fields: uuid, vendor, model, driverVersion, firmwareVersion, deviceNode, index, numaNode,
 //
 //	totalMemoryBytes, totalComputeUnits, maxTflops, pcieGen, pcieWidth
 type DeviceBasicInfo struct {
@@ -89,6 +89,7 @@ type DeviceBasicInfo struct {
 	Model             [128]byte // C: char model[128]
 	DriverVersion     [80]byte  // C: char driverVersion[80]
 	FirmwareVersion   [64]byte  // C: char firmwareVersion[64]
+	DeviceNode        [64]byte  // C: char deviceNode[64]
 	Index             int32     // C: int32_t index
 	NUMANode          int32     // C: int32_t numaNode
 	TotalMemoryBytes  uint64    // C: uint64_t totalMemoryBytes
@@ -104,29 +105,16 @@ type DevicePropertyKV struct {
 }
 
 const MaxDeviceProperties = 64
-const MaxDeviceNodes = 32
-const MaxDeviceNodePath = 512
 
 type DeviceProperties struct {
 	Properties [MaxDeviceProperties]DevicePropertyKV
 	Count      uintptr
 }
 
-type DeviceNodeKV struct {
-	HostPath  [MaxDeviceNodePath]byte
-	GuestPath [MaxDeviceNodePath]byte
-}
-
-type DeviceNodes struct {
-	Nodes [MaxDeviceNodes]DeviceNodeKV
-	Count uintptr
-}
-
 type ExtendedDeviceInfo struct {
 	Basic        DeviceBasicInfo
 	Props        DeviceProperties
 	Capabilities VirtualizationCapabilities
-	DeviceNodes  DeviceNodes
 }
 
 type ExtraMetric struct {
@@ -207,6 +195,13 @@ type Mount struct {
 	GuestPath [MaxMountPath]byte
 }
 
+const (
+	MaxPartitionEnvs             = 16
+	MaxEnvValueLength            = 256
+	MaxPartitionDeviceNodes      = 16
+	MaxPartitionDeviceNodeLength = MaxMountPath*2 + 2
+)
+
 const MaxProcesses = 1024
 
 // PartitionResultType represents the type of partition result
@@ -219,12 +214,13 @@ const (
 
 // PartitionResult matches the C struct PartitionResult in provider/accelerator.h
 // Field names in Go are capitalized for export, but memory layout must match C struct exactly
-// C struct fields: type, deviceUUID, envVars
+// C struct fields: type, deviceUUID, envVars, deviceNodes
 type PartitionResult struct {
-	Type        PartitionResultType // C: PartitionResultType type
-	DeviceUUID  [64]byte            // C: char deviceUUID[64]
-	EnvVars     [10][256]byte       // C: char envVars[10][256], key-value pairs like "A=B"
-	DeviceNodes DeviceNodes         // C: DeviceNodes deviceNodes
+	Type        PartitionResultType                       // C: PartitionResultType type
+	DeviceUUID  [64]byte                                  // C: char deviceUUID[64]
+	EnvVars     [MaxPartitionEnvs][MaxEnvValueLength]byte // C: char envVars[16][256], key-value pairs like "A=B"
+	DeviceNodes [MaxPartitionDeviceNodes][MaxPartitionDeviceNodeLength]byte
+	// C: char deviceNodes[16][MAX_MOUNT_PATH*2+2], key-value pairs like "host=guest"
 }
 
 // SnapshotContext for snapshot/resume operations
@@ -432,6 +428,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 
 	for i := 0; i < int(cCount); i++ {
 		cInfo := &stackDevices[i]
+		vendor := byteArrayToString(cInfo.Basic.Vendor[:])
 
 		// Convert DeviceProperties KV array to map
 		properties := make(map[string]string, int(cInfo.Props.Count))
@@ -458,26 +455,20 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			properties["pcieWidth"] = fmt.Sprintf("%d", cInfo.Basic.PCIeWidth)
 		}
 
-		deviceNodes := make(map[string]string, int(cInfo.DeviceNodes.Count))
-		for j := 0; j < int(cInfo.DeviceNodes.Count) && j < MaxDeviceNodes; j++ {
-			hostPath := byteArrayToString(cInfo.DeviceNodes.Nodes[j].HostPath[:])
-			guestPath := byteArrayToString(cInfo.DeviceNodes.Nodes[j].GuestPath[:])
-			if hostPath == "" {
-				continue
-			}
-			if guestPath == "" {
-				guestPath = hostPath
-			}
-			deviceNodes[hostPath] = guestPath
+		model := byteArrayToString(cInfo.Basic.Model[:])
+		var deviceNodes map[string]string
+		if hostPath := byteArrayToString(cInfo.Basic.DeviceNode[:]); hostPath != "" {
+			// Legacy ABI exposes only a single device node, use host==guest by default.
+			deviceNodes = map[string]string{hostPath: hostPath}
 		}
-		if len(deviceNodes) == 0 {
-			deviceNodes = nil
+		if nodes, applied := applyProviderDeviceMountPolicy(deviceNodes, vendor, model, false, nil); applied {
+			deviceNodes = nodes
 		}
 
 		devices[i] = &api.DeviceInfo{
 			UUID:             byteArrayToString(cInfo.Basic.UUID[:]),
-			Vendor:           byteArrayToString(cInfo.Basic.Vendor[:]),
-			Model:            byteArrayToString(cInfo.Basic.Model[:]),
+			Vendor:           vendor,
+			Model:            model,
 			Index:            cInfo.Basic.Index,
 			NUMANode:         cInfo.Basic.NUMANode,
 			TotalMemoryBytes: cInfo.Basic.TotalMemoryBytes,
@@ -558,36 +549,27 @@ func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (*
 
 	// Parse optional env vars returned by vendor
 	envVars := make(map[string]string)
-	for i := range 10 {
+	for i := range MaxPartitionEnvs {
 		envVarStr := byteArrayToString(cResult.EnvVars[i][:])
 		if envVarStr == "" {
 			continue
 		}
-		// Parse key-value pair in format "A=B"
-		for j := 0; j < len(envVarStr); j++ {
-			if envVarStr[j] == '=' {
-				key := envVarStr[:j]
-				value := envVarStr[j+1:]
-				if key != "" {
-					envVars[key] = value
-				}
-				break
-			}
+		// Parse key-value pair in format "A=B".
+		if key, value, ok := splitKeyValue(envVarStr); ok {
+			envVars[key] = value
 		}
 	}
 
-	// Parse optional device node mappings returned by vendor
+	// Parse optional device node mapping pairs returned by vendor in format "hostPath=guestPath".
 	deviceNodes := make(map[string]string)
-	for i := 0; i < int(cResult.DeviceNodes.Count) && i < MaxDeviceNodes; i++ {
-		hostPath := byteArrayToString(cResult.DeviceNodes.Nodes[i].HostPath[:])
-		if hostPath == "" {
+	for i := range MaxPartitionDeviceNodes {
+		deviceNodePair := byteArrayToString(cResult.DeviceNodes[i][:])
+		if deviceNodePair == "" {
 			continue
 		}
-		guestPath := byteArrayToString(cResult.DeviceNodes.Nodes[i].GuestPath[:])
-		if guestPath == "" {
-			guestPath = hostPath
+		if hostPath, guestPath, ok := splitKeyValue(deviceNodePair); ok {
+			deviceNodes[hostPath] = guestPath
 		}
-		deviceNodes[hostPath] = guestPath
 	}
 	if len(deviceNodes) == 0 {
 		deviceNodes = nil
@@ -599,6 +581,20 @@ func (a *AcceleratorInterface) AssignPartition(templateID, deviceUUID string) (*
 		DeviceNodes:   deviceNodes,
 		Type:          cResult.Type,
 	}, nil
+}
+
+func splitKeyValue(input string) (string, string, bool) {
+	separatorIndex := -1
+	for i := 0; i < len(input); i++ {
+		if input[i] == '=' {
+			separatorIndex = i
+			break
+		}
+	}
+	if separatorIndex <= 0 || separatorIndex >= len(input)-1 {
+		return "", "", false
+	}
+	return input[:separatorIndex], input[separatorIndex+1:], true
 }
 
 // RemovePartition removes a partition from a device
