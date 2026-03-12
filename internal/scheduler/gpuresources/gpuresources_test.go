@@ -932,6 +932,41 @@ func (s *GPUResourcesSuite) TestQueueingHint_GPUAdd() {
 	s.Equal(fwk.Queue, hint)
 }
 
+func (s *GPUResourcesSuite) TestQueueingHint_MultiGPUInsufficientClusterState() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_MultiGPUInsufficientClusterState")
+
+	// Request 4 GPUs, but test fixtures do not have any node with 4 allocatable GPUs.
+	// A single GPU update should not requeue this pod.
+	pendingPod := s.makePod("pending-pod-need-4-gpus", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "4",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	pendingPod.Spec.NodeName = ""
+
+	oldGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("50"),
+				Vram:   resource.MustParse("5Gi"),
+			},
+		},
+	}
+	newGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Available: &tfv1.Resource{
+				Tflops: resource.MustParse("150"),
+				Vram:   resource.MustParse("15Gi"),
+			},
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pendingPod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.QueueSkip, hint)
+}
+
 func (s *GPUResourcesSuite) TestReconcileAllocationState_ComputePercent() {
 	log.FromContext(s.ctx).Info("Running TestReconcileAllocationState_ComputePercent")
 
