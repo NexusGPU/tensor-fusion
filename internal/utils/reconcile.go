@@ -148,7 +148,6 @@ func GetObjectHash(objs ...any) string {
 	return fmt.Sprintf("%x", hasher.Sum(nil))
 }
 
-
 func IsPodConditionTrue(conditions []corev1.PodCondition, conditionType corev1.PodConditionType) bool {
 	for _, condition := range conditions {
 		if condition.Type == conditionType {
