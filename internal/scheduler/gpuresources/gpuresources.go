@@ -791,26 +791,28 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 		}
 	}
 
-	// Calculate resource increase
-	var increaseTflops, increaseVram resource.Quantity
-	if oldGPU == nil && newGPU != nil {
-		// Add event: use available resources as increase
-		if newGPU.Status.Available != nil {
-			increaseTflops = newGPU.Status.Available.Tflops.DeepCopy()
-			increaseVram = newGPU.Status.Available.Vram.DeepCopy()
-		}
-	} else if oldGPU != nil && newGPU != nil {
-		// Update event: calculate difference in available resources
-		if oldGPU.Status.Available != nil && newGPU.Status.Available != nil {
-			increaseTflops = newGPU.Status.Available.Tflops.DeepCopy()
-			increaseVram = newGPU.Status.Available.Vram.DeepCopy()
-			increaseTflops.Sub(oldGPU.Status.Available.Tflops)
-			increaseVram.Sub(oldGPU.Status.Available.Vram)
-		}
+	// QueueingHint receives one GPU CR event at a time. We only treat it as a useful
+	// wake-up when available resources on that GPU actually increase.
+	if newGPU == nil || newGPU.Status.Available == nil {
+		logger.V(5).Info("Missing new GPU availability, skip", "pod", klog.KObj(pod))
+		return fwk.QueueSkip, nil
 	}
 
+	oldAvailableTflops := resource.Quantity{}
+	oldAvailableVram := resource.Quantity{}
+	if oldGPU != nil && oldGPU.Status.Available != nil {
+		oldAvailableTflops = oldGPU.Status.Available.Tflops.DeepCopy()
+		oldAvailableVram = oldGPU.Status.Available.Vram.DeepCopy()
+	}
+
+	increaseTflops := newGPU.Status.Available.Tflops.DeepCopy()
+	increaseVram := newGPU.Status.Available.Vram.DeepCopy()
+	increaseTflops.Sub(oldAvailableTflops)
+	increaseVram.Sub(oldAvailableVram)
+
 	// If resource decreased or unchanged, skip (for non-nominated pods)
-	if increaseTflops.Cmp(resource.MustParse("0")) <= 0 && increaseVram.Cmp(resource.MustParse("0")) <= 0 {
+	zero := resource.Quantity{}
+	if increaseTflops.Cmp(zero) <= 0 && increaseVram.Cmp(zero) <= 0 {
 		logger.V(4).Info("Resource decreased or unchanged, skip",
 			"pod", klog.KObj(pod),
 			"increaseTflops", increaseTflops.String(),
@@ -826,32 +828,14 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 		return fwk.QueueSkip, nil
 	}
 
-	// Calculate total request for this pod (multiply by count for multi-GPU)
-	// Handle both TFLOPs and ComputePercent (use GPU capacity to convert percent to absolute value)
-	var gpuCapacity resource.Quantity
-	if newGPU.Status.Capacity != nil {
-		gpuCapacity = newGPU.Status.Capacity.Tflops
-	}
-	actualTflops := utils.GetActualTflops(gpuCapacity, allocRequest.Request)
-	if actualTflops == nil {
-		// Cannot determine TFLOPs requirement (e.g., ComputePercent used but GPU capacity unavailable)
-		logger.V(5).Info("Cannot determine pod TFLOPs requirement, skip", "pod", klog.KObj(pod))
-		return fwk.QueueSkip, nil
-	}
-	podTotalTflops := actualTflops.DeepCopy()
-	podTotalTflops.Mul(int64(allocRequest.Count))
-
-	podTotalVram := allocRequest.Request.Vram.DeepCopy()
-	podTotalVram.Mul(int64(allocRequest.Count))
-
-	// Queue if resource increase >= pod's request
-	if increaseTflops.Cmp(podTotalTflops) >= 0 && increaseVram.Cmp(podTotalVram) >= 0 {
-		logger.V(4).Info("GPU resource increase sufficient for pod, requeue unscheduled pod",
+	// Important: for multi-GPU pods we must check whether the CURRENT cluster state
+	// can satisfy the full request (count/same-node/quota), not just this event delta.
+	if _, _, err := s.allocator.CheckQuotaAndFilter(s.ctx, allocRequest, false); err == nil {
+		logger.V(4).Info("GPU update may satisfy pod requirement, requeue unscheduled pod",
 			"pod", klog.KObj(pod),
 			"increaseTflops", increaseTflops.String(),
 			"increaseVram", increaseVram.String(),
-			"podRequestTflops", podTotalTflops.String(),
-			"podRequestVram", podTotalVram.String())
+			"gpuCount", allocRequest.Count)
 		return fwk.Queue, nil
 	}
 
