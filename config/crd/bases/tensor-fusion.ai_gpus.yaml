@@ -138,6 +138,40 @@ spec:
                   NUMA node
                 format: int32
                 type: integer
+              nvLink:
+                description: GPUNvLinkStatus records point-to-point NVLink topology
+                  and bandwidth hints for scheduler decisions.
+                properties:
+                  peerCount:
+                    format: int32
+                    type: integer
+                  peers:
+                    items:
+                      description: GPUNvLinkPeer describes NVLink connectivity from
+                        current GPU to a peer GPU.
+                      properties:
+                        bandwidthMBps:
+                          format: int64
+                          type: integer
+                        linkCount:
+                          format: int32
+                          type: integer
+                        linkVersion:
+                          format: int32
+                          type: integer
+                        peerUUID:
+                          type: string
+                      required:
+                      - peerUUID
+                      type: object
+                    type: array
+                  totalBandwidthMBps:
+                    format: int64
+                    type: integer
+                  totalLinkCount:
+                    format: int32
+                    type: integer
+                type: object
               phase:
                 default: Pending
                 enum:
