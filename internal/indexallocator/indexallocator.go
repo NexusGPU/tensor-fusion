@@ -2,7 +2,6 @@ package indexallocator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -294,16 +293,12 @@ func (s *IndexAllocator) AsyncCheckNodeIndexAvailableAndAssign(pod *v1.Pod, inde
 				return fmt.Errorf("index is not available")
 			}
 			// Index available, patch annotation to transit Pod from Pending to DeviceAllocating in hypervisor
-			patchOps := map[string]any{
-				"op":    "add",
-				"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PodIndexAnnotation),
-				"value": strconv.Itoa(index),
+			base := latestPod.DeepCopy()
+			if latestPod.Annotations == nil {
+				latestPod.Annotations = make(map[string]string, 1)
 			}
-			patchBytes, err := json.Marshal(patchOps)
-			if err != nil {
-				return err
-			}
-			err = s.Client.Patch(s.ctx, latestPod, client.RawPatch(types.JSONPatchType, patchBytes))
+			latestPod.Annotations[constants.PodIndexAnnotation] = strconv.Itoa(index)
+			err := s.Client.Patch(s.ctx, latestPod, client.MergeFrom(base))
 			if err != nil {
 				log.FromContext(s.ctx).Error(err, "failed to patch pod index annotation", "pod", latestPod.Name, "index", index)
 				return err

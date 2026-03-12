@@ -24,7 +24,7 @@ import (
 
 var injectLibResource v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("20m"),
-	v1.ResourceMemory: resource.MustParse("64Mi"),
+	v1.ResourceMemory: resource.MustParse("256Mi"),
 }
 
 var hypervisorDefaultRequests v1.ResourceList = v1.ResourceList{
