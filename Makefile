@@ -1,9 +1,14 @@
 # Image URL to use all building/pushing image targets
 IMG ?= tensorfusion/tensor-fusion-operator:latest
+HYPERVISOR_IMG ?= tensorfusion/tensor-fusion-hypervisor:latest
+ARCH ?= $(shell go env GOARCH)
+ARCHES ?= amd64 arm64
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION ?= 1.35.0
 # Keep envtest-based suites from overloading the local control plane startup.
 GINKGO_PARALLEL_PROCS ?= 4
+MANAGER_DOCKERFILE ?= dockerfile/operator.Dockerfile
+HYPERVISOR_DOCKERFILE ?= dockerfile/hypervisor.Dockerfile
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -121,27 +126,57 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 
 ##@ Build
 
+.PHONY: prepare-generated
+prepare-generated: vendor manifests generate ## Refresh vendored dependencies and generated artifacts.
+
+.PHONY: prepare-build
+prepare-build: vet ## Validate source before building without mutating vendored dependencies.
+
 .PHONY: build
-build: vendor manifests generate fmt vet ## Build manager binary.
+build: prepare-build ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
 .PHONY: run
-run: vendor manifests generate fmt vet ## Run a controller from your host.
+run: prepare-build ## Run a controller from your host.
 	go run ./cmd/main.go
 
 .PHONY: build-provider
 build-provider: ## Build accelerator example library.
 	$(MAKE) -C provider example
 
+.PHONY: build-manager-linux
+build-manager-linux: prepare-build ## Build Linux manager binary for ARCH, e.g. `make build-manager-linux ARCH=arm64`.
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) go build -o bin/manager-linux-$(ARCH) ./cmd/main.go
+
+.PHONY: build-manager-cross
+build-manager-cross: prepare-build ## Build Linux manager binaries for all ARCHES.
+	@for arch in $(ARCHES); do \
+		echo "building manager for $$arch"; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -o bin/manager-linux-$$arch ./cmd/main.go; \
+	done
+
 .PHONY: build-hypervisor
 build-hypervisor: ## Build hypervisor binary with CGO disabled using purego.
 	CGO_ENABLED=0 \
 	go build -o bin/hypervisor ./cmd/hypervisor
 
+.PHONY: build-hypervisor-linux
+build-hypervisor-linux: prepare-build ## Build Linux hypervisor binary for ARCH, e.g. `make build-hypervisor-linux ARCH=arm64`.
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) go build -o bin/hypervisor-linux-$(ARCH) ./cmd/hypervisor
+
+.PHONY: build-hypervisor-cross
+build-hypervisor-cross: prepare-build ## Build Linux hypervisor binaries for all ARCHES.
+	@for arch in $(ARCHES); do \
+		echo "building hypervisor for $$arch"; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -o bin/hypervisor-linux-$$arch ./cmd/hypervisor; \
+	done
+
 .PHONY: build-hypervisor-tui
 build-hypervisor-tui: 
 	go build -o bin/hypervisor-tui ./cmd/hypervisor-tui
 
+.PHONY: build-cross
+build-cross: build-manager-cross build-hypervisor-cross ## Build Linux manager and hypervisor binaries for all ARCHES.
 
 .PHONY: clean-cache
 clean-cache: ## Clean Go build cache.
@@ -151,8 +186,12 @@ clean-cache: ## Clean Go build cache.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
-docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
+docker-build: build-manager-linux ## Build manager image for ARCH using the prebuilt Linux binary.
+	$(CONTAINER_TOOL) build --build-arg TARGETARCH=$(ARCH) -t ${IMG} -f $(MANAGER_DOCKERFILE) .
+
+.PHONY: docker-build-hypervisor
+docker-build-hypervisor: build-hypervisor-linux ## Build hypervisor image for ARCH using the prebuilt Linux binary.
+	$(CONTAINER_TOOL) build --build-arg TARGETARCH=$(ARCH) -t ${HYPERVISOR_IMG} -f $(HYPERVISOR_DOCKERFILE) .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -164,16 +203,20 @@ docker-push: ## Push docker image with the manager.
 # - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 # - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
 # To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+PLATFORMS ?= linux/amd64,linux/arm64
 .PHONY: docker-buildx
-docker-buildx: ## Build and push docker image for the manager for cross-platform support
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
-	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
+docker-buildx: build-manager-cross ## Build and push multi-arch manager image for PLATFORMS.
 	- $(CONTAINER_TOOL) buildx create --name tensor-fusion-operator-builder
 	$(CONTAINER_TOOL) buildx use tensor-fusion-operator-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
+	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f $(MANAGER_DOCKERFILE) .
 	- $(CONTAINER_TOOL) buildx rm tensor-fusion-operator-builder
-	rm Dockerfile.cross
+
+.PHONY: docker-buildx-hypervisor
+docker-buildx-hypervisor: build-hypervisor-cross ## Build and push multi-arch hypervisor image for PLATFORMS.
+	- $(CONTAINER_TOOL) buildx create --name tensor-fusion-hypervisor-builder
+	$(CONTAINER_TOOL) buildx use tensor-fusion-hypervisor-builder
+	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${HYPERVISOR_IMG} -f $(HYPERVISOR_DOCKERFILE) .
+	- $(CONTAINER_TOOL) buildx rm tensor-fusion-hypervisor-builder
 
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.

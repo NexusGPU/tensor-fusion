@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -171,6 +172,9 @@ func TestSharedMemoryHandleCreateAndOpen(t *testing.T) {
 
 	// Verify shared memory file exists after creation
 	assert.True(t, fileExists(filepath.Join(podPath, ShmPathSuffix)))
+	stat, err := os.Stat(filepath.Join(podPath, ShmPathSuffix))
+	require.NoError(t, err)
+	assert.Equal(t, int64(unsafe.Sizeof(rustSharedDeviceStateV2Layout{})), stat.Size())
 
 	// Open existing shared memory
 	handle2, err := OpenSharedMemoryHandle(podPath)
@@ -188,6 +192,43 @@ func TestSharedMemoryHandleCreateAndOpen(t *testing.T) {
 	state1.SetPodMemoryUsed(deviceIdx, 42)
 	memory := state2.GetPodMemoryUsed(deviceIdx)
 	assert.Equal(t, uint64(42), memory)
+}
+
+func TestOpenSharedMemoryHandleRejectsLegacyLayout(t *testing.T) {
+	identifier := NewPodIdentifier("legacy_layout", "test")
+	podPath := identifier.ToPath(testShmBasePath)
+	shmPath := filepath.Join(podPath, ShmPathSuffix)
+	defer func() {
+		_ = os.RemoveAll(podPath)
+	}()
+
+	require.NoError(t, os.MkdirAll(podPath, 0755))
+
+	file, err := os.OpenFile(shmPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(int64(unsafe.Sizeof(SharedDeviceStateV2{}))))
+	require.NoError(t, file.Close())
+
+	_, err = OpenSharedMemoryHandle(podPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "legacy shared memory layout")
+}
+
+func TestRustSharedMemoryLayoutCompatibility(t *testing.T) {
+	var raw rustSharedDeviceStateV2Layout
+
+	assert.Equal(t, uintptr(0), unsafe.Offsetof(raw.Discriminant))
+	assert.Equal(t, uintptr(8), unsafe.Offsetof(raw.V2))
+	assert.Equal(
+		t,
+		uintptr(0x890),
+		unsafe.Offsetof(raw.V2)+unsafe.Offsetof(raw.V2.LastHeartbeat),
+	)
+	assert.Equal(
+		t,
+		uintptr(0x898),
+		unsafe.Offsetof(raw.V2)+unsafe.Offsetof(raw.V2.PIDs),
+	)
 }
 
 func TestSharedMemoryHandleErrorHandling(t *testing.T) {

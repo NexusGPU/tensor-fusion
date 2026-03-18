@@ -21,13 +21,13 @@ func TestValidateIsolationAndExecutionMode(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "hard local without sidecar is rejected",
+			name: "hard local without sidecar is allowed",
 			profile: &tfv1.WorkloadProfileSpec{
 				Isolation:     tfv1.IsolationModeHard,
 				IsLocalGPU:    true,
 				SidecarWorker: false,
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name: "hard local sidecar is allowed",

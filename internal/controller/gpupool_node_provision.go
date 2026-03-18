@@ -151,6 +151,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	wg.Add(len(gpuNodeParams))
 
 	var errList []error
+	var resultMu sync.Mutex
 
 	// lock the pool before next node scaling up loop, add assumed scaling resources until all pending nodeClaims are running
 	newCreatedNodes := map[string]tfv1.Resource{}
@@ -164,7 +165,9 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 
 			costPerHour, pricingErr := provider.GetInstancePricing(nodeClaim.InstanceType, nodeClaim.CapacityType, nodeClaim.Region)
 			if pricingErr != nil {
+				resultMu.Lock()
 				errList = append(errList, pricingErr)
+				resultMu.Unlock()
 				return
 			}
 
@@ -188,14 +191,18 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 			_ = controllerutil.SetControllerReference(pool, gpuNodeClaimRes, r.Scheme)
 			err := r.Create(ctx, gpuNodeClaimRes)
 			if err != nil {
+				resultMu.Lock()
 				errList = append(errList, err)
+				resultMu.Unlock()
 				return
 			}
 			log.Info("Created new GPUNode claim", "gpuNodeClaimName", nodeClaim.NodeName)
+			resultMu.Lock()
 			newCreatedNodes[nodeClaim.NodeName] = tfv1.Resource{
 				Tflops: nodeClaim.TFlopsOffered,
 				Vram:   nodeClaim.VRAMOffered,
 			}
+			resultMu.Unlock()
 		}(nodeClaim)
 	}
 

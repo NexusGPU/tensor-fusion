@@ -119,9 +119,10 @@ func TestGetWorkerInfoForAllocationByIndex_FastPath(t *testing.T) {
 
 	// Pre-populate worker info
 	expectedWorkerInfo := &api.WorkerInfo{
-		WorkerUID:  "test-uid-123",
-		WorkerName: "test-pod",
-		Status:     api.WorkerStatusDeviceAllocating,
+		WorkerUID:        "test-uid-123",
+		WorkerName:       "test-pod",
+		Status:           api.WorkerStatusDeviceAllocating,
+		AllocatedDevices: []string{"gpu-0"},
 	}
 	kc.indexToWorkerInfo[testPodIndex] = expectedWorkerInfo
 
@@ -268,9 +269,170 @@ func TestGetWorkerInfoForAllocationByIndex_PodArrivesFirst(t *testing.T) {
 	t.Logf("Device plugin request succeeded via fast path in %v", elapsed)
 }
 
+func TestGetWorkerInfoForAllocationByIndex_WaitsForAllocatedDevices(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	kc := &PodCacheManager{
+		ctx:               ctx,
+		nodeName:          "test-node",
+		cachedPod:         make(map[string]*corev1.Pod, 32),
+		indexToWorkerInfo: make(map[int]*api.WorkerInfo, 32),
+		stopCh:            make(chan struct{}),
+		workerChangedCh:   make(chan struct{}, 1),
+		indexSubscribers:  make(map[int]map[*workerInfoSubscriber]struct{}),
+		podSubscribers:    make(map[string]chan<- *api.WorkerInfo),
+	}
+
+	go kc.runWorkerChangeEventBus()
+	defer close(kc.stopCh)
+
+	const testPodIndex = 55
+
+	resultCh := make(chan *api.WorkerInfo, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		workerInfo, err := kc.GetWorkerInfoForAllocationByIndex(testPodIndex)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- workerInfo
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	kc.onPodAdd(createTestPodWithIndexAndGPUIds(testPodIndex, ""))
+
+	select {
+	case workerInfo := <-resultCh:
+		t.Fatalf("expected subscriber to wait for gpu ids, got %+v", workerInfo)
+	case err := <-errCh:
+		t.Fatalf("unexpected error while waiting for gpu ids: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	kc.onPodAdd(createTestPodWithIndexAndGPUIds(testPodIndex, "gpu-0"))
+
+	select {
+	case workerInfo := <-resultCh:
+		if workerInfo == nil {
+			t.Fatal("expected non-nil worker info")
+		}
+		if len(workerInfo.AllocatedDevices) != 1 || workerInfo.AllocatedDevices[0] != "gpu-0" {
+			t.Fatalf("unexpected allocated devices: %#v", workerInfo.AllocatedDevices)
+		}
+	case err := <-errCh:
+		t.Fatalf("unexpected error after gpu ids arrived: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for worker info with gpu ids")
+	}
+}
+
+func TestOnPodUpdate_ClearsStaleIndexWorkerInfo(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	kc := &PodCacheManager{
+		ctx:               ctx,
+		nodeName:          "test-node",
+		cachedPod:         make(map[string]*corev1.Pod, 32),
+		indexToWorkerInfo: make(map[int]*api.WorkerInfo, 32),
+		stopCh:            make(chan struct{}),
+		workerChangedCh:   make(chan struct{}, 1),
+		indexSubscribers:  make(map[int]map[*workerInfoSubscriber]struct{}),
+		podSubscribers:    make(map[string]chan<- *api.WorkerInfo),
+	}
+
+	go kc.runWorkerChangeEventBus()
+	defer close(kc.stopCh)
+
+	const testPodIndex = 66
+
+	oldPendingPod := createTestPodWithIndexAndGPUIds(testPodIndex, "gpu-old")
+	kc.onPodAdd(oldPendingPod)
+
+	workerInfo, err := kc.GetWorkerInfoForAllocationByIndex(testPodIndex)
+	if err != nil {
+		t.Fatalf("expected initial worker info, got error: %v", err)
+	}
+	if workerInfo.WorkerUID != string(oldPendingPod.UID) {
+		t.Fatalf("expected initial worker UID %s, got %s", oldPendingPod.UID, workerInfo.WorkerUID)
+	}
+
+	oldRunningPod := oldPendingPod.DeepCopy()
+	oldRunningPod.Status.Phase = corev1.PodRunning
+	kc.onPodUpdate(oldPendingPod, oldRunningPod)
+
+	kc.mu.RLock()
+	_, exists := kc.indexToWorkerInfo[testPodIndex]
+	kc.mu.RUnlock()
+	if exists {
+		t.Fatalf("expected stale worker info for index %d to be cleared after pod starts running", testPodIndex)
+	}
+
+	resultCh := make(chan *api.WorkerInfo, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		info, err := kc.GetWorkerInfoForAllocationByIndex(testPodIndex)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- info
+	}()
+
+	select {
+	case info := <-resultCh:
+		t.Fatalf("expected subscriber to wait for replacement pod, got %+v", info)
+	case err := <-errCh:
+		t.Fatalf("unexpected error while waiting for replacement pod: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	newPendingPod := createTestPodWithIndexAndGPUIds(testPodIndex, "gpu-new")
+	newPendingPod.Name = "test-pod-replacement"
+	newPendingPod.UID = types.UID("test-uid-replacement")
+	kc.onPodAdd(newPendingPod)
+
+	select {
+	case info := <-resultCh:
+		if info == nil {
+			t.Fatal("expected non-nil worker info for replacement pod")
+		}
+		if info.WorkerUID != string(newPendingPod.UID) {
+			t.Fatalf("expected replacement worker UID %s, got %s", newPendingPod.UID, info.WorkerUID)
+		}
+		if len(info.AllocatedDevices) != 1 || info.AllocatedDevices[0] != "gpu-new" {
+			t.Fatalf("unexpected replacement allocated devices: %#v", info.AllocatedDevices)
+		}
+	case err := <-errCh:
+		t.Fatalf("unexpected error after replacement pod arrived: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for replacement worker info")
+	}
+}
+
 // createTestPodWithIndex creates a test pod with the specified index annotation
 // that will trigger WorkerStatusDeviceAllocating status
 func createTestPodWithIndex(index int) *corev1.Pod {
+	return createTestPodWithIndexAndGPUIds(index, "gpu-0")
+}
+
+func createTestPodWithIndexAndGPUIds(index int, gpuIDs string) *corev1.Pod {
+	annotations := map[string]string{
+		constants.PodIndexAnnotation:      strconv.Itoa(index),
+		constants.TFLOPSRequestAnnotation: "10",
+		constants.VRAMRequestAnnotation:   "1Gi",
+		constants.TFLOPSLimitAnnotation:   "20",
+		constants.VRAMLimitAnnotation:     "2Gi",
+		constants.IsolationModeAnnotation: "soft",
+		constants.QoSLevelAnnotation:      "low",
+		constants.GpuPoolKey:              "default",
+	}
+	if gpuIDs != "" {
+		annotations[constants.GPUDeviceIDsAnnotation] = gpuIDs
+	}
+
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("test-pod-%d", index),
@@ -280,17 +442,7 @@ func createTestPodWithIndex(index int) *corev1.Pod {
 				constants.TensorFusionEnabledLabelKey: constants.TrueStringValue,
 				constants.WorkloadKey:                 "test-workload",
 			},
-			Annotations: map[string]string{
-				constants.PodIndexAnnotation:      strconv.Itoa(index),
-				constants.TFLOPSRequestAnnotation: "10",
-				constants.VRAMRequestAnnotation:   "1Gi",
-				constants.TFLOPSLimitAnnotation:   "20",
-				constants.VRAMLimitAnnotation:     "2Gi",
-				constants.IsolationModeAnnotation: "soft",
-				constants.QoSLevelAnnotation:      "low",
-				constants.GpuPoolKey:              "default",
-				constants.GPUDeviceIDsAnnotation:  "gpu-0",
-			},
+			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
 			NodeName: "test-node",
