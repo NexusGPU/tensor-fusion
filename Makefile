@@ -2,6 +2,8 @@
 IMG ?= tensorfusion/tensor-fusion-operator:latest
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION ?= 1.35.0
+# Keep envtest-based suites from overloading the local control plane startup.
+GINKGO_PARALLEL_PROCS ?= 4
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -70,8 +72,8 @@ one-crd:
 	bash scripts/generate-crd.sh
 
 .PHONY: test
-test: build-provider vendor manifests generate fmt vet envtest ## Run tests. To see failure output from parallel procs, add: --output-interceptor-mode=none
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m -cover -coverprofile cover.out -r --skip-file ./test/e2e
+test: build-provider vendor manifests generate fmt vet envtest ## Run tests and generate coverage.
+	KUBEBUILDER_ASSETS="$(ENVTEST_ASSETS_DIR)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -timeout 12m -cover -coverprofile cover.out -r --skip-file ./test/e2e
 
 .PHONY: check-coverage
 check-coverage: ## Check if test coverage meets minimum threshold (default: 45%)
@@ -87,15 +89,15 @@ test-with-coverage-check: test check-coverage ## Run tests and verify coverage m
 
 .PHONY: test-serial
 test-serial: build-provider vendor manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -timeout 12m -r --skip-file ./test/e2e
+	KUBEBUILDER_ASSETS="$(ENVTEST_ASSETS_DIR)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -timeout 12m -r --skip-file ./test/e2e
 
 .PHONY: ut
 ut: vendor manifests generate ## Run unit tests by make ut F=<focus-file>
-	cd internal/controller && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m --focus-file $F && cd ../../
+	cd internal/controller && KUBEBUILDER_ASSETS="$(ENVTEST_ASSETS_DIR)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p --procs $(GINKGO_PARALLEL_PROCS) -timeout 12m --focus-file $F && cd ../../
 
 .PHONY: ut-sched
 ut-sched: vendor manifests generate ## Run unit tests by make ut F=<focus-file>
-	cd test/sched && KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p -timeout 12m --focus-file $F && cd ../../
+	cd test/sched && KUBEBUILDER_ASSETS="$(ENVTEST_ASSETS_DIR)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -p --procs $(GINKGO_PARALLEL_PROCS) -timeout 12m --focus-file $F && cd ../../
 
 .PHONY: test-e2e
 test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
@@ -215,6 +217,7 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+ENVTEST_ASSETS_DIR = $(abspath $(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path))
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.8.0
