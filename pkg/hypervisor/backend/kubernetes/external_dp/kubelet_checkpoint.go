@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -84,7 +83,7 @@ type DevicePluginDetector struct {
 	ctx               context.Context
 	checkpointPath    string
 	apiClient         APIClientInterface
-	vendorDetectors   map[string]VendorDetector // key: resource name
+	vendorDetectors   map[string]VendorDetector // key: resource name prefix
 	previousDeviceIDs map[string]string
 	mu                sync.RWMutex
 	watcher           *fsnotify.Watcher
@@ -277,10 +276,13 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 			allocated = allocatedDevices
 		}
 	}
+	allocated, allocatedUsedBySystems := d.normalizeDeviceIDs(allocated)
+	registeredDeviceIDs, _ = d.normalizeDeviceIDs(registeredDeviceIDs)
 
 	// Determine added and removed devices
 	previousDeviceIDs := make(map[string]string, len(d.previousDeviceIDs))
 	maps.Copy(previousDeviceIDs, d.previousDeviceIDs)
+	previousDeviceIDs, _ = d.normalizeDeviceIDs(previousDeviceIDs)
 
 	var addedDevices, removedDevices map[string]string
 
@@ -314,40 +316,51 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 	// Process added devices using vendor-specific detectors
 	hasError := false
 	for deviceID, resName := range addedDevices {
-		for _, detector := range d.vendorDetectors {
-			resourceNamePrefixes := detector.GetResourceNamePrefixes()
-			if slices.Contains(resourceNamePrefixes, resName) {
-				usedBySystem, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(deviceID, resName)
-				klog.V(4).Infof(
-					"Device added: %s, resource: %s, patching with usedBy: %s, realDeviceID: %s",
+		detector := d.getVendorDetector(resName)
+		if detector == nil {
+			continue
+		}
+
+		usedBySystem := allocatedUsedBySystems[deviceID]
+		if usedBySystem == "" {
+			var normalizedDeviceID string
+			usedBySystem, normalizedDeviceID = detector.GetUsedBySystemAndRealDeviceID(deviceID, resName)
+			if normalizedDeviceID != deviceID {
+				klog.Warningf(
+					"Device %s for resource %s should have been normalized as %s before patching",
 					deviceID,
 					resName,
-					usedBySystem,
-					realDeviceID,
+					normalizedDeviceID,
 				)
-				if err := d.patchGPUResource(realDeviceID, usedBySystem); err != nil {
-					klog.Errorf("Failed to patch GPU resource for added device %s: %v", deviceID, err)
-					hasError = true
-				}
 			}
+		}
+
+		klog.V(4).Infof(
+			"Device added: %s, resource: %s, patching with usedBy: %s",
+			deviceID,
+			resName,
+			usedBySystem,
+		)
+		if err := d.patchGPUResource(deviceID, usedBySystem); err != nil {
+			klog.Errorf("Failed to patch GPU resource for added device %s: %v", deviceID, err)
+			hasError = true
 		}
 	}
 
 	// Process removed devices
 	for deviceID, resName := range removedDevices {
-		for _, detector := range d.vendorDetectors {
-			resourceNamePrefixes := detector.GetResourceNamePrefixes()
-			if slices.Contains(resourceNamePrefixes, resName) {
-				klog.V(4).Infof(
-					"Device plugin allocated container removed: %s, resource: %s, patching usedBy field to tensor fusion",
-					deviceID,
-					resName,
-				)
-				if err := d.patchGPUResource(deviceID, string(tfv1.UsedByTensorFusion)); err != nil {
-					klog.Errorf("Failed to patch GPU resource usedBy field to tensor fusion for removed device %s: %v", deviceID, err)
-					hasError = true
-				}
-			}
+		if d.getVendorDetector(resName) == nil {
+			continue
+		}
+
+		klog.V(4).Infof(
+			"Device plugin allocated container removed: %s, resource: %s, patching usedBy field to tensor fusion",
+			deviceID,
+			resName,
+		)
+		if err := d.patchGPUResource(deviceID, string(tfv1.UsedByTensorFusion)); err != nil {
+			klog.Errorf("Failed to patch GPU resource usedBy field to tensor fusion for removed device %s: %v", deviceID, err)
+			hasError = true
 		}
 	}
 
@@ -446,6 +459,60 @@ func (d *DevicePluginDetector) extractDeviceIDs(
 	}
 
 	return allocated, registered
+}
+
+func (d *DevicePluginDetector) normalizeDeviceIDs(
+	deviceIDs map[string]string,
+) (normalized map[string]string, usedBySystems map[string]string) {
+	normalized = make(map[string]string, len(deviceIDs))
+	usedBySystems = make(map[string]string, len(deviceIDs))
+
+	for deviceID, resourceName := range deviceIDs {
+		normalizedDeviceID := deviceID
+		usedBySystem := ""
+
+		detector := d.getVendorDetector(resourceName)
+		if detector != nil {
+			usedBySystem, normalizedDeviceID = detector.GetUsedBySystemAndRealDeviceID(deviceID, resourceName)
+		}
+
+		if existingResourceName, exists := normalized[normalizedDeviceID]; exists && existingResourceName != resourceName {
+			klog.Warningf(
+				"Conflicting resource names for normalized device %s: %s vs %s",
+				normalizedDeviceID,
+				existingResourceName,
+				resourceName,
+			)
+		}
+		normalized[normalizedDeviceID] = resourceName
+
+		if usedBySystem == "" {
+			continue
+		}
+		if existingSystem, exists := usedBySystems[normalizedDeviceID]; exists && existingSystem != usedBySystem {
+			klog.Warningf(
+				"Conflicting usedBy systems for normalized device %s: %s vs %s",
+				normalizedDeviceID,
+				existingSystem,
+				usedBySystem,
+			)
+		}
+		usedBySystems[normalizedDeviceID] = usedBySystem
+	}
+
+	return normalized, usedBySystems
+}
+
+func (d *DevicePluginDetector) getVendorDetector(resourceName string) VendorDetector {
+	if detector, exists := d.vendorDetectors[resourceName]; exists {
+		return detector
+	}
+	for resourceNamePrefix, detector := range d.vendorDetectors {
+		if strings.HasPrefix(resourceName, resourceNamePrefix) {
+			return detector
+		}
+	}
+	return nil
 }
 
 // findEntryForDevice finds the pod device entry for a given device ID
