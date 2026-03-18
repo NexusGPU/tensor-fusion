@@ -86,6 +86,7 @@
    char model[128];             // Model name (e.g., "A100", "H100")
    char driverVersion[80];      // Driver version
    char firmwareVersion[64];    // Firmware version
+   char deviceNode[64];         // Device node path (e.g., "/dev/nvidia0")
    int32_t index;               // Device index
    int32_t numaNode;            // NUMA node ID (-1 if not assigned)
    uint64_t totalMemoryBytes;   // Total memory in bytes
@@ -110,28 +111,11 @@
    size_t count;                                        // Number of properties (0 to MAX_DEVICE_PROPERTIES)
  } DeviceProperties;
  
- // Device node host/guest path pair
- #define MAX_DEVICE_NODES 32
- #define MAX_DEVICE_PATH 512
- 
- typedef struct {
-   char hostPath[MAX_DEVICE_PATH];   // Host device path (e.g., /dev/davinci0)
-   char guestPath[MAX_DEVICE_PATH];  // Guest device path (e.g., /dev/davinci0)
- } DeviceNodeKV;
- 
- // Device node list
- // Used for exposing device node mappings from discovery to the Go layer.
- typedef struct {
-   DeviceNodeKV nodes[MAX_DEVICE_NODES];  // Array of host/guest device node mappings
-   size_t count;                          // Number of mappings (0 to MAX_DEVICE_NODES)
- } DeviceNodes;
- 
  // Extended device information
  typedef struct {
    DeviceBasicInfo basic;
    DeviceProperties props;
    VirtualizationCapabilities virtualizationCapabilities;
-   DeviceNodes deviceNodes;
  } ExtendedDeviceInfo;
  
  // Partition template for hardware partitioning (e.g., MIG)
@@ -257,18 +241,23 @@
    char guestPath[MAX_MOUNT_PATH];  // Guest path
  } MountPath;
  
- typedef enum {
-   PARTITION_TYPE_ENVIRONMENT_VARIABLE = 0,
-   PARTITION_TYPE_DEVICE_NODE = 1,
- } PartitionResultType;
- 
+typedef enum {
+  PARTITION_TYPE_ENVIRONMENT_VARIABLE = 0,
+  PARTITION_TYPE_DEVICE_NODE = 1,
+} PartitionResultType;
+
+// Maximum device-node entries returned by partition APIs.
+#define MAX_PARTITION_DEVICE_NODES 16
+// Device-node entry format is "hostPath=guestPath".
+#define MAX_PARTITION_DEVICE_NODE_LENGTH (MAX_MOUNT_PATH * 2 + 2)
+
 typedef struct {
   PartitionResultType type;
-  char deviceUUID[64];    // Device UUID
-  char envVars[10][256];  // Array of environment variable key-value pairs, A=B, C=D, etc.
-  // Optional device node mappings for PARTITION_TYPE_DEVICE_NODE mode.
-  // Host path is mounted from node, guest path is exposed inside container.
-  DeviceNodes deviceNodes;
+  char deviceUUID[64];  // Device UUID
+  // Array of environment variable key-value pairs, A=B, C=D, etc.
+  char envVars[MAX_PARTITION_ENVS][MAX_ENV_VALUE_LENGTH];
+  // Array of device node mapping key-value pairs, hostPath=guestPath.
+  char deviceNodes[MAX_PARTITION_DEVICE_NODES][MAX_PARTITION_DEVICE_NODE_LENGTH];
 } PartitionResult;
  
  // ============================================================================

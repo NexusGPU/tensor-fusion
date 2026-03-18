@@ -331,15 +331,34 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(partitionResult.PartitionUUID) == "" {
+		return nil, fmt.Errorf("assign partition returned empty partition UUID for device %s", deviceUUID)
+	}
+	handler, ok := resolvePartitionResultHandler(partitionResult.Type)
+	if !ok {
+		return nil, fmt.Errorf(
+			"assign partition returned unknown partition result type %d for device %s",
+			partitionResult.Type,
+			deviceUUID,
+		)
+	}
 	newPartitionedDevice.ParentUUID = newPartitionedDevice.UUID
 	newPartitionedDevice.UUID = partitionResult.PartitionUUID
+	// Partitioned instances should never inherit parent compute nodes by default.
+	newPartitionedDevice.DeviceNode = nil
 
-	if partitionResult.Type == PartitionTypeDeviceNode && len(partitionResult.DeviceNodes) > 0 {
-		// Hard partition mode mounts provider-returned device nodes while preserving shared ones.
-		if newPartitionedDevice.DeviceNode == nil {
-			newPartitionedDevice.DeviceNode = make(map[string]string)
-		}
-		maps.Copy(newPartitionedDevice.DeviceNode, partitionResult.DeviceNodes)
+	partitionNodesBase := handler.BaseDeviceNodes(partitionResult)
+	if partitionNodes, applied := applyProviderDeviceMountPolicy(
+		partitionNodesBase,
+		existingDevice.Vendor,
+		existingDevice.Model,
+		true,
+		partitionResult.EnvVars,
+	); applied {
+		newPartitionedDevice.DeviceNode = partitionNodes
+	} else if handler.UseProviderNodesFallback() && len(partitionNodesBase) > 0 {
+		// Replace parent device nodes to avoid leaking physical /dev/davinci* into vNPU pods.
+		newPartitionedDevice.DeviceNode = maps.Clone(partitionNodesBase)
 	}
 
 	// Preserve provider-returned environment variables for both env/device-node modes.

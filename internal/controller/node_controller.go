@@ -130,11 +130,10 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	// If node changed to other AI accelerator hardware vendor, update gpuNode label vendor and trigger hypervisor update
-	if gpuNode.Labels[constants.AcceleratorLabelVendor] != node.Labels[constants.AcceleratorLabelVendor] {
-		gpuNode.Labels[constants.AcceleratorLabelVendor] = node.Labels[constants.AcceleratorLabelVendor]
+	// Keep GPUNode labels in sync with Node labels so hypervisor args can be reconciled reliably.
+	if syncGPUNodeLabelsFromNode(node, gpuNode) {
 		if err := r.Update(ctx, gpuNode); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update GPU node vendor: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to sync GPU node labels from node: %w", err)
 		}
 	}
 
@@ -241,6 +240,47 @@ func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool, 
 	}
 	_ = controllerutil.SetControllerReference(pool, gpuNode, r.Scheme)
 	return gpuNode
+}
+
+func syncGPUNodeLabelsFromNode(node *corev1.Node, gpuNode *tfv1.GPUNode) bool {
+	if node == nil || gpuNode == nil {
+		return false
+	}
+	if gpuNode.Labels == nil {
+		gpuNode.Labels = map[string]string{}
+	}
+	nodeLabels := node.GetLabels()
+	changed := false
+
+	desiredVendor := ""
+	if nodeLabels != nil {
+		desiredVendor = nodeLabels[constants.AcceleratorLabelVendor]
+	}
+	if desiredVendor == "" {
+		if _, exists := gpuNode.Labels[constants.AcceleratorLabelVendor]; exists {
+			delete(gpuNode.Labels, constants.AcceleratorLabelVendor)
+			changed = true
+		}
+	} else if gpuNode.Labels[constants.AcceleratorLabelVendor] != desiredVendor {
+		gpuNode.Labels[constants.AcceleratorLabelVendor] = desiredVendor
+		changed = true
+	}
+
+	desiredIsolationMode := ""
+	if nodeLabels != nil {
+		desiredIsolationMode = nodeLabels[constants.HypervisorIsolationModeLabel]
+	}
+	if desiredIsolationMode == "" {
+		if _, exists := gpuNode.Labels[constants.HypervisorIsolationModeLabel]; exists {
+			delete(gpuNode.Labels, constants.HypervisorIsolationModeLabel)
+			changed = true
+		}
+	} else if gpuNode.Labels[constants.HypervisorIsolationModeLabel] != desiredIsolationMode {
+		gpuNode.Labels[constants.HypervisorIsolationModeLabel] = desiredIsolationMode
+		changed = true
+	}
+
+	return changed
 }
 
 // SetupWithManager sets up the controller with the Manager.

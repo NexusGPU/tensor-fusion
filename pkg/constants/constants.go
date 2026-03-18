@@ -73,6 +73,8 @@ var (
 
 	LastSyncTimeAnnotationKey = Domain + "/last-sync"
 	WorkloadKey               = Domain + "/workload"
+	// JSON encoded virtualization capability payload from hypervisor discovery.
+	GPUVirtualizationCapabilitiesAnnotation = Domain + "/virtualization-capabilities"
 
 	GpuPoolKey = Domain + "/gpupool"
 
@@ -253,6 +255,7 @@ const (
 		":" + AscendDriverLibDir +
 		":" + AscendDriverCommonDir +
 		":" + AscendDCMILibDir
+	AscendRuntimeClassName = "ascend"
 	AscendDriverVolumeName = "ascend-driver"
 	AscendDCMIVolumeName   = "ascend-dcmi"
 	AscendHostDevVolume    = "ascend-host-dev"

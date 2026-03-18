@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-ascend-partition-sample
+  namespace: tensor-fusion-sys
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-ascend-partition-sample
+  template:
+    metadata:
+      labels:
+        app: vllm-ascend-partition-sample
+        tensor-fusion.ai/enabled: "true"
+        tensor-fusion.ai/gpupool: tensor-fusion-shared
+        tensor-fusion.ai/vendor: Ascend
+      annotations:
+        tensor-fusion.ai/gpu-count: "1"
+        tensor-fusion.ai/gpu-model: Ascend 310P3
+        tensor-fusion.ai/gpupool: tensor-fusion-shared
+        tensor-fusion.ai/is-local-gpu: "true"
+        tensor-fusion.ai/isolation: partitioned
+        tensor-fusion.ai/partition-id: vir01
+        tensor-fusion.ai/vendor: Ascend
+        tensor-fusion.ai/compute-percent-request: "10"
+        tensor-fusion.ai/compute-percent-limit: "12"
+    spec:
+      schedulerName: tensor-fusion-scheduler
+      runtimeClassName: ascend
+      containers:
+        - name: vllm-ascend
+          image: docker.m.daocloud.io/openeuler/vllm-ascend:0.11.0rc0-torch_npu2.5.1-cann8.1.rc1-python3.10-oe2203lts
+          command:
+            - bash
+            - -lc
+            - sleep infinity
+          imagePullPolicy: IfNotPresent

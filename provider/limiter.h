@@ -21,6 +21,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "accelerator.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -64,9 +66,9 @@ typedef struct {
  * @param deviceUUID Device UUID
  * @param bytesDiff Bytes difference (positive = allocation, negative = deallocation)
  * @param record Output parameter for operation record
- * @return RESULT_SUCCESS on success, error code otherwise
+ * @return ACCEL_SUCCESS on success, error code otherwise
  */
-Result CheckAndRecordMemoryOps(const char* processId, const char* deviceUUID, int64_t bytesDiff, MemoryOpRecord* record);
+AccelResult CheckAndRecordMemoryOps(const char* processId, const char* deviceUUID, int64_t bytesDiff, MemoryOpRecord* record);
 
 /**
  * Check and record compute operations for soft isolation.
@@ -76,9 +78,9 @@ Result CheckAndRecordMemoryOps(const char* processId, const char* deviceUUID, in
  * @param deviceUUID Device UUID
  * @param computeTokens Compute tokens consumed (e.g., SM-cycles)
  * @param record Output parameter for operation record
- * @return RESULT_SUCCESS on success, error code otherwise
+ * @return ACCEL_SUCCESS on success, error code otherwise
  */
-Result CheckAndRecordComputeOps(const char* processId, const char* deviceUUID, uint64_t computeTokens, ComputeOpRecord* record);
+AccelResult CheckAndRecordComputeOps(const char* processId, const char* deviceUUID, uint64_t computeTokens, ComputeOpRecord* record);
 
 /**
  * Freeze a worker process (pause execution when resource limit reached).
@@ -86,9 +88,9 @@ Result CheckAndRecordComputeOps(const char* processId, const char* deviceUUID, u
  * 
  * @param workerId Worker identifier
  * @param state Output parameter for freeze state
- * @return RESULT_SUCCESS on success, error code otherwise
+ * @return ACCEL_SUCCESS on success, error code otherwise
  */
-Result FreezeWorker(const char* workerId, WorkerFreezeState* state);
+AccelResult FreezeWorker(const char* workerId, WorkerFreezeState* state);
 
 /**
  * Resume a worker process (resume execution when resources become available).
@@ -96,9 +98,9 @@ Result FreezeWorker(const char* workerId, WorkerFreezeState* state);
  * 
  * @param workerId Worker identifier
  * @param state Output parameter for freeze state
- * @return RESULT_SUCCESS on success, error code otherwise
+ * @return ACCEL_SUCCESS on success, error code otherwise
  */
-Result ResumeWorker(const char* workerId, WorkerFreezeState* state);
+AccelResult ResumeWorker(const char* workerId, WorkerFreezeState* state);
 
 /**
  * Auto-freeze hook: called when resource limit is reached.
@@ -107,9 +109,9 @@ Result ResumeWorker(const char* workerId, WorkerFreezeState* state);
  * @param workerId Worker identifier
  * @param deviceUUID Device UUID
  * @param resourceType Resource type ("memory" or "compute")
- * @return RESULT_SUCCESS on success, error code otherwise
+ * @return ACCEL_SUCCESS on success, error code otherwise
  */
-Result AutoFreeze(const char* workerId, const char* deviceUUID, const char* resourceType);
+AccelResult AutoFreeze(const char* workerId, const char* deviceUUID, const char* resourceType);
 
 /**
  * Auto-resume hook: called when resources become available.
@@ -118,9 +120,9 @@ Result AutoFreeze(const char* workerId, const char* deviceUUID, const char* reso
  * @param workerId Worker identifier
  * @param deviceUUID Device UUID
  * @param resourceType Resource type ("memory" or "compute")
- * @return RESULT_SUCCESS on success, error code otherwise
+ * @return ACCEL_SUCCESS on success, error code otherwise
  */
-Result AutoResume(const char* workerId, const char* deviceUUID, const char* resourceType);
+AccelResult AutoResume(const char* workerId, const char* deviceUUID, const char* resourceType);
 
 /**
  * Add a worker process to the limiter tracking.
@@ -128,13 +130,12 @@ Result AutoResume(const char* workerId, const char* deviceUUID, const char* reso
  * 
  * @param deviceUUID Device UUID
  * @param processId Process identifier (as string)
- * @return RESULT_SUCCESS on success, error code otherwise
+ * @return ACCEL_SUCCESS on success, error code otherwise
  */
-Result AddWorkerProcess(const char* deviceUUID, const char* processId);
+AccelResult AddWorkerProcess(const char* deviceUUID, const char* processId);
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif // LIMITER_H
-

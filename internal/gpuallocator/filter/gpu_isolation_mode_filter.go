@@ -26,6 +26,9 @@ func (f *GPUIsolationModeFilter) Filter(ctx context.Context, workerPodKey tfv1.N
 
 	filtered := make([]*tfv1.GPU, 0, len(gpus))
 	for _, gpu := range gpus {
+		if !isIsolationSupportedByCapabilities(extractVirtualizationCapabilities(gpu), f.requiredIsolationMode) {
+			continue
+		}
 		if gpu.Status.IsolationMode == "" || gpu.Status.IsolationMode == f.requiredIsolationMode {
 			filtered = append(filtered, gpu)
 		}
@@ -35,4 +38,26 @@ func (f *GPUIsolationModeFilter) Filter(ctx context.Context, workerPodKey tfv1.N
 
 func (f *GPUIsolationModeFilter) Name() string {
 	return "GPUIsolationModeFilter"
+}
+
+func isIsolationSupportedByCapabilities(caps gpuVirtualizationCapabilities, mode tfv1.IsolationModeType) bool {
+	if mode == "" || mode == tfv1.IsolationModeShared {
+		return true
+	}
+
+	// Backward compatibility: if capability metadata is absent, keep legacy behavior.
+	if !hasVirtualizationCapabilityMetadata(caps) {
+		return true
+	}
+
+	switch mode {
+	case tfv1.IsolationModeSoft:
+		return caps.SupportsSoftIsolation
+	case tfv1.IsolationModeHard:
+		return caps.SupportsHardIsolation
+	case tfv1.IsolationModePartitioned:
+		return caps.SupportsPartitioning
+	default:
+		return false
+	}
 }

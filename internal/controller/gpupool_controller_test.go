@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -419,12 +420,18 @@ var _ = Describe("GPUPool Controller", func() {
 			}).Should(Succeed())
 
 			By("attempting to update cluster with nil NodeManagerConfig")
-			tfc := tfEnv.GetCluster()
-			tfc.Spec.GPUPools[0].SpecTemplate.NodeManagerConfig = nil
+			var updateErr error
+			Eventually(func() string {
+				tfc := tfEnv.GetCluster()
+				tfc.Spec.GPUPools[0].SpecTemplate.NodeManagerConfig = nil
 
-			err := k8sClient.Update(ctx, tfc)
-			Expect(err).Should(HaveOccurred())
-			Expect(err.Error()).Should(ContainSubstring("nodeManagerConfig"))
+				updateErr = k8sClient.Update(ctx, tfc)
+				if updateErr == nil || apierrors.IsConflict(updateErr) {
+					return ""
+				}
+				return updateErr.Error()
+			}, 10*time.Second, 100*time.Millisecond).Should(ContainSubstring("nodeManagerConfig"))
+			Expect(updateErr).Should(HaveOccurred())
 
 			tfEnv.Cleanup()
 		})

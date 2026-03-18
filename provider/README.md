@@ -44,37 +44,38 @@ make test-run
 
 ### 0. Initialization
 
-- `VirtualGPUInit()`: Initialize the virtual GPU library (must be called before other APIs)
+- `AccelInit()`: Initialize the accelerator library (must be called before other APIs)
+- `AccelShutdown()`: Shutdown the accelerator library
 
 ### 1. DeviceInfo APIs
 
-- `GetDeviceCount()`: Get the number of available devices
-- `GetAllDevices()`: Get all available devices information (returns `ExtendedDeviceInfo` with basic info, properties, and virtualization capabilities)
-- `GetDeviceTopology()`: Get device topology including NVLink, IB NIC, and other interconnects
+- `AccelGetDeviceCount()`: Get the number of available devices
+- `AccelGetAllDevices()`: Get all available devices information (returns `ExtendedDeviceInfo` with basic info, properties, and virtualization capabilities)
+- `AccelGetAllDevicesTopology()`: Get device topology including NVLink, IB NIC, and other interconnects
 
 ### 2. Virtualization APIs
 
 #### Partitioned Isolation
-- `AssignPartition()`: Assign a partition to a device using a template (e.g., create MIG instance)
-- `RemovePartition()`: Remove a partition from a device
+- `AccelAssignPartition()`: Assign a partition to a device using a template (e.g., create MIG instance)
+- `AccelRemovePartition()`: Remove a partition from a device
 
 #### Hard Isolation
-- `SetMemHardLimit()`: Set hard memory limit for a worker (one-time, called at worker start by limiter.so)
-- `SetComputeUnitHardLimit()`: Set hard compute unit limit for a worker (one-time, called at worker start)
+- `AccelSetMemHardLimit()`: Set hard memory limit for a worker (one-time, called at worker start by limiter.so)
+- `AccelSetComputeUnitHardLimit()`: Set hard compute unit limit for a worker (one-time, called at worker start)
 
 #### Snapshot/Migration
-- `Snapshot()`: Snapshot device state for processes (lock processes, checkpoint state)
-- `Resume()`: Resume device state for processes (unlock processes, restore state)
+- `AccelSnapshot()`: Snapshot device state for processes (lock processes, checkpoint state)
+- `AccelResume()`: Resume device state for processes (unlock processes, restore state)
 
 ### 3. Metrics APIs
 
-- `GetProcessInformation()`: Get process information (compute and memory utilization) for all processes on all devices. Combines compute and memory utilization into a single call (AMD SMI style API design)
-- `GetDeviceMetrics()`: Get basic device metrics (power, temperature, PCIe bandwidth, utilization, memory usage, and extra vendor-specific metrics)
-- `GetVendorMountLibs()`: Get vendor mount paths for additional device driver or runtime libraries
+- `AccelGetProcessInformation()`: Get process information (compute and memory utilization) for all processes on all devices. Combines compute and memory utilization into a single call (AMD SMI style API design)
+- `AccelGetDeviceMetrics()`: Get basic device metrics (power, temperature, PCIe bandwidth, utilization, memory usage, and extra vendor-specific metrics)
+- `AccelGetVendorMountLibs()`: Get vendor mount paths for additional device driver or runtime libraries
 
 ### 4. Utility APIs
 
-- `RegisterLogCallback()`: Register a log callback function for library logging
+- `AccelRegisterLogCallback()`: Register a log callback function for library logging
 
 ## Key Data Structures
 
@@ -94,14 +95,14 @@ make test-run
 
 ## Result Codes
 
-All APIs return a `Result` enum:
-- `RESULT_SUCCESS`: Operation succeeded
-- `RESULT_ERROR_INVALID_PARAM`: Invalid parameter
-- `RESULT_ERROR_NOT_FOUND`: Resource not found
-- `RESULT_ERROR_NOT_SUPPORTED`: Operation not supported
-- `RESULT_ERROR_RESOURCE_EXHAUSTED`: Resource exhausted
-- `RESULT_ERROR_OPERATION_FAILED`: Operation failed
-- `RESULT_ERROR_INTERNAL`: Internal error
+All APIs return an `AccelResult` enum:
+- `ACCEL_SUCCESS`: Operation succeeded
+- `ACCEL_ERROR_INVALID_PARAM`: Invalid parameter
+- `ACCEL_ERROR_NOT_FOUND`: Resource not found
+- `ACCEL_ERROR_NOT_SUPPORTED`: Operation not supported
+- `ACCEL_ERROR_RESOURCE_EXHAUSTED`: Resource exhausted
+- `ACCEL_ERROR_OPERATION_FAILED`: Operation failed
+- `ACCEL_ERROR_INTERNAL`: Internal error
 
 ## Vendor Implementations
 
@@ -120,6 +121,19 @@ mgr, err := device.NewManager("path/to/libaccelerator.so", 30*time.Second)
 ```
 
 See `internal/hypervisor/device/` for the Go bindings and device manager implementation.
+
+## ProviderConfig extraEnv Note
+
+When using `ProviderConfig.spec.hypervisor.extraEnv`, values are appended to the
+hypervisor process environment and may be forwarded to worker container env vars
+through partition assignment results.
+
+For Ascend partition mode:
+
+- `TF_ASCEND_PARTITION_RUNTIME_OPTIONS` is intended for static vNPU workflows
+  that require `ASCEND_RUNTIME_OPTIONS`.
+- In dynamic partition workflows (for example, using `ASCEND_VISIBLE_DEVICES`
+  with `ASCEND_VNPU_SPECS`), this is usually not needed.
 
 ## Testing
 
@@ -151,5 +165,5 @@ isolationModes:
 - All struct parameters are carefully designed with fixed-size arrays for ABI stability
 - Memory management: Caller allocates output buffers, library fills them
 - Thread safety: Vendor implementations should be thread-safe
-- Error handling: All APIs return `Result` enum for error handling
-- Logging: Use `RegisterLogCallback()` to receive library log messages
+- Error handling: All APIs return `AccelResult` enum for error handling
+- Logging: Use `AccelRegisterLogCallback()` to receive library log messages
