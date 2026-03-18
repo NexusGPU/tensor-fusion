@@ -23,8 +23,8 @@ type Controller struct {
 	ctx context.Context
 	mu  sync.RWMutex
 
-	devices       map[string]*api.DeviceInfo // key: lowercase device UUID
-	nativeUUIDs   map[string]string          // key: lowercase UUID -> original UUID from driver
+	devices     map[string]*api.DeviceInfo // key: lowercase device UUID
+	nativeUUIDs map[string]string          // key: lowercase UUID -> original UUID from driver
 
 	accelerator          *AcceleratorInterface
 	acceleratorVendor    string
