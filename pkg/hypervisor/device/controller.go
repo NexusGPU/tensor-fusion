@@ -369,6 +369,12 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 		maps.Copy(newPartitionedDevice.DeviceEnv, partitionResult.EnvVars)
 	}
 
+	if m.devices == nil {
+		m.devices = make(map[string]*api.DeviceInfo)
+	}
+	if m.nativeUUIDs == nil {
+		m.nativeUUIDs = make(map[string]string)
+	}
 	m.devices[partitionResult.PartitionUUID] = newPartitionedDevice
 	m.nativeUUIDs[partitionResult.PartitionUUID] = partitionResult.PartitionUUID
 	return newPartitionedDevice, nil
