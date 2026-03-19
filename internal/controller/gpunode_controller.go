@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -63,7 +64,9 @@ type GPUNodeReconciler struct {
 const (
 	// Kubernetes jobs propagate their name into labels with a 63-character limit.
 	maxNodeJobNameLength = 63
-	nodeJobHashLength    = 8
+	// Use a longer, dedicated hash suffix for node-scoped jobs to reduce collision risk
+	// while keeping enough of the original node name for debugging.
+	nodeJobHashLength = 12
 )
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch;create;update;patch;delete
@@ -804,7 +807,7 @@ func buildNodeJobName(prefix, nodeName string) string {
 		return name
 	}
 
-	hash := utils.GetObjectHash(nodeName)
+	hash := buildNodeJobHash(nodeName)
 	if len(hash) > nodeJobHashLength {
 		hash = hash[:nodeJobHashLength]
 	}
@@ -824,6 +827,11 @@ func buildNodeJobName(prefix, nodeName string) string {
 	}
 
 	return fmt.Sprintf("%s-%s-%s", prefix, truncatedNodeName, hash)
+}
+
+func buildNodeJobHash(nodeName string) string {
+	sum := sha256.Sum256([]byte(nodeName))
+	return fmt.Sprintf("%x", sum[:])
 }
 
 // isNodeUnderGPUDriverUpgrade checks if the node is undergoing NVIDIA GPU driver upgrade

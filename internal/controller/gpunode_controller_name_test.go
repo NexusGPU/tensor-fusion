@@ -52,3 +52,20 @@ func TestBuildNodeJobNameAddsHashForUniqueness(t *testing.T) {
 		t.Fatalf("expected both names to be <= %d, got %d and %d", maxNodeJobNameLength, len(gotA), len(gotB))
 	}
 }
+
+func TestBuildNodeJobNameIsStableForLongNames(t *testing.T) {
+	t.Parallel()
+
+	prefix := "driver-probe"
+	nodeName := strings.Repeat("very-long-node-name-", 6)
+
+	gotA := buildNodeJobName(prefix, nodeName)
+	gotB := buildNodeJobName(prefix, nodeName)
+
+	if gotA != gotB {
+		t.Fatalf("expected stable job name, got %q and %q", gotA, gotB)
+	}
+	if len(gotA) > maxNodeJobNameLength {
+		t.Fatalf("expected name length <= %d, got %d (%q)", maxNodeJobNameLength, len(gotA), gotA)
+	}
+}
