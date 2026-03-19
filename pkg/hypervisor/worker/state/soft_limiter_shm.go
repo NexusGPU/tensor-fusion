@@ -7,8 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -21,6 +21,10 @@ const (
 	MaxDevices    = 16
 	MaxUUIDLen    = 64
 	ShmPathSuffix = "shm"
+
+	// Rust `#[repr(C)] enum SharedDeviceState` discriminants.
+	rustSharedDeviceStateV1Discriminant = uint32(0)
+	rustSharedDeviceStateV2Discriminant = uint32(1)
 )
 
 // RefCountError represents errors in reference count operations
@@ -35,6 +39,13 @@ func (e *RefCountError) Error() string {
 var (
 	ErrRefCountUnderflow = &RefCountError{Type: "underflow"}
 )
+
+func isProcessAlive(pid uintptr) bool {
+	if pid == 0 {
+		return false
+	}
+	return syscall.Kill(int(pid), 0) == nil
+}
 
 // PodIdentifier contains namespace and name
 type PodIdentifier struct {
@@ -305,26 +316,39 @@ type DeviceConfig struct {
 	TotalCudaCores uint32
 }
 
-// SharedDeviceStateV1 is the V1 shared device state
+// SharedDeviceStateV1 is the Rust-compatible V1 shared device state.
 type SharedDeviceStateV1 struct {
 	Devices          [MaxDevices]DeviceEntryV1
 	DeviceCountField uint32
 	LastHeartbeat    uint64
-	PIDs             *ShmMutex[*PIDSet]
+	PIDs             ShmMutex[PIDSet]
+	//nolint:unused // Padding field for Rust shared memory compatibility.
+	_padding [512]byte
 }
 
-// SharedDeviceStateV2 is the V2 shared device state with ERL
+// SharedDeviceStateV2 is the Rust-compatible V2 shared device state with ERL.
 type SharedDeviceStateV2 struct {
 	Devices          [MaxDevices]DeviceEntryV2
 	DeviceCountField uint32
 	LastHeartbeat    uint64
-	PIDs             *ShmMutex[*PIDSet]
+	PIDs             ShmMutex[PIDSet]
+	//nolint:unused // Padding field for Rust shared memory compatibility.
+	_padding [512]byte
 }
 
-// SharedDeviceState is a versioned enum for compatibility
+// SharedDeviceState is the Go wrapper used by the hypervisor code.
 type SharedDeviceState struct {
 	V1 *SharedDeviceStateV1
 	V2 *SharedDeviceStateV2
+}
+
+// rustSharedDeviceStateV2Layout matches Rust's `#[repr(C)] enum SharedDeviceState::V2`.
+// The V2 payload begins at offset 8, which is required by `libcuda_limiter.so`.
+type rustSharedDeviceStateV2Layout struct {
+	Discriminant uint32
+	//nolint:unused // Required to align the payload to 8 bytes like Rust's repr(C) enum.
+	_padding [4]byte
+	V2       SharedDeviceStateV2
 }
 
 // Version returns the version number
@@ -723,38 +747,76 @@ func (d *SharedDeviceInfoV2) FetchAddERLTokens(amount float64) float64 {
 	}
 }
 
-// PIDSet is a set of process IDs with a fixed capacity
+// PIDBitmap matches Rust's oversized `Bitmap<MAX_PROCESSES>` layout.
+type PIDBitmap [MaxProcesses]uint64
+
+func (b *PIDBitmap) test(offset uint32) bool {
+	idx := offset / 64
+	if idx >= uint32(len(b)) {
+		return false
+	}
+	bit := (uint64(1) << 63) >> (offset & 63)
+	return (b[idx] & bit) == bit
+}
+
+func (b *PIDBitmap) testAndSet(offset uint32, value bool) {
+	idx := offset / 64
+	if idx >= uint32(len(b)) {
+		return
+	}
+	bit := (uint64(1) << 63) >> (offset & 63)
+	if value {
+		b[idx] |= bit
+	} else {
+		b[idx] &^= bit
+	}
+}
+
+// PIDSet is a Rust-compatible fixed-capacity set of process IDs.
 type PIDSet struct {
-	values []int
-	mu     sync.Mutex //nolint:unused // Used via ShmMutex wrapper
+	values [MaxProcesses]uintptr
+	bitmap PIDBitmap
+	len    uintptr
 }
 
 // NewPIDSet creates a new PID set
-func NewPIDSet() *PIDSet {
-	return &PIDSet{
-		values: make([]int, 0, MaxProcesses),
-	}
+func NewPIDSet() PIDSet {
+	return PIDSet{}
 }
 
 // InsertIfAbsent inserts a value if it's not already present
 func (s *PIDSet) InsertIfAbsent(pid int) bool {
-	for _, v := range s.values {
-		if v == pid {
+	pidValue := uintptr(pid)
+	for i := 0; i < MaxProcesses; i++ {
+		if s.bitmap.test(uint32(i)) && s.values[i] == pidValue {
 			return false
 		}
 	}
-	if len(s.values) >= MaxProcesses {
+	if s.len >= uintptr(MaxProcesses) {
 		return false
 	}
-	s.values = append(s.values, pid)
-	return true
+	for i := 0; i < MaxProcesses; i++ {
+		if s.bitmap.test(uint32(i)) {
+			continue
+		}
+		s.values[i] = pidValue
+		s.bitmap.testAndSet(uint32(i), true)
+		s.len++
+		return true
+	}
+	return false
 }
 
 // RemoveValue removes a value from the set
 func (s *PIDSet) RemoveValue(pid int) bool {
-	for i, v := range s.values {
-		if v == pid {
-			s.values = append(s.values[:i], s.values[i+1:]...)
+	pidValue := uintptr(pid)
+	for i := 0; i < MaxProcesses; i++ {
+		if s.bitmap.test(uint32(i)) && s.values[i] == pidValue {
+			s.bitmap.testAndSet(uint32(i), false)
+			s.values[i] = 0
+			if s.len > 0 {
+				s.len--
+			}
 			return true
 		}
 	}
@@ -763,38 +825,56 @@ func (s *PIDSet) RemoveValue(pid int) bool {
 
 // Values returns all values in the set
 func (s *PIDSet) Values() []int {
-	result := make([]int, len(s.values))
-	copy(result, s.values)
+	result := make([]int, 0, s.len)
+	for i := 0; i < MaxProcesses; i++ {
+		if s.bitmap.test(uint32(i)) {
+			result = append(result, int(s.values[i]))
+		}
+	}
 	return result
 }
 
 // ShmMutex is a shared memory mutex wrapper
 type ShmMutex[T any] struct {
-	mu    sync.Mutex
-	Value T
+	LockField uintptr
+	Value     T
+	PID       uintptr
 }
 
 // NewShmMutex creates a new shared memory mutex
-func NewShmMutex[T any](value T) *ShmMutex[T] {
-	return &ShmMutex[T]{
+func NewShmMutex[T any](value T) ShmMutex[T] {
+	return ShmMutex[T]{
 		Value: value,
+		PID:   uintptr(os.Getpid()),
 	}
 }
 
 // Lock locks the mutex
 func (m *ShmMutex[T]) Lock() {
-	m.mu.Lock()
+	for {
+		if atomic.CompareAndSwapUintptr(&m.LockField, 0, m.PID) {
+			return
+		}
+		holder := atomic.LoadUintptr(&m.LockField)
+		if holder != 0 && holder != m.PID && !isProcessAlive(holder) {
+			atomic.CompareAndSwapUintptr(&m.LockField, holder, 0)
+			continue
+		}
+		runtime.Gosched()
+	}
 }
 
 // Unlock unlocks the mutex
 func (m *ShmMutex[T]) Unlock() {
-	m.mu.Unlock()
+	_ = atomic.CompareAndSwapUintptr(&m.LockField, m.PID, 0)
 }
 
 // CleanupOrphanedLock cleans up orphaned locks (placeholder for now)
 func (m *ShmMutex[T]) CleanupOrphanedLock() {
-	// In a real implementation, this would check for dead processes
-	// and release their locks. For now, it's a no-op.
+	holder := atomic.LoadUintptr(&m.LockField)
+	if holder != 0 && !isProcessAlive(holder) {
+		atomic.CompareAndSwapUintptr(&m.LockField, holder, 0)
+	}
 }
 
 // SharedMemoryHandle manages a shared memory mapping
@@ -815,8 +895,8 @@ func CreateSharedMemoryHandle(podPath string, configs []DeviceConfig) (*SharedMe
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	// Calculate size needed for SharedDeviceStateV2
-	stateSize := int(unsafe.Sizeof(SharedDeviceStateV2{}))
+	// Rust maps this file as `#[repr(C)] enum SharedDeviceState::V2`.
+	stateSize := int(unsafe.Sizeof(rustSharedDeviceStateV2Layout{}))
 
 	// Create or open the file
 	file, err := os.OpenFile(shmPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
@@ -845,22 +925,21 @@ func CreateSharedMemoryHandle(podPath string, configs []DeviceConfig) (*SharedMe
 		return nil, err
 	}
 
-	// Copy the state to the mapped memory
-	stateBytes := (*[1 << 30]byte)(unsafe.Pointer(state))[:stateSize:stateSize]
-	copy(data, stateBytes)
-
 	// Get a pointer to the mapped state
-	mappedState := (*SharedDeviceStateV2)(unsafe.Pointer(&data[0]))
+	mappedState := (*rustSharedDeviceStateV2Layout)(unsafe.Pointer(&data[0]))
+	mappedState.Discriminant = rustSharedDeviceStateV2Discriminant
 
-	// Initialize the PIDs mutex in the mapped memory
-	// Note: This is a simplified version - in a real implementation,
-	// you'd need to properly initialize the mutex for shared memory
-	mappedState.PIDs = NewShmMutex(NewPIDSet())
+	// Copy the V2 payload bytes into the mapped enum payload without
+	// assigning the lock-containing struct by value.
+	statePayloadSize := int(unsafe.Sizeof(*state))
+	stateBytes := (*[1 << 30]byte)(unsafe.Pointer(state))[:statePayloadSize:statePayloadSize]
+	v2Offset := int(unsafe.Offsetof(rustSharedDeviceStateV2Layout{}.V2))
+	copy(data[v2Offset:v2Offset+statePayloadSize], stateBytes)
 
 	return &SharedMemoryHandle{
 		path:     shmPath,
 		data:     data,
-		state:    &SharedDeviceState{V2: mappedState},
+		state:    &SharedDeviceState{V2: &mappedState.V2},
 		file:     file,
 		fileSize: int64(stateSize),
 	}, nil
@@ -884,6 +963,15 @@ func OpenSharedMemoryHandle(podPath string) (*SharedMemoryHandle, error) {
 	}
 
 	fileSize := stat.Size()
+	expectedSize := int64(unsafe.Sizeof(rustSharedDeviceStateV2Layout{}))
+	legacySize := int64(unsafe.Sizeof(SharedDeviceStateV2{}))
+	if fileSize != expectedSize {
+		_ = file.Close()
+		if fileSize == legacySize {
+			return nil, fmt.Errorf("legacy shared memory layout detected: size=%d expected=%d", fileSize, expectedSize)
+		}
+		return nil, fmt.Errorf("unexpected shared memory size: got=%d expected=%d", fileSize, expectedSize)
+	}
 
 	// Memory map the file
 	data, err := syscall.Mmap(int(file.Fd()), 0, int(fileSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
@@ -892,13 +980,18 @@ func OpenSharedMemoryHandle(podPath string) (*SharedMemoryHandle, error) {
 		return nil, fmt.Errorf("failed to mmap: %w", err)
 	}
 
-	// Get a pointer to the mapped state (assume V2 for now)
-	mappedState := (*SharedDeviceStateV2)(unsafe.Pointer(&data[0]))
+	// Get a pointer to the mapped state and verify the Rust discriminant.
+	mappedState := (*rustSharedDeviceStateV2Layout)(unsafe.Pointer(&data[0]))
+	if mappedState.Discriminant != rustSharedDeviceStateV2Discriminant {
+		_ = syscall.Munmap(data)
+		_ = file.Close()
+		return nil, fmt.Errorf("unsupported shared memory discriminant: %d", mappedState.Discriminant)
+	}
 
 	return &SharedMemoryHandle{
 		path:     shmPath,
 		data:     data,
-		state:    &SharedDeviceState{V2: mappedState},
+		state:    &SharedDeviceState{V2: &mappedState.V2},
 		file:     file,
 		fileSize: fileSize,
 	}, nil

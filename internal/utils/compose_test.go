@@ -33,9 +33,27 @@ func envValue(envs []corev1.EnvVar, name string) (string, bool) {
 	return "", false
 }
 
+func hasEnvName(envs []corev1.EnvVar, name string) bool {
+	for _, env := range envs {
+		if env.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func hasVolumeMount(mounts []corev1.VolumeMount, name, path string) bool {
 	for _, mount := range mounts {
 		if mount.Name == name && mount.MountPath == path {
+			return true
+		}
+	}
+	return false
+}
+
+func hasVolumeMountWithSubPath(mounts []corev1.VolumeMount, name, path, subPath string) bool {
+	for _, mount := range mounts {
+		if mount.Name == name && mount.MountPath == path && mount.SubPath == subPath {
 			return true
 		}
 	}
@@ -124,12 +142,16 @@ var _ = Describe("Compose Utils", func() {
 				Spec: tfv1.GPUPoolSpec{
 					ComponentConfig: &tfv1.ComponentConfig{
 						Client: &tfv1.ClientConfig{Image: "client:latest"},
+						Worker: &tfv1.WorkerConfig{Image: "worker:latest"},
+						Hypervisor: &tfv1.HypervisorConfig{
+							Image: "hypervisor:latest",
+						},
 					},
 				},
 			}
 		}
 
-		It("should not inject initContainer or sidecar container in local mode", func() {
+		It("should inject worker sidecar in local soft mode", func() {
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
 				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
@@ -137,20 +159,170 @@ var _ = Describe("Compose Utils", func() {
 
 			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
 				Profile: &tfv1.WorkloadProfileSpec{
-					IsLocalGPU:    true,
-					SidecarWorker: true,
+					IsLocalGPU: true,
+					Isolation:  tfv1.IsolationModeSoft,
+					GPUVendor:  constants.AcceleratorVendorNvidia,
 				},
 			}, []int{0})
 
-			Expect(pod.Spec.InitContainers).To(BeEmpty())
-			Expect(pod.Spec.Containers).To(HaveLen(1))
+			Expect(pod.Spec.InitContainers).To(HaveLen(1))
+			Expect(pod.Spec.InitContainers[0].Name).To(Equal(constants.TFContainerNameClient))
+			Expect(pod.Spec.Containers).To(HaveLen(2))
+			Expect(pod.Spec.Containers[1].Name).To(Equal(constants.TFContainerNameWorker))
+			Expect(hasVolumeMount(pod.Spec.Containers[0].VolumeMounts, constants.TransportShmVolumeName, constants.TransportShmPath)).To(BeTrue())
+			Expect(hasVolumeMount(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.DataVolumeName,
+				constants.TFDataPath+constants.SharedMemMountSubPath,
+			)).To(BeTrue())
+			Expect(hasVolumeMount(pod.Spec.Containers[1].VolumeMounts, constants.TransportShmVolumeName, constants.TransportShmPath)).To(BeTrue())
+			Expect(hasVolumeMount(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.TFLibsVolumeName,
+				constants.TFLibsVolumeMountPath,
+			)).To(BeTrue())
+			Expect(hasVolumeMountWithSubPath(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.TFLibsVolumeName,
+				constants.LdPreloadFile,
+				constants.LdPreloadFileName,
+			)).To(BeTrue())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.HypervisorIPEnv)).To(BeTrue())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PodNameEnv)).To(BeTrue())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PodNamespaceEnv)).To(BeTrue())
+			value, found := envValue(pod.Spec.Containers[0].Env, constants.ContainerNameEnv)
+			Expect(found).To(BeTrue())
+			Expect(value).To(Equal("main"))
+			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeTrue())
+			cudaHooksValue, found := envValue(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)
+			Expect(found).To(BeTrue())
+			Expect(cudaHooksValue).To(Equal("false"))
 
 			volumeNames := make([]string, 0, len(pod.Spec.Volumes))
 			for _, volume := range pod.Spec.Volumes {
 				volumeNames = append(volumeNames, volume.Name)
 			}
 			Expect(volumeNames).To(ContainElement(constants.DataVolumeName))
-			Expect(volumeNames).NotTo(ContainElement(constants.TransportShmVolumeName))
+			Expect(volumeNames).To(ContainElement(constants.TransportShmVolumeName))
+			Expect(volumeNames).To(ContainElement(constants.TFLibsVolumeName))
+		})
+
+		It("should inject worker sidecar in local hard mode", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: true,
+					Isolation:  tfv1.IsolationModeHard,
+					GPUVendor:  constants.AcceleratorVendorNvidia,
+				},
+			}, []int{0})
+
+			Expect(pod.Spec.InitContainers).To(HaveLen(1))
+			Expect(pod.Spec.InitContainers[0].Name).To(Equal(constants.TFContainerNameClient))
+			Expect(pod.Spec.Containers).To(HaveLen(2))
+			Expect(pod.Spec.Containers[1].Name).To(Equal(constants.TFContainerNameWorker))
+			Expect(hasVolumeMount(pod.Spec.Containers[0].VolumeMounts, constants.TransportShmVolumeName, constants.TransportShmPath)).To(BeTrue())
+			Expect(hasVolumeMount(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.DataVolumeName,
+				constants.TFDataPath+constants.SharedMemMountSubPath,
+			)).To(BeTrue())
+			Expect(hasVolumeMount(pod.Spec.Containers[1].VolumeMounts, constants.TransportShmVolumeName, constants.TransportShmPath)).To(BeTrue())
+			Expect(hasVolumeMount(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.TFLibsVolumeName,
+				constants.TFLibsVolumeMountPath,
+			)).To(BeTrue())
+			Expect(hasVolumeMountWithSubPath(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.TFLibsVolumeName,
+				constants.LdPreloadFile,
+				constants.LdPreloadFileName,
+			)).To(BeTrue())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.HypervisorIPEnv)).To(BeTrue())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PodNameEnv)).To(BeTrue())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PodNamespaceEnv)).To(BeTrue())
+			value, found := envValue(pod.Spec.Containers[0].Env, constants.ContainerNameEnv)
+			Expect(found).To(BeTrue())
+			Expect(value).To(Equal("main"))
+			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeTrue())
+			cudaHooksValue, found := envValue(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)
+			Expect(found).To(BeTrue())
+			Expect(cudaHooksValue).To(Equal("false"))
+		})
+
+		It("should keep local shared mode as embedded worker", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: true,
+					Isolation:  tfv1.IsolationModeShared,
+				},
+			}, []int{0})
+
+			Expect(pod.Spec.InitContainers).To(BeEmpty())
+			Expect(pod.Spec.Containers).To(HaveLen(1))
+			Expect(hasVolumeMount(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.DataVolumeName,
+				constants.TFDataPath+constants.SharedMemMountSubPath,
+			)).To(BeTrue())
+			Expect(hasVolumeMount(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.TFLibsVolumeName,
+				constants.LdPreloadFile,
+			)).To(BeFalse())
+			Expect(hasVolumeMountWithSubPath(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.TFLibsVolumeName,
+				constants.LdPreloadFile,
+				constants.LdPreloadFileName,
+			)).To(BeFalse())
+			Expect(hasVolumeMount(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.TFConfVolumeName,
+				constants.LdPreloadFile,
+			)).To(BeFalse())
+			Expect(hasVolumeMount(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.TFLibsVolumeName,
+				constants.LdLibraryPathFile,
+			)).To(BeFalse())
+			Expect(hasVolumeMount(
+				pod.Spec.Containers[0].VolumeMounts,
+				constants.TFLibsVolumeName,
+				constants.TFLibsVolumeMountPath,
+			)).To(BeFalse())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PrependPathEnv)).To(BeFalse())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PrependLibPathEnv)).To(BeFalse())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.RealCUDALibPathEnv)).To(BeFalse())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.RealNvmlLibPathEnv)).To(BeFalse())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)).To(BeFalse())
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.NvidiaVisibleAllDeviceEnv)).To(BeFalse())
+		})
+
+		It("should not disable CUDA hooks for remote mode", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: false,
+					GPUVendor:  constants.AcceleratorVendorNvidia,
+				},
+			}, []int{0})
+
+			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)).To(BeFalse())
 		})
 
 		It("should not inject NVIDIA_VISIBLE_DEVICES for non-NVIDIA local workloads", func() {
@@ -182,6 +354,74 @@ var _ = Describe("Compose Utils", func() {
 			Expect(pod.Spec.InitContainers).To(HaveLen(1))
 			Expect(pod.Spec.InitContainers[0].Name).To(Equal(constants.TFContainerNameClient))
 			Expect(pod.Spec.Containers).To(HaveLen(1))
+		})
+
+		It("should prefer provider client image for any injected mode", func() {
+			providerMgr := provider.NewManager(nil)
+			providerMgr.UpdateProvider(&tfv1.ProviderConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: "nvidia-provider"},
+				Spec: tfv1.ProviderConfigSpec{
+					Vendor: constants.AcceleratorVendorNvidia,
+					Images: tfv1.ProviderImages{
+						RemoteClient: "provider-remote-client:latest",
+					},
+				},
+			})
+			provider.SetGlobalManagerForTesting(providerMgr)
+
+			pool := newPool()
+			pool.Spec.ComponentConfig.Client.Image = "pool-client:latest"
+
+			remotePod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), remotePod, pool, utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: false,
+					GPUVendor:  constants.AcceleratorVendorNvidia,
+				},
+			}, []int{0})
+
+			Expect(remotePod.Spec.InitContainers).To(HaveLen(1))
+			Expect(remotePod.Spec.InitContainers[0].Image).To(Equal("provider-remote-client:latest"))
+			Expect(hasEnvName(remotePod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)).To(BeFalse())
+
+			localHardPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), localHardPod, pool, utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: true,
+					Isolation:  tfv1.IsolationModeHard,
+					GPUVendor:  constants.AcceleratorVendorNvidia,
+				},
+			}, []int{0})
+
+			Expect(localHardPod.Spec.InitContainers).To(HaveLen(1))
+			Expect(localHardPod.Spec.InitContainers[0].Image).To(Equal("provider-remote-client:latest"))
+			cudaHooksValue, found := envValue(localHardPod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)
+			Expect(found).To(BeTrue())
+			Expect(cudaHooksValue).To(Equal("false"))
+
+			localSharedPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), localSharedPod, pool, utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: true,
+					Isolation:  tfv1.IsolationModeShared,
+					GPUVendor:  constants.AcceleratorVendorNvidia,
+				},
+			}, []int{0})
+
+			Expect(localSharedPod.Spec.InitContainers).To(BeEmpty())
+			Expect(hasEnvName(localSharedPod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)).To(BeFalse())
 		})
 
 		It("should auto set runtimeClassName for Ascend remote mode", func() {
@@ -361,6 +601,22 @@ var _ = Describe("Compose Utils", func() {
 			Expect(hasVolumeMount(spec.Containers[0].VolumeMounts, constants.AscendDCMIVolumeName, constants.AscendDCMIHostPath)).To(BeTrue())
 			Expect(hasHostPathVolume(spec.Volumes, constants.AscendDriverVolumeName, constants.AscendDriverHostPath)).To(BeTrue())
 			Expect(hasHostPathVolume(spec.Volumes, constants.AscendDCMIVolumeName, constants.AscendDCMIHostPath)).To(BeTrue())
+		})
+
+		It("should inject real NVIDIA library paths for NVIDIA workers", func() {
+			container := &corev1.Container{}
+			workloadProfile := &tfv1.WorkloadProfileSpec{
+				GPUVendor: constants.AcceleratorVendorNvidia,
+			}
+
+			utils.SetWorkerContainerSpec(container, workloadProfile, &tfv1.WorkerConfig{Image: "worker:latest"}, &tfv1.HypervisorConfig{}, "", false)
+
+			cudaPath, ok := envValue(container.Env, constants.RealCUDALibPathEnv)
+			Expect(ok).To(BeTrue())
+			Expect(cudaPath).To(Equal(constants.RealCUDALibPathValue))
+			nvmlPath, ok := envValue(container.Env, constants.RealNvmlLibPathEnv)
+			Expect(ok).To(BeTrue())
+			Expect(nvmlPath).To(Equal(constants.RealNvmlLibPathValue))
 		})
 	})
 })

@@ -190,8 +190,8 @@ func validateIsolationAndExecutionMode(profile *tfv1.WorkloadProfileSpec) error 
 	if profile == nil {
 		return nil
 	}
-	// Hard isolation needs worker runtime interception. Local-GPU mode without sidecar has no worker process.
-	if profile.Isolation == tfv1.IsolationModeHard && profile.IsLocalGPU && !profile.SidecarWorker {
+	// Local hard/soft modes run through a sibling worker container. Keep the old sidecar flag as a compatibility hint.
+	if profile.Isolation == tfv1.IsolationModeHard && profile.IsLocalGPU && !utils.UseLocalWorkerSidecar(profile) {
 		return fmt.Errorf("hard isolation is only supported in remote mode or local sidecar-worker mode")
 	}
 	return nil
