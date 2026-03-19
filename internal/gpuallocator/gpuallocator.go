@@ -1262,6 +1262,18 @@ func syncGPUMetadataAndStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
 	old.Status.Vendor = gpu.Status.Vendor
 	old.Status.NUMANode = gpu.Status.NUMANode
 	old.Status.Index = gpu.Status.Index
+	if gpu.Status.NvLink != nil {
+		old.Status.NvLink = &tfv1.GPUNvLinkStatus{
+			PeerCount:          gpu.Status.NvLink.PeerCount,
+			TotalLinkCount:     gpu.Status.NvLink.TotalLinkCount,
+			TotalBandwidthMBps: gpu.Status.NvLink.TotalBandwidthMBps,
+		}
+		if len(gpu.Status.NvLink.Peers) > 0 {
+			old.Status.NvLink.Peers = append([]tfv1.GPUNvLinkPeer(nil), gpu.Status.NvLink.Peers...)
+		}
+	} else {
+		old.Status.NvLink = nil
+	}
 }
 
 func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
