@@ -18,10 +18,12 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
+	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -58,6 +60,14 @@ type GPUNodeReconciler struct {
 	Expander                             *expander.NodeExpander
 	CompatibleWithNvidiaContainerToolkit bool
 }
+
+const (
+	// Kubernetes jobs propagate their name into labels with a 63-character limit.
+	maxNodeJobNameLength = 63
+	// Use a longer, dedicated hash suffix for node-scoped jobs to reduce collision risk
+	// while keeping enough of the original node name for debugging.
+	nodeJobHashLength = 12
+)
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes/status,verbs=get;update;patch
@@ -784,11 +794,44 @@ func (n *nvidiaHandler) findDevicePluginPod(ctx context.Context, r *GPUNodeRecon
 }
 
 func getDiscoveryJobName(gpunodeName string) string {
-	return fmt.Sprintf("node-discovery-%s", gpunodeName)
+	return buildNodeJobName("node-discovery", gpunodeName)
 }
 
 func getDriverProbeJobName(gpuNodeName string) string {
-	return fmt.Sprintf("driver-probe-%s", gpuNodeName)
+	return buildNodeJobName("driver-probe", gpuNodeName)
+}
+
+func buildNodeJobName(prefix, nodeName string) string {
+	name := fmt.Sprintf("%s-%s", prefix, nodeName)
+	if len(name) <= maxNodeJobNameLength {
+		return name
+	}
+
+	hash := buildNodeJobHash(nodeName)
+	if len(hash) > nodeJobHashLength {
+		hash = hash[:nodeJobHashLength]
+	}
+
+	availableNodeNameLen := maxNodeJobNameLength - len(prefix) - len(hash) - 2
+	if availableNodeNameLen <= 0 {
+		return fmt.Sprintf("%s-%s", prefix, hash)
+	}
+
+	truncatedNodeName := nodeName
+	if len(truncatedNodeName) > availableNodeNameLen {
+		truncatedNodeName = truncatedNodeName[:availableNodeNameLen]
+	}
+	truncatedNodeName = strings.TrimRight(truncatedNodeName, "-")
+	if truncatedNodeName == "" {
+		return fmt.Sprintf("%s-%s", prefix, hash)
+	}
+
+	return fmt.Sprintf("%s-%s-%s", prefix, truncatedNodeName, hash)
+}
+
+func buildNodeJobHash(nodeName string) string {
+	sum := sha256.Sum256([]byte(nodeName))
+	return fmt.Sprintf("%x", sum[:])
 }
 
 // isNodeUnderGPUDriverUpgrade checks if the node is undergoing NVIDIA GPU driver upgrade
