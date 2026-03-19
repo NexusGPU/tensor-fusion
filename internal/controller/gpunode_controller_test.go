@@ -48,7 +48,7 @@ var _ = Describe("GPUNode Controller", func() {
 			Eventually(func(g Gomega) {
 				job := &batchv1.Job{}
 				g.Expect(k8sClient.Get(ctx, types.NamespacedName{
-					Name:      fmt.Sprintf("node-discovery-%s", gpuNode.Name),
+					Name:      getDiscoveryJobName(gpuNode.Name),
 					Namespace: utils.CurrentNamespace(),
 				}, job)).Should(Succeed())
 
