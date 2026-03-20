@@ -71,6 +71,7 @@ func TestAddTFNodeDiscoveryConfAfterTemplate(t *testing.T) {
 		gpuNodeName                          string
 		expectInitContainers                 int
 		validateToolkitInit                  bool
+		expectedRuntimeClass                 string
 	}{
 		{
 			name:                                 "with nvidia toolkit validation",
@@ -79,6 +80,7 @@ func TestAddTFNodeDiscoveryConfAfterTemplate(t *testing.T) {
 			gpuNodeName:                          "test-node",
 			expectInitContainers:                 1,
 			validateToolkitInit:                  true,
+			expectedRuntimeClass:                 "nvidia",
 		},
 		{
 			name:                                 "without nvidia toolkit validation",
@@ -87,6 +89,7 @@ func TestAddTFNodeDiscoveryConfAfterTemplate(t *testing.T) {
 			gpuNodeName:                          "test-node",
 			expectInitContainers:                 0,
 			validateToolkitInit:                  false,
+			expectedRuntimeClass:                 "",
 		},
 	}
 
@@ -145,6 +148,11 @@ func TestAddTFNodeDiscoveryConfAfterTemplate(t *testing.T) {
 			// Verify basic node discovery settings
 			require.Equal(t, corev1.RestartPolicyOnFailure, tmpl.Spec.RestartPolicy)
 			require.NotNil(t, tmpl.Spec.TerminationGracePeriodSeconds)
+			runtimeClass := ""
+			if tmpl.Spec.RuntimeClassName != nil {
+				runtimeClass = *tmpl.Spec.RuntimeClassName
+			}
+			require.Equal(t, tt.expectedRuntimeClass, runtimeClass)
 		})
 	}
 }
