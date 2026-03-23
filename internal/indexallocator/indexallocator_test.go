@@ -5,6 +5,11 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
@@ -17,7 +22,8 @@ var _ = Describe("IndexAllocator", func() {
 	)
 
 	BeforeEach(func() {
-		scheme := fake.NewClientBuilder().WithScheme(fake.NewClientBuilder().Build().Scheme()).Build().Scheme()
+		scheme := runtime.NewScheme()
+		Expect(v1.AddToScheme(scheme)).To(Succeed())
 		client := fake.NewClientBuilder().WithScheme(scheme).Build()
 
 		ctx = context.Background()
@@ -81,4 +87,244 @@ var _ = Describe("IndexAllocator", func() {
 			Expect(index).To(Equal(1), "index should wrap around from 128 to 1")
 		})
 	})
+
+	Describe("AsyncCheckNodeIndexAvailableAndAssign", func() {
+		It("should patch the pod index annotation when annotations already exist", func() {
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "worker-pod",
+					Namespace: "default",
+					Annotations: map[string]string{
+						"existing": "value",
+					},
+				},
+				Spec: v1.PodSpec{
+					NodeName: "node-a",
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodPending,
+				},
+			}
+			Expect(allocator.Client.Create(ctx, pod)).To(Succeed())
+
+			allocator.SetReady()
+			allocator.AsyncCheckNodeIndexAvailableAndAssign(pod, 3)
+
+			Eventually(func(g Gomega) {
+				updated := &v1.Pod{}
+				g.Expect(allocator.Client.Get(ctx, types.NamespacedName{
+					Namespace: pod.Namespace,
+					Name:      pod.Name,
+				}, updated)).To(Succeed())
+				g.Expect(updated.Annotations).To(HaveKeyWithValue(constants.PodIndexAnnotation, "3"))
+				g.Expect(updated.Annotations).To(HaveKeyWithValue("existing", "value"))
+			}).Should(Succeed())
+		})
+
+		It("should patch the pod index annotation when annotations are nil", func() {
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "worker-pod-no-annotations",
+					Namespace: "default",
+				},
+				Spec: v1.PodSpec{
+					NodeName: "node-a",
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodPending,
+				},
+			}
+			Expect(allocator.Client.Create(ctx, pod)).To(Succeed())
+
+			allocator.SetReady()
+			allocator.AsyncCheckNodeIndexAvailableAndAssign(pod, 7)
+
+			Eventually(func(g Gomega) {
+				updated := &v1.Pod{}
+				g.Expect(allocator.Client.Get(ctx, types.NamespacedName{
+					Namespace: pod.Namespace,
+					Name:      pod.Name,
+				}, updated)).To(Succeed())
+				g.Expect(updated.Annotations).To(HaveKeyWithValue(constants.PodIndexAnnotation, "7"))
+			}).Should(Succeed())
+		})
+	})
+
+	Describe("Index occupancy tracking", func() {
+		It("should remove an occupied index after the pod reaches running state", func() {
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "worker-pod-running",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.LabelComponent: constants.ComponentWorker,
+					},
+				},
+				Spec: v1.PodSpec{
+					NodeName: "node-a",
+					Containers: []v1.Container{{
+						Resources: v1.ResourceRequirements{
+							Limits: v1.ResourceList{
+								v1.ResourceName(constants.PodIndexAnnotation + constants.PodIndexDelimiter + "0"): resourceMustParse("4"),
+							},
+						},
+					}},
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodPending,
+				},
+			}
+
+			allocator.SetReady()
+			Expect(allocator.CheckNodeIndexAndTryOccupy(pod, 4)).To(BeTrue())
+
+			pod.Status.Phase = v1.PodRunning
+			allocator.ReconcileLockState(pod)
+
+			allocator.storeMutex.RLock()
+			defer allocator.storeMutex.RUnlock()
+			Expect(allocator.nodeIndexQueue["node-a"]).NotTo(HaveKey(4))
+			Expect(allocator.podIndexMap).NotTo(HaveKey(types.NamespacedName{Namespace: "default", Name: "worker-pod-running"}))
+		})
+
+		It("should reclaim a stale occupied index for a new pending pod", func() {
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "worker-pod-stale",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.LabelComponent: constants.ComponentWorker,
+					},
+				},
+				Spec: v1.PodSpec{
+					NodeName: "node-a",
+					Containers: []v1.Container{{
+						Resources: v1.ResourceRequirements{
+							Limits: v1.ResourceList{
+								v1.ResourceName(constants.PodIndexAnnotation + constants.PodIndexDelimiter + "0"): resourceMustParse("3"),
+							},
+						},
+					}},
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodPending,
+				},
+			}
+			Expect(allocator.Client.Create(ctx, pod)).To(Succeed())
+
+			stalePod := types.NamespacedName{Namespace: "default", Name: "stale-worker"}
+			allocator.nodeIndexQueue["node-a"] = map[int]types.NamespacedName{3: stalePod}
+			allocator.podIndexMap[stalePod] = indexIdentifier{nodeName: "node-a", index: 3}
+
+			allocator.SetReady()
+			allocator.ReconcileLockState(pod)
+
+			Eventually(func(g Gomega) {
+				updated := &v1.Pod{}
+				g.Expect(allocator.Client.Get(ctx, types.NamespacedName{
+					Namespace: pod.Namespace,
+					Name:      pod.Name,
+				}, updated)).To(Succeed())
+				g.Expect(updated.Annotations).To(HaveKeyWithValue(constants.PodIndexAnnotation, "3"))
+			}).Should(Succeed())
+		})
+
+		It("should reclaim an index left behind by a running pod", func() {
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "worker-pod-after-running-occupant",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.LabelComponent: constants.ComponentWorker,
+					},
+				},
+				Spec: v1.PodSpec{
+					NodeName: "node-a",
+					Containers: []v1.Container{{
+						Resources: v1.ResourceRequirements{
+							Limits: v1.ResourceList{
+								v1.ResourceName(constants.PodIndexAnnotation + constants.PodIndexDelimiter + "0"): resourceMustParse("6"),
+							},
+						},
+					}},
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodPending,
+				},
+			}
+			Expect(allocator.Client.Create(ctx, pod)).To(Succeed())
+
+			runningOccupant := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "running-worker",
+					Namespace: "default",
+				},
+				Spec: v1.PodSpec{
+					NodeName: "node-a",
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodRunning,
+				},
+			}
+			Expect(allocator.Client.Create(ctx, runningOccupant)).To(Succeed())
+
+			runningMeta := types.NamespacedName{Namespace: runningOccupant.Namespace, Name: runningOccupant.Name}
+			allocator.nodeIndexQueue["node-a"] = map[int]types.NamespacedName{6: runningMeta}
+			allocator.podIndexMap[runningMeta] = indexIdentifier{nodeName: "node-a", index: 6}
+
+			allocator.SetReady()
+			allocator.ReconcileLockState(pod)
+
+			Eventually(func(g Gomega) {
+				updated := &v1.Pod{}
+				g.Expect(allocator.Client.Get(ctx, types.NamespacedName{
+					Namespace: pod.Namespace,
+					Name:      pod.Name,
+				}, updated)).To(Succeed())
+				g.Expect(updated.Annotations).To(HaveKeyWithValue(constants.PodIndexAnnotation, "6"))
+			}).Should(Succeed())
+		})
+
+		It("should start async index patching when queue already points to the same pending pod", func() {
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "worker-pod-existing-queue",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.LabelComponent: constants.ComponentWorker,
+					},
+				},
+				Spec: v1.PodSpec{
+					NodeName: "node-a",
+					Containers: []v1.Container{{
+						Resources: v1.ResourceRequirements{
+							Limits: v1.ResourceList{
+								v1.ResourceName(constants.PodIndexAnnotation + constants.PodIndexDelimiter + "0"): resourceMustParse("5"),
+							},
+						},
+					}},
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodPending,
+				},
+			}
+			Expect(allocator.Client.Create(ctx, pod)).To(Succeed())
+
+			podMeta := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
+			allocator.nodeIndexQueue["node-a"] = map[int]types.NamespacedName{5: podMeta}
+
+			allocator.SetReady()
+			allocator.ReconcileLockState(pod)
+
+			Eventually(func(g Gomega) {
+				updated := &v1.Pod{}
+				g.Expect(allocator.Client.Get(ctx, podMeta, updated)).To(Succeed())
+				g.Expect(updated.Annotations).To(HaveKeyWithValue(constants.PodIndexAnnotation, "5"))
+			}).Should(Succeed())
+		})
+	})
 })
+
+func resourceMustParse(value string) resource.Quantity {
+	return resource.MustParse(value)
+}

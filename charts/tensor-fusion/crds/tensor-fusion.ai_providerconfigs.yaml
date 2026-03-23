@@ -77,6 +77,29 @@ spec:
                       description: CostPerHour is the average cost per hour for this
                         GPU model
                       type: string
+                    deviceMount:
+                      description: |-
+                        DeviceMount defines model-specific device mount strategy used by hypervisor.
+                        This overrides spec.hypervisor.deviceMount when set.
+                      properties:
+                        deviceMountRule:
+                          description: |-
+                            DeviceMountRule is a CEL expression used in non-partitioned scenarios
+                            (e.g. shared/soft/whole-card) to filter compute device nodes.
+                          type: string
+                        partitionedDeviceMountRule:
+                          description: |-
+                            PartitionedDeviceMountRule is a CEL expression used in partitioned scenarios
+                            when provider-driven partitioning is performed.
+                          type: string
+                        sharedDevices:
+                          description: |-
+                            SharedDevices are always-mounted shared device paths or glob patterns.
+                            Examples: /dev/nvidiactl, /dev/uburma/*, /dev/ummu/*
+                          items:
+                            type: string
+                          type: array
+                      type: object
                     fp16TFlops:
                       anyOf:
                       - type: integer
@@ -131,9 +154,52 @@ spec:
               hypervisor:
                 description: Hypervisor contains vendor-specific hypervisor settings
                 properties:
+                  deviceMount:
+                    description: |-
+                      DeviceMount defines default device mount strategy used by hypervisor for this vendor.
+                      Model-level settings in hardwareMetadata.deviceMount take precedence over this default.
+                    properties:
+                      deviceMountRule:
+                        description: |-
+                          DeviceMountRule is a CEL expression used in non-partitioned scenarios
+                          (e.g. shared/soft/whole-card) to filter compute device nodes.
+                        type: string
+                      partitionedDeviceMountRule:
+                        description: |-
+                          PartitionedDeviceMountRule is a CEL expression used in partitioned scenarios
+                          when provider-driven partitioning is performed.
+                        type: string
+                      sharedDevices:
+                        description: |-
+                          SharedDevices are always-mounted shared device paths or glob patterns.
+                          Examples: /dev/nvidiactl, /dev/uburma/*, /dev/ummu/*
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                  extraEnv:
+                    description: |-
+                      ExtraEnv appends extra environment variables to the hypervisor container.
+                      This is useful for vendor-specific runtime toggles, for example static vNPU
+                      scenarios that need partition runtime options.
+                    items:
+                      description: ProviderHypervisorEnvVar defines a name/value env
+                        var for hypervisor container.
+                      properties:
+                        name:
+                          description: Name is the environment variable name.
+                          type: string
+                        value:
+                          description: Value is the environment variable value.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
                   hostPathMounts:
-                    description: HostPathMounts adds host path mounts to the hypervisor
-                      pod
+                    description: |-
+                      HostPathMounts adds host path mounts to the hypervisor pod.
+                      Vendor remote workers may also reuse these mounts when they depend on host driver libraries.
                     items:
                       description: ProviderHypervisorHostPathMount defines a hostPath
                         mount for hypervisor
@@ -157,8 +223,9 @@ spec:
                       type: object
                     type: array
                   ldLibraryPath:
-                    description: LDLibraryPath appends entries to LD_LIBRARY_PATH
-                      for the hypervisor container
+                    description: |-
+                      LDLibraryPath appends entries to LD_LIBRARY_PATH for the hypervisor container.
+                      Vendor remote workers may also reuse this when host driver libraries must be mounted.
                     type: string
                   privilegedHypervisor:
                     description: PrivilegedHypervisor indicates the hypervisor container

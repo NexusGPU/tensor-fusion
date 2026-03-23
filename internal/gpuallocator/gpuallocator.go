@@ -4,7 +4,6 @@ package gpuallocator
 import (
 	"context"
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -251,17 +250,49 @@ func (s *GpuAllocator) GetAllocationInfo() (
 	return s.gpuStore, s.nodeWorkerStore, s.uniqueAllocation
 }
 
-// GetNodeGpuStore returns a snapshot (shallow copy) of the node-to-GPU map.
-// The caller can safely iterate the returned maps without holding any lock.
-// The *tfv1.GPU pointers are shared with the allocator's internal state.
+func cloneGPUMap(gpuMap map[string]*tfv1.GPU) map[string]*tfv1.GPU {
+	innerCopy := make(map[string]*tfv1.GPU, len(gpuMap))
+	for gpuName, gpu := range gpuMap {
+		if gpu == nil {
+			innerCopy[gpuName] = nil
+			continue
+		}
+		innerCopy[gpuName] = gpu.DeepCopy()
+	}
+	return innerCopy
+}
+
+func cloneGPUSlice(gpus []*tfv1.GPU) []*tfv1.GPU {
+	result := make([]*tfv1.GPU, len(gpus))
+	for i, gpu := range gpus {
+		if gpu == nil {
+			continue
+		}
+		result[i] = gpu.DeepCopy()
+	}
+	return result
+}
+
+func (s *GpuAllocator) snapshotGPUStore() map[types.NamespacedName]*tfv1.GPU {
+	result := make(map[types.NamespacedName]*tfv1.GPU, len(s.gpuStore))
+	for key, gpu := range s.gpuStore {
+		if gpu == nil {
+			result[key] = nil
+			continue
+		}
+		result[key] = gpu.DeepCopy()
+	}
+	return result
+}
+
+// GetNodeGpuStore returns a snapshot of the node-to-GPU map.
+// The caller can safely iterate and inspect the returned GPUs without holding any lock.
 func (s *GpuAllocator) GetNodeGpuStore() map[string]map[string]*tfv1.GPU {
 	s.storeMutex.RLock()
 	defer s.storeMutex.RUnlock()
 	result := make(map[string]map[string]*tfv1.GPU, len(s.nodeGpuStore))
 	for nodeName, gpuMap := range s.nodeGpuStore {
-		innerCopy := make(map[string]*tfv1.GPU, len(gpuMap))
-		maps.Copy(innerCopy, gpuMap)
-		result[nodeName] = innerCopy
+		result[nodeName] = cloneGPUMap(gpuMap)
 	}
 	return result
 }
@@ -339,6 +370,13 @@ func (s *GpuAllocator) FilterWithPreempt(
 	preemptAllocRequests []*tfv1.AllocRequest,
 	targetNodeNames ...string,
 ) ([]*tfv1.GPU, []filter.FilterDetail, error) {
+	s.storeMutex.RLock()
+	gpuStore := s.snapshotGPUStore()
+	nodeGpuStore := make(map[string]map[string]*tfv1.GPU, len(s.nodeGpuStore))
+	for nodeName, gpuMap := range s.nodeGpuStore {
+		nodeGpuStore[nodeName] = cloneGPUMap(gpuMap)
+	}
+	s.storeMutex.RUnlock()
 
 	toFilterGPUs := []*tfv1.GPU{}
 
@@ -370,14 +408,14 @@ func (s *GpuAllocator) FilterWithPreempt(
 			"requestVram", preemptAllocRequest.Request.Vram.String())
 
 		for _, gpuName := range preemptAllocRequest.GPUNames {
-			gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
+			gpu := gpuStore[types.NamespacedName{Name: gpuName}]
 			if gpu == nil {
 				return nil, nil, fmt.Errorf("gpu %s not found", gpuName)
 			}
 			gpuCopy, exists := gpuReleasedMap[gpuName]
 			var beforeTflops, beforeVram string
 			if !exists {
-				gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
+				gpu := gpuStore[types.NamespacedName{Name: gpuName}]
 				if gpu == nil {
 					return nil, nil, fmt.Errorf("gpu %s not found", gpuName)
 				}
@@ -447,7 +485,7 @@ func (s *GpuAllocator) FilterWithPreempt(
 	}
 	// only iterate the affected nodes, instead of the entire pool(O(N) instead of O(P))
 	for nodeName := range affectedNodes {
-		nodeGPUs := s.nodeGpuStore[nodeName]
+		nodeGPUs := nodeGpuStore[nodeName]
 		log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Adding other GPUs from affected node",
 			"node", nodeName,
 			"totalGPUsOnNode", len(nodeGPUs),
@@ -529,8 +567,8 @@ func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []*tfv1.GPU) 
 
 	strategy := NewStrategy(schedulingConfigTemplate.Spec.Placement.Mode, &config.GPUFitConfig{
 		MaxWorkerPerNode: s.maxWorkerPerNode,
-	}, s.nodeGpuStore)
-	selectedGPUs, err := strategy.SelectGPUs(filteredGPUs, req.Count)
+	}, s.GetNodeGpuStore())
+	selectedGPUs, err := strategy.SelectGPUs(cloneGPUSlice(filteredGPUs), req.Count)
 	if err != nil {
 		return nil, fmt.Errorf("select GPU: %w", err)
 	}
@@ -1107,7 +1145,7 @@ type scoredGPU struct {
 }
 
 func (s *GpuAllocator) GetScoringStrategy(cfg *config.GPUFitConfig, req *tfv1.AllocRequest) Strategy {
-	return NewStrategy(s.getPlacementMode(s.ctx, req.PoolName), cfg, s.nodeGpuStore)
+	return NewStrategy(s.getPlacementMode(s.ctx, req.PoolName), cfg, s.GetNodeGpuStore())
 }
 
 // First level is k8s node name, second level is GPU name, value is score
@@ -1628,7 +1666,7 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 func (s *GpuAllocator) listGPUsFromPool(poolName string) []*tfv1.GPU {
 	s.storeMutex.RLock()
 	defer s.storeMutex.RUnlock()
-	return lo.Values(s.poolGpuStore[poolName])
+	return cloneGPUSlice(lo.Values(s.poolGpuStore[poolName]))
 }
 
 func (s *GpuAllocator) markGPUDirty(key types.NamespacedName) {

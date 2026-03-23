@@ -12,7 +12,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/metrics"
-	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/klog/v2"
 )
@@ -24,7 +23,8 @@ type Controller struct {
 	ctx context.Context
 	mu  sync.RWMutex
 
-	devices map[string]*api.DeviceInfo // key: device UUID
+	devices     map[string]*api.DeviceInfo // key: lowercase device UUID
+	nativeUUIDs map[string]string          // key: lowercase UUID -> original UUID from driver
 
 	accelerator          *AcceleratorInterface
 	acceleratorVendor    string
@@ -53,6 +53,7 @@ func NewController(
 	return &Controller{
 		ctx:                  ctx,
 		devices:              make(map[string]*api.DeviceInfo),
+		nativeUUIDs:          make(map[string]string),
 		accelerator:          accel,
 		acceleratorVendor:    acceleratorVendor,
 		discoveryInterval:    discoveryInterval,
@@ -91,12 +92,16 @@ func (m *Controller) discoverDevices() error {
 
 	// Build a map of newly fetched devices by UUID
 	newDevicesMap := make(map[string]*api.DeviceInfo, len(devices))
+	newNativeUUIDs := make(map[string]string, len(devices))
 	for _, device := range devices {
+		// Preserve the original UUID from the driver for C library calls
+		nativeUUID := device.UUID
 		// Convert UUID to lowercase for case-insensitive comparison
 		// Kubernetes resource name has to be lowercase
 		device.UUID = strings.ToLower(device.UUID)
 		device.IsolationMode = m.isolationMode
 		newDevicesMap[device.UUID] = device
+		newNativeUUIDs[device.UUID] = nativeUUID
 	}
 
 	// Diff logic: compare new devices with existing devices (K8s reconcile pattern)
@@ -166,12 +171,15 @@ func (m *Controller) discoverDevices() error {
 	// Update state after notifying handlers
 	for _, device := range addedDevices {
 		m.devices[device.UUID] = device
+		m.nativeUUIDs[device.UUID] = newNativeUUIDs[device.UUID]
 	}
 	for _, device := range removedDevices {
 		delete(m.devices, device.UUID)
+		delete(m.nativeUUIDs, device.UUID)
 	}
 	for _, update := range updatedDevices {
 		m.devices[update.new.UUID] = update.new
+		m.nativeUUIDs[update.new.UUID] = newNativeUUIDs[update.new.UUID]
 	}
 
 	nodeInfo := m.AggregateNodeInfo()
@@ -275,13 +283,25 @@ func (m *Controller) GetDeviceMetrics() (map[string]*api.GPUUsageMetrics, error)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	// Use the original driver UUIDs for the C library query,
+	// which requires exact case matching.
+	nativeUUIDs := make([]string, 0, len(m.devices))
+	for key := range m.devices {
+		if native, ok := m.nativeUUIDs[key]; ok {
+			nativeUUIDs = append(nativeUUIDs, native)
+		} else {
+			nativeUUIDs = append(nativeUUIDs, key)
+		}
+	}
+
 	result := make(map[string]*api.GPUUsageMetrics, len(m.devices))
-	metrics, err := m.accelerator.GetDeviceMetrics(lo.Keys(m.devices))
+	metrics, err := m.accelerator.GetDeviceMetrics(nativeUUIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get device metrics: %w", err)
 	}
 	for _, metric := range metrics {
-		result[metric.DeviceUUID] = metric
+		// Store with lowercase key for consistency with m.devices
+		result[strings.ToLower(metric.DeviceUUID)] = metric
 	}
 	return result, nil
 }
@@ -311,15 +331,34 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(partitionResult.PartitionUUID) == "" {
+		return nil, fmt.Errorf("assign partition returned empty partition UUID for device %s", deviceUUID)
+	}
+	handler, ok := resolvePartitionResultHandler(partitionResult.Type)
+	if !ok {
+		return nil, fmt.Errorf(
+			"assign partition returned unknown partition result type %d for device %s",
+			partitionResult.Type,
+			deviceUUID,
+		)
+	}
 	newPartitionedDevice.ParentUUID = newPartitionedDevice.UUID
 	newPartitionedDevice.UUID = partitionResult.PartitionUUID
+	// Partitioned instances should never inherit parent compute nodes by default.
+	newPartitionedDevice.DeviceNode = nil
 
-	if partitionResult.Type == PartitionTypeDeviceNode && len(partitionResult.DeviceNodes) > 0 {
-		// Hard partition mode mounts provider-returned device nodes while preserving shared ones.
-		if newPartitionedDevice.DeviceNode == nil {
-			newPartitionedDevice.DeviceNode = make(map[string]string)
-		}
-		maps.Copy(newPartitionedDevice.DeviceNode, partitionResult.DeviceNodes)
+	partitionNodesBase := handler.BaseDeviceNodes(partitionResult)
+	if partitionNodes, applied := applyProviderDeviceMountPolicy(
+		partitionNodesBase,
+		existingDevice.Vendor,
+		existingDevice.Model,
+		true,
+		partitionResult.EnvVars,
+	); applied {
+		newPartitionedDevice.DeviceNode = partitionNodes
+	} else if handler.UseProviderNodesFallback() && len(partitionNodesBase) > 0 {
+		// Replace parent device nodes to avoid leaking physical /dev/davinci* into vNPU pods.
+		newPartitionedDevice.DeviceNode = maps.Clone(partitionNodesBase)
 	}
 
 	// Preserve provider-returned environment variables for both env/device-node modes.
@@ -330,7 +369,14 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 		maps.Copy(newPartitionedDevice.DeviceEnv, partitionResult.EnvVars)
 	}
 
+	if m.devices == nil {
+		m.devices = make(map[string]*api.DeviceInfo)
+	}
+	if m.nativeUUIDs == nil {
+		m.nativeUUIDs = make(map[string]string)
+	}
 	m.devices[partitionResult.PartitionUUID] = newPartitionedDevice
+	m.nativeUUIDs[partitionResult.PartitionUUID] = partitionResult.PartitionUUID
 	return newPartitionedDevice, nil
 }
 
@@ -350,6 +396,7 @@ func (m *Controller) RemovePartitionedDevice(partitionUUID, deviceUUID string) e
 	}
 	klog.Infof("removed partition %s from device %s", partitionUUID, deviceUUID)
 	delete(m.devices, partitionUUID)
+	delete(m.nativeUUIDs, partitionUUID)
 	return nil
 }
 

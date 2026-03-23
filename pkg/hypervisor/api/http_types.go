@@ -79,13 +79,56 @@ type ListPodsResponse struct {
 	Pods []PodInfo `json:"pods"`
 }
 
-// ProcessInfo represents process mapping information (used in legacy.go)
-type ProcessInfo struct {
+// AutoFreezeConfig represents auto-freeze settings for remote workers.
+type AutoFreezeConfig struct {
+	FreezeToMemTTL  *string `json:"freeze_to_mem_ttl,omitempty"`
+	FreezeToDiskTTL *string `json:"freeze_to_disk_ttl,omitempty"`
+	Enable          bool    `json:"enable"`
+}
+
+// RemotePodInfo represents the modern pod info payload expected by remote workers.
+type RemotePodInfo struct {
+	PodName      string            `json:"pod_name"`
+	Namespace    string            `json:"namespace"`
+	GPUIDs       []string          `json:"gpu_uuids"`
+	TflopsLimit  *float64          `json:"tflops_limit,omitempty"`
+	VramLimit    *uint64           `json:"vram_limit,omitempty"`
+	QoSLevel     *string           `json:"qos_level,omitempty"`
+	ComputeShard bool              `json:"compute_shard"`
+	Isolation    string            `json:"isolation,omitempty"`
+	AutoFreeze   *AutoFreezeConfig `json:"auto_freeze,omitempty"`
+}
+
+// PodInfoResponse represents the modern response from GET /api/v1/pod.
+type PodInfoResponse struct {
+	Success bool           `json:"success"`
+	Data    *RemotePodInfo `json:"data"`
+	Message string         `json:"message"`
+}
+
+// LegacyProcessInfo represents process mapping information for the old list API.
+type LegacyProcessInfo struct {
 	WorkerUID      string            `json:"worker_uid"`
 	ProcessMapping map[string]string `json:"process_mapping"` // container PID -> host PID
 }
 
 // ListProcessesResponse represents the response from GET /api/v1/process (used in legacy.go)
 type ListProcessesResponse struct {
-	Processes []ProcessInfo `json:"processes"`
+	Processes []LegacyProcessInfo `json:"processes"`
+}
+
+// ProcessInitInfo represents process mapping info for remote worker initialization.
+type ProcessInitInfo struct {
+	HostPID       uint32 `json:"host_pid"`
+	ContainerPID  uint32 `json:"container_pid"`
+	ContainerName string `json:"container_name"`
+	PodName       string `json:"pod_name"`
+	Namespace     string `json:"namespace"`
+}
+
+// ProcessInitResponse represents the modern response from POST /api/v1/process.
+type ProcessInitResponse struct {
+	Success bool             `json:"success"`
+	Data    *ProcessInitInfo `json:"data"`
+	Message string           `json:"message"`
 }

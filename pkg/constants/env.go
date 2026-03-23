@@ -77,6 +77,9 @@ const (
 
 	RealNvmlLibPathValue = "/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
 	RealCUDALibPathValue = "/lib/x86_64-linux-gnu/libcuda.so"
+	RealNvmlLibPathEnv   = "TF_NVML_LIB_PATH"
+	RealCUDALibPathEnv   = "TF_CUDA_LIB_PATH"
+	EnableCudaHooksEnv   = "ENABLE_CUDA_HOOKS"
 
 	PrependPathEnv    = "TF_PREPEND_PATH"
 	PrependLibPathEnv = "TF_LD_LIBRARY_PATH"
@@ -177,6 +180,7 @@ const (
 	TFHardwareVendorEnv           = "TF_HARDWARE_VENDOR"
 	TFAcceleratorLibPathEnv       = "TF_ACCELERATOR_LIB_PATH"
 	TFProviderHardwareMetadataEnv = "TF_PROVIDER_HARDWARE_METADATA"
+	TFProviderDeviceMountEnv      = "TF_PROVIDER_DEVICE_MOUNT"
 )
 
 const (

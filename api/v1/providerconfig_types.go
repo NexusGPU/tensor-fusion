@@ -61,13 +61,37 @@ type ProviderHypervisorConfig struct {
 	// +optional
 	PrivilegedHypervisor bool `json:"privilegedHypervisor,omitempty"`
 
-	// LDLibraryPath appends entries to LD_LIBRARY_PATH for the hypervisor container
+	// LDLibraryPath appends entries to LD_LIBRARY_PATH for the hypervisor container.
+	// Vendor remote workers may also reuse this when host driver libraries must be mounted.
 	// +optional
 	LDLibraryPath string `json:"ldLibraryPath,omitempty"`
 
-	// HostPathMounts adds host path mounts to the hypervisor pod
+	// ExtraEnv appends extra environment variables to the hypervisor container.
+	// This is useful for vendor-specific runtime toggles, for example static vNPU
+	// scenarios that need partition runtime options.
+	// +optional
+	ExtraEnv []ProviderHypervisorEnvVar `json:"extraEnv,omitempty"`
+
+	// HostPathMounts adds host path mounts to the hypervisor pod.
+	// Vendor remote workers may also reuse these mounts when they depend on host driver libraries.
 	// +optional
 	HostPathMounts []ProviderHypervisorHostPathMount `json:"hostPathMounts,omitempty"`
+
+	// DeviceMount defines default device mount strategy used by hypervisor for this vendor.
+	// Model-level settings in hardwareMetadata.deviceMount take precedence over this default.
+	// +optional
+	DeviceMount *ProviderDeviceMountConfig `json:"deviceMount,omitempty"`
+}
+
+// ProviderHypervisorEnvVar defines a name/value env var for hypervisor container.
+type ProviderHypervisorEnvVar struct {
+	// Name is the environment variable name.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Value is the environment variable value.
+	// +optional
+	Value string `json:"value,omitempty"`
 }
 
 // ProviderHypervisorHostPathMount defines a hostPath mount for hypervisor
@@ -144,6 +168,29 @@ type HardwareModelInfo struct {
 	// Use template IDs defined in VirtualizationTemplates
 	// +optional
 	PartitionTemplateRefs []string `json:"partitionTemplateRefs,omitempty"`
+
+	// DeviceMount defines model-specific device mount strategy used by hypervisor.
+	// This overrides spec.hypervisor.deviceMount when set.
+	// +optional
+	DeviceMount *ProviderDeviceMountConfig `json:"deviceMount,omitempty"`
+}
+
+// ProviderDeviceMountConfig defines how hypervisor should decide mounted devices.
+type ProviderDeviceMountConfig struct {
+	// DeviceMountRule is a CEL expression used in non-partitioned scenarios
+	// (e.g. shared/soft/whole-card) to filter compute device nodes.
+	// +optional
+	DeviceMountRule string `json:"deviceMountRule,omitempty"`
+
+	// PartitionedDeviceMountRule is a CEL expression used in partitioned scenarios
+	// when provider-driven partitioning is performed.
+	// +optional
+	PartitionedDeviceMountRule string `json:"partitionedDeviceMountRule,omitempty"`
+
+	// SharedDevices are always-mounted shared device paths or glob patterns.
+	// Examples: /dev/nvidiactl, /dev/uburma/*, /dev/ummu/*
+	// +optional
+	SharedDevices []string `json:"sharedDevices,omitempty"`
 }
 
 // VirtualizationTemplate defines a partition/slice template for GPU virtualization

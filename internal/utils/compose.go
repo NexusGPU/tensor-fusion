@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/provider"
@@ -23,7 +24,7 @@ import (
 
 var injectLibResource v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("20m"),
-	v1.ResourceMemory: resource.MustParse("64Mi"),
+	v1.ResourceMemory: resource.MustParse("256Mi"),
 }
 
 var hypervisorDefaultRequests v1.ResourceList = v1.ResourceList{
@@ -50,6 +51,10 @@ var workerDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("50m"),
 	v1.ResourceMemory: resource.MustParse("128Mi"),
 }
+
+var sharedMemMaxSize = resource.MustParse("512Mi")
+
+var workerPodIndexCounter uint32
 var featureShortcutMap = map[string]struct {
 	EnvName  string
 	EnvValue string
@@ -75,6 +80,61 @@ type TensorFusionInfo struct {
 	WorkloadName     string
 	PodControllerRef *metav1.OwnerReference
 	ContainerNames   []string
+}
+
+func UseLocalWorkerSidecar(profile *tfv1.WorkloadProfileSpec) bool {
+	if profile == nil || !profile.IsLocalGPU {
+		return false
+	}
+	if profile.SidecarWorker {
+		return true
+	}
+	return profile.Isolation == "" || profile.Isolation == tfv1.IsolationModeSoft || profile.Isolation == tfv1.IsolationModeHard
+}
+
+func appendEnvIfMissing(envList []v1.EnvVar, envs ...v1.EnvVar) []v1.EnvVar {
+	for _, env := range envs {
+		if lo.ContainsBy(envList, func(item v1.EnvVar) bool {
+			return item.Name == env.Name
+		}) {
+			continue
+		}
+		envList = append(envList, env)
+	}
+	return envList
+}
+
+func appendNvidiaLibraryPathEnvs(envList []v1.EnvVar) []v1.EnvVar {
+	return appendEnvIfMissing(envList,
+		v1.EnvVar{
+			Name:  constants.RealCUDALibPathEnv,
+			Value: constants.RealCUDALibPathValue,
+		},
+		v1.EnvVar{
+			Name:  constants.RealNvmlLibPathEnv,
+			Value: constants.RealNvmlLibPathValue,
+		},
+	)
+}
+
+func shouldInjectClientBootstrap(profile *tfv1.WorkloadProfileSpec) bool {
+	if profile == nil {
+		return true
+	}
+	if !profile.IsLocalGPU {
+		return true
+	}
+	return UseLocalWorkerSidecar(profile)
+}
+
+func shouldDisableCudaHooksForLocalSidecarClient(profile *tfv1.WorkloadProfileSpec) bool {
+	if profile == nil {
+		return false
+	}
+	if !profile.IsLocalGPU || !UseLocalWorkerSidecar(profile) {
+		return false
+	}
+	return shouldInjectNvidiaVisibleDevices(profile.GPUVendor)
 }
 
 func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo TensorFusionInfo) {
@@ -124,7 +184,7 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 		pod.Annotations[constants.GpuVendorAnnotation] = tfInfo.Profile.GPUVendor
 	}
 	pod.Annotations[constants.IsLocalGPUAnnotation] = strconv.FormatBool(tfInfo.Profile.IsLocalGPU)
-	pod.Annotations[constants.SidecarWorkerAnnotation] = strconv.FormatBool(tfInfo.Profile.SidecarWorker)
+	pod.Annotations[constants.SidecarWorkerAnnotation] = strconv.FormatBool(UseLocalWorkerSidecar(tfInfo.Profile))
 	// add inject container annotation for client Pod, in case user doesn't specify it
 	pod.Annotations[constants.InjectContainerAnnotation] = strings.Join(tfInfo.ContainerNames, ",")
 	pod.Annotations[constants.IsolationModeAnnotation] = string(tfInfo.Profile.Isolation)
@@ -224,9 +284,14 @@ func AddTFDefaultClientConfBeforePatch(
 	tfInfo TensorFusionInfo,
 	injectContainerIndices []int,
 ) {
+	applyAscendRuntimeClassIfNeeded(&pod.Spec, tfInfo.Profile)
+
 	clientConfig := pool.Spec.ComponentConfig.Client
-	if !tfInfo.Profile.IsLocalGPU {
-		// Remote mode still relies on the client initContainer to inject TF libs/config.
+	useLocalWorkerSidecar := UseLocalWorkerSidecar(tfInfo.Profile)
+	useInjectLib := shouldInjectClientBootstrap(tfInfo.Profile)
+	if useInjectLib {
+		// Any mode that needs the client initContainer should prefer the provider-specific
+		// client image. Local shared/embedded mode skips this path entirely.
 		image := GetClientImage(tfInfo.Profile.GPUVendor, clientConfig.Image)
 		pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
 			Name:  constants.TFContainerNameClient,
@@ -237,7 +302,9 @@ func AddTFDefaultClientConfBeforePatch(
 					MountPath: constants.TFLibsVolumeMountPath,
 				},
 				{
-					Name:      constants.TFConfVolumeName,
+					// Current inject-lib images write ld.so.preload under /tensor-fusion.
+					// Mirror /tensor-fusion-conf onto the same volume so either path stays compatible.
+					Name:      constants.TFLibsVolumeName,
 					MountPath: constants.TFConfVolumeMountPath,
 				},
 			},
@@ -249,12 +316,6 @@ func AddTFDefaultClientConfBeforePatch(
 		})
 		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 			Name: constants.TFLibsVolumeName,
-			VolumeSource: v1.VolumeSource{
-				EmptyDir: &v1.EmptyDirVolumeSource{},
-			},
-		})
-		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-			Name: constants.TFConfVolumeName,
 			VolumeSource: v1.VolumeSource{
 				EmptyDir: &v1.EmptyDirVolumeSource{},
 			},
@@ -273,14 +334,11 @@ func AddTFDefaultClientConfBeforePatch(
 			pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
 				v1.VolumeMount{
-					Name:      constants.TFConfVolumeName,
+					// Mount the generated preload file from the libs volume, which is where
+					// the current inject-lib images actually write it.
+					Name:      constants.TFLibsVolumeName,
 					MountPath: constants.LdPreloadFile,
 					SubPath:   constants.LdPreloadFileName,
-					ReadOnly:  true,
-				}, v1.VolumeMount{
-					Name:      constants.TFConfVolumeName,
-					MountPath: constants.LdLibraryPathFile,
-					SubPath:   constants.LdLibraryPathFileName,
 					ReadOnly:  true,
 				}, v1.VolumeMount{
 					Name:      constants.TFLibsVolumeName,
@@ -290,7 +348,7 @@ func AddTFDefaultClientConfBeforePatch(
 	}
 
 	if tfInfo.Profile.IsLocalGPU {
-		// Local mode runs without sidecar/initContainer, and mounts shared data path directly.
+		// Local mode always mounts shared data path for worker-hypervisor communication.
 		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 			Name: constants.DataVolumeName,
 			VolumeSource: v1.VolumeSource{
@@ -301,16 +359,68 @@ func AddTFDefaultClientConfBeforePatch(
 			},
 		})
 
+		if useLocalWorkerSidecar {
+			// Local soft/hard modes run the TensorFusion worker in a sibling container and use /dev/shm for transport.
+			pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+				Name: constants.TransportShmVolumeName,
+				VolumeSource: v1.VolumeSource{
+					EmptyDir: &v1.EmptyDirVolumeSource{
+						SizeLimit: &sharedMemMaxSize,
+						Medium:    v1.StorageMediumMemory,
+					},
+				},
+			})
+
+			pod.Spec.Containers = append(pod.Spec.Containers, v1.Container{
+				Name: constants.TFContainerNameWorker,
+				VolumeMounts: []v1.VolumeMount{
+					{
+						Name:      constants.TransportShmVolumeName,
+						MountPath: constants.TransportShmPath,
+					},
+				},
+			})
+
+			workerContainerIndex := len(pod.Spec.Containers) - 1
+			SetWorkerContainerSpec(
+				&pod.Spec.Containers[workerContainerIndex],
+				tfInfo.Profile,
+				pool.Spec.ComponentConfig.Worker,
+				pool.Spec.ComponentConfig.Hypervisor,
+				pod.Annotations[constants.DisableFeaturesAnnotation],
+				true,
+			)
+			applyProviderRemoteWorkerConfigToContainerIndex(&pod.Spec, tfInfo.Profile.GPUVendor, workerContainerIndex)
+		}
+
 		for _, injectContainerIndex := range injectContainerIndices {
-			// add ngpu spec, client is the same as worker, in same process
-			pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
-				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
-				v1.VolumeMount{
-					Name:             constants.DataVolumeName,
-					MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
-					SubPathExpr:      constants.TFDataPathWorkerExpr,
-					MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
-				})
+			if useLocalWorkerSidecar {
+				pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
+					pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+					v1.VolumeMount{
+						Name:      constants.TransportShmVolumeName,
+						MountPath: constants.TransportShmPath,
+					},
+					// Local sidecar clients still need the host-backed TF shared-memory state for
+					// NVML/memory hooks, even though client-worker RPC uses /dev/shm transport.
+					v1.VolumeMount{
+						Name:             constants.DataVolumeName,
+						MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
+						SubPathExpr:      constants.TFDataPathWorkerExpr,
+						MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
+					},
+				)
+			} else {
+				// add ngpu spec, client is the same as worker, in same process
+				pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
+					pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+					v1.VolumeMount{
+						Name:             constants.DataVolumeName,
+						MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
+						SubPathExpr:      constants.TFDataPathWorkerExpr,
+						MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
+					})
+			}
 
 			envList := pod.Spec.Containers[injectContainerIndex].Env
 			if !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
@@ -346,12 +456,21 @@ func AddTFDefaultClientConfBeforePatch(
 				})
 			}
 
-			if !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
+			if useInjectLib && shouldInjectNvidiaVisibleDevices(tfInfo.Profile.GPUVendor) && !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
 				return env.Name == constants.NvidiaVisibleAllDeviceEnv
 			}) {
 				envList = append(envList, v1.EnvVar{
 					Name:  constants.NvidiaVisibleAllDeviceEnv,
 					Value: constants.NvidiaVisibleAllDeviceValue,
+				})
+			}
+			if useInjectLib && shouldInjectNvidiaVisibleDevices(tfInfo.Profile.GPUVendor) {
+				envList = appendNvidiaLibraryPathEnvs(envList)
+			}
+			if useInjectLib && shouldDisableCudaHooksForLocalSidecarClient(tfInfo.Profile) {
+				envList = appendEnvIfMissing(envList, v1.EnvVar{
+					Name:  constants.EnableCudaHooksEnv,
+					Value: "false",
 				})
 			}
 
@@ -670,9 +789,6 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 		Name:  constants.HypervisorPoolNameEnv,
 		Value: pool.Name,
 	}, v1.EnvVar{
-		Name:  constants.NvidiaVisibleAllDeviceEnv,
-		Value: constants.NvidiaVisibleAllDeviceValue,
-	}, v1.EnvVar{
 		Name:  constants.TensorFusionGPUInfoEnvVar,
 		Value: constants.TensorFusionGPUInfoConfigMountPath,
 	}, v1.EnvVar{
@@ -699,6 +815,12 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 		Name:  constants.TFProductNameEnv,
 		Value: constants.ProductNameTensorFusionOSS,
 	})
+	if shouldInjectNvidiaVisibleDevices(vendor) {
+		spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
+			Name:  constants.NvidiaVisibleAllDeviceEnv,
+			Value: constants.NvidiaVisibleAllDeviceValue,
+		})
+	}
 
 	if pool.Spec.ComponentConfig.Hypervisor.Image != "" {
 		spec.Containers[0].Image = pool.Spec.ComponentConfig.Hypervisor.Image
@@ -749,11 +871,7 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 }
 
 func applyProviderHypervisorConfig(spec *v1.PodSpec, vendor string) {
-	mgr := provider.GetManager()
-	if mgr == nil {
-		return
-	}
-	providerCfg, ok := mgr.GetProvider(vendor)
+	providerCfg, ok := getProviderConfig(vendor)
 	if !ok || providerCfg.Spec.Hypervisor == nil {
 		return
 	}
@@ -770,12 +888,48 @@ func applyProviderHypervisorConfig(spec *v1.PodSpec, vendor string) {
 		spec.Containers[0].SecurityContext.Privileged = ptr.To(true)
 	}
 
-	if len(hypervisorCfg.HostPathMounts) == 0 {
+	applyProviderHostPathMounts(spec, 0, hypervisorCfg.HostPathMounts)
+}
+
+func applyProviderRemoteWorkerConfig(spec *v1.PodSpec, vendor string) {
+	applyProviderRemoteWorkerConfigToContainerIndex(spec, vendor, 0)
+}
+
+func applyProviderRemoteWorkerConfigToContainerIndex(spec *v1.PodSpec, vendor string, containerIndex int) {
+	if !strings.EqualFold(strings.TrimSpace(vendor), constants.AcceleratorVendorHuaweiAscendNPU) {
+		return
+	}
+	if spec == nil || containerIndex < 0 || containerIndex >= len(spec.Containers) {
+		return
+	}
+
+	providerCfg, ok := getProviderConfig(vendor)
+	if !ok || providerCfg.Spec.Hypervisor == nil {
+		return
+	}
+
+	hypervisorCfg := providerCfg.Spec.Hypervisor
+	if hypervisorCfg.LDLibraryPath != "" {
+		spec.Containers[containerIndex].Env = appendLDLibraryPath(spec.Containers[containerIndex].Env, hypervisorCfg.LDLibraryPath)
+	}
+	applyProviderHostPathMounts(spec, containerIndex, hypervisorCfg.HostPathMounts)
+}
+
+func getProviderConfig(vendor string) (*tfv1.ProviderConfig, bool) {
+	mgr := provider.GetManager()
+	if mgr == nil {
+		return nil, false
+	}
+	return mgr.GetProvider(vendor)
+}
+
+func applyProviderHostPathMounts(spec *v1.PodSpec, containerIndex int, mounts []tfv1.ProviderHypervisorHostPathMount) {
+	if len(mounts) == 0 {
 		return
 	}
 
 	existingMounts := make(map[string]bool)
-	for _, mount := range spec.Containers[0].VolumeMounts {
+	for _, mount := range spec.Containers[containerIndex].VolumeMounts {
 		existingMounts[mount.Name] = true
 	}
 	existingVolumes := make(map[string]bool)
@@ -783,12 +937,12 @@ func applyProviderHypervisorConfig(spec *v1.PodSpec, vendor string) {
 		existingVolumes[volume.Name] = true
 	}
 
-	for _, mount := range hypervisorCfg.HostPathMounts {
+	for _, mount := range mounts {
 		if mount.Name == "" || mount.HostPath == "" || mount.MountPath == "" {
 			continue
 		}
 		if !existingMounts[mount.Name] {
-			spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
+			spec.Containers[containerIndex].VolumeMounts = append(spec.Containers[containerIndex].VolumeMounts, v1.VolumeMount{
 				Name:      mount.Name,
 				MountPath: mount.MountPath,
 				ReadOnly:  mount.ReadOnly,
@@ -887,6 +1041,13 @@ func SetWorkerContainerSpec(
 	disabledFeatures string,
 	sharedMemMode bool,
 ) {
+	if workloadProfile == nil {
+		workloadProfile = &tfv1.WorkloadProfileSpec{}
+	}
+	if workerConfig == nil {
+		workerConfig = &tfv1.WorkerConfig{}
+	}
+
 	// NOTE: need to set environment variable to make all GPUs visible to the worker,
 	// vgpu.rs limiter will limit to specific devices after Pod started
 	container.Name = constants.TFContainerNameWorker
@@ -900,9 +1061,6 @@ func SetWorkerContainerSpec(
 			MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 		})
 	container.Env = append(container.Env, v1.EnvVar{
-		Name:  constants.NvidiaVisibleAllDeviceEnv,
-		Value: constants.NvidiaVisibleAllDeviceValue,
-	}, v1.EnvVar{
 		Name: constants.HypervisorIPEnv,
 		ValueFrom: &v1.EnvVarSource{
 			FieldRef: &v1.ObjectFieldSelector{
@@ -933,8 +1091,15 @@ func SetWorkerContainerSpec(
 			},
 		},
 	})
+	if shouldInjectNvidiaVisibleDevices(workloadProfile.GPUVendor) {
+		container.Env = append(container.Env, v1.EnvVar{
+			Name:  constants.NvidiaVisibleAllDeviceEnv,
+			Value: constants.NvidiaVisibleAllDeviceValue,
+		})
+		container.Env = appendNvidiaLibraryPathEnvs(container.Env)
+	}
 
-	if !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) {
+	if shouldInjectCudaLimiter(workloadProfile.GPUVendor) && !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) {
 		// TODO: In hard isolation mode, current implementation relies on limiter to set CUDA_VISIBLE_DEVICES env.
 		// In next hypervisor versions, device allocation will be handled by device-plugin, so LD_PRELOAD should be removed.
 		container.Env = append(container.Env, v1.EnvVar{
@@ -1004,6 +1169,8 @@ func AddWorkerConfAfterTemplate(
 
 	// Configure worker container
 	SetWorkerContainerSpec(&spec.Containers[0], workloadProfile, workerConfig, hypervisorConfig, disabledFeatures, false)
+	assignWorkerPodIndexResource(&spec.Containers[0])
+	applyProviderRemoteWorkerConfig(spec, workloadProfile.GPUVendor)
 
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{
@@ -1017,12 +1184,45 @@ func AddWorkerConfAfterTemplate(
 	})
 
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
+	applyAscendRuntimeClassIfNeeded(spec, workloadProfile)
 
 	return spec.Containers[0].Name
 }
 
-// GetClientImage returns the client image for a vendor using Provider Manager
-// Falls back to defaultImage if Provider Manager is not initialized or vendor not found
+func assignWorkerPodIndexResource(container *v1.Container) {
+	if container == nil || hasPodIndexResourceClaim(container) {
+		return
+	}
+	if container.Resources.Limits == nil {
+		container.Resources.Limits = make(v1.ResourceList)
+	}
+
+	index := nextWorkerPodIndex()
+	indexKey := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, index/constants.IndexModLength)
+	indexQuantity := resource.MustParse(strconv.Itoa((index % constants.IndexModLength) + 1))
+	container.Resources.Limits[v1.ResourceName(indexKey)] = indexQuantity
+}
+
+func hasPodIndexResourceClaim(container *v1.Container) bool {
+	if container == nil || container.Resources.Limits == nil {
+		return false
+	}
+	for key := range container.Resources.Limits {
+		if strings.HasPrefix(string(key), constants.PodIndexAnnotation+constants.PodIndexDelimiter) {
+			return true
+		}
+	}
+	return false
+}
+
+func nextWorkerPodIndex() int {
+	maxIndex := uint32(constants.IndexKeyLength * constants.IndexModLength)
+	next := atomic.AddUint32(&workerPodIndexCounter, 1)
+	return int((next - 1) % maxIndex)
+}
+
+// GetClientImage returns the provider-specific remote client image for a vendor.
+// Falls back to defaultImage if Provider Manager is not initialized or vendor not found.
 func GetClientImage(vendor string, defaultImage string) string {
 	if mgr := provider.GetManager(); mgr != nil {
 		return mgr.GetRemoteClientImage(vendor, defaultImage)
@@ -1046,4 +1246,32 @@ func GetMiddlewareImage(vendor string, defaultImage string) string {
 		return mgr.GetMiddlewareImage(vendor, defaultImage)
 	}
 	return defaultImage
+}
+
+func shouldInjectNvidiaVisibleDevices(vendor string) bool {
+	vendor = strings.TrimSpace(vendor)
+	if vendor == "" {
+		// Keep historical behavior for legacy workloads without explicit vendor.
+		return true
+	}
+	return strings.EqualFold(vendor, constants.AcceleratorVendorNvidia)
+}
+
+func shouldInjectCudaLimiter(vendor string) bool {
+	return shouldInjectNvidiaVisibleDevices(vendor)
+}
+
+func applyAscendRuntimeClassIfNeeded(spec *v1.PodSpec, profile *tfv1.WorkloadProfileSpec) {
+	if spec == nil || profile == nil {
+		return
+	}
+	if spec.RuntimeClassName != nil && *spec.RuntimeClassName != "" {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(profile.GPUVendor), constants.AcceleratorVendorHuaweiAscendNPU) {
+		return
+	}
+	if !profile.IsLocalGPU || profile.Isolation == tfv1.IsolationModePartitioned || UseLocalWorkerSidecar(profile) {
+		spec.RuntimeClassName = ptr.To(constants.AscendRuntimeClassName)
+	}
 }

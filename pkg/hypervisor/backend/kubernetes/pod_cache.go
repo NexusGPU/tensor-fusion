@@ -98,9 +98,10 @@ func (kc *PodCacheManager) Start() error {
 	// Create a field selector to watch only pods on this node
 	fieldSelector := fields.OneTermEqualSelector("spec.nodeName", kc.nodeName).String()
 
-	// Create a label selector for pods with tensor-fusion.ai/enabled=true
+	// Create a label selector for TensorFusion worker pods on this node.
+	// Worker pods are the source of allocation metadata for device plugin index lookup.
 	labelSelector := labels.Set{
-		constants.TensorFusionEnabledLabelKey: constants.TrueStringValue,
+		constants.LabelComponent: constants.ComponentWorker,
 	}.AsSelector().String()
 
 	// Create list watcher
@@ -133,10 +134,10 @@ func (kc *PodCacheManager) Start() error {
 	go controller.Run(kc.stopCh)
 
 	klog.Infof(
-		"Started watching pods on node %s with label %s=%s",
+		"Started watching worker pods on node %s with label %s=%s",
 		kc.nodeName,
-		constants.TensorFusionEnabledLabelKey,
-		constants.TrueStringValue,
+		constants.LabelComponent,
+		constants.ComponentWorker,
 	)
 	return nil
 }
@@ -167,10 +168,17 @@ func (kc *PodCacheManager) onPodAdd(obj any) {
 			klog.Error(err, "Failed to convert node index to int", "node index", index)
 			return
 		}
-		// Make sure indexToWorker only contains device allocating pods (Pod is pending and index was assigned)
-		if workerInfo.Status == api.WorkerStatusDeviceAllocating {
+		// Only publish workers that are fully ready for device plugin allocation.
+		// The scheduler patches the index first and GPU IDs shortly after; returning the
+		// intermediate snapshot would create an empty allocation that never recovers.
+		if workerInfoReadyForAllocation(workerInfo) {
 			kc.indexToWorkerInfo[podIndex] = workerInfo
 			shouldNotifyIndexSubscribers = true
+		} else {
+			// The index is only valid during device allocation. Once the pod moves on to
+			// Running/Terminated, clear the cached entry so the next pod reusing the same
+			// index cannot receive stale worker metadata.
+			delete(kc.indexToWorkerInfo, podIndex)
 		}
 	}
 	kc.mu.Unlock()
@@ -268,7 +276,7 @@ func (kc *PodCacheManager) notifySubscribers() {
 	// Iterate through all subscribed indices
 	for podIndex, subs := range kc.indexSubscribers {
 		// Check if worker info is now available for this index
-		if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfo != nil {
+		if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfoReadyForAllocation(workerInfo) {
 			// Notify all subscribers for this index
 			for sub := range subs {
 				select {
@@ -325,7 +333,7 @@ func (kc *PodCacheManager) UnregisterWorkerInfoSubscriber(name string) {
 func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(podIndex int) (*api.WorkerInfo, error) {
 	// First, check if worker info is already available (fast path)
 	kc.mu.RLock()
-	if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfo != nil {
+	if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfoReadyForAllocation(workerInfo) {
 		kc.mu.RUnlock()
 		return workerInfo, nil
 	}
@@ -347,7 +355,7 @@ func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(podIndex int) (*api
 	// Double-check after registration to avoid race condition where pod arrived
 	// between our first check and subscriber registration
 	kc.mu.RLock()
-	if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfo != nil {
+	if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfoReadyForAllocation(workerInfo) {
 		kc.mu.RUnlock()
 		kc.unregisterSubscriber(podIndex, subscriber)
 		return workerInfo, nil
@@ -379,6 +387,16 @@ func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(podIndex int) (*api
 	}
 }
 
+func workerInfoReadyForAllocation(workerInfo *api.WorkerInfo) bool {
+	if workerInfo == nil {
+		return false
+	}
+	if workerInfo.Status != api.WorkerStatusDeviceAllocating {
+		return false
+	}
+	return len(workerInfo.AllocatedDevices) > 0
+}
+
 // unregisterSubscriber removes a subscriber from the subscribers map
 func (kc *PodCacheManager) unregisterSubscriber(podIndex int, sub *workerInfoSubscriber) {
 	kc.subscribersMu.Lock()
@@ -407,7 +425,7 @@ func (kc *PodCacheManager) GetPodByUID(podUID string) *corev1.Pod {
 // extractWorkerInfo extracts worker information from pod annotations using the common utility function
 func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod) (*api.WorkerInfo, string, error) {
 	// Use common utility function to extract pod worker info
-	index := ""
+	index := pod.Annotations[constants.PodIndexAnnotation]
 	allocRequest, msg, err := utils.ComposeAllocationRequest(kc.ctx, pod)
 	if err != nil {
 		klog.Error(
@@ -428,8 +446,7 @@ func (kc *PodCacheManager) extractWorkerInfo(pod *corev1.Pod) (*api.WorkerInfo, 
 		status = api.WorkerStatusTerminated
 	} else {
 		// Must be PodPending state, check if can allocate device (use annotation index to check if index-lock released)
-		if nodeIndex, exists := pod.Annotations[constants.PodIndexAnnotation]; exists {
-			index = nodeIndex
+		if index != "" {
 			status = api.WorkerStatusDeviceAllocating
 		}
 	}

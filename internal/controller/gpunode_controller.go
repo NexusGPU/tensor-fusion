@@ -37,7 +37,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/events"
 	schedulingcorev1 "k8s.io/component-helpers/scheduling/corev1"
 	"k8s.io/utils/ptr"
@@ -446,6 +448,8 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 
 	// pass provider hardware metadata to hypervisor to avoid extra API server calls
 	metadataEnvValue := "[]"
+	deviceMountEnvValue := "{}"
+	hypervisorExtraEnv := []corev1.EnvVar{}
 	if mgr := provider.GetManager(); mgr != nil {
 		if providerCfg, ok := mgr.GetProvider(vendor); ok {
 			metadata := providerCfg.Spec.HardwareMetadata
@@ -457,6 +461,8 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 			} else {
 				log.Error(err, "failed to marshal provider hardware metadata", "vendor", vendor)
 			}
+			deviceMountEnvValue = buildProviderDeviceMountEnv(providerCfg)
+			hypervisorExtraEnv = r.buildProviderHypervisorExtraEnv(ctx, providerCfg.Name)
 		} else {
 			log.Info("provider config not found; injecting empty hardware metadata", "vendor", vendor)
 		}
@@ -466,7 +472,13 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	spec.Containers[0].Env = utils.AppendEnvVarsIfNotExists(spec.Containers[0].Env, corev1.EnvVar{
 		Name:  constants.TFProviderHardwareMetadataEnv,
 		Value: metadataEnvValue,
+	}, corev1.EnvVar{
+		Name:  constants.TFProviderDeviceMountEnv,
+		Value: deviceMountEnvValue,
 	})
+	if len(hypervisorExtraEnv) > 0 {
+		spec.Containers[0].Env = utils.AppendEnvVarsIfNotExists(spec.Containers[0].Env, hypervisorExtraEnv...)
+	}
 
 	// add scheduling config for hypervisor
 	if pool.Spec.SchedulingConfigTemplate != nil {
@@ -799,6 +811,100 @@ func (n *nvidiaHandler) findDevicePluginPod(ctx context.Context, r *GPUNodeRecon
 
 func getDriverProbeJobName(gpuNodeName string) string {
 	return fmt.Sprintf("driver-probe-%s", gpuNodeName)
+}
+
+type providerDeviceMountEnv struct {
+	Default *tfv1.ProviderDeviceMountConfig           `json:"default,omitempty"`
+	Models  map[string]tfv1.ProviderDeviceMountConfig `json:"models,omitempty"`
+}
+
+func (r *GPUNodeReconciler) buildProviderHypervisorExtraEnv(ctx context.Context, providerConfigName string) []corev1.EnvVar {
+	if strings.TrimSpace(providerConfigName) == "" {
+		return nil
+	}
+
+	// Use unstructured read for forward-compatibility when controller vendor deps lag behind CRD fields.
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   tfv1.GroupVersion.Group,
+		Version: tfv1.GroupVersion.Version,
+		Kind:    "ProviderConfig",
+	})
+	if err := r.Get(ctx, client.ObjectKey{Name: providerConfigName}, obj); err != nil {
+		log.FromContext(ctx).Error(err, "failed to fetch provider config extraEnv", "providerConfig", providerConfigName)
+		return nil
+	}
+
+	extraEnvItems, found, err := unstructured.NestedSlice(obj.Object, "spec", "hypervisor", "extraEnv")
+	if err != nil {
+		log.FromContext(ctx).Error(err, "failed to parse provider hypervisor.extraEnv", "providerConfig", providerConfigName)
+		return nil
+	}
+	if !found || len(extraEnvItems) == 0 {
+		return nil
+	}
+
+	envs := make([]corev1.EnvVar, 0, len(extraEnvItems))
+	for _, item := range extraEnvItems {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := itemMap["name"].(string)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		value, _ := itemMap["value"].(string)
+		envs = append(envs, corev1.EnvVar{
+			Name:  name,
+			Value: value,
+		})
+	}
+	return envs
+}
+
+func buildProviderDeviceMountEnv(providerCfg *tfv1.ProviderConfig) string {
+	if providerCfg == nil {
+		return "{}"
+	}
+
+	envCfg := providerDeviceMountEnv{
+		Models: make(map[string]tfv1.ProviderDeviceMountConfig),
+	}
+
+	if providerCfg.Spec.Hypervisor != nil && providerCfg.Spec.Hypervisor.DeviceMount != nil {
+		envCfg.Default = providerCfg.Spec.Hypervisor.DeviceMount.DeepCopy()
+	}
+
+	for _, hw := range providerCfg.Spec.HardwareMetadata {
+		if hw.DeviceMount == nil {
+			continue
+		}
+		modelCfg := hw.DeviceMount.DeepCopy()
+		if modelCfg == nil {
+			continue
+		}
+		if key := normalizeProviderMountModelKey(hw.Model); key != "" {
+			envCfg.Models[key] = *modelCfg
+		}
+		if key := normalizeProviderMountModelKey(hw.FullModelName); key != "" {
+			envCfg.Models[key] = *modelCfg
+		}
+	}
+
+	if envCfg.Default == nil && len(envCfg.Models) == 0 {
+		return "{}"
+	}
+	raw, err := json.Marshal(envCfg)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func normalizeProviderMountModelKey(model string) string {
+	return strings.ToLower(strings.TrimSpace(model))
 }
 
 func getHypervisorIsolationModeFromNodeLabel(node *tfv1.GPUNode) string {
