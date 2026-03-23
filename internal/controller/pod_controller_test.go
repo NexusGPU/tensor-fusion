@@ -26,6 +26,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -312,6 +313,43 @@ var _ = Describe("Pod Controller", func() {
 				vramRestored := gpu.Status.Available.Vram.Cmp(initialAvailableVram) >= 0
 				return tflopsRestored && vramRestored
 			}, 10*time.Second).Should(BeTrue(), "GPU resources should be released when pod is in Succeeded state")
+		})
+
+		It("should clean up metrics when allocator has no record for a non-terminal worker pod", func() {
+			workerPod.Name = "test-worker-no-alloc"
+			workerPod.Annotations[constants.GPUDeviceIDsAnnotation] = "gpu-fake-id"
+
+			By("creating a worker pod")
+			Expect(k8sClient.Create(ctx, workerPod)).To(Succeed())
+
+			By("waiting for pod to be processed")
+			Eventually(func() error {
+				return k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), workerPod)
+			}).Should(Succeed())
+
+			By("manually setting GPU allocation metrics to simulate stale state")
+			gpuStore, _, _ := allocator.GetAllocationInfo()
+			metrics.SetGPUAllocationMetrics(gpuStore, workerPod)
+			Expect(metrics.HasGPUAllocationMetrics(workerPod.Name)).To(BeTrue())
+
+			By("verifying allocator has no allocation for this pod")
+			Expect(allocator.HasAllocation(types.NamespacedName{
+				Name: workerPod.Name, Namespace: workerPod.Namespace,
+			})).To(BeFalse())
+
+			By("triggering a reconcile via a minor pod update")
+			updatedPod := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(workerPod), updatedPod)).To(Succeed())
+			if updatedPod.Annotations == nil {
+				updatedPod.Annotations = map[string]string{}
+			}
+			updatedPod.Annotations["trigger-reconcile"] = "true"
+			Expect(k8sClient.Update(ctx, updatedPod)).To(Succeed())
+
+			By("verifying GPU allocation metrics are cleaned up")
+			Eventually(func() bool {
+				return metrics.HasGPUAllocationMetrics(workerPod.Name)
+			}).Should(BeFalse(), "GPU allocation metrics should be removed when allocator has no record")
 		})
 	})
 
