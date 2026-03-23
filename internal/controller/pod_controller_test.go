@@ -343,7 +343,7 @@ var _ = Describe("Pod Controller", func() {
 			if updatedPod.Annotations == nil {
 				updatedPod.Annotations = map[string]string{}
 			}
-			updatedPod.Annotations["trigger-reconcile"] = "true"
+			updatedPod.Annotations["trigger-reconcile"] = constants.TrueStringValue
 			Expect(k8sClient.Update(ctx, updatedPod)).To(Succeed())
 
 			By("verifying GPU allocation metrics are cleaned up")
