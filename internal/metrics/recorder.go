@@ -389,6 +389,13 @@ func RemoveGPUAllocationMetrics(podName string) {
 	delete(gpuAllocationMetricsMap, podName)
 }
 
+func HasGPUAllocationMetrics(podName string) bool {
+	gpuAllocationMetricsLock.RLock()
+	defer gpuAllocationMetricsLock.RUnlock()
+	_, exists := gpuAllocationMetricsMap[podName]
+	return exists
+}
+
 // SetGPUAllocationMetrics sets aggregated GPU allocation metrics for a pod
 func SetGPUAllocationMetrics(gpuStore map[types.NamespacedName]*tfv1.GPU, pod *corev1.Pod) {
 	gpuAllocationMetricsLock.Lock()
