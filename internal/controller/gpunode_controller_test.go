@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -59,7 +58,7 @@ var _ = Describe("GPUNode Controller", func() {
 			pod := &corev1.Pod{}
 			Eventually(func(g Gomega) {
 				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      fmt.Sprintf("hypervisor-%s", gpuNode.Name),
+					Name:      utils.BuildHypervisorPodName(gpuNode.Name),
 					Namespace: utils.CurrentNamespace(),
 				}, pod)
 				g.Expect(err).ShouldNot(HaveOccurred())
@@ -78,7 +77,7 @@ var _ = Describe("GPUNode Controller", func() {
 			Eventually(func(g Gomega) {
 				newPod := &corev1.Pod{}
 				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      fmt.Sprintf("hypervisor-%s", gpuNode.Name),
+					Name:      utils.BuildHypervisorPodName(gpuNode.Name),
 					Namespace: utils.CurrentNamespace(),
 				}, newPod)
 				g.Expect(err).ShouldNot(HaveOccurred())
