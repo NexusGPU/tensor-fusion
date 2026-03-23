@@ -1,10 +1,14 @@
 package worker
 
 import (
+	"fmt"
 	"maps"
+	"slices"
+	"strings"
 	"sync"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/device"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
@@ -24,6 +28,11 @@ type AllocationController struct {
 
 var _ framework.WorkerAllocationController = &AllocationController{}
 
+type visibleDeviceRef struct {
+	index int32
+	uuid  string
+}
+
 // NewAllocationController creates a new AllocationController
 func NewAllocationController(deviceController framework.DeviceController) *AllocationController {
 	return &AllocationController{
@@ -37,6 +46,10 @@ func NewAllocationController(deviceController framework.DeviceController) *Alloc
 func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*api.WorkerAllocation, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	if len(request.AllocatedDevices) == 0 {
+		return nil, fmt.Errorf("worker %s has no allocated devices", request.WorkerUID)
+	}
 
 	// idempotency check
 	if a.workerAllocations[request.WorkerUID] != nil {
@@ -89,6 +102,11 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 				GuestPath:   guestPath,
 				Permissions: "rwm",
 			}
+		}
+	}
+	if shouldPinNvidiaVisibleDevices(request, deviceInfos) {
+		if visibleDevices := buildPinnedNvidiaVisibleDevices(deviceInfos); visibleDevices != "" {
+			envs[constants.NvidiaVisibleAllDeviceEnv] = visibleDevices
 		}
 	}
 
@@ -172,4 +190,49 @@ func (a *AllocationController) removeDeviceAllocation(deviceUUID string, allocat
 			return wa.WorkerInfo.WorkerUID != allocation.WorkerInfo.WorkerUID
 		},
 	)
+}
+
+func shouldPinNvidiaVisibleDevices(request *api.WorkerInfo, deviceInfos []*api.DeviceInfo) bool {
+	if request == nil || len(deviceInfos) == 0 {
+		return false
+	}
+	if request.IsolationMode == tfv1.IsolationModePartitioned {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(deviceInfos[0].Vendor), constants.AcceleratorVendorNvidia)
+}
+
+func buildPinnedNvidiaVisibleDevices(deviceInfos []*api.DeviceInfo) string {
+	visibleDevices := make([]visibleDeviceRef, 0, len(deviceInfos))
+	seen := make(map[string]struct{}, len(deviceInfos))
+	for _, deviceInfo := range deviceInfos {
+		if deviceInfo == nil || deviceInfo.UUID == "" {
+			continue
+		}
+		if _, exists := seen[deviceInfo.UUID]; exists {
+			continue
+		}
+		seen[deviceInfo.UUID] = struct{}{}
+		visibleDevices = append(visibleDevices, visibleDeviceRef{
+			index: deviceInfo.Index,
+			uuid:  deviceInfo.UUID,
+		})
+	}
+	slices.SortFunc(visibleDevices, func(a, b visibleDeviceRef) int {
+		switch {
+		case a.index < b.index:
+			return -1
+		case a.index > b.index:
+			return 1
+		case a.uuid < b.uuid:
+			return -1
+		case a.uuid > b.uuid:
+			return 1
+		default:
+			return 0
+		}
+	})
+	return strings.Join(lo.Map(visibleDevices, func(device visibleDeviceRef, _ int) string {
+		return device.uuid
+	}), ",")
 }

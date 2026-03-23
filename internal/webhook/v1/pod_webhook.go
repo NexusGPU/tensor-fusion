@@ -229,7 +229,13 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 
 	// Inject tensor-fusion patches
 	patches, err := m.patchTFClient(
-		ctx, pod, pool, tfInfo.Profile.IsLocalGPU, tfInfo.Profile.SidecarWorker, currentBytes, containerIndices,
+		ctx,
+		pod,
+		pool,
+		tfInfo.Profile.IsLocalGPU,
+		utils.UseLocalWorkerSidecar(tfInfo.Profile),
+		currentBytes,
+		containerIndices,
 	)
 	if err != nil {
 		log.Error(err, "failed to patch tf client", "pod", req.Name, "namespace", req.Namespace)
@@ -406,7 +412,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		}
 
 		var patchJSON []byte
-		patchJSON, err = serializeContainerInjectionPatchJson(clientConfig, patchJSON, isLocalGPU)
+		patchJSON, err = serializeContainerInjectionPatchJson(clientConfig, patchJSON)
 		if err != nil {
 			return nil, err
 		}
@@ -427,21 +433,23 @@ func (m *TensorFusionPodMutator) patchTFClient(
 		// Inject tensor-fusion.ai/index resource for Device Plugin communication (worker pods only)
 		// This is a special index resource (not a real device), used for Pod-to-DevicePlugin communication
 		if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
-			if container.Resources.Limits == nil {
-				container.Resources.Limits = make(corev1.ResourceList)
-			}
-			// Limit is set to actual index value (1-128) for Device Plugin to match Pod
-			// ResourceFit of dummy device already ignored in TF scheduler
-			indexQuantity := resource.MustParse(strconv.Itoa((index % constants.IndexModLength) + 1))
-			indexKey := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, index/constants.IndexModLength)
-			container.Resources.Limits[corev1.ResourceName(indexKey)] = indexQuantity
+			applyPodIndexResource(container, index)
 		}
 
 		if !isLocalGPU {
 			addConnectionForRemoteFixedReplicaVirtualGPU(pod, container, clientConfig)
+		} else if sidecarWorker {
+			addConnectionForLocalSidecarWorker(container)
 		}
 
 		pod.Spec.Containers[containerIndex] = *container
+	}
+	if sidecarWorker {
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == constants.TFContainerNameWorker {
+				applyPodIndexResource(&pod.Spec.Containers[i], index)
+			}
+		}
 	}
 
 	// Patch hostPort allocation
@@ -560,6 +568,37 @@ func assignPodLabelsAndAnnotations(isLocalGPU bool, sidecarWorker bool, pod *cor
 	pod.Labels[constants.GpuPoolKey] = pool.Name
 }
 
+func applyPodIndexResource(container *corev1.Container, index int) {
+	if container.Resources.Limits == nil {
+		container.Resources.Limits = make(corev1.ResourceList)
+	}
+	indexQuantity := resource.MustParse(strconv.Itoa((index % constants.IndexModLength) + 1))
+	indexKey := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, index/constants.IndexModLength)
+	container.Resources.Limits[corev1.ResourceName(indexKey)] = indexQuantity
+}
+
+func addConnectionForLocalSidecarWorker(container *corev1.Container) {
+	upsertContainerEnv(container, corev1.EnvVar{
+		Name: constants.ConnectionInfoEnv,
+		// protocol+identifier+size+initVersion
+		Value: fmt.Sprintf("shmem+%s+%s+1", constants.ConnectionSharedMemName, constants.ConnectionSharedMemSize),
+	})
+	upsertContainerEnv(container, corev1.EnvVar{
+		Name:  constants.DisableVMSharedMemEnv,
+		Value: "0",
+	})
+}
+
+func upsertContainerEnv(container *corev1.Container, env corev1.EnvVar) {
+	for i := range container.Env {
+		if container.Env[i].Name == env.Name {
+			container.Env[i] = env
+			return
+		}
+	}
+	container.Env = append(container.Env, env)
+}
+
 func addConnectionForRemoteFixedReplicaVirtualGPU(pod *corev1.Pod, container *corev1.Container, clientConfig *tfv1.ClientConfig) {
 	var prefix string
 	if pod.GenerateName == "" && pod.Name != "" {
@@ -598,9 +637,13 @@ func removeNativeGPULimits(container *corev1.Container) {
 	}
 }
 
-func serializeContainerInjectionPatchJson(clientConfig *tfv1.ClientConfig, patchJSON []byte, isLocalGPU bool) ([]byte, error) {
+func serializeContainerInjectionPatchJson(
+	clientConfig *tfv1.ClientConfig,
+	patchJSON []byte,
+) ([]byte, error) {
 	var err error
-	if !isLocalGPU && clientConfig.PatchToContainer != nil {
+	useContainerPatch := clientConfig.PatchToContainer != nil
+	if useContainerPatch {
 		patchJSON, err = json.Marshal(clientConfig.PatchToContainer)
 		if err != nil {
 			return nil, fmt.Errorf("marshal patchToContainer: %w", err)

@@ -118,7 +118,7 @@ func (s *Server) setupRoutes() {
 		apiV1.GET("/limiter", s.legacyHandler.HandleGetLimiter)
 		apiV1.POST("/trap", s.legacyHandler.HandleTrap)
 		apiV1.GET("/pod", s.legacyHandler.HandleGetPods)
-		// TODO: should eliminate this API from limiter: apiV1.GET("/process", s.legacyHandler.HandleGetProcesses)
+		apiV1.POST("/process", s.legacyHandler.HandleInitProcess)
 	}
 }
 

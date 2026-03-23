@@ -322,13 +322,37 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				})
 				Expect(hasTransportShmPatch).To(Equal(expectTransportPatch))
 			},
+			Entry("local soft annotation", map[string]string{
+				constants.GpuPoolKey:                "mock",
+				constants.InjectContainerAnnotation: "main",
+				constants.IsLocalGPUAnnotation:      constants.TrueStringValue,
+				constants.IsolationModeAnnotation:   string(tfv1.IsolationModeSoft),
+				constants.TFLOPSLimitAnnotation:     "100",
+				constants.VRAMLimitAnnotation:       "16Gi",
+			}, true, true, true),
+			Entry("local hard annotation", map[string]string{
+				constants.GpuPoolKey:                "mock",
+				constants.InjectContainerAnnotation: "main",
+				constants.IsLocalGPUAnnotation:      constants.TrueStringValue,
+				constants.IsolationModeAnnotation:   string(tfv1.IsolationModeHard),
+				constants.TFLOPSLimitAnnotation:     "100",
+				constants.VRAMLimitAnnotation:       "16Gi",
+			}, true, true, true),
+			Entry("local shared annotation", map[string]string{
+				constants.GpuPoolKey:                "mock",
+				constants.InjectContainerAnnotation: "main",
+				constants.IsLocalGPUAnnotation:      constants.TrueStringValue,
+				constants.IsolationModeAnnotation:   string(tfv1.IsolationModeShared),
+				constants.TFLOPSLimitAnnotation:     "100",
+				constants.VRAMLimitAnnotation:       "16Gi",
+			}, false, false, false),
 			Entry("local sidecar-worker annotation", map[string]string{
 				constants.GpuPoolKey:                "mock",
 				constants.InjectContainerAnnotation: "main",
 				constants.SidecarWorkerAnnotation:   constants.TrueStringValue,
 				constants.TFLOPSLimitAnnotation:     "100",
 				constants.VRAMLimitAnnotation:       "16Gi",
-			}, false, false, false),
+			}, true, true, true),
 			Entry("remote mode annotation", map[string]string{
 				constants.GpuPoolKey:                "mock",
 				constants.InjectContainerAnnotation: "main",

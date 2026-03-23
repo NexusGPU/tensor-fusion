@@ -1,17 +1,24 @@
 package worker
 
 import (
+	"context"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/worker/computing"
+	workerstate "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/worker/state"
 	"github.com/samber/lo"
 	"k8s.io/klog/v2"
 )
+
+const sharedMemorySyncInterval = 500 * time.Millisecond
 
 type WorkerController struct {
 	mode    api.IsolationMode
@@ -23,6 +30,12 @@ type WorkerController struct {
 
 	mu      sync.RWMutex
 	workers map[string]*api.WorkerInfo
+
+	shmBasePath string
+	nowFunc     func() time.Time
+
+	syncCancel context.CancelFunc
+	syncWG     sync.WaitGroup
 }
 
 func NewWorkerController(
@@ -40,6 +53,11 @@ func NewWorkerController(
 		quotaController:      quotaController,
 
 		workers: make(map[string]*api.WorkerInfo, 32),
+		shmBasePath: filepath.Join(
+			constants.TFDataPath,
+			strings.TrimPrefix(constants.SharedMemMountSubPath, "/"),
+		),
+		nowFunc: time.Now,
 	}
 }
 
@@ -93,10 +111,13 @@ func (w *WorkerController) Start() error {
 		return err
 	}
 	klog.Info("Worker backend started")
+
+	w.startSharedMemorySyncLoop()
 	return nil
 }
 
 func (w *WorkerController) Stop() error {
+	w.stopSharedMemorySyncLoop()
 	_ = w.backend.Stop()
 	_ = w.quotaController.StopSoftQuotaLimiter()
 	return nil
@@ -201,4 +222,142 @@ func (w *WorkerController) buildWorkerLookupMap() map[string]string {
 		lookup[key] = worker.WorkerUID
 	}
 	return lookup
+}
+
+func (w *WorkerController) startSharedMemorySyncLoop() {
+	if w.backend == nil {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.syncCancel = cancel
+	w.syncWG.Add(1)
+	go func() {
+		defer w.syncWG.Done()
+
+		ticker := time.NewTicker(sharedMemorySyncInterval)
+		defer ticker.Stop()
+
+		for {
+			w.syncSharedMemoryState()
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func (w *WorkerController) stopSharedMemorySyncLoop() {
+	if w.syncCancel == nil {
+		return
+	}
+
+	w.syncCancel()
+	w.syncWG.Wait()
+	w.syncCancel = nil
+}
+
+func (w *WorkerController) syncSharedMemoryState() {
+	if w.backend == nil || w.shmBasePath == "" {
+		return
+	}
+
+	workerAllocations := w.workerAllocations()
+	if len(workerAllocations) == 0 {
+		return
+	}
+
+	workerLookup := w.buildWorkerLookupMap()
+	memoryByWorkerDevice := w.collectWorkerMemoryUsage(workerLookup)
+	now := uint64(w.nowFunc().Unix())
+
+	for workerUID, allocation := range workerAllocations {
+		workerInfo := allocation.WorkerInfo
+		if workerInfo == nil {
+			continue
+		}
+
+		podIdentifier := workerstate.NewPodIdentifier(workerInfo.Namespace, workerInfo.WorkerName)
+		handle, err := workerstate.OpenSharedMemoryHandle(w.shmBasePath, podIdentifier)
+		if err != nil {
+			klog.V(5).Infof("Skip shared memory sync for %s/%s: %v", workerInfo.Namespace, workerInfo.WorkerName, err)
+			continue
+		}
+
+		state := handle.GetState()
+		state.UpdateHeartbeat(now)
+
+		deviceMemoryUsage := memoryByWorkerDevice[workerUID]
+		for _, deviceInfo := range allocation.DeviceInfos {
+			if deviceInfo == nil {
+				continue
+			}
+
+			deviceUUID := strings.ToLower(deviceInfo.UUID)
+			state.SetPodMemoryUsed(int(deviceInfo.Index), deviceMemoryUsage[deviceUUID])
+		}
+
+		if err := handle.Close(); err != nil {
+			klog.V(5).Infof(
+				"Failed to close shared memory handle for %s/%s: %v",
+				workerInfo.Namespace,
+				workerInfo.WorkerName,
+				err,
+			)
+		}
+	}
+}
+
+func (w *WorkerController) workerAllocations() map[string]*api.WorkerAllocation {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	allocations := make(map[string]*api.WorkerAllocation, len(w.workers))
+	for workerUID := range w.workers {
+		allocation, exists := w.allocationController.GetWorkerAllocation(workerUID)
+		if !exists || allocation == nil || allocation.WorkerInfo == nil {
+			continue
+		}
+		allocations[workerUID] = allocation
+	}
+	return allocations
+}
+
+func (w *WorkerController) collectWorkerMemoryUsage(workerLookup map[string]string) map[string]map[string]uint64 {
+	processInfos, err := w.deviceController.GetProcessInformation()
+	if err != nil {
+		klog.V(4).Infof("Failed to collect process information for shared memory sync: %v", err)
+		return nil
+	}
+
+	result := make(map[string]map[string]uint64)
+	for _, procInfo := range processInfos {
+		hostPID, err := strconv.ParseUint(procInfo.ProcessID, 10, 32)
+		if err != nil {
+			klog.V(4).Infof("Failed to parse process ID %s during shared memory sync: %v", procInfo.ProcessID, err)
+			continue
+		}
+
+		mappingInfo, err := w.backend.GetProcessMappingInfo(uint32(hostPID))
+		if err != nil || mappingInfo == nil || mappingInfo.GuestID == "" {
+			continue
+		}
+
+		workerKey := mappingInfo.Namespace + "/" + mappingInfo.PodName
+		workerUID, found := workerLookup[workerKey]
+		if !found {
+			continue
+		}
+
+		deviceUUID := strings.ToLower(procInfo.DeviceUUID)
+		if result[workerUID] == nil {
+			result[workerUID] = make(map[string]uint64)
+		}
+		result[workerUID][deviceUUID] += procInfo.MemoryUsedBytes
+	}
+
+	return result
 }
