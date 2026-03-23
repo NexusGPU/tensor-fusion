@@ -18,6 +18,35 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+type stubNVMLDevice struct {
+	nvml.Device
+	getNvLinkStateFunc            func(int) (nvml.EnableState, nvml.Return)
+	getNvLinkVersionFunc          func(int) (uint32, nvml.Return)
+	getNvLinkRemoteDeviceTypeFunc func(int) (nvml.IntNvLinkDeviceType, nvml.Return)
+	getNvLinkRemotePciInfoFunc    func(int) (nvml.PciInfo, nvml.Return)
+	getP2PStatusFunc              func(nvml.Device, nvml.GpuP2PCapsIndex) (nvml.GpuP2PStatus, nvml.Return)
+}
+
+func (d *stubNVMLDevice) GetNvLinkState(n int) (nvml.EnableState, nvml.Return) {
+	return d.getNvLinkStateFunc(n)
+}
+
+func (d *stubNVMLDevice) GetNvLinkVersion(n int) (uint32, nvml.Return) {
+	return d.getNvLinkVersionFunc(n)
+}
+
+func (d *stubNVMLDevice) GetNvLinkRemoteDeviceType(n int) (nvml.IntNvLinkDeviceType, nvml.Return) {
+	return d.getNvLinkRemoteDeviceTypeFunc(n)
+}
+
+func (d *stubNVMLDevice) GetNvLinkRemotePciInfo(n int) (nvml.PciInfo, nvml.Return) {
+	return d.getNvLinkRemotePciInfoFunc(n)
+}
+
+func (d *stubNVMLDevice) GetP2PStatus(device nvml.Device, idx nvml.GpuP2PCapsIndex) (nvml.GpuP2PStatus, nvml.Return) {
+	return d.getP2PStatusFunc(device, idx)
+}
+
 func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 	// Setup test data
 	ctx := context.Background()
@@ -45,7 +74,7 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&tfv1.GPU{}).Build()
 
 	gpu, err := createOrUpdateTensorFusionGPU(
-		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1)
+		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1, nil)
 	assert.NoError(t, err)
 
 	// Assertions
@@ -76,7 +105,7 @@ func TestCreateOrUpdateTensorFusionGPU(t *testing.T) {
 
 	tflops.Add(resource.MustParse("100"))
 	updatedGpu, err := createOrUpdateTensorFusionGPU(
-		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1,
+		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1, nil,
 	)
 	assert.NoError(t, err)
 	assert.NotEqual(t, updatedGpu.Status.Capacity, gpu.Status.Capacity, "GPU capacity should not match")
@@ -124,7 +153,7 @@ func TestGPUControllerReference(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&tfv1.GPU{}).Build()
 
 	gpu, err := createOrUpdateTensorFusionGPU(
-		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1)
+		k8sClient, ctx, k8sNodeName, gpuNode, uuid, deviceName, memInfo, tflops, 1, -1, nil)
 	assert.NoError(t, err)
 	assert.True(t, metav1.IsControlledBy(gpu, gpuNode))
 
@@ -141,7 +170,7 @@ func TestGPUControllerReference(t *testing.T) {
 	}
 
 	gpu, err = createOrUpdateTensorFusionGPU(
-		k8sClient, ctx, k8sNodeName, newGpuNode, uuid, deviceName, memInfo, tflops, 1, -1)
+		k8sClient, ctx, k8sNodeName, newGpuNode, uuid, deviceName, memInfo, tflops, 1, -1, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, gpu.OwnerReferences[0].Kind)
 	assert.NotNil(t, gpu.OwnerReferences[0].APIVersion)
@@ -364,6 +393,126 @@ func TestPatchGPUNodeStatus_ErrorScenarios(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.expectedErr, "Error message should contain expected text")
 		})
 	}
+}
+
+func TestEstimateNvLinkBandwidthMBps(t *testing.T) {
+	assert.Equal(t, int64(50000), estimateNvLinkBandwidthMBps(4))
+	assert.Equal(t, int64(25000), estimateNvLinkBandwidthMBps(99))
+	assert.Equal(t, int64(0), estimateNvLinkBandwidthMBps(0))
+}
+
+func TestPciBusIDToString(t *testing.T) {
+	pci := nvml.PciInfo{
+		BusId: [32]uint8{'0', '0', '0', '0', ':', '0', '1', ':', '0', '0', '.', '0'},
+	}
+	assert.Equal(t, "0000:01:00.0", pciBusIDToString(pci))
+
+	legacyOnly := nvml.PciInfo{
+		BusIdLegacy: [16]uint8{'0', '0', '0', '0', ':', '0', '2', ':', '0', '0', '.', '0'},
+	}
+	assert.Equal(t, "0000:02:00.0", pciBusIDToString(legacyOnly))
+}
+
+func TestCloneNvLinkStatus(t *testing.T) {
+	src := &tfv1.GPUNvLinkStatus{
+		PeerCount:          1,
+		TotalLinkCount:     2,
+		TotalBandwidthMBps: 200000,
+		Peers: []tfv1.GPUNvLinkPeer{
+			{
+				PeerUUID:      "gpu-1",
+				LinkCount:     2,
+				LinkVersion:   4,
+				BandwidthMBps: 200000,
+			},
+		},
+	}
+	cloned := cloneNvLinkStatus(src)
+	assert.NotNil(t, cloned)
+	assert.Equal(t, src, cloned)
+
+	src.Peers[0].PeerUUID = "changed"
+	assert.Equal(t, "gpu-1", cloned.Peers[0].PeerUUID, "clone should not share peers slice")
+}
+
+func TestDiscoverNvLinkStatusDirectPeer(t *testing.T) {
+	self := &stubNVMLDevice{}
+	self.getNvLinkStateFunc = func(n int) (nvml.EnableState, nvml.Return) {
+		if n == 0 {
+			return nvml.FEATURE_ENABLED, nvml.SUCCESS
+		}
+		return nvml.FEATURE_DISABLED, nvml.SUCCESS
+	}
+	self.getNvLinkVersionFunc = func(n int) (uint32, nvml.Return) {
+		return 4, nvml.SUCCESS
+	}
+	self.getNvLinkRemoteDeviceTypeFunc = func(n int) (nvml.IntNvLinkDeviceType, nvml.Return) {
+		return nvml.NVLINK_DEVICE_TYPE_GPU, nvml.SUCCESS
+	}
+	self.getNvLinkRemotePciInfoFunc = func(n int) (nvml.PciInfo, nvml.Return) {
+		return nvml.PciInfo{
+			BusId: [32]uint8{'0', '0', '0', '0', ':', '0', '2', ':', '0', '0', '.', '0'},
+		}, nvml.SUCCESS
+	}
+
+	status := discoverNvLinkStatus(
+		self,
+		"gpu-0",
+		map[string]string{"0000:02:00.0": "gpu-1"},
+		[]discoveredGPU{{device: self, uuid: "gpu-0"}},
+	)
+
+	assert.NotNil(t, status)
+	assert.Equal(t, int32(1), status.PeerCount)
+	assert.Equal(t, int32(1), status.TotalLinkCount)
+	assert.Equal(t, int64(50000), status.TotalBandwidthMBps)
+	assert.Len(t, status.Peers, 1)
+	assert.Equal(t, "gpu-1", status.Peers[0].PeerUUID)
+	assert.Equal(t, int32(1), status.Peers[0].LinkCount)
+	assert.Equal(t, int32(4), status.Peers[0].LinkVersion)
+}
+
+func TestDiscoverNvLinkStatusSwitchFallback(t *testing.T) {
+	self := &stubNVMLDevice{}
+	peer := &stubNVMLDevice{}
+
+	self.getNvLinkStateFunc = func(n int) (nvml.EnableState, nvml.Return) {
+		if n == 0 || n == 1 {
+			return nvml.FEATURE_ENABLED, nvml.SUCCESS
+		}
+		return nvml.FEATURE_DISABLED, nvml.SUCCESS
+	}
+	self.getNvLinkVersionFunc = func(n int) (uint32, nvml.Return) {
+		return 4, nvml.SUCCESS
+	}
+	self.getNvLinkRemoteDeviceTypeFunc = func(n int) (nvml.IntNvLinkDeviceType, nvml.Return) {
+		return nvml.NVLINK_DEVICE_TYPE_SWITCH, nvml.SUCCESS
+	}
+	self.getP2PStatusFunc = func(device nvml.Device, idx nvml.GpuP2PCapsIndex) (nvml.GpuP2PStatus, nvml.Return) {
+		assert.Equal(t, nvml.P2P_CAPS_INDEX_NVLINK, idx)
+		assert.Equal(t, peer, device)
+		return nvml.P2P_STATUS_OK, nvml.SUCCESS
+	}
+
+	status := discoverNvLinkStatus(
+		self,
+		"gpu-0",
+		nil,
+		[]discoveredGPU{
+			{device: self, uuid: "gpu-0"},
+			{device: peer, uuid: "gpu-1"},
+		},
+	)
+
+	assert.NotNil(t, status)
+	assert.Equal(t, int32(1), status.PeerCount)
+	assert.Equal(t, int32(2), status.TotalLinkCount)
+	assert.Equal(t, int64(100000), status.TotalBandwidthMBps)
+	assert.Len(t, status.Peers, 1)
+	assert.Equal(t, "gpu-1", status.Peers[0].PeerUUID)
+	assert.Equal(t, int32(2), status.Peers[0].LinkCount)
+	assert.Equal(t, int32(4), status.Peers[0].LinkVersion)
+	assert.Equal(t, int64(100000), status.Peers[0].BandwidthMBps)
 }
 
 func TestPatchGPUNodeStatus_Integration(t *testing.T) {

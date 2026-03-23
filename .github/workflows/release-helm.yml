@@ -2,7 +2,7 @@ name: Release Helm Chart
 
 on:
   push:
-    branches: [ main ]
+    branches: [ v1 ]
     paths: [ 'charts/**' ]
   workflow_dispatch:
 

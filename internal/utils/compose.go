@@ -23,6 +23,9 @@ var injectLibResource v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("20m"),
 	v1.ResourceMemory: resource.MustParse("64Mi"),
 }
+
+const defaultNvidiaRuntimeClassName = "nvidia"
+
 var nodeDiscoveryDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("20m"),
 	v1.ResourceMemory: resource.MustParse("64Mi"),
@@ -748,6 +751,9 @@ func AddTFNodeDiscoveryConfAfterTemplate(ctx context.Context, tmpl *v1.PodTempla
 	}
 	tmpl.Spec.ServiceAccountName = serviceAccountName
 	tmpl.Spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
+	if compatibleWithNvidiaContainerToolkit && tmpl.Spec.RuntimeClassName == nil {
+		tmpl.Spec.RuntimeClassName = ptr.To(defaultNvidiaRuntimeClassName)
+	}
 
 	if len(tmpl.Spec.Containers) == 0 {
 		tmpl.Spec.Containers = []v1.Container{
