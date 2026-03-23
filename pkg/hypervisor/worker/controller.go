@@ -280,8 +280,8 @@ func (w *WorkerController) syncSharedMemoryState() {
 			continue
 		}
 
-		podPath := workerstate.NewPodIdentifier(workerInfo.Namespace, workerInfo.WorkerName).ToPath(w.shmBasePath)
-		handle, err := workerstate.OpenSharedMemoryHandle(podPath)
+		podIdentifier := workerstate.NewPodIdentifier(workerInfo.Namespace, workerInfo.WorkerName)
+		handle, err := workerstate.OpenSharedMemoryHandle(w.shmBasePath, podIdentifier)
 		if err != nil {
 			klog.V(5).Infof("Skip shared memory sync for %s/%s: %v", workerInfo.Namespace, workerInfo.WorkerName, err)
 			continue

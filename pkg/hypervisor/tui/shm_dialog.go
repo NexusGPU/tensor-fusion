@@ -182,7 +182,7 @@ func (m *ShmDialogModel) updateContent() {
 	content.WriteString(fmt.Sprintf("%s: %s\n\n", MetricLabelStyle.Render("SHM Path"), MetricValueStyle.Render(shmPath)))
 
 	// Try to open the shared memory handle
-	handle, err := workerstate.OpenSharedMemoryHandle(podPath)
+	handle, err := workerstate.OpenSharedMemoryHandle(shmBasePath, podIdentifier)
 	if err != nil {
 		content.WriteString(fmt.Sprintf("%s: %s\n\n", MetricLabelStyle.Render("Error"), MetricValueStyle.Render(err.Error())))
 		m.content = content.String()

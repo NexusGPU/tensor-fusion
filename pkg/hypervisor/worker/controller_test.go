@@ -119,8 +119,8 @@ func TestSyncSharedMemoryStateUpdatesHeartbeatAndPodMemory(t *testing.T) {
 	)
 
 	shmBasePath := t.TempDir()
-	podPath := workerstate.NewPodIdentifier(namespace, podName).ToPath(shmBasePath)
-	handle, err := workerstate.CreateSharedMemoryHandle(podPath, []workerstate.DeviceConfig{
+	podIdentifier := workerstate.NewPodIdentifier(namespace, podName)
+	handle, err := workerstate.CreateSharedMemoryHandle(shmBasePath, podIdentifier, []workerstate.DeviceConfig{
 		{
 			DeviceIdx:  0,
 			DeviceUUID: "GPU-1234",
@@ -188,7 +188,7 @@ func TestSyncSharedMemoryStateUpdatesHeartbeatAndPodMemory(t *testing.T) {
 
 	controller.syncSharedMemoryState()
 
-	reopenedHandle, err := workerstate.OpenSharedMemoryHandle(podPath)
+	reopenedHandle, err := workerstate.OpenSharedMemoryHandle(shmBasePath, podIdentifier)
 	if err != nil {
 		t.Fatalf("open shared memory: %v", err)
 	}

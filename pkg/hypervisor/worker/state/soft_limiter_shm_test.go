@@ -160,7 +160,7 @@ func TestSharedMemoryHandleCreateAndOpen(t *testing.T) {
 	}()
 
 	// Create shared memory
-	handle1, err := CreateSharedMemoryHandle(podPath, configs)
+	handle1, err := CreateSharedMemoryHandle(testShmBasePath, identifier, configs)
 	require.NoError(t, err)
 	defer func() {
 		_ = handle1.Close()
@@ -177,7 +177,7 @@ func TestSharedMemoryHandleCreateAndOpen(t *testing.T) {
 	assert.Equal(t, int64(unsafe.Sizeof(rustSharedDeviceStateV2Layout{})), stat.Size())
 
 	// Open existing shared memory
-	handle2, err := OpenSharedMemoryHandle(podPath)
+	handle2, err := OpenSharedMemoryHandle(testShmBasePath, identifier)
 	require.NoError(t, err)
 	defer func() {
 		_ = handle2.Close()
@@ -209,7 +209,7 @@ func TestOpenSharedMemoryHandleRejectsLegacyLayout(t *testing.T) {
 	require.NoError(t, file.Truncate(int64(unsafe.Sizeof(SharedDeviceStateV2{}))))
 	require.NoError(t, file.Close())
 
-	_, err = OpenSharedMemoryHandle(podPath)
+	_, err = OpenSharedMemoryHandle(testShmBasePath, identifier)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "legacy shared memory layout")
 }
@@ -232,8 +232,41 @@ func TestRustSharedMemoryLayoutCompatibility(t *testing.T) {
 }
 
 func TestSharedMemoryHandleErrorHandling(t *testing.T) {
-	_, err := OpenSharedMemoryHandle("non_existent_memory")
+	_, err := OpenSharedMemoryHandle(testShmBasePath, NewPodIdentifier("non-existent", "memory"))
 	assert.Error(t, err)
+}
+
+func TestSharedMemoryHandleRejectsInvalidPathComponents(t *testing.T) {
+	configs := createTestConfigs()
+
+	tests := []struct {
+		name        string
+		identifier  *PodIdentifier
+		errorString string
+	}{
+		{
+			name:        "namespace path traversal",
+			identifier:  NewPodIdentifier("../escape", "pod"),
+			errorString: "invalid namespace path component",
+		},
+		{
+			name:        "pod name contains separator",
+			identifier:  NewPodIdentifier("namespace", "pod/name"),
+			errorString: "invalid pod name path component",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := CreateSharedMemoryHandle(testShmBasePath, tt.identifier, configs)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errorString)
+
+			_, err = OpenSharedMemoryHandle(testShmBasePath, tt.identifier)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errorString)
+		})
+	}
 }
 
 func TestConcurrentDeviceAccess(t *testing.T) {
@@ -244,7 +277,7 @@ func TestConcurrentDeviceAccess(t *testing.T) {
 		_ = os.RemoveAll(podPath)
 	}()
 
-	handle, err := CreateSharedMemoryHandle(podPath, configs)
+	handle, err := CreateSharedMemoryHandle(testShmBasePath, identifier, configs)
 	require.NoError(t, err)
 	defer func() {
 		_ = handle.Close()
@@ -655,7 +688,7 @@ func TestSharedMemoryHandleCleanup(t *testing.T) {
 		_ = os.RemoveAll(testShmBasePath)
 	}()
 
-	handle, err := CreateSharedMemoryHandle(podPath, configs)
+	handle, err := CreateSharedMemoryHandle(testShmBasePath, identifier, configs)
 	require.NoError(t, err)
 
 	shmPath := filepath.Join(podPath, ShmPathSuffix)

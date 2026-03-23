@@ -886,8 +886,27 @@ type SharedMemoryHandle struct {
 	fileSize int64
 }
 
-// CreateSharedMemoryHandle creates a new shared memory handle
-func CreateSharedMemoryHandle(podPath string, configs []DeviceConfig) (*SharedMemoryHandle, error) {
+// CreateSharedMemoryHandle creates a new shared memory handle.
+// Namespace and pod name are expected to be single path components.
+func CreateSharedMemoryHandle(
+	basePath string, pod *PodIdentifier, configs []DeviceConfig,
+) (*SharedMemoryHandle, error) {
+	if pod == nil {
+		return nil, fmt.Errorf("pod identifier is required")
+	}
+	if pod.Namespace == "" || pod.Name == "" {
+		return nil, fmt.Errorf("pod identifier must include namespace and name")
+	}
+	if strings.Contains(pod.Namespace, "/") ||
+		strings.Contains(pod.Namespace, "\\") ||
+		strings.Contains(pod.Namespace, "..") {
+		return nil, fmt.Errorf("invalid namespace path component: %q", pod.Namespace)
+	}
+	if strings.Contains(pod.Name, "/") || strings.Contains(pod.Name, "\\") || strings.Contains(pod.Name, "..") {
+		return nil, fmt.Errorf("invalid pod name path component: %q", pod.Name)
+	}
+
+	podPath := filepath.Join(basePath, pod.Namespace, pod.Name)
 	shmPath := filepath.Join(podPath, ShmPathSuffix)
 
 	// Create directory if it doesn't exist
@@ -945,8 +964,25 @@ func CreateSharedMemoryHandle(podPath string, configs []DeviceConfig) (*SharedMe
 	}, nil
 }
 
-// OpenSharedMemoryHandle opens an existing shared memory handle
-func OpenSharedMemoryHandle(podPath string) (*SharedMemoryHandle, error) {
+// OpenSharedMemoryHandle opens an existing shared memory handle.
+// Namespace and pod name are expected to be single path components.
+func OpenSharedMemoryHandle(basePath string, pod *PodIdentifier) (*SharedMemoryHandle, error) {
+	if pod == nil {
+		return nil, fmt.Errorf("pod identifier is required")
+	}
+	if pod.Namespace == "" || pod.Name == "" {
+		return nil, fmt.Errorf("pod identifier must include namespace and name")
+	}
+	if strings.Contains(pod.Namespace, "/") ||
+		strings.Contains(pod.Namespace, "\\") ||
+		strings.Contains(pod.Namespace, "..") {
+		return nil, fmt.Errorf("invalid namespace path component: %q", pod.Namespace)
+	}
+	if strings.Contains(pod.Name, "/") || strings.Contains(pod.Name, "\\") || strings.Contains(pod.Name, "..") {
+		return nil, fmt.Errorf("invalid pod name path component: %q", pod.Name)
+	}
+
+	podPath := filepath.Join(basePath, pod.Namespace, pod.Name)
 	shmPath := filepath.Join(podPath, ShmPathSuffix)
 
 	// Open the file

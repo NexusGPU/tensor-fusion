@@ -556,11 +556,11 @@ func (h *LegacyHandler) ensureWorkerSharedMemory(namespace, podName string, allo
 		return nil
 	}
 
-	podPath := workerstate.NewPodIdentifier(namespace, podName).ToPath(h.shmBasePath)
+	podIdentifier := workerstate.NewPodIdentifier(namespace, podName)
 
-	handle, err := workerstate.OpenSharedMemoryHandle(podPath)
+	handle, err := workerstate.OpenSharedMemoryHandle(h.shmBasePath, podIdentifier)
 	if err != nil {
-		handle, err = workerstate.CreateSharedMemoryHandle(podPath, configs)
+		handle, err = workerstate.CreateSharedMemoryHandle(h.shmBasePath, podIdentifier, configs)
 		if err != nil {
 			return err
 		}
