@@ -8,32 +8,40 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    groups:
+      gomod:
+        patterns:
+          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
 
   - package-ecosystem: "docker"
     directory: "/dockerfile"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
 
   - package-ecosystem: "gomod"
     directory: "/"
     target-branch: v1
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    groups:
+      gomod:
+        patterns:
+          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     target-branch: v1
     schedule:
-      interval: "weekly"
+      interval: "monthly"
 
   - package-ecosystem: "docker"
     directory: "/dockerfile"
     target-branch: v1
     schedule:
-      interval: "weekly"
+      interval: "monthly"
