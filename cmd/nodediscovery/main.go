@@ -376,7 +376,11 @@ func cloneNvLinkStatus(in *tfv1.GPUNvLinkStatus) *tfv1.GPUNvLinkStatus {
 		TotalBandwidthMBps: in.TotalBandwidthMBps,
 	}
 	if len(in.Peers) > 0 {
-		out.Peers = append([]tfv1.GPUNvLinkPeer(nil), in.Peers...)
+		out.Peers = make([]tfv1.GPUNvLinkPeer, len(in.Peers))
+		for i, peer := range in.Peers {
+			peer.PeerUUID = normalizeGPUIdentifier(peer.PeerUUID)
+			out.Peers[i] = peer
+		}
 	}
 	return out
 }
@@ -387,6 +391,7 @@ func discoverNvLinkStatus(
 	busIDToUUID map[string]string,
 	allGPUs []discoveredGPU,
 ) *tfv1.GPUNvLinkStatus {
+	selfUUID = normalizeGPUIdentifier(selfUUID)
 	peerMap := make(map[string]*tfv1.GPUNvLinkPeer)
 	enabledLinkCount := int32(0)
 	switchLinkCount := int32(0)
@@ -421,7 +426,7 @@ func discoverNvLinkStatus(
 			remotePciFailures++
 			continue
 		}
-		peerUUID := busIDToUUID[pciBusIDToString(remotePci)]
+		peerUUID := normalizeGPUIdentifier(busIDToUUID[pciBusIDToString(remotePci)])
 		if peerUUID == "" || peerUUID == selfUUID {
 			if peerUUID == "" {
 				unmappedPeerCount++
@@ -443,18 +448,21 @@ func discoverNvLinkStatus(
 		peer.BandwidthMBps += estimateNvLinkBandwidthMBps(version)
 	}
 
-	if len(peerMap) == 0 && switchLinkCount > 0 {
+	if switchLinkCount > 0 {
 		switchPeers := discoverNvLinkSwitchPeers(device, selfUUID, allGPUs)
 		if len(switchPeers) > 0 {
-			perPeerBandwidthMBps := switchBandwidthMBps / int64(len(switchPeers))
+			// NVSwitch provides full bisection bandwidth: every GPU pair gets the
+			// full switch bandwidth, so we must NOT divide by peer count.
+			perPeerBandwidthMBps := switchBandwidthMBps
 			if perPeerBandwidthMBps <= 0 {
 				perPeerBandwidthMBps = estimateNvLinkBandwidthMBps(uint32(switchLinkVersion))
 			}
-			perPeerLinkCount := int32(1)
-			if switchLinkCount >= int32(len(switchPeers)) {
-				perPeerLinkCount = max(int32(1), switchLinkCount/int32(len(switchPeers)))
-			}
+			perPeerLinkCount := switchLinkCount
 			for _, peerUUID := range switchPeers {
+				if _, exists := peerMap[peerUUID]; exists {
+					// Already discovered via direct NVLink, skip.
+					continue
+				}
 				peerMap[peerUUID] = &tfv1.GPUNvLinkPeer{
 					PeerUUID:      peerUUID,
 					LinkCount:     perPeerLinkCount,
@@ -462,12 +470,12 @@ func discoverNvLinkStatus(
 					BandwidthMBps: perPeerBandwidthMBps,
 				}
 			}
-			ctrl.Log.Info("discovered NVLink peers through NVSwitch fallback",
+			ctrl.Log.Info("discovered NVLink peers through NVSwitch",
 				"uuid", selfUUID,
 				"peerCount", len(switchPeers),
 				"enabledLinks", enabledLinkCount,
 				"switchLinks", switchLinkCount,
-				"estimatedPerPeerBandwidthMBps", perPeerBandwidthMBps,
+				"perPeerBandwidthMBps", perPeerBandwidthMBps,
 			)
 		}
 	}
@@ -507,16 +515,18 @@ func discoverNvLinkStatus(
 }
 
 func discoverNvLinkSwitchPeers(device nvml.Device, selfUUID string, allGPUs []discoveredGPU) []string {
+	selfUUID = normalizeGPUIdentifier(selfUUID)
 	peerUUIDs := make([]string, 0, len(allGPUs))
 	for _, peer := range allGPUs {
-		if peer.uuid == selfUUID {
+		peerUUID := normalizeGPUIdentifier(peer.uuid)
+		if peerUUID == selfUUID {
 			continue
 		}
 		status, ret := device.GetP2PStatus(peer.device, nvml.P2P_CAPS_INDEX_NVLINK)
 		if ret != nvml.SUCCESS || status != nvml.P2P_STATUS_OK {
 			continue
 		}
-		peerUUIDs = append(peerUUIDs, peer.uuid)
+		peerUUIDs = append(peerUUIDs, peerUUID)
 	}
 	sort.Strings(peerUUIDs)
 	return peerUUIDs
@@ -541,6 +551,10 @@ func cStringFromUint8(raw []uint8) string {
 		}
 	}
 	return strings.ToLower(strings.TrimSpace(string(raw[:n])))
+}
+
+func normalizeGPUIdentifier(id string) string {
+	return strings.ToLower(strings.TrimSpace(id))
 }
 
 func pciBusIDToString(pci nvml.PciInfo) string {

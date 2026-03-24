@@ -59,15 +59,23 @@ func selectSingleGPUWithTopology(
 	cfg *config.GPUFitConfig,
 ) ([]string, int, bool) {
 	maxNodeConnectivity := 0.0
+	minNodeConnectivity := math.MaxFloat64
 	for _, gpu := range validGPUs {
-		maxNodeConnectivity = max(maxNodeConnectivity, gpuNvLinkBandwidth(gpu))
+		bw := gpuNvLinkBandwidth(gpu)
+		maxNodeConnectivity = max(maxNodeConnectivity, bw)
+		minNodeConnectivity = min(minNodeConnectivity, bw)
 	}
 	if maxNodeConnectivity <= 0 {
 		return nil, 0, false
 	}
+	// All GPUs have identical NVLink connectivity (e.g. uniform NVSwitch node),
+	// topology cannot differentiate any GPU, skip to avoid penalizing the node.
+	if minNodeConnectivity >= maxNodeConnectivity {
+		return nil, 0, false
+	}
 
 	protectWeight := cfg.SingleGPUProtectWeight
-	if protectWeight <= 0 || protectWeight >= 1 {
+	if protectWeight <= 0 || protectWeight > 1 {
 		protectWeight = defaultSingleGPUProtectWeight
 	}
 
