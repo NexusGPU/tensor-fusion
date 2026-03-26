@@ -40,6 +40,7 @@ const CycleStateGPUSchedulingResult = "gpuSchedulingResult"
 const SchedulerSimulationKey = "schedulerSimulation"
 
 var _ fwk.PreFilterPlugin = &GPUFit{}
+var _ fwk.PreEnqueuePlugin = &GPUFit{}
 var _ fwk.FilterPlugin = &GPUFit{}
 var _ fwk.ScorePlugin = &GPUFit{}
 var _ fwk.PermitPlugin = &GPUFit{}
@@ -115,6 +116,7 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator, indexAllocator *indexallo
 
 		// Set framework handle on gang manager so it can call Allow/Reject on waiting pods
 		if gangManager != nil {
+			gangManager.SetClient(client)
 			gangManager.SetFrameworkHandle(handle)
 		}
 
@@ -125,6 +127,10 @@ func NewWithDeps(allocator *gpuallocator.GpuAllocator, indexAllocator *indexallo
 
 func (s *GPUFit) Name() string {
 	return Name
+}
+
+func (s *GPUFit) PreEnqueue(ctx context.Context, pod *v1.Pod) *fwk.Status {
+	return nil
 }
 
 func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, _ []fwk.NodeInfo) (*fwk.PreFilterResult, *fwk.Status) {
@@ -148,7 +154,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 	if s.gangManager != nil {
 		if err := s.gangManager.PreFilter(ctx, pod); err != nil {
 			s.logger.Info("Gang scheduling PreFilter failed", "pod", pod.Name, "error", err)
-			return nil, fwk.NewStatus(fwk.Unschedulable, "gang scheduling pre-filter: "+err.Error())
+			return nil, fwk.NewStatus(fwk.UnschedulableAndUnresolvable, "gang scheduling pre-filter: "+err.Error())
 		}
 	}
 
@@ -620,9 +626,9 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 		return fwk.NewStatus(fwk.Error, "not enough GPUs on nominated node:"+nodeName)
 	}
 
-	// reserve GPU resources inside memory and asynchronously update GPU custom resource
+	// Reserve only creates an assumed allocation. The real GPU/quota mutation happens in PostBind.
 	allocReq := allocRequest.(*tfv1.AllocRequest)
-	_, err = s.allocator.Bind(
+	err = s.allocator.Assume(
 		schedulingResult.FinalGPUs,
 		allocReq,
 	)
@@ -639,17 +645,9 @@ func (s *GPUFit) Permit(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 		return fwk.NewStatus(fwk.Success, "skip for non tensor-fusion mode"), 0
 	}
 
-	// Check if gang scheduling is enabled for this pod
 	if s.gangManager == nil {
 		return fwk.NewStatus(fwk.Success, "gang manager not initialized"), 0
 	}
-
-	gangConfig := s.gangManager.ParseGangConfig(pod)
-	if !gangConfig.Enabled {
-		return fwk.NewStatus(fwk.Success, "gang scheduling not enabled"), 0
-	}
-
-	s.logger.Info("Permit stage: checking gang scheduling", "pod", pod.Name, "node", nodeName, "group", gangConfig.GroupKey)
 
 	// Get alloc request for gang info
 	allocRequestRaw, err := state.Read(CycleStateAllocateRequest)
@@ -667,6 +665,11 @@ func (s *GPUFit) Permit(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 
 	// Call gang manager Permit
 	status, waitTime, waitingInfo := s.gangManager.Permit(ctx, pod, nodeName, allocReq)
+	gangConfig := s.gangManager.ParseGangConfig(pod)
+
+	if waitingInfo != nil {
+		s.logger.Info("Permit stage: checking gang scheduling", "pod", pod.Name, "node", nodeName, "group", gangConfig.GroupKey)
+	}
 
 	// Store waiting info in state for later use (e.g., Unreserve)
 	schedulingResult.GangWaitingInfo = waitingInfo
@@ -674,6 +677,9 @@ func (s *GPUFit) Permit(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 
 	switch status {
 	case gang.PermitAllow:
+		if waitingInfo == nil {
+			return fwk.NewStatus(fwk.Success, "gang scheduling not enabled"), 0
+		}
 		s.logger.Info("Gang scheduling: all members ready, proceeding", "pod", pod.Name, "group", gangConfig.GroupKey)
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, gang.EventReasonGangScheduled,
 			"Gang scheduling complete", "All gang members ready for group %s", gangConfig.GroupKey)
@@ -709,15 +715,14 @@ func (s *GPUFit) Unreserve(ctx context.Context, state fwk.CycleState, pod *v1.Po
 	}
 	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
 
-	// Notify gang manager about unreserve
-	if s.gangManager != nil {
+	// Only gang-managed pods should update gang state on unreserve.
+	if s.gangManager != nil && schedulingResult.GangWaitingInfo != nil {
 		s.gangManager.Unreserve(ctx, pod)
 	}
 
-	s.allocator.Dealloc(tfv1.NameNamespace{
-		Name:      pod.Labels[constants.WorkloadKey],
-		Namespace: pod.Namespace,
-	}, schedulingResult.FinalGPUs, pod.ObjectMeta)
+	if err := s.allocator.Forget(string(pod.UID)); err != nil {
+		s.logger.Error(err, "failed to forget assumed allocation", "pod", pod.Name)
+	}
 }
 
 func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) {
@@ -731,8 +736,34 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 		s.logger.Error(err, "failed to read gpu scheduling result", "pod", pod.Name)
 		return
 	}
+	schedulingResult := gpuSchedulingResult.(*GPUSchedulingStateData)
+
+	// Retry Commit() a few times to handle transient errors (e.g., brief lock
+	// contention, concurrent reconcile). If all attempts fail, return early —
+	// do NOT proceed to MarkScheduled or annotation patch, as those assume
+	// allocator state is consistent. The allocator will self-heal via
+	// reconcileAllocationState which rebuilds committed state from workers.
+	var commitErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, commitErr = s.allocator.Commit(string(pod.UID)); commitErr == nil {
+			break
+		}
+		s.logger.Info("Commit retry", "pod", pod.Name, "attempt", attempt+1, "error", commitErr)
+	}
+	if commitErr != nil {
+		s.logger.Error(commitErr, "failed to commit gpu allocation after retries, allocator will reconcile from worker state",
+			"pod", pod.Name, "node", nodeName)
+		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "CommitFailed",
+			"GPU allocation commit failed", "Commit failed for pod %s after retries: %v", pod.Name, commitErr)
+		return
+	}
+
+	if s.gangManager != nil && schedulingResult.GangWaitingInfo != nil {
+		s.gangManager.MarkScheduled(pod)
+	}
+
 	// write the allocated GPU info to Pod in bindingCycle, before default binder changing the Pod nodeName info
-	finalGPUs := gpuSchedulingResult.(*GPUSchedulingStateData).FinalGPUs
+	finalGPUs := schedulingResult.FinalGPUs
 	gpuIDs := strings.Join(finalGPUs, ",")
 	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
 
@@ -848,12 +879,58 @@ func (s *GPUFit) EventsToRegister(_ context.Context) ([]fwk.ClusterEventWithHint
 	return []fwk.ClusterEventWithHint{
 		{
 			Event: fwk.ClusterEvent{
+				Resource:   fwk.Pod,
+				ActionType: fwk.Add,
+			},
+			QueueingHintFn: s.gangQueueingHint,
+		},
+		{
+			Event: fwk.ClusterEvent{
 				Resource:   gpuResource,
 				ActionType: fwk.Add | fwk.Update,
 			},
 			QueueingHintFn: s.queueingHint,
 		},
 	}, nil
+}
+
+func (s *GPUFit) gangQueueingHint(logger klog.Logger, pod *v1.Pod, _, newObj any) (fwk.QueueingHint, error) {
+	if !utils.IsTensorFusionWorker(pod) || s.gangManager == nil {
+		return fwk.QueueSkip, nil
+	}
+
+	targetConfig := s.gangManager.ParseGangConfig(pod)
+	if !targetConfig.Enabled {
+		return fwk.QueueSkip, nil
+	}
+
+	addedPod, ok := newObj.(*v1.Pod)
+	if !ok || addedPod == nil {
+		logger.V(5).Info("Skip gang queue hint: event object is not a Pod", "pod", klog.KObj(pod))
+		return fwk.QueueSkip, nil
+	}
+
+	if !utils.IsTensorFusionWorker(addedPod) {
+		return fwk.QueueSkip, nil
+	}
+
+	addedConfig := s.gangManager.ParseGangConfig(addedPod)
+	if !addedConfig.Enabled || addedConfig.GroupKey != targetConfig.GroupKey || addedPod.UID == pod.UID {
+		s.logger.Info("Gang pod add did not requeue waiting pod",
+			"pod", pod.Name,
+			"addedPod", addedPod.Name,
+			"targetGroup", targetConfig.GroupKey,
+			"addedGroup", addedConfig.GroupKey,
+			"samePod", addedPod.UID == pod.UID,
+			"addedEnabled", addedConfig.Enabled)
+		return fwk.QueueSkip, nil
+	}
+
+	s.logger.Info("Gang peer pod added, requeue waiting pod",
+		"pod", pod.Name,
+		"addedPod", addedPod.Name,
+		"group", targetConfig.GroupKey)
+	return fwk.Queue, nil
 }
 
 // convertToGPU converts an any to *tfv1.GPU, handling both typed and unstructured objects
@@ -961,19 +1038,18 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 		logger.V(5).Info("Cannot determine pod TFLOPs requirement, skip", "pod", klog.KObj(pod))
 		return fwk.QueueSkip, nil
 	}
-	podTotalTflops := actualTflops.DeepCopy()
-	podTotalTflops.Mul(int64(allocRequest.Count))
-
-	podTotalVram := allocRequest.Request.Vram.DeepCopy()
-	podTotalVram.Mul(int64(allocRequest.Count))
-	// Queue if resource increase >= pod's request
-	if increaseTflops.Cmp(podTotalTflops) >= 0 && increaseVram.Cmp(podTotalVram) >= 0 {
+	// Compare per-GPU request against this single GPU's resource increase.
+	// The queueing hint fires once per GPU CR update, so we only need to check
+	// whether this GPU could satisfy ONE allocation slot. Multi-GPU feasibility
+	// is validated later in Filter/Reserve.
+	perGPUVram := allocRequest.Request.Vram.DeepCopy()
+	if increaseTflops.Cmp(*actualTflops) >= 0 && increaseVram.Cmp(perGPUVram) >= 0 {
 		logger.V(4).Info("GPU resource increase sufficient for pod, requeue unscheduled pod",
 			"pod", klog.KObj(pod),
 			"increaseTflops", increaseTflops.String(),
 			"increaseVram", increaseVram.String(),
-			"podRequestTflops", podTotalTflops.String(),
-			"podRequestVram", podTotalVram.String())
+			"podRequestTflops", actualTflops.String(),
+			"podRequestVram", perGPUVram.String())
 		return fwk.Queue, nil
 	}
 

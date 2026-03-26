@@ -450,11 +450,11 @@ var _ = Describe("GPUFit Plugin", func() {
 
 			gpu := &tfv1.GPU{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "gpu-1"}, gpu)).To(Succeed())
-			Expect(gpu.Status.Available.Tflops.String()).To(Equal("800"))
-			Expect(gpu.Status.Available.Vram.String()).To(Equal("8Gi"))
+			Expect(gpu.Status.Available.Tflops.String()).To(Equal("900"))
+			Expect(gpu.Status.Available.Vram.String()).To(Equal("18Gi"))
 			Expect(gpu.Status.RunningApps).To(HaveLen(1))
 			Expect(gpu.Status.RunningApps[0].Name).To(Equal("workload-1"))
-			Expect(gpu.Status.RunningApps[0].Count).To(Equal(2))
+			Expect(gpu.Status.RunningApps[0].Count).To(Equal(1))
 
 			plugin.Unreserve(ctx, state, pod, "node-a")
 			plugin.allocator.SyncGPUsToK8s()
@@ -483,10 +483,16 @@ var _ = Describe("GPUFit Plugin", func() {
 			Expect(reserveStatus.IsSuccess()).To(BeTrue())
 
 			plugin.PostBind(ctx, state, pod, "node-a")
+			plugin.allocator.SyncGPUsToK8s()
 
 			updatedPod := &v1.Pod{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "p-postbind", Namespace: "ns1"}, updatedPod)).To(Succeed())
 			Expect(updatedPod.Annotations[constants.GPUDeviceIDsAnnotation]).To(Equal("gpu-1"))
+
+			gpu := &tfv1.GPU{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "gpu-1"}, gpu)).To(Succeed())
+			Expect(gpu.Status.Available.Tflops.String()).To(Equal("800"))
+			Expect(gpu.Status.Available.Vram.String()).To(Equal("8Gi"))
 		})
 	})
 
@@ -595,10 +601,13 @@ var _ = Describe("GPUFit Plugin", func() {
 		It("should return correct events", func() {
 			events, err := plugin.EventsToRegister(ctx)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(events).To(HaveLen(1))
-			Expect(events[0].Event.Resource).To(Equal(fwk.EventResource("gpus.v1.tensor-fusion.ai")))
-			Expect(events[0].Event.ActionType).To(Equal(fwk.Add | fwk.Update))
+			Expect(events).To(HaveLen(2))
+			Expect(events[0].Event.Resource).To(Equal(fwk.Pod))
+			Expect(events[0].Event.ActionType).To(Equal(fwk.Add))
 			Expect(events[0].QueueingHintFn).NotTo(BeNil())
+			Expect(events[1].Event.Resource).To(Equal(fwk.EventResource("gpus.v1.tensor-fusion.ai")))
+			Expect(events[1].Event.ActionType).To(Equal(fwk.Add | fwk.Update))
+			Expect(events[1].QueueingHintFn).NotTo(BeNil())
 		})
 	})
 

@@ -252,13 +252,19 @@ spec:
                     type: object
                 type: object
               gangScheduling:
-                description: GangScheduling configuration for scheduling multiple
-                  pods together
+                description: |-
+                  GangScheduling enables scheduling multiple pods as a gang.
+                  When omitted, the workload is scheduled normally without gang semantics.
+                  Gang semantics are evaluated for a scheduling batch created under the current
+                  workload target. Existing running replicas created by a previous Deployment or
+                  ReplicaSet revision are not rolled back when a later online scale-out cannot
+                  satisfy a newly requested gang quorum.
                 properties:
                   minMembers:
                     description: |-
-                      MinMembers specifies the minimum number of pods that must be scheduled together
-                      When > 0, gang scheduling is enabled for this workload
+                      MinMembers optionally overrides the gang quorum.
+                      When omitted or set to 0, the gang quorum defaults to the workload's desired replicas.
+                      When set explicitly, the value must be >= 2 and <= the workload's desired replicas.
                       The gang group name is automatically derived from the workload name (namespace/workload-name)
                     format: int32
                     minimum: 0

@@ -500,6 +500,14 @@ func checkWorkloadStatus(in *tfv1.TensorFusionWorkload) {
 		g.Expect(workload.Status.WorkerCount).Should(Equal(*workload.Spec.Replicas))
 
 		if *workload.Spec.Replicas == 0 {
+			readyCondition, found := lo.Find(workload.Status.Conditions, func(c metav1.Condition) bool {
+				return c.Type == "Ready"
+			})
+			g.Expect(found).Should(BeTrue())
+			g.Expect(workload.Status.Phase).Should(Equal(tfv1.TensorFusionWorkloadPhasePending))
+			g.Expect(readyCondition.Status).Should(Equal(metav1.ConditionFalse))
+			g.Expect(readyCondition.Reason).Should(Equal("ScaledToZero"))
+			g.Expect(readyCondition.Message).Should(Equal("Workload is scaled to zero"))
 			return
 		}
 		// Check phase and conditions

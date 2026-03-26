@@ -178,6 +178,9 @@ schedulerConfig:
   # Refer: https://kubernetes.io/docs/reference/scheduling/config/
   - schedulerName: tensor-fusion-scheduler
     plugins:
+      preEnqueue:
+        enabled:
+        - name: GPUResourcesFit
       preFilter:
         enabled:
         - name: GPUResourcesFit
@@ -190,6 +193,9 @@ schedulerConfig:
         - name: GPUResourcesFit
           weight: 5
       reserve:
+        enabled:
+        - name: GPUResourcesFit
+      permit:
         enabled:
         - name: GPUResourcesFit
       postBind:

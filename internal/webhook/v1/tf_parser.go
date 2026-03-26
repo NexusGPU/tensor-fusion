@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -179,7 +180,12 @@ func ParseTensorFusionInfo(
 	}
 
 	// Parse gang scheduling config from annotations
-	parseGangSchedulingAnnotations(pod, workloadProfile)
+	if err := parseGangSchedulingAnnotations(pod, workloadProfile); err != nil {
+		return info, err
+	}
+	if err := validateGangSchedulingConfig(ctx, k8sClient, pod, workloadProfile, info.EnabledReplicas, info.PodControllerRef, info.WorkloadName); err != nil {
+		return info, err
+	}
 
 	info.Profile = &workloadProfile.Spec
 	info.ContainerNames = containerNames
@@ -198,32 +204,133 @@ func validateIsolationAndExecutionMode(profile *tfv1.WorkloadProfileSpec) error 
 }
 
 // parseGangSchedulingAnnotations parses gang scheduling configuration from pod annotations
-func parseGangSchedulingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) {
-	// Check for gang-min-members annotation
-	minMembersStr, hasMinMembers := pod.Annotations[constants.GangMinMembersAnnotation]
-	if !hasMinMembers || minMembersStr == "" {
-		return
+func parseGangSchedulingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) error {
+	if pod.Annotations[constants.GangEnabledAnnotation] != constants.TrueStringValue {
+		return nil
 	}
 
-	minMembers, err := strconv.ParseInt(minMembersStr, 10, 32)
-	if err != nil || minMembers <= 0 {
-		return
-	}
-
-	// Initialize gang scheduling config if needed
 	if workloadProfile.Spec.GangScheduling == nil {
 		workloadProfile.Spec.GangScheduling = &tfv1.GangSchedulingConfig{}
 	}
 
-	workloadProfile.Spec.GangScheduling.MinMembers = int32(minMembers)
+	if minMembersStr := pod.Annotations[constants.GangMinMembersAnnotation]; minMembersStr != "" {
+		minMembers, err := strconv.ParseInt(minMembersStr, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid %s value %q: %w", constants.GangMinMembersAnnotation, minMembersStr, err)
+		}
+		if minMembers < 0 {
+			return fmt.Errorf("invalid %s=%d: must be >= 0", constants.GangMinMembersAnnotation, minMembers)
+		}
+		workloadProfile.Spec.GangScheduling.MinMembers = int32(minMembers)
+	}
 
 	// Parse timeout (optional)
 	timeoutStr, hasTimeout := pod.Annotations[constants.GangTimeoutAnnotation]
 	if hasTimeout && timeoutStr != "" && timeoutStr != "0" && timeoutStr != "0s" {
-		if timeout, err := time.ParseDuration(timeoutStr); err == nil {
-			workloadProfile.Spec.GangScheduling.Timeout = &metav1.Duration{Duration: timeout}
+		timeout, err := time.ParseDuration(timeoutStr)
+		if err != nil {
+			return fmt.Errorf("invalid %s value %q: %w", constants.GangTimeoutAnnotation, timeoutStr, err)
 		}
+		workloadProfile.Spec.GangScheduling.Timeout = &metav1.Duration{Duration: timeout}
 	}
+	return nil
+}
+
+func validateGangSchedulingConfig(
+	ctx context.Context,
+	k8sClient client.Client,
+	pod *corev1.Pod,
+	workloadProfile *tfv1.WorkloadProfile,
+	enabledReplicas *int32,
+	controllerRef *metav1.OwnerReference,
+	workloadName string,
+) error {
+	if workloadProfile == nil || workloadProfile.Spec.GangScheduling == nil {
+		return nil
+	}
+
+	minMembers := workloadProfile.Spec.GangScheduling.MinMembers
+	if minMembers == 1 {
+		return fmt.Errorf("invalid %s=%d: explicit gang minMembers must be >= 2", constants.GangMinMembersAnnotation, minMembers)
+	}
+
+	desiredMembers, known := resolveDesiredGangMembers(ctx, k8sClient, pod, workloadProfile, enabledReplicas, controllerRef)
+	if known && desiredMembers < 2 {
+		return fmt.Errorf("invalid %s=true: gang scheduling requires at least 2 replicas, got %d", constants.GangEnabledAnnotation, desiredMembers)
+	}
+	if minMembers >= 2 && known && minMembers > desiredMembers {
+		return fmt.Errorf("invalid %s=%d: exceeds desired replicas %d", constants.GangMinMembersAnnotation, minMembers, desiredMembers)
+	}
+
+	// Stamp resolved gang quorum onto the pod so the scheduler can read it
+	// directly from annotations without fetching the TensorFusionWorkload CR.
+	//
+	// When desiredMembers cannot be resolved (owner not yet visible, transient
+	// API error, etc.) but the user provided an explicit minMembers >= 2, use
+	// minMembers as the fallback for both desired and required so the pod is
+	// still scheduled with gang semantics (fail-closed for gang-enabled).
+	if !known && minMembers >= 2 {
+		desiredMembers = minMembers
+		known = true
+	}
+	if !known {
+		return fmt.Errorf("invalid %s=true: cannot determine gang size — set %s or spec.replicas on the workload",
+			constants.GangEnabledAnnotation, constants.GangMinMembersAnnotation)
+	}
+	if desiredMembers >= 2 {
+		requiredMembers := desiredMembers
+		if minMembers >= 2 {
+			requiredMembers = minMembers
+		}
+		pod.Annotations[constants.GangDesiredMembersAnnotation] = strconv.FormatInt(int64(desiredMembers), 10)
+		pod.Annotations[constants.GangRequiredMembersAnnotation] = strconv.FormatInt(int64(requiredMembers), 10)
+		pod.Annotations[constants.GangGroupKeyAnnotation] = pod.Namespace + "/" + workloadName
+	}
+	return nil
+}
+
+func resolveDesiredGangMembers(
+	ctx context.Context,
+	k8sClient client.Client,
+	pod *corev1.Pod,
+	workloadProfile *tfv1.WorkloadProfile,
+	enabledReplicas *int32,
+	controllerRef *metav1.OwnerReference,
+) (int32, bool) {
+	if enabledReplicas != nil {
+		return nonNegativeInt32(*enabledReplicas), true
+	}
+	if workloadProfile != nil && workloadProfile.Spec.Replicas != nil {
+		return nonNegativeInt32(*workloadProfile.Spec.Replicas), true
+	}
+	if controllerRef == nil || k8sClient == nil {
+		return 0, false
+	}
+
+	owner := &unstructured.Unstructured{}
+	owner.SetAPIVersion(controllerRef.APIVersion)
+	owner.SetKind(controllerRef.Kind)
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: controllerRef.Name}, owner); err != nil {
+		return 0, false
+	}
+
+	if replicas, found, err := unstructured.NestedInt64(owner.Object, "spec", "replicas"); err == nil && found {
+		return nonNegativeInt32(int32(replicas)), true
+	}
+	if parallelism, found, err := unstructured.NestedInt64(owner.Object, "spec", "parallelism"); err == nil && found {
+		return nonNegativeInt32(int32(parallelism)), true
+	}
+	if completions, found, err := unstructured.NestedInt64(owner.Object, "spec", "completions"); err == nil && found {
+		return nonNegativeInt32(int32(completions)), true
+	}
+	return 0, false
+}
+
+func nonNegativeInt32(v int32) int32 {
+	if v < 0 {
+		return 0
+	}
+	return v
 }
 
 func parseAutoScalingAnnotations(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) {

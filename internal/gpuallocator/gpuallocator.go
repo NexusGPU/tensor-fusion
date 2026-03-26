@@ -171,6 +171,7 @@ type GpuAllocator struct {
 
 	// each pod can only allocate and deallocate once, and deallocation must be after allocation
 	uniqueAllocation       map[string]*tfv1.AllocRequest
+	assumedAllocation      map[string]*tfv1.AllocRequest
 	uniqueDeallocation     map[string]struct{}
 	podNamespaceNsToPodUID map[string]string
 
@@ -228,6 +229,7 @@ func NewGpuAllocator(
 
 		indexAllocator:         indexAllocator,
 		uniqueAllocation:       make(map[string]*tfv1.AllocRequest, 512),
+		assumedAllocation:      make(map[string]*tfv1.AllocRequest, 512),
 		uniqueDeallocation:     make(map[string]struct{}, 512),
 		podNamespaceNsToPodUID: make(map[string]string, 512),
 		initializedCh:          make(chan struct{}),
@@ -273,6 +275,18 @@ func cloneGPUSlice(gpus []*tfv1.GPU) []*tfv1.GPU {
 	return result
 }
 
+func cloneAllocRequestMap(requests map[string]*tfv1.AllocRequest) map[string]*tfv1.AllocRequest {
+	result := make(map[string]*tfv1.AllocRequest, len(requests))
+	for key, req := range requests {
+		if req == nil {
+			result[key] = nil
+			continue
+		}
+		result[key] = req.DeepCopy()
+	}
+	return result
+}
+
 func (s *GpuAllocator) snapshotGPUStore() map[types.NamespacedName]*tfv1.GPU {
 	result := make(map[types.NamespacedName]*tfv1.GPU, len(s.gpuStore))
 	for key, gpu := range s.gpuStore {
@@ -289,12 +303,70 @@ func (s *GpuAllocator) snapshotGPUStore() map[types.NamespacedName]*tfv1.GPU {
 // The caller can safely iterate and inspect the returned GPUs without holding any lock.
 func (s *GpuAllocator) GetNodeGpuStore() map[string]map[string]*tfv1.GPU {
 	s.storeMutex.RLock()
-	defer s.storeMutex.RUnlock()
+
 	result := make(map[string]map[string]*tfv1.GPU, len(s.nodeGpuStore))
 	for nodeName, gpuMap := range s.nodeGpuStore {
 		result[nodeName] = cloneGPUMap(gpuMap)
 	}
+	assumedAllocations := cloneAllocRequestMap(s.assumedAllocation)
+	s.storeMutex.RUnlock()
+
+	if len(assumedAllocations) == 0 {
+		return result
+	}
+
+	gpuIndex := make(map[string]*tfv1.GPU, len(result)*4)
+	for _, gpuMap := range result {
+		for gpuName, gpu := range gpuMap {
+			gpuIndex[gpuName] = gpu
+		}
+	}
+	s.applyAssumedAllocationsToGPUCopies(gpuIndex, assumedAllocations)
 	return result
+}
+
+func (s *GpuAllocator) applyAssumedAllocationsToGPUCopies(gpuIndex map[string]*tfv1.GPU, assumedAllocations map[string]*tfv1.AllocRequest) {
+	for podUID, req := range assumedAllocations {
+		if req == nil {
+			continue
+		}
+		for _, gpuName := range req.GPUNames {
+			gpu := gpuIndex[gpuName]
+			if gpu == nil {
+				log.FromContext(s.ctx).V(4).Info("Skipping assumed allocation for missing GPU in snapshot", "podUID", podUID, "gpu", gpuName)
+				continue
+			}
+			if err := s.applyAllocationToGPU(gpu, req, gpuName); err != nil {
+				log.FromContext(s.ctx).Error(err, "Failed to apply assumed allocation to GPU snapshot", "podUID", podUID, "gpu", gpuName)
+			}
+		}
+	}
+}
+
+func (s *GpuAllocator) nodeNameForAllocationLocked(req *tfv1.AllocRequest) string {
+	if req == nil || len(req.GPUNames) == 0 {
+		return ""
+	}
+	gpu := s.gpuStore[types.NamespacedName{Name: req.GPUNames[0]}]
+	if gpu == nil {
+		return ""
+	}
+	return gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+}
+
+func (s *GpuAllocator) effectiveNodeWorkerCountsLocked() map[string]int {
+	counts := make(map[string]int, len(s.nodeWorkerStore)+len(s.assumedAllocation))
+	for nodeName, workers := range s.nodeWorkerStore {
+		counts[nodeName] = len(workers)
+	}
+	for _, req := range s.assumedAllocation {
+		nodeName := s.nodeNameForAllocationLocked(req)
+		if nodeName == "" {
+			continue
+		}
+		counts[nodeName]++
+	}
+	return counts
 }
 
 // AllocRequest encapsulates all parameters needed for GPU allocation
@@ -370,176 +442,13 @@ func (s *GpuAllocator) FilterWithPreempt(
 	preemptAllocRequests []*tfv1.AllocRequest,
 	targetNodeNames ...string,
 ) ([]*tfv1.GPU, []filter.FilterDetail, error) {
-	s.storeMutex.RLock()
-	gpuStore := s.snapshotGPUStore()
-	nodeGpuStore := make(map[string]map[string]*tfv1.GPU, len(s.nodeGpuStore))
-	for nodeName, gpuMap := range s.nodeGpuStore {
-		nodeGpuStore[nodeName] = cloneGPUMap(gpuMap)
-	}
-	s.storeMutex.RUnlock()
-
-	toFilterGPUs := []*tfv1.GPU{}
-
-	affectedNodes := make(map[string]bool)
-	// use map for O(1) duplicate check instead of O(M) array iteration
-	includedGPUs := make(map[string]bool)
-	// if specified target nodes, only consider these nodes
-	if len(targetNodeNames) > 0 {
-		for _, nodeName := range targetNodeNames {
-			affectedNodes[nodeName] = true
-		}
+	gpuStore, nodeGpuStore := s.snapshotStoresForPreempt()
+	toFilterGPUs, err := s.buildPreemptFilterInput(gpuStore, nodeGpuStore, preemptAllocRequests, targetNodeNames)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	// Use a temporary map to accumulate releases for the same GPU (multiple victims on same GPU)
-	gpuReleasedMap := make(map[string]*tfv1.GPU)
-
-	log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] FilterWithPreempt: starting to simulate release",
-		"preemptAllocRequestsCount", len(preemptAllocRequests))
-
-	for i, preemptAllocRequest := range preemptAllocRequests {
-
-		log.FromContext(s.ctx).V(4).Info("[PREEMPT] Processing victim allocation",
-			"victimIndex", i,
-			"workload", preemptAllocRequest.WorkloadNameNamespace.Name,
-			"gpuCount", preemptAllocRequest.Count,
-			"gpuNames", preemptAllocRequest.GPUNames,
-			"requestTflops", preemptAllocRequest.Request.Tflops.String(),
-			"requestComputePercent", preemptAllocRequest.Request.ComputePercent.String(),
-			"requestVram", preemptAllocRequest.Request.Vram.String())
-
-		for _, gpuName := range preemptAllocRequest.GPUNames {
-			gpu := gpuStore[types.NamespacedName{Name: gpuName}]
-			if gpu == nil {
-				return nil, nil, fmt.Errorf("gpu %s not found", gpuName)
-			}
-			gpuCopy, exists := gpuReleasedMap[gpuName]
-			var beforeTflops, beforeVram string
-			if !exists {
-				gpu := gpuStore[types.NamespacedName{Name: gpuName}]
-				if gpu == nil {
-					return nil, nil, fmt.Errorf("gpu %s not found", gpuName)
-				}
-				gpuCopy = gpu.DeepCopy()
-				gpuReleasedMap[gpuName] = gpuCopy
-				includedGPUs[gpuCopy.Name] = true
-			}
-			// Log GPU state before this release
-			if gpuCopy.Status.Available != nil {
-				beforeTflops = gpuCopy.Status.Available.Tflops.String()
-				beforeVram = gpuCopy.Status.Available.Vram.String()
-			}
-
-			var reqTflops resource.Quantity
-			if !preemptAllocRequest.Request.ComputePercent.IsZero() {
-				requiredTflops := utils.ComputePercentToTflops(gpuCopy.Status.Capacity.Tflops, preemptAllocRequest.Request)
-				reqTflops = *requiredTflops
-			} else {
-				reqTflops = preemptAllocRequest.Request.Tflops
-			}
-
-			// Handle partitioned mode: add back partition resources from config
-			if preemptAllocRequest.Isolation == tfv1.IsolationModePartitioned && preemptAllocRequest.PartitionTemplateID != "" {
-				partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(
-					gpuCopy.Status.Capacity.Tflops, gpuCopy.Status.GPUModel, preemptAllocRequest.PartitionTemplateID)
-				if err == nil {
-					gpuCopy.Status.Available.Tflops.Add(partitionTflops)
-					gpuCopy.Status.Available.Vram.Add(partitionVram)
-				} else {
-					// Fallback to request resources
-					gpuCopy.Status.Available.Tflops.Add(reqTflops)
-					gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
-				}
-			} else {
-				// Non-partitioned mode
-				gpuCopy.Status.Available.Tflops.Add(reqTflops)
-				gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
-			}
-
-			log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Simulated release on GPU",
-				"gpu", gpuName,
-				"node", gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel],
-				"victimWorkload", preemptAllocRequest.WorkloadNameNamespace.Name,
-				"releasedTflops", reqTflops.String(),
-				"releasedVram", preemptAllocRequest.Request.Vram.String(),
-				"beforeAvailableTflops", beforeTflops,
-				"afterAvailableTflops", gpuCopy.Status.Available.Tflops.String(),
-				"beforeAvailableVram", beforeVram,
-				"afterAvailableVram", gpuCopy.Status.Available.Vram.String(),
-				"capacityTflops", gpuCopy.Status.Capacity.Tflops.String())
-			// Add the node of the released GPU to affectedNodes if no target nodes are specified
-			if len(targetNodeNames) == 0 {
-				nodeName := gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel]
-				if nodeName != "" {
-					affectedNodes[nodeName] = true
-				}
-			}
-		}
-	}
-	// Convert map to slice for filtering
-	for _, gpuCopy := range gpuReleasedMap {
-		toFilterGPUs = append(toFilterGPUs, gpuCopy)
-	}
-	if len(affectedNodes) == 0 {
-		// This should not happen: FilterWithPreempt requires either targetNodeNames or preemptAllocRequests
-		return nil, nil, fmt.Errorf("FilterWithPreempt called with no affected nodes, invalid usage")
-	}
-	// only iterate the affected nodes, instead of the entire pool(O(N) instead of O(P))
-	for nodeName := range affectedNodes {
-		nodeGPUs := nodeGpuStore[nodeName]
-		log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Adding other GPUs from affected node",
-			"node", nodeName,
-			"totalGPUsOnNode", len(nodeGPUs),
-			"alreadyIncluded", len(includedGPUs))
-		for _, gpu := range nodeGPUs {
-			// Use map for O(1) duplicate check instead of O(M) array iteration
-			if !includedGPUs[gpu.Name] {
-				toFilterGPUs = append(toFilterGPUs, gpu.DeepCopy())
-				includedGPUs[gpu.Name] = true
-			}
-		}
-		log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Finished adding GPUs from node",
-			"node", nodeName,
-			"addedGPUs", len(toFilterGPUs)-len(gpuReleasedMap),
-			"totalToFilterGPUs", len(toFilterGPUs))
-	}
-
-	// Use same filter order as regular Filter
-	filterRegistry := s.filterRegistry
-
-	// 1. GPU index filter
-	if len(req.GPUIndices) > 0 {
-		filterRegistry = filterRegistry.With(filter.NewGPUIndexFilter(req.GPUIndices))
-	}
-
-	// 2. GPU isolation mode filter
-	if req.Isolation != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUIsolationModeFilter(req.Isolation))
-	}
-
-	// 3. Partition template filter (only for partitioned mode)
-	if req.Isolation == tfv1.IsolationModePartitioned {
-		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, MaxPartitionsMap, PartitionTemplateMap))
-	}
-
-	// 4. Resource filter
-	filterRegistry = filterRegistry.With(filter.NewResourceFilter(req.Request))
-
-	// 5. GPU model filter if specified
-	if req.GPUModel != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
-	}
-
-	// 6. Same node filter must be applied at final step
-	if req.Count > 1 {
-		filterRegistry = filterRegistry.With(filter.NewSameNodeFilter(req.Count))
-	}
-
-	// 7. GPU vendor filter if specified
-	if req.GPUVendor != "" {
-		filterRegistry = filterRegistry.With(filter.NewGPUVendorFilter(req.GPUVendor))
-	}
-
-	// No need to check count and other filters since it's always in the same node during each preempt trial
+	filterRegistry := s.buildPreemptFilterRegistry(req)
 	filteredGPUs, filterDetails, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs, false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("apply filters: %w", err)
@@ -550,6 +459,224 @@ func (s *GpuAllocator) FilterWithPreempt(
 		"toFilterGPUsCount", len(toFilterGPUs),
 		"filterDetailsCount", len(filterDetails))
 	return filteredGPUs, filterDetails, nil
+}
+
+func (s *GpuAllocator) snapshotStoresForPreempt() (map[types.NamespacedName]*tfv1.GPU, map[string]map[string]*tfv1.GPU) {
+	s.storeMutex.RLock()
+	gpuStore := s.snapshotGPUStore()
+	nodeGpuStore := make(map[string]map[string]*tfv1.GPU, len(s.nodeGpuStore))
+	for nodeName, gpuMap := range s.nodeGpuStore {
+		nodeGpuStore[nodeName] = cloneGPUMap(gpuMap)
+	}
+	assumedAllocations := cloneAllocRequestMap(s.assumedAllocation)
+	s.storeMutex.RUnlock()
+
+	if len(assumedAllocations) == 0 {
+		return gpuStore, nodeGpuStore
+	}
+
+	gpuIndex := make(map[string]*tfv1.GPU, len(gpuStore))
+	for key, gpu := range gpuStore {
+		if gpu == nil {
+			continue
+		}
+		gpuIndex[key.Name] = gpu
+	}
+	s.applyAssumedAllocationsToGPUCopies(gpuIndex, assumedAllocations)
+
+	nodeGPUIndex := make(map[string]*tfv1.GPU, len(gpuStore))
+	for _, gpuMap := range nodeGpuStore {
+		for gpuName, gpu := range gpuMap {
+			nodeGPUIndex[gpuName] = gpu
+		}
+	}
+	s.applyAssumedAllocationsToGPUCopies(nodeGPUIndex, assumedAllocations)
+	return gpuStore, nodeGpuStore
+}
+
+func (s *GpuAllocator) buildPreemptFilterInput(
+	gpuStore map[types.NamespacedName]*tfv1.GPU,
+	nodeGpuStore map[string]map[string]*tfv1.GPU,
+	preemptAllocRequests []*tfv1.AllocRequest,
+	targetNodeNames []string,
+) ([]*tfv1.GPU, error) {
+	affectedNodes := make(map[string]bool)
+	includedGPUs := make(map[string]bool)
+	for _, nodeName := range targetNodeNames {
+		affectedNodes[nodeName] = true
+	}
+
+	gpuReleasedMap, err := s.simulatePreemptedGPUReleases(gpuStore, preemptAllocRequests, len(targetNodeNames) == 0, affectedNodes, includedGPUs)
+	if err != nil {
+		return nil, err
+	}
+
+	toFilterGPUs := make([]*tfv1.GPU, 0, len(gpuReleasedMap))
+	for _, gpuCopy := range gpuReleasedMap {
+		toFilterGPUs = append(toFilterGPUs, gpuCopy)
+	}
+	if len(affectedNodes) == 0 {
+		return nil, fmt.Errorf("FilterWithPreempt called with no affected nodes, invalid usage")
+	}
+
+	s.addAffectedNodeGPUs(nodeGpuStore, affectedNodes, includedGPUs, &toFilterGPUs, len(gpuReleasedMap))
+	return toFilterGPUs, nil
+}
+
+func (s *GpuAllocator) simulatePreemptedGPUReleases(
+	gpuStore map[types.NamespacedName]*tfv1.GPU,
+	preemptAllocRequests []*tfv1.AllocRequest,
+	trackAffectedNodes bool,
+	affectedNodes map[string]bool,
+	includedGPUs map[string]bool,
+) (map[string]*tfv1.GPU, error) {
+	gpuReleasedMap := make(map[string]*tfv1.GPU)
+
+	log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] FilterWithPreempt: starting to simulate release",
+		"preemptAllocRequestsCount", len(preemptAllocRequests))
+
+	for i, preemptAllocRequest := range preemptAllocRequests {
+		log.FromContext(s.ctx).V(4).Info("[PREEMPT] Processing victim allocation",
+			"victimIndex", i,
+			"workload", preemptAllocRequest.WorkloadNameNamespace.Name,
+			"gpuCount", preemptAllocRequest.Count,
+			"gpuNames", preemptAllocRequest.GPUNames,
+			"requestTflops", preemptAllocRequest.Request.Tflops.String(),
+			"requestComputePercent", preemptAllocRequest.Request.ComputePercent.String(),
+			"requestVram", preemptAllocRequest.Request.Vram.String())
+
+		for _, gpuName := range preemptAllocRequest.GPUNames {
+			gpuCopy, err := s.getOrCreateReleasedGPUCopy(gpuStore, gpuReleasedMap, includedGPUs, gpuName)
+			if err != nil {
+				return nil, err
+			}
+			if err := s.releaseVictimAllocationFromGPU(gpuCopy, preemptAllocRequest, gpuName); err != nil {
+				return nil, err
+			}
+			if trackAffectedNodes {
+				nodeName := gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel]
+				if nodeName != "" {
+					affectedNodes[nodeName] = true
+				}
+			}
+		}
+	}
+
+	return gpuReleasedMap, nil
+}
+
+func (s *GpuAllocator) getOrCreateReleasedGPUCopy(
+	gpuStore map[types.NamespacedName]*tfv1.GPU,
+	gpuReleasedMap map[string]*tfv1.GPU,
+	includedGPUs map[string]bool,
+	gpuName string,
+) (*tfv1.GPU, error) {
+	if gpuCopy, exists := gpuReleasedMap[gpuName]; exists {
+		return gpuCopy, nil
+	}
+
+	gpu := gpuStore[types.NamespacedName{Name: gpuName}]
+	if gpu == nil {
+		return nil, fmt.Errorf("gpu %s not found", gpuName)
+	}
+
+	gpuCopy := gpu.DeepCopy()
+	gpuReleasedMap[gpuName] = gpuCopy
+	includedGPUs[gpuCopy.Name] = true
+	return gpuCopy, nil
+}
+
+func (s *GpuAllocator) releaseVictimAllocationFromGPU(gpuCopy *tfv1.GPU, preemptAllocRequest *tfv1.AllocRequest, gpuName string) error {
+	var beforeTflops, beforeVram string
+	if gpuCopy.Status.Available != nil {
+		beforeTflops = gpuCopy.Status.Available.Tflops.String()
+		beforeVram = gpuCopy.Status.Available.Vram.String()
+	}
+
+	reqTflops, err := s.requestedTflopsForGPU(gpuCopy, preemptAllocRequest.Request)
+	if err != nil {
+		return err
+	}
+
+	if preemptAllocRequest.Isolation == tfv1.IsolationModePartitioned && preemptAllocRequest.PartitionTemplateID != "" {
+		partitionTflops, partitionVram, partitionErr := CalculatePartitionResourceUsage(
+			gpuCopy.Status.Capacity.Tflops, gpuCopy.Status.GPUModel, preemptAllocRequest.PartitionTemplateID)
+		if partitionErr == nil {
+			gpuCopy.Status.Available.Tflops.Add(partitionTflops)
+			gpuCopy.Status.Available.Vram.Add(partitionVram)
+		} else {
+			gpuCopy.Status.Available.Tflops.Add(reqTflops)
+			gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
+		}
+	} else {
+		gpuCopy.Status.Available.Tflops.Add(reqTflops)
+		gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
+	}
+
+	log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Simulated release on GPU",
+		"gpu", gpuName,
+		"node", gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel],
+		"victimWorkload", preemptAllocRequest.WorkloadNameNamespace.Name,
+		"releasedTflops", reqTflops.String(),
+		"releasedVram", preemptAllocRequest.Request.Vram.String(),
+		"beforeAvailableTflops", beforeTflops,
+		"afterAvailableTflops", gpuCopy.Status.Available.Tflops.String(),
+		"beforeAvailableVram", beforeVram,
+		"afterAvailableVram", gpuCopy.Status.Available.Vram.String(),
+		"capacityTflops", gpuCopy.Status.Capacity.Tflops.String())
+	return nil
+}
+
+func (s *GpuAllocator) addAffectedNodeGPUs(
+	nodeGpuStore map[string]map[string]*tfv1.GPU,
+	affectedNodes map[string]bool,
+	includedGPUs map[string]bool,
+	toFilterGPUs *[]*tfv1.GPU,
+	releasedGPUCount int,
+) {
+	for nodeName := range affectedNodes {
+		nodeGPUs := nodeGpuStore[nodeName]
+		log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Adding other GPUs from affected node",
+			"node", nodeName,
+			"totalGPUsOnNode", len(nodeGPUs),
+			"alreadyIncluded", len(includedGPUs))
+		for _, gpu := range nodeGPUs {
+			if !includedGPUs[gpu.Name] {
+				*toFilterGPUs = append(*toFilterGPUs, gpu.DeepCopy())
+				includedGPUs[gpu.Name] = true
+			}
+		}
+		log.FromContext(s.ctx).V(4).Info("[PREEMPT-DBG] Finished adding GPUs from node",
+			"node", nodeName,
+			"addedGPUs", len(*toFilterGPUs)-releasedGPUCount,
+			"totalToFilterGPUs", len(*toFilterGPUs))
+	}
+}
+
+func (s *GpuAllocator) buildPreemptFilterRegistry(req *tfv1.AllocRequest) *filter.FilterRegistry {
+	filterRegistry := s.filterRegistry
+
+	if len(req.GPUIndices) > 0 {
+		filterRegistry = filterRegistry.With(filter.NewGPUIndexFilter(req.GPUIndices))
+	}
+	if req.Isolation != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUIsolationModeFilter(req.Isolation))
+	}
+	if req.Isolation == tfv1.IsolationModePartitioned {
+		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, MaxPartitionsMap, PartitionTemplateMap))
+	}
+	filterRegistry = filterRegistry.With(filter.NewResourceFilter(req.Request))
+	if req.GPUModel != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUModelFilter(req.GPUModel))
+	}
+	if req.Count > 1 {
+		filterRegistry = filterRegistry.With(filter.NewSameNodeFilter(req.Count))
+	}
+	if req.GPUVendor != "" {
+		filterRegistry = filterRegistry.With(filter.NewGPUVendorFilter(req.GPUVendor))
+	}
+
+	return filterRegistry
 }
 
 func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []*tfv1.GPU) ([]*tfv1.GPU, error) {
@@ -648,120 +775,241 @@ func (s *GpuAllocator) GetMatchedPartition(
 	return bestGPU, bestMatch, nil
 }
 
-// Bind allocates resources on the provided GPUs for the given request.
-// It updates the in-memory store and marks the GPUs as dirty for syncing.
-func (s *GpuAllocator) Bind(
-	gpuNames []string,
-	req *tfv1.AllocRequest,
-) ([]*tfv1.GPU, error) {
+func (s *GpuAllocator) requestedTflopsForGPU(gpu *tfv1.GPU, request tfv1.Resource) (resource.Quantity, error) {
+	if !request.ComputePercent.IsZero() {
+		if gpu == nil {
+			return resource.Quantity{}, fmt.Errorf("GPU is nil for compute-percent request")
+		}
+		if gpu.Status.Capacity == nil {
+			return resource.Quantity{}, fmt.Errorf("GPU %s has nil capacity for compute-percent request", gpu.Name)
+		}
+		requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, request)
+		return *requiredTflops, nil
+	}
+	return request.Tflops, nil
+}
+
+func (s *GpuAllocator) applyAllocationToGPU(gpu *tfv1.GPU, req *tfv1.AllocRequest, selectedGPU string) error {
+	if gpu == nil {
+		return fmt.Errorf("scheduled GPU %s not found in store", selectedGPU)
+	}
+	if gpu.Status.Available == nil {
+		return fmt.Errorf("GPU %s has nil available resources", selectedGPU)
+	}
+
+	if req.Isolation == tfv1.IsolationModePartitioned && req.PartitionTemplateID != "" {
+		return s.bindPartition(gpu, req, selectedGPU)
+	}
+
+	reqTflops, err := s.requestedTflopsForGPU(gpu, req.Request)
+	if err != nil {
+		return err
+	}
+	if gpu.Status.Available.Tflops.Cmp(reqTflops) < 0 {
+		return fmt.Errorf("GPU %s insufficient TFLOPs: available %s, requested %s",
+			selectedGPU, gpu.Status.Available.Tflops.String(), reqTflops.String())
+	}
+	if gpu.Status.Available.Vram.Cmp(req.Request.Vram) < 0 {
+		return fmt.Errorf("GPU %s insufficient VRAM: available %s, requested %s",
+			selectedGPU, gpu.Status.Available.Vram.String(), req.Request.Vram.String())
+	}
+
+	gpu.Status.Available.Tflops.Sub(reqTflops)
+	gpu.Status.Available.Vram.Sub(req.Request.Vram)
+	return nil
+}
+
+func (s *GpuAllocator) releaseAllocationFromGPU(gpu *tfv1.GPU, request *tfv1.AllocRequest, gpuName string) {
+	if gpu == nil {
+		return
+	}
+	if request.Isolation == tfv1.IsolationModePartitioned && request.PartitionTemplateID != "" {
+		s.deallocPartition(gpu, request, gpuName)
+		return
+	}
+
+	reqTflops, err := s.requestedTflopsForGPU(gpu, request.Request)
+	if err != nil {
+		reqTflops = request.Request.Tflops
+	}
+	gpu.Status.Available.Tflops.Add(reqTflops)
+	gpu.Status.Available.Vram.Add(request.Request.Vram)
+}
+
+func (s *GpuAllocator) snapshotAllocatedGPUsLocked(gpuNames []string) []*tfv1.GPU {
+	result := make([]*tfv1.GPU, len(gpuNames))
+	for i, gpuName := range gpuNames {
+		key := types.NamespacedName{Name: gpuName}
+		if gpu := s.gpuStore[key]; gpu != nil {
+			result[i] = gpu.DeepCopy()
+		}
+	}
+	return result
+}
+
+// Assume records a scheduler-only reservation without mutating committed GPU or quota state.
+func (s *GpuAllocator) Assume(gpuNames []string, req *tfv1.AllocRequest) error {
 	<-s.initializedCh
 	if len(gpuNames) == 0 {
-		return nil, fmt.Errorf("no GPUs provided to bind")
+		return fmt.Errorf("no GPUs provided to assume")
 	}
 
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
 
-	if _, exists := s.uniqueAllocation[string(req.PodMeta.UID)]; exists {
-		return nil, fmt.Errorf("pod %s has already allocated GPUs", req.PodMeta.UID)
+	podUID := string(req.PodMeta.UID)
+	if _, exists := s.uniqueAllocation[podUID]; exists {
+		return fmt.Errorf("pod %s has already allocated GPUs", req.PodMeta.UID)
+	}
+	if _, exists := s.assumedAllocation[podUID]; exists {
+		return fmt.Errorf("pod %s has already assumed GPUs", req.PodMeta.UID)
+	}
+	if err := s.quotaStore.CheckQuotaAvailable(req); err != nil {
+		return err
 	}
 
-	// Proceed with GPU allocation
+	gpuCopies := make(map[string]*tfv1.GPU, len(gpuNames))
 	gpuNodeName := ""
-	for _, selectedGPU := range gpuNames {
-		// Get the GPU from the store
-		key := types.NamespacedName{Name: selectedGPU}
-		gpu, exists := s.gpuStore[key]
-		if !exists {
-			return nil, fmt.Errorf("scheduled GPU %s not found in store", selectedGPU)
+	for _, gpuName := range gpuNames {
+		gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
+		if gpu == nil {
+			return fmt.Errorf("scheduled GPU %s not found in store", gpuName)
 		}
-
 		if gpuNodeName == "" {
 			gpuNodeName = gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		}
+		gpuCopies[gpuName] = gpu.DeepCopy()
+	}
 
-		// Double-check resource availability to prevent over-allocation
-		if gpu.Status.Available == nil {
-			return nil, fmt.Errorf("GPU %s has nil available resources", selectedGPU)
-		}
-		var reqTflops resource.Quantity
-		if !req.Request.ComputePercent.IsZero() {
-			requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
-			reqTflops = *requiredTflops
-		} else {
-			reqTflops = req.Request.Tflops
-		}
-		if gpu.Status.Available.Tflops.Cmp(reqTflops) < 0 {
-			return nil, fmt.Errorf("GPU %s insufficient TFLOPs: available %s, requested %s",
-				selectedGPU, gpu.Status.Available.Tflops.String(), reqTflops.String())
-		}
-		if gpu.Status.Available.Vram.Cmp(req.Request.Vram) < 0 {
-			return nil, fmt.Errorf("GPU %s insufficient VRAM: available %s, requested %s",
-				selectedGPU, gpu.Status.Available.Vram.String(), req.Request.Vram.String())
-		}
+	s.applyAssumedAllocationsToGPUCopies(gpuCopies, s.assumedAllocation)
 
-		// Handle partitioned mode differently
-		if req.Isolation == tfv1.IsolationModePartitioned && req.PartitionTemplateID != "" {
-			if err := s.bindPartition(gpu, req, selectedGPU); err != nil {
-				return nil, err
-			}
-		} else {
-			// Non-partitioned mode: subtract request resources
-			if gpu.Status.Available.Tflops.Cmp(req.Request.Tflops) < 0 {
-				return nil, fmt.Errorf("GPU %s insufficient TFLOPs: available %s, requested %s",
-					selectedGPU, gpu.Status.Available.Tflops.String(), req.Request.Tflops.String())
-			}
-			if gpu.Status.Available.Vram.Cmp(req.Request.Vram) < 0 {
-				return nil, fmt.Errorf("GPU %s insufficient VRAM: available %s, requested %s",
-					selectedGPU, gpu.Status.Available.Vram.String(), req.Request.Vram.String())
-			}
+	for _, gpuName := range gpuNames {
+		if err := s.applyAllocationToGPU(gpuCopies[gpuName], req, gpuName); err != nil {
+			return err
+		}
+	}
 
-			// reduce available resource on the GPU status
-			if !req.Request.ComputePercent.IsZero() {
-				requiredTflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
-				gpu.Status.Available.Tflops.Sub(*requiredTflops)
-			} else {
-				gpu.Status.Available.Tflops.Sub(req.Request.Tflops)
+	if s.maxWorkerPerNode > 0 {
+		workerCounts := s.effectiveNodeWorkerCountsLocked()
+		if workerCounts[gpuNodeName] >= s.maxWorkerPerNode {
+			return fmt.Errorf("node %s reached max workers per node %d", gpuNodeName, s.maxWorkerPerNode)
+		}
+	}
+
+	req.GPUNames = append([]string(nil), gpuNames...)
+	assumedReq := req.DeepCopy()
+	s.assumedAllocation[podUID] = assumedReq
+	delete(s.uniqueDeallocation, podUID)
+	s.quotaStore.AssumeQuota(req.WorkloadNameNamespace.Namespace, assumedReq)
+
+	return nil
+}
+
+// Commit converts a previously assumed allocation into a committed allocation.
+func (s *GpuAllocator) Commit(podUID string) ([]*tfv1.GPU, error) {
+	<-s.initializedCh
+
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+
+	if req, exists := s.uniqueAllocation[podUID]; exists && req != nil {
+		return s.snapshotAllocatedGPUsLocked(req.GPUNames), nil
+	}
+
+	req, exists := s.assumedAllocation[podUID]
+	if !exists || req == nil {
+		return nil, fmt.Errorf("pod %s has no assumed allocation to commit", podUID)
+	}
+
+	gpuNodeName := ""
+	appliedGPUKeys := make([]types.NamespacedName, 0, len(req.GPUNames))
+	for _, gpuName := range req.GPUNames {
+		key := types.NamespacedName{Name: gpuName}
+		gpu := s.gpuStore[key]
+		if gpu == nil {
+			for _, appliedKey := range appliedGPUKeys {
+				appliedGPU := s.gpuStore[appliedKey]
+				s.releaseAllocationFromGPU(appliedGPU, req, appliedKey.Name)
+				removeRunningApp(s.ctx, appliedGPU, req)
+				s.markGPUDirty(appliedKey)
 			}
-			gpu.Status.Available.Vram.Sub(req.Request.Vram)
+			return nil, fmt.Errorf("scheduled GPU %s not found in store", gpuName)
+		}
+		if gpuNodeName == "" {
+			gpuNodeName = gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		}
+		if err := s.applyAllocationToGPU(gpu, req, gpuName); err != nil {
+			for _, appliedKey := range appliedGPUKeys {
+				appliedGPU := s.gpuStore[appliedKey]
+				s.releaseAllocationFromGPU(appliedGPU, req, appliedKey.Name)
+				removeRunningApp(s.ctx, appliedGPU, req)
+				s.markGPUDirty(appliedKey)
+			}
+			return nil, err
 		}
 
 		addRunningApp(s.ctx, gpu, req)
-
 		s.markGPUDirty(key)
+		appliedGPUKeys = append(appliedGPUKeys, key)
 	}
 
-	// Allocate quota resources (atomic with GPU allocation)
-	// Use actual allocated GPU count instead of requested count
+	s.quotaStore.ForgetAssumedQuota(req.WorkloadNameNamespace.Namespace, req)
 	s.quotaStore.AllocateQuota(req.WorkloadNameNamespace.Namespace, req)
 	s.addAllocationMap(gpuNodeName, req.PodMeta)
 	metrics.SetSchedulerMetrics(req.PoolName, true)
 
-	log.FromContext(s.ctx).Info("GPU allocation successful",
+	log.FromContext(s.ctx).Info("GPU allocation committed",
 		"namespace", req.WorkloadNameNamespace.Namespace,
 		"workload", req.WorkloadNameNamespace.Name,
 		"podName", req.PodMeta.Name,
 		"gpu_count", req.Count,
-		"gpuNames", gpuNames,
+		"gpuNames", req.GPUNames,
 		"node", gpuNodeName,
 		"tflops", req.Request.Tflops.String(),
 		"vram", req.Request.Vram.String())
 
-	// Return copies of the bound GPUs from the store
-	result := make([]*tfv1.GPU, req.Count)
-	for i, gpuName := range gpuNames {
-		key := types.NamespacedName{Name: gpuName}
-		result[i] = s.gpuStore[key].DeepCopy()
-	}
-	req.GPUNames = gpuNames
-	s.uniqueAllocation[string(req.PodMeta.UID)] = req
-	delete(s.uniqueDeallocation, string(req.PodMeta.UID))
-	s.podNamespaceNsToPodUID[req.PodMeta.Namespace+"/"+req.PodMeta.Name] = string(req.PodMeta.UID)
+	s.uniqueAllocation[podUID] = req
+	delete(s.assumedAllocation, podUID)
+	delete(s.uniqueDeallocation, podUID)
+	s.podNamespaceNsToPodUID[req.PodMeta.Namespace+"/"+req.PodMeta.Name] = podUID
 
 	for _, handler := range s.bindHandlers {
 		handler(req)
 	}
-	return result, nil
+	return s.snapshotAllocatedGPUsLocked(req.GPUNames), nil
+}
+
+// Forget removes a scheduler-only reservation that never became committed.
+func (s *GpuAllocator) Forget(podUID string) error {
+	<-s.initializedCh
+
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+
+	req, exists := s.assumedAllocation[podUID]
+	if !exists || req == nil {
+		return nil
+	}
+
+	s.quotaStore.ForgetAssumedQuota(req.WorkloadNameNamespace.Namespace, req)
+	delete(s.assumedAllocation, podUID)
+	return nil
+}
+
+// Bind preserves the legacy eager-allocation API by internally using assume+commit.
+func (s *GpuAllocator) Bind(
+	gpuNames []string,
+	req *tfv1.AllocRequest,
+) ([]*tfv1.GPU, error) {
+	if err := s.Assume(gpuNames, req); err != nil {
+		return nil, err
+	}
+	committedGPUs, err := s.Commit(string(req.PodMeta.UID))
+	if err != nil {
+		_ = s.Forget(string(req.PodMeta.UID))
+		return nil, err
+	}
+	return committedGPUs, nil
 }
 
 // Alloc allocates a request to a gpu or multiple gpus from the same node.
@@ -785,7 +1033,15 @@ func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 	gpuNames := lo.Map(selectedGPUs, func(gpu *tfv1.GPU, _ int) string {
 		return gpu.Name
 	})
-	return s.Bind(gpuNames, req)
+	if err := s.Assume(gpuNames, req); err != nil {
+		return nil, err
+	}
+	committedGPUs, err := s.Commit(string(req.PodMeta.UID))
+	if err != nil {
+		_ = s.Forget(string(req.PodMeta.UID))
+		return nil, err
+	}
+	return committedGPUs, nil
 }
 
 func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocRequest, isSimulateSchedule bool) ([]*tfv1.GPU, []filter.FilterDetail, error) {
@@ -815,11 +1071,12 @@ func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocR
 
 	if s.maxWorkerPerNode > 0 {
 		s.storeMutex.RLock()
+		workerCounts := s.effectiveNodeWorkerCountsLocked()
 		// First pass: check if any filtering is needed
 		needsFiltering := false
 		for _, gpu := range filteredGPUs {
 			nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
-			if len(s.nodeWorkerStore[nodeName]) > s.maxWorkerPerNode {
+			if workerCounts[nodeName] >= s.maxWorkerPerNode {
 				needsFiltering = true
 				break
 			}
@@ -830,7 +1087,7 @@ func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocR
 			finalFilteredGPUs := make([]*tfv1.GPU, 0, len(filteredGPUs))
 			for _, gpu := range filteredGPUs {
 				nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
-				if len(s.nodeWorkerStore[nodeName]) <= s.maxWorkerPerNode {
+				if workerCounts[nodeName] < s.maxWorkerPerNode {
 					finalFilteredGPUs = append(finalFilteredGPUs, gpu)
 				}
 			}
@@ -1665,8 +1922,23 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 // listGPUsFromPool gets GPUs from the specified pool using the in-memory store
 func (s *GpuAllocator) listGPUsFromPool(poolName string) []*tfv1.GPU {
 	s.storeMutex.RLock()
-	defer s.storeMutex.RUnlock()
-	return cloneGPUSlice(lo.Values(s.poolGpuStore[poolName]))
+	gpus := cloneGPUSlice(lo.Values(s.poolGpuStore[poolName]))
+	assumedAllocations := cloneAllocRequestMap(s.assumedAllocation)
+	s.storeMutex.RUnlock()
+
+	if len(assumedAllocations) == 0 {
+		return gpus
+	}
+
+	gpuIndex := make(map[string]*tfv1.GPU, len(gpus))
+	for _, gpu := range gpus {
+		if gpu == nil {
+			continue
+		}
+		gpuIndex[gpu.Name] = gpu
+	}
+	s.applyAssumedAllocationsToGPUCopies(gpuIndex, assumedAllocations)
+	return gpus
 }
 
 func (s *GpuAllocator) markGPUDirty(key types.NamespacedName) {
@@ -1872,6 +2144,15 @@ func (s *GpuAllocator) reconcileAllocationState() {
 
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
+
+	// Preserve assumed entries that have not yet been committed (i.e., pods
+	// between Reserve and PostBind). Only remove entries that already appear
+	// in uniqueAllocation, meaning the reconcile rebuilt them from workers.
+	for uid := range s.assumedAllocation {
+		if _, committed := s.uniqueAllocation[uid]; committed {
+			delete(s.assumedAllocation, uid)
+		}
+	}
 
 	for gpuKey, gpu := range s.gpuStore {
 		if gpu.Status.Capacity != nil {

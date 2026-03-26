@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	gangscheduler "github.com/NexusGPU/tensor-fusion/internal/gang"
 	"github.com/NexusGPU/tensor-fusion/internal/portallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
@@ -256,7 +257,8 @@ func (r *TensorFusionWorkloadReconciler) tryStartWorker(
 	workload *tfv1.TensorFusionWorkload,
 	hash string,
 ) (*corev1.Pod, error) {
-	pod, err := workerGenerator.GenerateWorkerPod(ctx, workload)
+	desiredMembers := gangscheduler.ResolveDesiredMembers(ctx, r.Client, workload)
+	pod, err := workerGenerator.GenerateWorkerPod(ctx, workload, desiredMembers)
 	if err != nil {
 		return nil, fmt.Errorf("generate worker pod %w", err)
 	}
@@ -356,76 +358,78 @@ func (r *TensorFusionWorkloadReconciler) updateStatus(
 	}
 
 	// Determine workload phase
-	var phase tfv1.TensorFusionWorkloadPhase
+	desiredReplicas := gangscheduler.ResolveDesiredMembers(ctx, r.Client, workload)
+	phase, readyCondition := deriveWorkloadReadiness(workload, desiredReplicas, readyReplicas, failedWorkers)
 
-	// Update Ready condition based on readyReplicas and desired replicas
+	log.Info("Updating workload status", "phase", phase, "readyReplicas", readyReplicas)
+	if err := r.patchWorkloadStatus(ctx, client.ObjectKeyFromObject(workload), func(latest *tfv1.TensorFusionWorkload) bool {
+		changed := false
+
+		if latest.Spec.IsDynamicReplica() && latest.Status.WorkerCount != int32(len(pods)) {
+			latest.Status.WorkerCount = int32(len(pods))
+			changed = true
+		}
+		if latest.Status.ReadyWorkers != readyReplicas {
+			latest.Status.ReadyWorkers = readyReplicas
+			changed = true
+		}
+		if reconcileGangStatus(ctx, r.Client, latest, readyReplicas, failedWorkers) {
+			changed = true
+		}
+
+		effectivePhase, effectiveCondition := reconcileWorkloadReadinessWithGang(latest, phase, readyCondition)
+		if latest.Status.Phase != effectivePhase {
+			latest.Status.Phase = effectivePhase
+			changed = true
+		}
+		if meta.SetStatusCondition(&latest.Status.Conditions, effectiveCondition) {
+			changed = true
+		}
+
+		return changed
+	}); err != nil {
+		return fmt.Errorf("update workload status: %w", err)
+	}
+	return nil
+}
+
+func deriveWorkloadReadiness(
+	workload *tfv1.TensorFusionWorkload,
+	desiredReplicas, readyReplicas int32,
+	failedWorkers int,
+) (tfv1.TensorFusionWorkloadPhase, metav1.Condition) {
 	readyCondition := metav1.Condition{
 		Type:               constants.ConditionStatusTypeReady,
 		LastTransitionTime: metav1.Now(),
 	}
 
-	if failedWorkers > 0 {
-		// when any worker failed, workload status should be false
-		phase = tfv1.TensorFusionWorkloadPhaseFailed
+	switch {
+	case failedWorkers > 0:
 		readyCondition.Status = metav1.ConditionFalse
 		readyCondition.Reason = "WorkerFailed"
 		readyCondition.Message = fmt.Sprintf("Failed workers num: %d", failedWorkers)
-	} else if workload.Spec.IsDynamicReplica() {
-		// for dynamic replicas, if no worker failed, indicate workload is running
-		phase = tfv1.TensorFusionWorkloadPhaseRunning
+		return tfv1.TensorFusionWorkloadPhaseFailed, readyCondition
+	case desiredReplicas == 0:
+		readyCondition.Status = metav1.ConditionFalse
+		readyCondition.Reason = "ScaledToZero"
+		readyCondition.Message = "Workload is scaled to zero"
+		return tfv1.TensorFusionWorkloadPhasePending, readyCondition
+	case workload != nil && workload.Spec.IsDynamicReplica():
 		readyCondition.Status = metav1.ConditionTrue
 		readyCondition.Reason = "WorkloadReady"
 		readyCondition.Message = "All dynamic worker replicas are running"
-	} else if workload.Spec.Replicas != nil && readyReplicas == *workload.Spec.Replicas {
-		phase = tfv1.TensorFusionWorkloadPhaseRunning
+		return tfv1.TensorFusionWorkloadPhaseRunning, readyCondition
+	case readyReplicas == desiredReplicas:
 		readyCondition.Status = metav1.ConditionTrue
 		readyCondition.Reason = "WorkloadReady"
 		readyCondition.Message = "All workers are running"
-	} else {
-		phase = tfv1.TensorFusionWorkloadPhasePending
+		return tfv1.TensorFusionWorkloadPhaseRunning, readyCondition
+	default:
 		readyCondition.Status = metav1.ConditionFalse
 		readyCondition.Reason = "WaitingForWorkers"
-		readyCondition.Message = fmt.Sprintf("Ready replicas: %d/%d", readyReplicas, *workload.Spec.Replicas)
+		readyCondition.Message = fmt.Sprintf("Ready replicas: %d/%d", readyReplicas, desiredReplicas)
+		return tfv1.TensorFusionWorkloadPhasePending, readyCondition
 	}
-
-	conditionsChanged := meta.SetStatusCondition(&workload.Status.Conditions, readyCondition)
-
-	// Check if we need to update status
-	totalReplicasChangedInDynamicReplicaMode :=
-		workload.Status.WorkerCount != int32(len(pods)) && workload.Spec.IsDynamicReplica()
-	if totalReplicasChangedInDynamicReplicaMode {
-		workload.Status.WorkerCount = int32(len(pods))
-	}
-	statusChanged := totalReplicasChangedInDynamicReplicaMode || workload.Status.ReadyWorkers != readyReplicas ||
-		workload.Status.Phase != phase || conditionsChanged
-
-	if statusChanged {
-		log.Info("Updating workload status", "phase", phase, "readyReplicas", readyReplicas)
-		if err := r.patchWorkloadStatus(ctx, client.ObjectKeyFromObject(workload), func(latest *tfv1.TensorFusionWorkload) bool {
-			changed := false
-
-			if latest.Spec.IsDynamicReplica() && latest.Status.WorkerCount != int32(len(pods)) {
-				latest.Status.WorkerCount = int32(len(pods))
-				changed = true
-			}
-			if latest.Status.ReadyWorkers != readyReplicas {
-				latest.Status.ReadyWorkers = readyReplicas
-				changed = true
-			}
-			if latest.Status.Phase != phase {
-				latest.Status.Phase = phase
-				changed = true
-			}
-			if meta.SetStatusCondition(&latest.Status.Conditions, readyCondition) {
-				changed = true
-			}
-
-			return changed
-		}); err != nil {
-			return fmt.Errorf("update workload status: %w", err)
-		}
-	}
-	return nil
 }
 
 func (r *TensorFusionWorkloadReconciler) patchWorkloadStatus(
@@ -449,6 +453,133 @@ func (r *TensorFusionWorkloadReconciler) patchWorkloadStatus(
 		// Use full status update so required status fields remain present.
 		return r.Status().Update(ctx, latest)
 	})
+}
+
+// reconcileGangStatus updates gang status based on actual pod states.
+// The scheduler owns scheduling-phase transitions (Waiting/Scheduling/TimedOut),
+// while the controller owns runtime-phase transitions (Running/Failed).
+// The controller only overwrites the scheduler's phase when pods have actually
+// reached a terminal runtime state, to avoid a write-conflict loop.
+func reconcileGangStatus(
+	ctx context.Context,
+	c client.Client,
+	workload *tfv1.TensorFusionWorkload,
+	readyReplicas int32,
+	failedWorkers int,
+) bool {
+	desiredMembers := gangscheduler.ResolveDesiredMembers(ctx, c, workload)
+	if !gangscheduler.GangEnabledForWorkload(workload, desiredMembers) {
+		// If the workload has a GangScheduling spec but desiredMembers is
+		// temporarily unresolvable (e.g., owner not yet visible), do NOT
+		// clear existing gang status — just skip this reconcile cycle.
+		if workload.Spec.GangScheduling != nil && workload.Status.Gang != nil {
+			return false
+		}
+		if workload.Status.Gang == nil {
+			return false
+		}
+		workload.Status.Gang = nil
+		return true
+	}
+
+	// Start from existing status written by the scheduler, or create a new one.
+	var updated *tfv1.GangSchedulingStatus
+	if workload.Status.Gang != nil {
+		updated = workload.Status.Gang.DeepCopy()
+	} else {
+		updated = &tfv1.GangSchedulingStatus{
+			Phase: tfv1.GangSchedulingPhasePending,
+		}
+		setGangPhase(updated, tfv1.GangSchedulingPhasePending, "GangPending",
+			fmt.Sprintf("Gang waiting for scheduling: %d/%d ready", readyReplicas, desiredMembers))
+	}
+
+	// Always update counters that the controller can observe.
+	updated.GroupKey = fmt.Sprintf("%s/%s", workload.Namespace, workload.Name)
+	updated.DesiredMembers = desiredMembers
+	updated.ReadyMembers = readyReplicas
+	if updated.ScheduledMembers < readyReplicas {
+		updated.ScheduledMembers = readyReplicas
+	}
+
+	// Only transition phase for states the controller owns (runtime observation).
+	// Scheduler-owned phases (Waiting, Scheduling, TimedOut) are preserved.
+	switch {
+	case failedWorkers > 0:
+		setGangPhase(updated, tfv1.GangSchedulingPhaseFailed, "GangWorkerFailed",
+			fmt.Sprintf("Failed workers num: %d", failedWorkers))
+		updated.WaitingMembers = 0
+	case readyReplicas >= desiredMembers:
+		setGangPhase(updated, tfv1.GangSchedulingPhaseRunning, "GangReady",
+			fmt.Sprintf("Gang members running: %d/%d ready", readyReplicas, desiredMembers))
+		updated.WaitingMembers = 0
+		updated.BackoffUntil = ""
+	default:
+		// Only reset to Pending if the current phase is a terminal/runtime phase
+		// that is no longer valid. Never overwrite scheduler's in-progress phases.
+		if isSchedulerOwnedPhase(updated.Phase) {
+			// Scheduler is actively managing this phase — don't touch it.
+		} else if updated.Phase == "" || updated.Phase == tfv1.GangSchedulingPhaseRunning {
+			setGangPhase(updated, tfv1.GangSchedulingPhasePending, "GangPending",
+				fmt.Sprintf("Gang waiting for scheduling: %d/%d ready", readyReplicas, desiredMembers))
+		}
+	}
+
+	if gangscheduler.SameGangStatus(workload.Status.Gang, updated) {
+		return false
+	}
+	workload.Status.Gang = updated
+	return true
+}
+
+// isSchedulerOwnedPhase returns true for phases that the scheduler is responsible for.
+// The controller should not overwrite these phases unless pods reach a runtime state.
+func isSchedulerOwnedPhase(phase tfv1.GangSchedulingPhase) bool {
+	switch phase {
+	case tfv1.GangSchedulingPhaseWaiting, tfv1.GangSchedulingPhaseScheduling, tfv1.GangSchedulingPhaseTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+func reconcileWorkloadReadinessWithGang(
+	workload *tfv1.TensorFusionWorkload,
+	phase tfv1.TensorFusionWorkloadPhase,
+	readyCondition metav1.Condition,
+) (tfv1.TensorFusionWorkloadPhase, metav1.Condition) {
+	if workload == nil || workload.Status.Gang == nil {
+		return phase, readyCondition
+	}
+
+	switch workload.Status.Gang.Phase {
+	case tfv1.GangSchedulingPhaseRunning:
+		return phase, readyCondition
+	case tfv1.GangSchedulingPhaseFailed:
+		readyCondition.Status = metav1.ConditionFalse
+		readyCondition.Reason = workload.Status.Gang.Reason
+		readyCondition.Message = workload.Status.Gang.Message
+		return tfv1.TensorFusionWorkloadPhaseFailed, readyCondition
+	case tfv1.GangSchedulingPhaseTimedOut, tfv1.GangSchedulingPhasePending, tfv1.GangSchedulingPhaseWaiting, tfv1.GangSchedulingPhaseScheduling:
+		readyCondition.Status = metav1.ConditionFalse
+		readyCondition.Reason = workload.Status.Gang.Reason
+		readyCondition.Message = workload.Status.Gang.Message
+		return tfv1.TensorFusionWorkloadPhasePending, readyCondition
+	default:
+		return phase, readyCondition
+	}
+}
+
+func setGangPhase(status *tfv1.GangSchedulingStatus, phase tfv1.GangSchedulingPhase, reason, message string) {
+	if status == nil {
+		return
+	}
+	if status.Phase != phase || status.Reason != reason || status.Message != message {
+		status.LastTransitionTime = metav1.Now()
+	}
+	status.Phase = phase
+	status.Reason = reason
+	status.Message = message
 }
 
 func filterActivePods(podList *corev1.PodList) []*corev1.Pod {
