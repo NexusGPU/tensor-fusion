@@ -24,6 +24,7 @@ type DeviceInfo struct {
 	Model                      string
 	Index                      int32
 	NUMANode                   int32
+	Topology                   *DeviceTopology
 	TotalMemoryBytes           uint64
 	MaxTflops                  float64
 	VirtualizationCapabilities VirtualizationCapabilities
@@ -40,6 +41,22 @@ type DeviceInfo struct {
 	DeviceEnv map[string]string
 
 	IsolationMode IsolationMode
+}
+
+// DeviceTopology represents normalized topology metadata for a device.
+// This structure is vendor-agnostic and is intended to be persisted to the GPU CR status.
+// +k8s:deepcopy-gen=true
+type DeviceTopology struct {
+	Peers []DevicePeerLink
+}
+
+// DevicePeerLink represents the topology relationship between two devices.
+// +k8s:deepcopy-gen=true
+type DevicePeerLink struct {
+	PeerUUID  string
+	Tier      int32
+	LinkType  string
+	Bandwidth int64
 }
 
 type NodeInfo struct {

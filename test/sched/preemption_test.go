@@ -73,7 +73,7 @@ func (pts *PreemptionTestSuite) SetupSuite() {
 	)
 	gpuTopoOpt := app.WithPlugin(
 		gpuTopoPlugin.Name,
-		gpuTopoPlugin.NewWithDeps(fixture.allocator, fixture.client),
+		gpuTopoPlugin.New(),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)

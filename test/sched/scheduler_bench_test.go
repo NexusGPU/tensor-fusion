@@ -106,7 +106,7 @@ func BenchmarkScheduler(b *testing.B) {
 	)
 	gpuTopoOpt := app.WithPlugin(
 		gpuTopoPlugin.Name,
-		gpuTopoPlugin.NewWithDeps(fixture.allocator, fixture.client),
+		gpuTopoPlugin.New(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

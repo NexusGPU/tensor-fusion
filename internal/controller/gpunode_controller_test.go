@@ -88,7 +88,8 @@ var _ = Describe("GPUNode Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "node-1",
 					Labels: map[string]string{
-						constants.AcceleratorLabelVendor: constants.AcceleratorVendorNvidia,
+						constants.AcceleratorLabelVendor:                      constants.AcceleratorVendorNvidia,
+						constants.GPUNodePoolIdentifierLabelPrefix + "pool-1": "true",
 					},
 				},
 			}
@@ -101,11 +102,6 @@ var _ = Describe("GPUNode Controller", func() {
 					Vendor: constants.AcceleratorVendorNvidia,
 				},
 			}
-			client := fake.NewClientBuilder().
-				WithScheme(scheme).
-				WithObjects(node.DeepCopy(), gpu).
-				Build()
-
 			pool := &tfv1.GPUPool{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "pool-1",
@@ -118,6 +114,10 @@ var _ = Describe("GPUNode Controller", func() {
 					},
 				},
 			}
+			client := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(node.DeepCopy(), gpu, pool.DeepCopy()).
+				Build()
 
 			reconciler := &GPUNodeReconciler{
 				Client:                               client,

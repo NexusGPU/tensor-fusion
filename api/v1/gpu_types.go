@@ -66,6 +66,31 @@ type GPUStatus struct {
 	// AllocatedPartitions tracks allocated partitions on this GPU
 	// Key is partitionUUID, value contains template info and allocated resources
 	AllocatedPartitions map[string]AllocatedPartition `json:"allocatedPartitions,omitempty"`
+
+	// +optional
+	// Topology contains normalized GPU interconnect topology metadata,
+	// used by the GPUNetworkTopologyAware scheduler plugin.
+	Topology *GPUTopologyStatus `json:"topology,omitempty"`
+}
+
+// GPUTopologyStatus represents the normalized topology metadata for a GPU.
+type GPUTopologyStatus struct {
+	// Peers describes the topology relationship between this GPU and other GPUs on the same node.
+	Peers []GPUPeerLinkStatus `json:"peers,omitempty"`
+}
+
+// GPUPeerLinkStatus represents the link between two GPUs.
+type GPUPeerLinkStatus struct {
+	// PeerGPUUUID is the stable UUID of the peer GPU.
+	PeerGPUUUID string `json:"peerGPUUUID"`
+	// Tier is the normalized affinity tier (lower = closer). Used as the primary scheduling input.
+	Tier int32 `json:"tier"`
+	// LinkType describes the physical link type (e.g., "NVLink", "HCCS", "PCIe"). For observability only.
+	// +optional
+	LinkType string `json:"linkType,omitempty"`
+	// Bandwidth is the link bandwidth in bytes per second. For observability only.
+	// +optional
+	Bandwidth int64 `json:"bandwidth,omitempty"`
 }
 
 // +default="tensor-fusion"

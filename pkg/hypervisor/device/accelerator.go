@@ -168,9 +168,10 @@ const (
 
 // DeviceTopoNode represents connection to another device
 type DeviceTopoNode struct {
-	PeerUUID  [64]byte      // Peer device UUID
-	PeerIndex int32         // Peer device index
-	TopoLevel TopoLevelType // Topology level to this peer
+	PeerUUID             [64]byte      // Peer device UUID
+	PeerIndex            int32         // Peer device index
+	TopoLevel            TopoLevelType // Topology level to this peer
+	BandwidthBytesPerSec int64         // Estimated link bandwidth in bytes/sec, 0 if unknown
 }
 
 // DeviceTopologyInfo represents a device and its topology to all other devices
@@ -318,6 +319,78 @@ func byteArrayToString(arr []byte) string {
 	return string(arr)
 }
 
+func topoLevelToTier(level TopoLevelType) int32 {
+	switch level {
+	case TopoLevelInternal:
+		return 0 // High-speed interconnect: NVLink, HCCS, or same board
+	case TopoLevelSingleSwitch, TopoLevelMultiSwitch, TopoLevelHostBridge, TopoLevelNUMANode:
+		return 1 // PCIe local or same NUMA node
+	case TopoLevelSystem:
+		return 2 // Cross NUMA
+	default:
+		return 3 // Unknown
+	}
+}
+
+func topoLevelToLinkType(level TopoLevelType) string {
+	switch level {
+	case TopoLevelInternal:
+		return "Internal"
+	case TopoLevelSingleSwitch:
+		return "SingleSwitch"
+	case TopoLevelMultiSwitch:
+		return "MultiSwitch"
+	case TopoLevelHostBridge:
+		return "HostBridge"
+	case TopoLevelNUMANode:
+		return "NUMA"
+	case TopoLevelSystem:
+		return "System"
+	case TopoLevelSelf:
+		return "Self"
+	default:
+		return "Unknown"
+	}
+}
+
+func (a *AcceleratorInterface) getTopologyMap() (map[string]*api.DeviceTopology, error) {
+	var cTopology ExtendedDeviceTopology
+	result := getAllDevicesTopology(&cTopology)
+	if result != ResultSuccess {
+		return nil, &AcceleratorError{
+			Code:    result,
+			Message: fmt.Sprintf("failed to get all devices topology: %d", result),
+		}
+	}
+
+	topologyMap := make(map[string]*api.DeviceTopology, int(cTopology.DeviceCount))
+	for i := 0; i < int(cTopology.DeviceCount); i++ {
+		row := &cTopology.Devices[i]
+		deviceUUID := byteArrayToString(row.DeviceUUID[:])
+		if deviceUUID == "" {
+			continue
+		}
+		peers := make([]api.DevicePeerLink, 0, int(row.PeerCount))
+		for j := 0; j < int(row.PeerCount) && j < MaxTopologyDevices; j++ {
+			peer := &row.Peers[j]
+			peerUUID := byteArrayToString(peer.PeerUUID[:])
+			if peerUUID == "" || peerUUID == deviceUUID || peer.TopoLevel == TopoLevelSelf {
+				continue
+			}
+			peers = append(peers, api.DevicePeerLink{
+				PeerUUID:  peerUUID,
+				Tier:      topoLevelToTier(peer.TopoLevel),
+				LinkType:  topoLevelToLinkType(peer.TopoLevel),
+				Bandwidth: peer.BandwidthBytesPerSec,
+			})
+		}
+		topologyMap[deviceUUID] = &api.DeviceTopology{
+			Peers: peers,
+		}
+	}
+	return topologyMap, nil
+}
+
 // GetTotalProcessCount returns the total number of processes across all devices
 func (a *AcceleratorInterface) GetTotalProcessCount() int {
 	a.mu.RLock()
@@ -425,9 +498,19 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 	}
 
 	devices := make([]*api.DeviceInfo, int(cCount))
+	topologyMap, topoErr := a.getTopologyMap()
+	if topoErr != nil {
+		if IsNonFatalAcceleratorError(topoErr) {
+			klog.Warningf("GetAllDevices: topology unavailable, continuing without topology metadata: %v", topoErr)
+		} else {
+			klog.Warningf("GetAllDevices: failed to retrieve topology, continuing without topology metadata: %v", topoErr)
+		}
+		topologyMap = nil
+	}
 
 	for i := 0; i < int(cCount); i++ {
 		cInfo := &stackDevices[i]
+		deviceUUID := byteArrayToString(cInfo.Basic.UUID[:])
 		vendor := byteArrayToString(cInfo.Basic.Vendor[:])
 
 		// Convert DeviceProperties KV array to map
@@ -466,11 +549,12 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 		}
 
 		devices[i] = &api.DeviceInfo{
-			UUID:             byteArrayToString(cInfo.Basic.UUID[:]),
+			UUID:             deviceUUID,
 			Vendor:           vendor,
 			Model:            model,
 			Index:            cInfo.Basic.Index,
 			NUMANode:         cInfo.Basic.NUMANode,
+			Topology:         topologyMap[deviceUUID],
 			TotalMemoryBytes: cInfo.Basic.TotalMemoryBytes,
 			MaxTflops:        float64(cInfo.Basic.MaxTflops),
 			VirtualizationCapabilities: api.VirtualizationCapabilities{

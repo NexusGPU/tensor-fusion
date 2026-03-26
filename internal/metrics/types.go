@@ -9,12 +9,16 @@ import (
 type TensorFusionSystemMetrics struct {
 	PoolName string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
 
-	TotalWorkerCount            int64 `json:"totalWorkerCount" gorm:"column:total_workers_cnt"`
-	TotalNodeCount              int64 `json:"totalNodeCount" gorm:"column:total_nodes_cnt"`
-	TotalAllocationFailCount    int64 `json:"totalAllocationFailCount" gorm:"column:total_allocation_fail_cnt"`
-	TotalAllocationSuccessCount int64 `json:"totalAllocationSuccessCount" gorm:"column:total_allocation_success_cnt"`
-	TotalScaleUpCount           int64 `json:"totalScaleUpCount" gorm:"column:total_scale_up_cnt"`
-	TotalScaleDownCount         int64 `json:"totalScaleDownCount" gorm:"column:total_scale_down_cnt"`
+	TotalWorkerCount             int64 `json:"totalWorkerCount" gorm:"column:total_workers_cnt"`
+	TotalNodeCount               int64 `json:"totalNodeCount" gorm:"column:total_nodes_cnt"`
+	TotalAllocationFailCount     int64 `json:"totalAllocationFailCount" gorm:"column:total_allocation_fail_cnt"`
+	TotalAllocationSuccessCount  int64 `json:"totalAllocationSuccessCount" gorm:"column:total_allocation_success_cnt"`
+	TotalScaleUpCount            int64 `json:"totalScaleUpCount" gorm:"column:total_scale_up_cnt"`
+	TotalScaleDownCount          int64 `json:"totalScaleDownCount" gorm:"column:total_scale_down_cnt"`
+	TotalTopoSatisfiedCount      int64 `json:"totalTopoSatisfiedCount" gorm:"column:total_topo_satisfied_cnt"`
+	TotalTopoUnsatisfiedCount    int64 `json:"totalTopoUnsatisfiedCount" gorm:"column:total_topo_unsatisfied_cnt"`
+	TotalTopoFallbackCount       int64 `json:"totalTopoFallbackCount" gorm:"column:total_topo_fallback_cnt"`
+	TotalTopoSearchDegradedCount int64 `json:"totalTopoSearchDegradedCount" gorm:"column:total_topo_search_degraded_cnt"`
 
 	// NOTE: make sure new fields will be migrated in SetupTable function
 

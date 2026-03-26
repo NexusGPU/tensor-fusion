@@ -603,8 +603,12 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	// find top N score GPUs in this node
 	neededGPUs := allocRequest.(*tfv1.AllocRequest).Count
 
-	// when needed GPUs equals to valid GPUs, just return all GPUs on this node
-	if neededGPUs == uint(len(validGPUs)) {
+	// Try to use topology-aware GPU selection from GPUNetworkTopologyAware plugin.
+	// If the topology plugin produced a BestGPUIds for this node, prefer it.
+	if topoGPUs := s.tryGetTopologyBestGPUs(state, nodeName, neededGPUs); len(topoGPUs) > 0 {
+		schedulingResult.FinalGPUs = topoGPUs
+	} else if neededGPUs == uint(len(validGPUs)) {
+		// when needed GPUs equals to valid GPUs, just return all GPUs on this node
 		schedulingResult.FinalGPUs = lo.Map(validGPUs, func(gpu *tfv1.GPU, _ int) string {
 			return gpu.Name
 		})
@@ -637,6 +641,32 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	}
 
 	return fwk.NewStatus(fwk.Success, "")
+}
+
+// topologyBestGPUProvider is satisfied by gputopo.GPUTopologyStateData.
+// Defined here to avoid a circular import between gpuresources and gputopo.
+type topologyBestGPUProvider interface {
+	GetBestGPUIds(nodeName string) []string
+}
+
+// tryGetTopologyBestGPUs reads the topology plan from CycleState and returns
+// the BestGPUIds for the given node if available and valid.
+// Returns nil if topology data is not available, allowing fallback to default logic.
+func (s *GPUFit) tryGetTopologyBestGPUs(state fwk.CycleState, nodeName string, neededGPUs uint) []string {
+	// Key must match gputopo.CycleStateGPUTopologyResult
+	topoStateRaw, err := state.Read("gpuTopologyResult")
+	if err != nil {
+		return nil
+	}
+	provider, ok := topoStateRaw.(topologyBestGPUProvider)
+	if !ok {
+		return nil
+	}
+	bestGPUs := provider.GetBestGPUIds(nodeName)
+	if len(bestGPUs) == 0 || uint(len(bestGPUs)) != neededGPUs {
+		return nil
+	}
+	return bestGPUs
 }
 
 // Permit implements the gang scheduling logic
