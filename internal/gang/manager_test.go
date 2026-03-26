@@ -30,7 +30,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func createTestPod(name, workloadName string, gangMinMembers int32, gangTimeout string) *corev1.Pod {
@@ -55,7 +57,12 @@ func createTestPod(name, workloadName string, gangMinMembers int32, gangTimeout 
 	}
 
 	if gangMinMembers > 0 {
+		pod.Annotations[constants.GangEnabledAnnotation] = constants.TrueStringValue
 		pod.Annotations[constants.GangMinMembersAnnotation] = fmt.Sprintf("%d", gangMinMembers)
+		// Simulate webhook-stamped annotations so the scheduler reads only pod annotations.
+		pod.Annotations[constants.GangDesiredMembersAnnotation] = fmt.Sprintf("%d", gangMinMembers)
+		pod.Annotations[constants.GangRequiredMembersAnnotation] = fmt.Sprintf("%d", gangMinMembers)
+		pod.Annotations[constants.GangGroupKeyAnnotation] = "default/" + workloadName
 	}
 
 	if gangTimeout != "" {
@@ -126,6 +133,77 @@ func TestParseGangConfig(t *testing.T) {
 		}
 		config := manager.ParseGangConfig(pod)
 		assert.False(t, config.Enabled)
+	})
+
+	t.Run("resolves from webhook-stamped annotations without client", func(t *testing.T) {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pod",
+				Namespace: "default",
+				Labels:    map[string]string{constants.WorkloadKey: "test-workload"},
+				Annotations: map[string]string{
+					constants.GangEnabledAnnotation:         constants.TrueStringValue,
+					constants.GangMinMembersAnnotation:      "2",
+					constants.GangDesiredMembersAnnotation:  "4",
+					constants.GangRequiredMembersAnnotation: "2",
+					constants.GangGroupKeyAnnotation:        "default/test-workload",
+					constants.GangTimeoutAnnotation:         "30s",
+				},
+			},
+		}
+		config := manager.ParseGangConfig(pod)
+		assert.True(t, config.Enabled)
+		assert.Equal(t, int32(2), config.MinMembers)
+		assert.Equal(t, int32(4), config.DesiredMembers)
+		assert.Equal(t, int32(2), config.RequiredMembers)
+		assert.Equal(t, 30*time.Second, config.Timeout)
+		assert.Equal(t, PodGroupKey("default/test-workload"), config.GroupKey)
+	})
+
+	t.Run("gang-group-key annotation takes priority over workload label", func(t *testing.T) {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pod",
+				Namespace: "default",
+				Labels:    map[string]string{constants.WorkloadKey: "workload-a"},
+				Annotations: map[string]string{
+					constants.GangEnabledAnnotation:         constants.TrueStringValue,
+					constants.GangDesiredMembersAnnotation:  "3",
+					constants.GangRequiredMembersAnnotation: "3",
+					constants.GangGroupKeyAnnotation:        "default/workload-a/subgroup-0",
+				},
+			},
+		}
+		config := manager.ParseGangConfig(pod)
+		assert.True(t, config.Enabled)
+		assert.Equal(t, PodGroupKey("default/workload-a/subgroup-0"), config.GroupKey)
+	})
+
+	t.Run("returns disabled when webhook-stamped annotations are missing", func(t *testing.T) {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pod",
+				Namespace: "default",
+				Labels:    map[string]string{constants.WorkloadKey: "test-workload"},
+				Annotations: map[string]string{
+					constants.GangEnabledAnnotation:    constants.TrueStringValue,
+					constants.GangMinMembersAnnotation: "3",
+					// Missing gang-desired-members and gang-required-members
+				},
+			},
+		}
+		config := manager.ParseGangConfig(pod)
+		assert.False(t, config.Enabled, "without webhook-stamped members annotations, gang should be disabled")
+	})
+
+	t.Run("gang works correctly without m.client", func(t *testing.T) {
+		noClientManager := NewManager(nil, nil, "TestPlugin")
+		// Deliberately do NOT call SetClient — m.client is nil.
+		pod := createTestPod("test-pod", "test-workload", 3, "1m")
+		config := noClientManager.ParseGangConfig(pod)
+		assert.True(t, config.Enabled)
+		assert.Equal(t, int32(3), config.RequiredMembers)
+		assert.Equal(t, time.Minute, config.Timeout)
 	})
 }
 
@@ -411,7 +489,7 @@ func TestConcurrentPermit(t *testing.T) {
 
 func TestPodGroupInfoMethods(t *testing.T) {
 	t.Run("IsReady returns correct status", func(t *testing.T) {
-		pgInfo := NewPodGroupInfo("test/workload", 3, 0)
+		pgInfo := NewPodGroupInfo("test/workload", 3, 3, 3, 0)
 		assert.False(t, pgInfo.IsReady())
 
 		// Add 2 waiting pods
@@ -426,11 +504,11 @@ func TestPodGroupInfoMethods(t *testing.T) {
 
 	t.Run("IsTimedOut returns correct status", func(t *testing.T) {
 		// No timeout set
-		pgInfo := NewPodGroupInfo("test/workload", 3, 0)
+		pgInfo := NewPodGroupInfo("test/workload", 3, 3, 3, 0)
 		assert.False(t, pgInfo.IsTimedOut())
 
 		// With timeout
-		pgInfo2 := NewPodGroupInfo("test/workload2", 3, 50*time.Millisecond)
+		pgInfo2 := NewPodGroupInfo("test/workload2", 3, 3, 3, 50*time.Millisecond)
 		assert.False(t, pgInfo2.IsTimedOut())
 
 		time.Sleep(100 * time.Millisecond)
@@ -439,12 +517,12 @@ func TestPodGroupInfoMethods(t *testing.T) {
 
 	t.Run("RemainingTimeout returns correct duration", func(t *testing.T) {
 		// No timeout
-		pgInfo := NewPodGroupInfo("test/workload", 3, 0)
+		pgInfo := NewPodGroupInfo("test/workload", 3, 3, 3, 0)
 		remaining := pgInfo.RemainingTimeout()
-		assert.Equal(t, time.Hour, remaining) // Default for no timeout
+		assert.Equal(t, IndefiniteGangWaitDuration, remaining) // No timeout means indefinite wait
 
 		// With timeout
-		pgInfo2 := NewPodGroupInfo("test/workload2", 3, time.Second)
+		pgInfo2 := NewPodGroupInfo("test/workload2", 3, 3, 3, time.Second)
 		remaining2 := pgInfo2.RemainingTimeout()
 		assert.True(t, remaining2 > 0 && remaining2 <= time.Second)
 	})
@@ -476,6 +554,77 @@ func TestCleanupPodGroup(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Error("Waiting pod did not receive reject signal after cleanup")
 	}
+}
+
+func TestTerminalGangStatusIsNotDroppedWhenQueueIsFull(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, tfv1.AddToScheme(scheme))
+
+	workload := &tfv1.TensorFusionWorkload{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "status-workload",
+			Namespace: "default",
+		},
+	}
+
+	manager := NewManager(nil, nil, "TestPlugin")
+	manager.SetClient(fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(workload).
+		WithRuntimeObjects(workload).
+		Build())
+
+	// Fill the queue so the terminal update cannot be enqueued directly.
+	// Under the new non-blocking design, syncWorkloadGangStatus must return
+	// immediately (storing the update in pendingTerminal) instead of blocking.
+	manager.statusQueue = make(chan statusUpdate, 1)
+	manager.statusQueue <- statusUpdate{
+		key: clientObjectKey("default", "status-workload"),
+		status: &tfv1.GangSchedulingStatus{
+			Phase: tfv1.GangSchedulingPhaseWaiting,
+		},
+	}
+
+	pgInfo := NewPodGroupInfo("default/status-workload", 2, 3, 2, 0)
+	pgInfo.StatusNamespace = "default"
+	pgInfo.StatusWorkloadName = "status-workload"
+
+	// syncWorkloadGangStatus must return immediately (non-blocking) even when
+	// the queue is full; the update goes to the pendingTerminal overflow map.
+	done := make(chan struct{})
+	go func() {
+		manager.syncWorkloadGangStatus(
+			context.Background(),
+			pgInfo,
+			tfv1.GangSchedulingPhaseFailed,
+			"GangUnfulfillable",
+			"Gang cannot be fulfilled",
+			time.Now().Add(time.Minute),
+		)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Expected: goroutine completed immediately without blocking.
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("terminal gang status update blocked instead of returning immediately")
+	}
+
+	// FlushStatusForTest drains both the queue and the pendingTerminal overflow map.
+	manager.FlushStatusForTest()
+
+	updated := &tfv1.TensorFusionWorkload{}
+	require.NoError(t, manager.client.Get(context.Background(), clientObjectKey("default", "status-workload"), updated))
+	require.NotNil(t, updated.Status.Gang)
+	assert.Equal(t, tfv1.GangSchedulingPhaseFailed, updated.Status.Gang.Phase)
+	assert.Equal(t, "GangUnfulfillable", updated.Status.Gang.Reason)
+	assert.Equal(t, "Gang cannot be fulfilled", updated.Status.Gang.Message)
+	assert.NotEmpty(t, updated.Status.Gang.BackoffUntil)
+}
+
+func clientObjectKey(namespace, name string) types.NamespacedName {
+	return types.NamespacedName{Namespace: namespace, Name: name}
 }
 
 func TestMultipleGangGroups(t *testing.T) {

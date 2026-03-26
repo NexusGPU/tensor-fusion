@@ -56,9 +56,10 @@ func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	var providerConfig tfv1.ProviderConfig
 	if err := r.Get(ctx, req.NamespacedName, &providerConfig); err != nil {
 		if errors.IsNotFound(err) {
-			// ProviderConfig was deleted, remove from manager by name
-			// Since we index by vendor, we need to scan and remove
-			logger.Info("ProviderConfig deleted", "name", req.Name)
+			r.ProviderManager.DeleteProviderByName(req.Name)
+			gpuInfos := r.ProviderManager.GetAllGpuInfos()
+			gpuallocator.LoadPartitionTemplatesFromConfig(gpuInfos)
+			logger.Info("ProviderConfig deleted, caches cleaned", "name", req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -103,7 +104,7 @@ func (r *ProviderConfigReconciler) restartHypervisorPodsForVendor(ctx context.Co
 
 		key := client.ObjectKey{
 			Namespace: utils.CurrentNamespace(),
-			Name:      fmt.Sprintf("tf-hypervisor-%s", node.Name),
+			Name:      utils.BuildHypervisorPodName(node.Name),
 		}
 		pod := &corev1.Pod{}
 		if err := r.Get(ctx, key, pod); err != nil {

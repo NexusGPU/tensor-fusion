@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	gangscheduler "github.com/NexusGPU/tensor-fusion/internal/gang"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/worker"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
@@ -158,10 +159,32 @@ func (r *TensorFusionConnectionReconciler) selectWorkerAndSyncStatusFromWorkerPo
 		return ctrl.Result{}, err
 	}
 	r.Recorder.Eventf(connection, nil, v1.EventTypeNormal, "WorkerSelected", "Selected", "Worker %s successfully selected for connection", s.WorkerName)
-	connection.Status.Phase = s.WorkerPhase
+	// Write label BEFORE status so that if status update fails, the next
+	// reconcile will re-select a worker and overwrite the label. This avoids
+	// the case where status has WorkerName but the label is missing, which
+	// would permanently break the worker-pod watch association.
+	//
+	// NOTE: r.Patch updates connection in-place with the full server response,
+	// which overwrites any in-memory status fields. Set status fields only AFTER
+	// the patch so they are not lost.
+	err = r.patchMatchedWorkerLabel(ctx, connection, s.WorkerName)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Re-fetch after the label patch to get the latest resourceVersion.
+	// The label patch advances resourceVersion on the apiserver; without a re-fetch
+	// the subsequent Status().Update would carry a stale version and 409.
+	if err := r.Get(ctx, client.ObjectKeyFromObject(connection), connection); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
 	connection.Labels[constants.WorkloadKey] = workloadName
+	connection.Status.Phase = s.WorkerPhase
 	connection.Status.WorkerName = s.WorkerName
-	connection.Labels[constants.LabelWorkerName] = s.WorkerName
 	resourceVersion := s.ResourceVersion
 	if resourceVersion == "" {
 		resourceVersion = "0"
@@ -170,35 +193,20 @@ func (r *TensorFusionConnectionReconciler) selectWorkerAndSyncStatusFromWorkerPo
 	if err := r.Status().Update(ctx, connection); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update connection status: %w", err)
 	}
-
-	err = r.patchMatchedWorkerLabel(ctx, connection, s.WorkerName)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
 	r.Recorder.Eventf(connection, nil, v1.EventTypeNormal, "ConnectionReady", "Ready", "Connection URL: %s", connection.Status.ConnectionURL)
 	return ctrl.Result{}, nil
 }
 
-// patch worker label so that when Pod status changed, the reconcile request could be correctly triggered
+// patch worker label so that when Pod status changed, the reconcile request could be correctly triggered.
+// Always patch unconditionally: JSON Patch "add" on an existing key replaces it (RFC 6902), so a single op
+// handles both add and replace, and the function stays free of any in-memory label state assumptions.
 func (r *TensorFusionConnectionReconciler) patchMatchedWorkerLabel(ctx context.Context, connection *tfv1.TensorFusionConnection, latestWorkerName string) error {
-	if workerName, ok := connection.Labels[constants.LabelWorkerName]; !ok {
-		patch := []byte(`[{
-					"op": "add",
-					"path": "/metadata/labels/` + utils.EscapeJSONPointer(constants.LabelWorkerName) + `",
-					"value": "` + latestWorkerName + `"}]`)
-		if err := r.Patch(ctx, connection, client.RawPatch(types.JSONPatchType, patch)); err != nil {
-			return fmt.Errorf("failed to update connection label: %w", err)
-		}
-
-	} else if workerName != latestWorkerName {
-		patch := []byte(`[{
-					"op": "replace", 
-					"path": "/metadata/labels/` + utils.EscapeJSONPointer(constants.LabelWorkerName) + `", 
-					"value": "` + latestWorkerName + `"
-				}]`)
-		if err := r.Patch(ctx, connection, client.RawPatch(types.JSONPatchType, patch)); err != nil {
-			return fmt.Errorf("failed to update connection label: %w", err)
-		}
+	patch := []byte(`[{
+				"op": "add",
+				"path": "/metadata/labels/` + utils.EscapeJSONPointer(constants.LabelWorkerName) + `",
+				"value": "` + latestWorkerName + `"}]`)
+	if err := r.Patch(ctx, connection, client.RawPatch(types.JSONPatchType, patch)); err != nil {
+		return fmt.Errorf("failed to update connection label: %w", err)
 	}
 	return nil
 }
@@ -221,12 +229,13 @@ func (r *TensorFusionConnectionReconciler) shouldSelectWorker(
 			connection.Status.WorkerName = ""
 			connection.Status.Phase = tfv1.WorkerFailed
 			connection.Status.ConnectionURL = ""
-			// set worker name to empty to trigger select worker again
+			// Persist the failed state immediately so the CR reflects reality even if
+			// subsequent worker selection fails (e.g. ErrNoAvailableWorker → RequeueAfter
+			// without a status write).
 			if updateErr := r.Status().Update(ctx, connection); updateErr != nil {
-				return false, fmt.Errorf("failed to update connection status: %w", updateErr)
+				return false, fmt.Errorf("failed to update connection status to failed: %w", updateErr)
 			}
-			// let next reconcile loop to trigger select worker
-			return false, nil
+			return true, nil
 		} else if connection.Status.Phase != tfv1.WorkerRunning {
 			// pod is running now, but connection is not running, update connection to running
 			connection.Status.Phase = tfv1.WorkerRunning
@@ -364,7 +373,8 @@ func (r *TensorFusionConnectionReconciler) createDedicatedWorker(ctx context.Con
 }
 
 func (r *TensorFusionConnectionReconciler) startDedicatedWorkerPod(ctx context.Context, workerGenerator *worker.WorkerGenerator, workload *tfv1.TensorFusionWorkload, podTemplateHash string, connection *tfv1.TensorFusionConnection) error {
-	pod, err := workerGenerator.GenerateWorkerPod(ctx, workload)
+	desiredMembers := gangscheduler.ResolveDesiredMembers(ctx, r.Client, workload)
+	pod, err := workerGenerator.GenerateWorkerPod(ctx, workload, desiredMembers)
 	if err != nil {
 		return fmt.Errorf("generate worker pod %w", err)
 	}

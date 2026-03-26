@@ -60,7 +60,13 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	assumedTflops := int64(0)
 	assumedVRAM := int64(0)
 
-	for claimName := range PendingGPUNodeClaim[pool.Name] {
+	pendingGPUNodeStateLock.RLock()
+	pendingClaimNames := make([]string, 0, len(PendingGPUNodeClaim[pool.Name]))
+	for k := range PendingGPUNodeClaim[pool.Name] {
+		pendingClaimNames = append(pendingClaimNames, k)
+	}
+	pendingGPUNodeStateLock.RUnlock()
+	for _, claimName := range pendingClaimNames {
 		gpuNodeClaim := tfv1.GPUNodeClaim{}
 		if err := r.Get(ctx, client.ObjectKey{Name: claimName}, &gpuNodeClaim); err != nil {
 			return nil, err

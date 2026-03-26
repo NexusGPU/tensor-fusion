@@ -18,6 +18,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.gang.phase
+      name: Gang
+      type: string
     - jsonPath: .status.workerCount
       name: Worker Count
       type: string
@@ -265,13 +268,19 @@ spec:
                     type: object
                 type: object
               gangScheduling:
-                description: GangScheduling configuration for scheduling multiple
-                  pods together
+                description: |-
+                  GangScheduling enables scheduling multiple pods as a gang.
+                  When omitted, the workload is scheduled normally without gang semantics.
+                  Gang semantics are evaluated for a scheduling batch created under the current
+                  workload target. Existing running replicas created by a previous Deployment or
+                  ReplicaSet revision are not rolled back when a later online scale-out cannot
+                  satisfy a newly requested gang quorum.
                 properties:
                   minMembers:
                     description: |-
-                      MinMembers specifies the minimum number of pods that must be scheduled together
-                      When > 0, gang scheduling is enabled for this workload
+                      MinMembers optionally overrides the gang quorum.
+                      When omitted or set to 0, the gang quorum defaults to the workload's desired replicas.
+                      When set explicitly, the value must be >= 2 and <= the workload's desired replicas.
                       The gang group name is automatically derived from the workload name (namespace/workload-name)
                     format: int32
                     minimum: 0
@@ -747,6 +756,62 @@ spec:
                   - type
                   type: object
                 type: array
+              gang:
+                description: Gang captures workload-level gang scheduling state persisted
+                  by the scheduler/controller.
+                properties:
+                  backoffUntil:
+                    description: BackoffUntil is an RFC3339 timestamp string indicating
+                      when the gang may be retried.
+                    type: string
+                  desiredMembers:
+                    description: DesiredMembers is the quorum required by the workload's
+                      gang scheduling policy.
+                    format: int32
+                    type: integer
+                  groupKey:
+                    description: GroupKey is the stable scheduling group identity
+                      used by the scheduler.
+                    type: string
+                  lastTransitionTime:
+                    description: LastTransitionTime captures the last phase transition
+                      observed by the scheduler/controller.
+                    format: date-time
+                    type: string
+                  message:
+                    description: Message is a human-readable explanation of the latest
+                      gang state.
+                    type: string
+                  phase:
+                    default: Pending
+                    enum:
+                    - Pending
+                    - Waiting
+                    - Scheduling
+                    - Running
+                    - TimedOut
+                    - Failed
+                    type: string
+                  readyMembers:
+                    description: ReadyMembers is the number of pods currently considered
+                      ready for the workload.
+                    format: int32
+                    type: integer
+                  reason:
+                    description: Reason is a short machine-readable summary of the
+                      latest gang state transition.
+                    type: string
+                  scheduledMembers:
+                    description: ScheduledMembers is the number of pods that have
+                      passed scheduling/binding for this gang.
+                    format: int32
+                    type: integer
+                  waitingMembers:
+                    description: WaitingMembers is the number of pods currently blocked
+                      in Permit waiting for quorum.
+                    format: int32
+                    type: integer
+                type: object
               phase:
                 default: Pending
                 enum:

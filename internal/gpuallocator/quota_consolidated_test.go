@@ -427,6 +427,125 @@ var _ = Describe("GPUAllocator Quota Integration", func() {
 	})
 })
 
+var _ = Describe("GPUAllocator Assume Commit Flow", func() {
+	newAllocator := func() *GpuAllocator {
+		scheme := runtime.NewScheme()
+		Expect(tfv1.AddToScheme(scheme)).To(Succeed())
+		Expect(v1.AddToScheme(scheme)).To(Succeed())
+
+		quota := createTestQuota(100, 1000, 10)
+		gpus := []tfv1.GPU{
+			createAvailableGPU("gpu1", 50, 500),
+			createAvailableGPU("gpu2", 50, 500),
+		}
+
+		testPool := createTestGPUPool()
+		allObjects := objectsFromGPUs(gpus)
+		allObjects = append(allObjects, testPool)
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(allObjects...).
+			WithLists(&tfv1.GPUResourceQuotaList{Items: []tfv1.GPUResourceQuota{*quota}}).
+			Build()
+
+		allocator := NewGpuAllocator(context.Background(), nil, client, 0)
+		initAllocator(allocator)
+		return allocator
+	}
+
+	It("should keep committed GPU and quota state unchanged during assume", func() {
+		allocator := newAllocator()
+
+		req := createAllocRequest(30, 300, 2)
+		req.PodMeta = metav1.ObjectMeta{
+			Name:      "assumed-pod",
+			Namespace: TestNamespace,
+			UID:       "assumed-pod-uid",
+		}
+
+		Expect(allocator.Assume([]string{"gpu1", "gpu2"}, req)).To(Succeed())
+
+		usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
+		Expect(exists).To(BeTrue())
+		Expect(usage.Requests.Tflops.Value()).To(Equal(int64(0)))
+		Expect(usage.Requests.Vram.Value()).To(Equal(int64(0)))
+		Expect(usage.Workers).To(Equal(int32(0)))
+
+		gpuStore, _, uniqueAllocation := allocator.GetAllocationInfo()
+		Expect(uniqueAllocation).To(BeEmpty())
+		Expect(allocator.assumedAllocation).To(HaveLen(1))
+		Expect(gpuStore[types.NamespacedName{Name: "gpu1"}].Status.Available.Tflops.Value()).To(Equal(int64(50)))
+		Expect(gpuStore[types.NamespacedName{Name: "gpu1"}].Status.Available.Vram.Value()).To(Equal(int64(500)))
+
+		nextReq := createAllocRequest(30, 300, 2)
+		nextReq.PodMeta = metav1.ObjectMeta{
+			Name:      "next-pod",
+			Namespace: TestNamespace,
+			UID:       "next-pod-uid",
+		}
+		Expect(allocator.quotaStore.CheckQuotaAvailable(nextReq)).To(HaveOccurred())
+	})
+
+	It("should move assumed allocation to committed state on commit", func() {
+		allocator := newAllocator()
+
+		req := createAllocRequest(30, 300, 2)
+		req.PodMeta = metav1.ObjectMeta{
+			Name:      "commit-pod",
+			Namespace: TestNamespace,
+			UID:       "commit-pod-uid",
+		}
+
+		Expect(allocator.Assume([]string{"gpu1", "gpu2"}, req)).To(Succeed())
+		committedGPUs, err := allocator.Commit(string(req.PodMeta.UID))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(committedGPUs).To(HaveLen(2))
+
+		usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
+		Expect(exists).To(BeTrue())
+		Expect(usage.Requests.Tflops.Value()).To(Equal(int64(60)))
+		Expect(usage.Requests.Vram.Value()).To(Equal(int64(600)))
+		Expect(usage.Workers).To(Equal(int32(1)))
+
+		gpuStore, _, uniqueAllocation := allocator.GetAllocationInfo()
+		Expect(uniqueAllocation).To(HaveLen(1))
+		Expect(allocator.assumedAllocation).To(BeEmpty())
+		Expect(gpuStore[types.NamespacedName{Name: "gpu1"}].Status.Available.Tflops.Value()).To(Equal(int64(20)))
+		Expect(gpuStore[types.NamespacedName{Name: "gpu1"}].Status.Available.Vram.Value()).To(Equal(int64(200)))
+	})
+
+	It("should forget assumed allocation and restore future quota checks", func() {
+		allocator := newAllocator()
+
+		req := createAllocRequest(30, 300, 2)
+		req.PodMeta = metav1.ObjectMeta{
+			Name:      "forget-pod",
+			Namespace: TestNamespace,
+			UID:       "forget-pod-uid",
+		}
+
+		Expect(allocator.Assume([]string{"gpu1", "gpu2"}, req)).To(Succeed())
+
+		nextReq := createAllocRequest(30, 300, 2)
+		nextReq.PodMeta = metav1.ObjectMeta{
+			Name:      "retry-pod",
+			Namespace: TestNamespace,
+			UID:       "retry-pod-uid",
+		}
+		Expect(allocator.quotaStore.CheckQuotaAvailable(nextReq)).To(HaveOccurred())
+
+		Expect(allocator.Forget(string(req.PodMeta.UID))).To(Succeed())
+		Expect(allocator.assumedAllocation).To(BeEmpty())
+
+		usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
+		Expect(exists).To(BeTrue())
+		Expect(usage.Requests.Tflops.Value()).To(Equal(int64(0)))
+		Expect(usage.Workers).To(Equal(int32(0)))
+		Expect(allocator.quotaStore.CheckQuotaAvailable(nextReq)).To(Succeed())
+	})
+})
+
 var _ = Describe("GPUAllocator Concurrent Quota Enforcement", func() {
 	It("should enforce quota limits under concurrent allocation requests", func() {
 		scheme := runtime.NewScheme()

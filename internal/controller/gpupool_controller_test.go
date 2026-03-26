@@ -556,7 +556,7 @@ func verifyHypervisorPodHash(gpuNode *tfv1.GPUNode, hash string) {
 	Eventually(func(g Gomega) {
 		pod := &corev1.Pod{}
 		g.Expect(k8sClient.Get(ctx, client.ObjectKey{
-			Name:      fmt.Sprintf("tf-hypervisor-%s", gpuNode.Name),
+			Name:      utils.BuildHypervisorPodName(gpuNode.Name),
 			Namespace: utils.CurrentNamespace(),
 		}, pod)).Should(Succeed())
 		g.Expect(pod.Labels[constants.LabelKeyPodTemplateHash]).Should(Equal(hash))
@@ -590,7 +590,7 @@ func verifyHypervisorPodHashConsistently(gpuNode *tfv1.GPUNode, hash string) {
 	Consistently(func(g Gomega) {
 		pod := &corev1.Pod{}
 		g.Expect(k8sClient.Get(ctx, client.ObjectKey{
-			Name:      fmt.Sprintf("tf-hypervisor-%s", gpuNode.Name),
+			Name:      utils.BuildHypervisorPodName(gpuNode.Name),
 			Namespace: utils.CurrentNamespace(),
 		}, pod)).Should(Succeed())
 		g.Expect(pod.Labels[constants.LabelKeyPodTemplateHash]).Should(Equal(hash))
@@ -613,7 +613,7 @@ func verifyAllHypervisorPodHash(tfEnv *TensorFusionEnv, hash string) {
 		for _, gpuNode := range nodeList.Items {
 			pod := &corev1.Pod{}
 			g.Expect(k8sClient.Get(ctx, client.ObjectKey{
-				Name:      fmt.Sprintf("tf-hypervisor-%s", gpuNode.Name),
+				Name:      utils.BuildHypervisorPodName(gpuNode.Name),
 				Namespace: utils.CurrentNamespace(),
 			}, pod)).Should(Succeed())
 			g.Expect(pod.Labels[constants.LabelKeyPodTemplateHash]).Should(Equal(hash))
@@ -665,7 +665,7 @@ func verifyAllHypervisorPodHashConsistently(tfEnv *TensorFusionEnv, hash string)
 		for _, gpuNode := range nodeList.Items {
 			pod := &corev1.Pod{}
 			g.Expect(k8sClient.Get(ctx, client.ObjectKey{
-				Name:      fmt.Sprintf("tf-hypervisor-%s", gpuNode.Name),
+				Name:      utils.BuildHypervisorPodName(gpuNode.Name),
 				Namespace: utils.CurrentNamespace(),
 			}, pod)).Should(Succeed())
 			g.Expect(pod.Labels[constants.LabelKeyPodTemplateHash]).Should(Equal(hash))

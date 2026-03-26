@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -76,25 +77,24 @@ func (r *GPUPoolCompactionReconciler) getGPUNodeClaimForCompaction(ctx context.C
 	return gpuNodeClaimName
 }
 
-// Strategy #4: check if any two same nodes can be merged into one larger node, and make the remained capacity bigger and node number less without violating the capacity constraint and saving the hidden management,license,monitoring costs, potentially schedule more workloads since remaining capacity is single cohesive piece rather than fragments
-func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, pool *tfv1.GPUPool) error {
+type compactionPoolCapacity struct {
+	availableTFlops int64
+	availableVRAM   int64
+	totalTFlops     int64
+	totalVRAM       int64
+	warmUpTFlops    int64
+	warmUpVRAM      int64
+	minTFlops       int64
+	minVRAM         int64
+}
+
+func (r *GPUPoolCompactionReconciler) buildCompactionPoolCapacity(
+	ctx context.Context,
+	pool *tfv1.GPUPool,
+	gpuStore map[types.NamespacedName]*tfv1.GPU,
+) compactionPoolCapacity {
 	log := log.FromContext(ctx)
-
-	// Strategy #1, terminate empty node
-	allNodes := &tfv1.GPUNodeList{}
-	if err := r.List(ctx, allNodes, client.MatchingLabels(map[string]string{
-		fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): constants.TrueStringValue,
-	})); err != nil {
-		return fmt.Errorf("failed to list nodes : %w", err)
-	}
-
-	// Use latest in memory data to calculate available resources
-	gpuStore, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
-
-	poolAvailableTFlops := int64(0)
-	poolAvailableVRAM := int64(0)
-	poolTotalTFlops := int64(0)
-	poolTotalVRAM := int64(0)
+	capacity := compactionPoolCapacity{}
 
 	for _, gpu := range gpuStore {
 		if !gpu.DeletionTimestamp.IsZero() || gpu.Labels[constants.GpuPoolKey] != pool.Name ||
@@ -108,148 +108,204 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 			continue
 		}
 
-		availableTFlops := gpu.Status.Available.Tflops.Value()
-		poolAvailableTFlops += availableTFlops
-		availableVRAM := gpu.Status.Available.Vram.Value()
-		poolAvailableVRAM += availableVRAM
-
-		tflops := gpu.Status.Capacity.Tflops.Value()
-		poolTotalTFlops += tflops
-		vram := gpu.Status.Capacity.Vram.Value()
-		poolTotalVRAM += vram
+		capacity.availableTFlops += gpu.Status.Available.Tflops.Value()
+		capacity.availableVRAM += gpu.Status.Available.Vram.Value()
+		capacity.totalTFlops += gpu.Status.Capacity.Tflops.Value()
+		capacity.totalVRAM += gpu.Status.Capacity.Vram.Value()
 	}
 
-	poolWarmUpTFlops := int64(0)
-	poolWarmUpVRAM := int64(0)
 	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.WarmResources != nil {
-		poolWarmUpTFlops = pool.Spec.CapacityConfig.WarmResources.TFlops.Value()
-		poolWarmUpVRAM = pool.Spec.CapacityConfig.WarmResources.VRAM.Value()
+		capacity.warmUpTFlops = pool.Spec.CapacityConfig.WarmResources.TFlops.Value()
+		capacity.warmUpVRAM = pool.Spec.CapacityConfig.WarmResources.VRAM.Value()
 	}
-
-	poolMinTFlops := int64(0)
-	poolMinVRAM := int64(0)
 	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MinResources != nil {
-		poolMinTFlops = pool.Spec.CapacityConfig.MinResources.TFlops.Value()
-		poolMinVRAM = pool.Spec.CapacityConfig.MinResources.VRAM.Value()
+		capacity.minTFlops = pool.Spec.CapacityConfig.MinResources.TFlops.Value()
+		capacity.minVRAM = pool.Spec.CapacityConfig.MinResources.VRAM.Value()
 	}
 
-	log.Info("Found latest pool capacity constraints before compaction", "pool", pool.Name, "warmUpTFlops", poolWarmUpTFlops, "warmUpVRAM", poolWarmUpVRAM, "minTFlops", poolMinTFlops, "minVRAM", poolMinVRAM, "totalTFlops", poolTotalTFlops, "totalVRAM", poolTotalVRAM)
+	log.Info("Found latest pool capacity constraints before compaction",
+		"pool", pool.Name,
+		"warmUpTFlops", capacity.warmUpTFlops,
+		"warmUpVRAM", capacity.warmUpVRAM,
+		"minTFlops", capacity.minTFlops,
+		"minVRAM", capacity.minVRAM,
+		"totalTFlops", capacity.totalTFlops,
+		"totalVRAM", capacity.totalVRAM)
+
+	return capacity
+}
+
+func (c *compactionPoolCapacity) canCompactNode(node *tfv1.GPUNode) bool {
+	nodeCapTFlops := node.Status.TotalTFlops.Value()
+	nodeCapVRAM := node.Status.TotalVRAM.Value()
+	if nodeCapTFlops <= 0 || nodeCapVRAM <= 0 {
+		return false
+	}
+
+	matchWarmUpCapacityConstraints := c.availableTFlops-nodeCapTFlops >= c.warmUpTFlops &&
+		c.availableVRAM-nodeCapVRAM >= c.warmUpVRAM
+	matchMinCapacityConstraint := c.totalTFlops-nodeCapTFlops >= c.minTFlops &&
+		c.totalVRAM-nodeCapVRAM >= c.minVRAM
+	return matchWarmUpCapacityConstraints && matchMinCapacityConstraint
+}
+
+func (c *compactionPoolCapacity) consumeNode(node *tfv1.GPUNode) {
+	c.availableTFlops -= node.Status.TotalTFlops.Value()
+	c.availableVRAM -= node.Status.TotalVRAM.Value()
+	c.totalTFlops -= node.Status.TotalTFlops.Value()
+	c.totalVRAM -= node.Status.TotalVRAM.Value()
+}
+
+func (r *GPUPoolCompactionReconciler) shouldSkipNodeForCompaction(
+	gpuNode tfv1.GPUNode,
+	nodeToWorker map[string]map[types.NamespacedName]struct{},
+) bool {
+	k8sNodeName := gpuNode.Name
+	switch {
+	case gpuNode.Labels[constants.SchedulingDoNotDisruptLabel] == constants.TrueStringValue:
+		return true
+	case len(nodeToWorker[k8sNodeName]) != 0:
+		return true
+	case gpuNode.Status.Phase != tfv1.TensorFusionGPUNodePhaseRunning:
+		return true
+	case gpuNode.CreationTimestamp.After(time.Now().Add(-newNodeProtectionDuration)):
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *GPUPoolCompactionReconciler) recordProvisionCompaction(
+	ctx context.Context,
+	pool *tfv1.GPUPool,
+	gpuNode *tfv1.GPUNode,
+	capacity *compactionPoolCapacity,
+	toDeleteGPUNodes *[]string,
+) {
+	k8sNodeName := gpuNode.Name
+	gpuNodeClaimName := r.getGPUNodeClaimForCompaction(ctx, gpuNode)
+	if gpuNodeClaimName == "" {
+		return
+	}
+
+	capacity.consumeNode(gpuNode)
+	r.markDeletionNodes[k8sNodeName] = struct{}{}
+
+	log.FromContext(ctx).Info("Empty node can be compacted - provision mode", "node", gpuNode.Name,
+		"availableTFlopsAfterCompact", capacity.availableTFlops,
+		"availableVRAMAfterCompact", capacity.availableVRAM,
+		"warmUpTFlops", capacity.warmUpTFlops,
+		"warmUpVRAM", capacity.warmUpVRAM,
+		"nodeCapTFlops", gpuNode.Status.TotalTFlops.Value(),
+		"nodeCapVRAM", gpuNode.Status.TotalVRAM.Value(),
+	)
+
+	*toDeleteGPUNodes = append(*toDeleteGPUNodes, gpuNodeClaimName)
+	r.Recorder.Eventf(pool, nil, corev1.EventTypeNormal, "Compaction", "Compacting",
+		"Node %s is empty and deletion won't impact warm-up capacity, try terminating it", gpuNode.Name)
+}
+
+func (r *GPUPoolCompactionReconciler) recordAutoSelectCompaction(
+	ctx context.Context,
+	gpuNode *tfv1.GPUNode,
+	capacity *compactionPoolCapacity,
+) error {
+	k8sNodeName := gpuNode.Name
+	if err := r.Patch(ctx, &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: gpuNode.Name,
+			Labels: map[string]string{
+				constants.NodeDeletionMark: constants.TrueStringValue,
+			},
+		},
+	}, client.Merge); err != nil {
+		return err
+	}
+
+	capacity.consumeNode(gpuNode)
+	r.markDeletionNodes[k8sNodeName] = struct{}{}
+
+	log.FromContext(ctx).Info("Empty node can be compacted - auto-select mode", "node", gpuNode.Name,
+		"availableTFlopsAfterCompact", capacity.availableTFlops,
+		"availableVRAMAfterCompact", capacity.availableVRAM,
+		"warmUpTFlops", capacity.warmUpTFlops,
+		"warmUpVRAM", capacity.warmUpVRAM,
+		"nodeCapTFlops", gpuNode.Status.TotalTFlops.Value(),
+		"nodeCapVRAM", gpuNode.Status.TotalVRAM.Value(),
+	)
+	return nil
+}
+
+func (r *GPUPoolCompactionReconciler) persistPendingDeletionNodes(
+	ctx context.Context,
+	pool *tfv1.GPUPool,
+	toDeleteGPUNodes []string,
+) error {
+	if len(toDeleteGPUNodes) == 0 {
+		return nil
+	}
+
+	pendingGPUNodeStateLock.Lock()
+	PendingDeletionGPUNodes[pool.Name] = toDeleteGPUNodes
+	pendingGPUNodeStateLock.Unlock()
+
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		if err := r.Get(ctx, client.ObjectKey{Name: pool.Name}, pool); err != nil {
+			if errors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		if pool.Annotations == nil {
+			pool.Annotations = make(map[string]string)
+		}
+		pool.Annotations[constants.LastSyncTimeAnnotationKey] = time.Now().Format(time.RFC3339)
+		return r.Patch(ctx, pool, client.Merge)
+	})
+	if err != nil {
+		pendingGPUNodeStateLock.Lock()
+		PendingDeletionGPUNodes[pool.Name] = []string{}
+		pendingGPUNodeStateLock.Unlock()
+		return err
+	}
+
+	log.FromContext(ctx).Info("GPU node compaction completed, pending deletion nodes: ",
+		"name", pool.Name, "nodes", strings.Join(toDeleteGPUNodes, ","))
+	return nil
+}
+
+// Strategy #4: check if any two same nodes can be merged into one larger node, and make the remained capacity bigger and node number less without violating the capacity constraint and saving the hidden management,license,monitoring costs, potentially schedule more workloads since remaining capacity is single cohesive piece rather than fragments
+func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, pool *tfv1.GPUPool) error {
+	log := log.FromContext(ctx)
+
+	// Strategy #1, terminate empty node
+	allNodes := &tfv1.GPUNodeList{}
+	if err := r.List(ctx, allNodes, client.MatchingLabels(map[string]string{
+		fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): constants.TrueStringValue,
+	})); err != nil {
+		return fmt.Errorf("failed to list nodes : %w", err)
+	}
+
+	gpuStore, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
+	capacity := r.buildCompactionPoolCapacity(ctx, pool, gpuStore)
 
 	toDeleteGPUNodes := []string{}
 	for _, gpuNode := range allNodes.Items {
-		// Skip a node that is labeled as NoDisrupt
-		if gpuNode.Labels[constants.SchedulingDoNotDisruptLabel] == constants.TrueStringValue {
+		if r.shouldSkipNodeForCompaction(gpuNode, nodeToWorker) || !capacity.canCompactNode(&gpuNode) {
 			continue
 		}
 
-		// Check if node is empty, if not, continue
-		k8sNodeName := gpuNode.Name
-		if len(nodeToWorker[k8sNodeName]) != 0 {
-			// Node is in-use, should not be terminated
-			continue
-		}
-		if gpuNode.Status.Phase != tfv1.TensorFusionGPUNodePhaseRunning {
-			// Node is not running, should not be terminated
-			continue
-		}
-		// Protect new nodes at least 5 minutes to avoid flapping
-		if gpuNode.CreationTimestamp.After(time.Now().Add(-newNodeProtectionDuration)) {
+		if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
+			r.recordProvisionCompaction(ctx, pool, &gpuNode, &capacity, &toDeleteGPUNodes)
 			continue
 		}
 
-		nodeCapTFlops := gpuNode.Status.TotalTFlops.Value()
-		nodeCapVRAM := gpuNode.Status.TotalVRAM.Value()
-		if nodeCapTFlops <= 0 || nodeCapVRAM <= 0 {
-			continue
-		}
-
-		matchWarmUpCapacityConstraints := poolAvailableTFlops-nodeCapTFlops >= poolWarmUpTFlops &&
-			poolAvailableVRAM-nodeCapVRAM >= poolWarmUpVRAM
-		matchMinCapacityConstraint := poolTotalTFlops-nodeCapTFlops >= poolMinTFlops &&
-			poolTotalVRAM-nodeCapVRAM >= poolMinVRAM
-
-		if matchWarmUpCapacityConstraints && matchMinCapacityConstraint {
-			if pool.Spec.NodeManagerConfig.ProvisioningMode != tfv1.ProvisioningModeAutoSelect {
-				// not managed by Kubernetes, managed by TensorFusion, safe to terminate
-				gpuNodeClaimName := r.getGPUNodeClaimForCompaction(ctx, &gpuNode)
-				if gpuNodeClaimName == "" {
-					continue
-				}
-
-				poolAvailableTFlops -= nodeCapTFlops
-				poolAvailableVRAM -= nodeCapVRAM
-				poolTotalTFlops -= nodeCapTFlops
-				poolTotalVRAM -= nodeCapVRAM
-				r.markDeletionNodes[k8sNodeName] = struct{}{}
-
-				log.Info("Empty node can be compacted - provision mode", "node", gpuNode.Name,
-					"availableTFlopsAfterCompact", poolAvailableTFlops,
-					"availableVRAMAfterCompact", poolAvailableVRAM,
-					"warmUpTFlops", poolWarmUpTFlops,
-					"warmUpVRAM", poolWarmUpVRAM,
-					"nodeCapTFlops", nodeCapTFlops,
-					"nodeCapVRAM", nodeCapVRAM,
-				)
-
-				toDeleteGPUNodes = append(toDeleteGPUNodes, gpuNodeClaimName)
-				r.Recorder.Eventf(pool, nil, corev1.EventTypeNormal, "Compaction", "Compacting",
-					"Node %s is empty and deletion won't impact warm-up capacity, try terminating it", gpuNode.Name)
-			} else {
-				// managed by Kubernetes, mark it as destroying, GPUPool capacity should be reduced, and let K8S to delete it
-				if err := r.Patch(ctx, &corev1.Node{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: gpuNode.Name,
-						Labels: map[string]string{
-							constants.NodeDeletionMark: constants.TrueStringValue,
-						},
-					},
-				}, client.Merge); err != nil {
-					log.Error(err, "patch idle node failed", "node", gpuNode.Name)
-					continue
-				}
-
-				poolAvailableTFlops -= nodeCapTFlops
-				poolAvailableVRAM -= nodeCapVRAM
-				poolTotalTFlops -= nodeCapTFlops
-				poolTotalVRAM -= nodeCapVRAM
-				r.markDeletionNodes[k8sNodeName] = struct{}{}
-
-				log.Info("Empty node can be compacted - auto-select mode", "node", gpuNode.Name,
-					"availableTFlopsAfterCompact", poolAvailableTFlops,
-					"availableVRAMAfterCompact", poolAvailableVRAM,
-					"warmUpTFlops", poolWarmUpTFlops,
-					"warmUpVRAM", poolWarmUpVRAM,
-					"nodeCapTFlops", nodeCapTFlops,
-					"nodeCapVRAM", nodeCapVRAM,
-				)
-			}
+		if err := r.recordAutoSelectCompaction(ctx, &gpuNode, &capacity); err != nil {
+			log.Error(err, "patch idle node failed", "node", gpuNode.Name)
 		}
 	}
 
-	if len(toDeleteGPUNodes) > 0 {
-		pendingGPUNodeStateLock.Lock()
-		PendingDeletionGPUNodes[pool.Name] = toDeleteGPUNodes
-		pendingGPUNodeStateLock.Unlock()
-		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-			if err := r.Get(ctx, client.ObjectKey{Name: pool.Name}, pool); err != nil {
-				if errors.IsNotFound(err) {
-					return nil
-				}
-				return err
-			}
-			pool.Annotations[constants.LastSyncTimeAnnotationKey] = time.Now().Format(time.RFC3339)
-			return r.Patch(ctx, pool, client.Merge)
-		})
-		if err != nil {
-			pendingGPUNodeStateLock.Lock()
-			PendingDeletionGPUNodes[pool.Name] = []string{}
-			pendingGPUNodeStateLock.Unlock()
-			return err
-		}
-		log.Info("GPU node compaction completed, pending deletion nodes: ",
-			"name", pool.Name, "nodes", strings.Join(toDeleteGPUNodes, ","))
-	}
-	return nil
+	return r.persistPendingDeletionNodes(ctx, pool, toDeleteGPUNodes)
 }
 
 func (r *GPUPoolCompactionReconciler) getCompactionDuration(ctx context.Context, config *tfv1.NodeManagerConfig) time.Duration {
@@ -309,11 +365,15 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
-	if !needStartCompactionJob || len(PendingGPUNodeClaim[pool.Name]) > 0 {
+	pendingGPUNodeStateLock.RLock()
+	hasPendingClaim := len(PendingGPUNodeClaim[pool.Name]) > 0
+	hasPendingDeletion := len(PendingDeletionGPUNodes[pool.Name]) > 0
+	pendingGPUNodeStateLock.RUnlock()
+	if !needStartCompactionJob || hasPendingClaim {
 		log.Info("Skip compaction because node creating or duration not met", "name", req.Name)
 		return ctrl.Result{RequeueAfter: nextDuration}, nil
 	}
-	if len(PendingDeletionGPUNodes[pool.Name]) > 0 {
+	if hasPendingDeletion {
 		log.Info("Skip compaction because node deleting in progress", "name", req.Name)
 		return ctrl.Result{RequeueAfter: nextDuration}, nil
 	}

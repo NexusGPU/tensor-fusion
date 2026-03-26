@@ -26,12 +26,26 @@ import (
 )
 
 // PodGroupKey uniquely identifies a gang/pod group
-// Format: namespace/workload-name
+// Format: namespace/group-name
 type PodGroupKey string
 
 // NewPodGroupKey creates a PodGroupKey from namespace and workload name
 func NewPodGroupKey(namespace, workloadName string) PodGroupKey {
 	return PodGroupKey(fmt.Sprintf("%s/%s", namespace, workloadName))
+}
+
+// NewPodGroupKeyFromWorkloadRef creates a PodGroupKey from WorkloadRef fields.
+// Format: namespace/workload/podGroup[/replicaKey].
+func NewPodGroupKeyFromWorkloadRef(namespace, workloadName, podGroup, replicaKey string) PodGroupKey {
+	key := fmt.Sprintf("%s/%s", namespace, workloadName)
+	if podGroup == "" {
+		return PodGroupKey(key)
+	}
+	key = fmt.Sprintf("%s/%s", key, podGroup)
+	if replicaKey == "" {
+		return PodGroupKey(key)
+	}
+	return PodGroupKey(fmt.Sprintf("%s/%s", key, replicaKey))
 }
 
 // PermitStatus represents the result of Permit phase
@@ -48,8 +62,10 @@ const (
 
 // PodGroupInfo tracks the state of a gang scheduling group
 type PodGroupInfo struct {
-	Key        PodGroupKey
-	MinMembers int32
+	Key             PodGroupKey
+	MinMembers      int32
+	DesiredMembers  int32
+	RequiredMembers int32
 	// Timeout duration, zero means wait indefinitely
 	Timeout time.Duration
 
@@ -63,8 +79,22 @@ type PodGroupInfo struct {
 	// Pods that have been scheduled successfully
 	ScheduledPods map[types.UID]struct{}
 
+	// OnceResourceSatisfied is set to true when the gang quorum is first met.
+	// Once set, subsequent pods (e.g., restarted pods) skip the gang wait.
+	OnceResourceSatisfied bool
+
+	// Workload identity used for persisting gang state to TensorFusionWorkload.status.
+	StatusNamespace    string
+	StatusWorkloadName string
+
 	mu sync.RWMutex
 }
+
+const (
+	// IndefiniteGangWaitDuration is used when timeout is disabled (0),
+	// which means waiting "indefinitely" in practice.
+	IndefiniteGangWaitDuration = 100 * 365 * 24 * time.Hour
+)
 
 // WaitingPodInfo stores information about a pod waiting at Permit stage
 type WaitingPodInfo struct {
@@ -84,10 +114,12 @@ type WaitingPodInfo struct {
 
 // GangSchedulingConfig parsed from workload/pod annotations
 type GangSchedulingConfig struct {
-	Enabled    bool
-	GroupKey   PodGroupKey
-	MinMembers int32
-	Timeout    time.Duration // zero means wait indefinitely
+	Enabled         bool
+	GroupKey        PodGroupKey
+	MinMembers      int32
+	DesiredMembers  int32
+	RequiredMembers int32
+	Timeout         time.Duration // zero means wait indefinitely
 }
 
 // NewWaitingPodInfo creates a new WaitingPodInfo
@@ -111,14 +143,16 @@ func NewWaitingPodInfo(
 }
 
 // NewPodGroupInfo creates a new PodGroupInfo
-func NewPodGroupInfo(key PodGroupKey, minMembers int32, timeout time.Duration) *PodGroupInfo {
+func NewPodGroupInfo(key PodGroupKey, minMembers, desiredMembers, requiredMembers int32, timeout time.Duration) *PodGroupInfo {
 	return &PodGroupInfo{
-		Key:           key,
-		MinMembers:    minMembers,
-		Timeout:       timeout,
-		CreationTime:  time.Now(),
-		WaitingPods:   make(map[types.UID]*WaitingPodInfo),
-		ScheduledPods: make(map[types.UID]struct{}),
+		Key:             key,
+		MinMembers:      minMembers,
+		DesiredMembers:  desiredMembers,
+		RequiredMembers: requiredMembers,
+		Timeout:         timeout,
+		CreationTime:    time.Now(),
+		WaitingPods:     make(map[types.UID]*WaitingPodInfo),
+		ScheduledPods:   make(map[types.UID]struct{}),
 	}
 }
 
@@ -140,7 +174,7 @@ func (pg *PodGroupInfo) GetScheduledCount() int {
 func (pg *PodGroupInfo) IsReady() bool {
 	pg.mu.RLock()
 	defer pg.mu.RUnlock()
-	return int32(len(pg.WaitingPods)) >= pg.MinMembers
+	return int32(len(pg.WaitingPods)) >= pg.RequiredMembers
 }
 
 // IsTimedOut returns true if the gang has exceeded its timeout
@@ -156,8 +190,8 @@ func (pg *PodGroupInfo) IsTimedOut() bool {
 // Returns 0 if already timed out, returns a large duration if no timeout set
 func (pg *PodGroupInfo) RemainingTimeout() time.Duration {
 	if pg.Timeout == 0 {
-		// No timeout, return a large duration (1 hour as default wait)
-		return time.Hour
+		// No timeout: keep waiting for a very long period.
+		return IndefiniteGangWaitDuration
 	}
 	remaining := pg.Timeout - time.Since(pg.CreationTime)
 	if remaining < 0 {

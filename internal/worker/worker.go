@@ -34,6 +34,7 @@ func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
 func (wg *WorkerGenerator) GenerateWorkerPod(
 	ctx context.Context,
 	workload *tfv1.TensorFusionWorkload,
+	desiredMembers int32,
 ) (*v1.Pod, error) {
 	podTmpl := &v1.PodTemplate{}
 	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
@@ -69,7 +70,7 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	})
 
 	// Add labels to identify this pod as part of the workload
-	labels, annotations := utils.AppendTFWorkerLabelsAndAnnotationsAfterTemplate(podTmpl, workload, containerName)
+	labels, annotations := utils.AppendTFWorkerLabelsAndAnnotationsAfterTemplate(podTmpl, workload, containerName, desiredMembers)
 
 	return &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

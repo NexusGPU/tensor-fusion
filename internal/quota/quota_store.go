@@ -55,6 +55,10 @@ type QuotaStoreEntry struct {
 
 	// Current usage calculated in memory (authoritative)
 	CurrentUsage *tfv1.GPUResourceUsage
+
+	// Assumed usage is scheduler-only shadow state used before a pod is actually bound.
+	// It must never be synced back to the quota CRD.
+	AssumedUsage *tfv1.GPUResourceUsage
 }
 
 // NewQuotaStore creates a new quota store
@@ -71,6 +75,9 @@ func NewQuotaStore(client client.Client, ctx context.Context) *QuotaStore {
 // CheckQuotaAvailable is the quota checking logic
 // Note: This method assumes proper locking is handled by the caller
 func (qs *QuotaStore) CheckQuotaAvailable(req *tfv1.AllocRequest) error {
+	qs.StoreMutex.RLock()
+	defer qs.StoreMutex.RUnlock()
+
 	entry, exists := qs.QuotaStore[req.WorkloadNameNamespace.Namespace]
 	if !exists {
 		// No quota defined for this namespace, allow allocation
@@ -83,6 +90,9 @@ func (qs *QuotaStore) CheckQuotaAvailable(req *tfv1.AllocRequest) error {
 }
 
 func (qs *QuotaStore) CheckSingleQuotaAvailable(req *tfv1.AllocRequest) error {
+	qs.StoreMutex.RLock()
+	defer qs.StoreMutex.RUnlock()
+
 	entry, exists := qs.QuotaStore[req.WorkloadNameNamespace.Namespace]
 	if !exists {
 		// No quota defined for this namespace, allow allocation
@@ -92,6 +102,9 @@ func (qs *QuotaStore) CheckSingleQuotaAvailable(req *tfv1.AllocRequest) error {
 }
 
 func (qs *QuotaStore) CheckTotalQuotaRelaxed(req *tfv1.AllocRequest, toReleaseResource *tfv1.GPUResourceUsage) error {
+	qs.StoreMutex.RLock()
+	defer qs.StoreMutex.RUnlock()
+
 	entry, exists := qs.QuotaStore[req.WorkloadNameNamespace.Namespace]
 	if !exists {
 		// No quota defined for this namespace, allow allocation
@@ -101,6 +114,9 @@ func (qs *QuotaStore) CheckTotalQuotaRelaxed(req *tfv1.AllocRequest, toReleaseRe
 }
 
 func (qs *QuotaStore) CheckTotalQuotaWithPreScheduled(req *tfv1.AllocRequest, toScheduleResource *tfv1.GPUResourceUsage) error {
+	qs.StoreMutex.RLock()
+	defer qs.StoreMutex.RUnlock()
+
 	entry, exists := qs.QuotaStore[req.WorkloadNameNamespace.Namespace]
 	if !exists {
 		// No quota defined for this namespace, allow allocation
@@ -122,6 +138,32 @@ func (qs *QuotaStore) AdjustQuota(namespace string, reqDelta tfv1.Resource, limi
 	entry.CurrentUsage.Limits.Tflops.Add(limitDelta.Tflops)
 	entry.CurrentUsage.Limits.Vram.Add(limitDelta.Vram)
 	qs.markQuotaDirty(namespace)
+}
+
+func (qs *QuotaStore) effectiveUsageLocked(entry *QuotaStoreEntry) *tfv1.GPUResourceUsage {
+	if entry == nil {
+		return qs.Calculator.CreateZeroUsage()
+	}
+
+	usage := qs.Calculator.CreateZeroUsage()
+	if entry.CurrentUsage != nil {
+		usage = entry.CurrentUsage.DeepCopy()
+	}
+	if entry.AssumedUsage != nil {
+		usage.Requests.Tflops.Add(entry.AssumedUsage.Requests.Tflops)
+		usage.Requests.Vram.Add(entry.AssumedUsage.Requests.Vram)
+		usage.Limits.Tflops.Add(entry.AssumedUsage.Limits.Tflops)
+		usage.Limits.Vram.Add(entry.AssumedUsage.Limits.Vram)
+		usage.Workers += entry.AssumedUsage.Workers
+	}
+	return usage
+}
+
+func (qs *QuotaStore) ensureAssumedUsageLocked(entry *QuotaStoreEntry) *tfv1.GPUResourceUsage {
+	if entry.AssumedUsage == nil {
+		entry.AssumedUsage = qs.Calculator.CreateZeroUsage()
+	}
+	return entry.AssumedUsage
 }
 
 // checkSingleQuotas checks per-workload limits
@@ -166,11 +208,12 @@ func (qs *QuotaStore) checkSingleQuotas(entry *QuotaStoreEntry, req *tfv1.AllocR
 func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRequest,
 	toReleaseResource *tfv1.GPUResourceUsage, toAddResource *tfv1.GPUResourceUsage) error {
 	quotaNs := entry.Quota.Namespace
+	effectiveUsage := qs.effectiveUsageLocked(entry)
 
 	// Check total requests
 	if entry.Quota.Spec.Total.Requests != nil {
 		total := entry.Quota.Spec.Total.Requests
-		current := *entry.CurrentUsage.Requests.DeepCopy()
+		current := *effectiveUsage.Requests.DeepCopy()
 
 		if toReleaseResource != nil {
 			current.Tflops.Sub(toReleaseResource.Requests.Tflops)
@@ -189,7 +232,7 @@ func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRe
 	// Check total limits
 	if entry.Quota.Spec.Total.Limits != nil {
 		total := entry.Quota.Spec.Total.Limits
-		usage := *entry.CurrentUsage.Limits.DeepCopy()
+		usage := *effectiveUsage.Limits.DeepCopy()
 
 		if toReleaseResource != nil {
 			usage.Tflops.Sub(toReleaseResource.Limits.Tflops)
@@ -207,7 +250,9 @@ func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRe
 
 	// If it's preempt case, skip checking total workers since it's
 	// replacing existing workers rather than creating new ones
-	addWorkers := int32(0)
+	// A normal allocation request creates one new worker unless the caller
+	// explicitly supplies a precomputed worker delta (e.g. pre-schedule flow).
+	addWorkers := int32(1)
 	removeWorkers := int32(0)
 	if toReleaseResource != nil {
 		removeWorkers = toReleaseResource.Workers
@@ -221,7 +266,7 @@ func (qs *QuotaStore) checkTotalQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRe
 
 	// Check total workers, each allocation will create one worker instance
 	if entry.Quota.Spec.Total.MaxWorkers != nil {
-		if entry.CurrentUsage.Workers+addWorkers-removeWorkers >= *entry.Quota.Spec.Total.MaxWorkers {
+		if effectiveUsage.Workers+addWorkers-removeWorkers > *entry.Quota.Spec.Total.MaxWorkers {
 			return &QuotaExceededError{
 				Namespace: quotaNs,
 				Resource:  TotalMaxWorkersLimitResource,
@@ -250,8 +295,7 @@ func checkTotalExceeded(req *tfv1.AllocRequest, totalQuota *tfv1.Resource, curre
 
 	tflopsQuota := totalQuota.Tflops.Value()
 	tflopsCurrent := current.Tflops.Value()
-	if !totalQuota.Tflops.IsZero() &&
-		tflopsQuota < (tflopsCurrent+tflops) {
+	if tflopsQuota < (tflopsCurrent + tflops) {
 		var exceededMsg string
 		if isRequest {
 			exceededMsg = TotalMaxTFlopsRequestResource
@@ -268,7 +312,7 @@ func checkTotalExceeded(req *tfv1.AllocRequest, totalQuota *tfv1.Resource, curre
 
 	vramQuota := totalQuota.Vram.Value()
 	vramCurrent := current.Vram.Value()
-	if !totalQuota.Vram.IsZero() && vramQuota < (vramCurrent+vram) {
+	if vramQuota < (vramCurrent + vram) {
 		var exceededMsg string
 		if isRequest {
 			exceededMsg = TotalMaxVRAMRequestResource
@@ -288,13 +332,13 @@ func checkTotalExceeded(req *tfv1.AllocRequest, totalQuota *tfv1.Resource, curre
 // AllocateQuota atomically allocates quota resources
 // This function is called under GPU allocator's storeMutex
 func (qs *QuotaStore) AllocateQuota(namespace string, req *tfv1.AllocRequest) {
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
+
 	entry, exists := qs.QuotaStore[namespace]
 	if !exists {
 		return
 	}
-
-	qs.StoreMutex.Lock()
-	defer qs.StoreMutex.Unlock()
 
 	qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, req, true)
 	qs.markQuotaDirty(namespace)
@@ -303,16 +347,43 @@ func (qs *QuotaStore) AllocateQuota(namespace string, req *tfv1.AllocRequest) {
 // DeallocateQuota atomically deallocate quota resources
 // This function is called under GPU allocator's storeMutex
 func (qs *QuotaStore) DeallocateQuota(namespace string, allocation *tfv1.AllocRequest) {
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
+
 	entry, exists := qs.QuotaStore[namespace]
 	if !exists {
 		return
 	}
 
+	qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, allocation, false)
+	qs.markQuotaDirty(namespace)
+}
+
+// AssumeQuota records shadow quota usage for a pod that passed Reserve but is not bound yet.
+// Assumed usage affects admission checks but is never synced to Kubernetes.
+func (qs *QuotaStore) AssumeQuota(namespace string, req *tfv1.AllocRequest) {
 	qs.StoreMutex.Lock()
 	defer qs.StoreMutex.Unlock()
 
-	qs.Calculator.ApplyUsageOperation(entry.CurrentUsage, allocation, false)
-	qs.markQuotaDirty(namespace)
+	entry, exists := qs.QuotaStore[namespace]
+	if !exists {
+		return
+	}
+
+	qs.Calculator.ApplyUsageOperation(qs.ensureAssumedUsageLocked(entry), req, true)
+}
+
+// ForgetAssumedQuota removes shadow quota usage for an unbound pod.
+func (qs *QuotaStore) ForgetAssumedQuota(namespace string, allocation *tfv1.AllocRequest) {
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
+
+	entry, exists := qs.QuotaStore[namespace]
+	if !exists || entry.AssumedUsage == nil {
+		return
+	}
+
+	qs.Calculator.ApplyUsageOperation(entry.AssumedUsage, allocation, false)
 }
 
 // initQuotaStore initializes the quota store from Kubernetes
@@ -345,6 +416,7 @@ func (qs *QuotaStore) InitQuotaStore() error {
 		qs.QuotaStore[namespace] = &QuotaStoreEntry{
 			Quota:        quota.DeepCopy(),
 			CurrentUsage: currentUsage,
+			AssumedUsage: qs.Calculator.CreateZeroUsage(),
 		}
 	}
 
@@ -408,6 +480,7 @@ func (qs *QuotaStore) ReconcileQuotaStore(ctx context.Context, namespacedAllocat
 
 	for _, entry := range qs.QuotaStore {
 		entry.CurrentUsage = qs.Calculator.CreateZeroUsage()
+		entry.AssumedUsage = qs.Calculator.CreateZeroUsage()
 	}
 
 	// Process worker pods to rebuild quota usage
@@ -536,7 +609,18 @@ func (qs *QuotaStore) handleGPUQuotaCreate(ctx context.Context, gpuQuota *tfv1.G
 	qs.StoreMutex.Lock()
 	defer qs.StoreMutex.Unlock()
 
-	qs.QuotaStore[key].Quota = gpuQuota.DeepCopy()
+	entry, exists := qs.QuotaStore[key]
+	if !exists {
+		qs.QuotaStore[key] = &QuotaStoreEntry{
+			Quota:        gpuQuota.DeepCopy(),
+			CurrentUsage: qs.Calculator.CreateZeroUsage(),
+			AssumedUsage: qs.Calculator.CreateZeroUsage(),
+		}
+		log.V(4).Info("Added GPU quota to store", "namespace", key)
+		return
+	}
+
+	entry.Quota = gpuQuota.DeepCopy()
 	log.V(4).Info("Added GPU quota to store", "namespace", key)
 }
 
@@ -560,7 +644,24 @@ func (qs *QuotaStore) handleGPUQuotaUpdate(ctx context.Context, gpuQuota *tfv1.G
 	qs.StoreMutex.Lock()
 	defer qs.StoreMutex.Unlock()
 
-	qs.QuotaStore[key].Quota = gpuQuota.DeepCopy()
+	entry, exists := qs.QuotaStore[key]
+	if !exists {
+		qs.QuotaStore[key] = &QuotaStoreEntry{
+			Quota:        gpuQuota.DeepCopy(),
+			CurrentUsage: qs.Calculator.CreateZeroUsage(),
+			AssumedUsage: qs.Calculator.CreateZeroUsage(),
+		}
+		log.V(4).Info("Updated GPU quota in store (initialized entry)", "namespace", key)
+		return
+	}
+
+	entry.Quota = gpuQuota.DeepCopy()
+	if entry.CurrentUsage == nil {
+		entry.CurrentUsage = qs.Calculator.CreateZeroUsage()
+	}
+	if entry.AssumedUsage == nil {
+		entry.AssumedUsage = qs.Calculator.CreateZeroUsage()
+	}
 	log.V(4).Info("Updated GPU quota in store (preserve Used)", "namespace", key)
 }
 

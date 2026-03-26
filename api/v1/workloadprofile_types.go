@@ -96,14 +96,20 @@ type WorkloadProfileSpec struct {
 	WorkerPodTemplate *runtime.RawExtension `json:"workerPodTemplate,omitempty"`
 
 	// +optional
-	// GangScheduling configuration for scheduling multiple pods together
+	// GangScheduling enables scheduling multiple pods as a gang.
+	// When omitted, the workload is scheduled normally without gang semantics.
+	// Gang semantics are evaluated for a scheduling batch created under the current
+	// workload target. Existing running replicas created by a previous Deployment or
+	// ReplicaSet revision are not rolled back when a later online scale-out cannot
+	// satisfy a newly requested gang quorum.
 	GangScheduling *GangSchedulingConfig `json:"gangScheduling,omitempty"`
 }
 
 // GangSchedulingConfig defines gang scheduling configuration
 type GangSchedulingConfig struct {
-	// MinMembers specifies the minimum number of pods that must be scheduled together
-	// When > 0, gang scheduling is enabled for this workload
+	// MinMembers optionally overrides the gang quorum.
+	// When omitted or set to 0, the gang quorum defaults to the workload's desired replicas.
+	// When set explicitly, the value must be >= 2 and <= the workload's desired replicas.
 	// The gang group name is automatically derived from the workload name (namespace/workload-name)
 	// +kubebuilder:validation:Minimum=0
 	MinMembers int32 `json:"minMembers,omitempty"`
