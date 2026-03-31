@@ -145,9 +145,14 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
 		r.IndexAllocator.ReconcileLockState(pod)
 		if pod.DeletionTimestamp.IsZero() {
-			gpuStore, _, _ := r.Allocator.GetAllocationInfo()
-			metrics.SetGPUAllocationMetrics(gpuStore, pod)
-			metrics.SetWorkerMetricsByWorkload(pod, gpuStore)
+			if r.Allocator.HasAllocation(req.NamespacedName) {
+				gpuStore, _, _ := r.Allocator.GetAllocationInfo()
+				metrics.SetGPUAllocationMetrics(gpuStore, pod)
+				metrics.SetWorkerMetricsByWorkload(pod, gpuStore)
+			} else {
+				metrics.RemoveGPUAllocationMetrics(pod.Name)
+				metrics.RemoveWorkerMetrics(pod.Name, time.Now())
+			}
 		}
 		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
 		if err != nil {
