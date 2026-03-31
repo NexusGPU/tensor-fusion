@@ -69,7 +69,7 @@ const (
 	ConnectionNameEnv       = "TENSOR_FUSION_CONNECTION_NAME"
 	ConnectionNamespaceEnv  = "TENSOR_FUSION_CONNECTION_NAMESPACE"
 	DisableVMSharedMemEnv   = "TF_USE_IVSHMEM"
-	ConnectionSharedMemSize = "1024"
+	ConnectionSharedMemSize = "256"
 	ConnectionSharedMemName = "tf_shm"
 
 	RealNvmlLibPathValue = "/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
