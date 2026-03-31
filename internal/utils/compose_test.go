@@ -184,7 +184,7 @@ func TestSetWorkerContainerSpec(t *testing.T) {
 			expectCommand: []string{
 				"/bin/bash",
 				"-c",
-				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 256",
+				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 1024",
 			},
 		},
 		{
@@ -229,7 +229,7 @@ func TestSetWorkerContainerSpec(t *testing.T) {
 				require.Contains(t, container.Command[2], "exec ./tensor-fusion-worker", "should exec worker")
 				require.Contains(t, container.Command[2], "-n shmem", "should use shmem mode")
 				require.Contains(t, container.Command[2], "-m tf_shm", "should specify shared memory name")
-				require.Contains(t, container.Command[2], "-M 256", "should specify shared memory size")
+				require.Contains(t, container.Command[2], "-M 1024", "should specify shared memory size")
 			}
 		})
 	}
