@@ -1318,6 +1318,17 @@ func (s *GpuAllocator) ListNonUsingNodes() sets.Set[string] {
 	return set
 }
 
+func (s *GpuAllocator) HasAllocation(podIdentifier types.NamespacedName) bool {
+	s.storeMutex.RLock()
+	defer s.storeMutex.RUnlock()
+	podUID := s.podNamespaceNsToPodUID[podIdentifier.String()]
+	if podUID == "" {
+		return false
+	}
+	_, exists := s.uniqueAllocation[podUID]
+	return exists
+}
+
 func (s *GpuAllocator) DeallocByPodIdentifier(ctx context.Context, podIdentifier types.NamespacedName) {
 	// Read allocation info under RLock to avoid data race on maps
 	s.storeMutex.RLock()
@@ -2300,6 +2311,8 @@ func (s *GpuAllocator) startWorkerCleanUpChecker() {
 				if errors.IsNotFound(err) {
 					log.FromContext(s.ctx).Info("Pod has been deleted, deallocate GPU", "pod", c.podMeta.Name, "namespace", c.podMeta.Namespace)
 					s.Dealloc(c.workloadNameNs, c.gpuNames, c.podMeta)
+					metrics.RemoveGPUAllocationMetrics(c.podMeta.Name)
+					metrics.RemoveWorkerMetrics(c.podMeta.Name, time.Now())
 					cleaned++
 				}
 			}

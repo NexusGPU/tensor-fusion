@@ -23,8 +23,9 @@ var TFVersionMigrationMap = []struct {
 		"CREATE TABLE IF NOT EXISTS tf_gpu_allocation (\n    `pod` String NULL SKIPPING INDEX,\n    `namespace` String NULL INVERTED INDEX,\n    `pod_uuid` String NULL INVERTED INDEX,\n    `node` String NULL,\n    `gpu_model_index` String NULL,\n    `gpu_name` String NULL INVERTED INDEX,\n    `gpu_count` BigInt NULL,\n    `ts` Timestamp_ms TIME INDEX,\n    PRIMARY KEY (`pod`, `namespace`, `pod_uuid`))\n    ENGINE=mito WITH( ttl='30d', merge_mode = 'last_non_null')",
 	}},
 
-	// add alter SQL in future
-	{"1.1", []string{}},
+	{"1.1", []string{
+		"CREATE TABLE IF NOT EXISTS tf_gpu_metrics (\n    `gpu` String NULL INVERTED INDEX,\n    `node` String NULL INVERTED INDEX,\n    `pool` String NULL INVERTED INDEX,\n    `gpu_model` String NULL INVERTED INDEX,\n    `phase` String NULL INVERTED INDEX,\n    `capacity_tflops` Double NULL,\n    `available_tflops` Double NULL,\n    `allocated_tflops` Double NULL,\n    `allocated_tflops_percent` Double NULL,\n    `capacity_vram_bytes` Double NULL,\n    `available_vram_bytes` Double NULL,\n    `allocated_vram_bytes` Double NULL,\n    `allocated_vram_percent` Double NULL,\n    `ts` Timestamp_ms TIME INDEX,\n    PRIMARY KEY (`gpu`, `node`, `pool`, `gpu_model`))\n    ENGINE=mito WITH( ttl='30d', merge_mode = 'last_non_null')",
+	}},
 }
 
-const CurrentAppSQLVersion = "1.0"
+const CurrentAppSQLVersion = "1.1"
