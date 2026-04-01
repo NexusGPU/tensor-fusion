@@ -52,15 +52,45 @@ func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*
 	}
 
 	if req.PartitionTemplateID != "" {
-		templateInfo, exists := templateConfigs[req.PartitionTemplateID]
+		resolvedTemplateID, templateInfo, exists := resolvePartitionTemplate(templateConfigs, req.PartitionTemplateID)
 		if !exists {
 			return nil, fmt.Errorf("specified partition template %s not found for GPU model %s", req.PartitionTemplateID, gpuModel)
 		}
+
+		// Validate that the explicitly specified template satisfies request resources.
+		templateTflops := templateInfo.ComputePercent / 100.0 * gpuStatus.Capacity.Tflops.AsApproximateFloat64()
+		templateVramBytes := int64(templateInfo.MemoryGigabytes * 1024 * 1024 * 1024)
+
+		var requestTflops float64
+		if !req.Request.ComputePercent.IsZero() {
+			mu.Lock()
+			gpuCapacity, capExists := GPUCapacityMap[gpuModel]
+			mu.Unlock()
+			if capExists {
+				requestTflops = utils.ComputePercentToTflops(gpuCapacity.Tflops, req.Request).AsApproximateFloat64()
+			}
+		} else {
+			requestTflops = req.Request.Tflops.AsApproximateFloat64()
+		}
+		requestVramBytes := req.Request.Vram.Value()
+
+		canAllocate := true
+		reason := "partition template is specified in request"
+		if templateTflops < requestTflops {
+			canAllocate = false
+			reason = fmt.Sprintf("specified template %s has insufficient TFLOPs: %.2f < %.2f",
+				resolvedTemplateID, templateTflops, requestTflops)
+		} else if templateVramBytes < requestVramBytes {
+			canAllocate = false
+			reason = fmt.Sprintf("specified template %s has insufficient VRAM: %d < %d",
+				resolvedTemplateID, templateVramBytes, requestVramBytes)
+		}
+
 		return &PartitionMatchResult{
 			Template:    &templateInfo,
-			TemplateID:  req.PartitionTemplateID,
-			CanAllocate: true,
-			Reason:      "partition template is specified in request",
+			TemplateID:  resolvedTemplateID,
+			CanAllocate: canAllocate,
+			Reason:      reason,
 		}, nil
 	}
 
@@ -106,7 +136,7 @@ func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*
 		}
 
 		// Check if template resources can satisfy the request
-		templateTflops := templateInfo.ComputePercent * gpuStatus.Capacity.Tflops.AsApproximateFloat64()
+		templateTflops := templateInfo.ComputePercent / 100.0 * gpuStatus.Capacity.Tflops.AsApproximateFloat64()
 		templateVramBytes := int64(templateInfo.MemoryGigabytes * 1024 * 1024 * 1024)
 
 		// Check if template has enough resources
@@ -154,6 +184,20 @@ func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*
 	return bestMatch, nil
 }
 
+func resolvePartitionTemplate(templateConfigs map[string]config.PartitionTemplateInfo, requestedID string) (string, config.PartitionTemplateInfo, bool) {
+	if templateInfo, exists := templateConfigs[requestedID]; exists {
+		return requestedID, templateInfo, true
+	}
+
+	for templateID, templateInfo := range templateConfigs {
+		if config.MatchTemplateIdentifier(templateID, templateInfo.Name, requestedID) {
+			return templateID, templateInfo, true
+		}
+	}
+
+	return "", config.PartitionTemplateInfo{}, false
+}
+
 // CalculatePartitionResourceUsage calculates the resource usage for a partition template.
 // Gets template info from config.
 func CalculatePartitionResourceUsage(capacityTflops resource.Quantity, gpuModel, templateID string) (tflops resource.Quantity, vram resource.Quantity, err error) {
@@ -164,7 +208,11 @@ func CalculatePartitionResourceUsage(capacityTflops resource.Quantity, gpuModel,
 
 	templateInfo, exists := templateConfigs[templateID]
 	if !exists {
-		return resource.Quantity{}, resource.Quantity{}, fmt.Errorf("partition template %s not found for GPU model %s", templateID, gpuModel)
+		_, resolvedTemplateInfo, resolved := resolvePartitionTemplate(templateConfigs, templateID)
+		if !resolved {
+			return resource.Quantity{}, resource.Quantity{}, fmt.Errorf("partition template %s not found for GPU model %s", templateID, gpuModel)
+		}
+		templateInfo = resolvedTemplateInfo
 	}
 
 	tflops = resource.MustParse(fmt.Sprintf("%.2f", templateInfo.ComputePercent*capacityTflops.AsApproximateFloat64()/100.0))
@@ -187,7 +235,12 @@ func CheckPartitionAvailability(
 
 	templateInfo, exists := templateConfigs[templateID]
 	if !exists {
-		return fmt.Errorf("partition template %s not found for GPU model %s", templateID, gpu.Status.GPUModel)
+		resolvedTemplateID, resolvedTemplateInfo, resolved := resolvePartitionTemplate(templateConfigs, templateID)
+		if !resolved {
+			return fmt.Errorf("partition template %s not found for GPU model %s", templateID, gpu.Status.GPUModel)
+		}
+		templateID = resolvedTemplateID
+		templateInfo = resolvedTemplateInfo
 	}
 
 	// Get GPU config for strategy

@@ -2396,10 +2396,11 @@ func (s *GpuAllocator) bindPartition(gpu *tfv1.GPU, req *tfv1.AllocRequest, sele
 	if !hasTemplates {
 		return fmt.Errorf("no partition templates configured for GPU model %s", gpu.Status.GPUModel)
 	}
-	templateInfo, templateExists := templateConfigs[req.PartitionTemplateID]
+	resolvedTemplateID, templateInfo, templateExists := resolvePartitionTemplate(templateConfigs, req.PartitionTemplateID)
 	if !templateExists {
 		return fmt.Errorf("partition template %s not found in config for GPU model %s", req.PartitionTemplateID, gpu.Status.GPUModel)
 	}
+	req.PartitionTemplateID = resolvedTemplateID
 
 	// Calculate partition resource usage from config (no overhead)
 	partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(gpu.Status.Capacity.Tflops, gpu.Status.GPUModel, req.PartitionTemplateID)

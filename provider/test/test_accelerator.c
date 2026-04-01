@@ -120,7 +120,7 @@ void test_assignPartition() {
     PartitionResult partitionResult;
     memset(&partitionResult, 0, sizeof(partitionResult));
 
-    AccelResult result = AccelAssignPartition("mig-1g.7gb", "stub-device-0", &partitionResult);
+    AccelResult result = AccelAssignPartition("1g.10gb", "stub-device-0", &partitionResult);
 
     TEST_ASSERT(result == ACCEL_SUCCESS, "AccelAssignPartition returns success");
     TEST_ASSERT(strlen(partitionResult.deviceUUID) > 0, "Device UUID is set");
@@ -131,10 +131,10 @@ void test_assignPartition() {
     result = AccelAssignPartition(NULL, "stub-device-0", &partitionResult);
     TEST_ASSERT(result == ACCEL_ERROR_INVALID_PARAM, "NULL templateId returns error");
 
-    result = AccelAssignPartition("mig-1g.7gb", NULL, &partitionResult);
+    result = AccelAssignPartition("1g.10gb", NULL, &partitionResult);
     TEST_ASSERT(result == ACCEL_ERROR_INVALID_PARAM, "NULL deviceUUID returns error");
 
-    result = AccelAssignPartition("mig-1g.7gb", "stub-device-0", NULL);
+    result = AccelAssignPartition("1g.10gb", "stub-device-0", NULL);
     TEST_ASSERT(result == ACCEL_ERROR_INVALID_PARAM, "NULL partitionResult returns error");
 }
 
@@ -142,13 +142,13 @@ void test_assignPartition() {
 void test_removePartition() {
     printf("\n=== Testing AccelRemovePartition ===\n");
 
-    AccelResult result = AccelRemovePartition("mig-1g.7gb", "stub-device-0");
+    AccelResult result = AccelRemovePartition("1g.10gb", "stub-device-0");
     TEST_ASSERT(result == ACCEL_SUCCESS, "AccelRemovePartition returns success");
 
     result = AccelRemovePartition(NULL, "stub-device-0");
     TEST_ASSERT(result == ACCEL_ERROR_INVALID_PARAM, "NULL templateId returns error");
 
-    result = AccelRemovePartition("mig-1g.7gb", NULL);
+    result = AccelRemovePartition("1g.10gb", NULL);
     TEST_ASSERT(result == ACCEL_ERROR_INVALID_PARAM, "NULL deviceUUID returns error");
 }
 

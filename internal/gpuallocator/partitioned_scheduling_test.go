@@ -90,6 +90,19 @@ func TestMatchPartitionTemplate(t *testing.T) {
 			expectedTemplateID:  "4g.94gb",
 		},
 		{
+			name: "match NVIDIA style alias when required",
+			req: &tfv1.AllocRequest{
+				Request: tfv1.Resource{
+					Tflops: resource.MustParse("30"),
+					Vram:   resource.MustParse("20Gi"),
+				},
+				PartitionTemplateID: "mig-4g-94gb",
+			},
+			allocatedPartitions: map[string]tfv1.AllocatedPartition{},
+			expectError:         false,
+			expectedTemplateID:  "4g.94gb",
+		},
+		{
 			name: "no template matches request",
 			req: &tfv1.AllocRequest{
 				Request: tfv1.Resource{
