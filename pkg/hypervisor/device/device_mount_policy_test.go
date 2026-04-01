@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
@@ -326,6 +327,109 @@ func TestSplitDeviceRejectsUnknownPartitionResultType(t *testing.T) {
 	}
 }
 
+func TestSplitDeviceUsesProviderTemplateIDForNvidia(t *testing.T) {
+	var capturedTemplateID string
+	var capturedDeviceUUID string
+	oldAssignPartition := assignPartition
+	assignPartition = func(templateID *byte, deviceUUID *byte, result *PartitionResult) Result {
+		capturedTemplateID = bytePtrToString(templateID)
+		capturedDeviceUUID = bytePtrToString(deviceUUID)
+		return makeAssignPartitionStub(
+			PartitionTypeEnvironmentVariable,
+			"mig-partition-uuid",
+			[]string{"NVIDIA_VISIBLE_DEVICES=MIG-abc"},
+		)(templateID, deviceUUID, result)
+	}
+	t.Cleanup(func() {
+		assignPartition = oldAssignPartition
+	})
+
+	raw := `{"hardwareMetadata":[{"model":"A100_SXM_80G","fullModelName":"NVIDIA A100-SXM4-80GB","partitionTemplateRefs":["19"]}],"virtualizationTemplates":[{"id":"19","name":"1g.10gb"}]}`
+	oldVal, hadOldVal := os.LookupEnv(constants.TFProviderTemplateConfigEnv)
+	if err := os.Setenv(constants.TFProviderTemplateConfigEnv, raw); err != nil {
+		t.Fatalf("set %s: %v", constants.TFProviderTemplateConfigEnv, err)
+	}
+	resetProviderTemplateConfigForTest()
+	t.Cleanup(func() {
+		if hadOldVal {
+			_ = os.Setenv(constants.TFProviderTemplateConfigEnv, oldVal)
+		} else {
+			_ = os.Unsetenv(constants.TFProviderTemplateConfigEnv)
+		}
+		resetProviderTemplateConfigForTest()
+	})
+
+	controller := &Controller{
+		devices: map[string]*api.DeviceInfo{
+			"gpu-0": {
+				UUID:       "gpu-0",
+				Vendor:     "NVIDIA",
+				Model:      "NVIDIA A100-SXM4-80GB",
+				DeviceNode: map[string]string{"/dev/nvidia0": "/dev/nvidia0"},
+			},
+		},
+		nativeUUIDs: map[string]string{
+			"gpu-0": "GPU-AAA",
+		},
+		accelerator: &AcceleratorInterface{},
+	}
+
+	if _, err := controller.SplitDevice("gpu-0", "mig-1g-10gb"); err != nil {
+		t.Fatalf("split device failed: %v", err)
+	}
+	if capturedTemplateID != "19" {
+		t.Fatalf("expected provider template id 19, got %q", capturedTemplateID)
+	}
+	if capturedDeviceUUID != "GPU-AAA" {
+		t.Fatalf("expected native device uuid GPU-AAA, got %q", capturedDeviceUUID)
+	}
+}
+
+func TestRemovePartitionedDeviceUsesNativeUUID(t *testing.T) {
+	var capturedPartitionUUID string
+	var capturedDeviceUUID string
+	oldRemovePartition := removePartition
+	removePartition = func(templateID *byte, deviceUUID *byte) Result {
+		capturedPartitionUUID = bytePtrToString(templateID)
+		capturedDeviceUUID = bytePtrToString(deviceUUID)
+		return ResultSuccess
+	}
+	t.Cleanup(func() {
+		removePartition = oldRemovePartition
+	})
+
+	controller := &Controller{
+		devices: map[string]*api.DeviceInfo{
+			"gpu-0": {
+				UUID:   "gpu-0",
+				Vendor: "NVIDIA",
+				Model:  "NVIDIA A100-SXM4-80GB",
+			},
+			"mig-uuid": {
+				UUID:       "mig-uuid",
+				ParentUUID: "gpu-0",
+				Vendor:     "NVIDIA",
+				Model:      "NVIDIA A100-SXM4-80GB",
+			},
+		},
+		nativeUUIDs: map[string]string{
+			"gpu-0":    "GPU-AAA",
+			"mig-uuid": "MIG-AAA/1/0",
+		},
+		accelerator: &AcceleratorInterface{},
+	}
+
+	if err := controller.RemovePartitionedDevice("mig-uuid", "gpu-0"); err != nil {
+		t.Fatalf("remove partition failed: %v", err)
+	}
+	if capturedPartitionUUID != "mig-uuid" {
+		t.Fatalf("expected partition uuid mig-uuid, got %q", capturedPartitionUUID)
+	}
+	if capturedDeviceUUID != "GPU-AAA" {
+		t.Fatalf("expected native device uuid GPU-AAA, got %q", capturedDeviceUUID)
+	}
+}
+
 func makeAssignPartitionStub(
 	resultType PartitionResultType,
 	partitionUUID string,
@@ -370,4 +474,19 @@ func makeAssignPartitionStubWithDeviceNodes(
 		}
 		return ResultSuccess
 	}
+}
+
+func bytePtrToString(ptr *byte) string {
+	if ptr == nil {
+		return ""
+	}
+	buf := make([]byte, 0, 64)
+	for i := 0; i < 64; i++ {
+		b := *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(ptr)) + uintptr(i)))
+		if b == 0 {
+			break
+		}
+		buf = append(buf, b)
+	}
+	return string(buf)
 }

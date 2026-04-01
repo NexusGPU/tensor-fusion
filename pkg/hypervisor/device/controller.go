@@ -316,6 +316,13 @@ func (m *Controller) GetVendorMountLibs() ([]*api.Mount, error) {
 	return m.accelerator.GetVendorMountLibs()
 }
 
+func (m *Controller) nativeUUIDForLocked(deviceUUID string) string {
+	if native, ok := m.nativeUUIDs[deviceUUID]; ok && strings.TrimSpace(native) != "" {
+		return native
+	}
+	return deviceUUID
+}
+
 func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) (*api.DeviceInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -327,7 +334,9 @@ func (m *Controller) SplitDevice(deviceUUID string, partitionTemplateID string) 
 		return nil, fmt.Errorf("device %s is nil, can not partition", deviceUUID)
 	}
 	newPartitionedDevice := existingDevice.DeepCopy()
-	partitionResult, err := m.accelerator.AssignPartition(partitionTemplateID, deviceUUID)
+	providerTemplateID := resolveProviderTemplateID(existingDevice.Vendor, existingDevice.Model, partitionTemplateID)
+	nativeDeviceUUID := m.nativeUUIDForLocked(deviceUUID)
+	partitionResult, err := m.accelerator.AssignPartition(providerTemplateID, nativeDeviceUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +399,8 @@ func (m *Controller) RemovePartitionedDevice(partitionUUID, deviceUUID string) e
 		klog.Warningf("partition %s not found in controller cache, trying provider-side cleanup", partitionUUID)
 	}
 
-	err := m.accelerator.RemovePartition(partitionUUID, deviceUUID)
+	nativeDeviceUUID := m.nativeUUIDForLocked(deviceUUID)
+	err := m.accelerator.RemovePartition(partitionUUID, nativeDeviceUUID)
 	if err != nil {
 		return err
 	}
