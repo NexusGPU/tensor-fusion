@@ -458,6 +458,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	// pass provider hardware metadata to hypervisor to avoid extra API server calls
 	metadataEnvValue := "[]"
 	deviceMountEnvValue := "{}"
+	templateConfigEnvValue := "{\"hardwareMetadata\":[],\"virtualizationTemplates\":[]}"
 	hypervisorExtraEnv := []corev1.EnvVar{}
 	if mgr := provider.GetManager(); mgr != nil {
 		if providerCfg, ok := mgr.GetProvider(vendor); ok {
@@ -471,6 +472,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 				log.Error(err, "failed to marshal provider hardware metadata", "vendor", vendor)
 			}
 			deviceMountEnvValue = buildProviderDeviceMountEnv(providerCfg)
+			templateConfigEnvValue = buildProviderTemplateConfigEnv(providerCfg)
 			hypervisorExtraEnv = r.buildProviderHypervisorExtraEnv(ctx, providerCfg.Name)
 		} else {
 			log.Info("provider config not found; injecting empty hardware metadata", "vendor", vendor)
@@ -484,6 +486,9 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	}, corev1.EnvVar{
 		Name:  constants.TFProviderDeviceMountEnv,
 		Value: deviceMountEnvValue,
+	}, corev1.EnvVar{
+		Name:  constants.TFProviderTemplateConfigEnv,
+		Value: templateConfigEnvValue,
 	})
 	if len(hypervisorExtraEnv) > 0 {
 		spec.Containers[0].Env = utils.AppendEnvVarsIfNotExists(spec.Containers[0].Env, hypervisorExtraEnv...)
@@ -908,6 +913,33 @@ func buildProviderDeviceMountEnv(providerCfg *tfv1.ProviderConfig) string {
 	raw, err := json.Marshal(envCfg)
 	if err != nil {
 		return "{}"
+	}
+	return string(raw)
+}
+
+type providerTemplateConfigEnv struct {
+	HardwareMetadata        []tfv1.HardwareModelInfo      `json:"hardwareMetadata"`
+	VirtualizationTemplates []tfv1.VirtualizationTemplate `json:"virtualizationTemplates"`
+}
+
+func buildProviderTemplateConfigEnv(providerCfg *tfv1.ProviderConfig) string {
+	if providerCfg == nil {
+		return "{\"hardwareMetadata\":[],\"virtualizationTemplates\":[]}"
+	}
+
+	envCfg := providerTemplateConfigEnv{
+		HardwareMetadata:        providerCfg.Spec.HardwareMetadata,
+		VirtualizationTemplates: providerCfg.Spec.VirtualizationTemplates,
+	}
+	if envCfg.HardwareMetadata == nil {
+		envCfg.HardwareMetadata = []tfv1.HardwareModelInfo{}
+	}
+	if envCfg.VirtualizationTemplates == nil {
+		envCfg.VirtualizationTemplates = []tfv1.VirtualizationTemplate{}
+	}
+	raw, err := json.Marshal(envCfg)
+	if err != nil {
+		return "{\"hardwareMetadata\":[],\"virtualizationTemplates\":[]}"
 	}
 	return string(raw)
 }

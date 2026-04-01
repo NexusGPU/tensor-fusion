@@ -68,9 +68,18 @@ func (f *PartitionTemplateFilter) Filter(ctx context.Context, workerPodKey tfv1.
 				return false
 			}
 			if _, hasTemplate := templateConfigs[f.requiredTemplateID]; !hasTemplate {
-				logger.V(5).Info("GPU model does not have required partition template",
-					"gpu", gpu.Name, "model", gpu.Status.GPUModel, "template", f.requiredTemplateID)
-				return false
+				matchedTemplate := false
+				for templateID, templateInfo := range templateConfigs {
+					if config.MatchTemplateIdentifier(templateID, templateInfo.Name, f.requiredTemplateID) {
+						matchedTemplate = true
+						break
+					}
+				}
+				if !matchedTemplate {
+					logger.V(5).Info("GPU model does not have required partition template",
+						"gpu", gpu.Name, "model", gpu.Status.GPUModel, "template", f.requiredTemplateID)
+					return false
+				}
 			}
 		}
 
