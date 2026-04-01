@@ -576,7 +576,7 @@ func startScheduler(
 	)
 	gpuTopoOpt := app.WithPlugin(
 		gpuTopoPlugin.Name,
-		gpuTopoPlugin.NewWithDeps(allocator, mgr.GetClient()),
+		gpuTopoPlugin.New(),
 	)
 
 	cc, scheduler, nodeExpander, err := sched.SetupScheduler(

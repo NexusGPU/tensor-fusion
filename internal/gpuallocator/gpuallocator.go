@@ -1789,6 +1789,11 @@ func syncGPUMetadataAndStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
 	old.Status.UsedBy = gpu.Status.UsedBy
 	old.Status.Vendor = gpu.Status.Vendor
 	old.Status.NUMANode = gpu.Status.NUMANode
+	if gpu.Status.Topology != nil {
+		old.Status.Topology = gpu.Status.Topology.DeepCopy()
+	} else {
+		old.Status.Topology = nil
+	}
 	old.Status.Index = gpu.Status.Index
 	old.Status.IsolationMode = gpu.Status.IsolationMode
 	// Don't overwrite AllocatedPartitions as that's managed by the allocator

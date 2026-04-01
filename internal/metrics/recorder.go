@@ -486,6 +486,27 @@ func SetSchedulerMetrics(poolName string, isSuccess bool) {
 	}
 }
 
+// SetTopologyMetrics records GPU topology scheduling metrics.
+func SetTopologyMetrics(poolName string, satisfied bool, isFallback bool, isDegraded bool) {
+	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
+		TensorFusionSystemMetricsMap[poolName] = &TensorFusionSystemMetrics{
+			PoolName: poolName,
+		}
+	}
+	m := TensorFusionSystemMetricsMap[poolName]
+	if satisfied {
+		m.TotalTopoSatisfiedCount++
+	} else {
+		m.TotalTopoUnsatisfiedCount++
+	}
+	if isFallback {
+		m.TotalTopoFallbackCount++
+	}
+	if isDegraded {
+		m.TotalTopoSearchDegradedCount++
+	}
+}
+
 // TODO should record metrics after autoscaling feature added
 func SetAutoscalingMetrics(poolName string, isScaleUp bool) {
 	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
@@ -655,6 +676,12 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("total_allocation_success_cnt", successCount)
 		enc.AddField("total_scale_up_cnt", scaleUpCount)
 		enc.AddField("total_scale_down_cnt", scaleDownCount)
+		if item, ok := TensorFusionSystemMetricsMap[poolName]; ok {
+			enc.AddField("total_topo_satisfied_cnt", item.TotalTopoSatisfiedCount)
+			enc.AddField("total_topo_unsatisfied_cnt", item.TotalTopoUnsatisfiedCount)
+			enc.AddField("total_topo_fallback_cnt", item.TotalTopoFallbackCount)
+			enc.AddField("total_topo_search_degraded_cnt", item.TotalTopoSearchDegradedCount)
+		}
 		enc.EndLine(now)
 	}
 
