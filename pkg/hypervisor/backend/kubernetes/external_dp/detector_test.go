@@ -281,6 +281,130 @@ var _ = Describe("DevicePluginDetector", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockAPI.AssertExpectations(GinkgoT())).To(BeTrue())
 		})
+
+		It("should de-duplicate time-sliced GPU IDs when device is added", func() {
+			mockAPI := new(MockAPIServer)
+
+			checkpointData := `{
+  "Data": {
+    "PodDeviceEntries": [
+      {
+        "PodUID": "a7461dc1-023a-4bd5-a403-c738bb1d7db4",
+        "ContainerName": "web",
+        "ResourceName": "nvidia.com/gpu",
+        "DeviceIDs": {
+          "-1": [
+            "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3::0",
+            "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3::1",
+            "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3::2",
+            "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3::3"
+          ]
+        }
+      }
+    ],
+    "RegisteredDevices": {
+      "nvidia.com/gpu": [
+        "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3"
+      ]
+    }
+  }
+}`
+
+			tmpFile, err := os.CreateTemp("", "checkpoint-*.json")
+			Expect(err).NotTo(HaveOccurred())
+			defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+			_, err = tmpFile.WriteString(checkpointData)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tmpFile.Close()).To(Succeed())
+
+			gpu := &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3",
+				},
+				Status: tfv1.GPUStatus{
+					UsedBy: tfv1.UsedByTensorFusion,
+				},
+			}
+
+			mockAPI.On("GetGPU", "gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3").Return(gpu, nil).Once()
+			mockAPI.On("UpdateGPUStatus", mock.MatchedBy(func(gpu *tfv1.GPU) bool {
+				return gpu.Status.UsedBy == UsedByNvidiaDevicePlugin
+			})).Return(nil).Once()
+
+			detector := &DevicePluginDetector{
+				ctx:               context.Background(),
+				checkpointPath:    tmpFile.Name(),
+				apiClient:         mockAPI,
+				vendorDetectors:   make(map[string]VendorDetector),
+				previousDeviceIDs: make(map[string]string),
+			}
+			nvdpDetector := NewNvidiaDevicePluginDetector()
+			for _, prefix := range nvdpDetector.GetResourceNamePrefixes() {
+				detector.vendorDetectors[prefix] = nvdpDetector
+			}
+
+			err = detector.processDeviceState(false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockAPI.AssertExpectations(GinkgoT())).To(BeTrue())
+		})
+
+		It("should normalize time-sliced GPU IDs when device is removed", func() {
+			mockAPI := new(MockAPIServer)
+
+			checkpointData := `{
+  "Data": {
+    "PodDeviceEntries": [],
+    "RegisteredDevices": {
+      "nvidia.com/gpu": [
+        "GPU-355c151e-7dd4-5a89-f270-cbda6915d7a3"
+      ]
+    }
+  }
+}`
+
+			tmpFile, err := os.CreateTemp("", "checkpoint-*.json")
+			Expect(err).NotTo(HaveOccurred())
+			defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+			_, err = tmpFile.WriteString(checkpointData)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tmpFile.Close()).To(Succeed())
+
+			gpu := &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3",
+				},
+				Status: tfv1.GPUStatus{
+					UsedBy: UsedByNvidiaDevicePlugin,
+				},
+			}
+
+			mockAPI.On("GetGPU", "gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3").Return(gpu, nil).Once()
+			mockAPI.On("UpdateGPUStatus", mock.MatchedBy(func(gpu *tfv1.GPU) bool {
+				return gpu.Status.UsedBy == tfv1.UsedByTensorFusion
+			})).Return(nil).Once()
+
+			detector := &DevicePluginDetector{
+				ctx:            context.Background(),
+				checkpointPath: tmpFile.Name(),
+				apiClient:      mockAPI,
+				vendorDetectors: map[string]VendorDetector{
+					"nvidia.com/gpu": NewNvidiaDevicePluginDetector(),
+					"nvidia.com/mig": NewNvidiaDevicePluginDetector(),
+				},
+				previousDeviceIDs: map[string]string{
+					"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::0": "nvidia.com/gpu",
+					"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::1": "nvidia.com/gpu",
+					"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::2": "nvidia.com/gpu",
+					"gpu-355c151e-7dd4-5a89-f270-cbda6915d7a3::3": "nvidia.com/gpu",
+				},
+			}
+
+			err = detector.processDeviceState(false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockAPI.AssertExpectations(GinkgoT())).To(BeTrue())
+		})
 	})
 
 	Describe("findEntryForDevice", func() {

@@ -1,6 +1,8 @@
 package external_dp
 
 import (
+	"strings"
+
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
@@ -32,6 +34,12 @@ func (n *NvidiaDevicePluginDetector) GetUsedBySystemAndRealDeviceID(
 	resourceName string,
 ) (system string, realDeviceID string) {
 	if resourceName == resourceNvidiaGPU {
+		// NVIDIA time-slicing appends "::replicaIndex" to the same physical GPU UUID.
+		// Keep usedBy as nvidia-device-plugin and strip the replica suffix.
+		if baseID, _, hasReplicaIndex := strings.Cut(deviceID, "::"); hasReplicaIndex {
+			return string(UsedByNvidiaDevicePlugin), baseID
+		}
+
 		// Some external device plugin's device ID is GPU-(UUID)-0, 1, 2, 3 (e.g. HAMI)
 		// Need to recover to real device ID
 		if len(deviceID) > realDeviceIDLength {
