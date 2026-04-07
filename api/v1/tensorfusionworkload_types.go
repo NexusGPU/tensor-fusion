@@ -48,6 +48,61 @@ const (
 	TensorFusionWorkloadPhaseFailed  TensorFusionWorkloadPhase = "Failed"
 )
 
+// +kubebuilder:validation:Enum=Pending;Waiting;Scheduling;Running;TimedOut;Failed
+type GangSchedulingPhase string
+
+const (
+	GangSchedulingPhasePending    GangSchedulingPhase = "Pending"
+	GangSchedulingPhaseWaiting    GangSchedulingPhase = "Waiting"
+	GangSchedulingPhaseScheduling GangSchedulingPhase = "Scheduling"
+	GangSchedulingPhaseRunning    GangSchedulingPhase = "Running"
+	GangSchedulingPhaseTimedOut   GangSchedulingPhase = "TimedOut"
+	GangSchedulingPhaseFailed     GangSchedulingPhase = "Failed"
+)
+
+// GangSchedulingStatus defines the observed gang scheduling state for a workload.
+type GangSchedulingStatus struct {
+	// +kubebuilder:default=Pending
+	Phase GangSchedulingPhase `json:"phase,omitempty"`
+
+	// GroupKey is the stable scheduling group identity used by the scheduler.
+	GroupKey string `json:"groupKey,omitempty"`
+
+	// DesiredMembers is the quorum required by the workload's gang scheduling policy.
+	DesiredMembers int32 `json:"desiredMembers,omitempty"`
+
+	// WaitingMembers is the number of pods currently blocked in Permit waiting for quorum.
+	WaitingMembers int32 `json:"waitingMembers,omitempty"`
+
+	// ScheduledMembers is the number of pods that have passed scheduling/binding for this gang.
+	ScheduledMembers int32 `json:"scheduledMembers,omitempty"`
+
+	// ReadyMembers is the number of pods currently considered ready for the workload.
+	ReadyMembers int32 `json:"readyMembers,omitempty"`
+
+	// LastTransitionTime captures the last phase transition observed by the scheduler/controller.
+	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
+
+	// Reason is a short machine-readable summary of the latest gang state transition.
+	Reason string `json:"reason,omitempty"`
+
+	// Message is a human-readable explanation of the latest gang state.
+	Message string `json:"message,omitempty"`
+
+	// BackoffUntil is an RFC3339 timestamp string indicating when the gang may be retried.
+	BackoffUntil string `json:"backoffUntil,omitempty"`
+}
+
+func (in *GangSchedulingStatus) DeepCopy() *GangSchedulingStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(GangSchedulingStatus)
+	*out = *in
+	in.LastTransitionTime.DeepCopyInto(&out.LastTransitionTime)
+	return out
+}
+
 // TensorFusionWorkloadStatus defines the observed state of TensorFusionWorkload.
 type TensorFusionWorkloadStatus struct {
 	// +kubebuilder:default=Pending
@@ -77,11 +132,16 @@ type TensorFusionWorkloadStatus struct {
 	// The currently active cron scaling rule
 	// +optional
 	ActiveCronScalingRule *CronScalingRule `json:"activeCronScalingRule,omitempty"`
+
+	// Gang captures workload-level gang scheduling state persisted by the scheduler/controller.
+	// +optional
+	Gang *GangSchedulingStatus `json:"gang,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Gang",type="string",JSONPath=".status.gang.phase"
 // +kubebuilder:printcolumn:name="Worker Count",type="string",JSONPath=".status.workerCount"
 // +kubebuilder:printcolumn:name="Ready Workers",type="string",JSONPath=".status.readyWorkers"
 // +kubebuilder:printcolumn:name="Pod Template Hash",type="string",JSONPath=".status.podTemplateHash"

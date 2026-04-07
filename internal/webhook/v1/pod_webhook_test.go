@@ -918,6 +918,204 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(*tfInfo.EnabledReplicas).To(Equal(int32(3)))
 		})
 
+		It("should enable gang scheduling and default quorum to desired replicas when minMembers is omitted", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                            "mock",
+						constants.InjectContainerAnnotation:             "test-container",
+						constants.TensorFusionEnabledReplicasAnnotation: "3",
+						constants.GangEnabledAnnotation:                 constants.TrueStringValue,
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "test-container",
+					}},
+				},
+			}
+
+			tfInfo, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tfInfo.Profile.GangScheduling).NotTo(BeNil())
+			Expect(tfInfo.Profile.GangScheduling.MinMembers).To(Equal(int32(0)))
+			// Webhook should stamp resolved gang config onto the pod.
+			Expect(pod.Annotations[constants.GangDesiredMembersAnnotation]).To(Equal("3"))
+			Expect(pod.Annotations[constants.GangRequiredMembersAnnotation]).To(Equal("3"))
+			Expect(pod.Annotations[constants.GangGroupKeyAnnotation]).NotTo(BeEmpty())
+		})
+
+		It("should ignore gang minMembers when gang-enabled is not set", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                            "mock",
+						constants.InjectContainerAnnotation:             "test-container",
+						constants.TensorFusionEnabledReplicasAnnotation: "3",
+						constants.GangMinMembersAnnotation:              "2",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "test-container",
+					}},
+				},
+			}
+
+			tfInfo, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tfInfo.Profile.GangScheduling).To(BeNil())
+			// Gang not enabled — no stamped annotations.
+			Expect(pod.Annotations).NotTo(HaveKey(constants.GangDesiredMembersAnnotation))
+			Expect(pod.Annotations).NotTo(HaveKey(constants.GangRequiredMembersAnnotation))
+			Expect(pod.Annotations).NotTo(HaveKey(constants.GangGroupKeyAnnotation))
+		})
+
+		It("should reject explicit minMembers lower than two", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                            "mock",
+						constants.InjectContainerAnnotation:             "test-container",
+						constants.TensorFusionEnabledReplicasAnnotation: "3",
+						constants.GangEnabledAnnotation:                 constants.TrueStringValue,
+						constants.GangMinMembersAnnotation:              "1",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "test-container",
+					}},
+				},
+			}
+
+			_, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(constants.GangMinMembersAnnotation))
+		})
+
+		It("should reject invalid gang minMembers values", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                            "mock",
+						constants.InjectContainerAnnotation:             "test-container",
+						constants.TensorFusionEnabledReplicasAnnotation: "3",
+						constants.GangEnabledAnnotation:                 constants.TrueStringValue,
+						constants.GangMinMembersAnnotation:              "abc",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "test-container",
+					}},
+				},
+			}
+
+			_, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(constants.GangMinMembersAnnotation))
+		})
+
+		It("should reject explicit minMembers larger than desired replicas", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                            "mock",
+						constants.InjectContainerAnnotation:             "test-container",
+						constants.TensorFusionEnabledReplicasAnnotation: "2",
+						constants.GangEnabledAnnotation:                 constants.TrueStringValue,
+						constants.GangMinMembersAnnotation:              "3",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "test-container",
+					}},
+				},
+			}
+
+			_, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("exceeds desired replicas"))
+		})
+
+		It("should reject gang scheduling when the desired replicas are less than two", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                            "mock",
+						constants.InjectContainerAnnotation:             "test-container",
+						constants.TensorFusionEnabledReplicasAnnotation: "1",
+						constants.GangEnabledAnnotation:                 constants.TrueStringValue,
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "test-container",
+					}},
+				},
+			}
+
+			_, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(constants.GangEnabledAnnotation))
+		})
+
+		It("should reject invalid gang timeout values", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                            "mock",
+						constants.InjectContainerAnnotation:             "test-container",
+						constants.TensorFusionEnabledReplicasAnnotation: "3",
+						constants.GangEnabledAnnotation:                 constants.TrueStringValue,
+						constants.GangTimeoutAnnotation:                 "not-a-duration",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "test-container",
+					}},
+				},
+			}
+
+			_, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(constants.GangTimeoutAnnotation))
+		})
+
+		It("should reject gang scheduling when desired replicas cannot be determined", func() {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "no-replica-source",
+					Namespace: "default",
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                "mock",
+						constants.InjectContainerAnnotation: "test-container",
+						constants.GangEnabledAnnotation:     constants.TrueStringValue,
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "test-container",
+					}},
+				},
+			}
+
+			_, err := ParseTensorFusionInfo(ctx, k8sClient, pod)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("cannot determine gang size"))
+			Expect(err.Error()).To(ContainSubstring(constants.GangMinMembersAnnotation))
+		})
+
 		It("should treat generateName as workload name if the pod has no controllerRef", func() {
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{

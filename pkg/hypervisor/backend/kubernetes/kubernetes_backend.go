@@ -323,6 +323,7 @@ func (b *KubeletBackend) mutateGPUResourceState(
 	gpu.Status.Index = ptr.To(device.Index)
 	gpu.Status.Vendor = device.Vendor
 	gpu.Status.NUMANode = ptr.To(device.NUMANode)
+	gpu.Status.Topology = convertDeviceTopologyToStatus(device.Topology)
 	gpu.Status.IsolationMode = device.IsolationMode
 	gpu.Status.NodeSelector = map[string]string{
 		constants.KubernetesHostNameLabel: b.nodeName,
@@ -409,4 +410,25 @@ func (b *KubeletBackend) getTotalDeviceTflops() (float64, bool) {
 		found = true
 	}
 	return total, found
+}
+
+func convertDeviceTopologyToStatus(topology *api.DeviceTopology) *tfv1.GPUTopologyStatus {
+	if topology == nil {
+		return nil
+	}
+	peers := make([]tfv1.GPUPeerLinkStatus, 0, len(topology.Peers))
+	for _, peer := range topology.Peers {
+		if peer.PeerUUID == "" {
+			continue
+		}
+		peers = append(peers, tfv1.GPUPeerLinkStatus{
+			PeerGPUUUID: peer.PeerUUID,
+			Tier:        peer.Tier,
+			LinkType:    peer.LinkType,
+			Bandwidth:   peer.Bandwidth,
+		})
+	}
+	return &tfv1.GPUTopologyStatus{
+		Peers: peers,
+	}
 }

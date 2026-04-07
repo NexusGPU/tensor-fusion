@@ -172,12 +172,24 @@ var (
 	EvictionProtectionAnnotation = Domain + "/eviction-protection"
 
 	// Gang Scheduling annotations
-	// GangMinMembersAnnotation specifies minimum number of pods that must be scheduled together
-	// When > 0, gang scheduling is enabled for this workload
+	// GangEnabledAnnotation explicitly enables gang scheduling for this workload/pod.
+	GangEnabledAnnotation = Domain + "/gang-enabled"
+	// GangMinMembersAnnotation optionally overrides the minimum number of pods
+	// that must be scheduled together when gang scheduling is enabled.
 	GangMinMembersAnnotation = Domain + "/gang-min-members"
 	// GangTimeoutAnnotation specifies the timeout for waiting all gang members
 	// If not set or set to "0", wait indefinitely until resources are available
 	GangTimeoutAnnotation = Domain + "/gang-timeout"
+	// GangDesiredMembersAnnotation is stamped by the admission webhook with the
+	// resolved desired gang size so the scheduler can read it without fetching the CR.
+	GangDesiredMembersAnnotation = Domain + "/gang-desired-members"
+	// GangRequiredMembersAnnotation is stamped by the admission webhook with the
+	// effective gang quorum (max(minMembers, desiredMembers)) for the scheduler.
+	GangRequiredMembersAnnotation = Domain + "/gang-required-members"
+	// GangGroupKeyAnnotation is stamped by the admission webhook with the final
+	// gang group key (e.g. "namespace/workload") so the scheduler does not need
+	// to derive it at runtime.
+	GangGroupKeyAnnotation = Domain + "/gang-group-key"
 
 	NamespaceDefaultVal = "tensor-fusion-sys"
 

@@ -48,6 +48,12 @@ func (cr *ConnectionRouter) Get(ctx *gin.Context) {
 	namespace := ctx.Query("namespace")
 
 	req := types.NamespacedName{Name: name, Namespace: namespace}
+
+	// Subscribe BEFORE get to avoid missing the Running event in the gap
+	// between reading the current state and registering for updates.
+	ch, cancelFunc := cr.watcher.subscribe(req)
+	defer cancelFunc()
+
 	conn := cr.watcher.get(ctx, req)
 	if conn == nil {
 		ctx.JSON(404, gin.H{"error": "connection not found"})
@@ -66,14 +72,24 @@ func (cr *ConnectionRouter) Get(ctx *gin.Context) {
 		return
 	}
 
-	// Subscribe to connection updates
-	ch, cancelFunc := cr.watcher.subscribe(req)
-	defer cancelFunc()
-
-	// Wait for connection updates
-	for conn := range ch {
-		if conn.Status.Phase == tfv1.WorkerRunning {
-			ctx.String(200, conn.Status.ConnectionURL)
+	// Wait for connection updates with timeout and client disconnect awareness.
+	timeout := time.After(5 * time.Minute)
+	for {
+		select {
+		case conn, ok := <-ch:
+			if !ok {
+				ctx.JSON(503, gin.H{"error": "connection watch closed"})
+				return
+			}
+			if conn.Status.Phase == tfv1.WorkerRunning {
+				ctx.String(200, conn.Status.ConnectionURL)
+				return
+			}
+		case <-ctx.Request.Context().Done():
+			// Client disconnected.
+			return
+		case <-timeout:
+			ctx.JSON(504, gin.H{"error": "timeout waiting for connection to become ready"})
 			return
 		}
 	}
@@ -141,7 +157,6 @@ func (cw *connectionWatcher) subscribe(req types.NamespacedName) (connectionChan
 }
 
 func (cw *connectionWatcher) watchConnections(ctx context.Context, watcher watch.Interface) {
-	// Watch for changes
 	defer watcher.Stop()
 	watcherChan := watcher.ResultChan()
 	for {
@@ -151,7 +166,22 @@ func (cw *connectionWatcher) watchConnections(ctx context.Context, watcher watch
 			return
 		case event, ok := <-watcherChan:
 			if !ok {
-				return
+				// Watch channel closed (network blip, RV expired, etc.) — rebuild.
+				watcher.Stop()
+				var err error
+				for {
+					watcher, err = cw.client.Watch(ctx, &tfv1.TensorFusionConnectionList{})
+					if err == nil {
+						break
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Second):
+					}
+				}
+				watcherChan = watcher.ResultChan()
+				continue
 			}
 
 			conn, ok := event.Object.(*tfv1.TensorFusionConnection)

@@ -301,6 +301,42 @@ spec:
                   - count
                   type: object
                 type: array
+              topology:
+                description: |-
+                  Topology contains normalized GPU interconnect topology metadata,
+                  used by the GPUNetworkTopologyAware scheduler plugin.
+                properties:
+                  peers:
+                    description: Peers describes the topology relationship between
+                      this GPU and other GPUs on the same node.
+                    items:
+                      description: GPUPeerLinkStatus represents the link between two
+                        GPUs.
+                      properties:
+                        bandwidth:
+                          description: Bandwidth is the link bandwidth in bytes per
+                            second. For observability only.
+                          format: int64
+                          type: integer
+                        linkType:
+                          description: LinkType describes the physical link type (e.g.,
+                            "NVLink", "HCCS", "PCIe"). For observability only.
+                          type: string
+                        peerGPUUUID:
+                          description: PeerGPUUUID is the stable UUID of the peer
+                            GPU.
+                          type: string
+                        tier:
+                          description: Tier is the normalized affinity tier (lower
+                            = closer). Used as the primary scheduling input.
+                          format: int32
+                          type: integer
+                      required:
+                      - peerGPUUUID
+                      - tier
+                      type: object
+                    type: array
+                type: object
               usedBy:
                 description: |-
                   GPU is used by tensor-fusion or nvidia-operator

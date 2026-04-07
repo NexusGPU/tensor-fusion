@@ -127,6 +127,8 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			if e := r.Create(ctx, gpuNode); e != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to create GPUNode: %w", e)
 			}
+		} else {
+			return ctrl.Result{}, fmt.Errorf("failed to get GPUNode: %w", err)
 		}
 	}
 
@@ -188,6 +190,9 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 					return ctrl.Result{}, nil
 				} else {
 					log.Info("GPUNodeClaim is missing, Node is still there, should mark it as Orphan", "node", node.Name)
+					if node.Labels == nil {
+						node.Labels = make(map[string]string)
+					}
 					node.Labels[constants.ProvisionerMissingLabel] = constants.TrueStringValue
 					if err := r.Update(ctx, node); err != nil {
 						return ctrl.Result{}, fmt.Errorf("failed to update owner of node: %w", err)

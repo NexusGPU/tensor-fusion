@@ -194,10 +194,14 @@ func AddOrOverrideTFClientMissingAnnotationsBeforePatch(pod *v1.Pod, tfInfo Tens
 	}
 }
 
+// AppendTFWorkerLabelsAndAnnotationsAfterTemplate builds worker pod labels and
+// annotations from the workload spec. desiredMembers is the pre-resolved gang
+// size; pass 0 when gang scheduling is not enabled.
 func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 	podTmpl *v1.PodTemplate,
 	workload *tfv1.TensorFusionWorkload,
 	containerName string,
+	desiredMembers int32,
 ) (map[string]string, map[string]string) {
 	labels := maps.Clone(podTmpl.Template.Labels)
 	if labels == nil {
@@ -266,11 +270,25 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 		}
 	}
 
-	// Add gang scheduling annotations if configured
-	if workload.Spec.GangScheduling != nil && workload.Spec.GangScheduling.MinMembers > 0 {
-		annotations[constants.GangMinMembersAnnotation] = strconv.Itoa(int(workload.Spec.GangScheduling.MinMembers))
+	// Add gang scheduling annotations if configured.
+	// Stamp all gang decision inputs so the scheduler only reads pod annotations.
+	if workload.Spec.GangScheduling != nil {
+		annotations[constants.GangEnabledAnnotation] = constants.TrueStringValue
+		if workload.Spec.GangScheduling.MinMembers > 0 {
+			annotations[constants.GangMinMembersAnnotation] = strconv.Itoa(int(workload.Spec.GangScheduling.MinMembers))
+		}
 		if workload.Spec.GangScheduling.Timeout != nil && workload.Spec.GangScheduling.Timeout.Duration > 0 {
 			annotations[constants.GangTimeoutAnnotation] = workload.Spec.GangScheduling.Timeout.Duration.String()
+		}
+
+		if desiredMembers >= 2 {
+			requiredMembers := desiredMembers
+			if workload.Spec.GangScheduling.MinMembers >= 2 {
+				requiredMembers = workload.Spec.GangScheduling.MinMembers
+			}
+			annotations[constants.GangDesiredMembersAnnotation] = strconv.Itoa(int(desiredMembers))
+			annotations[constants.GangRequiredMembersAnnotation] = strconv.Itoa(int(requiredMembers))
+			annotations[constants.GangGroupKeyAnnotation] = workload.Namespace + "/" + workload.Name
 		}
 	}
 

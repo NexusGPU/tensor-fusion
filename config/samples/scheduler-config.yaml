@@ -10,9 +10,13 @@ profiles:
 # Refer: https://kubernetes.io/docs/reference/scheduling/config/
 - schedulerName: tensor-fusion-scheduler
   plugins:
+    preEnqueue:
+      enabled:
+      - name: GPUResourcesFit
     preFilter:
       enabled:
       - name: GPUResourcesFit
+      - name: GPUNetworkTopologyAware
     filter:
       enabled:
       - name: GPUResourcesFit
@@ -21,7 +25,12 @@ profiles:
       enabled:
       - name: GPUResourcesFit
         weight: 5
+      - name: GPUNetworkTopologyAware
+        weight: 3
     reserve:
+      enabled:
+      - name: GPUResourcesFit
+    permit:
       enabled:
       - name: GPUResourcesFit
     postBind:
@@ -35,9 +44,16 @@ profiles:
       tflopsWeight: 0.3
   - name: GPUNetworkTopologyAware
     args:
-      # Avoid the remote TFWorker RX/TX to avoid single node consume too much bandwidth
-      # Need enable monitor to take effect
-      totalIntranetBandWidthGBps: 100
+      # Topology enforcement mode: "soft" (default) or "hard"
+      mode: soft
+      # Topology data source: "auto" (default), "numa", or "vendor"
+      topologySource: auto
+      # Maximum allowed topology tier (1=same NUMA, 2=cross NUMA, 3=unknown)
+      maxAllowedTier: 1
+      # Policy when topology data is missing: "treat-as-worst" (default) or "reject"
+      unknownTopologyPolicy: treat-as-worst
+      # Prefer least-damage GPU selection for single-GPU requests
+      preferLeastDamage: true
   - name: NodeResourcesFit
     args:
       ignoredResourceGroups:
@@ -59,4 +75,3 @@ profiles:
           - utilization: 100
             score: 10
         type: RequestedToCapacityRatio
-

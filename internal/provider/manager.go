@@ -155,6 +155,24 @@ func (m *Manager) DeleteProvider(vendor string) {
 	m.resourceNameMu.Unlock()
 }
 
+// DeleteProviderByName removes a ProviderConfig by its CR name.
+// Used when handling delete events where only the object name is available.
+func (m *Manager) DeleteProviderByName(name string) {
+	m.mu.Lock()
+	var vendor string
+	for v, p := range m.providers {
+		if p.Name == name {
+			vendor = v
+			break
+		}
+	}
+	m.mu.Unlock()
+
+	if vendor != "" {
+		m.DeleteProvider(vendor)
+	}
+}
+
 // updateCaches updates the derived caches from provider config
 // Must be called with m.mu held
 func (m *Manager) updateCaches(provider *tfv1.ProviderConfig) {

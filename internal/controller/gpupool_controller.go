@@ -63,7 +63,7 @@ var (
 	// TODO add metrics for node provisioning and compaction
 
 	// When add/remove pending provisioning or deleting nodes, lock the memory
-	pendingGPUNodeStateLock sync.Mutex
+	pendingGPUNodeStateLock sync.RWMutex
 )
 
 func init() {
@@ -84,10 +84,10 @@ type GPUPoolReconciler struct {
 // First round reconcile should build correct capacity, and then check provisioning
 // for each pool first reconcile, record the time + StatusCheckInterval * 2
 // and requeue until current time after that, start provisioning loop
-var provisioningInitializationMinTime = map[string]time.Time{}
+var provisioningInitializationMinTime sync.Map
 
 // When GPU nodeSelector changed, trigger all node update
-var poolSelectorChangeMap = map[string]string{}
+var poolSelectorChangeMap sync.Map
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools/status,verbs=get;update;patch
@@ -130,8 +130,8 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	if _, ok := provisioningInitializationMinTime[pool.Name]; !ok {
-		provisioningInitializationMinTime[pool.Name] = time.Now().Add(constants.StatusCheckInterval * 3)
+	if _, ok := provisioningInitializationMinTime.Load(pool.Name); !ok {
+		provisioningInitializationMinTime.Store(pool.Name, time.Now().Add(constants.StatusCheckInterval*3))
 	}
 
 	if ctrlResult, err := r.reconcilePoolComponents(ctx, pool); err != nil {
@@ -147,7 +147,7 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Provisioning mode, check capacity and scale up if needed
 	if isProvisioningMode {
 		// avoid provision before first round reconcile
-		if time.Now().Before(provisioningInitializationMinTime[pool.Name]) {
+		if minTime, ok := provisioningInitializationMinTime.Load(pool.Name); ok && time.Now().Before(minTime.(time.Time)) {
 			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 		}
 		// avoid concurrent provisioning, must wait pending nodes bound, then start next round capacity check
@@ -173,13 +173,18 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 		}
 
-		if len(PendingDeletionGPUNodes[pool.Name]) > 0 {
+		pendingGPUNodeStateLock.RLock()
+		hasPendingDeletion := len(PendingDeletionGPUNodes[pool.Name]) > 0
+		hasPendingCreation := len(PendingGPUNodeClaim[pool.Name]) > 0
+		pendingGPUNodeStateLock.RUnlock()
+
+		if hasPendingDeletion {
 			if err := r.reconcilePendingDeletingNodes(ctx, pool); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
 
-		if len(PendingGPUNodeClaim[pool.Name]) > 0 {
+		if hasPendingCreation {
 			if err := r.reconcilePendingCreatingNodes(ctx, pool); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -191,7 +196,11 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *GPUPoolReconciler) reconcilePendingDeletingNodes(ctx context.Context, pool *tfv1.GPUPool) error {
 	log := log.FromContext(ctx)
 	remainDeletingNodes := []string{}
-	deletingNodes := PendingDeletionGPUNodes[pool.Name]
+	pendingGPUNodeStateLock.RLock()
+	srcDeletingNodes := PendingDeletionGPUNodes[pool.Name]
+	deletingNodes := make([]string, len(srcDeletingNodes))
+	copy(deletingNodes, srcDeletingNodes)
+	pendingGPUNodeStateLock.RUnlock()
 	for _, gpuNodeName := range deletingNodes {
 		gpuNodeList := &tfv1.GPUNodeList{}
 		if err := r.List(ctx, gpuNodeList, client.MatchingLabels{constants.ProvisionerLabelKey: gpuNodeName}); err != nil {
@@ -238,9 +247,15 @@ func (r *GPUPoolReconciler) reconcilePendingDeletingNodes(ctx context.Context, p
 }
 
 func (r *GPUPoolReconciler) reconcilePendingCreatingNodes(ctx context.Context, pool *tfv1.GPUPool) error {
-	latestPendingClaim := make(map[string]tfv1.Resource, len(PendingGPUNodeClaim[pool.Name]))
+	pendingGPUNodeStateLock.RLock()
+	currentClaimNames := make([]string, 0, len(PendingGPUNodeClaim[pool.Name]))
+	for k := range PendingGPUNodeClaim[pool.Name] {
+		currentClaimNames = append(currentClaimNames, k)
+	}
+	pendingGPUNodeStateLock.RUnlock()
+	latestPendingClaim := make(map[string]tfv1.Resource, len(currentClaimNames))
 	completedBoundClaims := []string{}
-	for claimName := range PendingGPUNodeClaim[pool.Name] {
+	for _, claimName := range currentClaimNames {
 		gpuNodeClaim := &tfv1.GPUNodeClaim{}
 		if err := r.Get(ctx, client.ObjectKey{Name: claimName}, gpuNodeClaim); err != nil {
 			return err
@@ -416,7 +431,7 @@ func (r *GPUPoolReconciler) reconcilePoolSelectorChange(ctx context.Context, poo
 	// Handle MultiVendorNodeSelector mode
 	if len(nodeManagerConfig.MultiVendorNodeSelector) > 0 {
 		hash := utils.GetObjectHash(nodeManagerConfig.MultiVendorNodeSelector)
-		if poolSelectorChangeMap[pool.Name] == hash {
+		if v, ok := poolSelectorChangeMap.Load(pool.Name); ok && v.(string) == hash {
 			return nil
 		}
 
@@ -455,14 +470,14 @@ func (r *GPUPoolReconciler) reconcilePoolSelectorChange(ctx context.Context, poo
 				}
 			}
 		}
-		poolSelectorChangeMap[pool.Name] = hash
+		poolSelectorChangeMap.Store(pool.Name, hash)
 		return nil
 	}
 
 	// Handle default NodeSelector mode
 	if nodeManagerConfig.NodeSelector != nil {
 		hash := utils.GetObjectHash(nodeManagerConfig.NodeSelector)
-		if poolSelectorChangeMap[pool.Name] == hash {
+		if v, ok := poolSelectorChangeMap.Load(pool.Name); ok && v.(string) == hash {
 			return nil
 		}
 
@@ -492,7 +507,7 @@ func (r *GPUPoolReconciler) reconcilePoolSelectorChange(ctx context.Context, poo
 				}
 			}
 		}
-		poolSelectorChangeMap[pool.Name] = hash
+		poolSelectorChangeMap.Store(pool.Name, hash)
 		return nil
 	}
 	return nil

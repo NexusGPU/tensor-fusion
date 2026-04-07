@@ -35,6 +35,10 @@ var poolMetricsMap = make(map[string]*PoolResourceMetrics, 4)
 var gpuAllocationMetricsLock sync.RWMutex
 var gpuAllocationMetricsMap = make(map[string]*GPUAllocationMetrics, 200)
 
+// Per-GPU card resource metrics, key is GPU name (UUID)
+var gpuResourceMetricsLock sync.RWMutex
+var gpuResourceMetricsMap = make(map[string]*GPUResourceMetrics, 100)
+
 var settingLock sync.RWMutex
 
 var log = ctrl.Log.WithName("metrics-recorder")
@@ -72,6 +76,74 @@ func RemoveNodeMetrics(nodeName string) {
 	nodeMetricsLock.Lock()
 	// Node lifecycle is much longer than worker, so just delete the metrics, 1 minute metrics interval is enough
 	delete(nodeMetricsMap, nodeName)
+}
+
+func SetGPUMetrics(gpuList []tfv1.GPU, nodeName, poolName string) {
+	gpuResourceMetricsLock.Lock()
+	defer gpuResourceMetricsLock.Unlock()
+
+	// Remove stale entries for this node that are no longer in the GPU list
+	currentGPUs := make(map[string]struct{}, len(gpuList))
+	for i := range gpuList {
+		currentGPUs[gpuList[i].Name] = struct{}{}
+	}
+	for key, m := range gpuResourceMetricsMap {
+		if m.NodeName == nodeName {
+			if _, ok := currentGPUs[key]; !ok {
+				delete(gpuResourceMetricsMap, key)
+			}
+		}
+	}
+
+	for i := range gpuList {
+		gpu := &gpuList[i]
+		if gpu.Status.Available == nil || gpu.Status.Capacity == nil {
+			continue
+		}
+
+		capTflops := gpu.Status.Capacity.Tflops.AsApproximateFloat64()
+		availTflops := gpu.Status.Available.Tflops.AsApproximateFloat64()
+		allocTflops := capTflops - availTflops
+
+		capVram := gpu.Status.Capacity.Vram.AsApproximateFloat64()
+		availVram := gpu.Status.Available.Vram.AsApproximateFloat64()
+		allocVram := capVram - availVram
+
+		var allocTflopsPercent, allocVramPercent float64
+		if capTflops > 0 {
+			allocTflopsPercent = allocTflops / capTflops * 100
+		}
+		if capVram > 0 {
+			allocVramPercent = allocVram / capVram * 100
+		}
+
+		gpuResourceMetricsMap[gpu.Name] = &GPUResourceMetrics{
+			GPUName:                gpu.Name,
+			NodeName:               nodeName,
+			PoolName:               poolName,
+			GPUModel:               gpu.Status.GPUModel,
+			Phase:                  string(gpu.Status.Phase),
+			CapacityTflops:         capTflops,
+			AvailableTflops:        availTflops,
+			AllocatedTflops:        allocTflops,
+			AllocatedTflopsPercent: allocTflopsPercent,
+			CapacityVramBytes:      capVram,
+			AvailableVramBytes:     availVram,
+			AllocatedVramBytes:     allocVram,
+			AllocatedVramPercent:   allocVramPercent,
+			LastRecordTime:         time.Now(),
+		}
+	}
+}
+
+func RemoveGPUMetricsByNode(nodeName string) {
+	gpuResourceMetricsLock.Lock()
+	defer gpuResourceMetricsLock.Unlock()
+	for key, m := range gpuResourceMetricsMap {
+		if m.NodeName == nodeName {
+			delete(gpuResourceMetricsMap, key)
+		}
+	}
 }
 
 func SetWorkerMetricsByWorkload(
@@ -317,6 +389,13 @@ func RemoveGPUAllocationMetrics(podName string) {
 	delete(gpuAllocationMetricsMap, podName)
 }
 
+func HasGPUAllocationMetrics(podName string) bool {
+	gpuAllocationMetricsLock.RLock()
+	defer gpuAllocationMetricsLock.RUnlock()
+	_, exists := gpuAllocationMetricsMap[podName]
+	return exists
+}
+
 // SetGPUAllocationMetrics sets aggregated GPU allocation metrics for a pod
 func SetGPUAllocationMetrics(gpuStore map[types.NamespacedName]*tfv1.GPU, pod *corev1.Pod) {
 	gpuAllocationMetricsLock.Lock()
@@ -407,6 +486,27 @@ func SetSchedulerMetrics(poolName string, isSuccess bool) {
 	}
 }
 
+// SetTopologyMetrics records GPU topology scheduling metrics.
+func SetTopologyMetrics(poolName string, satisfied bool, isFallback bool, isDegraded bool) {
+	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
+		TensorFusionSystemMetricsMap[poolName] = &TensorFusionSystemMetrics{
+			PoolName: poolName,
+		}
+	}
+	m := TensorFusionSystemMetricsMap[poolName]
+	if satisfied {
+		m.TotalTopoSatisfiedCount++
+	} else {
+		m.TotalTopoUnsatisfiedCount++
+	}
+	if isFallback {
+		m.TotalTopoFallbackCount++
+	}
+	if isDegraded {
+		m.TotalTopoSearchDegradedCount++
+	}
+}
+
 // TODO should record metrics after autoscaling feature added
 func SetAutoscalingMetrics(poolName string, isScaleUp bool) {
 	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
@@ -470,7 +570,7 @@ func (mr *MetricsRecorder) Start() {
 }
 
 func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
-	if len(workerMetricsMap) <= 0 && len(nodeMetricsMap) <= 0 {
+	if len(workerMetricsMap) <= 0 && len(nodeMetricsMap) <= 0 && len(gpuResourceMetricsMap) <= 0 {
 		return
 	}
 
@@ -576,6 +676,12 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("total_allocation_success_cnt", successCount)
 		enc.AddField("total_scale_up_cnt", scaleUpCount)
 		enc.AddField("total_scale_down_cnt", scaleDownCount)
+		if item, ok := TensorFusionSystemMetricsMap[poolName]; ok {
+			enc.AddField("total_topo_satisfied_cnt", item.TotalTopoSatisfiedCount)
+			enc.AddField("total_topo_unsatisfied_cnt", item.TotalTopoUnsatisfiedCount)
+			enc.AddField("total_topo_fallback_cnt", item.TotalTopoFallbackCount)
+			enc.AddField("total_topo_search_degraded_cnt", item.TotalTopoSearchDegradedCount)
+		}
 		enc.EndLine(now)
 	}
 
@@ -618,6 +724,27 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.EndLine(now)
 	}
 	gpuAllocationMetricsLock.RUnlock()
+
+	// Per-GPU card resource metrics
+	gpuResourceMetricsLock.RLock()
+	for _, metrics := range gpuResourceMetricsMap {
+		enc.StartLine("tf_gpu_metrics")
+		enc.AddTag("gpu", metrics.GPUName)
+		enc.AddTag("node", metrics.NodeName)
+		enc.AddTag("pool", metrics.PoolName)
+		enc.AddTag("gpu_model", metrics.GPUModel)
+		enc.AddTag("phase", metrics.Phase)
+		enc.AddField("capacity_tflops", metrics.CapacityTflops)
+		enc.AddField("available_tflops", metrics.AvailableTflops)
+		enc.AddField("allocated_tflops", metrics.AllocatedTflops)
+		enc.AddField("allocated_tflops_percent", metrics.AllocatedTflopsPercent)
+		enc.AddField("capacity_vram_bytes", metrics.CapacityVramBytes)
+		enc.AddField("available_vram_bytes", metrics.AvailableVramBytes)
+		enc.AddField("allocated_vram_bytes", metrics.AllocatedVramBytes)
+		enc.AddField("allocated_vram_percent", metrics.AllocatedVramPercent)
+		enc.EndLine(now)
+	}
+	gpuResourceMetricsLock.RUnlock()
 
 	nodeMetricsLock.RUnlock()
 

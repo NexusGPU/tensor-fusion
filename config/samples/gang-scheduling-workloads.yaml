@@ -1,0 +1,87 @@
+---
+# Strict gang scheduling: quorum defaults to replicas because minMembers is omitted.
+# This guarantee applies to a fresh scheduling batch. If an existing Deployment is
+# already running and is later scaled out, previously running replicas from an older
+# ReplicaSet are not automatically rolled back when the new target replica count
+# cannot satisfy the new gang quorum.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tf-deploy-gang-strict
+  namespace: default
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: tf-deploy-gang-strict
+  template:
+    metadata:
+      labels:
+        app: tf-deploy-gang-strict
+      annotations:
+        tensor-fusion.ai/gang-enabled: "true"
+        tensor-fusion.ai/gang-timeout: 5m
+        tensor-fusion.ai/gpu-count: "1"
+        tensor-fusion.ai/tflops-request: "100"
+        tensor-fusion.ai/vram-request: 10Gi
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: worker
+        image: your-registry/your-tf-worker:latest
+        command: ["sh", "-c", "sleep 3600"]
+---
+# Explicit quorum override: replicas=4 but only 2 members are required to pass the gang gate.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tf-job-gang-min-members-override
+  namespace: default
+spec:
+  completions: 4
+  parallelism: 4
+  completionMode: Indexed
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: tf-job-gang-min-members-override
+      annotations:
+        tensor-fusion.ai/gang-enabled: "true"
+        tensor-fusion.ai/gang-min-members: "2"
+        tensor-fusion.ai/gang-timeout: 5m
+        tensor-fusion.ai/gpu-count: "1"
+        tensor-fusion.ai/tflops-request: "100"
+        tensor-fusion.ai/vram-request: 10Gi
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: worker
+        image: your-registry/your-tf-worker:latest
+        command: ["sh", "-c", "echo index=${JOB_COMPLETION_INDEX}; sleep 3600"]
+---
+# Non-gang workload: no gang annotations, so scheduling falls back to normal behavior.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tf-deploy-no-gang
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tf-deploy-no-gang
+  template:
+    metadata:
+      labels:
+        app: tf-deploy-no-gang
+      annotations:
+        tensor-fusion.ai/gpu-count: "1"
+        tensor-fusion.ai/tflops-request: "100"
+        tensor-fusion.ai/vram-request: 10Gi
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: worker
+        image: your-registry/your-tf-worker:latest
+        command: ["sh", "-c", "sleep 3600"]

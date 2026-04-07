@@ -9,12 +9,16 @@ import (
 type TensorFusionSystemMetrics struct {
 	PoolName string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
 
-	TotalWorkerCount            int64 `json:"totalWorkerCount" gorm:"column:total_workers_cnt"`
-	TotalNodeCount              int64 `json:"totalNodeCount" gorm:"column:total_nodes_cnt"`
-	TotalAllocationFailCount    int64 `json:"totalAllocationFailCount" gorm:"column:total_allocation_fail_cnt"`
-	TotalAllocationSuccessCount int64 `json:"totalAllocationSuccessCount" gorm:"column:total_allocation_success_cnt"`
-	TotalScaleUpCount           int64 `json:"totalScaleUpCount" gorm:"column:total_scale_up_cnt"`
-	TotalScaleDownCount         int64 `json:"totalScaleDownCount" gorm:"column:total_scale_down_cnt"`
+	TotalWorkerCount             int64 `json:"totalWorkerCount" gorm:"column:total_workers_cnt"`
+	TotalNodeCount               int64 `json:"totalNodeCount" gorm:"column:total_nodes_cnt"`
+	TotalAllocationFailCount     int64 `json:"totalAllocationFailCount" gorm:"column:total_allocation_fail_cnt"`
+	TotalAllocationSuccessCount  int64 `json:"totalAllocationSuccessCount" gorm:"column:total_allocation_success_cnt"`
+	TotalScaleUpCount            int64 `json:"totalScaleUpCount" gorm:"column:total_scale_up_cnt"`
+	TotalScaleDownCount          int64 `json:"totalScaleDownCount" gorm:"column:total_scale_down_cnt"`
+	TotalTopoSatisfiedCount      int64 `json:"totalTopoSatisfiedCount" gorm:"column:total_topo_satisfied_cnt"`
+	TotalTopoUnsatisfiedCount    int64 `json:"totalTopoUnsatisfiedCount" gorm:"column:total_topo_unsatisfied_cnt"`
+	TotalTopoFallbackCount       int64 `json:"totalTopoFallbackCount" gorm:"column:total_topo_fallback_cnt"`
+	TotalTopoSearchDegradedCount int64 `json:"totalTopoSearchDegradedCount" gorm:"column:total_topo_search_degraded_cnt"`
 
 	// NOTE: make sure new fields will be migrated in SetupTable function
 
@@ -238,6 +242,33 @@ type GPUAllocationMetrics struct {
 
 func (gam GPUAllocationMetrics) TableName() string {
 	return "tf_gpu_allocation"
+}
+
+// GPUResourceMetrics records per-GPU card capacity and allocation status
+type GPUResourceMetrics struct {
+	GPUName  string `json:"gpuName" gorm:"column:gpu;index:,class:INVERTED"`
+	NodeName string `json:"nodeName" gorm:"column:node;index:,class:INVERTED"`
+	PoolName string `json:"poolName" gorm:"column:pool;index:,class:INVERTED"`
+	GPUModel string `json:"gpuModel" gorm:"column:gpu_model;index:,class:INVERTED"`
+	Phase    string `json:"phase" gorm:"column:phase;index:,class:INVERTED"`
+
+	CapacityTflops         float64 `json:"capacityTflops" gorm:"column:capacity_tflops"`
+	AvailableTflops        float64 `json:"availableTflops" gorm:"column:available_tflops"`
+	AllocatedTflops        float64 `json:"allocatedTflops" gorm:"column:allocated_tflops"`
+	AllocatedTflopsPercent float64 `json:"allocatedTflopsPercent" gorm:"column:allocated_tflops_percent"`
+
+	CapacityVramBytes    float64 `json:"capacityVramBytes" gorm:"column:capacity_vram_bytes"`
+	AvailableVramBytes   float64 `json:"availableVramBytes" gorm:"column:available_vram_bytes"`
+	AllocatedVramBytes   float64 `json:"allocatedVramBytes" gorm:"column:allocated_vram_bytes"`
+	AllocatedVramPercent float64 `json:"allocatedVramPercent" gorm:"column:allocated_vram_percent"`
+
+	// NOTE: make sure new fields will be migrated in SetupTable function
+
+	LastRecordTime time.Time `json:"lastRecordTime" gorm:"column:ts;index:,class:TIME"`
+}
+
+func (gm GPUResourceMetrics) TableName() string {
+	return "tf_gpu_metrics"
 }
 
 // NOTE: make sure new metrics will be migrated in SetupTable function
