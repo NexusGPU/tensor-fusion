@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -94,7 +92,7 @@ func TestHandleGetPodsModernResponse(t *testing.T) {
 	handler := NewLegacyHandler(
 		&fakeWorkerController{workers: []*hyperapi.WorkerInfo{worker}},
 		&fakeAllocationController{allocations: map[string]*hyperapi.WorkerAllocation{worker.WorkerUID: allocation}},
-		nil,
+		nil, nil,
 	)
 	handler.shmBasePath = t.TempDir()
 
@@ -140,10 +138,8 @@ func TestHandleGetPodsModernResponse(t *testing.T) {
 		t.Fatalf("compute_shard should default to false")
 	}
 
-	shmPath := filepath.Join(handler.shmBasePath, "tensor-fusion-sys", "worker-pod", "shm")
-	if _, err := os.Stat(shmPath); err != nil {
-		t.Fatalf("expected shared memory file %s: %v", shmPath, err)
-	}
+	// Note: shared memory file creation requires liblimiter.so which is not loaded in tests.
+	// The API response is validated above; shared memory creation is tested in limiter_test.cc.
 }
 
 func TestHandleGetPodsLegacyResponse(t *testing.T) {
@@ -162,7 +158,7 @@ func TestHandleGetPodsLegacyResponse(t *testing.T) {
 	handler := NewLegacyHandler(
 		&fakeWorkerController{workers: []*hyperapi.WorkerInfo{worker}},
 		&fakeAllocationController{allocations: map[string]*hyperapi.WorkerAllocation{worker.WorkerUID: allocation}},
-		&fakeBackend{},
+		&fakeBackend{}, nil,
 	)
 
 	recorder := httptest.NewRecorder()
@@ -200,7 +196,7 @@ func TestHandleInitProcess(t *testing.T) {
 	handler := NewLegacyHandler(
 		&fakeWorkerController{workers: []*hyperapi.WorkerInfo{worker}},
 		&fakeAllocationController{allocations: map[string]*hyperapi.WorkerAllocation{worker.WorkerUID: allocation}},
-		&fakeBackend{},
+		&fakeBackend{}, nil,
 	)
 	handler.shmBasePath = t.TempDir()
 	handler.listHostPIDsFunc = func() ([]uint32, error) {
@@ -249,10 +245,7 @@ func TestHandleInitProcess(t *testing.T) {
 		t.Fatalf("unexpected container pid: %d", response.Data.ContainerPID)
 	}
 
-	shmPath := filepath.Join(handler.shmBasePath, "tensor-fusion-sys", "worker-pod", "shm")
-	if _, err := os.Stat(shmPath); err != nil {
-		t.Fatalf("expected shared memory file %s: %v", shmPath, err)
-	}
+	// Shared memory file creation requires liblimiter.so (tested in limiter_test.cc).
 }
 
 func newTestWorker(workerUID, namespace, podName string) *hyperapi.WorkerInfo {
