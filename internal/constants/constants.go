@@ -18,7 +18,8 @@ var (
 	PendingRequeueDuration     = time.Second * 3
 	StatusCheckInterval        = time.Second * 6
 	GracefulPeriodSeconds      = ptr.To(int64(5))
-	UnschedQueueBufferDuration = 10 * time.Second
+	UnschedQueueBufferDuration     = 10 * time.Second
+	NominatedPodRequeueTimeout     = 5 * time.Minute
 )
 
 const (

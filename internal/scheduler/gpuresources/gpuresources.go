@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -791,15 +792,20 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 		return fwk.QueueSkip, nil
 	}
 
+	logger.Info("queueingHint called for TF worker pod",
+		"pod", klog.KObj(pod),
+		"nominatedNode", pod.Status.NominatedNodeName,
+		"newObjType", fmt.Sprintf("%T", newObj))
+
 	oldGPU, err := convertToGPU(oldObj)
 	if err != nil {
-		logger.V(5).Info("Failed to convert oldObj to GPU, skip", "pod", klog.KObj(pod), "error", err)
+		logger.Info("Failed to convert oldObj to GPU, skip", "pod", klog.KObj(pod), "error", err)
 		return fwk.QueueSkip, nil
 	}
 
 	newGPU, err := convertToGPU(newObj)
 	if err != nil {
-		logger.V(5).Info("Failed to convert newObj to GPU, skip", "pod", klog.KObj(pod), "error", err)
+		logger.Info("Failed to convert newObj to GPU, skip", "pod", klog.KObj(pod), "error", err)
 		return fwk.QueueSkip, nil
 	}
 
@@ -813,13 +819,30 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 	//    has been decided and resources will eventually be available
 	if pod.Status.NominatedNodeName != "" && newGPU != nil {
 		gpuNodeName := newGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		logger.Info("queueingHint: nominated pod GPU CR update received",
+			"pod", klog.KObj(pod),
+			"nominatedNode", pod.Status.NominatedNodeName,
+			"gpu", newGPU.Name,
+			"gpuNodeName", gpuNodeName,
+			"nodeSelector", newGPU.Status.NodeSelector,
+			"match", gpuNodeName == pod.Status.NominatedNodeName)
 		if gpuNodeName == pod.Status.NominatedNodeName {
-			logger.V(4).Info("GPU CR updated on nominated node, immediately requeue preempting pod",
+			logger.Info("GPU CR updated on nominated node, immediately requeue preempting pod",
 				"pod", klog.KObj(pod),
 				"nominatedNode", pod.Status.NominatedNodeName,
 				"gpu", newGPU.Name)
 			return fwk.Queue, nil
 		}
+		// Fallback: if the nominated pod has been pending too long, the nomination is likely stale.
+		// Skip the nominated-node-only fast path and fall through to the general logic below,
+		// which checks resource increase + CheckQuotaAndFilter across ALL nodes.
+		if time.Since(pod.CreationTimestamp.Time) <= constants.NominatedPodRequeueTimeout {
+			return fwk.QueueSkip, nil
+		}
+		logger.Info("Nominated pod pending too long, falling through to general requeue logic",
+			"pod", klog.KObj(pod),
+			"nominatedNode", pod.Status.NominatedNodeName,
+			"pendingSince", pod.CreationTimestamp.Time)
 	}
 
 	// QueueingHint receives one GPU CR event at a time. We only treat it as a useful
