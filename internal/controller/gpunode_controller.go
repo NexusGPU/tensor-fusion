@@ -353,6 +353,10 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 		if err := r.Status().Update(ctx, gpunode); err != nil {
 			return fmt.Errorf("failed to update GPU node status to failed: %w", err)
 		}
+		if _, err := r.syncStatusToGPUDevices(ctx, gpunode, tfv1.TensorFusionGPUPhasePending); err != nil {
+			log.Error(err, "failed to cascade GPU phase to Pending when node failed", "node", gpunode.Name)
+		}
+
 		metrics.SetNodeMetrics(gpunode, pool, nil)
 	}
 
