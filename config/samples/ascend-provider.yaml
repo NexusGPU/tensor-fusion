@@ -67,7 +67,7 @@ spec:
       fullModelName: Huawei Ascend 910B
       maxIsolationGroups: 5
       maxPartitions: 7
-      model: Ascend910B
+      model: Ascend 910B
       partitionTemplateRefs:
         - vir01
         - vir02

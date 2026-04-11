@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -316,7 +315,7 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 	for deviceID, resName := range addedDevices {
 		for _, detector := range d.vendorDetectors {
 			resourceNamePrefixes := detector.GetResourceNamePrefixes()
-			if slices.Contains(resourceNamePrefixes, resName) {
+			if hasResourceNamePrefix(resourceNamePrefixes, resName) {
 				usedBySystem, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(deviceID, resName)
 				klog.V(4).Infof(
 					"Device added: %s, resource: %s, patching with usedBy: %s, realDeviceID: %s",
@@ -337,13 +336,20 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 	for deviceID, resName := range removedDevices {
 		for _, detector := range d.vendorDetectors {
 			resourceNamePrefixes := detector.GetResourceNamePrefixes()
-			if slices.Contains(resourceNamePrefixes, resName) {
+			if hasResourceNamePrefix(resourceNamePrefixes, resName) {
+				// Normalize device ID the same way as the add path so that
+				// 3rd-party device plugins (e.g. HAMI) whose IDs differ from
+				// the real GPU UUID can be correctly matched back.
+				_, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(deviceID, resName)
 				klog.V(4).Infof(
-					"Device plugin allocated container removed: %s, resource: %s, patching usedBy field to tensor fusion",
+					"Device plugin allocated container removed: %s "+
+						"(realDeviceID: %s), resource: %s, "+
+						"patching usedBy field to tensor fusion",
 					deviceID,
+					realDeviceID,
 					resName,
 				)
-				if err := d.patchGPUResource(deviceID, string(tfv1.UsedByTensorFusion)); err != nil {
+				if err := d.patchGPUResource(realDeviceID, string(tfv1.UsedByTensorFusion)); err != nil {
 					klog.Errorf("Failed to patch GPU resource usedBy field to tensor fusion for removed device %s: %v", deviceID, err)
 					hasError = true
 				}
@@ -356,6 +362,17 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 		d.previousDeviceIDs = allocated
 	}
 	return nil
+}
+
+// hasResourceNamePrefix returns true if resName matches or starts with any of the prefixes.
+// This handles cases like nvidia.com/mig-1g.5gb matching prefix nvidia.com/mig.
+func hasResourceNamePrefix(prefixes []string, resName string) bool {
+	for _, prefix := range prefixes {
+		if resName == prefix || strings.HasPrefix(resName, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // patchGPUResource patches a GPU resource with the specified usedBy value

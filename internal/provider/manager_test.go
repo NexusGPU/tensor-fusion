@@ -51,7 +51,7 @@ func TestUpdateAndGetProvider(t *testing.T) {
 			},
 			InUseResourceNames: []string{
 				"nvidia.com/gpu",
-				"nvidia.com/mig-1g.5gb",
+				"nvidia.com/mig-1g.10gb",
 			},
 			HardwareMetadata: []tfv1.HardwareModelInfo{
 				{
