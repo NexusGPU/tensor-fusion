@@ -126,6 +126,18 @@ const (
 	LdPreloadEnv     = "LD_PRELOAD"
 	LdPreloadLimiter = "/home/app/libcuda_limiter.so"
 
+	// Soft isolation: C limiter injected directly into business container via middleware image
+	TFSoftLimiterInitContainerName = "init-soft-limiter"
+	TFSoftLimiterVolumeName        = "tf-soft-limiter"
+	TFSoftLimiterVolumeMountPath   = "/tensor-fusion-limiter"
+	TFSoftLimiterLibName           = "libcuda_limiter.so"
+	LdPreloadSoftLimiter           = TFSoftLimiterVolumeMountPath + "/" + TFSoftLimiterLibName
+
+	// Environment variables required by C cuda_hook
+	TFIsolationModeEnv  = "TF_ISOLATION_MODE"
+	TFShmPathEnv        = "TF_SHM_PATH"
+	TFShmPathValueInPod = "/run/tensor-fusion/shm/shm"
+
 	SharedMemMountSubPath = "/shm"
 
 	// disable GPU limiter, for emergency use

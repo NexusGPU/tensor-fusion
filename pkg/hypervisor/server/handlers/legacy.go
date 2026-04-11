@@ -27,7 +27,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
@@ -35,6 +34,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 	workerstate "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/worker/state"
 	"github.com/gin-gonic/gin"
+	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 )
 
@@ -43,6 +43,7 @@ type LegacyHandler struct {
 	workerController     framework.WorkerController
 	allocationController framework.WorkerAllocationController
 	backend              framework.Backend
+	deviceController     framework.DeviceController
 	listHostPIDsFunc     func() ([]uint32, error)
 	processMappingFunc   func(hostPID uint32) (*framework.ProcessMappingInfo, error)
 	shmBasePath          string
@@ -53,11 +54,13 @@ func NewLegacyHandler(
 	workerController framework.WorkerController,
 	allocationController framework.WorkerAllocationController,
 	backend framework.Backend,
+	deviceController framework.DeviceController,
 ) *LegacyHandler {
 	handler := &LegacyHandler{
 		workerController:     workerController,
 		allocationController: allocationController,
 		backend:              backend,
+		deviceController:     deviceController,
 		shmBasePath: filepath.Join(
 			constants.TFDataPath,
 			strings.TrimPrefix(constants.SharedMemMountSubPath, "/"),
@@ -105,8 +108,9 @@ func (h *LegacyHandler) HandleGetLimiter(c *gin.Context) {
 }
 
 // HandleTrap handles POST /api/v1/trap
+// When VRAM pressure is detected, this endpoint identifies low-QoS workers
+// that can be snapshotted to release VRAM for higher-priority workloads.
 func (h *LegacyHandler) HandleTrap(c *gin.Context) {
-	// Trap endpoint: start snapshot low QoS workers to release VRAM
 	workers, err := h.workerController.ListWorkers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
@@ -120,9 +124,11 @@ func (h *LegacyHandler) HandleTrap(c *gin.Context) {
 			continue
 		}
 
-		// TODO: Check QoS level and snapshot low QoS workers
-		// For now, snapshot all workers (this should be filtered by QoS)
-		snapshotCount++
+		// Only snapshot low QoS workers to release VRAM for higher priority workloads
+		if worker.QoS == tfv1.QoSLow || worker.QoS == tfv1.QoSMedium {
+			snapshotCount++
+			klog.V(2).Infof("VRAM trap: worker %s (QoS=%s) selected for snapshot", worker.WorkerUID, worker.QoS)
+		}
 	}
 
 	c.JSON(http.StatusOK, api.TrapResponse{
@@ -233,6 +239,12 @@ func (h *LegacyHandler) HandleInitProcess(c *gin.Context) {
 			Message: fmt.Sprintf("Failed to initialize process: %v", err),
 		})
 		return
+	}
+
+	// Register host PID in shared memory so cuda-limiter can track active processes
+	if err := h.registerPIDInSharedMemory(namespace, podName, hostPID); err != nil {
+		klog.Warningf("Failed to register PID %d in shared memory for %s/%s: %v",
+			hostPID, namespace, podName, err)
 	}
 
 	c.JSON(http.StatusOK, api.ProcessInitResponse{
@@ -546,115 +558,61 @@ func getAllocationIsolation(allocation *api.WorkerAllocation) string {
 	return string(allocation.WorkerInfo.IsolationMode)
 }
 
-func (h *LegacyHandler) ensureWorkerSharedMemory(namespace, podName string, allocation *api.WorkerAllocation) error {
-	if h.shmBasePath == "" || allocation == nil || allocation.WorkerInfo == nil {
-		return nil
-	}
-
-	configs := buildSharedMemoryConfigs(allocation)
-	if len(configs) == 0 {
-		return nil
-	}
-
-	podIdentifier := workerstate.NewPodIdentifier(namespace, podName)
-
-	handle, err := workerstate.OpenSharedMemoryHandle(h.shmBasePath, podIdentifier)
+func (h *LegacyHandler) registerPIDInSharedMemory(namespace, podName string, hostPID uint32) error {
+	podId := workerstate.NewPodIdentifier(namespace, podName)
+	handle, err := workerstate.OpenSharedMemoryHandle(h.shmBasePath, podId)
 	if err != nil {
-		handle, err = workerstate.CreateSharedMemoryHandle(h.shmBasePath, podIdentifier, configs)
-		if err != nil {
-			return err
-		}
-		return handle.Close()
+		return fmt.Errorf("failed to open shm for PID registration: %w", err)
 	}
-	defer func() {
-		_ = handle.Close()
-	}()
-
-	updateSharedMemoryState(handle.GetState(), configs)
+	state := handle.GetState()
+	if state != nil {
+		state.AddPID(int(hostPID))
+	}
 	return nil
 }
 
-func buildSharedMemoryConfigs(allocation *api.WorkerAllocation) []workerstate.DeviceConfig {
+func (h *LegacyHandler) ensureWorkerSharedMemory(namespace, podName string, allocation *api.WorkerAllocation) error {
 	if allocation == nil || allocation.WorkerInfo == nil {
 		return nil
 	}
 
+	configs := buildWorkerDeviceConfigs(allocation)
+	if len(configs) == 0 {
+		return nil
+	}
+
+	podId := workerstate.NewPodIdentifier(namespace, podName)
+	_, err := workerstate.CreateSharedMemoryHandle(h.shmBasePath, podId, configs)
+	return err
+}
+
+func buildWorkerDeviceConfigs(allocation *api.WorkerAllocation) []workerstate.DeviceConfig {
+	if allocation == nil || allocation.WorkerInfo == nil {
+		return nil
+	}
 	configs := make([]workerstate.DeviceConfig, 0, len(allocation.DeviceInfos))
 	for _, deviceInfo := range allocation.DeviceInfos {
 		if deviceInfo == nil {
 			continue
 		}
-
 		memLimit := deviceInfo.TotalMemoryBytes
 		if allocation.WorkerInfo.Limits.Vram.Value() > 0 {
 			memLimit = uint64(allocation.WorkerInfo.Limits.Vram.Value())
 		}
-
 		smCount := parseUint32Property(deviceInfo.Properties, "totalComputeUnits")
 		computeCapability := ""
 		if deviceInfo.Properties != nil {
 			computeCapability = deviceInfo.Properties["computeCapability"]
 		}
-
 		configs = append(configs, workerstate.DeviceConfig{
-			DeviceIdx:      uint32(deviceInfo.Index),
-			DeviceUUID:     normalizeGPUUUID(deviceInfo.UUID),
-			UpLimit:        computeLimitPercent(allocation.WorkerInfo, deviceInfo),
-			MemLimit:       memLimit,
-			SMCount:        smCount,
-			MaxThreadPerSM: 0,
-			TotalCudaCores: smCount * coresPerSM(computeCapability),
+			DeviceIdx:  uint32(deviceInfo.Index),
+			DeviceUUID: normalizeGPUUUID(deviceInfo.UUID),
+			UpLimit:    computeLimitPercent(allocation.WorkerInfo, deviceInfo),
+			MemLimit:   memLimit,
+			SMCount:    smCount * coresPerSM(computeCapability),
 		})
 	}
-
 	return configs
-}
-
-func updateSharedMemoryState(state *workerstate.SharedDeviceState, configs []workerstate.DeviceConfig) {
-	if state == nil {
-		return
-	}
-
-	deviceCount := uint32(len(configs))
-	now := uint64(time.Now().Unix())
-
-	if state.V1 != nil {
-		state.V1.DeviceCountField = deviceCount
-		state.V1.LastHeartbeat = now
-		for _, config := range configs {
-			index := int(config.DeviceIdx)
-			if index >= len(state.V1.Devices) {
-				continue
-			}
-			entry := &state.V1.Devices[index]
-			entry.SetUUID(config.DeviceUUID)
-			entry.DeviceInfo.TotalCudaCores = config.TotalCudaCores
-			entry.DeviceInfo.AvailableCudaCores = int32(config.TotalCudaCores)
-			entry.DeviceInfo.UpLimit = config.UpLimit
-			entry.DeviceInfo.MemLimit = config.MemLimit
-			entry.SetActive(true)
-		}
-		return
-	}
-
-	if state.V2 == nil {
-		return
-	}
-
-	state.V2.DeviceCountField = deviceCount
-	state.V2.LastHeartbeat = now
-	for _, config := range configs {
-		index := int(config.DeviceIdx)
-		if index >= len(state.V2.Devices) {
-			continue
-		}
-		entry := &state.V2.Devices[index]
-		entry.SetUUID(config.DeviceUUID)
-		entry.DeviceInfo.TotalCudaCores = config.TotalCudaCores
-		entry.DeviceInfo.UpLimit = config.UpLimit
-		entry.DeviceInfo.MemLimit = config.MemLimit
-		entry.SetActive(true)
-	}
 }
 
 func computeLimitPercent(workerInfo *api.WorkerInfo, deviceInfo *api.DeviceInfo) uint32 {

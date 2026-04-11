@@ -430,6 +430,15 @@ func (d *DevicePluginDetector) readCheckpointFile() (*KubeletCheckpoint, error) 
 }
 
 // extractDeviceIDs extracts allocated and registered device IDs from checkpoint
+// normalizeDeviceID strips the "::slice_index" suffix that NVIDIA time-slicing
+// appends to device IDs (e.g. "gpu-uuid::3" → "gpu-uuid").
+func normalizeDeviceID(deviceID string) string {
+	if idx := strings.Index(deviceID, "::"); idx >= 0 {
+		return deviceID[:idx]
+	}
+	return deviceID
+}
+
 func (d *DevicePluginDetector) extractDeviceIDs(
 	checkpoint *KubeletCheckpoint,
 ) (allocated, registered map[string]string) {
@@ -444,7 +453,7 @@ func (d *DevicePluginDetector) extractDeviceIDs(
 			}
 			for _, deviceList := range entry.DeviceIDs {
 				for _, deviceID := range deviceList {
-					allocated[strings.ToLower(deviceID)] = entry.ResourceName
+					allocated[normalizeDeviceID(strings.ToLower(deviceID))] = entry.ResourceName
 				}
 			}
 		}
@@ -457,7 +466,7 @@ func (d *DevicePluginDetector) extractDeviceIDs(
 				continue
 			}
 			for _, deviceID := range deviceIDs {
-				registered[strings.ToLower(deviceID)] = resourceName
+				registered[normalizeDeviceID(strings.ToLower(deviceID))] = resourceName
 			}
 		}
 	}
@@ -467,13 +476,13 @@ func (d *DevicePluginDetector) extractDeviceIDs(
 
 // findEntryForDevice finds the pod device entry for a given device ID
 func (d *DevicePluginDetector) findEntryForDevice(checkpoint *KubeletCheckpoint, deviceID string) PodDeviceEntry {
-	deviceIDLower := strings.ToLower(deviceID)
+	normalizedID := normalizeDeviceID(strings.ToLower(deviceID))
 
 	if checkpoint.Data.PodDeviceEntries != nil {
 		for _, entry := range checkpoint.Data.PodDeviceEntries {
 			for _, deviceList := range entry.DeviceIDs {
 				for _, id := range deviceList {
-					if strings.ToLower(id) == deviceIDLower {
+					if normalizeDeviceID(strings.ToLower(id)) == normalizedID {
 						return entry
 					}
 				}
@@ -528,7 +537,7 @@ func (d *DevicePluginDetector) getAllocatedDevices() (map[string]string, error) 
 		for _, container := range podResource.Containers {
 			for _, device := range container.Devices {
 				for _, deviceID := range device.DeviceIds {
-					allocatedDevices[strings.ToLower(deviceID)] = device.ResourceName
+					allocatedDevices[normalizeDeviceID(strings.ToLower(deviceID))] = device.ResourceName
 				}
 			}
 		}

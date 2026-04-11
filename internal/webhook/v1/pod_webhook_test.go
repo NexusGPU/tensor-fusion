@@ -329,7 +329,7 @@ var _ = Describe("TensorFusionPodMutator", func() {
 				constants.IsolationModeAnnotation:   string(tfv1.IsolationModeSoft),
 				constants.TFLOPSLimitAnnotation:     "100",
 				constants.VRAMLimitAnnotation:       "16Gi",
-			}, true, true, true),
+			}, true, false, false),
 			Entry("local hard annotation", map[string]string{
 				constants.GpuPoolKey:                "mock",
 				constants.InjectContainerAnnotation: "main",
@@ -349,7 +349,9 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Entry("local sidecar-worker annotation", map[string]string{
 				constants.GpuPoolKey:                "mock",
 				constants.InjectContainerAnnotation: "main",
+				constants.IsLocalGPUAnnotation:      constants.TrueStringValue,
 				constants.SidecarWorkerAnnotation:   constants.TrueStringValue,
+				constants.IsolationModeAnnotation:   string(tfv1.IsolationModeHard),
 				constants.TFLOPSLimitAnnotation:     "100",
 				constants.VRAMLimitAnnotation:       "16Gi",
 			}, true, true, true),

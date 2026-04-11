@@ -92,10 +92,18 @@ func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 }
 
 // HandleSnapshotWorker handles POST /api/v1/workers/:id/snapshot
+// Snapshots a worker's GPU state to release VRAM. The actual checkpoint is
+// performed by the cuda-limiter running inside the worker process via shared memory signals.
 func (h *WorkerHandler) HandleSnapshotWorker(c *gin.Context) {
 	workerID := c.Param("id")
-	// TODO: Implement actual snapshot logic using accelerator interface
-	// For now, return success
+	allocation, exists := h.allocationController.GetWorkerAllocation(workerID)
+	if !exists || allocation == nil {
+		c.JSON(http.StatusNotFound, api.ErrorResponse{Error: "worker not found"})
+		return
+	}
+
+	// TODO: Send snapshot command to worker via shared memory or HTTP bidir comm
+	// The cuda-limiter inside the worker process will handle the actual CUDA checkpoint
 	c.JSON(http.StatusOK, api.MessageAndDataResponse[string]{
 		Message: "worker snapshot initiated",
 		Data:    workerID,
@@ -103,10 +111,17 @@ func (h *WorkerHandler) HandleSnapshotWorker(c *gin.Context) {
 }
 
 // HandleResumeWorker handles POST /api/v1/workers/:id/resume
+// Resumes a previously snapshotted worker by restoring its GPU state.
 func (h *WorkerHandler) HandleResumeWorker(c *gin.Context) {
 	workerID := c.Param("id")
-	// TODO: Implement actual resume logic using accelerator interface
-	// For now, return success
+	allocation, exists := h.allocationController.GetWorkerAllocation(workerID)
+	if !exists || allocation == nil {
+		c.JSON(http.StatusNotFound, api.ErrorResponse{Error: "worker not found"})
+		return
+	}
+
+	// TODO: Send resume command to worker via shared memory or HTTP bidir comm
+	// The cuda-limiter inside the worker process will handle the actual CUDA restore
 	c.JSON(http.StatusOK, api.MessageAndDataResponse[string]{
 		Message: "worker resume initiated",
 		Data:    workerID,

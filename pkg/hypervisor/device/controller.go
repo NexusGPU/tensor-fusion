@@ -50,7 +50,8 @@ func NewController(
 	if err != nil {
 		return nil, fmt.Errorf("failed to create accelerator interface: %w", err)
 	}
-	return &Controller{
+
+	ctrl := &Controller{
 		ctx:                  ctx,
 		devices:              make(map[string]*api.DeviceInfo),
 		nativeUUIDs:          make(map[string]string),
@@ -59,7 +60,9 @@ func NewController(
 		discoveryInterval:    discoveryInterval,
 		deviceUpdateHandlers: make([]framework.DeviceChangeHandler, 2),
 		isolationMode:        api.IsolationMode(isolationMode),
-	}, nil
+	}
+
+	return ctrl, nil
 }
 
 // SetAllocationController sets the allocation controller for telemetry purposes

@@ -151,7 +151,7 @@ var _ = Describe("Compose Utils", func() {
 			}
 		}
 
-		It("should inject worker sidecar in local soft mode", func() {
+		It("should inject soft limiter directly into business container (no sidecar)", func() {
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
 				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
@@ -165,46 +165,45 @@ var _ = Describe("Compose Utils", func() {
 				},
 			}, []int{0})
 
+			// Soft mode: init container from middleware image copies C limiter
 			Expect(pod.Spec.InitContainers).To(HaveLen(1))
-			Expect(pod.Spec.InitContainers[0].Name).To(Equal(constants.TFContainerNameClient))
-			Expect(pod.Spec.Containers).To(HaveLen(2))
-			Expect(pod.Spec.Containers[1].Name).To(Equal(constants.TFContainerNameWorker))
-			Expect(hasVolumeMount(pod.Spec.Containers[0].VolumeMounts, constants.TransportShmVolumeName, constants.TransportShmPath)).To(BeTrue())
+			Expect(pod.Spec.InitContainers[0].Name).To(Equal(constants.TFSoftLimiterInitContainerName))
+
+			// No worker sidecar — only the original business container
+			Expect(pod.Spec.Containers).To(HaveLen(1))
+
+			// Business container has LD_PRELOAD pointing to C limiter
+			ldPreloadVal, found := envValue(pod.Spec.Containers[0].Env, constants.LdPreloadEnv)
+			Expect(found).To(BeTrue())
+			Expect(ldPreloadVal).To(Equal(constants.LdPreloadSoftLimiter))
+
+			// Business container has limiter volume and shared memory volume
+			Expect(hasVolumeMount(pod.Spec.Containers[0].VolumeMounts, constants.TFSoftLimiterVolumeName, constants.TFSoftLimiterVolumeMountPath)).To(BeTrue())
 			Expect(hasVolumeMount(
 				pod.Spec.Containers[0].VolumeMounts,
 				constants.DataVolumeName,
 				constants.TFDataPath+constants.SharedMemMountSubPath,
 			)).To(BeTrue())
-			Expect(hasVolumeMount(pod.Spec.Containers[1].VolumeMounts, constants.TransportShmVolumeName, constants.TransportShmPath)).To(BeTrue())
-			Expect(hasVolumeMount(
-				pod.Spec.Containers[0].VolumeMounts,
-				constants.TFLibsVolumeName,
-				constants.TFLibsVolumeMountPath,
-			)).To(BeTrue())
-			Expect(hasVolumeMountWithSubPath(
-				pod.Spec.Containers[0].VolumeMounts,
-				constants.TFLibsVolumeName,
-				constants.LdPreloadFile,
-				constants.LdPreloadFileName,
-			)).To(BeTrue())
+
+			// Standard env vars injected
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.HypervisorIPEnv)).To(BeTrue())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PodNameEnv)).To(BeTrue())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PodNamespaceEnv)).To(BeTrue())
 			value, found := envValue(pod.Spec.Containers[0].Env, constants.ContainerNameEnv)
 			Expect(found).To(BeTrue())
 			Expect(value).To(Equal("main"))
-			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeTrue())
-			cudaHooksValue, found := envValue(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)
-			Expect(found).To(BeTrue())
-			Expect(cudaHooksValue).To(Equal("false"))
+			// NVIDIA_VISIBLE_DEVICES is NOT set by webhook for soft mode —
+			// device plugin sets it to the allocated GPU UUID at Allocate time.
+			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeFalse())
 
 			volumeNames := make([]string, 0, len(pod.Spec.Volumes))
 			for _, volume := range pod.Spec.Volumes {
 				volumeNames = append(volumeNames, volume.Name)
 			}
 			Expect(volumeNames).To(ContainElement(constants.DataVolumeName))
-			Expect(volumeNames).To(ContainElement(constants.TransportShmVolumeName))
-			Expect(volumeNames).To(ContainElement(constants.TFLibsVolumeName))
+			Expect(volumeNames).To(ContainElement(constants.TFSoftLimiterVolumeName))
+			// No transport shm or tf-libs needed
+			Expect(volumeNames).NotTo(ContainElement(constants.TransportShmVolumeName))
 		})
 
 		It("should inject worker sidecar in local hard mode", func() {

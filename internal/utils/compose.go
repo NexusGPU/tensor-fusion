@@ -89,7 +89,21 @@ func UseLocalWorkerSidecar(profile *tfv1.WorkloadProfileSpec) bool {
 	if profile.SidecarWorker {
 		return true
 	}
-	return profile.Isolation == "" || profile.Isolation == tfv1.IsolationModeSoft || profile.Isolation == tfv1.IsolationModeHard
+	// Soft isolation does NOT need a worker sidecar — the C limiter is injected
+	// directly into the business container via LD_PRELOAD.
+	if profile.Isolation == tfv1.IsolationModeSoft {
+		return false
+	}
+	return profile.Isolation == "" || profile.Isolation == tfv1.IsolationModeHard
+}
+
+// useLocalSoftIsolation returns true when the pod should use direct limiter injection
+// into the business container (no worker sidecar).
+func useLocalSoftIsolation(profile *tfv1.WorkloadProfileSpec) bool {
+	if profile == nil || !profile.IsLocalGPU {
+		return false
+	}
+	return profile.Isolation == tfv1.IsolationModeSoft
 }
 
 func appendEnvIfMissing(envList []v1.EnvVar, envs ...v1.EnvVar) []v1.EnvVar {
@@ -377,8 +391,84 @@ func AddTFDefaultClientConfBeforePatch(
 			},
 		})
 
-		if useLocalWorkerSidecar {
-			// Local soft/hard modes run the TensorFusion worker in a sibling container and use /dev/shm for transport.
+		if useLocalSoftIsolation(tfInfo.Profile) {
+			// Soft isolation: inject C limiter directly into business container via middleware image.
+			// No worker sidecar needed — the limiter intercepts CUDA calls in-process.
+			middlewareImage := GetMiddlewareImage(tfInfo.Profile.GPUVendor, pool.Spec.ComponentConfig.Hypervisor.Image)
+			pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
+				Name:  constants.TFSoftLimiterInitContainerName,
+				Image: middlewareImage,
+				Command: []string{
+					"sh", "-c",
+					"cp /build/* " + constants.TFSoftLimiterVolumeMountPath + "/ 2>/dev/null; true",
+				},
+				VolumeMounts: []v1.VolumeMount{
+					{
+						Name:      constants.TFSoftLimiterVolumeName,
+						MountPath: constants.TFSoftLimiterVolumeMountPath,
+					},
+				},
+				Resources: v1.ResourceRequirements{
+					Requests: injectLibResource,
+					Limits:   injectLibResource,
+				},
+			})
+			pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+				Name: constants.TFSoftLimiterVolumeName,
+				VolumeSource: v1.VolumeSource{
+					EmptyDir: &v1.EmptyDirVolumeSource{},
+				},
+			})
+
+			for _, injectContainerIndex := range injectContainerIndices {
+				pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
+					pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+					v1.VolumeMount{
+						Name:      constants.TFSoftLimiterVolumeName,
+						MountPath: constants.TFSoftLimiterVolumeMountPath,
+						ReadOnly:  true,
+					},
+					v1.VolumeMount{
+						Name:      constants.TFSoftLimiterVolumeName,
+						MountPath: "/usr/local/bin/nvidia-smi",
+						SubPath:   "nvidia-smi",
+						ReadOnly:  true,
+					},
+					v1.VolumeMount{
+						Name:             constants.DataVolumeName,
+						MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
+						SubPathExpr:      constants.TFDataPathWorkerExpr,
+						MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
+					},
+				)
+
+				envList := pod.Spec.Containers[injectContainerIndex].Env
+				envList = append(envList, v1.EnvVar{
+					Name:  constants.LdPreloadEnv,
+					Value: constants.LdPreloadSoftLimiter,
+				}, v1.EnvVar{
+					Name:  constants.TFIsolationModeEnv,
+					Value: string(tfv1.IsolationModeSoft),
+				}, v1.EnvVar{
+					Name:  constants.TFShmPathEnv,
+					Value: constants.TFShmPathValueInPod,
+				})
+				// Do NOT set NVIDIA_VISIBLE_DEVICES=all here.
+				// Device plugin's Allocate sets it to the assigned GPU UUID.
+				if shouldInjectNvidiaVisibleDevices(tfInfo.Profile.GPUVendor) {
+					envList = appendNvidiaLibraryPathEnvs(envList)
+				}
+				envList = appendEnvIfMissing(envList,
+					v1.EnvVar{Name: constants.PodNamespaceEnv, ValueFrom: &v1.EnvVarSource{FieldRef: &v1.ObjectFieldSelector{FieldPath: constants.NamespaceFieldRef}}},
+					v1.EnvVar{Name: constants.PodNameEnv, ValueFrom: &v1.EnvVarSource{FieldRef: &v1.ObjectFieldSelector{FieldPath: constants.ResourceNameFieldRef}}},
+					v1.EnvVar{Name: constants.ContainerNameEnv, Value: pod.Spec.Containers[injectContainerIndex].Name},
+					v1.EnvVar{Name: constants.HypervisorIPEnv, ValueFrom: &v1.EnvVarSource{FieldRef: &v1.ObjectFieldSelector{FieldPath: constants.HostIPFieldRef}}},
+					v1.EnvVar{Name: constants.HypervisorPortEnv, Value: strconv.Itoa(int(getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor)))},
+				)
+				pod.Spec.Containers[injectContainerIndex].Env = envList
+			}
+		} else if useLocalWorkerSidecar {
+			// Local hard modes run the TensorFusion worker in a sibling container and use /dev/shm for transport.
 			pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 				Name: constants.TransportShmVolumeName,
 				VolumeSource: v1.VolumeSource{
@@ -412,6 +502,10 @@ func AddTFDefaultClientConfBeforePatch(
 		}
 
 		for _, injectContainerIndex := range injectContainerIndices {
+			if useLocalSoftIsolation(tfInfo.Profile) {
+				// Soft isolation already handled volumes and env in its own block above.
+				continue
+			}
 			if useLocalWorkerSidecar {
 				pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 					pod.Spec.Containers[injectContainerIndex].VolumeMounts,
@@ -1110,10 +1204,14 @@ func SetWorkerContainerSpec(
 		},
 	})
 	if shouldInjectNvidiaVisibleDevices(workloadProfile.GPUVendor) {
-		container.Env = append(container.Env, v1.EnvVar{
-			Name:  constants.NvidiaVisibleAllDeviceEnv,
-			Value: constants.NvidiaVisibleAllDeviceValue,
-		})
+		// Soft isolation: let device plugin set NVIDIA_VISIBLE_DEVICES to the allocated GPU.
+		// Other modes: set to "all" so the worker can see all GPUs (limiter restricts via CUDA_VISIBLE_DEVICES).
+		if workloadProfile.Isolation != tfv1.IsolationModeSoft {
+			container.Env = append(container.Env, v1.EnvVar{
+				Name:  constants.NvidiaVisibleAllDeviceEnv,
+				Value: constants.NvidiaVisibleAllDeviceValue,
+			})
+		}
 		container.Env = appendNvidiaLibraryPathEnvs(container.Env)
 	}
 
@@ -1188,7 +1286,9 @@ func AddWorkerConfAfterTemplate(
 	// Configure worker container
 	SetWorkerContainerSpec(&spec.Containers[0], workloadProfile, workerConfig, hypervisorConfig, disabledFeatures, false)
 	assignWorkerPodIndexResource(&spec.Containers[0])
-	applyProviderRemoteWorkerConfig(spec, workloadProfile.GPUVendor)
+	if workloadProfile != nil {
+		applyProviderRemoteWorkerConfig(spec, workloadProfile.GPUVendor)
+	}
 
 	// Add volume from host for CUDA hot migration and snapshot
 	spec.Volumes = append(spec.Volumes, v1.Volume{
@@ -1203,6 +1303,51 @@ func AddWorkerConfAfterTemplate(
 
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
 	applyAscendRuntimeClassIfNeeded(spec, workloadProfile)
+
+	// For soft isolation, inject an init container that copies the C limiter from
+	// the middleware image, overwriting the Rust limiter bundled in the worker image.
+	if workloadProfile != nil && workloadProfile.Isolation == tfv1.IsolationModeSoft {
+		middlewareImage := GetMiddlewareImage(workloadProfile.GPUVendor, hypervisorConfig.Image)
+		spec.InitContainers = append(spec.InitContainers, v1.Container{
+			Name:  constants.TFSoftLimiterInitContainerName,
+			Image: middlewareImage,
+			Command: []string{
+				"sh", "-c",
+				"cp /build/* /soft-limiter/ 2>/dev/null; true",
+			},
+			VolumeMounts: []v1.VolumeMount{
+				{Name: "soft-limiter", MountPath: "/soft-limiter"},
+			},
+			Resources: v1.ResourceRequirements{
+				Requests: injectLibResource,
+				Limits:   injectLibResource,
+			},
+		})
+		spec.Volumes = append(spec.Volumes, v1.Volume{
+			Name:         "soft-limiter",
+			VolumeSource: v1.VolumeSource{EmptyDir: &v1.EmptyDirVolumeSource{}},
+		})
+		// Mount the C limiter over the Rust limiter path in the worker container
+		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts,
+			v1.VolumeMount{
+				Name:      "soft-limiter",
+				MountPath: constants.LdPreloadLimiter, // /home/app/libcuda_limiter.so
+				SubPath:   constants.TFSoftLimiterLibName,
+				ReadOnly:  true,
+			},
+			v1.VolumeMount{
+				Name:      "soft-limiter",
+				MountPath: "/usr/local/bin/nvidia-smi",
+				SubPath:   "nvidia-smi",
+				ReadOnly:  true,
+			},
+		)
+		// Set env vars for C limiter activation
+		spec.Containers[0].Env = append(spec.Containers[0].Env,
+			v1.EnvVar{Name: constants.TFIsolationModeEnv, Value: string(tfv1.IsolationModeSoft)},
+			v1.EnvVar{Name: constants.TFShmPathEnv, Value: constants.TFShmPathValueInPod},
+		)
+	}
 
 	return spec.Containers[0].Name
 }

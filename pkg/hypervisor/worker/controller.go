@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"math"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,7 +20,10 @@ import (
 	"k8s.io/klog/v2"
 )
 
-const sharedMemorySyncInterval = 500 * time.Millisecond
+const (
+	sharedMemorySyncInterval = 500 * time.Millisecond
+	shmCleanupInterval       = 5 * time.Minute
+)
 
 type WorkerController struct {
 	mode    api.IsolationMode
@@ -28,8 +33,9 @@ type WorkerController struct {
 	allocationController framework.WorkerAllocationController
 	quotaController      framework.QuotaController
 
-	mu      sync.RWMutex
-	workers map[string]*api.WorkerInfo
+	mu         sync.RWMutex
+	workers    map[string]*api.WorkerInfo
+	shmHandles map[string]*workerstate.SharedMemoryHandle // workerUID -> shm handle
 
 	shmBasePath string
 	nowFunc     func() time.Time
@@ -44,21 +50,31 @@ func NewWorkerController(
 	mode api.IsolationMode,
 	backend framework.Backend,
 ) framework.WorkerController {
-	quotaController := computing.NewQuotaController(deviceController)
-	return &WorkerController{
+	quotaController := computing.NewQuotaController(deviceController, backend)
+
+	wc := &WorkerController{
 		deviceController:     deviceController,
 		allocationController: allocationController,
 		mode:                 mode,
 		backend:              backend,
 		quotaController:      quotaController,
 
-		workers: make(map[string]*api.WorkerInfo, 32),
+		workers:    make(map[string]*api.WorkerInfo, 32),
+		shmHandles: make(map[string]*workerstate.SharedMemoryHandle, 8),
 		shmBasePath: filepath.Join(
 			constants.TFDataPath,
 			strings.TrimPrefix(constants.SharedMemMountSubPath, "/"),
 		),
 		nowFunc: time.Now,
 	}
+
+	// Wire up providers so QuotaController can access worker allocations and shm handles
+	if qc, ok := quotaController.(*computing.Controller); ok {
+		qc.SetWorkerInfoProvider(wc.buildWorkerInfoSnapshots)
+		qc.SetShmHandleProvider(wc.getShmHandle)
+	}
+
+	return wc
 }
 
 func (w *WorkerController) Start() error {
@@ -66,8 +82,16 @@ func (w *WorkerController) Start() error {
 	handler := framework.WorkerChangeHandler{
 		OnAdd: func(worker *api.WorkerInfo) {
 			w.mu.Lock()
-			defer w.mu.Unlock()
 			w.workers[worker.WorkerUID] = worker
+			w.mu.Unlock()
+
+			// For soft isolation, proactively create shared memory when a worker pod appears.
+			// Unlike hard/sidecar mode where the worker process calls /process-init to trigger
+			// shm creation, soft mode injects the limiter directly into the business container
+			// which only reads shm passively.
+			if w.mode == tfv1.IsolationModeSoft {
+				w.ensureSoftWorkerSharedMemory(worker)
+			}
 		},
 		OnRemove: func(worker *api.WorkerInfo) {
 			// Deallocate worker devices first
@@ -112,7 +136,10 @@ func (w *WorkerController) Start() error {
 	}
 	klog.Info("Worker backend started")
 
-	w.startSharedMemorySyncLoop()
+	ctx, cancel := context.WithCancel(context.Background())
+	w.syncCancel = cancel
+	w.startSharedMemorySyncLoop(ctx)
+	w.startSharedMemoryCleanupLoop(ctx)
 	return nil
 }
 
@@ -224,13 +251,66 @@ func (w *WorkerController) buildWorkerLookupMap() map[string]string {
 	return lookup
 }
 
-func (w *WorkerController) startSharedMemorySyncLoop() {
+// buildWorkerInfoSnapshots builds a map of worker info snapshots for ERL updates.
+// This is called by the QuotaController to get current worker allocations and device info.
+func (w *WorkerController) buildWorkerInfoSnapshots() map[string]*computing.WorkerInfoSnapshot {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	result := make(map[string]*computing.WorkerInfoSnapshot, len(w.workers))
+	for workerUID, workerInfo := range w.workers {
+		allocation, exists := w.allocationController.GetWorkerAllocation(workerUID)
+		if !exists || allocation == nil || allocation.WorkerInfo == nil {
+			continue
+		}
+
+		snapshot := &computing.WorkerInfoSnapshot{
+			Namespace:  workerInfo.Namespace,
+			WorkerName: workerInfo.WorkerName,
+		}
+
+		for _, deviceInfo := range allocation.DeviceInfos {
+			if deviceInfo == nil {
+				continue
+			}
+			snapshot.Devices = append(snapshot.Devices, computing.DeviceSnapshot{
+				DeviceUUID: deviceInfo.UUID,
+				DeviceIdx:  int(deviceInfo.Index),
+				UpLimit:    computeUpLimit(workerInfo, deviceInfo),
+			})
+		}
+
+		result[workerUID] = snapshot
+	}
+	return result
+}
+
+// computeUpLimit calculates the compute limit percentage (0-100) for a worker on a device.
+func computeUpLimit(workerInfo *api.WorkerInfo, deviceInfo *api.DeviceInfo) uint32 {
+	if workerInfo == nil {
+		return 100
+	}
+	if workerInfo.Limits.ComputePercent.Value() > 0 {
+		return uint32(workerInfo.Limits.ComputePercent.Value())
+	}
+	if workerInfo.Limits.Tflops.Value() > 0 && deviceInfo != nil && deviceInfo.MaxTflops > 0 {
+		percent := math.Ceil(workerInfo.Limits.Tflops.AsApproximateFloat64() / deviceInfo.MaxTflops * 100.0)
+		if percent < 1 {
+			return 1
+		}
+		if percent > 100 {
+			return 100
+		}
+		return uint32(percent)
+	}
+	return 100
+}
+
+func (w *WorkerController) startSharedMemorySyncLoop(ctx context.Context) {
 	if w.backend == nil {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	w.syncCancel = cancel
 	w.syncWG.Add(1)
 	go func() {
 		defer w.syncWG.Done()
@@ -260,6 +340,99 @@ func (w *WorkerController) stopSharedMemorySyncLoop() {
 	w.syncCancel = nil
 }
 
+// startSharedMemoryCleanupLoop runs a periodic cleanup of orphaned shared memory files
+// for workers that no longer exist. Runs every 5 minutes.
+func (w *WorkerController) startSharedMemoryCleanupLoop(ctx context.Context) {
+	if w.shmBasePath == "" {
+		return
+	}
+
+	w.syncWG.Add(1)
+	go func() {
+		defer w.syncWG.Done()
+
+		ticker := time.NewTicker(shmCleanupInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				w.cleanupOrphanedSharedMemory()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// cleanupOrphanedSharedMemory removes shared memory files for workers that no longer exist.
+// Directory structure: {shmBasePath}/{namespace}/{podName}/shm
+func (w *WorkerController) cleanupOrphanedSharedMemory() {
+	activeWorkers := make(map[string]bool)
+	w.mu.RLock()
+	for _, worker := range w.workers {
+		activeWorkers[worker.Namespace+"/"+worker.WorkerName] = true
+	}
+	w.mu.RUnlock()
+
+	namespaces, err := os.ReadDir(w.shmBasePath)
+	if err != nil {
+		return
+	}
+
+	cleanedCount := 0
+
+	for _, nsEntry := range namespaces {
+		if !nsEntry.IsDir() {
+			continue
+		}
+		nsPath := filepath.Join(w.shmBasePath, nsEntry.Name())
+		pods, err := os.ReadDir(nsPath)
+		if err != nil {
+			continue
+		}
+		for _, podEntry := range pods {
+			if !podEntry.IsDir() {
+				continue
+			}
+			if activeWorkers[nsEntry.Name()+"/"+podEntry.Name()] {
+				continue
+			}
+
+			shmPath := filepath.Join(nsPath, podEntry.Name(), workerstate.ShmPathSuffix)
+			if _, statErr := os.Stat(shmPath); statErr != nil {
+				continue
+			}
+
+			// Clean up shm file
+			_ = os.Remove(shmPath)
+			_ = os.Remove(filepath.Join(nsPath, podEntry.Name()))
+			cleanedCount++
+		}
+	}
+
+	// Clean up stale shm handles
+	w.mu.Lock()
+	for uid, handle := range w.shmHandles {
+		if _, exists := w.workers[uid]; !exists {
+			_ = handle.Close()
+			delete(w.shmHandles, uid)
+		}
+	}
+	w.mu.Unlock()
+
+	if cleanedCount > 0 {
+		klog.Infof("Shared memory cleanup: removed %d orphaned entries", cleanedCount)
+	}
+}
+
+// getShmHandle returns the Go shm handle for a worker, or nil if not found.
+func (w *WorkerController) getShmHandle(workerUID string) *workerstate.SharedMemoryHandle {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.shmHandles[workerUID]
+}
+
 func (w *WorkerController) syncSharedMemoryState() {
 	if w.backend == nil || w.shmBasePath == "" {
 		return
@@ -280,14 +453,19 @@ func (w *WorkerController) syncSharedMemoryState() {
 			continue
 		}
 
-		podIdentifier := workerstate.NewPodIdentifier(workerInfo.Namespace, workerInfo.WorkerName)
-		handle, err := workerstate.OpenSharedMemoryHandle(w.shmBasePath, podIdentifier)
-		if err != nil {
-			klog.V(5).Infof("Skip shared memory sync for %s/%s: %v", workerInfo.Namespace, workerInfo.WorkerName, err)
+		// Get shm handle for this worker
+		w.mu.RLock()
+		handle := w.shmHandles[workerUID]
+		w.mu.RUnlock()
+		if handle == nil {
 			continue
 		}
 
 		state := handle.GetState()
+		if state == nil {
+			continue
+		}
+
 		state.UpdateHeartbeat(now)
 
 		deviceMemoryUsage := memoryByWorkerDevice[workerUID]
@@ -295,20 +473,82 @@ func (w *WorkerController) syncSharedMemoryState() {
 			if deviceInfo == nil {
 				continue
 			}
-
 			deviceUUID := strings.ToLower(deviceInfo.UUID)
 			state.SetPodMemoryUsed(int(deviceInfo.Index), deviceMemoryUsage[deviceUUID])
 		}
-
-		if err := handle.Close(); err != nil {
-			klog.V(5).Infof(
-				"Failed to close shared memory handle for %s/%s: %v",
-				workerInfo.Namespace,
-				workerInfo.WorkerName,
-				err,
-			)
-		}
 	}
+}
+
+// ensureSoftWorkerSharedMemory creates shared memory for a soft isolation pod.
+// Called when a new worker pod is detected. Uses pure Go shm (no C limiter dependency).
+func (w *WorkerController) ensureSoftWorkerSharedMemory(worker *api.WorkerInfo) {
+	go func() {
+		// Retry for up to 30 seconds waiting for allocation
+		for i := 0; i < 30; i++ {
+			allocation, exists := w.allocationController.GetWorkerAllocation(worker.WorkerUID)
+			if exists && allocation != nil && allocation.WorkerInfo != nil && len(allocation.DeviceInfos) > 0 {
+				configs := buildSoftDeviceConfigs(allocation)
+				if len(configs) == 0 {
+					return
+				}
+				podId := workerstate.NewPodIdentifier(worker.Namespace, worker.WorkerName)
+				handle, err := workerstate.CreateSharedMemoryHandle(w.shmBasePath, podId, configs)
+				if err != nil {
+					klog.Errorf("Failed to create shared memory for soft worker %s/%s: %v", worker.Namespace, worker.WorkerName, err)
+					return
+				}
+				// Store handle for later use (heartbeat, memory sync)
+				w.mu.Lock()
+				w.shmHandles[worker.WorkerUID] = handle
+				w.mu.Unlock()
+				klog.Infof("Created shared memory for soft worker %s/%s with %d devices",
+					worker.Namespace, worker.WorkerName, len(configs))
+				return
+			}
+			time.Sleep(1 * time.Second)
+		}
+		klog.Warningf("Timed out waiting for allocation for soft worker %s/%s", worker.Namespace, worker.WorkerName)
+	}()
+}
+
+func buildSoftDeviceConfigs(allocation *api.WorkerAllocation) []workerstate.DeviceConfig {
+	if allocation == nil || allocation.WorkerInfo == nil {
+		return nil
+	}
+	configs := make([]workerstate.DeviceConfig, 0, len(allocation.DeviceInfos))
+	for _, deviceInfo := range allocation.DeviceInfos {
+		if deviceInfo == nil {
+			continue
+		}
+		memLimit := deviceInfo.TotalMemoryBytes
+		if allocation.WorkerInfo.Limits.Vram.Value() > 0 {
+			memLimit = uint64(allocation.WorkerInfo.Limits.Vram.Value())
+		}
+		smCount := uint32(0)
+		if deviceInfo.Properties != nil {
+			if v, err := strconv.ParseUint(deviceInfo.Properties["totalComputeUnits"], 10, 32); err == nil {
+				smCount = uint32(v)
+			}
+		}
+		configs = append(configs, workerstate.DeviceConfig{
+			DeviceIdx:  uint32(deviceInfo.Index),
+			DeviceUUID: normalizeDeviceUUID(deviceInfo.UUID),
+			UpLimit:    computeUpLimit(allocation.WorkerInfo, deviceInfo),
+			MemLimit:   memLimit,
+			SMCount:    smCount * 128,
+		})
+	}
+	return configs
+}
+
+func normalizeDeviceUUID(uuid string) string {
+	if strings.HasPrefix(uuid, "gpu-") {
+		return strings.ToUpper(strings.TrimPrefix(uuid, "gpu-"))
+	}
+	if strings.HasPrefix(uuid, "GPU-") {
+		return strings.TrimPrefix(uuid, "GPU-")
+	}
+	return strings.ToUpper(uuid)
 }
 
 func (w *WorkerController) workerAllocations() map[string]*api.WorkerAllocation {
