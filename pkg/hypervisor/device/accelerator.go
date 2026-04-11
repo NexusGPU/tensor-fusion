@@ -18,6 +18,7 @@ package device
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
@@ -366,14 +367,14 @@ func (a *AcceleratorInterface) getTopologyMap() (map[string]*api.DeviceTopology,
 	topologyMap := make(map[string]*api.DeviceTopology, int(cTopology.DeviceCount))
 	for i := 0; i < int(cTopology.DeviceCount); i++ {
 		row := &cTopology.Devices[i]
-		deviceUUID := byteArrayToString(row.DeviceUUID[:])
+		deviceUUID := strings.ToLower(byteArrayToString(row.DeviceUUID[:]))
 		if deviceUUID == "" {
 			continue
 		}
 		peers := make([]api.DevicePeerLink, 0, int(row.PeerCount))
 		for j := 0; j < int(row.PeerCount) && j < MaxTopologyDevices; j++ {
 			peer := &row.Peers[j]
-			peerUUID := byteArrayToString(peer.PeerUUID[:])
+			peerUUID := strings.ToLower(byteArrayToString(peer.PeerUUID[:]))
 			if peerUUID == "" || peerUUID == deviceUUID || peer.TopoLevel == TopoLevelSelf {
 				continue
 			}
@@ -507,7 +508,6 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 		}
 		topologyMap = nil
 	}
-
 	for i := 0; i < int(cCount); i++ {
 		cInfo := &stackDevices[i]
 		deviceUUID := byteArrayToString(cInfo.Basic.UUID[:])
@@ -554,7 +554,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			Model:            model,
 			Index:            cInfo.Basic.Index,
 			NUMANode:         cInfo.Basic.NUMANode,
-			Topology:         topologyMap[deviceUUID],
+			Topology:         topologyMap[strings.ToLower(deviceUUID)],
 			TotalMemoryBytes: cInfo.Basic.TotalMemoryBytes,
 			MaxTflops:        float64(cInfo.Basic.MaxTflops),
 			VirtualizationCapabilities: api.VirtualizationCapabilities{
