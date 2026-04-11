@@ -791,15 +791,20 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 		return fwk.QueueSkip, nil
 	}
 
+	logger.Info("queueingHint called for TF worker pod",
+		"pod", klog.KObj(pod),
+		"nominatedNode", pod.Status.NominatedNodeName,
+		"newObjType", fmt.Sprintf("%T", newObj))
+
 	oldGPU, err := convertToGPU(oldObj)
 	if err != nil {
-		logger.V(5).Info("Failed to convert oldObj to GPU, skip", "pod", klog.KObj(pod), "error", err)
+		logger.Info("Failed to convert oldObj to GPU, skip", "pod", klog.KObj(pod), "error", err)
 		return fwk.QueueSkip, nil
 	}
 
 	newGPU, err := convertToGPU(newObj)
 	if err != nil {
-		logger.V(5).Info("Failed to convert newObj to GPU, skip", "pod", klog.KObj(pod), "error", err)
+		logger.Info("Failed to convert newObj to GPU, skip", "pod", klog.KObj(pod), "error", err)
 		return fwk.QueueSkip, nil
 	}
 
@@ -813,8 +818,15 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 	//    has been decided and resources will eventually be available
 	if pod.Status.NominatedNodeName != "" && newGPU != nil {
 		gpuNodeName := newGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		logger.Info("queueingHint: nominated pod GPU CR update received",
+			"pod", klog.KObj(pod),
+			"nominatedNode", pod.Status.NominatedNodeName,
+			"gpu", newGPU.Name,
+			"gpuNodeName", gpuNodeName,
+			"nodeSelector", newGPU.Status.NodeSelector,
+			"match", gpuNodeName == pod.Status.NominatedNodeName)
 		if gpuNodeName == pod.Status.NominatedNodeName {
-			logger.V(4).Info("GPU CR updated on nominated node, immediately requeue preempting pod",
+			logger.Info("GPU CR updated on nominated node, immediately requeue preempting pod",
 				"pod", klog.KObj(pod),
 				"nominatedNode", pod.Status.NominatedNodeName,
 				"gpu", newGPU.Name)
