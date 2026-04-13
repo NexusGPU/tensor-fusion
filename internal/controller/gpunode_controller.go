@@ -167,6 +167,23 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj, coreNode)
 	if err != nil {
+		nodePhaseChanged, gpuList, pendingErr := r.syncNodeAndOwnedGPUPhases(
+			ctx,
+			node,
+			tfv1.TensorFusionGPUNodePhasePending,
+			tfv1.TensorFusionGPUPhasePending,
+		)
+		if pendingErr == nil {
+			if nodePhaseChanged {
+				metrics.SetNodeMetrics(node, poolObj, nil)
+			}
+			if len(gpuList) > 0 {
+				metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
+			}
+		}
+		if pendingErr != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to mark GPUNode pending after hypervisor reconcile error %q: %w", err.Error(), pendingErr)
+		}
 		return ctrl.Result{}, err
 	}
 	// pod deleted or deleting, wait next reconcile
@@ -194,24 +211,21 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 
 	// Reconcile GPUNode status with hypervisor pod status, when changed
 	if pod.Status.Phase != corev1.PodRunning || !utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady) {
-		if node.Status.Phase != tfv1.TensorFusionGPUNodePhasePending {
-			node.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
-			err := r.Status().Update(ctx, node)
-			if err != nil {
-				return fmt.Errorf("failed to update GPU node status to pending: %w", err)
-			}
-			metrics.SetNodeMetrics(node, poolObj, nil)
-		}
-
-		gpuList, err := r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhasePending)
+		nodePhaseChanged, gpuList, err := r.syncNodeAndOwnedGPUPhases(
+			ctx,
+			node,
+			tfv1.TensorFusionGPUNodePhasePending,
+			tfv1.TensorFusionGPUPhasePending,
+		)
 		if err != nil {
 			return err
 		}
-
+		if nodePhaseChanged {
+			metrics.SetNodeMetrics(node, poolObj, nil)
+		}
 		if len(gpuList) > 0 {
 			metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
 		}
-
 		return nil
 	} else {
 		gpuModels, err := gpuallocator.RefreshGPUNodeCapacity(ctx, r.Client, node, poolObj, r.Allocator, coreNode)
@@ -260,6 +274,28 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 		}
 		return nil
 	}
+}
+
+func (r *GPUNodeReconciler) syncNodeAndOwnedGPUPhases(
+	ctx context.Context,
+	node *tfv1.GPUNode,
+	nodePhase tfv1.TensorFusionGPUNodePhase,
+	gpuPhase tfv1.TensorFusionGPUPhase,
+) (bool, []tfv1.GPU, error) {
+	nodePhaseChanged := node.Status.Phase != nodePhase
+	if nodePhaseChanged {
+		node.Status.Phase = nodePhase
+		if err := r.Status().Update(ctx, node); err != nil {
+			return false, nil, fmt.Errorf("failed to update GPU node status to %s: %w", nodePhase, err)
+		}
+	}
+
+	gpuList, err := r.syncStatusToGPUDevices(ctx, node, gpuPhase)
+	if err != nil {
+		return nodePhaseChanged, nil, err
+	}
+
+	return nodePhaseChanged, gpuList, nil
 }
 
 func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tfv1.GPUNode, state tfv1.TensorFusionGPUPhase) ([]tfv1.GPU, error) {
@@ -356,12 +392,13 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 
 	if jobFailed {
 		log.Info("node discovery job failed, update GPU node status to failed", "node", gpunode.Name)
-		gpunode.Status.Phase = tfv1.TensorFusionGPUNodePhaseFailed
-		if err := r.Status().Update(ctx, gpunode); err != nil {
-			return fmt.Errorf("failed to update GPU node status to failed: %w", err)
-		}
-		if _, err := r.syncStatusToGPUDevices(ctx, gpunode, tfv1.TensorFusionGPUPhasePending); err != nil {
-			log.Error(err, "failed to cascade GPU phase to Pending when node failed", "node", gpunode.Name)
+		if _, _, err := r.syncNodeAndOwnedGPUPhases(
+			ctx,
+			gpunode,
+			tfv1.TensorFusionGPUNodePhaseFailed,
+			tfv1.TensorFusionGPUPhasePending,
+		); err != nil {
+			log.Error(err, "failed to sync node and GPU phases after node discovery failure", "node", gpunode.Name)
 		}
 
 		metrics.SetNodeMetrics(gpunode, pool, nil)
