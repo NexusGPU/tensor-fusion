@@ -346,9 +346,16 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 		}
 	}
 
-	if job.Status.Failed > 0 {
+	jobFailed := false
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			jobFailed = true
+			break
+		}
+	}
+
+	if jobFailed {
 		log.Info("node discovery job failed, update GPU node status to failed", "node", gpunode.Name)
-		// Update phase to failed, require manual address why it failed and restart of node discovery job
 		gpunode.Status.Phase = tfv1.TensorFusionGPUNodePhaseFailed
 		if err := r.Status().Update(ctx, gpunode); err != nil {
 			return fmt.Errorf("failed to update GPU node status to failed: %w", err)
