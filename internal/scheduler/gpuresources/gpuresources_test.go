@@ -434,18 +434,29 @@ func (s *GPUResourcesSuite) TestFilter() {
 	for _, tt := range tests {
 		s.Run(tt.name, func() {
 			nodeInfo := &framework.NodeInfo{}
-			nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: tt.nodeName}})
+			nodeInfo.SetNode(&v1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: tt.nodeName},
+				// The hypervisor-health fast-path requires a positive index
+				// allocatable. Provide it so these cases exercise the legacy
+				// NodeGPUs-based filter rather than the fast-path.
+				Status: v1.NodeStatus{
+					Allocatable: v1.ResourceList{
+						v1.ResourceName(constants.PodIndexAnnotation): resource.MustParse("512"),
+					},
+				},
+			})
 			status := s.plugin.Filter(s.ctx, state, pod, nodeInfo)
 			s.Equal(tt.expectedStatus, status.Code())
 		})
 	}
 }
 
-// When hypervisor dies the node's device plugin drops out and kubelet zeroes
-// allocatable["tensor-fusion.ai/index"] well before the GPU CR phase cascade
-// kicks in. Filter must reject with UnschedulableAndUnresolvable so preemption
-// doesn't retry. A missing key (device plugin hasn't registered yet) must not
-// trigger this path — only an explicit 0 does.
+// Every TF worker pod has tensor-fusion.ai/index injected by the webhook, so the
+// node must expose a positive allocatable for that resource. Filter must reject
+// with UnschedulableAndUnresolvable on both a zeroed value (hypervisor just died
+// and its device plugin dropped out) and a missing key (device plugin never
+// registered). This closes the pod-storm window where GPUNode -> GPU phase
+// propagation has not yet reached PhaseFilter.
 func (s *GPUResourcesSuite) TestFilter_HypervisorDownDropsIndexAllocatable() {
 	log.FromContext(s.ctx).Info("Running TestFilter_HypervisorDownDropsIndexAllocatable")
 	state := framework.NewCycleState()
@@ -482,9 +493,9 @@ func (s *GPUResourcesSuite) TestFilter_HypervisorDownDropsIndexAllocatable() {
 			expectedStatus: fwk.Success,
 		},
 		{
-			name:           "index resource missing -> do not short-circuit here",
+			name:           "index resource missing -> device plugin not registered, reject",
 			allocatable:    v1.ResourceList{},
-			expectedStatus: fwk.Success,
+			expectedStatus: fwk.UnschedulableAndUnresolvable,
 		},
 	}
 
@@ -820,7 +831,16 @@ func (s *GPUResourcesSuite) TestFilter_ErrorHandling() {
 	state := framework.NewCycleState()
 	pod := s.makePod("p1", nil)
 	nodeInfo := &framework.NodeInfo{}
-	nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
+	// Provide a positive index allocatable so we pass the hypervisor-health
+	// fast-path and reach the state.Read failure this test targets.
+	nodeInfo.SetNode(&v1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status: v1.NodeStatus{
+			Allocatable: v1.ResourceList{
+				v1.ResourceName(constants.PodIndexAnnotation): resource.MustParse("512"),
+			},
+		},
+	})
 
 	// No pre-filter call, so state is empty
 	status := s.plugin.Filter(s.ctx, state, pod, nodeInfo)

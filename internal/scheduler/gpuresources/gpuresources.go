@@ -320,17 +320,25 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 		return fwk.NewStatus(fwk.Success, "skip for non tensor-fusion mode")
 	}
 
-	// Fast-path rejection: when the hypervisor on this node dies, its device plugin
-	// drops out and kubelet may zero node.Status.Allocatable["tensor-fusion.ai/index"].
-	// This propagates to the scheduler cache well before the GPUNode -> GPU phase
-	// cascade reaches PhaseFilter, so catching it here closes the pod-storm window.
-	// Reject on a non-positive value (<=0); missing key means the device plugin
-	// hasn't registered yet and other filters already handle that.
-	if scalar := nodeInfo.GetAllocatable().GetScalarResources(); scalar != nil {
-		if idx, ok := scalar[v1.ResourceName(constants.PodIndexAnnotation)]; ok && idx <= 0 {
-			return fwk.NewStatus(fwk.UnschedulableAndUnresolvable,
-				"node tensor-fusion.ai/index allocatable is <= 0, hypervisor likely unhealthy")
-		}
+	// Fast-path rejection: every TF worker pod has tensor-fusion.ai/index injected
+	// by the webhook (pod_webhook.go), so a node that does not expose a positive
+	// allocatable for this resource cannot host the pod. Two cases:
+	//   1. key present but <= 0  — hypervisor's device plugin was here and dropped
+	//      out (typical pod-storm trigger when hypervisor dies). Kubelet zeros the
+	//      value well before the GPUNode -> GPU phase cascade reaches PhaseFilter.
+	//   2. key missing           — device plugin has never registered (non-TF node
+	//      or still bootstrapping).
+	// Both must be rejected up front; returning UnschedulableAndUnresolvable tells
+	// the preemption machinery not to waste a retry.
+	scalar := nodeInfo.GetAllocatable().GetScalarResources()
+	idx, ok := scalar[v1.ResourceName(constants.PodIndexAnnotation)]
+	if !ok {
+		return fwk.NewStatus(fwk.UnschedulableAndUnresolvable,
+			"node does not expose tensor-fusion.ai/index, device plugin not registered")
+	}
+	if idx <= 0 {
+		return fwk.NewStatus(fwk.UnschedulableAndUnresolvable,
+			"node tensor-fusion.ai/index allocatable is <= 0, hypervisor likely unhealthy")
 	}
 
 	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
