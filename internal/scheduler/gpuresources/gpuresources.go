@@ -860,69 +860,104 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 		return fwk.QueueSkip, nil
 	}
 
-	// Detect meaningful signals that warrant re-running a fit check:
-	//   1. Phase transitioned into Running — PhaseFilter previously rejected this GPU
-	//      but would now admit it. Status.Available usually does NOT change across
-	//      this transition, so relying on the available-delta check alone would leave
-	//      pods stuck in the unschedulable queue until the 5-minute fallback flush.
-	//   2. Available resources on this GPU increased — the classic wake-up trigger.
-	// If neither is true the event carries no new useful information for this pod.
-	phaseBecameRunning := newGPU.Status.Phase == tfv1.TensorFusionGPUPhaseRunning &&
-		(oldGPU == nil || oldGPU.Status.Phase != tfv1.TensorFusionGPUPhaseRunning)
-
-	var increaseTflops, increaseVram resource.Quantity
-	availableIncreased := false
-	if newGPU.Status.Available != nil {
-		oldAvailableTflops := resource.Quantity{}
-		oldAvailableVram := resource.Quantity{}
-		if oldGPU != nil && oldGPU.Status.Available != nil {
-			oldAvailableTflops = oldGPU.Status.Available.Tflops.DeepCopy()
-			oldAvailableVram = oldGPU.Status.Available.Vram.DeepCopy()
+	// Phase transition into Running is a rare, strong wake-up signal (GPU CR
+	// coming back from Pending/Failed). Crucially, the scheduler framework's
+	// informer and GpuAllocator.StartInformerForGPU are independent goroutines,
+	// so by the time queueingHint runs, handleGPUUpdate may not yet have synced
+	// the new phase into the allocator's in-memory store. Passing this event
+	// through s.allocator.CheckQuotaAndFilter (which uses PhaseFilter over the
+	// allocator's view) would therefore race with the allocator and spuriously
+	// return "not fit", leaving the pod stuck in the unschedulable queue until
+	// the 5-minute fallback flush.
+	// We accept the false-positive cost (one wasted scheduling cycle if the pod
+	// still cannot fit) in exchange for never losing the wake-up.
+	//
+	// To keep the blast radius bounded, apply one race-free pre-check using only
+	// the event object itself: pool label must match the pod's pool annotation.
+	// Cross-pool pods have no business being woken up by an unrelated GPU's
+	// phase change, and this filter alone typically cuts the wake-up set by
+	// orders of magnitude on multi-pool clusters.
+	if newGPU.Status.Phase == tfv1.TensorFusionGPUPhaseRunning &&
+		(oldGPU == nil || oldGPU.Status.Phase != tfv1.TensorFusionGPUPhaseRunning) {
+		podPool := ""
+		if pod.Annotations != nil {
+			podPool = pod.Annotations[constants.GpuPoolKey]
 		}
-		increaseTflops = newGPU.Status.Available.Tflops.DeepCopy()
-		increaseVram = newGPU.Status.Available.Vram.DeepCopy()
-		increaseTflops.Sub(oldAvailableTflops)
-		increaseVram.Sub(oldAvailableVram)
-		zero := resource.Quantity{}
-		availableIncreased = increaseTflops.Cmp(zero) > 0 || increaseVram.Cmp(zero) > 0
+		gpuPool := ""
+		if newGPU.Labels != nil {
+			gpuPool = newGPU.Labels[constants.GpuPoolKey]
+		}
+		// Require both sides to be set and equal. An empty podPool means
+		// ComposeAllocationRequest will reject the pod anyway (AllocRequest.
+		// PoolName comes from this annotation and is required downstream); an
+		// empty gpuPool means the GPU hasn't been labeled into any pool yet and
+		// cannot be picked by listGPUsFromPool. Waking the pod in either case
+		// would just burn a scheduling cycle for a guaranteed failure.
+		if podPool == "" || gpuPool == "" || podPool != gpuPool {
+			logger.V(4).Info("GPU phase->Running but pool does not match, skip",
+				"pod", klog.KObj(pod), "gpu", newGPU.Name,
+				"podPool", podPool, "gpuPool", gpuPool)
+			return fwk.QueueSkip, nil
+		}
+
+		oldPhase := tfv1.TensorFusionGPUPhase("")
+		if oldGPU != nil {
+			oldPhase = oldGPU.Status.Phase
+		}
+		logger.Info("GPU transitioned into Running phase, requeue unscheduled pod",
+			"pod", klog.KObj(pod), "gpu", newGPU.Name, "oldPhase", oldPhase,
+			"pool", gpuPool)
+		return fwk.Queue, nil
 	}
 
-	if !phaseBecameRunning && !availableIncreased {
-		logger.V(4).Info("No phase->Running transition and no available increase, skip",
+	// Available-increase path. The allocator deliberately keeps its own
+	// Status.Available authoritative (handleGPUUpdate preserves it to avoid
+	// circular updates from its own Bind/Dealloc writes), so a fit check against
+	// the allocator's view is actually the right oracle for this path — it
+	// reflects real local reservations, not the cluster snapshot.
+	if newGPU.Status.Available == nil {
+		logger.V(5).Info("Missing new GPU availability, skip", "pod", klog.KObj(pod))
+		return fwk.QueueSkip, nil
+	}
+
+	oldAvailableTflops := resource.Quantity{}
+	oldAvailableVram := resource.Quantity{}
+	if oldGPU != nil && oldGPU.Status.Available != nil {
+		oldAvailableTflops = oldGPU.Status.Available.Tflops.DeepCopy()
+		oldAvailableVram = oldGPU.Status.Available.Vram.DeepCopy()
+	}
+	increaseTflops := newGPU.Status.Available.Tflops.DeepCopy()
+	increaseVram := newGPU.Status.Available.Vram.DeepCopy()
+	increaseTflops.Sub(oldAvailableTflops)
+	increaseVram.Sub(oldAvailableVram)
+	zero := resource.Quantity{}
+	if increaseTflops.Cmp(zero) <= 0 && increaseVram.Cmp(zero) <= 0 {
+		logger.V(4).Info("Resource decreased or unchanged, skip",
 			"pod", klog.KObj(pod),
-			"newPhase", newGPU.Status.Phase,
 			"increaseTflops", increaseTflops.String(),
 			"increaseVram", increaseVram.String())
 		return fwk.QueueSkip, nil
 	}
 
-	// A meaningful signal arrived — but before waking the pod up, verify the pod can
-	// actually fit given the CURRENT cluster state. This covers:
-	//   - GPU came back Running but Available is still insufficient for this pod
-	//   - Multi-GPU pods where a single-GPU event isn't enough
-	//   - Pod's pool/quota no longer matches
-	// If the fit check fails, stay in the unschedulable queue to avoid a wasted cycle.
 	allocRequest, _, err := s.allocator.ComposeAllocationRequest(pod)
 	if err != nil {
 		logger.V(5).Info("Failed to compose allocation request for pod, skip",
 			"pod", klog.KObj(pod), "error", err)
 		return fwk.QueueSkip, nil
 	}
+	// For multi-GPU pods we must check whether the CURRENT cluster state can
+	// satisfy the full request (count/same-node/quota), not just this event delta.
 	if _, _, err := s.allocator.CheckQuotaAndFilter(s.ctx, allocRequest, false); err != nil {
-		logger.V(4).Info("Pod still cannot fit after GPU event, skip",
+		logger.V(4).Info("Pod still cannot fit after available-increase event, skip",
 			"pod", klog.KObj(pod),
 			"gpu", newGPU.Name,
-			"phaseBecameRunning", phaseBecameRunning,
-			"availableIncreased", availableIncreased,
 			"error", err.Error())
 		return fwk.QueueSkip, nil
 	}
 
-	logger.Info("GPU event may satisfy pod requirement, requeue unscheduled pod",
+	logger.Info("GPU available resources increased, requeue unscheduled pod",
 		"pod", klog.KObj(pod),
 		"gpu", newGPU.Name,
-		"phaseBecameRunning", phaseBecameRunning,
-		"availableIncreased", availableIncreased,
 		"increaseTflops", increaseTflops.String(),
 		"increaseVram", increaseVram.String(),
 		"gpuCount", allocRequest.Count)
