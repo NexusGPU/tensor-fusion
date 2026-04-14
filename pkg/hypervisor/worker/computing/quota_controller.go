@@ -1,12 +1,17 @@
 package computing
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 	workerstate "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/worker/state"
 	"k8s.io/klog/v2"
@@ -15,16 +20,30 @@ import (
 const (
 	erlUpdateInterval = 500 * time.Millisecond
 
-	// Rate estimation parameters (BBR-inspired)
+	// Token bucket defaults.
 	burstWindow = 0.5      // capacity = rate × burstWindow (seconds)
 	rateMin     = 10.0     // minimum refill rate (tokens/s)
 	rateMax     = 200000.0 // maximum refill rate
 	capacityMin = 200.0    // minimum token capacity
 	capacityMax = 200000.0
 
-	// Smoothing: EMA filter to reduce NVML noise and prevent oscillation
-	utilAlpha = 0.3 // utilization smoothing (lower = smoother)
-	rateAlpha = 0.2 // rate adjustment smoothing (lower = more stable)
+	// Feedback-control parameters.
+	utilAlpha           = 0.25 // utilization smoothing (EMA)
+	utilDeadband        = 0.03 // ignore tiny error to reduce oscillation
+	kp                  = 0.9
+	ki                  = 0.35
+	kd                  = 0.10
+	integralDecayFactor = 0.85
+	integralClamp       = 1.5
+
+	// Rate slew limiting avoids abrupt oscillation when NVML samples jump.
+	maxRateIncreaseRatio = 0.35 // max +35% per control interval
+	maxRateDecreaseRatio = 0.25 // max -25% per control interval
+
+	// Keep a modest token reserve for bursts while smoothing bucket release.
+	tokenReserveRatio = 0.35
+	tokenDrainRatio   = 0.80 // drain up to 80% of capacity/sec when oversupplied
+	tokenDrainMin     = 25.0
 )
 
 // WorkerInfoSnapshot holds the worker info needed for ERL updates
@@ -45,7 +64,22 @@ type DeviceSnapshot struct {
 type erlState struct {
 	currentRate  float64
 	smoothedUtil float64
+	integralErr  float64
+	lastError    float64
 	initialized  bool
+}
+
+type erlConfig struct {
+	burstWindow         float64
+	rateMin             float64
+	rateMax             float64
+	capacityMin         float64
+	capacityMax         float64
+	utilAlpha           float64
+	kp                  float64
+	ki                  float64
+	kd                  float64
+	integralDecayFactor float64
 }
 
 type Controller struct {
@@ -61,6 +95,7 @@ type Controller struct {
 
 	// Per-worker per-device AIMD state: key = workerUID + ":" + deviceUUID
 	erlStates map[string]*erlState
+	config    erlConfig
 }
 
 func NewQuotaController(
@@ -72,7 +107,71 @@ func NewQuotaController(
 		backend:          backend,
 		stopCh:           make(chan struct{}),
 		erlStates:        make(map[string]*erlState),
+		config:           defaultERLConfig(),
 	}
+}
+
+func defaultERLConfig() erlConfig {
+	return erlConfig{
+		burstWindow:         burstWindow,
+		rateMin:             rateMin,
+		rateMax:             rateMax,
+		capacityMin:         capacityMin,
+		capacityMax:         capacityMax,
+		utilAlpha:           utilAlpha,
+		kp:                  kp,
+		ki:                  ki,
+		kd:                  kd,
+		integralDecayFactor: integralDecayFactor,
+	}
+}
+
+func parsePositiveFloat(raw string, fallback float64) float64 {
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	return v
+}
+
+func loadERLConfigFromEnv() erlConfig {
+	cfg := defaultERLConfig()
+
+	raw := os.Getenv(constants.HypervisorSchedulingConfigEnv)
+	if raw == "" {
+		return cfg
+	}
+
+	var scheduling tfv1.HypervisorScheduling
+	if err := json.Unmarshal([]byte(raw), &scheduling); err != nil {
+		klog.Warningf("Failed to parse %s: %v", constants.HypervisorSchedulingConfigEnv, err)
+		return cfg
+	}
+
+	erl := scheduling.ElasticRateLimitParameters
+	cfg.rateMax = parsePositiveFloat(erl.MaxRefillRate, cfg.rateMax)
+	cfg.rateMin = parsePositiveFloat(erl.MinRefillRate, cfg.rateMin)
+	cfg.utilAlpha = parsePositiveFloat(erl.FilterAlpha, cfg.utilAlpha)
+	cfg.kp = parsePositiveFloat(erl.Kp, cfg.kp)
+	cfg.ki = parsePositiveFloat(erl.Ki, cfg.ki)
+	cfg.kd = parsePositiveFloat(erl.Kd, cfg.kd)
+	cfg.burstWindow = parsePositiveFloat(erl.BurstWindow, cfg.burstWindow)
+	cfg.capacityMin = parsePositiveFloat(erl.CapacityMin, cfg.capacityMin)
+	cfg.capacityMax = parsePositiveFloat(erl.CapacityMax, cfg.capacityMax)
+	cfg.integralDecayFactor = parsePositiveFloat(erl.IntegralDecayFactor, cfg.integralDecayFactor)
+
+	if cfg.rateMin > cfg.rateMax {
+		cfg.rateMin = cfg.rateMax
+	}
+	if cfg.capacityMin > cfg.capacityMax {
+		cfg.capacityMin = cfg.capacityMax
+	}
+	cfg.utilAlpha = clampFloat64(cfg.utilAlpha, 0.01, 0.95)
+	cfg.integralDecayFactor = clampFloat64(cfg.integralDecayFactor, 0.01, 0.999)
+	return cfg
 }
 
 func (c *Controller) SetWorkerInfoProvider(fn func() map[string]*WorkerInfoSnapshot) {
@@ -98,12 +197,23 @@ func (c *Controller) StartSoftQuotaLimiter() error {
 	if !strings.EqualFold(vendor, "NVIDIA") {
 		return fmt.Errorf("soft isolation mode is only supported on NVIDIA GPUs, current vendor: %s", vendor)
 	}
+	c.config = loadERLConfigFromEnv()
 
 	c.running = true
 	c.stopCh = make(chan struct{})
 
 	go c.runERLUpdateLoop()
-	klog.Info("Soft quota limiter started (AIMD congestion control)")
+	klog.Infof(
+		"Soft quota limiter started (feedback-controlled ERL): "+
+			"rate=[%.2f, %.2f] burstWindow=%.2f cap=[%.2f, %.2f] "+
+			"alpha=%.2f kp=%.2f ki=%.2f kd=%.2f decay=%.3f",
+		c.config.rateMin, c.config.rateMax,
+		c.config.burstWindow,
+		c.config.capacityMin, c.config.capacityMax,
+		c.config.utilAlpha,
+		c.config.kp, c.config.ki, c.config.kd,
+		c.config.integralDecayFactor,
+	)
 	return nil
 }
 
@@ -141,13 +251,95 @@ func (c *Controller) getOrCreateERLState(key string) *erlState {
 	st, ok := c.erlStates[key]
 	if !ok {
 		st = &erlState{
-			currentRate:  100.0, // Start low — forces throttling so NVML shows real util
+			currentRate:  100.0, // Start low to avoid immediate overshoot.
 			smoothedUtil: 0,
+			integralErr:  0,
+			lastError:    0,
 			initialized:  false,
 		}
 		c.erlStates[key] = st
 	}
 	return st
+}
+
+// TODO(known-issue): erlStates map entries are added per (workerUID,deviceUUID)
+// on first ERL tick but never deleted when the worker pod is removed. Across
+// pod churn the map grows and — more importantly for enforcement accuracy — the
+// PID state (currentRate/integralErr/smoothedUtil) on an un-GC'd device entry
+// leaks forward and biases the next pod scheduled on the same device. This
+// manifests as the measured 60% limit drifting to ~74% time-average after a
+// few pods have come and gone on the same GPU; restarting the hypervisor pod
+// restores strict 60% enforcement (see commit message for the investigation).
+// Fix direction: wire a worker-delete callback (from WorkerController /
+// /process-delete handler) that calls `delete(c.erlStates, key)` and also
+// resets the per-device shm bucket state.
+
+func clampFloat64(v, lo, hi float64) float64 {
+	return math.Min(math.Max(v, lo), hi)
+}
+
+func slewRate(current, target, upRatio, downRatio float64) float64 {
+	if target > current {
+		return math.Min(target, current*(1.0+upRatio))
+	}
+	return math.Max(target, current*(1.0-downRatio))
+}
+
+func computeDesiredRate(currentRate, targetUtil, smoothedUtil, dt float64, es *erlState, cfg erlConfig) float64 {
+	if smoothedUtil <= 0.01 {
+		// Near idle or no sample: ramp up conservatively but steadily.
+		return math.Min(currentRate*(1.0+maxRateIncreaseRatio), cfg.rateMax)
+	}
+
+	error := targetUtil - smoothedUtil
+	if math.Abs(error) < utilDeadband {
+		es.integralErr *= cfg.integralDecayFactor
+		return currentRate
+	}
+
+	es.integralErr = clampFloat64(es.integralErr*cfg.integralDecayFactor+error*dt, -integralClamp, integralClamp)
+	derivative := 0.0
+	if dt > 0 {
+		derivative = (error - es.lastError) / dt
+	}
+	es.lastError = error
+
+	// Feed-forward: estimate the rate required to move current utilization to target.
+	feedForwardRate := currentRate * (targetUtil / math.Max(smoothedUtil, 0.05))
+	controlFactor := 1.0 + cfg.kp*error + cfg.ki*es.integralErr + cfg.kd*derivative
+	controlFactor = clampFloat64(controlFactor, 0.5, 1.5)
+
+	desiredRate := clampFloat64(feedForwardRate*controlFactor, cfg.rateMin, cfg.rateMax)
+	return slewRate(currentRate, desiredRate, maxRateIncreaseRatio, maxRateDecreaseRatio)
+}
+
+func rebalanceTokenBucket(
+	deviceInfo *workerstate.SharedDeviceInfoV2,
+	nowSecs, refillRate, capacity, targetUtil, smoothedUtil float64,
+) float64 {
+	currentTokens, lastUpdate := deviceInfo.LoadERLTokenState()
+	if lastUpdate > 0 {
+		refillElapsed := nowSecs - lastUpdate
+		if refillElapsed > 0 && refillElapsed < 5.0 {
+			deviceInfo.FetchAddERLTokens(refillRate * refillElapsed)
+			currentTokens = deviceInfo.GetERLCurrentTokens()
+		}
+	}
+
+	reserveTarget := clampFloat64(capacity*tokenReserveRatio, 0.0, capacity)
+	if currentTokens > capacity {
+		drainAmount := math.Max(tokenDrainMin, capacity*tokenDrainRatio) * (erlUpdateInterval.Seconds())
+		currentTokens = math.Max(capacity, currentTokens-drainAmount)
+		deviceInfo.SetERLCurrentTokens(currentTokens)
+	} else if smoothedUtil > targetUtil+utilDeadband && currentTokens > reserveTarget {
+		// Smoothly bleed extra burst budget when utilization is already above target.
+		drainAmount := math.Max(tokenDrainMin, capacity*tokenDrainRatio) * (erlUpdateInterval.Seconds())
+		currentTokens = math.Max(reserveTarget, currentTokens-drainAmount)
+		deviceInfo.SetERLCurrentTokens(currentTokens)
+	}
+
+	deviceInfo.SetERLLastTokenUpdate(nowSecs)
+	return currentTokens
 }
 
 func (c *Controller) updateERLControllers() {
@@ -171,6 +363,7 @@ func (c *Controller) updateERLControllers() {
 
 	timestampMicros := uint64(time.Now().UnixMicro())
 	nowSecs := float64(timestampMicros) / 1e6
+	dt := erlUpdateInterval.Seconds()
 
 	for workerUID, workerInfo := range workers {
 		handle := c.shmHandleFn(workerUID)
@@ -206,55 +399,27 @@ func (c *Controller) updateERLControllers() {
 				es.smoothedUtil = nvmlUtil
 				es.initialized = true
 			} else {
-				es.smoothedUtil = utilAlpha*nvmlUtil + (1-utilAlpha)*es.smoothedUtil
+				es.smoothedUtil = c.config.utilAlpha*nvmlUtil + (1-c.config.utilAlpha)*es.smoothedUtil
 			}
 
-			// Rate control via NVML utilization feedback.
-			// Token rate controls how many kernels/s the workload can issue.
-			// More rate → more kernels → higher GPU util.
-			// Less rate → fewer kernels → lower GPU util.
-			//
-			// idealRate = currentRate × (targetUtil / actualUtil)
-			// If actual=100% and target=70%: rate reduces to 70% of current.
-			// If actual=50% and target=70%: rate increases to 140% of current.
-			if es.smoothedUtil > 0.05 {
-				idealRate := es.currentRate * (targetUtil / es.smoothedUtil)
-				es.currentRate = rateAlpha*idealRate + (1-rateAlpha)*es.currentRate
-			} else {
-				// Near-idle or no measurement: double rate quickly
-				es.currentRate = math.Min(es.currentRate*2.0, rateMax)
-			}
-
-			// Clamp rate
-			es.currentRate = math.Max(es.currentRate, rateMin)
-			es.currentRate = math.Min(es.currentRate, rateMax)
+			es.currentRate = computeDesiredRate(es.currentRate, targetUtil, es.smoothedUtil, dt, es, c.config)
 
 			// Dynamic capacity
-			newCapacity := math.Max(es.currentRate*burstWindow, capacityMin)
-			newCapacity = math.Min(newCapacity, capacityMax)
+			newCapacity := clampFloat64(es.currentRate*c.config.burstWindow, c.config.capacityMin, c.config.capacityMax)
 
 			// Write to shm
 			deviceInfo.SetERLTokenRefillRate(es.currentRate)
 			deviceInfo.SetERLTokenCapacity(newCapacity)
+			currentTokens := rebalanceTokenBucket(deviceInfo, nowSecs, es.currentRate, newCapacity, targetUtil, es.smoothedUtil)
 
-			// Refill tokens
-			_, lastUpdate := deviceInfo.LoadERLTokenState()
-			if lastUpdate > 0 {
-				refillElapsed := nowSecs - lastUpdate
-				if refillElapsed > 0 && refillElapsed < 5.0 {
-					deviceInfo.FetchAddERLTokens(es.currentRate * refillElapsed)
-				}
-			}
-			deviceInfo.SetERLLastTokenUpdate(nowSecs)
-
-			// Clamp tokens to capacity
-			currentTokens, _ := deviceInfo.LoadERLTokenState()
-			if currentTokens > newCapacity {
-				deviceInfo.SetERLCurrentTokens(newCapacity)
-			}
-
-			klog.Infof("ERL [%s] nvml=%.0f%% smooth=%.0f%% target=%.0f%% rate=%.0f cap=%.0f tokens=%.1f",
-				stateKey, nvmlUtil*100, es.smoothedUtil*100, targetUtil*100, es.currentRate, newCapacity, currentTokens)
+			klog.Infof(
+				"ERL [%s] nvml=%.0f%% smooth=%.0f%% target=%.0f%% err=%.1f%% "+
+					"rate=%.0f cap=%.0f tokens=%.1f int=%.3f",
+				stateKey,
+				nvmlUtil*100, es.smoothedUtil*100, targetUtil*100,
+				(targetUtil-es.smoothedUtil)*100,
+				es.currentRate, newCapacity, currentTokens, es.integralErr,
+			)
 		}
 	}
 }

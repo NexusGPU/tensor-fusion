@@ -85,6 +85,16 @@ func (w *WorkerController) Start() error {
 			w.workers[worker.WorkerUID] = worker
 			w.mu.Unlock()
 
+			// Recover partition allocation state for existing partitioned workers after restart.
+			// If the worker is already running with partitions, the partition-uuids annotation
+			// (written during initial allocation) lets us rebuild the in-memory allocation
+			// so that DeallocateWorker can properly clean up MIG instances on pod deletion.
+			if worker.IsolationMode == tfv1.IsolationModePartitioned && worker.PartitionTemplateID != "" {
+				if partitionUUIDs, ok := worker.Annotations[constants.PartitionUUIDsAnnotation]; ok && partitionUUIDs != "" {
+					w.allocationController.RecoverPartitionedWorker(worker, partitionUUIDs)
+				}
+			}
+
 			// For soft isolation, proactively create shared memory when a worker pod appears.
 			// Unlike hard/sidecar mode where the worker process calls /process-init to trigger
 			// shm creation, soft mode injects the limiter directly into the business container

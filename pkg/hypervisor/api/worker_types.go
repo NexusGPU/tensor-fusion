@@ -98,6 +98,12 @@ type WorkerAllocation struct {
 	Mounts []*Mount
 
 	Devices []*DeviceSpec
+
+	// CDIDevices are fully-qualified CDI device names to request from kubelet,
+	// e.g. "nvidia.com/gpu=GPU-<uuid>". Populated only for vendors whose CDI
+	// specs use the UUID naming strategy (NVIDIA default). Nil or empty means
+	// the consumer should fall back to env-var based device injection.
+	CDIDevices []string
 }
 
 // DeviceSpec specifies a host device to mount into a container.

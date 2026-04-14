@@ -130,6 +130,26 @@ func appendNvidiaLibraryPathEnvs(envList []v1.EnvVar) []v1.EnvVar {
 	)
 }
 
+func appendRemoteVendorToolMounts(volumeMounts []v1.VolumeMount, vendor, volumeName string) []v1.VolumeMount {
+	switch {
+	case shouldInjectNvidiaVisibleDevices(vendor):
+		return appendRemoteNvidiaToolMounts(volumeMounts, volumeName)
+	default:
+		return volumeMounts
+	}
+}
+
+func appendRemoteNvidiaToolMounts(volumeMounts []v1.VolumeMount, volumeName string) []v1.VolumeMount {
+	return append(volumeMounts, v1.VolumeMount{
+		// Keep nvidia-smi available from the default PATH for interactive exec shells.
+		// This avoids relying on TF_PREPEND_PATH/add-path behavior when users exec directly into bash.
+		Name:      volumeName,
+		MountPath: "/usr/local/bin/nvidia-smi",
+		SubPath:   "nvidia-smi",
+		ReadOnly:  true,
+	})
+}
+
 func shouldInjectClientBootstrap(profile *tfv1.WorkloadProfileSpec) bool {
 	if profile == nil {
 		return true
@@ -375,6 +395,11 @@ func AddTFDefaultClientConfBeforePatch(
 					Name:      constants.TFLibsVolumeName,
 					MountPath: constants.TFLibsVolumeMountPath,
 				})
+			pod.Spec.Containers[injectContainerIndex].VolumeMounts = appendRemoteVendorToolMounts(
+				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+				tfInfo.Profile.GPUVendor,
+				constants.TFLibsVolumeName,
+			)
 		}
 	}
 

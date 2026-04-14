@@ -28,7 +28,8 @@ import (
 // This is a key test to verify the device plugin implementation matches the design:
 // - DevicesIds[0] contains the index value (1-512) from resource limits
 // - len(req.ContainerRequests) is just the number of containers, NOT the pod index
-// - CdiDevices must be empty to prevent dummy device allocation
+// - CdiDevices are populated from the real allocation result (canonical NVIDIA
+//   device names), never echoed from the dummy DevicesIds used for indexing
 func TestDevicePluginAllocate_ExtractsIndexFromDevicesIds(t *testing.T) {
 	// This test verifies the key design principle:
 	// The pod index comes from DevicesIds[0], which contains the value from

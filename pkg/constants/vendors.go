@@ -29,6 +29,11 @@ const (
 	AcceleratorVendorExample = "Example"
 
 	AcceleratorVendorUnknown = "Unknown"
+
+	// NvidiaCDIKind is the CDI kind registered by nvidia-container-toolkit.
+	// Combined with a device name it yields a fully-qualified CDI device
+	// reference, e.g. "nvidia.com/gpu=GPU-<uuid>".
+	NvidiaCDIKind = "nvidia.com/gpu"
 )
 
 // L1 Virtualization means simple device partitioning, such as dynamic MIG/VirtualizationTemplates

@@ -22,6 +22,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
@@ -310,7 +311,17 @@ func (dp *DevicePlugin) Allocate(
 					Permissions:   device.Permissions,
 				}
 			}),
-			CdiDevices: []*pluginapi.CDIDevice{},
+			CdiDevices: lo.Map(allocResp.CDIDevices, func(name string, _ int) *pluginapi.CDIDevice {
+				return &pluginapi.CDIDevice{Name: name}
+			}),
+		}
+
+		// For partitioned mode, store MIG instance UUIDs in pod annotation
+		// so allocation state can be recovered after hypervisor restart.
+		if partitionUUIDs := buildPartitionUUIDsAnnotation(allocResp.DeviceInfos); partitionUUIDs != "" {
+			containerResp.Annotations = map[string]string{
+				constants.PartitionUUIDsAnnotation: partitionUUIDs,
+			}
 		}
 		responses = append(responses, containerResp)
 	}
@@ -336,4 +347,16 @@ func (dp *DevicePlugin) GetPreferredAllocation(
 	return &pluginapi.PreferredAllocationResponse{
 		ContainerResponses: []*pluginapi.ContainerPreferredAllocationResponse{},
 	}, nil
+}
+
+// buildPartitionUUIDsAnnotation builds a comma-separated string of "partitionUUID:parentGPU" pairs
+// from the allocation's DeviceInfos. Returns empty string if no partitioned devices.
+func buildPartitionUUIDsAnnotation(deviceInfos []*api.DeviceInfo) string {
+	var pairs []string
+	for _, d := range deviceInfos {
+		if d.ParentUUID != "" {
+			pairs = append(pairs, d.UUID+":"+d.ParentUUID)
+		}
+	}
+	return strings.Join(pairs, ",")
 }

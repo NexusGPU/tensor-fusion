@@ -42,6 +42,10 @@ type WorkerAllocationController interface {
 	// DeallocateWorker deallocates devices for a worker
 	DeallocateWorker(workerUID string) error
 
+	// RecoverPartitionedWorker rebuilds allocation state for an existing partitioned worker
+	// after hypervisor restart. partitionUUIDs is a comma-separated string of "partitionUUID:parentGPU" pairs.
+	RecoverPartitionedWorker(request *api.WorkerInfo, partitionUUIDs string)
+
 	// GetWorkerAllocation returns the allocation for a specific worker
 	GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, bool)
 

@@ -72,6 +72,9 @@ func (f *fakeWorkerAllocationController) AllocateWorkerDevices(*api.WorkerInfo) 
 
 func (f *fakeWorkerAllocationController) DeallocateWorker(string) error { return nil }
 
+func (f *fakeWorkerAllocationController) RecoverPartitionedWorker(request *api.WorkerInfo, partitionUUIDs string) {
+}
+
 func (f *fakeWorkerAllocationController) GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, bool) {
 	allocation, ok := f.allocations[workerUID]
 	return allocation, ok

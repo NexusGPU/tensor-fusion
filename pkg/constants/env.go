@@ -29,6 +29,7 @@ const (
 const (
 	NvidiaVisibleAllDeviceEnv   = "NVIDIA_VISIBLE_DEVICES"
 	NvidiaVisibleAllDeviceValue = "all"
+	CudaVisibleDevicesEnv       = "CUDA_VISIBLE_DEVICES"
 
 	TensorFusionGPUInfoConfigName       = "tensor-fusion-sys-public-gpu-info"
 	TensorFusionGPUInfoConfigVolumeName = "gpu-info"
