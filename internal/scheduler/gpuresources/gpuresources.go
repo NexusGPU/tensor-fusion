@@ -320,6 +320,19 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 		return fwk.NewStatus(fwk.Success, "skip for non tensor-fusion mode")
 	}
 
+	// Fast-path rejection: when the hypervisor on this node dies, its device plugin
+	// drops out and kubelet may zero node.Status.Allocatable["tensor-fusion.ai/index"].
+	// This propagates to the scheduler cache well before the GPUNode -> GPU phase
+	// cascade reaches PhaseFilter, so catching it here closes the pod-storm window.
+	// Reject on a non-positive value (<=0); missing key means the device plugin
+	// hasn't registered yet and other filters already handle that.
+	if scalar := nodeInfo.GetAllocatable().GetScalarResources(); scalar != nil {
+		if idx, ok := scalar[v1.ResourceName(constants.PodIndexAnnotation)]; ok && idx <= 0 {
+			return fwk.NewStatus(fwk.UnschedulableAndUnresolvable,
+				"node tensor-fusion.ai/index allocatable is <= 0, hypervisor likely unhealthy")
+		}
+	}
+
 	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
 		return fwk.NewStatus(fwk.Error, err.Error())
@@ -834,55 +847,78 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj in
 		}
 	}
 
-	// QueueingHint receives one GPU CR event at a time. We only treat it as a useful
-	// wake-up when available resources on that GPU actually increase.
-	if newGPU == nil || newGPU.Status.Available == nil {
-		logger.V(5).Info("Missing new GPU availability, skip", "pod", klog.KObj(pod))
+	if newGPU == nil {
+		logger.V(5).Info("Missing new GPU, skip", "pod", klog.KObj(pod))
 		return fwk.QueueSkip, nil
 	}
 
-	oldAvailableTflops := resource.Quantity{}
-	oldAvailableVram := resource.Quantity{}
-	if oldGPU != nil && oldGPU.Status.Available != nil {
-		oldAvailableTflops = oldGPU.Status.Available.Tflops.DeepCopy()
-		oldAvailableVram = oldGPU.Status.Available.Vram.DeepCopy()
+	// Detect meaningful signals that warrant re-running a fit check:
+	//   1. Phase transitioned into Running — PhaseFilter previously rejected this GPU
+	//      but would now admit it. Status.Available usually does NOT change across
+	//      this transition, so relying on the available-delta check alone would leave
+	//      pods stuck in the unschedulable queue until the 5-minute fallback flush.
+	//   2. Available resources on this GPU increased — the classic wake-up trigger.
+	// If neither is true the event carries no new useful information for this pod.
+	phaseBecameRunning := newGPU.Status.Phase == tfv1.TensorFusionGPUPhaseRunning &&
+		(oldGPU == nil || oldGPU.Status.Phase != tfv1.TensorFusionGPUPhaseRunning)
+
+	var increaseTflops, increaseVram resource.Quantity
+	availableIncreased := false
+	if newGPU.Status.Available != nil {
+		oldAvailableTflops := resource.Quantity{}
+		oldAvailableVram := resource.Quantity{}
+		if oldGPU != nil && oldGPU.Status.Available != nil {
+			oldAvailableTflops = oldGPU.Status.Available.Tflops.DeepCopy()
+			oldAvailableVram = oldGPU.Status.Available.Vram.DeepCopy()
+		}
+		increaseTflops = newGPU.Status.Available.Tflops.DeepCopy()
+		increaseVram = newGPU.Status.Available.Vram.DeepCopy()
+		increaseTflops.Sub(oldAvailableTflops)
+		increaseVram.Sub(oldAvailableVram)
+		zero := resource.Quantity{}
+		availableIncreased = increaseTflops.Cmp(zero) > 0 || increaseVram.Cmp(zero) > 0
 	}
 
-	increaseTflops := newGPU.Status.Available.Tflops.DeepCopy()
-	increaseVram := newGPU.Status.Available.Vram.DeepCopy()
-	increaseTflops.Sub(oldAvailableTflops)
-	increaseVram.Sub(oldAvailableVram)
-
-	// If resource decreased or unchanged, skip (for non-nominated pods)
-	zero := resource.Quantity{}
-	if increaseTflops.Cmp(zero) <= 0 && increaseVram.Cmp(zero) <= 0 {
-		logger.V(4).Info("Resource decreased or unchanged, skip",
+	if !phaseBecameRunning && !availableIncreased {
+		logger.V(4).Info("No phase->Running transition and no available increase, skip",
 			"pod", klog.KObj(pod),
+			"newPhase", newGPU.Status.Phase,
 			"increaseTflops", increaseTflops.String(),
 			"increaseVram", increaseVram.String())
 		return fwk.QueueSkip, nil
 	}
 
-	// Compose allocation request for the pod passed in by scheduler framework
+	// A meaningful signal arrived — but before waking the pod up, verify the pod can
+	// actually fit given the CURRENT cluster state. This covers:
+	//   - GPU came back Running but Available is still insufficient for this pod
+	//   - Multi-GPU pods where a single-GPU event isn't enough
+	//   - Pod's pool/quota no longer matches
+	// If the fit check fails, stay in the unschedulable queue to avoid a wasted cycle.
 	allocRequest, _, err := s.allocator.ComposeAllocationRequest(pod)
 	if err != nil {
 		logger.V(5).Info("Failed to compose allocation request for pod, skip",
 			"pod", klog.KObj(pod), "error", err)
 		return fwk.QueueSkip, nil
 	}
-
-	// Important: for multi-GPU pods we must check whether the CURRENT cluster state
-	// can satisfy the full request (count/same-node/quota), not just this event delta.
-	if _, _, err := s.allocator.CheckQuotaAndFilter(s.ctx, allocRequest, false); err == nil {
-		logger.V(4).Info("GPU update may satisfy pod requirement, requeue unscheduled pod",
+	if _, _, err := s.allocator.CheckQuotaAndFilter(s.ctx, allocRequest, false); err != nil {
+		logger.V(4).Info("Pod still cannot fit after GPU event, skip",
 			"pod", klog.KObj(pod),
-			"increaseTflops", increaseTflops.String(),
-			"increaseVram", increaseVram.String(),
-			"gpuCount", allocRequest.Count)
-		return fwk.Queue, nil
+			"gpu", newGPU.Name,
+			"phaseBecameRunning", phaseBecameRunning,
+			"availableIncreased", availableIncreased,
+			"error", err.Error())
+		return fwk.QueueSkip, nil
 	}
 
-	return fwk.QueueSkip, nil
+	logger.Info("GPU event may satisfy pod requirement, requeue unscheduled pod",
+		"pod", klog.KObj(pod),
+		"gpu", newGPU.Name,
+		"phaseBecameRunning", phaseBecameRunning,
+		"availableIncreased", availableIncreased,
+		"increaseTflops", increaseTflops.String(),
+		"increaseVram", increaseVram.String(),
+		"gpuCount", allocRequest.Count)
+	return fwk.Queue, nil
 }
 
 // validatePreemption validates GPU-specific preemption constraints in Filter phase.
