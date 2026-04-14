@@ -1204,9 +1204,10 @@ func SetWorkerContainerSpec(
 		},
 	})
 	if shouldInjectNvidiaVisibleDevices(workloadProfile.GPUVendor) {
-		// Soft isolation: let device plugin set NVIDIA_VISIBLE_DEVICES to the allocated GPU.
-		// Other modes: set to "all" so the worker can see all GPUs (limiter restricts via CUDA_VISIBLE_DEVICES).
-		if workloadProfile.Isolation != tfv1.IsolationModeSoft {
+		// Soft / hard isolation: let device plugin set NVIDIA_VISIBLE_DEVICES to the allocated GPU UUID.
+		// Partitioned / shared: expose all GPUs (no per-device restriction at this layer).
+		if workloadProfile.Isolation != tfv1.IsolationModeSoft &&
+			workloadProfile.Isolation != tfv1.IsolationModeHard {
 			container.Env = append(container.Env, v1.EnvVar{
 				Name:  constants.NvidiaVisibleAllDeviceEnv,
 				Value: constants.NvidiaVisibleAllDeviceValue,
@@ -1215,9 +1216,13 @@ func SetWorkerContainerSpec(
 		container.Env = appendNvidiaLibraryPathEnvs(container.Env)
 	}
 
-	if shouldInjectCudaLimiter(workloadProfile.GPUVendor) && !strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) {
-		// TODO: In hard isolation mode, current implementation relies on limiter to set CUDA_VISIBLE_DEVICES env.
-		// In next hypervisor versions, device allocation will be handled by device-plugin, so LD_PRELOAD should be removed.
+	// Only soft isolation preloads the open-source vgpu.rs cuda_limiter (reads limits from shm).
+	// Hard mode relies on the closed-source hard limiter that reads TF_CUDA_SM_PERCENT_LIMIT /
+	// TF_CUDA_MEMORY_LIMIT env vars, and per the HardMemLimiterEnv comment in pkg/constants/env.go
+	// it "only take effect ... when open source vgpu.rs gpu-limiter is disabled".
+	if workloadProfile.Isolation == tfv1.IsolationModeSoft &&
+		shouldInjectCudaLimiter(workloadProfile.GPUVendor) &&
+		!strings.Contains(disabledFeatures, constants.BuiltInFeaturesGpuLimiter) {
 		container.Env = append(container.Env, v1.EnvVar{
 			Name:  constants.LdPreloadEnv,
 			Value: constants.LdPreloadLimiter,

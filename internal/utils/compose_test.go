@@ -160,7 +160,7 @@ var _ = Describe("Compose Utils", func() {
 			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
 				Profile: &tfv1.WorkloadProfileSpec{
 					IsLocalGPU: true,
-					Isolation:  tfv1.IsolationModeSoft,
+					Isolation:  tfv1.IsolationModeType(tfv1.IsolationModeSoft),
 					GPUVendor:  constants.AcceleratorVendorNvidia,
 				},
 			}, []int{0})
@@ -215,7 +215,7 @@ var _ = Describe("Compose Utils", func() {
 			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
 				Profile: &tfv1.WorkloadProfileSpec{
 					IsLocalGPU: true,
-					Isolation:  tfv1.IsolationModeHard,
+					Isolation:  tfv1.IsolationModeType(tfv1.IsolationModeHard),
 					GPUVendor:  constants.AcceleratorVendorNvidia,
 				},
 			}, []int{0})
@@ -395,7 +395,7 @@ var _ = Describe("Compose Utils", func() {
 			utils.AddTFDefaultClientConfBeforePatch(context.Background(), localHardPod, pool, utils.TensorFusionInfo{
 				Profile: &tfv1.WorkloadProfileSpec{
 					IsLocalGPU: true,
-					Isolation:  tfv1.IsolationModeHard,
+					Isolation:  tfv1.IsolationModeType(tfv1.IsolationModeHard),
 					GPUVendor:  constants.AcceleratorVendorNvidia,
 				},
 			}, []int{0})
@@ -483,10 +483,11 @@ var _ = Describe("Compose Utils", func() {
 
 	Describe("SetWorkerContainerSpec", func() {
 		DescribeTable("configures worker container correctly",
-			func(vendor, workerImage, disabledFeatures string, sharedMemMode bool, expectCommand []string, expectNvidiaVisibleEnv, expectLdPreload bool) {
+			func(vendor, workerImage, disabledFeatures string, sharedMemMode bool, isolation tfv1.IsolationModeType, expectCommand []string, expectNvidiaVisibleEnv, expectLdPreload bool) {
 				container := &corev1.Container{}
 				workloadProfile := &tfv1.WorkloadProfileSpec{
 					GPUVendor: vendor,
+					Isolation: isolation,
 				}
 				workerConfig := &tfv1.WorkerConfig{
 					Image: workerImage,
@@ -520,21 +521,26 @@ var _ = Describe("Compose Utils", func() {
 					Expect(container.Command[2]).To(ContainSubstring("-M 256"), "should specify shared memory size")
 				}
 			},
-			Entry("basic worker config", "NVIDIA", "worker:latest", "", false, []string{
+			Entry("hard worker: no LD_PRELOAD, no NVIDIA_VISIBLE_DEVICES=all (device plugin allocates UUID)", "NVIDIA", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
 				"./tensor-fusion-worker",
 				"-p",
 				"8000",
-			}, true, true),
-			Entry("worker with shared memory mode", "NVIDIA", "worker:latest", "", true, []string{
+			}, false, false),
+			Entry("soft worker: LD_PRELOAD vgpu.rs limiter, no NVIDIA_VISIBLE_DEVICES=all", "NVIDIA", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModeSoft), []string{
+				"./tensor-fusion-worker",
+				"-p",
+				"8000",
+			}, false, true),
+			Entry("worker with shared memory mode (hard)", "NVIDIA", "worker:latest", "", true, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
 				"/bin/bash",
 				"-c",
 				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 256",
-			}, true, true),
-			Entry("worker with disabled start-worker feature", "NVIDIA", "worker:latest", "start-worker", false, []string{
+			}, false, false),
+			Entry("worker with disabled start-worker feature (hard)", "NVIDIA", "worker:latest", "start-worker", false, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
 				"sleep",
 				"infinity",
-			}, true, true),
-			Entry("worker without nvidia visible env for Ascend", "Ascend", "worker:latest", "", false, []string{
+			}, false, false),
+			Entry("worker without nvidia visible env for Ascend", "Ascend", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
 				"./tensor-fusion-worker",
 				"-p",
 				"8000",
