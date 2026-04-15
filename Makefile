@@ -150,7 +150,6 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	$(KUSTOMIZE) build config/default > dist/install.yaml
 
 ##@ Deployment
-
 ifndef ignore-not-found
   ignore-not-found = false
 endif
