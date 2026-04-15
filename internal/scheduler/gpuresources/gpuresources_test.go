@@ -434,9 +434,80 @@ func (s *GPUResourcesSuite) TestFilter() {
 	for _, tt := range tests {
 		s.Run(tt.name, func() {
 			nodeInfo := &framework.NodeInfo{}
-			nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: tt.nodeName}})
+			nodeInfo.SetNode(&v1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: tt.nodeName},
+				// The hypervisor-health fast-path requires a positive index
+				// allocatable. Provide it so these cases exercise the legacy
+				// NodeGPUs-based filter rather than the fast-path.
+				Status: v1.NodeStatus{
+					Allocatable: v1.ResourceList{
+						v1.ResourceName(constants.PodIndexAnnotation): resource.MustParse("512"),
+					},
+				},
+			})
 			status := s.plugin.Filter(s.ctx, state, pod, nodeInfo)
 			s.Equal(tt.expectedStatus, status.Code())
+		})
+	}
+}
+
+// Every TF worker pod has tensor-fusion.ai/index injected by the webhook, so the
+// node must expose a positive allocatable for that resource. Filter must reject
+// with UnschedulableAndUnresolvable on both a zeroed value (hypervisor just died
+// and its device plugin dropped out) and a missing key (device plugin never
+// registered). This closes the pod-storm window where GPUNode -> GPU phase
+// propagation has not yet reached PhaseFilter.
+func (s *GPUResourcesSuite) TestFilter_HypervisorDownDropsIndexAllocatable() {
+	log.FromContext(s.ctx).Info("Running TestFilter_HypervisorDownDropsIndexAllocatable")
+	state := framework.NewCycleState()
+	pod := s.makePod("p-hyper-down",
+		map[string]string{
+			constants.GpuCountAnnotation:      "1",
+			constants.TFLOPSRequestAnnotation: "100",
+			constants.VRAMRequestAnnotation:   "10Gi",
+			constants.TFLOPSLimitAnnotation:   "100",
+			constants.VRAMLimitAnnotation:     "40Gi",
+		})
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
+	s.Require().True(preFilterStatus.IsSuccess())
+
+	tests := []struct {
+		name           string
+		allocatable    v1.ResourceList
+		expectedStatus fwk.Code
+	}{
+		{
+			name: "hypervisor down -> index allocatable is 0",
+			allocatable: v1.ResourceList{
+				v1.ResourceName(constants.PodIndexAnnotation): resource.MustParse("0"),
+			},
+			expectedStatus: fwk.UnschedulableAndUnresolvable,
+		},
+		{
+			name: "healthy node -> index allocatable is positive",
+			allocatable: v1.ResourceList{
+				v1.ResourceName(constants.PodIndexAnnotation): resource.MustParse("512"),
+			},
+			// node-a is the only GPU-carrying node in the fixture; positive
+			// allocatable must let the request through this early check.
+			expectedStatus: fwk.Success,
+		},
+		{
+			name:           "index resource missing -> device plugin not registered, reject",
+			allocatable:    v1.ResourceList{},
+			expectedStatus: fwk.UnschedulableAndUnresolvable,
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			nodeInfo := &framework.NodeInfo{}
+			nodeInfo.SetNode(&v1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+				Status:     v1.NodeStatus{Allocatable: tt.allocatable},
+			})
+			status := s.plugin.Filter(s.ctx, state, pod, nodeInfo)
+			s.Equal(tt.expectedStatus, status.Code(), status.Message())
 		})
 	}
 }
@@ -760,7 +831,16 @@ func (s *GPUResourcesSuite) TestFilter_ErrorHandling() {
 	state := framework.NewCycleState()
 	pod := s.makePod("p1", nil)
 	nodeInfo := &framework.NodeInfo{}
-	nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
+	// Provide a positive index allocatable so we pass the hypervisor-health
+	// fast-path and reach the state.Read failure this test targets.
+	nodeInfo.SetNode(&v1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status: v1.NodeStatus{
+			Allocatable: v1.ResourceList{
+				v1.ResourceName(constants.PodIndexAnnotation): resource.MustParse("512"),
+			},
+		},
+	})
 
 	// No pre-filter call, so state is empty
 	status := s.plugin.Filter(s.ctx, state, pod, nodeInfo)
@@ -832,6 +912,282 @@ func (s *GPUResourcesSuite) TestQueueingHint_ResourceDecrease() {
 				Tflops: resource.MustParse("400"),
 				Vram:   resource.MustParse("8Gi"),
 			},
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.QueueSkip, hint)
+}
+
+// GPU phase transitioning Pending -> Running must wake pending pods even when
+// Status.Available is unchanged — that's the scenario that previously left
+// unschedulable pods stuck for up to the 5-minute queue flush.
+func (s *GPUResourcesSuite) TestQueueingHint_PhaseTransitionToRunning() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_PhaseTransitionToRunning")
+	pod := s.makePod("pending-pod-phase", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "1",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	pod.Spec.NodeName = ""
+
+	available := &tfv1.Resource{
+		Tflops: resource.MustParse("150"),
+		Vram:   resource.MustParse("15Gi"),
+	}
+	oldGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{constants.GpuPoolKey: "pool-a"},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhasePending,
+			Available: available.DeepCopy(),
+		},
+	}
+	newGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{constants.GpuPoolKey: "pool-a"},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhaseRunning,
+			Available: available.DeepCopy(),
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.Queue, hint)
+}
+
+// Running -> Pending must NOT wake pending pods — the GPU just became
+// ineligible, there is nothing new to try.
+func (s *GPUResourcesSuite) TestQueueingHint_PhaseTransitionToPending() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_PhaseTransitionToPending")
+	pod := s.makePod("pending-pod-phase-down", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "1",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	pod.Spec.NodeName = ""
+
+	available := &tfv1.Resource{
+		Tflops: resource.MustParse("150"),
+		Vram:   resource.MustParse("15Gi"),
+	}
+	oldGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhaseRunning,
+			Available: available.DeepCopy(),
+		},
+	}
+	newGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhasePending,
+			Available: available.DeepCopy(),
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.QueueSkip, hint)
+}
+
+// Phase->Running is treated as an unconditional wake-up even when the
+// allocator's current view says the pod cannot fit. The scheduler's GPU CR
+// informer and GpuAllocator.StartInformerForGPU run independently, so when
+// queueingHint fires the allocator may not yet have synced the new phase —
+// querying CheckQuotaAndFilter here would race and silently suppress the
+// wake-up this patch is meant to deliver. We accept the extra scheduling
+// cycle to guarantee the pod is reconsidered.
+func (s *GPUResourcesSuite) TestQueueingHint_PhaseTransitionToRunning_AllocatorMayBeStale() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_PhaseTransitionToRunning_AllocatorMayBeStale")
+	// Use a request deliberately too large for the fixture (4 GPUs) so that
+	// CheckQuotaAndFilter over the allocator's view would reject it. We must
+	// still return Queue because the allocator's view is authoritatively stale
+	// for phase on this path.
+	pod := s.makePod("pending-pod-need-4-gpus-phase", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "4",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	pod.Spec.NodeName = ""
+
+	available := &tfv1.Resource{
+		Tflops: resource.MustParse("150"),
+		Vram:   resource.MustParse("15Gi"),
+	}
+	oldGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{constants.GpuPoolKey: "pool-a"},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhasePending,
+			Available: available.DeepCopy(),
+		},
+	}
+	newGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{constants.GpuPoolKey: "pool-a"},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhaseRunning,
+			Available: available.DeepCopy(),
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.Queue, hint)
+}
+
+// Phase->Running on a GPU whose pool does not match the pod must not wake the
+// pod. Without this pre-check a single GPUNode recovery would thunder every
+// pending pod on every pool into activeQ at once.
+func (s *GPUResourcesSuite) TestQueueingHint_PhaseTransitionToRunning_PoolMismatch() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_PhaseTransitionToRunning_PoolMismatch")
+	pod := s.makePod("pending-pod-pool-a", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "1",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	pod.Spec.NodeName = ""
+
+	available := &tfv1.Resource{
+		Tflops: resource.MustParse("150"),
+		Vram:   resource.MustParse("15Gi"),
+	}
+	oldGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{constants.GpuPoolKey: "pool-b"},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhasePending,
+			Available: available.DeepCopy(),
+		},
+	}
+	newGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{constants.GpuPoolKey: "pool-b"},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhaseRunning,
+			Available: available.DeepCopy(),
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.QueueSkip, hint)
+}
+
+// Pod with no pool annotation cannot be scheduled (ComposeAllocationRequest
+// will set AllocRequest.PoolName="" and the allocator rejects it). Waking it
+// up on a phase->Running event would just burn a scheduling cycle for a
+// guaranteed failure, so skip.
+func (s *GPUResourcesSuite) TestQueueingHint_PhaseTransitionToRunning_PodPoolEmpty() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_PhaseTransitionToRunning_PodPoolEmpty")
+	pod := s.makePod("pending-pod-no-pool", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "1",
+	})
+	pod.Spec.NodeName = ""
+	delete(pod.Annotations, constants.GpuPoolKey) // simulate misconfigured pod
+
+	available := &tfv1.Resource{
+		Tflops: resource.MustParse("150"),
+		Vram:   resource.MustParse("15Gi"),
+	}
+	oldGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{constants.GpuPoolKey: "pool-a"},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhasePending,
+			Available: available.DeepCopy(),
+		},
+	}
+	newGPU := &tfv1.GPU{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{constants.GpuPoolKey: "pool-a"},
+		},
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhaseRunning,
+			Available: available.DeepCopy(),
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.QueueSkip, hint)
+}
+
+// GPU with no pool label has not been claimed by any GPUPool yet and cannot be
+// returned by listGPUsFromPool, so it cannot satisfy any pod. A phase->Running
+// event on such a GPU must not wake any pending pods.
+func (s *GPUResourcesSuite) TestQueueingHint_PhaseTransitionToRunning_GPUPoolEmpty() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_PhaseTransitionToRunning_GPUPoolEmpty")
+	pod := s.makePod("pending-pod-pool-a-2", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "1",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	pod.Spec.NodeName = ""
+
+	available := &tfv1.Resource{
+		Tflops: resource.MustParse("150"),
+		Vram:   resource.MustParse("15Gi"),
+	}
+	oldGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhasePending,
+			Available: available.DeepCopy(),
+		},
+	}
+	newGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhaseRunning,
+			Available: available.DeepCopy(),
+		},
+	}
+
+	hint, err := s.plugin.queueingHint(*s.plugin.logger, pod, oldGPU, newGPU)
+	s.NoError(err)
+	s.Equal(fwk.QueueSkip, hint)
+}
+
+// Phase stays Running and Available did not increase — the event carries no
+// useful signal, must not wake the pod.
+func (s *GPUResourcesSuite) TestQueueingHint_PhaseStaysRunning_NoIncrease() {
+	log.FromContext(s.ctx).Info("Running TestQueueingHint_PhaseStaysRunning_NoIncrease")
+	pod := s.makePod("pending-pod-stay-running", map[string]string{
+		constants.TFLOPSRequestAnnotation: "100",
+		constants.VRAMRequestAnnotation:   "10Gi",
+		constants.GpuCountAnnotation:      "1",
+		constants.GpuPoolKey:              "pool-a",
+	})
+	pod.Spec.NodeName = ""
+
+	available := &tfv1.Resource{
+		Tflops: resource.MustParse("150"),
+		Vram:   resource.MustParse("15Gi"),
+	}
+	oldGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhaseRunning,
+			Available: available.DeepCopy(),
+		},
+	}
+	newGPU := &tfv1.GPU{
+		Status: tfv1.GPUStatus{
+			Phase:     tfv1.TensorFusionGPUPhaseRunning,
+			Available: available.DeepCopy(),
 		},
 	}
 
