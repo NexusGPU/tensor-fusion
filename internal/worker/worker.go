@@ -25,10 +25,8 @@ type WorkerGenerator struct {
 var ErrNoAvailableWorker = errors.New("no available worker")
 
 func (wg *WorkerGenerator) PodTemplateHash(workloadSpec any) (string, error) {
-	return utils.GetObjectHash(
-		wg.WorkerConfig,
-		workloadSpec,
-	), nil
+	baseHash := utils.WorkerTemplateHash(wg.WorkerConfig, wg.HypervisorConfig)
+	return utils.GetObjectHash(baseHash, workloadSpec), nil
 }
 
 func (wg *WorkerGenerator) GenerateWorkerPod(

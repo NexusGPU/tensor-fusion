@@ -377,7 +377,7 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 			return "", nil
 		}
 
-		newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
+		newHash := utils.HypervisorTemplateHash(pool)
 		if utils.IsPodStopped(currentPod) || oldHash != newHash {
 			if err := r.Delete(ctx, currentPod); err != nil {
 				return "", fmt.Errorf("failed to delete old hypervisor pod: %w", err)
@@ -520,7 +520,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	}
 
 	// compose the final pod and set tolerations and controller reference
-	newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
+	newHash := utils.HypervisorTemplateHash(pool)
 	newPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      key.Name,
