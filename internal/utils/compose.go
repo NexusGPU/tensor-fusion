@@ -52,8 +52,6 @@ var workerDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceMemory: resource.MustParse("128Mi"),
 }
 
-var sharedMemMaxSize = resource.MustParse("512Mi")
-
 var workerPodIndexCounter uint32
 var featureShortcutMap = map[string]struct {
 	EnvName  string
@@ -473,8 +471,7 @@ func AddTFDefaultClientConfBeforePatch(
 				Name: constants.TransportShmVolumeName,
 				VolumeSource: v1.VolumeSource{
 					EmptyDir: &v1.EmptyDirVolumeSource{
-						SizeLimit: &sharedMemMaxSize,
-						Medium:    v1.StorageMediumMemory,
+						Medium: v1.StorageMediumMemory,
 					},
 				},
 			})
