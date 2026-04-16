@@ -824,7 +824,7 @@ func (n *nvidiaHandler) findDevicePluginPod(ctx context.Context, r *GPUNodeRecon
 }
 
 func getDriverProbeJobName(gpuNodeName string) string {
-	return fmt.Sprintf("driver-probe-%s", gpuNodeName)
+	return utils.BuildNodeScopedName("driver-probe", gpuNodeName, 63, 8)
 }
 
 type providerDeviceMountEnv struct {
