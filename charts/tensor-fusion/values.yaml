@@ -138,6 +138,37 @@ cloudVendorCredentials:
   accessKey: "dummy"
   secretKey: "dummy"
 
+# Optional, opt-in default ProviderConfig CRs created by the chart.
+# If you already manage ProviderConfig out-of-band (kubectl apply), keep this disabled.
+# When enabled, the chart will create the CR with helm.sh/resource-policy: keep so
+# uninstalling the chart will NOT delete it.
+providerConfigs:
+  nvidia:
+    enabled: false
+    name: nvidia-provider
+    # MIG (partitioned) requires the hypervisor container to run privileged so
+    # NVML can create GpuInstance / ComputeInstance. With this true and vendor
+    # =NVIDIA, the operator auto-injects NVIDIA_MIG_CONFIG_DEVICES=all and
+    # NVIDIA_MIG_MONITOR_DEVICES=all so the runtime exposes the dynamic
+    # /proc/driver/nvidia/capabilities/ files MIG operations need.
+    privilegedHypervisor: true
+    images:
+      middleware: tensorfusion/vgpu-provider-nvidia:latest
+      remoteClient: tensorfusion/tensor-fusion-client:latest
+      remoteWorker: tensorfusion/tensor-fusion-worker:latest
+    inUseResourceNames:
+      - nvidia.com/gpu
+      - nvidia.com/mig-1g.10gb
+      - nvidia.com/mig-2g.20gb
+      - nvidia.com/mig-3g.40gb
+      - nvidia.com/mig-4g.40gb
+      - nvidia.com/mig-7g.80gb
+    # Fill these only when you want the chart to ship a hardware/profile catalog;
+    # otherwise leave empty and edit the live CR with kubectl.
+    hardwareMetadata: []
+    virtualizationTemplates: []
+    extraEnv: []
+
 alert:
   enabled: true
   image:
