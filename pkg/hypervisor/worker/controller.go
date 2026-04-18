@@ -108,6 +108,12 @@ func (w *WorkerController) Start() error {
 			if err := w.allocationController.DeallocateWorker(worker.WorkerUID); err != nil {
 				klog.Errorf("Failed to deallocate worker %s: %v", worker.WorkerUID, err)
 			}
+			// Drop per-worker ERL/PID state so it cannot bias the next pod
+			// scheduled on the same GPU. Safe to call for any isolation mode;
+			// the quota controller handles non-soft modes as a no-op internally.
+			if w.quotaController != nil {
+				w.quotaController.CleanupWorker(worker.WorkerUID)
+			}
 			w.mu.Lock()
 			defer w.mu.Unlock()
 			delete(w.workers, worker.WorkerUID)

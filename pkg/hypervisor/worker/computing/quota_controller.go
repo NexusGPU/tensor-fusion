@@ -93,9 +93,12 @@ type Controller struct {
 	workerInfoFn func() map[string]*WorkerInfoSnapshot
 	shmHandleFn  func(workerUID string) *workerstate.SharedMemoryHandle
 
-	// Per-worker per-device AIMD state: key = workerUID + ":" + deviceUUID
-	erlStates map[string]*erlState
-	config    erlConfig
+	// Per-worker per-device AIMD state: key = workerUID + ":" + deviceUUID.
+	// Guarded by erlStatesMu; the ERL update loop and the worker-delete callback
+	// can race otherwise.
+	erlStatesMu sync.Mutex
+	erlStates   map[string]*erlState
+	config      erlConfig
 }
 
 func NewQuotaController(
@@ -248,6 +251,8 @@ func (c *Controller) runERLUpdateLoop() {
 }
 
 func (c *Controller) getOrCreateERLState(key string) *erlState {
+	c.erlStatesMu.Lock()
+	defer c.erlStatesMu.Unlock()
 	st, ok := c.erlStates[key]
 	if !ok {
 		st = &erlState{
@@ -262,17 +267,45 @@ func (c *Controller) getOrCreateERLState(key string) *erlState {
 	return st
 }
 
-// TODO(known-issue): erlStates map entries are added per (workerUID,deviceUUID)
-// on first ERL tick but never deleted when the worker pod is removed. Across
-// pod churn the map grows and — more importantly for enforcement accuracy — the
-// PID state (currentRate/integralErr/smoothedUtil) on an un-GC'd device entry
-// leaks forward and biases the next pod scheduled on the same device. This
-// manifests as the measured 60% limit drifting to ~74% time-average after a
-// few pods have come and gone on the same GPU; restarting the hypervisor pod
-// restores strict 60% enforcement (see commit message for the investigation).
-// Fix direction: wire a worker-delete callback (from WorkerController /
-// /process-delete handler) that calls `delete(c.erlStates, key)` and also
-// resets the per-device shm bucket state.
+// CleanupWorker drops every per-device ERL/PID state entry that belongs to the
+// given workerUID and zeroes the token-bucket fields in the worker's shm so
+// stale values cannot bias a freshly scheduled successor pod on the same GPU.
+// Safe to call with an empty workerUID (no-op) or before the soft limiter
+// has started.
+func (c *Controller) CleanupWorker(workerUID string) {
+	if workerUID == "" {
+		return
+	}
+
+	prefix := workerUID + ":"
+	c.erlStatesMu.Lock()
+	for key := range c.erlStates {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.erlStates, key)
+		}
+	}
+	c.erlStatesMu.Unlock()
+
+	// Best-effort reset of the worker's per-device shm bucket before the shm
+	// is reaped. shmHandleFn may return nil if the handle was already freed by
+	// the shm cleanup loop, in which case nothing needs to be done.
+	if c.shmHandleFn == nil {
+		return
+	}
+	handle := c.shmHandleFn(workerUID)
+	if handle == nil {
+		return
+	}
+	state := handle.GetState()
+	if state == nil || state.V2 == nil {
+		return
+	}
+	for i := range state.V2.Devices {
+		dev := &state.V2.Devices[i].DeviceInfo
+		dev.SetERLCurrentTokens(0)
+		dev.SetERLLastTokenUpdate(0)
+	}
+}
 
 func clampFloat64(v, lo, hi float64) float64 {
 	return math.Min(math.Max(v, lo), hi)

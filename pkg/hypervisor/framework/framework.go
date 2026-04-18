@@ -75,6 +75,11 @@ type QuotaController interface {
 
 	// GetWorkerQuotaStatus gets quota status for a worker
 	GetWorkerQuotaStatus(workerUID string) error
+
+	// CleanupWorker drops any in-memory ERL/PID state bound to the given worker
+	// UID. Called from the worker-remove path so that state does not leak across
+	// pod churn on the same GPU device.
+	CleanupWorker(workerUID string)
 }
 
 // The backend interface for the hypervisor to interact with the underlying infrastructure
