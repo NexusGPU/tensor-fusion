@@ -208,8 +208,10 @@ func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]
 			continue
 		}
 
-		// Skip if namespace or podName is empty (not a TensorFusion worker)
-		if mappingInfo.GuestID == "" {
+		// Skip if namespace or podName is empty (not a TensorFusion worker).
+		// GuestID="" would never fire because GetWorkerInfoFromHostPID builds it
+		// from empty strings as "__", so check the underlying identity fields.
+		if mappingInfo.Namespace == "" || mappingInfo.PodName == "" {
 			continue
 		}
 
@@ -598,7 +600,18 @@ func (w *WorkerController) collectWorkerMemoryUsage(workerLookup map[string]stri
 		}
 
 		mappingInfo, err := w.backend.GetProcessMappingInfo(uint32(hostPID))
-		if err != nil || mappingInfo == nil || mappingInfo.GuestID == "" {
+		if err != nil || mappingInfo == nil {
+			continue
+		}
+		// Require real pod identity. GuestID is built via fmt.Sprintf("%s_%s_%s",
+		// ns, pod, ctr), so three empty strings produce "__" (not ""). A caller
+		// hardening check on GuestID == "" therefore never fires for environ-less
+		// processes (LLM servers like sglang scrub /proc/{pid}/environ for
+		// secrecy, leaving mappingInfo with empty Namespace/PodName and
+		// GuestID="__"). Reject on the actual identity fields instead so those
+		// processes' memory is never attributed to the worker whose lookup key
+		// happens to collide with "/".
+		if mappingInfo.Namespace == "" || mappingInfo.PodName == "" {
 			continue
 		}
 
