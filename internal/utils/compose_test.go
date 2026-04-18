@@ -302,8 +302,6 @@ var _ = Describe("Compose Utils", func() {
 			)).To(BeFalse())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PrependPathEnv)).To(BeFalse())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PrependLibPathEnv)).To(BeFalse())
-			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.RealCUDALibPathEnv)).To(BeFalse())
-			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.RealNvmlLibPathEnv)).To(BeFalse())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)).To(BeFalse())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.NvidiaVisibleAllDeviceEnv)).To(BeFalse())
 		})
@@ -608,20 +606,5 @@ var _ = Describe("Compose Utils", func() {
 			Expect(hasHostPathVolume(spec.Volumes, constants.AscendDCMIVolumeName, constants.AscendDCMIHostPath)).To(BeTrue())
 		})
 
-		It("should inject real NVIDIA library paths for NVIDIA workers", func() {
-			container := &corev1.Container{}
-			workloadProfile := &tfv1.WorkloadProfileSpec{
-				GPUVendor: constants.AcceleratorVendorNvidia,
-			}
-
-			utils.SetWorkerContainerSpec(container, workloadProfile, &tfv1.WorkerConfig{Image: "worker:latest"}, &tfv1.HypervisorConfig{}, "", false)
-
-			cudaPath, ok := envValue(container.Env, constants.RealCUDALibPathEnv)
-			Expect(ok).To(BeTrue())
-			Expect(cudaPath).To(Equal(constants.RealCUDALibPathValue))
-			nvmlPath, ok := envValue(container.Env, constants.RealNvmlLibPathEnv)
-			Expect(ok).To(BeTrue())
-			Expect(nvmlPath).To(Equal(constants.RealNvmlLibPathValue))
-		})
 	})
 })

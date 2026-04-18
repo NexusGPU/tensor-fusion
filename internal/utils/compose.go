@@ -117,19 +117,6 @@ func appendEnvIfMissing(envList []v1.EnvVar, envs ...v1.EnvVar) []v1.EnvVar {
 	return envList
 }
 
-func appendNvidiaLibraryPathEnvs(envList []v1.EnvVar) []v1.EnvVar {
-	return appendEnvIfMissing(envList,
-		v1.EnvVar{
-			Name:  constants.RealCUDALibPathEnv,
-			Value: constants.RealCUDALibPathValue,
-		},
-		v1.EnvVar{
-			Name:  constants.RealNvmlLibPathEnv,
-			Value: constants.RealNvmlLibPathValue,
-		},
-	)
-}
-
 func appendRemoteVendorToolMounts(volumeMounts []v1.VolumeMount, vendor, volumeName string) []v1.VolumeMount {
 	switch {
 	case shouldInjectNvidiaVisibleDevices(vendor):
@@ -404,16 +391,20 @@ func AddTFDefaultClientConfBeforePatch(
 	}
 
 	if tfInfo.Profile.IsLocalGPU {
-		// Local mode always mounts shared data path for worker-hypervisor communication.
-		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-			Name: constants.DataVolumeName,
-			VolumeSource: v1.VolumeSource{
-				HostPath: &v1.HostPathVolumeSource{
-					Path: constants.TFDataPath,
-					Type: ptr.To(v1.HostPathDirectoryOrCreate),
+		// Local mode mounts shared data path for worker-hypervisor communication.
+		// Partitioned (MIG) doesn't need it — hardware isolation, no limiter/worker
+		// reads from this hostPath. Skip the volume so the pod spec stays clean.
+		if tfInfo.Profile.Isolation != tfv1.IsolationModePartitioned {
+			pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+				Name: constants.DataVolumeName,
+				VolumeSource: v1.VolumeSource{
+					HostPath: &v1.HostPathVolumeSource{
+						Path: constants.TFDataPath,
+						Type: ptr.To(v1.HostPathDirectoryOrCreate),
+					},
 				},
-			},
-		})
+			})
+		}
 
 		if useLocalSoftIsolation(tfInfo.Profile) {
 			// Soft isolation: inject C limiter directly into business container via middleware image.
@@ -479,9 +470,11 @@ func AddTFDefaultClientConfBeforePatch(
 				})
 				// Do NOT set NVIDIA_VISIBLE_DEVICES=all here.
 				// Device plugin's Allocate sets it to the assigned GPU UUID.
-				if shouldInjectNvidiaVisibleDevices(tfInfo.Profile.GPUVendor) {
-					envList = appendNvidiaLibraryPathEnvs(envList)
-				}
+				// The vgpu-provider limiter (libcuda_limiter.so) uses dlopen("libcuda.so")
+				// which finds the right library via ldconfig on any architecture or
+				// distro — no need to inject TF_CUDA_LIB_PATH / TF_NVML_LIB_PATH.
+				// Users who need a custom path can still set those env vars in their
+				// pod spec, and vgpu-provider will honor them.
 				envList = appendEnvIfMissing(envList,
 					v1.EnvVar{Name: constants.PodNamespaceEnv, ValueFrom: &v1.EnvVarSource{FieldRef: &v1.ObjectFieldSelector{FieldPath: constants.NamespaceFieldRef}}},
 					v1.EnvVar{Name: constants.PodNameEnv, ValueFrom: &v1.EnvVarSource{FieldRef: &v1.ObjectFieldSelector{FieldPath: constants.ResourceNameFieldRef}}},
@@ -527,6 +520,14 @@ func AddTFDefaultClientConfBeforePatch(
 		for _, injectContainerIndex := range injectContainerIndices {
 			if useLocalSoftIsolation(tfInfo.Profile) {
 				// Soft isolation already handled volumes and env in its own block above.
+				continue
+			}
+			if tfInfo.Profile.Isolation == tfv1.IsolationModePartitioned {
+				// Partitioned (MIG) relies on hardware isolation — no limiter, no
+				// worker shm, no hypervisor RPC. Device plugin already sets
+				// NVIDIA_VISIBLE_DEVICES to the MIG UUID, which is everything the
+				// pod actually needs. Skipping the worker-shm mount also avoids
+				// leaking /run/tensor-fusion into a container that has no consumer.
 				continue
 			}
 			if useLocalWorkerSidecar {
@@ -598,9 +599,6 @@ func AddTFDefaultClientConfBeforePatch(
 					Name:  constants.NvidiaVisibleAllDeviceEnv,
 					Value: constants.NvidiaVisibleAllDeviceValue,
 				})
-			}
-			if useInjectLib && shouldInjectNvidiaVisibleDevices(tfInfo.Profile.GPUVendor) {
-				envList = appendNvidiaLibraryPathEnvs(envList)
 			}
 			if useInjectLib && shouldDisableCudaHooksForLocalSidecarClient(tfInfo.Profile) {
 				envList = appendEnvIfMissing(envList, v1.EnvVar{
@@ -1021,6 +1019,19 @@ func applyProviderHypervisorConfig(spec *v1.PodSpec, vendor string) {
 			spec.Containers[0].SecurityContext = &v1.SecurityContext{}
 		}
 		spec.Containers[0].SecurityContext.Privileged = ptr.To(true)
+
+		// MIG GpuInstance creation succeeds with just `privileged: true`, but the
+		// follow-up nvmlGpuInstanceGetComputeInstanceProfileInfo call needs the
+		// per-GI access files under /proc/driver/nvidia/capabilities/. Those are
+		// injected by NVIDIA Container Runtime only when these two env vars are
+		// set; otherwise NVML returns NVML_ERROR_INSUFFICIENT_PERMISSIONS for
+		// every CI profile query and partition assignment fails.
+		if strings.EqualFold(strings.TrimSpace(vendor), constants.AcceleratorVendorNvidia) {
+			spec.Containers[0].Env = AppendEnvVarsIfNotExists(spec.Containers[0].Env,
+				v1.EnvVar{Name: "NVIDIA_MIG_CONFIG_DEVICES", Value: "all"},
+				v1.EnvVar{Name: "NVIDIA_MIG_MONITOR_DEVICES", Value: "all"},
+			)
+		}
 	}
 
 	applyProviderHostPathMounts(spec, 0, hypervisorCfg.HostPathMounts)
@@ -1236,7 +1247,6 @@ func SetWorkerContainerSpec(
 				Value: constants.NvidiaVisibleAllDeviceValue,
 			})
 		}
-		container.Env = appendNvidiaLibraryPathEnvs(container.Env)
 	}
 
 	// Only soft isolation preloads the open-source vgpu.rs cuda_limiter (reads limits from shm).
