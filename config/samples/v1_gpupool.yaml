@@ -38,6 +38,15 @@ spec:
             securityContext:
               runAsUser: 0
               runAsGroup: 0
+            # Optional: bind-mount host npu-smi so operators can run
+            # `kubectl exec ... -- npu-smi info` for debugging. Not used by
+            # the hypervisor itself; libdcmi enumerates devices internally.
+            # Drop this whole block if you don't need exec-time debugging.
+            volumes:
+              - name: host-npu-smi
+                hostPath:
+                  path: /usr/local/sbin/npu-smi
+                  type: File
             containers:
               - name: tensor-fusion-hypervisor
                 env:
@@ -47,6 +56,12 @@ spec:
                     value: /run/tensor-fusion/vgpu/libaccelerator_ascend.so
                   - name: LD_LIBRARY_PATH
                     value: /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/dcmi
+                # Driver / DCMI libs come from ProviderConfig.hypervisor.hostPathMounts
+                # (see config/samples/ascend-provider.yaml). Don't redeclare them here.
+                volumeMounts:
+                  - name: host-npu-smi
+                    mountPath: /usr/local/sbin/npu-smi
+                    readOnly: true
   nodeManagerConfig:
     defaultVendor: Ascend
     nodeSelector:
