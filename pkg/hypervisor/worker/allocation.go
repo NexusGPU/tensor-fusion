@@ -104,24 +104,22 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 			}
 		}
 	}
-	var cdiDevices []string
 	if isNvidiaVendor(deviceInfos) {
 		names := buildPinnedNvidiaDeviceNames(deviceInfos)
 		if len(names) > 0 {
 			joined := strings.Join(names, ",")
 			// Always canonicalize NVIDIA_VISIBLE_DEVICES — overwrite any value the
 			// provider placed via DeviceEnv (MIG path writes it upstream) so that
-			// the final value matches the NVML / CDI-spec canonical form.
+			// the final value matches the NVML canonical form (GPU-<hex>).
+			// nvidia-container-toolkit treats env as the authoritative request
+			// channel in both legacy and CDI-enabled runtime modes, so CDIDevices
+			// is never emitted here — see deviceplugin.go.
 			envs[constants.NvidiaVisibleAllDeviceEnv] = joined
 			// CUDA_VISIBLE_DEVICES is only set by the provider for partitioned/MIG
 			// mode. If present, canonicalize it in place; do NOT introduce it for
 			// non-partitioned modes where the limiter manages CUDA visibility.
 			if _, ok := envs[constants.CudaVisibleDevicesEnv]; ok {
 				envs[constants.CudaVisibleDevicesEnv] = joined
-			}
-			cdiDevices = make([]string, 0, len(names))
-			for _, n := range names {
-				cdiDevices = append(cdiDevices, constants.NvidiaCDIKind+"="+n)
 			}
 		}
 	}
@@ -132,7 +130,6 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 		Envs:        envs,
 		Mounts:      mounts,
 		Devices:     lo.Values(devices),
-		CDIDevices:  cdiDevices,
 	}
 
 	a.workerAllocations[request.WorkerUID] = allocation

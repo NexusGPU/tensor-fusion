@@ -311,9 +311,13 @@ func (dp *DevicePlugin) Allocate(
 					Permissions:   device.Permissions,
 				}
 			}),
-			CdiDevices: lo.Map(allocResp.CDIDevices, func(name string, _ int) *pluginapi.CDIDevice {
-				return &pluginapi.CDIDevice{Name: name}
-			}),
+			// CdiDevices is intentionally empty: nvidia-container-toolkit reads
+			// NVIDIA_VISIBLE_DEVICES from Envs and handles injection uniformly
+			// in both legacy and CDI-enabled runtime modes. Populating this
+			// list would force containerd >=1.7 into strict CDI lookup that
+			// fails on nodes without a CDI spec. The dummy index resource is
+			// also not a real CDI device, so it must not be echoed here.
+			CdiDevices: []*pluginapi.CDIDevice{},
 		}
 
 		// For partitioned mode, store MIG instance UUIDs in pod annotation
