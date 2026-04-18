@@ -242,8 +242,8 @@ rules:
   resources:
   - resourceclaims/binding
   verbs:
-  - update
   - patch
+  - update
 - apiGroups:
   - storage.k8s.io
   resources:
