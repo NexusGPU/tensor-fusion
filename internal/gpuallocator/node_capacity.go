@@ -26,7 +26,12 @@ func RefreshGPUNodeCapacity(
 		return nil, fmt.Errorf("failed to list GPUs: %w", err)
 	}
 	if len(gpuList.Items) == 0 {
-		// node discovery job not completed, wait next reconcile loop to check again
+		// node discovery job not completed, or GPU CRs have been removed externally.
+		// In the latter case TF owns nothing on this node, so reconcile the taint as idle
+		// to avoid a stale `tensor-fusion.ai/used-by` taint blocking native scheduling.
+		if err := reconcileProgressiveTaint(ctx, k8sClient, coreNode, true); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	}
 
@@ -107,37 +112,69 @@ func RefreshGPUNodeCapacity(
 	node.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
 
 	if !equality.Semantic.DeepEqual(node.Status, statusCopy) {
-		err := k8sClient.Status().Update(ctx, node)
-		if err != nil {
+		if err := k8sClient.Status().Update(ctx, node); err != nil {
 			return nil, fmt.Errorf("failed to update GPU node status: %w", err)
 		}
+	}
 
-		// check if need to update K8S node label
-		if utils.IsProgressiveMigration() && coreNode != nil {
-			taint := &corev1.Taint{
-				Key:    constants.NodeUsedByTaintKey,
-				Effect: corev1.TaintEffectPreferNoSchedule,
-				Value:  constants.TensorFusionSystemName,
-			}
-			needUpdateNode := false
-			if node.Status.AvailableVRAM.Equal(node.Status.TotalVRAM) && node.Status.AvailableTFlops.Equal(node.Status.TotalTFlops) {
-				// check if need to remove the taint
-				coreNode, needUpdateNode, _ = taints.RemoveTaint(coreNode, taint)
-			} else if !taints.TaintExists(coreNode.Spec.Taints, taint) {
-				// check if need to add the taint
-				coreNode, needUpdateNode, _ = taints.AddOrUpdateTaint(coreNode, taint)
-			}
-			if needUpdateNode {
-				log.FromContext(ctx).Info("Updating K8S node taints for isolation of tensor-fusion and non-tensor-fusion used nodes",
-					"node", coreNode.Name, "taint", taint.Key)
-				err := k8sClient.Update(ctx, coreNode)
-				if err != nil {
-					return nil, fmt.Errorf("failed to update K8S node: %w", err)
-				}
-			}
-		}
+	// Guard against a transient state where all GPU CRs on this node are missing
+	// Status.Capacity / Status.Available (e.g. fresh discovery, hypervisor restart,
+	// external status reset). The aggregation loop above skips such GPUs, so
+	// Total/Available both end up 0 and "Available.Equal(Total)" yields a
+	// meaningless isIdle=true — without this guard we'd wrongly remove the taint
+	// from a node that may still be serving TF workers. The next reconcile round
+	// will converge once GPU status is populated.
+	if node.Status.TotalVRAM.IsZero() && node.Status.TotalTFlops.IsZero() {
+		return gpuModels, nil
+	}
+
+	// Reconcile the isolation taint every round, independent of status diff.
+	// A transient Node update failure otherwise leaves the taint stuck because the next
+	// round's DeepEqual would be true and the block would be skipped.
+	isIdle := node.Status.AvailableVRAM.Equal(node.Status.TotalVRAM) &&
+		node.Status.AvailableTFlops.Equal(node.Status.TotalTFlops)
+	if err := reconcileProgressiveTaint(ctx, k8sClient, coreNode, isIdle); err != nil {
+		return nil, err
 	}
 	return gpuModels, nil
+}
+
+// reconcileProgressiveTaint converges the `tensor-fusion.ai/used-by` PreferNoSchedule
+// taint on the core k8s Node to the desired state derived from isIdle:
+//   - isIdle=true  + has taint  -> remove
+//   - isIdle=false + no taint   -> add
+//
+// No-op in all other combinations. Only runs when progressive migration is enabled
+// and coreNode is available.
+func reconcileProgressiveTaint(ctx context.Context, k8sClient client.Client, coreNode *corev1.Node, isIdle bool) error {
+	if !utils.IsProgressiveMigration() || coreNode == nil {
+		return nil
+	}
+	taint := &corev1.Taint{
+		Key:    constants.NodeUsedByTaintKey,
+		Effect: corev1.TaintEffectPreferNoSchedule,
+		Value:  constants.TensorFusionSystemName,
+	}
+	hasTaint := taints.TaintExists(coreNode.Spec.Taints, taint)
+	var (
+		updated *corev1.Node
+		changed bool
+	)
+	switch {
+	case isIdle && hasTaint:
+		updated, changed, _ = taints.RemoveTaint(coreNode, taint)
+	case !isIdle && !hasTaint:
+		updated, changed, _ = taints.AddOrUpdateTaint(coreNode, taint)
+	}
+	if !changed {
+		return nil
+	}
+	log.FromContext(ctx).Info("Reconciling TensorFusion isolation taint on node",
+		"node", updated.Name, "taint", taint.Key, "idle", isIdle)
+	if err := k8sClient.Update(ctx, updated); err != nil {
+		return fmt.Errorf("failed to update K8S node: %w", err)
+	}
+	return nil
 }
 
 func calculateVirtualCapacity(node *tfv1.GPUNode, pool *tfv1.GPUPool) (resource.Quantity, resource.Quantity) {
