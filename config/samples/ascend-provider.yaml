@@ -8,6 +8,13 @@ spec:
     middleware: tensorfusion/vgpu-provider-ascend:dev-local-npu-ser2
     remoteClient: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-client:1.63.1
     remoteWorker: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-worker:1.70.0
+  # privilegedHypervisor 让 hypervisor 容器 securityContext.privileged=true,
+  # 这是访问 /dev/davinci* 设备节点 + ioctl 的必要 cap。
+  # 注意:它只翻 cap,不改 UID。libdcmi 调 /dev/davinci_manager 严格要 uid=0,
+  # 否则 dcmi_init 返回 -8005。所以同时还要在 GPUPool / TensorFusionCluster 的
+  # componentConfig.hypervisor.podTemplate.template.spec.securityContext 里
+  # 设 runAsUser: 0 / runAsGroup: 0(operator 每次 reconcile 都会重建容器级
+  # securityContext,但 Pod 级幸存)。参考 config/samples/v1_gpupool.yaml。
   hypervisor:
     privilegedHypervisor: true
     ldLibraryPath: "/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/dcmi"

@@ -151,6 +151,14 @@ providerConfigs:
     # =NVIDIA, the operator auto-injects NVIDIA_MIG_CONFIG_DEVICES=all and
     # NVIDIA_MIG_MONITOR_DEVICES=all so the runtime exposes the dynamic
     # /proc/driver/nvidia/capabilities/ files MIG operations need.
+    #
+    # NOTE: privilegedHypervisor only flips capabilities, it does NOT change
+    # the process UID. MIG calls writing to /dev/nvidia-caps/nvidia-cap1
+    # additionally require uid=0. Set pod-level
+    # `securityContext.runAsUser: 0` in the GPUPool / TensorFusionCluster
+    # `componentConfig.hypervisor.podTemplate.template.spec` to take effect
+    # (the operator overwrites container-level securityContext on every
+    # reconcile, but pod-level fields survive).
     privilegedHypervisor: true
     images:
       middleware: tensorfusion/vgpu-provider-nvidia:latest

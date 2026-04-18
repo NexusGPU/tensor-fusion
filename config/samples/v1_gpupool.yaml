@@ -26,6 +26,18 @@ spec:
       podTemplate:
         template:
           spec:
+            # Pod-level securityContext is the SUPPORTED way to make the
+            # hypervisor container run as root. The container-level
+            # securityContext set here would be overwritten by the operator
+            # (it always rebuilds the container's securityContext). Pod-level
+            # fields (runAsUser/runAsGroup) survive that rebuild and are
+            # needed by Ascend's libdcmi (DAC check on /dev/davinci_manager
+            # requires uid=0). NVIDIA NVML works as non-root, but for any
+            # provider that opts into `privilegedHypervisor: true` and runs
+            # hardware-management calls (MIG / vNPU partitioning), set this.
+            securityContext:
+              runAsUser: 0
+              runAsGroup: 0
             containers:
               - name: tensor-fusion-hypervisor
                 env:

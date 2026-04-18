@@ -30,6 +30,17 @@ spec:
             podTemplate:
               template:
                 spec:
+                  # Pod-level securityContext is the SUPPORTED way to make
+                  # the hypervisor container run as root. Container-level
+                  # securityContext is overwritten by the operator on every
+                  # reconcile; pod-level survives. Required by Ascend libdcmi
+                  # (uid=0 DAC check on /dev/davinci_manager). NVIDIA only
+                  # needs this when doing MIG partition operations (which
+                  # also require ProviderConfig.hypervisor.privilegedHypervisor
+                  # = true).
+                  securityContext:
+                    runAsUser: 0
+                    runAsGroup: 0
                   containers:
                     - name: tensor-fusion-hypervisor
                       env:
