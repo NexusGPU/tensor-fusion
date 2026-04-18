@@ -104,23 +104,22 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 			}
 		}
 	}
-	if isNvidiaVendor(deviceInfos) {
+	if isNvidiaVendor(deviceInfos) && !isPartitioned {
+		// Non-partitioned modes (shared/soft/hard): canonicalize
+		// NVIDIA_VISIBLE_DEVICES to the NVML "GPU-<hex>" form. nvidia-container-
+		// toolkit treats this env as the authoritative request channel in both
+		// legacy and CDI-enabled runtime modes, so CDIDevices is never emitted
+		// here — see deviceplugin.go.
+		//
+		// Partitioned (MIG) mode is intentionally skipped: the NVIDIA provider's
+		// AccelAssignPartition already writes NVIDIA_VISIBLE_DEVICES=MIG-<uuid>
+		// (and CUDA_VISIBLE_DEVICES=MIG-<uuid>) into deviceInfo.DeviceEnv, which
+		// was copied into envs above. Overwriting that with the parent GPU UUID
+		// would expose the whole card to the container and silently break MIG
+		// isolation.
 		names := buildPinnedNvidiaDeviceNames(deviceInfos)
 		if len(names) > 0 {
-			joined := strings.Join(names, ",")
-			// Always canonicalize NVIDIA_VISIBLE_DEVICES — overwrite any value the
-			// provider placed via DeviceEnv (MIG path writes it upstream) so that
-			// the final value matches the NVML canonical form (GPU-<hex>).
-			// nvidia-container-toolkit treats env as the authoritative request
-			// channel in both legacy and CDI-enabled runtime modes, so CDIDevices
-			// is never emitted here — see deviceplugin.go.
-			envs[constants.NvidiaVisibleAllDeviceEnv] = joined
-			// CUDA_VISIBLE_DEVICES is only set by the provider for partitioned/MIG
-			// mode. If present, canonicalize it in place; do NOT introduce it for
-			// non-partitioned modes where the limiter manages CUDA visibility.
-			if _, ok := envs[constants.CudaVisibleDevicesEnv]; ok {
-				envs[constants.CudaVisibleDevicesEnv] = joined
-			}
+			envs[constants.NvidiaVisibleAllDeviceEnv] = strings.Join(names, ",")
 		}
 	}
 
