@@ -158,13 +158,18 @@ func ParseTensorFusionInfo(
 	applyVerticalScalingRules(ctx, k8sClient, pod, pool, workloadProfile)
 
 	injectContainer, ok := pod.Annotations[constants.InjectContainerAnnotation]
-	containerNames := strings.Split(injectContainer, ",")
+	containerNames := []string{}
+	if ok && injectContainer != "" {
+		containerNames = strings.Split(injectContainer, ",")
+		for i := range containerNames {
+			containerNames[i] = strings.TrimSpace(containerNames[i])
+		}
+	}
 	if len(pod.Spec.Containers) > 1 {
-		if !ok || len(containerNames) == 0 {
+		if len(containerNames) == 0 {
 			return info, fmt.Errorf("inject container has to be specified when Pod containers > 1")
 		}
-	} else {
-		// assign default container name when annotation not specified
+	} else if len(containerNames) == 0 {
 		containerNames = []string{pod.Spec.Containers[0].Name}
 	}
 

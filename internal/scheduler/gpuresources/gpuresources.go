@@ -353,6 +353,19 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 		return fwk.NewStatus(fwk.Success, "skip for non tensor-fusion mode")
 	}
 
+	// Fast-path rejection: the 16 tensor-fusion.ai/index_<hex> extended resources are
+	// registered by the hypervisor container's device plugins and share its lifetime.
+	// When the hypervisor dies, kubelet zeros these allocatables well before the
+	// GPUNode -> GPU phase cascade reaches PhaseFilter. Check index_0 as a proxy
+	// (all 16 die together since they're in the same container). Only reject when
+	// the key is present AND <= 0 — absence means a non-TF node or one still
+	// bootstrapping, which other filters will handle correctly.
+	idx0Key := v1.ResourceName(constants.PodIndexAnnotation + constants.PodIndexDelimiter + "0")
+	if v, ok := nodeInfo.GetAllocatable().GetScalarResources()[idx0Key]; ok && v <= 0 {
+		return fwk.NewStatus(fwk.UnschedulableAndUnresolvable,
+			"node tensor-fusion.ai/index_0 allocatable is <= 0, hypervisor likely unhealthy")
+	}
+
 	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
 		return fwk.NewStatus(fwk.Error, err.Error())
@@ -1022,6 +1035,10 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 		}
 	}
 
+	if hint, handled := s.phaseRunningWakeupHint(logger, pod, oldGPU, newGPU); handled {
+		return hint, nil
+	}
+
 	// Calculate resource increase
 	var increaseTflops, increaseVram resource.Quantity
 	if oldGPU == nil && newGPU != nil {
@@ -1084,6 +1101,58 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 	}
 
 	return fwk.QueueSkip, nil
+}
+
+// phaseRunningWakeupHint handles the rare, strong wake-up signal of a GPU CR
+// transitioning into the Running phase (e.g. after hypervisor recovery).
+// Available resources may be unchanged across this transition, so the
+// available-increase path in queueingHint would otherwise miss it and leave
+// the pod stuck until the 5-minute unschedulable queue flush. We accept the
+// false-positive cost of one wasted scheduling cycle in exchange for a
+// guaranteed wake-up.
+//
+// Race-free pre-check: only wake pods in the same pool as the GPU. An empty
+// podPool would fail in ComposeAllocationRequest anyway; an empty gpuPool
+// means the GPU has not been claimed by any pool. Both sides must be set and
+// equal. This check never touches the allocator, so it cannot reintroduce an
+// informer race.
+//
+// Returns (hint, handled). When handled is false the caller should continue
+// with the resource-increase path.
+func (s *GPUFit) phaseRunningWakeupHint(
+	logger klog.Logger,
+	pod *v1.Pod,
+	oldGPU, newGPU *tfv1.GPU,
+) (fwk.QueueingHint, bool) {
+	if newGPU == nil || newGPU.Status.Phase != tfv1.TensorFusionGPUPhaseRunning {
+		return fwk.QueueSkip, false
+	}
+	if oldGPU != nil && oldGPU.Status.Phase == tfv1.TensorFusionGPUPhaseRunning {
+		return fwk.QueueSkip, false
+	}
+
+	podPool := ""
+	if pod.Annotations != nil {
+		podPool = pod.Annotations[constants.GpuPoolKey]
+	}
+	gpuPool := ""
+	if newGPU.Labels != nil {
+		gpuPool = newGPU.Labels[constants.GpuPoolKey]
+	}
+	if podPool == "" || gpuPool == "" || podPool != gpuPool {
+		logger.V(4).Info("GPU phase->Running but pool does not match, skip",
+			"pod", klog.KObj(pod), "gpu", newGPU.Name,
+			"podPool", podPool, "gpuPool", gpuPool)
+		return fwk.QueueSkip, true
+	}
+	oldPhase := tfv1.TensorFusionGPUPhase("")
+	if oldGPU != nil {
+		oldPhase = oldGPU.Status.Phase
+	}
+	logger.Info("GPU transitioned into Running phase, requeue unscheduled pod",
+		"pod", klog.KObj(pod), "gpu", newGPU.Name, "oldPhase", oldPhase,
+		"pool", gpuPool)
+	return fwk.Queue, true
 }
 
 // allocateGPUsToContainers allocates GPUs to containers based on their requirements
