@@ -16,6 +16,12 @@ type GlobalConfig struct {
 
 	AutoScalingInterval  string `yaml:"autoScalingInterval"`
 	GPUOperatorNamespace string `yaml:"gpuOperatorNamespace"`
+
+	// HypervisorMaxCrashCount is the container RestartCount threshold that triggers
+	// a full hypervisor pod recreation. Once any container on the hypervisor pod
+	// exceeds this count, the pod is deleted so the next reconcile recreates it.
+	// Set to 0 to disable. If nil, falls back to DefaultHypervisorMaxCrashCount.
+	HypervisorMaxCrashCount *int32 `yaml:"hypervisorMaxCrashCount"`
 }
 
 type AutoMigrationConfig struct {
@@ -61,6 +67,10 @@ const (
 
 	// Default GPU operator namespace
 	DefaultGPUOperatorNamespace = "gpu-operator"
+
+	// DefaultHypervisorMaxCrashCount is the fallback threshold when
+	// HypervisorMaxCrashCount is not configured.
+	DefaultHypervisorMaxCrashCount int32 = 5
 )
 
 // GetGPUOperatorNamespace returns the configured GPU operator namespace or default value

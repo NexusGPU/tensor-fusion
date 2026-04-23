@@ -35,6 +35,22 @@ const CycleStateAllocateRequest = "allocateRequest"
 const CycleStateGPUSchedulingResult = "gpuSchedulingResult"
 const SchedulerSimulationKey = "schedulerSimulation"
 
+// CycleStateProgressiveNodeNames stores the candidate node set returned by the
+// progressive migration branch of PreFilter. Exposed for simulate-schedule /
+// debug endpoints so operators can see exactly which nodes TF advertised as
+// "TF-free" for a native pod, without having to infer it from FitError output.
+const CycleStateProgressiveNodeNames = "progressiveNodeNames"
+
+// ProgressiveNodeNamesState captures the node set decided by ListNonUsingNodes
+// at PreFilter time.
+type ProgressiveNodeNamesState struct {
+	NodeNames sets.Set[string]
+}
+
+// Clone satisfies fwk.StateData. The set is read-only after PreFilter, so
+// returning the same pointer is safe.
+func (p *ProgressiveNodeNamesState) Clone() fwk.StateData { return p }
+
 var _ framework.PreFilterPlugin = &GPUFit{}
 var _ framework.FilterPlugin = &GPUFit{}
 var _ framework.ScorePlugin = &GPUFit{}
@@ -120,6 +136,8 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 	// Handle progressive migration case
 	if utils.IsProgressiveMigration() && utils.HasGPUResourceRequest(pod) {
 		nodeNames := s.allocator.ListNonUsingNodes()
+		// Record the candidate set for simulate-schedule / debug endpoints.
+		state.Write(CycleStateProgressiveNodeNames, &ProgressiveNodeNamesState{NodeNames: nodeNames})
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "ScheduleWithNativeGPU",
 			"Scheduling non-TF workload for progressive migration",
 			"use native GPU resources, available native GPU nodes: "+strconv.Itoa(len(nodeNames)))

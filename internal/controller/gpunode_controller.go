@@ -471,6 +471,26 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 
 	// If pod exists and prerequisites are satisfied, verify its status
 	if podExists {
+		// Crash-loop recovery: if any container on the hypervisor pod has exceeded
+		// the restart threshold, delete the pod so the next reconcile recreates it
+		// fresh. This runs before the "already Running" fast-path because a pod in
+		// CrashLoopBackOff stays Running overall while its containers keep restarting.
+		if crashedContainer, restartCount, threshold, ok := hypervisorPodCrashExceeded(currentPod); ok {
+			log.Info("hypervisor pod crash count exceeded threshold, deleting for recreation",
+				"node", node.Name,
+				"pod", currentPod.Name,
+				"container", crashedContainer,
+				"restartCount", restartCount,
+				"threshold", threshold)
+			r.Recorder.Eventf(node, corev1.EventTypeWarning, "HypervisorCrashLoopRecreate",
+				"Hypervisor pod %s deleted for recreation: container %s restarted %d times (threshold %d)",
+				currentPod.Name, crashedContainer, restartCount, threshold)
+			if err := r.Delete(ctx, currentPod); err != nil {
+				return "", fmt.Errorf("failed to delete crash-looping hypervisor pod: %w", err)
+			}
+			return "", nil
+		}
+
 		// If node is already running, no need to recreate
 		if node.Status.Phase == tfv1.TensorFusionGPUNodePhaseRunning {
 			return key.Name, nil
@@ -904,4 +924,34 @@ func (r *GPUNodeReconciler) mapDevicePluginPodToGPUNode(ctx context.Context, obj
 		"nodeName", pod.Spec.NodeName)
 
 	return []ctrl.Request{{NamespacedName: client.ObjectKey{Name: pod.Spec.NodeName}}}
+}
+
+// hypervisorPodCrashExceeded reports whether any container (init or main) on the
+// hypervisor pod has restarted more than the configured threshold. Threshold is
+// read from GlobalConfig.HypervisorMaxCrashCount (operator configmap); missing or
+// nil falls back to DefaultHypervisorMaxCrashCount. A threshold of 0 or less
+// disables the check.
+func hypervisorPodCrashExceeded(pod *corev1.Pod) (container string, restartCount int32, threshold int32, exceeded bool) {
+	threshold = config.DefaultHypervisorMaxCrashCount
+	if cfg := config.GetGlobalConfig(); cfg != nil && cfg.HypervisorMaxCrashCount != nil {
+		threshold = *cfg.HypervisorMaxCrashCount
+	}
+	if threshold <= 0 {
+		return "", 0, 0, false
+	}
+	check := func(statuses []corev1.ContainerStatus) (string, int32, bool) {
+		for _, cs := range statuses {
+			if cs.RestartCount > threshold {
+				return cs.Name, cs.RestartCount, true
+			}
+		}
+		return "", 0, false
+	}
+	if name, count, hit := check(pod.Status.InitContainerStatuses); hit {
+		return name, count, threshold, true
+	}
+	if name, count, hit := check(pod.Status.ContainerStatuses); hit {
+		return name, count, threshold, true
+	}
+	return "", 0, threshold, false
 }
