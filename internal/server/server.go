@@ -27,6 +27,7 @@ func NewHTTPServer(
 	apiGroup := r.Group("/api")
 	apiGroup.GET("/connection", cr.Get)
 	apiGroup.GET("/allocation", alc.Get)
+	apiGroup.GET("/defrag", alc.DefragStatus)
 	apiGroup.POST("/simulate-schedule", alc.SimulateScheduleOnePod)
 	apiGroup.POST("/assign-host-port", func(ctx *gin.Context) {
 		if leaderChan == nil {

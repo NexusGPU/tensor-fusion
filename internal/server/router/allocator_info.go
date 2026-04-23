@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/controller"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
@@ -214,4 +215,11 @@ func readProgressiveNodeNames(state *framework.CycleState) gin.H {
 		"count": len(names),
 		"nodes": names,
 	}
+}
+
+// DefragStatus returns the last in-memory defrag stats per pool.
+func (r *AllocatorInfoRouter) DefragStatus(ctx *gin.Context) {
+	ctx.JSON(http.StatusOK, gin.H{
+		"lastRuns": controller.GetDefragLastRunStats(),
+	})
 }

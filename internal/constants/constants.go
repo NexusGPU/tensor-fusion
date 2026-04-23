@@ -195,6 +195,12 @@ const (
 	// No disrupt label, similar to Karpenter, avoid TFConnection/Worker/GPUNode to be moved to another node or destroying node.
 	// Refer: https://karpenter.sh/docs/concepts/disruption/
 	SchedulingDoNotDisruptLabel = Domain + "/do-not-disrupt"
+
+	// Marks a node that defrag is draining.
+	DefragDrainingLabel = Domain + "/defrag-draining"
+
+	// RFC3339 time when the drain label was applied.
+	DefragDrainingSinceAnnotation = Domain + "/defrag-draining-since"
 )
 
 const (

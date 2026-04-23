@@ -179,6 +179,11 @@ func (s *GpuAllocator) SetMaxWorkerPerNode(maxWorkerPerNode int) {
 	s.maxWorkerPerNode = maxWorkerPerNode
 }
 
+// MaxWorkerPerNode exposes the cap used by CheckQuotaAndFilter.
+func (s *GpuAllocator) MaxWorkerPerNode() int {
+	return s.maxWorkerPerNode
+}
+
 var ScalingQuotaExceededError = goerrors.New("scaling quota exceeded")
 
 func IsScalingQuotaExceededError(err error) bool {
