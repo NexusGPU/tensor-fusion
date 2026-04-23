@@ -1,6 +1,6 @@
 module github.com/NexusGPU/tensor-fusion/api
 
-go 1.24.6
+go 1.26.1
 
 require (
 	k8s.io/api v0.34.3
