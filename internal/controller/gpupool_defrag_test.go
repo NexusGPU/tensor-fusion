@@ -65,7 +65,7 @@ func TestParseDefragMaxDuration(t *testing.T) {
 
 // ---- countPoolGPUUsage -------------------------------------------------
 
-func gpuWithUsage(name, pool string, capTflops, capVram, avTflops, avVram string, usedBy tfv1.UsedBySystem) *tfv1.GPU {
+func gpuWithUsage(name, pool, capVram, avTflops, avVram string, usedBy tfv1.UsedBySystem) *tfv1.GPU {
 	return &tfv1.GPU{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -75,7 +75,7 @@ func gpuWithUsage(name, pool string, capTflops, capVram, avTflops, avVram string
 		},
 		Status: tfv1.GPUStatus{
 			UsedBy:   usedBy,
-			Capacity: &tfv1.Resource{Tflops: resource.MustParse(capTflops), Vram: resource.MustParse(capVram)},
+			Capacity: &tfv1.Resource{Tflops: resource.MustParse("100"), Vram: resource.MustParse(capVram)},
 			Available: &tfv1.Resource{
 				Tflops: resource.MustParse(avTflops),
 				Vram:   resource.MustParse(avVram),
@@ -89,15 +89,15 @@ func TestCountPoolGPUUsage(t *testing.T) {
 	// 5 GPUs on the same node, different states.
 	gpus := map[string]*tfv1.GPU{
 		// Fully free -- counted in total but not in used.
-		"free": gpuWithUsage("free", pool, "100", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion),
+		"free": gpuWithUsage("free", pool, "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion),
 		// Partially used by Tflops.
-		"partial-tf": gpuWithUsage("partial-tf", pool, "100", "10Gi", "50", "10Gi", tfv1.UsedByTensorFusion),
+		"partial-tf": gpuWithUsage("partial-tf", pool, "10Gi", "50", "10Gi", tfv1.UsedByTensorFusion),
 		// Partially used by VRAM.
-		"partial-vram": gpuWithUsage("partial-vram", pool, "100", "10Gi", "100", "5Gi", tfv1.UsedByTensorFusion),
+		"partial-vram": gpuWithUsage("partial-vram", pool, "10Gi", "100", "5Gi", tfv1.UsedByTensorFusion),
 		// Non-TF tenant GPU; excluded from both total and used.
-		"non-tf": gpuWithUsage("non-tf", pool, "100", "10Gi", "10", "1Gi", tfv1.UsedBySystem("external")),
+		"non-tf": gpuWithUsage("non-tf", pool, "10Gi", "10", "1Gi", tfv1.UsedBySystem("external")),
 		// Different pool; excluded.
-		"other-pool": gpuWithUsage("other-pool", "pool-b", "100", "10Gi", "50", "5Gi", tfv1.UsedByTensorFusion),
+		"other-pool": gpuWithUsage("other-pool", "pool-b", "10Gi", "50", "5Gi", tfv1.UsedByTensorFusion),
 	}
 
 	total, used := countPoolGPUUsage(gpus, pool)
@@ -118,7 +118,7 @@ func TestCountPoolGPUUsage(t *testing.T) {
 // ---- subtractGPURequest ------------------------------------------------
 
 func TestSubtractGPURequest_RawTflops(t *testing.T) {
-	gpu := gpuWithUsage("g", "p", "100", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion)
+	gpu := gpuWithUsage("g", "p", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion)
 	req := &tfv1.AllocRequest{
 		Request: tfv1.Resource{
 			Tflops: resource.MustParse("30"),
@@ -135,7 +135,7 @@ func TestSubtractGPURequest_RawTflops(t *testing.T) {
 }
 
 func TestSubtractGPURequest_ComputePercent(t *testing.T) {
-	gpu := gpuWithUsage("g", "p", "100", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion)
+	gpu := gpuWithUsage("g", "p", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion)
 	// ComputePercent=40 on a 100-tflops capacity means 40 tflops consumed.
 	cp := resource.MustParse("40")
 	req := &tfv1.AllocRequest{
@@ -168,8 +168,8 @@ type errLogger struct{ infoCount, errCount int }
 func (l *errLogger) Info(_ string, _ ...any)           { l.infoCount++ }
 func (l *errLogger) Error(_ error, _ string, _ ...any) { l.errCount++ }
 
-func newPod(ns, name string) *corev1.Pod {
-	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}
+func newPod(name string) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: name}}
 }
 
 func newReconcilerWithFake(client *clientgofake.Clientset) *GPUPoolCompactionReconciler {
@@ -184,13 +184,13 @@ func newReconcilerWithFake(client *clientgofake.Clientset) *GPUPoolCompactionRec
 func TestEvictWorkerPods_AllSucceed(t *testing.T) {
 	// Seed two pods so the fake can delete them through EvictV1.
 	fakeClient := clientgofake.NewSimpleClientset(
-		newPod("ns1", "p1"),
-		newPod("ns1", "p2"),
+		newPod("p1"),
+		newPod("p2"),
 	)
 	r := newReconcilerWithFake(fakeClient)
 	cand := &defragCandidate{
 		nodeName:   "node-a",
-		workerPods: []*corev1.Pod{newPod("ns1", "p1"), newPod("ns1", "p2")},
+		workerPods: []*corev1.Pod{newPod("p1"), newPod("p2")},
 	}
 	stats := &defragRunStats{}
 	ok := r.evictWorkerPods(context.Background(), &tfv1.GPUPool{}, cand, stats, &errLogger{})
@@ -207,8 +207,8 @@ func TestEvictWorkerPods_AllSucceed(t *testing.T) {
 
 func TestEvictWorkerPods_AbortsOnFirstFailure(t *testing.T) {
 	fakeClient := clientgofake.NewSimpleClientset(
-		newPod("ns1", "p1"),
-		newPod("ns1", "p2"),
+		newPod("p1"),
+		newPod("p2"),
 	)
 	// Inject a 429 on the first eviction, before the clientset's default
 	// handler runs. Subsequent evictions must not be attempted because
@@ -224,7 +224,7 @@ func TestEvictWorkerPods_AbortsOnFirstFailure(t *testing.T) {
 	r := newReconcilerWithFake(fakeClient)
 	cand := &defragCandidate{
 		nodeName:   "node-a",
-		workerPods: []*corev1.Pod{newPod("ns1", "p1"), newPod("ns1", "p2")},
+		workerPods: []*corev1.Pod{newPod("p1"), newPod("p2")},
 	}
 	stats := &defragRunStats{}
 	el := &errLogger{}
@@ -261,7 +261,7 @@ func TestEvictWorkerPods_NotFoundCountsAsSuccess(t *testing.T) {
 	r := newReconcilerWithFake(fakeClient)
 	cand := &defragCandidate{
 		nodeName:   "node-a",
-		workerPods: []*corev1.Pod{newPod("ns1", "gone")},
+		workerPods: []*corev1.Pod{newPod("gone")},
 	}
 	stats := &defragRunStats{}
 	ok := r.evictWorkerPods(context.Background(), &tfv1.GPUPool{}, cand, stats, &errLogger{})
@@ -274,13 +274,13 @@ func TestEvictWorkerPods_NotFoundCountsAsSuccess(t *testing.T) {
 }
 
 func TestEvictWorkerPods_HonorsCtxDeadline(t *testing.T) {
-	fakeClient := clientgofake.NewSimpleClientset(newPod("ns1", "p1"))
+	fakeClient := clientgofake.NewSimpleClientset(newPod("p1"))
 	r := newReconcilerWithFake(fakeClient)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cand := &defragCandidate{
 		nodeName:   "node-a",
-		workerPods: []*corev1.Pod{newPod("ns1", "p1")},
+		workerPods: []*corev1.Pod{newPod("p1")},
 	}
 	stats := &defragRunStats{}
 	if r.evictWorkerPods(ctx, &tfv1.GPUPool{}, cand, stats, &errLogger{}) {
@@ -344,10 +344,10 @@ func TestBuildDefragNodeBudgets_SkipsDeletionMarkedNodes(t *testing.T) {
 		"",
 		map[string]map[string]*tfv1.GPU{
 			"node-keep": {
-				"gpu-1": gpuWithUsage("gpu-1", "pool-a", "100", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion),
+				"gpu-1": gpuWithUsage("gpu-1", "pool-a", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion),
 			},
 			"node-delete": {
-				"gpu-2": gpuWithUsage("gpu-2", "pool-a", "100", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion),
+				"gpu-2": gpuWithUsage("gpu-2", "pool-a", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion),
 			},
 		},
 		map[string]map[types.NamespacedName]struct{}{},
@@ -394,7 +394,7 @@ func TestRunDefrag_PersistsLastDefragTimeWhenRunContextCanceled(t *testing.T) {
 	r, kubeClient := newDefragControllerTestReconciler(t, pool)
 	runStart := time.Now().Add(-time.Minute).Round(time.Second)
 
-	r.runDefrag(ctx, pool.DeepCopy(), runStart, &infoLogger{})
+	r.runDefrag(ctx, pool.DeepCopy(), runStart)
 
 	updated := &tfv1.GPUPool{}
 	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: pool.Name}, updated); err != nil {

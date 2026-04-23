@@ -150,7 +150,7 @@ func (r *GPUPoolCompactionReconciler) maybeStartDefragRun(ctx context.Context, p
 		defer flag.Store(false)
 		runCtx, cancel := context.WithTimeout(context.Background(), maxDuration)
 		defer cancel()
-		r.runDefrag(runCtx, poolCopy, runStart, logger)
+		r.runDefrag(runCtx, poolCopy, runStart)
 	}()
 }
 
@@ -181,7 +181,6 @@ func (r *GPUPoolCompactionReconciler) runDefrag(
 	ctx context.Context,
 	pool *tfv1.GPUPool,
 	runStart time.Time,
-	logger interface{ Info(string, ...any) },
 ) {
 	l := log.FromContext(ctx).WithValues("pool", pool.Name, "component", "defrag", "runStart", runStart)
 	r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventStarted,
@@ -224,7 +223,7 @@ func (r *GPUPoolCompactionReconciler) runDefrag(
 			return
 		}
 		stats.ProcessedNodes++
-		r.processDefragCandidate(ctx, pool, cand, runStart, maxWorkerPerNode, stats, l)
+		r.processDefragCandidate(ctx, pool, cand, runStart, maxWorkerPerNode, stats)
 	}
 }
 
@@ -369,7 +368,7 @@ func (r *GPUPoolCompactionReconciler) listNodeWorkerPods(
 	pods := make([]*corev1.Pod, 0, len(workerSet))
 	for nn := range workerSet {
 		pod := &corev1.Pod{}
-		if err := r.Get(ctx, client.ObjectKey{Namespace: nn.Namespace, Name: nn.Name}, pod); err != nil {
+		if err := r.Get(ctx, client.ObjectKey(nn), pod); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
@@ -398,10 +397,6 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 	runStart time.Time,
 	maxWorkerPerNode int,
 	stats *defragRunStats,
-	logger interface {
-		Info(string, ...any)
-		Error(error, string, ...any)
-	},
 ) {
 	l := log.FromContext(ctx).WithValues("pool", pool.Name, "node", cand.nodeName,
 		"utilization", cand.utilizationScore, "workerCount", len(cand.workerPods))
@@ -601,7 +596,7 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 		for _, g := range nb.gpus {
 			gpuList = append(gpuList, g)
 		}
-		filtered, _, ferr := r.Allocator.Filter(req, gpuList, true /*isSimulateSchedule*/)
+		filtered, _, ferr := r.Allocator.Filter(req, gpuList, true /* isSimulateSchedule */)
 		if ferr != nil || len(filtered) == 0 || uint(len(filtered)) < req.Count {
 			continue
 		}
