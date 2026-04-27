@@ -10,12 +10,15 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/robfig/cron/v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/kubernetes/pkg/scheduler"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -29,6 +32,22 @@ type GPUPoolCompactionReconciler struct {
 	Recorder record.EventRecorder
 
 	Allocator *gpuallocator.GpuAllocator
+
+	// Scheduler is used by defrag to run FindNodesThatFitPod.
+	// Nil means defrag is disabled.
+	Scheduler *scheduler.Scheduler
+
+	// KubeClient is used for the Eviction API. Nil means defrag is disabled.
+	KubeClient kubernetes.Interface
+
+	// Shared 5-field cron parser for defrag schedules.
+	defragParser cron.Parser
+
+	// key = pool name, value = *atomic.Bool.
+	defragRunning sync.Map
+
+	// key = k8s node name, value = drainStartTime (time.Time).
+	defragDrainingNodes sync.Map
 
 	markDeletionNodes map[string]struct{}
 }
@@ -265,6 +284,10 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
+	// Run defrag maintenance even when compaction is skipped.
+	r.defragDrainWatcherTick(ctx, pool)
+	r.defragStaleLabelCleanupTick(ctx, pool)
+
 	needStartCompactionJob := true
 	nextDuration := r.getCompactionDuration(ctx, pool.Spec.NodeManagerConfig)
 
@@ -312,6 +335,9 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, compactionErr
 	}
 
+	// Strategy #2: cron-driven defrag in a background goroutine.
+	r.maybeStartDefragRun(ctx, pool)
+
 	// Next ticker, timer set by user, won't impacted by other reconcile requests
 	return ctrl.Result{RequeueAfter: nextDuration}, nil
 }
@@ -319,6 +345,9 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // SetupWithManager sets up the controller with the Manager.
 func (r *GPUPoolCompactionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.markDeletionNodes = make(map[string]struct{})
+	r.defragParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	// Rebuild drain watcher state from already-labeled nodes.
+	r.scheduleDefragDrainWatcherBootstrap(mgr)
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gpupool-compaction").
 		WatchesMetadata(&tfv1.GPUPool{}, &handler.EnqueueRequestForObject{}).

@@ -17,7 +17,9 @@ limitations under the License.
 package gpuallocator
 
 import (
+	"context"
 	"sync"
+	"testing"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -872,3 +874,45 @@ var _ = Describe("GPU Allocator", func() {
 	})
 
 })
+
+func TestGetNodeWorkerStoreSnapshotCopiesInnerMaps(t *testing.T) {
+	worker := types.NamespacedName{Namespace: "ns", Name: "worker-a"}
+	allocator := &GpuAllocator{
+		nodeWorkerStore: map[string]map[types.NamespacedName]struct{}{
+			"node-a": {
+				worker: {},
+			},
+		},
+	}
+
+	snapshot := allocator.GetNodeWorkerStoreSnapshot()
+	delete(snapshot["node-a"], worker)
+	if len(allocator.nodeWorkerStore["node-a"]) != 1 {
+		t.Fatalf("mutating snapshot changed allocator store: %+v", allocator.nodeWorkerStore)
+	}
+
+	allocator.nodeWorkerStore["node-a"][types.NamespacedName{Namespace: "ns", Name: "worker-b"}] = struct{}{}
+	if len(snapshot["node-a"]) != 0 {
+		t.Fatalf("mutating allocator store changed old snapshot: %+v", snapshot)
+	}
+}
+
+func TestWaitUntilReadyHonorsInitializedChannel(t *testing.T) {
+	allocator := &GpuAllocator{initializedCh: make(chan struct{})}
+
+	expiredCtx, expiredCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer expiredCancel()
+	if allocator.WaitUntilReady(expiredCtx) {
+		t.Fatal("WaitUntilReady returned true before allocator was ready")
+	}
+
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), time.Second)
+	defer readyCancel()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		allocator.SetAllocatorReady()
+	}()
+	if !allocator.WaitUntilReady(readyCtx) {
+		t.Fatal("WaitUntilReady returned false after allocator became ready")
+	}
+}

@@ -9,6 +9,7 @@ rules:
   resources:
   - bindings
   - endpoints
+  - pods/eviction
   verbs:
   - create
 - apiGroups:

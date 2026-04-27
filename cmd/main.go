@@ -252,7 +252,7 @@ func main() {
 
 	scheduler, nodeExpander := startScheduler(ctx, allocator, mgr, k8sVersion)
 
-	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator, nodeExpander)
+	startCustomResourceController(ctx, mgr, metricsRecorder, allocator, portAllocator, nodeExpander, scheduler, k8sClient)
 
 	startHttpServerForTFClient(ctx, kc, portAllocator, indexAllocator, allocator, scheduler, nodeExpander, mgr.Elected())
 
@@ -359,6 +359,8 @@ func startCustomResourceController(
 	allocator *gpuallocator.GpuAllocator,
 	portAllocator *portallocator.PortAllocator,
 	nodeExpander *expander.NodeExpander,
+	sched *scheduler.Scheduler,
+	kubeClient kubernetes.Interface,
 ) {
 	if os.Getenv(constants.EnableCustomResourceControllerEnv) == constants.FalseStringValue {
 		return
@@ -414,10 +416,12 @@ func startCustomResourceController(
 		os.Exit(1)
 	}
 	if err = (&controller.GPUPoolCompactionReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("GPUPoolCompaction"),
-		Allocator: allocator,
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		Recorder:   mgr.GetEventRecorderFor("GPUPoolCompaction"),
+		Allocator:  allocator,
+		Scheduler:  sched,
+		KubeClient: kubeClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUPoolCompaction")
 		os.Exit(1)
