@@ -65,7 +65,7 @@ func TestParseDefragMaxDuration(t *testing.T) {
 
 // ---- countPoolGPUUsage -------------------------------------------------
 
-func gpuWithUsage(name, pool, capVram, avTflops, avVram string, usedBy tfv1.UsedBySystem) *tfv1.GPU {
+func gpuWithUsage(name, pool string, avTflops, avVram string, usedBy tfv1.UsedBySystem) *tfv1.GPU {
 	return &tfv1.GPU{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -75,7 +75,7 @@ func gpuWithUsage(name, pool, capVram, avTflops, avVram string, usedBy tfv1.Used
 		},
 		Status: tfv1.GPUStatus{
 			UsedBy:   usedBy,
-			Capacity: &tfv1.Resource{Tflops: resource.MustParse("100"), Vram: resource.MustParse(capVram)},
+			Capacity: &tfv1.Resource{Tflops: resource.MustParse("100"), Vram: resource.MustParse("10Gi")},
 			Available: &tfv1.Resource{
 				Tflops: resource.MustParse(avTflops),
 				Vram:   resource.MustParse(avVram),
@@ -89,15 +89,15 @@ func TestCountPoolGPUUsage(t *testing.T) {
 	// 5 GPUs on the same node, different states.
 	gpus := map[string]*tfv1.GPU{
 		// Fully free -- counted in total but not in used.
-		"free": gpuWithUsage("free", pool, "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion),
+		"free": gpuWithUsage("free", pool, "100", "10Gi", tfv1.UsedByTensorFusion),
 		// Partially used by Tflops.
-		"partial-tf": gpuWithUsage("partial-tf", pool, "10Gi", "50", "10Gi", tfv1.UsedByTensorFusion),
+		"partial-tf": gpuWithUsage("partial-tf", pool, "50", "10Gi", tfv1.UsedByTensorFusion),
 		// Partially used by VRAM.
-		"partial-vram": gpuWithUsage("partial-vram", pool, "10Gi", "100", "5Gi", tfv1.UsedByTensorFusion),
+		"partial-vram": gpuWithUsage("partial-vram", pool, "100", "5Gi", tfv1.UsedByTensorFusion),
 		// Non-TF tenant GPU; excluded from both total and used.
-		"non-tf": gpuWithUsage("non-tf", pool, "10Gi", "10", "1Gi", tfv1.UsedBySystem("external")),
+		"non-tf": gpuWithUsage("non-tf", pool, "10", "1Gi", tfv1.UsedBySystem("external")),
 		// Different pool; excluded.
-		"other-pool": gpuWithUsage("other-pool", "pool-b", "10Gi", "50", "5Gi", tfv1.UsedByTensorFusion),
+		"other-pool": gpuWithUsage("other-pool", "pool-b", "50", "5Gi", tfv1.UsedByTensorFusion),
 	}
 
 	total, used := countPoolGPUUsage(gpus, pool)
@@ -118,7 +118,7 @@ func TestCountPoolGPUUsage(t *testing.T) {
 // ---- subtractGPURequest ------------------------------------------------
 
 func TestSubtractGPURequest_RawTflops(t *testing.T) {
-	gpu := gpuWithUsage("g", "p", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion)
+	gpu := gpuWithUsage("g", "p", "100", "10Gi", tfv1.UsedByTensorFusion)
 	req := &tfv1.AllocRequest{
 		Request: tfv1.Resource{
 			Tflops: resource.MustParse("30"),
@@ -135,7 +135,7 @@ func TestSubtractGPURequest_RawTflops(t *testing.T) {
 }
 
 func TestSubtractGPURequest_ComputePercent(t *testing.T) {
-	gpu := gpuWithUsage("g", "p", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion)
+	gpu := gpuWithUsage("g", "p", "100", "10Gi", tfv1.UsedByTensorFusion)
 	// ComputePercent=40 on a 100-tflops capacity means 40 tflops consumed.
 	cp := resource.MustParse("40")
 	req := &tfv1.AllocRequest{
@@ -344,10 +344,10 @@ func TestBuildDefragNodeBudgets_SkipsDeletionMarkedNodes(t *testing.T) {
 		"",
 		map[string]map[string]*tfv1.GPU{
 			"node-keep": {
-				"gpu-1": gpuWithUsage("gpu-1", "pool-a", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion),
+				"gpu-1": gpuWithUsage("gpu-1", "pool-a", "100", "10Gi", tfv1.UsedByTensorFusion),
 			},
 			"node-delete": {
-				"gpu-2": gpuWithUsage("gpu-2", "pool-a", "10Gi", "100", "10Gi", tfv1.UsedByTensorFusion),
+				"gpu-2": gpuWithUsage("gpu-2", "pool-a", "100", "10Gi", tfv1.UsedByTensorFusion),
 			},
 		},
 		map[string]map[types.NamespacedName]struct{}{},
@@ -450,6 +450,54 @@ func TestDefragDrainWatcherTick_ScopedToPool(t *testing.T) {
 	}
 	if updated.Labels[constants.DefragDrainingLabel] != constants.TrueStringValue {
 		t.Fatalf("expected foreign-pool drain label to remain, labels=%v", updated.Labels)
+	}
+}
+
+func TestWaitForSchedulerNodeDefragLabel(t *testing.T) {
+	lister := &fakeNodeInfoLister{
+		infos: map[string]fwk.NodeInfo{
+			"node-a": newFrameworkNodeInfo(
+				"node-a",
+				map[string]string{constants.DefragDrainingLabel: constants.TrueStringValue},
+				corev1.ResourceList{},
+			),
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitForSchedulerNodeDefragLabel(ctx, lister, "node-a", time.Millisecond); err != nil {
+		t.Fatalf("waitForSchedulerNodeDefragLabel returned error: %v", err)
+	}
+}
+
+func TestFindNewOrFreshDefragWorker(t *testing.T) {
+	runStart := time.Now()
+	original := []*corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:         "ns",
+			Name:              "worker-a",
+			CreationTimestamp: metav1.NewTime(runStart.Add(-time.Minute)),
+		},
+	}}
+	current := append([]*corev1.Pod{}, original...)
+	current = append(current, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:         "ns",
+			Name:              "worker-b",
+			CreationTimestamp: metav1.NewTime(runStart.Add(time.Second)),
+		},
+	})
+
+	pod, ok := findNewOrFreshDefragWorker(runStart, original, current)
+	if !ok {
+		t.Fatal("expected new worker to be detected")
+	}
+	if pod.Namespace != "ns" || pod.Name != "worker-b" {
+		t.Fatalf("unexpected worker detected: %s/%s", pod.Namespace, pod.Name)
+	}
+
+	if pod, ok := findNewOrFreshDefragWorker(runStart, original, original); ok {
+		t.Fatalf("unchanged worker set should not be considered fresh, got %s/%s", pod.Namespace, pod.Name)
 	}
 }
 

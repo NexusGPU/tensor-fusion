@@ -43,6 +43,10 @@ const (
 
 	// Independent timeout for persisting LastDefragTime.
 	defragStatusPersistTimeout = 30 * time.Second
+
+	// Bound how long we wait for scheduler cache to observe the drain label.
+	defragSchedulerCacheSyncTimeout = 30 * time.Second
+	defragSchedulerCacheSyncPoll    = 200 * time.Millisecond
 )
 
 const (
@@ -115,6 +119,10 @@ func (r *GPUPoolCompactionReconciler) maybeStartDefragRun(ctx context.Context, p
 		return
 	}
 	if r.Allocator == nil {
+		return
+	}
+	if !r.Allocator.IsReady() {
+		logger.V(4).Info("defrag skipped: allocator not ready")
 		return
 	}
 
@@ -262,7 +270,7 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 	}
 
 	nodeGpuStore := r.Allocator.GetNodeGpuStore()
-	_, nodeWorkerStore, _ := r.Allocator.GetAllocationInfo()
+	nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
 
 	threshold := int64(cfg.UtilizationThresholdPercent)
 	out := make([]*defragCandidate, 0, len(allNodes.Items))
@@ -368,7 +376,7 @@ func (r *GPUPoolCompactionReconciler) listNodeWorkerPods(
 	pods := make([]*corev1.Pod, 0, len(workerSet))
 	for nn := range workerSet {
 		pod := &corev1.Pod{}
-		if err := r.Get(ctx, client.ObjectKey(nn), pod); err != nil {
+		if err := r.Get(ctx, nn, pod); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
@@ -401,16 +409,6 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 	l := log.FromContext(ctx).WithValues("pool", pool.Name, "node", cand.nodeName,
 		"utilization", cand.utilizationScore, "workerCount", len(cand.workerPods))
 
-	// Skip nodes that received new workers after this run started.
-	for _, p := range cand.workerPods {
-		if p.CreationTimestamp.After(runStart) {
-			stats.FreshPodSkips++
-			l.Info("skip node: contains fresh TF worker created after run started",
-				"pod", p.Namespace+"/"+p.Name, "createdAt", p.CreationTimestamp.Time)
-			return
-		}
-	}
-
 	// Label the source node before simulation so it cannot be chosen again.
 	if err := r.applyDefragDrainingLabel(ctx, cand.nodeName); err != nil {
 		l.Error(err, "patch draining label failed; skip candidate")
@@ -420,12 +418,47 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 		"node %s labeled for defrag draining (utilization=%.1f%%, workers=%d)",
 		cand.nodeName, cand.utilizationScore, len(cand.workerPods))
 
+	if err := r.waitSchedulerObservedDefragLabel(ctx, cand); err != nil {
+		l.Error(err, "scheduler cache did not observe drain label; skip candidate")
+		if clearErr := r.clearDefragDrainingLabel(ctx, cand.nodeName); clearErr != nil {
+			l.Error(clearErr, "clear draining label failed after scheduler cache wait")
+		}
+		return
+	}
+
+	refreshedPods, err := r.currentNodeWorkerPods(ctx, cand.nodeName)
+	if err != nil {
+		l.Error(err, "refresh worker pods failed after drain label; skip candidate")
+		if clearErr := r.clearDefragDrainingLabel(ctx, cand.nodeName); clearErr != nil {
+			l.Error(clearErr, "clear draining label failed after worker refresh error")
+		}
+		return
+	}
+	if len(refreshedPods) == 0 {
+		if clearErr := r.clearDefragDrainingLabel(ctx, cand.nodeName); clearErr != nil {
+			l.Error(clearErr, "clear draining label failed after empty worker refresh")
+		}
+		return
+	}
+	if freshPod, ok := findNewOrFreshDefragWorker(runStart, cand.workerPods, refreshedPods); ok {
+		stats.FreshPodSkips++
+		l.Info("skip node: contains TF worker that appeared after candidate collection",
+			"pod", freshPod.Namespace+"/"+freshPod.Name, "createdAt", freshPod.CreationTimestamp.Time)
+		if clearErr := r.clearDefragDrainingLabel(ctx, cand.nodeName); clearErr != nil {
+			l.Error(clearErr, "clear draining label failed after fresh worker detection")
+		}
+		return
+	}
+	cand.workerPods = refreshedPods
+
 	canRelocate, simErr := r.simulateJointPlacement(ctx, pool, cand, maxWorkerPerNode)
 	if simErr != nil {
 		l.Error(simErr, "joint placement simulation errored; treating as unmovable")
 	}
 	if !canRelocate {
 		stats.UnmovableNodes++
+		r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventSkipUnschedulable,
+			"node %s skipped: current TF workers cannot be jointly placed on other nodes", cand.nodeName)
 		if err := r.clearDefragDrainingLabel(ctx, cand.nodeName); err != nil {
 			l.Error(err, "clear draining label failed after unmovable verdict")
 		}
@@ -466,7 +499,7 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 
 	// Build a local budget for every target node except the source.
 	nodeGpuStore := r.Allocator.GetNodeGpuStore()
-	_, nodeWorkerStore, _ := r.Allocator.GetAllocationInfo()
+	nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
 	profileName := constants.SchedulerName
 	if len(cand.workerPods) > 0 && cand.workerPods[0].Spec.SchedulerName != "" {
 		profileName = cand.workerPods[0].Spec.SchedulerName
@@ -739,6 +772,92 @@ func (r *GPUPoolCompactionReconciler) snapshotDefragDrainingNodes() map[string]s
 	return out
 }
 
+func (r *GPUPoolCompactionReconciler) currentNodeWorkerPods(ctx context.Context, nodeName string) ([]*corev1.Pod, error) {
+	nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
+	return r.listNodeWorkerPods(ctx, nodeName, nodeWorkerStore[nodeName])
+}
+
+func findNewOrFreshDefragWorker(
+	runStart time.Time,
+	originalPods []*corev1.Pod,
+	currentPods []*corev1.Pod,
+) (*corev1.Pod, bool) {
+	original := make(map[types.NamespacedName]struct{}, len(originalPods))
+	for _, p := range originalPods {
+		if p == nil {
+			continue
+		}
+		original[types.NamespacedName{Namespace: p.Namespace, Name: p.Name}] = struct{}{}
+	}
+	for _, p := range currentPods {
+		if p == nil {
+			continue
+		}
+		if p.CreationTimestamp.After(runStart) {
+			return p, true
+		}
+		key := types.NamespacedName{Namespace: p.Namespace, Name: p.Name}
+		if _, existed := original[key]; !existed {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
+func (r *GPUPoolCompactionReconciler) waitSchedulerObservedDefragLabel(
+	ctx context.Context,
+	cand *defragCandidate,
+) error {
+	profileName := constants.SchedulerName
+	if len(cand.workerPods) > 0 && cand.workerPods[0].Spec.SchedulerName != "" {
+		profileName = cand.workerPods[0].Spec.SchedulerName
+	}
+	schedFramework := r.Scheduler.Profiles[profileName]
+	if schedFramework == nil {
+		return fmt.Errorf("scheduler framework not found for scheduler %q", profileName)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, defragSchedulerCacheSyncTimeout)
+	defer cancel()
+	return waitForSchedulerNodeDefragLabel(
+		waitCtx,
+		schedFramework.SnapshotSharedLister().NodeInfos(),
+		cand.nodeName,
+		defragSchedulerCacheSyncPoll,
+	)
+}
+
+func waitForSchedulerNodeDefragLabel(
+	ctx context.Context,
+	nodeInfoLister framework.NodeInfoLister,
+	nodeName string,
+	pollInterval time.Duration,
+) error {
+	if nodeInfoLister == nil {
+		return fmt.Errorf("scheduler node info lister is nil")
+	}
+	if pollInterval <= 0 {
+		pollInterval = defragSchedulerCacheSyncPoll
+	}
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		nodeInfo, err := nodeInfoLister.Get(nodeName)
+		if err == nil {
+			if node := nodeInfo.Node(); node != nil &&
+				node.Labels[constants.DefragDrainingLabel] == constants.TrueStringValue {
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for scheduler cache to observe defrag drain label on node %s: %w", nodeName, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 // subtractGPURequest mirrors GpuAllocator.Bind.
 func subtractGPURequest(gpu *tfv1.GPU, req *tfv1.AllocRequest) {
 	if gpu == nil || gpu.Status.Available == nil || gpu.Status.Capacity == nil {
@@ -808,7 +927,10 @@ func (r *GPUPoolCompactionReconciler) defragDrainWatcherTick(ctx context.Context
 	if r.Allocator == nil {
 		return
 	}
-	_, nodeWorkerStore, _ := r.Allocator.GetAllocationInfo()
+	if !r.Allocator.IsReady() {
+		return
+	}
+	nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
 	poolKey := fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name)
 
 	r.defragDrainingNodes.Range(func(k, v any) bool {
@@ -908,7 +1030,10 @@ func (r *GPUPoolCompactionReconciler) scheduleDefragDrainWatcherBootstrap(mgr ma
 		if r.Allocator == nil {
 			return nil
 		}
-		_, nodeWorkerStore, _ := r.Allocator.GetAllocationInfo()
+		if !r.Allocator.WaitUntilReady(ctx) {
+			return nil
+		}
+		nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
 		for i := range nodeList.Items {
 			n := &nodeList.Items[i]
 			if len(nodeWorkerStore[n.Name]) == 0 {

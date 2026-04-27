@@ -159,19 +159,61 @@ func (s *GpuAllocator) GetAllocationInfo() (
 	return s.gpuStore, s.nodeWorkerStore, s.uniqueAllocation
 }
 
-// GetNodeGpuStore returns a snapshot (shallow copy) of the node-to-GPU map.
-// The caller can safely iterate the returned maps without holding any lock.
-// The *tfv1.GPU pointers are shared with the allocator's internal state.
+// GetNodeGpuStore returns a snapshot of the node-to-GPU map.
+// The caller can safely iterate and read the returned objects without holding
+// the allocator lock.
 func (s *GpuAllocator) GetNodeGpuStore() map[string]map[string]*tfv1.GPU {
 	s.storeMutex.RLock()
 	defer s.storeMutex.RUnlock()
 	result := make(map[string]map[string]*tfv1.GPU, len(s.nodeGpuStore))
 	for nodeName, gpuMap := range s.nodeGpuStore {
 		innerCopy := make(map[string]*tfv1.GPU, len(gpuMap))
-		maps.Copy(innerCopy, gpuMap)
+		for gpuName, gpu := range gpuMap {
+			if gpu == nil {
+				continue
+			}
+			innerCopy[gpuName] = gpu.DeepCopy()
+		}
 		result[nodeName] = innerCopy
 	}
 	return result
+}
+
+// GetNodeWorkerStoreSnapshot returns a copied node-to-worker map.
+func (s *GpuAllocator) GetNodeWorkerStoreSnapshot() map[string]map[types.NamespacedName]struct{} {
+	s.storeMutex.RLock()
+	defer s.storeMutex.RUnlock()
+	result := make(map[string]map[types.NamespacedName]struct{}, len(s.nodeWorkerStore))
+	for nodeName, workerMap := range s.nodeWorkerStore {
+		innerCopy := make(map[types.NamespacedName]struct{}, len(workerMap))
+		maps.Copy(innerCopy, workerMap)
+		result[nodeName] = innerCopy
+	}
+	return result
+}
+
+func (s *GpuAllocator) WaitUntilReady(ctx context.Context) bool {
+	if s == nil || s.initializedCh == nil {
+		return false
+	}
+	select {
+	case <-s.initializedCh:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s *GpuAllocator) IsReady() bool {
+	if s == nil || s.initializedCh == nil {
+		return false
+	}
+	select {
+	case <-s.initializedCh:
+		return true
+	default:
+		return false
+	}
 }
 
 // AllocRequest encapsulates all parameters needed for GPU allocation
