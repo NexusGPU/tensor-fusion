@@ -63,13 +63,29 @@ const (
 )
 
 // Mirrored from the scheduler expander to avoid an import cycle.
+type schedulerSnapshotRefreshAPI interface {
+	UpdateNodeInfoSnapshot(ctx context.Context) error
+}
+
 type schedulerFitPodAPI interface {
+	schedulerSnapshotRefreshAPI
 	FindNodesThatFitPod(
 		ctx context.Context,
 		schedFramework framework.Framework,
 		state fwk.CycleState,
 		pod *corev1.Pod,
 	) ([]fwk.NodeInfo, framework.Diagnosis, error)
+}
+
+func refreshSchedulerNodeInfoSnapshot(ctx context.Context, sched any) error {
+	if sched == nil {
+		return errors.New("scheduler is nil")
+	}
+	refresher, ok := sched.(schedulerSnapshotRefreshAPI)
+	if !ok {
+		return errors.New("scheduler vendor patch missing: UpdateNodeInfoSnapshot not available")
+	}
+	return refresher.UpdateNodeInfoSnapshot(ctx)
 }
 
 // Snapshot of the most recent defrag run for a pool.
@@ -494,7 +510,7 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 ) (bool, error) {
 	fitAPI, ok := any(r.Scheduler).(schedulerFitPodAPI)
 	if !ok {
-		return false, errors.New("scheduler vendor patch missing: FindNodesThatFitPod not available")
+		return false, errors.New("scheduler vendor patch missing: FindNodesThatFitPod/UpdateNodeInfoSnapshot not available")
 	}
 
 	// Build a local budget for every target node except the source.
@@ -507,6 +523,9 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 	schedFramework := r.Scheduler.Profiles[profileName]
 	if schedFramework == nil {
 		return false, fmt.Errorf("scheduler framework not found for scheduler %q", profileName)
+	}
+	if err := fitAPI.UpdateNodeInfoSnapshot(ctx); err != nil {
+		return false, fmt.Errorf("refresh scheduler snapshot before defrag simulation: %w", err)
 	}
 
 	budget, err := buildDefragNodeBudgets(
@@ -831,6 +850,9 @@ func (r *GPUPoolCompactionReconciler) waitSchedulerObservedDefragLabel(
 	defer cancel()
 	return waitForSchedulerNodeDefragLabel(
 		waitCtx,
+		func(ctx context.Context) error {
+			return refreshSchedulerNodeInfoSnapshot(ctx, r.Scheduler)
+		},
 		schedFramework.SnapshotSharedLister().NodeInfos(),
 		cand.nodeName,
 		defragSchedulerCacheSyncPoll,
@@ -839,6 +861,7 @@ func (r *GPUPoolCompactionReconciler) waitSchedulerObservedDefragLabel(
 
 func waitForSchedulerNodeDefragLabel(
 	ctx context.Context,
+	refreshSnapshot func(context.Context) error,
 	nodeInfoLister framework.NodeInfoLister,
 	nodeName string,
 	pollInterval time.Duration,
@@ -852,7 +875,16 @@ func waitForSchedulerNodeDefragLabel(
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	var lastRefreshErr error
 	for {
+		if refreshSnapshot != nil {
+			if err := refreshSnapshot(ctx); err != nil {
+				lastRefreshErr = err
+			} else {
+				lastRefreshErr = nil
+			}
+		}
+
 		nodeInfo, err := nodeInfoLister.Get(nodeName)
 		if err == nil {
 			if node := nodeInfo.Node(); node != nil &&
@@ -863,6 +895,9 @@ func waitForSchedulerNodeDefragLabel(
 
 		select {
 		case <-ctx.Done():
+			if lastRefreshErr != nil {
+				return fmt.Errorf("refresh scheduler node info snapshot while waiting for defrag drain label on node %s: %w", nodeName, lastRefreshErr)
+			}
 			return fmt.Errorf("wait for scheduler cache to observe defrag drain label on node %s: %w", nodeName, ctx.Err())
 		case <-ticker.C:
 		}

@@ -1,5 +1,14 @@
 --- ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go	2025-09-15 17:45:27
 +++ ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go	2025-09-15 17:45:19
+@@ -427,2 +427,7 @@
+-// schedulePod tries to schedule the given pod to one of the nodes in the node list.
++// UpdateNodeInfoSnapshot refreshes the scheduler's shared node snapshot.
++func (sched *Scheduler) UpdateNodeInfoSnapshot(ctx context.Context) error {
++	return sched.Cache.UpdateSnapshot(klog.FromContext(ctx), sched.nodeInfoSnapshot)
++}
++
++// schedulePod tries to schedule the given pod to one of the nodes in the node list.
+ // If it succeeds, it will return the name of the node.
 @@ -439,7 +439,7 @@
  		return result, ErrNoNodesAvailable
  	}

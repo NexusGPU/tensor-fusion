@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -587,8 +588,65 @@ func TestWaitForSchedulerNodeDefragLabel(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := waitForSchedulerNodeDefragLabel(ctx, lister, "node-a", time.Millisecond); err != nil {
+	if err := waitForSchedulerNodeDefragLabel(ctx, nil, lister, "node-a", time.Millisecond); err != nil {
 		t.Fatalf("waitForSchedulerNodeDefragLabel returned error: %v", err)
+	}
+}
+
+func TestWaitForSchedulerNodeDefragLabel_RefreshesUntilLabelVisible(t *testing.T) {
+	lister := &fakeNodeInfoLister{
+		infos: map[string]fwk.NodeInfo{
+			"node-a": newFrameworkNodeInfo("node-a", map[string]string{}, corev1.ResourceList{}),
+		},
+	}
+	refreshCalls := 0
+	refresh := func(context.Context) error {
+		refreshCalls++
+		if refreshCalls == 2 {
+			lister.infos["node-a"] = newFrameworkNodeInfo(
+				"node-a",
+				map[string]string{constants.DefragDrainingLabel: constants.TrueStringValue},
+				corev1.ResourceList{},
+			)
+		}
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitForSchedulerNodeDefragLabel(ctx, refresh, lister, "node-a", time.Millisecond); err != nil {
+		t.Fatalf("waitForSchedulerNodeDefragLabel returned error: %v", err)
+	}
+	if refreshCalls < 2 {
+		t.Fatalf("refresh calls=%d want at least 2", refreshCalls)
+	}
+}
+
+func TestWaitForSchedulerNodeDefragLabel_ReturnsRefreshErrorAfterTimeout(t *testing.T) {
+	lister := &fakeNodeInfoLister{
+		infos: map[string]fwk.NodeInfo{
+			"node-a": newFrameworkNodeInfo("node-a", map[string]string{}, corev1.ResourceList{}),
+		},
+	}
+	refreshErr := errors.New("refresh failed")
+	refreshCalls := 0
+	refresh := func(context.Context) error {
+		refreshCalls++
+		return refreshErr
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := waitForSchedulerNodeDefragLabel(ctx, refresh, lister, "node-a", time.Millisecond)
+	if err == nil {
+		t.Fatal("expected refresh timeout error")
+	}
+	if refreshCalls == 0 {
+		t.Fatal("expected refresh to be called")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "refresh scheduler node info snapshot") || !strings.Contains(got, refreshErr.Error()) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
