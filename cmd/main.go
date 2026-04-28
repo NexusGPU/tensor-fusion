@@ -149,10 +149,10 @@ func main() {
 	flag.BoolVar(&enableAutoScale, "enable-auto-scale", false, "if turn on auto scale, "+
 		"TensorFusion will auto scale vGPU TFlops and VRAM based on the usage and traffic")
 	flag.StringVar(&alertManagerAddr, "alert-manager-addr",
-		"alertmanager.tensor-fusion-sys.svc.cluster.local:9093",
-		"specify the alert manager address, TensorFusion will generate alerts with "+
-			"built-in rules if enabled alert, you can configure routers and receivers "+
-			"in your own alertmanager config, "+
+		"http://alert-manager.tensor-fusion-sys.svc.cluster.local:9093",
+		"specify the alert manager address (must include scheme, e.g. http://). "+
+			"TensorFusion will generate alerts with built-in rules if enabled alert, "+
+			"you can configure routers and receivers in your own alertmanager config, "+
 			"refer https://prometheus.io/docs/alerting/latest/configuration")
 	flag.BoolVar(&enableAutoExpander, "enable-auto-expander", false, "if turn on auto expander, "+
 		"TensorFusion will auto expand Nodes then Pending Pods which caused by insufficient GPU resources found")
