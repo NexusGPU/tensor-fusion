@@ -417,6 +417,13 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 		if err != nil {
 			return fmt.Errorf("invalid gpuCount value: %w", err)
 		}
+		// Reject negative / zero / absurdly large values up front. A negative
+		// value cast to uint32 silently becomes ~4G, a 0 is a no-op that
+		// downstream code does not handle, and anything past a sane upper
+		// bound is operator error.
+		if val < 1 || val > 128 {
+			return fmt.Errorf("invalid gpuCount value %d: must be in [1, 128]", val)
+		}
 		workloadProfile.Spec.GPUCount = uint32(val)
 	} else if workloadProfile.Spec.GPUCount == 0 {
 		// Map to track GPU count per container: containerName -> gpuCount
