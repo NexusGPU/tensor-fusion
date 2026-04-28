@@ -564,6 +564,12 @@ func (h *LegacyHandler) registerPIDInSharedMemory(namespace, podName string, hos
 	if err != nil {
 		return fmt.Errorf("failed to open shm for PID registration: %w", err)
 	}
+	// Each /process init opens a fresh handle (mmap + fd). Without Close()
+	// the mapping and file descriptor leak — over a churning workload the
+	// hypervisor process accumulates one mmap region per pod-init.
+	defer func() {
+		_ = handle.Close()
+	}()
 	state := handle.GetState()
 	if state != nil {
 		state.AddPID(int(hostPID))
@@ -582,8 +588,20 @@ func (h *LegacyHandler) ensureWorkerSharedMemory(namespace, podName string, allo
 	}
 
 	podId := workerstate.NewPodIdentifier(namespace, podName)
-	_, err := workerstate.CreateSharedMemoryHandle(h.shmBasePath, podId, configs)
-	return err
+	// /process init can fire many times for a single pod (one per container
+	// and each retry). CreateSharedMemoryHandle truncates the underlying file
+	// (O_TRUNC), which would zero out live ERL state — used tokens, mem
+	// counters — every call. Open the existing shm if it is already there
+	// and only fall back to Create on first init. Both paths must Close()
+	// the returned handle to avoid leaking mmap/fd.
+	handle, err := workerstate.OpenSharedMemoryHandle(h.shmBasePath, podId)
+	if err != nil {
+		handle, err = workerstate.CreateSharedMemoryHandle(h.shmBasePath, podId, configs)
+		if err != nil {
+			return err
+		}
+	}
+	return handle.Close()
 }
 
 func buildWorkerDeviceConfigs(allocation *api.WorkerAllocation) []workerstate.DeviceConfig {
