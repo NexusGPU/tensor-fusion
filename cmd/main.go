@@ -614,13 +614,18 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 	needTSDB := enableAlert || enableAutoScale
 
 	err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		// Always close alertEvaluatorReady — even when neither alert nor
+		// auto-scale is enabled — so config-watcher goroutines that block
+		// on `<-alertEvaluatorReady` (see watchAndHandleConfigChanges) can
+		// proceed instead of accumulating one zombie goroutine per
+		// hot-reload of the dynamic config.
+		defer close(alertEvaluatorReady)
 		if !needTSDB {
 			return nil
 		}
 		timeSeriesDB = setupTimeSeriesDB()
 		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
 		alertCanBeEnabled = true
-		close(alertEvaluatorReady)
 		setupLog.Info("time series db setup successfully.")
 		return nil
 	}))
@@ -658,16 +663,26 @@ func watchAndHandleConfigChanges(ctx context.Context, mgr manager.Manager, needT
 			ctrl.Log.Info("preempt cluster-wide from env", "preemptClusterWideFromEnv", preemptClusterWideFromEnv)
 		}
 		config.SetGlobalConfig(globalConfig)
-		// handle alert rules update
-		go func() {
-			<-alertEvaluatorReady
-			if alertCanBeEnabled && enableAlert {
-				err = alertEvaluator.UpdateAlertRules(globalConfig.AlertRules)
-				if err != nil {
-					ctrl.Log.Error(err, "unable to update alert rules", "configPath", dynamicConfigPath)
+		// handle alert rules update — only when alert is actually enabled.
+		// Spawning a goroutine here regardless used to leak: when
+		// --enable-alert and --enable-auto-scale were both false, the TSDB
+		// runnable returned early and never closed alertEvaluatorReady, so
+		// the goroutine sat on `<-alertEvaluatorReady` forever. Each
+		// config-file write leaked one zombie goroutine. The goroutine
+		// only does meaningful work when both `alertCanBeEnabled` and
+		// `enableAlert` are true, so move the gate up front and skip
+		// spawning entirely otherwise.
+		if enableAlert {
+			go func() {
+				<-alertEvaluatorReady
+				if alertCanBeEnabled {
+					err = alertEvaluator.UpdateAlertRules(globalConfig.AlertRules)
+					if err != nil {
+						ctrl.Log.Error(err, "unable to update alert rules", "configPath", dynamicConfigPath)
+					}
 				}
-			}
-		}()
+			}()
+		}
 
 		// handle metrics ttl update
 		if needTSDB {
