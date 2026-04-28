@@ -318,6 +318,51 @@ func TestGetDefragConfig(t *testing.T) {
 	}
 }
 
+func TestPrepareDefragSimulationPod_ClearsAssignedGPUState(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns1",
+			Name:      "worker-1",
+			Annotations: map[string]string{
+				constants.GPUDeviceIDsAnnotation:  "gpu-source",
+				constants.ContainerGPUsAnnotation: `{"tensorfusion-worker":["gpu-source"]}`,
+				constants.GpuCountAnnotation:      "1",
+				constants.GpuPoolKey:              "pool-a",
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "source-node",
+		},
+		Status: corev1.PodStatus{
+			NominatedNodeName: "source-node",
+		},
+	}
+
+	got := prepareDefragSimulationPod(pod)
+
+	if got == pod {
+		t.Fatalf("expected a deep copy, got original pointer")
+	}
+	if got.Spec.NodeName != "" {
+		t.Fatalf("Spec.NodeName=%q, want empty for simulation", got.Spec.NodeName)
+	}
+	if got.Status.NominatedNodeName != "" {
+		t.Fatalf("Status.NominatedNodeName=%q, want empty for simulation", got.Status.NominatedNodeName)
+	}
+	if _, exists := got.Annotations[constants.GPUDeviceIDsAnnotation]; exists {
+		t.Fatalf("assigned GPU ids annotation should be cleared: %+v", got.Annotations)
+	}
+	if _, exists := got.Annotations[constants.ContainerGPUsAnnotation]; exists {
+		t.Fatalf("container GPU assignment annotation should be cleared: %+v", got.Annotations)
+	}
+	if got.Annotations[constants.GpuCountAnnotation] != "1" {
+		t.Fatalf("gpu count request annotation was not preserved: %+v", got.Annotations)
+	}
+	if pod.Annotations[constants.GPUDeviceIDsAnnotation] == "" {
+		t.Fatalf("original pod annotations were mutated")
+	}
+}
+
 func TestCanFitVirtualNodeResources_RejectsOversubscribedCPU(t *testing.T) {
 	nodeInfo := newFrameworkNodeInfo(
 		"node-b",
