@@ -548,10 +548,7 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 	budget map[string]*nodeBudget,
 	maxWorkerPerNode int,
 ) (bool, error) {
-	podCopy := pod.DeepCopy()
-	// Clear source-node hints before asking the scheduler for placement.
-	podCopy.Spec.NodeName = ""
-	podCopy.Status.NominatedNodeName = ""
+	podCopy := prepareDefragSimulationPod(pod)
 
 	fwkInstance := r.Scheduler.Profiles[podCopy.Spec.SchedulerName]
 	if fwkInstance == nil {
@@ -668,6 +665,20 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 	nb.nodeInfo = best.nodeInfo
 	nb.workerCount++
 	return true, nil
+}
+
+func prepareDefragSimulationPod(pod *corev1.Pod) *corev1.Pod {
+	podCopy := pod.DeepCopy()
+
+	// Clear source-node and assigned-GPU state before asking the scheduler
+	// whether this worker can be placed somewhere else.
+	podCopy.Spec.NodeName = ""
+	podCopy.Status.NominatedNodeName = ""
+	if podCopy.Annotations != nil {
+		delete(podCopy.Annotations, constants.GPUDeviceIDsAnnotation)
+		delete(podCopy.Annotations, constants.ContainerGPUsAnnotation)
+	}
+	return podCopy
 }
 
 func canFitVirtualNodeResources(nodeInfo fwk.NodeInfo, pod *corev1.Pod) bool {

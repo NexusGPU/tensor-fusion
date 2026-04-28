@@ -318,6 +318,51 @@ func TestGetDefragConfig(t *testing.T) {
 	}
 }
 
+func TestPrepareDefragSimulationPod_ClearsAssignedGPUState(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns1",
+			Name:      "worker-1",
+			Annotations: map[string]string{
+				constants.GPUDeviceIDsAnnotation:  "gpu-source",
+				constants.ContainerGPUsAnnotation: `{"tensorfusion-worker":["gpu-source"]}`,
+				constants.GpuCountAnnotation:      "1",
+				constants.GpuPoolKey:              "pool-a",
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "source-node",
+		},
+		Status: corev1.PodStatus{
+			NominatedNodeName: "source-node",
+		},
+	}
+
+	got := prepareDefragSimulationPod(pod)
+
+	if got == pod {
+		t.Fatalf("expected a deep copy, got original pointer")
+	}
+	if got.Spec.NodeName != "" {
+		t.Fatalf("Spec.NodeName=%q, want empty for simulation", got.Spec.NodeName)
+	}
+	if got.Status.NominatedNodeName != "" {
+		t.Fatalf("Status.NominatedNodeName=%q, want empty for simulation", got.Status.NominatedNodeName)
+	}
+	if _, exists := got.Annotations[constants.GPUDeviceIDsAnnotation]; exists {
+		t.Fatalf("assigned GPU ids annotation should be cleared: %+v", got.Annotations)
+	}
+	if _, exists := got.Annotations[constants.ContainerGPUsAnnotation]; exists {
+		t.Fatalf("container GPU assignment annotation should be cleared: %+v", got.Annotations)
+	}
+	if got.Annotations[constants.GpuCountAnnotation] != "1" {
+		t.Fatalf("gpu count request annotation was not preserved: %+v", got.Annotations)
+	}
+	if pod.Annotations[constants.GPUDeviceIDsAnnotation] == "" {
+		t.Fatalf("original pod annotations were mutated")
+	}
+}
+
 func TestCanFitVirtualNodeResources_RejectsOversubscribedCPU(t *testing.T) {
 	nodeInfo := newFrameworkNodeInfo(
 		"node-b",
@@ -390,7 +435,7 @@ func TestRunDefrag_PersistsLastDefragTimeWhenRunContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	pool := newDefragTestPool("pool-a", "30m")
+	pool := newDefragTestPool()
 	r, kubeClient := newDefragControllerTestReconciler(t, pool)
 	runStart := time.Now().Add(-time.Minute).Round(time.Second)
 
@@ -409,7 +454,7 @@ func TestRunDefrag_PersistsLastDefragTimeWhenRunContextCanceled(t *testing.T) {
 }
 
 func TestDefragStaleLabelCleanupTick_ScopedToPool(t *testing.T) {
-	pool := newDefragTestPool("pool-a", "30m")
+	pool := newDefragTestPool()
 	staleSince := time.Now().Add(-2 * time.Hour)
 
 	nodeA := newDefragDrainingNode("node-a", "pool-a", staleSince)
@@ -436,7 +481,7 @@ func TestDefragStaleLabelCleanupTick_ScopedToPool(t *testing.T) {
 }
 
 func TestDefragStaleLabelCleanupTick_UsesGPUNodePoolWhenNodePoolLabelMissing(t *testing.T) {
-	pool := newDefragTestPool("pool-a", "30m")
+	pool := newDefragTestPool()
 	staleSince := time.Now().Add(-2 * time.Hour)
 
 	node := newDefragDrainingNodeWithoutPoolLabel("node-a", staleSince)
@@ -455,7 +500,7 @@ func TestDefragStaleLabelCleanupTick_UsesGPUNodePoolWhenNodePoolLabelMissing(t *
 }
 
 func TestDefragDrainWatcherTick_ScopedToPool(t *testing.T) {
-	pool := newDefragTestPool("pool-a", "30m")
+	pool := newDefragTestPool()
 	nodeB := newDefragDrainingNode("node-b", "pool-b", time.Now().Add(-10*time.Minute))
 
 	r, kubeClient := newDefragControllerTestReconciler(t, pool, nodeB)
@@ -473,7 +518,7 @@ func TestDefragDrainWatcherTick_ScopedToPool(t *testing.T) {
 }
 
 func TestDefragDrainWatcherTick_UsesGPUNodePoolWhenNodePoolLabelMissing(t *testing.T) {
-	pool := newDefragTestPool("pool-a", "30m")
+	pool := newDefragTestPool()
 	node := newDefragDrainingNodeWithoutPoolLabel("node-a", time.Now().Add(-10*time.Minute))
 	gpuNode := newDefragGPUNode("node-a", "pool-a")
 
@@ -609,16 +654,16 @@ func newDefragControllerTestReconciler(
 	}, kubeClient
 }
 
-func newDefragTestPool(name, maxDuration string) *tfv1.GPUPool {
+func newDefragTestPool() *tfv1.GPUPool {
 	return &tfv1.GPUPool{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: "pool-a"},
 		Spec: tfv1.GPUPoolSpec{
 			NodeManagerConfig: &tfv1.NodeManagerConfig{
 				NodeCompaction: &tfv1.NodeCompaction{
 					Defrag: &tfv1.NodeDefragConfig{
 						Enabled:     true,
 						Schedule:    "0 3 * * *",
-						MaxDuration: maxDuration,
+						MaxDuration: "30m",
 					},
 				},
 			},
