@@ -2,6 +2,7 @@ package workload
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -22,6 +23,13 @@ type State struct {
 	WorkerUsageSamplers   map[string]*metrics.WorkerUsageSampler
 	WorkerUsageAggregator *metrics.WorkerUsageAggregator
 	HistoryPeriod         time.Duration
+
+	// Mu guards the maps and field writes against concurrent metrics-loader
+	// goroutines (AddSample) and the autoscaler main loop (UpdateWorkloadState).
+	// Public State methods take Mu themselves; private helpers used inside the
+	// handler (e.g. updateCurrentActiveWorkers, updateHistoryPeriod) assume
+	// the caller already holds Mu.
+	Mu sync.Mutex
 }
 
 func NewWorkloadState() *State {
@@ -71,6 +79,9 @@ func (w *State) ShouldScaleResource(name tfv1.ResourceName) bool {
 }
 
 func (w *State) IsRecommendationAppliedToAllWorkers() bool {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
+
 	if w.Status.Recommendation == nil {
 		return true
 	}
@@ -128,6 +139,8 @@ func (w *State) updateCurrentActiveWorkers(podList *corev1.PodList) {
 }
 
 func (w *State) AddSample(sample *metrics.WorkerUsage) {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
 	sampler, exists := w.WorkerUsageSamplers[sample.WorkerName]
 	if !exists {
 		sampler = metrics.NewWorkerUsageSampler()

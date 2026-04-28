@@ -57,6 +57,18 @@ func (h *handler) SetEventRecorder(recorder record.EventRecorder, scheme *runtim
 }
 
 func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload) error {
+	// List workers outside the State lock to avoid blocking AddSample on the
+	// API server round-trip; only the field/map mutations need exclusive access.
+	workerList := &corev1.PodList{}
+	if err := h.List(ctx, workerList,
+		client.InNamespace(workload.Namespace),
+		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
+		return err
+	}
+
+	workloadState.Mu.Lock()
+	defer workloadState.Mu.Unlock()
+
 	workloadState.Namespace = workload.Namespace
 	workloadState.Name = workload.Name
 	workloadState.Spec = workload.Spec
@@ -67,12 +79,6 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 		workloadState.updateHistoryPeriod(workload.Spec.AutoScalingConfig.AutoSetResources.HistoryDataPeriod)
 	}
 
-	workerList := &corev1.PodList{}
-	if err := h.List(ctx, workerList,
-		client.InNamespace(workloadState.Namespace),
-		client.MatchingLabels{constants.WorkloadKey: workloadState.Name}); err != nil {
-		return err
-	}
 	workloadState.updateCurrentActiveWorkers(workerList)
 	return nil
 }
@@ -81,12 +87,23 @@ func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, workload *S
 	// If the latest recommendation has not been applied to all workers,
 	// we need to retry the update
 	if recommendation == nil && !workload.IsRecommendationAppliedToAllWorkers() {
+		workload.Mu.Lock()
 		recommendation = workload.Status.Recommendation
+		workload.Mu.Unlock()
 	}
 
 	if recommendation != nil {
+		// Snapshot the worker map under the State lock to avoid concurrent map
+		// iteration with metrics-loader goroutines / main loop reloads.
+		workload.Mu.Lock()
+		workers := make([]*corev1.Pod, 0, len(workload.CurrentActiveWorkers))
+		for _, w := range workload.CurrentActiveWorkers {
+			workers = append(workers, w)
+		}
 		workload.Status.AppliedRecommendedReplicas = 0
-		for _, worker := range workload.CurrentActiveWorkers {
+		workload.Mu.Unlock()
+
+		for _, worker := range workers {
 			if isWorkerHasDedicatedGPU(worker) {
 				continue
 			}
@@ -95,7 +112,9 @@ func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, workload *S
 				log.FromContext(ctx).Error(err, "failed to update worker resources", "worker", worker.Name)
 				continue
 			}
+			workload.Mu.Lock()
 			workload.Status.AppliedRecommendedReplicas++
+			workload.Mu.Unlock()
 		}
 	}
 
@@ -294,13 +313,22 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 }
 
 func (h *handler) GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, error) {
+	// Snapshot under the State lock; the iteration below must not race with
+	// AddSample / UpdateWorkloadState mutating CurrentActiveWorkers.
+	workload.Mu.Lock()
 	if len(workload.CurrentActiveWorkers) <= 0 {
+		workload.Mu.Unlock()
 		return nil, nil
 	}
+	workers := make([]*corev1.Pod, 0, len(workload.CurrentActiveWorkers))
+	for _, w := range workload.CurrentActiveWorkers {
+		workers = append(workers, w)
+	}
+	workload.Mu.Unlock()
 
 	gpuStore, _, allocRequests := h.allocator.GetAllocationInfo()
 	gpuToWorkers := map[*tfv1.GPU][]*corev1.Pod{}
-	for _, worker := range workload.CurrentActiveWorkers {
+	for _, worker := range workers {
 		allocated, exists := allocRequests[string(worker.UID)]
 		if !exists || allocated == nil {
 			return nil, fmt.Errorf("worker %s has not allocated GPUs", worker.Name)
