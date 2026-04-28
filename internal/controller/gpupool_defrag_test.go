@@ -435,6 +435,25 @@ func TestDefragStaleLabelCleanupTick_ScopedToPool(t *testing.T) {
 	}
 }
 
+func TestDefragStaleLabelCleanupTick_UsesGPUNodePoolWhenNodePoolLabelMissing(t *testing.T) {
+	pool := newDefragTestPool("pool-a", "30m")
+	staleSince := time.Now().Add(-2 * time.Hour)
+
+	node := newDefragDrainingNodeWithoutPoolLabel("node-a", staleSince)
+	gpuNode := newDefragGPUNode("node-a", "pool-a")
+
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, node, gpuNode)
+	r.defragStaleLabelCleanupTick(context.Background(), pool)
+
+	updated := &corev1.Node{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: node.Name}, updated); err != nil {
+		t.Fatalf("get updated node: %v", err)
+	}
+	if _, exists := updated.Labels[constants.DefragDrainingLabel]; exists {
+		t.Fatalf("expected drain label to be cleared via GPUNode pool ownership, labels=%v", updated.Labels)
+	}
+}
+
 func TestDefragDrainWatcherTick_ScopedToPool(t *testing.T) {
 	pool := newDefragTestPool("pool-a", "30m")
 	nodeB := newDefragDrainingNode("node-b", "pool-b", time.Now().Add(-10*time.Minute))
@@ -450,6 +469,64 @@ func TestDefragDrainWatcherTick_ScopedToPool(t *testing.T) {
 	}
 	if updated.Labels[constants.DefragDrainingLabel] != constants.TrueStringValue {
 		t.Fatalf("expected foreign-pool drain label to remain, labels=%v", updated.Labels)
+	}
+}
+
+func TestDefragDrainWatcherTick_UsesGPUNodePoolWhenNodePoolLabelMissing(t *testing.T) {
+	pool := newDefragTestPool("pool-a", "30m")
+	node := newDefragDrainingNodeWithoutPoolLabel("node-a", time.Now().Add(-10*time.Minute))
+	gpuNode := newDefragGPUNode("node-a", "pool-a")
+
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, node, gpuNode)
+	r.defragDrainingNodes.Store(node.Name, time.Now().Add(-time.Minute))
+
+	r.defragDrainWatcherTick(context.Background(), pool)
+
+	updated := &corev1.Node{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: node.Name}, updated); err != nil {
+		t.Fatalf("get updated node: %v", err)
+	}
+	if _, exists := updated.Labels[constants.DefragDrainingLabel]; exists {
+		t.Fatalf("expected drain label to be cleared via GPUNode pool ownership, labels=%v", updated.Labels)
+	}
+}
+
+func TestDefragDrainingLabelPatch_IncludesAndClearsPoolOwner(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
+	r, kubeClient := newDefragControllerTestReconciler(t, node)
+
+	if err := r.applyDefragDrainingLabel(context.Background(), node.Name, "pool-a"); err != nil {
+		t.Fatalf("apply drain label: %v", err)
+	}
+
+	updated := &corev1.Node{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: node.Name}, updated); err != nil {
+		t.Fatalf("get updated node: %v", err)
+	}
+	if updated.Labels[constants.DefragDrainingLabel] != constants.TrueStringValue {
+		t.Fatalf("expected drain label, labels=%v", updated.Labels)
+	}
+	if updated.Annotations[constants.DefragDrainingPoolAnnotation] != "pool-a" {
+		t.Fatalf("expected drain pool annotation, annotations=%v", updated.Annotations)
+	}
+	if updated.Annotations[constants.DefragDrainingSinceAnnotation] == "" {
+		t.Fatalf("expected drain since annotation, annotations=%v", updated.Annotations)
+	}
+
+	if err := r.clearDefragDrainingLabel(context.Background(), node.Name); err != nil {
+		t.Fatalf("clear drain label: %v", err)
+	}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: node.Name}, updated); err != nil {
+		t.Fatalf("get cleared node: %v", err)
+	}
+	if _, exists := updated.Labels[constants.DefragDrainingLabel]; exists {
+		t.Fatalf("expected drain label cleared, labels=%v", updated.Labels)
+	}
+	if _, exists := updated.Annotations[constants.DefragDrainingPoolAnnotation]; exists {
+		t.Fatalf("expected drain pool annotation cleared, annotations=%v", updated.Annotations)
+	}
+	if _, exists := updated.Annotations[constants.DefragDrainingSinceAnnotation]; exists {
+		t.Fatalf("expected drain since annotation cleared, annotations=%v", updated.Annotations)
 	}
 }
 
@@ -559,6 +636,31 @@ func newDefragDrainingNode(name, poolName string, since time.Time) *corev1.Node 
 			},
 			Annotations: map[string]string{
 				constants.DefragDrainingSinceAnnotation: since.Format(time.RFC3339),
+			},
+		},
+	}
+}
+
+func newDefragDrainingNodeWithoutPoolLabel(name string, since time.Time) *corev1.Node {
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				constants.DefragDrainingLabel: constants.TrueStringValue,
+			},
+			Annotations: map[string]string{
+				constants.DefragDrainingSinceAnnotation: since.Format(time.RFC3339),
+			},
+		},
+	}
+}
+
+func newDefragGPUNode(name, poolName string) *tfv1.GPUNode {
+	return &tfv1.GPUNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, poolName): constants.TrueStringValue,
 			},
 		},
 	}

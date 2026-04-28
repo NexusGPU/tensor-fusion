@@ -201,6 +201,9 @@ const (
 
 	// RFC3339 time when the drain label was applied.
 	DefragDrainingSinceAnnotation = Domain + "/defrag-draining-since"
+
+	// GPUPool that owns the current defrag drain operation.
+	DefragDrainingPoolAnnotation = Domain + "/defrag-draining-pool"
 )
 
 const (

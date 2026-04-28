@@ -410,7 +410,7 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 		"utilization", cand.utilizationScore, "workerCount", len(cand.workerPods))
 
 	// Label the source node before simulation so it cannot be chosen again.
-	if err := r.applyDefragDrainingLabel(ctx, cand.nodeName); err != nil {
+	if err := r.applyDefragDrainingLabel(ctx, cand.nodeName, pool.Name); err != nil {
 		l.Error(err, "patch draining label failed; skip candidate")
 		return
 	}
@@ -931,7 +931,6 @@ func (r *GPUPoolCompactionReconciler) defragDrainWatcherTick(ctx context.Context
 		return
 	}
 	nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
-	poolKey := fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name)
 
 	r.defragDrainingNodes.Range(func(k, v any) bool {
 		nodeName, _ := k.(string)
@@ -945,7 +944,13 @@ func (r *GPUPoolCompactionReconciler) defragDrainWatcherTick(ctx context.Context
 			log.FromContext(ctx).Error(err, "get draining node in watcher", "node", nodeName)
 			return true
 		}
-		if node.Labels[poolKey] != constants.TrueStringValue {
+		belongs, err := r.defragNodeBelongsToPool(ctx, pool.Name, node)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "check draining node pool ownership",
+				"node", nodeName, "pool", pool.Name)
+			return true
+		}
+		if !belongs {
 			return true
 		}
 
@@ -980,8 +985,7 @@ func (r *GPUPoolCompactionReconciler) defragStaleLabelCleanupTick(ctx context.Co
 
 	nodeList := &corev1.NodeList{}
 	if err := r.List(ctx, nodeList, client.MatchingLabels{
-		constants.DefragDrainingLabel:                                      constants.TrueStringValue,
-		fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): constants.TrueStringValue,
+		constants.DefragDrainingLabel: constants.TrueStringValue,
 	}); err != nil {
 		log.FromContext(ctx).Error(err, "list draining nodes for stale cleanup")
 		return
@@ -989,6 +993,16 @@ func (r *GPUPoolCompactionReconciler) defragStaleLabelCleanupTick(ctx context.Co
 	now := time.Now()
 	for i := range nodeList.Items {
 		n := &nodeList.Items[i]
+		belongs, err := r.defragNodeBelongsToPool(ctx, pool.Name, n)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "check stale draining node pool ownership",
+				"node", n.Name, "pool", pool.Name)
+			continue
+		}
+		if !belongs {
+			continue
+		}
+
 		raw := n.Annotations[constants.DefragDrainingSinceAnnotation]
 		if raw == "" {
 			_ = r.clearDefragDrainingLabel(ctx, n.Name)
@@ -1055,8 +1069,33 @@ func (r *GPUPoolCompactionReconciler) scheduleDefragDrainWatcherBootstrap(mgr ma
 
 // ----- node label / annotation helpers ---------------------------------
 
-// applyDefragDrainingLabel writes the drain label and since-annotation.
-func (r *GPUPoolCompactionReconciler) applyDefragDrainingLabel(ctx context.Context, nodeName string) error {
+func (r *GPUPoolCompactionReconciler) defragNodeBelongsToPool(ctx context.Context, poolName string, node *corev1.Node) (bool, error) {
+	if node == nil {
+		return false, nil
+	}
+	if node.Annotations != nil {
+		if owner := node.Annotations[constants.DefragDrainingPoolAnnotation]; owner != "" {
+			return owner == poolName, nil
+		}
+	}
+
+	poolKey := fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, poolName)
+	if node.Labels != nil && node.Labels[poolKey] == constants.TrueStringValue {
+		return true, nil
+	}
+
+	gpuNode := &tfv1.GPUNode{}
+	if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return gpuNode.Labels[poolKey] == constants.TrueStringValue, nil
+}
+
+// applyDefragDrainingLabel writes the drain label and annotations.
+func (r *GPUPoolCompactionReconciler) applyDefragDrainingLabel(ctx context.Context, nodeName string, poolName string) error {
 	patch := map[string]any{
 		"metadata": map[string]any{
 			"labels": map[string]any{
@@ -1064,6 +1103,7 @@ func (r *GPUPoolCompactionReconciler) applyDefragDrainingLabel(ctx context.Conte
 			},
 			"annotations": map[string]any{
 				constants.DefragDrainingSinceAnnotation: time.Now().Format(time.RFC3339),
+				constants.DefragDrainingPoolAnnotation:  poolName,
 			},
 		},
 	}
@@ -1084,6 +1124,7 @@ func (r *GPUPoolCompactionReconciler) clearDefragDrainingLabel(ctx context.Conte
 			},
 			"annotations": map[string]any{
 				constants.DefragDrainingSinceAnnotation: nil,
+				constants.DefragDrainingPoolAnnotation:  nil,
 			},
 		},
 	}
