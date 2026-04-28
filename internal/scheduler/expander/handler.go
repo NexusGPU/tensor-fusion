@@ -49,6 +49,7 @@ type NodeExpander struct {
 }
 
 type schedulerFitPodAPI interface {
+	UpdateNodeInfoSnapshot(ctx context.Context) error
 	FindNodesThatFitPod(
 		ctx context.Context,
 		schedFramework framework.Framework,
@@ -398,7 +399,10 @@ func (e *NodeExpander) simulateSchedulingWithoutGPU(ctx context.Context, pod *co
 	}
 	fitAPI, ok := any(e.scheduler).(schedulerFitPodAPI)
 	if !ok {
-		return nil, fmt.Errorf("scheduler patch missing: run `make vendor` or `bash scripts/patch-scheduler.sh`")
+		return nil, fmt.Errorf("scheduler patch missing FindNodesThatFitPod/UpdateNodeInfoSnapshot: run `make vendor` or `bash scripts/patch-scheduler.sh`")
+	}
+	if err := fitAPI.UpdateNodeInfoSnapshot(ctx); err != nil {
+		return nil, fmt.Errorf("refresh scheduler snapshot before expansion simulation: %w", err)
 	}
 	delete(pod.Labels, constants.LabelComponent)
 	scheduleResult, _, err := fitAPI.FindNodesThatFitPod(ctx, fwkInstance, state, pod)

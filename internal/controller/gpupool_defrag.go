@@ -3,6 +3,7 @@
 //
 // +kubebuilder:rbac:groups=core,resources=pods/eviction,verbs=create
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;patch;update
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list
 package controller
 
 import (
@@ -25,6 +26,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
@@ -56,6 +58,7 @@ const (
 	defragEventPodEvictFailed    = "DefragPodEvictFailed"
 	defragEventAbortNode         = "DefragAbortNode"
 	defragEventSkipUnschedulable = "DefragSkipUnschedulable"
+	defragEventSkipPDBBlocked    = "DefragSkipPDBBlocked"
 	defragEventNodeDrained       = "DefragNodeDrained"
 	defragEventDrainTimeout      = "DefragDrainTimeout"
 	defragEventStaleLabelCleared = "DefragStaleLabelCleared"
@@ -63,13 +66,29 @@ const (
 )
 
 // Mirrored from the scheduler expander to avoid an import cycle.
+type schedulerSnapshotRefreshAPI interface {
+	UpdateNodeInfoSnapshot(ctx context.Context) error
+}
+
 type schedulerFitPodAPI interface {
+	schedulerSnapshotRefreshAPI
 	FindNodesThatFitPod(
 		ctx context.Context,
 		schedFramework framework.Framework,
 		state fwk.CycleState,
 		pod *corev1.Pod,
 	) ([]fwk.NodeInfo, framework.Diagnosis, error)
+}
+
+func refreshSchedulerNodeInfoSnapshot(ctx context.Context, sched any) error {
+	if sched == nil {
+		return errors.New("scheduler is nil")
+	}
+	refresher, ok := sched.(schedulerSnapshotRefreshAPI)
+	if !ok {
+		return errors.New("scheduler vendor patch missing: UpdateNodeInfoSnapshot not available")
+	}
+	return refresher.UpdateNodeInfoSnapshot(ctx)
 }
 
 // Snapshot of the most recent defrag run for a pool.
@@ -81,6 +100,7 @@ type defragRunStats struct {
 	EvictedPods        int       `json:"evictedPods"`
 	EvictionFailures   int       `json:"evictionFailures"`
 	UnmovableNodes     int       `json:"unmovableNodes"`
+	PDBBlockedNodes    int       `json:"pdbBlockedNodes"`
 	FreshPodSkips      int       `json:"freshPodSkips"`
 	DeadlineExceeded   bool      `json:"deadlineExceeded"`
 	DrainingCandidates []string  `json:"drainingCandidates,omitempty"`
@@ -206,9 +226,9 @@ func (r *GPUPoolCompactionReconciler) runDefrag(
 			l.Error(err, "failed to patch pool.Status.LastDefragTime")
 		}
 		r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventFinished,
-			"defrag run finished: candidates=%d processed=%d evicted=%d failed=%d unmovable=%d freshSkip=%d deadline=%t",
+			"defrag run finished: candidates=%d processed=%d evicted=%d failed=%d unmovable=%d pdbBlocked=%d freshSkip=%d deadline=%t",
 			stats.CandidateNodes, stats.ProcessedNodes, stats.EvictedPods, stats.EvictionFailures,
-			stats.UnmovableNodes, stats.FreshPodSkips, stats.DeadlineExceeded)
+			stats.UnmovableNodes, stats.PDBBlockedNodes, stats.FreshPodSkips, stats.DeadlineExceeded)
 	}()
 
 	candidates, err := r.collectDefragCandidates(ctx, pool)
@@ -465,6 +485,26 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 		return
 	}
 
+	pdbBlocked, pdbReason, err := r.checkDefragPDBPreflight(ctx, cand)
+	if err != nil {
+		stats.EvictionFailures++
+		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventAbortNode,
+			"node %s: eviction preflight failed: %v", cand.nodeName, err)
+		if clearErr := r.clearDefragDrainingLabel(ctx, cand.nodeName); clearErr != nil {
+			l.Error(clearErr, "clear draining label failed after eviction preflight error")
+		}
+		return
+	}
+	if pdbBlocked {
+		stats.PDBBlockedNodes++
+		r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventSkipPDBBlocked,
+			"node %s skipped before eviction: %s", cand.nodeName, pdbReason)
+		if err := r.clearDefragDrainingLabel(ctx, cand.nodeName); err != nil {
+			l.Error(err, "clear draining label failed after PDB preflight block")
+		}
+		return
+	}
+
 	// Abort the node on the first eviction failure and leave stale cleanup
 	// to remove the label later.
 	allSucceeded := r.evictWorkerPods(ctx, pool, cand, stats, l)
@@ -494,7 +534,7 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 ) (bool, error) {
 	fitAPI, ok := any(r.Scheduler).(schedulerFitPodAPI)
 	if !ok {
-		return false, errors.New("scheduler vendor patch missing: FindNodesThatFitPod not available")
+		return false, errors.New("scheduler vendor patch missing: FindNodesThatFitPod/UpdateNodeInfoSnapshot not available")
 	}
 
 	// Build a local budget for every target node except the source.
@@ -508,8 +548,11 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 	if schedFramework == nil {
 		return false, fmt.Errorf("scheduler framework not found for scheduler %q", profileName)
 	}
+	if err := fitAPI.UpdateNodeInfoSnapshot(ctx); err != nil {
+		return false, fmt.Errorf("refresh scheduler snapshot before defrag simulation: %w", err)
+	}
 
-	budget, err := buildDefragNodeBudgets(
+	budget := buildDefragNodeBudgets(
 		pool.Name,
 		cand.nodeName,
 		nodeGpuStore,
@@ -517,9 +560,6 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 		schedFramework.SnapshotSharedLister().NodeInfos(),
 		r.snapshotDefragDrainingNodes(),
 	)
-	if err != nil {
-		return false, err
-	}
 	if len(budget) == 0 {
 		return false, nil
 	}
@@ -732,7 +772,7 @@ func buildDefragNodeBudgets(
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{},
 	nodeInfoLister framework.NodeInfoLister,
 	drainingNodes map[string]struct{},
-) (map[string]*nodeBudget, error) {
+) map[string]*nodeBudget {
 	budget := make(map[string]*nodeBudget, len(nodeGpuStore))
 	for nodeName, gpus := range nodeGpuStore {
 		if nodeName == sourceNode {
@@ -743,7 +783,10 @@ func buildDefragNodeBudgets(
 		}
 		nodeInfo, err := nodeInfoLister.Get(nodeName)
 		if err != nil {
-			return nil, fmt.Errorf("get scheduler node info for %s: %w", nodeName, err)
+			// Allocator state can briefly outlive scheduler/cache state for
+			// deleted nodes. A missing target node is unusable for defrag, but
+			// it must not make the whole source candidate look unmovable.
+			continue
 		}
 		if node := nodeInfo.Node(); node == nil || node.Labels[constants.NodeDeletionMark] == constants.TrueStringValue {
 			continue
@@ -768,7 +811,7 @@ func buildDefragNodeBudgets(
 			nodeInfo:    nodeInfo.Snapshot(),
 		}
 	}
-	return budget, nil
+	return budget
 }
 
 func (r *GPUPoolCompactionReconciler) snapshotDefragDrainingNodes() map[string]struct{} {
@@ -831,6 +874,9 @@ func (r *GPUPoolCompactionReconciler) waitSchedulerObservedDefragLabel(
 	defer cancel()
 	return waitForSchedulerNodeDefragLabel(
 		waitCtx,
+		func(ctx context.Context) error {
+			return refreshSchedulerNodeInfoSnapshot(ctx, r.Scheduler)
+		},
 		schedFramework.SnapshotSharedLister().NodeInfos(),
 		cand.nodeName,
 		defragSchedulerCacheSyncPoll,
@@ -839,6 +885,7 @@ func (r *GPUPoolCompactionReconciler) waitSchedulerObservedDefragLabel(
 
 func waitForSchedulerNodeDefragLabel(
 	ctx context.Context,
+	refreshSnapshot func(context.Context) error,
 	nodeInfoLister framework.NodeInfoLister,
 	nodeName string,
 	pollInterval time.Duration,
@@ -852,7 +899,16 @@ func waitForSchedulerNodeDefragLabel(
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	var lastRefreshErr error
 	for {
+		if refreshSnapshot != nil {
+			if err := refreshSnapshot(ctx); err != nil {
+				lastRefreshErr = err
+			} else {
+				lastRefreshErr = nil
+			}
+		}
+
 		nodeInfo, err := nodeInfoLister.Get(nodeName)
 		if err == nil {
 			if node := nodeInfo.Node(); node != nil &&
@@ -863,6 +919,9 @@ func waitForSchedulerNodeDefragLabel(
 
 		select {
 		case <-ctx.Done():
+			if lastRefreshErr != nil {
+				return fmt.Errorf("refresh scheduler node info snapshot while waiting for defrag drain label on node %s: %w", nodeName, lastRefreshErr)
+			}
 			return fmt.Errorf("wait for scheduler cache to observe defrag drain label on node %s: %w", nodeName, ctx.Err())
 		case <-ticker.C:
 		}
@@ -886,6 +945,55 @@ func subtractGPURequest(gpu *tfv1.GPU, req *tfv1.AllocRequest) {
 }
 
 // ----- eviction ---------------------------------------------------------
+
+func (r *GPUPoolCompactionReconciler) checkDefragPDBPreflight(
+	ctx context.Context,
+	cand *defragCandidate,
+) (bool, string, error) {
+	if r.KubeClient == nil {
+		return false, "", errors.New("kube client is nil")
+	}
+	pdbsByNamespace := map[string][]policyv1.PodDisruptionBudget{}
+	for _, pod := range cand.workerPods {
+		if pod == nil {
+			continue
+		}
+		if pod.Namespace == "" {
+			return false, "", fmt.Errorf("pod %s has empty namespace", pod.Name)
+		}
+		pdbs, ok := pdbsByNamespace[pod.Namespace]
+		if !ok {
+			pdbList, err := r.KubeClient.PolicyV1().
+				PodDisruptionBudgets(pod.Namespace).
+				List(ctx, metav1.ListOptions{})
+			if err != nil {
+				return false, "", fmt.Errorf("list PDBs for namespace %s: %w", pod.Namespace, err)
+			}
+			pdbs = pdbList.Items
+			pdbsByNamespace[pod.Namespace] = pdbs
+		}
+		for i := range pdbs {
+			pdb := &pdbs[i]
+			selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
+			if err != nil {
+				return false, "", fmt.Errorf("parse PDB selector %s/%s: %w", pdb.Namespace, pdb.Name, err)
+			}
+			if selector == nil {
+				selector = labels.Nothing()
+			}
+			if !selector.Matches(labels.Set(pod.Labels)) {
+				continue
+			}
+			if pdb.Status.DisruptionsAllowed <= 0 {
+				return true, fmt.Sprintf(
+					"pod %s/%s is blocked by PDB %s/%s: disruptionsAllowed=%d",
+					pod.Namespace, pod.Name, pdb.Namespace, pdb.Name, pdb.Status.DisruptionsAllowed,
+				), nil
+			}
+		}
+	}
+	return false, "", nil
+}
 
 func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 	ctx context.Context,
