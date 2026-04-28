@@ -88,11 +88,11 @@ func TestHandleGetPodsModernResponse(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 
-	worker := newTestWorker("worker-uid", "tensor-fusion-sys", "worker-pod")
+	worker := newTestWorker()
 	allocation := &hyperapi.WorkerAllocation{
 		WorkerInfo: worker,
 		DeviceInfos: []*hyperapi.DeviceInfo{
-			newTestDevice("gpu-1234"),
+			newTestDevice(),
 		},
 	}
 
@@ -154,11 +154,11 @@ func TestHandleGetPodsLegacyResponse(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 
-	worker := newTestWorker("worker-uid", "tensor-fusion-sys", "worker-pod")
+	worker := newTestWorker()
 	allocation := &hyperapi.WorkerAllocation{
 		WorkerInfo: worker,
 		DeviceInfos: []*hyperapi.DeviceInfo{
-			newTestDevice("gpu-1234"),
+			newTestDevice(),
 		},
 	}
 
@@ -192,11 +192,11 @@ func TestHandleInitProcess(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 
-	worker := newTestWorker("worker-uid", "tensor-fusion-sys", "worker-pod")
+	worker := newTestWorker()
 	allocation := &hyperapi.WorkerAllocation{
 		WorkerInfo: worker,
 		DeviceInfos: []*hyperapi.DeviceInfo{
-			newTestDevice("gpu-1234"),
+			newTestDevice(),
 		},
 	}
 
@@ -255,11 +255,11 @@ func TestHandleInitProcess(t *testing.T) {
 	// Shared memory file creation requires liblimiter.so (tested in limiter_test.cc).
 }
 
-func newTestWorker(workerUID, namespace, podName string) *hyperapi.WorkerInfo {
+func newTestWorker() *hyperapi.WorkerInfo {
 	return &hyperapi.WorkerInfo{
-		WorkerUID:     workerUID,
-		Namespace:     namespace,
-		WorkerName:    podName,
+		WorkerUID:     "worker-uid",
+		Namespace:     "tensor-fusion-sys",
+		WorkerName:    "worker-pod",
 		QoS:           tfv1.QoSLow,
 		IsolationMode: hyperapi.IsolationMode(tfv1.IsolationModeShared),
 		Limits: tfv1.Resource{
@@ -270,9 +270,9 @@ func newTestWorker(workerUID, namespace, podName string) *hyperapi.WorkerInfo {
 	}
 }
 
-func newTestDevice(uuid string) *hyperapi.DeviceInfo {
+func newTestDevice() *hyperapi.DeviceInfo {
 	return &hyperapi.DeviceInfo{
-		UUID:             uuid,
+		UUID:             "gpu-1234",
 		Index:            0,
 		TotalMemoryBytes: 24 << 30,
 		MaxTflops:        60,
@@ -295,8 +295,8 @@ func TestEnsureWorkerSharedMemory_PreservesExistingState(t *testing.T) {
 	const podName = "worker-pod"
 
 	allocation := &hyperapi.WorkerAllocation{
-		WorkerInfo:  newTestWorker("worker-uid", namespace, podName),
-		DeviceInfos: []*hyperapi.DeviceInfo{newTestDevice("gpu-1234")},
+		WorkerInfo:  newTestWorker(),
+		DeviceInfos: []*hyperapi.DeviceInfo{newTestDevice()},
 	}
 
 	handler := NewLegacyHandler(nil, nil, nil, nil)
@@ -357,8 +357,8 @@ func TestEnsureWorkerSharedMemory_OpenErrorDoesNotRecreate(t *testing.T) {
 	const podName = "worker-pod"
 
 	allocation := &hyperapi.WorkerAllocation{
-		WorkerInfo:  newTestWorker("worker-uid", namespace, podName),
-		DeviceInfos: []*hyperapi.DeviceInfo{newTestDevice("gpu-1234")},
+		WorkerInfo:  newTestWorker(),
+		DeviceInfos: []*hyperapi.DeviceInfo{newTestDevice()},
 	}
 
 	handler := NewLegacyHandler(nil, nil, nil, nil)
