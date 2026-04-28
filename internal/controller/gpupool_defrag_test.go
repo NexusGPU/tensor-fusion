@@ -435,7 +435,7 @@ func TestRunDefrag_PersistsLastDefragTimeWhenRunContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	pool := newDefragTestPool("pool-a", "30m")
+	pool := newDefragTestPool()
 	r, kubeClient := newDefragControllerTestReconciler(t, pool)
 	runStart := time.Now().Add(-time.Minute).Round(time.Second)
 
@@ -454,7 +454,7 @@ func TestRunDefrag_PersistsLastDefragTimeWhenRunContextCanceled(t *testing.T) {
 }
 
 func TestDefragStaleLabelCleanupTick_ScopedToPool(t *testing.T) {
-	pool := newDefragTestPool("pool-a", "30m")
+	pool := newDefragTestPool()
 	staleSince := time.Now().Add(-2 * time.Hour)
 
 	nodeA := newDefragDrainingNode("node-a", "pool-a", staleSince)
@@ -481,7 +481,7 @@ func TestDefragStaleLabelCleanupTick_ScopedToPool(t *testing.T) {
 }
 
 func TestDefragStaleLabelCleanupTick_UsesGPUNodePoolWhenNodePoolLabelMissing(t *testing.T) {
-	pool := newDefragTestPool("pool-a", "30m")
+	pool := newDefragTestPool()
 	staleSince := time.Now().Add(-2 * time.Hour)
 
 	node := newDefragDrainingNodeWithoutPoolLabel("node-a", staleSince)
@@ -500,7 +500,7 @@ func TestDefragStaleLabelCleanupTick_UsesGPUNodePoolWhenNodePoolLabelMissing(t *
 }
 
 func TestDefragDrainWatcherTick_ScopedToPool(t *testing.T) {
-	pool := newDefragTestPool("pool-a", "30m")
+	pool := newDefragTestPool()
 	nodeB := newDefragDrainingNode("node-b", "pool-b", time.Now().Add(-10*time.Minute))
 
 	r, kubeClient := newDefragControllerTestReconciler(t, pool, nodeB)
@@ -518,7 +518,7 @@ func TestDefragDrainWatcherTick_ScopedToPool(t *testing.T) {
 }
 
 func TestDefragDrainWatcherTick_UsesGPUNodePoolWhenNodePoolLabelMissing(t *testing.T) {
-	pool := newDefragTestPool("pool-a", "30m")
+	pool := newDefragTestPool()
 	node := newDefragDrainingNodeWithoutPoolLabel("node-a", time.Now().Add(-10*time.Minute))
 	gpuNode := newDefragGPUNode("node-a", "pool-a")
 
@@ -654,16 +654,16 @@ func newDefragControllerTestReconciler(
 	}, kubeClient
 }
 
-func newDefragTestPool(name, maxDuration string) *tfv1.GPUPool {
+func newDefragTestPool() *tfv1.GPUPool {
 	return &tfv1.GPUPool{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: "pool-a"},
 		Spec: tfv1.GPUPoolSpec{
 			NodeManagerConfig: &tfv1.NodeManagerConfig{
 				NodeCompaction: &tfv1.NodeCompaction{
 					Defrag: &tfv1.NodeDefragConfig{
 						Enabled:     true,
 						Schedule:    "0 3 * * *",
-						MaxDuration: maxDuration,
+						MaxDuration: "30m",
 					},
 				},
 			},
