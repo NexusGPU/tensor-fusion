@@ -392,9 +392,12 @@ func AddTFDefaultClientConfBeforePatch(
 
 	if tfInfo.Profile.IsLocalGPU {
 		// Local mode mounts shared data path for worker-hypervisor communication.
-		// Partitioned (MIG) doesn't need it — hardware isolation, no limiter/worker
-		// reads from this hostPath. Skip the volume so the pod spec stays clean.
-		if tfInfo.Profile.Isolation != tfv1.IsolationModePartitioned {
+		// Partitioned (MIG) and shared (whole-card) don't need it — neither has
+		// a limiter or worker that reads this hostPath. Skip the volume so the
+		// pod spec stays clean and we don't leak /run/tensor-fusion into pods
+		// with no consumer.
+		if tfInfo.Profile.Isolation != tfv1.IsolationModePartitioned &&
+			tfInfo.Profile.Isolation != tfv1.IsolationModeShared {
 			pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 				Name: constants.DataVolumeName,
 				VolumeSource: v1.VolumeSource{
@@ -522,12 +525,15 @@ func AddTFDefaultClientConfBeforePatch(
 				// Soft isolation already handled volumes and env in its own block above.
 				continue
 			}
-			if tfInfo.Profile.Isolation == tfv1.IsolationModePartitioned {
-				// Partitioned (MIG) relies on hardware isolation — no limiter, no
-				// worker shm, no hypervisor RPC. Device plugin already sets
-				// NVIDIA_VISIBLE_DEVICES to the MIG UUID, which is everything the
-				// pod actually needs. Skipping the worker-shm mount also avoids
-				// leaking /run/tensor-fusion into a container that has no consumer.
+			if tfInfo.Profile.Isolation == tfv1.IsolationModePartitioned ||
+				tfInfo.Profile.Isolation == tfv1.IsolationModeShared {
+				// Partitioned (MIG/vNPU) relies on hardware isolation; shared
+				// (whole-card) has no isolation at all. Neither needs the
+				// limiter / worker shm or the hypervisor RPC env. Device
+				// plugin or container runtime already exposes the right
+				// device(s) to the pod. Skipping the worker-shm mount also
+				// avoids leaking /run/tensor-fusion into a container that
+				// has no consumer.
 				continue
 			}
 			if useLocalWorkerSidecar {
@@ -1198,14 +1204,20 @@ func SetWorkerContainerSpec(
 	// vgpu.rs limiter will limit to specific devices after Pod started
 	container.Name = constants.TFContainerNameWorker
 	container.Image = GetWorkerImage(workloadProfile.GPUVendor, workerConfig.Image)
-	container.VolumeMounts = append(
-		container.VolumeMounts,
-		v1.VolumeMount{
-			Name:             constants.DataVolumeName,
-			MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
-			SubPathExpr:      constants.TFDataPathWorkerExpr,
-			MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
-		})
+	// Shared mode (whole-card dedicated) has no limiter and no per-pod
+	// quota state for the worker to read or write, so the host-backed
+	// /run/tensor-fusion shm is dead weight for it. Skip the mount so the
+	// worker pod's spec stays clean.
+	if workloadProfile.Isolation != tfv1.IsolationModeShared {
+		container.VolumeMounts = append(
+			container.VolumeMounts,
+			v1.VolumeMount{
+				Name:             constants.DataVolumeName,
+				MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
+				SubPathExpr:      constants.TFDataPathWorkerExpr,
+				MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
+			})
+	}
 	container.Env = append(container.Env, v1.EnvVar{
 		Name: constants.HypervisorIPEnv,
 		ValueFrom: &v1.EnvVarSource{
@@ -1379,16 +1391,20 @@ func AddWorkerConfAfterTemplate(
 		applyProviderRemoteWorkerConfig(spec, workloadProfile.GPUVendor)
 	}
 
-	// Add volume from host for CUDA hot migration and snapshot
-	spec.Volumes = append(spec.Volumes, v1.Volume{
-		Name: constants.DataVolumeName,
-		VolumeSource: v1.VolumeSource{
-			HostPath: &v1.HostPathVolumeSource{
-				Path: constants.TFDataPath,
-				Type: ptr.To(v1.HostPathDirectoryOrCreate),
+	// Add volume from host for CUDA hot migration and snapshot.
+	// Shared (whole-card) workers don't read or write this shm, so skip the
+	// volume to avoid leaking /run/tensor-fusion into the pod spec.
+	if workloadProfile == nil || workloadProfile.Isolation != tfv1.IsolationModeShared {
+		spec.Volumes = append(spec.Volumes, v1.Volume{
+			Name: constants.DataVolumeName,
+			VolumeSource: v1.VolumeSource{
+				HostPath: &v1.HostPathVolumeSource{
+					Path: constants.TFDataPath,
+					Type: ptr.To(v1.HostPathDirectoryOrCreate),
+				},
 			},
-		},
-	})
+		})
+	}
 
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
 	applyAscendRuntimeClassIfNeeded(spec, workloadProfile)

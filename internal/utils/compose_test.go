@@ -254,7 +254,7 @@ var _ = Describe("Compose Utils", func() {
 			Expect(cudaHooksValue).To(Equal("false"))
 		})
 
-		It("should keep local shared mode as embedded worker", func() {
+		It("should keep local shared mode as embedded worker without tf-data shm", func() {
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
 				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
@@ -269,11 +269,14 @@ var _ = Describe("Compose Utils", func() {
 
 			Expect(pod.Spec.InitContainers).To(BeEmpty())
 			Expect(pod.Spec.Containers).To(HaveLen(1))
+			// Shared mode has no limiter and no worker process, so the
+			// hypervisor shm has no consumer in the pod. Skip the mount to
+			// avoid leaking /run/tensor-fusion into pods that don't use it.
 			Expect(hasVolumeMount(
 				pod.Spec.Containers[0].VolumeMounts,
 				constants.DataVolumeName,
 				constants.TFDataPath+constants.SharedMemMountSubPath,
-			)).To(BeTrue())
+			)).To(BeFalse())
 			Expect(hasVolumeMount(
 				pod.Spec.Containers[0].VolumeMounts,
 				constants.TFLibsVolumeName,
