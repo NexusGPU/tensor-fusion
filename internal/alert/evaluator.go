@@ -33,6 +33,13 @@ type AlertEvaluator struct {
 	alertManagerURL string
 	mu              sync.Mutex
 	tickers         map[string]*time.Ticker
+	// stopCh is closed by StopEvaluate to wake up every per-rule goroutine
+	// started by StartEvaluate. Without it, those goroutines block forever
+	// on `<-ticker.C` (the parent context is process-lifetime, not
+	// evaluator-lifetime), and every config hot-reload that calls
+	// UpdateAlertRules → StopEvaluate → StartEvaluate leaves a fresh
+	// batch of evaluator goroutines from the previous rule set behind.
+	stopCh chan struct{}
 }
 
 func NewAlertEvaluator(ctx context.Context, db *metrics.TimeSeriesDB, rules []config.AlertRule, alertManagerURL string) *AlertEvaluator {
@@ -44,6 +51,7 @@ func NewAlertEvaluator(ctx context.Context, db *metrics.TimeSeriesDB, rules []co
 		ctx:             ctx,
 		mu:              sync.Mutex{},
 		tickers:         make(map[string]*time.Ticker),
+		stopCh:          make(chan struct{}),
 	}
 }
 
@@ -64,6 +72,12 @@ func (e *AlertEvaluator) UpdateAlertRules(rules []config.AlertRule) error {
 }
 
 func (e *AlertEvaluator) StartEvaluate() error {
+	// Reset stopCh so the new round of goroutines binds to a fresh signal.
+	// (StopEvaluate closed the previous one to release the prior batch.)
+	if e.stopCh == nil {
+		e.stopCh = make(chan struct{})
+	}
+	stopCh := e.stopCh
 
 	for _, rule := range e.Rules {
 		interval, err := time.ParseDuration(rule.EvaluationInterval)
@@ -83,6 +97,8 @@ func (e *AlertEvaluator) StartEvaluate() error {
 					if _, err := e.evaluate(&rule); err != nil {
 						log.FromContext(e.ctx).Error(err, "failed to evaluate rule", "rule", rule)
 					}
+				case <-stopCh:
+					return
 				case <-e.ctx.Done():
 					return
 				}
@@ -93,9 +109,18 @@ func (e *AlertEvaluator) StartEvaluate() error {
 }
 
 func (e *AlertEvaluator) StopEvaluate() error {
-	// stop all tickers
+	// Stop the underlying tickers AND signal every running per-rule
+	// goroutine to exit. ticker.Stop() alone leaves goroutines blocked on
+	// ticker.C / e.ctx.Done() — and e.ctx is the long-lived parent
+	// context, so the goroutine never returns. Closing stopCh releases
+	// them. A nil-check on the map handles double-stop gracefully.
 	for _, ticker := range e.tickers {
 		ticker.Stop()
+	}
+	e.tickers = make(map[string]*time.Ticker)
+	if e.stopCh != nil {
+		close(e.stopCh)
+		e.stopCh = nil
 	}
 	return nil
 }
