@@ -598,14 +598,16 @@ func AddTFDefaultClientConfBeforePatch(
 				})
 			}
 
-			if useInjectLib && shouldInjectNvidiaVisibleDevices(tfInfo.Profile.GPUVendor) && !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
-				return env.Name == constants.NvidiaVisibleAllDeviceEnv
-			}) {
-				envList = append(envList, v1.EnvVar{
-					Name:  constants.NvidiaVisibleAllDeviceEnv,
-					Value: constants.NvidiaVisibleAllDeviceValue,
-				})
-			}
+			// We deliberately do NOT pre-set NVIDIA_VISIBLE_DEVICES=all here. After
+			// the soft/partitioned/shared `continue`s above, the only case left in
+			// this loop is `hard local sidecar`. For that flow the sidecar worker
+			// holds the real GPU; the client container talks to it over /dev/shm
+			// and does not need direct device access. Pre-setting =all would
+			// override the device plugin's per-card UUID at kubelet merge time
+			// and let the client physically see (and bypass the limiter to use)
+			// every GPU on the node. Letting the device plugin Allocate response
+			// be the single source of truth for NVIDIA_VISIBLE_DEVICES keeps the
+			// per-card boundary intact.
 			if useInjectLib && shouldDisableCudaHooksForLocalSidecarClient(tfInfo.Profile) {
 				envList = appendEnvIfMissing(envList, v1.EnvVar{
 					Name:  constants.EnableCudaHooksEnv,
@@ -1200,8 +1202,12 @@ func SetWorkerContainerSpec(
 		workerConfig = &tfv1.WorkerConfig{}
 	}
 
-	// NOTE: need to set environment variable to make all GPUs visible to the worker,
-	// vgpu.rs limiter will limit to specific devices after Pod started
+	// NVIDIA_VISIBLE_DEVICES is intentionally not set here — the hypervisor's
+	// AllocateWorkerDevices in pkg/hypervisor/worker/allocation.go is the single
+	// source of truth (canonical GPU-<hex> for non-partitioned NVIDIA, MIG-<uuid>
+	// kept untouched for partitioned). Pre-setting any value at pod-spec level
+	// would win over device-plugin envs at kubelet merge time and silently
+	// clobber the per-card or per-MIG boundary.
 	container.Name = constants.TFContainerNameWorker
 	container.Image = GetWorkerImage(workloadProfile.GPUVendor, workerConfig.Image)
 	// Shared mode (whole-card dedicated) has no limiter and no per-pod
@@ -1249,17 +1255,14 @@ func SetWorkerContainerSpec(
 			},
 		},
 	})
-	if shouldInjectNvidiaVisibleDevices(workloadProfile.GPUVendor) {
-		// Soft / hard isolation: let device plugin set NVIDIA_VISIBLE_DEVICES to the allocated GPU UUID.
-		// Partitioned / shared: expose all GPUs (no per-device restriction at this layer).
-		if workloadProfile.Isolation != tfv1.IsolationModeSoft &&
-			workloadProfile.Isolation != tfv1.IsolationModeHard {
-			container.Env = append(container.Env, v1.EnvVar{
-				Name:  constants.NvidiaVisibleAllDeviceEnv,
-				Value: constants.NvidiaVisibleAllDeviceValue,
-			})
-		}
-	}
+	// Intentionally do NOT pre-set NVIDIA_VISIBLE_DEVICES on the worker container.
+	// The hypervisor's AllocateWorkerDevices (pkg/hypervisor/worker/allocation.go)
+	// is the single source of truth: it writes the canonical GPU-<hex> UUID list
+	// for soft / hard / shared isolation, and intentionally lets the provider's
+	// MIG-<uuid> from PartitionResult.envVars stick for partitioned mode. Pod-spec
+	// env wins over device-plugin envs at kubelet merge time, so any pre-set
+	// value here would silently clobber the per-card / per-MIG boundary —
+	// including breaking MIG isolation by exposing the parent card.
 
 	// Only soft isolation preloads the open-source vgpu.rs cuda_limiter (reads limits from shm).
 	// Hard mode relies on the closed-source hard limiter that reads TF_CUDA_SM_PERCENT_LIMIT /

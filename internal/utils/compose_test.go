@@ -248,7 +248,13 @@ var _ = Describe("Compose Utils", func() {
 			value, found := envValue(pod.Spec.Containers[0].Env, constants.ContainerNameEnv)
 			Expect(found).To(BeTrue())
 			Expect(value).To(Equal("main"))
-			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeTrue())
+			// NVIDIA_VISIBLE_DEVICES must NOT be pre-set by the webhook for hard
+			// local sidecar pods. The TF device plugin's Allocate response is the
+			// single source of truth and will populate the specific GPU UUID; a
+			// pod-spec `=all` would override that at kubelet merge time and let
+			// the client container reach every GPU on the node, bypassing the
+			// sidecar limiter's per-card boundary.
+			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeFalse())
 			cudaHooksValue, found := envValue(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)
 			Expect(found).To(BeTrue())
 			Expect(cudaHooksValue).To(Equal("false"))
@@ -542,6 +548,23 @@ var _ = Describe("Compose Utils", func() {
 				"infinity",
 			}, false, false),
 			Entry("worker without nvidia visible env for Ascend", "Ascend", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
+				"./tensor-fusion-worker",
+				"-p",
+				"8000",
+			}, false, false),
+			// Regression: SetWorkerContainerSpec used to inject =all for any
+			// non-soft non-hard isolation, which silently overrode the MIG-<uuid>
+			// the NVIDIA provider returned in PartitionResult.envVars (pod-spec
+			// env wins over device-plugin envs at kubelet merge time). That
+			// would expose the parent card and break MIG isolation. Hold the
+			// line: partitioned worker container must NOT have NVIDIA_VISIBLE_DEVICES
+			// pre-set; the device plugin Allocate response is the only writer.
+			Entry("partitioned worker: no NVIDIA_VISIBLE_DEVICES=all (device plugin keeps MIG-<uuid>)", "NVIDIA", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModePartitioned), []string{
+				"./tensor-fusion-worker",
+				"-p",
+				"8000",
+			}, false, false),
+			Entry("shared worker: no NVIDIA_VISIBLE_DEVICES=all (device plugin writes specific UUID)", "NVIDIA", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModeShared), []string{
 				"./tensor-fusion-worker",
 				"-p",
 				"8000",
