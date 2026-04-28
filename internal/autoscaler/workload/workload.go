@@ -53,8 +53,13 @@ func (w *State) GetCurrentResourcesSpec() *tfv1.Resources {
 }
 
 func (w *State) IsAutoSetResourcesEnabled() bool {
-	return w.Spec.AutoScalingConfig.AutoSetResources.Enable &&
-		w.Spec.AutoScalingConfig.AutoSetResources.TargetResource != ""
+	// AutoSetResources is optional in the CRD; treat unset as disabled instead
+	// of dereferencing a nil pointer.
+	asr := w.Spec.AutoScalingConfig.AutoSetResources
+	if asr == nil {
+		return false
+	}
+	return asr.Enable && asr.TargetResource != ""
 }
 
 func (w *State) ShouldScaleResource(name tfv1.ResourceName) bool {

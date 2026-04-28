@@ -269,7 +269,8 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 			metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
 		}
 
-		if coreNode.Labels != nil && coreNode.Labels[constants.KarpenterExpansionLabel] != "" {
+		// r.Expander is nil when -enable-auto-expander is off.
+		if r.Expander != nil && coreNode.Labels != nil && coreNode.Labels[constants.KarpenterExpansionLabel] != "" {
 			r.Expander.RemoveInFlightNode(coreNode.Labels[constants.KarpenterExpansionLabel])
 		}
 		return nil

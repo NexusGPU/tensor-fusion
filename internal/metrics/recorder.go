@@ -551,7 +551,20 @@ func (mr *MetricsRecorder) Start() {
 }
 
 func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
-	if len(workerMetricsMap) <= 0 && len(nodeMetricsMap) <= 0 && len(gpuResourceMetricsMap) <= 0 {
+	// Take each map's read lock briefly to evaluate the early-exit predicate.
+	// Reading len() unlocked races with concurrent writers and Go's race
+	// detector flags it; the work below already takes write locks so the
+	// optimization is the only racy spot.
+	workerMetricsLock.RLock()
+	hasWorkerMetrics := len(workerMetricsMap) > 0
+	workerMetricsLock.RUnlock()
+	nodeMetricsLock.RLock()
+	hasNodeMetrics := len(nodeMetricsMap) > 0
+	nodeMetricsLock.RUnlock()
+	gpuResourceMetricsLock.RLock()
+	hasGPUResourceMetrics := len(gpuResourceMetricsMap) > 0
+	gpuResourceMetricsLock.RUnlock()
+	if !hasWorkerMetrics && !hasNodeMetrics && !hasGPUResourceMetrics {
 		return
 	}
 
@@ -660,7 +673,10 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.EndLine(now)
 	}
 
-	// Additional Pool level metrics
+	// Additional Pool level metrics. Hold poolMetricsLock for the iteration —
+	// concurrent writers (SetPoolMetrics, RemovePoolMetrics) would otherwise
+	// trigger `concurrent map iteration and map write`.
+	poolMetricsLock.RLock()
 	for _, metrics := range poolMetricsMap {
 		enc.StartLine("tf_pool_metrics")
 		enc.AddTag("pool", metrics.PoolName)
@@ -678,6 +694,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("gpu_count", int64(metrics.GPUCount))
 		enc.EndLine(now)
 	}
+	poolMetricsLock.RUnlock()
 
 	// GPU allocation metrics
 	gpuAllocationMetricsLock.RLock()
