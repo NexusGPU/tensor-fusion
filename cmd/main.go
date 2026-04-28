@@ -676,9 +676,8 @@ func watchAndHandleConfigChanges(ctx context.Context, mgr manager.Manager, needT
 			go func() {
 				<-alertEvaluatorReady
 				if alertCanBeEnabled {
-					err = alertEvaluator.UpdateAlertRules(globalConfig.AlertRules)
-					if err != nil {
-						ctrl.Log.Error(err, "unable to update alert rules", "configPath", dynamicConfigPath)
+					if updateErr := alertEvaluator.UpdateAlertRules(globalConfig.AlertRules); updateErr != nil {
+						ctrl.Log.Error(updateErr, "unable to update alert rules", "configPath", dynamicConfigPath)
 					}
 				}
 			}()
@@ -688,9 +687,8 @@ func watchAndHandleConfigChanges(ctx context.Context, mgr manager.Manager, needT
 		if needTSDB {
 			go func() {
 				<-mgr.Elected()
-				err = timeSeriesDB.SetTableTTL(globalConfig.MetricsTTL)
-				if err != nil {
-					ctrl.Log.Error(err, "unable to update metrics ttl", "ttl config", globalConfig.MetricsTTL)
+				if ttlErr := timeSeriesDB.SetTableTTL(globalConfig.MetricsTTL); ttlErr != nil {
+					ctrl.Log.Error(ttlErr, "unable to update metrics ttl", "ttl config", globalConfig.MetricsTTL)
 				}
 			}()
 		}
