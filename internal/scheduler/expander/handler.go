@@ -170,11 +170,18 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	if pod == nil {
 		return fmt.Errorf("pod cannot be nil")
 	}
-	if _, ok := e.preSchedulePods[pod.Name]; ok {
+	// Read maps under the read lock to avoid `concurrent map read and map
+	// write` against addPreSchedulePod / addInFlightNode / RemovePreSchedulePod.
+	e.mu.RLock()
+	_, alreadyInPreSchedule := e.preSchedulePods[pod.Name]
+	inFlightCount := len(e.inFlightNodes)
+	e.mu.RUnlock()
+
+	if alreadyInPreSchedule {
 		e.logger.Info("Pod already in pre-schedule state, skipping expansion check and wait for expansion", "pod", klog.KObj(pod))
 		return nil
 	}
-	if len(e.inFlightNodes) >= MaxInFlightNodes {
+	if inFlightCount >= MaxInFlightNodes {
 		e.logger.Error(nil, "Too many inFlight nodes, skipping expansion to avoid too many nodes provisioned concurrently")
 		time.Sleep(WaitingInFlightNodesPeriod)
 		return nil
@@ -209,6 +216,9 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 			}
 		}
 	}
+	// Snapshot inFlightNodes under read lock to avoid concurrent map access
+	// against addInFlightNode / RemoveInFlightNode.
+	e.mu.RLock()
 	inFlightGPUSnapshot := make(map[string]*tfv1.GPU, len(e.inFlightNodes)*4)
 	for _, inFlightGPUs := range e.inFlightNodes {
 		for _, gpu := range inFlightGPUs {
@@ -217,6 +227,7 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 			allGpus = append(allGpus, snapshot)
 		}
 	}
+	e.mu.RUnlock()
 	if len(allGpus) == 0 {
 		e.eventRecorder.Eventf(pod, corev1.EventTypeWarning, "NodeExpansionCheck",
 			"all schedulable nodes are none GPU nodes, manual check required")
@@ -422,7 +433,19 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 	// NOTE: a known issue, if cpu/mem not enough or affinity not satisfied for pre-scheduled pods inside inFlightNodes,
 	// it will not be considered, when inflight created and the Pod still not be able to schedule on new node,
 	// wait next scheduling check and node expansion period (k8s move UnscheduleQueue to ActiveQueue every 5 minutes)
+	//
+	// Snapshot pre-scheduled pods under the read lock so that the loop body —
+	// which calls RemovePreSchedulePod (write lock) — does not race with the
+	// iteration. Without the snapshot Go would fatal with
+	// `concurrent map read and map write`.
+	e.mu.RLock()
+	preScheduleSnapshot := make([]*tfv1.AllocRequest, 0, len(e.preSchedulePods))
 	for _, alloc := range e.preSchedulePods {
+		preScheduleSnapshot = append(preScheduleSnapshot, alloc)
+	}
+	e.mu.RUnlock()
+
+	for _, alloc := range preScheduleSnapshot {
 		preScheduledPodPreAllocated := false
 		for _, gpu := range inflightSnapshot {
 			reqTflops := alloc.Request.Tflops

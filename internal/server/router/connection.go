@@ -70,11 +70,22 @@ func (cr *ConnectionRouter) Get(ctx *gin.Context) {
 	ch, cancelFunc := cr.watcher.subscribe(req)
 	defer cancelFunc()
 
-	// Wait for connection updates
-	for conn := range ch {
-		if conn.Status.Phase == tfv1.WorkerRunning {
-			ctx.String(200, conn.Status.ConnectionURL)
+	// Wait for connection updates. Listen on the request context so a client
+	// disconnect (or server shutdown) breaks the loop and triggers cancelFunc;
+	// otherwise the goroutine and the subscriber entry in cw.subs leak forever.
+	reqCtx := ctx.Request.Context()
+	for {
+		select {
+		case <-reqCtx.Done():
 			return
+		case conn, ok := <-ch:
+			if !ok {
+				return
+			}
+			if conn.Status.Phase == tfv1.WorkerRunning {
+				ctx.String(200, conn.Status.ConnectionURL)
+				return
+			}
 		}
 	}
 }
