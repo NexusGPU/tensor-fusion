@@ -45,6 +45,17 @@ const CleanUpCheckInterval = 3 * time.Minute
 var mu sync.Mutex
 var GPUCapacityMap = map[string]tfv1.Resource{}
 
+// GetGPUCapacity returns the capacity recorded for a given GPU model under
+// the same lock used by the writers. Direct reads of GPUCapacityMap from
+// outside this package race with the informer-driven writes and would
+// eventually fatal with `concurrent map read and map write`.
+func GetGPUCapacity(model string) (tfv1.Resource, bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	r, ok := GPUCapacityMap[model]
+	return r, ok
+}
+
 type Strategy interface {
 	// When isForNode = true, indicates each GPU's node level score
 	// otherwise it's single GPU score inside one node
@@ -1542,6 +1553,16 @@ func (s *GpuAllocator) ReconcileAllocationState() {
 
 func (s *GpuAllocator) ReconcileAllocationStateForTesting() {
 	s.reconcileAllocationState()
+}
+
+// SetGPUForTesting inserts a GPU into the live in-memory store under the
+// allocator's write lock. Tests need this because GetAllocationInfo returns
+// deep-copied snapshots, so mutating the returned map no longer reaches the
+// real store.
+func (s *GpuAllocator) SetGPUForTesting(key types.NamespacedName, gpu *tfv1.GPU) {
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+	s.gpuStore[key] = gpu
 }
 
 func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(

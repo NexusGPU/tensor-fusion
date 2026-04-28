@@ -150,8 +150,35 @@ func (e *NodeExpander) cleanupInFlightNodeClaim(nodeClaim *karpv1.NodeClaim) {
 }
 
 func (e *NodeExpander) GetNodeScalerInfo() any {
+	if e == nil {
+		return map[string]any{}
+	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+
+	// Deep-copy the live maps because the caller (HTTP handler) JSON-encodes
+	// the result *after* RUnlock. Returning live references would race with
+	// addInFlightNode / addPreSchedulePod / RemovePreSchedulePod and trip
+	// `concurrent map iteration and map write`.
+	inFlightNodesCopy := make(map[string][]*tfv1.GPU, len(e.inFlightNodes))
+	for nodeName, gpus := range e.inFlightNodes {
+		gpuCopies := make([]*tfv1.GPU, 0, len(gpus))
+		for _, g := range gpus {
+			if g == nil {
+				continue
+			}
+			gpuCopies = append(gpuCopies, g.DeepCopy())
+		}
+		inFlightNodesCopy[nodeName] = gpuCopies
+	}
+
+	preSchedulePodsCopy := make(map[string]*tfv1.AllocRequest, len(e.preSchedulePods))
+	for podName, req := range e.preSchedulePods {
+		if req == nil {
+			continue
+		}
+		preSchedulePodsCopy[podName] = req.DeepCopy()
+	}
 
 	inFlightNodeClaimSnapshot := make(map[string]any)
 	e.inFlightNodeClaims.Range(func(key, value interface{}) bool {
@@ -159,9 +186,9 @@ func (e *NodeExpander) GetNodeScalerInfo() any {
 		return true
 	})
 	return map[string]any{
-		"inFlightNodes":       e.inFlightNodes,
+		"inFlightNodes":       inFlightNodesCopy,
 		"inFlightNodeClaims":  inFlightNodeClaimSnapshot,
-		"preSchedulePods":     e.preSchedulePods,
+		"preSchedulePods":     preSchedulePodsCopy,
 		"preScheduleTimerNum": len(e.preScheduleTimers),
 	}
 }

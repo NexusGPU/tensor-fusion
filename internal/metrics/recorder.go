@@ -311,7 +311,13 @@ func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []strin
 }
 
 func InitPoolMetricsWhenNotExists(poolObj *tfv1.GPUPool) {
-	if _, ok := poolMetricsMap[poolObj.Name]; !ok {
+	// Take the read lock for the existence check; SetPoolMetrics takes the
+	// write lock and will re-check under it, but reading the map without any
+	// lock would race with a concurrent SetPoolMetrics writer.
+	poolMetricsLock.RLock()
+	_, ok := poolMetricsMap[poolObj.Name]
+	poolMetricsLock.RUnlock()
+	if !ok {
 		SetPoolMetrics(poolObj)
 	}
 }
@@ -738,16 +744,20 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 	}
 	gpuResourceMetricsLock.RUnlock()
 
+	// Snapshot the count while still holding the read lock; the log statements
+	// below run after RUnlock and would otherwise race with concurrent
+	// SetNodeMetrics / RemoveNodeMetrics writers.
+	nodeMetricsCount := len(nodeMetricsMap)
 	nodeMetricsLock.RUnlock()
 
 	if err := enc.Err(); err != nil {
-		log.Error(err, "metrics encoding error", "workerCount", activeWorkerCnt, "nodeCount", len(nodeMetricsMap))
+		log.Error(err, "metrics encoding error", "workerCount", activeWorkerCnt, "nodeCount", nodeMetricsCount)
 	}
 
 	if _, err := writer.Write(enc.Bytes()); err != nil {
-		log.Error(err, "metrics writing error", "workerCount", activeWorkerCnt, "nodeCount", len(nodeMetricsMap))
+		log.Error(err, "metrics writing error", "workerCount", activeWorkerCnt, "nodeCount", nodeMetricsCount)
 	}
-	log.Info("metrics and raw billing recorded:", "workerCount", activeWorkerCnt, "nodeCount", len(nodeMetricsMap))
+	log.Info("metrics and raw billing recorded:", "workerCount", activeWorkerCnt, "nodeCount", nodeMetricsCount)
 }
 
 // Update metrics recorder's raw billing map
