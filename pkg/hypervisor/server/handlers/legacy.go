@@ -19,6 +19,7 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -592,10 +593,16 @@ func (h *LegacyHandler) ensureWorkerSharedMemory(namespace, podName string, allo
 	// and each retry). CreateSharedMemoryHandle truncates the underlying file
 	// (O_TRUNC), which would zero out live ERL state — used tokens, mem
 	// counters — every call. Open the existing shm if it is already there
-	// and only fall back to Create on first init. Both paths must Close()
-	// the returned handle to avoid leaking mmap/fd.
+	// and only fall back to Create on the FIRST init (file does not exist
+	// yet). Any other Open error — legacy layout, size mismatch, discriminant
+	// mismatch, mmap failure, permission denied, transient I/O — must NOT
+	// trigger Create, otherwise we would silently O_TRUNC a healthy shm and
+	// destroy live state. Surface the error instead.
 	handle, err := workerstate.OpenSharedMemoryHandle(h.shmBasePath, podId)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("failed to open existing shm (refusing to recreate over a non-missing file): %w", err)
+		}
 		handle, err = workerstate.CreateSharedMemoryHandle(h.shmBasePath, podId, configs)
 		if err != nil {
 			return err
