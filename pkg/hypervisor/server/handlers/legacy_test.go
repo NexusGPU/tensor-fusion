@@ -1,15 +1,19 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	hyperapi "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
+	workerstate "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/worker/state"
 	"github.com/gin-gonic/gin"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -276,6 +280,114 @@ func newTestDevice(uuid string) *hyperapi.DeviceInfo {
 			"computeCapability": "8.6",
 			"totalComputeUnits": "82",
 		},
+	}
+}
+
+// TestEnsureWorkerSharedMemory_PreservesExistingState exercises the
+// /process re-init path. Calling /process N times for the same pod must NOT
+// truncate the shm — that would zero live ERL state (used tokens, mem
+// counters) every retry. We assert that bytes mutated between two calls to
+// ensureWorkerSharedMemory survive across the second call.
+func TestEnsureWorkerSharedMemory_PreservesExistingState(t *testing.T) {
+	t.Parallel()
+
+	const namespace = "tensor-fusion-sys"
+	const podName = "worker-pod"
+
+	allocation := &hyperapi.WorkerAllocation{
+		WorkerInfo:  newTestWorker("worker-uid", namespace, podName),
+		DeviceInfos: []*hyperapi.DeviceInfo{newTestDevice("gpu-1234")},
+	}
+
+	handler := NewLegacyHandler(nil, nil, nil, nil)
+	handler.shmBasePath = t.TempDir()
+
+	if err := handler.ensureWorkerSharedMemory(namespace, podName, allocation); err != nil {
+		t.Fatalf("first ensureWorkerSharedMemory failed: %v", err)
+	}
+
+	shmPath := filepath.Join(handler.shmBasePath, namespace, podName, workerstate.ShmPathSuffix)
+
+	before, err := os.ReadFile(shmPath)
+	if err != nil {
+		t.Fatalf("failed to read shm file after create: %v", err)
+	}
+	if len(before) < 64 {
+		t.Fatalf("shm file unexpectedly small: %d bytes", len(before))
+	}
+
+	// Mutate a sentinel byte well past the V2 enum discriminant (offset 0..3)
+	// to simulate live ERL state mutation by the worker. If the second call
+	// goes through CreateSharedMemoryHandle, O_TRUNC + Truncate will rewrite
+	// the layout and our sentinel will be gone.
+	const sentinelOffset = 64
+	const sentinel = byte(0xAB)
+	mutated := make([]byte, len(before))
+	copy(mutated, before)
+	mutated[sentinelOffset] = sentinel
+	if err := os.WriteFile(shmPath, mutated, 0o600); err != nil {
+		t.Fatalf("failed to write sentinel into shm file: %v", err)
+	}
+
+	if err := handler.ensureWorkerSharedMemory(namespace, podName, allocation); err != nil {
+		t.Fatalf("second ensureWorkerSharedMemory failed: %v", err)
+	}
+
+	after, err := os.ReadFile(shmPath)
+	if err != nil {
+		t.Fatalf("failed to read shm file after second ensure: %v", err)
+	}
+
+	if !bytes.Equal(after, mutated) {
+		t.Fatalf("shm bytes changed across re-init — Create() truncated live state.\n"+
+			"sentinel byte at offset %d: want 0x%02X, got 0x%02X",
+			sentinelOffset, sentinel, after[sentinelOffset])
+	}
+}
+
+// TestEnsureWorkerSharedMemory_OpenErrorDoesNotRecreate covers the safety
+// gate: when OpenSharedMemoryHandle fails for a reason OTHER than ENOENT
+// (legacy layout, wrong size, discriminant mismatch, permission, transient
+// IO), we MUST surface the error instead of falling back to Create — which
+// uses O_TRUNC and would silently destroy live shm state.
+func TestEnsureWorkerSharedMemory_OpenErrorDoesNotRecreate(t *testing.T) {
+	t.Parallel()
+
+	const namespace = "tensor-fusion-sys"
+	const podName = "worker-pod"
+
+	allocation := &hyperapi.WorkerAllocation{
+		WorkerInfo:  newTestWorker("worker-uid", namespace, podName),
+		DeviceInfos: []*hyperapi.DeviceInfo{newTestDevice("gpu-1234")},
+	}
+
+	handler := NewLegacyHandler(nil, nil, nil, nil)
+	handler.shmBasePath = t.TempDir()
+
+	// Stage a corrupt-on-disk shm: file exists, wrong size — Open returns
+	// "unexpected shared memory size" (NOT os.ErrNotExist). The fix must
+	// surface that error instead of recreating.
+	shmPath := filepath.Join(handler.shmBasePath, namespace, podName, workerstate.ShmPathSuffix)
+	if err := os.MkdirAll(filepath.Dir(shmPath), 0o755); err != nil {
+		t.Fatalf("failed to create shm dir: %v", err)
+	}
+	corrupt := bytes.Repeat([]byte{0xCD}, 16)
+	if err := os.WriteFile(shmPath, corrupt, 0o600); err != nil {
+		t.Fatalf("failed to write corrupt shm: %v", err)
+	}
+
+	err := handler.ensureWorkerSharedMemory(namespace, podName, allocation)
+	if err == nil {
+		t.Fatalf("expected ensureWorkerSharedMemory to surface non-NotExist Open error, got nil")
+	}
+
+	after, readErr := os.ReadFile(shmPath)
+	if readErr != nil {
+		t.Fatalf("failed to read shm file after ensure: %v", readErr)
+	}
+	if !bytes.Equal(after, corrupt) {
+		t.Fatalf("shm file was rewritten despite non-NotExist Open error: len=%d (expected %d unchanged bytes)",
+			len(after), len(corrupt))
 	}
 }
 
