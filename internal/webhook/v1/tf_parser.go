@@ -572,6 +572,16 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 	if workloadProfile.Spec.GPUCount == 0 {
 		workloadProfile.Spec.GPUCount = 1
 	}
+	// Final guard: regardless of whether GPUCount was sourced from the
+	// pod annotation, the WorkloadProfile spec, container limits, or the
+	// gpu-indices annotation, the resulting value must fit in [1, 128].
+	// Catches the case where a user creates a WorkloadProfile CR with
+	// `spec.gpuCount: 0` or `200` and references it from a pod that has
+	// no `tensor-fusion.ai/gpu-count` annotation of its own — the
+	// annotation-only check above would never fire.
+	if workloadProfile.Spec.GPUCount < 1 || workloadProfile.Spec.GPUCount > 128 {
+		return fmt.Errorf("invalid gpuCount %d: must be in [1, 128]", workloadProfile.Spec.GPUCount)
+	}
 	return nil
 }
 
