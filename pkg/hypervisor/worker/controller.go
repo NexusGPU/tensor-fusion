@@ -85,6 +85,16 @@ func (w *WorkerController) Start() error {
 			w.workers[worker.WorkerUID] = worker
 			w.mu.Unlock()
 
+			// Recover partition allocation state for existing partitioned workers after restart.
+			// If the worker is already running with partitions, the partition-uuids annotation
+			// (written during initial allocation) lets us rebuild the in-memory allocation
+			// so that DeallocateWorker can properly clean up MIG instances on pod deletion.
+			if worker.IsolationMode == tfv1.IsolationModePartitioned && worker.PartitionTemplateID != "" {
+				if partitionUUIDs, ok := worker.Annotations[constants.PartitionUUIDsAnnotation]; ok && partitionUUIDs != "" {
+					w.allocationController.RecoverPartitionedWorker(worker, partitionUUIDs)
+				}
+			}
+
 			// For soft isolation, proactively create shared memory when a worker pod appears.
 			// Unlike hard/sidecar mode where the worker process calls /process-init to trigger
 			// shm creation, soft mode injects the limiter directly into the business container
@@ -97,6 +107,12 @@ func (w *WorkerController) Start() error {
 			// Deallocate worker devices first
 			if err := w.allocationController.DeallocateWorker(worker.WorkerUID); err != nil {
 				klog.Errorf("Failed to deallocate worker %s: %v", worker.WorkerUID, err)
+			}
+			// Drop per-worker ERL/PID state so it cannot bias the next pod
+			// scheduled on the same GPU. Safe to call for any isolation mode;
+			// the quota controller handles non-soft modes as a no-op internally.
+			if w.quotaController != nil {
+				w.quotaController.CleanupWorker(worker.WorkerUID)
 			}
 			w.mu.Lock()
 			defer w.mu.Unlock()
@@ -192,8 +208,10 @@ func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]
 			continue
 		}
 
-		// Skip if namespace or podName is empty (not a TensorFusion worker)
-		if mappingInfo.GuestID == "" {
+		// Skip if namespace or podName is empty (not a TensorFusion worker).
+		// GuestID="" would never fire because GetWorkerInfoFromHostPID builds it
+		// from empty strings as "__", so check the underlying identity fields.
+		if mappingInfo.Namespace == "" || mappingInfo.PodName == "" {
 			continue
 		}
 
@@ -582,7 +600,18 @@ func (w *WorkerController) collectWorkerMemoryUsage(workerLookup map[string]stri
 		}
 
 		mappingInfo, err := w.backend.GetProcessMappingInfo(uint32(hostPID))
-		if err != nil || mappingInfo == nil || mappingInfo.GuestID == "" {
+		if err != nil || mappingInfo == nil {
+			continue
+		}
+		// Require real pod identity. GuestID is built via fmt.Sprintf("%s_%s_%s",
+		// ns, pod, ctr), so three empty strings produce "__" (not ""). A caller
+		// hardening check on GuestID == "" therefore never fires for environ-less
+		// processes (LLM servers like sglang scrub /proc/{pid}/environ for
+		// secrecy, leaving mappingInfo with empty Namespace/PodName and
+		// GuestID="__"). Reject on the actual identity fields instead so those
+		// processes' memory is never attributed to the worker whose lookup key
+		// happens to collide with "/".
+		if mappingInfo.Namespace == "" || mappingInfo.PodName == "" {
 			continue
 		}
 

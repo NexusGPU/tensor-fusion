@@ -104,9 +104,22 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 			}
 		}
 	}
-	if shouldPinNvidiaVisibleDevices(request, deviceInfos) {
-		if visibleDevices := buildPinnedNvidiaVisibleDevices(deviceInfos); visibleDevices != "" {
-			envs[constants.NvidiaVisibleAllDeviceEnv] = visibleDevices
+	if isNvidiaVendor(deviceInfos) && !isPartitioned {
+		// Non-partitioned modes (shared/soft/hard): canonicalize
+		// NVIDIA_VISIBLE_DEVICES to the NVML "GPU-<hex>" form. nvidia-container-
+		// toolkit treats this env as the authoritative request channel in both
+		// legacy and CDI-enabled runtime modes, so CDIDevices is never emitted
+		// here — see deviceplugin.go.
+		//
+		// Partitioned (MIG) mode is intentionally skipped: the NVIDIA provider's
+		// AccelAssignPartition already writes NVIDIA_VISIBLE_DEVICES=MIG-<uuid>
+		// (and CUDA_VISIBLE_DEVICES=MIG-<uuid>) into deviceInfo.DeviceEnv, which
+		// was copied into envs above. Overwriting that with the parent GPU UUID
+		// would expose the whole card to the container and silently break MIG
+		// isolation.
+		names := buildPinnedNvidiaDeviceNames(deviceInfos)
+		if len(names) > 0 {
+			envs[constants.NvidiaVisibleAllDeviceEnv] = strings.Join(names, ",")
 		}
 	}
 
@@ -156,6 +169,58 @@ func (a *AllocationController) DeallocateWorker(workerUID string) error {
 	return nil
 }
 
+// RecoverPartitionedWorker rebuilds allocation state for an existing partitioned worker
+// after hypervisor restart. partitionUUIDs is a comma-separated string of "partitionUUID:parentGPU" pairs.
+func (a *AllocationController) RecoverPartitionedWorker(request *api.WorkerInfo, partitionUUIDs string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.workerAllocations[request.WorkerUID] != nil {
+		return // already allocated, skip
+	}
+
+	var deviceInfos []*api.DeviceInfo
+	for _, pair := range strings.Split(partitionUUIDs, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		parts := strings.SplitN(pair, ":", 2)
+		if len(parts) != 2 {
+			klog.Warningf("invalid partition UUID pair %q for worker %s, skipping", pair, request.WorkerUID)
+			continue
+		}
+		partUUID, parentUUID := parts[0], parts[1]
+
+		// Build a minimal DeviceInfo with partition and parent UUID for deallocation
+		deviceInfo := &api.DeviceInfo{
+			UUID:       partUUID,
+			ParentUUID: parentUUID,
+		}
+		// Enrich from the parent device if available
+		if parent, exists := a.deviceController.GetDevice(parentUUID); exists {
+			deviceInfo.Vendor = parent.Vendor
+			deviceInfo.Model = parent.Model
+		}
+		deviceInfos = append(deviceInfos, deviceInfo)
+	}
+
+	if len(deviceInfos) == 0 {
+		klog.Warningf("no valid partition UUIDs to recover for worker %s", request.WorkerUID)
+		return
+	}
+
+	allocation := &api.WorkerAllocation{
+		WorkerInfo:  request,
+		DeviceInfos: deviceInfos,
+	}
+	a.workerAllocations[request.WorkerUID] = allocation
+	for _, deviceUUID := range request.AllocatedDevices {
+		a.addDeviceAllocation(deviceUUID, allocation)
+	}
+	klog.Infof("recovered partitioned worker %s with %d partition(s)", request.WorkerUID, len(deviceInfos))
+}
+
 // GetWorkerAllocation returns the allocation for a specific worker
 func (a *AllocationController) GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, bool) {
 	a.mu.RLock()
@@ -192,30 +257,35 @@ func (a *AllocationController) removeDeviceAllocation(deviceUUID string, allocat
 	)
 }
 
-func shouldPinNvidiaVisibleDevices(request *api.WorkerInfo, deviceInfos []*api.DeviceInfo) bool {
-	if request == nil || len(deviceInfos) == 0 {
-		return false
-	}
-	if request.IsolationMode == tfv1.IsolationModePartitioned {
+func isNvidiaVendor(deviceInfos []*api.DeviceInfo) bool {
+	if len(deviceInfos) == 0 {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(deviceInfos[0].Vendor), constants.AcceleratorVendorNvidia)
 }
 
-func buildPinnedNvidiaVisibleDevices(deviceInfos []*api.DeviceInfo) string {
+// buildPinnedNvidiaDeviceNames returns canonical NVIDIA device names for
+// NVIDIA_VISIBLE_DEVICES and CDI device requests. The returned strings match
+// what nvidia-container-toolkit registers in the CDI spec (and what NVML
+// returns) byte-for-byte: "GPU-<hex>" for full GPUs, "MIG-<...>" for MIG
+// partitions. Upstream lowercasing of the "GPU-"/"MIG-" prefix is repaired
+// here; the hex payload is preserved as-is to stay compatible with both
+// default-CDI and legacy device-plugin modes.
+func buildPinnedNvidiaDeviceNames(deviceInfos []*api.DeviceInfo) []string {
 	visibleDevices := make([]visibleDeviceRef, 0, len(deviceInfos))
 	seen := make(map[string]struct{}, len(deviceInfos))
 	for _, deviceInfo := range deviceInfos {
 		if deviceInfo == nil || deviceInfo.UUID == "" {
 			continue
 		}
-		if _, exists := seen[deviceInfo.UUID]; exists {
+		name := canonicalizeNvidiaDeviceUUID(deviceInfo.UUID)
+		if _, exists := seen[name]; exists {
 			continue
 		}
-		seen[deviceInfo.UUID] = struct{}{}
+		seen[name] = struct{}{}
 		visibleDevices = append(visibleDevices, visibleDeviceRef{
 			index: deviceInfo.Index,
-			uuid:  deviceInfo.UUID,
+			uuid:  name,
 		})
 	}
 	slices.SortFunc(visibleDevices, func(a, b visibleDeviceRef) int {
@@ -232,7 +302,22 @@ func buildPinnedNvidiaVisibleDevices(deviceInfos []*api.DeviceInfo) string {
 			return 0
 		}
 	})
-	return strings.Join(lo.Map(visibleDevices, func(device visibleDeviceRef, _ int) string {
+	return lo.Map(visibleDevices, func(device visibleDeviceRef, _ int) string {
 		return device.uuid
-	}), ",")
+	})
+}
+
+// canonicalizeNvidiaDeviceUUID restores the NVML-canonical prefix casing
+// ("GPU-"/"MIG-") without touching the hex payload. If the input has no
+// recognized prefix (e.g. a bare index or "all"), it is returned unchanged.
+func canonicalizeNvidiaDeviceUUID(s string) string {
+	if len(s) >= 4 {
+		switch strings.ToUpper(s[:4]) {
+		case "GPU-":
+			return "GPU-" + s[4:]
+		case "MIG-":
+			return "MIG-" + s[4:]
+		}
+	}
+	return s
 }

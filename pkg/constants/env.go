@@ -29,6 +29,7 @@ const (
 const (
 	NvidiaVisibleAllDeviceEnv   = "NVIDIA_VISIBLE_DEVICES"
 	NvidiaVisibleAllDeviceValue = "all"
+	CudaVisibleDevicesEnv       = "CUDA_VISIBLE_DEVICES"
 
 	TensorFusionGPUInfoConfigName       = "tensor-fusion-sys-public-gpu-info"
 	TensorFusionGPUInfoConfigVolumeName = "gpu-info"
@@ -75,11 +76,7 @@ const (
 	ConnectionSharedMemSize = "1024"
 	ConnectionSharedMemName = "tf_shm"
 
-	RealNvmlLibPathValue = "/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
-	RealCUDALibPathValue = "/lib/x86_64-linux-gnu/libcuda.so"
-	RealNvmlLibPathEnv   = "TF_NVML_LIB_PATH"
-	RealCUDALibPathEnv   = "TF_CUDA_LIB_PATH"
-	EnableCudaHooksEnv   = "ENABLE_CUDA_HOOKS"
+	EnableCudaHooksEnv = "ENABLE_CUDA_HOOKS"
 
 	PrependPathEnv    = "TF_PREPEND_PATH"
 	PrependLibPathEnv = "TF_LD_LIBRARY_PATH"

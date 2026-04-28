@@ -223,6 +223,14 @@ func (a *APIClient) getHardwareMetadataFromEnv() ([]tfv1.HardwareModelInfo, erro
 }
 
 func matchFp16TFlops(model, vendor string, metadata []tfv1.HardwareModelInfo) (resource.Quantity, bool) {
+	// Devices report different name shapes depending on the runtime path:
+	//   * NVML returns "NVIDIA A100-SXM4-80GB" (vendor + full marketing name).
+	//   * Some accelerators only fill the short alias (e.g. "A100_SXM_80G").
+	// ProviderConfig.hardwareMetadata stores both `model` (short alias) and
+	// `fullModelName` (the NVML-style string). Try both so the fp16TFlops
+	// fallback fires regardless of which side reports which — important on
+	// MIG parent devices where NVML/CUDA can't report SM count and TFlops
+	// would otherwise be computed as 0.
 	modelsToMatch := []string{model}
 	if vendor != "" && len(model) >= len(vendor) {
 		if strings.EqualFold(model[:len(vendor)], vendor) {
@@ -234,7 +242,7 @@ func matchFp16TFlops(model, vendor string, metadata []tfv1.HardwareModelInfo) (r
 	}
 	for _, hw := range metadata {
 		for _, candidate := range modelsToMatch {
-			if strings.EqualFold(hw.Model, candidate) {
+			if strings.EqualFold(hw.Model, candidate) || strings.EqualFold(hw.FullModelName, candidate) {
 				if hw.Fp16TFlops.IsZero() {
 					return resource.Quantity{}, false
 				}

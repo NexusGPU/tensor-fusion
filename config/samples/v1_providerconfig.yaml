@@ -15,6 +15,25 @@ spec:
     remoteClient: tensorfusion/tensor-fusion-client:latest
     remoteWorker: tensorfusion/tensor-fusion-worker:latest
 
+  # Hypervisor settings.
+  # MIG partition operations (creating GpuInstance / ComputeInstance) need the
+  # hypervisor container to run privileged AND to ask the NVIDIA Container
+  # Runtime to expose the dynamic /proc/driver/nvidia/capabilities/ files.
+  # When privilegedHypervisor=true and vendor=NVIDIA, the operator
+  # auto-injects NVIDIA_MIG_CONFIG_DEVICES=all and NVIDIA_MIG_MONITOR_DEVICES=all
+  # so MIG works out of the box; no manual extraEnv needed.
+  #
+  # NOTE: privilegedHypervisor only flips `securityContext.privileged: true` on
+  # the container — it does NOT change the process UID. MIG calls additionally
+  # require uid=0 (DAC check when writing to /dev/nvidia-caps/nvidia-cap1).
+  # Set pod-level `runAsUser: 0` / `runAsGroup: 0` in the GPUPool /
+  # TensorFusionCluster componentConfig.hypervisor.podTemplate — the operator
+  # rebuilds container-level securityContext on every reconcile, but pod-level
+  # fields survive. See config/samples/v1_gpupool.yaml for the matching
+  # pod-level snippet.
+  hypervisor:
+    privilegedHypervisor: true
+
   # Resource names that should be removed from pod specs when TensorFusion manages GPUs
   # These are the standard Kubernetes resource names used by device plugins
   inUseResourceNames:

@@ -26,6 +26,27 @@ spec:
       podTemplate:
         template:
           spec:
+            # Pod-level securityContext is the SUPPORTED way to make the
+            # hypervisor container run as root. The container-level
+            # securityContext set here would be overwritten by the operator
+            # (it always rebuilds the container's securityContext). Pod-level
+            # fields (runAsUser/runAsGroup) survive that rebuild and are
+            # needed by Ascend's libdcmi (DAC check on /dev/davinci_manager
+            # requires uid=0). NVIDIA NVML works as non-root, but for any
+            # provider that opts into `privilegedHypervisor: true` and runs
+            # hardware-management calls (MIG / vNPU partitioning), set this.
+            securityContext:
+              runAsUser: 0
+              runAsGroup: 0
+            # Optional: bind-mount host npu-smi so operators can run
+            # `kubectl exec ... -- npu-smi info` for debugging. Not used by
+            # the hypervisor itself; libdcmi enumerates devices internally.
+            # Drop this whole block if you don't need exec-time debugging.
+            volumes:
+              - name: host-npu-smi
+                hostPath:
+                  path: /usr/local/sbin/npu-smi
+                  type: File
             containers:
               - name: tensor-fusion-hypervisor
                 env:
@@ -35,6 +56,12 @@ spec:
                     value: /run/tensor-fusion/vgpu/libaccelerator_ascend.so
                   - name: LD_LIBRARY_PATH
                     value: /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/dcmi
+                # Driver / DCMI libs come from ProviderConfig.hypervisor.hostPathMounts
+                # (see config/samples/ascend-provider.yaml). Don't redeclare them here.
+                volumeMounts:
+                  - name: host-npu-smi
+                    mountPath: /usr/local/sbin/npu-smi
+                    readOnly: true
   nodeManagerConfig:
     defaultVendor: Ascend
     nodeSelector:
