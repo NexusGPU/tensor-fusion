@@ -16,6 +16,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -242,8 +243,129 @@ func TestEvictWorkerPods_AbortsOnFirstFailure(t *testing.T) {
 	if attempts != 1 {
 		t.Fatalf("EvictV1 called %d times; expected abort after first failure", attempts)
 	}
+	if len(fakeClient.Actions()) == 0 {
+		t.Fatalf("expected eviction attempt to be recorded")
+	}
 	if el.errCount == 0 {
 		t.Fatalf("expected error log entry on failure")
+	}
+}
+
+func TestCheckDefragPDBPreflight_BlockedPDBSkipsWholeNode(t *testing.T) {
+	p1 := newPod("p1")
+	p1.Labels = map[string]string{"app": "blocked"}
+	p2 := newPod("p2")
+	p2.Labels = map[string]string{"app": "free"}
+
+	pdb := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns1",
+			Name:      "pdb-blocked",
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "blocked"},
+			},
+		},
+		Status: policyv1.PodDisruptionBudgetStatus{
+			DisruptionsAllowed: 0,
+		},
+	}
+	fakeClient := clientgofake.NewSimpleClientset(p1, p2, pdb)
+	r := newReconcilerWithFake(fakeClient)
+	cand := &defragCandidate{
+		nodeName:   "node-a",
+		workerPods: []*corev1.Pod{p1, p2},
+	}
+
+	blocked, reason, err := r.checkDefragPDBPreflight(context.Background(), cand)
+	if err != nil {
+		t.Fatalf("check PDB preflight: %v", err)
+	}
+	if !blocked {
+		t.Fatalf("expected PDB to block node")
+	}
+	if !strings.Contains(reason, "pdb-blocked") || !strings.Contains(reason, "p1") {
+		t.Fatalf("reason should identify blocking PDB and pod, got %q", reason)
+	}
+}
+
+func TestCheckDefragPDBPreflight_AllowsNodeWhenDisruptionsAvailable(t *testing.T) {
+	p1 := newPod("p1")
+	p1.Labels = map[string]string{"app": "allowed"}
+
+	pdb := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns1",
+			Name:      "pdb-allowed",
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "allowed"},
+			},
+		},
+		Status: policyv1.PodDisruptionBudgetStatus{
+			DisruptionsAllowed: 1,
+		},
+	}
+	fakeClient := clientgofake.NewSimpleClientset(p1, pdb)
+	r := newReconcilerWithFake(fakeClient)
+	cand := &defragCandidate{
+		nodeName:   "node-a",
+		workerPods: []*corev1.Pod{p1},
+	}
+
+	blocked, reason, err := r.checkDefragPDBPreflight(context.Background(), cand)
+	if err != nil {
+		t.Fatalf("check PDB preflight: %v", err)
+	}
+	if blocked {
+		t.Fatalf("expected PDB to allow node, reason=%q", reason)
+	}
+}
+
+func TestCheckDefragPDBPreflight_ListsPDBsOncePerNamespace(t *testing.T) {
+	p1 := newPod("p1")
+	p1.Labels = map[string]string{"app": "allowed"}
+	p2 := newPod("p2")
+	p2.Labels = map[string]string{"app": "allowed"}
+
+	pdb := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns1",
+			Name:      "pdb-allowed",
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "allowed"},
+			},
+		},
+		Status: policyv1.PodDisruptionBudgetStatus{
+			DisruptionsAllowed: 2,
+		},
+	}
+	directClient := clientgofake.NewSimpleClientset(p1, p2, pdb)
+	r := newReconcilerWithFake(directClient)
+	cand := &defragCandidate{
+		nodeName:   "node-a",
+		workerPods: []*corev1.Pod{p1, p2},
+	}
+
+	blocked, reason, err := r.checkDefragPDBPreflight(context.Background(), cand)
+	if err != nil {
+		t.Fatalf("check PDB preflight: %v", err)
+	}
+	if blocked {
+		t.Fatalf("expected PDB to allow node, reason=%q", reason)
+	}
+	listActions := 0
+	for _, action := range directClient.Actions() {
+		if action.GetVerb() == "list" && action.GetResource().Resource == "poddisruptionbudgets" {
+			listActions++
+		}
+	}
+	if listActions != 1 {
+		t.Fatalf("expected one PDB list for namespace, got %d actions=%v", listActions, directClient.Actions())
 	}
 }
 
@@ -385,7 +507,7 @@ func TestCanFitVirtualNodeResources_RejectsOversubscribedCPU(t *testing.T) {
 }
 
 func TestBuildDefragNodeBudgets_SkipsDeletionMarkedNodes(t *testing.T) {
-	budgets, err := buildDefragNodeBudgets(
+	budgets := buildDefragNodeBudgets(
 		"pool-a",
 		"",
 		map[string]map[string]*tfv1.GPU{
@@ -421,14 +543,50 @@ func TestBuildDefragNodeBudgets_SkipsDeletionMarkedNodes(t *testing.T) {
 		},
 		map[string]struct{}{},
 	)
-	if err != nil {
-		t.Fatalf("build budgets: %v", err)
-	}
 	if _, ok := budgets["node-delete"]; ok {
 		t.Fatalf("expected deletion-marked node to be excluded, got budgets=%v", budgets)
 	}
 	if _, ok := budgets["node-keep"]; !ok {
 		t.Fatalf("expected healthy node to remain in budget, got budgets=%v", budgets)
+	}
+}
+
+func TestBuildDefragNodeBudgets_SkipsMissingSchedulerNodeInfo(t *testing.T) {
+	budgets := buildDefragNodeBudgets(
+		"pool-a",
+		"source-node",
+		map[string]map[string]*tfv1.GPU{
+			"source-node": {
+				"gpu-source": gpuWithUsage("gpu-source", "pool-a", "50", "5Gi", tfv1.UsedByTensorFusion),
+			},
+			"node-keep": {
+				"gpu-keep": gpuWithUsage("gpu-keep", "pool-a", "100", "10Gi", tfv1.UsedByTensorFusion),
+			},
+			"node-stale": {
+				"gpu-stale": gpuWithUsage("gpu-stale", "pool-a", "100", "10Gi", tfv1.UsedByTensorFusion),
+			},
+		},
+		map[string]map[types.NamespacedName]struct{}{},
+		&fakeNodeInfoLister{
+			infos: map[string]fwk.NodeInfo{
+				"node-keep": newFrameworkNodeInfo(
+					"node-keep",
+					nil,
+					corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("4"),
+						corev1.ResourceMemory: resource.MustParse("16Gi"),
+						corev1.ResourcePods:   resource.MustParse("32"),
+					},
+				),
+			},
+		},
+		map[string]struct{}{},
+	)
+	if _, ok := budgets["node-stale"]; ok {
+		t.Fatalf("stale node should be excluded, got budgets=%v", budgets)
+	}
+	if _, ok := budgets["node-keep"]; !ok {
+		t.Fatalf("healthy target node should remain, got budgets=%v", budgets)
 	}
 }
 
