@@ -392,9 +392,12 @@ func AddTFDefaultClientConfBeforePatch(
 
 	if tfInfo.Profile.IsLocalGPU {
 		// Local mode mounts shared data path for worker-hypervisor communication.
-		// Partitioned (MIG) doesn't need it — hardware isolation, no limiter/worker
-		// reads from this hostPath. Skip the volume so the pod spec stays clean.
-		if tfInfo.Profile.Isolation != tfv1.IsolationModePartitioned {
+		// Partitioned (MIG) and shared (whole-card) don't need it — neither has
+		// a limiter or worker that reads this hostPath. Skip the volume so the
+		// pod spec stays clean and we don't leak /run/tensor-fusion into pods
+		// with no consumer.
+		if tfInfo.Profile.Isolation != tfv1.IsolationModePartitioned &&
+			tfInfo.Profile.Isolation != tfv1.IsolationModeShared {
 			pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
 				Name: constants.DataVolumeName,
 				VolumeSource: v1.VolumeSource{
@@ -522,12 +525,15 @@ func AddTFDefaultClientConfBeforePatch(
 				// Soft isolation already handled volumes and env in its own block above.
 				continue
 			}
-			if tfInfo.Profile.Isolation == tfv1.IsolationModePartitioned {
-				// Partitioned (MIG) relies on hardware isolation — no limiter, no
-				// worker shm, no hypervisor RPC. Device plugin already sets
-				// NVIDIA_VISIBLE_DEVICES to the MIG UUID, which is everything the
-				// pod actually needs. Skipping the worker-shm mount also avoids
-				// leaking /run/tensor-fusion into a container that has no consumer.
+			if tfInfo.Profile.Isolation == tfv1.IsolationModePartitioned ||
+				tfInfo.Profile.Isolation == tfv1.IsolationModeShared {
+				// Partitioned (MIG/vNPU) relies on hardware isolation; shared
+				// (whole-card) has no isolation at all. Neither needs the
+				// limiter / worker shm or the hypervisor RPC env. Device
+				// plugin or container runtime already exposes the right
+				// device(s) to the pod. Skipping the worker-shm mount also
+				// avoids leaking /run/tensor-fusion into a container that
+				// has no consumer.
 				continue
 			}
 			if useLocalWorkerSidecar {
@@ -592,14 +598,16 @@ func AddTFDefaultClientConfBeforePatch(
 				})
 			}
 
-			if useInjectLib && shouldInjectNvidiaVisibleDevices(tfInfo.Profile.GPUVendor) && !lo.ContainsBy(envList, func(env v1.EnvVar) bool {
-				return env.Name == constants.NvidiaVisibleAllDeviceEnv
-			}) {
-				envList = append(envList, v1.EnvVar{
-					Name:  constants.NvidiaVisibleAllDeviceEnv,
-					Value: constants.NvidiaVisibleAllDeviceValue,
-				})
-			}
+			// We deliberately do NOT pre-set NVIDIA_VISIBLE_DEVICES=all here. After
+			// the soft/partitioned/shared `continue`s above, the only case left in
+			// this loop is `hard local sidecar`. For that flow the sidecar worker
+			// holds the real GPU; the client container talks to it over /dev/shm
+			// and does not need direct device access. Pre-setting =all would
+			// override the device plugin's per-card UUID at kubelet merge time
+			// and let the client physically see (and bypass the limiter to use)
+			// every GPU on the node. Letting the device plugin Allocate response
+			// be the single source of truth for NVIDIA_VISIBLE_DEVICES keeps the
+			// per-card boundary intact.
 			if useInjectLib && shouldDisableCudaHooksForLocalSidecarClient(tfInfo.Profile) {
 				envList = appendEnvIfMissing(envList, v1.EnvVar{
 					Name:  constants.EnableCudaHooksEnv,
@@ -1194,18 +1202,28 @@ func SetWorkerContainerSpec(
 		workerConfig = &tfv1.WorkerConfig{}
 	}
 
-	// NOTE: need to set environment variable to make all GPUs visible to the worker,
-	// vgpu.rs limiter will limit to specific devices after Pod started
+	// NVIDIA_VISIBLE_DEVICES is intentionally not set here — the hypervisor's
+	// AllocateWorkerDevices in pkg/hypervisor/worker/allocation.go is the single
+	// source of truth (canonical GPU-<hex> for non-partitioned NVIDIA, MIG-<uuid>
+	// kept untouched for partitioned). Pre-setting any value at pod-spec level
+	// would win over device-plugin envs at kubelet merge time and silently
+	// clobber the per-card or per-MIG boundary.
 	container.Name = constants.TFContainerNameWorker
 	container.Image = GetWorkerImage(workloadProfile.GPUVendor, workerConfig.Image)
-	container.VolumeMounts = append(
-		container.VolumeMounts,
-		v1.VolumeMount{
-			Name:             constants.DataVolumeName,
-			MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
-			SubPathExpr:      constants.TFDataPathWorkerExpr,
-			MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
-		})
+	// Shared mode (whole-card dedicated) has no limiter and no per-pod
+	// quota state for the worker to read or write, so the host-backed
+	// /run/tensor-fusion shm is dead weight for it. Skip the mount so the
+	// worker pod's spec stays clean.
+	if workloadProfile.Isolation != tfv1.IsolationModeShared {
+		container.VolumeMounts = append(
+			container.VolumeMounts,
+			v1.VolumeMount{
+				Name:             constants.DataVolumeName,
+				MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
+				SubPathExpr:      constants.TFDataPathWorkerExpr,
+				MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
+			})
+	}
 	container.Env = append(container.Env, v1.EnvVar{
 		Name: constants.HypervisorIPEnv,
 		ValueFrom: &v1.EnvVarSource{
@@ -1237,17 +1255,14 @@ func SetWorkerContainerSpec(
 			},
 		},
 	})
-	if shouldInjectNvidiaVisibleDevices(workloadProfile.GPUVendor) {
-		// Soft / hard isolation: let device plugin set NVIDIA_VISIBLE_DEVICES to the allocated GPU UUID.
-		// Partitioned / shared: expose all GPUs (no per-device restriction at this layer).
-		if workloadProfile.Isolation != tfv1.IsolationModeSoft &&
-			workloadProfile.Isolation != tfv1.IsolationModeHard {
-			container.Env = append(container.Env, v1.EnvVar{
-				Name:  constants.NvidiaVisibleAllDeviceEnv,
-				Value: constants.NvidiaVisibleAllDeviceValue,
-			})
-		}
-	}
+	// Intentionally do NOT pre-set NVIDIA_VISIBLE_DEVICES on the worker container.
+	// The hypervisor's AllocateWorkerDevices (pkg/hypervisor/worker/allocation.go)
+	// is the single source of truth: it writes the canonical GPU-<hex> UUID list
+	// for soft / hard / shared isolation, and intentionally lets the provider's
+	// MIG-<uuid> from PartitionResult.envVars stick for partitioned mode. Pod-spec
+	// env wins over device-plugin envs at kubelet merge time, so any pre-set
+	// value here would silently clobber the per-card / per-MIG boundary —
+	// including breaking MIG isolation by exposing the parent card.
 
 	// Only soft isolation preloads the open-source vgpu.rs cuda_limiter (reads limits from shm).
 	// Hard mode relies on the closed-source hard limiter that reads TF_CUDA_SM_PERCENT_LIMIT /
@@ -1379,16 +1394,20 @@ func AddWorkerConfAfterTemplate(
 		applyProviderRemoteWorkerConfig(spec, workloadProfile.GPUVendor)
 	}
 
-	// Add volume from host for CUDA hot migration and snapshot
-	spec.Volumes = append(spec.Volumes, v1.Volume{
-		Name: constants.DataVolumeName,
-		VolumeSource: v1.VolumeSource{
-			HostPath: &v1.HostPathVolumeSource{
-				Path: constants.TFDataPath,
-				Type: ptr.To(v1.HostPathDirectoryOrCreate),
+	// Add volume from host for CUDA hot migration and snapshot.
+	// Shared (whole-card) workers don't read or write this shm, so skip the
+	// volume to avoid leaking /run/tensor-fusion into the pod spec.
+	if workloadProfile == nil || workloadProfile.Isolation != tfv1.IsolationModeShared {
+		spec.Volumes = append(spec.Volumes, v1.Volume{
+			Name: constants.DataVolumeName,
+			VolumeSource: v1.VolumeSource{
+				HostPath: &v1.HostPathVolumeSource{
+					Path: constants.TFDataPath,
+					Type: ptr.To(v1.HostPathDirectoryOrCreate),
+				},
 			},
-		},
-	})
+		})
+	}
 
 	spec.TerminationGracePeriodSeconds = constants.GracefulPeriodSeconds
 	applyAscendRuntimeClassIfNeeded(spec, workloadProfile)
