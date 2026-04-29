@@ -1,6 +1,7 @@
 // Strategy #2 for GPUPool compaction: move TF workers off low-utilization
 // nodes so Strategy #1 can later reclaim the emptied nodes.
 //
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;patch
 // +kubebuilder:rbac:groups=core,resources=pods/eviction,verbs=create
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;patch;update
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list
@@ -30,38 +31,25 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 const (
-	// How long the watcher waits for allocator state to observe an empty node.
-	drainConfirmationTimeout = 10 * time.Minute
-
 	// Fallback when MaxDuration is empty or invalid.
 	defaultDefragMaxDuration = 2 * time.Hour
 
 	// Independent timeout for persisting LastDefragTime.
 	defragStatusPersistTimeout = 30 * time.Second
-
-	// Bound how long we wait for scheduler cache to observe the drain label.
-	defragSchedulerCacheSyncTimeout = 30 * time.Second
-	defragSchedulerCacheSyncPoll    = 200 * time.Millisecond
 )
 
 const (
 	defragEventStarted           = "DefragStarted"
-	defragEventNodeDraining      = "DefragNodeDraining"
 	defragEventPodEvicted        = "DefragPodEvicted"
 	defragEventPodEvictFailed    = "DefragPodEvictFailed"
 	defragEventAbortNode         = "DefragAbortNode"
 	defragEventSkipUnschedulable = "DefragSkipUnschedulable"
 	defragEventSkipPDBBlocked    = "DefragSkipPDBBlocked"
-	defragEventNodeDrained       = "DefragNodeDrained"
-	defragEventDrainTimeout      = "DefragDrainTimeout"
-	defragEventStaleLabelCleared = "DefragStaleLabelCleared"
 	defragEventFinished          = "DefragFinished"
 )
 
@@ -80,30 +68,18 @@ type schedulerFitPodAPI interface {
 	) ([]fwk.NodeInfo, framework.Diagnosis, error)
 }
 
-func refreshSchedulerNodeInfoSnapshot(ctx context.Context, sched any) error {
-	if sched == nil {
-		return errors.New("scheduler is nil")
-	}
-	refresher, ok := sched.(schedulerSnapshotRefreshAPI)
-	if !ok {
-		return errors.New("scheduler vendor patch missing: UpdateNodeInfoSnapshot not available")
-	}
-	return refresher.UpdateNodeInfoSnapshot(ctx)
-}
-
 // Snapshot of the most recent defrag run for a pool.
 type defragRunStats struct {
-	StartTime          time.Time `json:"startTime"`
-	EndTime            time.Time `json:"endTime"`
-	CandidateNodes     int       `json:"candidateNodes"`
-	ProcessedNodes     int       `json:"processedNodes"`
-	EvictedPods        int       `json:"evictedPods"`
-	EvictionFailures   int       `json:"evictionFailures"`
-	UnmovableNodes     int       `json:"unmovableNodes"`
-	PDBBlockedNodes    int       `json:"pdbBlockedNodes"`
-	FreshPodSkips      int       `json:"freshPodSkips"`
-	DeadlineExceeded   bool      `json:"deadlineExceeded"`
-	DrainingCandidates []string  `json:"drainingCandidates,omitempty"`
+	StartTime        time.Time `json:"startTime"`
+	EndTime          time.Time `json:"endTime"`
+	CandidateNodes   int       `json:"candidateNodes"`
+	ProcessedNodes   int       `json:"processedNodes"`
+	EvictedPods      int       `json:"evictedPods"`
+	EvictionFailures int       `json:"evictionFailures"`
+	UnmovableNodes   int       `json:"unmovableNodes"`
+	PDBBlockedNodes  int       `json:"pdbBlockedNodes"`
+	FreshPodSkips    int       `json:"freshPodSkips"`
+	DeadlineExceeded bool      `json:"deadlineExceeded"`
 }
 
 // sync.Map keyed by pool name -> *defragRunStats.
@@ -125,9 +101,9 @@ func GetDefragLastRunStats() map[string]defragRunStats {
 
 // ----- cron gating ------------------------------------------------------
 
-// maybeStartDefragRun validates the config, checks the schedule, and starts
-// a background run when the pool is due.
-func (r *GPUPoolCompactionReconciler) maybeStartDefragRun(ctx context.Context, pool *tfv1.GPUPool) {
+// maybeRunDefragStep validates the config, checks the schedule, and processes
+// at most one defrag source node when the current campaign is due.
+func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, pool *tfv1.GPUPool) {
 	logger := log.FromContext(ctx).WithValues("pool", pool.Name, "component", "defrag")
 
 	cfg := getDefragConfig(pool)
@@ -153,15 +129,25 @@ func (r *GPUPoolCompactionReconciler) maybeStartDefragRun(ctx context.Context, p
 	}
 	maxDuration := parseDefragMaxDuration(cfg.MaxDuration, logger)
 
-	// Treat a run as due once a scheduled tick has elapsed since the anchor.
+	// Treat a campaign as due once a scheduled tick has elapsed since the anchor.
 	now := time.Now()
 	anchor := now.Add(-maxDuration).Add(-time.Minute)
 	if pool.Status.LastDefragTime != nil {
 		anchor = pool.Status.LastDefragTime.Time
 	}
-	next := schedule.Next(anchor)
-	if next.After(now) {
-		logger.V(5).Info("defrag not due yet", "next", next, "anchor", anchor)
+	campaignStart := schedule.Next(anchor)
+	if campaignStart.After(now) {
+		logger.V(5).Info("defrag not due yet", "next", campaignStart, "anchor", anchor)
+		return
+	}
+	if now.Sub(campaignStart) > maxDuration {
+		logger.Info("defrag campaign expired before this reconcile; advancing schedule anchor",
+			"campaignStart", campaignStart, "maxDuration", maxDuration)
+		persistCtx, persistCancel := context.WithTimeout(ctx, defragStatusPersistTimeout)
+		defer persistCancel()
+		if err := r.patchPoolLastDefragTime(persistCtx, pool, campaignStart); err != nil {
+			logger.Error(err, "failed to patch pool.Status.LastDefragTime after expired defrag campaign")
+		}
 		return
 	}
 
@@ -171,15 +157,18 @@ func (r *GPUPoolCompactionReconciler) maybeStartDefragRun(ctx context.Context, p
 		logger.V(4).Info("defrag already running for this pool; skipping")
 		return
 	}
+	defer flag.Store(false)
 
-	runStart := time.Now()
-	poolCopy := pool.DeepCopy()
-	go func() {
-		defer flag.Store(false)
-		runCtx, cancel := context.WithTimeout(context.Background(), maxDuration)
-		defer cancel()
-		r.runDefrag(runCtx, poolCopy, runStart)
-	}()
+	runCtx, cancel := context.WithDeadline(ctx, campaignStart.Add(maxDuration))
+	defer cancel()
+	result := r.runDefragStep(runCtx, pool.DeepCopy(), campaignStart)
+	if result.finishCampaign {
+		persistCtx, persistCancel := context.WithTimeout(ctx, defragStatusPersistTimeout)
+		defer persistCancel()
+		if err := r.patchPoolLastDefragTime(persistCtx, pool, campaignStart); err != nil {
+			logger.Error(err, "failed to patch pool.Status.LastDefragTime after defrag step")
+		}
+	}
 }
 
 func getDefragConfig(pool *tfv1.GPUPool) *tfv1.NodeDefragConfig {
@@ -204,55 +193,61 @@ func parseDefragMaxDuration(raw string, logger interface{ Info(string, ...any) }
 
 // ----- main run ---------------------------------------------------------
 
-// runDefrag processes one pool under a MaxDuration deadline.
-func (r *GPUPoolCompactionReconciler) runDefrag(
+type defragStepResult struct {
+	evictedNode    bool
+	finishCampaign bool
+}
+
+// runDefragStep processes one pool under the current campaign deadline and
+// emits evictions for at most one source node.
+func (r *GPUPoolCompactionReconciler) runDefragStep(
 	ctx context.Context,
 	pool *tfv1.GPUPool,
 	runStart time.Time,
-) {
+) defragStepResult {
 	l := log.FromContext(ctx).WithValues("pool", pool.Name, "component", "defrag", "runStart", runStart)
 	r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventStarted,
-		"defrag run started at %s", runStart.Format(time.RFC3339))
+		"defrag step started at %s", runStart.Format(time.RFC3339))
 
 	stats := &defragRunStats{StartTime: runStart}
 	defer func() {
 		stats.EndTime = time.Now()
 		defragLastRunStats.Store(pool.Name, stats)
-		// Use a fresh context so timeouts still persist the schedule anchor.
-		persistCtx, persistCancel := context.WithTimeout(
-			context.Background(), defragStatusPersistTimeout)
-		defer persistCancel()
-		if err := r.patchPoolLastDefragTime(persistCtx, pool, runStart); err != nil {
-			l.Error(err, "failed to patch pool.Status.LastDefragTime")
-		}
 		r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventFinished,
-			"defrag run finished: candidates=%d processed=%d evicted=%d failed=%d unmovable=%d pdbBlocked=%d freshSkip=%d deadline=%t",
+			"defrag step finished: candidates=%d processed=%d evicted=%d failed=%d unmovable=%d pdbBlocked=%d freshSkip=%d deadline=%t",
 			stats.CandidateNodes, stats.ProcessedNodes, stats.EvictedPods, stats.EvictionFailures,
 			stats.UnmovableNodes, stats.PDBBlockedNodes, stats.FreshPodSkips, stats.DeadlineExceeded)
 	}()
 
+	blocked, err := r.hasDefragEvictedPods(ctx)
+	if err != nil {
+		l.Error(err, "list defrag-evicted pods failed")
+		return defragStepResult{}
+	}
+	if blocked {
+		l.Info("defrag paused: defrag-evicted pod still exists")
+		return defragStepResult{}
+	}
+
 	candidates, err := r.collectDefragCandidates(ctx, pool)
 	if err != nil {
 		l.Error(err, "collect defrag candidates failed")
-		return
+		return defragStepResult{}
 	}
 	stats.CandidateNodes = len(candidates)
 	if len(candidates) == 0 {
 		l.Info("no defrag candidates")
-		return
+		return defragStepResult{finishCampaign: true}
 	}
 
 	maxWorkerPerNode := r.Allocator.MaxWorkerPerNode()
-
-	for _, cand := range candidates {
-		if ctxDone(ctx) {
-			stats.DeadlineExceeded = true
-			l.Info("defrag deadline exceeded during candidate loop", "remaining", len(candidates)-stats.ProcessedNodes)
-			return
-		}
-		stats.ProcessedNodes++
-		r.processDefragCandidate(ctx, pool, cand, runStart, maxWorkerPerNode, stats)
+	result := runDefragCandidateLoop(ctx, candidates, stats, func(cand *defragCandidate) defragCandidateOutcome {
+		return r.processDefragCandidate(ctx, pool, cand, maxWorkerPerNode, stats)
+	})
+	if stats.DeadlineExceeded {
+		l.Info("defrag deadline exceeded during candidate loop", "remaining", len(candidates)-stats.ProcessedNodes)
 	}
+	return result
 }
 
 func ctxDone(ctx context.Context) bool {
@@ -262,6 +257,30 @@ func ctxDone(ctx context.Context) bool {
 	default:
 		return false
 	}
+}
+
+func runDefragCandidateLoop(
+	ctx context.Context,
+	candidates []*defragCandidate,
+	stats *defragRunStats,
+	process func(*defragCandidate) defragCandidateOutcome,
+) defragStepResult {
+	for _, cand := range candidates {
+		if ctxDone(ctx) {
+			stats.DeadlineExceeded = true
+			return defragStepResult{finishCampaign: true}
+		}
+		stats.ProcessedNodes++
+		switch process(cand) {
+		case defragCandidateSkipped:
+			continue
+		case defragCandidateEvicted:
+			return defragStepResult{evictedNode: true}
+		case defragCandidateAborted:
+			return defragStepResult{}
+		}
+	}
+	return defragStepResult{finishCampaign: true}
 }
 
 // ----- candidate filtering + sorting ------------------------------------
@@ -281,6 +300,8 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 	if cfg == nil {
 		return nil, nil
 	}
+	minPodAge := parseDefragMaxDuration(cfg.MaxDuration, log.FromContext(ctx))
+	now := time.Now()
 
 	allNodes := &tfv1.GPUNodeList{}
 	if err := r.List(ctx, allNodes, client.MatchingLabels(map[string]string{
@@ -318,9 +339,6 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 		if k8sNode.Spec.Unschedulable {
 			continue
 		}
-		if k8sNode.Labels[constants.DefragDrainingLabel] == constants.TrueStringValue {
-			continue
-		}
 
 		nodeGPUs := nodeGpuStore[k8sNodeName]
 		if len(nodeGPUs) == 0 {
@@ -345,6 +363,14 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 		if len(pods) == 0 {
 			continue
 		}
+		if freshPod, ok := findFreshDefragWorker(now, minPodAge, pods); ok {
+			log.FromContext(ctx).V(4).Info("skip defrag candidate: contains fresh TF worker",
+				"node", k8sNodeName,
+				"pod", freshPod.Namespace+"/"+freshPod.Name,
+				"createdAt", freshPod.CreationTimestamp.Time,
+				"minAge", minPodAge)
+			continue
+		}
 
 		out = append(out, &defragCandidate{
 			nodeName:         k8sNodeName,
@@ -361,6 +387,16 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 		return out[i].utilizationScore < out[j].utilizationScore
 	})
 	return out, nil
+}
+
+func (r *GPUPoolCompactionReconciler) hasDefragEvictedPods(ctx context.Context) (bool, error) {
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList, client.MatchingLabels{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
+	}); err != nil {
+		return false, fmt.Errorf("list defrag-evicted pods: %w", err)
+	}
+	return len(podList.Items) > 0, nil
 }
 
 func countPoolGPUUsage(gpus map[string]*tfv1.GPU, poolName string) (total, used int) {
@@ -418,56 +454,44 @@ func (r *GPUPoolCompactionReconciler) listNodeWorkerPods(
 
 // ----- per-candidate processing ----------------------------------------
 
+type defragCandidateOutcome int
+
+const (
+	defragCandidateSkipped defragCandidateOutcome = iota
+	defragCandidateEvicted
+	defragCandidateAborted
+)
+
 func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 	ctx context.Context,
 	pool *tfv1.GPUPool,
 	cand *defragCandidate,
-	runStart time.Time,
 	maxWorkerPerNode int,
 	stats *defragRunStats,
-) {
+) defragCandidateOutcome {
 	l := log.FromContext(ctx).WithValues("pool", pool.Name, "node", cand.nodeName,
 		"utilization", cand.utilizationScore, "workerCount", len(cand.workerPods))
 
-	// Label the source node before simulation so it cannot be chosen again.
-	if err := r.applyDefragDrainingLabel(ctx, cand.nodeName, pool.Name); err != nil {
-		l.Error(err, "patch draining label failed; skip candidate")
-		return
-	}
-	r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventNodeDraining,
-		"node %s labeled for defrag draining (utilization=%.1f%%, workers=%d)",
-		cand.nodeName, cand.utilizationScore, len(cand.workerPods))
-
-	if err := r.waitSchedulerObservedDefragLabel(ctx, cand); err != nil {
-		l.Error(err, "scheduler cache did not observe drain label; skip candidate")
-		if clearErr := r.clearDefragDrainingLabel(ctx, cand.nodeName); clearErr != nil {
-			l.Error(clearErr, "clear draining label failed after scheduler cache wait")
-		}
-		return
-	}
-
 	refreshedPods, err := r.currentNodeWorkerPods(ctx, cand.nodeName)
 	if err != nil {
-		l.Error(err, "refresh worker pods failed after drain label; skip candidate")
-		if clearErr := r.clearDefragDrainingLabel(ctx, cand.nodeName); clearErr != nil {
-			l.Error(clearErr, "clear draining label failed after worker refresh error")
-		}
-		return
+		l.Error(err, "refresh worker pods failed; skip candidate")
+		return defragCandidateSkipped
 	}
 	if len(refreshedPods) == 0 {
-		if clearErr := r.clearDefragDrainingLabel(ctx, cand.nodeName); clearErr != nil {
-			l.Error(clearErr, "clear draining label failed after empty worker refresh")
-		}
-		return
+		return defragCandidateSkipped
 	}
-	if freshPod, ok := findNewOrFreshDefragWorker(runStart, cand.workerPods, refreshedPods); ok {
+	cfg := getDefragConfig(pool)
+	minPodAge := defaultDefragMaxDuration
+	if cfg != nil {
+		minPodAge = parseDefragMaxDuration(cfg.MaxDuration, l)
+	}
+	if freshPod, ok := findFreshDefragWorker(time.Now(), minPodAge, refreshedPods); ok {
 		stats.FreshPodSkips++
-		l.Info("skip node: contains TF worker that appeared after candidate collection",
-			"pod", freshPod.Namespace+"/"+freshPod.Name, "createdAt", freshPod.CreationTimestamp.Time)
-		if clearErr := r.clearDefragDrainingLabel(ctx, cand.nodeName); clearErr != nil {
-			l.Error(clearErr, "clear draining label failed after fresh worker detection")
-		}
-		return
+		l.Info("skip node: contains fresh TF worker",
+			"pod", freshPod.Namespace+"/"+freshPod.Name,
+			"createdAt", freshPod.CreationTimestamp.Time,
+			"minAge", minPodAge)
+		return defragCandidateSkipped
 	}
 	cand.workerPods = refreshedPods
 
@@ -479,10 +503,7 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 		stats.UnmovableNodes++
 		r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventSkipUnschedulable,
 			"node %s skipped: current TF workers cannot be jointly placed on other nodes", cand.nodeName)
-		if err := r.clearDefragDrainingLabel(ctx, cand.nodeName); err != nil {
-			l.Error(err, "clear draining label failed after unmovable verdict")
-		}
-		return
+		return defragCandidateSkipped
 	}
 
 	pdbBlocked, pdbReason, err := r.checkDefragPDBPreflight(ctx, cand)
@@ -490,31 +511,24 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 		stats.EvictionFailures++
 		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventAbortNode,
 			"node %s: eviction preflight failed: %v", cand.nodeName, err)
-		if clearErr := r.clearDefragDrainingLabel(ctx, cand.nodeName); clearErr != nil {
-			l.Error(clearErr, "clear draining label failed after eviction preflight error")
-		}
-		return
+		return defragCandidateAborted
 	}
 	if pdbBlocked {
 		stats.PDBBlockedNodes++
 		r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventSkipPDBBlocked,
 			"node %s skipped before eviction: %s", cand.nodeName, pdbReason)
-		if err := r.clearDefragDrainingLabel(ctx, cand.nodeName); err != nil {
-			l.Error(err, "clear draining label failed after PDB preflight block")
-		}
-		return
+		return defragCandidateSkipped
 	}
 
-	// Abort the node on the first eviction failure and leave stale cleanup
-	// to remove the label later.
+	// Abort the node on the first eviction or post-eviction label failure.
 	allSucceeded := r.evictWorkerPods(ctx, pool, cand, stats, l)
 	if allSucceeded {
-		r.defragDrainingNodes.Store(cand.nodeName, time.Now())
-		stats.DrainingCandidates = append(stats.DrainingCandidates, cand.nodeName)
+		return defragCandidateEvicted
 	} else {
 		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventAbortNode,
-			"node %s: eviction aborted; label retained for stale cleanup", cand.nodeName)
+			"node %s: eviction aborted", cand.nodeName)
 	}
+	return defragCandidateAborted
 }
 
 // ----- simulation: joint placement using local budget -------------------
@@ -558,7 +572,6 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 		nodeGpuStore,
 		nodeWorkerStore,
 		schedFramework.SnapshotSharedLister().NodeInfos(),
-		r.snapshotDefragDrainingNodes(),
 	)
 	if len(budget) == 0 {
 		return false, nil
@@ -771,14 +784,10 @@ func buildDefragNodeBudgets(
 	nodeGpuStore map[string]map[string]*tfv1.GPU,
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{},
 	nodeInfoLister framework.NodeInfoLister,
-	drainingNodes map[string]struct{},
 ) map[string]*nodeBudget {
 	budget := make(map[string]*nodeBudget, len(nodeGpuStore))
 	for nodeName, gpus := range nodeGpuStore {
 		if nodeName == sourceNode {
-			continue
-		}
-		if _, draining := drainingNodes[nodeName]; draining {
 			continue
 		}
 		nodeInfo, err := nodeInfoLister.Get(nodeName)
@@ -814,118 +823,28 @@ func buildDefragNodeBudgets(
 	return budget
 }
 
-func (r *GPUPoolCompactionReconciler) snapshotDefragDrainingNodes() map[string]struct{} {
-	out := map[string]struct{}{}
-	r.defragDrainingNodes.Range(func(k, _ any) bool {
-		nodeName, _ := k.(string)
-		if nodeName != "" {
-			out[nodeName] = struct{}{}
-		}
-		return true
-	})
-	return out
-}
-
 func (r *GPUPoolCompactionReconciler) currentNodeWorkerPods(ctx context.Context, nodeName string) ([]*corev1.Pod, error) {
 	nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
 	return r.listNodeWorkerPods(ctx, nodeName, nodeWorkerStore[nodeName])
 }
 
-func findNewOrFreshDefragWorker(
-	runStart time.Time,
-	originalPods []*corev1.Pod,
-	currentPods []*corev1.Pod,
+func findFreshDefragWorker(
+	now time.Time,
+	minAge time.Duration,
+	pods []*corev1.Pod,
 ) (*corev1.Pod, bool) {
-	original := make(map[types.NamespacedName]struct{}, len(originalPods))
-	for _, p := range originalPods {
-		if p == nil {
-			continue
-		}
-		original[types.NamespacedName{Namespace: p.Namespace, Name: p.Name}] = struct{}{}
+	if minAge <= 0 {
+		return nil, false
 	}
-	for _, p := range currentPods {
-		if p == nil {
+	for _, p := range pods {
+		if p == nil || p.CreationTimestamp.IsZero() {
 			continue
 		}
-		if p.CreationTimestamp.After(runStart) {
-			return p, true
-		}
-		key := types.NamespacedName{Namespace: p.Namespace, Name: p.Name}
-		if _, existed := original[key]; !existed {
+		if now.Sub(p.CreationTimestamp.Time) < minAge {
 			return p, true
 		}
 	}
 	return nil, false
-}
-
-func (r *GPUPoolCompactionReconciler) waitSchedulerObservedDefragLabel(
-	ctx context.Context,
-	cand *defragCandidate,
-) error {
-	profileName := constants.SchedulerName
-	if len(cand.workerPods) > 0 && cand.workerPods[0].Spec.SchedulerName != "" {
-		profileName = cand.workerPods[0].Spec.SchedulerName
-	}
-	schedFramework := r.Scheduler.Profiles[profileName]
-	if schedFramework == nil {
-		return fmt.Errorf("scheduler framework not found for scheduler %q", profileName)
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, defragSchedulerCacheSyncTimeout)
-	defer cancel()
-	return waitForSchedulerNodeDefragLabel(
-		waitCtx,
-		func(ctx context.Context) error {
-			return refreshSchedulerNodeInfoSnapshot(ctx, r.Scheduler)
-		},
-		schedFramework.SnapshotSharedLister().NodeInfos(),
-		cand.nodeName,
-		defragSchedulerCacheSyncPoll,
-	)
-}
-
-func waitForSchedulerNodeDefragLabel(
-	ctx context.Context,
-	refreshSnapshot func(context.Context) error,
-	nodeInfoLister framework.NodeInfoLister,
-	nodeName string,
-	pollInterval time.Duration,
-) error {
-	if nodeInfoLister == nil {
-		return fmt.Errorf("scheduler node info lister is nil")
-	}
-	if pollInterval <= 0 {
-		pollInterval = defragSchedulerCacheSyncPoll
-	}
-
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-	var lastRefreshErr error
-	for {
-		if refreshSnapshot != nil {
-			if err := refreshSnapshot(ctx); err != nil {
-				lastRefreshErr = err
-			} else {
-				lastRefreshErr = nil
-			}
-		}
-
-		nodeInfo, err := nodeInfoLister.Get(nodeName)
-		if err == nil {
-			if node := nodeInfo.Node(); node != nil &&
-				node.Labels[constants.DefragDrainingLabel] == constants.TrueStringValue {
-				return nil
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			if lastRefreshErr != nil {
-				return fmt.Errorf("refresh scheduler node info snapshot while waiting for defrag drain label on node %s: %w", nodeName, lastRefreshErr)
-			}
-			return fmt.Errorf("wait for scheduler cache to observe defrag drain label on node %s: %w", nodeName, ctx.Err())
-		case <-ticker.C:
-		}
-	}
 }
 
 // subtractGPURequest mirrors GpuAllocator.Bind.
@@ -1018,6 +937,15 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 		}
 		err := r.KubeClient.CoreV1().Pods(pod.Namespace).EvictV1(ctx, eviction)
 		if err == nil {
+			if markErr := r.markPodDefragEvicted(ctx, pod); markErr != nil {
+				stats.EvictionFailures++
+				r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventPodEvictFailed,
+					"evicted pod %s/%s on node %s but failed to mark defrag label: %v (node eviction aborted)",
+					pod.Namespace, pod.Name, cand.nodeName, markErr)
+				logger.Error(markErr, "failed to mark evicted pod; aborting remaining pods on node",
+					"pod", pod.Namespace+"/"+pod.Name, "node", cand.nodeName)
+				return false
+			}
 			stats.EvictedPods++
 			r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventPodEvicted,
 				"evicted pod %s/%s on node %s for defrag", pod.Namespace, pod.Name, cand.nodeName)
@@ -1038,227 +966,35 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 	return true
 }
 
-// ----- drain watcher / stale cleanup -----------------------------------
-
-// defragDrainWatcherTick clears labels once allocator state sees a node as
-// empty. Timed-out nodes stay labeled until stale cleanup removes them.
-func (r *GPUPoolCompactionReconciler) defragDrainWatcherTick(ctx context.Context, pool *tfv1.GPUPool) {
-	if r.Allocator == nil {
-		return
+func (r *GPUPoolCompactionReconciler) markPodDefragEvicted(ctx context.Context, pod *corev1.Pod) error {
+	if r.KubeClient == nil {
+		return errors.New("kube client is nil")
 	}
-	if !r.Allocator.IsReady() {
-		return
+	if pod == nil {
+		return errors.New("pod is nil")
 	}
-	nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
-
-	r.defragDrainingNodes.Range(func(k, v any) bool {
-		nodeName, _ := k.(string)
-		start, _ := v.(time.Time)
-		node := &corev1.Node{}
-		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, node); err != nil {
-			if apierrors.IsNotFound(err) {
-				r.defragDrainingNodes.Delete(nodeName)
-				return true
-			}
-			log.FromContext(ctx).Error(err, "get draining node in watcher", "node", nodeName)
-			return true
-		}
-		belongs, err := r.defragNodeBelongsToPool(ctx, pool.Name, node)
-		if err != nil {
-			log.FromContext(ctx).Error(err, "check draining node pool ownership",
-				"node", nodeName, "pool", pool.Name)
-			return true
-		}
-		if !belongs {
-			return true
-		}
-
-		if len(nodeWorkerStore[nodeName]) == 0 {
-			if err := r.clearDefragDrainingLabel(ctx, nodeName); err != nil {
-				log.FromContext(ctx).Error(err, "clear draining label in watcher",
-					"node", nodeName)
-				return true
-			}
-			r.defragDrainingNodes.Delete(nodeName)
-			r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventNodeDrained,
-				"node %s fully drained after defrag", nodeName)
-			return true
-		}
-		if time.Since(start) > drainConfirmationTimeout {
-			r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventDrainTimeout,
-				"node %s still has %d TF workers after %s; relying on stale cleanup",
-				nodeName, len(nodeWorkerStore[nodeName]), drainConfirmationTimeout)
-		}
-		return true
-	})
-}
-
-// defragStaleLabelCleanupTick removes old drain labels for the current pool.
-func (r *GPUPoolCompactionReconciler) defragStaleLabelCleanupTick(ctx context.Context, pool *tfv1.GPUPool) {
-	cfg := getDefragConfig(pool)
-	if cfg == nil {
-		return
+	patch := map[string]any{
+		"metadata": map[string]any{
+			"labels": map[string]any{
+				constants.DefragEvictedPodLabel: constants.TrueStringValue,
+			},
+		},
 	}
-	maxDuration := parseDefragMaxDuration(cfg.MaxDuration, log.FromContext(ctx))
-	staleAfter := 2 * maxDuration
-
-	nodeList := &corev1.NodeList{}
-	if err := r.List(ctx, nodeList, client.MatchingLabels{
-		constants.DefragDrainingLabel: constants.TrueStringValue,
-	}); err != nil {
-		log.FromContext(ctx).Error(err, "list draining nodes for stale cleanup")
-		return
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return err
 	}
-	now := time.Now()
-	for i := range nodeList.Items {
-		n := &nodeList.Items[i]
-		belongs, err := r.defragNodeBelongsToPool(ctx, pool.Name, n)
-		if err != nil {
-			log.FromContext(ctx).Error(err, "check stale draining node pool ownership",
-				"node", n.Name, "pool", pool.Name)
-			continue
-		}
-		if !belongs {
-			continue
-		}
-
-		raw := n.Annotations[constants.DefragDrainingSinceAnnotation]
-		if raw == "" {
-			_ = r.clearDefragDrainingLabel(ctx, n.Name)
-			r.defragDrainingNodes.Delete(n.Name)
-			continue
-		}
-		since, err := time.Parse(time.RFC3339, raw)
-		if err != nil {
-			_ = r.clearDefragDrainingLabel(ctx, n.Name)
-			r.defragDrainingNodes.Delete(n.Name)
-			continue
-		}
-		if now.Sub(since) > staleAfter {
-			if err := r.clearDefragDrainingLabel(ctx, n.Name); err != nil {
-				log.FromContext(ctx).Error(err, "clear stale draining label", "node", n.Name)
-				continue
-			}
-			r.defragDrainingNodes.Delete(n.Name)
-			r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventStaleLabelCleared,
-				"node %s defrag draining label cleared after %s", n.Name, now.Sub(since))
-		}
-	}
-}
-
-// scheduleDefragDrainWatcherBootstrap rebuilds in-memory drain state after
-// the manager cache is ready.
-func (r *GPUPoolCompactionReconciler) scheduleDefragDrainWatcherBootstrap(mgr manager.Manager) {
-	_ = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		if !mgr.GetCache().WaitForCacheSync(ctx) {
-			return nil
-		}
-		nodeList := &corev1.NodeList{}
-		if err := r.List(ctx, nodeList, client.MatchingLabels{
-			constants.DefragDrainingLabel: constants.TrueStringValue,
-		}); err != nil {
-			log.FromContext(ctx).Error(err, "bootstrap draining nodes list failed")
-			return nil
-		}
-		if r.Allocator == nil {
-			return nil
-		}
-		if !r.Allocator.WaitUntilReady(ctx) {
-			return nil
-		}
-		nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
-		for i := range nodeList.Items {
-			n := &nodeList.Items[i]
-			if len(nodeWorkerStore[n.Name]) == 0 {
-				_ = r.clearDefragDrainingLabel(ctx, n.Name)
-				continue
-			}
-			since := n.Annotations[constants.DefragDrainingSinceAnnotation]
-			start := time.Now()
-			if since != "" {
-				if t, err := time.Parse(time.RFC3339, since); err == nil {
-					start = t
-				}
-			}
-			r.defragDrainingNodes.Store(n.Name, start)
-		}
+	_, err = r.KubeClient.CoreV1().Pods(pod.Namespace).Patch(
+		ctx,
+		pod.Name,
+		types.MergePatchType,
+		raw,
+		metav1.PatchOptions{},
+	)
+	if apierrors.IsNotFound(err) {
 		return nil
-	}))
-}
-
-// ----- node label / annotation helpers ---------------------------------
-
-func (r *GPUPoolCompactionReconciler) defragNodeBelongsToPool(ctx context.Context, poolName string, node *corev1.Node) (bool, error) {
-	if node == nil {
-		return false, nil
 	}
-	if node.Annotations != nil {
-		if owner := node.Annotations[constants.DefragDrainingPoolAnnotation]; owner != "" {
-			return owner == poolName, nil
-		}
-	}
-
-	poolKey := fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, poolName)
-	if node.Labels != nil && node.Labels[poolKey] == constants.TrueStringValue {
-		return true, nil
-	}
-
-	gpuNode := &tfv1.GPUNode{}
-	if err := r.Get(ctx, client.ObjectKey{Name: node.Name}, gpuNode); err != nil {
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return gpuNode.Labels[poolKey] == constants.TrueStringValue, nil
-}
-
-// applyDefragDrainingLabel writes the drain label and annotations.
-func (r *GPUPoolCompactionReconciler) applyDefragDrainingLabel(ctx context.Context, nodeName string, poolName string) error {
-	patch := map[string]any{
-		"metadata": map[string]any{
-			"labels": map[string]any{
-				constants.DefragDrainingLabel: constants.TrueStringValue,
-			},
-			"annotations": map[string]any{
-				constants.DefragDrainingSinceAnnotation: time.Now().Format(time.RFC3339),
-				constants.DefragDrainingPoolAnnotation:  poolName,
-			},
-		},
-	}
-	raw, err := json.Marshal(patch)
-	if err != nil {
-		return err
-	}
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
-	return r.Patch(ctx, node, client.RawPatch(types.MergePatchType, raw))
-}
-
-// clearDefragDrainingLabel removes the label and annotation.
-func (r *GPUPoolCompactionReconciler) clearDefragDrainingLabel(ctx context.Context, nodeName string) error {
-	patch := map[string]any{
-		"metadata": map[string]any{
-			"labels": map[string]any{
-				constants.DefragDrainingLabel: nil,
-			},
-			"annotations": map[string]any{
-				constants.DefragDrainingSinceAnnotation: nil,
-				constants.DefragDrainingPoolAnnotation:  nil,
-			},
-		},
-	}
-	raw, err := json.Marshal(patch)
-	if err != nil {
-		return err
-	}
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
-	if err := r.Patch(ctx, node, client.RawPatch(types.MergePatchType, raw)); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	return nil
+	return err
 }
 
 // patchPoolLastDefragTime persists the schedule anchor in status.
@@ -1272,5 +1008,3 @@ func (r *GPUPoolCompactionReconciler) patchPoolLastDefragTime(ctx context.Contex
 	live.Status.LastDefragTime = &now
 	return r.Status().Patch(ctx, live, patch)
 }
-
-var _ = ctrl.Result{}

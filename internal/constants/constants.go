@@ -196,14 +196,8 @@ const (
 	// Refer: https://karpenter.sh/docs/concepts/disruption/
 	SchedulingDoNotDisruptLabel = Domain + "/do-not-disrupt"
 
-	// Marks a node that defrag is draining.
-	DefragDrainingLabel = Domain + "/defrag-draining"
-
-	// RFC3339 time when the drain label was applied.
-	DefragDrainingSinceAnnotation = Domain + "/defrag-draining-since"
-
-	// GPUPool that owns the current defrag drain operation.
-	DefragDrainingPoolAnnotation = Domain + "/defrag-draining-pool"
+	// Marks a pod that has been evicted by GPUPool defrag.
+	DefragEvictedPodLabel = Domain + "/defrag-evicted"
 )
 
 const (
