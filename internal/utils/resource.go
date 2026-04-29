@@ -10,7 +10,6 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
-	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -91,22 +90,33 @@ func GetActualTflopsFloat64(gpuCapacity resource.Quantity, res tfv1.Resource) fl
 	return res.Tflops.AsApproximateFloat64()
 }
 
+// ParseIndicesAnnotation parses a comma-separated GPU index annotation
+// (e.g. "0,2,3"). Returns (indices, hasError). Previously the error path
+// silently coerced any unparseable token to 0, which caused garbage input
+// like "abc,xyz" to be accepted as "[0, 0]" and then passed straight to
+// the GPUIndexFilter as if the user had asked for GPU 0. Reject the whole
+// annotation on any malformed / negative / out-of-range token instead.
 func ParseIndicesAnnotation(gpuIndicesStr string) ([]int32, bool) {
 	if gpuIndicesStr == "" {
 		return nil, false
 	}
-	gpuIndices := lo.Map(slices.Collect(strings.SplitSeq(gpuIndicesStr, ",")), func(index string, _ int) int32 {
-		indexInt, err := strconv.Atoi(strings.TrimSpace(index))
+	parts := strings.Split(gpuIndicesStr, ",")
+	gpuIndices := make([]int32, 0, len(parts))
+	for _, raw := range parts {
+		token := strings.TrimSpace(raw)
+		indexInt, err := strconv.Atoi(token)
 		if err != nil {
-			ctrl.Log.Error(err, "Invalid GPU index annotation", "index", index)
-			return 0
+			ctrl.Log.Error(err, "Invalid GPU index annotation", "index", token)
+			return nil, true
 		}
-		if indexInt < math.MinInt32 || indexInt > math.MaxInt32 {
-			ctrl.Log.Error(fmt.Errorf("out of range int32"), "Invalid GPU index range", "index", indexInt)
-			return 0
+		if indexInt < 0 || indexInt > math.MaxInt32 {
+			ctrl.Log.Error(fmt.Errorf("out of range"),
+				"Invalid GPU index range, must be 0..MaxInt32",
+				"index", indexInt)
+			return nil, true
 		}
-		return int32(indexInt)
-	})
+		gpuIndices = append(gpuIndices, int32(indexInt))
+	}
 	return gpuIndices, false
 }
 
@@ -126,6 +136,10 @@ func ComposeAllocationRequest(ctx context.Context, pod *corev1.Pod) (*tfv1.Alloc
 		count, err = strconv.Atoi(gpuCountStr)
 		if err != nil {
 			return &tfv1.AllocRequest{}, "invalid gpu count annotation", err
+		}
+		if count < 1 || count > 128 {
+			return &tfv1.AllocRequest{}, "invalid gpu count annotation",
+				fmt.Errorf("gpu count %d out of range [1, 128]", count)
 		}
 	}
 	if count > MaxGPUCounterPerAllocation {

@@ -417,6 +417,13 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 		if err != nil {
 			return fmt.Errorf("invalid gpuCount value: %w", err)
 		}
+		// Reject negative / zero / absurdly large values up front. A negative
+		// value cast to uint32 silently becomes ~4G, a 0 is a no-op that
+		// downstream code does not handle, and anything past a sane upper
+		// bound is operator error.
+		if val < 1 || val > 128 {
+			return fmt.Errorf("invalid gpuCount value %d: must be in [1, 128]", val)
+		}
 		workloadProfile.Spec.GPUCount = uint32(val)
 	} else if workloadProfile.Spec.GPUCount == 0 {
 		// Map to track GPU count per container: containerName -> gpuCount
@@ -564,6 +571,16 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 	// finally add default GPU count when not specified
 	if workloadProfile.Spec.GPUCount == 0 {
 		workloadProfile.Spec.GPUCount = 1
+	}
+	// Final guard: regardless of whether GPUCount was sourced from the
+	// pod annotation, the WorkloadProfile spec, container limits, or the
+	// gpu-indices annotation, the resulting value must fit in [1, 128].
+	// Catches the case where a user creates a WorkloadProfile CR with
+	// `spec.gpuCount: 0` or `200` and references it from a pod that has
+	// no `tensor-fusion.ai/gpu-count` annotation of its own — the
+	// annotation-only check above would never fire.
+	if workloadProfile.Spec.GPUCount < 1 || workloadProfile.Spec.GPUCount > 128 {
+		return fmt.Errorf("invalid gpuCount %d: must be in [1, 128]", workloadProfile.Spec.GPUCount)
 	}
 	return nil
 }

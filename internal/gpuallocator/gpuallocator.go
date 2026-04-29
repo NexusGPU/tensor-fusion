@@ -2526,8 +2526,11 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 			return &tfv1.AllocRequest{}, "invalid gpu count annotation", err
 		}
 	}
-	if count > MaxGPUCounterPerAllocation {
-		return &tfv1.AllocRequest{}, "gpu count annotation is too large", nil
+	// Reject negative / zero / absurdly large values: -1 cast to uint is huge,
+	// 0 is a no-op downstream does not handle.
+	if count < 1 || count > MaxGPUCounterPerAllocation {
+		return &tfv1.AllocRequest{}, "invalid gpu count annotation",
+			fmt.Errorf("gpu count %d out of range [1, %d]", count, MaxGPUCounterPerAllocation)
 	}
 
 	qosLevel := tfv1.QoSLevel(pod.Annotations[constants.QoSLevelAnnotation])
