@@ -482,38 +482,44 @@ func SetGPUAllocationMetrics(gpuStore map[types.NamespacedName]*tfv1.GPU, pod *c
 }
 
 func SetSchedulerMetrics(poolName string, isSuccess bool) {
-	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
-		TensorFusionSystemMetricsMap[poolName] = &TensorFusionSystemMetrics{
-			PoolName: poolName,
-		}
+	TensorFusionSystemMetricsMapLock.Lock()
+	defer TensorFusionSystemMetricsMapLock.Unlock()
+	item, ok := TensorFusionSystemMetricsMap[poolName]
+	if !ok {
+		item = &TensorFusionSystemMetrics{PoolName: poolName}
+		TensorFusionSystemMetricsMap[poolName] = item
 	}
 	if isSuccess {
-		TensorFusionSystemMetricsMap[poolName].TotalAllocationSuccessCount++
+		item.TotalAllocationSuccessCount++
 	} else {
-		TensorFusionSystemMetricsMap[poolName].TotalAllocationFailCount++
+		item.TotalAllocationFailCount++
 	}
 }
 
 // TODO should record metrics after autoscaling feature added
 func SetAutoscalingMetrics(poolName string, isScaleUp bool) {
-	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
-		TensorFusionSystemMetricsMap[poolName] = &TensorFusionSystemMetrics{
-			PoolName: poolName,
-		}
+	TensorFusionSystemMetricsMapLock.Lock()
+	defer TensorFusionSystemMetricsMapLock.Unlock()
+	item, ok := TensorFusionSystemMetricsMap[poolName]
+	if !ok {
+		item = &TensorFusionSystemMetrics{PoolName: poolName}
+		TensorFusionSystemMetricsMap[poolName] = item
 	}
 	if isScaleUp {
-		TensorFusionSystemMetricsMap[poolName].TotalScaleUpCount++
+		item.TotalScaleUpCount++
 	} else {
-		TensorFusionSystemMetricsMap[poolName].TotalScaleDownCount++
+		item.TotalScaleDownCount++
 	}
 }
 
 func getSchedulerMetricsByPool(poolName string) (int64, int64, int64, int64) {
-	if item, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
+	TensorFusionSystemMetricsMapLock.RLock()
+	defer TensorFusionSystemMetricsMapLock.RUnlock()
+	item, ok := TensorFusionSystemMetricsMap[poolName]
+	if !ok {
 		return 0, 0, 0, 0
-	} else {
-		return item.TotalAllocationSuccessCount, item.TotalAllocationFailCount, item.TotalScaleUpCount, item.TotalScaleDownCount
 	}
+	return item.TotalAllocationSuccessCount, item.TotalAllocationFailCount, item.TotalScaleUpCount, item.TotalScaleDownCount
 }
 
 // Start metrics recorder

@@ -24,7 +24,7 @@ type Handler interface {
 	UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload) error
 	ApplyRecommendationToWorkload(ctx context.Context, workloadState *State, recommendation *tfv1.Resources) error
 	UpdateWorkloadStatus(ctx context.Context, state *State, recommendation *tfv1.Resources) error
-	GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, error)
+	GetMaxAllowedResourcesSpec(view *StateView) (*tfv1.Resource, error)
 	SetEventRecorder(recorder record.EventRecorder, scheme *runtime.Scheme)
 }
 
@@ -66,64 +66,96 @@ func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State,
 		return err
 	}
 
+	// DeepCopy Spec to detach from the controller-runtime informer cache: the
+	// listed workload object can share backing memory with the cache and may
+	// be mutated by the reflector after we release Mu.
+	specCopy := workload.Spec.DeepCopy()
+	statusCopy := workload.Status.DeepCopy()
+	creationTimestamp := workload.CreationTimestamp
+
 	workloadState.Mu.Lock()
 	defer workloadState.Mu.Unlock()
 
 	workloadState.Namespace = workload.Namespace
 	workloadState.Name = workload.Name
-	workloadState.Spec = workload.Spec
-	workloadState.Status = *workload.Status.DeepCopy()
-	workloadState.CreationTimestamp = workload.CreationTimestamp
+	workloadState.Spec = *specCopy
+	workloadState.Status = *statusCopy
+	workloadState.CreationTimestamp = creationTimestamp
 
-	if workload.Spec.AutoScalingConfig.AutoSetResources != nil {
-		workloadState.updateHistoryPeriod(workload.Spec.AutoScalingConfig.AutoSetResources.HistoryDataPeriod)
+	if specCopy.AutoScalingConfig.AutoSetResources != nil {
+		workloadState.updateHistoryPeriod(specCopy.AutoScalingConfig.AutoSetResources.HistoryDataPeriod)
 	}
 
 	workloadState.updateCurrentActiveWorkers(workerList)
 	return nil
 }
 
-func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, workload *State, recommendation *tfv1.Resources) error {
+func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, workloadState *State, recommendation *tfv1.Resources) error {
 	// If the latest recommendation has not been applied to all workers,
-	// we need to retry the update
-	if recommendation == nil && !workload.IsRecommendationAppliedToAllWorkers() {
-		workload.Mu.Lock()
-		recommendation = workload.Status.Recommendation
-		workload.Mu.Unlock()
+	// we need to retry the update by reusing the in-memory recommendation.
+	if recommendation == nil && !workloadState.IsRecommendationAppliedToAllWorkers() {
+		recommendation = workloadState.LatestRecommendation()
 	}
 
-	if recommendation != nil {
-		// Snapshot the worker map under the State lock to avoid concurrent map
-		// iteration with metrics-loader goroutines / main loop reloads.
-		workload.Mu.Lock()
-		workers := make([]*corev1.Pod, 0, len(workload.CurrentActiveWorkers))
-		for _, w := range workload.CurrentActiveWorkers {
-			workers = append(workers, w)
-		}
-		workload.Status.AppliedRecommendedReplicas = 0
-		workload.Mu.Unlock()
+	if recommendation == nil {
+		return nil
+	}
 
-		for _, worker := range workers {
-			if isWorkerHasDedicatedGPU(worker) {
-				continue
-			}
+	// Snapshot the worker map under the State lock and DeepCopy each Pod —
+	// applyRecommendationToWorker mutates worker.Annotations before patching,
+	// which would otherwise race against any concurrent reader of
+	// CurrentActiveWorkers (recommender / Snapshot path). While we hold Mu,
+	// also pull out Namespace/Name and the ShouldScale decisions so the
+	// per-worker loop below never has to read State directly.
+	workloadState.Mu.Lock()
+	workers := make([]*corev1.Pod, 0, len(workloadState.CurrentActiveWorkers))
+	for _, w := range workloadState.CurrentActiveWorkers {
+		workers = append(workers, w.DeepCopy())
+	}
+	workloadState.Status.AppliedRecommendedReplicas = 0
+	ctx2 := workerScalingContext{
+		namespace:   workloadState.Namespace,
+		name:        workloadState.Name,
+		scaleTflops: workloadState.shouldScaleResourceLocked(tfv1.ResourceTflops),
+		scaleVram:   workloadState.shouldScaleResourceLocked(tfv1.ResourceVram),
+	}
+	workloadState.Mu.Unlock()
 
-			if err := h.applyRecommendationToWorker(ctx, workload, worker, recommendation); err != nil {
-				log.FromContext(ctx).Error(err, "failed to update worker resources", "worker", worker.Name)
-				continue
-			}
-			workload.Mu.Lock()
-			workload.Status.AppliedRecommendedReplicas++
-			workload.Mu.Unlock()
+	for _, worker := range workers {
+		if isWorkerHasDedicatedGPU(worker) {
+			continue
 		}
+
+		patched, err := h.applyRecommendationToWorker(ctx, ctx2, worker, recommendation)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "failed to update worker resources", "worker", worker.Name)
+			continue
+		}
+		if patched {
+			// Propagate the post-patch annotations back to state.CurrentActiveWorkers.
+			// We deep-copied for thread safety; without this write-back the next tick
+			// would still see the pre-patch annotations as curRes and re-issue (or
+			// skip) the patch incorrectly.
+			workloadState.setWorkerAnnotations(worker.Name, worker.Annotations)
+		}
+		workloadState.IncAppliedRecommendedReplicas()
 	}
 
 	return nil
 }
 
 func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recommendation *tfv1.Resources) error {
+	// Snapshot the in-memory Status under Mu so the K8s patch is built from
+	// a stable view. The recommender's intent has already been merged into
+	// state.Status.Conditions / ActiveCronScalingRule before we got here.
+	state.Mu.Lock()
+	stateStatus := *state.Status.DeepCopy()
+	stateNs := state.Namespace
+	stateName := state.Name
+	state.Mu.Unlock()
+
 	workload := &tfv1.TensorFusionWorkload{}
-	if err := h.Get(ctx, client.ObjectKey{Namespace: state.Namespace, Name: state.Name}, workload); err != nil {
+	if err := h.Get(ctx, client.ObjectKey{Namespace: stateNs, Name: stateName}, workload); err != nil {
 		return fmt.Errorf("failed to get workload: %v", err)
 	}
 
@@ -132,18 +164,18 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recomm
 
 	if isRecommendationChanged(&workload.Status, recommendation) {
 		workload.Status.Recommendation = recommendation
-		workload.Status.ActiveCronScalingRule = state.Status.ActiveCronScalingRule.DeepCopy()
+		workload.Status.ActiveCronScalingRule = stateStatus.ActiveCronScalingRule.DeepCopy()
 		hasChanges = true
 	}
 
-	if workload.Status.AppliedRecommendedReplicas != state.Status.AppliedRecommendedReplicas {
-		workload.Status.AppliedRecommendedReplicas = state.Status.AppliedRecommendedReplicas
+	if workload.Status.AppliedRecommendedReplicas != stateStatus.AppliedRecommendedReplicas {
+		workload.Status.AppliedRecommendedReplicas = stateStatus.AppliedRecommendedReplicas
 		hasChanges = true
 	}
 
 	// Update condition - check for both old and new condition types
 	// Always check conditions even if recommendation is nil, as conditions may need to be updated
-	if condition := meta.FindStatusCondition(state.Status.Conditions,
+	if condition := meta.FindStatusCondition(stateStatus.Conditions,
 		constants.ConditionStatusTypeResourceUpdate); condition != nil {
 		oldCondition := meta.FindStatusCondition(workload.Status.Conditions,
 			constants.ConditionStatusTypeResourceUpdate)
@@ -151,7 +183,7 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recomm
 			meta.SetStatusCondition(&workload.Status.Conditions, *condition)
 			hasChanges = true
 		}
-	} else if condition := meta.FindStatusCondition(state.Status.Conditions,
+	} else if condition := meta.FindStatusCondition(stateStatus.Conditions,
 		constants.ConditionStatusTypeRecommendationProvided); condition != nil {
 		// Migrate old condition to new type
 		oldCondition := meta.FindStatusCondition(workload.Status.Conditions,
@@ -164,11 +196,6 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recomm
 			meta.SetStatusCondition(&workload.Status.Conditions, *migratedCondition)
 			hasChanges = true
 		}
-	}
-
-	// Only return early if there are no changes and recommendation is nil and appliedRecommendedReplicas hasn't changed
-	if !hasChanges && !isAppliedRecommendedReplicasChanged(workload, state) {
-		return nil
 	}
 
 	if !hasChanges {
@@ -188,10 +215,6 @@ func isRecommendationChanged(status *tfv1.TensorFusionWorkloadStatus, recommenda
 	return recommendation != nil && (status.Recommendation == nil || !status.Recommendation.Equal(recommendation))
 }
 
-func isAppliedRecommendedReplicasChanged(workload *tfv1.TensorFusionWorkload, state *State) bool {
-	return workload.Status.AppliedRecommendedReplicas != state.Status.AppliedRecommendedReplicas
-}
-
 func isConditionEqual(c1, c2 *metav1.Condition) bool {
 	if c1 == nil && c2 == nil {
 		return true
@@ -205,7 +228,21 @@ func isConditionEqual(c1, c2 *metav1.Condition) bool {
 		c1.Message == c2.Message
 }
 
-func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *State, worker *corev1.Pod, recommendation *tfv1.Resources) error {
+// workerScalingContext is the per-tick decision snapshot taken once under
+// State.Mu and threaded through the worker loop, so applyRecommendationToWorker
+// never has to read State directly.
+type workerScalingContext struct {
+	namespace   string
+	name        string
+	scaleTflops bool
+	scaleVram   bool
+}
+
+// applyRecommendationToWorker patches the worker pod's GPU resource
+// annotations to match recommendation. Returns (true, nil) only when the K8s
+// patch actually went through, so the caller can mirror the new annotations
+// into state.CurrentActiveWorkers.
+func (h *handler) applyRecommendationToWorker(ctx context.Context, sc workerScalingContext, worker *corev1.Pod, recommendation *tfv1.Resources) (bool, error) {
 	log := log.FromContext(ctx)
 
 	curRes, err := utils.GPUResourcesFromAnnotations(worker.Annotations)
@@ -214,14 +251,14 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 	}
 
 	if recommendation.Equal(curRes) {
-		return nil
+		return false, nil
 	}
 
 	// Record event when scaling happens
 	if h.eventRecorder != nil && h.scheme != nil {
 		workloadObj := &tfv1.TensorFusionWorkload{}
-		workloadObj.Namespace = workload.Namespace
-		workloadObj.Name = workload.Name
+		workloadObj.Namespace = sc.namespace
+		workloadObj.Name = sc.name
 		workloadObj.Kind = "TensorFusionWorkload"
 		workloadObj.APIVersion = tfv1.GroupVersion.String()
 
@@ -245,57 +282,42 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 	}
 
 	annotationsToUpdate := utils.GPUResourcesToAnnotations(recommendation)
-	if !workload.ShouldScaleResource(tfv1.ResourceTflops) {
+	if !sc.scaleTflops {
 		delete(annotationsToUpdate, constants.TFLOPSRequestAnnotation)
 		delete(annotationsToUpdate, constants.TFLOPSLimitAnnotation)
 	}
-	if !workload.ShouldScaleResource(tfv1.ResourceVram) {
+	if !sc.scaleVram {
 		delete(annotationsToUpdate, constants.VRAMRequestAnnotation)
 		delete(annotationsToUpdate, constants.VRAMLimitAnnotation)
 	}
 
 	if len(annotationsToUpdate) <= 0 {
-		return nil
+		return false, nil
 	}
 
 	isScaleUp := recommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
 		recommendation.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
 
-	_, deltaRes, err := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+	_, _, err = h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
 		PodUID:     string(worker.UID),
 		IsScaleUp:  isScaleUp,
 		NewRequest: recommendation.Requests,
 		NewLimit:   recommendation.Limits,
 	}, false)
 	if err != nil {
-		return fmt.Errorf("failed to adjust allocation: %v", err)
+		return false, fmt.Errorf("failed to adjust allocation: %v", err)
 	}
 
 	patch := client.MergeFrom(worker.DeepCopy())
 	maps.Copy(worker.Annotations, annotationsToUpdate)
 	if err := h.Patch(ctx, worker, patch); err != nil {
-		// Rollback the allocation change by calculating original values from current state and delta
-		// After AdjustAllocation, the allocator state is now recommendation, so we need to subtract deltaRes
-		// to get back to the original curRes values
-		originalRequest := tfv1.Resource{
-			Tflops: recommendation.Requests.Tflops.DeepCopy(),
-			Vram:   recommendation.Requests.Vram.DeepCopy(),
-		}
-		originalRequest.Tflops.Sub(deltaRes.Tflops)
-		originalRequest.Vram.Sub(deltaRes.Vram)
-
-		originalLimit := tfv1.Resource{
-			Tflops: recommendation.Limits.Tflops.DeepCopy(),
-			Vram:   recommendation.Limits.Vram.DeepCopy(),
-		}
-		originalLimit.Tflops.Sub(deltaRes.Tflops)
-		originalLimit.Vram.Sub(deltaRes.Vram)
-
+		// Roll back to the exact pre-patch resource values parsed from the
+		// worker annotations. Request and limit deltas can differ.
 		if _, _, rollbackErr := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
 			PodUID:     string(worker.UID),
 			IsScaleUp:  !isScaleUp,
-			NewRequest: originalRequest,
-			NewLimit:   originalLimit,
+			NewRequest: curRes.Requests,
+			NewLimit:   curRes.Limits,
 		}, false); rollbackErr != nil {
 			log.Error(rollbackErr, "failed to rollback allocation after patch failure",
 				"worker", worker.Name, "originalError", err)
@@ -303,32 +325,23 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 			log.Info("rolled back allocation after patch failure",
 				"worker", worker.Name, "originalError", err)
 		}
-		return fmt.Errorf("failed to patch worker %s: %v", worker.Name, err)
+		return false, fmt.Errorf("failed to patch worker %s: %v", worker.Name, err)
 	}
 
 	log.Info("apply recommendation to worker successfully",
 		"worker", worker.Name, "recommendation", recommendation, "currentResources", curRes)
 
-	return nil
+	return true, nil
 }
 
-func (h *handler) GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, error) {
-	// Snapshot under the State lock; the iteration below must not race with
-	// AddSample / UpdateWorkloadState mutating CurrentActiveWorkers.
-	workload.Mu.Lock()
-	if len(workload.CurrentActiveWorkers) <= 0 {
-		workload.Mu.Unlock()
+func (h *handler) GetMaxAllowedResourcesSpec(view *StateView) (*tfv1.Resource, error) {
+	if view == nil || len(view.Workers) <= 0 {
 		return nil, nil
 	}
-	workers := make([]*corev1.Pod, 0, len(workload.CurrentActiveWorkers))
-	for _, w := range workload.CurrentActiveWorkers {
-		workers = append(workers, w)
-	}
-	workload.Mu.Unlock()
 
 	gpuStore, _, allocRequests := h.allocator.GetAllocationInfo()
 	gpuToWorkers := map[*tfv1.GPU][]*corev1.Pod{}
-	for _, worker := range workers {
+	for _, worker := range view.Workers {
 		allocated, exists := allocRequests[string(worker.UID)]
 		if !exists || allocated == nil {
 			return nil, fmt.Errorf("worker %s has not allocated GPUs", worker.Name)

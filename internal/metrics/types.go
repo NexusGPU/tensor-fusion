@@ -3,6 +3,7 @@
 package metrics
 
 import (
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,11 @@ func (wm TensorFusionSystemMetrics) TableName() string {
 	return "tf_system_metrics"
 }
 
+// TensorFusionSystemMetricsMapLock serializes access to TensorFusionSystemMetricsMap.
+// Writers (SetSchedulerMetrics / SetAutoscalingMetrics) take Lock; the periodic
+// recorder reader (getSchedulerMetricsByPool, called from inside the recorder
+// flush loop) takes RLock.
+var TensorFusionSystemMetricsMapLock sync.RWMutex
 var TensorFusionSystemMetricsMap = make(map[string]*TensorFusionSystemMetrics)
 
 // Metrics will be stored in a map, key is the worker name, value is the metrics

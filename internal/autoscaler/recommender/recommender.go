@@ -9,15 +9,23 @@ import (
 )
 
 // Interface defines the contract for resource recommendation strategies used by the autoscaler.
+//
+// Recommend operates on an immutable StateView and is therefore safe to call
+// concurrently with State mutators. Any side-effect a recommender wants to
+// record (status conditions, active cron rule changes) must be returned in
+// RecResult.Intent so the caller can merge them under State.Mu.
 type Interface interface {
 	Name() string
-	Recommend(ctx context.Context, workload *workload.State) (*RecResult, error)
+	Recommend(ctx context.Context, view *workload.StateView) (*RecResult, error)
 }
 
 type RecResult struct {
 	Resources        tfv1.Resources
 	HasApplied       bool
 	ScaleDownLocking bool
+	// Intent describes the side-effect that should be merged back into
+	// State.Status. The zero value means "no side-effect".
+	Intent workload.Intent
 }
 
 type recommenderToRecResult map[string]*RecResult
@@ -58,22 +66,29 @@ func mergeResourcesByLargerRequests(src *tfv1.Resources, target *tfv1.Resources)
 	}
 }
 
-func GetRecommendation(ctx context.Context, workload *workload.State, recommenders []Interface) (*tfv1.Resources, error) {
+// GetRecommendation runs every recommender against the given view and returns
+// (mergedRecommendation, perRecommenderIntents). The caller is expected to
+// pass intents to State.ApplyIntents to materialize them under State.Mu.
+func GetRecommendation(ctx context.Context, view *workload.StateView, recommenders []Interface) (*tfv1.Resources, []workload.Intent, error) {
 	recResults := make(recommenderToRecResult)
+	intents := make([]workload.Intent, 0, len(recommenders))
 	for _, recommender := range recommenders {
-		result, err := recommender.Recommend(ctx, workload)
+		result, err := recommender.Recommend(ctx, view)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get recommendation from %s: %v", recommender.Name(), err)
+			return nil, intents, fmt.Errorf("failed to get recommendation from %s: %v", recommender.Name(), err)
 		}
-		if result != nil {
-			recResults[recommender.Name()] = result
+		if result == nil {
+			continue
+		}
+		recResults[recommender.Name()] = result
+		if result.Intent != (workload.Intent{}) {
+			intents = append(intents, result.Intent)
 		}
 	}
 
 	recommendation := recResults.generateRecommendation()
 	if recommendation != nil {
-		curRes := workload.GetCurrentResourcesSpec()
-		// If a resource value is zero, replace it with current value
+		curRes := view.GetCurrentResourcesSpec()
 		if recommendation.Requests.Tflops.IsZero() || recommendation.Limits.Tflops.IsZero() {
 			recommendation.Requests.Tflops = curRes.Requests.Tflops
 			recommendation.Limits.Tflops = curRes.Limits.Tflops
@@ -85,5 +100,5 @@ func GetRecommendation(ctx context.Context, workload *workload.State, recommende
 		}
 	}
 
-	return recommendation, nil
+	return recommendation, intents, nil
 }

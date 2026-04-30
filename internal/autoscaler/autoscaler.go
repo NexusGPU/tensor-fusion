@@ -174,22 +174,31 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 	log.Info("workloads loaded", "workloadCount", len(s.workloads))
 }
 
-func (s *Autoscaler) processSingleWorkload(ctx context.Context, workload *workload.State) {
+func (s *Autoscaler) processSingleWorkload(ctx context.Context, state *workload.State) {
 	log := log.FromContext(ctx)
-	recommendation, err := recommender.GetRecommendation(ctx, workload, s.recommenders)
+
+	// Snapshot once per tick so all recommenders observe the same Spec/Status
+	// and the read paths cannot race with UpdateWorkloadState / AddSample.
+	view := state.Snapshot()
+
+	recommendation, intents, err := recommender.GetRecommendation(ctx, view, s.recommenders)
 	if err != nil {
-		log.Error(err, "failed to get recommendation", "workload", workload.Name)
+		log.Error(err, "failed to get recommendation", "workload", view.Name)
 		return
 	}
 
-	if workload.IsAutoSetResourcesEnabled() {
-		if err := s.workloadHandler.ApplyRecommendationToWorkload(ctx, workload, recommendation); err != nil {
-			log.Error(err, "failed to apply recommendation to workload", "workload", workload.Name)
+	// Merge recommender side-effects (status conditions, active cron rule)
+	// back into State.Status under State.Mu.
+	state.ApplyIntents(intents)
+
+	if view.IsAutoSetResourcesEnabled() {
+		if err := s.workloadHandler.ApplyRecommendationToWorkload(ctx, state, recommendation); err != nil {
+			log.Error(err, "failed to apply recommendation to workload", "workload", view.Name)
 		}
 	}
 
-	if err := s.workloadHandler.UpdateWorkloadStatus(ctx, workload, recommendation); err != nil {
-		log.Error(err, "failed to update workload status", "workload", workload.Name)
+	if err := s.workloadHandler.UpdateWorkloadStatus(ctx, state, recommendation); err != nil {
+		log.Error(err, "failed to update workload status", "workload", view.Name)
 	}
 }
 

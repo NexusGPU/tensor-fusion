@@ -26,7 +26,7 @@ func NewPercentileVramEstimator(percentile float64) VramEstimator {
 }
 
 func (e *percentileVramEstimator) GetVramEstimation(w *metrics.WorkerUsageAggregator) ResourceAmount {
-	return resourceAmountFromFloat(float64(w.VramHistogram.Percentile(e.percentile)))
+	return resourceAmountFromFloat(w.VramPercentile(e.percentile))
 }
 
 type vramMarginEstimator struct {
@@ -60,7 +60,7 @@ func NewPercentileTflopsEstimator(percentile float64) TflopsEstimator {
 }
 
 func (e *percentileTflopsEstimator) GetTflopsEstimation(w *metrics.WorkerUsageAggregator) ResourceAmount {
-	return resourceAmountFromFloat(float64(w.TflopsHistogram.Percentile(e.percentile)))
+	return resourceAmountFromFloat(w.TflopsPercentile(e.percentile))
 }
 
 type tflopsMarginEstimator struct {

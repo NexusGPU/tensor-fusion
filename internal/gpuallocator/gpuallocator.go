@@ -798,10 +798,10 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 	deltaVRAMRequest.Sub(request.Request.Vram)
 
 	deltaTFlopsLimit := adjustRequest.NewLimit.Tflops
-	deltaTFlopsLimit.Sub(request.Request.Tflops)
+	deltaTFlopsLimit.Sub(request.Limit.Tflops)
 
 	deltaVRAMLimit := adjustRequest.NewLimit.Vram
-	deltaVRAMLimit.Sub(request.Request.Vram)
+	deltaVRAMLimit.Sub(request.Limit.Vram)
 
 	if adjustRequest.IsScaleUp {
 		for _, gpuName := range request.GPUNames {

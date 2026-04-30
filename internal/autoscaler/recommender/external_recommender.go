@@ -13,7 +13,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -37,9 +36,9 @@ func (e *ExternalRecommender) Name() string {
 	return "external"
 }
 
-func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *workload.State) (*RecResult, error) {
+func (e *ExternalRecommender) Recommend(ctx context.Context, view *workload.StateView) (*RecResult, error) {
 	log := log.FromContext(ctx)
-	config := workloadState.Spec.AutoScalingConfig.ExternalScaler
+	config := view.Spec.AutoScalingConfig.ExternalScaler
 
 	if config == nil || !config.Enable {
 		return nil, nil
@@ -55,27 +54,29 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 		}
 	}
 
-	timeSinceCreation := time.Since(workloadState.CreationTimestamp.Time)
+	timeSinceCreation := time.Since(view.CreationTimestamp.Time)
 	if timeSinceCreation < initialDelay {
-		meta.SetStatusCondition(&workloadState.Status.Conditions, metav1.Condition{
-			Type:               constants.ConditionStatusTypeResourceUpdate,
-			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Now(),
-			Reason:             "LowConfidence",
-			Message:            fmt.Sprintf("Workload created %v ago, less than InitialDelayPeriod %v, no update performed", timeSinceCreation, initialDelay),
-		})
 		return &RecResult{
 			Resources:        tfv1.Resources{},
 			HasApplied:       true,
 			ScaleDownLocking: false,
+			Intent: workload.Intent{
+				Condition: &metav1.Condition{
+					Type:               constants.ConditionStatusTypeResourceUpdate,
+					Status:             metav1.ConditionTrue,
+					LastTransitionTime: metav1.Now(),
+					Reason:             "LowConfidence",
+					Message:            fmt.Sprintf("Workload created %v ago, less than InitialDelayPeriod %v, no update performed", timeSinceCreation, initialDelay),
+				},
+			},
 		}, nil
 	}
 
 	// Prepare request
-	curRes := workloadState.GetCurrentResourcesSpec()
+	curRes := view.GetCurrentResourcesSpec()
 	request := tfv1.ExternalScalerRequest{
-		WorkloadName:     workloadState.Name,
-		Namespace:        workloadState.Namespace,
+		WorkloadName:     view.Name,
+		Namespace:        view.Namespace,
 		CurrentResources: *curRes,
 	}
 
@@ -124,17 +125,19 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 
 	// If no scaling needed, return nil
 	if !response.NeedScaleUp && !response.NeedScaleDown {
-		meta.SetStatusCondition(&workloadState.Status.Conditions, metav1.Condition{
-			Type:               constants.ConditionStatusTypeResourceUpdate,
-			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Now(),
-			Reason:             "NoScalingNeeded",
-			Message:            response.Reason,
-		})
 		return &RecResult{
 			Resources:        tfv1.Resources{},
 			HasApplied:       true,
 			ScaleDownLocking: false,
+			Intent: workload.Intent{
+				Condition: &metav1.Condition{
+					Type:               constants.ConditionStatusTypeResourceUpdate,
+					Status:             metav1.ConditionTrue,
+					LastTransitionTime: metav1.Now(),
+					Reason:             "NoScalingNeeded",
+					Message:            response.Reason,
+				},
+			},
 		}, nil
 	}
 
@@ -147,7 +150,7 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 	if e.recommendationProcessor != nil {
 		var err error
 		var msg string
-		recommendation, msg, err = e.recommendationProcessor.Apply(ctx, workloadState, &recommendation)
+		recommendation, msg, err = e.recommendationProcessor.Apply(ctx, view, &recommendation)
 		if err != nil {
 			return nil, fmt.Errorf("failed to apply recommendation processor: %v", err)
 		}
@@ -157,25 +160,28 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 	}
 
 	hasApplied := recommendation.Equal(curRes)
+	result := &RecResult{
+		Resources:        recommendation,
+		HasApplied:       hasApplied,
+		ScaleDownLocking: false,
+	}
 	if !hasApplied {
 		reason := "Updated"
 		if response.Reason != "" {
 			reason = response.Reason
 		}
-		meta.SetStatusCondition(&workloadState.Status.Conditions, metav1.Condition{
-			Type:               constants.ConditionStatusTypeResourceUpdate,
-			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Now(),
-			Reason:             reason,
-			Message:            fmt.Sprintf("External scaler recommendation: %s", response.Reason),
-		})
+		result.Intent = workload.Intent{
+			Condition: &metav1.Condition{
+				Type:               constants.ConditionStatusTypeResourceUpdate,
+				Status:             metav1.ConditionTrue,
+				LastTransitionTime: metav1.Now(),
+				Reason:             reason,
+				Message:            fmt.Sprintf("External scaler recommendation: %s", response.Reason),
+			},
+		}
 	}
 
-	return &RecResult{
-		Resources:        recommendation,
-		HasApplied:       hasApplied,
-		ScaleDownLocking: false,
-	}, nil
+	return result, nil
 }
 
 func (e *ExternalRecommender) getAPIKey(ctx context.Context, secretRef *corev1.SecretReference) (string, error) {
