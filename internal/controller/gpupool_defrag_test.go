@@ -207,6 +207,64 @@ func TestEvictWorkerPods_AllSucceed(t *testing.T) {
 	}
 }
 
+func TestEvictWorkerPods_MarksEvictedPodLabel(t *testing.T) {
+	p1 := newPod("p1")
+	fakeClient := clientgofake.NewSimpleClientset(p1)
+	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != "eviction" {
+			return false, nil, nil
+		}
+		// Keep the pod object around so the controller must patch the
+		// defrag marker after a successful eviction request.
+		return true, nil, nil
+	})
+	r := newReconcilerWithFake(fakeClient)
+	cand := &defragCandidate{
+		nodeName:   "node-a",
+		workerPods: []*corev1.Pod{p1},
+	}
+	stats := &defragRunStats{}
+
+	if !r.evictWorkerPods(context.Background(), &tfv1.GPUPool{}, cand, stats, &errLogger{}) {
+		t.Fatalf("expected eviction to succeed")
+	}
+
+	updated, err := fakeClient.CoreV1().Pods(p1.Namespace).Get(context.Background(), p1.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get patched pod: %v", err)
+	}
+	if updated.Labels[constants.DefragEvictedPodLabel] != constants.TrueStringValue {
+		t.Fatalf("expected defrag evicted label, labels=%v", updated.Labels)
+	}
+}
+
+func TestEvictWorkerPods_LabelPatchFailureAborts(t *testing.T) {
+	p1 := newPod("p1")
+	fakeClient := clientgofake.NewSimpleClientset(p1)
+	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != "eviction" {
+			return false, nil, nil
+		}
+		return true, nil, nil
+	})
+	fakeClient.PrependReactor("patch", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("patch failed")
+	})
+	r := newReconcilerWithFake(fakeClient)
+	cand := &defragCandidate{
+		nodeName:   "node-a",
+		workerPods: []*corev1.Pod{p1},
+	}
+	stats := &defragRunStats{}
+
+	if r.evictWorkerPods(context.Background(), &tfv1.GPUPool{}, cand, stats, &errLogger{}) {
+		t.Fatalf("expected label patch failure to abort")
+	}
+	if stats.EvictionFailures != 1 {
+		t.Fatalf("evictionFailures=%d want 1", stats.EvictionFailures)
+	}
+}
+
 func TestEvictWorkerPods_AbortsOnFirstFailure(t *testing.T) {
 	fakeClient := clientgofake.NewSimpleClientset(
 		newPod("p1"),
@@ -441,6 +499,57 @@ func TestGetDefragConfig(t *testing.T) {
 	}
 }
 
+func TestCollectDefragCandidates_SkipsFreshWorkerPods(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
+	gpuNode := newDefragGPUNode("node-a", "pool-a")
+	freshWorker := newDefragWorkerPod("worker-fresh", "node-a", now.Add(-10*time.Minute))
+	objects := []ctrlclient.Object{pool, node, gpuNode, freshWorker}
+	objects = append(objects, newDefragNodeGPUs("node-a", "pool-a")...)
+
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
+		t.Fatalf("init GPU store: %v", err)
+	}
+	r.Allocator.ReconcileAllocationStateForTesting()
+
+	candidates, err := r.collectDefragCandidates(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("collect defrag candidates: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("fresh worker pod should make node ineligible, got %d candidates", len(candidates))
+	}
+}
+
+func TestCollectDefragCandidates_IncludesOldWorkerPods(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
+	gpuNode := newDefragGPUNode("node-a", "pool-a")
+	oldWorker := newDefragWorkerPod("worker-old", "node-a", now.Add(-31*time.Minute))
+	objects := []ctrlclient.Object{pool, node, gpuNode, oldWorker}
+	objects = append(objects, newDefragNodeGPUs("node-a", "pool-a")...)
+
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
+		t.Fatalf("init GPU store: %v", err)
+	}
+	r.Allocator.ReconcileAllocationStateForTesting()
+
+	candidates, err := r.collectDefragCandidates(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("collect defrag candidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("old worker pod should be eligible, got %d candidates", len(candidates))
+	}
+	if candidates[0].nodeName != "node-a" {
+		t.Fatalf("candidate node=%q want node-a", candidates[0].nodeName)
+	}
+}
+
 func TestPrepareDefragSimulationPod_ClearsAssignedGPUState(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -541,7 +650,6 @@ func TestBuildDefragNodeBudgets_SkipsDeletionMarkedNodes(t *testing.T) {
 				),
 			},
 		},
-		map[string]struct{}{},
 	)
 	if _, ok := budgets["node-delete"]; ok {
 		t.Fatalf("expected deletion-marked node to be excluded, got budgets=%v", budgets)
@@ -580,7 +688,6 @@ func TestBuildDefragNodeBudgets_SkipsMissingSchedulerNodeInfo(t *testing.T) {
 				),
 			},
 		},
-		map[string]struct{}{},
 	)
 	if _, ok := budgets["node-stale"]; ok {
 		t.Fatalf("stale node should be excluded, got budgets=%v", budgets)
@@ -590,252 +697,198 @@ func TestBuildDefragNodeBudgets_SkipsMissingSchedulerNodeInfo(t *testing.T) {
 	}
 }
 
-func TestRunDefrag_PersistsLastDefragTimeWhenRunContextCanceled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
+func TestRunDefragStep_NoCandidatesFinishesCampaign(t *testing.T) {
 	pool := newDefragTestPool()
-	r, kubeClient := newDefragControllerTestReconciler(t, pool)
-	runStart := time.Now().Add(-time.Minute).Round(time.Second)
+	r, _ := newDefragControllerTestReconciler(t, pool)
 
-	r.runDefrag(ctx, pool.DeepCopy(), runStart)
+	result := r.runDefragStep(context.Background(), pool.DeepCopy(), time.Now().Add(-time.Minute))
 
-	updated := &tfv1.GPUPool{}
-	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: pool.Name}, updated); err != nil {
-		t.Fatalf("get updated pool: %v", err)
+	if !result.finishCampaign {
+		t.Fatalf("expected empty defrag step to finish campaign")
 	}
-	if updated.Status.LastDefragTime == nil {
-		t.Fatal("expected LastDefragTime to be persisted")
-	}
-	if !updated.Status.LastDefragTime.Time.Equal(runStart) {
-		t.Fatalf("lastDefragTime=%v want %v", updated.Status.LastDefragTime.Time, runStart)
+	if result.evictedNode {
+		t.Fatalf("empty defrag step should not evict a node")
 	}
 }
 
-func TestDefragStaleLabelCleanupTick_ScopedToPool(t *testing.T) {
+func TestRunDefragStep_BlockedByDefragEvictedPod(t *testing.T) {
 	pool := newDefragTestPool()
-	staleSince := time.Now().Add(-2 * time.Hour)
-
-	nodeA := newDefragDrainingNode("node-a", "pool-a", staleSince)
-	nodeB := newDefragDrainingNode("node-b", "pool-b", staleSince)
-
-	r, kubeClient := newDefragControllerTestReconciler(t, pool, nodeA, nodeB)
-	r.defragStaleLabelCleanupTick(context.Background(), pool)
-
-	updatedA := &corev1.Node{}
-	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: nodeA.Name}, updatedA); err != nil {
-		t.Fatalf("get updated node-a: %v", err)
+	blocker := newPod("evicted-worker")
+	blocker.Labels = map[string]string{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
 	}
-	if _, exists := updatedA.Labels[constants.DefragDrainingLabel]; exists {
-		t.Fatalf("expected node-a drain label to be cleared, labels=%v", updatedA.Labels)
+	blocker.Annotations = map[string]string{
+		constants.DefragEvictedPodPoolAnnotation:  pool.Name,
+		constants.DefragEvictedPodSinceAnnotation: time.Now().Format(time.RFC3339),
 	}
+	r, _ := newDefragControllerTestReconciler(t, pool, blocker)
 
-	updatedB := &corev1.Node{}
-	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: nodeB.Name}, updatedB); err != nil {
-		t.Fatalf("get updated node-b: %v", err)
+	result := r.runDefragStep(context.Background(), pool.DeepCopy(), time.Now().Add(-time.Minute))
+
+	if result.finishCampaign {
+		t.Fatalf("defrag-evicted pod should pause, not finish campaign")
 	}
-	if updatedB.Labels[constants.DefragDrainingLabel] != constants.TrueStringValue {
-		t.Fatalf("expected node-b drain label to remain, labels=%v", updatedB.Labels)
+	if result.evictedNode {
+		t.Fatalf("blocked defrag step should not evict a node")
 	}
 }
 
-func TestDefragStaleLabelCleanupTick_UsesGPUNodePoolWhenNodePoolLabelMissing(t *testing.T) {
+func TestHasDefragEvictedPods_ScopedToPool(t *testing.T) {
 	pool := newDefragTestPool()
-	staleSince := time.Now().Add(-2 * time.Hour)
-
-	node := newDefragDrainingNodeWithoutPoolLabel("node-a", staleSince)
-	gpuNode := newDefragGPUNode("node-a", "pool-a")
-
-	r, kubeClient := newDefragControllerTestReconciler(t, pool, node, gpuNode)
-	r.defragStaleLabelCleanupTick(context.Background(), pool)
-
-	updated := &corev1.Node{}
-	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: node.Name}, updated); err != nil {
-		t.Fatalf("get updated node: %v", err)
+	otherPoolPod := newPod("other-pool-evicted-worker")
+	otherPoolPod.Labels = map[string]string{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
 	}
-	if _, exists := updated.Labels[constants.DefragDrainingLabel]; exists {
-		t.Fatalf("expected drain label to be cleared via GPUNode pool ownership, labels=%v", updated.Labels)
+	otherPoolPod.Annotations = map[string]string{
+		constants.DefragEvictedPodPoolAnnotation:  "pool-b",
+		constants.DefragEvictedPodSinceAnnotation: time.Now().Format(time.RFC3339),
+	}
+	samePoolPod := newPod("same-pool-evicted-worker")
+	samePoolPod.Labels = map[string]string{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
+	}
+	samePoolPod.Annotations = map[string]string{
+		constants.DefragEvictedPodPoolAnnotation:  pool.Name,
+		constants.DefragEvictedPodSinceAnnotation: time.Now().Format(time.RFC3339),
+	}
+
+	rOther, _ := newDefragControllerTestReconciler(t, pool, otherPoolPod)
+	blocked, err := rOther.hasDefragEvictedPods(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("check evicted pods for other pool: %v", err)
+	}
+	if blocked {
+		t.Fatalf("evicted pod from another pool must not block pool %s", pool.Name)
+	}
+
+	rSame, _ := newDefragControllerTestReconciler(t, pool, samePoolPod)
+	blocked, err = rSame.hasDefragEvictedPods(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("check evicted pods for same pool: %v", err)
+	}
+	if !blocked {
+		t.Fatalf("evicted pod from same pool should block the next defrag step")
 	}
 }
 
-func TestDefragDrainWatcherTick_ScopedToPool(t *testing.T) {
+func TestHasDefragEvictedPods_ClearsStaleSamePoolMarker(t *testing.T) {
 	pool := newDefragTestPool()
-	nodeB := newDefragDrainingNode("node-b", "pool-b", time.Now().Add(-10*time.Minute))
-
-	r, kubeClient := newDefragControllerTestReconciler(t, pool, nodeB)
-	r.defragDrainingNodes.Store(nodeB.Name, time.Now().Add(-time.Minute))
-
-	r.defragDrainWatcherTick(context.Background(), pool)
-
-	updated := &corev1.Node{}
-	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: nodeB.Name}, updated); err != nil {
-		t.Fatalf("get updated node: %v", err)
+	stalePod := newPod("stale-evicted-worker")
+	stalePod.Labels = map[string]string{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
 	}
-	if updated.Labels[constants.DefragDrainingLabel] != constants.TrueStringValue {
-		t.Fatalf("expected foreign-pool drain label to remain, labels=%v", updated.Labels)
+	stalePod.Annotations = map[string]string{
+		constants.DefragEvictedPodPoolAnnotation:  pool.Name,
+		constants.DefragEvictedPodSinceAnnotation: time.Now().Add(-2 * time.Hour).Format(time.RFC3339),
+	}
+
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, stalePod)
+	blocked, err := r.hasDefragEvictedPods(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("check stale evicted pod marker: %v", err)
+	}
+	if blocked {
+		t.Fatalf("stale evicted pod marker should not block defrag")
+	}
+
+	updated := &corev1.Pod{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Namespace: stalePod.Namespace, Name: stalePod.Name}, updated); err != nil {
+		t.Fatalf("get stale pod after cleanup: %v", err)
+	}
+	if updated.Labels[constants.DefragEvictedPodLabel] == constants.TrueStringValue {
+		t.Fatalf("stale defrag-evicted label should be cleared, labels=%v", updated.Labels)
 	}
 }
 
-func TestDefragDrainWatcherTick_UsesGPUNodePoolWhenNodePoolLabelMissing(t *testing.T) {
-	pool := newDefragTestPool()
-	node := newDefragDrainingNodeWithoutPoolLabel("node-a", time.Now().Add(-10*time.Minute))
-	gpuNode := newDefragGPUNode("node-a", "pool-a")
-
-	r, kubeClient := newDefragControllerTestReconciler(t, pool, node, gpuNode)
-	r.defragDrainingNodes.Store(node.Name, time.Now().Add(-time.Minute))
-
-	r.defragDrainWatcherTick(context.Background(), pool)
-
-	updated := &corev1.Node{}
-	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: node.Name}, updated); err != nil {
-		t.Fatalf("get updated node: %v", err)
+func TestDefragRequeueAfter_ContinuesActiveCampaignQuickly(t *testing.T) {
+	result := defragStepResult{evictedNode: true}
+	got := defragRequeueAfter(result, 30*time.Minute)
+	if got <= 0 || got >= 30*time.Minute {
+		t.Fatalf("active defrag campaign should requeue quickly, got %s", got)
 	}
-	if _, exists := updated.Labels[constants.DefragDrainingLabel]; exists {
-		t.Fatalf("expected drain label to be cleared via GPUNode pool ownership, labels=%v", updated.Labels)
+
+	if got := defragRequeueAfter(defragStepResult{finishCampaign: true}, 30*time.Minute); got != 30*time.Minute {
+		t.Fatalf("finished campaign should use normal compaction period, got %s", got)
 	}
 }
 
-func TestDefragDrainingLabelPatch_IncludesAndClearsPoolOwner(t *testing.T) {
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
-	r, kubeClient := newDefragControllerTestReconciler(t, node)
+func TestRunDefragCandidateLoop_StopsAfterFirstEvictedNode(t *testing.T) {
+	candidates := []*defragCandidate{
+		{nodeName: "node-a"},
+		{nodeName: "node-b"},
+	}
+	stats := &defragRunStats{}
+	visited := []string{}
 
-	if err := r.applyDefragDrainingLabel(context.Background(), node.Name, "pool-a"); err != nil {
-		t.Fatalf("apply drain label: %v", err)
-	}
-
-	updated := &corev1.Node{}
-	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: node.Name}, updated); err != nil {
-		t.Fatalf("get updated node: %v", err)
-	}
-	if updated.Labels[constants.DefragDrainingLabel] != constants.TrueStringValue {
-		t.Fatalf("expected drain label, labels=%v", updated.Labels)
-	}
-	if updated.Annotations[constants.DefragDrainingPoolAnnotation] != "pool-a" {
-		t.Fatalf("expected drain pool annotation, annotations=%v", updated.Annotations)
-	}
-	if updated.Annotations[constants.DefragDrainingSinceAnnotation] == "" {
-		t.Fatalf("expected drain since annotation, annotations=%v", updated.Annotations)
-	}
-
-	if err := r.clearDefragDrainingLabel(context.Background(), node.Name); err != nil {
-		t.Fatalf("clear drain label: %v", err)
-	}
-	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: node.Name}, updated); err != nil {
-		t.Fatalf("get cleared node: %v", err)
-	}
-	if _, exists := updated.Labels[constants.DefragDrainingLabel]; exists {
-		t.Fatalf("expected drain label cleared, labels=%v", updated.Labels)
-	}
-	if _, exists := updated.Annotations[constants.DefragDrainingPoolAnnotation]; exists {
-		t.Fatalf("expected drain pool annotation cleared, annotations=%v", updated.Annotations)
-	}
-	if _, exists := updated.Annotations[constants.DefragDrainingSinceAnnotation]; exists {
-		t.Fatalf("expected drain since annotation cleared, annotations=%v", updated.Annotations)
-	}
-}
-
-func TestWaitForSchedulerNodeDefragLabel(t *testing.T) {
-	lister := &fakeNodeInfoLister{
-		infos: map[string]fwk.NodeInfo{
-			"node-a": newFrameworkNodeInfo(
-				"node-a",
-				map[string]string{constants.DefragDrainingLabel: constants.TrueStringValue},
-				corev1.ResourceList{},
-			),
-		},
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := waitForSchedulerNodeDefragLabel(ctx, nil, lister, "node-a", time.Millisecond); err != nil {
-		t.Fatalf("waitForSchedulerNodeDefragLabel returned error: %v", err)
-	}
-}
-
-func TestWaitForSchedulerNodeDefragLabel_RefreshesUntilLabelVisible(t *testing.T) {
-	lister := &fakeNodeInfoLister{
-		infos: map[string]fwk.NodeInfo{
-			"node-a": newFrameworkNodeInfo("node-a", map[string]string{}, corev1.ResourceList{}),
-		},
-	}
-	refreshCalls := 0
-	refresh := func(context.Context) error {
-		refreshCalls++
-		if refreshCalls == 2 {
-			lister.infos["node-a"] = newFrameworkNodeInfo(
-				"node-a",
-				map[string]string{constants.DefragDrainingLabel: constants.TrueStringValue},
-				corev1.ResourceList{},
-			)
-		}
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := waitForSchedulerNodeDefragLabel(ctx, refresh, lister, "node-a", time.Millisecond); err != nil {
-		t.Fatalf("waitForSchedulerNodeDefragLabel returned error: %v", err)
-	}
-	if refreshCalls < 2 {
-		t.Fatalf("refresh calls=%d want at least 2", refreshCalls)
-	}
-}
-
-func TestWaitForSchedulerNodeDefragLabel_ReturnsRefreshErrorAfterTimeout(t *testing.T) {
-	lister := &fakeNodeInfoLister{
-		infos: map[string]fwk.NodeInfo{
-			"node-a": newFrameworkNodeInfo("node-a", map[string]string{}, corev1.ResourceList{}),
-		},
-	}
-	refreshErr := errors.New("refresh failed")
-	refreshCalls := 0
-	refresh := func(context.Context) error {
-		refreshCalls++
-		return refreshErr
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	err := waitForSchedulerNodeDefragLabel(ctx, refresh, lister, "node-a", time.Millisecond)
-	if err == nil {
-		t.Fatal("expected refresh timeout error")
-	}
-	if refreshCalls == 0 {
-		t.Fatal("expected refresh to be called")
-	}
-	got := err.Error()
-	if !strings.Contains(got, "refresh scheduler node info snapshot") || !strings.Contains(got, refreshErr.Error()) {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestFindNewOrFreshDefragWorker(t *testing.T) {
-	runStart := time.Now()
-	original := []*corev1.Pod{{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:         "ns",
-			Name:              "worker-a",
-			CreationTimestamp: metav1.NewTime(runStart.Add(-time.Minute)),
-		},
-	}}
-	current := append([]*corev1.Pod{}, original...)
-	current = append(current, &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:         "ns",
-			Name:              "worker-b",
-			CreationTimestamp: metav1.NewTime(runStart.Add(time.Second)),
-		},
+	result := runDefragCandidateLoop(context.Background(), candidates, stats, func(cand *defragCandidate) defragCandidateOutcome {
+		visited = append(visited, cand.nodeName)
+		return defragCandidateEvicted
 	})
 
-	pod, ok := findNewOrFreshDefragWorker(runStart, original, current)
-	if !ok {
-		t.Fatal("expected new worker to be detected")
+	if !result.evictedNode {
+		t.Fatalf("expected one node to be evicted")
 	}
-	if pod.Namespace != "ns" || pod.Name != "worker-b" {
-		t.Fatalf("unexpected worker detected: %s/%s", pod.Namespace, pod.Name)
+	if result.finishCampaign {
+		t.Fatalf("evicting one node should not finish the campaign")
+	}
+	if stats.ProcessedNodes != 1 {
+		t.Fatalf("processedNodes=%d want 1", stats.ProcessedNodes)
+	}
+	if len(visited) != 1 || visited[0] != "node-a" {
+		t.Fatalf("visited=%v want only node-a", visited)
+	}
+}
+
+func TestRunDefragCandidateLoop_SkipsAndContinuesToNextCandidate(t *testing.T) {
+	candidates := []*defragCandidate{
+		{nodeName: "node-a"},
+		{nodeName: "node-b"},
+	}
+	stats := &defragRunStats{}
+	visited := []string{}
+
+	result := runDefragCandidateLoop(context.Background(), candidates, stats, func(cand *defragCandidate) defragCandidateOutcome {
+		visited = append(visited, cand.nodeName)
+		if cand.nodeName == "node-a" {
+			return defragCandidateSkipped
+		}
+		return defragCandidateEvicted
+	})
+
+	if !result.evictedNode {
+		t.Fatalf("expected second candidate to be evicted")
+	}
+	if stats.ProcessedNodes != 2 {
+		t.Fatalf("processedNodes=%d want 2", stats.ProcessedNodes)
+	}
+	if fmt.Sprint(visited) != "[node-a node-b]" {
+		t.Fatalf("visited=%v", visited)
+	}
+}
+
+func TestFindFreshDefragWorker(t *testing.T) {
+	now := time.Now()
+	fresh := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace:         "ns",
+		Name:              "worker-fresh",
+		CreationTimestamp: metav1.NewTime(now.Add(-time.Minute)),
+	}}
+	old := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace:         "ns",
+		Name:              "worker-old",
+		CreationTimestamp: metav1.NewTime(now.Add(-time.Hour)),
+	}}
+
+	got, ok := findFreshDefragWorker(now, 30*time.Minute, []*corev1.Pod{old, fresh})
+	if !ok {
+		t.Fatal("expected fresh worker to be detected")
+	}
+	if got.Name != fresh.Name {
+		t.Fatalf("got %s want %s", got.Name, fresh.Name)
 	}
 
-	if pod, ok := findNewOrFreshDefragWorker(runStart, original, original); ok {
-		t.Fatalf("unchanged worker set should not be considered fresh, got %s/%s", pod.Namespace, pod.Name)
+	if pod, ok := findFreshDefragWorker(now, 30*time.Minute, []*corev1.Pod{old}); ok {
+		t.Fatalf("old worker should not be fresh, got %s/%s", pod.Namespace, pod.Name)
 	}
 }
 
@@ -877,9 +930,10 @@ func newDefragTestPool() *tfv1.GPUPool {
 			NodeManagerConfig: &tfv1.NodeManagerConfig{
 				NodeCompaction: &tfv1.NodeCompaction{
 					Defrag: &tfv1.NodeDefragConfig{
-						Enabled:     true,
-						Schedule:    "0 3 * * *",
-						MaxDuration: "30m",
+						Enabled:                     true,
+						Schedule:                    "0 3 * * *",
+						MaxDuration:                 "30m",
+						UtilizationThresholdPercent: 40,
 					},
 				},
 			},
@@ -887,33 +941,62 @@ func newDefragTestPool() *tfv1.GPUPool {
 	}
 }
 
-func newDefragDrainingNode(name, poolName string, since time.Time) *corev1.Node {
-	return &corev1.Node{
+func newDefragWorkerPod(name, nodeName string, createdAt time.Time) *corev1.Pod {
+	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
+			Namespace:         "ns1",
+			Name:              name,
+			UID:               types.UID(name + "-uid"),
+			CreationTimestamp: metav1.NewTime(createdAt),
 			Labels: map[string]string{
-				constants.DefragDrainingLabel:                                     constants.TrueStringValue,
-				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, poolName): constants.TrueStringValue,
+				constants.LabelComponent: constants.ComponentWorker,
+				constants.WorkloadKey:    "workload-a",
 			},
 			Annotations: map[string]string{
-				constants.DefragDrainingSinceAnnotation: since.Format(time.RFC3339),
+				constants.GpuPoolKey:              "pool-a",
+				constants.GpuCountAnnotation:      "1",
+				constants.TFLOPSRequestAnnotation: "10",
+				constants.VRAMRequestAnnotation:   "1Gi",
+				constants.TFLOPSLimitAnnotation:   "10",
+				constants.VRAMLimitAnnotation:     "1Gi",
+				constants.GPUDeviceIDsAnnotation:  fmt.Sprintf("%s-gpu-0", nodeName),
 			},
 		},
+		Spec: corev1.PodSpec{
+			NodeName: nodeName,
+			Containers: []corev1.Container{{
+				Name:  "main",
+				Image: "worker:test",
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 }
 
-func newDefragDrainingNodeWithoutPoolLabel(name string, since time.Time) *corev1.Node {
-	return &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-			Labels: map[string]string{
-				constants.DefragDrainingLabel: constants.TrueStringValue,
-			},
-			Annotations: map[string]string{
-				constants.DefragDrainingSinceAnnotation: since.Format(time.RFC3339),
-			},
-		},
+func newDefragNodeGPUs(nodeName, poolName string) []ctrlclient.Object {
+	out := make([]ctrlclient.Object, 0, 4)
+	for i := 0; i < 4; i++ {
+		availableTflops := "100"
+		if i == 0 {
+			availableTflops = "50"
+		}
+		out = append(out, gpuWithUsageOnNode(
+			fmt.Sprintf("%s-gpu-%d", nodeName, i),
+			poolName,
+			nodeName,
+			availableTflops,
+			"10Gi",
+		))
 	}
+	return out
+}
+
+func gpuWithUsageOnNode(name, poolName, nodeName, avTflops, avVram string) *tfv1.GPU {
+	g := gpuWithUsage(name, poolName, avTflops, avVram, tfv1.UsedByTensorFusion)
+	g.Status.NodeSelector = map[string]string{
+		constants.KubernetesHostNameLabel: nodeName,
+	}
+	return g
 }
 
 func newDefragGPUNode(name, poolName string) *tfv1.GPUNode {
@@ -923,6 +1006,9 @@ func newDefragGPUNode(name, poolName string) *tfv1.GPUNode {
 			Labels: map[string]string{
 				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, poolName): constants.TrueStringValue,
 			},
+		},
+		Status: tfv1.GPUNodeStatus{
+			Phase: tfv1.TensorFusionGPUNodePhaseRunning,
 		},
 	}
 }

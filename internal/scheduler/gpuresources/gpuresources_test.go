@@ -451,14 +451,8 @@ func (s *GPUResourcesSuite) TestFilter() {
 	}
 }
 
-// A node that the GPUPool defrag controller has labeled for draining
-// must be rejected by Filter before any other check. This prevents
-// evicted TF worker pods from bouncing back onto the still-occupied
-// source node, which would defeat the defrag run. The rejection must
-// be UnschedulableAndUnresolvable so the preemption machinery does not
-// speculatively retry the same node.
-func (s *GPUResourcesSuite) TestFilter_DefragDrainingLabelRejectsNode() {
-	log.FromContext(s.ctx).Info("Running TestFilter_DefragDrainingLabelRejectsNode")
+func (s *GPUResourcesSuite) TestFilter_DefragDrainingLabelDoesNotRejectNode() {
+	log.FromContext(s.ctx).Info("Running TestFilter_DefragDrainingLabelDoesNotRejectNode")
 	state := framework.NewCycleState()
 	pod := s.makePod("p-drain-guard",
 		map[string]string{
@@ -471,41 +465,20 @@ func (s *GPUResourcesSuite) TestFilter_DefragDrainingLabelRejectsNode() {
 	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
 	s.Require().True(preFilterStatus.IsSuccess())
 
-	tests := []struct {
-		name           string
-		labels         map[string]string
-		expectedStatus fwk.Code
-	}{
-		{
-			name:           "node with draining label is rejected",
-			labels:         map[string]string{constants.DefragDrainingLabel: constants.TrueStringValue},
-			expectedStatus: fwk.UnschedulableAndUnresolvable,
+	nodeInfo := &framework.NodeInfo{}
+	nodeInfo.SetNode(&v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "node-a",
+			Labels: map[string]string{constants.Domain + "/defrag-draining": constants.TrueStringValue},
 		},
-		{
-			name:           "node without draining label proceeds through Filter",
-			labels:         map[string]string{},
-			expectedStatus: fwk.Success,
+		Status: v1.NodeStatus{
+			Allocatable: v1.ResourceList{
+				v1.ResourceName(constants.PodIndexAnnotation): resource.MustParse("512"),
+			},
 		},
-	}
-
-	for _, tt := range tests {
-		s.Run(tt.name, func() {
-			nodeInfo := &framework.NodeInfo{}
-			nodeInfo.SetNode(&v1.Node{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   "node-a",
-					Labels: tt.labels,
-				},
-				Status: v1.NodeStatus{
-					Allocatable: v1.ResourceList{
-						v1.ResourceName(constants.PodIndexAnnotation): resource.MustParse("512"),
-					},
-				},
-			})
-			status := s.plugin.Filter(s.ctx, state, pod, nodeInfo)
-			s.Equal(tt.expectedStatus, status.Code(), status.Message())
-		})
-	}
+	})
+	status := s.plugin.Filter(s.ctx, state, pod, nodeInfo)
+	s.Equal(fwk.Success, status.Code(), status.Message())
 }
 
 // Every TF worker pod has tensor-fusion.ai/index injected by the webhook, so the
