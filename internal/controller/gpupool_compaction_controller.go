@@ -309,6 +309,11 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if !needStartCompactionJob || len(PendingGPUNodeClaim[pool.Name]) > 0 {
+		if len(PendingGPUNodeClaim[pool.Name]) == 0 {
+			if requeueAfter := r.maybeRunDefragStep(ctx, pool, nextDuration); requeueAfter > 0 && requeueAfter < nextDuration {
+				return ctrl.Result{RequeueAfter: requeueAfter}, nil
+			}
+		}
 		log.Info("Skip compaction because node creating or duration not met", "name", req.Name)
 		return ctrl.Result{RequeueAfter: nextDuration}, nil
 	}
@@ -329,10 +334,13 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Strategy #2: cron-driven defrag, one source node per reconcile.
-	r.maybeRunDefragStep(ctx, pool)
+	requeueAfter := nextDuration
+	if defragRequeueAfter := r.maybeRunDefragStep(ctx, pool, nextDuration); defragRequeueAfter > 0 && defragRequeueAfter < requeueAfter {
+		requeueAfter = defragRequeueAfter
+	}
 
 	// Next ticker, timer set by user, won't impacted by other reconcile requests
-	return ctrl.Result{RequeueAfter: nextDuration}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

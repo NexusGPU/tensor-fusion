@@ -198,6 +198,12 @@ const (
 
 	// Marks a pod that has been evicted by GPUPool defrag.
 	DefragEvictedPodLabel = Domain + "/defrag-evicted"
+
+	// RFC3339 time when the pod was evicted by GPUPool defrag.
+	DefragEvictedPodSinceAnnotation = Domain + "/defrag-evicted-since"
+
+	// GPUPool that owns the pod eviction marker.
+	DefragEvictedPodPoolAnnotation = Domain + "/defrag-evicted-pool"
 )
 
 const (

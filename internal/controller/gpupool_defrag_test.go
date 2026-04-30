@@ -717,6 +717,10 @@ func TestRunDefragStep_BlockedByDefragEvictedPod(t *testing.T) {
 	blocker.Labels = map[string]string{
 		constants.DefragEvictedPodLabel: constants.TrueStringValue,
 	}
+	blocker.Annotations = map[string]string{
+		constants.DefragEvictedPodPoolAnnotation:  pool.Name,
+		constants.DefragEvictedPodSinceAnnotation: time.Now().Format(time.RFC3339),
+	}
 	r, _ := newDefragControllerTestReconciler(t, pool, blocker)
 
 	result := r.runDefragStep(context.Background(), pool.DeepCopy(), time.Now().Add(-time.Minute))
@@ -726,6 +730,85 @@ func TestRunDefragStep_BlockedByDefragEvictedPod(t *testing.T) {
 	}
 	if result.evictedNode {
 		t.Fatalf("blocked defrag step should not evict a node")
+	}
+}
+
+func TestHasDefragEvictedPods_ScopedToPool(t *testing.T) {
+	pool := newDefragTestPool()
+	otherPoolPod := newPod("other-pool-evicted-worker")
+	otherPoolPod.Labels = map[string]string{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
+	}
+	otherPoolPod.Annotations = map[string]string{
+		constants.DefragEvictedPodPoolAnnotation:  "pool-b",
+		constants.DefragEvictedPodSinceAnnotation: time.Now().Format(time.RFC3339),
+	}
+	samePoolPod := newPod("same-pool-evicted-worker")
+	samePoolPod.Labels = map[string]string{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
+	}
+	samePoolPod.Annotations = map[string]string{
+		constants.DefragEvictedPodPoolAnnotation:  pool.Name,
+		constants.DefragEvictedPodSinceAnnotation: time.Now().Format(time.RFC3339),
+	}
+
+	rOther, _ := newDefragControllerTestReconciler(t, pool, otherPoolPod)
+	blocked, err := rOther.hasDefragEvictedPods(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("check evicted pods for other pool: %v", err)
+	}
+	if blocked {
+		t.Fatalf("evicted pod from another pool must not block pool %s", pool.Name)
+	}
+
+	rSame, _ := newDefragControllerTestReconciler(t, pool, samePoolPod)
+	blocked, err = rSame.hasDefragEvictedPods(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("check evicted pods for same pool: %v", err)
+	}
+	if !blocked {
+		t.Fatalf("evicted pod from same pool should block the next defrag step")
+	}
+}
+
+func TestHasDefragEvictedPods_ClearsStaleSamePoolMarker(t *testing.T) {
+	pool := newDefragTestPool()
+	stalePod := newPod("stale-evicted-worker")
+	stalePod.Labels = map[string]string{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
+	}
+	stalePod.Annotations = map[string]string{
+		constants.DefragEvictedPodPoolAnnotation:  pool.Name,
+		constants.DefragEvictedPodSinceAnnotation: time.Now().Add(-2 * time.Hour).Format(time.RFC3339),
+	}
+
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, stalePod)
+	blocked, err := r.hasDefragEvictedPods(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("check stale evicted pod marker: %v", err)
+	}
+	if blocked {
+		t.Fatalf("stale evicted pod marker should not block defrag")
+	}
+
+	updated := &corev1.Pod{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Namespace: stalePod.Namespace, Name: stalePod.Name}, updated); err != nil {
+		t.Fatalf("get stale pod after cleanup: %v", err)
+	}
+	if updated.Labels[constants.DefragEvictedPodLabel] == constants.TrueStringValue {
+		t.Fatalf("stale defrag-evicted label should be cleared, labels=%v", updated.Labels)
+	}
+}
+
+func TestDefragRequeueAfter_ContinuesActiveCampaignQuickly(t *testing.T) {
+	result := defragStepResult{evictedNode: true}
+	got := defragRequeueAfter(result, 30*time.Minute)
+	if got <= 0 || got >= 30*time.Minute {
+		t.Fatalf("active defrag campaign should requeue quickly, got %s", got)
+	}
+
+	if got := defragRequeueAfter(defragStepResult{finishCampaign: true}, 30*time.Minute); got != 30*time.Minute {
+		t.Fatalf("finished campaign should use normal compaction period, got %s", got)
 	}
 }
 
