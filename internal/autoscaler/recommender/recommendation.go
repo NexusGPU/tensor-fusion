@@ -10,7 +10,7 @@ import (
 )
 
 type RecommendationProcessor interface {
-	Apply(ctx context.Context, workload *workload.State, recommendation *tfv1.Resources) (tfv1.Resources, string, error)
+	Apply(ctx context.Context, view *workload.StateView, recommendation *tfv1.Resources) (tfv1.Resources, string, error)
 }
 
 func NewRecommendationProcessor(workloadHandler workload.Handler) RecommendationProcessor {
@@ -23,11 +23,11 @@ type recommendationProcessor struct {
 
 func (r *recommendationProcessor) Apply(
 	ctx context.Context,
-	workload *workload.State,
+	view *workload.StateView,
 	rec *tfv1.Resources) (tfv1.Resources, string, error) {
 	result := *rec
 	msg := ""
-	curRes := workload.GetCurrentResourcesSpec()
+	curRes := view.GetCurrentResourcesSpec()
 
 	isScaleUpTflops := curRes.Requests.Tflops.Cmp(rec.Requests.Tflops) < 0
 	isScaleUpVram := curRes.Requests.Vram.Cmp(rec.Requests.Vram) < 0
@@ -36,11 +36,11 @@ func (r *recommendationProcessor) Apply(
 	}
 
 	// Get max allowed considering the node with min available resources
-	allowedRes, err := r.workloadHandler.GetMaxAllowedResourcesSpec(workload)
+	allowedRes, err := r.workloadHandler.GetMaxAllowedResourcesSpec(view)
 	if err != nil || allowedRes == nil {
 		return result, msg, err
 	}
-	log.FromContext(ctx).V(4).Info("fetched max allowed resources", "workload", workload.Name, "resources", allowedRes)
+	log.FromContext(ctx).V(4).Info("fetched max allowed resources", "workload", view.Name, "resources", allowedRes)
 
 	if isScaleUpTflops && rec.Requests.Tflops.Cmp(allowedRes.Tflops) > 0 {
 		result.Requests.Tflops = allowedRes.Tflops

@@ -76,8 +76,9 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to get computing vendor config for cluster %s", cluster.Name)
 	}
 
-	// When node really created, remove from in flight nodes
-	if claim.Labels != nil && claim.Status.Phase == tfv1.GPUNodeClaimBound {
+	// When node really created, remove from in flight nodes. r.Expander is nil
+	// when -enable-auto-expander is off; skip the call entirely in that case.
+	if r.Expander != nil && claim.Labels != nil && claim.Status.Phase == tfv1.GPUNodeClaimBound {
 		r.Expander.RemoveInFlightNode(claim.Labels[constants.KarpenterExpansionLabel])
 	}
 
@@ -90,7 +91,9 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	needRequeueCheckDeletion := false
 	shouldReturn, err := utils.HandleFinalizer(ctx, claim, r.Client, func(ctx context.Context, claim *tfv1.GPUNodeClaim) (bool, error) {
 		nodeList := &corev1.NodeList{}
-		r.Expander.RemoveInFlightNode(claim.Name)
+		if r.Expander != nil {
+			r.Expander.RemoveInFlightNode(claim.Name)
+		}
 		if err := r.List(ctx, nodeList, client.MatchingLabels{constants.ProvisionerLabelKey: claim.Name}); err != nil {
 			if errors.IsNotFound(err) {
 				return true, nil

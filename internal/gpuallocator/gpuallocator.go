@@ -45,6 +45,17 @@ const CleanUpCheckInterval = 3 * time.Minute
 var mu sync.Mutex
 var GPUCapacityMap = map[string]tfv1.Resource{}
 
+// GetGPUCapacity returns the capacity recorded for a given GPU model under
+// the same lock used by the writers. Direct reads of GPUCapacityMap from
+// outside this package race with the informer-driven writes and would
+// eventually fatal with `concurrent map read and map write`.
+func GetGPUCapacity(model string) (tfv1.Resource, bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	r, ok := GPUCapacityMap[model]
+	return r, ok
+}
+
 type Strategy interface {
 	// When isForNode = true, indicates each GPU's node level score
 	// otherwise it's single GPU score inside one node
@@ -149,6 +160,13 @@ func (s *GpuAllocator) RegisterBindHandler(handler func(req *tfv1.AllocRequest))
 	s.bindHandlers = append(s.bindHandlers, handler)
 }
 
+// GetAllocationInfo returns deep-copied snapshots of the in-memory allocation
+// state. Callers can iterate freely without holding any allocator lock and
+// without risking `concurrent map iteration and map write` against
+// Bind / Dealloc / informer paths.
+//
+// The trade-off is one allocation pass per call; that is acceptable because
+// every caller is on a slow path (HTTP debug endpoints, reconcile loops).
 func (s *GpuAllocator) GetAllocationInfo() (
 	gpuStore map[types.NamespacedName]*tfv1.GPU,
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{},
@@ -156,7 +174,32 @@ func (s *GpuAllocator) GetAllocationInfo() (
 ) {
 	s.storeMutex.RLock()
 	defer s.storeMutex.RUnlock()
-	return s.gpuStore, s.nodeWorkerStore, s.uniqueAllocation
+
+	gpuStore = make(map[types.NamespacedName]*tfv1.GPU, len(s.gpuStore))
+	for k, v := range s.gpuStore {
+		if v == nil {
+			continue
+		}
+		gpuStore[k] = v.DeepCopy()
+	}
+
+	nodeWorkerStore = make(map[string]map[types.NamespacedName]struct{}, len(s.nodeWorkerStore))
+	for nodeName, workers := range s.nodeWorkerStore {
+		inner := make(map[types.NamespacedName]struct{}, len(workers))
+		for w := range workers {
+			inner[w] = struct{}{}
+		}
+		nodeWorkerStore[nodeName] = inner
+	}
+
+	uniqueAllocation = make(map[string]*tfv1.AllocRequest, len(s.uniqueAllocation))
+	for k, v := range s.uniqueAllocation {
+		if v == nil {
+			continue
+		}
+		uniqueAllocation[k] = v.DeepCopy()
+	}
+	return gpuStore, nodeWorkerStore, uniqueAllocation
 }
 
 // GetNodeGpuStore returns a snapshot of the node-to-GPU map.
@@ -755,10 +798,10 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 	deltaVRAMRequest.Sub(request.Request.Vram)
 
 	deltaTFlopsLimit := adjustRequest.NewLimit.Tflops
-	deltaTFlopsLimit.Sub(request.Request.Tflops)
+	deltaTFlopsLimit.Sub(request.Limit.Tflops)
 
 	deltaVRAMLimit := adjustRequest.NewLimit.Vram
-	deltaVRAMLimit.Sub(request.Request.Vram)
+	deltaVRAMLimit.Sub(request.Limit.Vram)
 
 	if adjustRequest.IsScaleUp {
 		for _, gpuName := range request.GPUNames {
@@ -1196,7 +1239,7 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 	defer s.storeMutex.Unlock()
 
 	if s.gpuStore[key] != nil {
-		if gpu.Status.GPUModel != "" {
+		if gpu.Status.GPUModel != "" && gpu.Status.Capacity != nil {
 			mu.Lock()
 			if _, exists := GPUCapacityMap[gpu.Status.GPUModel]; !exists {
 				GPUCapacityMap[gpu.Status.GPUModel] = *gpu.Status.Capacity
@@ -1264,7 +1307,18 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 		syncGPUMetadataAndStatusFromCluster(old, gpu)
 		log.V(6).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
 	} else {
-		s.gpuStore[key] = gpu.DeepCopy()
+		// Mirror handleGPUCreate's defaulting so downstream code (e.g.
+		// addOrUpdateGPUMaps) can safely deref Capacity when the informer
+		// delivers an Update for an object the create path never saw with a
+		// fully populated Status.
+		gpuInMem := gpu.DeepCopy()
+		if gpuInMem.Status.Capacity == nil {
+			gpuInMem.Status.Capacity = &tfv1.Resource{}
+		}
+		if gpuInMem.Status.Available == nil {
+			gpuInMem.Status.Available = gpuInMem.Status.Capacity.DeepCopy()
+		}
+		s.gpuStore[key] = gpuInMem
 		log.V(6).Info("Updated GPU in store (new entry)", "name", key.Name, "phase", gpu.Status.Phase)
 	}
 
@@ -1296,7 +1350,7 @@ func (s *GpuAllocator) addOrUpdateGPUMaps(gpuInMem *tfv1.GPU) {
 		}
 	}
 
-	if gpuInMem.Status.GPUModel != "" {
+	if gpuInMem.Status.GPUModel != "" && gpuInMem.Status.Capacity != nil {
 		mu.Lock()
 		GPUCapacityMap[gpuInMem.Status.GPUModel] = *gpuInMem.Status.Capacity
 		mu.Unlock()
@@ -1499,6 +1553,16 @@ func (s *GpuAllocator) ReconcileAllocationState() {
 
 func (s *GpuAllocator) ReconcileAllocationStateForTesting() {
 	s.reconcileAllocationState()
+}
+
+// SetGPUForTesting inserts a GPU into the live in-memory store under the
+// allocator's write lock. Tests need this because GetAllocationInfo returns
+// deep-copied snapshots, so mutating the returned map no longer reaches the
+// real store.
+func (s *GpuAllocator) SetGPUForTesting(key types.NamespacedName, gpu *tfv1.GPU) {
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+	s.gpuStore[key] = gpu
 }
 
 func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(

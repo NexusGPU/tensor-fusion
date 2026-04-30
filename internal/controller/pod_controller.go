@@ -79,7 +79,12 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	pod := &corev1.Pod{}
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
 		if errors.IsNotFound(err) {
-			_ = r.Expander.RemovePreSchedulePod(req.Name, true)
+			// r.Expander is nil when -enable-auto-expander is off; the receiver
+			// methods guard against it but we keep this explicit so a future
+			// refactor of the expander API stays safe here.
+			if r.Expander != nil {
+				_ = r.Expander.RemovePreSchedulePod(req.Name, true)
+			}
 			r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
 			metrics.RemoveWorkerMetrics(req.Name, time.Now())
 			metrics.RemoveGPUAllocationMetrics(req.Name)
@@ -99,7 +104,9 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	// Release GPU resources when pod is in Failed or Succeeded (Complete) state
 	// Only for worker pods that have allocated GPU resources
 	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker && utils.IsPodStopped(pod) {
-		_ = r.Expander.RemovePreSchedulePod(pod.Name, true)
+		if r.Expander != nil {
+			_ = r.Expander.RemovePreSchedulePod(pod.Name, true)
+		}
 		r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
 		metrics.RemoveWorkerMetrics(pod.Name, time.Now())
 		metrics.RemoveGPUAllocationMetrics(pod.Name)

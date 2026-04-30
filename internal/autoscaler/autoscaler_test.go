@@ -170,10 +170,10 @@ var _ = Describe("Autoscaler", func() {
 
 			scalerWorkers := ws.WorkerUsageSamplers
 			Expect(scalerWorkers[worker.Name].LastTflopsSampleTime).To(Equal(usage.Timestamp))
-			Expect(ws.WorkerUsageAggregator.TflopsHistogram.IsEmpty()).To(BeFalse())
+			Expect(ws.WorkerUsageAggregator.TflopsIsEmpty()).To(BeFalse())
 			Expect(scalerWorkers[worker.Name].VramPeak).To(Equal(usage.VramUsage))
 			Expect(scalerWorkers[worker.Name].LastVramSampleTime).To(Equal(usage.Timestamp))
-			Expect(ws.WorkerUsageAggregator.VramHistogram.IsEmpty()).To(BeFalse())
+			Expect(ws.WorkerUsageAggregator.VramIsEmpty()).To(BeFalse())
 			usage = &metrics.WorkerUsage{
 				Namespace:    workload.Namespace,
 				WorkloadName: workload.Name,
@@ -189,7 +189,7 @@ var _ = Describe("Autoscaler", func() {
 			Expect(scalerWorkers[worker.Name].LastTflopsSampleTime).To(Equal(usage.Timestamp))
 			Expect(scalerWorkers[worker.Name].VramPeak).To(Equal(usage.VramUsage))
 			Expect(scalerWorkers[worker.Name].LastVramSampleTime).To(Equal(usage.Timestamp))
-			Expect(ws.WorkerUsageAggregator.TotalSamplesCount).To(Equal(2))
+			Expect(ws.WorkerUsageAggregator.TotalSamplesCount()).To(Equal(2))
 		})
 	})
 
@@ -458,7 +458,7 @@ var _ = Describe("Autoscaler", func() {
 			scaler.loadWorkloads(testCtx)
 			workloadState = scaler.workloads[key]
 
-			got, err := workloadHandler.GetMaxAllowedResourcesSpec(workloadState)
+			got, err := workloadHandler.GetMaxAllowedResourcesSpec(workloadState.Snapshot())
 			Expect(err).To(Succeed())
 			Expect(got.Tflops.Value()).To(Equal(allTflops))
 			Expect(got.Vram.Value()).To(Equal(allVram))
@@ -476,7 +476,7 @@ var _ = Describe("Autoscaler", func() {
 			workloadState, exists = scaler.workloads[key]
 			Expect(exists).To(BeTrue())
 			Expect(workloadState).ToNot(BeNil())
-			got, err = workloadHandler.GetMaxAllowedResourcesSpec(workloadState)
+			got, err = workloadHandler.GetMaxAllowedResourcesSpec(workloadState.Snapshot())
 			Expect(err).To(Succeed())
 			Expect(got.Tflops.Value()).To(Equal(allTflops / 2))
 			Expect(got.Vram.Value()).To(Equal(allVram / 2))
@@ -492,7 +492,7 @@ var _ = Describe("Autoscaler", func() {
 			// because WorkerCount == 0, so GetMaxAllowedResourcesSpec should return nil
 			workloadState = scaler.workloads[key]
 			if workloadState != nil {
-				got, err = workloadHandler.GetMaxAllowedResourcesSpec(workloadState)
+				got, err = workloadHandler.GetMaxAllowedResourcesSpec(workloadState.Snapshot())
 				// If workload still exists but has no workers, it should return nil
 				if err == nil {
 					Expect(got).To(BeNil())
@@ -676,16 +676,18 @@ func (f *FakeRecommender) Name() string {
 	return "fake"
 }
 
-func (f *FakeRecommender) Recommend(ctx context.Context, workload *workload.State) (*recommender.RecResult, error) {
-	meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
-		Type:               constants.ConditionStatusTypeRecommendationProvided,
-		Status:             metav1.ConditionTrue,
-		LastTransitionTime: metav1.Now(),
-		Reason:             "FakeReason",
-		Message:            "Fake message",
-	})
+func (f *FakeRecommender) Recommend(ctx context.Context, view *workload.StateView) (*recommender.RecResult, error) {
 	return &recommender.RecResult{
 		Resources: *f.Resources,
+		Intent: workload.Intent{
+			Condition: &metav1.Condition{
+				Type:               constants.ConditionStatusTypeRecommendationProvided,
+				Status:             metav1.ConditionTrue,
+				LastTransitionTime: metav1.Now(),
+				Reason:             "FakeReason",
+				Message:            "Fake message",
+			},
+		},
 	}, nil
 }
 

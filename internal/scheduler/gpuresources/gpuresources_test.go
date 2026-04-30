@@ -1409,13 +1409,12 @@ func (s *GPUResourcesSuite) TestReconcileAllocationState_ComputePercent() {
 
 	// Manually add GPU to allocator store
 	// Since InitGPUAndQuotaStore uses sync.Once, we need to manually add the GPU to the store
-	gpuStore, _, _ := s.allocator.GetAllocationInfo()
 	key := types.NamespacedName{Name: "gpu-test-percent"}
 	gpuCopy := gpu.DeepCopy()
 	if gpuCopy.Status.Available == nil {
 		gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
 	}
-	gpuStore[key] = gpuCopy
+	s.allocator.SetGPUForTesting(key, gpuCopy)
 
 	// Reconcile allocation state
 	s.allocator.ReconcileAllocationStateForTesting()
@@ -1521,13 +1520,12 @@ func (s *GPUResourcesSuite) TestReconcileAllocationState_MixedTflopsAndComputePe
 	s.NoError(s.client.Create(s.ctx, workerPod2))
 
 	// Manually add GPU to allocator store
-	gpuStore, _, _ := s.allocator.GetAllocationInfo()
 	key := types.NamespacedName{Name: "gpu-test-mixed"}
 	gpuCopy := gpu.DeepCopy()
 	if gpuCopy.Status.Available == nil {
 		gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
 	}
-	gpuStore[key] = gpuCopy
+	s.allocator.SetGPUForTesting(key, gpuCopy)
 
 	// Reconcile allocation state
 	s.allocator.ReconcileAllocationStateForTesting()
@@ -1936,20 +1934,19 @@ func (s *GPUResourcesSuite) TestReconcileAllocationState_MultipleGPUsWithCompute
 	s.NoError(s.client.Create(s.ctx, workerPod2))
 
 	// Manually add GPUs to allocator store
-	gpuStore, _, _ := s.allocator.GetAllocationInfo()
 	key1 := types.NamespacedName{Name: "gpu-mixed-1"}
 	gpuCopy1 := gpu1.DeepCopy()
 	if gpuCopy1.Status.Available == nil {
 		gpuCopy1.Status.Available = gpuCopy1.Status.Capacity.DeepCopy()
 	}
-	gpuStore[key1] = gpuCopy1
+	s.allocator.SetGPUForTesting(key1, gpuCopy1)
 
 	key2 := types.NamespacedName{Name: "gpu-mixed-2"}
 	gpuCopy2 := gpu2.DeepCopy()
 	if gpuCopy2.Status.Available == nil {
 		gpuCopy2.Status.Available = gpuCopy2.Status.Capacity.DeepCopy()
 	}
-	gpuStore[key2] = gpuCopy2
+	s.allocator.SetGPUForTesting(key2, gpuCopy2)
 
 	// Reconcile allocation state
 	s.allocator.ReconcileAllocationStateForTesting()

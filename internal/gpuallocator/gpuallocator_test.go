@@ -24,6 +24,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
+	quota "github.com/NexusGPU/tensor-fusion/internal/quota"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
@@ -267,6 +268,68 @@ var _ = Describe("GPU Allocator", func() {
 	})
 
 	Context("GPU AutoScale", func() {
+		It("should adjust quota limits from the previous limits", func() {
+			allocator.quotaStore.QuotaStore[testPodMeta.Namespace] = &quota.QuotaStoreEntry{
+				Quota: &tfv1.GPUResourceQuota{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "adjust-limit-delta-quota",
+						Namespace: testPodMeta.Namespace,
+					},
+					Spec: tfv1.GPUResourceQuotaSpec{
+						Total: tfv1.GPUResourceQuotaTotal{
+							Requests: &tfv1.Resource{
+								Tflops: resource.MustParse("1000"),
+								Vram:   resource.MustParse("100Gi"),
+							},
+							Limits: &tfv1.Resource{
+								Tflops: resource.MustParse("1000"),
+								Vram:   resource.MustParse("100Gi"),
+							},
+						},
+					},
+				},
+				CurrentUsage: quota.NewCalculator().CreateZeroUsage(),
+			}
+
+			gpus, err := allocator.Alloc(&tfv1.AllocRequest{
+				PoolName:              "test-pool",
+				WorkloadNameNamespace: workloadNameNs,
+				Request: tfv1.Resource{
+					Tflops: resource.MustParse("50"),
+					Vram:   resource.MustParse("10Gi"),
+				},
+				Limit: tfv1.Resource{
+					Tflops: resource.MustParse("70"),
+					Vram:   resource.MustParse("12Gi"),
+				},
+				Count:   1,
+				PodMeta: testPodMeta,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gpus).To(HaveLen(1))
+
+			_, _, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+				PodUID:    string(testPodMeta.UID),
+				IsScaleUp: true,
+				NewRequest: tfv1.Resource{
+					Tflops: resource.MustParse("90"),
+					Vram:   resource.MustParse("15Gi"),
+				},
+				NewLimit: tfv1.Resource{
+					Tflops: resource.MustParse("120"),
+					Vram:   resource.MustParse("20Gi"),
+				},
+			}, false)
+			Expect(err).NotTo(HaveOccurred())
+
+			usage, exists := allocator.quotaStore.GetQuotaStatus(testPodMeta.Namespace)
+			Expect(exists).To(BeTrue())
+			Expect(usage.Requests.Tflops.Cmp(resource.MustParse("90"))).To(Equal(0))
+			Expect(usage.Requests.Vram.Cmp(resource.MustParse("15Gi"))).To(Equal(0))
+			Expect(usage.Limits.Tflops.Cmp(resource.MustParse("120"))).To(Equal(0))
+			Expect(usage.Limits.Vram.Cmp(resource.MustParse("20Gi"))).To(Equal(0))
+		})
+
 		It("should scale up GPUs", func() {
 			request := tfv1.Resource{
 				Tflops: resource.MustParse("50"),
