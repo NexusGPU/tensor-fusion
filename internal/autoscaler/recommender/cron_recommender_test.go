@@ -70,7 +70,7 @@ var _ = Describe("CronRecommender", func() {
 		})
 
 		It("should return recResult with correct fields if the active cron scaling rule remains unchanged", func() {
-			recResult, _ := recommender.Recommend(ctx, ws)
+			recResult, _ := recommender.Recommend(ctx, ws.Snapshot())
 			Expect(recResult).ToNot(BeNil())
 			Expect(recResult.HasApplied).To(BeTrue())
 			Expect(recResult.ScaleDownLocking).To(BeTrue())
@@ -95,16 +95,17 @@ var _ = Describe("CronRecommender", func() {
 				CronScalingRules: []tfv1.CronScalingRule{*activeRule},
 			}
 
-			recResult, _ := recommender.Recommend(ctx, ws)
+			recResult, _ := recommender.Recommend(ctx, ws.Snapshot())
 			Expect(recResult.Resources.Equal(&ws.Spec.Resources)).To(BeTrue())
 			Expect(recResult.HasApplied).To(BeFalse())
 			Expect(recResult.ScaleDownLocking).To(BeTrue())
+			ws.ApplyIntents([]workload.Intent{recResult.Intent})
 			Expect(ws.Status.ActiveCronScalingRule).To(BeNil())
 			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
 			expectedMsg := fmt.Sprintf("Cron scaling rule %q is inactive", activeRule.Name)
 			Expect(condition.Message).To(Equal(expectedMsg))
 
-			recResult, _ = recommender.Recommend(ctx, ws)
+			recResult, _ = recommender.Recommend(ctx, ws.Snapshot())
 			Expect(recResult).To(BeNil())
 		})
 
@@ -141,8 +142,9 @@ var _ = Describe("CronRecommender", func() {
 				},
 			}
 			recommender = NewCronRecommender(&fakeRecommendationProcessor{expectRes})
-			recResult, _ := recommender.Recommend(ctx, ws)
+			recResult, _ := recommender.Recommend(ctx, ws.Snapshot())
 			Expect(recResult.Resources.Equal(&expectRes)).To(BeTrue())
+			ws.ApplyIntents([]workload.Intent{recResult.Intent})
 			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
 			expectedMsg := fmt.Sprintf("Cron scaling rule %q is active, fake message", activeRule.Name)
 			Expect(condition.Message).To(Equal(expectedMsg))
@@ -168,7 +170,7 @@ var _ = Describe("CronRecommender", func() {
 					},
 				},
 			}
-			_, err := recommender.Recommend(ctx, ws)
+			_, err := recommender.Recommend(ctx, ws.Snapshot())
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -275,13 +277,14 @@ var _ = Describe("CronRecommender", func() {
 
 func verifyCronRecommendationStatus(ctx context.Context, recommender *CronRecommender, w *workload.State, rule *tfv1.CronScalingRule) {
 	GinkgoHelper()
-	recommendation, _ := recommender.Recommend(ctx, w)
+	recommendation, _ := recommender.Recommend(ctx, w.Snapshot())
 	if rule != nil {
 		// verify resource of recommendation
 		Expect(recommendation.Resources.Equal(&rule.DesiredResources)).To(BeTrue())
 		Expect(recommendation.HasApplied).To(BeFalse())
 		Expect(recommendation.ScaleDownLocking).To(BeTrue())
-		// verify workload status
+		// merge recommender intent and verify workload status
+		w.ApplyIntents([]workload.Intent{recommendation.Intent})
 		Expect(equality.Semantic.DeepEqual(w.Status.ActiveCronScalingRule, rule)).To(BeTrue())
 		condition := meta.FindStatusCondition(w.Status.Conditions, constants.ConditionStatusTypeRecommendationProvided)
 		expectedMsg := fmt.Sprintf("Cron scaling rule %q is active", rule.Name)

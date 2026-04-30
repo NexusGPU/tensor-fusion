@@ -20,6 +20,14 @@ func NewNodeScalerInfoRouter(
 }
 
 func (r *NodeScalerInfoRouter) Get(ctx *gin.Context) {
+	if r.nodeExpander == nil {
+		// Auto-expander disabled (e.g. -enable-auto-expander=false). Surface a
+		// proper status code instead of dereferencing the nil pointer.
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "node scaler not enabled",
+		})
+		return
+	}
 	ctx.JSON(http.StatusOK, gin.H{
 		"data": r.nodeExpander.GetNodeScalerInfo(),
 	})

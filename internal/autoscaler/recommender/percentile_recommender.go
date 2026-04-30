@@ -9,7 +9,6 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -64,7 +63,7 @@ var defaultPercentileConfig = PercentileConfig{
 }
 
 type ResourcesEstimator interface {
-	GetResourcesEstimation(*workload.State) *EstimatedResources
+	GetResourcesEstimation(*workload.StateView) *EstimatedResources
 }
 
 type PercentileConfig struct {
@@ -98,11 +97,11 @@ func (p *PercentileRecommender) Name() string {
 	return "percentile"
 }
 
-func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workload.State) (*RecResult, error) {
+func (p *PercentileRecommender) Recommend(ctx context.Context, view *workload.StateView) (*RecResult, error) {
 	log := log.FromContext(ctx)
 
 	// Check InitialDelayPeriod
-	asr := workload.Spec.AutoScalingConfig.AutoSetResources
+	asr := view.Spec.AutoScalingConfig.AutoSetResources
 	if asr == nil {
 		return nil, nil
 	}
@@ -113,7 +112,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		initialDelay = 30 * time.Minute
 	}
 
-	workloadCreationTime := workload.CreationTimestamp.Time
+	workloadCreationTime := view.CreationTimestamp.Time
 	if workloadCreationTime.IsZero() {
 		// Fallback: use current time if creation timestamp is not set
 		workloadCreationTime = time.Now()
@@ -121,29 +120,31 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 
 	timeSinceCreation := time.Since(workloadCreationTime)
 	if timeSinceCreation < initialDelay {
-		meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
-			Type:               constants.ConditionStatusTypeResourceUpdate,
-			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Now(),
-			Reason:             "LowConfidence",
-			Message:            fmt.Sprintf("Workload created time less than InitialDelayPeriod %v, no update performed", initialDelay),
-		})
 		return &RecResult{
 			Resources:        tfv1.Resources{},
 			HasApplied:       true,
 			ScaleDownLocking: false,
+			Intent: workload.Intent{
+				Condition: &metav1.Condition{
+					Type:               constants.ConditionStatusTypeResourceUpdate,
+					Status:             metav1.ConditionTrue,
+					LastTransitionTime: metav1.Now(),
+					Reason:             "LowConfidence",
+					Message:            fmt.Sprintf("Workload created time less than InitialDelayPeriod %v, no update performed", initialDelay),
+				},
+			},
 		}, nil
 	}
 
-	estimations := p.GetResourcesEstimation(workload)
+	estimations := p.GetResourcesEstimation(view)
 	if estimations == nil {
 		return nil, nil
 	}
 
-	log.V(4).Info("estimated resources", "workload", workload.Name, "estimations", estimations)
+	log.V(4).Info("estimated resources", "workload", view.Name, "estimations", estimations)
 
-	curRes := workload.GetCurrentResourcesSpec()
-	originalRes := workload.GetOriginalResourcesSpec()
+	curRes := view.GetCurrentResourcesSpec()
+	originalRes := view.GetOriginalResourcesSpec()
 	recommendation := tfv1.Resources{}
 	message := ""
 
@@ -158,7 +159,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		&originalRes.Requests.Tflops,
 		&originalRes.Limits.Tflops,
 		config,
-		workload.Spec.Qos,
+		view.Spec.Qos,
 	); result != nil {
 		message = result.message
 		recommendation.Requests.Tflops = result.targetRequest
@@ -179,7 +180,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		&originalRes.Requests.Vram,
 		&originalRes.Limits.Vram,
 		config,
-		workload.Spec.Qos,
+		view.Spec.Qos,
 	); result != nil {
 		if len(message) > 0 {
 			message += fmt.Sprintf(", %s", result.message)
@@ -222,18 +223,19 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 
 		// Avoid fluctuation when scale up/down is too small
 		if !shouldUpdate && thresholdMessage != "" {
-			meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
-				Type:               constants.ConditionStatusTypeResourceUpdate,
-				Status:             metav1.ConditionTrue,
-				LastTransitionTime: metav1.Now(),
-				Reason:             "InsideUpdateThreshold",
-				Message:            thresholdMessage + "no update performed",
-			})
-			// Still update recommendation in status
 			return &RecResult{
 				Resources:        recommendation,
 				HasApplied:       false,
 				ScaleDownLocking: false,
+				Intent: workload.Intent{
+					Condition: &metav1.Condition{
+						Type:               constants.ConditionStatusTypeResourceUpdate,
+						Status:             metav1.ConditionTrue,
+						LastTransitionTime: metav1.Now(),
+						Reason:             "InsideUpdateThreshold",
+						Message:            thresholdMessage + "no update performed",
+					},
+				},
 			}, nil
 		}
 	}
@@ -245,7 +247,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 	if p.recommendationProcessor != nil {
 		var err error
 		var msg string
-		recommendation, msg, err = p.recommendationProcessor.Apply(ctx, workload, &recommendation)
+		recommendation, msg, err = p.recommendationProcessor.Apply(ctx, view, &recommendation)
 		if err != nil {
 			return nil, fmt.Errorf("failed to apply recommendation processor: %v", err)
 		}
@@ -256,21 +258,24 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 	}
 
 	hasApplied := recommendation.Equal(curRes)
-	if !hasApplied {
-		meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
-			Type:               constants.ConditionStatusTypeResourceUpdate,
-			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Now(),
-			Reason:             "Updated",
-			Message:            message,
-		})
-	}
-
-	return &RecResult{
+	result := &RecResult{
 		Resources:        recommendation,
 		HasApplied:       hasApplied,
 		ScaleDownLocking: false,
-	}, nil
+	}
+	if !hasApplied {
+		result.Intent = workload.Intent{
+			Condition: &metav1.Condition{
+				Type:               constants.ConditionStatusTypeResourceUpdate,
+				Status:             metav1.ConditionTrue,
+				LastTransitionTime: metav1.Now(),
+				Reason:             "Updated",
+				Message:            message,
+			},
+		}
+	}
+
+	return result, nil
 }
 
 type scalingResult struct {
@@ -400,13 +405,13 @@ type resourcesEstimator struct {
 	upperBoundVram   VramEstimator
 }
 
-func (r *resourcesEstimator) GetResourcesEstimation(workload *workload.State) *EstimatedResources {
-	aggregator := workload.WorkerUsageAggregator
-	if aggregator.IsEmpty() {
+func (r *resourcesEstimator) GetResourcesEstimation(view *workload.StateView) *EstimatedResources {
+	aggregator := view.Aggregator
+	if aggregator == nil || aggregator.IsEmpty() {
 		return nil
 	}
 	// TODO: cache config
-	asr := workload.Spec.AutoScalingConfig.AutoSetResources
+	asr := view.Spec.AutoScalingConfig.AutoSetResources
 	if asr == nil {
 		return nil
 	}

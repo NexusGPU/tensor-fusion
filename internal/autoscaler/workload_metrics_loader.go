@@ -60,8 +60,12 @@ func (l *workloadMetricsLoader) addWorkload(ctx context.Context, workloadID Work
 		return
 	}
 
+	// Snapshot under State.Mu so we don't race with UpdateWorkloadState
+	// rewriting Spec / CreationTimestamp.
+	view := state.Snapshot()
+
 	// Get configuration
-	asr := state.Spec.AutoScalingConfig.AutoSetResources
+	asr := view.Spec.AutoScalingConfig.AutoSetResources
 	if asr == nil || !asr.Enable {
 		return
 	}
@@ -100,7 +104,7 @@ func (l *workloadMetricsLoader) addWorkload(ctx context.Context, workloadID Work
 	}
 
 	// Set timer for initial delay
-	timeSinceCreation := time.Since(state.CreationTimestamp.Time)
+	timeSinceCreation := time.Since(view.CreationTimestamp.Time)
 	if timeSinceCreation < initialDelay {
 		remainingDelay := initialDelay - timeSinceCreation
 		loaderState.initialDelayTimer = time.AfterFunc(remainingDelay, func() {

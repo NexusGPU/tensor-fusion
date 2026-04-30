@@ -9,7 +9,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/robfig/cron/v3"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -30,13 +29,13 @@ func (c *CronRecommender) Name() string {
 	return "cron"
 }
 
-func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*RecResult, error) {
-	activeRule, err := c.getActiveCronScalingRule(&w.Spec.AutoScalingConfig)
+func (c *CronRecommender) Recommend(ctx context.Context, view *workload.StateView) (*RecResult, error) {
+	activeRule, err := c.getActiveCronScalingRule(&view.Spec.AutoScalingConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active cron scaling rule %w", err)
 	}
 
-	currentRule := w.Status.ActiveCronScalingRule
+	currentRule := view.Status.ActiveCronScalingRule
 
 	if activeRule == nil && currentRule == nil {
 		return nil, nil
@@ -46,22 +45,22 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 	var reason, message string
 	if activeRule == nil {
 		// Revert the resources to those specified in the workload spec
-		recommendation = *w.GetOriginalResourcesSpec()
+		recommendation = *view.GetOriginalResourcesSpec()
 		reason = "RuleInactive"
 		message = fmt.Sprintf("Cron scaling rule %q is inactive", currentRule.Name)
 		log.FromContext(ctx).Info("cron scaling rule inactive",
-			"rule", currentRule.Name, "workload", w.Name, "resources", recommendation)
+			"rule", currentRule.Name, "workload", view.Name, "resources", recommendation)
 	} else {
 		recommendation = activeRule.DesiredResources
 		if currentRule == nil || !recommendation.Equal(&currentRule.DesiredResources) {
 			reason = "RuleActive"
 			message = fmt.Sprintf("Cron scaling rule %q is active", activeRule.Name)
 			log.FromContext(ctx).Info("cron scaling rule active",
-				"rule", activeRule.Name, "workload", w.Name, "resources", recommendation)
+				"rule", activeRule.Name, "workload", view.Name, "resources", recommendation)
 			if c.recommendationProcessor != nil {
 				var err error
 				var msg string
-				recommendation, msg, err = c.recommendationProcessor.Apply(ctx, w, &recommendation)
+				recommendation, msg, err = c.recommendationProcessor.Apply(ctx, view, &recommendation)
 				if err != nil {
 					return nil, fmt.Errorf("failed to apply recommendation processor: %v", err)
 				}
@@ -73,22 +72,27 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 		}
 	}
 
-	if len(reason) > 0 {
-		w.Status.ActiveCronScalingRule = activeRule.DeepCopy()
-		meta.SetStatusCondition(&w.Status.Conditions, metav1.Condition{
-			Type:               constants.ConditionStatusTypeRecommendationProvided,
-			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Now(),
-			Reason:             reason,
-			Message:            message,
-		})
-	}
-
-	return &RecResult{
+	result := &RecResult{
 		Resources:        recommendation,
 		HasApplied:       len(reason) == 0,
 		ScaleDownLocking: true,
-	}, nil
+	}
+
+	if len(reason) > 0 {
+		result.Intent = workload.Intent{
+			Condition: &metav1.Condition{
+				Type:               constants.ConditionStatusTypeRecommendationProvided,
+				Status:             metav1.ConditionTrue,
+				LastTransitionTime: metav1.Now(),
+				Reason:             reason,
+				Message:            message,
+			},
+			SetActiveCronRule: true,
+			ActiveCronRule:    activeRule.DeepCopy(),
+		}
+	}
+
+	return result, nil
 }
 
 func (c *CronRecommender) getActiveCronScalingRule(config *tfv1.AutoScalingConfig) (*tfv1.CronScalingRule, error) {

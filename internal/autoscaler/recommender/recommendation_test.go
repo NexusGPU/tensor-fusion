@@ -116,9 +116,9 @@ var _ = Describe("Recommender", func() {
 			Tflops: resource.MustParse("100"),
 			Vram:   resource.MustParse("100Gi"),
 		}
-		workload := workload.NewWorkloadState()
+		ws := workload.NewWorkloadState()
 		// Set current resources to be less than recommendation to trigger scale-up check
-		workload.Spec.Resources = tfv1.Resources{
+		ws.Spec.Resources = tfv1.Resources{
 			Requests: tfv1.Resource{
 				Tflops: resource.MustParse("50"),
 				Vram:   resource.MustParse("50Gi"),
@@ -129,7 +129,7 @@ var _ = Describe("Recommender", func() {
 			},
 		}
 		processor := &recommendationProcessor{&fakeWorkloadHandler{Resource: maxAllowedRes}}
-		got, msg, _ := processor.Apply(context.Background(), workload, &recommendation)
+		got, msg, _ := processor.Apply(context.Background(), ws.Snapshot(), &recommendation)
 		Expect(got.Equal(&expectedRec)).To(BeTrue())
 		Expect(msg).To(Equal("TFlops request set to max allowed: (100), VRAM request set to max allowed: (100Gi)"))
 	})
@@ -149,9 +149,9 @@ var _ = Describe("Recommender", func() {
 			Tflops: resource.MustParse("300"),
 			Vram:   resource.MustParse("300Gi"),
 		}
-		workload := workload.NewWorkloadState()
+		ws := workload.NewWorkloadState()
 		processor := &recommendationProcessor{&fakeWorkloadHandler{Resource: maxAllowedRes}}
-		got, msg, _ := processor.Apply(context.Background(), workload, &recommendation)
+		got, msg, _ := processor.Apply(context.Background(), ws.Snapshot(), &recommendation)
 		Expect(got.Equal(&recommendation)).To(BeTrue())
 		Expect(msg).To(BeEmpty())
 	})
@@ -162,7 +162,7 @@ type fakeWorkloadHandler struct {
 	workload.Handler
 }
 
-func (f *fakeWorkloadHandler) GetMaxAllowedResourcesSpec(workload *workload.State) (*tfv1.Resource, error) {
+func (f *fakeWorkloadHandler) GetMaxAllowedResourcesSpec(view *workload.StateView) (*tfv1.Resource, error) {
 	return &f.Resource, nil
 }
 
@@ -172,7 +172,7 @@ type fakeRecommendationProcessor struct {
 
 func (r *fakeRecommendationProcessor) Apply(
 	ctx context.Context,
-	workload *workload.State,
+	view *workload.StateView,
 	rec *tfv1.Resources) (tfv1.Resources, string, error) {
 	return r.Resources, "fake message", nil
 }

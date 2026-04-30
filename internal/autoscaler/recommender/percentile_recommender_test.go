@@ -74,8 +74,9 @@ var _ = Describe("Percentile Recommender", func() {
 
 			ws.Spec.Resources = curRes
 			ws.Status.Recommendation = nil // Use original resources
-			got, _ := recommender.Recommend(ctx, ws)
+			got, _ := recommender.Recommend(ctx, ws.Snapshot())
 			Expect(got).ToNot(BeNil())
+			ws.ApplyIntents([]workload.Intent{got.Intent})
 			// Debug: print actual vs expected if test fails
 			if !got.Resources.Requests.Tflops.Equal(expectRes.Requests.Tflops) {
 				GinkgoWriter.Printf("TFlops request: got %s, expected %s\n", got.Resources.Requests.Tflops.String(), expectRes.Requests.Tflops.String())
@@ -118,8 +119,9 @@ var _ = Describe("Percentile Recommender", func() {
 
 			ws.Spec.Resources = curRes
 			ws.Status.Recommendation = nil // Use original resources
-			got, _ := recommender.Recommend(ctx, ws)
+			got, _ := recommender.Recommend(ctx, ws.Snapshot())
 			Expect(got).ToNot(BeNil())
+			ws.ApplyIntents([]workload.Intent{got.Intent})
 			// Current is 400, target is 200, so we expect scaling down
 			// But due to UpdateThreshold or other constraints, the recommended might equal current
 			// So just check that a recommendation was made and it's reasonable
@@ -151,7 +153,7 @@ var _ = Describe("Percentile Recommender", func() {
 
 			ws.Spec.Resources = curRes
 			ws.Status.Recommendation = nil // Use original resources
-			got, _ := recommender.Recommend(ctx, ws)
+			got, _ := recommender.Recommend(ctx, ws.Snapshot())
 			// Current matches target bounds, so no scaling needed - should return nil
 			// But due to UpdateThreshold or other logic, might still return a result
 			if got != nil {
@@ -190,9 +192,10 @@ var _ = Describe("Percentile Recommender", func() {
 			}
 			ws.Spec.Resources = curRes
 			ws.Status.Recommendation = nil // Ensure we use original resources
-			got, _ := recommender.Recommend(ctx, ws)
+			got, _ := recommender.Recommend(ctx, ws.Snapshot())
 			Expect(got).ToNot(BeNil())
 			Expect(got.Resources.Equal(&expectRes)).To(BeTrue())
+			ws.ApplyIntents([]workload.Intent{got.Intent})
 			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeResourceUpdate)
 			Expect(condition).ToNot(BeNil())
 			Expect(condition.Message).To(ContainSubstring("Compute scaled"))
@@ -245,6 +248,6 @@ type fakeResourcesEstimator struct {
 	*EstimatedResources
 }
 
-func (f *fakeResourcesEstimator) GetResourcesEstimation(workoad *workload.State) *EstimatedResources {
+func (f *fakeResourcesEstimator) GetResourcesEstimation(view *workload.StateView) *EstimatedResources {
 	return f.EstimatedResources
 }
