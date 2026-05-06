@@ -15,6 +15,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/robfig/cron/v3"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -62,6 +63,30 @@ func TestParseDefragMaxDuration(t *testing.T) {
 				t.Fatalf("expected fallback log; got none")
 			}
 		})
+	}
+}
+
+func TestSelectDefragCampaign_StaleAnchorUsesCurrentWindow(t *testing.T) {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse("* * * * *")
+	if err != nil {
+		t.Fatalf("parse schedule: %v", err)
+	}
+	now := time.Now()
+	staleAnchor := now.Add(-24 * time.Hour)
+
+	decision := selectDefragCampaign(schedule, staleAnchor, now, 10*time.Minute)
+	if !decision.due {
+		t.Fatalf("expected a due current-window campaign, got %+v", decision)
+	}
+	if decision.skipMissed {
+		t.Fatalf("expected current-window campaign, got missed-window skip %+v", decision)
+	}
+	if decision.start.Before(now.Add(-2 * time.Minute)) {
+		t.Fatalf("campaign advanced only one stale tick, got %s from stale %s", decision.start, staleAnchor)
+	}
+	if decision.start.After(time.Now()) {
+		t.Fatalf("campaign must not advance into the future, got %s", decision.start)
 	}
 }
 
@@ -165,6 +190,11 @@ func TestSubtractGPURequest_SafelyIgnoresBadInput(t *testing.T) {
 
 // ---- evictWorkerPods with fake clientset ------------------------------
 
+const (
+	testDefragNodeA         = "node-a"
+	testEvictionSubresource = "eviction"
+)
+
 type errLogger struct{ infoCount, errCount int }
 
 func (l *errLogger) Info(_ string, _ ...any)           { l.infoCount++ }
@@ -175,7 +205,15 @@ func newPod(name string) *corev1.Pod {
 }
 
 func newReconcilerWithFake(client *clientgofake.Clientset) *GPUPoolCompactionReconciler {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	kubeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}).
+		Build()
 	return &GPUPoolCompactionReconciler{
+		Client:     kubeClient,
+		Scheme:     scheme,
 		KubeClient: client,
 		// FakeRecorder so Eventf doesn't panic -- 16 is well over what a
 		// single test will produce, otherwise Recorder.Eventf would block.
@@ -191,7 +229,7 @@ func TestEvictWorkerPods_AllSucceed(t *testing.T) {
 	)
 	r := newReconcilerWithFake(fakeClient)
 	cand := &defragCandidate{
-		nodeName:   "node-a",
+		nodeName:   testDefragNodeA,
 		workerPods: []*corev1.Pod{newPod("p1"), newPod("p2")},
 	}
 	stats := &defragRunStats{}
@@ -211,7 +249,7 @@ func TestEvictWorkerPods_MarksEvictedPodLabel(t *testing.T) {
 	p1 := newPod("p1")
 	fakeClient := clientgofake.NewSimpleClientset(p1)
 	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
-		if a.GetSubresource() != "eviction" {
+		if a.GetSubresource() != testEvictionSubresource {
 			return false, nil, nil
 		}
 		// Keep the pod object around so the controller must patch the
@@ -220,7 +258,7 @@ func TestEvictWorkerPods_MarksEvictedPodLabel(t *testing.T) {
 	})
 	r := newReconcilerWithFake(fakeClient)
 	cand := &defragCandidate{
-		nodeName:   "node-a",
+		nodeName:   testDefragNodeA,
 		workerPods: []*corev1.Pod{p1},
 	}
 	stats := &defragRunStats{}
@@ -238,11 +276,43 @@ func TestEvictWorkerPods_MarksEvictedPodLabel(t *testing.T) {
 	}
 }
 
+func TestEvictWorkerPods_MarksSourceNodeBeforeEviction(t *testing.T) {
+	p1 := newPod("p1")
+	fakeClient := clientgofake.NewSimpleClientset(p1)
+	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != testEvictionSubresource {
+			return false, nil, nil
+		}
+		return true, nil, nil
+	})
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, node)
+	r.KubeClient = fakeClient
+	cand := &defragCandidate{
+		nodeName:   testDefragNodeA,
+		workerPods: []*corev1.Pod{p1},
+	}
+	stats := &defragRunStats{}
+
+	if !r.evictWorkerPods(context.Background(), pool, cand, stats, &errLogger{}) {
+		t.Fatalf("expected eviction to succeed")
+	}
+
+	updated := &corev1.Node{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: testDefragNodeA}, updated); err != nil {
+		t.Fatalf("get source node: %v", err)
+	}
+	if updated.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
+		t.Fatalf("expected source node defrag label, labels=%v", updated.Labels)
+	}
+}
+
 func TestEvictWorkerPods_LabelPatchFailureAborts(t *testing.T) {
 	p1 := newPod("p1")
 	fakeClient := clientgofake.NewSimpleClientset(p1)
 	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
-		if a.GetSubresource() != "eviction" {
+		if a.GetSubresource() != testEvictionSubresource {
 			return false, nil, nil
 		}
 		return true, nil, nil
@@ -252,7 +322,7 @@ func TestEvictWorkerPods_LabelPatchFailureAborts(t *testing.T) {
 	})
 	r := newReconcilerWithFake(fakeClient)
 	cand := &defragCandidate{
-		nodeName:   "node-a",
+		nodeName:   testDefragNodeA,
 		workerPods: []*corev1.Pod{p1},
 	}
 	stats := &defragRunStats{}
@@ -275,7 +345,7 @@ func TestEvictWorkerPods_AbortsOnFirstFailure(t *testing.T) {
 	// evictWorkerPods is supposed to abort the entire node.
 	attempts := 0
 	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
-		if a.GetSubresource() != "eviction" {
+		if a.GetSubresource() != testEvictionSubresource {
 			return false, nil, nil
 		}
 		attempts++
@@ -283,7 +353,7 @@ func TestEvictWorkerPods_AbortsOnFirstFailure(t *testing.T) {
 	})
 	r := newReconcilerWithFake(fakeClient)
 	cand := &defragCandidate{
-		nodeName:   "node-a",
+		nodeName:   testDefragNodeA,
 		workerPods: []*corev1.Pod{newPod("p1"), newPod("p2")},
 	}
 	stats := &defragRunStats{}
@@ -332,7 +402,7 @@ func TestCheckDefragPDBPreflight_BlockedPDBSkipsWholeNode(t *testing.T) {
 	fakeClient := clientgofake.NewSimpleClientset(p1, p2, pdb)
 	r := newReconcilerWithFake(fakeClient)
 	cand := &defragCandidate{
-		nodeName:   "node-a",
+		nodeName:   testDefragNodeA,
 		workerPods: []*corev1.Pod{p1, p2},
 	}
 
@@ -369,7 +439,7 @@ func TestCheckDefragPDBPreflight_AllowsNodeWhenDisruptionsAvailable(t *testing.T
 	fakeClient := clientgofake.NewSimpleClientset(p1, pdb)
 	r := newReconcilerWithFake(fakeClient)
 	cand := &defragCandidate{
-		nodeName:   "node-a",
+		nodeName:   testDefragNodeA,
 		workerPods: []*corev1.Pod{p1},
 	}
 
@@ -405,7 +475,7 @@ func TestCheckDefragPDBPreflight_ListsPDBsOncePerNamespace(t *testing.T) {
 	directClient := clientgofake.NewSimpleClientset(p1, p2, pdb)
 	r := newReconcilerWithFake(directClient)
 	cand := &defragCandidate{
-		nodeName:   "node-a",
+		nodeName:   testDefragNodeA,
 		workerPods: []*corev1.Pod{p1, p2},
 	}
 
@@ -434,14 +504,14 @@ func TestEvictWorkerPods_NotFoundCountsAsSuccess(t *testing.T) {
 	// short-circuits in the fake to a plain action Invoke; inject NotFound
 	// explicitly to match the path we actually hit in production.
 	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
-		if a.GetSubresource() != "eviction" {
+		if a.GetSubresource() != testEvictionSubresource {
 			return false, nil, nil
 		}
 		return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "pods"}, "gone")
 	})
 	r := newReconcilerWithFake(fakeClient)
 	cand := &defragCandidate{
-		nodeName:   "node-a",
+		nodeName:   testDefragNodeA,
 		workerPods: []*corev1.Pod{newPod("gone")},
 	}
 	stats := &defragRunStats{}
@@ -460,7 +530,7 @@ func TestEvictWorkerPods_HonorsCtxDeadline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cand := &defragCandidate{
-		nodeName:   "node-a",
+		nodeName:   testDefragNodeA,
 		workerPods: []*corev1.Pod{newPod("p1")},
 	}
 	stats := &defragRunStats{}
@@ -502,11 +572,11 @@ func TestGetDefragConfig(t *testing.T) {
 func TestCollectDefragCandidates_SkipsFreshWorkerPods(t *testing.T) {
 	now := time.Now()
 	pool := newDefragTestPool()
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
-	gpuNode := newDefragGPUNode("node-a", "pool-a")
-	freshWorker := newDefragWorkerPod("worker-fresh", "node-a", now.Add(-10*time.Minute))
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	gpuNode := newDefragGPUNode(testDefragNodeA, "pool-a")
+	freshWorker := newDefragWorkerPod("worker-fresh", testDefragNodeA, now.Add(-10*time.Minute))
 	objects := []ctrlclient.Object{pool, node, gpuNode, freshWorker}
-	objects = append(objects, newDefragNodeGPUs("node-a", "pool-a")...)
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA, "pool-a")...)
 
 	r, _ := newDefragControllerTestReconciler(t, objects...)
 	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
@@ -526,11 +596,11 @@ func TestCollectDefragCandidates_SkipsFreshWorkerPods(t *testing.T) {
 func TestCollectDefragCandidates_IncludesOldWorkerPods(t *testing.T) {
 	now := time.Now()
 	pool := newDefragTestPool()
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
-	gpuNode := newDefragGPUNode("node-a", "pool-a")
-	oldWorker := newDefragWorkerPod("worker-old", "node-a", now.Add(-31*time.Minute))
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	gpuNode := newDefragGPUNode(testDefragNodeA, "pool-a")
+	oldWorker := newDefragWorkerPod("worker-old", testDefragNodeA, now.Add(-31*time.Minute))
 	objects := []ctrlclient.Object{pool, node, gpuNode, oldWorker}
-	objects = append(objects, newDefragNodeGPUs("node-a", "pool-a")...)
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA, "pool-a")...)
 
 	r, _ := newDefragControllerTestReconciler(t, objects...)
 	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
@@ -545,7 +615,7 @@ func TestCollectDefragCandidates_IncludesOldWorkerPods(t *testing.T) {
 	if len(candidates) != 1 {
 		t.Fatalf("old worker pod should be eligible, got %d candidates", len(candidates))
 	}
-	if candidates[0].nodeName != "node-a" {
+	if candidates[0].nodeName != testDefragNodeA {
 		t.Fatalf("candidate node=%q want node-a", candidates[0].nodeName)
 	}
 }
@@ -814,7 +884,7 @@ func TestDefragRequeueAfter_ContinuesActiveCampaignQuickly(t *testing.T) {
 
 func TestRunDefragCandidateLoop_StopsAfterFirstEvictedNode(t *testing.T) {
 	candidates := []*defragCandidate{
-		{nodeName: "node-a"},
+		{nodeName: testDefragNodeA},
 		{nodeName: "node-b"},
 	}
 	stats := &defragRunStats{}
@@ -834,14 +904,14 @@ func TestRunDefragCandidateLoop_StopsAfterFirstEvictedNode(t *testing.T) {
 	if stats.ProcessedNodes != 1 {
 		t.Fatalf("processedNodes=%d want 1", stats.ProcessedNodes)
 	}
-	if len(visited) != 1 || visited[0] != "node-a" {
+	if len(visited) != 1 || visited[0] != testDefragNodeA {
 		t.Fatalf("visited=%v want only node-a", visited)
 	}
 }
 
 func TestRunDefragCandidateLoop_SkipsAndContinuesToNextCandidate(t *testing.T) {
 	candidates := []*defragCandidate{
-		{nodeName: "node-a"},
+		{nodeName: testDefragNodeA},
 		{nodeName: "node-b"},
 	}
 	stats := &defragRunStats{}
@@ -849,7 +919,7 @@ func TestRunDefragCandidateLoop_SkipsAndContinuesToNextCandidate(t *testing.T) {
 
 	result := runDefragCandidateLoop(context.Background(), candidates, stats, func(cand *defragCandidate) defragCandidateOutcome {
 		visited = append(visited, cand.nodeName)
-		if cand.nodeName == "node-a" {
+		if cand.nodeName == testDefragNodeA {
 			return defragCandidateSkipped
 		}
 		return defragCandidateEvicted

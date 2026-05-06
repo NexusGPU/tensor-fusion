@@ -140,17 +140,17 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 	if pool.Status.LastDefragTime != nil {
 		anchor = pool.Status.LastDefragTime.Time
 	}
-	campaignStart := schedule.Next(anchor)
-	if campaignStart.After(now) {
-		logger.V(5).Info("defrag not due yet", "next", campaignStart, "anchor", anchor)
+	campaign := selectDefragCampaign(schedule, anchor, now, maxDuration)
+	if !campaign.due {
+		logger.V(5).Info("defrag not due yet", "next", campaign.start, "anchor", anchor)
 		return 0
 	}
-	if now.Sub(campaignStart) > maxDuration {
-		logger.Info("defrag campaign expired before this reconcile; advancing schedule anchor",
-			"campaignStart", campaignStart, "maxDuration", maxDuration)
+	if campaign.skipMissed {
+		logger.Info("defrag campaign expired before this reconcile; skipping missed schedule window",
+			"advancedAnchor", campaign.start, "maxDuration", maxDuration)
 		persistCtx, persistCancel := context.WithTimeout(ctx, defragStatusPersistTimeout)
 		defer persistCancel()
-		if err := r.patchPoolLastDefragTime(persistCtx, pool, campaignStart); err != nil {
+		if err := r.patchPoolLastDefragTime(persistCtx, pool, campaign.start); err != nil {
 			logger.Error(err, "failed to patch pool.Status.LastDefragTime after expired defrag campaign")
 		}
 		return 0
@@ -164,17 +164,58 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 	}
 	defer flag.Store(false)
 
-	runCtx, cancel := context.WithDeadline(ctx, campaignStart.Add(maxDuration))
+	runCtx, cancel := context.WithDeadline(ctx, campaign.start.Add(maxDuration))
 	defer cancel()
-	result := r.runDefragStep(runCtx, pool.DeepCopy(), campaignStart)
+	result := r.runDefragStep(runCtx, pool.DeepCopy(), campaign.start)
 	if result.finishCampaign {
 		persistCtx, persistCancel := context.WithTimeout(ctx, defragStatusPersistTimeout)
 		defer persistCancel()
-		if err := r.patchPoolLastDefragTime(persistCtx, pool, campaignStart); err != nil {
+		if err := r.patchPoolLastDefragTime(persistCtx, pool, campaign.start); err != nil {
 			logger.Error(err, "failed to patch pool.Status.LastDefragTime after defrag step")
 		}
 	}
 	return defragRequeueAfter(result, normalRequeue)
+}
+
+type defragSchedule interface {
+	Next(time.Time) time.Time
+}
+
+type defragCampaignDecision struct {
+	start      time.Time
+	due        bool
+	skipMissed bool
+}
+
+func selectDefragCampaign(schedule defragSchedule, anchor, now time.Time, maxDuration time.Duration) defragCampaignDecision {
+	campaignStart := schedule.Next(anchor)
+	if campaignStart.After(now) {
+		return defragCampaignDecision{start: campaignStart}
+	}
+	if now.Sub(campaignStart) <= maxDuration {
+		return defragCampaignDecision{start: campaignStart, due: true}
+	}
+
+	latestActive, ok := latestScheduledDefragTick(schedule, now.Add(-maxDuration).Add(-time.Nanosecond), now)
+	if ok {
+		return defragCampaignDecision{start: latestActive, due: true}
+	}
+	return defragCampaignDecision{start: now, due: true, skipMissed: true}
+}
+
+func latestScheduledDefragTick(schedule defragSchedule, after, now time.Time) (time.Time, bool) {
+	next := schedule.Next(after)
+	if next.After(now) {
+		return time.Time{}, false
+	}
+	latest := next
+	for {
+		candidate := schedule.Next(latest)
+		if !candidate.After(latest) || candidate.After(now) {
+			return latest, true
+		}
+		latest = candidate
+	}
 }
 
 func getDefragConfig(pool *tfv1.GPUPool) *tfv1.NodeDefragConfig {
@@ -874,7 +915,9 @@ func buildDefragNodeBudgets(
 			// it must not make the whole source candidate look unmovable.
 			continue
 		}
-		if node := nodeInfo.Node(); node == nil || node.Labels[constants.NodeDeletionMark] == constants.TrueStringValue {
+		if node := nodeInfo.Node(); node == nil ||
+			node.Labels[constants.NodeDeletionMark] == constants.TrueStringValue ||
+			node.Labels[constants.DefragSourceNodeLabel] == constants.TrueStringValue {
 			continue
 		}
 
@@ -1001,6 +1044,27 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 		Error(error, string, ...any)
 	},
 ) bool {
+	if ctxDone(ctx) {
+		stats.DeadlineExceeded = true
+		return false
+	}
+	if err := r.markNodeDefragSource(ctx, cand.nodeName); err != nil {
+		stats.EvictionFailures++
+		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventPodEvictFailed,
+			"failed to mark node %s as defrag source: %v (node eviction aborted)", cand.nodeName, err)
+		logger.Error(err, "failed to mark defrag source node; aborting node eviction", "node", cand.nodeName)
+		return false
+	}
+	anyEvicted := false
+	defer func() {
+		if anyEvicted {
+			return
+		}
+		if clearErr := r.clearNodeDefragSourceMarker(context.Background(), cand.nodeName); clearErr != nil {
+			logger.Error(clearErr, "failed to clear unused defrag source node marker", "node", cand.nodeName)
+		}
+	}()
+
 	for _, pod := range cand.workerPods {
 		if ctxDone(ctx) {
 			stats.DeadlineExceeded = true
@@ -1014,6 +1078,7 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 		}
 		err := r.KubeClient.CoreV1().Pods(pod.Namespace).EvictV1(ctx, eviction)
 		if err == nil {
+			anyEvicted = true
 			if markErr := r.markPodDefragEvicted(ctx, pool.Name, pod); markErr != nil {
 				stats.EvictionFailures++
 				r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventPodEvictFailed,
@@ -1029,6 +1094,7 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 			continue
 		}
 		if apierrors.IsNotFound(err) {
+			anyEvicted = true
 			stats.EvictedPods++
 			continue
 		}
@@ -1045,6 +1111,39 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 
 // ----- pod marker helpers ----------------------------------------------
 
+func (r *GPUPoolCompactionReconciler) markNodeDefragSource(ctx context.Context, nodeName string) error {
+	if r.Client == nil {
+		return errors.New("controller client is nil")
+	}
+	if nodeName == "" {
+		return errors.New("node name is empty")
+	}
+	raw, err := metadataMergePatch(map[string]any{constants.DefragSourceNodeLabel: constants.TrueStringValue}, nil)
+	if err != nil {
+		return err
+	}
+	target := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
+	return r.Patch(ctx, target, client.RawPatch(types.MergePatchType, raw))
+}
+
+func (r *GPUPoolCompactionReconciler) clearNodeDefragSourceMarker(ctx context.Context, nodeName string) error {
+	if r.Client == nil || nodeName == "" {
+		return nil
+	}
+	raw, err := metadataMergePatch(map[string]any{constants.DefragSourceNodeLabel: nil}, nil)
+	if err != nil {
+		return err
+	}
+	target := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
+	if err := r.Patch(ctx, target, client.RawPatch(types.MergePatchType, raw)); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func (r *GPUPoolCompactionReconciler) markPodDefragEvicted(ctx context.Context, poolName string, pod *corev1.Pod) error {
 	if r.KubeClient == nil {
 		return errors.New("kube client is nil")
@@ -1052,18 +1151,13 @@ func (r *GPUPoolCompactionReconciler) markPodDefragEvicted(ctx context.Context, 
 	if pod == nil {
 		return errors.New("pod is nil")
 	}
-	patch := map[string]any{
-		"metadata": map[string]any{
-			"labels": map[string]any{
-				constants.DefragEvictedPodLabel: constants.TrueStringValue,
-			},
-			"annotations": map[string]any{
-				constants.DefragEvictedPodPoolAnnotation:  poolName,
-				constants.DefragEvictedPodSinceAnnotation: time.Now().Format(time.RFC3339),
-			},
+	raw, err := metadataMergePatch(
+		map[string]any{constants.DefragEvictedPodLabel: constants.TrueStringValue},
+		map[string]any{
+			constants.DefragEvictedPodPoolAnnotation:  poolName,
+			constants.DefragEvictedPodSinceAnnotation: time.Now().Format(time.RFC3339),
 		},
-	}
-	raw, err := json.Marshal(patch)
+	)
 	if err != nil {
 		return err
 	}
@@ -1084,18 +1178,13 @@ func (r *GPUPoolCompactionReconciler) clearPodDefragEvictedMarker(ctx context.Co
 	if pod == nil {
 		return nil
 	}
-	patch := map[string]any{
-		"metadata": map[string]any{
-			"labels": map[string]any{
-				constants.DefragEvictedPodLabel: nil,
-			},
-			"annotations": map[string]any{
-				constants.DefragEvictedPodPoolAnnotation:  nil,
-				constants.DefragEvictedPodSinceAnnotation: nil,
-			},
+	raw, err := metadataMergePatch(
+		map[string]any{constants.DefragEvictedPodLabel: nil},
+		map[string]any{
+			constants.DefragEvictedPodPoolAnnotation:  nil,
+			constants.DefragEvictedPodSinceAnnotation: nil,
 		},
-	}
-	raw, err := json.Marshal(patch)
+	)
 	if err != nil {
 		return err
 	}
@@ -1107,6 +1196,17 @@ func (r *GPUPoolCompactionReconciler) clearPodDefragEvictedMarker(ctx context.Co
 		return err
 	}
 	return nil
+}
+
+func metadataMergePatch(labels, annotations map[string]any) ([]byte, error) {
+	metadata := map[string]any{}
+	if len(labels) > 0 {
+		metadata["labels"] = labels
+	}
+	if len(annotations) > 0 {
+		metadata["annotations"] = annotations
+	}
+	return json.Marshal(map[string]any{"metadata": metadata})
 }
 
 // patchPoolLastDefragTime persists the schedule anchor in status.

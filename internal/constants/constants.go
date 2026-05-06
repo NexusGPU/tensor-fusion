@@ -204,6 +204,9 @@ const (
 
 	// GPUPool that owns the pod eviction marker.
 	DefragEvictedPodPoolAnnotation = Domain + "/defrag-evicted-pool"
+
+	// Marks a node that is being emptied by GPUPool defrag.
+	DefragSourceNodeLabel = Domain + "/defrag-source"
 )
 
 const (

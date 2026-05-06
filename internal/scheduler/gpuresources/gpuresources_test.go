@@ -481,6 +481,36 @@ func (s *GPUResourcesSuite) TestFilter_DefragDrainingLabelDoesNotRejectNode() {
 	s.Equal(fwk.Success, status.Code(), status.Message())
 }
 
+func (s *GPUResourcesSuite) TestFilter_DefragSourceLabelRejectsWorker() {
+	log.FromContext(s.ctx).Info("Running TestFilter_DefragSourceLabelRejectsWorker")
+	state := framework.NewCycleState()
+	pod := s.makePod("p-defrag-source",
+		map[string]string{
+			constants.GpuCountAnnotation:      "1",
+			constants.TFLOPSRequestAnnotation: "100",
+			constants.VRAMRequestAnnotation:   "10Gi",
+			constants.TFLOPSLimitAnnotation:   "100",
+			constants.VRAMLimitAnnotation:     "40Gi",
+		})
+	_, preFilterStatus := s.plugin.PreFilter(s.ctx, state, pod, []fwk.NodeInfo{})
+	s.Require().True(preFilterStatus.IsSuccess())
+
+	nodeInfo := &framework.NodeInfo{}
+	nodeInfo.SetNode(&v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "node-a",
+			Labels: map[string]string{constants.DefragSourceNodeLabel: constants.TrueStringValue},
+		},
+		Status: v1.NodeStatus{
+			Allocatable: v1.ResourceList{
+				v1.ResourceName(constants.PodIndexAnnotation): resource.MustParse("512"),
+			},
+		},
+	})
+	status := s.plugin.Filter(s.ctx, state, pod, nodeInfo)
+	s.Equal(fwk.Unschedulable, status.Code(), status.Message())
+}
+
 // Every TF worker pod has tensor-fusion.ai/index injected by the webhook, so the
 // node must expose a positive allocatable for that resource. Filter must reject
 // with UnschedulableAndUnresolvable on both a zeroed value (hypervisor just died
