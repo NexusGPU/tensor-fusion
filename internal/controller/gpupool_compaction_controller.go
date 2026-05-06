@@ -46,9 +46,6 @@ type GPUPoolCompactionReconciler struct {
 	// key = pool name, value = *atomic.Bool.
 	defragRunning sync.Map
 
-	// key = k8s node name, value = drainStartTime (time.Time).
-	defragDrainingNodes sync.Map
-
 	markDeletionNodes map[string]struct{}
 }
 
@@ -284,10 +281,6 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
-	// Run defrag maintenance even when compaction is skipped.
-	r.defragDrainWatcherTick(ctx, pool)
-	r.defragStaleLabelCleanupTick(ctx, pool)
-
 	needStartCompactionJob := true
 	nextDuration := r.getCompactionDuration(ctx, pool.Spec.NodeManagerConfig)
 
@@ -316,6 +309,11 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if !needStartCompactionJob || len(PendingGPUNodeClaim[pool.Name]) > 0 {
+		if len(PendingGPUNodeClaim[pool.Name]) == 0 {
+			if requeueAfter := r.maybeRunDefragStep(ctx, pool, nextDuration); requeueAfter > 0 && requeueAfter < nextDuration {
+				return ctrl.Result{RequeueAfter: requeueAfter}, nil
+			}
+		}
 		log.Info("Skip compaction because node creating or duration not met", "name", req.Name)
 		return ctrl.Result{RequeueAfter: nextDuration}, nil
 	}
@@ -335,19 +333,20 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, compactionErr
 	}
 
-	// Strategy #2: cron-driven defrag in a background goroutine.
-	r.maybeStartDefragRun(ctx, pool)
+	// Strategy #2: cron-driven defrag, one source node per reconcile.
+	requeueAfter := nextDuration
+	if defragRequeueAfter := r.maybeRunDefragStep(ctx, pool, nextDuration); defragRequeueAfter > 0 && defragRequeueAfter < requeueAfter {
+		requeueAfter = defragRequeueAfter
+	}
 
 	// Next ticker, timer set by user, won't impacted by other reconcile requests
-	return ctrl.Result{RequeueAfter: nextDuration}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *GPUPoolCompactionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.markDeletionNodes = make(map[string]struct{})
 	r.defragParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
-	// Rebuild drain watcher state from already-labeled nodes.
-	r.scheduleDefragDrainWatcherBootstrap(mgr)
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gpupool-compaction").
 		WatchesMetadata(&tfv1.GPUPool{}, &handler.EnqueueRequestForObject{}).
