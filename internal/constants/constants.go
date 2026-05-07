@@ -207,6 +207,12 @@ const (
 
 	// Marks a node that is being emptied by GPUPool defrag.
 	DefragSourceNodeLabel = Domain + "/defrag-source"
+
+	// RFC3339 time when the node was marked as a GPUPool defrag source.
+	DefragSourceNodeSinceAnnotation = Domain + "/defrag-source-since"
+
+	// GPUPool that owns the node source marker.
+	DefragSourceNodePoolAnnotation = Domain + "/defrag-source-pool"
 )
 
 const (

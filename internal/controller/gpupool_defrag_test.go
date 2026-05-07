@@ -193,6 +193,9 @@ func TestSubtractGPURequest_SafelyIgnoresBadInput(t *testing.T) {
 const (
 	testDefragNodeA         = "node-a"
 	testEvictionSubresource = "eviction"
+
+	testDefragSourceNodeSinceAnnotation = constants.Domain + "/defrag-source-since"
+	testDefragSourceNodePoolAnnotation  = constants.Domain + "/defrag-source-pool"
 )
 
 type errLogger struct{ infoCount, errCount int }
@@ -305,6 +308,18 @@ func TestEvictWorkerPods_MarksSourceNodeBeforeEviction(t *testing.T) {
 	}
 	if updated.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
 		t.Fatalf("expected source node defrag label, labels=%v", updated.Labels)
+	}
+	if updated.Annotations[testDefragSourceNodePoolAnnotation] != pool.Name {
+		t.Fatalf("expected source node pool annotation %q=%q, annotations=%v",
+			testDefragSourceNodePoolAnnotation, pool.Name, updated.Annotations)
+	}
+	rawSince := updated.Annotations[testDefragSourceNodeSinceAnnotation]
+	if rawSince == "" {
+		t.Fatalf("expected source node since annotation %q, annotations=%v",
+			testDefragSourceNodeSinceAnnotation, updated.Annotations)
+	}
+	if _, err := time.Parse(time.RFC3339, rawSince); err != nil {
+		t.Fatalf("source node since annotation should be RFC3339, got %q: %v", rawSince, err)
 	}
 }
 
@@ -867,6 +882,101 @@ func TestHasDefragEvictedPods_ClearsStaleSamePoolMarker(t *testing.T) {
 	}
 	if updated.Labels[constants.DefragEvictedPodLabel] == constants.TrueStringValue {
 		t.Fatalf("stale defrag-evicted label should be cleared, labels=%v", updated.Labels)
+	}
+}
+
+func TestRunDefragStep_ClearsStaleDefragSourceNodeMarker(t *testing.T) {
+	pool := newDefragTestPool()
+	staleNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testDefragNodeA,
+			Labels: map[string]string{
+				constants.DefragSourceNodeLabel: constants.TrueStringValue,
+			},
+			Annotations: map[string]string{
+				testDefragSourceNodePoolAnnotation:  pool.Name,
+				testDefragSourceNodeSinceAnnotation: time.Now().Add(-2 * time.Hour).Format(time.RFC3339),
+			},
+		},
+	}
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, staleNode)
+
+	result := r.runDefragStep(context.Background(), pool.DeepCopy(), time.Now().Add(-time.Minute))
+	if !result.finishCampaign {
+		t.Fatalf("expected empty defrag step to finish campaign")
+	}
+
+	updated := &corev1.Node{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: testDefragNodeA}, updated); err != nil {
+		t.Fatalf("get stale source node after cleanup: %v", err)
+	}
+	if updated.Labels[constants.DefragSourceNodeLabel] == constants.TrueStringValue {
+		t.Fatalf("stale defrag-source label should be cleared, labels=%v", updated.Labels)
+	}
+	if updated.Annotations[testDefragSourceNodePoolAnnotation] != "" ||
+		updated.Annotations[testDefragSourceNodeSinceAnnotation] != "" {
+		t.Fatalf("stale defrag-source annotations should be cleared, annotations=%v", updated.Annotations)
+	}
+}
+
+func TestRunDefragStep_KeepsLegacyDefragSourceNodeMarkerWithActiveWorker(t *testing.T) {
+	pool := newDefragTestPool()
+	legacySourceNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testDefragNodeA,
+			Labels: map[string]string{
+				constants.DefragSourceNodeLabel: constants.TrueStringValue,
+			},
+		},
+	}
+	activeWorker := newDefragWorkerPod("active-worker", testDefragNodeA, time.Now().Add(-time.Hour))
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, legacySourceNode, activeWorker)
+
+	result := r.runDefragStep(context.Background(), pool.DeepCopy(), time.Now().Add(-time.Minute))
+	if !result.finishCampaign {
+		t.Fatalf("expected empty defrag step to finish campaign")
+	}
+
+	updated := &corev1.Node{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: testDefragNodeA}, updated); err != nil {
+		t.Fatalf("get legacy source node after cleanup: %v", err)
+	}
+	if updated.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
+		t.Fatalf("legacy defrag-source label with active worker should be kept, labels=%v", updated.Labels)
+	}
+}
+
+func TestRunDefragStep_KeepsLegacyDefragSourceNodeMarkerWhileAnyEvictedPodActive(t *testing.T) {
+	pool := newDefragTestPool()
+	legacySourceNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testDefragNodeA,
+			Labels: map[string]string{
+				constants.DefragSourceNodeLabel: constants.TrueStringValue,
+			},
+		},
+	}
+	otherPoolEvictedPod := newPod("other-pool-evicted-worker")
+	otherPoolEvictedPod.Labels = map[string]string{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
+	}
+	otherPoolEvictedPod.Annotations = map[string]string{
+		constants.DefragEvictedPodPoolAnnotation:  "pool-b",
+		constants.DefragEvictedPodSinceAnnotation: time.Now().Format(time.RFC3339),
+	}
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, legacySourceNode, otherPoolEvictedPod)
+
+	result := r.runDefragStep(context.Background(), pool.DeepCopy(), time.Now().Add(-time.Minute))
+	if !result.finishCampaign {
+		t.Fatalf("expected empty defrag step to finish campaign")
+	}
+
+	updated := &corev1.Node{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: testDefragNodeA}, updated); err != nil {
+		t.Fatalf("get legacy source node after cleanup: %v", err)
+	}
+	if updated.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
+		t.Fatalf("legacy defrag-source label should be kept while any evicted pod is active, labels=%v", updated.Labels)
 	}
 }
 
