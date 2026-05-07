@@ -134,6 +134,25 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 	}
 	maxDuration := parseDefragMaxDuration(cfg.MaxDuration, logger)
 
+	// Stale-marker sweep runs every reconcile, not just when the cron campaign
+	// is due. Source-node and evicted-pod markers must drain on their own
+	// safety-net TTL even outside the cron window — otherwise an interrupted
+	// defrag (controller restart, ungraceful exit, etc.) can leave nodes
+	// excluded from target selection until the next scheduled tick.
+	blocked, err := r.hasDefragEvictedPods(ctx, pool)
+	if err != nil {
+		logger.Error(err, "stale-marker sweep: list defrag-evicted pods failed")
+		return 0
+	}
+	if blocked {
+		logger.V(4).Info("defrag paused: defrag-evicted pod still exists")
+		return defragRequeueAfter(defragStepResult{blockedByEvictedPod: true}, normalRequeue)
+	}
+	if err := r.cleanupStaleDefragSourceMarkers(ctx, pool); err != nil {
+		logger.Error(err, "stale-marker sweep: cleanup stale defrag source markers failed")
+		return 0
+	}
+
 	// Treat a campaign as due once a scheduled tick has elapsed since the anchor.
 	now := time.Now()
 	anchor := now.Add(-maxDuration).Add(-time.Minute)
@@ -468,7 +487,7 @@ func (r *GPUPoolCompactionReconciler) hasDefragEvictedPods(ctx context.Context, 
 	if cfg != nil {
 		maxDuration = parseDefragMaxDuration(cfg.MaxDuration, log.FromContext(ctx))
 	}
-	staleAfter := 2 * maxDuration
+	staleAfter := maxDuration
 	now := time.Now()
 	for i := range podList.Items {
 		pod := &podList.Items[i]
@@ -530,7 +549,7 @@ func (r *GPUPoolCompactionReconciler) cleanupStaleDefragSourceMarkers(ctx contex
 	if cfg != nil {
 		maxDuration = parseDefragMaxDuration(cfg.MaxDuration, log.FromContext(ctx))
 	}
-	staleAfter := 2 * maxDuration
+	staleAfter := maxDuration
 	now := time.Now()
 
 	nodeList := &corev1.NodeList{}
@@ -540,8 +559,6 @@ func (r *GPUPoolCompactionReconciler) cleanupStaleDefragSourceMarkers(ctx contex
 		return fmt.Errorf("list defrag source nodes: %w", err)
 	}
 
-	anyEvictedPodActiveKnown := false
-	anyEvictedPodActive := false
 	for i := range nodeList.Items {
 		node := &nodeList.Items[i]
 		if !defragSourceNodeBelongsToPool(pool.Name, node) {
@@ -554,40 +571,11 @@ func (r *GPUPoolCompactionReconciler) cleanupStaleDefragSourceMarkers(ctx contex
 		if !isDefragSourceNodeMarkerStale(node, now, staleAfter, hasWorkers) {
 			continue
 		}
-		if isLegacyDefragSourceNodeMarker(node) {
-			if !anyEvictedPodActiveKnown {
-				active, err := r.hasAnyActiveDefragEvictedPod(ctx, staleAfter)
-				if err != nil {
-					return err
-				}
-				anyEvictedPodActive = active
-				anyEvictedPodActiveKnown = true
-			}
-			if anyEvictedPodActive {
-				continue
-			}
-		}
 		if err := r.clearNodeDefragSourceMarker(ctx, node.Name); err != nil {
 			return fmt.Errorf("clear stale defrag source marker on node %s: %w", node.Name, err)
 		}
 	}
 	return nil
-}
-
-func (r *GPUPoolCompactionReconciler) hasAnyActiveDefragEvictedPod(ctx context.Context, staleAfter time.Duration) (bool, error) {
-	podList := &corev1.PodList{}
-	if err := r.List(ctx, podList, client.MatchingLabels{
-		constants.DefragEvictedPodLabel: constants.TrueStringValue,
-	}); err != nil {
-		return false, fmt.Errorf("list defrag-evicted pods: %w", err)
-	}
-	now := time.Now()
-	for i := range podList.Items {
-		if !isDefragEvictedPodMarkerStale(&podList.Items[i], now, staleAfter) {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func (r *GPUPoolCompactionReconciler) hasActiveTensorFusionWorkerOnNode(ctx context.Context, nodeName string) (bool, error) {
@@ -611,39 +599,44 @@ func (r *GPUPoolCompactionReconciler) hasActiveTensorFusionWorkerOnNode(ctx cont
 }
 
 func defragSourceNodeBelongsToPool(poolName string, node *corev1.Node) bool {
-	if node == nil {
-		return false
-	}
-	if node.Annotations == nil {
-		return true
-	}
-	owner := node.Annotations[constants.DefragSourceNodePoolAnnotation]
-	return owner == "" || owner == poolName
-}
-
-func isLegacyDefragSourceNodeMarker(node *corev1.Node) bool {
 	if node == nil || node.Annotations == nil {
-		return true
-	}
-	return node.Annotations[constants.DefragSourceNodePoolAnnotation] == "" &&
-		node.Annotations[constants.DefragSourceNodeSinceAnnotation] == ""
-}
-
-func isDefragSourceNodeMarkerStale(node *corev1.Node, now time.Time, staleAfter time.Duration, hasActiveWorkers bool) bool {
-	if node == nil || staleAfter <= 0 {
 		return false
 	}
-	if node.Annotations != nil {
-		raw := node.Annotations[constants.DefragSourceNodeSinceAnnotation]
-		if raw != "" {
-			since, err := time.Parse(time.RFC3339, raw)
-			if err == nil {
-				return now.Sub(since) > staleAfter
-			}
-			return !hasActiveWorkers
-		}
+	return node.Annotations[constants.DefragSourceNodePoolAnnotation] == poolName
+}
+
+// isDefragSourceNodeMarkerStale decides whether a defrag source-node marker is
+// safe to clear. Callers must ensure no active defrag-evicted pod for the pool
+// is still in flight before invoking this — otherwise we may release the
+// source node back as a target while the original workers are still being
+// rescheduled.
+//
+// Two cleanup paths:
+//   - Happy path: the node has no active TF worker, so this campaign is done
+//     for this node and the marker has served its purpose.
+//   - Safety net: the marker has outlived MaxDuration. Even if a worker is
+//     still hanging around (stuck terminating, lost reconcile, etc.), the
+//     marker is too old to trust and should be cleared so the node can be
+//     reused.
+func isDefragSourceNodeMarkerStale(node *corev1.Node, now time.Time, staleAfter time.Duration, hasActiveWorkers bool) bool {
+	if node == nil || node.Annotations == nil {
+		return false
 	}
-	return !hasActiveWorkers
+	raw := node.Annotations[constants.DefragSourceNodeSinceAnnotation]
+	if raw == "" {
+		return false
+	}
+	if !hasActiveWorkers {
+		return true
+	}
+	if staleAfter <= 0 {
+		return false
+	}
+	since, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return false
+	}
+	return now.Sub(since) > staleAfter
 }
 
 func countPoolGPUUsage(gpus map[string]*tfv1.GPU, poolName string) (total, used int) {
