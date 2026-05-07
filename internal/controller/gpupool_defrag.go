@@ -288,6 +288,10 @@ func (r *GPUPoolCompactionReconciler) runDefragStep(
 		l.Info("defrag paused: defrag-evicted pod still exists")
 		return defragStepResult{blockedByEvictedPod: true}
 	}
+	if err := r.cleanupStaleDefragSourceMarkers(ctx, pool); err != nil {
+		l.Error(err, "cleanup stale defrag source markers failed")
+		return defragStepResult{}
+	}
 
 	candidates, err := r.collectDefragCandidates(ctx, pool)
 	if err != nil {
@@ -515,6 +519,131 @@ func isDefragEvictedPodMarkerStale(pod *corev1.Pod, now time.Time, staleAfter ti
 		return false
 	}
 	return now.Sub(since) > staleAfter
+}
+
+func (r *GPUPoolCompactionReconciler) cleanupStaleDefragSourceMarkers(ctx context.Context, pool *tfv1.GPUPool) error {
+	if pool == nil {
+		return errors.New("pool is nil")
+	}
+	cfg := getDefragConfig(pool)
+	maxDuration := defaultDefragMaxDuration
+	if cfg != nil {
+		maxDuration = parseDefragMaxDuration(cfg.MaxDuration, log.FromContext(ctx))
+	}
+	staleAfter := 2 * maxDuration
+	now := time.Now()
+
+	nodeList := &corev1.NodeList{}
+	if err := r.List(ctx, nodeList, client.MatchingLabels{
+		constants.DefragSourceNodeLabel: constants.TrueStringValue,
+	}); err != nil {
+		return fmt.Errorf("list defrag source nodes: %w", err)
+	}
+
+	anyEvictedPodActiveKnown := false
+	anyEvictedPodActive := false
+	for i := range nodeList.Items {
+		node := &nodeList.Items[i]
+		if !defragSourceNodeBelongsToPool(pool.Name, node) {
+			continue
+		}
+		hasWorkers, err := r.hasActiveTensorFusionWorkerOnNode(ctx, node.Name)
+		if err != nil {
+			return fmt.Errorf("list active TF workers on defrag source node %s: %w", node.Name, err)
+		}
+		if !isDefragSourceNodeMarkerStale(node, now, staleAfter, hasWorkers) {
+			continue
+		}
+		if isLegacyDefragSourceNodeMarker(node) {
+			if !anyEvictedPodActiveKnown {
+				active, err := r.hasAnyActiveDefragEvictedPod(ctx, staleAfter)
+				if err != nil {
+					return err
+				}
+				anyEvictedPodActive = active
+				anyEvictedPodActiveKnown = true
+			}
+			if anyEvictedPodActive {
+				continue
+			}
+		}
+		if err := r.clearNodeDefragSourceMarker(ctx, node.Name); err != nil {
+			return fmt.Errorf("clear stale defrag source marker on node %s: %w", node.Name, err)
+		}
+	}
+	return nil
+}
+
+func (r *GPUPoolCompactionReconciler) hasAnyActiveDefragEvictedPod(ctx context.Context, staleAfter time.Duration) (bool, error) {
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList, client.MatchingLabels{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
+	}); err != nil {
+		return false, fmt.Errorf("list defrag-evicted pods: %w", err)
+	}
+	now := time.Now()
+	for i := range podList.Items {
+		if !isDefragEvictedPodMarkerStale(&podList.Items[i], now, staleAfter) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (r *GPUPoolCompactionReconciler) hasActiveTensorFusionWorkerOnNode(ctx context.Context, nodeName string) (bool, error) {
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList); err != nil {
+		return false, fmt.Errorf("list pods: %w", err)
+	}
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if pod.Spec.NodeName != nodeName {
+			continue
+		}
+		if !pod.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if utils.IsTensorFusionWorker(pod) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func defragSourceNodeBelongsToPool(poolName string, node *corev1.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.Annotations == nil {
+		return true
+	}
+	owner := node.Annotations[constants.DefragSourceNodePoolAnnotation]
+	return owner == "" || owner == poolName
+}
+
+func isLegacyDefragSourceNodeMarker(node *corev1.Node) bool {
+	if node == nil || node.Annotations == nil {
+		return true
+	}
+	return node.Annotations[constants.DefragSourceNodePoolAnnotation] == "" &&
+		node.Annotations[constants.DefragSourceNodeSinceAnnotation] == ""
+}
+
+func isDefragSourceNodeMarkerStale(node *corev1.Node, now time.Time, staleAfter time.Duration, hasActiveWorkers bool) bool {
+	if node == nil || staleAfter <= 0 {
+		return false
+	}
+	if node.Annotations != nil {
+		raw := node.Annotations[constants.DefragSourceNodeSinceAnnotation]
+		if raw != "" {
+			since, err := time.Parse(time.RFC3339, raw)
+			if err == nil {
+				return now.Sub(since) > staleAfter
+			}
+			return !hasActiveWorkers
+		}
+	}
+	return !hasActiveWorkers
 }
 
 func countPoolGPUUsage(gpus map[string]*tfv1.GPU, poolName string) (total, used int) {
@@ -1048,7 +1177,7 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 		stats.DeadlineExceeded = true
 		return false
 	}
-	if err := r.markNodeDefragSource(ctx, cand.nodeName); err != nil {
+	if err := r.markNodeDefragSource(ctx, pool.Name, cand.nodeName); err != nil {
 		stats.EvictionFailures++
 		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventPodEvictFailed,
 			"failed to mark node %s as defrag source: %v (node eviction aborted)", cand.nodeName, err)
@@ -1111,14 +1240,20 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 
 // ----- pod marker helpers ----------------------------------------------
 
-func (r *GPUPoolCompactionReconciler) markNodeDefragSource(ctx context.Context, nodeName string) error {
+func (r *GPUPoolCompactionReconciler) markNodeDefragSource(ctx context.Context, poolName, nodeName string) error {
 	if r.Client == nil {
 		return errors.New("controller client is nil")
 	}
 	if nodeName == "" {
 		return errors.New("node name is empty")
 	}
-	raw, err := metadataMergePatch(map[string]any{constants.DefragSourceNodeLabel: constants.TrueStringValue}, nil)
+	raw, err := metadataMergePatch(
+		map[string]any{constants.DefragSourceNodeLabel: constants.TrueStringValue},
+		map[string]any{
+			constants.DefragSourceNodePoolAnnotation:  poolName,
+			constants.DefragSourceNodeSinceAnnotation: time.Now().Format(time.RFC3339),
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -1130,7 +1265,13 @@ func (r *GPUPoolCompactionReconciler) clearNodeDefragSourceMarker(ctx context.Co
 	if r.Client == nil || nodeName == "" {
 		return nil
 	}
-	raw, err := metadataMergePatch(map[string]any{constants.DefragSourceNodeLabel: nil}, nil)
+	raw, err := metadataMergePatch(
+		map[string]any{constants.DefragSourceNodeLabel: nil},
+		map[string]any{
+			constants.DefragSourceNodePoolAnnotation:  nil,
+			constants.DefragSourceNodeSinceAnnotation: nil,
+		},
+	)
 	if err != nil {
 		return err
 	}
