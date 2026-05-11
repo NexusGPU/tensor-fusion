@@ -240,6 +240,20 @@ type NodeDefragConfig struct {
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	UtilizationThresholdPercent int32 `json:"utilizationThresholdPercent,omitempty"`
+
+	// EvictedPodMarkerTTL caps how long a defrag-evicted pod marker is honored
+	// before it's treated as stale and cleaned. Independent from MaxDuration so
+	// that a long campaign window doesn't keep a stuck eviction marker alive.
+	// Parsed with time.ParseDuration. If empty or invalid, falls back to 30m.
+	// +kubebuilder:default="30m"
+	EvictedPodMarkerTTL string `json:"evictedPodMarkerTTL,omitempty"`
+
+	// SourceNodeMarkerTTL caps how long a defrag source-node marker survives
+	// when the node still has TF workers stuck on it. Same independence
+	// rationale as EvictedPodMarkerTTL. Parsed with time.ParseDuration.
+	// If empty or invalid, falls back to 30m.
+	// +kubebuilder:default="30m"
+	SourceNodeMarkerTTL string `json:"sourceNodeMarkerTTL,omitempty"`
 }
 type NodeRollingUpdatePolicy struct {
 	// If set to false, updates will be pending in status, and user needs to manually approve updates.

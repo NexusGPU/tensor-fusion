@@ -329,6 +329,14 @@ spec:
                                         Enabled toggles the defrag strategy on/off. Disabled by default to keep
                                         legacy pools untouched until the operator explicitly opts in.
                                       type: boolean
+                                    evictedPodMarkerTTL:
+                                      default: 30m
+                                      description: |-
+                                        EvictedPodMarkerTTL caps how long a defrag-evicted pod marker is honored
+                                        before it's treated as stale and cleaned. Independent from MaxDuration so
+                                        that a long campaign window doesn't keep a stuck eviction marker alive.
+                                        Parsed with time.ParseDuration. If empty or invalid, falls back to 30m.
+                                      type: string
                                     maxDuration:
                                       default: 2h
                                       description: |-
@@ -341,6 +349,14 @@ spec:
                                       description: |-
                                         Schedule is a standard 5-field cron expression ("min hour dom month dow").
                                         Example: "0 3 * * *" triggers once per day at 03:00 local time of the controller.
+                                      type: string
+                                    sourceNodeMarkerTTL:
+                                      default: 30m
+                                      description: |-
+                                        SourceNodeMarkerTTL caps how long a defrag source-node marker survives
+                                        when the node still has TF workers stuck on it. Same independence
+                                        rationale as EvictedPodMarkerTTL. Parsed with time.ParseDuration.
+                                        If empty or invalid, falls back to 30m.
                                       type: string
                                     utilizationThresholdPercent:
                                       default: 40

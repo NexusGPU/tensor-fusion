@@ -213,6 +213,23 @@ const (
 
 	// GPUPool that owns the node source marker.
 	DefragSourceNodePoolAnnotation = Domain + "/defrag-source-pool"
+
+	// Marks a node that defrag gave up evicting after a real EvictV1 error.
+	// Future defrag candidate selection skips it until no active TF worker
+	// is left on the node. Scheduler is intentionally NOT aware of this
+	// marker -- already-evicted pods may be rescheduled back here, which is
+	// fine: we only promise "defrag won't pick this node again", not
+	// "scheduler must avoid this node".
+	DefragEvictSkipNodeLabel = Domain + "/defrag-evict-skip"
+
+	// RFC3339 time when the node was put on the defrag evict-skip list.
+	DefragEvictSkipNodeSinceAnnotation = Domain + "/defrag-evict-skip-since"
+
+	// GPUPool that owns the evict-skip marker.
+	DefragEvictSkipNodePoolAnnotation = Domain + "/defrag-evict-skip-pool"
+
+	// Short troubleshooting hint (e.g. eviction error snippet); not parsed.
+	DefragEvictSkipNodeReasonAnnotation = Domain + "/defrag-evict-skip-reason"
 )
 
 const (
