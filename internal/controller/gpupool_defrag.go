@@ -61,6 +61,7 @@ const (
 	defragEventAbortNode         = "DefragAbortNode"
 	defragEventSkipUnschedulable = "DefragSkipUnschedulable"
 	defragEventSkipPDBBlocked    = "DefragSkipPDBBlocked"
+	defragEventSkipMissingPDB    = "DefragSkipMissingPDB"
 	defragEventBlockedSourceNode = "DefragBlockedBySourceNode"
 	defragEventBlockedEvictedPod = "DefragBlockedByEvictedPod"
 	defragEventEvictSkip         = "DefragNodeEvictSkip"
@@ -92,6 +93,7 @@ type defragRunStats struct {
 	EvictionFailures int       `json:"evictionFailures"`
 	UnmovableNodes   int       `json:"unmovableNodes"`
 	PDBBlockedNodes  int       `json:"pdbBlockedNodes"`
+	MissingPDBNodes  int       `json:"missingPdbNodes"`
 	FreshPodSkips    int       `json:"freshPodSkips"`
 	DeadlineExceeded bool      `json:"deadlineExceeded"`
 }
@@ -367,12 +369,12 @@ func (r *GPUPoolCompactionReconciler) runDefragStep(
 		stats.EndTime = time.Now()
 		defragLastRunStats.Store(pool.Name, stats)
 		r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventFinished,
-			"defrag step finished: candidates=%d processed=%d evicted=%d failed=%d unmovable=%d pdbBlocked=%d freshSkip=%d deadline=%t",
+			"defrag step finished: candidates=%d processed=%d evicted=%d failed=%d unmovable=%d pdbBlocked=%d missingPdb=%d freshSkip=%d deadline=%t",
 			stats.CandidateNodes, stats.ProcessedNodes, stats.EvictedPods, stats.EvictionFailures,
-			stats.UnmovableNodes, stats.PDBBlockedNodes, stats.FreshPodSkips, stats.DeadlineExceeded)
+			stats.UnmovableNodes, stats.PDBBlockedNodes, stats.MissingPDBNodes, stats.FreshPodSkips, stats.DeadlineExceeded)
 	}()
 
-	candidates, err := r.collectDefragCandidates(ctx, pool)
+	candidates, err := r.collectDefragCandidates(ctx, pool, stats)
 	if err != nil {
 		l.Error(err, "collect defrag candidates failed")
 		return defragStepResult{}
@@ -438,7 +440,7 @@ type defragCandidate struct {
 	workerPods       []*corev1.Pod
 }
 
-func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Context, pool *tfv1.GPUPool) ([]*defragCandidate, error) {
+func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Context, pool *tfv1.GPUPool, stats *defragRunStats) ([]*defragCandidate, error) {
 	cfg := getDefragConfig(pool)
 	if cfg == nil {
 		return nil, nil
@@ -522,6 +524,26 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 				"pod", freshPod.Namespace+"/"+freshPod.Name,
 				"createdAt", freshPod.CreationTimestamp.Time,
 				"minAge", minPodAge)
+			continue
+		}
+
+		// Hard requirement: every TF worker on the candidate node must be
+		// covered by a PDB with a non-empty selector. Without a real PDB,
+		// defrag eviction would proceed unconstrained, so we drop the node
+		// and surface a Warning event so operators know which pod to fix.
+		missingPod, pdbErr := r.findWorkerMissingPDB(ctx, pods)
+		if pdbErr != nil {
+			log.FromContext(ctx).Error(pdbErr, "skip defrag candidate: list PDB failed",
+				"node", k8sNodeName, "pool", pool.Name)
+			continue
+		}
+		if missingPod != nil {
+			if stats != nil {
+				stats.MissingPDBNodes++
+			}
+			r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventSkipMissingPDB,
+				"node %s skipped from defrag: pod %s/%s has no PodDisruptionBudget covering it; please add a PDB to enable safe defrag",
+				k8sNodeName, missingPod.Namespace, missingPod.Name)
 			continue
 		}
 
@@ -1289,6 +1311,71 @@ func subtractGPURequest(gpu *tfv1.GPU, req *tfv1.AllocRequest) {
 }
 
 // ----- eviction ---------------------------------------------------------
+
+// findWorkerMissingPDB returns the first TF worker pod that is NOT covered
+// by any PodDisruptionBudget with a non-empty selector in its namespace.
+// Empty / match-everything selectors are intentionally rejected: a PDB
+// without an explicit selector is almost always a misconfiguration and
+// must not be trusted as a real disruption guardrail before defrag
+// eviction. Returns (nil, nil) when every pod is covered by at least one
+// non-empty-selector PDB.
+func (r *GPUPoolCompactionReconciler) findWorkerMissingPDB(
+	ctx context.Context,
+	pods []*corev1.Pod,
+) (*corev1.Pod, error) {
+	if r.KubeClient == nil {
+		return nil, errors.New("kube client is nil")
+	}
+	pdbsByNamespace := map[string][]policyv1.PodDisruptionBudget{}
+	for _, pod := range pods {
+		if pod == nil {
+			continue
+		}
+		if pod.Namespace == "" {
+			return nil, fmt.Errorf("pod %s has empty namespace", pod.Name)
+		}
+		pdbs, ok := pdbsByNamespace[pod.Namespace]
+		if !ok {
+			pdbList, err := r.KubeClient.PolicyV1().
+				PodDisruptionBudgets(pod.Namespace).
+				List(ctx, metav1.ListOptions{})
+			if err != nil {
+				return nil, fmt.Errorf("list PDBs for namespace %s: %w", pod.Namespace, err)
+			}
+			pdbs = pdbList.Items
+			pdbsByNamespace[pod.Namespace] = pdbs
+		}
+		covered := false
+		for i := range pdbs {
+			pdb := &pdbs[i]
+			if !isNonEmptyPDBSelector(pdb.Spec.Selector) {
+				continue
+			}
+			selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
+			if err != nil {
+				return nil, fmt.Errorf("parse PDB selector %s/%s: %w", pdb.Namespace, pdb.Name, err)
+			}
+			if selector == nil {
+				continue
+			}
+			if selector.Matches(labels.Set(pod.Labels)) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return pod, nil
+		}
+	}
+	return nil, nil
+}
+
+// isNonEmptyPDBSelector reports whether the PDB selector defines at least
+// one label match rule. nil / empty selectors are treated as "no real
+// guardrail" and rejected by findWorkerMissingPDB.
+func isNonEmptyPDBSelector(sel *metav1.LabelSelector) bool {
+	return sel != nil && (len(sel.MatchLabels) > 0 || len(sel.MatchExpressions) > 0)
+}
 
 func (r *GPUPoolCompactionReconciler) checkDefragPDBPreflight(
 	ctx context.Context,
