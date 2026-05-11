@@ -740,7 +740,7 @@ func TestCollectDefragCandidates_AllowsNodeCoveredByPDB(t *testing.T) {
 	assertNoEvent(t, r.Recorder, defragEventSkipMissingPDB)
 }
 
-func TestPrepareDefragSimulationPod_ClearsAssignedGPUState(t *testing.T) {
+func TestCloneAsUnscheduledWorker_ClearsAssignedGPUState(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "ns1",
@@ -760,7 +760,7 @@ func TestPrepareDefragSimulationPod_ClearsAssignedGPUState(t *testing.T) {
 		},
 	}
 
-	got := prepareDefragSimulationPod(pod)
+	got := cloneAsUnscheduledWorker(pod)
 
 	if got == pod {
 		t.Fatalf("expected a deep copy, got original pointer")
@@ -785,7 +785,7 @@ func TestPrepareDefragSimulationPod_ClearsAssignedGPUState(t *testing.T) {
 	}
 }
 
-func TestCanFitVirtualNodeResources_RejectsOversubscribedCPU(t *testing.T) {
+func TestFitsVirtualNodeAllocatable_RejectsOversubscribedCPU(t *testing.T) {
 	nodeInfo := newFrameworkNodeInfo(
 		"node-b",
 		nil,
@@ -800,7 +800,9 @@ func TestCanFitVirtualNodeResources_RejectsOversubscribedCPU(t *testing.T) {
 	nodeInfo.AddPodInfo(firstPodInfo)
 
 	secondPod := newSchedulerTestPod("ns1", "worker-2", "1500m", "1Gi")
-	if canFitVirtualNodeResources(nodeInfo, secondPod) {
+	secondPodInfo, _ := framework.NewPodInfo(secondPod)
+	virtual := cloneNodeInfoWithVirtualPod(nodeInfo, secondPodInfo)
+	if fitsVirtualNodeAllocatable(virtual) {
 		t.Fatal("expected second pod to be rejected once virtual CPU budget is exhausted")
 	}
 }
@@ -810,11 +812,13 @@ func TestBuildDefragNodeBudgets_SkipsDeletionMarkedNodes(t *testing.T) {
 		"pool-a",
 		"",
 		map[string]map[string]*tfv1.GPU{
+			// Partially-used GPUs so the empty-target gate keeps the node;
+			// this test is about node-label filtering, not the empty gate.
 			"node-keep": {
-				"gpu-1": gpuWithUsage("gpu-1", "pool-a", "100", "10Gi", tfv1.UsedByTensorFusion),
+				"gpu-1": gpuWithUsage("gpu-1", "pool-a", "60", "6Gi", tfv1.UsedByTensorFusion),
 			},
 			"node-delete": {
-				"gpu-2": gpuWithUsage("gpu-2", "pool-a", "100", "10Gi", tfv1.UsedByTensorFusion),
+				"gpu-2": gpuWithUsage("gpu-2", "pool-a", "60", "6Gi", tfv1.UsedByTensorFusion),
 			},
 		},
 		map[string]map[types.NamespacedName]struct{}{},
@@ -857,11 +861,13 @@ func TestBuildDefragNodeBudgets_SkipsMissingSchedulerNodeInfo(t *testing.T) {
 			"source-node": {
 				"gpu-source": gpuWithUsage("gpu-source", "pool-a", "50", "5Gi", tfv1.UsedByTensorFusion),
 			},
+			// Partially-used GPUs so the empty-target gate keeps these
+			// nodes; this test is about missing scheduler-cache nodes.
 			"node-keep": {
-				"gpu-keep": gpuWithUsage("gpu-keep", "pool-a", "100", "10Gi", tfv1.UsedByTensorFusion),
+				"gpu-keep": gpuWithUsage("gpu-keep", "pool-a", "70", "7Gi", tfv1.UsedByTensorFusion),
 			},
 			"node-stale": {
-				"gpu-stale": gpuWithUsage("gpu-stale", "pool-a", "100", "10Gi", tfv1.UsedByTensorFusion),
+				"gpu-stale": gpuWithUsage("gpu-stale", "pool-a", "70", "7Gi", tfv1.UsedByTensorFusion),
 			},
 		},
 		map[string]map[types.NamespacedName]struct{}{},
@@ -2050,6 +2056,198 @@ func TestEvaluateDefragGuards_DoesNotMutateMarkers(t *testing.T) {
 	if updatedNode.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
 		t.Fatalf("guard must not clear source-node marker, labels=%v", updatedNode.Labels)
 	}
+}
+
+// ---- defrag monotonicity gates ----------------------------------------
+
+// gpuFullyFreeOnNode returns a GPU whose Available == Capacity so
+// countPoolGPUUsage classifies it as "free" and isGPUFullyAvailable
+// returns true. Useful as fixture noise reduction in monotonicity tests.
+func gpuFullyFreeOnNode(name, poolName, nodeName string) *tfv1.GPU {
+	g := gpuWithUsage(name, poolName, "100", "10Gi", tfv1.UsedByTensorFusion)
+	g.Status.NodeSelector = map[string]string{
+		constants.KubernetesHostNameLabel: nodeName,
+	}
+	return g
+}
+
+func TestBuildDefragNodeBudgets_DropsEmptyTarget(t *testing.T) {
+	// Layout: 1 source (excluded), 1 partially-used buddy, 1 fully-empty
+	// pool node. The empty node MUST be filtered so defrag does not waste
+	// a disruption shuffling workers onto a previously empty machine.
+	const pool = "pool-a"
+	source := "node-source"
+	buddy := "node-buddy"
+	empty := "node-empty"
+
+	nodeGpuStore := map[string]map[string]*tfv1.GPU{
+		source: {
+			"src-gpu-0": gpuWithUsageOnNode("src-gpu-0", pool, source, "50", "5Gi"),
+		},
+		buddy: {
+			"buddy-gpu-0": gpuWithUsageOnNode("buddy-gpu-0", pool, buddy, "60", "8Gi"),
+			"buddy-gpu-1": gpuFullyFreeOnNode("buddy-gpu-1", pool, buddy),
+		},
+		empty: {
+			"empty-gpu-0": gpuFullyFreeOnNode("empty-gpu-0", pool, empty),
+			"empty-gpu-1": gpuFullyFreeOnNode("empty-gpu-1", pool, empty),
+		},
+	}
+	lister := &fakeNodeInfoLister{infos: map[string]fwk.NodeInfo{
+		source: newFrameworkNodeInfo(source, nil, nil),
+		buddy:  newFrameworkNodeInfo(buddy, nil, nil),
+		empty:  newFrameworkNodeInfo(empty, nil, nil),
+	}}
+
+	budgets := buildDefragNodeBudgets(pool, source, nodeGpuStore, nil, lister)
+
+	if _, ok := budgets[source]; ok {
+		t.Fatalf("source node must not appear in budgets, got %v", budgets)
+	}
+	if _, ok := budgets[empty]; ok {
+		t.Fatalf("empty pool node must be filtered from budgets, got %v", budgets)
+	}
+	nb, ok := budgets[buddy]
+	if !ok {
+		t.Fatalf("buddy node missing from budgets, got %v", budgets)
+	}
+	if nb.totalGPUs != 2 || nb.usedGPUs != 1 {
+		t.Fatalf("buddy budget total/used = %d/%d, want 2/1", nb.totalGPUs, nb.usedGPUs)
+	}
+}
+
+func TestBuildDefragNodeBudgets_SkipsExcludedNodeLabels(t *testing.T) {
+	// Regression: NodeDeletionMark / DefragSourceNodeLabel should still be
+	// filtered out independently of the new emptiness gate. A node
+	// labelled as source-marker also having real usage must NOT leak in.
+	const pool = "pool-a"
+	source := "node-source"
+	marked := "node-marked"
+	nodeGpuStore := map[string]map[string]*tfv1.GPU{
+		source: {"src": gpuWithUsageOnNode("src", pool, source, "50", "5Gi")},
+		marked: {"mk": gpuWithUsageOnNode("mk", pool, marked, "60", "5Gi")},
+	}
+	lister := &fakeNodeInfoLister{infos: map[string]fwk.NodeInfo{
+		source: newFrameworkNodeInfo(source, nil, nil),
+		marked: newFrameworkNodeInfo(marked, map[string]string{
+			constants.DefragSourceNodeLabel: constants.TrueStringValue,
+		}, nil),
+	}}
+	budgets := buildDefragNodeBudgets(pool, source, nodeGpuStore, nil, lister)
+	if _, ok := budgets[marked]; ok {
+		t.Fatalf("DefragSourceNodeLabel must keep node out of budgets, got %v", budgets)
+	}
+}
+
+func TestIsGPUFullyAvailable(t *testing.T) {
+	cases := []struct {
+		name string
+		g    *tfv1.GPU
+		want bool
+	}{
+		{name: "nil", g: nil, want: false},
+		{name: "missing-available", g: &tfv1.GPU{Status: tfv1.GPUStatus{Capacity: &tfv1.Resource{}}}, want: false},
+		{name: "missing-capacity", g: &tfv1.GPU{Status: tfv1.GPUStatus{Available: &tfv1.Resource{}}}, want: false},
+		{
+			name: "fully-free",
+			g:    gpuWithUsage("a", "p", "100", "10Gi", tfv1.UsedByTensorFusion),
+			want: true,
+		},
+		{
+			name: "tflops-half-used",
+			g:    gpuWithUsage("a", "p", "50", "10Gi", tfv1.UsedByTensorFusion),
+			want: false,
+		},
+		{
+			name: "vram-half-used",
+			g:    gpuWithUsage("a", "p", "100", "5Gi", tfv1.UsedByTensorFusion),
+			want: false,
+		},
+		{
+			// Capacity is 100/10Gi from gpuWithUsage; Available 0/0 is
+			// strictly less, so this is "fully used", not fully available.
+			name: "fully-used",
+			g:    gpuWithUsage("a", "p", "0", "0", tfv1.UsedByTensorFusion),
+			want: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isGPUFullyAvailable(c.g); got != c.want {
+				t.Fatalf("isGPUFullyAvailable=%v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestBudgetUtilizationPercent(t *testing.T) {
+	cases := []struct {
+		name string
+		nb   *nodeBudget
+		want float64
+	}{
+		{name: "nil", nb: nil, want: 0},
+		{name: "zero-total", nb: &nodeBudget{}, want: 0},
+		{name: "half", nb: &nodeBudget{totalGPUs: 4, usedGPUs: 2}, want: 50},
+		{name: "all-used", nb: &nodeBudget{totalGPUs: 3, usedGPUs: 3}, want: 100},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := budgetUtilizationPercent(c.nb); got != c.want {
+				t.Fatalf("budgetUtilizationPercent=%v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestApplyGPUPlacementToBudget_TracksUsedGPUTransition(t *testing.T) {
+	// Validates the dynamic-util commit path: only fully-free -> partially
+	// used transitions bump usedGPUs. A second placement onto the same GPU
+	// must NOT double-count.
+	const pool = "pool-a"
+	node := "node-buddy"
+	freeGPU := gpuFullyFreeOnNode("g-free", pool, node)
+	usedGPU := gpuWithUsageOnNode("g-used", pool, node, "50", "5Gi") // half-used baseline
+
+	nb := &nodeBudget{
+		gpus:      map[string]*tfv1.GPU{"g-free": freeGPU, "g-used": usedGPU},
+		totalGPUs: 2,
+		usedGPUs:  1, // matches the half-used GPU above
+	}
+	req := &tfv1.AllocRequest{
+		Request: tfv1.Resource{Tflops: resource.MustParse("10"), Vram: resource.MustParse("1Gi")},
+	}
+
+	// First placement: lands on the fully-free GPU → usedGPUs jumps to 2.
+	applyGPUPlacementToBudget(nb, []*tfv1.GPU{freeGPU}, req)
+	if nb.usedGPUs != 2 {
+		t.Fatalf("after first placement usedGPUs=%d, want 2", nb.usedGPUs)
+	}
+	if isGPUFullyAvailable(nb.gpus["g-free"]) {
+		t.Fatalf("free GPU should no longer be fully available after subtract")
+	}
+
+	// Second placement on the already-used GPU: no transition, usedGPUs stays.
+	applyGPUPlacementToBudget(nb, []*tfv1.GPU{usedGPU}, req)
+	if nb.usedGPUs != 2 {
+		t.Fatalf("second placement bumped usedGPUs to %d; commit must not double-count", nb.usedGPUs)
+	}
+
+	// Budget utilization should now report 100% (2/2 used).
+	if got := budgetUtilizationPercent(nb); got != 100 {
+		t.Fatalf("budgetUtilizationPercent=%v, want 100", got)
+	}
+}
+
+func TestApplyGPUPlacementToBudget_NilBudgetNoop(t *testing.T) {
+	// Defensive: applyGPUPlacementToBudget(nil, ...) must not panic; this
+	// shape never occurs in production but keeps the helper safe for reuse.
+	req := &tfv1.AllocRequest{
+		Request: tfv1.Resource{Tflops: resource.MustParse("10"), Vram: resource.MustParse("1Gi")},
+	}
+	applyGPUPlacementToBudget(nil, []*tfv1.GPU{
+		gpuWithUsage("a", "p", "100", "10Gi", tfv1.UsedByTensorFusion),
+	}, req)
 }
 
 // ---- compile-time sanity check ----------------------------------------
