@@ -338,12 +338,6 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 		return fwk.NewStatus(fwk.Success, "skip for non tensor-fusion mode")
 	}
 
-	// Keep TF workers off nodes that defrag is draining.
-	if node := nodeInfo.Node(); node != nil &&
-		node.Labels[constants.DefragDrainingLabel] == constants.TrueStringValue {
-		return fwk.NewStatus(fwk.UnschedulableAndUnresolvable, "node is draining for defrag")
-	}
-
 	// Fast-path rejection: every TF worker pod has tensor-fusion.ai/index injected
 	// by the webhook (pod_webhook.go), so a node that does not expose a positive
 	// allocatable for this resource cannot host the pod. Two cases:
@@ -364,6 +358,13 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 		return fwk.NewStatus(fwk.UnschedulableAndUnresolvable,
 			"node tensor-fusion.ai/index allocatable is <= 0, hypervisor likely unhealthy")
 	}
+	node := nodeInfo.Node()
+	if node == nil {
+		return fwk.NewStatus(fwk.Unschedulable, "not valid node")
+	}
+	if node.Labels[constants.DefragSourceNodeLabel] == constants.TrueStringValue {
+		return fwk.NewStatus(fwk.Unschedulable, "node is being emptied by defrag")
+	}
 
 	filterResult, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
@@ -378,7 +379,7 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 		return s.validatePreemption(state, pod, nodeInfo)
 	}
 
-	nodeName := nodeInfo.Node().Name
+	nodeName := node.Name
 
 	// Check if there are higher priority nominated pods waiting for this node's GPU resources
 	// This ensures that low priority pods don't steal GPU resources from pods that have already
