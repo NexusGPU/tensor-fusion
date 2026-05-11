@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -51,16 +50,16 @@ type ProgressiveNodeNamesState struct {
 // returning the same pointer is safe.
 func (p *ProgressiveNodeNamesState) Clone() fwk.StateData { return p }
 
-var _ framework.PreFilterPlugin = &GPUFit{}
-var _ framework.FilterPlugin = &GPUFit{}
-var _ framework.ScorePlugin = &GPUFit{}
-var _ framework.ReservePlugin = &GPUFit{}
-var _ framework.PostBindPlugin = &GPUFit{}
-var _ framework.EnqueueExtensions = &GPUFit{}
+var _ fwk.PreFilterPlugin = &GPUFit{}
+var _ fwk.FilterPlugin = &GPUFit{}
+var _ fwk.ScorePlugin = &GPUFit{}
+var _ fwk.ReservePlugin = &GPUFit{}
+var _ fwk.PostBindPlugin = &GPUFit{}
+var _ fwk.EnqueueExtensions = &GPUFit{}
 
 type GPUFit struct {
 	logger    *klog.Logger
-	fh        framework.Handle
+	fh        fwk.Handle
 	client    client.Client
 	allocator *gpuallocator.GpuAllocator
 	ctx       context.Context
@@ -101,10 +100,10 @@ func (p *GPUSchedulingStateData) Clone() fwk.StateData {
 	return p
 }
 
-type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error)
+type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle fwk.Handle) (fwk.Plugin, error)
 
 func NewWithDeps(allocator *gpuallocator.GpuAllocator, client client.Client) PluginFactoryFunc {
-	return func(ctx context.Context, obj runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+	return func(ctx context.Context, obj runtime.Object, handle fwk.Handle) (fwk.Plugin, error) {
 		target := &config.GPUFitConfig{}
 		if unknown, ok := obj.(*runtime.Unknown); ok {
 			if err := json.Unmarshal(unknown.Raw, target); err != nil {
@@ -132,7 +131,7 @@ func (s *GPUFit) Name() string {
 	return Name
 }
 
-func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, _ []fwk.NodeInfo) (*framework.PreFilterResult, *fwk.Status) {
+func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, _ []fwk.NodeInfo) (*fwk.PreFilterResult, *fwk.Status) {
 	// Handle progressive migration case
 	if utils.IsProgressiveMigration() && utils.HasGPUResourceRequest(pod) {
 		nodeNames := s.allocator.ListNonUsingNodes()
@@ -141,7 +140,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "ScheduleWithNativeGPU",
 			"Scheduling non-TF workload for progressive migration",
 			"use native GPU resources, available native GPU nodes: "+strconv.Itoa(len(nodeNames)))
-		return &framework.PreFilterResult{
+		return &fwk.PreFilterResult{
 			NodeNames: nodeNames,
 		}, fwk.NewStatus(fwk.Success, "progressive migration for native resources claim")
 	}
@@ -275,12 +274,12 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 		IsPreemption:                 false,
 	})
 
-	return &framework.PreFilterResult{
+	return &fwk.PreFilterResult{
 		NodeNames: allGPUNodeNames,
 	}, fwk.NewStatus(fwk.Success)
 }
 
-func (s *GPUFit) PreFilterExtensions() framework.PreFilterExtensions {
+func (s *GPUFit) PreFilterExtensions() fwk.PreFilterExtensions {
 	return s
 }
 
@@ -598,7 +597,7 @@ func (s *GPUFit) Score(
 	return int64(mergeResourceAndTopologyScore(resourceScore, topologyScore, s.cfg)), nil
 }
 
-func (s *GPUFit) ScoreExtensions() framework.ScoreExtensions {
+func (s *GPUFit) ScoreExtensions() fwk.ScoreExtensions {
 	return nil
 }
 

@@ -1206,7 +1206,7 @@ func buildDefragNodeBudgets(
 	sourceNode string,
 	nodeGpuStore map[string]map[string]*tfv1.GPU,
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{},
-	nodeInfoLister framework.NodeInfoLister,
+	nodeInfoLister fwk.NodeInfoLister,
 ) map[string]*nodeBudget {
 	budget := make(map[string]*nodeBudget, len(nodeGpuStore))
 	for nodeName, gpus := range nodeGpuStore {

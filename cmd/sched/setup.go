@@ -160,7 +160,7 @@ func SetupScheduler(
 		originalFailureHandler := sched.FailureHandler
 		sched.FailureHandler = func(
 			ctx context.Context, fwk framework.Framework, podInfo *framework.QueuedPodInfo,
-			status *fwk.Status, nominatingInfo *framework.NominatingInfo, start time.Time,
+			status *fwk.Status, nominatingInfo *fwk.NominatingInfo, start time.Time,
 		) {
 			if status.IsRejected() {
 				// Handle TensorFusion pods that are rejected due to lack of GPU resources
@@ -185,8 +185,8 @@ func RunScheduler(ctx context.Context,
 	// Config registration.
 	if cz, err := configz.New(configName); err != nil {
 		return fmt.Errorf("unable to register config: %s", err)
-	} else {
-		cz.Set(cc.ComponentConfig)
+	} else if err := cz.Set(&cc.ComponentConfig); err != nil {
+		return fmt.Errorf("unable to set config: %s", err)
 	}
 
 	cc.EventBroadcaster.StartRecordingToSink(ctx.Done())
@@ -226,7 +226,7 @@ func RunScheduler(ctx context.Context,
 }
 
 func getRecorderFactory(cc *schedulerserverconfig.CompletedConfig) profile.RecorderFactory {
-	return func(name string) events.EventRecorder {
+	return func(name string) events.EventRecorderLogger {
 		return cc.EventBroadcaster.NewRecorder(name)
 	}
 }

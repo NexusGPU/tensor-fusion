@@ -124,8 +124,8 @@ func BenchmarkScheduler(b *testing.B) {
 	// Config registration.
 	if cz, err := configz.New("componentconfig"); err != nil {
 		b.Fatal(err)
-	} else {
-		cz.Set(cc.ComponentConfig)
+	} else if err := cz.Set(&cc.ComponentConfig); err != nil {
+		b.Fatal(err)
 	}
 
 	cc.EventBroadcaster.StartRecordingToSink(testCtx.Done())

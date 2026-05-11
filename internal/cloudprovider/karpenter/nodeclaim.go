@@ -380,11 +380,9 @@ func (p KarpenterGPUNodeProvider) buildRequirements(nodeClaim *karpv1.NodeClaim,
 	if param.InstanceType != "" {
 		key := string(tfv1.NodeRequirementKeyInstanceType)
 		requirements = append(requirements, karpv1.NodeSelectorRequirementWithMinValues{
-			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
-				Key:      key,
-				Operator: corev1.NodeSelectorOpIn,
-				Values:   []string{param.InstanceType},
-			},
+			Key:      key,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   []string{param.InstanceType},
 		})
 		seen[key] = struct{}{}
 	}
@@ -392,11 +390,9 @@ func (p KarpenterGPUNodeProvider) buildRequirements(nodeClaim *karpv1.NodeClaim,
 	if param.Zone != "" {
 		key := string(tfv1.NodeRequirementKeyZone)
 		requirements = append(requirements, karpv1.NodeSelectorRequirementWithMinValues{
-			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
-				Key:      key,
-				Operator: corev1.NodeSelectorOpIn,
-				Values:   []string{param.Zone},
-			},
+			Key:      key,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   []string{param.Zone},
 		})
 		seen[key] = struct{}{}
 	}
@@ -405,11 +401,9 @@ func (p KarpenterGPUNodeProvider) buildRequirements(nodeClaim *karpv1.NodeClaim,
 	if param.Region != "" {
 		key := string(tfv1.NodeRequirementKeyRegion)
 		requirements = append(requirements, karpv1.NodeSelectorRequirementWithMinValues{
-			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
-				Key:      key,
-				Operator: corev1.NodeSelectorOpIn,
-				Values:   []string{param.Region},
-			},
+			Key:      key,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   []string{param.Region},
 		})
 		seen[key] = struct{}{}
 	}
@@ -425,11 +419,9 @@ func (p KarpenterGPUNodeProvider) buildRequirements(nodeClaim *karpv1.NodeClaim,
 		}
 
 		requirements = append(requirements, karpv1.NodeSelectorRequirementWithMinValues{
-			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
-				Key:      key,
-				Operator: corev1.NodeSelectorOpIn,
-				Values:   []string{value},
-			},
+			Key:      key,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   []string{value},
 		})
 		seen[key] = struct{}{}
 	}
@@ -444,11 +436,9 @@ func (p KarpenterGPUNodeProvider) buildRequirements(nodeClaim *karpv1.NodeClaim,
 			}
 			seen[key] = struct{}{}
 			requirements = append(requirements, karpv1.NodeSelectorRequirementWithMinValues{
-				NodeSelectorRequirement: corev1.NodeSelectorRequirement{
-					Key:      key,
-					Operator: requirement.Operator,
-					Values:   requirement.Values,
-				},
+				Key:      key,
+				Operator: requirement.Operator,
+				Values:   requirement.Values,
 			})
 		}
 	}
