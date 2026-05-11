@@ -36,22 +36,15 @@ import (
 )
 
 const (
-	// Fallback when MaxDuration is empty or invalid.
 	defaultDefragMaxDuration = 2 * time.Hour
 
-	// Fallback for the per-marker TTLs (EvictedPodMarkerTTL,
-	// SourceNodeMarkerTTL) when their config fields are empty or invalid.
-	// Marker TTLs are deliberately decoupled from MaxDuration: a long
-	// campaign window must not keep a stuck eviction marker alive, and a
-	// short campaign must not prematurely release a marker that is still
-	// guarding an in-flight drain.
+	// Marker TTLs are deliberately decoupled from MaxDuration so a long
+	// campaign window never traps a stuck eviction marker and a short
+	// window never releases one while a drain is still in flight.
 	defaultDefragMarkerTTL = 30 * time.Minute
 
-	// Independent timeout for persisting LastDefragTime.
 	defragStatusPersistTimeout = 30 * time.Second
-
-	// Short requeue used while a stepwise defrag campaign is still active.
-	defragActiveStepRequeue = 10 * time.Second
+	defragActiveStepRequeue    = 10 * time.Second
 )
 
 const (
@@ -68,13 +61,12 @@ const (
 	defragEventFinished          = "DefragFinished"
 )
 
-// Mirrored from the scheduler expander to avoid an import cycle.
-type schedulerSnapshotRefreshAPI interface {
-	UpdateNodeInfoSnapshot(ctx context.Context) error
-}
-
+// schedulerFitPodAPI is satisfied by *scheduler.Scheduler only after the
+// vendor patch (scripts/patch-scheduler.sh) lifts the private
+// findNodesThatFitPod into a public wrapper. We assert it at runtime so an
+// un-patched build still compiles in -mod=mod and only fails defrag.
 type schedulerFitPodAPI interface {
-	schedulerSnapshotRefreshAPI
+	UpdateNodeInfoSnapshot(ctx context.Context) error
 	FindNodesThatFitPod(
 		ctx context.Context,
 		schedFramework framework.Framework,
@@ -82,6 +74,13 @@ type schedulerFitPodAPI interface {
 		pod *corev1.Pod,
 	) ([]fwk.NodeInfo, framework.Diagnosis, error)
 }
+
+// defragCompactScorer ties broken toward already-loaded GPUs to consolidate.
+var defragCompactScorer = gpuallocator.NewStrategy(
+	tfv1.PlacementModeCompactFirst,
+	&config.GPUFitConfig{VramWeight: 0.5, TflopsWeight: 0.5},
+	nil,
+)
 
 // Snapshot of the most recent defrag run for a pool.
 type defragRunStats struct {
@@ -98,7 +97,7 @@ type defragRunStats struct {
 	DeadlineExceeded bool      `json:"deadlineExceeded"`
 }
 
-// sync.Map keyed by pool name -> *defragRunStats.
+// keyed by pool name -> *defragRunStats.
 var defragLastRunStats sync.Map
 
 func GetDefragLastRunStats() map[string]defragRunStats {
@@ -117,10 +116,9 @@ func GetDefragLastRunStats() map[string]defragRunStats {
 
 // ----- cron gating ------------------------------------------------------
 
-// maybeRunDefragStep validates the config, checks the schedule, and processes
-// at most one defrag source node when the current campaign is due. It returns a
-// non-zero requeue when the caller should wake before the normal compaction
-// interval.
+// maybeRunDefragStep processes at most one source node per cron tick. Returns
+// a non-zero requeue when the next wake-up should be sooner than the normal
+// compaction interval.
 func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, pool *tfv1.GPUPool, normalRequeue time.Duration) time.Duration {
 	logger := log.FromContext(ctx).WithValues("pool", pool.Name, "component", "defrag")
 
@@ -147,20 +145,15 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 	}
 	maxDuration := parseDefragMaxDuration(cfg.MaxDuration, logger)
 
-	// Safety sweep runs every reconcile, not just when the cron campaign is
-	// due. Stale evicted-pod / source-node / evict-skip markers must drain
-	// on their own safety-net TTL even outside the cron window -- otherwise
-	// an interrupted defrag (controller restart, ungraceful exit, etc.)
-	// leaves nodes excluded from target selection until the next scheduled
-	// tick. Best-effort: never blocks the guard / step pipeline below.
+	// Sweep stale markers every reconcile so an interrupted defrag
+	// (controller restart, ungraceful exit) doesn't permanently exclude
+	// nodes from target selection until the next cron tick.
 	r.runDefragSafetySweep(ctx, pool)
 
-	// After the sweep, evaluate whether the pool is allowed to start fresh
-	// evictions this reconcile. Two reasons we pause:
-	//   - same-pool evicted pod still pending reschedule
-	//   - same-pool source node still draining (would otherwise let multiple
-	//     source nodes accumulate, which the scheduler excludes as targets
-	//     and would poison capacity further).
+	// Guards pause the pool when a same-pool evicted pod is still pending
+	// reschedule or a source node is still draining. Letting multiple
+	// source nodes accumulate would shrink capacity (scheduler excludes
+	// source nodes as targets).
 	guard := r.evaluateDefragGuards(ctx, pool)
 	if guard.err != nil {
 		logger.Error(guard.err, "evaluate defrag guards failed")
@@ -179,7 +172,6 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 		return defragRequeueAfter(defragStepResult{blockedBySourceNode: true}, normalRequeue)
 	}
 
-	// Treat a campaign as due once a scheduled tick has elapsed since the anchor.
 	now := time.Now()
 	anchor := now.Add(-maxDuration).Add(-time.Minute)
 	if pool.Status.LastDefragTime != nil {
@@ -198,8 +190,8 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 		if err := r.patchPoolLastDefragTime(persistCtx, pool, campaign.start); err != nil {
 			logger.Error(err, "failed to patch pool.Status.LastDefragTime after expired defrag campaign")
 		}
-		// Evict-skip list is campaign-scoped: a missed window counts as a
-		// completed cycle, drop the list so the next tick starts clean.
+		// A missed window counts as a finished cycle, so drop the
+		// campaign-scoped evict-skip list before the next tick.
 		if err := r.clearAllDefragEvictSkipMarkersForPool(persistCtx, pool); err != nil {
 			logger.Error(err, "failed to clear defrag evict-skip markers after expired defrag campaign")
 		}
@@ -223,10 +215,9 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 		if err := r.patchPoolLastDefragTime(persistCtx, pool, campaign.start); err != nil {
 			logger.Error(err, "failed to patch pool.Status.LastDefragTime after defrag step")
 		}
-		// Campaign finished -- drop this pool's evict-skip list so the next
-		// campaign re-evaluates every node. Stuck workers that re-trigger
-		// failure will land back on the list, but defrag is not permanently
-		// blind to them.
+		// Reset the campaign-scoped evict-skip list. Stuck workers will
+		// re-trigger the marker on the next campaign, but defrag is never
+		// permanently blind to them.
 		if err := r.clearAllDefragEvictSkipMarkersForPool(persistCtx, pool); err != nil {
 			logger.Error(err, "failed to clear defrag evict-skip markers after defrag campaign")
 		}
@@ -295,10 +286,8 @@ func parseDefragMaxDuration(raw string, logger interface{ Info(string, ...any) }
 	return d
 }
 
-// parseDefragMarkerTTL parses one of the two independent marker TTL fields
-// (EvictedPodMarkerTTL, SourceNodeMarkerTTL). Empty / invalid input falls back
-// to defaultDefragMarkerTTL so an operator never accidentally disables marker
-// expiry by leaving the field unset.
+// parseDefragMarkerTTL falls back to defaultDefragMarkerTTL on empty / invalid
+// input so an operator cannot accidentally disable marker expiry.
 func parseDefragMarkerTTL(raw, fieldName string, logger interface{ Info(string, ...any) }) time.Duration {
 	if raw == "" {
 		return defaultDefragMarkerTTL
@@ -310,6 +299,16 @@ func parseDefragMarkerTTL(raw, fieldName string, logger interface{ Info(string, 
 		return defaultDefragMarkerTTL
 	}
 	return d
+}
+
+// defragMinPodAge is the minimum age a TF worker must reach before defrag may
+// evict it. Reuses MaxDuration: a worker younger than the campaign window is
+// treated as "still settling" to avoid re-evicting fresh reschedules.
+func defragMinPodAge(cfg *tfv1.NodeDefragConfig, logger interface{ Info(string, ...any) }) time.Duration {
+	if cfg == nil {
+		return defaultDefragMaxDuration
+	}
+	return parseDefragMaxDuration(cfg.MaxDuration, logger)
 }
 
 func evictedPodMarkerTTL(cfg *tfv1.NodeDefragConfig, logger interface{ Info(string, ...any) }) time.Duration {
@@ -347,14 +346,9 @@ func defragRequeueAfter(result defragStepResult, normalRequeue time.Duration) ti
 	return normalRequeue
 }
 
-// runDefragStep processes one pool under the current campaign deadline and
-// emits evictions for at most one source node.
-//
-// Preconditions: the caller (maybeRunDefragStep) must have already run
-// runDefragSafetySweep and confirmed evaluateDefragGuards is unblocked. This
-// function intentionally does not repeat those steps -- it focuses on
-// candidate selection + eviction so the sweep/guard pipeline runs exactly
-// once per reconcile.
+// runDefragStep evicts at most one source node within the campaign deadline.
+// Caller must have already run the safety sweep and confirmed guards are
+// clear; this function does not repeat them.
 func (r *GPUPoolCompactionReconciler) runDefragStep(
 	ctx context.Context,
 	pool *tfv1.GPUPool,
@@ -430,7 +424,6 @@ func runDefragCandidateLoop(
 
 // ----- candidate filtering + sorting ------------------------------------
 
-// defragCandidate holds the node state needed for simulation and eviction.
 type defragCandidate struct {
 	nodeName         string
 	gpuNodeName      string
@@ -445,7 +438,7 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 	if cfg == nil {
 		return nil, nil
 	}
-	minPodAge := parseDefragMaxDuration(cfg.MaxDuration, log.FromContext(ctx))
+	minPodAge := defragMinPodAge(cfg, log.FromContext(ctx))
 	now := time.Now()
 
 	allNodes := &tfv1.GPUNodeList{}
@@ -458,7 +451,7 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 	nodeGpuStore := r.Allocator.GetNodeGpuStore()
 	nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
 
-	threshold := int64(cfg.UtilizationThresholdPercent)
+	threshold := float64(cfg.UtilizationThresholdPercent)
 	out := make([]*defragCandidate, 0, len(allNodes.Items))
 
 	for i := range allNodes.Items {
@@ -476,18 +469,18 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 		k8sNodeName := gpuNode.Name
 		k8sNode := &corev1.Node{}
 		if err := r.Get(ctx, client.ObjectKey{Name: k8sNodeName}, k8sNode); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
+			if !apierrors.IsNotFound(err) {
+				log.FromContext(ctx).V(4).Info("skip defrag candidate: get node failed",
+					"node", k8sNodeName, "pool", pool.Name, "err", err.Error())
 			}
 			continue
 		}
 		if k8sNode.Spec.Unschedulable {
 			continue
 		}
-		// Evict-skip list: a previous step's real eviction error landed
-		// this node here. Skip until the node drains and the safety sweep
-		// releases it. Scheduler is intentionally unaware -- already-evicted
-		// pods may be rescheduled back, that is acceptable.
+		// Scheduler intentionally does not honor evict-skip, so an
+		// already-evicted pod may land back on the same node. That's
+		// acceptable: defrag just stops re-evicting it this campaign.
 		if k8sNode.Labels[constants.DefragEvictSkipNodeLabel] == constants.TrueStringValue &&
 			defragEvictSkipNodeBelongsToPool(pool.Name, k8sNode) {
 			log.FromContext(ctx).V(4).Info("skip defrag candidate: node on defrag evict-skip list",
@@ -506,13 +499,15 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 		if used == 0 {
 			continue
 		}
-		utilization := float64(used) * 100 / float64(total)
-		if int64(utilization) > threshold {
+		utilization := gpuUtilizationPercent(used, total)
+		if utilization > threshold {
 			continue
 		}
 
 		pods, err := r.listNodeWorkerPods(ctx, k8sNodeName, nodeWorkerStore[k8sNodeName])
 		if err != nil {
+			log.FromContext(ctx).V(4).Info("skip defrag candidate: list worker pods failed",
+				"node", k8sNodeName, "pool", pool.Name, "err", err.Error())
 			continue
 		}
 		if len(pods) == 0 {
@@ -527,10 +522,7 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 			continue
 		}
 
-		// Hard requirement: every TF worker on the candidate node must be
-		// covered by a PDB with a non-empty selector. Without a real PDB,
-		// defrag eviction would proceed unconstrained, so we drop the node
-		// and surface a Warning event so operators know which pod to fix.
+		// Defrag refuses to evict workers without a real PDB guardrail.
 		missingPod, pdbErr := r.findWorkerMissingPDB(ctx, pods)
 		if pdbErr != nil {
 			log.FromContext(ctx).Error(pdbErr, "skip defrag candidate: list PDB failed",
@@ -564,12 +556,8 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 	return out, nil
 }
 
-// sweepStaleDefragEvictedPodMarkers walks every same-pool defrag-evicted pod
-// and clears any marker that has outlived EvictedPodMarkerTTL. It does NOT
-// short-circuit on the first non-stale marker -- a stale pod farther down the
-// list must still be cleaned up in one pass. Callers should treat this as a
-// best-effort safety sweep: errors clearing one marker are logged and the
-// loop continues, so a single bad pod can't block the rest of the cleanup.
+// sweepStaleDefragEvictedPodMarkers is best-effort: a stale pod must not block
+// cleanup of the rest, so per-pod failures only log.
 func (r *GPUPoolCompactionReconciler) sweepStaleDefragEvictedPodMarkers(ctx context.Context, pool *tfv1.GPUPool) error {
 	if pool == nil {
 		return errors.New("pool is nil")
@@ -598,10 +586,9 @@ func (r *GPUPoolCompactionReconciler) sweepStaleDefragEvictedPodMarkers(ctx cont
 	return nil
 }
 
-// hasActiveDefragEvictedPods reports whether the pool still has at least one
-// non-stale defrag-evicted pod waiting to be rescheduled. Pure read: it
-// performs no patches. Callers should run sweepStaleDefragEvictedPodMarkers
-// first so a stale leftover doesn't falsely mark the pool as blocked.
+// hasActiveDefragEvictedPods is a pure read; the caller must have already
+// run sweepStaleDefragEvictedPodMarkers so a stale leftover does not block
+// the pool forever.
 func (r *GPUPoolCompactionReconciler) hasActiveDefragEvictedPods(ctx context.Context, pool *tfv1.GPUPool) (bool, error) {
 	if pool == nil {
 		return false, errors.New("pool is nil")
@@ -627,10 +614,8 @@ func (r *GPUPoolCompactionReconciler) hasActiveDefragEvictedPods(ctx context.Con
 	return false, nil
 }
 
-// runDefragSafetySweep runs every same-pool stale-marker cleanup once.
-// All three sweeps are best-effort: each is independent, an error in one
-// must not stop the others, so we log-and-continue. Run this every reconcile
-// (NodeCompaction.Period) before evaluating guards or starting a step.
+// runDefragSafetySweep runs the three independent stale-marker cleanups.
+// Each sub-sweep is best-effort: a failure must not block the others.
 func (r *GPUPoolCompactionReconciler) runDefragSafetySweep(ctx context.Context, pool *tfv1.GPUPool) {
 	if pool == nil {
 		return
@@ -647,17 +632,13 @@ func (r *GPUPoolCompactionReconciler) runDefragSafetySweep(ctx context.Context, 
 	}
 }
 
-// defragGuardDecision describes whether the pool is allowed to proceed with
-// fresh evictions this reconcile. Read-only: callers must not patch markers
-// based on this output -- run the sweep first.
 type defragGuardDecision struct {
 	blockedByEvictedPod bool
 	blockedBySourceNode bool
 	err                 error
 }
 
-// evaluateDefragGuards checks the two pause-conditions for a fresh defrag step.
-// It performs only List operations; sweepers must already have run so that a
+// evaluateDefragGuards is read-only; the sweep must run first so a
 // stale-but-not-yet-cleaned marker does not falsely block the pool.
 func (r *GPUPoolCompactionReconciler) evaluateDefragGuards(ctx context.Context, pool *tfv1.GPUPool) defragGuardDecision {
 	if pool == nil {
@@ -681,11 +662,9 @@ func (r *GPUPoolCompactionReconciler) evaluateDefragGuards(ctx context.Context, 
 }
 
 // hasActiveDefragSourceNodes reports whether any node still carries the defrag
-// source-node marker for this pool. Callers should run cleanupStaleDefragSourceMarkers
-// first so that "active" really means a node currently being drained, not a
-// leftover marker. While such a node exists, the controller pauses new evictions
-// for the same pool to avoid adding more source nodes (which the scheduler also
-// excludes from target selection).
+// hasActiveDefragSourceNodes pauses new evictions while any same-pool source
+// node is still draining. Sweep must run first or stale markers will falsely
+// block the pool.
 func (r *GPUPoolCompactionReconciler) hasActiveDefragSourceNodes(ctx context.Context, pool *tfv1.GPUPool) (bool, error) {
 	if pool == nil {
 		return false, errors.New("pool is nil")
@@ -709,31 +688,24 @@ func defragEvictedPodBelongsToPool(poolName string, pod *corev1.Pod) bool {
 	if pod == nil || poolName == "" {
 		return false
 	}
-	if pod.Annotations == nil {
-		return false
+	if evictedPodMarker.belongsToPool(pod, poolName) {
+		return true
 	}
-	if owner := pod.Annotations[constants.DefragEvictedPodPoolAnnotation]; owner != "" {
-		return owner == poolName
-	}
+	// Legacy fallback for markers written before
+	// DefragEvictedPodPoolAnnotation existed.
 	return pod.Annotations[constants.GpuPoolKey] == poolName
 }
 
 func isDefragEvictedPodMarkerStale(pod *corev1.Pod, now time.Time, staleAfter time.Duration) bool {
-	if pod == nil || staleAfter <= 0 {
+	if pod == nil || staleAfter <= 0 || pod.Annotations == nil {
 		return false
 	}
-	var since time.Time
-	if pod.Annotations != nil {
-		if raw := pod.Annotations[constants.DefragEvictedPodSinceAnnotation]; raw != "" {
-			if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
-				since = parsed
-			}
-		}
+	raw := pod.Annotations[constants.DefragEvictedPodSinceAnnotation]
+	if raw == "" {
+		return false
 	}
-	if since.IsZero() && !pod.CreationTimestamp.IsZero() {
-		since = pod.CreationTimestamp.Time
-	}
-	if since.IsZero() {
+	since, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
 		return false
 	}
 	return now.Sub(since) > staleAfter
@@ -743,7 +715,8 @@ func (r *GPUPoolCompactionReconciler) cleanupStaleDefragSourceMarkers(ctx contex
 	if pool == nil {
 		return errors.New("pool is nil")
 	}
-	staleAfter := sourceNodeMarkerTTL(getDefragConfig(pool), log.FromContext(ctx))
+	logger := log.FromContext(ctx)
+	staleAfter := sourceNodeMarkerTTL(getDefragConfig(pool), logger)
 	now := time.Now()
 
 	nodeList := &corev1.NodeList{}
@@ -753,6 +726,8 @@ func (r *GPUPoolCompactionReconciler) cleanupStaleDefragSourceMarkers(ctx contex
 		return fmt.Errorf("list defrag source nodes: %w", err)
 	}
 
+	// Best-effort: a per-node failure must not block cleanup of the rest,
+	// otherwise one stuck node freezes source-marker cleanup pool-wide.
 	for i := range nodeList.Items {
 		node := &nodeList.Items[i]
 		if !defragSourceNodeBelongsToPool(pool.Name, node) {
@@ -760,69 +735,40 @@ func (r *GPUPoolCompactionReconciler) cleanupStaleDefragSourceMarkers(ctx contex
 		}
 		hasWorkers, err := r.hasActiveTensorFusionWorkerOnNode(ctx, node.Name)
 		if err != nil {
-			return fmt.Errorf("list active TF workers on defrag source node %s: %w", node.Name, err)
+			logger.Error(err, "skip source-marker cleanup: list active TF workers failed",
+				"node", node.Name, "pool", pool.Name)
+			continue
 		}
 		if !isDefragSourceNodeMarkerStale(node, now, staleAfter, hasWorkers) {
 			continue
 		}
 		if err := r.clearNodeDefragSourceMarker(ctx, node.Name); err != nil {
-			return fmt.Errorf("clear stale defrag source marker on node %s: %w", node.Name, err)
+			logger.Error(err, "clear stale defrag source marker failed",
+				"node", node.Name, "pool", pool.Name)
+			continue
 		}
 	}
 	return nil
 }
 
-// hasActiveTensorFusionWorkerOnNode reports whether any TF worker pod is still
-// active on the node. Source of truth is the allocator's nodeWorkerStore (the
-// same store that defrag candidate selection uses), avoiding an O(cluster) pod
-// list. Each candidate is re-fetched to filter out entries the store hasn't
-// yet purged after a recent delete.
 func (r *GPUPoolCompactionReconciler) hasActiveTensorFusionWorkerOnNode(ctx context.Context, nodeName string) (bool, error) {
-	if r.Allocator == nil {
-		return false, errors.New("allocator is nil")
+	pods, err := r.currentNodeWorkerPods(ctx, nodeName)
+	if err != nil {
+		return false, err
 	}
-	for nn := range r.Allocator.GetNodeWorkerStoreSnapshot()[nodeName] {
-		pod := &corev1.Pod{}
-		if err := r.Get(ctx, nn, pod); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			return false, fmt.Errorf("get worker pod %s on node %s: %w", nn.String(), nodeName, err)
-		}
-		if pod.Spec.NodeName != nodeName {
-			continue
-		}
-		if !pod.DeletionTimestamp.IsZero() {
-			continue
-		}
-		if !utils.IsTensorFusionWorker(pod) {
-			continue
-		}
-		return true, nil
-	}
-	return false, nil
+	return len(pods) > 0, nil
 }
 
 func defragSourceNodeBelongsToPool(poolName string, node *corev1.Node) bool {
-	if node == nil || node.Annotations == nil {
-		return false
-	}
-	return node.Annotations[constants.DefragSourceNodePoolAnnotation] == poolName
+	return sourceNodeMarker.belongsToPool(node, poolName)
 }
 
-// isDefragSourceNodeMarkerStale decides whether a defrag source-node marker is
-// safe to clear. Callers must ensure no active defrag-evicted pod for the pool
-// is still in flight before invoking this — otherwise we may release the
-// source node back as a target while the original workers are still being
-// rescheduled.
-//
-// Two cleanup paths:
-//   - Happy path: the node has no active TF worker, so this campaign is done
-//     for this node and the marker has served its purpose.
-//   - Safety net: the marker has outlived MaxDuration. Even if a worker is
-//     still hanging around (stuck terminating, lost reconcile, etc.), the
-//     marker is too old to trust and should be cleared so the node can be
-//     reused.
+// isDefragSourceNodeMarkerStale releases the source-node marker either when
+// the node has no active TF worker (happy path) or when the marker has
+// outlived staleAfter (safety net for stuck terminating workers). Callers
+// must ensure no same-pool defrag-evicted pod is still in flight, otherwise
+// the source node may be selected as a target while its original workers
+// are still being rescheduled.
 func isDefragSourceNodeMarkerStale(node *corev1.Node, now time.Time, staleAfter time.Duration, hasActiveWorkers bool) bool {
 	if node == nil || node.Annotations == nil {
 		return false
@@ -859,16 +805,40 @@ func countPoolGPUUsage(gpus map[string]*tfv1.GPU, poolName string) (total, used 
 			continue
 		}
 		total++
-		// Count the GPU as used once either dimension is partially consumed.
-		if g.Status.Available.Tflops.Cmp(g.Status.Capacity.Tflops) < 0 ||
-			g.Status.Available.Vram.Cmp(g.Status.Capacity.Vram) < 0 {
+		if !isGPUFullyAvailable(g) {
 			used++
 		}
 	}
 	return
 }
 
-// listNodeWorkerPods fetches TF worker pods from allocator-owned keys.
+// isGPUFullyAvailable is the inverse of the "used" predicate inside
+// countPoolGPUUsage so source and budget sides share one definition.
+func isGPUFullyAvailable(g *tfv1.GPU) bool {
+	if g == nil || g.Status.Available == nil || g.Status.Capacity == nil {
+		return false
+	}
+	return g.Status.Available.Tflops.Cmp(g.Status.Capacity.Tflops) >= 0 &&
+		g.Status.Available.Vram.Cmp(g.Status.Capacity.Vram) >= 0
+}
+
+// gpuUtilizationPercent is shared by the candidate source-side view and the
+// simulation budget side; keeping both on one helper is what makes the
+// monotonicity gate sound.
+func gpuUtilizationPercent(used, total int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(used) * 100 / float64(total)
+}
+
+func budgetUtilizationPercent(nb *nodeBudget) float64 {
+	if nb == nil {
+		return 0
+	}
+	return gpuUtilizationPercent(nb.usedGPUs, nb.totalGPUs)
+}
+
 func (r *GPUPoolCompactionReconciler) listNodeWorkerPods(
 	ctx context.Context,
 	nodeName string,
@@ -925,11 +895,7 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 	if len(refreshedPods) == 0 {
 		return defragCandidateSkipped
 	}
-	cfg := getDefragConfig(pool)
-	minPodAge := defaultDefragMaxDuration
-	if cfg != nil {
-		minPodAge = parseDefragMaxDuration(cfg.MaxDuration, l)
-	}
+	minPodAge := defragMinPodAge(getDefragConfig(pool), l)
 	if freshPod, ok := findFreshDefragWorker(time.Now(), minPodAge, refreshedPods); ok {
 		stats.FreshPodSkips++
 		l.Info("skip node: contains fresh TF worker",
@@ -942,7 +908,10 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 
 	canRelocate, simErr := r.simulateJointPlacement(ctx, pool, cand, maxWorkerPerNode)
 	if simErr != nil {
-		l.Error(simErr, "joint placement simulation errored; treating as unmovable")
+		l.Error(simErr, "joint placement simulation errored; abort candidate")
+		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventAbortNode,
+			"node %s aborted: simulation error: %v", cand.nodeName, simErr)
+		return defragCandidateAborted
 	}
 	if !canRelocate {
 		stats.UnmovableNodes++
@@ -965,24 +934,26 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 		return defragCandidateSkipped
 	}
 
-	// Abort the node on the first eviction or post-eviction label failure.
-	allSucceeded := r.evictWorkerPods(ctx, pool, cand, stats, l)
-	if allSucceeded {
+	if r.evictWorkerPods(ctx, pool, cand, stats, l) {
 		return defragCandidateEvicted
-	} else {
-		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventAbortNode,
-			"node %s: eviction aborted", cand.nodeName)
 	}
+	r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventAbortNode,
+		"node %s: eviction aborted", cand.nodeName)
 	return defragCandidateAborted
 }
 
 // ----- simulation: joint placement using local budget -------------------
 
-// nodeBudget is the per-target-node virtual accounting used by simulation.
+// nodeBudget is the simulation's virtual accounting per target node.
+// totalGPUs / usedGPUs mirror countPoolGPUUsage so the monotonicity gate can
+// require target utilization >= source. usedGPUs is mutated on commit so
+// subsequent placements in the same step see the updated value.
 type nodeBudget struct {
 	gpus        map[string]*tfv1.GPU
 	workerCount int
 	nodeInfo    fwk.NodeInfo
+	totalGPUs   int
+	usedGPUs    int
 }
 
 func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
@@ -993,12 +964,8 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 ) (bool, error) {
 	fitAPI, ok := any(r.Scheduler).(schedulerFitPodAPI)
 	if !ok {
-		return false, errors.New("scheduler vendor patch missing: FindNodesThatFitPod/UpdateNodeInfoSnapshot not available")
+		return false, errors.New("scheduler vendor patch missing: run scripts/patch-scheduler.sh")
 	}
-
-	// Build a local budget for every target node except the source.
-	nodeGpuStore := r.Allocator.GetNodeGpuStore()
-	nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
 	profileName := constants.SchedulerName
 	if len(cand.workerPods) > 0 && cand.workerPods[0].Spec.SchedulerName != "" {
 		profileName = cand.workerPods[0].Spec.SchedulerName
@@ -1014,8 +981,8 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 	budget := buildDefragNodeBudgets(
 		pool.Name,
 		cand.nodeName,
-		nodeGpuStore,
-		nodeWorkerStore,
+		r.Allocator.GetNodeGpuStore(),
+		r.Allocator.GetNodeWorkerStoreSnapshot(),
 		schedFramework.SnapshotSharedLister().NodeInfos(),
 	)
 	if len(budget) == 0 {
@@ -1026,7 +993,7 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 		if ctxDone(ctx) {
 			return false, ctx.Err()
 		}
-		placed, err := r.placeSinglePod(ctx, fitAPI, srcPod, budget, maxWorkerPerNode)
+		placed, err := r.placeSinglePod(ctx, fitAPI, srcPod, budget, maxWorkerPerNode, cand.utilizationScore)
 		if err != nil {
 			return false, err
 		}
@@ -1037,16 +1004,20 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 	return true, nil
 }
 
-// placeSinglePod asks the scheduler for feasible nodes, intersects that
-// result with the local budget, and commits the chosen virtual placement.
+// placeSinglePod intersects scheduler-feasible nodes with the local budget
+// and commits one virtual placement. (false, nil) is the "no fit" path that
+// callers should treat as unmovable. sourceUtilization (0..100) gates
+// targets to at-least-as-loaded ones; the gate reads the dynamic budget so
+// prior placements within the same step are visible.
 func (r *GPUPoolCompactionReconciler) placeSinglePod(
 	ctx context.Context,
 	fitAPI schedulerFitPodAPI,
 	pod *corev1.Pod,
 	budget map[string]*nodeBudget,
 	maxWorkerPerNode int,
+	sourceUtilization float64,
 ) (bool, error) {
-	podCopy := prepareDefragSimulationPod(pod)
+	podCopy := cloneAsUnscheduledWorker(pod)
 
 	fwkInstance := r.Scheduler.Profiles[podCopy.Spec.SchedulerName]
 	if fwkInstance == nil {
@@ -1055,9 +1026,9 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 
 	state := framework.NewCycleState()
 	state.SetRecordPluginMetrics(false)
-	podsToActivate := framework.NewPodsToActivate()
-	state.Write(framework.PodsToActivateKey, podsToActivate)
-	// Tell internal plugins this is a dry run.
+	state.Write(framework.PodsToActivateKey, framework.NewPodsToActivate())
+	// Mark this as a dry run so gpuresources / allocator plugins skip
+	// real-state mutations and use the simulation-only code paths.
 	state.Write(fwk.StateKey(constants.SchedulerSimulationKey), &gpuallocator.SimulateSchedulingFilterDetail{
 		FilterStageDetails: []filter.FilterDetail{},
 	})
@@ -1076,14 +1047,6 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 	}
 	podInfo, _ := framework.NewPodInfo(podCopy)
 
-	// Defrag always prefers compact placement when breaking node ties.
-	compactScorer := gpuallocator.NewStrategy(
-		tfv1.PlacementModeCompactFirst,
-		&config.GPUFitConfig{VramWeight: 0.5, TflopsWeight: 0.5},
-		nil,
-	)
-
-	// Walk feasible ∩ budget and choose the highest-scoring target.
 	type fitCandidate struct {
 		node     string
 		selected []*tfv1.GPU
@@ -1106,16 +1069,24 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 			continue
 		}
 
-		// Mirror CheckQuotaAndFilter: only reject nodes already over the cap.
+		// Mirror CheckQuotaAndFilter: only reject nodes already over cap.
 		if maxWorkerPerNode > 0 && nb.workerCount > maxWorkerPerNode {
+			continue
+		}
+		// Monotonicity gate: workers may only flow toward at-least-as-
+		// loaded targets, evaluated against the dynamic budget.
+		targetUtil := budgetUtilizationPercent(nb)
+		if targetUtil < sourceUtilization {
+			log.FromContext(ctx).V(5).Info("defrag reject lower-utilization target",
+				"target", tgt, "targetUtil", targetUtil, "sourceUtil", sourceUtilization)
 			continue
 		}
 		candidateInfo := cloneNodeInfoWithVirtualPod(nb.nodeInfo, podInfo)
 		if candidateInfo == nil || !fitsVirtualNodeAllocatable(candidateInfo) {
 			continue
 		}
-		// Re-run filters against the virtualized node snapshot so resource-based
-		// plugins see the capacity already consumed by prior simulated placements.
+		// Re-run filters on the virtualized snapshot so resource plugins
+		// see capacity already consumed by prior simulated placements.
 		if status := fwkInstance.RunFilterPluginsWithNominatedPods(ctx, state.Clone(), podCopy, candidateInfo); status != nil && !status.IsSuccess() {
 			continue
 		}
@@ -1134,11 +1105,11 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 			continue
 		}
 
-		// Score on the budget copies so tie-breaks match the simulated state.
+		// Score the budget copies so tie-breaks reflect simulated state.
 		score := 0
 		for _, g := range selected {
 			if orig, ok := nb.gpus[g.Name]; ok {
-				score += compactScorer.Score(orig, false)
+				score += defragCompactScorer.Score(orig, false)
 			}
 		}
 		if best == nil || score > bestScore {
@@ -1151,25 +1122,37 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 		return false, nil
 	}
 
-	// Commit the placement into the local budget.
 	nb := budget[best.node]
-	for _, g := range best.selected {
-		live := nb.gpus[g.Name]
-		if live == nil || live.Status.Available == nil {
-			continue
-		}
-		subtractGPURequest(live, req)
-	}
+	applyGPUPlacementToBudget(nb, best.selected, req)
 	nb.nodeInfo = best.nodeInfo
 	nb.workerCount++
 	return true, nil
 }
 
-func prepareDefragSimulationPod(pod *corev1.Pod) *corev1.Pod {
-	podCopy := pod.DeepCopy()
+// applyGPUPlacementToBudget subtracts req from each selected GPU and bumps
+// nb.usedGPUs on each "fully free -> partially used" transition, keeping
+// the budget aligned with countPoolGPUUsage.
+func applyGPUPlacementToBudget(nb *nodeBudget, selected []*tfv1.GPU, req *tfv1.AllocRequest) {
+	if nb == nil {
+		return
+	}
+	for _, g := range selected {
+		live := nb.gpus[g.Name]
+		if live == nil || live.Status.Available == nil {
+			continue
+		}
+		wasFree := isGPUFullyAvailable(live)
+		subtractGPURequest(live, req)
+		if wasFree && !isGPUFullyAvailable(live) {
+			nb.usedGPUs++
+		}
+	}
+}
 
-	// Clear source-node and assigned-GPU state before asking the scheduler
-	// whether this worker can be placed somewhere else.
+// cloneAsUnscheduledWorker returns a deep copy with allocator-assigned
+// scheduling state cleared so the scheduler treats it as a fresh candidate.
+func cloneAsUnscheduledWorker(pod *corev1.Pod) *corev1.Pod {
+	podCopy := pod.DeepCopy()
 	podCopy.Spec.NodeName = ""
 	podCopy.Status.NominatedNodeName = ""
 	if podCopy.Annotations != nil {
@@ -1177,15 +1160,6 @@ func prepareDefragSimulationPod(pod *corev1.Pod) *corev1.Pod {
 		delete(podCopy.Annotations, constants.ContainerGPUsAnnotation)
 	}
 	return podCopy
-}
-
-func canFitVirtualNodeResources(nodeInfo fwk.NodeInfo, pod *corev1.Pod) bool {
-	podInfo, _ := framework.NewPodInfo(pod)
-	virtualNode := cloneNodeInfoWithVirtualPod(nodeInfo, podInfo)
-	if virtualNode == nil {
-		return false
-	}
-	return fitsVirtualNodeAllocatable(virtualNode)
 }
 
 func cloneNodeInfoWithVirtualPod(nodeInfo fwk.NodeInfo, podInfo fwk.PodInfo) fwk.NodeInfo {
@@ -1237,9 +1211,8 @@ func buildDefragNodeBudgets(
 		}
 		nodeInfo, err := nodeInfoLister.Get(nodeName)
 		if err != nil {
-			// Allocator state can briefly outlive scheduler/cache state for
-			// deleted nodes. A missing target node is unusable for defrag, but
-			// it must not make the whole source candidate look unmovable.
+			// Allocator state can briefly outlive scheduler cache for
+			// deleted nodes; drop only this target, not the candidate.
 			continue
 		}
 		if node := nodeInfo.Node(); node == nil ||
@@ -1261,18 +1234,29 @@ func buildDefragNodeBudgets(
 		if len(copied) == 0 {
 			continue
 		}
+		// Skip fully empty target nodes: relocating onto one swaps which
+		// machine is occupied without reducing total occupancy. Strategy
+		// #1 owns reclaiming empty nodes, defrag stays out of its way.
+		total, used := countPoolGPUUsage(copied, poolName)
+		if used == 0 {
+			continue
+		}
 		budget[nodeName] = &nodeBudget{
 			gpus:        copied,
 			workerCount: len(nodeWorkerStore[nodeName]),
 			nodeInfo:    nodeInfo.Snapshot(),
+			totalGPUs:   total,
+			usedGPUs:    used,
 		}
 	}
 	return budget
 }
 
 func (r *GPUPoolCompactionReconciler) currentNodeWorkerPods(ctx context.Context, nodeName string) ([]*corev1.Pod, error) {
-	nodeWorkerStore := r.Allocator.GetNodeWorkerStoreSnapshot()
-	return r.listNodeWorkerPods(ctx, nodeName, nodeWorkerStore[nodeName])
+	if r.Allocator == nil {
+		return nil, errors.New("allocator is nil")
+	}
+	return r.listNodeWorkerPods(ctx, nodeName, r.Allocator.GetNodeWorkerStoreSnapshot()[nodeName])
 }
 
 func findFreshDefragWorker(
@@ -1312,21 +1296,36 @@ func subtractGPURequest(gpu *tfv1.GPU, req *tfv1.AllocRequest) {
 
 // ----- eviction ---------------------------------------------------------
 
-// findWorkerMissingPDB returns the first TF worker pod that is NOT covered
-// by any PodDisruptionBudget with a non-empty selector in its namespace.
-// Empty / match-everything selectors are intentionally rejected: a PDB
-// without an explicit selector is almost always a misconfiguration and
-// must not be trusted as a real disruption guardrail before defrag
-// eviction. Returns (nil, nil) when every pod is covered by at least one
-// non-empty-selector PDB.
-func (r *GPUPoolCompactionReconciler) findWorkerMissingPDB(
+// pdbSelectorMode picks the policy for PDBs with empty / match-everything
+// selectors. Both modes exist because K8s' LabelSelectorAsSelector(nil)
+// defaults to "matches everything", which is unsafe in our context.
+type pdbSelectorMode int
+
+const (
+	// Skip empty selectors entirely (used by the "every pod must be
+	// covered by a real PDB" precheck so misconfigured PDBs are not
+	// trusted as guardrails).
+	pdbRequireExplicitSelector pdbSelectorMode = iota
+	// Rewrite empty selectors to labels.Nothing() (used by the "is
+	// anyone blocking eviction" runtime check so an empty PDB never
+	// falsely blocks an unrelated pod).
+	pdbTreatEmptyAsMatchNothing
+)
+
+// forEachMatchingPDB caches PDBs per namespace and calls fn for each
+// (pod, matched PDB) pair. fn returning stop=true halts iteration.
+func (r *GPUPoolCompactionReconciler) forEachMatchingPDB(
 	ctx context.Context,
 	pods []*corev1.Pod,
-) (*corev1.Pod, error) {
+	mode pdbSelectorMode,
+	fn func(pod *corev1.Pod, pdb *policyv1.PodDisruptionBudget) (stop bool),
+) (matched map[types.NamespacedName]bool, err error) {
 	if r.KubeClient == nil {
 		return nil, errors.New("kube client is nil")
 	}
+	matched = map[types.NamespacedName]bool{}
 	pdbsByNamespace := map[string][]policyv1.PodDisruptionBudget{}
+
 	for _, pod := range pods {
 		if pod == nil {
 			continue
@@ -1336,94 +1335,101 @@ func (r *GPUPoolCompactionReconciler) findWorkerMissingPDB(
 		}
 		pdbs, ok := pdbsByNamespace[pod.Namespace]
 		if !ok {
-			pdbList, err := r.KubeClient.PolicyV1().
+			list, listErr := r.KubeClient.PolicyV1().
 				PodDisruptionBudgets(pod.Namespace).
 				List(ctx, metav1.ListOptions{})
-			if err != nil {
-				return nil, fmt.Errorf("list PDBs for namespace %s: %w", pod.Namespace, err)
+			if listErr != nil {
+				return nil, fmt.Errorf("list PDBs for namespace %s: %w", pod.Namespace, listErr)
 			}
-			pdbs = pdbList.Items
+			pdbs = list.Items
 			pdbsByNamespace[pod.Namespace] = pdbs
 		}
-		covered := false
+
 		for i := range pdbs {
 			pdb := &pdbs[i]
-			if !isNonEmptyPDBSelector(pdb.Spec.Selector) {
+			selector, selErr := pdbSelectorFor(pdb, mode)
+			if selErr != nil {
+				return nil, selErr
+			}
+			if selector == nil || !selector.Matches(labels.Set(pod.Labels)) {
 				continue
 			}
-			selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
-			if err != nil {
-				return nil, fmt.Errorf("parse PDB selector %s/%s: %w", pdb.Namespace, pdb.Name, err)
-			}
-			if selector == nil {
-				continue
-			}
-			if selector.Matches(labels.Set(pod.Labels)) {
-				covered = true
-				break
+			matched[types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}] = true
+			if fn != nil && fn(pod, pdb) {
+				return matched, nil
 			}
 		}
-		if !covered {
+	}
+	return matched, nil
+}
+
+func pdbSelectorFor(pdb *policyv1.PodDisruptionBudget, mode pdbSelectorMode) (labels.Selector, error) {
+	sel := pdb.Spec.Selector
+	empty := sel == nil || (len(sel.MatchLabels) == 0 && len(sel.MatchExpressions) == 0)
+	switch mode {
+	case pdbRequireExplicitSelector:
+		if empty {
+			return nil, nil
+		}
+	case pdbTreatEmptyAsMatchNothing:
+		if empty {
+			return labels.Nothing(), nil
+		}
+	}
+	selector, err := metav1.LabelSelectorAsSelector(sel)
+	if err != nil {
+		return nil, fmt.Errorf("parse PDB selector %s/%s: %w", pdb.Namespace, pdb.Name, err)
+	}
+	return selector, nil
+}
+
+// findWorkerMissingPDB returns the first worker pod that no explicit-selector
+// PDB covers. Empty / match-everything selectors are treated as missing.
+func (r *GPUPoolCompactionReconciler) findWorkerMissingPDB(
+	ctx context.Context,
+	pods []*corev1.Pod,
+) (*corev1.Pod, error) {
+	matched, err := r.forEachMatchingPDB(ctx, pods, pdbRequireExplicitSelector, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, pod := range pods {
+		if pod == nil {
+			continue
+		}
+		if !matched[types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}] {
 			return pod, nil
 		}
 	}
 	return nil, nil
 }
 
-// isNonEmptyPDBSelector reports whether the PDB selector defines at least
-// one label match rule. nil / empty selectors are treated as "no real
-// guardrail" and rejected by findWorkerMissingPDB.
-func isNonEmptyPDBSelector(sel *metav1.LabelSelector) bool {
-	return sel != nil && (len(sel.MatchLabels) > 0 || len(sel.MatchExpressions) > 0)
-}
-
+// checkDefragPDBPreflight returns (blocked, reason) when any worker pod is
+// covered by a PDB whose DisruptionsAllowed has hit zero.
 func (r *GPUPoolCompactionReconciler) checkDefragPDBPreflight(
 	ctx context.Context,
 	cand *defragCandidate,
 ) (bool, string, error) {
-	if r.KubeClient == nil {
-		return false, "", errors.New("kube client is nil")
+	var (
+		blocked bool
+		reason  string
+	)
+	_, err := r.forEachMatchingPDB(ctx, cand.workerPods, pdbTreatEmptyAsMatchNothing,
+		func(pod *corev1.Pod, pdb *policyv1.PodDisruptionBudget) bool {
+			if pdb.Status.DisruptionsAllowed > 0 {
+				return false
+			}
+			blocked = true
+			reason = fmt.Sprintf(
+				"pod %s/%s is blocked by PDB %s/%s: disruptionsAllowed=%d",
+				pod.Namespace, pod.Name, pdb.Namespace, pdb.Name, pdb.Status.DisruptionsAllowed,
+			)
+			return true
+		})
+	if err != nil {
+		return false, "", err
 	}
-	pdbsByNamespace := map[string][]policyv1.PodDisruptionBudget{}
-	for _, pod := range cand.workerPods {
-		if pod == nil {
-			continue
-		}
-		if pod.Namespace == "" {
-			return false, "", fmt.Errorf("pod %s has empty namespace", pod.Name)
-		}
-		pdbs, ok := pdbsByNamespace[pod.Namespace]
-		if !ok {
-			pdbList, err := r.KubeClient.PolicyV1().
-				PodDisruptionBudgets(pod.Namespace).
-				List(ctx, metav1.ListOptions{})
-			if err != nil {
-				return false, "", fmt.Errorf("list PDBs for namespace %s: %w", pod.Namespace, err)
-			}
-			pdbs = pdbList.Items
-			pdbsByNamespace[pod.Namespace] = pdbs
-		}
-		for i := range pdbs {
-			pdb := &pdbs[i]
-			selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
-			if err != nil {
-				return false, "", fmt.Errorf("parse PDB selector %s/%s: %w", pdb.Namespace, pdb.Name, err)
-			}
-			if selector == nil {
-				selector = labels.Nothing()
-			}
-			if !selector.Matches(labels.Set(pod.Labels)) {
-				continue
-			}
-			if pdb.Status.DisruptionsAllowed <= 0 {
-				return true, fmt.Sprintf(
-					"pod %s/%s is blocked by PDB %s/%s: disruptionsAllowed=%d",
-					pod.Namespace, pod.Name, pdb.Namespace, pdb.Name, pdb.Status.DisruptionsAllowed,
-				), nil
-			}
-		}
-	}
-	return false, "", nil
+	return blocked, reason, nil
 }
 
 func (r *GPUPoolCompactionReconciler) evictWorkerPods(
@@ -1447,9 +1453,12 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 		logger.Error(err, "failed to mark defrag source node; aborting node eviction", "node", cand.nodeName)
 		return false
 	}
-	anyEvicted := false
+	// The deferred clear only fires when nothing was evicted (otherwise
+	// the marker must stay to guard already-evicted pods). suppressDeferred
+	// covers branches that already cleared the marker themselves.
+	var anySuccess, suppressDeferred bool
 	defer func() {
-		if anyEvicted {
+		if anySuccess || suppressDeferred {
 			return
 		}
 		if clearErr := r.clearNodeDefragSourceMarker(context.Background(), cand.nodeName); clearErr != nil {
@@ -1463,15 +1472,18 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 			return false
 		}
 		eviction := &policyv1.Eviction{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      pod.Name,
-				Namespace: pod.Namespace,
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: pod.Namespace},
 		}
 		err := r.KubeClient.CoreV1().Pods(pod.Namespace).EvictV1(ctx, eviction)
+
 		if err == nil {
-			anyEvicted = true
-			if markErr := r.markPodDefragEvicted(ctx, pool.Name, pod); markErr != nil {
+			anySuccess = true
+			// Detach from ctx so a parent deadline expiring between Evict
+			// and Patch does not leave the just-evicted pod untracked.
+			markCtx, markCancel := context.WithTimeout(context.Background(), defragStatusPersistTimeout)
+			markErr := r.markPodDefragEvicted(markCtx, pool.Name, pod)
+			markCancel()
+			if markErr != nil {
 				stats.EvictionFailures++
 				r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventPodEvictFailed,
 					"evicted pod %s/%s on node %s but failed to mark defrag label: %v (node eviction aborted)",
@@ -1486,21 +1498,22 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 			continue
 		}
 		if apierrors.IsNotFound(err) {
-			anyEvicted = true
+			anySuccess = true
 			stats.EvictedPods++
 			continue
 		}
+
+		// EvictV1 refused by api-server (webhook, finalizer, PDB
+		// contention). Mark evict-skip so this node is left alone next
+		// step, and release the source marker so any already-evicted
+		// pods can be rescheduled normally.
 		stats.EvictionFailures++
 		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventPodEvictFailed,
 			"failed to evict pod %s/%s on node %s: %v (node eviction aborted)",
 			pod.Namespace, pod.Name, cand.nodeName, err)
 		logger.Error(err, "eviction failed; aborting remaining pods on node",
 			"pod", pod.Namespace+"/"+pod.Name, "node", cand.nodeName)
-		// Real EvictV1 failure (not NotFound): api-server refused the drain
-		// (webhook, finalizer, PDB contention). Give up on this node for
-		// future defrag selection, and release the scheduler-facing source
-		// marker so already-evicted pods can be rescheduled normally --
-		// scheduler does NOT honor evict-skip, by design.
+
 		reason := fmt.Sprintf("evict pod %s/%s failed: %v", pod.Namespace, pod.Name, err)
 		if skipErr := r.markNodeDefragEvictSkip(ctx, pool.Name, cand.nodeName, reason); skipErr != nil {
 			logger.Error(skipErr, "failed to mark node defrag evict-skip", "node", cand.nodeName)
@@ -1511,132 +1524,141 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 		if clearErr := r.clearNodeDefragSourceMarker(context.Background(), cand.nodeName); clearErr != nil {
 			logger.Error(clearErr, "failed to clear source marker after evict-skip", "node", cand.nodeName)
 		}
-		// Suppress the deferred source-marker clear (it would race with the
-		// explicit clear above when anyEvicted==false anyway).
-		anyEvicted = true
+		suppressDeferred = true
 		return false
 	}
 	return true
 }
 
-// ----- pod marker helpers ----------------------------------------------
+// ----- marker helpers ---------------------------------------------------
 
-func (r *GPUPoolCompactionReconciler) markNodeDefragSource(ctx context.Context, poolName, nodeName string) error {
+// markerSpec captures one defrag marker's label + annotation contract.
+// reasonAnno is optional and only carried by the evict-skip marker.
+type markerSpec struct {
+	label      string
+	poolAnno   string
+	sinceAnno  string
+	reasonAnno string
+}
+
+var (
+	sourceNodeMarker = markerSpec{
+		label:     constants.DefragSourceNodeLabel,
+		poolAnno:  constants.DefragSourceNodePoolAnnotation,
+		sinceAnno: constants.DefragSourceNodeSinceAnnotation,
+	}
+	evictSkipMarker = markerSpec{
+		label:      constants.DefragEvictSkipNodeLabel,
+		poolAnno:   constants.DefragEvictSkipNodePoolAnnotation,
+		sinceAnno:  constants.DefragEvictSkipNodeSinceAnnotation,
+		reasonAnno: constants.DefragEvictSkipNodeReasonAnnotation,
+	}
+	evictedPodMarker = markerSpec{
+		label:     constants.DefragEvictedPodLabel,
+		poolAnno:  constants.DefragEvictedPodPoolAnnotation,
+		sinceAnno: constants.DefragEvictedPodSinceAnnotation,
+	}
+)
+
+func (m markerSpec) belongsToPool(obj metav1.Object, poolName string) bool {
+	if obj == nil || poolName == "" {
+		return false
+	}
+	annos := obj.GetAnnotations()
+	if annos == nil {
+		return false
+	}
+	return annos[m.poolAnno] == poolName
+}
+
+func (m markerSpec) markPatch(poolName, reason string) ([]byte, error) {
+	annotations := map[string]any{
+		m.poolAnno:  poolName,
+		m.sinceAnno: time.Now().Format(time.RFC3339),
+	}
+	if m.reasonAnno != "" && reason != "" {
+		const maxReasonLen = 256
+		if len(reason) > maxReasonLen {
+			reason = reason[:maxReasonLen]
+		}
+		annotations[m.reasonAnno] = reason
+	}
+	return metadataMergePatch(
+		map[string]any{m.label: constants.TrueStringValue},
+		annotations,
+	)
+}
+
+func (m markerSpec) clearPatch() ([]byte, error) {
+	annotations := map[string]any{
+		m.poolAnno:  nil,
+		m.sinceAnno: nil,
+	}
+	if m.reasonAnno != "" {
+		annotations[m.reasonAnno] = nil
+	}
+	return metadataMergePatch(
+		map[string]any{m.label: nil},
+		annotations,
+	)
+}
+
+func (r *GPUPoolCompactionReconciler) markNode(ctx context.Context, m markerSpec, nodeName, poolName, reason string) error {
 	if r.Client == nil {
 		return errors.New("controller client is nil")
 	}
 	if nodeName == "" {
 		return errors.New("node name is empty")
 	}
-	raw, err := metadataMergePatch(
-		map[string]any{constants.DefragSourceNodeLabel: constants.TrueStringValue},
-		map[string]any{
-			constants.DefragSourceNodePoolAnnotation:  poolName,
-			constants.DefragSourceNodeSinceAnnotation: time.Now().Format(time.RFC3339),
-		},
-	)
+	raw, err := m.markPatch(poolName, reason)
 	if err != nil {
 		return err
 	}
-	target := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
-	return r.Patch(ctx, target, client.RawPatch(types.MergePatchType, raw))
+	return r.Patch(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}},
+		client.RawPatch(types.MergePatchType, raw))
+}
+
+func (r *GPUPoolCompactionReconciler) clearNodeMarker(ctx context.Context, m markerSpec, nodeName string) error {
+	if r.Client == nil || nodeName == "" {
+		return nil
+	}
+	raw, err := m.clearPatch()
+	if err != nil {
+		return err
+	}
+	err = r.Patch(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}},
+		client.RawPatch(types.MergePatchType, raw))
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func (r *GPUPoolCompactionReconciler) markNodeDefragSource(ctx context.Context, poolName, nodeName string) error {
+	return r.markNode(ctx, sourceNodeMarker, nodeName, poolName, "")
 }
 
 func (r *GPUPoolCompactionReconciler) clearNodeDefragSourceMarker(ctx context.Context, nodeName string) error {
-	if r.Client == nil || nodeName == "" {
-		return nil
-	}
-	raw, err := metadataMergePatch(
-		map[string]any{constants.DefragSourceNodeLabel: nil},
-		map[string]any{
-			constants.DefragSourceNodePoolAnnotation:  nil,
-			constants.DefragSourceNodeSinceAnnotation: nil,
-		},
-	)
-	if err != nil {
-		return err
-	}
-	target := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
-	if err := r.Patch(ctx, target, client.RawPatch(types.MergePatchType, raw)); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	return nil
+	return r.clearNodeMarker(ctx, sourceNodeMarker, nodeName)
 }
 
-// markNodeDefragEvictSkip records that defrag gave up draining this node
-// after a real eviction failure. Future defrag candidate selection skips it
-// until cleanupStaleDefragEvictSkipMarkers releases it (no TF worker left)
-// or the campaign ends.
 func (r *GPUPoolCompactionReconciler) markNodeDefragEvictSkip(ctx context.Context, poolName, nodeName, reason string) error {
-	if r.Client == nil {
-		return errors.New("controller client is nil")
-	}
-	if nodeName == "" {
-		return errors.New("node name is empty")
-	}
-	const maxReasonLen = 256
-	if len(reason) > maxReasonLen {
-		reason = reason[:maxReasonLen]
-	}
-	annotations := map[string]any{
-		constants.DefragEvictSkipNodePoolAnnotation:  poolName,
-		constants.DefragEvictSkipNodeSinceAnnotation: time.Now().Format(time.RFC3339),
-	}
-	if reason != "" {
-		annotations[constants.DefragEvictSkipNodeReasonAnnotation] = reason
-	}
-	raw, err := metadataMergePatch(
-		map[string]any{constants.DefragEvictSkipNodeLabel: constants.TrueStringValue},
-		annotations,
-	)
-	if err != nil {
-		return err
-	}
-	target := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
-	return r.Patch(ctx, target, client.RawPatch(types.MergePatchType, raw))
+	return r.markNode(ctx, evictSkipMarker, nodeName, poolName, reason)
 }
 
 func (r *GPUPoolCompactionReconciler) clearNodeDefragEvictSkipMarker(ctx context.Context, nodeName string) error {
-	if r.Client == nil || nodeName == "" {
-		return nil
-	}
-	raw, err := metadataMergePatch(
-		map[string]any{constants.DefragEvictSkipNodeLabel: nil},
-		map[string]any{
-			constants.DefragEvictSkipNodePoolAnnotation:   nil,
-			constants.DefragEvictSkipNodeSinceAnnotation:  nil,
-			constants.DefragEvictSkipNodeReasonAnnotation: nil,
-		},
-	)
-	if err != nil {
-		return err
-	}
-	target := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
-	if err := r.Patch(ctx, target, client.RawPatch(types.MergePatchType, raw)); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	return nil
+	return r.clearNodeMarker(ctx, evictSkipMarker, nodeName)
 }
 
 func defragEvictSkipNodeBelongsToPool(poolName string, node *corev1.Node) bool {
-	if node == nil || node.Annotations == nil {
-		return false
-	}
-	return node.Annotations[constants.DefragEvictSkipNodePoolAnnotation] == poolName
+	return evictSkipMarker.belongsToPool(node, poolName)
 }
 
-// cleanupStaleDefragEvictSkipMarkers releases an evict-skip marker as soon
-// as the node has no active TF worker left, so the next defrag step can
-// re-evaluate it. Runs every reconcile via the safety sweep.
-// Complementary path: clearAllDefragEvictSkipMarkersForPool, invoked at
-// campaign end, drops every same-pool marker regardless of worker state.
-func (r *GPUPoolCompactionReconciler) cleanupStaleDefragEvictSkipMarkers(ctx context.Context, pool *tfv1.GPUPool) error {
+// forEachPoolEvictSkipNode lists same-pool evict-skip nodes and invokes fn.
+// When fn returns an error, iteration stops and the error is propagated.
+func (r *GPUPoolCompactionReconciler) forEachPoolEvictSkipNode(
+	ctx context.Context, pool *tfv1.GPUPool, fn func(node *corev1.Node) error,
+) error {
 	if pool == nil {
 		return errors.New("pool is nil")
 	}
@@ -1651,43 +1673,48 @@ func (r *GPUPoolCompactionReconciler) cleanupStaleDefragEvictSkipMarkers(ctx con
 		if !defragEvictSkipNodeBelongsToPool(pool.Name, node) {
 			continue
 		}
+		if err := fn(node); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// cleanupStaleDefragEvictSkipMarkers releases evict-skip markers whose nodes
+// have already drained, letting the next step re-evaluate them. Per-node
+// failures only log so a single stuck node never blocks the rest.
+func (r *GPUPoolCompactionReconciler) cleanupStaleDefragEvictSkipMarkers(ctx context.Context, pool *tfv1.GPUPool) error {
+	logger := log.FromContext(ctx)
+	return r.forEachPoolEvictSkipNode(ctx, pool, func(node *corev1.Node) error {
 		hasWorkers, err := r.hasActiveTensorFusionWorkerOnNode(ctx, node.Name)
 		if err != nil {
-			return fmt.Errorf("check active TF workers on evict-skip node %s: %w", node.Name, err)
+			logger.Error(err, "skip evict-skip cleanup: list active TF workers failed",
+				"node", node.Name, "pool", pool.Name)
+			return nil
 		}
 		if hasWorkers {
-			continue
+			return nil
 		}
 		if err := r.clearNodeDefragEvictSkipMarker(ctx, node.Name); err != nil {
-			return fmt.Errorf("clear evict-skip marker on node %s: %w", node.Name, err)
+			logger.Error(err, "clear evict-skip marker failed",
+				"node", node.Name, "pool", pool.Name)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
-// clearAllDefragEvictSkipMarkersForPool is the campaign-scoped release: drop
-// every same-pool evict-skip marker even if the node still has stuck TF
-// workers, so the next cron tick gives the node a fresh chance.
+// clearAllDefragEvictSkipMarkersForPool drops every same-pool marker on
+// campaign end, even when workers are still stuck, so the next cron tick
+// gives each node a fresh chance. Best-effort per node.
 func (r *GPUPoolCompactionReconciler) clearAllDefragEvictSkipMarkersForPool(ctx context.Context, pool *tfv1.GPUPool) error {
-	if pool == nil {
-		return errors.New("pool is nil")
-	}
-	nodeList := &corev1.NodeList{}
-	if err := r.List(ctx, nodeList, client.MatchingLabels{
-		constants.DefragEvictSkipNodeLabel: constants.TrueStringValue,
-	}); err != nil {
-		return fmt.Errorf("list defrag evict-skip nodes: %w", err)
-	}
-	for i := range nodeList.Items {
-		node := &nodeList.Items[i]
-		if !defragEvictSkipNodeBelongsToPool(pool.Name, node) {
-			continue
-		}
+	logger := log.FromContext(ctx)
+	return r.forEachPoolEvictSkipNode(ctx, pool, func(node *corev1.Node) error {
 		if err := r.clearNodeDefragEvictSkipMarker(ctx, node.Name); err != nil {
-			return fmt.Errorf("clear evict-skip marker on node %s: %w", node.Name, err)
+			logger.Error(err, "clear evict-skip marker failed",
+				"node", node.Name, "pool", pool.Name)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func (r *GPUPoolCompactionReconciler) markPodDefragEvicted(ctx context.Context, poolName string, pod *corev1.Pod) error {
@@ -1697,22 +1724,12 @@ func (r *GPUPoolCompactionReconciler) markPodDefragEvicted(ctx context.Context, 
 	if pod == nil {
 		return errors.New("pod is nil")
 	}
-	raw, err := metadataMergePatch(
-		map[string]any{constants.DefragEvictedPodLabel: constants.TrueStringValue},
-		map[string]any{
-			constants.DefragEvictedPodPoolAnnotation:  poolName,
-			constants.DefragEvictedPodSinceAnnotation: time.Now().Format(time.RFC3339),
-		},
-	)
+	raw, err := evictedPodMarker.markPatch(poolName, "")
 	if err != nil {
 		return err
 	}
 	_, err = r.KubeClient.CoreV1().Pods(pod.Namespace).Patch(
-		ctx,
-		pod.Name,
-		types.MergePatchType,
-		raw,
-		metav1.PatchOptions{},
+		ctx, pod.Name, types.MergePatchType, raw, metav1.PatchOptions{},
 	)
 	if apierrors.IsNotFound(err) {
 		return nil
@@ -1724,13 +1741,7 @@ func (r *GPUPoolCompactionReconciler) clearPodDefragEvictedMarker(ctx context.Co
 	if pod == nil {
 		return nil
 	}
-	raw, err := metadataMergePatch(
-		map[string]any{constants.DefragEvictedPodLabel: nil},
-		map[string]any{
-			constants.DefragEvictedPodPoolAnnotation:  nil,
-			constants.DefragEvictedPodSinceAnnotation: nil,
-		},
-	)
+	raw, err := evictedPodMarker.clearPatch()
 	if err != nil {
 		return err
 	}
@@ -1755,7 +1766,6 @@ func metadataMergePatch(labels, annotations map[string]any) ([]byte, error) {
 	return json.Marshal(map[string]any{"metadata": metadata})
 }
 
-// patchPoolLastDefragTime persists the schedule anchor in status.
 func (r *GPUPoolCompactionReconciler) patchPoolLastDefragTime(ctx context.Context, pool *tfv1.GPUPool, runStart time.Time) error {
 	live := &tfv1.GPUPool{}
 	if err := r.Get(ctx, client.ObjectKey{Name: pool.Name}, live); err != nil {
