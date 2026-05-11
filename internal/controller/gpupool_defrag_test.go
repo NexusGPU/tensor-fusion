@@ -588,10 +588,10 @@ func TestCollectDefragCandidates_SkipsFreshWorkerPods(t *testing.T) {
 	now := time.Now()
 	pool := newDefragTestPool()
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
-	gpuNode := newDefragGPUNode(testDefragNodeA, "pool-a")
+	gpuNode := newDefragGPUNode(testDefragNodeA)
 	freshWorker := newDefragWorkerPod("worker-fresh", testDefragNodeA, now.Add(-10*time.Minute))
 	objects := []ctrlclient.Object{pool, node, gpuNode, freshWorker}
-	objects = append(objects, newDefragNodeGPUs(testDefragNodeA, "pool-a")...)
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
 
 	r, _ := newDefragControllerTestReconciler(t, objects...)
 	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
@@ -599,7 +599,7 @@ func TestCollectDefragCandidates_SkipsFreshWorkerPods(t *testing.T) {
 	}
 	r.Allocator.ReconcileAllocationStateForTesting()
 
-	candidates, err := r.collectDefragCandidates(context.Background(), pool)
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, &defragRunStats{})
 	if err != nil {
 		t.Fatalf("collect defrag candidates: %v", err)
 	}
@@ -612,18 +612,19 @@ func TestCollectDefragCandidates_IncludesOldWorkerPods(t *testing.T) {
 	now := time.Now()
 	pool := newDefragTestPool()
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
-	gpuNode := newDefragGPUNode(testDefragNodeA, "pool-a")
+	gpuNode := newDefragGPUNode(testDefragNodeA)
 	oldWorker := newDefragWorkerPod("worker-old", testDefragNodeA, now.Add(-31*time.Minute))
 	objects := []ctrlclient.Object{pool, node, gpuNode, oldWorker}
-	objects = append(objects, newDefragNodeGPUs(testDefragNodeA, "pool-a")...)
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
 
 	r, _ := newDefragControllerTestReconciler(t, objects...)
+	r.KubeClient = clientgofake.NewSimpleClientset(newDefragWorkerPDB("pdb-worker", "ns1"))
 	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
 		t.Fatalf("init GPU store: %v", err)
 	}
 	r.Allocator.ReconcileAllocationStateForTesting()
 
-	candidates, err := r.collectDefragCandidates(context.Background(), pool)
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, &defragRunStats{})
 	if err != nil {
 		t.Fatalf("collect defrag candidates: %v", err)
 	}
@@ -633,6 +634,110 @@ func TestCollectDefragCandidates_IncludesOldWorkerPods(t *testing.T) {
 	if candidates[0].nodeName != testDefragNodeA {
 		t.Fatalf("candidate node=%q want node-a", candidates[0].nodeName)
 	}
+}
+
+func TestCollectDefragCandidates_SkipsNodeWithMissingPDB(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	oldWorker := newDefragWorkerPod("worker-old", testDefragNodeA, now.Add(-2*time.Hour))
+	objects := []ctrlclient.Object{pool, node, gpuNode, oldWorker}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	// Default helper already injects an empty fake clientset. With no PDB
+	// in ns1, the worker is uncovered so the node must be filtered out.
+	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
+		t.Fatalf("init GPU store: %v", err)
+	}
+	r.Allocator.ReconcileAllocationStateForTesting()
+
+	stats := &defragRunStats{}
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, stats)
+	if err != nil {
+		t.Fatalf("collect defrag candidates: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("node with uncovered worker pod must not be a candidate, got %d", len(candidates))
+	}
+	if stats.MissingPDBNodes != 1 {
+		t.Fatalf("MissingPDBNodes=%d want 1", stats.MissingPDBNodes)
+	}
+	assertWarningEvent(t, r.Recorder, defragEventSkipMissingPDB, "no PodDisruptionBudget")
+}
+
+func TestCollectDefragCandidates_SkipsNodeWhenPDBSelectorIsEmpty(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	oldWorker := newDefragWorkerPod("worker-old", testDefragNodeA, now.Add(-2*time.Hour))
+	emptySelectorPDB := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns1",
+			Name:      "pdb-empty",
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			// Empty selector intentionally: must NOT count as coverage.
+			Selector: &metav1.LabelSelector{},
+		},
+		Status: policyv1.PodDisruptionBudgetStatus{
+			DisruptionsAllowed: 1,
+		},
+	}
+	objects := []ctrlclient.Object{pool, node, gpuNode, oldWorker}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	r.KubeClient = clientgofake.NewSimpleClientset(emptySelectorPDB)
+	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
+		t.Fatalf("init GPU store: %v", err)
+	}
+	r.Allocator.ReconcileAllocationStateForTesting()
+
+	stats := &defragRunStats{}
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, stats)
+	if err != nil {
+		t.Fatalf("collect defrag candidates: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("empty-selector PDB must not count as coverage, got %d candidates", len(candidates))
+	}
+	if stats.MissingPDBNodes != 1 {
+		t.Fatalf("MissingPDBNodes=%d want 1", stats.MissingPDBNodes)
+	}
+	assertWarningEvent(t, r.Recorder, defragEventSkipMissingPDB, "no PodDisruptionBudget")
+}
+
+func TestCollectDefragCandidates_AllowsNodeCoveredByPDB(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	oldWorker := newDefragWorkerPod("worker-old", testDefragNodeA, now.Add(-2*time.Hour))
+	objects := []ctrlclient.Object{pool, node, gpuNode, oldWorker}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	r.KubeClient = clientgofake.NewSimpleClientset(newDefragWorkerPDB("pdb-worker", "ns1"))
+	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
+		t.Fatalf("init GPU store: %v", err)
+	}
+	r.Allocator.ReconcileAllocationStateForTesting()
+
+	stats := &defragRunStats{}
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, stats)
+	if err != nil {
+		t.Fatalf("collect defrag candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].nodeName != testDefragNodeA {
+		t.Fatalf("node covered by PDB should be a candidate, got %+v", candidates)
+	}
+	if stats.MissingPDBNodes != 0 {
+		t.Fatalf("MissingPDBNodes=%d want 0", stats.MissingPDBNodes)
+	}
+	assertNoEvent(t, r.Recorder, defragEventSkipMissingPDB)
 }
 
 func TestPrepareDefragSimulationPod_ClearsAssignedGPUState(t *testing.T) {
@@ -1049,13 +1154,13 @@ func TestSafetySweepAndGuards_BlocksOnLingeringSourceNode(t *testing.T) {
 	activeWorker := newDefragWorkerPod("worker-source", testDefragNodeA, now.Add(-time.Hour))
 
 	candidateNode := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: otherNode}}
-	candidateGPUNode := newDefragGPUNode(otherNode, "pool-a")
+	candidateGPUNode := newDefragGPUNode(otherNode)
 	candidateWorker := newDefragWorkerPod("worker-candidate", otherNode, now.Add(-2*time.Hour))
 
 	objects := []ctrlclient.Object{
 		pool, sourceNode, activeWorker, candidateNode, candidateGPUNode, candidateWorker,
 	}
-	objects = append(objects, newDefragNodeGPUs(otherNode, "pool-a")...)
+	objects = append(objects, newDefragNodeGPUs(otherNode)...)
 
 	r, _ := newDefragControllerTestReconciler(t, objects...)
 	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
@@ -1229,10 +1334,10 @@ func TestCollectDefragCandidates_SkipsEvictSkipNode(t *testing.T) {
 			},
 		},
 	}
-	gpuNode := newDefragGPUNode(testDefragNodeA, "pool-a")
+	gpuNode := newDefragGPUNode(testDefragNodeA)
 	worker := newDefragWorkerPod("worker-old", testDefragNodeA, now.Add(-2*time.Hour))
 	objects := []ctrlclient.Object{pool, node, gpuNode, worker}
-	objects = append(objects, newDefragNodeGPUs(testDefragNodeA, "pool-a")...)
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
 
 	r, _ := newDefragControllerTestReconciler(t, objects...)
 	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
@@ -1240,7 +1345,7 @@ func TestCollectDefragCandidates_SkipsEvictSkipNode(t *testing.T) {
 	}
 	r.Allocator.ReconcileAllocationStateForTesting()
 
-	candidates, err := r.collectDefragCandidates(context.Background(), pool)
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, &defragRunStats{})
 	if err != nil {
 		t.Fatalf("collect defrag candidates: %v", err)
 	}
@@ -1262,18 +1367,19 @@ func TestCollectDefragCandidates_SkipsEvictSkipNode(t *testing.T) {
 			},
 		},
 	}
-	otherGPUNode := newDefragGPUNode("node-b", "pool-a")
+	otherGPUNode := newDefragGPUNode("node-b")
 	otherWorker := newDefragWorkerPod("worker-old-b", "node-b", now.Add(-2*time.Hour))
 	moreObjects := []ctrlclient.Object{otherEvictSkipNode, otherGPUNode, otherWorker}
-	moreObjects = append(moreObjects, newDefragNodeGPUs("node-b", "pool-a")...)
+	moreObjects = append(moreObjects, newDefragNodeGPUs("node-b")...)
 	moreObjects = append(moreObjects, objects...)
 
 	r2, _ := newDefragControllerTestReconciler(t, moreObjects...)
+	r2.KubeClient = clientgofake.NewSimpleClientset(newDefragWorkerPDB("pdb-worker", "ns1"))
 	if err := r2.Allocator.InitGPUAndQuotaStore(); err != nil {
 		t.Fatalf("init GPU store: %v", err)
 	}
 	r2.Allocator.ReconcileAllocationStateForTesting()
-	candidates, err = r2.collectDefragCandidates(context.Background(), pool)
+	candidates, err = r2.collectDefragCandidates(context.Background(), pool, &defragRunStats{})
 	if err != nil {
 		t.Fatalf("collect defrag candidates (cross-pool): %v", err)
 	}
@@ -1561,6 +1667,9 @@ func newDefragControllerTestReconciler(
 		Scheme:    scheme,
 		Recorder:  record.NewFakeRecorder(16),
 		Allocator: allocator,
+		// Empty clientset so PDB-required filter has something to query.
+		// Tests that need real PDBs override r.KubeClient explicitly.
+		KubeClient: clientgofake.NewSimpleClientset(),
 	}, kubeClient
 }
 
@@ -1625,7 +1734,10 @@ func newDefragWorkerPod(name, nodeName string, createdAt time.Time) *corev1.Pod 
 	}
 }
 
-func newDefragNodeGPUs(nodeName, poolName string) []ctrlclient.Object {
+// newDefragNodeGPUs builds a fixed 4-GPU layout for the defrag test pool.
+// All defrag tests share the same "pool-a" defined by newDefragTestPool,
+// so the pool name is hardcoded rather than parameterized.
+func newDefragNodeGPUs(nodeName string) []ctrlclient.Object {
 	out := make([]ctrlclient.Object, 0, 4)
 	for i := 0; i < 4; i++ {
 		availableTflops := "100"
@@ -1634,7 +1746,7 @@ func newDefragNodeGPUs(nodeName, poolName string) []ctrlclient.Object {
 		}
 		out = append(out, gpuWithUsageOnNode(
 			fmt.Sprintf("%s-gpu-%d", nodeName, i),
-			poolName,
+			"pool-a",
 			nodeName,
 			availableTflops,
 			"10Gi",
@@ -1651,17 +1763,82 @@ func gpuWithUsageOnNode(name, poolName, nodeName, avTflops, avVram string) *tfv1
 	return g
 }
 
-func newDefragGPUNode(name, poolName string) *tfv1.GPUNode {
+// newDefragGPUNode is hardcoded to "pool-a" because every defrag test
+// uses the same pool defined by newDefragTestPool.
+func newDefragGPUNode(name string) *tfv1.GPUNode {
 	return &tfv1.GPUNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			Labels: map[string]string{
-				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, poolName): constants.TrueStringValue,
+				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, "pool-a"): constants.TrueStringValue,
 			},
 		},
 		Status: tfv1.GPUNodeStatus{
 			Phase: tfv1.TensorFusionGPUNodePhaseRunning,
 		},
+	}
+}
+
+// newDefragWorkerPDB returns a PDB whose selector matches the labels set
+// by newDefragWorkerPod, so candidate filtering treats the worker as
+// PDB-covered.
+func newDefragWorkerPDB(name, namespace string) *policyv1.PodDisruptionBudget {
+	return &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					constants.LabelComponent: constants.ComponentWorker,
+					constants.WorkloadKey:    "workload-a",
+				},
+			},
+		},
+		Status: policyv1.PodDisruptionBudgetStatus{
+			DisruptionsAllowed: 1,
+		},
+	}
+}
+
+// assertWarningEvent drains the FakeRecorder and fails the test unless one
+// of the events is a Warning matching `reason` and contains `substr`.
+func assertWarningEvent(t *testing.T, recorder record.EventRecorder, reason, substr string) {
+	t.Helper()
+	fr, ok := recorder.(*record.FakeRecorder)
+	if !ok {
+		t.Fatalf("recorder is %T, want *record.FakeRecorder", recorder)
+	}
+	for {
+		select {
+		case ev := <-fr.Events:
+			if strings.Contains(ev, "Warning "+reason) && strings.Contains(ev, substr) {
+				return
+			}
+		default:
+			t.Fatalf("no Warning %q event matched substr %q", reason, substr)
+		}
+	}
+}
+
+// assertNoEvent drains the FakeRecorder and fails the test if any event
+// carries the given reason.
+func assertNoEvent(t *testing.T, recorder record.EventRecorder, reason string) {
+	t.Helper()
+	fr, ok := recorder.(*record.FakeRecorder)
+	if !ok {
+		t.Fatalf("recorder is %T, want *record.FakeRecorder", recorder)
+	}
+	for {
+		select {
+		case ev := <-fr.Events:
+			if strings.Contains(ev, reason) {
+				t.Fatalf("unexpected event %q", ev)
+			}
+		default:
+			return
+		}
 	}
 }
 
