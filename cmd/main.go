@@ -47,6 +47,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/internal/version"
 	webhookcorev1 "github.com/NexusGPU/tensor-fusion/internal/webhook/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -65,7 +66,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	schemeBuilder "sigs.k8s.io/controller-runtime/pkg/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/yaml"
@@ -106,12 +106,13 @@ func init() {
 	utilruntime.Must(tfv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 
-	karpenterScheme := &schemeBuilder.Builder{
-		GroupVersion: schema.GroupVersion{Group: "karpenter.sh", Version: "v1"},
-	}
-	karpenterScheme.Register(&karpv1.NodeClaim{}, &karpv1.NodeClaimList{})
-	karpenterScheme.Register(&karpv1.NodePool{}, &karpv1.NodePoolList{})
-	utilruntime.Must(karpenterScheme.AddToScheme(scheme))
+	addKarpenterTypesToScheme(scheme)
+}
+
+func addKarpenterTypesToScheme(s *runtime.Scheme) {
+	gv := schema.GroupVersion{Group: "karpenter.sh", Version: "v1"}
+	s.AddKnownTypes(gv, &karpv1.NodeClaim{}, &karpv1.NodeClaimList{}, &karpv1.NodePool{}, &karpv1.NodePoolList{})
+	metav1.AddToGroupVersion(s, gv)
 }
 
 //nolint:gocyclo
@@ -368,8 +369,9 @@ func startCustomResourceController(
 
 	var err error
 	if err = (&controller.TensorFusionConnectionReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder: mgr.GetEventRecorderFor("TensorFusionConnection"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TensorFusionConnection")
@@ -385,8 +387,9 @@ func startCustomResourceController(
 	}
 
 	if err = (&controller.TensorFusionClusterReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder:        mgr.GetEventRecorderFor("TensorFusionCluster"),
 		MetricsRecorder: &metricsRecorder,
 	}).SetupWithManager(mgr, true); err != nil {
@@ -395,8 +398,9 @@ func startCustomResourceController(
 	}
 
 	GPUPoolReconciler := &controller.GPUPoolReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder: mgr.GetEventRecorderFor("GPUPool"),
 	}
 	if err = GPUPoolReconciler.SetupWithManager(mgr, true); err != nil {
@@ -405,8 +409,9 @@ func startCustomResourceController(
 	}
 
 	if err = (&controller.GPUNodeReconciler{
-		Client:                               mgr.GetClient(),
-		Scheme:                               mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder:                             mgr.GetEventRecorderFor("GPUNode"),
 		Allocator:                            allocator,
 		Expander:                             nodeExpander,
@@ -416,8 +421,9 @@ func startCustomResourceController(
 		os.Exit(1)
 	}
 	if err = (&controller.GPUPoolCompactionReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder:   mgr.GetEventRecorderFor("GPUPoolCompaction"),
 		Allocator:  allocator,
 		Scheduler:  sched,
@@ -451,8 +457,9 @@ func startCustomResourceController(
 		os.Exit(1)
 	}
 	if err = (&controller.NodeReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder: mgr.GetEventRecorderFor("Node"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Node")
@@ -467,8 +474,9 @@ func startCustomResourceController(
 		os.Exit(1)
 	}
 	if err = (&controller.TensorFusionWorkloadReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder:      mgr.GetEventRecorderFor("tensorfusionworkload"),
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr); err != nil {
@@ -476,8 +484,9 @@ func startCustomResourceController(
 		os.Exit(1)
 	}
 	if err = (&controller.GPUResourceQuotaReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder: mgr.GetEventRecorderFor("GPUResourceQuota"),
 
 		QuotaStore: allocator.GetQuotaStore(),
@@ -490,6 +499,7 @@ func startCustomResourceController(
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Expander: nodeExpander,
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder: mgr.GetEventRecorderFor("GPUNodeClaim"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUNodeClaim")

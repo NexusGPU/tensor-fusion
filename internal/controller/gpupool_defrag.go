@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,7 +42,23 @@ const (
 	// Marker TTLs are deliberately decoupled from MaxDuration so a long
 	// campaign window never traps a stuck eviction marker and a short
 	// window never releases one while a drain is still in flight.
-	defaultDefragMarkerTTL = 30 * time.Minute
+	//
+	// EvictedPodMarker defaults to "infinite" so a stuck eviction marker
+	// keeps blocking the next defrag round until the pod is actually
+	// reconciled away. SourceNode defaults to 30m as a safety net for the
+	// "stuck terminating workers" path; happy-path cleanup is driven by
+	// hasActiveTensorFusionWorkerOnNode regardless of TTL.
+	defaultDefragEvictedPodMarkerTTL = defragMarkerTTLInfinite
+	defaultDefragSourceNodeMarkerTTL = 30 * time.Minute
+
+	// defragMarkerTTLInfinite represents "no expiry"; isDefrag*MarkerStale
+	// short-circuits to false when staleAfter <= 0, so the safety sweep
+	// becomes a no-op for the corresponding marker class.
+	defragMarkerTTLInfinite time.Duration = 0
+	// defragMarkerTTLNeverKeyword is the user-facing literal that maps to
+	// defragMarkerTTLInfinite (matched case-insensitively, surrounding
+	// whitespace tolerated).
+	defragMarkerTTLNeverKeyword = "never"
 
 	defragStatusPersistTimeout = 30 * time.Second
 	defragActiveStepRequeue    = 10 * time.Second
@@ -286,17 +303,27 @@ func parseDefragMaxDuration(raw string, logger interface{ Info(string, ...any) }
 	return d
 }
 
-// parseDefragMarkerTTL falls back to defaultDefragMarkerTTL on empty / invalid
-// input so an operator cannot accidentally disable marker expiry.
-func parseDefragMarkerTTL(raw, fieldName string, logger interface{ Info(string, ...any) }) time.Duration {
+// parseDefragMarkerTTL accepts:
+//   - "" or any unparseable / non-positive duration → defaultTTL fallback
+//   - the case-insensitive literal "never" → defragMarkerTTLInfinite,
+//     letting operators explicitly opt out of the safety sweep when they
+//     want markers to live as long as the underlying object does
+//   - any positive time.ParseDuration value → returned as-is
+//
+// The fieldName is logged on fallback so multi-field misconfigurations
+// can be told apart in operator logs.
+func parseDefragMarkerTTL(raw, fieldName string, defaultTTL time.Duration, logger interface{ Info(string, ...any) }) time.Duration {
 	if raw == "" {
-		return defaultDefragMarkerTTL
+		return defaultTTL
+	}
+	if strings.EqualFold(strings.TrimSpace(raw), defragMarkerTTLNeverKeyword) {
+		return defragMarkerTTLInfinite
 	}
 	d, err := time.ParseDuration(raw)
 	if err != nil || d <= 0 {
 		logger.Info("invalid defrag marker TTL, falling back to default",
-			"field", fieldName, "input", raw, "default", defaultDefragMarkerTTL)
-		return defaultDefragMarkerTTL
+			"field", fieldName, "input", raw, "default", defaultTTL)
+		return defaultTTL
 	}
 	return d
 }
@@ -313,16 +340,16 @@ func defragMinPodAge(cfg *tfv1.NodeDefragConfig, logger interface{ Info(string, 
 
 func evictedPodMarkerTTL(cfg *tfv1.NodeDefragConfig, logger interface{ Info(string, ...any) }) time.Duration {
 	if cfg == nil {
-		return defaultDefragMarkerTTL
+		return defaultDefragEvictedPodMarkerTTL
 	}
-	return parseDefragMarkerTTL(cfg.EvictedPodMarkerTTL, "evictedPodMarkerTTL", logger)
+	return parseDefragMarkerTTL(cfg.EvictedPodMarkerTTL, "evictedPodMarkerTTL", defaultDefragEvictedPodMarkerTTL, logger)
 }
 
 func sourceNodeMarkerTTL(cfg *tfv1.NodeDefragConfig, logger interface{ Info(string, ...any) }) time.Duration {
 	if cfg == nil {
-		return defaultDefragMarkerTTL
+		return defaultDefragSourceNodeMarkerTTL
 	}
-	return parseDefragMarkerTTL(cfg.SourceNodeMarkerTTL, "sourceNodeMarkerTTL", logger)
+	return parseDefragMarkerTTL(cfg.SourceNodeMarkerTTL, "sourceNodeMarkerTTL", defaultDefragSourceNodeMarkerTTL, logger)
 }
 
 // ----- main run ---------------------------------------------------------

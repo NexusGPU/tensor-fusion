@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/component-base/configz"
 	"k8s.io/klog/v2"
+	configv1 "k8s.io/kube-scheduler/config/v1"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	schedulerserverconfig "k8s.io/kubernetes/cmd/kube-scheduler/app/config"
@@ -37,6 +38,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler"
 	kubeschedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/latest"
+	conversionv1 "k8s.io/kubernetes/pkg/scheduler/apis/config/v1"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
@@ -153,6 +155,7 @@ func SetupScheduler(
 	if enableNodeExpander {
 		unschedHandler, nodeExpander := expander.NewUnscheduledPodHandler(
 			ctx, sched, allocator,
+			//nolint:staticcheck // keep old recorder interface until scheduler/expander migrate from record.EventRecorder
 			mgr.GetEventRecorderFor("TensorFusionScheduler"),
 		)
 
@@ -182,10 +185,15 @@ func RunScheduler(ctx context.Context,
 ) error {
 	logger := klog.FromContext(ctx)
 
+	externalConfig, err := ToExternalSchedulerConfig(&cc.ComponentConfig)
+	if err != nil {
+		return err
+	}
+
 	// Config registration.
 	if cz, err := configz.New(configName); err != nil {
 		return fmt.Errorf("unable to register config: %s", err)
-	} else if err := cz.Set(&cc.ComponentConfig); err != nil {
+	} else if err := cz.Set(externalConfig); err != nil {
 		return fmt.Errorf("unable to set config: %s", err)
 	}
 
@@ -229,6 +237,23 @@ func getRecorderFactory(cc *schedulerserverconfig.CompletedConfig) profile.Recor
 	return func(name string) events.EventRecorderLogger {
 		return cc.EventBroadcaster.NewRecorder(name)
 	}
+}
+
+// ToExternalSchedulerConfig converts the internal KubeSchedulerConfiguration to
+// the external v1 type and sets its GroupVersionKind. This is required by
+// component-base configz.Set since v0.36, which rejects objects without a GVK.
+// Mirrors upstream cmd/kube-scheduler/app/server.go in k8s.io/kubernetes v1.36.
+func ToExternalSchedulerConfig(
+	internalConfig *kubeschedulerconfig.KubeSchedulerConfiguration,
+) (*configv1.KubeSchedulerConfiguration, error) {
+	externalConfig := &configv1.KubeSchedulerConfiguration{}
+	if err := conversionv1.Convert_config_KubeSchedulerConfiguration_To_v1_KubeSchedulerConfiguration(
+		internalConfig, externalConfig, nil,
+	); err != nil {
+		return nil, fmt.Errorf("unable to convert component config to external v1: %w", err)
+	}
+	externalConfig.SetGroupVersionKind(configv1.SchemeGroupVersion.WithKind("KubeSchedulerConfiguration"))
+	return externalConfig, nil
 }
 
 func preHandleConfig(cfgPath string) (string, error) {

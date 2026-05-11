@@ -66,6 +66,51 @@ func TestParseDefragMaxDuration(t *testing.T) {
 	}
 }
 
+func TestParseDefragMarkerTTL(t *testing.T) {
+	cases := []struct {
+		name        string
+		raw         string
+		defaultTTL  time.Duration
+		want        time.Duration
+		expectHints bool
+	}{
+		// Empty + each field's default. The two defaults are deliberately
+		// asymmetric: evicted-pod defaults to "infinite" so a stuck marker
+		// keeps blocking; source-node keeps a 30m safety net.
+		{"empty falls back to evicted-pod default (infinite)", "", defaultDefragEvictedPodMarkerTTL, defragMarkerTTLInfinite, false},
+		{"empty falls back to source-node default (30m)", "", defaultDefragSourceNodeMarkerTTL, 30 * time.Minute, false},
+
+		// "never" keyword (case + whitespace tolerant) is the explicit way
+		// to opt out of expiry per-field, regardless of the default.
+		{"never lowercase", "never", defaultDefragSourceNodeMarkerTTL, defragMarkerTTLInfinite, false},
+		{"NEVER uppercase", "NEVER", defaultDefragSourceNodeMarkerTTL, defragMarkerTTLInfinite, false},
+		{"Never with surrounding whitespace", "  Never\t", defaultDefragSourceNodeMarkerTTL, defragMarkerTTLInfinite, false},
+
+		// Positive durations are honored as-is.
+		{"valid duration is honored", "45m", defaultDefragSourceNodeMarkerTTL, 45 * time.Minute, false},
+
+		// Invalid / non-positive falls back to the supplied default and logs.
+		{"unparseable falls back to default", "not-a-duration", 30 * time.Minute, 30 * time.Minute, true},
+		{"zero falls back to default", "0s", 30 * time.Minute, 30 * time.Minute, true},
+		{"negative falls back to default", "-5m", 30 * time.Minute, 30 * time.Minute, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lg := &infoLogger{}
+			got := parseDefragMarkerTTL(tc.raw, "fieldX", tc.defaultTTL, lg)
+			if got != tc.want {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+			if tc.expectHints && len(lg.messages) == 0 {
+				t.Fatalf("expected fallback log; got none")
+			}
+			if !tc.expectHints && len(lg.messages) != 0 {
+				t.Fatalf("did not expect fallback log; got %v", lg.messages)
+			}
+		})
+	}
+}
+
 func TestSelectDefragCampaign_StaleAnchorUsesCurrentWindow(t *testing.T) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	schedule, err := parser.Parse("* * * * *")
@@ -971,6 +1016,9 @@ func TestHasActiveDefragEvictedPods_ScopedToPool(t *testing.T) {
 
 func TestSweepStaleDefragEvictedPodMarkers_ClearsStaleSamePoolMarker(t *testing.T) {
 	pool := newDefragTestPool()
+	// Pin TTL to 30m so the test's "older than TTL" intent is independent
+	// of the field's CRD default (which is "never").
+	pool.Spec.NodeManagerConfig.NodeCompaction.Defrag.EvictedPodMarkerTTL = "30m"
 	stalePod := newPod("stale-evicted-worker")
 	stalePod.Labels = map[string]string{
 		constants.DefragEvictedPodLabel: constants.TrueStringValue,
@@ -1272,6 +1320,45 @@ func TestEvictedPodMarkerTTL_IndependentFromMaxDuration(t *testing.T) {
 	}
 }
 
+func TestEvictedPodMarkerTTL_NeverKeepsMarkerActiveIndefinitely(t *testing.T) {
+	// "never" disables expiry, which is the new default for this field.
+	// A pod marked 24h ago must still be honored: sweep does not clean it
+	// and hasActiveDefragEvictedPods keeps the next defrag step blocked
+	// until external lifecycle removes the pod.
+	pool := newDefragTestPool()
+	pool.Spec.NodeManagerConfig.NodeCompaction.Defrag.EvictedPodMarkerTTL = "never"
+
+	oldPod := newPod("very-old-evicted-worker")
+	oldPod.Labels = map[string]string{
+		constants.DefragEvictedPodLabel: constants.TrueStringValue,
+	}
+	oldPod.Annotations = map[string]string{
+		constants.DefragEvictedPodPoolAnnotation:  pool.Name,
+		constants.DefragEvictedPodSinceAnnotation: time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
+	}
+
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, oldPod)
+	if err := r.sweepStaleDefragEvictedPodMarkers(context.Background(), pool); err != nil {
+		t.Fatalf("sweep evicted pod markers: %v", err)
+	}
+
+	updated := &corev1.Pod{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Namespace: oldPod.Namespace, Name: oldPod.Name}, updated); err != nil {
+		t.Fatalf("get pod after sweep: %v", err)
+	}
+	if updated.Labels[constants.DefragEvictedPodLabel] != constants.TrueStringValue {
+		t.Fatalf("evicted-pod marker must NOT be cleared when TTL=never, labels=%v", updated.Labels)
+	}
+
+	blocked, err := r.hasActiveDefragEvictedPods(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("hasActiveDefragEvictedPods: %v", err)
+	}
+	if !blocked {
+		t.Fatalf("hasActiveDefragEvictedPods must keep blocking when TTL=never")
+	}
+}
+
 func TestEvictWorkerPods_RealFailurePlacesNodeOnEvictSkipList(t *testing.T) {
 	// EvictV1 returns a real (non-NotFound) error on the first pod. The
 	// node must end up on the same-pool evict-skip list and the source-node
@@ -1565,6 +1652,44 @@ func TestSourceNodeMarkerTTL_IndependentFromMaxDuration(t *testing.T) {
 	}
 }
 
+func TestSourceNodeMarkerTTL_NeverKeepsMarkerWithStuckWorker(t *testing.T) {
+	// SourceNodeMarkerTTL=never disables the safety net: as long as the
+	// node still has an active TF worker, the marker must persist
+	// regardless of how old the since-annotation is. The hasActiveWorkers
+	// shortcut still wins when workers drain (covered separately by
+	// TestSafetySweep_ClearsDefragSourceNodeMarkerOnceDrained).
+	pool := newDefragTestPool()
+	pool.Spec.NodeManagerConfig.NodeCompaction.Defrag.SourceNodeMarkerTTL = "never"
+
+	veryOldNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testDefragNodeA,
+			Labels: map[string]string{
+				constants.DefragSourceNodeLabel: constants.TrueStringValue,
+			},
+			Annotations: map[string]string{
+				testDefragSourceNodePoolAnnotation:  pool.Name,
+				testDefragSourceNodeSinceAnnotation: time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
+			},
+		},
+	}
+	stuckWorker := newDefragWorkerPod("worker-stuck", testDefragNodeA, time.Now().Add(-time.Hour))
+
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, veryOldNode, stuckWorker)
+	primeAllocatorWorkerStore(t, r)
+	if err := r.cleanupStaleDefragSourceMarkers(context.Background(), pool); err != nil {
+		t.Fatalf("cleanup stale source markers: %v", err)
+	}
+
+	updated := &corev1.Node{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: testDefragNodeA}, updated); err != nil {
+		t.Fatalf("get source node after cleanup: %v", err)
+	}
+	if updated.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
+		t.Fatalf("source-node marker must NOT be cleared when TTL=never and workers are stuck, labels=%v", updated.Labels)
+	}
+}
+
 func TestRunDefragCandidateLoop_StopsAfterFirstEvictedNode(t *testing.T) {
 	candidates := []*defragCandidate{
 		{nodeName: testDefragNodeA},
@@ -1752,7 +1877,6 @@ func newDefragNodeGPUs(nodeName string) []ctrlclient.Object {
 		}
 		out = append(out, gpuWithUsageOnNode(
 			fmt.Sprintf("%s-gpu-%d", nodeName, i),
-			"pool-a",
 			nodeName,
 			availableTflops,
 			"10Gi",
@@ -1761,8 +1885,8 @@ func newDefragNodeGPUs(nodeName string) []ctrlclient.Object {
 	return out
 }
 
-func gpuWithUsageOnNode(name, poolName, nodeName, avTflops, avVram string) *tfv1.GPU {
-	g := gpuWithUsage(name, poolName, avTflops, avVram, tfv1.UsedByTensorFusion)
+func gpuWithUsageOnNode(name, nodeName, avTflops, avVram string) *tfv1.GPU {
+	g := gpuWithUsage(name, "pool-a", avTflops, avVram, tfv1.UsedByTensorFusion)
 	g.Status.NodeSelector = map[string]string{
 		constants.KubernetesHostNameLabel: nodeName,
 	}
@@ -2005,6 +2129,9 @@ func TestEvaluateDefragGuards_DoesNotMutateMarkers(t *testing.T) {
 	// "guard is read-only".
 	now := time.Now()
 	pool := newDefragTestPool()
+	// Pin TTL to 30m so "stale enough that hasActiveDefragEvictedPods
+	// returns false" is independent of the field's CRD default ("never").
+	pool.Spec.NodeManagerConfig.NodeCompaction.Defrag.EvictedPodMarkerTTL = "30m"
 
 	stalePod := newPod("stale-evicted-worker")
 	stalePod.Labels = map[string]string{
@@ -2063,8 +2190,8 @@ func TestEvaluateDefragGuards_DoesNotMutateMarkers(t *testing.T) {
 // gpuFullyFreeOnNode returns a GPU whose Available == Capacity so
 // countPoolGPUUsage classifies it as "free" and isGPUFullyAvailable
 // returns true. Useful as fixture noise reduction in monotonicity tests.
-func gpuFullyFreeOnNode(name, poolName, nodeName string) *tfv1.GPU {
-	g := gpuWithUsage(name, poolName, "100", "10Gi", tfv1.UsedByTensorFusion)
+func gpuFullyFreeOnNode(name, nodeName string) *tfv1.GPU {
+	g := gpuWithUsage(name, "pool-a", "100", "10Gi", tfv1.UsedByTensorFusion)
 	g.Status.NodeSelector = map[string]string{
 		constants.KubernetesHostNameLabel: nodeName,
 	}
@@ -2082,15 +2209,15 @@ func TestBuildDefragNodeBudgets_DropsEmptyTarget(t *testing.T) {
 
 	nodeGpuStore := map[string]map[string]*tfv1.GPU{
 		source: {
-			"src-gpu-0": gpuWithUsageOnNode("src-gpu-0", pool, source, "50", "5Gi"),
+			"src-gpu-0": gpuWithUsageOnNode("src-gpu-0", source, "50", "5Gi"),
 		},
 		buddy: {
-			"buddy-gpu-0": gpuWithUsageOnNode("buddy-gpu-0", pool, buddy, "60", "8Gi"),
-			"buddy-gpu-1": gpuFullyFreeOnNode("buddy-gpu-1", pool, buddy),
+			"buddy-gpu-0": gpuWithUsageOnNode("buddy-gpu-0", buddy, "60", "8Gi"),
+			"buddy-gpu-1": gpuFullyFreeOnNode("buddy-gpu-1", buddy),
 		},
 		empty: {
-			"empty-gpu-0": gpuFullyFreeOnNode("empty-gpu-0", pool, empty),
-			"empty-gpu-1": gpuFullyFreeOnNode("empty-gpu-1", pool, empty),
+			"empty-gpu-0": gpuFullyFreeOnNode("empty-gpu-0", empty),
+			"empty-gpu-1": gpuFullyFreeOnNode("empty-gpu-1", empty),
 		},
 	}
 	lister := &fakeNodeInfoLister{infos: map[string]fwk.NodeInfo{
@@ -2124,8 +2251,8 @@ func TestBuildDefragNodeBudgets_SkipsExcludedNodeLabels(t *testing.T) {
 	source := "node-source"
 	marked := "node-marked"
 	nodeGpuStore := map[string]map[string]*tfv1.GPU{
-		source: {"src": gpuWithUsageOnNode("src", pool, source, "50", "5Gi")},
-		marked: {"mk": gpuWithUsageOnNode("mk", pool, marked, "60", "5Gi")},
+		source: {"src": gpuWithUsageOnNode("src", source, "50", "5Gi")},
+		marked: {"mk": gpuWithUsageOnNode("mk", marked, "60", "5Gi")},
 	}
 	lister := &fakeNodeInfoLister{infos: map[string]fwk.NodeInfo{
 		source: newFrameworkNodeInfo(source, nil, nil),
@@ -2204,10 +2331,9 @@ func TestApplyGPUPlacementToBudget_TracksUsedGPUTransition(t *testing.T) {
 	// Validates the dynamic-util commit path: only fully-free -> partially
 	// used transitions bump usedGPUs. A second placement onto the same GPU
 	// must NOT double-count.
-	const pool = "pool-a"
 	node := "node-buddy"
-	freeGPU := gpuFullyFreeOnNode("g-free", pool, node)
-	usedGPU := gpuWithUsageOnNode("g-used", pool, node, "50", "5Gi") // half-used baseline
+	freeGPU := gpuFullyFreeOnNode("g-free", node)
+	usedGPU := gpuWithUsageOnNode("g-used", node, "50", "5Gi") // half-used baseline
 
 	nb := &nodeBudget{
 		gpus:      map[string]*tfv1.GPU{"g-free": freeGPU, "g-used": usedGPU},
