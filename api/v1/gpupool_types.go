@@ -244,14 +244,17 @@ type NodeDefragConfig struct {
 	// EvictedPodMarkerTTL caps how long a defrag-evicted pod marker is honored
 	// before it's treated as stale and cleaned. Independent from MaxDuration so
 	// that a long campaign window doesn't keep a stuck eviction marker alive.
-	// Parsed with time.ParseDuration. If empty or invalid, falls back to 30m.
-	// +kubebuilder:default="30m"
+	// Parsed with time.ParseDuration. Use "never" (case-insensitive) to disable
+	// expiry, meaning the marker is kept until cleared by the normal eviction
+	// lifecycle. If empty or invalid, falls back to "never".
+	// +kubebuilder:default="never"
 	EvictedPodMarkerTTL string `json:"evictedPodMarkerTTL,omitempty"`
 
 	// SourceNodeMarkerTTL caps how long a defrag source-node marker survives
 	// when the node still has TF workers stuck on it. Same independence
 	// rationale as EvictedPodMarkerTTL. Parsed with time.ParseDuration.
-	// If empty or invalid, falls back to 30m.
+	// Use "never" (case-insensitive) to disable expiry. If empty or invalid,
+	// falls back to "30m".
 	// +kubebuilder:default="30m"
 	SourceNodeMarkerTTL string `json:"sourceNodeMarkerTTL,omitempty"`
 }

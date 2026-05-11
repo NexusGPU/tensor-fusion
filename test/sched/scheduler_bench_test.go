@@ -121,10 +121,15 @@ func BenchmarkScheduler(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	// Config registration.
+	// Config registration. component-base v0.36+ requires a typed external
+	// object with a GVK, so convert via the shared helper before registering.
+	externalConfig, err := sched.ToExternalSchedulerConfig(&cc.ComponentConfig)
+	if err != nil {
+		b.Fatal(err)
+	}
 	if cz, err := configz.New("componentconfig"); err != nil {
 		b.Fatal(err)
-	} else if err := cz.Set(&cc.ComponentConfig); err != nil {
+	} else if err := cz.Set(externalConfig); err != nil {
 		b.Fatal(err)
 	}
 

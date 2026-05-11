@@ -190,23 +190,26 @@ var _ = BeforeSuite(func() {
 	_ = portAllocator.SetupWithManager(ctx, mgr)
 
 	err = (&TensorFusionClusterReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder:        mgr.GetEventRecorderFor("TensorFusionCluster"),
 		MetricsRecorder: metricsRecorder,
 	}).SetupWithManager(mgr, false)
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&GPUPoolReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder: mgr.GetEventRecorderFor("GPUPool"),
 	}).SetupWithManager(mgr, false)
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&GPUNodeReconciler{
-		Client:                               mgr.GetClient(),
-		Scheme:                               mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder:                             mgr.GetEventRecorderFor("GPUNode"),
 		Allocator:                            allocator,
 		CompatibleWithNvidiaContainerToolkit: false,
@@ -215,8 +218,9 @@ var _ = BeforeSuite(func() {
 
 	SetTestModeCompactionPeriod()
 	err = (&GPUPoolCompactionReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder:  mgr.GetEventRecorderFor("GPUPoolCompaction"),
 		Allocator: allocator,
 	}).SetupWithManager(mgr)
@@ -243,8 +247,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&NodeReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder: mgr.GetEventRecorderFor("Node"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
@@ -256,8 +261,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&TensorFusionConnectionReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder: mgr.GetEventRecorderFor("TensorFusionConnection"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
@@ -269,8 +275,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&TensorFusionWorkloadReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder:      mgr.GetEventRecorderFor("TensorFusionWorkload"),
 		PortAllocator: portAllocator,
 	}).SetupWithManager(mgr)
@@ -282,8 +289,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&GPUNodeClaimReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // keep old recorder interface until controllers migrate from record.EventRecorder
 		Recorder: mgr.GetEventRecorderFor("GPUNodeClaim"),
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
