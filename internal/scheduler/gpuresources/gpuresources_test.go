@@ -1613,7 +1613,7 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation() {
 	// Add nominated pod to framework's PodNominator
 	podInfo, _ := framework.NewPodInfo(updatedNominatedPod)
 	logger := klog.FromContext(s.ctx)
-	s.fwk.AddNominatedPod(logger, podInfo, &framework.NominatingInfo{NominatedNodeName: testNodeName})
+	s.fwk.AddNominatedPod(logger, podInfo, &fwk.NominatingInfo{NominatedNodeName: testNodeName})
 
 	// Create a lower priority pod trying to schedule on the same node
 	lowerPriorityPod := s.makePod("lower-priority-pod", map[string]string{
@@ -1685,7 +1685,7 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation_SamePriority() 
 	// Add nominated pod to framework's PodNominator
 	podInfo, _ := framework.NewPodInfo(updatedNominatedPod)
 	logger := klog.FromContext(s.ctx)
-	s.fwk.AddNominatedPod(logger, podInfo, &framework.NominatingInfo{NominatedNodeName: "node-b"})
+	s.fwk.AddNominatedPod(logger, podInfo, &fwk.NominatingInfo{NominatedNodeName: "node-b"})
 
 	// Create another pod with same priority
 	samePriorityPod := s.makePod("same-priority-pod", map[string]string{
@@ -1741,7 +1741,7 @@ func (s *GPUResourcesSuite) TestCheckNominatedPodsGPUReservation_SufficientResou
 	// Add nominated pod to framework's PodNominator
 	podInfo, _ := framework.NewPodInfo(updatedNominatedPod)
 	logger := klog.FromContext(s.ctx)
-	s.fwk.AddNominatedPod(logger, podInfo, &framework.NominatingInfo{NominatedNodeName: "node-b"})
+	s.fwk.AddNominatedPod(logger, podInfo, &fwk.NominatingInfo{NominatedNodeName: "node-b"})
 
 	// Create a lower priority pod requesting resources that fit after reservation
 	lowerPriorityPod := s.makePod("lower-priority-pod-fit", map[string]string{

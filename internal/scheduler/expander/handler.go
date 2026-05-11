@@ -219,7 +219,7 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	gpuNodesPassedOtherFilters, err := e.simulateSchedulingWithoutGPU(ctx, pod)
 	if err != nil {
 		e.eventRecorder.Eventf(pod, corev1.EventTypeNormal, "NodeExpansionCheck",
-			"can not schedule on any nodes even without GPU constraints, manual check required. error: %w", err)
+			"can not schedule on any nodes even without GPU constraints, manual check required. error: %v", err)
 		e.logger.Info("Pod schedulable but no GPU nodes available, manual check required",
 			"namespace", pod.Namespace, "pod", pod.Name, "error", err)
 		return nil

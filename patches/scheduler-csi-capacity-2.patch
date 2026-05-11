@@ -1,6 +1,6 @@
---- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/binder.go	2025-08-06 17:00:36
-+++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/binder.go	2025-08-06 17:00:27
-@@ -269,7 +269,11 @@
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/binder.go
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumebinding/binder.go
+@@ -272,7 +272,11 @@
  	}
  
  	b.csiDriverLister = capacityCheck.CSIDriverInformer.Lister()
@@ -11,9 +11,9 @@
 +		b.csiStorageCapacityLister = capacityCheck.CSIStorageCapacityInformer.Lister()
 +	}
  
- 	return b
+ 	return b, nil
  }
-@@ -988,6 +992,11 @@
+@@ -995,6 +999,11 @@
  		return true, nil, nil
  	}
  
