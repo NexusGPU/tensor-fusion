@@ -1,0 +1,36 @@
+{{- if .Values.providerConfigs.nvidia.enabled }}
+{{- $cfg := .Values.providerConfigs.nvidia }}
+apiVersion: tensor-fusion.ai/v1
+kind: ProviderConfig
+metadata:
+  name: {{ $cfg.name | default "nvidia-provider" }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  vendor: NVIDIA
+  images:
+    middleware: {{ $cfg.images.middleware | quote }}
+    remoteClient: {{ $cfg.images.remoteClient | quote }}
+    remoteWorker: {{ $cfg.images.remoteWorker | quote }}
+  hypervisor:
+    privilegedHypervisor: {{ $cfg.privilegedHypervisor }}
+    {{- with $cfg.extraEnv }}
+    extraEnv:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  devicePluginDetection:
+    resourceNamePrefixes:
+      - nvidia.com/gpu
+      - nvidia.com/mig
+    usedBySystemName: nvidia-device-plugin
+  inUseResourceNames:
+    {{- toYaml $cfg.inUseResourceNames | nindent 4 }}
+  {{- with $cfg.hardwareMetadata }}
+  hardwareMetadata:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $cfg.virtualizationTemplates }}
+  virtualizationTemplates:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

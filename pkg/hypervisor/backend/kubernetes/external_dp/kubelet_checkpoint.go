@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -316,7 +315,7 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 	for deviceID, resName := range addedDevices {
 		for _, detector := range d.vendorDetectors {
 			resourceNamePrefixes := detector.GetResourceNamePrefixes()
-			if slices.Contains(resourceNamePrefixes, resName) {
+			if hasResourceNamePrefix(resourceNamePrefixes, resName) {
 				usedBySystem, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(deviceID, resName)
 				klog.V(4).Infof(
 					"Device added: %s, resource: %s, patching with usedBy: %s, realDeviceID: %s",
@@ -337,13 +336,20 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 	for deviceID, resName := range removedDevices {
 		for _, detector := range d.vendorDetectors {
 			resourceNamePrefixes := detector.GetResourceNamePrefixes()
-			if slices.Contains(resourceNamePrefixes, resName) {
+			if hasResourceNamePrefix(resourceNamePrefixes, resName) {
+				// Normalize device ID the same way as the add path so that
+				// 3rd-party device plugins (e.g. HAMI) whose IDs differ from
+				// the real GPU UUID can be correctly matched back.
+				_, realDeviceID := detector.GetUsedBySystemAndRealDeviceID(deviceID, resName)
 				klog.V(4).Infof(
-					"Device plugin allocated container removed: %s, resource: %s, patching usedBy field to tensor fusion",
+					"Device plugin allocated container removed: %s "+
+						"(realDeviceID: %s), resource: %s, "+
+						"patching usedBy field to tensor fusion",
 					deviceID,
+					realDeviceID,
 					resName,
 				)
-				if err := d.patchGPUResource(deviceID, string(tfv1.UsedByTensorFusion)); err != nil {
+				if err := d.patchGPUResource(realDeviceID, string(tfv1.UsedByTensorFusion)); err != nil {
 					klog.Errorf("Failed to patch GPU resource usedBy field to tensor fusion for removed device %s: %v", deviceID, err)
 					hasError = true
 				}
@@ -356,6 +362,17 @@ func (d *DevicePluginDetector) processDeviceState(patchAllDevices bool) error {
 		d.previousDeviceIDs = allocated
 	}
 	return nil
+}
+
+// hasResourceNamePrefix returns true if resName matches or starts with any of the prefixes.
+// This handles cases like nvidia.com/mig-1g.5gb matching prefix nvidia.com/mig.
+func hasResourceNamePrefix(prefixes []string, resName string) bool {
+	for _, prefix := range prefixes {
+		if resName == prefix || strings.HasPrefix(resName, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // patchGPUResource patches a GPU resource with the specified usedBy value
@@ -413,6 +430,15 @@ func (d *DevicePluginDetector) readCheckpointFile() (*KubeletCheckpoint, error) 
 }
 
 // extractDeviceIDs extracts allocated and registered device IDs from checkpoint
+// normalizeDeviceID strips the "::slice_index" suffix that NVIDIA time-slicing
+// appends to device IDs (e.g. "gpu-uuid::3" → "gpu-uuid").
+func normalizeDeviceID(deviceID string) string {
+	if idx := strings.Index(deviceID, "::"); idx >= 0 {
+		return deviceID[:idx]
+	}
+	return deviceID
+}
+
 func (d *DevicePluginDetector) extractDeviceIDs(
 	checkpoint *KubeletCheckpoint,
 ) (allocated, registered map[string]string) {
@@ -427,7 +453,7 @@ func (d *DevicePluginDetector) extractDeviceIDs(
 			}
 			for _, deviceList := range entry.DeviceIDs {
 				for _, deviceID := range deviceList {
-					allocated[strings.ToLower(deviceID)] = entry.ResourceName
+					allocated[normalizeDeviceID(strings.ToLower(deviceID))] = entry.ResourceName
 				}
 			}
 		}
@@ -440,7 +466,7 @@ func (d *DevicePluginDetector) extractDeviceIDs(
 				continue
 			}
 			for _, deviceID := range deviceIDs {
-				registered[strings.ToLower(deviceID)] = resourceName
+				registered[normalizeDeviceID(strings.ToLower(deviceID))] = resourceName
 			}
 		}
 	}
@@ -450,13 +476,13 @@ func (d *DevicePluginDetector) extractDeviceIDs(
 
 // findEntryForDevice finds the pod device entry for a given device ID
 func (d *DevicePluginDetector) findEntryForDevice(checkpoint *KubeletCheckpoint, deviceID string) PodDeviceEntry {
-	deviceIDLower := strings.ToLower(deviceID)
+	normalizedID := normalizeDeviceID(strings.ToLower(deviceID))
 
 	if checkpoint.Data.PodDeviceEntries != nil {
 		for _, entry := range checkpoint.Data.PodDeviceEntries {
 			for _, deviceList := range entry.DeviceIDs {
 				for _, id := range deviceList {
-					if strings.ToLower(id) == deviceIDLower {
+					if normalizeDeviceID(strings.ToLower(id)) == normalizedID {
 						return entry
 					}
 				}
@@ -511,7 +537,7 @@ func (d *DevicePluginDetector) getAllocatedDevices() (map[string]string, error) 
 		for _, container := range podResource.Containers {
 			for _, device := range container.Devices {
 				for _, deviceID := range device.DeviceIds {
-					allocatedDevices[strings.ToLower(deviceID)] = device.ResourceName
+					allocatedDevices[normalizeDeviceID(strings.ToLower(deviceID))] = device.ResourceName
 				}
 			}
 		}

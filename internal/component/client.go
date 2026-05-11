@@ -28,8 +28,8 @@ func (c *Client) GetName() string {
 
 func (c *Client) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string) {
 	oldHash := status.ClientVersion
-	changed, newHash := utils.CompareAndGetObjectHash(oldHash, pool.Spec.ComponentConfig.Client)
-	return changed, newHash, oldHash
+	newHash := utils.ClientTemplateHash(pool)
+	return oldHash != newHash, newHash, oldHash
 }
 
 func (c *Client) SetConfigHash(status *tfv1.PoolComponentStatus, hash string) {

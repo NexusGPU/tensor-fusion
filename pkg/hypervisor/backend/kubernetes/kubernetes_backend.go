@@ -307,11 +307,12 @@ func (b *KubeletBackend) mutateGPUResourceState(
 	}
 
 	// Set status fields
-	tflops := resource.MustParse(fmt.Sprintf("%f", device.MaxTflops))
-	if device.MaxTflops <= 0 {
-		if resolved, ok := b.resolveDeviceTflopsFromProviderConfig(device); ok {
-			tflops = resolved
-		}
+	// Prefer ProviderConfig Fp16TFlops if configured, fall back to device-reported value
+	var tflops resource.Quantity
+	if resolved, ok := b.resolveDeviceTflopsFromProviderConfig(device); ok {
+		tflops = resolved
+	} else {
+		tflops = resource.MustParse(fmt.Sprintf("%f", device.MaxTflops))
 	}
 	b.setDeviceTflops(device.UUID, tflops)
 	gpu.Status.Capacity = &tfv1.Resource{

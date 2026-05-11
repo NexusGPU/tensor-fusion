@@ -42,6 +42,10 @@ type WorkerAllocationController interface {
 	// DeallocateWorker deallocates devices for a worker
 	DeallocateWorker(workerUID string) error
 
+	// RecoverPartitionedWorker rebuilds allocation state for an existing partitioned worker
+	// after hypervisor restart. partitionUUIDs is a comma-separated string of "partitionUUID:parentGPU" pairs.
+	RecoverPartitionedWorker(request *api.WorkerInfo, partitionUUIDs string)
+
 	// GetWorkerAllocation returns the allocation for a specific worker
 	GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, bool)
 
@@ -71,6 +75,11 @@ type QuotaController interface {
 
 	// GetWorkerQuotaStatus gets quota status for a worker
 	GetWorkerQuotaStatus(workerUID string) error
+
+	// CleanupWorker drops any in-memory ERL/PID state bound to the given worker
+	// UID. Called from the worker-remove path so that state does not leak across
+	// pod churn on the same GPU device.
+	CleanupWorker(workerUID string)
 }
 
 // The backend interface for the hypervisor to interact with the underlying infrastructure

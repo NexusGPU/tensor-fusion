@@ -15,15 +15,34 @@ spec:
     remoteClient: tensorfusion/tensor-fusion-client:latest
     remoteWorker: tensorfusion/tensor-fusion-worker:latest
 
+  # Hypervisor settings.
+  # MIG partition operations (creating GpuInstance / ComputeInstance) need the
+  # hypervisor container to run privileged AND to ask the NVIDIA Container
+  # Runtime to expose the dynamic /proc/driver/nvidia/capabilities/ files.
+  # When privilegedHypervisor=true and vendor=NVIDIA, the operator
+  # auto-injects NVIDIA_MIG_CONFIG_DEVICES=all and NVIDIA_MIG_MONITOR_DEVICES=all
+  # so MIG works out of the box; no manual extraEnv needed.
+  #
+  # NOTE: privilegedHypervisor only flips `securityContext.privileged: true` on
+  # the container — it does NOT change the process UID. MIG calls additionally
+  # require uid=0 (DAC check when writing to /dev/nvidia-caps/nvidia-cap1).
+  # Set pod-level `runAsUser: 0` / `runAsGroup: 0` in the GPUPool /
+  # TensorFusionCluster componentConfig.hypervisor.podTemplate — the operator
+  # rebuilds container-level securityContext on every reconcile, but pod-level
+  # fields survive. See config/samples/v1_gpupool.yaml for the matching
+  # pod-level snippet.
+  hypervisor:
+    privilegedHypervisor: true
+
   # Resource names that should be removed from pod specs when TensorFusion manages GPUs
   # These are the standard Kubernetes resource names used by device plugins
   inUseResourceNames:
     - "nvidia.com/gpu"
-    - "nvidia.com/mig-1g.5gb"
-    - "nvidia.com/mig-2g.10gb"
-    - "nvidia.com/mig-3g.20gb"
-    - "nvidia.com/mig-4g.20gb"
-    - "nvidia.com/mig-7g.40gb"
+    - "nvidia.com/mig-1g.10gb"
+    - "nvidia.com/mig-2g.20gb"
+    - "nvidia.com/mig-3g.40gb"
+    - "nvidia.com/mig-4g.40gb"
+    - "nvidia.com/mig-7g.80gb"
 
   # Device plugin detection settings
   devicePluginDetection:
@@ -44,18 +63,16 @@ spec:
       maxPlacementSlots: 8
       # References to virtualization templates defined below
       partitionTemplateRefs:
-        - mig-1g-10gb
-        - mig-2g-20gb
-        - mig-3g-40gb
-        - mig-7g-80gb
+        - "19"
+        - "14"
+        - "9"
+        - "0"
 
     # Example: NVIDIA H100
     - model: H100_SXM
       fullModelName: "NVIDIA H100 80GB HBM3"
       costPerHour: "2.99"
       fp16TFlops: "989"
-      maxPartitions: 7
-      maxPlacementSlots: 8
 
     # Example: Consumer GPU without MIG
     - model: RTX4090
@@ -66,7 +83,7 @@ spec:
   # Virtualization templates for GPU partitioning (e.g., MIG profiles)
   # Templates can be referenced by multiple hardware models
   virtualizationTemplates:
-    - id: mig-1g-10gb
+    - id: "19"
       name: "1g.10gb"
       memoryGigabytes: 10
       computePercent: "14.2857"
@@ -76,7 +93,7 @@ spec:
       placementOffset: 1
       isolationGroupSharing: "exclusive"
 
-    - id: mig-2g-20gb
+    - id: "14"
       name: "2g.20gb"
       memoryGigabytes: 20
       computePercent: "28.5714"
@@ -86,7 +103,7 @@ spec:
       placementOffset: 2
       isolationGroupSharing: "exclusive"
 
-    - id: mig-3g-40gb
+    - id: "9"
       name: "3g.40gb"
       memoryGigabytes: 40
       computePercent: "42.8571"
@@ -96,7 +113,7 @@ spec:
       placementOffset: 4
       isolationGroupSharing: "exclusive"
 
-    - id: mig-7g-80gb
+    - id: "0"
       name: "7g.80gb"
       memoryGigabytes: 80
       computePercent: "100"

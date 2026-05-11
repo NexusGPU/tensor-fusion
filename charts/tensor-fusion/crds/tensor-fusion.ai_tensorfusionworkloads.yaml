@@ -293,9 +293,15 @@ spec:
                     type: string
                 type: object
               gpuCount:
-                description: The number of GPUs to be used by the workload, default
-                  to 1
+                description: |-
+                  The number of GPUs to be used by the workload, default to 1.
+                  Must be between 1 and 128. Values outside this range are rejected by
+                  the webhook because (a) 0 / negative are operational no-ops the
+                  scheduler can not satisfy, and (b) anything past a sane upper bound is
+                  almost always operator error and would consume the entire pool.
                 format: int32
+                maximum: 128
+                minimum: 1
                 type: integer
               gpuIndices:
                 description: Specify GPU indices for precise control of scheduling

@@ -121,7 +121,11 @@ var (
 	PartitionNameAnnotation = Domain + "/partition"
 	// PartitionTemplateIDAnnotation is the partition UUID assigned to a pod in partitioned mode
 	// This is read by accelerator.c to mock slice GPU like MIG does
-	PartitionTemplateIDAnnotation     = Domain + "/partition-id"
+	PartitionTemplateIDAnnotation = Domain + "/partition-id"
+	// PartitionUUIDsAnnotation stores MIG instance UUIDs created during device plugin allocation.
+	// Format: comma-separated "partitionUUID:parentGPU" pairs (e.g., "MIG-xxx/7/0:GPU-abc,MIG-yyy/3/0:GPU-def").
+	// Used to recover partition allocation state after hypervisor restart.
+	PartitionUUIDsAnnotation          = Domain + "/partition-uuids"
 	DedicatedGPUAnnotation            = Domain + "/dedicated-gpu"
 	SetPendingOwnedWorkloadAnnotation = Domain + "/pending-owned-workload"
 	PricingAnnotation                 = Domain + "/hourly-pricing"

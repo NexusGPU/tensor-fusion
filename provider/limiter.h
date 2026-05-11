@@ -1,17 +1,18 @@
 /*
- * Copyright 2024.
+ * Soft isolation limiter interface.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * This header defines two API sets:
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * 1. Worker-facing APIs (called from cuda_hook / LD_PRELOAD inside Client Pod):
+ *    - CheckAndRecordMemoryOps, CheckAndRecordComputeOps
+ *    - FreezeWorker, ResumeWorker, AutoFreeze, AutoResume
+ *    - AddWorkerProcess
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * 2. Hypervisor-facing APIs (called by Go hypervisor via purego):
+ *    - LimiterInit, LimiterShutdown
+ *    - LimiterCreateWorker, LimiterRemoveWorker
+ *    - LimiterRegisterPID
+ *    - LimiterUpdateERL, LimiterUpdateHeartbeat, LimiterSetPodMemoryUsed
  */
 
 #ifndef LIMITER_H
@@ -33,106 +34,76 @@ extern "C" {
 
 // Memory operation record
 typedef struct {
-    char deviceUUID[64];             // Device UUID
-    int64_t bytesDiff;                // Bytes difference (positive = allocation, negative = deallocation)
-    bool shouldBlock;                 // Output: whether this operation should be blocked
-    uint64_t availableBytes;          // Output: available bytes after this operation
+    char deviceUUID[64];
+    int64_t bytesDiff;
+    bool shouldBlock;
+    uint64_t availableBytes;
 } MemoryOpRecord;
 
 // Compute operation record
 typedef struct {
-    char deviceUUID[64];             // Device UUID
-    uint64_t computeTokens;          // Compute tokens consumed (e.g., SM-cycles)
-    bool shouldBlock;                 // Output: whether this operation should be blocked
-    uint64_t availableTokens;         // Output: available tokens after this operation
+    char deviceUUID[64];
+    uint64_t computeTokens;
+    bool shouldBlock;
+    uint64_t availableTokens;
 } ComputeOpRecord;
 
 // Worker freeze state
 typedef struct {
-    char workerId[64];               // Worker identifier
-    bool isFrozen;                    // Current freeze state
-    uint64_t freezeTimeMs;            // Time frozen in milliseconds
+    char workerId[64];
+    bool isFrozen;
+    uint64_t freezeTimeMs;
 } WorkerFreezeState;
 
+// Device configuration for shared memory initialization
+typedef struct {
+    uint32_t deviceIdx;
+    char deviceUUID[64];
+    uint32_t upLimit;        // compute limit percentage (0-100)
+    uint64_t memLimit;       // memory limit in bytes
+    uint32_t totalCudaCores;
+} LimiterDeviceConfig;
+
 // ============================================================================
-// Limiter APIs (Implemented by limiter.so, NOT by vendor accelerator.so)
+// Worker-facing APIs (called from cuda_hook inside worker/client processes)
 // ============================================================================
 
-/**
- * Check and record memory operations for soft isolation.
- * This API is called from hooks in CUDA runtime (via dlsym replacement).
- * 
- * @param processId Process identifier
- * @param deviceUUID Device UUID
- * @param bytesDiff Bytes difference (positive = allocation, negative = deallocation)
- * @param record Output parameter for operation record
- * @return ACCEL_SUCCESS on success, error code otherwise
- */
-AccelResult CheckAndRecordMemoryOps(const char* processId, const char* deviceUUID, int64_t bytesDiff, MemoryOpRecord* record);
+AccelResult CheckAndRecordMemoryOps(const char* processId, const char* deviceUUID,
+    int64_t bytesDiff, MemoryOpRecord* record);
 
-/**
- * Check and record compute operations for soft isolation.
- * This API is called from hooks in CUDA runtime (via dlsym replacement).
- * 
- * @param processId Process identifier
- * @param deviceUUID Device UUID
- * @param computeTokens Compute tokens consumed (e.g., SM-cycles)
- * @param record Output parameter for operation record
- * @return ACCEL_SUCCESS on success, error code otherwise
- */
-AccelResult CheckAndRecordComputeOps(const char* processId, const char* deviceUUID, uint64_t computeTokens, ComputeOpRecord* record);
+AccelResult CheckAndRecordComputeOps(const char* processId, const char* deviceUUID,
+    uint64_t computeTokens, ComputeOpRecord* record);
 
-/**
- * Freeze a worker process (pause execution when resource limit reached).
- * This API is called automatically when resources are exhausted.
- * 
- * @param workerId Worker identifier
- * @param state Output parameter for freeze state
- * @return ACCEL_SUCCESS on success, error code otherwise
- */
 AccelResult FreezeWorker(const char* workerId, WorkerFreezeState* state);
-
-/**
- * Resume a worker process (resume execution when resources become available).
- * This API is called automatically when resources become available.
- * 
- * @param workerId Worker identifier
- * @param state Output parameter for freeze state
- * @return ACCEL_SUCCESS on success, error code otherwise
- */
 AccelResult ResumeWorker(const char* workerId, WorkerFreezeState* state);
 
-/**
- * Auto-freeze hook: called when resource limit is reached.
- * This triggers automatic freezing of the worker.
- * 
- * @param workerId Worker identifier
- * @param deviceUUID Device UUID
- * @param resourceType Resource type ("memory" or "compute")
- * @return ACCEL_SUCCESS on success, error code otherwise
- */
 AccelResult AutoFreeze(const char* workerId, const char* deviceUUID, const char* resourceType);
-
-/**
- * Auto-resume hook: called when resources become available.
- * This triggers automatic resuming of the worker.
- * 
- * @param workerId Worker identifier
- * @param deviceUUID Device UUID
- * @param resourceType Resource type ("memory" or "compute")
- * @return ACCEL_SUCCESS on success, error code otherwise
- */
 AccelResult AutoResume(const char* workerId, const char* deviceUUID, const char* resourceType);
 
-/**
- * Add a worker process to the limiter tracking.
- * This API is called when a process starts using a device.
- * 
- * @param deviceUUID Device UUID
- * @param processId Process identifier (as string)
- * @return ACCEL_SUCCESS on success, error code otherwise
- */
 AccelResult AddWorkerProcess(const char* deviceUUID, const char* processId);
+
+// ============================================================================
+// Hypervisor-facing APIs (called by Go hypervisor to manage shared memory & ERL)
+// ============================================================================
+
+AccelResult LimiterInit(const char* shmBasePath);
+AccelResult LimiterShutdown(void);
+
+AccelResult LimiterCreateWorker(const char* namespace_, const char* podName,
+    const LimiterDeviceConfig* configs, size_t configCount);
+AccelResult LimiterRemoveWorker(const char* namespace_, const char* podName);
+
+AccelResult LimiterRegisterPID(const char* namespace_, const char* podName, uint32_t hostPID);
+
+AccelResult LimiterUpdateERL(const char* namespace_, const char* podName,
+    uint32_t deviceIdx, uint32_t upLimit,
+    double utilizationPercent, uint64_t timestampMicros);
+
+AccelResult LimiterUpdateHeartbeat(const char* namespace_, const char* podName,
+    uint64_t timestampSecs);
+
+AccelResult LimiterSetPodMemoryUsed(const char* namespace_, const char* podName,
+    uint32_t deviceIdx, uint64_t memoryUsed);
 
 #ifdef __cplusplus
 }

@@ -387,7 +387,7 @@ func (m *TensorFusionPodMutator) patchTFClient(
 	if pod.Labels == nil {
 		pod.Labels = map[string]string{}
 	}
-	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.GetObjectHash(clientConfig)
+	pod.Labels[constants.LabelKeyPodTemplateHash] = utils.ClientTemplateHash(pool)
 
 	assignPodLabelsAndAnnotations(isLocalGPU, sidecarWorker, pod, pool)
 

@@ -249,7 +249,7 @@ var _ = Describe("AcceleratorInterface", func() {
 		})
 
 		It("should assign partition successfully", func() {
-			result, err := accel.AssignPartition("mig-1g.7gb", "stub-device-0")
+			result, err := accel.AssignPartition("1g.10gb", "stub-device-0")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).NotTo(BeNil())
 			Expect(result.PartitionUUID).NotTo(BeEmpty())
@@ -270,7 +270,7 @@ var _ = Describe("AcceleratorInterface", func() {
 			for i := range longDeviceUUID {
 				longDeviceUUID[i] = 'a'
 			}
-			_, err := accel.AssignPartition("mig-1g.7gb", string(longDeviceUUID))
+			_, err := accel.AssignPartition("1g.10gb", string(longDeviceUUID))
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("too long"))
 		})
@@ -285,7 +285,7 @@ var _ = Describe("AcceleratorInterface", func() {
 
 		It("should remove partition successfully", func() {
 			// RemovePartition takes templateID (not partitionUUID) and deviceUUID
-			err := accel.RemovePartition("mig-1g.7gb", "stub-device-0")
+			err := accel.RemovePartition("1g.10gb", "stub-device-0")
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})

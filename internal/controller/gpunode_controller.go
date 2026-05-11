@@ -155,6 +155,21 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj, coreNode)
 	if err != nil {
+		nodePhaseChanged, gpuList, pendingErr := r.syncNodeAndOwnedGPUPhases(
+			ctx,
+			node,
+			tfv1.TensorFusionGPUNodePhasePending,
+			tfv1.TensorFusionGPUPhasePending,
+		)
+		if pendingErr != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to mark GPUNode pending after hypervisor reconcile error %q: %w", err.Error(), pendingErr)
+		}
+		if nodePhaseChanged {
+			metrics.SetNodeMetrics(node, poolObj, nil)
+		}
+		if len(gpuList) > 0 {
+			metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
+		}
 		return ctrl.Result{}, err
 	}
 	// pod deleted or deleting, wait next reconcile
@@ -197,24 +212,21 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 	}
 
 	if hypervisorNotReady {
-		if node.Status.Phase != tfv1.TensorFusionGPUNodePhasePending {
-			node.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
-			err := r.Status().Update(ctx, node)
-			if err != nil {
-				return fmt.Errorf("failed to update GPU node status to pending: %w", err)
-			}
-			metrics.SetNodeMetrics(node, poolObj, nil)
-		}
-
-		gpuList, err := r.syncStatusToGPUDevices(ctx, node, tfv1.TensorFusionGPUPhasePending)
+		nodePhaseChanged, gpuList, err := r.syncNodeAndOwnedGPUPhases(
+			ctx,
+			node,
+			tfv1.TensorFusionGPUNodePhasePending,
+			tfv1.TensorFusionGPUPhasePending,
+		)
 		if err != nil {
 			return err
 		}
-
+		if nodePhaseChanged {
+			metrics.SetNodeMetrics(node, poolObj, nil)
+		}
 		if len(gpuList) > 0 {
 			metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
 		}
-
 		return nil
 	} else {
 		gpuModels, err := gpuallocator.RefreshGPUNodeCapacity(ctx, r.Client, node, poolObj, r.Allocator, coreNode)
@@ -263,6 +275,28 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 		}
 		return nil
 	}
+}
+
+func (r *GPUNodeReconciler) syncNodeAndOwnedGPUPhases(
+	ctx context.Context,
+	node *tfv1.GPUNode,
+	nodePhase tfv1.TensorFusionGPUNodePhase,
+	gpuPhase tfv1.TensorFusionGPUPhase,
+) (bool, []tfv1.GPU, error) {
+	nodePhaseChanged := node.Status.Phase != nodePhase
+	if nodePhaseChanged {
+		node.Status.Phase = nodePhase
+		if err := r.Status().Update(ctx, node); err != nil {
+			return false, nil, fmt.Errorf("failed to update GPU node status to %s: %w", nodePhase, err)
+		}
+	}
+
+	gpuList, err := r.syncStatusToGPUDevices(ctx, node, gpuPhase)
+	if err != nil {
+		return nodePhaseChanged, nil, err
+	}
+
+	return nodePhaseChanged, gpuList, nil
 }
 
 func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tfv1.GPUNode, state tfv1.TensorFusionGPUPhase) ([]tfv1.GPU, error) {
@@ -377,7 +411,7 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 			return "", nil
 		}
 
-		newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
+		newHash := utils.HypervisorTemplateHash(pool)
 		if utils.IsPodStopped(currentPod) || oldHash != newHash {
 			if err := r.Delete(ctx, currentPod); err != nil {
 				return "", fmt.Errorf("failed to delete old hypervisor pod: %w", err)
@@ -458,6 +492,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	// pass provider hardware metadata to hypervisor to avoid extra API server calls
 	metadataEnvValue := "[]"
 	deviceMountEnvValue := "{}"
+	templateConfigEnvValue := emptyProviderTemplateConfigEnv
 	hypervisorExtraEnv := []corev1.EnvVar{}
 	if mgr := provider.GetManager(); mgr != nil {
 		if providerCfg, ok := mgr.GetProvider(vendor); ok {
@@ -471,6 +506,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 				log.Error(err, "failed to marshal provider hardware metadata", "vendor", vendor)
 			}
 			deviceMountEnvValue = buildProviderDeviceMountEnv(providerCfg)
+			templateConfigEnvValue = buildProviderTemplateConfigEnv(providerCfg)
 			hypervisorExtraEnv = r.buildProviderHypervisorExtraEnv(ctx, providerCfg.Name)
 		} else {
 			log.Info("provider config not found; injecting empty hardware metadata", "vendor", vendor)
@@ -484,6 +520,9 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	}, corev1.EnvVar{
 		Name:  constants.TFProviderDeviceMountEnv,
 		Value: deviceMountEnvValue,
+	}, corev1.EnvVar{
+		Name:  constants.TFProviderTemplateConfigEnv,
+		Value: templateConfigEnvValue,
 	})
 	if len(hypervisorExtraEnv) > 0 {
 		spec.Containers[0].Env = utils.AppendEnvVarsIfNotExists(spec.Containers[0].Env, hypervisorExtraEnv...)
@@ -515,7 +554,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	}
 
 	// compose the final pod and set tolerations and controller reference
-	newHash := utils.GetObjectHash(pool.Spec.ComponentConfig.Hypervisor)
+	newHash := utils.HypervisorTemplateHash(pool)
 	newPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      key.Name,
@@ -819,7 +858,7 @@ func (n *nvidiaHandler) findDevicePluginPod(ctx context.Context, r *GPUNodeRecon
 }
 
 func getDriverProbeJobName(gpuNodeName string) string {
-	return fmt.Sprintf("driver-probe-%s", gpuNodeName)
+	return utils.BuildNodeScopedName("driver-probe", gpuNodeName, 63, 8)
 }
 
 type providerDeviceMountEnv struct {
@@ -908,6 +947,35 @@ func buildProviderDeviceMountEnv(providerCfg *tfv1.ProviderConfig) string {
 	raw, err := json.Marshal(envCfg)
 	if err != nil {
 		return "{}"
+	}
+	return string(raw)
+}
+
+type providerTemplateConfigEnv struct {
+	HardwareMetadata        []tfv1.HardwareModelInfo      `json:"hardwareMetadata"`
+	VirtualizationTemplates []tfv1.VirtualizationTemplate `json:"virtualizationTemplates"`
+}
+
+const emptyProviderTemplateConfigEnv = `{"hardwareMetadata":[],"virtualizationTemplates":[]}`
+
+func buildProviderTemplateConfigEnv(providerCfg *tfv1.ProviderConfig) string {
+	if providerCfg == nil {
+		return emptyProviderTemplateConfigEnv
+	}
+
+	envCfg := providerTemplateConfigEnv{
+		HardwareMetadata:        providerCfg.Spec.HardwareMetadata,
+		VirtualizationTemplates: providerCfg.Spec.VirtualizationTemplates,
+	}
+	if envCfg.HardwareMetadata == nil {
+		envCfg.HardwareMetadata = []tfv1.HardwareModelInfo{}
+	}
+	if envCfg.VirtualizationTemplates == nil {
+		envCfg.VirtualizationTemplates = []tfv1.VirtualizationTemplate{}
+	}
+	raw, err := json.Marshal(envCfg)
+	if err != nil {
+		return emptyProviderTemplateConfigEnv
 	}
 	return string(raw)
 }

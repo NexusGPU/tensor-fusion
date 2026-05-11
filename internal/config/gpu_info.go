@@ -32,10 +32,10 @@ type GpuInfo struct {
 
 // PartitionTemplateInfo contains detailed resource information for a partition template
 type PartitionTemplateInfo struct {
-	// TemplateID is the unique identifier for this partition template Profile `19` for 1g.10gb in A100
+	// TemplateID is the unique identifier for this partition template (e.g., "19" for NVIDIA MIG profile ID, "ascend-vir01" for Ascend)
 	TemplateID string `json:"templateId"`
 
-	// Name is the unique identifier (e.g., "1g.24gb", "4g.94gb", "vir01", "vir04")
+	// Name is the vendor-specific profile name (e.g., "1g.10gb", "2g.20gb", "vir01", "vir04")
 	Name string `json:"name"`
 
 	// MemoryGigabytes is the memory allocated to this partition in gigabytes

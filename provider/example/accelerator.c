@@ -204,6 +204,58 @@ AccelResult AutoResume(const char* workerId, const char* deviceUUID, const char*
 }
 
 // ============================================================================
+// Example Implementation - Hypervisor-facing Limiter APIs (stubs)
+// In production, these are implemented in limiter.cc (vgpu-provider).
+// The example provider returns NOT_SUPPORTED for all hypervisor limiter APIs.
+// ============================================================================
+
+AccelResult LimiterInit(const char* shmBasePath) {
+    (void)shmBasePath;
+    logMessage("INFO", "LimiterInit stub called");
+    return ACCEL_ERROR_NOT_SUPPORTED;
+}
+
+AccelResult LimiterShutdown(void) {
+    return ACCEL_ERROR_NOT_SUPPORTED;
+}
+
+AccelResult LimiterCreateWorker(const char* namespace_, const char* podName,
+    const LimiterDeviceConfig* configs, size_t configCount) {
+    (void)namespace_; (void)podName; (void)configs; (void)configCount;
+    return ACCEL_ERROR_NOT_SUPPORTED;
+}
+
+AccelResult LimiterRemoveWorker(const char* namespace_, const char* podName) {
+    (void)namespace_; (void)podName;
+    return ACCEL_ERROR_NOT_SUPPORTED;
+}
+
+AccelResult LimiterRegisterPID(const char* namespace_, const char* podName, uint32_t hostPID) {
+    (void)namespace_; (void)podName; (void)hostPID;
+    return ACCEL_ERROR_NOT_SUPPORTED;
+}
+
+AccelResult LimiterUpdateERL(const char* namespace_, const char* podName,
+    uint32_t deviceIdx, uint32_t upLimit,
+    double utilizationPercent, uint64_t timestampMicros) {
+    (void)namespace_; (void)podName; (void)deviceIdx;
+    (void)upLimit; (void)utilizationPercent; (void)timestampMicros;
+    return ACCEL_ERROR_NOT_SUPPORTED;
+}
+
+AccelResult LimiterUpdateHeartbeat(const char* namespace_, const char* podName,
+    uint64_t timestampSecs) {
+    (void)namespace_; (void)podName; (void)timestampSecs;
+    return ACCEL_ERROR_NOT_SUPPORTED;
+}
+
+AccelResult LimiterSetPodMemoryUsed(const char* namespace_, const char* podName,
+    uint32_t deviceIdx, uint64_t memoryUsed) {
+    (void)namespace_; (void)podName; (void)deviceIdx; (void)memoryUsed;
+    return ACCEL_ERROR_NOT_SUPPORTED;
+}
+
+// ============================================================================
 // Example Implementation - DeviceInfo APIs
 // ============================================================================
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -50,7 +51,16 @@ func SendAlert(ctx context.Context, alertManagerURL string, alerts []config.Post
 	if len(alerts) == 0 {
 		return nil
 	}
-	if alertManagerURL[len(alertManagerURL)-1] != '/' {
+	alertManagerURL = strings.TrimSpace(alertManagerURL)
+	if alertManagerURL == "" {
+		return fmt.Errorf("alert manager URL is empty")
+	}
+	// http.NewRequest needs a scheme; reject bare host:port early instead of
+	// constructing a request that will fail later with a confusing error.
+	if !strings.HasPrefix(alertManagerURL, "http://") && !strings.HasPrefix(alertManagerURL, "https://") {
+		return fmt.Errorf("alert manager URL must include http:// or https:// scheme: %s", alertManagerURL)
+	}
+	if !strings.HasSuffix(alertManagerURL, "/") {
 		alertManagerURL += "/"
 	}
 	alertManagerURL += "api/v2/alerts"

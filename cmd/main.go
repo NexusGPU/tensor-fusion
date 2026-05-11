@@ -149,10 +149,10 @@ func main() {
 	flag.BoolVar(&enableAutoScale, "enable-auto-scale", false, "if turn on auto scale, "+
 		"TensorFusion will auto scale vGPU TFlops and VRAM based on the usage and traffic")
 	flag.StringVar(&alertManagerAddr, "alert-manager-addr",
-		"alertmanager.tensor-fusion-sys.svc.cluster.local:9093",
-		"specify the alert manager address, TensorFusion will generate alerts with "+
-			"built-in rules if enabled alert, you can configure routers and receivers "+
-			"in your own alertmanager config, "+
+		"http://alert-manager.tensor-fusion-sys.svc.cluster.local:9093",
+		"specify the alert manager address (must include scheme, e.g. http://). "+
+			"TensorFusion will generate alerts with built-in rules if enabled alert, "+
+			"you can configure routers and receivers in your own alertmanager config, "+
 			"refer https://prometheus.io/docs/alerting/latest/configuration")
 	flag.BoolVar(&enableAutoExpander, "enable-auto-expander", false, "if turn on auto expander, "+
 		"TensorFusion will auto expand Nodes then Pending Pods which caused by insufficient GPU resources found")
@@ -614,13 +614,18 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 	needTSDB := enableAlert || enableAutoScale
 
 	err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		// Always close alertEvaluatorReady — even when neither alert nor
+		// auto-scale is enabled — so config-watcher goroutines that block
+		// on `<-alertEvaluatorReady` (see watchAndHandleConfigChanges) can
+		// proceed instead of accumulating one zombie goroutine per
+		// hot-reload of the dynamic config.
+		defer close(alertEvaluatorReady)
 		if !needTSDB {
 			return nil
 		}
 		timeSeriesDB = setupTimeSeriesDB()
 		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
 		alertCanBeEnabled = true
-		close(alertEvaluatorReady)
 		setupLog.Info("time series db setup successfully.")
 		return nil
 	}))
@@ -658,24 +663,32 @@ func watchAndHandleConfigChanges(ctx context.Context, mgr manager.Manager, needT
 			ctrl.Log.Info("preempt cluster-wide from env", "preemptClusterWideFromEnv", preemptClusterWideFromEnv)
 		}
 		config.SetGlobalConfig(globalConfig)
-		// handle alert rules update
-		go func() {
-			<-alertEvaluatorReady
-			if alertCanBeEnabled && enableAlert {
-				err = alertEvaluator.UpdateAlertRules(globalConfig.AlertRules)
-				if err != nil {
-					ctrl.Log.Error(err, "unable to update alert rules", "configPath", dynamicConfigPath)
+		// handle alert rules update — only when alert is actually enabled.
+		// Spawning a goroutine here regardless used to leak: when
+		// --enable-alert and --enable-auto-scale were both false, the TSDB
+		// runnable returned early and never closed alertEvaluatorReady, so
+		// the goroutine sat on `<-alertEvaluatorReady` forever. Each
+		// config-file write leaked one zombie goroutine. The goroutine
+		// only does meaningful work when both `alertCanBeEnabled` and
+		// `enableAlert` are true, so move the gate up front and skip
+		// spawning entirely otherwise.
+		if enableAlert {
+			go func() {
+				<-alertEvaluatorReady
+				if alertCanBeEnabled {
+					if updateErr := alertEvaluator.UpdateAlertRules(globalConfig.AlertRules); updateErr != nil {
+						ctrl.Log.Error(updateErr, "unable to update alert rules", "configPath", dynamicConfigPath)
+					}
 				}
-			}
-		}()
+			}()
+		}
 
 		// handle metrics ttl update
 		if needTSDB {
 			go func() {
 				<-mgr.Elected()
-				err = timeSeriesDB.SetTableTTL(globalConfig.MetricsTTL)
-				if err != nil {
-					ctrl.Log.Error(err, "unable to update metrics ttl", "ttl config", globalConfig.MetricsTTL)
+				if ttlErr := timeSeriesDB.SetTableTTL(globalConfig.MetricsTTL); ttlErr != nil {
+					ctrl.Log.Error(ttlErr, "unable to update metrics ttl", "ttl config", globalConfig.MetricsTTL)
 				}
 			}()
 		}

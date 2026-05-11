@@ -151,7 +151,7 @@ var _ = Describe("Compose Utils", func() {
 			}
 		}
 
-		It("should inject worker sidecar in local soft mode", func() {
+		It("should inject soft limiter directly into business container (no sidecar)", func() {
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
 				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
@@ -160,51 +160,50 @@ var _ = Describe("Compose Utils", func() {
 			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
 				Profile: &tfv1.WorkloadProfileSpec{
 					IsLocalGPU: true,
-					Isolation:  tfv1.IsolationModeSoft,
+					Isolation:  tfv1.IsolationModeType(tfv1.IsolationModeSoft),
 					GPUVendor:  constants.AcceleratorVendorNvidia,
 				},
 			}, []int{0})
 
+			// Soft mode: init container from middleware image copies C limiter
 			Expect(pod.Spec.InitContainers).To(HaveLen(1))
-			Expect(pod.Spec.InitContainers[0].Name).To(Equal(constants.TFContainerNameClient))
-			Expect(pod.Spec.Containers).To(HaveLen(2))
-			Expect(pod.Spec.Containers[1].Name).To(Equal(constants.TFContainerNameWorker))
-			Expect(hasVolumeMount(pod.Spec.Containers[0].VolumeMounts, constants.TransportShmVolumeName, constants.TransportShmPath)).To(BeTrue())
+			Expect(pod.Spec.InitContainers[0].Name).To(Equal(constants.TFSoftLimiterInitContainerName))
+
+			// No worker sidecar — only the original business container
+			Expect(pod.Spec.Containers).To(HaveLen(1))
+
+			// Business container has LD_PRELOAD pointing to C limiter
+			ldPreloadVal, found := envValue(pod.Spec.Containers[0].Env, constants.LdPreloadEnv)
+			Expect(found).To(BeTrue())
+			Expect(ldPreloadVal).To(Equal(constants.LdPreloadSoftLimiter))
+
+			// Business container has limiter volume and shared memory volume
+			Expect(hasVolumeMount(pod.Spec.Containers[0].VolumeMounts, constants.TFSoftLimiterVolumeName, constants.TFSoftLimiterVolumeMountPath)).To(BeTrue())
 			Expect(hasVolumeMount(
 				pod.Spec.Containers[0].VolumeMounts,
 				constants.DataVolumeName,
 				constants.TFDataPath+constants.SharedMemMountSubPath,
 			)).To(BeTrue())
-			Expect(hasVolumeMount(pod.Spec.Containers[1].VolumeMounts, constants.TransportShmVolumeName, constants.TransportShmPath)).To(BeTrue())
-			Expect(hasVolumeMount(
-				pod.Spec.Containers[0].VolumeMounts,
-				constants.TFLibsVolumeName,
-				constants.TFLibsVolumeMountPath,
-			)).To(BeTrue())
-			Expect(hasVolumeMountWithSubPath(
-				pod.Spec.Containers[0].VolumeMounts,
-				constants.TFLibsVolumeName,
-				constants.LdPreloadFile,
-				constants.LdPreloadFileName,
-			)).To(BeTrue())
+
+			// Standard env vars injected
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.HypervisorIPEnv)).To(BeTrue())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PodNameEnv)).To(BeTrue())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PodNamespaceEnv)).To(BeTrue())
 			value, found := envValue(pod.Spec.Containers[0].Env, constants.ContainerNameEnv)
 			Expect(found).To(BeTrue())
 			Expect(value).To(Equal("main"))
-			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeTrue())
-			cudaHooksValue, found := envValue(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)
-			Expect(found).To(BeTrue())
-			Expect(cudaHooksValue).To(Equal("false"))
+			// NVIDIA_VISIBLE_DEVICES is NOT set by webhook for soft mode —
+			// device plugin sets it to the allocated GPU UUID at Allocate time.
+			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeFalse())
 
 			volumeNames := make([]string, 0, len(pod.Spec.Volumes))
 			for _, volume := range pod.Spec.Volumes {
 				volumeNames = append(volumeNames, volume.Name)
 			}
 			Expect(volumeNames).To(ContainElement(constants.DataVolumeName))
-			Expect(volumeNames).To(ContainElement(constants.TransportShmVolumeName))
-			Expect(volumeNames).To(ContainElement(constants.TFLibsVolumeName))
+			Expect(volumeNames).To(ContainElement(constants.TFSoftLimiterVolumeName))
+			// No transport shm or tf-libs needed
+			Expect(volumeNames).NotTo(ContainElement(constants.TransportShmVolumeName))
 		})
 
 		It("should inject worker sidecar in local hard mode", func() {
@@ -216,7 +215,7 @@ var _ = Describe("Compose Utils", func() {
 			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
 				Profile: &tfv1.WorkloadProfileSpec{
 					IsLocalGPU: true,
-					Isolation:  tfv1.IsolationModeHard,
+					Isolation:  tfv1.IsolationModeType(tfv1.IsolationModeHard),
 					GPUVendor:  constants.AcceleratorVendorNvidia,
 				},
 			}, []int{0})
@@ -249,13 +248,19 @@ var _ = Describe("Compose Utils", func() {
 			value, found := envValue(pod.Spec.Containers[0].Env, constants.ContainerNameEnv)
 			Expect(found).To(BeTrue())
 			Expect(value).To(Equal("main"))
-			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeTrue())
+			// NVIDIA_VISIBLE_DEVICES must NOT be pre-set by the webhook for hard
+			// local sidecar pods. The TF device plugin's Allocate response is the
+			// single source of truth and will populate the specific GPU UUID; a
+			// pod-spec `=all` would override that at kubelet merge time and let
+			// the client container reach every GPU on the node, bypassing the
+			// sidecar limiter's per-card boundary.
+			Expect(hasNvidiaVisibleEnv(pod.Spec.Containers[0].Env)).To(BeFalse())
 			cudaHooksValue, found := envValue(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)
 			Expect(found).To(BeTrue())
 			Expect(cudaHooksValue).To(Equal("false"))
 		})
 
-		It("should keep local shared mode as embedded worker", func() {
+		It("should keep local shared mode as embedded worker without tf-data shm", func() {
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
 				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
@@ -270,11 +275,14 @@ var _ = Describe("Compose Utils", func() {
 
 			Expect(pod.Spec.InitContainers).To(BeEmpty())
 			Expect(pod.Spec.Containers).To(HaveLen(1))
+			// Shared mode has no limiter and no worker process, so the
+			// hypervisor shm has no consumer in the pod. Skip the mount to
+			// avoid leaking /run/tensor-fusion into pods that don't use it.
 			Expect(hasVolumeMount(
 				pod.Spec.Containers[0].VolumeMounts,
 				constants.DataVolumeName,
 				constants.TFDataPath+constants.SharedMemMountSubPath,
-			)).To(BeTrue())
+			)).To(BeFalse())
 			Expect(hasVolumeMount(
 				pod.Spec.Containers[0].VolumeMounts,
 				constants.TFLibsVolumeName,
@@ -303,8 +311,6 @@ var _ = Describe("Compose Utils", func() {
 			)).To(BeFalse())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PrependPathEnv)).To(BeFalse())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.PrependLibPathEnv)).To(BeFalse())
-			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.RealCUDALibPathEnv)).To(BeFalse())
-			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.RealNvmlLibPathEnv)).To(BeFalse())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)).To(BeFalse())
 			Expect(hasEnvName(pod.Spec.Containers[0].Env, constants.NvidiaVisibleAllDeviceEnv)).To(BeFalse())
 		})
@@ -396,7 +402,7 @@ var _ = Describe("Compose Utils", func() {
 			utils.AddTFDefaultClientConfBeforePatch(context.Background(), localHardPod, pool, utils.TensorFusionInfo{
 				Profile: &tfv1.WorkloadProfileSpec{
 					IsLocalGPU: true,
-					Isolation:  tfv1.IsolationModeHard,
+					Isolation:  tfv1.IsolationModeType(tfv1.IsolationModeHard),
 					GPUVendor:  constants.AcceleratorVendorNvidia,
 				},
 			}, []int{0})
@@ -484,10 +490,11 @@ var _ = Describe("Compose Utils", func() {
 
 	Describe("SetWorkerContainerSpec", func() {
 		DescribeTable("configures worker container correctly",
-			func(vendor, workerImage, disabledFeatures string, sharedMemMode bool, expectCommand []string, expectNvidiaVisibleEnv, expectLdPreload bool) {
+			func(vendor, workerImage, disabledFeatures string, sharedMemMode bool, isolation tfv1.IsolationModeType, expectCommand []string, expectNvidiaVisibleEnv, expectLdPreload bool) {
 				container := &corev1.Container{}
 				workloadProfile := &tfv1.WorkloadProfileSpec{
 					GPUVendor: vendor,
+					Isolation: isolation,
 				}
 				workerConfig := &tfv1.WorkerConfig{
 					Image: workerImage,
@@ -518,24 +525,46 @@ var _ = Describe("Compose Utils", func() {
 					Expect(container.Command[2]).To(ContainSubstring("exec ./tensor-fusion-worker"), "should exec worker")
 					Expect(container.Command[2]).To(ContainSubstring("-n shmem"), "should use shmem mode")
 					Expect(container.Command[2]).To(ContainSubstring("-m tf_shm"), "should specify shared memory name")
-					Expect(container.Command[2]).To(ContainSubstring("-M 256"), "should specify shared memory size")
+					Expect(container.Command[2]).To(ContainSubstring("-M 1024"), "should specify shared memory size")
 				}
 			},
-			Entry("basic worker config", "NVIDIA", "worker:latest", "", false, []string{
+			Entry("hard worker: no LD_PRELOAD, no NVIDIA_VISIBLE_DEVICES=all (device plugin allocates UUID)", "NVIDIA", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
 				"./tensor-fusion-worker",
 				"-p",
 				"8000",
-			}, true, true),
-			Entry("worker with shared memory mode", "NVIDIA", "worker:latest", "", true, []string{
+			}, false, false),
+			Entry("soft worker: LD_PRELOAD vgpu.rs limiter, no NVIDIA_VISIBLE_DEVICES=all", "NVIDIA", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModeSoft), []string{
+				"./tensor-fusion-worker",
+				"-p",
+				"8000",
+			}, false, true),
+			Entry("worker with shared memory mode (hard)", "NVIDIA", "worker:latest", "", true, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
 				"/bin/bash",
 				"-c",
-				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 256",
-			}, true, true),
-			Entry("worker with disabled start-worker feature", "NVIDIA", "worker:latest", "start-worker", false, []string{
+				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 1024",
+			}, false, false),
+			Entry("worker with disabled start-worker feature (hard)", "NVIDIA", "worker:latest", "start-worker", false, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
 				"sleep",
 				"infinity",
-			}, true, true),
-			Entry("worker without nvidia visible env for Ascend", "Ascend", "worker:latest", "", false, []string{
+			}, false, false),
+			Entry("worker without nvidia visible env for Ascend", "Ascend", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
+				"./tensor-fusion-worker",
+				"-p",
+				"8000",
+			}, false, false),
+			// Regression: SetWorkerContainerSpec used to inject =all for any
+			// non-soft non-hard isolation, which silently overrode the MIG-<uuid>
+			// the NVIDIA provider returned in PartitionResult.envVars (pod-spec
+			// env wins over device-plugin envs at kubelet merge time). That
+			// would expose the parent card and break MIG isolation. Hold the
+			// line: partitioned worker container must NOT have NVIDIA_VISIBLE_DEVICES
+			// pre-set; the device plugin Allocate response is the only writer.
+			Entry("partitioned worker: no NVIDIA_VISIBLE_DEVICES=all (device plugin keeps MIG-<uuid>)", "NVIDIA", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModePartitioned), []string{
+				"./tensor-fusion-worker",
+				"-p",
+				"8000",
+			}, false, false),
+			Entry("shared worker: no NVIDIA_VISIBLE_DEVICES=all (device plugin writes specific UUID)", "NVIDIA", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModeShared), []string{
 				"./tensor-fusion-worker",
 				"-p",
 				"8000",
@@ -603,20 +632,5 @@ var _ = Describe("Compose Utils", func() {
 			Expect(hasHostPathVolume(spec.Volumes, constants.AscendDCMIVolumeName, constants.AscendDCMIHostPath)).To(BeTrue())
 		})
 
-		It("should inject real NVIDIA library paths for NVIDIA workers", func() {
-			container := &corev1.Container{}
-			workloadProfile := &tfv1.WorkloadProfileSpec{
-				GPUVendor: constants.AcceleratorVendorNvidia,
-			}
-
-			utils.SetWorkerContainerSpec(container, workloadProfile, &tfv1.WorkerConfig{Image: "worker:latest"}, &tfv1.HypervisorConfig{}, "", false)
-
-			cudaPath, ok := envValue(container.Env, constants.RealCUDALibPathEnv)
-			Expect(ok).To(BeTrue())
-			Expect(cudaPath).To(Equal(constants.RealCUDALibPathValue))
-			nvmlPath, ok := envValue(container.Env, constants.RealNvmlLibPathEnv)
-			Expect(ok).To(BeTrue())
-			Expect(nvmlPath).To(Equal(constants.RealNvmlLibPathValue))
-		})
 	})
 })

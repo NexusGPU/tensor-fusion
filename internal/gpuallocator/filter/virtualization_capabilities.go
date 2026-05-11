@@ -8,14 +8,14 @@ import (
 )
 
 type gpuVirtualizationCapabilities struct {
-	SupportsPartitioning  bool   `json:"supportsPartitioning"`
-	SupportsSoftIsolation bool   `json:"supportsSoftIsolation"`
-	SupportsHardIsolation bool   `json:"supportsHardIsolation"`
-	SupportsSnapshot      bool   `json:"supportsSnapshot"`
-	SupportsMetrics       bool   `json:"supportsMetrics"`
-	SupportsRemoting      bool   `json:"supportsRemoting"`
-	MaxPartitions         uint32 `json:"maxPartitions"`
-	MaxWorkersPerDevice   uint32 `json:"maxWorkersPerDevice"`
+	SupportsPartitioning  bool   `json:"SupportsPartitioning"`
+	SupportsSoftIsolation bool   `json:"SupportsSoftIsolation"`
+	SupportsHardIsolation bool   `json:"SupportsHardIsolation"`
+	SupportsSnapshot      bool   `json:"SupportsSnapshot"`
+	SupportsMetrics       bool   `json:"SupportsMetrics"`
+	SupportsRemoting      bool   `json:"SupportsRemoting"`
+	MaxPartitions         uint32 `json:"MaxPartitions"`
+	MaxWorkersPerDevice   uint32 `json:"MaxWorkersPerDevice"`
 
 	metadataPresent bool `json:"-"`
 }

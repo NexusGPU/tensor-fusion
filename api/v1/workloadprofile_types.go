@@ -72,7 +72,13 @@ type WorkloadProfileSpec struct {
 	// GPUModel specifies the required GPU model (e.g., "A100", "H100")
 	GPUModel string `json:"gpuModel,omitempty"`
 
-	// The number of GPUs to be used by the workload, default to 1
+	// The number of GPUs to be used by the workload, default to 1.
+	// Must be between 1 and 128. Values outside this range are rejected by
+	// the webhook because (a) 0 / negative are operational no-ops the
+	// scheduler can not satisfy, and (b) anything past a sane upper bound is
+	// almost always operator error and would consume the entire pool.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=128
 	GPUCount uint32 `json:"gpuCount,omitempty"`
 
 	// Specify GPU indices for precise control of scheduling

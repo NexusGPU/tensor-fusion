@@ -29,6 +29,7 @@ const (
 const (
 	NvidiaVisibleAllDeviceEnv   = "NVIDIA_VISIBLE_DEVICES"
 	NvidiaVisibleAllDeviceValue = "all"
+	CudaVisibleDevicesEnv       = "CUDA_VISIBLE_DEVICES"
 
 	TensorFusionGPUInfoConfigName       = "tensor-fusion-sys-public-gpu-info"
 	TensorFusionGPUInfoConfigVolumeName = "gpu-info"
@@ -72,14 +73,10 @@ const (
 	ConnectionNameEnv       = "TENSOR_FUSION_CONNECTION_NAME"
 	ConnectionNamespaceEnv  = "TENSOR_FUSION_CONNECTION_NAMESPACE"
 	DisableVMSharedMemEnv   = "TF_USE_IVSHMEM"
-	ConnectionSharedMemSize = "256"
+	ConnectionSharedMemSize = "1024"
 	ConnectionSharedMemName = "tf_shm"
 
-	RealNvmlLibPathValue = "/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
-	RealCUDALibPathValue = "/lib/x86_64-linux-gnu/libcuda.so"
-	RealNvmlLibPathEnv   = "TF_NVML_LIB_PATH"
-	RealCUDALibPathEnv   = "TF_CUDA_LIB_PATH"
-	EnableCudaHooksEnv   = "ENABLE_CUDA_HOOKS"
+	EnableCudaHooksEnv = "ENABLE_CUDA_HOOKS"
 
 	PrependPathEnv    = "TF_PREPEND_PATH"
 	PrependLibPathEnv = "TF_LD_LIBRARY_PATH"
@@ -126,6 +123,18 @@ const (
 	LdPreloadEnv     = "LD_PRELOAD"
 	LdPreloadLimiter = "/home/app/libcuda_limiter.so"
 
+	// Soft isolation: C limiter injected directly into business container via middleware image
+	TFSoftLimiterInitContainerName = "init-soft-limiter"
+	TFSoftLimiterVolumeName        = "tf-soft-limiter"
+	TFSoftLimiterVolumeMountPath   = "/tensor-fusion-limiter"
+	TFSoftLimiterLibName           = "libcuda_limiter.so"
+	LdPreloadSoftLimiter           = TFSoftLimiterVolumeMountPath + "/" + TFSoftLimiterLibName
+
+	// Environment variables required by C cuda_hook
+	TFIsolationModeEnv  = "TF_ISOLATION_MODE"
+	TFShmPathEnv        = "TF_SHM_PATH"
+	TFShmPathValueInPod = "/run/tensor-fusion/shm/shm"
+
 	SharedMemMountSubPath = "/shm"
 
 	// disable GPU limiter, for emergency use
@@ -141,7 +150,7 @@ const (
 	// hard limiter (not open sourced) in megabytes, only take effect on worker container and
 	// when open source vgpu.rs gpu-limiter is disabled
 	// when use this mode, memory request can not autoscale dynamically
-	HardMemLimiterEnv = "TF_GPU_MEMORY_LIMIT"
+	HardMemLimiterEnv = "TF_CUDA_MEMORY_LIMIT"
 
 	TensorFusionRemoteWorkerPortNumber = 8000
 	TensorFusionRemoteWorkerPortName   = "remote-vgpu"
@@ -181,6 +190,7 @@ const (
 	TFAcceleratorLibPathEnv       = "TF_ACCELERATOR_LIB_PATH"
 	TFProviderHardwareMetadataEnv = "TF_PROVIDER_HARDWARE_METADATA"
 	TFProviderDeviceMountEnv      = "TF_PROVIDER_DEVICE_MOUNT"
+	TFProviderTemplateConfigEnv   = "TF_PROVIDER_TEMPLATE_CONFIG"
 )
 
 const (

@@ -68,7 +68,7 @@ func NewServer(
 	healthHandler := handlers.NewHealthHandler()
 	deviceHandler := handlers.NewDeviceHandler(deviceController)
 	workerHandler := handlers.NewWorkerHandler(workerController, allocationController)
-	legacyHandler := handlers.NewLegacyHandler(workerController, allocationController, backend)
+	legacyHandler := handlers.NewLegacyHandler(workerController, allocationController, backend, deviceController)
 
 	s := &Server{
 		deviceController:     deviceController,

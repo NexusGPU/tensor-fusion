@@ -4,7 +4,6 @@ import (
 	"context"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -25,8 +24,11 @@ func NewPhaseFilter(allowedPhases ...tfv1.TensorFusionGPUPhase) *PhaseFilter {
 func (f *PhaseFilter) Filter(ctx context.Context, workerPodKey tfv1.NameNamespace, gpus []*tfv1.GPU) ([]*tfv1.GPU, error) {
 	validPhase := 0
 	filteredGPUs := lo.Filter(gpus, func(gpu *tfv1.GPU, _ int) bool {
-		// when running progressive migration mode, only return GPUs used by tensor-fusion
-		if utils.IsProgressiveMigration() && gpu.Status.UsedBy != tfv1.UsedByTensorFusion {
+		// Exclude GPUs claimed by external device plugins (e.g. nvidia-device-plugin, HAMI).
+		// In progressive migration mode, only GPUs explicitly owned by tensor-fusion are eligible.
+		// In normal mode, GPUs with a non-empty UsedBy that isn't tensor-fusion are also excluded
+		// to prevent double-scheduling with external provisioners.
+		if gpu.Status.UsedBy != "" && gpu.Status.UsedBy != tfv1.UsedByTensorFusion {
 			return false
 		}
 
