@@ -138,6 +138,19 @@ build-hypervisor: ## Build hypervisor binary with CGO disabled using purego.
 	CGO_ENABLED=0 \
 	go build -o bin/hypervisor ./cmd/hypervisor
 
+# Target arch for docker image binaries (matches dockerfile/*.Dockerfile COPY paths).
+TARGETARCH ?= $(shell go env GOARCH)
+
+.PHONY: build-manager-linux
+build-manager-linux: vendor manifests generate fmt vet ## Cross-compile manager for linux/${TARGETARCH}.
+	GOOS=linux GOARCH=$(TARGETARCH) CGO_ENABLED=0 \
+	go build -o bin/manager-linux-$(TARGETARCH) cmd/main.go
+
+.PHONY: build-hypervisor-linux
+build-hypervisor-linux: ## Cross-compile hypervisor for linux/${TARGETARCH}.
+	GOOS=linux GOARCH=$(TARGETARCH) CGO_ENABLED=0 \
+	go build -o bin/hypervisor-linux-$(TARGETARCH) ./cmd/hypervisor
+
 .PHONY: build-hypervisor-tui
 build-hypervisor-tui: 
 	go build -o bin/hypervisor-tui ./cmd/hypervisor-tui
@@ -147,12 +160,24 @@ build-hypervisor-tui:
 clean-cache: ## Clean Go build cache.
 	go clean -cache -testcache
 
-# If you wish to build the manager image targeting other platforms you can use the --platform flag.
-# (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
-# More info: https://docs.docker.com/develop/develop-images/build_enhancements/
+# Hypervisor image override (separate from operator IMG).
+HYPERVISOR_IMG ?= tensorfusion/tensor-fusion-hypervisor:latest
+
+# Build operator image. The Dockerfile lives at dockerfile/operator.Dockerfile and
+# expects a pre-built bin/manager-linux-${TARGETARCH}, so we build the binary first.
 .PHONY: docker-build
-docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} -f dockerfile/operator.Dockerfile .
+docker-build: build-manager-linux ## Build operator docker image (override IMG=... TARGETARCH=...).
+	$(CONTAINER_TOOL) build -t ${IMG} \
+		-f dockerfile/operator.Dockerfile \
+		--build-arg TARGETARCH=$(TARGETARCH) \
+		.
+
+.PHONY: docker-build-hypervisor
+docker-build-hypervisor: build-hypervisor-linux ## Build hypervisor docker image (override HYPERVISOR_IMG=... TARGETARCH=...).
+	$(CONTAINER_TOOL) build -t ${HYPERVISOR_IMG} \
+		-f dockerfile/hypervisor.Dockerfile \
+		--build-arg TARGETARCH=$(TARGETARCH) \
+		.
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -164,10 +189,14 @@ docker-push: ## Push docker image with the manager.
 # - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 # - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
 # To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+PLATFORMS ?= linux/arm64,linux/amd64
 .PHONY: docker-buildx
-docker-buildx: ## Build and push docker image for the manager for cross-platform support
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
+docker-buildx: ## Build and push operator docker image for multiple architectures.
+	# Build binaries for each target arch before invoking buildx.
+	for arch in amd64 arm64; do \
+		$(MAKE) build-manager-linux TARGETARCH=$$arch ; \
+	done
+	# copy operator Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross.
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' dockerfile/operator.Dockerfile > Dockerfile.cross
 	# `buildx create` is allowed to fail (idempotent: builder may already exist).
 	# Everything else MUST fail the target — leading `-` here would silently
