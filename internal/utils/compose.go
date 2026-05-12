@@ -498,7 +498,9 @@ func AddTFDefaultClientConfBeforePatch(
 				},
 			})
 
-			pod.Spec.Containers = append(pod.Spec.Containers, v1.Container{
+			// Seed the sidecar from worker.podTemplate so user-defined env/resources
+			// (e.g. TF_LICENSE) reach the sidecar like they do for remote worker pods.
+			sidecar := v1.Container{
 				Name: constants.TFContainerNameWorker,
 				VolumeMounts: []v1.VolumeMount{
 					{
@@ -506,7 +508,23 @@ func AddTFDefaultClientConfBeforePatch(
 						MountPath: constants.TransportShmPath,
 					},
 				},
-			})
+			}
+			if wc := pool.Spec.ComponentConfig.Worker; wc != nil && wc.PodTemplate != nil {
+				var tmpl v1.PodTemplate
+				if err := json.Unmarshal(wc.PodTemplate.Raw, &tmpl); err == nil {
+					for _, c := range tmpl.Template.Spec.Containers {
+						if c.Name != "" && c.Name != constants.TFContainerNameWorker {
+							continue
+						}
+						sidecar.Env = append(sidecar.Env, c.Env...)
+						if c.Resources.Requests != nil || c.Resources.Limits != nil {
+							sidecar.Resources = c.Resources
+						}
+						break
+					}
+				}
+			}
+			pod.Spec.Containers = append(pod.Spec.Containers, sidecar)
 
 			workerContainerIndex := len(pod.Spec.Containers) - 1
 			SetWorkerContainerSpec(
