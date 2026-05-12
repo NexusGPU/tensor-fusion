@@ -150,7 +150,8 @@ const (
 	// hard limiter (not open sourced) in megabytes, only take effect on worker container and
 	// when open source vgpu.rs gpu-limiter is disabled
 	// when use this mode, memory request can not autoscale dynamically
-	HardMemLimiterEnv = "TF_CUDA_MEMORY_LIMIT"
+	// (legacy name kept for reference: "TF_CUDA_MEMORY_LIMIT")
+	HardMemLimiterEnv = "TF_GPU_MEMORY_LIMIT"
 
 	TensorFusionRemoteWorkerPortNumber = 8000
 	TensorFusionRemoteWorkerPortName   = "remote-vgpu"
