@@ -785,6 +785,166 @@ func TestCollectDefragCandidates_AllowsNodeCoveredByPDB(t *testing.T) {
 	assertNoEvent(t, r.Recorder, defragEventSkipMissingPDB)
 }
 
+func TestCollectDefragCandidates_SkipsNodeWithNativeGPUPod(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	oldWorker := newDefragWorkerPod("worker-old", testDefragNodeA, now.Add(-2*time.Hour))
+	nativePod := newNativeGPUPod("native-nvidia", testDefragNodeA, corev1.ResourceName("nvidia.com/gpu"), false)
+	objects := []ctrlclient.Object{pool, node, gpuNode, oldWorker, nativePod}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	r.KubeClient = clientgofake.NewSimpleClientset(newDefragWorkerPDB("pdb-worker", "ns1"))
+	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
+		t.Fatalf("init GPU store: %v", err)
+	}
+	r.Allocator.ReconcileAllocationStateForTesting()
+
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, &defragRunStats{})
+	if err != nil {
+		t.Fatalf("collect defrag candidates: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("native GPU pod on node should disqualify it, got %d candidates", len(candidates))
+	}
+}
+
+func TestCollectDefragCandidates_SkipsNodeWithAMDGPUPod(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	oldWorker := newDefragWorkerPod("worker-old", testDefragNodeA, now.Add(-2*time.Hour))
+	amdPod := newNativeGPUPod("native-amd", testDefragNodeA, corev1.ResourceName("amd.com/gpu"), false)
+	objects := []ctrlclient.Object{pool, node, gpuNode, oldWorker, amdPod}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	r.KubeClient = clientgofake.NewSimpleClientset(newDefragWorkerPDB("pdb-worker", "ns1"))
+	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
+		t.Fatalf("init GPU store: %v", err)
+	}
+	r.Allocator.ReconcileAllocationStateForTesting()
+
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, &defragRunStats{})
+	if err != nil {
+		t.Fatalf("collect defrag candidates: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("amd.com/gpu pod on node should disqualify it, got %d candidates", len(candidates))
+	}
+}
+
+func TestCollectDefragCandidates_AllowsNodeWithNonGPUSidecarPod(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	oldWorker := newDefragWorkerPod("worker-old", testDefragNodeA, now.Add(-2*time.Hour))
+	// Sidecar requests no GPU at all; the new filter must not catch it.
+	sidecar := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns1",
+			Name:      "sidecar-no-gpu",
+			UID:       types.UID("sidecar-no-gpu-uid"),
+		},
+		Spec: corev1.PodSpec{
+			NodeName: testDefragNodeA,
+			Containers: []corev1.Container{{
+				Name:  "main",
+				Image: "sidecar:test",
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("100m"),
+						corev1.ResourceMemory: resource.MustParse("128Mi"),
+					},
+				},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	objects := []ctrlclient.Object{pool, node, gpuNode, oldWorker, sidecar}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	r.KubeClient = clientgofake.NewSimpleClientset(newDefragWorkerPDB("pdb-worker", "ns1"))
+	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
+		t.Fatalf("init GPU store: %v", err)
+	}
+	r.Allocator.ReconcileAllocationStateForTesting()
+
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, &defragRunStats{})
+	if err != nil {
+		t.Fatalf("collect defrag candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].nodeName != testDefragNodeA {
+		t.Fatalf("non-GPU sidecar must not disqualify the node, got %+v", candidates)
+	}
+}
+
+func TestCollectDefragCandidates_AllowsNodeWhenOnlyTFWorkerOwnsGPURequest(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	// A TF worker that *also* declared native GPU resources must not
+	// trigger the native-GPU skip; the filter only targets non-TF pods.
+	worker := newDefragWorkerPod("worker-with-native-decl", testDefragNodeA, now.Add(-2*time.Hour))
+	worker.Spec.Containers[0].Resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+		},
+	}
+	objects := []ctrlclient.Object{pool, node, gpuNode, worker}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	r.KubeClient = clientgofake.NewSimpleClientset(newDefragWorkerPDB("pdb-worker", "ns1"))
+	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
+		t.Fatalf("init GPU store: %v", err)
+	}
+	r.Allocator.ReconcileAllocationStateForTesting()
+
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, &defragRunStats{})
+	if err != nil {
+		t.Fatalf("collect defrag candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].nodeName != testDefragNodeA {
+		t.Fatalf("TF worker with native GPU decl must not be treated as native pod, got %+v", candidates)
+	}
+}
+
+func TestCollectDefragCandidates_AllowsNodeWhenNativeGPUPodIsTerminating(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}}
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	oldWorker := newDefragWorkerPod("worker-old", testDefragNodeA, now.Add(-2*time.Hour))
+	terminating := newNativeGPUPod("native-terminating", testDefragNodeA, corev1.ResourceName("nvidia.com/gpu"), false)
+	deletionTime := metav1.NewTime(now.Add(-1 * time.Minute))
+	terminating.DeletionTimestamp = &deletionTime
+	terminating.Finalizers = []string{"defrag-test/keep"}
+	objects := []ctrlclient.Object{pool, node, gpuNode, oldWorker, terminating}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	r.KubeClient = clientgofake.NewSimpleClientset(newDefragWorkerPDB("pdb-worker", "ns1"))
+	if err := r.Allocator.InitGPUAndQuotaStore(); err != nil {
+		t.Fatalf("init GPU store: %v", err)
+	}
+	r.Allocator.ReconcileAllocationStateForTesting()
+
+	candidates, err := r.collectDefragCandidates(context.Background(), pool, &defragRunStats{})
+	if err != nil {
+		t.Fatalf("collect defrag candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].nodeName != testDefragNodeA {
+		t.Fatalf("terminating native GPU pod must not block defrag, got %+v", candidates)
+	}
+}
+
 func TestCloneAsUnscheduledWorker_ClearsAssignedGPUState(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1787,6 +1947,10 @@ func newDefragControllerTestReconciler(
 	kubeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&tfv1.GPUPool{}).
+		WithIndex(&corev1.Pod{}, constants.NodeNameFieldRef, func(obj ctrlclient.Object) []string {
+			pod := obj.(*corev1.Pod)
+			return []string{pod.Spec.NodeName}
+		}).
 		WithObjects(objects...).
 		Build()
 
@@ -1859,6 +2023,35 @@ func newDefragWorkerPod(name, nodeName string, createdAt time.Time) *corev1.Pod 
 			Containers: []corev1.Container{{
 				Name:  "main",
 				Image: "worker:test",
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// newNativeGPUPod fabricates a non-TF pod that holds the given native GPU
+// resource. The request is always set (matching real cluster admission
+// behaviour where limits propagate to requests); alsoLimits=true mirrors
+// the typical pod that pins both sides.
+func newNativeGPUPod(name, nodeName string, resourceName corev1.ResourceName, alsoLimits bool) *corev1.Pod {
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{resourceName: resource.MustParse("1")},
+	}
+	if alsoLimits {
+		resources.Limits = corev1.ResourceList{resourceName: resource.MustParse("1")}
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns1",
+			Name:      name,
+			UID:       types.UID(name + "-uid"),
+		},
+		Spec: corev1.PodSpec{
+			NodeName: nodeName,
+			Containers: []corev1.Container{{
+				Name:      "main",
+				Image:     "native-gpu:test",
+				Resources: resources,
 			}},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},

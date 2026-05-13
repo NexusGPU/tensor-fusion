@@ -531,6 +531,20 @@ func (r *GPUPoolCompactionReconciler) collectDefragCandidates(ctx context.Contex
 			continue
 		}
 
+		// Native (non-TF) GPU pods will keep this node occupied even after we
+		// drain all TF workers, so Strategy #1 cannot reclaim it. Skip it
+		// before doing the heavier worker / PDB scans.
+		if hasNative, nativePod, nativeErr := r.nodeHasNativeGPUPod(ctx, k8sNodeName); nativeErr != nil {
+			log.FromContext(ctx).V(4).Info("skip defrag candidate: list pods on node failed",
+				"node", k8sNodeName, "pool", pool.Name, "err", nativeErr.Error())
+			continue
+		} else if hasNative {
+			log.FromContext(ctx).V(4).Info("skip defrag candidate: node hosts native GPU pod",
+				"node", k8sNodeName,
+				"pod", nativePod.Namespace+"/"+nativePod.Name)
+			continue
+		}
+
 		pods, err := r.listNodeWorkerPods(ctx, k8sNodeName, nodeWorkerStore[k8sNodeName])
 		if err != nil {
 			log.FromContext(ctx).V(4).Info("skip defrag candidate: list worker pods failed",
@@ -1284,6 +1298,33 @@ func (r *GPUPoolCompactionReconciler) currentNodeWorkerPods(ctx context.Context,
 		return nil, errors.New("allocator is nil")
 	}
 	return r.listNodeWorkerPods(ctx, nodeName, r.Allocator.GetNodeWorkerStoreSnapshot()[nodeName])
+}
+
+// nodeHasNativeGPUPod reports whether any non-TF-worker pod on the node
+// requests native GPU resources (nvidia.com/gpu / amd.com/gpu). Such nodes
+// cannot be drained empty by defrag, so Strategy #1 will never reclaim
+// them; relocating their TF workers would only churn the workload.
+func (r *GPUPoolCompactionReconciler) nodeHasNativeGPUPod(ctx context.Context, nodeName string) (bool, *corev1.Pod, error) {
+	if nodeName == "" {
+		return false, nil, nil
+	}
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList, client.MatchingFields{constants.NodeNameFieldRef: nodeName}); err != nil {
+		return false, nil, fmt.Errorf("list pods on node %s: %w", nodeName, err)
+	}
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if !pod.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if utils.IsTensorFusionWorker(pod) {
+			continue
+		}
+		if utils.HasGPUResourceRequest(pod) {
+			return true, pod, nil
+		}
+	}
+	return false, nil, nil
 }
 
 func findFreshDefragWorker(
