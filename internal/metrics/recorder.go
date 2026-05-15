@@ -40,6 +40,7 @@ var gpuResourceMetricsLock sync.RWMutex
 var gpuResourceMetricsMap = make(map[string]*GPUResourceMetrics, 100)
 
 var settingLock sync.RWMutex
+var tensorFusionSystemMetricsLock sync.RWMutex
 
 var log = ctrl.Log.WithName("metrics-recorder")
 
@@ -311,7 +312,10 @@ func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []strin
 }
 
 func InitPoolMetricsWhenNotExists(poolObj *tfv1.GPUPool) {
-	if _, ok := poolMetricsMap[poolObj.Name]; !ok {
+	poolMetricsLock.RLock()
+	_, ok := poolMetricsMap[poolObj.Name]
+	poolMetricsLock.RUnlock()
+	if !ok {
 		SetPoolMetrics(poolObj)
 	}
 }
@@ -474,6 +478,8 @@ func SetGPUAllocationMetrics(gpuStore map[types.NamespacedName]*tfv1.GPU, pod *c
 }
 
 func SetSchedulerMetrics(poolName string, isSuccess bool) {
+	tensorFusionSystemMetricsLock.Lock()
+	defer tensorFusionSystemMetricsLock.Unlock()
 	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
 		TensorFusionSystemMetricsMap[poolName] = &TensorFusionSystemMetrics{
 			PoolName: poolName,
@@ -488,6 +494,8 @@ func SetSchedulerMetrics(poolName string, isSuccess bool) {
 
 // SetTopologyMetrics records GPU topology scheduling metrics.
 func SetTopologyMetrics(poolName string, satisfied bool, isFallback bool, isDegraded bool) {
+	tensorFusionSystemMetricsLock.Lock()
+	defer tensorFusionSystemMetricsLock.Unlock()
 	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
 		TensorFusionSystemMetricsMap[poolName] = &TensorFusionSystemMetrics{
 			PoolName: poolName,
@@ -509,6 +517,8 @@ func SetTopologyMetrics(poolName string, satisfied bool, isFallback bool, isDegr
 
 // TODO should record metrics after autoscaling feature added
 func SetAutoscalingMetrics(poolName string, isScaleUp bool) {
+	tensorFusionSystemMetricsLock.Lock()
+	defer tensorFusionSystemMetricsLock.Unlock()
 	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
 		TensorFusionSystemMetricsMap[poolName] = &TensorFusionSystemMetrics{
 			PoolName: poolName,
@@ -522,6 +532,8 @@ func SetAutoscalingMetrics(poolName string, isScaleUp bool) {
 }
 
 func getSchedulerMetricsByPool(poolName string) (int64, int64, int64, int64) {
+	tensorFusionSystemMetricsLock.RLock()
+	defer tensorFusionSystemMetricsLock.RUnlock()
 	if item, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
 		return 0, 0, 0, 0
 	} else {
@@ -570,7 +582,16 @@ func (mr *MetricsRecorder) Start() {
 }
 
 func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
-	if len(workerMetricsMap) <= 0 && len(nodeMetricsMap) <= 0 && len(gpuResourceMetricsMap) <= 0 {
+	workerMetricsLock.RLock()
+	workerMetricsCount := len(workerMetricsMap)
+	workerMetricsLock.RUnlock()
+	nodeMetricsLock.RLock()
+	nodeMetricsCount := len(nodeMetricsMap)
+	nodeMetricsLock.RUnlock()
+	gpuResourceMetricsLock.RLock()
+	gpuResourceMetricsCount := len(gpuResourceMetricsMap)
+	gpuResourceMetricsLock.RUnlock()
+	if workerMetricsCount <= 0 && nodeMetricsCount <= 0 && gpuResourceMetricsCount <= 0 {
 		return
 	}
 
@@ -635,7 +656,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 	}
 	workerMetricsLock.Unlock()
 
-	nodeMetricsLock.RLock()
+	nodeMetricsLock.Lock()
 
 	for _, metrics := range nodeMetricsMap {
 		metrics.RawCost = mr.getNodeRawCost(metrics, now.Sub(metrics.LastRecordTime), mr.HourlyUnitPriceMap)
@@ -676,16 +697,20 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("total_allocation_success_cnt", successCount)
 		enc.AddField("total_scale_up_cnt", scaleUpCount)
 		enc.AddField("total_scale_down_cnt", scaleDownCount)
+		tensorFusionSystemMetricsLock.RLock()
 		if item, ok := TensorFusionSystemMetricsMap[poolName]; ok {
 			enc.AddField("total_topo_satisfied_cnt", item.TotalTopoSatisfiedCount)
 			enc.AddField("total_topo_unsatisfied_cnt", item.TotalTopoUnsatisfiedCount)
 			enc.AddField("total_topo_fallback_cnt", item.TotalTopoFallbackCount)
 			enc.AddField("total_topo_search_degraded_cnt", item.TotalTopoSearchDegradedCount)
 		}
+		tensorFusionSystemMetricsLock.RUnlock()
 		enc.EndLine(now)
 	}
+	nodeMetricsLock.Unlock()
 
 	// Additional Pool level metrics
+	poolMetricsLock.RLock()
 	for _, metrics := range poolMetricsMap {
 		enc.StartLine("tf_pool_metrics")
 		enc.AddTag("pool", metrics.PoolName)
@@ -703,6 +728,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("gpu_count", int64(metrics.GPUCount))
 		enc.EndLine(now)
 	}
+	poolMetricsLock.RUnlock()
 
 	// GPU allocation metrics
 	gpuAllocationMetricsLock.RLock()
@@ -746,16 +772,14 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 	}
 	gpuResourceMetricsLock.RUnlock()
 
-	nodeMetricsLock.RUnlock()
-
 	if err := enc.Err(); err != nil {
-		log.Error(err, "metrics encoding error", "workerCount", activeWorkerCnt, "nodeCount", len(nodeMetricsMap))
+		log.Error(err, "metrics encoding error", "workerCount", activeWorkerCnt, "nodeCount", nodeMetricsCount)
 	}
 
 	if _, err := writer.Write(enc.Bytes()); err != nil {
-		log.Error(err, "metrics writing error", "workerCount", activeWorkerCnt, "nodeCount", len(nodeMetricsMap))
+		log.Error(err, "metrics writing error", "workerCount", activeWorkerCnt, "nodeCount", nodeMetricsCount)
 	}
-	log.Info("metrics and raw billing recorded:", "workerCount", activeWorkerCnt, "nodeCount", len(nodeMetricsMap))
+	log.Info("metrics and raw billing recorded:", "workerCount", activeWorkerCnt, "nodeCount", nodeMetricsCount)
 }
 
 // Update metrics recorder's raw billing map
