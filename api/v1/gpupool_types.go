@@ -218,6 +218,57 @@ type Taint struct {
 type NodeCompaction struct {
 	// +kubebuilder:default="5m"
 	Period string `json:"period,omitempty"`
+
+	// Defrag controls the node-level defragmentation strategy (Strategy #2):
+	// cron-triggered migration of TF workers off low-utilization nodes so that
+	// whole nodes can be reclaimed by Strategy #1.
+	// +optional
+	Defrag *NodeDefragConfig `json:"defrag,omitempty"`
+}
+
+type NodeDefragConfig struct {
+	// Enabled toggles the defrag strategy on/off. Disabled by default to keep
+	// legacy pools untouched until the operator explicitly opts in.
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Schedule is a standard 5-field cron expression ("min hour dom month dow").
+	// Example: "0 3 * * *" triggers once per day at 03:00 local time of the controller.
+	// +kubebuilder:default="0 3 * * *"
+	Schedule string `json:"schedule,omitempty"`
+
+	// MaxDuration caps the wall-clock time of a single defrag run. Parsed with
+	// time.ParseDuration. If the run exceeds this window, it stops emitting new
+	// evictions and lets any in-flight draining nodes fall back to stale cleanup.
+	// +kubebuilder:default="2h"
+	MaxDuration string `json:"maxDuration,omitempty"`
+
+	// UtilizationThresholdPercent decides which nodes are defrag candidates.
+	// A node enters the candidate set when
+	// (#GPUs occupied by >=1 TF worker) / (#total pool GPUs on node) * 100 <= Threshold.
+	// Purely empty nodes (usedGPUs==0) are NOT candidates; they are left to
+	// Strategy #1 since defrag has nothing to move off them.
+	// +kubebuilder:default=40
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	UtilizationThresholdPercent int32 `json:"utilizationThresholdPercent,omitempty"`
+
+	// EvictedPodMarkerTTL caps how long a defrag-evicted pod marker is honored
+	// before it's treated as stale and cleaned. Independent from MaxDuration so
+	// that a long campaign window doesn't keep a stuck eviction marker alive.
+	// Parsed with time.ParseDuration. Use "never" (case-insensitive) to disable
+	// expiry, meaning the marker is kept until cleared by the normal eviction
+	// lifecycle. If empty or invalid, falls back to "never".
+	// +kubebuilder:default="never"
+	EvictedPodMarkerTTL string `json:"evictedPodMarkerTTL,omitempty"`
+
+	// SourceNodeMarkerTTL caps how long a defrag source-node marker survives
+	// when the node still has TF workers stuck on it. Same independence
+	// rationale as EvictedPodMarkerTTL. Parsed with time.ParseDuration.
+	// Use "never" (case-insensitive) to disable expiry. If empty or invalid,
+	// falls back to "30m".
+	// +kubebuilder:default="30m"
+	SourceNodeMarkerTTL string `json:"sourceNodeMarkerTTL,omitempty"`
 }
 type NodeRollingUpdatePolicy struct {
 	// If set to false, updates will be pending in status, and user needs to manually approve updates.
@@ -421,6 +472,12 @@ type GPUPoolStatus struct {
 
 	// +optional
 	LastCompactionTime *metav1.Time `json:"lastCompactionTime,omitempty"`
+
+	// LastDefragTime records the start time of the most recent defrag run and
+	// persists across controller restarts so cron evaluation can anchor on it
+	// (see NodeDefragConfig.Schedule). A nil value means "never ran".
+	// +optional
+	LastDefragTime *metav1.Time `json:"lastDefragTime,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Running;Updating;Destroying;Unknown

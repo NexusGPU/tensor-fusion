@@ -10,18 +10,23 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
+	"github.com/robfig/cron/v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/kubernetes/pkg/scheduler"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+// +kubebuilder:rbac:groups=core,resources=pods/eviction,verbs=create
 
 // GPUPoolReconciler reconciles a GPUPool object
 type GPUPoolCompactionReconciler struct {
@@ -30,6 +35,25 @@ type GPUPoolCompactionReconciler struct {
 	Recorder events.EventRecorder
 
 	Allocator *gpuallocator.GpuAllocator
+
+	// Scheduler is used by defrag to run FindNodesThatFitPod.
+	// Nil means defrag is disabled.
+	Scheduler *scheduler.Scheduler
+
+	// KubeClient is used for the Eviction API. Nil means defrag is disabled.
+	KubeClient kubernetes.Interface
+
+	// Shared 5-field cron parser for defrag schedules.
+	defragParser cron.Parser
+
+	// key = pool name, value = *atomic.Bool.
+	defragRunning sync.Map
+
+	// defragStepFn is the strategy-2 entry point used by Reconcile.
+	// Production leaves it nil so runDefragStep dispatches to the real
+	// maybeRunDefragStep. Tests substitute it to exercise Reconcile's
+	// gating without standing up a scheduler.
+	defragStepFn func(ctx context.Context, pool *tfv1.GPUPool, normalRequeue time.Duration) time.Duration
 
 	markDeletionNodes map[string]struct{}
 }
@@ -328,12 +352,14 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	pool := &tfv1.GPUPool{}
 	if err := r.Get(ctx, req.NamespacedName, pool); err != nil {
 		if errors.IsNotFound(err) {
+			r.cleanupPerPoolState(req)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
 	if !pool.DeletionTimestamp.IsZero() {
+		r.cleanupPerPoolState(req)
 		log.Info("GPUPool is being deleted, skip compaction", "name", req.Name)
 		return ctrl.Result{}, nil
 	}
@@ -370,6 +396,15 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	hasPendingDeletion := len(PendingDeletionGPUNodes[pool.Name]) > 0
 	pendingGPUNodeStateLock.RUnlock()
 	if !needStartCompactionJob || hasPendingClaim {
+		// Even when the compaction interval gate is hit, defrag still
+		// needs to make progress (drain a source node, sweep stale
+		// markers). Skip only when new nodes are being added because
+		// draining during capacity expansion is wasted churn.
+		if !hasPendingClaim {
+			if defragRequeue := r.dispatchDefragStep(ctx, pool, nextDuration); defragRequeue > 0 && defragRequeue < nextDuration {
+				return ctrl.Result{RequeueAfter: defragRequeue}, nil
+			}
+		}
 		log.Info("Skip compaction because node creating or duration not met", "name", req.Name)
 		return ctrl.Result{RequeueAfter: nextDuration}, nil
 	}
@@ -389,13 +424,38 @@ func (r *GPUPoolCompactionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, compactionErr
 	}
 
+	// Strategy #2: cron-driven defrag. Runs at most one source node per tick;
+	// returns a shorter requeue when in flight so progress isn't pinned to
+	// the compaction interval.
+	if defragRequeue := r.dispatchDefragStep(ctx, pool, nextDuration); defragRequeue > 0 && defragRequeue < nextDuration {
+		return ctrl.Result{RequeueAfter: defragRequeue}, nil
+	}
+
 	// Next ticker, timer set by user, won't impacted by other reconcile requests
 	return ctrl.Result{RequeueAfter: nextDuration}, nil
+}
+
+// cleanupPerPoolState drops every per-pool entry across the compaction +
+// defrag maps so a deleted GPUPool does not slowly accumulate in memory.
+func (r *GPUPoolCompactionReconciler) cleanupPerPoolState(req ctrl.Request) {
+	jobStarted.Delete(req.String())
+	defragLastRunStats.Delete(req.Name)
+	r.defragRunning.Delete(req.Name)
+}
+
+// dispatchDefragStep dispatches to the test-injected defragStepFn when
+// present, otherwise to the production maybeRunDefragStep.
+func (r *GPUPoolCompactionReconciler) dispatchDefragStep(ctx context.Context, pool *tfv1.GPUPool, normalRequeue time.Duration) time.Duration {
+	if r.defragStepFn != nil {
+		return r.defragStepFn(ctx, pool, normalRequeue)
+	}
+	return r.maybeRunDefragStep(ctx, pool, normalRequeue)
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *GPUPoolCompactionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.markDeletionNodes = make(map[string]struct{})
+	r.defragParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gpupool-compaction").
 		WatchesMetadata(&tfv1.GPUPool{}, &handler.EnqueueRequestForObject{}).

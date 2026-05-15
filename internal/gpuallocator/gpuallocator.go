@@ -509,6 +509,56 @@ func (s *GpuAllocator) effectiveNodeWorkerCountsLocked() map[string]int {
 	return counts
 }
 
+// GetNodeWorkerStoreSnapshot returns a copied node-to-worker map. Used by
+// defrag to iterate the workers on a candidate node without holding the
+// allocator lock.
+func (s *GpuAllocator) GetNodeWorkerStoreSnapshot() map[string]map[types.NamespacedName]struct{} {
+	s.storeMutex.RLock()
+	defer s.storeMutex.RUnlock()
+	result := make(map[string]map[types.NamespacedName]struct{}, len(s.nodeWorkerStore))
+	for nodeName, workerMap := range s.nodeWorkerStore {
+		innerCopy := make(map[types.NamespacedName]struct{}, len(workerMap))
+		for k, v := range workerMap {
+			innerCopy[k] = v
+		}
+		result[nodeName] = innerCopy
+	}
+	return result
+}
+
+// WaitUntilReady blocks until the allocator has finished its initial load
+// or ctx is cancelled. Returns true if initialization completed.
+func (s *GpuAllocator) WaitUntilReady(ctx context.Context) bool {
+	if s == nil || s.initializedCh == nil {
+		return false
+	}
+	select {
+	case <-s.initializedCh:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// IsReady reports whether the allocator has finished its initial load.
+func (s *GpuAllocator) IsReady() bool {
+	if s == nil || s.initializedCh == nil {
+		return false
+	}
+	select {
+	case <-s.initializedCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// MaxWorkerPerNode exposes the cap used by CheckQuotaAndFilter so defrag
+// can size its joint placement simulation slot count.
+func (s *GpuAllocator) MaxWorkerPerNode() int {
+	return s.maxWorkerPerNode
+}
+
 // AllocRequest encapsulates all parameters needed for GPU allocation
 func (s *GpuAllocator) SetMaxWorkerPerNode(maxWorkerPerNode int) {
 	s.maxWorkerPerNode = maxWorkerPerNode
