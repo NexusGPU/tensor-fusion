@@ -83,7 +83,9 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	pod := &corev1.Pod{}
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
 		if errors.IsNotFound(err) {
-			_ = r.Expander.RemovePreSchedulePod(req.Name, true)
+			if r.Expander != nil {
+				_ = r.Expander.RemovePreSchedulePod(req.Name, true)
+			}
 			r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
 			metrics.RemoveWorkerMetrics(req.Name, time.Now())
 			metrics.RemoveGPUAllocationMetrics(req.Name)
@@ -104,7 +106,9 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	// Release GPU resources when pod is in Failed or Succeeded (Complete) state
 	// Only for worker pods that have allocated GPU resources
 	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker && utils.IsPodStopped(pod) {
-		_ = r.Expander.RemovePreSchedulePod(pod.Name, true)
+		if r.Expander != nil {
+			_ = r.Expander.RemovePreSchedulePod(pod.Name, true)
+		}
 		r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
 		metrics.RemoveWorkerMetrics(pod.Name, time.Now())
 		metrics.RemoveGPUAllocationMetrics(pod.Name)
@@ -193,14 +197,24 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 }
 
 func (r *PodReconciler) handleWorkerPodFinalizer(ctx context.Context, pod *corev1.Pod) (bool, error) {
-	// Handle our GPU resource cleanup finalizer
+	// Handle our GPU resource cleanup finalizer. The counter on the owner
+	// annotation IS admission-side state — webhook reads it to decide whether
+	// to admit more pods — so we cannot leave it drifted by skipping Decrease
+	// failures and forging ahead with finalizer removal. Decrease retries
+	// transient conflicts internally; anything that still surfaces here is
+	// persistent (RBAC, owner schema mismatch, ...) and must block finalizer
+	// removal so the pod requeues and a human can observe the failure.
 	shouldReturn, err := utils.HandleFinalizer(ctx, pod, r.Client, func(ctx context.Context, obj *corev1.Pod) (bool, error) {
 		// if the Pod keep terminating, should update deletion timestamp for raw cost calculation
 		metrics.RemoveWorkerMetrics(pod.Name, time.Now())
 		metrics.RemoveGPUAllocationMetrics(pod.Name)
 		counter := &v1.TensorFusionPodCounter{Client: r.Client}
 		if err := counter.Decrease(ctx, pod); err != nil {
-			return false, err
+			// Returning (false, err) keeps the finalizer in place and lets
+			// HandleFinalizer + controller-runtime requeue with backoff so
+			// the counter eventually decrements. Releasing the finalizer
+			// here would leak the count on every persistent failure path.
+			return false, fmt.Errorf("decrease pod counter (will retry): %w", err)
 		}
 		return true, nil
 	})

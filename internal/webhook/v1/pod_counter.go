@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -99,7 +100,14 @@ func (c *TensorFusionPodCounter) Increase(ctx context.Context, pod *corev1.Pod) 
 	return nil
 }
 
-// Decrease decreases the counter in owner annotation by key
+// Decrease decreases the counter in owner annotation by key. Wraps the
+// Get+modify+Update in retry.RetryOnConflict so a transient ResourceVersion
+// race with the workload controller (or another finalizer hook on the same
+// owner) does not surface as a failure to the caller. Genuine errors
+// (RBAC, network, persistent conflict after retries) propagate so the pod
+// reconciler can requeue and the count stays consistent with admission-side
+// bookkeeping — silently swallowing them would leak the owner annotation
+// past the pod's lifetime and skew future admission decisions.
 func (c *TensorFusionPodCounter) Decrease(ctx context.Context, pod *corev1.Pod) error {
 	log := log.FromContext(ctx)
 	ownerRef := getControllerOwnerRef(pod)
@@ -108,42 +116,45 @@ func (c *TensorFusionPodCounter) Decrease(ctx context.Context, pod *corev1.Pod) 
 		return nil
 	}
 	key := getOrGenerateKey(pod)
-	ownerObj := &unstructured.Unstructured{}
-	ownerObj.SetAPIVersion(ownerRef.APIVersion)
-	ownerObj.SetKind(ownerRef.Kind)
 	objKey := client.ObjectKey{Name: ownerRef.Name, Namespace: pod.Namespace}
-	if err := c.Client.Get(ctx, objKey, ownerObj); err != nil {
-		// when owner accidentally deleted, just ignore
-		if errors.IsNotFound(err) {
+
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		ownerObj := &unstructured.Unstructured{}
+		ownerObj.SetAPIVersion(ownerRef.APIVersion)
+		ownerObj.SetKind(ownerRef.Kind)
+		if err := c.Client.Get(ctx, objKey, ownerObj); err != nil {
+			// owner already gone — there is no counter to decrement.
+			if errors.IsNotFound(err) {
+				return nil
+			}
+			return fmt.Errorf("failed to get owner object: %w", err)
+		}
+		annotations := ownerObj.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		val := annotations[key]
+		if val == "" {
+			val = "0"
+		}
+		count, err := strconv.ParseInt(val, 10, 32)
+		if err != nil {
+			// Corrupt annotation — give up silently rather than spin on retries.
+			log.Error(err, "invalid count annotation", "namespace", pod.Namespace, "name", pod.Name)
 			return nil
 		}
-		log.Error(err, "failed to get owner object", "namespace", pod.Namespace, "name", pod.Name)
+		count--
+		if count <= 0 {
+			delete(annotations, key)
+		} else {
+			annotations[key] = fmt.Sprintf("%d", count)
+		}
+		ownerObj.SetAnnotations(annotations)
+		if err := c.Client.Update(ctx, ownerObj); err != nil {
+			return fmt.Errorf("failed to update owner annotation: %w", err)
+		}
 		return nil
-	}
-	annotations := ownerObj.GetAnnotations()
-	if annotations == nil {
-		annotations = map[string]string{}
-	}
-	val := annotations[key]
-	if val == "" {
-		val = "0"
-	}
-	count, err := strconv.ParseInt(val, 10, 32)
-	if err != nil {
-		log.Error(err, "invalid count annotation", "namespace", pod.Namespace, "name", pod.Name)
-		return nil
-	}
-	count--
-	if count <= 0 {
-		delete(annotations, key)
-	} else {
-		annotations[key] = fmt.Sprintf("%d", count)
-	}
-	ownerObj.SetAnnotations(annotations)
-	if err := c.Client.Update(ctx, ownerObj); err != nil {
-		return fmt.Errorf("failed to update owner annotation, try later: %w", err)
-	}
-	return nil
+	})
 }
 
 // getControllerOwnerRef returns the controller owner reference of a pod
