@@ -57,22 +57,34 @@ func (h *handler) SetEventRecorder(recorder events.EventRecorder, scheme *runtim
 }
 
 func (h *handler) UpdateWorkloadState(ctx context.Context, workloadState *State, workload *tfv1.TensorFusionWorkload) error {
+	workerList := &corev1.PodList{}
+	if err := h.List(ctx, workerList,
+		client.InNamespace(workload.Namespace),
+		client.MatchingLabels{constants.WorkloadKey: workload.Name}); err != nil {
+		return err
+	}
+
+	workloadState.Mu.Lock()
+	defer workloadState.Mu.Unlock()
 	workloadState.Namespace = workload.Namespace
 	workloadState.Name = workload.Name
+	workloadState.uid = string(workload.UID)
 	workloadState.Spec = workload.Spec
-	workloadState.Status = *workload.Status.DeepCopy()
+	// Status is autoscaler-owned in memory after seeding. Overwriting it on
+	// every load would race with recommender writes that have not yet been
+	// persisted by UpdateWorkloadStatus, dropping ActiveCronScalingRule /
+	// Recommendation / AppliedRecommendedReplicas / conditions silently.
+	// Seed once (operator startup / first observation), then leave it alone.
+	if !workloadState.statusSeeded {
+		workloadState.Status = *workload.Status.DeepCopy()
+		workloadState.statusSeeded = true
+	}
 	workloadState.CreationTimestamp = workload.CreationTimestamp
 
 	if workload.Spec.AutoScalingConfig.AutoSetResources != nil {
 		workloadState.updateHistoryPeriod(workload.Spec.AutoScalingConfig.AutoSetResources.HistoryDataPeriod)
 	}
 
-	workerList := &corev1.PodList{}
-	if err := h.List(ctx, workerList,
-		client.InNamespace(workloadState.Namespace),
-		client.MatchingLabels{constants.WorkloadKey: workloadState.Name}); err != nil {
-		return err
-	}
 	workloadState.updateCurrentActiveWorkers(workerList)
 	return nil
 }
@@ -81,12 +93,14 @@ func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, workload *S
 	// If the latest recommendation has not been applied to all workers,
 	// we need to retry the update
 	if recommendation == nil && !workload.IsRecommendationAppliedToAllWorkers() {
-		recommendation = workload.Status.Recommendation
+		recommendation = workload.LatestRecommendation()
 	}
 
 	if recommendation != nil {
-		workload.Status.AppliedRecommendedReplicas = 0
-		for _, worker := range workload.CurrentActiveWorkers {
+		// Count successfully-applied workers locally and write once at the end
+		// to avoid lock churn (Reset + Inc-per-iteration was O(N) lock acquisitions).
+		var applied int32
+		for _, worker := range workload.ActiveWorkersSnapshot() {
 			if isWorkerHasDedicatedGPU(worker) {
 				continue
 			}
@@ -95,16 +109,18 @@ func (h *handler) ApplyRecommendationToWorkload(ctx context.Context, workload *S
 				log.FromContext(ctx).Error(err, "failed to update worker resources", "worker", worker.Name)
 				continue
 			}
-			workload.Status.AppliedRecommendedReplicas++
+			applied++
 		}
+		workload.SetAppliedRecommendedReplicas(applied)
 	}
 
 	return nil
 }
 
 func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recommendation *tfv1.Resources) error {
+	namespace, name, stateStatus := state.StatusSnapshot()
 	workload := &tfv1.TensorFusionWorkload{}
-	if err := h.Get(ctx, client.ObjectKey{Namespace: state.Namespace, Name: state.Name}, workload); err != nil {
+	if err := h.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, workload); err != nil {
 		return fmt.Errorf("failed to get workload: %v", err)
 	}
 
@@ -113,18 +129,18 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recomm
 
 	if isRecommendationChanged(&workload.Status, recommendation) {
 		workload.Status.Recommendation = recommendation
-		workload.Status.ActiveCronScalingRule = state.Status.ActiveCronScalingRule.DeepCopy()
+		workload.Status.ActiveCronScalingRule = stateStatus.ActiveCronScalingRule.DeepCopy()
 		hasChanges = true
 	}
 
-	if workload.Status.AppliedRecommendedReplicas != state.Status.AppliedRecommendedReplicas {
-		workload.Status.AppliedRecommendedReplicas = state.Status.AppliedRecommendedReplicas
+	if workload.Status.AppliedRecommendedReplicas != stateStatus.AppliedRecommendedReplicas {
+		workload.Status.AppliedRecommendedReplicas = stateStatus.AppliedRecommendedReplicas
 		hasChanges = true
 	}
 
 	// Update condition - check for both old and new condition types
 	// Always check conditions even if recommendation is nil, as conditions may need to be updated
-	if condition := meta.FindStatusCondition(state.Status.Conditions,
+	if condition := meta.FindStatusCondition(stateStatus.Conditions,
 		constants.ConditionStatusTypeResourceUpdate); condition != nil {
 		oldCondition := meta.FindStatusCondition(workload.Status.Conditions,
 			constants.ConditionStatusTypeResourceUpdate)
@@ -132,7 +148,7 @@ func (h *handler) UpdateWorkloadStatus(ctx context.Context, state *State, recomm
 			meta.SetStatusCondition(&workload.Status.Conditions, *condition)
 			hasChanges = true
 		}
-	} else if condition := meta.FindStatusCondition(state.Status.Conditions,
+	} else if condition := meta.FindStatusCondition(stateStatus.Conditions,
 		constants.ConditionStatusTypeRecommendationProvided); condition != nil {
 		// Migrate old condition to new type
 		oldCondition := meta.FindStatusCondition(workload.Status.Conditions,
@@ -170,7 +186,8 @@ func isRecommendationChanged(status *tfv1.TensorFusionWorkloadStatus, recommenda
 }
 
 func isAppliedRecommendedReplicasChanged(workload *tfv1.TensorFusionWorkload, state *State) bool {
-	return workload.Status.AppliedRecommendedReplicas != state.Status.AppliedRecommendedReplicas
+	_, _, stateStatus := state.StatusSnapshot()
+	return workload.Status.AppliedRecommendedReplicas != stateStatus.AppliedRecommendedReplicas
 }
 
 func isConditionEqual(c1, c2 *metav1.Condition) bool {
@@ -200,9 +217,10 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 
 	// Record event when scaling happens
 	if h.eventRecorder != nil && h.scheme != nil {
+		namespace, name := workload.Coordinates()
 		workloadObj := &tfv1.TensorFusionWorkload{}
-		workloadObj.Namespace = workload.Namespace
-		workloadObj.Name = workload.Name
+		workloadObj.Namespace = namespace
+		workloadObj.Name = name
 		workloadObj.Kind = "TensorFusionWorkload"
 		workloadObj.APIVersion = tfv1.GroupVersion.String()
 
@@ -253,6 +271,13 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 		return fmt.Errorf("failed to adjust allocation: %v", err)
 	}
 
+	if worker.Annotations == nil {
+		// maps.Copy panics on a nil destination. Pods admitted through the
+		// TF webhook always have GPU resource annotations, but a manual
+		// `kubectl annotate ...-` or an out-of-band controller could leave
+		// the map nil; initialize defensively before the in-place merge.
+		worker.Annotations = make(map[string]string, len(annotationsToUpdate))
+	}
 	patch := client.MergeFrom(worker.DeepCopy())
 	maps.Copy(worker.Annotations, annotationsToUpdate)
 	if err := h.Patch(ctx, worker, patch); err != nil {
@@ -288,6 +313,11 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 		return fmt.Errorf("failed to patch worker %s: %v", worker.Name, err)
 	}
 
+	// Patch landed; mirror the new annotations into the in-memory State so the
+	// next ActiveWorkersSnapshot (now returning deep copies, not shared pointers)
+	// reflects the latest applied resources instead of replaying a stale curRes.
+	workload.UpdateWorkerAnnotations(worker.Name, annotationsToUpdate)
+
 	log.Info("apply recommendation to worker successfully",
 		"worker", worker.Name, "recommendation", recommendation, "currentResources", curRes)
 
@@ -295,13 +325,14 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 }
 
 func (h *handler) GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, error) {
-	if len(workload.CurrentActiveWorkers) <= 0 {
+	workers := workload.ActiveWorkersSnapshot()
+	if len(workers) <= 0 {
 		return nil, nil
 	}
 
 	gpuStore, _, allocRequests := h.allocator.GetAllocationInfo()
 	gpuToWorkers := map[*tfv1.GPU][]*corev1.Pod{}
-	for _, worker := range workload.CurrentActiveWorkers {
+	for _, worker := range workers {
 		allocated, exists := allocRequests[string(worker.UID)]
 		if !exists || allocated == nil {
 			return nil, fmt.Errorf("worker %s has not allocated GPUs", worker.Name)

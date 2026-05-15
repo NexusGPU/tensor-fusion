@@ -26,7 +26,11 @@ func RefreshGPUNodeCapacity(
 		return nil, fmt.Errorf("failed to list GPUs: %w", err)
 	}
 	if len(gpuList.Items) == 0 {
-		// node discovery job not completed, wait next reconcile loop to check again
+		// Node discovery may not be complete, or GPU CRs may have been removed.
+		// Reconcile the progressive taint as idle so stale isolation does not block native scheduling forever.
+		if err := reconcileProgressiveTaint(ctx, k8sClient, coreNode, true); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	}
 
@@ -106,38 +110,63 @@ func RefreshGPUNodeCapacity(
 
 	node.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
 
-	if !equality.Semantic.DeepEqual(node.Status, statusCopy) {
-		err := k8sClient.Status().Update(ctx, node)
-		if err != nil {
-			return nil, fmt.Errorf("failed to update GPU node status: %w", err)
-		}
-
-		// check if need to update K8S node label
-		if utils.IsProgressiveMigration() && coreNode != nil {
-			taint := &corev1.Taint{
-				Key:    constants.NodeUsedByTaintKey,
-				Effect: corev1.TaintEffectPreferNoSchedule,
-				Value:  constants.TensorFusionSystemName,
-			}
-			needUpdateNode := false
-			if node.Status.AvailableVRAM.Equal(node.Status.TotalVRAM) && node.Status.AvailableTFlops.Equal(node.Status.TotalTFlops) {
-				// check if need to remove the taint
-				coreNode, needUpdateNode, _ = taints.RemoveTaint(coreNode, taint)
-			} else if !taints.TaintExists(coreNode.Spec.Taints, taint) {
-				// check if need to add the taint
-				coreNode, needUpdateNode, _ = taints.AddOrUpdateTaint(coreNode, taint)
-			}
-			if needUpdateNode {
-				log.FromContext(ctx).Info("Updating K8S node taints for isolation of tensor-fusion and non-tensor-fusion used nodes",
-					"node", coreNode.Name, "taint", taint.Key)
-				err := k8sClient.Update(ctx, coreNode)
-				if err != nil {
-					return nil, fmt.Errorf("failed to update K8S node: %w", err)
-				}
-			}
+	statusChanged := !equality.Semantic.DeepEqual(node.Status, statusCopy)
+	var statusErr error
+	if statusChanged {
+		if err := k8sClient.Status().Update(ctx, node); err != nil {
+			statusErr = fmt.Errorf("failed to update GPU node status: %w", err)
 		}
 	}
-	return gpuModels, nil
+
+	// Best-effort: reconcile the progressive taint even when the status update above failed,
+	// so a transient API error does not leave the node in a stale isolation state. Surface
+	// the original status error to the caller for retry.
+	if !node.Status.TotalVRAM.IsZero() || !node.Status.TotalTFlops.IsZero() {
+		isIdle := node.Status.AvailableVRAM.Equal(node.Status.TotalVRAM) &&
+			node.Status.AvailableTFlops.Equal(node.Status.TotalTFlops)
+		if err := reconcileProgressiveTaint(ctx, k8sClient, coreNode, isIdle); err != nil {
+			if statusErr != nil {
+				log.FromContext(ctx).Error(err, "failed to reconcile progressive taint after status update failure",
+					"node", node.Name)
+				return nil, statusErr
+			}
+			return nil, err
+		}
+	}
+	return gpuModels, statusErr
+}
+
+func reconcileProgressiveTaint(ctx context.Context, k8sClient client.Client, coreNode *corev1.Node, isIdle bool) error {
+	if !utils.IsProgressiveMigration() || coreNode == nil {
+		return nil
+	}
+	taint := &corev1.Taint{
+		Key:    constants.NodeUsedByTaintKey,
+		Effect: corev1.TaintEffectPreferNoSchedule,
+		Value:  constants.TensorFusionSystemName,
+	}
+	hasTaint := taints.TaintExists(coreNode.Spec.Taints, taint)
+	var (
+		updated *corev1.Node
+		changed bool
+	)
+	switch {
+	case isIdle && hasTaint:
+		updated, changed, _ = taints.RemoveTaint(coreNode, taint)
+	case !isIdle && !hasTaint:
+		updated, changed, _ = taints.AddOrUpdateTaint(coreNode, taint)
+	default:
+		return nil
+	}
+	if !changed {
+		return nil
+	}
+	log.FromContext(ctx).Info("Updating K8S node taints for isolation of tensor-fusion and non-tensor-fusion used nodes",
+		"node", updated.Name, "taint", taint.Key, "idle", isIdle)
+	if err := k8sClient.Update(ctx, updated); err != nil {
+		return fmt.Errorf("failed to update K8S node: %w", err)
+	}
+	return nil
 }
 
 func calculateVirtualCapacity(node *tfv1.GPUNode, pool *tfv1.GPUPool) (resource.Quantity, resource.Quantity) {

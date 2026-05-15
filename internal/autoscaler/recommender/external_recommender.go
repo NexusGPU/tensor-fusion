@@ -13,7 +13,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -39,7 +38,10 @@ func (e *ExternalRecommender) Name() string {
 
 func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *workload.State) (*RecResult, error) {
 	log := log.FromContext(ctx)
-	config := workloadState.Spec.AutoScalingConfig.ExternalScaler
+	// Snapshot up front; HTTP work below must run without holding State.Mu.
+	config := workloadState.ExternalScalerConfig()
+	namespace, name := workloadState.Coordinates()
+	creationTime := workloadState.CreationTime()
 
 	if config == nil || !config.Enable {
 		return nil, nil
@@ -55,9 +57,9 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 		}
 	}
 
-	timeSinceCreation := time.Since(workloadState.CreationTimestamp.Time)
+	timeSinceCreation := time.Since(creationTime)
 	if timeSinceCreation < initialDelay {
-		meta.SetStatusCondition(&workloadState.Status.Conditions, metav1.Condition{
+		workloadState.UpsertStatusCondition(metav1.Condition{
 			Type:               constants.ConditionStatusTypeResourceUpdate,
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),
@@ -74,8 +76,8 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 	// Prepare request
 	curRes := workloadState.GetCurrentResourcesSpec()
 	request := tfv1.ExternalScalerRequest{
-		WorkloadName:     workloadState.Name,
-		Namespace:        workloadState.Namespace,
+		WorkloadName:     name,
+		Namespace:        namespace,
 		CurrentResources: *curRes,
 	}
 
@@ -124,7 +126,7 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 
 	// If no scaling needed, return nil
 	if !response.NeedScaleUp && !response.NeedScaleDown {
-		meta.SetStatusCondition(&workloadState.Status.Conditions, metav1.Condition{
+		workloadState.UpsertStatusCondition(metav1.Condition{
 			Type:               constants.ConditionStatusTypeResourceUpdate,
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),
@@ -162,7 +164,7 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 		if response.Reason != "" {
 			reason = response.Reason
 		}
-		meta.SetStatusCondition(&workloadState.Status.Conditions, metav1.Condition{
+		workloadState.UpsertStatusCondition(metav1.Condition{
 			Type:               constants.ConditionStatusTypeResourceUpdate,
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),

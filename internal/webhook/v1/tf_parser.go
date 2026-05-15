@@ -657,8 +657,8 @@ func handleDedicatedGPU(pod *corev1.Pod, workloadProfile *tfv1.WorkloadProfile) 
 		return fmt.Errorf("dedicated GPU requires gpu-model annotation to be specified")
 	}
 
-	// Get full GPU capacity from pricing provider
-	resource, found := gpuallocator.GPUCapacityMap[workloadProfile.Spec.GPUModel]
+	// Get full GPU capacity from pricing provider.
+	resource, found := gpuallocator.GetGPUCapacity(workloadProfile.Spec.GPUModel)
 	if !found {
 		return fmt.Errorf("could not find capacity information for GPU model: %s", workloadProfile.Spec.GPUModel)
 	}

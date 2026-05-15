@@ -38,6 +38,7 @@ const Name = "GPUResourcesFit"
 const CycleStateAllocateRequest = "allocateRequest"
 const CycleStateGPUSchedulingResult = "gpuSchedulingResult"
 const SchedulerSimulationKey = "schedulerSimulation"
+const CycleStateProgressiveNodeNames = "progressiveNodeNames"
 
 var _ fwk.PreFilterPlugin = &GPUFit{}
 var _ fwk.PreEnqueuePlugin = &GPUFit{}
@@ -90,6 +91,14 @@ func (p *GPUSchedulingStateData) Clone() fwk.StateData {
 	return p
 }
 
+type ProgressiveNodeNamesState struct {
+	NodeNames sets.Set[string]
+}
+
+func (p *ProgressiveNodeNamesState) Clone() fwk.StateData {
+	return p
+}
+
 type PluginFactoryFunc func(ctx context.Context, obj runtime.Object, handle fwk.Handle) (fwk.Plugin, error)
 
 func NewWithDeps(allocator *gpuallocator.GpuAllocator, indexAllocator *indexallocator.IndexAllocator, gangManager *gang.Manager, client client.Client) PluginFactoryFunc {
@@ -137,6 +146,7 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 	// Handle progressive migration case
 	if utils.IsProgressiveMigration() && utils.HasGPUResourceRequest(pod) {
 		nodeNames := s.allocator.ListNonUsingNodes()
+		state.Write(CycleStateProgressiveNodeNames, &ProgressiveNodeNamesState{NodeNames: nodeNames})
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "ScheduleWithNativeGPU",
 			"Scheduling non-TF workload for progressive migration",
 			"use native GPU resources, available native GPU nodes: "+strconv.Itoa(len(nodeNames)))

@@ -756,13 +756,11 @@ var _ = Describe("GPUFit Plugin", func() {
 			Expect(k8sClient.Create(ctx, workerPod)).To(Succeed())
 
 			// Manually add GPU to allocator store
-			gpuStore, _, _ := allocator.GetAllocationInfo()
-			key := types.NamespacedName{Name: "gpu-test-percent"}
 			gpuCopy := gpu.DeepCopy()
 			if gpuCopy.Status.Available == nil {
 				gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
 			}
-			gpuStore[key] = gpuCopy
+			allocator.UpsertGPUForTesting(ctx, gpuCopy)
 
 			// Reconcile allocation state
 			allocator.ReconcileAllocationStateForTesting()
@@ -866,13 +864,11 @@ var _ = Describe("GPUFit Plugin", func() {
 			Expect(k8sClient.Create(ctx, workerPod2)).To(Succeed())
 
 			// Manually add GPU to allocator store
-			gpuStore, _, _ := allocator.GetAllocationInfo()
-			key := types.NamespacedName{Name: "gpu-test-mixed"}
 			gpuCopy := gpu.DeepCopy()
 			if gpuCopy.Status.Available == nil {
 				gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
 			}
-			gpuStore[key] = gpuCopy
+			allocator.UpsertGPUForTesting(ctx, gpuCopy)
 
 			// Reconcile allocation state
 			allocator.ReconcileAllocationStateForTesting()
@@ -1007,20 +1003,17 @@ var _ = Describe("GPUFit Plugin", func() {
 			Expect(k8sClient.Create(ctx, workerPod2)).To(Succeed())
 
 			// Manually add GPUs to allocator store
-			gpuStore, _, _ := allocator.GetAllocationInfo()
-			key1 := types.NamespacedName{Name: "gpu-mixed-1"}
 			gpuCopy1 := gpu1.DeepCopy()
 			if gpuCopy1.Status.Available == nil {
 				gpuCopy1.Status.Available = gpuCopy1.Status.Capacity.DeepCopy()
 			}
-			gpuStore[key1] = gpuCopy1
+			allocator.UpsertGPUForTesting(ctx, gpuCopy1)
 
-			key2 := types.NamespacedName{Name: "gpu-mixed-2"}
 			gpuCopy2 := gpu2.DeepCopy()
 			if gpuCopy2.Status.Available == nil {
 				gpuCopy2.Status.Available = gpuCopy2.Status.Capacity.DeepCopy()
 			}
-			gpuStore[key2] = gpuCopy2
+			allocator.UpsertGPUForTesting(ctx, gpuCopy2)
 
 			// Reconcile allocation state
 			allocator.ReconcileAllocationStateForTesting()

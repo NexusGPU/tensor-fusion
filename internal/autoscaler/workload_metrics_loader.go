@@ -60,8 +60,9 @@ func (l *workloadMetricsLoader) addWorkload(ctx context.Context, workloadID Work
 		return
 	}
 
-	// Get configuration
-	asr := state.Spec.AutoScalingConfig.AutoSetResources
+	// Get configuration (deep copy under State's read lock so we don't race with
+	// loadWorkloads/UpdateWorkloadState rewriting Spec on a separate goroutine).
+	asr := state.AutoSetResources()
 	if asr == nil || !asr.Enable {
 		return
 	}
@@ -100,7 +101,7 @@ func (l *workloadMetricsLoader) addWorkload(ctx context.Context, workloadID Work
 	}
 
 	// Set timer for initial delay
-	timeSinceCreation := time.Since(state.CreationTimestamp.Time)
+	timeSinceCreation := time.Since(state.CreationTime())
 	if timeSinceCreation < initialDelay {
 		remainingDelay := initialDelay - timeSinceCreation
 		loaderState.initialDelayTimer = time.AfterFunc(remainingDelay, func() {
@@ -132,11 +133,18 @@ func (l *workloadMetricsLoader) removeWorkload(workloadID WorkloadID) {
 
 func (l *workloadMetricsLoader) startWorkloadMetricsLoading(loaderState *workloadMetricsState) {
 	logger := log.FromContext(loaderState.ctx)
+
+	// Bail before logging / history-load if removeWorkload already cancelled.
+	if loaderState.ctx.Err() != nil {
+		return
+	}
+
 	logger.Info("Starting metrics loading for workload",
 		"workload", loaderState.workloadID.Name,
 		"firstLoad", loaderState.firstLoad)
 
-	// First load: load history
+	// First load: load history. This call can be slow (up to 60s timeout)
+	// and runs without holding l.mu, so removeWorkload may cancel us mid-way.
 	if loaderState.firstLoad {
 		if err := l.loadHistoryMetricsForWorkload(loaderState); err != nil {
 			logger.Error(err, "failed to load history metrics", "workload", loaderState.workloadID.Name)
@@ -144,12 +152,33 @@ func (l *workloadMetricsLoader) startWorkloadMetricsLoading(loaderState *workloa
 		loaderState.firstLoad = false
 	}
 
-	// Set up ticker for periodic realtime metrics
-	loaderState.ticker = time.NewTicker(loaderState.evaluationInterval)
+	// Re-check post-history-load: if removeWorkload fired during the load,
+	// do NOT create a fresh ticker — that would leak (removeWorkload already
+	// observed ticker == nil and only cancelled ctx).
+	if loaderState.ctx.Err() != nil {
+		return
+	}
+
+	// Assigning loaderState.ticker is a write that removeWorkload reads under
+	// l.mu (line ~126). Take l.mu here so the publish/observe happens under
+	// the same mutex, and re-check ctx once more in case removeWorkload was
+	// waiting on the lock with intent to cancel.
+	l.mu.Lock()
+	if loaderState.ctx.Err() != nil {
+		l.mu.Unlock()
+		return
+	}
+	ticker := time.NewTicker(loaderState.evaluationInterval)
+	loaderState.ticker = ticker
+	l.mu.Unlock()
+
 	go func() {
+		// Stop the ticker on goroutine exit unconditionally. ticker.Stop is
+		// idempotent so this is safe even if removeWorkload already stopped it.
+		defer ticker.Stop()
 		for {
 			select {
-			case <-loaderState.ticker.C:
+			case <-ticker.C:
 				if err := l.loadRealtimeMetricsForWorkload(loaderState); err != nil {
 					logger.Error(err, "failed to load realtime metrics", "workload", loaderState.workloadID.Name)
 				}

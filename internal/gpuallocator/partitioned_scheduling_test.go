@@ -33,20 +33,22 @@ const testGPUModel = "A100_SXM_80G"
 func TestMatchPartitionTemplate(t *testing.T) {
 	// Setup: Initialize partition template map
 	gpuModel := testGPUModel
-	PartitionTemplateMap[gpuModel] = map[string]config.PartitionTemplateInfo{
-		"1g.24gb": {
-			TemplateID:      "19",
-			Name:            "1g.24gb",
-			MemoryGigabytes: 24, // 24GB (function converts to bytes)
-			ComputePercent:  1.0 / 7.0 * 100,
-		},
-		"4g.94gb": {
-			TemplateID:      "9",
-			Name:            "4g.94gb",
-			MemoryGigabytes: 94, // 94GB (function converts to bytes)
-			ComputePercent:  4.0 / 7.0 * 100,
-		},
-	}
+	MutatePartitionConfigForTesting(func(cfg *partitionConfig) {
+		cfg.Templates[gpuModel] = map[string]config.PartitionTemplateInfo{
+			"1g.24gb": {
+				TemplateID:      "19",
+				Name:            "1g.24gb",
+				MemoryGigabytes: 24, // 24GB (function converts to bytes)
+				ComputePercent:  1.0 / 7.0 * 100,
+			},
+			"4g.94gb": {
+				TemplateID:      "9",
+				Name:            "4g.94gb",
+				MemoryGigabytes: 94, // 94GB (function converts to bytes)
+				ComputePercent:  4.0 / 7.0 * 100,
+			},
+		}
+	})
 	// Setup: Initialize GPU capacity map for ComputePercent conversion
 	// A100_SXM_80G has ~312 TFLOPs capacity
 	mu.Lock()
@@ -214,14 +216,16 @@ func TestCalculatePartitionResourceUsage(t *testing.T) {
 	// Setup
 	gpuModel := testGPUModel
 	templateID := "1g.24gb"
-	PartitionTemplateMap[gpuModel] = map[string]config.PartitionTemplateInfo{
-		templateID: {
-			TemplateID:      templateID,
-			Name:            "1g.24gb",
-			MemoryGigabytes: 24, // 24GB (function converts to bytes)
-			ComputePercent:  1.0 / 7.0 * 100,
-		},
-	}
+	MutatePartitionConfigForTesting(func(cfg *partitionConfig) {
+		cfg.Templates[gpuModel] = map[string]config.PartitionTemplateInfo{
+			templateID: {
+				TemplateID:      templateID,
+				Name:            "1g.24gb",
+				MemoryGigabytes: 24, // 24GB (function converts to bytes)
+				ComputePercent:  1.0 / 7.0 * 100,
+			},
+		}
+	})
 
 	tflops, vram, err := CalculatePartitionResourceUsage(resource.MustParse("312"), gpuModel, templateID)
 
@@ -243,30 +247,30 @@ func TestCheckPartitionAvailability(t *testing.T) {
 	template4g := "4g.94gb" // Profile 9
 
 	// Clear and setup maps for this test
-	mu.Lock()
-	PartitionTemplateMap[gpuModel] = map[string]config.PartitionTemplateInfo{
-		template1g: {
-			TemplateID:      template1g,
-			Name:            "1g.24gb",
-			MemoryGigabytes: 24, // 24GB
-			ComputePercent:  1.0 / 7.0 * 100,
-			MaxPartition:    7,                             // Can allocate up to 7 instances
-			PlacementLimit:  []uint32{0, 1, 2, 3, 4, 5, 6}, // Can start at any of these positions
-			PlacementOffSet: 1,                             // Occupies 1 slot
-		},
-		template4g: {
-			TemplateID:      template4g,
-			Name:            "4g.94gb",
-			MemoryGigabytes: 94, // 94GB
-			ComputePercent:  4.0 / 7.0 * 100,
-			MaxPartition:    2,              // Can only allocate 2 instances
-			PlacementLimit:  []uint32{0, 4}, // Can start at position 0 or 4
-			PlacementOffSet: 4,              // Occupies 4 slots (0-3 or 4-7)
-		},
-	}
-	MaxPartitionsMap[gpuModel] = 7
-	MaxPlacementSlotsMap[gpuModel] = 8 // A100 has 8 placement slots (0-7)
-	mu.Unlock()
+	MutatePartitionConfigForTesting(func(cfg *partitionConfig) {
+		cfg.Templates[gpuModel] = map[string]config.PartitionTemplateInfo{
+			template1g: {
+				TemplateID:      template1g,
+				Name:            "1g.24gb",
+				MemoryGigabytes: 24, // 24GB
+				ComputePercent:  1.0 / 7.0 * 100,
+				MaxPartition:    7,                             // Can allocate up to 7 instances
+				PlacementLimit:  []uint32{0, 1, 2, 3, 4, 5, 6}, // Can start at any of these positions
+				PlacementOffSet: 1,                             // Occupies 1 slot
+			},
+			template4g: {
+				TemplateID:      template4g,
+				Name:            "4g.94gb",
+				MemoryGigabytes: 94, // 94GB
+				ComputePercent:  4.0 / 7.0 * 100,
+				MaxPartition:    2,              // Can only allocate 2 instances
+				PlacementLimit:  []uint32{0, 4}, // Can start at position 0 or 4
+				PlacementOffSet: 4,              // Occupies 4 slots (0-3 or 4-7)
+			},
+		}
+		cfg.MaxPartitions[gpuModel] = 7
+		cfg.MaxPlacementSlots[gpuModel] = 8 // A100 has 8 placement slots (0-7)
+	})
 
 	tests := []struct {
 		name          string
