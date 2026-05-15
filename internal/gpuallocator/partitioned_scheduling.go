@@ -45,8 +45,9 @@ type PartitionMatchResult struct {
 func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*PartitionMatchResult, error) {
 	gpuModel := gpuStatus.GPUModel
 
-	// Get template configs from global map
-	templateConfigs, exists := PartitionTemplateMap[gpuModel]
+	// Get template configs from global map (locked accessor; the returned
+	// inner map is post-publish-immutable, see GetPartitionTemplates).
+	templateConfigs, exists := GetPartitionTemplates(gpuModel)
 	if !exists || len(templateConfigs) == 0 {
 		return nil, fmt.Errorf("no partition template configs found for GPU model %s", gpuModel)
 	}
@@ -63,10 +64,7 @@ func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*
 
 		var requestTflops float64
 		if !req.Request.ComputePercent.IsZero() {
-			mu.Lock()
-			gpuCapacity, capExists := GPUCapacityMap[gpuModel]
-			mu.Unlock()
-			if capExists {
+			if gpuCapacity, capExists := GetGPUCapacity(gpuModel); capExists {
 				requestTflops = utils.ComputePercentToTflops(gpuCapacity.Tflops, req.Request).AsApproximateFloat64()
 			}
 		} else {
@@ -99,9 +97,7 @@ func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*
 	var requestTflops float64
 	if !req.Request.ComputePercent.IsZero() {
 		// Get GPU capacity from global map to convert ComputePercent to TFLOPs
-		mu.Lock()
-		gpuCapacity, exists := GPUCapacityMap[gpuModel]
-		mu.Unlock()
+		gpuCapacity, exists := GetGPUCapacity(gpuModel)
 		if !exists {
 			return nil, fmt.Errorf("GPU capacity not found for model %s, cannot convert ComputePercent to TFLOPs", gpuModel)
 		}
@@ -112,8 +108,8 @@ func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*
 	}
 	requestVramBytes := req.Request.Vram.Value()
 
-	// Get max partitions from config
-	maxPartitions := MaxPartitionsMap[gpuModel]
+	// Get max partitions from config (locked accessor)
+	maxPartitions := GetMaxPartitions(gpuModel)
 	if maxPartitions <= 0 {
 		maxPartitions = DefaultMaxPartitionNum
 	}
@@ -201,7 +197,7 @@ func resolvePartitionTemplate(templateConfigs map[string]config.PartitionTemplat
 // CalculatePartitionResourceUsage calculates the resource usage for a partition template.
 // Gets template info from config.
 func CalculatePartitionResourceUsage(capacityTflops resource.Quantity, gpuModel, templateID string) (tflops resource.Quantity, vram resource.Quantity, err error) {
-	templateConfigs, exists := PartitionTemplateMap[gpuModel]
+	templateConfigs, exists := GetPartitionTemplates(gpuModel)
 	if !exists {
 		return resource.Quantity{}, resource.Quantity{}, fmt.Errorf("no partition template configs for GPU model %s", gpuModel)
 	}
@@ -228,7 +224,7 @@ func CheckPartitionAvailability(
 	templateID string,
 ) error {
 	// Get template info from config first to check template-specific constraints
-	templateConfigs, exists := PartitionTemplateMap[gpu.Status.GPUModel]
+	templateConfigs, exists := GetPartitionTemplates(gpu.Status.GPUModel)
 	if !exists {
 		return fmt.Errorf("no partition template configs for GPU model %s", gpu.Status.GPUModel)
 	}
@@ -273,32 +269,35 @@ func CheckPartitionAvailability(
 	return nil
 }
 
-// getGpuConfigFromMaps constructs a GpuInfo from the global maps for strategy use
+// getGpuConfigFromMaps constructs a GpuInfo from the global maps for strategy use.
+// All reads go through locked accessors so we don't race with
+// LoadPartitionTemplatesFromConfig running concurrently from
+// providerconfig_controller / pricing reload paths.
 func getGpuConfigFromMaps(gpuModel string) *config.GpuInfo {
 	gpuConfig := &config.GpuInfo{
 		Model:         gpuModel,
-		MaxPartitions: MaxPartitionsMap[gpuModel],
+		MaxPartitions: GetMaxPartitions(gpuModel),
 	}
 
 	// Get MaxPlacementSlots
-	if slots, exists := MaxPlacementSlotsMap[gpuModel]; exists {
+	if slots, exists := GetMaxPlacementSlots(gpuModel); exists {
 		gpuConfig.MaxPlacementSlots = slots
 	}
 
 	// Get MaxIsolationGroups (defaults to MaxPlacementSlots if not set)
-	if groups, exists := MaxIsolationGroupsMap[gpuModel]; exists {
+	if groups, exists := GetMaxIsolationGroups(gpuModel); exists {
 		gpuConfig.MaxIsolationGroups = groups
 	} else if gpuConfig.MaxPlacementSlots > 0 {
 		gpuConfig.MaxIsolationGroups = gpuConfig.MaxPlacementSlots
 	}
 
 	// Get TotalExtendedResources
-	if resources, exists := TotalExtendedResourcesMap[gpuModel]; exists {
+	if resources, exists := GetTotalExtendedResources(gpuModel); exists {
 		gpuConfig.TotalExtendedResources = resources
 	}
 
 	// Convert template map to slice
-	if templates, exists := PartitionTemplateMap[gpuModel]; exists {
+	if templates, exists := GetPartitionTemplates(gpuModel); exists {
 		for _, t := range templates {
 			gpuConfig.PartitionTemplates = append(gpuConfig.PartitionTemplates, t)
 		}

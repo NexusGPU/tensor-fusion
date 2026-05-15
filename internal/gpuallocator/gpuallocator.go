@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	goerrors "github.com/pkg/errors"
@@ -45,63 +46,177 @@ const CleanUpCheckInterval = 3 * time.Minute
 var mu sync.Mutex
 var GPUCapacityMap = map[string]tfv1.Resource{}
 
-// PartitionTemplateMap stores partition template info by GPU model
-// Key: GPU model (e.g., "A100_SXM_80G"), Value: map of templateID -> template info
-var PartitionTemplateMap = map[string]map[string]config.PartitionTemplateInfo{}
-
-// MaxPartitionsMap stores max partitions by GPU model
-// Key: GPU model, Value: max partitions (e.g., 7 for MIG)
-var MaxPartitionsMap = map[string]uint32{}
-
-// MaxPlacementSlotsMap stores max placement slots by GPU model
-// Key: GPU model, Value: max placement slots (e.g., 8 for MIG)
-var MaxPlacementSlotsMap = map[string]uint32{}
-
-// MaxIsolationGroupsMap stores max isolation groups by GPU model
-// Key: GPU model, Value: max isolation groups (e.g., 4 for Ascend vGroups)
-var MaxIsolationGroupsMap = map[string]uint32{}
-
-// TotalExtendedResourcesMap stores total extended resources by GPU model
-// Key: GPU model, Value: map of resource name -> total capacity
-// For Ascend NPU: {"AICORE": 8, "AICPU": 7, "VPC": 12, ...}
-var TotalExtendedResourcesMap = map[string]map[string]uint32{}
-
-// LoadPartitionTemplatesFromConfig loads partition templates and max partitions from GPU info config
-// This should be called when GPU info config is loaded/updated
-func LoadPartitionTemplatesFromConfig(gpuInfos []config.GpuInfo) {
+func GetGPUCapacity(model string) (tfv1.Resource, bool) {
 	mu.Lock()
 	defer mu.Unlock()
+	resource, found := GPUCapacityMap[model]
+	return resource, found
+}
 
-	// Rebuild maps on each refresh to avoid stale template/config entries.
-	PartitionTemplateMap = make(map[string]map[string]config.PartitionTemplateInfo, len(gpuInfos)*2)
-	MaxPartitionsMap = make(map[string]uint32, len(gpuInfos)*2)
-	MaxPlacementSlotsMap = make(map[string]uint32, len(gpuInfos)*2)
-	MaxIsolationGroupsMap = make(map[string]uint32, len(gpuInfos)*2)
-	TotalExtendedResourcesMap = make(map[string]map[string]uint32, len(gpuInfos)*2)
+// partitionConfig is an immutable snapshot of all 5 partition-related
+// config maps. The writer (LoadPartitionTemplatesFromConfig) constructs a
+// fresh *partitionConfig and publishes it atomically; readers do a single
+// atomic Load and then read freely from the snapshot.
+//
+// The contract is structural: once a *partitionConfig is published via
+// partitionConfigPtr.Store, NONE of its fields are mutated. Any
+// "modification" goes through publishing a brand-new snapshot. This makes
+// "post-publish immutability" a property of the type, not a comment.
+type partitionConfig struct {
+	// Templates: GPU model -> templateID -> template info.
+	Templates map[string]map[string]config.PartitionTemplateInfo
+	// MaxPartitions: GPU model -> max partitions (e.g. 7 for MIG).
+	MaxPartitions map[string]uint32
+	// MaxPlacementSlots: GPU model -> max placement slots (e.g. 8 for MIG).
+	MaxPlacementSlots map[string]uint32
+	// MaxIsolationGroups: GPU model -> max isolation groups (e.g. 4 for Ascend vGroups).
+	MaxIsolationGroups map[string]uint32
+	// TotalExtendedResources: GPU model -> resource name -> total capacity.
+	// For Ascend NPU: {"AICORE": 8, "AICPU": 7, "VPC": 12, ...}.
+	TotalExtendedResources map[string]map[string]uint32
+}
+
+func newEmptyPartitionConfig() *partitionConfig {
+	return &partitionConfig{
+		Templates:              map[string]map[string]config.PartitionTemplateInfo{},
+		MaxPartitions:          map[string]uint32{},
+		MaxPlacementSlots:      map[string]uint32{},
+		MaxIsolationGroups:     map[string]uint32{},
+		TotalExtendedResources: map[string]map[string]uint32{},
+	}
+}
+
+// clone shallow-copies the outer maps so test helpers can mutate the result
+// without disturbing the currently-published snapshot. Inner maps are
+// reference-shared and remain immutable.
+func (c *partitionConfig) clone() *partitionConfig {
+	next := &partitionConfig{
+		Templates:              make(map[string]map[string]config.PartitionTemplateInfo, len(c.Templates)),
+		MaxPartitions:          make(map[string]uint32, len(c.MaxPartitions)),
+		MaxPlacementSlots:      make(map[string]uint32, len(c.MaxPlacementSlots)),
+		MaxIsolationGroups:     make(map[string]uint32, len(c.MaxIsolationGroups)),
+		TotalExtendedResources: make(map[string]map[string]uint32, len(c.TotalExtendedResources)),
+	}
+	for k, v := range c.Templates {
+		next.Templates[k] = v
+	}
+	for k, v := range c.MaxPartitions {
+		next.MaxPartitions[k] = v
+	}
+	for k, v := range c.MaxPlacementSlots {
+		next.MaxPlacementSlots[k] = v
+	}
+	for k, v := range c.MaxIsolationGroups {
+		next.MaxIsolationGroups[k] = v
+	}
+	for k, v := range c.TotalExtendedResources {
+		next.TotalExtendedResources[k] = v
+	}
+	return next
+}
+
+// partitionConfigPtr holds the current snapshot. Read with .Load(); replace
+// with .Store(newCfg). NEVER mutate a value returned from .Load().
+var partitionConfigPtr atomic.Pointer[partitionConfig]
+
+func init() {
+	// Seed with an empty snapshot so readers never observe nil between
+	// process start and the first LoadPartitionTemplatesFromConfig.
+	partitionConfigPtr.Store(newEmptyPartitionConfig())
+}
+
+// GetPartitionTemplates returns the templates map for a GPU model from the
+// current snapshot. The returned inner map is post-publish-immutable, so
+// callers may iterate / read it without holding any lock.
+func GetPartitionTemplates(gpuModel string) (map[string]config.PartitionTemplateInfo, bool) {
+	templates, ok := partitionConfigPtr.Load().Templates[gpuModel]
+	return templates, ok
+}
+
+// GetMaxPartitions returns MaxPartitions for a model from the current
+// snapshot, or 0 if missing.
+func GetMaxPartitions(gpuModel string) uint32 {
+	return partitionConfigPtr.Load().MaxPartitions[gpuModel]
+}
+
+// GetMaxPlacementSlots returns MaxPlacementSlots for a model from the current
+// snapshot.
+func GetMaxPlacementSlots(gpuModel string) (uint32, bool) {
+	v, ok := partitionConfigPtr.Load().MaxPlacementSlots[gpuModel]
+	return v, ok
+}
+
+// GetMaxIsolationGroups returns MaxIsolationGroups for a model from the
+// current snapshot.
+func GetMaxIsolationGroups(gpuModel string) (uint32, bool) {
+	v, ok := partitionConfigPtr.Load().MaxIsolationGroups[gpuModel]
+	return v, ok
+}
+
+// GetTotalExtendedResources returns the extended-resources map for a GPU
+// model from the current snapshot.
+func GetTotalExtendedResources(gpuModel string) (map[string]uint32, bool) {
+	v, ok := partitionConfigPtr.Load().TotalExtendedResources[gpuModel]
+	return v, ok
+}
+
+// GetPartitionConfigSnapshot returns the MaxPartitions and PartitionTemplate
+// maps from the current snapshot as a single atomic pair. Used by callers
+// that hand both maps to a filter / strategy and need them cross-consistent.
+// Both maps are post-publish-immutable, so the snapshot is safe to use long
+// after the call returns.
+func GetPartitionConfigSnapshot() (map[string]uint32, map[string]map[string]config.PartitionTemplateInfo) {
+	cfg := partitionConfigPtr.Load()
+	return cfg.MaxPartitions, cfg.Templates
+}
+
+// MutatePartitionConfigForTesting clones the current snapshot, applies fn to
+// the clone, then atomically publishes the result. Test-only — production
+// code MUST go through LoadPartitionTemplatesFromConfig so the contract of
+// "writer constructs a whole new snapshot" is enforced.
+func MutatePartitionConfigForTesting(fn func(*partitionConfig)) {
+	old := partitionConfigPtr.Load()
+	next := old.clone()
+	fn(next)
+	partitionConfigPtr.Store(next)
+}
+
+// LoadPartitionTemplatesFromConfig builds a fresh *partitionConfig from the
+// supplied GPU info list and atomically publishes it. Called from
+// providerconfig_controller and pricing reload paths; concurrent readers
+// observe either the previous or the new snapshot, never a torn state.
+func LoadPartitionTemplatesFromConfig(gpuInfos []config.GpuInfo) {
+	cfg := &partitionConfig{
+		Templates:              make(map[string]map[string]config.PartitionTemplateInfo, len(gpuInfos)*2),
+		MaxPartitions:          make(map[string]uint32, len(gpuInfos)*2),
+		MaxPlacementSlots:      make(map[string]uint32, len(gpuInfos)*2),
+		MaxIsolationGroups:     make(map[string]uint32, len(gpuInfos)*2),
+		TotalExtendedResources: make(map[string]map[string]uint32, len(gpuInfos)*2),
+	}
 
 	for _, gpuInfo := range gpuInfos {
 		// Store max partitions
 		if gpuInfo.MaxPartitions > 0 {
-			MaxPartitionsMap[gpuInfo.Model] = gpuInfo.MaxPartitions
-			MaxPartitionsMap[gpuInfo.FullModelName] = gpuInfo.MaxPartitions
+			cfg.MaxPartitions[gpuInfo.Model] = gpuInfo.MaxPartitions
+			cfg.MaxPartitions[gpuInfo.FullModelName] = gpuInfo.MaxPartitions
 		}
 
 		// Store max placement slots
 		if gpuInfo.MaxPlacementSlots > 0 {
-			MaxPlacementSlotsMap[gpuInfo.Model] = gpuInfo.MaxPlacementSlots
-			MaxPlacementSlotsMap[gpuInfo.FullModelName] = gpuInfo.MaxPlacementSlots
+			cfg.MaxPlacementSlots[gpuInfo.Model] = gpuInfo.MaxPlacementSlots
+			cfg.MaxPlacementSlots[gpuInfo.FullModelName] = gpuInfo.MaxPlacementSlots
 		}
 
 		// Store max isolation groups (for Ascend vGroups)
 		if gpuInfo.MaxIsolationGroups > 0 {
-			MaxIsolationGroupsMap[gpuInfo.Model] = gpuInfo.MaxIsolationGroups
-			MaxIsolationGroupsMap[gpuInfo.FullModelName] = gpuInfo.MaxIsolationGroups
+			cfg.MaxIsolationGroups[gpuInfo.Model] = gpuInfo.MaxIsolationGroups
+			cfg.MaxIsolationGroups[gpuInfo.FullModelName] = gpuInfo.MaxIsolationGroups
 		}
 
 		// Store total extended resources (for Ascend AICORE, AICPU, etc.)
 		if len(gpuInfo.TotalExtendedResources) > 0 {
-			TotalExtendedResourcesMap[gpuInfo.Model] = gpuInfo.TotalExtendedResources
-			TotalExtendedResourcesMap[gpuInfo.FullModelName] = gpuInfo.TotalExtendedResources
+			cfg.TotalExtendedResources[gpuInfo.Model] = gpuInfo.TotalExtendedResources
+			cfg.TotalExtendedResources[gpuInfo.FullModelName] = gpuInfo.TotalExtendedResources
 		}
 
 		// Store partition templates
@@ -114,10 +229,12 @@ func LoadPartitionTemplatesFromConfig(gpuInfos []config.GpuInfo) {
 					templateMap[template.Name] = template
 				}
 			}
-			PartitionTemplateMap[gpuInfo.Model] = templateMap
-			PartitionTemplateMap[gpuInfo.FullModelName] = templateMap
+			cfg.Templates[gpuInfo.Model] = templateMap
+			cfg.Templates[gpuInfo.FullModelName] = templateMap
 		}
 	}
+
+	partitionConfigPtr.Store(cfg)
 }
 
 type Strategy interface {
@@ -242,6 +359,10 @@ func (s *GpuAllocator) RegisterBindHandler(handler func(req *tfv1.AllocRequest))
 	s.bindHandlers = append(s.bindHandlers, handler)
 }
 
+func (s *GpuAllocator) UpsertGPUForTesting(ctx context.Context, gpu *tfv1.GPU) {
+	s.handleGPUCreate(ctx, gpu)
+}
+
 func (s *GpuAllocator) GetAllocationInfo() (
 	gpuStore map[types.NamespacedName]*tfv1.GPU,
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{},
@@ -249,7 +370,26 @@ func (s *GpuAllocator) GetAllocationInfo() (
 ) {
 	s.storeMutex.RLock()
 	defer s.storeMutex.RUnlock()
-	return s.gpuStore, s.nodeWorkerStore, s.uniqueAllocation
+
+	gpuStore = make(map[types.NamespacedName]*tfv1.GPU, len(s.gpuStore))
+	for key, gpu := range s.gpuStore {
+		if gpu == nil {
+			continue
+		}
+		gpuStore[key] = gpu.DeepCopy()
+	}
+
+	nodeWorkerStore = make(map[string]map[types.NamespacedName]struct{}, len(s.nodeWorkerStore))
+	for nodeName, workers := range s.nodeWorkerStore {
+		workerCopy := make(map[types.NamespacedName]struct{}, len(workers))
+		for worker := range workers {
+			workerCopy[worker] = struct{}{}
+		}
+		nodeWorkerStore[nodeName] = workerCopy
+	}
+
+	uniqueAllocation = cloneAllocRequestMap(s.uniqueAllocation)
+	return gpuStore, nodeWorkerStore, uniqueAllocation
 }
 
 func cloneGPUMap(gpuMap map[string]*tfv1.GPU) map[string]*tfv1.GPU {
@@ -402,7 +542,8 @@ func (s *GpuAllocator) Filter(
 
 	// 3. Partition template filter (only for partitioned mode)
 	if req.Isolation == tfv1.IsolationModePartitioned {
-		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, MaxPartitionsMap, PartitionTemplateMap))
+		maxPartitionsSnap, partitionTemplateSnap := GetPartitionConfigSnapshot()
+		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, maxPartitionsSnap, partitionTemplateSnap))
 	}
 
 	// 4. Resource filter (moved after isolation/partition filters)
@@ -663,7 +804,8 @@ func (s *GpuAllocator) buildPreemptFilterRegistry(req *tfv1.AllocRequest) *filte
 		filterRegistry = filterRegistry.With(filter.NewGPUIsolationModeFilter(req.Isolation))
 	}
 	if req.Isolation == tfv1.IsolationModePartitioned {
-		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, MaxPartitionsMap, PartitionTemplateMap))
+		maxPartitionsSnap, partitionTemplateSnap := GetPartitionConfigSnapshot()
+		filterRegistry = filterRegistry.With(filter.NewPartitionTemplateFilter(req.Isolation, req.PartitionTemplateID, maxPartitionsSnap, partitionTemplateSnap))
 	}
 	filterRegistry = filterRegistry.With(filter.NewResourceFilter(req.Request))
 	if req.GPUModel != "" {
@@ -735,8 +877,8 @@ func (s *GpuAllocator) GetMatchedPartition(
 
 	// Find the best GPU with the best matching partition template
 	for _, gpu := range filteredGPUs {
-		// Get partition templates from global config by GPU model
-		templateConfigs, hasTemplates := PartitionTemplateMap[gpu.Status.GPUModel]
+		// Get partition templates from global config by GPU model (locked accessor)
+		templateConfigs, hasTemplates := GetPartitionTemplates(gpu.Status.GPUModel)
 		if !hasTemplates || len(templateConfigs) == 0 {
 			continue // Skip GPUs without partition templates in config
 		}
@@ -1176,6 +1318,11 @@ func (s *GpuAllocator) Dealloc(
 		}
 
 		removeRunningApp(s.ctx, storeGPU, request)
+		// Safety net: if the GPU CR was reset between Reserve and Dealloc (e.g.
+		// hypervisor restart cleared status), Available wasn't actually subtracted
+		// when this allocation was made, so adding it back here would push Available
+		// above Capacity. Clamp to maintain the invariant Available <= Capacity.
+		clampGPUAvailableToCapacity(storeGPU)
 
 		s.markGPUDirty(gpuNameNs)
 	}
@@ -1666,7 +1813,7 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 	defer s.storeMutex.Unlock()
 
 	if s.gpuStore[key] != nil {
-		if gpu.Status.GPUModel != "" {
+		if gpu.Status.GPUModel != "" && gpu.Status.Capacity != nil {
 			mu.Lock()
 			if _, exists := GPUCapacityMap[gpu.Status.GPUModel]; !exists {
 				GPUCapacityMap[gpu.Status.GPUModel] = *gpu.Status.Capacity
@@ -1734,7 +1881,14 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 		syncGPUMetadataAndStatusFromCluster(old, gpu)
 		log.V(6).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
 	} else {
-		s.gpuStore[key] = gpu.DeepCopy()
+		gpuInMem := gpu.DeepCopy()
+		if gpuInMem.Status.Capacity == nil {
+			gpuInMem.Status.Capacity = &tfv1.Resource{}
+		}
+		if gpuInMem.Status.Available == nil {
+			gpuInMem.Status.Available = gpuInMem.Status.Capacity.DeepCopy()
+		}
+		s.gpuStore[key] = gpuInMem
 		log.V(6).Info("Updated GPU in store (new entry)", "name", key.Name, "phase", gpu.Status.Phase)
 	}
 
@@ -1742,6 +1896,9 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 }
 
 func (s *GpuAllocator) addOrUpdateGPUMaps(gpuInMem *tfv1.GPU) {
+	if gpuInMem == nil {
+		return
+	}
 	if gpuInMem.Status.NodeSelector != nil {
 		gpuNodeName := gpuInMem.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		if gpuNodeName != "" {
@@ -1766,7 +1923,7 @@ func (s *GpuAllocator) addOrUpdateGPUMaps(gpuInMem *tfv1.GPU) {
 		}
 	}
 
-	if gpuInMem.Status.GPUModel != "" {
+	if gpuInMem.Status.GPUModel != "" && gpuInMem.Status.Capacity != nil {
 		mu.Lock()
 		GPUCapacityMap[gpuInMem.Status.GPUModel] = *gpuInMem.Status.Capacity
 		mu.Unlock()
@@ -1808,6 +1965,14 @@ func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
 		old.Status.Available = gpu.Status.Capacity.DeepCopy()
 	}
 
+	// Detect the hypervisor-restart pattern: GPU CR was reset to zero capacity
+	// (controller saw it disappear and reappear without status), and now the
+	// hypervisor publishes the real capacity. The naive "Available += diff"
+	// math is wrong in that case because it assumes Available already tracked
+	// active allocations through the transition, which it didn't (the worker
+	// was running the whole time but our in-memory Available was reset).
+	oldCapacityWasZero := old.Status.Capacity.Tflops.IsZero() && old.Status.Capacity.Vram.IsZero()
+
 	tflopsDiff := gpu.Status.Capacity.Tflops.DeepCopy()
 	tflopsDiff.Sub(old.Status.Capacity.Tflops)
 	if tflopsDiff.Value() != 0 {
@@ -1819,6 +1984,59 @@ func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
 	if vramDiff.Value() != 0 {
 		old.Status.Capacity.Vram.Add(vramDiff)
 		old.Status.Available.Vram.Add(vramDiff)
+	}
+
+	if oldCapacityWasZero && (!old.Status.Capacity.Tflops.IsZero() || !old.Status.Capacity.Vram.IsZero()) {
+		// Rebuild Available = Capacity - sum(active Request on this GPU).
+		// uniqueAllocation is the authoritative ledger of who holds what.
+		s.recomputeGPUAvailableFromAllocations(old)
+	}
+	// Final safety net: a stale Dealloc or a Capacity downgrade can still drift
+	// Available above Capacity (the observable symptom). Clamp to invariant.
+	clampGPUAvailableToCapacity(old)
+}
+
+// recomputeGPUAvailableFromAllocations resets gpu.Status.Available to Capacity,
+// then subtracts every active allocation that references this GPU. Caller must
+// hold s.storeMutex.
+func (s *GpuAllocator) recomputeGPUAvailableFromAllocations(gpu *tfv1.GPU) {
+	if gpu == nil || gpu.Status.Capacity == nil {
+		return
+	}
+	available := gpu.Status.Capacity.DeepCopy()
+	for _, req := range s.uniqueAllocation {
+		if req == nil {
+			continue
+		}
+		for _, name := range req.GPUNames {
+			if name != gpu.Name {
+				continue
+			}
+			if !req.Request.ComputePercent.IsZero() {
+				tflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
+				available.Tflops.Sub(*tflops)
+			} else {
+				available.Tflops.Sub(req.Request.Tflops)
+			}
+			available.Vram.Sub(req.Request.Vram)
+		}
+	}
+	gpu.Status.Available = available
+}
+
+// clampGPUAvailableToCapacity enforces the invariant Available <= Capacity for
+// both tflops and vram. This is defense-in-depth against any code path that
+// adds resources back to Available without a matching prior subtraction
+// (e.g., GPU CR reset + Dealloc of a pod that survived the reset).
+func clampGPUAvailableToCapacity(gpu *tfv1.GPU) {
+	if gpu == nil || gpu.Status.Capacity == nil || gpu.Status.Available == nil {
+		return
+	}
+	if gpu.Status.Available.Tflops.Cmp(gpu.Status.Capacity.Tflops) > 0 {
+		gpu.Status.Available.Tflops = gpu.Status.Capacity.Tflops.DeepCopy()
+	}
+	if gpu.Status.Available.Vram.Cmp(gpu.Status.Capacity.Vram) > 0 {
+		gpu.Status.Available.Vram = gpu.Status.Capacity.Vram.DeepCopy()
 	}
 }
 
@@ -2389,15 +2607,22 @@ func removeRunningApp(ctx context.Context, gpu *tfv1.GPU, allocRequest *tfv1.All
 			})
 		}
 	} else {
-		// should not happen, if deallocation twice, it should be a bug
-		log.FromContext(ctx).Info("[Warning] The app to remove not found, could be caused by deallocation twice bug", "gpu", gpu.Name, "namespace", gpu.Namespace, "workload", workloadNameNamespace.Name, "namespace", workloadNameNamespace.Namespace)
+		// Common false positive: the GPU CR's RunningApps was cleared (e.g. by a
+		// hypervisor restart) while the allocation entry survived in memory. In
+		// that case there's nothing to remove from RunningApps and that's fine.
+		// True "deallocation twice" would have been blocked earlier by the
+		// uniqueDeallocation guard in Dealloc.
+		log.FromContext(ctx).V(1).Info("running-app entry not present on GPU at dealloc time; likely GPU CR was reset between Reserve and Dealloc",
+			"gpu", gpu.Name,
+			"workloadNamespace", workloadNameNamespace.Namespace,
+			"workloadName", workloadNameNamespace.Name)
 	}
 }
 
 // bindPartition handles partition allocation for a single GPU in partitioned mode
 func (s *GpuAllocator) bindPartition(gpu *tfv1.GPU, req *tfv1.AllocRequest, selectedGPU string) error {
-	// Verify template exists in global config for this GPU model
-	templateConfigs, hasTemplates := PartitionTemplateMap[gpu.Status.GPUModel]
+	// Verify template exists in global config for this GPU model (locked accessor).
+	templateConfigs, hasTemplates := GetPartitionTemplates(gpu.Status.GPUModel)
 	if !hasTemplates {
 		return fmt.Errorf("no partition templates configured for GPU model %s", gpu.Status.GPUModel)
 	}
