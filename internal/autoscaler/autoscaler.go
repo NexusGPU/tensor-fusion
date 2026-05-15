@@ -153,6 +153,22 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 			continue
 		}
 
+		// Detect same-name-different-UID recreation: between two ticks the
+		// previous workload may have been deleted and a fresh one created
+		// with the same namespace/name. Drop the stale State (and its
+		// metrics-loader goroutine) so the fresh CR seeds a clean Status —
+		// otherwise the new workload would inherit the old workload's
+		// Recommendation / ActiveCronScalingRule / Conditions /
+		// AppliedRecommendedReplicas through the seed-once cache.
+		if existing, ok := s.findWorkloadState(workloadID.Namespace, workloadID.Name); ok {
+			if !existing.MatchesUID(string(workload.UID)) {
+				log.Info("workload recreated with same namespace/name, dropping stale state",
+					"workload", workloadID)
+				s.metricsLoader.removeWorkload(workloadID)
+				delete(s.workloads, workloadID)
+			}
+		}
+
 		activeWorkloads[workloadID] = true
 		workloadState := s.findOrCreateWorkloadState(workloadID.Namespace, workloadID.Name)
 		if err := s.workloadHandler.UpdateWorkloadState(ctx, workloadState, &workload); err != nil {
@@ -176,20 +192,32 @@ func (s *Autoscaler) loadWorkloads(ctx context.Context) {
 
 func (s *Autoscaler) processSingleWorkload(ctx context.Context, workload *workload.State) {
 	log := log.FromContext(ctx)
+	_, workloadName := workload.Coordinates()
 	recommendation, err := recommender.GetRecommendation(ctx, workload, s.recommenders)
 	if err != nil {
-		log.Error(err, "failed to get recommendation", "workload", workload.Name)
+		log.Error(err, "failed to get recommendation", "workload", workloadName)
 		return
+	}
+
+	// Mirror the newly computed recommendation into State.Status before Apply
+	// runs. Subsequent reads through GetCurrentResourcesSpec (used by the
+	// recommender for incremental scaling), LatestRecommendation (retry on
+	// partial failure), and IsRecommendationAppliedToAllWorkers all consume
+	// State.Status.Recommendation, which seed-once UpdateWorkloadState no
+	// longer refreshes from the API. Only update on a non-nil result so a
+	// no-op round does not erase the in-flight recommendation.
+	if recommendation != nil {
+		workload.SetRecommendation(recommendation)
 	}
 
 	if workload.IsAutoSetResourcesEnabled() {
 		if err := s.workloadHandler.ApplyRecommendationToWorkload(ctx, workload, recommendation); err != nil {
-			log.Error(err, "failed to apply recommendation to workload", "workload", workload.Name)
+			log.Error(err, "failed to apply recommendation to workload", "workload", workloadName)
 		}
 	}
 
 	if err := s.workloadHandler.UpdateWorkloadStatus(ctx, workload, recommendation); err != nil {
-		log.Error(err, "failed to update workload status", "workload", workload.Name)
+		log.Error(err, "failed to update workload status", "workload", workloadName)
 	}
 }
 

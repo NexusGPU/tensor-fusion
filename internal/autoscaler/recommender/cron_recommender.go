@@ -9,7 +9,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/robfig/cron/v3"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -31,12 +30,16 @@ func (c *CronRecommender) Name() string {
 }
 
 func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*RecResult, error) {
-	activeRule, err := c.getActiveCronScalingRule(&w.Spec.AutoScalingConfig)
+	// Snapshot all Spec/Status reads up front so we don't hold State.Mu across
+	// recommendationProcessor.Apply (which itself locks via State accessors).
+	cfg := w.AutoScalingConfigSnapshot()
+	currentRule := w.ActiveCronScalingRuleSnapshot()
+	_, name := w.Coordinates()
+
+	activeRule, err := c.getActiveCronScalingRule(&cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active cron scaling rule %w", err)
 	}
-
-	currentRule := w.Status.ActiveCronScalingRule
 
 	if activeRule == nil && currentRule == nil {
 		return nil, nil
@@ -50,14 +53,14 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 		reason = "RuleInactive"
 		message = fmt.Sprintf("Cron scaling rule %q is inactive", currentRule.Name)
 		log.FromContext(ctx).Info("cron scaling rule inactive",
-			"rule", currentRule.Name, "workload", w.Name, "resources", recommendation)
+			"rule", currentRule.Name, "workload", name, "resources", recommendation)
 	} else {
 		recommendation = activeRule.DesiredResources
 		if currentRule == nil || !recommendation.Equal(&currentRule.DesiredResources) {
 			reason = "RuleActive"
 			message = fmt.Sprintf("Cron scaling rule %q is active", activeRule.Name)
 			log.FromContext(ctx).Info("cron scaling rule active",
-				"rule", activeRule.Name, "workload", w.Name, "resources", recommendation)
+				"rule", activeRule.Name, "workload", name, "resources", recommendation)
 			if c.recommendationProcessor != nil {
 				var err error
 				var msg string
@@ -74,8 +77,8 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 	}
 
 	if len(reason) > 0 {
-		w.Status.ActiveCronScalingRule = activeRule.DeepCopy()
-		meta.SetStatusCondition(&w.Status.Conditions, metav1.Condition{
+		w.SetActiveCronScalingRule(activeRule.DeepCopy())
+		w.UpsertStatusCondition(metav1.Condition{
 			Type:               constants.ConditionStatusTypeRecommendationProvided,
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),

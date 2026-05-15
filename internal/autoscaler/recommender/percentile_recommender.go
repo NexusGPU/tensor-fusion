@@ -7,9 +7,9 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -102,7 +102,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 	log := log.FromContext(ctx)
 
 	// Check InitialDelayPeriod
-	asr := workload.Spec.AutoScalingConfig.AutoSetResources
+	asr := workload.AutoSetResources()
 	if asr == nil {
 		return nil, nil
 	}
@@ -113,15 +113,17 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		initialDelay = 30 * time.Minute
 	}
 
-	workloadCreationTime := workload.CreationTimestamp.Time
+	workloadCreationTime := workload.CreationTime()
 	if workloadCreationTime.IsZero() {
 		// Fallback: use current time if creation timestamp is not set
 		workloadCreationTime = time.Now()
 	}
+	_, name := workload.Coordinates()
+	qos := workload.Qos()
 
 	timeSinceCreation := time.Since(workloadCreationTime)
 	if timeSinceCreation < initialDelay {
-		meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
+		workload.UpsertStatusCondition(metav1.Condition{
 			Type:               constants.ConditionStatusTypeResourceUpdate,
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),
@@ -140,7 +142,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		return nil, nil
 	}
 
-	log.V(4).Info("estimated resources", "workload", workload.Name, "estimations", estimations)
+	log.V(4).Info("estimated resources", "workload", name, "estimations", estimations)
 
 	curRes := workload.GetCurrentResourcesSpec()
 	originalRes := workload.GetOriginalResourcesSpec()
@@ -158,7 +160,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		&originalRes.Requests.Tflops,
 		&originalRes.Limits.Tflops,
 		config,
-		workload.Spec.Qos,
+		qos,
 	); result != nil {
 		message = result.message
 		recommendation.Requests.Tflops = result.targetRequest
@@ -179,7 +181,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		&originalRes.Requests.Vram,
 		&originalRes.Limits.Vram,
 		config,
-		workload.Spec.Qos,
+		qos,
 	); result != nil {
 		if len(message) > 0 {
 			message += fmt.Sprintf(", %s", result.message)
@@ -222,7 +224,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 
 		// Avoid fluctuation when scale up/down is too small
 		if !shouldUpdate && thresholdMessage != "" {
-			meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
+			workload.UpsertStatusCondition(metav1.Condition{
 				Type:               constants.ConditionStatusTypeResourceUpdate,
 				Status:             metav1.ConditionTrue,
 				LastTransitionTime: metav1.Now(),
@@ -257,7 +259,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 
 	hasApplied := recommendation.Equal(curRes)
 	if !hasApplied {
-		meta.SetStatusCondition(&workload.Status.Conditions, metav1.Condition{
+		workload.UpsertStatusCondition(metav1.Condition{
 			Type:               constants.ConditionStatusTypeResourceUpdate,
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),
@@ -391,7 +393,14 @@ type EstimatedResources struct {
 	UpperBoundVram   resource.Quantity
 }
 
-type resourcesEstimator struct {
+// resourcesEstimator is stateless. It holds no per-call data; estimators are
+// constructed locally per GetResourcesEstimation call so concurrent invocations
+// for different workloads cannot stomp on each other's percentile / margin
+// configuration (the previous "*r = resourcesEstimator{...}" pattern was a
+// data race across workloads sharing the same PercentileRecommender).
+type resourcesEstimator struct{}
+
+type percentileEstimators struct {
 	lowerBoundTflops TflopsEstimator
 	targetTflops     TflopsEstimator
 	upperBoundTflops TflopsEstimator
@@ -400,28 +409,31 @@ type resourcesEstimator struct {
 	upperBoundVram   VramEstimator
 }
 
-func (r *resourcesEstimator) GetResourcesEstimation(workload *workload.State) *EstimatedResources {
-	aggregator := workload.WorkerUsageAggregator
-	if aggregator.IsEmpty() {
-		return nil
-	}
-	// TODO: cache config
-	asr := workload.Spec.AutoScalingConfig.AutoSetResources
+func (r *resourcesEstimator) GetResourcesEstimation(wl *workload.State) *EstimatedResources {
+	asr := wl.AutoSetResources()
 	if asr == nil {
 		return nil
 	}
-	r.createEstimatorsFromConfig(getPercentileConfig(asr))
-	return &EstimatedResources{
-		LowerBoundTflops: QuantityFromAmount(r.lowerBoundTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
-		TargetTflops:     QuantityFromAmount(r.targetTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
-		UpperBoundTflops: QuantityFromAmount(r.upperBoundTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
-		LowerBoundVram:   QuantityFromAmount(r.lowerBoundVram.GetVramEstimation(aggregator), resource.BinarySI),
-		TargetVram:       QuantityFromAmount(r.targetVram.GetVramEstimation(aggregator), resource.BinarySI),
-		UpperBoundVram:   QuantityFromAmount(r.upperBoundVram.GetVramEstimation(aggregator), resource.BinarySI),
-	}
+	est := buildPercentileEstimators(getPercentileConfig(asr))
+
+	var result *EstimatedResources
+	wl.ConsumeAggregator(func(aggregator *metrics.WorkerUsageAggregator) {
+		if aggregator == nil || aggregator.IsEmpty() {
+			return
+		}
+		result = &EstimatedResources{
+			LowerBoundTflops: QuantityFromAmount(est.lowerBoundTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
+			TargetTflops:     QuantityFromAmount(est.targetTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
+			UpperBoundTflops: QuantityFromAmount(est.upperBoundTflops.GetTflopsEstimation(aggregator), resource.DecimalSI),
+			LowerBoundVram:   QuantityFromAmount(est.lowerBoundVram.GetVramEstimation(aggregator), resource.BinarySI),
+			TargetVram:       QuantityFromAmount(est.targetVram.GetVramEstimation(aggregator), resource.BinarySI),
+			UpperBoundVram:   QuantityFromAmount(est.upperBoundVram.GetVramEstimation(aggregator), resource.BinarySI),
+		}
+	})
+	return result
 }
 
-func (r *resourcesEstimator) createEstimatorsFromConfig(config *PercentileConfig) {
+func buildPercentileEstimators(config *PercentileConfig) percentileEstimators {
 	// Simplified: no confidence multiplier, just percentile + margin
 	targetTflops := NewPercentileTflopsEstimator(config.TargetTflopsPercentile)
 	lowerBoundTflops := NewPercentileTflopsEstimator(config.LowerBoundTflopsPercentile)
@@ -439,7 +451,7 @@ func (r *resourcesEstimator) createEstimatorsFromConfig(config *PercentileConfig
 	lowerBoundVram = WithVramMargin(config.RequestMarginFraction, lowerBoundVram)
 	upperBoundVram = WithVramMargin(config.RequestMarginFraction, upperBoundVram)
 
-	*r = resourcesEstimator{
+	return percentileEstimators{
 		lowerBoundTflops: lowerBoundTflops,
 		targetTflops:     targetTflops,
 		upperBoundTflops: upperBoundTflops,

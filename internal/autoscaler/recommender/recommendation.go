@@ -40,7 +40,8 @@ func (r *recommendationProcessor) Apply(
 	if err != nil || allowedRes == nil {
 		return result, msg, err
 	}
-	log.FromContext(ctx).V(4).Info("fetched max allowed resources", "workload", workload.Name, "resources", allowedRes)
+	_, workloadName := workload.Coordinates()
+	log.FromContext(ctx).V(4).Info("fetched max allowed resources", "workload", workloadName, "resources", allowedRes)
 
 	if isScaleUpTflops && rec.Requests.Tflops.Cmp(allowedRes.Tflops) > 0 {
 		result.Requests.Tflops = allowedRes.Tflops
