@@ -270,7 +270,7 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 			metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
 		}
 
-		if coreNode.Labels != nil && coreNode.Labels[constants.KarpenterExpansionLabel] != "" {
+		if r.Expander != nil && coreNode.Labels != nil && coreNode.Labels[constants.KarpenterExpansionLabel] != "" {
 			r.Expander.RemoveInFlightNode(coreNode.Labels[constants.KarpenterExpansionLabel])
 		}
 		return nil
@@ -389,6 +389,22 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 
 	// If pod exists and prerequisites are satisfied, verify its status
 	if podExists {
+		if crashedContainer, restartCount, threshold, ok := hypervisorPodCrashExceeded(currentPod); ok {
+			log.Info("hypervisor pod crash count exceeded threshold, deleting for recreation",
+				"node", node.Name,
+				"pod", currentPod.Name,
+				"container", crashedContainer,
+				"restartCount", restartCount,
+				"threshold", threshold)
+			r.Recorder.Eventf(node, nil, corev1.EventTypeWarning, "HypervisorCrashLoopRecreate", "Recreate",
+				"Hypervisor pod %s deleted for recreation: container %s restarted %d times (threshold %d)",
+				currentPod.Name, crashedContainer, restartCount, threshold)
+			if err := r.Delete(ctx, currentPod); err != nil {
+				return "", fmt.Errorf("failed to delete crash-looping hypervisor pod: %w", err)
+			}
+			return "", nil
+		}
+
 		desiredIsolationMode := getHypervisorIsolationModeFromNodeLabel(node)
 		if !isHypervisorIsolationModeConfigured(currentPod, desiredIsolationMode) {
 			if err := r.Delete(ctx, currentPod); err != nil {
@@ -1119,6 +1135,32 @@ func (r *GPUNodeReconciler) mapDevicePluginPodToGPUNode(ctx context.Context, obj
 		"nodeName", pod.Spec.NodeName)
 
 	return []ctrl.Request{{NamespacedName: client.ObjectKey{Name: pod.Spec.NodeName}}}
+}
+
+func hypervisorPodCrashExceeded(pod *corev1.Pod) (container string, restartCount int32, threshold int32, exceeded bool) {
+	threshold = config.DefaultHypervisorMaxCrashCount
+	if cfg := config.GetGlobalConfig(); cfg != nil && cfg.HypervisorMaxCrashCount != nil {
+		threshold = *cfg.HypervisorMaxCrashCount
+	}
+	if threshold <= 0 {
+		return "", 0, 0, false
+	}
+
+	check := func(statuses []corev1.ContainerStatus) (string, int32, bool) {
+		for _, cs := range statuses {
+			if cs.RestartCount > threshold {
+				return cs.Name, cs.RestartCount, true
+			}
+		}
+		return "", 0, false
+	}
+	if name, count, hit := check(pod.Status.InitContainerStatuses); hit {
+		return name, count, threshold, true
+	}
+	if name, count, hit := check(pod.Status.ContainerStatuses); hit {
+		return name, count, threshold, true
+	}
+	return "", 0, threshold, false
 }
 
 func getMatchedVendor(node *corev1.Node, nodeManagerConfig *tfv1.NodeManagerConfig) (string, error) {
