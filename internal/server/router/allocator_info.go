@@ -2,8 +2,11 @@ package router
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"sort"
 
 	"time"
 
@@ -119,27 +122,81 @@ func (r *AllocatorInfoRouter) SimulateScheduleOnePod(ctx *gin.Context) {
 	scheduleResult, err := r.scheduler.SchedulePod(ctx, fwkInstance, state, pod)
 	gpuCycleState, _ := state.Read(gpuresources.CycleStateGPUSchedulingResult)
 	simulateSchedulingFilterDetail, _ := state.Read(fwk.StateKey(constants.SchedulerSimulationKey))
+	progressiveNodes := readProgressiveNodeNames(state)
+	var errorPayload gin.H
 	if err != nil {
-		if fitError, ok := err.(*framework.FitError); ok {
-			ctx.JSON(http.StatusOK, gin.H{
-				"scheduleResult": scheduleResult,
-				"filterDetail":   simulateSchedulingFilterDetail,
-				"error": gin.H{
-					"numAllNodes": fitError.NumAllNodes,
-					"diagnosis":   fitError.Diagnosis,
-				},
-				"cycleState":        state,
-				"gpuSchedulerState": gpuCycleState,
-			})
-			return
+		log.FromContext(ctx).Error(err, "Simulate schedule pod failed",
+			"pod", pod.Name, "namespace", pod.Namespace, "errorType", fmt.Sprintf("%T", err))
+		errorPayload = gin.H{
+			"type":    fmt.Sprintf("%T", err),
+			"message": err.Error(),
+		}
+		var fitError *framework.FitError
+		if errors.As(err, &fitError) {
+			errorPayload["numAllNodes"] = fitError.NumAllNodes
+			errorPayload["diagnosis"] = renderDiagnosis(&fitError.Diagnosis)
 		}
 	}
 	ctx.JSON(http.StatusOK, gin.H{
-		"scheduleResult":    scheduleResult,
-		"filterDetail":      simulateSchedulingFilterDetail,
-		"error":             err,
-		"cycleState":        state,
-		"gpuSchedulerState": gpuCycleState,
+		"scheduleResult":       scheduleResult,
+		"filterDetail":         simulateSchedulingFilterDetail,
+		"error":                errorPayload,
+		"cycleState":           state,
+		"gpuSchedulerState":    gpuCycleState,
+		"progressiveNodeNames": progressiveNodes,
 	})
-	log.FromContext(ctx).Info("Simulate schedule pod completed", "pod", pod.Name, "namespace", pod.Namespace, "duration", time.Since(start))
+	log.FromContext(ctx).Info("Simulate schedule pod completed",
+		"pod", pod.Name, "namespace", pod.Namespace, "duration", time.Since(start), "scheduleError", err != nil)
+}
+
+func renderDiagnosis(d *framework.Diagnosis) gin.H {
+	if d == nil {
+		return nil
+	}
+	out := gin.H{
+		"preFilterMsg":         d.PreFilterMsg,
+		"postFilterMsg":        d.PostFilterMsg,
+		"unschedulablePlugins": d.UnschedulablePlugins.UnsortedList(),
+		"pendingPlugins":       d.PendingPlugins.UnsortedList(),
+	}
+	if d.NodeToStatus != nil {
+		nodeStatuses := gin.H{}
+		d.NodeToStatus.ForEachExplicitNode(func(name string, s *fwk.Status) {
+			nodeStatuses[name] = renderStatus(s)
+		})
+		out["nodeToStatus"] = gin.H{
+			"nodes":             nodeStatuses,
+			"absentNodesStatus": renderStatus(d.NodeToStatus.AbsentNodesStatus()),
+		}
+	}
+	return out
+}
+
+func renderStatus(s *fwk.Status) gin.H {
+	if s == nil {
+		return gin.H{"code": "Success"}
+	}
+	return gin.H{
+		"code":    s.Code().String(),
+		"plugin":  s.Plugin(),
+		"reasons": s.Reasons(),
+		"message": s.Message(),
+	}
+}
+
+func readProgressiveNodeNames(state *framework.CycleState) gin.H {
+	raw, err := state.Read(gpuresources.CycleStateProgressiveNodeNames)
+	if err != nil || raw == nil {
+		return nil
+	}
+	s, ok := raw.(*gpuresources.ProgressiveNodeNamesState)
+	if !ok || s.NodeNames == nil {
+		return nil
+	}
+	names := s.NodeNames.UnsortedList()
+	sort.Strings(names)
+	return gin.H{
+		"count": len(names),
+		"nodes": names,
+	}
 }

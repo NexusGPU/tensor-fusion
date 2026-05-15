@@ -141,8 +141,31 @@ func (e *NodeExpander) cleanupInFlightNodeClaim(nodeClaim *karpv1.NodeClaim) {
 }
 
 func (e *NodeExpander) GetNodeScalerInfo() any {
+	if e == nil {
+		return map[string]any{}
+	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+
+	inFlightNodesCopy := make(map[string][]*tfv1.GPU, len(e.inFlightNodes))
+	for nodeName, gpus := range e.inFlightNodes {
+		gpuCopies := make([]*tfv1.GPU, 0, len(gpus))
+		for _, gpu := range gpus {
+			if gpu == nil {
+				continue
+			}
+			gpuCopies = append(gpuCopies, gpu.DeepCopy())
+		}
+		inFlightNodesCopy[nodeName] = gpuCopies
+	}
+
+	preSchedulePodsCopy := make(map[string]*tfv1.AllocRequest, len(e.preSchedulePods))
+	for podName, req := range e.preSchedulePods {
+		if req == nil {
+			continue
+		}
+		preSchedulePodsCopy[podName] = req.DeepCopy()
+	}
 
 	inFlightNodeClaimSnapshot := make(map[string]any)
 	e.inFlightNodeClaims.Range(func(key, value any) bool {
@@ -150,9 +173,9 @@ func (e *NodeExpander) GetNodeScalerInfo() any {
 		return true
 	})
 	return map[string]any{
-		"inFlightNodes":       e.inFlightNodes,
+		"inFlightNodes":       inFlightNodesCopy,
 		"inFlightNodeClaims":  inFlightNodeClaimSnapshot,
-		"preSchedulePods":     e.preSchedulePods,
+		"preSchedulePods":     preSchedulePodsCopy,
 		"preScheduleTimerNum": len(e.preScheduleTimers),
 	}
 }
@@ -161,11 +184,16 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	if pod == nil {
 		return fmt.Errorf("pod cannot be nil")
 	}
-	if _, ok := e.preSchedulePods[pod.Name]; ok {
+	e.mu.RLock()
+	_, alreadyInPreSchedule := e.preSchedulePods[pod.Name]
+	inFlightCount := len(e.inFlightNodes)
+	e.mu.RUnlock()
+
+	if alreadyInPreSchedule {
 		e.logger.Info("Pod already in pre-schedule state, skipping expansion check and wait for expansion", "pod", klog.KObj(pod))
 		return nil
 	}
-	if len(e.inFlightNodes) >= MaxInFlightNodes {
+	if inFlightCount >= MaxInFlightNodes {
 		e.logger.Error(nil, "Too many inFlight nodes, skipping expansion to avoid too many nodes provisioned concurrently")
 		time.Sleep(WaitingInFlightNodesPeriod)
 		return nil
@@ -200,14 +228,19 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 			}
 		}
 	}
+	e.mu.RLock()
 	inFlightGPUSnapshot := make(map[string]*tfv1.GPU, len(e.inFlightNodes)*4)
 	for _, inFlightGPUs := range e.inFlightNodes {
 		for _, gpu := range inFlightGPUs {
+			if gpu == nil {
+				continue
+			}
 			snapshot := gpu.DeepCopy()
 			inFlightGPUSnapshot[gpu.Name] = snapshot
 			allGpus = append(allGpus, snapshot)
 		}
 	}
+	e.mu.RUnlock()
 	if len(allGpus) == 0 {
 		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCheck", "NoGPUNodes",
 			"all schedulable nodes are none GPU nodes, manual check required")
@@ -388,6 +421,9 @@ func (e *NodeExpander) simulateSchedulingWithoutGPU(ctx context.Context, pod *co
 	if !utils.IsTensorFusionPod(pod) {
 		return nil, fmt.Errorf("pod to check expansion is not a tensor fusion worker pod: %s", pod.Name)
 	}
+	if err := e.scheduler.UpdateNodeInfoSnapshot(ctx); err != nil {
+		return nil, fmt.Errorf("refresh scheduler snapshot before expansion simulation: %w", err)
+	}
 	delete(pod.Labels, constants.LabelComponent)
 	scheduleResult, _, _, _, err := e.scheduler.FindNodesThatFitPod(ctx, fwkInstance, state, pod)
 	pod.Labels[constants.LabelComponent] = constants.ComponentWorker
@@ -410,9 +446,21 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 	// NOTE: a known issue, if cpu/mem not enough or affinity not satisfied for pre-scheduled pods inside inFlightNodes,
 	// it will not be considered, when inflight created and the Pod still not be able to schedule on new node,
 	// wait next scheduling check and node expansion period (k8s move UnscheduleQueue to ActiveQueue every 5 minutes)
+	e.mu.RLock()
+	preScheduleSnapshot := make([]*tfv1.AllocRequest, 0, len(e.preSchedulePods))
 	for _, alloc := range e.preSchedulePods {
+		if alloc != nil {
+			preScheduleSnapshot = append(preScheduleSnapshot, alloc.DeepCopy())
+		}
+	}
+	e.mu.RUnlock()
+
+	for _, alloc := range preScheduleSnapshot {
 		preScheduledPodPreAllocated := false
 		for _, gpu := range inflightSnapshot {
+			if gpu == nil || gpu.Status.Capacity == nil || gpu.Status.Available == nil {
+				continue
+			}
 			reqTflops := alloc.Request.Tflops
 			if !alloc.Request.ComputePercent.IsZero() {
 				reqTflops = *utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, alloc.Request)
@@ -436,8 +484,6 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 	}
 
 	// Get allocation request
-	e.mu.RLock()
-	defer e.mu.RUnlock()
 	allocRequest, _, err := utils.ComposeAllocationRequest(e.ctx, pod)
 	if err != nil {
 		return nil, false, true, false
@@ -459,9 +505,9 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 			Tflops: resource.Quantity{},
 			Vram:   resource.Quantity{},
 		},
-		Workers: int32(len(e.preSchedulePods)),
+		Workers: int32(len(preScheduleSnapshot)),
 	}
-	for _, alloc := range e.preSchedulePods {
+	for _, alloc := range preScheduleSnapshot {
 		toScheduleResource.Requests.Tflops.Add(alloc.Request.Tflops)
 		toScheduleResource.Requests.Vram.Add(alloc.Request.Vram)
 		toScheduleResource.Limits.Tflops.Add(alloc.Limit.Tflops)
