@@ -1303,12 +1303,16 @@ func SetWorkerContainerSpec(
 	// when compute isolation mode is hard-isolation, memory limit also change to hard-mode
 	// open source vgpu.rs memory limiter is feedback-loop based, potentially cause resource contention
 	if workloadProfile.Isolation == tfv1.IsolationModeHard {
+		memLimitMB := strconv.FormatInt(workloadProfile.Resources.Limits.Vram.Value()/(1024*1024), 10)
 		container.Env = append(container.Env, v1.EnvVar{
 			Name:  constants.HardSMLimiterEnv,
 			Value: workloadProfile.Resources.Limits.ComputePercent.String(),
 		}, v1.EnvVar{
 			Name:  constants.HardMemLimiterEnv,
-			Value: strconv.FormatInt(workloadProfile.Resources.Limits.Vram.Value()/(1024*1024), 10),
+			Value: memLimitMB,
+		}, v1.EnvVar{
+			Name:  constants.LegacyHardMemLimiterEnv,
+			Value: memLimitMB,
 		})
 	}
 
