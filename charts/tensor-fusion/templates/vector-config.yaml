@@ -1,3 +1,25 @@
+{{- /*
+  tensor-os plan 31 — InfluxDB-line sink is the only path to greptime.
+  When any monitoring.scrapes.* is enabled, prometheus_scrape sources are
+  added and the prom_to_influx remap restructures the metric event into
+  influx-line fields (measurement = .name; tags = whitelist; fields = value).
+  The resulting events feed the SAME http sink as the file source — we never
+  introduce a prometheus_remote_write sink.
+*/}}
+{{- $mon := .Values.monitoring | default dict -}}
+{{- $scrapes := $mon.scrapes | default dict -}}
+{{- $anyScrape := or (or (or (or
+      (and $scrapes.nodeExporter $scrapes.nodeExporter.enabled)
+      (and $scrapes.kubeStateMetrics $scrapes.kubeStateMetrics.enabled))
+      (and $scrapes.cadvisor $scrapes.cadvisor.enabled))
+      (and $scrapes.kubeApiserver $scrapes.kubeApiserver.enabled))
+      (and $scrapes.tensorOsServer $scrapes.tensorOsServer.enabled) -}}
+{{- $whitelist := list -}}
+{{- if and $mon.labelWhitelist $mon.labelWhitelist.common }}{{ $whitelist = concat $whitelist $mon.labelWhitelist.common }}{{ end -}}
+{{- if and $mon.labelWhitelist $mon.labelWhitelist.kubeState }}{{ $whitelist = concat $whitelist $mon.labelWhitelist.kubeState }}{{ end -}}
+{{- if and $mon.labelWhitelist $mon.labelWhitelist.cadvisor }}{{ $whitelist = concat $whitelist $mon.labelWhitelist.cadvisor }}{{ end -}}
+{{- if and $mon.labelWhitelist $mon.labelWhitelist.apiserver }}{{ $whitelist = concat $whitelist $mon.labelWhitelist.apiserver }}{{ end -}}
+{{- $whitelistJson := $whitelist | uniq | toJson -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -18,6 +40,33 @@ data:
         type: kubernetes_logs
         self_node_name: "${NODE_NAME}"
         extra_label_selector: "tensor-fusion.ai/component in (operator)"
+      {{- if and $scrapes.kubeStateMetrics $scrapes.kubeStateMetrics.enabled }}
+      scrape_ksm:
+        type: prometheus_scrape
+        endpoints: ["{{ $scrapes.kubeStateMetrics.endpoint }}"]
+        scrape_interval_secs: {{ $scrapes.kubeStateMetrics.intervalSecs | default 30 }}
+      {{- end }}
+      {{- if and $scrapes.kubeApiserver $scrapes.kubeApiserver.enabled }}
+      scrape_apiserver:
+        type: prometheus_scrape
+        endpoints: ["{{ $scrapes.kubeApiserver.endpoint }}"]
+        scrape_interval_secs: {{ $scrapes.kubeApiserver.intervalSecs | default 30 }}
+        {{- if $scrapes.kubeApiserver.tlsSkipVerify }}
+        tls:
+          verify_certificate: false
+        {{- end }}
+        {{- if $scrapes.kubeApiserver.authBearerTokenFile }}
+        auth:
+          strategy: bearer
+          token_file: "{{ $scrapes.kubeApiserver.authBearerTokenFile }}"
+        {{- end }}
+      {{- end }}
+      {{- if and $scrapes.tensorOsServer $scrapes.tensorOsServer.enabled }}
+      scrape_tos_server:
+        type: prometheus_scrape
+        endpoints: ["{{ $scrapes.tensorOsServer.endpoint }}"]
+        scrape_interval_secs: {{ $scrapes.tensorOsServer.intervalSecs | default 15 }}
+      {{- end }}
 
     transforms:
       prepare_kubernetes_logs:
@@ -33,11 +82,33 @@ data:
           del(.kubernetes)
           del(.file)
           del(.source_type)
+      {{- if $anyScrape }}
+      prom_to_influx:
+        type: remap
+        inputs:
+          - scrape_*
+        source: |
+          # vector prometheus_scrape emits one metric event per series:
+          #   .name (measurement) / .tags (kv) / .counter|.gauge|.histogram|.summary
+          # Reshape into influx-line: measurement = .name; tags = whitelist;
+          # fields = { value }. Histograms/summaries fall back to their `sum`.
+          .measurement = .name
+          v = .counter.value || .gauge.value || .histogram.sum || .summary.sum || 0.0
+          .fields = { "value": v }
+          whitelist = {{ $whitelistJson }}
+          tags = object!(.tags || {})
+          .tags = filter(tags) -> |k, _v| { includes(whitelist, k) }
+          .tags.cluster_id = .tags.cluster_id || "{{ .Release.Name }}"
+          .tags.collected_by = "vector"
+      {{- end }}
     sinks:
       sink_greptimedb_operator_metrics:
         type: http
         inputs:
-          - metrics        
+          - metrics
+        {{- if $anyScrape }}
+          - prom_to_influx
+        {{- end }}
         method: post
         encoding:
           codec: text
@@ -70,7 +141,7 @@ data:
   vector-hypervisor.yaml: |
     api:
       enabled: true
-    
+
     sources:
       kubernetes_logs:
         type: kubernetes_logs
@@ -81,7 +152,28 @@ data:
         data_dir: /logs
         include:
           - /logs/metrics.log.*
-    
+      {{- if and $scrapes.nodeExporter $scrapes.nodeExporter.enabled }}
+      scrape_node_exporter:
+        type: prometheus_scrape
+        endpoints: ["{{ $scrapes.nodeExporter.endpoint }}"]
+        scrape_interval_secs: {{ $scrapes.nodeExporter.intervalSecs | default 15 }}
+      {{- end }}
+      {{- if and $scrapes.cadvisor $scrapes.cadvisor.enabled }}
+      scrape_cadvisor:
+        type: prometheus_scrape
+        endpoints: ["{{ $scrapes.cadvisor.endpoint }}"]
+        scrape_interval_secs: {{ $scrapes.cadvisor.intervalSecs | default 15 }}
+        {{- if $scrapes.cadvisor.tlsSkipVerify }}
+        tls:
+          verify_certificate: false
+        {{- end }}
+        {{- if $scrapes.cadvisor.authBearerTokenFile }}
+        auth:
+          strategy: bearer
+          token_file: "{{ $scrapes.cadvisor.authBearerTokenFile }}"
+        {{- end }}
+      {{- end }}
+
     transforms:
       prepare_kubernetes_logs:
         type: remap
@@ -96,12 +188,31 @@ data:
           del(.kubernetes)
           del(.file)
           del(.source_type)
+      {{- if $anyScrape }}
+      prom_to_influx:
+        type: remap
+        inputs:
+          - scrape_*
+        source: |
+          .measurement = .name
+          v = .counter.value || .gauge.value || .histogram.sum || .summary.sum || 0.0
+          .fields = { "value": v }
+          whitelist = {{ $whitelistJson }}
+          tags = object!(.tags || {})
+          .tags = filter(tags) -> |k, _v| { includes(whitelist, k) }
+          .tags.cluster_id = .tags.cluster_id || "{{ .Release.Name }}"
+          .tags.node = .tags.node || "${NODE_NAME}"
+          .tags.collected_by = "vector"
+      {{- end }}
 
     sinks:
       sink_greptimedb_hypervisor_metrics:
         type: http
         inputs:
-          - metrics        
+          - metrics
+        {{- if $anyScrape }}
+          - prom_to_influx
+        {{- end }}
         method: post
         encoding:
           codec: text

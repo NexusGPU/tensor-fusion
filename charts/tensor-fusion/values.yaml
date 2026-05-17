@@ -108,6 +108,55 @@ greptime:
       memory: 2Gi
       cpu: 200m
 
+# tensor-os plan 31 — Vector prometheus_scrape sources + remap → InfluxDB.
+# Disabling every entry below restores the chart to its pre-plan-31 behavior
+# (file sources + kubernetes_logs + http sink only). When enabled, the source
+# block + remap transform are injected and stitched into the same InfluxDB
+# sink; we deliberately do NOT introduce a prometheus_remote_write sink.
+monitoring:
+  scrapes:
+    nodeExporter:
+      enabled: false
+      endpoint: "http://127.0.0.1:9100/metrics"
+      intervalSecs: 15
+    kubeStateMetrics:
+      enabled: false
+      endpoint: "http://cluster-metric-source-state.tos-observe.svc:8080/metrics"
+      intervalSecs: 30
+    cadvisor:
+      enabled: false
+      endpoint: "https://127.0.0.1:10250/metrics/cadvisor"
+      intervalSecs: 15
+      tlsSkipVerify: true
+      authBearerTokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    kubeApiserver:
+      enabled: false
+      endpoint: "https://kubernetes.default.svc/metrics"
+      intervalSecs: 30
+      tlsSkipVerify: true
+      authBearerTokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    tensorOsServer:
+      enabled: false
+      endpoint: "http://tos-server.tos-system.svc:3000/metrics"
+      intervalSecs: 15
+  # tos-server appends rendered prometheus_scrape blocks to a separate
+  # ConfigMap (key: dynamic-scrapes.toml) when published services come up.
+  # Vector sidecar loads it with --config and reloads on SIGHUP. Off by
+  # default; tos-server enables it once the patcher service is rolled.
+  dynamicScrapes:
+    enabled: false
+    configMapName: tensor-fusion-vector-dynamic-config
+    configMapKey: "dynamic-scrapes.toml"
+  # Allow-list of labels carried from prometheus_scrape into the InfluxDB
+  # line-protocol tags. Anything outside the union of these lists is dropped
+  # by the prom_to_influx remap transform to prevent tag-cardinality blow-ups
+  # (greptime's mito engine builds per-tag PK indices).
+  labelWhitelist:
+    common: ["cluster_id","node","instance","job"]
+    kubeState: ["namespace","pod","container","workload","workload_kind","phase","condition"]
+    cadvisor: ["namespace","pod","container","image"]
+    apiserver: ["verb","resource","code","scope"]
+
 # greptime:
 #   isCloud: true
 #   host: your-instance.us-west-2.aws.greptime.cloud
