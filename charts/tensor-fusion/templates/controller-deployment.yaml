@@ -134,6 +134,20 @@ spec:
         {{- end }}
         - name: vector
           image: {{ .Values.controller.vectorAgentImage }}
+          {{- /*
+            tensor-os plan 31 R2-BE2 — `--watch-config` reloads vector
+            when either the helm-managed `vector.yaml` OR the
+            tos-server-managed dynamic-scrapes file under /etc/vector/dynamic/
+            changes (kubectl-patch + ConfigMap projection picks it up
+            within ~30s). The `--config` glob picks up *.toml + the main
+            yaml so tos-server's TOML blocks merge in cleanly.
+          */}}
+          args:
+            - --watch-config
+            - --config=/etc/vector/vector.yaml
+            {{- if and .Values.monitoring .Values.monitoring.dynamicScrapes (default false .Values.monitoring.dynamicScrapes.enabled) }}
+            - --config-toml=/etc/vector/dynamic/{{ .Values.monitoring.dynamicScrapes.configMapKey | default "dynamic-scrapes.toml" }}
+            {{- end }}
           env:
             - name: NODE_NAME
               valueFrom:
@@ -153,6 +167,11 @@ spec:
             - name: vector-config
               mountPath: /etc/vector/vector.yaml
               subPath: vector-operator.yaml
+            {{- if and .Values.monitoring .Values.monitoring.dynamicScrapes (default false .Values.monitoring.dynamicScrapes.enabled) }}
+            - name: vector-dynamic-config
+              mountPath: /etc/vector/dynamic
+              readOnly: true
+            {{- end }}
             - name: kubernetes-logs
               mountPath: /var/log/pods
       volumes:
@@ -169,6 +188,13 @@ spec:
           configMap:
             name: tensor-fusion-sys-vector-config
             defaultMode: 420
+        {{- if and .Values.monitoring .Values.monitoring.dynamicScrapes (default false .Values.monitoring.dynamicScrapes.enabled) }}
+        - name: vector-dynamic-config
+          configMap:
+            name: {{ .Values.monitoring.dynamicScrapes.configMapName | default "tensor-fusion-vector-dynamic-config" }}
+            defaultMode: 420
+            optional: true
+        {{- end }}
         - name: cloud-vendor-credentials
           secret:
             secretName: tf-cloud-vendor-credentials

@@ -1,0 +1,38 @@
+{{- /*
+  tensor-os plan 31 R2-BE2 — placeholder ConfigMap for the dynamic
+  prometheus_scrape blocks tos-server appends at runtime.
+
+  The Vector operator-sidecar (controller-deployment.yaml) mounts this
+  ConfigMap into /etc/vector/dynamic/, and Vector's `--watch-config` flag
+  picks up changes without a restart. tos-server patches the
+  `dynamic-scrapes.toml` key via `kubectl patch cm --type=merge` and
+  signals the sidecar via SIGHUP (best-effort backup; --watch-config is
+  the primary reload mechanism).
+
+  This template ships an empty placeholder file so the ConfigMap exists
+  on first install — without the ConfigMap, the patcher would have to
+  create-or-update on every patch which races with the helm-managed
+  lifecycle. The placeholder also makes `helm template --dry-run` output
+  show the file mounting wiring is in place.
+*/}}
+{{- $mon := .Values.monitoring | default dict -}}
+{{- $ds := $mon.dynamicScrapes | default dict -}}
+{{- if $ds.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $ds.configMapName | default "tensor-fusion-vector-dynamic-config" }}
+  namespace: {{ include "tensor-fusion.namespace" . }}
+  labels:
+    app.kubernetes.io/managed-by: helm
+    tensor-fusion.ai/component: vector-dynamic-config
+  annotations:
+    # The contents are intentionally owned by tos-server at runtime —
+    # `helm.sh/resource-policy: keep` prevents `helm uninstall` from
+    # deleting the user-added scrape blocks.
+    helm.sh/resource-policy: keep
+data:
+  {{ ($ds.configMapKey | default "dynamic-scrapes.toml") }}: |
+    # Placeholder. tos-server appends prometheus_scrape blocks here when
+    # a published-service finishes its first successful deploy.
+{{- end }}

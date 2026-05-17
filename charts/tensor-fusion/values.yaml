@@ -127,13 +127,19 @@ monitoring:
       enabled: false
       endpoint: "https://127.0.0.1:10250/metrics/cadvisor"
       intervalSecs: 15
-      tlsSkipVerify: true
+      # tensor-os plan 31 R2-MIN2 — default to verifying TLS against the
+      # in-cluster CA bundle. Operators who terminate kubelet TLS with
+      # self-signed certs not in the SA CA bundle can flip this to true.
+      tlsSkipVerify: false
       authBearerTokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
     kubeApiserver:
       enabled: false
       endpoint: "https://kubernetes.default.svc/metrics"
       intervalSecs: 30
-      tlsSkipVerify: true
+      # tensor-os plan 31 R2-MIN2 — verify against /var/run/secrets/.../ca.crt
+      # by default; the vector-config.yaml template wires `tls.ca_file` when
+      # this is false.
+      tlsSkipVerify: false
       authBearerTokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
     tensorOsServer:
       enabled: false

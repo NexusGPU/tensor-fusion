@@ -1,13 +1,26 @@
 {{- /*
-  tensor-os plan 31 — InfluxDB-line sink is the only path to greptime.
-  When any monitoring.scrapes.* is enabled, prometheus_scrape sources are
-  added and the prom_to_influx remap restructures the metric event into
-  influx-line fields (measurement = .name; tags = whitelist; fields = value).
-  The resulting events feed the SAME http sink as the file source — we never
-  introduce a prometheus_remote_write sink.
+  tensor-os plan 31 / R2-BE3 — vector aggregator config.
+
+  Architecture:
+   - File sources (`metrics`) emit log events containing InfluxDB-line
+     payload our hypervisor / operator already write; they route through
+     the http sink raw.
+   - prometheus_scrape sources emit *metric* events (`.name`, `.tags`,
+     `.counter|.gauge|.histogram|.summary`). Metric events can NOT be
+     reshaped into log-shape `.measurement / .fields` and then encoded
+     with `codec: text` (R1 attempt → no-ops). We instead:
+       * keep the events as metrics
+       * apply a `remap` transform that filters `.tags` against the
+         whitelist and stamps `cluster_id` / `node` — VRL on metric
+         events supports `.tags` directly.
+       * sink them via `sinks.influxdb_metrics_v2`, Vector's native
+         InfluxDB-line writer for metric events. Greptime exposes an
+         InfluxDB v2 write endpoint at `/v1/influxdb/api/v2/write` that
+         this sink talks to natively.
 */}}
 {{- $mon := .Values.monitoring | default dict -}}
 {{- $scrapes := $mon.scrapes | default dict -}}
+{{- $ds := $mon.dynamicScrapes | default dict -}}
 {{- $anyScrape := or (or (or (or
       (and $scrapes.nodeExporter $scrapes.nodeExporter.enabled)
       (and $scrapes.kubeStateMetrics $scrapes.kubeStateMetrics.enabled))
@@ -54,6 +67,10 @@ data:
         {{- if $scrapes.kubeApiserver.tlsSkipVerify }}
         tls:
           verify_certificate: false
+        {{- else }}
+        tls:
+          verify_certificate: true
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
         {{- end }}
         {{- if $scrapes.kubeApiserver.authBearerTokenFile }}
         auth:
@@ -83,32 +100,33 @@ data:
           del(.file)
           del(.source_type)
       {{- if $anyScrape }}
-      prom_to_influx:
+      prom_tags:
+        # R2-BE3: VRL on *metric* events. We only filter / stamp tags;
+        # the event shape (counter / gauge / etc.) stays intact so the
+        # downstream influxdb_metrics sink can serialize it correctly.
         type: remap
         inputs:
           - scrape_*
         source: |
-          # vector prometheus_scrape emits one metric event per series:
-          #   .name (measurement) / .tags (kv) / .counter|.gauge|.histogram|.summary
-          # Reshape into influx-line: measurement = .name; tags = whitelist;
-          # fields = { value }. Histograms/summaries fall back to their `sum`.
-          .measurement = .name
-          v = .counter.value || .gauge.value || .histogram.sum || .summary.sum || 0.0
-          .fields = { "value": v }
           whitelist = {{ $whitelistJson }}
+          # `.tags` is the metric label map. `del()` requires a known
+          # key, so we iterate by enumerating and dropping non-whitelisted
+          # entries.
           tags = object!(.tags || {})
-          .tags = filter(tags) -> |k, _v| { includes(whitelist, k) }
-          .tags.cluster_id = .tags.cluster_id || "{{ .Release.Name }}"
-          .tags.collected_by = "vector"
+          for_each(tags) -> |k, _v| {
+            if !includes(whitelist, k) {
+              tags = remove!(tags, [k])
+            }
+          }
+          tags.cluster_id = string(tags.cluster_id || "{{ .Release.Name }}")
+          tags.collected_by = "vector"
+          .tags = tags
       {{- end }}
     sinks:
       sink_greptimedb_operator_metrics:
         type: http
         inputs:
           - metrics
-        {{- if $anyScrape }}
-          - prom_to_influx
-        {{- end }}
         method: post
         encoding:
           codec: text
@@ -121,7 +139,27 @@ data:
             # refer https://docs.greptime.com/user-guide/protocols/http/#post-influxdb-line-protocol-data
             Authorization: "token {{ .Values.greptime.user }}:{{ .Values.greptime.password }}"
         {{- end }}
-      
+      {{- if $anyScrape }}
+      sink_greptimedb_operator_prom_metrics:
+        # R2-BE3: native InfluxDB-v2 line writer for metric events.
+        # Greptime accepts InfluxDB v2 line protocol on the same write
+        # endpoint as our file-sourced metrics.
+        type: influxdb_metrics
+        inputs:
+          - prom_tags
+        {{- if ne .Values.greptime.isCloud true }}
+        endpoint: "http://{{ .Values.greptime.host }}:4000"
+        bucket: public
+        org: ""
+        token: ""
+        {{- else }}
+        endpoint: "https://{{ .Values.greptime.host }}"
+        bucket: "{{ .Values.greptime.db }}"
+        org: ""
+        token: "{{ .Values.greptime.user }}:{{ .Values.greptime.password }}"
+        {{- end }}
+      {{- end }}
+
       sink_greptimedb_operator_logs:
         type: greptimedb_logs
         compression: gzip
@@ -166,6 +204,10 @@ data:
         {{- if $scrapes.cadvisor.tlsSkipVerify }}
         tls:
           verify_certificate: false
+        {{- else }}
+        tls:
+          verify_certificate: true
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
         {{- end }}
         {{- if $scrapes.cadvisor.authBearerTokenFile }}
         auth:
@@ -189,20 +231,22 @@ data:
           del(.file)
           del(.source_type)
       {{- if $anyScrape }}
-      prom_to_influx:
+      prom_tags:
         type: remap
         inputs:
           - scrape_*
         source: |
-          .measurement = .name
-          v = .counter.value || .gauge.value || .histogram.sum || .summary.sum || 0.0
-          .fields = { "value": v }
           whitelist = {{ $whitelistJson }}
           tags = object!(.tags || {})
-          .tags = filter(tags) -> |k, _v| { includes(whitelist, k) }
-          .tags.cluster_id = .tags.cluster_id || "{{ .Release.Name }}"
-          .tags.node = .tags.node || "${NODE_NAME}"
-          .tags.collected_by = "vector"
+          for_each(tags) -> |k, _v| {
+            if !includes(whitelist, k) {
+              tags = remove!(tags, [k])
+            }
+          }
+          tags.cluster_id = string(tags.cluster_id || "{{ .Release.Name }}")
+          tags.node = string(tags.node || "${NODE_NAME}")
+          tags.collected_by = "vector"
+          .tags = tags
       {{- end }}
 
     sinks:
@@ -210,9 +254,6 @@ data:
         type: http
         inputs:
           - metrics
-        {{- if $anyScrape }}
-          - prom_to_influx
-        {{- end }}
         method: post
         encoding:
           codec: text
@@ -225,7 +266,24 @@ data:
             # refer https://docs.greptime.com/user-guide/protocols/http/#post-influxdb-line-protocol-data
             Authorization: "token {{ .Values.greptime.user }}:{{ .Values.greptime.password }}"
         {{- end }}
-        
+      {{- if $anyScrape }}
+      sink_greptimedb_hypervisor_prom_metrics:
+        type: influxdb_metrics
+        inputs:
+          - prom_tags
+        {{- if ne .Values.greptime.isCloud true }}
+        endpoint: "http://{{ .Values.greptime.host }}:4000"
+        bucket: public
+        org: ""
+        token: ""
+        {{- else }}
+        endpoint: "https://{{ .Values.greptime.host }}"
+        bucket: "{{ .Values.greptime.db }}"
+        org: ""
+        token: "{{ .Values.greptime.user }}:{{ .Values.greptime.password }}"
+        {{- end }}
+      {{- end }}
+
       sink_greptimedb_hypervisor_worker_logs:
         type: greptimedb_logs
         compression: gzip
