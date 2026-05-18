@@ -20,6 +20,7 @@ import (
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
@@ -128,6 +129,10 @@ var _ = Describe("NodeExpander Unit Tests", func() {
 
 		It("should manage pre-scheduled pods correctly", func() {
 			testPreScheduledPodManagement(suite)
+		})
+
+		It("should clone GPUNodeClaim with stripped server-side fields and matching spec.NodeName", func() {
+			testCloneGPUNodeClaimStripsServerFields(suite)
 		})
 	})
 
@@ -557,6 +562,74 @@ func testExpandWhenInflightCannotSatisfy(suite *NodeExpanderTestSuite) {
 
 	// Since we don't have a full scheduler, just verify the new NodeClaim was created
 	// and the expansion logic completed successfully (tested above)"
+}
+
+// Regression: cloneGPUNodeClaim used to DeepCopy the original verbatim, which
+// (1) passed the original's ResourceVersion/UID/etc. to apiserver Create — real
+// apiserver rejects this — and (2) left Spec.NodeName pointing at the original
+// node name, breaking the metadata.Name == Spec.NodeName invariant the rest of
+// the provisioning pipeline relies on.
+func testCloneGPUNodeClaimStripsServerFields(suite *NodeExpanderTestSuite) {
+	originalClaim := &tfv1.GPUNodeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pool-a-original",
+			Labels: map[string]string{
+				constants.LabelKeyOwner: "pool-a",
+			},
+		},
+		Spec: tfv1.GPUNodeClaimSpec{
+			NodeName: "pool-a-original",
+		},
+	}
+	Expect(suite.k8sClient.Create(suite.ctx, originalClaim)).To(Succeed())
+	defer func() { _ = suite.k8sClient.Delete(suite.ctx, originalClaim) }()
+
+	// Re-read so we get the fake client's auto-assigned ResourceVersion/UID;
+	// the DeepCopy used to carry these straight into Create.
+	persisted := &tfv1.GPUNodeClaim{}
+	Expect(suite.k8sClient.Get(suite.ctx, client.ObjectKey{Name: originalClaim.Name}, persisted)).To(Succeed())
+	Expect(persisted.ResourceVersion).NotTo(BeEmpty())
+
+	preparedNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tensor-fusion-prepared",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: tfv1.GroupVersion.String(),
+				Kind:       tfv1.GPUNodeClaimKind,
+				Name:       originalClaim.Name,
+				UID:        persisted.UID,
+			}},
+		},
+	}
+	pod := createTestTensorFusionPod("clone-worker", suite.namespace, "100", "1Gi")
+
+	// Intercept Create so we can assert on the exact payload sent to apiserver.
+	var captured *tfv1.GPUNodeClaim
+	baseClient, ok := suite.k8sClient.(client.WithWatch)
+	Expect(ok).To(BeTrue())
+	origClient := suite.nodeExpander.client
+	defer func() { suite.nodeExpander.client = origClient }()
+	suite.nodeExpander.client = interceptor.NewClient(baseClient, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if gnc, ok := obj.(*tfv1.GPUNodeClaim); ok {
+				captured = gnc.DeepCopy()
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	})
+
+	Expect(suite.nodeExpander.createGPUNodeClaim(suite.ctx, pod, preparedNode)).To(Succeed())
+
+	Expect(captured).NotTo(BeNil(), "Create was not invoked")
+	Expect(captured.ResourceVersion).To(BeEmpty(), "ResourceVersion must be cleared before Create")
+	Expect(string(captured.UID)).To(BeEmpty(), "UID must be cleared before Create")
+	Expect(captured.Generation).To(BeZero())
+	Expect(captured.CreationTimestamp.IsZero()).To(BeTrue())
+	Expect(captured.ManagedFields).To(BeNil())
+	Expect(captured.Spec.NodeName).To(Equal(captured.Name),
+		"spec.NodeName must track metadata.Name so cloudprovider/controller keys stay consistent")
+	Expect(captured.Name).NotTo(Equal(originalClaim.Name))
+	Expect(captured.Labels[constants.KarpenterExpansionLabel]).To(Equal(preparedNode.Name))
 }
 
 // Helper functions
