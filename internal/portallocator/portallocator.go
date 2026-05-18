@@ -52,8 +52,9 @@ type PortAllocator struct {
 	ctx               context.Context
 
 	clusterLevelPortReleaseQueue chan struct {
-		podName string
-		port    int
+		namespace string
+		podName   string
+		port      int
 	}
 
 	nodeLevelPortReleaseQueue chan struct {
@@ -92,8 +93,9 @@ func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRa
 		ctx:               ctx,
 
 		clusterLevelPortReleaseQueue: make(chan struct {
-			podName string
-			port    int
+			namespace string
+			podName   string
+			port      int
 		}),
 		nodeLevelPortReleaseQueue: make(chan struct {
 			nodeName string
@@ -212,12 +214,25 @@ func (s *PortAllocator) AssignClusterLevelHostPort(podName string) (int, error) 
 	return 0, fmt.Errorf("no available port on cluster")
 }
 
-func (s *PortAllocator) ReleaseClusterLevelHostPort(podName string, port int, immediateRelease bool) error {
-	if port == 0 {
-		return fmt.Errorf("port cannot be 0 when release host port, may caused by portNumber annotation not detected, podName: %s", podName)
+// clusterPortOffset validates port against the cluster range and the bitmap
+// size, returning the bit offset to use for masking. Rejecting here keeps the
+// bitmap indexing below from panicking on malformed or stale annotations.
+func (s *PortAllocator) clusterPortOffset(port int) (int, error) {
+	if port < s.PortRangeStartCluster || port >= s.PortRangeEndCluster {
+		return 0, fmt.Errorf("port %d out of cluster range [%d, %d)", port, s.PortRangeStartCluster, s.PortRangeEndCluster)
 	}
+	offset := port - s.PortRangeStartCluster
+	if offset/64 >= len(s.BitmapCluster) {
+		return 0, fmt.Errorf("port %d offset %d exceeds bitmap size %d", port, offset, len(s.BitmapCluster)*64)
+	}
+	return offset, nil
+}
 
-	portOffset := port - s.PortRangeStartCluster
+func (s *PortAllocator) ReleaseClusterLevelHostPort(namespace string, podName string, port int, immediateRelease bool) error {
+	portOffset, err := s.clusterPortOffset(port)
+	if err != nil {
+		return fmt.Errorf("invalid port for pod %s/%s: %w", namespace, podName, err)
+	}
 
 	if immediateRelease {
 		s.storeMutexCluster.Lock()
@@ -227,30 +242,40 @@ func (s *PortAllocator) ReleaseClusterLevelHostPort(podName string, port int, im
 	} else {
 		// put into queue, release until Pod not found
 		s.clusterLevelPortReleaseQueue <- struct {
-			podName string
-			port    int
-		}{podName, port}
+			namespace string
+			podName   string
+			port      int
+		}{namespace, podName, port}
 	}
 	return nil
 }
 
 func (s *PortAllocator) releaseClusterPortUntilPodDeleted() {
 	for item := range s.clusterLevelPortReleaseQueue {
+		namespace := item.namespace
 		podName := item.podName
-		portOffset := item.port - s.PortRangeStartCluster
+		portOffset, offsetErr := s.clusterPortOffset(item.port)
+		if offsetErr != nil {
+			// Defensive: queue is fed by ReleaseClusterLevelHostPort which
+			// already validates, but guard the bitmap indexing anyway so a
+			// bad item can never crash the background worker.
+			log.Log.Error(offsetErr, "drop release request for invalid port",
+				"namespace", namespace, "pod", podName, "port", item.port)
+			continue
+		}
 
 		_ = retry.OnError(RETRY_CONFIG, func(_ error) bool {
 			return true
 		}, func() error {
 			pod := &v1.Pod{}
-			err := s.Client.Get(s.ctx, client.ObjectKey{Name: podName}, pod)
+			err := s.Client.Get(s.ctx, client.ObjectKey{Namespace: namespace, Name: podName}, pod)
 			if errors.IsNotFound(err) {
 				s.storeMutexCluster.Lock()
 				defer s.storeMutexCluster.Unlock()
 				s.BitmapCluster[portOffset/64] &^= 1 << (portOffset % 64)
 				return nil
 			}
-			return fmt.Errorf("pod still there, can not release port %s", podName)
+			return fmt.Errorf("pod still there, can not release port %s/%s", namespace, podName)
 		})
 	}
 }
