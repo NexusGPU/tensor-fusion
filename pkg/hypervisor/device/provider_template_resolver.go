@@ -3,6 +3,7 @@ package device
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -47,12 +48,25 @@ func resolveProviderTemplateID(vendor, model, requestedTemplateID string) string
 				continue
 			}
 			if internalconfig.MatchTemplateIdentifier(tmpl.ID, tmpl.Name, requestedTemplateID) {
-				return tmpl.ID
+				return downstreamTemplateID(tmpl)
 			}
 		}
 	}
 
 	return requestedTemplateID
+}
+
+// downstreamTemplateID returns the identifier to forward to the vendor partition
+// API (vgpu-provider → NVML for NVIDIA). When NVMLProfileID is set, return it as
+// a decimal string so the same numeric profile id can be reused across cards
+// even though chart-side `id` values must be unique. Otherwise fall back to the
+// chart-side `id` (existing behavior — required for vendors like Ascend that
+// already use friendly string ids).
+func downstreamTemplateID(tmpl tfv1.VirtualizationTemplate) string {
+	if tmpl.NVMLProfileID != nil {
+		return strconv.FormatUint(uint64(*tmpl.NVMLProfileID), 10)
+	}
+	return tmpl.ID
 }
 
 func loadProviderTemplateConfig() providerTemplateConfig {

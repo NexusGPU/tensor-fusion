@@ -195,9 +195,36 @@ type ProviderDeviceMountConfig struct {
 
 // VirtualizationTemplate defines a partition/slice template for GPU virtualization
 type VirtualizationTemplate struct {
-	// ID is the unique identifier for this template (e.g., "mig-1g-10gb", "vir01")
+	// ID is the chart/CR-side unique identifier for this template
+	// (e.g., "mig-a100-80g-1g-10gb", "vir01"). It MUST be unique within
+	// a ProviderConfig's virtualizationTemplates list — the resolver
+	// builds a `map[ID]template` to look up by partitionTemplateRefs.
+	//
+	// For vendors whose downstream partition API consumes this string
+	// directly (e.g., NVML uses an integer GI Profile ID): keep this
+	// field equal to that integer-as-string ("19", "14", ...) OR set
+	// `nvmlProfileId` (or future vendor-specific id fields) so the
+	// resolver can pick the correct downstream value. When
+	// `nvmlProfileId` is set, the resolver returns that integer
+	// converted to string instead of `id`, letting the same NVML
+	// numeric id be reused across multiple cards (e.g., A30 and A100
+	// both have a profile 14 with different physical semantics) — each
+	// card has its own template entry with a unique `id` but shares
+	// the same `nvmlProfileId`.
 	// +kubebuilder:validation:Required
 	ID string `json:"id"`
+
+	// NVMLProfileID is the NVIDIA NVML GI Profile ID that should be passed
+	// to nvmlDeviceGetGpuInstanceProfileInfoV / CreateGpuInstance. When set,
+	// the resolver returns this integer (as string) to vgpu-provider instead
+	// of `id`. This decouples chart-side identifiers (which must be unique
+	// within the templates pool) from NVML's numeric profile ids (which
+	// collide between architectures — e.g., A30 id=14 means 1g.6gb while
+	// A100 id=14 means 2g.20gb).
+	// Leave unset for non-NVIDIA vendors (e.g., Ascend) or when the chart-side
+	// `id` is already the numeric NVML id.
+	// +optional
+	NVMLProfileID *uint32 `json:"nvmlProfileId,omitempty"`
 
 	// Name is the vendor-specific name (e.g., "1g.10gb", "vir01")
 	// +kubebuilder:validation:Required
