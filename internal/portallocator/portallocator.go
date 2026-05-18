@@ -64,19 +64,43 @@ type PortAllocator struct {
 	}
 }
 
+// parsePortRange parses an "<start>-<end>" string and validates that both
+// sides are well-formed integers and that start < end. A misconfigured flag
+// (missing dash, non-numeric, reversed) would otherwise either panic on slice
+// indexing, silently produce a zero-size bitmap, or pass a negative length to
+// make() — all of which surface only at the first allocation request.
+func parsePortRange(raw string, label string) (int, int, error) {
+	parts := strings.Split(raw, "-")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid %s port range %q: expected format <start>-<end>", label, raw)
+	}
+	start, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid %s port range %q: start: %w", label, raw, err)
+	}
+	end, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid %s port range %q: end: %w", label, raw, err)
+	}
+	if start <= 0 || end <= 0 || start >= end {
+		return 0, 0, fmt.Errorf("invalid %s port range %q: require 0 < start < end", label, raw)
+	}
+	return start, end, nil
+}
+
 func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRange string, clusterLevelPortRange string) (*PortAllocator, error) {
 	if client == nil {
 		return nil, fmt.Errorf("client cannot be nil")
 	}
 
-	nodeLevelRange := strings.Split(nodeLevelPortRange, "-")
-	clusterLevelRange := strings.Split(clusterLevelPortRange, "-")
-
-	portRangeStartNode, _ := strconv.Atoi(nodeLevelRange[0])
-	portRangeEndNode, _ := strconv.Atoi(nodeLevelRange[1])
-
-	portRangeStartCluster, _ := strconv.Atoi(clusterLevelRange[0])
-	portRangeEndCluster, _ := strconv.Atoi(clusterLevelRange[1])
+	portRangeStartNode, portRangeEndNode, err := parsePortRange(nodeLevelPortRange, "node-level")
+	if err != nil {
+		return nil, err
+	}
+	portRangeStartCluster, portRangeEndCluster, err := parsePortRange(clusterLevelPortRange, "cluster-level")
+	if err != nil {
+		return nil, err
+	}
 
 	allocator := &PortAllocator{
 		PortRangeStartNode:    portRangeStartNode,
