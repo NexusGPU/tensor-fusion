@@ -892,7 +892,9 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 		return
 	}
 
-	// Patch pod annotations with retry
+	// Patch pod annotations with retry. The closure must return the patch error
+	// so retry.OnError actually retries on transient failures and the outer err
+	// reflects the final outcome (controls cleanup below).
 	err = retry.OnError(wait.Backoff{
 		Duration: 1 * time.Second,
 		Factor:   2,
@@ -901,15 +903,15 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 	}, func(err error) bool {
 		return true
 	}, func() error {
-		err = s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patchBytes))
-		if err != nil {
-			s.logger.Error(err, "failed to patch pod annotations", "pod", pod.Name)
+		patchErr := s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patchBytes))
+		if patchErr != nil {
+			s.logger.Error(patchErr, "failed to patch pod annotations", "pod", pod.Name)
 			s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUDeviceAllocatedFailed",
 				"Attach GPU device ID info failed", "Can not add GPU device IDs: "+gpuIDs)
-		} else {
-			s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
-				"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
+			return patchErr
 		}
+		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
+			"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
 		return nil
 	})
 	if err != nil {

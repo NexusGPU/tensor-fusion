@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/samber/lo"
@@ -29,6 +30,7 @@ import (
 	tf "k8s.io/kubernetes/pkg/scheduler/testing/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -493,6 +495,40 @@ var _ = Describe("GPUFit Plugin", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "gpu-1"}, gpu)).To(Succeed())
 			Expect(gpu.Status.Available.Tflops.String()).To(Equal("800"))
 			Expect(gpu.Status.Available.Vram.String()).To(Equal("8Gi"))
+		})
+
+		// Regression: the patch closure must propagate its error to retry.OnError.
+		// If it returns nil, retry.OnError treats the first attempt as success and
+		// never retries, leaving the worker pod without the gpu-device-ids
+		// annotation while the allocator commit has already happened.
+		It("should retry pod annotation patch on transient apiserver error", func() {
+			state := framework.NewCycleState()
+			pod := makePod("p-postbind-retry", map[string]string{
+				constants.GpuCountAnnotation:      "1",
+				constants.TFLOPSRequestAnnotation: "100",
+				constants.VRAMRequestAnnotation:   "10Gi",
+				constants.TFLOPSLimitAnnotation:   "100",
+				constants.VRAMLimitAnnotation:     "40Gi",
+			})
+			_, preFilterStatus := plugin.PreFilter(ctx, state, pod, []fwk.NodeInfo{})
+			Expect(preFilterStatus.IsSuccess()).To(BeTrue())
+			reserveStatus := plugin.Reserve(ctx, state, pod, "node-a")
+			Expect(reserveStatus.IsSuccess()).To(BeTrue())
+
+			var patchAttempts int32
+			baseClient, ok := k8sClient.(client.WithWatch)
+			Expect(ok).To(BeTrue())
+			plugin.client = interceptor.NewClient(baseClient, interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					atomic.AddInt32(&patchAttempts, 1)
+					return errors.NewServiceUnavailable("simulated apiserver flake")
+				},
+			})
+
+			plugin.PostBind(ctx, state, pod, "node-a")
+
+			// retry.OnError is configured with Steps=3; with the fix it tries 3 times.
+			Expect(atomic.LoadInt32(&patchAttempts)).To(Equal(int32(3)))
 		})
 	})
 

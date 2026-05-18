@@ -149,7 +149,7 @@ cloudVendorCredentials:
 # uninstalling the chart will NOT delete it.
 providerConfigs:
   nvidia:
-    enabled: false
+    enabled: true
     name: nvidia-provider
     # MIG (partitioned) requires the hypervisor container to run privileged so
     # NVML can create GpuInstance / ComputeInstance. With this true and vendor
@@ -171,15 +171,486 @@ providerConfigs:
       remoteWorker: tensorfusion/tensor-fusion-worker:latest
     inUseResourceNames:
       - nvidia.com/gpu
+      # MIG profile names — device-plugin only reports what physically exists on
+      # each node, so listing 40GB / 80GB / A30 families together is safe.
+      # 80GB family: A100-80GB / H100-80GB / A800-80GB / H800
       - nvidia.com/mig-1g.10gb
       - nvidia.com/mig-2g.20gb
       - nvidia.com/mig-3g.40gb
       - nvidia.com/mig-4g.40gb
       - nvidia.com/mig-7g.80gb
-    # Fill these only when you want the chart to ship a hardware/profile catalog;
-    # otherwise leave empty and edit the live CR with kubectl.
-    hardwareMetadata: []
-    virtualizationTemplates: []
+      # 40GB family: A100-40GB / A800-40GB
+      - nvidia.com/mig-1g.5gb
+      - nvidia.com/mig-2g.10gb
+      - nvidia.com/mig-3g.20gb
+      - nvidia.com/mig-4g.20gb
+      - nvidia.com/mig-7g.40gb
+      # A30 (4-slice MIG)
+      - nvidia.com/mig-1g.6gb
+      - nvidia.com/mig-2g.12gb
+      - nvidia.com/mig-4g.24gb
+    # =============================================================================
+    # Template layout (since main introduced VirtualizationTemplate.nvmlProfileId):
+    #   - `id` is the chart-side unique key, used by partitionTemplateRefs lookup
+    #     and matched against user-facing pod annotations / WorkloadProfile.
+    #   - `nvmlProfileId` is the NVML GI Profile ID forwarded to vgpu-provider →
+    #     NVML's nvmlDeviceGetGpuInstanceProfileInfoV / CreateGpuInstance.
+    #
+    # Without `nvmlProfileId`, the resolver falls back to passing `id` verbatim
+    # to NVML — which means `id` itself would have to be an integer-as-string and
+    # would collide between architectures (A30 id=14 means 1g.6gb while A100
+    # id=14 means 2g.20gb — different physical semantics, different
+    # computePercent). Decoupling the two fields lets one ProviderConfig cover
+    # all MIG-capable NVIDIA cards.
+    # See: api/v1/providerconfig_types.go (VirtualizationTemplate),
+    #      pkg/hypervisor/device/provider_template_resolver.go:downstreamTemplateID.
+    # =============================================================================
+    hardwareMetadata:
+      # ---- A100 / A800 80GB family (7-slice; partitionTemplateRefs use nv-80g-*) ----
+      - model: A100_SXM_80G
+        fullModelName: "NVIDIA A100-SXM4-80GB"
+        costPerHour: "1.89"
+        fp16TFlops: "312"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-80g-1g-10gb
+          - nv-80g-1g-10gb-me
+          - nv-80g-1g-20gb
+          - nv-80g-2g-20gb
+          - nv-80g-3g-40gb
+          - nv-80g-4g-40gb
+          - nv-80g-7g-80gb
+      - model: A100_PCIe_80G
+        fullModelName: "NVIDIA A100 80GB PCIe"
+        costPerHour: "1.79"
+        fp16TFlops: "312"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-80g-1g-10gb
+          - nv-80g-1g-10gb-me
+          - nv-80g-1g-20gb
+          - nv-80g-2g-20gb
+          - nv-80g-3g-40gb
+          - nv-80g-4g-40gb
+          - nv-80g-7g-80gb
+      - model: A800_SXM_80G
+        fullModelName: "NVIDIA A800-SXM4-80GB"
+        costPerHour: "1.89"
+        fp16TFlops: "312"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-80g-1g-10gb
+          - nv-80g-1g-10gb-me
+          - nv-80g-1g-20gb
+          - nv-80g-2g-20gb
+          - nv-80g-3g-40gb
+          - nv-80g-4g-40gb
+          - nv-80g-7g-80gb
+      - model: A800_PCIe_80G
+        fullModelName: "NVIDIA A800-PCIE-80GB"
+        costPerHour: "1.79"
+        fp16TFlops: "312"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-80g-1g-10gb
+          - nv-80g-1g-10gb-me
+          - nv-80g-1g-20gb
+          - nv-80g-2g-20gb
+          - nv-80g-3g-40gb
+          - nv-80g-4g-40gb
+          - nv-80g-7g-80gb
+
+      # ---- H100 / H800 80GB family (same NVML profile IDs as A100-80GB) ----
+      - model: H100_SXM
+        fullModelName: "NVIDIA H100 80GB HBM3"
+        costPerHour: "2.99"
+        fp16TFlops: "989"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-80g-1g-10gb
+          - nv-80g-1g-10gb-me
+          - nv-80g-1g-20gb
+          - nv-80g-2g-20gb
+          - nv-80g-3g-40gb
+          - nv-80g-4g-40gb
+          - nv-80g-7g-80gb
+      - model: H100_PCIe_80G
+        fullModelName: "NVIDIA H100 PCIe"
+        costPerHour: "2.79"
+        fp16TFlops: "756"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-80g-1g-10gb
+          - nv-80g-1g-10gb-me
+          - nv-80g-1g-20gb
+          - nv-80g-2g-20gb
+          - nv-80g-3g-40gb
+          - nv-80g-4g-40gb
+          - nv-80g-7g-80gb
+      - model: H800_SXM
+        fullModelName: "NVIDIA H800 80GB HBM3"
+        costPerHour: "2.99"
+        fp16TFlops: "989"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-80g-1g-10gb
+          - nv-80g-1g-10gb-me
+          - nv-80g-1g-20gb
+          - nv-80g-2g-20gb
+          - nv-80g-3g-40gb
+          - nv-80g-4g-40gb
+          - nv-80g-7g-80gb
+      - model: H800_PCIe
+        fullModelName: "NVIDIA H800 PCIe"
+        costPerHour: "2.79"
+        fp16TFlops: "756"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-80g-1g-10gb
+          - nv-80g-1g-10gb-me
+          - nv-80g-1g-20gb
+          - nv-80g-2g-20gb
+          - nv-80g-3g-40gb
+          - nv-80g-4g-40gb
+          - nv-80g-7g-80gb
+
+      # ---- A100 / A800 40GB family (7-slice; partitionTemplateRefs use nv-40g-*) ----
+      - model: A100_SXM_40G
+        fullModelName: "NVIDIA A100-SXM4-40GB"
+        costPerHour: "1.49"
+        fp16TFlops: "312"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-40g-1g-5gb
+          - nv-40g-1g-5gb-me
+          - nv-40g-1g-10gb
+          - nv-40g-2g-10gb
+          - nv-40g-3g-20gb
+          - nv-40g-4g-20gb
+          - nv-40g-7g-40gb
+      - model: A100_PCIe_40G
+        fullModelName: "NVIDIA A100-PCIE-40GB"
+        costPerHour: "1.39"
+        fp16TFlops: "312"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-40g-1g-5gb
+          - nv-40g-1g-5gb-me
+          - nv-40g-1g-10gb
+          - nv-40g-2g-10gb
+          - nv-40g-3g-20gb
+          - nv-40g-4g-20gb
+          - nv-40g-7g-40gb
+      - model: A800_SXM_40G
+        fullModelName: "NVIDIA A800-SXM4-40GB"
+        costPerHour: "1.49"
+        fp16TFlops: "312"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-40g-1g-5gb
+          - nv-40g-1g-5gb-me
+          - nv-40g-1g-10gb
+          - nv-40g-2g-10gb
+          - nv-40g-3g-20gb
+          - nv-40g-4g-20gb
+          - nv-40g-7g-40gb
+      - model: A800_PCIe_40G
+        fullModelName: "NVIDIA A800-PCIE-40GB"
+        costPerHour: "1.39"
+        fp16TFlops: "312"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-40g-1g-5gb
+          - nv-40g-1g-5gb-me
+          - nv-40g-1g-10gb
+          - nv-40g-2g-10gb
+          - nv-40g-3g-20gb
+          - nv-40g-4g-20gb
+          - nv-40g-7g-40gb
+
+      # ---- A30 (4-slice MIG; partitionTemplateRefs use nv-a30-*) ----
+      - model: A30
+        fullModelName: "NVIDIA A30"
+        costPerHour: "0.45"
+        fp16TFlops: "165"
+        maxPartitions: 4
+        maxPlacementSlots: 4
+        partitionTemplateRefs:
+          - nv-a30-1g-6gb
+          - nv-a30-2g-12gb
+          - nv-a30-4g-24gb
+
+      # ---- Non-MIG cards (catalog only, no partitionTemplateRefs) ----
+      - model: A10
+        fullModelName: "NVIDIA A10"
+        costPerHour: "0.60"
+        fp16TFlops: "125"
+      - model: A40
+        fullModelName: "NVIDIA A40-PCIE-48GB"
+        costPerHour: "1.10"
+        fp16TFlops: "149.7"
+      - model: L4
+        fullModelName: "NVIDIA L4"
+        costPerHour: "0.55"
+        fp16TFlops: "121"
+      - model: L40
+        fullModelName: "NVIDIA L40"
+        costPerHour: "1.20"
+        fp16TFlops: "362"
+      - model: L40S
+        fullModelName: "NVIDIA L40S"
+        costPerHour: "1.40"
+        fp16TFlops: "366"
+      - model: T4
+        fullModelName: "Tesla T4"
+        costPerHour: "0.35"
+        fp16TFlops: "65"
+      - model: RTX4090
+        fullModelName: "NVIDIA GeForce RTX 4090"
+        costPerHour: "0.30"
+        fp16TFlops: "165.16"
+
+    # =============================================================================
+    # virtualizationTemplates
+    #
+    # Field semantics:
+    #   - `id`            : chart-side unique key (referenced by partitionTemplateRefs).
+    #   - `nvmlProfileId` : integer NVIDIA NVML GI Profile ID — actually forwarded
+    #                       to vgpu-provider → NVML. The resolver returns this
+    #                       (as decimal string) instead of `id` when set.
+    #   - `name`          : friendly profile name a user puts in pod annotation
+    #                       `tensor-fusion.ai/partition` (e.g., "1g.10gb"). Matches
+    #                       canonically — "1g.10gb" / "mig-1g.10gb" / "mig-1g-10gb"
+    #                       all hit the same template.
+    #
+    # `id` naming convention:  nv-<family>-<profile>[-me]
+    #
+    #   <family>  Which physical card this template targets, tagged by the full-GPU
+    #             memory size. Same compute slicing but different memory variants
+    #             share a family. Current families:
+    #               80g  → A100 80GB / A800 80GB / H100 80GB / H800 80GB
+    #                      (7-slice MIG; 1g profile = 10GB each)
+    #               40g  → A100 40GB / A800 40GB
+    #                      (7-slice MIG; 1g profile = 5GB each)
+    #               a30  → A30 24GB
+    #                      (4-slice MIG; different NVML id table & computePercent)
+    #
+    #             Future additions: `h100-94g`, `h200`, `b200`, `pro-blackwell`
+    #             once authoritative `nvidia-smi mig -lgip` placement data is in.
+    #
+    #   <profile> canonical MIG shorthand `NgSlice-Mgb`, dashes replace dots so
+    #             ids stay DNS-1123 friendly (k8s-safe). Example: "1g.10gb" →
+    #             "1g-10gb". The dotted form is kept in `name`.
+    #
+    #   -me       optional suffix for the "+me" media-extension variant. Singleton:
+    #             only one +me instance per GPU at a time.
+    #
+    # Examples (and their physical NVML profile id):
+    #   nv-80g-1g-10gb       = "1g.10gb"    on A100/H100 80GB  (NVML id 19)
+    #   nv-80g-1g-10gb-me    = "1g.10gb+me" on A100/H100 80GB  (NVML id 20, singleton)
+    #   nv-80g-1g-20gb       = "1g.20gb"    on A100/H100 80GB  (NVML id 15, double-mem)
+    #   nv-40g-1g-5gb        = "1g.5gb"     on A100 40GB       (NVML id 19)
+    #   nv-40g-1g-10gb       = "1g.10gb"    on A100 40GB       (NVML id 15, double-mem)
+    #   nv-a30-2g-12gb       = "2g.12gb"    on A30             (NVML id 5)
+    #
+    # Note: NVML profile ids collide between architectures (id=14 is 1g.6gb on
+    # A30 but 2g.20gb on A100/H100) — this is intentional in NVIDIA's API and is
+    # exactly why we keep chart-side `id` distinct from `nvmlProfileId`.
+    # placement / computePercent values come from `nvidia-smi mig -lgip`.
+    # =============================================================================
+    virtualizationTemplates:
+      # ===== A100/A800/H100/H800 80GB family (7-slice) =====
+      - id: nv-80g-1g-10gb
+        nvmlProfileId: 19
+        name: "1g.10gb"
+        memoryGigabytes: 10
+        computePercent: "14.2857"
+        description: "1/7 GPU slice with 10GB memory (A100/H100 80GB)"
+        maxInstances: 7
+        placementLimit: [0, 1, 2, 3, 4, 5, 6]
+        placementOffset: 1
+        isolationGroupSharing: exclusive
+      - id: nv-80g-1g-10gb-me
+        nvmlProfileId: 20
+        name: "1g.10gb+me"
+        memoryGigabytes: 10
+        computePercent: "14.2857"
+        description: "1g slice + media engine (singleton; +1 JPEG + 1 OFA)"
+        maxInstances: 1
+        placementLimit: [0, 1, 2, 3, 4, 5, 6]
+        placementOffset: 1
+        isolationGroupSharing: exclusive
+      - id: nv-80g-1g-20gb
+        nvmlProfileId: 15
+        name: "1g.20gb"
+        memoryGigabytes: 20
+        computePercent: "14.2857"
+        description: "1g slice with double memory (A100/H100 80GB)"
+        maxInstances: 4
+        placementLimit: [0, 2, 4, 6]
+        placementOffset: 2
+        isolationGroupSharing: exclusive
+      - id: nv-80g-2g-20gb
+        nvmlProfileId: 14
+        name: "2g.20gb"
+        memoryGigabytes: 20
+        computePercent: "28.5714"
+        description: "2/7 GPU slice with 20GB memory (A100/H100 80GB)"
+        maxInstances: 3
+        placementLimit: [0, 2, 4]
+        placementOffset: 2
+        isolationGroupSharing: exclusive
+      - id: nv-80g-3g-40gb
+        nvmlProfileId: 9
+        name: "3g.40gb"
+        memoryGigabytes: 40
+        computePercent: "42.8571"
+        description: "3/7 GPU slice with 40GB memory (A100/H100 80GB)"
+        maxInstances: 2
+        placementLimit: [0, 4]
+        placementOffset: 4
+        isolationGroupSharing: exclusive
+      - id: nv-80g-4g-40gb
+        nvmlProfileId: 5
+        name: "4g.40gb"
+        memoryGigabytes: 40
+        computePercent: "57.1428"
+        description: "4/7 GPU slice with 40GB memory (A100/H100 80GB)"
+        maxInstances: 1
+        placementLimit: [0]
+        placementOffset: 4
+        isolationGroupSharing: exclusive
+      - id: nv-80g-7g-80gb
+        nvmlProfileId: 0
+        name: "7g.80gb"
+        memoryGigabytes: 80
+        computePercent: "100"
+        description: "Full GPU with 80GB memory (A100/H100 80GB)"
+        maxInstances: 1
+        placementLimit: [0]
+        placementOffset: 8
+        isolationGroupSharing: exclusive
+
+      # ===== A100/A800 40GB family (7-slice) =====
+      # NVML ids are reused (15/19 swap meaning vs 80GB), but each card resolves
+      # via its own partitionTemplateRefs, so no collision.
+      - id: nv-40g-1g-5gb
+        nvmlProfileId: 19
+        name: "1g.5gb"
+        memoryGigabytes: 5
+        computePercent: "14.2857"
+        description: "1/7 GPU slice with 5GB memory (A100 40GB)"
+        maxInstances: 7
+        placementLimit: [0, 1, 2, 3, 4, 5, 6]
+        placementOffset: 1
+        isolationGroupSharing: exclusive
+      - id: nv-40g-1g-5gb-me
+        nvmlProfileId: 20
+        name: "1g.5gb+me"
+        memoryGigabytes: 5
+        computePercent: "14.2857"
+        description: "1g.5gb + media engine (singleton)"
+        maxInstances: 1
+        placementLimit: [0, 1, 2, 3, 4, 5, 6]
+        placementOffset: 1
+        isolationGroupSharing: exclusive
+      - id: nv-40g-1g-10gb
+        nvmlProfileId: 15
+        name: "1g.10gb"
+        memoryGigabytes: 10
+        computePercent: "14.2857"
+        description: "1g slice with double memory (A100 40GB; same compute as 1g.5gb)"
+        maxInstances: 4
+        placementLimit: [0, 2, 4, 6]
+        placementOffset: 2
+        isolationGroupSharing: exclusive
+      - id: nv-40g-2g-10gb
+        nvmlProfileId: 14
+        name: "2g.10gb"
+        memoryGigabytes: 10
+        computePercent: "28.5714"
+        description: "2/7 GPU slice with 10GB memory (A100 40GB)"
+        maxInstances: 3
+        placementLimit: [0, 2, 4]
+        placementOffset: 2
+        isolationGroupSharing: exclusive
+      - id: nv-40g-3g-20gb
+        nvmlProfileId: 9
+        name: "3g.20gb"
+        memoryGigabytes: 20
+        computePercent: "42.8571"
+        description: "3/7 GPU slice with 20GB memory (A100 40GB)"
+        maxInstances: 2
+        placementLimit: [0, 4]
+        placementOffset: 4
+        isolationGroupSharing: exclusive
+      - id: nv-40g-4g-20gb
+        nvmlProfileId: 5
+        name: "4g.20gb"
+        memoryGigabytes: 20
+        computePercent: "57.1428"
+        description: "4/7 GPU slice with 20GB memory (A100 40GB)"
+        maxInstances: 1
+        placementLimit: [0]
+        placementOffset: 4
+        isolationGroupSharing: exclusive
+      - id: nv-40g-7g-40gb
+        nvmlProfileId: 0
+        name: "7g.40gb"
+        memoryGigabytes: 40
+        computePercent: "100"
+        description: "Full GPU with 40GB memory (A100 40GB)"
+        maxInstances: 1
+        placementLimit: [0]
+        placementOffset: 8
+        isolationGroupSharing: exclusive
+
+      # ===== A30 (4-slice) =====
+      # Different NVML id table from 7-slice family; different computePercent
+      # (25 / 50 / 100 instead of 14.2857 / 28.5714 / ...).
+      - id: nv-a30-1g-6gb
+        nvmlProfileId: 14
+        name: "1g.6gb"
+        memoryGigabytes: 6
+        computePercent: "25"
+        description: "1/4 NPU slice with 6GB memory (A30)"
+        maxInstances: 4
+        placementLimit: [0, 1, 2, 3]
+        placementOffset: 1
+        isolationGroupSharing: exclusive
+      - id: nv-a30-2g-12gb
+        nvmlProfileId: 5
+        name: "2g.12gb"
+        memoryGigabytes: 12
+        computePercent: "50"
+        description: "2/4 NPU slice with 12GB memory (A30)"
+        maxInstances: 2
+        placementLimit: [0, 2]
+        placementOffset: 2
+        isolationGroupSharing: exclusive
+      - id: nv-a30-4g-24gb
+        nvmlProfileId: 0
+        name: "4g.24gb"
+        memoryGigabytes: 24
+        computePercent: "100"
+        description: "Full A30 GPU with 24GB memory"
+        maxInstances: 1
+        placementLimit: [0]
+        placementOffset: 4
+        isolationGroupSharing: exclusive
+
     extraEnv: []
 
 alert:
@@ -236,6 +707,8 @@ schedulerConfig:
         enabled:
         - name: GPUResourcesFit
           weight: 5
+        - name: GPUNetworkTopologyAware
+          weight: 3
       reserve:
         enabled:
         - name: GPUResourcesFit
@@ -253,9 +726,27 @@ schedulerConfig:
         tflopsWeight: 0.3
     - name: GPUNetworkTopologyAware
       args:
-        # Avoid the remote TFWorker RX/TX to avoid single node consume too much bandwidth
-        # Need enable monitor to take effect
-        totalIntranetBandWidthGBps: 100
+        # Topology enforcement mode:
+        #   soft (default) — only score; never reject a node
+        #   hard           — reject nodes whose best combination exceeds maxAllowedTier
+        # NOTE: this `mode` is the scheduler plugin mode, unrelated to Pod IsolationMode
+        # (shared / soft / hard / partitioned).
+        mode: soft
+        # Topology data source:
+        #   auto (default) — prefer vendor topology (GPU.status.topology.peers[].tier),
+        #                    fall back to NUMA when vendor data is missing
+        #   numa           — force NUMA-only evaluation
+        #   vendor         — force vendor interconnect topology
+        topologySource: auto
+        # Tier ceiling for "acceptable" GPU combinations (lower = closer / better):
+        #   0 = same NVLink group, 1 = same NUMA, 2 = cross NUMA, 3 = unknown
+        maxAllowedTier: 1
+        # When a GPU has no topology data, treat it as the worst tier (still scorable
+        # in soft mode) or reject it outright in hard mode.
+        unknownTopologyPolicy: treat-as-worst
+        # Single-GPU requests prefer GPUs that won't break existing high-quality
+        # NVLink / NUMA groups (helps preserve future multi-GPU allocations).
+        preferLeastDamage: true
     - name: NodeResourcesFit
       args:
         ignoredResourceGroups:

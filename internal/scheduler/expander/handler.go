@@ -640,6 +640,18 @@ func (e *NodeExpander) cloneGPUNodeClaim(ctx context.Context, pod *corev1.Pod, p
 	}
 	newGPUNodeClaim.Labels[constants.KarpenterExpansionLabel] = preparedNode.Name
 	newGPUNodeClaim.Name = originalGPUNodeClaim.Labels[constants.LabelKeyOwner] + "-" + rand.String(8)
+	// Keep metadata.Name and spec.NodeName in lock-step; the rest of the
+	// provisioning pipeline (cloudprovider, controller) keys off NodeName.
+	newGPUNodeClaim.Spec.NodeName = newGPUNodeClaim.Name
+	// Strip server-side fields so apiserver accepts the Create; OwnerReferences
+	// are preserved so ownership stays consistent with the source claim.
+	newGPUNodeClaim.ResourceVersion = ""
+	newGPUNodeClaim.UID = ""
+	newGPUNodeClaim.Generation = 0
+	newGPUNodeClaim.CreationTimestamp = metav1.Time{}
+	newGPUNodeClaim.DeletionTimestamp = nil
+	newGPUNodeClaim.ManagedFields = nil
+	newGPUNodeClaim.Status = tfv1.GPUNodeClaimStatus{}
 
 	// Create the new GPUNodeClaim
 	if err := e.client.Create(ctx, newGPUNodeClaim); err != nil {
