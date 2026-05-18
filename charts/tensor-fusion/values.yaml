@@ -87,7 +87,12 @@ controller:
       cpu: 2000m
 
   admissionWebhooks:
-    failurePolicy: Ignore
+    # Default Fail: the mutating webhook is scoped via objectSelector to only
+    # tensor-fusion.ai/enabled=true pods, so a failure won't block unrelated
+    # workloads. Failing closed prevents TF pods from being admitted without
+    # the required resource injection / control sidecars when the webhook is
+    # unavailable.
+    failurePolicy: Fail
     secretName: tensor-fusion-webhook-secret
     patch:
       image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0

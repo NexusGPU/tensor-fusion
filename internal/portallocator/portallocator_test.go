@@ -109,10 +109,10 @@ var _ = Describe("Port Allocator", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(port).To(Equal(42002))
 
-			err = pa.ReleaseClusterLevelHostPort(podName, port, true)
+			err = pa.ReleaseClusterLevelHostPort("default", podName, port, true)
 			Expect(err).NotTo(HaveOccurred())
 
-			err = pa.ReleaseClusterLevelHostPort(podName, 59999, true)
+			err = pa.ReleaseClusterLevelHostPort("default", podName, 59999, true)
 			Expect(err).NotTo(HaveOccurred())
 
 			port, err = pa.AssignClusterLevelHostPort(podName)
@@ -121,9 +121,25 @@ var _ = Describe("Port Allocator", func() {
 		})
 
 		It("should fail to release a cluster port with invalid parameters", func() {
-			err := pa.ReleaseClusterLevelHostPort("test-pod", 0, true)
+			By("rejecting port 0")
+			err := pa.ReleaseClusterLevelHostPort("default", "test-pod", 0, true)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("port cannot be 0 when release host port"))
+			Expect(err.Error()).To(ContainSubstring("out of cluster range"))
+
+			By("rejecting negative port")
+			err = pa.ReleaseClusterLevelHostPort("default", "test-pod", -1, true)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("out of cluster range"))
+
+			By("rejecting port above range end")
+			err = pa.ReleaseClusterLevelHostPort("default", "test-pod", 60000, true)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("out of cluster range"))
+
+			By("rejecting port well above range end")
+			err = pa.ReleaseClusterLevelHostPort("default", "test-pod", 99999, true)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("out of cluster range"))
 		})
 	})
 

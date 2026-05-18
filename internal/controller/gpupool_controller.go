@@ -141,6 +141,12 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// For provisioning mode, check if need to scale up GPUNodes upon AvailableCapacity changed
+	// NodeManagerConfig is optional in the CRD; guard against nil to avoid panicking on
+	// upgraded/restored pool objects missing this field.
+	if pool.Spec.NodeManagerConfig == nil {
+		log.Info("GPUPool has no NodeManagerConfig, skipping provisioning checks", "pool", pool.Name)
+		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
+	}
 	isProvisioningMode := pool.Spec.NodeManagerConfig.ProvisioningMode == tfv1.ProvisioningModeProvisioned ||
 		pool.Spec.NodeManagerConfig.ProvisioningMode == tfv1.ProvisioningModeKarpenter
 
