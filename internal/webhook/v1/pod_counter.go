@@ -65,39 +65,48 @@ func (c *TensorFusionPodCounter) Get(ctx context.Context, pod *corev1.Pod) (int3
 	return int32(count), key, nil
 }
 
-// Increase increases the counter in owner annotation by key
+// Increase increases the counter in owner annotation by key. Wrapped in
+// retry.RetryOnConflict so concurrent admission of multiple pods sharing the
+// same owner (e.g. a Deployment scaling up) does not surface as a 500 to the
+// API server — each concurrent webhook would otherwise read the same
+// ResourceVersion, both compute count+1, and only the first Update succeeds.
+// Mirrors Decrease's retry strategy so admission-side and finalizer-side
+// bookkeeping stay symmetric.
 func (c *TensorFusionPodCounter) Increase(ctx context.Context, pod *corev1.Pod) error {
 	ownerRef := getControllerOwnerRef(pod)
 	if ownerRef == nil {
 		return fmt.Errorf("no controller owner reference found for pod %s/%s", pod.Namespace, pod.Name)
 	}
 	key := getOrGenerateKey(pod)
-	ownerObj := &unstructured.Unstructured{}
-	ownerObj.SetAPIVersion(ownerRef.APIVersion)
-	ownerObj.SetKind(ownerRef.Kind)
 	objKey := client.ObjectKey{Name: ownerRef.Name, Namespace: pod.Namespace}
-	if err := c.Client.Get(ctx, objKey, ownerObj); err != nil {
-		return fmt.Errorf("failed to get owner object: %w", err)
-	}
-	annotations := ownerObj.GetAnnotations()
-	if annotations == nil {
-		annotations = map[string]string{}
-	}
-	val := annotations[key]
-	if val == "" {
-		val = "0"
-	}
-	count, err := strconv.ParseInt(val, 10, 32)
-	if err != nil {
-		return fmt.Errorf("invalid count annotation: %s, err: %w", val, err)
-	}
-	count++
-	annotations[key] = fmt.Sprintf("%d", count)
-	ownerObj.SetAnnotations(annotations)
-	if err := c.Client.Update(ctx, ownerObj); err != nil {
-		return fmt.Errorf("failed to update owner annotation: %w", err)
-	}
-	return nil
+
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		ownerObj := &unstructured.Unstructured{}
+		ownerObj.SetAPIVersion(ownerRef.APIVersion)
+		ownerObj.SetKind(ownerRef.Kind)
+		if err := c.Client.Get(ctx, objKey, ownerObj); err != nil {
+			return fmt.Errorf("failed to get owner object: %w", err)
+		}
+		annotations := ownerObj.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		val := annotations[key]
+		if val == "" {
+			val = "0"
+		}
+		count, err := strconv.ParseInt(val, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid count annotation: %s, err: %w", val, err)
+		}
+		count++
+		annotations[key] = fmt.Sprintf("%d", count)
+		ownerObj.SetAnnotations(annotations)
+		if err := c.Client.Update(ctx, ownerObj); err != nil {
+			return fmt.Errorf("failed to update owner annotation: %w", err)
+		}
+		return nil
+	})
 }
 
 // Decrease decreases the counter in owner annotation by key. Wraps the
