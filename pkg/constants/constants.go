@@ -251,6 +251,41 @@ var (
 	// to another node or destroying node.
 	// Refer: https://karpenter.sh/docs/concepts/disruption/
 	SchedulingDoNotDisruptLabel = Domain + "/do-not-disrupt"
+
+	// Marks a pod that has been evicted by GPUPool defrag.
+	DefragEvictedPodLabel = Domain + "/defrag-evicted"
+
+	// RFC3339 time when the pod was evicted by GPUPool defrag.
+	DefragEvictedPodSinceAnnotation = Domain + "/defrag-evicted-since"
+
+	// GPUPool that owns the pod eviction marker.
+	DefragEvictedPodPoolAnnotation = Domain + "/defrag-evicted-pool"
+
+	// Marks a node that is being emptied by GPUPool defrag.
+	DefragSourceNodeLabel = Domain + "/defrag-source"
+
+	// RFC3339 time when the node was marked as a GPUPool defrag source.
+	DefragSourceNodeSinceAnnotation = Domain + "/defrag-source-since"
+
+	// GPUPool that owns the node source marker.
+	DefragSourceNodePoolAnnotation = Domain + "/defrag-source-pool"
+
+	// Marks a node that defrag gave up evicting after a real EvictV1 error.
+	// Future defrag candidate selection skips it until no active TF worker
+	// is left on the node. Scheduler is intentionally NOT aware of this
+	// marker -- already-evicted pods may be rescheduled back here, which is
+	// fine: we only promise "defrag won't pick this node again", not
+	// "scheduler must avoid this node".
+	DefragEvictSkipNodeLabel = Domain + "/defrag-evict-skip"
+
+	// RFC3339 time when the node was put on the defrag evict-skip list.
+	DefragEvictSkipNodeSinceAnnotation = Domain + "/defrag-evict-skip-since"
+
+	// GPUPool that owns the evict-skip marker.
+	DefragEvictSkipNodePoolAnnotation = Domain + "/defrag-evict-skip-pool"
+
+	// Short troubleshooting hint (e.g. eviction error snippet); not parsed.
+	DefragEvictSkipNodeReasonAnnotation = Domain + "/defrag-evict-skip-reason"
 )
 
 const (
