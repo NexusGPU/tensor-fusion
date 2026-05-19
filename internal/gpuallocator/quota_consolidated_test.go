@@ -425,6 +425,198 @@ var _ = Describe("GPUAllocator Quota Integration", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("total.max.tflops"))
 	})
+
+	// Regression for the bug where AdjustAllocation passed per-GPU deltas to
+	// AdjustQuota without multiplying by GPU count, while normal Alloc/IncreaseUsage
+	// does multiply — leaving multi-GPU workload quota usage permanently underreported
+	// after any autoscale event.
+	It("should scale quota usage by GPU count when AdjustAllocation runs on multi-GPU workload", func() {
+		scheme := runtime.NewScheme()
+		Expect(tfv1.AddToScheme(scheme)).To(Succeed())
+
+		quotaObj := createTestQuota(200, 2000, 10)
+		gpus := []tfv1.GPU{
+			createAvailableGPU("gpu1", 100, 1000),
+			createAvailableGPU("gpu2", 100, 1000),
+		}
+
+		testPool := createTestGPUPool()
+		allObjects := objectsFromGPUs(gpus)
+		allObjects = append(allObjects, testPool)
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(allObjects...).
+			WithLists(&tfv1.GPUResourceQuotaList{Items: []tfv1.GPUResourceQuota{*quotaObj}}).
+			Build()
+
+		ctx := context.Background()
+		allocator := NewGpuAllocator(ctx, nil, fakeClient, 0)
+		initAllocator(allocator)
+
+		req := createAllocRequest(30, 300, 2)
+		req.PodMeta = podMeta
+		allocatedGPUs, err := allocator.Alloc(req)
+		Expect(err).To(Succeed())
+		Expect(allocatedGPUs).To(HaveLen(2))
+
+		usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
+		Expect(exists).To(BeTrue())
+		Expect(usage.Requests.Tflops.Value()).To(Equal(int64(60))) // 30 * 2
+		Expect(usage.Limits.Tflops.Value()).To(Equal(int64(60)))
+
+		_, deltaReq, deltaLimit, err := allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+			PodUID: string(podMeta.UID),
+			NewRequest: tfv1.Resource{
+				Tflops: *resource.NewQuantity(40, resource.DecimalSI),
+				Vram:   *resource.NewQuantity(400, resource.BinarySI),
+			},
+			NewLimit: tfv1.Resource{
+				Tflops: *resource.NewQuantity(50, resource.DecimalSI),
+				Vram:   *resource.NewQuantity(500, resource.BinarySI),
+			},
+		}, false)
+		Expect(err).To(Succeed())
+		// Returned deltas are per-GPU so callers can reconstruct pre-adjust per-GPU
+		// values; the multiplication by Count happens inside AdjustAllocation.
+		Expect(deltaReq.Tflops.Value()).To(Equal(int64(10)))
+		Expect(deltaLimit.Tflops.Value()).To(Equal(int64(20)))
+
+		usage, exists = allocator.quotaStore.GetQuotaStatus(TestNamespace)
+		Expect(exists).To(BeTrue())
+		// requests = 60 (initial) + 2 GPUs * 10 per-GPU delta = 80
+		Expect(usage.Requests.Tflops.Value()).To(Equal(int64(80)))
+		Expect(usage.Requests.Vram.Value()).To(Equal(int64(800)))
+		// limits = 60 (initial) + 2 GPUs * 20 per-GPU delta = 100
+		Expect(usage.Limits.Tflops.Value()).To(Equal(int64(100)))
+		Expect(usage.Limits.Vram.Value()).To(Equal(int64(1000)))
+
+		// Scale back down and verify the quota returns to its post-Alloc baseline,
+		// not to some drifted value.
+		_, _, _, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+			PodUID: string(podMeta.UID),
+			NewRequest: tfv1.Resource{
+				Tflops: *resource.NewQuantity(30, resource.DecimalSI),
+				Vram:   *resource.NewQuantity(300, resource.BinarySI),
+			},
+			NewLimit: tfv1.Resource{
+				Tflops: *resource.NewQuantity(30, resource.DecimalSI),
+				Vram:   *resource.NewQuantity(300, resource.BinarySI),
+			},
+		}, false)
+		Expect(err).To(Succeed())
+
+		usage, exists = allocator.quotaStore.GetQuotaStatus(TestNamespace)
+		Expect(exists).To(BeTrue())
+		Expect(usage.Requests.Tflops.Value()).To(Equal(int64(60)))
+		Expect(usage.Requests.Vram.Value()).To(Equal(int64(600)))
+		Expect(usage.Limits.Tflops.Value()).To(Equal(int64(60)))
+		Expect(usage.Limits.Vram.Value()).To(Equal(int64(600)))
+	})
+
+	// Regression for the bug where AdjustAllocation only ran the namespace
+	// quota pre-check when the caller flagged scale-up — letting a
+	// limit-only growth (request flat) skip validation and push total
+	// limit usage past the quota cap.
+	It("should reject AdjustAllocation when limit-only growth would exceed total quota", func() {
+		scheme := runtime.NewScheme()
+		Expect(tfv1.AddToScheme(scheme)).To(Succeed())
+
+		// Total caps at 200/2000 — InitQuotaStore rejects quotas where limits < requests,
+		// so requests and limits must move together for the entry to be admitted.
+		quotaObj := createTestQuota(200, 2000, 10)
+		gpus := []tfv1.GPU{createAvailableGPU("gpu1", 500, 5000)}
+
+		testPool := createTestGPUPool()
+		allObjects := objectsFromGPUs(gpus)
+		allObjects = append(allObjects, testPool)
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(allObjects...).
+			WithLists(&tfv1.GPUResourceQuotaList{Items: []tfv1.GPUResourceQuota{*quotaObj}}).
+			Build()
+
+		ctx := context.Background()
+		allocator := NewGpuAllocator(ctx, nil, fakeClient, 0)
+		initAllocator(allocator)
+
+		req := createAllocRequest(30, 300, 1)
+		req.PodMeta = podMeta
+		_, err := allocator.Alloc(req)
+		Expect(err).To(Succeed())
+
+		// Request stays flat; limit grows from 30 to 250 — past the 200 total cap.
+		_, _, _, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+			PodUID: string(podMeta.UID),
+			NewRequest: tfv1.Resource{
+				Tflops: *resource.NewQuantity(30, resource.DecimalSI),
+				Vram:   *resource.NewQuantity(300, resource.BinarySI),
+			},
+			NewLimit: tfv1.Resource{
+				Tflops: *resource.NewQuantity(250, resource.DecimalSI),
+				Vram:   *resource.NewQuantity(2500, resource.BinarySI),
+			},
+		}, false)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("total.max.tflops.limit"))
+
+		// QuotaStore must not have absorbed the rejected change.
+		usage, exists := allocator.quotaStore.GetQuotaStatus(TestNamespace)
+		Expect(exists).To(BeTrue())
+		Expect(usage.Limits.Tflops.Value()).To(Equal(int64(30)))
+	})
+
+	// Regression for the bug where checkSingleQuotas was fed per-GPU deltas
+	// instead of absolute new values during adjust, so a workload whose new
+	// limit blew past single.MaxLimits could slip through whenever the delta
+	// itself stayed under the cap.
+	It("should reject AdjustAllocation when new absolute limit exceeds single.MaxLimits", func() {
+		scheme := runtime.NewScheme()
+		Expect(tfv1.AddToScheme(scheme)).To(Succeed())
+
+		quotaObj := createTestQuota(500, 5000, 10)
+		quotaObj.Spec.Single.MaxLimits = &tfv1.Resource{
+			Tflops: *resource.NewQuantity(100, resource.DecimalSI),
+			Vram:   *resource.NewQuantity(1000, resource.BinarySI),
+		}
+		gpus := []tfv1.GPU{createAvailableGPU("gpu1", 500, 5000)}
+
+		testPool := createTestGPUPool()
+		allObjects := objectsFromGPUs(gpus)
+		allObjects = append(allObjects, testPool)
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(allObjects...).
+			WithLists(&tfv1.GPUResourceQuotaList{Items: []tfv1.GPUResourceQuota{*quotaObj}}).
+			Build()
+
+		ctx := context.Background()
+		allocator := NewGpuAllocator(ctx, nil, fakeClient, 0)
+		initAllocator(allocator)
+
+		req := createAllocRequest(50, 500, 1)
+		req.PodMeta = podMeta
+		_, err := allocator.Alloc(req)
+		Expect(err).To(Succeed())
+
+		// New limit 150 exceeds single.MaxLimits=100. The per-GPU delta would be 100,
+		// which equals the cap and would silently pass the old delta-vs-absolute compare.
+		_, _, _, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+			PodUID: string(podMeta.UID),
+			NewRequest: tfv1.Resource{
+				Tflops: *resource.NewQuantity(50, resource.DecimalSI),
+				Vram:   *resource.NewQuantity(500, resource.BinarySI),
+			},
+			NewLimit: tfv1.Resource{
+				Tflops: *resource.NewQuantity(150, resource.DecimalSI),
+				Vram:   *resource.NewQuantity(500, resource.BinarySI),
+			},
+		}, false)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("single.max.tflops.limit"))
+	})
 })
 
 var _ = Describe("GPUAllocator Assume Commit Flow", func() {

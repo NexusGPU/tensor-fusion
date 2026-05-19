@@ -215,7 +215,10 @@ type GPUAllocationInfo struct {
 }
 
 type AdjustRequest struct {
-	PodUID     string
+	PodUID string
+	// Deprecated: kept for source compatibility. The allocator pre-checks
+	// per-GPU capacity and namespace quota unconditionally, so callers no
+	// longer need to declare scale direction. The value is ignored.
 	IsScaleUp  bool
 	NewRequest Resource
 	NewLimit   Resource
