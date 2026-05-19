@@ -1,0 +1,7 @@
+- app_version: 1.43.5
+  chart: tensor-fusion-1.5.6
+  name: tensor-fusion-sys
+  namespace: tensor-fusion-sys
+  revision: "1"
+  status: deployed
+  updated: 2025-09-04 15:52:50.415318 +0800 +0800

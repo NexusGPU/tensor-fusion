@@ -1,0 +1,200 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    meta.helm.sh/release-name: tensor-fusion-sys
+    meta.helm.sh/release-namespace: tensor-fusion-sys
+  creationTimestamp: "2025-09-04T07:53:30Z"
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    k8slens-edit-resource-version: v1
+  name: tensor-fusion-sys-role
+  resourceVersion: "53714930"
+  uid: 06a46569-6e1c-4337-9e5d-500f0a2e0dd6
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - events
+  - namespaces
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - pods
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - nodes/finalizers
+  - pods/binding
+  - pods/exec
+  - pods/finalizers
+  verbs:
+  - create
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - nodes/status
+  - pods/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  - policy
+  - storage.k8s.io
+  resources:
+  - '*'
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  - deployments
+  - replicasets
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - providerconfigs
+  - gpunodeclasses
+  - gpunodes
+  - gpupools
+  - gpuresourcequotas
+  - gpus
+  - schedulingconfigtemplates
+  - tensorfusionclusters
+  - tensorfusionconnections
+  - tensorfusionworkloads
+  - workloadprofiles
+  - gpunodeclaims
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - providerconfigs/finalizers
+  - gpunodeclasses/finalizers
+  - gpunodes/finalizers
+  - gpupools/finalizers
+  - gpuresourcequotas/finalizers
+  - gpus/finalizers
+  - schedulingconfigtemplates/finalizers
+  - tensorfusionclusters/finalizers
+  - tensorfusionconnections/finalizers
+  - tensorfusionworkloads/finalizers
+  - workloadprofiles/finalizers
+  - gpunodeclaims/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - gpunodeclasses/status
+  - gpunodes/status
+  - gpupools/status
+  - gpuresourcequotas/status
+  - gpus/status
+  - schedulingconfigtemplates/status
+  - tensorfusionclusters/status
+  - tensorfusionconnections/status
+  - tensorfusionworkloads/status
+  - workloadprofiles/status
+  - gpunodeclaims/status
+  - providerconfigs/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - karpenter.sh
+  resources:
+  - '*'
+  verbs:
+  - '*'
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create

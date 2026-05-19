@@ -1,0 +1,410 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    kubectl.kubernetes.io/restartedAt: "2026-05-16T07:13:33Z"
+    tensor-fusion.ai/compute-percent-limit: "10"
+    tensor-fusion.ai/compute-percent-request: "10"
+    tensor-fusion.ai/generate-workload: "true"
+    tensor-fusion.ai/gpu-count: "1"
+    tensor-fusion.ai/gpu-ids: gpu-337d5efe-90a4-32c4-afcb-78ea5e3a5606
+    tensor-fusion.ai/gpupool: tensor-fusion-shared
+    tensor-fusion.ai/index: "7"
+    tensor-fusion.ai/inject-container: pytorch
+    tensor-fusion.ai/is-local-gpu: "true"
+    tensor-fusion.ai/isolation: hard
+    tensor-fusion.ai/qos: medium
+    tensor-fusion.ai/sidecar-worker: "true"
+    tensor-fusion.ai/vram-limit: 1Gi
+    tensor-fusion.ai/vram-request: 1Gi
+    tensor-fusion.ai/workload: pytorch-hard-local
+  creationTimestamp: "2026-05-16T07:13:33Z"
+  finalizers:
+  - tensor-fusion.ai/finalizer
+  generateName: pytorch-hard-local-864cbbcfcc-
+  generation: 1
+  labels:
+    app: pytorch-hard-local
+    pod-template-hash: 864cbbcfcc
+    tensor-fusion.ai/component: worker
+    tensor-fusion.ai/enabled: "true"
+    tensor-fusion.ai/gpupool: tensor-fusion-shared
+    tensor-fusion.ai/pod-template-hash: 22f36cc8890c4e7a
+    tensor-fusion.ai/workload: pytorch-hard-local
+  name: pytorch-hard-local-864cbbcfcc-42plc
+  namespace: default
+  ownerReferences:
+  - apiVersion: apps/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: ReplicaSet
+    name: pytorch-hard-local-864cbbcfcc
+    uid: 8c30d551-52ae-4a63-9c6c-e7877ca7cb0a
+  resourceVersion: "62910374"
+  uid: 1ba9b20a-8b48-4420-84df-f8c4760089ae
+spec:
+  containers:
+  - command:
+    - sh
+    - -c
+    - sleep infinity
+    env:
+    - name: TF_ENABLE_LOG
+      value: "1"
+    - name: TF_LOG_PATH
+      value: /tmp/tf.log
+    - name: TF_PREPEND_PATH
+      value: /tensor-fusion
+    - name: TF_LD_LIBRARY_PATH
+      value: /tensor-fusion
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: CONTAINER_NAME
+      value: pytorch
+    - name: ENABLE_CUDA_HOOKS
+      value: "false"
+    - name: HYPERVISOR_IP
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: status.hostIP
+    - name: HYPERVISOR_PORT
+      value: "8001"
+    - name: TENSOR_FUSION_OPERATOR_CONNECTION_INFO
+      value: shmem+tf_shm+1024+1
+    - name: TF_USE_IVSHMEM
+      value: "0"
+    image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+    imagePullPolicy: IfNotPresent
+    name: pytorch
+    resources:
+      limits:
+        tensor-fusion.ai/index_0: "7"
+      requests:
+        tensor-fusion.ai/index_0: "7"
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-gkkhp
+      readOnly: true
+    - mountPath: /etc/ld.so.preload
+      name: tf-libs
+      readOnly: true
+      subPath: ld.so.preload
+    - mountPath: /tensor-fusion
+      name: tf-libs
+    - mountPath: /usr/local/bin/nvidia-smi
+      name: tf-libs
+      readOnly: true
+      subPath: nvidia-smi
+    - mountPath: /dev/shm
+      name: tf-transport-shm
+    - mountPath: /run/tensor-fusion/shm
+      mountPropagation: HostToContainer
+      name: tf-data
+      subPathExpr: shm/$(POD_NAMESPACE)/$(POD_NAME)
+  - command:
+    - /bin/bash
+    - -c
+    - touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker
+      -n shmem -m tf_shm -M 1024
+    env:
+    - name: TF_ENABLE_LOG
+      value: "1"
+    - name: TF_LICENSE
+      value: '|ee|1781107200000'
+    - name: TF_LICENSE_SIGN
+      value: 304502201b85cdd1cd6bd815b1671de5e41e8ad472ba1439190aa5ef6bfef9347f2b4372022100a1dcd8e79bc06e5580ff17c0a75d45f8282d97ba778523a70d1f551616b4d7b2
+    - name: HYPERVISOR_IP
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: status.hostIP
+    - name: HYPERVISOR_PORT
+      value: "8001"
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: CONTAINER_NAME
+      value: tensorfusion-worker
+    - name: TF_ENABLE_LOG
+      value: "1"
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: TF_CUDA_SM_PERCENT_LIMIT
+      value: "10"
+    - name: TF_GPU_MEMORY_LIMIT
+      value: "1024"
+    image: tensorfusion/tensor-fusion-worker:v2.13.0
+    imagePullPolicy: IfNotPresent
+    name: tensorfusion-worker
+    ports:
+    - containerPort: 8000
+      name: remote-vgpu
+      protocol: TCP
+    resources:
+      limits:
+        cpu: "2"
+        memory: 8Gi
+        tensor-fusion.ai/index_0: "7"
+      requests:
+        cpu: 100m
+        memory: 128Mi
+        tensor-fusion.ai/index_0: "7"
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /dev/shm
+      name: tf-transport-shm
+    - mountPath: /run/tensor-fusion/shm
+      mountPropagation: HostToContainer
+      name: tf-data
+      subPathExpr: shm/$(POD_NAMESPACE)/$(POD_NAME)
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-gkkhp
+      readOnly: true
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: true
+  initContainers:
+  - env:
+    - name: RUN_INSIDE_GPU_NODE
+      value: "true"
+    image: tensorfusion/tensor-fusion-client:v2.13.0
+    imagePullPolicy: IfNotPresent
+    name: inject-lib
+    resources:
+      limits:
+        cpu: 20m
+        memory: 256Mi
+      requests:
+        cpu: 20m
+        memory: 256Mi
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /tensor-fusion
+      name: tf-libs
+    - mountPath: /tensor-fusion-conf
+      name: tf-libs
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-gkkhp
+      readOnly: true
+  nodeName: ubuntu
+  preemptionPolicy: PreemptLowerPriority
+  priority: 0
+  restartPolicy: Always
+  schedulerName: tensor-fusion-scheduler
+  securityContext: {}
+  serviceAccount: default
+  serviceAccountName: default
+  terminationGracePeriodSeconds: 30
+  tolerations:
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: PreferNoSchedule
+    key: tensor-fusion.ai/used-by
+    operator: Equal
+    value: tensor-fusion
+  volumes:
+  - name: kube-api-access-gkkhp
+    projected:
+      defaultMode: 420
+      sources:
+      - serviceAccountToken:
+          expirationSeconds: 3607
+          path: token
+      - configMap:
+          items:
+          - key: ca.crt
+            path: ca.crt
+          name: kube-root-ca.crt
+      - downwardAPI:
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+  - emptyDir: {}
+    name: tf-libs
+  - hostPath:
+      path: /run/tensor-fusion
+      type: DirectoryOrCreate
+    name: tf-data
+  - emptyDir:
+      medium: Memory
+    name: tf-transport-shm
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-16T07:13:35Z"
+    status: "True"
+    type: PodReadyToStartContainers
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-16T07:13:35Z"
+    status: "True"
+    type: Initialized
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-16T07:13:36Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-16T07:13:36Z"
+    status: "True"
+    type: ContainersReady
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-16T07:13:33Z"
+    status: "True"
+    type: PodScheduled
+  containerStatuses:
+  - allocatedResources:
+      tensor-fusion.ai/index_0: "7"
+    containerID: containerd://8fda6c33e18fa9e0f57bf088dca82dcbe7ea4d3a575217637d015390cfbe463a
+    image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+    imageID: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch@sha256:77f17f843507062875ce8be2a6f76aa6aa3df7f9ef1e31d9d7432f4b0f563dee
+    lastState: {}
+    name: pytorch
+    ready: true
+    resources:
+      limits:
+        tensor-fusion.ai/index_0: "7"
+      requests:
+        tensor-fusion.ai/index_0: "7"
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-05-16T07:13:35Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-gkkhp
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /etc/ld.so.preload
+      name: tf-libs
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /tensor-fusion
+      name: tf-libs
+    - mountPath: /usr/local/bin/nvidia-smi
+      name: tf-libs
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /dev/shm
+      name: tf-transport-shm
+    - mountPath: /run/tensor-fusion/shm
+      name: tf-data
+  - allocatedResources:
+      cpu: 100m
+      memory: 128Mi
+      tensor-fusion.ai/index_0: "7"
+    containerID: containerd://015e2debba9b51a25dd2ac2c973e38d9adda675df47fbadc0749b764b217a142
+    image: docker.io/tensorfusion/tensor-fusion-worker:v2.13.0
+    imageID: sha256:db76ef6112b10a535d7403a040d371f2e88d427ffe11f7338d0c9f894d6d98a5
+    lastState: {}
+    name: tensorfusion-worker
+    ready: true
+    resources:
+      limits:
+        cpu: "2"
+        memory: 8Gi
+        tensor-fusion.ai/index_0: "7"
+      requests:
+        cpu: 100m
+        memory: 128Mi
+        tensor-fusion.ai/index_0: "7"
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-05-16T07:13:35Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /dev/shm
+      name: tf-transport-shm
+    - mountPath: /run/tensor-fusion/shm
+      name: tf-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-gkkhp
+      readOnly: true
+      recursiveReadOnly: Disabled
+  hostIP: 192.168.2.4
+  hostIPs:
+  - ip: 192.168.2.4
+  initContainerStatuses:
+  - allocatedResources:
+      cpu: 20m
+      memory: 256Mi
+    containerID: containerd://7ee1768fb19ac5b309fe89e14f6aef279fe2028cd03e360a6eca44f8bc2df327
+    image: docker.io/tensorfusion/tensor-fusion-client:v2.13.0
+    imageID: sha256:a224cab1586682684b933172d1a5b7a61be233e79a61d2af8db7ef236523d929
+    lastState: {}
+    name: inject-lib
+    ready: true
+    resources:
+      limits:
+        cpu: 20m
+        memory: 256Mi
+      requests:
+        cpu: 20m
+        memory: 256Mi
+    restartCount: 0
+    started: false
+    state:
+      terminated:
+        containerID: containerd://7ee1768fb19ac5b309fe89e14f6aef279fe2028cd03e360a6eca44f8bc2df327
+        exitCode: 0
+        finishedAt: "2026-05-16T07:13:35Z"
+        reason: Completed
+        startedAt: "2026-05-16T07:13:34Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /tensor-fusion
+      name: tf-libs
+    - mountPath: /tensor-fusion-conf
+      name: tf-libs
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-gkkhp
+      readOnly: true
+      recursiveReadOnly: Disabled
+  phase: Running
+  podIP: 10.42.0.253
+  podIPs:
+  - ip: 10.42.0.253
+  qosClass: Burstable
+  startTime: "2026-05-16T07:13:33Z"

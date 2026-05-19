@@ -1,0 +1,493 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/tensor-fusion-hypervisor: unconfined
+  creationTimestamp: "2026-05-15T10:20:25Z"
+  generation: 1
+  labels:
+    tensor-fusion.ai/component: hypervisor
+    tensor-fusion.ai/pod-template-hash: 1790c6dc12ff6401
+    tensor-fusion.ai/pool-tensor-fusion-shared: "true"
+  name: tf-hypervisor-kylin-pc
+  namespace: tensor-fusion-sys
+  ownerReferences:
+  - apiVersion: tensor-fusion.ai/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: GPUNode
+    name: kylin-pc
+    uid: 814d9ff6-fe33-474b-915c-9d1220da3ca1
+  - apiVersion: v1
+    kind: Node
+    name: kylin-pc
+    uid: 9cccaff7-6a14-4581-8b1b-e9621738a87f
+  resourceVersion: "62828859"
+  uid: ad27a1e0-8a88-4686-a760-717442d51df2
+spec:
+  containers:
+  - args:
+    - --isolation-mode=partitioned
+    env:
+    - name: TF_LOG_LEVEL
+      value: debug
+    - name: TF_ACCELERATOR_LIB_PATH
+      value: /run/tensor-fusion/vgpu/libaccelerator_ascend.so
+    - name: LD_LIBRARY_PATH
+      value: /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/dcmi
+    - name: TENSOR_FUSION_POOL_NAME
+      value: tensor-fusion-shared
+    - name: TENSOR_FUSION_GPU_INFO_PATH
+      value: /etc/tensor-fusion/gpu-info.yaml
+    - name: API_LISTEN_ADDR
+      value: 0.0.0.0:8001
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: GPU_NODE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: spec.nodeName
+    - name: DETECT_IN_USED_GPUS
+      value: "true"
+    - name: TF_PRODUCT_NAME
+      value: tensor-fusion-oss
+    - name: DEVICE_PLUGIN_PATH
+      value: /var/lib/kubelet/device-plugins
+    - name: TF_HARDWARE_VENDOR
+      value: Ascend
+    - name: TF_PROVIDER_HARDWARE_METADATA
+      value: '[{"model":"Ascend 310P3","fullModelName":"Huawei Ascend 310P3","costPerHour":"1.0","fp16TFlops":"22","maxPartitions":7,"maxIsolationGroups":5,"totalExtendedResources":{"AICORE":8,"AICPU":7,"JPEGD":16,"JPEGE":8,"VDEC":12,"VENC":3,"VPC":12},"partitionTemplateRefs":["vir01","vir02","vir04"]}]'
+    - name: TF_PROVIDER_DEVICE_MOUNT
+      value: '{"default":{"deviceMountRule":"true","partitionedDeviceMountRule":"true","sharedDevices":["/dev/davinci_manager","/dev/davinci_manager_docker","/dev/devmm_svm","/dev/hisi_hdc","/dev/uburma/*","/dev/ummu/*"]}}'
+    - name: TF_PROVIDER_TEMPLATE_CONFIG
+      value: '{"hardwareMetadata":[{"model":"Ascend 310P3","fullModelName":"Huawei
+        Ascend 310P3","costPerHour":"1.0","fp16TFlops":"22","maxPartitions":7,"maxIsolationGroups":5,"totalExtendedResources":{"AICORE":8,"AICPU":7,"JPEGD":16,"JPEGE":8,"VDEC":12,"VENC":3,"VPC":12},"partitionTemplateRefs":["vir01","vir02","vir04"]}],"virtualizationTemplates":[{"id":"vir01","name":"vir01","memoryGigabytes":3,"computePercent":"12.5","description":"1/8
+        NPU slice (vir01, 3GB)","maxInstances":8,"extendedResources":{"AICORE":1,"AICPU":1,"JPEGD":2,"JPEGE":1,"VDEC":1,"VPC":1},"isolationGroupSharing":"shared","maxPartitionsPerIsolationGroup":2,"isolationGroupSlots":2},{"id":"vir02","name":"vir02","memoryGigabytes":6,"computePercent":"25","description":"1/4
+        NPU slice (vir02, 6GB)","maxInstances":4,"extendedResources":{"AICORE":2,"AICPU":2,"JPEGD":4,"JPEGE":2,"VDEC":3,"VENC":1,"VPC":3},"isolationGroupSharing":"exclusive","isolationGroupSlots":2},{"id":"vir04","name":"vir04","memoryGigabytes":12,"computePercent":"50","description":"1/2
+        NPU slice (vir04, 12GB)","maxInstances":2,"extendedResources":{"AICORE":4,"AICPU":4,"JPEGD":8,"JPEGE":4,"VDEC":6,"VENC":2,"VPC":6},"isolationGroupSharing":"exclusive","isolationGroupSlots":4}]}'
+    - name: TF_HYPERVISOR_SCHEDULING_CONFIG
+      value: '{"autoFreezeAndResume":{"autoFreeze":[{"qos":"low","freezeToMemTTL":"1m","freezeToDiskTTL":"1h","enable":true},{"qos":"medium","freezeToMemTTL":"2m","freezeToDiskTTL":"2h","enable":true},{"qos":"high","freezeToMemTTL":"1d","freezeToDiskTTL":"1w","enable":true},{"qos":"critical","freezeToMemTTL":"1w","freezeToDiskTTL":"4w","enable":true}],"intelligenceWarmup":{"enable":true,"model":"smart-warmup-v1","historyDataPeriod":"1y","predictionPeriod":"1m"}},"elasticRateLimitParameters":{"maxRefillRate":"12000","minRefillRate":"80","filterAlpha":"0.30","ki":"0.4","kd":"1.0","kp":"0.12","burstWindow":"0.5","capacityMin":"150","capacityMax":"6000","integralDecayFactor":"0.85"},"multiProcessQueuingParameters":{}}'
+    - name: TF_HYPERVISOR_METRICS_FORMAT
+      value: influx
+    - name: TF_HYPERVISOR_METRICS_EXTRA_LABELS
+      value: '{}'
+    image: docker.io/tensorfusion/tensor-fusion-hypervisor:dev-feat-mig
+    imagePullPolicy: IfNotPresent
+    livenessProbe:
+      failureThreshold: 5
+      httpGet:
+        path: /healthz
+        port: 8001
+        scheme: HTTP
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      successThreshold: 1
+      timeoutSeconds: 5
+    name: tensor-fusion-hypervisor
+    readinessProbe:
+      failureThreshold: 2
+      httpGet:
+        path: /readyz
+        port: 8001
+        scheme: HTTP
+      initialDelaySeconds: 5
+      periodSeconds: 15
+      successThreshold: 1
+      timeoutSeconds: 5
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 60m
+        memory: 128Mi
+    securityContext:
+      appArmorProfile:
+        type: Unconfined
+      capabilities:
+        add:
+        - SYS_PTRACE
+      privileged: true
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /usr/local/sbin/npu-smi
+      name: host-npu-smi
+      readOnly: true
+    - mountPath: /run/tensor-fusion
+      name: tf-data
+    - mountPath: /etc/tensor-fusion/gpu-info.yaml
+      name: gpu-info
+      subPath: gpu-info.yaml
+    - mountPath: /var/lib/kubelet/device-plugins
+      name: device-plugin
+    - mountPath: /var/lib/kubelet/pod-resources
+      name: pod-resources
+    - mountPath: /logs
+      name: logs
+    - mountPath: /usr/local/Ascend
+      name: ascend-root
+      readOnly: true
+    - mountPath: /usr/local/dcmi
+      name: ascend-dcmi
+      readOnly: true
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-bn689
+      readOnly: true
+  - env:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: spec.nodeName
+    image: docker.1ms.run/timberio/vector:latest-alpine
+    imagePullPolicy: IfNotPresent
+    name: vector
+    resources:
+      limits:
+        cpu: "1"
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /etc/vector/vector.yaml
+      name: vector-config
+      readOnly: true
+      subPath: vector-hypervisor.yaml
+    - mountPath: /logs
+      name: logs
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-bn689
+      readOnly: true
+  dnsPolicy: ClusterFirstWithHostNet
+  enableServiceLinks: false
+  hostNetwork: true
+  hostPID: true
+  initContainers:
+  - command:
+    - hypervisor
+    - mount-shm
+    - --mount-point
+    - /run/tensor-fusion/shm
+    - --size
+    - "1024"
+    image: docker.io/tensorfusion/tensor-fusion-hypervisor:dev-feat-mig
+    imagePullPolicy: IfNotPresent
+    name: init-shm
+    resources: {}
+    securityContext:
+      privileged: true
+      runAsGroup: 0
+      runAsUser: 0
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /run/tensor-fusion
+      mountPropagation: Bidirectional
+      name: tf-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-bn689
+      readOnly: true
+  - command:
+    - sh
+    - -c
+    - if [ -d /build ]; then cp -r /build/. /run/tensor-fusion; fi
+    image: tensorfusion/vgpu-provider-ascend:dev-arm64
+    imagePullPolicy: IfNotPresent
+    name: init-runtime
+    resources: {}
+    securityContext:
+      privileged: true
+      runAsGroup: 0
+      runAsUser: 0
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /run/tensor-fusion
+      mountPropagation: Bidirectional
+      name: tf-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-bn689
+      readOnly: true
+  nodeName: kylin-pc
+  preemptionPolicy: PreemptLowerPriority
+  priority: 2000001000
+  priorityClassName: system-node-critical
+  restartPolicy: Always
+  runtimeClassName: ascend
+  schedulerName: default-scheduler
+  securityContext:
+    runAsGroup: 0
+    runAsUser: 0
+  serviceAccount: tensor-fusion-hypervisor-sa
+  serviceAccountName: tensor-fusion-hypervisor-sa
+  terminationGracePeriodSeconds: 5
+  tolerations:
+  - key: tensor-fusion.ai/used-by
+    operator: Exists
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 300
+  volumes:
+  - hostPath:
+      path: /usr/local/sbin/npu-smi
+      type: File
+    name: host-npu-smi
+  - hostPath:
+      path: /run/tensor-fusion
+      type: DirectoryOrCreate
+    name: tf-data
+  - configMap:
+      defaultMode: 420
+      name: tensor-fusion-sys-vector-config
+    name: vector-config
+  - emptyDir: {}
+    name: logs
+  - hostPath:
+      path: /var/log/pods
+      type: DirectoryOrCreate
+    name: kubernetes-logs
+  - configMap:
+      defaultMode: 420
+      name: tensor-fusion-sys-public-gpu-info
+    name: gpu-info
+  - hostPath:
+      path: /var/lib/kubelet/device-plugins
+      type: DirectoryOrCreate
+    name: device-plugin
+  - hostPath:
+      path: /var/lib/kubelet/pod-resources
+      type: DirectoryOrCreate
+    name: pod-resources
+  - hostPath:
+      path: /usr/local/Ascend
+      type: Directory
+    name: ascend-root
+  - hostPath:
+      path: /usr/local/dcmi
+      type: Directory
+    name: ascend-dcmi
+  - name: kube-api-access-bn689
+    projected:
+      defaultMode: 420
+      sources:
+      - serviceAccountToken:
+          expirationSeconds: 3607
+          path: token
+      - configMap:
+          items:
+          - key: ca.crt
+            path: ca.crt
+          name: kube-root-ca.crt
+      - downwardAPI:
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-15T10:20:26Z"
+    status: "True"
+    type: PodReadyToStartContainers
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-15T10:20:27Z"
+    status: "True"
+    type: Initialized
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-15T10:20:44Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-15T10:20:44Z"
+    status: "True"
+    type: ContainersReady
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-15T10:20:25Z"
+    status: "True"
+    type: PodScheduled
+  containerStatuses:
+  - allocatedResources:
+      cpu: 60m
+      memory: 128Mi
+    containerID: containerd://dd360f050824a90ae71a64b218740e49393f3af09aba14da03eabc26dbe354d0
+    image: docker.io/tensorfusion/tensor-fusion-hypervisor:dev-feat-mig
+    imageID: sha256:d6931e53488e769df803fece6c7036b0be3e316c2fadc5bd051ea53c7ca05c77
+    lastState: {}
+    name: tensor-fusion-hypervisor
+    ready: true
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 60m
+        memory: 128Mi
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-05-15T10:20:27Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /usr/local/sbin/npu-smi
+      name: host-npu-smi
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /run/tensor-fusion
+      name: tf-data
+    - mountPath: /etc/tensor-fusion/gpu-info.yaml
+      name: gpu-info
+    - mountPath: /var/lib/kubelet/device-plugins
+      name: device-plugin
+    - mountPath: /var/lib/kubelet/pod-resources
+      name: pod-resources
+    - mountPath: /logs
+      name: logs
+    - mountPath: /usr/local/Ascend
+      name: ascend-root
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /usr/local/dcmi
+      name: ascend-dcmi
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-bn689
+      readOnly: true
+      recursiveReadOnly: Disabled
+  - allocatedResources:
+      cpu: 50m
+      memory: 64Mi
+    containerID: containerd://06f5d3e5a6baed49699baa0f8d79d5cc5ba2913e0ecebec4d6861fcdc0e6d0ca
+    image: docker.1ms.run/timberio/vector:latest-alpine
+    imageID: docker.1ms.run/timberio/vector@sha256:bbc59e9d5a6cf432f11d912911a6ac63784527d978626cff783152c2bb2ee1a9
+    lastState: {}
+    name: vector
+    ready: true
+    resources:
+      limits:
+        cpu: "1"
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-05-15T10:20:27Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 6
+        - 10
+        - 11
+        - 20
+        - 26
+        - 27
+        uid: 0
+    volumeMounts:
+    - mountPath: /etc/vector/vector.yaml
+      name: vector-config
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /logs
+      name: logs
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-bn689
+      readOnly: true
+      recursiveReadOnly: Disabled
+  hostIP: 192.168.2.50
+  hostIPs:
+  - ip: 192.168.2.50
+  initContainerStatuses:
+  - containerID: containerd://4ef499ce207fb9f2ebf48be50edc560917cb78469d147a1b2aef359d724a3c97
+    image: docker.io/tensorfusion/tensor-fusion-hypervisor:dev-feat-mig
+    imageID: sha256:d6931e53488e769df803fece6c7036b0be3e316c2fadc5bd051ea53c7ca05c77
+    lastState: {}
+    name: init-shm
+    ready: true
+    resources: {}
+    restartCount: 0
+    started: false
+    state:
+      terminated:
+        containerID: containerd://4ef499ce207fb9f2ebf48be50edc560917cb78469d147a1b2aef359d724a3c97
+        exitCode: 0
+        finishedAt: "2026-05-15T10:20:26Z"
+        reason: Completed
+        startedAt: "2026-05-15T10:20:26Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /run/tensor-fusion
+      name: tf-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-bn689
+      readOnly: true
+      recursiveReadOnly: Disabled
+  - containerID: containerd://e933250bf153091568b5aa20935a0b2ca91bd4e6a2ad48b53be99492800bae04
+    image: docker.io/tensorfusion/vgpu-provider-ascend:dev-arm64
+    imageID: sha256:f747e62d25bad5321c07473e22cce687068f08cd7f92aaab9f8ecdd3cd25ce34
+    lastState: {}
+    name: init-runtime
+    ready: true
+    resources: {}
+    restartCount: 0
+    started: false
+    state:
+      terminated:
+        containerID: containerd://e933250bf153091568b5aa20935a0b2ca91bd4e6a2ad48b53be99492800bae04
+        exitCode: 0
+        finishedAt: "2026-05-15T10:20:26Z"
+        reason: Completed
+        startedAt: "2026-05-15T10:20:26Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        - 10
+        uid: 0
+    volumeMounts:
+    - mountPath: /run/tensor-fusion
+      name: tf-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-bn689
+      readOnly: true
+      recursiveReadOnly: Disabled
+  phase: Running
+  podIP: 192.168.2.50
+  podIPs:
+  - ip: 192.168.2.50
+  qosClass: Burstable
+  startTime: "2026-05-15T10:20:25Z"

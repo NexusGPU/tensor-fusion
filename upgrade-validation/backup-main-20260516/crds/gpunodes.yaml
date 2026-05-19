@@ -1,0 +1,360 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"annotations":{"controller-gen.kubebuilder.io/version":"v0.16.4"},"name":"gpunodes.tensor-fusion.ai"},"spec":{"group":"tensor-fusion.ai","names":{"kind":"GPUNode","listKind":"GPUNodeList","plural":"gpunodes","singular":"gpunode"},"scope":"Cluster","versions":[{"additionalPrinterColumns":[{"jsonPath":".status.phase","name":"Phase","type":"string"},{"jsonPath":".status.totalTFlops","name":"Total TFlops","type":"string"},{"jsonPath":".status.totalVRAM","name":"Total VRAM","type":"string"},{"jsonPath":".status.virtualTFlops","name":"Virtual TFlops","type":"string"},{"jsonPath":".status.virtualVRAM","name":"Virtual VRAM","type":"string"},{"jsonPath":".status.availableTFlops","name":"Available TFlops","type":"string"},{"jsonPath":".status.availableVRAM","name":"Available VRAM","type":"string"},{"jsonPath":".status.totalGPUs","name":"GPU Count","type":"integer"}],"name":"v1","schema":{"openAPIV3Schema":{"description":"GPUNode is the Schema for the gpunodes API.","properties":{"apiVersion":{"description":"APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources","type":"string"},"kind":{"description":"Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds","type":"string"},"metadata":{"type":"object"},"spec":{"description":"GPUNodeSpec defines the desired state of GPUNode.","properties":{"cloudVendorParam":{"type":"string"},"costPerHour":{"type":"string"},"gpuCardIndices":{"description":"if not all GPU cards should be used, specify the GPU card indices, default to empty,\nonboard all GPU cards to the pool","items":{"type":"integer"},"type":"array"},"manageMode":{"default":"AutoSelect","enum":["Manual","AutoSelect","Provisioned"],"type":"string"}},"type":"object"},"status":{"description":"GPUNodeStatus defines the observed state of GPUNode.","properties":{"allocatedPods":{"additionalProperties":{"items":{"properties":{"limits":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"},"name":{"type":"string"},"namespace":{"type":"string"},"qos":{"enum":["low","medium","high","critical"],"type":"string"},"requests":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"},"uid":{"type":"string"}},"type":"object"},"type":"array"},"type":"object"},"availableTFlops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"availableVRAM":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"conditions":{"items":{"description":"Condition contains details for one aspect of the current state of this API Resource.","properties":{"lastTransitionTime":{"description":"lastTransitionTime is the last time the condition transitioned from one status to another.\nThis should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.","format":"date-time","type":"string"},"message":{"description":"message is a human readable message indicating details about the transition.\nThis may be an empty string.","maxLength":32768,"type":"string"},"observedGeneration":{"description":"observedGeneration represents the .metadata.generation that the condition was set based upon.\nFor instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date\nwith respect to the current state of the instance.","format":"int64","minimum":0,"type":"integer"},"reason":{"description":"reason contains a programmatic identifier indicating the reason for the condition's last transition.\nProducers of specific condition types may define expected values and meanings for this field,\nand whether the values are considered a guaranteed API.\nThe value should be a CamelCase string.\nThis field may not be empty.","maxLength":1024,"minLength":1,"pattern":"^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$","type":"string"},"status":{"description":"status of the condition, one of True, False, Unknown.","enum":["True","False","Unknown"],"type":"string"},"type":{"description":"type of condition in CamelCase or in foo.example.com/CamelCase.","maxLength":316,"pattern":"^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$","type":"string"}},"required":["lastTransitionTime","message","reason","status","type"],"type":"object"},"type":"array"},"hypervisorStatus":{"properties":{"hypervisorState":{"type":"string"},"hypervisorVersion":{"type":"string"},"lastHeartbeatTime":{"format":"date-time","type":"string"}},"type":"object"},"loadedModels":{"items":{"type":"string"},"type":"array"},"managedGPUDeviceIDs":{"items":{"type":"string"},"type":"array"},"managedGPUs":{"format":"int32","type":"integer"},"nodeInfo":{"properties":{"dataDiskSize":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"ramSize":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"Additional space for L1/L2 VRAM buffer","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"type":"object"},"observedGeneration":{"format":"int64","type":"integer"},"phase":{"default":"Pending","enum":["Pending","Provisioning","Migrating","Running","Succeeded","Failed","Unknown","Destroying"],"type":"string"},"totalGPUPods":{"format":"int32","type":"integer"},"totalGPUs":{"format":"int32","type":"integer"},"totalTFlops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"totalVRAM":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"virtualAvailableTFlops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"virtualAvailableVRAM":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"virtualTFlops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"virtualVRAM":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["managedGPUs","phase","totalGPUs","totalTFlops","totalVRAM"],"type":"object"}},"type":"object"}},"served":true,"storage":true,"subresources":{"status":{}}}]}}
+  creationTimestamp: "2025-09-04T07:52:47Z"
+  generation: 2
+  name: gpunodes.tensor-fusion.ai
+  resourceVersion: "20536307"
+  uid: 8ce26398-c5f8-4553-8ad0-6bda7302eed9
+spec:
+  conversion:
+    strategy: None
+  group: tensor-fusion.ai
+  names:
+    kind: GPUNode
+    listKind: GPUNodeList
+    plural: gpunodes
+    singular: gpunode
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.totalTFlops
+      name: Total TFlops
+      type: string
+    - jsonPath: .status.totalVRAM
+      name: Total VRAM
+      type: string
+    - jsonPath: .status.virtualTFlops
+      name: Virtual TFlops
+      type: string
+    - jsonPath: .status.virtualVRAM
+      name: Virtual VRAM
+      type: string
+    - jsonPath: .status.availableTFlops
+      name: Available TFlops
+      type: string
+    - jsonPath: .status.availableVRAM
+      name: Available VRAM
+      type: string
+    - jsonPath: .status.totalGPUs
+      name: GPU Count
+      type: integer
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: GPUNode is the Schema for the gpunodes API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: GPUNodeSpec defines the desired state of GPUNode.
+            properties:
+              cloudVendorParam:
+                type: string
+              costPerHour:
+                type: string
+              gpuCardIndices:
+                description: |-
+                  if not all GPU cards should be used, specify the GPU card indices, default to empty,
+                  onboard all GPU cards to the pool
+                items:
+                  type: integer
+                type: array
+              manageMode:
+                default: AutoSelect
+                enum:
+                - Manual
+                - AutoSelect
+                - Provisioned
+                type: string
+            type: object
+          status:
+            description: GPUNodeStatus defines the observed state of GPUNode.
+            properties:
+              allocatedPods:
+                additionalProperties:
+                  items:
+                    properties:
+                      limits:
+                        properties:
+                          compute:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            description: 0-100 percentage, mutually exclusive with
+                              TFLOPs
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          tflops:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          vram:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                        required:
+                        - tflops
+                        - vram
+                        type: object
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                      qos:
+                        enum:
+                        - low
+                        - medium
+                        - high
+                        - critical
+                        type: string
+                      requests:
+                        properties:
+                          compute:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            description: 0-100 percentage, mutually exclusive with
+                              TFLOPs
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          tflops:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          vram:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                        required:
+                        - tflops
+                        - vram
+                        type: object
+                      uid:
+                        type: string
+                    type: object
+                  type: array
+                type: object
+              availableTFlops:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              availableVRAM:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              hypervisorStatus:
+                properties:
+                  hypervisorState:
+                    type: string
+                  hypervisorVersion:
+                    type: string
+                  lastHeartbeatTime:
+                    format: date-time
+                    type: string
+                type: object
+              loadedModels:
+                items:
+                  type: string
+                type: array
+              managedGPUDeviceIDs:
+                items:
+                  type: string
+                type: array
+              managedGPUs:
+                format: int32
+                type: integer
+              nodeInfo:
+                properties:
+                  dataDiskSize:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  ramSize:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: Additional space for L1/L2 VRAM buffer
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                type: object
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                default: Pending
+                enum:
+                - Pending
+                - Provisioning
+                - Migrating
+                - Running
+                - Succeeded
+                - Failed
+                - Unknown
+                - Destroying
+                type: string
+              totalGPUPods:
+                format: int32
+                type: integer
+              totalGPUs:
+                format: int32
+                type: integer
+              totalTFlops:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              totalVRAM:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              virtualAvailableTFlops:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              virtualAvailableVRAM:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              virtualTFlops:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              virtualVRAM:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+            required:
+            - managedGPUs
+            - phase
+            - totalGPUs
+            - totalTFlops
+            - totalVRAM
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: GPUNode
+    listKind: GPUNodeList
+    plural: gpunodes
+    singular: gpunode
+  conditions:
+  - lastTransitionTime: "2025-09-04T07:52:47Z"
+    message: no conflicts found
+    reason: NoConflicts
+    status: "True"
+    type: NamesAccepted
+  - lastTransitionTime: "2025-09-04T07:52:47Z"
+    message: the initial names have been accepted
+    reason: InitialNamesAccepted
+    status: "True"
+    type: Established
+  storedVersions:
+  - v1

@@ -1,0 +1,288 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    tensor-fusion.ai/embedded-worker: "true"
+    tensor-fusion.ai/generate-workload: "true"
+    tensor-fusion.ai/gpu-count: "1"
+    tensor-fusion.ai/gpu-ids: gpu-f5d00867-cc01-0631-8d51-14394632047c
+    tensor-fusion.ai/gpupool: tensor-fusion-shared
+    tensor-fusion.ai/index: "3"
+    tensor-fusion.ai/inject-container: pytorch
+    tensor-fusion.ai/is-local-gpu: "true"
+    tensor-fusion.ai/isolation: soft
+    tensor-fusion.ai/qos: high
+    tensor-fusion.ai/sidecar-worker: "false"
+    tensor-fusion.ai/tflops-limit: "10"
+    tensor-fusion.ai/tflops-request: "10"
+    tensor-fusion.ai/vram-limit: 1Gi
+    tensor-fusion.ai/vram-request: 1Gi
+    tensor-fusion.ai/workload: pytorch-soft-local
+  creationTimestamp: "2026-05-16T07:08:18Z"
+  finalizers:
+  - tensor-fusion.ai/finalizer
+  generateName: pytorch-soft-local-7bb8888887-
+  generation: 1
+  labels:
+    app: pytorch-soft-local
+    pod-template-hash: 7bb8888887
+    tensor-fusion.ai/component: worker
+    tensor-fusion.ai/enabled: "true"
+    tensor-fusion.ai/gpupool: tensor-fusion-shared
+    tensor-fusion.ai/pod-template-hash: 22f36cc8890c4e7a
+    tensor-fusion.ai/workload: pytorch-soft-local
+  name: pytorch-soft-local-7bb8888887-4zsqw
+  namespace: default
+  ownerReferences:
+  - apiVersion: apps/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: ReplicaSet
+    name: pytorch-soft-local-7bb8888887
+    uid: 51732d4c-6195-4780-a0d1-559a0f240288
+  resourceVersion: "62909723"
+  uid: 630b016d-3dbf-4f9f-a045-910616e2511f
+spec:
+  containers:
+  - command:
+    - sh
+    - -c
+    - sleep infinity
+    env:
+    - name: TF_ENABLE_LOG
+      value: "1"
+    - name: TF_LOG_PATH
+      value: /tmp/tf.log
+    - name: LD_PRELOAD
+      value: /tensor-fusion-limiter/libcuda_limiter.so
+    - name: TF_ISOLATION_MODE
+      value: soft
+    - name: TF_SHM_PATH
+      value: /run/tensor-fusion/shm/shm
+    - name: POD_NAMESPACE
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.namespace
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: CONTAINER_NAME
+      value: pytorch
+    - name: HYPERVISOR_IP
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: status.hostIP
+    - name: HYPERVISOR_PORT
+      value: "8001"
+    image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+    imagePullPolicy: IfNotPresent
+    name: pytorch
+    resources:
+      limits:
+        tensor-fusion.ai/index_0: "3"
+      requests:
+        tensor-fusion.ai/index_0: "3"
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-457zg
+      readOnly: true
+    - mountPath: /tensor-fusion-limiter
+      name: tf-soft-limiter
+      readOnly: true
+    - mountPath: /usr/local/bin/nvidia-smi
+      name: tf-soft-limiter
+      readOnly: true
+      subPath: nvidia-smi
+    - mountPath: /run/tensor-fusion/shm
+      mountPropagation: HostToContainer
+      name: tf-data
+      subPathExpr: shm/$(POD_NAMESPACE)/$(POD_NAME)
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: true
+  initContainers:
+  - command:
+    - sh
+    - -c
+    - cp /build/* /tensor-fusion-limiter/ 2>/dev/null; true
+    image: tensorfusion/tensor-fusion-hypervisor:2.6.4
+    imagePullPolicy: IfNotPresent
+    name: init-soft-limiter
+    resources:
+      limits:
+        cpu: 20m
+        memory: 256Mi
+      requests:
+        cpu: 20m
+        memory: 256Mi
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /tensor-fusion-limiter
+      name: tf-soft-limiter
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-457zg
+      readOnly: true
+  nodeName: ubuntu
+  preemptionPolicy: PreemptLowerPriority
+  priority: 10000
+  priorityClassName: tensor-fusion-high
+  restartPolicy: Always
+  schedulerName: tensor-fusion-scheduler
+  securityContext: {}
+  serviceAccount: default
+  serviceAccountName: default
+  terminationGracePeriodSeconds: 30
+  tolerations:
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: PreferNoSchedule
+    key: tensor-fusion.ai/used-by
+    operator: Equal
+    value: tensor-fusion
+  volumes:
+  - name: kube-api-access-457zg
+    projected:
+      defaultMode: 420
+      sources:
+      - serviceAccountToken:
+          expirationSeconds: 3607
+          path: token
+      - configMap:
+          items:
+          - key: ca.crt
+            path: ca.crt
+          name: kube-root-ca.crt
+      - downwardAPI:
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+  - hostPath:
+      path: /run/tensor-fusion
+      type: DirectoryOrCreate
+    name: tf-data
+  - emptyDir: {}
+    name: tf-soft-limiter
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-16T07:08:20Z"
+    status: "True"
+    type: PodReadyToStartContainers
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-16T07:08:22Z"
+    status: "True"
+    type: Initialized
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-16T07:08:23Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-16T07:08:23Z"
+    status: "True"
+    type: ContainersReady
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-16T07:08:18Z"
+    status: "True"
+    type: PodScheduled
+  containerStatuses:
+  - allocatedResources:
+      tensor-fusion.ai/index_0: "3"
+    containerID: containerd://df67559f1259662e086000a5c32b02dd51c4ffdd30a91d1c084c363f218ffa5b
+    image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+    imageID: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch@sha256:77f17f843507062875ce8be2a6f76aa6aa3df7f9ef1e31d9d7432f4b0f563dee
+    lastState: {}
+    name: pytorch
+    ready: true
+    resources:
+      limits:
+        tensor-fusion.ai/index_0: "3"
+      requests:
+        tensor-fusion.ai/index_0: "3"
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-05-16T07:08:22Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-457zg
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /tensor-fusion-limiter
+      name: tf-soft-limiter
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /usr/local/bin/nvidia-smi
+      name: tf-soft-limiter
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /run/tensor-fusion/shm
+      name: tf-data
+  hostIP: 192.168.2.4
+  hostIPs:
+  - ip: 192.168.2.4
+  initContainerStatuses:
+  - allocatedResources:
+      cpu: 20m
+      memory: 256Mi
+    containerID: containerd://918291ac61b08a6de65f61978b30879a9a8124bc58d6c59d3bef48f1c502eb72
+    image: docker.io/tensorfusion/tensor-fusion-hypervisor:2.6.4
+    imageID: sha256:2a32b00adc0b29e526fa055a92a3ca31eec8e7bc8e34e1e3780c338a73e8d513
+    lastState: {}
+    name: init-soft-limiter
+    ready: true
+    resources:
+      limits:
+        cpu: 20m
+        memory: 256Mi
+      requests:
+        cpu: 20m
+        memory: 256Mi
+    restartCount: 0
+    started: false
+    state:
+      terminated:
+        containerID: containerd://918291ac61b08a6de65f61978b30879a9a8124bc58d6c59d3bef48f1c502eb72
+        exitCode: 0
+        finishedAt: "2026-05-16T07:08:21Z"
+        reason: Completed
+        startedAt: "2026-05-16T07:08:19Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 65532
+    volumeMounts:
+    - mountPath: /tensor-fusion-limiter
+      name: tf-soft-limiter
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-457zg
+      readOnly: true
+      recursiveReadOnly: Disabled
+  phase: Running
+  podIP: 10.42.0.56
+  podIPs:
+  - ip: 10.42.0.56
+  qosClass: Burstable
+  startTime: "2026-05-16T07:08:18Z"

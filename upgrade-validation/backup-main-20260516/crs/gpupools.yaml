@@ -1,0 +1,376 @@
+apiVersion: v1
+items:
+- apiVersion: tensor-fusion.ai/v1
+  kind: GPUPool
+  metadata:
+    annotations:
+      tensor-fusion.ai/is-default-pool: "false"
+    creationTimestamp: "2026-03-06T08:30:47Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 54
+    labels:
+      k8slens-edit-resource-version: v1
+      tensor-fusion.ai/cluster: tensor-fusion
+      tensor-fusion.ai/managed-by: tensor-fusion
+    name: tensor-fusion-nvidia-shared
+    ownerReferences:
+    - apiVersion: tensor-fusion.ai/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: TensorFusionCluster
+      name: tensor-fusion
+      uid: 3c39ba92-7a4f-4f4e-b7fc-9d9121594b72
+    resourceVersion: "62829135"
+    uid: f5c7c1ad-a079-4864-8a19-0841e8ea741d
+  spec:
+    capacityConfig:
+      maxResources:
+        cpu: "0"
+        memory: "0"
+        tflops: "100"
+        vram: 100Gi
+      minResources:
+        cpu: "0"
+        memory: "0"
+        tflops: "20"
+        vram: 10Gi
+      oversubscription:
+        tflopsOversellRatio: 2000
+        vramExpandToHostDisk: 60
+        vramExpandToHostMem: 50
+      warmResources:
+        cpu: "0"
+        memory: "0"
+        tflops: "10"
+        vram: 5Gi
+    componentConfig:
+      client:
+        operatorEndpoint: http://tensor-fusion-sys.tensor-fusion-sys:8080
+        patchToContainer:
+          env:
+          - name: TF_ENABLE_LOG
+            value: "1"
+          - name: TF_LOG_PATH
+            value: /tmp/tf.log
+        patchToPod:
+          spec: {}
+      hypervisor:
+        enableVector: true
+        image: tensorfusion/tensor-fusion-hypervisor:dev
+        podTemplate:
+          template:
+            spec:
+              containers:
+              - env:
+                - name: TF_LOG_LEVEL
+                  value: debug
+                - name: TF_ACCELERATOR_LIB_PATH
+                  value: /run/tensor-fusion/libaccelerator_nvidia.so
+                name: tensor-fusion-hypervisor
+                resources:
+                  limits:
+                    cpu: 1000m
+                    memory: 1Gi
+                  requests:
+                    cpu: 60m
+                    memory: 128Mi
+                securityContext:
+                  privileged: true
+                  runAsGroup: 0
+                  runAsUser: 0
+              - name: vector
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+              securityContext:
+                runAsGroup: 0
+                runAsUser: 0
+        portNumber: 8001
+        vectorImage: docker.io/timberio/vector:latest-alpine
+      worker:
+        image: docker.io/tensorfusion/tensor-fusion-worker:1.70.13
+        podTemplate:
+          template:
+            spec:
+              containers:
+              - env:
+                - name: TF_ENABLE_LOG
+                  value: "1"
+                name: tensorfusion-worker
+                resources:
+                  limits:
+                    cpu: 2000m
+                    memory: 8Gi
+                  requests:
+                    cpu: 100m
+                    memory: 128Mi
+    nodeManagerConfig:
+      defaultVendor: NVIDIA
+      nodeCompaction:
+        period: 30m
+      nodePoolRollingUpdatePolicy:
+        batchInterval: 1s
+        batchPercentage: 20
+        maintenanceWindow:
+          includes:
+          - 2 2 * * *
+        maxDuration: 10m
+      nodeSelector:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.present
+            operator: In
+            values:
+            - "true"
+      provisioningMode: AutoSelect
+    schedulingConfigTemplate: tf-scheduling-config
+  status:
+    availableTFlops: "142"
+    availableVRAM: 48Gi
+    budgetExceeded: ""
+    componentStatus:
+      client: 96c1e3a67a14aef7
+      hypervisor: f27d4097fe402662
+      worker: 766d76fa37e1bfc6
+    notReadyNodes: 0
+    phase: Running
+    provisioningPhase: None
+    readyNodes: 1
+    totalGPUs: 2
+    totalNodes: 1
+    totalTFlops: "142"
+    totalVRAM: 48Gi
+    virtualAvailableTFlops: "2840"
+    virtualAvailableVRAM: "1263066942668"
+    virtualTFlops: "2840"
+    virtualVRAM: "1263066942668"
+- apiVersion: tensor-fusion.ai/v1
+  kind: GPUPool
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"tensor-fusion.ai/v1","kind":"GPUPool","metadata":{"annotations":{"tensor-fusion.ai/client-batch-update-last-time":"","tensor-fusion.ai/client-update-in-progress":"","tensor-fusion.ai/hypervisor-batch-update-last-time":"","tensor-fusion.ai/hypervisor-update-in-progress":"","tensor-fusion.ai/is-default-pool":"true","tensor-fusion.ai/worker-batch-update-last-time":"","tensor-fusion.ai/worker-update-in-progress":""},"creationTimestamp":"2025-09-04T07:55:58Z","finalizers":["tensor-fusion.ai/finalizer"],"generation":280,"labels":{"k8slens-edit-resource-version":"v1","tensor-fusion.ai/cluster":"tensor-fusion","tensor-fusion.ai/managed-by":"tensor-fusion"},"name":"tensor-fusion-shared","ownerReferences":[{"apiVersion":"tensor-fusion.ai/v1","blockOwnerDeletion":true,"controller":true,"kind":"TensorFusionCluster","name":"tensor-fusion","uid":"3c39ba92-7a4f-4f4e-b7fc-9d9121594b72"}],"resourceVersion":"60008253","uid":"332ad884-73bb-4658-99da-e05358939a94"},"spec":{"capacityConfig":{"maxResources":{"cpu":"0","memory":"0","tflops":"100","vram":"100Gi"},"minResources":{"cpu":"0","memory":"0","tflops":"20","vram":"10Gi"},"oversubscription":{"tflopsOversellRatio":2000,"vramExpandToHostDisk":60,"vramExpandToHostMem":50},"warmResources":{"cpu":"0","memory":"0","tflops":"10","vram":"5Gi"}},"componentConfig":{"client":{"operatorEndpoint":"http://tensor-fusion-sys.tensor-fusion-sys:8080","patchToContainer":{"env":[{"name":"TF_ENABLE_LOG","value":"1"},{"name":"TF_LOG_PATH","value":"/tmp/tf.log"}]},"patchToPod":{"spec":{}}},"hypervisor":{"enableVector":true,"image":"docker.io/library/tensor-fusion-hypervisor:latestcode-20260319-102209","podTemplate":{"template":{"metadata":{"annotations":{"container.apparmor.security.beta.kubernetes.io/tensor-fusion-hypervisor":"unconfined"}},"spec":{"containers":[{"env":[{"name":"TF_LOG_LEVEL","value":"debug"},{"name":"TF_ACCELERATOR_LIB_PATH","value":"/run/tensor-fusion/vgpu/libaccelerator_ascend.so"},{"name":"TF_HARDWARE_VENDOR","value":"Ascend"},{"name":"LD_LIBRARY_PATH","value":"/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/dcmi"}],"name":"tensor-fusion-hypervisor","resources":{"limits":{"cpu":"1000m","memory":"1Gi"},"requests":{"cpu":"60m","memory":"128Mi"}},"securityContext":{"privileged":true,"runAsGroup":0,"runAsUser":0},"volumeMounts":[{"mountPath":"/usr/local/sbin/npu-smi","name":"host-npu-smi","readOnly":true},{"mountPath":"/etc/ascend_install.info","name":"ascend-install-info","readOnly":true},{"mountPath":"/debug","name":"debug-host","readOnly":false},{"mountPath":"/usr/local/Ascend/driver","name":"ascend-driver","readOnly":true},{"mountPath":"/usr/local/dcmi","name":"dcmi-lib","readOnly":true}]},{"name":"vector","resources":{"requests":{"cpu":"50m","memory":"64Mi"}}}],"securityContext":{"runAsGroup":0,"runAsUser":0},"volumes":[{"hostPath":{"path":"/usr/local/sbin/npu-smi","type":"File"},"name":"host-npu-smi"},{"hostPath":{"path":"/etc/ascend_install.info","type":"File"},"name":"ascend-install-info"},{"hostPath":{"path":"/home/kylin/zh","type":"Directory"},"name":"debug-host"},{"hostPath":{"path":"/usr/local/Ascend/driver","type":"Directory"},"name":"ascend-driver"},{"hostPath":{"path":"/usr/local/dcmi","type":"Directory"},"name":"dcmi-lib"}]}}},"portNumber":8001,"vectorImage":"docker.1ms.run/timberio/vector:latest-alpine"},"worker":{"image":"rgpu-work:dev","podTemplate":{"template":{"spec":{"containers":[{"env":[{"name":"TF_ENABLE_LOG","value":"1"}],"name":"tensorfusion-worker","resources":{"limits":{"cpu":"2000m","memory":"8Gi"},"requests":{"cpu":"100m","memory":"128Mi"}}}],"runtimeClassName":"ascend"}}}}},"nodeManagerConfig":{"defaultVendor":"NVIDIA","nodeCompaction":{"period":"30m"},"nodePoolRollingUpdatePolicy":{"batchInterval":"1s","batchPercentage":20,"maintenanceWindow":{"includes":["2 2 * * *"]},"maxDuration":"10m"},"nodeSelector":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"huawei.com/npu.present","operator":"In","values":["true"]}]}]},"provisioningMode":"AutoSelect"},"qosConfig":{"defaultQoS":"medium","definitions":[{"description":"Ensure 100% of the requested capacity. Although the limit is not guaranteed, credits will accumulate over time if not scheduled. You can burst to the target value once a GPU is available, but latency is not guaranteed. VRAM will cool down into NVMe with the shortest threshold and include requested value. This is perfect for training and fine-tuning jobs, hands-on labs, etc. It serves with best effort.","name":"low","priority":10},{"description":"Ensure 100% of the requested capacity. Allow bursts to limits and preempt low QoS tasks. Latency is not guaranteed. This is perfect for offline business tasks like embedding. VRAM will cool down into NVMe with a shorter threshold, include requested value","name":"medium","priority":30},{"description":"Ensure 100% of the requested capacity, burst to limits, and preempt medium QoS tasks. This is perfect for online businesses like inference but not for latency-critical services. Examples include grammar checks, non-latency-sensitive chat, image or video generation, and one-time translations. VRAM will not cool down below the requested value.","name":"high","priority":60},{"description":"ensure 100% of the requested capacity, and burst to limits to preempt all low/medium QoS tasks and 50% of high QoS tasks, ensure low latency, perfect for realtime business that latency is critical, for example, realtime translation, chat completion, code completion etc. VRAM will not cool-down below the requested value.","name":"critical","priority":100}],"evictionProtectionPriceRatio":"1.2","pricing":[{"limitsOverRequests":"0.1","qos":"low","requests":{"perFP16TFlopsPerHour":"$0.0069228","perGBOfVRAMPerHour":"$0.01548"}},{"limitsOverRequests":"0.3","qos":"medium","requests":{"perFP16TFlopsPerHour":"$0.0069228","perGBOfVRAMPerHour":"$0.01548"}},{"limitsOverRequests":"0.6","qos":"high","requests":{"perFP16TFlopsPerHour":"$0.0069228","perGBOfVRAMPerHour":"$0.01548"}},{"limitsOverRequests":"1","qos":"critical","requests":{"perFP16TFlopsPerHour":"$0.0069228","perGBOfVRAMPerHour":"$0.01548"}}]},"schedulingConfigTemplate":"tf-scheduling-config"},"status":{"availableTFlops":"0","availableVRAM":"0","budgetExceeded":"","componentStatus":{"client":"ffb27bafdf73a264","hypervisor":"007ba6d8539e505b","worker":"22ee4cd4e81e9381"},"notReadyNodes":1,"phase":"Updating","provisioningPhase":"None","readyNodes":0,"totalNodes":1,"totalTFlops":"0","totalVRAM":"0","virtualAvailableTFlops":"0","virtualAvailableVRAM":"0","virtualTFlops":"0","virtualVRAM":"0"}}
+      tensor-fusion.ai/client-batch-update-last-time: ""
+      tensor-fusion.ai/client-update-in-progress: ""
+      tensor-fusion.ai/hypervisor-batch-update-last-time: ""
+      tensor-fusion.ai/hypervisor-update-in-progress: ""
+      tensor-fusion.ai/is-default-pool: "true"
+      tensor-fusion.ai/worker-batch-update-last-time: ""
+      tensor-fusion.ai/worker-update-in-progress: ""
+    creationTimestamp: "2025-09-04T07:55:58Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 319
+    labels:
+      k8slens-edit-resource-version: v1
+      tensor-fusion.ai/cluster: tensor-fusion
+      tensor-fusion.ai/managed-by: tensor-fusion
+    name: tensor-fusion-shared
+    ownerReferences:
+    - apiVersion: tensor-fusion.ai/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: TensorFusionCluster
+      name: tensor-fusion
+      uid: 3c39ba92-7a4f-4f4e-b7fc-9d9121594b72
+    resourceVersion: "62828862"
+    uid: 332ad884-73bb-4658-99da-e05358939a94
+  spec:
+    capacityConfig:
+      maxResources:
+        cpu: "0"
+        memory: "0"
+        tflops: "100"
+        vram: 100Gi
+      minResources:
+        cpu: "0"
+        memory: "0"
+        tflops: "20"
+        vram: 10Gi
+      oversubscription:
+        tflopsOversellRatio: 2000
+        vramExpandToHostDisk: 60
+        vramExpandToHostMem: 50
+      warmResources:
+        cpu: "0"
+        memory: "0"
+        tflops: "10"
+        vram: 5Gi
+    componentConfig:
+      client:
+        operatorEndpoint: http://tensor-fusion-sys.tensor-fusion-sys:8080
+        patchToContainer:
+          env:
+          - name: TF_ENABLE_LOG
+            value: "1"
+          - name: TF_LOG_PATH
+            value: /tmp/tf.log
+        patchToPod:
+          spec: {}
+      hypervisor:
+        enableVector: true
+        image: docker.io/tensorfusion/tensor-fusion-hypervisor:dev-feat-mig
+        podTemplate:
+          template:
+            metadata:
+              annotations:
+                container.apparmor.security.beta.kubernetes.io/tensor-fusion-hypervisor: unconfined
+            spec:
+              containers:
+              - env:
+                - name: TF_LOG_LEVEL
+                  value: debug
+                - name: TF_ACCELERATOR_LIB_PATH
+                  value: /run/tensor-fusion/vgpu/libaccelerator_ascend.so
+                name: tensor-fusion-hypervisor
+                resources:
+                  limits:
+                    cpu: 1000m
+                    memory: 1Gi
+                  requests:
+                    cpu: 60m
+                    memory: 128Mi
+                securityContext:
+                  privileged: true
+                  runAsGroup: 0
+                  runAsUser: 0
+                volumeMounts:
+                - mountPath: /usr/local/sbin/npu-smi
+                  name: host-npu-smi
+                  readOnly: true
+              - name: vector
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+              runtimeClassName: ascend
+              securityContext:
+                runAsGroup: 0
+                runAsUser: 0
+              volumes:
+              - hostPath:
+                  path: /usr/local/sbin/npu-smi
+                  type: File
+                name: host-npu-smi
+        portNumber: 8001
+        vectorImage: docker.1ms.run/timberio/vector:latest-alpine
+      worker:
+        image: rgpu-work:dev
+        podTemplate:
+          template:
+            spec:
+              containers:
+              - env:
+                - name: TF_ENABLE_LOG
+                  value: "1"
+                - name: TF_LICENSE
+                  value: '|ee|253372098780000'
+                - name: TF_LICENSE_SIGN
+                  vaule: 3046022100a9693f16b962e577748106a1c2b0300d89258cda1ab854a23a1ce81b2f1bb16b022100be8e870fac59c3f9299c6fb24bb67e481573e99708edf90b968fbf5c2368108c
+                name: tensorfusion-worker
+                resources:
+                  limits:
+                    cpu: 2000m
+                    memory: 8Gi
+                  requests:
+                    cpu: 100m
+                    memory: 128Mi
+              runtimeClassName: ascend
+    nodeManagerConfig:
+      defaultVendor: Ascend
+      nodeCompaction:
+        period: 30m
+      nodePoolRollingUpdatePolicy:
+        batchInterval: 1s
+        batchPercentage: 20
+        maintenanceWindow:
+          includes:
+          - 2 2 * * *
+        maxDuration: 10m
+      nodeSelector:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: huawei.com/npu.present
+            operator: In
+            values:
+            - "true"
+      provisioningMode: AutoSelect
+    qosConfig:
+      defaultQoS: medium
+      definitions:
+      - description: Ensure 100% of the requested capacity. Although the limit is
+          not guaranteed, credits will accumulate over time if not scheduled. You
+          can burst to the target value once a GPU is available, but latency is not
+          guaranteed. VRAM will cool down into NVMe with the shortest threshold and
+          include requested value. This is perfect for training and fine-tuning jobs,
+          hands-on labs, etc. It serves with best effort.
+        name: low
+        priority: 10
+      - description: Ensure 100% of the requested capacity. Allow bursts to limits
+          and preempt low QoS tasks. Latency is not guaranteed. This is perfect for
+          offline business tasks like embedding. VRAM will cool down into NVMe with
+          a shorter threshold, include requested value
+        name: medium
+        priority: 30
+      - description: Ensure 100% of the requested capacity, burst to limits, and preempt
+          medium QoS tasks. This is perfect for online businesses like inference but
+          not for latency-critical services. Examples include grammar checks, non-latency-sensitive
+          chat, image or video generation, and one-time translations. VRAM will not
+          cool down below the requested value.
+        name: high
+        priority: 60
+      - description: ensure 100% of the requested capacity, and burst to limits to
+          preempt all low/medium QoS tasks and 50% of high QoS tasks, ensure low latency,
+          perfect for realtime business that latency is critical, for example, realtime
+          translation, chat completion, code completion etc. VRAM will not cool-down
+          below the requested value.
+        name: critical
+        priority: 100
+      evictionProtectionPriceRatio: "1.2"
+      pricing:
+      - limitsOverRequests: "0.1"
+        qos: low
+        requests:
+          perFP16TFlopsPerHour: $0.0069228
+          perGBOfVRAMPerHour: $0.01548
+      - limitsOverRequests: "0.3"
+        qos: medium
+        requests:
+          perFP16TFlopsPerHour: $0.0069228
+          perGBOfVRAMPerHour: $0.01548
+      - limitsOverRequests: "0.6"
+        qos: high
+        requests:
+          perFP16TFlopsPerHour: $0.0069228
+          perGBOfVRAMPerHour: $0.01548
+      - limitsOverRequests: "1"
+        qos: critical
+        requests:
+          perFP16TFlopsPerHour: $0.0069228
+          perGBOfVRAMPerHour: $0.01548
+    schedulingConfigTemplate: tf-scheduling-config
+  status:
+    availableTFlops: "22"
+    availableVRAM: 21527Mi
+    budgetExceeded: ""
+    componentStatus:
+      client: 96c1e3a67a14aef7
+      hypervisor: 1790c6dc12ff6401
+      worker: afa74a25a38acae9
+    notReadyNodes: 0
+    phase: Running
+    provisioningPhase: None
+    readyNodes: 1
+    totalGPUs: 1
+    totalNodes: 1
+    totalTFlops: "22"
+    totalVRAM: 21527Mi
+    virtualAvailableTFlops: "440"
+    virtualAvailableVRAM: "102336908492"
+    virtualTFlops: "440"
+    virtualVRAM: "102336908492"
+kind: List
+metadata:
+  resourceVersion: ""

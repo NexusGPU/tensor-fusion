@@ -1,0 +1,625 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"annotations":{"controller-gen.kubebuilder.io/version":"v0.20.0"},"name":"workloadprofiles.tensor-fusion.ai"},"spec":{"group":"tensor-fusion.ai","names":{"kind":"WorkloadProfile","listKind":"WorkloadProfileList","plural":"workloadprofiles","singular":"workloadprofile"},"scope":"Namespaced","versions":[{"additionalPrinterColumns":[{"jsonPath":".spec.poolName","name":"Pool Name","type":"string"},{"jsonPath":".spec.qos","name":"QoS","type":"string"},{"jsonPath":".spec.isLocalGPU","name":"Is Local GPU","type":"string"},{"jsonPath":".spec.gpuCount","name":"GPU Number","type":"string"},{"jsonPath":".spec.replicas","name":"Replicas","type":"string"}],"name":"v1","schema":{"openAPIV3Schema":{"description":"WorkloadProfile is the Schema for the workloadprofiles API.","properties":{"apiVersion":{"description":"APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources","type":"string"},"kind":{"description":"Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds","type":"string"},"metadata":{"type":"object"},"spec":{"description":"WorkloadProfileSpec defines the desired state of WorkloadProfile.","properties":{"autoScalingConfig":{"description":"AutoScalingConfig configured here will override Pool's schedulingConfig\nThis field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,\nuser can set tensor-fusion.ai/autoscale: 'true'","properties":{"autoSetResources":{"description":"Adjust baseline requests and limits to match the actual usage using recent metrics","properties":{"enable":{"type":"boolean"},"historyDataPeriod":{"description":"How much time back TSDB have to be queried to get historical metrics. Default: 2h","type":"string"},"initialDelayPeriod":{"description":"When workload is created, wait for this period to collect enough metrics before scaling, default: 30m","type":"string"},"interval":{"description":"How often to evaluate the scaling operation, default: same as global config's auto scaling interval","type":"string"},"lowerBoundComputePercentile":{"description":"Tflops usage percentile that will be used for the lower bound on tflops recommendation. Default: 0.5","type":"string"},"lowerBoundVRAMPercentile":{"description":"Vram usage percentile that will be used for the lower bound on vram recommendation. Default: 0.5","type":"string"},"marginFraction":{"description":"Fraction of usage added as the safety margin to the recommended request. Default: 0.15","type":"string"},"maxComputeResourcesRatio":{"description":"Max scaling ratio to original resources, e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi, default: 10.0","type":"string"},"maxVRAMResourcesRatio":{"description":"Max scaling ratio to original resources, e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi, default: 5.0","type":"string"},"minComputeResourcesRatio":{"description":"Min scaling ratio to original resources, e.g. request 10Gi, ratio 0.5, scale down limit to 5Gi, default: 0.1\nThis ratio only apply to tflops/compute request rather than limit, to avoid performance downgrade when not used for a long time","type":"string"},"minVRAMResourcesRatio":{"description":"Min scaling ratio to original resources, e.g. request 10Gi, ratio 0.5, scale down limit to 5Gi, default: 0.2","type":"string"},"targetComputePercentile":{"description":"Tflops usage percentile that will be used as a base for tflops target recommendation. Default: 0.9","type":"string"},"targetResource":{"description":"Target resource to scale, such as \"compute\", \"vram\", or \"all\" by default","type":"string"},"targetVRAMPercentile":{"description":"Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.9","type":"string"},"updateThreshold":{"description":"Only when the difference between the recommended request and the current request is greater than this threshold, the request will be updated. Default: 0.1\nThis value can't greater than MarginFraction, otherwise no update will be made since always inside the threshold after multiplying MarginFraction.","type":"string"},"upperBoundComputePercentile":{"description":"Tflops usage percentile that will be used for the upper bound on tflops recommendation. Default: 0.95","type":"string"},"upperBoundVRAMPercentile":{"description":"Vram usage percentile that will be used for the upper bound on vram recommendation. Default: 0.95","type":"string"}},"type":"object"},"cronScalingRules":{"description":"CronScalingRules defines a list of CronScaling rules used to schedule scaling actions based on cron expressions.","items":{"description":"CronScalingRule defines the rule for scaling resources based on a cron schedule.\nIt allows enabling/disabling the scaler, specifying the time window for scaling,\nand configuring the desired resources and replicas during the scheduled period.","properties":{"desiredResources":{"description":"DesiredResources specifies the target resources to scale to during the schedule.","properties":{"limits":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"},"requests":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"}},"required":["limits","requests"],"type":"object"},"enable":{"description":"Enable specifies whether the cron scaler is enabled.","type":"boolean"},"end":{"description":"End is the end time for the scaling schedule, in cron format.","type":"string"},"name":{"description":"Name is the identifier for the cron scaler.","type":"string"},"start":{"description":"Start is the start time for the scaling schedule, in cron format.","type":"string"}},"type":"object"},"type":"array"},"externalScaler":{"properties":{"apiKeySecretRef":{"description":"API key will be set into the request header as \"Authorization: Bearer \u003capi key\u003e\"","properties":{"name":{"description":"name is unique within a namespace to reference a secret resource.","type":"string"},"namespace":{"description":"namespace defines the space within which the secret name must be unique.","type":"string"}},"type":"object","x-kubernetes-map-type":"atomic"},"enable":{"type":"boolean"},"initialDelayPeriod":{"type":"string"},"interval":{"description":"How often to evaluate the scaling operation, default: same as global config's auto scaling interval","type":"string"},"url":{"type":"string"}},"type":"object"}},"type":"object"},"gangScheduling":{"description":"GangScheduling configuration for scheduling multiple pods together","properties":{"minMembers":{"description":"MinMembers specifies the minimum number of pods that must be scheduled together\nWhen \u003e 0, gang scheduling is enabled for this workload\nThe gang group name is automatically derived from the workload name (namespace/workload-name)","format":"int32","minimum":0,"type":"integer"},"timeout":{"description":"Timeout specifies how long to wait for all gang members to be schedulable\nIf not set or set to \"0s\", wait indefinitely until resources are available\nExample values: \"5m\", \"10m\", \"1h\"","type":"string"}},"type":"object"},"gpuCount":{"description":"The number of GPUs to be used by the workload, default to 1","format":"int32","type":"integer"},"gpuIndices":{"description":"Specify GPU indices for precise control of scheduling","items":{"format":"int32","type":"integer"},"type":"array"},"gpuModel":{"description":"GPUModel specifies the required GPU model (e.g., \"A100\", \"H100\")","type":"string"},"isLocalGPU":{"description":"Schedule the workload to the same GPU server that runs vGPU worker for best performance, default to false","type":"boolean"},"isolation":{"default":"soft","description":"How to isolate resources, could be `shared` or `soft` or `hard` or `partitioned`","enum":["shared","soft","hard","partitioned"],"type":"string"},"nodeAffinity":{"description":"NodeAffinity specifies the node affinity requirements for the workload","properties":{"preferredDuringSchedulingIgnoredDuringExecution":{"description":"The scheduler will prefer to schedule pods to nodes that satisfy\nthe affinity expressions specified by this field, but it may choose\na node that violates one or more of the expressions. The node that is\nmost preferred is the one with the greatest sum of weights, i.e.\nfor each node that meets all of the scheduling requirements (resource\nrequest, requiredDuringScheduling affinity expressions, etc.),\ncompute a sum by iterating through the elements of this field and adding\n\"weight\" to the sum if the node matches the corresponding matchExpressions; the\nnode(s) with the highest sum are the most preferred.","items":{"description":"An empty preferred scheduling term matches all objects with implicit weight 0\n(i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).","properties":{"preference":{"description":"A node selector term, associated with the corresponding weight.","properties":{"matchExpressions":{"description":"A list of node selector requirements by node's labels.","items":{"description":"A node selector requirement is a selector that contains values, a key, and an operator\nthat relates the key and values.","properties":{"key":{"description":"The label key that the selector applies to.","type":"string"},"operator":{"description":"Represents a key's relationship to a set of values.\nValid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.","type":"string"},"values":{"description":"An array of string values. If the operator is In or NotIn,\nthe values array must be non-empty. If the operator is Exists or DoesNotExist,\nthe values array must be empty. If the operator is Gt or Lt, the values\narray must have a single element, which will be interpreted as an integer.\nThis array is replaced during a strategic merge patch.","items":{"type":"string"},"type":"array","x-kubernetes-list-type":"atomic"}},"required":["key","operator"],"type":"object"},"type":"array","x-kubernetes-list-type":"atomic"},"matchFields":{"description":"A list of node selector requirements by node's fields.","items":{"description":"A node selector requirement is a selector that contains values, a key, and an operator\nthat relates the key and values.","properties":{"key":{"description":"The label key that the selector applies to.","type":"string"},"operator":{"description":"Represents a key's relationship to a set of values.\nValid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.","type":"string"},"values":{"description":"An array of string values. If the operator is In or NotIn,\nthe values array must be non-empty. If the operator is Exists or DoesNotExist,\nthe values array must be empty. If the operator is Gt or Lt, the values\narray must have a single element, which will be interpreted as an integer.\nThis array is replaced during a strategic merge patch.","items":{"type":"string"},"type":"array","x-kubernetes-list-type":"atomic"}},"required":["key","operator"],"type":"object"},"type":"array","x-kubernetes-list-type":"atomic"}},"type":"object","x-kubernetes-map-type":"atomic"},"weight":{"description":"Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.","format":"int32","type":"integer"}},"required":["preference","weight"],"type":"object"},"type":"array","x-kubernetes-list-type":"atomic"},"requiredDuringSchedulingIgnoredDuringExecution":{"description":"If the affinity requirements specified by this field are not met at\nscheduling time, the pod will not be scheduled onto the node.\nIf the affinity requirements specified by this field cease to be met\nat some point during pod execution (e.g. due to an update), the system\nmay or may not try to eventually evict the pod from its node.","properties":{"nodeSelectorTerms":{"description":"Required. A list of node selector terms. The terms are ORed.","items":{"description":"A null or empty node selector term matches no objects. The requirements of\nthem are ANDed.\nThe TopologySelectorTerm type implements a subset of the NodeSelectorTerm.","properties":{"matchExpressions":{"description":"A list of node selector requirements by node's labels.","items":{"description":"A node selector requirement is a selector that contains values, a key, and an operator\nthat relates the key and values.","properties":{"key":{"description":"The label key that the selector applies to.","type":"string"},"operator":{"description":"Represents a key's relationship to a set of values.\nValid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.","type":"string"},"values":{"description":"An array of string values. If the operator is In or NotIn,\nthe values array must be non-empty. If the operator is Exists or DoesNotExist,\nthe values array must be empty. If the operator is Gt or Lt, the values\narray must have a single element, which will be interpreted as an integer.\nThis array is replaced during a strategic merge patch.","items":{"type":"string"},"type":"array","x-kubernetes-list-type":"atomic"}},"required":["key","operator"],"type":"object"},"type":"array","x-kubernetes-list-type":"atomic"},"matchFields":{"description":"A list of node selector requirements by node's fields.","items":{"description":"A node selector requirement is a selector that contains values, a key, and an operator\nthat relates the key and values.","properties":{"key":{"description":"The label key that the selector applies to.","type":"string"},"operator":{"description":"Represents a key's relationship to a set of values.\nValid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.","type":"string"},"values":{"description":"An array of string values. If the operator is In or NotIn,\nthe values array must be non-empty. If the operator is Exists or DoesNotExist,\nthe values array must be empty. If the operator is Gt or Lt, the values\narray must have a single element, which will be interpreted as an integer.\nThis array is replaced during a strategic merge patch.","items":{"type":"string"},"type":"array","x-kubernetes-list-type":"atomic"}},"required":["key","operator"],"type":"object"},"type":"array","x-kubernetes-list-type":"atomic"}},"type":"object","x-kubernetes-map-type":"atomic"},"type":"array","x-kubernetes-list-type":"atomic"}},"required":["nodeSelectorTerms"],"type":"object","x-kubernetes-map-type":"atomic"}},"type":"object"},"partitionTemplateId":{"description":"PartitionTemplateID specifies the partition template ID for partitioned isolation mode\nThis is read from pod annotation tensor-fusion.ai/partition if specified","type":"string"},"poolName":{"type":"string"},"qos":{"description":"Qos defines the quality of service level for the client.","enum":["low","medium","high","critical"],"type":"string"},"replicas":{"description":"If replicas not set, it will be dynamic based on pending Pod\nIf isLocalGPU set to true, replicas must be dynamic, and this field will be ignored","format":"int32","type":"integer"},"resources":{"properties":{"limits":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"},"requests":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"}},"required":["limits","requests"],"type":"object"},"sidecarWorker":{"description":"When set to sidecar worker mode, its always Local GPU mode, and hard-isolated with shared memory\ndefault to false, indicates the workload's embedded worker is same process, soft-isolated","type":"boolean"},"vendor":{"description":"Specify GPU vendor for precise control of scheduling","type":"string"},"workerPodTemplate":{"description":"WorkerPodTemplate is the template for the worker pod, only take effect in remote vGPU mode","type":"object","x-kubernetes-preserve-unknown-fields":true}},"type":"object"},"status":{"description":"WorkloadProfileStatus defines the observed state of WorkloadProfile.","type":"object"}},"type":"object"}},"served":true,"storage":true,"subresources":{"status":{}}}]}}
+  creationTimestamp: "2025-09-04T07:52:48Z"
+  generation: 12
+  name: workloadprofiles.tensor-fusion.ai
+  resourceVersion: "54459679"
+  uid: 83753d1d-d084-4705-b9e5-9d6510fb6323
+spec:
+  conversion:
+    strategy: None
+  group: tensor-fusion.ai
+  names:
+    kind: WorkloadProfile
+    listKind: WorkloadProfileList
+    plural: workloadprofiles
+    singular: workloadprofile
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.poolName
+      name: Pool Name
+      type: string
+    - jsonPath: .spec.qos
+      name: QoS
+      type: string
+    - jsonPath: .spec.isLocalGPU
+      name: Is Local GPU
+      type: string
+    - jsonPath: .spec.gpuCount
+      name: GPU Number
+      type: string
+    - jsonPath: .spec.replicas
+      name: Replicas
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: WorkloadProfile is the Schema for the workloadprofiles API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: WorkloadProfileSpec defines the desired state of WorkloadProfile.
+            properties:
+              autoScalingConfig:
+                description: |-
+                  AutoScalingConfig configured here will override Pool's schedulingConfig
+                  This field can not be fully supported in annotation, if user want to enable auto-scaling in annotation,
+                  user can set tensor-fusion.ai/autoscale: 'true'
+                properties:
+                  autoSetResources:
+                    description: Adjust baseline requests and limits to match the
+                      actual usage using recent metrics
+                    properties:
+                      enable:
+                        type: boolean
+                      historyDataPeriod:
+                        description: 'How much time back TSDB have to be queried to
+                          get historical metrics. Default: 2h'
+                        type: string
+                      initialDelayPeriod:
+                        description: 'When workload is created, wait for this period
+                          to collect enough metrics before scaling, default: 30m'
+                        type: string
+                      interval:
+                        description: 'How often to evaluate the scaling operation,
+                          default: same as global config''s auto scaling interval'
+                        type: string
+                      lowerBoundComputePercentile:
+                        description: 'Tflops usage percentile that will be used for
+                          the lower bound on tflops recommendation. Default: 0.5'
+                        type: string
+                      lowerBoundVRAMPercentile:
+                        description: 'Vram usage percentile that will be used for
+                          the lower bound on vram recommendation. Default: 0.5'
+                        type: string
+                      marginFraction:
+                        description: 'Fraction of usage added as the safety margin
+                          to the recommended request. Default: 0.15'
+                        type: string
+                      maxComputeResourcesRatio:
+                        description: 'Max scaling ratio to original resources, e.g.
+                          request 10Gi, ratio 2.0, scale up limit to 20Gi, default:
+                          10.0'
+                        type: string
+                      maxVRAMResourcesRatio:
+                        description: 'Max scaling ratio to original resources, e.g.
+                          request 10Gi, ratio 2.0, scale up limit to 20Gi, default:
+                          5.0'
+                        type: string
+                      minComputeResourcesRatio:
+                        description: |-
+                          Min scaling ratio to original resources, e.g. request 10Gi, ratio 0.5, scale down limit to 5Gi, default: 0.1
+                          This ratio only apply to tflops/compute request rather than limit, to avoid performance downgrade when not used for a long time
+                        type: string
+                      minVRAMResourcesRatio:
+                        description: 'Min scaling ratio to original resources, e.g.
+                          request 10Gi, ratio 0.5, scale down limit to 5Gi, default:
+                          0.2'
+                        type: string
+                      targetComputePercentile:
+                        description: 'Tflops usage percentile that will be used as
+                          a base for tflops target recommendation. Default: 0.9'
+                        type: string
+                      targetResource:
+                        description: Target resource to scale, such as "compute",
+                          "vram", or "all" by default
+                        type: string
+                      targetVRAMPercentile:
+                        description: 'Vram usage percentile that will be used as a
+                          base for vram target recommendation. Default: 0.9'
+                        type: string
+                      updateThreshold:
+                        description: |-
+                          Only when the difference between the recommended request and the current request is greater than this threshold, the request will be updated. Default: 0.1
+                          This value can't greater than MarginFraction, otherwise no update will be made since always inside the threshold after multiplying MarginFraction.
+                        type: string
+                      upperBoundComputePercentile:
+                        description: 'Tflops usage percentile that will be used for
+                          the upper bound on tflops recommendation. Default: 0.95'
+                        type: string
+                      upperBoundVRAMPercentile:
+                        description: 'Vram usage percentile that will be used for
+                          the upper bound on vram recommendation. Default: 0.95'
+                        type: string
+                    type: object
+                  cronScalingRules:
+                    description: CronScalingRules defines a list of CronScaling rules
+                      used to schedule scaling actions based on cron expressions.
+                    items:
+                      description: |-
+                        CronScalingRule defines the rule for scaling resources based on a cron schedule.
+                        It allows enabling/disabling the scaler, specifying the time window for scaling,
+                        and configuring the desired resources and replicas during the scheduled period.
+                      properties:
+                        desiredResources:
+                          description: DesiredResources specifies the target resources
+                            to scale to during the schedule.
+                          properties:
+                            limits:
+                              properties:
+                                compute:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: 0-100 percentage, mutually exclusive
+                                    with TFLOPs
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                tflops:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                vram:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              required:
+                              - tflops
+                              - vram
+                              type: object
+                            requests:
+                              properties:
+                                compute:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: 0-100 percentage, mutually exclusive
+                                    with TFLOPs
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                tflops:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                vram:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              required:
+                              - tflops
+                              - vram
+                              type: object
+                          required:
+                          - limits
+                          - requests
+                          type: object
+                        enable:
+                          description: Enable specifies whether the cron scaler is
+                            enabled.
+                          type: boolean
+                        end:
+                          description: End is the end time for the scaling schedule,
+                            in cron format.
+                          type: string
+                        name:
+                          description: Name is the identifier for the cron scaler.
+                          type: string
+                        start:
+                          description: Start is the start time for the scaling schedule,
+                            in cron format.
+                          type: string
+                      type: object
+                    type: array
+                  externalScaler:
+                    properties:
+                      apiKeySecretRef:
+                        description: 'API key will be set into the request header
+                          as "Authorization: Bearer <api key>"'
+                        properties:
+                          name:
+                            description: name is unique within a namespace to reference
+                              a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which
+                              the secret name must be unique.
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      enable:
+                        type: boolean
+                      initialDelayPeriod:
+                        type: string
+                      interval:
+                        description: 'How often to evaluate the scaling operation,
+                          default: same as global config''s auto scaling interval'
+                        type: string
+                      url:
+                        type: string
+                    type: object
+                type: object
+              gangScheduling:
+                description: GangScheduling configuration for scheduling multiple
+                  pods together
+                properties:
+                  minMembers:
+                    description: |-
+                      MinMembers specifies the minimum number of pods that must be scheduled together
+                      When > 0, gang scheduling is enabled for this workload
+                      The gang group name is automatically derived from the workload name (namespace/workload-name)
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  timeout:
+                    description: |-
+                      Timeout specifies how long to wait for all gang members to be schedulable
+                      If not set or set to "0s", wait indefinitely until resources are available
+                      Example values: "5m", "10m", "1h"
+                    type: string
+                type: object
+              gpuCount:
+                description: The number of GPUs to be used by the workload, default
+                  to 1
+                format: int32
+                type: integer
+              gpuIndices:
+                description: Specify GPU indices for precise control of scheduling
+                items:
+                  format: int32
+                  type: integer
+                type: array
+              gpuModel:
+                description: GPUModel specifies the required GPU model (e.g., "A100",
+                  "H100")
+                type: string
+              isLocalGPU:
+                description: Schedule the workload to the same GPU server that runs
+                  vGPU worker for best performance, default to false
+                type: boolean
+              isolation:
+                default: soft
+                description: How to isolate resources, could be `shared` or `soft`
+                  or `hard` or `partitioned`
+                enum:
+                - shared
+                - soft
+                - hard
+                - partitioned
+                type: string
+              nodeAffinity:
+                description: NodeAffinity specifies the node affinity requirements
+                  for the workload
+                properties:
+                  preferredDuringSchedulingIgnoredDuringExecution:
+                    description: |-
+                      The scheduler will prefer to schedule pods to nodes that satisfy
+                      the affinity expressions specified by this field, but it may choose
+                      a node that violates one or more of the expressions. The node that is
+                      most preferred is the one with the greatest sum of weights, i.e.
+                      for each node that meets all of the scheduling requirements (resource
+                      request, requiredDuringScheduling affinity expressions, etc.),
+                      compute a sum by iterating through the elements of this field and adding
+                      "weight" to the sum if the node matches the corresponding matchExpressions; the
+                      node(s) with the highest sum are the most preferred.
+                    items:
+                      description: |-
+                        An empty preferred scheduling term matches all objects with implicit weight 0
+                        (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
+                      properties:
+                        preference:
+                          description: A node selector term, associated with the corresponding
+                            weight.
+                          properties:
+                            matchExpressions:
+                              description: A list of node selector requirements by
+                                node's labels.
+                              items:
+                                description: |-
+                                  A node selector requirement is a selector that contains values, a key, and an operator
+                                  that relates the key and values.
+                                properties:
+                                  key:
+                                    description: The label key that the selector applies
+                                      to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      Represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      An array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. If the operator is Gt or Lt, the values
+                                      array must have a single element, which will be interpreted as an integer.
+                                      This array is replaced during a strategic merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            matchFields:
+                              description: A list of node selector requirements by
+                                node's fields.
+                              items:
+                                description: |-
+                                  A node selector requirement is a selector that contains values, a key, and an operator
+                                  that relates the key and values.
+                                properties:
+                                  key:
+                                    description: The label key that the selector applies
+                                      to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      Represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      An array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. If the operator is Gt or Lt, the values
+                                      array must have a single element, which will be interpreted as an integer.
+                                      This array is replaced during a strategic merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        weight:
+                          description: Weight associated with matching the corresponding
+                            nodeSelectorTerm, in the range 1-100.
+                          format: int32
+                          type: integer
+                      required:
+                      - preference
+                      - weight
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    description: |-
+                      If the affinity requirements specified by this field are not met at
+                      scheduling time, the pod will not be scheduled onto the node.
+                      If the affinity requirements specified by this field cease to be met
+                      at some point during pod execution (e.g. due to an update), the system
+                      may or may not try to eventually evict the pod from its node.
+                    properties:
+                      nodeSelectorTerms:
+                        description: Required. A list of node selector terms. The
+                          terms are ORed.
+                        items:
+                          description: |-
+                            A null or empty node selector term matches no objects. The requirements of
+                            them are ANDed.
+                            The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+                          properties:
+                            matchExpressions:
+                              description: A list of node selector requirements by
+                                node's labels.
+                              items:
+                                description: |-
+                                  A node selector requirement is a selector that contains values, a key, and an operator
+                                  that relates the key and values.
+                                properties:
+                                  key:
+                                    description: The label key that the selector applies
+                                      to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      Represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      An array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. If the operator is Gt or Lt, the values
+                                      array must have a single element, which will be interpreted as an integer.
+                                      This array is replaced during a strategic merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            matchFields:
+                              description: A list of node selector requirements by
+                                node's fields.
+                              items:
+                                description: |-
+                                  A node selector requirement is a selector that contains values, a key, and an operator
+                                  that relates the key and values.
+                                properties:
+                                  key:
+                                    description: The label key that the selector applies
+                                      to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      Represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      An array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. If the operator is Gt or Lt, the values
+                                      array must have a single element, which will be interpreted as an integer.
+                                      This array is replaced during a strategic merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    required:
+                    - nodeSelectorTerms
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              partitionTemplateId:
+                description: |-
+                  PartitionTemplateID specifies the partition template ID for partitioned isolation mode
+                  This is read from pod annotation tensor-fusion.ai/partition if specified
+                type: string
+              poolName:
+                type: string
+              qos:
+                description: Qos defines the quality of service level for the client.
+                enum:
+                - low
+                - medium
+                - high
+                - critical
+                type: string
+              replicas:
+                description: |-
+                  If replicas not set, it will be dynamic based on pending Pod
+                  If isLocalGPU set to true, replicas must be dynamic, and this field will be ignored
+                format: int32
+                type: integer
+              resources:
+                properties:
+                  limits:
+                    properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      tflops:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      vram:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                    required:
+                    - tflops
+                    - vram
+                    type: object
+                  requests:
+                    properties:
+                      compute:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: 0-100 percentage, mutually exclusive with TFLOPs
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      tflops:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      vram:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                    required:
+                    - tflops
+                    - vram
+                    type: object
+                required:
+                - limits
+                - requests
+                type: object
+              sidecarWorker:
+                description: |-
+                  When set to sidecar worker mode, its always Local GPU mode, and hard-isolated with shared memory
+                  default to false, indicates the workload's embedded worker is same process, soft-isolated
+                type: boolean
+              vendor:
+                description: Specify GPU vendor for precise control of scheduling
+                type: string
+              workerPodTemplate:
+                description: WorkerPodTemplate is the template for the worker pod,
+                  only take effect in remote vGPU mode
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+            type: object
+          status:
+            description: WorkloadProfileStatus defines the observed state of WorkloadProfile.
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: WorkloadProfile
+    listKind: WorkloadProfileList
+    plural: workloadprofiles
+    singular: workloadprofile
+  conditions:
+  - lastTransitionTime: "2025-09-04T07:52:48Z"
+    message: no conflicts found
+    reason: NoConflicts
+    status: "True"
+    type: NamesAccepted
+  - lastTransitionTime: "2025-09-04T07:52:48Z"
+    message: the initial names have been accepted
+    reason: InitialNamesAccepted
+    status: "True"
+    type: Established
+  storedVersions:
+  - v1

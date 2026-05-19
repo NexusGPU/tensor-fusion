@@ -1,0 +1,112 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"annotations":{"controller-gen.kubebuilder.io/version":"v0.16.4"},"name":"tensorfusionconnections.tensor-fusion.ai"},"spec":{"group":"tensor-fusion.ai","names":{"kind":"TensorFusionConnection","listKind":"TensorFusionConnectionList","plural":"tensorfusionconnections","singular":"tensorfusionconnection"},"scope":"Namespaced","versions":[{"additionalPrinterColumns":[{"jsonPath":".status.phase","name":"Phase","type":"string"},{"jsonPath":".status.connectionURL","name":"Connection URL","type":"string"},{"jsonPath":".status.workerName","name":"Worker Name","type":"string"},{"jsonPath":".spec.workloadName","name":"Workload Name","type":"string"},{"jsonPath":".spec.clientPod","name":"Client Pod","type":"string"}],"name":"v1","schema":{"openAPIV3Schema":{"description":"TensorFusionConnection is the Schema for the tensorfusionconnections API.","properties":{"apiVersion":{"description":"APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources","type":"string"},"kind":{"description":"Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds","type":"string"},"metadata":{"type":"object"},"spec":{"description":"TensorFusionConnectionSpec defines the desired state of TensorFusionConnection.","properties":{"clientPod":{"type":"string"},"workloadName":{"type":"string"}},"required":["clientPod","workloadName"],"type":"object"},"status":{"description":"TensorFusionConnectionStatus defines the observed state of TensorFusionConnection.","properties":{"connectionURL":{"type":"string"},"phase":{"type":"string"},"workerName":{"type":"string"}},"required":["connectionURL","phase","workerName"],"type":"object"}},"type":"object"}},"served":true,"storage":true,"subresources":{"status":{}}}]}}
+  creationTimestamp: "2025-09-04T07:52:48Z"
+  generation: 1
+  name: tensorfusionconnections.tensor-fusion.ai
+  resourceVersion: "369952"
+  uid: 9a429b86-fee9-4044-bd31-122215a52a63
+spec:
+  conversion:
+    strategy: None
+  group: tensor-fusion.ai
+  names:
+    kind: TensorFusionConnection
+    listKind: TensorFusionConnectionList
+    plural: tensorfusionconnections
+    singular: tensorfusionconnection
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.connectionURL
+      name: Connection URL
+      type: string
+    - jsonPath: .status.workerName
+      name: Worker Name
+      type: string
+    - jsonPath: .spec.workloadName
+      name: Workload Name
+      type: string
+    - jsonPath: .spec.clientPod
+      name: Client Pod
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: TensorFusionConnection is the Schema for the tensorfusionconnections
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TensorFusionConnectionSpec defines the desired state of TensorFusionConnection.
+            properties:
+              clientPod:
+                type: string
+              workloadName:
+                type: string
+            required:
+            - clientPod
+            - workloadName
+            type: object
+          status:
+            description: TensorFusionConnectionStatus defines the observed state of
+              TensorFusionConnection.
+            properties:
+              connectionURL:
+                type: string
+              phase:
+                type: string
+              workerName:
+                type: string
+            required:
+            - connectionURL
+            - phase
+            - workerName
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: TensorFusionConnection
+    listKind: TensorFusionConnectionList
+    plural: tensorfusionconnections
+    singular: tensorfusionconnection
+  conditions:
+  - lastTransitionTime: "2025-09-04T07:52:48Z"
+    message: no conflicts found
+    reason: NoConflicts
+    status: "True"
+    type: NamesAccepted
+  - lastTransitionTime: "2025-09-04T07:52:48Z"
+    message: the initial names have been accepted
+    reason: InitialNamesAccepted
+    status: "True"
+    type: Established
+  storedVersions:
+  - v1

@@ -1,0 +1,2605 @@
+NAME: tensor-fusion-sys
+LAST DEPLOYED: Thu Sep  4 15:52:50 2025
+NAMESPACE: tensor-fusion-sys
+STATUS: deployed
+REVISION: 1
+CHART: tensor-fusion
+VERSION: 1.5.6
+APP_VERSION: 1.43.5
+TEST SUITE: None
+USER-SUPPLIED VALUES:
+admissionWebhooks:
+  patch:
+    image: k8s.m.daocloud.io/ingress-nginx/kube-webhook-certgen:v1.5.0
+agent:
+  agentId: ""
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-agent
+controller:
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-operator
+  vectorAgentImage: docker.m.daocloud.io/timberio/vector:latest-alpine
+greptime:
+  image:
+    repository: greptime-registry.cn-hangzhou.cr.aliyuncs.com/greptime/greptimedb
+
+COMPUTED VALUES:
+admissionWebhooks:
+  patch:
+    image: k8s.m.daocloud.io/ingress-nginx/kube-webhook-certgen:v1.5.0
+agent:
+  agentId: ""
+  cloudEndpoint: wss://app.tensor-fusion.ai
+  enrollToken: token-from-cloud
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-agent
+    tag: latest
+  resources:
+    limits:
+      cpu: 4000m
+      memory: 2Gi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+alert:
+  alertManagerConfig:
+    global: {}
+    receivers:
+    - name: default-receiver
+    route:
+      group_interval: 5m
+      group_wait: 10s
+      receiver: default-receiver
+      repeat_interval: 3h
+    templates:
+    - /etc/alertmanager/*.tmpl
+  enabled: true
+  image:
+    repository: quay.io/prometheus/alertmanager
+    tag: v0.28.1
+  persistence:
+    enabled: false
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 1500m
+      memory: 1Gi
+    requests:
+      cpu: 50m
+      memory: 256Mi
+cloudVendorCredentials:
+  accessKey: dummy
+  secretKey: dummy
+controller:
+  admissionWebhooks:
+    failurePolicy: Ignore
+    patch:
+      image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0
+    secretName: tensor-fusion-webhook-secret
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: tensor-fusion.ai/component
+            operator: In
+            values:
+            - operator
+        topologyKey: kubernetes.io/hostname
+  command:
+  - /manager
+  - -metrics-bind-address
+  - :9000
+  - -leader-elect
+  - -enable-auto-scale
+  - -enable-alert
+  image:
+    repository: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-operator
+    tag: latest
+  livenessProbe:
+    failureThreshold: 5
+    httpGet:
+      path: /healthz
+      port: 8081
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 5
+  nvidiaOperatorProgressiveMigration: false
+  podAnnotations: {}
+  readinessProbe:
+    failureThreshold: 2
+    httpGet:
+      path: /readyz
+      port: 8081
+    initialDelaySeconds: 5
+    periodSeconds: 15
+    timeoutSeconds: 5
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 50m
+      memory: 256Mi
+  tolerations: []
+  vectorAgentImage: docker.m.daocloud.io/timberio/vector:latest-alpine
+dynamicConfig:
+  alertRules:
+  - alertTargetInstance: '{{ .worker }}-{{ .uuid }}'
+    consecutiveCount: 3
+    description: Worker {{ .worker }} from Node {{ .node }} is using more than {{
+      .Threshold }}% of its TFlops limit
+    evaluationInterval: 15s
+    name: WorkerTFlopsThrottled
+    query: |
+      SELECT workload, worker, uuid, node, MAX(compute_throttled_cnt)-MIN(compute_throttled_cnt) as throttled_increase
+      FROM tf_worker_usage
+      WHERE {{ .Conditions }}
+      GROUP BY workload, worker, uuid, node
+      HAVING throttled_increase > {{ .Threshold }}
+    runbookURL: https://tensor-fusion.ai/guide/troubleshooting/handbook
+    severity: P1
+    summary: Worker TFlops Throttled
+    threshold: 0
+  - alertTargetInstance: '{{ .worker }}-{{ .uuid }}'
+    consecutiveCount: 1
+    description: Worker {{ .worker }} from Node {{ .node }} has switched VRAM {{ .switch_increase
+      }} times in last 2 minutes, GPU may be too hot
+    evaluationInterval: 2m
+    name: WorkerVRAMSwitchCountIncreasing
+    query: "SELECT workload, worker, uuid, node, MAX(vram_resumed_cnt)-MIN(vram_resumed_cnt)
+      as switch_increase\nFROM tf_worker_usage \nWHERE {{ .Conditions }}\nGROUP BY
+      workload, worker, uuid, node\nHAVING switch_increase > {{ .Threshold }}\n"
+    runbookURL: https://tensor-fusion.ai/guide/troubleshooting/handbook
+    severity: P1
+    summary: Worker VRAM Switch Count Increasing
+    threshold: 0
+  - alertTargetInstance: '{{ .pool }}'
+    consecutiveCount: 1
+    description: Worker allocation failed, {{ .failure_increase }} times in last 30
+      seconds for GPU Pool {{ .pool }}
+    evaluationInterval: 30s
+    name: WorkerAllocationFailed
+    query: |
+      SELECT pool, (MAX(total_allocation_fail_cnt) - MIN(total_allocation_fail_cnt)) as failure_increase,
+      FROM tf_system_metrics
+      WHERE {{ .Conditions }}
+      GROUP BY pool
+      HAVING failure_increase > {{ .Threshold }}
+    runbookURL: https://tensor-fusion.ai/guide/troubleshooting/handbook
+    severity: P1
+    summary: Worker allocation failed for GPU Pool {{ .pool }}
+    threshold: 0
+  - alertTargetInstance: '{{ .uuid }}'
+    consecutiveCount: 2
+    description: 'GPU {{ .uuid }} on Node {{ .node }} in Pool {{ .pool }} has VRAM
+      usage above {{ .Threshold }}% for 2 consecutive 30s, average usage: {{ .memory_used
+      }}%'
+    evaluationInterval: 30s
+    name: GPUVRAMFull
+    query: |
+      SELECT
+        node,
+        pool,
+        uuid,
+        avg(memory_percentage) AS memory_used
+      FROM tf_gpu_usage
+      WHERE memory_percentage > {{ .Threshold }} AND {{ .Conditions }}
+      GROUP BY node, pool, uuid
+    severity: P1
+    summary: GPU VRAM Full, used {{ .memory_used }}% on {{ .node }} {{ .uuid }}
+    threshold: 97
+  - alertTargetInstance: '{{ .uuid }}'
+    consecutiveCount: 4
+    description: 'GPU {{ .uuid }} on Node {{ .node }} in Pool {{ .pool }} has TFlops
+      usage above {{ .Threshold }}% for 4 consecutive 30s, average usage: {{ .compute_used
+      }}%'
+    evaluationInterval: 30s
+    name: GPUTFlopsFull
+    query: |
+      SELECT
+        node,
+        pool,
+        uuid,
+        avg(compute_percentage) AS compute_used
+      FROM tf_gpu_usage
+      WHERE compute_percentage > {{ .Threshold }} AND {{ .Conditions }}
+      GROUP BY node, pool, uuid
+    severity: P1
+    summary: GPU TFlops Full, used {{ .compute_used }}% on {{ .node }} {{ .uuid }}
+    threshold: 97
+  - alertTargetInstance: '{{ .uuid }}'
+    consecutiveCount: 3
+    description: 'GPU {{ .uuid }} from Node {{ .node }} has temperature above {{ .Threshold
+      }}°C, Average temperature: {{ .avg_temperature }}, GPU Pool: {{ .pool }}'
+    evaluationInterval: 30s
+    name: GPUTemperatureHigh
+    query: |
+      SELECT
+        node,
+        pool,
+        uuid,
+        avg(temperature) AS avg_temperature
+      FROM tf_gpu_usage
+      WHERE temperature > {{ .Threshold }} AND {{ .Conditions }}
+      GROUP BY node, pool, uuid
+    runbookURL: https://tensor-fusion.ai/guide/troubleshooting/handbook
+    severity: P1
+    summary: GPU Temperature High, {{ .avg_temperature }}°C on {{ .node }} {{ .uuid
+      }}
+    threshold: 90
+  - alertTargetInstance: '{{ .node }}'
+    consecutiveCount: 2
+    description: Node {{ .node }} in Pool {{ .pool }} has available TFlops below {{
+      .Threshold }}%
+    evaluationInterval: 1m
+    name: NodeTFlopsAllocationCritical
+    query: |
+      SELECT node, pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+      FROM tf_node_metrics
+      WHERE {{ .Conditions }}
+      GROUP BY node, pool
+      HAVING tflops_available < {{ .Threshold }}
+    severity: P0
+    summary: Available TFlops below threshold, remaining {{ .tflops_available }}%
+      for {{ .node }}
+    threshold: 5
+  - alertTargetInstance: '{{ .node }}'
+    consecutiveCount: 2
+    description: Node {{ .node }} in Pool {{ .pool }} has available TFlops below {{
+      .Threshold }}%
+    evaluationInterval: 1m
+    name: NodeTFlopsAllocationWarning
+    query: |
+      SELECT node, pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+      FROM tf_node_metrics
+      WHERE {{ .Conditions }}
+      GROUP BY node, pool
+      HAVING tflops_available < {{ .Threshold }}
+    severity: P1
+    summary: Node available TFlops below threshold, remaining {{ .tflops_available
+      }}% for {{ .node }}
+    threshold: 10
+  - alertTargetInstance: '{{ .pool }}'
+    consecutiveCount: 2
+    description: Pool {{ .pool }} has available TFlops below {{ .Threshold }}%
+    evaluationInterval: 1m
+    name: PoolTotalTFlopsAllocationCritical
+    query: |
+      SELECT pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+      FROM tf_node_metrics
+      WHERE {{ .Conditions }}
+      GROUP BY pool
+      HAVING tflops_available < {{ .Threshold }}
+    severity: P0
+    summary: Pool available TFlops below threshold, remaining {{ .tflops_available
+      }}%
+    threshold: 5
+  - alertTargetInstance: '{{ .pool }}'
+    consecutiveCount: 2
+    description: Pool {{ .pool }} has available TFlops below {{ .Threshold }}%
+    evaluationInterval: 1m
+    name: PoolTotalTFlopsAllocationWarning
+    query: |
+      SELECT pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+      FROM tf_node_metrics
+      WHERE {{ .Conditions }}
+      GROUP BY pool
+      HAVING tflops_available < {{ .Threshold }}
+    severity: P1
+    summary: Pool available TFlops below threshold, remaining {{ .tflops_available
+      }}%
+    threshold: 10
+  - alertTargetInstance: '{{ .node }}'
+    consecutiveCount: 2
+    description: Node {{ .node }} in Pool {{ .pool }} has available VRAM below {{
+      .Threshold }}%
+    evaluationInterval: 1m
+    name: NodeVRAMAllocationCritical
+    query: |
+      SELECT node, pool, (100 - avg(allocated_vram_percent)) as vram_available
+      FROM tf_node_metrics
+      WHERE {{ .Conditions }}
+      GROUP BY node, pool
+      HAVING vram_available < {{ .Threshold }}
+    severity: P1
+    summary: Node available VRAM below threshold, remaining {{ .vram_available }}%
+      for {{ .node }}
+    threshold: 5
+  - alertTargetInstance: '{{ .node }}'
+    consecutiveCount: 2
+    description: Node {{ .node }} in Pool {{ .pool }} has available VRAM below {{
+      .Threshold }}%
+    evaluationInterval: 1m
+    name: NodeVRAMAllocationWarning
+    query: |
+      SELECT node, pool, (100 - avg(allocated_vram_percent)) as vram_available
+      FROM tf_node_metrics
+      WHERE {{ .Conditions }}
+      GROUP BY node, pool
+      HAVING vram_available < {{ .Threshold }}
+    severity: P1
+    summary: Node available VRAM below threshold, remaining {{ .vram_available }}%
+      for {{ .node }}
+    threshold: 10
+  - alertTargetInstance: '{{ .pool }}'
+    consecutiveCount: 2
+    description: Pool {{ .pool }} has available VRAM below {{ .Threshold }}%
+    evaluationInterval: 1m
+    name: PoolVRAMAllocationWarning
+    query: |
+      SELECT pool, (100 - avg(allocated_vram_percent)) as vram_available
+      FROM tf_node_metrics
+      WHERE {{ .Conditions }}
+      GROUP BY pool
+      HAVING vram_available < {{ .Threshold }}
+    severity: P1
+    summary: Pool available VRAM below threshold, remaining {{ .vram_available }}%
+      for {{ .pool }}
+    threshold: 10
+  - alertTargetInstance: '{{ .node }}'
+    consecutiveCount: 2
+    description: GPU Node {{ .node }} has no workload running, should be decommissioned
+    evaluationInterval: 5m
+    name: EmptyGPU
+    query: "SELECT DISTINCT node \nFROM tf_node_metrics \nWHERE {{ .Conditions }}
+      AND node NOT IN (\n    SELECT DISTINCT node \n    FROM tf_worker_usage \n    WHERE
+      {{ .Conditions }}\n)\n"
+    severity: P2
+    summary: Empty GPU without any workload, Node {{ .node }}
+    threshold: 0
+  - alertTargetInstance: '{{ .uuid }}'
+    consecutiveCount: 3
+    description: 'GPU {{ .uuid }} on Node {{ .node }} in Pool {{ .pool }} has been
+      idle for 3 consecutive 10m, compute: {{ .compute }}, vram: {{ .vram }}'
+    evaluationInterval: 10m
+    name: IdleGPU
+    query: |
+      SELECT node, pool, uuid, avg(compute_percentage) as compute, avg(memory_percentage) vram
+      FROM tf_gpu_usage
+      WHERE {{ .Conditions }}
+      GROUP BY node, pool, uuid
+      HAVING compute < 1 and vram < {{ .Threshold }};
+    severity: P2
+    summary: 'Idle GPU found: {{ .uuid }} on Node {{ .node }}'
+    threshold: 5
+  metricsExtraPodLabels: {}
+  metricsFormat: influx
+  metricsTTL: 30d
+fullnameOverride: ""
+greptime:
+  db: public
+  host: greptimedb-standalone.greptimedb.svc.cluster.local
+  image:
+    repository: greptime-registry.cn-hangzhou.cr.aliyuncs.com/greptime/greptimedb
+    tag: latest
+  installStandalone: true
+  isCloud: false
+  port: 4002
+  resources:
+    limits:
+      cpu: 200m
+      memory: 2Gi
+    requests:
+      cpu: 100m
+      memory: 512Mi
+imagePullSecrets: []
+initialGpuNodeLabelSelector: nvidia.com/gpu.present=true
+nameOverride: ""
+namespaceOverride: ""
+schedulerConfig:
+  apiVersion: kubescheduler.config.k8s.io/v1
+  clientConnection:
+    burst: 100
+    kubeconfig: ""
+    qps: 50
+  kind: KubeSchedulerConfiguration
+  profiles:
+  - pluginConfig:
+    - args:
+        maxWorkerPerNode: 256
+        tflopsWeight: 0.3
+        vramWeight: 0.7
+      name: GPUResourcesFit
+    - args:
+        totalIntranetBandWidthGBps: 100
+      name: GPUNetworkTopologyAware
+    - args:
+        scoringStrategy:
+          requestedToCapacityRatio:
+            shape:
+            - score: 0
+              utilization: 0
+            - score: 9
+              utilization: 75
+            - score: 10
+              utilization: 100
+          resources:
+          - name: cpu
+            weight: 1
+          - name: memory
+            weight: 1
+          - name: nvidia.com/gpu
+            weight: 5
+          type: RequestedToCapacityRatio
+      name: NodeResourcesFit
+    plugins:
+      filter:
+        enabled:
+        - name: GPUResourcesFit
+        - name: GPUNetworkTopologyAware
+      postBind:
+        enabled:
+        - name: GPUResourcesFit
+      preFilter:
+        enabled:
+        - name: GPUResourcesFit
+      reserve:
+        enabled:
+        - name: GPUResourcesFit
+      score:
+        enabled:
+        - name: GPUResourcesFit
+          weight: 5
+    schedulerName: tensor-fusion-scheduler
+serviceAccount:
+  annotations: {}
+  automount: true
+  create: true
+
+HOOKS:
+---
+# Source: tensor-fusion/templates/admission-webhooks/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tensor-fusion-sys-webhook-job
+  namespace: tensor-fusion-sys
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade,post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+---
+# Source: tensor-fusion/templates/admission-webhooks/clusterrole.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tensor-fusion-sys-webhook-job
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade,post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+rules:
+  - apiGroups:
+      - admissionregistration.k8s.io
+    resources:
+      - mutatingwebhookconfigurations
+    verbs:
+      - get
+      - update
+---
+# Source: tensor-fusion/templates/admission-webhooks/clusterrolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tensor-fusion-sys-webhook-job
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade,post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tensor-fusion-sys-webhook-job
+subjects:
+  - kind: ServiceAccount
+    name: tensor-fusion-sys-webhook-job
+    namespace: tensor-fusion-sys
+---
+# Source: tensor-fusion/templates/admission-webhooks/role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tensor-fusion-sys-webhook-job
+  namespace: tensor-fusion-sys
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade,post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - create
+---
+# Source: tensor-fusion/templates/admission-webhooks/rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tensor-fusion-sys-webhook-job
+  namespace: tensor-fusion-sys
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade,post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tensor-fusion-sys-webhook-job
+subjects:
+  - kind: ServiceAccount
+    name: tensor-fusion-sys-webhook-job
+    namespace: tensor-fusion-sys
+---
+# Source: tensor-fusion/templates/admission-webhooks/job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tensor-fusion-sys-add-hook-crt
+  namespace: tensor-fusion-sys
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      name: tensor-fusion-sys-add-hook-crt
+    spec:
+      containers:
+        - name: create
+          image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0
+          args:
+            - create
+            - --host=tensor-fusion-sys-webhook,tensor-fusion-sys-webhook.$(POD_NAMESPACE).svc
+            - --namespace=$(POD_NAMESPACE)
+            - --secret-name=tensor-fusion-webhook-secret
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+      restartPolicy: OnFailure
+      serviceAccountName: tensor-fusion-sys-webhook-job
+---
+# Source: tensor-fusion/templates/admission-webhooks/job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tensor-fusion-sys-patch-admission-webhook
+  namespace: tensor-fusion-sys
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      name: tensor-fusion-sys-patch-webhook
+    spec:
+      containers:
+        - name: patch
+          image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0
+          args:
+            - patch
+            - --webhook-name=tensor-fusion-sys-mutating-webhook
+            - --namespace=$(POD_NAMESPACE)
+            - --patch-mutating=true
+            - --patch-validating=false
+            - --secret-name=tensor-fusion-webhook-secret
+            - --patch-failure-policy=Ignore
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+      restartPolicy: OnFailure
+      serviceAccountName: tensor-fusion-sys-webhook-job
+MANIFEST:
+---
+# Source: tensor-fusion/templates/greptime-standalone.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: greptimedb
+---
+# Source: tensor-fusion/templates/serviceaccount-hypervisor.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  # Service account for watch vGPU worker auto scaling event and collect Pod log metadata
+  # The name is fixed and only needs pods/nodes read permission
+  name: tensor-fusion-hypervisor-sa
+  namespace: tensor-fusion-sys
+  labels:
+    helm.sh/chart: tensor-fusion-1.5.6
+    app.kubernetes.io/version: "1.43.5"
+    app.kubernetes.io/managed-by: Helm
+automountServiceAccountToken: true
+---
+# Source: tensor-fusion/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tensor-fusion-sys
+  namespace: tensor-fusion-sys
+  labels:
+    helm.sh/chart: tensor-fusion-1.5.6
+    app.kubernetes.io/version: "1.43.5"
+    app.kubernetes.io/managed-by: Helm
+automountServiceAccountToken: true
+---
+# Source: tensor-fusion/templates/vendor-credentials.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tf-cloud-vendor-credentials
+  namespace: tensor-fusion-sys
+  annotations:
+    helm.sh/resource-policy: keep
+data:
+  ak: "ZHVtbXk="
+  sk: "ZHVtbXk="
+---
+# Source: tensor-fusion/templates/alert-manager.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tensor-fusion-sys-alert-manager-config
+  namespace: tensor-fusion-sys
+  labels:
+    tensor-fusion.ai/component: alert-manager
+    helm.sh/chart: tensor-fusion-1.5.6
+    app.kubernetes.io/version: "1.43.5"
+    app.kubernetes.io/managed-by: Helm
+data:
+  alertmanager.yml: |
+    global: {}
+    receivers:
+    - name: default-receiver
+    route:
+      group_interval: 5m
+      group_wait: 10s
+      receiver: default-receiver
+      repeat_interval: 3h
+    templates:
+    - /etc/alertmanager/*.tmpl
+---
+# Source: tensor-fusion/templates/config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tensor-fusion-sys-config
+  namespace: tensor-fusion-sys
+  labels:
+    tensor-fusion.ai/component: config
+    helm.sh/chart: tensor-fusion-1.5.6
+    app.kubernetes.io/version: "1.43.5"
+    app.kubernetes.io/managed-by: Helm
+data:
+  # Read by tensor fusion operator, eval alert rules and send to alertmanager if enabledAlert is true
+  config.yaml: |
+    alertRules:
+    - alertTargetInstance: '{{ .worker }}-{{ .uuid }}'
+      consecutiveCount: 3
+      description: Worker {{ .worker }} from Node {{ .node }} is using more than {{ .Threshold
+        }}% of its TFlops limit
+      evaluationInterval: 15s
+      name: WorkerTFlopsThrottled
+      query: |
+        SELECT workload, worker, uuid, node, MAX(compute_throttled_cnt)-MIN(compute_throttled_cnt) as throttled_increase
+        FROM tf_worker_usage
+        WHERE {{ .Conditions }}
+        GROUP BY workload, worker, uuid, node
+        HAVING throttled_increase > {{ .Threshold }}
+      runbookURL: https://tensor-fusion.ai/guide/troubleshooting/handbook
+      severity: P1
+      summary: Worker TFlops Throttled
+      threshold: 0
+    - alertTargetInstance: '{{ .worker }}-{{ .uuid }}'
+      consecutiveCount: 1
+      description: Worker {{ .worker }} from Node {{ .node }} has switched VRAM {{ .switch_increase
+        }} times in last 2 minutes, GPU may be too hot
+      evaluationInterval: 2m
+      name: WorkerVRAMSwitchCountIncreasing
+      query: "SELECT workload, worker, uuid, node, MAX(vram_resumed_cnt)-MIN(vram_resumed_cnt)
+        as switch_increase\nFROM tf_worker_usage \nWHERE {{ .Conditions }}\nGROUP BY workload,
+        worker, uuid, node\nHAVING switch_increase > {{ .Threshold }}\n"
+      runbookURL: https://tensor-fusion.ai/guide/troubleshooting/handbook
+      severity: P1
+      summary: Worker VRAM Switch Count Increasing
+      threshold: 0
+    - alertTargetInstance: '{{ .pool }}'
+      consecutiveCount: 1
+      description: Worker allocation failed, {{ .failure_increase }} times in last 30
+        seconds for GPU Pool {{ .pool }}
+      evaluationInterval: 30s
+      name: WorkerAllocationFailed
+      query: |
+        SELECT pool, (MAX(total_allocation_fail_cnt) - MIN(total_allocation_fail_cnt)) as failure_increase,
+        FROM tf_system_metrics
+        WHERE {{ .Conditions }}
+        GROUP BY pool
+        HAVING failure_increase > {{ .Threshold }}
+      runbookURL: https://tensor-fusion.ai/guide/troubleshooting/handbook
+      severity: P1
+      summary: Worker allocation failed for GPU Pool {{ .pool }}
+      threshold: 0
+    - alertTargetInstance: '{{ .uuid }}'
+      consecutiveCount: 2
+      description: 'GPU {{ .uuid }} on Node {{ .node }} in Pool {{ .pool }} has VRAM usage
+        above {{ .Threshold }}% for 2 consecutive 30s, average usage: {{ .memory_used
+        }}%'
+      evaluationInterval: 30s
+      name: GPUVRAMFull
+      query: |
+        SELECT
+          node,
+          pool,
+          uuid,
+          avg(memory_percentage) AS memory_used
+        FROM tf_gpu_usage
+        WHERE memory_percentage > {{ .Threshold }} AND {{ .Conditions }}
+        GROUP BY node, pool, uuid
+      severity: P1
+      summary: GPU VRAM Full, used {{ .memory_used }}% on {{ .node }} {{ .uuid }}
+      threshold: 97
+    - alertTargetInstance: '{{ .uuid }}'
+      consecutiveCount: 4
+      description: 'GPU {{ .uuid }} on Node {{ .node }} in Pool {{ .pool }} has TFlops
+        usage above {{ .Threshold }}% for 4 consecutive 30s, average usage: {{ .compute_used
+        }}%'
+      evaluationInterval: 30s
+      name: GPUTFlopsFull
+      query: |
+        SELECT
+          node,
+          pool,
+          uuid,
+          avg(compute_percentage) AS compute_used
+        FROM tf_gpu_usage
+        WHERE compute_percentage > {{ .Threshold }} AND {{ .Conditions }}
+        GROUP BY node, pool, uuid
+      severity: P1
+      summary: GPU TFlops Full, used {{ .compute_used }}% on {{ .node }} {{ .uuid }}
+      threshold: 97
+    - alertTargetInstance: '{{ .uuid }}'
+      consecutiveCount: 3
+      description: 'GPU {{ .uuid }} from Node {{ .node }} has temperature above {{ .Threshold
+        }}°C, Average temperature: {{ .avg_temperature }}, GPU Pool: {{ .pool }}'
+      evaluationInterval: 30s
+      name: GPUTemperatureHigh
+      query: |
+        SELECT
+          node,
+          pool,
+          uuid,
+          avg(temperature) AS avg_temperature
+        FROM tf_gpu_usage
+        WHERE temperature > {{ .Threshold }} AND {{ .Conditions }}
+        GROUP BY node, pool, uuid
+      runbookURL: https://tensor-fusion.ai/guide/troubleshooting/handbook
+      severity: P1
+      summary: GPU Temperature High, {{ .avg_temperature }}°C on {{ .node }} {{ .uuid
+        }}
+      threshold: 90
+    - alertTargetInstance: '{{ .node }}'
+      consecutiveCount: 2
+      description: Node {{ .node }} in Pool {{ .pool }} has available TFlops below {{
+        .Threshold }}%
+      evaluationInterval: 1m
+      name: NodeTFlopsAllocationCritical
+      query: |
+        SELECT node, pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+        FROM tf_node_metrics
+        WHERE {{ .Conditions }}
+        GROUP BY node, pool
+        HAVING tflops_available < {{ .Threshold }}
+      severity: P0
+      summary: Available TFlops below threshold, remaining {{ .tflops_available }}% for
+        {{ .node }}
+      threshold: 5
+    - alertTargetInstance: '{{ .node }}'
+      consecutiveCount: 2
+      description: Node {{ .node }} in Pool {{ .pool }} has available TFlops below {{
+        .Threshold }}%
+      evaluationInterval: 1m
+      name: NodeTFlopsAllocationWarning
+      query: |
+        SELECT node, pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+        FROM tf_node_metrics
+        WHERE {{ .Conditions }}
+        GROUP BY node, pool
+        HAVING tflops_available < {{ .Threshold }}
+      severity: P1
+      summary: Node available TFlops below threshold, remaining {{ .tflops_available }}%
+        for {{ .node }}
+      threshold: 10
+    - alertTargetInstance: '{{ .pool }}'
+      consecutiveCount: 2
+      description: Pool {{ .pool }} has available TFlops below {{ .Threshold }}%
+      evaluationInterval: 1m
+      name: PoolTotalTFlopsAllocationCritical
+      query: |
+        SELECT pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+        FROM tf_node_metrics
+        WHERE {{ .Conditions }}
+        GROUP BY pool
+        HAVING tflops_available < {{ .Threshold }}
+      severity: P0
+      summary: Pool available TFlops below threshold, remaining {{ .tflops_available }}%
+      threshold: 5
+    - alertTargetInstance: '{{ .pool }}'
+      consecutiveCount: 2
+      description: Pool {{ .pool }} has available TFlops below {{ .Threshold }}%
+      evaluationInterval: 1m
+      name: PoolTotalTFlopsAllocationWarning
+      query: |
+        SELECT pool, (100 - avg(allocated_tflops_percent)) as tflops_available
+        FROM tf_node_metrics
+        WHERE {{ .Conditions }}
+        GROUP BY pool
+        HAVING tflops_available < {{ .Threshold }}
+      severity: P1
+      summary: Pool available TFlops below threshold, remaining {{ .tflops_available }}%
+      threshold: 10
+    - alertTargetInstance: '{{ .node }}'
+      consecutiveCount: 2
+      description: Node {{ .node }} in Pool {{ .pool }} has available VRAM below {{ .Threshold
+        }}%
+      evaluationInterval: 1m
+      name: NodeVRAMAllocationCritical
+      query: |
+        SELECT node, pool, (100 - avg(allocated_vram_percent)) as vram_available
+        FROM tf_node_metrics
+        WHERE {{ .Conditions }}
+        GROUP BY node, pool
+        HAVING vram_available < {{ .Threshold }}
+      severity: P1
+      summary: Node available VRAM below threshold, remaining {{ .vram_available }}% for
+        {{ .node }}
+      threshold: 5
+    - alertTargetInstance: '{{ .node }}'
+      consecutiveCount: 2
+      description: Node {{ .node }} in Pool {{ .pool }} has available VRAM below {{ .Threshold
+        }}%
+      evaluationInterval: 1m
+      name: NodeVRAMAllocationWarning
+      query: |
+        SELECT node, pool, (100 - avg(allocated_vram_percent)) as vram_available
+        FROM tf_node_metrics
+        WHERE {{ .Conditions }}
+        GROUP BY node, pool
+        HAVING vram_available < {{ .Threshold }}
+      severity: P1
+      summary: Node available VRAM below threshold, remaining {{ .vram_available }}% for
+        {{ .node }}
+      threshold: 10
+    - alertTargetInstance: '{{ .pool }}'
+      consecutiveCount: 2
+      description: Pool {{ .pool }} has available VRAM below {{ .Threshold }}%
+      evaluationInterval: 1m
+      name: PoolVRAMAllocationWarning
+      query: |
+        SELECT pool, (100 - avg(allocated_vram_percent)) as vram_available
+        FROM tf_node_metrics
+        WHERE {{ .Conditions }}
+        GROUP BY pool
+        HAVING vram_available < {{ .Threshold }}
+      severity: P1
+      summary: Pool available VRAM below threshold, remaining {{ .vram_available }}% for
+        {{ .pool }}
+      threshold: 10
+    - alertTargetInstance: '{{ .node }}'
+      consecutiveCount: 2
+      description: GPU Node {{ .node }} has no workload running, should be decommissioned
+      evaluationInterval: 5m
+      name: EmptyGPU
+      query: "SELECT DISTINCT node \nFROM tf_node_metrics \nWHERE {{ .Conditions }} AND
+        node NOT IN (\n    SELECT DISTINCT node \n    FROM tf_worker_usage \n    WHERE
+        {{ .Conditions }}\n)\n"
+      severity: P2
+      summary: Empty GPU without any workload, Node {{ .node }}
+      threshold: 0
+    - alertTargetInstance: '{{ .uuid }}'
+      consecutiveCount: 3
+      description: 'GPU {{ .uuid }} on Node {{ .node }} in Pool {{ .pool }} has been idle
+        for 3 consecutive 10m, compute: {{ .compute }}, vram: {{ .vram }}'
+      evaluationInterval: 10m
+      name: IdleGPU
+      query: |
+        SELECT node, pool, uuid, avg(compute_percentage) as compute, avg(memory_percentage) vram
+        FROM tf_gpu_usage
+        WHERE {{ .Conditions }}
+        GROUP BY node, pool, uuid
+        HAVING compute < 1 and vram < {{ .Threshold }};
+      severity: P2
+      summary: 'Idle GPU found: {{ .uuid }} on Node {{ .node }}'
+      threshold: 5
+    metricsExtraPodLabels: {}
+    metricsFormat: influx
+    metricsTTL: 30d
+  scheduler-config.yaml: |
+    apiVersion: kubescheduler.config.k8s.io/v1
+    clientConnection:
+      burst: 100
+      kubeconfig: ""
+      qps: 50
+    kind: KubeSchedulerConfiguration
+    profiles:
+    - pluginConfig:
+      - args:
+          maxWorkerPerNode: 256
+          tflopsWeight: 0.3
+          vramWeight: 0.7
+        name: GPUResourcesFit
+      - args:
+          totalIntranetBandWidthGBps: 100
+        name: GPUNetworkTopologyAware
+      - args:
+          scoringStrategy:
+            requestedToCapacityRatio:
+              shape:
+              - score: 0
+                utilization: 0
+              - score: 9
+                utilization: 75
+              - score: 10
+                utilization: 100
+            resources:
+            - name: cpu
+              weight: 1
+            - name: memory
+              weight: 1
+            - name: nvidia.com/gpu
+              weight: 5
+            type: RequestedToCapacityRatio
+        name: NodeResourcesFit
+      plugins:
+        filter:
+          enabled:
+          - name: GPUResourcesFit
+          - name: GPUNetworkTopologyAware
+        postBind:
+          enabled:
+          - name: GPUResourcesFit
+        preFilter:
+          enabled:
+          - name: GPUResourcesFit
+        reserve:
+          enabled:
+          - name: GPUResourcesFit
+        score:
+          enabled:
+          - name: GPUResourcesFit
+            weight: 5
+      schedulerName: tensor-fusion-scheduler
+---
+# Source: tensor-fusion/templates/gpu-public-gpu-info.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tensor-fusion-sys-public-gpu-info
+  namespace: tensor-fusion-sys
+  labels:
+    tensor-fusion.ai/component: gpu-info
+    helm.sh/chart: tensor-fusion-1.5.6
+    app.kubernetes.io/version: "1.43.5"
+    app.kubernetes.io/managed-by: Helm
+data:
+  # TODO: should be auto generated based on some server side database
+  gpu-info.yaml: |
+    # Refer: 
+    #  - https://www.techpowerup.com/gpu-specs
+    #  - https://getdeploying.com/reference/cloud-gpu
+    #  - https://en.wikipedia.org/wiki/List_of_Nvidia_graphics_processing_units
+    #  - https://en.wikipedia.org/wiki/GeForce_RTX_30_series#
+    #  - https://en.wikipedia.org/wiki/GeForce_RTX_50_series
+    #  - https://github.com/exo-explore/exo/blob/main/exo/topology/device_capabilities.py
+
+    # Field Definition:
+    # - 'model' is `GPUModel_BoardSlotType` to identify the GPU
+    # - 'costPerHour' is the average cost referring a few Cloud/Serverless GPU vendors
+    # - 'fp16TFlops' is the max FP16 TFlops of the GPU. For NVIDIA, it means none-sparsity performance and using Tensor Cores
+    
+    # note that this sheet only contains TFlops, no VRAM, since variant GPUs have the same TFlops but different VRAM, VRAM can be easily detected from NVML lib
+    # TODO: this should be dynamic after user inputs their cloud vendor and discounts info, for example Azure/AWS has much higher price than this sheet
+    
+    # Turing Architecture Series
+    - model: T4
+      fullModelName: "Tesla T4"
+      vendor: NVIDIA
+      costPerHour: 0.3
+      fp16TFlops: 65
+
+    # Ampere Architecture Series
+    - model: A100_SXM_80G
+      fullModelName: "NVIDIA A100-SXM4-80GB"
+      vendor: NVIDIA
+      costPerHour: 1.89
+      fp16TFlops: 312
+    
+    - model: A100_PCIe_80G
+      fullModelName: "NVIDIA A100 80GB PCIe"
+      vendor: NVIDIA
+      costPerHour: 1.64
+      fp16TFlops: 312
+
+    - model: A100_SXM_40G
+      fullModelName: "NVIDIA A100-SXM4-40GB"
+      vendor: NVIDIA
+      costPerHour: 1.4
+      fp16TFlops: 312
+    
+    - model: A100_PCIe_40G
+      fullModelName: "NVIDIA A100 40GB PCIe"
+      vendor: NVIDIA
+      costPerHour: 1.2
+      fp16TFlops: 312
+
+    - model: A800_SXM_40G
+      fullModelName: "NVIDIA A800-SXM4-40GB"
+      vendor: NVIDIA
+      costPerHour: 1.89
+      fp16TFlops: 312
+
+    - model: A800_SXM_80G
+      fullModelName: "NVIDIA A800-SXM4-80GB"
+      vendor: NVIDIA
+      costPerHour: 1.89
+      fp16TFlops: 312
+    
+    - model: A800_PCIe_80G
+      fullModelName: "NVIDIA A800 80GB PCIe"
+      vendor: NVIDIA
+      costPerHour: 1.64
+      fp16TFlops: 312
+
+    - model: A800_PCIe_40G
+      fullModelName: "NVIDIA A800 40GB PCIe"
+      vendor: NVIDIA
+      costPerHour: 1.64
+      fp16TFlops: 312  
+
+    - model: A10
+      fullModelName: "NVIDIA A10"
+      vendor: NVIDIA
+      costPerHour: 0.7
+      fp16TFlops: 125
+
+    # A10G has more RT cores than A10for rendering case
+    - model: A10G
+      fullModelName: "NVIDIA A10G"
+      vendor: NVIDIA
+      costPerHour: 0.8
+      fp16TFlops: 125
+
+    - model: A40
+      fullModelName: "NVIDIA A40 48GB PCIe"
+      vendor: NVIDIA
+      costPerHour: 0.4
+      fp16TFlops: 149.7
+
+    - model: A6000
+      fullModelName: "NVIDIA RTX A6000"
+      vendor: NVIDIA
+      costPerHour: 0.49
+      fp16TFlops: 38.71
+
+    - model: A6000Ada
+      fullModelName: "NVIDIA RTX 6000 Ada Generation"
+      vendor: NVIDIA
+      costPerHour: 0.77
+      fp16TFlops: 323
+
+    # NVIDIA RTX Series
+    # RTX 20 Series
+    - model: RTX2060
+      fullModelName: "NVIDIA GeForce RTX 2060"
+      vendor: NVIDIA
+      costPerHour: 0.05
+      fp16TFlops: 12.9
+
+    - model: RTX2060S
+      fullModelName: "NVIDIA GeForce RTX 2060 SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.06
+      fp16TFlops: 14.4
+
+    - model: RTX2070
+      fullModelName: "NVIDIA GeForce RTX 2070"
+      vendor: NVIDIA
+      costPerHour: 0.06
+      fp16TFlops: 14.93
+
+    - model: RTX2070S
+      fullModelName: "NVIDIA GeForce RTX 2070 SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.07
+      fp16TFlops: 18.12
+
+    - model: RTX2080
+      fullModelName: "NVIDIA GeForce RTX 2080"
+      vendor: NVIDIA
+      costPerHour: 0.08
+      fp16TFlops: 20.14
+
+    - model: RTX2080S
+      fullModelName: "NVIDIA GeForce RTX 2080 SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.09
+      fp16TFlops: 22.30
+
+    - model: RTX2080Ti
+      fullModelName: "NVIDIA GeForce RTX 2080 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.1
+      fp16TFlops: 26.9
+
+    - model: TITANRTX
+      fullModelName: "NVIDIA TITAN RTX"
+      vendor: NVIDIA
+      costPerHour: 0.12
+      fp16TFlops: 32.62
+
+    # RTX 30 Series
+    - model: RTX3050
+      fullModelName: "NVIDIA GeForce RTX 3050"
+      vendor: NVIDIA
+      costPerHour: 0.05
+      fp16TFlops: 18.22
+
+    - model: RTX3060
+      fullModelName: "NVIDIA GeForce RTX 3060"
+      vendor: NVIDIA
+      costPerHour: 0.07
+      fp16TFlops: 26.0
+    
+    - model: RTX3060Ti
+      fullModelName: "NVIDIA GeForce RTX 3060 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.08
+      fp16TFlops: 32.4
+    
+    - model: RTX3070
+      fullModelName: "NVIDIA GeForce RTX 3070"
+      vendor: NVIDIA
+      costPerHour: 0.1
+      fp16TFlops: 40.6
+    
+    - model: RTX3070Ti
+      fullModelName: "NVIDIA GeForce RTX 3070 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.1
+      fp16TFlops: 43.6
+    
+    - model: RTX3080
+      fullModelName: "NVIDIA GeForce RTX 3080 (10 GB)"
+      vendor: NVIDIA
+      costPerHour: 0.18
+      fp16TFlops: 59.6
+    
+    - model: RTX3080_12GB
+      fullModelName: "NVIDIA GeForce RTX 3080 (12 GB)"
+      vendor: NVIDIA
+      costPerHour: 0.2
+      fp16TFlops: 61.2
+    
+    - model: RTX3080Ti
+      fullModelName: "NVIDIA GeForce RTX 3080 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.18
+      fp16TFlops: 68.2
+    
+    - model: RTX3090
+      fullModelName: "NVIDIA GeForce RTX 3090"
+      vendor: NVIDIA
+      costPerHour: 0.25
+      fp16TFlops: 71.2
+    
+    - model: RTX3090Ti
+      fullModelName: "NVIDIA GeForce RTX 3090 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.21
+      fp16TFlops: 80.0
+
+    # Ada Lovelace Architecture Series  
+    - model: L4
+      fullModelName: "NVIDIA L4"
+      vendor: NVIDIA
+      costPerHour: 0.43
+      fp16TFlops: 121
+
+    - model: L40
+      fullModelName: "NVIDIA L40"
+      vendor: NVIDIA
+      costPerHour: 0.7 # should be a bit cheaper than L40S
+      fp16TFlops: 181
+
+    - model: L40S
+      fullModelName: "NVIDIA L40S"
+      vendor: NVIDIA
+      costPerHour: 1.4
+      fp16TFlops: 365
+
+    # RTX 40 Series
+    - model: RTX4060
+      fullModelName: "NVIDIA GeForce RTX 4060"
+      vendor: NVIDIA
+      costPerHour: 0.1
+      fp16TFlops: 44.0
+    
+    - model: RTX4060Ti
+      fullModelName: "NVIDIA GeForce RTX 4060 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.11
+      fp16TFlops: 44.0
+    
+    - model: RTX4060Ti_16GB
+      fullModelName: "NVIDIA GeForce RTX 4060 Ti 16GB"
+      vendor: NVIDIA
+      costPerHour: 0.12
+      fp16TFlops: 44.0
+    
+    - model: RTX4070
+      fullModelName: "NVIDIA GeForce RTX 4070"
+      vendor: NVIDIA
+      costPerHour: 0.15
+      fp16TFlops: 58.0
+    
+    - model: RTX4070S
+      fullModelName: "NVIDIA GeForce RTX 4070 SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.18
+      fp16TFlops: 60.0
+    
+    - model: RTX4070Ti
+      fullModelName: "NVIDIA GeForce RTX 4070 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.2
+      fp16TFlops: 78.86
+    
+    - model: RTX4070TiS
+      fullModelName: "NVIDIA GeForce RTX 4070 Ti SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.22
+      fp16TFlops: 80.0
+
+    - model: RTX4080
+      fullModelName: "NVIDIA GeForce RTX 4080"
+      vendor: NVIDIA
+      costPerHour: 0.23
+      fp16TFlops: 97.48
+    
+    - model: RTX4080S
+      fullModelName: "NVIDIA GeForce RTX 4080 SUPER"
+      vendor: NVIDIA
+      costPerHour: 0.25
+      fp16TFlops: 104.0
+
+    - model: RTX4090
+      fullModelName: "NVIDIA GeForce RTX 4090"
+      vendor: NVIDIA
+      costPerHour: 0.3
+      fp16TFlops: 165.16
+
+    # Hopper Architecture Series
+    - model: H100_SXM
+      fullModelName: "NVIDIA H100 80GB HBM3"
+      vendor: NVIDIA
+      costPerHour: 2.99
+      fp16TFlops: 989
+    
+    - model: H100_PCIe
+      fullModelName: "NVIDIA H100 PCIe"
+      vendor: NVIDIA
+      costPerHour: 2.39
+      fp16TFlops: 835
+
+    - model: H800_SXM
+      fullModelName: "NVIDIA H800 80GB HBM3"
+      vendor: NVIDIA
+      costPerHour: 2.99
+      fp16TFlops: 989
+  
+    - model: H800_NVL
+      fullModelName: "NVIDIA H800 NVL"
+      vendor: NVIDIA
+      costPerHour: 2.79
+      fp16TFlops: 835
+    
+    - model: H20
+      fullModelName: "NVIDIA H20"
+      vendor: NVIDIA
+      costPerHour: 1.00
+      fp16TFlops: 148
+
+    - model: V100
+      fullModelName: "NVIDIA V100"
+      vendor: NVIDIA
+      costPerHour: 0.7
+      fp16TFlops: 125
+
+    - model: V100S
+      fullModelName: "NVIDIA V100S"
+      vendor: NVIDIA
+      costPerHour: 0.8
+      fp16TFlops: 130
+
+    # higher mem bandwidth and vram size(141G) than H100
+    - model: H200
+      fullModelName: "NVIDIA H200 80GB HBM3"
+      vendor: NVIDIA
+      costPerHour: 3.99
+      fp16TFlops: 989
+
+    - model: H800_PCIe
+      fullModelName: "NVIDIA H800 PCIe"
+      vendor: NVIDIA
+      costPerHour: 2.39
+      fp16TFlops: 835
+   
+    - model: H100_NVL
+      fullModelName: "NVIDIA H100 NVL"
+      vendor: NVIDIA
+      costPerHour: 2.99
+      fp16TFlops: 989
+
+    # Blackwell Architecture Series
+    - model: B200_SXM
+      fullModelName: "NVIDIA B200 SXM"
+      vendor: NVIDIA
+      costPerHour: 6.39 # unknown price,on-request
+      fp16TFlops: 2250
+
+    - model: RTX_5090
+      fullModelName: "NVIDIA GeForce RTX 5090"
+      vendor: NVIDIA
+      costPerHour: 0.89
+      fp16TFlops: 419.2
+  
+    - model: RTX_5090D
+      fullModelName: "NVIDIA GeForceRTX 5090D"
+      vendor: NVIDIA
+      costPerHour: 0.65
+      fp16TFlops: 380
+    
+    - model: RTX_5080
+      fullModelName: "NVIDIA GeForce RTX 5080"
+      vendor: NVIDIA
+      costPerHour: 0.9
+      fp16TFlops: 225
+
+    - model: RTX_5070Ti
+      fullModelName: "NVIDIA GeForce RTX 5070 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.5
+      fp16TFlops: 177.4
+
+    - model: RTX_5070
+      fullModelName: "NVIDIA GeForce RTX 5070"
+      vendor: NVIDIA
+      costPerHour: 0.3
+      fp16TFlops: 124
+
+    - model: RTX_5060Ti
+      fullModelName: "NVIDIA GeForce RTX 5060 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.2
+      fp16TFlops: 51
+
+    - model: RTX_5060
+      fullModelName: "NVIDIA GeForce RTX 5060"
+      vendor: NVIDIA
+      costPerHour: 0.18
+      fp16TFlops: 42
+
+    # NVIDIA Quadro RTX Ampere Series
+    - model: RTXA2000
+      fullModelName: "NVIDIA RTX A2000"
+      vendor: NVIDIA
+      costPerHour: 0.1
+      fp16TFlops: 32
+    
+    - model: RTXA4000
+      fullModelName: "NVIDIA RTX A4000"
+      vendor: NVIDIA
+      costPerHour: 0.24
+      fp16TFlops: 76.5
+    
+    - model: RTXA4500
+      fullModelName: "NVIDIA RTX A4500"
+      vendor: NVIDIA
+      costPerHour: 0.23
+      fp16TFlops: 94.5
+    
+    - model: RTXA5000
+      fullModelName: "NVIDIA RTX A5000"
+      vendor: NVIDIA
+      costPerHour: 0.26
+      fp16TFlops: 111
+    
+    - model: RTX4000AdaGen
+      fullModelName: "NVIDIA RTX 4000 Ada Generation"
+      vendor: NVIDIA
+      costPerHour: 0.26
+      fp16TFlops: 163
+
+    - model: RTX2000Ada
+      fullModelName: "NVIDIA RTX 2000 Ada Generation"
+      vendor: NVIDIA
+      costPerHour: 0.23
+      fp16TFlops: 46
+
+    # NVIDIA GTX Series
+    - model: GTX1050Ti
+      fullModelName: "NVIDIA GeForce GTX 1050 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.03
+      fp16TFlops: 4.0
+    
+    - model: GTX1070
+      fullModelName: "NVIDIA GeForce GTX 1070"
+      vendor: NVIDIA
+      costPerHour: 0.04
+      fp16TFlops: 0.101
+    
+    - model: GTX1080
+      fullModelName: "NVIDIA GeForce GTX 1080"
+      vendor: NVIDIA
+      costPerHour: 0.05
+      fp16TFlops: 0.138
+    
+    - model: GTX1080Ti
+      fullModelName: "NVIDIA GeForce GTX 1080 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.06
+      fp16TFlops: 0.177
+    
+    - model: GTX1660Ti
+      fullModelName: "NVIDIA GeForce GTX 1660 Ti"
+      vendor: NVIDIA
+      costPerHour: 0.04
+      fp16TFlops: 9.6
+
+    # Apple Silicon
+    - model: M1
+      fullModelName: "Apple M1"
+      vendor: Apple
+      costPerHour: 0.1
+      fp16TFlops: 4.58
+    
+    - model: M1Pro
+      fullModelName: "Apple M1 Pro"
+      vendor: Apple
+      costPerHour: 0.15
+      fp16TFlops: 10.60
+    
+    - model: M1Max
+      fullModelName: "Apple M1 Max"
+      vendor: Apple
+      costPerHour: 0.2
+      fp16TFlops: 21.20
+    
+    - model: M1Ultra
+      fullModelName: "Apple M1 Ultra"
+      vendor: Apple
+      costPerHour: 0.3
+      fp16TFlops: 42.40
+    
+    - model: M2
+      fullModelName: "Apple M2"
+      vendor: Apple
+      costPerHour: 0.12
+      fp16TFlops: 7.10
+    
+    - model: M2Pro
+      fullModelName: "Apple M2 Pro"
+      vendor: Apple
+      costPerHour: 0.18
+      fp16TFlops: 11.36
+    
+    - model: M2Max
+      fullModelName: "Apple M2 Max"
+      vendor: Apple
+      costPerHour: 0.25
+      fp16TFlops: 26.98
+    
+    - model: M2Ultra
+      fullModelName: "Apple M2 Ultra"
+      vendor: Apple
+      costPerHour: 0.35
+      fp16TFlops: 53.96
+    
+    - model: M3
+      fullModelName: "Apple M3"
+      vendor: Apple
+      costPerHour: 0.14
+      fp16TFlops: 7.10
+    
+    - model: M3Pro
+      fullModelName: "Apple M3 Pro"
+      vendor: Apple
+      costPerHour: 0.2
+      fp16TFlops: 9.94
+    
+    - model: M3Max
+      fullModelName: "Apple M3 Max"
+      vendor: Apple
+      costPerHour: 0.28
+      fp16TFlops: 28.40
+    
+    - model: M3Ultra
+      fullModelName: "Apple M3 Ultra"
+      vendor: Apple
+      costPerHour: 0.4
+      fp16TFlops: 108.52
+    
+    - model: M4
+      fullModelName: "Apple M4"
+      vendor: Apple
+      costPerHour: 0.16
+      fp16TFlops: 8.52
+    
+    - model: M4Pro
+      fullModelName: "Apple M4 Pro"
+      vendor: Apple
+      costPerHour: 0.22
+      fp16TFlops: 11.44
+    
+    - model: M4Max
+      fullModelName: "Apple M4 Max"
+      vendor: Apple
+      costPerHour: 0.3
+      fp16TFlops: 36.07
+
+    # Apple A Series
+    - model: A13Bionic
+      fullModelName: "Apple A13 Bionic"
+      vendor: Apple
+      costPerHour: 0.05
+      fp16TFlops: 1.38
+    
+    - model: A14Bionic
+      fullModelName: "Apple A14 Bionic"
+      vendor: Apple
+      costPerHour: 0.06
+      fp16TFlops: 1.50
+    
+    - model: A15Bionic
+      fullModelName: "Apple A15 Bionic"
+      vendor: Apple
+      costPerHour: 0.07
+      fp16TFlops: 2.74
+    
+    - model: A16Bionic
+      fullModelName: "Apple A16 Bionic"
+      vendor: Apple
+      costPerHour: 0.08
+      fp16TFlops: 3.58
+    
+    - model: A17Pro
+      fullModelName: "Apple A17 Pro"
+      vendor: Apple
+      costPerHour: 0.09
+      fp16TFlops: 4.30
+
+    # AMD Radeon RX 6000 Series
+    - model: RX6400
+      fullModelName: "AMD Radeon RX 6400"
+      vendor: AMD
+      costPerHour: 0.04
+      fp16TFlops: 7.14
+    
+    - model: RX6500XT
+      fullModelName: "AMD Radeon RX 6500 XT"
+      vendor: AMD
+      costPerHour: 0.05
+      fp16TFlops: 11.54
+    
+    - model: RX6600
+      fullModelName: "AMD Radeon RX 6600"
+      vendor: AMD
+      costPerHour: 0.06
+      fp16TFlops: 17.86
+    
+    - model: RX6600XT
+      fullModelName: "AMD Radeon RX 6600 XT"
+      vendor: AMD
+      costPerHour: 0.07
+      fp16TFlops: 21.2
+    
+    - model: RX6700
+      fullModelName: "AMD Radeon RX 6700"
+      vendor: AMD
+      costPerHour: 0.08
+      fp16TFlops: 22.8
+    
+    - model: RX6700XT
+      fullModelName: "AMD Radeon RX 6700 XT"
+      vendor: AMD
+      costPerHour: 0.09
+      fp16TFlops: 26.42
+    
+    - model: RX6800
+      fullModelName: "AMD Radeon RX 6800"
+      vendor: AMD
+      costPerHour: 0.11
+      fp16TFlops: 32.34
+    
+    - model: RX6800XT
+      fullModelName: "AMD Radeon RX 6800 XT"
+      vendor: AMD
+      costPerHour: 0.13
+      fp16TFlops: 41.48
+    
+    - model: RX6900XT
+      fullModelName: "AMD Radeon RX 6900 XT"
+      vendor: AMD
+      costPerHour: 0.15
+      fp16TFlops: 46.08
+
+    # AMD Radeon RX 7000 Series
+    - model: RX7500
+      fullModelName: "AMD Radeon RX 7500"
+      vendor: AMD
+      costPerHour: 0.06
+      fp16TFlops: 32.4
+    
+    - model: RX7600
+      fullModelName: "AMD Radeon RX 7600"
+      vendor: AMD
+      costPerHour: 0.08
+      fp16TFlops: 43.0
+    
+    - model: RX7700XT
+      fullModelName: "AMD Radeon RX 7700 XT"
+      vendor: AMD
+      costPerHour: 0.12
+      fp16TFlops: 68.4
+    
+    - model: RX7800XT
+      fullModelName: "AMD Radeon RX 7800 XT"
+      vendor: AMD
+      costPerHour: 0.15
+      fp16TFlops: 85.2
+    
+    - model: RX7900XT
+      fullModelName: "AMD Radeon RX 7900 XT"
+      vendor: AMD
+      costPerHour: 0.18
+      fp16TFlops: 106.8
+    
+    - model: RX7900XTX
+      fullModelName: "AMD Radeon RX 7900 XTX"
+      vendor: AMD
+      costPerHour: 0.2
+      fp16TFlops: 122.8
+---
+# Source: tensor-fusion/templates/greptime-standalone.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tensor-fusion-sys-greptimedb-standalone
+  namespace: greptimedb
+data:
+  config.toml: |
+    [logging]
+      dir = "/data/greptimedb/logs"
+      level = "info"
+      log_format = "text"
+
+    [storage]
+      data_home = "/data/greptimedb"
+
+    [wal]
+      dir = "/data/greptimedb/wal"
+---
+# Source: tensor-fusion/templates/vector-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tensor-fusion-sys-vector-config
+  namespace: tensor-fusion-sys
+data:
+  vector-operator.yaml: |
+    api:
+      enabled: true
+    sources:
+      metrics:
+        type: file
+        data_dir: /logs
+        include:
+          - /logs/metrics*.log
+
+      kubernetes_logs:
+        type: kubernetes_logs
+        self_node_name: "${NODE_NAME}"
+        extra_label_selector: "tensor-fusion.ai/component in (operator)"
+
+    transforms:
+      prepare_kubernetes_logs:
+        type: remap
+        inputs:
+          - kubernetes_logs
+        source: |
+          .message = .message
+          .container = .kubernetes.container_name
+          .pod = .kubernetes.pod_name
+          .namespace = .kubernetes.pod_namespace
+          .component = .kubernetes.pod_labels."tensor-fusion.ai/component"
+          del(.kubernetes)
+          del(.file)
+          del(.source_type)
+    sinks:
+      sink_greptimedb_operator_metrics:
+        type: http
+        inputs:
+          - metrics        
+        method: post
+        encoding:
+          codec: text
+        uri: "http://greptimedb-standalone.greptimedb.svc.cluster.local:4000/v1/influxdb/api/v2/write?db=public&precision=ms"
+      
+      sink_greptimedb_operator_logs:
+        type: greptimedb_logs
+        compression: gzip
+        table: tf_system_log
+        inputs:
+          - prepare_kubernetes_logs
+        endpoint: http://greptimedb-standalone.greptimedb.svc.cluster.local:4000
+        dbname: public
+
+  vector-hypervisor.yaml: |
+    api:
+      enabled: true
+    
+    sources:
+      kubernetes_logs:
+        type: kubernetes_logs
+        self_node_name: "${NODE_NAME}"
+        extra_label_selector: "tensor-fusion.ai/component in (hypervisor,worker)"
+      metrics:
+        type: file
+        data_dir: /logs
+        include:
+          - /logs/metrics.log.*
+    
+    transforms:
+      prepare_kubernetes_logs:
+        type: remap
+        inputs:
+          - kubernetes_logs
+        source: |
+          .message = .message
+          .container = .kubernetes.container_name
+          .pod = .kubernetes.pod_name
+          .namespace = .kubernetes.pod_namespace
+          .component = .kubernetes.pod_labels."tensor-fusion.ai/component"
+          del(.kubernetes)
+          del(.file)
+          del(.source_type)
+
+    sinks:
+      sink_greptimedb_hypervisor_metrics:
+        type: http
+        inputs:
+          - metrics        
+        method: post
+        encoding:
+          codec: text
+        uri: "http://greptimedb-standalone.greptimedb.svc.cluster.local:4000/v1/influxdb/api/v2/write?db=public&precision=ms"
+        
+      sink_greptimedb_hypervisor_worker_logs:
+        type: greptimedb_logs
+        compression: gzip
+        table: tf_system_log
+        inputs:
+          - prepare_kubernetes_logs
+        endpoint: http://greptimedb-standalone.greptimedb.svc.cluster.local:4000
+        dbname: public
+---
+# Source: tensor-fusion/templates/rbac-hypervisor.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tensor-fusion-hypervisor-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - pods
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - gpunodes
+  - gpunodes/status
+  - gpus
+  - gpus/status
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+---
+# Source: tensor-fusion/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tensor-fusion-sys-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - events
+  - namespaces
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - pods
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - nodes/finalizers
+  - pods/binding
+  - pods/exec
+  - pods/finalizers
+  verbs:
+  - create
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - nodes/status
+  - pods/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  - policy
+  - storage.k8s.io
+  resources:
+  - '*'
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  - deployments
+  - replicasets
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - gpunodeclasses
+  - gpunodes
+  - gpupools
+  - gpuresourcequotas
+  - gpus
+  - schedulingconfigtemplates
+  - tensorfusionclusters
+  - tensorfusionconnections
+  - tensorfusionworkloads
+  - workloadprofiles
+  - gpunodeclaims
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - gpunodeclasses/finalizers
+  - gpunodes/finalizers
+  - gpupools/finalizers
+  - gpuresourcequotas/finalizers
+  - gpus/finalizers
+  - schedulingconfigtemplates/finalizers
+  - tensorfusionclusters/finalizers
+  - tensorfusionconnections/finalizers
+  - tensorfusionworkloads/finalizers
+  - workloadprofiles/finalizers
+  - gpunodeclaims/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - gpunodeclasses/status
+  - gpunodes/status
+  - gpupools/status
+  - gpuresourcequotas/status
+  - gpus/status
+  - schedulingconfigtemplates/status
+  - tensorfusionclusters/status
+  - tensorfusionconnections/status
+  - tensorfusionworkloads/status
+  - workloadprofiles/status
+  - gpunodeclaims/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - karpenter.sh
+  resources:
+  - nodeclaims
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - karpenter.*
+  resources:
+  - '*'
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+    - authentication.k8s.io
+  resources:
+    - tokenreviews
+  verbs:
+    - create
+---
+# Source: tensor-fusion/templates/rbac-hypervisor.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tensor-fusion-hypervisor-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tensor-fusion-hypervisor-role
+subjects:
+- kind: ServiceAccount
+  name: tensor-fusion-hypervisor-sa
+  namespace: tensor-fusion-sys
+---
+# Source: tensor-fusion/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tensor-fusion-sys-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tensor-fusion-sys-role
+subjects:
+- kind: ServiceAccount
+  name: tensor-fusion-sys
+  namespace: tensor-fusion-sys
+---
+# Source: tensor-fusion/templates/admission-webhooks/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: tensor-fusion-sys-webhook
+  namespace: tensor-fusion-sys
+spec:
+  ports:
+    - port: 443
+      protocol: TCP
+      targetPort: 9443
+  selector:
+      app.kubernetes.io/name: tensor-fusion
+      app.kubernetes.io/instance: tensor-fusion-sys
+      app.kubernetes.io/component: controller
+---
+# Source: tensor-fusion/templates/alert-manager.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-manager
+  namespace: tensor-fusion-sys
+  labels:
+    tensor-fusion.ai/component: alert-manager
+    helm.sh/chart: tensor-fusion-1.5.6
+    app.kubernetes.io/version: "1.43.5"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  ports:
+    - name: http
+      protocol: TCP
+      port: 9093
+      targetPort: http
+  selector:
+    tensor-fusion.ai/component: alert-manager
+  type: ClusterIP
+  sessionAffinity: None
+  internalTrafficPolicy: Cluster
+---
+# Source: tensor-fusion/templates/alert-manager.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-manager-headless
+  namespace: tensor-fusion-sys
+  labels:
+    tensor-fusion.ai/component: alert-manager-headless
+    helm.sh/chart: tensor-fusion-1.5.6
+    app.kubernetes.io/version: "1.43.5"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  ports:
+    - name: http
+      protocol: TCP
+      port: 9093
+      targetPort: http
+  selector:
+    tensor-fusion.ai/component: alert-manager
+  clusterIP: None
+  clusterIPs:
+    - None
+  type: ClusterIP
+  sessionAffinity: None
+  internalTrafficPolicy: Cluster
+---
+# Source: tensor-fusion/templates/controller-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: tensor-fusion-sys
+  namespace: tensor-fusion-sys
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      targetPort: 8080
+  selector:
+      app.kubernetes.io/name: tensor-fusion
+      app.kubernetes.io/instance: tensor-fusion-sys
+      app.kubernetes.io/component: controller
+---
+# Source: tensor-fusion/templates/greptime-standalone.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: greptimedb-standalone
+  namespace: greptimedb
+  labels:
+    app.greptime.io/component: greptimedb-standalone
+spec:
+  selector:
+    app.greptime.io/component: greptimedb-standalone
+  ports:
+    - name: grpc
+      port: 4001
+      targetPort: 4001
+    - name: http
+      port: 4000
+      targetPort: 4000
+    - name: mysql
+      port: 4002
+      targetPort: 4002
+    - name: postgres
+      port: 4003
+      targetPort: 4003
+---
+# Source: tensor-fusion/templates/controller-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tensor-fusion-sys-controller
+  namespace: tensor-fusion-sys
+  labels:
+    tensor-fusion.ai/component: operator
+    helm.sh/chart: tensor-fusion-1.5.6
+    app.kubernetes.io/version: "1.43.5"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tensor-fusion
+      app.kubernetes.io/instance: tensor-fusion-sys
+      app.kubernetes.io/component: controller
+      tensor-fusion.ai/component: operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tensor-fusion
+        app.kubernetes.io/instance: tensor-fusion-sys
+        app.kubernetes.io/component: controller
+        tensor-fusion.ai/component: operator
+    spec:
+      serviceAccountName: tensor-fusion-sys
+      enableServiceLinks: false
+      containers:
+        - name: controller
+          image: "registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-operator:latest"
+          command:
+            - /manager
+            - -metrics-bind-address
+            - :9000
+            - -leader-elect
+            - -enable-auto-scale
+            - -enable-alert
+          livenessProbe:
+            failureThreshold: 5
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            failureThreshold: 2
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+            requests:
+              cpu: 50m
+              memory: 256Mi
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 8081
+          env:
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+            # when deploy with AutoSelect mode, GPU node is managed by Kubernetes rather than TensorFusion, thus, need to specify the label selector to generate the GPUNode custom resource
+            - name: INITIAL_GPU_NODE_LABEL_SELECTOR
+              value: "nvidia.com/gpu.present=true"
+            - name: TSDB_MYSQL_HOST
+              value: "greptimedb-standalone.greptimedb.svc.cluster.local"
+            - name: TSDB_MYSQL_PORT
+              value: "4002"
+            - name: TSDB_MYSQL_DATABASE
+              value: "public"
+            - name: TSDB_MYSQL_USER
+              value: root
+          volumeMounts:
+            - name: cert
+              readOnly: true
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+            - name: logs
+              mountPath: /logs
+            - name: cloud-vendor-credentials
+              mountPath: /tmp/secret
+              readOnly: true
+            - name: gpu-info
+              mountPath: /etc/tensor-fusion/gpu-info.yaml
+              subPath: gpu-info.yaml
+              readOnly: true
+            - name: config
+              mountPath: /etc/tensor-fusion/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: config
+              mountPath: /etc/tensor-fusion/scheduler-config.yaml
+              subPath: scheduler-config.yaml
+              readOnly: true
+        - name: vector
+          image: docker.m.daocloud.io/timberio/vector:latest-alpine
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          volumeMounts:
+            - name: logs
+              mountPath: /logs
+            - name: vector-config
+              mountPath: /etc/vector/vector.yaml
+              subPath: vector-operator.yaml
+            - name: kubernetes-logs
+              mountPath: /var/log/pods
+      volumes:
+        - name: cert
+          secret:
+            secretName: tensor-fusion-webhook-secret
+            defaultMode: 420
+            items:
+              - key: cert
+                path: tls.crt
+              - key: key
+                path: tls.key
+        - name: vector-config
+          configMap:
+            name: tensor-fusion-sys-vector-config
+            defaultMode: 420
+        - name: cloud-vendor-credentials
+          secret:
+            secretName: tf-cloud-vendor-credentials
+            defaultMode: 420
+        - configMap:
+            defaultMode: 420
+            name: tensor-fusion-sys-public-gpu-info
+          name: gpu-info
+        - configMap:
+            defaultMode: 420
+            name: tensor-fusion-sys-config
+          name: config
+        - name: logs
+          emptyDir: {}
+        - name: kubernetes-logs
+          hostPath:
+            path: /var/log/pods
+            type: DirectoryOrCreate
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: tensor-fusion.ai/component
+                operator: In
+                values:
+                - operator
+            topologyKey: kubernetes.io/hostname
+---
+# Source: tensor-fusion/templates/alert-manager.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tensor-fusion-sys-alert-manager
+  namespace: tensor-fusion-sys
+  labels:
+    tensor-fusion.ai/component: alert-manager
+    helm.sh/chart: tensor-fusion-1.5.6
+    app.kubernetes.io/version: "1.43.5"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      tensor-fusion.ai/component: alert-manager
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        tensor-fusion.ai/component: alert-manager
+        helm.sh/chart: tensor-fusion-1.5.6
+        app.kubernetes.io/version: "1.43.5"
+        app.kubernetes.io/managed-by: Helm
+    spec:
+      enableServiceLinks: false
+      volumes:
+        - name: config
+          configMap:
+            name: tensor-fusion-sys-alert-manager-config
+            defaultMode: 420
+        - name: storage
+          emptyDir: {}
+      containers:
+        - name: alertmanager
+          image: "quay.io/prometheus/alertmanager:v0.28.1"
+          args:
+            - '--storage.path=/alertmanager'
+            - '--config.file=/etc/alertmanager/alertmanager.yml'
+            - '--web.listen-address=0.0.0.0:9093'
+          ports:
+            - name: http
+              containerPort: 9093
+              protocol: TCP
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.podIP
+          resources:
+            limits:
+              cpu: 1500m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+            - name: storage
+              mountPath: /alertmanager
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+              scheme: HTTP
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+              scheme: HTTP
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+      restartPolicy: Always
+      serviceAccountName: alert-manager
+  serviceName: alert-manager-headless
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  revisionHistoryLimit: 10
+---
+# Source: tensor-fusion/templates/greptime-standalone.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tensor-fusion-sys-greptimedb-standalone
+  namespace: greptimedb
+  labels:
+    app.greptime.io/component: greptimedb-standalone
+    tensor-fusion.ai/component: greptimedb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.greptime.io/component: greptimedb-standalone
+      tensor-fusion.ai/component: greptimedb
+  template:
+    metadata:
+      labels:
+        app.greptime.io/component: greptimedb-standalone
+        tensor-fusion.ai/component: greptimedb
+    spec:
+      volumes:
+        - name: logs
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: tensor-fusion-sys-greptimedb-standalone
+            defaultMode: 420
+      containers:
+        - name: standalone
+          image: greptime-registry.cn-hangzhou.cr.aliyuncs.com/greptime/greptimedb:latest
+          args:
+            - standalone
+            - start
+            - '--rpc-bind-addr'
+            - 0.0.0.0:4001
+            - '--mysql-addr'
+            - 0.0.0.0:4002
+            - '--http-addr'
+            - 0.0.0.0:4000
+            - '--postgres-addr'
+            - 0.0.0.0:4003
+            - '--config-file'
+            - /etc/greptimedb/config.toml
+          ports:
+            - name: grpc
+              containerPort: 4001
+              protocol: TCP
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+            - name: mysql
+              containerPort: 4002
+              protocol: TCP
+            - name: postgres
+              containerPort: 4003
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 4000m
+              memory: 2Gi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: datanode
+              mountPath: /data/greptimedb
+            - name: logs
+              mountPath: /data/greptimedb/logs
+            - name: config
+              mountPath: /etc/greptimedb
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+              scheme: HTTP
+            timeoutSeconds: 1
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+              scheme: HTTP
+            timeoutSeconds: 1
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 10
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 4000
+              scheme: HTTP
+            timeoutSeconds: 1
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 60
+          imagePullPolicy: Always
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      enableServiceLinks: false
+  volumeClaimTemplates:
+    - kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata:
+        name: datanode
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+        volumeMode: Filesystem
+  serviceName: ''
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  revisionHistoryLimit: 10
+---
+# Source: tensor-fusion/templates/greptime-standalone.yaml
+# NOTICE: make sure greptimedb operator had been installed in your cluster if not enable 'installStandalone'
+# cloud mode is recommended to reduce the maintenance effort
+# ```bash
+# helm repo add greptime https://greptimeteam.github.io/helm-charts/
+# helm repo update
+# helm install greptimedb-operator greptime/greptimedb-operator -n greptimedb --create-namespace
+# ```
+---
+# Source: tensor-fusion/templates/admission-webhooks/mutating-webhook.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: tensor-fusion-sys-mutating-webhook
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: tensor-fusion-sys-webhook
+      namespace: tensor-fusion-sys
+      path: /mutate-v1-pod
+  failurePolicy: Ignore
+  name: mpod-v1.kb.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods
+  sideEffects: None
+  timeoutSeconds: 10
+# When it's progressive migration mode, remove the object selector so that all pods should be mutated 
+# it's to identify resources used by native scheduler and device plugin, two types of workload won't overlap
+
+  objectSelector:
+    matchExpressions:
+      - key: tensor-fusion.ai/enabled
+        operator: In
+        values:
+          - "true"
+

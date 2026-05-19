@@ -1,0 +1,72 @@
+[
+  {
+    "apiVersion": "admissionregistration.k8s.io/v1",
+    "kind": "MutatingWebhookConfiguration",
+    "metadata": {
+      "annotations": {
+        "meta.helm.sh/release-name": "tensor-fusion-sys",
+        "meta.helm.sh/release-namespace": "tensor-fusion-sys"
+      },
+      "creationTimestamp": "2025-09-04T07:53:30Z",
+      "generation": 6,
+      "labels": {
+        "app.kubernetes.io/managed-by": "Helm",
+        "k8slens-edit-resource-version": "v1"
+      },
+      "name": "tensor-fusion-sys-mutating-webhook",
+      "resourceVersion": "4443653",
+      "uid": "71c5bc39-5e5d-4aeb-b52b-13daf75d44f2"
+    },
+    "webhooks": [
+      {
+        "admissionReviewVersions": [
+          "v1"
+        ],
+        "clientConfig": {
+          "caBundle": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJkakNDQVJ5Z0F3SUJBZ0lSQU9JRVBET1JUTll5VitYMDRpRXoyTk13Q2dZSUtvWkl6ajBFQXdJd0R6RU4KTUFzR0ExVUVDaE1FYm1sc01UQWdGdzB5TlRBNU1EUXdOelE0TWpaYUdBOHlNVEkxTURneE1UQTNORGd5TmxvdwpEekVOTUFzR0ExVUVDaE1FYm1sc01UQlpNQk1HQnlxR1NNNDlBZ0VHQ0NxR1NNNDlBd0VIQTBJQUJOSnVPUXM5CmpxOGtFSTcyZ1JtYjdtNXk2M2hIZFR3S1duR3lzVG5KVmpKN1ZiYzU5YzFYV2xYS3Q2SUhqNW1MQjQ5TGFZTDQKV1dOcTdyayswRkduSFZhalZ6QlZNQTRHQTFVZER3RUIvd1FFQXdJQ0JEQVRCZ05WSFNVRUREQUtCZ2dyQmdFRgpCUWNEQVRBUEJnTlZIUk1CQWY4RUJUQURBUUgvTUIwR0ExVWREZ1FXQkJRd0EwYk9TaGduNU5oaVl4Z0xXZkRYCmZGUWFrakFLQmdncWhrak9QUVFEQWdOSUFEQkZBaUJDRUhMOEt3bkRkRHNxMkltRTFqTU94UzE5V0hpdC9WY1kKZnN6YzkrNEtCZ0loQU5RRTJON2xnVXR5RG5JUnZtMEwxVVRuc05QSU9uNGF0akdUbFNMbzNnQkwKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=",
+          "service": {
+            "name": "tensor-fusion-sys-webhook",
+            "namespace": "tensor-fusion-sys",
+            "path": "/mutate-v1-pod",
+            "port": 443
+          }
+        },
+        "failurePolicy": "Ignore",
+        "matchPolicy": "Equivalent",
+        "name": "mpod.tensor-fusion.ai",
+        "namespaceSelector": {},
+        "objectSelector": {
+          "matchExpressions": [
+            {
+              "key": "tensor-fusion.ai/enabled",
+              "operator": "In",
+              "values": [
+                "true"
+              ]
+            }
+          ]
+        },
+        "reinvocationPolicy": "Never",
+        "rules": [
+          {
+            "apiGroups": [
+              ""
+            ],
+            "apiVersions": [
+              "v1"
+            ],
+            "operations": [
+              "CREATE"
+            ],
+            "resources": [
+              "pods"
+            ],
+            "scope": "*"
+          }
+        ],
+        "sideEffects": "None",
+        "timeoutSeconds": 10
+      }
+    ]
+  }
+]

@@ -1,0 +1,1592 @@
+apiVersion: v1
+items:
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-16T07:45:09Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 3
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: 2-1-1-pytorch-soft-remote
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: 2-1-1-pytorch-soft-remote
+      uid: 8850c10d-ade2-4604-8975-a3c6933ccd08
+    resourceVersion: "62732916"
+    uid: 9f856123-5a06-40ee-901e-c0b6fecb06f0
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: 2Gi
+      requests:
+        compute: "10"
+        tflops: "0"
+        vram: 1Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-05-14T10:11:34Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: a421a6a48b9eb6b9
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-16T07:45:22Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: 2-1-2-pytorch-mnist-soft-remote
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: 2-1-2-pytorch-mnist-soft-remote
+      uid: a9e76883-3568-457a-ad43-ed4b74de9c4a
+    resourceVersion: "61669567"
+    uid: 07a4b35e-6da9-408b-ae55-711cef2f461c
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: 15Gi
+      requests:
+        compute: "10"
+        tflops: "0"
+        vram: 1Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-23T08:39:23Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: b60e058758783363
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-16T07:04:19Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: 2-1-3-pytorch-deepseek-soft-remote
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: 2-1-3-pytorch-deepseek-soft-remote
+      uid: 517d2db5-f8cb-4ef4-bc97-41980d15f587
+    resourceVersion: "61669579"
+    uid: a859a7ed-6d5e-43b2-88af-a07052ffdf67
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: 15Gi
+      requests:
+        compute: "20"
+        tflops: "0"
+        vram: 2Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-17T07:54:50Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 0834ccdc88b1a637
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-16T07:04:26Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 4
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: 2-2-1-ollama-soft-remote
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: 2-2-1-ollama-soft-remote
+      uid: b829a16f-d118-43e2-a238-2c5961df5e8e
+    resourceVersion: "61669594"
+    uid: 9dac78df-9743-4b98-8cd5-623e2618398f
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: 24Gi
+      requests:
+        compute: "50"
+        tflops: "0"
+        vram: 10Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-20T10:14:06Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: cbbeca59dcb9d525
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-14T06:32:04Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 3
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: 2.1.3-pytorch-qwen-hard-remote
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: 2.1.3-pytorch-qwen-hard-remote
+      uid: 6fa97912-0fb5-4169-a884-2f465a426cd8
+    resourceVersion: "61669558"
+    uid: 4749cf45-5683-4616-9783-38c603a9b8da
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isolation: hard
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: 15Gi
+      requests:
+        compute: "100"
+        tflops: "0"
+        vram: 4Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-14T07:12:14Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: cd44df4564982c31
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2025-12-17T01:32:20Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 2
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: carl-test-pytorch
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: carl-test-pytorch
+      uid: 3380ec73-f06a-4363-ad0b-7d3a6a5517c3
+    resourceVersion: "61669564"
+    uid: 8a831b26-3337-4550-af3b-e3f9beb182c8
+  spec:
+    autoScalingConfig:
+      autoSetResources:
+        enable: true
+    gpuCount: 1
+    gpuModel: NVIDIA GeForce RTX 3090
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "0"
+        tflops: 35600m
+        vram: 1Gi
+      requests:
+        compute: "0"
+        tflops: 1m
+        vram: 1Gi
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-25T02:07:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    - lastTransitionTime: "2026-01-08T12:39:34Z"
+      message: VRAM scaled down due to (1Gi) above upper bound (13142648)
+      reason: OutOfEstimatedBound
+      status: "True"
+      type: RecommendationProvided
+    - lastTransitionTime: "2026-01-08T12:39:34Z"
+      message: VRAM scaled down due to (1Gi) above upper bound (13142648)
+      reason: OutOfEstimatedBound
+      status: "True"
+      type: ResourceUpdate
+    phase: Pending
+    podTemplateHash: d171fe14b5bce727
+    recommendation:
+      limits:
+        compute: "0"
+        tflops: 35600m
+        vram: 11500k
+      requests:
+        compute: "0"
+        tflops: 1m
+        vram: 11500k
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-01-28T06:40:44Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: mlperf-whisper-vllm-cuda129-remote-limit-50
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: mlperf-whisper-vllm-cuda129-remote-limit-50
+      uid: e5680f38-b19d-4c32-9cd4-356cb0be1554
+    resourceVersion: "61669580"
+    uid: 07254509-3d82-4a6b-b275-f48625421398
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isolation: soft
+    poolName: tensor-fusion-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "0"
+        tflops: 17800m
+        vram: 1Gi
+      requests:
+        compute: "0"
+        tflops: 17800m
+        vram: 256Mi
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-25T02:07:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 6c744c8f5cd3f507
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-01-28T06:40:05Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: mlperf-whisper-vllm-cuda129-remote-limit-50-premmed
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: mlperf-whisper-vllm-cuda129-remote-limit-50-premmed
+      uid: 08fc1991-a4a6-4823-9dbe-22778fcbe9f7
+    resourceVersion: "61669595"
+    uid: 3bf9f5b2-dd4b-4e81-9d9e-e4e70619a956
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isolation: soft
+    poolName: tensor-fusion-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "0"
+        tflops: 17800m
+        vram: 1Gi
+      requests:
+        compute: "0"
+        tflops: 17800m
+        vram: 256Mi
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-25T02:07:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 6c744c8f5cd3f507
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2025-11-18T10:32:22Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 5
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: pytorch-bench
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: pytorch-bench
+      uid: 90374531-67f7-4c6f-b9e6-bfddf2f07e6f
+    resourceVersion: "61669559"
+    uid: c30f3313-5604-4b21-9cb8-e1af50220b91
+  spec:
+    autoScalingConfig:
+      autoSetResources:
+        enable: true
+        targetResource: all
+    gpuCount: 1
+    gpuIndices:
+    - 0
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "0"
+        tflops: 35600m
+        vram: 23Gi
+      requests:
+        compute: "0"
+        tflops: "20"
+        vram: 3Gi
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-25T02:07:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    - lastTransitionTime: "2025-11-18T10:40:23Z"
+      message: VRAM scaled down due to (1Gi) above upper bound (13142648)
+      reason: OutOfEstimatedBound
+      status: "True"
+      type: RecommendationProvided
+    - lastTransitionTime: "2025-12-11T06:13:57Z"
+      message: Compute change (0) within threshold (0), VRAM change (0) within threshold
+        (107374182), no update performed
+      reason: InsideUpdateThreshold
+      status: "True"
+      type: ResourceUpdate
+    phase: Pending
+    podTemplateHash: acb82e6538b9a5dd
+    recommendation:
+      limits:
+        compute: "0"
+        tflops: "71"
+        vram: 46M
+      requests:
+        compute: "0"
+        tflops: "2"
+        vram: 11500k
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-05-14T10:57:39Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 3
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: qwen25-3b-server
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: qwen25-3b-server
+      uid: c7d830f2-3230-4375-a486-b755e801d45b
+    resourceVersion: "62740376"
+    uid: fcc787b0-ba79-444a-ba05-d77b08977b8d
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    gpuIndices:
+    - 1
+    isLocalGPU: true
+    isolation: hard
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: 24Gi
+      requests:
+        compute: "100"
+        tflops: "0"
+        vram: 24Gi
+    sidecarWorker: true
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-05-14T11:33:40Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: ad40ae075f3ac5a9
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2025-12-17T11:39:51Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 9
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: sglang-local-debug
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: sglang-local-debug
+      uid: e4fceee0-a642-4fca-b2be-df588085b8be
+    resourceVersion: "61669596"
+    uid: 7631f51c-51db-463f-bb56-2463beb563d0
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "0"
+        tflops: 35600m
+        vram: 24Gi
+      requests:
+        compute: "0"
+        tflops: 1m
+        vram: 1Gi
+    sidecarWorker: true
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-25T02:07:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: da5f2df4b49fe83b
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-01-20T08:52:05Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: static-web
+    namespace: default
+    resourceVersion: "61669570"
+    uid: d2700797-a12b-46b5-8ecd-d017f0e6525b
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 2
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-shared
+    qos: high
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: "0"
+      requests:
+        compute: "100"
+        tflops: "0"
+        vram: "0"
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-25T02:07:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 6306496265fe840e
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2025-11-14T14:17:15Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: test-one-label5
+    namespace: default
+    resourceVersion: "61669592"
+    uid: 85993c88-4b9e-4d94-9002-c7fd57b81f1e
+  spec:
+    autoScalingConfig:
+      autoSetResources: {}
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-shared
+    qos: high
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: "0"
+      requests:
+        compute: "100"
+        tflops: "0"
+        vram: "0"
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-25T02:07:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 1e52d5499af224c1
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-01-13T08:10:08Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 6
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: test-paritition-deployment
+    namespace: default
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: test-paritition-deployment
+      uid: 24660630-a8a8-44b2-9463-9d94c0ee6cfe
+    resourceVersion: "61669560"
+    uid: 6511267f-e3f2-4411-bd4e-5ae6becf9e69
+  spec:
+    autoScalingConfig:
+      autoSetResources: {}
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: partitioned
+    poolName: tensor-fusion-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "0"
+        tflops: "0"
+        vram: "0"
+      requests:
+        compute: "0"
+        tflops: "0"
+        vram: 1Gi
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-25T02:07:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 15c3ea442e7ca1b2
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2025-12-06T03:19:39Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 3
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: mlperf-bert-99-pytorch-cuda121-local-limit50
+    namespace: mlperf
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: mlperf-bert-99-pytorch-cuda121-local-limit50
+      uid: 2436e3e4-363f-478e-8434-cfc9f27d4beb
+    resourceVersion: "61669581"
+    uid: 1b44709d-efe7-494a-a73c-85297303d44f
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "0"
+        tflops: 71200m
+        vram: 12Gi
+      requests:
+        compute: "0"
+        tflops: 100m
+        vram: 256Mi
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-25T02:07:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    - lastTransitionTime: "2025-12-06T03:23:37Z"
+      message: VRAM scaled down due to (2048373350) above upper bound (13142648)
+      reason: OutOfEstimatedBound
+      status: "True"
+      type: RecommendationProvided
+    - lastTransitionTime: "2025-12-06T03:23:37Z"
+      message: VRAM scaled up due to (256Mi) below lower bound (922447665)
+      reason: OutOfEstimatedBound
+      status: "True"
+      type: ResourceUpdate
+    phase: Pending
+    podTemplateHash: 3cae06443f1bf9d3
+    recommendation:
+      limits:
+        compute: "0"
+        tflops: 35600m
+        vram: 552M
+      requests:
+        compute: "0"
+        tflops: 100m
+        vram: 11500k
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2025-12-06T03:08:48Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 3
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: mlperf-bert-99-pytorch-cuda129-local-limit50
+    namespace: mlperf
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: mlperf-bert-99-pytorch-cuda129-local-limit50
+      uid: 7f7452d4-3217-40f7-ae7f-c926ebaa7e5a
+    resourceVersion: "61669582"
+    uid: 771d78a4-747a-413c-8b43-6579fb231d70
+  spec:
+    autoScalingConfig:
+      autoSetResources:
+        enable: true
+        targetResource: all
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "0"
+        tflops: 35600m
+        vram: 12Gi
+      requests:
+        compute: "0"
+        tflops: 100m
+        vram: 256Mi
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-25T02:07:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    - lastTransitionTime: "2025-12-06T04:14:37Z"
+      message: VRAM scaled down due to (1Gi) above upper bound (13142648)
+      reason: OutOfEstimatedBound
+      status: "True"
+      type: RecommendationProvided
+    - lastTransitionTime: "2025-12-06T04:14:37Z"
+      message: Compute change (0) within threshold (0), VRAM change (0) within threshold
+        (107374182), no update performed
+      reason: InsideUpdateThreshold
+      status: "True"
+      type: ResourceUpdate
+    phase: Pending
+    podTemplateHash: b7ba44d78c256954
+    recommendation:
+      limits:
+        compute: "0"
+        tflops: "35"
+        vram: "27599999"
+      requests:
+        compute: "0"
+        tflops: "1"
+        vram: 11500k
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-20T07:51:40Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: 2-2-1-ollama-soft-remote-test
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: 2-2-1-ollama-soft-remote-test
+      uid: 4c1fe604-3cae-44d3-9ccd-eaa41ac71864
+    resourceVersion: "61669549"
+    uid: 93be934b-deca-4df3-b05e-2c2d5ec2d0cf
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: 10Gi
+      requests:
+        compute: "80"
+        tflops: "0"
+        vram: 2Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-20T07:56:07Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 23156d3fb2b49ede
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-23T09:42:11Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 2
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: tc-cuda-graph-stress
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: tc-cuda-graph-stress
+      uid: 5011d11c-c14b-4b47-9335-bd9945972a4d
+    resourceVersion: "61669561"
+    uid: e9034d8e-6746-4c07-84e8-6cb23ea0ea17
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "60"
+        tflops: "0"
+        vram: 24Gi
+      requests:
+        compute: "50"
+        tflops: "0"
+        vram: 128Mi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-23T10:04:20Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: e9c5f1f618d9cc6b
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-14T07:48:34Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 4
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: tc-soft-2-2-1-pytorch
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: tc-soft-2-2-1-pytorch
+      uid: e3a87ed0-02e3-4e25-a700-00965e4de104
+    resourceVersion: "61669568"
+    uid: 995c0cd6-dd11-4df2-be37-9b1f38dee309
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: 15Gi
+      requests:
+        compute: "50"
+        tflops: "0"
+        vram: 2Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-27T01:40:35Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: fe7b61894c127677
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-15T07:58:49Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: tc-soft-2-3-1-ollama
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: tc-soft-2-3-1-ollama
+      uid: 33ebc332-2dea-48bf-b8f2-2c52205b9eb4
+    resourceVersion: "61669583"
+    uid: 3a7987b5-7b48-403b-96bf-21be8eb97670
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: 20Gi
+      requests:
+        compute: "80"
+        tflops: "0"
+        vram: 2Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-16T02:01:41Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: d0e947e7b8d16608
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-15T06:15:55Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: tc-soft-2-4-1-gemm-10g
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: tc-soft-2-4-1-gemm-10g
+      uid: 4794d9e7-54e8-45e9-ac88-c1855675ee85
+    resourceVersion: "61669562"
+    uid: bfc6c232-37f8-4517-8c54-ef406b72ba9a
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "60"
+        tflops: "0"
+        vram: 10Gi
+      requests:
+        compute: "50"
+        tflops: "0"
+        vram: 2Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-15T06:53:36Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 71f518bf863ef7bf
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-28T06:59:52Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: vllm-ascend
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: vllm-ascend
+      uid: 0c08639f-ef66-435b-a93a-618d8a92b25d
+    resourceVersion: "61676796"
+    uid: cd6e9298-6dbe-44e6-b5f7-060334c7e114
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    gpuModel: Ascend 310P3
+    isLocalGPU: true
+    isolation: shared
+    poolName: tensor-fusion-shared
+    qos: high
+    resources:
+      limits:
+        compute: "0"
+        tflops: "22"
+        vram: 21527Mi
+      requests:
+        compute: "0"
+        tflops: "22"
+        vram: 21527Mi
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:43:11Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: fe5b3550cebf0622
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-09T11:22:00Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 2
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: vllm-ascend-parttion
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: vllm-ascend-parttion
+      uid: 347452ca-c715-47b1-bf46-d728a975d0af
+    resourceVersion: "61677298"
+    uid: ef4f0a79-4cae-45d7-bca5-6d60bfab26bc
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    gpuModel: Ascend 310P3
+    isLocalGPU: true
+    isolation: partitioned
+    poolName: tensor-fusion-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "50"
+        tflops: "0"
+        vram: "0"
+      requests:
+        compute: "10"
+        tflops: "0"
+        vram: "0"
+    vendor: Ascend
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:48:20Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: a784b57f03f48041
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-29T05:40:08Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+    name: vllm-ascend-remote
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: vllm-ascend-remote
+      uid: 8936e3d0-ddc7-4fad-812a-6889d107c104
+    resourceVersion: "61676693"
+    uid: 306614b9-d345-4fd1-b58d-535082483363
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    gpuModel: Ascend 310P3
+    isolation: shared
+    poolName: tensor-fusion-shared
+    qos: high
+    resources:
+      limits:
+        compute: "0"
+        tflops: "22"
+        vram: 21527Mi
+      requests:
+        compute: "0"
+        tflops: "22"
+        vram: 21527Mi
+    vendor: Ascend
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:41:01Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 227c2fbac08b17d9
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-05-14T11:24:44Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 2
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: vllm-hard-local-nolimit
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: vllm-hard-local-nolimit
+      uid: 6575b461-9a01-4e88-bb63-82261ca4ef15
+    resourceVersion: "62829117"
+    uid: cb9e858f-647e-4b80-abcd-212e41390970
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    gpuIndices:
+    - 1
+    isLocalGPU: true
+    isolation: hard
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "100"
+        tflops: "0"
+        vram: 24Gi
+      requests:
+        compute: "100"
+        tflops: "0"
+        vram: 24Gi
+    sidecarWorker: true
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-05-15T10:24:26Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: ad40ae075f3ac5a9
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-03-25T11:24:27Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 3
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: vllm-nvidia
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: vllm-nvidia
+      uid: ca0d1816-e8c3-4766-8b34-9d3092176b11
+    resourceVersion: "61678217"
+    uid: 5cf6640e-81db-441a-91cd-711186e67243
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    gpuModel: NVIDIA GeForce RTX 3090
+    isLocalGPU: true
+    isolation: shared
+    poolName: tensor-fusion-nvidia-shared
+    qos: high
+    resources:
+      limits:
+        compute: "0"
+        tflops: "71"
+        vram: 24Gi
+      requests:
+        compute: "0"
+        tflops: "71"
+        vram: 24Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:57:50Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: f3d6aeaeaf76ec7e
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-03-25T11:01:55Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 10
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: vllm-nvidia-hard
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: vllm-nvidia-hard
+      uid: f071f45d-5035-4aa1-a491-57d74ce6cad8
+    resourceVersion: "62539737"
+    uid: 286cb4ad-23a3-4660-aee9-6b4cc928636c
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: hard
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "70"
+        tflops: "0"
+        vram: 10Gi
+      requests:
+        compute: "60"
+        tflops: "0"
+        vram: 1Gi
+    sidecarWorker: true
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-05-12T07:56:04Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 134ec6d58a7f9d84
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-03-25T11:03:24Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 6
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: vllm-nvidia-hard-remote
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: vllm-nvidia-hard-remote
+      uid: 40428eef-aa17-451f-81d9-1aed8bcb364c
+    resourceVersion: "62626915"
+    uid: 25f47d4e-3b08-4800-b953-015e5eeaaacc
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 2
+    isolation: hard
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "70"
+        tflops: "0"
+        vram: 10Gi
+      requests:
+        compute: "60"
+        tflops: "0"
+        vram: 5Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-05-13T06:37:35Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 413a6c8528fb729f
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-28T09:00:27Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: vllm-nvidia-remote
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: vllm-nvidia-remote
+      uid: 97b3b9f1-ae45-47fe-886f-83cc078c15ac
+    resourceVersion: "61678506"
+    uid: e36cd70f-f55d-4b27-bd6b-a4de284ed287
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    gpuModel: NVIDIA GeForce RTX 3090
+    isolation: shared
+    poolName: tensor-fusion-nvidia-shared
+    qos: high
+    resources:
+      limits:
+        compute: "0"
+        tflops: "71"
+        vram: 24Gi
+      requests:
+        compute: "0"
+        tflops: "71"
+        vram: 24Gi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T06:00:38Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 9fd701c7675e1819
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-07T07:09:37Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 3
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: vllm-soft-local-nolimit
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: vllm-soft-local-nolimit
+      uid: 45bbade4-cae1-4d98-a15b-71ad56020680
+    resourceVersion: "61669590"
+    uid: 8207c459-cd7e-420e-a57d-17cc776cf5e7
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 1
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "60"
+        tflops: "0"
+        vram: 4Gi
+      requests:
+        compute: "50"
+        tflops: "0"
+        vram: 256Mi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-12T06:23:41Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 74b1b43de97b2ba1
+    workerCount: 0
+- apiVersion: tensor-fusion.ai/v1
+  kind: TensorFusionWorkload
+  metadata:
+    annotations:
+      tensor-fusion.ai/workload-mode: dynamic
+    creationTimestamp: "2026-04-12T06:24:21Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 4
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+    name: vllm-soft-test
+    namespace: tensor-fusion-sys
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: vllm-soft-test
+      uid: 6833dc97-df52-4150-a272-42fe2001d166
+    resourceVersion: "61677581"
+    uid: 7da71679-0f37-4eae-af9d-87e44064afab
+  spec:
+    autoScalingConfig: {}
+    gpuCount: 2
+    isLocalGPU: true
+    isolation: soft
+    poolName: tensor-fusion-nvidia-shared
+    qos: medium
+    resources:
+      limits:
+        compute: "30"
+        tflops: "0"
+        vram: 12Gi
+      requests:
+        compute: "20"
+        tflops: "0"
+        vram: 512Mi
+    vendor: NVIDIA
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:51:08Z"
+      message: Workload is scaled to zero
+      reason: ScaledToZero
+      status: "False"
+      type: Ready
+    phase: Pending
+    podTemplateHash: 3482d6c51072993a
+    workerCount: 0
+kind: List
+metadata:
+  resourceVersion: ""

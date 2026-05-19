@@ -1,0 +1,139 @@
+apiVersion: v1
+items:
+- apiVersion: tensor-fusion.ai/v1
+  kind: GPU
+  metadata:
+    annotations:
+      tensor-fusion.ai/last-sync: "2026-05-15T10:20:28Z"
+      tensor-fusion.ai/virtualization-capabilities: '{"SupportsPartitioning":false,"SupportsSoftIsolation":true,"SupportsHardIsolation":true,"SupportsSnapshot":true,"SupportsMetrics":true,"SupportsRemoting":true,"MaxPartitions":0,"MaxWorkersPerDevice":64}'
+    creationTimestamp: "2026-05-15T10:15:21Z"
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+      tensor-fusion.ai/managed-by: ubuntu
+    name: gpu-337d5efe-90a4-32c4-afcb-78ea5e3a5606
+    ownerReferences:
+    - apiVersion: tensor-fusion.ai/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: GPUNode
+      name: ubuntu
+      uid: e70f5834-84e5-47c7-b4d3-71163f53df2c
+    resourceVersion: "62828868"
+    uid: 672e45d7-e9f1-4b8a-9207-67de2836a23b
+  status:
+    available:
+      compute: "0"
+      tflops: "71"
+      vram: 24Gi
+    capacity:
+      compute: "0"
+      tflops: "71"
+      vram: 24Gi
+    gpuModel: NVIDIA GeForce RTX 3090
+    index: 0
+    isolationMode: hard
+    message: managed
+    nodeSelector:
+      kubernetes.io/hostname: ubuntu
+    numaNode: -1
+    phase: Running
+    topology:
+      peers:
+      - linkType: NUMA
+        peerGPUUUID: gpu-f5d00867-cc01-0631-8d51-14394632047c
+        tier: 1
+    usedBy: tensor-fusion
+    uuid: gpu-337d5efe-90a4-32c4-afcb-78ea5e3a5606
+    vendor: NVIDIA
+- apiVersion: tensor-fusion.ai/v1
+  kind: GPU
+  metadata:
+    annotations:
+      tensor-fusion.ai/last-sync: "2026-05-15T10:20:28Z"
+      tensor-fusion.ai/virtualization-capabilities: '{"SupportsPartitioning":false,"SupportsSoftIsolation":true,"SupportsHardIsolation":true,"SupportsSnapshot":true,"SupportsMetrics":true,"SupportsRemoting":true,"MaxPartitions":0,"MaxWorkersPerDevice":64}'
+    creationTimestamp: "2026-05-15T10:15:21Z"
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+      tensor-fusion.ai/managed-by: ubuntu
+    name: gpu-f5d00867-cc01-0631-8d51-14394632047c
+    ownerReferences:
+    - apiVersion: tensor-fusion.ai/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: GPUNode
+      name: ubuntu
+      uid: e70f5834-84e5-47c7-b4d3-71163f53df2c
+    resourceVersion: "62829131"
+    uid: 8a6d26f3-5fdd-472a-808e-2d3560d2b87e
+  status:
+    available:
+      compute: "0"
+      tflops: "71"
+      vram: 24Gi
+    capacity:
+      compute: "0"
+      tflops: "71"
+      vram: 24Gi
+    gpuModel: NVIDIA GeForce RTX 3090
+    index: 1
+    isolationMode: hard
+    message: managed
+    nodeSelector:
+      kubernetes.io/hostname: ubuntu
+    numaNode: -1
+    phase: Running
+    topology:
+      peers:
+      - linkType: NUMA
+        peerGPUUUID: gpu-337d5efe-90a4-32c4-afcb-78ea5e3a5606
+        tier: 1
+    usedBy: tensor-fusion
+    uuid: gpu-f5d00867-cc01-0631-8d51-14394632047c
+    vendor: NVIDIA
+- apiVersion: tensor-fusion.ai/v1
+  kind: GPU
+  metadata:
+    annotations:
+      tensor-fusion.ai/last-sync: "2026-05-15T10:20:28Z"
+      tensor-fusion.ai/virtualization-capabilities: '{"SupportsPartitioning":true,"SupportsSoftIsolation":false,"SupportsHardIsolation":false,"SupportsSnapshot":false,"SupportsMetrics":true,"SupportsRemoting":false,"MaxPartitions":7,"MaxWorkersPerDevice":7}'
+    creationTimestamp: "2026-04-09T09:00:31Z"
+    generation: 1
+    labels:
+      tensor-fusion.ai/gpupool: tensor-fusion-shared
+      tensor-fusion.ai/managed-by: kylin-pc
+    name: npu-2106030675zepc001725-0
+    ownerReferences:
+    - apiVersion: tensor-fusion.ai/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: GPUNode
+      name: kylin-pc
+      uid: 814d9ff6-fe33-474b-915c-9d1220da3ca1
+    resourceVersion: "62828861"
+    uid: 2300f892-aa34-4e7a-9a76-cc9d0a0c8ad3
+  status:
+    available:
+      compute: "0"
+      tflops: "22"
+      vram: 21527Mi
+    capacity:
+      compute: "0"
+      tflops: "22"
+      vram: 21527Mi
+    gpuModel: Ascend 310P3
+    index: 0
+    isolationMode: partitioned
+    message: managed
+    nodeSelector:
+      kubernetes.io/hostname: kylin-pc
+    numaNode: -1
+    phase: Running
+    topology: {}
+    usedBy: tensor-fusion
+    uuid: npu-2106030675zepc001725-0
+    vendor: Ascend
+kind: List
+metadata:
+  resourceVersion: ""

@@ -1,0 +1,504 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"annotations":{"controller-gen.kubebuilder.io/version":"v0.16.4"},"name":"schedulingconfigtemplates.tensor-fusion.ai"},"spec":{"group":"tensor-fusion.ai","names":{"kind":"SchedulingConfigTemplate","listKind":"SchedulingConfigTemplateList","plural":"schedulingconfigtemplates","singular":"schedulingconfigtemplate"},"scope":"Cluster","versions":[{"additionalPrinterColumns":[{"jsonPath":".spec.placement.mode","name":"Mode","type":"string"},{"jsonPath":".spec.placement.allowLocalGPU","name":"Allow Local GPU","type":"string"},{"jsonPath":".spec.hypervisor.autoFreezeAndResume.autoFreeze.enable","name":"AutoFreeze","type":"string"}],"name":"v1","schema":{"openAPIV3Schema":{"description":"SchedulingConfigTemplate is the Schema for the schedulingconfigtemplates API.","properties":{"apiVersion":{"description":"APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources","type":"string"},"kind":{"description":"Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds","type":"string"},"metadata":{"type":"object"},"spec":{"description":"Place the workload to right nodes and scale smart.","properties":{"hypervisor":{"description":"single GPU device multi-process queuing and fair scheduling with QoS constraint","properties":{"autoFreezeAndResume":{"description":"additional layer to save VRAM, auto-freeze memory and cool down to RAM and Disk\nHypervisor will monitor and trigger freeze of inactive workers, Operator should mark them as scaled-to-zero and release the GPU pool resources, don't scale down CPU client part, so that they can continue to serve the traffic or scale down by other auto-scaling solutions like KEDA/KNative","properties":{"autoFreeze":{"items":{"properties":{"enable":{"type":"boolean"},"freezeToDiskTTL":{"type":"string"},"freezeToMemTTL":{"type":"string"},"qos":{"enum":["low","medium","high","critical"],"type":"string"}},"type":"object"},"type":"array"},"intelligenceWarmup":{"properties":{"enable":{"type":"boolean"},"historyDataPeriod":{"type":"string"},"model":{"type":"string"},"predictionPeriod":{"type":"string"}},"type":"object"}},"type":"object"},"elasticRateLimitParameters":{"description":"Hypervisor will move low priority jobs to pending queue if GPU is full\nThis config can adjust hypervisor's queueing behavior to balance the co-scheduling CUDA calls","properties":{"burstWindow":{"description":"Burst window to control token bucket Min/Max (currentCapacity = burstWindow x currentRefillRate)","type":"string"},"capacityMax":{"type":"string"},"capacityMin":{"description":"token bucket min and max","type":"string"},"filterAlpha":{"description":"Filter ineffective requests from rate limit, 0.0 to 1.0","type":"string"},"integralDecayFactor":{"description":"Decay factor for integral term in PID controller, to avoid integral windup","type":"string"},"kd":{"type":"string"},"ki":{"description":"PID controller parameters","type":"string"},"kp":{"type":"string"},"maxRefillRate":{"description":"Refill rate is controlled by PID controller, adjusted by current utilization","type":"string"},"minRefillRate":{"type":"string"}},"type":"object"},"multiProcessQueuingParameters":{"description":"For differentiate QoS levels, ensure critical and high QoS workloads on same GPU card getting more computing resources","properties":{"coefficientHigh":{"type":"string"},"coefficientLow":{"description":"Coefficient for scale down when resource contention happens","type":"string"},"coefficientMedium":{"type":"string"},"computingThresholdForPreempt":{"description":"Condition for triggering scale down when usage is above ComputingThresholdForPreempt","type":"string"},"computingThresholdForResume":{"description":"Condition for triggering scale up when usage is below ComputingThresholdForResume","type":"string"},"slowStartRatio":{"description":"When avg utilization \u003c ComputingThresholdForResume and last for more than TriggerResumeDuration\nUse following formula to scale up:\nCase #1 If all process has same QoS level, and cur_limit \u003c= limit, fast resume to limit\nCase #2 Else, Max(limit, Min(cur_limit * 1/CoEfficient * SlowStartRatio, cur_limit * 1.2))","type":"string"},"triggerPreemptDuration":{"type":"string"},"triggerResumeDuration":{"type":"string"}},"type":"object"}},"type":"object"},"placement":{"description":"place the client or worker to best matched nodes","properties":{"allowUsingLocalGPU":{"default":true,"type":"boolean"},"gpuFilters":{"items":{"description":"GPUFilter is to select eligible GPUs for scheduling.\n\nexample:\n```yaml\n- type: avoidTooMuchConnectionsOnSameGPU\nparams:\n\n\tconnectionNum: 150\n\n- type: avoidDifferentZone\nparams:\n\n\t# by default, GPU worker will be scheduled into the same zone as CPU Client Pod to align AZ and improve performance\n\ttopologyKey: topology.kubernetes.io/zone\n\n```","properties":{"params":{"type":"object","x-kubernetes-preserve-unknown-fields":true},"type":{"type":"string"}},"type":"object"},"type":"array"},"mode":{"default":"NodeCompactGPULowLoad","enum":["CompactFirst","LowLoadFirst","NodeCompactGPULowLoad"],"type":"string"}},"required":["mode"],"type":"object"},"reBalancer":{"description":"avoid hot GPU devices and continuously balance the workload\nimplemented by mark GPU as hot and trigger evict for re-scheduling\nThe hot GPUs will get lower priority for scheduling","properties":{"enable":{"type":"boolean"},"interval":{"type":"string"},"reBalanceCoolDownTime":{"type":"string"},"threshold":{"properties":{"matchAny":{"type":"object","x-kubernetes-preserve-unknown-fields":true}},"type":"object"}},"type":"object"},"verticalScalingRules":{"description":"scale the workload based on the usage and traffic","items":{"properties":{"autoScaling":{"properties":{"autoSetResources":{"description":"Adjust baseline requests and limits to match the actual usage using recent metrics","properties":{"enable":{"type":"boolean"},"historyDataPeriod":{"description":"How much time back TSDB have to be queried to get historical metrics. Default: 2h","type":"string"},"initialDelayPeriod":{"description":"When workload is created, wait for this period to collect enough metrics before scaling, default: 30m","type":"string"},"interval":{"description":"How often to evaluate the scaling operation, default: same as global config's auto scaling interval","type":"string"},"lowerBoundComputePercentile":{"description":"Tflops usage percentile that will be used for the lower bound on tflops recommendation. Default: 0.5\nWhen QoS is low or medium, request set to lower bound","type":"string"},"lowerBoundVRAMPercentile":{"description":"Vram usage percentile that will be used for the lower bound on vram recommendation. Default: 0.5","type":"string"},"marginFraction":{"description":"Fraction of usage added as the safety margin to the recommended request. Default: 0.15","type":"string"},"maxComputeResourcesRatio":{"description":"Max scaling ratio to original resources, e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi, default: 10.0","type":"string"},"maxVRAMResourcesRatio":{"description":"Max scaling ratio to original resources, e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi, default: 5.0","type":"string"},"minComputeResourcesRatio":{"description":"Min scaling ratio to original resources, e.g. request 10Gi, ratio 0.5, scale down limit to 5Gi, default: 0.1\nThis ratio only apply to tflops/compute request rather than limit, to avoid performance downgrade when not used for a long time","type":"string"},"minVRAMResourcesRatio":{"description":"Min scaling ratio to original resources, e.g. request 10Gi, ratio 0.5, scale down limit to 5Gi, default: 0.2","type":"string"},"targetComputePercentile":{"description":"Tflops usage percentile that will be used as a base for tflops target recommendation. Default: 0.95","type":"string"},"targetResource":{"description":"Target resource to scale, such as \"compute\", \"vram\", or \"all\" by default","type":"string"},"targetVRAMPercentile":{"description":"Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.95\nThe requests will be set to match this percentile of the actual usage, but won't change when current requests is in lower and upper bounds\nWhen QoS is high, set request to target","type":"string"},"updateThreshold":{"description":"Only when the difference between the recommended request and the current request is greater than this threshold, the request will be updated. Default: 0.1\nThis value can't greater than MarginFraction, otherwise no update will be made since always inside the threshold after multiplying MarginFraction.","type":"string"},"upperBoundComputePercentile":{"description":"Tflops usage percentile that will be used for the upper bound on tflops recommendation. Default: 0.99\nLimit will be set to upper bound, when QoS is critical, also set limit request to upper bound","type":"string"},"upperBoundVRAMPercentile":{"description":"Vram usage percentile that will be used for the upper bound on vram recommendation. Default: 0.99","type":"string"}},"type":"object"},"cronScalingRules":{"description":"CronScalingRules defines a list of CronScaling rules used to schedule scaling actions based on cron expressions.","items":{"description":"CronScalingRule defines the rule for scaling resources based on a cron schedule.\nIt allows enabling/disabling the scaler, specifying the time window for scaling,\nand configuring the desired resources and replicas during the scheduled period.","properties":{"desiredResources":{"description":"DesiredResources specifies the target resources to scale to during the schedule.","properties":{"limits":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"},"requests":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"}},"required":["limits","requests"],"type":"object"},"enable":{"description":"Enable specifies whether the cron scaler is enabled.","type":"boolean"},"end":{"description":"End is the end time for the scaling schedule, in cron format.","type":"string"},"name":{"description":"Name is the identifier for the cron scaler.","type":"string"},"start":{"description":"Start is the start time for the scaling schedule, in cron format.","type":"string"}},"type":"object"},"type":"array"},"externalScaler":{"properties":{"apiKeySecretRef":{"description":"API key will be set into the request header as \"Authorization: Bearer \u003capi key\u003e\"","properties":{"name":{"description":"name is unique within a namespace to reference a secret resource.","type":"string"},"namespace":{"description":"namespace defines the space within which the secret name must be unique.","type":"string"}},"type":"object","x-kubernetes-map-type":"atomic"},"enable":{"type":"boolean"},"initialDelayPeriod":{"type":"string"},"interval":{"description":"How often to evaluate the scaling operation, default: same as global config's auto scaling interval","type":"string"},"url":{"type":"string"}},"type":"object"}},"type":"object"},"name":{"type":"string"},"selector":{"description":"Rule auto applied in webhook, when pod matches the selector,\nthe rule will be added into workload profile's autoScalingConfig and annotation","properties":{"matchExpressions":{"description":"matchExpressions is a list of label selector requirements. The requirements are ANDed.","items":{"description":"A label selector requirement is a selector that contains values, a key, and an operator that\nrelates the key and values.","properties":{"key":{"description":"key is the label key that the selector applies to.","type":"string"},"operator":{"description":"operator represents a key's relationship to a set of values.\nValid operators are In, NotIn, Exists and DoesNotExist.","type":"string"},"values":{"description":"values is an array of string values. If the operator is In or NotIn,\nthe values array must be non-empty. If the operator is Exists or DoesNotExist,\nthe values array must be empty. This array is replaced during a strategic\nmerge patch.","items":{"type":"string"},"type":"array","x-kubernetes-list-type":"atomic"}},"required":["key","operator"],"type":"object"},"type":"array","x-kubernetes-list-type":"atomic"},"matchLabels":{"additionalProperties":{"type":"string"},"description":"matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels\nmap is equivalent to an element of matchExpressions, whose key field is \"key\", the\noperator is \"In\", and the values array contains only \"value\". The requirements are ANDed.","type":"object"}},"type":"object","x-kubernetes-map-type":"atomic"}},"type":"object"},"type":"array"}},"required":["placement"],"type":"object"},"status":{"description":"SchedulingConfigTemplateStatus defines the observed state of SchedulingConfigTemplate.","type":"object"}},"type":"object"}},"served":true,"storage":true,"subresources":{"status":{}}}]}}
+  creationTimestamp: "2025-09-04T07:52:48Z"
+  generation: 11
+  name: schedulingconfigtemplates.tensor-fusion.ai
+  resourceVersion: "48858931"
+  uid: f813c028-2b49-4379-8ae1-2492a2c05cd1
+spec:
+  conversion:
+    strategy: None
+  group: tensor-fusion.ai
+  names:
+    kind: SchedulingConfigTemplate
+    listKind: SchedulingConfigTemplateList
+    plural: schedulingconfigtemplates
+    singular: schedulingconfigtemplate
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.placement.mode
+      name: Mode
+      type: string
+    - jsonPath: .spec.placement.allowLocalGPU
+      name: Allow Local GPU
+      type: string
+    - jsonPath: .spec.hypervisor.autoFreezeAndResume.autoFreeze.enable
+      name: AutoFreeze
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: SchedulingConfigTemplate is the Schema for the schedulingconfigtemplates
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: Place the workload to right nodes and scale smart.
+            properties:
+              hypervisor:
+                description: single GPU device multi-process queuing and fair scheduling
+                  with QoS constraint
+                properties:
+                  autoFreezeAndResume:
+                    description: |-
+                      additional layer to save VRAM, auto-freeze memory and cool down to RAM and Disk
+                      Hypervisor will monitor and trigger freeze of inactive workers, Operator should mark them as scaled-to-zero and release the GPU pool resources, don't scale down CPU client part, so that they can continue to serve the traffic or scale down by other auto-scaling solutions like KEDA/KNative
+                    properties:
+                      autoFreeze:
+                        items:
+                          properties:
+                            enable:
+                              type: boolean
+                            freezeToDiskTTL:
+                              type: string
+                            freezeToMemTTL:
+                              type: string
+                            qos:
+                              enum:
+                              - low
+                              - medium
+                              - high
+                              - critical
+                              type: string
+                          type: object
+                        type: array
+                      intelligenceWarmup:
+                        properties:
+                          enable:
+                            type: boolean
+                          historyDataPeriod:
+                            type: string
+                          model:
+                            type: string
+                          predictionPeriod:
+                            type: string
+                        type: object
+                    type: object
+                  elasticRateLimitParameters:
+                    description: |-
+                      Hypervisor will move low priority jobs to pending queue if GPU is full
+                      This config can adjust hypervisor's queueing behavior to balance the co-scheduling CUDA calls
+                    properties:
+                      burstWindow:
+                        description: Burst window to control token bucket Min/Max
+                          (currentCapacity = burstWindow x currentRefillRate)
+                        type: string
+                      capacityMax:
+                        type: string
+                      capacityMin:
+                        description: token bucket min and max
+                        type: string
+                      filterAlpha:
+                        description: Filter ineffective requests from rate limit,
+                          0.0 to 1.0
+                        type: string
+                      integralDecayFactor:
+                        description: Decay factor for integral term in PID controller,
+                          to avoid integral windup
+                        type: string
+                      kd:
+                        type: string
+                      ki:
+                        description: PID controller parameters
+                        type: string
+                      kp:
+                        type: string
+                      maxRefillRate:
+                        description: Refill rate is controlled by PID controller,
+                          adjusted by current utilization
+                        type: string
+                      minRefillRate:
+                        type: string
+                    type: object
+                  multiProcessQueuingParameters:
+                    description: For differentiate QoS levels, ensure critical and
+                      high QoS workloads on same GPU card getting more computing resources
+                    properties:
+                      coefficientHigh:
+                        type: string
+                      coefficientLow:
+                        description: Coefficient for scale down when resource contention
+                          happens
+                        type: string
+                      coefficientMedium:
+                        type: string
+                      computingThresholdForPreempt:
+                        description: Condition for triggering scale down when usage
+                          is above ComputingThresholdForPreempt
+                        type: string
+                      computingThresholdForResume:
+                        description: Condition for triggering scale up when usage
+                          is below ComputingThresholdForResume
+                        type: string
+                      slowStartRatio:
+                        description: |-
+                          When avg utilization < ComputingThresholdForResume and last for more than TriggerResumeDuration
+                          Use following formula to scale up:
+                          Case #1 If all process has same QoS level, and cur_limit <= limit, fast resume to limit
+                          Case #2 Else, Max(limit, Min(cur_limit * 1/CoEfficient * SlowStartRatio, cur_limit * 1.2))
+                        type: string
+                      triggerPreemptDuration:
+                        type: string
+                      triggerResumeDuration:
+                        type: string
+                    type: object
+                type: object
+              placement:
+                description: place the client or worker to best matched nodes
+                properties:
+                  allowUsingLocalGPU:
+                    default: true
+                    type: boolean
+                  gpuFilters:
+                    items:
+                      description: "GPUFilter is to select eligible GPUs for scheduling.\n\nexample:\n```yaml\n-
+                        type: avoidTooMuchConnectionsOnSameGPU\nparams:\n\n\tconnectionNum:
+                        150\n\n- type: avoidDifferentZone\nparams:\n\n\t# by default,
+                        GPU worker will be scheduled into the same zone as CPU Client
+                        Pod to align AZ and improve performance\n\ttopologyKey: topology.kubernetes.io/zone\n\n```"
+                      properties:
+                        params:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                        type:
+                          type: string
+                      type: object
+                    type: array
+                  mode:
+                    default: NodeCompactGPULowLoad
+                    enum:
+                    - CompactFirst
+                    - LowLoadFirst
+                    - NodeCompactGPULowLoad
+                    type: string
+                required:
+                - mode
+                type: object
+              reBalancer:
+                description: |-
+                  avoid hot GPU devices and continuously balance the workload
+                  implemented by mark GPU as hot and trigger evict for re-scheduling
+                  The hot GPUs will get lower priority for scheduling
+                properties:
+                  enable:
+                    type: boolean
+                  interval:
+                    type: string
+                  reBalanceCoolDownTime:
+                    type: string
+                  threshold:
+                    properties:
+                      matchAny:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                    type: object
+                type: object
+              verticalScalingRules:
+                description: scale the workload based on the usage and traffic
+                items:
+                  properties:
+                    autoScaling:
+                      properties:
+                        autoSetResources:
+                          description: Adjust baseline requests and limits to match
+                            the actual usage using recent metrics
+                          properties:
+                            enable:
+                              type: boolean
+                            historyDataPeriod:
+                              description: 'How much time back TSDB have to be queried
+                                to get historical metrics. Default: 2h'
+                              type: string
+                            initialDelayPeriod:
+                              description: 'When workload is created, wait for this
+                                period to collect enough metrics before scaling, default:
+                                30m'
+                              type: string
+                            interval:
+                              description: 'How often to evaluate the scaling operation,
+                                default: same as global config''s auto scaling interval'
+                              type: string
+                            lowerBoundComputePercentile:
+                              description: |-
+                                Tflops usage percentile that will be used for the lower bound on tflops recommendation. Default: 0.5
+                                When QoS is low or medium, request set to lower bound
+                              type: string
+                            lowerBoundVRAMPercentile:
+                              description: 'Vram usage percentile that will be used
+                                for the lower bound on vram recommendation. Default:
+                                0.5'
+                              type: string
+                            marginFraction:
+                              description: 'Fraction of usage added as the safety
+                                margin to the recommended request. Default: 0.15'
+                              type: string
+                            maxComputeResourcesRatio:
+                              description: 'Max scaling ratio to original resources,
+                                e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi,
+                                default: 10.0'
+                              type: string
+                            maxVRAMResourcesRatio:
+                              description: 'Max scaling ratio to original resources,
+                                e.g. request 10Gi, ratio 2.0, scale up limit to 20Gi,
+                                default: 5.0'
+                              type: string
+                            minComputeResourcesRatio:
+                              description: |-
+                                Min scaling ratio to original resources, e.g. request 10Gi, ratio 0.5, scale down limit to 5Gi, default: 0.1
+                                This ratio only apply to tflops/compute request rather than limit, to avoid performance downgrade when not used for a long time
+                              type: string
+                            minVRAMResourcesRatio:
+                              description: 'Min scaling ratio to original resources,
+                                e.g. request 10Gi, ratio 0.5, scale down limit to
+                                5Gi, default: 0.2'
+                              type: string
+                            targetComputePercentile:
+                              description: 'Tflops usage percentile that will be used
+                                as a base for tflops target recommendation. Default:
+                                0.95'
+                              type: string
+                            targetResource:
+                              description: Target resource to scale, such as "compute",
+                                "vram", or "all" by default
+                              type: string
+                            targetVRAMPercentile:
+                              description: |-
+                                Vram usage percentile that will be used as a base for vram target recommendation. Default: 0.95
+                                The requests will be set to match this percentile of the actual usage, but won't change when current requests is in lower and upper bounds
+                                When QoS is high, set request to target
+                              type: string
+                            updateThreshold:
+                              description: |-
+                                Only when the difference between the recommended request and the current request is greater than this threshold, the request will be updated. Default: 0.1
+                                This value can't greater than MarginFraction, otherwise no update will be made since always inside the threshold after multiplying MarginFraction.
+                              type: string
+                            upperBoundComputePercentile:
+                              description: |-
+                                Tflops usage percentile that will be used for the upper bound on tflops recommendation. Default: 0.99
+                                Limit will be set to upper bound, when QoS is critical, also set limit request to upper bound
+                              type: string
+                            upperBoundVRAMPercentile:
+                              description: 'Vram usage percentile that will be used
+                                for the upper bound on vram recommendation. Default:
+                                0.99'
+                              type: string
+                          type: object
+                        cronScalingRules:
+                          description: CronScalingRules defines a list of CronScaling
+                            rules used to schedule scaling actions based on cron expressions.
+                          items:
+                            description: |-
+                              CronScalingRule defines the rule for scaling resources based on a cron schedule.
+                              It allows enabling/disabling the scaler, specifying the time window for scaling,
+                              and configuring the desired resources and replicas during the scheduled period.
+                            properties:
+                              desiredResources:
+                                description: DesiredResources specifies the target
+                                  resources to scale to during the schedule.
+                                properties:
+                                  limits:
+                                    properties:
+                                      compute:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        description: 0-100 percentage, mutually exclusive
+                                          with TFLOPs
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      tflops:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      vram:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    required:
+                                    - tflops
+                                    - vram
+                                    type: object
+                                  requests:
+                                    properties:
+                                      compute:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        description: 0-100 percentage, mutually exclusive
+                                          with TFLOPs
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      tflops:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      vram:
+                                        anyOf:
+                                        - type: integer
+                                        - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    required:
+                                    - tflops
+                                    - vram
+                                    type: object
+                                required:
+                                - limits
+                                - requests
+                                type: object
+                              enable:
+                                description: Enable specifies whether the cron scaler
+                                  is enabled.
+                                type: boolean
+                              end:
+                                description: End is the end time for the scaling schedule,
+                                  in cron format.
+                                type: string
+                              name:
+                                description: Name is the identifier for the cron scaler.
+                                type: string
+                              start:
+                                description: Start is the start time for the scaling
+                                  schedule, in cron format.
+                                type: string
+                            type: object
+                          type: array
+                        externalScaler:
+                          properties:
+                            apiKeySecretRef:
+                              description: 'API key will be set into the request header
+                                as "Authorization: Bearer <api key>"'
+                              properties:
+                                name:
+                                  description: name is unique within a namespace to
+                                    reference a secret resource.
+                                  type: string
+                                namespace:
+                                  description: namespace defines the space within
+                                    which the secret name must be unique.
+                                  type: string
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            enable:
+                              type: boolean
+                            initialDelayPeriod:
+                              type: string
+                            interval:
+                              description: 'How often to evaluate the scaling operation,
+                                default: same as global config''s auto scaling interval'
+                              type: string
+                            url:
+                              type: string
+                          type: object
+                      type: object
+                    name:
+                      type: string
+                    selector:
+                      description: |-
+                        Rule auto applied in webhook, when pod matches the selector,
+                        the rule will be added into workload profile's autoScalingConfig and annotation
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                  type: object
+                type: array
+            required:
+            - placement
+            type: object
+          status:
+            description: SchedulingConfigTemplateStatus defines the observed state
+              of SchedulingConfigTemplate.
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: SchedulingConfigTemplate
+    listKind: SchedulingConfigTemplateList
+    plural: schedulingconfigtemplates
+    singular: schedulingconfigtemplate
+  conditions:
+  - lastTransitionTime: "2025-09-04T07:52:48Z"
+    message: no conflicts found
+    reason: NoConflicts
+    status: "True"
+    type: NamesAccepted
+  - lastTransitionTime: "2025-09-04T07:52:48Z"
+    message: the initial names have been accepted
+    reason: InitialNamesAccepted
+    status: "True"
+    type: Established
+  storedVersions:
+  - v1

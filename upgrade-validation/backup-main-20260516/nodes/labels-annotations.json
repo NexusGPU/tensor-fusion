@@ -1,0 +1,115 @@
+[
+  {
+    "name": "kylin-pc",
+    "labels": {
+      "beta.kubernetes.io/arch": "arm64",
+      "beta.kubernetes.io/instance-type": "k3s",
+      "beta.kubernetes.io/os": "linux",
+      "huawei.com/npu.present": "true",
+      "kubernetes.io/arch": "arm64",
+      "kubernetes.io/hostname": "kylin-pc",
+      "kubernetes.io/os": "linux",
+      "node.kubernetes.io/instance-type": "k3s",
+      "tensor-fusion.ai/hardware-vendor": "Ascend",
+      "tensor-fusion.ai/isolationMode": "partitioned",
+      "tensor-fusion.ai/node-selector-hash": "ffd0aade3dd4674e"
+    },
+    "annotations": {
+      "alpha.kubernetes.io/provided-node-ip": "192.168.2.50",
+      "flannel.alpha.coreos.com/backend-data": "{\"VNI\":1,\"VtepMAC\":\"d2:7e:0b:62:94:ec\"}",
+      "flannel.alpha.coreos.com/backend-type": "vxlan",
+      "flannel.alpha.coreos.com/kube-subnet-manager": "true",
+      "flannel.alpha.coreos.com/public-ip": "192.168.2.50",
+      "k3s.io/hostname": "kylin-pc",
+      "k3s.io/internal-ip": "192.168.2.50",
+      "k3s.io/node-args": "[\"agent\",\"--server\",\"https://192.168.2.2:6443\",\"--token\",\"********\",\"--server\",\"https://192.168.2.2:6443\",\"--token\",\"********\"]",
+      "k3s.io/node-config-hash": "7K6ZKFFHDOPQY6OYDWLS54C5FFEPANDOOPZE44V6WRBX2X4J4SIQ====",
+      "k3s.io/node-env": "{}",
+      "node.alpha.kubernetes.io/ttl": "0",
+      "tensor-fusion.ai/hardware-vendor": "Ascend",
+      "volumes.kubernetes.io/controller-managed-attach-detach": "true"
+    },
+    "taints": null
+  },
+  {
+    "name": "rhzs",
+    "labels": {
+      "beta.kubernetes.io/arch": "amd64",
+      "beta.kubernetes.io/instance-type": "k3s",
+      "beta.kubernetes.io/os": "linux",
+      "feature.node.kubernetes.io/cpu-model.vendor_id": "NVIDIA",
+      "feature.node.kubernetes.io/pci-10de.present": "true",
+      "k8slens-edit-resource-version": "v1",
+      "kubernetes.io/arch": "amd64",
+      "kubernetes.io/hostname": "rhzs",
+      "kubernetes.io/os": "linux",
+      "node-role.kubernetes.io/control-plane": "true",
+      "node-role.kubernetes.io/master": "true",
+      "node.kubernetes.io/instance-type": "k3s",
+      "nvidia.com/gpu.present": "true",
+      "tensor-fusion.ai/hardware-vendor": "NVIDIA",
+      "tensor-fusion.ai/node-selector-hash": "1f4cf63923943abf",
+      "tensor-fusion.ai/should-delete": "true",
+      "tf-role": "cpu"
+    },
+    "annotations": {
+      "alpha.kubernetes.io/provided-node-ip": "192.168.2.2",
+      "flannel.alpha.coreos.com/backend-data": "{\"VNI\":1,\"VtepMAC\":\"a6:d9:42:8d:cc:6c\"}",
+      "flannel.alpha.coreos.com/backend-type": "vxlan",
+      "flannel.alpha.coreos.com/kube-subnet-manager": "true",
+      "flannel.alpha.coreos.com/public-ip": "192.168.2.2",
+      "k3s.io/hostname": "rhzs",
+      "k3s.io/internal-ip": "192.168.2.2",
+      "k3s.io/node-args": "[\"server\",\"--node-label\",\"nvidia.com/gpu.present=true\",\"--node-label\",\"feature.node.kubernetes.io/cpu-model.vendor_id=NVIDIA\",\"--node-label\",\"feature.node.kubernetes.io/pci-10de.present=true\",\"--tls-san\",\"117.50.174.140\",\"--flannel-backend\",\"none\",\"--disable-network-policy\"]",
+      "k3s.io/node-config-hash": "4QGTGJOPVCKQVLEWIE45KFM3AYAMF74XAJMWZSO6RFAGFVK6Q2BA====",
+      "k3s.io/node-env": "{}",
+      "node.alpha.kubernetes.io/ttl": "0",
+      "volumes.kubernetes.io/controller-managed-attach-detach": "true"
+    },
+    "taints": [
+      {
+        "effect": "PreferNoSchedule",
+        "key": "tensor-fusion.ai/used-by",
+        "value": "tensor-fusion"
+      }
+    ]
+  },
+  {
+    "name": "ubuntu",
+    "labels": {
+      "beta.kubernetes.io/arch": "amd64",
+      "beta.kubernetes.io/instance-type": "k3s",
+      "beta.kubernetes.io/os": "linux",
+      "feature.node.kubernetes.io/cpu-model.vendor_id": "NVIDIA",
+      "feature.node.kubernetes.io/pci-10de.present": "true",
+      "gpu": "on",
+      "k8slens-edit-resource-version": "v1",
+      "kubernetes.io/arch": "amd64",
+      "kubernetes.io/hostname": "ubuntu",
+      "kubernetes.io/os": "linux",
+      "node.kubernetes.io/instance-type": "k3s",
+      "nvidia.com/gpu.present": "true",
+      "tensor-fusion.ai/hardware-vendor": "NVIDIA",
+      "tensor-fusion.ai/isolationMode": "hard",
+      "tensor-fusion.ai/node-selector-hash": "1f4cf63923943abf",
+      "tensor-fusion.ai/watch-node": "true"
+    },
+    "annotations": {
+      "alpha.kubernetes.io/provided-node-ip": "192.168.2.4",
+      "flannel.alpha.coreos.com/backend-data": "{\"VNI\":1,\"VtepMAC\":\"5a:04:69:57:fb:69\"}",
+      "flannel.alpha.coreos.com/backend-type": "vxlan",
+      "flannel.alpha.coreos.com/kube-subnet-manager": "true",
+      "flannel.alpha.coreos.com/public-ip": "192.168.2.4",
+      "hami.io/node-handshake": "Reported 2026-05-16 02:22:58.076798098 +0000 UTC m=+1786102.763898628",
+      "hami.io/node-nvidia-register": "GPU-337d5efe-90a4-32c4-afcb-78ea5e3a5606,10,24576,100,NVIDIA-NVIDIA GeForce RTX 3090,0,true,0,hami-core:GPU-f5d00867-cc01-0631-8d51-14394632047c,10,24576,100,NVIDIA-NVIDIA GeForce RTX 3090,0,true,1,hami-core:",
+      "k3s.io/hostname": "ubuntu",
+      "k3s.io/internal-ip": "192.168.2.4",
+      "k3s.io/node-args": "[\"agent\",\"--node-label\",\"nvidia.com/gpu.present=true\",\"--node-label\",\"feature.node.kubernetes.io/cpu-model.vendor_id=NVIDIA\",\"--node-label\",\"feature.node.kubernetes.io/pci-10de.present=true\"]",
+      "k3s.io/node-config-hash": "N6ISMEGGAGCTXG7RSJKSEEWWWXLYGP3XKNLFPBRS4LGNBMXDVEZA====",
+      "k3s.io/node-env": "{\"K3S_TOKEN\":\"********\",\"K3S_URL\":\"https://192.168.2.2:6443\"}",
+      "node.alpha.kubernetes.io/ttl": "0",
+      "volumes.kubernetes.io/controller-managed-attach-detach": "true"
+    },
+    "taints": null
+  }
+]

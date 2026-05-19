@@ -1,0 +1,683 @@
+apiVersion: v1
+items:
+- apiVersion: v1
+  kind: Node
+  metadata:
+    annotations:
+      alpha.kubernetes.io/provided-node-ip: 192.168.2.50
+      flannel.alpha.coreos.com/backend-data: '{"VNI":1,"VtepMAC":"d2:7e:0b:62:94:ec"}'
+      flannel.alpha.coreos.com/backend-type: vxlan
+      flannel.alpha.coreos.com/kube-subnet-manager: "true"
+      flannel.alpha.coreos.com/public-ip: 192.168.2.50
+      k3s.io/hostname: kylin-pc
+      k3s.io/internal-ip: 192.168.2.50
+      k3s.io/node-args: '["agent","--server","https://192.168.2.2:6443","--token","********","--server","https://192.168.2.2:6443","--token","********"]'
+      k3s.io/node-config-hash: 7K6ZKFFHDOPQY6OYDWLS54C5FFEPANDOOPZE44V6WRBX2X4J4SIQ====
+      k3s.io/node-env: '{}'
+      node.alpha.kubernetes.io/ttl: "0"
+      tensor-fusion.ai/hardware-vendor: Ascend
+      volumes.kubernetes.io/controller-managed-attach-detach: "true"
+    creationTimestamp: "2026-04-09T08:04:23Z"
+    finalizers:
+    - wrangler.cattle.io/node
+    labels:
+      beta.kubernetes.io/arch: arm64
+      beta.kubernetes.io/instance-type: k3s
+      beta.kubernetes.io/os: linux
+      huawei.com/npu.present: "true"
+      kubernetes.io/arch: arm64
+      kubernetes.io/hostname: kylin-pc
+      kubernetes.io/os: linux
+      node.kubernetes.io/instance-type: k3s
+      tensor-fusion.ai/hardware-vendor: Ascend
+      tensor-fusion.ai/isolationMode: partitioned
+      tensor-fusion.ai/node-selector-hash: ffd0aade3dd4674e
+    name: kylin-pc
+    resourceVersion: "62890064"
+    uid: 9cccaff7-6a14-4581-8b1b-e9621738a87f
+  spec:
+    podCIDR: 10.42.6.0/24
+    podCIDRs:
+    - 10.42.6.0/24
+    providerID: k3s://kylin-pc
+  status:
+    addresses:
+    - address: 192.168.2.50
+      type: InternalIP
+    - address: kylin-pc
+      type: Hostname
+    allocatable:
+      cpu: "8"
+      ephemeral-storage: "99834798412"
+      hugepages-1Gi: "0"
+      hugepages-2Mi: "0"
+      hugepages-32Mi: "0"
+      hugepages-64Ki: "0"
+      memory: 32638000Ki
+      pods: "110"
+      tensor-fusion.ai/index_0: "36"
+      tensor-fusion.ai/index_1: "36"
+      tensor-fusion.ai/index_2: "36"
+      tensor-fusion.ai/index_3: "36"
+      tensor-fusion.ai/index_4: "36"
+      tensor-fusion.ai/index_5: "36"
+      tensor-fusion.ai/index_6: "36"
+      tensor-fusion.ai/index_7: "36"
+      tensor-fusion.ai/index_8: "36"
+      tensor-fusion.ai/index_9: "36"
+      tensor-fusion.ai/index_a: "36"
+      tensor-fusion.ai/index_b: "36"
+      tensor-fusion.ai/index_c: "36"
+      tensor-fusion.ai/index_d: "36"
+      tensor-fusion.ai/index_e: "36"
+      tensor-fusion.ai/index_f: "36"
+    capacity:
+      cpu: "8"
+      ephemeral-storage: 102626232Ki
+      hugepages-1Gi: "0"
+      hugepages-2Mi: "0"
+      hugepages-32Mi: "0"
+      hugepages-64Ki: "0"
+      memory: 32638000Ki
+      pods: "110"
+      tensor-fusion.ai/index_0: "36"
+      tensor-fusion.ai/index_1: "36"
+      tensor-fusion.ai/index_2: "36"
+      tensor-fusion.ai/index_3: "36"
+      tensor-fusion.ai/index_4: "36"
+      tensor-fusion.ai/index_5: "36"
+      tensor-fusion.ai/index_6: "36"
+      tensor-fusion.ai/index_7: "36"
+      tensor-fusion.ai/index_8: "36"
+      tensor-fusion.ai/index_9: "36"
+      tensor-fusion.ai/index_a: "36"
+      tensor-fusion.ai/index_b: "36"
+      tensor-fusion.ai/index_c: "36"
+      tensor-fusion.ai/index_d: "36"
+      tensor-fusion.ai/index_e: "36"
+      tensor-fusion.ai/index_f: "36"
+    conditions:
+    - lastHeartbeatTime: "2026-05-11T09:29:57Z"
+      lastTransitionTime: "2026-05-11T09:29:57Z"
+      message: Cilium is running on this node
+      reason: CiliumIsUp
+      status: "False"
+      type: NetworkUnavailable
+    - lastHeartbeatTime: "2026-05-16T02:18:42Z"
+      lastTransitionTime: "2026-04-25T10:16:37Z"
+      message: kubelet has sufficient memory available
+      reason: KubeletHasSufficientMemory
+      status: "False"
+      type: MemoryPressure
+    - lastHeartbeatTime: "2026-05-16T02:18:42Z"
+      lastTransitionTime: "2026-04-25T10:16:37Z"
+      message: kubelet has no disk pressure
+      reason: KubeletHasNoDiskPressure
+      status: "False"
+      type: DiskPressure
+    - lastHeartbeatTime: "2026-05-16T02:18:42Z"
+      lastTransitionTime: "2026-04-25T10:16:37Z"
+      message: kubelet has sufficient PID available
+      reason: KubeletHasSufficientPID
+      status: "False"
+      type: PIDPressure
+    - lastHeartbeatTime: "2026-05-16T02:18:42Z"
+      lastTransitionTime: "2026-04-25T10:16:37Z"
+      message: kubelet is posting ready status
+      reason: KubeletReady
+      status: "True"
+      type: Ready
+    daemonEndpoints:
+      kubeletEndpoint:
+        Port: 10250
+    features:
+      supplementalGroupsPolicy: true
+    images:
+    - names:
+      - docker.m.daocloud.io/codercom/code-server@sha256:4aff9947c113487113201da811564fade1af5f23038b4d683998d024eebbac92
+      - docker.m.daocloud.io/codercom/code-server:latest
+      sizeBytes: 265765359
+    - names:
+      - crpi-g0sp919hs677ssox.cn-shanghai.personal.cr.aliyuncs.com/jwzhang123/llm-benchmark@sha256:47e59e1a94490d62f3b0348f8e65a65c4f756493b7f4818482bfac942db981dc
+      - crpi-g0sp919hs677ssox.cn-shanghai.personal.cr.aliyuncs.com/jwzhang123/llm-benchmark:latest-amd
+      sizeBytes: 254650892
+    - names:
+      - docker.io/rancher/mirrored-library-traefik:3.3.6
+      sizeBytes: 215916926
+    - names:
+      - quay.io/cilium/cilium@sha256:758ca0793f5995bb938a2fa219dcce63dc0b3fa7fc4ce5cc851125281fb7361d
+      sizeBytes: 211859515
+    - names:
+      - docker.io/rancher/klipper-helm:v0.9.8-build20250709
+      sizeBytes: 210774031
+    - names:
+      - docker.m.daocloud.io/nicolaka/netshoot@sha256:47b907d662d139d1e2f22bfe14f4efca1e3f1feed283572f47c970c780c03b61
+      - docker.m.daocloud.io/nicolaka/netshoot:latest
+      sizeBytes: 208398825
+    - names:
+      - docker.io/tensorfusion/tensor-fusion-hypervisor:dev-feat-mig
+      sizeBytes: 170832216
+    - names:
+      - docker.io/rancher/mirrored-metrics-server:v0.8.0
+      sizeBytes: 80837158
+    - names:
+      - docker.io/rancher/mirrored-coredns-coredns:1.12.3
+      sizeBytes: 71987628
+    - names:
+      - docker.io/rancher/local-path-provisioner:v0.0.31
+      sizeBytes: 59961239
+    - names:
+      - quay.io/cilium/cilium-envoy@sha256:709c08ade3d17d52da4ca2af33f431360ec26268d288d9a6cd1d98acc9a1dced
+      sizeBytes: 59574598
+    - names:
+      - docker.1ms.run/timberio/vector@sha256:bbc59e9d5a6cf432f11d912911a6ac63784527d978626cff783152c2bb2ee1a9
+      - docker.1ms.run/timberio/vector:latest-alpine
+      - docker.io/timberio/vector:latest-alpine
+      sizeBytes: 56370172
+    - names:
+      - docker.m.daocloud.io/timberio/vector@sha256:98d5c3d29043b4a0604631b5973e67f0ed4a5c1ebb57dfd5803b8ff3bfbc70a1
+      - docker.m.daocloud.io/timberio/vector:latest-alpine
+      sizeBytes: 55303908
+    - names:
+      - quay.io/cilium/hubble-relay@sha256:6cfae1d1afa566ba941f03d4d7e141feddd05260e5cd0a1509aba1890a45ef00
+      sizeBytes: 26213670
+    - names:
+      - docker.io/rancher/klipper-lb:v0.4.13
+      sizeBytes: 19589317
+    - names:
+      - quay.io/cilium/hubble-ui-backend@sha256:0e0eed917653441fded4e7cdb096b7be6a3bddded5a2dd10812a27b1fc6ed95b
+      sizeBytes: 18304896
+    - names:
+      - docker.m.daocloud.io/linuxserver/openssh-server@sha256:792bb9969a6751f9be2dcecdebd166f75c51187628f1be48ac9c9b3776561c16
+      - docker.m.daocloud.io/linuxserver/openssh-server:latest
+      sizeBytes: 17152907
+    - names:
+      - quay.io/cilium/hubble-ui@sha256:e2e9313eb7caf64b0061d9da0efbdad59c6c461f6ca1752768942bfeda0796c6
+      sizeBytes: 10975063
+    - names:
+      - docker.io/tensorfusion/vgpu-provider-ascend:dev-arm64
+      sizeBytes: 4474130
+    - names:
+      - docker.io/rancher/mirrored-library-busybox:1.36.1
+      sizeBytes: 4281197
+    - names:
+      - docker.m.daocloud.io/library/alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+      - docker.m.daocloud.io/library/alpine:3.20
+      sizeBytes: 4103199
+    - names:
+      - docker.io/rancher/mirrored-pause:3.6
+      - registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.6
+      - registry.k8s.io/pause:3.10
+      sizeBytes: 487188
+    nodeInfo:
+      architecture: arm64
+      bootID: e40bed5a-c971-4920-9bfc-bcba1182988f
+      containerRuntimeVersion: containerd://2.1.4-k3s1
+      kernelVersion: 5.4.18-110-generic
+      kubeProxyVersion: ""
+      kubeletVersion: v1.33.5+k3s1
+      machineID: 62d952e311a64df2b258a10c39a69014
+      operatingSystem: linux
+      osImage: Kylin V10 SP1
+      swap:
+        capacity: 40098590720
+      systemUUID: 20201008-10c3-ab06-c327-10c3ab06c326
+    runtimeHandlers:
+    - features:
+        recursiveReadOnlyMounts: false
+        userNamespaces: true
+      name: ""
+    - features:
+        recursiveReadOnlyMounts: false
+        userNamespaces: true
+      name: ascend
+    - features:
+        recursiveReadOnlyMounts: false
+        userNamespaces: true
+      name: runc
+- apiVersion: v1
+  kind: Node
+  metadata:
+    annotations:
+      alpha.kubernetes.io/provided-node-ip: 192.168.2.2
+      flannel.alpha.coreos.com/backend-data: '{"VNI":1,"VtepMAC":"a6:d9:42:8d:cc:6c"}'
+      flannel.alpha.coreos.com/backend-type: vxlan
+      flannel.alpha.coreos.com/kube-subnet-manager: "true"
+      flannel.alpha.coreos.com/public-ip: 192.168.2.2
+      k3s.io/hostname: rhzs
+      k3s.io/internal-ip: 192.168.2.2
+      k3s.io/node-args: '["server","--node-label","nvidia.com/gpu.present=true","--node-label","feature.node.kubernetes.io/cpu-model.vendor_id=NVIDIA","--node-label","feature.node.kubernetes.io/pci-10de.present=true","--tls-san","117.50.174.140","--flannel-backend","none","--disable-network-policy"]'
+      k3s.io/node-config-hash: 4QGTGJOPVCKQVLEWIE45KFM3AYAMF74XAJMWZSO6RFAGFVK6Q2BA====
+      k3s.io/node-env: '{}'
+      node.alpha.kubernetes.io/ttl: "0"
+      volumes.kubernetes.io/controller-managed-attach-detach: "true"
+    creationTimestamp: "2025-09-04T07:39:25Z"
+    finalizers:
+    - wrangler.cattle.io/node
+    labels:
+      beta.kubernetes.io/arch: amd64
+      beta.kubernetes.io/instance-type: k3s
+      beta.kubernetes.io/os: linux
+      feature.node.kubernetes.io/cpu-model.vendor_id: NVIDIA
+      feature.node.kubernetes.io/pci-10de.present: "true"
+      k8slens-edit-resource-version: v1
+      kubernetes.io/arch: amd64
+      kubernetes.io/hostname: rhzs
+      kubernetes.io/os: linux
+      node-role.kubernetes.io/control-plane: "true"
+      node-role.kubernetes.io/master: "true"
+      node.kubernetes.io/instance-type: k3s
+      nvidia.com/gpu.present: "true"
+      tensor-fusion.ai/hardware-vendor: NVIDIA
+      tensor-fusion.ai/node-selector-hash: 1f4cf63923943abf
+      tensor-fusion.ai/should-delete: "true"
+      tf-role: cpu
+    name: rhzs
+    resourceVersion: "62890331"
+    uid: 968b6bdd-2ecd-42ef-8770-8fb8e09a729b
+  spec:
+    podCIDR: 10.42.0.0/24
+    podCIDRs:
+    - 10.42.0.0/24
+    providerID: k3s://rhzs
+    taints:
+    - effect: PreferNoSchedule
+      key: tensor-fusion.ai/used-by
+      value: tensor-fusion
+  status:
+    addresses:
+    - address: 192.168.2.2
+      type: InternalIP
+    - address: rhzs
+      type: Hostname
+    allocatable:
+      cpu: "32"
+      ephemeral-storage: "1866483373026"
+      hugepages-1Gi: "0"
+      hugepages-2Mi: "0"
+      memory: 129217404Ki
+      pods: "110"
+      tensor-fusion.ai/index: "512"
+    capacity:
+      cpu: "32"
+      ephemeral-storage: 1918671232Ki
+      hugepages-1Gi: "0"
+      hugepages-2Mi: "0"
+      memory: 129217404Ki
+      pods: "110"
+      tensor-fusion.ai/index: "512"
+    conditions:
+    - lastHeartbeatTime: "2026-05-11T09:29:35Z"
+      lastTransitionTime: "2026-05-11T09:29:35Z"
+      message: Cilium is running on this node
+      reason: CiliumIsUp
+      status: "False"
+      type: NetworkUnavailable
+    - lastHeartbeatTime: "2026-05-16T02:22:53Z"
+      lastTransitionTime: "2025-09-04T07:39:25Z"
+      message: kubelet has sufficient memory available
+      reason: KubeletHasSufficientMemory
+      status: "False"
+      type: MemoryPressure
+    - lastHeartbeatTime: "2026-05-16T02:22:53Z"
+      lastTransitionTime: "2026-04-30T04:46:49Z"
+      message: kubelet has no disk pressure
+      reason: KubeletHasNoDiskPressure
+      status: "False"
+      type: DiskPressure
+    - lastHeartbeatTime: "2026-05-16T02:22:53Z"
+      lastTransitionTime: "2025-09-04T07:39:25Z"
+      message: kubelet has sufficient PID available
+      reason: KubeletHasSufficientPID
+      status: "False"
+      type: PIDPressure
+    - lastHeartbeatTime: "2026-05-16T02:22:53Z"
+      lastTransitionTime: "2025-09-04T07:39:26Z"
+      message: kubelet is posting ready status
+      reason: KubeletReady
+      status: "True"
+      type: Ready
+    daemonEndpoints:
+      kubeletEndpoint:
+        Port: 10250
+    features:
+      supplementalGroupsPolicy: true
+    images:
+    - names:
+      - crpi-g0sp919hs677ssox.cn-shanghai.personal.cr.aliyuncs.com/jwzhang123/llm-benchmark@sha256:47e59e1a94490d62f3b0348f8e65a65c4f756493b7f4818482bfac942db981dc
+      - crpi-g0sp919hs677ssox.cn-shanghai.personal.cr.aliyuncs.com/jwzhang123/llm-benchmark:latest-amd
+      sizeBytes: 254650892
+    - names:
+      - quay.io/cilium/cilium@sha256:758ca0793f5995bb938a2fa219dcce63dc0b3fa7fc4ce5cc851125281fb7361d
+      sizeBytes: 224306600
+    - names:
+      - docker.m.daocloud.io/library/postgres@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
+      - docker.m.daocloud.io/library/postgres:16-alpine
+      sizeBytes: 109995527
+    - names:
+      - quay.io/cilium/cilium-envoy@sha256:709c08ade3d17d52da4ca2af33f431360ec26268d288d9a6cd1d98acc9a1dced
+      sizeBytes: 62862122
+    - names:
+      - docker.io/rancher/local-path-provisioner@sha256:80496fdeb307541007621959aa13aed41d31db9cd2dc4167c19833e0bfa3878c
+      - docker.io/rancher/local-path-provisioner:v0.0.31
+      sizeBytes: 20727855
+    - names:
+      - docker.io/rancher/klipper-lb@sha256:7eb86d5b908ec6ddd9796253d8cc2f43df99420fc8b8a18452a94dc56f86aca0
+      - docker.io/rancher/klipper-lb:v0.4.13
+      sizeBytes: 5020426
+    - names:
+      - docker.io/library/alpine@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+      - docker.io/library/alpine:latest
+      sizeBytes: 3875040
+    nodeInfo:
+      architecture: amd64
+      bootID: 2871d16a-9ea4-4900-a32f-c56cd8b28fa8
+      containerRuntimeVersion: containerd://2.0.5-k3s2
+      kernelVersion: 6.14.0-35-generic
+      kubeProxyVersion: ""
+      kubeletVersion: v1.33.4+k3s1
+      machineID: 3a8e0a1716684c15a180b7d3820d8a43
+      operatingSystem: linux
+      osImage: Ubuntu 25.04
+      swap:
+        capacity: 8589930496
+      systemUUID: 8c386ada-c08b-5eaa-69cd-bcfce7650d52
+    runtimeHandlers:
+    - features:
+        recursiveReadOnlyMounts: true
+        userNamespaces: true
+      name: runc
+    - features:
+        recursiveReadOnlyMounts: true
+        userNamespaces: true
+      name: ""
+- apiVersion: v1
+  kind: Node
+  metadata:
+    annotations:
+      alpha.kubernetes.io/provided-node-ip: 192.168.2.4
+      flannel.alpha.coreos.com/backend-data: '{"VNI":1,"VtepMAC":"5a:04:69:57:fb:69"}'
+      flannel.alpha.coreos.com/backend-type: vxlan
+      flannel.alpha.coreos.com/kube-subnet-manager: "true"
+      flannel.alpha.coreos.com/public-ip: 192.168.2.4
+      hami.io/node-handshake: Reported 2026-05-16 02:22:58.076798098 +0000 UTC m=+1786102.763898628
+      hami.io/node-nvidia-register: 'GPU-337d5efe-90a4-32c4-afcb-78ea5e3a5606,10,24576,100,NVIDIA-NVIDIA
+        GeForce RTX 3090,0,true,0,hami-core:GPU-f5d00867-cc01-0631-8d51-14394632047c,10,24576,100,NVIDIA-NVIDIA
+        GeForce RTX 3090,0,true,1,hami-core:'
+      k3s.io/hostname: ubuntu
+      k3s.io/internal-ip: 192.168.2.4
+      k3s.io/node-args: '["agent","--node-label","nvidia.com/gpu.present=true","--node-label","feature.node.kubernetes.io/cpu-model.vendor_id=NVIDIA","--node-label","feature.node.kubernetes.io/pci-10de.present=true"]'
+      k3s.io/node-config-hash: N6ISMEGGAGCTXG7RSJKSEEWWWXLYGP3XKNLFPBRS4LGNBMXDVEZA====
+      k3s.io/node-env: '{"K3S_TOKEN":"********","K3S_URL":"https://192.168.2.2:6443"}'
+      node.alpha.kubernetes.io/ttl: "0"
+      volumes.kubernetes.io/controller-managed-attach-detach: "true"
+    creationTimestamp: "2025-09-04T07:48:22Z"
+    finalizers:
+    - wrangler.cattle.io/node
+    labels:
+      beta.kubernetes.io/arch: amd64
+      beta.kubernetes.io/instance-type: k3s
+      beta.kubernetes.io/os: linux
+      feature.node.kubernetes.io/cpu-model.vendor_id: NVIDIA
+      feature.node.kubernetes.io/pci-10de.present: "true"
+      gpu: "on"
+      k8slens-edit-resource-version: v1
+      kubernetes.io/arch: amd64
+      kubernetes.io/hostname: ubuntu
+      kubernetes.io/os: linux
+      node.kubernetes.io/instance-type: k3s
+      nvidia.com/gpu.present: "true"
+      tensor-fusion.ai/hardware-vendor: NVIDIA
+      tensor-fusion.ai/isolationMode: hard
+      tensor-fusion.ai/node-selector-hash: 1f4cf63923943abf
+      tensor-fusion.ai/watch-node: "true"
+    name: ubuntu
+    ownerReferences:
+    - apiVersion: karpenter.sh/v1
+      controller: true
+      kind: NodeClaim
+      name: ai-gpu-k4lq2
+      uid: 2082734f-b70c-460d-8e0b-ef24844cfd8b
+    resourceVersion: "62890336"
+    uid: 89e85805-ae11-407e-be8c-e9452c46a63d
+  spec:
+    podCIDR: 10.42.1.0/24
+    podCIDRs:
+    - 10.42.1.0/24
+    providerID: k3s://ubuntu
+  status:
+    addresses:
+    - address: 192.168.2.4
+      type: InternalIP
+    - address: ubuntu
+      type: Hostname
+    allocatable:
+      cpu: "20"
+      ephemeral-storage: "1866483373026"
+      hugepages-1Gi: "0"
+      hugepages-2Mi: "0"
+      memory: 63858848Ki
+      nvidia.com/gpu: "20"
+      pods: "110"
+      tensor-fusion.ai/index: "0"
+      tensor-fusion.ai/index_0: "36"
+      tensor-fusion.ai/index_1: "36"
+      tensor-fusion.ai/index_2: "36"
+      tensor-fusion.ai/index_3: "36"
+      tensor-fusion.ai/index_4: "36"
+      tensor-fusion.ai/index_5: "36"
+      tensor-fusion.ai/index_6: "36"
+      tensor-fusion.ai/index_7: "36"
+      tensor-fusion.ai/index_8: "36"
+      tensor-fusion.ai/index_9: "36"
+      tensor-fusion.ai/index_10: "0"
+      tensor-fusion.ai/index_11: "0"
+      tensor-fusion.ai/index_12: "0"
+      tensor-fusion.ai/index_13: "0"
+      tensor-fusion.ai/index_14: "0"
+      tensor-fusion.ai/index_15: "0"
+      tensor-fusion.ai/index_a: "36"
+      tensor-fusion.ai/index_b: "36"
+      tensor-fusion.ai/index_c: "36"
+      tensor-fusion.ai/index_d: "36"
+      tensor-fusion.ai/index_e: "36"
+      tensor-fusion.ai/index_f: "36"
+    capacity:
+      cpu: "20"
+      ephemeral-storage: 1918671232Ki
+      hugepages-1Gi: "0"
+      hugepages-2Mi: "0"
+      memory: 63858848Ki
+      nvidia.com/gpu: "20"
+      pods: "110"
+      tensor-fusion.ai/index: "0"
+      tensor-fusion.ai/index_0: "36"
+      tensor-fusion.ai/index_1: "36"
+      tensor-fusion.ai/index_2: "36"
+      tensor-fusion.ai/index_3: "36"
+      tensor-fusion.ai/index_4: "36"
+      tensor-fusion.ai/index_5: "36"
+      tensor-fusion.ai/index_6: "36"
+      tensor-fusion.ai/index_7: "36"
+      tensor-fusion.ai/index_8: "36"
+      tensor-fusion.ai/index_9: "36"
+      tensor-fusion.ai/index_10: "0"
+      tensor-fusion.ai/index_11: "0"
+      tensor-fusion.ai/index_12: "0"
+      tensor-fusion.ai/index_13: "0"
+      tensor-fusion.ai/index_14: "0"
+      tensor-fusion.ai/index_15: "0"
+      tensor-fusion.ai/index_a: "36"
+      tensor-fusion.ai/index_b: "36"
+      tensor-fusion.ai/index_c: "36"
+      tensor-fusion.ai/index_d: "36"
+      tensor-fusion.ai/index_e: "36"
+      tensor-fusion.ai/index_f: "36"
+    conditions:
+    - lastHeartbeatTime: "2026-05-11T09:29:29Z"
+      lastTransitionTime: "2026-05-11T09:29:29Z"
+      message: Cilium is running on this node
+      reason: CiliumIsUp
+      status: "False"
+      type: NetworkUnavailable
+    - lastHeartbeatTime: "2026-05-16T02:19:30Z"
+      lastTransitionTime: "2026-04-03T03:51:30Z"
+      message: kubelet has sufficient memory available
+      reason: KubeletHasSufficientMemory
+      status: "False"
+      type: MemoryPressure
+    - lastHeartbeatTime: "2026-05-16T02:19:30Z"
+      lastTransitionTime: "2026-04-29T20:09:27Z"
+      message: kubelet has no disk pressure
+      reason: KubeletHasNoDiskPressure
+      status: "False"
+      type: DiskPressure
+    - lastHeartbeatTime: "2026-05-16T02:19:30Z"
+      lastTransitionTime: "2026-04-03T03:51:30Z"
+      message: kubelet has sufficient PID available
+      reason: KubeletHasSufficientPID
+      status: "False"
+      type: PIDPressure
+    - lastHeartbeatTime: "2026-05-16T02:19:30Z"
+      lastTransitionTime: "2026-04-03T03:51:30Z"
+      message: kubelet is posting ready status
+      reason: KubeletReady
+      status: "True"
+      type: Ready
+    daemonEndpoints:
+      kubeletEndpoint:
+        Port: 10250
+    features:
+      supplementalGroupsPolicy: true
+    images:
+    - names:
+      - docker.io/library/sglang-router:0.3.2
+      sizeBytes: 33516828424
+    - names:
+      - m.daocloud.io/docker.io/vllm/vllm-openai@sha256:014a95f21c9edf6abe0aea6b07353f96baa4ec291c427bb1176dc7c93a85845c
+      - m.daocloud.io/docker.io/vllm/vllm-openai:v0.11.0
+      sizeBytes: 12454045526
+    - names:
+      - docker.1ms.run/lmsysorg/sglang@sha256:6f81caf1d2a24b2cfc212410900c14d633302bc16e6ec8379c0d382e625ab313
+      - docker.1ms.run/lmsysorg/sglang:latest-runtime
+      sizeBytes: 11760947730
+    - names:
+      - registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch@sha256:77f17f843507062875ce8be2a6f76aa6aa3df7f9ef1e31d9d7432f4b0f563dee
+      - registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+      sizeBytes: 3314101001
+    - names:
+      - docker.io/bitnamilegacy/kubectl:1.33
+      sizeBytes: 309796271
+    - names:
+      - docker.io/tensorfusion/tensor-fusion-operator:fix-cap-drift-441e72e-local
+      sizeBytes: 273325364
+    - names:
+      - docker.m.daocloud.io/codercom/code-server@sha256:4aff9947c113487113201da811564fade1af5f23038b4d683998d024eebbac92
+      - docker.m.daocloud.io/codercom/code-server:latest
+      sizeBytes: 266390881
+    - names:
+      - crpi-g0sp919hs677ssox.cn-shanghai.personal.cr.aliyuncs.com/jwzhang123/llm-benchmark@sha256:47e59e1a94490d62f3b0348f8e65a65c4f756493b7f4818482bfac942db981dc
+      - crpi-g0sp919hs677ssox.cn-shanghai.personal.cr.aliyuncs.com/jwzhang123/llm-benchmark:latest-amd
+      sizeBytes: 254650892
+    - names:
+      - greptime-registry.cn-hangzhou.cr.aliyuncs.com/greptime/greptimedb@sha256:32d4f3c5c9a189963e2d69f7fbd8ba32957a8654229c02048757b257c880a9c2
+      - greptime-registry.cn-hangzhou.cr.aliyuncs.com/greptime/greptimedb:latest
+      sizeBytes: 243328323
+    - names:
+      - greptime-registry.cn-hangzhou.cr.aliyuncs.com/greptime/greptimedb@sha256:a5a2ffb2ce4e7d69e1fe14b8caf7da4ce907a087c4b20146a556bb6c79a936eb
+      sizeBytes: 242735046
+    - names:
+      - quay.io/cilium/cilium@sha256:758ca0793f5995bb938a2fa219dcce63dc0b3fa7fc4ce5cc851125281fb7361d
+      sizeBytes: 224306600
+    - names:
+      - docker.io/tensorfusion/tensor-fusion-operator:dev
+      sizeBytes: 219026752
+    - names:
+      - docker.io/projecthami/hami@sha256:abda390681393ec843e82fc3b0267ccb262e7479f70696e693cc526bf5e2d094
+      - docker.io/projecthami/hami:v2.7.0
+      sizeBytes: 141300035
+    - names:
+      - docker.io/tensorfusion/tensor-fusion-client:1.63.4
+      sizeBytes: 83892559
+    - names:
+      - docker.io/rancher/mirrored-coredns-coredns:1.12.3
+      sizeBytes: 75190699
+    - names:
+      - docker.io/tensorfusion/tensor-fusion-hypervisor:dev
+      sizeBytes: 72784191
+    - names:
+      - quay.io/cilium/cilium-envoy@sha256:709c08ade3d17d52da4ca2af33f431360ec26268d288d9a6cd1d98acc9a1dced
+      sizeBytes: 62862122
+    - names:
+      - docker.io/rancher/mirrored-library-traefik:3.3.6
+      - docker.m.daocloud.io/rancher/mirrored-library-traefik:3.3.6
+      sizeBytes: 58274900
+    - names:
+      - docker.io/timberio/vector@sha256:651ca836b61bfdcc8e3b8ec22b0d2973aef09ef106984f8306f639cbb50174bb
+      - docker.io/timberio/vector:latest-alpine
+      sizeBytes: 56612775
+    - names:
+      - docker.m.daocloud.io/timberio/vector@sha256:98d5c3d29043b4a0604631b5973e67f0ed4a5c1ebb57dfd5803b8ff3bfbc70a1
+      - docker.m.daocloud.io/timberio/vector:latest-alpine
+      sizeBytes: 55645503
+    - names:
+      - docker.io/tensorfusion/vgpu-provider-nvidia:1.3.2
+      sizeBytes: 54132071
+    - names:
+      - registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-worker@sha256:c344405f194c798b3d66603050c84c3693692cce5997499ead3b9fc6db405612
+      - registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-worker:1.68.1
+      sizeBytes: 38018200
+    - names:
+      - docker.io/tensorfusion/vgpu-provider-nvidia:dev
+      sizeBytes: 31481659
+    - names:
+      - quay.io/cilium/operator-generic@sha256:f7884848483bbcd7b1e0ccfd34ba4546f258b460cb4b7e2f06a1bcc96ef88039
+      sizeBytes: 31216191
+    - names:
+      - quay.io/cilium/hubble-relay@sha256:6cfae1d1afa566ba941f03d4d7e141feddd05260e5cd0a1509aba1890a45ef00
+      sizeBytes: 28577506
+    - names:
+      - docker.io/library/registry:2.8.3
+      sizeBytes: 26004103
+    - names:
+      - docker.io/rancher/mirrored-metrics-server:v0.8.0
+      - docker.m.daocloud.io/rancher/mirrored-metrics-server:v0.8.0
+      sizeBytes: 22493802
+    - names:
+      - quay.io/cilium/hubble-ui-backend@sha256:0e0eed917653441fded4e7cdb096b7be6a3bddded5a2dd10812a27b1fc6ed95b
+      sizeBytes: 20027102
+    - names:
+      - quay.io/cilium/hubble-ui@sha256:e2e9313eb7caf64b0061d9da0efbdad59c6c461f6ca1752768942bfeda0796c6
+      sizeBytes: 11081180
+    - names:
+      - docker.io/rancher/klipper-lb@sha256:7eb86d5b908ec6ddd9796253d8cc2f43df99420fc8b8a18452a94dc56f86aca0
+      - docker.io/rancher/klipper-lb:v0.4.13
+      sizeBytes: 5020426
+    - names:
+      - docker.io/rancher/mirrored-pause:3.6
+      sizeBytes: 685844
+    nodeInfo:
+      architecture: amd64
+      bootID: 5c9f40db-682e-4f31-b540-c1820f75565d
+      containerRuntimeVersion: containerd://2.0.5-k3s2
+      kernelVersion: 6.14.0-37-generic
+      kubeProxyVersion: ""
+      kubeletVersion: v1.33.3+k3s1
+      machineID: 333c11ad29c0460d83c5b7bfe98ec5b7
+      operatingSystem: linux
+      osImage: Ubuntu 25.04
+      swap:
+        capacity: 8589930496
+      systemUUID: 651efbe2-b250-416c-d08c-60cf84bcb542
+    runtimeHandlers:
+    - features:
+        recursiveReadOnlyMounts: true
+        userNamespaces: true
+      name: runc
+    - features:
+        recursiveReadOnlyMounts: true
+        userNamespaces: true
+      name: ""
+kind: List
+metadata:
+  resourceVersion: ""

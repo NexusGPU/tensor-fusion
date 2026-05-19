@@ -1,0 +1,20 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  annotations:
+    meta.helm.sh/release-name: tensor-fusion-sys
+    meta.helm.sh/release-namespace: tensor-fusion-sys
+  creationTimestamp: "2025-09-04T07:53:30Z"
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  name: tensor-fusion-sys-rolebinding
+  resourceVersion: "1225"
+  uid: 5b25c42c-62d3-4079-804e-c9bc0b1eb66d
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tensor-fusion-sys-role
+subjects:
+- kind: ServiceAccount
+  name: tensor-fusion-sys
+  namespace: tensor-fusion-sys

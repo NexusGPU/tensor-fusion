@@ -1,0 +1,74 @@
+apiVersion: v1
+items:
+- apiVersion: tensor-fusion.ai/v1
+  kind: SchedulingConfigTemplate
+  metadata:
+    annotations:
+      freelens.app/resource-version: v1
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"tensor-fusion.ai/v1","kind":"SchedulingConfigTemplate","metadata":{"annotations":{},"labels":{"tensor-fusion.ai/cluster":"tensor-fusion"},"name":"tf-scheduling-config"},"spec":{"autoScaling":{"autoSetLimits":{"evaluationPeriod":"10s","extraTFlopsBufferRatio":"20%","ignoredDeltaRange":"5%","maxRatioToRequests":"5.0","prediction":{"enable":true,"historyDataPeriod":"1y","model":"smart-limit-v1","predictionPeriod":"1m"},"scaleUpStep":"200%"},"autoSetReplicas":{"enable":true,"evaluationPeriod":"30s","scaleDownCoolDownTime":"5m","scaleDownStep":"10%","scaleUpCoolDownTime":"1m","scaleUpStep":"30%","targetTFlopsOfLimits":"95%"},"autoSetRequests":{"aggregationPeriod":"7d","evaluationPeriod":"30m","extraBufferRatio":"1.0","percentileForAutoRequests":"90%","prediction":{"enable":true,"historyDataPeriod":"1y","model":"smart-request-v1","predictionPeriod":"1h"}}},"hypervisor":{"autoFreezeAndResume":{"autoFreeze":[{"enable":true,"freezeToDiskTTL":"1h","freezeToMemTTL":"1m","qos":"low"},{"enable":true,"freezeToDiskTTL":"2h","freezeToMemTTL":"15m","qos":"medium"},{"enable":true,"freezeToDiskTTL":"1w","freezeToMemTTL":"1d","qos":"high"},{"enable":true,"freezeToDiskTTL":"4w","freezeToMemTTL":"1w","qos":"critical"}],"intelligenceWarmup":{"enable":true,"historyDataPeriod":"1y","model":"smart-warmup-v1","predictionPeriod":"1m"}},"multiProcessQueuing":{"enable":true,"interval":"500ms","queueLevelTimeSlices":["1s","2s","4s","8s"]}},"placement":{"allowUsingLocalGPU":true,"gpuFilters":[{"params":{"connectionNum":150},"type":"avoidTooMuchConnectionsOnSameGPU"},{"params":{"topologyKey":"topology.kubernetes.io/zone"},"type":"avoidDifferentZone"}],"mode":"CompactFirst"},"reBalancer":{"interval":"20m","reBalanceCoolDownTime":"5m","threshold":{"matchAny":{"tflopsTotalLimitExceededRatio":1.5,"vramSwitchPerMinute":5}}}}}
+    creationTimestamp: "2025-09-04T07:55:58Z"
+    generation: 19
+    labels:
+      k8slens-edit-resource-version: v1
+      tensor-fusion.ai/cluster: tensor-fusion
+    name: tf-scheduling-config
+    resourceVersion: "60550147"
+    uid: 8f911566-fa2d-48f4-929d-7476d412abba
+  spec:
+    hypervisor:
+      autoFreezeAndResume:
+        autoFreeze:
+        - enable: true
+          freezeToDiskTTL: 1h
+          freezeToMemTTL: 1m
+          qos: low
+        - enable: true
+          freezeToDiskTTL: 2h
+          freezeToMemTTL: 2m
+          qos: medium
+        - enable: true
+          freezeToDiskTTL: 1w
+          freezeToMemTTL: 1d
+          qos: high
+        - enable: true
+          freezeToDiskTTL: 4w
+          freezeToMemTTL: 1w
+          qos: critical
+        intelligenceWarmup:
+          enable: true
+          historyDataPeriod: 1y
+          model: smart-warmup-v1
+          predictionPeriod: 1m
+      elasticRateLimitParameters:
+        burstWindow: "0.5"
+        capacityMax: "6000"
+        capacityMin: "150"
+        filterAlpha: "0.30"
+        integralDecayFactor: "0.85"
+        kd: "1.0"
+        ki: "0.4"
+        kp: "0.12"
+        maxRefillRate: "12000"
+        minRefillRate: "80"
+      multiProcessQueuingParameters: {}
+    placement:
+      allowUsingLocalGPU: true
+      gpuFilters:
+      - params:
+          connectionNum: 150
+        type: avoidTooMuchConnectionsOnSameGPU
+      - params:
+          topologyKey: topology.kubernetes.io/zone
+        type: avoidDifferentZone
+      mode: NodeCompactGPULowLoad
+    reBalancer:
+      interval: 20m
+      reBalanceCoolDownTime: 5m
+      threshold:
+        matchAny:
+          tflopsTotalLimitExceededRatio: 1.5
+          vramSwitchPerMinute: 5
+kind: List
+metadata:
+  resourceVersion: ""

@@ -1,0 +1,476 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/tensor-fusion-hypervisor: unconfined
+  creationTimestamp: "2026-05-15T10:20:25Z"
+  generation: 1
+  labels:
+    tensor-fusion.ai/component: hypervisor
+    tensor-fusion.ai/pod-template-hash: f27d4097fe402662
+    tensor-fusion.ai/pool-tensor-fusion-nvidia-shared: "true"
+  name: tf-hypervisor-ubuntu
+  namespace: tensor-fusion-sys
+  ownerReferences:
+  - apiVersion: tensor-fusion.ai/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: GPUNode
+    name: ubuntu
+    uid: e70f5834-84e5-47c7-b4d3-71163f53df2c
+  - apiVersion: v1
+    kind: Node
+    name: ubuntu
+    uid: 89e85805-ae11-407e-be8c-e9452c46a63d
+  resourceVersion: "62828864"
+  uid: 1e3ed94a-a1f3-4227-b0c9-a32647e6aea5
+spec:
+  containers:
+  - args:
+    - --isolation-mode=hard
+    env:
+    - name: TF_LOG_LEVEL
+      value: debug
+    - name: TF_ACCELERATOR_LIB_PATH
+      value: /run/tensor-fusion/libaccelerator_nvidia.so
+    - name: NVIDIA_MIG_CONFIG_DEVICES
+      value: all
+    - name: NVIDIA_MIG_MONITOR_DEVICES
+      value: all
+    - name: TENSOR_FUSION_POOL_NAME
+      value: tensor-fusion-nvidia-shared
+    - name: TENSOR_FUSION_GPU_INFO_PATH
+      value: /etc/tensor-fusion/gpu-info.yaml
+    - name: API_LISTEN_ADDR
+      value: 0.0.0.0:8001
+    - name: POD_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.name
+    - name: GPU_NODE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: spec.nodeName
+    - name: DETECT_IN_USED_GPUS
+      value: "true"
+    - name: TF_PRODUCT_NAME
+      value: tensor-fusion-oss
+    - name: NVIDIA_VISIBLE_DEVICES
+      value: all
+    - name: DEVICE_PLUGIN_PATH
+      value: /var/lib/kubelet/device-plugins
+    - name: TF_HARDWARE_VENDOR
+      value: NVIDIA
+    - name: TF_PROVIDER_HARDWARE_METADATA
+      value: '[{"model":"NVIDIA GeForce RTX 3090","fullModelName":"NVIDIA GeForce
+        RTX 3090","costPerHour":"1.0","fp16TFlops":"71","maxPartitions":7,"maxIsolationGroups":5}]'
+    - name: TF_PROVIDER_DEVICE_MOUNT
+      value: '{}'
+    - name: TF_PROVIDER_TEMPLATE_CONFIG
+      value: '{"hardwareMetadata":[{"model":"NVIDIA GeForce RTX 3090","fullModelName":"NVIDIA
+        GeForce RTX 3090","costPerHour":"1.0","fp16TFlops":"71","maxPartitions":7,"maxIsolationGroups":5}],"virtualizationTemplates":[{"id":"mig-1g-10gb","name":"1g.10gb","memoryGigabytes":10,"computePercent":"14.2857","description":"1/7
+        GPU slice with 10GB memory","maxInstances":7,"placementLimit":[0,1,2,3,4,5,6],"placementOffset":1,"isolationGroupSharing":"exclusive"},{"id":"mig-2g-20gb","name":"2g.20gb","memoryGigabytes":20,"computePercent":"28.5714","description":"2/7
+        GPU slice with 20GB memory","maxInstances":3,"placementLimit":[0,2,4],"placementOffset":2,"isolationGroupSharing":"exclusive"},{"id":"mig-3g-40gb","name":"3g.40gb","memoryGigabytes":40,"computePercent":"42.8571","description":"3/7
+        GPU slice with 40GB memory","maxInstances":2,"placementLimit":[0,4],"placementOffset":4,"isolationGroupSharing":"exclusive"},{"id":"mig-7g-80gb","name":"7g.80gb","memoryGigabytes":80,"computePercent":"100","description":"Full
+        GPU with 80GB memory","maxInstances":1,"placementLimit":[0],"placementOffset":8,"isolationGroupSharing":"exclusive"}]}'
+    - name: TF_ENABLE_LOG
+      value: "1"
+    - name: TF_HYPERVISOR_SCHEDULING_CONFIG
+      value: '{"autoFreezeAndResume":{"autoFreeze":[{"qos":"low","freezeToMemTTL":"1m","freezeToDiskTTL":"1h","enable":true},{"qos":"medium","freezeToMemTTL":"2m","freezeToDiskTTL":"2h","enable":true},{"qos":"high","freezeToMemTTL":"1d","freezeToDiskTTL":"1w","enable":true},{"qos":"critical","freezeToMemTTL":"1w","freezeToDiskTTL":"4w","enable":true}],"intelligenceWarmup":{"enable":true,"model":"smart-warmup-v1","historyDataPeriod":"1y","predictionPeriod":"1m"}},"elasticRateLimitParameters":{"maxRefillRate":"12000","minRefillRate":"80","filterAlpha":"0.30","ki":"0.4","kd":"1.0","kp":"0.12","burstWindow":"0.5","capacityMin":"150","capacityMax":"6000","integralDecayFactor":"0.85"},"multiProcessQueuingParameters":{}}'
+    - name: TF_HYPERVISOR_METRICS_FORMAT
+      value: influx
+    - name: TF_HYPERVISOR_METRICS_EXTRA_LABELS
+      value: '{}'
+    image: tensorfusion/tensor-fusion-hypervisor:dev
+    imagePullPolicy: IfNotPresent
+    livenessProbe:
+      failureThreshold: 5
+      httpGet:
+        path: /healthz
+        port: 8001
+        scheme: HTTP
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      successThreshold: 1
+      timeoutSeconds: 5
+    name: tensor-fusion-hypervisor
+    readinessProbe:
+      failureThreshold: 2
+      httpGet:
+        path: /readyz
+        port: 8001
+        scheme: HTTP
+      initialDelaySeconds: 5
+      periodSeconds: 15
+      successThreshold: 1
+      timeoutSeconds: 5
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 60m
+        memory: 128Mi
+    securityContext:
+      appArmorProfile:
+        type: Unconfined
+      capabilities:
+        add:
+        - SYS_PTRACE
+      privileged: true
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /run/tensor-fusion
+      name: tf-data
+    - mountPath: /etc/tensor-fusion/gpu-info.yaml
+      name: gpu-info
+      subPath: gpu-info.yaml
+    - mountPath: /var/lib/kubelet/device-plugins
+      name: device-plugin
+    - mountPath: /var/lib/kubelet/pod-resources
+      name: pod-resources
+    - mountPath: /logs
+      name: logs
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-qpzzx
+      readOnly: true
+  - env:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: spec.nodeName
+    image: docker.io/timberio/vector:latest-alpine
+    imagePullPolicy: IfNotPresent
+    name: vector
+    resources:
+      limits:
+        cpu: "1"
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /etc/vector/vector.yaml
+      name: vector-config
+      readOnly: true
+      subPath: vector-hypervisor.yaml
+    - mountPath: /logs
+      name: logs
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-qpzzx
+      readOnly: true
+  dnsPolicy: ClusterFirstWithHostNet
+  enableServiceLinks: false
+  hostNetwork: true
+  hostPID: true
+  initContainers:
+  - command:
+    - hypervisor
+    - mount-shm
+    - --mount-point
+    - /run/tensor-fusion/shm
+    - --size
+    - "1024"
+    image: tensorfusion/tensor-fusion-hypervisor:dev
+    imagePullPolicy: IfNotPresent
+    name: init-shm
+    resources: {}
+    securityContext:
+      privileged: true
+      runAsGroup: 0
+      runAsUser: 0
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /run/tensor-fusion
+      mountPropagation: Bidirectional
+      name: tf-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-qpzzx
+      readOnly: true
+  - command:
+    - sh
+    - -c
+    - if [ -d /build ]; then cp -r /build/. /run/tensor-fusion; fi
+    image: tensorfusion/vgpu-provider-nvidia:1.3.2
+    imagePullPolicy: IfNotPresent
+    name: init-runtime
+    resources: {}
+    securityContext:
+      privileged: true
+      runAsGroup: 0
+      runAsUser: 0
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /run/tensor-fusion
+      mountPropagation: Bidirectional
+      name: tf-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-qpzzx
+      readOnly: true
+  nodeName: ubuntu
+  preemptionPolicy: PreemptLowerPriority
+  priority: 2000001000
+  priorityClassName: system-node-critical
+  restartPolicy: Always
+  schedulerName: default-scheduler
+  securityContext:
+    runAsGroup: 0
+    runAsUser: 0
+  serviceAccount: tensor-fusion-hypervisor-sa
+  serviceAccountName: tensor-fusion-hypervisor-sa
+  terminationGracePeriodSeconds: 5
+  tolerations:
+  - key: tensor-fusion.ai/used-by
+    operator: Exists
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 300
+  volumes:
+  - hostPath:
+      path: /run/tensor-fusion
+      type: DirectoryOrCreate
+    name: tf-data
+  - configMap:
+      defaultMode: 420
+      name: tensor-fusion-sys-vector-config
+    name: vector-config
+  - emptyDir: {}
+    name: logs
+  - hostPath:
+      path: /var/log/pods
+      type: DirectoryOrCreate
+    name: kubernetes-logs
+  - configMap:
+      defaultMode: 420
+      name: tensor-fusion-sys-public-gpu-info
+    name: gpu-info
+  - hostPath:
+      path: /var/lib/kubelet/device-plugins
+      type: DirectoryOrCreate
+    name: device-plugin
+  - hostPath:
+      path: /var/lib/kubelet/pod-resources
+      type: DirectoryOrCreate
+    name: pod-resources
+  - name: kube-api-access-qpzzx
+    projected:
+      defaultMode: 420
+      sources:
+      - serviceAccountToken:
+          expirationSeconds: 3607
+          path: token
+      - configMap:
+          items:
+          - key: ca.crt
+            path: ca.crt
+          name: kube-root-ca.crt
+      - downwardAPI:
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-15T10:20:26Z"
+    status: "True"
+    type: PodReadyToStartContainers
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-15T10:20:27Z"
+    status: "True"
+    type: Initialized
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-15T10:20:44Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-15T10:20:44Z"
+    status: "True"
+    type: ContainersReady
+  - lastProbeTime: null
+    lastTransitionTime: "2026-05-15T10:20:25Z"
+    status: "True"
+    type: PodScheduled
+  containerStatuses:
+  - allocatedResources:
+      cpu: 60m
+      memory: 128Mi
+    containerID: containerd://b315d7dcca4d202a8193568739495ec260174aaa8c36cfc81e75d8c7f7e79b8e
+    image: docker.io/tensorfusion/tensor-fusion-hypervisor:dev
+    imageID: sha256:7f0019555703aa1655af7d5989b4fe65fd9e8b5f55681a1f9cb610cb6748926b
+    lastState: {}
+    name: tensor-fusion-hypervisor
+    ready: true
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 60m
+        memory: 128Mi
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-05-15T10:20:27Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /run/tensor-fusion
+      name: tf-data
+    - mountPath: /etc/tensor-fusion/gpu-info.yaml
+      name: gpu-info
+    - mountPath: /var/lib/kubelet/device-plugins
+      name: device-plugin
+    - mountPath: /var/lib/kubelet/pod-resources
+      name: pod-resources
+    - mountPath: /logs
+      name: logs
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-qpzzx
+      readOnly: true
+      recursiveReadOnly: Disabled
+  - allocatedResources:
+      cpu: 50m
+      memory: 64Mi
+    containerID: containerd://6aefc02d67c55dafbdbe7368c6b8c18492cb0f5569ffe76f285d042411397935
+    image: docker.io/timberio/vector:latest-alpine
+    imageID: docker.io/timberio/vector@sha256:651ca836b61bfdcc8e3b8ec22b0d2973aef09ef106984f8306f639cbb50174bb
+    lastState: {}
+    name: vector
+    ready: true
+    resources:
+      limits:
+        cpu: "1"
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+    restartCount: 0
+    started: true
+    state:
+      running:
+        startedAt: "2026-05-15T10:20:27Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 6
+        - 10
+        - 11
+        - 20
+        - 26
+        - 27
+        uid: 0
+    volumeMounts:
+    - mountPath: /etc/vector/vector.yaml
+      name: vector-config
+      readOnly: true
+      recursiveReadOnly: Disabled
+    - mountPath: /logs
+      name: logs
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-qpzzx
+      readOnly: true
+      recursiveReadOnly: Disabled
+  hostIP: 192.168.2.4
+  hostIPs:
+  - ip: 192.168.2.4
+  initContainerStatuses:
+  - containerID: containerd://724907b2e3b70e4998de2a1050b4b49a67b73d0082e1f024c804c4e218865367
+    image: docker.io/tensorfusion/tensor-fusion-hypervisor:dev
+    imageID: sha256:7f0019555703aa1655af7d5989b4fe65fd9e8b5f55681a1f9cb610cb6748926b
+    lastState: {}
+    name: init-shm
+    ready: true
+    resources: {}
+    restartCount: 0
+    started: false
+    state:
+      terminated:
+        containerID: containerd://724907b2e3b70e4998de2a1050b4b49a67b73d0082e1f024c804c4e218865367
+        exitCode: 0
+        finishedAt: "2026-05-15T10:20:26Z"
+        reason: Completed
+        startedAt: "2026-05-15T10:20:26Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        uid: 0
+    volumeMounts:
+    - mountPath: /run/tensor-fusion
+      name: tf-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-qpzzx
+      readOnly: true
+      recursiveReadOnly: Disabled
+  - containerID: containerd://dd562c42c8087e186826319dea1f566495b5b422bda5592209149f78e8251adb
+    image: docker.io/tensorfusion/vgpu-provider-nvidia:1.3.2
+    imageID: sha256:87cf688fd42bca018681d124be6713643a4cd342f058fab9f519c95713bc4242
+    lastState: {}
+    name: init-runtime
+    ready: true
+    resources: {}
+    restartCount: 0
+    started: false
+    state:
+      terminated:
+        containerID: containerd://dd562c42c8087e186826319dea1f566495b5b422bda5592209149f78e8251adb
+        exitCode: 0
+        finishedAt: "2026-05-15T10:20:26Z"
+        reason: Completed
+        startedAt: "2026-05-15T10:20:26Z"
+    user:
+      linux:
+        gid: 0
+        supplementalGroups:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 6
+        - 10
+        - 11
+        - 20
+        - 26
+        - 27
+        uid: 0
+    volumeMounts:
+    - mountPath: /run/tensor-fusion
+      name: tf-data
+    - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-qpzzx
+      readOnly: true
+      recursiveReadOnly: Disabled
+  phase: Running
+  podIP: 192.168.2.4
+  podIPs:
+  - ip: 192.168.2.4
+  qosClass: Burstable
+  startTime: "2026-05-15T10:20:25Z"

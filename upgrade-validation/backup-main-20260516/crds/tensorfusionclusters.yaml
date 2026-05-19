@@ -1,0 +1,974 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  creationTimestamp: "2025-09-04T07:52:48Z"
+  generation: 11
+  name: tensorfusionclusters.tensor-fusion.ai
+  resourceVersion: "58233966"
+  uid: e9795610-1b1f-4179-8cff-b42b2aa126ed
+spec:
+  conversion:
+    strategy: None
+  group: tensor-fusion.ai
+  names:
+    kind: TensorFusionCluster
+    listKind: TensorFusionClusterList
+    plural: tensorfusionclusters
+    singular: tensorfusioncluster
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.totalPools
+      name: Total Pools
+      type: string
+    - jsonPath: .status.totalNodes
+      name: Total Nodes
+      type: string
+    - jsonPath: .status.totalGPUs
+      name: Total GPU
+      type: string
+    - jsonPath: .status.totalTFlops
+      name: Total Tflops
+      type: string
+    - jsonPath: .status.totalVRAM
+      name: Total VRAM
+      type: string
+    - jsonPath: .status.availableTFlops
+      name: Available Tflops
+      type: string
+    - jsonPath: .status.availableVRAM
+      name: Available VRAM
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: TensorFusionCluster is the Schema for the tensorfusionclusters
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TensorFusionClusterSpec defines the desired state of TensorFusionCluster.
+            properties:
+              computingVendor:
+                description: ComputingVendorConfig defines the Cloud vendor connection
+                  such as AWS, GCP, Azure etc.
+                properties:
+                  authType:
+                    enum:
+                    - accessKey
+                    - serviceAccountRole
+                    type: string
+                  enable:
+                    default: true
+                    type: boolean
+                  name:
+                    type: string
+                  params:
+                    properties:
+                      accessKeyPath:
+                        description: the secret of access key and secret key or config
+                          file, must be mounted as file path
+                        type: string
+                      configFile:
+                        type: string
+                      defaultRegion:
+                        type: string
+                      extraParams:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          User can set extra cloud vendor params, eg.
+                          in ali cloud:" spotPriceLimit, spotDuration, spotInterruptionBehavior, systemDiskCategory, systemDiskSize, dataDiskPerformanceLevel
+                          in aws cloud: TODO
+                        type: object
+                      iamRole:
+                        description: preferred IAM role since it's more secure
+                        type: string
+                      secretKeyPath:
+                        type: string
+                    type: object
+                  type:
+                    description: support popular cloud providers
+                    enum:
+                    - aws
+                    - lambda-labs
+                    - gcp
+                    - azure
+                    - oracle-oci
+                    - ibm
+                    - openshift
+                    - vultr
+                    - together-ai
+                    - alibaba
+                    - nvidia
+                    - tencent
+                    - runpod
+                    - karpenter
+                    - mock
+                    type: string
+                type: object
+              gpuPools:
+                items:
+                  description: GPUPool defines how to create a GPU pool, could be
+                    URL or inline
+                  properties:
+                    isDefault:
+                      type: boolean
+                    name:
+                      type: string
+                    specTemplate:
+                      description: GPUPoolSpec defines the desired state of GPUPool.
+                      properties:
+                        capacityConfig:
+                          properties:
+                            maxResources:
+                              properties:
+                                cpu:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: CPU/Memory is only available when CloudVendor
+                                    connection is enabled
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                memory:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                tflops:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                vram:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                            minResources:
+                              properties:
+                                cpu:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: CPU/Memory is only available when CloudVendor
+                                    connection is enabled
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                memory:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                tflops:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                vram:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                            oversubscription:
+                              properties:
+                                tflopsOversellRatio:
+                                  default: 500
+                                  description: The multi of TFlops to oversell, default
+                                    to 500%, indicates 5 times oversell
+                                  format: int32
+                                  maximum: 100000
+                                  minimum: 100
+                                  type: integer
+                                vramExpandToHostDisk:
+                                  default: 70
+                                  description: the percentage of Host Disk appending
+                                    to GPU VRAM, default to 70%
+                                  format: int32
+                                  maximum: 100
+                                  minimum: 0
+                                  type: integer
+                                vramExpandToHostMem:
+                                  default: 50
+                                  description: the percentage of Host RAM appending
+                                    to GPU VRAM, default to 50%
+                                  format: int32
+                                  maximum: 100
+                                  minimum: 0
+                                  type: integer
+                              type: object
+                            warmResources:
+                              properties:
+                                cpu:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: CPU/Memory is only available when CloudVendor
+                                    connection is enabled
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                memory:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                tflops:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                vram:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          type: object
+                        componentConfig:
+                          description: Customize system components for seamless onboarding.
+                          properties:
+                            client:
+                              properties:
+                                image:
+                                  description: |-
+                                    Image is the default client image, used when no ProviderConfig is found for the vendor
+                                    When ProviderConfig exists, remoteClient image from ProviderConfig takes precedence
+                                  type: string
+                                operatorEndpoint:
+                                  type: string
+                                patchToContainer:
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                                patchToPod:
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                              type: object
+                            hypervisor:
+                              properties:
+                                enableVector:
+                                  type: boolean
+                                image:
+                                  description: |-
+                                    Image is the default hypervisor image, used when no ProviderConfig is found for the vendor
+                                    When ProviderConfig exists, middleware image from ProviderConfig takes precedence
+                                  type: string
+                                podTemplate:
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                                portNumber:
+                                  default: 8000
+                                  format: int32
+                                  maximum: 65535
+                                  minimum: 0
+                                  type: integer
+                                vectorImage:
+                                  type: string
+                              type: object
+                            worker:
+                              properties:
+                                image:
+                                  description: |-
+                                    Image is the default worker image, used when no ProviderConfig is found for the vendor
+                                    When ProviderConfig exists, remoteWorker image from ProviderConfig takes precedence
+                                  type: string
+                                podTemplate:
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                              type: object
+                          type: object
+                        defaultUsingLocalGPU:
+                          type: boolean
+                        nodeManagerConfig:
+                          properties:
+                            defaultVendor:
+                              default: NVIDIA
+                              description: |-
+                                In single AI accelerator hardware vendor mode, when default vendor set
+                                All nodes provisioned by NodeProvisioner or selected by NodeSelector will be set with vendor label
+                              type: string
+                            multiVendorNodeSelector:
+                              additionalProperties:
+                                description: |-
+                                  A node selector represents the union of the results of one or more label queries
+                                  over a set of nodes; that is, it represents the OR of the selectors represented
+                                  by the node selector terms.
+                                properties:
+                                  nodeSelectorTerms:
+                                    description: Required. A list of node selector
+                                      terms. The terms are ORed.
+                                    items:
+                                      description: |-
+                                        A null or empty node selector term matches no objects. The requirements of
+                                        them are ANDed.
+                                        The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+                                      properties:
+                                        matchExpressions:
+                                          description: A list of node selector requirements
+                                            by node's labels.
+                                          items:
+                                            description: |-
+                                              A node selector requirement is a selector that contains values, a key, and an operator
+                                              that relates the key and values.
+                                            properties:
+                                              key:
+                                                description: The label key that the
+                                                  selector applies to.
+                                                type: string
+                                              operator:
+                                                description: |-
+                                                  Represents a key's relationship to a set of values.
+                                                  Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                                type: string
+                                              values:
+                                                description: |-
+                                                  An array of string values. If the operator is In or NotIn,
+                                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                  the values array must be empty. If the operator is Gt or Lt, the values
+                                                  array must have a single element, which will be interpreted as an integer.
+                                                  This array is replaced during a strategic merge patch.
+                                                items:
+                                                  type: string
+                                                type: array
+                                                x-kubernetes-list-type: atomic
+                                            required:
+                                            - key
+                                            - operator
+                                            type: object
+                                          type: array
+                                          x-kubernetes-list-type: atomic
+                                        matchFields:
+                                          description: A list of node selector requirements
+                                            by node's fields.
+                                          items:
+                                            description: |-
+                                              A node selector requirement is a selector that contains values, a key, and an operator
+                                              that relates the key and values.
+                                            properties:
+                                              key:
+                                                description: The label key that the
+                                                  selector applies to.
+                                                type: string
+                                              operator:
+                                                description: |-
+                                                  Represents a key's relationship to a set of values.
+                                                  Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                                type: string
+                                              values:
+                                                description: |-
+                                                  An array of string values. If the operator is In or NotIn,
+                                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                  the values array must be empty. If the operator is Gt or Lt, the values
+                                                  array must have a single element, which will be interpreted as an integer.
+                                                  This array is replaced during a strategic merge patch.
+                                                items:
+                                                  type: string
+                                                type: array
+                                                x-kubernetes-list-type: atomic
+                                            required:
+                                            - key
+                                            - operator
+                                            type: object
+                                          type: array
+                                          x-kubernetes-list-type: atomic
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - nodeSelectorTerms
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              description: |-
+                                When this field set, the GPU pool will be in multi AI accelerator vendor mode
+                                each GPU node's vendor name is set to map key, e.g. { AMD: { nodeSelectorTerms }}
+                              type: object
+                            nodeCompaction:
+                              properties:
+                                period:
+                                  default: 5m
+                                  type: string
+                              type: object
+                            nodePoolRollingUpdatePolicy:
+                              properties:
+                                autoUpdateClient:
+                                  type: boolean
+                                autoUpdateHypervisor:
+                                  type: boolean
+                                autoUpdateWorker:
+                                  type: boolean
+                                batchInterval:
+                                  default: 1s
+                                  type: string
+                                batchPercentage:
+                                  default: 100
+                                  format: int32
+                                  maximum: 100
+                                  minimum: 0
+                                  type: integer
+                                maintenanceWindow:
+                                  properties:
+                                    includes:
+                                      description: crontab syntax.
+                                      items:
+                                        type: string
+                                      type: array
+                                  type: object
+                                maxDuration:
+                                  default: 10m
+                                  type: string
+                              type: object
+                            nodeProvisioner:
+                              description: |-
+                                NodeProvisioner or NodeSelector, they are exclusive.
+                                NodeSelector is for existing GPUs, NodeProvisioner is for Karpenter-like auto management.
+                              properties:
+                                budget:
+                                  description: NodeProvisioner will start an virtual
+                                    billing based on public pricing or customized
+                                    pricing, if the VM's costs exceeded any budget
+                                    constraints, the new VM will not be created, and
+                                    alerts will be generated
+                                  properties:
+                                    budgetExceedStrategy:
+                                      default: AlertOnly
+                                      enum:
+                                      - AlertOnly
+                                      - AlertAndTerminateVM
+                                      type: string
+                                    budgetPerDay:
+                                      default: "100"
+                                      type: string
+                                    budgetPerMonth:
+                                      default: "1000"
+                                      type: string
+                                    budgetPerQuarter:
+                                      default: "3000"
+                                      type: string
+                                  type: object
+                                cpuNodeLabels:
+                                  additionalProperties:
+                                    type: string
+                                  type: object
+                                cpuRequirements:
+                                  items:
+                                    properties:
+                                      key:
+                                        enum:
+                                        - node.kubernetes.io/instance-type
+                                        - kubernetes.io/arch
+                                        - kubernetes.io/os
+                                        - topology.kubernetes.io/region
+                                        - topology.kubernetes.io/zone
+                                        - karpenter.sh/capacity-type
+                                        - tensor-fusion.ai/gpu-vendor
+                                        - tensor-fusion.ai/gpu-instance-family
+                                        - tensor-fusion.ai/gpu-instance-size
+                                        type: string
+                                      operator:
+                                        default: In
+                                        description: |-
+                                          A node selector operator is the set of operators that can be used in
+                                          a node selector requirement.
+                                        enum:
+                                        - In
+                                        - Exists
+                                        - DoesNotExist
+                                        - Gt
+                                        - Lt
+                                        type: string
+                                      values:
+                                        items:
+                                          type: string
+                                        type: array
+                                    type: object
+                                  type: array
+                                cpuTaints:
+                                  items:
+                                    properties:
+                                      effect:
+                                        default: NoSchedule
+                                        enum:
+                                        - NoSchedule
+                                        - NoExecute
+                                        - PreferNoSchedule
+                                        type: string
+                                      key:
+                                        type: string
+                                      value:
+                                        type: string
+                                    type: object
+                                  type: array
+                                gpuNodeAnnotations:
+                                  additionalProperties:
+                                    type: string
+                                  type: object
+                                gpuNodeLabels:
+                                  additionalProperties:
+                                    type: string
+                                  type: object
+                                gpuRequirements:
+                                  items:
+                                    properties:
+                                      key:
+                                        enum:
+                                        - node.kubernetes.io/instance-type
+                                        - kubernetes.io/arch
+                                        - kubernetes.io/os
+                                        - topology.kubernetes.io/region
+                                        - topology.kubernetes.io/zone
+                                        - karpenter.sh/capacity-type
+                                        - tensor-fusion.ai/gpu-vendor
+                                        - tensor-fusion.ai/gpu-instance-family
+                                        - tensor-fusion.ai/gpu-instance-size
+                                        type: string
+                                      operator:
+                                        default: In
+                                        description: |-
+                                          A node selector operator is the set of operators that can be used in
+                                          a node selector requirement.
+                                        enum:
+                                        - In
+                                        - Exists
+                                        - DoesNotExist
+                                        - Gt
+                                        - Lt
+                                        type: string
+                                      values:
+                                        items:
+                                          type: string
+                                        type: array
+                                    type: object
+                                  type: array
+                                gpuTaints:
+                                  items:
+                                    properties:
+                                      effect:
+                                        default: NoSchedule
+                                        enum:
+                                        - NoSchedule
+                                        - NoExecute
+                                        - PreferNoSchedule
+                                        type: string
+                                      key:
+                                        type: string
+                                      value:
+                                        type: string
+                                    type: object
+                                  type: array
+                                karpenterNodeClassRef:
+                                  description: Karpenter NodeClass name
+                                  properties:
+                                    group:
+                                      type: string
+                                    kind:
+                                      type: string
+                                    name:
+                                      type: string
+                                    version:
+                                      type: string
+                                  required:
+                                  - group
+                                  - kind
+                                  - name
+                                  - version
+                                  type: object
+                                nodeClass:
+                                  description: TensorFusion GPUNodeClass name
+                                  type: string
+                              type: object
+                            nodeSelector:
+                              description: |-
+                                A node selector represents the union of the results of one or more label queries
+                                over a set of nodes; that is, it represents the OR of the selectors represented
+                                by the node selector terms.
+                              properties:
+                                nodeSelectorTerms:
+                                  description: Required. A list of node selector terms.
+                                    The terms are ORed.
+                                  items:
+                                    description: |-
+                                      A null or empty node selector term matches no objects. The requirements of
+                                      them are ANDed.
+                                      The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+                                    properties:
+                                      matchExpressions:
+                                        description: A list of node selector requirements
+                                          by node's labels.
+                                        items:
+                                          description: |-
+                                            A node selector requirement is a selector that contains values, a key, and an operator
+                                            that relates the key and values.
+                                          properties:
+                                            key:
+                                              description: The label key that the
+                                                selector applies to.
+                                              type: string
+                                            operator:
+                                              description: |-
+                                                Represents a key's relationship to a set of values.
+                                                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                              type: string
+                                            values:
+                                              description: |-
+                                                An array of string values. If the operator is In or NotIn,
+                                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                the values array must be empty. If the operator is Gt or Lt, the values
+                                                array must have a single element, which will be interpreted as an integer.
+                                                This array is replaced during a strategic merge patch.
+                                              items:
+                                                type: string
+                                              type: array
+                                              x-kubernetes-list-type: atomic
+                                          required:
+                                          - key
+                                          - operator
+                                          type: object
+                                        type: array
+                                        x-kubernetes-list-type: atomic
+                                      matchFields:
+                                        description: A list of node selector requirements
+                                          by node's fields.
+                                        items:
+                                          description: |-
+                                            A node selector requirement is a selector that contains values, a key, and an operator
+                                            that relates the key and values.
+                                          properties:
+                                            key:
+                                              description: The label key that the
+                                                selector applies to.
+                                              type: string
+                                            operator:
+                                              description: |-
+                                                Represents a key's relationship to a set of values.
+                                                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                              type: string
+                                            values:
+                                              description: |-
+                                                An array of string values. If the operator is In or NotIn,
+                                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                the values array must be empty. If the operator is Gt or Lt, the values
+                                                array must have a single element, which will be interpreted as an integer.
+                                                This array is replaced during a strategic merge patch.
+                                              items:
+                                                type: string
+                                              type: array
+                                              x-kubernetes-list-type: atomic
+                                          required:
+                                          - key
+                                          - operator
+                                          type: object
+                                        type: array
+                                        x-kubernetes-list-type: atomic
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                              required:
+                              - nodeSelectorTerms
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            provisioningMode:
+                              default: AutoSelect
+                              enum:
+                              - Provisioned
+                              - AutoSelect
+                              - Karpenter
+                              type: string
+                          type: object
+                        qosConfig:
+                          description: Define different QoS and their price.
+                          properties:
+                            defaultQoS:
+                              enum:
+                              - low
+                              - medium
+                              - high
+                              - critical
+                              type: string
+                            definitions:
+                              items:
+                                properties:
+                                  description:
+                                    type: string
+                                  name:
+                                    enum:
+                                    - low
+                                    - medium
+                                    - high
+                                    - critical
+                                    type: string
+                                  priority:
+                                    type: integer
+                                type: object
+                              type: array
+                            evictionProtectionPriceRatio:
+                              default: "1.2"
+                              description: |-
+                                Eviction protection price ratio applied to cost calculation during protection period
+                                This multiplier increases pricing for protected workloads to discourage preemption
+                              type: string
+                            pricing:
+                              items:
+                                properties:
+                                  limitsOverRequests:
+                                    default: "1"
+                                    description: Default requests and limitsOverRequests
+                                      are same, indicates normal on-demand serverless
+                                      GPU usage, in hands-on lab low QoS case, limitsOverRequests
+                                      should be lower, so that user can get burstable
+                                      GPU resources with very low cost
+                                    type: string
+                                  qos:
+                                    enum:
+                                    - low
+                                    - medium
+                                    - high
+                                    - critical
+                                    type: string
+                                  requests:
+                                    description: |-
+                                      The default pricing based on second level pricing from https://modal.com/pricing
+                                      with Tensor/CUDA Core : HBM = 2:1
+                                    properties:
+                                      perFP16TFlopsPerHour:
+                                        default: $0.0069228
+                                        type: string
+                                      perGBOfVRAMPerHour:
+                                        default: $0.01548
+                                        type: string
+                                    type: object
+                                type: object
+                              type: array
+                          type: object
+                        schedulingConfigTemplate:
+                          type: string
+                      required:
+                      - nodeManagerConfig
+                      type: object
+                  required:
+                  - specTemplate
+                  type: object
+                type: array
+            type: object
+          status:
+            description: TensorFusionClusterStatus defines the observed state of TensorFusionCluster.
+            properties:
+              allocatedTFlopsPercent:
+                type: string
+              allocatedVRAMPercent:
+                type: string
+              availableTFlops:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              availableVRAM:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              cloudVendorConfigHash:
+                type: string
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              notReadyGPUPools:
+                items:
+                  type: string
+                type: array
+              phase:
+                default: Pending
+                description: TensorFusionClusterPhase represents the phase of the
+                  TensorFusionCluster resource.
+                enum:
+                - Pending
+                - Running
+                - Updating
+                - Destroying
+                - Unknown
+                type: string
+              potentialSavingsPerMonth:
+                type: string
+              readyGPUPools:
+                items:
+                  type: string
+                type: array
+              retryCount:
+                default: 0
+                format: int64
+                type: integer
+              savedCostsPerMonth:
+                type: string
+              totalGPUs:
+                format: int32
+                type: integer
+              totalNodes:
+                format: int32
+                type: integer
+              totalPools:
+                format: int32
+                type: integer
+              totalTFlops:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              totalVRAM:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              utilizedTFlopsPercent:
+                type: string
+              utilizedVRAMPercent:
+                type: string
+              virtualAvailableTFlops:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              virtualAvailableVRAM:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              virtualTFlops:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              virtualVRAM:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+            required:
+            - availableTFlops
+            - availableVRAM
+            - retryCount
+            - totalGPUs
+            - totalNodes
+            - totalPools
+            - totalTFlops
+            - totalVRAM
+            - virtualTFlops
+            - virtualVRAM
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: TensorFusionCluster
+    listKind: TensorFusionClusterList
+    plural: tensorfusionclusters
+    singular: tensorfusioncluster
+  conditions:
+  - lastTransitionTime: "2025-09-04T07:52:48Z"
+    message: no conflicts found
+    reason: NoConflicts
+    status: "True"
+    type: NamesAccepted
+  - lastTransitionTime: "2025-09-04T07:52:48Z"
+    message: the initial names have been accepted
+    reason: InitialNamesAccepted
+    status: "True"
+    type: Established
+  storedVersions:
+  - v1

@@ -1,0 +1,99 @@
+apiVersion: v1
+items:
+- apiVersion: tensor-fusion.ai/v1
+  kind: GPUNode
+  metadata:
+    annotations:
+      tensor-fusion.ai/last-sync: "2026-04-29T05:48:40Z"
+    creationTimestamp: "2026-04-09T08:11:14Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/hardware-vendor: Ascend
+      tensor-fusion.ai/isolationMode: partitioned
+      tensor-fusion.ai/managed-by: tensor-fusion-shared
+      tensor-fusion.ai/pool-tensor-fusion-shared: "true"
+    name: kylin-pc
+    ownerReferences:
+    - apiVersion: tensor-fusion.ai/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: GPUPool
+      name: tensor-fusion-shared
+      uid: 332ad884-73bb-4658-99da-e05358939a94
+    resourceVersion: "62828860"
+    uid: 814d9ff6-fe33-474b-915c-9d1220da3ca1
+  spec:
+    manageMode: AutoSelect
+  status:
+    allocatedPods:
+      npu-2106030675zepc001725-0: []
+    availableTFlops: "22"
+    availableVRAM: 21527Mi
+    hypervisorStatus: {}
+    managedGPUDeviceIDs:
+    - npu-2106030675zepc001725-0
+    managedGPUs: 1
+    nodeInfo:
+      dataDiskSize: "105089261568"
+      ramSize: 33421312k
+    phase: Running
+    totalGPUs: 1
+    totalTFlops: "22"
+    totalVRAM: 21527Mi
+    virtualAvailableTFlops: "440"
+    virtualAvailableVRAM: "102336908492"
+    virtualTFlops: "440"
+    virtualVRAM: "102336908492"
+- apiVersion: tensor-fusion.ai/v1
+  kind: GPUNode
+  metadata:
+    annotations:
+      tensor-fusion.ai/last-sync: "2026-05-15T10:24:35Z"
+    creationTimestamp: "2026-05-15T10:15:19Z"
+    finalizers:
+    - tensor-fusion.ai/finalizer
+    generation: 1
+    labels:
+      tensor-fusion.ai/hardware-vendor: NVIDIA
+      tensor-fusion.ai/isolationMode: hard
+      tensor-fusion.ai/managed-by: tensor-fusion-nvidia-shared
+      tensor-fusion.ai/pool-tensor-fusion-nvidia-shared: "true"
+    name: ubuntu
+    ownerReferences:
+    - apiVersion: tensor-fusion.ai/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: GPUPool
+      name: tensor-fusion-nvidia-shared
+      uid: f5c7c1ad-a079-4864-8a19-0841e8ea741d
+    resourceVersion: "62829134"
+    uid: e70f5834-84e5-47c7-b4d3-71163f53df2c
+  spec:
+    manageMode: AutoSelect
+  status:
+    allocatedPods:
+      gpu-337d5efe-90a4-32c4-afcb-78ea5e3a5606: []
+      gpu-f5d00867-cc01-0631-8d51-14394632047c: []
+    availableTFlops: "142"
+    availableVRAM: 48Gi
+    hypervisorStatus: {}
+    managedGPUDeviceIDs:
+    - gpu-337d5efe-90a4-32c4-afcb-78ea5e3a5606
+    - gpu-f5d00867-cc01-0631-8d51-14394632047c
+    managedGPUs: 2
+    nodeInfo:
+      dataDiskSize: "1964719341568"
+      ramSize: "65391460352"
+    phase: Running
+    totalGPUs: 2
+    totalTFlops: "142"
+    totalVRAM: 48Gi
+    virtualAvailableTFlops: "2840"
+    virtualAvailableVRAM: "1263066942668"
+    virtualTFlops: "2840"
+    virtualVRAM: "1263066942668"
+kind: List
+metadata:
+  resourceVersion: ""

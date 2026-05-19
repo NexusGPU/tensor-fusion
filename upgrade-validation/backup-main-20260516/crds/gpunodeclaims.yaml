@@ -1,0 +1,139 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"annotations":{"controller-gen.kubebuilder.io/version":"v0.16.4"},"name":"gpunodeclaims.tensor-fusion.ai"},"spec":{"group":"tensor-fusion.ai","names":{"kind":"GPUNodeClaim","listKind":"GPUNodeClaimList","plural":"gpunodeclaims","singular":"gpunodeclaim"},"scope":"Cluster","versions":[{"additionalPrinterColumns":[{"jsonPath":".status.phase","name":"Phase","type":"string"}],"name":"v1","schema":{"openAPIV3Schema":{"description":"GPUNodeClaim is the Schema for the gpunodeclaims API.","properties":{"apiVersion":{"description":"APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources","type":"string"},"kind":{"description":"Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds","type":"string"},"metadata":{"type":"object"},"spec":{"description":"GPUNodeClaimSpec defines the desired state of GPUNodeClaim.","properties":{"capacityType":{"type":"string"},"extraParams":{"additionalProperties":{"type":"string"},"type":"object"},"gpuDeviceOffered":{"format":"int32","type":"integer"},"instanceType":{"type":"string"},"nodeClassRef":{"properties":{"group":{"type":"string"},"kind":{"type":"string"},"name":{"type":"string"},"version":{"type":"string"}},"required":["group","kind","name","version"],"type":"object"},"nodeName":{"type":"string"},"region":{"type":"string"},"tflopsOffered":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vramOffered":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"zone":{"type":"string"}},"required":["gpuDeviceOffered","tflopsOffered","vramOffered"],"type":"object"},"status":{"description":"GPUNodeClaimStatus defines the observed state of GPUNodeClaim.","properties":{"instanceID":{"type":"string"},"phase":{"default":"Pending","type":"string"}},"required":["phase"],"type":"object"}},"required":["metadata"],"type":"object"}},"served":true,"storage":true,"subresources":{"status":{}}}]}}
+  creationTimestamp: "2025-09-04T07:52:47Z"
+  generation: 1
+  name: gpunodeclaims.tensor-fusion.ai
+  resourceVersion: "369944"
+  uid: 420c4cb8-ca9d-40b5-a9e1-3b1c671f0a36
+spec:
+  conversion:
+    strategy: None
+  group: tensor-fusion.ai
+  names:
+    kind: GPUNodeClaim
+    listKind: GPUNodeClaimList
+    plural: gpunodeclaims
+    singular: gpunodeclaim
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: GPUNodeClaim is the Schema for the gpunodeclaims API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: GPUNodeClaimSpec defines the desired state of GPUNodeClaim.
+            properties:
+              capacityType:
+                type: string
+              extraParams:
+                additionalProperties:
+                  type: string
+                type: object
+              gpuDeviceOffered:
+                format: int32
+                type: integer
+              instanceType:
+                type: string
+              nodeClassRef:
+                properties:
+                  group:
+                    type: string
+                  kind:
+                    type: string
+                  name:
+                    type: string
+                  version:
+                    type: string
+                required:
+                - group
+                - kind
+                - name
+                - version
+                type: object
+              nodeName:
+                type: string
+              region:
+                type: string
+              tflopsOffered:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              vramOffered:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              zone:
+                type: string
+            required:
+            - gpuDeviceOffered
+            - tflopsOffered
+            - vramOffered
+            type: object
+          status:
+            description: GPUNodeClaimStatus defines the observed state of GPUNodeClaim.
+            properties:
+              instanceID:
+                type: string
+              phase:
+                default: Pending
+                type: string
+            required:
+            - phase
+            type: object
+        required:
+        - metadata
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: GPUNodeClaim
+    listKind: GPUNodeClaimList
+    plural: gpunodeclaims
+    singular: gpunodeclaim
+  conditions:
+  - lastTransitionTime: "2025-09-04T07:52:47Z"
+    message: no conflicts found
+    reason: NoConflicts
+    status: "True"
+    type: NamesAccepted
+  - lastTransitionTime: "2025-09-04T07:52:47Z"
+    message: the initial names have been accepted
+    reason: InitialNamesAccepted
+    status: "True"
+    type: Established
+  storedVersions:
+  - v1

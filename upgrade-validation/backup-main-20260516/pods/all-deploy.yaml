@@ -1,0 +1,1787 @@
+apiVersion: v1
+items:
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"name":"2-2-1-ollama-soft-remote","namespace":"default"},"spec":{"replicas":1,"selector":{"matchLabels":{"app":"2-2-1-soft"}},"template":{"metadata":{"annotations":{"tensor-fusion.ai/compute-percent-limit":"100","tensor-fusion.ai/compute-percent-request":"20","tensor-fusion.ai/gpu-count":"1","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/is-local-gpu":"false","tensor-fusion.ai/isolation":"soft","tensor-fusion.ai/vendor":"NVIDIA","tensor-fusion.ai/vram-limit":"10Gi","tensor-fusion.ai/vram-request":"2Gi"},"labels":{"app":"2-2-1-soft","tensor-fusion.ai/enabled":"true","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/vendor":"NVIDIA"}},"spec":{"containers":[{"command":["ollama","serve"],"env":[{"name":"OLLAMA_NUM_PARALLEL","value":"5"},{"name":"OLLAMA_MAX_QUEUE","value":"1024"},{"name":"OLLAMA_SCHED_SPREAD","value":"1"}],"image":"registry.cn-hangzhou.aliyuncs.com/tensorfusion/ollama:0.10.11","name":"ollama","ports":[{"containerPort":11434}],"resources":{"limits":{"cpu":"32","memory":"24Gi"},"requests":{"cpu":"10m","memory":"64Mi"}},"volumeMounts":[{"mountPath":"/root/.ollama/","name":"model-cache"}]}],"nodeSelector":{"tf-role":"cpu"},"terminationGracePeriodSeconds":3,"volumes":[{"hostPath":{"path":"/usr/share/ollama/.ollama/","type":"DirectoryOrCreate"},"name":"model-cache"}]}}}}
+    creationTimestamp: "2026-04-20T07:51:40Z"
+    generation: 3
+    name: 2-2-1-ollama-soft-remote-test
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448102"
+    uid: 4c1fe604-3cae-44d3-9ccd-eaa41ac71864
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: 2-2-1-soft-remote-test
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/compute-percent-limit: "100"
+          tensor-fusion.ai/compute-percent-request: "80"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "false"
+          tensor-fusion.ai/isolation: soft
+          tensor-fusion.ai/vendor: NVIDIA
+          tensor-fusion.ai/vram-limit: 10Gi
+          tensor-fusion.ai/vram-request: 2Gi
+        creationTimestamp: null
+        labels:
+          app: 2-2-1-soft-remote-test
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - ollama
+          - serve
+          env:
+          - name: OLLAMA_NUM_PARALLEL
+            value: "5"
+          - name: OLLAMA_MAX_QUEUE
+            value: "1024"
+          - name: OLLAMA_SCHED_SPREAD
+            value: "1"
+          image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/ollama:0.10.11
+          imagePullPolicy: IfNotPresent
+          name: ollama
+          ports:
+          - containerPort: 11434
+            protocol: TCP
+          resources:
+            limits:
+              cpu: "32"
+              memory: 24Gi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /root/.ollama/
+            name: model-cache
+        dnsPolicy: ClusterFirst
+        nodeSelector:
+          tf-role: cpu
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 3
+        volumes:
+        - hostPath:
+            path: /usr/share/ollama/.ollama/
+            type: DirectoryOrCreate
+          name: model-cache
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-20T07:52:17Z"
+      lastUpdateTime: "2026-04-20T07:52:17Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-04-20T07:51:40Z"
+      lastUpdateTime: "2026-05-11T09:36:54Z"
+      message: ReplicaSet "2-2-1-ollama-soft-remote-test-6f89765477" has successfully
+        progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 3
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "3"
+    creationTimestamp: "2026-04-23T09:42:10Z"
+    generation: 4
+    name: tc-cuda-graph-stress
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448103"
+    uid: 5011d11c-c14b-4b47-9335-bd9945972a4d
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: cuda-graph-stress
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/compute-percent-limit: "60"
+          tensor-fusion.ai/compute-percent-request: "50"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/inject-container: stress
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: soft
+          tensor-fusion.ai/sidecar-worker: "false"
+          tensor-fusion.ai/vendor: NVIDIA
+          tensor-fusion.ai/vram-limit: 24Gi
+          tensor-fusion.ai/vram-request: 128Mi
+        creationTimestamp: null
+        labels:
+          app: cuda-graph-stress
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - python3
+          - /workspace/Demo/cuda-graph-stress.py
+          env:
+          - name: MATMUL_N
+            value: "2048"
+          - name: ITERS_PER_REPLAY
+            value: "8"
+          image: lmsysorg/sglang:latest-runtime
+          imagePullPolicy: IfNotPresent
+          name: stress
+          resources:
+            limits:
+              cpu: "4"
+              memory: 4Gi
+            requests:
+              cpu: 500m
+              memory: 2Gi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /workspace/Demo
+            name: demo-files
+            readOnly: true
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 3
+        volumes:
+        - hostPath:
+            path: /home/ubuntu/Demo
+            type: Directory
+          name: demo-files
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-23T09:51:09Z"
+      lastUpdateTime: "2026-04-23T09:51:09Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-04-23T09:42:10Z"
+      lastUpdateTime: "2026-05-11T09:36:54Z"
+      message: ReplicaSet "tc-cuda-graph-stress-5d8c455865" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 4
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "6"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"name":"tc-soft-2-2-1-pytorch","namespace":"tensor-fusion-sys"},"spec":{"replicas":1,"selector":{"matchLabels":{"app":"tc-soft-2-2-1"}},"template":{"metadata":{"annotations":{"tensor-fusion.ai/compute-percent-limit":"100","tensor-fusion.ai/compute-percent-request":"50","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/is-local-gpu":"true","tensor-fusion.ai/isolation":"soft","tensor-fusion.ai/vendor":"NVIDIA","tensor-fusion.ai/vram-limit":"15Gi","tensor-fusion.ai/vram-request":"2Gi"},"labels":{"app":"tc-soft-2-2-1","tensor-fusion.ai/enabled":"true","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/vendor":"NVIDIA"}},"spec":{"containers":[{"command":["sh","-c","sleep 99d"],"image":"registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime","imagePullPolicy":"IfNotPresent","name":"python","resources":{"limits":{"cpu":"32","memory":"24Gi"},"requests":{"cpu":"10m","memory":"64Mi"}},"volumeMounts":[{"mountPath":"/workspace/Demo","name":"demo-files"}]}],"terminationGracePeriodSeconds":3,"volumes":[{"hostPath":{"path":"/home/ubuntu/Demo","type":"DirectoryOrCreate"},"name":"demo-files"}]}}}}
+    creationTimestamp: "2026-04-14T07:48:34Z"
+    generation: 15
+    name: tc-soft-2-2-1-pytorch
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448104"
+    uid: e3a87ed0-02e3-4e25-a700-00965e4de104
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: tc-soft-2-2-1
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/compute-percent-limit: "100"
+          tensor-fusion.ai/compute-percent-request: "50"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: soft
+          tensor-fusion.ai/vendor: NVIDIA
+          tensor-fusion.ai/vram-limit: 15Gi
+          tensor-fusion.ai/vram-request: 2Gi
+        creationTimestamp: null
+        labels:
+          app: tc-soft-2-2-1
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+          imagePullPolicy: IfNotPresent
+          name: python
+          resources:
+            limits:
+              cpu: "32"
+              memory: 24Gi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /workspace/Demo
+            name: demo-files
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 3
+        volumes:
+        - hostPath:
+            path: /home/ubuntu/Demo
+            type: DirectoryOrCreate
+          name: demo-files
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-27T01:40:17Z"
+      lastUpdateTime: "2026-04-27T01:40:17Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-04-14T07:48:34Z"
+      lastUpdateTime: "2026-05-11T09:36:54Z"
+      message: ReplicaSet "tc-soft-2-2-1-pytorch-64b4677b79" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 15
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+    creationTimestamp: "2026-04-15T07:58:49Z"
+    generation: 3
+    name: tc-soft-2-3-1-ollama
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448106"
+    uid: 33ebc332-2dea-48bf-b8f2-2c52205b9eb4
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: tc-soft-2-3-1
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/compute-percent-limit: "100"
+          tensor-fusion.ai/compute-percent-request: "80"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: soft
+          tensor-fusion.ai/vendor: NVIDIA
+          tensor-fusion.ai/vram-limit: 20Gi
+          tensor-fusion.ai/vram-request: 2Gi
+        creationTimestamp: null
+        labels:
+          app: tc-soft-2-3-1
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - ollama
+          - serve
+          env:
+          - name: OLLAMA_NUM_PARALLEL
+            value: "5"
+          - name: OLLAMA_MAX_QUEUE
+            value: "1024"
+          - name: OLLAMA_SCHED_SPREAD
+            value: "1"
+          image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/ollama:0.10.11
+          imagePullPolicy: IfNotPresent
+          name: ollama
+          ports:
+          - containerPort: 11434
+            protocol: TCP
+          resources:
+            limits:
+              cpu: "32"
+              memory: 24Gi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /root/.ollama/
+            name: model-cache
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 3
+        volumes:
+        - hostPath:
+            path: /usr/share/ollama/.ollama/
+            type: DirectoryOrCreate
+          name: model-cache
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-16T02:01:17Z"
+      lastUpdateTime: "2026-04-16T02:01:17Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-04-15T07:58:49Z"
+      lastUpdateTime: "2026-05-11T09:36:54Z"
+      message: ReplicaSet "tc-soft-2-3-1-ollama-7dddfcf8bb" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 3
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"name":"tc-soft-2-4-1-gemm-10g","namespace":"tensor-fusion-sys"},"spec":{"replicas":1,"selector":{"matchLabels":{"app":"tc-soft-2-4-1"}},"template":{"metadata":{"annotations":{"tensor-fusion.ai/compute-percent-limit":"60","tensor-fusion.ai/compute-percent-request":"50","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/is-local-gpu":"true","tensor-fusion.ai/isolation":"soft","tensor-fusion.ai/vendor":"NVIDIA","tensor-fusion.ai/vram-limit":"10Gi","tensor-fusion.ai/vram-request":"2Gi"},"labels":{"app":"tc-soft-2-4-1","tensor-fusion.ai/enabled":"true","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/vendor":"NVIDIA"}},"spec":{"containers":[{"command":["sh","-c","sleep 99d"],"env":[{"name":"TF_MAX_CACHE_REQUEST_COUNT","value":"0"}],"image":"registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime","imagePullPolicy":"IfNotPresent","name":"python","resources":{"limits":{"cpu":"32","memory":"24Gi"},"requests":{"cpu":"10m","memory":"64Mi"}},"volumeMounts":[{"mountPath":"/workspace/Demo","name":"demo-files"}]}],"terminationGracePeriodSeconds":3,"volumes":[{"hostPath":{"path":"/home/ubuntu/Demo","type":"DirectoryOrCreate"},"name":"demo-files"}]}}}}
+    creationTimestamp: "2026-04-15T06:15:55Z"
+    generation: 3
+    name: tc-soft-2-4-1-gemm-10g
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448108"
+    uid: 4794d9e7-54e8-45e9-ac88-c1855675ee85
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: tc-soft-2-4-1
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/compute-percent-limit: "60"
+          tensor-fusion.ai/compute-percent-request: "50"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: soft
+          tensor-fusion.ai/vendor: NVIDIA
+          tensor-fusion.ai/vram-limit: 10Gi
+          tensor-fusion.ai/vram-request: 2Gi
+        creationTimestamp: null
+        labels:
+          app: tc-soft-2-4-1
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          env:
+          - name: TF_MAX_CACHE_REQUEST_COUNT
+            value: "0"
+          image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+          imagePullPolicy: IfNotPresent
+          name: python
+          resources:
+            limits:
+              cpu: "32"
+              memory: 24Gi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /workspace/Demo
+            name: demo-files
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 3
+        volumes:
+        - hostPath:
+            path: /home/ubuntu/Demo
+            type: DirectoryOrCreate
+          name: demo-files
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-15T06:15:59Z"
+      lastUpdateTime: "2026-04-15T06:15:59Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-04-15T06:15:55Z"
+      lastUpdateTime: "2026-05-11T09:36:54Z"
+      message: ReplicaSet "tc-soft-2-4-1-gemm-10g-dc5446d9f" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 3
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "196"
+      meta.helm.sh/release-name: tensor-fusion-sys
+      meta.helm.sh/release-namespace: tensor-fusion-sys
+      oldversion: docker.io/tensorfusion/tensor-fusion-operator:tmp-test-ns2
+    creationTimestamp: "2025-09-04T07:53:30Z"
+    generation: 263
+    labels:
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/version: 1.43.5
+      helm.sh/chart: tensor-fusion-1.5.6
+      k8slens-edit-resource-version: v1
+      tensor-fusion.ai/component: operator
+    name: tensor-fusion-sys-controller
+    namespace: tensor-fusion-sys
+    resourceVersion: "62828758"
+    uid: e2b1403c-7f3d-42e0-9b46-dfb998d71142
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app.kubernetes.io/component: controller
+        app.kubernetes.io/instance: tensor-fusion-sys
+        app.kubernetes.io/name: tensor-fusion
+        tensor-fusion.ai/component: operator
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-15T10:19:51Z"
+        creationTimestamp: null
+        labels:
+          app.kubernetes.io/component: controller
+          app.kubernetes.io/instance: tensor-fusion-sys
+          app.kubernetes.io/name: tensor-fusion
+          tensor-fusion.ai/component: operator
+      spec:
+        containers:
+        - command:
+          - /manager
+          - -metrics-bind-address
+          - :9000
+          - -leader-elect
+          - -enable-auto-scale
+          - -enable-auto-expander
+          env:
+          - name: NVIDIA_OPERATOR_PROGRESSIVE_MIGRATION
+            value: "true"
+          - name: ENABLE_SCHEDULER
+            value: "true"
+          - name: ENABLE_CR_CONTROLLER
+            value: "true"
+          - name: OPERATOR_NAMESPACE
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+          - name: INITIAL_GPU_NODE_LABEL_SELECTOR
+            value: tensor-fusion.ai/watch-node=true
+          - name: TSDB_MYSQL_HOST
+            value: 10.43.105.91
+          - name: TSDB_MYSQL_PORT
+            value: "4002"
+          - name: TSDB_MYSQL_DATABASE
+            value: public
+          - name: TSDB_MYSQL_USER
+            value: root
+          image: tensorfusion/tensor-fusion-operator:fix-cap-drift-441e72e-local
+          imagePullPolicy: Never
+          livenessProbe:
+            failureThreshold: 5
+            httpGet:
+              path: /healthz
+              port: 8081
+              scheme: HTTP
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            successThreshold: 1
+            timeoutSeconds: 5
+          name: controller
+          ports:
+          - containerPort: 8080
+            name: http
+            protocol: TCP
+          - containerPort: 8081
+            name: metrics
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 2
+            httpGet:
+              path: /readyz
+              port: 8081
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            successThreshold: 1
+            timeoutSeconds: 5
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
+            requests:
+              cpu: 50m
+              memory: 256Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /tmp/k8s-webhook-server/serving-certs
+            name: cert
+            readOnly: true
+          - mountPath: /logs
+            name: logs
+          - mountPath: /tmp/secret
+            name: cloud-vendor-credentials
+            readOnly: true
+          - mountPath: /etc/tensor-fusion/gpu-info.yaml
+            name: gpu-info
+            readOnly: true
+            subPath: gpu-info.yaml
+          - mountPath: /etc/tensor-fusion/config.yaml
+            name: config
+            readOnly: true
+            subPath: config.yaml
+          - mountPath: /etc/tensor-fusion/scheduler-config.yaml
+            name: config
+            readOnly: true
+            subPath: scheduler-config.yaml
+        - env:
+          - name: NODE_NAME
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: spec.nodeName
+          - name: INITIAL_GPU_NODE_LABEL_SELECTOR
+            value: tensor-fusion.ai/watch-node=true
+          image: docker.m.daocloud.io/timberio/vector:latest-alpine
+          imagePullPolicy: IfNotPresent
+          name: vector
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /logs
+            name: logs
+          - mountPath: /etc/vector/vector.yaml
+            name: vector-config
+            subPath: vector-operator.yaml
+          - mountPath: /var/log/pods
+            name: kubernetes-logs
+        dnsPolicy: ClusterFirst
+        enableServiceLinks: false
+        nodeSelector:
+          kubernetes.io/hostname: ubuntu
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: tensor-fusion-sys
+        serviceAccountName: tensor-fusion-sys
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - name: cert
+          secret:
+            defaultMode: 420
+            items:
+            - key: cert
+              path: tls.crt
+            - key: key
+              path: tls.key
+            secretName: tensor-fusion-webhook-secret
+        - configMap:
+            defaultMode: 420
+            name: tensor-fusion-sys-vector-config
+          name: vector-config
+        - name: cloud-vendor-credentials
+          secret:
+            defaultMode: 420
+            secretName: tf-cloud-vendor-credentials
+        - configMap:
+            defaultMode: 420
+            name: tensor-fusion-sys-public-gpu-info
+          name: gpu-info
+        - configMap:
+            defaultMode: 420
+            name: tensor-fusion-sys-config
+          name: config
+        - emptyDir: {}
+          name: logs
+        - hostPath:
+            path: /var/log/pods
+            type: DirectoryOrCreate
+          name: kubernetes-logs
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-05-15T10:09:24Z"
+      lastUpdateTime: "2026-05-15T10:09:24Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-05-11T09:54:22Z"
+      lastUpdateTime: "2026-05-15T10:20:08Z"
+      message: ReplicaSet "tensor-fusion-sys-controller-789b48779f" has successfully
+        progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 263
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "8"
+    creationTimestamp: "2026-02-11T09:53:09Z"
+    generation: 50
+    labels:
+      k8slens-edit-resource-version: v1
+    name: vllm-ascend
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448111"
+    uid: 0c08639f-ef66-435b-a93a-618d8a92b25d
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-ascend
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/dedicated-gpu: "true"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpu-model: Ascend 310P3
+          tensor-fusion.ai/gpupool: tensor-fusion-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: shared
+        creationTimestamp: null
+        labels:
+          app: vllm-ascend
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-shared
+          tensor-fusion.ai/vendor: Ascend
+      spec:
+        containers:
+        - command:
+          - bash
+          - -lc
+          - sleep infinity
+          image: docker.m.daocloud.io/openeuler/vllm-ascend:0.11.0rc0-torch_npu2.5.1-cann8.1.rc1-python3.10-oe2203lts
+          imagePullPolicy: IfNotPresent
+          name: vllm-ascend
+          ports:
+          - containerPort: 4082
+            protocol: TCP
+          resources: {}
+          securityContext:
+            privileged: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /usr/local/sbin
+            name: ascend-tools
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        runtimeClassName: ascend
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - hostPath:
+            path: /usr/local/sbin
+            type: Directory
+          name: ascend-tools
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:41:12Z"
+      lastUpdateTime: "2026-04-29T05:41:12Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-02-11T09:53:09Z"
+      lastUpdateTime: "2026-05-11T09:36:54Z"
+      message: ReplicaSet "vllm-ascend-78d5688c5b" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 50
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "10"
+    creationTimestamp: "2026-03-12T01:36:19Z"
+    generation: 45
+    name: vllm-ascend-parttion
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448116"
+    uid: 347452ca-c715-47b1-bf46-d728a975d0af
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-ascend-parttion
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/compute-percent-limit: "50"
+          tensor-fusion.ai/compute-percent-request: "10"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpu-model: Ascend 310P3
+          tensor-fusion.ai/gpupool: tensor-fusion-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: partitioned
+          tensor-fusion.ai/vendor: Ascend
+        creationTimestamp: null
+        labels:
+          app: vllm-ascend-parttion
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-shared
+          tensor-fusion.ai/vendor: Ascend
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          image: docker.m.daocloud.io/openeuler/vllm-ascend:0.11.0rc0-torch_npu2.5.1-cann8.1.rc1-python3.10-oe2203lts
+          imagePullPolicy: IfNotPresent
+          name: vllm-ascend
+          ports:
+          - containerPort: 4082
+            protocol: TCP
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /usr/local/sbin
+            name: ascend-tools
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        runtimeClassName: ascend
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 10
+        volumes:
+        - hostPath:
+            path: /usr/local/sbin
+            type: Directory
+          name: ascend-tools
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:47:19Z"
+      lastUpdateTime: "2026-04-29T05:47:19Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-03-12T01:36:19Z"
+      lastUpdateTime: "2026-05-11T09:36:54Z"
+      message: ReplicaSet "vllm-ascend-parttion-fd867bd4c" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 45
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "44"
+    creationTimestamp: "2026-03-09T08:03:34Z"
+    generation: 149
+    name: vllm-ascend-remote
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448117"
+    uid: 8936e3d0-ddc7-4fad-812a-6889d107c104
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-ascend-remote
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/dedicated-gpu: "true"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpu-model: Ascend 310P3
+          tensor-fusion.ai/gpupool: tensor-fusion-shared
+          tensor-fusion.ai/is-local-gpu: "false"
+          tensor-fusion.ai/isolation: shared
+          tensor-fusion.ai/vendor: Ascend
+        creationTimestamp: null
+        labels:
+          app: vllm-ascend-remote
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-shared
+          tensor-fusion.ai/vendor: Ascend
+      spec:
+        containers:
+        - command:
+          - bash
+          - -c
+          - |
+            # 强行把你的工具软链接到系统标准路径 /usr/bin 下
+            # /usr/bin 几乎在所有 Linux 的 PATH 里都是最高优先级的标准路径
+            ln -sf /tensor-fusion/npu-smi /usr/bin/npu-smi
+            # 恢复环境
+            # if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
+            # source /usr/local/Ascend/ascend-toolkit/set_env.sh
+            # fi
+            # 此时直接输入 npu-smi 必然指向 /usr/bin/npu-smi -> /tensor-fusion/npu-smi
+            # export PATH="/tensor-fusion:$PATH"
+            npu-smi info
+            sleep infinity
+          env:
+          - name: LD_LIBRARY_PATH
+            value: /tensor-fusion
+          image: docker.m.daocloud.io/openeuler/vllm-ascend:0.11.0rc0-torch_npu2.5.1-cann8.1.rc1-python3.10-oe2203lts
+          imagePullPolicy: IfNotPresent
+          name: vllm-ascend
+          resources: {}
+          securityContext:
+            privileged: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        nodeName: kylin-pc
+        restartPolicy: Always
+        runtimeClassName: ascend
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:40:55Z"
+      lastUpdateTime: "2026-04-29T05:40:55Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-03-09T08:03:34Z"
+      lastUpdateTime: "2026-05-11T09:36:54Z"
+      message: ReplicaSet "vllm-ascend-remote-759b7bc6cf" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 149
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"name":"vllm-hard-local-nolimit","namespace":"tensor-fusion-sys"},"spec":{"replicas":1,"selector":{"matchLabels":{"app":"vllm-hard-local"}},"template":{"metadata":{"annotations":{"tensor-fusion.ai/compute-percent-limit":"100","tensor-fusion.ai/compute-percent-request":"100","tensor-fusion.ai/gpu-count":"1","tensor-fusion.ai/gpu-indices":"1","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/is-local-gpu":"true","tensor-fusion.ai/isolation":"hard","tensor-fusion.ai/sidecar-worker":"true","tensor-fusion.ai/vendor":"NVIDIA","tensor-fusion.ai/vram-limit":"24Gi","tensor-fusion.ai/vram-request":"24Gi"},"labels":{"app":"vllm-hard-local","tensor-fusion.ai/enabled":"true","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/vendor":"NVIDIA"}},"spec":{"containers":[{"command":["sh","-c","sleep 99d"],"env":[{"name":"https_proxy","value":"http://192.168.2.4:7890"},{"name":"http_proxy","value":"http://192.168.2.4:7890"}],"image":"m.daocloud.io/docker.io/vllm/vllm-openai:v0.11.0","imagePullPolicy":"IfNotPresent","lifecycle":{"postStart":{"exec":{"command":["/bin/sh","-c","pip config set global.index-url https://pypi.mirrors.ustc.edu.cn/simple"]}}},"name":"python","resources":{"limits":{"cpu":"32","memory":"48Gi"},"requests":{"cpu":"100m","memory":"256Mi"}},"securityContext":{"allowPrivilegeEscalation":true,"capabilities":{"add":["IPC_LOCK","KILL","SYS_PTRACE","SYS_ADMIN"]},"privileged":true,"runAsUser":0},"volumeMounts":[{"mountPath":"/root/.cache/huggingface","name":"model-cache"},{"mountPath":"/data/models","name":"modelscope-cache"}]}],"nodeSelector":{"kubernetes.io/hostname":"ubuntu"},"terminationGracePeriodSeconds":0,"volumes":[{"hostPath":{"path":"/home/ubuntu/.cache/huggingface","type":"DirectoryOrCreate"},"name":"model-cache"},{"hostPath":{"path":"/data/models","type":"DirectoryOrCreate"},"name":"modelscope-cache"}]}}}}
+    creationTimestamp: "2026-05-14T11:24:44Z"
+    generation: 6
+    name: vllm-hard-local-nolimit
+    namespace: tensor-fusion-sys
+    resourceVersion: "62829118"
+    uid: 6575b461-9a01-4e88-bb63-82261ca4ef15
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-hard-local
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          tensor-fusion.ai/compute-percent-limit: "100"
+          tensor-fusion.ai/compute-percent-request: "100"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpu-indices: "1"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: hard
+          tensor-fusion.ai/sidecar-worker: "true"
+          tensor-fusion.ai/vendor: NVIDIA
+          tensor-fusion.ai/vram-limit: 24Gi
+          tensor-fusion.ai/vram-request: 24Gi
+        creationTimestamp: null
+        labels:
+          app: vllm-hard-local
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          env:
+          - name: https_proxy
+            value: http://192.168.2.4:7890
+          - name: http_proxy
+            value: http://192.168.2.4:7890
+          image: m.daocloud.io/docker.io/vllm/vllm-openai:v0.11.0
+          imagePullPolicy: IfNotPresent
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                - /bin/sh
+                - -c
+                - pip config set global.index-url https://pypi.mirrors.ustc.edu.cn/simple
+          name: python
+          resources:
+            limits:
+              cpu: "32"
+              memory: 48Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: true
+            capabilities:
+              add:
+              - IPC_LOCK
+              - KILL
+              - SYS_PTRACE
+              - SYS_ADMIN
+            privileged: true
+            runAsUser: 0
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /root/.cache/huggingface
+            name: model-cache
+          - mountPath: /data/models
+            name: modelscope-cache
+        dnsPolicy: ClusterFirst
+        nodeSelector:
+          kubernetes.io/hostname: ubuntu
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 0
+        volumes:
+        - hostPath:
+            path: /home/ubuntu/.cache/huggingface
+            type: DirectoryOrCreate
+          name: model-cache
+        - hostPath:
+            path: /data/models
+            type: DirectoryOrCreate
+          name: modelscope-cache
+  status:
+    conditions:
+    - lastTransitionTime: "2026-05-14T11:24:44Z"
+      lastUpdateTime: "2026-05-14T11:30:20Z"
+      message: ReplicaSet "vllm-hard-local-nolimit-5c89d9cf47" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    - lastTransitionTime: "2026-05-15T10:19:16Z"
+      lastUpdateTime: "2026-05-15T10:19:16Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    observedGeneration: 6
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "18"
+    creationTimestamp: "2026-03-09T06:35:33Z"
+    generation: 84
+    name: vllm-nvidia
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448118"
+    uid: ca0d1816-e8c3-4766-8b34-9d3092176b11
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-nvidia
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/dedicated-gpu: "true"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpu-model: NVIDIA GeForce RTX 3090
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: shared
+          tensor-fusion.ai/vendor: NVIDIA
+        creationTimestamp: null
+        labels:
+          app: vllm-nvidia
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+          imagePullPolicy: IfNotPresent
+          name: test
+          resources:
+            limits:
+              cpu: "4"
+              memory: 1Gi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:56:49Z"
+      lastUpdateTime: "2026-04-29T05:56:49Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-03-09T06:35:33Z"
+      lastUpdateTime: "2026-05-11T09:36:54Z"
+      message: ReplicaSet "vllm-nvidia-756774b99c" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 84
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "47"
+      tensor-fusion.ai/gang-enabled: "true"
+    creationTimestamp: "2026-03-16T09:08:00Z"
+    generation: 179
+    name: vllm-nvidia-hard
+    namespace: tensor-fusion-sys
+    resourceVersion: "62539738"
+    uid: f071f45d-5035-4aa1-a491-57d74ce6cad8
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-nvidia-hard
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/compute-percent-limit: "70"
+          tensor-fusion.ai/compute-percent-request: "60"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: hard
+          tensor-fusion.ai/sidecar-worker: "true"
+          tensor-fusion.ai/vendor: NVIDIA
+          tensor-fusion.ai/vram-limit: 10Gi
+          tensor-fusion.ai/vram-request: 1Gi
+        creationTimestamp: null
+        labels:
+          app: vllm-nvidia-hard
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          env:
+          - name: https_proxy
+            value: http://192.168.2.4:7890
+          - name: http_proxy
+            value: http://192.168.2.4:7890
+          image: m.daocloud.io/docker.io/vllm/vllm-openai:v0.11.0
+          imagePullPolicy: IfNotPresent
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                - /bin/sh
+                - -c
+                - pip config set global.index-url https://pypi.mirrors.ustc.edu.cn/simple
+          name: python
+          resources:
+            limits:
+              cpu: "32"
+              memory: 48Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: true
+            capabilities:
+              add:
+              - IPC_LOCK
+              - KILL
+              - SYS_PTRACE
+              - SYS_ADMIN
+            privileged: true
+            runAsUser: 0
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /root/.cache/huggingface
+            name: model-cache
+          - mountPath: /data/models
+            name: modelscope-cache
+        dnsPolicy: ClusterFirst
+        nodeSelector:
+          kubernetes.io/hostname: ubuntu
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 0
+        volumes:
+        - hostPath:
+            path: /home/ubuntu/.cache/huggingface
+            type: Directory
+          name: model-cache
+        - hostPath:
+            path: /data/models
+            type: DirectoryOrCreate
+          name: modelscope-cache
+  status:
+    conditions:
+    - lastTransitionTime: "2026-05-11T07:44:01Z"
+      lastUpdateTime: "2026-05-11T09:36:55Z"
+      message: ReplicaSet "vllm-nvidia-hard-67d78f6c77" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    - lastTransitionTime: "2026-05-12T07:49:46Z"
+      lastUpdateTime: "2026-05-12T07:49:46Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    observedGeneration: 179
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "16"
+    creationTimestamp: "2026-03-16T09:09:33Z"
+    generation: 97
+    name: vllm-nvidia-hard-remote
+    namespace: tensor-fusion-sys
+    resourceVersion: "62626834"
+    uid: 40428eef-aa17-451f-81d9-1aed8bcb364c
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-nvidia-hard-remote
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:50+08:00"
+          tensor-fusion.ai/compute-percent-limit: "70"
+          tensor-fusion.ai/compute-percent-request: "60"
+          tensor-fusion.ai/gpu-count: "2"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "false"
+          tensor-fusion.ai/isolation: hard
+          tensor-fusion.ai/vendor: NVIDIA
+          tensor-fusion.ai/vram-limit: 10Gi
+          tensor-fusion.ai/vram-request: 5Gi
+        creationTimestamp: null
+        labels:
+          app: vllm-nvidia-hard-remote
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+          imagePullPolicy: IfNotPresent
+          name: test
+          resources:
+            limits:
+              cpu: "4"
+              memory: 1Gi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        nodeName: ubuntu
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-16T09:09:33Z"
+      lastUpdateTime: "2026-05-11T09:36:55Z"
+      message: ReplicaSet "vllm-nvidia-hard-remote-655d6cbfd8" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    - lastTransitionTime: "2026-05-12T08:05:47Z"
+      lastUpdateTime: "2026-05-12T08:05:47Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    observedGeneration: 97
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "3"
+    creationTimestamp: "2026-04-28T08:58:48Z"
+    generation: 12
+    name: vllm-nvidia-remote
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448127"
+    uid: 97b3b9f1-ae45-47fe-886f-83cc078c15ac
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-nvidia-remote
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:51+08:00"
+          tensor-fusion.ai/dedicated-gpu: "true"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpu-model: NVIDIA GeForce RTX 3090
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "false"
+          tensor-fusion.ai/isolation: shared
+          tensor-fusion.ai/vendor: NVIDIA
+        creationTimestamp: null
+        labels:
+          app: vllm-nvidia-remote
+          tensor-fusion.ai/enabled: "true"
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+          imagePullPolicy: IfNotPresent
+          name: test
+          resources:
+            limits:
+              cpu: "4"
+              memory: 1Gi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        nodeName: ubuntu
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:58:02Z"
+      lastUpdateTime: "2026-04-29T05:58:02Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-04-28T08:58:48Z"
+      lastUpdateTime: "2026-05-11T09:36:55Z"
+      message: ReplicaSet "vllm-nvidia-remote-64b4ffb7db" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 12
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "5"
+    creationTimestamp: "2026-03-11T05:44:47Z"
+    generation: 11
+    name: vllm-nvidia-remote-specify
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448128"
+    uid: d374a26c-7265-41de-9697-9cad9c433967
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-nvidia-remote-specify
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:51+08:00"
+          tensor-fusion.ai/dedicated-gpu: "true"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpu-model: NVIDIA GeForce RTX 3090
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "false"
+          tensor-fusion.ai/isolation: shared
+          tensor-fusion.ai/vendor: NVIDIA
+        creationTimestamp: null
+        labels:
+          app: vllm-nvidia-remote-specify
+          tensor-fusion.ai/disable-features: gpu-limiter
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+          imagePullPolicy: IfNotPresent
+          name: test
+          resources:
+            limits:
+              cpu: "4"
+              memory: 1Gi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-11T08:01:14Z"
+      lastUpdateTime: "2026-03-11T08:01:14Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-03-11T05:44:47Z"
+      lastUpdateTime: "2026-05-11T09:36:55Z"
+      message: ReplicaSet "vllm-nvidia-remote-specify-fb874776b" has successfully
+        progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 11
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "2"
+    creationTimestamp: "2026-03-11T05:39:28Z"
+    generation: 6
+    name: vllm-nvidia-specify
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448129"
+    uid: 1d52fb36-a788-4668-bbaf-72d5b2fdb642
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-nvidia-specify
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:51+08:00"
+          tensor-fusion.ai/dedicated-gpu: "true"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpu-model: NVIDIA GeForce RTX 3090
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: shared
+        creationTimestamp: null
+        labels:
+          app: vllm-nvidia-specify
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+          imagePullPolicy: IfNotPresent
+          name: test
+          resources:
+            limits:
+              cpu: "4"
+              memory: 1Gi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+  status:
+    conditions:
+    - lastTransitionTime: "2026-03-11T08:21:14Z"
+      lastUpdateTime: "2026-03-11T08:21:14Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-03-11T05:39:28Z"
+      lastUpdateTime: "2026-05-11T09:36:55Z"
+      message: ReplicaSet "vllm-nvidia-specify-fcbd4b594" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 6
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "4"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"name":"vllm-soft-local-nolimit","namespace":"tensor-fusion-sys"},"spec":{"replicas":1,"selector":{"matchLabels":{"app":"vllm-soft-local"}},"template":{"metadata":{"annotations":{"tensor-fusion.ai/compute-percent-limit":"100","tensor-fusion.ai/compute-percent-request":"50","tensor-fusion.ai/gpu-count":"1","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/is-local-gpu":"true","tensor-fusion.ai/isolation":"soft","tensor-fusion.ai/vendor":"NVIDIA","tensor-fusion.ai/vram-limit":"24Gi","tensor-fusion.ai/vram-request":"256Mi"},"labels":{"app":"vllm-soft-local","tensor-fusion.ai/enabled":"true","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/vendor":"NVIDIA"}},"spec":{"containers":[{"command":["sh","-c","sleep 99d"],"image":"m.daocloud.io/docker.io/vllm/vllm-openai:v0.11.0","imagePullPolicy":"IfNotPresent","name":"python","resources":{"limits":{"cpu":"32","memory":"48Gi"},"requests":{"cpu":"100m","memory":"256Mi"}},"securityContext":{"capabilities":{"add":["IPC_LOCK","KILL","SYS_PTRACE","SYS_ADMIN"]},"privileged":true,"runAsUser":0},"volumeMounts":[{"mountPath":"/root/.cache/huggingface","name":"model-cache"},{"mountPath":"/data/models","name":"modelscope-cache"}]}],"terminationGracePeriodSeconds":0,"volumes":[{"hostPath":{"path":"/home/ubuntu/.cache/huggingface","type":"DirectoryOrCreate"},"name":"model-cache"},{"hostPath":{"path":"/data/models","type":"DirectoryOrCreate"},"name":"modelscope-cache"}]}}}}
+    creationTimestamp: "2026-04-07T07:09:37Z"
+    generation: 11
+    name: vllm-soft-local-nolimit
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448134"
+    uid: 45bbade4-cae1-4d98-a15b-71ad56020680
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-soft-local
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:51+08:00"
+          tensor-fusion.ai/compute-percent-limit: "60"
+          tensor-fusion.ai/compute-percent-request: "50"
+          tensor-fusion.ai/gpu-count: "1"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: soft
+          tensor-fusion.ai/vendor: NVIDIA
+          tensor-fusion.ai/vram-limit: 4Gi
+          tensor-fusion.ai/vram-request: 256Mi
+        creationTimestamp: null
+        labels:
+          app: vllm-soft-local
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          image: m.daocloud.io/docker.io/vllm/vllm-openai:v0.11.0
+          imagePullPolicy: IfNotPresent
+          name: python
+          resources:
+            limits:
+              cpu: "32"
+              memory: 48Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            capabilities:
+              add:
+              - IPC_LOCK
+              - KILL
+              - SYS_PTRACE
+              - SYS_ADMIN
+            privileged: true
+            runAsUser: 0
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /root/.cache/huggingface
+            name: model-cache
+          - mountPath: /data/models
+            name: modelscope-cache
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 0
+        volumes:
+        - hostPath:
+            path: /home/ubuntu/.cache/huggingface
+            type: DirectoryOrCreate
+          name: model-cache
+        - hostPath:
+            path: /data/models
+            type: DirectoryOrCreate
+          name: modelscope-cache
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-12T06:23:41Z"
+      lastUpdateTime: "2026-04-12T06:23:41Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-04-07T07:09:37Z"
+      lastUpdateTime: "2026-05-11T09:36:55Z"
+      message: ReplicaSet "vllm-soft-local-nolimit-5949dcbf9d" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 11
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "5"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"name":"vllm-soft-test","namespace":"tensor-fusion-sys"},"spec":{"progressDeadlineSeconds":600,"replicas":0,"revisionHistoryLimit":10,"selector":{"matchLabels":{"app":"vllm-soft-test"}},"strategy":{"rollingUpdate":{"maxSurge":"25%","maxUnavailable":"25%"},"type":"RollingUpdate"},"template":{"metadata":{"annotations":{"tensor-fusion.ai/compute-percent-limit":"30","tensor-fusion.ai/compute-percent-request":"20","tensor-fusion.ai/gpu-count":"1","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/is-local-gpu":"true","tensor-fusion.ai/isolation":"soft","tensor-fusion.ai/sidecar-worker":"true","tensor-fusion.ai/vendor":"NVIDIA","tensor-fusion.ai/vram-limit":"4Gi","tensor-fusion.ai/vram-request":"512Mi"},"creationTimestamp":null,"labels":{"app":"vllm-soft-test","tensor-fusion.ai/enabled":"true","tensor-fusion.ai/gpupool":"tensor-fusion-nvidia-shared","tensor-fusion.ai/vendor":"NVIDIA"}},"spec":{"containers":[{"command":["sh","-c","sleep 99d"],"image":"registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime","imagePullPolicy":"IfNotPresent","name":"test","resources":{"limits":{"cpu":"4","memory":"1Gi"},"requests":{"cpu":"10m","memory":"64Mi"}},"terminationMessagePath":"/dev/termination-log","terminationMessagePolicy":"File"}],"dnsPolicy":"ClusterFirst","restartPolicy":"Always","schedulerName":"default-scheduler","securityContext":{},"terminationGracePeriodSeconds":30}}}}
+    creationTimestamp: "2026-04-12T06:24:20Z"
+    generation: 16
+    name: vllm-soft-test
+    namespace: tensor-fusion-sys
+    resourceVersion: "62448135"
+    uid: 6833dc97-df52-4150-a272-42fe2001d166
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 0
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: vllm-soft-test
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-05-11T17:36:51+08:00"
+          tensor-fusion.ai/compute-percent-limit: "30"
+          tensor-fusion.ai/compute-percent-request: "20"
+          tensor-fusion.ai/gpu-count: "2"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/is-local-gpu: "true"
+          tensor-fusion.ai/isolation: soft
+          tensor-fusion.ai/vendor: NVIDIA
+          tensor-fusion.ai/vram-limit: 12Gi
+          tensor-fusion.ai/vram-request: 512Mi
+        creationTimestamp: null
+        labels:
+          app: vllm-soft-test
+          tensor-fusion.ai/enabled: "true"
+          tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+          tensor-fusion.ai/vendor: NVIDIA
+      spec:
+        containers:
+        - command:
+          - sh
+          - -c
+          - sleep 99d
+          image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+          imagePullPolicy: IfNotPresent
+          name: test
+          resources:
+            limits:
+              cpu: "4"
+              memory: 1Gi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+  status:
+    conditions:
+    - lastTransitionTime: "2026-04-29T05:49:14Z"
+      lastUpdateTime: "2026-04-29T05:49:14Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-04-12T06:24:20Z"
+      lastUpdateTime: "2026-05-11T09:36:55Z"
+      message: ReplicaSet "vllm-soft-test-765b5b58fd" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 16
+kind: List
+metadata:
+  resourceVersion: ""

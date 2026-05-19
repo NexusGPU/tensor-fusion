@@ -1,0 +1,393 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"annotations":{"controller-gen.kubebuilder.io/version":"v0.20.0"},"name":"gpus.tensor-fusion.ai"},"spec":{"group":"tensor-fusion.ai","names":{"kind":"GPU","listKind":"GPUList","plural":"gpus","singular":"gpu"},"scope":"Cluster","versions":[{"additionalPrinterColumns":[{"jsonPath":".status.gpuModel","name":"GPU Model","type":"string"},{"jsonPath":".status.phase","name":"Phase","type":"string"},{"jsonPath":".status.capacity.tflops","name":"Total TFlops","type":"string"},{"jsonPath":".status.capacity.vram","name":"Total VRAM","type":"string"},{"jsonPath":".status.available.tflops","name":"Available TFlops","type":"string"},{"jsonPath":".status.available.vram","name":"Available VRAM","type":"string"},{"jsonPath":".status.uuid","name":"Device UUID","type":"string"},{"jsonPath":".status.usedBy","name":"Used By","type":"string"},{"jsonPath":".status.nodeSelector","name":"Node","type":"string"}],"name":"v1","schema":{"openAPIV3Schema":{"description":"GPU is the Schema for the gpus API.","properties":{"apiVersion":{"description":"APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources","type":"string"},"kind":{"description":"Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds","type":"string"},"metadata":{"type":"object"},"status":{"description":"GPUStatus defines the observed state of GPU.\nNOTE: When new fields added, remember to update syncGPUMetadataAndStatusFromCluster","properties":{"allocatedPartitions":{"additionalProperties":{"description":"AllocatedPartition represents an allocated partition on a GPU\nKey in AllocatedPartitions map is podUID","properties":{"allocatedAt":{"description":"AllocatedAt is when this partition was allocated","format":"date-time","type":"string"},"allocatedSlotEnd":{"description":"AllocatedSlotEnd is the ending slot position (exclusive) where this partition is allocated\nThe partition occupies slots [AllocatedSlotStart, AllocatedSlotEnd)","format":"int32","type":"integer"},"allocatedSlotStart":{"description":"AllocatedSlotStart is the starting slot position where this partition is allocated\nThis is the actual hardware slot position (0-based index)\nFor NVIDIA MIG: physical slot position (0-7)","format":"int32","type":"integer"},"isolationGroupId":{"description":"IsolationGroupID is the isolation group where this partition is allocated\nFor Ascend NPU: vGroup ID (0-3)\nFor NVIDIA MIG: this is derived from slot position, not used separately","format":"int32","type":"integer"},"namespace":{"description":"Namespace is the namespace of the pod using this partition","type":"string"},"podName":{"description":"PodName is the name of the pod using this partition","type":"string"},"podUid":{"description":"PodUID is the UID of the pod using this partition (used as map key)","type":"string"},"templateId":{"description":"TemplateID is the template used to create this partition","type":"string"}},"required":["allocatedAt","namespace","podName","podUid","templateId"],"type":"object"},"description":"AllocatedPartitions tracks allocated partitions on this GPU\nKey is partitionUUID, value contains template info and allocated resources","type":"object"},"available":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"},"capacity":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"},"gpuModel":{"type":"string"},"index":{"format":"int32","type":"integer"},"isolationMode":{"default":"soft","enum":["shared","soft","hard","partitioned"],"type":"string"},"message":{"type":"string"},"nodeSelector":{"additionalProperties":{"type":"string"},"description":"The host match selector to schedule worker pods","type":"object"},"numaNode":{"description":"When it's -1, it means the GPU is not assigned to any NUMA node","format":"int32","type":"integer"},"phase":{"default":"Pending","enum":["Pending","Provisioning","Running","Unknown","Destroying","Migrating"],"type":"string"},"runningApps":{"items":{"properties":{"count":{"description":"Worker count","type":"integer"},"name":{"description":"Workload name namespace","type":"string"},"namespace":{"type":"string"},"pods":{"description":"Pod names that are running this workload","items":{"properties":{"isExternal":{"description":"IsExternal indicates if this allocation is from an external device plugin\n(e.g., nvidia-device-plugin) rather than TensorFusion scheduler","type":"boolean"},"limits":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"},"name":{"type":"string"},"namespace":{"type":"string"},"qos":{"enum":["low","medium","high","critical"],"type":"string"},"requests":{"properties":{"compute":{"anyOf":[{"type":"integer"},{"type":"string"}],"description":"0-100 percentage, mutually exclusive with TFLOPs","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"tflops":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true},"vram":{"anyOf":[{"type":"integer"},{"type":"string"}],"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","x-kubernetes-int-or-string":true}},"required":["tflops","vram"],"type":"object"},"uid":{"type":"string"}},"type":"object"},"type":"array"}},"required":["count"],"type":"object"},"type":"array"},"topology":{"description":"Topology contains normalized GPU interconnect topology metadata,\nused by the GPUNetworkTopologyAware scheduler plugin.","properties":{"peers":{"description":"Peers describes the topology relationship between this GPU and other GPUs on the same node.","items":{"description":"GPUPeerLinkStatus represents the link between two GPUs.","properties":{"bandwidth":{"description":"Bandwidth is the link bandwidth in bytes per second. For observability only.","format":"int64","type":"integer"},"linkType":{"description":"LinkType describes the physical link type (e.g., \"NVLink\", \"HCCS\", \"PCIe\"). For observability only.","type":"string"},"peerGPUUUID":{"description":"PeerGPUUUID is the stable UUID of the peer GPU.","type":"string"},"tier":{"description":"Tier is the normalized affinity tier (lower = closer). Used as the primary scheduling input.","format":"int32","type":"integer"}},"required":["peerGPUUUID","tier"],"type":"object"},"type":"array"}},"type":"object"},"usedBy":{"description":"GPU is used by tensor-fusion or nvidia-operator\nThis is the key to be compatible with nvidia-device-plugin to avoid resource overlap\nHypervisor will watch kubelet device plugin to report all GPUs already used by nvidia-device-plugin\nGPUs will be grouped by usedBy to be used by different Pods,\ntensor-fusion annotation or nvidia-device-plugin resource block","type":"string"},"uuid":{"type":"string"},"vendor":{"default":"NVIDIA","type":"string"}},"required":["available","capacity","gpuModel","message","nodeSelector","phase","uuid","vendor"],"type":"object"}},"type":"object"}},"served":true,"storage":true,"subresources":{"status":{}}}]}}
+  creationTimestamp: "2025-09-04T07:52:48Z"
+  generation: 11
+  name: gpus.tensor-fusion.ai
+  resourceVersion: "60260785"
+  uid: f00cc87c-fb7c-4547-9b96-770974f50644
+spec:
+  conversion:
+    strategy: None
+  group: tensor-fusion.ai
+  names:
+    kind: GPU
+    listKind: GPUList
+    plural: gpus
+    singular: gpu
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.gpuModel
+      name: GPU Model
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.capacity.tflops
+      name: Total TFlops
+      type: string
+    - jsonPath: .status.capacity.vram
+      name: Total VRAM
+      type: string
+    - jsonPath: .status.available.tflops
+      name: Available TFlops
+      type: string
+    - jsonPath: .status.available.vram
+      name: Available VRAM
+      type: string
+    - jsonPath: .status.uuid
+      name: Device UUID
+      type: string
+    - jsonPath: .status.usedBy
+      name: Used By
+      type: string
+    - jsonPath: .status.nodeSelector
+      name: Node
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: GPU is the Schema for the gpus API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          status:
+            description: |-
+              GPUStatus defines the observed state of GPU.
+              NOTE: When new fields added, remember to update syncGPUMetadataAndStatusFromCluster
+            properties:
+              allocatedPartitions:
+                additionalProperties:
+                  description: |-
+                    AllocatedPartition represents an allocated partition on a GPU
+                    Key in AllocatedPartitions map is podUID
+                  properties:
+                    allocatedAt:
+                      description: AllocatedAt is when this partition was allocated
+                      format: date-time
+                      type: string
+                    allocatedSlotEnd:
+                      description: |-
+                        AllocatedSlotEnd is the ending slot position (exclusive) where this partition is allocated
+                        The partition occupies slots [AllocatedSlotStart, AllocatedSlotEnd)
+                      format: int32
+                      type: integer
+                    allocatedSlotStart:
+                      description: |-
+                        AllocatedSlotStart is the starting slot position where this partition is allocated
+                        This is the actual hardware slot position (0-based index)
+                        For NVIDIA MIG: physical slot position (0-7)
+                      format: int32
+                      type: integer
+                    isolationGroupId:
+                      description: |-
+                        IsolationGroupID is the isolation group where this partition is allocated
+                        For Ascend NPU: vGroup ID (0-3)
+                        For NVIDIA MIG: this is derived from slot position, not used separately
+                      format: int32
+                      type: integer
+                    namespace:
+                      description: Namespace is the namespace of the pod using this
+                        partition
+                      type: string
+                    podName:
+                      description: PodName is the name of the pod using this partition
+                      type: string
+                    podUid:
+                      description: PodUID is the UID of the pod using this partition
+                        (used as map key)
+                      type: string
+                    templateId:
+                      description: TemplateID is the template used to create this
+                        partition
+                      type: string
+                  required:
+                  - allocatedAt
+                  - namespace
+                  - podName
+                  - podUid
+                  - templateId
+                  type: object
+                description: |-
+                  AllocatedPartitions tracks allocated partitions on this GPU
+                  Key is partitionUUID, value contains template info and allocated resources
+                type: object
+              available:
+                properties:
+                  compute:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: 0-100 percentage, mutually exclusive with TFLOPs
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  tflops:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  vram:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                required:
+                - tflops
+                - vram
+                type: object
+              capacity:
+                properties:
+                  compute:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: 0-100 percentage, mutually exclusive with TFLOPs
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  tflops:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  vram:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                required:
+                - tflops
+                - vram
+                type: object
+              gpuModel:
+                type: string
+              index:
+                format: int32
+                type: integer
+              isolationMode:
+                default: soft
+                enum:
+                - shared
+                - soft
+                - hard
+                - partitioned
+                type: string
+              message:
+                type: string
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: The host match selector to schedule worker pods
+                type: object
+              numaNode:
+                description: When it's -1, it means the GPU is not assigned to any
+                  NUMA node
+                format: int32
+                type: integer
+              phase:
+                default: Pending
+                enum:
+                - Pending
+                - Provisioning
+                - Running
+                - Unknown
+                - Destroying
+                - Migrating
+                type: string
+              runningApps:
+                items:
+                  properties:
+                    count:
+                      description: Worker count
+                      type: integer
+                    name:
+                      description: Workload name namespace
+                      type: string
+                    namespace:
+                      type: string
+                    pods:
+                      description: Pod names that are running this workload
+                      items:
+                        properties:
+                          isExternal:
+                            description: |-
+                              IsExternal indicates if this allocation is from an external device plugin
+                              (e.g., nvidia-device-plugin) rather than TensorFusion scheduler
+                            type: boolean
+                          limits:
+                            properties:
+                              compute:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: 0-100 percentage, mutually exclusive
+                                  with TFLOPs
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              tflops:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              vram:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                            required:
+                            - tflops
+                            - vram
+                            type: object
+                          name:
+                            type: string
+                          namespace:
+                            type: string
+                          qos:
+                            enum:
+                            - low
+                            - medium
+                            - high
+                            - critical
+                            type: string
+                          requests:
+                            properties:
+                              compute:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: 0-100 percentage, mutually exclusive
+                                  with TFLOPs
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              tflops:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              vram:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                            required:
+                            - tflops
+                            - vram
+                            type: object
+                          uid:
+                            type: string
+                        type: object
+                      type: array
+                  required:
+                  - count
+                  type: object
+                type: array
+              topology:
+                description: |-
+                  Topology contains normalized GPU interconnect topology metadata,
+                  used by the GPUNetworkTopologyAware scheduler plugin.
+                properties:
+                  peers:
+                    description: Peers describes the topology relationship between
+                      this GPU and other GPUs on the same node.
+                    items:
+                      description: GPUPeerLinkStatus represents the link between two
+                        GPUs.
+                      properties:
+                        bandwidth:
+                          description: Bandwidth is the link bandwidth in bytes per
+                            second. For observability only.
+                          format: int64
+                          type: integer
+                        linkType:
+                          description: LinkType describes the physical link type (e.g.,
+                            "NVLink", "HCCS", "PCIe"). For observability only.
+                          type: string
+                        peerGPUUUID:
+                          description: PeerGPUUUID is the stable UUID of the peer
+                            GPU.
+                          type: string
+                        tier:
+                          description: Tier is the normalized affinity tier (lower
+                            = closer). Used as the primary scheduling input.
+                          format: int32
+                          type: integer
+                      required:
+                      - peerGPUUUID
+                      - tier
+                      type: object
+                    type: array
+                type: object
+              usedBy:
+                description: |-
+                  GPU is used by tensor-fusion or nvidia-operator
+                  This is the key to be compatible with nvidia-device-plugin to avoid resource overlap
+                  Hypervisor will watch kubelet device plugin to report all GPUs already used by nvidia-device-plugin
+                  GPUs will be grouped by usedBy to be used by different Pods,
+                  tensor-fusion annotation or nvidia-device-plugin resource block
+                type: string
+              uuid:
+                type: string
+              vendor:
+                default: NVIDIA
+                type: string
+            required:
+            - available
+            - capacity
+            - gpuModel
+            - message
+            - nodeSelector
+            - phase
+            - uuid
+            - vendor
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: GPU
+    listKind: GPUList
+    plural: gpus
+    singular: gpu
+  conditions:
+  - lastTransitionTime: "2025-09-04T07:52:48Z"
+    message: no conflicts found
+    reason: NoConflicts
+    status: "True"
+    type: NamesAccepted
+  - lastTransitionTime: "2025-09-04T07:52:48Z"
+    message: the initial names have been accepted
+    reason: InitialNamesAccepted
+    status: "True"
+    type: Established
+  storedVersions:
+  - v1
