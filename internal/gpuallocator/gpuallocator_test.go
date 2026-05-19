@@ -275,9 +275,8 @@ var _ = Describe("GPU Allocator", func() {
 			Expect(gpus).To(HaveLen(1))
 
 			gpu := getGPU(gpus[0].Name)
-			remain, _, err := allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
-				PodUID:    string(testPodMeta.UID),
-				IsScaleUp: true,
+			remain, _, _, err := allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+				PodUID: string(testPodMeta.UID),
 				NewRequest: tfv1.Resource{
 					Tflops: resource.MustParse("300"),
 					Vram:   resource.MustParse("30Gi"),
@@ -292,9 +291,8 @@ var _ = Describe("GPU Allocator", func() {
 			Expect(remain.Tflops.Value()).To(BeEquivalentTo(gpu.Status.Available.Tflops.Value()))
 			Expect(remain.Vram.Value()).To(BeEquivalentTo(gpu.Status.Available.Vram.Value()))
 
-			_, _, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
-				PodUID:    string(testPodMeta.UID),
-				IsScaleUp: true,
+			_, _, _, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+				PodUID: string(testPodMeta.UID),
 				NewRequest: tfv1.Resource{
 					Tflops: resource.MustParse("90"),
 					Vram:   resource.MustParse("15Gi"),
@@ -312,9 +310,8 @@ var _ = Describe("GPU Allocator", func() {
 				To(BeEquivalentTo(5 * 1024 * 1024 * 1024))
 
 			// test scale down
-			_, _, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
-				PodUID:    string(testPodMeta.UID),
-				IsScaleUp: false,
+			_, _, _, err = allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+				PodUID: string(testPodMeta.UID),
 				NewRequest: tfv1.Resource{
 					Tflops: resource.MustParse("10"),
 					Vram:   resource.MustParse("1Gi"),

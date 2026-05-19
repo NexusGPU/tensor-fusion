@@ -261,15 +261,8 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 		return nil
 	}
 
-	// When curRes is nil (parse failure above), treat as a scale-up so AdjustAllocation
-	// runs the quota pre-check — safer than skipping it.
-	isScaleUp := curRes == nil ||
-		recommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
-		recommendation.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
-
-	_, deltaRes, err := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+	_, deltaReq, deltaLimit, err := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
 		PodUID:     string(worker.UID),
-		IsScaleUp:  isScaleUp,
 		NewRequest: recommendation.Requests,
 		NewLimit:   recommendation.Limits,
 	}, false)
@@ -287,26 +280,25 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 	patch := client.MergeFrom(worker.DeepCopy())
 	maps.Copy(worker.Annotations, annotationsToUpdate)
 	if err := h.Patch(ctx, worker, patch); err != nil {
-		// Rollback the allocation change by calculating original values from current state and delta
-		// After AdjustAllocation, the allocator state is now recommendation, so we need to subtract deltaRes
-		// to get back to the original curRes values
+		// Rollback by reconstructing the pre-adjust values from the new recommendation
+		// and the per-resource deltas. Request and limit must use their own deltas;
+		// recommendations can scale them independently.
 		originalRequest := tfv1.Resource{
 			Tflops: recommendation.Requests.Tflops.DeepCopy(),
 			Vram:   recommendation.Requests.Vram.DeepCopy(),
 		}
-		originalRequest.Tflops.Sub(deltaRes.Tflops)
-		originalRequest.Vram.Sub(deltaRes.Vram)
+		originalRequest.Tflops.Sub(deltaReq.Tflops)
+		originalRequest.Vram.Sub(deltaReq.Vram)
 
 		originalLimit := tfv1.Resource{
 			Tflops: recommendation.Limits.Tflops.DeepCopy(),
 			Vram:   recommendation.Limits.Vram.DeepCopy(),
 		}
-		originalLimit.Tflops.Sub(deltaRes.Tflops)
-		originalLimit.Vram.Sub(deltaRes.Vram)
+		originalLimit.Tflops.Sub(deltaLimit.Tflops)
+		originalLimit.Vram.Sub(deltaLimit.Vram)
 
-		if _, _, rollbackErr := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
+		if _, _, _, rollbackErr := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
 			PodUID:     string(worker.UID),
-			IsScaleUp:  !isScaleUp,
 			NewRequest: originalRequest,
 			NewLimit:   originalLimit,
 		}, false); rollbackErr != nil {

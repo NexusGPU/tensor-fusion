@@ -1396,16 +1396,21 @@ func (s *GpuAllocator) Dealloc(
 		"vram", request.Request.Vram.String())
 }
 
-// Used for scale up decision, dryRun to pre-check capacity to determine if the allocation
-// is valid when scaling up, return error and the max new requests/limits on existing GPU
-// Auto scaler can directly call AdjustAllocation for scaling down decision
-// it has to call AdjustAllocation with dryRun=true when scaling up,
-// if return error is ScalingQuotaExceededError,
-// it means the allocation is invalid, and it should scale up with another AdjustRequest
-// to make sure not exceed quota, which returns in the first returned result
-// retry until AdjustAllocation returns nil error, at most pre-configured maxRetry times
-// returns remaining resource, delta resource, error
-func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.AdjustRequest, dryRun bool) (tfv1.Resource, tfv1.Resource, error) {
+// AdjustAllocation applies an in-place request/limit change to an existing
+// pod allocation. It always pre-checks per-GPU capacity and namespace quota
+// — including the limit dimension — regardless of which direction any single
+// resource moves. Callers must not gate this check themselves: an autoscaler
+// recommendation can grow Limits while leaving Requests flat (or shrinking
+// them), and only the allocator has the full picture needed to validate that.
+// With dryRun=true, no state is mutated; otherwise the allocator's per-pod
+// state, per-GPU available, and the namespace quota usage are updated.
+//
+// Returns (remaining resource on the first failing GPU when capacity is
+// exceeded, per-GPU request delta, per-GPU limit delta, error). Deltas are
+// per-GPU (matching the units of request.Request/Limit) so callers can
+// reconstruct the pre-adjust per-GPU values by subtracting the deltas from
+// the new request/limit they passed in.
+func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.AdjustRequest, dryRun bool) (tfv1.Resource, tfv1.Resource, tfv1.Resource, error) {
 
 	<-s.initializedCh
 	s.storeMutex.Lock()
@@ -1413,7 +1418,7 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 
 	request, exists := s.uniqueAllocation[adjustRequest.PodUID]
 	if !exists || request == nil {
-		return tfv1.Resource{}, tfv1.Resource{}, fmt.Errorf("pod %s has not allocated GPUs", adjustRequest.PodUID)
+		return tfv1.Resource{}, tfv1.Resource{}, tfv1.Resource{}, fmt.Errorf("pod %s has not allocated GPUs", adjustRequest.PodUID)
 	}
 
 	deltaTFlopsRequest := adjustRequest.NewRequest.Tflops
@@ -1428,36 +1433,32 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 	deltaVRAMLimit := adjustRequest.NewLimit.Vram
 	deltaVRAMLimit.Sub(request.Limit.Vram)
 
-	if adjustRequest.IsScaleUp {
-		for _, gpuName := range request.GPUNames {
-			gpuNameNs := types.NamespacedName{Name: gpuName}
-			gpu, exists := s.gpuStore[gpuNameNs]
-			if !exists {
-				return tfv1.Resource{}, tfv1.Resource{}, fmt.Errorf("GPU not found in allocator store %s", gpuName)
-			}
-			if remain, err := s.checkGPUCapacityAndQuota(gpu, request.Request, adjustRequest.NewRequest); err != nil {
-				return remain, tfv1.Resource{}, err
-			}
+	// Per-GPU capacity check. Scale-down trivially passes (new <= old), so
+	// running this unconditionally is safe and removes the previous brittle
+	// dependency on a caller-supplied scale direction flag.
+	for _, gpuName := range request.GPUNames {
+		gpuNameNs := types.NamespacedName{Name: gpuName}
+		gpu, exists := s.gpuStore[gpuNameNs]
+		if !exists {
+			return tfv1.Resource{}, tfv1.Resource{}, tfv1.Resource{}, fmt.Errorf("GPU not found in allocator store %s", gpuName)
 		}
-
-		// check namespaced level quota
-		if err := s.quotaStore.CheckQuotaAvailable(&tfv1.AllocRequest{
-			WorkloadNameNamespace: request.WorkloadNameNamespace,
-
-			Count: uint(len(request.GPUNames)),
-			Request: tfv1.Resource{
-				Tflops: deltaTFlopsRequest,
-				Vram:   deltaVRAMRequest,
-			},
-			Limit: tfv1.Resource{
-				Tflops: deltaTFlopsLimit,
-				Vram:   deltaVRAMLimit,
-			},
-			GPUNames: request.GPUNames,
-			PodMeta:  request.PodMeta,
-		}); err != nil {
-			return tfv1.Resource{}, tfv1.Resource{}, err
+		if remain, err := s.checkGPUCapacityAndQuota(gpu, request.Request, adjustRequest.NewRequest); err != nil {
+			return remain, tfv1.Resource{}, tfv1.Resource{}, err
 		}
+	}
+
+	// Namespace quota check. Single-quota caps must compare against the absolute
+	// new values; total-quota math is delta-based. CheckAdjustQuotaAvailable
+	// handles both correctly.
+	if err := s.quotaStore.CheckAdjustQuotaAvailable(&tfv1.AllocRequest{
+		WorkloadNameNamespace: request.WorkloadNameNamespace,
+		Count:                 uint(len(request.GPUNames)),
+		Request:               adjustRequest.NewRequest,
+		Limit:                 adjustRequest.NewLimit,
+		GPUNames:              request.GPUNames,
+		PodMeta:               request.PodMeta,
+	}, request.Request, request.Limit); err != nil {
+		return tfv1.Resource{}, tfv1.Resource{}, tfv1.Resource{}, err
 	}
 
 	// pre check passed, change GPU request and QuotaStore and markDirty to sync to Kubernetes
@@ -1473,12 +1474,27 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 			s.markGPUDirty(gpuNameNs)
 		}
 
+		// Quota usage is tracked as the total across all GPUs of the workload,
+		// matching the normal Alloc path which multiplies by allocation.Count via
+		// Calculator.IncreaseUsage. AdjustQuota itself adds the deltas verbatim,
+		// so we must scale single-GPU deltas by GPU count here. DeepCopy to avoid
+		// mutating the per-GPU deltas we return to the caller.
+		gpuCount := int64(len(request.GPUNames))
+		scaledReqTflops := deltaTFlopsRequest.DeepCopy()
+		scaledReqTflops.Mul(gpuCount)
+		scaledReqVram := deltaVRAMRequest.DeepCopy()
+		scaledReqVram.Mul(gpuCount)
+		scaledLimitTflops := deltaTFlopsLimit.DeepCopy()
+		scaledLimitTflops.Mul(gpuCount)
+		scaledLimitVram := deltaVRAMLimit.DeepCopy()
+		scaledLimitVram.Mul(gpuCount)
+
 		s.quotaStore.AdjustQuota(request.PodMeta.Namespace, tfv1.Resource{
-			Tflops: deltaTFlopsRequest,
-			Vram:   deltaVRAMRequest,
+			Tflops: scaledReqTflops,
+			Vram:   scaledReqVram,
 		}, tfv1.Resource{
-			Tflops: deltaTFlopsLimit,
-			Vram:   deltaVRAMLimit,
+			Tflops: scaledLimitTflops,
+			Vram:   scaledLimitVram,
 		})
 		request.Request = adjustRequest.NewRequest
 		request.Limit = adjustRequest.NewLimit
@@ -1493,9 +1509,12 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 			"limit vram", request.Limit.Vram.String())
 	}
 	return tfv1.Resource{}, tfv1.Resource{
-		Tflops: deltaTFlopsRequest,
-		Vram:   deltaVRAMRequest,
-	}, nil
+			Tflops: deltaTFlopsRequest,
+			Vram:   deltaVRAMRequest,
+		}, tfv1.Resource{
+			Tflops: deltaTFlopsLimit,
+			Vram:   deltaVRAMLimit,
+		}, nil
 }
 
 func (s *GpuAllocator) ListNonUsingNodes() sets.Set[string] {

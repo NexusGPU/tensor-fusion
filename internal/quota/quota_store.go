@@ -125,6 +125,50 @@ func (qs *QuotaStore) CheckTotalQuotaWithPreScheduled(req *tfv1.AllocRequest, to
 	return qs.checkTotalQuotas(entry, req, nil, toScheduleResource)
 }
 
+// CheckAdjustQuotaAvailable validates an in-place resource change to an existing
+// allocation. new* are the absolute per-GPU values after the change; old* are
+// the current per-GPU values. Single per-workload caps are checked against the
+// new absolute values (a delta is meaningless here); namespace totals are
+// checked against effectiveUsage + (new-old)*count without phantom-incrementing
+// the worker count.
+func (qs *QuotaStore) CheckAdjustQuotaAvailable(
+	req *tfv1.AllocRequest,
+	oldRequest tfv1.Resource,
+	oldLimit tfv1.Resource,
+) error {
+	qs.StoreMutex.RLock()
+	defer qs.StoreMutex.RUnlock()
+
+	entry, exists := qs.QuotaStore[req.WorkloadNameNamespace.Namespace]
+	if !exists {
+		return nil
+	}
+
+	// req carries the absolute new request/limit, so checkSingleQuotas compares
+	// them directly against single.MaxRequests / single.MaxLimits.
+	if err := qs.checkSingleQuotas(entry, req); err != nil {
+		return err
+	}
+
+	// For the namespace total check, swap to a delta-shaped request: checkTotalExceeded
+	// multiplies req.Request/Limit by Count and adds to current usage, so we need delta
+	// here, not absolute values. toAddResource is zeroed (instead of nil) so addWorkers
+	// defaults to 0 rather than 1 — adjusts don't add a worker.
+	deltaReqTflops := req.Request.Tflops.DeepCopy()
+	deltaReqTflops.Sub(oldRequest.Tflops)
+	deltaReqVram := req.Request.Vram.DeepCopy()
+	deltaReqVram.Sub(oldRequest.Vram)
+	deltaLimitTflops := req.Limit.Tflops.DeepCopy()
+	deltaLimitTflops.Sub(oldLimit.Tflops)
+	deltaLimitVram := req.Limit.Vram.DeepCopy()
+	deltaLimitVram.Sub(oldLimit.Vram)
+
+	deltaReq := *req
+	deltaReq.Request = tfv1.Resource{Tflops: deltaReqTflops, Vram: deltaReqVram}
+	deltaReq.Limit = tfv1.Resource{Tflops: deltaLimitTflops, Vram: deltaLimitVram}
+	return qs.checkTotalQuotas(entry, &deltaReq, nil, qs.Calculator.CreateZeroUsage())
+}
+
 func (qs *QuotaStore) AdjustQuota(namespace string, reqDelta tfv1.Resource, limitDelta tfv1.Resource) {
 	qs.StoreMutex.Lock()
 	defer qs.StoreMutex.Unlock()
