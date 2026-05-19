@@ -169,6 +169,30 @@ func (qs *QuotaStore) ensureAssumedUsageLocked(entry *QuotaStoreEntry) *tfv1.GPU
 // checkSingleQuotas checks per-workload limits
 func (qs *QuotaStore) checkSingleQuotas(entry *QuotaStoreEntry, req *tfv1.AllocRequest) error {
 	single := &entry.Quota.Spec.Single
+
+	// Check single requests (per workload)
+	if single.MaxRequests != nil {
+		if !single.MaxRequests.Tflops.IsZero() && req.Request.Tflops.Cmp(single.MaxRequests.Tflops) > 0 {
+			return &QuotaExceededError{
+				Namespace:    entry.Quota.Namespace,
+				Resource:     MaxTFlopsRequestResource,
+				Requested:    req.Request.Tflops,
+				Limit:        single.MaxRequests.Tflops,
+				Unresolvable: true,
+			}
+		}
+		if !single.MaxRequests.Vram.IsZero() && req.Request.Vram.Cmp(single.MaxRequests.Vram) > 0 {
+			return &QuotaExceededError{
+				Namespace:    entry.Quota.Namespace,
+				Resource:     MaxVRAMRequestResource,
+				Requested:    req.Request.Vram,
+				Limit:        single.MaxRequests.Vram,
+				Unresolvable: true,
+			}
+		}
+	}
+
+	// Check single limits (per workload)
 	if single.MaxLimits != nil {
 		if !single.MaxLimits.Tflops.IsZero() && req.Limit.Tflops.Cmp(single.MaxLimits.Tflops) > 0 {
 			return &QuotaExceededError{
@@ -179,27 +203,25 @@ func (qs *QuotaStore) checkSingleQuotas(entry *QuotaStoreEntry, req *tfv1.AllocR
 				Unresolvable: true,
 			}
 		}
-
-		// Check single VRAM limit (per GPU)
-		if !single.MaxLimits.Vram.IsZero() && req.Request.Vram.Cmp(single.MaxLimits.Vram) > 0 {
+		if !single.MaxLimits.Vram.IsZero() && req.Limit.Vram.Cmp(single.MaxLimits.Vram) > 0 {
 			return &QuotaExceededError{
 				Namespace:    entry.Quota.Namespace,
 				Resource:     MaxVRAMLimitResource,
-				Requested:    req.Request.Vram,
+				Requested:    req.Limit.Vram,
 				Limit:        single.MaxLimits.Vram,
 				Unresolvable: true,
 			}
 		}
+	}
 
-		// Check single GPU count limit (per worker)
-		if single.MaxGPUCount != nil && int32(req.Count) > *single.MaxGPUCount {
-			return &QuotaExceededError{
-				Namespace:    entry.Quota.Namespace,
-				Resource:     MaxGPULimitResource,
-				Requested:    *resource.NewQuantity(int64(req.Count), resource.DecimalSI),
-				Limit:        *resource.NewQuantity(int64(*single.MaxGPUCount), resource.DecimalSI),
-				Unresolvable: true,
-			}
+	// Check single GPU count limit (per worker), independent of MaxLimits being set
+	if single.MaxGPUCount != nil && int32(req.Count) > *single.MaxGPUCount {
+		return &QuotaExceededError{
+			Namespace:    entry.Quota.Namespace,
+			Resource:     MaxGPULimitResource,
+			Requested:    *resource.NewQuantity(int64(req.Count), resource.DecimalSI),
+			Limit:        *resource.NewQuantity(int64(*single.MaxGPUCount), resource.DecimalSI),
+			Unresolvable: true,
 		}
 	}
 	return nil
