@@ -208,15 +208,18 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 
 	curRes, err := utils.GPUResourcesFromAnnotations(worker.Annotations)
 	if err != nil {
-		log.Error(err, "invalid GPU resources annotations")
+		// curRes is nil when parsing fails. Keep going so the autoscaler overwrites
+		// the bad annotations with the latest recommendation rather than getting
+		// stuck on a single corrupt worker, but skip comparisons that need curRes.
+		log.Error(err, "invalid GPU resources annotations, will overwrite with recommendation")
 	}
 
-	if recommendation.Equal(curRes) {
+	if curRes != nil && recommendation.Equal(curRes) {
 		return nil
 	}
 
 	// Record event when scaling happens
-	if h.eventRecorder != nil && h.scheme != nil {
+	if h.eventRecorder != nil && h.scheme != nil && curRes != nil {
 		namespace, name := workload.Coordinates()
 		workloadObj := &tfv1.TensorFusionWorkload{}
 		workloadObj.Namespace = namespace
@@ -258,7 +261,10 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 		return nil
 	}
 
-	isScaleUp := recommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
+	// When curRes is nil (parse failure above), treat as a scale-up so AdjustAllocation
+	// runs the quota pre-check — safer than skipping it.
+	isScaleUp := curRes == nil ||
+		recommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
 		recommendation.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
 
 	_, deltaRes, err := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
