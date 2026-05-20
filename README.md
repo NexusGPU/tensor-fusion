@@ -1,6 +1,5 @@
 <p align="center"><a href="javascript:void(0);" target="_blank" rel="noreferrer"><img width="100%" src="https://cdn.tensor-fusion.ai/logo-banner.png" alt="Logo"></a></p>
 
-
 <p align="center">
     <br /><strong><a href="https://tensor-fusion.ai" target="_blank">TensorFusion.AI</a></strong><br/><b>Less GPUs, More AI Apps.</b>
     <br />
