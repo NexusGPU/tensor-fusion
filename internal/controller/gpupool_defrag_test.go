@@ -621,7 +621,7 @@ func TestGetDefragConfig(t *testing.T) {
 		t.Fatalf("nil Defrag should return nil")
 	}
 	// Wired Defrag is returned as-is.
-	cfg := &tfv1.NodeDefragConfig{Enabled: true, Schedule: "0 3 * * *"}
+	cfg := &tfv1.NodeDefragConfig{Enabled: true, Schedule: "0 3 * * *", Timezone: "UTC"}
 	p.Spec.NodeManagerConfig.NodeCompaction.Defrag = cfg
 	got := getDefragConfig(p)
 	if got != cfg {
@@ -1988,6 +1988,7 @@ func newDefragTestPool() *tfv1.GPUPool {
 					Defrag: &tfv1.NodeDefragConfig{
 						Enabled:                     true,
 						Schedule:                    "0 3 * * *",
+						Timezone:                    "UTC",
 						MaxDuration:                 "30m",
 						UtilizationThresholdPercent: 40,
 					},

@@ -221,9 +221,21 @@ type NodeDefragConfig struct {
 	Enabled bool `json:"enabled,omitempty"`
 
 	// Schedule is a standard 5-field cron expression ("min hour dom month dow").
-	// Example: "0 3 * * *" triggers once per day at 03:00 local time of the controller.
+	// Must NOT contain a CRON_TZ=/TZ= prefix; use the dedicated Timezone field
+	// so the choice is explicit and reviewable instead of falling back to the
+	// controller process's local timezone.
+	// Example: "0 3 * * *" with Timezone "Asia/Shanghai" triggers daily at 03:00 Shanghai time.
 	// +kubebuilder:default="0 3 * * *"
+	// +kubebuilder:validation:Pattern=`^[^=]+$`
 	Schedule string `json:"schedule,omitempty"`
+
+	// Timezone is the IANA timezone name (e.g. "UTC", "Asia/Shanghai",
+	// "America/Los_Angeles") used to evaluate Schedule. Required to avoid
+	// relying on the controller process's local timezone. No default is
+	// provided on purpose so operators consciously pick one.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Timezone string `json:"timezone"`
 
 	// MaxDuration caps the wall-clock time of a single defrag run. Parsed with
 	// time.ParseDuration. If the run exceeds this window, it stops emitting new
