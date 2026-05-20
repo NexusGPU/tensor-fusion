@@ -350,7 +350,11 @@ spec:
                                       default: 0 3 * * *
                                       description: |-
                                         Schedule is a standard 5-field cron expression ("min hour dom month dow").
-                                        Example: "0 3 * * *" triggers once per day at 03:00 local time of the controller.
+                                        Must NOT contain a CRON_TZ=/TZ= prefix; use the dedicated Timezone field
+                                        so the choice is explicit and reviewable instead of falling back to the
+                                        controller process's local timezone.
+                                        Example: "0 3 * * *" with Timezone "Asia/Shanghai" triggers daily at 03:00 Shanghai time.
+                                      pattern: ^[^=]+$
                                       type: string
                                     sourceNodeMarkerTTL:
                                       default: 30m
@@ -360,6 +364,14 @@ spec:
                                         rationale as EvictedPodMarkerTTL. Parsed with time.ParseDuration.
                                         Use "never" (case-insensitive) to disable expiry. If empty or invalid,
                                         falls back to "30m".
+                                      type: string
+                                    timezone:
+                                      description: |-
+                                        Timezone is the IANA timezone name (e.g. "UTC", "Asia/Shanghai",
+                                        "America/Los_Angeles") used to evaluate Schedule. Required to avoid
+                                        relying on the controller process's local timezone. No default is
+                                        provided on purpose so operators consciously pick one.
+                                      minLength: 1
                                       type: string
                                     utilizationThresholdPercent:
                                       default: 40
@@ -373,6 +385,8 @@ spec:
                                       maximum: 100
                                       minimum: 0
                                       type: integer
+                                  required:
+                                  - timezone
                                   type: object
                                 period:
                                   default: 5m

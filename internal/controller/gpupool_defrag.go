@@ -76,6 +76,7 @@ const (
 	defragEventBlockedEvictedPod = "DefragBlockedByEvictedPod"
 	defragEventEvictSkip         = "DefragNodeEvictSkip"
 	defragEventFinished          = "DefragFinished"
+	defragEventConfigInvalid     = "DefragConfigInvalid"
 )
 
 // schedulerFitPodAPI is satisfied by *scheduler.Scheduler only after the
@@ -155,9 +156,12 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 		return 0
 	}
 
-	schedule, err := r.defragParser.Parse(cfg.Schedule)
+	schedule, err := utils.ParseTimezoneAwareCronSchedule(r.defragParser, cfg.Schedule, cfg.Timezone)
 	if err != nil {
-		logger.Error(err, "invalid defrag cron schedule; defrag disabled", "schedule", cfg.Schedule)
+		logger.Error(err, "invalid defrag schedule config; defrag disabled",
+			"schedule", cfg.Schedule, "timezone", cfg.Timezone)
+		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventConfigInvalid,
+			"defrag disabled: %v", err)
 		return 0
 	}
 	maxDuration := parseDefragMaxDuration(cfg.MaxDuration, logger)
