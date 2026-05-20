@@ -698,6 +698,10 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 		}
 	}
 	for k, v := range nodeClaim.Annotations {
+		// Expansion copies should not inherit do-not-disrupt protection; otherwise reclaimed nodes can get stuck.
+		if shouldSkipAnnotationCopy(k, v) {
+			continue
+		}
 		if isNotAutoAddedKarpenterKeys(k) {
 			newNodeClaim.Annotations[k] = v
 		}
@@ -721,4 +725,8 @@ func isNotAutoAddedKarpenterKeys(k string) bool {
 		return strings.HasPrefix(k, "karpenter.sh") || strings.HasPrefix(k, "karpenter.k8s.io")
 	}
 	return true
+}
+
+func shouldSkipAnnotationCopy(k, v string) bool {
+	return k == "karpenter.sh/do-not-disrupt" && strings.EqualFold(v, "true")
 }

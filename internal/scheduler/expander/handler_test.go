@@ -118,6 +118,10 @@ var _ = Describe("NodeExpander Unit Tests", func() {
 			testExpansionLabelNotOverridden(suite)
 		})
 
+		It("should filter do-not-disrupt=true while keeping other karpenter annotations", func() {
+			testDoNotDisruptAnnotationFiltered(suite)
+		})
+
 		It("should cleanup inflight node claim when node is ready", func() {
 			testCleanupReadyInFlightNodeClaim(suite)
 		})
@@ -226,6 +230,32 @@ func testExpansionLabelNotOverridden(suite *NodeExpanderTestSuite) {
 	Expect(suite.k8sClient.Get(suite.ctx, client.ObjectKey{Name: preparedNode.Name}, newClaim)).To(Succeed())
 	Expect(newClaim.Labels[constants.KarpenterExpansionLabel]).To(Equal(preparedNode.Name))
 	Expect(newClaim.Labels["env"]).To(Equal("prod"))
+}
+
+func testDoNotDisruptAnnotationFiltered(suite *NodeExpanderTestSuite) {
+	origNodeClaim := &karpv1.NodeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "orig-claim-anno",
+			Annotations: map[string]string{
+				"karpenter.sh/do-not-disrupt": "true",
+				"karpenter.sh/custom-note":    "keep-me",
+			},
+		},
+	}
+	Expect(suite.k8sClient.Create(suite.ctx, origNodeClaim)).To(Succeed())
+	defer func() { _ = suite.k8sClient.Delete(suite.ctx, origNodeClaim) }()
+
+	pod := createTestTensorFusionPod("worker-anno", suite.namespace, "100", "1Gi")
+	preparedNode := createTestNode("new-expansion-anno", origNodeClaim)
+
+	err := suite.nodeExpander.createKarpenterNodeClaimDirect(suite.ctx, pod, preparedNode, origNodeClaim)
+	Expect(err).To(Succeed())
+
+	newClaim := &karpv1.NodeClaim{}
+	Expect(suite.k8sClient.Get(suite.ctx, client.ObjectKey{Name: preparedNode.Name}, newClaim)).To(Succeed())
+	_, exists := newClaim.Annotations["karpenter.sh/do-not-disrupt"]
+	Expect(exists).To(BeFalse())
+	Expect(newClaim.Annotations["karpenter.sh/custom-note"]).To(Equal("keep-me"))
 }
 
 func testCleanupReadyInFlightNodeClaim(suite *NodeExpanderTestSuite) {
