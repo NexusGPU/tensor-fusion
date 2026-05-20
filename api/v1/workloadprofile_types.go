@@ -33,6 +33,7 @@ const (
 )
 
 // WorkloadProfileSpec defines the desired state of WorkloadProfile.
+// +kubebuilder:validation:XValidation:rule="!has(self.gangScheduling) || self.gangScheduling.minMembers == 0 || !has(self.replicas) || self.gangScheduling.minMembers <= self.replicas",message="gangScheduling.minMembers must be <= spec.replicas when both are set"
 type WorkloadProfileSpec struct {
 	// +optional
 	// If replicas not set, it will be dynamic based on pending Pod
@@ -111,7 +112,20 @@ type WorkloadProfileSpec struct {
 	GangScheduling *GangSchedulingConfig `json:"gangScheduling,omitempty"`
 }
 
-// GangSchedulingConfig defines gang scheduling configuration
+// GangSchedulingMode controls how the gang scheduler reacts when one member
+// cannot be placed. Only Strict is currently supported; the enum will be
+// extended (e.g. with NonStrict) when alternative policies actually exist.
+// +kubebuilder:validation:Enum=Strict
+type GangSchedulingMode string
+
+const (
+	// GangSchedulingModeStrict: any member's unschedulability fails the whole
+	// group atomically (PostFilter rejects all waiting peers + backoff).
+	GangSchedulingModeStrict GangSchedulingMode = "Strict"
+)
+
+// GangSchedulingConfig defines gang scheduling configuration.
+// +kubebuilder:validation:XValidation:rule="self.minMembers == 0 || self.minMembers >= 2",message="minMembers must be 0 (default to workload replicas) or >= 2"
 type GangSchedulingConfig struct {
 	// MinMembers optionally overrides the gang quorum.
 	// When omitted or set to 0, the gang quorum defaults to the workload's desired replicas.
@@ -125,6 +139,12 @@ type GangSchedulingConfig struct {
 	// Example values: "5m", "10m", "1h"
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
+
+	// Mode selects the gang failure-handling policy. Defaults to Strict.
+	// NonStrict is reserved for future use and currently behaves as Strict.
+	// +optional
+	// +kubebuilder:default=Strict
+	Mode GangSchedulingMode `json:"mode,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=shared;soft;hard;partitioned

@@ -43,6 +43,13 @@ import (
 const MaxGPUCounterPerAllocation = 128
 const CleanUpCheckInterval = 3 * time.Minute
 
+// DefaultAssumedAllocationTTL bounds how long an assumed (uncommitted) GPU
+// reservation can survive in memory. Must exceed the longest expected gang
+// Permit wait so pods waiting for peers are not expired mid-cycle. A pod that
+// stays "assumed" longer than this is treated as orphaned (e.g. operator
+// crashed between Reserve and PreBind) and reclaimed by reconcileAllocationState.
+const DefaultAssumedAllocationTTL = 30 * time.Minute
+
 var mu sync.Mutex
 var GPUCapacityMap = map[string]tfv1.Resource{}
 
@@ -277,7 +284,7 @@ type GpuAllocator struct {
 	poolGpuStore    map[string]map[string]*tfv1.GPU
 	nodeWorkerStore map[string]map[types.NamespacedName]struct{}
 	storeMutex      sync.RWMutex
-	allocateMutex   sync.Mutex // serializes legacy Alloc() calls (CheckQuotaAndFilter + Bind)
+	allocateMutex   sync.Mutex // serializes Alloc() callers that do CheckQuotaAndFilter + Bind in one step (tests, single-shot paths outside the scheduler plugin)
 	syncInterval    time.Duration
 	cancel          context.CancelFunc
 	ctx             context.Context
@@ -292,6 +299,17 @@ type GpuAllocator struct {
 	uniqueDeallocation     map[string]struct{}
 	podNamespaceNsToPodUID map[string]string
 
+	// assumedAllocationTimestamps records when each assumed entry was created so
+	// reconcileAllocationState can sweep stale ones whose pod never reached
+	// PreBind (e.g. operator crash between Reserve and PreBind). Keyed by podUID
+	// in lockstep with assumedAllocation. Always mutated under storeMutex.
+	assumedAllocationTimestamps map[string]time.Time
+	// assumedAllocationTTL bounds how long an assumed (uncommitted) reservation
+	// can survive. Must exceed the maximum expected gang Permit wait so pods
+	// waiting for peers are not expired mid-cycle. Sweep happens during
+	// reconcileAllocationState.
+	assumedAllocationTTL time.Duration
+
 	maxWorkerPerNode int
 
 	initGPUStoreOnce    sync.Once
@@ -300,6 +318,13 @@ type GpuAllocator struct {
 
 	bindHandlers   []func(req *tfv1.AllocRequest)
 	indexAllocator *indexallocator.IndexAllocator
+
+	// gangWaitingProbe, when set, lets the assumed-allocation TTL sweep
+	// recognize pods that are legitimately parked at Permit (gang waiting).
+	// Returning true tells the sweep to leave the entry alone and refresh its
+	// timestamp. Wired from cmd/main.go to avoid a gang→allocator package
+	// dependency. nil → no gang awareness (treat every entry uniformly).
+	gangWaitingProbe func(podUID string) bool
 }
 
 func NewGpuAllocator(
@@ -344,12 +369,14 @@ func NewGpuAllocator(
 		dirtyQueue:      make(map[types.NamespacedName]struct{}),
 		ctx:             ctx,
 
-		indexAllocator:         indexAllocator,
-		uniqueAllocation:       make(map[string]*tfv1.AllocRequest, 512),
-		assumedAllocation:      make(map[string]*tfv1.AllocRequest, 512),
-		uniqueDeallocation:     make(map[string]struct{}, 512),
-		podNamespaceNsToPodUID: make(map[string]string, 512),
-		initializedCh:          make(chan struct{}),
+		indexAllocator:              indexAllocator,
+		uniqueAllocation:            make(map[string]*tfv1.AllocRequest, 512),
+		assumedAllocation:           make(map[string]*tfv1.AllocRequest, 512),
+		assumedAllocationTimestamps: make(map[string]time.Time, 512),
+		assumedAllocationTTL:        DefaultAssumedAllocationTTL,
+		uniqueDeallocation:          make(map[string]struct{}, 512),
+		podNamespaceNsToPodUID:      make(map[string]string, 512),
+		initializedCh:               make(chan struct{}),
 	}
 
 	return allocator
@@ -357,6 +384,14 @@ func NewGpuAllocator(
 
 func (s *GpuAllocator) RegisterBindHandler(handler func(req *tfv1.AllocRequest)) {
 	s.bindHandlers = append(s.bindHandlers, handler)
+}
+
+// SetGangWaitingProbe wires a predicate that reports whether a pod is in the
+// gang Permit-wait state. The assumed-allocation TTL sweep uses this to avoid
+// evicting legitimately-waiting gang members whose Permit can outlast the
+// default TTL (gang default is IndefiniteGangWaitDuration ≈ 100 years).
+func (s *GpuAllocator) SetGangWaitingProbe(probe func(podUID string) bool) {
+	s.gangWaitingProbe = probe
 }
 
 func (s *GpuAllocator) UpsertGPUForTesting(ctx context.Context, gpu *tfv1.GPU) {
@@ -1091,6 +1126,7 @@ func (s *GpuAllocator) Assume(gpuNames []string, req *tfv1.AllocRequest) error {
 	req.GPUNames = append([]string(nil), gpuNames...)
 	assumedReq := req.DeepCopy()
 	s.assumedAllocation[podUID] = assumedReq
+	s.assumedAllocationTimestamps[podUID] = time.Now()
 	delete(s.uniqueDeallocation, podUID)
 	s.quotaStore.AssumeQuota(req.WorkloadNameNamespace.Namespace, assumedReq)
 
@@ -1113,30 +1149,35 @@ func (s *GpuAllocator) Commit(podUID string) ([]*tfv1.GPU, error) {
 		return nil, fmt.Errorf("pod %s has no assumed allocation to commit", podUID)
 	}
 
+	// Roll back per-GPU state and clear the assumed reservation/quota on any
+	// failure during commit. Keeps the invariant: a failed Commit leaves no
+	// assumed state behind, regardless of whether the caller also calls Forget.
+	rollbackOnCommitFailure := func(appliedGPUKeys []types.NamespacedName) {
+		for _, appliedKey := range appliedGPUKeys {
+			appliedGPU := s.gpuStore[appliedKey]
+			s.releaseAllocationFromGPU(appliedGPU, req, appliedKey.Name)
+			removeRunningApp(s.ctx, appliedGPU, req)
+			s.markGPUDirty(appliedKey)
+		}
+		s.quotaStore.ForgetAssumedQuota(req.WorkloadNameNamespace.Namespace, req)
+		delete(s.assumedAllocation, podUID)
+		delete(s.assumedAllocationTimestamps, podUID)
+	}
+
 	gpuNodeName := ""
 	appliedGPUKeys := make([]types.NamespacedName, 0, len(req.GPUNames))
 	for _, gpuName := range req.GPUNames {
 		key := types.NamespacedName{Name: gpuName}
 		gpu := s.gpuStore[key]
 		if gpu == nil {
-			for _, appliedKey := range appliedGPUKeys {
-				appliedGPU := s.gpuStore[appliedKey]
-				s.releaseAllocationFromGPU(appliedGPU, req, appliedKey.Name)
-				removeRunningApp(s.ctx, appliedGPU, req)
-				s.markGPUDirty(appliedKey)
-			}
+			rollbackOnCommitFailure(appliedGPUKeys)
 			return nil, fmt.Errorf("scheduled GPU %s not found in store", gpuName)
 		}
 		if gpuNodeName == "" {
 			gpuNodeName = gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		}
 		if err := s.applyAllocationToGPU(gpu, req, gpuName); err != nil {
-			for _, appliedKey := range appliedGPUKeys {
-				appliedGPU := s.gpuStore[appliedKey]
-				s.releaseAllocationFromGPU(appliedGPU, req, appliedKey.Name)
-				removeRunningApp(s.ctx, appliedGPU, req)
-				s.markGPUDirty(appliedKey)
-			}
+			rollbackOnCommitFailure(appliedGPUKeys)
 			return nil, err
 		}
 
@@ -1162,13 +1203,35 @@ func (s *GpuAllocator) Commit(podUID string) ([]*tfv1.GPU, error) {
 
 	s.uniqueAllocation[podUID] = req
 	delete(s.assumedAllocation, podUID)
+	delete(s.assumedAllocationTimestamps, podUID)
 	delete(s.uniqueDeallocation, podUID)
 	s.podNamespaceNsToPodUID[req.PodMeta.Namespace+"/"+req.PodMeta.Name] = podUID
 
-	for _, handler := range s.bindHandlers {
+	// NOTE: bindHandlers used to fire here, but Commit now runs in PreBind —
+	// firing handlers at Commit time would report "Scheduled" before the
+	// framework's Bind has actually happened, and PreBind may still roll the
+	// commit back if annotation patching fails. PostBind is the unambiguous
+	// "scheduling complete" point; it calls NotifyBound.
+	return s.snapshotAllocatedGPUsLocked(req.GPUNames), nil
+}
+
+// NotifyBound fires the registered bind handlers (e.g. expander's
+// "Scheduled" event / preSchedule removal) for an already-committed pod.
+// Intended to be called from PostBind after the framework's Bind has
+// successfully placed the pod, so handlers only see pods that truly reached
+// the bound state.
+func (s *GpuAllocator) NotifyBound(podUID string) {
+	<-s.initializedCh
+	s.storeMutex.RLock()
+	req, exists := s.uniqueAllocation[podUID]
+	handlers := s.bindHandlers
+	s.storeMutex.RUnlock()
+	if !exists || req == nil {
+		return
+	}
+	for _, handler := range handlers {
 		handler(req)
 	}
-	return s.snapshotAllocatedGPUsLocked(req.GPUNames), nil
 }
 
 // Forget removes a scheduler-only reservation that never became committed.
@@ -1185,10 +1248,142 @@ func (s *GpuAllocator) Forget(podUID string) error {
 
 	s.quotaStore.ForgetAssumedQuota(req.WorkloadNameNamespace.Namespace, req)
 	delete(s.assumedAllocation, podUID)
+	delete(s.assumedAllocationTimestamps, podUID)
 	return nil
 }
 
-// Bind preserves the legacy eager-allocation API by internally using assume+commit.
+// Rollback releases a committed allocation so the pod can re-enter scheduling.
+// It restores GPU available capacity, removes the running-app record, releases
+// quota, and clears the per-pod allocator state. Unlike Dealloc, it does NOT
+// set the uniqueDeallocation marker, so a subsequent Assume/Commit for the
+// same podUID succeeds. Intended for use when a post-Commit step (e.g. PreBind
+// pod annotation patch) fails and the scheduling cycle must abort.
+// Idempotent: returns nil if podUID has no committed allocation.
+func (s *GpuAllocator) Rollback(podUID string) error {
+	<-s.initializedCh
+
+	s.storeMutex.Lock()
+	defer s.storeMutex.Unlock()
+
+	request, exists := s.uniqueAllocation[podUID]
+	if !exists || request == nil {
+		return nil
+	}
+
+	nodeName := ""
+	for _, gpuName := range request.GPUNames {
+		gpuKey := types.NamespacedName{Name: gpuName}
+		storeGPU, ok := s.gpuStore[gpuKey]
+		if !ok {
+			continue
+		}
+		s.releaseAllocationFromGPU(storeGPU, request, gpuName)
+		if nodeName == "" {
+			nodeName = storeGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		}
+		removeRunningApp(s.ctx, storeGPU, request)
+		// Safety net: same rationale as Dealloc — if the GPU CR was reset
+		// between Commit and Rollback, adding resources back could push
+		// Available above Capacity.
+		clampGPUAvailableToCapacity(storeGPU)
+		s.markGPUDirty(gpuKey)
+	}
+
+	if nodeName != "" {
+		delete(s.nodeWorkerStore[nodeName], types.NamespacedName{
+			Name:      request.PodMeta.Name,
+			Namespace: request.PodMeta.Namespace,
+		})
+	}
+	delete(s.uniqueAllocation, podUID)
+	delete(s.podNamespaceNsToPodUID, request.PodMeta.Namespace+"/"+request.PodMeta.Name)
+	s.quotaStore.DeallocateQuota(request.WorkloadNameNamespace.Namespace, request)
+
+	log.FromContext(s.ctx).Info("GPU allocation rolled back",
+		"namespace", request.WorkloadNameNamespace.Namespace,
+		"workload", request.WorkloadNameNamespace.Name,
+		"podName", request.PodMeta.Name,
+		"gpu_count", len(request.GPUNames),
+		"gpuNames", request.GPUNames,
+		"tflops", request.Request.Tflops.String(),
+		"vram", request.Request.Vram.String())
+
+	return nil
+}
+
+// IsCommitted reports whether a committed allocation exists for podUID.
+// Intended for observability and tests; production code should not branch on
+// this since allocator state can change concurrently.
+func (s *GpuAllocator) IsCommitted(podUID string) bool {
+	<-s.initializedCh
+	s.storeMutex.RLock()
+	defer s.storeMutex.RUnlock()
+	_, ok := s.uniqueAllocation[podUID]
+	return ok
+}
+
+// UnreserveOrRollback releases any allocator state held for podUID, whether
+// the pod is in the committed phase or only assumed. It is strongly idempotent:
+// safe to call multiple times and safe to call when no state exists. Intended
+// for the scheduler plugin's Unreserve callback and any failure-path cleanup
+// that should not need to know the pod's current phase.
+//
+// Implementation: Rollback handles the committed case (no-op if absent), Forget
+// handles the assumed case (no-op if absent). Calling both covers all three
+// states (committed / assumed-only / nothing) without further branching.
+func (s *GpuAllocator) UnreserveOrRollback(podUID string) error {
+	if err := s.Rollback(podUID); err != nil {
+		return err
+	}
+	return s.Forget(podUID)
+}
+
+// sweepStaleAssumedAllocationsLocked drops assumed entries that have outlived
+// the TTL or have already been committed elsewhere. Called from
+// reconcileAllocationState (startup) and the periodic cleanup ticker
+// (steady-state) so namespace quota is not falsely inflated by orphaned
+// assumed reservations (e.g. pod deleted mid-cycle without an Unreserve).
+//
+// Caller MUST hold storeMutex.Lock.
+func (s *GpuAllocator) sweepStaleAssumedAllocationsLocked(now time.Time) int {
+	swept := 0
+	for uid, assumedReq := range s.assumedAllocation {
+		if _, committed := s.uniqueAllocation[uid]; committed {
+			delete(s.assumedAllocation, uid)
+			delete(s.assumedAllocationTimestamps, uid)
+			continue
+		}
+		ts, ok := s.assumedAllocationTimestamps[uid]
+		if !ok {
+			// No timestamp recorded — stamp it now and give it a fresh window.
+			s.assumedAllocationTimestamps[uid] = now
+			continue
+		}
+		// Gang pods may legitimately stay parked at Permit longer than the
+		// default TTL (gang's indefinite-wait duration is ~100 years). Refresh
+		// their timestamp instead of evicting, so the sweep window restarts
+		// each time we observe the pod still waiting.
+		if s.gangWaitingProbe != nil && s.gangWaitingProbe(uid) {
+			s.assumedAllocationTimestamps[uid] = now
+			continue
+		}
+		if now.Sub(ts) > s.assumedAllocationTTL {
+			if assumedReq != nil {
+				s.quotaStore.ForgetAssumedQuota(assumedReq.WorkloadNameNamespace.Namespace, assumedReq)
+			}
+			delete(s.assumedAllocation, uid)
+			delete(s.assumedAllocationTimestamps, uid)
+			log.FromContext(s.ctx).Info("evicted stale assumed allocation past TTL",
+				"podUID", uid, "age", now.Sub(ts), "ttl", s.assumedAllocationTTL)
+			swept++
+		}
+	}
+	return swept
+}
+
+// Bind performs an atomic assume+commit for a caller that has already selected
+// the target GPUs. On commit failure it releases the assumed reservation so the
+// allocator state stays consistent regardless of the failure point.
 func (s *GpuAllocator) Bind(
 	gpuNames []string,
 	req *tfv1.AllocRequest,
@@ -1204,8 +1399,9 @@ func (s *GpuAllocator) Bind(
 	return committedGPUs, nil
 }
 
-// Alloc allocates a request to a gpu or multiple gpus from the same node.
-// This is now implemented as a combination of Filter and Bind for backward compatibility.
+// Alloc filters + selects + binds in one call. Used by tests and any caller
+// that does not go through the scheduler plugin's Reserve/PreBind/PostBind
+// pipeline.
 func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 	s.allocateMutex.Lock()
 	defer s.allocateMutex.Unlock()
@@ -1221,19 +1417,10 @@ func (s *GpuAllocator) Alloc(req *tfv1.AllocRequest) ([]*tfv1.GPU, error) {
 		return nil, err
 	}
 
-	// Then, bind resources to the selected GPUs
 	gpuNames := lo.Map(selectedGPUs, func(gpu *tfv1.GPU, _ int) string {
 		return gpu.Name
 	})
-	if err := s.Assume(gpuNames, req); err != nil {
-		return nil, err
-	}
-	committedGPUs, err := s.Commit(string(req.PodMeta.UID))
-	if err != nil {
-		_ = s.Forget(string(req.PodMeta.UID))
-		return nil, err
-	}
-	return committedGPUs, nil
+	return s.Bind(gpuNames, req)
 }
 
 func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocRequest, isSimulateSchedule bool) ([]*tfv1.GPU, []filter.FilterDetail, error) {
@@ -2414,32 +2601,39 @@ func (s *GpuAllocator) reconcileAllocationState() {
 		return
 	}
 
-	// filter out pending workers which doesn't have nodeName or is being deleted
+	// Filter rule (authoritative-annotation invariant):
+	//   - Pod must be scheduled (NodeName != "") AND not in the deleted-and-deallocated
+	//     state (deletion timestamp set without our finalizer).
+	//   - Pod must carry a non-empty gpu-device-ids annotation. Per the architecture,
+	//     PreBind is the single point that commits a TF allocation, and PreBind only
+	//     proceeds to Bind if that annotation was successfully patched. A scheduled
+	//     worker pod WITHOUT the annotation therefore did not commit an allocation —
+	//     registering it here would falsely inflate namespace quota (the request
+	//     resources are non-zero even when GPUNames is empty).
 	workers.Items = lo.Filter(workers.Items, func(worker v1.Pod, _ int) bool {
 		scheduled := worker.Spec.NodeName != ""
-
 		deletedAndDeAllocated := !worker.DeletionTimestamp.IsZero() &&
 			!controllerutil.ContainsFinalizer(&worker, constants.Finalizer)
+		hasGPUAnnotation := worker.Annotations[constants.GPUDeviceIDsAnnotation] != ""
 
-		// Only register active pods in uniqueAllocation.
-		// Pods that are deletedAndDeAllocated must NOT be registered: their resources
-		// are not counted in Available, so a late Dealloc would add resources back
-		// that were never subtracted, causing Available to exceed correct state.
-		if scheduled && !deletedAndDeAllocated {
-			allocRequest, msg, err := s.ComposeAllocationRequest(&worker)
-			if err != nil {
-				logger.Error(err, "Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", worker.Name, "msg", msg)
-				return false
-			}
-			s.uniqueAllocation[string(worker.UID)] = allocRequest
-			s.podNamespaceNsToPodUID[worker.Namespace+"/"+worker.Name] = string(worker.UID)
-			s.addAllocationMap(worker.Spec.NodeName, worker.ObjectMeta)
-
-			if utils.IsPodPending(&worker) {
-				s.indexAllocator.ReconcileLockState(&worker)
-			}
+		active := scheduled && !deletedAndDeAllocated && hasGPUAnnotation
+		if !active {
+			return false
 		}
-		return scheduled && !deletedAndDeAllocated
+
+		allocRequest, msg, err := s.ComposeAllocationRequest(&worker)
+		if err != nil {
+			logger.Error(err, "Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", worker.Name, "msg", msg)
+			return false
+		}
+		s.uniqueAllocation[string(worker.UID)] = allocRequest
+		s.podNamespaceNsToPodUID[worker.Namespace+"/"+worker.Name] = string(worker.UID)
+		s.addAllocationMap(worker.Spec.NodeName, worker.ObjectMeta)
+
+		if utils.IsPodPending(&worker) {
+			s.indexAllocator.ReconcileLockState(&worker)
+		}
+		return true
 	})
 
 	actualAvailableMap := make(map[types.NamespacedName]*tfv1.Resource)
@@ -2448,14 +2642,7 @@ func (s *GpuAllocator) reconcileAllocationState() {
 	s.storeMutex.Lock()
 	defer s.storeMutex.Unlock()
 
-	// Preserve assumed entries that have not yet been committed (i.e., pods
-	// between Reserve and PostBind). Only remove entries that already appear
-	// in uniqueAllocation, meaning the reconcile rebuilt them from workers.
-	for uid := range s.assumedAllocation {
-		if _, committed := s.uniqueAllocation[uid]; committed {
-			delete(s.assumedAllocation, uid)
-		}
-	}
+	s.sweepStaleAssumedAllocationsLocked(time.Now())
 
 	for gpuKey, gpu := range s.gpuStore {
 		if gpu.Status.Capacity != nil {
@@ -2608,8 +2795,18 @@ func (s *GpuAllocator) startWorkerCleanUpChecker() {
 					cleaned++
 				}
 			}
-			log.FromContext(s.ctx).Info("GPU allocation cleaned up check completed", "total workers",
-				totalWorkers, "backup cleaner cleaned", cleaned)
+
+			// Sweep stale assumed allocations whose scheduling cycle never
+			// reached PreBind (e.g. pod deleted between Reserve and PreBind
+			// without Unreserve being called). Without this, assumed quota
+			// would slowly inflate over an operator's lifetime.
+			s.storeMutex.Lock()
+			sweptAssumed := s.sweepStaleAssumedAllocationsLocked(time.Now())
+			s.storeMutex.Unlock()
+
+			log.FromContext(s.ctx).Info("GPU allocation cleaned up check completed",
+				"total workers", totalWorkers, "backup cleaner cleaned", cleaned,
+				"stale assumed swept", sweptAssumed)
 		case <-s.ctx.Done():
 			return
 		}
@@ -2840,6 +3037,15 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 			fmt.Errorf("can not parse gpu indices annotation")
 	}
 
+	// Mirror utils.ComposeAllocationRequest so allocator recovery (reconcileAllocationState,
+	// defrag) preserves the partitioned-mode semantics encoded on worker pods. Without
+	// these fields, existing partition workers are rebuilt as non-partitioned allocations
+	// and capacity is recomputed from request resources instead of the partition template.
+	isolationMode := tfv1.IsolationModeType(pod.Annotations[constants.IsolationModeAnnotation])
+	if isolationMode == "" {
+		isolationMode = tfv1.IsolationModeSoft
+	}
+
 	allocRequest := tfv1.AllocRequest{
 		PoolName: pod.Annotations[constants.GpuPoolKey],
 		Request:  gpuRequestResource,
@@ -2849,12 +3055,19 @@ func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest
 		GPUModel:   pod.Annotations[constants.GPUModelAnnotation],
 		GPUIndices: gpuIndices,
 		GPUVendor:  gpuVendor,
+		Isolation:  isolationMode,
 		WorkloadNameNamespace: tfv1.NameNamespace{
 			Name:      pod.Labels[constants.WorkloadKey],
 			Namespace: pod.Namespace,
 		},
 		PodMeta: pod.ObjectMeta,
 		QoS:     qosLevel,
+	}
+
+	if allocRequest.Isolation == tfv1.IsolationModePartitioned {
+		if partitionTemplateID, ok := pod.Annotations[constants.PartitionTemplateIDAnnotation]; ok && partitionTemplateID != "" {
+			allocRequest.PartitionTemplateID = partitionTemplateID
+		}
 	}
 
 	// for already allocated workers, set the GPU device IDs for further scaling and retrieval

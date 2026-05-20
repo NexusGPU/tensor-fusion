@@ -354,6 +354,12 @@ var _ = Describe("GPUFit Plugin", func() {
 				constants.TFLOPSRequestAnnotation: "100",
 				constants.VRAMRequestAnnotation:   "10Gi",
 			}, fwk.Unschedulable, ""),
+			// Gang+virtualization regression (no pool-slot pre-rejection) is
+			// covered by TestPreFilterDoesNotPoolSlotRejectGangAcrossIsolationModes
+			// in prefilter_gang_no_pool_slot_check_test.go, which wires a real
+			// gang.Manager + populated podLister so the test actually exercises
+			// the post-gang code path. Adding it here is no good because this
+			// suite's plugin is built with gangManager=nil.
 		)
 	})
 
@@ -468,10 +474,10 @@ var _ = Describe("GPUFit Plugin", func() {
 		})
 	})
 
-	Describe("PostBind", func() {
-		It("should update pod annotations after bind", func() {
+	Describe("PreBind", func() {
+		It("should commit allocation and patch pod annotations", func() {
 			state := framework.NewCycleState()
-			pod := makePod("p-postbind", map[string]string{
+			pod := makePod("p-prebind", map[string]string{
 				constants.GpuCountAnnotation:      "1",
 				constants.TFLOPSRequestAnnotation: "100",
 				constants.VRAMRequestAnnotation:   "10Gi",
@@ -484,11 +490,12 @@ var _ = Describe("GPUFit Plugin", func() {
 			reserveStatus := plugin.Reserve(ctx, state, pod, "node-a")
 			Expect(reserveStatus.IsSuccess()).To(BeTrue())
 
-			plugin.PostBind(ctx, state, pod, "node-a")
+			preBindStatus := plugin.PreBind(ctx, state, pod, "node-a")
+			Expect(preBindStatus.IsSuccess()).To(BeTrue())
 			plugin.allocator.SyncGPUsToK8s()
 
 			updatedPod := &v1.Pod{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "p-postbind", Namespace: "ns1"}, updatedPod)).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "p-prebind", Namespace: "ns1"}, updatedPod)).To(Succeed())
 			Expect(updatedPod.Annotations[constants.GPUDeviceIDsAnnotation]).To(Equal("gpu-1"))
 
 			gpu := &tfv1.GPU{}
@@ -499,11 +506,10 @@ var _ = Describe("GPUFit Plugin", func() {
 
 		// Regression: the patch closure must propagate its error to retry.OnError.
 		// If it returns nil, retry.OnError treats the first attempt as success and
-		// never retries, leaving the worker pod without the gpu-device-ids
-		// annotation while the allocator commit has already happened.
+		// never retries.
 		It("should retry pod annotation patch on transient apiserver error", func() {
 			state := framework.NewCycleState()
-			pod := makePod("p-postbind-retry", map[string]string{
+			pod := makePod("p-prebind-retry", map[string]string{
 				constants.GpuCountAnnotation:      "1",
 				constants.TFLOPSRequestAnnotation: "100",
 				constants.VRAMRequestAnnotation:   "10Gi",
@@ -525,10 +531,17 @@ var _ = Describe("GPUFit Plugin", func() {
 				},
 			})
 
-			plugin.PostBind(ctx, state, pod, "node-a")
+			preBindStatus := plugin.PreBind(ctx, state, pod, "node-a")
+			// PreBind must surface the patch failure to the framework so Unreserve
+			// is called and the pod is requeued.
+			Expect(preBindStatus.IsSuccess()).To(BeFalse())
 
-			// retry.OnError is configured with Steps=3; with the fix it tries 3 times.
+			// retry.OnError is configured with Steps=3.
 			Expect(atomic.LoadInt32(&patchAttempts)).To(Equal(int32(3)))
+
+			// After a patch failure PreBind must roll back the committed allocation
+			// so the allocator and the (annotation-less) pod stay in sync.
+			Expect(plugin.allocator.IsCommitted(string(pod.UID))).To(BeFalse())
 		})
 	})
 

@@ -567,7 +567,10 @@ func TestTerminalGangStatusIsNotDroppedWhenQueueIsFull(t *testing.T) {
 		},
 	}
 
-	manager := NewManager(nil, nil, "TestPlugin")
+	// Construct without starting the flush loop so the fault-injected "queue
+	// full" state cannot be drained before syncWorkloadGangStatus runs.
+	// Production code uses NewManager, which starts the loop immediately.
+	manager := newManager(nil, nil, "TestPlugin", 1)
 	manager.SetClient(fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(workload).
@@ -575,9 +578,8 @@ func TestTerminalGangStatusIsNotDroppedWhenQueueIsFull(t *testing.T) {
 		Build())
 
 	// Fill the queue so the terminal update cannot be enqueued directly.
-	// Under the new non-blocking design, syncWorkloadGangStatus must return
+	// Under the non-blocking design, syncWorkloadGangStatus must return
 	// immediately (storing the update in pendingTerminal) instead of blocking.
-	manager.statusQueue = make(chan statusUpdate, 1)
 	manager.statusQueue <- statusUpdate{
 		key: clientObjectKey("default", "status-workload"),
 		status: &tfv1.GangSchedulingStatus{

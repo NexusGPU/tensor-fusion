@@ -52,6 +52,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	k8sVer "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apiserver/pkg/util/feature"
@@ -574,6 +575,11 @@ func startScheduler(
 
 	// Create gang scheduling manager
 	gangManager := gang.NewManager(nil, mgr.GetEventRecorder("GangScheduler"), gpuresources.Name)
+	// Let the allocator's assumed-allocation TTL sweep recognize legitimately
+	// gang-waiting pods so they are not mistaken for orphans.
+	allocator.SetGangWaitingProbe(func(podUID string) bool {
+		return gangManager.IsPodWaiting(types.UID(podUID))
+	})
 
 	gpuResourceFitOpt := app.WithPlugin(
 		gpuresources.Name,

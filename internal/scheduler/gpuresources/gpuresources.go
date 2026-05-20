@@ -46,7 +46,9 @@ var _ fwk.FilterPlugin = &GPUFit{}
 var _ fwk.ScorePlugin = &GPUFit{}
 var _ fwk.PermitPlugin = &GPUFit{}
 var _ fwk.ReservePlugin = &GPUFit{}
+var _ fwk.PreBindPlugin = &GPUFit{}
 var _ fwk.PostBindPlugin = &GPUFit{}
+var _ fwk.PostFilterPlugin = &GPUFit{}
 var _ fwk.EnqueueExtensions = &GPUFit{}
 
 type GPUFit struct {
@@ -138,7 +140,21 @@ func (s *GPUFit) Name() string {
 	return Name
 }
 
+// PreEnqueue gates pods at the entrance of the scheduling queue. For gang pods,
+// it deflects entry until enough peers exist so the queue is not flooded with
+// pods that cannot reach quorum; non-gang pods always pass. A non-Success
+// return parks the pod in the unschedulable queue until a QueueingHint
+// (gangQueueingHint / queueingHint below) fires on a relevant event.
 func (s *GPUFit) PreEnqueue(ctx context.Context, pod *v1.Pod) *fwk.Status {
+	if !utils.IsTensorFusionWorker(pod) {
+		return nil
+	}
+	if s.gangManager == nil {
+		return nil
+	}
+	if err := s.gangManager.PreEnqueue(ctx, pod); err != nil {
+		return fwk.NewStatus(fwk.UnschedulableAndUnresolvable, "gang PreEnqueue: "+err.Error())
+	}
 	return nil
 }
 
@@ -692,6 +708,52 @@ func (s *GPUFit) tryGetTopologyBestGPUs(state fwk.CycleState, nodeName string, n
 	return bestGPUs
 }
 
+// PostFilter is the strict-gang failure handler. It should run only after
+// recovery PostFilter plugins (notably DefaultPreemption) have had a chance to
+// rescue the pod. Current scheduler configs list only GPUResourcesFit in the
+// regular postFilter extension point and rely on DefaultPreemption from the
+// default MultiPoint set. Kubernetes expands MultiPoint-only plugins before
+// regular-only plugins for the same extension point, so preemption gets first
+// try; only then do we give up the whole gang.
+//
+// Behavior:
+//   - Non-TensorFusion or non-gang pods: return Unschedulable, no group action.
+//   - Strict-gang pods that no other plugin could rescue: invalidate the
+//     gang cycle, reject all currently-waiting peers, install a group
+//     backoff, and return Unschedulable. Peers fail fast instead of timing
+//     out at Permit.
+func (s *GPUFit) PostFilter(ctx context.Context, _ fwk.CycleState, pod *v1.Pod, _ fwk.NodeToStatusReader) (*fwk.PostFilterResult, *fwk.Status) {
+	if !utils.IsTensorFusionWorker(pod) {
+		return nil, fwk.NewStatus(fwk.Unschedulable, "skip non-tensor-fusion pod")
+	}
+	if s.gangManager == nil {
+		return nil, fwk.NewStatus(fwk.Unschedulable, "gang manager not initialized")
+	}
+	config := s.gangManager.ParseGangConfig(pod)
+	if !config.Enabled {
+		// Non-gang TensorFusion pod — nothing to do at the group level; let the
+		// framework continue with default unschedulable handling.
+		return nil, fwk.NewStatus(fwk.Unschedulable, "non-gang pod, no group action")
+	}
+
+	// Distinguish PreFilter-stage failure (peers not yet present → transient,
+	// peers may still arrive) from Filter-stage failure (no candidate nodes →
+	// real, strict-reject the whole group). When the gang has fewer active
+	// peers than RequiredMembers, the PostFilter trigger almost certainly
+	// came from the PreFilter cardinality check — group rejection here would
+	// cascade-reject on every member's first attempt before peers finish
+	// landing in the cache.
+	if !s.gangManager.QuorumReachable(pod) {
+		return nil, fwk.NewStatus(fwk.Unschedulable,
+			fmt.Sprintf("gang %s peers not yet reachable; deferring strict reject", config.GroupKey))
+	}
+
+	s.gangManager.RejectGroupOnUnschedulable(ctx, pod)
+	s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GangStrictRejected",
+		"Gang strict-rejected", "Gang group %s rejected because member %s could not be scheduled", config.GroupKey, pod.Name)
+	return nil, fwk.NewStatus(fwk.Unschedulable, fmt.Sprintf("gang group %s rejected: member unschedulable", config.GroupKey))
+}
+
 // Permit implements the gang scheduling logic
 func (s *GPUFit) Permit(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) (*fwk.Status, time.Duration) {
 	if !utils.IsTensorFusionWorker(pod) {
@@ -755,47 +817,64 @@ func (s *GPUFit) Permit(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 	}
 }
 
+// Unreserve is the framework's failure-path callback for any failure between
+// Reserve and successful Bind. It releases all allocator state (assumed or
+// committed) so the pod can re-enter scheduling cleanly.
 func (s *GPUFit) Unreserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) {
 	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}
 
 	s.logger.Info("Un-reserving pod for GPU resources", "pod", pod.Name, "node", nodeName)
-	schedulingResultRaw, err := state.Read(CycleStateGPUSchedulingResult)
-	if err != nil {
-		s.logger.Error(err, "failed to read gpu scheduling result", "pod", pod.Name)
-		return
-	}
-	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
 
-	// Only gang-managed pods should update gang state on unreserve.
-	if s.gangManager != nil && schedulingResult.GangWaitingInfo != nil {
-		s.gangManager.Unreserve(ctx, pod)
+	if schedulingResultRaw, err := state.Read(CycleStateGPUSchedulingResult); err == nil {
+		schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
+		if s.gangManager != nil && schedulingResult.GangWaitingInfo != nil {
+			s.gangManager.Unreserve(ctx, pod)
+		}
+	} else {
+		s.logger.Error(err, "failed to read gpu scheduling result on unreserve", "pod", pod.Name)
 	}
 
-	if err := s.allocator.Forget(string(pod.UID)); err != nil {
-		s.logger.Error(err, "failed to forget assumed allocation", "pod", pod.Name)
+	if err := s.allocator.UnreserveOrRollback(string(pod.UID)); err != nil {
+		s.logger.Error(err, "failed to release allocator state for pod", "pod", pod.Name)
 	}
 }
 
-func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) {
+// PreBindPreFlight is a lightweight gate that tells the framework whether
+// this plugin's PreBind should run for the pod. It does not mutate state.
+func (s *GPUFit) PreBindPreFlight(_ context.Context, _ fwk.CycleState, pod *v1.Pod, _ string) *fwk.Status {
 	if !utils.IsTensorFusionWorker(pod) {
-		return
+		return fwk.NewStatus(fwk.Skip, "skip for non tensor-fusion mode")
+	}
+	return fwk.NewStatus(fwk.Success, "")
+}
+
+// PreBind is the atomic critical section for GPU scheduling. It transitions
+// the assumed reservation to a committed allocation and writes all GPU-related
+// pod annotations. Either both succeed (and the framework proceeds to Bind),
+// or this function rolls back the commit and returns fwk.Error so the framework
+// calls Unreserve and the pod re-enters the queue. The invariant is: no pod
+// reaches Bind without a valid gpu-device-ids annotation.
+func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) *fwk.Status {
+	if !utils.IsTensorFusionWorker(pod) {
+		return fwk.NewStatus(fwk.Success, "skip for non tensor-fusion mode")
 	}
 
-	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName)
-	gpuSchedulingResult, err := state.Read(CycleStateGPUSchedulingResult)
+	s.logger.Info("PreBinding pod for GPU resources", "pod", pod.Name, "node", nodeName)
+	schedulingResultRaw, err := state.Read(CycleStateGPUSchedulingResult)
 	if err != nil {
 		s.logger.Error(err, "failed to read gpu scheduling result", "pod", pod.Name)
-		return
+		return fwk.NewStatus(fwk.Error, "read scheduling result: "+err.Error())
 	}
-	schedulingResult := gpuSchedulingResult.(*GPUSchedulingStateData)
+	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
+	finalGPUs := schedulingResult.FinalGPUs
+	gpuIDs := strings.Join(finalGPUs, ",")
 
-	// Retry Commit() a few times to handle transient errors (e.g., brief lock
-	// contention, concurrent reconcile). If all attempts fail, return early —
-	// do NOT proceed to MarkScheduled or annotation patch, as those assume
-	// allocator state is consistent. The allocator will self-heal via
-	// reconcileAllocationState which rebuilds committed state from workers.
+	// 1. Commit assumed → committed. Retry transient failures (brief lock
+	// contention, concurrent reconcile). Commit's internal failure path already
+	// clears assumed state on its own, so on commit failure we just return Error
+	// and let the framework call Unreserve (which becomes a no-op).
 	var commitErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if _, commitErr = s.allocator.Commit(string(pod.UID)); commitErr == nil {
@@ -804,31 +883,24 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 		s.logger.Info("Commit retry", "pod", pod.Name, "attempt", attempt+1, "error", commitErr)
 	}
 	if commitErr != nil {
-		s.logger.Error(commitErr, "failed to commit gpu allocation after retries, allocator will reconcile from worker state",
-			"pod", pod.Name, "node", nodeName)
+		s.logger.Error(commitErr, "failed to commit gpu allocation in PreBind", "pod", pod.Name, "node", nodeName)
 		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "CommitFailed",
 			"GPU allocation commit failed", "Commit failed for pod %s after retries: %v", pod.Name, commitErr)
-		return
+		return fwk.NewStatus(fwk.Error, "commit failed: "+commitErr.Error())
 	}
 
-	if s.gangManager != nil && schedulingResult.GangWaitingInfo != nil {
-		s.gangManager.MarkScheduled(pod)
-	}
-
-	// write the allocated GPU info to Pod in bindingCycle, before default binder changing the Pod nodeName info
-	finalGPUs := schedulingResult.FinalGPUs
-	gpuIDs := strings.Join(finalGPUs, ",")
-	s.logger.Info("PostBinding pod for GPU resources", "pod", pod.Name, "node", nodeName, "gpuIDs", gpuIDs)
-
+	// 2. Build and patch pod annotations. Any failure from here on must roll
+	// back the just-committed allocation so the allocator and the pod stay in
+	// sync (pod has no gpu-device-ids ⇒ allocator must release).
 	index, err := utils.ParsePodIndexResourceClaim(pod)
 	if err != nil {
 		s.logger.Error(err, "failed to parse pod index annotation", "pod", pod.Name)
-		return
+		_ = s.allocator.Rollback(string(pod.UID))
+		return fwk.NewStatus(fwk.Error, "parse pod index: "+err.Error())
 	}
 
 	indexAvailable := s.indexAllocator.CheckNodeIndexAndTryOccupy(pod, index)
 
-	// Build patch operations
 	patchOps := []map[string]any{
 		{
 			"op":    "add",
@@ -842,17 +914,16 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PodIndexAnnotation),
 			"value": strconv.Itoa(index),
 		})
-	} else {
-		s.logger.Info("Index is not available on node, spawn a goroutine to patch it asynchronously", "pod", pod.Name, "node", nodeName, "index", index)
-		// spawn a goroutine to patch
-		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "PodIndexAllocationPending", "Pod index allocation pending",
-			fmt.Sprintf("Index %d will be patched into pod after released by other pod on the same node: %s", index, nodeName))
-		s.indexAllocator.AsyncCheckNodeIndexAvailableAndAssign(pod, index)
 	}
+	// If the index is not immediately available we defer the asynchronous
+	// patch-and-assign goroutine until AFTER the main annotation patch
+	// succeeds. Starting it here would race with a possible rollback below:
+	// if the main patch fails we Rollback the allocator, but a goroutine
+	// already in flight could still patch a pod-index annotation onto a
+	// pod whose GPU allocation no longer exists.
 
-	// Add partition template ID annotation if in partitioned mode
-	allocRequestRaw, err := state.Read(CycleStateAllocateRequest)
-	if err == nil {
+	// Partition template annotation in partitioned mode.
+	if allocRequestRaw, err := state.Read(CycleStateAllocateRequest); err == nil {
 		allocRequest := allocRequestRaw.(*tfv1.AllocRequest)
 		if allocRequest.Isolation == tfv1.IsolationModePartitioned && allocRequest.PartitionTemplateID != "" {
 			patchOps = append(patchOps, map[string]any{
@@ -860,42 +931,43 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 				"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PartitionTemplateIDAnnotation),
 				"value": allocRequest.PartitionTemplateID,
 			})
-			s.logger.Info("Adding partition template ID annotation", "pod", pod.Name, "templateID", allocRequest.PartitionTemplateID)
 		}
 	}
 
-	// By default, all containers share the same GPUs (PodLevelResources behavior)
-	// If container-gpu-count annotation exists, allocate GPUs per container
-	// Each container gets its specific GPU IDs, while percent/vram remain the same
+	// Per-container GPU mapping if requested (best-effort; mapping errors are
+	// logged but do not abort PreBind because the workload still works with
+	// shared-GPU semantics).
 	if pod.Annotations != nil {
 		if containerGPUCountJSON, ok := pod.Annotations[constants.ContainerGPUCountAnnotation]; ok && containerGPUCountJSON != "" {
-			containerGPUsJSON, err := s.allocateGPUsToContainers(containerGPUCountJSON, finalGPUs)
-			if err != nil {
-				s.logger.Error(err, "failed to allocate GPUs to containers", "pod", pod.Name)
+			containerGPUsJSON, mapErr := s.allocateGPUsToContainers(containerGPUCountJSON, finalGPUs)
+			if mapErr != nil {
+				s.logger.Error(mapErr, "failed to allocate GPUs to containers", "pod", pod.Name)
 				s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "ContainerGPUAllocationFailed",
-					"Failed to allocate GPUs to containers", "Error: %v", err)
+					"Failed to allocate GPUs to containers", "Error: %v", mapErr)
 			} else {
 				patchOps = append(patchOps, map[string]any{
 					"op":    "add",
 					"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.ContainerGPUsAnnotation),
 					"value": containerGPUsJSON,
 				})
-				s.logger.Info("Allocated GPUs per container", "pod", pod.Name, "containerGPUs", containerGPUsJSON)
 			}
 		}
 	}
 
-	// Convert patch operations to JSON
 	patchBytes, err := json.Marshal(patchOps)
 	if err != nil {
 		s.logger.Error(err, "failed to marshal patch operations", "pod", pod.Name)
-		return
+		if indexAvailable {
+			s.indexAllocator.RemoveNodeIndexQueueForPod(types.NamespacedName{
+				Namespace: pod.Namespace,
+				Name:      pod.Name,
+			})
+		}
+		_ = s.allocator.Rollback(string(pod.UID))
+		return fwk.NewStatus(fwk.Error, "marshal patch: "+err.Error())
 	}
 
-	// Patch pod annotations with retry. The closure must return the patch error
-	// so retry.OnError actually retries on transient failures and the outer err
-	// reflects the final outcome (controls cleanup below).
-	err = retry.OnError(wait.Backoff{
+	patchErr := retry.OnError(wait.Backoff{
 		Duration: 1 * time.Second,
 		Factor:   2,
 		Jitter:   0.1,
@@ -903,27 +975,68 @@ func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod
 	}, func(err error) bool {
 		return true
 	}, func() error {
-		patchErr := s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patchBytes))
-		if patchErr != nil {
-			s.logger.Error(patchErr, "failed to patch pod annotations", "pod", pod.Name)
-			s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUDeviceAllocatedFailed",
-				"Attach GPU device ID info failed", "Can not add GPU device IDs: "+gpuIDs)
-			return patchErr
-		}
-		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
-			"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
-		return nil
+		return s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patchBytes))
 	})
-	if err != nil {
+	if patchErr != nil {
+		s.logger.Error(patchErr, "failed to patch pod annotations in PreBind", "pod", pod.Name)
+		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "GPUDeviceAllocatedFailed",
+			"Attach GPU device ID info failed", "Can not add GPU device IDs: "+gpuIDs)
 		if indexAvailable {
 			s.indexAllocator.RemoveNodeIndexQueueForPod(types.NamespacedName{
 				Namespace: pod.Namespace,
 				Name:      pod.Name,
 			})
 		}
-		s.logger.Error(err, "failed to patch pod annotations in post binding stage", "pod", pod.Name)
+		_ = s.allocator.Rollback(string(pod.UID))
+		return fwk.NewStatus(fwk.Error, "patch pod annotations: "+patchErr.Error())
+	}
+
+	s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "GPUDeviceAllocated",
+		"Attach GPU device ID info", "Attach TensorFusion GPU device IDs to Pod: "+gpuIDs)
+
+	// Now that the gpu-device-ids annotation is durably patched and the
+	// allocator commit is final, it is safe to kick off the async pod-index
+	// patcher. Doing this before the main patch would race with the rollback
+	// path above.
+	if !indexAvailable {
+		s.logger.Info("Index is not available on node, spawn a goroutine to patch it asynchronously",
+			"pod", pod.Name, "node", nodeName, "index", index)
+		s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeNormal, "PodIndexAllocationPending",
+			"Pod index allocation pending",
+			fmt.Sprintf("Index %d will be patched into pod after released by other pod on the same node: %s", index, nodeName))
+		s.indexAllocator.AsyncCheckNodeIndexAvailableAndAssign(pod, index)
+	}
+	return fwk.NewStatus(fwk.Success, "")
+}
+
+// PostBind is intentionally minimal: by the time we reach here the pod is
+// bound, the GPU allocation is committed, and the pod has all required
+// annotations. Anything done here must not be load-bearing for scheduling
+// correctness — only gang status, metrics, and observability belong.
+func (s *GPUFit) PostBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeName string) {
+	if !utils.IsTensorFusionWorker(pod) {
 		return
 	}
+
+	schedulingResultRaw, err := state.Read(CycleStateGPUSchedulingResult)
+	if err != nil {
+		s.logger.Error(err, "failed to read gpu scheduling result in PostBind", "pod", pod.Name)
+		return
+	}
+	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
+
+	if s.gangManager != nil && schedulingResult.GangWaitingInfo != nil {
+		s.gangManager.MarkScheduled(pod)
+	}
+
+	// Fire allocator bind handlers (e.g. expander "Scheduled" event /
+	// preSchedule removal) only now that Bind has actually succeeded. This
+	// must happen in PostBind, not in PreBind's Commit, otherwise a PreBind
+	// patch failure would emit a "scheduled" notification for a pod that we
+	// subsequently rolled back.
+	s.allocator.NotifyBound(string(pod.UID))
+
+	s.logger.V(1).Info("PostBind completed", "pod", pod.Name, "node", nodeName)
 }
 
 func (s *GPUFit) EventsToRegister(_ context.Context) ([]fwk.ClusterEventWithHint, error) {
