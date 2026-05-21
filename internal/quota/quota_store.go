@@ -492,36 +492,44 @@ func (qs *QuotaStore) InitQuotaStore() error {
 
 // ValidateQuotaConfig validates quota configuration
 func (qs *QuotaStore) validateQuotaConfig(quota *tfv1.GPUResourceQuota) error {
-	// Check for negative values
-	if !quota.Spec.Total.Requests.Tflops.IsZero() && quota.Spec.Total.Requests.Tflops.Cmp(resource.Quantity{}) < 0 {
-		return fmt.Errorf("requests.tflops cannot be negative")
+	req := quota.Spec.Total.Requests
+	lim := quota.Spec.Total.Limits
+
+	if req != nil {
+		if !req.Tflops.IsZero() && req.Tflops.Cmp(resource.Quantity{}) < 0 {
+			return fmt.Errorf("requests.tflops cannot be negative")
+		}
+		if !req.Vram.IsZero() && req.Vram.Cmp(resource.Quantity{}) < 0 {
+			return fmt.Errorf("requests.vram cannot be negative")
+		}
 	}
-	if !quota.Spec.Total.Requests.Vram.IsZero() && quota.Spec.Total.Requests.Vram.Cmp(resource.Quantity{}) < 0 {
-		return fmt.Errorf("requests.vram cannot be negative")
+
+	if lim != nil {
+		if !lim.Tflops.IsZero() && lim.Tflops.Cmp(resource.Quantity{}) < 0 {
+			return fmt.Errorf("limits.tflops cannot be negative")
+		}
+		if !lim.Vram.IsZero() && lim.Vram.Cmp(resource.Quantity{}) < 0 {
+			return fmt.Errorf("limits.vram cannot be negative")
+		}
 	}
-	if !quota.Spec.Total.Limits.Tflops.IsZero() && quota.Spec.Total.Limits.Tflops.Cmp(resource.Quantity{}) < 0 {
-		return fmt.Errorf("limits.tflops cannot be negative")
-	}
-	if !quota.Spec.Total.Limits.Vram.IsZero() && quota.Spec.Total.Limits.Vram.Cmp(resource.Quantity{}) < 0 {
-		return fmt.Errorf("limits.vram cannot be negative")
-	}
+
 	if quota.Spec.Total.MaxWorkers != nil && *quota.Spec.Total.MaxWorkers < 0 {
 		return fmt.Errorf("workers cannot be negative")
 	}
 
-	// Validate limits >= requests
-	if !quota.Spec.Total.Requests.Tflops.IsZero() && !quota.Spec.Total.Limits.Tflops.IsZero() {
-		if quota.Spec.Total.Limits.Tflops.Cmp(quota.Spec.Total.Requests.Tflops) < 0 {
-			return fmt.Errorf("limits.tflops cannot be less than requests.tflops")
+	if req != nil && lim != nil {
+		if !req.Tflops.IsZero() && !lim.Tflops.IsZero() {
+			if lim.Tflops.Cmp(req.Tflops) < 0 {
+				return fmt.Errorf("limits.tflops cannot be less than requests.tflops")
+			}
 		}
-	}
-	if !quota.Spec.Total.Requests.Vram.IsZero() && !quota.Spec.Total.Limits.Vram.IsZero() {
-		if quota.Spec.Total.Limits.Vram.Cmp(quota.Spec.Total.Requests.Vram) < 0 {
-			return fmt.Errorf("limits.vram cannot be less than requests.vram")
+		if !req.Vram.IsZero() && !lim.Vram.IsZero() {
+			if lim.Vram.Cmp(req.Vram) < 0 {
+				return fmt.Errorf("limits.vram cannot be less than requests.vram")
+			}
 		}
 	}
 
-	// Validate alert threshold percentage range
 	if quota.Spec.Total.AlertThresholdPercent != nil {
 		threshold := *quota.Spec.Total.AlertThresholdPercent
 		if threshold < 0 || threshold > 100 {
@@ -669,9 +677,13 @@ func (e *QuotaExceededError) Error() string {
 
 // handleGPUQuotaCreate handles GPU quota creation events
 func (qs *QuotaStore) handleGPUQuotaCreate(ctx context.Context, gpuQuota *tfv1.GPUResourceQuota) {
+
 	log := log.FromContext(ctx)
 	key := gpuQuota.Namespace
-
+	if err := qs.validateQuotaConfig(gpuQuota); err != nil {
+		log.Error(err, "Invalid quota configuration, skipping", "namespace", key)
+		return
+	}
 	qs.StoreMutex.Lock()
 	defer qs.StoreMutex.Unlock()
 
@@ -707,6 +719,10 @@ func (qs *QuotaStore) handleGPUQuotaUpdate(ctx context.Context, gpuQuota *tfv1.G
 	log := log.FromContext(ctx)
 	key := gpuQuota.Namespace
 
+	if err := qs.validateQuotaConfig(gpuQuota); err != nil {
+		log.Error(err, "Invalid quota configuration update, skipping", "namespace", key)
+		return
+	}
 	qs.StoreMutex.Lock()
 	defer qs.StoreMutex.Unlock()
 

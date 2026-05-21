@@ -109,8 +109,8 @@ func (c *Calculator) IsAlertThresholdReached(availablePercent string, threshold 
 		// should not happen, default to "100"
 		return true
 	}
-	available, _ := strconv.ParseInt(availablePercent, 10, 64)
-	return available < minAvailablePercent
+	available, _ := strconv.ParseFloat(availablePercent, 64)
+	return available < float64(minAvailablePercent)
 }
 
 // CreateStandardConditions creates standard quota conditions
@@ -147,7 +147,7 @@ func (c *Calculator) CalculateConditions(availablePercent *tfv1.GPUResourceAvail
 		return []metav1.Condition{
 			{
 				Type:               constants.ConditionStatusTypeReady,
-				Status:             metav1.ConditionFalse,
+				Status:             metav1.ConditionTrue,
 				LastTransitionTime: now,
 				Reason:             "CapacitySufficient",
 				Message:            QuotaReadyAndCapacitySufficient,
