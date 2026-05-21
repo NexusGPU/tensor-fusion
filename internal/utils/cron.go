@@ -28,7 +28,9 @@ func ParseTimezoneAwareCronSchedule(parser cron.Parser, schedule, timezone strin
 		return nil, errors.New("timezone is required (e.g. \"UTC\" or \"Asia/Shanghai\")")
 	}
 	if _, err := time.LoadLocation(tz); err != nil {
-		return nil, fmt.Errorf("invalid timezone %q: %w", tz, err)
+		// "unknown time zone" also fires when the image lacks tzdata
+		// and the binary was built without time/tzdata; hint both.
+		return nil, fmt.Errorf("invalid timezone %q: %w (check IANA name; image needs tzdata or binary must embed time/tzdata)", tz, err)
 	}
 	sched := strings.TrimSpace(schedule)
 	if sched == "" {

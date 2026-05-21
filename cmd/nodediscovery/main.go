@@ -11,6 +11,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	// Embed tzdata so named timezones resolve even on runtime images
+	// without /usr/share/zoneinfo.
+	_ "time/tzdata"
 
 	"github.com/shirou/gopsutil/mem"
 
