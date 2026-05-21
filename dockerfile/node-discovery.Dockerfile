@@ -32,6 +32,10 @@ go build -a -o nodediscovery cmd/nodediscovery/main.go
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM ubuntu:24.04
 WORKDIR /
+# tzdata: needed for non-UTC timezones; binary also embeds time/tzdata.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /workspace/nodediscovery .
 USER 65532:65532
 
