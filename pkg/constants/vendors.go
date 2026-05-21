@@ -15,7 +15,7 @@ const (
 	// GPGPU vendors - CN
 	AcceleratorVendorHygon        = "Hygon"
 	AcceleratorVendorMetaX        = "MetaX"
-	AcceleratorVendorMThreads     = "MThreads"
+	AcceleratorVendorMThreads     = "MooreThreads"
 	AcceleratorVendorBiren        = "Biren"
 	AcceleratorVendorAlibabaTHead = "THead"
 
@@ -44,7 +44,9 @@ var L1VirtualizationSupportedVendors = []map[string]bool{
 		AcceleratorVendorAMD:             false,
 		AcceleratorVendorHygon:           false,
 		AcceleratorVendorMetaX:           false,
-		AcceleratorVendorMThreads:        false,
+		// MUSA backend implements AccelAssignPartition via env vars (MTHREADS_VISIBLE_DEVICES,
+		// MUSA_VGPU_TEMPLATE, ...) — see vgpu-provider-internal/musa/accelerator.cpp:836-876.
+		AcceleratorVendorMThreads: true,
 	},
 }
 
@@ -86,6 +88,8 @@ func GetAcceleratorLibPath(vendor string) string {
 		return "libaccelerator_amd.so"
 	case AcceleratorVendorHuaweiAscendNPU:
 		return "libaccelerator_ascend.so"
+	case AcceleratorVendorMThreads:
+		return "libaccelerator_musa.so"
 	default:
 		// Default to stub library for unknown vendors
 		return "libaccelerator_example.so"
