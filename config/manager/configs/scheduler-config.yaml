@@ -1,0 +1,92 @@
+apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+clientConnection:
+  kubeconfig: $HOME/.kube/config
+  # for local development benchmarking only
+  qps: 1000
+  burst: 2000
+percentageOfNodesToScore: 50
+profiles:
+# Refer: https://kubernetes.io/docs/reference/scheduling/config/
+- schedulerName: tensor-fusion-scheduler
+  plugins:
+    preEnqueue:
+      enabled:
+      - name: GPUResourcesFit
+    preFilter:
+      enabled:
+      - name: GPUResourcesFit
+      - name: GPUNetworkTopologyAware
+    filter:
+      enabled:
+      - name: GPUResourcesFit
+      - name: GPUNetworkTopologyAware
+    score:
+      enabled:
+      - name: GPUResourcesFit
+        weight: 5
+      - name: GPUNetworkTopologyAware
+        weight: 3
+    postFilter:
+      # Only GPUResourcesFit is listed here. DefaultPreemption stays enabled
+      # through the scheduler's default MultiPoint plugin set.
+      # During MultiPoint expansion, MultiPoint-only plugins are placed before
+      # regular-only plugins for the same extension point. Because
+      # DefaultPreemption is MultiPoint-only here and GPUResourcesFit is
+      # regular-only, the effective order is [DefaultPreemption,
+      # GPUResourcesFit]. PostFilter stops on the first non-Unschedulable
+      # result, so preemption gets to rescue the pod before GPUResourcesFit
+      # strict-fails the gang.
+      enabled:
+      - name: GPUResourcesFit
+    reserve:
+      enabled:
+      - name: GPUResourcesFit
+    permit:
+      enabled:
+      - name: GPUResourcesFit
+    preBind:
+      enabled:
+      - name: GPUResourcesFit
+    postBind:
+      enabled:
+      - name: GPUResourcesFit
+  pluginConfig:
+  - name: GPUResourcesFit
+    args:
+      maxWorkerPerNode: 256
+      vramWeight: 0.7
+      tflopsWeight: 0.3
+  - name: GPUNetworkTopologyAware
+    args:
+      # Topology enforcement mode: "soft" (default) or "hard"
+      mode: soft
+      # Topology data source: "auto" (default), "numa", or "vendor"
+      topologySource: auto
+      # Maximum allowed topology tier (1=same NUMA, 2=cross NUMA, 3=unknown)
+      maxAllowedTier: 1
+      # Policy when topology data is missing: "treat-as-worst" (default) or "reject"
+      unknownTopologyPolicy: treat-as-worst
+      # Prefer least-damage GPU selection for single-GPU requests
+      preferLeastDamage: true
+  - name: NodeResourcesFit
+    args:
+      ignoredResourceGroups:
+        - "tensor-fusion.ai"
+      scoringStrategy:
+        resources:
+        - name: cpu
+          weight: 1
+        - name: memory
+          weight: 1
+        - name: nvidia.com/gpu
+          weight: 5
+        requestedToCapacityRatio:
+          shape:
+          - utilization: 0
+            score: 0
+          - utilization: 75
+            score: 9
+          - utilization: 100
+            score: 10
+        type: RequestedToCapacityRatio

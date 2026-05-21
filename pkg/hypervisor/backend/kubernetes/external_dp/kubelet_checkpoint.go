@@ -109,9 +109,15 @@ func NewDevicePluginDetector(
 		checkpointPath = defaultKubeletCheckpointPath
 	}
 
+	// Fail-fast: NewWatcher returns nil watcher on error (typically inotify
+	// instance / fd exhaustion). Continuing with a nil watcher would only
+	// defer the crash — setupFilesystemWatcher would deref nil at Add(), and
+	// run()'s select would deref nil while evaluating the watcher channel
+	// expressions. The caller already propagates this error, so the detector
+	// is never partially constructed.
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		klog.Errorf("failed to create filesystem watcher for kubelet CDI checkpoint file: %v", err)
+		return nil, fmt.Errorf("failed to create filesystem watcher: %w", err)
 	}
 
 	detector := &DevicePluginDetector{

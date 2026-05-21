@@ -1,0 +1,28 @@
+# Mount the tensor-fusion runtime configs into the manager pod. cmd/main.go
+# defaults all three flags to /etc/tensor-fusion/... and exits if the dynamic
+# config cannot be loaded, so without this patch a `make deploy` produces a
+# manager that crashes on startup.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  labels:
+    app.kubernetes.io/name: tensor-fusion
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        volumeMounts:
+        - name: tensor-fusion-config
+          mountPath: /etc/tensor-fusion
+          readOnly: true
+      volumes:
+      - name: tensor-fusion-config
+        configMap:
+          # configMapGenerator name "config" in config/manager + namePrefix
+          # "tensor-fusion-" in config/default => rendered ConfigMap name
+          # "tensor-fusion-config". kustomize rewrites this reference
+          # automatically when the generator name suffix-hash is disabled.
+          name: config
