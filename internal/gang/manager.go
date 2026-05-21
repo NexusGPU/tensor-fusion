@@ -64,7 +64,11 @@ type Manager struct {
 
 	// client is only used for persisting gang status to TensorFusionWorkload.
 	// Gang scheduling decisions are made entirely from pod annotations.
-	client client.Client
+	// Read via getClient() / written via SetClient() — both serialized on
+	// clientMu so the statusFlushLoop reading concurrently with a late
+	// SetClient call does not race.
+	clientMu sync.RWMutex
+	client   client.Client
 
 	// pluginName is used when calling Allow/Reject on waiting pods
 	pluginName string
@@ -103,19 +107,32 @@ const (
 	statusFlushInterval = 500 * time.Millisecond
 )
 
-// NewManager creates a new gang scheduling manager
+// NewManager creates a new gang scheduling manager and starts the background
+// status flush loop.
 func NewManager(podLister listerv1.PodLister, eventRecorder events.EventRecorder, pluginName string) *Manager {
-	m := &Manager{
+	m := newManager(podLister, eventRecorder, pluginName, statusQueueSize)
+	go m.statusFlushLoop()
+	return m
+}
+
+// newManager builds a manager *without* starting the flush loop. Used by
+// tests that need to fault-inject queue state before the loop has a chance
+// to drain. Production callers must use NewManager.
+func newManager(
+	podLister listerv1.PodLister,
+	eventRecorder events.EventRecorder,
+	pluginName string,
+	queueSize int,
+) *Manager {
+	return &Manager{
 		podLister:       podLister,
 		eventRecorder:   eventRecorder,
 		pluginName:      pluginName,
 		podGroups:       make(map[PodGroupKey]*PodGroupInfo),
 		backedOffGroups: gocache.New(DefaultBackoffDuration, DefaultBackoffDuration),
-		statusQueue:     make(chan statusUpdate, statusQueueSize),
+		statusQueue:     make(chan statusUpdate, queueSize),
 		pendingTerminal: make(map[client.ObjectKey]statusUpdate),
 	}
-	go m.statusFlushLoop()
-	return m
 }
 
 // statusFlushLoop drains the statusQueue, coalescing updates per workload key,
@@ -158,7 +175,7 @@ func (m *Manager) drainTerminalOverflow(pending map[client.ObjectKey]statusUpdat
 }
 
 func (m *Manager) flushStatusUpdates(pending map[client.ObjectKey]statusUpdate) {
-	if m.client == nil || len(pending) == 0 {
+	if m.getClient() == nil || len(pending) == 0 {
 		return
 	}
 	for key, u := range pending {
@@ -199,7 +216,134 @@ func (m *Manager) SetFrameworkHandle(handle framework.Handle) {
 
 // SetClient sets the controller-runtime client used to read workload spec and persist gang status.
 func (m *Manager) SetClient(c client.Client) {
+	m.clientMu.Lock()
 	m.client = c
+	m.clientMu.Unlock()
+}
+
+// getClient returns the controller-runtime client under read lock. Returns
+// nil if SetClient was never called (gang manager constructed without a
+// client, e.g. in tests that do not exercise the status flush path).
+func (m *Manager) getClient() client.Client {
+	m.clientMu.RLock()
+	defer m.clientMu.RUnlock()
+	return m.client
+}
+
+// QuorumReachable reports whether the gang has at least RequiredMembers
+// active peers visible in the pod cache. Used by PostFilter to distinguish
+// a transient PreFilter rejection (peers still arriving) from a genuine
+// Filter-stage failure that warrants group rejection. Permissive on
+// uncertainty: returns true (assume reachable) when gang is disabled, lister
+// is unavailable, or list errors out — those paths must not block a real
+// Filter-stage strict reject.
+func (m *Manager) QuorumReachable(pod *corev1.Pod) bool {
+	config, groupKey, mode := m.resolveGangConfigWithContext(context.TODO(), pod)
+	if !config.Enabled || m.podLister == nil {
+		return true
+	}
+	active, err := m.countActivePodsInGang(pod, groupKey, mode)
+	if err != nil {
+		return true
+	}
+	return int32(active) >= config.RequiredMembers
+}
+
+// RejectGroupOnUnschedulable marks the gang cycle invalid and rejects all
+// currently-waiting peers. Called from PostFilter when one member is found
+// unschedulable in Strict mode: DefaultPreemption has already failed to
+// rescue the pod, so the whole group cannot make progress — fail fast rather
+// than letting peers waste the Permit timeout window. The reject path writes
+// GangSchedulingPhaseFailed (not TimedOut, since this is not a wait expiry).
+//
+// Safe to call on non-gang pods (no-op) and on already-rejected groups
+// (idempotent: backoff cache absorbs repeat calls, waiting peers map shrinks
+// to empty).
+func (m *Manager) RejectGroupOnUnschedulable(ctx context.Context, pod *corev1.Pod) {
+	config, _, _ := m.resolveGangConfigWithContext(ctx, pod)
+	if !config.Enabled {
+		return
+	}
+
+	m.mu.RLock()
+	pgInfo, exists := m.podGroups[config.GroupKey]
+	m.mu.RUnlock()
+	if !exists {
+		// Group not yet tracked — just install the backoff so subsequent
+		// PreEnqueue / PreFilter calls bounce back without spinning up state.
+		m.backedOffGroups.Set(string(config.GroupKey), struct{}{}, DefaultBackoffDuration)
+		return
+	}
+
+	pgInfo.mu.Lock()
+	pgInfo.ScheduleCycleValid = false
+	totalActive := len(pgInfo.WaitingPods) + len(pgInfo.ScheduledPods)
+	waitingCount := len(pgInfo.WaitingPods)
+	for podUID, waitingInfo := range pgInfo.WaitingPods {
+		if m.frameworkHandle != nil {
+			if wp := m.frameworkHandle.GetWaitingPod(podUID); wp != nil {
+				wp.Reject(m.pluginName, "gang member unschedulable")
+			}
+		}
+		select {
+		case waitingInfo.RejectCh <- "gang member unschedulable":
+		default:
+		}
+		delete(pgInfo.WaitingPods, podUID)
+	}
+	pgInfo.mu.Unlock()
+
+	m.backedOffGroups.Set(string(config.GroupKey), struct{}{}, DefaultBackoffDuration)
+	backoffUntil := time.Now().Add(DefaultBackoffDuration)
+	m.syncWorkloadGangStatus(
+		ctx,
+		pgInfo,
+		tfv1.GangSchedulingPhaseFailed,
+		"GangMemberUnschedulable",
+		fmt.Sprintf("Gang member %s/%s unschedulable; rejected %d waiting peer(s)", pod.Namespace, pod.Name, waitingCount),
+		backoffUntil,
+	)
+
+	log.Info("Gang strict-rejected by PostFilter",
+		"group", config.GroupKey,
+		"trigger", pod.Name,
+		"waitingRejected", waitingCount,
+		"totalActiveBefore", totalActive)
+}
+
+// IsPodWaiting reports whether the pod with the given UID is currently parked
+// at the Permit stage waiting for gang peers. Used by the allocator's TTL
+// sweep so legitimately waiting gang pods (which may stay assumed for the
+// full IndefiniteGangWaitDuration) are not mistaken for orphans.
+//
+// Lock hierarchy:
+//   - m.mu protects podGroups (which entries exist).
+//   - pgInfo.mu protects each pgInfo's WaitingPods/ScheduledPods maps.
+//
+// We snapshot the podGroups slice under m.mu, then drop m.mu and take
+// pgInfo.mu.RLock() per group before reading WaitingPods. Holding m.mu
+// while iterating WaitingPods directly would race with concurrent Permit
+// / MarkScheduled / Unreserve writers that only synchronize on pgInfo.mu.
+func (m *Manager) IsPodWaiting(podUID types.UID) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	groups := make([]*PodGroupInfo, 0, len(m.podGroups))
+	for _, pgInfo := range m.podGroups {
+		groups = append(groups, pgInfo)
+	}
+	m.mu.RUnlock()
+
+	for _, pgInfo := range groups {
+		pgInfo.mu.RLock()
+		_, ok := pgInfo.WaitingPods[podUID]
+		pgInfo.mu.RUnlock()
+		if ok {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseGangConfig parses gang scheduling configuration from pod
@@ -349,6 +493,56 @@ func parseGangTimeout(annotations map[string]string) time.Duration {
 	return 0
 }
 
+// PreEnqueue is the cheap queue-admission gate for gang pods. It returns nil
+// when the pod may enter the active scheduling queue, and an error otherwise
+// — the caller should translate that into fwk.Unschedulable so the framework
+// keeps the pod in the unschedulable queue until a QueueingHint fires.
+//
+// The check is intentionally lighter than PreFilter: no pod-group state
+// mutation, no lazy reset, no metric writes. Three rejection reasons:
+//  1. Group is backed off (recent PostFilter strict-fail or Permit timeout).
+//  2. Group has not previously reached quorum AND the live count of valid
+//     gang peers is below RequiredMembers.
+//
+// Once the group has reached quorum once (OnceResourceSatisfied) we always
+// admit, matching PreFilter's "restarted pod skips wait" policy.
+func (m *Manager) PreEnqueue(ctx context.Context, pod *corev1.Pod) error {
+	config, groupKey, mode := m.resolveGangConfigWithContext(ctx, pod)
+	if !config.Enabled {
+		return nil
+	}
+
+	if _, backed := m.backedOffGroups.Get(string(config.GroupKey)); backed {
+		return fmt.Errorf("pod group %s is backed off", config.GroupKey)
+	}
+
+	m.mu.RLock()
+	if pgInfo, exists := m.podGroups[config.GroupKey]; exists {
+		pgInfo.mu.RLock()
+		onceSatisfied := pgInfo.OnceResourceSatisfied
+		pgInfo.mu.RUnlock()
+		m.mu.RUnlock()
+		if onceSatisfied {
+			return nil
+		}
+	} else {
+		m.mu.RUnlock()
+	}
+
+	if m.podLister == nil {
+		// Without a lister we cannot count peers; defer admission to PreFilter.
+		return nil
+	}
+	activePods, err := m.countActivePodsInGang(pod, groupKey, mode)
+	if err != nil {
+		return err
+	}
+	if activePods < int(config.RequiredMembers) {
+		return fmt.Errorf("gang peers not ready: have %d, need %d", activePods, config.RequiredMembers)
+	}
+	return nil
+}
+
 // PreFilter checks if the pod can proceed to scheduling
 // Returns error if gang requirements cannot be met
 func (m *Manager) PreFilter(ctx context.Context, pod *corev1.Pod) error {
@@ -359,19 +553,35 @@ func (m *Manager) PreFilter(ctx context.Context, pod *corev1.Pod) error {
 
 	m.reconcilePodGroupState(pod, groupKey, mode)
 
-	// Check if this group is backed off
-	if _, backed := m.backedOffGroups.Get(string(config.GroupKey)); backed {
+	// Backoff gate: the group was rejected recently (PostFilter strict-fail or
+	// Permit timeout). The gocache entry's TTL is the authoritative cooldown
+	// window; the ScheduleCycleValid flag mirrors it for in-flight pods so
+	// they do not need to consult the cache directly.
+	_, backed := m.backedOffGroups.Get(string(config.GroupKey))
+	if backed {
 		return fmt.Errorf("pod group %s is backed off, retry later", config.GroupKey)
 	}
 
-	// If the gang was previously satisfied, skip the cardinality check
-	// so that restarted pods are not blocked.
 	m.mu.RLock()
-	if pgInfo, exists := m.podGroups[config.GroupKey]; exists && pgInfo.OnceResourceSatisfied {
-		m.mu.RUnlock()
-		return nil
-	}
+	pgInfo, pgExists := m.podGroups[config.GroupKey]
 	m.mu.RUnlock()
+	if pgExists {
+		pgInfo.mu.Lock()
+		// Lazy reset: backoff has expired (cache miss above) ⇒ next cycle is
+		// allowed to proceed. Without this, a group that was strict-failed
+		// once would have ScheduleCycleValid=false stuck across cycles.
+		if !pgInfo.ScheduleCycleValid {
+			pgInfo.ScheduleCycleValid = true
+		}
+		onceSatisfied := pgInfo.OnceResourceSatisfied
+		pgInfo.mu.Unlock()
+
+		if onceSatisfied {
+			// Restarted pods skip the quorum gate so they do not block forever
+			// waiting for peers that may never come back.
+			return nil
+		}
+	}
 
 	// Check if there are enough pods in the group
 	if m.podLister != nil {
@@ -412,6 +622,17 @@ func (m *Manager) countActivePodsInGang(pod *corev1.Pod, targetKey PodGroupKey, 
 	return len(activePodUIDs), nil
 }
 
+// activeGangPodUIDs returns UIDs of pods that are active gang peers in the
+// target group. A pod qualifies only when:
+//   - it is active (not deleted/failed/succeeded),
+//   - it has gang-enabled=true,
+//   - it carries valid (>=2) desired/required-members annotations, and
+//   - its resolved group key + mode matches the target.
+//
+// The full resolveGangConfigWithContext check is necessary because the label
+// selector alone (workload label) would also match rollout siblings that
+// belong to an older non-gang revision; those pods would inflate the count
+// and let PreFilter falsely admit a gang that cannot reach quorum.
 func (m *Manager) activeGangPodUIDs(pod *corev1.Pod, targetKey PodGroupKey, targetMode groupKeyMode) (map[types.UID]struct{}, error) {
 	if m.podLister == nil {
 		return nil, nil
@@ -421,21 +642,22 @@ func (m *Manager) activeGangPodUIDs(pod *corev1.Pod, targetKey PodGroupKey, targ
 		return nil, fmt.Errorf("list pods for gang %s/%s: %w", pod.Namespace, targetKey, err)
 	}
 
+	matches := func(p *corev1.Pod) bool {
+		if !isActivePod(p) {
+			return false
+		}
+		cfg, key, mode := m.resolveGangConfigWithContext(context.TODO(), p)
+		return cfg.Enabled && mode == targetMode && key == targetKey
+	}
+
 	activePodUIDs := make(map[types.UID]struct{}, len(pods))
 	for _, p := range pods {
-		if !isActivePod(p) {
-			continue
+		if matches(p) {
+			activePodUIDs[p.UID] = struct{}{}
 		}
-		key, mode := resolveGroupKeyFromAnnotationsOrPod(p)
-		if key == "" || mode != targetMode || key != targetKey {
-			continue
-		}
-		activePodUIDs[p.UID] = struct{}{}
 	}
-	if isActivePod(pod) {
-		if key, mode := resolveGroupKeyFromAnnotationsOrPod(pod); key != "" && mode == targetMode && key == targetKey {
-			activePodUIDs[pod.UID] = struct{}{}
-		}
+	if matches(pod) {
+		activePodUIDs[pod.UID] = struct{}{}
 	}
 	return activePodUIDs, nil
 }
@@ -891,6 +1113,15 @@ func (m *Manager) checkAndRejectGangIfNeeded(ctx context.Context, groupKey PodGr
 		return
 	}
 
+	// If PostFilter has already invalidated this cycle (strict-fail), it has
+	// written the Failed status, rejected all waiting peers, and set backoff.
+	// Subsequent Unreserve callbacks for the same group are noise — return so
+	// we do not overwrite the more-specific PostFilter reason with a generic
+	// "unfulfillable" message.
+	if !pgInfo.ScheduleCycleValid {
+		return
+	}
+
 	// If there are still enough pods, don't reject
 	totalActive := len(pgInfo.WaitingPods) + len(pgInfo.ScheduledPods)
 	if int32(totalActive) >= pgInfo.RequiredMembers {
@@ -905,20 +1136,35 @@ func (m *Manager) checkAndRejectGangIfNeeded(ctx context.Context, groupKey PodGr
 		return
 	}
 
-	// Not enough pods, reject all waiting
-	log.Info("Gang cannot be fulfilled, rejecting all waiting pods",
+	// Distinguish timeout from unfulfillable so external observers can tell
+	// "we waited the configured window and gave up" apart from "we lost
+	// peers and can no longer reach quorum".
+	timedOut := pgInfo.IsTimedOut()
+	phase := tfv1.GangSchedulingPhaseFailed
+	reason := "GangUnfulfillable"
+	rejectMsg := "gang cannot be fulfilled"
+	statusMsg := fmt.Sprintf("Gang cannot be fulfilled: %d/%d members active", totalActive, int(pgInfo.RequiredMembers))
+	if timedOut {
+		phase = tfv1.GangSchedulingPhaseTimedOut
+		reason = "GangSchedulingTimeout"
+		rejectMsg = "gang scheduling timeout"
+		statusMsg = fmt.Sprintf("Pod group %s timed out with %d/%d members ready", string(pgInfo.Key), totalActive, int(pgInfo.RequiredMembers))
+	}
+
+	log.Info("Rejecting all waiting gang pods",
 		"group", pgInfo.Key,
 		"active", totalActive,
-		"requiredMembers", pgInfo.RequiredMembers)
+		"requiredMembers", pgInfo.RequiredMembers,
+		"reason", reason)
 
 	for podUID, waitingInfo := range pgInfo.WaitingPods {
 		if m.frameworkHandle != nil {
 			if wp := m.frameworkHandle.GetWaitingPod(podUID); wp != nil {
-				wp.Reject(m.pluginName, "gang cannot be fulfilled")
+				wp.Reject(m.pluginName, rejectMsg)
 			}
 		}
 		select {
-		case waitingInfo.RejectCh <- "gang cannot be fulfilled":
+		case waitingInfo.RejectCh <- rejectMsg:
 		default:
 		}
 		delete(pgInfo.WaitingPods, podUID)
@@ -927,14 +1173,7 @@ func (m *Manager) checkAndRejectGangIfNeeded(ctx context.Context, groupKey PodGr
 	// Set backoff
 	m.backedOffGroups.Set(string(pgInfo.Key), struct{}{}, DefaultBackoffDuration)
 	backoffUntil := time.Now().Add(DefaultBackoffDuration)
-	m.syncWorkloadGangStatus(
-		ctx,
-		pgInfo,
-		tfv1.GangSchedulingPhaseFailed,
-		"GangUnfulfillable",
-		fmt.Sprintf("Gang cannot be fulfilled: %d/%d members active", totalActive, int(pgInfo.RequiredMembers)),
-		backoffUntil,
-	)
+	m.syncWorkloadGangStatus(ctx, pgInfo, phase, reason, statusMsg, backoffUntil)
 }
 
 func (m *Manager) cleanupPodGroupIfEmpty(groupKey PodGroupKey) {

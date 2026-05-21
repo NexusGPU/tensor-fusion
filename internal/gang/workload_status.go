@@ -42,7 +42,7 @@ func (m *Manager) syncWorkloadGangStatus(
 	reason, message string,
 	backoffUntil time.Time,
 ) {
-	if m.client == nil || pgInfo == nil || pgInfo.StatusNamespace == "" || pgInfo.StatusWorkloadName == "" {
+	if m.getClient() == nil || pgInfo == nil || pgInfo.StatusNamespace == "" || pgInfo.StatusWorkloadName == "" {
 		return
 	}
 
@@ -120,8 +120,12 @@ func (m *Manager) patchWorkloadGangStatus(
 	mutate func(*tfv1.TensorFusionWorkload) bool,
 ) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		c := m.getClient()
+		if c == nil {
+			return nil
+		}
 		workload := &tfv1.TensorFusionWorkload{}
-		if err := m.client.Get(ctx, key, workload); err != nil {
+		if err := c.Get(ctx, key, workload); err != nil {
 			if apierrors.IsNotFound(err) {
 				return nil
 			}
@@ -131,6 +135,6 @@ func (m *Manager) patchWorkloadGangStatus(
 		if !mutate(workload) {
 			return nil
 		}
-		return m.client.Status().Update(ctx, workload)
+		return c.Status().Update(ctx, workload)
 	})
 }

@@ -1364,7 +1364,12 @@ func findFreshDefragWorker(
 	return nil, false
 }
 
-// subtractGPURequest mirrors GpuAllocator.Bind.
+// subtractGPURequest performs the per-GPU resource subtraction math used by
+// the defrag node-budget simulation. It operates on a caller-owned GPU
+// snapshot, NOT on allocator state — defrag only needs to predict whether a
+// placement would fit, without committing it. The arithmetic intentionally
+// mirrors the math inside GpuAllocator.Commit / Bind so the predicted budget
+// matches what those would do at real bind time.
 func subtractGPURequest(gpu *tfv1.GPU, req *tfv1.AllocRequest) {
 	if gpu == nil || gpu.Status.Available == nil || gpu.Status.Capacity == nil {
 		return

@@ -285,6 +285,14 @@ spec:
                     format: int32
                     minimum: 0
                     type: integer
+                  mode:
+                    default: Strict
+                    description: |-
+                      Mode selects the gang failure-handling policy. Defaults to Strict.
+                      NonStrict is reserved for future use and currently behaves as Strict.
+                    enum:
+                    - Strict
+                    type: string
                   timeout:
                     description: |-
                       Timeout specifies how long to wait for all gang members to be schedulable
@@ -292,6 +300,10 @@ spec:
                       Example values: "5m", "10m", "1h"
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: minMembers must be 0 (default to workload replicas) or
+                    >= 2
+                  rule: self.minMembers == 0 || self.minMembers >= 2
               gpuCount:
                 description: |-
                   The number of GPUs to be used by the workload, default to 1.
@@ -617,6 +629,11 @@ spec:
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
             type: object
+            x-kubernetes-validations:
+            - message: gangScheduling.minMembers must be <= spec.replicas when both
+                are set
+              rule: '!has(self.gangScheduling) || self.gangScheduling.minMembers ==
+                0 || !has(self.replicas) || self.gangScheduling.minMembers <= self.replicas'
           status:
             description: TensorFusionWorkloadStatus defines the observed state of
               TensorFusionWorkload.

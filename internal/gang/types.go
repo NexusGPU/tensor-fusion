@@ -83,6 +83,15 @@ type PodGroupInfo struct {
 	// Once set, subsequent pods (e.g., restarted pods) skip the gang wait.
 	OnceResourceSatisfied bool
 
+	// ScheduleCycleValid signals whether the current scheduling cycle for this
+	// group is still considered viable. Defaults to true. PostFilter sets it
+	// to false (along with backoff) when a member is unschedulable in Strict
+	// mode, so peers waiting in Permit / new pods entering PreFilter fail fast
+	// instead of waiting until Permit timeout. Reset lazily at the next
+	// PreFilter entry once the backoff window has expired — see the lazy reset
+	// in (Manager).PreFilter.
+	ScheduleCycleValid bool
+
 	// Workload identity used for persisting gang state to TensorFusionWorkload.status.
 	StatusNamespace    string
 	StatusWorkloadName string
@@ -145,14 +154,15 @@ func NewWaitingPodInfo(
 // NewPodGroupInfo creates a new PodGroupInfo
 func NewPodGroupInfo(key PodGroupKey, minMembers, desiredMembers, requiredMembers int32, timeout time.Duration) *PodGroupInfo {
 	return &PodGroupInfo{
-		Key:             key,
-		MinMembers:      minMembers,
-		DesiredMembers:  desiredMembers,
-		RequiredMembers: requiredMembers,
-		Timeout:         timeout,
-		CreationTime:    time.Now(),
-		WaitingPods:     make(map[types.UID]*WaitingPodInfo),
-		ScheduledPods:   make(map[types.UID]struct{}),
+		Key:                key,
+		MinMembers:         minMembers,
+		DesiredMembers:     desiredMembers,
+		RequiredMembers:    requiredMembers,
+		Timeout:            timeout,
+		CreationTime:       time.Now(),
+		WaitingPods:        make(map[types.UID]*WaitingPodInfo),
+		ScheduledPods:      make(map[types.UID]struct{}),
+		ScheduleCycleValid: true,
 	}
 }
 

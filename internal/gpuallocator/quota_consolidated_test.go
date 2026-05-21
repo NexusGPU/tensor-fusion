@@ -96,6 +96,14 @@ func objectsFromGPUs(gpus []tfv1.GPU) []client.Object {
 }
 
 func createWorkerPod(namespace, name, tflops, vram string) v1.Pod {
+	return createWorkerPodOnGPU(namespace, name, tflops, vram, "gpu1")
+}
+
+// createWorkerPodOnGPU builds a worker pod whose annotations include the
+// gpu-device-ids reference required by reconcileAllocationState. A pod
+// without that annotation is treated as "not committed by PreBind" and is
+// deliberately excluded from quota accounting (see Step 5 of the R5 refactor).
+func createWorkerPodOnGPU(namespace, name, tflops, vram, gpuIDs string) v1.Pod {
 	return v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -112,6 +120,7 @@ func createWorkerPod(namespace, name, tflops, vram string) v1.Pod {
 				constants.VRAMLimitAnnotation:     vram,
 				constants.GpuCountAnnotation:      "1",
 				constants.GpuPoolKey:              TestPoolName,
+				constants.GPUDeviceIDsAnnotation:  gpuIDs,
 			},
 		},
 		Spec: v1.PodSpec{

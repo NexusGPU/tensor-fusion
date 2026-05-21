@@ -27,10 +27,25 @@ profiles:
         weight: 5
       - name: GPUNetworkTopologyAware
         weight: 3
+    postFilter:
+      # Only GPUResourcesFit is listed here. DefaultPreemption stays enabled
+      # through the scheduler's default MultiPoint plugin set.
+      # During MultiPoint expansion, MultiPoint-only plugins are placed before
+      # regular-only plugins for the same extension point. Because
+      # DefaultPreemption is MultiPoint-only here and GPUResourcesFit is
+      # regular-only, the effective order is [DefaultPreemption,
+      # GPUResourcesFit]. PostFilter stops on the first non-Unschedulable
+      # result, so preemption gets to rescue the pod before GPUResourcesFit
+      # strict-fails the gang.
+      enabled:
+      - name: GPUResourcesFit
     reserve:
       enabled:
       - name: GPUResourcesFit
     permit:
+      enabled:
+      - name: GPUResourcesFit
+    preBind:
       enabled:
       - name: GPUResourcesFit
     postBind:
