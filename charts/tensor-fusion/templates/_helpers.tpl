@@ -12,10 +12,18 @@ Expand the name of the chart.
 {{/*
 Create a default fully qualified app name.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
-If release name contains chart name it will be used as a full name.
+
+Precedence: fullnameOverride > release name (with nameOverride fallback when
+the release name does not contain the chart/name token). This matches the
+standard Helm/Bitnami pattern so users setting only fullnameOverride see
+their value reflected in every resource name.
 */}}
 {{- define "tensor-fusion.fullname" -}}
-{{- default .Release.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- if .Values.fullnameOverride -}}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- default .Release.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 {{- end }}
 
 {{/*

@@ -8,3 +8,21 @@ images:
 - name: controller
   newName: tensorfusion/tensor-fusion
   newTag: latest
+
+# Bundle the tensor-fusion runtime configs so the manager pod can find them at
+# /etc/tensor-fusion/. Sample files in config/samples/ are renamed to match the
+# binary's default flag values:
+#   --gpu-info-config  /etc/tensor-fusion/gpu-info.yaml
+#   --dynamic-config   /etc/tensor-fusion/config.yaml
+#   --scheduler-config /etc/tensor-fusion/scheduler-config.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+# Generator name combines with the namePrefix in config/default to produce
+# the rendered ConfigMap name "tensor-fusion-config" (matching the convention
+# used by the Helm chart).
+- name: config
+  files:
+  - configs/gpu-info.yaml
+  - configs/config.yaml
+  - configs/scheduler-config.yaml

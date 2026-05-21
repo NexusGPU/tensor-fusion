@@ -832,7 +832,7 @@ dynamicConfig:
     # Worker can not scale up/scheduled alert
     - name: WorkerAllocationFailed
       query: |
-        SELECT pool, (MAX(total_allocation_fail_cnt) - MIN(total_allocation_fail_cnt)) as failure_increase,
+        SELECT pool, (MAX(total_allocation_fail_cnt) - MIN(total_allocation_fail_cnt)) as failure_increase
         FROM tf_system_metrics
         WHERE {{ .Conditions }}
         GROUP BY pool
