@@ -702,7 +702,10 @@ func (m *TensorFusionPodMutator) assignClusterHostPortFromLeader(pod *corev1.Pod
 	}
 
 	urlStr := fmt.Sprintf("http://%s:%s/api/assign-host-port?podName=%s", leaderIP, operatorPort, pod.Name)
-	req, err := http.NewRequest("GET", urlStr, nil)
+	// Server-side registers this endpoint as POST in internal/server/server.go,
+	// so the request method must match — using GET here returned 405 Method Not
+	// Allowed on non-leader webhook replicas and blocked admission.
+	req, err := http.NewRequest("POST", urlStr, nil)
 	if err != nil {
 		return 0, err
 	}

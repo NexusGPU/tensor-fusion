@@ -7,10 +7,9 @@ metadata:
   name: tensorfusionconnection-sample
   namespace: tensor-fusion
 spec:
-  resources:
-    limits:
-      tflops: '100'
-      vram: 8Gi
-    requests:
-      tflops: '20'
-      vram: 9Gi
+  # Name of the TensorFusionWorkload that owns the worker pool this connection
+  # routes to. Must reference an existing TensorFusionWorkload in the same
+  # namespace.
+  workloadName: tensorfusionworkload-sample
+  # Name of the client Pod requesting GPU access through this connection.
+  clientPod: my-client-pod
