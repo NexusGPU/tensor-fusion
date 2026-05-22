@@ -68,9 +68,9 @@ func (l *workloadMetricsLoader) addWorkload(ctx context.Context, workloadID Work
 	}
 
 	// Parse durations
-	initialDelay, _ := parseDurationOrDefault(asr.InitialDelayPeriod, 30*time.Minute)
-	evaluationInterval, _ := parseDurationOrDefault(asr.Interval, getDefaultEvaluationInterval())
-	historyDataPeriod, _ := parseDurationOrDefault(asr.HistoryDataPeriod, 2*time.Hour)
+	initialDelay := parseDurationOrDefault(asr.InitialDelayPeriod, 30*time.Minute)
+	evaluationInterval := parseDurationOrDefault(asr.Interval, getDefaultEvaluationInterval())
+	historyDataPeriod := parseDurationOrDefault(asr.HistoryDataPeriod, 2*time.Hour)
 
 	// Enforce 30-day max on HistoryDataPeriod
 	if historyDataPeriod > maxHistoryDataPeriod {
@@ -247,11 +247,17 @@ func (l *workloadMetricsLoader) loadRealtimeMetricsForWorkload(loaderState *work
 	return nil
 }
 
-func parseDurationOrDefault(durationStr string, defaultDuration time.Duration) (time.Duration, error) {
+func parseDurationOrDefault(durationStr string, defaultDuration time.Duration) time.Duration {
 	if durationStr == "" {
-		return defaultDuration, nil
+		return defaultDuration
 	}
-	return time.ParseDuration(durationStr)
+	d, err := time.ParseDuration(durationStr)
+	if err != nil {
+		log.Log.Info("invalid duration string, falling back to default",
+			"value", durationStr, "default", defaultDuration, "error", err)
+		return defaultDuration
+	}
+	return d
 }
 
 func getDefaultEvaluationInterval() time.Duration {

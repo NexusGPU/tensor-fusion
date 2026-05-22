@@ -234,7 +234,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 			// Still update recommendation in status
 			return &RecResult{
 				Resources:        recommendation,
-				HasApplied:       false,
+				HasApplied:       true,
 				ScaleDownLocking: false,
 			}, nil
 		}
