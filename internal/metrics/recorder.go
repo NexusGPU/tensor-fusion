@@ -10,6 +10,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -47,14 +48,38 @@ var log = ctrl.Log.WithName("metrics-recorder")
 type MetricsRecorder struct {
 	MetricsOutputPath string
 
-	// Raw billing result for node and workers
-	HourlyUnitPriceMap map[string]float64
+	// ProviderManager is the live source of GPU pricing data. The recorder
+	// pulls pricing on every metric cycle via currentPricing(), so changes to
+	// ProviderConfig take effect without restarting the operator.
+	ProviderManager *provider.Manager
+
+	// ConfigMapPricing is the legacy pricing source loaded from a ConfigMap at
+	// startup. ProviderManager pricing takes precedence over it; kept for
+	// backward compatibility with deployments that still rely on the
+	// ConfigMap.
+	ConfigMapPricing map[string]float64
 
 	// Pool level eviction protection price ratio map, key is pool name
 	PoolEvictionProtectionPriceRatioMap map[string]string
 
 	// Worker level unit price map, key is pool name, second level key is QoS level
 	WorkerUnitPriceMap map[string]map[string]RawBillingPricing
+}
+
+// currentPricing returns the live GPU model → hourly unit price map, merging
+// ConfigMap pricing (legacy) with ProviderManager pricing (authoritative,
+// updated by providerconfig_controller on every ProviderConfig change).
+func (mr *MetricsRecorder) currentPricing() map[string]float64 {
+	merged := make(map[string]float64, len(mr.ConfigMapPricing))
+	for k, v := range mr.ConfigMapPricing {
+		merged[k] = v
+	}
+	if mr.ProviderManager != nil {
+		for k, v := range mr.ProviderManager.GetGPUPricingMap() {
+			merged[k] = v
+		}
+	}
+	return merged
 }
 
 type ActiveNodeAndWorker struct {
@@ -659,7 +684,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 	nodeMetricsLock.Lock()
 
 	for _, metrics := range nodeMetricsMap {
-		metrics.RawCost = mr.getNodeRawCost(metrics, now.Sub(metrics.LastRecordTime), mr.HourlyUnitPriceMap)
+		metrics.RawCost = mr.getNodeRawCost(metrics, now.Sub(metrics.LastRecordTime), mr.currentPricing())
 		metrics.LastRecordTime = now
 
 		if _, ok := activeWorkerAndNodeByPool[metrics.PoolName]; !ok {
