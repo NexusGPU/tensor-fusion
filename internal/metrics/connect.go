@@ -134,6 +134,11 @@ func (t *TimeSeriesDB) SetTableTTL(ttl string) error {
 		&HypervisorGPUUsageMetrics{},
 		&PoolResourceMetrics{},
 		&GPUAllocationMetrics{},
+		// tf_gpu_metrics — per-GPU capacity/availability rows, a distinct schema
+		// from tf_gpu_usage (HypervisorGPUUsageMetrics). Omitting it from the
+		// dynamic TTL update pins its retention to the boot-time default while
+		// every other table reacts to runtime changes.
+		&GPUResourceMetrics{},
 	}
 	if t == nil || t.DB == nil {
 		return nil

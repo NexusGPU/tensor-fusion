@@ -117,11 +117,16 @@ func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl
 	if err := r.Get(ctx, client.ObjectKey{Name: workload.Spec.PoolName}, pool); err != nil {
 		return ctrl.Result{}, fmt.Errorf("gpu pool(%s) does not exist", workload.Spec.PoolName)
 	}
-
 	// Create worker generator
+	var workerConfig *tfv1.WorkerConfig
+	var hypervisorConfig *tfv1.HypervisorConfig
+	if pool.Spec.ComponentConfig != nil {
+		workerConfig = pool.Spec.ComponentConfig.Worker
+		hypervisorConfig = pool.Spec.ComponentConfig.Hypervisor
+	}
 	workerGenerator := &worker.WorkerGenerator{
-		WorkerConfig:     pool.Spec.ComponentConfig.Worker,
-		HypervisorConfig: pool.Spec.ComponentConfig.Hypervisor,
+		WorkerConfig:     workerConfig,
+		HypervisorConfig: hypervisorConfig,
 	}
 
 	podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec)

@@ -35,6 +35,11 @@ func (wg *WorkerGenerator) GenerateWorkerPod(
 	desiredMembers int32,
 ) (*v1.Pod, error) {
 	podTmpl := &v1.PodTemplate{}
+	if wg.WorkerConfig == nil || wg.WorkerConfig.PodTemplate == nil ||
+		len(wg.WorkerConfig.PodTemplate.Raw) == 0 {
+		return nil, fmt.Errorf("worker pod template is not configured in pool %s",
+			workload.Spec.PoolName)
+	}
 	err := json.Unmarshal(wg.WorkerConfig.PodTemplate.Raw, podTmpl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal pod template: %w", err)
