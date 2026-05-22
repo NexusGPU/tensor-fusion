@@ -64,9 +64,12 @@ func MatchPartitionTemplate(gpuStatus tfv1.GPUStatus, req *tfv1.AllocRequest) (*
 
 		var requestTflops float64
 		if !req.Request.ComputePercent.IsZero() {
-			if gpuCapacity, capExists := GetGPUCapacity(gpuModel); capExists {
-				requestTflops = utils.ComputePercentToTflops(gpuCapacity.Tflops, req.Request).AsApproximateFloat64()
+			gpuCapacity, capExists := GetGPUCapacity(gpuModel)
+			if !capExists {
+				return nil, fmt.Errorf("GPU capacity not found for model %s, cannot convert ComputePercent to TFLOPs for explicit template %s",
+					gpuModel, req.PartitionTemplateID)
 			}
+			requestTflops = utils.ComputePercentToTflops(gpuCapacity.Tflops, req.Request).AsApproximateFloat64()
 		} else {
 			requestTflops = req.Request.Tflops.AsApproximateFloat64()
 		}

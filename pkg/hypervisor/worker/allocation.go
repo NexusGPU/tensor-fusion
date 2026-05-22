@@ -62,13 +62,22 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	// partitioned mode, call split device
 	isPartitioned := request.IsolationMode == tfv1.IsolationModePartitioned && request.PartitionTemplateID != ""
 
+	// Track partitions created in this call so we can release them on any
+	// subsequent failure. Without this, mid-loop / post-loop errors leave
+	// hardware partitions allocated with no entry in workerAllocations,
+	// so DeallocateWorker (triggered by pod deletion) finds nothing to clean
+	// and the partition stays orphaned until manual intervention.
+	var splittedPartitions []*api.DeviceInfo
+
 	for _, deviceUUID := range request.AllocatedDevices {
 		if device, exists := a.deviceController.GetDevice(deviceUUID); exists {
 			if isPartitioned {
 				deviceInfo, err := a.deviceController.SplitDevice(deviceUUID, request.PartitionTemplateID)
 				if err != nil {
+					a.rollbackSplits(splittedPartitions)
 					return nil, err
 				}
+				splittedPartitions = append(splittedPartitions, deviceInfo)
 				deviceInfos = append(deviceInfos, deviceInfo)
 			} else {
 				deviceInfos = append(deviceInfos, device)
@@ -85,6 +94,7 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 		} else {
 			// Fatal errors (INTERNAL, OPERATION_FAILED, etc.) should block allocation
 			klog.Errorf("failed to get vendor mount libs for worker %s: %v", request.WorkerUID, err)
+			a.rollbackSplits(splittedPartitions)
 			return nil, err
 		}
 	}
@@ -136,6 +146,21 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 		a.addDeviceAllocation(deviceUUID, allocation)
 	}
 	return allocation, nil
+}
+
+// rollbackSplits releases partitions that were created during a failed
+// allocation. Errors are logged best-effort; the caller is already returning
+// the original allocation error.
+func (a *AllocationController) rollbackSplits(splits []*api.DeviceInfo) {
+	for _, split := range splits {
+		if split == nil || split.ParentUUID == "" {
+			continue
+		}
+		if err := a.deviceController.RemovePartitionedDevice(split.UUID, split.ParentUUID); err != nil {
+			klog.Errorf("rollback partition %s on parent %s failed: %v",
+				split.UUID, split.ParentUUID, err)
+		}
+	}
 }
 
 // DeallocateWorker deallocates devices for a worker
