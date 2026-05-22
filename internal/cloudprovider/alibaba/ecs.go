@@ -31,6 +31,7 @@ func NewAlibabaGPUNodeProvider(ctx context.Context, config tfv1.ComputingVendorC
 
 	if cachedClient != nil {
 		provider.client = cachedClient
+		provider.nodeClass = nodeClass
 		return provider, nil
 	}
 

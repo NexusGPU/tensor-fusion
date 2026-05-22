@@ -78,11 +78,16 @@ func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeC
 			},
 		},
 	}
-	_, err := p.ec2Client.RunInstances(ctx, input)
+	output, err := p.ec2Client.RunInstances(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create instance: %w", err)
 	}
-	return &types.GPUNodeStatus{}, nil
+	if output == nil || len(output.Instances) == 0 {
+		return nil, fmt.Errorf("RunInstances returned no instances")
+	}
+	return &types.GPUNodeStatus{
+		InstanceID: aws.ToString(output.Instances[0].InstanceId),
+	}, nil
 }
 
 func (p AWSGPUNodeProvider) TerminateNode(ctx context.Context, param *types.NodeIdentityParam) error {
