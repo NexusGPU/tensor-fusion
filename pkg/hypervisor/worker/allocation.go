@@ -70,18 +70,21 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	var splittedPartitions []*api.DeviceInfo
 
 	for _, deviceUUID := range request.AllocatedDevices {
-		if device, exists := a.deviceController.GetDevice(deviceUUID); exists {
-			if isPartitioned {
-				deviceInfo, err := a.deviceController.SplitDevice(deviceUUID, request.PartitionTemplateID)
-				if err != nil {
-					a.rollbackSplits(splittedPartitions)
-					return nil, err
-				}
-				splittedPartitions = append(splittedPartitions, deviceInfo)
-				deviceInfos = append(deviceInfos, deviceInfo)
-			} else {
-				deviceInfos = append(deviceInfos, device)
+		device, exists := a.deviceController.GetDevice(deviceUUID)
+		if !exists {
+			klog.Errorf("worker %s requested device %s not found in device controller, skipping", request.WorkerUID, deviceUUID)
+			continue
+		}
+		if isPartitioned {
+			deviceInfo, err := a.deviceController.SplitDevice(deviceUUID, request.PartitionTemplateID)
+			if err != nil {
+				a.rollbackSplits(splittedPartitions)
+				return nil, err
 			}
+			splittedPartitions = append(splittedPartitions, deviceInfo)
+			deviceInfos = append(deviceInfos, deviceInfo)
+		} else {
+			deviceInfos = append(deviceInfos, device)
 		}
 	}
 
