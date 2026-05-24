@@ -39,7 +39,7 @@ func (r recommenderToRecResult) generateRecommendation() *tfv1.Resources {
 	}
 
 	if recommendation.IsZero() ||
-		(recommendation.Requests.Tflops.Cmp(minRes.Requests.Tflops) < 0 &&
+		(recommendation.Requests.Tflops.Cmp(minRes.Requests.Tflops) < 0 ||
 			recommendation.Requests.Vram.Cmp(minRes.Requests.Vram) < 0) {
 		return nil
 	}
