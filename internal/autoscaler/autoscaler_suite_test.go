@@ -159,7 +159,7 @@ var _ = BeforeSuite(func() {
 
 	metricsRecorder = &metrics.MetricsRecorder{
 		MetricsOutputPath: "./metrics.log",
-		HourlyUnitPriceMap: map[string]float64{
+		ConfigMapPricing: map[string]float64{
 			"A100": 10,
 		},
 		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing),

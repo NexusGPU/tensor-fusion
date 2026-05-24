@@ -71,29 +71,40 @@ func (h *WorkerHandler) HandleGetWorker(c *gin.Context) {
 		return
 	}
 
-	// Get worker metrics
+	// Get worker metrics. GetWorkerMetrics returns
+	// map[DeviceUUID]map[WorkerUID]map[ProcessID]*WorkerMetrics, so the
+	// outer key is the device UUID — we have to scan all devices to find
+	// entries for this worker UID rather than indexing by workerID directly.
 	workerMetrics, err := h.workerController.GetWorkerMetrics()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	metrics, exists := workerMetrics[workerID]
-	if !exists || metrics == nil {
-		c.JSON(http.StatusOK, api.DataResponse[map[string]any]{
-			Data: map[string]any{
-				"worker_uid": workerID,
-				"allocation": allocation,
-			},
-		})
-		return
+	metricsByDevice := make(map[string]map[string]*api.WorkerMetrics)
+	for deviceUUID, workersOnDevice := range workerMetrics {
+		if procMetrics, ok := workersOnDevice[workerID]; ok && len(procMetrics) > 0 {
+			metricsByDevice[deviceUUID] = procMetrics
+		}
 	}
-	// TODO
+
+	c.JSON(http.StatusOK, api.DataResponse[map[string]any]{
+		Data: map[string]any{
+			"worker_uid": workerID,
+			"allocation": allocation,
+			"metrics":    metricsByDevice,
+		},
+	})
 }
 
-// HandleSnapshotWorker handles POST /api/v1/workers/:id/snapshot
-// Snapshots a worker's GPU state to release VRAM. The actual checkpoint is
-// performed by the cuda-limiter running inside the worker process via shared memory signals.
+// HandleSnapshotWorker handles POST /api/v1/workers/:id/snapshot.
+//
+// Snapshotting a worker's GPU state requires sending a checkpoint command to
+// the cuda-limiter running inside the worker process (via shared memory or
+// HTTP bidir comm). That plumbing isn't implemented yet, so this endpoint
+// returns 501 instead of pretending success — previously it always responded
+// 200 with "worker snapshot initiated" while doing nothing, which silently
+// misled any caller.
 func (h *WorkerHandler) HandleSnapshotWorker(c *gin.Context) {
 	workerID := c.Param("id")
 	allocation, exists := h.allocationController.GetWorkerAllocation(workerID)
@@ -102,16 +113,16 @@ func (h *WorkerHandler) HandleSnapshotWorker(c *gin.Context) {
 		return
 	}
 
-	// TODO: Send snapshot command to worker via shared memory or HTTP bidir comm
-	// The cuda-limiter inside the worker process will handle the actual CUDA checkpoint
-	c.JSON(http.StatusOK, api.MessageAndDataResponse[string]{
-		Message: "worker snapshot initiated",
-		Data:    workerID,
+	c.JSON(http.StatusNotImplemented, api.ErrorResponse{
+		Error: "worker snapshot is not implemented yet",
 	})
 }
 
-// HandleResumeWorker handles POST /api/v1/workers/:id/resume
-// Resumes a previously snapshotted worker by restoring its GPU state.
+// HandleResumeWorker handles POST /api/v1/workers/:id/resume.
+//
+// Same situation as snapshot — the cuda-limiter resume plumbing isn't wired
+// up yet, so we return 501 rather than 200 with a misleading "initiated"
+// message.
 func (h *WorkerHandler) HandleResumeWorker(c *gin.Context) {
 	workerID := c.Param("id")
 	allocation, exists := h.allocationController.GetWorkerAllocation(workerID)
@@ -120,10 +131,7 @@ func (h *WorkerHandler) HandleResumeWorker(c *gin.Context) {
 		return
 	}
 
-	// TODO: Send resume command to worker via shared memory or HTTP bidir comm
-	// The cuda-limiter inside the worker process will handle the actual CUDA restore
-	c.JSON(http.StatusOK, api.MessageAndDataResponse[string]{
-		Message: "worker resume initiated",
-		Data:    workerID,
+	c.JSON(http.StatusNotImplemented, api.ErrorResponse{
+		Error: "worker resume is not implemented yet",
 	})
 }

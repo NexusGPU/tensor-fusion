@@ -137,18 +137,53 @@ func NewDevicePluginDetector(
 	return detector, nil
 }
 
-// registerVendorDetectors registers all vendor-specific detectors
+// registerVendorDetectors registers all vendor-specific detectors.
+//
+// NVIDIA is registered unconditionally because it carries device-ID
+// post-processing logic (stripping the HAMI "-<idx>" suffix to recover the
+// real GPU UUID) that the generic, config-driven detector cannot replicate.
+//
+// For every other vendor we read ProviderConfig.Spec.DevicePluginDetection
+// from the K8s API and register a GenericDevicePluginDetector for each
+// declared resource prefix. This is what the DevicePluginDetectionConfig
+// fields on ProviderConfig were designed for; without this registration step
+// they were silently ignored and only NVIDIA's hardcoded prefixes worked.
+//
+// Registration runs once at hypervisor startup. New ProviderConfigs added at
+// runtime require a hypervisor restart to take effect — same as the previous
+// hardcoded behaviour, so this is not a regression.
 func (d *DevicePluginDetector) registerVendorDetectors() {
-	// Register NVIDIA detector
+	// 1. NVIDIA (hardcoded — special device-ID handling).
 	nvdpDetector := NewNvidiaDevicePluginDetector()
-	resourceNamePrefixes := nvdpDetector.GetResourceNamePrefixes()
-	for _, resourceNamePrefix := range resourceNamePrefixes {
-		d.vendorDetectors[resourceNamePrefix] = nvdpDetector
+	for _, prefix := range nvdpDetector.GetResourceNamePrefixes() {
+		d.vendorDetectors[prefix] = nvdpDetector
 	}
 
-	// Add more vendor detectors here as needed
-	// amdDetector := NewAMDDevicePluginDetector()
-	// d.vendorDetectors[amdDetector.GetResourceName()] = amdDetector
+	// 2. Generic detectors driven by ProviderConfig.
+	var providerList tfv1.ProviderConfigList
+	if err := d.k8sClient.List(d.ctx, &providerList); err != nil {
+		klog.Warningf("failed to list ProviderConfigs for vendor detector registration, "+
+			"only NVIDIA prefixes will be detected: %v", err)
+		return
+	}
+	for i := range providerList.Items {
+		p := &providerList.Items[i]
+		cfg := p.Spec.DevicePluginDetection
+		if cfg == nil || len(cfg.ResourceNamePrefixes) == 0 {
+			continue
+		}
+		generic := NewGenericDevicePluginDetector(cfg.ResourceNamePrefixes, cfg.UsedBySystemName)
+		for _, prefix := range cfg.ResourceNamePrefixes {
+			// Don't overwrite the hardcoded NVIDIA entries — their special
+			// device-ID handling must win.
+			if _, exists := d.vendorDetectors[prefix]; exists {
+				continue
+			}
+			d.vendorDetectors[prefix] = generic
+			klog.Infof("registered generic device plugin detector for vendor=%s prefix=%s usedBy=%s",
+				p.Spec.Vendor, prefix, cfg.UsedBySystemName)
+		}
+	}
 }
 
 // Start starts watching the checkpoint file and processing device allocations

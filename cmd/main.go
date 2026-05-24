@@ -240,9 +240,10 @@ func main() {
 	// Initialize Provider Manager for hardware vendor configurations
 	providerManager := startProviderManager(ctx, mgr)
 
-	// Merge pricing from ConfigMap (backward compat) with Provider Manager
-	mergedPricingMap := mergePricingMaps(gpuPricingMap, providerManager)
-	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, mergedPricingMap)
+	// Pass the live ProviderManager so MetricsRecorder picks up pricing
+	// changes from ProviderConfig updates without an operator restart. The
+	// legacy ConfigMap pricing is still honored as a fallback.
+	metricsRecorder := startMetricsRecorder(enableLeaderElection, mgr, gpuPricingMap, providerManager)
 
 	// Initialize Index allocator for Device Plugin communication
 	indexAllocator, err := indexallocator.NewIndexAllocator(ctx, mgr.GetClient())
@@ -710,10 +711,12 @@ func startMetricsRecorder(
 	enableLeaderElection bool,
 	mgr manager.Manager,
 	gpuPricingMap map[string]float64,
+	providerManager *provider.Manager,
 ) metrics.MetricsRecorder {
 	metricsRecorder := metrics.MetricsRecorder{
-		MetricsOutputPath:  metricsPath,
-		HourlyUnitPriceMap: gpuPricingMap,
+		MetricsOutputPath: metricsPath,
+		ProviderManager:   providerManager,
+		ConfigMapPricing:  gpuPricingMap,
 
 		// Worker level map will be updated by cluster reconcile
 		// Key is poolName, second level key is QoS level
@@ -738,27 +741,6 @@ func startAutoScaler(mgr manager.Manager, allocator *gpuallocator.GpuAllocator) 
 			os.Exit(1)
 		}
 	}
-}
-
-// mergePricingMaps merges pricing from ConfigMap with Provider Manager
-// Provider Manager takes precedence for overlapping models
-func mergePricingMaps(configMapPricing map[string]float64, providerManager *provider.Manager) map[string]float64 {
-	merged := make(map[string]float64)
-
-	// First copy ConfigMap pricing
-	for k, v := range configMapPricing {
-		merged[k] = v
-	}
-
-	// Override with Provider Manager pricing (takes precedence)
-	if providerManager != nil {
-		providerPricing := providerManager.GetGPUPricingMap()
-		for k, v := range providerPricing {
-			merged[k] = v
-		}
-	}
-
-	return merged
 }
 
 // Setup GreptimeDB connection
