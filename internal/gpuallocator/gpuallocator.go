@@ -2958,46 +2958,39 @@ func (s *GpuAllocator) bindPartition(gpu *tfv1.GPU, req *tfv1.AllocRequest, sele
 	return nil
 }
 
-// deallocPartition handles partition deallocation for a single GPU in partitioned mode
+// deallocPartition handles partition deallocation for a single GPU in partitioned mode.
+// Callers guarantee request.PartitionTemplateID is non-empty, so we always compute the
+// release amount from the request's template — symmetric with the allocation path.
+// In partitioned mode req.Request.Tflops/Vram are typically zero (resources are fixed
+// by the template), so falling back to them would permanently shrink Available.
 func (s *GpuAllocator) deallocPartition(storeGPU *tfv1.GPU, request *tfv1.AllocRequest, gpu string) {
 	logger := log.FromContext(s.ctx)
-	// Find and remove the allocated partition using podUID as key
 	podUID := string(request.PodMeta.UID)
-	if storeGPU.Status.AllocatedPartitions != nil {
-		allocatedPartition, exists := storeGPU.Status.AllocatedPartitions[podUID]
-		if exists {
-			// Calculate partition resource usage from config (no overhead)
-			partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(storeGPU.Status.Capacity.Tflops, storeGPU.Status.GPUModel, allocatedPartition.TemplateID)
-			if err != nil {
-				// Fallback: add back request resources if template not found in config
-				logger.Info("Partition template not found in config during deallocation, using request resources",
-					"gpu", gpu, "template", allocatedPartition.TemplateID, "error", err)
-				storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
-				storeGPU.Status.Available.Vram.Add(request.Request.Vram)
-			} else {
-				// Add back partition resources (no overhead)
-				storeGPU.Status.Available.Tflops.Add(partitionTflops)
-				storeGPU.Status.Available.Vram.Add(partitionVram)
-			}
 
-			// Remove partition from allocated partitions map using podUID
+	partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(
+		storeGPU.Status.Capacity.Tflops, storeGPU.Status.GPUModel, request.PartitionTemplateID)
+	if err != nil {
+		// Template no longer in config (upgrade removed/renamed it). Skip the
+		// Available restore — the reconcile loop will rebuild Available from
+		// actual worker state. Still drop the in-memory partition entry so it
+		// doesn't linger.
+		logger.Info("[WARNING] partition template not in config at dealloc; skipping Available restore (will be reconciled)",
+			"gpu", gpu, "template", request.PartitionTemplateID, "error", err)
+		if storeGPU.Status.AllocatedPartitions != nil {
 			delete(storeGPU.Status.AllocatedPartitions, podUID)
-			logger.Info("Removed partition allocation",
-				"gpu", gpu,
-				"podUID", podUID,
-				"template", allocatedPartition.TemplateID)
-		} else {
-			logger.Info("Partition not found in allocated partitions during deallocation",
-				"gpu", gpu, "podUID", podUID)
-			// Fallback: add back request resources
-			storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
-			storeGPU.Status.Available.Vram.Add(request.Request.Vram)
 		}
-	} else {
-		// No allocated partitions map, fallback to request resources
-		storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
-		storeGPU.Status.Available.Vram.Add(request.Request.Vram)
+		return
 	}
+
+	storeGPU.Status.Available.Tflops.Add(partitionTflops)
+	storeGPU.Status.Available.Vram.Add(partitionVram)
+	if storeGPU.Status.AllocatedPartitions != nil {
+		delete(storeGPU.Status.AllocatedPartitions, podUID)
+	}
+	logger.Info("Removed partition allocation",
+		"gpu", gpu,
+		"podUID", podUID,
+		"template", request.PartitionTemplateID)
 }
 func (s *GpuAllocator) ComposeAllocationRequest(pod *v1.Pod) (*tfv1.AllocRequest, string, error) {
 	// allow Pods with no requests/limits to use TensorFusion, Pod webhook will ensure at least one request/limit is set
