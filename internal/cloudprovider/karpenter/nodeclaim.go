@@ -37,8 +37,8 @@ var (
 	// CapacityTypeMapping maps the CapacityTypeEnum to the corresponding Karpenter capacity type
 	CapacityTypeMapping = map[tfv1.CapacityTypeEnum]string{
 		tfv1.CapacityTypeOnDemand: AWSOnDemandType,
-		tfv1.CapacityTypeSpot:     AWSReservedType,
-		tfv1.CapacityTypeReserved: AWSSpotType,
+		tfv1.CapacityTypeSpot:     AWSSpotType,
+		tfv1.CapacityTypeReserved: AWSReservedType,
 	}
 )
 

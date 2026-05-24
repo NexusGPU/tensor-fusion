@@ -71,6 +71,12 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	provider, cluster, err := createProvisionerAndQueryCluster(ctx, pool, r.Client)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
+		return ctrl.Result{}, fmt.Errorf("cluster is nil after createProvisionerAndQueryCluster")
+	}
 	vendorCfg := cluster.Spec.ComputingVendor
 	if vendorCfg == nil {
 		return ctrl.Result{}, fmt.Errorf("failed to get computing vendor config for cluster %s", cluster.Name)

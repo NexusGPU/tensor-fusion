@@ -4,6 +4,35 @@ metadata:
   labels:
     app.kubernetes.io/name: tensor-fusion
     app.kubernetes.io/managed-by: kustomize
+    # The pool that owns this claim. The GPUPool reconciler reads this label
+    # to associate the claim back to its pool.
+    tensor-fusion.ai/owner: gpupool-sample
   name: gpunodeclaim-sample
 spec:
-  # TODO(user): Add fields here
+  # Desired node name; defaults to a generated name if omitted.
+  nodeName: gpu-node-1
+
+  # Cloud-provider placement.
+  region: us-east-1
+  zone: us-east-1a
+  instanceType: g5.xlarge
+  # Capacity type: OnDemand | Reserved | Spot
+  capacityType: OnDemand
+
+  # Reference to the GPUNodeClass that supplies launch-template / image /
+  # security-group settings for this instance.
+  nodeClassRef:
+    group: tensor-fusion.ai
+    version: v1
+    kind: GPUNodeClass
+    name: gpunodeclass-sample
+
+  # Resources this single node is expected to offer once it comes online.
+  # These are required fields on the CRD; the reconciler uses them to update
+  # the pool's available capacity once the node is registered.
+  tflopsOffered: "70"
+  vramOffered: 24Gi
+  gpuDeviceOffered: 1
+
+  # Optional provider-specific parameters (e.g. user-data, custom tags).
+  extraParams: {}
