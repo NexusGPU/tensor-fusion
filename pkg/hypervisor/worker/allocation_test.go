@@ -66,6 +66,103 @@ func TestAllocateWorkerDevicesPinsNvidiaVisibleDevicesByUUID(t *testing.T) {
 	}
 }
 
+func TestAllocateWorkerDevicesPinsMthreadsVisibleDevicesByIndex(t *testing.T) {
+	t.Parallel()
+
+	controller := NewAllocationController(&fakeDeviceController{
+		devices: map[string]*api.DeviceInfo{
+			"mt-1": {
+				UUID:       "gpu-mt-bbb",
+				Vendor:     constants.AcceleratorVendorMThreads,
+				Index:      1,
+				DeviceNode: map[string]string{"/dev/mtgpu.1": "/dev/mtgpu.1"},
+			},
+			"mt-0": {
+				UUID:       "gpu-mt-aaa",
+				Vendor:     constants.AcceleratorVendorMThreads,
+				Index:      0,
+				DeviceNode: map[string]string{"/dev/mtgpu.0": "/dev/mtgpu.0"},
+			},
+		},
+	})
+
+	allocation, err := controller.AllocateWorkerDevices(&api.WorkerInfo{
+		WorkerUID:        "worker-mthreads-shared",
+		AllocatedDevices: []string{"mt-1", "mt-0"},
+		IsolationMode:    tfv1.IsolationModeShared,
+	})
+	if err != nil {
+		t.Fatalf("allocate worker devices: %v", err)
+	}
+	if got := allocation.Envs[constants.MthreadsVisibleDevicesEnv]; got != "0,1" {
+		t.Fatalf("unexpected %s: %q", constants.MthreadsVisibleDevicesEnv, got)
+	}
+	if _, exists := allocation.Envs[constants.NvidiaVisibleAllDeviceEnv]; exists {
+		t.Fatalf("did not expect %s for MThreads vendor", constants.NvidiaVisibleAllDeviceEnv)
+	}
+}
+
+func TestAllocateWorkerDevicesPinsAscendVisibleDevicesByIndex(t *testing.T) {
+	t.Parallel()
+
+	controller := NewAllocationController(&fakeDeviceController{
+		devices: map[string]*api.DeviceInfo{
+			"npu-0": {
+				UUID:       "npu-aaa",
+				Vendor:     constants.AcceleratorVendorHuaweiAscendNPU,
+				Index:      0,
+				DeviceNode: map[string]string{"/dev/davinci0": "/dev/davinci0"},
+			},
+		},
+	})
+
+	allocation, err := controller.AllocateWorkerDevices(&api.WorkerInfo{
+		WorkerUID:        "worker-ascend-shared",
+		AllocatedDevices: []string{"npu-0"},
+		IsolationMode:    tfv1.IsolationModeSoft,
+	})
+	if err != nil {
+		t.Fatalf("allocate worker devices: %v", err)
+	}
+	if got := allocation.Envs[constants.AscendVisibleDevicesEnv]; got != "0" {
+		t.Fatalf("unexpected %s: %q", constants.AscendVisibleDevicesEnv, got)
+	}
+}
+
+func TestAllocateWorkerDevicesDoesNotPinMthreadsVisibleDevicesForPartitionedMode(t *testing.T) {
+	t.Parallel()
+
+	// Partitioned mode: AssignPartition populates DeviceEnv with the
+	// partition-scoped MTHREADS_VISIBLE_DEVICES. The canonicalize block must
+	// not overwrite it.
+	controller := NewAllocationController(&fakeDeviceController{
+		devices: map[string]*api.DeviceInfo{
+			"mt-0": {
+				UUID:   "gpu-mt-aaa",
+				Vendor: constants.AcceleratorVendorMThreads,
+				Index:  0,
+				// SplitDevice in the fake controller is what populates DeviceEnv
+				// in real flows; here we just confirm the canonicalize branch
+				// is skipped for partitioned mode.
+				DeviceNode: map[string]string{"/dev/mtgpu.0": "/dev/mtgpu.0"},
+			},
+		},
+	})
+
+	allocation, err := controller.AllocateWorkerDevices(&api.WorkerInfo{
+		WorkerUID:           "worker-mthreads-partitioned",
+		AllocatedDevices:    []string{"mt-0"},
+		IsolationMode:       tfv1.IsolationModePartitioned,
+		PartitionTemplateID: "musa-1g-4gb",
+	})
+	if err != nil {
+		t.Fatalf("allocate worker devices: %v", err)
+	}
+	if _, exists := allocation.Envs[constants.MthreadsVisibleDevicesEnv]; exists {
+		t.Fatalf("did not expect %s for partitioned mode", constants.MthreadsVisibleDevicesEnv)
+	}
+}
+
 func TestAllocateWorkerDevicesDoesNotPinNvidiaVisibleDevicesForPartitionedMode(t *testing.T) {
 	t.Parallel()
 

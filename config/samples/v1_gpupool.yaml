@@ -26,6 +26,14 @@ spec:
       podTemplate:
         template:
           spec:
+            # Do NOT set `runtimeClassName: ascend` here. The ascend-docker-
+            # runtime hook reads ASCEND_VISIBLE_DEVICES and, when unset, mounts
+            # nothing — meaning the hypervisor would lose /dev/davinci_manager
+            # and libdcmi would fail with -8005. The hypervisor reaches the
+            # devices via hostPath mounts declared on ProviderConfig
+            # (see config/samples/ascend-provider.yaml) plus
+            # `privilegedHypervisor: true`. RuntimeClass is for *workers*, not
+            # for the hypervisor (see applyAscendRuntimeClassIfNeeded).
             # Pod-level securityContext is the SUPPORTED way to make the
             # hypervisor container run as root. The container-level
             # securityContext set here would be overwritten by the operator

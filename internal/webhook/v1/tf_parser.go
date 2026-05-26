@@ -111,6 +111,9 @@ func ParseTensorFusionInfo(
 	} else {
 		workloadProfile.Spec.Isolation = tfv1.IsolationModeSoft
 	}
+	// Early validation for cross-cutting rules (hard isolation requires
+	// remote / sidecar). Vendor-dependent checks run after
+	// parseGPUResourcesAnnotations populates GPUVendor — see below.
 	if err := validateIsolationAndExecutionMode(&workloadProfile.Spec); err != nil {
 		return info, err
 	}
@@ -176,6 +179,19 @@ func ParseTensorFusionInfo(
 	gpuModel, ok := pod.Annotations[constants.GPUModelAnnotation]
 	if ok {
 		workloadProfile.Spec.GPUModel = gpuModel
+	}
+
+	// Now that GPUVendor is resolved (either from container resource limits
+	// in parseGPUResourcesAnnotations or from the vendor annotation), reject
+	// pods asking for soft isolation against a vendor that doesn't ship a
+	// soft-isolation limiter — surfaces the misconfig at admission instead
+	// of silently letting LD_PRELOAD point at a file that never gets copied.
+	if workloadProfile.Spec.Isolation == tfv1.IsolationModeSoft &&
+		!constants.SupportsSoftIsolation(workloadProfile.Spec.GPUVendor) {
+		return info, fmt.Errorf(
+			"isolation=soft is not supported for vendor %q; "+
+				"set annotation %s=partitioned or pick another mode",
+			workloadProfile.Spec.GPUVendor, constants.IsolationModeAnnotation)
 	}
 
 	// Handle dedicated GPU logic

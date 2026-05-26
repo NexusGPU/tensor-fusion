@@ -117,22 +117,39 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 			}
 		}
 	}
-	if isNvidiaVendor(deviceInfos) && !isPartitioned {
-		// Non-partitioned modes (shared/soft/hard): canonicalize
-		// NVIDIA_VISIBLE_DEVICES to the NVML "GPU-<hex>" form. nvidia-container-
-		// toolkit treats this env as the authoritative request channel in both
-		// legacy and CDI-enabled runtime modes, so CDIDevices is never emitted
-		// here — see deviceplugin.go.
+	if !isPartitioned {
+		// Non-partitioned modes (shared/soft/hard): pin the vendor's
+		// *_VISIBLE_DEVICES env to the devices this worker actually got. The
+		// matching OCI runtime hook (nvidia-container-toolkit /
+		// mthreads-container-runtime / ascend-docker-runtime) reads this env
+		// as its authoritative request channel — without it, hooks fall back
+		// to the image-baked default (typically `=all`), which on multi-card
+		// hosts leaks every card into the pod and silently breaks isolation.
 		//
-		// Partitioned (MIG) mode is intentionally skipped: the NVIDIA provider's
-		// AccelAssignPartition already writes NVIDIA_VISIBLE_DEVICES=MIG-<uuid>
-		// (and CUDA_VISIBLE_DEVICES=MIG-<uuid>) into deviceInfo.DeviceEnv, which
-		// was copied into envs above. Overwriting that with the parent GPU UUID
-		// would expose the whole card to the container and silently break MIG
-		// isolation.
-		names := buildPinnedNvidiaDeviceNames(deviceInfos)
-		if len(names) > 0 {
-			envs[constants.NvidiaVisibleAllDeviceEnv] = strings.Join(names, ",")
+		// Partitioned (MIG / MUSA template) mode is intentionally skipped:
+		// the provider's AccelAssignPartition already wrote the partition-
+		// scoped env (NVIDIA_VISIBLE_DEVICES=MIG-<uuid>,
+		// MTHREADS_VISIBLE_DEVICES=<idx>+MUSA_VGPU_PARTITION_UUID, ...) into
+		// deviceInfo.DeviceEnv and that was copied into envs above.
+		// Overwriting it with the parent device identifier would expose the
+		// whole card.
+		if isNvidiaVendor(deviceInfos) {
+			// NVIDIA canonicalizes to NVML "GPU-<hex>" form. CDIDevices is
+			// never emitted here — see deviceplugin.go.
+			names := buildPinnedNvidiaDeviceNames(deviceInfos)
+			if len(names) > 0 {
+				envs[constants.NvidiaVisibleAllDeviceEnv] = strings.Join(names, ",")
+			}
+		} else if envName, ok := indexBasedVisibleDevicesEnvName(deviceInfos); ok {
+			// MThreads / Ascend: mthreads-container-runtime and
+			// ascend-docker-runtime both accept comma-separated device
+			// indices — matches what vgpu-provider-internal's MUSA
+			// AccelAssignPartition emits in partitioned mode
+			// (`MTHREADS_VISIBLE_DEVICES=%u`).
+			indices := buildPinnedDeviceIndices(deviceInfos)
+			if len(indices) > 0 {
+				envs[envName] = strings.Join(indices, ",")
+			}
 		}
 	}
 
@@ -332,6 +349,47 @@ func buildPinnedNvidiaDeviceNames(deviceInfos []*api.DeviceInfo) []string {
 	})
 	return lo.Map(visibleDevices, func(device visibleDeviceRef, _ int) string {
 		return device.uuid
+	})
+}
+
+// indexBasedVisibleDevicesEnvName returns the *_VISIBLE_DEVICES env var name
+// for vendors whose container runtime hook honors a comma-separated *device
+// index* list. NVIDIA is handled separately because its hook canonicalizes
+// on UUIDs, not indices. Returns ("", false) for vendors with no such
+// convention; the caller skips env injection in that case.
+func indexBasedVisibleDevicesEnvName(deviceInfos []*api.DeviceInfo) (string, bool) {
+	if len(deviceInfos) == 0 {
+		return "", false
+	}
+	vendor := strings.TrimSpace(deviceInfos[0].Vendor)
+	switch {
+	case strings.EqualFold(vendor, constants.AcceleratorVendorMThreads):
+		return constants.MthreadsVisibleDevicesEnv, true
+	case strings.EqualFold(vendor, constants.AcceleratorVendorHuaweiAscendNPU):
+		return constants.AscendVisibleDevicesEnv, true
+	}
+	return "", false
+}
+
+// buildPinnedDeviceIndices returns the deduped, sorted device indices the
+// worker was allocated, formatted as decimal strings ready for joining into
+// a *_VISIBLE_DEVICES env value.
+func buildPinnedDeviceIndices(deviceInfos []*api.DeviceInfo) []string {
+	indices := make([]int32, 0, len(deviceInfos))
+	seen := make(map[int32]struct{}, len(deviceInfos))
+	for _, deviceInfo := range deviceInfos {
+		if deviceInfo == nil {
+			continue
+		}
+		if _, exists := seen[deviceInfo.Index]; exists {
+			continue
+		}
+		seen[deviceInfo.Index] = struct{}{}
+		indices = append(indices, deviceInfo.Index)
+	}
+	slices.Sort(indices)
+	return lo.Map(indices, func(i int32, _ int) string {
+		return fmt.Sprintf("%d", i)
 	})
 }
 
