@@ -31,6 +31,14 @@ const (
 	NvidiaVisibleAllDeviceValue = "all"
 	CudaVisibleDevicesEnv       = "CUDA_VISIBLE_DEVICES"
 
+	// Per-vendor visible-devices envs honored by the matching OCI runtime hook
+	// (mthreads-container-runtime / ascend-docker-runtime). For non-partitioned
+	// modes the worker allocation controller pins these to the comma-joined
+	// device indices it actually handed out, so the hook can't accidentally
+	// inject every card on the host even if the image baked in `=all`.
+	MthreadsVisibleDevicesEnv = "MTHREADS_VISIBLE_DEVICES"
+	AscendVisibleDevicesEnv   = "ASCEND_VISIBLE_DEVICES"
+
 	TensorFusionGPUInfoConfigName       = "tensor-fusion-sys-public-gpu-info"
 	TensorFusionGPUInfoConfigVolumeName = "gpu-info"
 	TensorFusionGPUInfoConfigMountPath  = "/etc/tensor-fusion/gpu-info.yaml"
@@ -127,8 +135,11 @@ const (
 	TFSoftLimiterInitContainerName = "init-soft-limiter"
 	TFSoftLimiterVolumeName        = "tf-soft-limiter"
 	TFSoftLimiterVolumeMountPath   = "/tensor-fusion-limiter"
-	TFSoftLimiterLibName           = "libcuda_limiter.so"
-	LdPreloadSoftLimiter           = TFSoftLimiterVolumeMountPath + "/" + TFSoftLimiterLibName
+	// TFSoftLimiterLibName / LdPreloadSoftLimiter are the NVIDIA defaults.
+	// For per-vendor selection at runtime, use constants.GetSoftLimiterLibName(vendor)
+	// — Ascend uses libascend_limiter.so, MThreads uses libmusa_limiter.so.
+	TFSoftLimiterLibName = "libcuda_limiter.so"
+	LdPreloadSoftLimiter = TFSoftLimiterVolumeMountPath + "/" + TFSoftLimiterLibName
 
 	// Environment variables required by C cuda_hook
 	TFIsolationModeEnv  = "TF_ISOLATION_MODE"

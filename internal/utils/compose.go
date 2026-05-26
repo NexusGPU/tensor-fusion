@@ -411,8 +411,12 @@ func AddTFDefaultClientConfBeforePatch(
 
 		if useLocalSoftIsolation(tfInfo.Profile) {
 			// Soft isolation: inject C limiter directly into business container via middleware image.
-			// No worker sidecar needed — the limiter intercepts CUDA calls in-process.
+			// No worker sidecar needed — the limiter intercepts CUDA / aclrt / musa calls in-process.
+			// Limiter filename varies by vendor: libcuda_limiter.so (NVIDIA),
+			// libascend_limiter.so (Ascend), libmusa_limiter.so (MThreads).
+			// Each vendor's middleware image ships its own under /build/.
 			middlewareImage := GetMiddlewareImage(tfInfo.Profile.GPUVendor, pool.Spec.ComponentConfig.Hypervisor.Image)
+			softLimiterLib := constants.GetSoftLimiterLibName(tfInfo.Profile.GPUVendor)
 			pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
 				Name:  constants.TFSoftLimiterInitContainerName,
 				Image: middlewareImage,
@@ -463,7 +467,7 @@ func AddTFDefaultClientConfBeforePatch(
 				envList := pod.Spec.Containers[injectContainerIndex].Env
 				envList = append(envList, v1.EnvVar{
 					Name:  constants.LdPreloadEnv,
-					Value: constants.LdPreloadSoftLimiter,
+					Value: constants.TFSoftLimiterVolumeMountPath + "/" + softLimiterLib,
 				}, v1.EnvVar{
 					Name:  constants.TFIsolationModeEnv,
 					Value: string(tfv1.IsolationModeSoft),
@@ -486,6 +490,15 @@ func AddTFDefaultClientConfBeforePatch(
 					v1.EnvVar{Name: constants.HypervisorPortEnv, Value: strconv.Itoa(int(getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor)))},
 				)
 				pod.Spec.Containers[injectContainerIndex].Env = envList
+
+				// Belt-and-suspenders: device-plugin's Allocate response
+				// already mounts vendor lib paths via AccelGetVendorMountLibs,
+				// but workloads that request our resource via a non-plugin
+				// path (e.g. raw GPUIndices) wouldn't get them. Apply the
+				// ProviderConfig HostPathMounts the same way the remote
+				// worker sidecar does — currently Ascend-gated inside the
+				// helper, so non-Ascend vendors are a no-op.
+				applyProviderRemoteWorkerConfigToContainerIndex(&pod.Spec, tfInfo.Profile.GPUVendor, injectContainerIndex)
 			}
 		} else if useLocalWorkerSidecar {
 			// Local hard modes run the TensorFusion worker in a sibling container and use /dev/shm for transport.
@@ -1438,6 +1451,7 @@ func AddWorkerConfAfterTemplate(
 	// the middleware image, overwriting the Rust limiter bundled in the worker image.
 	if workloadProfile != nil && workloadProfile.Isolation == tfv1.IsolationModeSoft {
 		middlewareImage := GetMiddlewareImage(workloadProfile.GPUVendor, hypervisorConfig.Image)
+		softLimiterLib := constants.GetSoftLimiterLibName(workloadProfile.GPUVendor)
 		spec.InitContainers = append(spec.InitContainers, v1.Container{
 			Name:  constants.TFSoftLimiterInitContainerName,
 			Image: middlewareImage,
@@ -1457,12 +1471,16 @@ func AddWorkerConfAfterTemplate(
 			Name:         "soft-limiter",
 			VolumeSource: v1.VolumeSource{EmptyDir: &v1.EmptyDirVolumeSource{}},
 		})
-		// Mount the C limiter over the Rust limiter path in the worker container
+		// Mount the C limiter over the Rust limiter path in the worker container.
+		// SubPath is the per-vendor filename produced by `cp /build/*` above.
+		// MountPath stays as the NVIDIA path: the Rust limiter only ships in
+		// the NVIDIA worker image, so non-NVIDIA vendors just see a new file
+		// at this path (harmless — those workers don't LD_PRELOAD it).
 		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts,
 			v1.VolumeMount{
 				Name:      "soft-limiter",
 				MountPath: constants.LdPreloadLimiter, // /home/app/libcuda_limiter.so
-				SubPath:   constants.TFSoftLimiterLibName,
+				SubPath:   softLimiterLib,
 				ReadOnly:  true,
 			},
 			v1.VolumeMount{
