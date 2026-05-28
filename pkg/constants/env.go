@@ -199,9 +199,13 @@ const (
 	HypervisorDetectUsedGPUEnv         = "DETECT_IN_USED_GPUS"
 	HypervisorDevicePluginPathEnv      = "DEVICE_PLUGIN_PATH"
 	HypervisorKubeletCheckpointPathEnv = "KUBELET_CHECKPOINT_PATH"
-	// Set to "true" to disable the kubelet PodResources gRPC proxy started by
-	// the kubernetes backend (used by DCGM exporter to discover TF GPU bindings).
-	HypervisorPodResourcesProxyDisabledEnv = "DISABLE_POD_RESOURCES_PROXY"
+	// Set to "true" to enable the kubelet PodResources gRPC proxy (used by DCGM
+	// exporter to attribute GPU metrics to TF-managed pods). Default is off:
+	// the operator reads this env at compose time, skips injecting the
+	// pod-resources-tf hostPath volume/mount on the hypervisor pod when unset,
+	// and propagates the same env into the hypervisor container so the backend
+	// agrees with the operator.
+	HypervisorPodResourcesProxyEnabledEnv = "ENABLE_POD_RESOURCES_PROXY"
 
 	// Add ptrace capability to hypervisor container, to trace all host PID using GPU
 	SystemPtraceCapability = "SYS_PTRACE"

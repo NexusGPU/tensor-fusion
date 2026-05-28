@@ -2,6 +2,7 @@ package utils_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -110,9 +111,51 @@ var _ = Describe("Compose Utils", func() {
 				Expect(spec.HostPID).To(BeTrue())
 				Expect(spec.TerminationGracePeriodSeconds).NotTo(BeNil())
 			},
-			Entry("without vector", false, "test-image:latest", 2, 8),
-			Entry("with vector", true, "test-image:latest", 2, 8),
+			Entry("without vector", false, "test-image:latest", 2, 7),
+			Entry("with vector", true, "test-image:latest", 2, 7),
 		)
+
+		It("injects the pod-resources-tf volume/mount only when the proxy is enabled", func() {
+			ctx := context.Background()
+			pool := &tfv1.GPUPool{
+				Spec: tfv1.GPUPoolSpec{
+					ComponentConfig: &tfv1.ComponentConfig{
+						Hypervisor: &tfv1.HypervisorConfig{
+							Image: "test-image:latest",
+						},
+					},
+				},
+			}
+
+			// Default off: no extra volume, no extra mount, no env on container.
+			offSpec := &corev1.PodSpec{}
+			utils.AddTFHypervisorConfAfterTemplate(ctx, offSpec, pool, "NVIDIA", false)
+			Expect(offSpec.Volumes).To(HaveLen(7))
+			for _, v := range offSpec.Volumes {
+				Expect(v.Name).NotTo(Equal(constants.KubeletPodResourcesProxyVolumeName))
+			}
+			for _, m := range offSpec.Containers[0].VolumeMounts {
+				Expect(m.Name).NotTo(Equal(constants.KubeletPodResourcesProxyVolumeName))
+			}
+			for _, e := range offSpec.Containers[0].Env {
+				Expect(e.Name).NotTo(Equal(constants.HypervisorPodResourcesProxyEnabledEnv))
+			}
+
+			// Opt-in via env: volume, mount, and env all present.
+			GinkgoT().Setenv(constants.HypervisorPodResourcesProxyEnabledEnv, constants.TrueStringValue)
+			onSpec := &corev1.PodSpec{}
+			utils.AddTFHypervisorConfAfterTemplate(ctx, onSpec, pool, "NVIDIA", false)
+			Expect(onSpec.Volumes).To(HaveLen(8))
+			Expect(slices.ContainsFunc(onSpec.Volumes, func(v corev1.Volume) bool {
+				return v.Name == constants.KubeletPodResourcesProxyVolumeName
+			})).To(BeTrue())
+			Expect(slices.ContainsFunc(onSpec.Containers[0].VolumeMounts, func(m corev1.VolumeMount) bool {
+				return m.Name == constants.KubeletPodResourcesProxyVolumeName
+			})).To(BeTrue())
+			Expect(slices.ContainsFunc(onSpec.Containers[0].Env, func(e corev1.EnvVar) bool {
+				return e.Name == constants.HypervisorPodResourcesProxyEnabledEnv && e.Value == constants.TrueStringValue
+			})).To(BeTrue())
+		})
 
 		It("should inject NVIDIA_VISIBLE_DEVICES only for NVIDIA vendor", func() {
 			ctx := context.Background()

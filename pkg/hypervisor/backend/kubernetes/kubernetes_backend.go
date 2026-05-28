@@ -124,10 +124,11 @@ func (b *KubeletBackend) Start() error {
 	}
 
 	// Start the kubelet pod-resources gRPC proxy that exposes TF workers to
-	// DCGM exporter with real NVML UUIDs. Failure here is non-fatal: the rest
-	// of the hypervisor must keep running even if /var/lib/kubelet/
-	// pod-resources-tf is not mountable on this node.
-	if os.Getenv(constants.HypervisorPodResourcesProxyDisabledEnv) != constants.TrueStringValue {
+	// DCGM exporter with real NVML UUIDs. Opt-in: only runs when the operator
+	// has both injected the pod-resources-tf hostPath mount and set
+	// ENABLE_POD_RESOURCES_PROXY=true on this container. Failure here is
+	// non-fatal: the rest of the hypervisor must keep running.
+	if os.Getenv(constants.HypervisorPodResourcesProxyEnabledEnv) == constants.TrueStringValue {
 		proxy, err := StartPodResourcesProxy(b.podCacher)
 		if err != nil {
 			klog.Warningf("Failed to start pod-resources proxy (DCGM exporter pod labels will be missing): %v", err)
@@ -136,7 +137,7 @@ func (b *KubeletBackend) Start() error {
 			klog.Info("Pod-resources proxy started")
 		}
 	} else {
-		klog.Info("Pod-resources proxy disabled by env")
+		klog.Info("Pod-resources proxy disabled (set ENABLE_POD_RESOURCES_PROXY=true to enable)")
 	}
 	return nil
 }
