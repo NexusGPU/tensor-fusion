@@ -29,10 +29,11 @@ type KubeletBackend struct {
 	deviceController     framework.DeviceController
 	allocationController framework.WorkerAllocationController
 
-	apiClient      *APIClient
-	podCacher      *PodCacheManager
-	devicePlugins  []*DevicePlugin
-	deviceDetector *external_dp.DevicePluginDetector
+	apiClient         *APIClient
+	podCacher         *PodCacheManager
+	devicePlugins     []*DevicePlugin
+	deviceDetector    *external_dp.DevicePluginDetector
+	podResourcesProxy *PodResourcesProxy
 
 	nodeName string
 
@@ -121,6 +122,22 @@ func (b *KubeletBackend) Start() error {
 			klog.Info("Device plugin detector started")
 		}
 	}
+
+	// Start the kubelet pod-resources gRPC proxy that exposes TF workers to
+	// DCGM exporter with real NVML UUIDs. Failure here is non-fatal: the rest
+	// of the hypervisor must keep running even if /var/lib/kubelet/
+	// pod-resources-tf is not mountable on this node.
+	if os.Getenv(constants.HypervisorPodResourcesProxyDisabledEnv) != constants.TrueStringValue {
+		proxy, err := StartPodResourcesProxy(b.ctx, b.podCacher)
+		if err != nil {
+			klog.Warningf("Failed to start pod-resources proxy (DCGM exporter pod labels will be missing): %v", err)
+		} else {
+			b.podResourcesProxy = proxy
+			klog.Info("Pod-resources proxy started")
+		}
+	} else {
+		klog.Info("Pod-resources proxy disabled by env")
+	}
 	return nil
 }
 
@@ -131,6 +148,10 @@ func (b *KubeletBackend) Stop() error {
 				klog.Errorf("Failed to stop device plugin %d: %v", i, err)
 			}
 		}
+	}
+
+	if b.podResourcesProxy != nil {
+		b.podResourcesProxy.Stop()
 	}
 
 	if b.deviceDetector != nil {

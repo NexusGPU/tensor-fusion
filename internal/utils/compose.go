@@ -802,6 +802,15 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 				Type: ptr.To(v1.HostPathDirectoryOrCreate),
 			},
 		},
+	}, v1.Volume{
+		// Sibling dir for the pod-resources proxy socket exposed to DCGM exporter.
+		Name: constants.KubeletPodResourcesProxyVolumeName,
+		VolumeSource: v1.VolumeSource{
+			HostPath: &v1.HostPathVolumeSource{
+				Path: constants.KubeletPodResourcesProxyPath,
+				Type: ptr.To(v1.HostPathDirectoryOrCreate),
+			},
+		},
 	})
 
 	composeHypervisorInitContainer(ctx, spec, pool, vendor, compatibleWithNvidiaContainerToolkit)
@@ -927,6 +936,9 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 	}, v1.VolumeMount{
 		Name:      constants.KubeletPodResourcesVolumeName,
 		MountPath: constants.KubeletPodResourcesPath,
+	}, v1.VolumeMount{
+		Name:      constants.KubeletPodResourcesProxyVolumeName,
+		MountPath: constants.KubeletPodResourcesProxyPath,
 	})
 	if enableVector {
 		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{

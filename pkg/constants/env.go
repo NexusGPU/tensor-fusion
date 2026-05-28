@@ -60,6 +60,13 @@ const (
 	KubeletPodResourcesVolumeName = "pod-resources"
 	KubeletPodResourcesPath       = "/var/lib/kubelet/pod-resources"
 
+	// TF pod-resources proxy: a sibling directory under the kubelet root where
+	// the hypervisor publishes a kubelet-shaped PodResources socket with TF
+	// device-plugin entries rewritten into nvidia.com/gpu form. DCGM exporter
+	// is pointed at this socket via DCGM_POD_RESOURCES_KUBELET_SOCKET.
+	KubeletPodResourcesProxyVolumeName = "pod-resources-tf"
+	KubeletPodResourcesProxyPath       = "/var/lib/kubelet/pod-resources-tf"
+
 	TensorFusionVectorConfigName       = "tensor-fusion-sys-vector-config"
 	TensorFusionVectorConfigVolumeName = "vector-config"
 	TensorFusionVectorConfigMountPath  = "/etc/vector/vector.yaml"
@@ -192,6 +199,9 @@ const (
 	HypervisorDetectUsedGPUEnv         = "DETECT_IN_USED_GPUS"
 	HypervisorDevicePluginPathEnv      = "DEVICE_PLUGIN_PATH"
 	HypervisorKubeletCheckpointPathEnv = "KUBELET_CHECKPOINT_PATH"
+	// Set to "true" to disable the kubelet PodResources gRPC proxy started by
+	// the kubernetes backend (used by DCGM exporter to discover TF GPU bindings).
+	HypervisorPodResourcesProxyDisabledEnv = "DISABLE_POD_RESOURCES_PROXY"
 
 	// Add ptrace capability to hypervisor container, to trace all host PID using GPU
 	SystemPtraceCapability = "SYS_PTRACE"
