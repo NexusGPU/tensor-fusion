@@ -163,6 +163,9 @@ func (p *PodResourcesProxy) List(
 			if len(uuids) == 0 {
 				continue
 			}
+			for i := range uuids {
+				uuids[i] = normalizeNVMLUUID(uuids[i])
+			}
 			for _, cd := range cont.Devices {
 				if !isTFDevicePluginResource(cd.GetResourceName()) {
 					continue
@@ -242,6 +245,18 @@ func containerGPUIDs(pod *corev1.Pod, containerName string) []string {
 		return filterEmpty(strings.Split(raw, ","))
 	}
 	return nil
+}
+
+// normalizeNVMLUUID uppercases a leading "gpu-" prefix to match what NVML and
+// DCGM exporter emit ("GPU-xxxxxxxx-..."). TF's pod-level fallback annotation
+// (tensor-fusion.ai/gpu-ids) stores ids in their kubernetes-name form which is
+// lowercased; without this normalization DCGM's UUID-string match silently
+// fails and pod/namespace/container labels are dropped from metrics.
+func normalizeNVMLUUID(id string) string {
+	if strings.HasPrefix(id, "gpu-") {
+		return "GPU-" + id[len("gpu-"):]
+	}
+	return id
 }
 
 func filterEmpty(in []string) []string {
