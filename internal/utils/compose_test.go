@@ -110,8 +110,8 @@ var _ = Describe("Compose Utils", func() {
 				Expect(spec.HostPID).To(BeTrue())
 				Expect(spec.TerminationGracePeriodSeconds).NotTo(BeNil())
 			},
-			Entry("without vector", false, "test-image:latest", 2, 7),
-			Entry("with vector", true, "test-image:latest", 2, 7),
+			Entry("without vector", false, "test-image:latest", 2, 8),
+			Entry("with vector", true, "test-image:latest", 2, 8),
 		)
 
 		It("should inject NVIDIA_VISIBLE_DEVICES only for NVIDIA vendor", func() {

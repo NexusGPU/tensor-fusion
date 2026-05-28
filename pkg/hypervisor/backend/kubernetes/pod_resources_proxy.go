@@ -16,8 +16,8 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
@@ -52,9 +52,11 @@ const (
 //	resource_name = "nvidia.com/gpu"
 //	device_ids    = [<real NVML UUID>, ...]
 //
-// Real UUIDs come from pod annotations written by the TF scheduler:
-//   - tensor-fusion.ai/container-gpus  (per-container JSON: {"name": ["GPU-xxx"]})
-//   - tensor-fusion.ai/gpu-ids         (pod-level comma-separated fallback)
+// Real UUIDs come from pod annotations written by the TF scheduler, checked in
+// this preference order:
+//  1. tensor-fusion.ai/container-gpus  (per-container JSON: {"name": ["GPU-xxx"]})
+//  2. tensor-fusion.ai/partition-uuids (MIG: "MIG-xxx:GPU-parent,...") — emits MIG-
+//  3. tensor-fusion.ai/gpu-ids         (pod-level comma-separated fallback)
 //
 // All non-TF entries (real nvidia.com/gpu, CPU, memory, DRA) are passed through.
 type PodResourcesProxy struct {
@@ -64,15 +66,21 @@ type PodResourcesProxy struct {
 	upstream     podresv1.PodResourcesListerClient
 	cache        *PodCacheManager
 
-	server *grpc.Server
-	lis    net.Listener
+	server   *grpc.Server
+	lis      net.Listener
+	stopOnce sync.Once
 }
 
 // StartPodResourcesProxy launches the proxy. Returns an error only when setup
 // fails (e.g. proxy socket cannot be listened on). The upstream kubelet socket
 // is dialed lazily by grpc.NewClient — if kubelet is down, individual List
 // calls will fail but the proxy itself stays up.
-func StartPodResourcesProxy(ctx context.Context, cache *PodCacheManager) (*PodResourcesProxy, error) {
+//
+// The caller (KubeletBackend) owns the lifecycle and must call Stop() to tear
+// the proxy down. We deliberately don't watch a context here: Backend.Stop()
+// is the single shutdown path, and a ctx-watcher goroutine would race with it
+// on exit.
+func StartPodResourcesProxy(cache *PodCacheManager) (*PodResourcesProxy, error) {
 	if cache == nil {
 		return nil, fmt.Errorf("pod cache manager is required")
 	}
@@ -119,23 +127,22 @@ func StartPodResourcesProxy(ctx context.Context, cache *PodCacheManager) (*PodRe
 			klog.Errorf("pod-resources proxy server exited: %v", err)
 		}
 	}()
-
-	go func() {
-		<-ctx.Done()
-		p.Stop()
-	}()
 	return p, nil
 }
 
+// Stop is idempotent — Backend.Stop() and any future ctx-driven path can both
+// call it safely.
 func (p *PodResourcesProxy) Stop() {
-	if p.server != nil {
-		p.server.GracefulStop()
-	}
-	if p.upstreamConn != nil {
-		_ = p.upstreamConn.Close()
-	}
-	// Best-effort cleanup; ignore errors.
-	_ = os.Remove(proxySocketPath)
+	p.stopOnce.Do(func() {
+		if p.server != nil {
+			p.server.GracefulStop()
+		}
+		if p.upstreamConn != nil {
+			_ = p.upstreamConn.Close()
+		}
+		// Best-effort cleanup; ignore errors.
+		_ = os.Remove(proxySocketPath)
+	})
 }
 
 // List proxies kubelet's response, rewriting TF device-plugin entries in place.
@@ -228,7 +235,11 @@ func isTFDevicePluginResource(resourceName string) bool {
 // containerGPUIDs returns the real GPU UUIDs assigned to a container, in the
 // preference order documented in the design doc:
 //  1. tensor-fusion.ai/container-gpus  — JSON {containerName: ["GPU-..."]}
-//  2. tensor-fusion.ai/gpu-ids         — comma-separated pod-level fallback
+//  2. tensor-fusion.ai/partition-uuids — MIG instances: "MIG-uuid:GPU-parent,..."
+//  3. tensor-fusion.ai/gpu-ids         — comma-separated pod-level fallback
+//
+// For MIG pods we return the MIG-<uuid> form (left side of each pair); DCGM
+// exporter resolves it back to a parent GPU and a MIG profile via NVML.
 func containerGPUIDs(pod *corev1.Pod, containerName string) []string {
 	if pod == nil || pod.Annotations == nil {
 		return nil
@@ -241,10 +252,35 @@ func containerGPUIDs(pod *corev1.Pod, containerName string) []string {
 			}
 		}
 	}
+	if raw := pod.Annotations[constants.PartitionUUIDsAnnotation]; raw != "" {
+		return parsePartitionUUIDs(raw)
+	}
 	if raw := pod.Annotations[constants.GPUDeviceIDsAnnotation]; raw != "" {
 		return filterEmpty(strings.Split(raw, ","))
 	}
 	return nil
+}
+
+// parsePartitionUUIDs extracts the MIG instance UUIDs from a
+// tensor-fusion.ai/partition-uuids annotation value. The format is
+// comma-separated "partitionUUID:parentGPU" pairs, e.g.
+// "MIG-xxx/7/0:GPU-abc,MIG-yyy/3/0:GPU-def".
+func parsePartitionUUIDs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if colon := strings.IndexByte(p, ':'); colon >= 0 {
+			p = p[:colon]
+		}
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // normalizeNVMLUUID uppercases a leading "gpu-" prefix to match what NVML and
@@ -252,6 +288,9 @@ func containerGPUIDs(pod *corev1.Pod, containerName string) []string {
 // (tensor-fusion.ai/gpu-ids) stores ids in their kubernetes-name form which is
 // lowercased; without this normalization DCGM's UUID-string match silently
 // fails and pod/namespace/container labels are dropped from metrics.
+//
+// MIG- prefixed UUIDs from partition-uuids are returned unchanged — DCGM
+// already expects that form for MIG instances.
 func normalizeNVMLUUID(id string) string {
 	if strings.HasPrefix(id, "gpu-") {
 		return "GPU-" + id[len("gpu-"):]
@@ -274,8 +313,3 @@ func filterEmpty(in []string) []string {
 func (p *PodResourcesProxy) SocketPath() string {
 	return proxySocketPath
 }
-
-// ensureWritable is unused outside tests; kept here so test code that builds a
-// proxy against a custom socket directory has a hook (not exported via a
-// public API to avoid surface area churn).
-var _ = filepath.Join

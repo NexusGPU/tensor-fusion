@@ -128,7 +128,7 @@ func (b *KubeletBackend) Start() error {
 	// of the hypervisor must keep running even if /var/lib/kubelet/
 	// pod-resources-tf is not mountable on this node.
 	if os.Getenv(constants.HypervisorPodResourcesProxyDisabledEnv) != constants.TrueStringValue {
-		proxy, err := StartPodResourcesProxy(b.ctx, b.podCacher)
+		proxy, err := StartPodResourcesProxy(b.podCacher)
 		if err != nil {
 			klog.Warningf("Failed to start pod-resources proxy (DCGM exporter pod labels will be missing): %v", err)
 		} else {
