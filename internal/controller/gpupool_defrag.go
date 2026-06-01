@@ -62,6 +62,9 @@ const (
 
 	defragStatusPersistTimeout = 30 * time.Second
 	defragActiveStepRequeue    = 10 * time.Second
+	// Keep reconciles frequent inside an active campaign window when there is
+	// nothing to evict yet, so MaxDuration is not shadowed by a long compaction period.
+	defragInWindowIdleRequeue = 60 * time.Second
 )
 
 const (
@@ -76,6 +79,7 @@ const (
 	defragEventBlockedEvictedPod = "DefragBlockedByEvictedPod"
 	defragEventEvictSkip         = "DefragNodeEvictSkip"
 	defragEventFinished          = "DefragFinished"
+	defragEventConfigInvalid     = "DefragConfigInvalid"
 )
 
 // schedulerFitPodAPI is satisfied by *scheduler.Scheduler only after the
@@ -157,9 +161,12 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 		return 0
 	}
 
-	schedule, err := r.defragParser.Parse(cfg.Schedule)
+	schedule, err := utils.ParseTimezoneAwareCronSchedule(r.defragParser, cfg.Schedule, cfg.Timezone)
 	if err != nil {
-		logger.Error(err, "invalid defrag cron schedule; defrag disabled", "schedule", cfg.Schedule)
+		logger.Error(err, "invalid defrag schedule config; defrag disabled",
+			"schedule", cfg.Schedule, "timezone", cfg.Timezone)
+		r.Recorder.Eventf(pool, nil, corev1.EventTypeWarning, defragEventConfigInvalid, defragEventConfigInvalid,
+			"defrag disabled: %v", err)
 		return 0
 	}
 	maxDuration := parseDefragMaxDuration(cfg.MaxDuration, logger)
@@ -204,16 +211,7 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 	if campaign.skipMissed {
 		logger.Info("defrag campaign expired before this reconcile; skipping missed schedule window",
 			"advancedAnchor", campaign.start, "maxDuration", maxDuration)
-		persistCtx, persistCancel := context.WithTimeout(ctx, defragStatusPersistTimeout)
-		defer persistCancel()
-		if err := r.patchPoolLastDefragTime(persistCtx, pool, campaign.start); err != nil {
-			logger.Error(err, "failed to patch pool.Status.LastDefragTime after expired defrag campaign")
-		}
-		// A missed window counts as a finished cycle, so drop the
-		// campaign-scoped evict-skip list before the next tick.
-		if err := r.clearAllDefragEvictSkipMarkersForPool(persistCtx, pool); err != nil {
-			logger.Error(err, "failed to clear defrag evict-skip markers after expired defrag campaign")
-		}
+		r.advanceCampaignAnchor(ctx, pool, campaign.start, defragFinishReasonSkipMissed)
 		return 0
 	}
 
@@ -225,23 +223,42 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 	}
 	defer flag.Store(false)
 
-	runCtx, cancel := context.WithDeadline(ctx, campaign.start.Add(maxDuration))
+	deadline := campaign.start.Add(maxDuration)
+	runCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	result := r.runDefragStep(runCtx, pool.DeepCopy(), campaign.start)
-	if result.finishCampaign {
-		persistCtx, persistCancel := context.WithTimeout(ctx, defragStatusPersistTimeout)
-		defer persistCancel()
-		if err := r.patchPoolLastDefragTime(persistCtx, pool, campaign.start); err != nil {
-			logger.Error(err, "failed to patch pool.Status.LastDefragTime after defrag step")
-		}
-		// Reset the campaign-scoped evict-skip list. Stuck workers will
-		// re-trigger the marker on the next campaign, but defrag is never
-		// permanently blind to them.
-		if err := r.clearAllDefragEvictSkipMarkersForPool(persistCtx, pool); err != nil {
-			logger.Error(err, "failed to clear defrag evict-skip markers after defrag campaign")
-		}
+	if reason, advance := decideDefragCampaignProgress(result, time.Now(), deadline); advance {
+		r.advanceCampaignAnchor(ctx, pool, campaign.start, reason)
 	}
 	return defragRequeueAfter(result, normalRequeue)
+}
+
+func decideDefragCampaignProgress(result defragStepResult, now, deadline time.Time) (defragFinishReason, bool) {
+	if result.finishReason == defragFinishReasonDeadline {
+		return defragFinishReasonDeadline, true
+	}
+	if now.After(deadline) {
+		return defragFinishReasonWindowClosed, true
+	}
+	return defragFinishReasonNone, false
+}
+
+func (r *GPUPoolCompactionReconciler) advanceCampaignAnchor(
+	ctx context.Context,
+	pool *tfv1.GPUPool,
+	campaignStart time.Time,
+	reason defragFinishReason,
+) {
+	logger := log.FromContext(ctx).WithValues("pool", pool.Name, "component", "defrag",
+		"campaignStart", campaignStart, "reason", reason.String())
+	persistCtx, persistCancel := context.WithTimeout(ctx, defragStatusPersistTimeout)
+	defer persistCancel()
+	if err := r.patchPoolLastDefragTime(persistCtx, pool, campaignStart); err != nil {
+		logger.Error(err, "failed to patch pool.Status.LastDefragTime after defrag campaign end")
+	}
+	if err := r.clearAllDefragEvictSkipMarkersForPool(persistCtx, pool); err != nil {
+		logger.Error(err, "failed to clear defrag evict-skip markers after defrag campaign end")
+	}
 }
 
 type defragSchedule interface {
@@ -356,20 +373,56 @@ func sourceNodeMarkerTTL(cfg *tfv1.NodeDefragConfig, logger interface{ Info(stri
 
 // ----- main run ---------------------------------------------------------
 
+type defragFinishReason int
+
+const (
+	defragFinishReasonNone defragFinishReason = iota
+	defragFinishReasonDeadline
+	defragFinishReasonNoCandidates
+	defragFinishReasonAllSkipped
+	defragFinishReasonSkipMissed
+	defragFinishReasonWindowClosed
+)
+
+func (r defragFinishReason) String() string {
+	switch r {
+	case defragFinishReasonDeadline:
+		return "deadline"
+	case defragFinishReasonNoCandidates:
+		return "noCandidates"
+	case defragFinishReasonAllSkipped:
+		return "allSkipped"
+	case defragFinishReasonSkipMissed:
+		return "skipMissed"
+	case defragFinishReasonWindowClosed:
+		return "windowClosed"
+	default:
+		return "none"
+	}
+}
+
 type defragStepResult struct {
 	evictedNode         bool
+	abortedNode         bool
 	finishCampaign      bool
+	finishReason        defragFinishReason
 	blockedByEvictedPod bool
 	blockedBySourceNode bool
+	idleStep            bool
 }
 
 func defragRequeueAfter(result defragStepResult, normalRequeue time.Duration) time.Duration {
 	if normalRequeue <= 0 {
 		normalRequeue = defaultCompactionDuration
 	}
-	if result.evictedNode || result.blockedByEvictedPod || result.blockedBySourceNode {
+	if result.evictedNode || result.abortedNode || result.blockedByEvictedPod || result.blockedBySourceNode {
 		if defragActiveStepRequeue < normalRequeue {
 			return defragActiveStepRequeue
+		}
+	}
+	if result.idleStep && result.finishReason != defragFinishReasonDeadline {
+		if defragInWindowIdleRequeue < normalRequeue {
+			return defragInWindowIdleRequeue
 		}
 	}
 	return normalRequeue
@@ -384,13 +437,23 @@ func (r *GPUPoolCompactionReconciler) runDefragStep(
 	runStart time.Time,
 ) defragStepResult {
 	l := log.FromContext(ctx).WithValues("pool", pool.Name, "component", "defrag", "runStart", runStart)
-	r.Recorder.Eventf(pool, nil, corev1.EventTypeNormal, defragEventStarted, defragEventStarted,
-		"defrag step started at %s", runStart.Format(time.RFC3339))
 
 	stats := &defragRunStats{StartTime: runStart}
+	startedAnnounced := false
+	announceStart := func() {
+		if startedAnnounced {
+			return
+		}
+		startedAnnounced = true
+		r.Recorder.Eventf(pool, nil, corev1.EventTypeNormal, defragEventStarted, defragEventStarted,
+			"defrag step started at %s", runStart.Format(time.RFC3339))
+	}
 	defer func() {
 		stats.EndTime = time.Now()
 		defragLastRunStats.Store(pool.Name, stats)
+		if !startedAnnounced {
+			return
+		}
 		r.Recorder.Eventf(pool, nil, corev1.EventTypeNormal, defragEventFinished, defragEventFinished,
 			"defrag step finished: candidates=%d processed=%d evicted=%d failed=%d unmovable=%d pdbBlocked=%d missingPdb=%d freshSkip=%d deadline=%t",
 			stats.CandidateNodes, stats.ProcessedNodes, stats.EvictedPods, stats.EvictionFailures,
@@ -404,16 +467,22 @@ func (r *GPUPoolCompactionReconciler) runDefragStep(
 	}
 	stats.CandidateNodes = len(candidates)
 	if len(candidates) == 0 {
-		l.Info("no defrag candidates")
-		return defragStepResult{finishCampaign: true}
+		l.V(4).Info("no defrag candidates")
+		return defragStepResult{
+			finishCampaign: true,
+			finishReason:   defragFinishReasonNoCandidates,
+			idleStep:       true,
+		}
 	}
+
+	announceStart()
 
 	maxWorkerPerNode := r.Allocator.MaxWorkerPerNode()
 	result := runDefragCandidateLoop(ctx, candidates, stats, func(cand *defragCandidate) defragCandidateOutcome {
 		return r.processDefragCandidate(ctx, pool, cand, maxWorkerPerNode, stats)
 	})
-	if stats.DeadlineExceeded {
-		l.Info("defrag deadline exceeded during candidate loop", "remaining", len(candidates)-stats.ProcessedNodes)
+	if result.finishReason == defragFinishReasonDeadline {
+		l.Info("defrag deadline exceeded", "remaining", len(candidates)-stats.ProcessedNodes)
 	}
 	return result
 }
@@ -436,7 +505,10 @@ func runDefragCandidateLoop(
 	for _, cand := range candidates {
 		if ctxDone(ctx) {
 			stats.DeadlineExceeded = true
-			return defragStepResult{finishCampaign: true}
+			return defragStepResult{
+				finishCampaign: true,
+				finishReason:   defragFinishReasonDeadline,
+			}
 		}
 		stats.ProcessedNodes++
 		switch process(cand) {
@@ -445,10 +517,19 @@ func runDefragCandidateLoop(
 		case defragCandidateEvicted:
 			return defragStepResult{evictedNode: true}
 		case defragCandidateAborted:
-			return defragStepResult{}
+			return defragStepResult{abortedNode: true}
+		case defragCandidateDeadline:
+			return defragStepResult{
+				finishCampaign: true,
+				finishReason:   defragFinishReasonDeadline,
+			}
 		}
 	}
-	return defragStepResult{finishCampaign: true}
+	return defragStepResult{
+		finishCampaign: true,
+		finishReason:   defragFinishReasonAllSkipped,
+		idleStep:       true,
+	}
 }
 
 // ----- candidate filtering + sorting ------------------------------------
@@ -918,6 +999,7 @@ const (
 	defragCandidateSkipped defragCandidateOutcome = iota
 	defragCandidateEvicted
 	defragCandidateAborted
+	defragCandidateDeadline
 )
 
 func (r *GPUPoolCompactionReconciler) processDefragCandidate(
@@ -979,6 +1061,9 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 
 	if r.evictWorkerPods(ctx, pool, cand, stats, l) {
 		return defragCandidateEvicted
+	}
+	if stats.DeadlineExceeded {
+		return defragCandidateDeadline
 	}
 	r.Recorder.Eventf(pool, nil, corev1.EventTypeWarning, defragEventAbortNode, defragEventAbortNode,
 		"node %s: eviction aborted", cand.nodeName)

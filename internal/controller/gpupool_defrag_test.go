@@ -625,7 +625,7 @@ func TestGetDefragConfig(t *testing.T) {
 		t.Fatalf("nil Defrag should return nil")
 	}
 	// Wired Defrag is returned as-is.
-	cfg := &tfv1.NodeDefragConfig{Enabled: true, Schedule: "0 3 * * *"}
+	cfg := &tfv1.NodeDefragConfig{Enabled: true, Schedule: "0 3 * * *", Timezone: "UTC"}
 	p.Spec.NodeManagerConfig.NodeCompaction.Defrag = cfg
 	got := getDefragConfig(p)
 	if got != cfg {
@@ -1342,6 +1342,14 @@ func TestDefragRequeueAfter_ContinuesActiveCampaignQuickly(t *testing.T) {
 		t.Fatalf("finished campaign should use normal compaction period, got %s", got)
 	}
 
+	if got := defragRequeueAfter(defragStepResult{
+		finishCampaign: true,
+		finishReason:   defragFinishReasonNoCandidates,
+		idleStep:       true,
+	}, 30*time.Minute); got != defragInWindowIdleRequeue {
+		t.Fatalf("idle in-window campaign should requeue at idle cadence, got %s", got)
+	}
+
 	if got := defragRequeueAfter(defragStepResult{blockedBySourceNode: true}, 30*time.Minute); got != defragActiveStepRequeue {
 		t.Fatalf("source-node block should requeue quickly, got %s", got)
 	}
@@ -1873,6 +1881,12 @@ func TestRunDefragCandidateLoop_StopsAfterFirstEvictedNode(t *testing.T) {
 	if result.finishCampaign {
 		t.Fatalf("evicting one node should not finish the campaign")
 	}
+	if result.finishReason != defragFinishReasonNone {
+		t.Fatalf("eviction outcome should carry no finishReason, got %v", result.finishReason)
+	}
+	if result.idleStep {
+		t.Fatalf("eviction outcome must not be idle")
+	}
 	if stats.ProcessedNodes != 1 {
 		t.Fatalf("processedNodes=%d want 1", stats.ProcessedNodes)
 	}
@@ -1905,6 +1919,167 @@ func TestRunDefragCandidateLoop_SkipsAndContinuesToNextCandidate(t *testing.T) {
 	}
 	if fmt.Sprint(visited) != "[node-a node-b]" {
 		t.Fatalf("visited=%v", visited)
+	}
+}
+
+func TestRunDefragCandidateLoop_AllSkippedReportsAllSkippedReason(t *testing.T) {
+	candidates := []*defragCandidate{
+		{nodeName: testDefragNodeA},
+		{nodeName: "node-b"},
+	}
+	stats := &defragRunStats{}
+	result := runDefragCandidateLoop(context.Background(), candidates, stats, func(_ *defragCandidate) defragCandidateOutcome {
+		return defragCandidateSkipped
+	})
+	if !result.finishCampaign {
+		t.Fatalf("all-skipped should finish the campaign loop")
+	}
+	if result.finishReason != defragFinishReasonAllSkipped {
+		t.Fatalf("finishReason=%v want allSkipped", result.finishReason)
+	}
+	if !result.idleStep {
+		t.Fatalf("all-skipped must be marked idle")
+	}
+	if stats.ProcessedNodes != len(candidates) {
+		t.Fatalf("processedNodes=%d want %d", stats.ProcessedNodes, len(candidates))
+	}
+}
+
+func TestRunDefragCandidateLoop_CtxDoneReportsDeadlineReason(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	stats := &defragRunStats{}
+	result := runDefragCandidateLoop(ctx, []*defragCandidate{
+		{nodeName: testDefragNodeA},
+		{nodeName: "node-b"},
+	}, stats, func(_ *defragCandidate) defragCandidateOutcome {
+		t.Fatalf("process should not be invoked when ctx is already done")
+		return defragCandidateSkipped
+	})
+	if !result.finishCampaign {
+		t.Fatalf("ctx-done should finish the campaign loop")
+	}
+	if result.finishReason != defragFinishReasonDeadline {
+		t.Fatalf("finishReason=%v want deadline", result.finishReason)
+	}
+	if !stats.DeadlineExceeded {
+		t.Fatalf("stats.DeadlineExceeded must be set on ctx-done")
+	}
+	if result.idleStep {
+		t.Fatalf("deadline outcome is not idle")
+	}
+}
+
+func TestRunDefragCandidateLoop_DeadlineOutcomeClosesCampaign(t *testing.T) {
+	candidates := []*defragCandidate{
+		{nodeName: testDefragNodeA},
+		{nodeName: "node-b"},
+	}
+	stats := &defragRunStats{}
+	calls := 0
+	result := runDefragCandidateLoop(context.Background(), candidates, stats, func(_ *defragCandidate) defragCandidateOutcome {
+		calls++
+		stats.DeadlineExceeded = true
+		return defragCandidateDeadline
+	})
+	if calls != 1 {
+		t.Fatalf("deadline outcome must short-circuit after the first candidate, got calls=%d", calls)
+	}
+	if !result.finishCampaign || result.finishReason != defragFinishReasonDeadline {
+		t.Fatalf("deadline outcome must close campaign with reason=deadline, got %+v", result)
+	}
+	if result.idleStep {
+		t.Fatalf("deadline outcome is not idle")
+	}
+	if !stats.DeadlineExceeded {
+		t.Fatalf("stats.DeadlineExceeded must propagate")
+	}
+}
+
+func TestDecideDefragCampaignProgress_WindowKeepsRetryingUntilDeadline(t *testing.T) {
+	campaignStart := time.Date(2026, 5, 25, 1, 0, 0, 0, time.UTC)
+	deadline := campaignStart.Add(60 * time.Minute)
+
+	cases := []struct {
+		name        string
+		result      defragStepResult
+		now         time.Time
+		wantAdvance bool
+		wantReason  defragFinishReason
+	}{
+		{
+			name:        "noCandidates inside window keeps anchor",
+			result:      defragStepResult{finishCampaign: true, finishReason: defragFinishReasonNoCandidates, idleStep: true},
+			now:         campaignStart.Add(5 * time.Minute),
+			wantAdvance: false,
+			wantReason:  defragFinishReasonNone,
+		},
+		{
+			name:        "allSkipped inside window keeps anchor",
+			result:      defragStepResult{finishCampaign: true, finishReason: defragFinishReasonAllSkipped, idleStep: true},
+			now:         campaignStart.Add(30 * time.Minute),
+			wantAdvance: false,
+			wantReason:  defragFinishReasonNone,
+		},
+		{
+			name:        "evictedNode never advances anchor",
+			result:      defragStepResult{evictedNode: true},
+			now:         campaignStart.Add(15 * time.Minute),
+			wantAdvance: false,
+			wantReason:  defragFinishReasonNone,
+		},
+		{
+			name:        "abortedNode never advances anchor",
+			result:      defragStepResult{abortedNode: true},
+			now:         campaignStart.Add(15 * time.Minute),
+			wantAdvance: false,
+			wantReason:  defragFinishReasonNone,
+		},
+		{
+			name:        "deadline outcome advances anchor",
+			result:      defragStepResult{finishCampaign: true, finishReason: defragFinishReasonDeadline},
+			now:         deadline,
+			wantAdvance: true,
+			wantReason:  defragFinishReasonDeadline,
+		},
+		{
+			name:        "wall-clock past deadline advances anchor even on idle outcome",
+			result:      defragStepResult{finishCampaign: true, finishReason: defragFinishReasonAllSkipped, idleStep: true},
+			now:         deadline.Add(time.Second),
+			wantAdvance: true,
+			wantReason:  defragFinishReasonWindowClosed,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotReason, gotAdvance := decideDefragCampaignProgress(tc.result, tc.now, deadline)
+			if gotAdvance != tc.wantAdvance {
+				t.Fatalf("advance=%v want %v (reason=%s)", gotAdvance, tc.wantAdvance, gotReason)
+			}
+			if gotReason != tc.wantReason {
+				t.Fatalf("reason=%s want %s", gotReason, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestAdvanceCampaignAnchor_PersistsLastDefragTime(t *testing.T) {
+	pool := newDefragTestPool()
+	r, kubeClient := newDefragControllerTestReconciler(t, pool)
+
+	campaignStart := time.Now().Add(-15 * time.Minute).Truncate(time.Second)
+	r.advanceCampaignAnchor(context.Background(), pool, campaignStart, defragFinishReasonDeadline)
+
+	updated := &tfv1.GPUPool{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: pool.Name}, updated); err != nil {
+		t.Fatalf("get pool after advanceCampaignAnchor: %v", err)
+	}
+	if updated.Status.LastDefragTime == nil {
+		t.Fatalf("advanceCampaignAnchor should have persisted LastDefragTime")
+	}
+	if !updated.Status.LastDefragTime.Time.Equal(campaignStart) {
+		t.Fatalf("LastDefragTime=%v want %v", updated.Status.LastDefragTime.Time, campaignStart)
 	}
 }
 
@@ -1992,6 +2167,7 @@ func newDefragTestPool() *tfv1.GPUPool {
 					Defrag: &tfv1.NodeDefragConfig{
 						Enabled:                     true,
 						Schedule:                    "0 3 * * *",
+						Timezone:                    "UTC",
 						MaxDuration:                 "30m",
 						UtilizationThresholdPercent: 40,
 					},
