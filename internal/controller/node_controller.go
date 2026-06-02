@@ -130,6 +130,13 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			if e := r.Create(ctx, gpuNode); e != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to create GPUNode: %w", e)
 			}
+			// Initialize phase to Pending right away so the GPUNode never sits with
+			// an empty phase during the inflight window (before node-discovery runs),
+			// which would otherwise be invisible to phase-based monitoring.
+			gpuNode.Status.Phase = tfv1.TensorFusionGPUNodePhasePending
+			if e := r.Status().Update(ctx, gpuNode); e != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to initialize GPUNode status to Pending: %w", e)
+			}
 		}
 	}
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
@@ -30,7 +31,6 @@ import (
 )
 
 const (
-	MaxInFlightNodes           = 15
 	WaitingInFlightNodesPeriod = 20 * time.Second
 )
 
@@ -209,7 +209,7 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 		e.logger.Info("Pod already in pre-schedule state, skipping expansion check and wait for expansion", "pod", klog.KObj(pod))
 		return nil
 	}
-	if inFlightCount >= MaxInFlightNodes {
+	if inFlightCount >= config.GetMaxInFlightNodes() {
 		e.logger.Error(nil, "Too many inFlight nodes, skipping expansion to avoid too many nodes provisioned concurrently")
 		time.Sleep(WaitingInFlightNodesPeriod)
 		return nil

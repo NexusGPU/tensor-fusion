@@ -191,6 +191,42 @@ func TestGPUNodeReconcileSetsNodeAndGPUsPendingWhenHypervisorCreationFails(t *te
 	}
 }
 
+func TestGPUNodeReconcileInitializesEmptyPhaseToPending(t *testing.T) {
+	t.Helper()
+
+	ctx := context.Background()
+	pool := newNodeDiscoveryTestPool(t)
+	// GPUNode in the inflight window: no status set yet (empty phase, no GPUs discovered).
+	gpuNode := &tfv1.GPUNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "node-1",
+			Finalizers: []string{constants.Finalizer},
+			Labels: map[string]string{
+				fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true",
+			},
+		},
+	}
+	coreNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: gpuNode.Name,
+		},
+	}
+
+	reconciler, kubeClient := newNodeDiscoveryTestReconciler(t, pool, gpuNode, coreNode)
+
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: gpuNode.Name}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	updatedNode := &tfv1.GPUNode{}
+	if err := kubeClient.Get(ctx, types.NamespacedName{Name: gpuNode.Name}, updatedNode); err != nil {
+		t.Fatalf("get updated GPUNode: %v", err)
+	}
+	if updatedNode.Status.Phase != tfv1.TensorFusionGPUNodePhasePending {
+		t.Fatalf("expected GPUNode phase %q, got %q", tfv1.TensorFusionGPUNodePhasePending, updatedNode.Status.Phase)
+	}
+}
+
 func newNodeDiscoveryTestReconciler(t *testing.T, objects ...ctrlclient.Object) (*GPUNodeReconciler, ctrlclient.Client) {
 	t.Helper()
 

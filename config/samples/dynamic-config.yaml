@@ -5,7 +5,11 @@ metricsFormat: influx
 
 autoScalingInterval: 10s
 
-alertRules:    
+# Cap on how many nodes the auto-expander may provision concurrently.
+# Defaults to 15 when unset or <= 0.
+maxInFlightNodes: 15
+
+alertRules:
   # Worker TFlops throttled alert
   - name: WorkerTFlopsThrottled
     query: |
