@@ -133,6 +133,28 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	// Ensure the GPUNode never sits with an empty phase during the inflight window
+	// (before node-discovery completes / when discovery fails), so phase-based
+	// monitoring can observe it. New GPUNodes are born Pending in the NodeReconciler,
+	// this is a safety net for pre-existing nodes with empty phase. Placed before the
+	// allocatable / driver-upgrade gates below, since those requeue early.
+	if node.Status.Phase == "" {
+		nodePhaseChanged, gpuList, err := r.syncNodeAndOwnedGPUPhases(
+			ctx, node,
+			tfv1.TensorFusionGPUNodePhasePending,
+			tfv1.TensorFusionGPUPhasePending,
+		)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to initialize GPUNode phase to Pending: %w", err)
+		}
+		if nodePhaseChanged {
+			metrics.SetNodeMetrics(node, poolObj, nil)
+		}
+		if len(gpuList) > 0 {
+			metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
+		}
+	}
+
 	// Support a some special case: when OS image shipped with Nvidia Driver, and Nvidia Operator override it
 	// Need wait device-plugin to be ready and K8S Node GPU resource to be allocatable,
 	// so that to avoid potential version mismatch issues from nvidia container toolkit mounted libs
