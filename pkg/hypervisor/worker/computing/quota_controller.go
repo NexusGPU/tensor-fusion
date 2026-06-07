@@ -197,8 +197,8 @@ func (c *Controller) StartSoftQuotaLimiter() error {
 	}
 
 	vendor := c.deviceController.GetAcceleratorVendor()
-	if !strings.EqualFold(vendor, "NVIDIA") {
-		return fmt.Errorf("soft isolation mode is only supported on NVIDIA GPUs, current vendor: %s", vendor)
+	if !constants.SupportsSoftIsolation(vendor) {
+		return fmt.Errorf("soft isolation mode is not supported for vendor: %s", vendor)
 	}
 	c.config = loadERLConfigFromEnv()
 

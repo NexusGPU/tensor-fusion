@@ -38,6 +38,10 @@ const (
 	// inject every card on the host even if the image baked in `=all`.
 	MthreadsVisibleDevicesEnv = "MTHREADS_VISIBLE_DEVICES"
 	AscendVisibleDevicesEnv   = "ASCEND_VISIBLE_DEVICES"
+	// PPU is CUDA-compatible; its OCI hook honors PPU_VISIBLE_DEVICES (alias of
+	// CUDA_VISIBLE_DEVICES) and accepts a comma-separated device-index list in
+	// non-partitioned modes — see vgpu-provider-internal/ppu/accelerator.cpp.
+	PpuVisibleDevicesEnv = "PPU_VISIBLE_DEVICES"
 
 	TensorFusionGPUInfoConfigName       = "tensor-fusion-sys-public-gpu-info"
 	TensorFusionGPUInfoConfigVolumeName = "gpu-info"

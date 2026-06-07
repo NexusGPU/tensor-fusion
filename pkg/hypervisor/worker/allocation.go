@@ -367,6 +367,10 @@ func indexBasedVisibleDevicesEnvName(deviceInfos []*api.DeviceInfo) (string, boo
 		return constants.MthreadsVisibleDevicesEnv, true
 	case strings.EqualFold(vendor, constants.AcceleratorVendorHuaweiAscendNPU):
 		return constants.AscendVisibleDevicesEnv, true
+	case strings.EqualFold(vendor, constants.AcceleratorVendorAlibabaPPU):
+		// PPU's env-var partition path emits `PPU_VISIBLE_DEVICES=%u` (index);
+		// non-partitioned workers pin the same env to the cards they got.
+		return constants.PpuVisibleDevicesEnv, true
 	}
 	return "", false
 }

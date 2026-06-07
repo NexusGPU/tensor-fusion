@@ -1,0 +1,105 @@
+# Example ProviderConfig for Alibaba PPU (真武 / Zhenwu 810E).
+#
+# PPU is NVML/CUDA-compatible (same-name libnvidia-ml.so + CUDA SDK), but it is
+# NOT NVIDIA: it ships its own device plugin (aliyun.com/ppu), OCI runtime hook
+# (PPU_VISIBLE_DEVICES, by device index) and soft limiter (libppu_limiter.so).
+# Backed by vgpu-provider-internal/ppu (accelerator.cpp + limiter/ppu).
+apiVersion: tensor-fusion.ai/v1
+kind: ProviderConfig
+metadata:
+  name: ppu-provider
+spec:
+  vendor: PPU
+  images:
+    # Middleware image must bundle libaccelerator_ppu.so + libppu_limiter.so.
+    middleware: tensorfusion/vgpu-provider-ppu:dev-local
+    remoteClient: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-client:1.63.1
+    remoteWorker: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-worker:1.70.0
+  hypervisor:
+    # Required to access /dev/alixpu_* device nodes + ioctl.
+    privilegedHypervisor: true
+    # PPU SDK runtime tree (CUDA-compatible libcudart.so/libcuda.so) + NVML.
+    # Paths match this host (Alibaba Cloud Linux / RHEL): SDK at /opt/pg1/CUDA_SDK,
+    # NVML (libnvidia-ml.so.1) lives in /usr/lib64. NOTE: the operator hardcodes
+    # hostPath Type=Directory for every hostPathMount, so we mount the *directory*
+    # /usr/lib64 (not the single .so file) at /opt/host-lib64 and add it to LD path.
+    ldLibraryPath: "/opt/host-lib64:/opt/pg1/lib:/opt/pg1/targets/x86_64-linux/lib:/opt/pg1/CUDA_SDK/lib64:/opt/pg1/CUDA_SDK/targets/x86_64-linux/lib"
+    deviceMount:
+      # Compute device nodes are /dev/alixpu_ppu<index>; MIG mode mounts the
+      # same parent node (PPU exposes MIG via NVML, not a separate /dev node).
+      deviceMountRule: 'device["hostPath"].startsWith("/dev/alixpu_ppu")'
+      partitionedDeviceMountRule: 'device["hostPath"].startsWith("/dev/alixpu_ppu")'
+      sharedDevices:
+        # base control node /dev/alixpu (major 241:0) is opened by libhgml/ppu-smi
+        # in EVERY container; without it the cgroup devices controller denies 241:0
+        # ("Failed to open /dev/alixpu, driver is not loaded").
+        - /dev/alixpu
+        - /dev/alixpu_ctl
+        - /dev/alixpu_sep
+        - /dev/alixpu-caps/*
+        - /dev/alixpu-caps-imex-channels
+    hostPathMounts:
+      - name: ppu-sdk
+        # whole PPU install tree: provides libhgml.so (targets/.../lib) + libuki.so
+        # (lib/) that NVML's nvmlInit dlopens, plus CUDA_SDK runtime libs. All
+        # glibc-clean so safe on LD_LIBRARY_PATH.
+        hostPath: /opt/pg1
+        mountPath: /opt/pg1
+        readOnly: true
+      - name: ppu-nvml
+        # ONLY libnvidia-ml.so.1 lives here (copied from /usr/lib64). Do NOT mount
+        # the whole /usr/lib64 — that drags the host RHEL glibc/libpthread onto
+        # LD_LIBRARY_PATH and clashes with the ubuntu container loader
+        # (undefined symbol _dl_make_stack_executable, GLIBC_PRIVATE). NVML's
+        # standard deps (libc/libpthread/libstdc++) come from the container.
+        hostPath: /opt/ppu-nvml
+        mountPath: /opt/host-lib64
+        readOnly: true
+  devicePluginDetection:
+    resourceNamePrefixes:
+      - aliyun.com/ppu
+    usedBySystemName: ppu-device-plugin
+  inUseResourceNames:
+    - aliyun.com/ppu
+  hardwareMetadata:
+    - model: PPU-ZW810E
+      fullModelName: "Alibaba PPU Zhenwu 810E"
+      costPerHour: "1.0"
+      # NVML does not expose peak TFLOPS for PPU; filled from vendor spec.
+      fp16TFlops: "386"
+      # Real-hardware MIG: the ZW810E (96 GiB, 8 GPU slices / 64 CU) splits into
+      # at most 2 instances (two 4g48gb half-cards). Only the 4g48gb / 8g96gb
+      # GI profiles exist on this SKU per `ppu-smi mig -i 0 -lgip`.
+      maxPartitions: 2
+      maxPlacementSlots: 8
+      partitionTemplateRefs:
+        - ppu-4g-48gb
+        - ppu-8g-96gb
+
+  # MIG GPU-instance profiles, from `ppu-smi mig -i 0 -lgip` on a real
+  # PPU-ZW810E (docs/gpu-cli-reference.zh.md). PPU exposes NVML "same-name" MIG
+  # but the profile IDs are PPU-specific (2 / 3), NOT the NVIDIA scheme.
+  # `nvmlProfileId` is the value passed to AccelAssignPartition as templateId.
+  # Other SKUs / firmware may expose smaller templates — re-confirm with -lgip.
+  virtualizationTemplates:
+    - id: ppu-4g-48gb
+      nvmlProfileId: 2
+      name: "4g.48gb"
+      memoryGigabytes: 48
+      computePercent: "50"
+      description: "Half PPU card — 4 GPU slices (32 CU), 48 GiB"
+      maxInstances: 2
+      placementLimit: [0, 4]
+      placementOffset: 4
+      isolationGroupSharing: "exclusive"
+
+    - id: ppu-8g-96gb
+      nvmlProfileId: 3
+      name: "8g.96gb"
+      memoryGigabytes: 96
+      computePercent: "100"
+      description: "Full PPU card — 8 GPU slices (64 CU), 96 GiB"
+      maxInstances: 1
+      placementLimit: [0]
+      placementOffset: 8
+      isolationGroupSharing: "exclusive"
