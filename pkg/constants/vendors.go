@@ -20,6 +20,12 @@ const (
 	AcceleratorVendorMThreads     = "MooreThreads"
 	AcceleratorVendorBiren        = "Biren"
 	AcceleratorVendorAlibabaTHead = "THead"
+	// AcceleratorVendorAlibabaPPU matches the vendor string the PPU provider
+	// hardcodes (vgpu-provider-internal/ppu/accelerator.cpp). PPU (真武 / Zhenwu
+	// 810E) is NVML/CUDA-compatible but is NOT NVIDIA: it ships its own device
+	// plugin (aliyun.com/ppu), OCI runtime hook (PPU_VISIBLE_DEVICES by index)
+	// and soft limiter (libppu_limiter.so).
+	AcceleratorVendorAlibabaPPU = "PPU"
 
 	// DSA vendors - CN
 	AcceleratorVendorHuaweiAscendNPU = "Ascend"
@@ -49,6 +55,11 @@ var L1VirtualizationSupportedVendors = []map[string]bool{
 		// MUSA backend implements AccelAssignPartition via env vars (MTHREADS_VISIBLE_DEVICES,
 		// MUSA_VGPU_TEMPLATE, ...) — see vgpu-provider-internal/musa/accelerator.cpp:836-876.
 		AcceleratorVendorMThreads: true,
+
+		// PPU implements real MIG (maxPartitions=7) on MIG-enabled cards via NVML
+		// GPU/compute-instance APIs, falling back to env-var whole-card partitioning
+		// — see vgpu-provider-internal/ppu/accelerator.cpp (AccelAssignPartition).
+		AcceleratorVendorAlibabaPPU: true,
 	},
 }
 
@@ -67,6 +78,10 @@ var L2VirtualizationSupportedVendors = []map[string]bool{
 		// (libascend_limiter.so / libmusa_limiter.so), shm V2 protocol.
 		AcceleratorVendorHuaweiAscendNPU: true,
 		AcceleratorVendorMThreads:        true,
+
+		// PPU soft isolation enforced by libppu_limiter.so (LD_PRELOAD), shipped
+		// in the vgpu-provider-internal PPU middleware image.
+		AcceleratorVendorAlibabaPPU: true,
 
 		// WIP
 		AcceleratorVendorAMD:   false,
@@ -125,6 +140,8 @@ func GetAcceleratorLibPath(vendor string) string {
 		return "libaccelerator_ascend.so"
 	case AcceleratorVendorMThreads:
 		return "libaccelerator_musa.so"
+	case AcceleratorVendorAlibabaPPU:
+		return "libaccelerator_ppu.so"
 	default:
 		// Default to stub library for unknown vendors
 		return "libaccelerator_example.so"
@@ -142,6 +159,8 @@ func GetSoftLimiterLibName(vendor string) string {
 		return "libascend_limiter.so"
 	case AcceleratorVendorMThreads:
 		return "libmusa_limiter.so"
+	case AcceleratorVendorAlibabaPPU:
+		return "libppu_limiter.so"
 	default:
 		return "libcuda_limiter.so"
 	}

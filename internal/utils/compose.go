@@ -1081,7 +1081,12 @@ func applyProviderRemoteWorkerConfig(spec *v1.PodSpec, vendor string) {
 }
 
 func applyProviderRemoteWorkerConfigToContainerIndex(spec *v1.PodSpec, vendor string, containerIndex int) {
-	if !strings.EqualFold(strings.TrimSpace(vendor), constants.AcceleratorVendorHuaweiAscendNPU) {
+	// Ascend mounts host driver libs; PPU mounts the host NVML/CUDA runtime tree
+	// (/usr/local/ppu, libnvidia-ml.so) so the in-process libppu_limiter.so can
+	// resolve them in soft-iso user pods that request GPUs via the non-plugin path.
+	v := strings.TrimSpace(vendor)
+	if !strings.EqualFold(v, constants.AcceleratorVendorHuaweiAscendNPU) &&
+		!strings.EqualFold(v, constants.AcceleratorVendorAlibabaPPU) {
 		return
 	}
 	if spec == nil || containerIndex < 0 || containerIndex >= len(spec.Containers) {

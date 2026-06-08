@@ -49,6 +49,8 @@ func GetPartitionStrategy(vendor string) PartitionStrategy {
 	case constants.AcceleratorVendorNvidia, constants.AcceleratorVendorExample:
 		// Default to NVIDIA MIG strategy for backward compatibility
 		return &NVIDIAMIGStrategy{}
+	case constants.AcceleratorVendorAlibabaPPU:
+		return &PPUMIGStrategy{}
 	default:
 		return &NotSupportedPartitionStrategy{}
 	}
@@ -67,6 +69,21 @@ func (s *NotSupportedPartitionStrategy) CheckAvailability(gpu *tfv1.GPU, templat
 
 func (s *NotSupportedPartitionStrategy) AllocateSlot(gpu *tfv1.GPU, templateInfo config.PartitionTemplateInfo, gpuConfig *config.GpuInfo) (*uint32, *uint32, *uint32, error) {
 	return nil, nil, nil, fmt.Errorf("vendor %s is not supported for GPU partition strategy", gpu.Status.Vendor)
+}
+
+// PPUMIGStrategy implements PartitionStrategy for Alibaba PPU (Zhenwu 810E).
+// PPU is NVML "same-name" with real MIG (GI/CI created via
+// nvmlDeviceCreateGpuInstance using NVIDIA-scheme profile ids), so its
+// placement-slot allocation matches NVIDIA MIG and is reused by embedding
+// NVIDIAMIGStrategy. Kept as a distinct type so PPU-specific MIG behavior
+// (e.g. the per-GI capability device-node model, which differs from NVIDIA)
+// can diverge here without affecting NVIDIA.
+type PPUMIGStrategy struct {
+	NVIDIAMIGStrategy
+}
+
+func (s *PPUMIGStrategy) Name() string {
+	return "ppu-mig"
 }
 
 // NVIDIAMIGStrategy implements PartitionStrategy for NVIDIA MIG

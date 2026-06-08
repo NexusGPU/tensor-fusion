@@ -129,6 +129,42 @@ func TestAllocateWorkerDevicesPinsAscendVisibleDevicesByIndex(t *testing.T) {
 	}
 }
 
+func TestAllocateWorkerDevicesPinsPpuVisibleDevicesByIndex(t *testing.T) {
+	t.Parallel()
+
+	controller := NewAllocationController(&fakeDeviceController{
+		devices: map[string]*api.DeviceInfo{
+			"ppu-1": {
+				UUID:       "ppu-GPU-bbb",
+				Vendor:     constants.AcceleratorVendorAlibabaPPU,
+				Index:      1,
+				DeviceNode: map[string]string{"/dev/alixpu_ppu1": "/dev/alixpu_ppu1"},
+			},
+			"ppu-0": {
+				UUID:       "ppu-GPU-aaa",
+				Vendor:     constants.AcceleratorVendorAlibabaPPU,
+				Index:      0,
+				DeviceNode: map[string]string{"/dev/alixpu_ppu0": "/dev/alixpu_ppu0"},
+			},
+		},
+	})
+
+	allocation, err := controller.AllocateWorkerDevices(&api.WorkerInfo{
+		WorkerUID:        "worker-ppu-soft",
+		AllocatedDevices: []string{"ppu-1", "ppu-0"},
+		IsolationMode:    tfv1.IsolationModeSoft,
+	})
+	if err != nil {
+		t.Fatalf("allocate worker devices: %v", err)
+	}
+	if got := allocation.Envs[constants.PpuVisibleDevicesEnv]; got != "0,1" {
+		t.Fatalf("unexpected %s: %q", constants.PpuVisibleDevicesEnv, got)
+	}
+	if _, exists := allocation.Envs[constants.NvidiaVisibleAllDeviceEnv]; exists {
+		t.Fatalf("did not expect %s for PPU vendor", constants.NvidiaVisibleAllDeviceEnv)
+	}
+}
+
 func TestAllocateWorkerDevicesDoesNotPinMthreadsVisibleDevicesForPartitionedMode(t *testing.T) {
 	t.Parallel()
 

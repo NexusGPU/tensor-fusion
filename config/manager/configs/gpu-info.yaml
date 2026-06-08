@@ -22,6 +22,16 @@
   costPerHour: 0.25
   fp16TFlops: 66
 
+# Alibaba PPU (真武 / Zhenwu 810E) — NVML/CUDA-compatible, 96 GiB HBM.
+# Real-hardware MIG splits into at most 2 instances (two 4g48gb half-cards)
+# per `ppu-smi mig -lgip`. NVML does not expose peak TFLOPS; from vendor spec.
+- model: PPU-ZW810E
+  fullModelName: "Alibaba PPU Zhenwu 810E"
+  vendor: PPU
+  costPerHour: 1.0
+  fp16TFlops: 386
+  maxPartitions: 2
+
 # Ascend 310P3 NPU with vNPU partition support
 - model: Ascend_310P3
   fullModelName: "Ascend 310P3"
