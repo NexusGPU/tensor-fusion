@@ -24,8 +24,12 @@ import (
 
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/expander"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	k8sVer "k8s.io/apimachinery/pkg/util/version"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/component-base/configz"
@@ -50,6 +54,9 @@ const (
 	configName             = "componentconfig"
 	clientConnectionCfgKey = "clientConnection"
 	kubeConfigCfgKey       = "kubeconfig"
+
+	nominatedPodRequeueWatchdogIntervalEnv     = "NOMINATED_POD_REQUEUE_WATCHDOG_INTERVAL"
+	defaultNominatedPodRequeueWatchdogInterval = 10 * time.Minute
 )
 
 func SetupScheduler(
@@ -219,10 +226,112 @@ func RunScheduler(ctx context.Context,
 			<-mgr.Elected()
 		}
 		logger.Info("Starting scheduling cycle")
+		startNominatedPodRequeueWatchdog(
+			ctx,
+			sched,
+			cc.PodMaxInUnschedulablePodsDuration,
+		)
 		sched.Run(ctx)
 		cc.EventBroadcaster.Shutdown()
 	}()
 	return nil
+}
+
+func startNominatedPodRequeueWatchdog(
+	ctx context.Context,
+	sched *scheduler.Scheduler,
+	podMaxInUnschedulablePodsDuration time.Duration,
+) {
+	if sched == nil || sched.SchedulingQueue == nil {
+		return
+	}
+
+	logger := klog.FromContext(ctx)
+	interval := nominatedPodRequeueWatchdogInterval(logger)
+	threshold := podMaxInUnschedulablePodsDuration + time.Minute
+	if threshold <= time.Minute {
+		threshold = 6 * time.Minute
+	}
+	logger.Info("Starting nominated TensorFusion pod requeue watchdog",
+		"interval", interval,
+		"threshold", threshold,
+	)
+
+	go func() {
+		firstObserved := map[types.UID]time.Time{}
+		wait.UntilWithContext(ctx, func(ctx context.Context) {
+			now := time.Now()
+			pods, summary := sched.SchedulingQueue.PendingPods()
+			seen := map[types.UID]struct{}{}
+			podsToActivate := map[string]*corev1.Pod{}
+
+			for _, pod := range pods {
+				if pod == nil {
+					continue
+				}
+				seen[pod.UID] = struct{}{}
+
+				if !shouldWatchNominatedPod(pod) {
+					delete(firstObserved, pod.UID)
+					continue
+				}
+
+				firstSeenAt, ok := firstObserved[pod.UID]
+				if !ok {
+					firstObserved[pod.UID] = now
+					continue
+				}
+				if now.Sub(firstSeenAt) < threshold {
+					continue
+				}
+
+				podsToActivate[string(pod.UID)] = pod
+				firstObserved[pod.UID] = now
+			}
+
+			for uid := range firstObserved {
+				if _, ok := seen[uid]; !ok {
+					delete(firstObserved, uid)
+				}
+			}
+
+			if len(podsToActivate) == 0 {
+				return
+			}
+			logger.Info("Force activating nominated TensorFusion pods left in scheduling queue",
+				"count", len(podsToActivate),
+				"threshold", threshold,
+				"summary", summary,
+			)
+			sched.SchedulingQueue.Activate(logger, podsToActivate)
+		}, interval)
+	}()
+}
+
+func nominatedPodRequeueWatchdogInterval(logger klog.Logger) time.Duration {
+	raw := os.Getenv(nominatedPodRequeueWatchdogIntervalEnv)
+	if raw == "" {
+		return defaultNominatedPodRequeueWatchdogInterval
+	}
+
+	interval, err := time.ParseDuration(raw)
+	if err != nil || interval <= 0 {
+		logger.Info("Invalid nominated pod requeue watchdog interval, using default",
+			"env", nominatedPodRequeueWatchdogIntervalEnv,
+			"value", raw,
+			"default", defaultNominatedPodRequeueWatchdogInterval,
+			"error", err,
+		)
+		return defaultNominatedPodRequeueWatchdogInterval
+	}
+	return interval
+}
+
+func shouldWatchNominatedPod(pod *corev1.Pod) bool {
+	return pod.Spec.NodeName == "" &&
+		pod.DeletionTimestamp == nil &&
+		pod.Status.NominatedNodeName != "" &&
+		utils.IsTensorFusionWorker(pod)
 }
 
 func getRecorderFactory(cc *schedulerserverconfig.CompletedConfig) profile.RecorderFactory {
