@@ -190,6 +190,8 @@ spec:
                 type: string
               message:
                 type: string
+              model:
+                type: string
               nodeSelector:
                 additionalProperties:
                   type: string
@@ -200,6 +202,40 @@ spec:
                   NUMA node
                 format: int32
                 type: integer
+              nvLink:
+                description: GPUNvLinkStatus records point-to-point NVLink topology
+                  and bandwidth hints for scheduler decisions.
+                properties:
+                  peerCount:
+                    format: int32
+                    type: integer
+                  peers:
+                    items:
+                      description: GPUNvLinkPeer describes NVLink connectivity from
+                        current GPU to a peer GPU.
+                      properties:
+                        bandwidthMBps:
+                          format: int64
+                          type: integer
+                        linkCount:
+                          format: int32
+                          type: integer
+                        linkVersion:
+                          format: int32
+                          type: integer
+                        peerUUID:
+                          type: string
+                      required:
+                      - peerUUID
+                      type: object
+                    type: array
+                  totalBandwidthMBps:
+                    format: int64
+                    type: integer
+                  totalLinkCount:
+                    format: int32
+                    type: integer
+                type: object
               phase:
                 default: Pending
                 enum:
@@ -303,6 +339,7 @@ spec:
                 type: array
               topology:
                 description: |-
+                  Deprecated: superseded by NvLink for v1 compatibility; retained for migration, will be removed in a future API version.
                   Topology contains normalized GPU interconnect topology metadata,
                   used by the GPUNetworkTopologyAware scheduler plugin.
                 properties:
@@ -344,6 +381,9 @@ spec:
                   Hypervisor will watch kubelet device plugin to report all GPUs already used by nvidia-device-plugin
                   GPUs will be grouped by usedBy to be used by different Pods,
                   tensor-fusion annotation or nvidia-device-plugin resource block
+                enum:
+                - tensor-fusion
+                - nvidia-device-plugin
                 type: string
               uuid:
                 type: string
