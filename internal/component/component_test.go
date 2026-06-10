@@ -2,6 +2,8 @@ package component
 
 import (
 	"testing"
+
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 )
 
 func TestCalculateDesiredUpdatedDelta(t *testing.T) {
@@ -86,5 +88,25 @@ func TestCalculateDesiredUpdatedDelta(t *testing.T) {
 				t.Errorf("calculateDesiredUpdatedDelta() batchIdx = %v, want %v", gotBatchIdx, tt.wantBatchIdx)
 			}
 		})
+	}
+}
+
+func TestIsAutoUpdateEnableNilPolicy(t *testing.T) {
+	// Regression: pools without nodePoolRollingUpdatePolicy must not panic
+	// (nil pointer dereference) and default to auto-update disabled.
+	pool := &tfv1.GPUPool{
+		Spec: tfv1.GPUPoolSpec{
+			NodeManagerConfig: &tfv1.NodeManagerConfig{},
+		},
+	}
+	if got := isAutoUpdateEnable(&Hypervisor{}, pool); got {
+		t.Errorf("isAutoUpdateEnable() with nil NodePoolRollingUpdatePolicy = %v, want false", got)
+	}
+
+	pool.Spec.NodeManagerConfig.NodePoolRollingUpdatePolicy = &tfv1.NodeRollingUpdatePolicy{
+		AutoUpdateHypervisor: true,
+	}
+	if got := isAutoUpdateEnable(&Hypervisor{}, pool); !got {
+		t.Errorf("isAutoUpdateEnable() with AutoUpdateHypervisor=true = %v, want true", got)
 	}
 }
