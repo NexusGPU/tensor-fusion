@@ -148,6 +148,32 @@ func GetAcceleratorLibPath(vendor string) string {
 	}
 }
 
+// GetMetricsExporterResourceName returns the kubelet device-plugin resource
+// name the vendor's metrics exporter expects to see in PodResources entries
+// when attributing device metrics to pods (DCGM exporter and equivalents).
+// The pod-resources proxy rewrites tensor-fusion.ai/index_* entries to this
+// name based on the node's vendor. Sources:
+//   - NVIDIA: DCGM exporter matches "nvidia.com/gpu"
+//   - MThreads: vgpu-provider-internal/musa/metadata.yaml devicePlugin.resourceName
+//   - Ascend: generic "huawei.com/npu" (model-specific Ascend310P/910
+//     registrations vary per fleet; generic name chosen deliberately)
+//   - PPU: vgpu-provider-internal/ppu/metadata.yaml devicePlugin.resourceName
+//
+// Unknown vendors fall back to the NVIDIA name for backward compatibility
+// with single-vendor deployments that never declare a vendor.
+func GetMetricsExporterResourceName(vendor string) string {
+	switch strings.TrimSpace(vendor) {
+	case AcceleratorVendorMThreads:
+		return "mthreads.com/vgpu"
+	case AcceleratorVendorHuaweiAscendNPU:
+		return "huawei.com/npu"
+	case AcceleratorVendorAlibabaPPU:
+		return "aliyun.com/ppu"
+	default:
+		return NvidiaGPUKey
+	}
+}
+
 // GetSoftLimiterLibName returns the LD_PRELOAD .so basename for a vendor's
 // soft-isolation limiter. The middleware image must ship the matching file
 // under `/build/` so the soft-limiter init container can `cp /build/*` into

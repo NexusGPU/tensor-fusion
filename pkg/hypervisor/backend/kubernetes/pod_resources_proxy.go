@@ -39,18 +39,18 @@ const (
 	proxySocketDir  = "/var/lib/kubelet/pod-resources-tf"
 	proxySocketPath = proxySocketDir + "/kubelet.sock"
 
-	// nvidiaGPUResourceName is what DCGM exporter expects in resource_name.
-	nvidiaGPUResourceName = "nvidia.com/gpu"
-
 	upstreamDialTimeout = 5 * time.Second
 )
 
 // PodResourcesProxy is a transparent kubelet PodResources gRPC proxy that
 // rewrites tensor-fusion device-plugin entries (resource_name=tensor-fusion.ai/index_*,
-// device_ids=<dummy>) into the form DCGM exporter understands:
+// device_ids=<dummy>) into the form the node vendor's metrics exporter
+// understands (DCGM exporter and equivalents):
 //
-//	resource_name = "nvidia.com/gpu"
-//	device_ids    = [<real NVML UUID>, ...]
+//	resource_name = vendor's device-plugin resource name (e.g. "nvidia.com/gpu",
+//	                "mthreads.com/vgpu", "huawei.com/npu" — see
+//	                constants.GetMetricsExporterResourceName)
+//	device_ids    = [<real device UUID>, ...]
 //
 // Real UUIDs come from pod annotations written by the TF scheduler, checked in
 // this preference order:
@@ -66,6 +66,10 @@ type PodResourcesProxy struct {
 	upstream     podresv1.PodResourcesListerClient
 	cache        *PodCacheManager
 
+	// resourceName is what TF device-plugin entries are rewritten to —
+	// resolved from the node's accelerator vendor at startup.
+	resourceName string
+
 	server   *grpc.Server
 	lis      net.Listener
 	stopOnce sync.Once
@@ -80,7 +84,7 @@ type PodResourcesProxy struct {
 // the proxy down. We deliberately don't watch a context here: Backend.Stop()
 // is the single shutdown path, and a ctx-watcher goroutine would race with it
 // on exit.
-func StartPodResourcesProxy(cache *PodCacheManager) (*PodResourcesProxy, error) {
+func StartPodResourcesProxy(cache *PodCacheManager, vendor string) (*PodResourcesProxy, error) {
 	if cache == nil {
 		return nil, fmt.Errorf("pod cache manager is required")
 	}
@@ -115,14 +119,15 @@ func StartPodResourcesProxy(cache *PodCacheManager) (*PodResourcesProxy, error) 
 		upstreamConn: conn,
 		upstream:     podresv1.NewPodResourcesListerClient(conn),
 		cache:        cache,
+		resourceName: constants.GetMetricsExporterResourceName(vendor),
 		server:       grpc.NewServer(),
 		lis:          lis,
 	}
 	podresv1.RegisterPodResourcesListerServer(p.server, p)
 
 	go func() {
-		klog.Infof("pod-resources proxy listening on %s (upstream %s)",
-			proxySocketPath, upstreamKubeletPodResourcesSocket)
+		klog.Infof("pod-resources proxy listening on %s (upstream %s, rewriting to %s)",
+			proxySocketPath, upstreamKubeletPodResourcesSocket, p.resourceName)
 		if err := p.server.Serve(lis); err != nil {
 			klog.Errorf("pod-resources proxy server exited: %v", err)
 		}
@@ -177,7 +182,7 @@ func (p *PodResourcesProxy) List(
 				if !isTFDevicePluginResource(cd.GetResourceName()) {
 					continue
 				}
-				cd.ResourceName = nvidiaGPUResourceName
+				cd.ResourceName = p.resourceName
 				cd.DeviceIds = append(cd.DeviceIds[:0], uuids...)
 				cd.Topology = nil // let DCGM resolve NUMA via NVML
 				rewritten++

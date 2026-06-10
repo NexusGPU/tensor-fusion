@@ -204,3 +204,22 @@ func TestContainerGPUIDs_NilPod(t *testing.T) {
 		t.Errorf("containerGPUIDs(no annotations) = %v, want nil", got)
 	}
 }
+
+func TestMetricsExporterResourceNamePerVendor(t *testing.T) {
+	tests := []struct {
+		vendor string
+		want   string
+	}{
+		{constants.AcceleratorVendorNvidia, "nvidia.com/gpu"},
+		{constants.AcceleratorVendorMThreads, "mthreads.com/vgpu"},
+		{constants.AcceleratorVendorHuaweiAscendNPU, "huawei.com/npu"},
+		{constants.AcceleratorVendorAlibabaPPU, "aliyun.com/ppu"},
+		{"", "nvidia.com/gpu"},        // undeclared vendor: backward compat
+		{"Unknown", "nvidia.com/gpu"}, // unenumerated vendor: backward compat
+	}
+	for _, tt := range tests {
+		if got := constants.GetMetricsExporterResourceName(tt.vendor); got != tt.want {
+			t.Errorf("GetMetricsExporterResourceName(%q) = %q, want %q", tt.vendor, got, tt.want)
+		}
+	}
+}
