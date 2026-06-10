@@ -29,6 +29,9 @@ type GPUStatus struct {
 	// +kubebuilder:default="NVIDIA"
 	Vendor string `json:"vendor"`
 
+	// +optional
+	Model string `json:"model,omitempty"`
+
 	Capacity  *Resource `json:"capacity"`
 	Available *Resource `json:"available"`
 
@@ -63,14 +66,47 @@ type GPUStatus struct {
 	RunningApps []*RunningAppDetail `json:"runningApps,omitempty"`
 
 	// +optional
+	NvLink *GPUNvLinkStatus `json:"nvLink,omitempty"`
+
+	// +optional
 	// AllocatedPartitions tracks allocated partitions on this GPU
 	// Key is partitionUUID, value contains template info and allocated resources
 	AllocatedPartitions map[string]AllocatedPartition `json:"allocatedPartitions,omitempty"`
 
 	// +optional
+	// Deprecated: superseded by NvLink for v1 compatibility; retained for migration, will be removed in a future API version.
 	// Topology contains normalized GPU interconnect topology metadata,
 	// used by the GPUNetworkTopologyAware scheduler plugin.
 	Topology *GPUTopologyStatus `json:"topology,omitempty"`
+}
+
+// GPUNvLinkStatus records point-to-point NVLink topology and bandwidth hints for scheduler decisions.
+type GPUNvLinkStatus struct {
+	// +optional
+	PeerCount int32 `json:"peerCount,omitempty"`
+
+	// +optional
+	TotalLinkCount int32 `json:"totalLinkCount,omitempty"`
+
+	// +optional
+	TotalBandwidthMBps int64 `json:"totalBandwidthMBps,omitempty"`
+
+	// +optional
+	Peers []GPUNvLinkPeer `json:"peers,omitempty"`
+}
+
+// GPUNvLinkPeer describes NVLink connectivity from current GPU to a peer GPU.
+type GPUNvLinkPeer struct {
+	PeerUUID string `json:"peerUUID"`
+
+	// +optional
+	LinkCount int32 `json:"linkCount,omitempty"`
+
+	// +optional
+	LinkVersion int32 `json:"linkVersion,omitempty"`
+
+	// +optional
+	BandwidthMBps int64 `json:"bandwidthMBps,omitempty"`
 }
 
 // GPUTopologyStatus represents the normalized topology metadata for a GPU.
@@ -93,11 +129,13 @@ type GPUPeerLinkStatus struct {
 	Bandwidth int64 `json:"bandwidth,omitempty"`
 }
 
+// +kubebuilder:validation:Enum=tensor-fusion;nvidia-device-plugin
 // +default="tensor-fusion"
 type UsedBySystem string
 
 var (
-	UsedByTensorFusion UsedBySystem = UsedBySystem(DomainPrefix)
+	UsedByTensorFusion       UsedBySystem = UsedBySystem(DomainPrefix)
+	UsedByNvidiaDevicePlugin UsedBySystem = "nvidia-device-plugin"
 )
 
 type RunningAppDetail struct {

@@ -66,102 +66,106 @@ func TestAllocateWorkerDevicesPinsNvidiaVisibleDevicesByUUID(t *testing.T) {
 	}
 }
 
-func TestAllocateWorkerDevicesPinsMthreadsVisibleDevicesByIndex(t *testing.T) {
+func TestAllocateWorkerDevicesPinsIndexBasedVisibleDevices(t *testing.T) {
 	t.Parallel()
 
-	controller := NewAllocationController(&fakeDeviceController{
-		devices: map[string]*api.DeviceInfo{
-			"mt-1": {
-				UUID:       "gpu-mt-bbb",
-				Vendor:     constants.AcceleratorVendorMThreads,
-				Index:      1,
-				DeviceNode: map[string]string{"/dev/mtgpu.1": "/dev/mtgpu.1"},
+	tests := []struct {
+		name          string
+		devices       map[string]*api.DeviceInfo
+		workerUID     string
+		allocated     []string
+		isolationMode tfv1.IsolationModeType
+		wantEnvs      map[string]string
+	}{
+		{
+			name: "MThreads pins hook and runtime filter envs by index",
+			devices: map[string]*api.DeviceInfo{
+				"mt-1": {
+					UUID:       "gpu-mt-bbb",
+					Vendor:     constants.AcceleratorVendorMThreads,
+					Index:      1,
+					DeviceNode: map[string]string{"/dev/mtgpu.1": "/dev/mtgpu.1"},
+				},
+				"mt-0": {
+					UUID:       "gpu-mt-aaa",
+					Vendor:     constants.AcceleratorVendorMThreads,
+					Index:      0,
+					DeviceNode: map[string]string{"/dev/mtgpu.0": "/dev/mtgpu.0"},
+				},
 			},
-			"mt-0": {
-				UUID:       "gpu-mt-aaa",
-				Vendor:     constants.AcceleratorVendorMThreads,
-				Index:      0,
-				DeviceNode: map[string]string{"/dev/mtgpu.0": "/dev/mtgpu.0"},
-			},
-		},
-	})
-
-	allocation, err := controller.AllocateWorkerDevices(&api.WorkerInfo{
-		WorkerUID:        "worker-mthreads-shared",
-		AllocatedDevices: []string{"mt-1", "mt-0"},
-		IsolationMode:    tfv1.IsolationModeShared,
-	})
-	if err != nil {
-		t.Fatalf("allocate worker devices: %v", err)
-	}
-	if got := allocation.Envs[constants.MthreadsVisibleDevicesEnv]; got != "0,1" {
-		t.Fatalf("unexpected %s: %q", constants.MthreadsVisibleDevicesEnv, got)
-	}
-	if _, exists := allocation.Envs[constants.NvidiaVisibleAllDeviceEnv]; exists {
-		t.Fatalf("did not expect %s for MThreads vendor", constants.NvidiaVisibleAllDeviceEnv)
-	}
-}
-
-func TestAllocateWorkerDevicesPinsAscendVisibleDevicesByIndex(t *testing.T) {
-	t.Parallel()
-
-	controller := NewAllocationController(&fakeDeviceController{
-		devices: map[string]*api.DeviceInfo{
-			"npu-0": {
-				UUID:       "npu-aaa",
-				Vendor:     constants.AcceleratorVendorHuaweiAscendNPU,
-				Index:      0,
-				DeviceNode: map[string]string{"/dev/davinci0": "/dev/davinci0"},
+			workerUID:     "worker-mthreads-shared",
+			allocated:     []string{"mt-1", "mt-0"},
+			isolationMode: tfv1.IsolationModeShared,
+			wantEnvs: map[string]string{
+				constants.MthreadsVisibleDevicesEnv: "0,1",
+				constants.MusaVisibleDevicesEnv:     "0,1",
 			},
 		},
-	})
-
-	allocation, err := controller.AllocateWorkerDevices(&api.WorkerInfo{
-		WorkerUID:        "worker-ascend-shared",
-		AllocatedDevices: []string{"npu-0"},
-		IsolationMode:    tfv1.IsolationModeSoft,
-	})
-	if err != nil {
-		t.Fatalf("allocate worker devices: %v", err)
-	}
-	if got := allocation.Envs[constants.AscendVisibleDevicesEnv]; got != "0" {
-		t.Fatalf("unexpected %s: %q", constants.AscendVisibleDevicesEnv, got)
-	}
-}
-
-func TestAllocateWorkerDevicesPinsPpuVisibleDevicesByIndex(t *testing.T) {
-	t.Parallel()
-
-	controller := NewAllocationController(&fakeDeviceController{
-		devices: map[string]*api.DeviceInfo{
-			"ppu-1": {
-				UUID:       "ppu-GPU-bbb",
-				Vendor:     constants.AcceleratorVendorAlibabaPPU,
-				Index:      1,
-				DeviceNode: map[string]string{"/dev/alixpu_ppu1": "/dev/alixpu_ppu1"},
+		{
+			name: "Ascend pins hook env by index",
+			devices: map[string]*api.DeviceInfo{
+				"npu-0": {
+					UUID:       "npu-aaa",
+					Vendor:     constants.AcceleratorVendorHuaweiAscendNPU,
+					Index:      0,
+					DeviceNode: map[string]string{"/dev/davinci0": "/dev/davinci0"},
+				},
 			},
-			"ppu-0": {
-				UUID:       "ppu-GPU-aaa",
-				Vendor:     constants.AcceleratorVendorAlibabaPPU,
-				Index:      0,
-				DeviceNode: map[string]string{"/dev/alixpu_ppu0": "/dev/alixpu_ppu0"},
+			workerUID:     "worker-ascend-shared",
+			allocated:     []string{"npu-0"},
+			isolationMode: tfv1.IsolationModeSoft,
+			wantEnvs: map[string]string{
+				constants.AscendVisibleDevicesEnv: "0",
 			},
 		},
-	})
+		{
+			name: "PPU pins hook and CUDA runtime filter envs by index",
+			devices: map[string]*api.DeviceInfo{
+				"ppu-1": {
+					UUID:       "ppu-GPU-bbb",
+					Vendor:     constants.AcceleratorVendorAlibabaPPU,
+					Index:      1,
+					DeviceNode: map[string]string{"/dev/alixpu_ppu1": "/dev/alixpu_ppu1"},
+				},
+				"ppu-0": {
+					UUID:       "ppu-GPU-aaa",
+					Vendor:     constants.AcceleratorVendorAlibabaPPU,
+					Index:      0,
+					DeviceNode: map[string]string{"/dev/alixpu_ppu0": "/dev/alixpu_ppu0"},
+				},
+			},
+			workerUID:     "worker-ppu-soft",
+			allocated:     []string{"ppu-1", "ppu-0"},
+			isolationMode: tfv1.IsolationModeSoft,
+			wantEnvs: map[string]string{
+				constants.PpuVisibleDevicesEnv:  "0,1",
+				constants.CudaVisibleDevicesEnv: "0,1",
+			},
+		},
+	}
 
-	allocation, err := controller.AllocateWorkerDevices(&api.WorkerInfo{
-		WorkerUID:        "worker-ppu-soft",
-		AllocatedDevices: []string{"ppu-1", "ppu-0"},
-		IsolationMode:    tfv1.IsolationModeSoft,
-	})
-	if err != nil {
-		t.Fatalf("allocate worker devices: %v", err)
-	}
-	if got := allocation.Envs[constants.PpuVisibleDevicesEnv]; got != "0,1" {
-		t.Fatalf("unexpected %s: %q", constants.PpuVisibleDevicesEnv, got)
-	}
-	if _, exists := allocation.Envs[constants.NvidiaVisibleAllDeviceEnv]; exists {
-		t.Fatalf("did not expect %s for PPU vendor", constants.NvidiaVisibleAllDeviceEnv)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			controller := NewAllocationController(&fakeDeviceController{devices: tt.devices})
+			allocation, err := controller.AllocateWorkerDevices(&api.WorkerInfo{
+				WorkerUID:        tt.workerUID,
+				AllocatedDevices: tt.allocated,
+				IsolationMode:    tt.isolationMode,
+			})
+			if err != nil {
+				t.Fatalf("allocate worker devices: %v", err)
+			}
+			for envName, want := range tt.wantEnvs {
+				if got := allocation.Envs[envName]; got != want {
+					t.Fatalf("unexpected %s: %q, want %q", envName, got, want)
+				}
+			}
+			if _, exists := allocation.Envs[constants.NvidiaVisibleAllDeviceEnv]; exists {
+				t.Fatalf("did not expect %s for non-NVIDIA vendor", constants.NvidiaVisibleAllDeviceEnv)
+			}
+		})
 	}
 }
 

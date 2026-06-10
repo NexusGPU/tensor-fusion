@@ -387,7 +387,17 @@ type ComponentConfig struct {
 	Hypervisor *HypervisorConfig `json:"hypervisor,omitempty"`
 
 	// +optional
+	NodeDiscovery *NodeDiscoveryConfig `json:"nodeDiscovery,omitempty"`
+
+	// +optional
 	Client *ClientConfig `json:"client,omitempty"`
+}
+
+type NodeDiscoveryConfig struct {
+	Image string `json:"image,omitempty"`
+
+	// +optional
+	PodTemplate *runtime.RawExtension `json:"podTemplate,omitempty"`
 }
 
 type HypervisorConfig struct {
@@ -422,7 +432,12 @@ type WorkerConfig struct {
 type ClientConfig struct {
 	// Image is the default client image, used when no ProviderConfig is found for the vendor
 	// When ProviderConfig exists, remoteClient image from ProviderConfig takes precedence
+	// Deprecated: superseded by RemoteModeImage/EmbeddedModeImage for v1 compatibility; retained for migration, will be removed in a future API version.
 	Image string `json:"image,omitempty"`
+
+	RemoteModeImage string `json:"remoteModeImage,omitempty"`
+
+	EmbeddedModeImage string `json:"embeddedModeImage,omitempty"`
 
 	OperatorEndpoint string `json:"operatorEndpoint,omitempty"`
 
@@ -431,6 +446,12 @@ type ClientConfig struct {
 
 	// +optional
 	PatchToContainer *runtime.RawExtension `json:"patchToContainer,omitempty"`
+
+	// +optional
+	PatchToEmbeddedWorkerContainer *runtime.RawExtension `json:"patchToEmbeddedWorkerContainer,omitempty"`
+
+	// +optional
+	PatchEmbeddedWorkerToPod *runtime.RawExtension `json:"patchEmbeddedWorkerToPod,omitempty"`
 }
 
 // GPUPoolStatus defines the observed state of GPUPool.

@@ -257,19 +257,30 @@ spec:
                           properties:
                             client:
                               properties:
+                                embeddedModeImage:
+                                  type: string
                                 image:
                                   description: |-
                                     Image is the default client image, used when no ProviderConfig is found for the vendor
                                     When ProviderConfig exists, remoteClient image from ProviderConfig takes precedence
+                                    Deprecated: superseded by RemoteModeImage/EmbeddedModeImage for v1 compatibility; retained for migration, will be removed in a future API version.
                                   type: string
                                 operatorEndpoint:
                                   type: string
+                                patchEmbeddedWorkerToPod:
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
                                 patchToContainer:
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                                patchToEmbeddedWorkerContainer:
                                   type: object
                                   x-kubernetes-preserve-unknown-fields: true
                                 patchToPod:
                                   type: object
                                   x-kubernetes-preserve-unknown-fields: true
+                                remoteModeImage:
+                                  type: string
                               type: object
                             hypervisor:
                               properties:
@@ -291,6 +302,14 @@ spec:
                                   type: integer
                                 vectorImage:
                                   type: string
+                              type: object
+                            nodeDiscovery:
+                              properties:
+                                image:
+                                  type: string
+                                podTemplate:
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
                               type: object
                             worker:
                               properties:
