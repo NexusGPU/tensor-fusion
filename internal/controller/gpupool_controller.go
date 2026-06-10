@@ -428,6 +428,21 @@ func (r *GPUPoolReconciler) reconcilePoolComponents(ctx context.Context, pool *t
 	return ctrlResult, utilerrors.NewAggregate(errs)
 }
 
+// GetPoolNodeSelectorHash returns the change-detection hash for pool node
+// matching. DefaultVendor is part of the hash so that a vendor-only change
+// (e.g. correcting a wrongly defaulted vendor) re-stamps node labels even
+// when the selector itself is unchanged.
+func GetPoolNodeSelectorHash(nodeManagerConfig *tfv1.NodeManagerConfig) string {
+	if len(nodeManagerConfig.MultiVendorNodeSelector) > 0 {
+		return utils.GetObjectHash(nodeManagerConfig.MultiVendorNodeSelector)
+	}
+	defaultVendor := constants.AcceleratorVendorNvidia
+	if nodeManagerConfig.DefaultVendor != "" {
+		defaultVendor = nodeManagerConfig.DefaultVendor
+	}
+	return utils.GetObjectHash(nodeManagerConfig.NodeSelector, defaultVendor)
+}
+
 func (r *GPUPoolReconciler) reconcilePoolSelectorChange(ctx context.Context, pool *tfv1.GPUPool) error {
 	nodeManagerConfig := pool.Spec.NodeManagerConfig
 	if nodeManagerConfig == nil {
@@ -436,7 +451,7 @@ func (r *GPUPoolReconciler) reconcilePoolSelectorChange(ctx context.Context, poo
 
 	// Handle MultiVendorNodeSelector mode
 	if len(nodeManagerConfig.MultiVendorNodeSelector) > 0 {
-		hash := utils.GetObjectHash(nodeManagerConfig.MultiVendorNodeSelector)
+		hash := GetPoolNodeSelectorHash(nodeManagerConfig)
 		if v, ok := poolSelectorChangeMap.Load(pool.Name); ok && v.(string) == hash {
 			return nil
 		}
@@ -482,7 +497,7 @@ func (r *GPUPoolReconciler) reconcilePoolSelectorChange(ctx context.Context, poo
 
 	// Handle default NodeSelector mode
 	if nodeManagerConfig.NodeSelector != nil {
-		hash := utils.GetObjectHash(nodeManagerConfig.NodeSelector)
+		hash := GetPoolNodeSelectorHash(nodeManagerConfig)
 		if v, ok := poolSelectorChangeMap.Load(pool.Name); ok && v.(string) == hash {
 			return nil
 		}

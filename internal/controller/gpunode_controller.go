@@ -494,6 +494,16 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	// add vendor-specific env vars for multi-vendor support
 	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
 		nodeVendor := node.Labels[constants.AcceleratorLabelVendor]
+		if nodeVendor != vendor {
+			// A stale hardware-vendor label (e.g. left over from a pool vendor
+			// change) must not diverge the hypervisor's vendor judgement
+			// (soft-limiter selection, SupportsSoftIsolation) from the
+			// accelerator lib / provider config composed above, which all use
+			// the pool-resolved vendor.
+			log.Info("node hardware-vendor label differs from pool-resolved vendor, using pool-resolved vendor",
+				"node", node.Name, "labelVendor", nodeVendor, "poolVendor", vendor)
+			nodeVendor = vendor
+		}
 		acceleratorLibPath := constants.GetAcceleratorLibPath(nodeVendor)
 		spec.Containers[0].Env = utils.AppendEnvVarsIfNotExists(spec.Containers[0].Env, corev1.EnvVar{
 			Name:  constants.TFHardwareVendorEnv,

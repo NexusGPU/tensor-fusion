@@ -149,12 +149,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	// update k8s node hash
-	hash := ""
-	if len(pool.Spec.NodeManagerConfig.MultiVendorNodeSelector) > 0 {
-		hash = utils.GetObjectHash(pool.Spec.NodeManagerConfig.MultiVendorNodeSelector)
-	} else {
-		hash = utils.GetObjectHash(pool.Spec.NodeManagerConfig.NodeSelector)
-	}
+	hash := GetPoolNodeSelectorHash(pool.Spec.NodeManagerConfig)
 	if node.Labels[constants.LabelNodeSelectorHash] != hash {
 		if err := UpdateK8SNodeSelectorHashAndVendor(ctx, r.Client, node, hash, node.Labels[constants.AcceleratorLabelVendor]); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update k8s node hash: %w", err)
