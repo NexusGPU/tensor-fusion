@@ -726,6 +726,11 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	spec.PriorityClassName = constants.NodeCriticalPriorityClassName
 
 	enableVector := pool.Spec.ComponentConfig.Hypervisor != nil && pool.Spec.ComponentConfig.Hypervisor.EnableVector
+	// Opt-in: the kubelet pod-resources proxy (DCGM exporter integration) is
+	// off by default. When enabled, the operator injects the pod-resources-tf
+	// hostPath volume/mount and propagates the same env into the hypervisor
+	// container so the backend agrees with what the operator decided here.
+	enablePodResourcesProxy := os.Getenv(constants.HypervisorPodResourcesProxyEnabledEnv) == constants.TrueStringValue
 
 	// when no config or config is not valid, reset hypervisor&vector container
 	if enableVector && len(spec.Containers) != 2 {
@@ -804,8 +809,21 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 		},
 	})
 
+	if enablePodResourcesProxy {
+		// Sibling dir for the pod-resources proxy socket exposed to DCGM exporter.
+		spec.Volumes = append(spec.Volumes, v1.Volume{
+			Name: constants.KubeletPodResourcesProxyVolumeName,
+			VolumeSource: v1.VolumeSource{
+				HostPath: &v1.HostPathVolumeSource{
+					Path: constants.KubeletPodResourcesProxyPath,
+					Type: ptr.To(v1.HostPathDirectoryOrCreate),
+				},
+			},
+		})
+	}
+
 	composeHypervisorInitContainer(ctx, spec, pool, vendor, compatibleWithNvidiaContainerToolkit)
-	composeHypervisorContainer(spec, pool, vendor, enableVector)
+	composeHypervisorContainer(spec, pool, vendor, enableVector, enablePodResourcesProxy)
 
 	if enableVector {
 		composeVectorContainer(spec, pool)
@@ -911,7 +929,7 @@ func composeHypervisorInitContainer(
 	}
 }
 
-func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor string, enableVector bool) {
+func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor string, enableVector bool, enablePodResourcesProxy bool) {
 	spec.HostNetwork = true
 	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
 		Name:      constants.DataVolumeName,
@@ -928,6 +946,12 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 		Name:      constants.KubeletPodResourcesVolumeName,
 		MountPath: constants.KubeletPodResourcesPath,
 	})
+	if enablePodResourcesProxy {
+		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
+			Name:      constants.KubeletPodResourcesProxyVolumeName,
+			MountPath: constants.KubeletPodResourcesProxyPath,
+		})
+	}
 	if enableVector {
 		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, v1.VolumeMount{
 			Name:      constants.LogsVolumeName,
@@ -1002,6 +1026,13 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 		Name:  constants.HypervisorDevicePluginPathEnv,
 		Value: constants.KubeletDevicePluginPath,
 	})
+
+	if enablePodResourcesProxy {
+		spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
+			Name:  constants.HypervisorPodResourcesProxyEnabledEnv,
+			Value: constants.TrueStringValue,
+		})
+	}
 
 	if len(spec.Containers[0].Resources.Requests) == 0 {
 		spec.Containers[0].Resources.Requests = hypervisorDefaultRequests

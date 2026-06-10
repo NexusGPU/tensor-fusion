@@ -29,10 +29,11 @@ type KubeletBackend struct {
 	deviceController     framework.DeviceController
 	allocationController framework.WorkerAllocationController
 
-	apiClient      *APIClient
-	podCacher      *PodCacheManager
-	devicePlugins  []*DevicePlugin
-	deviceDetector *external_dp.DevicePluginDetector
+	apiClient         *APIClient
+	podCacher         *PodCacheManager
+	devicePlugins     []*DevicePlugin
+	deviceDetector    *external_dp.DevicePluginDetector
+	podResourcesProxy *PodResourcesProxy
 
 	nodeName string
 
@@ -121,6 +122,24 @@ func (b *KubeletBackend) Start() error {
 			klog.Info("Device plugin detector started")
 		}
 	}
+
+	// Start the kubelet pod-resources gRPC proxy that exposes TF workers to
+	// the node vendor's metrics exporter (DCGM exporter and equivalents) with
+	// real device UUIDs under the vendor's resource name. Opt-in: only runs
+	// when the operator has both injected the pod-resources-tf hostPath mount
+	// and set ENABLE_POD_RESOURCES_PROXY=true on this container. Failure here
+	// is non-fatal: the rest of the hypervisor must keep running.
+	if os.Getenv(constants.HypervisorPodResourcesProxyEnabledEnv) == constants.TrueStringValue {
+		proxy, err := StartPodResourcesProxy(b.podCacher, b.deviceController.GetAcceleratorVendor())
+		if err != nil {
+			klog.Warningf("Failed to start pod-resources proxy (exporter pod labels will be missing): %v", err)
+		} else {
+			b.podResourcesProxy = proxy
+			klog.Info("Pod-resources proxy started")
+		}
+	} else {
+		klog.Info("Pod-resources proxy disabled (set ENABLE_POD_RESOURCES_PROXY=true to enable)")
+	}
 	return nil
 }
 
@@ -131,6 +150,10 @@ func (b *KubeletBackend) Stop() error {
 				klog.Errorf("Failed to stop device plugin %d: %v", i, err)
 			}
 		}
+	}
+
+	if b.podResourcesProxy != nil {
+		b.podResourcesProxy.Stop()
 	}
 
 	if b.deviceDetector != nil {
