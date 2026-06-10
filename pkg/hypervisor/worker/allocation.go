@@ -140,15 +140,19 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 			if len(names) > 0 {
 				envs[constants.NvidiaVisibleAllDeviceEnv] = strings.Join(names, ",")
 			}
-		} else if envName, ok := indexBasedVisibleDevicesEnvName(deviceInfos); ok {
-			// MThreads / Ascend: mthreads-container-runtime and
-			// ascend-docker-runtime both accept comma-separated device
-			// indices — matches what vgpu-provider-internal's MUSA
-			// AccelAssignPartition emits in partitioned mode
-			// (`MTHREADS_VISIBLE_DEVICES=%u`).
+		} else if envNames := indexBasedVisibleDevicesEnvNames(deviceInfos); len(envNames) > 0 {
+			// MThreads / Ascend / PPU: the runtime hooks accept
+			// comma-separated device indices — matches what
+			// vgpu-provider-internal's MUSA AccelAssignPartition emits in
+			// partitioned mode (`MTHREADS_VISIBLE_DEVICES=%u`). Vendors with
+			// an in-container runtime filter env get it pinned to the same
+			// list (e.g. `MUSA_VISIBLE_DEVICES`).
 			indices := buildPinnedDeviceIndices(deviceInfos)
 			if len(indices) > 0 {
-				envs[envName] = strings.Join(indices, ",")
+				pinned := strings.Join(indices, ",")
+				for _, envName := range envNames {
+					envs[envName] = pinned
+				}
 			}
 		}
 	}
@@ -352,27 +356,36 @@ func buildPinnedNvidiaDeviceNames(deviceInfos []*api.DeviceInfo) []string {
 	})
 }
 
-// indexBasedVisibleDevicesEnvName returns the *_VISIBLE_DEVICES env var name
-// for vendors whose container runtime hook honors a comma-separated *device
-// index* list. NVIDIA is handled separately because its hook canonicalizes
-// on UUIDs, not indices. Returns ("", false) for vendors with no such
-// convention; the caller skips env injection in that case.
-func indexBasedVisibleDevicesEnvName(deviceInfos []*api.DeviceInfo) (string, bool) {
+// indexBasedVisibleDevicesEnvNames returns the *_VISIBLE_DEVICES env var
+// names for vendors whose container runtime hook honors a comma-separated
+// *device index* list. NVIDIA is handled separately because its hook
+// canonicalizes on UUIDs, not indices. Vendors with a two-layer convention
+// (host-side hook env + in-container runtime filter env) get both names, so
+// the runtime library can't see unallocated cards even when the hook is
+// bypassed (legacy / privileged mounts) — matches what each provider's
+// partitioned path emits. Returns nil for vendors with no such convention;
+// the caller skips env injection in that case.
+func indexBasedVisibleDevicesEnvNames(deviceInfos []*api.DeviceInfo) []string {
 	if len(deviceInfos) == 0 {
-		return "", false
+		return nil
 	}
 	vendor := strings.TrimSpace(deviceInfos[0].Vendor)
 	switch {
 	case strings.EqualFold(vendor, constants.AcceleratorVendorMThreads):
-		return constants.MthreadsVisibleDevicesEnv, true
+		// mt-container-toolkit hook + libmusart.so runtime filter — see
+		// vgpu-provider-internal/musa/metadata.yaml (visibleDevicesEnv /
+		// runtimeVisibleDevicesEnv) and accelerator.cpp emitting both.
+		return []string{constants.MthreadsVisibleDevicesEnv, constants.MusaVisibleDevicesEnv}
 	case strings.EqualFold(vendor, constants.AcceleratorVendorHuaweiAscendNPU):
-		return constants.AscendVisibleDevicesEnv, true
+		return []string{constants.AscendVisibleDevicesEnv}
 	case strings.EqualFold(vendor, constants.AcceleratorVendorAlibabaPPU):
 		// PPU's env-var partition path emits `PPU_VISIBLE_DEVICES=%u` (index);
 		// non-partitioned workers pin the same env to the cards they got.
-		return constants.PpuVisibleDevicesEnv, true
+		// PPU is CUDA-compatible, so the standard CUDA_VISIBLE_DEVICES is the
+		// runtime-side filter — see vgpu-provider-internal/ppu/metadata.yaml.
+		return []string{constants.PpuVisibleDevicesEnv, constants.CudaVisibleDevicesEnv}
 	}
-	return "", false
+	return nil
 }
 
 // buildPinnedDeviceIndices returns the deduped, sorted device indices the

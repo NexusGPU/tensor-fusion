@@ -37,7 +37,12 @@ const (
 	// device indices it actually handed out, so the hook can't accidentally
 	// inject every card on the host even if the image baked in `=all`.
 	MthreadsVisibleDevicesEnv = "MTHREADS_VISIBLE_DEVICES"
-	AscendVisibleDevicesEnv   = "ASCEND_VISIBLE_DEVICES"
+	// Runtime-side filter consumed by libmusart.so inside the container —
+	// second line of defense beyond the mt-container-toolkit hook env above.
+	// MUSA's partitioned path emits both (musa/accelerator.cpp), so the
+	// non-partitioned pinning must too.
+	MusaVisibleDevicesEnv   = "MUSA_VISIBLE_DEVICES"
+	AscendVisibleDevicesEnv = "ASCEND_VISIBLE_DEVICES"
 	// PPU is CUDA-compatible; its OCI hook honors PPU_VISIBLE_DEVICES (alias of
 	// CUDA_VISIBLE_DEVICES) and accepts a comma-separated device-index list in
 	// non-partitioned modes — see vgpu-provider-internal/ppu/accelerator.cpp.

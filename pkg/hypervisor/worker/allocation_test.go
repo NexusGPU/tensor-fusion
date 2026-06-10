@@ -97,6 +97,9 @@ func TestAllocateWorkerDevicesPinsMthreadsVisibleDevicesByIndex(t *testing.T) {
 	if got := allocation.Envs[constants.MthreadsVisibleDevicesEnv]; got != "0,1" {
 		t.Fatalf("unexpected %s: %q", constants.MthreadsVisibleDevicesEnv, got)
 	}
+	if got := allocation.Envs[constants.MusaVisibleDevicesEnv]; got != "0,1" {
+		t.Fatalf("unexpected %s: %q", constants.MusaVisibleDevicesEnv, got)
+	}
 	if _, exists := allocation.Envs[constants.NvidiaVisibleAllDeviceEnv]; exists {
 		t.Fatalf("did not expect %s for MThreads vendor", constants.NvidiaVisibleAllDeviceEnv)
 	}
@@ -159,6 +162,9 @@ func TestAllocateWorkerDevicesPinsPpuVisibleDevicesByIndex(t *testing.T) {
 	}
 	if got := allocation.Envs[constants.PpuVisibleDevicesEnv]; got != "0,1" {
 		t.Fatalf("unexpected %s: %q", constants.PpuVisibleDevicesEnv, got)
+	}
+	if got := allocation.Envs[constants.CudaVisibleDevicesEnv]; got != "0,1" {
+		t.Fatalf("unexpected %s: %q", constants.CudaVisibleDevicesEnv, got)
 	}
 	if _, exists := allocation.Envs[constants.NvidiaVisibleAllDeviceEnv]; exists {
 		t.Fatalf("did not expect %s for PPU vendor", constants.NvidiaVisibleAllDeviceEnv)
