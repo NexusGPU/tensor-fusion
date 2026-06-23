@@ -65,16 +65,38 @@ func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	// Update the provider manager cache
+	// Always refresh the in-memory caches: after an operator restart the
+	// ProviderManager is empty and must be repopulated from every ProviderConfig.
 	r.ProviderManager.UpdateProvider(&providerConfig)
 	gpuInfos := r.ProviderManager.GetAllGpuInfos()
 	gpuallocator.LoadPartitionTemplatesFromConfig(gpuInfos)
 	logger.Info("partition templates refreshed", "gpuInfoCount", len(gpuInfos))
 	logger.Info("ProviderConfig synced", "vendor", providerConfig.Spec.Vendor)
 
-	if err := r.restartHypervisorPodsForVendor(ctx, providerConfig.Spec.Vendor); err != nil {
-		logger.Error(err, "failed to restart hypervisor pods", "vendor", providerConfig.Spec.Vendor)
-		return ctrl.Result{}, err
+	// Only bounce hypervisor pods when the spec actually changed since we last
+	// acted on it. On operator restart / informer resync the controller gets a
+	// reconcile for the unchanged object; recreating healthy hypervisor pods
+	// there is disruptive and surprising. The last-acted spec hash is persisted
+	// on the ProviderConfig itself so the comparison survives operator restarts.
+	newHash := utils.GetObjectHash(providerConfig.Spec)
+	oldHash := providerConfig.Annotations[constants.ProviderConfigSpecHashAnnotation]
+
+	if oldHash != "" && oldHash != newHash {
+		if err := r.restartHypervisorPodsForVendor(ctx, providerConfig.Spec.Vendor); err != nil {
+			logger.Error(err, "failed to restart hypervisor pods", "vendor", providerConfig.Spec.Vendor)
+			return ctrl.Result{}, err
+		}
+	}
+
+	if oldHash != newHash {
+		patch := client.MergeFrom(providerConfig.DeepCopy())
+		if providerConfig.Annotations == nil {
+			providerConfig.Annotations = map[string]string{}
+		}
+		providerConfig.Annotations[constants.ProviderConfigSpecHashAnnotation] = newHash
+		if err := r.Patch(ctx, &providerConfig, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("persist provider-config spec hash: %w", err)
+		}
 	}
 
 	return ctrl.Result{}, nil

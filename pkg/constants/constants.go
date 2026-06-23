@@ -286,6 +286,12 @@ var (
 
 	// Short troubleshooting hint (e.g. eviction error snippet); not parsed.
 	DefragEvictSkipNodeReasonAnnotation = Domain + "/defrag-evict-skip-reason"
+
+	// ProviderConfigSpecHashAnnotation records the spec hash the ProviderConfig
+	// controller last acted on. Used to bounce hypervisor pods only when the
+	// spec actually changes, so an operator restart / informer resync (which
+	// replays the unchanged object) does not needlessly recreate them.
+	ProviderConfigSpecHashAnnotation = Domain + "/provider-config-hash"
 )
 
 const (
