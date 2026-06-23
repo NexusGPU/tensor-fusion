@@ -55,12 +55,19 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 		}
 
 		var tfEnv *TensorFusionEnv
+		var schedulerCancel context.CancelFunc
 		BeforeEach(func() {
 			tfEnv = NewTensorFusionEnvBuilder().
 				AddPoolWithNodeCount(1).SetGpuCountPerNode(2).
 				Build()
 			cfg := tfEnv.GetConfig()
-			go mockSchedulerLoop(ctx, cfg)
+			// Derive a cancellable context so the mock scheduler goroutine is
+			// stopped in AfterEach instead of leaking for the whole suite. Leaked
+			// loops list every pod every 50ms and starve later specs on
+			// CPU-constrained CI, which surfaced as flaky worker-reselection.
+			var schedulerCtx context.Context
+			schedulerCtx, schedulerCancel = context.WithCancel(ctx)
+			go mockSchedulerLoop(schedulerCtx, cfg)
 			pool := tfEnv.GetGPUPool(0)
 			// Create workload first
 			workload := createTensorFusionWorkload(pool.Name, workloadNamespacedName, 2)
@@ -84,6 +91,12 @@ var _ = Describe("TensorFusionConnection Controller", func() {
 		})
 
 		AfterEach(func() {
+			// Stop this spec's mock scheduler goroutine so it does not leak
+			// across specs and starve later ones under constrained CI CPU.
+			if schedulerCancel != nil {
+				schedulerCancel()
+			}
+
 			// Clean up connection
 			connection := &tfv1.TensorFusionConnection{}
 			err := k8sClient.Get(ctx, typeNamespacedName, connection)

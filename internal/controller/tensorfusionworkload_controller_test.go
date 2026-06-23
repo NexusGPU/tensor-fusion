@@ -42,6 +42,7 @@ import (
 
 var _ = Describe("TensorFusionWorkload Controller", func() {
 	var tfEnv *TensorFusionEnv
+	var schedulerCancel context.CancelFunc
 	key := client.ObjectKey{Name: "mock", Namespace: "default"}
 
 	BeforeEach(func() {
@@ -49,9 +50,17 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 			AddPoolWithNodeCount(1).SetGpuCountPerNode(5).
 			Build()
 		cfg := tfEnv.GetConfig()
-		go mockSchedulerLoop(ctx, cfg)
+		// Stop the mock scheduler goroutine in AfterEach instead of leaking it
+		// for the whole suite; leaked loops list every pod every 50ms and
+		// starve later specs on CPU-constrained CI.
+		var schedulerCtx context.Context
+		schedulerCtx, schedulerCancel = context.WithCancel(ctx)
+		go mockSchedulerLoop(schedulerCtx, cfg)
 	})
 	AfterEach(func() {
+		if schedulerCancel != nil {
+			schedulerCancel()
+		}
 		cleanupWorkload(key)
 		tfEnv.Cleanup()
 	})
