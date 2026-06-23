@@ -204,8 +204,15 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 		return admission.Allowed("no valid container to inject tensor-fusion, skipped")
 	}
 
-	// Check if final profile is valid and contains valid GPU resource requests
-	if tfInfo.Profile.Resources.Requests.Tflops.IsZero() &&
+	// Check if final profile is valid and contains valid GPU resource requests.
+	// In partitioned mode with an explicit partition template, the resources are
+	// fixed by the template (the allocator accounts capacity from the template,
+	// not from req.Request — see allocPartition/CalculatePartitionResourceUsage),
+	// so an empty request is expected and must not be rejected here.
+	pinnedPartition := tfInfo.Profile.Isolation == tfv1.IsolationModePartitioned &&
+		tfInfo.Profile.PartitionTemplateID != ""
+	if !pinnedPartition &&
+		tfInfo.Profile.Resources.Requests.Tflops.IsZero() &&
 		tfInfo.Profile.Resources.Requests.ComputePercent.IsZero() &&
 		tfInfo.Profile.Resources.Requests.Vram.IsZero() {
 		return admission.Errored(http.StatusInternalServerError,
