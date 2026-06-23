@@ -149,6 +149,101 @@ var _ = Describe("TensorFusionPodMutator", func() {
 			Expect(op.Value).To(Equal("tensor-fusion-scheduler"))
 		})
 
+		It("should allow a partitioned pod with an explicit partition template and no resource request", func() {
+			// In partitioned mode the resources are fixed by the partition template
+			// (the allocator accounts capacity from the template, not from the
+			// request), so an empty request must not be rejected at admission.
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod-partitioned",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					OwnerReferences: []metav1.OwnerReference{{
+						APIVersion: "apps/v1",
+						Kind:       "ReplicaSet",
+						Name:       "test-workload",
+						UID:        "owner-uid",
+						Controller: ptr.To(true),
+					}},
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                    "mock",
+						constants.InjectContainerAnnotation:     "main",
+						constants.IsolationModeAnnotation:       string(tfv1.IsolationModePartitioned),
+						constants.PartitionTemplateIDAnnotation: "1g.10gb",
+						constants.GPUModelAnnotation:            "A100",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "main",
+						Image: "test-image",
+					}},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object:    runtime.RawExtension{Raw: podBytes},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeTrue())
+		})
+
+		It("should still reject a partitioned pod without a partition template and no resource request", func() {
+			// Without an explicit template the scheduler picks the smallest fitting
+			// template from the request, so a resource request is still required.
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod-partitioned-no-tmpl",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.TensorFusionEnabledLabelKey: "true",
+					},
+					OwnerReferences: []metav1.OwnerReference{{
+						APIVersion: "apps/v1",
+						Kind:       "ReplicaSet",
+						Name:       "test-workload",
+						UID:        "owner-uid",
+						Controller: ptr.To(true),
+					}},
+					Annotations: map[string]string{
+						constants.GpuPoolKey:                "mock",
+						constants.InjectContainerAnnotation: "main",
+						constants.IsolationModeAnnotation:   string(tfv1.IsolationModePartitioned),
+						constants.GPUModelAnnotation:        "A100",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "main",
+						Image: "test-image",
+					}},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object:    runtime.RawExtension{Raw: podBytes},
+					Operation: admissionv1.Create,
+					Namespace: "default",
+				},
+			}
+
+			resp := mutator.Handle(ctx, req)
+			Expect(resp.Allowed).To(BeFalse())
+			Expect(resp.Result.Message).To(ContainSubstring("tflops request is not set"))
+		})
+
 		It("should successfully mutate a pod with TF resources", func() {
 			// Set up a workload profile for testing
 			workloadProfile := &tfv1.WorkloadProfile{
