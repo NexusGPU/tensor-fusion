@@ -28,7 +28,7 @@ grep -l 'nvLink' charts/tensor-fusion/crds/tensor-fusion.ai_gpus.yaml \
 
 ### 2. 校验收紧项检查
 
-v2 CRD 收紧了两处校验，校验跟随 CRD 生效、**与运行哪个镜像无关**（即镜像回滚也救不了），需提前确认存量数据不命中：
+v2 CRD 和控制器行为引入了以下兼容性检查点，CRD 校验跟随 CRD 生效、**与运行哪个镜像无关**（即镜像回滚也救不了），需提前确认存量数据不命中：
 
 ```bash
 # nodeManagerConfig 变为必填（正常部署必有此字段，确认即可）
@@ -54,7 +54,7 @@ kubectl get gpupools -A -o json \
 ### 3. 轻量备份（保险，不再是回退的依赖项）
 
 ```bash
-ns=tensor-fusion
+ns=tensor-fusion  # 改成实际 Helm release/operator 所在 namespace
 mkdir -p tf-backup
 for kind in tensorfusionclusters gpupools workloadprofiles schedulingconfigtemplates; do
   kubectl get ${kind}.tensor-fusion.ai -A -o yaml > tf-backup/${kind}.yaml
@@ -78,7 +78,7 @@ kubectl get crd providerconfigs.tensor-fusion.ai   # 新增 CRD 已就绪
 不走 `helm upgrade` 时，chart 模板的变更需要手动同步。v1 → v2 的 RBAC 差异有两处（缺了 operator/hypervisor 会报 Forbidden）：
 
 - **operator ClusterRole**（`rbac.yaml`）：`tensor-fusion.ai` 资源列表新增 `providerconfigs`
-- **hypervisor Role**（`rbac-hypervisor.yaml`）：资源新增 `providerconfigs`，verbs 新增 `create`
+- **hypervisor Role**（`rbac-hypervisor.yaml`）：`tensor-fusion.ai` 资源列表需要包含 `providerconfigs`，并保留模板里的 `get/list/watch/create/update/patch` verbs
 
 可以直接用新版 chart 渲染后单独 apply 这两个文件：
 
@@ -130,6 +130,35 @@ spec:
 - 新旧 key 并存无副作用；v2 稳定运行后再删除旧的 `tensor-fusion.ai/index`。
 - 旧 key 的容量按你现网原有声明值保留（v1 device plugin 实际广播 512 个 slot，每 worker 请求 1）。
 
+### 步骤 2.6：规划并标记节点隔离/切分模式
+
+v2 需要提前规划每个 GPU 节点承担的隔离模式，并在 **Kubernetes Node** 上打 label：
+
+```bash
+kubectl label node <node-name> tensor-fusion.ai/isolationMode=soft --overwrite
+# 可选值：shared / soft / hard / partitioned
+```
+
+这不是业务 Pod 上的 `tensor-fusion.ai/isolation` annotation。两者职责不同：
+
+| 位置 | Key | 作用 |
+|---|---|---|
+| Node label | `tensor-fusion.ai/isolationMode` | operator 同步到 GPUNode，并作为该节点 hypervisor 的 `--isolation-mode=<mode>` 启动参数；hypervisor 上报 GPU.status.isolationMode |
+| Pod annotation | `tensor-fusion.ai/isolation` | workload 请求的隔离模式；scheduler/allocator 会按 GPU.status.isolationMode 过滤 |
+
+因此要保证节点规划和 workload 请求一致：soft workload 只能稳定落到 soft 节点，hard workload 落到 hard 节点，partitioned workload 落到 partitioned 节点。未规划时不要依赖默认值，尤其是默认 workload isolation 为 `soft`，但 hypervisor 侧默认参数不是升级策略的一部分，可能导致升级后调度过滤无可用 GPU。
+
+建议升级前按 pool/节点用途一次性标好：
+
+```bash
+kubectl label node <soft-node> tensor-fusion.ai/isolationMode=soft --overwrite
+kubectl label node <hard-node> tensor-fusion.ai/isolationMode=hard --overwrite
+kubectl label node <partition-node> tensor-fusion.ai/isolationMode=partitioned --overwrite
+kubectl get nodes -L tensor-fusion.ai/isolationMode
+```
+
+后续修改该 label 时，v2 operator 会删除并重建对应节点的 hypervisor pod 以应用新的 `--isolation-mode`，应按维护变更处理，避免和运行中 worker/业务混在同一个升级动作里。
+
 ### 步骤 3：换 operator 镜像（直接改 Deployment）
 
 ```bash
@@ -162,7 +191,7 @@ kubectl get gpu -A -o wide            # status 正常更新
 # 多厂商环境：确认节点 hardware-vendor 标签与所属 pool 的 defaultVendor 一致
 # （升级窗口内 GPUPool 被写入时 CRD 默认值可能把 vendor 临时填成 NVIDIA，
 #   旧版 operator 会按错值给节点打标，导致 hypervisor 的 soft 限流器选错厂商库）
-kubectl get nodes -o custom-columns='NODE:.metadata.name,VENDOR:.metadata.labels.tensor-fusion\.ai/hardware-vendor'
+kubectl get nodes -o custom-columns='NODE:.metadata.name,VENDOR:.metadata.labels.tensor-fusion\.ai/hardware-vendor,ISOLATION:.metadata.labels.tensor-fusion\.ai/isolationMode'
 # 提交一个测试 Workload，确认正常调度
 ```
 
@@ -194,5 +223,6 @@ kubectl -n ${ns} rollout undo deploy/tensor-fusion-controller
 - [ ] 已轻量备份 CR 与 controller Deployment
 - [ ] 先 `kubectl apply` CRD，再同步 RBAC，最后换镜像
 - [ ] （Karpenter 环境）NodeOverlay 已声明 `index_0..index_f`，且保留旧 `tensor-fusion.ai/index`
+- [ ] GPU 节点已按用途标记 `tensor-fusion.ai/isolationMode=shared|soft|hard|partitioned`
 - [ ] 升级后 Cluster/Pool=Running，测试 Workload 可调度
 - [ ] 回退预案明确：只回滚镜像，CRD 不动
