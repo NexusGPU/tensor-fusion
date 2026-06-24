@@ -1,11 +1,9 @@
 apiVersion: kubescheduler.config.k8s.io/v1
 kind: KubeSchedulerConfiguration
 clientConnection:
-  kubeconfig: $HOME/.kube/config
-  # for local development benchmarking only
+  kubeconfig: ""
   qps: 1000
   burst: 2000
-percentageOfNodesToScore: 50
 profiles:
 # Refer: https://kubernetes.io/docs/reference/scheduling/config/
 - schedulerName: tensor-fusion-scheduler
@@ -59,15 +57,26 @@ profiles:
       tflopsWeight: 0.3
   - name: GPUNetworkTopologyAware
     args:
-      # Topology enforcement mode: "soft" (default) or "hard"
+      # Topology enforcement mode:
+      #   soft (default) - only score; never reject a node
+      #   hard           - reject nodes whose best combination exceeds maxAllowedTier
+      # NOTE: this `mode` is the scheduler plugin mode, unrelated to Pod IsolationMode
+      # (shared / soft / hard / partitioned).
       mode: soft
-      # Topology data source: "auto" (default), "numa", or "vendor"
+      # Topology data source:
+      #   auto (default) - prefer vendor topology (GPU.status.topology.peers[].tier),
+      #                    fall back to NUMA when vendor data is missing
+      #   numa           - force NUMA-only evaluation
+      #   vendor         - force vendor interconnect topology
       topologySource: auto
-      # Maximum allowed topology tier (1=same NUMA, 2=cross NUMA, 3=unknown)
+      # Tier ceiling for "acceptable" GPU combinations (lower = closer / better):
+      #   0 = same NVLink group, 1 = same NUMA, 2 = cross NUMA, 3 = unknown
       maxAllowedTier: 1
-      # Policy when topology data is missing: "treat-as-worst" (default) or "reject"
+      # When a GPU has no topology data, treat it as the worst tier (still scorable
+      # in soft mode) or reject it outright in hard mode.
       unknownTopologyPolicy: treat-as-worst
-      # Prefer least-damage GPU selection for single-GPU requests
+      # Single-GPU requests prefer GPUs that won't break existing high-quality
+      # NVLink / NUMA groups (helps preserve future multi-GPU allocations).
       preferLeastDamage: true
   - name: NodeResourcesFit
     args:
