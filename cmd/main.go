@@ -220,6 +220,7 @@ func main() {
 		setupLog.Error(err, "unable to get k8s version")
 		os.Exit(1)
 	}
+
 	// set env for feature gating, so that to be compatible with different k8s version
 	setupLog.Info("detected API server version for feature gating", "version", version.String())
 	_ = os.Setenv(constants.KubeApiVersionMajorEnv, version.Major)
