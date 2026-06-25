@@ -162,9 +162,13 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 				gpuStore, _, _ := r.Allocator.GetAllocationInfo()
 				metrics.SetGPUAllocationMetrics(gpuStore, pod)
 				metrics.SetWorkerMetricsByWorkload(pod, gpuStore)
-			} else {
+			} else if r.Allocator.IsReady() {
 				metrics.RemoveGPUAllocationMetrics(pod.Name)
 				metrics.RemoveWorkerMetrics(pod.Name, time.Now())
+			} else {
+				return ctrl.Result{
+					RequeueAfter: time.Second,
+				}, nil
 			}
 		}
 		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
