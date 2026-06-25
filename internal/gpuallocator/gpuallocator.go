@@ -1802,7 +1802,6 @@ func (s *GpuAllocator) reconcileAllocationState() {
 			log.FromContext(ctx).Info("Correcting gpu running apps", "gpu", gpuKey.Name, "runningApps", len(gpu.Status.RunningApps))
 		}
 	}
-
 	// reconcile quota store state
 	s.quotaStore.ReconcileQuotaStore(ctx, s.uniqueAllocation)
 	log.FromContext(ctx).Info("Quota store data reconciled")
