@@ -17,7 +17,10 @@ import (
 // Handles both the systemd driver (underscores, e.g.
 // "kubepods-burstable-pode38c7b11_d82c_4169_b866_361c5d7103af.slice") and the
 // cgroupfs driver (dashes, e.g. "kubepods/burstable/pode38c7b11-...-...").
-var podUIDCgroupRe = regexp.MustCompile(`pod([0-9a-fA-F]{8}[-_][0-9a-fA-F]{4}[-_][0-9a-fA-F]{4}[-_][0-9a-fA-F]{4}[-_][0-9a-fA-F]{12})`)
+var podUIDCgroupRe = regexp.MustCompile(
+	`pod([0-9a-fA-F]{8}[-_][0-9a-fA-F]{4}[-_]` +
+		`[0-9a-fA-F]{4}[-_][0-9a-fA-F]{4}[-_][0-9a-fA-F]{12})`,
+)
 
 // GetWorkerInfoFromHostPID extracts worker information from a process's environment
 // by reading /proc/{hostPID}/environ and /proc/{hostPID}/status

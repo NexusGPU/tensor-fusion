@@ -214,7 +214,10 @@ func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]
 		// from their environment (e.g. vLLM's spawned EngineCore subprocess).
 		workerUID, found := resolveWorkerUID(mappingInfo, workerLookup, workerUIDs)
 		if !found {
-			klog.V(5).Infof("Worker not found for process %d (ns=%q pod=%q podUID=%q)", hostPID, mappingInfo.Namespace, mappingInfo.PodName, mappingInfo.PodUID)
+			klog.V(5).Infof(
+				"Worker not found for process %d (ns=%q pod=%q podUID=%q)",
+				hostPID, mappingInfo.Namespace, mappingInfo.PodName, mappingInfo.PodUID,
+			)
 			continue
 		}
 
@@ -282,7 +285,11 @@ func (w *WorkerController) buildWorkerUIDSet() map[string]struct{} {
 // pod UID (environ-independent) for processes that stripped POD_NAME/POD_NAMESPACE
 // from their environment (e.g. vLLM's spawned EngineCore subprocess). Returns
 // ("", false) when the process cannot be attributed to a tracked worker.
-func resolveWorkerUID(mappingInfo *framework.ProcessMappingInfo, workerLookup map[string]string, workerUIDs map[string]struct{}) (string, bool) {
+func resolveWorkerUID(
+	mappingInfo *framework.ProcessMappingInfo,
+	workerLookup map[string]string,
+	workerUIDs map[string]struct{},
+) (string, bool) {
 	if mappingInfo == nil {
 		return "", false
 	}

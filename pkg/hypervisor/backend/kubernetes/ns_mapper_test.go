@@ -14,7 +14,7 @@ func TestGetPodUIDFromCgroup(t *testing.T) {
 	}{
 		{
 			name:    "systemd driver (underscores)",
-			cgroup:  "0::/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pode38c7b11_d82c_4169_b866_361c5d7103af.slice/cri-containerd-abc123.scope\n",
+			cgroup:  "12:devices:/kubepods-burstable-pode38c7b11_d82c_4169_b866_361c5d7103af.slice\n",
 			wantUID: "e38c7b11-d82c-4169-b866-361c5d7103af",
 		},
 		{
