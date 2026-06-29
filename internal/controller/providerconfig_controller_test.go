@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"time"
+
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -69,6 +71,17 @@ var _ = Describe("ProviderConfig controller", func() {
 			Scheme:          k8sClient.Scheme(),
 			ProviderManager: provider.NewManager(k8sClient),
 		}
+
+		// A prior spec's AfterEach deletes these objects, but ProviderConfig and
+		// GPUNode carry finalizers, so deletion completes asynchronously. Wait for
+		// any leftovers to be fully gone before recreating; otherwise Create fails
+		// with "object is being deleted ... already exists".
+		Eventually(func(g Gomega) {
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: pcName}, &tfv1.ProviderConfig{})
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: nodeName}, &tfv1.GPUNode{})
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		}).WithTimeout(30 * time.Second).WithPolling(250 * time.Millisecond).Should(Succeed())
 
 		Expect(k8sClient.Create(ctx, &tfv1.ProviderConfig{
 			ObjectMeta: metav1.ObjectMeta{Name: pcName},

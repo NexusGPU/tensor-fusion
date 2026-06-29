@@ -116,6 +116,13 @@ type ProcessMappingInfo struct {
 	ContainerName string
 	// GuestID is a composite identifier: namespace_podName_containerName
 	GuestID string
+	// PodUID is the Kubernetes pod UID parsed from the process cgroup. It is
+	// environ-independent (the kubelet-created cgroup is inherited by every
+	// child process and cannot be scrubbed by the workload, unlike POD_NAME in
+	// /proc/<pid>/environ). Used as a fallback when Namespace/PodName are empty
+	// because the GPU-holding process stripped its environment (e.g. vLLM's
+	// spawned EngineCore subprocess). Matches WorkerInfo.WorkerUID (== pod.UID).
+	PodUID string
 	// HostPID is the process ID in the host namespace
 	HostPID uint32
 	// GuestPID is the process ID in the container namespace
