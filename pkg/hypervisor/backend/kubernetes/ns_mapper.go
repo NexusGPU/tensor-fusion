@@ -5,12 +5,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 )
+
+// podUIDCgroupRe matches the Kubernetes pod UID embedded in a cgroup path.
+// Handles both the systemd driver (underscores, e.g.
+// "kubepods-burstable-pode38c7b11_d82c_4169_b866_361c5d7103af.slice") and the
+// cgroupfs driver (dashes, e.g. "kubepods/burstable/pode38c7b11-...-...").
+var podUIDCgroupRe = regexp.MustCompile(`pod([0-9a-fA-F]{8}[-_][0-9a-fA-F]{4}[-_][0-9a-fA-F]{4}[-_][0-9a-fA-F]{4}[-_][0-9a-fA-F]{12})`)
 
 // GetWorkerInfoFromHostPID extracts worker information from a process's environment
 // by reading /proc/{hostPID}/environ and /proc/{hostPID}/status
@@ -55,14 +62,38 @@ func GetWorkerInfoFromHostPID(hostPID uint32) (*framework.ProcessMappingInfo, er
 		containerPID = hostPID
 	}
 
+	// Parse the pod UID from the cgroup as an environ-independent fallback.
+	// Some GPU workloads spawn the process that actually holds device memory
+	// with a stripped environment (e.g. vLLM's EngineCore subprocess drops
+	// POD_NAME/POD_NAMESPACE), which would otherwise make this process
+	// unattributable. The cgroup is set by the kubelet and inherited by every
+	// child, so it survives such stripping.
+	podUID := getPodUIDFromCgroup(procDir)
+
 	return &framework.ProcessMappingInfo{
 		Namespace:     namespace,
 		PodName:       podName,
 		ContainerName: containerName,
 		GuestID:       fmt.Sprintf("%s_%s_%s", namespace, podName, containerName),
+		PodUID:        podUID,
 		HostPID:       hostPID,
 		GuestPID:      containerPID,
 	}, nil
+}
+
+// getPodUIDFromCgroup reads /proc/<pid>/cgroup and extracts the Kubernetes pod
+// UID, normalized to the canonical dash-separated form (matching pod.UID, i.e.
+// WorkerInfo.WorkerUID). Returns "" when no pod UID can be found.
+func getPodUIDFromCgroup(procDir string) string {
+	data, err := os.ReadFile(filepath.Join(procDir, "cgroup"))
+	if err != nil {
+		return ""
+	}
+	m := podUIDCgroupRe.FindSubmatch(data)
+	if m == nil {
+		return ""
+	}
+	return strings.ReplaceAll(string(m[1]), "_", "-")
 }
 
 // getContainerPIDFromStatus reads the container PID (NSpid) from /proc/{pid}/status

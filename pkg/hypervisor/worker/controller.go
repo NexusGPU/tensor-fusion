@@ -177,6 +177,7 @@ func (w *WorkerController) ListWorkers() ([]*api.WorkerInfo, error) {
 func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]*api.WorkerMetrics, error) {
 	// Step 1: Build worker lookup map: "namespace/podName" -> WorkerUID
 	workerLookup := w.buildWorkerLookupMap()
+	workerUIDs := w.buildWorkerUIDSet()
 
 	// Step 2: Get all process information from device controller
 	processInfos, err := w.deviceController.GetProcessInformation()
@@ -208,19 +209,12 @@ func (w *WorkerController) GetWorkerMetrics() (map[string]map[string]map[string]
 			continue
 		}
 
-		// Skip if namespace or podName is empty (not a TensorFusion worker).
-		// GuestID="" would never fire because GetWorkerInfoFromHostPID builds it
-		// from empty strings as "__", so check the underlying identity fields.
-		if mappingInfo.Namespace == "" || mappingInfo.PodName == "" {
-			continue
-		}
-
-		// Look up WorkerUID using namespace/podName
-		workerKey := mappingInfo.Namespace + "/" + mappingInfo.PodName
-		workerUID, found := workerLookup[workerKey]
+		// Resolve the owning worker by environ identity, falling back to the
+		// cgroup-derived pod UID for processes that stripped POD_NAME/POD_NAMESPACE
+		// from their environment (e.g. vLLM's spawned EngineCore subprocess).
+		workerUID, found := resolveWorkerUID(mappingInfo, workerLookup, workerUIDs)
 		if !found {
-			// Process belongs to a pod not tracked by this hypervisor
-			klog.V(5).Infof("Worker not found for key %s (process %d)", workerKey, hostPID)
+			klog.V(5).Infof("Worker not found for process %d (ns=%q pod=%q podUID=%q)", hostPID, mappingInfo.Namespace, mappingInfo.PodName, mappingInfo.PodUID)
 			continue
 		}
 
@@ -267,6 +261,42 @@ func (w *WorkerController) buildWorkerLookupMap() map[string]string {
 		lookup[key] = worker.WorkerUID
 	}
 	return lookup
+}
+
+// buildWorkerUIDSet returns the set of WorkerUIDs (== pod.UID) currently tracked
+// by this hypervisor. Used to validate cgroup-derived pod UIDs during memory
+// attribution when a process has no usable POD_NAME in its environment.
+func (w *WorkerController) buildWorkerUIDSet() map[string]struct{} {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	set := make(map[string]struct{}, len(w.workers))
+	for _, worker := range w.workers {
+		set[worker.WorkerUID] = struct{}{}
+	}
+	return set
+}
+
+// resolveWorkerUID maps a process to its owning worker UID. It prefers the
+// environ-derived namespace/podName key, then falls back to the cgroup-derived
+// pod UID (environ-independent) for processes that stripped POD_NAME/POD_NAMESPACE
+// from their environment (e.g. vLLM's spawned EngineCore subprocess). Returns
+// ("", false) when the process cannot be attributed to a tracked worker.
+func resolveWorkerUID(mappingInfo *framework.ProcessMappingInfo, workerLookup map[string]string, workerUIDs map[string]struct{}) (string, bool) {
+	if mappingInfo == nil {
+		return "", false
+	}
+	if mappingInfo.Namespace != "" && mappingInfo.PodName != "" {
+		if uid, ok := workerLookup[mappingInfo.Namespace+"/"+mappingInfo.PodName]; ok {
+			return uid, true
+		}
+	}
+	if mappingInfo.PodUID != "" {
+		if _, ok := workerUIDs[mappingInfo.PodUID]; ok {
+			return mappingInfo.PodUID, true
+		}
+	}
+	return "", false
 }
 
 // buildWorkerInfoSnapshots builds a map of worker info snapshots for ERL updates.
@@ -487,12 +517,25 @@ func (w *WorkerController) syncSharedMemoryState() {
 		state.UpdateHeartbeat(now)
 
 		deviceMemoryUsage := memoryByWorkerDevice[workerUID]
+		// Total across every physical GPU this worker's processes touched. Used
+		// as a fallback for single-device pods whose process landed on a GPU
+		// other than the nominally-allocated one (e.g. shared-pool pods can run
+		// on any visible card), so the per-UUID lookup below would otherwise miss.
+		var totalUsage uint64
+		for _, used := range deviceMemoryUsage {
+			totalUsage += used
+		}
+		singleDevice := len(allocation.DeviceInfos) == 1
 		for _, deviceInfo := range allocation.DeviceInfos {
 			if deviceInfo == nil {
 				continue
 			}
 			deviceUUID := strings.ToLower(deviceInfo.UUID)
-			state.SetPodMemoryUsed(int(deviceInfo.Index), deviceMemoryUsage[deviceUUID])
+			used := deviceMemoryUsage[deviceUUID]
+			if used == 0 && singleDevice {
+				used = totalUsage
+			}
+			state.SetPodMemoryUsed(int(deviceInfo.Index), used)
 		}
 	}
 }
@@ -591,6 +634,7 @@ func (w *WorkerController) collectWorkerMemoryUsage(workerLookup map[string]stri
 		return nil
 	}
 
+	workerUIDs := w.buildWorkerUIDSet()
 	result := make(map[string]map[string]uint64)
 	for _, procInfo := range processInfos {
 		hostPID, err := strconv.ParseUint(procInfo.ProcessID, 10, 32)
@@ -603,20 +647,12 @@ func (w *WorkerController) collectWorkerMemoryUsage(workerLookup map[string]stri
 		if err != nil || mappingInfo == nil {
 			continue
 		}
-		// Require real pod identity. GuestID is built via fmt.Sprintf("%s_%s_%s",
-		// ns, pod, ctr), so three empty strings produce "__" (not ""). A caller
-		// hardening check on GuestID == "" therefore never fires for environ-less
-		// processes (LLM servers like sglang scrub /proc/{pid}/environ for
-		// secrecy, leaving mappingInfo with empty Namespace/PodName and
-		// GuestID="__"). Reject on the actual identity fields instead so those
-		// processes' memory is never attributed to the worker whose lookup key
-		// happens to collide with "/".
-		if mappingInfo.Namespace == "" || mappingInfo.PodName == "" {
-			continue
-		}
-
-		workerKey := mappingInfo.Namespace + "/" + mappingInfo.PodName
-		workerUID, found := workerLookup[workerKey]
+		// Resolve the owning worker. Prefer environ-derived namespace/podName,
+		// but fall back to the cgroup-derived pod UID when the GPU-holding
+		// process stripped its environment (e.g. vLLM's spawned EngineCore drops
+		// POD_NAME/POD_NAMESPACE). Without the fallback such a process' memory is
+		// never attributed and the pod's nvidia-smi reports 0.
+		workerUID, found := resolveWorkerUID(mappingInfo, workerLookup, workerUIDs)
 		if !found {
 			continue
 		}
