@@ -2750,7 +2750,6 @@ func (s *GpuAllocator) reconcileAllocationState() {
 			s.markGPUDirtyLocked(gpuKey)
 		}
 	}
-
 	// reconcile quota store state
 	s.quotaStore.ReconcileQuotaStore(ctx, s.uniqueAllocation)
 	log.FromContext(ctx).Info("Quota store data reconciled")

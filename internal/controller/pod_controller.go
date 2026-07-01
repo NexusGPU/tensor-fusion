@@ -156,23 +156,9 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker {
-		r.IndexAllocator.ReconcileLockState(pod)
-		if pod.DeletionTimestamp.IsZero() {
-			if r.Allocator.HasAllocation(req.NamespacedName) {
-				gpuStore, _, _ := r.Allocator.GetAllocationInfo()
-				metrics.SetGPUAllocationMetrics(gpuStore, pod)
-				metrics.SetWorkerMetricsByWorkload(pod, gpuStore)
-			} else {
-				metrics.RemoveGPUAllocationMetrics(pod.Name)
-				metrics.RemoveWorkerMetrics(pod.Name, time.Now())
-			}
-		}
-		shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if shouldReturn {
-			return ctrl.Result{}, nil
+		res, handled, err := r.reconcileWorkerPod(ctx, req.NamespacedName, pod)
+		if handled || err != nil {
+			return res, err
 		}
 	}
 
@@ -202,6 +188,36 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// reconcileWorkerPod handles worker-pod lock state, allocation metrics and the
+// GPU cleanup finalizer. The returned bool reports whether Reconcile should
+// return the given result immediately (terminal step or requeue) instead of
+// continuing.
+func (r *PodReconciler) reconcileWorkerPod(
+	ctx context.Context, namespacedName types.NamespacedName, pod *corev1.Pod,
+) (ctrl.Result, bool, error) {
+	r.IndexAllocator.ReconcileLockState(pod)
+	if pod.DeletionTimestamp.IsZero() {
+		if r.Allocator.HasAllocation(namespacedName) {
+			gpuStore, _, _ := r.Allocator.GetAllocationInfo()
+			metrics.SetGPUAllocationMetrics(gpuStore, pod)
+			metrics.SetWorkerMetricsByWorkload(pod, gpuStore)
+		} else if r.Allocator.IsReady() {
+			metrics.RemoveGPUAllocationMetrics(pod.Name)
+			metrics.RemoveWorkerMetrics(pod.Name, time.Now())
+		} else {
+			return ctrl.Result{RequeueAfter: time.Second}, true, nil
+		}
+	}
+	shouldReturn, err := r.handleWorkerPodFinalizer(ctx, pod)
+	if err != nil {
+		return ctrl.Result{}, true, err
+	}
+	if shouldReturn {
+		return ctrl.Result{}, true, nil
+	}
+	return ctrl.Result{}, false, nil
 }
 
 func (r *PodReconciler) handleWorkerPodFinalizer(ctx context.Context, pod *corev1.Pod) (bool, error) {
