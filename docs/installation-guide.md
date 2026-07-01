@@ -182,6 +182,29 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 # 再 apply 对应厂家的 provider + tensorfusioncluster
 ```
 
+**在线安装（Helm 仓库，无需 clone 仓库）**：把 `./charts/tensor-fusion` 换成
+`tensor-fusion/tensor-fusion --version <chart 版本>`；样例 CR 不打包进 chart，用仓库
+raw URL apply（或先 clone 仓库）。以 Ascend 为例：
+
+```bash
+helm repo add tensor-fusion https://helm.tensor-fusion.ai && helm repo update
+helm install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.7.8 \
+  -n tensor-fusion-sys --create-namespace \
+  --set cluster.enabled=false \
+  --set providerConfigs.nvidia.enabled=false \
+  --set initialGpuNodeLabelSelector=huawei.com/npu.present=true
+RAW=https://raw.githubusercontent.com/NexusGPU/tensor-fusion/main/config/samples
+kubectl apply -f $RAW/provider-ascend.yaml -f $RAW/tensorfusioncluster-ascend.yaml
+```
+
+换厂家只改 `initialGpuNodeLabelSelector` + 两个文件名：
+
+| 厂家 | selector | 文件 |
+| --- | --- | --- |
+| Ascend | `huawei.com/npu.present=true` | provider-ascend / tensorfusioncluster-ascend |
+| MooreThreads | `mthreads.com/gpu.present=true` | provider-mthreads / tensorfusioncluster-mthreads |
+| PPU | `aliyun.com/ppu.present=true` | provider-ppu / tensorfusioncluster-ppu |
+
 ### 4.2 多厂家（一个集群多种卡）
 
 一个 Kubernetes 集群只有一个 `TensorFusionCluster`；多厂家时在 `spec.gpuPools` 下放多个
