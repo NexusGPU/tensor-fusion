@@ -87,7 +87,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 | --- | --- | --- |
 | `initialGpuNodeLabelSelector` | controller 初始扫描 GPU 节点的 label selector | `nvidia.com/gpu.present=true` |
 | `controller.image.repository` | operator 镜像仓库 | `tensorfusion/tensor-fusion-operator` |
-| `controller.image.tag` | operator 镜像 tag | `2.11.3` |
+| `controller.image.tag` | operator 镜像 tag | `latest` |
 | `controller.replicaCount` | controller 副本数 | `1` |
 | `greptime.installStandalone` | 是否安装内置 GreptimeDB standalone | `true` |
 | `greptime.host` | GreptimeDB MySQL endpoint host | `greptimedb-standalone.greptimedb.svc.cluster.local` |
@@ -96,7 +96,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 
 ### 2.4 指定组件版本
 
-Chart 默认使用浮动 tag：hypervisor / vgpu-provider / client / worker 默认 `latest`，operator 默认为 chart 内固定的 `controller.image.tag`。生产环境建议**固定版本**，通过 `--set` 覆盖对应 values 键：
+Chart 默认所有组件镜像都使用浮动 tag `latest`（operator / hypervisor / vgpu-provider / client / worker）。生产环境建议**固定版本**，通过 `--set` 覆盖对应 values 键：
 
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
@@ -123,7 +123,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 若通过 Helm 仓库（而非本地 chart 路径）安装，可用 `--version` 固定 **chart 版本**（与镜像 tag 相互独立）：
 
 ```bash
-helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion
+helm repo add tensor-fusion https://helm.tensor-fusion.ai
 helm repo update
 helm install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.7.7 \
   -n tensor-fusion-sys --create-namespace
