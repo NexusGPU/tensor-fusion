@@ -5,9 +5,9 @@ metadata:
 spec:
   vendor: Ascend
   images:
-    middleware: tensorfusion/vgpu-provider-ascend:dev-local-npu-ser2
-    remoteClient: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-client:1.63.1
-    remoteWorker: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-worker:1.70.0
+    middleware: tensorfusion/vgpu-provider-ascend:latest
+    remoteClient: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-client:latest
+    remoteWorker: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-worker:latest
   # privilegedHypervisor 让 hypervisor 容器 securityContext.privileged=true,
   # 这是访问 /dev/davinci* 设备节点 + ioctl 的必要 cap。
   # 注意:它只翻 cap,不改 UID。libdcmi 调 /dev/davinci_manager 严格要 uid=0,

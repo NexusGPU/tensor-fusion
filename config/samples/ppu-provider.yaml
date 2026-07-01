@@ -12,9 +12,9 @@ spec:
   vendor: PPU
   images:
     # Middleware image must bundle libaccelerator_ppu.so + libppu_limiter.so.
-    middleware: tensorfusion/vgpu-provider-ppu:dev-local
-    remoteClient: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-client:1.63.1
-    remoteWorker: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-worker:1.70.0
+    middleware: tensorfusion/vgpu-provider-ppu:latest
+    remoteClient: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-client:latest
+    remoteWorker: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-worker:latest
   hypervisor:
     # Required to access /dev/alixpu_* device nodes + ioctl.
     privilegedHypervisor: true

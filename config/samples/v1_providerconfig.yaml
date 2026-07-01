@@ -11,7 +11,7 @@ spec:
   # Container images for TensorFusion components
   # These vendor-specific images contain the appropriate drivers and runtimes
   images:
-    middleware: tensorfusion/tensor-fusion-operator:latest
+    middleware: tensorfusion/vgpu-provider-nvidia:latest
     remoteClient: tensorfusion/tensor-fusion-client:latest
     remoteWorker: tensorfusion/tensor-fusion-worker:latest
 
@@ -388,9 +388,9 @@ spec:
   vendor: Ascend
 
   images:
-    middleware: tensorfusion/tensor-fusion-ascend-operator:latest
-    remoteClient: tensorfusion/tensor-fusion-ascend-client:latest
-    remoteWorker: tensorfusion/tensor-fusion-ascend-worker:latest
+    middleware: tensorfusion/vgpu-provider-ascend:latest
+    remoteClient: tensorfusion/tensor-fusion-client:latest
+    remoteWorker: tensorfusion/tensor-fusion-worker:latest
 
   hypervisor:
     privilegedHypervisor: true
