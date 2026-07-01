@@ -4,11 +4,20 @@ metadata:
   name: {{ include "tensor-fusion.fullname" . }}-role
 rules:
 - apiGroups:
-  - ""
+  - ''
+  resources:
+  - bindings
+  - endpoints
+  - pods/eviction
+  verbs:
+  - create
+- apiGroups:
+  - ''
   resources:
   - configmaps
   - events
   - namespaces
+  - pods/finalizers
   verbs:
   - create
   - get
@@ -17,24 +26,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - events.k8s.io
-  resources:
-  - events
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - endpoints
-  verbs:
-  - create
-- apiGroups:
-  - ""
+  - ''
   resourceNames:
   - kube-scheduler
   resources:
@@ -43,7 +35,7 @@ rules:
   - get
   - update
 - apiGroups:
-  - ""
+  - ''
   resources:
   - nodes
   - pods
@@ -56,13 +48,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - ""
-  resources:
-  - bindings
-  verbs:
-  - create
-- apiGroups:
-  - ""
+  - ''
   resources:
   - nodes/finalizers
   - pods/binding
@@ -73,24 +59,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - ""
-  resources:
-  - pods/eviction
-  verbs:
-  - create
-- apiGroups:
-  - ""
-  resources:
-  - pods/finalizers
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
+  - ''
   resources:
   - nodes/status
   - pods/status
@@ -99,16 +68,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - ""
-  resources:
-  - replicationcontrollers
-  - services
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
+  - ''
   resources:
   - persistentvolumeclaims
   - persistentvolumes
@@ -119,22 +79,10 @@ rules:
   - update
   - watch
 - apiGroups:
-  - storage.k8s.io
+  - ''
   resources:
-  - csinodes
-  - csidrivers
-  - csistoragecapacities
-  - storageclasses
-  - volumeattachments
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - apps
-  - extensions
-  resources:
-  - replicasets
+  - replicationcontrollers
+  - services
   verbs:
   - get
   - list
@@ -155,13 +103,26 @@ rules:
   - update
   - watch
 - apiGroups:
-  - policy
+  - apps
+  - extensions
   resources:
-  - poddisruptionbudgets
+  - replicasets
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
 - apiGroups:
   - batch
   resources:
@@ -185,6 +146,19 @@ rules:
 - apiGroups:
   - coordination.k8s.io
   resources:
+  - leasecandidates
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
   - leases
   verbs:
   - create
@@ -206,75 +180,22 @@ rules:
   - update
   - watch
 - apiGroups:
-  - coordination.k8s.io
+  - events.k8s.io
   resources:
-  - leasecandidates
+  - events
   verbs:
   - create
-  - delete
-  - deletecollection
   - get
   - list
   - patch
   - update
   - watch
 - apiGroups:
-  - tensor-fusion.ai
+  - karpenter.sh
   resources:
-  - gpunodeclasses
-  - gpunodes
-  - gpupools
-  - gpuresourcequotas
-  - gpus
-  - providerconfigs
-  - schedulingconfigtemplates
-  - tensorfusionclusters
-  - tensorfusionconnections
-  - tensorfusionworkloads
-  - workloadprofiles
-  - gpunodeclaims
+  - '*'
   verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - tensor-fusion.ai
-  resources:
-  - gpunodeclasses/finalizers
-  - gpunodes/finalizers
-  - gpupools/finalizers
-  - gpuresourcequotas/finalizers
-  - gpus/finalizers
-  - schedulingconfigtemplates/finalizers
-  - tensorfusionclusters/finalizers
-  - tensorfusionconnections/finalizers
-  - tensorfusionworkloads/finalizers
-  - workloadprofiles/finalizers
-  - gpunodeclaims/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - tensor-fusion.ai
-  resources:
-  - gpunodeclasses/status
-  - gpunodes/status
-  - gpupools/status
-  - gpuresourcequotas/status
-  - gpus/status
-  - schedulingconfigtemplates/status
-  - tensorfusionclusters/status
-  - tensorfusionconnections/status
-  - tensorfusionworkloads/status
-  - workloadprofiles/status
-  - gpunodeclaims/status
-  verbs:
-  - get
-  - patch
-  - update
+  - '*'
 - apiGroups:
   - karpenter.sh
   resources:
@@ -288,30 +209,20 @@ rules:
   - update
   - watch
 - apiGroups:
-  - karpenter.*
+  - policy
   resources:
-  - '*'
+  - poddisruptionbudgets
   verbs:
-  - '*'
-- apiGroups:
-  - authentication.k8s.io
-  resources:
-  - tokenreviews
-  verbs:
-  - create
-- apiGroups:
-  - authorization.k8s.io
-  resources:
-  - subjectaccessreviews
-  verbs:
-  - create
+  - get
+  - list
+  - watch
 - apiGroups:
   - resource.k8s.io
   resources:
   - deviceclasses
   - devicetaintrules
-  - resourceclaims
   - resourceslices
+  - resourceclaims
   verbs:
   - get
   - list
@@ -320,12 +231,6 @@ rules:
   - resource.k8s.io
   resources:
   - resourceclaims
-  verbs:
-  - patch
-  - update
-- apiGroups:
-  - resource.k8s.io
-  resources:
   - resourceclaims/status
   verbs:
   - get
@@ -338,8 +243,77 @@ rules:
   resources:
   - resourceclaims/binding
   verbs:
-  - update
   - patch
+  - update
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - csidrivers
+  - csinodes
+  - csistoragecapacities
+  - storageclasses
+  - volumeattachments
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - gpunodeclaims
+  - gpunodeclasses
+  - gpunodes
+  - gpupools
+  - gpuresourcequotas
+  - gpus
+  - providerconfigs
+  - schedulingconfigtemplates
+  - tensorfusionclusters
+  - tensorfusionconnections
+  - tensorfusionworkloads
+  - workloadprofiles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - gpunodeclaims/finalizers
+  - gpunodeclasses/finalizers
+  - gpunodes/finalizers
+  - gpupools/finalizers
+  - gpuresourcequotas/finalizers
+  - gpus/finalizers
+  - schedulingconfigtemplates/finalizers
+  - tensorfusionclusters/finalizers
+  - tensorfusionconnections/finalizers
+  - tensorfusionworkloads/finalizers
+  - workloadprofiles/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - tensor-fusion.ai
+  resources:
+  - gpunodeclaims/status
+  - gpunodeclasses/status
+  - gpunodes/status
+  - gpupools/status
+  - gpuresourcequotas/status
+  - gpus/status
+  - schedulingconfigtemplates/status
+  - tensorfusionclusters/status
+  - tensorfusionconnections/status
+  - tensorfusionworkloads/status
+  - workloadprofiles/status
+  verbs:
+  - get
+  - patch
+  - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

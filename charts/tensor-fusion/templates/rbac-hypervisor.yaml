@@ -4,7 +4,7 @@ metadata:
   name: tensor-fusion-hypervisor-role
 rules:
 - apiGroups:
-  - ""
+  - ''
   resources:
   - nodes
   - pods

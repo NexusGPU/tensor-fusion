@@ -1,0 +1,95 @@
+{{- if .Values.cluster.enabled }}
+{{- $c := .Values.cluster }}
+{{- $nv := .Values.providerConfigs.nvidia }}
+# SchedulingConfigTemplate referenced by the default pool below. Values mirror a
+# known-good production config (auto-freeze TTLs per QoS, ERL parameters,
+# NodeCompactGPULowLoad placement). Tune via override files as needed.
+apiVersion: tensor-fusion.ai/v1
+kind: SchedulingConfigTemplate
+metadata:
+  name: {{ $c.schedulingConfigTemplateName | default "tf-scheduling-config" }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  placement:
+    mode: NodeCompactGPULowLoad
+    allowUsingLocalGPU: true
+    gpuFilters:
+      - type: avoidTooMuchConnectionsOnSameGPU
+        params:
+          connectionNum: 150
+      - type: avoidDifferentZone
+        params:
+          topologyKey: topology.kubernetes.io/zone
+  reBalancer:
+    interval: 20m
+    reBalanceCoolDownTime: 5m
+    threshold:
+      matchAny:
+        tflopsTotalLimitExceededRatio: 1.5
+        vramSwitchPerMinute: 5
+  hypervisor:
+    autoFreezeAndResume:
+      autoFreeze:
+        - qos: low
+          enable: true
+          freezeToMemTTL: 1m
+          freezeToDiskTTL: 1h
+        - qos: medium
+          enable: true
+          freezeToMemTTL: 2m
+          freezeToDiskTTL: 2h
+        - qos: high
+          enable: true
+          freezeToMemTTL: 1d
+          freezeToDiskTTL: 1w
+        - qos: critical
+          enable: true
+          freezeToMemTTL: 1w
+          freezeToDiskTTL: 4w
+      intelligenceWarmup:
+        enable: true
+        model: smart-warmup-v1
+        historyDataPeriod: 1y
+        predictionPeriod: 1m
+    elasticRateLimitParameters:
+      kp: '0.12'
+      ki: '0.4'
+      kd: '1.0'
+      filterAlpha: '0.30'
+      burstWindow: '0.5'
+      integralDecayFactor: '0.85'
+      capacityMin: '150'
+      capacityMax: '6000'
+      minRefillRate: '80'
+      maxRefillRate: '12000'
+---
+apiVersion: tensor-fusion.ai/v1
+kind: TensorFusionCluster
+metadata:
+  name: {{ $c.name | default "tensor-fusion" }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  gpuPools:
+    - name: {{ $c.pool.name | default "shared" }}
+      isDefault: true
+      specTemplate:
+        capacityConfig:
+          {{- toYaml $c.pool.capacityConfig | nindent 10 }}
+        componentConfig:
+          # Only the hypervisor image is set here — client / worker images are
+          # resolved from the NVIDIA ProviderConfig (single source of truth).
+          hypervisor:
+            image: {{ $c.hypervisorImage | quote }}
+        nodeManagerConfig:
+          defaultVendor: NVIDIA
+          nodeSelector:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: {{ $c.pool.nodeSelectorKey | default "nvidia.com/gpu.present" }}
+                    operator: In
+                    values:
+                      - "true"
+        schedulingConfigTemplate: {{ $c.schedulingConfigTemplateName | default "tf-scheduling-config" }}
+{{- end }}
