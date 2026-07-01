@@ -1,0 +1,47 @@
+# Real-world MooreThreads ProviderConfig example (derived from a running cluster).
+# Image tags normalized to :latest; pin them for production.
+apiVersion: tensor-fusion.ai/v1
+kind: ProviderConfig
+metadata:
+  name: mthreads-provider
+spec:
+  hardwareMetadata:
+  - costPerHour: '1.0'
+    fp16TFlops: '14'
+    fullModelName: Moore Threads MTT X300
+    maxIsolationGroups: 1
+    maxPartitions: 4
+    model: MTT X300
+    partitionTemplateRefs:
+    - mtgpu-default
+  hypervisor:
+    deviceMount:
+      deviceMountRule: device.hostPath.startsWith("/dev/dri/renderD")
+      partitionedDeviceMountRule: device.hostPath.startsWith("/dev/dri/renderD")
+      sharedDevices:
+      - /dev/mtgpu.0
+      - /dev/dri
+    extraEnv:
+    - name: MTML_LIB_PATH
+      value: /opt/tf-mthreads/libmtml.so
+    hostPathMounts:
+    - hostPath: /opt/tf-mthreads
+      mountPath: /opt/tf-mthreads
+      name: mtml-staging
+      readOnly: true
+    ldLibraryPath: /usr/local/musa/lib:/opt/tf-mthreads
+    privilegedHypervisor: true
+  images:
+    middleware: docker.io/tensorfusion/vgpu-provider-musa:latest
+    remoteClient: registry.cn-hangzhou.aliyuncs.com/tensorfusion/rgpu_client_t:latest
+    remoteWorker: registry.cn-hangzhou.aliyuncs.com/tensorfusion/rgpu-work:latest
+  vendor: MooreThreads
+  virtualizationTemplates:
+  - computePercent: '100'
+    description: Default MPC partition (whole-card)
+    id: mtgpu-default
+    isolationGroupSharing: exclusive
+    isolationGroupSlots: 1
+    maxInstances: 1
+    memoryGigabytes: 16
+    name: mtgpu-default

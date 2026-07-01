@@ -1,0 +1,132 @@
+# Real-world NVIDIA TensorFusionCluster example (single NVIDIA pool, from a running cluster).
+# Image tags normalized to :latest; pin them for production.
+apiVersion: tensor-fusion.ai/v1
+kind: TensorFusionCluster
+metadata:
+  name: tensor-fusion
+spec:
+  gpuPools:
+  - isDefault: true
+    name: shared
+    specTemplate:
+      capacityConfig:
+        maxResources:
+          cpu: '0'
+          memory: '0'
+          tflops: '100'
+          vram: 100Gi
+        minResources:
+          cpu: '0'
+          memory: '0'
+          tflops: '20'
+          vram: 10Gi
+        oversubscription:
+          tflopsOversellRatio: 2000
+          vramExpandToHostDisk: 60
+          vramExpandToHostMem: 50
+        warmResources:
+          cpu: '0'
+          memory: '0'
+          tflops: '10'
+          vram: 5Gi
+      componentConfig:
+        client:
+          embeddedModeImage: tensorfusion/tensor-fusion-client:latest
+          image: tensorfusion/tensor-fusion-client:latest
+          operatorEndpoint: http://tensor-fusion-sys.tensor-fusion-sys:8080
+          patchToContainer:
+            env:
+            - name: TF_ENABLE_LOG
+              value: '0'
+            - name: TF_LOG_PATH
+              value: /tmp/tf.log
+          patchToPod:
+            spec: {}
+          remoteModeImage: tensorfusion/tensor-fusion-client:latest
+        hypervisor:
+          enableVector: true
+          image: docker.io/tensorfusion/tensor-fusion-hypervisor:latest
+          podTemplate:
+            template:
+              spec:
+                containers:
+                - env:
+                  - name: TF_LOG_LEVEL
+                    value: debug
+                  - name: TF_ACCELERATOR_LIB_PATH
+                    value: /run/tensor-fusion/libaccelerator_nvidia.so
+                  imagePullPolicy: IfNotPresent
+                  name: tensor-fusion-hypervisor
+                  resources:
+                    limits:
+                      cpu: 1000m
+                      memory: 1Gi
+                    requests:
+                      cpu: 60m
+                      memory: 128Mi
+                  securityContext:
+                    privileged: true
+                    runAsGroup: 0
+                    runAsUser: 0
+                - name: vector
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 64Mi
+                securityContext:
+                  runAsGroup: 0
+                  runAsUser: 0
+          portNumber: 8001
+          vectorImage: docker.m.daocloud.io/timberio/vector:latest-alpine
+        nodeDiscovery:
+          image: docker.m.daocloud.io/tensorfusion/tensor-fusion-node-discovery:latest
+          podTemplate:
+            template:
+              spec:
+                containers:
+                - name: tensorfusion-node-discovery
+        worker:
+          image: tensorfusion/tensor-fusion-worker:latest
+          podTemplate:
+            template:
+              spec:
+                containers:
+                - env:
+                  - name: TF_ENABLE_LOG
+                    value: '1'
+                  - name: TF_NVML_LIB_PATH
+                    value: /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1
+                  - name: TF_CUDA_LIB_PATH
+                    value: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+                  - name: TF_LICENSE
+                    value: '|ee|1784709281000'
+                  - name: TF_LICENSE_SIGN
+                    value: 3046022100ffd7ba9a0007afa86835ea3acf2d7cbfe9d9b52339be7c4caf6ce85d0cadc843022100c991906ce029a0ca79f0a7f6e31114571c7a57a53e0f0d53aed7c78d54643f6c
+                  name: tensorfusion-worker
+                  resources:
+                    limits:
+                      cpu: 2000m
+                      memory: 8Gi
+                    requests:
+                      cpu: 100m
+                      memory: 128Mi
+      nodeManagerConfig:
+        defaultVendor: NVIDIA
+        nodeCompaction:
+          period: 30m
+        nodePoolRollingUpdatePolicy:
+          batchInterval: 1s
+          batchPercentage: 20
+          maintenanceWindow:
+            includes:
+            - 2 2 * * *
+          maxDuration: 10m
+        nodeSelector:
+          nodeSelectorTerms:
+          - matchExpressions:
+            - key: nvidia.com/gpu.present
+              operator: In
+              values:
+              - 'true'
+        provisioningMode: AutoSelect
+      schedulingConfigTemplate: tf-scheduling-config

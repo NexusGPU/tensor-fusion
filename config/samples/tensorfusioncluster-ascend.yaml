@@ -1,0 +1,183 @@
+# Real-world Ascend TensorFusionCluster example (single Ascend pool, from a running cluster).
+# Image tags normalized to :latest; pin them for production.
+apiVersion: tensor-fusion.ai/v1
+kind: TensorFusionCluster
+metadata:
+  name: tensor-fusion
+spec:
+  gpuPools:
+  - isDefault: true
+    name: ascend-shared
+    specTemplate:
+      capacityConfig:
+        maxResources:
+          cpu: '0'
+          memory: '0'
+          tflops: '100'
+          vram: 100Gi
+        minResources:
+          cpu: '0'
+          memory: '0'
+          tflops: '20'
+          vram: 10Gi
+        oversubscription:
+          tflopsOversellRatio: 2000
+          vramExpandToHostDisk: 60
+          vramExpandToHostMem: 50
+        warmResources:
+          cpu: '0'
+          memory: '0'
+          tflops: '10'
+          vram: 5Gi
+      componentConfig:
+        client:
+          operatorEndpoint: http://tensor-fusion-sys.tensor-fusion-sys:8080
+          patchToContainer:
+            env:
+            - name: TF_ENABLE_LOG
+              value: '1'
+            - name: TF_LOG_PATH
+              value: /tmp/tf.log
+          patchToPod:
+            spec: {}
+        hypervisor:
+          enableVector: true
+          image: docker.io/tensorfusion/tensor-fusion-hypervisor:latest
+          podTemplate:
+            template:
+              metadata:
+                annotations:
+                  container.apparmor.security.beta.kubernetes.io/tensor-fusion-hypervisor: unconfined
+              spec:
+                containers:
+                - env:
+                  - name: TF_LOG_LEVEL
+                    value: debug
+                  - name: TF_ACCELERATOR_LIB_PATH
+                    value: /run/tensor-fusion/vgpu/libaccelerator_ascend.so
+                  name: tensor-fusion-hypervisor
+                  resources:
+                    limits:
+                      cpu: 1000m
+                      memory: 1Gi
+                    requests:
+                      cpu: 60m
+                      memory: 128Mi
+                  securityContext:
+                    privileged: true
+                    runAsGroup: 0
+                    runAsUser: 0
+                  volumeMounts:
+                  - mountPath: /usr/local/sbin/npu-smi
+                    name: host-npu-smi
+                    readOnly: true
+                - name: vector
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 64Mi
+                securityContext:
+                  runAsGroup: 0
+                  runAsUser: 0
+                volumes:
+                - hostPath:
+                    path: /usr/local/sbin/npu-smi
+                    type: File
+                  name: host-npu-smi
+          portNumber: 8001
+          vectorImage: docker.1ms.run/timberio/vector:latest-alpine
+        worker:
+          image: rgpu-work:latest
+          podTemplate:
+            template:
+              spec:
+                containers:
+                - env:
+                  - name: TF_ENABLE_LOG
+                    value: '1'
+                  - name: TF_LICENSE
+                    value: '|ee|253372098780000'
+                  - name: TF_LICENSE_SIGN
+                    vaule: 3046022100a9693f16b962e577748106a1c2b0300d89258cda1ab854a23a1ce81b2f1bb16b022100be8e870fac59c3f9299c6fb24bb67e481573e99708edf90b968fbf5c2368108c
+                  name: tensorfusion-worker
+                  resources:
+                    limits:
+                      cpu: 2000m
+                      memory: 8Gi
+                    requests:
+                      cpu: 100m
+                      memory: 128Mi
+                runtimeClassName: ascend
+      nodeManagerConfig:
+        defaultVendor: Ascend
+        nodeCompaction:
+          period: 30m
+        nodePoolRollingUpdatePolicy:
+          batchInterval: 1s
+          batchPercentage: 20
+          maintenanceWindow:
+            includes:
+            - 2 2 * * *
+          maxDuration: 10m
+        nodeSelector:
+          nodeSelectorTerms:
+          - matchExpressions:
+            - key: huawei.com/npu.present
+              operator: In
+              values:
+              - 'true'
+        provisioningMode: AutoSelect
+      qosConfig:
+        defaultQoS: medium
+        definitions:
+        - description: Ensure 100% of the requested capacity. Although the limit is
+            not guaranteed, credits will accumulate over time if not scheduled. You
+            can burst to the target value once a GPU is available, but latency is
+            not guaranteed. VRAM will cool down into NVMe with the shortest threshold
+            and include requested value. This is perfect for training and fine-tuning
+            jobs, hands-on labs, etc. It serves with best effort.
+          name: low
+          priority: 10
+        - description: Ensure 100% of the requested capacity. Allow bursts to limits
+            and preempt low QoS tasks. Latency is not guaranteed. This is perfect
+            for offline business tasks like embedding. VRAM will cool down into NVMe
+            with a shorter threshold, include requested value
+          name: medium
+          priority: 30
+        - description: Ensure 100% of the requested capacity, burst to limits, and
+            preempt medium QoS tasks. This is perfect for online businesses like inference
+            but not for latency-critical services. Examples include grammar checks,
+            non-latency-sensitive chat, image or video generation, and one-time translations.
+            VRAM will not cool down below the requested value.
+          name: high
+          priority: 60
+        - description: ensure 100% of the requested capacity, and burst to limits
+            to preempt all low/medium QoS tasks and 50% of high QoS tasks, ensure
+            low latency, perfect for realtime business that latency is critical, for
+            example, realtime translation, chat completion, code completion etc. VRAM
+            will not cool-down below the requested value.
+          name: critical
+          priority: 100
+        evictionProtectionPriceRatio: '1.2'
+        pricing:
+        - limitsOverRequests: '0.1'
+          qos: low
+          requests:
+            perFP16TFlopsPerHour: $0.0069228
+            perGBOfVRAMPerHour: $0.01548
+        - limitsOverRequests: '0.3'
+          qos: medium
+          requests:
+            perFP16TFlopsPerHour: $0.0069228
+            perGBOfVRAMPerHour: $0.01548
+        - limitsOverRequests: '0.6'
+          qos: high
+          requests:
+            perFP16TFlopsPerHour: $0.0069228
+            perGBOfVRAMPerHour: $0.01548
+        - limitsOverRequests: '1'
+          qos: critical
+          requests:
+            perFP16TFlopsPerHour: $0.0069228
+            perGBOfVRAMPerHour: $0.01548
+      schedulingConfigTemplate: tf-scheduling-config
