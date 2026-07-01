@@ -31,7 +31,7 @@ controller:
   image:
     repository: tensorfusion/tensor-fusion-operator
     # Overrides the image tag whose default is the chart appVersion.
-    tag: "1.48.6"
+    tag: "latest"
   # This is for setting Kubernetes Annotations to a Pod.
   # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/ 
   
@@ -651,7 +651,62 @@ providerConfigs:
         placementOffset: 4
         isolationGroupSharing: exclusive
 
-    extraEnv: []
+    # NVIDIA_MIG_CONFIG_DEVICES / NVIDIA_MIG_MONITOR_DEVICES are required on
+    # MIG-enabled nodes: the NVIDIA Container Runtime only injects the per-GI
+    # capability files under /proc/driver/nvidia/capabilities/ when these are set,
+    # otherwise the hypervisor may fail to start on a MIG node and NVML MIG
+    # (GpuInstance / ComputeInstance) queries fail. The operator also auto-injects
+    # them when privilegedHypervisor=true, but they are set explicitly here so MIG
+    # support does not silently depend on that path.
+    # (TF_ENABLE_LOG / TF_LOG_LEVEL=debug are intentionally omitted — debug only.)
+    extraEnv:
+      - name: NVIDIA_MIG_CONFIG_DEVICES
+        value: all
+      - name: NVIDIA_MIG_MONITOR_DEVICES
+        value: all
+    # Optional device mount policy for the hypervisor (spec.hypervisor.deviceMount).
+    # Empty ({}) = builtin default device mounting, which is correct for almost all
+    # clusters. Only set this for special setups that need to filter/override which
+    # device nodes the hypervisor mounts (CEL rules). Fields:
+    #   deviceMountRule / partitionedDeviceMountRule (CEL expressions), sharedDevices ([]).
+    # Example:
+    #   deviceMount:
+    #     deviceMountRule: "false"      # mount none of the base device nodes
+    #     sharedDevices: []
+    deviceMount: {}
+
+# Optional, opt-in default TensorFusionCluster (+ its SchedulingConfigTemplate)
+# created by the chart so a fresh `helm install` is usable out of the box with a
+# single NVIDIA shared GPU pool. Both CRs carry helm.sh/resource-policy: keep, so
+# uninstalling the chart will NOT delete the cluster or its pools.
+# Disable this if you manage TensorFusionCluster / SchedulingConfigTemplate
+# out-of-band (kubectl apply).
+cluster:
+  enabled: true
+  name: tensor-fusion
+  # Hypervisor image is NOT part of ProviderConfig — it can only be set on the
+  # pool, so it lives here. Client / worker images are NOT repeated: they come
+  # from providerConfigs.nvidia.images.remoteClient / remoteWorker (single source).
+  hypervisorImage: tensorfusion/tensor-fusion-hypervisor:latest
+  schedulingConfigTemplateName: tf-scheduling-config
+  pool:
+    name: shared
+    # GPU node label the default pool selects on.
+    nodeSelectorKey: nvidia.com/gpu.present
+    capacityConfig:
+      maxResources:
+        tflops: "100"
+        vram: "100Gi"
+      minResources:
+        tflops: "20"
+        vram: "10Gi"
+      warmResources:
+        tflops: "10"
+        vram: "5Gi"
+      oversubscription:
+        tflopsOversellRatio: 2000
+        vramExpandToHostDisk: 60
+        vramExpandToHostMem: 50
 
 alert:
   enabled: true

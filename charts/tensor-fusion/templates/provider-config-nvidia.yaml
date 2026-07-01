@@ -18,6 +18,10 @@ spec:
     extraEnv:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+    {{- with $cfg.deviceMount }}
+    deviceMount:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
   devicePluginDetection:
     resourceNamePrefixes:
       - nvidia.com/gpu

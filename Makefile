@@ -48,7 +48,8 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases && \
-	cp -r config/crd/bases/* ./charts/tensor-fusion/crds/
+	cp -r config/crd/bases/* ./charts/tensor-fusion/crds/ && \
+	bash hack/sync-helm-rbac.sh
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
