@@ -125,7 +125,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 ```bash
 helm repo add tensor-fusion https://helm.tensor-fusion.ai
 helm repo update
-helm install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.7.7 \
+helm install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.7.8 \
   -n tensor-fusion-sys --create-namespace
 ```
 
@@ -152,60 +152,68 @@ kubectl logs -n tensor-fusion-sys deploy/tensor-fusion-sys-controller -c control
 
 控制面安装完成后，需要创建 TensorFusionCluster 或 GPUPool，TensorFusion 才能发现和管理 GPU 资源。
 
-注意：
+> 从 v1.7.8 起，默认 Helm 安装（`cluster.enabled=true`）会自动创建一个 NVIDIA
+> `TensorFusionCluster`（单 NVIDIA pool）。**纯 NVIDIA 集群开箱即用，无需手动创建**；
+> 其它厂家或多卡场景见下面 4.1 / 4.2。
 
-- `config/samples/v1_tensorfusioncluster.yaml` 和 `config/samples/v1_gpupool.yaml` 当前是 TODO stub，不能直接用于安装。
-- `GPUPool.spec.componentConfig` 需要使用当前发行版本对应的完整配置，至少要包含 worker、hypervisor、client 等组件镜像和 patch 配置。
+`config/samples/` 下提供了各厂家真实可用的样例（ProviderConfig + TensorFusionCluster），
+`componentConfig` 已是与当前版本匹配的完整配置，可直接 apply。
+
+小贴士：
+
 - 使用 TensorFusionCluster 创建 pool 时，实际 GPUPool 名称通常是 `<cluster-name>-<pool-name>`。
-- 如果希望业务 Pod 不显式写 `tensor-fusion.ai/gpupool`，需要在 TensorFusionCluster 的 pool 定义中设置 `isDefault: true`。
+- 业务 Pod 不显式写 `tensor-fusion.ai/gpupool` 时，会落到 `isDefault: true` 的 pool。
 
-建议使用平台生成的、与当前版本匹配的 TensorFusionCluster/GPUPool YAML。下面只展示结构，不建议原样 apply：
+### 4.1 按厂家安装（单一厂家）
 
-```yaml
-apiVersion: tensor-fusion.ai/v1
-kind: TensorFusionCluster
-metadata:
-  name: tensor-fusion
-spec:
-  gpuPools:
-    - name: shared
-      isDefault: true
-      specTemplate:
-        defaultUsingLocalGPU: false
-        nodeManagerConfig:
-          provisioningMode: AutoSelect
-          nodeSelector:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.present
-                    operator: In
-                    values:
-                      - "true"
-        capacityConfig:
-          oversubscription:
-            tflopsOversellRatio: 500
-            vramExpandToHostMem: 50
-            vramExpandToHostDisk: 70
-        componentConfig:
-          worker:
-            image: "<tensor-fusion-worker-image>"
-            podTemplate: {}
-          hypervisor:
-            image: "<tensor-fusion-hypervisor-image>"
-            vectorImage: "<vector-image>"
-            podTemplate: {}
-          nodeDiscovery:
-            image: "<tensor-fusion-node-discovery-image>"
-            podTemplate: {}
-          client:
-            remoteModeImage: "<tensor-fusion-client-image>"
-            embeddedModeImage: "<tensor-fusion-client-image>"
-            operatorEndpoint: "http://tensor-fusion-sys.tensor-fusion-sys:8080"
-            patchToPod: {}
-            patchToContainer: {}
+| 厂家 | 命令 |
+| --- | --- |
+| NVIDIA | 默认已创建；或 `kubectl apply -f config/samples/provider-nvidia.yaml -f config/samples/tensorfusioncluster-nvidia.yaml` |
+| Ascend | `kubectl apply -f config/samples/provider-ascend.yaml -f config/samples/tensorfusioncluster-ascend.yaml` |
+| MooreThreads | `kubectl apply -f config/samples/provider-mthreads.yaml -f config/samples/tensorfusioncluster-mthreads.yaml` |
+| PPU | `kubectl apply -f config/samples/provider-ppu.yaml -f config/samples/tensorfusioncluster-ppu.yaml` |
+
+非 NVIDIA 集群安装控制面时，建议关掉默认 NVIDIA cluster，避免多出一个无节点的 pool：
+
+```bash
+helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
+  -n tensor-fusion-sys --create-namespace \
+  --set cluster.enabled=false --set providerConfigs.nvidia.enabled=false
+# 再 apply 对应厂家的 provider + tensorfusioncluster
 ```
 
-应用真实配置后检查资源：
+### 4.2 多厂家（一个集群多种卡）
+
+一个 Kubernetes 集群只有一个 `TensorFusionCluster`；多厂家时在 `spec.gpuPools` 下放多个
+pool（仅一个 `isDefault: true`）。现成例子 `config/samples/tensorfusioncluster-multi-vendor.yaml`：
+
+```bash
+helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
+  -n tensor-fusion-sys --create-namespace \
+  --set cluster.enabled=false \
+  --set initialGpuNodeLabelSelector=tensor-fusion.ai/watch-node=true
+kubectl apply -f config/samples/provider-nvidia.yaml \
+  -f config/samples/provider-ascend.yaml \
+  -f config/samples/provider-mthreads.yaml \
+  -f config/samples/tensorfusioncluster-multi-vendor.yaml
+```
+
+**节点标签（`initialGpuNodeLabelSelector`）**——决定 operator watch 哪些节点：
+
+- **单一厂家**：用该厂家的 present 标签即可（默认 `nvidia.com/gpu.present=true`），
+  **无需额外打标签**——该标签由厂家的 device-plugin / feature-discovery 自动打，TensorFusion 不负责打。
+- **多厂家**：各厂家 present 标签不同（`nvidia.com/gpu.present` / `huawei.com/npu.present` /
+  `mthreads.com/gpu.present` / `aliyun.com/ppu`），单个标签选不全。改用 vendor 无关的
+  `tensor-fusion.ai/watch-node=true`，并**手动给每个 GPU 节点打这个标签**（该标签不会自动生成）：
+
+  ```bash
+  kubectl label node <gpu-node> tensor-fusion.ai/watch-node=true
+  ```
+
+- 或把 `initialGpuNodeLabelSelector` 留空（`--set initialGpuNodeLabelSelector=""`），
+  operator 会 watch 所有节点（无需打标签，但大集群有一定性能开销）。
+
+应用配置后检查资源：
 
 ```bash
 kubectl get tensorfusioncluster

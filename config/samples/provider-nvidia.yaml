@@ -1,0 +1,474 @@
+# Real-world NVIDIA ProviderConfig example (full hardware catalog + MIG-ready hypervisor).
+# Image tags default to :latest; pin them for production.
+apiVersion: tensor-fusion.ai/v1
+kind: ProviderConfig
+metadata:
+  name: nvidia-provider
+spec:
+  vendor: NVIDIA
+  images:
+    middleware: tensorfusion/vgpu-provider-nvidia:latest
+    remoteClient: tensorfusion/tensor-fusion-client:latest
+    remoteWorker: tensorfusion/tensor-fusion-worker:latest
+  hypervisor:
+    privilegedHypervisor: true
+    extraEnv:
+    - name: NVIDIA_MIG_CONFIG_DEVICES
+      value: all
+    - name: NVIDIA_MIG_MONITOR_DEVICES
+      value: all
+  devicePluginDetection:
+    resourceNamePrefixes:
+    - nvidia.com/gpu
+    - nvidia.com/mig
+    usedBySystemName: nvidia-device-plugin
+  inUseResourceNames:
+  - nvidia.com/gpu
+  - nvidia.com/mig-1g.10gb
+  - nvidia.com/mig-2g.20gb
+  - nvidia.com/mig-3g.40gb
+  - nvidia.com/mig-4g.40gb
+  - nvidia.com/mig-7g.80gb
+  - nvidia.com/mig-1g.5gb
+  - nvidia.com/mig-2g.10gb
+  - nvidia.com/mig-3g.20gb
+  - nvidia.com/mig-4g.20gb
+  - nvidia.com/mig-7g.40gb
+  - nvidia.com/mig-1g.6gb
+  - nvidia.com/mig-2g.12gb
+  - nvidia.com/mig-4g.24gb
+  hardwareMetadata:
+  - costPerHour: '1.89'
+    fp16TFlops: '312'
+    fullModelName: NVIDIA A100-SXM4-80GB
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: A100_SXM_80G
+    partitionTemplateRefs:
+    - nv-80g-1g-10gb
+    - nv-80g-1g-10gb-me
+    - nv-80g-1g-20gb
+    - nv-80g-2g-20gb
+    - nv-80g-3g-40gb
+    - nv-80g-4g-40gb
+    - nv-80g-7g-80gb
+  - costPerHour: '1.79'
+    fp16TFlops: '312'
+    fullModelName: NVIDIA A100 80GB PCIe
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: A100_PCIe_80G
+    partitionTemplateRefs:
+    - nv-80g-1g-10gb
+    - nv-80g-1g-10gb-me
+    - nv-80g-1g-20gb
+    - nv-80g-2g-20gb
+    - nv-80g-3g-40gb
+    - nv-80g-4g-40gb
+    - nv-80g-7g-80gb
+  - costPerHour: '1.89'
+    fp16TFlops: '312'
+    fullModelName: NVIDIA A800-SXM4-80GB
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: A800_SXM_80G
+    partitionTemplateRefs:
+    - nv-80g-1g-10gb
+    - nv-80g-1g-10gb-me
+    - nv-80g-1g-20gb
+    - nv-80g-2g-20gb
+    - nv-80g-3g-40gb
+    - nv-80g-4g-40gb
+    - nv-80g-7g-80gb
+  - costPerHour: '1.79'
+    fp16TFlops: '312'
+    fullModelName: NVIDIA A800-PCIE-80GB
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: A800_PCIe_80G
+    partitionTemplateRefs:
+    - nv-80g-1g-10gb
+    - nv-80g-1g-10gb-me
+    - nv-80g-1g-20gb
+    - nv-80g-2g-20gb
+    - nv-80g-3g-40gb
+    - nv-80g-4g-40gb
+    - nv-80g-7g-80gb
+  - costPerHour: '2.99'
+    fp16TFlops: '989'
+    fullModelName: NVIDIA H100 80GB HBM3
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: H100_SXM
+    partitionTemplateRefs:
+    - nv-80g-1g-10gb
+    - nv-80g-1g-10gb-me
+    - nv-80g-1g-20gb
+    - nv-80g-2g-20gb
+    - nv-80g-3g-40gb
+    - nv-80g-4g-40gb
+    - nv-80g-7g-80gb
+  - costPerHour: '2.79'
+    fp16TFlops: '756'
+    fullModelName: NVIDIA H100 PCIe
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: H100_PCIe_80G
+    partitionTemplateRefs:
+    - nv-80g-1g-10gb
+    - nv-80g-1g-10gb-me
+    - nv-80g-1g-20gb
+    - nv-80g-2g-20gb
+    - nv-80g-3g-40gb
+    - nv-80g-4g-40gb
+    - nv-80g-7g-80gb
+  - costPerHour: '2.99'
+    fp16TFlops: '989'
+    fullModelName: NVIDIA H800 80GB HBM3
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: H800_SXM
+    partitionTemplateRefs:
+    - nv-80g-1g-10gb
+    - nv-80g-1g-10gb-me
+    - nv-80g-1g-20gb
+    - nv-80g-2g-20gb
+    - nv-80g-3g-40gb
+    - nv-80g-4g-40gb
+    - nv-80g-7g-80gb
+  - costPerHour: '2.79'
+    fp16TFlops: '756'
+    fullModelName: NVIDIA H800 PCIe
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: H800_PCIe
+    partitionTemplateRefs:
+    - nv-80g-1g-10gb
+    - nv-80g-1g-10gb-me
+    - nv-80g-1g-20gb
+    - nv-80g-2g-20gb
+    - nv-80g-3g-40gb
+    - nv-80g-4g-40gb
+    - nv-80g-7g-80gb
+  - costPerHour: '1.49'
+    fp16TFlops: '312'
+    fullModelName: NVIDIA A100-SXM4-40GB
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: A100_SXM_40G
+    partitionTemplateRefs:
+    - nv-40g-1g-5gb
+    - nv-40g-1g-5gb-me
+    - nv-40g-1g-10gb
+    - nv-40g-2g-10gb
+    - nv-40g-3g-20gb
+    - nv-40g-4g-20gb
+    - nv-40g-7g-40gb
+  - costPerHour: '1.39'
+    fp16TFlops: '312'
+    fullModelName: NVIDIA A100-PCIE-40GB
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: A100_PCIe_40G
+    partitionTemplateRefs:
+    - nv-40g-1g-5gb
+    - nv-40g-1g-5gb-me
+    - nv-40g-1g-10gb
+    - nv-40g-2g-10gb
+    - nv-40g-3g-20gb
+    - nv-40g-4g-20gb
+    - nv-40g-7g-40gb
+  - costPerHour: '1.49'
+    fp16TFlops: '312'
+    fullModelName: NVIDIA A800-SXM4-40GB
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: A800_SXM_40G
+    partitionTemplateRefs:
+    - nv-40g-1g-5gb
+    - nv-40g-1g-5gb-me
+    - nv-40g-1g-10gb
+    - nv-40g-2g-10gb
+    - nv-40g-3g-20gb
+    - nv-40g-4g-20gb
+    - nv-40g-7g-40gb
+  - costPerHour: '1.39'
+    fp16TFlops: '312'
+    fullModelName: NVIDIA A800-PCIE-40GB
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: A800_PCIe_40G
+    partitionTemplateRefs:
+    - nv-40g-1g-5gb
+    - nv-40g-1g-5gb-me
+    - nv-40g-1g-10gb
+    - nv-40g-2g-10gb
+    - nv-40g-3g-20gb
+    - nv-40g-4g-20gb
+    - nv-40g-7g-40gb
+  - costPerHour: '0.45'
+    fp16TFlops: '165'
+    fullModelName: NVIDIA A30
+    maxPartitions: 4
+    maxPlacementSlots: 4
+    model: A30
+    partitionTemplateRefs:
+    - nv-a30-1g-6gb
+    - nv-a30-2g-12gb
+    - nv-a30-4g-24gb
+  - costPerHour: '0.60'
+    fp16TFlops: '125'
+    fullModelName: NVIDIA A10
+    model: A10
+  - costPerHour: '1.10'
+    fp16TFlops: '149.7'
+    fullModelName: NVIDIA A40-PCIE-48GB
+    model: A40
+  - costPerHour: '0.55'
+    fp16TFlops: '121'
+    fullModelName: NVIDIA L4
+    model: L4
+  - costPerHour: '1.20'
+    fp16TFlops: '362'
+    fullModelName: NVIDIA L40
+    model: L40
+  - costPerHour: '1.40'
+    fp16TFlops: '366'
+    fullModelName: NVIDIA L40S
+    model: L40S
+  - costPerHour: '0.35'
+    fp16TFlops: '65'
+    fullModelName: Tesla T4
+    model: T4
+  - costPerHour: '0.30'
+    fp16TFlops: '165.16'
+    fullModelName: NVIDIA GeForce RTX 4090
+    model: RTX4090
+  virtualizationTemplates:
+  - computePercent: '14.2857'
+    description: 1/7 GPU slice with 10GB memory (A100/H100 80GB)
+    id: nv-80g-1g-10gb
+    isolationGroupSharing: exclusive
+    maxInstances: 7
+    memoryGigabytes: 10
+    name: 1g.10gb
+    nvmlProfileId: 19
+    placementLimit:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    placementOffset: 1
+  - computePercent: '14.2857'
+    description: 1g slice + media engine (singleton; +1 JPEG + 1 OFA)
+    id: nv-80g-1g-10gb-me
+    isolationGroupSharing: exclusive
+    maxInstances: 1
+    memoryGigabytes: 10
+    name: 1g.10gb+me
+    nvmlProfileId: 20
+    placementLimit:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    placementOffset: 1
+  - computePercent: '14.2857'
+    description: 1g slice with double memory (A100/H100 80GB)
+    id: nv-80g-1g-20gb
+    isolationGroupSharing: exclusive
+    maxInstances: 4
+    memoryGigabytes: 20
+    name: 1g.20gb
+    nvmlProfileId: 15
+    placementLimit:
+    - 0
+    - 2
+    - 4
+    - 6
+    placementOffset: 2
+  - computePercent: '28.5714'
+    description: 2/7 GPU slice with 20GB memory (A100/H100 80GB)
+    id: nv-80g-2g-20gb
+    isolationGroupSharing: exclusive
+    maxInstances: 3
+    memoryGigabytes: 20
+    name: 2g.20gb
+    nvmlProfileId: 14
+    placementLimit:
+    - 0
+    - 2
+    - 4
+    placementOffset: 2
+  - computePercent: '42.8571'
+    description: 3/7 GPU slice with 40GB memory (A100/H100 80GB)
+    id: nv-80g-3g-40gb
+    isolationGroupSharing: exclusive
+    maxInstances: 2
+    memoryGigabytes: 40
+    name: 3g.40gb
+    nvmlProfileId: 9
+    placementLimit:
+    - 0
+    - 4
+    placementOffset: 4
+  - computePercent: '57.1428'
+    description: 4/7 GPU slice with 40GB memory (A100/H100 80GB)
+    id: nv-80g-4g-40gb
+    isolationGroupSharing: exclusive
+    maxInstances: 1
+    memoryGigabytes: 40
+    name: 4g.40gb
+    nvmlProfileId: 5
+    placementLimit:
+    - 0
+    placementOffset: 4
+  - computePercent: '100'
+    description: Full GPU with 80GB memory (A100/H100 80GB)
+    id: nv-80g-7g-80gb
+    isolationGroupSharing: exclusive
+    maxInstances: 1
+    memoryGigabytes: 80
+    name: 7g.80gb
+    nvmlProfileId: 0
+    placementLimit:
+    - 0
+    placementOffset: 8
+  - computePercent: '14.2857'
+    description: 1/7 GPU slice with 5GB memory (A100 40GB)
+    id: nv-40g-1g-5gb
+    isolationGroupSharing: exclusive
+    maxInstances: 7
+    memoryGigabytes: 5
+    name: 1g.5gb
+    nvmlProfileId: 19
+    placementLimit:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    placementOffset: 1
+  - computePercent: '14.2857'
+    description: 1g.5gb + media engine (singleton)
+    id: nv-40g-1g-5gb-me
+    isolationGroupSharing: exclusive
+    maxInstances: 1
+    memoryGigabytes: 5
+    name: 1g.5gb+me
+    nvmlProfileId: 20
+    placementLimit:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    placementOffset: 1
+  - computePercent: '14.2857'
+    description: 1g slice with double memory (A100 40GB; same compute as 1g.5gb)
+    id: nv-40g-1g-10gb
+    isolationGroupSharing: exclusive
+    maxInstances: 4
+    memoryGigabytes: 10
+    name: 1g.10gb
+    nvmlProfileId: 15
+    placementLimit:
+    - 0
+    - 2
+    - 4
+    - 6
+    placementOffset: 2
+  - computePercent: '28.5714'
+    description: 2/7 GPU slice with 10GB memory (A100 40GB)
+    id: nv-40g-2g-10gb
+    isolationGroupSharing: exclusive
+    maxInstances: 3
+    memoryGigabytes: 10
+    name: 2g.10gb
+    nvmlProfileId: 14
+    placementLimit:
+    - 0
+    - 2
+    - 4
+    placementOffset: 2
+  - computePercent: '42.8571'
+    description: 3/7 GPU slice with 20GB memory (A100 40GB)
+    id: nv-40g-3g-20gb
+    isolationGroupSharing: exclusive
+    maxInstances: 2
+    memoryGigabytes: 20
+    name: 3g.20gb
+    nvmlProfileId: 9
+    placementLimit:
+    - 0
+    - 4
+    placementOffset: 4
+  - computePercent: '57.1428'
+    description: 4/7 GPU slice with 20GB memory (A100 40GB)
+    id: nv-40g-4g-20gb
+    isolationGroupSharing: exclusive
+    maxInstances: 1
+    memoryGigabytes: 20
+    name: 4g.20gb
+    nvmlProfileId: 5
+    placementLimit:
+    - 0
+    placementOffset: 4
+  - computePercent: '100'
+    description: Full GPU with 40GB memory (A100 40GB)
+    id: nv-40g-7g-40gb
+    isolationGroupSharing: exclusive
+    maxInstances: 1
+    memoryGigabytes: 40
+    name: 7g.40gb
+    nvmlProfileId: 0
+    placementLimit:
+    - 0
+    placementOffset: 8
+  - computePercent: '25'
+    description: 1/4 NPU slice with 6GB memory (A30)
+    id: nv-a30-1g-6gb
+    isolationGroupSharing: exclusive
+    maxInstances: 4
+    memoryGigabytes: 6
+    name: 1g.6gb
+    nvmlProfileId: 14
+    placementLimit:
+    - 0
+    - 1
+    - 2
+    - 3
+    placementOffset: 1
+  - computePercent: '50'
+    description: 2/4 NPU slice with 12GB memory (A30)
+    id: nv-a30-2g-12gb
+    isolationGroupSharing: exclusive
+    maxInstances: 2
+    memoryGigabytes: 12
+    name: 2g.12gb
+    nvmlProfileId: 5
+    placementLimit:
+    - 0
+    - 2
+    placementOffset: 2
+  - computePercent: '100'
+    description: Full A30 GPU with 24GB memory
+    id: nv-a30-4g-24gb
+    isolationGroupSharing: exclusive
+    maxInstances: 1
+    memoryGigabytes: 24
+    name: 4g.24gb
+    nvmlProfileId: 0
+    placementLimit:
+    - 0
+    placementOffset: 4

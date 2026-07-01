@@ -1,8 +1,19 @@
 ## Append samples of your project ##
+#
+# Per-vendor install — pick ONE vendor and apply its ProviderConfig +
+# TensorFusionCluster (control plane / CRDs + operator must already be installed,
+# and a SchedulingConfigTemplate named "tf-scheduling-config" must exist):
+#
+#   NVIDIA:        kubectl apply -f provider-nvidia.yaml   -f tensorfusioncluster-nvidia.yaml
+#   Ascend:        kubectl apply -f provider-ascend.yaml   -f tensorfusioncluster-ascend.yaml
+#   MooreThreads:  kubectl apply -f provider-mthreads.yaml -f tensorfusioncluster-mthreads.yaml
+#   PPU:           kubectl apply -f provider-ppu.yaml      -f tensorfusioncluster-ppu.yaml
+#
+# `kubectl apply -k .` installs the generic CR examples + all four ProviderConfigs,
+# but NO TensorFusionCluster (they are all named "tensor-fusion" — apply one manually).
 resources:
 - v1_tensorfusionconnection.yaml
 - v1_gpu.yaml
-- v1_tensorfusioncluster.yaml
 - v1_gpupool.yaml
 - v1_gpunode.yaml
 - v1_gpunodeclass.yaml
@@ -10,7 +21,21 @@ resources:
 - v1_workloadprofile.yaml
 - v1_tensorfusionworkload.yaml
 - v1_gpunodeclaim.yaml
-- v1_providerconfig.yaml
+# Per-vendor ProviderConfig examples (coexist; apply the ones you need):
+- provider-nvidia.yaml
+- provider-ascend.yaml
+- provider-mthreads.yaml
+- provider-ppu.yaml
+# Per-vendor TensorFusionCluster examples — pick ONE (all named "tensor-fusion",
+# so they are NOT listed above; apply the one matching your hardware):
+# - tensorfusioncluster-nvidia.yaml
+# - tensorfusioncluster-ascend.yaml
+# - tensorfusioncluster-mthreads.yaml
+# - tensorfusioncluster-ppu.yaml
+# Cluster with MULTIPLE card types: use ONE TensorFusionCluster with several
+# pools under spec.gpuPools (exactly one isDefault: true). Ready-made example
+# covering all current vendors:
+# - tensorfusioncluster-multi-vendor.yaml
 # Optional Ascend runtime examples (apply manually when needed):
 # - ascend-runtimeclass.yaml
 # - ascend-partition-runtimeclass-deployment.yaml

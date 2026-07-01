@@ -1,13 +1,15 @@
-{{- if .Values.cluster.enabled }}
-{{- $c := .Values.cluster }}
-{{- $nv := .Values.providerConfigs.nvidia }}
-# SchedulingConfigTemplate referenced by the default pool below. Values mirror a
+{{- $sct := .Values.schedulingConfigTemplate }}
+{{- $sctName := $sct.name | default "tf-scheduling-config" }}
+{{- if $sct.enabled }}
+# SchedulingConfigTemplate is a shared dependency referenced by EVERY pool (all
+# vendors), so it is created independently of cluster.enabled — non-NVIDIA /
+# multi-vendor installs (cluster.enabled=false) still get it. Values mirror a
 # known-good production config (auto-freeze TTLs per QoS, ERL parameters,
 # NodeCompactGPULowLoad placement). Tune via override files as needed.
 apiVersion: tensor-fusion.ai/v1
 kind: SchedulingConfigTemplate
 metadata:
-  name: {{ $c.schedulingConfigTemplateName | default "tf-scheduling-config" }}
+  name: {{ $sctName }}
   annotations:
     helm.sh/resource-policy: keep
 spec:
@@ -63,6 +65,10 @@ spec:
       capacityMax: '6000'
       minRefillRate: '80'
       maxRefillRate: '12000'
+{{- end }}
+{{- if .Values.cluster.enabled }}
+{{- $c := .Values.cluster }}
+{{- $nv := .Values.providerConfigs.nvidia }}
 ---
 apiVersion: tensor-fusion.ai/v1
 kind: TensorFusionCluster
@@ -78,12 +84,99 @@ spec:
         capacityConfig:
           {{- toYaml $c.pool.capacityConfig | nindent 10 }}
         componentConfig:
-          # Only the hypervisor image is set here — client / worker images are
-          # resolved from the NVIDIA ProviderConfig (single source of truth).
+          client:
+            # client / worker images default to the NVIDIA ProviderConfig images.
+            image: {{ $nv.images.remoteClient | quote }}
+            embeddedModeImage: {{ $nv.images.remoteClient | quote }}
+            remoteModeImage: {{ $nv.images.remoteClient | quote }}
+            operatorEndpoint: http://tensor-fusion-sys.{{ include "tensor-fusion.namespace" . }}:8080
+            patchToContainer:
+              env:
+                - name: TF_ENABLE_LOG
+                  value: "0"
+                - name: TF_LOG_PATH
+                  value: /tmp/tf.log
+            patchToPod:
+              spec: {}
           hypervisor:
+            enableVector: true
             image: {{ $c.hypervisorImage | quote }}
+            portNumber: 8001
+            vectorImage: {{ $c.vectorImage | default "docker.io/timberio/vector:latest-alpine" | quote }}
+            podTemplate:
+              template:
+                spec:
+                  containers:
+                    - name: tensor-fusion-hypervisor
+                      imagePullPolicy: IfNotPresent
+                      env:
+                        - name: TF_LOG_LEVEL
+                          value: info
+                        # NVIDIA ProviderConfig sets no ldLibraryPath, so the
+                        # accelerator lib is not on the loader search path — the
+                        # hypervisor needs its FULL path (the operator only
+                        # auto-injects the bare filename as a fallback).
+                        - name: TF_ACCELERATOR_LIB_PATH
+                          value: /run/tensor-fusion/libaccelerator_nvidia.so
+                      resources:
+                        requests:
+                          cpu: 60m
+                          memory: 128Mi
+                        limits:
+                          cpu: 1000m
+                          memory: 1Gi
+                      securityContext:
+                        privileged: true
+                        runAsUser: 0
+                        runAsGroup: 0
+                    - name: vector
+                      resources:
+                        requests:
+                          cpu: 50m
+                          memory: 64Mi
+                  securityContext:
+                    runAsUser: 0
+                    runAsGroup: 0
+          nodeDiscovery:
+            image: {{ $c.nodeDiscoveryImage | default "docker.io/tensorfusion/tensor-fusion-node-discovery:latest" | quote }}
+            podTemplate:
+              template:
+                spec:
+                  containers:
+                    - name: tensorfusion-node-discovery
+          worker:
+            image: {{ $nv.images.remoteWorker | quote }}
+            podTemplate:
+              template:
+                spec:
+                  containers:
+                    - name: tensorfusion-worker
+                      env:
+                        - name: TF_ENABLE_LOG
+                          value: "1"
+                        - name: TF_NVML_LIB_PATH
+                          value: /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1
+                        - name: TF_CUDA_LIB_PATH
+                          value: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+                      resources:
+                        requests:
+                          cpu: 100m
+                          memory: 128Mi
+                        limits:
+                          cpu: 2000m
+                          memory: 8Gi
         nodeManagerConfig:
           defaultVendor: NVIDIA
+          provisioningMode: AutoSelect
+          nodeCompaction:
+            period: 30m
+          nodePoolRollingUpdatePolicy:
+            batchInterval: 1s
+            batchPercentage: 20
+            maxDuration: 10m
+            maintenanceWindow:
+              includes:
+                - 2 2 * * *
           nodeSelector:
             nodeSelectorTerms:
               - matchExpressions:
@@ -91,5 +184,5 @@ spec:
                     operator: In
                     values:
                       - "true"
-        schedulingConfigTemplate: {{ $c.schedulingConfigTemplateName | default "tf-scheduling-config" }}
+        schedulingConfigTemplate: {{ $sctName }}
 {{- end }}

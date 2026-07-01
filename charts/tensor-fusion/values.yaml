@@ -675,12 +675,19 @@ providerConfigs:
     #     sharedDevices: []
     deviceMount: {}
 
-# Optional, opt-in default TensorFusionCluster (+ its SchedulingConfigTemplate)
-# created by the chart so a fresh `helm install` is usable out of the box with a
-# single NVIDIA shared GPU pool. Both CRs carry helm.sh/resource-policy: keep, so
-# uninstalling the chart will NOT delete the cluster or its pools.
-# Disable this if you manage TensorFusionCluster / SchedulingConfigTemplate
-# out-of-band (kubectl apply).
+# SchedulingConfigTemplate — placement / auto-freeze / rate-limit policy shared by
+# EVERY GPU pool (all vendors). Created independently of `cluster.enabled` so
+# non-NVIDIA / multi-vendor installs (cluster.enabled=false) still get it; every
+# pool references it by `.name`. Carries helm.sh/resource-policy: keep.
+schedulingConfigTemplate:
+  enabled: true
+  name: tf-scheduling-config
+
+# Optional, opt-in default TensorFusionCluster created by the chart so a fresh
+# `helm install` is usable out of the box with a single NVIDIA shared GPU pool.
+# Carries helm.sh/resource-policy: keep, so uninstalling the chart will NOT delete
+# the cluster or its pools. Disable for non-NVIDIA clusters (then apply a
+# per-vendor TensorFusionCluster from config/samples).
 cluster:
   enabled: true
   name: tensor-fusion
@@ -688,19 +695,24 @@ cluster:
   # pool, so it lives here. Client / worker images are NOT repeated: they come
   # from providerConfigs.nvidia.images.remoteClient / remoteWorker (single source).
   hypervisorImage: tensorfusion/tensor-fusion-hypervisor:latest
-  schedulingConfigTemplateName: tf-scheduling-config
   pool:
     name: shared
     # GPU node label the default pool selects on.
     nodeSelectorKey: nvidia.com/gpu.present
     capacityConfig:
       maxResources:
+        cpu: "0"
+        memory: "0"
         tflops: "100"
         vram: "100Gi"
       minResources:
+        cpu: "0"
+        memory: "0"
         tflops: "20"
         vram: "10Gi"
       warmResources:
+        cpu: "0"
+        memory: "0"
         tflops: "10"
         vram: "5Gi"
       oversubscription:
