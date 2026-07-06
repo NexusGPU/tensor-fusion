@@ -1012,8 +1012,95 @@ func TestFitsVirtualNodeAllocatable_RejectsOversubscribedCPU(t *testing.T) {
 	}
 }
 
+func TestVirtualNodeAllocatableReason_ReportsCPU(t *testing.T) {
+	nodeInfo := newFrameworkNodeInfo(
+		"node-b",
+		nil,
+		corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2"),
+			corev1.ResourceMemory: resource.MustParse("8Gi"),
+			corev1.ResourcePods:   resource.MustParse("4"),
+		},
+	)
+	firstPodInfo, _ := framework.NewPodInfo(newSchedulerTestPod("ns1", "worker-1", "1500m", "1Gi"))
+	nodeInfo.AddPodInfo(firstPodInfo)
+	secondPodInfo, _ := framework.NewPodInfo(newSchedulerTestPod("ns1", "worker-2", "1500m", "1Gi"))
+
+	ok, reason := virtualNodeAllocatableReason(cloneNodeInfoWithVirtualPod(nodeInfo, secondPodInfo))
+
+	if ok {
+		t.Fatal("expected virtual node to be oversubscribed")
+	}
+	if !strings.Contains(reason, "cpu") || !strings.Contains(reason, "requested=") || !strings.Contains(reason, "allocatable=") {
+		t.Fatalf("reason %q does not explain CPU pressure", reason)
+	}
+}
+
+func TestDefragPlacementDiagnosticsSummaryIncludesTopRejects(t *testing.T) {
+	diag := newDefragPlacementDiagnostics("node-source", "profile-a", []string{"node-a", "node-b"})
+	diag.startPod(newDefragWorkerPod("worker-a", "node-source", time.Now()))
+	diag.setFeasibleNodes([]fwk.NodeInfo{
+		newFrameworkNodeInfo("node-a", nil, nil),
+		newFrameworkNodeInfo("node-b", nil, nil),
+	})
+	diag.reject("node-a", "virtual-node-resource", "cpu requested=3000m allocatable=2000m")
+	diag.reject("node-b", "allocator-select", "select GPU: insufficient GPUs")
+
+	summary := diag.summary()
+
+	for _, want := range []string{
+		"pod=ns1/worker-a",
+		"feasible=2",
+		"budgetTargets=2",
+		"node-a:virtual-node-resource(cpu requested=3000m allocatable=2000m)",
+		"node-b:allocator-select(select GPU: insufficient GPUs)",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary %q missing %q", summary, want)
+		}
+	}
+}
+
+func TestDefragMaxWorkerPerNodeRejectsAtCap(t *testing.T) {
+	nb := &nodeBudget{workerCount: 1}
+	diag := newDefragPlacementDiagnostics("node-source", "profile-a", []string{"node-target"})
+
+	if !defragRejectsMaxWorkerPerNode(nb, 1, "node-target", diag) {
+		t.Fatal("expected target at maxWorkerPerNode to be rejected before adding another worker")
+	}
+	summary := diag.summary()
+	if !strings.Contains(summary, "node-target:max-worker-per-node") {
+		t.Fatalf("summary %q missing max-worker rejection", summary)
+	}
+}
+
+func TestApplyGPUPlacementToBudgetConsumesVirtualGPU(t *testing.T) {
+	gpu := gpuWithUsageOnNode("target-gpu-0", "node-target", "100", "10Gi")
+	nb := &nodeBudget{
+		gpus:      map[string]*tfv1.GPU{gpu.Name: gpu.DeepCopy()},
+		totalGPUs: 1,
+		usedGPUs:  0,
+	}
+	req := &tfv1.AllocRequest{
+		Count: 1,
+		Request: tfv1.Resource{
+			Tflops: resource.MustParse("100"),
+			Vram:   resource.MustParse("1Gi"),
+		},
+	}
+
+	applyGPUPlacementToBudget(nb, []*tfv1.GPU{gpu.DeepCopy()}, req)
+
+	if nb.usedGPUs != 1 {
+		t.Fatalf("usedGPUs=%d, want 1 after fully-free GPU is consumed", nb.usedGPUs)
+	}
+	if got := nb.gpus[gpu.Name].Status.Available.Tflops; !got.IsZero() {
+		t.Fatalf("available TFLOPs=%s, want exhausted virtual budget", got.String())
+	}
+}
+
 func TestBuildDefragNodeBudgets_SkipsDeletionMarkedNodes(t *testing.T) {
-	budgets := buildDefragNodeBudgets(
+	budgets, _, _ := buildDefragNodeBudgets(
 		"pool-a",
 		"",
 		map[string]map[string]*tfv1.GPU{
@@ -1059,7 +1146,7 @@ func TestBuildDefragNodeBudgets_SkipsDeletionMarkedNodes(t *testing.T) {
 }
 
 func TestBuildDefragNodeBudgets_SkipsMissingSchedulerNodeInfo(t *testing.T) {
-	budgets := buildDefragNodeBudgets(
+	budgets, _, _ := buildDefragNodeBudgets(
 		"pool-a",
 		"source-node",
 		map[string]map[string]*tfv1.GPU{
@@ -2661,7 +2748,7 @@ func TestBuildDefragNodeBudgets_DropsEmptyTarget(t *testing.T) {
 		empty:  newFrameworkNodeInfo(empty, nil, nil),
 	}}
 
-	budgets := buildDefragNodeBudgets(pool, source, nodeGpuStore, nil, lister)
+	budgets, _, _ := buildDefragNodeBudgets(pool, source, nodeGpuStore, nil, lister)
 
 	if _, ok := budgets[source]; ok {
 		t.Fatalf("source node must not appear in budgets, got %v", budgets)
@@ -2675,6 +2762,64 @@ func TestBuildDefragNodeBudgets_DropsEmptyTarget(t *testing.T) {
 	}
 	if nb.totalGPUs != 2 || nb.usedGPUs != 1 {
 		t.Fatalf("buddy budget total/used = %d/%d, want 2/1", nb.totalGPUs, nb.usedGPUs)
+	}
+}
+
+func TestBuildDefragNodeBudgets_ReportsDirtyFreeAndExclusions(t *testing.T) {
+	// The smoking gun we want to read off production: a target with used GPUs
+	// plus a free-but-unreported (Available==nil) GPU. The dirty card must be
+	// tallied so "Free=0,Dirty>0" is visible, and a fully-empty node must
+	// surface an exclusion reason instead of vanishing silently.
+	const pool = "pool-a"
+	source := "node-source"
+	buddy := "node-buddy"
+	empty := "node-empty"
+
+	dirty := gpuFullyFreeOnNode("buddy-gpu-dirty", buddy)
+	dirty.Status.Available = nil // present in store but status never reported
+
+	nodeGpuStore := map[string]map[string]*tfv1.GPU{
+		source: {"src-gpu-0": gpuWithUsageOnNode("src-gpu-0", source, "50", "5Gi")},
+		buddy: {
+			"buddy-gpu-0":     gpuWithUsageOnNode("buddy-gpu-0", buddy, "60", "8Gi"),
+			"buddy-gpu-dirty": dirty,
+		},
+		empty: {"empty-gpu-0": gpuFullyFreeOnNode("empty-gpu-0", empty)},
+	}
+	lister := &fakeNodeInfoLister{infos: map[string]fwk.NodeInfo{
+		source: newFrameworkNodeInfo(source, nil, nil),
+		buddy:  newFrameworkNodeInfo(buddy, nil, nil),
+		empty:  newFrameworkNodeInfo(empty, nil, nil),
+	}}
+
+	_, accounting, exclusions := buildDefragNodeBudgets(pool, source, nodeGpuStore, nil, lister)
+
+	var buddyAcct *defragBudgetNodeAccounting
+	for i := range accounting {
+		if accounting[i].Node == buddy {
+			buddyAcct = &accounting[i]
+		}
+	}
+	if buddyAcct == nil {
+		t.Fatalf("buddy accounting missing, got %+v", accounting)
+	}
+	// Only the healthy used GPU counts toward the tally; the dirty free GPU is
+	// invisible to placement, so Free must be 0 while Dirty is 1.
+	if buddyAcct.Total != 1 || buddyAcct.Used != 1 || buddyAcct.Free != 0 || buddyAcct.Dirty != 1 {
+		t.Fatalf("buddy accounting = %+v, want total=1 used=1 free=0 dirty=1", *buddyAcct)
+	}
+
+	foundEmpty := false
+	for _, e := range exclusions {
+		if e.Node == empty {
+			foundEmpty = true
+			if !strings.Contains(e.Reason, "empty node") {
+				t.Fatalf("empty exclusion reason %q missing 'empty node'", e.Reason)
+			}
+		}
+	}
+	if !foundEmpty {
+		t.Fatalf("empty node exclusion missing, got %+v", exclusions)
 	}
 }
 
@@ -2695,7 +2840,7 @@ func TestBuildDefragNodeBudgets_SkipsExcludedNodeLabels(t *testing.T) {
 			constants.DefragSourceNodeLabel: constants.TrueStringValue,
 		}, nil),
 	}}
-	budgets := buildDefragNodeBudgets(pool, source, nodeGpuStore, nil, lister)
+	budgets, _, _ := buildDefragNodeBudgets(pool, source, nodeGpuStore, nil, lister)
 	if _, ok := budgets[marked]; ok {
 		t.Fatalf("DefragSourceNodeLabel must keep node out of budgets, got %v", budgets)
 	}
