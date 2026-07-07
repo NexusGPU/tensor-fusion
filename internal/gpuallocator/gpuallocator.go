@@ -468,6 +468,17 @@ func (s *GpuAllocator) FilterWithPreempt(
 }
 
 func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []*tfv1.GPU) ([]*tfv1.GPU, error) {
+	return s.SelectFromStore(req, filteredGPUs, s.nodeGpuStore)
+}
+
+// SelectFromStore selects GPUs using the supplied node GPU store for strategy
+// node-level scoring. Defrag dry-runs pass their virtual budget here so
+// filtering and selection observe the same simulated state.
+func (s *GpuAllocator) SelectFromStore(
+	req *tfv1.AllocRequest,
+	filteredGPUs []*tfv1.GPU,
+	nodeGpuStore map[string]map[string]*tfv1.GPU,
+) ([]*tfv1.GPU, error) {
 	pool := &tfv1.GPUPool{}
 	if err := s.Get(s.ctx, client.ObjectKey{Name: req.PoolName}, pool); err != nil {
 		return nil, fmt.Errorf("get pool %s: %w", req.PoolName, err)
@@ -482,7 +493,7 @@ func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []*tfv1.GPU) 
 
 	strategy := NewStrategy(schedulingConfigTemplate.Spec.Placement.Mode, &config.GPUFitConfig{
 		MaxWorkerPerNode: s.maxWorkerPerNode,
-	}, s.nodeGpuStore)
+	}, nodeGpuStore)
 	selectedGPUs, err := strategy.SelectGPUs(filteredGPUs, req.Count)
 	if err != nil {
 		return nil, fmt.Errorf("select GPU: %w", err)
@@ -653,7 +664,7 @@ func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocR
 		needsFiltering := false
 		for _, gpu := range filteredGPUs {
 			nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
-			if len(s.nodeWorkerStore[nodeName]) > s.maxWorkerPerNode {
+			if len(s.nodeWorkerStore[nodeName]) >= s.maxWorkerPerNode {
 				needsFiltering = true
 				break
 			}
@@ -664,7 +675,7 @@ func (s *GpuAllocator) CheckQuotaAndFilter(ctx context.Context, req *tfv1.AllocR
 			finalFilteredGPUs := make([]*tfv1.GPU, 0, len(filteredGPUs))
 			for _, gpu := range filteredGPUs {
 				nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
-				if len(s.nodeWorkerStore[nodeName]) <= s.maxWorkerPerNode {
+				if len(s.nodeWorkerStore[nodeName]) < s.maxWorkerPerNode {
 					finalFilteredGPUs = append(finalFilteredGPUs, gpu)
 				}
 			}
