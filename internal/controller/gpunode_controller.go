@@ -178,7 +178,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 	}
 
-	if err := r.reconcileNodeDiscoveryJob(ctx, node, poolObj); err != nil {
+	if err := r.reconcileNodeDiscoveryJob(ctx, node, poolObj, coreNode); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -353,10 +353,21 @@ func (r *GPUNodeReconciler) fetchAllOwnedGPUDevices(ctx context.Context, node *t
 	return gpuList.Items, nil
 }
 
+func isJobFinished(job *batchv1.Job) bool {
+	for _, c := range job.Status.Conditions {
+		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) &&
+			c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 	ctx context.Context,
 	gpunode *tfv1.GPUNode,
 	pool *tfv1.GPUPool,
+	coreNode *corev1.Node,
 ) error {
 	log := log.FromContext(ctx)
 	log.Info("starting node discovery job")
@@ -398,6 +409,12 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 		},
 	}
 
+	if job.Annotations == nil {
+		job.Annotations = map[string]string{}
+	}
+	currentBootID := coreNode.Status.NodeInfo.BootID
+	job.Annotations[constants.NodeBootIDAnnotationKey] = currentBootID
+
 	if err := r.Get(ctx, client.ObjectKeyFromObject(job), job); err != nil {
 		if errors.IsNotFound(err) {
 			if err := ctrl.SetControllerReference(gpunode, job, r.Scheme); err != nil {
@@ -409,6 +426,22 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 		} else {
 			return fmt.Errorf("create node discovery job %w", err)
 		}
+	}
+
+	// A finished discovery job from a previous node boot is stale: after a reboot
+	// GPU devices may have changed (e.g. card physically removed), so delete the
+	// old job and let the next reconcile (triggered by the owned-job deletion
+	// event) recreate it to re-run discovery.
+	if currentBootID != "" && isJobFinished(job) &&
+		job.Annotations[constants.NodeBootIDAnnotationKey] != currentBootID {
+		log.Info("node rebooted since last discovery run, deleting stale discovery job to re-trigger it",
+			"node", gpunode.Name, "jobBootID", job.Annotations[constants.NodeBootIDAnnotationKey],
+			"currentBootID", currentBootID)
+		if err := r.Delete(ctx, job,
+			client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("delete stale node discovery job %w", err)
+		}
+		return nil
 	}
 
 	jobFailed := false

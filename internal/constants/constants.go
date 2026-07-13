@@ -59,7 +59,11 @@ const (
 	// enumerated by the latest node discovery run, value is the RFC3339 time it
 	// was first found missing. Cleared automatically when the device reappears.
 	GPUMissingSinceAnnotationKey = Domain + "/gpu-missing-since"
-	WorkloadKey                  = Domain + "/workload"
+	// NodeBootIDAnnotationKey records the Kubernetes node boot ID a node-discovery
+	// job was created for, so a node reboot (boot ID change) re-triggers discovery
+	// to refresh GPU resources (e.g. clean up physically removed cards).
+	NodeBootIDAnnotationKey = Domain + "/node-boot-id"
+	WorkloadKey             = Domain + "/workload"
 
 	GpuPoolKey = Domain + "/gpupool"
 

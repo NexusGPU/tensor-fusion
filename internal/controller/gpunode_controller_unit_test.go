@@ -56,7 +56,7 @@ func TestGPUNodeReconcileNodeDiscoveryJobIgnoresFailedAttemptsWithoutFailedCondi
 		t.Fatalf("get GPUNode: %v", err)
 	}
 
-	if err := reconciler.reconcileNodeDiscoveryJob(ctx, currentNode, newNodeDiscoveryTestPool(t)); err != nil {
+	if err := reconciler.reconcileNodeDiscoveryJob(ctx, currentNode, newNodeDiscoveryTestPool(t), &corev1.Node{}); err != nil {
 		t.Fatalf("reconcileNodeDiscoveryJob: %v", err)
 	}
 
@@ -67,6 +67,93 @@ func TestGPUNodeReconcileNodeDiscoveryJobIgnoresFailedAttemptsWithoutFailedCondi
 
 	if updatedNode.Status.Phase != tfv1.TensorFusionGPUNodePhasePending {
 		t.Fatalf("expected GPUNode phase %q, got %q", tfv1.TensorFusionGPUNodePhasePending, updatedNode.Status.Phase)
+	}
+}
+
+func newBootIDTestCoreNode(bootID string) *corev1.Node {
+	return &corev1.Node{
+		Status: corev1.NodeStatus{
+			NodeInfo: corev1.NodeSystemInfo{BootID: bootID},
+		},
+	}
+}
+
+func newFinishedDiscoveryJob(gpuNodeName, bootID string) *batchv1.Job {
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      getDiscoveryJobName(gpuNodeName),
+			Namespace: utils.CurrentNamespace(),
+			Annotations: map[string]string{
+				constants.NodeBootIDAnnotationKey: bootID,
+			},
+		},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+}
+
+// A node reboot (boot ID change) must re-trigger node discovery so that GPU
+// resources are refreshed, e.g. a physically removed card gets cleaned up.
+func TestGPUNodeReconcileRecreatesDiscoveryJobAfterNodeReboot(t *testing.T) {
+	t.Helper()
+
+	ctx := context.Background()
+	gpuNode := newNodeDiscoveryTestGPUNode()
+	job := newFinishedDiscoveryJob(gpuNode.Name, "boot-1")
+
+	reconciler, kubeClient := newNodeDiscoveryTestReconciler(t, gpuNode, job)
+
+	if err := reconciler.reconcileNodeDiscoveryJob(ctx, gpuNode, newNodeDiscoveryTestPool(t),
+		newBootIDTestCoreNode("boot-2")); err != nil {
+		t.Fatalf("reconcileNodeDiscoveryJob: %v", err)
+	}
+
+	// the stale job from the previous boot must be deleted so the next reconcile
+	// (triggered by the owned-job deletion event) recreates it
+	stale := &batchv1.Job{}
+	err := kubeClient.Get(ctx, types.NamespacedName{
+		Name: getDiscoveryJobName(gpuNode.Name), Namespace: utils.CurrentNamespace()}, stale)
+	if err == nil {
+		t.Fatalf("expected stale discovery job from previous boot to be deleted")
+	}
+
+	// the follow-up reconcile recreates the job stamped with the current boot ID
+	if err := reconciler.reconcileNodeDiscoveryJob(ctx, gpuNode, newNodeDiscoveryTestPool(t),
+		newBootIDTestCoreNode("boot-2")); err != nil {
+		t.Fatalf("reconcileNodeDiscoveryJob recreate: %v", err)
+	}
+	recreated := &batchv1.Job{}
+	if err := kubeClient.Get(ctx, types.NamespacedName{
+		Name: getDiscoveryJobName(gpuNode.Name), Namespace: utils.CurrentNamespace()}, recreated); err != nil {
+		t.Fatalf("expected discovery job recreated after reboot: %v", err)
+	}
+	if recreated.Annotations[constants.NodeBootIDAnnotationKey] != "boot-2" {
+		t.Fatalf("recreated job should be stamped with current boot ID, got %q",
+			recreated.Annotations[constants.NodeBootIDAnnotationKey])
+	}
+}
+
+func TestGPUNodeReconcileKeepsDiscoveryJobWithinSameBoot(t *testing.T) {
+	t.Helper()
+
+	ctx := context.Background()
+	gpuNode := newNodeDiscoveryTestGPUNode()
+	job := newFinishedDiscoveryJob(gpuNode.Name, "boot-1")
+
+	reconciler, kubeClient := newNodeDiscoveryTestReconciler(t, gpuNode, job)
+
+	if err := reconciler.reconcileNodeDiscoveryJob(ctx, gpuNode, newNodeDiscoveryTestPool(t),
+		newBootIDTestCoreNode("boot-1")); err != nil {
+		t.Fatalf("reconcileNodeDiscoveryJob: %v", err)
+	}
+
+	kept := &batchv1.Job{}
+	if err := kubeClient.Get(ctx, types.NamespacedName{
+		Name: getDiscoveryJobName(gpuNode.Name), Namespace: utils.CurrentNamespace()}, kept); err != nil {
+		t.Fatalf("completed discovery job of the current boot must be kept: %v", err)
 	}
 }
 
@@ -98,7 +185,7 @@ func TestGPUNodeReconcileNodeDiscoveryJobMarksNodeFailedOnFailedCondition(t *tes
 		t.Fatalf("get GPUNode: %v", err)
 	}
 
-	if err := reconciler.reconcileNodeDiscoveryJob(ctx, currentNode, newNodeDiscoveryTestPool(t)); err != nil {
+	if err := reconciler.reconcileNodeDiscoveryJob(ctx, currentNode, newNodeDiscoveryTestPool(t), &corev1.Node{}); err != nil {
 		t.Fatalf("reconcileNodeDiscoveryJob: %v", err)
 	}
 
