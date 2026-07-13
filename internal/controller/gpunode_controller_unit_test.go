@@ -227,6 +227,43 @@ func TestGPUNodeReconcileInitializesEmptyPhaseToPending(t *testing.T) {
 	}
 }
 
+func TestSyncStatusToGPUDevicesSkipsMissingGPUs(t *testing.T) {
+	t.Helper()
+
+	ctx := context.Background()
+	gpuNode := newNodeDiscoveryTestGPUNode()
+
+	normalGPU := newNodeDiscoveryTestGPU(gpuNode.Name, tfv1.TensorFusionGPUPhasePending)
+	normalGPU.Name = "gpu-normal"
+
+	missingGPU := newNodeDiscoveryTestGPU(gpuNode.Name, tfv1.TensorFusionGPUPhaseUnknown)
+	missingGPU.Name = "gpu-missing"
+	missingGPU.Annotations = map[string]string{
+		constants.GPUMissingSinceAnnotationKey: "2026-07-13T00:00:00Z",
+	}
+
+	reconciler, kubeClient := newNodeDiscoveryTestReconciler(t, gpuNode, normalGPU, missingGPU)
+
+	if _, err := reconciler.syncStatusToGPUDevices(ctx, gpuNode, tfv1.TensorFusionGPUPhaseRunning); err != nil {
+		t.Fatalf("syncStatusToGPUDevices: %v", err)
+	}
+
+	updated := &tfv1.GPU{}
+	if err := kubeClient.Get(ctx, types.NamespacedName{Name: "gpu-normal"}, updated); err != nil {
+		t.Fatalf("get normal GPU: %v", err)
+	}
+	if updated.Status.Phase != tfv1.TensorFusionGPUPhaseRunning {
+		t.Fatalf("expected normal GPU phase %q, got %q", tfv1.TensorFusionGPUPhaseRunning, updated.Status.Phase)
+	}
+
+	if err := kubeClient.Get(ctx, types.NamespacedName{Name: "gpu-missing"}, updated); err != nil {
+		t.Fatalf("get missing GPU: %v", err)
+	}
+	if updated.Status.Phase != tfv1.TensorFusionGPUPhaseUnknown {
+		t.Fatalf("missing GPU phase must stay %q, got %q", tfv1.TensorFusionGPUPhaseUnknown, updated.Status.Phase)
+	}
+}
+
 func newNodeDiscoveryTestReconciler(t *testing.T, objects ...ctrlclient.Object) (*GPUNodeReconciler, ctrlclient.Client) {
 	t.Helper()
 

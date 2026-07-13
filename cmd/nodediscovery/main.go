@@ -23,6 +23,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/samber/lo"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -250,6 +251,14 @@ func main() {
 
 	}
 
+	// GPUs owned by this node but absent from the current enumeration (e.g.
+	// physically removed) must be marked missing, otherwise stale GPU CRs keep
+	// polluting scheduling and capacity statistics forever.
+	if err := markMissingGPUs(k8sClient, ctx, gpunode, allDeviceIDs); err != nil {
+		ctrl.Log.Error(err, "failed to mark missing GPUs")
+		os.Exit(1)
+	}
+
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		return patchGPUNodeStatus(k8sClient, ctx, gpunode, totalTFlops, totalVRAM, int32(count), allDeviceIDs)
 	})
@@ -257,6 +266,76 @@ func main() {
 		ctrl.Log.Error(err, "failed to patch status of GPUNode after retries")
 		os.Exit(1)
 	}
+}
+
+// markMissingGPUs cleans up GPU CRs owned by this node whose physical device was
+// not enumerated in the current discovery run: idle GPUs (no running apps, the
+// normal case since ops drain a card before pulling it) are deleted directly,
+// busy GPUs are only marked (phase -> Unknown plus a missing-since annotation)
+// so transient NVML/driver hiccups do not wipe allocation state, and get deleted
+// by a later run once idle.
+func markMissingGPUs(
+	k8sClient client.Client, ctx context.Context,
+	gpunode *tfv1.GPUNode, aliveDeviceIDs []string) error {
+	gpuList := &tfv1.GPUList{}
+	if err := k8sClient.List(ctx, gpuList,
+		client.MatchingLabels{constants.LabelKeyOwner: gpunode.Name}); err != nil {
+		return fmt.Errorf("list GPUs owned by node %s: %w", gpunode.Name, err)
+	}
+
+	alive := make(map[string]struct{}, len(aliveDeviceIDs))
+	for _, id := range aliveDeviceIDs {
+		alive[normalizeGPUIdentifier(id)] = struct{}{}
+	}
+
+	for i := range gpuList.Items {
+		gpu := &gpuList.Items[i]
+		if _, ok := alive[normalizeGPUIdentifier(gpu.Name)]; ok {
+			continue
+		}
+
+		// Cards are always drained before being physically pulled, so an idle
+		// missing GPU has nothing to lose (Available == Capacity): delete it
+		// directly. Even a false positive is harmless, the next discovery run
+		// recreates it identically.
+		if len(gpu.Status.RunningApps) == 0 {
+			ctrl.Log.Info("GPU device not enumerated and has no running apps, deleting directly",
+				"uuid", gpu.Name)
+			if err := k8sClient.Delete(ctx, gpu); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("delete missing idle GPU %s: %w", gpu.Name, err)
+			}
+			continue
+		}
+
+		// A missing GPU still referenced by running apps: deleting now would reset
+		// allocation accounting on recreate (transient NVML/driver hiccups), so
+		// only mark it. Once its workloads are gone, the next discovery run
+		// deletes it via the idle path above.
+		// Keep the first missing-since timestamp for observability.
+		if _, marked := gpu.Annotations[constants.GPUMissingSinceAnnotationKey]; !marked {
+			patch := client.MergeFrom(gpu.DeepCopy())
+			if gpu.Annotations == nil {
+				gpu.Annotations = map[string]string{}
+			}
+			gpu.Annotations[constants.GPUMissingSinceAnnotationKey] = time.Now().Format(time.RFC3339)
+			if err := k8sClient.Patch(ctx, gpu, patch); err != nil {
+				return fmt.Errorf("mark GPU %s missing: %w", gpu.Name, err)
+			}
+		}
+
+		if gpu.Status.Phase != tfv1.TensorFusionGPUPhaseUnknown {
+			patch := client.MergeFrom(gpu.DeepCopy())
+			gpu.Status.Phase = tfv1.TensorFusionGPUPhaseUnknown
+			if err := k8sClient.Status().Patch(ctx, gpu, patch); err != nil {
+				return fmt.Errorf("update phase of missing GPU %s: %w", gpu.Name, err)
+			}
+		}
+
+		ctrl.Log.Info("GPU device not enumerated in this discovery run but still has running apps, "+
+			"marked as missing, it will be deleted once idle in a future discovery run unless it recovers",
+			"uuid", gpu.Name, "missingSince", gpu.Annotations[constants.GPUMissingSinceAnnotationKey])
+	}
+	return nil
 }
 
 // Use proper patch-based update with retry on conflict
@@ -356,7 +435,9 @@ func createOrUpdateTensorFusionGPU(
 		if gpu.Status.UsedBy == "" {
 			gpu.Status.UsedBy = tfv1.UsedByTensorFusion
 		}
-		if gpu.Status.Phase == "" {
+		if gpu.Status.Phase == "" || gpu.Status.Phase == tfv1.TensorFusionGPUPhaseUnknown {
+			// Unknown means the device was previously marked missing by discovery,
+			// it has recovered now, reset to Pending for the controller to promote.
 			gpu.Status.Phase = tfv1.TensorFusionGPUPhasePending
 		}
 		return k8sClient.Status().Patch(ctx, gpu, client.Merge)

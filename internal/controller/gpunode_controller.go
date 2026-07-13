@@ -328,6 +328,12 @@ func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tf
 	}
 
 	for i := range gpuList {
+		// GPUs marked missing by node discovery must keep their Unknown phase,
+		// otherwise node level sync would put a physically absent GPU back into
+		// scheduling rotation.
+		if utils.IsGPUMissing(&gpuList[i]) {
+			continue
+		}
 		if gpuList[i].Status.Phase != state {
 			patch := client.MergeFrom(gpuList[i].DeepCopy())
 			gpuList[i].Status.Phase = state

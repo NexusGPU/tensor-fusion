@@ -55,7 +55,11 @@ const (
 	InitialGPUNodeSelector      = "nvidia.com/gpu.present=true"
 
 	LastSyncTimeAnnotationKey = Domain + "/last-sync"
-	WorkloadKey               = Domain + "/workload"
+	// GPUMissingSinceAnnotationKey marks a GPU CR whose physical device was not
+	// enumerated by the latest node discovery run, value is the RFC3339 time it
+	// was first found missing. Cleared automatically when the device reappears.
+	GPUMissingSinceAnnotationKey = Domain + "/gpu-missing-since"
+	WorkloadKey                  = Domain + "/workload"
 
 	GpuPoolKey = Domain + "/gpupool"
 
