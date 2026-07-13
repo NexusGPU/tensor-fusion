@@ -14,6 +14,15 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+// IsGPUMissing returns true when the GPU device was marked missing by node
+// discovery (physical device not enumerated on the node while workloads still
+// reference it). Missing GPUs must be excluded from scheduling, phase sync and
+// capacity statistics until they either recover or are deleted by a later
+// discovery run once idle.
+func IsGPUMissing(gpu *tfv1.GPU) bool {
+	return gpu.Annotations[constants.GPUMissingSinceAnnotationKey] != ""
+}
+
 func GPUResourcesFromAnnotations(annotations map[string]string) (*tfv1.Resources, error) {
 	result := tfv1.Resources{}
 	resInfo := []struct {
