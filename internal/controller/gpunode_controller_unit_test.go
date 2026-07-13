@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/constants"
@@ -30,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -70,24 +72,28 @@ func TestGPUNodeReconcileNodeDiscoveryJobIgnoresFailedAttemptsWithoutFailedCondi
 	}
 }
 
-func newBootIDTestCoreNode(bootID string) *corev1.Node {
+func newReadyTestCoreNode(readyTransition time.Time) *corev1.Node {
 	return &corev1.Node{
 		Status: corev1.NodeStatus{
-			NodeInfo: corev1.NodeSystemInfo{BootID: bootID},
+			Conditions: []corev1.NodeCondition{
+				{
+					Type:               corev1.NodeReady,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: metav1.NewTime(readyTransition),
+				},
+			},
 		},
 	}
 }
 
-func newFinishedDiscoveryJob(gpuNodeName, bootID string) *batchv1.Job {
+func newCompletedDiscoveryJob(gpuNodeName string, completedAt time.Time) *batchv1.Job {
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      getDiscoveryJobName(gpuNodeName),
 			Namespace: utils.CurrentNamespace(),
-			Annotations: map[string]string{
-				constants.NodeBootIDAnnotationKey: bootID,
-			},
 		},
 		Status: batchv1.JobStatus{
+			CompletionTime: ptr.To(metav1.NewTime(completedAt)),
 			Conditions: []batchv1.JobCondition{
 				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
 			},
@@ -95,19 +101,21 @@ func newFinishedDiscoveryJob(gpuNodeName, bootID string) *batchv1.Job {
 	}
 }
 
-// A node reboot (boot ID change) must re-trigger node discovery so that GPU
-// resources are refreshed, e.g. a physically removed card gets cleaned up.
+// A discovery job that finished before the node last became Ready ran against a
+// previous boot: it must be deleted so discovery re-runs and refreshes GPU
+// resources, e.g. cleans up a physically removed card.
 func TestGPUNodeReconcileRecreatesDiscoveryJobAfterNodeReboot(t *testing.T) {
 	t.Helper()
 
 	ctx := context.Background()
+	now := time.Now()
 	gpuNode := newNodeDiscoveryTestGPUNode()
-	job := newFinishedDiscoveryJob(gpuNode.Name, "boot-1")
+	job := newCompletedDiscoveryJob(gpuNode.Name, now.Add(-2*time.Hour))
 
 	reconciler, kubeClient := newNodeDiscoveryTestReconciler(t, gpuNode, job)
 
 	if err := reconciler.reconcileNodeDiscoveryJob(ctx, gpuNode, newNodeDiscoveryTestPool(t),
-		newBootIDTestCoreNode("boot-2")); err != nil {
+		newReadyTestCoreNode(now.Add(-time.Hour))); err != nil {
 		t.Fatalf("reconcileNodeDiscoveryJob: %v", err)
 	}
 
@@ -120,9 +128,9 @@ func TestGPUNodeReconcileRecreatesDiscoveryJobAfterNodeReboot(t *testing.T) {
 		t.Fatalf("expected stale discovery job from previous boot to be deleted")
 	}
 
-	// the follow-up reconcile recreates the job stamped with the current boot ID
+	// the follow-up reconcile recreates the job
 	if err := reconciler.reconcileNodeDiscoveryJob(ctx, gpuNode, newNodeDiscoveryTestPool(t),
-		newBootIDTestCoreNode("boot-2")); err != nil {
+		newReadyTestCoreNode(now.Add(-time.Hour))); err != nil {
 		t.Fatalf("reconcileNodeDiscoveryJob recreate: %v", err)
 	}
 	recreated := &batchv1.Job{}
@@ -130,30 +138,49 @@ func TestGPUNodeReconcileRecreatesDiscoveryJobAfterNodeReboot(t *testing.T) {
 		Name: getDiscoveryJobName(gpuNode.Name), Namespace: utils.CurrentNamespace()}, recreated); err != nil {
 		t.Fatalf("expected discovery job recreated after reboot: %v", err)
 	}
-	if recreated.Annotations[constants.NodeBootIDAnnotationKey] != "boot-2" {
-		t.Fatalf("recreated job should be stamped with current boot ID, got %q",
-			recreated.Annotations[constants.NodeBootIDAnnotationKey])
-	}
 }
 
-func TestGPUNodeReconcileKeepsDiscoveryJobWithinSameBoot(t *testing.T) {
+func TestGPUNodeReconcileKeepsDiscoveryJobCompletedAfterNodeReady(t *testing.T) {
 	t.Helper()
 
 	ctx := context.Background()
+	now := time.Now()
 	gpuNode := newNodeDiscoveryTestGPUNode()
-	job := newFinishedDiscoveryJob(gpuNode.Name, "boot-1")
+	// job completed after the node last became Ready: same boot, must be kept
+	job := newCompletedDiscoveryJob(gpuNode.Name, now.Add(-time.Hour))
 
 	reconciler, kubeClient := newNodeDiscoveryTestReconciler(t, gpuNode, job)
 
 	if err := reconciler.reconcileNodeDiscoveryJob(ctx, gpuNode, newNodeDiscoveryTestPool(t),
-		newBootIDTestCoreNode("boot-1")); err != nil {
+		newReadyTestCoreNode(now.Add(-2*time.Hour))); err != nil {
 		t.Fatalf("reconcileNodeDiscoveryJob: %v", err)
 	}
 
 	kept := &batchv1.Job{}
 	if err := kubeClient.Get(ctx, types.NamespacedName{
 		Name: getDiscoveryJobName(gpuNode.Name), Namespace: utils.CurrentNamespace()}, kept); err != nil {
-		t.Fatalf("completed discovery job of the current boot must be kept: %v", err)
+		t.Fatalf("discovery job completed in the current boot must be kept: %v", err)
+	}
+}
+
+func TestGPUNodeReconcileKeepsDiscoveryJobWhenNodeHasNoReadyCondition(t *testing.T) {
+	t.Helper()
+
+	ctx := context.Background()
+	gpuNode := newNodeDiscoveryTestGPUNode()
+	job := newCompletedDiscoveryJob(gpuNode.Name, time.Now().Add(-2*time.Hour))
+
+	reconciler, kubeClient := newNodeDiscoveryTestReconciler(t, gpuNode, job)
+
+	if err := reconciler.reconcileNodeDiscoveryJob(ctx, gpuNode, newNodeDiscoveryTestPool(t),
+		&corev1.Node{}); err != nil {
+		t.Fatalf("reconcileNodeDiscoveryJob: %v", err)
+	}
+
+	kept := &batchv1.Job{}
+	if err := kubeClient.Get(ctx, types.NamespacedName{
+		Name: getDiscoveryJobName(gpuNode.Name), Namespace: utils.CurrentNamespace()}, kept); err != nil {
+		t.Fatalf("discovery job must be kept when node Ready condition is absent: %v", err)
 	}
 }
 
