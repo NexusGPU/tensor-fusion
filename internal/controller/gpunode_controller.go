@@ -368,6 +368,25 @@ func isNodeReady(node *corev1.Node) bool {
 	return false
 }
 
+// removeStuckHypervisorPodOnNotReadyNode deletes a hypervisor pod that never
+// reached Running on a NotReady node; a Running pod is left alone (k8s NoExecute
+// eviction handles it, and it may be only a transient blip). Returns nil so the
+// caller skips creation. Recovery re-triggers reconcile via the Node watch.
+func (r *GPUNodeReconciler) removeStuckHypervisorPodOnNotReadyNode(
+	ctx context.Context, node *tfv1.GPUNode, currentPod *corev1.Pod, podExists bool,
+) error {
+	log := log.FromContext(ctx)
+	if podExists && currentPod.Status.Phase != corev1.PodRunning && currentPod.DeletionTimestamp.IsZero() {
+		log.Info("node is not ready, deleting non-running hypervisor pod",
+			"node", node.Name, "pod", currentPod.Name, "podPhase", currentPod.Status.Phase)
+		if err := r.Delete(ctx, currentPod); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete hypervisor pod on not-ready node: %w", err)
+		}
+	}
+	log.V(1).Info("node is not ready, skip hypervisor pod reconciliation", "node", node.Name)
+	return nil
+}
+
 func (r *GPUNodeReconciler) reconcileHypervisorPod(
 	ctx context.Context,
 	node *tfv1.GPUNode,
@@ -405,15 +424,7 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 	// is intentionally NOT gated here: a cordoned node is still healthy and its
 	// hypervisor must keep running.
 	if !isNodeReady(k8sNode) {
-		if podExists && currentPod.Status.Phase != corev1.PodRunning && currentPod.DeletionTimestamp.IsZero() {
-			log.Info("node is not ready, deleting non-running hypervisor pod",
-				"node", node.Name, "pod", currentPod.Name, "podPhase", currentPod.Status.Phase)
-			if err := r.Delete(ctx, currentPod); err != nil && !errors.IsNotFound(err) {
-				return "", fmt.Errorf("failed to delete hypervisor pod on not-ready node: %w", err)
-			}
-		}
-		log.V(1).Info("node is not ready, skip hypervisor pod reconciliation", "node", node.Name)
-		return "", nil
+		return "", r.removeStuckHypervisorPodOnNotReadyNode(ctx, node, currentPod, podExists)
 	}
 
 	// Check hypervisor prerequisites (e.g., device plugin pod for NVIDIA)

@@ -1196,105 +1196,24 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 	}
 	podInfo, _ := framework.NewPodInfo(podCopy)
 
-	type fitCandidate struct {
-		node     string
-		selected []*tfv1.GPU
-		nodeInfo fwk.NodeInfo
-	}
-	var best *fitCandidate
+	var best *defragFitCandidate
 	var bestScore int
 
 	for _, info := range feasible {
-		node := info.Node()
-		if node == nil {
+		cand := r.evalDefragTarget(ctx, fwkInstance, state, info, budget, req, podCopy, podInfo, maxWorkerPerNode, sourceUtilization, diag)
+		if cand == nil {
 			continue
 		}
-		tgt := node.Name
-		if tgt == "" {
-			continue
-		}
-		nb, ok := budget[tgt]
-		if !ok {
-			if diag != nil {
-				diag.reject(tgt, "not-in-budget", "scheduler feasible node is not a defrag budget target")
-			}
-			continue
-		}
-
-		if !targetAcceptsAnotherWorker(nb, maxWorkerPerNode) {
-			if diag != nil {
-				diag.reject(tgt, "max-worker-per-node", fmt.Sprintf("workerCount=%d max=%d", nb.workerCount, maxWorkerPerNode))
-			}
-			continue
-		}
-		// Monotonicity gate: workers may only flow toward at-least-as-
-		// loaded targets, evaluated against the dynamic budget.
-		targetUtil := budgetUtilizationPercent(nb)
-		if targetUtil < sourceUtilization {
-			log.FromContext(ctx).V(5).Info("defrag reject lower-utilization target",
-				"target", tgt, "targetUtil", targetUtil, "sourceUtil", sourceUtilization)
-			if diag != nil {
-				diag.reject(tgt, "monotonicity", fmt.Sprintf("targetUtil=%.2f sourceUtil=%.2f", targetUtil, sourceUtilization))
-			}
-			continue
-		}
-		candidateInfo := cloneNodeInfoWithVirtualPod(nb.nodeInfo, podInfo)
-		if ok, reason := virtualNodeAllocatableReason(candidateInfo); !ok {
-			if diag != nil {
-				diag.reject(tgt, "virtual-node-resource", reason)
-			}
-			continue
-		}
-		// Re-run filters on the virtualized snapshot so resource plugins
-		// see capacity already consumed by prior simulated placements.
-		virtualState := state.Clone()
-		if status := fwkInstance.RunFilterPluginsWithNominatedPods(ctx, virtualState, podCopy, candidateInfo); status != nil && !status.IsSuccess() {
-			if diag != nil {
-				diag.reject(tgt, "scheduler-filter", status.Message())
-				for _, reason := range schedulerSimulationFilterReasons(virtualState) {
-					diag.addSchedulerDetail(reason)
-				}
-			}
-			continue
-		}
-
-		gpuList := make([]*tfv1.GPU, 0, len(nb.gpus))
-		for _, g := range nb.gpus {
-			gpuList = append(gpuList, g)
-		}
-		filtered, _, ferr := r.Allocator.Filter(req, gpuList, true /* isSimulateSchedule */)
-		if ferr != nil || len(filtered) == 0 || uint(len(filtered)) < req.Count {
-			if diag != nil {
-				reason := fmt.Sprintf("filtered=%d required=%d", len(filtered), req.Count)
-				if ferr != nil {
-					reason = ferr.Error()
-				}
-				diag.reject(tgt, "allocator-filter", reason)
-			}
-			continue
-		}
-
-		selected, serr := r.Allocator.SelectFromStore(req, filtered, map[string]map[string]*tfv1.GPU{tgt: nb.gpus})
-		if serr != nil || len(selected) != int(req.Count) {
-			if diag != nil {
-				reason := fmt.Sprintf("selected=%d required=%d", len(selected), req.Count)
-				if serr != nil {
-					reason = serr.Error()
-				}
-				diag.reject(tgt, "allocator-select", reason)
-			}
-			continue
-		}
-
+		nb := budget[cand.node]
 		// Score the budget copies so tie-breaks reflect simulated state.
 		score := 0
-		for _, g := range selected {
+		for _, g := range cand.selected {
 			if orig, ok := nb.gpus[g.Name]; ok {
 				score += defragCompactScorer.Score(orig, false)
 			}
 		}
 		if best == nil || score > bestScore {
-			best = &fitCandidate{node: tgt, selected: selected, nodeInfo: candidateInfo}
+			best = cand
 			bestScore = score
 		}
 	}
@@ -1308,6 +1227,99 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 	nb.nodeInfo = best.nodeInfo
 	nb.workerCount++
 	return true, nil
+}
+
+type defragFitCandidate struct {
+	node     string
+	selected []*tfv1.GPU
+	nodeInfo fwk.NodeInfo
+}
+
+// evalDefragTarget evaluates one scheduler-feasible node as a relocation target
+// for podCopy against the simulated budget, returning the fit (with its selected
+// GPUs) or nil when the node is rejected. Rejections are recorded on diag (which
+// tolerates a nil receiver).
+func (r *GPUPoolCompactionReconciler) evalDefragTarget(
+	ctx context.Context,
+	fwkInstance framework.Framework,
+	state fwk.CycleState,
+	info fwk.NodeInfo,
+	budget map[string]*nodeBudget,
+	req *tfv1.AllocRequest,
+	podCopy *corev1.Pod,
+	podInfo fwk.PodInfo,
+	maxWorkerPerNode int,
+	sourceUtilization float64,
+	diag *defragPlacementDiagnostics,
+) *defragFitCandidate {
+	node := info.Node()
+	if node == nil {
+		return nil
+	}
+	tgt := node.Name
+	if tgt == "" {
+		return nil
+	}
+	nb, ok := budget[tgt]
+	if !ok {
+		diag.reject(tgt, "not-in-budget", "scheduler feasible node is not a defrag budget target")
+		return nil
+	}
+
+	if !targetAcceptsAnotherWorker(nb, maxWorkerPerNode) {
+		diag.reject(tgt, "max-worker-per-node", fmt.Sprintf("workerCount=%d max=%d", nb.workerCount, maxWorkerPerNode))
+		return nil
+	}
+	// Monotonicity gate: workers may only flow toward at-least-as-
+	// loaded targets, evaluated against the dynamic budget.
+	targetUtil := budgetUtilizationPercent(nb)
+	if targetUtil < sourceUtilization {
+		log.FromContext(ctx).V(5).Info("defrag reject lower-utilization target",
+			"target", tgt, "targetUtil", targetUtil, "sourceUtil", sourceUtilization)
+		diag.reject(tgt, "monotonicity", fmt.Sprintf("targetUtil=%.2f sourceUtil=%.2f", targetUtil, sourceUtilization))
+		return nil
+	}
+	candidateInfo := cloneNodeInfoWithVirtualPod(nb.nodeInfo, podInfo)
+	if ok, reason := virtualNodeAllocatableReason(candidateInfo); !ok {
+		diag.reject(tgt, "virtual-node-resource", reason)
+		return nil
+	}
+	// Re-run filters on the virtualized snapshot so resource plugins
+	// see capacity already consumed by prior simulated placements.
+	virtualState := state.Clone()
+	if status := fwkInstance.RunFilterPluginsWithNominatedPods(ctx, virtualState, podCopy, candidateInfo); status != nil && !status.IsSuccess() {
+		diag.reject(tgt, "scheduler-filter", status.Message())
+		for _, reason := range schedulerSimulationFilterReasons(virtualState) {
+			diag.addSchedulerDetail(reason)
+		}
+		return nil
+	}
+
+	gpuList := make([]*tfv1.GPU, 0, len(nb.gpus))
+	for _, g := range nb.gpus {
+		gpuList = append(gpuList, g)
+	}
+	filtered, _, ferr := r.Allocator.Filter(req, gpuList, true /* isSimulateSchedule */)
+	if ferr != nil || len(filtered) == 0 || uint(len(filtered)) < req.Count {
+		reason := fmt.Sprintf("filtered=%d required=%d", len(filtered), req.Count)
+		if ferr != nil {
+			reason = ferr.Error()
+		}
+		diag.reject(tgt, "allocator-filter", reason)
+		return nil
+	}
+
+	selected, serr := r.Allocator.SelectFromStore(req, filtered, map[string]map[string]*tfv1.GPU{tgt: nb.gpus})
+	if serr != nil || len(selected) != int(req.Count) {
+		reason := fmt.Sprintf("selected=%d required=%d", len(selected), req.Count)
+		if serr != nil {
+			reason = serr.Error()
+		}
+		diag.reject(tgt, "allocator-select", reason)
+		return nil
+	}
+
+	return &defragFitCandidate{node: tgt, selected: selected, nodeInfo: candidateInfo}
 }
 
 // targetAcceptsAnotherWorker mirrors CheckQuotaAndFilter
@@ -1405,6 +1417,9 @@ func (d *defragPlacementDiagnostics) setFeasibleNodes(nodes []fwk.NodeInfo) {
 }
 
 func (d *defragPlacementDiagnostics) reject(target, stage, reason string) {
+	if d == nil {
+		return
+	}
 	pd := d.currentPod()
 	if pd == nil {
 		d.startPod(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "unknown", Name: "unknown"}})

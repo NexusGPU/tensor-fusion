@@ -239,6 +239,8 @@ func TestSubtractGPURequest_SafelyIgnoresBadInput(t *testing.T) {
 const (
 	testDefragNodeA         = "node-a"
 	testEvictionSubresource = "eviction"
+	testDefragNodeSource    = "node-source"
+	testDefragNodeBuddy     = "node-buddy"
 )
 
 // Re-declared as var (not const) because constants.Domain is a var in main.
@@ -1004,11 +1006,11 @@ func TestFitsVirtualNodeAllocatable_RejectsOversubscribedCPU(t *testing.T) {
 			corev1.ResourcePods:   resource.MustParse("4"),
 		},
 	)
-	firstPod := newSchedulerTestPod("ns1", "worker-1", "1500m", "1Gi")
+	firstPod := newSchedulerTestPod("worker-1")
 	firstPodInfo, _ := framework.NewPodInfo(firstPod)
 	nodeInfo.AddPodInfo(firstPodInfo)
 
-	secondPod := newSchedulerTestPod("ns1", "worker-2", "1500m", "1Gi")
+	secondPod := newSchedulerTestPod("worker-2")
 	secondPodInfo, _ := framework.NewPodInfo(secondPod)
 	virtual := cloneNodeInfoWithVirtualPod(nodeInfo, secondPodInfo)
 	if fitsVirtualNodeAllocatable(virtual) {
@@ -1026,9 +1028,9 @@ func TestVirtualNodeAllocatableReason_ReportsCPU(t *testing.T) {
 			corev1.ResourcePods:   resource.MustParse("4"),
 		},
 	)
-	firstPodInfo, _ := framework.NewPodInfo(newSchedulerTestPod("ns1", "worker-1", "1500m", "1Gi"))
+	firstPodInfo, _ := framework.NewPodInfo(newSchedulerTestPod("worker-1"))
 	nodeInfo.AddPodInfo(firstPodInfo)
-	secondPodInfo, _ := framework.NewPodInfo(newSchedulerTestPod("ns1", "worker-2", "1500m", "1Gi"))
+	secondPodInfo, _ := framework.NewPodInfo(newSchedulerTestPod("worker-2"))
 
 	ok, reason := virtualNodeAllocatableReason(cloneNodeInfoWithVirtualPod(nodeInfo, secondPodInfo))
 
@@ -1041,8 +1043,8 @@ func TestVirtualNodeAllocatableReason_ReportsCPU(t *testing.T) {
 }
 
 func TestDefragPlacementDiagnosticsSummaryIncludesTopRejects(t *testing.T) {
-	diag := newDefragPlacementDiagnostics("node-source", "profile-a", []string{"node-a", "node-b"})
-	diag.startPod(newDefragWorkerPod("worker-a", "node-source", time.Now()))
+	diag := newDefragPlacementDiagnostics(testDefragNodeSource, "profile-a", []string{"node-a", "node-b"})
+	diag.startPod(newDefragWorkerPod("worker-a", testDefragNodeSource, time.Now()))
 	diag.setFeasibleNodes([]fwk.NodeInfo{
 		newFrameworkNodeInfo("node-a", nil, nil),
 		newFrameworkNodeInfo("node-b", nil, nil),
@@ -2461,10 +2463,10 @@ func newFrameworkNodeInfo(name string, labels map[string]string, allocatable cor
 	return info
 }
 
-func newSchedulerTestPod(namespace, name, cpu, memory string) *corev1.Pod {
+func newSchedulerTestPod(name string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
+			Namespace: "ns1",
 			Name:      name,
 		},
 		Spec: corev1.PodSpec{
@@ -2472,8 +2474,8 @@ func newSchedulerTestPod(namespace, name, cpu, memory string) *corev1.Pod {
 				Name: "main",
 				Resources: corev1.ResourceRequirements{
 					Requests: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse(cpu),
-						corev1.ResourceMemory: resource.MustParse(memory),
+						corev1.ResourceCPU:    resource.MustParse("1500m"),
+						corev1.ResourceMemory: resource.MustParse("1Gi"),
 					},
 				},
 			}},
@@ -2650,8 +2652,8 @@ func TestBuildDefragNodeBudgets_DropsEmptyTarget(t *testing.T) {
 	// pool node. The empty node MUST be filtered so defrag does not waste
 	// a disruption shuffling workers onto a previously empty machine.
 	const pool = "pool-a"
-	source := "node-source"
-	buddy := "node-buddy"
+	source := testDefragNodeSource
+	buddy := testDefragNodeBuddy
 	empty := "node-empty"
 
 	nodeGpuStore := map[string]map[string]*tfv1.GPU{
@@ -2696,8 +2698,8 @@ func TestBuildDefragNodeBudgets_ReportsDirtyFreeAndExclusions(t *testing.T) {
 	// tallied so "Free=0,Dirty>0" is visible, and a fully-empty node must
 	// surface an exclusion reason instead of vanishing silently.
 	const pool = "pool-a"
-	source := "node-source"
-	buddy := "node-buddy"
+	source := testDefragNodeSource
+	buddy := testDefragNodeBuddy
 	empty := "node-empty"
 
 	dirty := gpuFullyFreeOnNode("buddy-gpu-dirty", buddy)
@@ -2753,7 +2755,7 @@ func TestBuildDefragNodeBudgets_SkipsExcludedNodeLabels(t *testing.T) {
 	// filtered out independently of the new emptiness gate. A node
 	// labelled as source-marker also having real usage must NOT leak in.
 	const pool = "pool-a"
-	source := "node-source"
+	source := testDefragNodeSource
 	marked := "node-marked"
 	nodeGpuStore := map[string]map[string]*tfv1.GPU{
 		source: {"src": gpuWithUsageOnNode("src", source, "50", "5Gi")},
@@ -2836,7 +2838,7 @@ func TestApplyGPUPlacementToBudget_TracksUsedGPUTransition(t *testing.T) {
 	// Validates the dynamic-util commit path: only fully-free -> partially
 	// used transitions bump usedGPUs. A second placement onto the same GPU
 	// must NOT double-count.
-	node := "node-buddy"
+	node := testDefragNodeBuddy
 	freeGPU := gpuFullyFreeOnNode("g-free", node)
 	usedGPU := gpuWithUsageOnNode("g-used", node, "50", "5Gi") // half-used baseline
 
