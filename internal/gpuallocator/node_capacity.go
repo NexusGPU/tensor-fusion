@@ -49,6 +49,11 @@ func RefreshGPUNodeCapacity(
 		if gpu.Status.Available == nil || gpu.Status.Capacity == nil {
 			continue
 		}
+		// GPUs marked missing by hypervisor discovery (e.g. physically removed)
+		// must not contribute phantom capacity to node statistics.
+		if utils.IsGPUMissing(&gpu) {
+			continue
+		}
 		node.Status.AvailableVRAM.Add(gpu.Status.Available.Vram)
 		node.Status.AvailableTFlops.Add(gpu.Status.Available.Tflops)
 		node.Status.TotalVRAM.Add(gpu.Status.Capacity.Vram)

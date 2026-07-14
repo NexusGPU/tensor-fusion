@@ -476,6 +476,10 @@
             "type": "string"
           }
         },
+        "maxInFlightNodes": {
+          "type": "integer",
+          "description": "Cap on how many nodes the auto-expander may provision concurrently, defaults to 15 when unset or <= 0"
+        },
         "alertRules": {
           "type": "array",
           "description": "Alerting rules",

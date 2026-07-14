@@ -146,6 +146,28 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	// Ensure the GPUNode never sits with an empty phase during the inflight window
+	// (before node-discovery completes / when discovery fails), so phase-based
+	// monitoring can observe it. New GPUNodes are born Pending in the NodeReconciler,
+	// this is a safety net for pre-existing nodes with empty phase. Placed before the
+	// driver-upgrade gate below, since it requeues early.
+	if node.Status.Phase == "" {
+		nodePhaseChanged, gpuList, err := r.syncNodeAndOwnedGPUPhases(
+			ctx, node,
+			tfv1.TensorFusionGPUNodePhasePending,
+			tfv1.TensorFusionGPUPhasePending,
+		)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to initialize GPUNode phase to Pending: %w", err)
+		}
+		if nodePhaseChanged {
+			metrics.SetNodeMetrics(node, poolObj, nil)
+		}
+		if len(gpuList) > 0 {
+			metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
+		}
+	}
+
 	// Check if the node is undergoing NVIDIA GPU driver upgrade
 	if isNodeUnderGPUDriverUpgrade(coreNode) {
 		log.Info("Node is undergoing GPU driver upgrade, skip reconciling",
@@ -306,6 +328,12 @@ func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tf
 	}
 
 	for _, gpu := range gpuList {
+		// GPUs marked missing by hypervisor discovery must keep their Unknown
+		// phase, otherwise node level sync would put a physically absent GPU
+		// back into scheduling rotation.
+		if utils.IsGPUMissing(&gpu) {
+			continue
+		}
 		if gpu.Status.Phase != state {
 			patch := client.MergeFrom(gpu.DeepCopy())
 			gpu.Status.Phase = state
@@ -323,6 +351,40 @@ func (r *GPUNodeReconciler) fetchAllOwnedGPUDevices(ctx context.Context, node *t
 		return nil, fmt.Errorf("failed to list GPUs: %w", err)
 	}
 	return gpuList.Items, nil
+}
+
+// isNodeReady reports whether the core Kubernetes node's Ready condition is
+// True. A NotReady node (Ready False/Unknown, e.g. unreachable) must not get a
+// hypervisor pod created on it.
+func isNodeReady(node *corev1.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, cond := range node.Status.Conditions {
+		if cond.Type == corev1.NodeReady {
+			return cond.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// removeStuckHypervisorPodOnNotReadyNode deletes a hypervisor pod that never
+// reached Running on a NotReady node; a Running pod is left alone (k8s NoExecute
+// eviction handles it, and it may be only a transient blip). Returns nil so the
+// caller skips creation. Recovery re-triggers reconcile via the Node watch.
+func (r *GPUNodeReconciler) removeStuckHypervisorPodOnNotReadyNode(
+	ctx context.Context, node *tfv1.GPUNode, currentPod *corev1.Pod, podExists bool,
+) error {
+	log := log.FromContext(ctx)
+	if podExists && currentPod.Status.Phase != corev1.PodRunning && currentPod.DeletionTimestamp.IsZero() {
+		log.Info("node is not ready, deleting non-running hypervisor pod",
+			"node", node.Name, "pod", currentPod.Name, "podPhase", currentPod.Status.Phase)
+		if err := r.Delete(ctx, currentPod); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete hypervisor pod on not-ready node: %w", err)
+		}
+	}
+	log.V(1).Info("node is not ready, skip hypervisor pod reconciliation", "node", node.Name)
+	return nil
 }
 
 func (r *GPUNodeReconciler) reconcileHypervisorPod(
@@ -351,6 +413,18 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 		}
 	} else {
 		podExists = true
+	}
+
+	// A NotReady node cannot run a hypervisor pod: creating one just leaves it
+	// Pending on the dead node forever (the pod tolerates the not-ready /
+	// unreachable taints to survive transient blips). Skip creation and clean
+	// up any pod that never reached Running; a Running pod is left alone in case
+	// the node is only briefly unreachable. Recovery re-triggers this reconcile
+	// via the core Node watch in SetupWithManager. Cordon (spec.Unschedulable)
+	// is intentionally NOT gated here: a cordoned node is still healthy and its
+	// hypervisor must keep running.
+	if !isNodeReady(k8sNode) {
+		return "", r.removeStuckHypervisorPodOnNotReadyNode(ctx, node, currentPod, podExists)
 	}
 
 	// Check hypervisor prerequisites (e.g., device plugin pod for NVIDIA)

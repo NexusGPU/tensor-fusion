@@ -13,6 +13,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -263,5 +265,91 @@ func (a *APIClient) DeleteGPU(uuid string) error {
 	if err := a.client.Delete(a.ctx, gpu); err != nil {
 		return fmt.Errorf("failed to delete GPU %s: %w", uuid, err)
 	}
+	return nil
+}
+
+// CleanupStaleGPUs cleans up GPU CRs owned by this node whose physical device
+// was not enumerated in the current discovery run (e.g. physically removed, or
+// removed while the hypervisor was down): idle GPUs are deleted directly, busy
+// GPUs are only marked missing so transient NVML/driver hiccups do not wipe
+// allocation state, and get deleted by a later run once idle.
+func (a *APIClient) CleanupStaleGPUs(gpuNodeName string, aliveDeviceIDs []string) error {
+	gpuList := &tfv1.GPUList{}
+	if err := a.client.List(a.ctx, gpuList,
+		client.MatchingLabels{constants.LabelKeyOwner: gpuNodeName}); err != nil {
+		return fmt.Errorf("list GPUs owned by node %s: %w", gpuNodeName, err)
+	}
+
+	alive := make(map[string]struct{}, len(aliveDeviceIDs))
+	for _, id := range aliveDeviceIDs {
+		alive[strings.ToLower(id)] = struct{}{}
+	}
+
+	for i := range gpuList.Items {
+		gpu := &gpuList.Items[i]
+		if _, ok := alive[strings.ToLower(gpu.Name)]; ok {
+			continue
+		}
+		if err := a.deleteOrMarkMissingGPU(gpu); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteOrMarkMissingGPU handles a device that is no longer enumerated: the GPU
+// CR is deleted when idle, or marked missing (phase Unknown plus missing-since
+// annotation) when workloads still reference it.
+func (a *APIClient) DeleteOrMarkMissingGPU(uuid string) error {
+	gpu := &tfv1.GPU{}
+	if err := a.client.Get(a.ctx, client.ObjectKey{Name: uuid}, gpu); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get GPU %s: %w", uuid, err)
+	}
+	return a.deleteOrMarkMissingGPU(gpu)
+}
+
+func (a *APIClient) deleteOrMarkMissingGPU(gpu *tfv1.GPU) error {
+	// Cards are always drained before being physically pulled, so an idle
+	// missing GPU has nothing to lose (Available == Capacity): delete it
+	// directly. Even a false positive is harmless, the next discovery run
+	// recreates it identically.
+	if len(gpu.Status.RunningApps) == 0 && len(gpu.Status.AllocatedPartitions) == 0 {
+		klog.Infof("GPU device not enumerated and has no running apps, deleting directly: %s", gpu.Name)
+		if err := a.client.Delete(a.ctx, gpu); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete missing idle GPU %s: %w", gpu.Name, err)
+		}
+		return nil
+	}
+
+	// A missing GPU still referenced by running apps: deleting now would reset
+	// allocation accounting on recreate (transient NVML/driver hiccups), so
+	// only mark it. Once its workloads are gone, the next discovery run
+	// deletes it via the idle path above.
+	// Keep the first missing-since timestamp for observability.
+	if _, marked := gpu.Annotations[constants.GPUMissingSinceAnnotationKey]; !marked {
+		patch := client.MergeFrom(gpu.DeepCopy())
+		if gpu.Annotations == nil {
+			gpu.Annotations = map[string]string{}
+		}
+		gpu.Annotations[constants.GPUMissingSinceAnnotationKey] = time.Now().Format(time.RFC3339)
+		if err := a.client.Patch(a.ctx, gpu, patch); err != nil {
+			return fmt.Errorf("mark GPU %s missing: %w", gpu.Name, err)
+		}
+	}
+
+	if gpu.Status.Phase != tfv1.TensorFusionGPUPhaseUnknown {
+		patch := client.MergeFrom(gpu.DeepCopy())
+		gpu.Status.Phase = tfv1.TensorFusionGPUPhaseUnknown
+		if err := a.client.Status().Patch(a.ctx, gpu, patch); err != nil {
+			return fmt.Errorf("update phase of missing GPU %s: %w", gpu.Name, err)
+		}
+	}
+
+	klog.Infof("GPU device not enumerated in this discovery run but still has running apps, "+
+		"marked as missing, it will be deleted once idle in a future discovery run unless it recovers: "+
+		"uuid=%s missingSince=%s", gpu.Name, gpu.Annotations[constants.GPUMissingSinceAnnotationKey])
 	return nil
 }

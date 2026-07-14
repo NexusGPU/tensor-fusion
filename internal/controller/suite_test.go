@@ -740,6 +740,15 @@ func (b *TensorFusionEnvBuilder) Build() *TensorFusionEnv {
 			}
 			Expect(k8sClient.Create(ctx, coreNode)).To(Succeed())
 
+			// Mark the node Ready so reconcileHypervisorPod's not-ready gate
+			// allows hypervisor pod creation; a real node backing a GPUNode is
+			// always Ready (envtest has no kubelet to post this on its own).
+			nodePatch := client.MergeFrom(coreNode.DeepCopy())
+			coreNode.Status.Conditions = []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+			}
+			Expect(k8sClient.Status().Patch(ctx, coreNode, nodePatch)).To(Succeed())
+
 			// generate gpus for gpunode
 			gpuNode := b.GetGPUNode(poolIndex, nodeIndex)
 			gpuCount := b.poolNodeMap[poolIndex][nodeIndex]
