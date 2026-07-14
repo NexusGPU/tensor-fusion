@@ -588,6 +588,7 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 		setupLog.Info("time series db setup successfully.")
 		return nil
 	}))
+
 	if err != nil {
 		setupLog.Error(err, "unable to add time series setup to manager")
 		os.Exit(1)
