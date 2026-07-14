@@ -222,7 +222,6 @@ rules:
   - deviceclasses
   - devicetaintrules
   - resourceslices
-  - resourceclaims
   verbs:
   - get
   - list
