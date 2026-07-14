@@ -28,6 +28,9 @@ rules:
   - create
   - update
   - patch
+  # delete is required to clean up GPU resources whose physical device was
+  # removed (OnRemove and the stale-GPU reconciliation on discovery).
+  - delete
 - apiGroups:
   - authentication.k8s.io
   resources:

@@ -262,8 +262,11 @@ func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler 
 			if device != nil {
 				b.deleteDeviceTflops(device.UUID)
 			}
-			if err := b.apiClient.DeleteGPU(device.UUID); err != nil {
-				klog.Errorf("Failed to delete GPU when device removed: %v", err)
+			// Delete only when idle; a missing GPU still referenced by running
+			// apps is marked (Unknown phase + missing-since annotation) so a
+			// transient NVML/driver hiccup cannot wipe allocation accounting.
+			if err := b.apiClient.DeleteOrMarkMissingGPU(device.UUID); err != nil {
+				klog.Errorf("Failed to clean up GPU when device removed: %v", err)
 			} else {
 				klog.Infof("Device removed: %s", device.UUID)
 			}
@@ -282,6 +285,13 @@ func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler 
 			if nodeInfo != nil {
 				if totalTflops, ok := b.getTotalDeviceTflops(); ok {
 					nodeInfo.TotalTFlops = totalTflops
+				}
+				// GPU CRs owned by this node but absent from the current
+				// enumeration (e.g. card removed while the hypervisor was down,
+				// so no OnRemove ever fired) must be cleaned up, otherwise stale
+				// GPU CRs keep polluting scheduling and capacity statistics forever.
+				if err := b.apiClient.CleanupStaleGPUs(b.nodeName, nodeInfo.DeviceIDs); err != nil {
+					klog.Errorf("Failed to clean up stale GPUs: %v", err)
 				}
 			}
 			if err := b.apiClient.UpdateGPUNodeStatus(b.nodeName, nodeInfo); err != nil {
@@ -358,7 +368,11 @@ func (b *KubeletBackend) mutateGPUResourceState(
 	if gpu.Status.UsedBy == "" {
 		gpu.Status.UsedBy = tfv1.UsedByTensorFusion
 	}
-	if gpu.Status.Phase == "" {
+	if gpu.Status.Phase == "" || gpu.Status.Phase == tfv1.TensorFusionGPUPhaseUnknown {
+		// Unknown means the device was previously marked missing by discovery,
+		// it has recovered now (the missing-since annotation is cleared by the
+		// full annotation rewrite above), reset to Pending for the controller
+		// to promote.
 		gpu.Status.Phase = tfv1.TensorFusionGPUPhasePending
 	}
 	gpu.Status.Message = "managed"

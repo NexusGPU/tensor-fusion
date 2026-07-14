@@ -907,6 +907,17 @@ func (s *GpuAllocator) buildPreemptFilterRegistry(req *tfv1.AllocRequest) *filte
 }
 
 func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []*tfv1.GPU) ([]*tfv1.GPU, error) {
+	return s.SelectFromStore(req, filteredGPUs, s.GetNodeGpuStore())
+}
+
+// SelectFromStore selects GPUs using the supplied node GPU store for strategy
+// node-level scoring. Defrag dry-runs pass their virtual budget here so
+// filtering and selection observe the same simulated state.
+func (s *GpuAllocator) SelectFromStore(
+	req *tfv1.AllocRequest,
+	filteredGPUs []*tfv1.GPU,
+	nodeGpuStore map[string]map[string]*tfv1.GPU,
+) ([]*tfv1.GPU, error) {
 	pool := &tfv1.GPUPool{}
 	if err := s.Get(s.ctx, client.ObjectKey{Name: req.PoolName}, pool); err != nil {
 		return nil, fmt.Errorf("get pool %s: %w", req.PoolName, err)
@@ -921,7 +932,7 @@ func (s *GpuAllocator) Select(req *tfv1.AllocRequest, filteredGPUs []*tfv1.GPU) 
 
 	strategy := NewStrategy(schedulingConfigTemplate.Spec.Placement.Mode, &config.GPUFitConfig{
 		MaxWorkerPerNode: s.maxWorkerPerNode,
-	}, s.GetNodeGpuStore())
+	}, nodeGpuStore)
 	selectedGPUs, err := strategy.SelectGPUs(cloneGPUSlice(filteredGPUs), req.Count)
 	if err != nil {
 		return nil, fmt.Errorf("select GPU: %w", err)
