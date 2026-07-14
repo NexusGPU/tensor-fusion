@@ -353,14 +353,28 @@ func (r *GPUNodeReconciler) fetchAllOwnedGPUDevices(ctx context.Context, node *t
 	return gpuList.Items, nil
 }
 
-func isJobFinished(job *batchv1.Job) bool {
+// discoveryJobFinishedAt returns when the job finished, or nil if it is still
+// running. Failed jobs have no CompletionTime, so fall back to the Failed
+// condition transition time.
+func discoveryJobFinishedAt(job *batchv1.Job) *metav1.Time {
+	if job.Status.CompletionTime != nil {
+		return job.Status.CompletionTime
+	}
 	for _, c := range job.Status.Conditions {
-		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) &&
-			c.Status == corev1.ConditionTrue {
-			return true
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return &c.LastTransitionTime
 		}
 	}
-	return false
+	return nil
+}
+
+func nodeReadyLastTransition(coreNode *corev1.Node) *metav1.Time {
+	for _, c := range coreNode.Status.Conditions {
+		if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
+			return &c.LastTransitionTime
+		}
+	}
+	return nil
 }
 
 func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
@@ -409,12 +423,6 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 		},
 	}
 
-	if job.Annotations == nil {
-		job.Annotations = map[string]string{}
-	}
-	currentBootID := coreNode.Status.NodeInfo.BootID
-	job.Annotations[constants.NodeBootIDAnnotationKey] = currentBootID
-
 	if err := r.Get(ctx, client.ObjectKeyFromObject(job), job); err != nil {
 		if errors.IsNotFound(err) {
 			if err := ctrl.SetControllerReference(gpunode, job, r.Scheme); err != nil {
@@ -428,15 +436,17 @@ func (r *GPUNodeReconciler) reconcileNodeDiscoveryJob(
 		}
 	}
 
-	// A finished discovery job from a previous node boot is stale: after a reboot
-	// GPU devices may have changed (e.g. card physically removed), so delete the
-	// old job and let the next reconcile (triggered by the owned-job deletion
-	// event) recreate it to re-run discovery.
-	if currentBootID != "" && isJobFinished(job) &&
-		job.Annotations[constants.NodeBootIDAnnotationKey] != currentBootID {
-		log.Info("node rebooted since last discovery run, deleting stale discovery job to re-trigger it",
-			"node", gpunode.Name, "jobBootID", job.Annotations[constants.NodeBootIDAnnotationKey],
-			"currentBootID", currentBootID)
+	// A discovery job that finished before the node last became Ready ran against
+	// a previous boot (nodes transition NotReady -> Ready across a reboot), so its
+	// results may be stale, e.g. a physically removed card. Delete it and let the
+	// next reconcile (triggered by the owned-job deletion event) recreate it to
+	// re-run discovery. Ready flapping may cause a spurious re-run, which is
+	// harmless since discovery is idempotent.
+	finishedAt := discoveryJobFinishedAt(job)
+	readyAt := nodeReadyLastTransition(coreNode)
+	if finishedAt != nil && readyAt != nil && finishedAt.Before(readyAt) {
+		log.Info("node became Ready after last discovery run, deleting stale discovery job to re-trigger it",
+			"node", gpunode.Name, "jobFinishedAt", finishedAt, "nodeReadySince", readyAt)
 		if err := r.Delete(ctx, job,
 			client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !errors.IsNotFound(err) {
 			return fmt.Errorf("delete stale node discovery job %w", err)
