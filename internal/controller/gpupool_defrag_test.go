@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2820,6 +2821,61 @@ func TestBuildDefragNodeBudgets_ReportsDirtyFreeAndExclusions(t *testing.T) {
 	}
 	if !foundEmpty {
 		t.Fatalf("empty node exclusion missing, got %+v", exclusions)
+	}
+}
+
+func TestExcludedNodesByReason_GroupsSameReasonNodes(t *testing.T) {
+	// A node-churn burst can exclude dozens of nodes with the identical
+	// "not in scheduler snapshot" reason; grouping must collapse them to one
+	// key with all node names present, instead of repeating the reason text.
+	diag := &defragPlacementDiagnostics{
+		ExcludedNodes: []defragNodeExclusion{
+			{Node: "node-b", Reason: "not in scheduler snapshot"},
+			{Node: "node-a", Reason: "not in scheduler snapshot"},
+			{Node: "node-c", Reason: "deletion-marked"},
+		},
+	}
+
+	grouped := diag.excludedNodesByReason()
+
+	if got := grouped["not in scheduler snapshot"]; !reflect.DeepEqual(got, []string{"node-a", "node-b"}) {
+		t.Fatalf("grouped snapshot reason = %v, want sorted [node-a node-b]", got)
+	}
+	if got := grouped["deletion-marked"]; !reflect.DeepEqual(got, []string{"node-c"}) {
+		t.Fatalf("grouped deletion-marked = %v, want [node-c]", got)
+	}
+}
+
+func TestLogPodDiagnostics_GroupsRejectionsByStageAndReason(t *testing.T) {
+	// Mirrors the production case: dozens of budget targets rejected for the
+	// identical scheduler-infeasible reason, differing only by Target. The
+	// log rendering must collapse them instead of repeating the reason text.
+	diag := &defragPlacementDiagnostics{
+		PodDiagnostics: []*defragPodPlacementDiagnostic{
+			{
+				Pod: "ns/pod-a",
+				Rejections: []defragTargetRejection{
+					{Target: "node-2", Stage: "scheduler-infeasible", Reason: "in budget but scheduler did not return node as feasible"},
+					{Target: "node-1", Stage: "scheduler-infeasible", Reason: "in budget but scheduler did not return node as feasible"},
+					{Target: "node-3", Stage: "not-in-budget", Reason: "scheduler feasible node is not a defrag budget target"},
+				},
+			},
+		},
+	}
+
+	rendered := diag.logPodDiagnostics()
+	if len(rendered) != 1 {
+		t.Fatalf("logPodDiagnostics() len = %d, want 1", len(rendered))
+	}
+	rejections, ok := rendered[0]["rejections"].(map[string][]string)
+	if !ok {
+		t.Fatalf("rejections field has wrong type: %T", rendered[0]["rejections"])
+	}
+	if got := rejections["scheduler-infeasible: in budget but scheduler did not return node as feasible"]; !reflect.DeepEqual(got, []string{"node-1", "node-2"}) {
+		t.Fatalf("grouped scheduler-infeasible = %v, want sorted [node-1 node-2]", got)
+	}
+	if got := rejections["not-in-budget: scheduler feasible node is not a defrag budget target"]; !reflect.DeepEqual(got, []string{"node-3"}) {
+		t.Fatalf("grouped not-in-budget = %v, want [node-3]", got)
 	}
 }
 
