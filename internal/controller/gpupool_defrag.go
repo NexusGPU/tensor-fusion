@@ -1586,13 +1586,68 @@ func (d *defragPlacementDiagnostics) logFields() map[string]any {
 		return nil
 	}
 	return map[string]any{
-		"sourceNode":     d.SourceNode,
-		"profile":        d.Profile,
-		"budgetTargets":  d.BudgetTargets,
+		"sourceNode": d.SourceNode,
+		"profile":    d.Profile,
+		// budgetTargets is omitted: it's the same node names already
+		// present as the "Node" field of each budgetNodes entry.
 		"budgetNodes":    d.BudgetNodes,
-		"excludedNodes":  d.ExcludedNodes,
-		"podDiagnostics": d.PodDiagnostics,
+		"excludedNodes":  d.excludedNodesByReason(),
+		"podDiagnostics": d.logPodDiagnostics(),
 	}
+}
+
+// groupByReason collapses same-reason entries (e.g. dozens of nodes deleted
+// in one node-churn event, all "not in scheduler snapshot") into one entry
+// with a node-name list, instead of repeating the reason text per node.
+func groupByReason(node, reason string, into map[string][]string) {
+	into[reason] = append(into[reason], node)
+}
+
+func (d *defragPlacementDiagnostics) excludedNodesByReason() map[string][]string {
+	if d == nil || len(d.ExcludedNodes) == 0 {
+		return nil
+	}
+	grouped := make(map[string][]string)
+	for _, e := range d.ExcludedNodes {
+		groupByReason(e.Node, e.Reason, grouped)
+	}
+	for reason := range grouped {
+		sort.Strings(grouped[reason])
+	}
+	return grouped
+}
+
+// logPodDiagnostics renders PodDiagnostics for logging with Rejections
+// grouped by "stage: reason" the same way excludedNodesByReason groups
+// ExcludedNodes: most rejected targets for a given pod share the identical
+// stage/reason (e.g. "scheduler-infeasible: in budget but scheduler did not
+// return node as feasible") and only differ by which node they targeted.
+func (d *defragPlacementDiagnostics) logPodDiagnostics() []map[string]any {
+	if d == nil || len(d.PodDiagnostics) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(d.PodDiagnostics))
+	for _, pd := range d.PodDiagnostics {
+		if pd == nil {
+			continue
+		}
+		rejections := make(map[string][]string, len(pd.Rejections))
+		for _, r := range pd.Rejections {
+			groupByReason(r.Target, r.Stage+": "+r.Reason, rejections)
+		}
+		for reason := range rejections {
+			sort.Strings(rejections[reason])
+		}
+		out = append(out, map[string]any{
+			"pod":              pd.Pod,
+			"request":          pd.Request,
+			"feasibleNodes":    pd.FeasibleNodes,
+			"schedulerDetails": pd.SchedulerDetails,
+			"rejections":       rejections,
+			"selectedTarget":   pd.SelectedTarget,
+		})
+	}
+	return out
 }
 
 func defragPodRequestSummary(pod *corev1.Pod) string {
@@ -1777,7 +1832,11 @@ func buildDefragNodeBudgets(
 		if err != nil {
 			// Allocator state can briefly outlive scheduler cache for
 			// deleted nodes; drop only this target, not the candidate.
-			exclude(nodeName, "not in scheduler snapshot: "+err.Error())
+			// err.Error() just repeats nodeName ("nodeinfo not found for
+			// node name ..."), which is already in the Node field below,
+			// so it's dropped here to keep the (often long) exclusion
+			// list from duplicating it per entry.
+			exclude(nodeName, "not in scheduler snapshot")
 			continue
 		}
 		if node := nodeInfo.Node(); node == nil {
