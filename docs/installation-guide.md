@@ -478,10 +478,44 @@ helm upgrade tensor-fusion-sys ./charts/tensor-fusion \
 - `upgrade.md`
 - `rollback.md`
 
-卸载会删除 TensorFusion CR、控制面、webhook、CRD 等资源。确认不再需要后执行：
+卸载脚本支持 Helm、`helm template | kubectl apply` 和 `make deploy` / Kustomize
+三种安装方式。它会删除集群内全部 TensorFusion CR、控制面、webhook、CRD、
+TensorFusion Node 标签、NodeOverlay、PVC，以及 Helm、Kustomize 和 GreptimeDB
+使用的 namespace。确认不再需要其中的数据和业务后执行：
 
 ```bash
 NAMESPACE=tensor-fusion-sys HELM_RELEASE=tensor-fusion-sys ./scripts/uninstall.sh
 ```
 
-卸载前建议先备份业务和 TensorFusion CR 状态。
+运行前可以查看完整参数和删除范围：
+
+```bash
+./scripts/uninstall.sh --help
+```
+
+默认值：
+
+| 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `NAMESPACE` | `tensor-fusion-sys` | Helm / manifest 控制面 namespace |
+| `KUSTOMIZE_NAMESPACE` | `tensor-fusion` | `make deploy` 使用的 namespace |
+| `HELM_RELEASE` | `tensor-fusion-sys` | Helm release 名称 |
+| `RESOURCE_PREFIX` | 与 `HELM_RELEASE` 相同 | manifest 资源名和 PVC 前缀 |
+| `WAIT_TIMEOUT_SECONDS` | `600` | 等待 CR finalizer 和资源删除的超时秒数 |
+
+非默认 release 名称或 `helm template` 资源前缀可以额外设置：
+
+```bash
+NAMESPACE=<namespace> \
+HELM_RELEASE=<release-name> \
+RESOURCE_PREFIX=<rendered-resource-prefix> \
+./scripts/uninstall.sh
+```
+
+脚本按 finalizer 依赖顺序等待资源删除，任一步失败都会停止，不会继续删除
+controller 或 CRD。它会清理 TensorFusion Node 标签、taint、NodeOverlay、
+可调度的 `tensor-fusion.ai/index*` 容量以及 TensorFusion PVC/PV。kubelet
+checkpoint 中值为 `0` 的 index key 可能保留到 kubelet 下次重启，但不会再提供
+调度容量。脚本不会删除
+`nvidia.com/gpu.present`、`huawei.com/npu.present` 等厂家发现标签。卸载前必须
+先备份业务、PVC 数据和 TensorFusion CR 状态。
