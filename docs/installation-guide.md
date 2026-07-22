@@ -519,3 +519,8 @@ checkpoint 中值为 `0` 的 index key 可能保留到 kubelet 下次重启，�
 调度容量。脚本不会删除
 `nvidia.com/gpu.present`、`huawei.com/npu.present` 等厂家发现标签。卸载前必须
 先备份业务、PVC 数据和 TensorFusion CR 状态。
+
+`scripts/uninstall.sh` 可以作为单文件复制到目标机器执行，不要求同时下载完整仓库。
+当前 Helm 和 Kustomize 默认安装产生的集群级 RBAC、webhook、CRD 等资源名已内置
+在脚本中。如果脚本旁边存在 `charts/tensor-fusion` 或 `config/default`，还会额外
+根据本地 manifest 执行一次兼容性清理；这两个目录不是单文件卸载的必需依赖。

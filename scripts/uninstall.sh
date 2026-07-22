@@ -63,14 +63,15 @@ usage() {
         '  RESOURCE_PREFIX        Rendered resource/PVC prefix (default: HELM_RELEASE)' \
         '  LABEL_DOMAIN           Node label/resource domain (default: tensor-fusion.ai)' \
         '  WAIT_TIMEOUT_SECONDS   Finalizer/delete timeout (default: 600)' \
-        '  CHART_DIR              Local Helm chart path' \
-        '  KUSTOMIZE_DIR          Local Kustomize path' \
+        '  CHART_DIR              Optional local Helm chart path' \
+        '  KUSTOMIZE_DIR          Optional local Kustomize path' \
         '' \
         'The script deletes all TensorFusion CRs/CRDs, control-plane resources,' \
         'TensorFusion namespaces, PVCs/PVs, Node labels, taints, NodeOverlay, and' \
         'schedulable tensor-fusion.ai/index* capacity. Zero-valued index entries may' \
         'remain in kubelet checkpoints until kubelet restarts. Vendor labels such' \
-        'as nvidia.com/gpu.present and huawei.com/npu.present are preserved.'
+        'as nvidia.com/gpu.present and huawei.com/npu.present are preserved.' \
+        'The script can run standalone; local Helm/Kustomize files are optional.'
 }
 
 is_namespaced_crd() {
@@ -214,10 +215,37 @@ cleanup_fixed_name_resources() {
         "clusterrole/${RESOURCE_PREFIX}-role"
         clusterrole/tensor-fusion-hypervisor-role
         "clusterrole/${RESOURCE_PREFIX}-webhook-job"
+        clusterrole/tensor-fusion-gpu-editor-role
+        clusterrole/tensor-fusion-gpu-viewer-role
+        clusterrole/tensor-fusion-gpunode-editor-role
+        clusterrole/tensor-fusion-gpunode-viewer-role
+        clusterrole/tensor-fusion-gpunodeclaim-admin-role
+        clusterrole/tensor-fusion-gpunodeclaim-editor-role
+        clusterrole/tensor-fusion-gpunodeclaim-viewer-role
+        clusterrole/tensor-fusion-gpunodeclass-editor-role
+        clusterrole/tensor-fusion-gpunodeclass-viewer-role
+        clusterrole/tensor-fusion-gpupool-editor-role
+        clusterrole/tensor-fusion-gpupool-viewer-role
+        clusterrole/tensor-fusion-manager-role
+        clusterrole/tensor-fusion-metrics-auth-role
+        clusterrole/tensor-fusion-metrics-reader
+        clusterrole/tensor-fusion-schedulingconfigtemplate-editor-role
+        clusterrole/tensor-fusion-schedulingconfigtemplate-viewer-role
+        clusterrole/tensor-fusion-tensorfusioncluster-editor-role
+        clusterrole/tensor-fusion-tensorfusioncluster-viewer-role
+        clusterrole/tensor-fusion-tensorfusionconnection-editor-role
+        clusterrole/tensor-fusion-tensorfusionconnection-viewer-role
+        clusterrole/tensor-fusion-tensorfusionworkload-editor-role
+        clusterrole/tensor-fusion-tensorfusionworkload-viewer-role
+        clusterrole/tensor-fusion-workloadprofile-editor-role
+        clusterrole/tensor-fusion-workloadprofile-viewer-role
         "clusterrolebinding/${RESOURCE_PREFIX}-rolebinding"
         clusterrolebinding/tensor-fusion-hypervisor-rolebinding
         "clusterrolebinding/${RESOURCE_PREFIX}-webhook-job"
+        clusterrolebinding/tensor-fusion-manager-rolebinding
+        clusterrolebinding/tensor-fusion-metrics-auth-rolebinding
         "mutatingwebhookconfiguration/${RESOURCE_PREFIX}-mutating-webhook"
+        mutatingwebhookconfiguration/tensor-fusion-mutating-webhook-configuration
         priorityclass/tensor-fusion-critical
         priorityclass/tensor-fusion-high
         priorityclass/tensor-fusion-medium
