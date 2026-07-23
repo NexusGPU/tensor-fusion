@@ -514,8 +514,16 @@ RESOURCE_PREFIX=<rendered-resource-prefix> \
 
 脚本按 finalizer 依赖顺序等待资源删除，任一步失败都会停止，不会继续删除
 controller 或 CRD。它会清理 TensorFusion Node 标签、taint、NodeOverlay、
-可调度的 `tensor-fusion.ai/index*` 容量以及 TensorFusion PVC/PV。kubelet
-checkpoint 中值为 `0` 的 index key 可能保留到 kubelet 下次重启，但不会再提供
-调度容量。脚本不会删除
+可调度的 `tensor-fusion.ai/index*` 容量以及 TensorFusion PVC/PV。device plugin
+断开后，kubelet 会经过约 5 分钟 grace period 清理内部 endpoint 和 checkpoint；
+期间 Node status 可能保留非零 capacity，但 allocatable 已变为 `0`。宽限期结束后，
+kubelet 会有意保留值为 `0` 的 index key。脚本随后将这些 key 从 Node status 删除，
+并经过一个状态同步窗口确认 kubelet 不再写回。
+如果超过 `WAIT_TIMEOUT_SECONDS` 仍未删除，脚本会报错。脚本不会删除
 `nvidia.com/gpu.present`、`huawei.com/npu.present` 等厂家发现标签。卸载前必须
 先备份业务、PVC 数据和 TensorFusion CR 状态。
+
+`scripts/uninstall.sh` 可以作为单文件复制到目标机器执行，不要求同时下载完整仓库。
+当前 Helm 和 Kustomize 默认安装产生的集群级 RBAC、webhook、CRD 等资源名已内置
+在脚本中。如果脚本旁边存在 `charts/tensor-fusion` 或 `config/default`，还会额外
+根据本地 manifest 执行一次兼容性清理；这两个目录不是单文件卸载的必需依赖。

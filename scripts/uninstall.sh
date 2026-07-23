@@ -15,6 +15,8 @@ RESOURCE_PREFIX=${RESOURCE_PREFIX:-${HELM_RELEASE}}
 LABEL_DOMAIN=${LABEL_DOMAIN:-tensor-fusion.ai}
 WAIT_TIMEOUT_SECONDS=${WAIT_TIMEOUT_SECONDS:-600}
 POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-2}
+KUBELET_DEVICE_PLUGIN_GRACE_SECONDS=${KUBELET_DEVICE_PLUGIN_GRACE_SECONDS:-300}
+NODE_STATUS_SETTLE_SECONDS=${NODE_STATUS_SETTLE_SECONDS:-30}
 CHART_DIR=${CHART_DIR:-${ROOT_DIR}/charts/tensor-fusion}
 KUSTOMIZE_DIR=${KUSTOMIZE_DIR:-${ROOT_DIR}/config/default}
 
@@ -62,15 +64,18 @@ usage() {
         '  HELM_RELEASE           Helm release name (default: tensor-fusion-sys)' \
         '  RESOURCE_PREFIX        Rendered resource/PVC prefix (default: HELM_RELEASE)' \
         '  LABEL_DOMAIN           Node label/resource domain (default: tensor-fusion.ai)' \
-        '  WAIT_TIMEOUT_SECONDS   Finalizer/delete timeout (default: 600)' \
-        '  CHART_DIR              Local Helm chart path' \
-        '  KUSTOMIZE_DIR          Local Kustomize path' \
+        '  WAIT_TIMEOUT_SECONDS   Operation timeout in seconds (default: 600)' \
+        '  KUBELET_DEVICE_PLUGIN_GRACE_SECONDS  Kubelet plugin grace period (default: 300)' \
+        '  NODE_STATUS_SETTLE_SECONDS  Node status verification window (default: 30)' \
+        '  CHART_DIR              Optional local Helm chart path' \
+        '  KUSTOMIZE_DIR          Optional local Kustomize path' \
         '' \
         'The script deletes all TensorFusion CRs/CRDs, control-plane resources,' \
         'TensorFusion namespaces, PVCs/PVs, Node labels, taints, NodeOverlay, and' \
-        'schedulable tensor-fusion.ai/index* capacity. Zero-valued index entries may' \
-        'remain in kubelet checkpoints until kubelet restarts. Vendor labels such' \
-        'as nvidia.com/gpu.present and huawei.com/npu.present are preserved.'
+        'schedulable tensor-fusion.ai/index* capacity. After kubelet plugin cleanup,' \
+        'the script removes zero-valued index entries from Node status. Vendor labels such' \
+        'as nvidia.com/gpu.present and huawei.com/npu.present are preserved.' \
+        'The script can run standalone; local Helm/Kustomize files are optional.'
 }
 
 is_namespaced_crd() {
@@ -214,10 +219,37 @@ cleanup_fixed_name_resources() {
         "clusterrole/${RESOURCE_PREFIX}-role"
         clusterrole/tensor-fusion-hypervisor-role
         "clusterrole/${RESOURCE_PREFIX}-webhook-job"
+        clusterrole/tensor-fusion-gpu-editor-role
+        clusterrole/tensor-fusion-gpu-viewer-role
+        clusterrole/tensor-fusion-gpunode-editor-role
+        clusterrole/tensor-fusion-gpunode-viewer-role
+        clusterrole/tensor-fusion-gpunodeclaim-admin-role
+        clusterrole/tensor-fusion-gpunodeclaim-editor-role
+        clusterrole/tensor-fusion-gpunodeclaim-viewer-role
+        clusterrole/tensor-fusion-gpunodeclass-editor-role
+        clusterrole/tensor-fusion-gpunodeclass-viewer-role
+        clusterrole/tensor-fusion-gpupool-editor-role
+        clusterrole/tensor-fusion-gpupool-viewer-role
+        clusterrole/tensor-fusion-manager-role
+        clusterrole/tensor-fusion-metrics-auth-role
+        clusterrole/tensor-fusion-metrics-reader
+        clusterrole/tensor-fusion-schedulingconfigtemplate-editor-role
+        clusterrole/tensor-fusion-schedulingconfigtemplate-viewer-role
+        clusterrole/tensor-fusion-tensorfusioncluster-editor-role
+        clusterrole/tensor-fusion-tensorfusioncluster-viewer-role
+        clusterrole/tensor-fusion-tensorfusionconnection-editor-role
+        clusterrole/tensor-fusion-tensorfusionconnection-viewer-role
+        clusterrole/tensor-fusion-tensorfusionworkload-editor-role
+        clusterrole/tensor-fusion-tensorfusionworkload-viewer-role
+        clusterrole/tensor-fusion-workloadprofile-editor-role
+        clusterrole/tensor-fusion-workloadprofile-viewer-role
         "clusterrolebinding/${RESOURCE_PREFIX}-rolebinding"
         clusterrolebinding/tensor-fusion-hypervisor-rolebinding
         "clusterrolebinding/${RESOURCE_PREFIX}-webhook-job"
+        clusterrolebinding/tensor-fusion-manager-rolebinding
+        clusterrolebinding/tensor-fusion-metrics-auth-rolebinding
         "mutatingwebhookconfiguration/${RESOURCE_PREFIX}-mutating-webhook"
+        mutatingwebhookconfiguration/tensor-fusion-mutating-webhook-configuration
         priorityclass/tensor-fusion-critical
         priorityclass/tensor-fusion-high
         priorityclass/tensor-fusion-medium
@@ -273,8 +305,18 @@ cleanup_greptime_and_pvcs() {
     done
 }
 
+patch_node_extended_resources() {
+    local patch=$1
+    local node
+    while IFS= read -r node; do
+        kubectl patch "$node" --subresource=status --type=merge -p "$patch" >/dev/null
+    done < <(kubectl get nodes -o name)
+}
+
 cleanup_node_resources() {
     local suffix key node
+    local deadline grace_deadline
+    local had_index=false
     local capacity_entries=""
     local allocatable_entries=""
     local patch=""
@@ -308,19 +350,53 @@ cleanup_node_resources() {
     done
     patch="{\"status\":{\"capacity\":{${capacity_entries%,}},\"allocatable\":{${allocatable_entries%,}}}}"
 
-    log "Removing TensorFusion extended resources from Node status"
-    while IFS= read -r node; do
-        kubectl patch "$node" --subresource=status --type=merge -p "$patch" >/dev/null
-    done < <(kubectl get nodes -o name)
-
-    sleep 5
     node=$(kubectl get nodes -o json)
-    if grep -Eq "\"${LABEL_DOMAIN}/index[^\"]*\"[[:space:]]*:[[:space:]]*\"[1-9]" <<<"$node"; then
-        die "non-zero TensorFusion extended resources still exist in Node status"
-    fi
     if grep -q "\"${LABEL_DOMAIN}/index" <<<"$node"; then
-        log "Zero-valued TensorFusion index resources remain in kubelet checkpoints; kubelet restart is required to remove their keys"
+        had_index=true
     fi
+
+    if [[ "$had_index" == true ]]; then
+        if ((WAIT_TIMEOUT_SECONDS <= KUBELET_DEVICE_PLUGIN_GRACE_SECONDS + NODE_STATUS_SETTLE_SECONDS)); then
+            die "WAIT_TIMEOUT_SECONDS must exceed the kubelet grace and Node status settle periods"
+        fi
+        deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
+        grace_deadline=$((SECONDS + KUBELET_DEVICE_PLUGIN_GRACE_SECONDS))
+        log "Waiting ${KUBELET_DEVICE_PLUGIN_GRACE_SECONDS}s for kubelet to retire TensorFusion device-plugin endpoints"
+        while ((SECONDS < grace_deadline)); do
+            if ((SECONDS >= deadline)); then
+                die "timed out waiting for kubelet device-plugin grace period"
+            fi
+            sleep "$POLL_INTERVAL_SECONDS"
+        done
+        node=$(kubectl get nodes -o json)
+        while grep -Eq "\"${LABEL_DOMAIN}/index[^\"]*\"[[:space:]]*:[[:space:]]*\"[1-9]" <<<"$node"; do
+            if ((SECONDS >= deadline)); then
+                die "timed out waiting for non-zero TensorFusion extended resources to retire; a Hypervisor or external capacity provider may still be active"
+            fi
+            log "Kubelet still reports non-zero TensorFusion index capacity; waiting for endpoint retirement"
+            sleep "$POLL_INTERVAL_SECONDS"
+            node=$(kubectl get nodes -o json)
+        done
+
+        log "Removing zero-valued TensorFusion extended resources from Node status"
+
+        while true; do
+            patch_node_extended_resources "$patch"
+            sleep "$NODE_STATUS_SETTLE_SECONDS"
+            node=$(kubectl get nodes -o json)
+            if ! grep -q "\"${LABEL_DOMAIN}/index" <<<"$node"; then
+                break
+            fi
+            if ((SECONDS >= deadline)); then
+                die "timed out removing TensorFusion index resources; a Hypervisor, kubelet checkpoint, or external capacity provider may still be active"
+            fi
+            log "Kubelet wrote TensorFusion index resources back; retrying final Node status cleanup"
+        done
+    else
+        log "Removing TensorFusion extended resources from Node status"
+        patch_node_extended_resources "$patch"
+    fi
+    log "All TensorFusion extended resources have been removed from Node status"
 }
 
 delete_crds() {
