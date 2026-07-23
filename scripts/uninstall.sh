@@ -68,8 +68,8 @@ usage() {
         '' \
         'The script deletes all TensorFusion CRs/CRDs, control-plane resources,' \
         'TensorFusion namespaces, PVCs/PVs, Node labels, taints, NodeOverlay, and' \
-        'schedulable tensor-fusion.ai/index* capacity. Zero-valued index entries may' \
-        'remain in kubelet checkpoints until kubelet restarts. Vendor labels such' \
+        'schedulable tensor-fusion.ai/index* capacity. The script waits for kubelet' \
+        'to garbage-collect zero-valued index entries. Vendor labels such' \
         'as nvidia.com/gpu.present and huawei.com/npu.present are preserved.' \
         'The script can run standalone; local Helm/Kustomize files are optional.'
 }
@@ -303,6 +303,7 @@ cleanup_greptime_and_pvcs() {
 
 cleanup_node_resources() {
     local suffix key node
+    local deadline
     local capacity_entries=""
     local allocatable_entries=""
     local patch=""
@@ -347,8 +348,17 @@ cleanup_node_resources() {
         die "non-zero TensorFusion extended resources still exist in Node status"
     fi
     if grep -q "\"${LABEL_DOMAIN}/index" <<<"$node"; then
-        log "Zero-valued TensorFusion index resources remain in kubelet checkpoints; kubelet restart is required to remove their keys"
+        log "Waiting for kubelet to garbage-collect zero-valued TensorFusion index resources"
+        deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
+        while grep -q "\"${LABEL_DOMAIN}/index" <<<"$node"; do
+            if ((SECONDS >= deadline)); then
+                die "timed out waiting for kubelet to remove zero-valued TensorFusion index resources; kubelet restart may be required"
+            fi
+            sleep "$POLL_INTERVAL_SECONDS"
+            node=$(kubectl get nodes -o json)
+        done
     fi
+    log "All TensorFusion extended resources have been removed from Node status"
 }
 
 delete_crds() {

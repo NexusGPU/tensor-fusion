@@ -514,9 +514,10 @@ RESOURCE_PREFIX=<rendered-resource-prefix> \
 
 脚本按 finalizer 依赖顺序等待资源删除，任一步失败都会停止，不会继续删除
 controller 或 CRD。它会清理 TensorFusion Node 标签、taint、NodeOverlay、
-可调度的 `tensor-fusion.ai/index*` 容量以及 TensorFusion PVC/PV。kubelet
-checkpoint 中值为 `0` 的 index key 可能保留到 kubelet 下次重启，但不会再提供
-调度容量。脚本不会删除
+可调度的 `tensor-fusion.ai/index*` 容量以及 TensorFusion PVC/PV。device plugin
+断开后，kubelet 会在约 5 分钟 grace period 内暂时保留值为 `0` 的 index key；
+脚本会等待 kubelet 完成垃圾回收，只有 key 完全消失才继续。如果超过
+`WAIT_TIMEOUT_SECONDS` 仍未删除，脚本会报错并提示可能需要重启 kubelet。脚本不会删除
 `nvidia.com/gpu.present`、`huawei.com/npu.present` 等厂家发现标签。卸载前必须
 先备份业务、PVC 数据和 TensorFusion CR 状态。
 
