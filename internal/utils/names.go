@@ -3,6 +3,7 @@ package utils
 import (
 	"crypto/sha256"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -16,7 +17,30 @@ const (
 // Short names are preserved as-is, while long names are truncated and suffixed
 // with a short hash to remain unique and DNS-label safe.
 func BuildHypervisorPodName(nodeName string) string {
-	return BuildNodeScopedName("tf-hypervisor", nodeName, maxHypervisorPodNameLength, defaultHashLength)
+	// This name is shared with v1 and is part of the in-place upgrade contract:
+	// GPUPool rolling updates replace the existing pod instead of running two
+	// node-level hypervisors concurrently.
+	return buildV1CompatibleHypervisorPodName(nodeName)
+}
+
+func buildV1CompatibleHypervisorPodName(nodeName string) string {
+	const prefix = "hypervisor"
+	name := prefix + "-" + nodeName
+	if len(name) <= maxHypervisorPodNameLength {
+		return name
+	}
+
+	hash := shortHash(nodeName, defaultHashLength)
+	maxNodeLen := maxHypervisorPodNameLength - len(prefix) - len(hash) - 2
+	truncated := nodeName
+	if len(truncated) > maxNodeLen {
+		truncated = truncated[:maxNodeLen]
+	}
+	truncated = strings.TrimRight(truncated, "-")
+	if truncated == "" {
+		return prefix + "-" + hash
+	}
+	return fmt.Sprintf("%s-%s-%s", prefix, truncated, hash)
 }
 
 // BuildNodeScopedName constructs a name in the form "prefix-nodeName", ensuring

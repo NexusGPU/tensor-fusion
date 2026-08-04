@@ -115,6 +115,7 @@ spec:
         nodeCompaction:
           period: 30m
         nodePoolRollingUpdatePolicy:
+          autoUpdateHypervisor: true
           batchInterval: 1s
           batchPercentage: 20
           maintenanceWindow:

@@ -115,8 +115,8 @@ var _ = Describe("ProviderConfig controller", func() {
 	})
 
 	It("does not recreate hypervisor pods on reconcile when the spec is unchanged", func() {
-		// First reconcile adopts the current state: it records the spec hash but
-		// must NOT delete the already-running hypervisor pod.
+		// ProviderConfig reconciliation only publishes a rollout revision. It
+		// never deletes a hypervisor directly.
 		reconcileOnce()
 		Expect(hypervisorPodExists()).To(BeTrue(), "pod should survive the initial adopt reconcile")
 
@@ -130,7 +130,7 @@ var _ = Describe("ProviderConfig controller", func() {
 		Expect(hypervisorPodExists()).To(BeTrue(), "pod should survive a no-op resync reconcile")
 	})
 
-	It("recreates hypervisor pods when the spec actually changes", func() {
+	It("does not directly delete hypervisor pods when the spec changes", func() {
 		reconcileOnce() // adopt + record hash
 		Expect(hypervisorPodExists()).To(BeTrue())
 
@@ -140,6 +140,6 @@ var _ = Describe("ProviderConfig controller", func() {
 		Expect(k8sClient.Update(ctx, pc)).To(Succeed())
 
 		reconcileOnce()
-		Eventually(hypervisorPodExists).Should(BeFalse(), "pod should be deleted after a real spec change")
+		Consistently(hypervisorPodExists).Should(BeTrue(), "GPUPool rolling update must own pod recreation")
 	})
 })
