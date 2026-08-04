@@ -479,6 +479,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			state := framework.NewCycleState()
 			pod := makePod("p-prebind", map[string]string{
 				constants.GpuCountAnnotation:      "1",
+				constants.IsolationModeAnnotation: string(tfv1.IsolationModeHard),
 				constants.TFLOPSRequestAnnotation: "100",
 				constants.VRAMRequestAnnotation:   "10Gi",
 				constants.TFLOPSLimitAnnotation:   "100",
@@ -497,6 +498,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			updatedPod := &v1.Pod{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "p-prebind", Namespace: "ns1"}, updatedPod)).To(Succeed())
 			Expect(updatedPod.Annotations[constants.GPUDeviceIDsAnnotation]).To(Equal("gpu-1"))
+			Expect(updatedPod.Annotations[constants.EffectiveHardSMPercentAnnotation]).To(Equal("10"))
 
 			gpu := &tfv1.GPU{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "gpu-1"}, gpu)).To(Succeed())

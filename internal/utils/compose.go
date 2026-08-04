@@ -1353,10 +1353,16 @@ func SetWorkerContainerSpec(
 	// open source vgpu.rs memory limiter is feedback-loop based, potentially cause resource contention
 	if workloadProfile.Isolation == tfv1.IsolationModeHard {
 		memLimitMB := strconv.FormatInt(workloadProfile.Resources.Limits.Vram.Value()/(1024*1024), 10)
+		// Keep an explicit compute-percent in the Pod spec. For an absolute
+		// TFLOPS limit, the percentage depends on the GPU selected later by the
+		// scheduler, so the hypervisor device plugin injects this env at Allocate.
+		if !workloadProfile.Resources.Limits.ComputePercent.IsZero() {
+			container.Env = append(container.Env, v1.EnvVar{
+				Name:  constants.HardSMLimiterEnv,
+				Value: workloadProfile.Resources.Limits.ComputePercent.String(),
+			})
+		}
 		container.Env = append(container.Env, v1.EnvVar{
-			Name:  constants.HardSMLimiterEnv,
-			Value: workloadProfile.Resources.Limits.ComputePercent.String(),
-		}, v1.EnvVar{
 			Name:  constants.HardMemLimiterEnv,
 			Value: memLimitMB,
 		}, v1.EnvVar{

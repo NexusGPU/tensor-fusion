@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -876,8 +877,9 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	// clears assumed state on its own, so on commit failure we just return Error
 	// and let the framework call Unreserve (which becomes a no-op).
 	var commitErr error
+	var committedGPUs []*tfv1.GPU
 	for attempt := 0; attempt < 3; attempt++ {
-		if _, commitErr = s.allocator.Commit(string(pod.UID)); commitErr == nil {
+		if committedGPUs, commitErr = s.allocator.Commit(string(pod.UID)); commitErr == nil {
 			break
 		}
 		s.logger.Info("Commit retry", "pod", pod.Name, "attempt", attempt+1, "error", commitErr)
@@ -907,6 +909,24 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation),
 			"value": gpuIDs,
 		},
+	}
+	allocRequestRaw, allocRequestErr := state.Read(CycleStateAllocateRequest)
+	if allocRequestErr == nil {
+		allocRequest := allocRequestRaw.(*tfv1.AllocRequest)
+		if allocRequest.Isolation == tfv1.IsolationModeHard &&
+			!allocRequest.Limit.Tflops.IsZero() &&
+			allocRequest.Limit.ComputePercent.IsZero() {
+			percent, percentErr := effectiveHardSMPercent(allocRequest.Limit.Tflops, committedGPUs)
+			if percentErr != nil {
+				_ = s.allocator.Rollback(string(pod.UID))
+				return fwk.NewStatus(fwk.Error, "calculate hard SM percent: "+percentErr.Error())
+			}
+			patchOps = append(patchOps, map[string]any{
+				"op":    "add",
+				"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.EffectiveHardSMPercentAnnotation),
+				"value": strconv.FormatUint(uint64(percent), 10),
+			})
+		}
 	}
 	if indexAvailable {
 		patchOps = append(patchOps, map[string]any{
@@ -1007,6 +1027,22 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 		s.indexAllocator.AsyncCheckNodeIndexAvailableAndAssign(pod, index)
 	}
 	return fwk.NewStatus(fwk.Success, "")
+}
+
+func effectiveHardSMPercent(tflops resource.Quantity, gpus []*tfv1.GPU) (uint32, error) {
+	if len(gpus) == 0 || gpus[0] == nil || gpus[0].Status.Capacity == nil ||
+		gpus[0].Status.Capacity.Tflops.IsZero() {
+		return 0, fmt.Errorf("selected GPU capacity is unavailable")
+	}
+	percent := math.Ceil(tflops.AsApproximateFloat64() /
+		gpus[0].Status.Capacity.Tflops.AsApproximateFloat64() * 100)
+	if percent < 1 {
+		percent = 1
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	return uint32(percent), nil
 }
 
 // PostBind is intentionally minimal: by the time we reach here the pod is

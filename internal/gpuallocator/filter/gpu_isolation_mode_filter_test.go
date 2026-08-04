@@ -7,6 +7,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -98,6 +99,46 @@ func TestGPUIsolationModeFilter_ExplicitUnsupportedIsolation(t *testing.T) {
 	}
 	if len(filtered) != 0 {
 		t.Fatalf("expected gpu to be rejected when annotation explicitly marks capabilities unsupported")
+	}
+}
+
+func TestGPUIsolationModeFilter_SharedAcceptsAnyNodeRuntimeMode(t *testing.T) {
+	filter := NewGPUIsolationModeFilter(tfv1.IsolationModeShared)
+	gpus := []*tfv1.GPU{
+		{Status: tfv1.GPUStatus{UUID: "shared", IsolationMode: tfv1.IsolationModeShared}},
+		{Status: tfv1.GPUStatus{UUID: "soft", IsolationMode: tfv1.IsolationModeSoft}},
+		{Status: tfv1.GPUStatus{UUID: "hard", IsolationMode: tfv1.IsolationModeHard}},
+		{Status: tfv1.GPUStatus{UUID: "partitioned", IsolationMode: tfv1.IsolationModePartitioned}},
+	}
+
+	filtered, err := filter.Filter(context.Background(), tfv1.NameNamespace{}, gpus)
+	if err != nil {
+		t.Fatalf("filter returned error: %v", err)
+	}
+	if len(filtered) != len(gpus) {
+		t.Fatalf("expected all runtime modes to be eligible for shared, got %d", len(filtered))
+	}
+}
+
+func TestSharedWholeGPUFilter_OnlyKeepsIdleUnpartitionedGPUs(t *testing.T) {
+	res := func(tflops, vram string) *tfv1.Resource {
+		return &tfv1.Resource{Tflops: resource.MustParse(tflops), Vram: resource.MustParse(vram)}
+	}
+	gpus := []*tfv1.GPU{
+		{ObjectMeta: metav1.ObjectMeta{Name: "idle"}, Status: tfv1.GPUStatus{Capacity: res("100", "24Gi"), Available: res("100", "24Gi")}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "used"}, Status: tfv1.GPUStatus{Capacity: res("100", "24Gi"), Available: res("80", "20Gi")}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "partitioned"}, Status: tfv1.GPUStatus{
+			Capacity: res("100", "24Gi"), Available: res("100", "24Gi"),
+			AllocatedPartitions: map[string]tfv1.AllocatedPartition{"pod": {PodUID: "pod"}},
+		}},
+	}
+
+	filtered, err := NewSharedWholeGPUFilter().Filter(context.Background(), tfv1.NameNamespace{}, gpus)
+	if err != nil {
+		t.Fatalf("filter returned error: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].Name != "idle" {
+		t.Fatalf("expected only idle GPU, got %#v", filtered)
 	}
 }
 
