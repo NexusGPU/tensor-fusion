@@ -11,7 +11,41 @@
 - **v2 CRD 是 v1 schema 的严格超集**（逐字段比对验证）：无字段删除，v1 写入的数据在 v2 CRD 下完整保留。
 - 回退时 **CRD 保持 v2 不动**，但不能只换 operator 镜像：v1/v2 的 scheduler ConfigMap 和 Hypervisor 镜像必须与各自 operator 配套切换。
 - v1/v2 使用相同的 Hypervisor Pod 名称 `hypervisor-<node>`。升级时由 v2 operator 删除旧 UID，并以相同名称创建 v2 Pod；正常流程不需要手动清理旧 Pod。
-- 升级顺序：**先 apply CRD → 同步 RBAC → 确认 `autoUpdateHypervisor=true` → 将 operator 缩容到 0 → 同步切换 ConfigMap、operator 和 Hypervisor 镜像 → 恢复 operator 副本**。如使用 Helm 管理完整升级，使用 Chart `1.8.1`，并在生产 values 中固定配套的 operator/hypervisor 镜像版本。
+- 升级顺序：**下载并固定 Helm Chart → apply CRD → 同步 RBAC → 确认 `autoUpdateHypervisor=true` → 将 operator 缩容到 0 → 同步切换 ConfigMap、operator 和 Hypervisor 镜像 → 恢复 operator 副本**。本文使用正式 Helm 包作为资源来源，但不执行 `helm upgrade`，避免更新同一 release 中的数据库、监控等其他组件。
+
+---
+
+## 获取正式 Helm 升级包
+
+升级使用公开 Helm 仓库中已发布的 Chart `1.8.1`，不要依赖本地源码目录，也不要使用未固定版本的最新包：
+
+```bash
+chart_version=1.8.1
+upgrade_dir=${TMPDIR:-/tmp}/tensor-fusion-upgrade-${chart_version}
+
+helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
+helm repo update tensor-fusion
+helm search repo tensor-fusion/tensor-fusion --versions | head
+
+rm -rf "${upgrade_dir}"
+mkdir -p "${upgrade_dir}"
+helm pull tensor-fusion/tensor-fusion \
+  --version "${chart_version}" \
+  --untar \
+  --untardir "${upgrade_dir}"
+
+chart=${upgrade_dir}/tensor-fusion
+helm show chart "${chart}" | grep -E '^(version|appVersion):'
+```
+
+版本检查必须输出：
+
+```text
+appVersion: 2.14.0
+version: 1.8.1
+```
+
+后续 CRD、RBAC 和 ConfigMap 都从 `${chart}` 读取。不要执行 `helm upgrade` 或 `helm upgrade --install`；本文只使用 `helm template` 和 `kubectl apply` 精确更新 operator 所需资源，不会更新数据库或同一 Helm release 中的其他组件。
 
 ---
 
@@ -20,8 +54,8 @@
 ### 1. 确认 CRD 包含 v1 兼容字段（关键）
 
 ```bash
-grep -l 'nvLink' charts/tensor-fusion/crds/tensor-fusion.ai_gpus.yaml \
-  && grep -l 'remoteModeImage' charts/tensor-fusion/crds/tensor-fusion.ai_gpupools.yaml \
+grep -l 'nvLink' "${chart}/crds/tensor-fusion.ai_gpus.yaml" \
+  && grep -l 'remoteModeImage' "${chart}/crds/tensor-fusion.ai_gpupools.yaml" \
   && echo "OK: compat fields present"
 ```
 
@@ -81,6 +115,7 @@ kubectl get crd -o name | grep 'tensor-fusion.ai' \
   | xargs kubectl get -o yaml > tf-backup/crds.yaml
 kubectl -n ${ns} get deploy ${controller_deploy} -o yaml > tf-backup/controller-deploy.yaml
 kubectl -n ${ns} get configmap ${release}-config -o yaml > tf-backup/config-v1.yaml
+kubectl get providerconfigs -o yaml > tf-backup/providerconfigs-v1.yaml
 kubectl -n ${ns} get pods -o json | jq -r '
   .items[]
   | select(.metadata.name | startswith("hypervisor-"))
@@ -89,6 +124,34 @@ kubectl -n ${ns} get pods -o json | jq -r '
   | @tsv' > tf-backup/hypervisor-v1.tsv
 ```
 
+固定现有 ProviderConfig 的 client/worker 镜像，避免升级时被 Chart 默认的 `latest` 覆盖。以下以 NVIDIA ProviderConfig 为例，名称按实际环境调整：
+
+```bash
+provider_name=<nvidia-providerconfig-name>
+remote_client_image=$(kubectl get providerconfig ${provider_name} \
+  -o jsonpath='{.spec.images.remoteClient}')
+remote_worker_image=$(kubectl get providerconfig ${provider_name} \
+  -o jsonpath='{.spec.images.remoteWorker}')
+
+printf 'remoteClient=%s\nremoteWorker=%s\n' \
+  "${remote_client_image}" "${remote_worker_image}"
+test -n "${remote_client_image}"
+test -n "${remote_worker_image}"
+```
+
+建议两者都使用明确版本，不要使用 `latest`。本文的精确升级不会渲染或 apply `templates/provider-config-nvidia.yaml`，因此现有 ProviderConfig 会保持不变。如果确实需要同步 ProviderConfig，必须在渲染时用上面记录的镜像显式覆盖 Chart 默认值，并在 apply 前检查生成结果：
+
+```bash
+helm template ${release} "${chart}" -n ${ns} \
+  -f tf-backup/helm-values.yaml \
+  --set-string providerConfigs.nvidia.images.remoteClient="${remote_client_image}" \
+  --set-string providerConfigs.nvidia.images.remoteWorker="${remote_worker_image}" \
+  -s templates/provider-config-nvidia.yaml \
+  > tf-backup/providerconfig-v2.yaml
+```
+
+没有主动迁移 ProviderConfig 的需求时，不要 apply 这个文件。
+
 ---
 
 ## 升级步骤
@@ -96,7 +159,7 @@ kubectl -n ${ns} get pods -o json | jq -r '
 ### 步骤 1：先升级 CRD
 
 ```bash
-kubectl apply --server-side --force-conflicts -f charts/tensor-fusion/crds/
+kubectl apply --server-side --force-conflicts -f "${chart}/crds/"
 kubectl get crd providerconfigs.tensor-fusion.ai   # 新增 CRD 已就绪
 ```
 
@@ -110,7 +173,7 @@ kubectl get crd providerconfigs.tensor-fusion.ai   # 新增 CRD 已就绪
 可以直接用新版 chart 渲染后单独 apply 这两个文件：
 
 ```bash
-helm template ${release} ./charts/tensor-fusion -n ${ns} \
+helm template ${release} "${chart}" -n ${ns} \
   -f tf-backup/helm-values.yaml \
   -s templates/rbac.yaml -s templates/rbac-hypervisor.yaml | kubectl apply --server-side -f -
 ```
@@ -120,7 +183,7 @@ helm template ${release} ./charts/tensor-fusion -n ${ns} \
 此处只提前渲染并检查 v2 ConfigMap，不要在 v1 operator 仍运行时 apply。v1 operator 使用 v2 scheduler 配置会因 `GPUNetworkTopologyAware` 扩展点不兼容而 CrashLoop；实际 apply 放在步骤 3 的 `operator=0` 窗口内：
 
 ```bash
-helm template ${release} ./charts/tensor-fusion -n ${ns} \
+helm template ${release} "${chart}" -n ${ns} \
   -f tf-backup/helm-values.yaml \
   -s templates/config.yaml > tf-backup/config-v2.yaml
 ```
@@ -331,6 +394,11 @@ test "${hypervisor_count}" = "1"
 
 kubectl get gpupools -A \
   -o custom-columns='POOL:.metadata.name,PROGRESS:.status.componentStatus.hypervisorUpdateProgress,SYNCED:.status.componentStatus.hypervisorConfigSynced'
+
+test "$(kubectl get providerconfig ${provider_name} \
+  -o jsonpath='{.spec.images.remoteClient}')" = "${remote_client_image}"
+test "$(kubectl get providerconfig ${provider_name} \
+  -o jsonpath='{.spec.images.remoteWorker}')" = "${remote_worker_image}"
 ```
 
 有 GPUNode 的待升级 pool 最终必须满足 `PROGRESS=100`、`SYNCED=true`，并且每个 GPU 节点只有一个 Hypervisor Pod。没有 GPUNode 的空 pool 不执行实际滚动，进度字段可能为空，应检查其 vendor、镜像和 rolling policy 配置，不要要求 `PROGRESS=100`。正常升级过程中不应出现第二种 Pod 名称，也不应残留 v1 UID或 v1镜像。
@@ -400,9 +468,11 @@ kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
 
 ## 检查清单
 
+- [ ] 已从公开 Helm 仓库下载并固定 Chart `1.8.1`，`appVersion=2.14.0`；未执行 `helm upgrade`
 - [ ] CRD 来自 compat 改动合并后的 main（预检 1 通过）
 - [ ] `nodeManagerConfig` / `gpuCount` 预检通过，所有待升级 pool 均为 `autoUpdateHypervisor=true`
 - [ ] 已全量备份 CRD、CR、Helm values、v1 ConfigMap 与 controller Deployment
+- [ ] ProviderConfig 的 `remoteClient` / `remoteWorker` 已记录并固定为现有明确版本，升级后值保持不变
 - [ ] 先 apply CRD/RBAC，再将 operator 缩容到 0，并在停止窗口内同步切换 v2 ConfigMap、operator/Hypervisor 镜像
 - [ ] （Karpenter 环境）NodeOverlay 已声明 `index_0..index_f`，且保留旧 `tensor-fusion.ai/index`
 - [ ] GPU 节点已按用途标记 `tensor-fusion.ai/isolationMode=soft|hard|partitioned`（已有 shared label 可保留兼容，但不再要求）
