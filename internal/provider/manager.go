@@ -155,9 +155,10 @@ func (m *Manager) DeleteProvider(vendor string) {
 	m.resourceNameMu.Unlock()
 }
 
-// DeleteProviderByName removes a ProviderConfig by its CR name.
-// Used when handling delete events where only the object name is available.
-func (m *Manager) DeleteProviderByName(name string) {
+// DeleteProviderByName removes a ProviderConfig by its CR name and returns its
+// vendor. The vendor lets callers roll affected hypervisors back to defaults
+// after the Kubernetes object has already disappeared.
+func (m *Manager) DeleteProviderByName(name string) string {
 	m.mu.Lock()
 	var vendor string
 	for v, p := range m.providers {
@@ -171,6 +172,7 @@ func (m *Manager) DeleteProviderByName(name string) {
 	if vendor != "" {
 		m.DeleteProvider(vendor)
 	}
+	return vendor
 }
 
 // updateCaches updates the derived caches from provider config

@@ -296,10 +296,15 @@ var (
 	DefragEvictSkipNodeReasonAnnotation = Domain + "/defrag-evict-skip-reason"
 
 	// ProviderConfigSpecHashAnnotation records the spec hash the ProviderConfig
-	// controller last acted on. Used to bounce hypervisor pods only when the
-	// spec actually changes, so an operator restart / informer resync (which
-	// replays the unchanged object) does not needlessly recreate them.
+	// controller last published to GPUPools. It prevents an operator restart or
+	// informer resync from starting another rollout for unchanged configuration.
 	ProviderConfigSpecHashAnnotation = Domain + "/provider-config-hash"
+
+	// ProviderConfigRevisionsAnnotation stores a JSON map of normalized vendor
+	// names to ProviderConfig spec hashes on a GPUPool. The hypervisor component
+	// uses it to start a normal batched rollout, while per-node hashes ensure a
+	// change only recreates nodes served by that vendor.
+	ProviderConfigRevisionsAnnotation = Domain + "/provider-config-revisions"
 )
 
 const (

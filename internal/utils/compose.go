@@ -1407,19 +1407,44 @@ func SetWorkerContainerSpec(
 	}
 }
 
-// HypervisorTemplateHash computes hash of the full hypervisor pod template
-// including code-level defaults from AddTFHypervisorConfAfterTemplate.
-// Vendor-agnostic: uses empty vendor and compatibleWithNvidiaContainerToolkit=false
-// so the hash stays stable across nodes — vendor-specific extras are applied
-// per-node at pod creation time.
+// HypervisorTemplateHash computes the pool-wide hypervisor rollout hash. It
+// includes every ProviderConfig revision so a provider change starts the
+// existing GPUPool batched update state machine.
 func HypervisorTemplateHash(pool *tfv1.GPUPool) string {
+	spec := hypervisorTemplateSpec(pool)
+	revisions := ProviderConfigRevisions(pool)
+	if len(revisions) == 0 {
+		return GetObjectHash(spec)
+	}
+	return GetObjectHash(struct {
+		Spec      v1.PodSpec
+		Revisions map[string]string
+	}{Spec: spec, Revisions: revisions})
+}
+
+// HypervisorPodTemplateHash computes the desired hash for one node. Only the
+// revision of that node's vendor is included, so a ProviderConfig update in a
+// multi-vendor pool does not recreate unrelated hypervisors.
+func HypervisorPodTemplateHash(pool *tfv1.GPUPool, vendor string) string {
+	spec := hypervisorTemplateSpec(pool)
+	revision := ProviderConfigRevision(pool, vendor)
+	if revision == "" {
+		return GetObjectHash(spec)
+	}
+	return GetObjectHash(struct {
+		Spec     v1.PodSpec
+		Revision string
+	}{Spec: spec, Revision: revision})
+}
+
+func hypervisorTemplateSpec(pool *tfv1.GPUPool) v1.PodSpec {
 	podTmpl := &v1.PodTemplate{}
 	if pool.Spec.ComponentConfig.Hypervisor != nil && pool.Spec.ComponentConfig.Hypervisor.PodTemplate != nil {
 		json.Unmarshal(pool.Spec.ComponentConfig.Hypervisor.PodTemplate.Raw, podTmpl) //nolint:errcheck
 	}
 	spec := podTmpl.Template.Spec
 	AddTFHypervisorConfAfterTemplate(context.Background(), &spec, pool, "", false)
-	return GetObjectHash(spec)
+	return spec
 }
 
 // WorkerTemplateHash computes hash of the base worker pod template

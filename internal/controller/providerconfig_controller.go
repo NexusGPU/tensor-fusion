@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	schedulingcorev1 "k8s.io/component-helpers/scheduling/corev1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,9 +46,8 @@ type ProviderConfigReconciler struct {
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=providerconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpunodes,verbs=get;list;watch
-// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=tensor-fusion.ai,resources=gpupools,verbs=get;list;watch;patch;update
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
 
 // Reconcile handles ProviderConfig create/update/delete events
 func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -56,9 +56,14 @@ func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	var providerConfig tfv1.ProviderConfig
 	if err := r.Get(ctx, req.NamespacedName, &providerConfig); err != nil {
 		if errors.IsNotFound(err) {
-			r.ProviderManager.DeleteProviderByName(req.Name)
+			vendor := r.ProviderManager.DeleteProviderByName(req.Name)
 			gpuInfos := r.ProviderManager.GetAllGpuInfos()
 			gpuallocator.LoadPartitionTemplatesFromConfig(gpuInfos)
+			if vendor != "" {
+				if err := r.publishProviderRevision(ctx, vendor, ""); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
 			logger.Info("ProviderConfig deleted, caches cleaned", "name", req.Name)
 			return ctrl.Result{}, nil
 		}
@@ -73,22 +78,17 @@ func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	logger.Info("partition templates refreshed", "gpuInfoCount", len(gpuInfos))
 	logger.Info("ProviderConfig synced", "vendor", providerConfig.Spec.Vendor)
 
-	// Only bounce hypervisor pods when the spec actually changed since we last
-	// acted on it. On operator restart / informer resync the controller gets a
-	// reconcile for the unchanged object; recreating healthy hypervisor pods
-	// there is disruptive and surprising. The last-acted spec hash is persisted
-	// on the ProviderConfig itself so the comparison survives operator restarts.
+	// Publish the revision instead of deleting pods directly. GPUPool owns the
+	// rollout state machine (batch size, interval and progress), while per-node
+	// hashes limit recreation to nodes that use this vendor.
 	newHash := utils.GetObjectHash(providerConfig.Spec)
 	oldHash := providerConfig.Annotations[constants.ProviderConfigSpecHashAnnotation]
 
-	if oldHash != "" && oldHash != newHash {
-		if err := r.restartHypervisorPodsForVendor(ctx, providerConfig.Spec.Vendor); err != nil {
-			logger.Error(err, "failed to restart hypervisor pods", "vendor", providerConfig.Spec.Vendor)
+	if oldHash != newHash {
+		if err := r.publishProviderRevision(ctx, providerConfig.Spec.Vendor, newHash); err != nil {
+			logger.Error(err, "failed to publish ProviderConfig revision", "vendor", providerConfig.Spec.Vendor)
 			return ctrl.Result{}, err
 		}
-	}
-
-	if oldHash != newHash {
 		patch := client.MergeFrom(providerConfig.DeepCopy())
 		if providerConfig.Annotations == nil {
 			providerConfig.Annotations = map[string]string{}
@@ -102,51 +102,82 @@ func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return ctrl.Result{}, nil
 }
 
-func (r *ProviderConfigReconciler) restartHypervisorPodsForVendor(ctx context.Context, vendor string) error {
+func (r *ProviderConfigReconciler) publishProviderRevision(ctx context.Context, vendor, revision string) error {
 	logger := log.FromContext(ctx)
 	if vendor == "" {
 		return nil
 	}
 
-	var nodeList tfv1.GPUNodeList
-	if err := r.List(ctx, &nodeList); err != nil {
-		return fmt.Errorf("failed to list GPU nodes: %w", err)
+	poolNames := map[string]struct{}{}
+	var poolList tfv1.GPUPoolList
+	if err := r.List(ctx, &poolList); err != nil {
+		return fmt.Errorf("list GPU pools for ProviderConfig rollout: %w", err)
+	}
+	for i := range poolList.Items {
+		pool := &poolList.Items[i]
+		if poolMayUseVendor(pool, vendor) {
+			poolNames[pool.Name] = struct{}{}
+		}
 	}
 
+	// GPUNode labels are the observed vendor source of truth and also cover
+	// manually-created or temporarily inconsistent pool configurations.
+	var nodeList tfv1.GPUNodeList
+	if err := r.List(ctx, &nodeList); err != nil {
+		return fmt.Errorf("list GPU nodes for ProviderConfig rollout: %w", err)
+	}
 	for i := range nodeList.Items {
 		node := &nodeList.Items[i]
 		nodeVendor, err := r.resolveNodeVendor(ctx, node)
 		if err != nil {
-			logger.Error(err, "failed to resolve node vendor, skipping hypervisor restart", "node", node.Name)
+			logger.Error(err, "failed to resolve node vendor while publishing revision", "node", node.Name)
 			continue
 		}
-		if !strings.EqualFold(nodeVendor, vendor) {
-			continue
+		if strings.EqualFold(nodeVendor, vendor) {
+			if poolName := utils.ExtractPoolNameFromNodeLabel(node); poolName != "" {
+				poolNames[poolName] = struct{}{}
+			}
 		}
+	}
 
-		key := client.ObjectKey{
-			Namespace: utils.CurrentNamespace(),
-			Name:      utils.BuildHypervisorPodName(node.Name),
-		}
-		pod := &corev1.Pod{}
-		if err := r.Get(ctx, key, pod); err != nil {
-			if errors.IsNotFound(err) {
-				continue
+	for poolName := range poolNames {
+		if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			pool := &tfv1.GPUPool{}
+			if err := r.Get(ctx, client.ObjectKey{Name: poolName}, pool); err != nil {
+				return err
 			}
-			logger.Error(err, "failed to get hypervisor pod", "pod", key.Name, "node", node.Name)
-			continue
-		}
-		if err := r.Delete(ctx, pod); err != nil {
-			if errors.IsNotFound(err) {
-				continue
+			before := client.MergeFrom(pool.DeepCopy())
+			if err := utils.SetProviderConfigRevision(pool, vendor, revision); err != nil {
+				return err
 			}
-			logger.Error(err, "failed to delete hypervisor pod", "pod", key.Name, "node", node.Name)
-			continue
+			return r.Patch(ctx, pool, before)
+		}); err != nil {
+			return fmt.Errorf("publish ProviderConfig revision to pool %s: %w", poolName, err)
 		}
-		logger.Info("deleted hypervisor pod due to ProviderConfig update", "pod", key.Name, "node", node.Name, "vendor", vendor)
+		logger.Info("published ProviderConfig revision for rolling update",
+			"pool", poolName, "vendor", vendor, "revision", revision)
 	}
 
 	return nil
+}
+
+func poolMayUseVendor(pool *tfv1.GPUPool, vendor string) bool {
+	if pool == nil || pool.Spec.NodeManagerConfig == nil {
+		return strings.EqualFold(vendor, constants.AcceleratorVendorNvidia)
+	}
+	cfg := pool.Spec.NodeManagerConfig
+	for configuredVendor := range cfg.MultiVendorNodeSelector {
+		if strings.EqualFold(configuredVendor, vendor) {
+			return true
+		}
+	}
+	if len(cfg.MultiVendorNodeSelector) > 0 {
+		return false
+	}
+	if cfg.DefaultVendor != "" {
+		return strings.EqualFold(cfg.DefaultVendor, vendor)
+	}
+	return strings.EqualFold(vendor, constants.AcceleratorVendorNvidia)
 }
 
 func (r *ProviderConfigReconciler) resolveNodeVendor(ctx context.Context, node *tfv1.GPUNode) (string, error) {

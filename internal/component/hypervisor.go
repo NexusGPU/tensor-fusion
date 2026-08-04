@@ -65,8 +65,9 @@ func (h *Hypervisor) SetUpdateProgress(status *tfv1.PoolComponentStatus, progres
 	}
 }
 
-func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool *tfv1.GPUPool, configHash string) (int, int, bool, error) {
+func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool *tfv1.GPUPool, _ string) (int, int, bool, error) {
 	log := log.FromContext(ctx)
+	h.nodesToUpdate = nil
 
 	nodeList := &tfv1.GPUNodeList{}
 	if err := r.List(ctx, nodeList, client.MatchingLabels(map[string]string{
@@ -92,8 +93,10 @@ func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool
 		}
 		pod := &corev1.Pod{}
 		err := r.Get(ctx, key, pod)
+		vendor := hypervisorNodeVendor(&node, pool)
+		desiredHash := utils.HypervisorPodTemplateHash(pool, vendor)
 		if errors.IsNotFound(err) ||
-			pod.Labels[constants.LabelKeyPodTemplateHash] != configHash {
+			pod.Labels[constants.LabelKeyPodTemplateHash] != desiredHash {
 			h.nodesToUpdate = append(h.nodesToUpdate, &node)
 		}
 	}
@@ -102,6 +105,27 @@ func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool
 	sort.Sort(GPUNodeByCreationTimestamp(h.nodesToUpdate))
 
 	return total, total - len(h.nodesToUpdate), false, nil
+}
+
+func hypervisorNodeVendor(node *tfv1.GPUNode, pool *tfv1.GPUPool) string {
+	// A single-vendor pool is authoritative. GPUNode labels may be stale after
+	// pool/vendor migration and must not route provider revisions to another
+	// vendor. Multi-vendor pools still use the observed per-node label.
+	if pool != nil && pool.Spec.NodeManagerConfig != nil {
+		cfg := pool.Spec.NodeManagerConfig
+		if len(cfg.MultiVendorNodeSelector) == 0 && cfg.DefaultVendor != "" {
+			return cfg.DefaultVendor
+		}
+	}
+	if node != nil && node.Labels != nil {
+		if vendor := node.Labels[constants.AcceleratorLabelVendor]; vendor != "" {
+			return vendor
+		}
+	}
+	if pool != nil && pool.Spec.NodeManagerConfig != nil && pool.Spec.NodeManagerConfig.DefaultVendor != "" {
+		return pool.Spec.NodeManagerConfig.DefaultVendor
+	}
+	return constants.AcceleratorVendorNvidia
 }
 
 func (h *Hypervisor) PerformBatchUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, delta int) (bool, error) {
