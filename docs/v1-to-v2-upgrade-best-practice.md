@@ -11,7 +11,7 @@
 - **v2 CRD 是 v1 schema 的严格超集**（逐字段比对验证）：无字段删除，v1 写入的数据在 v2 CRD 下完整保留。
 - 回退时 **CRD 保持 v2 不动**，但不能只换 operator 镜像：v1/v2 的 scheduler ConfigMap 和 Hypervisor 镜像必须与各自 operator 配套切换。
 - v1/v2 使用相同的 Hypervisor Pod 名称 `hypervisor-<node>`。升级时由 v2 operator 删除旧 UID，并以相同名称创建 v2 Pod；正常流程不需要手动清理旧 Pod。
-- 升级顺序：**先 apply CRD → 同步 RBAC → 确认 `autoUpdateHypervisor=true` → 将 operator 缩容到 0 → 同步切换 ConfigMap、operator 和 Hypervisor 镜像 → 恢复 operator 副本**。如使用 Helm 管理完整升级，使用 Chart `1.8.0`，并在生产 values 中固定配套的 operator/hypervisor 镜像版本。
+- 升级顺序：**先 apply CRD → 同步 RBAC → 确认 `autoUpdateHypervisor=true` → 将 operator 缩容到 0 → 同步切换 ConfigMap、operator 和 Hypervisor 镜像 → 恢复 operator 副本**。如使用 Helm 管理完整升级，使用 Chart `1.8.1`，并在生产 values 中固定配套的 operator/hypervisor 镜像版本。
 
 ---
 
