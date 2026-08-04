@@ -102,11 +102,11 @@ Chart 默认所有组件镜像都使用浮动 tag `latest`（operator / hypervis
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   -n tensor-fusion-sys --create-namespace \
-  --set controller.image.tag=2.13.0 \
-  --set cluster.hypervisorImage=tensorfusion/tensor-fusion-hypervisor:2.13.0 \
+  --set controller.image.tag=2.14.0 \
+  --set cluster.hypervisorImage=tensorfusion/tensor-fusion-hypervisor:2.14.0 \
   --set providerConfigs.nvidia.images.middleware=tensorfusion/vgpu-provider-nvidia:1.3.5 \
-  --set providerConfigs.nvidia.images.remoteClient=tensorfusion/tensor-fusion-client:v2.15.1 \
-  --set providerConfigs.nvidia.images.remoteWorker=tensorfusion/tensor-fusion-worker:v2.15.1
+  --set providerConfigs.nvidia.images.remoteClient=tensorfusion/tensor-fusion-client:v2.17.2 \
+  --set providerConfigs.nvidia.images.remoteWorker=tensorfusion/tensor-fusion-worker:v2.17.2
 ```
 
 各组件对应的 values 键：
@@ -124,9 +124,9 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 若通过 Helm 仓库（而非本地 chart 路径）安装，可用 `--version` 固定 **chart 版本**（与镜像 tag 相互独立）：
 
 ```bash
-helm repo add tensor-fusion https://helm.tensor-fusion.ai
-helm repo update
-helm install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.0 \
+helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
+helm repo update tensor-fusion
+helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.1 \
   -n tensor-fusion-sys --create-namespace
 ```
 
@@ -200,8 +200,9 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 raw URL apply（或先 clone 仓库）。以 Ascend 为例：
 
 ```bash
-helm repo add tensor-fusion https://helm.tensor-fusion.ai && helm repo update
-helm install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.0 \
+helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
+helm repo update tensor-fusion
+helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.1 \
   -n tensor-fusion-sys --create-namespace \
   --set cluster.enabled=false \
   --set providerConfigs.nvidia.enabled=false \
