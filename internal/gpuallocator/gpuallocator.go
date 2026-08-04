@@ -624,6 +624,9 @@ func (s *GpuAllocator) Filter(
 	if req.Isolation != "" {
 		filterRegistry = filterRegistry.With(filter.NewGPUIsolationModeFilter(req.Isolation))
 	}
+	if req.Isolation == tfv1.IsolationModeShared {
+		filterRegistry = filterRegistry.With(filter.NewSharedWholeGPUFilter())
+	}
 
 	// 3. Partition template filter (only for partitioned mode)
 	if req.Isolation == tfv1.IsolationModePartitioned {
@@ -834,6 +837,9 @@ func (s *GpuAllocator) releaseVictimAllocationFromGPU(gpuCopy *tfv1.GPU, preempt
 			gpuCopy.Status.Available.Tflops.Add(reqTflops)
 			gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
 		}
+		delete(gpuCopy.Status.AllocatedPartitions, string(preemptAllocRequest.PodMeta.UID))
+	} else if preemptAllocRequest.Isolation == tfv1.IsolationModeShared && gpuCopy.Status.Capacity != nil {
+		gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
 	} else {
 		gpuCopy.Status.Available.Tflops.Add(reqTflops)
 		gpuCopy.Status.Available.Vram.Add(preemptAllocRequest.Request.Vram)
@@ -887,6 +893,9 @@ func (s *GpuAllocator) buildPreemptFilterRegistry(req *tfv1.AllocRequest) *filte
 	}
 	if req.Isolation != "" {
 		filterRegistry = filterRegistry.With(filter.NewGPUIsolationModeFilter(req.Isolation))
+	}
+	if req.Isolation == tfv1.IsolationModeShared {
+		filterRegistry = filterRegistry.With(filter.NewSharedWholeGPUFilter())
 	}
 	if req.Isolation == tfv1.IsolationModePartitioned {
 		maxPartitionsSnap, partitionTemplateSnap := GetPartitionConfigSnapshot()
@@ -1038,6 +1047,17 @@ func (s *GpuAllocator) applyAllocationToGPU(gpu *tfv1.GPU, req *tfv1.AllocReques
 	if req.Isolation == tfv1.IsolationModePartitioned && req.PartitionTemplateID != "" {
 		return s.bindPartition(gpu, req, selectedGPU)
 	}
+	if req.Isolation == tfv1.IsolationModeShared {
+		if gpu.Status.Capacity == nil ||
+			!gpu.Status.Available.Tflops.Equal(gpu.Status.Capacity.Tflops) ||
+			!gpu.Status.Available.Vram.Equal(gpu.Status.Capacity.Vram) ||
+			len(gpu.Status.AllocatedPartitions) > 0 {
+			return fmt.Errorf("GPU %s is not completely idle for shared whole-GPU allocation", selectedGPU)
+		}
+		gpu.Status.Available.Tflops = resource.Quantity{}
+		gpu.Status.Available.Vram = resource.Quantity{}
+		return nil
+	}
 
 	reqTflops, err := s.requestedTflopsForGPU(gpu, req.Request)
 	if err != nil {
@@ -1063,6 +1083,10 @@ func (s *GpuAllocator) releaseAllocationFromGPU(gpu *tfv1.GPU, request *tfv1.All
 	}
 	if request.Isolation == tfv1.IsolationModePartitioned && request.PartitionTemplateID != "" {
 		s.deallocPartition(gpu, request, gpuName)
+		return
+	}
+	if request.Isolation == tfv1.IsolationModeShared && gpu.Status.Capacity != nil {
+		gpu.Status.Available = gpu.Status.Capacity.DeepCopy()
 		return
 	}
 
@@ -1547,19 +1571,7 @@ func (s *GpuAllocator) Dealloc(
 			continue
 		}
 
-		// Handle partitioned mode deallocation
-		if request.Isolation == tfv1.IsolationModePartitioned && request.PartitionTemplateID != "" {
-			s.deallocPartition(storeGPU, request, gpu)
-		} else {
-			// Non-partitioned mode: add back request resources
-			if !request.Request.ComputePercent.IsZero() {
-				requiredTflops := utils.ComputePercentToTflops(storeGPU.Status.Capacity.Tflops, request.Request)
-				storeGPU.Status.Available.Tflops.Add(*requiredTflops)
-			} else {
-				storeGPU.Status.Available.Tflops.Add(request.Request.Tflops)
-			}
-			storeGPU.Status.Available.Vram.Add(request.Request.Vram)
-		}
+		s.releaseAllocationFromGPU(storeGPU, request, gpu)
 
 		if nodeName == "" {
 			nodeName = storeGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
@@ -1640,7 +1652,11 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 		if !exists {
 			return tfv1.Resource{}, tfv1.Resource{}, tfv1.Resource{}, fmt.Errorf("GPU not found in allocator store %s", gpuName)
 		}
-		if remain, err := s.checkGPUCapacityAndQuota(gpu, request.Request, adjustRequest.NewRequest); err != nil {
+		if request.Isolation == tfv1.IsolationModeShared {
+			if err := checkSharedRequestWithinGPUCapacity(gpu, adjustRequest.NewRequest); err != nil {
+				return tfv1.Resource{}, tfv1.Resource{}, tfv1.Resource{}, err
+			}
+		} else if remain, err := s.checkGPUCapacityAndQuota(gpu, request.Request, adjustRequest.NewRequest); err != nil {
 			return remain, tfv1.Resource{}, tfv1.Resource{}, err
 		}
 	}
@@ -1665,9 +1681,11 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 			gpuNameNs := types.NamespacedName{Name: gpuName}
 			gpu := s.gpuStore[gpuNameNs]
 
-			availableRes := gpu.Status.Available
-			availableRes.Tflops.Sub(deltaTFlopsRequest)
-			availableRes.Vram.Sub(deltaVRAMRequest)
+			if request.Isolation != tfv1.IsolationModeShared {
+				availableRes := gpu.Status.Available
+				availableRes.Tflops.Sub(deltaTFlopsRequest)
+				availableRes.Vram.Sub(deltaVRAMRequest)
+			}
 
 			s.markGPUDirty(gpuNameNs)
 		}
@@ -1713,6 +1731,21 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 			Tflops: deltaTFlopsLimit,
 			Vram:   deltaVRAMLimit,
 		}, nil
+}
+
+func checkSharedRequestWithinGPUCapacity(gpu *tfv1.GPU, requested tfv1.Resource) error {
+	if gpu == nil || gpu.Status.Capacity == nil {
+		return fmt.Errorf("GPU capacity is nil for shared whole-GPU allocation")
+	}
+	requiredTflops := requested.Tflops
+	if !requested.ComputePercent.IsZero() {
+		requiredTflops = *utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, requested)
+	}
+	if gpu.Status.Capacity.Tflops.Cmp(requiredTflops) < 0 ||
+		gpu.Status.Capacity.Vram.Cmp(requested.Vram) < 0 {
+		return ScalingQuotaExceededError
+	}
+	return nil
 }
 
 func (s *GpuAllocator) ListNonUsingNodes() sets.Set[string] {
@@ -2279,6 +2312,12 @@ func (s *GpuAllocator) recomputeGPUAvailableFromAllocations(gpu *tfv1.GPU) {
 			if name != gpu.Name {
 				continue
 			}
+			if req.Isolation == tfv1.IsolationModeShared {
+				available.Tflops = resource.Quantity{}
+				available.Vram = resource.Quantity{}
+				gpu.Status.Available = available
+				return
+			}
 			if !req.Request.ComputePercent.IsZero() {
 				tflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
 				available.Tflops.Sub(*tflops)
@@ -2719,6 +2758,9 @@ func (s *GpuAllocator) reconcileAllocationState() {
 						logger.Info("[WARNING] Partition template not found in config during reconciliation, can not calculate correct resource usage",
 							"gpu", gpuId, "template", allocRequest.PartitionTemplateID, "error", err)
 					}
+				} else if allocRequest.Isolation == tfv1.IsolationModeShared {
+					gpuAvailableRes.Tflops = resource.Quantity{}
+					gpuAvailableRes.Vram = resource.Quantity{}
 				} else {
 					// Non-partitioned mode
 					var reqTflops resource.Quantity

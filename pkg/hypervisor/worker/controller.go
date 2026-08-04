@@ -85,22 +85,13 @@ func (w *WorkerController) Start() error {
 			w.workers[worker.WorkerUID] = worker
 			w.mu.Unlock()
 
-			// Recover partition allocation state for existing partitioned workers after restart.
-			// If the worker is already running with partitions, the partition-uuids annotation
-			// (written during initial allocation) lets us rebuild the in-memory allocation
-			// so that DeallocateWorker can properly clean up MIG instances on pod deletion.
-			if worker.IsolationMode == tfv1.IsolationModePartitioned && worker.PartitionTemplateID != "" {
-				if partitionUUIDs, ok := worker.Annotations[constants.PartitionUUIDsAnnotation]; ok && partitionUUIDs != "" {
-					w.allocationController.RecoverPartitionedWorker(worker, partitionUUIDs)
-				}
-			}
+			w.recoverExistingWorkerAllocation(worker)
 
-			// For soft isolation, proactively create shared memory when a worker pod appears.
-			// Unlike hard/sidecar mode where the worker process calls /process-init to trigger
-			// shm creation, soft mode injects the limiter directly into the business container
-			// which only reads shm passively.
-			if w.mode == tfv1.IsolationModeSoft {
-				w.ensureSoftWorkerSharedMemory(worker)
+			// Existing soft processes keep their limiter state in shared memory.
+			// Reopen that mapping after a hypervisor restart so heartbeat updates continue;
+			// otherwise already-running CUDA kernels are eventually denied as unhealthy.
+			if usesSoftLimiterSharedMemory(worker.IsolationMode) {
+				w.ensureWorkerSharedMemory(worker, worker.Status == api.WorkerStatusRunning)
 			}
 		},
 		OnRemove: func(worker *api.WorkerInfo) {
@@ -137,8 +128,8 @@ func (w *WorkerController) Start() error {
 		return err
 	}
 
-	// Start soft quota limiter
-	if w.mode == tfv1.IsolationModeSoft {
+	// Only soft isolation consumes the shared-memory ERL token bucket.
+	if usesSoftLimiterSharedMemory(w.mode) {
 		if err := w.quotaController.StartSoftQuotaLimiter(); err != nil {
 			klog.Fatalf("Failed to start soft quota limiter: %v", err)
 		}
@@ -157,6 +148,33 @@ func (w *WorkerController) Start() error {
 	w.startSharedMemorySyncLoop(ctx)
 	w.startSharedMemoryCleanupLoop(ctx)
 	return nil
+}
+
+func usesSoftLimiterSharedMemory(mode tfv1.IsolationModeType) bool {
+	return mode == tfv1.IsolationModeSoft
+}
+
+// recoverExistingWorkerAllocation rebuilds the in-memory allocation for a pod
+// that was already running when the hypervisor started. New pods are allocated
+// through the device plugin and are intentionally ignored here.
+func (w *WorkerController) recoverExistingWorkerAllocation(worker *api.WorkerInfo) {
+	if worker == nil || worker.Status != api.WorkerStatusRunning || len(worker.AllocatedDevices) == 0 {
+		return
+	}
+
+	if worker.IsolationMode == tfv1.IsolationModePartitioned && worker.PartitionTemplateID != "" {
+		if partitionUUIDs := worker.Annotations[constants.PartitionUUIDsAnnotation]; partitionUUIDs != "" {
+			w.allocationController.RecoverPartitionedWorker(worker, partitionUUIDs)
+		}
+		return
+	}
+
+	if _, err := w.allocationController.AllocateWorkerDevices(worker); err != nil {
+		klog.Errorf("Failed to recover allocation for existing worker %s/%s: %v",
+			worker.Namespace, worker.WorkerName, err)
+		return
+	}
+	klog.Infof("Recovered allocation for existing worker %s/%s", worker.Namespace, worker.WorkerName)
 }
 
 func (w *WorkerController) Stop() error {
@@ -314,6 +332,9 @@ func (w *WorkerController) buildWorkerInfoSnapshots() map[string]*computing.Work
 
 	result := make(map[string]*computing.WorkerInfoSnapshot, len(w.workers))
 	for workerUID, workerInfo := range w.workers {
+		if workerInfo == nil || !usesSoftLimiterSharedMemory(workerInfo.IsolationMode) {
+			continue
+		}
 		allocation, exists := w.allocationController.GetWorkerAllocation(workerUID)
 		if !exists || allocation == nil || allocation.WorkerInfo == nil {
 			continue
@@ -547,9 +568,9 @@ func (w *WorkerController) syncSharedMemoryState() {
 	}
 }
 
-// ensureSoftWorkerSharedMemory creates shared memory for a soft isolation pod.
-// Called when a new worker pod is detected. Uses pure Go shm (no C limiter dependency).
-func (w *WorkerController) ensureSoftWorkerSharedMemory(worker *api.WorkerInfo) {
+// ensureWorkerSharedMemory opens the existing limiter shared memory for a
+// running worker after hypervisor restart, or creates it for a new worker.
+func (w *WorkerController) ensureWorkerSharedMemory(worker *api.WorkerInfo, recoverExisting bool) {
 	go func() {
 		// Retry for up to 30 seconds waiting for allocation
 		for i := 0; i < 30; i++ {
@@ -560,22 +581,29 @@ func (w *WorkerController) ensureSoftWorkerSharedMemory(worker *api.WorkerInfo) 
 					return
 				}
 				podId := workerstate.NewPodIdentifier(worker.Namespace, worker.WorkerName)
-				handle, err := workerstate.CreateSharedMemoryHandle(w.shmBasePath, podId, configs)
+				var handle *workerstate.SharedMemoryHandle
+				var err error
+				if recoverExisting {
+					handle, err = workerstate.OpenSharedMemoryHandle(w.shmBasePath, podId)
+				}
+				if handle == nil {
+					handle, err = workerstate.CreateSharedMemoryHandle(w.shmBasePath, podId, configs)
+				}
 				if err != nil {
-					klog.Errorf("Failed to create shared memory for soft worker %s/%s: %v", worker.Namespace, worker.WorkerName, err)
+					klog.Errorf("Failed to prepare shared memory for worker %s/%s: %v", worker.Namespace, worker.WorkerName, err)
 					return
 				}
 				// Store handle for later use (heartbeat, memory sync)
 				w.mu.Lock()
 				w.shmHandles[worker.WorkerUID] = handle
 				w.mu.Unlock()
-				klog.Infof("Created shared memory for soft worker %s/%s with %d devices",
+				klog.Infof("Prepared shared memory for worker %s/%s with %d devices",
 					worker.Namespace, worker.WorkerName, len(configs))
 				return
 			}
 			time.Sleep(1 * time.Second)
 		}
-		klog.Warningf("Timed out waiting for allocation for soft worker %s/%s", worker.Namespace, worker.WorkerName)
+		klog.Warningf("Timed out waiting for allocation for worker %s/%s", worker.Namespace, worker.WorkerName)
 	}()
 }
 

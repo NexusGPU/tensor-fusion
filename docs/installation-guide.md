@@ -36,6 +36,7 @@ GPU 节点需要满足：
 - TensorFusion CRD、RBAC、controller。
 - Mutating admission webhook。
 - TensorFusion scheduler 配置。
+- NVIDIA ProviderConfig、SchedulingConfigTemplate，以及默认的 NVIDIA TensorFusionCluster/GPUPool。
 - GreptimeDB standalone。
 - Alertmanager。
 - cluster-agent、vector sidecar。
@@ -92,7 +93,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 | `greptime.installStandalone` | 是否安装内置 GreptimeDB standalone | `true` |
 | `greptime.host` | GreptimeDB MySQL endpoint host | `greptimedb-standalone.greptimedb.svc.cluster.local` |
 | `alert.enabled` | 是否安装 alertmanager | `true` |
-| `controller.admissionWebhooks.failurePolicy` | webhook 失败策略 | `Ignore` |
+| `controller.admissionWebhooks.failurePolicy` | webhook 失败策略 | `Fail` |
 
 ### 2.4 指定组件版本
 
@@ -101,8 +102,8 @@ Chart 默认所有组件镜像都使用浮动 tag `latest`（operator / hypervis
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   -n tensor-fusion-sys --create-namespace \
-  --set controller.image.tag=2.11.3 \
-  --set cluster.hypervisorImage=tensorfusion/tensor-fusion-hypervisor:2.11.3 \
+  --set controller.image.tag=2.13.0 \
+  --set cluster.hypervisorImage=tensorfusion/tensor-fusion-hypervisor:2.13.0 \
   --set providerConfigs.nvidia.images.middleware=tensorfusion/vgpu-provider-nvidia:1.3.5 \
   --set providerConfigs.nvidia.images.remoteClient=tensorfusion/tensor-fusion-client:v2.15.1 \
   --set providerConfigs.nvidia.images.remoteWorker=tensorfusion/tensor-fusion-worker:v2.15.1
@@ -125,7 +126,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 ```bash
 helm repo add tensor-fusion https://helm.tensor-fusion.ai
 helm repo update
-helm install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.7.8 \
+helm install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.0 \
   -n tensor-fusion-sys --create-namespace
 ```
 
@@ -164,6 +165,18 @@ kubectl logs -n tensor-fusion-sys deploy/tensor-fusion-sys-controller -c control
 - 使用 TensorFusionCluster 创建 pool 时，实际 GPUPool 名称通常是 `<cluster-name>-<pool-name>`。
 - 业务 Pod 不显式写 `tensor-fusion.ai/gpupool` 时，会落到 `isDefault: true` 的 pool。
 
+**节点切分/隔离能力（`tensor-fusion.ai/isolationMode`）**——为被 operator watch 的
+GPU 节点选择一种能力：
+
+```bash
+kubectl label node <gpu-node> tensor-fusion.ai/isolationMode=soft --overwrite
+# 推荐值：soft / hard / partitioned
+```
+
+soft、hard、partitioned 是互斥的节点能力。`shared` 从 v2.13.0 起表示整卡分配策略，
+不是必须单独规划的第四种节点能力：shared workload 可以使用上述任一模式节点上的完整
+空闲、未分区 GPU，不要求节点存在 `isolationMode=shared` label；已有 shared label 继续兼容。
+
 ### 4.1 按厂家安装（单一厂家）
 
 | 厂家 | 命令 |
@@ -188,7 +201,7 @@ raw URL apply（或先 clone 仓库）。以 Ascend 为例：
 
 ```bash
 helm repo add tensor-fusion https://helm.tensor-fusion.ai && helm repo update
-helm install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.7.8 \
+helm install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.0 \
   -n tensor-fusion-sys --create-namespace \
   --set cluster.enabled=false \
   --set providerConfigs.nvidia.enabled=false \
@@ -250,8 +263,16 @@ kubectl describe gpupool <gpupool-name>
 业务 Pod 必须满足以下条件，webhook 才会注入 TensorFusion client：
 
 - Pod label 有 `tensor-fusion.ai/enabled: "true"`。
-- 至少设置一个资源请求 annotation：`tensor-fusion.ai/tflops-request`、`tensor-fusion.ai/compute-percent-request` 或 `tensor-fusion.ai/vram-request`。
+- 切片请求至少设置一个资源 annotation：`tensor-fusion.ai/tflops-request`、`tensor-fusion.ai/compute-percent-request` 或 `tensor-fusion.ai/vram-request`。标准 shared 整卡请求设置 `isolation: "shared"`、`dedicated-gpu: "true"` 和 `gpu-model`，无需用户填写 TFLOPS/VRAM；`gpu-count` 未填写时默认为 1，建议显式填写。
 - 多容器 Pod 必须设置 `tensor-fusion.ai/inject-container`。
+
+先查询目标 pool 中 operator 已识别的准确型号；下面的 `<gpu-model>` 必须替换为
+`GPU.status.gpuModel` 中的完整值：
+
+```bash
+kubectl get gpu -l tensor-fusion.ai/gpupool=<gpupool-name> \
+  -o custom-columns='NAME:.metadata.name,MODEL:.status.gpuModel,CAPACITY:.status.capacity'
+```
 
 示例 Deployment：
 
@@ -274,11 +295,11 @@ spec:
       annotations:
         tensor-fusion.ai/gpupool: "<gpupool-name>"
         tensor-fusion.ai/inject-container: "pytorch"
+        tensor-fusion.ai/dedicated-gpu: "true"
         tensor-fusion.ai/isolation: "shared"
         tensor-fusion.ai/is-local-gpu: "false"
         tensor-fusion.ai/gpu-count: "1"
-        tensor-fusion.ai/tflops-request: "10"
-        tensor-fusion.ai/vram-request: "1Gi"
+        tensor-fusion.ai/gpu-model: "<gpu-model>"
     spec:
       containers:
         - name: pytorch
@@ -296,12 +317,33 @@ kubectl get tensorfusionworkload,tensorfusionconnection -A
 kubectl get pods -A -l tensor-fusion.ai/component=worker -o wide
 ```
 
-进入业务容器检查 CUDA/NVML 注入：
+进入业务容器实际调用 CUDA/NVML；仅 Pod 进入 Running/Ready 不代表 GPU 链路验证通过：
 
 ```bash
 POD=$(kubectl get pod -l app=tensor-fusion-smoke -o jsonpath='{.items[0].metadata.name}')
+WORKER=$(kubectl get pod \
+  -l tensor-fusion.ai/component=worker,tensor-fusion.ai/workload=tensor-fusion-smoke \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl get pod "$WORKER" -o jsonpath='{.metadata.annotations.tensor-fusion\.ai/gpu-ids}{"\n"}'
 kubectl exec -it "$POD" -c pytorch -- nvidia-smi
-kubectl exec -it "$POD" -c pytorch -- sh -lc 'ldd "$(which nvidia-smi)" | grep -E "tensor-fusion|nvidia-ml|cuda"'
+kubectl exec "$POD" -c pytorch -- python3 -c \
+  'import ctypes; cuda=ctypes.CDLL("libcuda.so.1"); count=ctypes.c_int(); print("cuInit=", cuda.cuInit(0)); print("cuDeviceGetCount=", cuda.cuDeviceGetCount(ctypes.byref(count)), "count=", count.value)'
+kubectl exec "$POD" -c pytorch -- python3 -c \
+  'import torch; print("count=", torch.cuda.device_count()); x=torch.ones(1024, device="cuda"); print("sum=", x.sum().item()); print("uuid=", torch.cuda.get_device_properties(0).uuid)'
+kubectl exec "$POD" -c pytorch -- nvidia-smi \
+  --query-gpu=uuid,name,memory.total --format=csv,noheader
+```
+
+shared 整卡用例应看到 `cuInit=0`、CUDA device count 与 `gpu-count` 一致。上面的 remote
+示例由 worker Pod 持有 `tensor-fusion.ai/gpu-ids`；local 示例则由业务 Pod 持有。CUDA/NVML
+应返回同一 GPU UUID（忽略 GPU CR 名称的 `gpu-` 前缀及 NVML 的 `GPU-` 格式前缀）。验证后
+删除 Deployment，并确认 TensorFusionWorkload/Connection 被清理、GPU available 恢复为 capacity：
+
+```bash
+kubectl delete deployment tensor-fusion-smoke
+kubectl get tensorfusionworkload,tensorfusionconnection -A
+kubectl get gpu -l tensor-fusion.ai/gpupool=<gpupool-name> \
+  -o custom-columns='NAME:.metadata.name,CAPACITY:.status.capacity,AVAILABLE:.status.available'
 ```
 
 如果容器里配置了 `http_proxy` 或 `https_proxy`，本地服务探测建议使用：
@@ -317,14 +359,19 @@ curl --noproxy "*" http://127.0.0.1:8000/v1/models
 | `tensor-fusion.ai/gpupool` | 指定 GPUPool。未指定时依赖默认 pool。 |
 | `tensor-fusion.ai/is-local-gpu` | `true` 表示业务 Pod 调度到 GPU 节点本地用卡；`false` 表示 remote 模式。 |
 | `tensor-fusion.ai/isolation` | `shared`、`soft`、`hard`、`partitioned`。 |
+| `tensor-fusion.ai/dedicated-gpu` | `true` 表示按 `gpu-model` 补齐整卡容量；它本身不会把 isolation 改为 shared。标准 shared 请求需要同时设置 `isolation=shared`。 |
 | `tensor-fusion.ai/gpu-count` | 请求 GPU 数量。 |
+| `tensor-fusion.ai/gpu-model` | 请求的 GPU 型号；使用 `dedicated-gpu=true` 时必须填写，应使用 `GPU.status.gpuModel` 的准确值，并确保 operator 已加载该型号容量。 |
 | `tensor-fusion.ai/gpu-indices` | 指定 GPU index，是硬过滤条件。指定后 `gpu-count` 按 index 数量计算。 |
 | `tensor-fusion.ai/tflops-request` | 调度用 TFLOPs 请求，推荐优先使用。 |
 | `tensor-fusion.ai/compute-percent-request` | 按百分比请求算力。与 TFLOPs request 互斥。 |
 | `tensor-fusion.ai/vram-request` | 调度用显存请求。 |
 | `tensor-fusion.ai/inject-container` | 多容器 Pod 中指定要注入的容器，多个容器用逗号分隔。 |
 
-`shared` 模式是整卡共享、无运行时 TFLOPs 限制的模式，但调度阶段仍需要资源请求 annotation，用于 TensorFusion 选择 GPU 和记录分配。
+`shared` 是完整空闲 GPU 的整卡分配策略，不挂载 soft limiter 或 hard preload。用户无需填写
+TFLOPS/VRAM request/limit；webhook 会根据 `gpu-model` 补齐整卡容量，allocator 分配后会将
+所选 GPU CR 的 available TFLOPS/VRAM 都扣减为 0。shared 不优先选择带 shared label 的节点，
+仍沿用现有 GPU/节点 binpack 评分。
 
 ## 7. 排障
 

@@ -8,6 +8,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -532,6 +533,47 @@ var _ = Describe("Compose Utils", func() {
 	})
 
 	Describe("SetWorkerContainerSpec", func() {
+		It("lets device allocation derive the hard limit for absolute TFLOPS", func() {
+			container := &corev1.Container{}
+			profile := &tfv1.WorkloadProfileSpec{
+				GPUVendor: constants.AcceleratorVendorNvidia,
+				Isolation: tfv1.IsolationModeHard,
+				Resources: tfv1.Resources{
+					Limits: tfv1.Resource{
+						Tflops: resource.MustParse("10"),
+						Vram:   resource.MustParse("1Gi"),
+					},
+				},
+			}
+
+			utils.SetWorkerContainerSpec(container, profile, &tfv1.WorkerConfig{}, &tfv1.HypervisorConfig{}, "", false)
+
+			_, hasHardSMEnv := envValue(container.Env, constants.HardSMLimiterEnv)
+			Expect(hasHardSMEnv).To(BeFalse())
+			memLimit, hasHardMemEnv := envValue(container.Env, constants.HardMemLimiterEnv)
+			Expect(hasHardMemEnv).To(BeTrue())
+			Expect(memLimit).To(Equal("1024"))
+		})
+
+		It("preserves an explicit hard compute percent", func() {
+			container := &corev1.Container{}
+			profile := &tfv1.WorkloadProfileSpec{
+				GPUVendor: constants.AcceleratorVendorNvidia,
+				Isolation: tfv1.IsolationModeHard,
+				Resources: tfv1.Resources{
+					Limits: tfv1.Resource{
+						ComputePercent: resource.MustParse("25"),
+					},
+				},
+			}
+
+			utils.SetWorkerContainerSpec(container, profile, &tfv1.WorkerConfig{}, &tfv1.HypervisorConfig{}, "", false)
+
+			limit, exists := envValue(container.Env, constants.HardSMLimiterEnv)
+			Expect(exists).To(BeTrue())
+			Expect(limit).To(Equal("25"))
+		})
+
 		DescribeTable("configures worker container correctly",
 			func(vendor, workerImage, disabledFeatures string, sharedMemMode bool, isolation tfv1.IsolationModeType, expectCommand []string, expectNvidiaVisibleEnv, expectLdPreload bool) {
 				container := &corev1.Container{}

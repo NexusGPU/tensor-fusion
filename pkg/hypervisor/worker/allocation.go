@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -155,6 +156,19 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 				}
 			}
 		}
+	}
+	if request.IsolationMode == tfv1.IsolationModeHard && len(deviceInfos) > 0 {
+		// Hard isolation consumes a percentage, while users may request either
+		// ComputePercent or absolute TFLOPS. The scheduler records the effective
+		// percentage derived from the selected GPU CR capacity. Keep the device's
+		// discovered capacity as a compatibility fallback for older schedulers.
+		percent := computeUpLimit(request, deviceInfos[0])
+		if raw := request.Annotations[constants.EffectiveHardSMPercentAnnotation]; raw != "" {
+			if parsed, err := strconv.ParseUint(raw, 10, 32); err == nil && parsed >= 1 && parsed <= 100 {
+				percent = uint32(parsed)
+			}
+		}
+		envs[constants.HardSMLimiterEnv] = strconv.FormatUint(uint64(percent), 10)
 	}
 
 	allocation := &api.WorkerAllocation{
