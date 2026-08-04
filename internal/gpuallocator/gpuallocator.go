@@ -1587,8 +1587,33 @@ func (s *GpuAllocator) Dealloc(
 		s.markGPUDirty(gpuNameNs)
 	}
 
+	podKey := types.NamespacedName{Name: podMeta.Name, Namespace: podMeta.Namespace}
+	if nodeName == "" {
+		// Every gpu in gpus was already gone from gpuStore (e.g. its node
+		// was torn down and handleGPUDelete ran before this Dealloc call),
+		// so NodeSelector couldn't be read off any of them. Fall back to
+		// scanning nodeWorkerStore for whichever node still lists this pod,
+		// otherwise the pod's entry - and possibly its node's now-empty
+		// entry - would never get reaped.
+		for candidateNode, workers := range s.nodeWorkerStore {
+			if _, ok := workers[podKey]; ok {
+				nodeName = candidateNode
+				break
+			}
+		}
+	}
+
 	// remove pod from nodeWorkerStore
-	delete(s.nodeWorkerStore[nodeName], types.NamespacedName{Name: podMeta.Name, Namespace: podMeta.Namespace})
+	delete(s.nodeWorkerStore[nodeName], podKey)
+	// handleGPUDelete leaves a node's nodeWorkerStore entry in place if it
+	// still had workers when the node's last GPU disappeared (to avoid
+	// discarding live bookkeeping); once the last worker also drains here,
+	// and the node has no GPUs left either, there's nothing left to trigger
+	// cleanup for this node again, so reap it now instead of leaving an
+	// empty map behind forever.
+	if nodeName != "" && len(s.nodeWorkerStore[nodeName]) == 0 && s.nodeGpuStore[nodeName] == nil {
+		delete(s.nodeWorkerStore, nodeName)
+	}
 	delete(s.uniqueAllocation, podUID)
 	delete(s.podNamespaceNsToPodUID, podMeta.Namespace+"/"+podMeta.Name)
 	s.uniqueDeallocation[podUID] = struct{}{}
@@ -2154,6 +2179,23 @@ func (s *GpuAllocator) handleGPUDelete(ctx context.Context, gpu *tfv1.GPU) {
 		gpuNodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		if s.nodeGpuStore[gpuNodeName] != nil {
 			delete(s.nodeGpuStore[gpuNodeName], gpu.Name)
+			// A node's last GPU being removed almost always means the node
+			// itself is gone (terminated/scaled down). Drop the now-empty
+			// entry too, otherwise it lingers in nodeGpuStore forever and
+			// keeps showing up as a defunct defrag budget target.
+			if len(s.nodeGpuStore[gpuNodeName]) == 0 {
+				delete(s.nodeGpuStore, gpuNodeName)
+				// GPU CR deletion doesn't guarantee the node's workers are
+				// gone too (e.g. cascade-delete on node termination races
+				// ahead of pod cleanup, or RunningApps hasn't synced to the
+				// GPU CR yet when node-discovery decides to delete it) so
+				// only reap nodeWorkerStore here if it's already empty;
+				// otherwise leave live worker bookkeeping for Dealloc /
+				// the cleanup checker to retire pod-by-pod.
+				if len(s.nodeWorkerStore[gpuNodeName]) == 0 {
+					delete(s.nodeWorkerStore, gpuNodeName)
+				}
+			}
 		}
 	}
 
@@ -2161,6 +2203,9 @@ func (s *GpuAllocator) handleGPUDelete(ctx context.Context, gpu *tfv1.GPU) {
 		pool := gpu.Labels[constants.GpuPoolKey]
 		if pool != "" {
 			delete(s.poolGpuStore[pool], gpu.Name)
+			if len(s.poolGpuStore[pool]) == 0 {
+				delete(s.poolGpuStore, pool)
+			}
 		}
 	}
 	log.Info("Removed GPU from store", "name", key.Name)

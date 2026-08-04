@@ -392,6 +392,136 @@ var _ = Describe("GPU Allocator", func() {
 			_, exists = allocator.gpuStore[key]
 			Expect(exists).To(BeFalse())
 		})
+
+		It("should drop the node entry from nodeGpuStore once its last GPU is deleted", func() {
+			nodeName := "solo-node"
+			soloGPU := &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{Name: "solo-gpu"},
+				Status: tfv1.GPUStatus{
+					NodeSelector: map[string]string{
+						constants.KubernetesHostNameLabel: nodeName,
+					},
+				},
+			}
+			allocator.storeMutex.Lock()
+			allocator.nodeGpuStore[nodeName] = map[string]*tfv1.GPU{soloGPU.Name: soloGPU}
+			allocator.storeMutex.Unlock()
+
+			allocator.handleGPUDelete(ctx, soloGPU)
+
+			allocator.storeMutex.RLock()
+			_, exists := allocator.nodeGpuStore[nodeName]
+			allocator.storeMutex.RUnlock()
+			Expect(exists).To(BeFalse())
+		})
+
+		It("should drop nodeWorkerStore and poolGpuStore entries alongside nodeGpuStore", func() {
+			nodeName := "solo-node-2"
+			poolName := "solo-pool"
+			soloGPU := &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "solo-gpu-2",
+					Labels: map[string]string{constants.GpuPoolKey: poolName},
+				},
+				Status: tfv1.GPUStatus{
+					NodeSelector: map[string]string{
+						constants.KubernetesHostNameLabel: nodeName,
+					},
+				},
+			}
+			allocator.storeMutex.Lock()
+			allocator.nodeGpuStore[nodeName] = map[string]*tfv1.GPU{soloGPU.Name: soloGPU}
+			allocator.poolGpuStore[poolName] = map[string]*tfv1.GPU{soloGPU.Name: soloGPU}
+			allocator.nodeWorkerStore[nodeName] = map[types.NamespacedName]struct{}{}
+			allocator.storeMutex.Unlock()
+
+			allocator.handleGPUDelete(ctx, soloGPU)
+
+			allocator.storeMutex.RLock()
+			_, nodeWorkerExists := allocator.nodeWorkerStore[nodeName]
+			_, poolExists := allocator.poolGpuStore[poolName]
+			allocator.storeMutex.RUnlock()
+			Expect(nodeWorkerExists).To(BeFalse())
+			Expect(poolExists).To(BeFalse())
+		})
+
+		It("should keep nodeWorkerStore when the node still has live worker entries", func() {
+			nodeName := "busy-node"
+			soloGPU := &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{Name: "busy-gpu"},
+				Status: tfv1.GPUStatus{
+					NodeSelector: map[string]string{
+						constants.KubernetesHostNameLabel: nodeName,
+					},
+				},
+			}
+			livePod := types.NamespacedName{Namespace: "default", Name: "still-running-worker"}
+			allocator.storeMutex.Lock()
+			allocator.nodeGpuStore[nodeName] = map[string]*tfv1.GPU{soloGPU.Name: soloGPU}
+			allocator.nodeWorkerStore[nodeName] = map[types.NamespacedName]struct{}{livePod: {}}
+			allocator.storeMutex.Unlock()
+
+			allocator.handleGPUDelete(ctx, soloGPU)
+
+			allocator.storeMutex.RLock()
+			workers, exists := allocator.nodeWorkerStore[nodeName]
+			allocator.storeMutex.RUnlock()
+			Expect(exists).To(BeTrue())
+			Expect(workers).To(HaveKey(livePod))
+		})
+
+		It("should reap nodeWorkerStore once the last worker drains from a node with no GPUs left", func() {
+			nodeName := "draining-node"
+			gpuName := "draining-gpu"
+			podMeta := metav1.ObjectMeta{Namespace: "default", Name: "last-worker", UID: "last-worker-uid"}
+
+			allocator.storeMutex.Lock()
+			allocator.gpuStore[types.NamespacedName{Name: gpuName}] = &tfv1.GPU{
+				ObjectMeta: metav1.ObjectMeta{Name: gpuName},
+				Status: tfv1.GPUStatus{
+					NodeSelector: map[string]string{constants.KubernetesHostNameLabel: nodeName},
+					Available:    &tfv1.Resource{},
+					Capacity:     &tfv1.Resource{},
+				},
+			}
+			allocator.nodeWorkerStore[nodeName] = map[types.NamespacedName]struct{}{
+				{Namespace: podMeta.Namespace, Name: podMeta.Name}: {},
+			}
+			allocator.uniqueAllocation[string(podMeta.UID)] = &tfv1.AllocRequest{
+				WorkloadNameNamespace: workloadNameNs,
+				Request:               tfv1.Resource{},
+			}
+			allocator.storeMutex.Unlock()
+
+			allocator.Dealloc(workloadNameNs, []string{gpuName}, podMeta)
+
+			allocator.storeMutex.RLock()
+			_, exists := allocator.nodeWorkerStore[nodeName]
+			allocator.storeMutex.RUnlock()
+			Expect(exists).To(BeFalse())
+		})
+
+		It("should still locate and clean up the pod's node when its GPU was already purged from gpuStore", func() {
+			nodeName := "already-gone-node"
+			gpuName := "already-gone-gpu"
+			podMeta := metav1.ObjectMeta{Namespace: "default", Name: "orphaned-worker", UID: "orphaned-worker-uid"}
+			podKey := types.NamespacedName{Namespace: podMeta.Namespace, Name: podMeta.Name}
+
+			allocator.storeMutex.Lock()
+			allocator.nodeWorkerStore[nodeName] = map[types.NamespacedName]struct{}{podKey: {}}
+			allocator.uniqueAllocation[string(podMeta.UID)] = &tfv1.AllocRequest{
+				WorkloadNameNamespace: workloadNameNs,
+				Request:               tfv1.Resource{},
+			}
+			allocator.storeMutex.Unlock()
+
+			allocator.Dealloc(workloadNameNs, []string{gpuName}, podMeta)
+
+			allocator.storeMutex.RLock()
+			_, exists := allocator.nodeWorkerStore[nodeName]
+			allocator.storeMutex.RUnlock()
+			Expect(exists).To(BeFalse())
+		})
 	})
 	Context("FilterWithPreempt", func() {
 		It("should include other available GPUs from same node for multi-GPU preemption", func() {
