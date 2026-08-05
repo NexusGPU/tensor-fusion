@@ -137,8 +137,30 @@ var _ = Describe("GPUNode Controller", func() {
 		})
 	})
 
-	Context("Hypervisor isolation-mode label", func() {
-		It("should append partitioned isolation mode arg when label is set", func() {
+	Context("Hypervisor isolation-mode policy", func() {
+		It("should keep running nodes pending until the pool rollout selects them", func() {
+			pool := &tfv1.GPUPool{
+				Spec: tfv1.GPUPoolSpec{
+					NodeManagerConfig: &tfv1.NodeManagerConfig{DefaultIsolationMode: tfv1.IsolationModeSoft},
+					ComponentConfig:   &tfv1.ComponentConfig{Hypervisor: &tfv1.HypervisorConfig{}},
+				},
+			}
+			pool.Status.ComponentStatus.HypervisorVersion = utils.HypervisorTemplateHash(pool)
+			pool.Status.ComponentStatus.HypervisorConfigSynced = true
+			Expect(hypervisorPolicyUpdatePending(pool)).To(BeFalse())
+
+			pool.Spec.NodeManagerConfig.DefaultIsolationMode = tfv1.IsolationModeHard
+			Expect(hypervisorPolicyUpdatePending(pool)).To(BeTrue())
+
+			pool.Status.ComponentStatus.HypervisorVersion = utils.HypervisorTemplateHash(pool)
+			pool.Status.ComponentStatus.HypervisorConfigSynced = false
+			Expect(hypervisorPolicyUpdatePending(pool)).To(BeTrue())
+
+			pool.Status.ComponentStatus.HypervisorConfigSynced = true
+			Expect(hypervisorPolicyUpdatePending(pool)).To(BeFalse())
+		})
+
+		It("should append the configured partitioned isolation mode arg", func() {
 			spec := &corev1.PodSpec{
 				Containers: []corev1.Container{
 					{
@@ -151,7 +173,7 @@ var _ = Describe("GPUNode Controller", func() {
 			Expect(spec.Containers[0].Args).To(ContainElement("--isolation-mode=partitioned"))
 		})
 
-		It("should replace existing isolation mode arg when label requires partitioned mode", func() {
+		It("should replace an existing isolation mode arg with the configured mode", func() {
 			spec := &corev1.PodSpec{
 				Containers: []corev1.Container{
 					{

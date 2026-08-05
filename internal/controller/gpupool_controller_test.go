@@ -441,11 +441,20 @@ var _ = Describe("GPUPool Controller", func() {
 func triggerHypervisorUpdate(tfEnv *TensorFusionEnv) (string, string) {
 	GinkgoHelper()
 	ensureGpuPoolIsRunning(tfEnv)
-	oldHash := verifyGpuPoolHypervisorHash(tfEnv, "")
+	oldCampaignHash := verifyGpuPoolHypervisorHash(tfEnv, "")
+	oldPool := tfEnv.GetGPUPool(0)
+	oldPodHash := utils.HypervisorPodTemplateHash(
+		oldPool, constants.AcceleratorVendorNvidia, tfv1.IsolationModeSoft,
+	)
 	updateHypervisorConfig(tfEnv)
-	newHash := verifyGpuPoolHypervisorHash(tfEnv, oldHash)
-	Expect(newHash).ShouldNot(Equal(oldHash))
-	return newHash, oldHash
+	newCampaignHash := verifyGpuPoolHypervisorHash(tfEnv, oldCampaignHash)
+	newPool := tfEnv.GetGPUPool(0)
+	newPodHash := utils.HypervisorPodTemplateHash(
+		newPool, constants.AcceleratorVendorNvidia, tfv1.IsolationModeSoft,
+	)
+	Expect(newCampaignHash).ShouldNot(Equal(oldCampaignHash))
+	Expect(newPodHash).ShouldNot(Equal(oldPodHash))
+	return newPodHash, oldPodHash
 }
 
 func updateHypervisorConfig(tfEnv *TensorFusionEnv) {

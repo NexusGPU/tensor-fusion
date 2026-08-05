@@ -50,7 +50,7 @@ func TestV1HypervisorPodIsReplacedInPlaceByV2(t *testing.T) {
 	if err := utils.SetProviderConfigRevision(pool, vendor, "v2-provider-revision"); err != nil {
 		t.Fatal(err)
 	}
-	newHash := utils.HypervisorPodTemplateHash(pool, vendor)
+	newHash := utils.HypervisorPodTemplateHash(pool, vendor, tfv1.IsolationModeSoft)
 	if oldHash == newHash {
 		t.Fatal("v2 ProviderConfig revision must change the desired hypervisor hash")
 	}

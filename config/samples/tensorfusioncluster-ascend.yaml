@@ -110,6 +110,7 @@ spec:
                 runtimeClassName: ascend
       nodeManagerConfig:
         defaultVendor: Ascend
+        defaultIsolationMode: soft
         nodeCompaction:
           period: 30m
         nodePoolRollingUpdatePolicy:

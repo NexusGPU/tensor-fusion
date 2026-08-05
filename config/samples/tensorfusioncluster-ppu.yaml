@@ -113,6 +113,7 @@ spec:
                       memory: 128Mi
       nodeManagerConfig:
         defaultVendor: PPU
+        defaultIsolationMode: soft
         nodeCompaction:
           period: 30m
         nodePoolRollingUpdatePolicy:

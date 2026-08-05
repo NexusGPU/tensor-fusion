@@ -1413,28 +1413,30 @@ func SetWorkerContainerSpec(
 func HypervisorTemplateHash(pool *tfv1.GPUPool) string {
 	spec := hypervisorTemplateSpec(pool)
 	revisions := ProviderConfigRevisions(pool)
-	if len(revisions) == 0 {
-		return GetObjectHash(spec)
-	}
 	return GetObjectHash(struct {
-		Spec      v1.PodSpec
-		Revisions map[string]string
-	}{Spec: spec, Revisions: revisions})
+		Spec                v1.PodSpec
+		ProviderRevisions   map[string]string
+		NodeIsolationPolicy string
+	}{
+		Spec:                spec,
+		ProviderRevisions:   revisions,
+		NodeIsolationPolicy: NodeIsolationPolicyHash(pool.Spec.NodeManagerConfig),
+	})
 }
 
 // HypervisorPodTemplateHash computes the desired hash for one node. Only the
 // revision of that node's vendor is included, so a ProviderConfig update in a
-// multi-vendor pool does not recreate unrelated hypervisors.
-func HypervisorPodTemplateHash(pool *tfv1.GPUPool, vendor string) string {
+// multi-vendor pool does not recreate unrelated hypervisors. The resolved
+// isolation mode is node-specific, so policy changes only restart nodes whose
+// effective mode changed.
+func HypervisorPodTemplateHash(pool *tfv1.GPUPool, vendor string, isolationMode tfv1.IsolationModeType) string {
 	spec := hypervisorTemplateSpec(pool)
 	revision := ProviderConfigRevision(pool, vendor)
-	if revision == "" {
-		return GetObjectHash(spec)
-	}
 	return GetObjectHash(struct {
-		Spec     v1.PodSpec
-		Revision string
-	}{Spec: spec, Revision: revision})
+		Spec          v1.PodSpec
+		Revision      string
+		IsolationMode tfv1.IsolationModeType
+	}{Spec: spec, Revision: revision, IsolationMode: isolationMode})
 }
 
 func hypervisorTemplateSpec(pool *tfv1.GPUPool) v1.PodSpec {

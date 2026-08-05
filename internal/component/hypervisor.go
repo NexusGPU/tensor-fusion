@@ -65,6 +65,10 @@ func (h *Hypervisor) SetUpdateProgress(status *tfv1.PoolComponentStatus, progres
 	}
 }
 
+func (h *Hypervisor) IsConfigSynced(status *tfv1.PoolComponentStatus) bool {
+	return status.HypervisorConfigSynced
+}
+
 func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool *tfv1.GPUPool, _ string) (int, int, bool, error) {
 	log := log.FromContext(ctx)
 	h.nodesToUpdate = nil
@@ -74,6 +78,14 @@ func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool
 		fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true",
 	})); err != nil {
 		return 0, 0, false, fmt.Errorf("failed to list nodes: %w", err)
+	}
+	k8sNodeList := &corev1.NodeList{}
+	if err := r.List(ctx, k8sNodeList); err != nil {
+		return 0, 0, false, fmt.Errorf("failed to list Kubernetes nodes: %w", err)
+	}
+	k8sNodesByName := make(map[string]*corev1.Node, len(k8sNodeList.Items))
+	for i := range k8sNodeList.Items {
+		k8sNodesByName[k8sNodeList.Items[i].Name] = &k8sNodeList.Items[i]
 	}
 
 	total := len(nodeList.Items)
@@ -94,7 +106,17 @@ func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool
 		pod := &corev1.Pod{}
 		err := r.Get(ctx, key, pod)
 		vendor := hypervisorNodeVendor(&node, pool)
-		desiredHash := utils.HypervisorPodTemplateHash(pool, vendor)
+		k8sNode := k8sNodesByName[node.Name]
+		if k8sNode == nil {
+			// The Kubernetes Node may already be disappearing. An empty node
+			// cannot match a selector, so the pool default is used.
+			k8sNode = &corev1.Node{}
+		}
+		isolationMode, resolveErr := utils.ResolveNodeIsolationMode(k8sNode, pool.Spec.NodeManagerConfig)
+		if resolveErr != nil {
+			return 0, 0, false, fmt.Errorf("resolve isolation mode for node %s: %w", node.Name, resolveErr)
+		}
+		desiredHash := utils.HypervisorPodTemplateHash(pool, vendor, isolationMode)
 		if errors.IsNotFound(err) ||
 			pod.Labels[constants.LabelKeyPodTemplateHash] != desiredHash {
 			h.nodesToUpdate = append(h.nodesToUpdate, &node)

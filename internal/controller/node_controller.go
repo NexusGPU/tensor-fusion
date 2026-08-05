@@ -139,7 +139,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	// Keep GPUNode labels in sync with Node labels so hypervisor args can be reconciled reliably.
+	// Keep the observed hardware vendor in sync.
 	if syncGPUNodeLabelsFromNode(node, gpuNode) {
 		if err := r.Update(ctx, gpuNode); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to sync GPU node labels from node: %w", err)
@@ -241,10 +241,6 @@ func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool, 
 	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
 		gpuNode.Labels[constants.AcceleratorLabelVendor] = node.Labels[constants.AcceleratorLabelVendor]
 	}
-	// Copy isolation-mode label from k8s node to GPUNode
-	if node.Labels != nil && node.Labels[constants.HypervisorIsolationModeLabel] != "" {
-		gpuNode.Labels[constants.HypervisorIsolationModeLabel] = node.Labels[constants.HypervisorIsolationModeLabel]
-	}
 	_ = controllerutil.SetControllerReference(pool, gpuNode, r.Scheme)
 	return gpuNode
 }
@@ -270,20 +266,6 @@ func syncGPUNodeLabelsFromNode(node *corev1.Node, gpuNode *tfv1.GPUNode) bool {
 		}
 	} else if gpuNode.Labels[constants.AcceleratorLabelVendor] != desiredVendor {
 		gpuNode.Labels[constants.AcceleratorLabelVendor] = desiredVendor
-		changed = true
-	}
-
-	desiredIsolationMode := ""
-	if nodeLabels != nil {
-		desiredIsolationMode = nodeLabels[constants.HypervisorIsolationModeLabel]
-	}
-	if desiredIsolationMode == "" {
-		if _, exists := gpuNode.Labels[constants.HypervisorIsolationModeLabel]; exists {
-			delete(gpuNode.Labels, constants.HypervisorIsolationModeLabel)
-			changed = true
-		}
-	} else if gpuNode.Labels[constants.HypervisorIsolationModeLabel] != desiredIsolationMode {
-		gpuNode.Labels[constants.HypervisorIsolationModeLabel] = desiredIsolationMode
 		changed = true
 	}
 

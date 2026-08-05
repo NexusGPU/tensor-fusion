@@ -102,8 +102,8 @@ Chart 默认所有组件镜像都使用浮动 tag `latest`（operator / hypervis
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   -n tensor-fusion-sys --create-namespace \
-  --set controller.image.tag=2.14.0 \
-  --set cluster.hypervisorImage=tensorfusion/tensor-fusion-hypervisor:2.14.0 \
+  --set controller.image.tag=2.15.0 \
+  --set cluster.hypervisorImage=tensorfusion/tensor-fusion-hypervisor:2.15.0 \
   --set providerConfigs.nvidia.images.middleware=tensorfusion/vgpu-provider-nvidia:1.3.5 \
   --set providerConfigs.nvidia.images.remoteClient=tensorfusion/tensor-fusion-client:v2.17.2 \
   --set providerConfigs.nvidia.images.remoteWorker=tensorfusion/tensor-fusion-worker:v2.17.2
@@ -126,7 +126,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 ```bash
 helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
 helm repo update tensor-fusion
-helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.1 \
+helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.2 \
   -n tensor-fusion-sys --create-namespace
 ```
 
@@ -165,17 +165,32 @@ kubectl logs -n tensor-fusion-sys deploy/tensor-fusion-sys-controller -c control
 - 使用 TensorFusionCluster 创建 pool 时，实际 GPUPool 名称通常是 `<cluster-name>-<pool-name>`。
 - 业务 Pod 不显式写 `tensor-fusion.ai/gpupool` 时，会落到 `isDefault: true` 的 pool。
 
-**节点切分/隔离能力（`tensor-fusion.ai/isolationMode`）**——为被 operator watch 的
-GPU 节点选择一种能力：
+**节点切分/隔离能力**通过 GPUPool 的 `nodeManagerConfig` 统一配置。未命中规则的节点
+使用 `defaultIsolationMode`；规则按顺序匹配，第一条命中后停止：
 
-```bash
-kubectl label node <gpu-node> tensor-fusion.ai/isolationMode=soft --overwrite
-# 推荐值：soft / hard / partitioned
+```yaml
+nodeManagerConfig:
+  defaultIsolationMode: soft
+  isolationModeRules:
+    - mode: partitioned
+      selector:
+        matchExpressions:
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values: [p4d.24xlarge, p5.48xlarge]
+    - mode: hard
+      selector:
+        matchLabels:
+          tensor-fusion.ai/gpu-model: H100
 ```
+
+修改默认模式或 selector 规则会进入 GPUPool 现有的 Hypervisor 滚动更新流程。
+`autoUpdateHypervisor=false` 时只标记配置未同步；启用后按 `batchPercentage` 和
+`batchInterval` 分批更新，并且只重建有效模式发生变化的节点。
 
 soft、hard、partitioned 是互斥的节点能力。`shared` 从 v2.13.0 起表示整卡分配策略，
 不是必须单独规划的第四种节点能力：shared workload 可以使用上述任一模式节点上的完整
-空闲、未分区 GPU，不要求节点存在 `isolationMode=shared` label；已有 shared label 继续兼容。
+空闲、未分区 GPU。节点的有效模式完全由 GPUPool 策略决定。
 
 ### 4.1 按厂家安装（单一厂家）
 
@@ -202,7 +217,7 @@ raw URL apply（或先 clone 仓库）。以 Ascend 为例：
 ```bash
 helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
 helm repo update tensor-fusion
-helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.1 \
+helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.2 \
   -n tensor-fusion-sys --create-namespace \
   --set cluster.enabled=false \
   --set providerConfigs.nvidia.enabled=false \
@@ -513,7 +528,7 @@ kubectl get tensorfusioncluster,gpupool,gpunode,gpu,workloadprofile,tensorfusion
   > "backup-${TS}/tf-state.yaml"
 ```
 
-升级：
+同一架构内的常规 Chart 升级：
 
 ```bash
 helm upgrade tensor-fusion-sys ./charts/tensor-fusion \
@@ -521,10 +536,14 @@ helm upgrade tensor-fusion-sys ./charts/tensor-fusion \
   -f <your-values.yaml>
 ```
 
-更详细的升级和回滚流程见仓库根目录：
+此命令会更新同一 Helm release 中的数据库、监控等组件，**不能用于 v1→v2 架构升级**。
+v1→v2 必须使用精确升级流程：只从固定版本 Helm 包中提取并 apply CRD、RBAC 和
+scheduler ConfigMap，在 `operator=0` 窗口内同步切换 operator/Hypervisor 镜像与
+GPUPool 隔离策略，不执行整包 `helm upgrade`。
 
-- `upgrade.md`
-- `rollback.md`
+详细步骤及回退方案见：
+
+- `docs/v1-to-v2-upgrade-best-practice.md`
 
 卸载脚本支持 Helm、`helm template | kubectl apply` 和 `make deploy` / Kustomize
 三种安装方式。它会删除集群内全部 TensorFusion CR、控制面、webhook、CRD、

@@ -699,6 +699,18 @@ cluster:
     name: shared
     # GPU node label the default pool selects on.
     nodeSelectorKey: nvidia.com/gpu.present
+    # Runtime isolation mode for nodes that do not match any isolationModeRules entry.
+    defaultIsolationMode: soft
+    # Ordered Kubernetes label selectors; the first matching rule wins.
+    # Example:
+    # isolationModeRules:
+    #   - mode: partitioned
+    #     selector:
+    #       matchExpressions:
+    #         - key: node.kubernetes.io/instance-type
+    #           operator: In
+    #           values: [p4d.24xlarge, p5.48xlarge]
+    isolationModeRules: []
     capacityConfig:
       maxResources:
         cpu: "0"

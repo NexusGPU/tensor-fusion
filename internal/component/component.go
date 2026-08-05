@@ -23,6 +23,7 @@ type Interface interface {
 	SetBatchUpdateLastTimeInfo(pool *tfv1.GPUPool, time string)
 	GetUpdateProgress(status *tfv1.PoolComponentStatus) int32
 	SetUpdateProgress(status *tfv1.PoolComponentStatus, progress int32)
+	IsConfigSynced(status *tfv1.PoolComponentStatus) bool
 	GetResourcesInfo(r client.Client, ctx context.Context, pool *tfv1.GPUPool, hash string) (int, int, bool, error)
 	PerformBatchUpdate(r client.Client, ctx context.Context, pool *tfv1.GPUPool, delta int) (bool, error)
 }
@@ -52,10 +53,23 @@ func ManageUpdate(ctx context.Context, r client.Client, pool *tfv1.GPUPool, comp
 			return nil, fmt.Errorf("failed to patch pool: %w", err)
 		}
 	} else {
-		if !autoUpdateEnabled || component.GetUpdateInProgressInfo(pool) != configHash {
+		if !autoUpdateEnabled {
 			return nil, nil
 		}
-		if timeInfo := component.GetBatchUpdateLastTimeInfo(pool); len(timeInfo) != 0 {
+		if component.GetUpdateInProgressInfo(pool) != configHash {
+			if component.IsConfigSynced(newStatus) {
+				return nil, nil
+			}
+			if pool.Annotations == nil {
+				pool.Annotations = map[string]string{}
+			}
+			patch := client.MergeFrom(pool.DeepCopy())
+			component.SetUpdateInProgressInfo(pool, configHash)
+			component.SetBatchUpdateLastTimeInfo(pool, "")
+			if err := r.Patch(ctx, pool, patch); err != nil {
+				return nil, fmt.Errorf("failed to resume component rollout: %w", err)
+			}
+		} else if timeInfo := component.GetBatchUpdateLastTimeInfo(pool); len(timeInfo) != 0 {
 			lastBatchUpdateTime, err := time.Parse(time.RFC3339, timeInfo)
 			if err != nil {
 				return nil, err
