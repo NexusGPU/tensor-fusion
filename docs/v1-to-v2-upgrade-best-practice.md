@@ -10,8 +10,7 @@
 - CRD 的 group/version 不变，仍为 `tensor-fusion.ai/v1`，单一 served/storage 版本，无 Conversion Webhook，无 K8s API 版本迁移。
 - **v2 CRD 是 v1 schema 的严格超集**（逐字段比对验证）：无字段删除，v1 写入的数据在 v2 CRD 下完整保留。
 - 回退时 **CRD 保持 v2 不动**，但不能只换 operator 镜像：v1/v2 的 scheduler ConfigMap 和 Hypervisor 镜像必须与各自 operator 配套切换。
-- v1/v2 使用相同的 Hypervisor Pod 名称 `hypervisor-<node>`。升级时由 v2 operator 删除旧 UID，并以相同名称创建 v2 Pod；正常流程不需要手动清理旧 Pod。
-- 升级顺序：**下载并固定 Helm Chart → apply CRD → 同步 RBAC → 确认 `autoUpdateHypervisor=true` → 将 operator 缩容到 0 → 同步切换 ConfigMap、operator 和 Hypervisor 镜像 → 恢复 operator 副本**。本文使用正式 Helm 包作为资源来源，但不执行 `helm upgrade`，避免更新同一 release 中的数据库、监控等其他组件。
+- 升级顺序：**下载并固定 Helm Chart → 确认 `autoUpdateHypervisor=true` → apply CRD → 创建 NVIDIA ProviderConfig → 同步 RBAC → 切换 ConfigMap → 切换 operator 并等待 Ready → 切换 Hypervisor 镜像**。不需要将 operator 缩容到 0，也不需要手工删除 Hypervisor Pod。本文使用正式 Helm 包作为资源来源，但不执行 `helm upgrade`，避免更新同一 release 中的数据库、监控等其他组件。
 
 ---
 
@@ -47,7 +46,7 @@ appVersion: 2.15.0
 version: 1.8.3
 ```
 
-后续 CRD、RBAC 和 ConfigMap 都从 `${chart}` 读取。不要执行 `helm upgrade` 或 `helm upgrade --install`；本文只使用 `helm template` 和 `kubectl apply` 精确更新 operator 所需资源，不会更新数据库或同一 Helm release 中的其他组件。
+后续 CRD、ProviderConfig、RBAC 和 ConfigMap 都从 `${chart}` 读取。不要执行 `helm upgrade` 或 `helm upgrade --install`；本文只使用 `helm template` 和 `kubectl apply` 精确更新 operator 所需资源，不会更新数据库或同一 Helm release 中的其他组件。
 
 由于没有执行 `helm upgrade`，升级后 `helm list` 仍会显示原 release 的旧 Chart/App
 版本，这是预期行为。实际版本应通过 controller Deployment 与 Hypervisor Pod 的镜像核验，
@@ -105,12 +104,16 @@ nodeManagerConfig:
 升级前显式启用可以避免新镜像和隔离策略停留在待同步状态。若运维期间主动关闭自动更新，配置
 会保持待同步；重新启用后，状态机会自动创建 rollout campaign 并补做积压更新。
 
-### 3. 提前规划节点隔离/切分模式（关键）
+### 3. 提前规划节点隔离/切分模式（关键，暂不写入）
 
 升级前必须先在 TensorFusionCluster（TFC）中规划每个 GPUPool 的节点策略：哪些节点使用
 `soft`、哪些使用 `hard`，需要硬件切分的节点使用 `partitioned`。TFC 管理的 pool 以
 `spec.gpuPools[].specTemplate.nodeManagerConfig` 为配置源，不要直接修改派生出的 GPUPool，
 也不要依赖 Node 或 GPUNode 上的 `tensor-fusion.ai/isolationMode` label。
+
+`defaultIsolationMode` 和 `isolationModeRules` 是 v2 CRD 新增字段。v1 CRD 不包含这两个
+字段，因此升级前这里只做节点盘点和配置审核，**不要将下面的示例提前 apply 到现有 TFC**。
+实际写入必须在步骤 1 apply v2 CRD 之后进行。
 
 规划时遵循以下规则：
 
@@ -119,7 +122,7 @@ nodeManagerConfig:
 - selector 应使用升级后仍会稳定存在的 Kubernetes Node label。先检查每条 selector 实际命中的节点，避免拼写错误或 label 缺失使节点意外落到默认模式。
 - 同时核对现有 workload 的 isolation 请求与目标节点能力一致；`soft`、`hard`、`partitioned` 是互斥的节点能力。
 
-例如，先盘点用于分组的 label，再形成 TFC 配置：
+例如，先盘点用于分组的 label，再形成待写入的 TFC 配置：
 
 ```bash
 mkdir -p tf-backup
@@ -149,8 +152,9 @@ spec:
                   tensor-fusion.ai/gpu-model: H100
 ```
 
-在进入 operator 缩容窗口前，必须确定每个 pool 的最终 `defaultIsolationMode` 和有序
-`isolationModeRules`；后续步骤应写入这份已审核的配置，不能直接照抄文中的示例值。
+本阶段只确定每个 pool 的最终 `defaultIsolationMode` 和有序 `isolationModeRules`。
+步骤 1 apply v2 CRD 后，步骤 5 再将这份已审核的配置与 Hypervisor 镜像一起写入 TFC；
+不能直接照抄文中的示例值。
 
 ### 4. 全量备份（保险，不再是回退的依赖项）
 
@@ -160,8 +164,6 @@ ns=tensor-fusion-sys       # 改成实际 operator 所在 namespace
 controller_deploy=$(kubectl -n ${ns} get deploy \
   -l tensor-fusion.ai/component=operator \
   -o jsonpath='{.items[0].metadata.name}')
-controller_replicas=$(kubectl -n ${ns} get deploy ${controller_deploy} \
-  -o jsonpath='{.spec.replicas}')
 mkdir -p tf-backup
 helm -n ${ns} get values ${release} -o yaml > tf-backup/helm-values.yaml
 for resource in $(kubectl api-resources --api-group=tensor-fusion.ai -o name); do
@@ -170,8 +172,10 @@ done
 kubectl get crd -o name | grep 'tensor-fusion.ai' \
   | xargs kubectl get -o yaml > tf-backup/crds.yaml
 kubectl -n ${ns} get deploy ${controller_deploy} -o yaml > tf-backup/controller-deploy.yaml
-kubectl -n ${ns} get configmap ${release}-config -o yaml > tf-backup/config-v1.yaml
-kubectl get providerconfigs -o yaml > tf-backup/providerconfigs-v1.yaml
+kubectl -n ${ns} get configmap ${release}-config -o json \
+  | jq 'del(.metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp,
+      .metadata.managedFields)' \
+  > tf-backup/config-v1.json
 kubectl -n ${ns} get pods -o json | jq -r '
   .items[]
   | select(.metadata.name | startswith("hypervisor-"))
@@ -180,18 +184,14 @@ kubectl -n ${ns} get pods -o json | jq -r '
   | @tsv' > tf-backup/hypervisor-v1.tsv
 ```
 
-固定并检查现有 ProviderConfig 的 middleware/client/worker 镜像。升级会重建 Hypervisor，
-即使不修改 ProviderConfig，GPU 节点也必须能够拉取 middleware init image。以下以 NVIDIA
-ProviderConfig 为例，名称按实际环境调整：
+v1 没有 ProviderConfig CRD；升级到 v2 时必须创建 NVIDIA ProviderConfig。先固定 Chart
+`1.8.3` 配套的名称和镜像：
 
 ```bash
-provider_name=<nvidia-providerconfig-name>
-middleware_image=$(kubectl get providerconfig ${provider_name} \
-  -o jsonpath='{.spec.images.middleware}')
-remote_client_image=$(kubectl get providerconfig ${provider_name} \
-  -o jsonpath='{.spec.images.remoteClient}')
-remote_worker_image=$(kubectl get providerconfig ${provider_name} \
-  -o jsonpath='{.spec.images.remoteWorker}')
+provider_name=nvidia-provider
+middleware_image=tensorfusion/vgpu-provider-nvidia:1.3.9
+remote_client_image=tensorfusion/tensor-fusion-client:v2.15.0
+remote_worker_image=tensorfusion/tensor-fusion-worker:v2.15.0
 
 printf 'middleware=%s\nremoteClient=%s\nremoteWorker=%s\n' \
   "${middleware_image}" "${remote_client_image}" "${remote_worker_image}"
@@ -200,23 +200,25 @@ test -n "${remote_client_image}"
 test -n "${remote_worker_image}"
 ```
 
-三个镜像都应使用明确版本，不要使用 `latest`。升级前应在实际 GPU 节点预拉取或离线导入
-`${middleware_image}`；仅在 controller 节点拉取不能证明 Hypervisor 所在节点可用。本文的精确
-升级不会渲染或 apply `templates/provider-config-nvidia.yaml`，因此现有 ProviderConfig 会保持
-不变。如果确实需要同步 ProviderConfig，必须在渲染时用上面记录的镜像显式覆盖 Chart
-默认值，并在 apply 前检查生成结果：
+三个镜像都必须使用明确版本，不要使用 `latest`。升级前应在实际 GPU 节点预拉取或离线导入
+`${middleware_image}`；仅在 controller 节点拉取不能证明 Hypervisor 所在节点可用。
+
+使用固定镜像渲染 v2 ProviderConfig，检查生成结果后留到步骤 2 apply：
 
 ```bash
 helm template ${release} "${chart}" -n ${ns} \
   -f tf-backup/helm-values.yaml \
+  --set providerConfigs.nvidia.enabled=true \
+  --set-string providerConfigs.nvidia.name="${provider_name}" \
   --set-string providerConfigs.nvidia.images.middleware="${middleware_image}" \
   --set-string providerConfigs.nvidia.images.remoteClient="${remote_client_image}" \
   --set-string providerConfigs.nvidia.images.remoteWorker="${remote_worker_image}" \
   -s templates/provider-config-nvidia.yaml \
   > tf-backup/providerconfig-v2.yaml
-```
 
-没有主动迁移 ProviderConfig 的需求时，不要 apply 这个文件。
+grep -E '^(kind: ProviderConfig|  name:|    (middleware|remoteClient|remoteWorker):)' \
+  tf-backup/providerconfig-v2.yaml
+```
 
 ---
 
@@ -229,32 +231,52 @@ kubectl apply --server-side --force-conflicts -f "${chart}/crds/"
 kubectl get crd providerconfigs.tensor-fusion.ai   # 新增 CRD 已就绪
 ```
 
-### 步骤 2：同步 RBAC（v2 新增权限，必须先做）
+### 步骤 2：创建 ProviderConfig 并同步 RBAC
+
+步骤 1 已经安装 ProviderConfig CRD。先 apply 预检阶段渲染并核对过的 NVIDIA
+ProviderConfig：
+
+```bash
+kubectl apply -f tf-backup/providerconfig-v2.yaml
+test "$(kubectl get providerconfig "${provider_name}" \
+  -o jsonpath='{.spec.vendor}')" = "NVIDIA"
+test "$(kubectl get providerconfig "${provider_name}" \
+  -o jsonpath='{.spec.images.middleware}')" = "${middleware_image}"
+test "$(kubectl get providerconfig "${provider_name}" \
+  -o jsonpath='{.spec.images.remoteClient}')" = "${remote_client_image}"
+test "$(kubectl get providerconfig "${provider_name}" \
+  -o jsonpath='{.spec.images.remoteWorker}')" = "${remote_worker_image}"
+```
+
+四条 `test` 均通过才继续。
 
 不走 `helm upgrade` 时，chart 模板的变更需要手动同步。v1 → v2 的 RBAC 差异有两处（缺了 operator/hypervisor 会报 Forbidden）：
 
 - **operator ClusterRole**（`rbac.yaml`）：`tensor-fusion.ai` 资源列表新增 `providerconfigs`
 - **hypervisor ClusterRole/ClusterRoleBinding**（`rbac-hypervisor.yaml`）：`tensor-fusion.ai` 资源列表需要包含 `providerconfigs`，并保留模板里的 `get/list/watch/create/update/patch` verbs
 
-可以直接用新版 chart 渲染后单独 apply 这两个文件：
+分别渲染并 apply 两份 RBAC，不能只更新其中一个：
 
 ```bash
 helm template ${release} "${chart}" -n ${ns} \
   -f tf-backup/helm-values.yaml \
-  -s templates/rbac.yaml -s templates/rbac-hypervisor.yaml | kubectl apply --server-side -f -
-```
+  -s templates/rbac.yaml > tf-backup/rbac-operator-v2.yaml
 
-**ConfigMap 也必须同步**：`<release>-config` 的 `scheduler-config.yaml` 在 v1/v2 间互不兼容。v2 为 `GPUResourcesFit` 增加了 `permit`、`postFilter`、`preBind`、`preEnqueue` 等扩展点，v1 二进制没有实现这些接口；`GPUNetworkTopologyAware` 的参数结构也已改变。
-
-此处只提前渲染并检查 v2 ConfigMap，不要在 v1 operator 仍运行时 apply。v1 operator 使用 v2 scheduler 配置会因 `GPUNetworkTopologyAware` 扩展点不兼容而 CrashLoop；实际 apply 放在步骤 3 的 `operator=0` 窗口内：
-
-```bash
 helm template ${release} "${chart}" -n ${ns} \
   -f tf-backup/helm-values.yaml \
-  -s templates/config.yaml > tf-backup/config-v2.yaml
+  -s templates/rbac-hypervisor.yaml > tf-backup/rbac-hypervisor-v2.yaml
+
+kubectl apply --server-side \
+  --dry-run=server \
+  -f tf-backup/rbac-operator-v2.yaml \
+  -f tf-backup/rbac-hypervisor-v2.yaml
+
+kubectl apply --server-side \
+  -f tf-backup/rbac-operator-v2.yaml \
+  -f tf-backup/rbac-hypervisor-v2.yaml
 ```
 
-### 步骤 2.5：更新 Karpenter 资源声明（使用 Karpenter 时必须）
+### 步骤 3：更新 Karpenter 资源声明（使用 Karpenter 时必须）
 
 worker pod 的 kubelet 扩展资源由 v1 的单一 `tensor-fusion.ai/index: 1` 变为 v2 的 16 个 bucket 资源 `tensor-fusion.ai/index_0..index_f`（每个容量 36）。Karpenter 的扩容判定依赖声明的资源容量——不更新的话，**v2 worker pod 触发的扩容永远不会发生**。
 
@@ -290,9 +312,11 @@ spec:
 - 新旧 key 并存无副作用；v2 稳定运行后再删除旧的 `tensor-fusion.ai/index`。
 - 旧 key 的容量按你现网原有声明值保留（v1 device plugin 实际广播 512 个 slot，每 worker 请求 1）。
 
-### 步骤 2.6：写入已规划的节点隔离/切分模式
+### 步骤 4：确认待写入的节点隔离/切分模式
 
-使用升级前预检第 3 节已经审核的规划。v2 通过每个 GPUPool 的 `nodeManagerConfig` 统一
+步骤 1 已经 apply v2 CRD，此时 TFC schema 才支持 `defaultIsolationMode` 和
+`isolationModeRules`。再次确认升级前预检第 3 节审核的规划；实际写入由步骤 5 中切换
+Hypervisor 镜像的同一个 TFC patch 完成。v2 通过每个 GPUPool 的 `nodeManagerConfig` 统一
 管理节点能力，不需要在 Kubernetes Node 或 GPUNode 上写
 `tensor-fusion.ai/isolationMode` label。未命中规则的节点使用
 `defaultIsolationMode`；规则按顺序匹配，第一条命中后停止：
@@ -318,19 +342,17 @@ nodeManagerConfig:
 是互斥的节点能力，需要保证 pool 策略和 workload 请求一致。未配置规则时默认值为
 `soft`，一键安装和升级不需要额外的逐节点操作。
 
-`shared` 从 v2.13.0 起表示**整卡分配策略**，不是必须单独规划的第四种节点能力：
-
-- shared workload 可以使用 soft、hard、partitioned 或兼容 shared 节点上的完整空闲、未分区 GPU。
-- GPU 只要已有 soft/hard 切片、已有整卡分配或已被 partitioned/MIG 切分，就不再满足 shared 请求。
-- scheduler 仍沿用现有 GPU/节点紧凑（binpack）评分，保留更多完整空闲卡和空闲节点。
-
 后续修改 `defaultIsolationMode` 或 `isolationModeRules` 会进入 GPUPool 现有的 Hypervisor
 滚动更新流程。启用 `autoUpdateHypervisor` 后按批次更新，并且只重建最终有效模式发生变化
 的节点。
 
-### 步骤 3：在 operator=0 窗口内原子切换
+### 步骤 5：切换 operator 和 Hypervisor
 
-不能在 v1 operator 仍运行时先修改 v2 Hypervisor 镜像，否则 v1 controller 可能抢先处理新配置并启动不兼容的 v2 Hypervisor。反过来也不能让 v2 operator 启动 v1 Hypervisor：两代 CLI 参数不兼容，会在 init container 阶段 CrashLoop。
+依次切换 scheduler ConfigMap 和 operator 镜像；确认 v2 operator Ready 后，再修改 TFC
+中的 Hypervisor 镜像。
+
+`<release>-config` 的 `scheduler-config.yaml` 在 v1/v2 间互不兼容，因此在切换 operator
+镜像前渲染并 apply v2 ConfigMap。
 
 先设置目标镜像，并再次确认所有待升级 pool 已显式开启自动滚动：
 
@@ -343,18 +365,22 @@ kubectl get gpupools -A -o json \
       .spec.nodeManagerConfig.nodePoolRollingUpdatePolicy.autoUpdateHypervisor == true)'
 ```
 
-命令输出 `true` 才继续。然后停止 operator，在没有 controller 竞争的窗口中同时切换 ConfigMap 和镜像配置。以下以 TFC 中第一个 pool 为例；多 pool 环境必须逐个修改对应路径：
+命令输出 `true` 才继续。以下以 TFC 中第一个 pool 为例；多 pool 环境必须逐个修改对应路径：
 
 ```bash
-# 1. 停止 v1 operator，并确认旧 Pod 已退出
-kubectl -n ${ns} scale deploy/${controller_deploy} --replicas=0
-kubectl -n ${ns} wait --for=delete pod \
-  -l tensor-fusion.ai/component=operator --timeout=120s
+# 1. 渲染并切换到 v2 scheduler 配置
+helm template ${release} "${chart}" -n ${ns} \
+  -f tf-backup/helm-values.yaml \
+  -s templates/config.yaml > tf-backup/config-v2.yaml
 
-# 2. 切换到 v2 scheduler 配置
 kubectl apply -f tf-backup/config-v2.yaml
 
-# 3. operator 停止期间只更新期望状态，不会被 v1 抢先 reconcile
+# 2. 立即切换 operator，并等待 v2 operator 使用配套配置启动
+kubectl -n ${ns} set image deploy/${controller_deploy} \
+  controller=${v2_operator_image}
+kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
+
+# 3. v2 operator Ready 后再更新 Hypervisor 期望状态
 # 以下仅以 gpuPools[0]、默认 soft、无规则为语法示例；不要直接用于生产环境。
 # 多 pool 环境按实际数组索引逐个修改，并写入升级前已审核的 defaultIsolationMode
 # 和 isolationModeRules。
@@ -363,36 +389,11 @@ kubectl patch tensorfusioncluster <cluster-name> --type=json -p="[
   {\"op\":\"add\",\"path\":\"/spec/gpuPools/0/specTemplate/nodeManagerConfig/defaultIsolationMode\",\"value\":\"soft\"},
   {\"op\":\"add\",\"path\":\"/spec/gpuPools/0/specTemplate/nodeManagerConfig/isolationModeRules\",\"value\":[]}
 ]"
-kubectl -n ${ns} set image deploy/${controller_deploy} \
-  controller=${v2_operator_image}
-
-# 4. 启动 v2 operator
-kubectl -n ${ns} scale deploy/${controller_deploy} \
-  --replicas=${controller_replicas}
-kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
 ```
 
-- v1/v2 Hypervisor 都使用 `hypervisor-<node>`。v2 operator 会删除旧 UID，再用相同名称创建 v2 Pod；不要把手动删除旧 Pod作为正常升级步骤。
-- 如果同名 Pod 长时间卡在 Terminating/CrashLoop，可在确认 v2 operator、TFC 镜像和 scheduler ConfigMap 均正确后，按节点删除该 Pod作为故障恢复；不要用宽泛 selector 一次删除所有节点。
-- hypervisor / worker / client 镜像由 GPUPool / TensorFusionCluster 的 `componentConfig` 控制，不需要修改 operator Deployment 中的其他容器。
-- `INITIAL_GPU_NODE_LABEL_SELECTOR`：Chart 默认仍为 `nvidia.com/gpu.present=true`。现网 Deployment 里该 env 已是渲染后的实际值，本流程只换 operator 镜像，不会覆盖它；多厂商环境继续保留现网实际 selector。
-- v2 Hypervisor 必须包含“启动时根据运行中 Pod 的 `gpu-ids`、isolation、算力和显存注解恢复 soft/shared/hard allocation”的修复。未包含该修复的版本虽然不会重建业务 Pod，但存量 Pod 内新启动的 CUDA/NVML 进程会报 `Pod ... not found`。
+### 步骤 6：验证
 
-### 步骤 4：升级后的功能迁移（不阻塞升级，按需进行）
-
-v2 operator 不再读取以下 v1 字段（字段保留仅为兼容与回退，数据不会丢，但功能上由新机制接管）：
-
-| v1 字段 | v2 接管方式 |
-|---|---|
-| `client.remoteModeImage` / `embeddedModeImage` | 合并为 `client.image`（ProviderConfig 存在时以其为准） |
-| `componentConfig.nodeDiscovery` | 节点发现已内置 |
-| `gpu.status.nvLink` / `model` | `status.topology`（控制器自动重建）/ ProviderConfig.hardwareMetadata |
-| `gpu-info` ConfigMap | ProviderConfig CRD（按厂商创建，参考 `config/samples/provider-nvidia.yaml`；NVIDIA 默认配置也可用 chart 模板 `templates/provider-config-nvidia.yaml` 渲染） |
-
-shared、soft、hard、partitioned workload 的 annotation 样例、厂商支持范围和验证方法见
-[跨厂商测试矩阵](cross-vendor-test-matrix.md)，本升级文档不再重复维护。
-
-### 步骤 5：验证
+workload 的 annotation 样例和验证方法见[跨厂商测试矩阵](cross-vendor-test-matrix.md)。
 
 ```bash
 kubectl get tensorfusioncluster -A    # Phase=Running
@@ -427,6 +428,8 @@ kubectl get gpupools -A \
   -o custom-columns='POOL:.metadata.name,PROGRESS:.status.componentStatus.hypervisorUpdateProgress,SYNCED:.status.componentStatus.hypervisorConfigSynced'
 
 test "$(kubectl get providerconfig ${provider_name} \
+  -o jsonpath='{.spec.images.middleware}')" = "${middleware_image}"
+test "$(kubectl get providerconfig ${provider_name} \
   -o jsonpath='{.spec.images.remoteClient}')" = "${remote_client_image}"
 test "$(kubectl get providerconfig ${provider_name} \
   -o jsonpath='{.spec.images.remoteWorker}')" = "${remote_worker_image}"
@@ -451,9 +454,7 @@ test "$(kubectl get providerconfig ${provider_name} \
 
 ## 回退方案（Rollback）
 
-升级和回退都要避免旧 operator 抢先处理新一代 Hypervisor 镜像。回退时同样先将 operator 缩容到 0，再在停止窗口内恢复 v1 scheduler ConfigMap、v1 Hypervisor 镜像和 v1 operator 镜像。
-
-可直接使用升级前备份，或用原 v1 chart 和升级前 values 重新渲染 v1 ConfigMap：
+使用升级前备份的 v1 ConfigMap；也可以用原 v1 Chart 和升级前 values 重新渲染：
 
 ```bash
 helm template ${release} <v1-chart-path> -n ${ns} \
@@ -461,39 +462,34 @@ helm template ${release} <v1-chart-path> -n ${ns} \
   -s templates/config.yaml > tf-backup/config-v1-rendered.yaml
 ```
 
-执行原子回退：
+按以下步骤回退：
 
 ```bash
 v1_operator_image=<registry>/tensor-fusion-operator:<v1-tag>
 v1_hypervisor_image=<registry>/tensor-fusion-hypervisor:<v1-tag>
 
-kubectl -n ${ns} scale deploy/${controller_deploy} --replicas=0
-kubectl -n ${ns} wait --for=delete pod \
-  -l tensor-fusion.ai/component=operator --timeout=120s
-
-# 二选一：使用升级前备份，或使用刚渲染的 v1 ConfigMap
-kubectl apply -f tf-backup/config-v1.yaml
+# 1. 恢复 v1 scheduler ConfigMap（二选一）
+kubectl apply -f tf-backup/config-v1.json
 # kubectl apply -f tf-backup/config-v1-rendered.yaml
 
+# 2. 切换 v1 operator 并等待 Ready
+kubectl -n ${ns} set image deploy/${controller_deploy} \
+  controller=${v1_operator_image}
+kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
+
+# 3. 恢复 TFC 中的 v1 Hypervisor 镜像
 kubectl patch tensorfusioncluster <cluster-name> --type=json -p="[{
   \"op\":\"replace\",
   \"path\":\"/spec/gpuPools/0/specTemplate/componentConfig/hypervisor/image\",
   \"value\":\"${v1_hypervisor_image}\"
 }]"
-kubectl -n ${ns} set image deploy/${controller_deploy} \
-  controller=${v1_operator_image}
 
-kubectl -n ${ns} scale deploy/${controller_deploy} \
-  --replicas=${controller_replicas}
-kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
+# 4. 等待每个节点的 Hypervisor 使用 v1 镜像恢复 Ready
+kubectl -n ${ns} wait --for=condition=Ready \
+  pod/hypervisor-<node-name> --timeout=180s
 ```
 
-确认 v1 operator Ready 后，等待同名 `hypervisor-<node>` 自动替换为 v1 镜像并恢复 2/2 Ready。正常回退不需要删除另一种名称的 Pod；如果同名 Pod 卡住，仅将按节点删除作为故障恢复。不能只执行 `rollout undo`：Deployment 会回滚镜像，但不会恢复 v1 ConfigMap和 TensorFusionCluster/GPUPool 中的 Hypervisor 镜像。
-
-- **不要把 v1 旧 CRD apply 回去**。v2 CRD 是超集，v1 operator 在其下完全正常工作；反向 apply 旧 CRD 会触发 pruning，把 v2 写入的字段（`topology`、`gangScheduling`、`isolationMode` 等）剪掉，影响二次升级。带默认值的字段还可能在重新 apply v2 CRD 后被静默填入默认值，key 级 diff 无法发现值已变化，因此恢复时必须使用备份做值级比对。
-- 回退后 v1 operator 全量更新对象时会抹掉它不认识的 v2-only status 字段——无害，二次升级时 v2 控制器会自动重新发现填充。
-- ProviderConfig 等 v2 专有资源及新增的 RBAC 权限回退后闲置即可，无需删除。
-- Karpenter NodeOverlay 也不用动：旧 `tensor-fusion.ai/index` key 已按步骤 2.5 保留，v1 worker 的扩容不受影响。
+v2 CRD、ProviderConfig、RBAC 和 Karpenter NodeOverlay 保持不变。
 
 ---
 
@@ -503,8 +499,8 @@ kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
 - [ ] CRD 来自 compat 改动合并后的 main（预检 1 通过）
 - [ ] `nodeManagerConfig` / `gpuCount` 预检通过，所有待升级 pool 均为 `autoUpdateHypervisor=true`
 - [ ] 已全量备份 CRD、CR、Helm values、v1 ConfigMap 与 controller Deployment
-- [ ] ProviderConfig 的 `middleware` / `remoteClient` / `remoteWorker` 已记录并固定为明确版本，middleware 已在实际 GPU 节点验证可拉取或完成离线导入
-- [ ] 先 apply CRD/RBAC，再将 operator 缩容到 0，并在停止窗口内同步切换 v2 ConfigMap、operator/Hypervisor 镜像
+- [ ] v2 NVIDIA ProviderConfig 已使用固定版本渲染并在步骤 2 创建；middleware 已在实际 GPU 节点验证可拉取或完成离线导入
+- [ ] 先 apply CRD，再创建 NVIDIA ProviderConfig、同步 RBAC、更新 Karpenter（如使用）并确认隔离策略；最后按“v2 ConfigMap → v2 operator Ready → v2 Hypervisor 镜像”的顺序执行
 - [ ] （Karpenter 环境）NodeOverlay 已声明 `index_0..index_f`，且保留旧 `tensor-fusion.ai/index`
 - [ ] 每个待升级 GPUPool 已规划 `defaultIsolationMode` 和有序的 `isolationModeRules`；每条 selector 的实际命中节点及重叠优先级均已核对
 - [ ] v1/v2 Hypervisor 名称均为 `hypervisor-<node>`；升级后 UID 已变化、镜像为 v2、每节点仅一个 Pod
@@ -512,4 +508,4 @@ kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
 - [ ] 升级后 Cluster/Pool=Running，local/remote 测试 Workload 可调度并能实际调用 CUDA/NVML
 - [ ] shared workload 只使用完整空闲、未分区 GPU；hard 百分比/绝对值与显存限额验证通过
 - [ ] 存量 soft/hard Pod 的 UID/restartCount/GPU UUID 不变，升级后新 CUDA/NVML 调用正常
-- [ ] 回退预案明确：CRD 不动；operator 缩容到 0 后同步恢复 v1 ConfigMap、operator/Hypervisor 镜像，由 operator 自动替换同名 Pod
+- [ ] 回退预案明确：CRD 不动；按“v1 ConfigMap → v1 operator Ready → v1 Hypervisor 镜像”的顺序执行，由 operator 自动替换同名 Pod
