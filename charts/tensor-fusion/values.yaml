@@ -31,7 +31,7 @@ controller:
   image:
     repository: tensorfusion/tensor-fusion-operator
     # Overrides the image tag whose default is the chart appVersion.
-    tag: "latest"
+    tag: ""
   # This is for setting Kubernetes Annotations to a Pod.
   # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/ 
   
@@ -122,8 +122,8 @@ greptime:
 #   port: 5001
 
 agent:
-  enrollToken: "token-from-cloud"
-  agentId: 'org-from-cloud:env'
+  enrollToken: ""
+  agentId: ""
   cloudEndpoint: "wss://app.tensor-fusion.ai"
   
   image:
@@ -166,9 +166,9 @@ providerConfigs:
     # reconcile, but pod-level fields survive).
     privilegedHypervisor: true
     images:
-      middleware: tensorfusion/vgpu-provider-nvidia:latest
-      remoteClient: tensorfusion/tensor-fusion-client:latest
-      remoteWorker: tensorfusion/tensor-fusion-worker:latest
+      middleware: tensorfusion/vgpu-provider-nvidia:1.3.9
+      remoteClient: tensorfusion/tensor-fusion-client:v2.15.0
+      remoteWorker: tensorfusion/tensor-fusion-worker:v2.15.0
     inUseResourceNames:
       - nvidia.com/gpu
       # MIG profile names — device-plugin only reports what physically exists on
@@ -694,7 +694,7 @@ cluster:
   # Hypervisor image is NOT part of ProviderConfig — it can only be set on the
   # pool, so it lives here. Client / worker images are NOT repeated: they come
   # from providerConfigs.nvidia.images.remoteClient / remoteWorker (single source).
-  hypervisorImage: tensorfusion/tensor-fusion-hypervisor:latest
+  hypervisorImage: tensorfusion/tensor-fusion-hypervisor:2.15.0
   pool:
     name: shared
     # GPU node label the default pool selects on.
