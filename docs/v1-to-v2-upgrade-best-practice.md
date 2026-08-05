@@ -17,12 +17,12 @@
 
 ## 获取正式 Helm 升级包
 
-升级使用包含节点隔离策略和自动更新恢复修复的 Chart `1.8.2`。必须等该版本发布到公开
-Helm 仓库后再执行；如果仓库中查不到 `1.8.2`，停止升级，不要退回使用缺少新 CRD 字段的
-`1.8.1`，也不要使用未固定版本的最新包：
+升级使用包含节点隔离策略、自动更新恢复修复和一键安装修复的 Chart `1.8.3`。必须等该版本
+发布到公开 Helm 仓库后再执行；如果仓库中查不到 `1.8.3`，停止升级，不要退回使用缺少
+最新 Helm 修复的旧包，也不要使用未固定版本的最新包：
 
 ```bash
-chart_version=1.8.2
+chart_version=1.8.3
 upgrade_dir=${TMPDIR:-/tmp}/tensor-fusion-upgrade-${chart_version}
 
 helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
@@ -44,10 +44,14 @@ helm show chart "${chart}" | grep -E '^(version|appVersion):'
 
 ```text
 appVersion: 2.15.0
-version: 1.8.2
+version: 1.8.3
 ```
 
 后续 CRD、RBAC 和 ConfigMap 都从 `${chart}` 读取。不要执行 `helm upgrade` 或 `helm upgrade --install`；本文只使用 `helm template` 和 `kubectl apply` 精确更新 operator 所需资源，不会更新数据库或同一 Helm release 中的其他组件。
+
+由于没有执行 `helm upgrade`，升级后 `helm list` 仍会显示原 release 的旧 Chart/App
+版本，这是预期行为。实际版本应通过 controller Deployment 与 Hypervisor Pod 的镜像核验，
+不能只看 Helm release 元数据。
 
 ---
 
@@ -176,26 +180,36 @@ kubectl -n ${ns} get pods -o json | jq -r '
   | @tsv' > tf-backup/hypervisor-v1.tsv
 ```
 
-固定现有 ProviderConfig 的 client/worker 镜像，避免升级时被 Chart 默认的 `latest` 覆盖。以下以 NVIDIA ProviderConfig 为例，名称按实际环境调整：
+固定并检查现有 ProviderConfig 的 middleware/client/worker 镜像。升级会重建 Hypervisor，
+即使不修改 ProviderConfig，GPU 节点也必须能够拉取 middleware init image。以下以 NVIDIA
+ProviderConfig 为例，名称按实际环境调整：
 
 ```bash
 provider_name=<nvidia-providerconfig-name>
+middleware_image=$(kubectl get providerconfig ${provider_name} \
+  -o jsonpath='{.spec.images.middleware}')
 remote_client_image=$(kubectl get providerconfig ${provider_name} \
   -o jsonpath='{.spec.images.remoteClient}')
 remote_worker_image=$(kubectl get providerconfig ${provider_name} \
   -o jsonpath='{.spec.images.remoteWorker}')
 
-printf 'remoteClient=%s\nremoteWorker=%s\n' \
-  "${remote_client_image}" "${remote_worker_image}"
+printf 'middleware=%s\nremoteClient=%s\nremoteWorker=%s\n' \
+  "${middleware_image}" "${remote_client_image}" "${remote_worker_image}"
+test -n "${middleware_image}"
 test -n "${remote_client_image}"
 test -n "${remote_worker_image}"
 ```
 
-建议两者都使用明确版本，不要使用 `latest`。本文的精确升级不会渲染或 apply `templates/provider-config-nvidia.yaml`，因此现有 ProviderConfig 会保持不变。如果确实需要同步 ProviderConfig，必须在渲染时用上面记录的镜像显式覆盖 Chart 默认值，并在 apply 前检查生成结果：
+三个镜像都应使用明确版本，不要使用 `latest`。升级前应在实际 GPU 节点预拉取或离线导入
+`${middleware_image}`；仅在 controller 节点拉取不能证明 Hypervisor 所在节点可用。本文的精确
+升级不会渲染或 apply `templates/provider-config-nvidia.yaml`，因此现有 ProviderConfig 会保持
+不变。如果确实需要同步 ProviderConfig，必须在渲染时用上面记录的镜像显式覆盖 Chart
+默认值，并在 apply 前检查生成结果：
 
 ```bash
 helm template ${release} "${chart}" -n ${ns} \
   -f tf-backup/helm-values.yaml \
+  --set-string providerConfigs.nvidia.images.middleware="${middleware_image}" \
   --set-string providerConfigs.nvidia.images.remoteClient="${remote_client_image}" \
   --set-string providerConfigs.nvidia.images.remoteWorker="${remote_worker_image}" \
   -s templates/provider-config-nvidia.yaml \
@@ -485,11 +499,11 @@ kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
 
 ## 检查清单
 
-- [ ] 已从公开 Helm 仓库下载并固定 Chart `1.8.2`，`appVersion=2.15.0`；兼容字段和隔离策略字段预检通过，且未执行 `helm upgrade`
+- [ ] 已从公开 Helm 仓库下载并固定 Chart `1.8.3`，`appVersion=2.15.0`；兼容字段和隔离策略字段预检通过，且未执行 `helm upgrade`
 - [ ] CRD 来自 compat 改动合并后的 main（预检 1 通过）
 - [ ] `nodeManagerConfig` / `gpuCount` 预检通过，所有待升级 pool 均为 `autoUpdateHypervisor=true`
 - [ ] 已全量备份 CRD、CR、Helm values、v1 ConfigMap 与 controller Deployment
-- [ ] ProviderConfig 的 `remoteClient` / `remoteWorker` 已记录并固定为现有明确版本，升级后值保持不变
+- [ ] ProviderConfig 的 `middleware` / `remoteClient` / `remoteWorker` 已记录并固定为明确版本，middleware 已在实际 GPU 节点验证可拉取或完成离线导入
 - [ ] 先 apply CRD/RBAC，再将 operator 缩容到 0，并在停止窗口内同步切换 v2 ConfigMap、operator/Hypervisor 镜像
 - [ ] （Karpenter 环境）NodeOverlay 已声明 `index_0..index_f`，且保留旧 `tensor-fusion.ai/index`
 - [ ] 每个待升级 GPUPool 已规划 `defaultIsolationMode` 和有序的 `isolationModeRules`；每条 selector 的实际命中节点及重叠优先级均已核对

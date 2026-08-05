@@ -6,7 +6,7 @@
 
 - 使用本仓库 Helm chart 安装，chart 路径为 `charts/tensor-fusion`。
 - Helm release 名称使用 `tensor-fusion-sys`，系统命名空间使用 `tensor-fusion-sys`。
-- 集群已有 GPU 节点，节点能被 `nvidia.com/gpu.present=true` 这类 label 选中。
+- GPU 功能验证时，集群已有 GPU 节点，节点能被 `nvidia.com/gpu.present=true` 这类 label 选中。无 GPU 的控制面安装验证不要求此条件。
 - 执行安装的账号具备创建 CRD、ClusterRole、MutatingWebhookConfiguration、Namespace 的权限。
 
 ## 1. 前置条件
@@ -39,7 +39,11 @@ GPU 节点需要满足：
 - NVIDIA ProviderConfig、SchedulingConfigTemplate，以及默认的 NVIDIA TensorFusionCluster/GPUPool。
 - GreptimeDB standalone。
 - Alertmanager。
-- cluster-agent、vector sidecar。
+- vector sidecar。cluster-agent 默认关闭，仅在显式配置 `agent.agentId` 后启用。
+
+无 GPU 的集群也可以安装控制面。只要没有节点命中
+`initialGpuNodeLabelSelector`，operator 就不会创建 GPUNode 或 Hypervisor Pod；此时只验证
+controller、CRD、RBAC、webhook 和默认 CR 是否正确即可。
 
 从仓库根目录执行：
 
@@ -88,7 +92,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 | --- | --- | --- |
 | `initialGpuNodeLabelSelector` | controller 初始扫描 GPU 节点的 label selector | `nvidia.com/gpu.present=true` |
 | `controller.image.repository` | operator 镜像仓库 | `tensorfusion/tensor-fusion-operator` |
-| `controller.image.tag` | operator 镜像 tag | `latest` |
+| `controller.image.tag` | operator 镜像 tag；空值时使用 Chart `appVersion` | `""`（当前解析为 `2.15.0`） |
 | `controller.replicaCount` | controller 副本数 | `1` |
 | `greptime.installStandalone` | 是否安装内置 GreptimeDB standalone | `true` |
 | `greptime.host` | GreptimeDB MySQL endpoint host | `greptimedb-standalone.greptimedb.svc.cluster.local` |
@@ -97,16 +101,18 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 
 ### 2.4 指定组件版本
 
-Chart 默认所有组件镜像都使用浮动 tag `latest`（operator / hypervisor / vgpu-provider / client / worker）。生产环境建议**固定版本**，通过 `--set` 覆盖对应 values 键：
+Chart 1.8.3 起默认固定与 `appVersion=2.15.0` 配套的组件版本，一键安装不再依赖
+operator / hypervisor / vgpu-provider / client / worker 的浮动 `latest`。需要使用私有仓库或
+其它已验证版本时，可通过 `--set` 覆盖：
 
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   -n tensor-fusion-sys --create-namespace \
   --set controller.image.tag=2.15.0 \
   --set cluster.hypervisorImage=tensorfusion/tensor-fusion-hypervisor:2.15.0 \
-  --set providerConfigs.nvidia.images.middleware=tensorfusion/vgpu-provider-nvidia:1.3.5 \
-  --set providerConfigs.nvidia.images.remoteClient=tensorfusion/tensor-fusion-client:v2.17.2 \
-  --set providerConfigs.nvidia.images.remoteWorker=tensorfusion/tensor-fusion-worker:v2.17.2
+  --set providerConfigs.nvidia.images.middleware=tensorfusion/vgpu-provider-nvidia:1.3.9 \
+  --set providerConfigs.nvidia.images.remoteClient=tensorfusion/tensor-fusion-client:v2.15.0 \
+  --set providerConfigs.nvidia.images.remoteWorker=tensorfusion/tensor-fusion-worker:v2.15.0
 ```
 
 各组件对应的 values 键：
@@ -114,10 +120,10 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 | 组件 | values 键 | 说明 |
 | --- | --- | --- |
 | operator | `controller.image.repository` + `controller.image.tag` | 仓库与 tag 分开两个键 |
-| hypervisor | `cluster.hypervisorImage` | **完整镜像**（含仓库+tag），默认 `...tensor-fusion-hypervisor:latest` |
-| vgpu-provider | `providerConfigs.nvidia.images.middleware` | 默认 `...vgpu-provider-nvidia:latest` |
-| client | `providerConfigs.nvidia.images.remoteClient` | 默认 `...tensor-fusion-client:latest` |
-| worker | `providerConfigs.nvidia.images.remoteWorker` | 默认 `...tensor-fusion-worker:latest` |
+| hypervisor | `cluster.hypervisorImage` | **完整镜像**（含仓库+tag），默认 `tensorfusion/tensor-fusion-hypervisor:2.15.0` |
+| vgpu-provider | `providerConfigs.nvidia.images.middleware` | 默认 `tensorfusion/vgpu-provider-nvidia:1.3.9` |
+| client | `providerConfigs.nvidia.images.remoteClient` | 默认 `tensorfusion/tensor-fusion-client:v2.15.0` |
+| worker | `providerConfigs.nvidia.images.remoteWorker` | 默认 `tensorfusion/tensor-fusion-worker:v2.15.0` |
 
 > 注意：`cluster.hypervisorImage` 传的是完整镜像引用（`仓库:tag`），而 operator 用 `repository` + `tag` 两个独立键。
 
@@ -126,7 +132,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 ```bash
 helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
 helm repo update tensor-fusion
-helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.2 \
+helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.3 \
   -n tensor-fusion-sys --create-namespace
 ```
 
@@ -148,6 +154,16 @@ kubectl logs -n tensor-fusion-sys deploy/tensor-fusion-sys-controller -c control
 ```
 
 正常情况下，controller Pod 至少包含 `controller` 和 `vector` 容器；如果 values 中配置了 `agent.agentId`，还会有 `cluster-agent`。
+
+无 GPU 环境还应确认没有误建 Hypervisor：
+
+```bash
+kubectl get pods -n tensor-fusion-sys -o json \
+  | jq '[.items[] | select(any(.spec.containers[]?; .name == "tensor-fusion-hypervisor"))] | length'
+```
+
+没有节点命中 GPU selector 时，输出必须为 `0`。默认 TFC/GPUPool 因没有 GPUNode 可能保持
+`Updating`，不影响 controller-only 安装验收。
 
 ## 4. 创建 TensorFusionCluster 和 GPUPool
 
@@ -217,7 +233,7 @@ raw URL apply（或先 clone 仓库）。以 Ascend 为例：
 ```bash
 helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
 helm repo update tensor-fusion
-helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.2 \
+helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.3 \
   -n tensor-fusion-sys --create-namespace \
   --set cluster.enabled=false \
   --set providerConfigs.nvidia.enabled=false \
