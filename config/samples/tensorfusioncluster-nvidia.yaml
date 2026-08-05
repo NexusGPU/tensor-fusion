@@ -112,6 +112,7 @@ spec:
                       memory: 128Mi
       nodeManagerConfig:
         defaultVendor: NVIDIA
+        defaultIsolationMode: soft
         nodeCompaction:
           period: 30m
         nodePoolRollingUpdatePolicy:

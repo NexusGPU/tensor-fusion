@@ -64,6 +64,10 @@ func (c *Client) SetUpdateProgress(status *tfv1.PoolComponentStatus, progress in
 	}
 }
 
+func (c *Client) IsConfigSynced(status *tfv1.PoolComponentStatus) bool {
+	return status.ClientConfigSynced
+}
+
 func (c *Client) GetResourcesInfo(r client.Client, ctx context.Context, pool *tfv1.GPUPool, configHash string) (int, int, bool, error) {
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList,

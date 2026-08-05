@@ -17,18 +17,18 @@ func TestProviderRevisionProducesVendorScopedHypervisorHashes(t *testing.T) {
 	}
 
 	baseCampaign := HypervisorTemplateHash(pool)
-	baseNVIDIA := HypervisorPodTemplateHash(pool, constants.AcceleratorVendorNvidia)
-	baseAMD := HypervisorPodTemplateHash(pool, "AMD")
-	if baseCampaign != baseNVIDIA || baseCampaign != baseAMD {
-		t.Fatalf("hashes without provider revisions must preserve the legacy hash")
+	baseNVIDIA := HypervisorPodTemplateHash(pool, constants.AcceleratorVendorNvidia, tfv1.IsolationModeSoft)
+	baseAMD := HypervisorPodTemplateHash(pool, "AMD", tfv1.IsolationModeSoft)
+	if baseNVIDIA != baseAMD {
+		t.Fatalf("vendor must not affect hashes without provider revisions")
 	}
 
 	if err := SetProviderConfigRevision(pool, "NVIDIA", "revision-1"); err != nil {
 		t.Fatalf("set provider revision: %v", err)
 	}
 	campaignV1 := HypervisorTemplateHash(pool)
-	nvidiaV1 := HypervisorPodTemplateHash(pool, "nvidia")
-	amdV1 := HypervisorPodTemplateHash(pool, "AMD")
+	nvidiaV1 := HypervisorPodTemplateHash(pool, "nvidia", tfv1.IsolationModeSoft)
+	amdV1 := HypervisorPodTemplateHash(pool, "AMD", tfv1.IsolationModeSoft)
 	if campaignV1 == baseCampaign {
 		t.Fatalf("provider revision must change the pool rollout hash")
 	}
@@ -42,10 +42,10 @@ func TestProviderRevisionProducesVendorScopedHypervisorHashes(t *testing.T) {
 	if err := SetProviderConfigRevision(pool, "NVIDIA", "revision-2"); err != nil {
 		t.Fatalf("update provider revision: %v", err)
 	}
-	if HypervisorPodTemplateHash(pool, "NVIDIA") == nvidiaV1 {
+	if HypervisorPodTemplateHash(pool, "NVIDIA", tfv1.IsolationModeSoft) == nvidiaV1 {
 		t.Fatalf("new provider revision must produce a new matching pod hash")
 	}
-	if HypervisorPodTemplateHash(pool, "AMD") != amdV1 {
+	if HypervisorPodTemplateHash(pool, "AMD", tfv1.IsolationModeSoft) != amdV1 {
 		t.Fatalf("new provider revision must leave another vendor unchanged")
 	}
 

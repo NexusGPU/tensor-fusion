@@ -17,10 +17,12 @@
 
 ## 获取正式 Helm 升级包
 
-升级使用公开 Helm 仓库中已发布的 Chart `1.8.1`，不要依赖本地源码目录，也不要使用未固定版本的最新包：
+升级使用包含节点隔离策略和自动更新恢复修复的 Chart `1.8.2`。必须等该版本发布到公开
+Helm 仓库后再执行；如果仓库中查不到 `1.8.2`，停止升级，不要退回使用缺少新 CRD 字段的
+`1.8.1`，也不要使用未固定版本的最新包：
 
 ```bash
-chart_version=1.8.1
+chart_version=1.8.2
 upgrade_dir=${TMPDIR:-/tmp}/tensor-fusion-upgrade-${chart_version}
 
 helm repo add tensor-fusion https://nexusgpu.github.io/tensor-fusion --force-update
@@ -41,8 +43,8 @@ helm show chart "${chart}" | grep -E '^(version|appVersion):'
 版本检查必须输出：
 
 ```text
-appVersion: 2.14.0
-version: 1.8.1
+appVersion: 2.15.0
+version: 1.8.2
 ```
 
 后续 CRD、RBAC 和 ConfigMap 都从 `${chart}` 读取。不要执行 `helm upgrade` 或 `helm upgrade --install`；本文只使用 `helm template` 和 `kubectl apply` 精确更新 operator 所需资源，不会更新数据库或同一 Helm release 中的其他组件。
@@ -56,6 +58,8 @@ version: 1.8.1
 ```bash
 grep -l 'nvLink' "${chart}/crds/tensor-fusion.ai_gpus.yaml" \
   && grep -l 'remoteModeImage' "${chart}/crds/tensor-fusion.ai_gpupools.yaml" \
+  && grep -l 'defaultIsolationMode' "${chart}/crds/tensor-fusion.ai_gpupools.yaml" \
+  && grep -l 'isolationModeRules' "${chart}/crds/tensor-fusion.ai_gpupools.yaml" \
   && echo "OK: compat fields present"
 ```
 
@@ -94,9 +98,57 @@ nodeManagerConfig:
     batchPercentage: 20
 ```
 
-必须在修改 Hypervisor 镜像之前启用。配置变化发生后再单独打开开关，当前状态机不会补做之前错过的滚动更新。
+升级前显式启用可以避免新镜像和隔离策略停留在待同步状态。若运维期间主动关闭自动更新，配置
+会保持待同步；重新启用后，状态机会自动创建 rollout campaign 并补做积压更新。
 
-### 3. 全量备份（保险，不再是回退的依赖项）
+### 3. 提前规划节点隔离/切分模式（关键）
+
+升级前必须先在 TensorFusionCluster（TFC）中规划每个 GPUPool 的节点策略：哪些节点使用
+`soft`、哪些使用 `hard`，需要硬件切分的节点使用 `partitioned`。TFC 管理的 pool 以
+`spec.gpuPools[].specTemplate.nodeManagerConfig` 为配置源，不要直接修改派生出的 GPUPool，
+也不要依赖 Node 或 GPUNode 上的 `tensor-fusion.ai/isolationMode` label。
+
+规划时遵循以下规则：
+
+- 用 `defaultIsolationMode` 定义未命中任何 selector 的节点模式；没有特殊需求时建议为 `soft`。
+- `isolationModeRules` 按声明顺序匹配，第一条命中即生效。selector 有重叠时必须确认优先级符合预期。
+- selector 应使用升级后仍会稳定存在的 Kubernetes Node label。先检查每条 selector 实际命中的节点，避免拼写错误或 label 缺失使节点意外落到默认模式。
+- 同时核对现有 workload 的 isolation 请求与目标节点能力一致；`soft`、`hard`、`partitioned` 是互斥的节点能力。
+
+例如，先盘点用于分组的 label，再形成 TFC 配置：
+
+```bash
+mkdir -p tf-backup
+kubectl get nodes -L node.kubernetes.io/instance-type,tensor-fusion.ai/gpu-model
+kubectl get nodes -l 'node.kubernetes.io/instance-type in (p4d.24xlarge,p5.48xlarge)'
+kubectl get nodes -l 'tensor-fusion.ai/gpu-model=H100'
+kubectl get tensorfusioncluster -A -o yaml > tf-backup/tfc-before-v2.yaml
+```
+
+```yaml
+spec:
+  gpuPools:
+    - name: nvidia
+      specTemplate:
+        nodeManagerConfig:
+          defaultIsolationMode: soft
+          isolationModeRules:
+            - mode: partitioned
+              selector:
+                matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values: [p4d.24xlarge, p5.48xlarge]
+            - mode: hard
+              selector:
+                matchLabels:
+                  tensor-fusion.ai/gpu-model: H100
+```
+
+在进入 operator 缩容窗口前，必须确定每个 pool 的最终 `defaultIsolationMode` 和有序
+`isolationModeRules`；后续步骤应写入这份已审核的配置，不能直接照抄文中的示例值。
+
+### 4. 全量备份（保险，不再是回退的依赖项）
 
 ```bash
 release=tensor-fusion-sys  # 改成实际 Helm release 名称
@@ -224,41 +276,43 @@ spec:
 - 新旧 key 并存无副作用；v2 稳定运行后再删除旧的 `tensor-fusion.ai/index`。
 - 旧 key 的容量按你现网原有声明值保留（v1 device plugin 实际广播 512 个 slot，每 worker 请求 1）。
 
-### 步骤 2.6：规划并标记节点隔离/切分模式
+### 步骤 2.6：写入已规划的节点隔离/切分模式
 
-v2 需要提前规划每个 GPU 节点承担的切分/隔离能力，并在 **Kubernetes Node** 上打 label：
+使用升级前预检第 3 节已经审核的规划。v2 通过每个 GPUPool 的 `nodeManagerConfig` 统一
+管理节点能力，不需要在 Kubernetes Node 或 GPUNode 上写
+`tensor-fusion.ai/isolationMode` label。未命中规则的节点使用
+`defaultIsolationMode`；规则按顺序匹配，第一条命中后停止：
 
-```bash
-kubectl label node <node-name> tensor-fusion.ai/isolationMode=soft --overwrite
-# 推荐值：soft / hard / partitioned
+```yaml
+nodeManagerConfig:
+  defaultIsolationMode: soft
+  isolationModeRules:
+    - mode: partitioned
+      selector:
+        matchExpressions:
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values: [p4d.24xlarge, p5.48xlarge]
+    - mode: hard
+      selector:
+        matchLabels:
+          tensor-fusion.ai/gpu-model: H100
 ```
 
-这不是业务 Pod 上的 `tensor-fusion.ai/isolation` annotation。两者职责不同：
-
-| 位置 | Key | 作用 |
-|---|---|---|
-| Node label | `tensor-fusion.ai/isolationMode` | operator 同步到 GPUNode，并作为该节点 hypervisor 的 `--isolation-mode=<mode>` 启动参数；hypervisor 上报 GPU.status.isolationMode |
-| Pod annotation | `tensor-fusion.ai/isolation` | workload 请求的分配/隔离策略；soft、hard、partitioned 按节点能力过滤，shared 按完整空闲 GPU 过滤 |
-
-soft、hard、partitioned 是互斥的节点切分/隔离能力，需要保证节点规划和 workload 请求一致：soft workload 落到 soft 节点，hard workload 落到 hard 节点，partitioned workload 落到 partitioned 节点。未规划时不要依赖默认值，尤其是默认 workload isolation 为 `soft`，但 hypervisor 侧默认参数不是升级策略的一部分，可能导致升级后调度过滤无可用 GPU。
+`nodeManagerConfig` 是节点能力的期望配置；业务 Pod 上的
+`tensor-fusion.ai/isolation` annotation 是 workload 请求。soft、hard、partitioned
+是互斥的节点能力，需要保证 pool 策略和 workload 请求一致。未配置规则时默认值为
+`soft`，一键安装和升级不需要额外的逐节点操作。
 
 `shared` 从 v2.13.0 起表示**整卡分配策略**，不是必须单独规划的第四种节点能力：
 
 - shared workload 可以使用 soft、hard、partitioned 或兼容 shared 节点上的完整空闲、未分区 GPU。
 - GPU 只要已有 soft/hard 切片、已有整卡分配或已被 partitioned/MIG 切分，就不再满足 shared 请求。
-- 不要求节点存在 `tensor-fusion.ai/isolationMode=shared` label；已有 shared label 继续兼容。
-- scheduler 不优先 shared label 节点，仍沿用现有 GPU/节点紧凑（binpack）评分，保留更多完整空闲卡和空闲节点。
+- scheduler 仍沿用现有 GPU/节点紧凑（binpack）评分，保留更多完整空闲卡和空闲节点。
 
-建议升级前按 pool/节点用途一次性标好：
-
-```bash
-kubectl label node <soft-node> tensor-fusion.ai/isolationMode=soft --overwrite
-kubectl label node <hard-node> tensor-fusion.ai/isolationMode=hard --overwrite
-kubectl label node <partition-node> tensor-fusion.ai/isolationMode=partitioned --overwrite
-kubectl get nodes -L tensor-fusion.ai/isolationMode
-```
-
-后续修改该 label 时，v2 operator 会删除并重建对应节点的 hypervisor pod 以应用新的 `--isolation-mode`，应按维护变更处理，避免和运行中 worker/业务混在同一个升级动作里。
+后续修改 `defaultIsolationMode` 或 `isolationModeRules` 会进入 GPUPool 现有的 Hypervisor
+滚动更新流程。启用 `autoUpdateHypervisor` 后按批次更新，并且只重建最终有效模式发生变化
+的节点。
 
 ### 步骤 3：在 operator=0 窗口内原子切换
 
@@ -287,11 +341,14 @@ kubectl -n ${ns} wait --for=delete pod \
 kubectl apply -f tf-backup/config-v2.yaml
 
 # 3. operator 停止期间只更新期望状态，不会被 v1 抢先 reconcile
-kubectl patch tensorfusioncluster <cluster-name> --type=json -p="[{
-  \"op\":\"replace\",
-  \"path\":\"/spec/gpuPools/0/specTemplate/componentConfig/hypervisor/image\",
-  \"value\":\"${v2_hypervisor_image}\"
-}]"
+# 以下仅以 gpuPools[0]、默认 soft、无规则为语法示例；不要直接用于生产环境。
+# 多 pool 环境按实际数组索引逐个修改，并写入升级前已审核的 defaultIsolationMode
+# 和 isolationModeRules。
+kubectl patch tensorfusioncluster <cluster-name> --type=json -p="[
+  {\"op\":\"replace\",\"path\":\"/spec/gpuPools/0/specTemplate/componentConfig/hypervisor/image\",\"value\":\"${v2_hypervisor_image}\"},
+  {\"op\":\"add\",\"path\":\"/spec/gpuPools/0/specTemplate/nodeManagerConfig/defaultIsolationMode\",\"value\":\"soft\"},
+  {\"op\":\"add\",\"path\":\"/spec/gpuPools/0/specTemplate/nodeManagerConfig/isolationModeRules\",\"value\":[]}
+]"
 kubectl -n ${ns} set image deploy/${controller_deploy} \
   controller=${v2_operator_image}
 
@@ -304,7 +361,7 @@ kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
 - v1/v2 Hypervisor 都使用 `hypervisor-<node>`。v2 operator 会删除旧 UID，再用相同名称创建 v2 Pod；不要把手动删除旧 Pod作为正常升级步骤。
 - 如果同名 Pod 长时间卡在 Terminating/CrashLoop，可在确认 v2 operator、TFC 镜像和 scheduler ConfigMap 均正确后，按节点删除该 Pod作为故障恢复；不要用宽泛 selector 一次删除所有节点。
 - hypervisor / worker / client 镜像由 GPUPool / TensorFusionCluster 的 `componentConfig` 控制，不需要修改 operator Deployment 中的其他容器。
-- `INITIAL_GPU_NODE_LABEL_SELECTOR`：v2 chart 去掉了默认值 `nvidia.com/gpu.present=true`，但现网 Deployment 里该 env 已是渲染后的实际值，只换镜像不受影响。
+- `INITIAL_GPU_NODE_LABEL_SELECTOR`：Chart 默认仍为 `nvidia.com/gpu.present=true`。现网 Deployment 里该 env 已是渲染后的实际值，本流程只换 operator 镜像，不会覆盖它；多厂商环境继续保留现网实际 selector。
 - v2 Hypervisor 必须包含“启动时根据运行中 Pod 的 `gpu-ids`、isolation、算力和显存注解恢复 soft/shared/hard allocation”的修复。未包含该修复的版本虽然不会重建业务 Pod，但存量 Pod 内新启动的 CUDA/NVML 进程会报 `Pod ... not found`。
 
 ### 步骤 4：升级后的功能迁移（不阻塞升级，按需进行）
@@ -316,50 +373,10 @@ v2 operator 不再读取以下 v1 字段（字段保留仅为兼容与回退，�
 | `client.remoteModeImage` / `embeddedModeImage` | 合并为 `client.image`（ProviderConfig 存在时以其为准） |
 | `componentConfig.nodeDiscovery` | 节点发现已内置 |
 | `gpu.status.nvLink` / `model` | `status.topology`（控制器自动重建）/ ProviderConfig.hardwareMetadata |
-| `gpu-info` ConfigMap | ProviderConfig CRD（按厂商创建，参考 `config/samples/v1_providerconfig.yaml`，NVIDIA 默认配置可用 chart 模板 `templates/provider-config-nvidia.yaml` 渲染） |
+| `gpu-info` ConfigMap | ProviderConfig CRD（按厂商创建，参考 `config/samples/provider-nvidia.yaml`；NVIDIA 默认配置也可用 chart 模板 `templates/provider-config-nvidia.yaml` 渲染） |
 
-#### shared 整卡 workload
-
-沿用已有 dedicated GPU 请求方式，用户侧不需要填写 TFLOPS/VRAM request/limit：
-
-```yaml
-metadata:
-  labels:
-    tensor-fusion.ai/enabled: "true"
-  annotations:
-    tensor-fusion.ai/dedicated-gpu: "true"
-    tensor-fusion.ai/gpu-count: "1"
-    tensor-fusion.ai/gpu-model: "<gpu-model>"
-    tensor-fusion.ai/gpupool: "<pool-name>"
-    tensor-fusion.ai/is-local-gpu: "true" # 远程模式改为 "false"
-    tensor-fusion.ai/isolation: "shared"
-    tensor-fusion.ai/vendor: "NVIDIA"
-```
-
-webhook 根据 `dedicated-gpu` 和 `gpu-model` 在内部补齐所选型号的整卡 TFLOPS/VRAM 容量；allocator 最终将所选 GPU 的 available TFLOPS/VRAM 都记为 0。不要在 shared workload 上填写切片值（例如 `10 TFLOPS / 1Gi`），避免用户声明与整卡实际分配不一致。
-
-#### hard workload 的算力与显存
-
-hard 模式支持两种算力写法，二选一：
-
-```yaml
-# 百分比：直接注入 hard limiter
-tensor-fusion.ai/compute-percent-request: "20"
-tensor-fusion.ai/compute-percent-limit: "20"
-
-# 绝对值：scheduler 选卡后按 GPU CR 容量换算百分比
-tensor-fusion.ai/tflops-request: "10"
-tensor-fusion.ai/tflops-limit: "10"
-```
-
-绝对 TFLOPS 使用所选 `GPU.status.capacity.tflops` 换算并向上取整。例如 GPU 容量为 80 TFLOPS、请求 10 TFLOPS 时，`10 / 80 * 100` 注入为 `TF_CUDA_SM_PERCENT_LIMIT=13`。不要使用 hypervisor 运行时探测出的理论 TFLOPS 作为换算基数。
-
-VRAM 仍只支持绝对值（例如 `1Gi`），不支持百分比：
-
-```yaml
-tensor-fusion.ai/vram-request: "1Gi"
-tensor-fusion.ai/vram-limit: "1Gi"
-```
+shared、soft、hard、partitioned workload 的 annotation 样例、厂商支持范围和验证方法见
+[跨厂商测试矩阵](cross-vendor-test-matrix.md)，本升级文档不再重复维护。
 
 ### 步骤 5：验证
 
@@ -468,14 +485,14 @@ kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
 
 ## 检查清单
 
-- [ ] 已从公开 Helm 仓库下载并固定 Chart `1.8.1`，`appVersion=2.14.0`；未执行 `helm upgrade`
+- [ ] 已从公开 Helm 仓库下载并固定 Chart `1.8.2`，`appVersion=2.15.0`；兼容字段和隔离策略字段预检通过，且未执行 `helm upgrade`
 - [ ] CRD 来自 compat 改动合并后的 main（预检 1 通过）
 - [ ] `nodeManagerConfig` / `gpuCount` 预检通过，所有待升级 pool 均为 `autoUpdateHypervisor=true`
 - [ ] 已全量备份 CRD、CR、Helm values、v1 ConfigMap 与 controller Deployment
 - [ ] ProviderConfig 的 `remoteClient` / `remoteWorker` 已记录并固定为现有明确版本，升级后值保持不变
 - [ ] 先 apply CRD/RBAC，再将 operator 缩容到 0，并在停止窗口内同步切换 v2 ConfigMap、operator/Hypervisor 镜像
 - [ ] （Karpenter 环境）NodeOverlay 已声明 `index_0..index_f`，且保留旧 `tensor-fusion.ai/index`
-- [ ] GPU 节点已按用途标记 `tensor-fusion.ai/isolationMode=soft|hard|partitioned`（已有 shared label 可保留兼容，但不再要求）
+- [ ] 每个待升级 GPUPool 已规划 `defaultIsolationMode` 和有序的 `isolationModeRules`；每条 selector 的实际命中节点及重叠优先级均已核对
 - [ ] v1/v2 Hypervisor 名称均为 `hypervisor-<node>`；升级后 UID 已变化、镜像为 v2、每节点仅一个 Pod
 - [ ] 有 GPUNode 的待升级 pool 为 `hypervisorUpdateProgress=100`、`hypervisorConfigSynced=true`；空 pool 已单独核对配置
 - [ ] 升级后 Cluster/Pool=Running，local/remote 测试 Workload 可调度并能实际调用 CUDA/NVML

@@ -66,6 +66,10 @@ func (w *Worker) SetUpdateProgress(status *tfv1.PoolComponentStatus, progress in
 	}
 }
 
+func (w *Worker) IsConfigSynced(status *tfv1.PoolComponentStatus) bool {
+	return status.WorkerConfigSynced
+}
+
 func (w *Worker) GetResourcesInfo(r client.Client, ctx context.Context, pool *tfv1.GPUPool, configHash string) (int, int, bool, error) {
 	log := log.FromContext(ctx)
 	workloadList := &tfv1.TensorFusionWorkloadList{}

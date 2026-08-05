@@ -104,6 +104,7 @@ spec:
                       memory: 128Mi
       nodeManagerConfig:
         defaultVendor: MooreThreads
+        defaultIsolationMode: soft
         nodeCompaction:
           period: 30m
         nodePoolRollingUpdatePolicy:

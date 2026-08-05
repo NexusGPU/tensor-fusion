@@ -43,15 +43,13 @@ var _ = Describe("Node Controller", func() {
 		})
 	})
 
-	Context("GPUNode label propagation", func() {
-		It("Should copy isolation-mode label when creating gpunode", func() {
+	Context("GPUNode vendor label propagation", func() {
+		It("Should copy vendor label when creating gpunode", func() {
 			reconciler := &NodeReconciler{Scheme: k8sClient.Scheme()}
 			node := &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-node",
-					Labels: map[string]string{
-						constants.HypervisorIsolationModeLabel: string(tfv1.IsolationModePartitioned),
-					},
+					Name:   "test-node",
+					Labels: map[string]string{constants.AcceleratorLabelVendor: "Ascend"},
 				},
 			}
 			pool := &tfv1.GPUPool{
@@ -59,16 +57,15 @@ var _ = Describe("Node Controller", func() {
 			}
 
 			gpuNode := reconciler.generateGPUNode(node, pool, "")
-			Expect(gpuNode.Labels[constants.HypervisorIsolationModeLabel]).To(Equal(string(tfv1.IsolationModePartitioned)))
+			Expect(gpuNode.Labels[constants.AcceleratorLabelVendor]).To(Equal("Ascend"))
 		})
 
-		It("Should sync vendor and isolation-mode labels from node to existing gpunode", func() {
+		It("Should sync vendor label from node to existing gpunode", func() {
 			node := &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test-node-sync",
 					Labels: map[string]string{
-						constants.AcceleratorLabelVendor:       "Ascend",
-						constants.HypervisorIsolationModeLabel: string(tfv1.IsolationModeShared),
+						constants.AcceleratorLabelVendor: "Ascend",
 					},
 				},
 			}
@@ -76,8 +73,7 @@ var _ = Describe("Node Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test-node-sync",
 					Labels: map[string]string{
-						constants.AcceleratorLabelVendor:       "NVIDIA",
-						constants.HypervisorIsolationModeLabel: string(tfv1.IsolationModePartitioned),
+						constants.AcceleratorLabelVendor: "NVIDIA",
 					},
 				},
 			}
@@ -85,10 +81,9 @@ var _ = Describe("Node Controller", func() {
 			changed := syncGPUNodeLabelsFromNode(node, gpuNode)
 			Expect(changed).To(BeTrue())
 			Expect(gpuNode.Labels[constants.AcceleratorLabelVendor]).To(Equal("Ascend"))
-			Expect(gpuNode.Labels[constants.HypervisorIsolationModeLabel]).To(Equal(string(tfv1.IsolationModeShared)))
 		})
 
-		It("Should remove vendor and isolation-mode labels on gpunode when absent on node", func() {
+		It("Should remove vendor label when absent on node", func() {
 			node := &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:   "test-node-clear",
@@ -99,8 +94,7 @@ var _ = Describe("Node Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test-node-clear",
 					Labels: map[string]string{
-						constants.AcceleratorLabelVendor:       "Ascend",
-						constants.HypervisorIsolationModeLabel: string(tfv1.IsolationModeShared),
+						constants.AcceleratorLabelVendor: "Ascend",
 					},
 				},
 			}
@@ -108,9 +102,7 @@ var _ = Describe("Node Controller", func() {
 			changed := syncGPUNodeLabelsFromNode(node, gpuNode)
 			Expect(changed).To(BeTrue())
 			_, hasVendor := gpuNode.Labels[constants.AcceleratorLabelVendor]
-			_, hasMode := gpuNode.Labels[constants.HypervisorIsolationModeLabel]
 			Expect(hasVendor).To(BeFalse())
-			Expect(hasMode).To(BeFalse())
 		})
 	})
 

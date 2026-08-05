@@ -116,6 +116,7 @@ spec:
                       memory: 128Mi
       nodeManagerConfig:
         defaultVendor: NVIDIA
+        defaultIsolationMode: soft
         nodeCompaction:
           period: 30m
         nodePoolRollingUpdatePolicy:
@@ -239,6 +240,7 @@ spec:
                 runtimeClassName: ascend
       nodeManagerConfig:
         defaultVendor: Ascend
+        defaultIsolationMode: soft
         nodeCompaction:
           period: 30m
         nodePoolRollingUpdatePolicy:
@@ -409,6 +411,7 @@ spec:
                       memory: 128Mi
       nodeManagerConfig:
         defaultVendor: MooreThreads
+        defaultIsolationMode: soft
         nodeCompaction:
           period: 30m
         nodePoolRollingUpdatePolicy:
@@ -530,6 +533,7 @@ spec:
                       memory: 128Mi
       nodeManagerConfig:
         defaultVendor: PPU
+        defaultIsolationMode: soft
         nodeCompaction:
           period: 30m
         nodePoolRollingUpdatePolicy:

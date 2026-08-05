@@ -461,6 +461,11 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 		log.V(1).Info("hypervisor prerequisites are ready", "node", node.Name)
 	}
 
+	desiredIsolationMode, err := utils.ResolveNodeIsolationMode(k8sNode, pool.Spec.NodeManagerConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve isolation mode for node %s: %w", node.Name, err)
+	}
+
 	// If pod exists and prerequisites are satisfied, verify its status
 	if podExists {
 		if crashedContainer, restartCount, threshold, ok := hypervisorPodCrashExceeded(currentPod); ok {
@@ -479,12 +484,20 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 			return "", nil
 		}
 
-		desiredIsolationMode := getHypervisorIsolationModeFromNodeLabel(node)
-		if !isHypervisorIsolationModeConfigured(currentPod, desiredIsolationMode) {
+		if !isHypervisorIsolationModeConfigured(currentPod, string(desiredIsolationMode)) {
+			// Pool policy changes use the existing batched Hypervisor rollout.
+			// Running nodes wait until the pool controller selects them by
+			// moving the GPUNode to Pending.
+			if node.Status.Phase == tfv1.TensorFusionGPUNodePhaseRunning && hypervisorPolicyUpdatePending(pool) {
+				log.Info("hypervisor isolation mode update is waiting for pool rollout",
+					"name", currentPod.Name,
+					"desiredIsolationMode", desiredIsolationMode)
+				return key.Name, nil
+			}
 			if err := r.Delete(ctx, currentPod); err != nil {
 				return "", fmt.Errorf("failed to delete hypervisor pod with outdated isolation mode: %w", err)
 			}
-			log.Info("hypervisor pod deleted due to isolation mode label change",
+			log.Info("hypervisor pod deleted due to isolation mode change",
 				"name", currentPod.Name,
 				"desiredIsolationMode", desiredIsolationMode)
 			return "", nil
@@ -501,7 +514,7 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 			return "", nil
 		}
 
-		newHash := utils.HypervisorPodTemplateHash(pool, vendor)
+		newHash := utils.HypervisorPodTemplateHash(pool, vendor, desiredIsolationMode)
 		if utils.IsPodStopped(currentPod) || oldHash != newHash {
 			if err := r.Delete(ctx, currentPod); err != nil {
 				return "", fmt.Errorf("failed to delete old hypervisor pod: %w", err)
@@ -563,7 +576,11 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	}
 	log.Info("adding hypervisor manifest for GPU node", "node", node.Name, "vendor", vendor)
 	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool, vendor, r.CompatibleWithNvidiaContainerToolkit)
-	applyHypervisorIsolationModeArg(&spec, getHypervisorIsolationModeFromNodeLabel(node))
+	isolationMode, err := utils.ResolveNodeIsolationMode(k8sNode, pool.Spec.NodeManagerConfig)
+	if err != nil {
+		return fmt.Errorf("failed to resolve isolation mode for node %s: %w", node.Name, err)
+	}
+	applyHypervisorIsolationModeArg(&spec, string(isolationMode))
 
 	// add vendor-specific env vars for multi-vendor support
 	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
@@ -654,7 +671,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	}
 
 	// compose the final pod and set tolerations and controller reference
-	newHash := utils.HypervisorPodTemplateHash(pool, vendor)
+	newHash := utils.HypervisorPodTemplateHash(pool, vendor, isolationMode)
 	newPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      key.Name,
@@ -1084,11 +1101,12 @@ func normalizeProviderMountModelKey(model string) string {
 	return strings.ToLower(strings.TrimSpace(model))
 }
 
-func getHypervisorIsolationModeFromNodeLabel(node *tfv1.GPUNode) string {
-	if node == nil || node.Labels == nil {
-		return ""
+func hypervisorPolicyUpdatePending(pool *tfv1.GPUPool) bool {
+	if pool == nil {
+		return false
 	}
-	return node.Labels[constants.HypervisorIsolationModeLabel]
+	status := pool.Status.ComponentStatus
+	return status.HypervisorVersion != utils.HypervisorTemplateHash(pool) || !status.HypervisorConfigSynced
 }
 
 func applyHypervisorIsolationModeArg(spec *corev1.PodSpec, isolationMode string) {

@@ -167,6 +167,11 @@ spec:
                           memory: 8Gi
         nodeManagerConfig:
           defaultVendor: NVIDIA
+          defaultIsolationMode: {{ $c.pool.defaultIsolationMode | default "soft" }}
+          {{- with $c.pool.isolationModeRules }}
+          isolationModeRules:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           provisioningMode: AutoSelect
           nodeCompaction:
             period: 30m

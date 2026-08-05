@@ -88,6 +88,16 @@ type NodeManagerConfig struct {
 	// +kubebuilder:default="AutoSelect"
 	ProvisioningMode ProvisioningMode `json:"provisioningMode,omitempty"`
 
+	// DefaultIsolationMode is used when no IsolationModeRule matches a node.
+	// +optional
+	// +kubebuilder:default=soft
+	DefaultIsolationMode IsolationModeType `json:"defaultIsolationMode,omitempty"`
+
+	// IsolationModeRules select a node isolation mode from its Kubernetes
+	// labels. Rules are evaluated in order and the first match wins.
+	// +optional
+	IsolationModeRules []NodeIsolationModeRule `json:"isolationModeRules,omitempty"`
+
 	// +optional
 	// +kubebuilder:default=NVIDIA
 	// In single AI accelerator hardware vendor mode, when default vendor set
@@ -110,6 +120,12 @@ type NodeManagerConfig struct {
 
 	// +optional
 	NodePoolRollingUpdatePolicy *NodeRollingUpdatePolicy `json:"nodePoolRollingUpdatePolicy,omitempty"`
+}
+
+type NodeIsolationModeRule struct {
+	Mode IsolationModeType `json:"mode"`
+
+	Selector metav1.LabelSelector `json:"selector"`
 }
 
 // +kubebuilder:validation:Enum=Provisioned;AutoSelect;Karpenter
