@@ -57,9 +57,6 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	By("Ensure that Prometheus is enabled")
-	_ = utils.UncommentCode("config/default/kustomization.yaml", "#- ../prometheus", "#")
-
 	By("generating files")
 	cmd := exec.Command("make", "generate")
 	_, err := utils.Run(cmd)
@@ -84,7 +81,8 @@ var _ = BeforeSuite(func() {
 	// The tests-e2e are intended to run on a temporary cluster that is created and destroyed for testing.
 	// To prevent errors when tests run in environments with Prometheus or CertManager already installed,
 	// we check for their presence before execution.
-	// Setup Prometheus and CertManager before the suite if not skipped and if not already installed
+	// The E2E Kustomize overlay deploys Prometheus and cert-manager resources.
+	// Install their operators before applying that overlay.
 	if !skipPrometheusInstall {
 		By("checking if prometheus is installed already")
 		isPrometheusOperatorAlreadyInstalled = utils.IsPrometheusCRDsInstalled()

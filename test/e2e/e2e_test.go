@@ -31,7 +31,11 @@ import (
 )
 
 // namespace where the project is deployed in
-const namespace = "tensor-fusion-system"
+const namespace = "tensor-fusion"
+
+const e2eDeployConfig = "config/e2e"
+
+const leaderElectionID = "85104305.tensor-fusion.ai"
 
 // serviceAccountName created for the project
 const serviceAccountName = "tensor-fusion-controller-manager"
@@ -59,7 +63,8 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
 		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
+		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage),
+			fmt.Sprintf("DEPLOY_CONFIG=%s", e2eDeployConfig))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -72,7 +77,7 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
+		cmd = exec.Command("make", "undeploy", fmt.Sprintf("DEPLOY_CONFIG=%s", e2eDeployConfig))
 		_, _ = utils.Run(cmd)
 
 		By("uninstalling CRDs")
@@ -161,6 +166,14 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(output).To(Equal("Running"), "Incorrect controller-manager pod status")
 			}
 			Eventually(verifyControllerUp).Should(Succeed())
+
+			By("validating that the controller-manager acquired its leader lease")
+			verifyLeaderElection := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "lease", leaderElectionID, "-n", namespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+			Eventually(verifyLeaderElection).Should(Succeed())
 		})
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
@@ -201,7 +214,7 @@ var _ = Describe("Manager", Ordered, func() {
 				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("controller-runtime.metrics\tServing metrics server"),
+				g.Expect(output).To(ContainSubstring("Serving metrics server"),
 					"Metrics server not yet started")
 			}
 			Eventually(verifyMetricsServerStarted).Should(Succeed())
