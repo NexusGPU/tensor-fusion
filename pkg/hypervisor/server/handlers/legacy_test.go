@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	hyperapi "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 	workerstate "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/worker/state"
@@ -83,6 +84,27 @@ func (f *fakeBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler {
 
 func (f *fakeBackend) ListWorkers() []*hyperapi.WorkerInfo { return nil }
 
+func TestNewLegacyHandlerLoadsAutoFreezeConfig(t *testing.T) {
+	t.Setenv(constants.HypervisorSchedulingConfigEnv, `{
+		"autoFreezeAndResume": {
+			"autoFreeze": [{
+				"qos": "low",
+				"enable": true,
+				"freezeToMemTTL": "1m",
+				"freezeToDiskTTL": "1h"
+			}]
+		}
+	}`)
+
+	handler := NewLegacyHandler(nil, nil, nil, nil)
+	if len(handler.autoFreeze) != 1 {
+		t.Fatalf("expected one auto-freeze rule, got %d", len(handler.autoFreeze))
+	}
+	if handler.autoFreeze[0].Qos != tfv1.QoSLow || handler.autoFreeze[0].Enable == nil || !*handler.autoFreeze[0].Enable {
+		t.Fatalf("unexpected auto-freeze rule: %#v", handler.autoFreeze[0])
+	}
+}
+
 func TestHandleGetPodsModernResponse(t *testing.T) {
 	t.Parallel()
 
@@ -102,6 +124,13 @@ func TestHandleGetPodsModernResponse(t *testing.T) {
 		nil, nil,
 	)
 	handler.shmBasePath = t.TempDir()
+	enableAutoFreeze := true
+	handler.autoFreeze = []tfv1.AutoFreeze{{
+		Qos:             tfv1.QoSLow,
+		FreezeToMemTTL:  "1m",
+		FreezeToDiskTTL: "1h",
+		Enable:          &enableAutoFreeze,
+	}}
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -143,6 +172,15 @@ func TestHandleGetPodsModernResponse(t *testing.T) {
 	}
 	if response.Data.ComputeShard {
 		t.Fatalf("compute_shard should default to false")
+	}
+	if response.Data.AutoFreeze == nil || !response.Data.AutoFreeze.Enable {
+		t.Fatal("expected enabled auto-freeze config for low QoS")
+	}
+	if response.Data.AutoFreeze.FreezeToMemTTL == nil || *response.Data.AutoFreeze.FreezeToMemTTL != "1m" {
+		t.Fatalf("unexpected freeze-to-memory TTL: %#v", response.Data.AutoFreeze.FreezeToMemTTL)
+	}
+	if response.Data.AutoFreeze.FreezeToDiskTTL == nil || *response.Data.AutoFreeze.FreezeToDiskTTL != "1h" {
+		t.Fatalf("unexpected freeze-to-disk TTL: %#v", response.Data.AutoFreeze.FreezeToDiskTTL)
 	}
 
 	// Note: shared memory file creation requires liblimiter.so which is not loaded in tests.

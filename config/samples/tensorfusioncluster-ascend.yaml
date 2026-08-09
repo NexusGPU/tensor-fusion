@@ -41,8 +41,8 @@ spec:
           patchToPod:
             spec: {}
         hypervisor:
-          enableVector: true
-          image: docker.io/tensorfusion/tensor-fusion-hypervisor:latest
+          image: docker.io/tensorfusion/tensor-fusion-hypervisor:2.15.1
+          vectorImage: docker.1ms.run/timberio/vector:latest-alpine
           podTemplate:
             template:
               metadata:
@@ -71,21 +71,11 @@ spec:
                   - mountPath: /usr/local/sbin/npu-smi
                     name: host-npu-smi
                     readOnly: true
-                - name: vector
-                  resources:
-                    requests:
-                      cpu: 50m
-                      memory: 64Mi
-                securityContext:
-                  runAsGroup: 0
-                  runAsUser: 0
                 volumes:
                 - hostPath:
                     path: /usr/local/sbin/npu-smi
                     type: File
                   name: host-npu-smi
-          portNumber: 8001
-          vectorImage: docker.1ms.run/timberio/vector:latest-alpine
         worker:
           image: rgpu-work:latest
           podTemplate:

@@ -459,10 +459,13 @@ func parseGPUResourcesAnnotations(pod *corev1.Pod, workloadProfile *tfv1.Workloa
 						containerGPUCounts[container.Name] = gpuNumber
 						// Accumulate GPU count from all containers
 						workloadProfile.Spec.GPUCount += uint32(gpuNumber)
-						// For seamless migration with only one tensor-fusion.ai/enabled label
-						// and one tensor-fusion.ai/vram-limit annotation, convert this to 100% computing-percent
+						// Fractional isolation needs an explicit resource amount when
+						// migrating a native whole-GPU claim. Shared allocation is already
+						// defined by GPU count and reserves the full selected cards.
 						if !isMigratedFromContainerLimits {
-							workloadProfile.Spec.Resources.Limits.ComputePercent = resource.MustParse("100")
+							if workloadProfile.Spec.Isolation != tfv1.IsolationModeShared {
+								workloadProfile.Spec.Resources.Limits.ComputePercent = resource.MustParse("100")
+							}
 							isMigratedFromContainerLimits = true
 						}
 						// Collect container names for inject annotation

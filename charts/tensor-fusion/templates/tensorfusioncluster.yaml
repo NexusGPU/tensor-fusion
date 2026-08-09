@@ -99,9 +99,7 @@ spec:
             patchToPod:
               spec: {}
           hypervisor:
-            enableVector: true
             image: {{ $c.hypervisorImage | quote }}
-            portNumber: 8001
             vectorImage: {{ $c.vectorImage | default "docker.io/timberio/vector:latest-alpine" | quote }}
             podTemplate:
               template:
@@ -129,14 +127,6 @@ spec:
                         privileged: true
                         runAsUser: 0
                         runAsGroup: 0
-                    - name: vector
-                      resources:
-                        requests:
-                          cpu: 50m
-                          memory: 64Mi
-                  securityContext:
-                    runAsUser: 0
-                    runAsGroup: 0
           nodeDiscovery:
             image: {{ $c.nodeDiscoveryImage | default "docker.io/tensorfusion/tensor-fusion-node-discovery:latest" | quote }}
             podTemplate:

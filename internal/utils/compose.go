@@ -117,6 +117,16 @@ func appendEnvIfMissing(envList []v1.EnvVar, envs ...v1.EnvVar) []v1.EnvVar {
 	return envList
 }
 
+func setEnv(envList []v1.EnvVar, env v1.EnvVar) []v1.EnvVar {
+	result := envList[:0]
+	for _, item := range envList {
+		if item.Name != env.Name {
+			result = append(result, item)
+		}
+	}
+	return append(result, env)
+}
+
 func appendRemoteVendorToolMounts(volumeMounts []v1.VolumeMount, vendor, volumeName string) []v1.VolumeMount {
 	switch {
 	case shouldInjectNvidiaVisibleDevices(vendor):
@@ -959,12 +969,17 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 		})
 	}
 
-	spec.Containers[0].SecurityContext = &v1.SecurityContext{
-		Capabilities: &v1.Capabilities{
-			Add: []v1.Capability{
-				constants.SystemPtraceCapability,
-			},
-		},
+	if spec.Containers[0].SecurityContext == nil {
+		spec.Containers[0].SecurityContext = &v1.SecurityContext{}
+	}
+	if spec.Containers[0].SecurityContext.Capabilities == nil {
+		spec.Containers[0].SecurityContext.Capabilities = &v1.Capabilities{}
+	}
+	if !lo.Contains(spec.Containers[0].SecurityContext.Capabilities.Add, constants.SystemPtraceCapability) {
+		spec.Containers[0].SecurityContext.Capabilities.Add = append(
+			spec.Containers[0].SecurityContext.Capabilities.Add,
+			constants.SystemPtraceCapability,
+		)
 	}
 	applyProviderHypervisorConfig(spec, vendor)
 
@@ -981,15 +996,20 @@ func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor str
 
 	port := getHypervisorPortNumber(pool.Spec.ComponentConfig.Hypervisor)
 	spec.ServiceAccountName = constants.HypervisorServiceAccountName
+	spec.Containers[0].Env = setEnv(spec.Containers[0].Env, v1.EnvVar{
+		Name:  constants.HypervisorListenAddrEnv,
+		Value: fmt.Sprintf("%s:%d", constants.DefaultHttpBindIP, port),
+	})
+	spec.Containers[0].Env = setEnv(spec.Containers[0].Env, v1.EnvVar{
+		Name:  constants.HypervisorPortEnv,
+		Value: strconv.Itoa(int(port)),
+	})
 	spec.Containers[0].Env = append(spec.Containers[0].Env, v1.EnvVar{
 		Name:  constants.HypervisorPoolNameEnv,
 		Value: pool.Name,
 	}, v1.EnvVar{
 		Name:  constants.TensorFusionGPUInfoEnvVar,
 		Value: constants.TensorFusionGPUInfoConfigMountPath,
-	}, v1.EnvVar{
-		Name:  constants.HypervisorListenAddrEnv,
-		Value: fmt.Sprintf("%s:%d", constants.DefaultHttpBindIP, port),
 	}, v1.EnvVar{
 		Name: constants.PodNameEnv,
 		ValueFrom: &v1.EnvVarSource{

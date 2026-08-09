@@ -122,6 +122,15 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 				return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to marshal current pod: %w", err))
 			}
 			pod.Labels[constants.TensorFusionEnabledLabelKey] = constants.TrueStringValue
+			// Native GPU resources represent whole-card claims. Preserve an explicit
+			// TensorFusion isolation annotation, otherwise migrate them to the
+			// equivalent shared whole-GPU allocation policy.
+			if _, explicitIsolation := pod.Annotations[constants.IsolationModeAnnotation]; !explicitIsolation {
+				if pod.Annotations == nil {
+					pod.Annotations = make(map[string]string)
+				}
+				pod.Annotations[constants.IsolationModeAnnotation] = string(tfv1.IsolationModeShared)
+			}
 		} else {
 			if utils.IsProgressiveMigration() {
 				return admission.Patched("set scheduler to tensor-fusion-scheduler", jsonpatch.JsonPatchOperation{
@@ -211,7 +220,8 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	// so an empty request is expected and must not be rejected here.
 	pinnedPartition := tfInfo.Profile.Isolation == tfv1.IsolationModePartitioned &&
 		tfInfo.Profile.PartitionTemplateID != ""
-	if !pinnedPartition &&
+	sharedWholeGPU := tfInfo.Profile.Isolation == tfv1.IsolationModeShared && tfInfo.Profile.GPUCount > 0
+	if !pinnedPartition && !sharedWholeGPU &&
 		tfInfo.Profile.Resources.Requests.Tflops.IsZero() &&
 		tfInfo.Profile.Resources.Requests.ComputePercent.IsZero() &&
 		tfInfo.Profile.Resources.Requests.Vram.IsZero() {

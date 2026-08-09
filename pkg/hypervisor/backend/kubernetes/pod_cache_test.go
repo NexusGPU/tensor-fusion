@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	corev1 "k8s.io/api/core/v1"
@@ -409,6 +410,37 @@ func TestOnPodUpdate_ClearsStaleIndexWorkerInfo(t *testing.T) {
 		t.Fatalf("unexpected error after replacement pod arrived: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for replacement worker info")
+	}
+}
+
+func TestExtractWorkerInfoPreservesV1IsolationModes(t *testing.T) {
+	t.Parallel()
+
+	kc := &PodCacheManager{ctx: context.Background()}
+	for _, mode := range []tfv1.IsolationModeType{
+		tfv1.IsolationModeSoft,
+		tfv1.IsolationModeHard,
+		tfv1.IsolationModeShared,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			pod := createTestPodWithIndexAndGPUIds(1, "gpu-v1")
+			pod.Status.Phase = corev1.PodRunning
+			pod.Annotations[constants.IsolationModeAnnotation] = string(mode)
+
+			worker, _, err := kc.extractWorkerInfo(pod)
+			if err != nil {
+				t.Fatalf("extract v1 worker info: %v", err)
+			}
+			if worker.Status != api.WorkerStatusRunning {
+				t.Fatalf("status = %q, want %q", worker.Status, api.WorkerStatusRunning)
+			}
+			if worker.IsolationMode != mode {
+				t.Fatalf("isolation = %q, want %q", worker.IsolationMode, mode)
+			}
+			if len(worker.AllocatedDevices) != 1 || worker.AllocatedDevices[0] != "gpu-v1" {
+				t.Fatalf("allocated devices = %#v, want [gpu-v1]", worker.AllocatedDevices)
+			}
+		})
 	}
 }
 

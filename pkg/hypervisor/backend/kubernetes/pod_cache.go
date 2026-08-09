@@ -132,6 +132,9 @@ func (kc *PodCacheManager) Start() error {
 
 	// Start the informer
 	go controller.Run(kc.stopCh)
+	if !cache.WaitForCacheSync(kc.ctx.Done(), controller.HasSynced) {
+		return fmt.Errorf("failed to sync worker pod cache on node %s", kc.nodeName)
+	}
 
 	klog.Infof(
 		"Started watching worker pods on node %s with label %s=%s",

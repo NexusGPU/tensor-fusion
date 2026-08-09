@@ -35,6 +35,16 @@ func envValue(envs []corev1.EnvVar, name string) (string, bool) {
 	return "", false
 }
 
+func countEnv(envs []corev1.EnvVar, name string) int {
+	count := 0
+	for _, env := range envs {
+		if env.Name == name {
+			count++
+		}
+	}
+	return count
+}
+
 func hasEnvName(envs []corev1.EnvVar, name string) bool {
 	for _, env := range envs {
 		if env.Name == name {
@@ -177,6 +187,62 @@ var _ = Describe("Compose Utils", func() {
 			ascendSpec := &corev1.PodSpec{}
 			utils.AddTFHypervisorConfAfterTemplate(ctx, ascendSpec, pool, "Ascend", false)
 			Expect(hasNvidiaVisibleEnv(ascendSpec.Containers[0].Env)).To(BeFalse())
+		})
+
+		It("preserves the hypervisor container security context while adding SYS_PTRACE", func() {
+			ctx := context.Background()
+			runAsUser := int64(0)
+			runAsGroup := int64(0)
+			privileged := true
+			spec := &corev1.PodSpec{Containers: []corev1.Container{{
+				Name: constants.TFContainerNameHypervisor,
+				SecurityContext: &corev1.SecurityContext{
+					Privileged: &privileged,
+					RunAsUser:  &runAsUser,
+					RunAsGroup: &runAsGroup,
+				},
+			}}}
+			pool := &tfv1.GPUPool{Spec: tfv1.GPUPoolSpec{ComponentConfig: &tfv1.ComponentConfig{
+				Hypervisor: &tfv1.HypervisorConfig{Image: "test-image:latest"},
+			}}}
+
+			utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool, "NVIDIA", false)
+
+			securityContext := spec.Containers[0].SecurityContext
+			Expect(securityContext).NotTo(BeNil())
+			Expect(securityContext.Privileged).NotTo(BeNil())
+			Expect(*securityContext.Privileged).To(BeTrue())
+			Expect(securityContext.RunAsUser).NotTo(BeNil())
+			Expect(*securityContext.RunAsUser).To(Equal(int64(0)))
+			Expect(securityContext.RunAsGroup).NotTo(BeNil())
+			Expect(*securityContext.RunAsGroup).To(Equal(int64(0)))
+			Expect(securityContext.Capabilities.Add).To(ContainElement(corev1.Capability(constants.SystemPtraceCapability)))
+		})
+
+		It("passes the configured port to the hypervisor process", func() {
+			ctx := context.Background()
+			port := int32(8000)
+			spec := &corev1.PodSpec{Containers: []corev1.Container{{
+				Name: constants.TFContainerNameHypervisor,
+				Env: []corev1.EnvVar{
+					{Name: constants.HypervisorPortEnv, Value: "9000"},
+					{Name: constants.HypervisorListenAddrEnv, Value: "127.0.0.1:9000"},
+				},
+			}}}
+			pool := &tfv1.GPUPool{Spec: tfv1.GPUPoolSpec{ComponentConfig: &tfv1.ComponentConfig{
+				Hypervisor: &tfv1.HypervisorConfig{Image: "test-image:latest", PortNumber: &port},
+			}}}
+
+			utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool, "NVIDIA", false)
+
+			portValue, found := envValue(spec.Containers[0].Env, constants.HypervisorPortEnv)
+			Expect(found).To(BeTrue())
+			Expect(portValue).To(Equal("8000"))
+			listenAddr, found := envValue(spec.Containers[0].Env, constants.HypervisorListenAddrEnv)
+			Expect(found).To(BeTrue())
+			Expect(listenAddr).To(Equal("0.0.0.0:8000"))
+			Expect(countEnv(spec.Containers[0].Env, constants.HypervisorPortEnv)).To(Equal(1))
+			Expect(countEnv(spec.Containers[0].Env, constants.HypervisorListenAddrEnv)).To(Equal(1))
 		})
 	})
 

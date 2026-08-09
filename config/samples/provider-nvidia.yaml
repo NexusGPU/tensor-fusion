@@ -25,11 +25,21 @@ spec:
   inUseResourceNames:
   - nvidia.com/gpu
   - nvidia.com/mig-1g.10gb
+  - nvidia.com/mig-1g.10gb.me
+  - nvidia.com/mig-1g.20gb
   - nvidia.com/mig-2g.20gb
   - nvidia.com/mig-3g.40gb
   - nvidia.com/mig-4g.40gb
   - nvidia.com/mig-7g.80gb
+  - nvidia.com/mig-1g.18gb
+  - nvidia.com/mig-1g.18gb.me
+  - nvidia.com/mig-1g.35gb
+  - nvidia.com/mig-2g.35gb
+  - nvidia.com/mig-3g.71gb
+  - nvidia.com/mig-4g.71gb
+  - nvidia.com/mig-7g.141gb
   - nvidia.com/mig-1g.5gb
+  - nvidia.com/mig-1g.5gb.me
   - nvidia.com/mig-2g.10gb
   - nvidia.com/mig-3g.20gb
   - nvidia.com/mig-4g.20gb
@@ -150,6 +160,32 @@ spec:
     - nv-80g-3g-40gb
     - nv-80g-4g-40gb
     - nv-80g-7g-80gb
+  - costPerHour: '3.99'
+    fp16TFlops: '989'
+    fullModelName: NVIDIA H200
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: H200
+    partitionTemplateRefs:
+    - nv-h200-1g-18gb
+    - nv-h200-1g-18gb-me
+    - nv-h200-1g-35gb
+    - nv-h200-2g-35gb
+    - nv-h200-3g-71gb
+    - nv-h200-4g-71gb
+    - nv-h200-7g-141gb
+  - costPerHour: '3.99'
+    fp16TFlops: '835'
+    fullModelName: NVIDIA H200 NVL
+    maxPartitions: 7
+    maxPlacementSlots: 8
+    model: H200_NVL
+    partitionTemplateRefs:
+    - nv-h200-1g-18gb
+    - nv-h200-2g-35gb
+    - nv-h200-3g-71gb
+    - nv-h200-4g-71gb
+    - nv-h200-7g-141gb
   - costPerHour: '1.49'
     fp16TFlops: '312'
     fullModelName: NVIDIA A100-SXM4-40GB
@@ -220,6 +256,10 @@ spec:
     fp16TFlops: '125'
     fullModelName: NVIDIA A10
     model: A10
+  - costPerHour: '0.80'
+    fp16TFlops: '125'
+    fullModelName: NVIDIA A10G
+    model: A10G
   - costPerHour: '1.10'
     fp16TFlops: '149.7'
     fullModelName: NVIDIA A40-PCIE-48GB
@@ -240,6 +280,10 @@ spec:
     fp16TFlops: '65'
     fullModelName: Tesla T4
     model: T4
+  - costPerHour: '0.25'
+    fp16TFlops: '71.2'
+    fullModelName: NVIDIA GeForce RTX 3090
+    model: RTX3090
   - costPerHour: '0.30'
     fp16TFlops: '165.16'
     fullModelName: NVIDIA GeForce RTX 4090
@@ -336,6 +380,101 @@ spec:
     maxInstances: 1
     memoryGigabytes: 80
     name: 7g.80gb
+    nvmlProfileId: 0
+    placementLimit:
+    - 0
+    placementOffset: 8
+  - computePercent: '14.2857'
+    description: 1/7 GPU slice with 18GB memory (H200 141GB)
+    id: nv-h200-1g-18gb
+    isolationGroupSharing: exclusive
+    maxInstances: 7
+    memoryGigabytes: 18
+    name: 1g.18gb
+    nvmlProfileId: 19
+    placementLimit:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    placementOffset: 1
+  - computePercent: '14.2857'
+    description: 1g.18gb + media engine (singleton)
+    id: nv-h200-1g-18gb-me
+    isolationGroupSharing: exclusive
+    maxInstances: 1
+    memoryGigabytes: 18
+    name: 1g.18gb+me
+    nvmlProfileId: 20
+    placementLimit:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    placementOffset: 1
+  - computePercent: '14.2857'
+    description: 1g slice with double memory (H200 SXM 141GB)
+    id: nv-h200-1g-35gb
+    isolationGroupSharing: exclusive
+    maxInstances: 4
+    memoryGigabytes: 35
+    name: 1g.35gb
+    nvmlProfileId: 15
+    placementLimit:
+    - 0
+    - 2
+    - 4
+    - 6
+    placementOffset: 2
+  - computePercent: '28.5714'
+    description: 2/7 GPU slice with 35GB memory (H200 141GB)
+    id: nv-h200-2g-35gb
+    isolationGroupSharing: exclusive
+    maxInstances: 3
+    memoryGigabytes: 35
+    name: 2g.35gb
+    nvmlProfileId: 14
+    placementLimit:
+    - 0
+    - 2
+    - 4
+    placementOffset: 2
+  - computePercent: '42.8571'
+    description: 3/7 GPU slice with 71GB memory (H200 141GB)
+    id: nv-h200-3g-71gb
+    isolationGroupSharing: exclusive
+    maxInstances: 2
+    memoryGigabytes: 71
+    name: 3g.71gb
+    nvmlProfileId: 9
+    placementLimit:
+    - 0
+    - 4
+    placementOffset: 4
+  - computePercent: '57.1428'
+    description: 4/7 GPU slice with 71GB memory (H200 141GB)
+    id: nv-h200-4g-71gb
+    isolationGroupSharing: exclusive
+    maxInstances: 1
+    memoryGigabytes: 71
+    name: 4g.71gb
+    nvmlProfileId: 5
+    placementLimit:
+    - 0
+    placementOffset: 4
+  - computePercent: '100'
+    description: Full H200 GPU with 141GB memory
+    id: nv-h200-7g-141gb
+    isolationGroupSharing: exclusive
+    maxInstances: 1
+    memoryGigabytes: 141
+    name: 7g.141gb
     nvmlProfileId: 0
     placementLimit:
     - 0
