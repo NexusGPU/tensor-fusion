@@ -126,6 +126,34 @@ var _ = Describe("Compose Utils", func() {
 			Entry("with vector", true, "test-image:latest", 2, 7),
 		)
 
+		It("does not duplicate NVIDIA validation volume already present in the pod template", func() {
+			ctx := context.Background()
+			spec := &corev1.PodSpec{
+				Volumes: []corev1.Volume{{
+					Name: "run-nvidia-validations",
+					VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+						Path: "/run/nvidia/validations",
+					}},
+				}},
+			}
+			pool := &tfv1.GPUPool{Spec: tfv1.GPUPoolSpec{ComponentConfig: &tfv1.ComponentConfig{
+				Hypervisor: &tfv1.HypervisorConfig{Image: "test-image:latest"},
+			}}}
+
+			utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool, "NVIDIA", true)
+
+			validationVolumes := make([]corev1.Volume, 0, 1)
+			for _, volume := range spec.Volumes {
+				if volume.Name == "run-nvidia-validations" {
+					validationVolumes = append(validationVolumes, volume)
+				}
+			}
+			Expect(validationVolumes).To(HaveLen(1))
+			Expect(validationVolumes[0].HostPath).NotTo(BeNil())
+			Expect(validationVolumes[0].HostPath.Path).To(Equal("/run/nvidia/validations"))
+			Expect(validationVolumes[0].HostPath.Type).To(BeNil(), "the existing template volume must win")
+		})
+
 		It("injects the pod-resources-tf volume/mount only when the proxy is enabled", func() {
 			ctx := context.Background()
 			pool := &tfv1.GPUPool{
