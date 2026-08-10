@@ -762,7 +762,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 	}
 
 	// add volumes of vector and configs
-	spec.Volumes = append(spec.Volumes, v1.Volume{
+	spec.Volumes = appendVolumesIfNotExists(spec.Volumes, v1.Volume{
 		Name: constants.DataVolumeName,
 		VolumeSource: v1.VolumeSource{
 			HostPath: &v1.HostPathVolumeSource{
@@ -821,7 +821,7 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 
 	if enablePodResourcesProxy {
 		// Sibling dir for the pod-resources proxy socket exposed to DCGM exporter.
-		spec.Volumes = append(spec.Volumes, v1.Volume{
+		spec.Volumes = appendVolumesIfNotExists(spec.Volumes, v1.Volume{
 			Name: constants.KubeletPodResourcesProxyVolumeName,
 			VolumeSource: v1.VolumeSource{
 				HostPath: &v1.HostPathVolumeSource{
@@ -927,7 +927,7 @@ func composeHypervisorInitContainer(
 		spec.InitContainers = append(spec.InitContainers, initContainer)
 
 		// Add volume for NVIDIA validations
-		spec.Volumes = append(spec.Volumes, v1.Volume{
+		spec.Volumes = appendVolumesIfNotExists(spec.Volumes, v1.Volume{
 			Name: "run-nvidia-validations",
 			VolumeSource: v1.VolumeSource{
 				HostPath: &v1.HostPathVolumeSource{
@@ -937,6 +937,24 @@ func composeHypervisorInitContainer(
 			},
 		})
 	}
+}
+
+// appendVolumesIfNotExists merges operator-provided volumes into a pod
+// template using Volume.name as the key. Volumes explicitly supplied by the
+// template take precedence.
+func appendVolumesIfNotExists(volumes []v1.Volume, newVolumes ...v1.Volume) []v1.Volume {
+	existingNames := make(map[string]struct{}, len(volumes)+len(newVolumes))
+	for _, volume := range volumes {
+		existingNames[volume.Name] = struct{}{}
+	}
+	for _, volume := range newVolumes {
+		if _, exists := existingNames[volume.Name]; exists {
+			continue
+		}
+		volumes = append(volumes, volume)
+		existingNames[volume.Name] = struct{}{}
+	}
+	return volumes
 }
 
 func composeHypervisorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool, vendor string, enableVector bool, enablePodResourcesProxy bool) {
