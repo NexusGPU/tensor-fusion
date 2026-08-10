@@ -10,7 +10,7 @@
 - CRD 的 group/version 不变，仍为 `tensor-fusion.ai/v1`，单一 served/storage 版本，无 Conversion Webhook，无 K8s API 版本迁移。
 - **v2 CRD 是 v1 schema 的严格超集**（逐字段比对验证）：无字段删除，v1 写入的数据在 v2 CRD 下完整保留。
 - 回退时 **CRD 保持 v2 不动**，但不能只换 operator 镜像：v1/v2 的 scheduler ConfigMap 和 Hypervisor 镜像必须与各自 operator 配套切换。
-- 升级顺序：**下载并固定 Helm Chart → 确认 `autoUpdateHypervisor=true` → apply CRD → 创建 NVIDIA ProviderConfig → 同步 RBAC → 切换 ConfigMap → 切换 operator 并等待 Ready → 切换 Hypervisor 镜像**。不需要将 operator 缩容到 0，也不需要手工删除 Hypervisor Pod。本文使用正式 Helm 包作为资源来源，但不执行 `helm upgrade`，避免更新同一 release 中的数据库、监控等其他组件。
+- 升级顺序：**下载并固定 Helm Chart → 确认 `autoUpdateHypervisor=true` → apply CRD → 创建 NVIDIA ProviderConfig → 同步 RBAC → 切换 ConfigMap → 切换 operator 并等待 Ready → 更新 Hypervisor 镜像和隔离策略**。必须在 v2 operator Ready 后再写入 v2 Hypervisor 镜像，避免 v1 operator 提前创建不兼容的 v2 Hypervisor。不需要将 operator 缩容到 0，也不需要手工删除 Hypervisor Pod。本文使用正式 Helm 包作为资源来源，但不执行 `helm upgrade`，避免更新同一 release 中的数据库、监控等其他组件。
 
 ---
 
@@ -100,6 +100,24 @@ nodeManagerConfig:
     batchInterval: 1s
     batchPercentage: 20
 ```
+
+升级期间必须保留每个 pool 现有的 `componentConfig.hypervisor.portNumber`。该端口在 v1
+业务 Pod 创建时已经固化为 `HYPERVISOR_PORT`，修改 TFC/GPUPool 不会更新存量 Pod；如果在
+替换 Hypervisor 镜像时同时把端口从 8001 改为 8000（或反向修改），存量 Pod 内新启动的
+CUDA/NVML 进程将继续访问旧端口。升级前记录两侧值并确认一致：
+
+```bash
+kubectl get gpupools -o custom-columns='POOL:.metadata.name,PORT:.spec.componentConfig.hypervisor.portNumber'
+kubectl get pods -A -l tensor-fusion.ai/component=worker -o json \
+  | jq -r '.items[]
+    | [.metadata.namespace, .metadata.name,
+       ([.spec.containers[].env[]?
+         | select(.name == "HYPERVISOR_PORT") | .value] | first // "-")]
+    | @tsv'
+```
+
+v2 Hypervisor 会继续使用保留下来的 `portNumber`。不要为了采用新安装默认值而在本次升级中
+删除或修改该字段；如确需改端口，应作为独立变更并重建所有依赖该 pool 的业务 Pod。
 
 升级前显式启用可以避免新镜像和隔离策略停留在待同步状态。若运维期间主动关闭自动更新，配置
 会保持待同步；重新启用后，状态机会自动创建 rollout campaign 并补做积压更新。
@@ -220,6 +238,18 @@ grep -E '^(kind: ProviderConfig|  name:|    (middleware|remoteClient|remoteWorke
   tf-backup/providerconfig-v2.yaml
 ```
 
+ProviderConfig 中的 `hardwareMetadata` 会成为 v2 的硬件容量数据源。渲染结果必须覆盖现网
+GPU 的完整型号，否则未命中的型号会退回运行时估算，升级后 TFLOPS 可能变化。至少对比以下
+两份型号列表，并把缺失的自定义型号补到 Helm values 后重新渲染：
+
+```bash
+kubectl get gpu -o json | jq -r '.items[].status.gpuModel' | sort -u
+grep -E '^[[:space:]]+fullModelName:' tf-backup/providerconfig-v2.yaml | sort -u
+kubectl get gpu -o json \
+  | jq -r '.items[] | [.metadata.name, .status.gpuModel, .status.capacity.tflops] | @tsv' \
+  > tf-backup/gpu-capacity-v1.tsv
+```
+
 ---
 
 ## 升级步骤
@@ -266,15 +296,18 @@ helm template ${release} "${chart}" -n ${ns} \
   -f tf-backup/helm-values.yaml \
   -s templates/rbac-hypervisor.yaml > tf-backup/rbac-hypervisor-v2.yaml
 
-kubectl apply --server-side \
+kubectl apply --server-side --force-conflicts \
   --dry-run=server \
   -f tf-backup/rbac-operator-v2.yaml \
   -f tf-backup/rbac-hypervisor-v2.yaml
 
-kubectl apply --server-side \
+kubectl apply --server-side --force-conflicts \
   -f tf-backup/rbac-operator-v2.yaml \
   -f tf-backup/rbac-hypervisor-v2.yaml
 ```
+
+v1 RBAC 通常由 Helm field manager 持有 `.rules`；缺少 `--force-conflicts` 时命令会报冲突，
+ClusterRole 实际不会获得 `providerconfigs` 权限。
 
 ### 步骤 3：更新 Karpenter 资源声明（使用 Karpenter 时必须）
 
@@ -354,7 +387,8 @@ nodeManagerConfig:
 `<release>-config` 的 `scheduler-config.yaml` 在 v1/v2 间互不兼容，因此在切换 operator
 镜像前渲染并 apply v2 ConfigMap。
 
-先设置目标镜像，并再次确认所有待升级 pool 已显式开启自动滚动：
+先定义目标镜像变量（此时不要把 v2 Hypervisor 镜像写入 TFC），并确认所有待升级 pool
+均已显式开启自动滚动：
 
 ```bash
 v2_operator_image=<registry>/tensor-fusion-operator:<v2-tag>
@@ -365,7 +399,7 @@ kubectl get gpupools -A -o json \
       .spec.nodeManagerConfig.nodePoolRollingUpdatePolicy.autoUpdateHypervisor == true)'
 ```
 
-命令输出 `true` 才继续。以下以 TFC 中第一个 pool 为例；多 pool 环境必须逐个修改对应路径：
+检查输出 `true` 才继续。以下以 TFC 中第一个 pool 为例；多 pool 环境必须逐个修改对应路径：
 
 ```bash
 # 1. 渲染并切换到 v2 scheduler 配置
@@ -380,7 +414,7 @@ kubectl -n ${ns} set image deploy/${controller_deploy} \
   controller=${v2_operator_image}
 kubectl -n ${ns} rollout status deploy/${controller_deploy} --timeout=180s
 
-# 3. v2 operator Ready 后再更新 Hypervisor 期望状态
+# 3. v2 operator Ready 后，再更新 Hypervisor 镜像和隔离策略
 # 以下仅以 gpuPools[0]、默认 soft、无规则为语法示例；不要直接用于生产环境。
 # 多 pool 环境按实际数组索引逐个修改，并写入升级前已审核的 defaultIsolationMode
 # 和 isolationModeRules。
@@ -423,6 +457,9 @@ test -n "${v1_uid}"
 test "${v2_uid}" != "${v1_uid}"
 test "${v2_image}" = "${v2_hypervisor_image}"
 test "${hypervisor_count}" = "1"
+
+diff -u tf-backup/gpu-capacity-v1.tsv <(kubectl get gpu -o json \
+  | jq -r '.items[] | [.metadata.name, .status.gpuModel, .status.capacity.tflops] | @tsv')
 
 kubectl get gpupools -A \
   -o custom-columns='POOL:.metadata.name,PROGRESS:.status.componentStatus.hypervisorUpdateProgress,SYNCED:.status.componentStatus.hypervisorConfigSynced'
@@ -499,13 +536,15 @@ v2 CRD、ProviderConfig、RBAC 和 Karpenter NodeOverlay 保持不变。
 - [ ] CRD 来自 compat 改动合并后的 main（预检 1 通过）
 - [ ] `nodeManagerConfig` / `gpuCount` 预检通过，所有待升级 pool 均为 `autoUpdateHypervisor=true`
 - [ ] 已全量备份 CRD、CR、Helm values、v1 ConfigMap 与 controller Deployment
-- [ ] v2 NVIDIA ProviderConfig 已使用固定版本渲染并在步骤 2 创建；middleware 已在实际 GPU 节点验证可拉取或完成离线导入
-- [ ] 先 apply CRD，再创建 NVIDIA ProviderConfig、同步 RBAC、更新 Karpenter（如使用）并确认隔离策略；最后按“v2 ConfigMap → v2 operator Ready → v2 Hypervisor 镜像”的顺序执行
+- [ ] v2 NVIDIA ProviderConfig 已使用固定版本渲染并在步骤 2 创建；`hardwareMetadata` 覆盖现网型号，middleware 已在实际 GPU 节点验证可拉取或完成离线导入
+- [ ] 先 apply CRD，再创建 NVIDIA ProviderConfig、同步 RBAC、更新 Karpenter（如使用）并确认隔离策略；最后按“v2 ConfigMap → v2 operator Ready → 更新 v2 Hypervisor 镜像/隔离策略”的顺序执行
 - [ ] （Karpenter 环境）NodeOverlay 已声明 `index_0..index_f`，且保留旧 `tensor-fusion.ai/index`
 - [ ] 每个待升级 GPUPool 已规划 `defaultIsolationMode` 和有序的 `isolationModeRules`；每条 selector 的实际命中节点及重叠优先级均已核对
 - [ ] v1/v2 Hypervisor 名称均为 `hypervisor-<node>`；升级后 UID 已变化、镜像为 v2、每节点仅一个 Pod
 - [ ] 有 GPUNode 的待升级 pool 为 `hypervisorUpdateProgress=100`、`hypervisorConfigSynced=true`；空 pool 已单独核对配置
 - [ ] 升级后 Cluster/Pool=Running，local/remote 测试 Workload 可调度并能实际调用 CUDA/NVML
 - [ ] shared workload 只使用完整空闲、未分区 GPU；hard 百分比/绝对值与显存限额验证通过
-- [ ] 存量 soft/hard Pod 的 UID/restartCount/GPU UUID 不变，升级后新 CUDA/NVML 调用正常
+- [ ] 存量 soft/hard/shared Pod 的 UID/restartCount/GPU UUID 不变，升级后新 CUDA/NVML 调用正常
+- [ ] 每个 pool 的 `portNumber` 在升级期间保持不变，存量 worker Pod 的 `HYPERVISOR_PORT` 与其一致
+- [ ] 升级前后 GPU 型号与容量清单一致，没有因 ProviderConfig 缺少硬件元数据而退回运行时估算
 - [ ] 回退预案明确：CRD 不动；按“v1 ConfigMap → v1 operator Ready → v1 Hypervisor 镜像”的顺序执行，由 operator 自动替换同名 Pod

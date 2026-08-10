@@ -461,6 +461,17 @@
       "type": "object",
       "description": "Dynamic configuration for alerting",
       "properties": {
+        "autoMigration": {
+          "type": "object",
+          "description": "Native GPU workload migration configuration",
+          "properties": {
+            "enable": {
+              "type": "boolean",
+              "description": "Migrate native nvidia.com/gpu requests to TensorFusion shared whole-GPU allocations",
+              "default": false
+            }
+          }
+        },
         "metricsTTL": {
           "type": "string",
           "description": "Metrics and Logs Retention Period, default to 30d"

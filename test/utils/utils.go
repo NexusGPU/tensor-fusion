@@ -17,12 +17,11 @@ limitations under the License.
 package utils
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	ginkgo "github.com/onsi/ginkgo/v2" //nolint:golint,revive
 )
@@ -128,8 +127,30 @@ func InstallCertManager() error {
 		"--timeout", "5m",
 	)
 
-	_, err := Run(cmd)
-	return err
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+
+	const readinessIssuer = `apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: tensor-fusion-e2e-readiness
+  namespace: default
+spec:
+  selfSigned: {}
+`
+	deadline := time.Now().Add(2 * time.Minute)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		cmd = exec.Command("kubectl", "apply", "--dry-run=server", "-f", "-")
+		cmd.Stdin = strings.NewReader(readinessIssuer)
+		if _, lastErr = Run(cmd); lastErr == nil {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+
+	return fmt.Errorf("cert-manager API did not become ready: %w", lastErr)
 }
 
 // IsCertManagerCRDsInstalled checks if any Cert Manager CRDs are installed
@@ -199,53 +220,4 @@ func GetProjectDir() (string, error) {
 	}
 	wd = strings.ReplaceAll(wd, "/test/e2e", "")
 	return wd, nil
-}
-
-// UncommentCode searches for target in the file and remove the comment prefix
-// of the target content. The target content may span multiple lines.
-func UncommentCode(filename, target, prefix string) error {
-	// false positive
-	// nolint:gosec
-	content, err := os.ReadFile(filename)
-	if err != nil {
-		return err
-	}
-	strContent := string(content)
-
-	idx := strings.Index(strContent, target)
-	if idx < 0 {
-		return fmt.Errorf("unable to find the code %s to be uncomment", target)
-	}
-
-	out := new(bytes.Buffer)
-	_, err = out.Write(content[:idx])
-	if err != nil {
-		return err
-	}
-
-	scanner := bufio.NewScanner(bytes.NewBufferString(target))
-	if !scanner.Scan() {
-		return nil
-	}
-	for {
-		_, err := out.WriteString(strings.TrimPrefix(scanner.Text(), prefix))
-		if err != nil {
-			return err
-		}
-		// Avoid writing a newline in case the previous line was the last in target.
-		if !scanner.Scan() {
-			break
-		}
-		if _, err := out.WriteString("\n"); err != nil {
-			return err
-		}
-	}
-
-	_, err = out.Write(content[idx+len(target):])
-	if err != nil {
-		return err
-	}
-	// false positive
-	// nolint:gosec
-	return os.WriteFile(filename, out.Bytes(), 0644)
 }

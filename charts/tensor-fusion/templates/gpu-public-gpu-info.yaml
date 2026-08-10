@@ -358,12 +358,18 @@ data:
       costPerHour: 0.8
       fp16TFlops: 130
 
-    # higher mem bandwidth and vram size(141G) than H100
+    # H200 SXM: 141GB HBM3e, up to seven MIG instances.
     - model: H200
-      fullModelName: "NVIDIA H200 80GB HBM3"
+      fullModelName: "NVIDIA H200"
       vendor: NVIDIA
       costPerHour: 3.99
       fp16TFlops: 989
+
+    - model: H200_NVL
+      fullModelName: "NVIDIA H200 NVL"
+      vendor: NVIDIA
+      costPerHour: 3.99
+      fp16TFlops: 835
 
     - model: H800_PCIe
       fullModelName: "NVIDIA H800 PCIe"

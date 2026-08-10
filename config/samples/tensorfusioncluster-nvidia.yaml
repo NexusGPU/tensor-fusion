@@ -44,8 +44,8 @@ spec:
             spec: {}
           remoteModeImage: tensorfusion/tensor-fusion-client:latest
         hypervisor:
-          enableVector: true
           image: docker.io/tensorfusion/tensor-fusion-hypervisor:latest
+          vectorImage: docker.m.daocloud.io/timberio/vector:latest-alpine
           podTemplate:
             template:
               spec:
@@ -68,16 +68,6 @@ spec:
                     privileged: true
                     runAsGroup: 0
                     runAsUser: 0
-                - name: vector
-                  resources:
-                    requests:
-                      cpu: 50m
-                      memory: 64Mi
-                securityContext:
-                  runAsGroup: 0
-                  runAsUser: 0
-          portNumber: 8001
-          vectorImage: docker.m.daocloud.io/timberio/vector:latest-alpine
         nodeDiscovery:
           image: docker.m.daocloud.io/tensorfusion/tensor-fusion-node-discovery:latest
           podTemplate:

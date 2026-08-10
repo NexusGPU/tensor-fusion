@@ -48,6 +48,7 @@ type LegacyHandler struct {
 	listHostPIDsFunc     func() ([]uint32, error)
 	processMappingFunc   func(hostPID uint32) (*framework.ProcessMappingInfo, error)
 	shmBasePath          string
+	autoFreeze           []tfv1.AutoFreeze
 }
 
 // NewLegacyHandler creates a new legacy handler
@@ -66,6 +67,15 @@ func NewLegacyHandler(
 			constants.TFDataPath,
 			strings.TrimPrefix(constants.SharedMemMountSubPath, "/"),
 		),
+	}
+	if raw := os.Getenv(constants.HypervisorSchedulingConfigEnv); raw != "" {
+		var scheduling tfv1.HypervisorScheduling
+		if err := json.Unmarshal([]byte(raw), &scheduling); err != nil {
+			klog.Warningf("Failed to parse %s for legacy API compatibility: %v",
+				constants.HypervisorSchedulingConfigEnv, err)
+		} else {
+			handler.autoFreeze = scheduling.AutoFreezeAndResume.AutoFreeze
+		}
 	}
 	handler.listHostPIDsFunc = defaultListHostPIDs
 	handler.processMappingFunc = func(hostPID uint32) (*framework.ProcessMappingInfo, error) {
@@ -366,7 +376,6 @@ func (h *LegacyHandler) handleGetPodInfo(c *gin.Context) {
 		})
 		return
 	}
-
 	c.JSON(http.StatusOK, api.PodInfoResponse{
 		Success: true,
 		Data: &api.RemotePodInfo{
@@ -378,6 +387,7 @@ func (h *LegacyHandler) handleGetPodInfo(c *gin.Context) {
 			QoSLevel:     getPascalCaseQoSLevel(allocation),
 			ComputeShard: false,
 			Isolation:    getAllocationIsolation(allocation),
+			AutoFreeze:   getAutoFreezeConfig(allocation, h.autoFreeze),
 		},
 		Message: fmt.Sprintf("Pod %s information retrieved successfully", payload.Kubernetes.Pod.Name),
 	})
@@ -557,6 +567,28 @@ func getAllocationIsolation(allocation *api.WorkerAllocation) string {
 		return ""
 	}
 	return string(allocation.WorkerInfo.IsolationMode)
+}
+
+func getAutoFreezeConfig(allocation *api.WorkerAllocation, configs []tfv1.AutoFreeze) *api.AutoFreezeConfig {
+	if allocation.WorkerInfo == nil {
+		return nil
+	}
+	for _, config := range configs {
+		if config.Qos != allocation.WorkerInfo.QoS {
+			continue
+		}
+		result := &api.AutoFreezeConfig{
+			Enable: config.Enable != nil && *config.Enable,
+		}
+		if config.FreezeToMemTTL != "" {
+			result.FreezeToMemTTL = ptr.To(config.FreezeToMemTTL)
+		}
+		if config.FreezeToDiskTTL != "" {
+			result.FreezeToDiskTTL = ptr.To(config.FreezeToDiskTTL)
+		}
+		return result
+	}
+	return nil
 }
 
 func (h *LegacyHandler) registerPIDInSharedMemory(namespace, podName string, hostPID uint32) error {

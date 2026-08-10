@@ -51,7 +51,7 @@ spec:
     ldLibraryPath: /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/dcmi
     privilegedHypervisor: true
   images:
-    middleware: docker.io/tensorfusion/vgpu-provider-ascend:latest
+    middleware: docker.io/tensorfusion/vgpu-provider-ascend:dev
     remoteClient: registry.cn-hangzhou.aliyuncs.com/tensorfusion/rgpu_client_t:latest
     remoteWorker: registry.cn-hangzhou.aliyuncs.com/tensorfusion/rgpu-work:latest
   inUseResourceNames:

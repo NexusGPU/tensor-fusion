@@ -159,11 +159,8 @@ providerConfigs:
     #
     # NOTE: privilegedHypervisor only flips capabilities, it does NOT change
     # the process UID. MIG calls writing to /dev/nvidia-caps/nvidia-cap1
-    # additionally require uid=0. Set pod-level
-    # `securityContext.runAsUser: 0` in the GPUPool / TensorFusionCluster
-    # `componentConfig.hypervisor.podTemplate.template.spec` to take effect
-    # (the operator overwrites container-level securityContext on every
-    # reconcile, but pod-level fields survive).
+    # additionally require uid=0. Set container-level runAsUser/runAsGroup on
+    # the hypervisor container in the GPUPool / TensorFusionCluster pod template.
     privilegedHypervisor: true
     images:
       middleware: tensorfusion/vgpu-provider-nvidia:1.3.9
@@ -172,15 +169,27 @@ providerConfigs:
     inUseResourceNames:
       - nvidia.com/gpu
       # MIG profile names — device-plugin only reports what physically exists on
-      # each node, so listing 40GB / 80GB / A30 families together is safe.
+      # each node, so listing 40GB / 80GB / 141GB / A30 families together is safe.
       # 80GB family: A100-80GB / H100-80GB / A800-80GB / H800
       - nvidia.com/mig-1g.10gb
+      - nvidia.com/mig-1g.10gb.me
+      - nvidia.com/mig-1g.20gb
       - nvidia.com/mig-2g.20gb
       - nvidia.com/mig-3g.40gb
       - nvidia.com/mig-4g.40gb
       - nvidia.com/mig-7g.80gb
+      # H200 141GB family: H200 SXM / H200 NVL
+      - nvidia.com/mig-1g.18gb
+      - nvidia.com/mig-1g.18gb.me
+      - nvidia.com/mig-1g.35gb
+      - nvidia.com/mig-2g.35gb
+      - nvidia.com/mig-3g.71gb
+      - nvidia.com/mig-4g.71gb
+      - nvidia.com/mig-7g.141gb
       # 40GB family: A100-40GB / A800-40GB
+      # 1g.10gb is shared with the 80GB family and is already listed above.
       - nvidia.com/mig-1g.5gb
+      - nvidia.com/mig-1g.5gb.me
       - nvidia.com/mig-2g.10gb
       - nvidia.com/mig-3g.20gb
       - nvidia.com/mig-4g.20gb
@@ -322,6 +331,36 @@ providerConfigs:
           - nv-80g-4g-40gb
           - nv-80g-7g-80gb
 
+      # ---- H200 141GB family (7-slice; partitionTemplateRefs use nv-h200-*) ----
+      - model: H200
+        fullModelName: "NVIDIA H200"
+        costPerHour: "3.99"
+        fp16TFlops: "989"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        partitionTemplateRefs:
+          - nv-h200-1g-18gb
+          - nv-h200-1g-18gb-me
+          - nv-h200-1g-35gb
+          - nv-h200-2g-35gb
+          - nv-h200-3g-71gb
+          - nv-h200-4g-71gb
+          - nv-h200-7g-141gb
+      - model: H200_NVL
+        fullModelName: "NVIDIA H200 NVL"
+        costPerHour: "3.99"
+        fp16TFlops: "835"
+        maxPartitions: 7
+        maxPlacementSlots: 8
+        # NVIDIA mig-parted does not advertise 1g.35gb or 1g.18gb+me for
+        # PCI device 0x233B (H200 NVL); expose only its supported common set.
+        partitionTemplateRefs:
+          - nv-h200-1g-18gb
+          - nv-h200-2g-35gb
+          - nv-h200-3g-71gb
+          - nv-h200-4g-71gb
+          - nv-h200-7g-141gb
+
       # ---- A100 / A800 40GB family (7-slice; partitionTemplateRefs use nv-40g-*) ----
       - model: A100_SXM_40G
         fullModelName: "NVIDIA A100-SXM4-40GB"
@@ -397,6 +436,10 @@ providerConfigs:
         fullModelName: "NVIDIA A10"
         costPerHour: "0.60"
         fp16TFlops: "125"
+      - model: A10G
+        fullModelName: "NVIDIA A10G"
+        costPerHour: "0.80"
+        fp16TFlops: "125"
       - model: A40
         fullModelName: "NVIDIA A40-PCIE-48GB"
         costPerHour: "1.10"
@@ -417,6 +460,10 @@ providerConfigs:
         fullModelName: "Tesla T4"
         costPerHour: "0.35"
         fp16TFlops: "65"
+      - model: RTX3090
+        fullModelName: "NVIDIA GeForce RTX 3090"
+        costPerHour: "0.25"
+        fp16TFlops: "71.2"
       - model: RTX4090
         fullModelName: "NVIDIA GeForce RTX 4090"
         costPerHour: "0.30"
@@ -447,7 +494,7 @@ providerConfigs:
     #               a30  → A30 24GB
     #                      (4-slice MIG; different NVML id table & computePercent)
     #
-    #             Future additions: `h100-94g`, `h200`, `b200`, `pro-blackwell`
+    #             Future additions: `h100-94g`, `b200`, `pro-blackwell`
     #             once authoritative `nvidia-smi mig -lgip` placement data is in.
     #
     #   <profile> canonical MIG shorthand `NgSlice-Mgb`, dashes replace dots so
@@ -538,6 +585,80 @@ providerConfigs:
         memoryGigabytes: 80
         computePercent: "100"
         description: "Full GPU with 80GB memory (A100/H100 80GB)"
+        maxInstances: 1
+        placementLimit: [0]
+        placementOffset: 8
+        isolationGroupSharing: exclusive
+
+      # ===== H200 141GB family (7-slice) =====
+      # NVIDIA's MIG profile geometry uses the same NVML profile IDs and
+      # placements as other 7-slice Hopper GPUs, with H200-specific memory sizes.
+      - id: nv-h200-1g-18gb
+        nvmlProfileId: 19
+        name: "1g.18gb"
+        memoryGigabytes: 18
+        computePercent: "14.2857"
+        description: "1/7 GPU slice with 18GB memory (H200 141GB)"
+        maxInstances: 7
+        placementLimit: [0, 1, 2, 3, 4, 5, 6]
+        placementOffset: 1
+        isolationGroupSharing: exclusive
+      - id: nv-h200-1g-18gb-me
+        nvmlProfileId: 20
+        name: "1g.18gb+me"
+        memoryGigabytes: 18
+        computePercent: "14.2857"
+        description: "1g.18gb + media engine (singleton)"
+        maxInstances: 1
+        placementLimit: [0, 1, 2, 3, 4, 5, 6]
+        placementOffset: 1
+        isolationGroupSharing: exclusive
+      - id: nv-h200-1g-35gb
+        nvmlProfileId: 15
+        name: "1g.35gb"
+        memoryGigabytes: 35
+        computePercent: "14.2857"
+        description: "1g slice with double memory (H200 SXM 141GB)"
+        maxInstances: 4
+        placementLimit: [0, 2, 4, 6]
+        placementOffset: 2
+        isolationGroupSharing: exclusive
+      - id: nv-h200-2g-35gb
+        nvmlProfileId: 14
+        name: "2g.35gb"
+        memoryGigabytes: 35
+        computePercent: "28.5714"
+        description: "2/7 GPU slice with 35GB memory (H200 141GB)"
+        maxInstances: 3
+        placementLimit: [0, 2, 4]
+        placementOffset: 2
+        isolationGroupSharing: exclusive
+      - id: nv-h200-3g-71gb
+        nvmlProfileId: 9
+        name: "3g.71gb"
+        memoryGigabytes: 71
+        computePercent: "42.8571"
+        description: "3/7 GPU slice with 71GB memory (H200 141GB)"
+        maxInstances: 2
+        placementLimit: [0, 4]
+        placementOffset: 4
+        isolationGroupSharing: exclusive
+      - id: nv-h200-4g-71gb
+        nvmlProfileId: 5
+        name: "4g.71gb"
+        memoryGigabytes: 71
+        computePercent: "57.1428"
+        description: "4/7 GPU slice with 71GB memory (H200 141GB)"
+        maxInstances: 1
+        placementLimit: [0]
+        placementOffset: 4
+        isolationGroupSharing: exclusive
+      - id: nv-h200-7g-141gb
+        nvmlProfileId: 0
+        name: "7g.141gb"
+        memoryGigabytes: 141
+        computePercent: "100"
+        description: "Full H200 GPU with 141GB memory"
         maxInstances: 1
         placementLimit: [0]
         placementOffset: 8
@@ -651,14 +772,8 @@ providerConfigs:
         placementOffset: 4
         isolationGroupSharing: exclusive
 
-    # NVIDIA_MIG_CONFIG_DEVICES / NVIDIA_MIG_MONITOR_DEVICES are required on
-    # MIG-enabled nodes: the NVIDIA Container Runtime only injects the per-GI
-    # capability files under /proc/driver/nvidia/capabilities/ when these are set,
-    # otherwise the hypervisor may fail to start on a MIG node and NVML MIG
-    # (GpuInstance / ComputeInstance) queries fail. The operator also auto-injects
-    # them when privilegedHypervisor=true, but they are set explicitly here so MIG
-    # support does not silently depend on that path.
-    # (TF_ENABLE_LOG / TF_LOG_LEVEL=debug are intentionally omitted — debug only.)
+    # Keep these explicit so MIG support does not depend only on operator-side
+    # automatic injection when privilegedHypervisor=true.
     extraEnv:
       - name: NVIDIA_MIG_CONFIG_DEVICES
         value: all
@@ -866,6 +981,10 @@ schedulerConfig:
 
 # KV structure config for other global configs
 dynamicConfig:
+  # Migrate native nvidia.com/gpu requests to TensorFusion shared whole-GPU allocations.
+  autoMigration:
+    enable: false
+
   # retention period for metrics data
   metricsTTL: 30d
   metricsFormat: influx

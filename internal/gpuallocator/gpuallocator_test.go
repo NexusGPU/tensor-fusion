@@ -370,7 +370,12 @@ var _ = Describe("GPU Allocator", func() {
 
 			// Verify the GPU is in the store
 			key := types.NamespacedName{Name: newGPU.Name, Namespace: newGPU.Namespace}
+			allocator.storeMutex.RLock()
 			cachedGPU, exists := allocator.gpuStore[key]
+			if exists {
+				cachedGPU = cachedGPU.DeepCopy()
+			}
+			allocator.storeMutex.RUnlock()
 			Expect(exists).To(BeTrue())
 			Expect(cachedGPU.Name).To(Equal(newGPU.Name))
 			Expect(cachedGPU.Status.Phase).To(Equal(newGPU.Status.Phase))

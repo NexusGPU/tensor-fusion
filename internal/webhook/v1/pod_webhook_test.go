@@ -26,6 +26,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -70,6 +71,96 @@ var _ = Describe("TensorFusionPodMutator", func() {
 	})
 
 	Context("Handle", func() {
+		It("should auto-migrate native GPU limits to shared whole-GPU allocation", func() {
+			originalProviderManager := provider.GetManager()
+			providerManager := provider.NewManager(nil)
+			providerManager.UpdateProvider(&tfv1.ProviderConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: "nvidia-provider"},
+				Spec: tfv1.ProviderConfigSpec{
+					Vendor:             constants.AcceleratorVendorNvidia,
+					InUseResourceNames: []string{string(constants.NvidiaGPUKey)},
+				},
+			})
+			provider.SetGlobalManagerForTesting(providerManager)
+			DeferCleanup(func() { provider.SetGlobalManagerForTesting(originalProviderManager) })
+
+			originalConfig := config.GetGlobalConfig()
+			config.SetGlobalConfig(&config.GlobalConfig{
+				AutoMigration: &config.AutoMigrationConfig{Enable: true},
+			})
+			DeferCleanup(func() { config.SetGlobalConfig(originalConfig) })
+
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "auto-migrate-shared",
+					Namespace: "default",
+					Labels:    map[string]string{"app": "test"},
+					Annotations: map[string]string{
+						constants.GpuPoolKey: "mock",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main",
+							Image: "test-image",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									constants.NvidiaGPUKey: resource.MustParse("1"),
+								},
+								Limits: corev1.ResourceList{
+									constants.NvidiaGPUKey: resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			}
+			podBytes, err := json.Marshal(pod)
+			Expect(err).NotTo(HaveOccurred())
+
+			resp := mutator.Handle(ctx, admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Object:    runtime.RawExtension{Raw: podBytes},
+					Operation: admissionv1.Create,
+					Namespace: pod.Namespace,
+				},
+			})
+
+			Expect(resp.Allowed).To(BeTrue(), resp.Result)
+			expectPatchValue := func(path string, value any) {
+				patch, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+					return patch.Path == path
+				})
+				Expect(found).To(BeTrue(), "expected patch for %s, got %#v, response: %#v", path, resp.Patches, resp.Result)
+				Expect(patch.Value).To(Equal(value))
+			}
+			expectPatchValue("/metadata/labels/tensor-fusion.ai~1enabled", constants.TrueStringValue)
+			expectPatchValue("/metadata/annotations/tensor-fusion.ai~1isolation", string(tfv1.IsolationModeShared))
+			expectPatchValue("/metadata/annotations/tensor-fusion.ai~1gpu-count", "1")
+
+			for _, annotation := range []string{
+				constants.ComputeRequestAnnotation,
+				constants.ComputeLimitAnnotation,
+				constants.TFLOPSRequestAnnotation,
+				constants.TFLOPSLimitAnnotation,
+				constants.VRAMRequestAnnotation,
+				constants.VRAMLimitAnnotation,
+			} {
+				escaped := strings.ReplaceAll(annotation, "/", "~1")
+				_, found := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+					return patch.Path == "/metadata/annotations/"+escaped
+				})
+				Expect(found).To(BeFalse(), "unexpected fractional resource annotation %s", annotation)
+			}
+
+			_, removedNativeLimit := lo.Find(resp.Patches, func(patch jsonpatch.JsonPatchOperation) bool {
+				return patch.Operation == "remove" &&
+					patch.Path == "/spec/containers/0/resources/limits/nvidia.com~1gpu"
+			})
+			Expect(removedNativeLimit).To(BeTrue())
+		})
+
 		It("should handle pod with empty namespace", func() {
 			// Create a pod with empty namespace
 			pod := &corev1.Pod{
