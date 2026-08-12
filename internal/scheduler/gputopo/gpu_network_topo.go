@@ -143,7 +143,13 @@ func (s *GPUNetworkTopologyAware) PreFilter(ctx context.Context, state fwk.Cycle
 			continue
 		}
 
-		plan, evalErr := eval.Evaluate(gpus, gpuCount, preferLeastDamage)
+		var placementScorer GPUScorer
+		if schedulingResult.ScoringStrategy != nil {
+			placementScorer = func(gpu *tfv1.GPU) int {
+				return schedulingResult.ScoringStrategy.Score(gpu, false)
+			}
+		}
+		plan, evalErr := eval.EvaluateWithScorer(gpus, gpuCount, preferLeastDamage, placementScorer)
 		if evalErr != nil {
 			s.logger.Error(evalErr, "topology evaluation failed", "pod", pod.Name, "node", nodeName)
 			continue
@@ -260,28 +266,16 @@ func (s *GPUNetworkTopologyAware) Filter(ctx context.Context, state fwk.CycleSta
 	return fwk.NewStatus(fwk.Success, "")
 }
 
-// Score returns a topology-based score for the node.
-func (s *GPUNetworkTopologyAware) Score(ctx context.Context, state fwk.CycleState, pod *v1.Pod, nodeInfo fwk.NodeInfo) (int64, *fwk.Status) {
-	nodeName := nodeInfo.Node().Name
+// Score is retained for compatibility with existing scheduler configs that
+// list this plugin at the Score extension point. Node ordering is owned by
+// GPUResourcesFit's placement mode, so topology contributes no node score.
+func (s *GPUNetworkTopologyAware) Score(_ context.Context, _ fwk.CycleState, pod *v1.Pod, _ fwk.NodeInfo) (int64, *fwk.Status) {
 	if !utils.IsTensorFusionWorker(pod) {
 		return 0, fwk.NewStatus(fwk.Success, "")
 	}
-
-	topoStateRaw, err := state.Read(CycleStateGPUTopologyResult)
-	if err != nil {
-		return 0, fwk.NewStatus(fwk.Success, "")
-	}
-
-	topoState := topoStateRaw.(*GPUTopologyStateData)
-	plan, exists := topoState.Plans[nodeName]
-	if !exists {
-		return 0, fwk.NewStatus(fwk.Success, "")
-	}
-
-	return plan.Score, fwk.NewStatus(fwk.Success, "")
+	return 0, fwk.NewStatus(fwk.Success, "node ordering is controlled by placement mode")
 }
 
-// ScoreExtensions returns nil since no normalization extension is needed.
 func (s *GPUNetworkTopologyAware) ScoreExtensions() fwk.ScoreExtensions {
 	return nil
 }
