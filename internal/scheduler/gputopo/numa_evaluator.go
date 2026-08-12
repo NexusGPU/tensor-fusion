@@ -24,6 +24,10 @@ func (e *NUMAEvaluator) Name() string {
 }
 
 func (e *NUMAEvaluator) Evaluate(gpus []*tfv1.GPU, count uint, preferLeastDamage bool) (*NodeTopologyPlan, error) {
+	return e.EvaluateWithScorer(gpus, count, preferLeastDamage, nil)
+}
+
+func (e *NUMAEvaluator) EvaluateWithScorer(gpus []*tfv1.GPU, count uint, preferLeastDamage bool, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	if count == 0 {
 		return &NodeTopologyPlan{
 			CandidateGPUIds: []string{},
@@ -40,9 +44,9 @@ func (e *NUMAEvaluator) Evaluate(gpus []*tfv1.GPU, count uint, preferLeastDamage
 	}
 
 	if count == 1 {
-		return e.evaluateSingleGPU(gpus, candidateNames, preferLeastDamage)
+		return e.evaluateSingleGPU(gpus, candidateNames, preferLeastDamage, scorer)
 	}
-	return e.evaluateMultiGPU(gpus, candidateNames, count)
+	return e.evaluateMultiGPU(gpus, candidateNames, count, scorer)
 }
 
 // numaGroup groups GPUs by their NUMA node ID.
@@ -69,16 +73,18 @@ func groupByNUMA(gpus []*tfv1.GPU) map[int32][]*tfv1.GPU {
 // 1. GPU in a NUMA domain with only 1 remaining GPU ("orphan")
 // 2. GPU in a smaller NUMA domain
 // 3. GPU in a larger NUMA domain (avoid breaking large clusters)
-func (e *NUMAEvaluator) evaluateSingleGPU(gpus []*tfv1.GPU, candidateNames []string, preferLeastDamage bool) (*NodeTopologyPlan, error) {
+func (e *NUMAEvaluator) evaluateSingleGPU(gpus []*tfv1.GPU, candidateNames []string, preferLeastDamage bool, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	if !preferLeastDamage || len(gpus) <= 1 {
+		ordered := append([]*tfv1.GPU(nil), gpus...)
+		sortGPUsByPlacement(ordered, scorer)
 		// No least-damage optimization needed; determine tier from the GPU's actual NUMA status
 		tier := TierSameNUMA
-		if gpus[0].Status.NUMANode == nil || *gpus[0].Status.NUMANode < 0 {
+		if ordered[0].Status.NUMANode == nil || *ordered[0].Status.NUMANode < 0 {
 			tier = TierUnknown
 		}
 		return &NodeTopologyPlan{
 			CandidateGPUIds: candidateNames,
-			BestGPUIds:      []string{gpus[0].Name},
+			BestGPUIds:      []string{ordered[0].Name},
 			Tier:            tier,
 			Score:           TierBandedScore(tier, 100),
 			ModeSatisfied:   int(tier) <= e.maxAllowedTier,
@@ -123,6 +129,12 @@ func (e *NUMAEvaluator) evaluateSingleGPU(gpus []*tfv1.GPU, candidateNames []str
 		if si.domainSize != sj.domainSize {
 			return si.domainSize < sj.domainSize
 		}
+		if scorer != nil {
+			siScore, sjScore := scorer(si.gpu), scorer(sj.gpu)
+			if siScore != sjScore {
+				return siScore > sjScore
+			}
+		}
 		// Stable tie-breaking by name
 		return si.gpu.Name < sj.gpu.Name
 	})
@@ -145,7 +157,7 @@ func (e *NUMAEvaluator) evaluateSingleGPU(gpus []*tfv1.GPU, candidateNames []str
 
 // evaluateMultiGPU selects the best multi-GPU combination based on NUMA affinity.
 // Uses a three-phase approach: prune → enumerate → sort.
-func (e *NUMAEvaluator) evaluateMultiGPU(gpus []*tfv1.GPU, candidateNames []string, count uint) (*NodeTopologyPlan, error) {
+func (e *NUMAEvaluator) evaluateMultiGPU(gpus []*tfv1.GPU, candidateNames []string, count uint, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	n := int(count)
 	if len(gpus) < n {
 		return &NodeTopologyPlan{
@@ -160,17 +172,17 @@ func (e *NUMAEvaluator) evaluateMultiGPU(gpus []*tfv1.GPU, candidateNames []stri
 	numaGroups := groupByNUMA(gpus)
 
 	// Phase 1: Try same-NUMA combinations first (best tier)
-	bestPlan := e.findBestSameNUMACombination(numaGroups, candidateNames, n)
+	bestPlan := e.findBestSameNUMACombination(numaGroups, candidateNames, n, scorer)
 	if bestPlan != nil {
 		return bestPlan, nil
 	}
 
 	// Phase 2: Cross-NUMA enumeration with complexity control
-	return e.findBestCrossNUMACombination(gpus, candidateNames, n, numaGroups)
+	return e.findBestCrossNUMACombination(gpus, candidateNames, n, numaGroups, scorer)
 }
 
 // findBestSameNUMACombination searches for the best all-same-NUMA combination.
-func (e *NUMAEvaluator) findBestSameNUMACombination(numaGroups map[int32][]*tfv1.GPU, candidateNames []string, count int) *NodeTopologyPlan {
+func (e *NUMAEvaluator) findBestSameNUMACombination(numaGroups map[int32][]*tfv1.GPU, candidateNames []string, count int, scorer GPUScorer) *NodeTopologyPlan {
 	// Collect NUMA domains that have enough GPUs
 	var viableGroups []numaGroup
 	for numaID, gpus := range numaGroups {
@@ -188,16 +200,17 @@ func (e *NUMAEvaluator) findBestSameNUMACombination(numaGroups map[int32][]*tfv1
 
 	// Sort groups: prefer NUMA domains with fewer excess GPUs (compact allocation)
 	sort.SliceStable(viableGroups, func(i, j int) bool {
-		return len(viableGroups[i].gpus) < len(viableGroups[j].gpus)
+		if len(viableGroups[i].gpus) != len(viableGroups[j].gpus) {
+			return len(viableGroups[i].gpus) < len(viableGroups[j].gpus)
+		}
+		return bestPlacementScore(viableGroups[i].gpus, count, scorer) > bestPlacementScore(viableGroups[j].gpus, count, scorer)
 	})
 
 	// From the best group, pick the first `count` GPUs (sorted by name for stability)
 	bestGroup := viableGroups[0]
 	selected := make([]*tfv1.GPU, len(bestGroup.gpus))
 	copy(selected, bestGroup.gpus)
-	sort.SliceStable(selected, func(i, j int) bool {
-		return selected[i].Name < selected[j].Name
-	})
+	sortGPUsByPlacement(selected, scorer)
 
 	bestGPUIds := make([]string, count)
 	for i := 0; i < count; i++ {
@@ -226,10 +239,10 @@ func (e *NUMAEvaluator) findBestSameNUMACombination(numaGroups map[int32][]*tfv1
 
 // findBestCrossNUMACombination finds the best cross-NUMA combination using
 // a three-level strategy: full enumeration → domain-based pruning → heuristic.
-func (e *NUMAEvaluator) findBestCrossNUMACombination(gpus []*tfv1.GPU, candidateNames []string, count int, numaGroups map[int32][]*tfv1.GPU) (*NodeTopologyPlan, error) {
+func (e *NUMAEvaluator) findBestCrossNUMACombination(gpus []*tfv1.GPU, candidateNames []string, count int, numaGroups map[int32][]*tfv1.GPU, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	// Level 1: if full enumeration is feasible, use it directly
 	if combinationCount(len(gpus), count) <= MaxCombinationSearch {
-		return e.enumerateAndSelectBest(gpus, candidateNames, count, numaGroups)
+		return e.enumerateAndSelectBest(gpus, candidateNames, count, numaGroups, scorer)
 	}
 
 	// Level 2: domain-based pruning — keep only the top NUMA domains (largest
@@ -238,11 +251,11 @@ func (e *NUMAEvaluator) findBestCrossNUMACombination(gpus []*tfv1.GPU, candidate
 	pruned := e.pruneByDomain(gpus, count, numaGroups)
 	if pruned != nil && combinationCount(len(pruned), count) <= MaxCombinationSearch {
 		prunedNUMAGroups := groupByNUMA(pruned)
-		return e.enumerateAndSelectBest(pruned, candidateNames, count, prunedNUMAGroups)
+		return e.enumerateAndSelectBest(pruned, candidateNames, count, prunedNUMAGroups, scorer)
 	}
 
 	// Level 3: heuristic greedy selection
-	return e.heuristicCrossNUMASelection(gpus, candidateNames, count, numaGroups)
+	return e.heuristicCrossNUMASelection(gpus, candidateNames, count, numaGroups, scorer)
 }
 
 // pruneByDomain reduces the candidate GPU set by keeping only GPUs from the
@@ -298,10 +311,11 @@ type combinationScore struct {
 	affinityScore  int64 // normalized pairwise affinity (0-100)
 	fragmentationP int   // total leftover GPUs in used NUMA domains / clusters
 	totalBandwidth int64 // sum of pairwise bandwidth (bytes/sec), for tie-breaking
+	placementScore int   // placement score; used only after topology quality ties
 }
 
 // enumerateAndSelectBest enumerates all C(M, N) combinations and returns the best one.
-func (e *NUMAEvaluator) enumerateAndSelectBest(gpus []*tfv1.GPU, candidateNames []string, count int, numaGroups map[int32][]*tfv1.GPU) (*NodeTopologyPlan, error) {
+func (e *NUMAEvaluator) enumerateAndSelectBest(gpus []*tfv1.GPU, candidateNames []string, count int, numaGroups map[int32][]*tfv1.GPU, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	var bestCombo *combinationScore
 
 	// Generate all combinations
@@ -312,7 +326,7 @@ func (e *NUMAEvaluator) enumerateAndSelectBest(gpus []*tfv1.GPU, candidateNames 
 
 	for {
 		// Score current combination
-		combo := e.scoreCombination(gpus, indices, numaGroups)
+		combo := e.scoreCombination(gpus, indices, numaGroups, scorer)
 		if bestCombo == nil || compareCombinations(combo, bestCombo) < 0 {
 			bestCombo = combo
 		}
@@ -346,12 +360,14 @@ func (e *NUMAEvaluator) enumerateAndSelectBest(gpus []*tfv1.GPU, candidateNames 
 }
 
 // scoreCombination computes the topology score for a specific GPU combination.
-func (e *NUMAEvaluator) scoreCombination(gpus []*tfv1.GPU, indices []int, numaGroups map[int32][]*tfv1.GPU) *combinationScore {
+func (e *NUMAEvaluator) scoreCombination(gpus []*tfv1.GPU, indices []int, numaGroups map[int32][]*tfv1.GPU, scorer GPUScorer) *combinationScore {
 	names := make([]string, len(indices))
+	selectedGPUs := make([]*tfv1.GPU, len(indices))
 	numaSet := make(map[int32]int) // numaID → count of GPUs selected from this domain
 
 	for i, idx := range indices {
 		gpu := gpus[idx]
+		selectedGPUs[i] = gpu
 		names[i] = gpu.Name
 		numaID := int32(-1)
 		if gpu.Status.NUMANode != nil && *gpu.Status.NUMANode >= 0 {
@@ -416,11 +432,13 @@ func (e *NUMAEvaluator) scoreCombination(gpus []*tfv1.GPU, indices []int, numaGr
 		numaCount:      len(numaSet),
 		affinityScore:  normalizedScore,
 		fragmentationP: fragmentationP,
+		placementScore: placementScore(selectedGPUs, scorer),
 	}
 }
 
 // compareCombinations returns negative if a is better than b.
-// Priority: smaller tier → higher score → lower fragmentation → higher bandwidth → lexicographic.
+// Priority: smaller tier → higher topology score → lower topology fragmentation →
+// higher bandwidth → higher placement score → lexicographic.
 func compareCombinations(a, b *combinationScore) int {
 	if a.tier != b.tier {
 		return int(a.tier) - int(b.tier)
@@ -437,6 +455,9 @@ func compareCombinations(a, b *combinationScore) int {
 		}
 		return -1
 	}
+	if a.placementScore != b.placementScore {
+		return b.placementScore - a.placementScore
+	}
 	// Lexicographic tie-break
 	for i := 0; i < len(a.gpuNames) && i < len(b.gpuNames); i++ {
 		if a.gpuNames[i] < b.gpuNames[i] {
@@ -451,7 +472,7 @@ func compareCombinations(a, b *combinationScore) int {
 
 // heuristicCrossNUMASelection uses a greedy heuristic when full enumeration is too expensive.
 // Strategy: fill from the largest NUMA domain first to minimize cross-NUMA traffic.
-func (e *NUMAEvaluator) heuristicCrossNUMASelection(_ []*tfv1.GPU, candidateNames []string, count int, numaGroups map[int32][]*tfv1.GPU) (*NodeTopologyPlan, error) {
+func (e *NUMAEvaluator) heuristicCrossNUMASelection(_ []*tfv1.GPU, candidateNames []string, count int, numaGroups map[int32][]*tfv1.GPU, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	// Sort NUMA groups by size descending (fill from largest first)
 	type groupEntry struct {
 		numaID int32
@@ -464,6 +485,9 @@ func (e *NUMAEvaluator) heuristicCrossNUMASelection(_ []*tfv1.GPU, candidateName
 	sort.SliceStable(groups, func(i, j int) bool {
 		if len(groups[i].gpus) != len(groups[j].gpus) {
 			return len(groups[i].gpus) > len(groups[j].gpus)
+		}
+		if scoreI, scoreJ := placementScore(groups[i].gpus, scorer), placementScore(groups[j].gpus, scorer); scoreI != scoreJ {
+			return scoreI > scoreJ
 		}
 		return groups[i].numaID < groups[j].numaID
 	})
@@ -478,9 +502,7 @@ func (e *NUMAEvaluator) heuristicCrossNUMASelection(_ []*tfv1.GPU, candidateName
 		// Sort GPUs within group for stability
 		sorted := make([]*tfv1.GPU, len(g.gpus))
 		copy(sorted, g.gpus)
-		sort.SliceStable(sorted, func(i, j int) bool {
-			return sorted[i].Name < sorted[j].Name
-		})
+		sortGPUsByPlacement(sorted, scorer)
 
 		for _, gpu := range sorted {
 			if len(selected) >= count {

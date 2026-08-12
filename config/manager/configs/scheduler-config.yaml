@@ -23,8 +23,6 @@ profiles:
       enabled:
       - name: GPUResourcesFit
         weight: 5
-      - name: GPUNetworkTopologyAware
-        weight: 3
     postFilter:
       # Only GPUResourcesFit is listed here. DefaultPreemption stays enabled
       # through the scheduler's default MultiPoint plugin set.

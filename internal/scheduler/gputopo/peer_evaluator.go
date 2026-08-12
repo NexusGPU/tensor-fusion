@@ -33,6 +33,10 @@ func (e *PeerTopologyEvaluator) Name() string {
 }
 
 func (e *PeerTopologyEvaluator) Evaluate(gpus []*tfv1.GPU, count uint, preferLeastDamage bool) (*NodeTopologyPlan, error) {
+	return e.EvaluateWithScorer(gpus, count, preferLeastDamage, nil)
+}
+
+func (e *PeerTopologyEvaluator) EvaluateWithScorer(gpus []*tfv1.GPU, count uint, preferLeastDamage bool, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	if count == 0 {
 		return &NodeTopologyPlan{
 			CandidateGPUIds: []string{},
@@ -49,9 +53,9 @@ func (e *PeerTopologyEvaluator) Evaluate(gpus []*tfv1.GPU, count uint, preferLea
 	}
 
 	if count == 1 {
-		return e.evaluateSingleGPU(gpus, candidateNames, preferLeastDamage)
+		return e.evaluateSingleGPU(gpus, candidateNames, preferLeastDamage, scorer)
 	}
-	return e.evaluateMultiGPU(gpus, candidateNames, count)
+	return e.evaluateMultiGPU(gpus, candidateNames, count, scorer)
 }
 
 // peerTierMatrix holds pairwise tier and bandwidth values between GPUs.
@@ -209,9 +213,11 @@ func buildTier0Clusters(matrix *peerTierMatrix) [][]int {
 }
 
 // evaluateSingleGPU selects the least-damage single GPU using peer topology clusters.
-func (e *PeerTopologyEvaluator) evaluateSingleGPU(gpus []*tfv1.GPU, candidateNames []string, preferLeastDamage bool) (*NodeTopologyPlan, error) {
+func (e *PeerTopologyEvaluator) evaluateSingleGPU(gpus []*tfv1.GPU, candidateNames []string, preferLeastDamage bool, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	if !preferLeastDamage || len(gpus) <= 1 {
-		gpu := gpus[0]
+		ordered := append([]*tfv1.GPU(nil), gpus...)
+		sortGPUsByPlacement(ordered, scorer)
+		gpu := ordered[0]
 		tier := singleGPUTier(gpu)
 		return &NodeTopologyPlan{
 			CandidateGPUIds: candidateNames,
@@ -256,6 +262,12 @@ func (e *PeerTopologyEvaluator) evaluateSingleGPU(gpus []*tfv1.GPU, candidateNam
 		if si.cSize != sj.cSize {
 			return si.cSize < sj.cSize
 		}
+		if scorer != nil {
+			siScore, sjScore := scorer(si.gpu), scorer(sj.gpu)
+			if siScore != sjScore {
+				return siScore > sjScore
+			}
+		}
 		return si.gpu.Name < sj.gpu.Name
 	})
 
@@ -284,7 +296,7 @@ func singleGPUTier(gpu *tfv1.GPU) GPUAffinityTier {
 }
 
 // evaluateMultiGPU selects the best multi-GPU combination using peer topology data.
-func (e *PeerTopologyEvaluator) evaluateMultiGPU(gpus []*tfv1.GPU, candidateNames []string, count uint) (*NodeTopologyPlan, error) {
+func (e *PeerTopologyEvaluator) evaluateMultiGPU(gpus []*tfv1.GPU, candidateNames []string, count uint, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	n := int(count)
 	if len(gpus) < n {
 		return &NodeTopologyPlan{
@@ -300,18 +312,18 @@ func (e *PeerTopologyEvaluator) evaluateMultiGPU(gpus []*tfv1.GPU, candidateName
 	clusters := buildTier0Clusters(matrix)
 
 	// Phase 1: try same-interconnect cluster (all pairs tier 0)
-	bestPlan := e.findBestSameClusterCombination(gpus, candidateNames, n, matrix, clusters)
+	bestPlan := e.findBestSameClusterCombination(gpus, candidateNames, n, matrix, clusters, scorer)
 	if bestPlan != nil {
 		return bestPlan, nil
 	}
 
 	// Phase 2: cross-cluster with complexity control
-	return e.findBestCrossClusterCombination(gpus, candidateNames, n, matrix, clusters)
+	return e.findBestCrossClusterCombination(gpus, candidateNames, n, matrix, clusters, scorer)
 }
 
 // findBestSameClusterCombination searches for a viable tier-0 cluster.
 // A valid cluster must have all internal pairs at tier 0 and enough GPUs.
-func (e *PeerTopologyEvaluator) findBestSameClusterCombination(gpus []*tfv1.GPU, candidateNames []string, count int, matrix *peerTierMatrix, clusters [][]int) *NodeTopologyPlan {
+func (e *PeerTopologyEvaluator) findBestSameClusterCombination(gpus []*tfv1.GPU, candidateNames []string, count int, matrix *peerTierMatrix, clusters [][]int, scorer GPUScorer) *NodeTopologyPlan {
 	var viableClusters [][]int
 	for _, cluster := range clusters {
 		if len(cluster) < count {
@@ -339,7 +351,17 @@ func (e *PeerTopologyEvaluator) findBestSameClusterCombination(gpus []*tfv1.GPU,
 
 	// Prefer cluster with fewer excess GPUs (compact fit)
 	sort.SliceStable(viableClusters, func(i, j int) bool {
-		return len(viableClusters[i]) < len(viableClusters[j])
+		if len(viableClusters[i]) != len(viableClusters[j]) {
+			return len(viableClusters[i]) < len(viableClusters[j])
+		}
+		scoreCluster := func(cluster []int) int {
+			clusterGPUs := make([]*tfv1.GPU, len(cluster))
+			for n, idx := range cluster {
+				clusterGPUs[n] = gpus[idx]
+			}
+			return bestPlacementScore(clusterGPUs, count, scorer)
+		}
+		return scoreCluster(viableClusters[i]) > scoreCluster(viableClusters[j])
 	})
 
 	bestCluster := viableClusters[0]
@@ -349,9 +371,7 @@ func (e *PeerTopologyEvaluator) findBestSameClusterCombination(gpus []*tfv1.GPU,
 	for i, idx := range bestCluster {
 		selected[i] = gpus[idx]
 	}
-	sort.SliceStable(selected, func(i, j int) bool {
-		return selected[i].Name < selected[j].Name
-	})
+	sortGPUsByPlacement(selected, scorer)
 	bestGPUIds := make([]string, count)
 	for i := 0; i < count; i++ {
 		bestGPUIds[i] = selected[i].Name
@@ -378,21 +398,21 @@ func (e *PeerTopologyEvaluator) findBestSameClusterCombination(gpus []*tfv1.GPU,
 
 // findBestCrossClusterCombination uses enumeration, pruning, or heuristic
 // for combinations that span multiple interconnect clusters.
-func (e *PeerTopologyEvaluator) findBestCrossClusterCombination(gpus []*tfv1.GPU, candidateNames []string, count int, matrix *peerTierMatrix, clusters [][]int) (*NodeTopologyPlan, error) {
+func (e *PeerTopologyEvaluator) findBestCrossClusterCombination(gpus []*tfv1.GPU, candidateNames []string, count int, matrix *peerTierMatrix, clusters [][]int, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	// Level 1: full enumeration
 	if combinationCount(len(gpus), count) <= MaxCombinationSearch {
-		return e.enumerateAndSelectBest(gpus, candidateNames, count, matrix)
+		return e.enumerateAndSelectBest(gpus, candidateNames, count, matrix, scorer)
 	}
 
 	// Level 2: cluster-based pruning
 	pruned := pruneByClusters(gpus, count, clusters)
 	if pruned != nil && combinationCount(len(pruned), count) <= MaxCombinationSearch {
 		prunedMatrix := buildPeerTierMatrix(pruned)
-		return e.enumerateAndSelectBest(pruned, candidateNames, count, prunedMatrix)
+		return e.enumerateAndSelectBest(pruned, candidateNames, count, prunedMatrix, scorer)
 	}
 
 	// Level 3: heuristic
-	return e.heuristicSelection(gpus, candidateNames, count, matrix, clusters)
+	return e.heuristicSelection(gpus, candidateNames, count, matrix, clusters, scorer)
 }
 
 // pruneByClusters reduces the candidate set by keeping GPUs from the largest
@@ -415,7 +435,7 @@ func pruneByClusters(gpus []*tfv1.GPU, count int, clusters [][]int) []*tfv1.GPU 
 }
 
 // enumerateAndSelectBest scores all C(M,N) combinations using the peer tier matrix.
-func (e *PeerTopologyEvaluator) enumerateAndSelectBest(gpus []*tfv1.GPU, candidateNames []string, count int, matrix *peerTierMatrix) (*NodeTopologyPlan, error) {
+func (e *PeerTopologyEvaluator) enumerateAndSelectBest(gpus []*tfv1.GPU, candidateNames []string, count int, matrix *peerTierMatrix, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	var bestCombo *combinationScore
 
 	indices := make([]int, count)
@@ -435,7 +455,7 @@ func (e *PeerTopologyEvaluator) enumerateAndSelectBest(gpus []*tfv1.GPU, candida
 	}
 
 	for {
-		combo := scoreCombinationFromMatrix(gpus, indices, matrix, gpuClusterID, clusterSizes)
+		combo := scoreCombinationFromMatrix(gpus, indices, matrix, gpuClusterID, clusterSizes, scorer)
 		if bestCombo == nil || compareCombinations(combo, bestCombo) < 0 {
 			bestCombo = combo
 		}
@@ -469,10 +489,12 @@ func (e *PeerTopologyEvaluator) enumerateAndSelectBest(gpus []*tfv1.GPU, candida
 // gpuClusterID maps each GPU index to its tier-0 cluster ID.
 // clusterSizes maps each cluster ID to the total number of GPUs in that cluster
 // within the current candidate set.
-func scoreCombinationFromMatrix(gpus []*tfv1.GPU, indices []int, matrix *peerTierMatrix, gpuClusterID []int, clusterSizes map[int]int) *combinationScore {
+func scoreCombinationFromMatrix(gpus []*tfv1.GPU, indices []int, matrix *peerTierMatrix, gpuClusterID []int, clusterSizes map[int]int, scorer GPUScorer) *combinationScore {
 	names := make([]string, len(indices))
+	selectedGPUs := make([]*tfv1.GPU, len(indices))
 	for i, idx := range indices {
 		names[i] = gpus[idx].Name
+		selectedGPUs[i] = gpus[idx]
 	}
 
 	// Determine worst-case tier, pairwise affinity, and total bandwidth
@@ -526,6 +548,7 @@ func scoreCombinationFromMatrix(gpus []*tfv1.GPU, indices []int, matrix *peerTie
 		affinityScore:  normalizedScore,
 		fragmentationP: fragmentationP,
 		totalBandwidth: totalBandwidth,
+		placementScore: placementScore(selectedGPUs, scorer),
 	}
 }
 
@@ -544,7 +567,7 @@ func peerAffinityForTier(tier int32) int64 {
 }
 
 // heuristicSelection fills from the largest tier-0 cluster first.
-func (e *PeerTopologyEvaluator) heuristicSelection(gpus []*tfv1.GPU, candidateNames []string, count int, matrix *peerTierMatrix, clusters [][]int) (*NodeTopologyPlan, error) {
+func (e *PeerTopologyEvaluator) heuristicSelection(gpus []*tfv1.GPU, candidateNames []string, count int, matrix *peerTierMatrix, clusters [][]int, scorer GPUScorer) (*NodeTopologyPlan, error) {
 	// clusters already sorted by size descending
 	var selected []string
 	clustersUsed := 0
@@ -558,6 +581,12 @@ func (e *PeerTopologyEvaluator) heuristicSelection(gpus []*tfv1.GPU, candidateNa
 		sorted := make([]int, len(cluster))
 		copy(sorted, cluster)
 		sort.SliceStable(sorted, func(i, j int) bool {
+			if scorer != nil {
+				si, sj := scorer(gpus[sorted[i]]), scorer(gpus[sorted[j]])
+				if si != sj {
+					return si > sj
+				}
+			}
 			return gpus[sorted[i]].Name < gpus[sorted[j]].Name
 		})
 		for _, idx := range sorted {
