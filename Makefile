@@ -207,9 +207,18 @@ $(ENVTEST): $(LOCALBIN)
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: golangci-lint
-golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
-$(GOLANGCI_LINT): $(LOCALBIN)
-	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+golangci-lint: $(LOCALBIN) ## Download golangci-lint locally if necessary.
+	@set -e; \
+	go_bin="$$(go env GOROOT)/bin/go"; \
+	go_version="$$($$go_bin env GOVERSION)"; \
+	target="$(GOLANGCI_LINT)-$(GOLANGCI_LINT_VERSION)-$$go_version"; \
+	[ -f "$$target" ] || { \
+		echo "Downloading github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) with $$go_version"; \
+		rm -f $(GOLANGCI_LINT); \
+		GOTOOLCHAIN=local GOBIN=$(LOCALBIN) "$$go_bin" install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
+		mv $(GOLANGCI_LINT) "$$target"; \
+	}; \
+	ln -sf "$$target" $(GOLANGCI_LINT)
 
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist

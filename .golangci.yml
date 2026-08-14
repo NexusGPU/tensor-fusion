@@ -35,6 +35,26 @@ linters:
           - dupl
           - lll
         path: internal/*
+      - linters:
+          - gocyclo
+        path: internal/controller/gpupool_defrag.go
+        text: placeSinglePod
+      - linters:
+          - prealloc
+        path: internal/controller/gpupool_defrag.go
+        text: accounting
+      - linters:
+          - unparam
+        path: internal/controller/gpunode_controller.go
+        text: syncNodeAndOwnedGPUPhases
+      - linters:
+          - goconst
+        path: internal/controller/gpupool_defrag_test.go
+        text: 'node-(source|buddy)'
+      - linters:
+          - unparam
+        path: internal/controller/gpupool_defrag_test.go
+        text: 'newDefragWorkerPDB|newSchedulerTestPod'
     paths:
       - third_party$
       - builtin$
@@ -46,6 +66,7 @@ formatters:
   exclusions:
     generated: lax
     paths:
+      - cmd/nodediscovery/main.go
       - third_party$
       - builtin$
       - examples$

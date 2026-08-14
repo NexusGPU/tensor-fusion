@@ -40,5 +40,8 @@ jobs:
           bash ./scripts/patch-scheduler.sh
       - name: Run linter
         uses: golangci/golangci-lint-action@v9
+        env:
+          GOTOOLCHAIN: local
         with:
-          version: v2.1.5
+          version: v2.1.6
+          install-mode: goinstall
