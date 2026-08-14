@@ -11,13 +11,38 @@ You may obtain a copy of the License at
 package kubernetes
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
+	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	podresv1 "k8s.io/kubelet/pkg/apis/podresources/v1"
 )
+
+type fakePodResourcesClient struct {
+	listResponse *podresv1.ListPodResourcesResponse
+}
+
+func (f *fakePodResourcesClient) List(
+	context.Context, *podresv1.ListPodResourcesRequest, ...grpc.CallOption,
+) (*podresv1.ListPodResourcesResponse, error) {
+	return f.listResponse, nil
+}
+
+func (f *fakePodResourcesClient) GetAllocatableResources(
+	context.Context, *podresv1.AllocatableResourcesRequest, ...grpc.CallOption,
+) (*podresv1.AllocatableResourcesResponse, error) {
+	return &podresv1.AllocatableResourcesResponse{}, nil
+}
+
+func (f *fakePodResourcesClient) Get(
+	context.Context, *podresv1.GetPodResourcesRequest, ...grpc.CallOption,
+) (*podresv1.GetPodResourcesResponse, error) {
+	return &podresv1.GetPodResourcesResponse{}, nil
+}
 
 func TestNormalizeNVMLUUID(t *testing.T) {
 	cases := []struct {
@@ -50,18 +75,61 @@ func TestIsTFDevicePluginResource(t *testing.T) {
 		name string
 		want bool
 	}{
+		{constants.PodIndexAnnotation, true}, // v1 vgpu.rs resource name
 		{prefix + "0", true},
 		{prefix + "a", true},
 		{prefix + "f", true},
 		{"nvidia.com/gpu", false},
 		{"cpu", false},
-		{constants.PodIndexAnnotation, false}, // missing delimiter
+		{constants.PodIndexAnnotation + "x", false},
 		{"", false},
 	}
 	for _, c := range cases {
 		if got := isTFDevicePluginResource(c.name); got != c.want {
 			t.Errorf("isTFDevicePluginResource(%q) = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestPodResourcesProxyListRewritesLegacyV1Resource(t *testing.T) {
+	const gpuUUID = "GPU-f5d00867-cc01-0631-8d51-14394632047c"
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		UID:       "worker-uid",
+		Name:      "worker",
+		Namespace: "tensor-fusion-sys",
+		Annotations: map[string]string{
+			constants.ContainerGPUsAnnotation: `{"worker":["` + gpuUUID + `"]}`,
+		},
+	}}
+	response := &podresv1.ListPodResourcesResponse{PodResources: []*podresv1.PodResources{{
+		Name:      pod.Name,
+		Namespace: pod.Namespace,
+		Containers: []*podresv1.ContainerResources{{
+			Name: "worker",
+			Devices: []*podresv1.ContainerDevices{{
+				ResourceName: constants.PodIndexAnnotation,
+				DeviceIds:    []string{"0"},
+			}},
+		}},
+	}}}
+	proxy := &PodResourcesProxy{
+		upstream: &fakePodResourcesClient{listResponse: response},
+		cache: &PodCacheManager{cachedPod: map[string]*corev1.Pod{
+			string(pod.UID): pod,
+		}},
+		resourceName: "nvidia.com/gpu",
+	}
+
+	got, err := proxy.List(context.Background(), &podresv1.ListPodResourcesRequest{})
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	device := got.PodResources[0].Containers[0].Devices[0]
+	if device.ResourceName != "nvidia.com/gpu" {
+		t.Errorf("resource name = %q, want nvidia.com/gpu", device.ResourceName)
+	}
+	if !reflect.DeepEqual(device.DeviceIds, []string{gpuUUID}) {
+		t.Errorf("device IDs = %v, want [%s]", device.DeviceIds, gpuUUID)
 	}
 }
 

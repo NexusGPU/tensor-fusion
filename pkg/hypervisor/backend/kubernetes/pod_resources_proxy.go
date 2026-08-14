@@ -43,7 +43,8 @@ const (
 )
 
 // PodResourcesProxy is a transparent kubelet PodResources gRPC proxy that
-// rewrites tensor-fusion device-plugin entries (resource_name=tensor-fusion.ai/index_*,
+// rewrites tensor-fusion device-plugin entries (resource_name=tensor-fusion.ai/index
+// from v1 or tensor-fusion.ai/index_* from v2,
 // device_ids=<dummy>) into the form the node vendor's metrics exporter
 // understands (DCGM exporter and equivalents):
 //
@@ -226,13 +227,18 @@ func (p *PodResourcesProxy) lookupPod(namespace, name string) *corev1.Pod {
 	return nil
 }
 
-// isTFDevicePluginResource matches the device-plugin resource names registered
-// by pkg/hypervisor/backend/kubernetes/deviceplugin.go:
+// isTFDevicePluginResource matches both the legacy v1 resource name registered
+// by vgpu.rs and the v2 resource names registered by
+// pkg/hypervisor/backend/kubernetes/deviceplugin.go:
 //
+//	tensor-fusion.ai/index
 //	tensor-fusion.ai/index_<0..f>
 //
 // (PodIndexAnnotation + PodIndexDelimiter + %x).
 func isTFDevicePluginResource(resourceName string) bool {
+	if resourceName == constants.PodIndexAnnotation {
+		return true
+	}
 	prefix := constants.PodIndexAnnotation + constants.PodIndexDelimiter
 	return strings.HasPrefix(resourceName, prefix)
 }
