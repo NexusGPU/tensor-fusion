@@ -240,7 +240,11 @@ func isTFDevicePluginResource(resourceName string) bool {
 		return true
 	}
 	prefix := constants.PodIndexAnnotation + constants.PodIndexDelimiter
-	return strings.HasPrefix(resourceName, prefix)
+	suffix := strings.TrimPrefix(resourceName, prefix)
+	if suffix == resourceName || len(suffix) != 1 {
+		return false
+	}
+	return (suffix[0] >= '0' && suffix[0] <= '9') || (suffix[0] >= 'a' && suffix[0] <= 'f')
 }
 
 // containerGPUIDs returns the real GPU UUIDs assigned to a container, in the

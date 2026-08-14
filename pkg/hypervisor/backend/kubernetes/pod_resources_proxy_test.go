@@ -82,6 +82,10 @@ func TestIsTFDevicePluginResource(t *testing.T) {
 		{"nvidia.com/gpu", false},
 		{"cpu", false},
 		{constants.PodIndexAnnotation + "x", false},
+		{prefix, false},
+		{prefix + "g", false},
+		{prefix + "10", false},
+		{prefix + "0_extra", false},
 		{"", false},
 	}
 	for _, c := range cases {
