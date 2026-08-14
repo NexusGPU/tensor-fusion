@@ -43,6 +43,81 @@ worker pod 还会被控制器额外加 `tensor-fusion.ai/workload`、`tensor-fus
 
 ---
 
+## Gang 调度使用
+
+Gang 调度适用于需要多个 GPU Pod 同时获得资源才能开始工作的场景。开启后，Pod 在 scheduler `Permit` 阶段等待同组成员；只有达到 quorum 后才会一起继续绑定。
+
+将下列注解写在 Deployment / StatefulSet / Job 的 `spec.template.metadata.annotations` 上：
+
+| 注解 | 必需性 | 说明 |
+|---|---|---|
+| `tensor-fusion.ai/gang-enabled: "true"` | 必需 | 开启 Gang 调度。 |
+| `tensor-fusion.ai/gang-min-members: "<N>"` | 可选 | quorum 大小。省略或设为 `0` 时默认为 workload 的目标副本数；显式值必须 `>= 2` 且不能大于目标副本数。 |
+| `tensor-fusion.ai/gang-timeout: "5m"` | 可选 | 等待 quorum 的最长时间，支持 Go duration，如 `30s`、`5m`、`1h`；省略或 `0s` 表示持续等待。 |
+
+目前只支持 `Strict` 模式：任意成员确认无法调度或等待超时时，当前 Gang 调度周期失败，已在等待的同组 Pod 会被拒绝并进入 backoff。
+
+### 完整示例
+
+下面创建 4 个 Pod，默认要求 4 个成员都获得 GPU 后才通过 Gang 门禁：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tf-gang-demo
+  namespace: tensor-fusion-sys
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: tf-gang-demo
+  template:
+    metadata:
+      labels:
+        app: tf-gang-demo
+        tensor-fusion.ai/enabled: "true"
+      annotations:
+        tensor-fusion.ai/gpupool: tensor-fusion-nvidia-shared
+        tensor-fusion.ai/vendor: NVIDIA
+        tensor-fusion.ai/isolation: soft
+        tensor-fusion.ai/is-local-gpu: "true"
+        tensor-fusion.ai/gpu-count: "1"
+        tensor-fusion.ai/compute-percent-request: "20"
+        tensor-fusion.ai/vram-request: 1Gi
+        tensor-fusion.ai/gang-enabled: "true"
+        tensor-fusion.ai/gang-timeout: 5m
+    spec:
+      containers:
+      - name: worker
+        image: registry.cn-hangzhou.aliyuncs.com/tensorfusion/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+        command: ["sh", "-c", "sleep 3600"]
+```
+
+如果希望 4 个副本中有 2 个通过即可启动，增加：
+
+```yaml
+tensor-fusion.ai/gang-min-members: "2"
+```
+
+Webhook 会将用户注解转换到 `TensorFusionWorkload.spec.gangScheduling`，并在实际 worker Pod 上写入 scheduler 所需的 group key、desired members 和 required members。这些内部注解不需要用户手工设置。
+
+验证方式：
+
+```bash
+kubectl get tensorfusionworkloads -n tensor-fusion-sys
+kubectl get tensorfusionworkload tf-gang-demo -n tensor-fusion-sys \
+  -o jsonpath='{.status.gang}{"\n"}'
+kubectl get pods -n tensor-fusion-sys \
+  -l tensor-fusion.ai/workload=tf-gang-demo -o wide
+```
+
+`status.gang.phase` 可能为 `Pending`、`Waiting`、`Scheduling`、`Running`、`TimedOut` 或 `Failed`。
+
+注意：Gang 原子性针对当前新建的调度批次。已经运行的 Deployment 在线扩容时，如果新副本无法满足新 quorum，之前已运行的副本不会被回滚。
+
+---
+
 ## 总览
 
 ### 本地模式
