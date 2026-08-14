@@ -2,10 +2,13 @@ package utils_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 
@@ -233,6 +236,112 @@ func TestSetWorkerContainerSpec(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSetWorkerContainerSpecMergesAndDeduplicatesExistingEnv(t *testing.T) {
+	container := &corev1.Container{
+		Env: []corev1.EnvVar{
+			{Name: "CUSTOM_WORKER_ENV", Value: "custom-value"},
+			{Name: constants.EnableWorkerLogEnv, Value: "custom"},
+			{Name: "CUSTOM_WORKER_ENV", Value: "duplicate-value"},
+		},
+	}
+
+	utils.SetWorkerContainerSpec(
+		container,
+		&tfv1.WorkloadProfileSpec{},
+		&tfv1.WorkerConfig{},
+		&tfv1.HypervisorConfig{},
+		"",
+		false,
+	)
+
+	require.Contains(t, container.Env, corev1.EnvVar{Name: "CUSTOM_WORKER_ENV", Value: "custom-value"})
+	require.Contains(t, container.Env, corev1.EnvVar{
+		Name:  constants.EnableWorkerLogEnv,
+		Value: constants.EnableWorkerLogValue,
+	})
+	require.Equal(t, 1, lo.CountBy(container.Env, func(env corev1.EnvVar) bool {
+		return env.Name == "CUSTOM_WORKER_ENV"
+	}))
+	require.Equal(t, 1, lo.CountBy(container.Env, func(env corev1.EnvVar) bool {
+		return env.Name == constants.EnableWorkerLogEnv
+	}))
+}
+
+func TestAddTFDefaultClientConfBeforePatchMergesWorkerTemplateEnvIntoSidecar(t *testing.T) {
+	workerTemplate, err := json.Marshal(corev1.PodTemplate{
+		Template: corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{
+					{
+						Name: constants.TFContainerNameWorker,
+						Env: []corev1.EnvVar{
+							{Name: "CUSTOM_WORKER_ENV", Value: "custom-value"},
+							{
+								Name: "CUSTOM_WORKER_SECRET",
+								ValueFrom: &corev1.EnvVarSource{
+									SecretKeyRef: &corev1.SecretKeySelector{
+										LocalObjectReference: corev1.LocalObjectReference{Name: "worker-secret"},
+										Key:                  "token",
+									},
+								},
+							},
+							{Name: constants.EnableWorkerLogEnv, Value: "custom"},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	pool := &tfv1.GPUPool{
+		Spec: tfv1.GPUPoolSpec{
+			ComponentConfig: &tfv1.ComponentConfig{
+				Client: &tfv1.ClientConfig{},
+				Worker: &tfv1.WorkerConfig{
+					PodTemplate: &runtime.RawExtension{Raw: workerTemplate},
+				},
+				Hypervisor: &tfv1.HypervisorConfig{},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "application"}},
+		},
+	}
+	tfInfo := utils.TensorFusionInfo{
+		Profile: &tfv1.WorkloadProfileSpec{
+			IsLocalGPU:    true,
+			SidecarWorker: true,
+		},
+	}
+
+	utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, pool, tfInfo, []int{0})
+
+	require.Len(t, pod.Spec.Containers, 2)
+	worker := pod.Spec.Containers[1]
+	require.Equal(t, constants.TFContainerNameWorker, worker.Name)
+	require.Contains(t, worker.Env, corev1.EnvVar{Name: "CUSTOM_WORKER_ENV", Value: "custom-value"})
+	require.Contains(t, worker.Env, corev1.EnvVar{
+		Name: "CUSTOM_WORKER_SECRET",
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "worker-secret"},
+				Key:                  "token",
+			},
+		},
+	})
+	require.Contains(t, worker.Env, corev1.EnvVar{
+		Name:  constants.EnableWorkerLogEnv,
+		Value: constants.EnableWorkerLogValue,
+	})
+	require.Equal(t, 1, lo.CountBy(worker.Env, func(env corev1.EnvVar) bool {
+		return env.Name == constants.EnableWorkerLogEnv
+	}))
 }
 
 func TestNodeDiscoveryInitContainerImageFallback(t *testing.T) {

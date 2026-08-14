@@ -308,6 +308,7 @@ func AddTFDefaultClientConfBeforePatch(
 
 			pod.Spec.Containers = append(pod.Spec.Containers, v1.Container{
 				Name: constants.TFContainerNameWorker,
+				Env:  workerTemplateEnv(pool.Spec.ComponentConfig.Worker),
 				VolumeMounts: []v1.VolumeMount{
 					{
 						Name:      constants.TransportShmVolumeName,
@@ -855,6 +856,9 @@ func SetWorkerContainerSpec(
 	disabledFeatures string,
 	sharedMemMode bool,
 ) {
+	templateEnv := container.Env
+	container.Env = nil
+
 	// NOTE: need to set environment variable to make all GPUs visible to the worker,
 	// vgpu.rs limiter will limit to specific devices after Pod started
 	container.Name = constants.TFContainerNameWorker
@@ -929,6 +933,8 @@ func SetWorkerContainerSpec(
 			Value: strconv.FormatInt(workloadProfile.Resources.Limits.Vram.Value()/(1024*1024), 10),
 		})
 	}
+	container.Env = appendMissingEnv(nil, container.Env)
+	container.Env = appendMissingEnv(container.Env, templateEnv)
 
 	// TODO support hostNetwork mode and InfiniBand for higher performance
 	container.Ports = append(container.Ports, v1.ContainerPort{
@@ -964,6 +970,39 @@ func SetWorkerContainerSpec(
 	if len(container.Resources.Requests) == 0 {
 		container.Resources.Requests = workerDefaultRequests
 	}
+}
+
+func workerTemplateEnv(workerConfig *tfv1.WorkerConfig) []v1.EnvVar {
+	if workerConfig == nil || workerConfig.PodTemplate == nil {
+		return nil
+	}
+
+	podTemplate := &v1.PodTemplate{}
+	if err := json.Unmarshal(workerConfig.PodTemplate.Raw, podTemplate); err != nil || len(podTemplate.Template.Spec.Containers) == 0 {
+		return nil
+	}
+
+	return podTemplate.Template.Spec.Containers[0].Env
+}
+
+func appendMissingEnv(existing, additions []v1.EnvVar) []v1.EnvVar {
+	seen := make(map[string]struct{}, len(existing)+len(additions))
+	result := make([]v1.EnvVar, 0, len(existing)+len(additions))
+	for _, env := range existing {
+		if _, ok := seen[env.Name]; ok {
+			continue
+		}
+		result = append(result, env)
+		seen[env.Name] = struct{}{}
+	}
+	for _, env := range additions {
+		if _, ok := seen[env.Name]; ok {
+			continue
+		}
+		result = append(result, env)
+		seen[env.Name] = struct{}{}
+	}
+	return result
 }
 
 // HypervisorTemplateHash computes hash of the full hypervisor pod template
