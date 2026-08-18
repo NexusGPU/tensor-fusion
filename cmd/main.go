@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -144,8 +145,6 @@ func main() {
 		"/etc/tensor-fusion/config.yaml", "specify the path to dynamic config file")
 	flag.StringVar(&schedulerConfigPath, "scheduler-config", "/etc/tensor-fusion/scheduler-config.yaml",
 		"specify the path to TensorFusion scheduler config file")
-	flag.StringVar(&isolationModePolicy, "isolation-mode-policy", "static",
-		"GPU isolation policy for the TensorFusion scheduling domain: static or dynamic")
 	flag.StringVar(&metricsPath, "metrics-path", "/logs/metrics.log", "specify the path to metrics file")
 	flag.StringVar(&nodeLevelPortRange, "host-port-range", "40000-42000",
 		"specify the port range for assigning ports to pre-scheduled Pods such as vGPU workers")
@@ -170,15 +169,12 @@ func main() {
 
 	klog.InitFlags(nil)
 	flag.Parse()
-	switch strings.ToLower(strings.TrimSpace(isolationModePolicy)) {
-	case "static":
-		isolationModePolicy = string(tfv1.IsolationModePolicyStatic)
-	case "dynamic":
-		isolationModePolicy = string(tfv1.IsolationModePolicyDynamic)
-	default:
-		setupLog.Error(nil, "invalid isolation-mode-policy", "value", isolationModePolicy)
+	resolvedIsolationModePolicy, err := resolveIsolationModePolicy(os.Getenv(constants.IsolationModePolicyEnv))
+	if err != nil {
+		setupLog.Error(err, "invalid isolation mode policy", "env", constants.IsolationModePolicyEnv)
 		os.Exit(1)
 	}
+	isolationModePolicy = string(resolvedIsolationModePolicy)
 	ctrl.SetLogger(klog.NewKlogr())
 	ctx := context.Background()
 
@@ -297,6 +293,17 @@ func main() {
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
+	}
+}
+
+func resolveIsolationModePolicy(raw string) (tfv1.IsolationModePolicyType, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "static":
+		return tfv1.IsolationModePolicyStatic, nil
+	case "dynamic":
+		return tfv1.IsolationModePolicyDynamic, nil
+	default:
+		return "", fmt.Errorf("%s must be static or dynamic, got %q", constants.IsolationModePolicyEnv, raw)
 	}
 }
 

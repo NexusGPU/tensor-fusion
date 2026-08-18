@@ -1,7 +1,10 @@
 package constants
 
 // Controller itself envs
-const NamespaceEnv = "OPERATOR_NAMESPACE"
+const (
+	NamespaceEnv           = "OPERATOR_NAMESPACE"
+	IsolationModePolicyEnv = "TF_ISOLATION_MODE_POLICY"
+)
 
 // Scheduler preemption: when PreemptClusterWideFromEnv is enabled, effective value is read from this env.
 // "true" = cluster-wide preemption; "false" = same-tenant (same namespace) only.

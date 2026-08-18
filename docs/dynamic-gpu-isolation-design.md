@@ -156,7 +156,7 @@ flowchart TB
 
 | 对象 | 字段 | 含义 | 主要写入方 |
 |---|---|---|---|
-| Operator | `--isolation-mode-policy` | 调度域期望策略 | 用户/Helm |
+| Operator | `TF_ISOLATION_MODE_POLICY` | 调度域期望策略 | 用户/Helm |
 | GPUPool | `defaultIsolationMode/isolationModeRules` | 静态节点模式规则 | 用户/TFC |
 | GPU | `status.isolationPolicy` | 当前节点 Hypervisor 实际生效策略 | Hypervisor |
 | GPU | `status.isolationMode` | 静态策略下的节点模式；动态策略下忽略 | Hypervisor |
@@ -175,14 +175,15 @@ Operator 参数是调度域期望状态，GPU status 是实际数据面状态。
 
 ### 6.1 Operator 调度域开关
 
-在 Operator 中增加启动参数：
+Operator 从环境变量读取调度域策略：
 
 ```text
---isolation-mode-policy=static|dynamic
+TF_ISOLATION_MODE_POLICY=static|dynamic
 ```
 
-默认值必须是 `static`，以保证现有 Helm values、自定义 Operator command、TFC、GPUPool 和升级场景
-行为不变。Helm values 应提供对应字段并生成该参数；没有显式配置时不得启用 Dynamic。
+新 Helm Chart 默认注入 `dynamic`。Operator 二进制在环境变量不存在时仍回退为 `static`，保证旧部署
+清单和非 Helm 启动方式兼容；v1 镜像会安全忽略这个未知环境变量，因此可以只回退镜像而不必先修改
+容器命令。
 
 配置示例：
 
@@ -302,7 +303,7 @@ Hypervisor rollout hash 必须包含当前调度域的有效 isolation policy：
 1. 用户停止或迁出该调度域的全部 TensorFusion workload。
 2. 确认调度域内不存在有效 Worker Pod、assumed allocation 或硬件分区；GPU RunningApps 只作为
    辅助检查，不能作为唯一真相来源。
-3. 修改 Operator 的 `--isolation-mode-policy` 并重启 Operator。
+3. 修改 Operator 的 `TF_ISOLATION_MODE_POLICY` 并重启 Operator。
 4. Operator 按现有批次策略重建调度域内的 Hypervisor。
 5. 所有 GPU 发布新的实际策略后，调度域恢复调度。
 
@@ -750,12 +751,12 @@ Dynamic 调度域第一阶段必须拒绝 partitioned 请求，原因包括：
 
 ```text
 TensorFusion deployment A
-  --isolation-mode-policy=static
+  TF_ISOLATION_MODE_POLICY=static
   GPUPool: nvidia-mig
     defaultIsolationMode: partitioned
 
 TensorFusion deployment B
-  --isolation-mode-policy=dynamic
+  TF_ISOLATION_MODE_POLICY=dynamic
   GPUPool: nvidia-flexible
     supports: soft, hard, shared
 ```
@@ -803,7 +804,7 @@ Hypervisor和 Scheduler 对同一 status subresource 的更新必须使用冲突
 
 建议分层校验：
 
-- Operator 参数：`--isolation-mode-policy` 只允许 `static`、`dynamic`，非法值启动失败。
+- Operator 环境变量：`TF_ISOLATION_MODE_POLICY` 只允许 `static`、`dynamic`，非法值启动失败。
 - Operator：Dynamic 调度域中的静态规则被忽略并提示。
 - Scheduler：明确拒绝 Dynamic 调度域的 partitioned 请求。
 - Scheduler/PodResources：识别非 TensorFusion GPU 使用者并建立 external allocation；信息不可确认时
@@ -840,8 +841,8 @@ Webhook 可以提前给用户更友好的错误，但正确性不能依赖 webho
 
 ### 16.1 旧对象
 
-未设置 Operator `--isolation-mode-policy` 参数时默认为 Static。现有 TFC/GPUPool 无需增加或迁移
-字段，行为不变。
+未设置 Operator `TF_ISOLATION_MODE_POLICY` 时二进制默认为 Static。现有 TFC/GPUPool 无需增加或迁移
+字段；新 Helm Chart 默认显式注入 Dynamic，旧清单仍保持 Static。
 
 ### 16.2 Operator 与 Hypervisor 版本
 

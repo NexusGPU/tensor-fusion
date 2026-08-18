@@ -27,9 +27,10 @@ controller:
 
   nvidiaOperatorProgressiveMigration: false
 
-  # Scheduling-domain GPU isolation policy. Static preserves v1/v2 behavior;
-  # Dynamic recovers per-GPU mode from existing worker Pod annotations.
-  isolationModePolicy: static
+  # Scheduling-domain GPU isolation policy, injected as TF_ISOLATION_MODE_POLICY.
+  # Static preserves v1/v2 behavior; Dynamic recovers per-GPU mode from
+  # existing worker Pod annotations. Older images safely ignore this env var.
+  isolationModePolicy: dynamic
 
   # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
   image:
