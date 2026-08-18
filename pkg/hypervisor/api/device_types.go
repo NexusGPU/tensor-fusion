@@ -16,6 +16,8 @@ limitations under the License.
 
 package api
 
+import tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+
 // DeviceInfo represents discovered GPU device information
 // +k8s:deepcopy-gen=true
 type DeviceInfo struct {
@@ -40,7 +42,8 @@ type DeviceInfo struct {
 	// Env to inject to guest
 	DeviceEnv map[string]string
 
-	IsolationMode IsolationMode
+	IsolationMode   IsolationMode
+	IsolationPolicy tfv1.IsolationModePolicyType
 }
 
 // DeviceTopology represents normalized topology metadata for a device.

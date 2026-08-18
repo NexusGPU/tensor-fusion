@@ -21,6 +21,7 @@ import (
 // This is a shared dependency between DeviceController, WorkerController, and Backend
 type AllocationController struct {
 	deviceController framework.DeviceController
+	isolationPolicy  tfv1.IsolationModePolicyType
 
 	mu                sync.RWMutex
 	workerAllocations map[string]*api.WorkerAllocation
@@ -38,9 +39,19 @@ type visibleDeviceRef struct {
 func NewAllocationController(deviceController framework.DeviceController) *AllocationController {
 	return &AllocationController{
 		deviceController:  deviceController,
+		isolationPolicy:   tfv1.IsolationModePolicyStatic,
 		workerAllocations: make(map[string]*api.WorkerAllocation, 32),
 		deviceAllocations: make(map[string][]*api.WorkerAllocation, 32),
 	}
+}
+
+func (a *AllocationController) SetIsolationPolicy(policy tfv1.IsolationModePolicyType) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if policy != tfv1.IsolationModePolicyDynamic {
+		policy = tfv1.IsolationModePolicyStatic
+	}
+	a.isolationPolicy = policy
 }
 
 // AllocateWorkerDevices allocates devices for a worker request
@@ -56,6 +67,9 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	if a.workerAllocations[request.WorkerUID] != nil {
 		klog.Infof("worker %s already allocated, skipping", request.WorkerUID)
 		return a.workerAllocations[request.WorkerUID], nil
+	}
+	if err := a.validateDynamicAllocationLocked(request); err != nil {
+		return nil, err
 	}
 
 	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
@@ -234,12 +248,15 @@ func (a *AllocationController) DeallocateWorker(workerUID string) error {
 
 // RecoverPartitionedWorker rebuilds allocation state for an existing partitioned worker
 // after hypervisor restart. partitionUUIDs is a comma-separated string of "partitionUUID:parentGPU" pairs.
-func (a *AllocationController) RecoverPartitionedWorker(request *api.WorkerInfo, partitionUUIDs string) {
+func (a *AllocationController) RecoverPartitionedWorker(request *api.WorkerInfo, partitionUUIDs string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.isolationPolicy == tfv1.IsolationModePolicyDynamic {
+		return fmt.Errorf("dynamic isolation policy does not support partitioned worker %s", request.WorkerUID)
+	}
 
 	if a.workerAllocations[request.WorkerUID] != nil {
-		return // already allocated, skip
+		return nil // already allocated, skip
 	}
 
 	var deviceInfos []*api.DeviceInfo
@@ -270,7 +287,7 @@ func (a *AllocationController) RecoverPartitionedWorker(request *api.WorkerInfo,
 
 	if len(deviceInfos) == 0 {
 		klog.Warningf("no valid partition UUIDs to recover for worker %s", request.WorkerUID)
-		return
+		return nil
 	}
 
 	allocation := &api.WorkerAllocation{
@@ -282,6 +299,41 @@ func (a *AllocationController) RecoverPartitionedWorker(request *api.WorkerInfo,
 		a.addDeviceAllocation(deviceUUID, allocation)
 	}
 	klog.Infof("recovered partitioned worker %s with %d partition(s)", request.WorkerUID, len(deviceInfos))
+	return nil
+}
+
+func (a *AllocationController) validateDynamicAllocationLocked(request *api.WorkerInfo) error {
+	if a.isolationPolicy != tfv1.IsolationModePolicyDynamic {
+		return nil
+	}
+	if request.IsolationMode == tfv1.IsolationModePartitioned {
+		return fmt.Errorf("dynamic isolation policy does not support partitioned worker %s", request.WorkerUID)
+	}
+	if request.IsolationMode != tfv1.IsolationModeShared &&
+		request.IsolationMode != tfv1.IsolationModeSoft &&
+		request.IsolationMode != tfv1.IsolationModeHard {
+		return fmt.Errorf("worker %s has invalid dynamic isolation mode %q", request.WorkerUID, request.IsolationMode)
+	}
+
+	for _, deviceUUID := range request.AllocatedDevices {
+		allocations := a.deviceAllocations[deviceUUID]
+		if request.IsolationMode == tfv1.IsolationModeShared && len(allocations) > 0 {
+			return fmt.Errorf(
+				"device %s is already allocated and cannot be used by shared worker %s",
+				deviceUUID, request.WorkerUID,
+			)
+		}
+		for _, allocation := range allocations {
+			if allocation == nil || allocation.WorkerInfo == nil {
+				return fmt.Errorf("device %s has an unknown existing allocation", deviceUUID)
+			}
+			existingMode := allocation.WorkerInfo.IsolationMode
+			if existingMode != request.IsolationMode {
+				return fmt.Errorf("device %s is already allocated in isolation mode %s", deviceUUID, existingMode)
+			}
+		}
+	}
+	return nil
 }
 
 // GetWorkerAllocation returns the allocation for a specific worker

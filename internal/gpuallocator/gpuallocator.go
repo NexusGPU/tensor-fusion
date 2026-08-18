@@ -288,6 +288,9 @@ type GpuAllocator struct {
 	syncInterval    time.Duration
 	cancel          context.CancelFunc
 	ctx             context.Context
+	// isolationPolicy is the scheduler-wide policy. Static is the compatible
+	// default; Dynamic is enabled by the operator command line.
+	isolationPolicy tfv1.IsolationModePolicyType
 
 	// Queue for tracking modified GPUs that need to be synced
 	dirtyQueue     map[types.NamespacedName]struct{}
@@ -325,6 +328,27 @@ type GpuAllocator struct {
 	// timestamp. Wired from cmd/main.go to avoid a gang→allocator package
 	// dependency. nil → no gang awareness (treat every entry uniformly).
 	gangWaitingProbe func(podUID string) bool
+}
+
+// SetIsolationPolicy configures the scheduler-wide isolation policy. The
+// policy is intentionally global in the first implementation; GPUPool-level
+// policy selection is reserved for a future API extension.
+func (s *GpuAllocator) SetIsolationPolicy(policy tfv1.IsolationModePolicyType) {
+	if policy != tfv1.IsolationModePolicyDynamic {
+		policy = tfv1.IsolationModePolicyStatic
+	}
+	s.storeMutex.Lock()
+	s.isolationPolicy = policy
+	s.storeMutex.Unlock()
+}
+
+func (s *GpuAllocator) IsolationPolicy() tfv1.IsolationModePolicyType {
+	s.storeMutex.RLock()
+	defer s.storeMutex.RUnlock()
+	if s.isolationPolicy == "" {
+		return tfv1.IsolationModePolicyStatic
+	}
+	return s.isolationPolicy
 }
 
 func NewGpuAllocator(
@@ -514,6 +538,9 @@ func (s *GpuAllocator) applyAssumedAllocationsToGPUCopies(gpuIndex map[string]*t
 			if err := s.applyAllocationToGPU(gpu, req, gpuName); err != nil {
 				log.FromContext(s.ctx).Error(err, "Failed to apply assumed allocation to GPU snapshot", "podUID", podUID, "gpu", gpuName)
 			}
+			if gpu.Status.IsolationPolicy == tfv1.IsolationModePolicyDynamic && gpu.Status.ActiveIsolationMode == "" && req.Isolation != tfv1.IsolationModePartitioned {
+				gpu.Status.ActiveIsolationMode = req.Isolation
+			}
 		}
 	}
 }
@@ -612,6 +639,10 @@ func (s *GpuAllocator) Filter(
 	toFilterGPUs []*tfv1.GPU,
 	isSimulateSchedule bool,
 ) ([]*tfv1.GPU, []filter.FilterDetail, error) {
+	if s.IsolationPolicy() == tfv1.IsolationModePolicyDynamic && req.Isolation == tfv1.IsolationModePartitioned {
+		return nil, nil, fmt.Errorf("dynamic policy does not support partitioned allocation")
+	}
+	toFilterGPUs = filterGPUsForIsolationPolicy(toFilterGPUs, s.IsolationPolicy(), req.Isolation)
 	// Filter order: index -> isolation -> partition -> resource -> (model, vendor, nodeAffinity) -> sameNode
 	filterRegistry := s.filterRegistry
 
@@ -666,16 +697,63 @@ func (s *GpuAllocator) Filter(
 	return filteredGPUs, filterDetails, nil
 }
 
+func filterGPUsForIsolationPolicy(
+	gpus []*tfv1.GPU,
+	expectedPolicy tfv1.IsolationModePolicyType,
+	requested tfv1.IsolationModeType,
+) []*tfv1.GPU {
+	filtered := make([]*tfv1.GPU, 0, len(gpus))
+	for _, gpu := range gpus {
+		if isGPUIsolationCompatible(expectedPolicy, gpu, requested) {
+			filtered = append(filtered, gpu)
+		}
+	}
+	return filtered
+}
+
+func isGPUIsolationCompatible(
+	expectedPolicy tfv1.IsolationModePolicyType,
+	gpu *tfv1.GPU,
+	requested tfv1.IsolationModeType,
+) bool {
+	if gpu == nil {
+		return false
+	}
+	if expectedPolicy == tfv1.IsolationModePolicyDynamic {
+		if gpu.Status.IsolationPolicy != tfv1.IsolationModePolicyDynamic || gpu.Status.DynamicIsolationConflict {
+			return false
+		}
+		return gpu.Status.ActiveIsolationMode == "" || gpu.Status.ActiveIsolationMode == requested
+	}
+	if gpu.Status.IsolationPolicy != "" && gpu.Status.IsolationPolicy != tfv1.IsolationModePolicyStatic {
+		return false
+	}
+	if requested == "" || requested == tfv1.IsolationModeShared {
+		return true
+	}
+	return gpu.Status.IsolationMode == "" || gpu.Status.IsolationMode == requested
+}
+
+// IsGPUIsolationCompatible reports whether a GPU may participate in placement
+// and scoring for the scheduler-wide policy and requested isolation mode.
+func (s *GpuAllocator) IsGPUIsolationCompatible(gpu *tfv1.GPU, requested tfv1.IsolationModeType) bool {
+	return isGPUIsolationCompatible(s.IsolationPolicy(), gpu, requested)
+}
+
 func (s *GpuAllocator) FilterWithPreempt(
 	req *tfv1.AllocRequest,
 	preemptAllocRequests []*tfv1.AllocRequest,
 	targetNodeNames ...string,
 ) ([]*tfv1.GPU, []filter.FilterDetail, error) {
+	if s.IsolationPolicy() == tfv1.IsolationModePolicyDynamic && req.Isolation == tfv1.IsolationModePartitioned {
+		return nil, nil, fmt.Errorf("dynamic policy does not support partitioned allocation")
+	}
 	gpuStore, nodeGpuStore := s.snapshotStoresForPreempt()
 	toFilterGPUs, err := s.buildPreemptFilterInput(gpuStore, nodeGpuStore, preemptAllocRequests, targetNodeNames)
 	if err != nil {
 		return nil, nil, err
 	}
+	toFilterGPUs = filterGPUsForIsolationPolicy(toFilterGPUs, s.IsolationPolicy(), req.Isolation)
 
 	filterRegistry := s.buildPreemptFilterRegistry(req)
 	filteredGPUs, filterDetails, err := filterRegistry.Apply(s.ctx, req.WorkloadNameNamespace, toFilterGPUs, false)
@@ -1132,6 +1210,23 @@ func (s *GpuAllocator) Assume(gpuNames []string, req *tfv1.AllocRequest) error {
 
 	gpuCopies := make(map[string]*tfv1.GPU, len(gpuNames))
 	gpuNodeName := ""
+	newDynamicLocks := make([]string, 0, len(gpuNames))
+	clearNewDynamicLocks := func() {
+		if s.isolationPolicy != tfv1.IsolationModePolicyDynamic {
+			return
+		}
+		for _, gpuName := range newDynamicLocks {
+			if s.clearDynamicModeIfUnusedLocked(gpuName) {
+				s.markGPUDirty(types.NamespacedName{Name: gpuName})
+			}
+		}
+	}
+	assumeCompleted := false
+	defer func() {
+		if !assumeCompleted {
+			clearNewDynamicLocks()
+		}
+	}()
 	for _, gpuName := range gpuNames {
 		gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
 		if gpu == nil {
@@ -1140,13 +1235,39 @@ func (s *GpuAllocator) Assume(gpuNames []string, req *tfv1.AllocRequest) error {
 		if gpuNodeName == "" {
 			gpuNodeName = gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		}
+		if s.isolationPolicy == tfv1.IsolationModePolicyDynamic &&
+			gpu.Status.IsolationPolicy != tfv1.IsolationModePolicyDynamic {
+			return fmt.Errorf("GPU %s has not advertised Dynamic isolation policy", gpuName)
+		}
+		if s.isolationPolicy != tfv1.IsolationModePolicyDynamic &&
+			!isGPUIsolationCompatible(s.isolationPolicy, gpu, req.Isolation) {
+			return fmt.Errorf("GPU %s is incompatible with %s isolation policy and mode %s",
+				gpuName, s.isolationPolicy, req.Isolation)
+		}
 		gpuCopies[gpuName] = gpu.DeepCopy()
+		if s.isolationPolicy == tfv1.IsolationModePolicyDynamic {
+			if req.Isolation == tfv1.IsolationModePartitioned {
+				return fmt.Errorf("dynamic policy does not support partitioned allocation")
+			}
+			if gpuCopies[gpuName].Status.DynamicIsolationConflict {
+				return fmt.Errorf("GPU %s has a Dynamic isolation conflict", gpuName)
+			}
+			active := gpuCopies[gpuName].Status.ActiveIsolationMode
+			if active != "" && active != req.Isolation {
+				return fmt.Errorf("GPU %s is locked to isolation mode %s", gpuName, active)
+			}
+			if active == "" {
+				gpuCopies[gpuName].Status.ActiveIsolationMode = req.Isolation
+				newDynamicLocks = append(newDynamicLocks, gpuName)
+			}
+		}
 	}
 
 	s.applyAssumedAllocationsToGPUCopies(gpuCopies, s.assumedAllocation)
 
 	for _, gpuName := range gpuNames {
 		if err := s.applyAllocationToGPU(gpuCopies[gpuName], req, gpuName); err != nil {
+			clearNewDynamicLocks()
 			return err
 		}
 	}
@@ -1154,7 +1275,24 @@ func (s *GpuAllocator) Assume(gpuNames []string, req *tfv1.AllocRequest) error {
 	if s.maxWorkerPerNode > 0 {
 		workerCounts := s.effectiveNodeWorkerCountsLocked()
 		if workerCounts[gpuNodeName] >= s.maxWorkerPerNode {
+			clearNewDynamicLocks()
 			return fmt.Errorf("node %s reached max workers per node %d", gpuNodeName, s.maxWorkerPerNode)
+		}
+	}
+
+	// Publish the card-level mode lock only after the complete request has
+	// passed validation. Assume holds storeMutex, so no concurrent Assume can
+	// observe a partially locked multi-GPU request. The lock is kept in the
+	// real store while the request is assumed and is cleared by Forget/Rollback
+	// when no allocation still references the GPU.
+	if s.isolationPolicy == tfv1.IsolationModePolicyDynamic {
+		for _, gpuName := range gpuNames {
+			key := types.NamespacedName{Name: gpuName}
+			gpu := s.gpuStore[key]
+			if gpu != nil && gpu.Status.ActiveIsolationMode == "" {
+				gpu.Status.ActiveIsolationMode = req.Isolation
+				s.markGPUDirty(key)
+			}
 		}
 	}
 
@@ -1164,6 +1302,7 @@ func (s *GpuAllocator) Assume(gpuNames []string, req *tfv1.AllocRequest) error {
 	s.assumedAllocationTimestamps[podUID] = time.Now()
 	delete(s.uniqueDeallocation, podUID)
 	s.quotaStore.AssumeQuota(req.WorkloadNameNamespace.Namespace, assumedReq)
+	assumeCompleted = true
 
 	return nil
 }
@@ -1188,15 +1327,25 @@ func (s *GpuAllocator) Commit(podUID string) ([]*tfv1.GPU, error) {
 	// failure during commit. Keeps the invariant: a failed Commit leaves no
 	// assumed state behind, regardless of whether the caller also calls Forget.
 	rollbackOnCommitFailure := func(appliedGPUKeys []types.NamespacedName) {
+		// Remove the assumed ledger entry first so mode locks can be released
+		// for GPUs that were validated but never reached applyAllocation.
+		delete(s.assumedAllocation, podUID)
+		delete(s.assumedAllocationTimestamps, podUID)
 		for _, appliedKey := range appliedGPUKeys {
 			appliedGPU := s.gpuStore[appliedKey]
 			s.releaseAllocationFromGPU(appliedGPU, req, appliedKey.Name)
 			removeRunningApp(s.ctx, appliedGPU, req)
 			s.markGPUDirty(appliedKey)
 		}
+		if s.isolationPolicy == tfv1.IsolationModePolicyDynamic {
+			for _, gpuName := range req.GPUNames {
+				key := types.NamespacedName{Name: gpuName}
+				if s.clearDynamicModeIfUnusedLocked(gpuName) {
+					s.markGPUDirty(key)
+				}
+			}
+		}
 		s.quotaStore.ForgetAssumedQuota(req.WorkloadNameNamespace.Namespace, req)
-		delete(s.assumedAllocation, podUID)
-		delete(s.assumedAllocationTimestamps, podUID)
 	}
 
 	gpuNodeName := ""
@@ -1215,7 +1364,6 @@ func (s *GpuAllocator) Commit(podUID string) ([]*tfv1.GPU, error) {
 			rollbackOnCommitFailure(appliedGPUKeys)
 			return nil, err
 		}
-
 		addRunningApp(s.ctx, gpu, req)
 		s.markGPUDirty(key)
 		appliedGPUKeys = append(appliedGPUKeys, key)
@@ -1284,6 +1432,14 @@ func (s *GpuAllocator) Forget(podUID string) error {
 	s.quotaStore.ForgetAssumedQuota(req.WorkloadNameNamespace.Namespace, req)
 	delete(s.assumedAllocation, podUID)
 	delete(s.assumedAllocationTimestamps, podUID)
+	if s.isolationPolicy == tfv1.IsolationModePolicyDynamic {
+		for _, gpuName := range req.GPUNames {
+			key := types.NamespacedName{Name: gpuName}
+			if s.clearDynamicModeIfUnusedLocked(gpuName) {
+				s.markGPUDirty(key)
+			}
+		}
+	}
 	return nil
 }
 
@@ -1331,6 +1487,14 @@ func (s *GpuAllocator) Rollback(podUID string) error {
 		})
 	}
 	delete(s.uniqueAllocation, podUID)
+	if s.isolationPolicy == tfv1.IsolationModePolicyDynamic {
+		for _, gpuName := range request.GPUNames {
+			key := types.NamespacedName{Name: gpuName}
+			if s.clearDynamicModeIfUnusedLocked(gpuName) {
+				s.markGPUDirty(key)
+			}
+		}
+	}
 	delete(s.podNamespaceNsToPodUID, request.PodMeta.Namespace+"/"+request.PodMeta.Name)
 	s.quotaStore.DeallocateQuota(request.WorkloadNameNamespace.Namespace, request)
 
@@ -1344,6 +1508,22 @@ func (s *GpuAllocator) Rollback(podUID string) error {
 		"vram", request.Request.Vram.String())
 
 	return nil
+}
+
+// clearDynamicModeIfUnusedLocked releases a Dynamic card mode lock once no
+// committed or assumed request references the GPU. Caller must hold
+// storeMutex. It returns true when the GPU status was changed.
+func (s *GpuAllocator) clearDynamicModeIfUnusedLocked(gpuName string) bool {
+	if s.isolationPolicy != tfv1.IsolationModePolicyDynamic || s.dynamicGPUHasAllocationLocked(gpuName) {
+		return false
+	}
+	gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]
+	if gpu == nil || (gpu.Status.ActiveIsolationMode == "" && !gpu.Status.DynamicIsolationConflict) {
+		return false
+	}
+	gpu.Status.ActiveIsolationMode = ""
+	gpu.Status.DynamicIsolationConflict = false
+	return true
 }
 
 // IsCommitted reports whether a committed allocation exists for podUID.
@@ -1382,10 +1562,21 @@ func (s *GpuAllocator) UnreserveOrRollback(podUID string) error {
 // Caller MUST hold storeMutex.Lock.
 func (s *GpuAllocator) sweepStaleAssumedAllocationsLocked(now time.Time) int {
 	swept := 0
+	clearDynamicLocks := func(req *tfv1.AllocRequest) {
+		if req == nil || s.isolationPolicy != tfv1.IsolationModePolicyDynamic {
+			return
+		}
+		for _, gpuName := range req.GPUNames {
+			if s.clearDynamicModeIfUnusedLocked(gpuName) {
+				s.markGPUDirty(types.NamespacedName{Name: gpuName})
+			}
+		}
+	}
 	for uid, assumedReq := range s.assumedAllocation {
 		if _, committed := s.uniqueAllocation[uid]; committed {
 			delete(s.assumedAllocation, uid)
 			delete(s.assumedAllocationTimestamps, uid)
+			clearDynamicLocks(assumedReq)
 			continue
 		}
 		ts, ok := s.assumedAllocationTimestamps[uid]
@@ -1408,6 +1599,7 @@ func (s *GpuAllocator) sweepStaleAssumedAllocationsLocked(now time.Time) int {
 			}
 			delete(s.assumedAllocation, uid)
 			delete(s.assumedAllocationTimestamps, uid)
+			clearDynamicLocks(assumedReq)
 			log.FromContext(s.ctx).Info("evicted stale assumed allocation past TTL",
 				"podUID", uid, "age", now.Sub(ts), "ttl", s.assumedAllocationTTL)
 			swept++
@@ -1615,6 +1807,14 @@ func (s *GpuAllocator) Dealloc(
 		delete(s.nodeWorkerStore, nodeName)
 	}
 	delete(s.uniqueAllocation, podUID)
+	if s.isolationPolicy == tfv1.IsolationModePolicyDynamic {
+		for _, gpuName := range gpus {
+			key := types.NamespacedName{Name: gpuName}
+			if s.clearDynamicModeIfUnusedLocked(gpuName) {
+				s.markGPUDirty(key)
+			}
+		}
+	}
 	delete(s.podNamespaceNsToPodUID, podMeta.Namespace+"/"+podMeta.Name)
 	s.uniqueDeallocation[podUID] = struct{}{}
 
@@ -1629,6 +1829,22 @@ func (s *GpuAllocator) Dealloc(
 		"gpuNames", gpus,
 		"tflops", request.Request.Tflops.String(),
 		"vram", request.Request.Vram.String())
+}
+
+// dynamicGPUHasAllocationLocked reports whether any committed or assumed
+// request still references a GPU. Caller must hold storeMutex.
+func (s *GpuAllocator) dynamicGPUHasAllocationLocked(gpuName string) bool {
+	for _, req := range s.uniqueAllocation {
+		if req != nil && slices.Contains(req.GPUNames, gpuName) {
+			return true
+		}
+	}
+	for _, req := range s.assumedAllocation {
+		if req != nil && slices.Contains(req.GPUNames, gpuName) {
+			return true
+		}
+	}
+	return false
 }
 
 // AdjustAllocation applies an in-place request/limit change to an existing
@@ -2298,6 +2514,7 @@ func syncGPUMetadataAndStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
 	}
 	old.Status.Index = gpu.Status.Index
 	old.Status.IsolationMode = gpu.Status.IsolationMode
+	old.Status.IsolationPolicy = gpu.Status.IsolationPolicy
 	// Don't overwrite AllocatedPartitions as that's managed by the allocator
 }
 
@@ -2447,6 +2664,8 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 			latest.Status.Available = gpu.Status.Available
 			latest.Status.RunningApps = gpu.Status.RunningApps
 			latest.Status.AllocatedPartitions = gpu.Status.AllocatedPartitions
+			latest.Status.ActiveIsolationMode = gpu.Status.ActiveIsolationMode
+			latest.Status.DynamicIsolationConflict = gpu.Status.DynamicIsolationConflict
 
 			// Attempt to update with the latest version
 			return s.Status().Update(s.ctx, latest)
@@ -2687,6 +2906,7 @@ func (s *GpuAllocator) CheckQuotaAndFilterSingleNodePreempt(
 func (s *GpuAllocator) reconcileAllocationState() {
 	ctx := s.ctx
 	logger := log.FromContext(ctx)
+	policy := s.IsolationPolicy()
 
 	workers := &v1.PodList{}
 	if err := s.List(ctx, workers, client.MatchingLabels(map[string]string{
@@ -2696,40 +2916,16 @@ func (s *GpuAllocator) reconcileAllocationState() {
 		return
 	}
 
-	// Filter rule (authoritative-annotation invariant):
-	//   - Pod must be scheduled (NodeName != "") AND not in the deleted-and-deallocated
-	//     state (deletion timestamp set without our finalizer).
-	//   - Pod must carry a non-empty gpu-device-ids annotation. Per the architecture,
-	//     PreBind is the single point that commits a TF allocation, and PreBind only
-	//     proceeds to Bind if that annotation was successfully patched. A scheduled
-	//     worker pod WITHOUT the annotation therefore did not commit an allocation —
-	//     registering it here would falsely inflate namespace quota (the request
-	//     resources are non-zero even when GPUNames is empty).
-	workers.Items = lo.Filter(workers.Items, func(worker v1.Pod, _ int) bool {
-		scheduled := worker.Spec.NodeName != ""
-		deletedAndDeAllocated := !worker.DeletionTimestamp.IsZero() &&
-			!controllerutil.ContainsFinalizer(&worker, constants.Finalizer)
-		hasGPUAnnotation := worker.Annotations[constants.GPUDeviceIDsAnnotation] != ""
+	workers.Items = s.filterAndRegisterExistingWorkers(workers.Items)
 
-		active := scheduled && !deletedAndDeAllocated && hasGPUAnnotation
-		if !active {
-			return false
-		}
-
-		allocRequest, msg, err := s.ComposeAllocationRequest(&worker)
-		if err != nil {
-			logger.Error(err, "Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", worker.Name, "msg", msg)
-			return false
-		}
-		s.uniqueAllocation[string(worker.UID)] = allocRequest
-		s.podNamespaceNsToPodUID[worker.Namespace+"/"+worker.Name] = string(worker.UID)
-		s.addAllocationMap(worker.Spec.NodeName, worker.ObjectMeta)
-
-		if utils.IsPodPending(&worker) {
-			s.indexAllocator.ReconcileLockState(&worker)
-		}
-		return true
-	})
+	// Dynamic migration bridge: v1 Worker Pods already carry the GPU UUIDs and
+	// workload isolation annotations. Recover their per-GPU mode lock before
+	// rebuilding resource accounting; no v1 GPU status field is required.
+	recoveredModes := make(map[types.NamespacedName]tfv1.IsolationModeType)
+	modeConflicts := make(map[types.NamespacedName]bool)
+	if policy == tfv1.IsolationModePolicyDynamic {
+		recoveredModes, modeConflicts = recoverDynamicIsolationModes(workers.Items, s.uniqueAllocation)
+	}
 
 	actualAvailableMap := make(map[types.NamespacedName]*tfv1.Resource)
 	actualRunningAppsMap := make(map[types.NamespacedName][]*tfv1.RunningAppDetail)
@@ -2740,6 +2936,15 @@ func (s *GpuAllocator) reconcileAllocationState() {
 	s.sweepStaleAssumedAllocationsLocked(time.Now())
 
 	for gpuKey, gpu := range s.gpuStore {
+		if policy == tfv1.IsolationModePolicyDynamic {
+			if modeConflicts[gpuKey] {
+				gpu.Status.ActiveIsolationMode = ""
+				gpu.Status.DynamicIsolationConflict = true
+			} else {
+				gpu.Status.ActiveIsolationMode = recoveredModes[gpuKey]
+				gpu.Status.DynamicIsolationConflict = false
+			}
+		}
 		if gpu.Status.Capacity != nil {
 			actualAvailableMap[gpuKey] = gpu.Status.Capacity.DeepCopy()
 			actualRunningAppsMap[gpuKey] = gpu.Status.RunningApps
@@ -2851,6 +3056,66 @@ func (s *GpuAllocator) reconcileAllocationState() {
 	// reconcile quota store state
 	s.quotaStore.ReconcileQuotaStore(ctx, s.uniqueAllocation)
 	log.FromContext(ctx).Info("Quota store data reconciled")
+}
+
+// filterAndRegisterExistingWorkers rebuilds the allocator's authoritative
+// worker maps from scheduled worker Pods with committed GPU annotations.
+func (s *GpuAllocator) filterAndRegisterExistingWorkers(workers []v1.Pod) []v1.Pod {
+	logger := log.FromContext(s.ctx)
+	activeWorkers := make([]v1.Pod, 0, len(workers))
+	for _, worker := range workers {
+		scheduled := worker.Spec.NodeName != ""
+		deletedAndDeAllocated := !worker.DeletionTimestamp.IsZero() &&
+			!controllerutil.ContainsFinalizer(&worker, constants.Finalizer)
+		hasGPUAnnotation := worker.Annotations[constants.GPUDeviceIDsAnnotation] != ""
+		if !scheduled || deletedAndDeAllocated || !hasGPUAnnotation {
+			continue
+		}
+
+		allocRequest, msg, err := s.ComposeAllocationRequest(&worker)
+		if err != nil {
+			logger.Error(err, "Failed to compose allocation request for existing worker Pod, annotation may not be valid", "pod", worker.Name, "msg", msg)
+			continue
+		}
+		s.uniqueAllocation[string(worker.UID)] = allocRequest
+		s.podNamespaceNsToPodUID[worker.Namespace+"/"+worker.Name] = string(worker.UID)
+		s.addAllocationMap(worker.Spec.NodeName, worker.ObjectMeta)
+		if utils.IsPodPending(&worker) {
+			s.indexAllocator.ReconcileLockState(&worker)
+		}
+		activeWorkers = append(activeWorkers, worker)
+	}
+	return activeWorkers
+}
+
+func recoverDynamicIsolationModes(
+	workers []v1.Pod,
+	allocations map[string]*tfv1.AllocRequest,
+) (map[types.NamespacedName]tfv1.IsolationModeType, map[types.NamespacedName]bool) {
+	recoveredModes := make(map[types.NamespacedName]tfv1.IsolationModeType)
+	modeConflicts := make(map[types.NamespacedName]bool)
+	for _, worker := range workers {
+		alloc := allocations[string(worker.UID)]
+		for gpuID := range strings.SplitSeq(worker.Annotations[constants.GPUDeviceIDsAnnotation], ",") {
+			gpuID = strings.TrimSpace(gpuID)
+			if gpuID == "" {
+				continue
+			}
+			key := types.NamespacedName{Name: gpuID}
+			if alloc == nil || (alloc.Isolation != tfv1.IsolationModeShared &&
+				alloc.Isolation != tfv1.IsolationModeSoft &&
+				alloc.Isolation != tfv1.IsolationModeHard) {
+				modeConflicts[key] = true
+				continue
+			}
+			if previous := recoveredModes[key]; previous != "" && previous != alloc.Isolation {
+				modeConflicts[key] = true
+				continue
+			}
+			recoveredModes[key] = alloc.Isolation
+		}
+	}
+	return recoveredModes, modeConflicts
 }
 
 func (s *GpuAllocator) startWorkerCleanUpChecker() {

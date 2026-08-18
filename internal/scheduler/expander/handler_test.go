@@ -761,3 +761,95 @@ func createTestTensorFusionPod(name, namespace, tflops, vram string) *corev1.Pod
 
 	return pod
 }
+
+func TestDynamicInflightPreSchedulingRespectsModeAndCount(t *testing.T) {
+	if err := tfv1.AddToScheme(scheme.Scheme); err != nil {
+		t.Fatal(err)
+	}
+	allocator := gpuallocator.NewGpuAllocator(context.Background(), nil,
+		fake.NewClientBuilder().WithScheme(scheme.Scheme).Build(), time.Second)
+	allocator.SetIsolationPolicy(tfv1.IsolationModePolicyDynamic)
+	inflight := map[string]*tfv1.GPU{
+		"gpu-0": createTestGPU("gpu-0", "future-node", "100", "10Gi"),
+		"gpu-1": createTestGPU("gpu-1", "future-node", "100", "10Gi"),
+		"gpu-2": createTestGPU("gpu-2", "future-node", "100", "10Gi"),
+	}
+	for _, gpu := range inflight {
+		gpu.Status.IsolationPolicy = tfv1.IsolationModePolicyDynamic
+	}
+
+	soft := &tfv1.AllocRequest{
+		Count:     2,
+		Isolation: tfv1.IsolationModeSoft,
+		Request: tfv1.Resource{
+			Tflops: resource.MustParse("25"),
+			Vram:   resource.MustParse("2Gi"),
+		},
+	}
+	if !applyPreScheduledAllocationToInflightGPUs(allocator, soft, inflight) {
+		t.Fatal("expected two-GPU soft pre-scheduling to succeed")
+	}
+	softLocked := 0
+	idle := 0
+	for _, gpu := range inflight {
+		switch gpu.Status.ActiveIsolationMode {
+		case tfv1.IsolationModeSoft:
+			softLocked++
+			if got := gpu.Status.Available.Tflops.String(); got != "75" {
+				t.Fatalf("soft-allocated GPU has %s TFLOPS available, want 75", got)
+			}
+		case "":
+			idle++
+		}
+	}
+	if softLocked != 2 || idle != 1 {
+		t.Fatalf("unexpected Dynamic locks: soft=%d idle=%d", softLocked, idle)
+	}
+
+	hardTwo := &tfv1.AllocRequest{
+		Count:     2,
+		Isolation: tfv1.IsolationModeHard,
+		Request: tfv1.Resource{
+			Tflops: resource.MustParse("10"),
+			Vram:   resource.MustParse("1Gi"),
+		},
+	}
+	if applyPreScheduledAllocationToInflightGPUs(allocator, hardTwo, inflight) {
+		t.Fatal("expected hard pre-scheduling to fail when only one idle GPU remains")
+	}
+	for _, gpu := range inflight {
+		if gpu.Status.ActiveIsolationMode == tfv1.IsolationModeHard {
+			t.Fatal("failed multi-GPU pre-scheduling must not leave a partial hard lock")
+		}
+	}
+}
+
+func TestPrepareNewNodeResetsDynamicTemplateState(t *testing.T) {
+	if err := tfv1.AddToScheme(scheme.Scheme); err != nil {
+		t.Fatal(err)
+	}
+	allocator := gpuallocator.NewGpuAllocator(context.Background(), nil,
+		fake.NewClientBuilder().WithScheme(scheme.Scheme).Build(), time.Second)
+	allocator.SetIsolationPolicy(tfv1.IsolationModePolicyDynamic)
+	expander := &NodeExpander{allocator: allocator}
+	templateGPU := createTestGPU("gpu-template", "old-node", "100", "10Gi")
+	templateGPU.Status.IsolationPolicy = tfv1.IsolationModePolicyDynamic
+	templateGPU.Status.ActiveIsolationMode = tfv1.IsolationModeHard
+	templateGPU.Status.DynamicIsolationConflict = true
+
+	newNode, gpus := expander.prepareNewNodesForScheduleAttempt(
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "old-node", Labels: map[string]string{}}},
+		map[string]*tfv1.GPU{templateGPU.Name: templateGPU},
+	)
+	if len(gpus) != 1 {
+		t.Fatalf("got %d prepared GPUs, want 1", len(gpus))
+	}
+	prepared := gpus[0]
+	if prepared.Status.IsolationPolicy != tfv1.IsolationModePolicyDynamic ||
+		prepared.Status.ActiveIsolationMode != "" || prepared.Status.DynamicIsolationConflict {
+		t.Fatalf("prepared GPU retained stale Dynamic state: %#v", prepared.Status)
+	}
+	if got := prepared.Status.NodeSelector[constants.KubernetesHostNameLabel]; got != newNode.Name {
+		t.Fatalf("prepared GPU hostname = %q, want %q", got, newNode.Name)
+	}
+}

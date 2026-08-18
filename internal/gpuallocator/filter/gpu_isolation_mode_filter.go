@@ -29,6 +29,15 @@ func (f *GPUIsolationModeFilter) Filter(ctx context.Context, workerPodKey tfv1.N
 		if !isIsolationSupportedByCapabilities(extractVirtualizationCapabilities(gpu), f.requiredIsolationMode) {
 			continue
 		}
+		if gpu.Status.IsolationPolicy == tfv1.IsolationModePolicyDynamic {
+			if gpu.Status.DynamicIsolationConflict {
+				continue
+			}
+			if gpu.Status.ActiveIsolationMode == "" || gpu.Status.ActiveIsolationMode == f.requiredIsolationMode {
+				filtered = append(filtered, gpu)
+			}
+			continue
+		}
 		// Shared is a whole-GPU allocation policy rather than a node runtime mode.
 		// Allow idle whole GPUs from every node isolation mode; normal allocator
 		// scoring decides placement without preferring shared-labelled nodes.

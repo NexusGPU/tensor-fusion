@@ -9,6 +9,8 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
@@ -138,7 +140,13 @@ func (h *UnscheduledPodHandler) processQueuedPod(qp *queuedPod) {
 		}
 	}
 
-	if err := h.nodeExpander.ProcessExpansion(h.ctx, qp.pod); err != nil {
+	currentPod, proceed := h.currentPodForExpansion(qp.pod)
+	if !proceed {
+		h.removePendingPod(qp.pod)
+		return
+	}
+
+	if err := h.nodeExpander.ProcessExpansion(h.ctx, currentPod); err != nil {
 		h.logger.Error(err, "Failed to process node expansion after buffer",
 			"pod", klog.KObj(qp.pod))
 	} else {
@@ -146,6 +154,31 @@ func (h *UnscheduledPodHandler) processQueuedPod(qp *queuedPod) {
 			"pod", klog.KObj(qp.pod))
 	}
 	h.removePendingPod(qp.pod)
+}
+
+func (h *UnscheduledPodHandler) currentPodForExpansion(queuedPod *corev1.Pod) (*corev1.Pod, bool) {
+	currentPod := &corev1.Pod{}
+	err := h.nodeExpander.client.Get(h.ctx, types.NamespacedName{
+		Namespace: queuedPod.Namespace,
+		Name:      queuedPod.Name,
+	}, currentPod)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			h.logger.Error(err, "Failed to refresh pod before node expansion", "pod", klog.KObj(queuedPod))
+		}
+		return nil, false
+	}
+
+	if currentPod.UID != queuedPod.UID || currentPod.Spec.NodeName != "" ||
+		!currentPod.DeletionTimestamp.IsZero() || currentPod.Status.NominatedNodeName != "" {
+		h.logger.V(4).Info("Pod no longer requires node expansion",
+			"pod", klog.KObj(currentPod),
+			"node", currentPod.Spec.NodeName,
+			"nominatedNode", currentPod.Status.NominatedNodeName)
+		return nil, false
+	}
+
+	return currentPod, true
 }
 
 // removePendingPod removes a pod from the pending map

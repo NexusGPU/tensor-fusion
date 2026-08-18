@@ -48,7 +48,8 @@ func (f *fakeAllocationController) AllocateWorkerDevices(
 
 func (f *fakeAllocationController) DeallocateWorker(workerUID string) error { return nil }
 
-func (f *fakeAllocationController) RecoverPartitionedWorker(request *hyperapi.WorkerInfo, partitionUUIDs string) {
+func (f *fakeAllocationController) RecoverPartitionedWorker(request *hyperapi.WorkerInfo, partitionUUIDs string) error {
+	return nil
 }
 
 func (f *fakeAllocationController) GetWorkerAllocation(workerUID string) (*hyperapi.WorkerAllocation, bool) {

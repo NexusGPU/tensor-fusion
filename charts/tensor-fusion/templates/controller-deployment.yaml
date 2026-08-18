@@ -50,6 +50,8 @@ spec:
             - name: metrics
               containerPort: 8081
           env:
+            - name: TF_ISOLATION_MODE_POLICY
+              value: {{ .Values.controller.isolationModePolicy | default "dynamic" | quote }}
             - name: OPERATOR_NAMESPACE
               valueFrom:
                 fieldRef:

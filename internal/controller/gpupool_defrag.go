@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -1691,6 +1692,9 @@ func applyGPUPlacementToBudget(nb *nodeBudget, selected []*tfv1.GPU, req *tfv1.A
 		}
 		wasFree := isGPUFullyAvailable(live)
 		subtractGPURequest(live, req)
+		if live.Status.IsolationPolicy == tfv1.IsolationModePolicyDynamic && live.Status.ActiveIsolationMode == "" {
+			live.Status.ActiveIsolationMode = req.Isolation
+		}
 		if wasFree && !isGPUFullyAvailable(live) {
 			nb.usedGPUs++
 		}
@@ -1897,6 +1901,11 @@ func findFreshDefragWorker(
 // matches what those would do at real bind time.
 func subtractGPURequest(gpu *tfv1.GPU, req *tfv1.AllocRequest) {
 	if gpu == nil || gpu.Status.Available == nil || gpu.Status.Capacity == nil {
+		return
+	}
+	if req.Isolation == tfv1.IsolationModeShared {
+		gpu.Status.Available.Tflops = resource.Quantity{}
+		gpu.Status.Available.Vram = resource.Quantity{}
 		return
 	}
 	if !req.Request.ComputePercent.IsZero() {

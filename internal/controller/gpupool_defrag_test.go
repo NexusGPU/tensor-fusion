@@ -235,6 +235,41 @@ func TestSubtractGPURequest_SafelyIgnoresBadInput(t *testing.T) {
 	subtractGPURequest(g, &tfv1.AllocRequest{})
 }
 
+func TestApplyGPUPlacementToBudgetTracksDynamicMode(t *testing.T) {
+	gpu := gpuWithUsage("g", "p", "100", "10Gi", tfv1.UsedByTensorFusion)
+	gpu.Status.IsolationPolicy = tfv1.IsolationModePolicyDynamic
+	nb := &nodeBudget{gpus: map[string]*tfv1.GPU{gpu.Name: gpu}, totalGPUs: 1}
+	req := &tfv1.AllocRequest{
+		Isolation: tfv1.IsolationModeSoft,
+		Request: tfv1.Resource{
+			Tflops: resource.MustParse("30"),
+			Vram:   resource.MustParse("2Gi"),
+		},
+	}
+
+	applyGPUPlacementToBudget(nb, []*tfv1.GPU{{ObjectMeta: metav1.ObjectMeta{Name: gpu.Name}}}, req)
+	if gpu.Status.ActiveIsolationMode != tfv1.IsolationModeSoft {
+		t.Fatalf("active isolation mode = %q, want soft", gpu.Status.ActiveIsolationMode)
+	}
+	if nb.usedGPUs != 1 {
+		t.Fatalf("used GPUs = %d, want 1", nb.usedGPUs)
+	}
+}
+
+func TestSubtractGPURequestSharedConsumesWholeGPU(t *testing.T) {
+	gpu := gpuWithUsage("g", "p", "100", "10Gi", tfv1.UsedByTensorFusion)
+	subtractGPURequest(gpu, &tfv1.AllocRequest{
+		Isolation: tfv1.IsolationModeShared,
+		Request: tfv1.Resource{
+			Tflops: resource.MustParse("10"),
+			Vram:   resource.MustParse("1Gi"),
+		},
+	})
+	if !gpu.Status.Available.Tflops.IsZero() || !gpu.Status.Available.Vram.IsZero() {
+		t.Fatalf("shared placement did not consume the whole GPU: %#v", gpu.Status.Available)
+	}
+}
+
 // ---- evictWorkerPods with fake clientset ------------------------------
 
 const (
@@ -2730,6 +2765,7 @@ func TestBuildDefragNodeBudgets_ReportsDirtyFreeAndExclusions(t *testing.T) {
 	}
 	if buddyAcct == nil {
 		t.Fatalf("buddy accounting missing, got %+v", accounting)
+		return
 	}
 	// Only the healthy used GPU counts toward the tally; the dirty free GPU is
 	// invisible to placement, so Free must be 0 while Dirty is 1.

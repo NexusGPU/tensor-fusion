@@ -77,8 +77,9 @@ type GPUPoolReconciler struct {
 
 	LastProcessedItems sync.Map
 
-	Scheme   *runtime.Scheme
-	Recorder events.EventRecorder
+	Scheme              *runtime.Scheme
+	Recorder            events.EventRecorder
+	IsolationModePolicy tfv1.IsolationModePolicyType
 }
 
 // First round reconcile should build correct capacity, and then check provisioning
@@ -400,7 +401,7 @@ func (r *GPUPoolReconciler) reconcilePoolComponents(ctx context.Context, pool *t
 	}()
 
 	components := []component.Interface{
-		&component.Hypervisor{},
+		&component.Hypervisor{IsolationModePolicy: r.IsolationModePolicy},
 		&component.Worker{},
 		&component.Client{},
 	}

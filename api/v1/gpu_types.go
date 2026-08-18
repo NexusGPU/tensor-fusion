@@ -41,6 +41,24 @@ type GPUStatus struct {
 	// +kubebuilder:default=soft
 	IsolationMode IsolationModeType `json:"isolationMode,omitempty"`
 
+	// IsolationPolicy is the policy actually advertised by the node hypervisor.
+	// Static is the backward-compatible zero-value interpretation.
+	// +optional
+	// +kubebuilder:validation:Enum=Static;Dynamic
+	IsolationPolicy IsolationModePolicyType `json:"isolationPolicy,omitempty"`
+
+	// ActiveIsolationMode is the mode lock for a Dynamic GPU. It is empty when
+	// the GPU has no TensorFusion allocation; Static GPUs leave it empty.
+	// +optional
+	// +kubebuilder:validation:Enum=shared;soft;hard
+	ActiveIsolationMode IsolationModeType `json:"activeIsolationMode,omitempty"`
+
+	// DynamicIsolationConflict is true when recovery found multiple workload
+	// isolation modes on one Dynamic GPU. Such a GPU is fail-closed until the
+	// conflicting allocations are gone and recovery converges.
+	// +optional
+	DynamicIsolationConflict bool `json:"dynamicIsolationConflict,omitempty"`
+
 	// +optional
 	Index *int32 `json:"index,omitempty"`
 
@@ -79,6 +97,15 @@ type GPUStatus struct {
 	// used by the GPUNetworkTopologyAware scheduler plugin.
 	Topology *GPUTopologyStatus `json:"topology,omitempty"`
 }
+
+// IsolationModePolicyType controls whether isolation is selected per node or
+// per GPU allocation. It is deliberately separate from IsolationModeType.
+type IsolationModePolicyType string
+
+const (
+	IsolationModePolicyStatic  IsolationModePolicyType = "Static"
+	IsolationModePolicyDynamic IsolationModePolicyType = "Dynamic"
+)
 
 // GPUNvLinkStatus records point-to-point NVLink topology and bandwidth hints for scheduler decisions.
 type GPUNvLinkStatus struct {

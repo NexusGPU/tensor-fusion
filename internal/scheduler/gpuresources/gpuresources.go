@@ -277,6 +277,9 @@ func (s *GPUFit) PreFilter(ctx context.Context, state fwk.CycleState, pod *v1.Po
 		// range if it's not in validNodesValidGPUs, add to validNodeNonMatchingGPUs
 		validNodeNonMatchingGPUs[k] = make([]*tfv1.GPU, 0, preAllocSize)
 		for gpuName, gpu := range allGPUs {
+			if !s.allocator.IsGPUIsolationCompatible(gpu, allocRequest.Isolation) {
+				continue
+			}
 			seen := false
 			// just loop because the number always <= 8/16
 			for _, matchedGPU := range matchedGPUs {
@@ -421,10 +424,6 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 
 // checkNominatedPodsGPUReservation checks if there are nominated TensorFusion pods
 // on this node and reserves their resources to prevent scheduling conflicts.
-// Strategy:
-// - Only **higher** priority nominated pods will have their resources reserved
-// - Equal or lower priority nominated pods are ignored (current pod has equal/higher right)
-// - Current pod can be scheduled if remaining resources (after reservation) are sufficient
 func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, schedulingData *GPUSchedulingStateData) *fwk.Status {
 	nominatedPodInfos := s.fh.NominatedPodsForNode(nodeName)
 	if len(nominatedPodInfos) == 0 {
@@ -473,10 +472,8 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 			nominatedPodPriority = *nominatedPod.Spec.Priority
 		}
 
-		// Only reserve resources for higher priority nominated pods
-		// Equal or lower priority pods should not block the current pod
-		if nominatedPodPriority <= currentPodPriority {
-			s.logger.V(4).Info("Skipping equal/lower priority nominated pod (no reservation needed)",
+		if !shouldReserveForNominatedPod(pod, nominatedPod) {
+			s.logger.V(4).Info("Skipping nominated pod resource reservation",
 				"currentPod", pod.Name,
 				"nominatedPod", nominatedPod.Name,
 				"nominatedPriority", nominatedPodPriority,
@@ -492,7 +489,6 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 			continue
 		}
 
-		// Reserve resources for higher priority nominated pods
 		// Calculate total resources needed (multiply by GPU count for multi-GPU pods)
 		// Handle both Tflops and ComputePercent (use GPU capacity to convert)
 		var nominatedTflopsPerGPU *resource.Quantity
@@ -511,7 +507,7 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 		nominatedVramTotal.Mul(int64(nominatedAllocReq.Count))
 		reservedVram.Add(nominatedVramTotal)
 
-		s.logger.V(4).Info("Reserving GPU resources for higher priority nominated pod",
+		s.logger.V(4).Info("Reserving GPU resources for nominated pod",
 			"currentPod", pod.Name,
 			"nominatedPod", nominatedPod.Name,
 			"nominatedPriority", nominatedPodPriority,
@@ -568,10 +564,32 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 			"requiredVram", currentVramTotal.String(),
 			"currentGPUCount", currentAllocReq.Count)
 		return fwk.NewStatus(fwk.Unschedulable,
-			fmt.Sprintf("GPU resources reserved for higher priority nominated pods on node %s", nodeName))
+			fmt.Sprintf("GPU resources reserved for nominated pods on node %s", nodeName))
 	}
 
 	return fwk.NewStatus(fwk.Success, "")
+}
+
+func shouldReserveForNominatedPod(currentPod, nominatedPod *v1.Pod) bool {
+	currentPriority := int32(0)
+	if currentPod.Spec.Priority != nil {
+		currentPriority = *currentPod.Spec.Priority
+	}
+	nominatedPriority := int32(0)
+	if nominatedPod.Spec.Priority != nil {
+		nominatedPriority = *nominatedPod.Spec.Priority
+	}
+
+	if nominatedPriority > currentPriority {
+		return true
+	}
+	if nominatedPriority != currentPriority {
+		return false
+	}
+
+	currentGroup := currentPod.Annotations[constants.GangGroupKeyAnnotation]
+	nominatedGroup := nominatedPod.Annotations[constants.GangGroupKeyAnnotation]
+	return currentGroup != "" && currentGroup == nominatedGroup
 }
 
 func (s *GPUFit) Score(
@@ -735,6 +753,10 @@ func (s *GPUFit) PostFilter(ctx context.Context, _ fwk.CycleState, pod *v1.Pod, 
 		// Non-gang TensorFusion pod — nothing to do at the group level; let the
 		// framework continue with default unschedulable handling.
 		return nil, fwk.NewStatus(fwk.Unschedulable, "non-gang pod, no group action")
+	}
+	if pod.Status.NominatedNodeName != "" {
+		return nil, fwk.NewStatus(fwk.Unschedulable,
+			fmt.Sprintf("gang member is waiting for preemption on nominated node %s", pod.Status.NominatedNodeName))
 	}
 
 	// Distinguish PreFilter-stage failure (peers not yet present → transient,

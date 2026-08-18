@@ -391,6 +391,13 @@ func (e *NodeExpander) prepareNewNodesForScheduleAttempt(
 		gpuCopy := gpu.DeepCopy()
 		gpuCopy.Name = "gpu-" + rand.String(12)
 		gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
+		gpuCopy.Status.IsolationPolicy = e.allocator.IsolationPolicy()
+		gpuCopy.Status.ActiveIsolationMode = ""
+		gpuCopy.Status.DynamicIsolationConflict = false
+		if gpuCopy.Status.NodeSelector == nil {
+			gpuCopy.Status.NodeSelector = make(map[string]string, 1)
+		}
+		gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel] = newPreparedNode.Name
 		newPreparedGPUs = append(newPreparedGPUs, gpuCopy)
 	}
 	return newPreparedNode, newPreparedGPUs
@@ -456,23 +463,7 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 	e.mu.RUnlock()
 
 	for _, alloc := range preScheduleSnapshot {
-		preScheduledPodPreAllocated := false
-		for _, gpu := range inflightSnapshot {
-			if gpu == nil || gpu.Status.Capacity == nil || gpu.Status.Available == nil {
-				continue
-			}
-			reqTflops := alloc.Request.Tflops
-			if !alloc.Request.ComputePercent.IsZero() {
-				reqTflops = *utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, alloc.Request)
-			}
-			if gpu.Status.Available.Tflops.Cmp(reqTflops) >= 0 &&
-				gpu.Status.Available.Vram.Cmp(alloc.Request.Vram) >= 0 {
-				gpu.Status.Available.Tflops.Sub(reqTflops)
-				gpu.Status.Available.Vram.Sub(alloc.Request.Vram)
-				preScheduledPodPreAllocated = true
-				break
-			}
-		}
+		preScheduledPodPreAllocated := applyPreScheduledAllocationToInflightGPUs(e.allocator, alloc, inflightSnapshot)
 		// this is unexpected, all pre-scheduled pod should be able to place into inFlight node
 		// possible happen when new node added to cluster and removed from inFlight nodes, simultaneously,
 		// new Pods added and also unschedulable, trigger node expansion before previous Pod scheduled
@@ -532,6 +523,74 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 		}
 	}
 	return allocRequest, true, false, onlyCanBeFlightGPU
+}
+
+func applyPreScheduledAllocationToInflightGPUs(
+	allocator *gpuallocator.GpuAllocator,
+	alloc *tfv1.AllocRequest,
+	inflight map[string]*tfv1.GPU,
+) bool {
+	if allocator == nil || alloc == nil {
+		return false
+	}
+	working := make(map[string]*tfv1.GPU, len(inflight))
+	for name, gpu := range inflight {
+		if gpu != nil {
+			working[name] = gpu.DeepCopy()
+		}
+	}
+
+	remaining := int(alloc.Count)
+	if remaining < 1 {
+		remaining = 1
+	}
+	for _, gpu := range working {
+		if remaining == 0 {
+			break
+		}
+		if gpu.Status.Capacity == nil || gpu.Status.Available == nil ||
+			!allocator.IsGPUIsolationCompatible(gpu, alloc.Isolation) {
+			continue
+		}
+
+		if alloc.Isolation == tfv1.IsolationModeShared {
+			if len(gpu.Status.AllocatedPartitions) > 0 ||
+				gpu.Status.Available.Tflops.Cmp(gpu.Status.Capacity.Tflops) != 0 ||
+				gpu.Status.Available.Vram.Cmp(gpu.Status.Capacity.Vram) != 0 {
+				continue
+			}
+			gpu.Status.Available.Tflops = resource.Quantity{}
+			gpu.Status.Available.Vram = resource.Quantity{}
+		} else {
+			reqTflops := alloc.Request.Tflops
+			if !alloc.Request.ComputePercent.IsZero() {
+				reqTflops = *utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, alloc.Request)
+			}
+			if gpu.Status.Available.Tflops.Cmp(reqTflops) < 0 ||
+				gpu.Status.Available.Vram.Cmp(alloc.Request.Vram) < 0 {
+				continue
+			}
+			gpu.Status.Available.Tflops.Sub(reqTflops)
+			gpu.Status.Available.Vram.Sub(alloc.Request.Vram)
+		}
+		if allocator.IsolationPolicy() == tfv1.IsolationModePolicyDynamic && gpu.Status.ActiveIsolationMode == "" {
+			gpu.Status.ActiveIsolationMode = alloc.Isolation
+		}
+		remaining--
+	}
+	if remaining != 0 {
+		return false
+	}
+
+	for name, gpu := range working {
+		original := inflight[name]
+		if original == nil {
+			continue
+		}
+		original.Status.Available = gpu.Status.Available.DeepCopy()
+		original.Status.ActiveIsolationMode = gpu.Status.ActiveIsolationMode
+	}
+	return true
 }
 
 func (e *NodeExpander) checkGPUFitForNewNode(pod *corev1.Pod, gpus []*tfv1.GPU) bool {

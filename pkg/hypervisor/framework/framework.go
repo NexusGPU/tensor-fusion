@@ -1,8 +1,6 @@
 package framework
 
-import (
-	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
-)
+import "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 
 type DeviceController interface {
 	Start() error
@@ -44,7 +42,7 @@ type WorkerAllocationController interface {
 
 	// RecoverPartitionedWorker rebuilds allocation state for an existing partitioned worker
 	// after hypervisor restart. partitionUUIDs is a comma-separated string of "partitionUUID:parentGPU" pairs.
-	RecoverPartitionedWorker(request *api.WorkerInfo, partitionUUIDs string)
+	RecoverPartitionedWorker(request *api.WorkerInfo, partitionUUIDs string) error
 
 	// GetWorkerAllocation returns the allocation for a specific worker
 	GetWorkerAllocation(workerUID string) (*api.WorkerAllocation, bool)

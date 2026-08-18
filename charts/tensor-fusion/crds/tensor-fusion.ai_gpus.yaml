@@ -69,6 +69,21 @@ spec:
               GPUStatus defines the observed state of GPU.
               NOTE: When new fields added, remember to update syncGPUMetadataAndStatusFromCluster
             properties:
+              activeIsolationMode:
+                allOf:
+                - enum:
+                  - shared
+                  - soft
+                  - hard
+                  - partitioned
+                - enum:
+                  - shared
+                  - soft
+                  - hard
+                description: |-
+                  ActiveIsolationMode is the mode lock for a Dynamic GPU. It is empty when
+                  the GPU has no TensorFusion allocation; Static GPUs leave it empty.
+                type: string
               allocatedPartitions:
                 additionalProperties:
                   description: |-
@@ -175,6 +190,12 @@ spec:
                 - tflops
                 - vram
                 type: object
+              dynamicIsolationConflict:
+                description: |-
+                  DynamicIsolationConflict is true when recovery found multiple workload
+                  isolation modes on one Dynamic GPU. Such a GPU is fail-closed until the
+                  conflicting allocations are gone and recovery converges.
+                type: boolean
               gpuModel:
                 type: string
               index:
@@ -187,6 +208,14 @@ spec:
                 - soft
                 - hard
                 - partitioned
+                type: string
+              isolationPolicy:
+                description: |-
+                  IsolationPolicy is the policy actually advertised by the node hypervisor.
+                  Static is the backward-compatible zero-value interpretation.
+                enum:
+                - Static
+                - Dynamic
                 type: string
               message:
                 type: string

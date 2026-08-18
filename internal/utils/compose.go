@@ -1449,8 +1449,24 @@ func SetWorkerContainerSpec(
 // includes every ProviderConfig revision so a provider change starts the
 // existing GPUPool batched update state machine.
 func HypervisorTemplateHash(pool *tfv1.GPUPool) string {
+	return hypervisorTemplateHash(pool, true)
+}
+
+// HypervisorTemplateHashWithPolicy computes the pool component hash while
+// honoring the isolation policy. Dynamic policy deliberately excludes static
+// node isolation rules: those rules do not select the Hypervisor process mode
+// and changing them must not trigger a rollout.
+func HypervisorTemplateHashWithPolicy(pool *tfv1.GPUPool, policy tfv1.IsolationModePolicyType) string {
+	return hypervisorTemplateHash(pool, policy != tfv1.IsolationModePolicyDynamic)
+}
+
+func hypervisorTemplateHash(pool *tfv1.GPUPool, includeNodeIsolation bool) string {
 	spec := hypervisorTemplateSpec(pool)
 	revisions := ProviderConfigRevisions(pool)
+	var nodeIsolationPolicy string
+	if includeNodeIsolation {
+		nodeIsolationPolicy = NodeIsolationPolicyHash(pool.Spec.NodeManagerConfig)
+	}
 	return GetObjectHash(struct {
 		Spec                v1.PodSpec
 		ProviderRevisions   map[string]string
@@ -1458,7 +1474,7 @@ func HypervisorTemplateHash(pool *tfv1.GPUPool) string {
 	}{
 		Spec:                spec,
 		ProviderRevisions:   revisions,
-		NodeIsolationPolicy: NodeIsolationPolicyHash(pool.Spec.NodeManagerConfig),
+		NodeIsolationPolicy: nodeIsolationPolicy,
 	})
 }
 

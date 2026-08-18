@@ -359,6 +359,7 @@ func (b *KubeletBackend) mutateGPUResourceState(
 	gpu.Status.NUMANode = ptr.To(device.NUMANode)
 	gpu.Status.Topology = convertDeviceTopologyToStatus(device.Topology)
 	gpu.Status.IsolationMode = device.IsolationMode
+	gpu.Status.IsolationPolicy = device.IsolationPolicy
 	gpu.Status.NodeSelector = map[string]string{
 		constants.KubernetesHostNameLabel: b.nodeName,
 	}

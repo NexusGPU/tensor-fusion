@@ -30,6 +30,57 @@ func TestAllocateWorkerDevicesRejectsMissingAllocatedDevices(t *testing.T) {
 	}
 }
 
+func TestAllocateWorkerDevicesEnforcesDynamicIsolationPerDevice(t *testing.T) {
+	t.Parallel()
+
+	controller := NewAllocationController(&fakeDeviceController{
+		devices: map[string]*api.DeviceInfo{
+			"gpu-0": {UUID: "GPU-aaa", Vendor: constants.AcceleratorVendorNvidia},
+			"gpu-1": {UUID: "GPU-bbb", Vendor: constants.AcceleratorVendorNvidia},
+		},
+	})
+	controller.SetIsolationPolicy(tfv1.IsolationModePolicyDynamic)
+
+	allocate := func(uid string, mode tfv1.IsolationModeType, devices ...string) error {
+		_, err := controller.AllocateWorkerDevices(&api.WorkerInfo{
+			WorkerUID:        uid,
+			AllocatedDevices: devices,
+			IsolationMode:    mode,
+		})
+		return err
+	}
+
+	if err := allocate("soft-1", tfv1.IsolationModeSoft, "gpu-0"); err != nil {
+		t.Fatalf("first soft allocation failed: %v", err)
+	}
+	if err := allocate("soft-2", tfv1.IsolationModeSoft, "gpu-0"); err != nil {
+		t.Fatalf("same-mode allocation failed: %v", err)
+	}
+	if err := allocate("hard-conflict", tfv1.IsolationModeHard, "gpu-0"); err == nil {
+		t.Fatal("expected hard allocation to conflict with existing soft allocations")
+	}
+	if err := allocate("shared-conflict", tfv1.IsolationModeShared, "gpu-0"); err == nil {
+		t.Fatal("expected shared allocation to require an idle GPU")
+	}
+
+	if err := allocate("shared", tfv1.IsolationModeShared, "gpu-1"); err != nil {
+		t.Fatalf("shared allocation on idle GPU failed: %v", err)
+	}
+	if err := allocate("second-shared", tfv1.IsolationModeShared, "gpu-1"); err == nil {
+		t.Fatal("expected a second shared allocation to be rejected")
+	}
+	if err := allocate("multi-gpu", tfv1.IsolationModeSoft, "gpu-0", "gpu-1"); err == nil {
+		t.Fatal("expected multi-GPU allocation to fail when one device has a conflicting mode")
+	}
+	if _, exists := controller.GetWorkerAllocation("multi-gpu"); exists {
+		t.Fatal("failed multi-GPU allocation must not leave partial worker state")
+	}
+
+	if err := allocate("partitioned", tfv1.IsolationModePartitioned, "gpu-0"); err == nil {
+		t.Fatal("expected partitioned allocation to be rejected in Dynamic policy")
+	}
+}
+
 func TestAllocateWorkerDevicesPinsNvidiaVisibleDevicesByUUID(t *testing.T) {
 	t.Parallel()
 

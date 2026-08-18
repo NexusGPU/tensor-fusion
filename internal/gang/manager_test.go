@@ -72,6 +72,22 @@ func createTestPod(name, workloadName string, gangMinMembers int32, gangTimeout 
 	return pod
 }
 
+func TestCollectActivatablePodsFallsBackToLiveClient(t *testing.T) {
+	current := createTestPod("worker-0", "gang-workload", 2, "")
+	peer := createTestPod("worker-1", "gang-workload", 2, "")
+	manager := NewManager(nil, nil, "test")
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	manager.SetClient(fake.NewClientBuilder().WithScheme(scheme).WithObjects(current, peer).Build())
+
+	groupKey, mode := resolveGroupKeyFromAnnotationsOrPod(current)
+	pods, err := manager.collectActivatablePods(context.Background(), current, groupKey, mode)
+
+	require.NoError(t, err)
+	require.Contains(t, pods, peer.Namespace+"/"+peer.Name)
+}
+
 func createTestAllocReq(pod *corev1.Pod, gpuNames []string) *tfv1.AllocRequest {
 	return &tfv1.AllocRequest{
 		PoolName: "test-pool",

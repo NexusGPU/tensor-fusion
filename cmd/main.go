@@ -20,8 +20,10 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	// Embed tzdata so named timezones (e.g. "Asia/Shanghai") resolve
@@ -107,6 +109,7 @@ var timeSeriesDB *metrics.TimeSeriesDB
 var dynamicConfigPath string
 var alertEvaluator *alert.AlertEvaluator
 var schedulerConfigPath string
+var isolationModePolicy string
 var alertEvaluatorReady chan struct{}
 var enableAutoExpander bool
 var compatibleWithNvidiaContainerToolkit bool
@@ -166,6 +169,12 @@ func main() {
 
 	klog.InitFlags(nil)
 	flag.Parse()
+	resolvedIsolationModePolicy, err := resolveIsolationModePolicy(os.Getenv(constants.IsolationModePolicyEnv))
+	if err != nil {
+		setupLog.Error(err, "invalid isolation mode policy", "env", constants.IsolationModePolicyEnv)
+		os.Exit(1)
+	}
+	isolationModePolicy = string(resolvedIsolationModePolicy)
 	ctrl.SetLogger(klog.NewKlogr())
 	ctx := context.Background()
 
@@ -287,6 +296,17 @@ func main() {
 	}
 }
 
+func resolveIsolationModePolicy(raw string) (tfv1.IsolationModePolicyType, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "static":
+		return tfv1.IsolationModePolicyStatic, nil
+	case "dynamic":
+		return tfv1.IsolationModePolicyDynamic, nil
+	default:
+		return "", fmt.Errorf("%s must be static or dynamic, got %q", constants.IsolationModePolicyEnv, raw)
+	}
+}
+
 func addHealthCheckAPI(mgr manager.Manager) {
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
@@ -304,6 +324,7 @@ func startTensorFusionAllocators(
 	indexAllocator *indexallocator.IndexAllocator,
 ) (*gpuallocator.GpuAllocator, *portallocator.PortAllocator) {
 	allocator := gpuallocator.NewGpuAllocator(ctx, indexAllocator, mgr.GetClient(), 10*time.Second)
+	allocator.SetIsolationPolicy(tfv1.IsolationModePolicyType(isolationModePolicy))
 	if err := allocator.SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to set up GPU allocator watches")
 		os.Exit(1)
@@ -445,9 +466,10 @@ func startCustomResourceController(
 	}
 
 	GPUPoolReconciler := &controller.GPUPoolReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("GPUPool"),
+		Client:              mgr.GetClient(),
+		Scheme:              mgr.GetScheme(),
+		Recorder:            mgr.GetEventRecorder("GPUPool"),
+		IsolationModePolicy: tfv1.IsolationModePolicyType(isolationModePolicy),
 	}
 	if err = GPUPoolReconciler.SetupWithManager(mgr, true); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUPool")
@@ -461,6 +483,7 @@ func startCustomResourceController(
 		Allocator:                            allocator,
 		Expander:                             nodeExpander,
 		CompatibleWithNvidiaContainerToolkit: compatibleWithNvidiaContainerToolkit,
+		IsolationModePolicy:                  tfv1.IsolationModePolicyType(isolationModePolicy),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GPUNode")
 		os.Exit(1)

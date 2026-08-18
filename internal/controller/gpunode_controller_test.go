@@ -173,6 +173,15 @@ var _ = Describe("GPUNode Controller", func() {
 			Expect(spec.Containers[0].Args).To(ContainElement("--isolation-mode=partitioned"))
 		})
 
+		It("should append and detect the Dynamic isolation policy arg", func() {
+			spec := &corev1.PodSpec{Containers: []corev1.Container{{Name: constants.TFContainerNameHypervisor}}}
+			applyHypervisorIsolationPolicyArg(spec, string(tfv1.IsolationModePolicyDynamic))
+			Expect(spec.Containers[0].Args).To(ContainElement("--isolation-policy=dynamic"))
+			pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: spec.Containers}}
+			Expect(isHypervisorIsolationPolicyConfigured(pod, string(tfv1.IsolationModePolicyDynamic))).To(BeTrue())
+			Expect(isHypervisorIsolationPolicyConfigured(pod, string(tfv1.IsolationModePolicyStatic))).To(BeFalse())
+		})
+
 		It("should replace an existing isolation mode arg with the configured mode", func() {
 			spec := &corev1.PodSpec{
 				Containers: []corev1.Container{

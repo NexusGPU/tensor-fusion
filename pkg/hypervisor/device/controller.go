@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/metrics"
@@ -31,6 +32,7 @@ type Controller struct {
 	discoveryInterval    time.Duration
 	deviceUpdateHandlers []framework.DeviceChangeHandler
 	isolationMode        api.IsolationMode
+	isolationPolicy      tfv1.IsolationModePolicyType
 
 	// allocationController is set after creation to provide allocation data for telemetry
 	allocationController framework.WorkerAllocationController
@@ -60,9 +62,19 @@ func NewController(
 		discoveryInterval:    discoveryInterval,
 		deviceUpdateHandlers: make([]framework.DeviceChangeHandler, 2),
 		isolationMode:        api.IsolationMode(isolationMode),
+		isolationPolicy:      tfv1.IsolationModePolicyStatic,
 	}
 
 	return ctrl, nil
+}
+
+func (m *Controller) SetIsolationPolicy(policy tfv1.IsolationModePolicyType) {
+	if policy != tfv1.IsolationModePolicyDynamic {
+		policy = tfv1.IsolationModePolicyStatic
+	}
+	m.mu.Lock()
+	m.isolationPolicy = policy
+	m.mu.Unlock()
 }
 
 // SetAllocationController sets the allocation controller for telemetry purposes
@@ -103,6 +115,7 @@ func (m *Controller) discoverDevices() error {
 		// Kubernetes resource name has to be lowercase
 		device.UUID = strings.ToLower(device.UUID)
 		device.IsolationMode = m.isolationMode
+		device.IsolationPolicy = m.isolationPolicy
 		newDevicesMap[device.UUID] = device
 		newNativeUUIDs[device.UUID] = nativeUUID
 	}

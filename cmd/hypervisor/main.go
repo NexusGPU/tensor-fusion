@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +35,8 @@ var (
 		"./provider/build/libaccelerator_example.so", "Path to accelerator library")
 	isolationMode = flag.String("isolation-mode", "soft",
 		"Isolation mode: shared, soft, hard, partitioned")
+	isolationPolicy = flag.String("isolation-policy", "static",
+		"Isolation policy: static or dynamic")
 	backendType       = flag.String("backend-type", "kubernetes", "Backend type: kubernetes, simple")
 	discoveryInterval = flag.Duration("discovery-interval",
 		12*time.Hour, "Device discovery interval")
@@ -51,6 +54,16 @@ func main() {
 	}
 
 	flag.Parse()
+	policy := tfv1.IsolationModePolicyStatic
+	switch strings.ToLower(strings.TrimSpace(*isolationPolicy)) {
+	case "static":
+		*isolationPolicy = "static"
+	case "dynamic":
+		*isolationPolicy = "dynamic"
+		policy = tfv1.IsolationModePolicyDynamic
+	default:
+		klog.Fatalf("invalid isolation policy: %s", *isolationPolicy)
+	}
 	klog.InitFlags(nil)
 	defer klog.Flush()
 
@@ -75,6 +88,7 @@ func main() {
 	if err != nil {
 		klog.Fatalf("Failed to create device controller: %v", err)
 	}
+	deviceController.SetIsolationPolicy(policy)
 	if err := deviceController.Start(); err != nil {
 		klog.Fatalf("Failed to start device manager: %v", err)
 	}
@@ -84,6 +98,7 @@ func main() {
 
 	// Create allocation controller first - it's a shared dependency
 	allocationController := worker.NewAllocationController(deviceController)
+	allocationController.SetIsolationPolicy(policy)
 	deviceController.SetAllocationController(allocationController)
 	klog.Info("Allocation controller created")
 
@@ -109,10 +124,10 @@ func main() {
 		if err != nil {
 			klog.Fatalf("Failed to create Kubernetes backend: %v", err)
 		}
-		workerController = worker.NewWorkerController(deviceController, allocationController, mode, backend)
+		workerController = worker.NewWorkerControllerWithPolicy(deviceController, allocationController, mode, policy, backend)
 	case "simple":
 		backend = single_node.NewSingleNodeBackend(ctx, deviceController, allocationController)
-		workerController = worker.NewWorkerController(deviceController, allocationController, mode, backend)
+		workerController = worker.NewWorkerControllerWithPolicy(deviceController, allocationController, mode, policy, backend)
 	default:
 		klog.Fatalf("Invalid backend type: %s", *backendType)
 	}
