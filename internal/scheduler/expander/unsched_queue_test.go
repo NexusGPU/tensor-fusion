@@ -3,18 +3,42 @@ package expander
 import (
 	"context"
 	"sync"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 )
+
+func TestCurrentPodForExpansionUsesLiveNominatedState(t *testing.T) {
+	queuedPod := createTensorFusionWorkerPod("worker-pod", "uid-nominated")
+	currentPod := queuedPod.DeepCopy()
+	currentPod.Status.NominatedNodeName = "node-a"
+
+	handler := &UnscheduledPodHandler{
+		ctx:    context.Background(),
+		logger: log.FromContext(context.Background()),
+		nodeExpander: &NodeExpander{client: clientfake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithObjects(currentPod).
+			Build()},
+	}
+
+	refreshed, proceed := handler.currentPodForExpansion(queuedPod)
+
+	require.Nil(t, refreshed)
+	require.False(t, proceed)
+}
 
 // createTestPod creates a test pod with configurable labels
 func createTestPod(name, namespace string, uid types.UID, labels map[string]string, nodeName string) *corev1.Pod {

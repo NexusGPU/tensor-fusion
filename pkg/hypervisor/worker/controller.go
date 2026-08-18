@@ -27,6 +27,7 @@ const (
 
 type WorkerController struct {
 	mode    api.IsolationMode
+	policy  tfv1.IsolationModePolicyType
 	backend framework.Backend
 
 	deviceController     framework.DeviceController
@@ -50,12 +51,25 @@ func NewWorkerController(
 	mode api.IsolationMode,
 	backend framework.Backend,
 ) framework.WorkerController {
+	return NewWorkerControllerWithPolicy(
+		deviceController, allocationController, mode, tfv1.IsolationModePolicyStatic, backend,
+	)
+}
+
+func NewWorkerControllerWithPolicy(
+	deviceController framework.DeviceController,
+	allocationController framework.WorkerAllocationController,
+	mode api.IsolationMode,
+	policy tfv1.IsolationModePolicyType,
+	backend framework.Backend,
+) framework.WorkerController {
 	quotaController := computing.NewQuotaController(deviceController, backend)
 
 	wc := &WorkerController{
 		deviceController:     deviceController,
 		allocationController: allocationController,
 		mode:                 mode,
+		policy:               policy,
 		backend:              backend,
 		quotaController:      quotaController,
 
@@ -129,7 +143,7 @@ func (w *WorkerController) Start() error {
 	}
 
 	// Only soft isolation consumes the shared-memory ERL token bucket.
-	if usesSoftLimiterSharedMemory(w.mode) {
+	if w.policy == tfv1.IsolationModePolicyDynamic || usesSoftLimiterSharedMemory(w.mode) {
 		if err := w.quotaController.StartSoftQuotaLimiter(); err != nil {
 			klog.Fatalf("Failed to start soft quota limiter: %v", err)
 		}
@@ -164,7 +178,10 @@ func (w *WorkerController) recoverExistingWorkerAllocation(worker *api.WorkerInf
 
 	if worker.IsolationMode == tfv1.IsolationModePartitioned && worker.PartitionTemplateID != "" {
 		if partitionUUIDs := worker.Annotations[constants.PartitionUUIDsAnnotation]; partitionUUIDs != "" {
-			w.allocationController.RecoverPartitionedWorker(worker, partitionUUIDs)
+			if err := w.allocationController.RecoverPartitionedWorker(worker, partitionUUIDs); err != nil {
+				klog.Errorf("Failed to recover partitioned allocation for existing worker %s/%s: %v",
+					worker.Namespace, worker.WorkerName, err)
+			}
 		}
 		return
 	}

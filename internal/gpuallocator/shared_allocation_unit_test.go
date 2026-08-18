@@ -144,6 +144,38 @@ func TestSharedPreemptionSimulationRestoresWholeGPUOnlyForSharedVictim(t *testin
 	assert.Empty(t, filtered, "releasing one slice must not make a still-used GPU eligible for shared")
 }
 
+func TestDynamicPreemptionOnlyReusesSameModeGPU(t *testing.T) {
+	gpu := sharedTestGPU("gpu-soft-victim", "node-1", tfv1.IsolationModeSoft)
+	gpu.Status.IsolationPolicy = tfv1.IsolationModePolicyDynamic
+	gpu.Status.ActiveIsolationMode = tfv1.IsolationModeSoft
+	gpu.Status.Available = &tfv1.Resource{Tflops: qty("20"), Vram: qty("4Gi")}
+	s := newTestAllocator()
+	s.isolationPolicy = tfv1.IsolationModePolicyDynamic
+	s.gpuStore[types.NamespacedName{Name: gpu.Name}] = gpu
+	s.nodeGpuStore = map[string]map[string]*tfv1.GPU{"node-1": {gpu.Name: gpu}}
+	victim := &tfv1.AllocRequest{
+		Isolation: tfv1.IsolationModeSoft,
+		GPUNames:  []string{gpu.Name},
+		Request:   tfv1.Resource{Tflops: qty("80"), Vram: qty("20Gi")},
+	}
+	incoming := func(mode tfv1.IsolationModeType) *tfv1.AllocRequest {
+		return &tfv1.AllocRequest{
+			Isolation: mode,
+			Count:     1,
+			Request:   tfv1.Resource{Tflops: qty("90"), Vram: qty("22Gi")},
+		}
+	}
+
+	filtered, _, err := s.FilterWithPreempt(incoming(tfv1.IsolationModeSoft), []*tfv1.AllocRequest{victim})
+	assert.NoError(t, err)
+	assert.Len(t, filtered, 1, "same-mode preemption should reuse the released GPU")
+	assert.Equal(t, tfv1.IsolationModeType(tfv1.IsolationModeSoft), filtered[0].Status.ActiveIsolationMode)
+
+	filtered, _, err = s.FilterWithPreempt(incoming(tfv1.IsolationModeHard), []*tfv1.AllocRequest{victim})
+	assert.NoError(t, err)
+	assert.Empty(t, filtered, "cross-mode preemption must not change the GPU mode lock")
+}
+
 func TestCompactPlacementKeepsExistingGPUAndNodeBinpackWithoutSharedPriority(t *testing.T) {
 	usedHard := sharedTestGPU("hard-used", "node-used", tfv1.IsolationModeHard)
 	usedHard.Status.Available = &tfv1.Resource{Tflops: qty("50"), Vram: qty("12Gi")}

@@ -62,6 +62,7 @@ type GPUNodeReconciler struct {
 	Allocator                            *gpuallocator.GpuAllocator
 	Expander                             *expander.NodeExpander
 	CompatibleWithNvidiaContainerToolkit bool
+	IsolationModePolicy                  tfv1.IsolationModePolicyType
 }
 
 // For test or troubleshooting purpose, using env var to force GPUNode state
@@ -387,6 +388,44 @@ func (r *GPUNodeReconciler) removeStuckHypervisorPodOnNotReadyNode(
 	return nil
 }
 
+func (r *GPUNodeReconciler) ensureHypervisorPrerequisites(
+	ctx context.Context,
+	nodeName string,
+	vendor string,
+	currentPod *corev1.Pod,
+	podExists bool,
+) error {
+	log := log.FromContext(ctx)
+	handler := r.getVendorHandler(vendor)
+	if handler == nil {
+		return nil
+	}
+
+	log.V(1).Info("checking hypervisor prerequisites", "node", nodeName, "vendor", vendor)
+	prereqs, err := handler.CheckHypervisorPrerequisites(ctx, r, nodeName)
+	if err != nil {
+		return fmt.Errorf("failed to check hypervisor prerequisites: %w", err)
+	}
+	if prereqs.Ready {
+		log.V(1).Info("hypervisor prerequisites are ready", "node", nodeName)
+		return nil
+	}
+
+	if podExists {
+		log.Info("hypervisor prerequisites not ready, deleting existing hypervisor pod",
+			"node", nodeName,
+			"pod", currentPod.Name,
+			"podPhase", currentPod.Status.Phase)
+		if err := r.Delete(ctx, currentPod); err != nil {
+			return fmt.Errorf("failed to delete existing hypervisor pod: %w", err)
+		}
+		log.Info("deleted hypervisor pod due to prerequisites not ready", "node", nodeName, "pod", currentPod.Name)
+	} else {
+		log.V(1).Info("hypervisor prerequisites not ready, no existing pod to delete", "node", nodeName)
+	}
+	return fmt.Errorf("waiting for hypervisor prerequisites (device plugin)")
+}
+
 func (r *GPUNodeReconciler) reconcileHypervisorPod(
 	ctx context.Context,
 	node *tfv1.GPUNode,
@@ -434,34 +473,11 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 		return "", fmt.Errorf("failed to resolve node vendor: %w", err)
 	}
 
-	handler := r.getVendorHandler(vendor)
-	if handler != nil {
-		log.V(1).Info("checking hypervisor prerequisites", "node", node.Name, "vendor", vendor)
-		prereqs, err := handler.CheckHypervisorPrerequisites(ctx, r, node.Name)
-		if err != nil {
-			return "", fmt.Errorf("failed to check hypervisor prerequisites: %w", err)
-		}
-
-		if !prereqs.Ready {
-			if podExists {
-				log.Info("hypervisor prerequisites not ready, deleting existing hypervisor pod",
-					"node", node.Name,
-					"pod", currentPod.Name,
-					"podPhase", currentPod.Status.Phase)
-				if err := r.Delete(ctx, currentPod); err != nil {
-					return "", fmt.Errorf("failed to delete existing hypervisor pod: %w", err)
-				}
-				log.Info("deleted hypervisor pod due to prerequisites not ready", "node", node.Name, "pod", key.Name)
-			} else {
-				log.V(1).Info("hypervisor prerequisites not ready, no existing pod to delete", "node", node.Name)
-			}
-			// Return error to trigger requeue, ensuring eventual creation when prerequisites are met
-			return "", fmt.Errorf("waiting for hypervisor prerequisites (device plugin)")
-		}
-		log.V(1).Info("hypervisor prerequisites are ready", "node", node.Name)
+	if err := r.ensureHypervisorPrerequisites(ctx, node.Name, vendor, currentPod, podExists); err != nil {
+		return "", err
 	}
 
-	desiredIsolationMode, err := utils.ResolveNodeIsolationMode(k8sNode, pool.Spec.NodeManagerConfig)
+	desiredIsolationMode, err := r.effectiveHypervisorIsolationMode(k8sNode, pool)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve isolation mode for node %s: %w", node.Name, err)
 	}
@@ -484,7 +500,12 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 			return "", nil
 		}
 
-		if !isHypervisorIsolationModeConfigured(currentPod, string(desiredIsolationMode)) {
+		policy := r.IsolationModePolicy
+		if policy == "" {
+			policy = tfv1.IsolationModePolicyStatic
+		}
+		if !isHypervisorIsolationModeConfigured(currentPod, string(desiredIsolationMode)) ||
+			!isHypervisorIsolationPolicyConfigured(currentPod, string(policy)) {
 			// Pool policy changes use the existing batched Hypervisor rollout.
 			// Running nodes wait until the pool controller selects them by
 			// moving the GPUNode to Pending.
@@ -576,11 +597,16 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	}
 	log.Info("adding hypervisor manifest for GPU node", "node", node.Name, "vendor", vendor)
 	utils.AddTFHypervisorConfAfterTemplate(ctx, &spec, pool, vendor, r.CompatibleWithNvidiaContainerToolkit)
-	isolationMode, err := utils.ResolveNodeIsolationMode(k8sNode, pool.Spec.NodeManagerConfig)
+	isolationMode, err := r.effectiveHypervisorIsolationMode(k8sNode, pool)
 	if err != nil {
 		return fmt.Errorf("failed to resolve isolation mode for node %s: %w", node.Name, err)
 	}
 	applyHypervisorIsolationModeArg(&spec, string(isolationMode))
+	policy := r.IsolationModePolicy
+	if policy == "" {
+		policy = tfv1.IsolationModePolicyStatic
+	}
+	applyHypervisorIsolationPolicyArg(&spec, string(policy))
 
 	// add vendor-specific env vars for multi-vendor support
 	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
@@ -712,6 +738,23 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	}
 	log.Info("hypervisor pod created", "name", key.Name, "hash", newHash)
 	return nil
+}
+
+// effectiveHypervisorIsolationMode is the process-wide compatibility mode
+// passed to the Hypervisor. Dynamic scheduling owns the actual isolation mode
+// per GPU, so node labels/rules must not select or roll the Hypervisor between
+// soft and hard. Soft is the common base because it initializes the shared
+// quota controller used by dynamic soft workers; hard workers still bypass
+// soft limiter hooks based on their WorkerInfo isolation annotation.
+func (r *GPUNodeReconciler) effectiveHypervisorIsolationMode(node *corev1.Node, pool *tfv1.GPUPool) (tfv1.IsolationModeType, error) {
+	policy := r.IsolationModePolicy
+	if policy == "" {
+		policy = tfv1.IsolationModePolicyStatic
+	}
+	if policy == tfv1.IsolationModePolicyDynamic {
+		return tfv1.IsolationModeSoft, nil
+	}
+	return utils.ResolveNodeIsolationMode(node, pool.Spec.NodeManagerConfig)
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -1116,6 +1159,32 @@ func applyHypervisorIsolationModeArg(spec *corev1.PodSpec, isolationMode string)
 	spec.Containers[0].Args = upsertHypervisorIsolationModeArg(spec.Containers[0].Args, isolationMode)
 }
 
+func applyHypervisorIsolationPolicyArg(spec *corev1.PodSpec, policy string) {
+	if spec == nil || len(spec.Containers) == 0 || policy == "" {
+		return
+	}
+	policy = strings.ToLower(strings.TrimSpace(policy))
+	const policyFlag = "--isolation-policy"
+	args := spec.Containers[0].Args
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], policyFlag+"=") {
+			args[i] = policyFlag + "=" + policy
+			spec.Containers[0].Args = args
+			return
+		}
+		if args[i] == policyFlag {
+			if i+1 < len(args) {
+				args[i+1] = policy
+			} else {
+				args = append(args, policy)
+			}
+			spec.Containers[0].Args = args
+			return
+		}
+	}
+	spec.Containers[0].Args = append(args, policyFlag+"="+policy)
+}
+
 func upsertHypervisorIsolationModeArg(args []string, isolationMode string) []string {
 	const isolationModeFlag = "--isolation-mode"
 	if isolationMode == "" {
@@ -1150,6 +1219,30 @@ func isHypervisorIsolationModeConfigured(pod *corev1.Pod, desiredIsolationMode s
 		return !found
 	}
 	return found && valid && actualIsolationMode == desiredIsolationMode
+}
+
+func isHypervisorIsolationPolicyConfigured(pod *corev1.Pod, desiredPolicy string) bool {
+	if pod == nil || len(pod.Spec.Containers) == 0 {
+		return false
+	}
+	actual, found := extractHypervisorIsolationPolicyArg(pod.Spec.Containers[0].Args)
+	if desiredPolicy == "" {
+		return !found
+	}
+	return found && strings.EqualFold(actual, desiredPolicy)
+}
+
+func extractHypervisorIsolationPolicyArg(args []string) (string, bool) {
+	const flagName = "--isolation-policy"
+	for i, arg := range args {
+		if strings.HasPrefix(arg, flagName+"=") {
+			return strings.TrimPrefix(arg, flagName+"="), true
+		}
+		if arg == flagName && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
 }
 
 func extractHypervisorIsolationModeArg(args []string) (string, bool, bool) {

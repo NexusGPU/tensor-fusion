@@ -22,6 +22,7 @@ import (
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
+	fwk "k8s.io/kube-scheduler/framework"
 	internalcache "k8s.io/kubernetes/pkg/scheduler/backend/cache"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultbinder"
@@ -30,6 +31,8 @@ import (
 	tffwk "k8s.io/kubernetes/pkg/scheduler/testing/framework"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+const testGangNodeName = "node-a"
 
 // TestPreFilterDoesNotPoolSlotRejectGangAcrossIsolationModes is the regression
 // guard for the removed `checkGangPoolFeasibility` shortcut.
@@ -65,12 +68,12 @@ func TestPreFilterDoesNotPoolSlotRejectGangAcrossIsolationModes(t *testing.T) {
 					Name: "gpu-1",
 					Labels: map[string]string{
 						constants.GpuPoolKey:    poolName,
-						constants.LabelKeyOwner: "node-a",
+						constants.LabelKeyOwner: testGangNodeName,
 					},
 				},
 				Status: tfv1.GPUStatus{
 					Phase:        tfv1.TensorFusionGPUPhaseRunning,
-					NodeSelector: map[string]string{constants.KubernetesHostNameLabel: "node-a"},
+					NodeSelector: map[string]string{constants.KubernetesHostNameLabel: testGangNodeName},
 					UsedBy:       tfv1.UsedByTensorFusion,
 					Capacity:     &tfv1.Resource{Tflops: resource.MustParse("1000"), Vram: resource.MustParse("80Gi")},
 					Available:    &tfv1.Resource{Tflops: resource.MustParse("1000"), Vram: resource.MustParse("80Gi")},
@@ -133,6 +136,50 @@ func TestPreFilterDoesNotPoolSlotRejectGangAcrossIsolationModes(t *testing.T) {
 				require.NotContains(t, msg, "gang requires", "PreFilter must not reject on physical-GPU-count grounds for mode %s", mode)
 				require.NotContains(t, msg, "slot", "PreFilter must not reject on physical-GPU-count grounds for mode %s", mode)
 			}
+		})
+	}
+}
+
+func TestPostFilterDefersStrictRejectForNominatedGangPod(t *testing.T) {
+	manager := gang.NewManager(nil, nil, Name)
+	pod := makeGangPeerPod("ns1", "wl1", "ns1/wl1", tfv1.IsolationModeSoft, 2, 0)
+	pod.Status.NominatedNodeName = testGangNodeName
+	plugin := &GPUFit{gangManager: manager}
+
+	_, status := plugin.PostFilter(context.Background(), framework.NewCycleState(), pod, nil)
+
+	require.Equal(t, fwk.Unschedulable, status.Code())
+	require.Contains(t, status.Message(), "waiting for preemption on nominated node node-a")
+	require.NoError(t, manager.PreEnqueue(context.Background(), pod), "nominated pod must not put the gang into backoff")
+}
+
+func TestShouldReserveForNominatedPod(t *testing.T) {
+	priority := func(value int32) *int32 { return &value }
+	gangPod := func(priorityValue int32, group string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+				constants.GangGroupKeyAnnotation: group,
+			}},
+			Spec: corev1.PodSpec{Priority: priority(priorityValue)},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		current   *corev1.Pod
+		nominated *corev1.Pod
+		want      bool
+	}{
+		{name: "higher priority", current: gangPod(50, "ns/gang-a"), nominated: gangPod(100, ""), want: true},
+		{name: "lower priority", current: gangPod(100, "ns/gang-a"), nominated: gangPod(50, "ns/gang-a"), want: false},
+		{name: "equal priority unrelated", current: gangPod(100, "ns/gang-a"), nominated: gangPod(100, "ns/gang-b"), want: false},
+		{name: "equal priority without gang", current: gangPod(100, ""), nominated: gangPod(100, ""), want: false},
+		{name: "equal priority same gang", current: gangPod(100, "ns/gang-a"), nominated: gangPod(100, "ns/gang-a"), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, shouldReserveForNominatedPod(tt.current, tt.nominated))
 		})
 	}
 }

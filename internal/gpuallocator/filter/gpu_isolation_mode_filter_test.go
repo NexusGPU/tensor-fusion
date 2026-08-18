@@ -120,6 +120,23 @@ func TestGPUIsolationModeFilter_SharedAcceptsAnyNodeRuntimeMode(t *testing.T) {
 	}
 }
 
+func TestGPUIsolationModeFilter_DynamicUsesRecoveredActiveMode(t *testing.T) {
+	filter := NewGPUIsolationModeFilter(tfv1.IsolationModeSoft)
+	gpus := []*tfv1.GPU{
+		{Status: tfv1.GPUStatus{UUID: "idle", IsolationPolicy: tfv1.IsolationModePolicyDynamic}},
+		{Status: tfv1.GPUStatus{UUID: "soft", IsolationPolicy: tfv1.IsolationModePolicyDynamic, ActiveIsolationMode: tfv1.IsolationModeSoft}},
+		{Status: tfv1.GPUStatus{UUID: "hard", IsolationPolicy: tfv1.IsolationModePolicyDynamic, ActiveIsolationMode: tfv1.IsolationModeHard}},
+		{Status: tfv1.GPUStatus{UUID: "conflict", IsolationPolicy: tfv1.IsolationModePolicyDynamic, DynamicIsolationConflict: true}},
+	}
+	filtered, err := filter.Filter(context.Background(), tfv1.NameNamespace{}, gpus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 2 || filtered[0].Status.UUID != "idle" || filtered[1].Status.UUID != "soft" {
+		t.Fatalf("unexpected Dynamic candidates: %#v", filtered)
+	}
+}
+
 func TestSharedWholeGPUFilter_OnlyKeepsIdleUnpartitionedGPUs(t *testing.T) {
 	res := func(tflops, vram string) *tfv1.Resource {
 		return &tfv1.Resource{Tflops: resource.MustParse(tflops), Vram: resource.MustParse(vram)}

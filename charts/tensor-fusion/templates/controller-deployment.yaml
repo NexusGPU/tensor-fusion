@@ -38,6 +38,7 @@ spec:
           image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}"
           command: 
             {{- toYaml .Values.controller.command | nindent 12 }}
+            - -isolation-mode-policy={{ .Values.controller.isolationModePolicy | default "static" }}
           livenessProbe:
             {{- toYaml .Values.controller.livenessProbe | nindent 12 }}
           readinessProbe:

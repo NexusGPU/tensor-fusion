@@ -260,7 +260,7 @@ func (s *GPUNetworkTopologyAware) Filter(ctx context.Context, state fwk.CycleSta
 	if !plan.ModeSatisfied {
 		return fwk.NewStatus(fwk.Unschedulable,
 			fmt.Sprintf("GPU topology constraint not satisfied: %s (tier=%d, maxAllowed=%d)",
-				plan.Reason, plan.Tier, s.cfg.GetMaxAllowedTier()))
+				plan.Reason, plan.Tier, maxTier))
 	}
 
 	return fwk.NewStatus(fwk.Success, "")

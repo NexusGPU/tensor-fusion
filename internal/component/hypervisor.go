@@ -20,7 +20,8 @@ var (
 )
 
 type Hypervisor struct {
-	nodesToUpdate []*tfv1.GPUNode
+	nodesToUpdate       []*tfv1.GPUNode
+	IsolationModePolicy tfv1.IsolationModePolicyType
 }
 
 func (h *Hypervisor) GetName() string {
@@ -29,8 +30,19 @@ func (h *Hypervisor) GetName() string {
 
 func (h *Hypervisor) DetectConfigChange(pool *tfv1.GPUPool, status *tfv1.PoolComponentStatus) (bool, string, string) {
 	oldHash := status.HypervisorVersion
-	newHash := utils.HypervisorTemplateHash(pool)
+	newHash := h.templateHash(pool)
 	return oldHash != newHash, newHash, oldHash
+}
+
+func (h *Hypervisor) templateHash(pool *tfv1.GPUPool) string {
+	policy := h.IsolationModePolicy
+	if policy == "" {
+		policy = tfv1.IsolationModePolicyStatic
+	}
+	if policy == tfv1.IsolationModePolicyStatic {
+		return utils.HypervisorTemplateHash(pool)
+	}
+	return utils.HypervisorTemplateHashWithPolicy(pool, policy)
 }
 
 func (h *Hypervisor) SetConfigHash(status *tfv1.PoolComponentStatus, hash string) {
@@ -112,7 +124,11 @@ func (h *Hypervisor) GetResourcesInfo(r client.Client, ctx context.Context, pool
 			// cannot match a selector, so the pool default is used.
 			k8sNode = &corev1.Node{}
 		}
-		isolationMode, resolveErr := utils.ResolveNodeIsolationMode(k8sNode, pool.Spec.NodeManagerConfig)
+		isolationMode := tfv1.IsolationModeType("soft")
+		var resolveErr error
+		if h.IsolationModePolicy != tfv1.IsolationModePolicyDynamic {
+			isolationMode, resolveErr = utils.ResolveNodeIsolationMode(k8sNode, pool.Spec.NodeManagerConfig)
+		}
 		if resolveErr != nil {
 			return 0, 0, false, fmt.Errorf("resolve isolation mode for node %s: %w", node.Name, resolveErr)
 		}

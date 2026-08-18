@@ -1218,29 +1218,52 @@ func (m *Manager) CleanupPodGroup(groupKey PodGroupKey) {
 }
 
 func (m *Manager) collectActivatablePods(
+	ctx context.Context,
 	currentPod *corev1.Pod,
 	targetKey PodGroupKey,
 	targetMode groupKeyMode,
 ) (map[string]*corev1.Pod, error) {
 	podsToActivate := make(map[string]*corev1.Pod)
-	if m.podLister == nil || currentPod == nil {
+	if currentPod == nil {
 		return podsToActivate, nil
 	}
 
-	pods, err := m.podLister.Pods(currentPod.Namespace).List(gangLabelSelector(currentPod, targetMode))
-	if err != nil {
-		return nil, fmt.Errorf("list pods for activation in gang %s/%s: %w", currentPod.Namespace, targetKey, err)
+	var pods []*corev1.Pod
+	if m.podLister != nil {
+		listedPods, err := m.podLister.Pods(currentPod.Namespace).List(gangLabelSelector(currentPod, targetMode))
+		if err != nil {
+			return nil, fmt.Errorf("list pods for activation in gang %s/%s: %w", currentPod.Namespace, targetKey, err)
+		}
+		pods = listedPods
 	}
 
-	for _, peerPod := range pods {
+	collect := func(peerPod *corev1.Pod) {
 		if !isActivePod(peerPod) || peerPod.UID == currentPod.UID || peerPod.Spec.NodeName != "" {
-			continue
+			return
 		}
 		key, mode := resolveGroupKeyFromAnnotationsOrPod(peerPod)
 		if key == "" || mode != targetMode || key != targetKey {
-			continue
+			return
 		}
 		podsToActivate[peerPod.Namespace+"/"+peerPod.Name] = peerPod
+	}
+	for _, peerPod := range pods {
+		collect(peerPod)
+	}
+	if len(podsToActivate) > 0 {
+		return podsToActivate, nil
+	}
+
+	if liveClient := m.getClient(); liveClient != nil {
+		podList := &corev1.PodList{}
+		if err := liveClient.List(ctx, podList,
+			client.InNamespace(currentPod.Namespace),
+			client.MatchingLabelsSelector{Selector: gangLabelSelector(currentPod, targetMode)}); err != nil {
+			return nil, fmt.Errorf("list live pods for activation in gang %s/%s: %w", currentPod.Namespace, targetKey, err)
+		}
+		for i := range podList.Items {
+			collect(&podList.Items[i])
+		}
 	}
 	return podsToActivate, nil
 }
@@ -1251,11 +1274,12 @@ func (m *Manager) activateUnscheduledPods(
 	targetKey PodGroupKey,
 	targetMode groupKeyMode,
 ) int {
-	if m.frameworkHandle == nil {
+	frameworkHandle := m.frameworkHandle
+	if frameworkHandle == nil {
 		return 0
 	}
 
-	podsToActivate, err := m.collectActivatablePods(currentPod, targetKey, targetMode)
+	podsToActivate, err := m.collectActivatablePods(ctx, currentPod, targetKey, targetMode)
 	if err != nil {
 		log.Error(err, "Failed to collect activatable gang pods",
 			"pod", currentPod.Name,
@@ -1266,7 +1290,10 @@ func (m *Manager) activateUnscheduledPods(
 		return 0
 	}
 
-	m.frameworkHandle.Activate(klog.FromContext(ctx), podsToActivate)
+	logger := klog.FromContext(ctx)
+	// Permit runs inside a scheduling cycle. Activate takes the scheduling queue
+	// lock, so run it after Permit can return and release the current cycle.
+	go frameworkHandle.Activate(logger, podsToActivate)
 	return len(podsToActivate)
 }
 
