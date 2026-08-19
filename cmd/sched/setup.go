@@ -58,7 +58,7 @@ const (
 	kubeConfigCfgKey       = "kubeconfig"
 
 	nominatedPodRequeueWatchdogIntervalEnv     = "NOMINATED_POD_REQUEUE_WATCHDOG_INTERVAL"
-	defaultNominatedPodRequeueWatchdogInterval = 10 * time.Minute
+	defaultNominatedPodRequeueWatchdogInterval = 3 * time.Minute
 )
 
 func SetupScheduler(
@@ -270,38 +270,7 @@ func startNominatedPodRequeueWatchdog(
 		wait.UntilWithContext(ctx, func(ctx context.Context) {
 			now := time.Now()
 			pods, summary := sched.SchedulingQueue.PendingPods()
-			seen := map[types.UID]struct{}{}
-			podsToActivate := map[string]*corev1.Pod{}
-
-			for _, pod := range pods {
-				if pod == nil {
-					continue
-				}
-				seen[pod.UID] = struct{}{}
-
-				if !shouldWatchNominatedPod(pod) {
-					delete(firstObserved, pod.UID)
-					continue
-				}
-
-				firstSeenAt, ok := firstObserved[pod.UID]
-				if !ok {
-					firstObserved[pod.UID] = now
-					continue
-				}
-				if now.Sub(firstSeenAt) < threshold {
-					continue
-				}
-
-				podsToActivate[string(pod.UID)] = pod
-				firstObserved[pod.UID] = now
-			}
-
-			for uid := range firstObserved {
-				if _, ok := seen[uid]; !ok {
-					delete(firstObserved, uid)
-				}
-			}
+			podsToActivate := nominatedPodsToActivate(now, pods, firstObserved, threshold)
 
 			if len(podsToActivate) == 0 {
 				return
@@ -314,6 +283,48 @@ func startNominatedPodRequeueWatchdog(
 			sched.SchedulingQueue.Activate(logger, podsToActivate)
 		}, interval)
 	}()
+}
+
+func nominatedPodsToActivate(
+	now time.Time,
+	pods []*corev1.Pod,
+	firstObserved map[types.UID]time.Time,
+	threshold time.Duration,
+) map[string]*corev1.Pod {
+	seen := map[types.UID]struct{}{}
+	podsToActivate := map[string]*corev1.Pod{}
+
+	for _, pod := range pods {
+		if pod == nil {
+			continue
+		}
+		seen[pod.UID] = struct{}{}
+
+		if !shouldWatchNominatedPod(pod) {
+			delete(firstObserved, pod.UID)
+			continue
+		}
+
+		firstSeenAt, ok := firstObserved[pod.UID]
+		if !ok {
+			firstObserved[pod.UID] = now
+			continue
+		}
+		if now.Sub(firstSeenAt) < threshold {
+			continue
+		}
+
+		podsToActivate[string(pod.UID)] = pod
+		firstObserved[pod.UID] = now
+	}
+
+	for uid := range firstObserved {
+		if _, ok := seen[uid]; !ok {
+			delete(firstObserved, uid)
+		}
+	}
+
+	return podsToActivate
 }
 
 func nominatedPodRequeueWatchdogInterval(logger klog.Logger) time.Duration {
