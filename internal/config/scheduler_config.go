@@ -10,7 +10,8 @@ type GPUFitConfig struct {
 type GPUNetworkTopologyAwareConfig struct {
 	// Mode controls the topology enforcement behavior.
 	// "hard": reject nodes that don't satisfy the topology constraint.
-	// "soft" (default): allow all nodes but prefer better topology via scoring.
+	// "soft" (default): allow all nodes and score topology for non-CompactFirst
+	// placement modes. CompactFirst preserves placement-only node ordering.
 	Mode string `json:"mode"`
 
 	// TopologySource controls which data source the evaluator uses.

@@ -10,6 +10,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
@@ -266,14 +267,38 @@ func (s *GPUNetworkTopologyAware) Filter(ctx context.Context, state fwk.CycleSta
 	return fwk.NewStatus(fwk.Success, "")
 }
 
-// Score is retained for compatibility with existing scheduler configs that
-// list this plugin at the Score extension point. Node ordering is owned by
-// GPUResourcesFit's placement mode, so topology contributes no node score.
-func (s *GPUNetworkTopologyAware) Score(_ context.Context, _ fwk.CycleState, pod *v1.Pod, _ fwk.NodeInfo) (int64, *fwk.Status) {
+// Score contributes topology preference for non-CompactFirst placement modes.
+// CompactFirst keeps placement-only node ordering so topology cannot break
+// bin-packing behavior.
+func (s *GPUNetworkTopologyAware) Score(_ context.Context, state fwk.CycleState, pod *v1.Pod, nodeInfo fwk.NodeInfo) (int64, *fwk.Status) {
 	if !utils.IsTensorFusionWorker(pod) {
 		return 0, fwk.NewStatus(fwk.Success, "")
 	}
-	return 0, fwk.NewStatus(fwk.Success, "node ordering is controlled by placement mode")
+
+	schedulingResultRaw, err := state.Read(gpuresources.CycleStateGPUSchedulingResult)
+	if err != nil {
+		return 0, fwk.NewStatus(fwk.Success, "no GPU scheduling result")
+	}
+	schedulingResult := schedulingResultRaw.(*gpuresources.GPUSchedulingStateData)
+	if schedulingResult.ScoringStrategy == nil {
+		return 0, fwk.NewStatus(fwk.Success, "no GPU placement strategy")
+	}
+	switch schedulingResult.ScoringStrategy.(type) {
+	case gpuallocator.CompactFirst, *gpuallocator.CompactFirst:
+		return 0, fwk.NewStatus(fwk.Success, "topology score disabled for CompactFirst placement")
+	}
+
+	topoStateRaw, err := state.Read(CycleStateGPUTopologyResult)
+	if err != nil {
+		return 0, fwk.NewStatus(fwk.Success, "no GPU topology result")
+	}
+	topoState := topoStateRaw.(*GPUTopologyStateData)
+	plan, exists := topoState.Plans[nodeInfo.Node().Name]
+	if !exists {
+		return 0, fwk.NewStatus(fwk.Success, "no GPU topology plan for node")
+	}
+
+	return plan.Score, fwk.NewStatus(fwk.Success, "")
 }
 
 func (s *GPUNetworkTopologyAware) ScoreExtensions() fwk.ScoreExtensions {

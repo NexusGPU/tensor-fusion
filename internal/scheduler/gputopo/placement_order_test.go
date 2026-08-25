@@ -7,6 +7,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/scheduler/gpuresources"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -124,17 +125,43 @@ func TestBetterTopologyWinsBeforePlacementScore(t *testing.T) {
 	}
 }
 
-func TestTopologyScoreDoesNotChangeNodePlacement(t *testing.T) {
+func TestTopologyScoreDependsOnPlacementMode(t *testing.T) {
 	plugin := &GPUNetworkTopologyAware{}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 		Labels: map[string]string{constants.LabelComponent: constants.ComponentWorker},
 	}}
+	nodeInfo := framework.NewNodeInfo()
+	nodeInfo.SetNode(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}})
 
-	score, status := plugin.Score(context.Background(), framework.NewCycleState(), pod, nil)
-	if !status.IsSuccess() {
-		t.Fatalf("Score() status = %v", status)
+	tests := []struct {
+		name string
+		mode tfv1.PlacementMode
+		want int64
+	}{
+		{name: "compact first keeps placement-only node ordering", mode: tfv1.PlacementModeCompactFirst, want: 0},
+		{name: "node compact gpu low load includes topology", mode: tfv1.PlacementModeNodeCompactGPULowLoad, want: 87},
+		{name: "low load first includes topology", mode: tfv1.PlacementModeLowLoadFirst, want: 87},
 	}
-	if score != 0 {
-		t.Fatalf("Score() = %d, want 0 so placement owns node ordering", score)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := framework.NewCycleState()
+			state.Write(gpuresources.CycleStateGPUSchedulingResult, &gpuresources.GPUSchedulingStateData{
+				ScoringStrategy: gpuallocator.NewStrategy(tt.mode, &config.GPUFitConfig{}, nil),
+			})
+			state.Write(CycleStateGPUTopologyResult, &GPUTopologyStateData{
+				Plans: map[string]*NodeTopologyPlan{
+					"node-a": {Score: 87},
+				},
+			})
+
+			score, status := plugin.Score(context.Background(), state, pod, nodeInfo)
+			if !status.IsSuccess() {
+				t.Fatalf("Score() status = %v", status)
+			}
+			if score != tt.want {
+				t.Fatalf("Score() = %d, want %d", score, tt.want)
+			}
+		})
 	}
 }

@@ -907,6 +907,8 @@ schedulerConfig:
         enabled:
         - name: GPUResourcesFit
           weight: 5
+        - name: GPUNetworkTopologyAware
+          weight: 3
       postFilter:
         # Only GPUResourcesFit is listed here. DefaultPreemption stays enabled
         # through the scheduler's default MultiPoint plugin set.
@@ -940,7 +942,7 @@ schedulerConfig:
     - name: GPUNetworkTopologyAware
       args:
         # Topology enforcement mode:
-        #   soft (default) — only score; never reject a node
+        #   soft (default) — never reject; score nodes unless placement is CompactFirst
         #   hard           — reject nodes whose best combination exceeds maxAllowedTier
         # NOTE: this `mode` is the scheduler plugin mode, unrelated to Pod IsolationMode
         # (shared / soft / hard / partitioned).
