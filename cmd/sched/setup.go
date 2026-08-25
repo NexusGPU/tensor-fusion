@@ -161,7 +161,7 @@ func SetupScheduler(
 	// Initialize node expander
 	if enableNodeExpander {
 		unschedHandler, nodeExpander := expander.NewUnscheduledPodHandler(
-			ctx, sched, allocator,
+			ctx, sched, allocator, mgr.GetAPIReader(),
 			//nolint:staticcheck // keep old recorder interface until scheduler/expander migrate from record.EventRecorder
 			mgr.GetEventRecorderFor("TensorFusionScheduler"),
 		)
