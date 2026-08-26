@@ -3,6 +3,8 @@ package expander
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,8 +21,10 @@ import (
 	errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/tools/events"
+	resourcehelper "k8s.io/component-helpers/resource"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler"
@@ -32,40 +36,59 @@ import (
 
 const (
 	WaitingInFlightNodesPeriod = 20 * time.Second
+	insufficientCapacityReason = "InsufficientCapacityError"
 )
 
 type NodeExpander struct {
-	client             client.Client
-	scheduler          *scheduler.Scheduler
-	allocator          *gpuallocator.GpuAllocator
-	logger             klog.Logger
-	inFlightNodes      map[string][]*tfv1.GPU
-	inFlightNodeClaims sync.Map
-	preSchedulePods    map[string]*tfv1.AllocRequest
-	preScheduleTimers  map[string]*time.Timer
-	eventRecorder      events.EventRecorder
-	mu                 sync.RWMutex
-	ctx                context.Context
+	client                    client.Client
+	scheduler                 *scheduler.Scheduler
+	allocator                 *gpuallocator.GpuAllocator
+	logger                    klog.Logger
+	inFlightNodes             map[string][]*tfv1.GPU
+	inFlightNodeClaims        sync.Map
+	failedExpansionCandidates map[string]map[string]struct{}
+	preSchedulePods           map[string]*tfv1.AllocRequest
+	preScheduleTimers         map[string]*time.Timer
+	eventRecorder             events.EventRecorder
+	eventReader               client.Reader
+	activatePod               func(*corev1.Pod)
+	mu                        sync.RWMutex
+	ctx                       context.Context
+}
+
+type inFlightNodeClaim struct {
+	podKey       client.ObjectKey
+	podUID       types.UID
+	nodeClaimUID types.UID
+	candidate    string
 }
 
 func NewNodeExpander(
 	ctx context.Context,
 	allocator *gpuallocator.GpuAllocator,
 	scheduler *scheduler.Scheduler,
+	eventReader client.Reader,
 	recorder events.EventRecorder,
 ) *NodeExpander {
 
 	expander := &NodeExpander{
-		client:             allocator.Client,
-		scheduler:          scheduler,
-		allocator:          allocator,
-		logger:             log.FromContext(ctx).WithValues("component", "NodeExpander"),
-		inFlightNodes:      make(map[string][]*tfv1.GPU, 10),
-		preSchedulePods:    make(map[string]*tfv1.AllocRequest, 20),
-		preScheduleTimers:  make(map[string]*time.Timer, 20),
-		inFlightNodeClaims: sync.Map{},
-		eventRecorder:      recorder,
-		ctx:                ctx,
+		client:                    allocator.Client,
+		scheduler:                 scheduler,
+		allocator:                 allocator,
+		logger:                    log.FromContext(ctx).WithValues("component", "NodeExpander"),
+		inFlightNodes:             make(map[string][]*tfv1.GPU, 10),
+		failedExpansionCandidates: make(map[string]map[string]struct{}),
+		preSchedulePods:           make(map[string]*tfv1.AllocRequest, 20),
+		preScheduleTimers:         make(map[string]*time.Timer, 20),
+		inFlightNodeClaims:        sync.Map{},
+		eventRecorder:             recorder,
+		eventReader:               eventReader,
+		ctx:                       ctx,
+	}
+	if scheduler != nil {
+		expander.activatePod = func(pod *corev1.Pod) {
+			scheduler.SchedulingQueue.Activate(expander.logger, map[string]*corev1.Pod{string(pod.UID): pod})
+		}
 	}
 	allocator.RegisterBindHandler(func(req *tfv1.AllocRequest) {
 		obj := &corev1.ObjectReference{
@@ -79,6 +102,7 @@ func NewNodeExpander(
 
 		removed := expander.RemovePreSchedulePod(req.PodMeta.Name, true)
 		if removed {
+			expander.clearFailedExpansionCandidates(req.PodMeta.Namespace, req.PodMeta.Name, req.PodMeta.UID)
 			recorder.Eventf(obj, nil, corev1.EventTypeNormal, "NodeExpansionCheck", "Scheduled",
 				"new node provisioned and pod scheduled successfully")
 		}
@@ -94,13 +118,12 @@ func NewNodeExpander(
 				return
 			case <-ticker.C:
 			}
-			expander.inFlightNodeClaims.Range(func(key, _ any) bool {
+			expander.inFlightNodeClaims.Range(func(key, value any) bool {
 				karpenterNodeClaim := &karpv1.NodeClaim{}
 				name := key.(string)
 				if err := expander.client.Get(expander.ctx, client.ObjectKey{Name: name}, karpenterNodeClaim); err != nil {
 					if errors.IsNotFound(err) {
-						expander.inFlightNodeClaims.Delete(key)
-						expander.RemoveInFlightNode(name)
+						expander.handleTerminatedInFlightNodeClaim(name, value, expander.hasInsufficientCapacityEvent(name, value))
 						expander.logger.Info("karpenter node claim not found, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", name)
 						return true
 					}
@@ -120,24 +143,98 @@ func (e *NodeExpander) cleanupInFlightNodeClaim(nodeClaim *karpv1.NodeClaim) {
 	if nodeClaim == nil {
 		return
 	}
-	if !nodeClaim.DeletionTimestamp.IsZero() {
-		e.inFlightNodeClaims.Delete(nodeClaim.Name)
-		e.RemoveInFlightNode(nodeClaim.Name)
-		e.logger.Info("karpenter node claim is deleted, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", nodeClaim.Name)
-		return
-	}
 	if nodeClaim.StatusConditions().IsTrue(status.ConditionReady) || nodeClaim.Status.NodeName != "" {
+		value, _ := e.inFlightNodeClaims.Load(nodeClaim.Name)
 		e.inFlightNodeClaims.Delete(nodeClaim.Name)
 		e.RemoveInFlightNode(nodeClaim.Name)
+		e.clearFailedExpansionCandidatesForClaim(value)
 		e.logger.Info("karpenter node claim ready, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", nodeClaim.Name)
 		return
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if _, ok := e.inFlightNodes[nodeClaim.Name]; !ok {
+	if !nodeClaim.DeletionTimestamp.IsZero() {
+		value, _ := e.inFlightNodeClaims.Load(nodeClaim.Name)
+		e.handleTerminatedInFlightNodeClaim(nodeClaim.Name, value, e.hasInsufficientCapacityEvent(nodeClaim.Name, value))
+		e.logger.Info("karpenter node claim is deleted, remove from inFlightNodeClaims and inFlightNodes", "nodeClaimName", nodeClaim.Name)
+		return
+	}
+	e.mu.RLock()
+	_, inFlight := e.inFlightNodes[nodeClaim.Name]
+	e.mu.RUnlock()
+	if !inFlight {
+		value, _ := e.inFlightNodeClaims.Load(nodeClaim.Name)
 		e.inFlightNodeClaims.Delete(nodeClaim.Name)
+		e.clearFailedExpansionCandidatesForClaim(value)
 		e.logger.Info("karpenter node claim has been provisioned, remove from inFlightNodeClaims", "nodeClaimName", nodeClaim.Name)
 	}
+}
+
+func (e *NodeExpander) handleTerminatedInFlightNodeClaim(name string, value any, insufficientCapacity bool) {
+	e.inFlightNodeClaims.Delete(name)
+	e.RemoveInFlightNode(name)
+
+	claim, ok := value.(inFlightNodeClaim)
+	if !ok {
+		return
+	}
+	_ = e.RemovePreSchedulePod(claim.podKey.Name, true)
+
+	pod := &corev1.Pod{}
+	if err := e.client.Get(e.ctx, claim.podKey, pod); err != nil || pod.UID != claim.podUID {
+		e.clearFailedExpansionCandidates(claim.podKey.Namespace, claim.podKey.Name, claim.podUID)
+		return
+	}
+	if insufficientCapacity {
+		e.addFailedExpansionCandidate(claim.podKey, claim.podUID, claim.candidate)
+		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCandidateFailed", "InsufficientCapacity",
+			"Karpenter NodeClaim %s failed due to insufficient capacity; trying the next expansion preference", name)
+	}
+	if e.activatePod != nil {
+		e.activatePod(pod)
+		e.logger.Info("reactivated pod after Karpenter NodeClaim terminated",
+			"pod", klog.KObj(pod), "nodeClaimName", name, "insufficientCapacity", insufficientCapacity)
+	}
+}
+
+func (e *NodeExpander) hasInsufficientCapacityEvent(name string, value any) bool {
+	claim, ok := value.(inFlightNodeClaim)
+	if !ok || e.eventReader == nil {
+		return false
+	}
+	matchingFields := client.MatchingFields{
+		"reason":              insufficientCapacityReason,
+		"involvedObject.kind": constants.KarpenterNodeClaimKind,
+	}
+	if claim.nodeClaimUID != "" {
+		matchingFields["involvedObject.uid"] = string(claim.nodeClaimUID)
+	} else {
+		matchingFields["involvedObject.name"] = name
+	}
+	events := &corev1.EventList{}
+	if err := e.eventReader.List(e.ctx, events, matchingFields, client.Limit(1)); err != nil {
+		e.logger.Error(err, "failed to list events for terminated Karpenter NodeClaim", "nodeClaimName", name)
+		return false
+	}
+	for i := range events.Items {
+		event := &events.Items[i]
+		if event.InvolvedObject.Kind != constants.KarpenterNodeClaimKind {
+			continue
+		}
+		if claim.nodeClaimUID != "" && event.InvolvedObject.UID == claim.nodeClaimUID {
+			return true
+		}
+		if claim.nodeClaimUID == "" && event.InvolvedObject.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *NodeExpander) clearFailedExpansionCandidatesForClaim(value any) {
+	claim, ok := value.(inFlightNodeClaim)
+	if !ok {
+		return
+	}
+	e.clearFailedExpansionCandidates(claim.podKey.Namespace, claim.podKey.Name, claim.podUID)
 }
 
 func (e *NodeExpander) GetNodeScalerInfo() any {
@@ -169,14 +266,33 @@ func (e *NodeExpander) GetNodeScalerInfo() any {
 
 	inFlightNodeClaimSnapshot := make(map[string]any)
 	e.inFlightNodeClaims.Range(func(key, value any) bool {
-		inFlightNodeClaimSnapshot[key.(string)] = value
+		claim, ok := value.(inFlightNodeClaim)
+		if !ok {
+			inFlightNodeClaimSnapshot[key.(string)] = value
+			return true
+		}
+		inFlightNodeClaimSnapshot[key.(string)] = map[string]string{
+			"pod":       claim.podKey.String(),
+			"podUID":    string(claim.podUID),
+			"candidate": claim.candidate,
+		}
 		return true
 	})
+	failedExpansionCandidatesCopy := make(map[string][]string, len(e.failedExpansionCandidates))
+	for podKey, candidates := range e.failedExpansionCandidates {
+		values := make([]string, 0, len(candidates))
+		for candidate := range candidates {
+			values = append(values, candidate)
+		}
+		sort.Strings(values)
+		failedExpansionCandidatesCopy[podKey] = values
+	}
 	return map[string]any{
-		"inFlightNodes":       inFlightNodesCopy,
-		"inFlightNodeClaims":  inFlightNodeClaimSnapshot,
-		"preSchedulePods":     preSchedulePodsCopy,
-		"preScheduleTimerNum": len(e.preScheduleTimers),
+		"inFlightNodes":             inFlightNodesCopy,
+		"inFlightNodeClaims":        inFlightNodeClaimSnapshot,
+		"failedExpansionCandidates": failedExpansionCandidatesCopy,
+		"preSchedulePods":           preSchedulePodsCopy,
+		"preScheduleTimerNum":       len(e.preScheduleTimers),
 	}
 }
 
@@ -302,6 +418,239 @@ func (e *NodeExpander) ProcessExpansion(ctx context.Context, pod *corev1.Pod) er
 	return nil
 }
 
+func expansionPodKey(namespace, name string, uid types.UID) string {
+	return expansionPodPrefix(namespace, name) + string(uid)
+}
+
+func expansionPodPrefix(namespace, name string) string {
+	return namespace + "/" + name + "/"
+}
+
+func (e *NodeExpander) addFailedExpansionCandidate(podKey client.ObjectKey, podUID types.UID, candidate string) {
+	if candidate == "" {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	key := expansionPodKey(podKey.Namespace, podKey.Name, podUID)
+	if e.failedExpansionCandidates[key] == nil {
+		e.failedExpansionCandidates[key] = make(map[string]struct{})
+	}
+	e.failedExpansionCandidates[key][candidate] = struct{}{}
+}
+
+func (e *NodeExpander) clearFailedExpansionCandidates(namespace, name string, uid types.UID) {
+	e.mu.Lock()
+	delete(e.failedExpansionCandidates, expansionPodKey(namespace, name, uid))
+	e.mu.Unlock()
+}
+
+// ClearFailedExpansionCandidatesForPod removes all candidate history for a
+// deleted Pod, including entries left by an older UID with the same name.
+func (e *NodeExpander) ClearFailedExpansionCandidatesForPod(namespace, name string) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	prefix := expansionPodPrefix(namespace, name)
+	for key := range e.failedExpansionCandidates {
+		if strings.HasPrefix(key, prefix) {
+			delete(e.failedExpansionCandidates, key)
+		}
+	}
+}
+
+const relaxedExpansionCandidate = "<relaxed>"
+
+type expansionCandidate struct {
+	candidate    string
+	requirements map[string][]string
+}
+
+func preferredExpansionCandidates(pod *corev1.Pod) []expansionCandidate {
+	if pod == nil || pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil {
+		return []expansionCandidate{{candidate: relaxedExpansionCandidate}}
+	}
+	terms := append([]corev1.PreferredSchedulingTerm(nil),
+		pod.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution...)
+	sort.SliceStable(terms, func(i, j int) bool {
+		return terms[i].Weight > terms[j].Weight
+	})
+
+	candidates := make([]expansionCandidate, 0, len(terms)+1)
+	seen := make(map[string]struct{}, len(terms)+1)
+	for _, term := range terms {
+		requirements := make(map[string][]string)
+		for _, expression := range term.Preference.MatchExpressions {
+			if expression.Operator != corev1.NodeSelectorOpIn ||
+				!isExpansionRequirementKey(expression.Key) {
+				continue
+			}
+			requirements[expression.Key] = append([]string(nil), expression.Values...)
+		}
+		candidate := expansionRequirementsKey(requirements)
+		if candidate == "" {
+			continue
+		}
+		if _, exists := seen[candidate]; exists {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		candidates = append(candidates, expansionCandidate{candidate: candidate, requirements: requirements})
+	}
+	candidates = append(candidates, expansionCandidate{candidate: relaxedExpansionCandidate})
+	return candidates
+}
+
+func requiredExpansionCandidates(pod *corev1.Pod) []expansionCandidate {
+	if pod == nil || pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil ||
+		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return []expansionCandidate{{}}
+	}
+	terms := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) == 0 {
+		return []expansionCandidate{{}}
+	}
+
+	candidates := make([]expansionCandidate, 0, len(terms))
+	seen := make(map[string]struct{}, len(terms))
+	for _, term := range terms {
+		requirements := make(map[string][]string)
+		compatible := true
+		for _, expression := range term.MatchExpressions {
+			if expression.Operator != corev1.NodeSelectorOpIn || !isExpansionRequirementKey(expression.Key) {
+				continue
+			}
+			var merged map[string][]string
+			merged, compatible = mergeExpansionRequirementValues(requirements, map[string][]string{
+				expression.Key: expression.Values,
+			})
+			if !compatible {
+				break
+			}
+			requirements = merged
+		}
+		if !compatible {
+			continue
+		}
+		candidate := expansionRequirementsKey(requirements)
+		if _, exists := seen[candidate]; exists {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		candidates = append(candidates, expansionCandidate{candidate: candidate, requirements: requirements})
+	}
+	return candidates
+}
+
+func podExpansionCandidates(pod *corev1.Pod) []expansionCandidate {
+	baseRequirements := podKarpenterRequirementValues(pod)
+	requiredCandidates := requiredExpansionCandidates(pod)
+	preferredCandidates := preferredExpansionCandidates(pod)
+	candidates := make([]expansionCandidate, 0, len(requiredCandidates)*len(preferredCandidates))
+	seen := make(map[string]struct{}, cap(candidates))
+
+	// Preserve preferred weight order, then try required OR terms in their
+	// declaration order for each preference.
+	for _, preferred := range preferredCandidates {
+		for _, required := range requiredCandidates {
+			requirements, compatible := mergeExpansionRequirementValues(
+				baseRequirements, required.requirements, preferred.requirements,
+			)
+			if !compatible {
+				continue
+			}
+			candidate := expansionRequirementsKey(requirements)
+			if candidate == "" {
+				candidate = relaxedExpansionCandidate
+			}
+			if _, exists := seen[candidate]; exists {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			candidates = append(candidates, expansionCandidate{candidate: candidate, requirements: requirements})
+		}
+	}
+	return candidates
+}
+
+func mergeExpansionRequirementValues(requirementSets ...map[string][]string) (map[string][]string, bool) {
+	merged := make(map[string][]string)
+	for _, requirements := range requirementSets {
+		for key, values := range requirements {
+			values = uniqueStrings(values)
+			if len(values) == 0 {
+				return nil, false
+			}
+			current, exists := merged[key]
+			if !exists {
+				merged[key] = append([]string(nil), values...)
+				continue
+			}
+			allowed := make(map[string]struct{}, len(values))
+			for _, value := range values {
+				allowed[value] = struct{}{}
+			}
+			intersection := make([]string, 0, len(current))
+			for _, value := range current {
+				if _, ok := allowed[value]; ok {
+					intersection = append(intersection, value)
+				}
+			}
+			if len(intersection) == 0 {
+				return nil, false
+			}
+			merged[key] = intersection
+		}
+	}
+	return merged, true
+}
+
+func isExpansionRequirementKey(key string) bool {
+	return key == corev1.LabelInstanceTypeStable ||
+		key == corev1.LabelTopologyZone ||
+		key == corev1.LabelTopologyRegion
+}
+
+func expansionRequirementsKey(requirements map[string][]string) string {
+	keys := []string{corev1.LabelInstanceTypeStable, corev1.LabelTopologyZone, corev1.LabelTopologyRegion}
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		values := append([]string(nil), requirements[key]...)
+		if len(values) == 0 {
+			continue
+		}
+		sort.Strings(values)
+		parts = append(parts, key+"="+strings.Join(values, ","))
+	}
+	return strings.Join(parts, ";")
+}
+
+func (e *NodeExpander) expansionCandidatesToTry(pod *corev1.Pod) []expansionCandidate {
+	candidates := podExpansionCandidates(pod)
+	podKey := expansionPodKey(pod.Namespace, pod.Name, pod.UID)
+	prefix := expansionPodPrefix(pod.Namespace, pod.Name)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	// A recreated Pod starts a new expansion attempt. Drop candidate history
+	// from older UIDs while preserving the current Pod's failures.
+	for key := range e.failedExpansionCandidates {
+		if strings.HasPrefix(key, prefix) && key != podKey {
+			delete(e.failedExpansionCandidates, key)
+		}
+	}
+	failed := e.failedExpansionCandidates[podKey]
+	remaining := make([]expansionCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, exists := failed[candidate.candidate]; !exists {
+			remaining = append(remaining, candidate)
+		}
+	}
+	return remaining
+}
+
 func (e *NodeExpander) addInFlightNode(node *corev1.Node, gpus []*tfv1.GPU) {
 	e.mu.Lock()
 	e.inFlightNodes[node.Name] = gpus
@@ -318,12 +667,18 @@ func (e *NodeExpander) addPreSchedulePod(allocRequest *tfv1.AllocRequest) {
 		currentPod := &corev1.Pod{}
 		err := e.client.Get(e.ctx, client.ObjectKey{Name: podMeta.Name, Namespace: podMeta.Namespace}, currentPod)
 		if err != nil {
-			if errors.IsNotFound(err) || !currentPod.DeletionTimestamp.IsZero() {
+			if errors.IsNotFound(err) {
 				_ = e.RemovePreSchedulePod(podMeta.Name, false)
+				e.clearFailedExpansionCandidates(podMeta.Namespace, podMeta.Name, podMeta.UID)
 			}
 			e.logger.Error(err, "failed to get pod for node expansion check",
 				"namespace", podMeta.Namespace, "pod", podMeta.Name)
 			_ = e.RemovePreSchedulePod(podMeta.Name, false)
+			return
+		}
+		if !currentPod.DeletionTimestamp.IsZero() {
+			_ = e.RemovePreSchedulePod(podMeta.Name, false)
+			e.clearFailedExpansionCandidates(podMeta.Namespace, podMeta.Name, podMeta.UID)
 			return
 		}
 		if currentPod.Spec.NodeName != "" {
@@ -333,6 +688,7 @@ func (e *NodeExpander) addPreSchedulePod(allocRequest *tfv1.AllocRequest) {
 			e.logger.Info("new node provisioned and pod scheduled successfully",
 				"namespace", podMeta.Namespace, "pod", podMeta.Name)
 			_ = e.RemovePreSchedulePod(podMeta.Name, false)
+			e.clearFailedExpansionCandidates(podMeta.Namespace, podMeta.Name, podMeta.UID)
 		} else {
 			// not scheduled, record warning event and remove pre-scheduled pod
 			e.eventRecorder.Eventf(currentPod, nil, corev1.EventTypeWarning, "NodeExpansionCheck", "ScheduleTimeout",
@@ -727,29 +1083,91 @@ func (e *NodeExpander) cloneGPUNodeClaim(ctx context.Context, pod *corev1.Pod, p
 // createKarpenterNodeClaimDirect creates a Karpenter NodeClaim directly with special label identifier
 // when running GPUPool in AutoSelect mode and Karpenter manage its Nodes, no GPUNodeClaim is created
 func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *corev1.Pod, preparedNode *corev1.Node, nodeClaim *karpv1.NodeClaim) error {
+	spec := nodeClaim.DeepCopy().Spec
+	spec.Resources.Requests = nodeClaimRequestsForPod(pod)
+	labels := make(map[string]string, 4)
+	for _, owner := range nodeClaim.OwnerReferences {
+		if owner.Kind != constants.KarpenterNodePoolKind {
+			continue
+		}
+		nodePool := &karpv1.NodePool{}
+		if err := e.client.Get(ctx, client.ObjectKey{Name: owner.Name}, nodePool); err != nil {
+			return fmt.Errorf("failed to get Karpenter NodePool %s: %w", owner.Name, err)
+		}
+		poolRequirements := append([]karpv1.NodeSelectorRequirementWithMinValues(nil), nodePool.Spec.Template.Spec.Requirements...)
+		poolKeys := make(map[string]struct{}, len(poolRequirements))
+		for _, requirement := range poolRequirements {
+			poolKeys[requirement.Key] = struct{}{}
+		}
+		for key, value := range nodePool.Spec.Template.Labels {
+			labels[key] = value
+		}
+		labels[karpv1.NodePoolLabelKey] = nodePool.Name
+		if nodeClassRef := nodePool.Spec.Template.Spec.NodeClassRef; nodeClassRef != nil {
+			labels[karpv1.NodeClassLabelKey(nodeClassRef.GroupKind())] = nodeClassRef.Name
+		}
+		for key := range labels {
+			// Karpenter layers NodeClaim labels into its requirements. Do not
+			// append a stale requirement for the same key from the source claim.
+			poolKeys[key] = struct{}{}
+		}
+		for _, requirement := range spec.Requirements {
+			if _, exists := poolKeys[requirement.Key]; exists {
+				continue
+			}
+			// A source NodeClaim contains the concrete instance type and zone
+			// selected for that node. The replacement must use the NodePool's
+			// alternatives so Karpenter can select another available offering.
+			if requirement.Key == corev1.LabelInstanceTypeStable || requirement.Key == corev1.LabelTopologyZone {
+				continue
+			}
+			poolRequirements = append(poolRequirements, requirement)
+		}
+		spec.Requirements = poolRequirements
+		break
+	}
+	labelRequirements := make(map[string][]string, len(labels))
+	for key, value := range labels {
+		labelRequirements[key] = []string{value}
+	}
+	if !mergeKarpenterRequirements(&spec, labelRequirements) {
+		return fmt.Errorf("karpenter node pool labels do not intersect with its requirements")
+	}
+	var selectedCandidate expansionCandidate
+	candidateFound := false
+	for _, candidate := range e.expansionCandidatesToTry(pod) {
+		candidateSpec := (&karpv1.NodeClaim{Spec: spec}).DeepCopy().Spec
+		if !mergeKarpenterRequirements(&candidateSpec, candidate.requirements) {
+			continue
+		}
+		spec = candidateSpec
+		selectedCandidate = candidate
+		candidateFound = true
+		break
+	}
+	if !candidateFound {
+		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCandidatesExhausted", "Exhausted",
+			"all Karpenter expansion requirement candidates have failed")
+		return fmt.Errorf("all Karpenter expansion requirement candidates have failed for pod %s/%s", pod.Namespace, pod.Name)
+	}
+
 	// Create NodeClaim from the prepared node
 	newNodeClaim := &karpv1.NodeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            preparedNode.Name,
-			Labels:          make(map[string]string, 16),
+			Labels:          labels,
 			Annotations:     make(map[string]string, 4),
 			OwnerReferences: nodeClaim.OwnerReferences,
 		},
-		Spec: nodeClaim.Spec,
+		Spec: spec,
 	}
 	// Add special label to indicate this is for node expansion of "preparedNode"
 	// When GPUNode controller reconciles, check and call RemoveInFlightNode
 	newNodeClaim.Labels[constants.KarpenterExpansionLabel] = newNodeClaim.Name
 
-	// Pass through labels and annotations
-	for k, v := range nodeClaim.Labels {
-		if k == constants.KarpenterExpansionLabel {
-			continue
-		}
-		if isNotAutoAddedKarpenterKeys(k) {
-			newNodeClaim.Labels[k] = v
-		}
-	}
+	// Keep source annotations, but rebuild labels from the NodePool template.
+	// Source NodeClaim labels include provider-resolved instance properties that
+	// would constrain the replacement to the same offering.
 	for k, v := range nodeClaim.Annotations {
 		// Expansion copies should not inherit do-not-disrupt protection; otherwise reclaimed nodes can get stuck.
 		if shouldSkipAnnotationCopy(k, v) {
@@ -766,12 +1184,197 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 			"failed to create new NodeClaim: %v", err)
 		return fmt.Errorf("failed to create NodeClaim: %w", err)
 	}
-	e.inFlightNodeClaims.Store(newNodeClaim.Name, true)
+	e.inFlightNodeClaims.Store(newNodeClaim.Name, inFlightNodeClaim{
+		podKey:       client.ObjectKey{Namespace: pod.Namespace, Name: pod.Name},
+		podUID:       pod.UID,
+		nodeClaimUID: newNodeClaim.UID,
+		candidate:    selectedCandidate.candidate,
+	})
 	e.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, "NodeExpansionCompleted", "Created",
 		"created new NodeClaim for node expansion: %s", newNodeClaim.Name)
 	e.logger.Info("created new NodeClaim for node expansion", "pod", pod.Name, "namespace", pod.Namespace, "nodeClaim", newNodeClaim.Name)
 
 	return nil
+}
+
+func nodeClaimRequestsForPod(pod *corev1.Pod) corev1.ResourceList {
+	requests := resourcehelper.PodRequests(pod, resourcehelper.PodResourcesOptions{})
+	for name := range requests {
+		if strings.HasPrefix(string(name), constants.Domain+"/") {
+			delete(requests, name)
+		}
+	}
+	requests[corev1.ResourcePods] = resource.MustParse("1")
+	return requests
+}
+
+func podKarpenterRequirementValues(pod *corev1.Pod) map[string][]string {
+	valuesByKey := make(map[string][]string)
+	if pod == nil {
+		return valuesByKey
+	}
+	setValues := func(key string, values ...string) {
+		if key != corev1.LabelInstanceTypeStable && key != corev1.LabelTopologyZone {
+			return
+		}
+		unique := make([]string, 0, len(values))
+		seen := make(map[string]struct{}, len(values))
+		for _, value := range values {
+			if value != "" {
+				if _, exists := seen[value]; !exists {
+					unique = append(unique, value)
+					seen[value] = struct{}{}
+				}
+			}
+		}
+		if current, exists := valuesByKey[key]; exists {
+			allowed := make(map[string]struct{}, len(unique))
+			for _, value := range unique {
+				allowed[value] = struct{}{}
+			}
+			intersection := make([]string, 0, len(current))
+			for _, value := range current {
+				if _, ok := allowed[value]; ok {
+					intersection = append(intersection, value)
+				}
+			}
+			valuesByKey[key] = intersection
+			return
+		}
+		valuesByKey[key] = unique
+	}
+	for key, value := range pod.Spec.NodeSelector {
+		setValues(key, value)
+	}
+	return valuesByKey
+}
+
+func mergeKarpenterRequirements(spec *karpv1.NodeClaimSpec, valuesByKey map[string][]string) bool {
+	if spec == nil {
+		return false
+	}
+	merged := append([]karpv1.NodeSelectorRequirementWithMinValues(nil), spec.Requirements...)
+	for i := range merged {
+		merged[i].Values = append([]string(nil), merged[i].Values...)
+	}
+	for key, values := range valuesByKey {
+		values = uniqueStrings(values)
+		if len(values) == 0 {
+			continue
+		}
+		matched := false
+		minValues := 0
+		remaining := make([]karpv1.NodeSelectorRequirementWithMinValues, 0, len(merged)+1)
+		for _, requirement := range merged {
+			if requirement.Key != key {
+				remaining = append(remaining, requirement)
+				continue
+			}
+			matched = true
+			var compatible bool
+			values, compatible = intersectKarpenterRequirementValues(requirement, values)
+			if !compatible {
+				return false
+			}
+			if requirement.MinValues != nil && *requirement.MinValues > minValues {
+				minValues = *requirement.MinValues
+			}
+		}
+		if minValues > len(values) {
+			return false
+		}
+		sort.Strings(values)
+		mergedRequirement := karpv1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+				Key: key, Operator: corev1.NodeSelectorOpIn, Values: values,
+			},
+		}
+		if matched && minValues > 0 {
+			mergedRequirement.MinValues = &minValues
+		}
+		merged = append(remaining, mergedRequirement)
+	}
+	spec.Requirements = merged
+	sort.Slice(spec.Requirements, func(i, j int) bool {
+		if spec.Requirements[i].Key == spec.Requirements[j].Key {
+			return spec.Requirements[i].Operator < spec.Requirements[j].Operator
+		}
+		return spec.Requirements[i].Key < spec.Requirements[j].Key
+	})
+	return true
+}
+
+func intersectKarpenterRequirementValues(requirement karpv1.NodeSelectorRequirementWithMinValues, values []string) ([]string, bool) {
+	allowed := make(map[string]struct{}, len(requirement.Values))
+	for _, value := range requirement.Values {
+		allowed[value] = struct{}{}
+	}
+	result := make([]string, 0, len(values))
+	switch requirement.Operator {
+	case corev1.NodeSelectorOpIn:
+		for _, value := range values {
+			if _, exists := allowed[value]; exists {
+				result = append(result, value)
+			}
+		}
+	case corev1.NodeSelectorOpNotIn:
+		for _, value := range values {
+			if _, excluded := allowed[value]; !excluded {
+				result = append(result, value)
+			}
+		}
+	case corev1.NodeSelectorOpExists:
+		result = append(result, values...)
+	case corev1.NodeSelectorOpDoesNotExist:
+		return nil, false
+	case corev1.NodeSelectorOpGt, corev1.NodeSelectorOpLt:
+		if len(requirement.Values) != 1 {
+			return nil, false
+		}
+		boundary, err := strconv.Atoi(requirement.Values[0])
+		if err != nil {
+			return nil, false
+		}
+		for _, value := range values {
+			number, err := strconv.Atoi(value)
+			if err != nil {
+				continue
+			}
+			if requirementMatchesNumber(requirement.Operator, number, boundary) {
+				result = append(result, value)
+			}
+		}
+	default:
+		return nil, false
+	}
+	return result, len(result) > 0
+}
+
+func requirementMatchesNumber(operator corev1.NodeSelectorOperator, value, boundary int) bool {
+	switch operator {
+	case corev1.NodeSelectorOpGt:
+		return value > boundary
+	case corev1.NodeSelectorOpLt:
+		return value < boundary
+	default:
+		return false
+	}
+}
+
+func uniqueStrings(values []string) []string {
+	unique := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
 }
 
 func isNotAutoAddedKarpenterKeys(k string) bool {

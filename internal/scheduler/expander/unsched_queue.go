@@ -15,6 +15,7 @@ import (
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -33,8 +34,9 @@ type UnscheduledPodHandler struct {
 }
 
 func NewUnscheduledPodHandler(ctx context.Context, scheduler *scheduler.Scheduler,
-	allocator *gpuallocator.GpuAllocator, recorder events.EventRecorder) (*UnscheduledPodHandler, *NodeExpander) {
-	nodeExpander := NewNodeExpander(ctx, allocator, scheduler, recorder)
+	allocator *gpuallocator.GpuAllocator, eventReader client.Reader,
+	recorder events.EventRecorder) (*UnscheduledPodHandler, *NodeExpander) {
+	nodeExpander := NewNodeExpander(ctx, allocator, scheduler, eventReader, recorder)
 	h := &UnscheduledPodHandler{
 		pending:      make(map[string]*corev1.Pod),
 		queue:        make(chan *queuedPod, 256),

@@ -159,7 +159,7 @@ func SetupScheduler(
 	// Initialize node expander
 	if enableNodeExpander {
 		unschedHandler, nodeExpander := expander.NewUnscheduledPodHandler(
-			ctx, sched, allocator,
+			ctx, sched, allocator, mgr.GetAPIReader(),
 			mgr.GetEventRecorder("TensorFusionScheduler"),
 		)
 
