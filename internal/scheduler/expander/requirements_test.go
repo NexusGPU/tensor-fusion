@@ -42,11 +42,9 @@ func TestMergePodKarpenterRequirements(t *testing.T) {
 		},
 	}
 
-	preparedNode := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
-		"node.kubernetes.io/instance-type": "g6.12xlarge",
-		"topology.kubernetes.io/zone":      "us-east-1a",
-	}}}
-	require.True(t, mergeKarpenterRequirements(spec, podKarpenterRequirementValues(pod, preparedNode)))
+	candidates := podExpansionCandidates(pod)
+	require.Len(t, candidates, 1)
+	require.True(t, mergeKarpenterRequirements(spec, candidates[0].requirements))
 
 	require.ElementsMatch(t, []string{"g6.2xlarge", "g6.12xlarge"}, spec.Requirements[0].Values)
 	require.ElementsMatch(t, []string{"us-east-1a", "us-east-1b"}, spec.Requirements[1].Values)
@@ -60,7 +58,7 @@ func TestMergePodKarpenterRequirementsPreservesPoolIntersection(t *testing.T) {
 	pod := &corev1.Pod{Spec: corev1.PodSpec{NodeSelector: map[string]string{
 		"node.kubernetes.io/instance-type": "g6.12xlarge",
 	}}}
-	require.True(t, mergeKarpenterRequirements(spec, podKarpenterRequirementValues(pod, nil)))
+	require.True(t, mergeKarpenterRequirements(spec, podKarpenterRequirementValues(pod)))
 	require.Equal(t, []string{"g6.12xlarge"}, spec.Requirements[0].Values)
 	require.Equal(t, []string{"us-east-1a", "us-east-1b"}, spec.Requirements[1].Values)
 }
@@ -128,8 +126,9 @@ func TestPodKarpenterRequirementValuesIntersectsSelectorAndAffinity(t *testing.T
 			}}},
 		}},
 	}}
-	values := podKarpenterRequirementValues(pod, nil)
-	require.Equal(t, []string{"g6.12xlarge"}, values[corev1.LabelInstanceTypeStable])
+	candidates := podExpansionCandidates(pod)
+	require.Len(t, candidates, 1)
+	require.Equal(t, []string{"g6.12xlarge"}, candidates[0].requirements[corev1.LabelInstanceTypeStable])
 }
 
 func TestPodKarpenterRequirementValuesIncludesRegion(t *testing.T) {
@@ -137,8 +136,80 @@ func TestPodKarpenterRequirementValuesIncludesRegion(t *testing.T) {
 		NodeSelector: map[string]string{corev1.LabelTopologyRegion: "us-west-2"},
 	}}
 
-	values := podKarpenterRequirementValues(pod, nil)
+	values := podKarpenterRequirementValues(pod)
 	require.Equal(t, []string{"us-west-2"}, values[corev1.LabelTopologyRegion])
+}
+
+func TestMergeRegionRequirementMatrix(t *testing.T) {
+	tests := []struct {
+		name        string
+		podRegions  []string
+		poolRegions []string
+		wantRegions []string
+		wantValid   bool
+	}{
+		{
+			name:        "pod and pool use intersection",
+			podRegions:  []string{"us-east-1", "eu-west-1"},
+			poolRegions: []string{"us-east-1", "us-west-2"},
+			wantRegions: []string{"us-east-1"},
+			wantValid:   true,
+		},
+		{
+			name:        "pod region without pool region",
+			podRegions:  []string{"us-west-2"},
+			wantRegions: []string{"us-west-2"},
+			wantValid:   true,
+		},
+		{
+			name:        "single pool region without pod region",
+			poolRegions: []string{"us-east-1"},
+			wantRegions: []string{"us-east-1"},
+			wantValid:   true,
+		},
+		{
+			name:        "multiple pool regions stay in one requirement",
+			poolRegions: []string{"us-east-1", "us-west-2"},
+			wantRegions: []string{"us-east-1", "us-west-2"},
+			wantValid:   true,
+		},
+		{
+			name:      "no pod or pool region",
+			wantValid: true,
+		},
+		{
+			name:        "empty intersection is invalid",
+			podRegions:  []string{"us-west-2"},
+			poolRegions: []string{"us-east-1"},
+			wantValid:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := &karpv1.NodeClaimSpec{}
+			if len(tt.poolRegions) > 0 {
+				spec.Requirements = []karpv1.NodeSelectorRequirementWithMinValues{{
+					Key: corev1.LabelTopologyRegion, Operator: corev1.NodeSelectorOpIn, Values: tt.poolRegions,
+				}}
+			}
+			podRequirements := make(map[string][]string)
+			if len(tt.podRegions) > 0 {
+				podRequirements[corev1.LabelTopologyRegion] = tt.podRegions
+			}
+
+			require.Equal(t, tt.wantValid, mergeKarpenterRequirements(spec, podRequirements))
+			if !tt.wantValid {
+				return
+			}
+			regions, exists := requirementValuesByKey(spec.Requirements)[corev1.LabelTopologyRegion]
+			if len(tt.wantRegions) == 0 {
+				require.False(t, exists)
+				return
+			}
+			require.ElementsMatch(t, tt.wantRegions, regions)
+		})
+	}
 }
 
 func TestPreferredExpansionCandidatesFollowWeight(t *testing.T) {
@@ -179,6 +250,87 @@ func TestPreferredExpansionCandidatesIncludeRegion(t *testing.T) {
 	require.Equal(t, relaxedExpansionCandidate, candidates[1].candidate)
 }
 
+func TestRequiredExpansionCandidatesPreserveTermOrderAndCorrelation(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{
+			{MatchExpressions: []corev1.NodeSelectorRequirement{
+				{Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.2xlarge"}},
+				{Key: corev1.LabelTopologyZone, Operator: corev1.NodeSelectorOpIn, Values: []string{"us-east-1a"}},
+			}},
+			{MatchExpressions: []corev1.NodeSelectorRequirement{
+				{Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.12xlarge"}},
+				{Key: corev1.LabelTopologyZone, Operator: corev1.NodeSelectorOpIn, Values: []string{"us-east-1b"}},
+			}},
+		}},
+	}}}}
+
+	candidates := podExpansionCandidates(pod)
+	require.Len(t, candidates, 2)
+	require.Equal(t, []string{"g6.2xlarge"}, candidates[0].requirements[corev1.LabelInstanceTypeStable])
+	require.Equal(t, []string{"us-east-1a"}, candidates[0].requirements[corev1.LabelTopologyZone])
+	require.Equal(t, []string{"g6.12xlarge"}, candidates[1].requirements[corev1.LabelInstanceTypeStable])
+	require.Equal(t, []string{"us-east-1b"}, candidates[1].requirements[corev1.LabelTopologyZone])
+}
+
+func TestExpansionCandidatesCombinePreferredWeightWithRequiredTerms(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{
+			{MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelTopologyZone, Operator: corev1.NodeSelectorOpIn, Values: []string{"us-east-1a"},
+			}}},
+			{MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelTopologyZone, Operator: corev1.NodeSelectorOpIn, Values: []string{"us-east-1b"},
+			}}},
+		}},
+		PreferredDuringSchedulingIgnoredDuringExecution: []corev1.PreferredSchedulingTerm{
+			{Weight: 50, Preference: corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.12xlarge"},
+			}}}},
+			{Weight: 100, Preference: corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.2xlarge"},
+			}}}},
+		},
+	}}}}
+
+	candidates := podExpansionCandidates(pod)
+	require.Len(t, candidates, 6)
+	want := [][2]string{
+		{"g6.2xlarge", "us-east-1a"},
+		{"g6.2xlarge", "us-east-1b"},
+		{"g6.12xlarge", "us-east-1a"},
+		{"g6.12xlarge", "us-east-1b"},
+		{"", "us-east-1a"},
+		{"", "us-east-1b"},
+	}
+	for i, expected := range want {
+		require.Equal(t, expected[1], candidates[i].requirements[corev1.LabelTopologyZone][0])
+		if expected[0] == "" {
+			require.NotContains(t, candidates[i].requirements, corev1.LabelInstanceTypeStable)
+		} else {
+			require.Equal(t, expected[0], candidates[i].requirements[corev1.LabelInstanceTypeStable][0])
+		}
+	}
+}
+
+func TestExpansionCandidatesSkipConflictingRequiredAndPreferredCombination(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+			MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.12xlarge"},
+			}},
+		}}},
+		PreferredDuringSchedulingIgnoredDuringExecution: []corev1.PreferredSchedulingTerm{{
+			Weight: 100, Preference: corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.2xlarge"},
+			}}},
+		}},
+	}}}}
+
+	candidates := podExpansionCandidates(pod)
+	require.Len(t, candidates, 1)
+	require.Equal(t, []string{"g6.12xlarge"}, candidates[0].requirements[corev1.LabelInstanceTypeStable])
+}
+
 func TestFailedExpansionCandidateState(t *testing.T) {
 	expander := &NodeExpander{failedExpansionCandidates: make(map[string]map[string]struct{})}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "worker", UID: types.UID("worker-uid")}}
@@ -193,25 +345,54 @@ func TestFailedExpansionCandidateState(t *testing.T) {
 		},
 	}}
 	podKey := client.ObjectKeyFromObject(pod)
-	remaining := expander.expansionPreferencesToTry(pod)
+	remaining := expander.expansionCandidatesToTry(pod)
 	require.Len(t, remaining, 3)
 	high := remaining[0]
 	require.Equal(t, []string{"g6.2xlarge"}, high.requirements[corev1.LabelInstanceTypeStable])
 
 	expander.addFailedExpansionCandidate(podKey, pod.UID, high.candidate)
-	remaining = expander.expansionPreferencesToTry(pod)
+	remaining = expander.expansionCandidatesToTry(pod)
 	require.Len(t, remaining, 2)
 	low := remaining[0]
 	require.Equal(t, []string{"g6.12xlarge"}, low.requirements[corev1.LabelInstanceTypeStable])
 
 	expander.addFailedExpansionCandidate(podKey, pod.UID, low.candidate)
-	remaining = expander.expansionPreferencesToTry(pod)
+	remaining = expander.expansionCandidatesToTry(pod)
 	require.Len(t, remaining, 1)
 	relaxed := remaining[0]
 	require.Equal(t, relaxedExpansionCandidate, relaxed.candidate)
 
 	expander.addFailedExpansionCandidate(podKey, pod.UID, relaxed.candidate)
-	require.Empty(t, expander.expansionPreferencesToTry(pod))
+	require.Empty(t, expander.expansionCandidatesToTry(pod))
+}
+
+func TestFailedExpansionCandidateStateExhaustsRequiredTerms(t *testing.T) {
+	expander := &NodeExpander{failedExpansionCandidates: make(map[string]map[string]struct{})}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "worker", UID: types.UID("worker-uid")},
+		Spec: corev1.PodSpec{Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{
+				{MatchExpressions: []corev1.NodeSelectorRequirement{{
+					Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.2xlarge"},
+				}}},
+				{MatchExpressions: []corev1.NodeSelectorRequirement{{
+					Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.12xlarge"},
+				}}},
+			}},
+		}}},
+	}
+	podKey := client.ObjectKeyFromObject(pod)
+
+	candidates := expander.expansionCandidatesToTry(pod)
+	require.Len(t, candidates, 2)
+	expander.addFailedExpansionCandidate(podKey, pod.UID, candidates[0].candidate)
+
+	candidates = expander.expansionCandidatesToTry(pod)
+	require.Len(t, candidates, 1)
+	require.Equal(t, []string{"g6.12xlarge"}, candidates[0].requirements[corev1.LabelInstanceTypeStable])
+	expander.addFailedExpansionCandidate(podKey, pod.UID, candidates[0].candidate)
+
+	require.Empty(t, expander.expansionCandidatesToTry(pod))
 }
 
 func TestFailedExpansionCandidateStateIsScopedByPodUID(t *testing.T) {
@@ -232,12 +413,12 @@ func TestFailedExpansionCandidateStateIsScopedByPodUID(t *testing.T) {
 		},
 	}}
 
-	first := expander.expansionPreferencesToTry(pod)[0]
+	first := expander.expansionCandidatesToTry(pod)[0]
 	expander.addFailedExpansionCandidate(client.ObjectKeyFromObject(pod), pod.UID, first.candidate)
 
 	recreated := pod.DeepCopy()
 	recreated.UID = types.UID("new-uid")
-	require.Equal(t, first.candidate, expander.expansionPreferencesToTry(recreated)[0].candidate)
+	require.Equal(t, first.candidate, expander.expansionCandidatesToTry(recreated)[0].candidate)
 	require.NotContains(t, expander.failedExpansionCandidates, expansionPodKey(pod.Namespace, pod.Name, pod.UID))
 }
 
