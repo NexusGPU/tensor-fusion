@@ -204,6 +204,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - karpenter.sh
+  resources:
+  - nodepools
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - policy
   resources:
   - poddisruptionbudgets
