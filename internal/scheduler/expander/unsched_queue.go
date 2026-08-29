@@ -71,6 +71,10 @@ func (h *UnscheduledPodHandler) HandleRejectedPod(ctx context.Context, podInfo *
 
 	// take snapshot to avoid modify origin Pod info
 	pod = pod.DeepCopy()
+	if h.nodeExpander.resetExpansionCandidatesForNewRound(pod) {
+		h.logger.Info("scheduler requeued pod after all Karpenter expansion candidates failed, starting a new expansion round",
+			"pod", klog.KObj(pod))
+	}
 
 	h.mu.Lock()
 	if _, ok := h.pending[string(pod.UID)]; ok {

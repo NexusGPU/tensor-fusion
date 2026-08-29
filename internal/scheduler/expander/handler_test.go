@@ -146,6 +146,10 @@ var _ = Describe("NodeExpander Unit Tests", func() {
 			testNonCapacityDeletion(suite)
 		})
 
+		It("should wait for scheduler requeue after exhausting expansion candidates", func() {
+			testExhaustedCandidatesWaitForSchedulerRequeue(suite)
+		})
+
 		It("should cleanup inflight node claim when node is ready", func() {
 			testCleanupReadyInFlightNodeClaim(suite)
 		})
@@ -474,6 +478,34 @@ func testNonCapacityDeletion(suite *NodeExpanderTestSuite) {
 	_, failed := suite.nodeExpander.failedExpansionCandidates[expansionPodKey(pod.Namespace, pod.Name, pod.UID)]
 	suite.nodeExpander.mu.RUnlock()
 	Expect(failed).To(BeFalse())
+}
+
+func testExhaustedCandidatesWaitForSchedulerRequeue(suite *NodeExpanderTestSuite) {
+	pod := createTestTensorFusionPod("exhausted-worker", suite.namespace, "100", "1Gi")
+	pod.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+			MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.2xlarge"},
+			}},
+		}}},
+	}}
+	Expect(suite.k8sClient.Create(suite.ctx, pod)).To(Succeed())
+	defer func() { _ = suite.k8sClient.Delete(suite.ctx, pod) }()
+
+	candidates := suite.nodeExpander.expansionCandidatesToTry(pod)
+	Expect(candidates).To(HaveLen(1))
+	claim := inFlightNodeClaim{
+		podKey:    client.ObjectKeyFromObject(pod),
+		podUID:    pod.UID,
+		candidate: candidates[0].candidate,
+	}
+	activated := false
+	suite.nodeExpander.activatePod = func(*corev1.Pod) { activated = true }
+
+	suite.nodeExpander.handleTerminatedInFlightNodeClaim("exhausted-claim", claim, true)
+
+	Expect(activated).To(BeFalse())
+	Expect(suite.nodeExpander.expansionCandidatesToTry(pod)).To(BeEmpty())
 }
 
 func testCleanupReadyInFlightNodeClaim(suite *NodeExpanderTestSuite) {
