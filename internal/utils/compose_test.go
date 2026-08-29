@@ -187,7 +187,7 @@ func TestSetWorkerContainerSpec(t *testing.T) {
 			expectCommand: []string{
 				"/bin/bash",
 				"-c",
-				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 1024",
+				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 2048",
 			},
 		},
 		{
@@ -232,7 +232,7 @@ func TestSetWorkerContainerSpec(t *testing.T) {
 				require.Contains(t, container.Command[2], "exec ./tensor-fusion-worker", "should exec worker")
 				require.Contains(t, container.Command[2], "-n shmem", "should use shmem mode")
 				require.Contains(t, container.Command[2], "-m tf_shm", "should specify shared memory name")
-				require.Contains(t, container.Command[2], "-M 1024", "should specify shared memory size")
+				require.Contains(t, container.Command[2], "-M "+constants.ConnectionSharedMemSize, "should specify shared memory size")
 			}
 		})
 	}
@@ -319,11 +319,11 @@ func TestAddTFDefaultClientConfBeforePatchMergesWorkerTemplateEnvIntoSidecar(t *
 			SidecarWorker: true,
 		},
 	}
-
 	utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, pool, tfInfo, []int{0})
 
 	require.Len(t, pod.Spec.Containers, 2)
 	worker := pod.Spec.Containers[1]
+	require.Contains(t, worker.Command[2], "-M "+constants.ConnectionSharedMemSize)
 	require.Equal(t, constants.TFContainerNameWorker, worker.Name)
 	require.Contains(t, worker.Env, corev1.EnvVar{Name: "CUSTOM_WORKER_ENV", Value: "custom-value"})
 	require.Contains(t, worker.Env, corev1.EnvVar{
