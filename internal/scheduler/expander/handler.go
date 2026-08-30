@@ -802,6 +802,10 @@ func (e *NodeExpander) prepareNewNodesForScheduleAttempt(
 	for _, gpu := range templateGPUs {
 		gpuCopy := gpu.DeepCopy()
 		gpuCopy.Name = "gpu-" + rand.String(12)
+		if gpuCopy.Status.NodeSelector == nil {
+			gpuCopy.Status.NodeSelector = make(map[string]string, 1)
+		}
+		gpuCopy.Status.NodeSelector[constants.KubernetesHostNameLabel] = newPreparedNode.Name
 		gpuCopy.Status.Available = gpuCopy.Status.Capacity.DeepCopy()
 		newPreparedGPUs = append(newPreparedGPUs, gpuCopy)
 	}
@@ -875,20 +879,7 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 	e.mu.RUnlock()
 
 	for _, alloc := range preScheduleSnapshot {
-		preScheduledPodPreAllocated := false
-		for _, gpu := range inflightSnapshot {
-			reqTflops := alloc.Request.Tflops
-			if !alloc.Request.ComputePercent.IsZero() {
-				reqTflops = *utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, alloc.Request)
-			}
-			if gpu.Status.Available.Tflops.Cmp(reqTflops) >= 0 &&
-				gpu.Status.Available.Vram.Cmp(alloc.Request.Vram) >= 0 {
-				gpu.Status.Available.Tflops.Sub(reqTflops)
-				gpu.Status.Available.Vram.Sub(alloc.Request.Vram)
-				preScheduledPodPreAllocated = true
-				break
-			}
-		}
+		preScheduledPodPreAllocated := e.reserveInflightGPUs(alloc, inflightSnapshot)
 		// this is unexpected, all pre-scheduled pod should be able to place into inFlight node
 		// possible happen when new node added to cluster and removed from inFlight nodes, simultaneously,
 		// new Pods added and also unschedulable, trigger node expansion before previous Pod scheduled
@@ -950,6 +941,67 @@ func (e *NodeExpander) checkGPUFitWithInflightNodes(pod *corev1.Pod, potentialGp
 		}
 	}
 	return allocRequest, true, false, onlyCanBeFlightGPU
+}
+
+// reserveInflightGPUs reserves all GPUs required by a pre-scheduled Pod from
+// one in-flight node. Resource accounting must honor AllocRequest.Count; a
+// multi-GPU Pod cannot be represented by reserving only its first GPU.
+func (e *NodeExpander) reserveInflightGPUs(alloc *tfv1.AllocRequest, inflightSnapshot map[string]*tfv1.GPU) bool {
+	if e == nil || e.allocator == nil || alloc == nil {
+		return false
+	}
+
+	count := int(alloc.Count)
+	if count == 0 {
+		count = 1
+	}
+
+	candidates := make([]*tfv1.GPU, 0, len(inflightSnapshot))
+	for _, gpu := range inflightSnapshot {
+		if gpu != nil {
+			candidates = append(candidates, gpu)
+		}
+	}
+	filtered, _, err := e.allocator.Filter(alloc, candidates, false)
+	if err != nil {
+		return false
+	}
+
+	byNode := make(map[string][]*tfv1.GPU)
+	for _, gpu := range filtered {
+		if gpu == nil || gpu.Status.Available == nil || gpu.Status.Capacity == nil {
+			continue
+		}
+		nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if nodeName == "" {
+			continue
+		}
+		byNode[nodeName] = append(byNode[nodeName], gpu)
+	}
+
+	for _, nodeGPUs := range byNode {
+		selected := make([]*tfv1.GPU, 0, count)
+		for _, gpu := range nodeGPUs {
+			selected = append(selected, gpu)
+			if len(selected) == count {
+				break
+			}
+		}
+		if len(selected) < count {
+			continue
+		}
+
+		for _, gpu := range selected {
+			reqTflops := alloc.Request.Tflops
+			if !alloc.Request.ComputePercent.IsZero() {
+				reqTflops = *utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, alloc.Request)
+			}
+			gpu.Status.Available.Tflops.Sub(reqTflops)
+			gpu.Status.Available.Vram.Sub(alloc.Request.Vram)
+		}
+		return true
+	}
+	return false
 }
 
 func (e *NodeExpander) checkGPUFitForNewNode(pod *corev1.Pod, gpus []*tfv1.GPU) bool {
