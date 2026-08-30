@@ -15,6 +15,7 @@ import (
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -33,8 +34,9 @@ type UnscheduledPodHandler struct {
 }
 
 func NewUnscheduledPodHandler(ctx context.Context, scheduler *scheduler.Scheduler,
-	allocator *gpuallocator.GpuAllocator, recorder events.EventRecorder) (*UnscheduledPodHandler, *NodeExpander) {
-	nodeExpander := NewNodeExpander(ctx, allocator, scheduler, recorder)
+	allocator *gpuallocator.GpuAllocator, eventReader client.Reader,
+	recorder events.EventRecorder) (*UnscheduledPodHandler, *NodeExpander) {
+	nodeExpander := NewNodeExpander(ctx, allocator, scheduler, eventReader, recorder)
 	h := &UnscheduledPodHandler{
 		pending:      make(map[string]*corev1.Pod),
 		queue:        make(chan *queuedPod, 256),
@@ -70,6 +72,10 @@ func (h *UnscheduledPodHandler) HandleRejectedPod(ctx context.Context, podInfo f
 
 	// take snapshot to avoid modify origin Pod info
 	pod = pod.DeepCopy()
+	if h.nodeExpander.resetExpansionCandidatesForNewRound(pod) {
+		h.logger.Info("scheduler requeued pod after all Karpenter expansion candidates failed, starting a new expansion round",
+			"pod", klog.KObj(pod))
+	}
 
 	h.mu.Lock()
 	if _, ok := h.pending[string(pod.UID)]; ok {

@@ -46,6 +46,18 @@ func (suite *NodeExpanderTestSuite) SetupSuite() {
 	// Setup fake client with scheme including TensorFusion types
 	suite.k8sClient = fake.NewClientBuilder().
 		WithScheme(scheme.Scheme).
+		WithIndex(&corev1.Event{}, "reason", func(obj client.Object) []string {
+			return []string{obj.(*corev1.Event).Reason}
+		}).
+		WithIndex(&corev1.Event{}, "involvedObject.kind", func(obj client.Object) []string {
+			return []string{obj.(*corev1.Event).InvolvedObject.Kind}
+		}).
+		WithIndex(&corev1.Event{}, "involvedObject.uid", func(obj client.Object) []string {
+			return []string{string(obj.(*corev1.Event).InvolvedObject.UID)}
+		}).
+		WithIndex(&corev1.Event{}, "involvedObject.name", func(obj client.Object) []string {
+			return []string{obj.(*corev1.Event).InvolvedObject.Name}
+		}).
 		WithStatusSubresource(&tfv1.GPU{}, &tfv1.GPUNode{}, &tfv1.TensorFusionWorkload{}, &corev1.Pod{}, &corev1.Node{}).
 		Build()
 	suite.namespace = "expansion-test-ns"
@@ -73,7 +85,7 @@ func (suite *NodeExpanderTestSuite) SetupSuite() {
 
 	// Setup node expander and unscheduled pod handler
 	recorder := &events.FakeRecorder{}
-	suite.unschedHandler, suite.nodeExpander = NewUnscheduledPodHandler(ctx, nil, suite.allocator, recorder)
+	suite.unschedHandler, suite.nodeExpander = NewUnscheduledPodHandler(ctx, nil, suite.allocator, suite.k8sClient, recorder)
 }
 
 // TearDownSuite cleans up the test environment
@@ -123,6 +135,22 @@ var _ = Describe("NodeExpander Unit Tests", func() {
 			testDoNotDisruptAnnotationFiltered(suite)
 		})
 
+		It("should skip a preferred instance type outside the NodePool", func() {
+			testIncompatiblePreferenceSkipped(suite)
+		})
+
+		It("should classify insufficient capacity from the Karpenter event", func() {
+			testInsufficientCapacityEvent(suite)
+		})
+
+		It("should reactivate without failing a candidate for non-capacity deletion", func() {
+			testNonCapacityDeletion(suite)
+		})
+
+		It("should wait for scheduler requeue after exhausting expansion candidates", func() {
+			testExhaustedCandidatesWaitForSchedulerRequeue(suite)
+		})
+
 		It("should cleanup inflight node claim when node is ready", func() {
 			testCleanupReadyInFlightNodeClaim(suite)
 		})
@@ -162,6 +190,20 @@ func testKarpenterNodeClaimCreation(suite *NodeExpanderTestSuite) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-nodepool",
 		},
+		Spec: karpv1.NodePoolSpec{Template: karpv1.NodeClaimTemplate{
+			ObjectMeta: karpv1.ObjectMeta{Labels: map[string]string{"team": "inference"}},
+			Spec: karpv1.NodeClaimTemplateSpec{
+				Requirements: []karpv1.NodeSelectorRequirementWithMinValues{
+					testKarpenterRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn,
+						[]string{"g6.2xlarge", "g6.12xlarge"}),
+					testKarpenterRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn,
+						[]string{"us-east-1a", "us-east-1b"}),
+				},
+				NodeClassRef: &karpv1.NodeClassReference{
+					Group: "karpenter.k8s.aws", Kind: "EC2NodeClass", Name: "default",
+				},
+			},
+		}},
 	}
 	Expect(suite.k8sClient.Create(suite.ctx, nodePool)).To(Succeed())
 	defer func() { _ = suite.k8sClient.Delete(suite.ctx, nodePool) }()
@@ -170,6 +212,19 @@ func testKarpenterNodeClaimCreation(suite *NodeExpanderTestSuite) {
 	nodeClaim := &karpv1.NodeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-nodeclaim-1",
+			Labels: map[string]string{
+				corev1.LabelInstanceTypeStable:              "g6.12xlarge",
+				corev1.LabelTopologyZone:                    "us-east-1a",
+				corev1.LabelTopologyRegion:                  "us-east-1",
+				corev1.LabelHostname:                        "source-node",
+				corev1.LabelArchStable:                      "amd64",
+				corev1.LabelOSStable:                        "linux",
+				karpv1.CapacityTypeLabelKey:                 "on-demand",
+				"karpenter.k8s.aws/instance-family":         "g6",
+				"karpenter.k8s.aws/instance-generation":     "6",
+				"source.example.com/runtime-resolved-label": "drop-me",
+				"team": "source-value",
+			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: "karpenter.sh/v1",
@@ -180,17 +235,41 @@ func testKarpenterNodeClaimCreation(suite *NodeExpanderTestSuite) {
 				},
 			},
 		},
+		Spec: karpv1.NodeClaimSpec{Requirements: []karpv1.NodeSelectorRequirementWithMinValues{
+			testKarpenterRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, []string{"g6.12xlarge"}),
+			testKarpenterRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, []string{"us-east-1a"}),
+			testKarpenterRequirement("team", corev1.NodeSelectorOpIn, []string{"source-value"}),
+		}, Resources: karpv1.ResourceRequirements{Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("4760m"),
+			corev1.ResourceMemory: resource.MustParse("48Gi"),
+			corev1.ResourcePods:   resource.MustParse("17"),
+		}}},
 	}
 	Expect(suite.k8sClient.Create(suite.ctx, nodeClaim)).To(Succeed())
 	defer func() { _ = suite.k8sClient.Delete(suite.ctx, nodeClaim) }()
 
 	// Create initial node owned by NodeClaim
 	node1 := createTestNode("node-1", nodeClaim)
+	// The only existing template is g6.12xlarge. The first expansion must still
+	// honor the Pod's higher-weight g6.2xlarge preference.
+	node1.Labels[corev1.LabelInstanceTypeStable] = "g6.12xlarge"
+	node1.Labels[corev1.LabelTopologyZone] = "us-east-1a"
 	Expect(suite.k8sClient.Create(suite.ctx, node1)).To(Succeed())
 	defer func() { _ = suite.k8sClient.Delete(suite.ctx, node1) }()
 
 	// Create test pod
 	pod := createTestTensorFusionPod("worker-1", suite.namespace, "1000", "8Gi")
+	pod.Spec.Containers[0].Resources.Requests[corev1.ResourceName(constants.PodIndexAnnotation)] = resource.MustParse("1")
+	pod.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		PreferredDuringSchedulingIgnoredDuringExecution: []corev1.PreferredSchedulingTerm{
+			{Weight: 100, Preference: corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.2xlarge"},
+			}}}},
+			{Weight: 50, Preference: corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.12xlarge"},
+			}}}},
+		},
+	}}
 	Expect(suite.k8sClient.Create(suite.ctx, pod)).To(Succeed())
 	defer func() { _ = suite.k8sClient.Delete(suite.ctx, pod) }()
 
@@ -207,6 +286,61 @@ func testKarpenterNodeClaimCreation(suite *NodeExpanderTestSuite) {
 		}
 		return len(nodeClaimList.Items)
 	}, 10*time.Second, 200*time.Millisecond).Should(Equal(2))
+
+	created := &karpv1.NodeClaim{}
+	nodeClaimList := &karpv1.NodeClaimList{}
+	Expect(suite.k8sClient.List(suite.ctx, nodeClaimList)).To(Succeed())
+	for i := range nodeClaimList.Items {
+		if nodeClaimList.Items[i].Name != nodeClaim.Name {
+			created = &nodeClaimList.Items[i]
+			break
+		}
+	}
+	createdRequirements := make(map[string][]string)
+	for _, requirement := range created.Spec.Requirements {
+		createdRequirements[requirement.Key] = requirement.Values
+	}
+	Expect(createdRequirements[corev1.LabelInstanceTypeStable]).To(Equal([]string{"g6.2xlarge"}))
+	Expect(createdRequirements[corev1.LabelTopologyZone]).To(Equal([]string{"us-east-1a", "us-east-1b"}))
+	Expect(created.Spec.Resources.Requests.Cpu().String()).To(Equal("1"))
+	Expect(created.Spec.Resources.Requests.Memory().String()).To(Equal("4Gi"))
+	Expect(created.Spec.Resources.Requests.Pods().String()).To(Equal("1"))
+	Expect(created.Labels).NotTo(HaveKey(corev1.LabelInstanceTypeStable))
+	Expect(created.Labels).NotTo(HaveKey(corev1.LabelTopologyZone))
+	Expect(created.Labels).NotTo(HaveKey(corev1.LabelTopologyRegion))
+	Expect(created.Labels).NotTo(HaveKey(corev1.LabelHostname))
+	Expect(created.Labels).NotTo(HaveKey(corev1.LabelArchStable))
+	Expect(created.Labels).NotTo(HaveKey(corev1.LabelOSStable))
+	Expect(created.Labels).NotTo(HaveKey(karpv1.CapacityTypeLabelKey))
+	Expect(created.Labels).NotTo(HaveKey("karpenter.k8s.aws/instance-family"))
+	Expect(created.Labels).NotTo(HaveKey("karpenter.k8s.aws/instance-generation"))
+	Expect(created.Labels).NotTo(HaveKey("source.example.com/runtime-resolved-label"))
+	Expect(created.Labels["team"]).To(Equal("inference"))
+	Expect(created.Labels[karpv1.NodePoolLabelKey]).To(Equal(nodePool.Name))
+	Expect(created.Labels[karpv1.NodeClassLabelKey(nodePool.Spec.Template.Spec.NodeClassRef.GroupKind())]).To(Equal("default"))
+	Expect(createdRequirements["team"]).To(Equal([]string{"inference"}))
+	Expect(createdRequirements[karpv1.NodePoolLabelKey]).To(Equal([]string{nodePool.Name}))
+	Expect(createdRequirements[karpv1.NodeClassLabelKey(nodePool.Spec.Template.Spec.NodeClassRef.GroupKind())]).To(Equal([]string{"default"}))
+	_, hasTensorFusionIndex := created.Spec.Resources.Requests[corev1.ResourceName(constants.PodIndexAnnotation)]
+	Expect(hasTensorFusionIndex).To(BeFalse())
+
+	value, exists := suite.nodeExpander.inFlightNodeClaims.Load(created.Name)
+	Expect(exists).To(BeTrue())
+	activated := make(chan *corev1.Pod, 1)
+	suite.nodeExpander.activatePod = func(pod *corev1.Pod) { activated <- pod }
+	suite.nodeExpander.handleTerminatedInFlightNodeClaim(created.Name, value, true)
+	Eventually(activated).Should(Receive(Equal(pod)))
+
+	secondNode := node1.DeepCopy()
+	secondNode.Name = "node-2"
+	Expect(suite.nodeExpander.createGPUNodeClaim(suite.ctx, pod, secondNode)).To(Succeed())
+	secondClaim := &karpv1.NodeClaim{}
+	Expect(suite.k8sClient.Get(suite.ctx, client.ObjectKey{Name: secondNode.Name}, secondClaim)).To(Succeed())
+	secondRequirements := make(map[string][]string)
+	for _, requirement := range secondClaim.Spec.Requirements {
+		secondRequirements[requirement.Key] = requirement.Values
+	}
+	Expect(secondRequirements[corev1.LabelInstanceTypeStable]).To(Equal([]string{"g6.12xlarge"}))
 }
 
 func testExpansionLabelNotOverridden(suite *NodeExpanderTestSuite) {
@@ -231,7 +365,7 @@ func testExpansionLabelNotOverridden(suite *NodeExpanderTestSuite) {
 	newClaim := &karpv1.NodeClaim{}
 	Expect(suite.k8sClient.Get(suite.ctx, client.ObjectKey{Name: preparedNode.Name}, newClaim)).To(Succeed())
 	Expect(newClaim.Labels[constants.KarpenterExpansionLabel]).To(Equal(preparedNode.Name))
-	Expect(newClaim.Labels["env"]).To(Equal("prod"))
+	Expect(newClaim.Labels).NotTo(HaveKey("env"))
 }
 
 func testDoNotDisruptAnnotationFiltered(suite *NodeExpanderTestSuite) {
@@ -260,6 +394,121 @@ func testDoNotDisruptAnnotationFiltered(suite *NodeExpanderTestSuite) {
 	Expect(newClaim.Annotations["karpenter.sh/custom-note"]).To(Equal("keep-me"))
 }
 
+func testIncompatiblePreferenceSkipped(suite *NodeExpanderTestSuite) {
+	nodePool := &karpv1.NodePool{
+		ObjectMeta: metav1.ObjectMeta{Name: "fallback-nodepool"},
+		Spec: karpv1.NodePoolSpec{Template: karpv1.NodeClaimTemplate{Spec: karpv1.NodeClaimTemplateSpec{
+			Requirements: []karpv1.NodeSelectorRequirementWithMinValues{
+				testKarpenterRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, []string{"g6.12xlarge"}),
+			},
+		}}},
+	}
+	Expect(suite.k8sClient.Create(suite.ctx, nodePool)).To(Succeed())
+	defer func() { _ = suite.k8sClient.Delete(suite.ctx, nodePool) }()
+
+	source := &karpv1.NodeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "fallback-source",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "karpenter.sh/v1", Kind: constants.KarpenterNodePoolKind, Name: nodePool.Name,
+			}},
+		},
+		Spec: karpv1.NodeClaimSpec{Requirements: []karpv1.NodeSelectorRequirementWithMinValues{
+			testKarpenterRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, []string{"g6.12xlarge"}),
+		}},
+	}
+	pod := createTestTensorFusionPod("fallback-worker", suite.namespace, "100", "1Gi")
+	pod.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		PreferredDuringSchedulingIgnoredDuringExecution: []corev1.PreferredSchedulingTerm{
+			{Weight: 100, Preference: corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.2xlarge"},
+			}}}},
+			{Weight: 50, Preference: corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.12xlarge"},
+			}}}},
+		},
+	}}
+	preparedNode := createTestNode("fallback-created", source)
+
+	Expect(suite.nodeExpander.createKarpenterNodeClaimDirect(suite.ctx, pod, preparedNode, source)).To(Succeed())
+	created := &karpv1.NodeClaim{}
+	Expect(suite.k8sClient.Get(suite.ctx, client.ObjectKey{Name: preparedNode.Name}, created)).To(Succeed())
+	for _, requirement := range created.Spec.Requirements {
+		if requirement.Key == corev1.LabelInstanceTypeStable {
+			Expect(requirement.Values).To(Equal([]string{"g6.12xlarge"}))
+			return
+		}
+	}
+	Fail("created NodeClaim did not contain an instance-type requirement")
+}
+
+func testInsufficientCapacityEvent(suite *NodeExpanderTestSuite) {
+	claim := inFlightNodeClaim{nodeClaimUID: "failed-claim-uid"}
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: "insufficient-capacity", Namespace: suite.namespace},
+		InvolvedObject: corev1.ObjectReference{
+			Kind: constants.KarpenterNodeClaimKind, Name: "failed-claim", UID: claim.nodeClaimUID,
+		},
+		Reason: insufficientCapacityReason,
+	}
+	Expect(suite.k8sClient.Create(suite.ctx, event)).To(Succeed())
+	Expect(suite.nodeExpander.hasInsufficientCapacityEvent("failed-claim", claim)).To(BeTrue())
+
+	event.Reason = "Disrupted"
+	Expect(suite.nodeExpander.hasInsufficientCapacityEvent("failed-claim", inFlightNodeClaim{nodeClaimUID: "other-uid"})).To(BeFalse())
+}
+
+func testNonCapacityDeletion(suite *NodeExpanderTestSuite) {
+	pod := createTestTensorFusionPod("non-capacity-worker", suite.namespace, "100", "1Gi")
+	Expect(suite.k8sClient.Create(suite.ctx, pod)).To(Succeed())
+	defer func() { _ = suite.k8sClient.Delete(suite.ctx, pod) }()
+
+	claim := inFlightNodeClaim{
+		podKey:    client.ObjectKeyFromObject(pod),
+		podUID:    pod.UID,
+		candidate: "candidate-a",
+	}
+	suite.nodeExpander.inFlightNodeClaims.Store("non-capacity-claim", claim)
+	activated := make(chan *corev1.Pod, 1)
+	suite.nodeExpander.activatePod = func(pod *corev1.Pod) { activated <- pod }
+
+	suite.nodeExpander.handleTerminatedInFlightNodeClaim("non-capacity-claim", claim, false)
+
+	Eventually(activated).Should(Receive(Equal(pod)))
+	suite.nodeExpander.mu.RLock()
+	_, failed := suite.nodeExpander.failedExpansionCandidates[expansionPodKey(pod.Namespace, pod.Name, pod.UID)]
+	suite.nodeExpander.mu.RUnlock()
+	Expect(failed).To(BeFalse())
+}
+
+func testExhaustedCandidatesWaitForSchedulerRequeue(suite *NodeExpanderTestSuite) {
+	pod := createTestTensorFusionPod("exhausted-worker", suite.namespace, "100", "1Gi")
+	pod.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+			MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.2xlarge"},
+			}},
+		}}},
+	}}
+	Expect(suite.k8sClient.Create(suite.ctx, pod)).To(Succeed())
+	defer func() { _ = suite.k8sClient.Delete(suite.ctx, pod) }()
+
+	candidates := suite.nodeExpander.expansionCandidatesToTry(pod)
+	Expect(candidates).To(HaveLen(1))
+	claim := inFlightNodeClaim{
+		podKey:    client.ObjectKeyFromObject(pod),
+		podUID:    pod.UID,
+		candidate: candidates[0].candidate,
+	}
+	activated := false
+	suite.nodeExpander.activatePod = func(*corev1.Pod) { activated = true }
+
+	suite.nodeExpander.handleTerminatedInFlightNodeClaim("exhausted-claim", claim, true)
+
+	Expect(activated).To(BeFalse())
+	Expect(suite.nodeExpander.expansionCandidatesToTry(pod)).To(BeEmpty())
+}
+
 func testCleanupReadyInFlightNodeClaim(suite *NodeExpanderTestSuite) {
 	nodeClaim := &karpv1.NodeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -268,6 +517,8 @@ func testCleanupReadyInFlightNodeClaim(suite *NodeExpanderTestSuite) {
 	}
 	nodeClaim.Status.NodeName = "ready-node"
 	nodeClaim.StatusConditions().SetTrue(status.ConditionReady)
+	now := metav1.Now()
+	nodeClaim.DeletionTimestamp = &now
 
 	gpu := &tfv1.GPU{
 		ObjectMeta: metav1.ObjectMeta{Name: "gpu-ready"},
@@ -283,7 +534,12 @@ func testCleanupReadyInFlightNodeClaim(suite *NodeExpanderTestSuite) {
 		},
 	}
 
-	suite.nodeExpander.inFlightNodeClaims.Store(nodeClaim.Name, true)
+	claim := inFlightNodeClaim{
+		podKey:    client.ObjectKey{Namespace: suite.namespace, Name: "ready-pod"},
+		candidate: "ready-candidate",
+	}
+	suite.nodeExpander.inFlightNodeClaims.Store(nodeClaim.Name, claim)
+	suite.nodeExpander.addFailedExpansionCandidate(claim.podKey, claim.podUID, claim.candidate)
 	suite.nodeExpander.addInFlightNode(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeClaim.Name}}, []*tfv1.GPU{gpu})
 
 	suite.nodeExpander.cleanupInFlightNodeClaim(nodeClaim)
@@ -293,8 +549,10 @@ func testCleanupReadyInFlightNodeClaim(suite *NodeExpanderTestSuite) {
 
 	suite.nodeExpander.mu.RLock()
 	_, exists := suite.nodeExpander.inFlightNodes[nodeClaim.Name]
+	_, failedExists := suite.nodeExpander.failedExpansionCandidates[expansionPodKey(claim.podKey.Namespace, claim.podKey.Name, claim.podUID)]
 	suite.nodeExpander.mu.RUnlock()
 	Expect(exists).To(BeFalse())
+	Expect(failedExists).To(BeFalse())
 }
 
 // Test inflight node management
