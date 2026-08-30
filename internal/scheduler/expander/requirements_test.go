@@ -1,15 +1,19 @@
 package expander
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
@@ -92,6 +96,39 @@ func TestMergeKarpenterRequirementsUsesKarpenterOperatorSemantics(t *testing.T) 
 	require.False(t, mergeKarpenterRequirements(spec, map[string][]string{
 		"capacity": {"reserved"},
 	}))
+}
+
+func TestReserveInflightGPUsHonorsAllocationCount(t *testing.T) {
+	allocator := gpuallocator.NewGpuAllocator(context.Background(), fake.NewClientBuilder().Build(), time.Second)
+	expander := &NodeExpander{allocator: allocator}
+	inflight := map[string]*tfv1.GPU{
+		"gpu-a": createTestGPU("gpu-a", "inflight-node", "1000", "24Gi"),
+		"gpu-b": createTestGPU("gpu-b", "inflight-node", "1000", "24Gi"),
+	}
+	for _, gpu := range inflight {
+		gpu.Status.Phase = tfv1.TensorFusionGPUPhaseRunning
+	}
+	alloc := &tfv1.AllocRequest{
+		Count: 2,
+		Request: tfv1.Resource{
+			Tflops: resource.MustParse("100"),
+			Vram:   resource.MustParse("20Gi"),
+		},
+	}
+
+	require.True(t, expander.reserveInflightGPUs(alloc, inflight))
+	for _, gpu := range inflight {
+		require.Equal(t, "4Gi", gpu.Status.Available.Vram.String())
+	}
+
+	followUp := &tfv1.AllocRequest{
+		Count: 1,
+		Request: tfv1.Resource{
+			Tflops: resource.MustParse("100"),
+			Vram:   resource.MustParse("8Gi"),
+		},
+	}
+	require.False(t, expander.reserveInflightGPUs(followUp, inflight))
 }
 
 func TestMergeKarpenterRequirementsPreservesMinValues(t *testing.T) {
