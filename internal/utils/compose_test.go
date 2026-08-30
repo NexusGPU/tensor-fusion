@@ -704,7 +704,7 @@ var _ = Describe("Compose Utils", func() {
 					Expect(container.Command[2]).To(ContainSubstring("exec ./tensor-fusion-worker"), "should exec worker")
 					Expect(container.Command[2]).To(ContainSubstring("-n shmem"), "should use shmem mode")
 					Expect(container.Command[2]).To(ContainSubstring("-m tf_shm"), "should specify shared memory name")
-					Expect(container.Command[2]).To(ContainSubstring("-M 1024"), "should specify shared memory size")
+					Expect(container.Command[2]).To(ContainSubstring("-M "+constants.ConnectionSharedMemSize), "should specify shared memory size")
 				}
 			},
 			Entry("hard worker: no LD_PRELOAD, no NVIDIA_VISIBLE_DEVICES=all (device plugin allocates UUID)", "NVIDIA", "worker:latest", "", false, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
@@ -720,7 +720,7 @@ var _ = Describe("Compose Utils", func() {
 			Entry("worker with shared memory mode (hard)", "NVIDIA", "worker:latest", "", true, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
 				"/bin/bash",
 				"-c",
-				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 1024",
+				"touch /dev/shm/tf_shm && chmod 666 /dev/shm/tf_shm && exec ./tensor-fusion-worker -n shmem -m tf_shm -M 2048",
 			}, false, false),
 			Entry("worker with disabled start-worker feature (hard)", "NVIDIA", "worker:latest", "start-worker", false, tfv1.IsolationModeType(tfv1.IsolationModeHard), []string{
 				"sleep",

@@ -372,6 +372,36 @@ func TestFailedExpansionCandidateState(t *testing.T) {
 	require.Empty(t, expander.expansionCandidatesToTry(pod))
 }
 
+func TestResetExpansionCandidatesForNewRoundOnlyAfterExhaustion(t *testing.T) {
+	expander := &NodeExpander{failedExpansionCandidates: make(map[string]map[string]struct{})}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "worker", UID: types.UID("worker-uid")},
+		Spec: corev1.PodSpec{Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{
+				{MatchExpressions: []corev1.NodeSelectorRequirement{{
+					Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.2xlarge"},
+				}}},
+				{MatchExpressions: []corev1.NodeSelectorRequirement{{
+					Key: corev1.LabelInstanceTypeStable, Operator: corev1.NodeSelectorOpIn, Values: []string{"g6.12xlarge"},
+				}}},
+			}},
+		}}},
+	}
+	podKey := client.ObjectKeyFromObject(pod)
+	candidates := expander.expansionCandidatesToTry(pod)
+	require.Len(t, candidates, 2)
+
+	expander.addFailedExpansionCandidate(podKey, pod.UID, candidates[0].candidate)
+	require.False(t, expander.resetExpansionCandidatesForNewRound(pod))
+	require.Len(t, expander.expansionCandidatesToTry(pod), 1)
+
+	expander.addFailedExpansionCandidate(podKey, pod.UID, candidates[1].candidate)
+	require.Empty(t, expander.expansionCandidatesToTry(pod))
+	require.True(t, expander.resetExpansionCandidatesForNewRound(pod))
+	require.Len(t, expander.expansionCandidatesToTry(pod), 2)
+	require.False(t, expander.resetExpansionCandidatesForNewRound(pod))
+}
+
 func TestFailedExpansionCandidateStateIsScopedByPodUID(t *testing.T) {
 	expander := &NodeExpander{failedExpansionCandidates: make(map[string]map[string]struct{})}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "worker", UID: types.UID("old-uid")}}

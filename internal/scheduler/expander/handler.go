@@ -185,6 +185,13 @@ func (e *NodeExpander) handleTerminatedInFlightNodeClaim(name string, value any,
 	}
 	if insufficientCapacity {
 		e.addFailedExpansionCandidate(claim.podKey, claim.podUID, claim.candidate)
+		if len(e.expansionCandidatesToTry(pod)) == 0 {
+			e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCandidatesExhausted", "InsufficientCapacity",
+				"Karpenter NodeClaim %s failed due to insufficient capacity; all expansion candidates have failed, waiting for scheduler requeue", name)
+			e.logger.Info("all Karpenter expansion candidates failed, waiting for scheduler requeue",
+				"pod", klog.KObj(pod), "nodeClaimName", name)
+			return
+		}
 		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCandidateFailed", "InsufficientCapacity",
 			"Karpenter NodeClaim %s failed due to insufficient capacity; trying the next expansion preference", name)
 	}
@@ -649,6 +656,34 @@ func (e *NodeExpander) expansionCandidatesToTry(pod *corev1.Pod) []expansionCand
 		}
 	}
 	return remaining
+}
+
+// resetExpansionCandidatesForNewRound clears a fully exhausted candidate set.
+// It is called after the scheduler requeues and rejects the Pod again, so a
+// failed expansion round does not immediately restart itself.
+func (e *NodeExpander) resetExpansionCandidatesForNewRound(pod *corev1.Pod) bool {
+	if e == nil || pod == nil {
+		return false
+	}
+	candidates := podExpansionCandidates(pod)
+	if len(candidates) == 0 {
+		return false
+	}
+
+	podKey := expansionPodKey(pod.Namespace, pod.Name, pod.UID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	failed, exists := e.failedExpansionCandidates[podKey]
+	if !exists {
+		return false
+	}
+	for _, candidate := range candidates {
+		if _, exists := failed[candidate.candidate]; !exists {
+			return false
+		}
+	}
+	delete(e.failedExpansionCandidates, podKey)
+	return true
 }
 
 func (e *NodeExpander) addInFlightNode(node *corev1.Node, gpus []*tfv1.GPU) {

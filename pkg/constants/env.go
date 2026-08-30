@@ -100,7 +100,7 @@ const (
 	ConnectionNameEnv       = "TENSOR_FUSION_CONNECTION_NAME"
 	ConnectionNamespaceEnv  = "TENSOR_FUSION_CONNECTION_NAMESPACE"
 	DisableVMSharedMemEnv   = "TF_USE_IVSHMEM"
-	ConnectionSharedMemSize = "1024"
+	ConnectionSharedMemSize = "2048"
 	ConnectionSharedMemName = "tf_shm"
 
 	EnableCudaHooksEnv = "ENABLE_CUDA_HOOKS"
