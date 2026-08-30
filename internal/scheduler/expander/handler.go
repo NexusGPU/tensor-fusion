@@ -1249,7 +1249,7 @@ func podKarpenterRequirementValues(pod *corev1.Pod) map[string][]string {
 		return valuesByKey
 	}
 	setValues := func(key string, values ...string) {
-		if key != corev1.LabelInstanceTypeStable && key != corev1.LabelTopologyZone {
+		if key != corev1.LabelInstanceTypeStable && key != corev1.LabelTopologyZone && key != corev1.LabelTopologyRegion {
 			return
 		}
 		unique := make([]string, 0, len(values))
