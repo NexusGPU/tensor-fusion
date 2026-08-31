@@ -183,17 +183,21 @@ func (e *NodeExpander) handleTerminatedInFlightNodeClaim(name string, value any,
 		e.clearFailedExpansionCandidates(claim.podKey.Namespace, claim.podKey.Name, claim.podUID)
 		return
 	}
+	roundExhausted := false
 	if insufficientCapacity {
 		e.addFailedExpansionCandidate(claim.podKey, claim.podUID, claim.candidate)
-		if len(e.expansionCandidatesToTry(pod)) == 0 {
+		roundExhausted = len(e.expansionCandidatesToTry(pod)) == 0
+		if roundExhausted {
 			e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCandidatesExhausted", "InsufficientCapacity",
 				"Karpenter NodeClaim %s failed due to insufficient capacity; all expansion candidates have failed, waiting for scheduler requeue", name)
-			e.logger.Info("all Karpenter expansion candidates failed, waiting for scheduler requeue",
-				"pod", klog.KObj(pod), "nodeClaimName", name)
-			return
+		} else {
+			e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCandidateFailed", "InsufficientCapacity",
+				"Karpenter NodeClaim %s failed due to insufficient capacity; trying the next expansion preference", name)
 		}
-		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionCandidateFailed", "InsufficientCapacity",
-			"Karpenter NodeClaim %s failed due to insufficient capacity; trying the next expansion preference", name)
+	}
+	if roundExhausted {
+		e.logger.Info("all Karpenter expansion candidates failed, reactivating pod for a new expansion round",
+			"pod", klog.KObj(pod), "nodeClaimName", name)
 	}
 	if e.activatePod != nil {
 		e.activatePod(pod)
