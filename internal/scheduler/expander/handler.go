@@ -206,9 +206,8 @@ func (e *NodeExpander) handleTerminatedInFlightNodeClaim(name string, value any,
 		}
 	}
 	if roundExhausted {
-		e.logger.Info("all Karpenter expansion candidates failed, waiting for scheduler requeue",
+		e.logger.Info("all Karpenter expansion candidates failed, reactivating pod for a new expansion round",
 			"pod", klog.KObj(pod), "nodeClaimName", name)
-		return
 	}
 	if e.activatePod != nil {
 		e.activatePod(pod)
