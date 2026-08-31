@@ -147,8 +147,8 @@ var _ = Describe("NodeExpander Unit Tests", func() {
 			testNonCapacityDeletion(suite)
 		})
 
-		It("should wait for scheduler requeue after exhausting expansion candidates", func() {
-			testExhaustedCandidatesWaitForSchedulerRequeue(suite)
+		It("should reactivate pod after exhausting expansion candidates", func() {
+			testExhaustedCandidatesReactivateForNewRound(suite)
 		})
 
 		It("should cleanup inflight node claim when node is ready", func() {
@@ -481,7 +481,7 @@ func testNonCapacityDeletion(suite *NodeExpanderTestSuite) {
 	Expect(failed).To(BeFalse())
 }
 
-func testExhaustedCandidatesWaitForSchedulerRequeue(suite *NodeExpanderTestSuite) {
+func testExhaustedCandidatesReactivateForNewRound(suite *NodeExpanderTestSuite) {
 	pod := createTestTensorFusionPod("exhausted-worker", suite.namespace, "100", "1Gi")
 	pod.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
@@ -505,7 +505,7 @@ func testExhaustedCandidatesWaitForSchedulerRequeue(suite *NodeExpanderTestSuite
 
 	suite.nodeExpander.handleTerminatedInFlightNodeClaim("exhausted-claim", claim, true)
 
-	Expect(activated).To(BeFalse())
+	Expect(activated).To(BeTrue())
 	Expect(suite.nodeExpander.expansionCandidatesToTry(pod)).To(BeEmpty())
 }
 
