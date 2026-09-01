@@ -33,7 +33,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 WORKDIR /
 # tzdata: needed for non-UTC timezones; binary also embeds time/tzdata.
 RUN apt-get update \
