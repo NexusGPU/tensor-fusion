@@ -1,5 +1,5 @@
 # Real-world NVIDIA TensorFusionCluster example (single NVIDIA pool, from a running cluster).
-# Image tags normalized to :latest; pin them for production.
+# Pin image tags to versions validated for the target TensorFusion release.
 apiVersion: tensor-fusion.ai/v1
 kind: TensorFusionCluster
 metadata:
@@ -31,8 +31,8 @@ spec:
           vram: 5Gi
       componentConfig:
         client:
-          embeddedModeImage: tensorfusion/tensor-fusion-client:latest
-          image: tensorfusion/tensor-fusion-client:latest
+          embeddedModeImage: tensorfusion/tensor-fusion-client:v2.25.0
+          image: tensorfusion/tensor-fusion-client:v2.25.0
           operatorEndpoint: http://tensor-fusion-sys.tensor-fusion-sys:8080
           patchToContainer:
             env:
@@ -42,7 +42,7 @@ spec:
               value: /tmp/tf.log
           patchToPod:
             spec: {}
-          remoteModeImage: tensorfusion/tensor-fusion-client:latest
+          remoteModeImage: tensorfusion/tensor-fusion-client:v2.25.0
         hypervisor:
           image: docker.io/tensorfusion/tensor-fusion-hypervisor:latest
           vectorImage: docker.m.daocloud.io/timberio/vector:latest-alpine
@@ -76,7 +76,7 @@ spec:
                 containers:
                 - name: tensorfusion-node-discovery
         worker:
-          image: tensorfusion/tensor-fusion-worker:latest
+          image: tensorfusion/tensor-fusion-worker:v2.25.0
           podTemplate:
             template:
               spec:

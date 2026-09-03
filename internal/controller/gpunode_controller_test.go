@@ -160,43 +160,6 @@ var _ = Describe("GPUNode Controller", func() {
 			Expect(hypervisorPolicyUpdatePending(pool)).To(BeFalse())
 		})
 
-		It("should append the configured partitioned isolation mode arg", func() {
-			spec := &corev1.PodSpec{
-				Containers: []corev1.Container{
-					{
-						Name: constants.TFContainerNameHypervisor,
-					},
-				},
-			}
-
-			applyHypervisorIsolationModeArg(spec, string(tfv1.IsolationModePartitioned))
-			Expect(spec.Containers[0].Args).To(ContainElement("--isolation-mode=partitioned"))
-		})
-
-		It("should append and detect the Dynamic isolation policy arg", func() {
-			spec := &corev1.PodSpec{Containers: []corev1.Container{{Name: constants.TFContainerNameHypervisor}}}
-			applyHypervisorIsolationPolicyArg(spec, string(tfv1.IsolationModePolicyDynamic))
-			Expect(spec.Containers[0].Args).To(ContainElement("--isolation-policy=dynamic"))
-			pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: spec.Containers}}
-			Expect(isHypervisorIsolationPolicyConfigured(pod, string(tfv1.IsolationModePolicyDynamic))).To(BeTrue())
-			Expect(isHypervisorIsolationPolicyConfigured(pod, string(tfv1.IsolationModePolicyStatic))).To(BeFalse())
-		})
-
-		It("should replace an existing isolation mode arg with the configured mode", func() {
-			spec := &corev1.PodSpec{
-				Containers: []corev1.Container{
-					{
-						Name: constants.TFContainerNameHypervisor,
-						Args: []string{"--foo=bar", "--isolation-mode=shared"},
-					},
-				},
-			}
-
-			applyHypervisorIsolationModeArg(spec, string(tfv1.IsolationModePartitioned))
-			Expect(spec.Containers[0].Args).To(ContainElement("--isolation-mode=partitioned"))
-			Expect(spec.Containers[0].Args).NotTo(ContainElement("--isolation-mode=shared"))
-		})
-
 		It("should require pod recreation when desired isolation mode is missing", func() {
 			pod := &corev1.Pod{
 				Spec: corev1.PodSpec{
@@ -257,12 +220,6 @@ var _ = Describe("GPUNode Controller", func() {
 			}
 
 			Expect(isHypervisorIsolationModeConfigured(pod, string(tfv1.IsolationModePartitioned))).To(BeFalse())
-		})
-
-		It("should not change args when upsert isolation mode is empty", func() {
-			args := []string{"--port=9000"}
-			got := upsertHypervisorIsolationModeArg(args, "")
-			Expect(got).To(Equal(args))
 		})
 
 		It("should require pod recreation when label is removed but arg still exists", func() {

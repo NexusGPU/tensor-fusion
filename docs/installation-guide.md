@@ -2,6 +2,10 @@
 
 本文档说明如何在 Kubernetes 集群中安装 TensorFusion 控制面，并完成最小业务 Pod 验证。
 
+TensorFusion 官方镜像发布在 [Docker Hub](https://hub.docker.com/u/tensorfusion)。需要使用最新
+版本时，可在该页面确认 operator、hypervisor、client 和 worker 的可用 tag，再覆盖 Helm
+values 或 TensorFusionCluster/ProviderConfig 中的镜像字段。
+
 适用假设：
 
 - 使用本仓库 Helm chart 安装，chart 路径为 `charts/tensor-fusion`。
@@ -94,10 +98,22 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 | `controller.image.repository` | operator 镜像仓库 | `tensorfusion/tensor-fusion-operator` |
 | `controller.image.tag` | operator 镜像 tag；空值时使用 Chart `appVersion` | `""`（当前解析为 `2.15.0`） |
 | `controller.replicaCount` | controller 副本数 | `1` |
+| `controller.compatibleWithNvidiaContainerToolkit` | 启用 NVIDIA Container Toolkit 校验及驱动库兼容挂载 | `false` |
 | `greptime.installStandalone` | 是否安装内置 GreptimeDB standalone | `true` |
 | `greptime.host` | GreptimeDB MySQL endpoint host | `greptimedb-standalone.greptimedb.svc.cluster.local` |
 | `alert.enabled` | 是否安装 alertmanager | `true` |
 | `controller.admissionWebhooks.failurePolicy` | webhook 失败策略 | `Fail` |
+
+安装了 NVIDIA GPU Operator，且 GPU 节点提供
+`/run/nvidia/validations/toolkit-ready` 和 `driver-ready` 时，可设置：
+
+```bash
+--set controller.compatibleWithNvidiaContainerToolkit=true
+```
+
+这会启用 Toolkit 就绪检查和非标准驱动目录发现。没有这些 validation 文件的集群应保持默认
+`false`。如需覆盖自动发现，可通过 `ProviderConfig.spec.hypervisor.extraEnv` 显式设置
+`TF_CUDA_LIB_PATH` 和 `TF_NVML_LIB_PATH`。
 
 ### 2.4 指定组件版本
 
@@ -111,8 +127,8 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   --set controller.image.tag=2.15.0 \
   --set cluster.hypervisorImage=tensorfusion/tensor-fusion-hypervisor:2.15.0 \
   --set providerConfigs.nvidia.images.middleware=tensorfusion/vgpu-provider-nvidia:1.3.9 \
-  --set providerConfigs.nvidia.images.remoteClient=tensorfusion/tensor-fusion-client:v2.15.0 \
-  --set providerConfigs.nvidia.images.remoteWorker=tensorfusion/tensor-fusion-worker:v2.15.0
+  --set providerConfigs.nvidia.images.remoteClient=tensorfusion/tensor-fusion-client:v2.25.0 \
+  --set providerConfigs.nvidia.images.remoteWorker=tensorfusion/tensor-fusion-worker:v2.25.0
 ```
 
 各组件对应的 values 键：
@@ -122,8 +138,8 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 | operator | `controller.image.repository` + `controller.image.tag` | 仓库与 tag 分开两个键 |
 | hypervisor | `cluster.hypervisorImage` | **完整镜像**（含仓库+tag），默认 `tensorfusion/tensor-fusion-hypervisor:2.15.0` |
 | vgpu-provider | `providerConfigs.nvidia.images.middleware` | 默认 `tensorfusion/vgpu-provider-nvidia:1.3.9` |
-| client | `providerConfigs.nvidia.images.remoteClient` | 默认 `tensorfusion/tensor-fusion-client:v2.15.0` |
-| worker | `providerConfigs.nvidia.images.remoteWorker` | 默认 `tensorfusion/tensor-fusion-worker:v2.15.0` |
+| client | `providerConfigs.nvidia.images.remoteClient` | 默认 `tensorfusion/tensor-fusion-client:v2.25.0` |
+| worker | `providerConfigs.nvidia.images.remoteWorker` | 默认 `tensorfusion/tensor-fusion-worker:v2.25.0` |
 
 > 注意：`cluster.hypervisorImage` 传的是完整镜像引用（`仓库:tag`），而 operator 用 `repository` + `tag` 两个独立键。
 

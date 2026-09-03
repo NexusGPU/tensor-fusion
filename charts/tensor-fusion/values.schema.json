@@ -67,6 +67,11 @@
           "minimum": 1,
           "default": 1
         },
+        "compatibleWithNvidiaContainerToolkit": {
+          "type": "boolean",
+          "description": "Enable NVIDIA Container Toolkit validation and driver-library compatibility handling",
+          "default": false
+        },
         "image": {
           "type": "object",
           "description": "Container image configuration for the controller",

@@ -31,6 +31,72 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+func TestSetHypervisorIsolationEnv(t *testing.T) {
+	spec := &corev1.PodSpec{Containers: []corev1.Container{{
+		Command: []string{"bash", "-c", "exec /usr/local/bin/hypervisor daemon"},
+		Args:    []string{"--custom-arg"},
+		Env: []corev1.EnvVar{
+			{Name: constants.TFIsolationModeEnv, ValueFrom: &corev1.EnvVarSource{}},
+			{Name: constants.IsolationModePolicyEnv, Value: string(tfv1.IsolationModePolicyStatic)},
+		},
+	}}}
+
+	setHypervisorIsolationEnv(spec, string(tfv1.IsolationModeSoft), string(tfv1.IsolationModePolicyDynamic))
+
+	env := spec.Containers[0].Env
+	if len(env) != 2 {
+		t.Fatalf("expected two env vars, got %d", len(env))
+	}
+	if env[0].Value != string(tfv1.IsolationModeSoft) || env[0].ValueFrom != nil {
+		t.Fatalf("isolation mode was not replaced: %+v", env[0])
+	}
+	if env[1].Value != string(tfv1.IsolationModePolicyDynamic) {
+		t.Fatalf("isolation policy = %q, want %q", env[1].Value, tfv1.IsolationModePolicyDynamic)
+	}
+	if got := spec.Containers[0].Command; len(got) != 3 || got[2] != "exec /usr/local/bin/hypervisor daemon" {
+		t.Fatalf("command was modified: %v", got)
+	}
+	if len(spec.Containers[0].Args) != 1 || spec.Containers[0].Args[0] != "--custom-arg" {
+		t.Fatalf("args were modified: %v", spec.Containers[0].Args)
+	}
+}
+
+func TestHypervisorIsolationConfigurationUsesEnvForShellCommand(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Command: []string{"bash", "-c"},
+		Args:    []string{"exec /usr/local/bin/hypervisor daemon", "--isolation-policy=dynamic"},
+		Env: []corev1.EnvVar{
+			{Name: constants.TFIsolationModeEnv, Value: "soft"},
+			{Name: constants.IsolationModePolicyEnv, Value: "dynamic"},
+		},
+	}}}}
+
+	if !isHypervisorIsolationModeConfigured(pod, string(tfv1.IsolationModeSoft)) {
+		t.Fatal("expected shell command to use the isolation mode env")
+	}
+	if !isHypervisorIsolationPolicyConfigured(pod, string(tfv1.IsolationModePolicyDynamic)) {
+		t.Fatal("expected shell command to use the isolation policy env")
+	}
+
+	pod.Spec.Containers[0].Env = nil
+	if isHypervisorIsolationPolicyConfigured(pod, string(tfv1.IsolationModePolicyDynamic)) {
+		t.Fatal("shell command positional args must not be treated as Hypervisor flags")
+	}
+}
+
+func TestHypervisorIsolationConfigurationUsesArgsForDirectCommand(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Args: []string{"--isolation-mode=soft", "--isolation-policy=dynamic"},
+	}}}}
+
+	if !isHypervisorIsolationModeConfigured(pod, string(tfv1.IsolationModeSoft)) {
+		t.Fatal("expected direct command isolation mode arg")
+	}
+	if !isHypervisorIsolationPolicyConfigured(pod, string(tfv1.IsolationModePolicyDynamic)) {
+		t.Fatal("expected direct command isolation policy arg")
+	}
+}
+
 // TestGPUNodeReconcileInitializesEmptyPhaseToPending covers the safety net for
 // pre-existing GPUNodes with an empty phase: the reconciler must set it to
 // Pending before any early-return gate (here the driver-upgrade gate), so the
