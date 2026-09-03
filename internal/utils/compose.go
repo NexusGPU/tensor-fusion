@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -392,11 +393,16 @@ func AddTFDefaultClientConfBeforePatch(
 					Name:      constants.TFLibsVolumeName,
 					MountPath: constants.TFLibsVolumeMountPath,
 				})
-			pod.Spec.Containers[injectContainerIndex].VolumeMounts = appendRemoteVendorToolMounts(
-				pod.Spec.Containers[injectContainerIndex].VolumeMounts,
-				tfInfo.Profile.GPUVendor,
-				constants.TFLibsVolumeName,
-			)
+			// The local soft path adds its own nvidia-smi wrapper from the
+			// soft-limiter volume below. Do not also add the remote client
+			// wrapper, since Kubernetes requires mountPath values to be unique.
+			if !useLocalSoftIsolation(tfInfo.Profile) {
+				pod.Spec.Containers[injectContainerIndex].VolumeMounts = appendRemoteVendorToolMounts(
+					pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+					tfInfo.Profile.GPUVendor,
+					constants.TFLibsVolumeName,
+				)
+			}
 		}
 	}
 
@@ -834,6 +840,9 @@ func AddTFHypervisorConfAfterTemplate(ctx context.Context, spec *v1.PodSpec, poo
 
 	composeHypervisorInitContainer(ctx, spec, pool, vendor, compatibleWithNvidiaContainerToolkit)
 	composeHypervisorContainer(spec, pool, vendor, enableVector, enablePodResourcesProxy)
+	if compatibleWithNvidiaContainerToolkit && strings.EqualFold(vendor, constants.AcceleratorVendorNvidia) {
+		addNvidiaDriverContractMounts(spec)
+	}
 
 	if enableVector {
 		composeVectorContainer(spec, pool)
@@ -917,8 +926,8 @@ func composeHypervisorInitContainer(
 			},
 			VolumeMounts: []v1.VolumeMount{
 				{
-					Name:             "run-nvidia-validations",
-					MountPath:        "/run/nvidia/validations",
+					Name:             constants.NvidiaValidationsVolumeName,
+					MountPath:        constants.NvidiaValidationsHostPath,
 					MountPropagation: ptr.To(v1.MountPropagationHostToContainer),
 				},
 			},
@@ -928,14 +937,71 @@ func composeHypervisorInitContainer(
 
 		// Add volume for NVIDIA validations
 		spec.Volumes = appendVolumesIfNotExists(spec.Volumes, v1.Volume{
-			Name: "run-nvidia-validations",
+			Name: constants.NvidiaValidationsVolumeName,
 			VolumeSource: v1.VolumeSource{
 				HostPath: &v1.HostPathVolumeSource{
-					Path: "/run/nvidia/validations",
+					Path: constants.NvidiaValidationsHostPath,
 					Type: ptr.To(v1.HostPathDirectoryOrCreate),
 				},
 			},
 		})
+	}
+}
+
+func addNvidiaDriverContractMounts(spec *v1.PodSpec) {
+	if spec == nil || len(spec.Containers) == 0 {
+		return
+	}
+
+	bindings := []struct {
+		volume v1.Volume
+		mount  v1.VolumeMount
+	}{
+		{
+			volume: v1.Volume{
+				Name: constants.NvidiaValidationsVolumeName,
+				VolumeSource: v1.VolumeSource{HostPath: &v1.HostPathVolumeSource{
+					Path: constants.NvidiaValidationsHostPath,
+					Type: ptr.To(v1.HostPathDirectoryOrCreate),
+				}},
+			},
+			mount: v1.VolumeMount{
+				Name: constants.NvidiaValidationsVolumeName, MountPath: constants.NvidiaValidationsHostPath, ReadOnly: true,
+			},
+		},
+		{
+			volume: v1.Volume{
+				Name: constants.NvidiaHostRootVolumeName,
+				VolumeSource: v1.VolumeSource{HostPath: &v1.HostPathVolumeSource{
+					Path: constants.NvidiaHostRootHostPath,
+					Type: ptr.To(v1.HostPathDirectory),
+				}},
+			},
+			mount: v1.VolumeMount{
+				Name: constants.NvidiaHostRootVolumeName, MountPath: constants.NvidiaHostRootMountPath, ReadOnly: true,
+			},
+		},
+		{
+			volume: v1.Volume{
+				Name: constants.NvidiaDriverRootVolumeName,
+				VolumeSource: v1.VolumeSource{HostPath: &v1.HostPathVolumeSource{
+					Path: constants.NvidiaDriverRootHostPath,
+					Type: ptr.To(v1.HostPathDirectoryOrCreate),
+				}},
+			},
+			mount: v1.VolumeMount{
+				Name: constants.NvidiaDriverRootVolumeName, MountPath: constants.NvidiaDriverRootMountPath, ReadOnly: true,
+			},
+		},
+	}
+	for _, binding := range bindings {
+		if slices.ContainsFunc(spec.Containers[0].VolumeMounts, func(existing v1.VolumeMount) bool {
+			return existing.Name == binding.mount.Name || existing.MountPath == binding.mount.MountPath
+		}) {
+			continue
+		}
+		spec.Volumes = appendVolumesIfNotExists(spec.Volumes, binding.volume)
+		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, binding.mount)
 	}
 }
 

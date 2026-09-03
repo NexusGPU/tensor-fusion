@@ -2,7 +2,9 @@ package constants
 
 // Controller itself envs
 const (
-	NamespaceEnv           = "OPERATOR_NAMESPACE"
+	NamespaceEnv = "OPERATOR_NAMESPACE"
+	// IsolationModePolicyEnv configures both the scheduling-domain policy in
+	// the Operator and the policy passed to generated Hypervisor Pods.
 	IsolationModePolicyEnv = "TF_ISOLATION_MODE_POLICY"
 )
 
@@ -33,6 +35,8 @@ const (
 	NvidiaVisibleAllDeviceEnv   = "NVIDIA_VISIBLE_DEVICES"
 	NvidiaVisibleAllDeviceValue = "all"
 	CudaVisibleDevicesEnv       = "CUDA_VISIBLE_DEVICES"
+	TFCudaLibPathEnv            = "TF_CUDA_LIB_PATH"
+	TFNvmlLibPathEnv            = "TF_NVML_LIB_PATH"
 
 	// Per-vendor visible-devices envs honored by the matching OCI runtime hook
 	// (mthreads-container-runtime / ascend-docker-runtime). For non-partitioned
@@ -81,6 +85,18 @@ const (
 	TensorFusionLogPath      = "/logs"
 
 	DefaultHttpBindIP = "0.0.0.0"
+)
+
+const (
+	NvidiaValidationsVolumeName = "run-nvidia-validations"
+	NvidiaValidationsHostPath   = "/run/nvidia/validations"
+	NvidiaDriverReadyPath       = NvidiaValidationsHostPath + "/driver-ready"
+	NvidiaHostRootVolumeName    = "nvidia-host-root"
+	NvidiaHostRootHostPath      = "/"
+	NvidiaHostRootMountPath     = "/host"
+	NvidiaDriverRootVolumeName  = "nvidia-driver-root"
+	NvidiaDriverRootHostPath    = "/run/nvidia/driver"
+	NvidiaDriverRootMountPath   = "/driver-root"
 )
 
 const (

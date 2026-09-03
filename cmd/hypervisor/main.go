@@ -53,7 +53,15 @@ func main() {
 		return
 	}
 
-	flag.Parse()
+	// Keep the v1 image command compatible. v1 invokes the binary as
+	// `hypervisor daemon`; v2 has a single daemon process and does not need a
+	// subcommand. Strip the legacy token before parsing flags so flags following
+	// it are still honored when a wrapper does forward them.
+	*isolationMode = envOrDefault(constants.TFIsolationModeEnv, *isolationMode)
+	*isolationPolicy = envOrDefault(constants.IsolationModePolicyEnv, *isolationPolicy)
+	if err := flag.CommandLine.Parse(legacyCompatibleFlagArgs(os.Args[1:])); err != nil {
+		klog.Fatalf("failed to parse hypervisor flags: %v", err)
+	}
 	policy := tfv1.IsolationModePolicyStatic
 	switch strings.ToLower(strings.TrimSpace(*isolationPolicy)) {
 	case "static":
@@ -82,6 +90,7 @@ func main() {
 		acceleratorVendor = ptr.To(vendor)
 		klog.Infof("Hardware vendor from env: %s", vendor)
 	}
+	configureNvidiaDriverLibraries(*acceleratorVendor, constants.NvidiaDriverReadyPath)
 
 	// Create and start device controller
 	deviceController, err := device.NewController(ctx, libPath, *acceleratorVendor, *discoveryInterval, *isolationMode)
@@ -186,4 +195,21 @@ func main() {
 
 	cancel()
 	klog.Info("Hypervisor stopped")
+}
+
+// legacyCompatibleFlagArgs removes the v1 daemon subcommand. The v2 binary
+// has a single daemon process, but accepting this token keeps existing TFC pod
+// templates usable when only the Hypervisor image is changed.
+func legacyCompatibleFlagArgs(args []string) []string {
+	if len(args) > 0 && args[0] == "daemon" {
+		return args[1:]
+	}
+	return args
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }

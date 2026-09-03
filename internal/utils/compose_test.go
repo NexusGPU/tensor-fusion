@@ -72,6 +72,16 @@ func hasVolumeMountWithSubPath(mounts []corev1.VolumeMount, name, path, subPath 
 	return false
 }
 
+func countVolumeMountPath(mounts []corev1.VolumeMount, path string) int {
+	count := 0
+	for _, mount := range mounts {
+		if mount.MountPath == path {
+			count++
+		}
+	}
+	return count
+}
+
 func hasHostPathVolume(volumes []corev1.Volume, name, path string) bool {
 	for _, volume := range volumes {
 		if volume.Name == name && volume.HostPath != nil && volume.HostPath.Path == path {
@@ -152,6 +162,69 @@ var _ = Describe("Compose Utils", func() {
 			Expect(validationVolumes[0].HostPath).NotTo(BeNil())
 			Expect(validationVolumes[0].HostPath.Path).To(Equal("/run/nvidia/validations"))
 			Expect(validationVolumes[0].HostPath.Type).To(BeNil(), "the existing template volume must win")
+			Expect(slices.ContainsFunc(spec.Containers[0].VolumeMounts, func(m corev1.VolumeMount) bool {
+				return m.Name == constants.NvidiaValidationsVolumeName &&
+					m.MountPath == constants.NvidiaValidationsHostPath && m.ReadOnly
+			})).To(BeTrue())
+			Expect(slices.ContainsFunc(spec.Containers[0].VolumeMounts, func(m corev1.VolumeMount) bool {
+				return m.Name == constants.NvidiaHostRootVolumeName &&
+					m.MountPath == constants.NvidiaHostRootMountPath && m.ReadOnly
+			})).To(BeTrue())
+			Expect(slices.ContainsFunc(spec.Containers[0].VolumeMounts, func(m corev1.VolumeMount) bool {
+				return m.Name == constants.NvidiaDriverRootVolumeName &&
+					m.MountPath == constants.NvidiaDriverRootMountPath && m.ReadOnly
+			})).To(BeTrue())
+			Expect(slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool {
+				return v.Name == constants.NvidiaHostRootVolumeName && v.HostPath != nil &&
+					v.HostPath.Path == constants.NvidiaHostRootHostPath
+			})).To(BeTrue())
+			Expect(slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool {
+				return v.Name == constants.NvidiaDriverRootVolumeName && v.HostPath != nil &&
+					v.HostPath.Path == constants.NvidiaDriverRootHostPath
+			})).To(BeTrue())
+		})
+
+		It("does not add NVIDIA driver contract mounts for another vendor", func() {
+			ctx := context.Background()
+			spec := &corev1.PodSpec{}
+			pool := &tfv1.GPUPool{Spec: tfv1.GPUPoolSpec{ComponentConfig: &tfv1.ComponentConfig{
+				Hypervisor: &tfv1.HypervisorConfig{Image: "test-image:latest"},
+			}}}
+
+			utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool, "Ascend", true)
+
+			for _, mount := range spec.Containers[0].VolumeMounts {
+				Expect(mount.Name).NotTo(Equal(constants.NvidiaHostRootVolumeName))
+				Expect(mount.Name).NotTo(Equal(constants.NvidiaDriverRootVolumeName))
+			}
+		})
+
+		It("preserves a user-provided host root mount", func() {
+			ctx := context.Background()
+			spec := &corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "tensor-fusion-hypervisor",
+					VolumeMounts: []corev1.VolumeMount{{
+						Name: "custom-host-root", MountPath: constants.NvidiaHostRootMountPath, ReadOnly: true,
+					}},
+				}},
+				Volumes: []corev1.Volume{{
+					Name: "custom-host-root",
+					VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+						Path: constants.NvidiaHostRootHostPath,
+					}},
+				}},
+			}
+			pool := &tfv1.GPUPool{Spec: tfv1.GPUPoolSpec{ComponentConfig: &tfv1.ComponentConfig{
+				Hypervisor: &tfv1.HypervisorConfig{Image: "test-image:latest"},
+			}}}
+
+			utils.AddTFHypervisorConfAfterTemplate(ctx, spec, pool, "NVIDIA", true)
+
+			Expect(countVolumeMountPath(spec.Containers[0].VolumeMounts, constants.NvidiaHostRootMountPath)).To(Equal(1))
+			Expect(slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool {
+				return v.Name == constants.NvidiaHostRootVolumeName
+			})).To(BeFalse())
 		})
 
 		It("injects the pod-resources-tf volume/mount only when the proxy is enabled", func() {
@@ -317,6 +390,7 @@ var _ = Describe("Compose Utils", func() {
 
 			// Business container has limiter volume and shared memory volume
 			Expect(hasVolumeMount(pod.Spec.Containers[0].VolumeMounts, constants.TFSoftLimiterVolumeName, constants.TFSoftLimiterVolumeMountPath)).To(BeTrue())
+			Expect(countVolumeMountPath(pod.Spec.Containers[0].VolumeMounts, "/usr/local/bin/nvidia-smi")).To(Equal(1))
 			Expect(hasVolumeMount(
 				pod.Spec.Containers[0].VolumeMounts,
 				constants.DataVolumeName,

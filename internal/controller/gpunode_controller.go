@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -601,12 +602,13 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	if err != nil {
 		return fmt.Errorf("failed to resolve isolation mode for node %s: %w", node.Name, err)
 	}
-	applyHypervisorIsolationModeArg(&spec, string(isolationMode))
 	policy := r.IsolationModePolicy
 	if policy == "" {
 		policy = tfv1.IsolationModePolicyStatic
 	}
-	applyHypervisorIsolationPolicyArg(&spec, string(policy))
+	// Keep the TFC command and args unchanged. The Hypervisor receives the
+	// effective isolation settings through environment variables.
+	setHypervisorIsolationEnv(&spec, string(isolationMode), string(policy))
 
 	// add vendor-specific env vars for multi-vendor support
 	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
@@ -1152,84 +1154,88 @@ func hypervisorPolicyUpdatePending(pool *tfv1.GPUPool) bool {
 	return status.HypervisorVersion != utils.HypervisorTemplateHash(pool) || !status.HypervisorConfigSynced
 }
 
-func applyHypervisorIsolationModeArg(spec *corev1.PodSpec, isolationMode string) {
-	if spec == nil || len(spec.Containers) == 0 || isolationMode == "" {
-		return
-	}
-	spec.Containers[0].Args = upsertHypervisorIsolationModeArg(spec.Containers[0].Args, isolationMode)
-}
-
-func applyHypervisorIsolationPolicyArg(spec *corev1.PodSpec, policy string) {
-	if spec == nil || len(spec.Containers) == 0 || policy == "" {
-		return
-	}
-	policy = strings.ToLower(strings.TrimSpace(policy))
-	const policyFlag = "--isolation-policy"
-	args := spec.Containers[0].Args
-	for i := 0; i < len(args); i++ {
-		if strings.HasPrefix(args[i], policyFlag+"=") {
-			args[i] = policyFlag + "=" + policy
-			spec.Containers[0].Args = args
-			return
-		}
-		if args[i] == policyFlag {
-			if i+1 < len(args) {
-				args[i+1] = policy
-			} else {
-				args = append(args, policy)
-			}
-			spec.Containers[0].Args = args
-			return
-		}
-	}
-	spec.Containers[0].Args = append(args, policyFlag+"="+policy)
-}
-
-func upsertHypervisorIsolationModeArg(args []string, isolationMode string) []string {
-	const isolationModeFlag = "--isolation-mode"
-	if isolationMode == "" {
-		return args
-	}
-
-	for i := 0; i < len(args); i++ {
-		if strings.HasPrefix(args[i], isolationModeFlag+"=") {
-			args[i] = isolationModeFlag + "=" + isolationMode
-			return args
-		}
-		if args[i] == isolationModeFlag {
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				args[i+1] = isolationMode
-			} else {
-				args = append(args, isolationMode)
-			}
-			return args
-		}
-	}
-	return append(args, isolationModeFlag+"="+isolationMode)
-}
-
 func isHypervisorIsolationModeConfigured(pod *corev1.Pod, desiredIsolationMode string) bool {
 	if pod == nil || len(pod.Spec.Containers) == 0 {
 		return false
 	}
 
-	actualIsolationMode, found, valid := extractHypervisorIsolationModeArg(pod.Spec.Containers[0].Args)
-	if desiredIsolationMode == "" {
-		// When label is absent, hypervisor args should not carry explicit isolation mode.
-		return !found
+	container := pod.Spec.Containers[0]
+	if actualIsolationMode, found := extractEnvValue(container.Env, constants.TFIsolationModeEnv); found {
+		return desiredIsolationMode != "" &&
+			strings.EqualFold(actualIsolationMode, desiredIsolationMode)
 	}
-	return found && valid && actualIsolationMode == desiredIsolationMode
+	if !usesShellCommand(container.Command) {
+		actualIsolationMode, found, valid := extractHypervisorIsolationModeArg(container.Args)
+		if found {
+			return desiredIsolationMode != "" &&
+				valid && strings.EqualFold(actualIsolationMode, desiredIsolationMode)
+		}
+	}
+	return desiredIsolationMode == ""
 }
 
 func isHypervisorIsolationPolicyConfigured(pod *corev1.Pod, desiredPolicy string) bool {
 	if pod == nil || len(pod.Spec.Containers) == 0 {
 		return false
 	}
-	actual, found := extractHypervisorIsolationPolicyArg(pod.Spec.Containers[0].Args)
-	if desiredPolicy == "" {
-		return !found
+	container := pod.Spec.Containers[0]
+	if actual, found := extractEnvValue(container.Env, constants.IsolationModePolicyEnv); found {
+		return desiredPolicy != "" && strings.EqualFold(actual, desiredPolicy)
 	}
-	return found && strings.EqualFold(actual, desiredPolicy)
+	if !usesShellCommand(container.Command) {
+		actual, found := extractHypervisorIsolationPolicyArg(container.Args)
+		if found {
+			return desiredPolicy != "" && strings.EqualFold(actual, desiredPolicy)
+		}
+	}
+	return desiredPolicy == ""
+}
+
+func setHypervisorIsolationEnv(spec *corev1.PodSpec, isolationMode, policy string) {
+	if spec == nil || len(spec.Containers) == 0 {
+		return
+	}
+	setEnvValue(&spec.Containers[0].Env, constants.TFIsolationModeEnv, isolationMode)
+	setEnvValue(&spec.Containers[0].Env, constants.IsolationModePolicyEnv, policy)
+}
+
+func setEnvValue(envs *[]corev1.EnvVar, name, value string) {
+	if envs == nil || name == "" || value == "" {
+		return
+	}
+	for i := range *envs {
+		if (*envs)[i].Name == name {
+			(*envs)[i].Value = value
+			(*envs)[i].ValueFrom = nil
+			return
+		}
+	}
+	*envs = append(*envs, corev1.EnvVar{Name: name, Value: value})
+}
+
+func extractEnvValue(envs []corev1.EnvVar, name string) (string, bool) {
+	for _, env := range envs {
+		if env.Name == name && env.Value != "" {
+			return env.Value, true
+		}
+	}
+	return "", false
+}
+
+func usesShellCommand(command []string) bool {
+	if len(command) == 0 {
+		return false
+	}
+	executable := strings.ToLower(filepath.Base(command[0]))
+	if executable != "sh" && executable != "bash" && executable != "dash" {
+		return false
+	}
+	for _, arg := range command[1:] {
+		if arg == "-c" {
+			return true
+		}
+	}
+	return false
 }
 
 func extractHypervisorIsolationPolicyArg(args []string) (string, bool) {

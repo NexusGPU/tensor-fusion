@@ -1,5 +1,5 @@
 # Real-world NVIDIA ProviderConfig example (full hardware catalog + MIG-ready hypervisor).
-# Image tags default to :latest; pin them for production.
+# Pin image tags to versions validated for the target TensorFusion release.
 apiVersion: tensor-fusion.ai/v1
 kind: ProviderConfig
 metadata:
@@ -8,8 +8,8 @@ spec:
   vendor: NVIDIA
   images:
     middleware: tensorfusion/vgpu-provider-nvidia:latest
-    remoteClient: tensorfusion/tensor-fusion-client:latest
-    remoteWorker: tensorfusion/tensor-fusion-worker:latest
+    remoteClient: tensorfusion/tensor-fusion-client:v2.25.0
+    remoteWorker: tensorfusion/tensor-fusion-worker:v2.25.0
   hypervisor:
     privilegedHypervisor: true
     extraEnv:
@@ -17,6 +17,13 @@ spec:
       value: all
     - name: NVIDIA_MIG_MONITOR_DEVICES
       value: all
+    # Usually leave TF_CUDA_LIB_PATH and TF_NVML_LIB_PATH unset so the
+    # Hypervisor can discover NVIDIA GPU Operator driver paths. Set them only
+    # when the libraries live at known custom paths.
+    # - name: TF_CUDA_LIB_PATH
+    #   value: /custom/driver/libcuda.so.1
+    # - name: TF_NVML_LIB_PATH
+    #   value: /custom/driver/libnvidia-ml.so.1
   devicePluginDetection:
     resourceNamePrefixes:
     - nvidia.com/gpu
