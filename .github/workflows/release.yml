@@ -116,10 +116,15 @@ jobs:
 
       - name: Build hypervisor binaries
         run: |
+          VERSION="${{ needs.release.outputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          GO_LDFLAGS="-X 'github.com/NexusGPU/tensor-fusion/internal/version.BuildVersion=${VERSION}'"
           # Build for amd64
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o bin/hypervisor-linux-amd64 cmd/hypervisor/main.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$GO_LDFLAGS" -a -o bin/hypervisor-linux-amd64 ./cmd/hypervisor
           # Build for arm64
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -o bin/hypervisor-linux-arm64 cmd/hypervisor/main.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$GO_LDFLAGS" -a -o bin/hypervisor-linux-arm64 ./cmd/hypervisor
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
