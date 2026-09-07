@@ -1154,10 +1154,13 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 			if _, exists := poolKeys[requirement.Key]; exists {
 				continue
 			}
-			// A source NodeClaim contains the concrete instance type and zone
-			// selected for that node. The replacement must use the NodePool's
-			// alternatives so Karpenter can select another available offering.
-			if requirement.Key == corev1.LabelInstanceTypeStable || requirement.Key == corev1.LabelTopologyZone {
+			// A source NodeClaim contains the concrete instance type, zone, and
+			// region selected for that node. The replacement must use the
+			// NodePool's alternatives so Karpenter can select another available
+			// offering.
+			if requirement.Key == corev1.LabelInstanceTypeStable ||
+				requirement.Key == corev1.LabelTopologyZone ||
+				requirement.Key == corev1.LabelTopologyRegion {
 				continue
 			}
 			poolRequirements = append(poolRequirements, requirement)

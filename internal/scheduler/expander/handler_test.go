@@ -238,6 +238,7 @@ func testKarpenterNodeClaimCreation(suite *NodeExpanderTestSuite) {
 		Spec: karpv1.NodeClaimSpec{Requirements: []karpv1.NodeSelectorRequirementWithMinValues{
 			testKarpenterRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, []string{"g6.12xlarge"}),
 			testKarpenterRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, []string{"us-east-1a"}),
+			testKarpenterRequirement(corev1.LabelTopologyRegion, corev1.NodeSelectorOpIn, []string{"us-east-1"}),
 			testKarpenterRequirement("team", corev1.NodeSelectorOpIn, []string{"source-value"}),
 		}, Resources: karpv1.ResourceRequirements{Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("4760m"),
@@ -302,6 +303,7 @@ func testKarpenterNodeClaimCreation(suite *NodeExpanderTestSuite) {
 	}
 	Expect(createdRequirements[corev1.LabelInstanceTypeStable]).To(Equal([]string{"g6.2xlarge"}))
 	Expect(createdRequirements[corev1.LabelTopologyZone]).To(Equal([]string{"us-east-1a", "us-east-1b"}))
+	Expect(createdRequirements).NotTo(HaveKey(corev1.LabelTopologyRegion))
 	Expect(created.Spec.Resources.Requests.Cpu().String()).To(Equal("1"))
 	Expect(created.Spec.Resources.Requests.Memory().String()).To(Equal("4Gi"))
 	Expect(created.Spec.Resources.Requests.Pods().String()).To(Equal("1"))

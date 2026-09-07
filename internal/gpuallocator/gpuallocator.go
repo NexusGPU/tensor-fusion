@@ -2390,40 +2390,8 @@ func (s *GpuAllocator) handleGPUDelete(ctx context.Context, gpu *tfv1.GPU) {
 
 	// Remove GPU from store
 	delete(s.gpuStore, key)
-
-	if gpu.Status.NodeSelector != nil {
-		gpuNodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
-		if s.nodeGpuStore[gpuNodeName] != nil {
-			delete(s.nodeGpuStore[gpuNodeName], gpu.Name)
-			// A node's last GPU being removed almost always means the node
-			// itself is gone (terminated/scaled down). Drop the now-empty
-			// entry too, otherwise it lingers in nodeGpuStore forever and
-			// keeps showing up as a defunct defrag budget target.
-			if len(s.nodeGpuStore[gpuNodeName]) == 0 {
-				delete(s.nodeGpuStore, gpuNodeName)
-				// GPU CR deletion doesn't guarantee the node's workers are
-				// gone too (e.g. cascade-delete on node termination races
-				// ahead of pod cleanup, or RunningApps hasn't synced to the
-				// GPU CR yet when node-discovery decides to delete it) so
-				// only reap nodeWorkerStore here if it's already empty;
-				// otherwise leave live worker bookkeeping for Dealloc /
-				// the cleanup checker to retire pod-by-pod.
-				if len(s.nodeWorkerStore[gpuNodeName]) == 0 {
-					delete(s.nodeWorkerStore, gpuNodeName)
-				}
-			}
-		}
-	}
-
-	if gpu.Labels != nil {
-		pool := gpu.Labels[constants.GpuPoolKey]
-		if pool != "" {
-			delete(s.poolGpuStore[pool], gpu.Name)
-			if len(s.poolGpuStore[pool]) == 0 {
-				delete(s.poolGpuStore, pool)
-			}
-		}
-	}
+	// Remove all secondary indexes using the last known metadata.
+	s.removeGPUFromMaps(gpu)
 	log.Info("Removed GPU from store", "name", key.Name)
 }
 
@@ -2436,6 +2404,10 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 	defer s.storeMutex.Unlock()
 
 	if old, ok := s.gpuStore[key]; ok && old != nil {
+		// The node and pool indexes are keyed by mutable GPU metadata. Remove
+		// the old entries before syncing the new metadata, otherwise a GPU that
+		// moves nodes or pools remains reachable through its old index.
+		s.removeGPUFromMaps(old)
 		s.handleGPUUpdateCapacityDiff(old, gpu)
 
 		// should never update available and runningApps here, to avoid circular update
@@ -2454,6 +2426,45 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 	}
 
 	s.addOrUpdateGPUMaps(s.gpuStore[key])
+}
+
+// removeGPUFromMaps removes a GPU from the secondary node and pool indexes.
+// Callers must hold storeMutex.
+func (s *GpuAllocator) removeGPUFromMaps(gpu *tfv1.GPU) {
+	if gpu == nil {
+		return
+	}
+
+	if gpu.Status.NodeSelector != nil {
+		nodeName := gpu.Status.NodeSelector[constants.KubernetesHostNameLabel]
+		if gpuMap := s.nodeGpuStore[nodeName]; gpuMap != nil {
+			delete(gpuMap, gpu.Name)
+			// A node's last GPU being removed almost always means the node
+			// itself is gone (terminated/scaled down). Drop the now-empty
+			// entry too, otherwise it lingers in nodeGpuStore forever and
+			// keeps showing up as a defunct defrag budget target.
+			if len(gpuMap) == 0 {
+				delete(s.nodeGpuStore, nodeName)
+				// GPU removal does not guarantee that worker bookkeeping has
+				// already drained, so only reap an empty worker map here.
+				if len(s.nodeWorkerStore[nodeName]) == 0 {
+					delete(s.nodeWorkerStore, nodeName)
+				}
+			}
+		}
+	}
+
+	if gpu.Labels != nil {
+		pool := gpu.Labels[constants.GpuPoolKey]
+		if pool != "" {
+			if gpuMap := s.poolGpuStore[pool]; gpuMap != nil {
+				delete(gpuMap, gpu.Name)
+				if len(gpuMap) == 0 {
+					delete(s.poolGpuStore, pool)
+				}
+			}
+		}
+	}
 }
 
 func (s *GpuAllocator) addOrUpdateGPUMaps(gpuInMem *tfv1.GPU) {
@@ -3227,7 +3238,7 @@ func removeRunningApp(ctx context.Context, gpu *tfv1.GPU, allocRequest *tfv1.All
 		if item.Count == 0 {
 			// scale down to zero, not running any more
 			gpu.Status.RunningApps = lo.Filter(gpu.Status.RunningApps, func(app *tfv1.RunningAppDetail, _ int) bool {
-				return app.Name != workloadNameNamespace.Name && app.Namespace != workloadNameNamespace.Namespace
+				return app.Name != workloadNameNamespace.Name || app.Namespace != workloadNameNamespace.Namespace
 			})
 		} else {
 			item.Pods = lo.Filter(item.Pods, func(pod *tfv1.PodGPUInfo, _ int) bool {
