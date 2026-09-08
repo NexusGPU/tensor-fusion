@@ -29,6 +29,8 @@ var injectLibResource v1.ResourceList = v1.ResourceList{
 	v1.ResourceMemory: resource.MustParse("256Mi"),
 }
 
+const legacyTFContainerNameWorker = "tensor-fusion-worker"
+
 var hypervisorDefaultRequests v1.ResourceList = v1.ResourceList{
 	v1.ResourceCPU:    resource.MustParse("50m"),
 	v1.ResourceMemory: resource.MustParse("128Mi"),
@@ -541,15 +543,11 @@ func AddTFDefaultClientConfBeforePatch(
 			if wc := pool.Spec.ComponentConfig.Worker; wc != nil && wc.PodTemplate != nil {
 				var tmpl v1.PodTemplate
 				if err := json.Unmarshal(wc.PodTemplate.Raw, &tmpl); err == nil {
-					for _, c := range tmpl.Template.Spec.Containers {
-						if c.Name != "" && c.Name != constants.TFContainerNameWorker {
-							continue
-						}
+					if c := workerTemplateContainer(tmpl.Template.Spec.Containers); c != nil {
 						sidecar.Env = append(sidecar.Env, c.Env...)
 						if c.Resources.Requests != nil || c.Resources.Limits != nil {
 							sidecar.Resources = c.Resources
 						}
-						break
 					}
 				}
 			}
@@ -1355,6 +1353,25 @@ func composeVectorContainer(spec *v1.PodSpec, pool *tfv1.GPUPool) {
 	if len(spec.Containers[1].Resources.Limits) == 0 {
 		spec.Containers[1].Resources.Limits = vectorDefaultLimits
 	}
+}
+
+func workerTemplateContainer(containers []v1.Container) *v1.Container {
+	for i := range containers {
+		if containers[i].Name == constants.TFContainerNameWorker {
+			return &containers[i]
+		}
+	}
+	for i := range containers {
+		if containers[i].Name == legacyTFContainerNameWorker {
+			return &containers[i]
+		}
+	}
+	// v1 always used the first template container. Preserve that behavior for
+	// single-container templates without making multi-container matching ambiguous.
+	if len(containers) == 1 {
+		return &containers[0]
+	}
+	return nil
 }
 
 // SetWorkerContainerSpec configures the worker container with required settings
