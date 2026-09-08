@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/provider"
@@ -470,6 +471,41 @@ var _ = Describe("Compose Utils", func() {
 			cudaHooksValue, found := envValue(pod.Spec.Containers[0].Env, constants.EnableCudaHooksEnv)
 			Expect(found).To(BeTrue())
 			Expect(cudaHooksValue).To(Equal("false"))
+		})
+
+		It("should merge legacy worker template env into local hard sidecar", func() {
+			pool := newPool()
+			pool.Spec.ComponentConfig.Worker.PodTemplate = &runtime.RawExtension{Raw: []byte(`{
+				"template":{"spec":{"containers":[{
+					"name":"tensor-fusion-worker",
+					"env":[
+						{"name":"TF_LICENSE","value":"license-value"},
+						{"name":"TF_LICENSE_SIGN","value":"signature-value"}
+					]
+				}]}}
+			}`)}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, pool, utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: true,
+					Isolation:  tfv1.IsolationModeHard,
+					GPUVendor:  constants.AcceleratorVendorNvidia,
+				},
+			}, []int{0})
+
+			Expect(pod.Spec.Containers).To(HaveLen(2))
+			worker := pod.Spec.Containers[1]
+			Expect(worker.Name).To(Equal(constants.TFContainerNameWorker))
+			license, found := envValue(worker.Env, constants.TFLicenseEnv)
+			Expect(found).To(BeTrue())
+			Expect(license).To(Equal("license-value"))
+			signature, found := envValue(worker.Env, constants.TFLicenseHMacEnv)
+			Expect(found).To(BeTrue())
+			Expect(signature).To(Equal("signature-value"))
 		})
 
 		It("should keep local shared mode as embedded worker without tf-data shm", func() {
