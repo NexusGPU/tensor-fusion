@@ -96,12 +96,17 @@ func (m *Controller) StartDiscoverDevices() error {
 // discoverDevices discovers all available GPU devices
 func (m *Controller) discoverDevices() error {
 	m.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			m.mu.Unlock()
+		}
+	}()
 
 	// Get all devices at once
 	klog.Infof("Start discovering devices using provider lib")
 	devices, err := m.accelerator.GetAllDevices()
 	if err != nil {
-		m.mu.Unlock()
 		return fmt.Errorf("failed to get all devices: %w", err)
 	}
 
@@ -156,35 +161,7 @@ func (m *Controller) discoverDevices() error {
 		}
 	}
 
-	// Notify handlers for all changes (similar to K8s reconcile)
-	for _, device := range addedDevices {
-		m.notifyHandlersLocked(func(handler framework.DeviceChangeHandler) {
-			if handler.OnAdd != nil {
-				handler.OnAdd(device)
-			}
-		})
-		klog.V(4).Infof("Device added: %s (UUID: %s)", device.Model, device.UUID)
-	}
-
-	for _, device := range removedDevices {
-		m.notifyHandlersLocked(func(handler framework.DeviceChangeHandler) {
-			if handler.OnRemove != nil {
-				handler.OnRemove(device)
-			}
-		})
-		klog.V(4).Infof("Device removed: %s (UUID: %s)", device.Model, device.UUID)
-	}
-
-	for _, update := range updatedDevices {
-		m.notifyHandlersLocked(func(handler framework.DeviceChangeHandler) {
-			if handler.OnUpdate != nil {
-				handler.OnUpdate(update.old, update.new)
-			}
-		})
-		klog.V(4).Infof("Device updated: %s (UUID: %s)", update.new.Model, update.new.UUID)
-	}
-
-	// Update state after notifying handlers
+	// Update state before notifying handlers so callbacks can safely read it.
 	for _, device := range addedDevices {
 		m.devices[device.UUID] = device
 		m.nativeUUIDs[device.UUID] = newNativeUUIDs[device.UUID]
@@ -199,16 +176,40 @@ func (m *Controller) discoverDevices() error {
 	}
 
 	nodeInfo := m.AggregateNodeInfo()
-	// Do not invoke callbacks while holding device.mu. Allocation callbacks may
-	// call back into the device controller, and allocation itself holds its own
-	// mutex while reading devices; keeping callbacks outside this lock avoids a
-	// device/allocation lock-order deadlock.
 	m.mu.Unlock()
+	locked = false
+
+	// Notify handlers outside device.mu. Callbacks may call back into this
+	// controller, and allocation callbacks use a separate mutex.
+	for _, device := range addedDevices {
+		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
+			if handler.OnAdd != nil {
+				handler.OnAdd(device)
+			}
+		})
+		klog.V(4).Infof("Device added: %s (UUID: %s)", device.Model, device.UUID)
+	}
+	for _, device := range removedDevices {
+		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
+			if handler.OnRemove != nil {
+				handler.OnRemove(device)
+			}
+		})
+		klog.V(4).Infof("Device removed: %s (UUID: %s)", device.Model, device.UUID)
+	}
+	for _, update := range updatedDevices {
+		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
+			if handler.OnUpdate != nil {
+				handler.OnUpdate(update.old, update.new)
+			}
+		})
+		klog.V(4).Infof("Device updated: %s (UUID: %s)", update.new.Model, update.new.UUID)
+	}
 
 	if metrics.ShouldSendTelemetry() {
 		sampleGPUModel := ""
-		if len(m.devices) > 0 {
-			for _, device := range m.devices {
+		if devices := m.GetDevices(); len(devices) > 0 {
+			for _, device := range devices {
 				if device.Model != "" {
 					sampleGPUModel = device.Model
 					break
@@ -226,7 +227,7 @@ func (m *Controller) discoverDevices() error {
 			nodeInfo, m.acceleratorVendor, sampleGPUModel, workersCount, m.isolationMode,
 		)
 	}
-	m.notifyHandlersLocked(func(handler framework.DeviceChangeHandler) {
+	m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
 		if handler.OnDiscoveryComplete != nil {
 			handler.OnDiscoveryComplete(nodeInfo)
 		}
@@ -234,10 +235,11 @@ func (m *Controller) discoverDevices() error {
 	return nil
 }
 
-// notifyHandlersLocked is used by discovery while it owns the controller state
-// lock, and by the final callback after discovery releases it.
-func (m *Controller) notifyHandlersLocked(fn func(framework.DeviceChangeHandler)) {
-	for _, handler := range m.deviceUpdateHandlers {
+func (m *Controller) notifyHandlers(fn func(framework.DeviceChangeHandler)) {
+	m.mu.RLock()
+	handlers := append([]framework.DeviceChangeHandler(nil), m.deviceUpdateHandlers...)
+	m.mu.RUnlock()
+	for _, handler := range handlers {
 		fn(handler)
 	}
 }
