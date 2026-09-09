@@ -84,7 +84,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
 		if errors.IsNotFound(err) {
 			if r.Expander != nil {
-				_ = r.Expander.RemovePreSchedulePod(req.Name, true)
+				_ = r.Expander.RemovePreSchedulePod(req.Namespace, req.Name, true)
 				r.Expander.ClearFailedExpansionCandidatesForPod(req.Namespace, req.Name)
 			}
 			r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)
@@ -105,14 +105,14 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		pod.Labels = map[string]string{}
 	}
 	if !pod.DeletionTimestamp.IsZero() && r.Expander != nil {
-		_ = r.Expander.RemovePreSchedulePod(pod.Name, true)
+		_ = r.Expander.RemovePreSchedulePod(pod.Namespace, pod.Name, true)
 		r.Expander.ClearFailedExpansionCandidatesForPod(pod.Namespace, pod.Name)
 	}
 	// Release GPU resources when pod is in Failed or Succeeded (Complete) state
 	// Only for worker pods that have allocated GPU resources
 	if pod.Labels[constants.LabelComponent] == constants.ComponentWorker && utils.IsPodStopped(pod) {
 		if r.Expander != nil {
-			_ = r.Expander.RemovePreSchedulePod(pod.Name, true)
+			_ = r.Expander.RemovePreSchedulePod(pod.Namespace, pod.Name, true)
 			r.Expander.ClearFailedExpansionCandidatesForPod(pod.Namespace, pod.Name)
 		}
 		r.Allocator.DeallocByPodIdentifier(ctx, req.NamespacedName)

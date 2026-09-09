@@ -102,6 +102,9 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 			deviceInfos = append(deviceInfos, device)
 		}
 	}
+	if len(deviceInfos) == 0 {
+		return nil, fmt.Errorf("none of the requested devices exist for worker %s", request.WorkerUID)
+	}
 
 	mounts, err := a.deviceController.GetVendorMountLibs()
 	if err != nil {

@@ -96,12 +96,12 @@ func (m *Controller) StartDiscoverDevices() error {
 // discoverDevices discovers all available GPU devices
 func (m *Controller) discoverDevices() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Get all devices at once
 	klog.Infof("Start discovering devices using provider lib")
 	devices, err := m.accelerator.GetAllDevices()
 	if err != nil {
+		m.mu.Unlock()
 		return fmt.Errorf("failed to get all devices: %w", err)
 	}
 
@@ -158,7 +158,7 @@ func (m *Controller) discoverDevices() error {
 
 	// Notify handlers for all changes (similar to K8s reconcile)
 	for _, device := range addedDevices {
-		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
+		m.notifyHandlersLocked(func(handler framework.DeviceChangeHandler) {
 			if handler.OnAdd != nil {
 				handler.OnAdd(device)
 			}
@@ -167,7 +167,7 @@ func (m *Controller) discoverDevices() error {
 	}
 
 	for _, device := range removedDevices {
-		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
+		m.notifyHandlersLocked(func(handler framework.DeviceChangeHandler) {
 			if handler.OnRemove != nil {
 				handler.OnRemove(device)
 			}
@@ -176,7 +176,7 @@ func (m *Controller) discoverDevices() error {
 	}
 
 	for _, update := range updatedDevices {
-		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
+		m.notifyHandlersLocked(func(handler framework.DeviceChangeHandler) {
 			if handler.OnUpdate != nil {
 				handler.OnUpdate(update.old, update.new)
 			}
@@ -199,6 +199,11 @@ func (m *Controller) discoverDevices() error {
 	}
 
 	nodeInfo := m.AggregateNodeInfo()
+	// Do not invoke callbacks while holding device.mu. Allocation callbacks may
+	// call back into the device controller, and allocation itself holds its own
+	// mutex while reading devices; keeping callbacks outside this lock avoids a
+	// device/allocation lock-order deadlock.
+	m.mu.Unlock()
 
 	if metrics.ShouldSendTelemetry() {
 		sampleGPUModel := ""
@@ -221,7 +226,7 @@ func (m *Controller) discoverDevices() error {
 			nodeInfo, m.acceleratorVendor, sampleGPUModel, workersCount, m.isolationMode,
 		)
 	}
-	m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
+	m.notifyHandlersLocked(func(handler framework.DeviceChangeHandler) {
 		if handler.OnDiscoveryComplete != nil {
 			handler.OnDiscoveryComplete(nodeInfo)
 		}
@@ -229,8 +234,9 @@ func (m *Controller) discoverDevices() error {
 	return nil
 }
 
-// notifyHandlers calls the provided function for each registered handler
-func (m *Controller) notifyHandlers(fn func(framework.DeviceChangeHandler)) {
+// notifyHandlersLocked is used by discovery while it owns the controller state
+// lock, and by the final callback after discovery releases it.
+func (m *Controller) notifyHandlersLocked(fn func(framework.DeviceChangeHandler)) {
 	for _, handler := range m.deviceUpdateHandlers {
 		fn(handler)
 	}
@@ -428,20 +434,27 @@ func (m *Controller) RemovePartitionedDevice(partitionUUID, deviceUUID string) e
 
 func (m *Controller) RegisterDeviceUpdateHandler(handler framework.DeviceChangeHandler) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.deviceUpdateHandlers = append(m.deviceUpdateHandlers, handler)
+	devices := make([]*api.DeviceInfo, 0, len(m.devices))
+	for _, device := range m.devices {
+		devices = append(devices, device)
+	}
+	var nodeInfo *api.NodeInfo
+	if len(devices) > 0 && handler.OnDiscoveryComplete != nil {
+		nodeInfo = m.AggregateNodeInfo()
+	}
+	m.mu.Unlock()
 
 	// Notify the newly registered handler about existing devices without triggering a new discovery
 	// This ensures handlers get notified of devices that were discovered before they were registered
-	if len(m.devices) > 0 {
-		for _, device := range m.devices {
+	if len(devices) > 0 {
+		for _, device := range devices {
 			if handler.OnAdd != nil {
 				handler.OnAdd(device)
 			}
 		}
 		// Also notify about discovery completion if there are existing devices
 		if handler.OnDiscoveryComplete != nil {
-			nodeInfo := m.AggregateNodeInfo()
 			handler.OnDiscoveryComplete(nodeInfo)
 		}
 	}
