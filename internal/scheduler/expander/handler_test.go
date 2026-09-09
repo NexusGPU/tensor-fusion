@@ -635,18 +635,28 @@ func testPreScheduledPodManagement(suite *NodeExpanderTestSuite) {
 
 	// Verify pre-scheduled pod exists
 	suite.nodeExpander.mu.RLock()
-	_, exists := suite.nodeExpander.preSchedulePods["test-pod"]
+	_, exists := suite.nodeExpander.preSchedulePods[preSchedulePodKey(allocReq.PodMeta.Namespace, allocReq.PodMeta.Name)]
 	suite.nodeExpander.mu.RUnlock()
 	Expect(exists).To(BeTrue())
 
 	// Test removing pre-scheduled pod
-	_ = suite.nodeExpander.RemovePreSchedulePod("test-pod", true)
+	_ = suite.nodeExpander.RemovePreSchedulePod(allocReq.PodMeta.Namespace, allocReq.PodMeta.Name, true)
 
 	// Verify pre-scheduled pod is removed
 	suite.nodeExpander.mu.RLock()
-	_, exists = suite.nodeExpander.preSchedulePods["test-pod"]
+	_, exists = suite.nodeExpander.preSchedulePods[preSchedulePodKey(allocReq.PodMeta.Namespace, allocReq.PodMeta.Name)]
 	suite.nodeExpander.mu.RUnlock()
 	Expect(exists).To(BeFalse())
+
+	// Same Pod name in another namespace must have independent state.
+	other := allocReq.DeepCopy()
+	other.PodMeta.Namespace = "other"
+	suite.nodeExpander.addPreSchedulePod(other)
+	suite.nodeExpander.mu.RLock()
+	_, exists = suite.nodeExpander.preSchedulePods[preSchedulePodKey(other.PodMeta.Namespace, other.PodMeta.Name)]
+	suite.nodeExpander.mu.RUnlock()
+	Expect(exists).To(BeTrue())
+	_ = suite.nodeExpander.RemovePreSchedulePod(other.PodMeta.Namespace, other.PodMeta.Name, true)
 }
 
 // Case 1: Expand from 1 GPU node cluster
@@ -828,7 +838,7 @@ func testExpandWhenInflightCannotSatisfy(suite *NodeExpanderTestSuite) {
 	// Add inflight node and pre-schedule a pod to it
 	suite.nodeExpander.mu.Lock()
 	suite.nodeExpander.inFlightNodes["inflight-node"] = []*tfv1.GPU{inflightGPU}
-	suite.nodeExpander.preSchedulePods["pre-scheduled"] = allocRequest
+	suite.nodeExpander.preSchedulePods[preSchedulePodKey(allocRequest.PodMeta.Namespace, allocRequest.PodMeta.Name)] = allocRequest
 	suite.nodeExpander.mu.Unlock()
 
 	// Create new pod that cannot be satisfied by the already-occupied inflight node
