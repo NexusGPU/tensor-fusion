@@ -120,6 +120,22 @@ func appendEnvIfMissing(envList []v1.EnvVar, envs ...v1.EnvVar) []v1.EnvVar {
 	return envList
 }
 
+// findMountAtPath returns the first volumeMount at path, if any.
+func findMountAtPath(mounts []v1.VolumeMount, path string) (v1.VolumeMount, bool) {
+	for _, mount := range mounts {
+		if mount.MountPath == path {
+			return mount, true
+		}
+	}
+	return v1.VolumeMount{}, false
+}
+
+// hasMountAtPath reports whether any volumeMount targets path.
+func hasMountAtPath(mounts []v1.VolumeMount, path string) bool {
+	_, ok := findMountAtPath(mounts, path)
+	return ok
+}
+
 func setEnv(envList []v1.EnvVar, env v1.EnvVar) []v1.EnvVar {
 	result := envList[:0]
 	for _, item := range envList {
@@ -340,6 +356,13 @@ func AddTFDefaultClientConfBeforePatch(
 	clientConfig := pool.Spec.ComponentConfig.Client
 	useLocalWorkerSidecar := UseLocalWorkerSidecar(tfInfo.Profile)
 	useInjectLib := shouldInjectClientBootstrap(tfInfo.Profile)
+	// Transport shared-memory volume for client-worker RPC in local hard
+	// sidecar mode. Defaults to a TF-managed emptyDir; when the workload
+	// already declares its own /dev/shm mount, that volume is reused instead
+	// so we never emit a duplicate mount path, which kubelet rejects
+	// ("mountPath ... must be unique").
+	shmVolumeName := constants.TransportShmVolumeName
+	shmSubPath := ""
 	if useInjectLib {
 		// Any mode that needs the client initContainer should prefer the provider-specific
 		// client image. Local shared/embedded mode skips this path entirely.
@@ -520,14 +543,45 @@ func AddTFDefaultClientConfBeforePatch(
 			}
 		} else if useLocalWorkerSidecar {
 			// Local hard modes run the TensorFusion worker in a sibling container and use /dev/shm for transport.
-			pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-				Name: constants.TransportShmVolumeName,
-				VolumeSource: v1.VolumeSource{
-					EmptyDir: &v1.EmptyDirVolumeSource{
-						Medium: v1.StorageMediumMemory,
+			//
+			// If a business container already declares its own /dev/shm mount
+			// (a common pattern: emptyDir with medium: Memory and a sizeLimit,
+			// e.g. for PyTorch DataLoader/NCCL), reuse that volume for the
+			// transport instead of appending a second mount at the same path.
+			// This keeps the user's sizeLimit in control and avoids the
+			// duplicate mount path that kubelet rejects. The transport only
+			// needs a shared tmpfs file, so any shared pod volume works as
+			// long as both the business container and the worker mount it.
+			for _, containerIndex := range injectContainerIndices {
+				userMount, found := findMountAtPath(pod.Spec.Containers[containerIndex].VolumeMounts, constants.TransportShmPath)
+				if !found {
+					continue
+				}
+				if shmVolumeName == constants.TransportShmVolumeName {
+					shmVolumeName = userMount.Name
+					shmSubPath = userMount.SubPath
+				} else if userMount.Name != shmVolumeName {
+					log.FromContext(ctx).Info(
+						"container /dev/shm volume differs from the reused transport volume; it will not share the tensor-fusion transport",
+						"container", pod.Spec.Containers[containerIndex].Name,
+						"volume", userMount.Name,
+						"sharedVolume", shmVolumeName)
+				}
+			}
+			if shmVolumeName == constants.TransportShmVolumeName {
+				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+					Name: constants.TransportShmVolumeName,
+					VolumeSource: v1.VolumeSource{
+						EmptyDir: &v1.EmptyDirVolumeSource{
+							Medium: v1.StorageMediumMemory,
+						},
 					},
-				},
-			})
+				})
+			} else {
+				log.FromContext(ctx).Info(
+					"reusing user-declared /dev/shm volume for local hard sidecar transport",
+					"volume", shmVolumeName)
+			}
 
 			// Seed the sidecar from worker.podTemplate so user-defined env/resources
 			// (e.g. TF_LICENSE) reach the sidecar like they do for remote worker pods.
@@ -535,8 +589,9 @@ func AddTFDefaultClientConfBeforePatch(
 				Name: constants.TFContainerNameWorker,
 				VolumeMounts: []v1.VolumeMount{
 					{
-						Name:      constants.TransportShmVolumeName,
+						Name:      shmVolumeName,
 						MountPath: constants.TransportShmPath,
+						SubPath:   shmSubPath,
 					},
 				},
 			}
@@ -582,14 +637,20 @@ func AddTFDefaultClientConfBeforePatch(
 				continue
 			}
 			if useLocalWorkerSidecar {
+				if !hasMountAtPath(pod.Spec.Containers[injectContainerIndex].VolumeMounts, constants.TransportShmPath) {
+					pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
+						pod.Spec.Containers[injectContainerIndex].VolumeMounts,
+						v1.VolumeMount{
+							Name:      shmVolumeName,
+							MountPath: constants.TransportShmPath,
+							SubPath:   shmSubPath,
+						},
+					)
+				}
+				// Local sidecar clients still need the host-backed TF shared-memory state for
+				// NVML/memory hooks, even though client-worker RPC uses /dev/shm transport.
 				pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 					pod.Spec.Containers[injectContainerIndex].VolumeMounts,
-					v1.VolumeMount{
-						Name:      constants.TransportShmVolumeName,
-						MountPath: constants.TransportShmPath,
-					},
-					// Local sidecar clients still need the host-backed TF shared-memory state for
-					// NVML/memory hooks, even though client-worker RPC uses /dev/shm transport.
 					v1.VolumeMount{
 						Name:             constants.DataVolumeName,
 						MountPath:        constants.TFDataPath + constants.SharedMemMountSubPath,
