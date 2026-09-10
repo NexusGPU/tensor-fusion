@@ -47,6 +47,10 @@ type GPUPoolCompactionReconciler struct {
 	defragRunning sync.Map
 
 	markDeletionNodes map[string]struct{}
+
+	// defragSimulate overrides simulateJointPlacement in unit tests so the
+	// full-cohort preflight can be exercised without a live scheduler.
+	defragSimulate func(ctx context.Context, pool *tfv1.GPUPool, cand *defragCandidate, maxWorkerPerNode int) (bool, *defragPlacementDiagnostics, error)
 }
 
 var defaultCompactionDuration = 1 * time.Minute
