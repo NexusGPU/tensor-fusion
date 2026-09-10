@@ -29,6 +29,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
 	fwk "k8s.io/kube-scheduler/framework"
+	k8sscheduler "k8s.io/kubernetes/pkg/scheduler"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -3010,6 +3011,335 @@ func TestApplyGPUPlacementToBudget_NilBudgetNoop(t *testing.T) {
 	applyGPUPlacementToBudget(nil, []*tfv1.GPU{
 		gpuWithUsage("a", "p", "100", "10Gi", tfv1.UsedByTensorFusion),
 	}, req)
+}
+
+// ---- progressive defrag: complete plan + single-step eviction ----------
+
+func newEvictionCountingClientset(pods ...*corev1.Pod) (*clientgofake.Clientset, *int) {
+	objs := make([]runtime.Object, 0, len(pods))
+	for _, p := range pods {
+		objs = append(objs, p)
+	}
+	fakeClient := clientgofake.NewSimpleClientset(objs...)
+	attempts := new(int)
+	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != testEvictionSubresource {
+			return false, nil, nil
+		}
+		*attempts++
+		return true, nil, nil
+	})
+	return fakeClient, attempts
+}
+
+func newSharedNodeWorkloadFixture(t *testing.T) (*GPUPoolCompactionReconciler, ctrlclient.Client, *tfv1.GPUPool, *corev1.Pod, *corev1.Pod) {
+	t.Helper()
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA, UID: "node-a-uid"}}
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	podA := newDefragWorkerPod("worker-a", testDefragNodeA, now.Add(-2*time.Hour))
+	podB := newDefragWorkerPod("worker-b", testDefragNodeA, now.Add(-2*time.Hour))
+	objects := []ctrlclient.Object{pool, node, gpuNode, podA, podB}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+	r, kubeClient := newDefragControllerTestReconciler(t, objects...)
+	primeAllocatorWorkerStore(t, r)
+	return r, kubeClient, pool, podA, podB
+}
+
+func newDefragSourceNode(poolName, nodeName string) *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name: nodeName,
+		UID:  types.UID(nodeName + "-uid"),
+		Labels: map[string]string{
+			constants.DefragSourceNodeLabel: constants.TrueStringValue,
+		},
+		Annotations: map[string]string{
+			constants.DefragSourceNodePoolAnnotation:  poolName,
+			constants.DefragSourceNodeSinceAnnotation: time.Now().Format(time.RFC3339),
+		},
+	}}
+}
+
+func getDefragTestNode(t *testing.T, kubeClient ctrlclient.Client, nodeName string) *corev1.Node {
+	t.Helper()
+	node := &corev1.Node{}
+	if err := kubeClient.Get(context.Background(), types.NamespacedName{Name: nodeName}, node); err != nil {
+		t.Fatalf("get node %s: %v", nodeName, err)
+	}
+	return node
+}
+
+func TestSelectDefragEvictionPod_Deterministic(t *testing.T) {
+	pods := []*corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "b", UID: "b"}},
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "a", UID: "a"}},
+	}
+	got := selectDefragEvictionPod(pods)
+	if got == nil || got.Name != "a" {
+		t.Fatalf("selectDefragEvictionPod=%v, want pod a", got)
+	}
+	if selectDefragEvictionPod(nil) != nil {
+		t.Fatalf("nil pods must select nil")
+	}
+}
+
+func TestEvictWorkerPods_UIDPrecondition(t *testing.T) {
+	pod := newDefragWorkerPod("p1", testDefragNodeA, time.Now().Add(-time.Hour))
+	fakeClient := clientgofake.NewSimpleClientset()
+	var captured *policyv1.Eviction
+	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != testEvictionSubresource {
+			return false, nil, nil
+		}
+		if ca, ok := a.(k8stesting.CreateAction); ok {
+			captured, _ = ca.GetObject().(*policyv1.Eviction)
+		}
+		return true, nil, nil
+	})
+	r := newReconcilerWithFake(fakeClient)
+	cand := &defragCandidate{nodeName: testDefragNodeA, workerPods: []*corev1.Pod{pod}}
+	if !r.evictWorkerPods(context.Background(), &tfv1.GPUPool{}, cand, &defragRunStats{}, &errLogger{}) {
+		t.Fatalf("expected eviction to succeed")
+	}
+	if captured == nil || captured.DeleteOptions == nil ||
+		captured.DeleteOptions.Preconditions == nil || captured.DeleteOptions.Preconditions.UID == nil {
+		t.Fatalf("eviction must carry a UID precondition, got %+v", captured)
+	}
+	if *captured.DeleteOptions.Preconditions.UID != pod.UID {
+		t.Fatalf("precondition UID=%q want %q", *captured.DeleteOptions.Preconditions.UID, pod.UID)
+	}
+}
+
+func TestEvictWorkerPods_TooManyRequestsKeepsSourceMarker(t *testing.T) {
+	pod := newDefragWorkerPod("p1", testDefragNodeA, time.Now().Add(-time.Hour))
+	fakeClient := clientgofake.NewSimpleClientset(pod)
+	attempts := 0
+	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != testEvictionSubresource {
+			return false, nil, nil
+		}
+		attempts++
+		return true, nil, apierrors.NewTooManyRequestsError("simulated PDB contention")
+	})
+	pool := newDefragTestPool()
+	r, kubeClient := newDefragControllerTestReconciler(t, pool,
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: testDefragNodeA}})
+	r.KubeClient = fakeClient
+	cand := &defragCandidate{nodeName: testDefragNodeA, workerPods: []*corev1.Pod{pod}}
+	if r.evictWorkerPods(context.Background(), pool, cand, &defragRunStats{}, &errLogger{}) {
+		t.Fatalf("429 must not report eviction success")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts=%d want 1", attempts)
+	}
+	node := getDefragTestNode(t, kubeClient, testDefragNodeA)
+	if node.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
+		t.Fatalf("source marker must be kept on a retryable error, labels=%v", node.Labels)
+	}
+	if node.Labels[constants.DefragEvictSkipNodeLabel] == constants.TrueStringValue {
+		t.Fatalf("429 must not mark the node evict-skip")
+	}
+}
+
+func TestProcessDefragCandidate_NoCompletePlan_NeverEvicts(t *testing.T) {
+	r, kubeClient, pool, podA, podB := newSharedNodeWorkloadFixture(t)
+	kubeFake, attempts := newEvictionCountingClientset()
+	r.KubeClient = kubeFake
+	r.defragSimulate = func(context.Context, *tfv1.GPUPool, *defragCandidate, int) (bool, *defragPlacementDiagnostics, error) {
+		return false, nil, nil
+	}
+	cand := &defragCandidate{nodeName: testDefragNodeA, workerPods: []*corev1.Pod{podA, podB}}
+	outcome := r.processDefragCandidate(context.Background(), pool, cand, 0, &defragRunStats{})
+	if outcome != defragCandidateSkipped {
+		t.Fatalf("outcome=%v want skipped when no complete plan exists", outcome)
+	}
+	if *attempts != 0 {
+		t.Fatalf("evictions=%d want 0: A must not move when B has no landing", *attempts)
+	}
+	node := getDefragTestNode(t, kubeClient, testDefragNodeA)
+	if node.Labels[constants.DefragSourceNodeLabel] == constants.TrueStringValue {
+		t.Fatalf("source marker must not be set when nothing was evicted")
+	}
+}
+
+func TestProcessDefragCandidate_CompletePlan_EvictsOnlyFirstPod(t *testing.T) {
+	r, kubeClient, pool, podA, podB := newSharedNodeWorkloadFixture(t)
+	kubeFake, attempts := newEvictionCountingClientset()
+	r.KubeClient = kubeFake
+	r.defragSimulate = func(context.Context, *tfv1.GPUPool, *defragCandidate, int) (bool, *defragPlacementDiagnostics, error) {
+		return true, nil, nil
+	}
+	cand := &defragCandidate{nodeName: testDefragNodeA, workerPods: []*corev1.Pod{podA, podB}}
+	stats := &defragRunStats{}
+	outcome := r.processDefragCandidate(context.Background(), pool, cand, 0, stats)
+	if outcome != defragCandidateEvicted {
+		t.Fatalf("outcome=%v want evicted", outcome)
+	}
+	if *attempts != 1 || stats.EvictedPods != 1 {
+		t.Fatalf("attempts=%d evicted=%d want exactly 1 (single-step)", *attempts, stats.EvictedPods)
+	}
+	node := getDefragTestNode(t, kubeClient, testDefragNodeA)
+	if node.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
+		t.Fatalf("source marker must be set after an accepted eviction")
+	}
+}
+
+func TestProcessDefragCandidate_RetryableEviction_KeepsSourceMarker(t *testing.T) {
+	r, kubeClient, pool, podA, podB := newSharedNodeWorkloadFixture(t)
+	kubeFake := clientgofake.NewSimpleClientset()
+	attempts := 0
+	kubeFake.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != testEvictionSubresource {
+			return false, nil, nil
+		}
+		attempts++
+		return true, nil, apierrors.NewTooManyRequestsError("simulated PDB contention")
+	})
+	r.KubeClient = kubeFake
+	r.defragSimulate = func(context.Context, *tfv1.GPUPool, *defragCandidate, int) (bool, *defragPlacementDiagnostics, error) {
+		return true, nil, nil
+	}
+	cand := &defragCandidate{nodeName: testDefragNodeA, workerPods: []*corev1.Pod{podA, podB}}
+	outcome := r.processDefragCandidate(context.Background(), pool, cand, 0, &defragRunStats{})
+	if outcome != defragCandidateAborted {
+		t.Fatalf("outcome=%v want aborted on 429", outcome)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts=%d want 1", attempts)
+	}
+	node := getDefragTestNode(t, kubeClient, testDefragNodeA)
+	if node.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
+		t.Fatalf("source marker must be kept on 429")
+	}
+	if node.Labels[constants.DefragEvictSkipNodeLabel] == constants.TrueStringValue {
+		t.Fatalf("429 must not mark evict-skip")
+	}
+}
+
+func TestContinueActiveDefragSourceNode_WaitsForInFlightEviction(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := newDefragSourceNode(pool.Name, testDefragNodeA)
+	worker := newDefragWorkerPod("worker-b", testDefragNodeA, now.Add(-2*time.Hour))
+	evicted := newDefragWorkerPod("worker-a", testDefragNodeA, now.Add(-time.Hour))
+	evicted.Labels[constants.DefragEvictedPodLabel] = constants.TrueStringValue
+	evicted.Annotations[constants.DefragEvictedPodPoolAnnotation] = pool.Name
+	r, _ := newDefragControllerTestReconciler(t, pool, node, worker, evicted)
+	r.Scheduler = &k8sscheduler.Scheduler{}
+	kubeFake, attempts := newEvictionCountingClientset()
+	r.KubeClient = kubeFake
+
+	if !r.continueActiveDefragSourceNode(context.Background(), pool) {
+		t.Fatalf("active source node must be handled")
+	}
+	if *attempts != 0 {
+		t.Fatalf("must wait for the in-flight eviction before evicting the next pod")
+	}
+}
+
+func TestContinueActiveDefragSourceNode_EvictsNextPod(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := newDefragSourceNode(pool.Name, testDefragNodeA)
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	podB := newDefragWorkerPod("worker-b", testDefragNodeA, now.Add(-2*time.Hour))
+	objects := []ctrlclient.Object{pool, node, gpuNode, podB}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	r.Scheduler = &k8sscheduler.Scheduler{}
+	primeAllocatorWorkerStore(t, r)
+	r.defragSimulate = func(context.Context, *tfv1.GPUPool, *defragCandidate, int) (bool, *defragPlacementDiagnostics, error) {
+		return true, nil, nil
+	}
+	kubeFake, attempts := newEvictionCountingClientset()
+	r.KubeClient = kubeFake
+
+	if !r.continueActiveDefragSourceNode(context.Background(), pool) {
+		t.Fatalf("active source node must be handled")
+	}
+	if *attempts != 1 {
+		t.Fatalf("attempts=%d want exactly 1 (next single step)", *attempts)
+	}
+}
+
+func TestContinueActiveDefragSourceNode_WaitsForTerminatingWorker(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := newDefragSourceNode(pool.Name, testDefragNodeA)
+	terminating := newDefragWorkerPod("worker-a", testDefragNodeA, now.Add(-2*time.Hour))
+	terminating.Finalizers = []string{"test/finalizer"}
+	terminating.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	live := newDefragWorkerPod("worker-b", testDefragNodeA, now.Add(-2*time.Hour))
+	r, _ := newDefragControllerTestReconciler(t, pool, node, terminating, live)
+	r.Scheduler = &k8sscheduler.Scheduler{}
+	kubeFake, attempts := newEvictionCountingClientset()
+	r.KubeClient = kubeFake
+
+	if !r.continueActiveDefragSourceNode(context.Background(), pool) {
+		t.Fatalf("a terminating worker means an eviction is likely in flight: must wait, not report progress")
+	}
+	if *attempts != 0 {
+		t.Fatalf("must not start a second eviction while one worker is Terminating")
+	}
+}
+
+func TestContinueActiveDefragSourceNode_NoProgressReturnsFalse(t *testing.T) {
+	now := time.Now()
+	pool := newDefragTestPool()
+	node := newDefragSourceNode(pool.Name, testDefragNodeA)
+	gpuNode := newDefragGPUNode(testDefragNodeA)
+	podB := newDefragWorkerPod("worker-b", testDefragNodeA, now.Add(-2*time.Hour))
+	objects := []ctrlclient.Object{pool, node, gpuNode, podB}
+	objects = append(objects, newDefragNodeGPUs(testDefragNodeA)...)
+	r, _ := newDefragControllerTestReconciler(t, objects...)
+	r.Scheduler = &k8sscheduler.Scheduler{}
+	primeAllocatorWorkerStore(t, r)
+	// No complete plan: the continuation must report "no progress" so the
+	// normal guard path (and the marker TTL sweep) takes over.
+	r.defragSimulate = func(context.Context, *tfv1.GPUPool, *defragCandidate, int) (bool, *defragPlacementDiagnostics, error) {
+		return false, nil, nil
+	}
+	kubeFake, attempts := newEvictionCountingClientset()
+	r.KubeClient = kubeFake
+
+	if r.continueActiveDefragSourceNode(context.Background(), pool) {
+		t.Fatalf("no complete plan must not be reported as handled progress")
+	}
+	if *attempts != 0 {
+		t.Fatalf("attempts=%d want 0", *attempts)
+	}
+}
+
+func TestContinueActiveDefragSourceNode_NoMarkerNotHandled(t *testing.T) {
+	pool := newDefragTestPool()
+	worker := newDefragWorkerPod("worker-b", testDefragNodeA, time.Now().Add(-2*time.Hour))
+	r, _ := newDefragControllerTestReconciler(t, pool, worker)
+	kubeFake, attempts := newEvictionCountingClientset()
+	r.KubeClient = kubeFake
+
+	if r.continueActiveDefragSourceNode(context.Background(), pool) {
+		t.Fatalf("no source marker means no continuation to advance")
+	}
+	if *attempts != 0 {
+		t.Fatalf("attempts=%d want 0", *attempts)
+	}
+}
+
+func TestCleanupStaleDefragSourceMarkers_KeepsMarkerWhileWorkerTerminating(t *testing.T) {
+	pool := newDefragTestPool()
+	node := newDefragSourceNode(pool.Name, testDefragNodeA)
+	terminating := newDefragWorkerPod("worker-b", testDefragNodeA, time.Now().Add(-2*time.Hour))
+	terminating.Finalizers = []string{"test/finalizer"}
+	terminating.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	r, kubeClient := newDefragControllerTestReconciler(t, pool, node, terminating)
+
+	r.runDefragSafetySweep(context.Background(), pool)
+
+	updated := getDefragTestNode(t, kubeClient, testDefragNodeA)
+	if updated.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
+		t.Fatalf("marker must stay while a worker is still Terminating, labels=%v", updated.Labels)
+	}
 }
 
 // ---- compile-time sanity check ----------------------------------------

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -154,6 +156,11 @@ func GetDefragLastRunStats() map[string]defragRunStats {
 func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, pool *tfv1.GPUPool, normalRequeue time.Duration) time.Duration {
 	logger := log.FromContext(ctx).WithValues("pool", pool.Name, "component", "defrag")
 
+	// Sweep stale markers before any gate so an interrupted or disabled
+	// defrag never leaves a source node marked (and unschedulable) forever.
+	// This is also the escape hatch for a drain that cannot make progress.
+	r.runDefragSafetySweep(ctx, pool)
+
 	cfg := getDefragConfig(pool)
 	if cfg == nil || !cfg.Enabled {
 		return 0
@@ -170,6 +177,12 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 		return 0
 	}
 
+	// A source node that is still draining keeps advancing regardless of
+	// the cron window or the source-node guard below.
+	if r.continueActiveDefragSourceNode(ctx, pool) {
+		return defragActiveStepRequeue
+	}
+
 	schedule, err := utils.ParseTimezoneAwareCronSchedule(r.defragParser, cfg.Schedule, cfg.Timezone)
 	if err != nil {
 		logger.Error(err, "invalid defrag schedule config; defrag disabled",
@@ -179,11 +192,6 @@ func (r *GPUPoolCompactionReconciler) maybeRunDefragStep(ctx context.Context, po
 		return 0
 	}
 	maxDuration := parseDefragMaxDuration(cfg.MaxDuration, logger)
-
-	// Sweep stale markers every reconcile so an interrupted defrag
-	// (controller restart, ungraceful exit) doesn't permanently exclude
-	// nodes from target selection until the next cron tick.
-	r.runDefragSafetySweep(ctx, pool)
 
 	// Guards pause the pool when a same-pool evicted pod is still pending
 	// reschedule or a source node is still draining. Letting multiple
@@ -927,13 +935,16 @@ func (r *GPUPoolCompactionReconciler) cleanupStaleDefragSourceMarkers(ctx contex
 		if !defragSourceNodeBelongsToPool(pool.Name, node) {
 			continue
 		}
-		hasWorkers, err := r.hasActiveTensorFusionWorkerOnNode(ctx, node.Name)
+		// Use the API (including Terminating pods): a node whose workers
+		// are all Terminating is not empty yet, and clearing the marker
+		// early would let replacements flow back before the pods are gone.
+		workers, err := r.listAllTensorFusionWorkersOnNode(ctx, node.Name)
 		if err != nil {
-			logger.Error(err, "skip source-marker cleanup: list active TF workers failed",
+			logger.Error(err, "skip source-marker cleanup: list TF workers failed",
 				"node", node.Name, "pool", pool.Name)
 			continue
 		}
-		if !isDefragSourceNodeMarkerStale(node, now, staleAfter, hasWorkers) {
+		if !isDefragSourceNodeMarkerStale(node, now, staleAfter, len(workers) > 0) {
 			continue
 		}
 		if err := r.clearNodeDefragSourceMarker(ctx, node.Name); err != nil {
@@ -1058,7 +1069,27 @@ func (r *GPUPoolCompactionReconciler) listNodeWorkerPods(
 		}
 		pods = append(pods, pod)
 	}
+	// The worker store is a map, so iteration order is random. Sort once
+	// here so planning and eviction order are deterministic across
+	// reconciles and restarts.
+	sortDefragWorkerPods(pods)
 	return pods, nil
+}
+
+// sortDefragWorkerPods orders pods deterministically (namespace, name, UID).
+// The worker store is a map and the API list order is not stable, so without
+// this the greedy placement preflight could flap feasible/infeasible across
+// reconciles.
+func sortDefragWorkerPods(pods []*corev1.Pod) {
+	sort.SliceStable(pods, func(i, j int) bool {
+		if pods[i].Namespace != pods[j].Namespace {
+			return pods[i].Namespace < pods[j].Namespace
+		}
+		if pods[i].Name != pods[j].Name {
+			return pods[i].Name < pods[j].Name
+		}
+		return pods[i].UID < pods[j].UID
+	})
 }
 
 // ----- per-candidate processing ----------------------------------------
@@ -1095,18 +1126,42 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 	if len(refreshedPods) == 0 {
 		return defragCandidateSkipped
 	}
+	cand.workerPods = refreshedPods
+	return r.evictSingleDefragPod(ctx, pool, cand, maxWorkerPerNode, stats, l)
+}
+
+// evictSingleDefragPod runs the complete-cohort placement preflight and then
+// evicts exactly one pod. The candidate keeps every remaining worker for the
+// preflight (so pod A is never evicted unless pod B also has a landing); only
+// the selected pod is handed to evictWorkerPods. The next pod is planned by a
+// later reconcile, after the cluster shows no eviction in flight. No target
+// is persisted: the source marker plus the live worker list are re-derived
+// from the cluster each time.
+func (r *GPUPoolCompactionReconciler) evictSingleDefragPod(
+	ctx context.Context,
+	pool *tfv1.GPUPool,
+	cand *defragCandidate,
+	maxWorkerPerNode int,
+	stats *defragRunStats,
+	l logr.Logger,
+) defragCandidateOutcome {
 	minPodAge := defragMinPodAge(getDefragConfig(pool), l)
-	if freshPod, ok := findFreshDefragWorker(time.Now(), minPodAge, refreshedPods); ok {
-		stats.FreshPodSkips++
+	if freshPod, ok := findFreshDefragWorker(time.Now(), minPodAge, cand.workerPods); ok {
+		if stats != nil {
+			stats.FreshPodSkips++
+		}
 		l.Info("skip node: contains fresh TF worker",
 			"pod", freshPod.Namespace+"/"+freshPod.Name,
 			"createdAt", freshPod.CreationTimestamp.Time,
 			"minAge", minPodAge)
 		return defragCandidateSkipped
 	}
-	cand.workerPods = refreshedPods
 
-	canRelocate, placementDiag, simErr := r.simulateJointPlacement(ctx, pool, cand, maxWorkerPerNode)
+	simulate := r.simulateJointPlacement
+	if r.defragSimulate != nil {
+		simulate = r.defragSimulate
+	}
+	canRelocate, placementDiag, simErr := simulate(ctx, pool, cand, maxWorkerPerNode)
 	if simErr != nil {
 		l.Error(simErr, "joint placement simulation errored; abort candidate")
 		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventAbortNode,
@@ -1114,7 +1169,9 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 		return defragCandidateAborted
 	}
 	if !canRelocate {
-		stats.UnmovableNodes++
+		if stats != nil {
+			stats.UnmovableNodes++
+		}
 		if placementDiag != nil {
 			l.Info("defrag joint placement rejected candidate", "diagnostics", placementDiag.logFields())
 		}
@@ -1129,26 +1186,36 @@ func (r *GPUPoolCompactionReconciler) processDefragCandidate(
 
 	pdbBlocked, pdbReason, err := r.checkDefragPDBPreflight(ctx, cand)
 	if err != nil {
-		stats.EvictionFailures++
+		if stats != nil {
+			stats.EvictionFailures++
+		}
 		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventAbortNode,
 			"node %s: eviction preflight failed: %v", cand.nodeName, err)
 		return defragCandidateAborted
 	}
 	if pdbBlocked {
-		stats.PDBBlockedNodes++
+		if stats != nil {
+			stats.PDBBlockedNodes++
+		}
 		r.Recorder.Eventf(pool, corev1.EventTypeNormal, defragEventSkipPDBBlocked,
 			"node %s skipped before eviction: %s", cand.nodeName, pdbReason)
 		return defragCandidateSkipped
 	}
 
-	if r.evictWorkerPods(ctx, pool, cand, stats, l) {
+	selected := selectDefragEvictionPod(cand.workerPods)
+	if selected == nil {
+		return defragCandidateSkipped
+	}
+	one := *cand
+	one.workerPods = []*corev1.Pod{selected}
+	if r.evictWorkerPods(ctx, pool, &one, stats, l) {
 		return defragCandidateEvicted
 	}
 	// evictWorkerPods sets stats.DeadlineExceeded when ctx is done; surface
 	// that as a deadline outcome (not an abort) so the loop closes the
 	// campaign properly and we don't emit a misleading "eviction aborted"
 	// event for what is really a timeout.
-	if stats.DeadlineExceeded {
+	if stats != nil && stats.DeadlineExceeded {
 		return defragCandidateDeadline
 	}
 	r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventAbortNode,
@@ -2146,6 +2213,12 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 		eviction := &policyv1.Eviction{
 			ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: pod.Namespace},
 		}
+		if pod.UID != "" {
+			uid := pod.UID
+			eviction.DeleteOptions = &metav1.DeleteOptions{
+				Preconditions: &metav1.Preconditions{UID: &uid},
+			}
+		}
 		err := r.KubeClient.CoreV1().Pods(pod.Namespace).EvictV1(ctx, eviction)
 
 		if err == nil {
@@ -2175,10 +2248,24 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 			continue
 		}
 
-		// EvictV1 refused by api-server (webhook, finalizer, PDB
-		// contention). Mark evict-skip so this node is left alone next
-		// step, and release the source marker so any already-evicted
-		// pods can be rescheduled normally.
+		// Retryable failures (PDB contention, API timeout, 5xx) must keep
+		// the source marker so the next reconcile retries instead of
+		// abandoning the node or double-evicting.
+		if isRetryableDefragEvictionError(err) {
+			stats.EvictionFailures++
+			r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventPodEvictFailed,
+				"eviction deferred for pod %s/%s on node %s: %v (will retry)",
+				pod.Namespace, pod.Name, cand.nodeName, err)
+			logger.Error(err, "retryable eviction error; keeping source marker",
+				"pod", pod.Namespace+"/"+pod.Name, "node", cand.nodeName)
+			suppressDeferred = true
+			return false
+		}
+
+		// EvictV1 refused by api-server (webhook, finalizer, permanent
+		// parameter/permission error). Mark evict-skip so this node is left
+		// alone next step, and release the source marker so any
+		// already-evicted pods can be rescheduled normally.
 		stats.EvictionFailures++
 		r.Recorder.Eventf(pool, corev1.EventTypeWarning, defragEventPodEvictFailed,
 			"failed to evict pod %s/%s on node %s: %v (node eviction aborted)",
@@ -2200,6 +2287,29 @@ func (r *GPUPoolCompactionReconciler) evictWorkerPods(
 		return false
 	}
 	return true
+}
+
+// isRetryableDefragEvictionError reports whether an Eviction API failure is
+// transient and should keep the same target instead of marking the node
+// evict-skip. PDB contention (429), API timeouts and 5xx responses are all
+// retryable; permanent webhook/finalizer/parameter errors are not.
+func isRetryableDefragEvictionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if apierrors.IsTooManyRequests(err) ||
+		apierrors.IsTimeout(err) ||
+		apierrors.IsServerTimeout(err) ||
+		apierrors.IsInternalError(err) ||
+		apierrors.IsServiceUnavailable(err) ||
+		apierrors.IsConflict(err) {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // ----- marker helpers ---------------------------------------------------
@@ -2387,6 +2497,136 @@ func (r *GPUPoolCompactionReconciler) clearAllDefragEvictSkipMarkersForPool(ctx 
 		}
 		return nil
 	})
+}
+
+// ----- progressive source-node continuation -----------------------------
+//
+// No continuation object is persisted: the source marker is the campaign
+// state and everything else is re-derived from the cluster each reconcile.
+// listAllTensorFusionWorkersOnNode returns every TF worker whose spec
+// nodeName matches, including Terminating pods; the allocator store
+// (listNodeWorkerPods) filters Terminating pods, so it cannot be used to
+// decide whether a node is actually empty.
+func (r *GPUPoolCompactionReconciler) listAllTensorFusionWorkersOnNode(ctx context.Context, nodeName string) ([]*corev1.Pod, error) {
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList, client.MatchingFields{constants.NodeNameFieldRef: nodeName}); err != nil {
+		return nil, fmt.Errorf("list pods on node %s: %w", nodeName, err)
+	}
+	out := make([]*corev1.Pod, 0, len(podList.Items))
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if !utils.IsTensorFusionWorker(pod) {
+			continue
+		}
+		out = append(out, pod)
+	}
+	return out, nil
+}
+
+func nonTerminatingPods(pods []*corev1.Pod) []*corev1.Pod {
+	out := make([]*corev1.Pod, 0, len(pods))
+	for _, pod := range pods {
+		if pod == nil || !pod.DeletionTimestamp.IsZero() {
+			continue
+		}
+		out = append(out, pod)
+	}
+	return out
+}
+
+// selectDefragEvictionPod picks the deterministic next pod to evict. The
+// full-cohort placement preflight already ran, so any pod in the candidate
+// is movable; stable ordering just keeps behavior predictable.
+func selectDefragEvictionPod(pods []*corev1.Pod) *corev1.Pod {
+	sorted := make([]*corev1.Pod, 0, len(pods))
+	for _, pod := range pods {
+		if pod != nil {
+			sorted = append(sorted, pod)
+		}
+	}
+	if len(sorted) == 0 {
+		return nil
+	}
+	sortDefragWorkerPods(sorted)
+	return sorted[0]
+}
+
+// activeDefragSourceNodeForPool returns the same-pool node currently marked
+// as a defrag source, if any.
+func (r *GPUPoolCompactionReconciler) activeDefragSourceNodeForPool(ctx context.Context, pool *tfv1.GPUPool) (*corev1.Node, error) {
+	nodeList := &corev1.NodeList{}
+	if err := r.List(ctx, nodeList, client.MatchingLabels{
+		constants.DefragSourceNodeLabel: constants.TrueStringValue,
+	}); err != nil {
+		return nil, fmt.Errorf("list defrag source nodes: %w", err)
+	}
+	for i := range nodeList.Items {
+		node := &nodeList.Items[i]
+		if defragSourceNodeBelongsToPool(pool.Name, node) {
+			return node, nil
+		}
+	}
+	return nil, nil
+}
+
+// continueActiveDefragSourceNode advances a source node that is still
+// draining: wait while an eviction is in flight, otherwise re-run the
+// complete-cohort preflight over the remaining workers and evict exactly one
+// pod. It is called before the cron window so a campaign is not starved by a
+// closed window; returning false means no progress was made, letting the
+// normal guards (and the marker TTL sweep) take over.
+func (r *GPUPoolCompactionReconciler) continueActiveDefragSourceNode(ctx context.Context, pool *tfv1.GPUPool) bool {
+	if pool == nil || r.Client == nil || r.Allocator == nil || r.KubeClient == nil || r.Scheduler == nil {
+		return false
+	}
+	if !r.Allocator.IsReady() {
+		return false
+	}
+	node, err := r.activeDefragSourceNodeForPool(ctx, pool)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "continue defrag: list source nodes failed", "pool", pool.Name)
+		return false
+	}
+	if node == nil {
+		return false
+	}
+	// One eviction in flight: the marked pod pauses the campaign until it
+	// is gone.
+	if blocked, err := r.hasActiveDefragEvictedPods(ctx, pool); err != nil || blocked {
+		return true
+	}
+	workers, err := r.listAllTensorFusionWorkersOnNode(ctx, node.Name)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "continue defrag: list workers failed", "node", node.Name)
+		return false
+	}
+	live := nonTerminatingPods(workers)
+	if len(live) == 0 {
+		// Empty or only terminating workers: the safety sweep clears the
+		// marker once the last pod object is actually gone.
+		return false
+	}
+	if len(live) < len(workers) {
+		// A worker is already Terminating but not marked yet (the in-flight
+		// eviction whose label patch has not landed, or a crash window).
+		// Never start a second eviction.
+		return true
+	}
+	total, used := countPoolGPUUsage(r.Allocator.GetNodeGpuStore()[node.Name], pool.Name)
+	if total == 0 {
+		return false
+	}
+	sortDefragWorkerPods(live)
+	logger := log.FromContext(ctx).WithValues("pool", pool.Name, "node", node.Name, "component", "defrag-resume")
+	logger.Info("continue progressive defrag: planning next pod", "remaining", len(live))
+	cand := &defragCandidate{
+		nodeName:         node.Name,
+		totalPoolGPUs:    total,
+		usedPoolGPUs:     used,
+		utilizationScore: gpuUtilizationPercent(used, total),
+		workerPods:       live,
+	}
+	return r.evictSingleDefragPod(ctx, pool, cand, r.Allocator.MaxWorkerPerNode(), &defragRunStats{}, logger) == defragCandidateEvicted
 }
 
 func (r *GPUPoolCompactionReconciler) markPodDefragEvicted(ctx context.Context, poolName string, pod *corev1.Pod) error {
