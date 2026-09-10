@@ -344,6 +344,52 @@ func AppendTFWorkerLabelsAndAnnotationsAfterTemplate(
 	return labels, annotations
 }
 
+func configureLocalTransportShm(ctx context.Context, pod *v1.Pod, injectContainerIndices []int) (string, string) {
+	shmVolumeName := constants.TransportShmVolumeName
+	shmSubPath := ""
+	// Local hard modes run the TensorFusion worker in a sibling container and use /dev/shm for transport.
+	//
+	// If a business container already declares its own /dev/shm mount
+	// (a common pattern: emptyDir with medium: Memory and a sizeLimit,
+	// e.g. for PyTorch DataLoader/NCCL), reuse that volume for the
+	// transport instead of appending a second mount at the same path.
+	// This keeps the user's sizeLimit in control and avoids the
+	// duplicate mount path that kubelet rejects. The transport only
+	// needs a shared tmpfs file, so any shared pod volume works as
+	// long as both the business container and the worker mount it.
+	for _, containerIndex := range injectContainerIndices {
+		userMount, found := findMountAtPath(pod.Spec.Containers[containerIndex].VolumeMounts, constants.TransportShmPath)
+		if !found {
+			continue
+		}
+		if shmVolumeName == constants.TransportShmVolumeName {
+			shmVolumeName = userMount.Name
+			shmSubPath = userMount.SubPath
+		} else if userMount.Name != shmVolumeName {
+			log.FromContext(ctx).Info(
+				"container /dev/shm volume differs from the reused transport volume; it will not share the tensor-fusion transport",
+				"container", pod.Spec.Containers[containerIndex].Name,
+				"volume", userMount.Name,
+				"sharedVolume", shmVolumeName)
+		}
+	}
+	if shmVolumeName == constants.TransportShmVolumeName {
+		pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+			Name: constants.TransportShmVolumeName,
+			VolumeSource: v1.VolumeSource{
+				EmptyDir: &v1.EmptyDirVolumeSource{
+					Medium: v1.StorageMediumMemory,
+				},
+			},
+		})
+	} else {
+		log.FromContext(ctx).Info(
+			"reusing user-declared /dev/shm volume for local hard sidecar transport",
+			"volume", shmVolumeName)
+	}
+	return shmVolumeName, shmSubPath
+}
+
 func AddTFDefaultClientConfBeforePatch(
 	ctx context.Context,
 	pod *v1.Pod,
@@ -542,46 +588,7 @@ func AddTFDefaultClientConfBeforePatch(
 				applyProviderRemoteWorkerConfigToContainerIndex(&pod.Spec, tfInfo.Profile.GPUVendor, injectContainerIndex)
 			}
 		} else if useLocalWorkerSidecar {
-			// Local hard modes run the TensorFusion worker in a sibling container and use /dev/shm for transport.
-			//
-			// If a business container already declares its own /dev/shm mount
-			// (a common pattern: emptyDir with medium: Memory and a sizeLimit,
-			// e.g. for PyTorch DataLoader/NCCL), reuse that volume for the
-			// transport instead of appending a second mount at the same path.
-			// This keeps the user's sizeLimit in control and avoids the
-			// duplicate mount path that kubelet rejects. The transport only
-			// needs a shared tmpfs file, so any shared pod volume works as
-			// long as both the business container and the worker mount it.
-			for _, containerIndex := range injectContainerIndices {
-				userMount, found := findMountAtPath(pod.Spec.Containers[containerIndex].VolumeMounts, constants.TransportShmPath)
-				if !found {
-					continue
-				}
-				if shmVolumeName == constants.TransportShmVolumeName {
-					shmVolumeName = userMount.Name
-					shmSubPath = userMount.SubPath
-				} else if userMount.Name != shmVolumeName {
-					log.FromContext(ctx).Info(
-						"container /dev/shm volume differs from the reused transport volume; it will not share the tensor-fusion transport",
-						"container", pod.Spec.Containers[containerIndex].Name,
-						"volume", userMount.Name,
-						"sharedVolume", shmVolumeName)
-				}
-			}
-			if shmVolumeName == constants.TransportShmVolumeName {
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: constants.TransportShmVolumeName,
-					VolumeSource: v1.VolumeSource{
-						EmptyDir: &v1.EmptyDirVolumeSource{
-							Medium: v1.StorageMediumMemory,
-						},
-					},
-				})
-			} else {
-				log.FromContext(ctx).Info(
-					"reusing user-declared /dev/shm volume for local hard sidecar transport",
-					"volume", shmVolumeName)
-			}
+			shmVolumeName, shmSubPath = configureLocalTransportShm(ctx, pod, injectContainerIndices)
 
 			// Seed the sidecar from worker.podTemplate so user-defined env/resources
 			// (e.g. TF_LICENSE) reach the sidecar like they do for remote worker pods.
