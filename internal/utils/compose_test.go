@@ -473,6 +473,98 @@ var _ = Describe("Compose Utils", func() {
 			Expect(cudaHooksValue).To(Equal("false"))
 		})
 
+		It("should reuse a user-declared /dev/shm mount in local hard mode", func() {
+			sizeLimit := resource.MustParse("2Gi")
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec: corev1.PodSpec{
+					Volumes: []corev1.Volume{{
+						Name: "dshm",
+						VolumeSource: corev1.VolumeSource{
+							EmptyDir: &corev1.EmptyDirVolumeSource{
+								Medium:    corev1.StorageMediumMemory,
+								SizeLimit: &sizeLimit,
+							},
+						},
+					}},
+					Containers: []corev1.Container{{
+						Name: "main",
+						VolumeMounts: []corev1.VolumeMount{{
+							Name:      "dshm",
+							MountPath: "/dev/shm",
+						}},
+					}},
+				},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: true,
+					Isolation:  tfv1.IsolationModeHard,
+					GPUVendor:  constants.AcceleratorVendorNvidia,
+				},
+			}, []int{0})
+
+			// The TF-managed transport shm volume must not be created; the
+			// user's volume is reused so kubelet never sees a duplicated
+			// /dev/shm mountPath.
+			for _, volume := range pod.Spec.Volumes {
+				Expect(volume.Name).NotTo(Equal(constants.TransportShmVolumeName))
+			}
+			Expect(countVolumeMountPath(pod.Spec.Containers[0].VolumeMounts, constants.TransportShmPath)).To(Equal(1))
+			Expect(hasVolumeMount(pod.Spec.Containers[0].VolumeMounts, "dshm", constants.TransportShmPath)).To(BeTrue())
+			// The worker sidecar mounts the same user volume for transport.
+			Expect(pod.Spec.Containers).To(HaveLen(2))
+			Expect(pod.Spec.Containers[1].Name).To(Equal(constants.TFContainerNameWorker))
+			Expect(hasVolumeMount(pod.Spec.Containers[1].VolumeMounts, "dshm", constants.TransportShmPath)).To(BeTrue())
+			Expect(pod.Spec.Containers[1].Command[2]).To(ContainSubstring("touch /dev/shm/tf_shm"))
+		})
+
+		It("should share a user-declared /dev/shm volume across injected containers in local hard mode", func() {
+			sizeLimit := resource.MustParse("2Gi")
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Spec: corev1.PodSpec{
+					Volumes: []corev1.Volume{{
+						Name: "dshm",
+						VolumeSource: corev1.VolumeSource{
+							EmptyDir: &corev1.EmptyDirVolumeSource{
+								Medium:    corev1.StorageMediumMemory,
+								SizeLimit: &sizeLimit,
+							},
+						},
+					}},
+					Containers: []corev1.Container{
+						{
+							Name: "main",
+							VolumeMounts: []corev1.VolumeMount{{
+								Name:      "dshm",
+								MountPath: "/dev/shm",
+							}},
+						},
+						{Name: "side"},
+					},
+				},
+			}
+
+			utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+				Profile: &tfv1.WorkloadProfileSpec{
+					IsLocalGPU: true,
+					Isolation:  tfv1.IsolationModeHard,
+					GPUVendor:  constants.AcceleratorVendorNvidia,
+				},
+			}, []int{0, 1})
+
+			Expect(pod.Spec.Containers).To(HaveLen(3))
+			// main keeps its own mount; side and the worker get the same volume
+			// so the transport is reachable from every injected container.
+			Expect(countVolumeMountPath(pod.Spec.Containers[0].VolumeMounts, constants.TransportShmPath)).To(Equal(1))
+			Expect(hasVolumeMount(pod.Spec.Containers[0].VolumeMounts, "dshm", constants.TransportShmPath)).To(BeTrue())
+			Expect(hasVolumeMount(pod.Spec.Containers[1].VolumeMounts, "dshm", constants.TransportShmPath)).To(BeTrue())
+			Expect(pod.Spec.Containers[2].Name).To(Equal(constants.TFContainerNameWorker))
+			Expect(hasVolumeMount(pod.Spec.Containers[2].VolumeMounts, "dshm", constants.TransportShmPath)).To(BeTrue())
+		})
+
 		It("should merge legacy worker template env into local hard sidecar", func() {
 			pool := newPool()
 			pool.Spec.ComponentConfig.Worker.PodTemplate = &runtime.RawExtension{Raw: []byte(`{
