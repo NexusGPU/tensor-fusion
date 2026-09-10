@@ -96,7 +96,12 @@ func (m *Controller) StartDiscoverDevices() error {
 // discoverDevices discovers all available GPU devices
 func (m *Controller) discoverDevices() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			m.mu.Unlock()
+		}
+	}()
 
 	// Get all devices at once
 	klog.Infof("Start discovering devices using provider lib")
@@ -156,35 +161,7 @@ func (m *Controller) discoverDevices() error {
 		}
 	}
 
-	// Notify handlers for all changes (similar to K8s reconcile)
-	for _, device := range addedDevices {
-		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
-			if handler.OnAdd != nil {
-				handler.OnAdd(device)
-			}
-		})
-		klog.V(4).Infof("Device added: %s (UUID: %s)", device.Model, device.UUID)
-	}
-
-	for _, device := range removedDevices {
-		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
-			if handler.OnRemove != nil {
-				handler.OnRemove(device)
-			}
-		})
-		klog.V(4).Infof("Device removed: %s (UUID: %s)", device.Model, device.UUID)
-	}
-
-	for _, update := range updatedDevices {
-		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
-			if handler.OnUpdate != nil {
-				handler.OnUpdate(update.old, update.new)
-			}
-		})
-		klog.V(4).Infof("Device updated: %s (UUID: %s)", update.new.Model, update.new.UUID)
-	}
-
-	// Update state after notifying handlers
+	// Update state before notifying handlers so callbacks can safely read it.
 	for _, device := range addedDevices {
 		m.devices[device.UUID] = device
 		m.nativeUUIDs[device.UUID] = newNativeUUIDs[device.UUID]
@@ -199,11 +176,40 @@ func (m *Controller) discoverDevices() error {
 	}
 
 	nodeInfo := m.AggregateNodeInfo()
+	m.mu.Unlock()
+	locked = false
+
+	// Notify handlers outside device.mu. Callbacks may call back into this
+	// controller, and allocation callbacks use a separate mutex.
+	for _, device := range addedDevices {
+		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
+			if handler.OnAdd != nil {
+				handler.OnAdd(device)
+			}
+		})
+		klog.V(4).Infof("Device added: %s (UUID: %s)", device.Model, device.UUID)
+	}
+	for _, device := range removedDevices {
+		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
+			if handler.OnRemove != nil {
+				handler.OnRemove(device)
+			}
+		})
+		klog.V(4).Infof("Device removed: %s (UUID: %s)", device.Model, device.UUID)
+	}
+	for _, update := range updatedDevices {
+		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
+			if handler.OnUpdate != nil {
+				handler.OnUpdate(update.old, update.new)
+			}
+		})
+		klog.V(4).Infof("Device updated: %s (UUID: %s)", update.new.Model, update.new.UUID)
+	}
 
 	if metrics.ShouldSendTelemetry() {
 		sampleGPUModel := ""
-		if len(m.devices) > 0 {
-			for _, device := range m.devices {
+		if devices := m.GetDevices(); len(devices) > 0 {
+			for _, device := range devices {
 				if device.Model != "" {
 					sampleGPUModel = device.Model
 					break
@@ -229,9 +235,11 @@ func (m *Controller) discoverDevices() error {
 	return nil
 }
 
-// notifyHandlers calls the provided function for each registered handler
 func (m *Controller) notifyHandlers(fn func(framework.DeviceChangeHandler)) {
-	for _, handler := range m.deviceUpdateHandlers {
+	m.mu.RLock()
+	handlers := append([]framework.DeviceChangeHandler(nil), m.deviceUpdateHandlers...)
+	m.mu.RUnlock()
+	for _, handler := range handlers {
 		fn(handler)
 	}
 }
@@ -428,20 +436,27 @@ func (m *Controller) RemovePartitionedDevice(partitionUUID, deviceUUID string) e
 
 func (m *Controller) RegisterDeviceUpdateHandler(handler framework.DeviceChangeHandler) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.deviceUpdateHandlers = append(m.deviceUpdateHandlers, handler)
+	devices := make([]*api.DeviceInfo, 0, len(m.devices))
+	for _, device := range m.devices {
+		devices = append(devices, device)
+	}
+	var nodeInfo *api.NodeInfo
+	if len(devices) > 0 && handler.OnDiscoveryComplete != nil {
+		nodeInfo = m.AggregateNodeInfo()
+	}
+	m.mu.Unlock()
 
 	// Notify the newly registered handler about existing devices without triggering a new discovery
 	// This ensures handlers get notified of devices that were discovered before they were registered
-	if len(m.devices) > 0 {
-		for _, device := range m.devices {
+	if len(devices) > 0 {
+		for _, device := range devices {
 			if handler.OnAdd != nil {
 				handler.OnAdd(device)
 			}
 		}
 		// Also notify about discovery completion if there are existing devices
 		if handler.OnDiscoveryComplete != nil {
-			nodeInfo := m.AggregateNodeInfo()
 			handler.OnDiscoveryComplete(nodeInfo)
 		}
 	}
