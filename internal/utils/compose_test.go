@@ -377,17 +377,17 @@ var _ = Describe("Compose Utils", func() {
 				},
 			}, []int{0})
 
-			// Soft mode: init container from middleware image copies C limiter
-			Expect(pod.Spec.InitContainers).To(HaveLen(1))
+			// Copy the limiter, then merge the workload preload configuration.
+			Expect(pod.Spec.InitContainers).To(HaveLen(2))
 			Expect(pod.Spec.InitContainers[0].Name).To(Equal(constants.TFSoftLimiterInitContainerName))
 
 			// No worker sidecar — only the original business container
 			Expect(pod.Spec.Containers).To(HaveLen(1))
 
-			// Business container has LD_PRELOAD pointing to C limiter
-			ldPreloadVal, found := envValue(pod.Spec.Containers[0].Env, constants.LdPreloadEnv)
-			Expect(found).To(BeTrue())
-			Expect(ldPreloadVal).To(Equal(constants.LdPreloadSoftLimiter))
+			// File preload survives an entrypoint overwriting LD_PRELOAD.
+			_, found := envValue(pod.Spec.Containers[0].Env, constants.LdPreloadEnv)
+			Expect(found).To(BeFalse())
+			Expect(countVolumeMountPath(pod.Spec.Containers[0].VolumeMounts, constants.LdPreloadFile)).To(Equal(1))
 
 			// Business container has limiter volume and shared memory volume
 			Expect(hasVolumeMount(pod.Spec.Containers[0].VolumeMounts, constants.TFSoftLimiterVolumeName, constants.TFSoftLimiterVolumeMountPath)).To(BeTrue())

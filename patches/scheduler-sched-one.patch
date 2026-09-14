@@ -4,8 +4,32 @@
 -	feasibleNodes, diagnosis, nodeHint, signature, err := sched.findNodesThatFitPod(ctx, fwk, state, pod)
 +	feasibleNodes, diagnosis, nodeHint, signature, err := sched.FindNodesThatFitPod(ctx, fwk, state, pod)
  	if err != nil {
-@@ -480,2 +480,7 @@
+@@ -480,2 +480,31 @@
 -// Filters the nodes to find the ones that fit the pod based on the framework
++// NodeResourceSnapshot reports scheduler-cache resources for diagnostics.
++type NodeResourceSnapshot struct {
++	AllocatableMilliCPU int64
++	RequestedMilliCPU   int64
++	AllocatableMemory   int64
++	RequestedMemory     int64
++}
++
++func (sched *Scheduler) NodeResourceSnapshots() map[string]NodeResourceSnapshot {
++	result := make(map[string]NodeResourceSnapshot)
++	nodeInfos, _ := sched.nodeInfoSnapshot.NodeInfos().List()
++	for _, nodeInfo := range nodeInfos {
++		allocatable := nodeInfo.GetAllocatable()
++		requested := nodeInfo.GetRequested()
++		result[nodeInfo.Node().Name] = NodeResourceSnapshot{
++			AllocatableMilliCPU: allocatable.GetMilliCPU(),
++			RequestedMilliCPU:   requested.GetMilliCPU(),
++			AllocatableMemory:   allocatable.GetMemory(),
++			RequestedMemory:     requested.GetMemory(),
++		}
++	}
++	return result
++}
++
 +// UpdateNodeInfoSnapshot refreshes the scheduler's shared node snapshot for dry-run simulations.
 +func (sched *Scheduler) UpdateNodeInfoSnapshot(ctx context.Context) error {
 +	return sched.Cache.UpdateSnapshot(klog.FromContext(ctx), sched.nodeInfoSnapshot)
@@ -13,7 +37,7 @@
 +
 +// Filters the nodes to find the ones that fit the pod based on the framework
  // filter plugins and filter extenders.
-@@ -482,2 +487,2 @@
+@@ -482,2 +511,2 @@
 -func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, string, fwk.PodSignature, error) {
 +func (sched *Scheduler) FindNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, string, fwk.PodSignature, error) {
  	logger := klog.FromContext(ctx)
