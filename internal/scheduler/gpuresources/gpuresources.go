@@ -866,11 +866,11 @@ func (s *GPUFit) Unreserve(ctx context.Context, state fwk.CycleState, pod *v1.Po
 
 // PreBindPreFlight is a lightweight gate that tells the framework whether
 // this plugin's PreBind should run for the pod. It does not mutate state.
-func (s *GPUFit) PreBindPreFlight(_ context.Context, _ fwk.CycleState, pod *v1.Pod, _ string) *fwk.Status {
+func (s *GPUFit) PreBindPreFlight(_ context.Context, _ fwk.CycleState, pod *v1.Pod, _ string) (*fwk.PreBindPreFlightResult, *fwk.Status) {
 	if !utils.IsTensorFusionWorker(pod) {
-		return fwk.NewStatus(fwk.Skip, "skip for non tensor-fusion mode")
+		return nil, fwk.NewStatus(fwk.Skip, "skip for non tensor-fusion mode")
 	}
-	return fwk.NewStatus(fwk.Success, "")
+	return &fwk.PreBindPreFlightResult{}, fwk.NewStatus(fwk.Success, "")
 }
 
 // PreBind is the atomic critical section for GPU scheduling. It transitions

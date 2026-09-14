@@ -849,7 +849,7 @@ func (e *NodeExpander) simulateSchedulingWithoutGPU(ctx context.Context, pod *co
 		return nil, fmt.Errorf("refresh scheduler snapshot before expansion simulation: %w", err)
 	}
 	delete(pod.Labels, constants.LabelComponent)
-	scheduleResult, _, _, _, err := e.scheduler.FindNodesThatFitPod(ctx, fwkInstance, state, pod)
+	scheduleResult, _, _, err := e.scheduler.FindNodesThatFitPod(ctx, fwkInstance, state, &framework.QueuedPodInfo{PodInfo: &framework.PodInfo{Pod: pod}})
 	pod.Labels[constants.LabelComponent] = constants.ComponentWorker
 	if len(scheduleResult) == 0 {
 		return nil, err
