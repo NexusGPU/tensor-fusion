@@ -193,7 +193,7 @@ func RunScheduler(ctx context.Context,
 	if cz, err := configz.New(configName); err != nil {
 		return fmt.Errorf("unable to register config: %s", err)
 	} else {
-		cz.Set(cc.ComponentConfig)
+		cz.Set(&cc.ComponentConfig)
 	}
 
 	cc.EventBroadcaster.StartRecordingToSink(ctx.Done())
@@ -346,7 +346,7 @@ func shouldWatchNominatedPod(pod *corev1.Pod) bool {
 }
 
 func getRecorderFactory(cc *schedulerserverconfig.CompletedConfig) profile.RecorderFactory {
-	return func(name string) events.EventRecorder {
+	return func(name string) events.EventRecorderLogger {
 		return cc.EventBroadcaster.NewRecorder(name)
 	}
 }
