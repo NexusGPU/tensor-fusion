@@ -1,18 +1,11 @@
 --- ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go	2026-01-26 00:00:00
 +++ ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go	2026-01-26 00:00:00
-@@ -430,7 +430,7 @@
- 		return result, ErrNoNodesAvailable
- 	}
- 
+@@ -433,2 +433,2 @@
 -	feasibleNodes, diagnosis, nodeHint, signature, err := sched.findNodesThatFitPod(ctx, fwk, state, pod)
 +	feasibleNodes, diagnosis, nodeHint, signature, err := sched.FindNodesThatFitPod(ctx, fwk, state, pod)
  	if err != nil {
- 		return result, err
- 	}
-@@ -477,9 +477,38 @@
- 	}, err
- }
- 
+@@ -480,2 +480,31 @@
+-// Filters the nodes to find the ones that fit the pod based on the framework
 +// NodeResourceSnapshot reports scheduler-cache resources for diagnostics.
 +type NodeResourceSnapshot struct {
 +	AllocatableMilliCPU int64
@@ -37,10 +30,14 @@
 +	return result
 +}
 +
- // Filters the nodes to find the ones that fit the pod based on the framework
++// UpdateNodeInfoSnapshot refreshes the scheduler's shared node snapshot for dry-run simulations.
++func (sched *Scheduler) UpdateNodeInfoSnapshot(ctx context.Context) error {
++	return sched.Cache.UpdateSnapshot(klog.FromContext(ctx), sched.nodeInfoSnapshot)
++}
++
++// Filters the nodes to find the ones that fit the pod based on the framework
  // filter plugins and filter extenders.
+@@ -482,2 +511,2 @@
 -func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, string, fwk.PodSignature, error) {
 +func (sched *Scheduler) FindNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, string, fwk.PodSignature, error) {
  	logger := klog.FromContext(ctx)
- 	diagnosis := framework.Diagnosis{
- 		NodeToStatus: framework.NewDefaultNodeToStatus(),
