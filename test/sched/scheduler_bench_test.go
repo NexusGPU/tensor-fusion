@@ -24,7 +24,9 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	configz "k8s.io/component-base/configz"
 	"k8s.io/klog/v2"
+	configv1 "k8s.io/kube-scheduler/config/v1"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
+	conversionv1 "k8s.io/kubernetes/pkg/scheduler/apis/config/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -118,11 +120,16 @@ func BenchmarkScheduler(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	// Config registration.
+	externalConfig := &configv1.KubeSchedulerConfiguration{}
+	if err := conversionv1.Convert_config_KubeSchedulerConfiguration_To_v1_KubeSchedulerConfiguration(
+		&cc.ComponentConfig, externalConfig, nil); err != nil {
+		b.Fatal(err)
+	}
+	externalConfig.SetGroupVersionKind(configv1.SchemeGroupVersion.WithKind("KubeSchedulerConfiguration"))
 	if cz, err := configz.New("componentconfig"); err != nil {
 		b.Fatal(err)
-	} else {
-		cz.Set(cc.ComponentConfig)
+	} else if err := cz.Set(externalConfig); err != nil {
+		b.Fatal(err)
 	}
 
 	cc.EventBroadcaster.StartRecordingToSink(testCtx.Done())

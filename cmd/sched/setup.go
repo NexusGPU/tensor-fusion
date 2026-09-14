@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/component-base/configz"
 	"k8s.io/klog/v2"
+	configv1 "k8s.io/kube-scheduler/config/v1"
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	schedulerserverconfig "k8s.io/kubernetes/cmd/kube-scheduler/app/config"
@@ -41,6 +42,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler"
 	kubeschedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/latest"
+	conversionv1 "k8s.io/kubernetes/pkg/scheduler/apis/config/v1"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
@@ -189,11 +191,17 @@ func RunScheduler(ctx context.Context,
 ) error {
 	logger := klog.FromContext(ctx)
 
-	// Config registration.
+	// Configz requires an external version with a group/version/kind.
+	externalConfig := &configv1.KubeSchedulerConfiguration{}
+	if err := conversionv1.Convert_config_KubeSchedulerConfiguration_To_v1_KubeSchedulerConfiguration(
+		&cc.ComponentConfig, externalConfig, nil); err != nil {
+		return fmt.Errorf("unable to convert configz: %w", err)
+	}
+	externalConfig.SetGroupVersionKind(configv1.SchemeGroupVersion.WithKind("KubeSchedulerConfiguration"))
 	if cz, err := configz.New(configName); err != nil {
 		return fmt.Errorf("unable to register config: %s", err)
-	} else {
-		cz.Set(&cc.ComponentConfig)
+	} else if err := cz.Set(externalConfig); err != nil {
+		return fmt.Errorf("unable to set configz: %w", err)
 	}
 
 	cc.EventBroadcaster.StartRecordingToSink(ctx.Done())

@@ -1009,6 +1009,12 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 		return fwk.NewStatus(fwk.Error, "marshal patch: "+err.Error())
 	}
 
+	// The scheduler cache owns the Pod object passed to PreBind. The API
+	// server returns the patched Pod from client.Patch; writing that response
+	// back into the scheduler-owned object can replace its assumed NodeName
+	// with the still-empty API value before Bind. Keep the response on a copy
+	// so the cache retains the assumed pod state until the binding event.
+	patchPod := pod.DeepCopy()
 	patchErr := retry.OnError(wait.Backoff{
 		Duration: 1 * time.Second,
 		Factor:   2,
@@ -1017,7 +1023,7 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	}, func(err error) bool {
 		return true
 	}, func() error {
-		return s.client.Patch(s.ctx, pod, client.RawPatch(types.JSONPatchType, patchBytes))
+		return s.client.Patch(s.ctx, patchPod, client.RawPatch(types.JSONPatchType, patchBytes))
 	})
 	if patchErr != nil {
 		s.logger.Error(patchErr, "failed to patch pod annotations in PreBind", "pod", pod.Name)

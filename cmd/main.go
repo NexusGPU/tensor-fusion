@@ -119,6 +119,7 @@ func init() {
 	utilruntime.Must(tfv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 
+	//nolint:staticcheck // Karpenter's registration API still requires this builder.
 	karpenterScheme := &schemeBuilder.Builder{
 		GroupVersion: schema.GroupVersion{Group: "karpenter.sh", Version: "v1"},
 	}
