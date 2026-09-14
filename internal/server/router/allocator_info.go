@@ -135,6 +135,7 @@ func (r *AllocatorInfoRouter) SimulateScheduleOnePod(ctx *gin.Context) {
 		if errors.As(err, &fitError) {
 			errorPayload["numAllNodes"] = fitError.NumAllNodes
 			errorPayload["diagnosis"] = renderDiagnosis(&fitError.Diagnosis)
+			errorPayload["nodeResources"] = renderNodeResources(r.scheduler.NodeResourceSnapshots())
 		}
 	}
 	ctx.JSON(http.StatusOK, gin.H{
@@ -147,6 +148,21 @@ func (r *AllocatorInfoRouter) SimulateScheduleOnePod(ctx *gin.Context) {
 	})
 	log.FromContext(ctx).Info("Simulate schedule pod completed",
 		"pod", pod.Name, "namespace", pod.Namespace, "duration", time.Since(start), "scheduleError", err != nil)
+}
+
+func renderNodeResources(resources map[string]scheduler.NodeResourceSnapshot) gin.H {
+	result := gin.H{}
+	for nodeName, snapshot := range resources {
+		result[nodeName] = gin.H{
+			"allocatableCPU":         fmt.Sprintf("%dm", snapshot.AllocatableMilliCPU),
+			"requestedCPU":           fmt.Sprintf("%dm", snapshot.RequestedMilliCPU),
+			"remainingCPU":           fmt.Sprintf("%dm", snapshot.AllocatableMilliCPU-snapshot.RequestedMilliCPU),
+			"allocatableMemoryBytes": snapshot.AllocatableMemory,
+			"requestedMemoryBytes":   snapshot.RequestedMemory,
+			"remainingMemoryBytes":   snapshot.AllocatableMemory - snapshot.RequestedMemory,
+		}
+	}
+	return result
 }
 
 func renderDiagnosis(d *framework.Diagnosis) gin.H {

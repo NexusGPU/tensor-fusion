@@ -390,6 +390,51 @@ func configureLocalTransportShm(ctx context.Context, pod *v1.Pod, injectContaine
 	return shmVolumeName, shmSubPath
 }
 
+// Use the workload image and mounts to preserve its existing preload file. A
+// separate file per container also keeps container-specific libraries isolated.
+func addSoftLimiterPreload(spec *v1.PodSpec, containerIndex int, limiterLib string) {
+	container := &spec.Containers[containerIndex]
+	original := container.DeepCopy()
+	volumeName := fmt.Sprintf("tf-soft-preload-%d", containerIndex)
+	const outputDir = "/tensor-fusion-preload"
+	spec.Volumes = append(spec.Volumes, v1.Volume{
+		Name:         volumeName,
+		VolumeSource: v1.VolumeSource{EmptyDir: &v1.EmptyDirVolumeSource{}},
+	})
+	spec.InitContainers = append(spec.InitContainers, v1.Container{
+		Name:            volumeName,
+		Image:           original.Image,
+		ImagePullPolicy: original.ImagePullPolicy,
+		SecurityContext: original.SecurityContext,
+		Env:             original.Env,
+		EnvFrom:         original.EnvFrom,
+		WorkingDir:      original.WorkingDir,
+		Command: []string{"/bin/sh", "-ec", `
+if [ -e /etc/ld.so.preload ]; then
+    cat /etc/ld.so.preload > "$1"
+else
+    : > "$1"
+fi
+printf '\n%s\n' "$2" >> "$1"
+chmod 644 "$1"
+`, "tf-soft-preload", outputDir + "/" + constants.LdPreloadFileName,
+			constants.TFSoftLimiterVolumeMountPath + "/" + limiterLib},
+		VolumeMounts: append(original.VolumeMounts, v1.VolumeMount{
+			Name: volumeName, MountPath: outputDir,
+		}),
+		Resources: v1.ResourceRequirements{Requests: injectLibResource, Limits: injectLibResource},
+	})
+	// The init container retains the original mount; replace it only in the
+	// business container so Kubernetes does not reject duplicate mount paths.
+	container.VolumeMounts = slices.DeleteFunc(container.VolumeMounts, func(m v1.VolumeMount) bool {
+		return m.MountPath == constants.LdPreloadFile
+	})
+	container.VolumeMounts = append(container.VolumeMounts, v1.VolumeMount{
+		Name: volumeName, MountPath: constants.LdPreloadFile,
+		SubPath: constants.LdPreloadFileName, ReadOnly: true,
+	})
+}
+
 func AddTFDefaultClientConfBeforePatch(
 	ctx context.Context,
 	pod *v1.Pod,
@@ -530,6 +575,7 @@ func AddTFDefaultClientConfBeforePatch(
 			})
 
 			for _, injectContainerIndex := range injectContainerIndices {
+				addSoftLimiterPreload(&pod.Spec, injectContainerIndex, softLimiterLib)
 				pod.Spec.Containers[injectContainerIndex].VolumeMounts = append(
 					pod.Spec.Containers[injectContainerIndex].VolumeMounts,
 					v1.VolumeMount{
@@ -553,9 +599,6 @@ func AddTFDefaultClientConfBeforePatch(
 
 				envList := pod.Spec.Containers[injectContainerIndex].Env
 				envList = append(envList, v1.EnvVar{
-					Name:  constants.LdPreloadEnv,
-					Value: constants.TFSoftLimiterVolumeMountPath + "/" + softLimiterLib,
-				}, v1.EnvVar{
 					Name:  constants.TFIsolationModeEnv,
 					Value: string(tfv1.IsolationModeSoft),
 				}, v1.EnvVar{

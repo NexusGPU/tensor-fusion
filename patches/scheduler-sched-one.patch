@@ -1,19 +1,46 @@
 --- ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go	2026-01-26 00:00:00
 +++ ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go	2026-01-26 00:00:00
-@@ -433,2 +433,2 @@
+@@ -430,7 +430,7 @@
+ 		return result, ErrNoNodesAvailable
+ 	}
+ 
 -	feasibleNodes, diagnosis, nodeHint, signature, err := sched.findNodesThatFitPod(ctx, fwk, state, pod)
 +	feasibleNodes, diagnosis, nodeHint, signature, err := sched.FindNodesThatFitPod(ctx, fwk, state, pod)
  	if err != nil {
-@@ -480,2 +480,7 @@
--// Filters the nodes to find the ones that fit the pod based on the framework
-+// UpdateNodeInfoSnapshot refreshes the scheduler's shared node snapshot for dry-run simulations.
-+func (sched *Scheduler) UpdateNodeInfoSnapshot(ctx context.Context) error {
-+	return sched.Cache.UpdateSnapshot(klog.FromContext(ctx), sched.nodeInfoSnapshot)
+ 		return result, err
+ 	}
+@@ -477,9 +477,38 @@
+ 	}, err
+ }
+ 
++// NodeResourceSnapshot reports scheduler-cache resources for diagnostics.
++type NodeResourceSnapshot struct {
++	AllocatableMilliCPU int64
++	RequestedMilliCPU   int64
++	AllocatableMemory   int64
++	RequestedMemory     int64
 +}
 +
-+// Filters the nodes to find the ones that fit the pod based on the framework
++func (sched *Scheduler) NodeResourceSnapshots() map[string]NodeResourceSnapshot {
++	result := make(map[string]NodeResourceSnapshot)
++	nodeInfos, _ := sched.nodeInfoSnapshot.NodeInfos().List()
++	for _, nodeInfo := range nodeInfos {
++		allocatable := nodeInfo.GetAllocatable()
++		requested := nodeInfo.GetRequested()
++		result[nodeInfo.Node().Name] = NodeResourceSnapshot{
++			AllocatableMilliCPU: allocatable.GetMilliCPU(),
++			RequestedMilliCPU:   requested.GetMilliCPU(),
++			AllocatableMemory:   allocatable.GetMemory(),
++			RequestedMemory:     requested.GetMemory(),
++		}
++	}
++	return result
++}
++
+ // Filters the nodes to find the ones that fit the pod based on the framework
  // filter plugins and filter extenders.
-@@ -482,2 +487,2 @@
 -func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, string, fwk.PodSignature, error) {
 +func (sched *Scheduler) FindNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, string, fwk.PodSignature, error) {
  	logger := klog.FromContext(ctx)
+ 	diagnosis := framework.Diagnosis{
+ 		NodeToStatus: framework.NewDefaultNodeToStatus(),
