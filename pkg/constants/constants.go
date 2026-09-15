@@ -98,6 +98,11 @@ var (
 	// thus, percent should only be used when tenant quota is not needed, and only one type of GPU in cluster
 	ComputeRequestAnnotation = Domain + "/compute-percent-request"
 	ComputeLimitAnnotation   = Domain + "/compute-percent-limit"
+	// SharedLegacyResourcesAnnotation stores the original GPU resource
+	// annotations while a whole-GPU shared allocation is active. The request
+	// and limit annotations are temporarily rewritten to the full GPU capacity
+	// so older allocators cannot treat the card as idle after a rollback.
+	SharedLegacyResourcesAnnotation = Domain + "/shared-legacy-resources"
 
 	WorkloadProfileAnnotation = Domain + "/workload-profile"
 	InjectContainerAnnotation = Domain + "/inject-container"

@@ -925,12 +925,8 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 
 	indexAvailable := s.indexAllocator.CheckNodeIndexAndTryOccupy(pod, index)
 
-	patchOps := []map[string]any{
-		{
-			"op":    "add",
-			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.GPUDeviceIDsAnnotation),
-			"value": gpuIDs,
-		},
+	patchAnnotations := map[string]any{
+		constants.GPUDeviceIDsAnnotation: gpuIDs,
 	}
 	allocRequestRaw, allocRequestErr := state.Read(CycleStateAllocateRequest)
 	if allocRequestErr == nil {
@@ -943,19 +939,11 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 				_ = s.allocator.Rollback(string(pod.UID))
 				return fwk.NewStatus(fwk.Error, "calculate hard SM percent: "+percentErr.Error())
 			}
-			patchOps = append(patchOps, map[string]any{
-				"op":    "add",
-				"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.EffectiveHardSMPercentAnnotation),
-				"value": strconv.FormatUint(uint64(percent), 10),
-			})
+			patchAnnotations[constants.EffectiveHardSMPercentAnnotation] = strconv.FormatUint(uint64(percent), 10)
 		}
 	}
 	if indexAvailable {
-		patchOps = append(patchOps, map[string]any{
-			"op":    "add",
-			"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PodIndexAnnotation),
-			"value": strconv.Itoa(index),
-		})
+		patchAnnotations[constants.PodIndexAnnotation] = strconv.Itoa(index)
 	}
 	// If the index is not immediately available we defer the asynchronous
 	// patch-and-assign goroutine until AFTER the main annotation patch
@@ -968,11 +956,7 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	if allocRequestRaw, err := state.Read(CycleStateAllocateRequest); err == nil {
 		allocRequest := allocRequestRaw.(*tfv1.AllocRequest)
 		if allocRequest.Isolation == tfv1.IsolationModePartitioned && allocRequest.PartitionTemplateID != "" {
-			patchOps = append(patchOps, map[string]any{
-				"op":    "add",
-				"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.PartitionTemplateIDAnnotation),
-				"value": allocRequest.PartitionTemplateID,
-			})
+			patchAnnotations[constants.PartitionTemplateIDAnnotation] = allocRequest.PartitionTemplateID
 		}
 	}
 
@@ -987,16 +971,31 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 				s.fh.EventRecorder().Eventf(pod, pod, v1.EventTypeWarning, "ContainerGPUAllocationFailed",
 					"Failed to allocate GPUs to containers", "Error: %v", mapErr)
 			} else {
-				patchOps = append(patchOps, map[string]any{
-					"op":    "add",
-					"path":  "/metadata/annotations/" + utils.EscapeJSONPointer(constants.ContainerGPUsAnnotation),
-					"value": containerGPUsJSON,
-				})
+				patchAnnotations[constants.ContainerGPUsAnnotation] = containerGPUsJSON
 			}
 		}
 	}
 
-	patchBytes, err := json.Marshal(patchOps)
+	// Keep whole-GPU shared allocations visible to older allocator versions
+	// during a rollback. v1 reconstructs usage from the legacy resource
+	// annotations and otherwise treats a shared pod with zero requests as idle.
+	patchPod := pod.DeepCopy()
+	if allocRequestRaw, err := state.Read(CycleStateAllocateRequest); err == nil {
+		allocRequest := allocRequestRaw.(*tfv1.AllocRequest)
+		if allocRequest.Isolation == tfv1.IsolationModeShared {
+			if err := addSharedLegacyResourceAnnotations(patchAnnotations, pod, committedGPUs); err != nil {
+				if indexAvailable {
+					s.indexAllocator.RemoveNodeIndexQueueForPod(client.ObjectKeyFromObject(pod))
+				}
+				_ = s.allocator.Rollback(string(pod.UID))
+				return fwk.NewStatus(fwk.Error, "prepare shared legacy resources: "+err.Error())
+			}
+		}
+	}
+
+	// Merge-patch deletions are idempotent if the API applied a previous
+	// attempt but its response was lost. Preserve all unrelated annotations.
+	patchBytes, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": patchAnnotations}})
 	if err != nil {
 		s.logger.Error(err, "failed to marshal patch operations", "pod", pod.Name)
 		if indexAvailable {
@@ -1014,7 +1013,6 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	// back into the scheduler-owned object can replace its assumed NodeName
 	// with the still-empty API value before Bind. Keep the response on a copy
 	// so the cache retains the assumed pod state until the binding event.
-	patchPod := pod.DeepCopy()
 	patchErr := retry.OnError(wait.Backoff{
 		Duration: 1 * time.Second,
 		Factor:   2,
@@ -1023,7 +1021,7 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	}, func(err error) bool {
 		return true
 	}, func() error {
-		return s.client.Patch(s.ctx, patchPod, client.RawPatch(types.JSONPatchType, patchBytes))
+		return s.client.Patch(s.ctx, patchPod, client.RawPatch(types.MergePatchType, patchBytes))
 	})
 	if patchErr != nil {
 		s.logger.Error(patchErr, "failed to patch pod annotations in PreBind", "pod", pod.Name)
@@ -1055,6 +1053,21 @@ func (s *GPUFit) PreBind(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 		s.indexAllocator.AsyncCheckNodeIndexAvailableAndAssign(pod, index)
 	}
 	return fwk.NewStatus(fwk.Success, "")
+}
+
+func addSharedLegacyResourceAnnotations(annotations map[string]any, pod *v1.Pod, gpus []*tfv1.GPU) error {
+	updated := pod.DeepCopy()
+	if err := utils.ApplySharedLegacyResources(updated, gpus); err != nil {
+		return err
+	}
+	for key, value := range updated.Annotations {
+		if oldValue, exists := pod.Annotations[key]; !exists || oldValue != value {
+			annotations[key] = value
+		}
+	}
+	annotations[constants.ComputeRequestAnnotation] = nil
+	annotations[constants.ComputeLimitAnnotation] = nil
+	return nil
 }
 
 func effectiveHardSMPercent(tflops resource.Quantity, gpus []*tfv1.GPU) (uint32, error) {
