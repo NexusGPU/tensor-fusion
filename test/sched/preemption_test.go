@@ -190,7 +190,7 @@ func testGPUResourcePreemption(suite *PreemptionTestSuite) {
 		_ = suite.k8sClient.Delete(suite.ctx, criticalPriorityPod)
 	}()
 	time.Sleep(10 * time.Millisecond)
-	suite.scheduler.SchedulingQueue.Add(klog.FromContext(suite.ctx), criticalPriorityPod)
+	suite.scheduler.SchedulingQueue.Add(suite.ctx, criticalPriorityPod)
 	suite.scheduler.ScheduleOne(suite.ctx)
 
 	// Preemption should be triggered and victims deleted, wait informer sync

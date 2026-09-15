@@ -1,17 +1,24 @@
---- ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go	2026-01-26 00:00:00
-+++ ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go	2026-01-26 00:00:00
-@@ -433,2 +433,2 @@
--	feasibleNodes, diagnosis, nodeHint, signature, err := sched.findNodesThatFitPod(ctx, fwk, state, pod)
-+	feasibleNodes, diagnosis, nodeHint, signature, err := sched.FindNodesThatFitPod(ctx, fwk, state, pod)
+--- ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go
++++ ../vendor/k8s.io/kubernetes/pkg/scheduler/schedule_one.go
+@@ -576,7 +576,7 @@
+ 		return result, ErrNoNodesAvailable
+ 	}
+ 
+-	feasibleNodes, diagnosis, nodeHint, err := sched.findNodesThatFitPod(ctx, fwk, state, podInfo)
++	feasibleNodes, diagnosis, nodeHint, err := sched.FindNodesThatFitPod(ctx, fwk, state, podInfo)
  	if err != nil {
-@@ -480,2 +480,31 @@
--// Filters the nodes to find the ones that fit the pod based on the framework
+ 		return result, err
+ 	}
+@@ -623,9 +623,32 @@
+ 	}, err
+ }
+ 
 +// NodeResourceSnapshot reports scheduler-cache resources for diagnostics.
 +type NodeResourceSnapshot struct {
 +	AllocatableMilliCPU int64
-+	RequestedMilliCPU   int64
-+	AllocatableMemory   int64
-+	RequestedMemory     int64
++	RequestedMilliCPU int64
++	AllocatableMemory int64
++	RequestedMemory int64
 +}
 +
 +func (sched *Scheduler) NodeResourceSnapshots() map[string]NodeResourceSnapshot {
@@ -20,24 +27,19 @@
 +	for _, nodeInfo := range nodeInfos {
 +		allocatable := nodeInfo.GetAllocatable()
 +		requested := nodeInfo.GetRequested()
-+		result[nodeInfo.Node().Name] = NodeResourceSnapshot{
-+			AllocatableMilliCPU: allocatable.GetMilliCPU(),
-+			RequestedMilliCPU:   requested.GetMilliCPU(),
-+			AllocatableMemory:   allocatable.GetMemory(),
-+			RequestedMemory:     requested.GetMemory(),
-+		}
++		result[nodeInfo.Node().Name] = NodeResourceSnapshot{AllocatableMilliCPU: allocatable.GetMilliCPU(), RequestedMilliCPU: requested.GetMilliCPU(), AllocatableMemory: allocatable.GetMemory(), RequestedMemory: requested.GetMemory()}
 +	}
 +	return result
 +}
 +
-+// UpdateNodeInfoSnapshot refreshes the scheduler's shared node snapshot for dry-run simulations.
 +func (sched *Scheduler) UpdateNodeInfoSnapshot(ctx context.Context) error {
 +	return sched.Cache.UpdateSnapshot(klog.FromContext(ctx), sched.nodeInfoSnapshot)
 +}
 +
-+// Filters the nodes to find the ones that fit the pod based on the framework
+ // Filters the nodes to find the ones that fit the pod based on the framework
  // filter plugins and filter extenders.
-@@ -482,2 +511,2 @@
--func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, string, fwk.PodSignature, error) {
-+func (sched *Scheduler) FindNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, string, fwk.PodSignature, error) {
+-func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, podInfo *framework.QueuedPodInfo) ([]fwk.NodeInfo, framework.Diagnosis, string, error) {
++func (sched *Scheduler) FindNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, podInfo *framework.QueuedPodInfo) ([]fwk.NodeInfo, framework.Diagnosis, string, error) {
  	logger := klog.FromContext(ctx)
+ 	diagnosis := framework.Diagnosis{
+ 		NodeToStatus: framework.NewDefaultNodeToStatus(),

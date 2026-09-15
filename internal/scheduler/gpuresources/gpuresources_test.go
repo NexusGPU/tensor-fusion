@@ -270,7 +270,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			k8sObjs = append(k8sObjs, node)
 		}
 
-		var registerPlugins []tf.RegisterPluginFunc
+		registerPlugins := make([]tf.RegisterPluginFunc, 0, 2)
 		registeredPlugins := append(
 			registerPlugins,
 			tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
@@ -475,6 +475,55 @@ var _ = Describe("GPUFit Plugin", func() {
 	})
 
 	Describe("PreBind", func() {
+		DescribeTable("preserves the assumed pod and releases scheduler resources",
+			func(bindSucceeds bool) {
+				pod := makePod("p-prebind-cache", map[string]string{
+					constants.TFLOPSRequestAnnotation: "100",
+					constants.VRAMRequestAnnotation:   "1Gi",
+				})
+				pod.Spec.Containers[0].Resources.Requests = v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("1"),
+					v1.ResourceMemory: resource.MustParse("32Gi"),
+				}
+				Expect(k8sClient.Update(ctx, pod)).To(Succeed())
+				state := framework.NewCycleState()
+				_, status := plugin.PreFilter(ctx, state, pod, nil)
+				Expect(status.IsSuccess()).To(BeTrue())
+
+				// Like scheduler.assumeAndReserve, cache and PreBind share this
+				// object, while the API object stays unbound until Bind succeeds.
+				assumedPod := pod.DeepCopy()
+				assumedPod.Spec.NodeName = testGangNodeName
+				before := assumedPod.DeepCopy()
+				schedulerCache := internalcache.New(ctx, nil, false)
+				logger := klog.FromContext(ctx)
+				schedulerCache.AddNode(logger, &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: testGangNodeName}})
+				Expect(schedulerCache.AssumePod(logger, assumedPod)).To(Succeed())
+				Expect(plugin.Reserve(ctx, state, assumedPod, testGangNodeName).IsSuccess()).To(BeTrue())
+				Expect(plugin.PreBind(ctx, state, assumedPod, testGangNodeName).IsSuccess()).To(BeTrue())
+
+				apiPod := &v1.Pod{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), apiPod)).To(Succeed())
+				Expect(apiPod.Spec.NodeName).To(BeEmpty())
+				Expect(apiPod.Annotations[constants.GPUDeviceIDsAnnotation]).NotTo(BeEmpty())
+				if bindSucceeds {
+					apiPod.Spec.NodeName = testGangNodeName
+					Expect(schedulerCache.AddPod(logger, apiPod)).To(Succeed())
+					Expect(schedulerCache.RemovePod(logger, apiPod)).To(Succeed())
+				} else {
+					plugin.Unreserve(ctx, state, assumedPod, testGangNodeName)
+					Expect(schedulerCache.ForgetPod(logger, assumedPod)).To(Succeed())
+				}
+				nodeInfo := schedulerCache.Dump().Nodes[testGangNodeName]
+				Expect(nodeInfo.Requested.Memory).To(BeZero(), "deleted or forgotten pod must release its 32Gi reservation")
+				Expect(nodeInfo.Requested.MilliCPU).To(BeZero())
+				Expect(nodeInfo.Pods).To(BeEmpty())
+				Expect(assumedPod).To(Equal(before), "PreBind must not mutate the scheduler cache's pod")
+			},
+			Entry("after bind and deletion", true),
+			Entry("after a subsequent bind failure", false),
+		)
+
 		It("should commit allocation and patch pod annotations", func() {
 			state := framework.NewCycleState()
 			pod := makePod("p-prebind", map[string]string{

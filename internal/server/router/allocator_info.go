@@ -119,7 +119,12 @@ func (r *AllocatorInfoRouter) SimulateScheduleOnePod(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "scheduler framework not found"})
 		return
 	}
-	scheduleResult, err := r.scheduler.SchedulePod(ctx, fwkInstance, state, pod)
+	if err := r.scheduler.UpdateNodeInfoSnapshot(ctx); err != nil {
+		log.FromContext(ctx).Error(err, "failed to refresh scheduler snapshot before simulation", "pod", pod.Name, "namespace", pod.Namespace)
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	scheduleResult, err := r.scheduler.SchedulePod(ctx, fwkInstance, state, &framework.QueuedPodInfo{PodInfo: &framework.PodInfo{Pod: pod}})
 	gpuCycleState, _ := state.Read(gpuresources.CycleStateGPUSchedulingResult)
 	simulateSchedulingFilterDetail, _ := state.Read(fwk.StateKey(constants.SchedulerSimulationKey))
 	progressiveNodes := readProgressiveNodeNames(state)

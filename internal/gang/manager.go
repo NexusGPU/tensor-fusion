@@ -460,13 +460,8 @@ func resolveGroupKey(pod *corev1.Pod) (PodGroupKey, groupKeyMode, bool) {
 		return "", groupKeyModeUnknown, false
 	}
 
-	if hasUsableWorkloadRef(pod.Spec.WorkloadRef) {
-		return NewPodGroupKeyFromWorkloadRef(
-			pod.Namespace,
-			pod.Spec.WorkloadRef.Name,
-			pod.Spec.WorkloadRef.PodGroup,
-			pod.Spec.WorkloadRef.PodGroupReplicaKey,
-		), groupKeyModeWorkloadRef, true
+	if hasUsableSchedulingGroup(pod.Spec.SchedulingGroup) {
+		return NewPodGroupKey(pod.Namespace, *pod.Spec.SchedulingGroup.PodGroupName), groupKeyModeWorkloadRef, true
 	}
 
 	workloadName := pod.Labels[constants.WorkloadKey]
@@ -476,8 +471,8 @@ func resolveGroupKey(pod *corev1.Pod) (PodGroupKey, groupKeyMode, bool) {
 	return NewPodGroupKey(pod.Namespace, workloadName), groupKeyModeWorkloadLabel, true
 }
 
-func hasUsableWorkloadRef(workloadRef *corev1.WorkloadReference) bool {
-	return workloadRef != nil && workloadRef.Name != "" && workloadRef.PodGroup != ""
+func hasUsableSchedulingGroup(group *corev1.PodSchedulingGroup) bool {
+	return group != nil && group.PodGroupName != nil && *group.PodGroupName != ""
 }
 
 func parseGangTimeout(annotations map[string]string) time.Duration {
