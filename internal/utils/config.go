@@ -189,6 +189,14 @@ func ExtractPodWorkerInfo(pod *corev1.Pod) PodWorkerInfo {
 }
 
 func GetGPUResource(pod *corev1.Pod, isRequest bool) (tfv1.Resource, error) {
+	if pod.Annotations[constants.IsolationModeAnnotation] == tfv1.IsolationModeShared {
+		if _, exists := pod.Annotations[constants.SharedLegacyResourcesAnnotation]; exists {
+			pod = pod.DeepCopy()
+			if _, err := RestoreSharedLegacyResources(pod); err != nil {
+				return tfv1.Resource{}, err
+			}
+		}
+	}
 	tflopsKey := constants.TFLOPSRequestAnnotation
 	vramKey := constants.VRAMRequestAnnotation
 	computePercentKey := constants.ComputeRequestAnnotation

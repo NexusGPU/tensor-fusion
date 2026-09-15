@@ -524,6 +524,66 @@ var _ = Describe("GPUFit Plugin", func() {
 			Entry("after a subsequent bind failure", false),
 		)
 
+		It("persists shared occupancy atomically and retries a lost patch response", func() {
+			const sharedNode = "node-b"
+			pod := makePod("shared-legacy", map[string]string{
+				constants.IsolationModeAnnotation:  tfv1.IsolationModeShared,
+				constants.ComputeRequestAnnotation: "0",
+				constants.ComputeLimitAnnotation:   "0",
+				constants.VRAMRequestAnnotation:    "0",
+				constants.VRAMLimitAnnotation:      "0",
+			})
+			state := framework.NewCycleState()
+			_, status := plugin.PreFilter(ctx, state, pod, nil)
+			Expect(status.IsSuccess()).To(BeTrue(), status.Message())
+			assumed := pod.DeepCopy()
+			assumed.Spec.NodeName = sharedNode
+			before := assumed.DeepCopy()
+			status = plugin.Reserve(ctx, state, assumed, sharedNode)
+			Expect(status.IsSuccess()).To(BeTrue(), status.Message())
+			baseClient, ok := k8sClient.(client.WithWatch)
+			Expect(ok).To(BeTrue())
+			attempts := 0
+			plugin.client = interceptor.NewClient(baseClient, interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if err := c.Patch(ctx, obj, patch, opts...); err != nil {
+						return err
+					}
+					attempts++
+					if attempts == 1 {
+						return errors.NewServiceUnavailable("response lost after successful patch")
+					}
+					return nil
+				},
+			})
+			status = plugin.PreBind(ctx, state, assumed, sharedNode)
+			Expect(status.IsSuccess()).To(BeTrue(), status.Message())
+			Expect(attempts).To(Equal(2))
+			Expect(assumed).To(Equal(before))
+			persisted := &v1.Pod{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), persisted)).To(Succeed())
+			gpu := &tfv1.GPU{}
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: persisted.Annotations[constants.GPUDeviceIDsAnnotation]}, gpu)).To(Succeed())
+			Expect(persisted.Annotations[constants.TFLOPSRequestAnnotation]).To(Equal(gpu.Status.Capacity.Tflops.String()))
+			Expect(persisted.Annotations[constants.VRAMRequestAnnotation]).To(Equal(gpu.Status.Capacity.Vram.String()))
+			Expect(persisted.Annotations).NotTo(HaveKey(constants.ComputeRequestAnnotation))
+			Expect(persisted.Annotations).NotTo(HaveKey(constants.ComputeLimitAnnotation))
+			request, err := utils.GetGPUResource(persisted, true)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(request.Tflops.IsZero()).To(BeTrue())
+			Expect(request.Vram.IsZero()).To(BeTrue())
+			plugin.Unreserve(ctx, state, assumed, sharedNode)
+			Expect(plugin.allocator.IsCommitted(string(pod.UID))).To(BeFalse())
+			// A failed Bind leaves an unbound Pod. Retrying from the API object
+			// must use the original zero request, then reserve the whole GPU again.
+			state = framework.NewCycleState()
+			_, status = plugin.PreFilter(ctx, state, persisted, nil)
+			Expect(status.IsSuccess()).To(BeTrue(), status.Message())
+			status = plugin.Reserve(ctx, state, persisted, sharedNode)
+			Expect(status.IsSuccess()).To(BeTrue(), status.Message())
+			plugin.Unreserve(ctx, state, persisted, sharedNode)
+		})
+
 		It("should commit allocation and patch pod annotations", func() {
 			state := framework.NewCycleState()
 			pod := makePod("p-prebind", map[string]string{

@@ -260,6 +260,10 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 	if len(annotationsToUpdate) <= 0 {
 		return nil
 	}
+	annotationsToUpdate, err = utils.SharedLegacyResourceUpdates(worker, annotationsToUpdate)
+	if err != nil {
+		return err
+	}
 
 	_, deltaReq, deltaLimit, err := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
 		PodUID:     string(worker.UID),

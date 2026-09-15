@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
+	"strings"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -203,6 +205,9 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 func (r *PodReconciler) reconcileWorkerPod(
 	ctx context.Context, namespacedName types.NamespacedName, pod *corev1.Pod,
 ) (ctrl.Result, bool, error) {
+	if err := r.reconcileSharedLegacyResources(ctx, pod); err != nil {
+		return ctrl.Result{}, true, err
+	}
 	r.IndexAllocator.ReconcileLockState(pod)
 	if pod.DeletionTimestamp.IsZero() {
 		if r.Allocator.HasAllocation(namespacedName) {
@@ -224,6 +229,36 @@ func (r *PodReconciler) reconcileWorkerPod(
 		return ctrl.Result{}, true, nil
 	}
 	return ctrl.Result{}, false, nil
+}
+
+func (r *PodReconciler) reconcileSharedLegacyResources(ctx context.Context, pod *corev1.Pod) error {
+	if pod.Annotations[constants.IsolationModeAnnotation] != tfv1.IsolationModeShared {
+		return nil
+	}
+	base := pod.DeepCopy()
+	if utils.IsPodStopped(pod) {
+		if _, err := utils.RestoreSharedLegacyResources(pod); err != nil {
+			return err
+		}
+		// Retained terminal Pods must not resurrect an allocation on restart.
+		delete(pod.Annotations, constants.GPUDeviceIDsAnnotation)
+	} else if pod.Spec.NodeName != "" && pod.Annotations[constants.GPUDeviceIDsAnnotation] != "" {
+		var gpus []*tfv1.GPU
+		for _, gpuName := range strings.Split(pod.Annotations[constants.GPUDeviceIDsAnnotation], ",") {
+			gpu := &tfv1.GPU{}
+			if err := r.Get(ctx, types.NamespacedName{Name: gpuName}, gpu); err != nil {
+				return err
+			}
+			gpus = append(gpus, gpu)
+		}
+		if err := utils.ApplySharedLegacyResources(pod, gpus); err != nil {
+			return err
+		}
+	}
+	if maps.Equal(base.Annotations, pod.Annotations) {
+		return nil
+	}
+	return r.Patch(ctx, pod, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
 }
 
 func (r *PodReconciler) handleWorkerPodFinalizer(ctx context.Context, pod *corev1.Pod) (bool, error) {

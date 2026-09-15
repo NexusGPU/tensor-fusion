@@ -28,6 +28,15 @@ func IsGPUMissing(gpu *tfv1.GPU) bool {
 }
 
 func GPUResourcesFromAnnotations(annotations map[string]string) (*tfv1.Resources, error) {
+	if annotations[constants.IsolationModeAnnotation] == tfv1.IsolationModeShared {
+		if _, exists := annotations[constants.SharedLegacyResourcesAnnotation]; exists {
+			var err error
+			annotations, err = sharedOriginalResourceAnnotations(annotations)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	result := tfv1.Resources{}
 	resInfo := []struct {
 		key string

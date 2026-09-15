@@ -5,11 +5,51 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+func TestSharedLegacyRecoveryPreservesOriginalRequestAndWholeCardOccupancy(t *testing.T) {
+	s := newTestAllocator()
+	gpu := sharedTestGPU("gpu-1", "node-1", tfv1.IsolationModeSoft)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "shared", Namespace: "default", UID: "shared-uid",
+		Labels: map[string]string{constants.LabelComponent: constants.ComponentWorker, constants.WorkloadKey: "workload"},
+		Annotations: map[string]string{
+			constants.IsolationModeAnnotation: tfv1.IsolationModeShared,
+			constants.GPUDeviceIDsAnnotation:  gpu.Name,
+			constants.TFLOPSRequestAnnotation: "10", constants.VRAMRequestAnnotation: "2Gi",
+			constants.TFLOPSLimitAnnotation: "20", constants.VRAMLimitAnnotation: "4Gi",
+		},
+	}, Spec: corev1.PodSpec{NodeName: "node-1"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+	require.NoError(t, utils.ApplySharedLegacyResources(pod, []*tfv1.GPU{gpu}))
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, tfv1.AddToScheme(scheme))
+	s.Client = fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, gpu).Build()
+	s.gpuStore[types.NamespacedName{Name: gpu.Name}] = gpu
+	for range 2 {
+		s.reconcileAllocationState()
+		req := s.uniqueAllocation[string(pod.UID)]
+		require.NotNil(t, req)
+		require.Equal(t, "10", req.Request.Tflops.String())
+		require.Equal(t, "2Gi", req.Request.Vram.String())
+		require.Equal(t, "20", req.Limit.Tflops.String())
+		require.True(t, gpu.Status.Available.Tflops.IsZero())
+		require.True(t, gpu.Status.Available.Vram.IsZero())
+		require.Len(t, gpu.Status.RunningApps, 1)
+	}
+	s.Dealloc(tfv1.NameNamespace{Name: "workload", Namespace: "default"}, []string{gpu.Name}, pod.ObjectMeta)
+	require.True(t, gpu.Status.Capacity.Tflops.Equal(gpu.Status.Available.Tflops))
+	require.True(t, gpu.Status.Capacity.Vram.Equal(gpu.Status.Available.Vram))
+}
 
 func sharedTestGPU(name, node string, mode tfv1.IsolationModeType) *tfv1.GPU {
 	gpu := makeGPU(name, "100", "24Gi", "100", "24Gi")
