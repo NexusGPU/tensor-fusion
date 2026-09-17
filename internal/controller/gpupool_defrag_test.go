@@ -37,6 +37,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+// Keep the defrag adapter synchronized with the scheduler vendor patch. This
+// is a compile-time contract test: a Kubernetes scheduler API change must
+// update both the patch and schedulerFitPodAPI together.
+var _ schedulerFitPodAPI = (*k8sscheduler.Scheduler)(nil)
+
+func TestSchedulerVendorPatchSatisfiesDefragContract(t *testing.T) {
+	if _, ok := any(&k8sscheduler.Scheduler{}).(schedulerFitPodAPI); !ok {
+		t.Fatal("scheduler vendor patch does not satisfy the defrag contract")
+	}
+}
+
 // ---- parseDefragMaxDuration / cron base guard --------------------------
 
 type infoLogger struct{ messages []string }
