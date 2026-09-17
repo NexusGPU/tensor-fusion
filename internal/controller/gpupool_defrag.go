@@ -86,19 +86,18 @@ const (
 )
 
 // schedulerFitPodAPI is satisfied by *scheduler.Scheduler only after the
-// vendor patch (scripts/patch-scheduler.sh) lifts the private
-// findNodesThatFitPod into a public wrapper. We assert it at runtime so an
-// un-patched build still compiles in -mod=mod and only fails defrag.
+// vendor patch (scripts/patch-scheduler.sh) exports the scheduler simulation
+// API. The runtime assertion gives defrag a clear error for an unpatched or
+// incompatible scheduler build.
 type schedulerFitPodAPI interface {
 	UpdateNodeInfoSnapshot(ctx context.Context) error
-	// Main branch's vendor patch keeps the upstream 5-return signature
-	// (adds nodeHint + PodSignature in k8s 1.35.x); defrag ignores both.
+	// The Kubernetes 1.36 vendor patch exports the upstream scheduler method.
 	FindNodesThatFitPod(
 		ctx context.Context,
 		schedFramework framework.Framework,
 		state fwk.CycleState,
-		pod *corev1.Pod,
-	) ([]fwk.NodeInfo, framework.Diagnosis, string, fwk.PodSignature, error)
+		podInfo *framework.QueuedPodInfo,
+	) ([]fwk.NodeInfo, framework.Diagnosis, string, error)
 }
 
 // defragCompactScorer ties broken toward already-loaded GPUs to consolidate.
@@ -1171,7 +1170,7 @@ func (r *GPUPoolCompactionReconciler) simulateJointPlacement(
 ) (bool, *defragPlacementDiagnostics, error) {
 	fitAPI, ok := any(r.Scheduler).(schedulerFitPodAPI)
 	if !ok {
-		return false, nil, errors.New("scheduler vendor patch missing: run scripts/patch-scheduler.sh")
+		return false, nil, errors.New("scheduler vendor API mismatch: run go mod vendor && scripts/patch-scheduler.sh, then rebuild")
 	}
 	profileName := constants.SchedulerName
 	if len(cand.workerPods) > 0 && cand.workerPods[0].Spec.SchedulerName != "" {
@@ -1247,7 +1246,12 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 		FilterStageDetails: []filter.FilterDetail{},
 	})
 
-	feasible, _, _, _, err := fitAPI.FindNodesThatFitPod(ctx, fwkInstance, state, podCopy)
+	feasible, _, _, err := fitAPI.FindNodesThatFitPod(
+		ctx,
+		fwkInstance,
+		state,
+		&framework.QueuedPodInfo{PodInfo: &framework.PodInfo{Pod: podCopy}},
+	)
 	if err != nil {
 		return false, fmt.Errorf("find feasible nodes: %w", err)
 	}
