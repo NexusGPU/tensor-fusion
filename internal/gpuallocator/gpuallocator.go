@@ -1461,6 +1461,7 @@ func (s *GpuAllocator) Rollback(podUID string) error {
 		return nil
 	}
 
+	delete(s.uniqueAllocation, podUID)
 	nodeName := ""
 	for _, gpuName := range request.GPUNames {
 		gpuKey := types.NamespacedName{Name: gpuName}
@@ -1469,6 +1470,9 @@ func (s *GpuAllocator) Rollback(podUID string) error {
 			continue
 		}
 		s.releaseAllocationFromGPU(storeGPU, request, gpuName)
+		// A capacity shrink may have clamped Available to zero. Rebuild after
+		// removing the holder rather than crediting the full released amount.
+		s.recomputeGPUAvailableFromAllocations(storeGPU)
 		if nodeName == "" {
 			nodeName = storeGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		}
@@ -1486,7 +1490,6 @@ func (s *GpuAllocator) Rollback(podUID string) error {
 			Namespace: request.PodMeta.Namespace,
 		})
 	}
-	delete(s.uniqueAllocation, podUID)
 	if s.isolationPolicy == tfv1.IsolationModePolicyDynamic {
 		for _, gpuName := range request.GPUNames {
 			key := types.NamespacedName{Name: gpuName}
@@ -1753,6 +1756,7 @@ func (s *GpuAllocator) Dealloc(
 		return
 	}
 
+	delete(s.uniqueAllocation, podUID)
 	nodeName := ""
 	for _, gpu := range gpus {
 		// Get the GPU from the store
@@ -1764,6 +1768,9 @@ func (s *GpuAllocator) Dealloc(
 		}
 
 		s.releaseAllocationFromGPU(storeGPU, request, gpu)
+		// Keep release symmetric with capacity-change accounting, including
+		// when the remaining holders still exceed the reduced capacity.
+		s.recomputeGPUAvailableFromAllocations(storeGPU)
 
 		if nodeName == "" {
 			nodeName = storeGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
@@ -1806,7 +1813,6 @@ func (s *GpuAllocator) Dealloc(
 	if nodeName != "" && len(s.nodeWorkerStore[nodeName]) == 0 && s.nodeGpuStore[nodeName] == nil {
 		delete(s.nodeWorkerStore, nodeName)
 	}
-	delete(s.uniqueAllocation, podUID)
 	if s.isolationPolicy == tfv1.IsolationModePolicyDynamic {
 		for _, gpuName := range gpus {
 			key := types.NamespacedName{Name: gpuName}
@@ -1955,6 +1961,14 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 		})
 		request.Request = adjustRequest.NewRequest
 		request.Limit = adjustRequest.NewLimit
+		// Recompute from the updated ledger so a prior capacity shrink and this
+		// adjustment cannot accumulate rounding or release drift.
+		for _, gpuName := range request.GPUNames {
+			if gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]; gpu != nil {
+				s.recomputeGPUAvailableFromAllocations(gpu)
+				clampGPUAvailableToCapacity(gpu)
+			}
+		}
 
 		log.FromContext(s.ctx).Info("GPU resource allocation adjust successfully",
 			"namespace", request.PodMeta.Namespace,
