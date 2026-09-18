@@ -1237,20 +1237,17 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 		return false, fmt.Errorf("scheduler framework not found for scheduler %q", podCopy.Spec.SchedulerName)
 	}
 
-	state := framework.NewCycleState()
-	state.SetRecordPluginMetrics(false)
-	state.Write(framework.PodsToActivateKey, framework.NewPodsToActivate())
-	// Mark this as a dry run so gpuresources / allocator plugins skip
-	// real-state mutations and use the simulation-only code paths.
-	state.Write(fwk.StateKey(constants.SchedulerSimulationKey), &gpuallocator.SimulateSchedulingFilterDetail{
-		FilterStageDetails: []filter.FilterDetail{},
-	})
+	state := newDefragSimulationState()
 
+	// Index resources are target-specific during v1/v2 migration. Discover
+	// candidates without them, then run the complete scheduler pre-filter and
+	// filter chain again with the target-specific Pod below.
+	discoveryPod := stripDefragIndexResources(podCopy)
 	feasible, _, _, err := fitAPI.FindNodesThatFitPod(
 		ctx,
 		fwkInstance,
 		state,
-		&framework.QueuedPodInfo{PodInfo: &framework.PodInfo{Pod: podCopy}},
+		&framework.QueuedPodInfo{PodInfo: &framework.PodInfo{Pod: discoveryPod}},
 	)
 	if err != nil {
 		return false, fmt.Errorf("find feasible nodes: %w", err)
@@ -1276,7 +1273,7 @@ func (r *GPUPoolCompactionReconciler) placeSinglePod(
 	var bestScore int
 
 	for _, info := range feasible {
-		cand := r.evalDefragTarget(ctx, fwkInstance, state, info, budget, req, podCopy, podInfo, maxWorkerPerNode, sourceUtilization, diag)
+		cand := r.evalDefragTarget(ctx, fwkInstance, info, budget, req, podCopy, podInfo, maxWorkerPerNode, sourceUtilization, diag)
 		if cand == nil {
 			continue
 		}
@@ -1318,7 +1315,6 @@ type defragFitCandidate struct {
 func (r *GPUPoolCompactionReconciler) evalDefragTarget(
 	ctx context.Context,
 	fwkInstance framework.Framework,
-	state fwk.CycleState,
 	info fwk.NodeInfo,
 	budget map[string]*nodeBudget,
 	req *tfv1.AllocRequest,
@@ -1355,15 +1351,25 @@ func (r *GPUPoolCompactionReconciler) evalDefragTarget(
 		diag.reject(tgt, "monotonicity", fmt.Sprintf("targetUtil=%.2f sourceUtil=%.2f", targetUtil, sourceUtilization))
 		return nil
 	}
-	candidateInfo := cloneNodeInfoWithVirtualPod(nb.nodeInfo, podInfo)
+	targetPod, targetPodInfo := prepareDefragPodForTarget(podCopy, podInfo, nb.nodeInfo)
+	candidateInfo := cloneNodeInfoWithVirtualPod(nb.nodeInfo, targetPodInfo)
 	if ok, reason := virtualNodeAllocatableReason(candidateInfo); !ok {
 		diag.reject(tgt, "virtual-node-resource", reason)
 		return nil
 	}
-	// Re-run filters on the virtualized snapshot so resource plugins
-	// see capacity already consumed by prior simulated placements.
-	virtualState := state.Clone()
-	if status := fwkInstance.RunFilterPluginsWithNominatedPods(ctx, virtualState, podCopy, candidateInfo); status != nil && !status.IsSuccess() {
+	// Re-run pre-filters and filters on the virtualized snapshot so every
+	// scheduler plugin sees the target-specific Pod shape and prior placements.
+	virtualState := newDefragSimulationState()
+	preFilterResult, status, _ := fwkInstance.RunPreFilterPlugins(ctx, virtualState, targetPod)
+	if status != nil && !status.IsSuccess() {
+		diag.reject(tgt, "scheduler-prefilter", status.Message())
+		return nil
+	}
+	if preFilterResult != nil && preFilterResult.NodeNames != nil && !preFilterResult.NodeNames.Has(tgt) {
+		diag.reject(tgt, "scheduler-prefilter", "target excluded by pre-filter")
+		return nil
+	}
+	if status := fwkInstance.RunFilterPluginsWithNominatedPods(ctx, virtualState, targetPod, candidateInfo); status != nil && !status.IsSuccess() {
 		diag.reject(tgt, "scheduler-filter", status.Message())
 		for _, reason := range schedulerSimulationFilterReasons(virtualState) {
 			diag.addSchedulerDetail(reason)
@@ -1789,6 +1795,125 @@ func cloneAsUnscheduledWorker(pod *corev1.Pod) *corev1.Pod {
 	return podCopy
 }
 
+func newDefragSimulationState() fwk.CycleState {
+	state := framework.NewCycleState()
+	state.SetRecordPluginMetrics(false)
+	state.Write(framework.PodsToActivateKey, framework.NewPodsToActivate())
+	state.Write(fwk.StateKey(constants.SchedulerSimulationKey), &gpuallocator.SimulateSchedulingFilterDetail{
+		FilterStageDetails: []filter.FilterDetail{},
+	})
+	return state
+}
+
+// prepareDefragPodForTarget models the Pod that admission will recreate on a
+// v2 node. Running v1/v2 workers keep their current claim, but a recreated
+// worker receives an unknown v2 bucket claim. v1-only targets keep the
+// original Pod shape so v1 and v2 nodes can coexist during the upgrade.
+func prepareDefragPodForTarget(pod *corev1.Pod, podInfo fwk.PodInfo, nodeInfo fwk.NodeInfo) (*corev1.Pod, fwk.PodInfo) {
+	if pod == nil || podInfo == nil || !hasCompleteV2IndexAllocatable(nodeInfo) {
+		return pod, podInfo
+	}
+
+	normalized := pod.DeepCopy()
+	if !normalizePodIndexResourcesForV2(normalized) {
+		return pod, podInfo
+	}
+	normalizedInfo, err := framework.NewPodInfo(normalized)
+	if err != nil {
+		return nil, nil
+	}
+	return normalized, normalizedInfo
+}
+
+func normalizePodIndexResourcesForV2(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	hasIndex := false
+	for _, container := range pod.Spec.Containers {
+		for _, claims := range []*corev1.ResourceList{&container.Resources.Requests, &container.Resources.Limits} {
+			for name := range *claims {
+				if isPodIndexResource(name) {
+					hasIndex = true
+				}
+			}
+		}
+	}
+	if !hasIndex {
+		return false
+	}
+
+	for i := range pod.Spec.Containers {
+		resources := &pod.Spec.Containers[i].Resources
+		containerHasIndex := false
+		for _, claims := range []*corev1.ResourceList{&resources.Requests, &resources.Limits} {
+			for name := range *claims {
+				if isPodIndexResource(name) {
+					containerHasIndex = true
+					delete(*claims, name)
+				}
+			}
+		}
+		if containerHasIndex {
+			setV2PodIndexResources(&resources.Requests)
+			setV2PodIndexResources(&resources.Limits)
+		}
+	}
+	return true
+}
+
+func setV2PodIndexResources(resources *corev1.ResourceList) {
+	if *resources == nil {
+		*resources = make(corev1.ResourceList)
+	}
+	// The replacement index is assigned after admission. Claim the maximum
+	// amount in every bucket so placement is safe for any assigned bucket.
+	quantity := *resource.NewQuantity(int64(constants.IndexModLength), resource.DecimalSI)
+	for i := 0; i < constants.IndexKeyLength; i++ {
+		(*resources)[v2PodIndexResource(i)] = quantity
+	}
+}
+
+func isPodIndexResource(name corev1.ResourceName) bool {
+	return name == corev1.ResourceName(constants.PodIndexAnnotation) || isV2PodIndexResource(name)
+}
+
+func isV2PodIndexResource(name corev1.ResourceName) bool {
+	return strings.HasPrefix(string(name), constants.PodIndexAnnotation+constants.PodIndexDelimiter)
+}
+
+func stripDefragIndexResources(pod *corev1.Pod) *corev1.Pod {
+	copy := pod.DeepCopy()
+	for i := range copy.Spec.Containers {
+		resources := &copy.Spec.Containers[i].Resources
+		for _, claims := range []*corev1.ResourceList{&resources.Requests, &resources.Limits} {
+			for name := range *claims {
+				if isPodIndexResource(name) {
+					delete(*claims, name)
+				}
+			}
+		}
+	}
+	return copy
+}
+
+func hasCompleteV2IndexAllocatable(nodeInfo fwk.NodeInfo) bool {
+	if nodeInfo == nil || nodeInfo.GetAllocatable() == nil {
+		return false
+	}
+	resources := nodeInfo.GetAllocatable().GetScalarResources()
+	for i := 0; i < constants.IndexKeyLength; i++ {
+		if _, ok := resources[v2PodIndexResource(i)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func v2PodIndexResource(index int) corev1.ResourceName {
+	return corev1.ResourceName(fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, index))
+}
+
 func cloneNodeInfoWithVirtualPod(nodeInfo fwk.NodeInfo, podInfo fwk.PodInfo) fwk.NodeInfo {
 	if nodeInfo == nil || podInfo == nil {
 		return nil
@@ -1821,7 +1946,14 @@ func virtualNodeAllocatableReason(nodeInfo fwk.NodeInfo) (bool, string) {
 	if allocatable.GetAllowedPodNumber() > 0 && len(nodeInfo.GetPods()) > allocatable.GetAllowedPodNumber() {
 		return false, fmt.Sprintf("pods requested=%d allocatable=%d", len(nodeInfo.GetPods()), allocatable.GetAllowedPodNumber())
 	}
+	legacyResource := corev1.ResourceName(constants.PodIndexAnnotation)
+	// A v2 node no longer advertises the legacy key. Existing v1 workers can
+	// remain bound to it, so their stale claim must not block a v2 simulation.
+	ignoreLegacyResource := hasCompleteV2IndexAllocatable(nodeInfo)
 	for name, qty := range requested.GetScalarResources() {
+		if ignoreLegacyResource && name == legacyResource {
+			continue
+		}
 		if qty > allocatable.GetScalarResources()[name] {
 			return false, fmt.Sprintf("%s requested=%d allocatable=%d", name, qty, allocatable.GetScalarResources()[name])
 		}

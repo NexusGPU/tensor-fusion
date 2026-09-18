@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/robfig/cron/v3"
 	corev1 "k8s.io/api/core/v1"
@@ -3489,6 +3491,368 @@ func TestCleanupStaleDefragSourceMarkers_KeepsMarkerWhileWorkerTerminating(t *te
 	updated := getDefragTestNode(t, kubeClient)
 	if updated.Labels[constants.DefragSourceNodeLabel] != constants.TrueStringValue {
 		t.Fatalf("marker must stay while a worker is still Terminating, labels=%v", updated.Labels)
+	}
+}
+
+// These tests use the same seam as defrag placement: a scheduler NodeInfo
+// containing existing Pods, a virtual candidate Pod, and the virtual
+// allocatable check. They reproduce the mixed v1/v2 resource shape without a
+// live scheduler or API server.
+func TestDefragMixedV1V2LegacyIndexResourceReproduction(t *testing.T) {
+	legacy := corev1.ResourceName(constants.PodIndexAnnotation)
+	index0 := corev1.ResourceName(constants.PodIndexAnnotation + constants.PodIndexDelimiter + "0")
+	index1 := corev1.ResourceName(constants.PodIndexAnnotation + constants.PodIndexDelimiter + "1")
+
+	cases := []struct {
+		name             string
+		allocatable      corev1.ResourceList
+		existingRequests []corev1.ResourceList
+		candidateRequest corev1.ResourceList
+		wantFit          bool
+		wantReason       string
+	}{
+		{
+			name:             "v2 candidate coexists with one running v1 worker",
+			allocatable:      newV2IndexAllocatable("0"),
+			existingRequests: []corev1.ResourceList{{legacy: resource.MustParse("1")}},
+			candidateRequest: corev1.ResourceList{index1: resource.MustParse("1")},
+			wantFit:          true,
+		},
+		{
+			name:        "v2 candidate coexists with three running v1 workers",
+			allocatable: newV2IndexAllocatable("0"),
+			existingRequests: []corev1.ResourceList{
+				{legacy: resource.MustParse("1")}, {legacy: resource.MustParse("1")}, {legacy: resource.MustParse("1")},
+			},
+			candidateRequest: corev1.ResourceList{index1: resource.MustParse("1")},
+			wantFit:          true,
+		},
+		{
+			name:             "v1 candidate can be recreated on a v2 target",
+			allocatable:      newV2IndexAllocatable("0"),
+			existingRequests: []corev1.ResourceList{{legacy: resource.MustParse("1")}},
+			candidateRequest: corev1.ResourceList{legacy: resource.MustParse("1")},
+			wantFit:          true,
+		},
+		{
+			name:        "v1 candidate can be recreated on c34 v2 target",
+			allocatable: newV2IndexAllocatable("0"),
+			existingRequests: []corev1.ResourceList{
+				{legacy: resource.MustParse("1")}, {legacy: resource.MustParse("1")}, {legacy: resource.MustParse("1")},
+			},
+			candidateRequest: corev1.ResourceList{legacy: resource.MustParse("1")},
+			wantFit:          true,
+		},
+		{
+			name:             "mixed v1 and v2 resources fit when legacy capacity is retained",
+			allocatable:      newV2IndexAllocatable("512"),
+			existingRequests: []corev1.ResourceList{{legacy: resource.MustParse("1")}},
+			candidateRequest: corev1.ResourceList{index1: resource.MustParse("1")},
+			wantFit:          true,
+		},
+		{
+			name:             "v2-only node accepts v2 candidate",
+			allocatable:      newV2IndexAllocatable(""),
+			existingRequests: []corev1.ResourceList{{index0: resource.MustParse("8")}},
+			candidateRequest: corev1.ResourceList{index1: resource.MustParse("1")},
+			wantFit:          true,
+		},
+		{
+			name:        "v2 candidate is rejected when its replacement bucket is unknown",
+			allocatable: newV2IndexAllocatable(""),
+			existingRequests: []corev1.ResourceList{
+				{index0: resource.MustParse("28")},
+				{index1: resource.MustParse("36")},
+			},
+			candidateRequest: corev1.ResourceList{index0: resource.MustParse("1")},
+			wantFit:          false,
+			wantReason:       "tensor-fusion.ai/index_1 requested=44 allocatable=36",
+		},
+		{
+			name:             "v2 bucket overcommit is still rejected",
+			allocatable:      corev1.ResourceList{index1: resource.MustParse("36")},
+			existingRequests: []corev1.ResourceList{{index1: resource.MustParse("36")}},
+			candidateRequest: corev1.ResourceList{index1: resource.MustParse("1")},
+			wantFit:          false,
+			wantReason:       "tensor-fusion.ai/index_1 requested=37 allocatable=36",
+		},
+		{
+			name:             "missing legacy allocatable is tolerated on a v2 target",
+			allocatable:      newV2IndexAllocatable(""),
+			existingRequests: []corev1.ResourceList{{legacy: resource.MustParse("1")}},
+			candidateRequest: corev1.ResourceList{index1: resource.MustParse("1")},
+			wantFit:          true,
+		},
+		{
+			name:        "unknown replacement bucket is rejected when one v2 bucket is full",
+			allocatable: newV2IndexAllocatable("0"),
+			existingRequests: []corev1.ResourceList{
+				{index0: resource.MustParse("28")},
+				{index1: resource.MustParse("36")},
+			},
+			candidateRequest: corev1.ResourceList{legacy: resource.MustParse("1")},
+			wantFit:          false,
+			wantReason:       "tensor-fusion.ai/index_1 requested=44 allocatable=36",
+		},
+		{
+			name:             "v1 candidate fits a v1 target",
+			allocatable:      corev1.ResourceList{legacy: resource.MustParse("512")},
+			existingRequests: []corev1.ResourceList{{legacy: resource.MustParse("1")}},
+			candidateRequest: corev1.ResourceList{legacy: resource.MustParse("1")},
+			wantFit:          true,
+		},
+		{
+			name:             "v2 candidate does not fit a v1-only target",
+			allocatable:      corev1.ResourceList{legacy: resource.MustParse("512")},
+			candidateRequest: corev1.ResourceList{index1: resource.MustParse("1")},
+			wantFit:          false,
+			wantReason:       "tensor-fusion.ai/index_1 requested=1 allocatable=0",
+		},
+		{
+			name:             "partial v2 target does not accept a legacy candidate",
+			allocatable:      corev1.ResourceList{legacy: resource.MustParse("0"), index0: resource.MustParse("36")},
+			candidateRequest: corev1.ResourceList{legacy: resource.MustParse("1")},
+			wantFit:          false,
+			wantReason:       "tensor-fusion.ai/index requested=1 allocatable=0",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			target := newFrameworkNodeInfo("target", nil, tc.allocatable)
+			for i, requests := range tc.existingRequests {
+				addResourceRequestPodToNodeInfo(t, target, "existing-"+strconv.Itoa(i), requests)
+			}
+
+			candidatePod := newResourceRequestPod("candidate", tc.candidateRequest)
+			candidateInfo, err := framework.NewPodInfo(candidatePod)
+			if err != nil {
+				t.Fatalf("build candidate PodInfo: %v", err)
+			}
+			simulationPod, simulationInfo := prepareDefragPodForTarget(candidatePod, candidateInfo, target)
+			if simulationPod == nil || simulationInfo == nil {
+				t.Fatal("simulation Pod or PodInfo is nil")
+			}
+			virtual := cloneNodeInfoWithVirtualPod(target, simulationInfo)
+			gotFit, reason := virtualNodeAllocatableReason(virtual)
+			if gotFit != tc.wantFit {
+				t.Fatalf("fit=%v reason=%q want fit=%v", gotFit, reason, tc.wantFit)
+			}
+			if tc.wantReason != "" && !strings.Contains(reason, tc.wantReason) {
+				t.Fatalf("reason=%q does not contain %q", reason, tc.wantReason)
+			}
+		})
+	}
+}
+
+// The generic clone only clears placement state. Resource normalization is
+// deliberately target-specific and is performed by prepareDefragPodForTarget.
+func TestPrepareDefragPodForTarget_NormalizesLegacyClaim(t *testing.T) {
+	legacy := corev1.ResourceName(constants.PodIndexAnnotation)
+	pod := newResourceRequestPod("legacy-worker", corev1.ResourceList{legacy: resource.MustParse("1")})
+	podInfo, err := framework.NewPodInfo(pod)
+	if err != nil {
+		t.Fatalf("build PodInfo: %v", err)
+	}
+	v2Target := newFrameworkNodeInfo("v2-target", nil, newV2IndexAllocatable(""))
+
+	got, gotInfo := prepareDefragPodForTarget(pod, podInfo, v2Target)
+	if gotInfo == nil {
+		t.Fatal("expected normalized PodInfo")
+	}
+	if _, exists := got.Spec.Containers[0].Resources.Requests[legacy]; exists {
+		t.Fatalf("legacy request was not removed: %v", got.Spec.Containers[0].Resources.Requests)
+	}
+	for i := 0; i < constants.IndexKeyLength; i++ {
+		indexResource := v2PodIndexResource(i)
+		indexQty := got.Spec.Containers[0].Resources.Requests[indexResource]
+		if indexQty.Value() != int64(constants.IndexModLength) {
+			t.Fatalf("v2 request %s=%s want %d", indexResource, indexQty.String(), constants.IndexModLength)
+		}
+	}
+
+	v1Target := newFrameworkNodeInfo("v1-target", nil, corev1.ResourceList{legacy: resource.MustParse("512")})
+	unchanged, _ := prepareDefragPodForTarget(pod, podInfo, v1Target)
+	if _, exists := unchanged.Spec.Containers[0].Resources.Requests[legacy]; !exists {
+		t.Fatal("legacy request should be retained for a v1-only target")
+	}
+}
+
+func TestPrepareDefragPodForTarget_NormalizesExistingV2ClaimForUnknownReplacementBucket(t *testing.T) {
+	legacy := corev1.ResourceName(constants.PodIndexAnnotation)
+	index1 := v2PodIndexResource(1)
+	pod := newResourceRequestPod("mixed-worker", corev1.ResourceList{
+		legacy: resource.MustParse("1"), index1: resource.MustParse("1"),
+	})
+	podInfo, err := framework.NewPodInfo(pod)
+	if err != nil {
+		t.Fatalf("build PodInfo: %v", err)
+	}
+	target := newFrameworkNodeInfo("v2-target", nil, newV2IndexAllocatable(""))
+
+	got, _ := prepareDefragPodForTarget(pod, podInfo, target)
+	requests := got.Spec.Containers[0].Resources.Requests
+	if _, exists := requests[legacy]; exists {
+		t.Fatalf("legacy request was not removed: %v", requests)
+	}
+	for i := 0; i < constants.IndexKeyLength; i++ {
+		indexResource := v2PodIndexResource(i)
+		indexQty := requests[indexResource]
+		if indexQty.Value() != int64(constants.IndexModLength) {
+			t.Fatalf("v2 request %s=%s want %d", indexResource, indexQty.String(), constants.IndexModLength)
+		}
+	}
+}
+
+func TestPrepareDefragPodForTarget_NormalizesSplitClaimsForUnknownReplacementBucket(t *testing.T) {
+	legacy := corev1.ResourceName(constants.PodIndexAnnotation)
+	index1 := v2PodIndexResource(1)
+	pod := newResourceRequestPod("split-claims", corev1.ResourceList{legacy: resource.MustParse("1")})
+	pod.Spec.Containers[0].Resources.Requests = corev1.ResourceList{legacy: resource.MustParse("1")}
+	pod.Spec.Containers[0].Resources.Limits = corev1.ResourceList{index1: resource.MustParse("1")}
+	podInfo, err := framework.NewPodInfo(pod)
+	if err != nil {
+		t.Fatalf("build PodInfo: %v", err)
+	}
+
+	got, _ := prepareDefragPodForTarget(pod, podInfo, newFrameworkNodeInfo("v2-target", nil, newV2IndexAllocatable("")))
+	requests := got.Spec.Containers[0].Resources.Requests
+	for i := 0; i < constants.IndexKeyLength; i++ {
+		indexResource := v2PodIndexResource(i)
+		indexQty := requests[indexResource]
+		if indexQty.Value() != int64(constants.IndexModLength) {
+			t.Fatalf("v2 request %s=%s want %d", indexResource, indexQty.String(), constants.IndexModLength)
+		}
+	}
+	if _, exists := got.Spec.Containers[0].Resources.Limits[index1]; !exists {
+		t.Fatalf("v2 claim was lost from limits: %v", got.Spec.Containers[0].Resources.Limits)
+	}
+}
+
+func TestPrepareDefragPodForTarget_NormalizesV2ClaimAcrossContainers(t *testing.T) {
+	legacy := corev1.ResourceName(constants.PodIndexAnnotation)
+	index1 := v2PodIndexResource(1)
+	pod := newResourceRequestPod("cross-container", corev1.ResourceList{legacy: resource.MustParse("1")})
+	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
+		Name: "v2-worker",
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{index1: resource.MustParse("1")},
+			Limits:   corev1.ResourceList{index1: resource.MustParse("1")},
+		},
+	})
+	podInfo, err := framework.NewPodInfo(pod)
+	if err != nil {
+		t.Fatalf("build PodInfo: %v", err)
+	}
+
+	got, _ := prepareDefragPodForTarget(pod, podInfo, newFrameworkNodeInfo("v2-target", nil, newV2IndexAllocatable("")))
+	requests := got.Spec.Containers[0].Resources.Requests
+	if _, exists := requests[legacy]; exists {
+		t.Fatalf("legacy claim was not removed: %v", requests)
+	}
+	for i := 0; i < constants.IndexKeyLength; i++ {
+		indexResource := v2PodIndexResource(i)
+		indexQty := requests[indexResource]
+		if indexQty.Value() != int64(constants.IndexModLength) {
+			t.Fatalf("v2 request %s=%s want %d", indexResource, indexQty.String(), constants.IndexModLength)
+		}
+	}
+}
+
+func TestStripDefragIndexResourcesForDiscovery(t *testing.T) {
+	pod := newResourceRequestPod("discovery", corev1.ResourceList{
+		corev1.ResourceName(constants.PodIndexAnnotation): resource.MustParse("1"),
+		v2PodIndexResource(1):                             resource.MustParse("1"),
+	})
+	pod.Spec.Containers[0].Resources.Requests[corev1.ResourceCPU] = resource.MustParse("1")
+	got := stripDefragIndexResources(pod)
+	requests := got.Spec.Containers[0].Resources.Requests
+	cpu := requests[corev1.ResourceCPU]
+	if len(requests) != 1 || cpu.Value() != 1 {
+		t.Fatalf("discovery resources=%v want only CPU request", requests)
+	}
+	if len(pod.Spec.Containers[0].Resources.Requests) != 3 {
+		t.Fatalf("source Pod was mutated: %v", pod.Spec.Containers[0].Resources.Requests)
+	}
+}
+
+func TestCloneAsUnscheduledWorker_PreservesV1V2ClaimsAndSchedulingConstraints(t *testing.T) {
+	legacy := corev1.ResourceName(constants.PodIndexAnnotation)
+	index1 := corev1.ResourceName(constants.PodIndexAnnotation + constants.PodIndexDelimiter + "1")
+	pod := newResourceRequestPod("mixed-worker", corev1.ResourceList{
+		legacy: resource.MustParse("1"), index1: resource.MustParse("1"),
+	})
+	pod.Spec.NodeName = "source-node"
+	pod.Spec.NodeSelector = map[string]string{
+		constants.Domain + "/defrag-test-placement": "run-20260916-01",
+	}
+
+	got := cloneAsUnscheduledWorker(pod)
+	if got.Spec.NodeName != "" {
+		t.Fatalf("NodeName=%q want empty", got.Spec.NodeName)
+	}
+	if got.Spec.NodeSelector[constants.Domain+"/defrag-test-placement"] != "run-20260916-01" {
+		t.Fatalf("nodeSelector was not preserved: %v", got.Spec.NodeSelector)
+	}
+	requests := got.Spec.Containers[0].Resources.Requests
+	legacyQty := requests[legacy]
+	index1Qty := requests[index1]
+	if legacyQty.Value() != 1 || index1Qty.Value() != 1 {
+		t.Fatalf("resource claims changed during clone: %v", requests)
+	}
+}
+
+func newV2IndexAllocatable(legacyCapacity string) corev1.ResourceList {
+	allocatable := make(corev1.ResourceList, constants.IndexKeyLength+1)
+	if legacyCapacity != "" {
+		allocatable[corev1.ResourceName(constants.PodIndexAnnotation)] = resource.MustParse(legacyCapacity)
+	}
+	for i := 0; i < constants.IndexKeyLength; i++ {
+		allocatable[v2PodIndexResource(i)] = resource.MustParse("36")
+	}
+	return allocatable
+}
+
+func newResourceRequestPod(name string, requests corev1.ResourceList) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: name},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "worker",
+			Resources: corev1.ResourceRequirements{
+				Requests: requests,
+				Limits:   requests,
+			},
+		}}},
+	}
+}
+
+func addResourceRequestPodToNodeInfo(t *testing.T, nodeInfo fwk.NodeInfo, name string, requests corev1.ResourceList) {
+	t.Helper()
+	podInfo, err := framework.NewPodInfo(newResourceRequestPod(name, requests))
+	if err != nil {
+		t.Fatalf("build existing PodInfo: %v", err)
+	}
+	nodeInfo.AddPodInfo(podInfo)
+}
+
+func TestSimulateSchedulingFilterDetailCloneIsIndependent(t *testing.T) {
+	original := &gpuallocator.SimulateSchedulingFilterDetail{
+		FilterStageDetails: []filter.FilterDetail{{
+			FilterName: "gpu",
+			Before:     []string{"gpu-a"},
+			After:      []string{"gpu-b"},
+		}},
+	}
+	clone := original.Clone().(*gpuallocator.SimulateSchedulingFilterDetail)
+	clone.FilterStageDetails[0].Before[0] = "changed"
+	clone.FilterStageDetails[0].After[0] = "changed"
+	clone.FilterStageDetails = append(clone.FilterStageDetails, filter.FilterDetail{FilterName: "extra"})
+
+	if original.FilterStageDetails[0].Before[0] != "gpu-a" || original.FilterStageDetails[0].After[0] != "gpu-b" {
+		t.Fatalf("clone mutated original details: %+v", original.FilterStageDetails)
+	}
+	if len(original.FilterStageDetails) != 1 {
+		t.Fatalf("clone append mutated original slice: %+v", original.FilterStageDetails)
 	}
 }
 

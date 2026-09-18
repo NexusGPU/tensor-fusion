@@ -258,7 +258,18 @@ type SimulateSchedulingFilterDetail struct {
 }
 
 func (p *SimulateSchedulingFilterDetail) Clone() fwk.StateData {
-	return p
+	if p == nil {
+		return nil
+	}
+	clone := &SimulateSchedulingFilterDetail{
+		FilterStageDetails: make([]filter.FilterDetail, len(p.FilterStageDetails)),
+	}
+	for i, detail := range p.FilterStageDetails {
+		clone.FilterStageDetails[i] = detail
+		clone.FilterStageDetails[i].Before = append([]string(nil), detail.Before...)
+		clone.FilterStageDetails[i].After = append([]string(nil), detail.After...)
+	}
+	return clone
 }
 
 // NewStrategy creates a strategy based on the placement mode
