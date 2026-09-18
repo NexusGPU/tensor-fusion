@@ -250,6 +250,15 @@ kubectl get gpu -o json \
   > tf-backup/gpu-capacity-v1.tsv
 ```
 
+> 容量口径变更说明：`fp16TFlops`（以及型号映射）变化后，GPU 的 `capacity` 也会随之改变。
+> 包含 gpuallocator 容量重算修复的版本起，operator 会在容量变化的那一刻按分配账本重算
+> `available = capacity − Σ活跃请求`（percent 请求按新 capacity 等比换算，分区占用按模板
+> 计算），并在 10s 内写回 GPU CR；状态与账本都表明空闲的卡由每 3 分钟一次的兜底检查纠正回
+> `capacity`。因此**不需要重启 operator，也不需要删除或重建 GPU CR**；确认生效可看 operator
+> 日志 `Rebuilt GPU available from allocations after capacity change` 与
+> `idle gpu avail corrected`。注意正在运行的 Pod 的 request/limit 不会被改写，被对齐的只是
+> 余量口径。
+
 ---
 
 ## 升级步骤
@@ -461,6 +470,10 @@ test "${hypervisor_count}" = "1"
 diff -u tf-backup/gpu-capacity-v1.tsv <(kubectl get gpu -o json \
   | jq -r '.items[] | [.metadata.name, .status.gpuModel, .status.capacity.tflops] | @tsv')
 
+# 空闲卡的 available 应等于 capacity（有占用时等于 capacity 减去占用）；
+# 若 available 偏低而卡上已无 Pod，最多等一个 3 分钟周期让兜底检查纠正。
+kubectl get gpu -o custom-columns='NAME:.metadata.name,CAP:.status.capacity.tflops,AVAIL:.status.available.tflops,APPS:.status.runningApps'
+
 kubectl get gpupools -A \
   -o custom-columns='POOL:.metadata.name,PROGRESS:.status.componentStatus.hypervisorUpdateProgress,SYNCED:.status.componentStatus.hypervisorConfigSynced'
 
@@ -546,5 +559,5 @@ v2 CRD、ProviderConfig、RBAC 和 Karpenter NodeOverlay 保持不变。
 - [ ] shared workload 只使用完整空闲、未分区 GPU；hard 百分比/绝对值与显存限额验证通过
 - [ ] 存量 soft/hard/shared Pod 的 UID/restartCount/GPU UUID 不变，升级后新 CUDA/NVML 调用正常
 - [ ] 每个 pool 的 `portNumber` 在升级期间保持不变，存量 worker Pod 的 `HYPERVISOR_PORT` 与其一致
-- [ ] 升级前后 GPU 型号与容量清单一致，没有因 ProviderConfig 缺少硬件元数据而退回运行时估算
+- [ ] 升级前后 GPU 型号与容量清单一致，没有因 ProviderConfig 缺少硬件元数据而退回运行时估算；空闲卡 `status.available` 已回到 `status.capacity`（未回到时查日志 `idle gpu avail corrected`）
 - [ ] 回退预案明确：CRD 不动；按“v1 ConfigMap → v1 operator Ready → v1 Hypervisor 镜像”的顺序执行，由 operator 自动替换同名 Pod

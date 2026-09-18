@@ -1461,6 +1461,7 @@ func (s *GpuAllocator) Rollback(podUID string) error {
 		return nil
 	}
 
+	delete(s.uniqueAllocation, podUID)
 	nodeName := ""
 	for _, gpuName := range request.GPUNames {
 		gpuKey := types.NamespacedName{Name: gpuName}
@@ -1469,6 +1470,9 @@ func (s *GpuAllocator) Rollback(podUID string) error {
 			continue
 		}
 		s.releaseAllocationFromGPU(storeGPU, request, gpuName)
+		// A capacity shrink may have clamped Available to zero. Rebuild after
+		// removing the holder rather than crediting the full released amount.
+		s.recomputeGPUAvailableFromAllocations(storeGPU)
 		if nodeName == "" {
 			nodeName = storeGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
 		}
@@ -1486,7 +1490,6 @@ func (s *GpuAllocator) Rollback(podUID string) error {
 			Namespace: request.PodMeta.Namespace,
 		})
 	}
-	delete(s.uniqueAllocation, podUID)
 	if s.isolationPolicy == tfv1.IsolationModePolicyDynamic {
 		for _, gpuName := range request.GPUNames {
 			key := types.NamespacedName{Name: gpuName}
@@ -1753,6 +1756,7 @@ func (s *GpuAllocator) Dealloc(
 		return
 	}
 
+	delete(s.uniqueAllocation, podUID)
 	nodeName := ""
 	for _, gpu := range gpus {
 		// Get the GPU from the store
@@ -1764,6 +1768,9 @@ func (s *GpuAllocator) Dealloc(
 		}
 
 		s.releaseAllocationFromGPU(storeGPU, request, gpu)
+		// Keep release symmetric with capacity-change accounting, including
+		// when the remaining holders still exceed the reduced capacity.
+		s.recomputeGPUAvailableFromAllocations(storeGPU)
 
 		if nodeName == "" {
 			nodeName = storeGPU.Status.NodeSelector[constants.KubernetesHostNameLabel]
@@ -1806,7 +1813,6 @@ func (s *GpuAllocator) Dealloc(
 	if nodeName != "" && len(s.nodeWorkerStore[nodeName]) == 0 && s.nodeGpuStore[nodeName] == nil {
 		delete(s.nodeWorkerStore, nodeName)
 	}
-	delete(s.uniqueAllocation, podUID)
 	if s.isolationPolicy == tfv1.IsolationModePolicyDynamic {
 		for _, gpuName := range gpus {
 			key := types.NamespacedName{Name: gpuName}
@@ -1955,6 +1961,14 @@ func (s *GpuAllocator) AdjustAllocation(ctx context.Context, adjustRequest tfv1.
 		})
 		request.Request = adjustRequest.NewRequest
 		request.Limit = adjustRequest.NewLimit
+		// Recompute from the updated ledger so a prior capacity shrink and this
+		// adjustment cannot accumulate rounding or release drift.
+		for _, gpuName := range request.GPUNames {
+			if gpu := s.gpuStore[types.NamespacedName{Name: gpuName}]; gpu != nil {
+				s.recomputeGPUAvailableFromAllocations(gpu)
+				clampGPUAvailableToCapacity(gpu)
+			}
+		}
 
 		log.FromContext(s.ctx).Info("GPU resource allocation adjust successfully",
 			"namespace", request.PodMeta.Namespace,
@@ -2408,10 +2422,33 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 		// the old entries before syncing the new metadata, otherwise a GPU that
 		// moves nodes or pools remains reachable through its old index.
 		s.removeGPUFromMaps(old)
-		s.handleGPUUpdateCapacityDiff(old, gpu)
+		rebuiltAvailable := s.handleGPUUpdateCapacityDiff(old, gpu)
 
 		// should never update available and runningApps here, to avoid circular update
 		syncGPUMetadataAndStatusFromCluster(old, gpu)
+		if rebuiltAvailable {
+			// Observable marker for capacity changes (e.g. a ProviderConfig
+			// fp16TFlops edit): Available was recomputed from the allocation
+			// ledger rather than shifted by the capacity delta.
+			//
+			// The sync loop only publishes dirty GPUs, and an idle card has no
+			// allocation event to mark it later, so queue it here - otherwise
+			// the CR (and therefore the scheduler, which filters on CR copies)
+			// keeps the pre-change Available forever.
+			s.markGPUDirty(key)
+			if old.Status.Available != nil {
+				log.Info("Rebuilt GPU available from allocations after capacity change",
+					"name", key.Name,
+					"capacityTflops", old.Status.Capacity.Tflops.String(),
+					"availableTflops", old.Status.Available.Tflops.String())
+			} else {
+				// The rebuild bailed out because a held amount is not derivable
+				// from config; surface it instead of silently keeping a stale value.
+				log.Info("Capacity changed but Available was left untouched: allocation usage not derivable from config",
+					"name", key.Name,
+					"capacityTflops", old.Status.Capacity.Tflops.String())
+			}
+		}
 		log.V(6).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
 	} else {
 		gpuInMem := gpu.DeepCopy()
@@ -2529,44 +2566,73 @@ func syncGPUMetadataAndStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
 	// Don't overwrite AllocatedPartitions as that's managed by the allocator
 }
 
-func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
-	if gpu == nil || gpu.Status.Capacity == nil {
-		return
+// allocationUsageOnGPU returns how much of a GPU's capacity one active
+// allocation holds. Percent based requests are converted with the GPU's
+// *current* capacity, mirroring applyAllocationToGPU / releaseAllocationFromGPU
+// so a capacity change rescales them consistently.
+//
+// ok=false means the held amount cannot be derived from config (e.g. the
+// partition template referenced by the allocation was removed or renamed by an
+// upgrade). Callers must then keep the previous accounting instead of treating
+// the allocation as free.
+func allocationUsageOnGPU(gpu *tfv1.GPU, req *tfv1.AllocRequest) (resource.Quantity, resource.Quantity, bool) {
+	if gpu == nil || req == nil || gpu.Status.Capacity == nil {
+		return resource.Quantity{}, resource.Quantity{}, false
+	}
+	if req.Isolation == tfv1.IsolationModePartitioned && req.PartitionTemplateID != "" {
+		partitionTflops, partitionVram, err := CalculatePartitionResourceUsage(
+			gpu.Status.Capacity.Tflops, gpu.Status.GPUModel, req.PartitionTemplateID)
+		if err != nil {
+			return resource.Quantity{}, resource.Quantity{}, false
+		}
+		return partitionTflops, partitionVram, true
+	}
+	if !req.Request.ComputePercent.IsZero() {
+		return *utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request), req.Request.Vram, true
+	}
+	return req.Request.Tflops, req.Request.Vram, true
+}
+
+// handleGPUUpdateCapacityDiff syncs Capacity and repairs Available. It reports
+// whether Available was rebuilt from the allocation ledger.
+func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) bool {
+	if old == nil || gpu == nil || gpu.Status.Capacity == nil {
+		return false
 	}
 	if old.Status.Capacity == nil {
 		old.Status.Capacity = gpu.Status.Capacity.DeepCopy()
 		old.Status.Available = gpu.Status.Capacity.DeepCopy()
+		return false
 	}
 
-	// Detect the hypervisor-restart pattern: GPU CR was reset to zero capacity
-	// (controller saw it disappear and reappear without status), and now the
-	// hypervisor publishes the real capacity. The naive "Available += diff"
-	// math is wrong in that case because it assumes Available already tracked
-	// active allocations through the transition, which it didn't (the worker
-	// was running the whole time but our in-memory Available was reset).
-	oldCapacityWasZero := old.Status.Capacity.Tflops.IsZero() && old.Status.Capacity.Vram.IsZero()
-
-	tflopsDiff := gpu.Status.Capacity.Tflops.DeepCopy()
-	tflopsDiff.Sub(old.Status.Capacity.Tflops)
-	if tflopsDiff.Value() != 0 {
-		old.Status.Capacity.Tflops.Add(tflopsDiff)
-		old.Status.Available.Tflops.Add(tflopsDiff)
+	// Publish the new capacity into the in-memory copy first: the rebuild below
+	// derives Available from the current (new) capacity.
+	tflopsChanged := !old.Status.Capacity.Tflops.Equal(gpu.Status.Capacity.Tflops)
+	vramChanged := !old.Status.Capacity.Vram.Equal(gpu.Status.Capacity.Vram)
+	if tflopsChanged {
+		old.Status.Capacity.Tflops = gpu.Status.Capacity.Tflops.DeepCopy()
 	}
-	vramDiff := gpu.Status.Capacity.Vram.DeepCopy()
-	vramDiff.Sub(old.Status.Capacity.Vram)
-	if vramDiff.Value() != 0 {
-		old.Status.Capacity.Vram.Add(vramDiff)
-		old.Status.Available.Vram.Add(vramDiff)
+	if vramChanged {
+		old.Status.Capacity.Vram = gpu.Status.Capacity.Vram.DeepCopy()
 	}
 
-	if oldCapacityWasZero && (!old.Status.Capacity.Tflops.IsZero() || !old.Status.Capacity.Vram.IsZero()) {
-		// Rebuild Available = Capacity - sum(active Request on this GPU).
-		// uniqueAllocation is the authoritative ledger of who holds what.
+	// A capacity change must never be applied to Available as a raw delta. That
+	// math only balances out when in-memory Available tracked the old capacity
+	// exactly; any pre-existing drift (a delta applied twice while the hypervisor
+	// and the allocator both rewrote status, a dealloc that could not restore
+	// what it took, the hypervisor-restart pattern) is carried over or amplified
+	// - observably: capacity 835 with Available stuck at 681
+	// (= 835 - (989 - 835)), which permanently blocks whole-GPU (shared)
+	// allocation because that path requires Available == Capacity.
+	// Rebuild from the allocation ledger instead, the same source of truth every
+	// other accounting path uses.
+	if tflopsChanged || vramChanged {
 		s.recomputeGPUAvailableFromAllocations(old)
 	}
-	// Final safety net: a stale Dealloc or a Capacity downgrade can still drift
-	// Available above Capacity (the observable symptom). Clamp to invariant.
+	// Final safety net: a stale Dealloc can still drift Available above
+	// Capacity (the observable symptom). Clamp to invariant.
 	clampGPUAvailableToCapacity(old)
+	return tflopsChanged || vramChanged
 }
 
 // recomputeGPUAvailableFromAllocations resets gpu.Status.Available to Capacity,
@@ -2585,22 +2651,87 @@ func (s *GpuAllocator) recomputeGPUAvailableFromAllocations(gpu *tfv1.GPU) {
 			if name != gpu.Name {
 				continue
 			}
+			// A shared (whole-GPU) holder consumes the card entirely.
 			if req.Isolation == tfv1.IsolationModeShared {
-				available.Tflops = resource.Quantity{}
-				available.Vram = resource.Quantity{}
-				gpu.Status.Available = available
+				gpu.Status.Available = &tfv1.Resource{}
 				return
 			}
-			if !req.Request.ComputePercent.IsZero() {
-				tflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
-				available.Tflops.Sub(*tflops)
-			} else {
-				available.Tflops.Sub(req.Request.Tflops)
+			tflops, vram, ok := allocationUsageOnGPU(gpu, req)
+			if !ok {
+				// Held amount is not derivable from config; keep the previous
+				// Available rather than advertising capacity that may be in use.
+				return
 			}
-			available.Vram.Sub(req.Request.Vram)
+			available.Tflops.Sub(tflops)
+			available.Vram.Sub(vram)
 		}
 	}
+	// A card can never have negative capacity left: an over-committed ledger
+	// (e.g. a whole-GPU request larger than a shrunken capacity) reports zero.
+	if available.Tflops.Sign() < 0 {
+		available.Tflops = resource.Quantity{}
+	}
+	if available.Vram.Sign() < 0 {
+		available.Vram = resource.Quantity{}
+	}
 	gpu.Status.Available = available
+}
+
+// gpuNameHasAllocation reports whether the committed allocation ledger still
+// references this GPU. Caller must hold s.storeMutex.
+func (s *GpuAllocator) gpuNameHasAllocation(name string) bool {
+	for _, req := range s.uniqueAllocation {
+		if req == nil {
+			continue
+		}
+		for _, gpuName := range req.GPUNames {
+			if gpuName == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// correctIdleGPUAvailableLocked repairs GPUs that are idle according to both
+// the status snapshot and the allocation ledger, but whose Available drifted
+// away from Capacity (a capacity change double-applied to Available, a dealloc
+// that could not restore the amount it took, a status rewrite that lost a
+// correction).
+//
+// Without this an idle card whose Available is lower than Capacity is a dead
+// end: shared whole-GPU scheduling requires Available == Capacity, the
+// hypervisor only re-seeds Available when it is exactly zero, and the rebuild
+// above only fires on a capacity change. Returns the number of GPUs corrected.
+// Caller must hold s.storeMutex.
+func (s *GpuAllocator) correctIdleGPUAvailableLocked() int {
+	corrected := 0
+	for key, gpu := range s.gpuStore {
+		if gpu == nil || gpu.Status.Capacity == nil {
+			continue
+		}
+		// Only touch cards where both the status snapshot and the ledger agree
+		// that nothing is committed.
+		if len(gpu.Status.RunningApps) > 0 || len(gpu.Status.AllocatedPartitions) > 0 {
+			continue
+		}
+		if s.gpuNameHasAllocation(gpu.Name) {
+			continue
+		}
+		// A nil Available counts as drifted too: shared whole-GPU scheduling
+		// requires it to be set and equal to Capacity.
+		if gpu.Status.Available != nil &&
+			gpu.Status.Available.Tflops.Equal(gpu.Status.Capacity.Tflops) &&
+			gpu.Status.Available.Vram.Equal(gpu.Status.Capacity.Vram) {
+			continue
+		}
+		gpu.Status.Available = gpu.Status.Capacity.DeepCopy()
+		// markGPUDirty (not the ...Locked variant): this sweep runs concurrently
+		// with the sync loop, which swaps the queue under dirtyQueueLock.
+		s.markGPUDirty(key)
+		corrected++
+	}
+	return corrected
 }
 
 // clampGPUAvailableToCapacity enforces the invariant Available <= Capacity for
@@ -3175,11 +3306,16 @@ func (s *GpuAllocator) startWorkerCleanUpChecker() {
 			// would slowly inflate over an operator's lifetime.
 			s.storeMutex.Lock()
 			sweptAssumed := s.sweepStaleAssumedAllocationsLocked(time.Now())
+			// Backstop for drifted Available on idle cards: nothing else
+			// recomputes Available for a card that has no allocation events
+			// (hypervisor only re-seeds it when it is exactly zero, and the
+			// capacity-change rebuild never fires without a capacity change).
+			correctedGPUs := s.correctIdleGPUAvailableLocked()
 			s.storeMutex.Unlock()
 
 			log.FromContext(s.ctx).Info("GPU allocation cleaned up check completed",
 				"total workers", totalWorkers, "backup cleaner cleaned", cleaned,
-				"stale assumed swept", sweptAssumed)
+				"stale assumed swept", sweptAssumed, "idle gpu avail corrected", correctedGPUs)
 		case <-s.ctx.Done():
 			return
 		}
