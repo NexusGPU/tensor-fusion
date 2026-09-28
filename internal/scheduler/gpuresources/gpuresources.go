@@ -440,19 +440,10 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 		return fwk.NewStatus(fwk.Success, "")
 	}
 
-	// Calculate total available GPU resources on this node
-	totalAvailableTflops := resource.Quantity{}
-	totalAvailableVram := resource.Quantity{}
-	for _, gpu := range availableGPUs {
-		if gpu.Status.Available != nil {
-			totalAvailableTflops.Add(gpu.Status.Available.Tflops)
-			totalAvailableVram.Add(gpu.Status.Available.Vram)
-		}
-	}
-
 	// Calculate resources needed by higher priority nominated pods
 	reservedTflops := resource.Quantity{}
 	reservedVram := resource.Quantity{}
+	sharedReservations := make([]*tfv1.AllocRequest, 0)
 
 	for _, nominatedPodInfo := range nominatedPodInfos {
 		nominatedPod := nominatedPodInfo.GetPod()
@@ -488,6 +479,14 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 				"nominatedPod", nominatedPod.Name, "error", err)
 			continue
 		}
+		if nominatedAllocReq.Isolation == tfv1.IsolationModeShared {
+			// Shared requests intentionally have no TFLOPs/VRAM request before
+			// PreBind. They reserve complete physical GPUs instead, so treating
+			// their zero-valued numeric request as free would let another pod
+			// consume a GPU that the nominated pod is waiting to claim.
+			sharedReservations = append(sharedReservations, nominatedAllocReq)
+			continue
+		}
 
 		// Calculate total resources needed (multiply by GPU count for multi-GPU pods)
 		// Handle both Tflops and ComputePercent (use GPU capacity to convert)
@@ -517,8 +516,50 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 			"reservedVramTotal", nominatedVramTotal.String())
 	}
 
+	// Compose the current request before applying reservations. For shared
+	// nominated pods this is the only reliable way to account for the request:
+	// GetGPUResource restores the original request from the legacy annotation
+	// backup, so the patched full-card values are deliberately not visible here.
+	currentAllocReq, _, err := s.allocator.ComposeAllocationRequest(pod)
+	if err != nil {
+		return fwk.NewStatus(fwk.Error, "failed to compose allocation request: "+err.Error())
+	}
+
+	// Remove the whole GPUs reserved for nominated shared pods from this
+	// scheduling cycle's candidate list. This also affects Reserve, which uses
+	// NodeGPUs to choose the final GPU names. If the nominated pod already has
+	// concrete GPU names, reserve those names; otherwise use the same scoring
+	// order as normal GPU selection. The latter is conservative for mixed GPU
+	// nodes, but prevents a lower-priority pod from racing the nominated pod.
+	if len(sharedReservations) > 0 {
+		remainingGPUs, reservedCount := reserveNominatedSharedGPUsWithMatcher(
+			availableGPUs, sharedReservations, schedulingData.ScoringStrategy,
+			s.sharedReservationGPUCompatible)
+		if currentAllocReq.Count > uint(len(remainingGPUs)) {
+			return fwk.NewStatus(fwk.Unschedulable,
+				fmt.Sprintf("GPU resources reserved for nominated shared pods on node %s (reserved %d whole GPUs)", nodeName, reservedCount))
+		}
+		schedulingData.NodeGPUs[nodeName] = remainingGPUs
+		availableGPUs = remainingGPUs
+		s.logger.V(4).Info("Reserved whole GPUs for nominated shared pods",
+			"node", nodeName,
+			"currentPod", pod.Name,
+			"reservedGPUCount", reservedCount,
+			"remainingGPUCount", len(remainingGPUs))
+	}
+
+	// Calculate total available GPU resources after whole-card reservations.
+	totalAvailableTflops := resource.Quantity{}
+	totalAvailableVram := resource.Quantity{}
+	for _, gpu := range availableGPUs {
+		if gpu.Status.Available != nil {
+			totalAvailableTflops.Add(gpu.Status.Available.Tflops)
+			totalAvailableVram.Add(gpu.Status.Available.Vram)
+		}
+	}
+
 	// If no resources need to be reserved, allow scheduling
-	if reservedTflops.IsZero() && reservedVram.IsZero() {
+	if len(sharedReservations) == 0 && reservedTflops.IsZero() && reservedVram.IsZero() {
 		return fwk.NewStatus(fwk.Success, "")
 	}
 
@@ -527,12 +568,6 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 	remainingVram := totalAvailableVram.DeepCopy()
 	remainingTflops.Sub(reservedTflops)
 	remainingVram.Sub(reservedVram)
-
-	// Get current pod's requirements
-	currentAllocReq, _, err := s.allocator.ComposeAllocationRequest(pod)
-	if err != nil {
-		return fwk.NewStatus(fwk.Error, "failed to compose allocation request: "+err.Error())
-	}
 
 	// Handle both Tflops and ComputePercent (use GPU capacity to convert)
 	// IMPORTANT: Calculate total resources needed for multi-GPU pods
@@ -568,6 +603,115 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 	}
 
 	return fwk.NewStatus(fwk.Success, "")
+}
+
+// reserveNominatedSharedGPUs removes candidate GPUs that a nominated shared
+// allocation may claim. A nominated pod usually has no GPU-device-ids yet, so
+// its whole-GPU reservation is represented by the same candidate ordering used
+// by normal placement. If it already has concrete GPU names, those names are
+// preferred. Only GPUs present in the current pod's candidate set are removed;
+// a nominated GPU outside that set cannot be selected by the current pod.
+func reserveNominatedSharedGPUs(candidates []*tfv1.GPU, reservations []*tfv1.AllocRequest, strategy gpuallocator.Strategy) ([]*tfv1.GPU, uint) {
+	return reserveNominatedSharedGPUsWithMatcher(candidates, reservations, strategy,
+		func(*tfv1.GPU, *tfv1.AllocRequest) bool { return true })
+}
+
+func reserveNominatedSharedGPUsWithMatcher(
+	candidates []*tfv1.GPU,
+	reservations []*tfv1.AllocRequest,
+	strategy gpuallocator.Strategy,
+	compatible func(*tfv1.GPU, *tfv1.AllocRequest) bool,
+) ([]*tfv1.GPU, uint) {
+	if len(candidates) == 0 || len(reservations) == 0 {
+		return candidates, 0
+	}
+
+	ordered := slices.Clone(candidates)
+	slices.SortStableFunc(ordered, func(a, b *tfv1.GPU) int {
+		if strategy != nil {
+			if scoreDiff := strategy.Score(b, false) - strategy.Score(a, false); scoreDiff != 0 {
+				return scoreDiff
+			}
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+
+	candidateByName := make(map[string]struct{}, len(candidates))
+	for _, gpu := range candidates {
+		if gpu != nil {
+			candidateByName[gpu.Name] = struct{}{}
+		}
+	}
+	reservedNames := make(map[string]struct{}, len(candidates))
+
+	reserve := func(name string) bool {
+		if _, exists := candidateByName[name]; !exists {
+			return false
+		}
+		if _, exists := reservedNames[name]; exists {
+			return false
+		}
+		reservedNames[name] = struct{}{}
+		return true
+	}
+
+	for _, request := range reservations {
+		if request == nil || request.Count == 0 {
+			continue
+		}
+
+		reservedForRequest := uint(0)
+		for _, gpuName := range request.GPUNames {
+			if reservedForRequest >= request.Count {
+				break
+			}
+			for _, gpu := range candidates {
+				if gpu.Name == gpuName && compatible(gpu, request) && reserve(gpuName) {
+					reservedForRequest++
+					break
+				}
+			}
+		}
+
+		// A nominated pod normally has no concrete GPU names. In that case,
+		// reserve the same number of candidates that normal placement could
+		// select. This is deliberately conservative while victims terminate.
+		for _, gpu := range ordered {
+			if reservedForRequest >= request.Count {
+				break
+			}
+			if compatible(gpu, request) && reserve(gpu.Name) {
+				reservedForRequest++
+			}
+		}
+	}
+
+	remaining := make([]*tfv1.GPU, 0, len(candidates)-len(reservedNames))
+	for _, gpu := range candidates {
+		if _, reserved := reservedNames[gpu.Name]; !reserved {
+			remaining = append(remaining, gpu)
+		}
+	}
+	return remaining, uint(len(reservedNames))
+}
+
+func (s *GPUFit) sharedReservationGPUCompatible(gpu *tfv1.GPU, request *tfv1.AllocRequest) bool {
+	if gpu == nil || request == nil || !s.allocator.IsGPUIsolationCompatible(gpu, request.Isolation) {
+		return false
+	}
+	if request.PoolName != "" && gpu.Labels[constants.GpuPoolKey] != request.PoolName {
+		return false
+	}
+	if request.GPUModel != "" && gpu.Status.GPUModel != request.GPUModel {
+		return false
+	}
+	if request.GPUVendor != "" && gpu.Status.Vendor != request.GPUVendor {
+		return false
+	}
+	if len(request.GPUIndices) > 0 && (gpu.Status.Index == nil || !slices.Contains(request.GPUIndices, *gpu.Status.Index)) {
+		return false
+	}
+	return true
 }
 
 func shouldReserveForNominatedPod(currentPod, nominatedPod *v1.Pod) bool {
