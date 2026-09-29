@@ -17,11 +17,34 @@ limitations under the License.
 package kubernetes
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
+	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/stretchr/testify/assert"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
+
+func TestNewDevicePluginsIncludesLegacyResource(t *testing.T) {
+	plugins := NewDevicePlugins(context.Background(), nil, nil, nil)
+	if len(plugins) != constants.IndexKeyLength+1 {
+		t.Fatalf("plugin count = %d, want %d", len(plugins), constants.IndexKeyLength+1)
+	}
+
+	legacy := plugins[0]
+	assert.Equal(t, constants.PodIndexAnnotation, legacy.resourceName)
+	assert.Equal(t, -1, legacy.resourceNameIndex)
+	assert.Equal(t, constants.LegacyIndexDeviceCount, legacy.deviceCount)
+	assert.Equal(t, filepath.Join(DevicePluginPath, LegacyDevicePluginEndpoint), legacy.socketPath)
+	assert.Equal(t, "0", legacy.deviceID(0))
+	assert.Equal(t, "511", legacy.deviceID(constants.LegacyIndexDeviceCount-1))
+
+	v2 := plugins[1]
+	assert.Equal(t, constants.PodIndexAnnotation+constants.PodIndexDelimiter+"0", v2.resourceName)
+	assert.Equal(t, constants.IndexModLength*(constants.IndexModLength+1)/2, v2.deviceCount)
+	assert.Equal(t, "0-1", v2.deviceID(0))
+}
 
 // TestDevicePluginAllocate_ExtractsIndexFromDevicesIds tests that the device plugin
 // correctly extracts the pod index from DevicesIds[0], not from len(req.ContainerRequests)

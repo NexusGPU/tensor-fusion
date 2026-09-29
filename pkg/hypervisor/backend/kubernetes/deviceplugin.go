@@ -42,6 +42,9 @@ const (
 	KubeletSocket = "kubelet.sock"
 	// DevicePluginEndpoint is the endpoint name for this device plugin
 	DevicePluginEndpoint = "tensor-fusion-index-%d.sock"
+	// LegacyDevicePluginEndpoint reuses the v1 endpoint so kubelet replaces the
+	// old registration cleanly while a node is running the v2 hypervisor.
+	LegacyDevicePluginEndpoint = "tensor-fusion.sock"
 )
 
 // DevicePlugin implements the Kubernetes device plugin interface
@@ -56,6 +59,8 @@ type DevicePlugin struct {
 	server            *grpc.Server
 	socketPath        string
 	resourceNameIndex int
+	resourceName      string
+	deviceCount       int
 }
 
 // NewDevicePlugins creates a new device plugin instance
@@ -65,16 +70,28 @@ func NewDevicePlugins(
 	allocationController framework.WorkerAllocationController,
 	kubeletClient *PodCacheManager,
 ) []*DevicePlugin {
-	devicePlugins := make([]*DevicePlugin, constants.IndexKeyLength)
+	devicePlugins := make([]*DevicePlugin, 0, constants.IndexKeyLength+1)
+	devicePlugins = append(devicePlugins, &DevicePlugin{
+		ctx:                  ctx,
+		deviceController:     deviceController,
+		allocationController: allocationController,
+		kubeletClient:        kubeletClient,
+		socketPath:           filepath.Join(DevicePluginPath, LegacyDevicePluginEndpoint),
+		resourceNameIndex:    -1,
+		resourceName:         constants.PodIndexAnnotation,
+		deviceCount:          constants.LegacyIndexDeviceCount,
+	})
 	for i := range constants.IndexKeyLength {
-		devicePlugins[i] = &DevicePlugin{
+		devicePlugins = append(devicePlugins, &DevicePlugin{
 			ctx:                  ctx,
 			deviceController:     deviceController,
 			allocationController: allocationController,
 			kubeletClient:        kubeletClient,
 			socketPath:           filepath.Join(DevicePluginPath, fmt.Sprintf(DevicePluginEndpoint, i)),
 			resourceNameIndex:    i,
-		}
+			resourceName:         fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, i),
+			deviceCount:          constants.IndexModLength * (constants.IndexModLength + 1) / 2,
+		})
 	}
 	return devicePlugins
 }
@@ -164,8 +181,8 @@ func (dp *DevicePlugin) register() error {
 	client := pluginapi.NewRegistrationClient(conn)
 	req := &pluginapi.RegisterRequest{
 		Version:      pluginapi.Version,
-		Endpoint:     fmt.Sprintf(DevicePluginEndpoint, dp.resourceNameIndex),
-		ResourceName: fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, dp.resourceNameIndex),
+		Endpoint:     filepath.Base(dp.socketPath),
+		ResourceName: dp.resourceName,
 		Options: &pluginapi.DevicePluginOptions{
 			PreStartRequired:                false,
 			GetPreferredAllocationAvailable: false,
@@ -177,8 +194,7 @@ func (dp *DevicePlugin) register() error {
 		return fmt.Errorf("failed to register: %w", err)
 	}
 
-	resourceName := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, dp.resourceNameIndex)
-	klog.V(4).Infof("Successfully registered device plugin with kubelet: %s", resourceName)
+	klog.V(4).Infof("Successfully registered device plugin with kubelet: %s", dp.resourceName)
 	return nil
 }
 
@@ -214,14 +230,13 @@ func (dp *DevicePlugin) GetDevicePluginOptions(
 
 // ListAndWatch streams device list and health updates
 func (dp *DevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
-	klog.V(4).Infof("ListAndWatch called for device plugin index %d", dp.resourceNameIndex)
+	klog.V(4).Infof("ListAndWatch called for device plugin resource %s", dp.resourceName)
 
 	// Build initial device list
-	total := constants.IndexModLength * (constants.IndexModLength + 1) / 2
-	devices := make([]*pluginapi.Device, total)
-	for i := range total {
+	devices := make([]*pluginapi.Device, dp.deviceCount)
+	for i := range dp.deviceCount {
 		devices[i] = &pluginapi.Device{
-			ID:     fmt.Sprintf("%d-%d", dp.resourceNameIndex, i+1),
+			ID:     dp.deviceID(i),
 			Health: pluginapi.Healthy,
 		}
 	}
@@ -238,12 +253,21 @@ func (dp *DevicePlugin) ListAndWatch(req *pluginapi.Empty, stream pluginapi.Devi
 
 	// Check if context was cancelled due to error or normal shutdown
 	if err := stream.Context().Err(); err != nil {
-		klog.Infof("ListAndWatch stream ended for device plugin index %d: %v", dp.resourceNameIndex, err)
+		klog.Infof("ListAndWatch stream ended for device plugin resource %s: %v", dp.resourceName, err)
 		return err
 	}
 
-	klog.Infof("ListAndWatch stream closed normally for device plugin index %d", dp.resourceNameIndex)
+	klog.Infof("ListAndWatch stream closed normally for device plugin resource %s", dp.resourceName)
 	return nil
+}
+
+func (dp *DevicePlugin) deviceID(index int) string {
+	if dp.resourceNameIndex < 0 {
+		// Keep v1's IDs stable so kubelet can reuse its device-plugin
+		// checkpoint while the hypervisor is replaced.
+		return fmt.Sprintf("%d", index)
+	}
+	return fmt.Sprintf("%d-%d", dp.resourceNameIndex, index+1)
 }
 
 // Allocate handles device allocation requests from kubelet
@@ -253,22 +277,29 @@ func (dp *DevicePlugin) Allocate(
 ) (*pluginapi.AllocateResponse, error) {
 	responses := make([]*pluginapi.ContainerAllocateResponse, 0, len(req.ContainerRequests))
 	klog.Infof(
-		"Allocate called for device plugin index %d, container requests: %d",
-		dp.resourceNameIndex,
+		"Allocate called for device plugin resource %s, container requests: %d",
+		dp.resourceName,
 		len(req.ContainerRequests),
 	)
 
 	for containerIdx, containerReq := range req.ContainerRequests {
 		podIndex := len(containerReq.DevicesIds)
-		if podIndex <= 0 || podIndex > constants.IndexModLength {
+		maxPodIndex := constants.IndexModLength
+		if dp.resourceNameIndex < 0 {
+			maxPodIndex = constants.LegacyIndexDeviceCount
+		}
+		if podIndex <= 0 || podIndex > maxPodIndex {
 			return nil, fmt.Errorf(
 				"container request %d dummy device requests is not valid: (expected index value 1-%d)",
 				containerIdx,
-				constants.IndexModLength,
+				maxPodIndex,
 			)
 		}
 
-		podIndexFull := podIndex + (dp.resourceNameIndex * constants.IndexModLength)
+		podIndexFull := podIndex
+		if dp.resourceNameIndex >= 0 {
+			podIndexFull += dp.resourceNameIndex * constants.IndexModLength
+		}
 
 		klog.V(4).Infof(
 			"Processing allocation for container index %d, pod index %d (from DevicesIds)",

@@ -11,6 +11,9 @@ metadata:
 spec:
   requirements: []
   capacity:
+    # Keep the v1 resource during rolling upgrades and rollback. v1's
+    # device plugin advertises one resource with 512 dummy devices.
+    tensor-fusion.ai/index: 512
     tensor-fusion.ai/index_0: 36
     tensor-fusion.ai/index_1: 36
     tensor-fusion.ai/index_2: 36

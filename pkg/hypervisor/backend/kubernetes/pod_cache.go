@@ -174,15 +174,10 @@ func (kc *PodCacheManager) onPodAdd(obj any) {
 		// Only publish workers that are fully ready for device plugin allocation.
 		// The scheduler patches the index first and GPU IDs shortly after; returning the
 		// intermediate snapshot would create an empty allocation that never recovers.
-		if workerInfoReadyForAllocation(workerInfo) {
-			kc.indexToWorkerInfo[podIndex] = workerInfo
-			shouldNotifyIndexSubscribers = true
-		} else {
-			// The index is only valid during device allocation. Once the pod moves on to
-			// Running/Terminated, clear the cached entry so the next pod reusing the same
-			// index cannot receive stale worker metadata.
-			delete(kc.indexToWorkerInfo, podIndex)
-		}
+		// If more than one ready Pod claims the index, leave it unavailable until the
+		// conflict is gone. Returning either Pod would allow the device plugin to attach
+		// the wrong GPU allocation because Allocate has no Pod UID to disambiguate.
+		shouldNotifyIndexSubscribers = kc.refreshIndexWorkerInfoLocked(podIndex)
 	}
 	kc.mu.Unlock()
 
@@ -222,24 +217,37 @@ func (kc *PodCacheManager) onPodDelete(obj any) {
 	}
 
 	kc.mu.Lock()
-	defer kc.mu.Unlock()
 	podUID := string(pod.UID)
 	delete(kc.cachedPod, podUID)
 	workerInfo, index, err := kc.extractWorkerInfo(pod)
 	if err != nil {
+		kc.mu.Unlock()
 		klog.Error(err, "Failed to extract worker info for pod", "pod", pod.Name, "namespace", pod.Namespace)
 		return
 	}
 	workerInfo.DeletedAt = time.Now().UnixMilli()
-	kc.notifyWorkerChanged(workerInfo)
 
+	shouldNotifyIndexSubscribers := false
 	if index != "" {
 		podIndex, err := strconv.Atoi(index)
 		if err != nil {
+			kc.mu.Unlock()
 			klog.Error(err, "Failed to convert node index to int", "node index", index)
 			return
 		}
-		delete(kc.indexToWorkerInfo, podIndex)
+		// Rebuild the entry from the remaining cached Pods. This handles informer
+		// delete events arriving out of order and promotes a unique replacement
+		// after a duplicate-index conflict is resolved.
+		shouldNotifyIndexSubscribers = kc.refreshIndexWorkerInfoLocked(podIndex)
+	}
+	kc.mu.Unlock()
+
+	kc.notifyWorkerChanged(workerInfo)
+	if shouldNotifyIndexSubscribers {
+		select {
+		case kc.workerChangedCh <- struct{}{}:
+		default:
+		}
 	}
 	klog.Infof(
 		"Pod %s/%s (UID: %s) deleted. state: %s node index: %s",
@@ -250,6 +258,47 @@ func (kc *PodCacheManager) onPodDelete(obj any) {
 		index,
 	)
 
+}
+
+// refreshIndexWorkerInfoLocked rebuilds the index entry from the current Pod
+// cache. The caller must hold kc.mu. A single ready worker is safe to publish;
+// zero or multiple ready workers leaves the index unavailable so the device
+// plugin cannot allocate a device for an ambiguous Pod.
+func (kc *PodCacheManager) refreshIndexWorkerInfoLocked(podIndex int) bool {
+	var candidate *api.WorkerInfo
+	for _, pod := range kc.cachedPod {
+		indexValue := pod.Annotations[constants.PodIndexAnnotation]
+		if indexValue == "" {
+			continue
+		}
+		index, err := strconv.Atoi(indexValue)
+		if err != nil || index != podIndex {
+			continue
+		}
+		workerInfo, _, err := kc.extractWorkerInfo(pod)
+		if err != nil || !workerInfoReadyForAllocation(workerInfo) {
+			continue
+		}
+		if candidate != nil && candidate.WorkerUID != workerInfo.WorkerUID {
+			delete(kc.indexToWorkerInfo, podIndex)
+			klog.Warningf(
+				"Duplicate ready worker Pods claim the same index; waiting for conflict: index=%d "+
+					"firstWorkerUID=%s duplicateWorkerUID=%s",
+				podIndex,
+				candidate.WorkerUID,
+				workerInfo.WorkerUID,
+			)
+			return false
+		}
+		candidate = workerInfo
+	}
+
+	if candidate == nil {
+		delete(kc.indexToWorkerInfo, podIndex)
+		return false
+	}
+	kc.indexToWorkerInfo[podIndex] = candidate
+	return true
 }
 
 // runWorkerChangeEventBus runs a standalone goroutine that consumes workerChangedCh
