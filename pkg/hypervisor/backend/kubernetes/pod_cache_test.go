@@ -413,6 +413,73 @@ func TestOnPodUpdate_ClearsStaleIndexWorkerInfo(t *testing.T) {
 	}
 }
 
+func TestPodCache_DuplicateIndexWaitsAndPromotesReplacement(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	kc := &PodCacheManager{
+		ctx:               ctx,
+		nodeName:          "test-node",
+		cachedPod:         make(map[string]*corev1.Pod, 32),
+		indexToWorkerInfo: make(map[int]*api.WorkerInfo, 32),
+		stopCh:            make(chan struct{}),
+		workerChangedCh:   make(chan struct{}, 1),
+		indexSubscribers:  make(map[int]map[*workerInfoSubscriber]struct{}),
+		podSubscribers:    make(map[string]chan<- *api.WorkerInfo),
+	}
+	go kc.runWorkerChangeEventBus()
+	defer close(kc.stopCh)
+
+	const index = 17
+	first := createTestPodWithIndexAndGPUIds(index, "gpu-first")
+	second := createTestPodWithIndexAndGPUIds(index, "gpu-second")
+	second.Name = "test-pod-duplicate"
+	second.UID = types.UID("test-uid-duplicate")
+
+	kc.onPodAdd(first)
+	kc.onPodAdd(second)
+
+	kc.mu.RLock()
+	_, exists := kc.indexToWorkerInfo[index]
+	kc.mu.RUnlock()
+	if exists {
+		t.Fatalf("duplicate index %d must remain unavailable while both Pods are ready", index)
+	}
+
+	resultCh := make(chan *api.WorkerInfo, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		workerInfo, err := kc.GetWorkerInfoForAllocationByIndex(index)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- workerInfo
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	// Removing one claimant should promote the remaining Pod and wake Allocate.
+	kc.onPodDelete(first)
+	select {
+	case workerInfo := <-resultCh:
+		if workerInfo.WorkerUID != string(second.UID) {
+			t.Fatalf("promoted worker UID = %s, want %s", workerInfo.WorkerUID, second.UID)
+		}
+	case err := <-errCh:
+		t.Fatalf("allocation lookup failed after conflict resolution: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for replacement worker")
+	}
+
+	kc.onPodDelete(second)
+	kc.mu.RLock()
+	_, exists = kc.indexToWorkerInfo[index]
+	kc.mu.RUnlock()
+	if exists {
+		t.Fatalf("worker index %d still present after final claimant deletion", index)
+	}
+}
+
 func TestExtractWorkerInfoPreservesV1IsolationModes(t *testing.T) {
 	t.Parallel()
 

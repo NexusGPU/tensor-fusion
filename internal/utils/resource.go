@@ -218,10 +218,18 @@ func ComposeAllocationRequest(ctx context.Context, pod *corev1.Pod) (*tfv1.Alloc
 }
 
 func ParsePodIndexResourceClaim(pod *corev1.Pod) (int, error) {
+	var legacyIndex int64
+	var hasLegacyIndex bool
 	for _, container := range pod.Spec.Containers {
 		for indexKey, indexValue := range container.Resources.Limits {
-			if strings.HasPrefix(string(indexKey), constants.PodIndexAnnotation+constants.PodIndexDelimiter) {
-				indexStr := strings.Split(string(indexKey), constants.PodIndexDelimiter)[1]
+			key := string(indexKey)
+			if key == constants.PodIndexAnnotation {
+				legacyIndex = indexValue.Value()
+				hasLegacyIndex = true
+				continue
+			}
+			if strings.HasPrefix(key, constants.PodIndexAnnotation+constants.PodIndexDelimiter) {
+				indexStr := strings.TrimPrefix(key, constants.PodIndexAnnotation+constants.PodIndexDelimiter)
 				indexInt, err := strconv.ParseInt(indexStr, 16, 64)
 				if err != nil {
 					return 0, fmt.Errorf("failed to parse tensor fusion index of Pod resource limits: %v", err)
@@ -232,6 +240,12 @@ func ParsePodIndexResourceClaim(pod *corev1.Pod) (int, error) {
 				return int(indexValue.Value()) + int(indexInt)*constants.IndexModLength, nil
 			}
 		}
+	}
+	if hasLegacyIndex {
+		if legacyIndex < 1 || legacyIndex > constants.LegacyIndexDeviceCount {
+			return 0, fmt.Errorf("legacy tensor fusion index of Pod resource limits out of range: %d", legacyIndex)
+		}
+		return int(legacyIndex), nil
 	}
 	return 0, fmt.Errorf("tensor fusion index of Pod resource limits is missing in any container")
 }

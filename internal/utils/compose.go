@@ -1836,7 +1836,8 @@ func hasPodIndexResourceClaim(container *v1.Container) bool {
 		return false
 	}
 	for key := range container.Resources.Limits {
-		if strings.HasPrefix(string(key), constants.PodIndexAnnotation+constants.PodIndexDelimiter) {
+		if key == v1.ResourceName(constants.PodIndexAnnotation) ||
+			strings.HasPrefix(string(key), constants.PodIndexAnnotation+constants.PodIndexDelimiter) {
 			return true
 		}
 	}

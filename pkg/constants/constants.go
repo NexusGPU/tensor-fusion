@@ -393,6 +393,8 @@ const (
 	// tensor-fusion.ai/index_0: 1 to tensor-fusion.ai/index_f: 8
 	IndexKeyLength = 16
 	IndexModLength = 8
+	// Legacy v1 device plugin capacity for tensor-fusion.ai/index.
+	LegacyIndexDeviceCount = 512
 )
 
 const (
