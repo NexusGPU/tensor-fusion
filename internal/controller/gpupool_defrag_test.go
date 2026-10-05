@@ -3175,7 +3175,7 @@ func TestReconcile_IntervalGate_SkipsDefragOnPendingClaim(t *testing.T) {
 // ---- progressive defrag: complete plan + single-step eviction ----------
 
 func newEvictionCountingClientset() (*clientgofake.Clientset, *int) {
-	fakeClient := clientgofake.NewSimpleClientset()
+	fakeClient := clientgofake.NewSimpleClientset(newDefragWorkerPDB())
 	attempts := new(int)
 	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if a.GetSubresource() != testEvictionSubresource {
@@ -3341,7 +3341,7 @@ func TestProcessDefragCandidate_CompletePlan_EvictsOnlyFirstPod(t *testing.T) {
 
 func TestProcessDefragCandidate_RetryableEviction_KeepsSourceMarker(t *testing.T) {
 	r, kubeClient, pool, podA, podB := newSharedNodeWorkloadFixture(t)
-	kubeFake := clientgofake.NewSimpleClientset()
+	kubeFake := clientgofake.NewSimpleClientset(newDefragWorkerPDB())
 	attempts := 0
 	kubeFake.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if a.GetSubresource() != testEvictionSubresource {

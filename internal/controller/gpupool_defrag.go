@@ -1109,6 +1109,20 @@ func (r *GPUPoolCompactionReconciler) evictSingleDefragPod(
 		return defragCandidateSkipped
 	}
 
+	// Recheck coverage after simulation for both fresh candidates and resumed
+	// source nodes: workers and PDBs may have changed since candidate selection.
+	if missingPod, pdbErr := r.findWorkerMissingPDB(ctx, cand.workerPods); pdbErr != nil {
+		l.Error(pdbErr, "refresh PDB check failed; skip candidate")
+		return defragCandidateSkipped
+	} else if missingPod != nil {
+		if stats != nil {
+			stats.MissingPDBNodes++
+		}
+		r.Recorder.Eventf(pool, nil, corev1.EventTypeWarning, defragEventSkipMissingPDB, defragEventSkipMissingPDB,
+			"node %s skipped from defrag after refresh: pod %s/%s has no PodDisruptionBudget covering it",
+			cand.nodeName, missingPod.Namespace, missingPod.Name)
+		return defragCandidateSkipped
+	}
 	pdbBlocked, pdbReason, err := r.checkDefragPDBPreflight(ctx, cand)
 	if err != nil {
 		if stats != nil {

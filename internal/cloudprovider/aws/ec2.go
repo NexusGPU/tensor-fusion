@@ -102,6 +102,9 @@ func (p AWSGPUNodeProvider) TerminateNode(ctx context.Context, param *types.Node
 }
 
 func (p AWSGPUNodeProvider) GetNodeStatus(ctx context.Context, param *types.NodeIdentityParam) (*types.GPUNodeStatus, error) {
+	if param == nil {
+		return nil, fmt.Errorf("node identity parameter is required")
+	}
 	// Fetch instance status using DescribeInstances API
 	input := &ec2.DescribeInstancesInput{
 		InstanceIds: []string{param.InstanceID},
@@ -110,21 +113,28 @@ func (p AWSGPUNodeProvider) GetNodeStatus(ctx context.Context, param *types.Node
 	if err != nil {
 		return nil, fmt.Errorf("failed to describe instance: %w", err)
 	}
-	if len(output.Reservations) == 0 || len(output.Reservations[0].Instances) == 0 {
+	if output == nil || len(output.Reservations) == 0 || len(output.Reservations[0].Instances) == 0 {
 		return nil, fmt.Errorf("instance not found")
 	}
 
 	instance := output.Reservations[0].Instances[0]
+	return gpuNodeStatusFromInstance(instance)
+}
 
-	status := &types.GPUNodeStatus{
-		InstanceID: *instance.InstanceId,
-		CreatedAt:  *instance.LaunchTime,
-
-		PrivateIP: *instance.PrivateIpAddress,
-		PublicIP:  *instance.PublicIpAddress,
+func gpuNodeStatusFromInstance(instance ec2Types.Instance) (*types.GPUNodeStatus, error) {
+	if instance.InstanceId == nil {
+		return nil, fmt.Errorf("instance response has no instance ID")
+	}
+	if instance.LaunchTime == nil {
+		return nil, fmt.Errorf("instance %s response has no launch time", aws.ToString(instance.InstanceId))
 	}
 
-	return status, nil
+	return &types.GPUNodeStatus{
+		InstanceID: aws.ToString(instance.InstanceId),
+		CreatedAt:  *instance.LaunchTime,
+		PrivateIP:  aws.ToString(instance.PrivateIpAddress),
+		PublicIP:   aws.ToString(instance.PublicIpAddress),
+	}, nil
 }
 
 func (p AWSGPUNodeProvider) GetInstancePricing(instanceType string, capacityType tfv1.CapacityTypeEnum, region string) (float64, error) {

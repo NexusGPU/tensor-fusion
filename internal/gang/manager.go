@@ -756,12 +756,14 @@ func (m *Manager) Permit(
 		pgInfo = NewPodGroupInfo(config.GroupKey, config.MinMembers, config.DesiredMembers, config.RequiredMembers, config.Timeout)
 		m.podGroups[config.GroupKey] = pgInfo
 	}
+	// m.mu protects the group map and pgInfo.mu protects the group's mutable
+	// state. Acquire them in that order so lifecycle readers cannot observe
+	// quorum fields while they are being refreshed.
+	pgInfo.mu.Lock()
 	pgInfo.MinMembers = config.MinMembers
 	pgInfo.DesiredMembers = config.DesiredMembers
 	pgInfo.RequiredMembers = config.RequiredMembers
 	m.rememberStatusTarget(pgInfo, pod)
-
-	pgInfo.mu.Lock()
 	m.mu.Unlock()
 
 	// Check if already timed out

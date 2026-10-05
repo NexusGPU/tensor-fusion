@@ -905,11 +905,15 @@ func (s *GpuAllocator) getOrCreateReleasedGPUCopy(
 }
 
 func (s *GpuAllocator) releaseVictimAllocationFromGPU(gpuCopy *tfv1.GPU, preemptAllocRequest *tfv1.AllocRequest, gpuName string) error {
-	var beforeTflops, beforeVram string
-	if gpuCopy.Status.Available != nil {
-		beforeTflops = gpuCopy.Status.Available.Tflops.String()
-		beforeVram = gpuCopy.Status.Available.Vram.String()
+	if gpuCopy == nil || preemptAllocRequest == nil {
+		return fmt.Errorf("cannot simulate release on GPU %s: GPU and allocation request are required", gpuName)
 	}
+	if gpuCopy.Status.Capacity == nil || gpuCopy.Status.Available == nil {
+		return fmt.Errorf("cannot simulate release on GPU %s: capacity or available resources are nil", gpuName)
+	}
+
+	beforeTflops := gpuCopy.Status.Available.Tflops.String()
+	beforeVram := gpuCopy.Status.Available.Vram.String()
 
 	reqTflops, err := s.requestedTflopsForGPU(gpuCopy, preemptAllocRequest.Request)
 	if err != nil {
@@ -1167,8 +1171,20 @@ func (s *GpuAllocator) applyAllocationToGPU(gpu *tfv1.GPU, req *tfv1.AllocReques
 }
 
 func (s *GpuAllocator) releaseAllocationFromGPU(gpu *tfv1.GPU, request *tfv1.AllocRequest, gpuName string) {
-	if gpu == nil {
+	if gpu == nil || request == nil {
 		return
+	}
+	if gpu.Status.Capacity == nil {
+		// Capacity recovery rebuilds Available from the remaining allocations.
+		// Drop the departing partition even while resource usage is unknown.
+		delete(gpu.Status.AllocatedPartitions, string(request.PodMeta.UID))
+		log.FromContext(s.ctx).Info("Skipping resource release until GPU capacity recovers", "gpu", gpuName)
+		return
+	}
+	if gpu.Status.Available == nil {
+		// The committed ledger still includes this request. Restore its debit
+		// before adding resources back, preserving every other worker's usage.
+		s.recomputeGPUAvailableFromAllocations(gpu)
 	}
 	if request.Isolation == tfv1.IsolationModePartitioned && request.PartitionTemplateID != "" {
 		s.deallocPartition(gpu, request, gpuName)
@@ -1178,7 +1194,6 @@ func (s *GpuAllocator) releaseAllocationFromGPU(gpu *tfv1.GPU, request *tfv1.All
 		gpu.Status.Available = gpu.Status.Capacity.DeepCopy()
 		return
 	}
-
 	reqTflops, err := s.requestedTflopsForGPU(gpu, request.Request)
 	if err != nil {
 		reqTflops = request.Request.Tflops
@@ -2544,9 +2559,10 @@ func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
 	if gpu == nil || gpu.Status.Capacity == nil {
 		return
 	}
-	if old.Status.Capacity == nil {
+	if old.Status.Capacity == nil || old.Status.Available == nil {
 		old.Status.Capacity = gpu.Status.Capacity.DeepCopy()
-		old.Status.Available = gpu.Status.Capacity.DeepCopy()
+		s.recomputeGPUAvailableFromAllocations(old)
+		return
 	}
 
 	// Detect the hypervisor-restart pattern: GPU CR was reset to zero capacity
@@ -2601,6 +2617,17 @@ func (s *GpuAllocator) recomputeGPUAvailableFromAllocations(gpu *tfv1.GPU) {
 				available.Vram = resource.Quantity{}
 				gpu.Status.Available = available
 				return
+			}
+			if req.Isolation == tfv1.IsolationModePartitioned && req.PartitionTemplateID != "" {
+				tflops, vram, err := CalculatePartitionResourceUsage(gpu.Status.Capacity.Tflops, gpu.Status.GPUModel, req.PartitionTemplateID)
+				if err != nil {
+					// Unknown partition usage must not make the card look idle.
+					gpu.Status.Available = &tfv1.Resource{}
+					return
+				}
+				available.Tflops.Sub(tflops)
+				available.Vram.Sub(vram)
+				continue
 			}
 			if !req.Request.ComputePercent.IsZero() {
 				tflops := utils.ComputePercentToTflops(gpu.Status.Capacity.Tflops, req.Request)
@@ -3055,9 +3082,12 @@ func (s *GpuAllocator) reconcileAllocationState() {
 			log.FromContext(ctx).Info("[Warning] GPU capacity is nil, skip reconcile", "gpu", gpuKey.Name)
 			continue
 		}
-		sameTflops := gpu.Status.Available.Tflops.Equal(actualAvailableMap[gpuKey].Tflops)
-		sameVRAM := gpu.Status.Available.Vram.Equal(actualAvailableMap[gpuKey].Vram)
+		sameTflops := gpu.Status.Available != nil && gpu.Status.Available.Tflops.Equal(actualAvailableMap[gpuKey].Tflops)
+		sameVRAM := gpu.Status.Available != nil && gpu.Status.Available.Vram.Equal(actualAvailableMap[gpuKey].Vram)
 		if !sameTflops || !sameVRAM {
+			if gpu.Status.Available == nil {
+				gpu.Status.Available = &tfv1.Resource{}
+			}
 			gpu.Status.Available.Tflops = actualAvailableMap[gpuKey].Tflops
 			gpu.Status.Available.Vram = actualAvailableMap[gpuKey].Vram
 			s.markGPUDirtyLocked(gpuKey)
