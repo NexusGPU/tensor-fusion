@@ -260,7 +260,7 @@ func (m *TensorFusionPodMutator) Handle(ctx context.Context, req admission.Reque
 	}
 
 	if podCounterAnnotationKey != "" {
-		if err := counter.Increase(ctx, pod); err != nil {
+		if err := counter.IncreaseWithKey(ctx, pod, podCounterAnnotationKey); err != nil {
 			return admission.Errored(http.StatusInternalServerError, fmt.Errorf("increase tf pod count: %w", err))
 		}
 		// Patch annotation for pod counter
@@ -589,8 +589,16 @@ func applyPodIndexResource(container *corev1.Container, index int) {
 	if container.Resources.Limits == nil {
 		container.Resources.Limits = make(corev1.ResourceList)
 	}
-	indexQuantity := resource.MustParse(strconv.Itoa((index % constants.IndexModLength) + 1))
-	indexKey := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, index/constants.IndexModLength)
+	// IndexAllocator returns a one-based index (1..128), while the resource
+	// encoding is zero-based (index_0..index_f with quantities 1..8).
+	// Keep the zero value as the first slot for the allocator-unavailable
+	// fallback, but never let it produce a negative resource index.
+	if index <= 0 || index > constants.IndexKeyLength*constants.IndexModLength {
+		index = 1
+	}
+	zeroBasedIndex := index - 1
+	indexQuantity := resource.MustParse(strconv.Itoa((zeroBasedIndex % constants.IndexModLength) + 1))
+	indexKey := fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, zeroBasedIndex/constants.IndexModLength)
 	container.Resources.Limits[corev1.ResourceName(indexKey)] = indexQuantity
 }
 

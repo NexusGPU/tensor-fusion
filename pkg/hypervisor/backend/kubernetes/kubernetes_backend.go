@@ -44,6 +44,8 @@ type KubeletBackend struct {
 	deviceTflopsMu sync.RWMutex
 
 	subscribers   map[string]struct{}
+	subscribersMu sync.Mutex
+	stopped       bool
 	workerHandler *framework.WorkerChangeHandler
 }
 
@@ -144,6 +146,19 @@ func (b *KubeletBackend) Start() error {
 }
 
 func (b *KubeletBackend) Stop() error {
+	b.subscribersMu.Lock()
+	if b.stopped {
+		b.subscribersMu.Unlock()
+		return nil
+	}
+	b.stopped = true
+	subscriberIDs := make([]string, 0, len(b.subscribers))
+	for subscriberID := range b.subscribers {
+		subscriberIDs = append(subscriberIDs, subscriberID)
+	}
+	clear(b.subscribers)
+	b.subscribersMu.Unlock()
+
 	if b.devicePlugins != nil {
 		for i, devicePlugin := range b.devicePlugins {
 			if err := devicePlugin.Stop(); err != nil {
@@ -161,10 +176,9 @@ func (b *KubeletBackend) Stop() error {
 	}
 
 	if b.podCacher != nil {
-		for subscriberID := range b.subscribers {
+		for _, subscriberID := range subscriberIDs {
 			b.podCacher.UnregisterWorkerInfoSubscriber(subscriberID)
 		}
-		b.subscribers = make(map[string]struct{})
 		b.podCacher.Stop()
 	}
 
@@ -173,6 +187,11 @@ func (b *KubeletBackend) Stop() error {
 
 // RegisterWorkerUpdateHandler registers a handler for worker updates
 func (b *KubeletBackend) RegisterWorkerUpdateHandler(handler framework.WorkerChangeHandler) error {
+	b.subscribersMu.Lock()
+	defer b.subscribersMu.Unlock()
+	if b.stopped {
+		return fmt.Errorf("kubelet backend is stopped")
+	}
 	b.workerHandler = &handler
 
 	// Create a channel bridge to convert channel messages to handler calls
@@ -185,12 +204,16 @@ func (b *KubeletBackend) RegisterWorkerUpdateHandler(handler framework.WorkerCha
 	go func() {
 		defer func() {
 			b.podCacher.UnregisterWorkerInfoSubscriber(subscriberID)
+			b.subscribersMu.Lock()
 			delete(b.subscribers, subscriberID)
+			b.subscribersMu.Unlock()
 		}()
 
 		for {
 			select {
 			case <-b.ctx.Done():
+				return
+			case <-b.podCacher.stopCh:
 				return
 			case worker, ok := <-workerCh:
 				if !ok {
@@ -312,10 +335,26 @@ func (b *KubeletBackend) ListWorkers() []*api.WorkerInfo {
 func (b *KubeletBackend) mutateGPUResourceState(
 	device *api.DeviceInfo, gpuNode *tfv1.GPUNode, gpu *tfv1.GPU,
 ) error {
+	if gpuNode == nil || gpu == nil {
+		return fmt.Errorf("GPU node and GPU are required")
+	}
+	controllerRef := metav1.GetControllerOf(gpuNode)
+	poolName := ""
+	if controllerRef != nil {
+		poolName = controllerRef.Name
+	} else if len(gpuNode.OwnerReferences) > 0 {
+		// Older GPUNode objects may have an owner reference without the
+		// controller bit set. Keep accepting those objects while avoiding an
+		// unchecked index into an empty slice.
+		poolName = gpuNode.OwnerReferences[0].Name
+	}
+	if poolName == "" {
+		return fmt.Errorf("GPU node %s has no controller owner reference", gpuNode.Name)
+	}
 	// Set metadata fields
 	gpu.Labels = map[string]string{
 		constants.LabelKeyOwner: gpuNode.Name,
-		constants.GpuPoolKey:    gpuNode.OwnerReferences[0].Name,
+		constants.GpuPoolKey:    poolName,
 	}
 	gpu.Annotations = map[string]string{
 		constants.LastSyncTimeAnnotationKey:               time.Now().Format(time.RFC3339),

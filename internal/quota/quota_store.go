@@ -543,14 +543,14 @@ func (qs *QuotaStore) validateQuotaConfig(quota *tfv1.GPUResourceQuota) error {
 // ReconcileQuotaStore rebuilds quota usage from actual worker pods
 func (qs *QuotaStore) ReconcileQuotaStore(ctx context.Context, namespacedAllocations map[string]*tfv1.AllocRequest) {
 	log := log.FromContext(ctx)
+	qs.StoreMutex.Lock()
+	defer qs.StoreMutex.Unlock()
 	if len(qs.QuotaStore) == 0 {
 		return
 	}
 	log.Info("Reconciling namespace level quota store")
 
 	// Reset all current usage to zero
-	qs.StoreMutex.Lock()
-	defer qs.StoreMutex.Unlock()
 
 	for _, entry := range qs.QuotaStore {
 		entry.CurrentUsage = qs.Calculator.CreateZeroUsage()

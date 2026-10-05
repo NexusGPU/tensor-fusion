@@ -55,11 +55,16 @@ type GPUPoolCompactionReconciler struct {
 	// gating without standing up a scheduler.
 	defragStepFn func(ctx context.Context, pool *tfv1.GPUPool, normalRequeue time.Duration) time.Duration
 
-	markDeletionNodes map[string]struct{}
+	markDeletionNodes map[string]compactionNodeMarker
 
 	// defragSimulate overrides simulateJointPlacement in unit tests so the
 	// full-cohort preflight can be exercised without a live scheduler.
 	defragSimulate func(ctx context.Context, pool *tfv1.GPUPool, cand *defragCandidate, maxWorkerPerNode int) (bool, *defragPlacementDiagnostics, error)
+}
+
+type compactionNodeMarker struct {
+	poolName string
+	uid      types.UID
 }
 
 var defaultCompactionDuration = 1 * time.Minute
@@ -189,6 +194,9 @@ func (r *GPUPoolCompactionReconciler) shouldSkipNodeForCompaction(
 	nodeToWorker map[string]map[types.NamespacedName]struct{},
 ) bool {
 	k8sNodeName := gpuNode.Name
+	if _, marked := r.markDeletionNodes[k8sNodeName]; marked {
+		return true
+	}
 	switch {
 	case gpuNode.Labels[constants.SchedulingDoNotDisruptLabel] == constants.TrueStringValue:
 		return true
@@ -217,7 +225,7 @@ func (r *GPUPoolCompactionReconciler) recordProvisionCompaction(
 	}
 
 	capacity.consumeNode(gpuNode)
-	r.markDeletionNodes[k8sNodeName] = struct{}{}
+	r.markDeletionNodes[k8sNodeName] = compactionNodeMarker{poolName: pool.Name, uid: gpuNode.UID}
 
 	log.FromContext(ctx).Info("Empty node can be compacted - provision mode", "node", gpuNode.Name,
 		"availableTFlopsAfterCompact", capacity.availableTFlops,
@@ -235,6 +243,7 @@ func (r *GPUPoolCompactionReconciler) recordProvisionCompaction(
 
 func (r *GPUPoolCompactionReconciler) recordAutoSelectCompaction(
 	ctx context.Context,
+	poolName string,
 	gpuNode *tfv1.GPUNode,
 	capacity *compactionPoolCapacity,
 ) error {
@@ -251,7 +260,7 @@ func (r *GPUPoolCompactionReconciler) recordAutoSelectCompaction(
 	}
 
 	capacity.consumeNode(gpuNode)
-	r.markDeletionNodes[k8sNodeName] = struct{}{}
+	r.markDeletionNodes[k8sNodeName] = compactionNodeMarker{poolName: poolName, uid: gpuNode.UID}
 
 	log.FromContext(ctx).Info("Empty node can be compacted - auto-select mode", "node", gpuNode.Name,
 		"availableTFlopsAfterCompact", capacity.availableTFlops,
@@ -305,6 +314,9 @@ func (r *GPUPoolCompactionReconciler) persistPendingDeletionNodes(
 // Strategy #4: check if any two same nodes can be merged into one larger node, and make the remained capacity bigger and node number less without violating the capacity constraint and saving the hidden management,license,monitoring costs, potentially schedule more workloads since remaining capacity is single cohesive piece rather than fragments
 func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, pool *tfv1.GPUPool) error {
 	log := log.FromContext(ctx)
+	if r.markDeletionNodes == nil {
+		r.markDeletionNodes = make(map[string]compactionNodeMarker)
+	}
 
 	// Strategy #1, terminate empty node
 	allNodes := &tfv1.GPUNodeList{}
@@ -313,6 +325,7 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 	})); err != nil {
 		return fmt.Errorf("failed to list nodes : %w", err)
 	}
+	r.pruneMarkedDeletionNodes(ctx, pool, allNodes.Items)
 
 	gpuStore, nodeToWorker, _ := r.Allocator.GetAllocationInfo()
 	capacity := r.buildCompactionPoolCapacity(ctx, pool, gpuStore)
@@ -328,12 +341,65 @@ func (r *GPUPoolCompactionReconciler) checkNodeCompaction(ctx context.Context, p
 			continue
 		}
 
-		if err := r.recordAutoSelectCompaction(ctx, &gpuNode, &capacity); err != nil {
+		if err := r.recordAutoSelectCompaction(ctx, pool.Name, &gpuNode, &capacity); err != nil {
 			log.Error(err, "patch idle node failed", "node", gpuNode.Name)
 		}
 	}
 
 	return r.persistPendingDeletionNodes(ctx, pool, toDeleteGPUNodes)
+}
+
+// pruneMarkedDeletionNodes keeps the in-memory compaction guard aligned with
+// the API objects. Without this sweep, a deleted node (or a recreated node
+// with the same name) could leave a permanent marker that excluded it from
+// every future capacity calculation.
+func (r *GPUPoolCompactionReconciler) pruneMarkedDeletionNodes(
+	ctx context.Context, pool *tfv1.GPUPool, gpuNodes []tfv1.GPUNode,
+) {
+	if len(r.markDeletionNodes) == 0 {
+		return
+	}
+	activeNodes := make(map[string]*tfv1.GPUNode, len(gpuNodes))
+	for i := range gpuNodes {
+		activeNodes[gpuNodes[i].Name] = &gpuNodes[i]
+	}
+
+	pendingClaims := make(map[string]struct{})
+	pendingGPUNodeStateLock.RLock()
+	for _, claimName := range PendingDeletionGPUNodes[pool.Name] {
+		pendingClaims[claimName] = struct{}{}
+	}
+	pendingGPUNodeStateLock.RUnlock()
+
+	for nodeName, marker := range r.markDeletionNodes {
+		if marker.poolName != pool.Name {
+			continue
+		}
+		gpuNode, exists := activeNodes[nodeName]
+		if !exists || (marker.uid != "" && gpuNode.UID != "" && marker.uid != gpuNode.UID) {
+			delete(r.markDeletionNodes, nodeName)
+			continue
+		}
+		if claimName := gpuNode.Labels[constants.ProvisionerLabelKey]; claimName != "" {
+			if _, pending := pendingClaims[claimName]; pending {
+				continue
+			}
+		}
+
+		// Auto-select compaction marks the Kubernetes Node. If that mark is
+		// gone, this is a new lifecycle for the same node name and the old
+		// in-memory guard must not suppress it.
+		node := &corev1.Node{}
+		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, node); err != nil {
+			if errors.IsNotFound(err) {
+				delete(r.markDeletionNodes, nodeName)
+			}
+			continue
+		}
+		if node.Labels[constants.NodeDeletionMark] != constants.TrueStringValue {
+			delete(r.markDeletionNodes, nodeName)
+		}
+	}
 }
 
 func (r *GPUPoolCompactionReconciler) getCompactionDuration(ctx context.Context, config *tfv1.NodeManagerConfig) time.Duration {
@@ -445,6 +511,11 @@ func (r *GPUPoolCompactionReconciler) cleanupPerPoolState(req ctrl.Request) {
 	jobStarted.Delete(req.String())
 	defragLastRunStats.Delete(req.Name)
 	r.defragRunning.Delete(req.Name)
+	for nodeName, marker := range r.markDeletionNodes {
+		if marker.poolName == req.Name {
+			delete(r.markDeletionNodes, nodeName)
+		}
+	}
 }
 
 // dispatchDefragStep dispatches to the test-injected defragStepFn when
@@ -458,7 +529,7 @@ func (r *GPUPoolCompactionReconciler) dispatchDefragStep(ctx context.Context, po
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *GPUPoolCompactionReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.markDeletionNodes = make(map[string]struct{})
+	r.markDeletionNodes = make(map[string]compactionNodeMarker)
 	r.defragParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("gpupool-compaction").

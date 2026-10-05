@@ -17,8 +17,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-var cachedClient *ecs.Client
-
 type AlibabaGPUNodeProvider struct {
 	client    *ecs.Client
 	nodeClass *tfv1.GPUNodeClass
@@ -28,12 +26,6 @@ type AlibabaGPUNodeProvider struct {
 func NewAlibabaGPUNodeProvider(ctx context.Context, config tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNodeClass) (AlibabaGPUNodeProvider, error) {
 
 	var provider AlibabaGPUNodeProvider
-
-	if cachedClient != nil {
-		provider.client = cachedClient
-		provider.nodeClass = nodeClass
-		return provider, nil
-	}
 
 	if config.AuthType != tfv1.AuthTypeAccessKey {
 		return provider, fmt.Errorf("unsupported auth type for alibaba cloud: %s", config.AuthType)
@@ -62,15 +54,13 @@ func NewAlibabaGPUNodeProvider(ctx context.Context, config tfv1.ComputingVendorC
 	}
 
 	provider.client = client
+	provider.nodeClass = nodeClass
+	provider.ctx = ctx
 
 	if err := provider.TestConnection(); err != nil {
 		return provider, err
 	}
 
-	cachedClient = client
-
-	provider.nodeClass = nodeClass
-	provider.ctx = ctx
 	return provider, nil
 }
 
