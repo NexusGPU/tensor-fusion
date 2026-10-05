@@ -143,6 +143,36 @@ func TestGetWorkerInfoForAllocationByIndex_FastPath(t *testing.T) {
 	}
 }
 
+func TestOnPodUpdateRemovesOldIndexEntry(t *testing.T) {
+	ctx := context.Background()
+	kc := &PodCacheManager{
+		ctx:               ctx,
+		cachedPod:         make(map[string]*corev1.Pod, 32),
+		indexToWorkerInfo: make(map[int]*api.WorkerInfo, 32),
+		stopCh:            make(chan struct{}),
+		workerChangedCh:   make(chan struct{}, 1),
+		indexSubscribers:  make(map[int]map[*workerInfoSubscriber]struct{}),
+		podSubscribers:    make(map[string]chan<- *api.WorkerInfo),
+	}
+
+	oldPod := createTestPodWithIndex(3)
+	kc.onPodAdd(oldPod)
+	if _, ok := kc.indexToWorkerInfo[3]; !ok {
+		t.Fatal("expected old index to be cached after pod add")
+	}
+
+	newPod := createTestPodWithIndex(4)
+	newPod.UID = oldPod.UID
+	kc.onPodUpdate(oldPod, newPod)
+
+	if _, ok := kc.indexToWorkerInfo[3]; ok {
+		t.Fatal("old index remained cached after pod index update")
+	}
+	if info, ok := kc.indexToWorkerInfo[4]; !ok || info.WorkerUID != string(oldPod.UID) {
+		t.Fatalf("new index cache = %#v, want worker %s", info, oldPod.UID)
+	}
+}
+
 // TestGetWorkerInfoForAllocationByIndex_MultipleSubscribers tests that multiple
 // subscribers for the same index all receive the worker info.
 func TestGetWorkerInfoForAllocationByIndex_MultipleSubscribers(t *testing.T) {

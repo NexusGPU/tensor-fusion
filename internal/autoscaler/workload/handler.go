@@ -213,8 +213,9 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 		// stuck on a single corrupt worker, but skip comparisons that need curRes.
 		log.Error(err, "invalid GPU resources annotations, will overwrite with recommendation")
 	}
+	effectiveRecommendation := recommendationForWorker(workload, curRes, recommendation)
 
-	if curRes != nil && recommendation.Equal(curRes) {
+	if curRes != nil && effectiveRecommendation.Equal(curRes) {
 		return nil
 	}
 
@@ -227,27 +228,27 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 		workloadObj.Kind = "TensorFusionWorkload"
 		workloadObj.APIVersion = tfv1.GroupVersion.String()
 
-		isScaleUp := recommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
-			recommendation.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
+		isScaleUp := effectiveRecommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
+			effectiveRecommendation.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
 
 		eventType := "Normal"
 		reason := "ResourceScaledDown"
 		message := fmt.Sprintf("Resources scaled down: Compute %s->%s, VRAM %s->%s",
-			curRes.Requests.Tflops.String(), recommendation.Requests.Tflops.String(),
-			curRes.Requests.Vram.String(), recommendation.Requests.Vram.String())
+			curRes.Requests.Tflops.String(), effectiveRecommendation.Requests.Tflops.String(),
+			curRes.Requests.Vram.String(), effectiveRecommendation.Requests.Vram.String())
 
 		if isScaleUp {
 			reason = "ResourceScaledUp"
 			message = fmt.Sprintf("Resources scaled up: Compute %s->%s, VRAM %s->%s",
-				curRes.Requests.Tflops.String(), recommendation.Requests.Tflops.String(),
-				curRes.Requests.Vram.String(), recommendation.Requests.Vram.String())
+				curRes.Requests.Tflops.String(), effectiveRecommendation.Requests.Tflops.String(),
+				curRes.Requests.Vram.String(), effectiveRecommendation.Requests.Vram.String())
 		}
 
 		action := "Scaled"
 		h.eventRecorder.Eventf(workloadObj, nil, eventType, reason, action, message)
 	}
 
-	annotationsToUpdate := utils.GPUResourcesToAnnotations(recommendation)
+	annotationsToUpdate := utils.GPUResourcesToAnnotations(effectiveRecommendation)
 	if !workload.ShouldScaleResource(tfv1.ResourceTflops) {
 		delete(annotationsToUpdate, constants.TFLOPSRequestAnnotation)
 		delete(annotationsToUpdate, constants.TFLOPSLimitAnnotation)
@@ -267,8 +268,8 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 
 	_, deltaReq, deltaLimit, err := h.allocator.AdjustAllocation(ctx, tfv1.AdjustRequest{
 		PodUID:     string(worker.UID),
-		NewRequest: recommendation.Requests,
-		NewLimit:   recommendation.Limits,
+		NewRequest: effectiveRecommendation.Requests,
+		NewLimit:   effectiveRecommendation.Limits,
 	}, false)
 	if err != nil {
 		return fmt.Errorf("failed to adjust allocation: %v", err)
@@ -288,15 +289,15 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 		// and the per-resource deltas. Request and limit must use their own deltas;
 		// recommendations can scale them independently.
 		originalRequest := tfv1.Resource{
-			Tflops: recommendation.Requests.Tflops.DeepCopy(),
-			Vram:   recommendation.Requests.Vram.DeepCopy(),
+			Tflops: effectiveRecommendation.Requests.Tflops.DeepCopy(),
+			Vram:   effectiveRecommendation.Requests.Vram.DeepCopy(),
 		}
 		originalRequest.Tflops.Sub(deltaReq.Tflops)
 		originalRequest.Vram.Sub(deltaReq.Vram)
 
 		originalLimit := tfv1.Resource{
-			Tflops: recommendation.Limits.Tflops.DeepCopy(),
-			Vram:   recommendation.Limits.Vram.DeepCopy(),
+			Tflops: effectiveRecommendation.Limits.Tflops.DeepCopy(),
+			Vram:   effectiveRecommendation.Limits.Vram.DeepCopy(),
 		}
 		originalLimit.Tflops.Sub(deltaLimit.Tflops)
 		originalLimit.Vram.Sub(deltaLimit.Vram)
@@ -321,9 +322,29 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 	workload.UpdateWorkerAnnotations(worker.Name, annotationsToUpdate)
 
 	log.Info("apply recommendation to worker successfully",
-		"worker", worker.Name, "recommendation", recommendation, "currentResources", curRes)
+		"worker", worker.Name, "recommendation", effectiveRecommendation, "currentResources", curRes)
 
 	return nil
+}
+
+// recommendationForWorker keeps a non-target resource at the worker's current
+// allocation. The recommender may calculate both resources, but a workload
+// configured for a single target must not change allocator state for the other
+// resource while its Pod annotations remain unchanged.
+func recommendationForWorker(workload *State, current, recommendation *tfv1.Resources) *tfv1.Resources {
+	effective := recommendation.DeepCopy()
+	if current == nil {
+		return effective
+	}
+	if !workload.ShouldScaleResource(tfv1.ResourceTflops) {
+		effective.Requests.Tflops = current.Requests.Tflops.DeepCopy()
+		effective.Limits.Tflops = current.Limits.Tflops.DeepCopy()
+	}
+	if !workload.ShouldScaleResource(tfv1.ResourceVram) {
+		effective.Requests.Vram = current.Requests.Vram.DeepCopy()
+		effective.Limits.Vram = current.Limits.Vram.DeepCopy()
+	}
+	return effective
 }
 
 func (h *handler) GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, error) {

@@ -296,15 +296,16 @@ func (c *Controller) CleanupWorker(workerUID string) {
 	if handle == nil {
 		return
 	}
-	state := handle.GetState()
-	if state == nil || state.V2 == nil {
-		return
-	}
-	for i := range state.V2.Devices {
-		dev := &state.V2.Devices[i].DeviceInfo
-		dev.SetERLCurrentTokens(0)
-		dev.SetERLLastTokenUpdate(0)
-	}
+	handle.WithState(func(state *workerstate.SharedDeviceState) {
+		if state.V2 == nil {
+			return
+		}
+		for i := range state.V2.Devices {
+			dev := &state.V2.Devices[i].DeviceInfo
+			dev.SetERLCurrentTokens(0)
+			dev.SetERLLastTokenUpdate(0)
+		}
+	})
 }
 
 func clampFloat64(v, lo, hi float64) float64 {
@@ -403,56 +404,56 @@ func (c *Controller) updateERLControllers() {
 		if handle == nil {
 			continue
 		}
-		state := handle.GetState()
-		if state == nil {
-			continue
-		}
-
-		for _, dev := range workerInfo.Devices {
-			deviceUUID := strings.ToLower(dev.DeviceUUID)
-
-			if state.V2 == nil || !state.HasDevice(dev.DeviceIdx) {
-				continue
+		handle.WithState(func(state *workerstate.SharedDeviceState) {
+			if state.V2 == nil {
+				return
 			}
-			deviceInfo := &state.V2.Devices[dev.DeviceIdx].DeviceInfo
+			for _, dev := range workerInfo.Devices {
+				deviceUUID := strings.ToLower(dev.DeviceUUID)
 
-			stateKey := workerUID + ":" + deviceUUID
-			es := c.getOrCreateERLState(stateKey)
+				if !state.HasDevice(dev.DeviceIdx) {
+					continue
+				}
+				deviceInfo := &state.V2.Devices[dev.DeviceIdx].DeviceInfo
 
-			targetUtil := float64(dev.UpLimit) / 100.0
+				stateKey := workerUID + ":" + deviceUUID
+				es := c.getOrCreateERLState(stateKey)
 
-			// Get NVML GPU utilization (0-100 → 0-1)
-			nvmlUtil := 0.0
-			if u, ok := deviceUtilization[deviceUUID]; ok {
-				nvmlUtil = u / 100.0
+				targetUtil := float64(dev.UpLimit) / 100.0
+
+				// Get NVML GPU utilization (0-100 → 0-1)
+				nvmlUtil := 0.0
+				if u, ok := deviceUtilization[deviceUUID]; ok {
+					nvmlUtil = u / 100.0
+				}
+
+				// EMA smooth utilization
+				if !es.initialized {
+					es.smoothedUtil = nvmlUtil
+					es.initialized = true
+				} else {
+					es.smoothedUtil = c.config.utilAlpha*nvmlUtil + (1-c.config.utilAlpha)*es.smoothedUtil
+				}
+
+				es.currentRate = computeDesiredRate(es.currentRate, targetUtil, es.smoothedUtil, dt, es, c.config)
+
+				// Dynamic capacity
+				newCapacity := clampFloat64(es.currentRate*c.config.burstWindow, c.config.capacityMin, c.config.capacityMax)
+
+				// Write to shm
+				deviceInfo.SetERLTokenRefillRate(es.currentRate)
+				deviceInfo.SetERLTokenCapacity(newCapacity)
+				currentTokens := rebalanceTokenBucket(deviceInfo, nowSecs, es.currentRate, newCapacity, targetUtil, es.smoothedUtil)
+
+				klog.Infof(
+					"ERL [%s] nvml=%.0f%% smooth=%.0f%% target=%.0f%% err=%.1f%% "+
+						"rate=%.0f cap=%.0f tokens=%.1f int=%.3f",
+					stateKey,
+					nvmlUtil*100, es.smoothedUtil*100, targetUtil*100,
+					(targetUtil-es.smoothedUtil)*100,
+					es.currentRate, newCapacity, currentTokens, es.integralErr,
+				)
 			}
-
-			// EMA smooth utilization
-			if !es.initialized {
-				es.smoothedUtil = nvmlUtil
-				es.initialized = true
-			} else {
-				es.smoothedUtil = c.config.utilAlpha*nvmlUtil + (1-c.config.utilAlpha)*es.smoothedUtil
-			}
-
-			es.currentRate = computeDesiredRate(es.currentRate, targetUtil, es.smoothedUtil, dt, es, c.config)
-
-			// Dynamic capacity
-			newCapacity := clampFloat64(es.currentRate*c.config.burstWindow, c.config.capacityMin, c.config.capacityMax)
-
-			// Write to shm
-			deviceInfo.SetERLTokenRefillRate(es.currentRate)
-			deviceInfo.SetERLTokenCapacity(newCapacity)
-			currentTokens := rebalanceTokenBucket(deviceInfo, nowSecs, es.currentRate, newCapacity, targetUtil, es.smoothedUtil)
-
-			klog.Infof(
-				"ERL [%s] nvml=%.0f%% smooth=%.0f%% target=%.0f%% err=%.1f%% "+
-					"rate=%.0f cap=%.0f tokens=%.1f int=%.3f",
-				stateKey,
-				nvmlUtil*100, es.smoothedUtil*100, targetUtil*100,
-				(targetUtil-es.smoothedUtil)*100,
-				es.currentRate, newCapacity, currentTokens, es.integralErr,
-			)
-		}
+		})
 	}
 }

@@ -73,11 +73,18 @@ func (c *TensorFusionPodCounter) Get(ctx context.Context, pod *corev1.Pod) (int3
 // Mirrors Decrease's retry strategy so admission-side and finalizer-side
 // bookkeeping stay symmetric.
 func (c *TensorFusionPodCounter) Increase(ctx context.Context, pod *corev1.Pod) error {
+	return c.IncreaseWithKey(ctx, pod, getOrGenerateKey(pod))
+}
+
+// IncreaseWithKey increments a previously resolved counter key. Admission
+// mutates the Pod between Get and Increase; callers that resolved a fallback
+// object-hash key before mutation must reuse that key or the increment would
+// land in a different owner annotation.
+func (c *TensorFusionPodCounter) IncreaseWithKey(ctx context.Context, pod *corev1.Pod, key string) error {
 	ownerRef := getControllerOwnerRef(pod)
 	if ownerRef == nil {
 		return fmt.Errorf("no controller owner reference found for pod %s/%s", pod.Namespace, pod.Name)
 	}
-	key := getOrGenerateKey(pod)
 	objKey := client.ObjectKey{Name: ownerRef.Name, Namespace: pod.Namespace}
 
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {

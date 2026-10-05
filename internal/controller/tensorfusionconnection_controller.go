@@ -331,9 +331,15 @@ func (r *TensorFusionConnectionReconciler) createDedicatedWorker(ctx context.Con
 	if err := r.Get(ctx, client.ObjectKey{Name: gpuPoolName}, gpuPool); err != nil {
 		return fmt.Errorf("gpu pool(%s) does not exist", gpuPoolName)
 	}
+	var workerConfig *tfv1.WorkerConfig
+	var hypervisorConfig *tfv1.HypervisorConfig
+	if gpuPool.Spec.ComponentConfig != nil {
+		workerConfig = gpuPool.Spec.ComponentConfig.Worker
+		hypervisorConfig = gpuPool.Spec.ComponentConfig.Hypervisor
+	}
 	workerGenerator := &worker.WorkerGenerator{
-		WorkerConfig:     gpuPool.Spec.ComponentConfig.Worker,
-		HypervisorConfig: gpuPool.Spec.ComponentConfig.Hypervisor,
+		WorkerConfig:     workerConfig,
+		HypervisorConfig: hypervisorConfig,
 	}
 	podTemplateHash, err := workerGenerator.PodTemplateHash(workload.Spec)
 	if err != nil {

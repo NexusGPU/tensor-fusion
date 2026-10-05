@@ -159,19 +159,12 @@ func (r *GPUPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		// avoid concurrent provisioning, must wait pending nodes bound, then start next round capacity check
 		newCreatedNodes, err := r.reconcilePoolCapacityWithProvisioner(ctx, pool)
+		r.recordPendingCreatedClaims(pool.Name, newCreatedNodes)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		// Set phase to updating and let GPUNode event trigger the check and update capacity loop, until all nodes are ready
 		if len(newCreatedNodes) > 0 {
-			pendingGPUNodeStateLock.Lock()
-			for claimName := range newCreatedNodes {
-				if PendingGPUNodeClaim[pool.Name] == nil {
-					PendingGPUNodeClaim[pool.Name] = make(map[string]tfv1.Resource, len(newCreatedNodes)*2)
-				}
-				PendingGPUNodeClaim[pool.Name][claimName] = newCreatedNodes[claimName]
-			}
-			pendingGPUNodeStateLock.Unlock()
 			// Refresh the capacity again since new node has been created
 			pool.Status.ProvisioningPhase = tfv1.ProvisioningPhaseProvisioning
 			if err := r.Status().Patch(ctx, pool, client.Merge); err != nil {
@@ -262,13 +255,23 @@ func (r *GPUPoolReconciler) reconcilePendingCreatingNodes(ctx context.Context, p
 	pendingGPUNodeStateLock.RUnlock()
 	latestPendingClaim := make(map[string]tfv1.Resource, len(currentClaimNames))
 	completedBoundClaims := []string{}
+	stateChanged := false
 	for _, claimName := range currentClaimNames {
 		gpuNodeClaim := &tfv1.GPUNodeClaim{}
 		if err := r.Get(ctx, client.ObjectKey{Name: claimName}, gpuNodeClaim); err != nil {
+			if errors.IsNotFound(err) {
+				// A claim can disappear after a provider failure or manual cleanup.
+				// Drop it from the in-memory assumption so it cannot block all
+				// subsequent provisioning cycles forever.
+				stateChanged = true
+				log.FromContext(ctx).Info("pending GPU node claim no longer exists, removing assumption", "claim", claimName)
+				continue
+			}
 			return err
 		}
 		if gpuNodeClaim.Status.Phase == tfv1.GPUNodeClaimBound {
 			completedBoundClaims = append(completedBoundClaims, claimName)
+			stateChanged = true
 		} else {
 			latestPendingClaim[claimName] = tfv1.Resource{
 				Tflops: gpuNodeClaim.Spec.TFlopsOffered,
@@ -276,7 +279,7 @@ func (r *GPUPoolReconciler) reconcilePendingCreatingNodes(ctx context.Context, p
 			}
 		}
 	}
-	if len(completedBoundClaims) > 0 {
+	if stateChanged {
 		pendingGPUNodeStateLock.Lock()
 		PendingGPUNodeClaim[pool.Name] = latestPendingClaim
 		pendingGPUNodeStateLock.Unlock()
@@ -284,6 +287,20 @@ func (r *GPUPoolReconciler) reconcilePendingCreatingNodes(ctx context.Context, p
 			"bound node claims", strings.Join(completedBoundClaims, ","))
 	}
 	return nil
+}
+
+func (r *GPUPoolReconciler) recordPendingCreatedClaims(poolName string, claims map[string]tfv1.Resource) {
+	if len(claims) == 0 {
+		return
+	}
+	pendingGPUNodeStateLock.Lock()
+	defer pendingGPUNodeStateLock.Unlock()
+	if PendingGPUNodeClaim[poolName] == nil {
+		PendingGPUNodeClaim[poolName] = make(map[string]tfv1.Resource, len(claims)*2)
+	}
+	for claimName, resources := range claims {
+		PendingGPUNodeClaim[poolName][claimName] = resources
+	}
 }
 
 func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(

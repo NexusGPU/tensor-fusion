@@ -554,34 +554,31 @@ func (w *WorkerController) syncSharedMemoryState() {
 			continue
 		}
 
-		state := handle.GetState()
-		if state == nil {
-			continue
-		}
-
-		state.UpdateHeartbeat(now)
-
 		deviceMemoryUsage := memoryByWorkerDevice[workerUID]
-		// Total across every physical GPU this worker's processes touched. Used
-		// as a fallback for single-device pods whose process landed on a GPU
-		// other than the nominally-allocated one (e.g. shared-pool pods can run
-		// on any visible card), so the per-UUID lookup below would otherwise miss.
-		var totalUsage uint64
-		for _, used := range deviceMemoryUsage {
-			totalUsage += used
-		}
-		singleDevice := len(allocation.DeviceInfos) == 1
-		for _, deviceInfo := range allocation.DeviceInfos {
-			if deviceInfo == nil {
-				continue
+		handle.WithState(func(state *workerstate.SharedDeviceState) {
+			state.UpdateHeartbeat(now)
+
+			// Total across every physical GPU this worker's processes touched. Used
+			// as a fallback for single-device pods whose process landed on a GPU
+			// other than the nominally-allocated one (e.g. shared-pool pods can run
+			// on any visible card), so the per-UUID lookup below would otherwise miss.
+			var totalUsage uint64
+			for _, used := range deviceMemoryUsage {
+				totalUsage += used
 			}
-			deviceUUID := strings.ToLower(deviceInfo.UUID)
-			used := deviceMemoryUsage[deviceUUID]
-			if used == 0 && singleDevice {
-				used = totalUsage
+			singleDevice := len(allocation.DeviceInfos) == 1
+			for _, deviceInfo := range allocation.DeviceInfos {
+				if deviceInfo == nil {
+					continue
+				}
+				deviceUUID := strings.ToLower(deviceInfo.UUID)
+				used := deviceMemoryUsage[deviceUUID]
+				if used == 0 && singleDevice {
+					used = totalUsage
+				}
+				state.SetPodMemoryUsed(int(deviceInfo.Index), used)
 			}
-			state.SetPodMemoryUsed(int(deviceInfo.Index), used)
-		}
+		})
 	}
 }
 

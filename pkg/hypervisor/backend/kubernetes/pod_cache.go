@@ -151,52 +151,49 @@ func (kc *PodCacheManager) Stop() {
 	close(kc.stopCh)
 }
 
-// onPodAdd handles pod addition events
+// onPodAdd handles pod addition and update events.
 func (kc *PodCacheManager) onPodAdd(obj any) {
 	pod := obj.(*corev1.Pod)
 	kc.mu.Lock()
+	oldPod := kc.cachedPod[string(pod.UID)]
 	kc.cachedPod[string(pod.UID)] = pod
+	kc.refreshPodIndicesLocked(oldPod, pod)
+	kc.mu.Unlock()
 
 	workerInfo, index, err := kc.extractWorkerInfo(pod)
 	if err != nil {
-		kc.mu.Unlock()
 		klog.Error(err, "Failed to extract worker info for pod", "pod", pod.Name, "namespace", pod.Namespace)
 		return
 	}
-	shouldNotifyIndexSubscribers := false
-	if index != "" {
-		podIndex, err := strconv.Atoi(index)
-		if err != nil {
-			kc.mu.Unlock()
-			klog.Error(err, "Failed to convert node index to int", "node index", index)
-			return
-		}
-		// Only publish workers that are fully ready for device plugin allocation.
-		// The scheduler patches the index first and GPU IDs shortly after; returning the
-		// intermediate snapshot would create an empty allocation that never recovers.
-		// If more than one ready Pod claims the index, leave it unavailable until the
-		// conflict is gone. Returning either Pod would allow the device plugin to attach
-		// the wrong GPU allocation because Allocate has no Pod UID to disambiguate.
-		shouldNotifyIndexSubscribers = kc.refreshIndexWorkerInfoLocked(podIndex)
-	}
-	kc.mu.Unlock()
-
 	kc.notifyWorkerChanged(workerInfo)
-	// Notify indexSubscribers via workerChangedCh (non-blocking send)
-	if shouldNotifyIndexSubscribers {
-		select {
-		case kc.workerChangedCh <- struct{}{}:
-		default:
-			// Channel already has a pending notification, no need to send another
-		}
-	}
 	klog.Infof("Pod %s/%s added to pending, state: %s node index: %s", pod.Namespace, pod.Name, workerInfo.Status, index)
 }
 
-// onPodUpdate handles pod update events
-func (kc *PodCacheManager) onPodUpdate(oldObj, newObj any) {
-	newPod := newObj.(*corev1.Pod)
-	kc.onPodAdd(newPod)
+// onPodUpdate handles pod update events using the previous cached Pod to
+// rebuild the old index as well as the new one.
+func (kc *PodCacheManager) onPodUpdate(_, newObj any) {
+	kc.onPodAdd(newObj)
+}
+
+// refreshPodIndicesLocked invalidates stale mappings even if worker metadata
+// is malformed, and wakes subscribers if a duplicate-index conflict cleared.
+// The caller must hold kc.mu and update cachedPod first.
+func (kc *PodCacheManager) refreshPodIndicesLocked(pods ...*corev1.Pod) {
+	for _, pod := range pods {
+		if pod == nil {
+			continue
+		}
+		index, err := strconv.Atoi(pod.Annotations[constants.PodIndexAnnotation])
+		if err != nil {
+			continue
+		}
+		if kc.refreshIndexWorkerInfoLocked(index) {
+			select {
+			case kc.workerChangedCh <- struct{}{}:
+			default:
+			}
+		}
+	}
 }
 
 // onPodDelete handles pod deletion events
@@ -218,37 +215,18 @@ func (kc *PodCacheManager) onPodDelete(obj any) {
 
 	kc.mu.Lock()
 	podUID := string(pod.UID)
+	cachedPod := kc.cachedPod[podUID]
 	delete(kc.cachedPod, podUID)
+	kc.refreshPodIndicesLocked(cachedPod, pod)
+	kc.mu.Unlock()
+
 	workerInfo, index, err := kc.extractWorkerInfo(pod)
 	if err != nil {
-		kc.mu.Unlock()
 		klog.Error(err, "Failed to extract worker info for pod", "pod", pod.Name, "namespace", pod.Namespace)
 		return
 	}
 	workerInfo.DeletedAt = time.Now().UnixMilli()
-
-	shouldNotifyIndexSubscribers := false
-	if index != "" {
-		podIndex, err := strconv.Atoi(index)
-		if err != nil {
-			kc.mu.Unlock()
-			klog.Error(err, "Failed to convert node index to int", "node index", index)
-			return
-		}
-		// Rebuild the entry from the remaining cached Pods. This handles informer
-		// delete events arriving out of order and promotes a unique replacement
-		// after a duplicate-index conflict is resolved.
-		shouldNotifyIndexSubscribers = kc.refreshIndexWorkerInfoLocked(podIndex)
-	}
-	kc.mu.Unlock()
-
 	kc.notifyWorkerChanged(workerInfo)
-	if shouldNotifyIndexSubscribers {
-		select {
-		case kc.workerChangedCh <- struct{}{}:
-		default:
-		}
-	}
 	klog.Infof(
 		"Pod %s/%s (UID: %s) deleted. state: %s node index: %s",
 		pod.Namespace,

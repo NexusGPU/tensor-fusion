@@ -291,8 +291,6 @@ func (m *Manager) RejectGroupOnUnschedulable(ctx context.Context, pod *corev1.Po
 		}
 		delete(pgInfo.WaitingPods, podUID)
 	}
-	pgInfo.mu.Unlock()
-
 	m.backedOffGroups.Set(string(config.GroupKey), struct{}{}, DefaultBackoffDuration)
 	backoffUntil := time.Now().Add(DefaultBackoffDuration)
 	m.syncWorkloadGangStatus(
@@ -303,6 +301,7 @@ func (m *Manager) RejectGroupOnUnschedulable(ctx context.Context, pod *corev1.Po
 		fmt.Sprintf("Gang member %s/%s unschedulable; rejected %d waiting peer(s)", pod.Namespace, pod.Name, waitingCount),
 		backoffUntil,
 	)
+	pgInfo.mu.Unlock()
 
 	log.Info("Gang strict-rejected by PostFilter",
 		"group", config.GroupKey,

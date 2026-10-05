@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -879,6 +880,7 @@ func (m *ShmMutex[T]) CleanupOrphanedLock() {
 
 // SharedMemoryHandle manages a shared memory mapping
 type SharedMemoryHandle struct {
+	mu       sync.RWMutex
 	path     string
 	data     []byte
 	state    *SharedDeviceState
@@ -1035,15 +1037,36 @@ func OpenSharedMemoryHandle(basePath string, pod *PodIdentifier) (*SharedMemoryH
 
 // GetState returns the shared device state
 func (h *SharedMemoryHandle) GetState() *SharedDeviceState {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.data == nil {
+		return nil
+	}
 	return h.state
+}
+
+// WithState runs fn while the shared-memory mapping is protected from Close.
+// Callers that retain the returned state pointer after this callback must not
+// do so; the pointer is only valid for the duration of fn.
+func (h *SharedMemoryHandle) WithState(fn func(*SharedDeviceState)) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.data == nil || h.state == nil {
+		return false
+	}
+	fn(h.state)
+	return true
 }
 
 // Close closes the shared memory handle
 func (h *SharedMemoryHandle) Close() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if h.data != nil {
 		_ = syscall.Munmap(h.data)
 		h.data = nil
 	}
+	h.state = nil
 	if h.file != nil {
 		_ = h.file.Close()
 		h.file = nil

@@ -11,6 +11,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -69,6 +70,13 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	for _, claimName := range pendingClaimNames {
 		gpuNodeClaim := tfv1.GPUNodeClaim{}
 		if err := r.Get(ctx, client.ObjectKey{Name: claimName}, &gpuNodeClaim); err != nil {
+			if apierrors.IsNotFound(err) {
+				pendingGPUNodeStateLock.Lock()
+				delete(PendingGPUNodeClaim[pool.Name], claimName)
+				pendingGPUNodeStateLock.Unlock()
+				log.Info("pending GPU node claim no longer exists, removing assumption", "claim", claimName)
+				continue
+			}
 			return nil, err
 		}
 		pendingTflops := gpuNodeClaim.Spec.TFlopsOffered.Value()
@@ -215,7 +223,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 	wg.Wait()
 
 	if len(errList) > 0 {
-		return nil, fmt.Errorf("failed to create nodes: %v", errList)
+		return newCreatedNodes, fmt.Errorf("failed to create nodes: %v", errList)
 	}
 	return newCreatedNodes, nil
 }

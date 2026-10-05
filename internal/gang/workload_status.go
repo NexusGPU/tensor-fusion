@@ -35,6 +35,7 @@ func (m *Manager) rememberStatusTarget(pgInfo *PodGroupInfo, pod *corev1.Pod) {
 // syncWorkloadGangStatus enqueues a gang status update for async persistence.
 // The actual API server write happens in the background flush loop, keeping
 // the Permit hot path non-blocking.
+// The caller must hold pgInfo.mu while the status snapshot is constructed.
 func (m *Manager) syncWorkloadGangStatus(
 	_ context.Context,
 	pgInfo *PodGroupInfo,

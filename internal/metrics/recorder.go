@@ -282,6 +282,10 @@ func getWorkerVramBytesLimit(gpuStore map[types.NamespacedName]*tfv1.GPU, pod *c
 				log.V(5).Info("GPU not found in store for GPU allocation metrics", "gpuID", sampleGPU, "pod", pod.Name)
 				return 0
 			}
+			if gpu.Status.Capacity == nil {
+				log.V(5).Info("GPU capacity not available", "gpuID", sampleGPU, "pod", pod.Name)
+				return 0
+			}
 			return gpu.Status.Capacity.Vram.AsApproximateFloat64()
 		}
 	}
