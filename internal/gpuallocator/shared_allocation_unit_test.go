@@ -184,6 +184,20 @@ func TestSharedPreemptionSimulationRestoresWholeGPUOnlyForSharedVictim(t *testin
 	assert.Empty(t, filtered, "releasing one slice must not make a still-used GPU eligible for shared")
 }
 
+func TestReleaseVictimAllocationRejectsIncompleteGPUStatus(t *testing.T) {
+	s := newTestAllocator()
+	gpu := sharedTestGPU("gpu-incomplete", "node-1", tfv1.IsolationModeHard)
+	gpu.Status.Available = nil
+	request := &tfv1.AllocRequest{
+		Isolation: tfv1.IsolationModeHard,
+		Request:   tfv1.Resource{Tflops: qty("10"), Vram: qty("2Gi")},
+	}
+
+	err := s.releaseVictimAllocationFromGPU(gpu, request, gpu.Name)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "capacity or available resources are nil")
+}
+
 func TestDynamicPreemptionOnlyReusesSameModeGPU(t *testing.T) {
 	gpu := sharedTestGPU("gpu-soft-victim", "node-1", tfv1.IsolationModeSoft)
 	gpu.Status.IsolationPolicy = tfv1.IsolationModePolicyDynamic
