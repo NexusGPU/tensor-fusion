@@ -17,14 +17,11 @@ limitations under the License.
 package handlers
 
 import (
-	"encoding/base64"
+	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,7 +44,6 @@ type LegacyHandler struct {
 	deviceController     framework.DeviceController
 	listHostPIDsFunc     func() ([]uint32, error)
 	processMappingFunc   func(hostPID uint32) (*framework.ProcessMappingInfo, error)
-	shmBasePath          string
 	autoFreeze           []tfv1.AutoFreeze
 }
 
@@ -63,10 +59,6 @@ func NewLegacyHandler(
 		allocationController: allocationController,
 		backend:              backend,
 		deviceController:     deviceController,
-		shmBasePath: filepath.Join(
-			constants.TFDataPath,
-			strings.TrimPrefix(constants.SharedMemMountSubPath, "/"),
-		),
 	}
 	if raw := os.Getenv(constants.HypervisorSchedulingConfigEnv); raw != "" {
 		var scheduling tfv1.HypervisorScheduling
@@ -205,37 +197,24 @@ func (h *LegacyHandler) HandleInitProcess(c *gin.Context) {
 		return
 	}
 
-	token, err := extractBearerToken(c)
+	workerUID, err := h.authenticatePodToken(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, api.ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	payload, err := extractJWTPayload(token)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, api.ErrorResponse{Error: err.Error()})
-		return
-	}
-
-	namespace := payload.Kubernetes.Namespace
-	podName := payload.Kubernetes.Pod.Name
-	allocation, found, err := h.findWorkerAllocation(namespace, podName)
-	if err != nil {
+	allocation, found := h.allocationController.GetWorkerAllocation(workerUID)
+	if !found || allocation == nil || allocation.WorkerInfo == nil {
 		c.JSON(http.StatusOK, api.ProcessInitResponse{
 			Success: false,
-			Message: fmt.Sprintf("Failed to find pod in registry: %v", err),
+			Message: "Pod has no GPU allocation on this node",
 		})
 		return
 	}
-	if !found {
-		c.JSON(http.StatusOK, api.ProcessInitResponse{
-			Success: false,
-			Message: fmt.Sprintf("Pod %s not found in namespace %s", podName, namespace),
-		})
-		return
-	}
+	namespace := allocation.WorkerInfo.Namespace
+	podName := allocation.WorkerInfo.WorkerName
 
-	if err := h.ensureWorkerSharedMemory(namespace, podName, allocation); err != nil {
+	if err := h.workerController.WithWorkerSharedMemory(workerUID, nil); err != nil {
 		c.JSON(http.StatusOK, api.ProcessInitResponse{
 			Success: false,
 			Message: fmt.Sprintf("Failed to prepare shared memory: %v", err),
@@ -243,7 +222,7 @@ func (h *LegacyHandler) HandleInitProcess(c *gin.Context) {
 		return
 	}
 
-	hostPID, err := h.findHostPID(namespace, podName, query.ContainerName, query.ContainerPID)
+	hostPID, err := h.findHostPID(workerUID, namespace, podName, query.ContainerName, query.ContainerPID)
 	if err != nil {
 		c.JSON(http.StatusOK, api.ProcessInitResponse{
 			Success: false,
@@ -253,9 +232,19 @@ func (h *LegacyHandler) HandleInitProcess(c *gin.Context) {
 	}
 
 	// Register host PID in shared memory so cuda-limiter can track active processes
-	if err := h.registerPIDInSharedMemory(namespace, podName, hostPID); err != nil {
-		klog.Warningf("Failed to register PID %d in shared memory for %s/%s: %v",
-			hostPID, namespace, podName, err)
+	registered := false
+	if err := h.workerController.WithWorkerSharedMemory(workerUID, func(state *workerstate.SharedDeviceState) {
+		registered = state.TryAddPID(int(hostPID))
+	}); err != nil {
+		c.JSON(http.StatusOK, api.ProcessInitResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to register process: %v", err),
+		})
+		return
+	}
+	if !registered {
+		c.JSON(http.StatusOK, api.ProcessInitResponse{Success: false, Message: "Process registration busy; retry"})
+		return
 	}
 
 	c.JSON(http.StatusOK, api.ProcessInitResponse{
@@ -306,19 +295,6 @@ type processInitQuery struct {
 	ContainerPID  uint32 `form:"container_pid" binding:"required"`
 }
 
-type jwtPayload struct {
-	Kubernetes kubernetesInfo `json:"kubernetes.io"`
-}
-
-type kubernetesInfo struct {
-	Namespace string        `json:"namespace"`
-	Pod       kubernetesPod `json:"pod"`
-}
-
-type kubernetesPod struct {
-	Name string `json:"name"`
-}
-
 func isModernPodInfoRequest(c *gin.Context) bool {
 	if c.GetHeader(constants.AuthorizationHeader) != "" {
 		return true
@@ -333,43 +309,22 @@ func (h *LegacyHandler) handleGetPodInfo(c *gin.Context) {
 		return
 	}
 
-	token, err := extractBearerToken(c)
+	workerUID, err := h.authenticatePodToken(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, api.ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	payload, err := extractJWTPayload(token)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, api.ErrorResponse{Error: err.Error()})
-		return
-	}
-
-	allocation, found, err := h.findWorkerAllocation(payload.Kubernetes.Namespace, payload.Kubernetes.Pod.Name)
-	if err != nil {
+	allocation, found := h.allocationController.GetWorkerAllocation(workerUID)
+	if !found || allocation == nil || allocation.WorkerInfo == nil {
 		c.JSON(http.StatusOK, api.PodInfoResponse{
 			Success: false,
-			Message: fmt.Sprintf("Failed to find pod in registry: %v", err),
-		})
-		return
-	}
-	if !found {
-		c.JSON(http.StatusOK, api.PodInfoResponse{
-			Success: false,
-			Message: fmt.Sprintf(
-				"Pod %s not found in namespace %s",
-				payload.Kubernetes.Pod.Name,
-				payload.Kubernetes.Namespace,
-			),
+			Message: "Pod has no GPU allocation on this node",
 		})
 		return
 	}
 
-	if err := h.ensureWorkerSharedMemory(
-		payload.Kubernetes.Namespace,
-		payload.Kubernetes.Pod.Name,
-		allocation,
-	); err != nil {
+	if err := h.workerController.WithWorkerSharedMemory(workerUID, nil); err != nil {
 		c.JSON(http.StatusOK, api.PodInfoResponse{
 			Success: false,
 			Message: fmt.Sprintf("Failed to prepare shared memory: %v", err),
@@ -389,63 +344,33 @@ func (h *LegacyHandler) handleGetPodInfo(c *gin.Context) {
 			Isolation:    getAllocationIsolation(allocation),
 			AutoFreeze:   getAutoFreezeConfig(allocation, h.autoFreeze),
 		},
-		Message: fmt.Sprintf("Pod %s information retrieved successfully", payload.Kubernetes.Pod.Name),
+		Message: fmt.Sprintf("Pod %s information retrieved successfully", allocation.WorkerInfo.WorkerName),
 	})
 }
 
-func extractBearerToken(c *gin.Context) (string, error) {
-	token := strings.TrimSpace(c.GetHeader(constants.AuthorizationHeader))
-	if token == "" {
-		return "", fmt.Errorf("missing authorization header")
+// Authenticate through Kubernetes before using any workload identity. JWT
+// payloads alone are untrusted, and Pod names can be reused after deletion.
+func (h *LegacyHandler) authenticatePodToken(c *gin.Context) (string, error) {
+	fields := strings.Fields(c.GetHeader(constants.AuthorizationHeader))
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		return "", fmt.Errorf("missing Bearer token")
 	}
-	return strings.TrimPrefix(token, "Bearer "), nil
+	authenticator, ok := h.backend.(interface {
+		AuthenticatePodToken(context.Context, string) (string, error)
+	})
+	if !ok {
+		return "", fmt.Errorf("pod token authentication is unavailable")
+	}
+	uid, err := authenticator.AuthenticatePodToken(c.Request.Context(), fields[1])
+	if err != nil || uid == "" {
+		return "", fmt.Errorf("invalid Pod token")
+	}
+	return uid, nil
 }
 
-func extractJWTPayload(token string) (*jwtPayload, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid JWT format")
-	}
-
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode JWT payload: %w", err)
-	}
-
-	var payload jwtPayload
-	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
-		return nil, fmt.Errorf("failed to parse JWT payload: %w", err)
-	}
-	if payload.Kubernetes.Namespace == "" || payload.Kubernetes.Pod.Name == "" {
-		return nil, fmt.Errorf("JWT payload missing kubernetes namespace or pod name")
-	}
-	return &payload, nil
-}
-
-func (h *LegacyHandler) findWorkerAllocation(namespace, podName string) (*api.WorkerAllocation, bool, error) {
-	workers, err := h.workerController.ListWorkers()
-	if err != nil {
-		return nil, false, err
-	}
-
-	for _, worker := range workers {
-		if worker == nil {
-			continue
-		}
-		if worker.Namespace != namespace || worker.WorkerName != podName {
-			continue
-		}
-		allocation, exists := h.allocationController.GetWorkerAllocation(worker.WorkerUID)
-		if !exists || allocation == nil {
-			continue
-		}
-		return allocation, true, nil
-	}
-
-	return nil, false, nil
-}
-
-func (h *LegacyHandler) findHostPID(namespace, podName, containerName string, containerPID uint32) (uint32, error) {
+func (h *LegacyHandler) findHostPID(
+	workerUID, namespace, podName, containerName string, containerPID uint32,
+) (uint32, error) {
 	if h.processMappingFunc == nil {
 		return 0, fmt.Errorf("kubernetes backend not enabled")
 	}
@@ -460,7 +385,7 @@ func (h *LegacyHandler) findHostPID(namespace, podName, containerName string, co
 		if err != nil || mappingInfo == nil {
 			continue
 		}
-		if mappingInfo.Namespace != namespace || mappingInfo.PodName != podName {
+		if mappingInfo.PodUID != workerUID {
 			continue
 		}
 		if mappingInfo.ContainerName != containerName || mappingInfo.GuestPID != containerPID {
@@ -589,157 +514,4 @@ func getAutoFreezeConfig(allocation *api.WorkerAllocation, configs []tfv1.AutoFr
 		return result
 	}
 	return nil
-}
-
-func (h *LegacyHandler) registerPIDInSharedMemory(namespace, podName string, hostPID uint32) error {
-	podId := workerstate.NewPodIdentifier(namespace, podName)
-	handle, err := workerstate.OpenSharedMemoryHandle(h.shmBasePath, podId)
-	if err != nil {
-		return fmt.Errorf("failed to open shm for PID registration: %w", err)
-	}
-	// Each /process init opens a fresh handle (mmap + fd). Without Close()
-	// the mapping and file descriptor leak — over a churning workload the
-	// hypervisor process accumulates one mmap region per pod-init.
-	defer func() {
-		_ = handle.Close()
-	}()
-	state := handle.GetState()
-	if state != nil {
-		state.AddPID(int(hostPID))
-	}
-	return nil
-}
-
-func (h *LegacyHandler) ensureWorkerSharedMemory(namespace, podName string, allocation *api.WorkerAllocation) error {
-	if allocation == nil || allocation.WorkerInfo == nil {
-		return nil
-	}
-
-	configs := buildWorkerDeviceConfigs(allocation)
-	if len(configs) == 0 {
-		return nil
-	}
-
-	podId := workerstate.NewPodIdentifier(namespace, podName)
-	// /process init can fire many times for a single pod (one per container
-	// and each retry). CreateSharedMemoryHandle truncates the underlying file
-	// (O_TRUNC), which would zero out live ERL state — used tokens, mem
-	// counters — every call. Open the existing shm if it is already there
-	// and only fall back to Create on the FIRST init (file does not exist
-	// yet). Any other Open error — legacy layout, size mismatch, discriminant
-	// mismatch, mmap failure, permission denied, transient I/O — must NOT
-	// trigger Create, otherwise we would silently O_TRUNC a healthy shm and
-	// destroy live state. Surface the error instead.
-	handle, err := workerstate.OpenSharedMemoryHandle(h.shmBasePath, podId)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("failed to open existing shm (refusing to recreate over a non-missing file): %w", err)
-		}
-		handle, err = workerstate.CreateSharedMemoryHandle(h.shmBasePath, podId, configs)
-		if err != nil {
-			return err
-		}
-	}
-	return handle.Close()
-}
-
-func buildWorkerDeviceConfigs(allocation *api.WorkerAllocation) []workerstate.DeviceConfig {
-	if allocation == nil || allocation.WorkerInfo == nil {
-		return nil
-	}
-	configs := make([]workerstate.DeviceConfig, 0, len(allocation.DeviceInfos))
-	for _, deviceInfo := range allocation.DeviceInfos {
-		if deviceInfo == nil {
-			continue
-		}
-		memLimit := deviceInfo.TotalMemoryBytes
-		if allocation.WorkerInfo.Limits.Vram.Value() > 0 {
-			memLimit = uint64(allocation.WorkerInfo.Limits.Vram.Value())
-		}
-		smCount := parseUint32Property(deviceInfo.Properties, "totalComputeUnits")
-		computeCapability := ""
-		if deviceInfo.Properties != nil {
-			computeCapability = deviceInfo.Properties["computeCapability"]
-		}
-		configs = append(configs, workerstate.DeviceConfig{
-			DeviceIdx:  uint32(deviceInfo.Index),
-			DeviceUUID: normalizeGPUUUID(deviceInfo.UUID),
-			UpLimit:    computeLimitPercent(allocation.WorkerInfo, deviceInfo),
-			MemLimit:   memLimit,
-			SMCount:    smCount * coresPerSM(computeCapability),
-		})
-	}
-	return configs
-}
-
-func computeLimitPercent(workerInfo *api.WorkerInfo, deviceInfo *api.DeviceInfo) uint32 {
-	if workerInfo == nil {
-		return 100
-	}
-	if workerInfo.Limits.ComputePercent.Value() > 0 {
-		return uint32(workerInfo.Limits.ComputePercent.Value())
-	}
-	if workerInfo.Limits.Tflops.Value() > 0 && deviceInfo != nil && deviceInfo.MaxTflops > 0 {
-		percent := math.Ceil(workerInfo.Limits.Tflops.AsApproximateFloat64() / deviceInfo.MaxTflops * 100.0)
-		if percent < 1 {
-			return 1
-		}
-		if percent > 100 {
-			return 100
-		}
-		return uint32(percent)
-	}
-	return 100
-}
-
-func parseUint32Property(properties map[string]string, key string) uint32 {
-	if properties == nil {
-		return 0
-	}
-	value := strings.TrimSpace(properties[key])
-	if value == "" {
-		return 0
-	}
-	parsed, err := strconv.ParseUint(value, 10, 32)
-	if err != nil {
-		return 0
-	}
-	return uint32(parsed)
-}
-
-func coresPerSM(computeCapability string) uint32 {
-	parts := strings.Split(strings.TrimSpace(computeCapability), ".")
-	if len(parts) != 2 {
-		return 0
-	}
-
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return 0
-	}
-
-	switch (major * 10) + minor {
-	case 20:
-		return 32
-	case 21:
-		return 48
-	case 30, 32, 35, 37:
-		return 192
-	case 50, 52, 53:
-		return 128
-	case 60:
-		return 64
-	case 61, 62:
-		return 128
-	case 70, 72, 75, 80:
-		return 64
-	case 86, 87, 89, 90, 100, 101, 103, 110, 120, 121:
-		return 128
-	default:
-		return 0
-	}
 }
