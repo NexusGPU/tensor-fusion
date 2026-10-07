@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +16,8 @@ import (
 type fakeDeviceController struct {
 	devices      map[string]*api.DeviceInfo
 	processInfos []api.ProcessInformation
+	processErr   error
+	splitCalls   int
 }
 
 func (f *fakeDeviceController) Start() error { return nil }
@@ -39,6 +43,7 @@ func (f *fakeDeviceController) GetDevice(deviceUUID string) (*api.DeviceInfo, bo
 }
 
 func (f *fakeDeviceController) SplitDevice(deviceUUID, _ string) (*api.DeviceInfo, error) {
+	f.splitCalls++
 	device, ok := f.devices[deviceUUID]
 	if !ok || device == nil {
 		return nil, nil
@@ -54,7 +59,7 @@ func (f *fakeDeviceController) GetDeviceMetrics() (map[string]*api.GPUUsageMetri
 }
 
 func (f *fakeDeviceController) GetProcessInformation() ([]api.ProcessInformation, error) {
-	return f.processInfos, nil
+	return f.processInfos, f.processErr
 }
 
 func (f *fakeDeviceController) GetVendorMountLibs() ([]*api.Mount, error) { return nil, nil }
@@ -67,6 +72,7 @@ type fakeWorkerAllocationController struct {
 	allocations       map[string]*api.WorkerAllocation
 	allocatedRequests []*api.WorkerInfo
 	recoveredRequests []*api.WorkerInfo
+	deallocated       []string
 }
 
 func (f *fakeWorkerAllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*api.WorkerAllocation, error) {
@@ -79,7 +85,10 @@ func (f *fakeWorkerAllocationController) AllocateWorkerDevices(request *api.Work
 	return allocation, nil
 }
 
-func (f *fakeWorkerAllocationController) DeallocateWorker(string) error { return nil }
+func (f *fakeWorkerAllocationController) DeallocateWorker(uid string) error {
+	f.deallocated = append(f.deallocated, uid)
+	return nil
+}
 
 func (f *fakeWorkerAllocationController) RecoverPartitionedWorker(
 	request *api.WorkerInfo, partitionUUIDs string,
@@ -196,15 +205,38 @@ func TestSyncSharedMemoryStateUpdatesHeartbeatAndPodMemory(t *testing.T) {
 			workerUID: workerInfo,
 		},
 		shmBasePath: shmBasePath,
+		shmHandles:  map[string]*workerstate.SharedMemoryHandle{workerUID: handle},
 		nowFunc: func() time.Time {
 			return syncTime
 		},
 	}
 
-	// syncSharedMemoryState requires liblimiter.so (loaded from accelerator .so).
-	// Without a real device.Controller, getLimiter() returns nil and sync is a no-op.
-	// The actual shared memory sync is tested via limiter_test.cc in vgpu-provider.
 	controller.syncSharedMemoryState()
+	assertMemory := func(want uint64) {
+		t.Helper()
+		handle.WithState(func(state *workerstate.SharedDeviceState) {
+			if got := atomic.LoadUint64(&state.V2.Devices[0].DeviceInfo.PodMemoryUsed); got != want {
+				t.Fatalf("pod memory = %d, want %d", got, want)
+			}
+			if got := state.GetLastHeartbeat(); got != uint64(syncTime.Unix()) {
+				t.Fatalf("heartbeat = %d, want %d", got, syncTime.Unix())
+			}
+		})
+	}
+	assertMemory(512 << 20)
+
+	// A failed sample must not make already allocated memory available again.
+	devices := controller.deviceController.(*fakeDeviceController)
+	devices.processErr = errors.New("provider unavailable")
+	syncTime = syncTime.Add(time.Second)
+	controller.syncSharedMemoryState()
+	assertMemory(512 << 20)
+
+	// A successful empty sample does mean that the process released its memory.
+	devices.processErr = nil
+	devices.processInfos = nil
+	controller.syncSharedMemoryState()
+	assertMemory(0)
 }
 
 func TestBuildWorkerInfoSnapshotsOnlyIncludesSharedMemoryWorkers(t *testing.T) {
@@ -291,7 +323,9 @@ func TestRecoverExistingWorkerAllocation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			allocations := &fakeWorkerAllocationController{}
-			controller := &WorkerController{allocationController: allocations}
+			controller := &WorkerController{
+				allocationController: allocations, workers: map[string]*api.WorkerInfo{tt.worker.WorkerUID: tt.worker},
+			}
 			controller.recoverExistingWorkerAllocation(tt.worker)
 
 			if got := len(allocations.allocatedRequests) == 1; got != tt.wantAllocated {
@@ -358,20 +392,13 @@ func TestRecoverExistingSoftWorkerSharedMemory(t *testing.T) {
 		}},
 		shmBasePath: basePath,
 		shmHandles:  make(map[string]*workerstate.SharedMemoryHandle),
+		workers:     map[string]*api.WorkerInfo{workerUID: workerInfo},
 	}
-	controller.ensureWorkerSharedMemory(workerInfo, true)
+	if err := controller.WithWorkerSharedMemory(workerUID, nil); err != nil {
+		t.Fatal(err)
+	}
 
-	var recovered *workerstate.SharedMemoryHandle
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		controller.mu.RLock()
-		recovered = controller.shmHandles[workerUID]
-		controller.mu.RUnlock()
-		if recovered != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	recovered := controller.getShmHandle(workerUID)
 	if recovered == nil {
 		t.Fatal("soft worker shared memory was not recovered")
 	}

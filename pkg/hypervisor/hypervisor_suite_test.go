@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -424,18 +425,17 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 			It("should list workers from allocations", func() {
 				// Register handler first before starting worker
-				var found bool
+				var found atomic.Bool
 				handler := framework.WorkerChangeHandler{
 					OnAdd: func(worker *api.WorkerInfo) {
 						if worker.WorkerUID == testWorkerUID1 {
-							found = true
+							found.Store(true)
 						}
 					},
 					OnRemove: func(worker *api.WorkerInfo) {},
 					OnUpdate: func(oldWorker, newWorker *api.WorkerInfo) {
-						// StartWorker adds worker to map before notifying, so it may trigger OnUpdate
 						if newWorker.WorkerUID == testWorkerUID1 {
-							found = true
+							found.Store(true)
 						}
 					},
 				}
@@ -464,7 +464,7 @@ var _ = Describe("Hypervisor Integration Tests", func() {
 
 				// Wait for callback to be invoked (either OnAdd or OnUpdate)
 				Eventually(func() bool {
-					return found
+					return found.Load()
 				}, 2*time.Second).Should(BeTrue(), "Should find test-worker-1 via callback")
 			})
 

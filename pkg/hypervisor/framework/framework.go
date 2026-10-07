@@ -1,6 +1,9 @@
 package framework
 
-import "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
+import (
+	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
+	workerstate "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/worker/state"
+)
 
 type DeviceController interface {
 	Start() error
@@ -61,6 +64,10 @@ type WorkerController interface {
 	// GetWorkerMetrics returns current worker metrics for all workers
 	// Returns map keyed by device UUID, then by worker UID, then by process ID
 	GetWorkerMetrics() (map[string]map[string]map[string]*api.WorkerMetrics, error)
+
+	// WithWorkerSharedMemory prepares the current worker's mapping and protects
+	// it from removal while fn runs. A nil callback only prepares the mapping.
+	WithWorkerSharedMemory(workerUID string, fn func(*workerstate.SharedDeviceState)) error
 }
 
 type QuotaController interface {
@@ -138,4 +145,6 @@ type WorkerChangeHandler struct {
 	OnAdd    func(worker *api.WorkerInfo)
 	OnRemove func(worker *api.WorkerInfo)
 	OnUpdate func(oldWorker, newWorker *api.WorkerInfo)
+	// OnPrepare must complete before starting a container or process using the allocation.
+	OnPrepare func(workerUID string) error
 }

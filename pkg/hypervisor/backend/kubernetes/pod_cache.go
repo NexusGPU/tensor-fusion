@@ -162,6 +162,7 @@ func (kc *PodCacheManager) onPodAdd(obj any) {
 
 	workerInfo, index, err := kc.extractWorkerInfo(pod)
 	if err != nil {
+		kc.notifyWorkerChanged(nil)
 		klog.Error(err, "Failed to extract worker info for pod", "pod", pod.Name, "namespace", pod.Namespace)
 		return
 	}
@@ -222,6 +223,7 @@ func (kc *PodCacheManager) onPodDelete(obj any) {
 
 	workerInfo, index, err := kc.extractWorkerInfo(pod)
 	if err != nil {
+		kc.notifyWorkerChanged(nil)
 		klog.Error(err, "Failed to extract worker info for pod", "pod", pod.Name, "namespace", pod.Namespace)
 		return
 	}
@@ -333,7 +335,9 @@ func (kc *PodCacheManager) notifyWorkerChanged(workerInfo *api.WorkerInfo) {
 		select {
 		case subscriber <- workerInfo:
 		default:
-			klog.Warningf("Channel is full, skipping notification for worker change %s", workerInfo.WorkerUID)
+			// The pending wakeup will reconcile the latest Pod cache, including
+			// deletions. Individual event payloads are not used for reconciliation.
+			klog.V(5).Info("Worker state reconciliation is already pending")
 		}
 	}
 }
@@ -361,6 +365,15 @@ func (kc *PodCacheManager) UnregisterWorkerInfoSubscriber(name string) {
 // If worker info is already available, it returns immediately. Otherwise, it waits for up to 10 minutes
 // for the worker info to become available.
 func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(podIndex int) (*api.WorkerInfo, error) {
+	return kc.getWorkerInfoForAllocationByIndex(kc.ctx, podIndex)
+}
+
+func (kc *PodCacheManager) getWorkerInfoForAllocationByIndex(
+	ctx context.Context, podIndex int,
+) (*api.WorkerInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// First, check if worker info is already available (fast path)
 	kc.mu.RLock()
 	if workerInfo, exists := kc.indexToWorkerInfo[podIndex]; exists && workerInfoReadyForAllocation(workerInfo) {
@@ -406,6 +419,9 @@ func (kc *PodCacheManager) GetWorkerInfoForAllocationByIndex(podIndex int) (*api
 		// Timeout reached
 		kc.unregisterSubscriber(podIndex, subscriber)
 		return nil, fmt.Errorf("timeout waiting for worker info for pod index %d after %v", podIndex, subscriberTimeout)
+	case <-ctx.Done():
+		kc.unregisterSubscriber(podIndex, subscriber)
+		return nil, fmt.Errorf("waiting for worker info for pod index %d: %w", podIndex, ctx.Err())
 	case <-kc.ctx.Done():
 		// Context cancelled
 		kc.unregisterSubscriber(podIndex, subscriber)

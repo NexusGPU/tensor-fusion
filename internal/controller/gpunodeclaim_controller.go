@@ -96,34 +96,9 @@ func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	needRequeueCheckDeletion := false
 	shouldReturn, err := utils.HandleFinalizer(ctx, claim, r.Client, func(ctx context.Context, claim *tfv1.GPUNodeClaim) (bool, error) {
-		nodeList := &corev1.NodeList{}
-		if r.Expander != nil {
-			r.Expander.RemoveInFlightNode(claim.Name)
-		}
-		if err := r.List(ctx, nodeList, client.MatchingLabels{constants.ProvisionerLabelKey: claim.Name}); err != nil {
-			if errors.IsNotFound(err) {
-				return true, nil
-			}
-			return false, err
-		}
-		if len(nodeList.Items) > 0 {
-			needRequeueCheckDeletion = true
-			for _, node := range nodeList.Items {
-				if !node.DeletionTimestamp.IsZero() {
-					continue
-				}
-				log.Info("Deleting cloud vendor node", "instanceID", claim.Status.InstanceID, "region", claim.Spec.Region)
-				err = provider.TerminateNode(ctx, &types.NodeIdentityParam{
-					InstanceID: claim.Status.InstanceID,
-					Region:     claim.Spec.Region,
-				})
-				if err != nil {
-					return false, err
-				}
-			}
-			return false, nil
-		}
-		return true, nil
+		canDelete, err := r.finalizeCloudVendorNode(ctx, claim, provider)
+		needRequeueCheckDeletion = !canDelete
+		return canDelete, err
 	})
 	if err != nil {
 		return ctrl.Result{}, err
@@ -179,4 +154,25 @@ func (r *GPUNodeClaimReconciler) reconcileCloudVendorNode(ctx context.Context, c
 		return err
 	}
 	return nil
+}
+
+func (r *GPUNodeClaimReconciler) finalizeCloudVendorNode(ctx context.Context, claim *tfv1.GPUNodeClaim, provider types.GPUNodeProvider) (bool, error) {
+	if r.Expander != nil {
+		r.Expander.RemoveInFlightNode(claim.Name)
+	}
+	// A cloud instance can exist before its Kubernetes Node registers, or
+	// after the Node has been deleted. Neither case means it was terminated.
+	if claim.Status.InstanceID != "" {
+		if err := provider.TerminateNode(ctx, &types.NodeIdentityParam{
+			InstanceID: claim.Status.InstanceID,
+			Region:     claim.Spec.Region,
+		}); err != nil {
+			return false, err
+		}
+	}
+	nodeList := &corev1.NodeList{}
+	if err := r.List(ctx, nodeList, client.MatchingLabels{constants.ProvisionerLabelKey: claim.Name}); err != nil {
+		return false, err
+	}
+	return len(nodeList.Items) == 0, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -23,8 +24,9 @@ type AWSGPUNodeProvider struct {
 
 func NewAWSGPUNodeProvider(ctx context.Context, cfg tfv1.ComputingVendorConfig, nodeClass *tfv1.GPUNodeClass) (AWSGPUNodeProvider, error) {
 	// TODO only support IAM role at first, need to assume role if role set with custom role
-	awsCfg := aws.Config{
-		Region: cfg.Params.DefaultRegion,
+	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(cfg.Params.DefaultRegion))
+	if err != nil {
+		return AWSGPUNodeProvider{}, fmt.Errorf("load AWS configuration: %w", err)
 	}
 	ec2Client := ec2.NewFromConfig(awsCfg)
 	pricingProvider := pricing.NewStaticPricingProvider()
@@ -44,6 +46,9 @@ func (p AWSGPUNodeProvider) TestConnection() error {
 }
 
 func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeClaim) (*types.GPUNodeStatus, error) {
+	if param == nil || param.UID == "" {
+		return nil, fmt.Errorf("GPUNodeClaim UID is required for idempotent instance creation")
+	}
 	nodeClass := p.nodeClass.Spec
 	awsTags := make([]ec2Types.Tag, 0, len(nodeClass.Tags)+3)
 	awsTags = append(awsTags, []ec2Types.Tag{
@@ -67,6 +72,8 @@ func (p AWSGPUNodeProvider) CreateNode(ctx context.Context, param *tfv1.GPUNodeC
 	}
 
 	input := &ec2.RunInstancesInput{
+		// Retrying after a failed status write must return the same instance.
+		ClientToken:  aws.String(string(param.UID)),
 		ImageId:      &nodeClass.OSImageSelectorTerms[0].ID,
 		InstanceType: ec2Types.InstanceType(param.Spec.InstanceType),
 		MinCount:     aws.Int32(1),

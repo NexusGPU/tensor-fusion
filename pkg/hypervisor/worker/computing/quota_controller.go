@@ -321,7 +321,7 @@ func slewRate(current, target, upRatio, downRatio float64) float64 {
 
 func computeDesiredRate(currentRate, targetUtil, smoothedUtil, dt float64, es *erlState, cfg erlConfig) float64 {
 	if smoothedUtil <= 0.01 {
-		// Near idle or no sample: ramp up conservatively but steadily.
+		// A valid near-idle sample allows a conservative, steady ramp-up.
 		return math.Min(currentRate*(1.0+maxRateIncreaseRatio), cfg.rateMax)
 	}
 
@@ -389,10 +389,16 @@ func (c *Controller) updateERLControllers() {
 	// Get device-level GPU utilization via NVML
 	deviceUtilization := make(map[string]float64)
 	deviceMetrics, metricsErr := c.deviceController.GetDeviceMetrics()
-	if metricsErr == nil {
-		for uuid, m := range deviceMetrics {
-			deviceUtilization[strings.ToLower(uuid)] = m.ComputePercentage
+	if metricsErr != nil {
+		// Preserve the last limits when telemetry is unavailable, not idle.
+		return
+	}
+	for uuid, m := range deviceMetrics {
+		if m == nil || math.IsNaN(m.ComputePercentage) ||
+			m.ComputePercentage < 0 || m.ComputePercentage > 100 {
+			continue
 		}
+		deviceUtilization[strings.ToLower(uuid)] = m.ComputePercentage
 	}
 
 	timestampMicros := uint64(time.Now().UnixMicro())
@@ -410,6 +416,10 @@ func (c *Controller) updateERLControllers() {
 			}
 			for _, dev := range workerInfo.Devices {
 				deviceUUID := strings.ToLower(dev.DeviceUUID)
+				utilization, sampled := deviceUtilization[deviceUUID]
+				if !sampled {
+					continue
+				}
 
 				if !state.HasDevice(dev.DeviceIdx) {
 					continue
@@ -422,10 +432,7 @@ func (c *Controller) updateERLControllers() {
 				targetUtil := float64(dev.UpLimit) / 100.0
 
 				// Get NVML GPU utilization (0-100 → 0-1)
-				nvmlUtil := 0.0
-				if u, ok := deviceUtilization[deviceUUID]; ok {
-					nvmlUtil = u / 100.0
-				}
+				nvmlUtil := utilization / 100.0
 
 				// EMA smooth utilization
 				if !es.initialized {

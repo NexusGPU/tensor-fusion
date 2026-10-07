@@ -30,6 +30,39 @@ func TestAllocateWorkerDevicesRejectsMissingAllocatedDevices(t *testing.T) {
 	}
 }
 
+func TestAllocateWorkerDevicesRejectsPartiallyMissingDevices(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []tfv1.IsolationModeType{
+		tfv1.IsolationModeSoft, tfv1.IsolationModeHard, tfv1.IsolationModeShared, tfv1.IsolationModePartitioned,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			devices := &fakeDeviceController{devices: map[string]*api.DeviceInfo{
+				"gpu-0": {UUID: "gpu-0"},
+			}}
+			controller := NewAllocationController(devices)
+			request := &api.WorkerInfo{
+				WorkerUID: "worker", IsolationMode: mode,
+				AllocatedDevices: []string{"gpu-0", "gpu-1"}, PartitionTemplateID: "test",
+			}
+			allocation, err := controller.AllocateWorkerDevices(request)
+			if err == nil || allocation != nil {
+				t.Fatal("allocation must fail when any requested GPU is missing")
+			}
+			if len(controller.workerAllocations) != 0 || len(controller.deviceAllocations) != 0 {
+				t.Fatal("failed allocation must not leave cached resource usage")
+			}
+			if devices.splitCalls != 0 {
+				t.Fatal("missing GPUs must be validated before creating any partitions")
+			}
+			devices.devices["gpu-1"] = &api.DeviceInfo{UUID: "gpu-1"}
+			allocation, err = controller.AllocateWorkerDevices(request)
+			if err != nil || len(allocation.DeviceInfos) != 2 {
+				t.Fatalf("retry after device discovery failed: %v", err)
+			}
+		})
+	}
+}
+
 func TestAllocateWorkerDevicesEnforcesDynamicIsolationPerDevice(t *testing.T) {
 	t.Parallel()
 

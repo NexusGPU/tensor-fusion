@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/backend/kubernetes/external_dp"
@@ -35,7 +38,8 @@ type KubeletBackend struct {
 	deviceDetector    *external_dp.DevicePluginDetector
 	podResourcesProxy *PodResourcesProxy
 
-	nodeName string
+	nodeName       string
+	checkpointPath string
 
 	workers   map[string]*api.WorkerInfo
 	workersMu sync.RWMutex
@@ -77,8 +81,11 @@ func NewKubeletBackend(
 
 	// Create device plugin detector
 	var deviceDetector *external_dp.DevicePluginDetector
+	checkpointPath := os.Getenv(constants.HypervisorKubeletCheckpointPathEnv)
+	if checkpointPath == "" {
+		checkpointPath = filepath.Join(DevicePluginPath, "kubelet_internal_checkpoint")
+	}
 	if os.Getenv(constants.HypervisorDetectUsedGPUEnv) == constants.TrueStringValue {
-		checkpointPath := os.Getenv(constants.HypervisorKubeletCheckpointPathEnv)
 		// Create adapter for kubelet client to match interface
 		deviceDetector, err = external_dp.NewDevicePluginDetector(ctx, checkpointPath, apiClient, restConfig)
 		if err != nil {
@@ -94,6 +101,7 @@ func NewKubeletBackend(
 		deviceDetector:       deviceDetector,
 		apiClient:            apiClient,
 		nodeName:             nodeName,
+		checkpointPath:       checkpointPath,
 		workers:              make(map[string]*api.WorkerInfo),
 		deviceTflops:         make(map[string]resource.Quantity),
 		subscribers:          make(map[string]struct{}),
@@ -105,9 +113,17 @@ func (b *KubeletBackend) Start() error {
 		return err
 	}
 	klog.Info("Kubelet client started, watching pods")
+	// Restore checkpointed workers before advertising devices. Kubelet may
+	// start these containers without another Allocate RPC after registration.
+	b.subscribersMu.Lock()
+	handler := b.workerHandler
+	b.subscribersMu.Unlock()
+	if handler != nil {
+		b.reconcileWorkers(*handler)
+	}
 
 	// Create and start device plugin
-	b.devicePlugins = NewDevicePlugins(b.ctx, b.deviceController, b.allocationController, b.podCacher)
+	b.devicePlugins = NewDevicePlugins(b.ctx, b.deviceController, b.allocateWorkerDevices, b.podCacher)
 	for _, devicePlugin := range b.devicePlugins {
 		if err := devicePlugin.Start(); err != nil {
 			return err
@@ -194,8 +210,10 @@ func (b *KubeletBackend) RegisterWorkerUpdateHandler(handler framework.WorkerCha
 	}
 	b.workerHandler = &handler
 
-	// Create a channel bridge to convert channel messages to handler calls
-	workerCh := make(chan *api.WorkerInfo, 16)
+	// Notifications are wakeups, not a journal. A single queued wakeup is
+	// enough: reconciliation reads the authoritative Pod cache, so bursts
+	// cannot discard the final update or deletion of a worker.
+	workerCh := make(chan *api.WorkerInfo, 1)
 	subscriberID := uuid.NewString()
 	b.podCacher.RegisterWorkerInfoSubscriber(subscriberID, workerCh)
 	b.subscribers[subscriberID] = struct{}{}
@@ -209,48 +227,136 @@ func (b *KubeletBackend) RegisterWorkerUpdateHandler(handler framework.WorkerCha
 			b.subscribersMu.Unlock()
 		}()
 
+		b.reconcileWorkers(handler)
 		for {
 			select {
 			case <-b.ctx.Done():
 				return
 			case <-b.podCacher.stopCh:
 				return
-			case worker, ok := <-workerCh:
+			case _, ok := <-workerCh:
 				if !ok {
 					return
 				}
-				if worker == nil {
-					continue
-				}
-
-				// Determine if this is add, update, or remove
-				b.workersMu.Lock()
-				oldWorker, exists := b.workers[worker.WorkerUID]
-
-				if worker.DeletedAt > 0 {
-					// Worker was deleted
-					if exists && handler.OnRemove != nil {
-						handler.OnRemove(worker)
-					}
-					delete(b.workers, worker.WorkerUID)
-				} else if !exists {
-					// New worker
-					b.workers[worker.WorkerUID] = worker
-					if handler.OnAdd != nil {
-						handler.OnAdd(worker)
-					}
-				} else {
-					// Updated worker
-					b.workers[worker.WorkerUID] = worker
-					if handler.OnUpdate != nil {
-						handler.OnUpdate(oldWorker, worker)
-					}
-				}
-				b.workersMu.Unlock()
+				b.reconcileWorkers(handler)
 			}
 		}
 	}()
 	return nil
+}
+
+// reconcileWorkers serializes the snapshot with callbacks. Deletions run before
+// additions so a same-name replacement cannot inherit the previous worker.
+func (b *KubeletBackend) reconcileWorkers(handler framework.WorkerChangeHandler) {
+	b.workersMu.Lock()
+	defer b.workersMu.Unlock()
+	pods := b.podCacher.GetAllPods()
+	confirmed := b.checkpointedWorkers()
+	removed := make(map[string]*api.WorkerInfo)
+	for uid, info := range b.workers {
+		if pods[uid] == nil {
+			removed[uid] = info
+		}
+	}
+	// Allocate can complete before the worker-change subscriber handles Add.
+	// If Add and Delete were coalesced, the allocation still needs cleanup.
+	for _, allocations := range b.allocationController.GetDeviceAllocations() {
+		for _, allocation := range allocations {
+			if allocation != nil && allocation.WorkerInfo != nil {
+				info := allocation.WorkerInfo
+				if pods[info.WorkerUID] == nil {
+					removed[info.WorkerUID] = info
+				}
+			}
+		}
+	}
+	for uid, info := range removed {
+		// Allocation may have raced with this snapshot after a new Pod arrived.
+		if b.podCacher.GetPodByUID(uid) != nil {
+			continue
+		}
+		if handler.OnRemove != nil {
+			handler.OnRemove(info)
+		}
+		delete(b.workers, uid)
+	}
+	for uid, pod := range pods {
+		old, exists := b.workers[uid]
+		info, _, err := b.podCacher.extractWorkerInfo(pod)
+		if err != nil {
+			// Pod phase is sufficient evidence of termination even when its
+			// resource annotations no longer parse. Preserve allocation metadata
+			// for cleanup; malformed active updates do not prove termination.
+			if old == nil || !utils.IsPodStopped(pod) {
+				continue
+			}
+			info = old.DeepCopy()
+			info.Status = api.WorkerStatusTerminated
+		}
+		info.AllocationConfirmed = confirmed[uid] || (old != nil && old.AllocationConfirmed)
+		b.workers[uid] = info
+		if !exists && handler.OnAdd != nil {
+			handler.OnAdd(info)
+		} else if exists && !reflect.DeepEqual(old, info) && handler.OnUpdate != nil {
+			handler.OnUpdate(old, info)
+		}
+	}
+}
+
+// allocateWorkerDevices completes shared-memory initialization before returning
+// the device-plugin response. A soft limiter can open TF_SHM_PATH as soon as the
+// process starts, before the asynchronous worker sync or any HTTP handshake.
+func (b *KubeletBackend) allocateWorkerDevices(
+	ctx context.Context, requested *api.WorkerInfo,
+) (*api.WorkerAllocation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	b.subscribersMu.Lock()
+	handler, stopped := b.workerHandler, b.stopped
+	b.subscribersMu.Unlock()
+	if stopped || handler == nil || handler.OnPrepare == nil {
+		return nil, fmt.Errorf("worker controller is not ready")
+	}
+	// The Pod cache can be ahead of the asynchronous notification consumer.
+	// Reconcile synchronously so preparation never depends on that timing.
+	b.reconcileWorkers(*handler)
+	pod := b.podCacher.GetPodByUID(requested.WorkerUID)
+	if pod == nil || utils.IsPodStopped(pod) || !pod.DeletionTimestamp.IsZero() {
+		return nil, fmt.Errorf("worker %s is no longer active", requested.WorkerUID)
+	}
+	worker, _, err := b.podCacher.extractWorkerInfo(pod)
+	if err != nil {
+		return nil, err
+	}
+	allocation, err := b.allocationController.AllocateWorkerDevices(worker)
+	if err != nil {
+		return nil, err
+	}
+	if worker.IsolationMode == tfv1.IsolationModeSoft || worker.IsolationMode == tfv1.IsolationModeHard {
+		err = handler.OnPrepare(worker.WorkerUID)
+	}
+	// Deletion can race allocation, including an OnRemove that ran just before
+	// AllocateWorkerDevices. Do not strand that late allocation without another event.
+	pod = b.podCacher.GetPodByUID(worker.WorkerUID)
+	if pod == nil || utils.IsPodStopped(pod) {
+		if cleanupErr := b.allocationController.DeallocateWorker(worker.WorkerUID); cleanupErr != nil {
+			klog.Errorf("Failed to clean up stopped worker %s after allocation: %v", worker.WorkerUID, cleanupErr)
+		}
+		return nil, fmt.Errorf("worker %s stopped during allocation", worker.WorkerUID)
+	}
+	if !pod.DeletionTimestamp.IsZero() {
+		// Terminating containers may still use the GPU. Block startup without
+		// releasing their existing allocation before termination or deletion.
+		return nil, fmt.Errorf("worker %s is terminating", worker.WorkerUID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("prepare worker %s: %w", worker.WorkerUID, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return allocation, nil
 }
 
 func (b *KubeletBackend) StartWorker(worker *api.WorkerInfo) error {

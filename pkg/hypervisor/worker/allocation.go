@@ -73,6 +73,15 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	}
 
 	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
+	// Validate the complete request before creating partitions or recording usage.
+	for _, deviceUUID := range request.AllocatedDevices {
+		info, exists := a.deviceController.GetDevice(deviceUUID)
+		if !exists || info == nil {
+			return nil, fmt.Errorf("worker %s requested device %s not found in device controller",
+				request.WorkerUID, deviceUUID)
+		}
+		deviceInfos = append(deviceInfos, info)
+	}
 
 	// partitioned mode, call split device
 	isPartitioned := request.IsolationMode == tfv1.IsolationModePartitioned && request.PartitionTemplateID != ""
@@ -84,12 +93,7 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	// and the partition stays orphaned until manual intervention.
 	var splittedPartitions []*api.DeviceInfo
 
-	for _, deviceUUID := range request.AllocatedDevices {
-		device, exists := a.deviceController.GetDevice(deviceUUID)
-		if !exists {
-			klog.Errorf("worker %s requested device %s not found in device controller, skipping", request.WorkerUID, deviceUUID)
-			continue
-		}
+	for i, deviceUUID := range request.AllocatedDevices {
 		if isPartitioned {
 			deviceInfo, err := a.deviceController.SplitDevice(deviceUUID, request.PartitionTemplateID)
 			if err != nil {
@@ -97,13 +101,8 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 				return nil, err
 			}
 			splittedPartitions = append(splittedPartitions, deviceInfo)
-			deviceInfos = append(deviceInfos, deviceInfo)
-		} else {
-			deviceInfos = append(deviceInfos, device)
+			deviceInfos[i] = deviceInfo
 		}
-	}
-	if len(deviceInfos) == 0 {
-		return nil, fmt.Errorf("none of the requested devices exist for worker %s", request.WorkerUID)
 	}
 
 	mounts, err := a.deviceController.GetVendorMountLibs()

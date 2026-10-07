@@ -12,6 +12,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
+	authv1 "k8s.io/api/authentication/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -32,6 +33,7 @@ var (
 
 func init() {
 	utilruntime.Must(tfv1.AddToScheme(scheme))
+	utilruntime.Must(authv1.AddToScheme(scheme))
 }
 
 // APIClient provides CRUD operations for GPU resources

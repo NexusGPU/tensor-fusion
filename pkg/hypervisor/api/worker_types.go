@@ -15,6 +15,10 @@ type WorkerInfo struct {
 	AllocatedDevices []string
 	Status           WorkerStatus
 
+	// AllocationConfirmed means kubelet has checkpointed a successful device
+	// allocation, even if the Pod has not reached Running yet.
+	AllocationConfirmed bool `json:"-"`
+
 	QoS           tfv1.QoSLevel
 	IsolationMode IsolationMode
 

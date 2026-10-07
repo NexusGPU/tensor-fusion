@@ -2,6 +2,7 @@ package single_node
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,16 +11,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 	"github.com/google/uuid"
-	"github.com/samber/lo"
 	"k8s.io/klog/v2"
 )
 
@@ -30,6 +32,7 @@ import (
 //   - StopWorker acquires the exclusive Lock
 type processState struct {
 	cmd           *exec.Cmd
+	done          chan struct{}
 	retryCount    int64
 	lastRetry     time.Time
 	lastExitCode  int
@@ -44,6 +47,13 @@ type processState struct {
 	logDir     string
 }
 
+type workerSubscriber struct {
+	handler framework.WorkerChangeHandler
+	changes chan struct{}
+	mu      sync.Mutex
+	workers map[string]*api.WorkerInfo
+}
+
 type SingleNodeBackend struct {
 	ctx                  context.Context
 	deviceController     framework.DeviceController
@@ -53,11 +63,13 @@ type SingleNodeBackend struct {
 	workers              map[string]*api.WorkerInfo
 	stopCh               chan struct{}
 	stopOnce             sync.Once
+	lifecycleMu          sync.Mutex // serializes start, restart and stop
+	processWG            sync.WaitGroup
 
 	// Worker watching
 	subscribersMu sync.RWMutex
-	subscribers   map[string]chan *api.WorkerInfo
-	workerHandler *framework.WorkerChangeHandler
+	subscribers   map[string]*workerSubscriber
+	workerHandler *workerSubscriber
 
 	// Process management
 	processesMu sync.RWMutex
@@ -88,7 +100,7 @@ func NewSingleNodeBackend(
 		allocationController: allocationController,
 		workers:              make(map[string]*api.WorkerInfo),
 		stopCh:               make(chan struct{}),
-		subscribers:          make(map[string]chan *api.WorkerInfo),
+		subscribers:          make(map[string]*workerSubscriber),
 		processes:            make(map[string]*processState),
 	}
 
@@ -147,6 +159,11 @@ func NewSingleNodeBackend(
 }
 
 func (b *SingleNodeBackend) Start() error {
+	b.lifecycleMu.Lock()
+	defer b.lifecycleMu.Unlock()
+	if err := b.checkStopped(); err != nil {
+		return err
+	}
 	// Load initial state from files
 	if err := b.loadState(); err != nil {
 		klog.Warningf("Failed to load initial state: %v", err)
@@ -162,6 +179,8 @@ func (b *SingleNodeBackend) Start() error {
 }
 
 func (b *SingleNodeBackend) Stop() error {
+	b.lifecycleMu.Lock()
+	defer b.lifecycleMu.Unlock()
 	// Use sync.Once to ensure stopCh is only closed once
 	b.stopOnce.Do(func() {
 		close(b.stopCh)
@@ -169,8 +188,8 @@ func (b *SingleNodeBackend) Stop() error {
 
 	// Close all subscriber channels
 	b.subscribersMu.Lock()
-	for id, ch := range b.subscribers {
-		close(ch)
+	for id, subscriber := range b.subscribers {
+		close(subscriber.changes)
 		delete(b.subscribers, id)
 	}
 	b.subscribersMu.Unlock()
@@ -185,79 +204,122 @@ func (b *SingleNodeBackend) Stop() error {
 	}
 	b.processes = make(map[string]*processState)
 	b.processesMu.Unlock()
+	b.processWG.Wait()
 
 	return nil
 }
 
+func (b *SingleNodeBackend) checkStopped() error {
+	select {
+	case <-b.stopCh:
+		return fmt.Errorf("single node backend is stopped")
+	case <-b.ctx.Done():
+		return b.ctx.Err()
+	default:
+		return nil
+	}
+}
+
 // loadState loads workers and devices from file state
 func (b *SingleNodeBackend) loadState() error {
+	b.mu.Lock()
 	workers, err := b.fileState.LoadWorkers()
 	if err != nil {
+		b.mu.Unlock()
 		return err
 	}
 
-	b.mu.Lock()
 	b.workers = workers
 	b.mu.Unlock()
+	b.notifySubscribers(nil)
 
 	return nil
 }
 
 // discoverWorkers discovers workers from file state and notifies subscribers of changes
 func (b *SingleNodeBackend) discoverWorkers() {
+	b.lifecycleMu.Lock()
+	defer b.lifecycleMu.Unlock()
+	if b.checkStopped() != nil {
+		return
+	}
+	b.mu.Lock()
 	workers, err := b.fileState.LoadWorkers()
 	if err != nil {
+		b.mu.Unlock()
 		klog.Errorf("Failed to load workers from file state: %v", err)
 		return
 	}
 
-	var changed []*api.WorkerInfo
-
-	b.mu.Lock()
+	changed := false
 	for uid, worker := range workers {
+		if worker.DeletedAt > 0 || worker.Status == api.WorkerStatusTerminated {
+			continue
+		}
 		oldWorker, exists := b.workers[uid]
-		if !exists || !workersEqual(oldWorker, worker) {
+		if !exists || !reflect.DeepEqual(oldWorker, worker) {
 			b.workers[uid] = worker
-			changed = append(changed, worker)
+			changed = true
 		}
 	}
+	var removed []string
 	for uid := range b.workers {
-		if _, exists := workers[uid]; !exists {
-			delete(b.workers, uid)
+		worker := workers[uid]
+		if worker == nil || worker.DeletedAt > 0 || worker.Status == api.WorkerStatusTerminated {
+			removed = append(removed, uid)
 		}
 	}
 	b.mu.Unlock()
+	// An external file deletion is also a stop request. Keep the cache entry
+	// until the managed process has exited, so OnRemove cannot free a live GPU.
+	for _, uid := range removed {
+		if err := b.stopWorker(uid); err != nil {
+			klog.Errorf("Failed to stop file-removed worker %s: %v", uid, err)
+		}
+	}
 
-	for _, worker := range changed {
-		b.notifySubscribers(worker)
+	if changed {
+		b.notifySubscribers(nil)
 	}
 }
 
-// notifySubscribers notifies all subscribers of a worker change
-func (b *SingleNodeBackend) notifySubscribers(worker *api.WorkerInfo) {
+// Notifications only wake subscribers. Their snapshots determine the lifecycle
+// changes, so a slow consumer cannot lose a deletion in a burst.
+func (b *SingleNodeBackend) notifySubscribers(_ *api.WorkerInfo) {
 	b.subscribersMu.RLock()
 	defer b.subscribersMu.RUnlock()
 
-	for _, ch := range b.subscribers {
+	for _, subscriber := range b.subscribers {
 		select {
-		case ch <- worker:
+		case subscriber.changes <- struct{}{}:
 		default:
-			klog.Warningf("Channel is full, skipping notification for worker change %s", worker.WorkerUID)
 		}
 	}
 }
 
-// workersEqual checks if two workers are equal (simple comparison)
-func workersEqual(w1, w2 *api.WorkerInfo) bool {
-	if w1 == nil && w2 == nil {
-		return true
+func (b *SingleNodeBackend) syncSubscriber(subscriber *workerSubscriber) {
+	subscriber.mu.Lock()
+	defer subscriber.mu.Unlock()
+	current := make(map[string]*api.WorkerInfo)
+	for _, info := range b.ListWorkers() {
+		if info.DeletedAt == 0 {
+			current[info.WorkerUID] = info
+		}
 	}
-	if w1 == nil || w2 == nil {
-		return false
+	for uid, old := range subscriber.workers {
+		if current[uid] == nil && subscriber.handler.OnRemove != nil {
+			subscriber.handler.OnRemove(old)
+		}
 	}
-	return w1.WorkerUID == w2.WorkerUID &&
-		w1.Status == w2.Status &&
-		len(w1.AllocatedDevices) == len(w2.AllocatedDevices)
+	for uid, info := range current {
+		old := subscriber.workers[uid]
+		if old == nil && subscriber.handler.OnAdd != nil {
+			subscriber.handler.OnAdd(info)
+		} else if old != nil && !reflect.DeepEqual(old, info) && subscriber.handler.OnUpdate != nil {
+			subscriber.handler.OnUpdate(old, info)
+		}
+	}
+	subscriber.workers = current
 }
 
 func (b *SingleNodeBackend) periodicWorkerDiscovery() {
@@ -280,18 +342,26 @@ func (b *SingleNodeBackend) periodicWorkerDiscovery() {
 }
 
 func (b *SingleNodeBackend) RegisterWorkerUpdateHandler(handler framework.WorkerChangeHandler) error {
-	b.workerHandler = &handler
-
-	// Create channel for this subscriber
-	workerCh := make(chan *api.WorkerInfo, 16)
 	subscriberID := uuid.NewString()
+	subscriber := &workerSubscriber{
+		handler: handler, changes: make(chan struct{}, 1), workers: make(map[string]*api.WorkerInfo),
+	}
 
 	// Register subscriber
 	b.subscribersMu.Lock()
-	b.subscribers[subscriberID] = workerCh
+	select {
+	case <-b.stopCh:
+		b.subscribersMu.Unlock()
+		return fmt.Errorf("single node backend is stopped")
+	default:
+	}
+	if handler.OnPrepare != nil {
+		b.workerHandler = subscriber
+	}
+	b.subscribers[subscriberID] = subscriber
 	b.subscribersMu.Unlock()
 
-	// Start bridge goroutine to convert channel messages to handler calls
+	// Replay existing workers as well as future changes.
 	go func() {
 		defer func() {
 			b.subscribersMu.Lock()
@@ -299,97 +369,99 @@ func (b *SingleNodeBackend) RegisterWorkerUpdateHandler(handler framework.Worker
 			b.subscribersMu.Unlock()
 		}()
 
+		b.syncSubscriber(subscriber)
 		for {
 			select {
 			case <-b.ctx.Done():
 				return
 			case <-b.stopCh:
 				return
-			case worker, ok := <-workerCh:
+			case _, ok := <-subscriber.changes:
 				if !ok {
 					return
 				}
-				if worker == nil {
-					continue
-				}
-
-				// Determine if this is add, update, or remove
-				b.mu.Lock()
-				oldWorker, exists := b.workers[worker.WorkerUID]
-
-				if worker.DeletedAt > 0 {
-					// Worker was deleted
-					if exists && handler.OnRemove != nil {
-						handler.OnRemove(worker)
-					}
-					delete(b.workers, worker.WorkerUID)
-				} else if !exists {
-					// New worker
-					b.workers[worker.WorkerUID] = worker
-					if handler.OnAdd != nil {
-						handler.OnAdd(worker)
-					}
-				} else {
-					// Updated worker
-					b.workers[worker.WorkerUID] = worker
-					if handler.OnUpdate != nil {
-						handler.OnUpdate(oldWorker, worker)
-					}
-				}
-				b.mu.Unlock()
+				b.syncSubscriber(subscriber)
 			}
 		}
 	}()
 	return nil
 }
 
-func (b *SingleNodeBackend) StartWorker(worker *api.WorkerInfo) error {
-	// If worker has process runtime info, start the process
-	if worker.WorkerRunningInfo != nil && worker.WorkerRunningInfo.Type == api.WorkerRuntimeTypeProcess {
-		if err := b.startProcess(worker); err != nil {
-			return err
-		}
+func (b *SingleNodeBackend) StartWorker(worker *api.WorkerInfo) (err error) {
+	b.lifecycleMu.Lock()
+	defer b.lifecycleMu.Unlock()
+	if err := b.checkStopped(); err != nil {
+		return err
+	}
+	b.mu.RLock()
+	_, exists := b.workers[worker.WorkerUID]
+	b.mu.RUnlock()
+	if exists {
+		return fmt.Errorf("worker %s already exists", worker.WorkerUID)
+	}
+	worker = worker.DeepCopy()
+	isProcess := worker.WorkerRunningInfo != nil && worker.WorkerRunningInfo.Type == api.WorkerRuntimeTypeProcess
+	if isProcess {
+		worker.WorkerRunningInfo.PID = 0
+		worker.WorkerRunningInfo.IsRunning = false
 	}
 
+	b.mu.Lock()
 	if err := b.fileState.AddWorker(worker); err != nil {
+		b.mu.Unlock()
 		return err
 	}
 
 	// Register worker after persistence to avoid periodic file-discovery replacing
 	// freshly added in-memory workers with stale snapshots.
-	b.mu.Lock()
-	b.workers[worker.WorkerUID] = worker
+	b.workers[worker.WorkerUID] = worker.DeepCopy()
 	b.mu.Unlock()
-
-	// Handle fast-fail process race: process may exit before worker map registration.
-	// In that case waitForProcess cannot update worker status, so we sync from process state.
-	if worker.WorkerRunningInfo != nil && worker.WorkerRunningInfo.Type == api.WorkerRuntimeTypeProcess {
-		var (
-			exitedEarly bool
-			exitCode    int
-		)
-		b.processesMu.RLock()
-		if ps, exists := b.processes[worker.WorkerUID]; exists && !ps.isRunning {
-			exitedEarly = true
-			exitCode = ps.lastExitCode
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, b.stopWorker(worker.WorkerUID))
 		}
-		b.processesMu.RUnlock()
+	}()
 
-		if exitedEarly {
-			b.mu.Lock()
-			if w, exists := b.workers[worker.WorkerUID]; exists && w.WorkerRunningInfo != nil {
-				w.WorkerRunningInfo.IsRunning = false
-				w.WorkerRunningInfo.ExitCode = exitCode
-				w.WorkerRunningInfo.PID = 0
-			}
-			b.mu.Unlock()
-			_ = b.fileState.AddWorker(worker)
+	if isProcess {
+		if err := b.prepareProcessWorker(worker); err != nil {
+			return err
+		}
+		if err := b.checkStopped(); err != nil {
+			return err
+		}
+		// Publish the PID before the exit callback can update this worker. This
+		// also handles processes that exit immediately after exec.
+		b.mu.Lock()
+		err = b.startProcess(worker)
+		if err == nil {
+			b.workers[worker.WorkerUID] = worker.DeepCopy()
+			err = b.fileState.AddWorker(worker)
+		}
+		b.mu.Unlock()
+		if err != nil {
+			return err
 		}
 	}
 
 	b.notifySubscribers(worker)
 	klog.Infof("Worker started: %s", worker.WorkerUID)
 	return nil
+}
+
+func (b *SingleNodeBackend) prepareProcessWorker(worker *api.WorkerInfo) error {
+	if len(worker.AllocatedDevices) == 0 ||
+		(worker.IsolationMode != tfv1.IsolationModeSoft && worker.IsolationMode != tfv1.IsolationModeHard) {
+		return nil
+	}
+	b.subscribersMu.RLock()
+	subscriber := b.workerHandler
+	b.subscribersMu.RUnlock()
+	if subscriber == nil {
+		return fmt.Errorf("worker %s has no preparation handler", worker.WorkerUID)
+	}
+	// Deliver OnAdd before asking WorkerController to prepare its mapping.
+	b.syncSubscriber(subscriber)
+	return subscriber.handler.OnPrepare(worker.WorkerUID)
 }
 
 // buildCmd creates exec.Cmd with proper environment and log redirection
@@ -455,6 +527,7 @@ func (b *SingleNodeBackend) startProcess(worker *api.WorkerInfo) error {
 
 	// Create process state with copied runtime info
 	ps := &processState{
+		done:       make(chan struct{}),
 		retryCount: 0,
 		lastRetry:  time.Now(),
 		isRunning:  false,
@@ -496,13 +569,19 @@ func (b *SingleNodeBackend) startProcess(worker *api.WorkerInfo) error {
 	b.processesMu.Unlock()
 
 	// Start goroutine to wait for process exit
-	go b.waitForProcess(worker.WorkerUID, cmd, logFile)
+	done := ps.done
+	b.processWG.Add(1)
+	go func() {
+		defer b.processWG.Done()
+		b.waitForProcess(worker.WorkerUID, cmd, logFile, done)
+	}()
 
 	klog.Infof("✓ Process started for worker %s: PID=%d, executable=%s", worker.WorkerUID, pid, ps.executable)
 	return nil
 }
 
-func (b *SingleNodeBackend) waitForProcess(workerUID string, cmd *exec.Cmd, logFile io.Closer) {
+func (b *SingleNodeBackend) waitForProcess(workerUID string, cmd *exec.Cmd, logFile io.Closer, done chan struct{}) {
+	defer close(done)
 	err := cmd.Wait()
 
 	// Close log file if exists
@@ -526,7 +605,7 @@ func (b *SingleNodeBackend) waitForProcess(workerUID string, cmd *exec.Cmd, logF
 	// Update process state - this is the source of truth for process status
 	b.processesMu.Lock()
 	ps, exists := b.processes[workerUID]
-	if !exists {
+	if !exists || ps.cmd != cmd {
 		b.processesMu.Unlock()
 		klog.Warningf("⚠ Process exited but processState not found for worker %s (already cleaned up)", workerUID)
 		return
@@ -552,57 +631,80 @@ func (b *SingleNodeBackend) waitForProcess(workerUID string, cmd *exec.Cmd, logF
 	// Update worker info in workers map (best effort, may have been removed)
 	b.mu.Lock()
 	worker, workerExists := b.workers[workerUID]
-	if workerExists && worker.WorkerRunningInfo != nil {
+	if workerExists && worker.WorkerRunningInfo != nil && worker.WorkerRunningInfo.PID == uint32(cmd.Process.Pid) {
+		worker = worker.DeepCopy()
 		worker.WorkerRunningInfo.IsRunning = false
 		worker.WorkerRunningInfo.ExitCode = exitCode
 		worker.WorkerRunningInfo.PID = 0
+		b.workers[workerUID] = worker
+		_ = b.fileState.AddWorker(worker)
 	}
 	b.mu.Unlock()
 
 	// Update file state and notify if worker still exists
 	if workerExists {
-		_ = b.fileState.AddWorker(worker)
 		b.notifySubscribers(worker)
 	}
 }
 
 func (b *SingleNodeBackend) StopWorker(workerUID string) error {
+	b.lifecycleMu.Lock()
+	defer b.lifecycleMu.Unlock()
+	return b.stopWorker(workerUID)
+}
+
+// stopWorker requires lifecycleMu to exclude starts and restarts.
+func (b *SingleNodeBackend) stopWorker(workerUID string) error {
 	klog.Infof("Stopping worker: %s", workerUID)
 
-	// Stop process if running - must do this BEFORE removing from maps
-	// to prevent race with reconcile loop
-	b.processesMu.Lock()
+	// Wait for the actual process exit before releasing its GPU. Lifecycle
+	// serialization prevents a restart from slipping between signal and removal.
+	b.processesMu.RLock()
 	ps, exists := b.processes[workerUID]
+	var cmd *exec.Cmd
+	var done chan struct{}
 	if exists {
-		if ps.cmd != nil && ps.cmd.Process != nil {
-			klog.Infof("Sending SIGTERM to process PID=%d for worker %s", ps.cmd.Process.Pid, workerUID)
-			_ = ps.cmd.Process.Signal(syscall.SIGTERM)
-			b.processesMu.Unlock()
-
-			// Wait outside lock for graceful shutdown
-			time.Sleep(100 * time.Millisecond)
-
-			// Check again and force kill if needed
-			b.processesMu.Lock()
-			if ps, ok := b.processes[workerUID]; ok && ps.cmd != nil && ps.cmd.Process != nil {
-				if ps.cmd.ProcessState == nil || !ps.cmd.ProcessState.Exited() {
-					klog.Infof("Force killing process for worker %s", workerUID)
-					_ = ps.cmd.Process.Kill()
-				}
+		cmd, done = ps.cmd, ps.done
+	}
+	b.processesMu.RUnlock()
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(100 * time.Millisecond):
+			if cmd != nil && cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				return fmt.Errorf("worker %s has not exited; keeping its allocation", workerUID)
 			}
 		}
-		delete(b.processes, workerUID)
 	}
+	b.processesMu.Lock()
+	delete(b.processes, workerUID)
 	b.processesMu.Unlock()
 
-	// Remove from workers map
+	// Serialize persistence with discovery so its snapshot cannot restore a
+	// stopped worker between cache removal and file removal.
 	b.mu.Lock()
-	delete(b.workers, workerUID)
-	b.mu.Unlock()
-
 	if err := b.fileState.RemoveWorker(workerUID); err != nil {
+		b.mu.Unlock()
 		klog.Errorf("Failed to remove worker %s from file state: %v", workerUID, err)
 		return err
+	}
+	delete(b.workers, workerUID)
+	b.mu.Unlock()
+	b.notifySubscribers(nil)
+	// Add and Remove can be coalesced before any subscriber sees the worker.
+	// Explicit stop still owns the responsibility to release its allocation.
+	if b.allocationController != nil {
+		if err := b.allocationController.DeallocateWorker(workerUID); err != nil {
+			return err
+		}
 	}
 
 	klog.Infof("✓ Worker stopped: %s", workerUID)
@@ -647,7 +749,11 @@ func (b *SingleNodeBackend) GetDeviceChangeHandler() framework.DeviceChangeHandl
 func (b *SingleNodeBackend) ListWorkers() []*api.WorkerInfo {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return lo.Values(b.workers)
+	workers := make([]*api.WorkerInfo, 0, len(b.workers))
+	for _, worker := range b.workers {
+		workers = append(workers, worker.DeepCopy())
+	}
+	return workers
 }
 
 // UpdateWorkerEnv updates environment variables for a worker without restarting its process.
@@ -663,12 +769,15 @@ func (b *SingleNodeBackend) UpdateWorkerEnv(workerUID string, env map[string]str
 		b.mu.Unlock()
 		return fmt.Errorf("worker %s has no running info", workerUID)
 	}
-	worker.WorkerRunningInfo.Env = env
-	b.mu.Unlock()
-
+	worker = worker.DeepCopy()
+	worker.WorkerRunningInfo.Env = maps.Clone(env)
 	if err := b.fileState.AddWorker(worker); err != nil {
+		b.mu.Unlock()
 		return fmt.Errorf("failed to persist worker env update: %w", err)
 	}
+	b.workers[workerUID] = worker
+	b.mu.Unlock()
+	b.notifySubscribers(worker)
 
 	klog.Infof("Updated env vars for worker %s (will apply on next process restart)", workerUID)
 	return nil
@@ -723,17 +832,29 @@ func (b *SingleNodeBackend) reconcileProcesses() {
 
 // restartProcess restarts a process for the given worker.
 //
-// Lock ordering: b.mu.RLock -> release -> b.processesMu.Lock -> release -> cmd.Start -> b.processesMu.Lock -> b.mu.Lock
-// This avoids nesting b.mu inside processesMu (which would risk deadlock with waitForProcess).
+// lifecycleMu serializes process creation with StopWorker and Stop. Worker and
+// process state locks are taken separately so exit callbacks can finish.
 func (b *SingleNodeBackend) restartProcess(workerUID string) error {
-	// Step 1: Copy latest env from worker info (separate lock domain, no nesting)
+	b.lifecycleMu.Lock()
+	defer b.lifecycleMu.Unlock()
+	if err := b.checkStopped(); err != nil {
+		return err
+	}
+	// Step 1: Read the current worker before preparing any restart.
 	var envUpdate map[string]string
 	b.mu.RLock()
-	if w, ok := b.workers[workerUID]; ok && w.WorkerRunningInfo != nil && w.WorkerRunningInfo.Env != nil {
-		envUpdate = make(map[string]string, len(w.WorkerRunningInfo.Env))
-		maps.Copy(envUpdate, w.WorkerRunningInfo.Env)
+	info := b.workers[workerUID].DeepCopy()
+	if info != nil && info.WorkerRunningInfo != nil && info.WorkerRunningInfo.Env != nil {
+		envUpdate = make(map[string]string, len(info.WorkerRunningInfo.Env))
+		maps.Copy(envUpdate, info.WorkerRunningInfo.Env)
 	}
 	b.mu.RUnlock()
+	if info == nil {
+		return fmt.Errorf("worker %s no longer exists", workerUID)
+	}
+	if err := b.prepareProcessWorker(info); err != nil {
+		return err
+	}
 
 	// Step 2: Under processesMu, verify state, merge env, and build cmd
 	b.processesMu.Lock()
@@ -785,12 +906,15 @@ func (b *SingleNodeBackend) restartProcess(workerUID string) error {
 		b.processesMu.Unlock()
 		// Worker was removed while we were starting — kill the orphaned process
 		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		if logFile != nil {
 			_ = logFile.Close()
 		}
 		return nil
 	}
 	ps.cmd = cmd
+	ps.done = make(chan struct{})
+	done := ps.done
 	ps.isRunning = true
 	ps.lastRetry = time.Now()
 	restartCount := ps.retryCount
@@ -800,19 +924,25 @@ func (b *SingleNodeBackend) restartProcess(workerUID string) error {
 	b.mu.Lock()
 	worker, workerExists := b.workers[workerUID]
 	if workerExists && worker.WorkerRunningInfo != nil {
+		worker = worker.DeepCopy()
 		worker.WorkerRunningInfo.PID = pid
 		worker.WorkerRunningInfo.IsRunning = true
 		worker.WorkerRunningInfo.Restarts = int(restartCount)
 		worker.WorkerRunningInfo.ExitCode = 0
+		b.workers[workerUID] = worker
+		_ = b.fileState.AddWorker(worker)
 	}
 	b.mu.Unlock()
 
 	// Start goroutine to wait for process exit
-	go b.waitForProcess(workerUID, cmd, logFile)
+	b.processWG.Add(1)
+	go func() {
+		defer b.processWG.Done()
+		b.waitForProcess(workerUID, cmd, logFile, done)
+	}()
 
 	// Update file state
 	if workerExists {
-		_ = b.fileState.AddWorker(worker)
 		b.notifySubscribers(worker)
 	}
 
