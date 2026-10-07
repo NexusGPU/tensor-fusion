@@ -82,6 +82,12 @@ func (cr *ConnectionRouter) Get(ctx *gin.Context) {
 				return
 			}
 			if conn.Status.Phase == tfv1.WorkerRunning {
+				// A same-name connection can be replaced while this request waits.
+				if os.Getenv(constants.DisableConnectionAuthEnv) != constants.TrueStringValue &&
+					!cr.authenticatePodConnection(ctx, conn) {
+					ctx.JSON(401, gin.H{"error": "unauthorized"})
+					return
+				}
 				ctx.String(200, conn.Status.ConnectionURL)
 				return
 			}
@@ -218,9 +224,15 @@ func (cr *ConnectionRouter) authenticatePodConnection(ctx *gin.Context, conn *tf
 		return false
 	}
 	token = token[len(BearerPrefix):]
+	// Cache authorization for this Pod owner, not authentication of the token
+	// alone. Both positive and negative results must remain owner-scoped.
+	cacheKey := struct {
+		token string
+		owner types.UID
+	}{token: token, owner: conn.OwnerReferences[0].UID}
 
 	// use cache to avoid repeated token review and unnecessary API calls to API server
-	if value, exists := cr.lruCache.Get(token); exists {
+	if value, exists := cr.lruCache.Get(cacheKey); exists {
 		if value.(bool) {
 			log.FromContext(ctx).Info("token authentication successful for connection from cache", "connection", conn.Name)
 			return true
@@ -242,24 +254,24 @@ func (cr *ConnectionRouter) authenticatePodConnection(ctx *gin.Context, conn *tf
 		return false
 	}
 	if !tokenReview.Status.Authenticated {
-		cr.lruCache.Add(token, false, JWTTokenCacheDuration)
+		cr.lruCache.Add(cacheKey, false, JWTTokenCacheDuration)
 		log.FromContext(ctx).Error(nil, "token authentication failed, invalid token", "connection", conn.Name)
 		return false
 	}
 	if tokenReview.Status.User.Extra == nil ||
 		len(tokenReview.Status.User.Extra[constants.ExtraVerificationInfoPodIDKey]) == 0 {
-		cr.lruCache.Add(token, false, JWTTokenCacheDuration)
+		cr.lruCache.Add(cacheKey, false, JWTTokenCacheDuration)
 		log.FromContext(ctx).Error(nil, "token authentication failed, no valid pod UID in token", "connection", conn.Name)
 		return false
 	}
 	// verified pod ID, the connection is valid
 	if string(conn.OwnerReferences[0].UID) == tokenReview.Status.User.Extra[constants.ExtraVerificationInfoPodIDKey][0] {
-		cr.lruCache.Add(token, true, JWTTokenCacheDuration)
+		cr.lruCache.Add(cacheKey, true, JWTTokenCacheDuration)
 		log.FromContext(ctx).Info("token authentication successful for connection", "connection", conn.Name)
 		return true
 	}
 
-	cr.lruCache.Add(token, false, JWTTokenCacheDuration)
+	cr.lruCache.Add(cacheKey, false, JWTTokenCacheDuration)
 	log.FromContext(ctx).Error(nil, "token authentication failed, pod ID not matched", "connection", conn.Name)
 	return false
 }
