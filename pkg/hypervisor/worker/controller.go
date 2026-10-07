@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -37,6 +38,7 @@ type WorkerController struct {
 	mu         sync.RWMutex
 	workers    map[string]*api.WorkerInfo
 	shmHandles map[string]*workerstate.SharedMemoryHandle // workerUID -> shm handle
+	stopped    bool
 
 	shmBasePath string
 	nowFunc     func() time.Time
@@ -91,24 +93,41 @@ func NewWorkerControllerWithPolicy(
 	return wc
 }
 
-func (w *WorkerController) Start() error {
-	// Register worker update handler
-	handler := framework.WorkerChangeHandler{
+func (w *WorkerController) workerChangeHandler() framework.WorkerChangeHandler {
+	return framework.WorkerChangeHandler{
+		OnPrepare: func(workerUID string) error { return w.WithWorkerSharedMemory(workerUID, nil) },
 		OnAdd: func(worker *api.WorkerInfo) {
 			w.mu.Lock()
 			w.workers[worker.WorkerUID] = worker
+			if worker.Status == api.WorkerStatusTerminated {
+				w.closeSharedMemoryLocked(worker.WorkerUID)
+			}
 			w.mu.Unlock()
+			// A busy backend may observe only the final Pod state. Allocation
+			// can already exist even though no earlier Add reached this handler.
+			if worker.Status == api.WorkerStatusTerminated {
+				if err := w.allocationController.DeallocateWorker(worker.WorkerUID); err != nil {
+					klog.Errorf("Failed to deallocate terminated worker %s: %v", worker.WorkerUID, err)
+				}
+				return
+			}
 
 			w.recoverExistingWorkerAllocation(worker)
 
 			// Existing soft processes keep their limiter state in shared memory.
 			// Reopen that mapping after a hypervisor restart so heartbeat updates continue;
 			// otherwise already-running CUDA kernels are eventually denied as unhealthy.
-			if usesSoftLimiterSharedMemory(worker.IsolationMode) {
-				w.ensureWorkerSharedMemory(worker, worker.Status == api.WorkerStatusRunning)
+			if usesSoftLimiterSharedMemory(worker.IsolationMode) || worker.IsolationMode == tfv1.IsolationModeHard {
+				_ = w.WithWorkerSharedMemory(worker.WorkerUID, nil)
 			}
 		},
 		OnRemove: func(worker *api.WorkerInfo) {
+			// Fence initialization before deallocating: a delayed HTTP request or
+			// sync pass must not recreate shared memory for a removed worker.
+			w.mu.Lock()
+			delete(w.workers, worker.WorkerUID)
+			w.closeSharedMemoryLocked(worker.WorkerUID)
+			w.mu.Unlock()
 			// Deallocate worker devices first
 			if err := w.allocationController.DeallocateWorker(worker.WorkerUID); err != nil {
 				klog.Errorf("Failed to deallocate worker %s: %v", worker.WorkerUID, err)
@@ -119,11 +138,14 @@ func (w *WorkerController) Start() error {
 			if w.quotaController != nil {
 				w.quotaController.CleanupWorker(worker.WorkerUID)
 			}
-			w.mu.Lock()
-			defer w.mu.Unlock()
-			delete(w.workers, worker.WorkerUID)
 		},
 		OnUpdate: func(oldWorker, newWorker *api.WorkerInfo) {
+			w.mu.Lock()
+			w.workers[newWorker.WorkerUID] = newWorker
+			if newWorker.Status == api.WorkerStatusTerminated {
+				w.closeSharedMemoryLocked(newWorker.WorkerUID)
+			}
+			w.mu.Unlock()
 			// Check if worker transitioned to Terminated state (Succeeded or Failed)
 			// If so, deallocate devices including partitions
 			if oldWorker.Status != api.WorkerStatusTerminated && newWorker.Status == api.WorkerStatusTerminated {
@@ -131,13 +153,13 @@ func (w *WorkerController) Start() error {
 					klog.Errorf("Failed to deallocate worker %s on termination: %v", newWorker.WorkerUID, err)
 				}
 			}
-			w.mu.Lock()
-			defer w.mu.Unlock()
-			w.workers[newWorker.WorkerUID] = newWorker
+			w.recoverExistingWorkerAllocation(newWorker)
 		},
 	}
+}
 
-	err := w.backend.RegisterWorkerUpdateHandler(handler)
+func (w *WorkerController) Start() error {
+	err := w.backend.RegisterWorkerUpdateHandler(w.workerChangeHandler())
 	if err != nil {
 		return err
 	}
@@ -168,11 +190,22 @@ func usesSoftLimiterSharedMemory(mode tfv1.IsolationModeType) bool {
 	return mode == tfv1.IsolationModeSoft
 }
 
-// recoverExistingWorkerAllocation rebuilds the in-memory allocation for a pod
-// that was already running when the hypervisor started. New pods are allocated
-// through the device plugin and are intentionally ignored here.
+// recoverExistingWorkerAllocation restores admitted Pods after restart. Kubelet
+// may reuse a checkpointed allocation while the Pod is still Pending. New Pods
+// without that evidence must continue through normal device-plugin admission.
 func (w *WorkerController) recoverExistingWorkerAllocation(worker *api.WorkerInfo) {
-	if worker == nil || worker.Status != api.WorkerStatusRunning || len(worker.AllocatedDevices) == 0 {
+	if worker == nil || worker.Status == api.WorkerStatusTerminated || len(worker.AllocatedDevices) == 0 ||
+		(worker.Status != api.WorkerStatusRunning && !worker.AllocationConfirmed) {
+		return
+	}
+	// Serialize recovery with removal, including background retries using an
+	// older snapshot. A late retry must never resurrect a deleted allocation.
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped || w.workers[worker.WorkerUID] != worker {
+		return
+	}
+	if _, exists := w.allocationController.GetWorkerAllocation(worker.WorkerUID); exists {
 		return
 	}
 
@@ -195,9 +228,17 @@ func (w *WorkerController) recoverExistingWorkerAllocation(worker *api.WorkerInf
 }
 
 func (w *WorkerController) Stop() error {
+	w.mu.Lock()
+	w.stopped = true
+	w.mu.Unlock()
 	w.stopSharedMemorySyncLoop()
 	_ = w.backend.Stop()
 	_ = w.quotaController.StopSoftQuotaLimiter()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for uid := range w.shmHandles {
+		w.closeSharedMemoryLocked(uid)
+	}
 	return nil
 }
 
@@ -412,6 +453,9 @@ func (w *WorkerController) startSharedMemorySyncLoop(ctx context.Context) {
 		defer ticker.Stop()
 
 		for {
+			if err := w.allocationController.RetryPendingCleanup(); err != nil {
+				klog.V(4).Infof("Pending allocation cleanup will be retried: %v", err)
+			}
 			w.syncSharedMemoryState()
 
 			select {
@@ -461,12 +505,14 @@ func (w *WorkerController) startSharedMemoryCleanupLoop(ctx context.Context) {
 // cleanupOrphanedSharedMemory removes shared memory files for workers that no longer exist.
 // Directory structure: {shmBasePath}/{namespace}/{podName}/shm
 func (w *WorkerController) cleanupOrphanedSharedMemory() {
+	// Keep the liveness check and unlink in the same critical section as
+	// initialization and OnAdd. A stale snapshot can unlink a new Pod's file.
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	activeWorkers := make(map[string]bool)
-	w.mu.RLock()
 	for _, worker := range w.workers {
 		activeWorkers[worker.Namespace+"/"+worker.WorkerName] = true
 	}
-	w.mu.RUnlock()
 
 	namespaces, err := os.ReadDir(w.shmBasePath)
 	if err != nil {
@@ -492,27 +538,27 @@ func (w *WorkerController) cleanupOrphanedSharedMemory() {
 				continue
 			}
 
-			shmPath := filepath.Join(nsPath, podEntry.Name(), workerstate.ShmPathSuffix)
-			if _, statErr := os.Stat(shmPath); statErr != nil {
+			podPath := filepath.Join(nsPath, podEntry.Name())
+			files, readErr := os.ReadDir(podPath)
+			if readErr != nil {
 				continue
 			}
-
-			// Clean up shm file
-			_ = os.Remove(shmPath)
-			_ = os.Remove(filepath.Join(nsPath, podEntry.Name()))
+			for _, file := range files {
+				if file.Name() == workerstate.ShmPathSuffix || strings.HasPrefix(file.Name(), ".shm-") {
+					_ = os.Remove(filepath.Join(podPath, file.Name()))
+				}
+			}
+			_ = os.Remove(podPath)
 			cleanedCount++
 		}
 	}
 
 	// Clean up stale shm handles
-	w.mu.Lock()
-	for uid, handle := range w.shmHandles {
+	for uid := range w.shmHandles {
 		if _, exists := w.workers[uid]; !exists {
-			_ = handle.Close()
-			delete(w.shmHandles, uid)
+			w.closeSharedMemoryLocked(uid)
 		}
 	}
-	w.mu.Unlock()
 
 	if cleanedCount > 0 {
 		klog.Infof("Shared memory cleanup: removed %d orphaned entries", cleanedCount)
@@ -530,6 +576,12 @@ func (w *WorkerController) syncSharedMemoryState() {
 	if w.backend == nil || w.shmBasePath == "" {
 		return
 	}
+	// Device discovery can fail during initial recovery. Retry admitted workers
+	// from the current cache, without waiting for another Pod update.
+	workers, _ := w.ListWorkers()
+	for _, worker := range workers {
+		w.recoverExistingWorkerAllocation(worker)
+	}
 
 	workerAllocations := w.workerAllocations()
 	if len(workerAllocations) == 0 {
@@ -545,6 +597,14 @@ func (w *WorkerController) syncSharedMemoryState() {
 		if workerInfo == nil {
 			continue
 		}
+		// Retry preparation after device allocation arrives. This uses the
+		// managed sync loop instead of per-Pod goroutines that outlive deletion.
+		if usesSoftLimiterSharedMemory(workerInfo.IsolationMode) || workerInfo.IsolationMode == tfv1.IsolationModeHard {
+			if err := w.WithWorkerSharedMemory(workerUID, nil); err != nil {
+				klog.V(4).Infof("Shared memory not ready for worker %s: %v", workerUID, err)
+				continue
+			}
+		}
 
 		// Get shm handle for this worker
 		w.mu.RLock()
@@ -557,6 +617,11 @@ func (w *WorkerController) syncSharedMemoryState() {
 		deviceMemoryUsage := memoryByWorkerDevice[workerUID]
 		handle.WithState(func(state *workerstate.SharedDeviceState) {
 			state.UpdateHeartbeat(now)
+			// nil means collection failed; an empty, non-nil map is a valid
+			// sample with no GPU processes. Keep the last usage on failure.
+			if memoryByWorkerDevice == nil {
+				return
+			}
 
 			// Total across every physical GPU this worker's processes touched. Used
 			// as a fallback for single-device pods whose process landed on a GPU
@@ -582,46 +647,54 @@ func (w *WorkerController) syncSharedMemoryState() {
 	}
 }
 
-// ensureWorkerSharedMemory opens the existing limiter shared memory for a
-// running worker after hypervisor restart, or creates it for a new worker.
-func (w *WorkerController) ensureWorkerSharedMemory(worker *api.WorkerInfo, recoverExisting bool) {
-	go func() {
-		// Retry for up to 30 seconds waiting for allocation
-		for i := 0; i < 30; i++ {
-			allocation, exists := w.allocationController.GetWorkerAllocation(worker.WorkerUID)
-			if exists && allocation != nil && allocation.WorkerInfo != nil && len(allocation.DeviceInfos) > 0 {
-				configs := buildSoftDeviceConfigs(allocation)
-				if len(configs) == 0 {
-					return
-				}
-				podId := workerstate.NewPodIdentifier(worker.Namespace, worker.WorkerName)
-				var handle *workerstate.SharedMemoryHandle
-				var err error
-				if recoverExisting {
-					handle, err = workerstate.OpenSharedMemoryHandle(w.shmBasePath, podId)
-				}
-				if handle == nil {
-					handle, err = workerstate.CreateSharedMemoryHandle(w.shmBasePath, podId, configs)
-				}
-				if err != nil {
-					klog.Errorf("Failed to prepare shared memory for worker %s/%s: %v", worker.Namespace, worker.WorkerName, err)
-					return
-				}
-				// Store handle for later use (heartbeat, memory sync)
-				w.mu.Lock()
-				w.shmHandles[worker.WorkerUID] = handle
-				w.mu.Unlock()
-				klog.Infof("Prepared shared memory for worker %s/%s with %d devices",
-					worker.Namespace, worker.WorkerName, len(configs))
-				return
-			}
-			time.Sleep(1 * time.Second)
+// WithWorkerSharedMemory serializes initialization with Pod removal and name
+// reuse. Both HTTP initialization and the background sync use this same handle.
+func (w *WorkerController) WithWorkerSharedMemory(
+	workerUID string, fn func(*workerstate.SharedDeviceState),
+) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	worker := w.workers[workerUID]
+	if w.stopped || worker == nil || worker.Status == api.WorkerStatusTerminated {
+		return fmt.Errorf("worker %s is no longer active", workerUID)
+	}
+	for uid, other := range w.workers {
+		if uid != workerUID && other.Namespace == worker.Namespace && other.WorkerName == worker.WorkerName &&
+			other.Status != api.WorkerStatusTerminated {
+			return fmt.Errorf("waiting for previous worker at %s/%s to be removed", worker.Namespace, worker.WorkerName)
 		}
-		klog.Warningf("Timed out waiting for allocation for worker %s/%s", worker.Namespace, worker.WorkerName)
-	}()
+	}
+	allocation, exists := w.allocationController.GetWorkerAllocation(workerUID)
+	if !exists || allocation == nil || allocation.WorkerInfo == nil || len(allocation.DeviceInfos) == 0 {
+		return fmt.Errorf("worker %s has no device allocation", workerUID)
+	}
+	handle := w.shmHandles[workerUID]
+	if handle == nil {
+		var err error
+		handle, err = workerstate.PrepareWorkerSharedMemory(
+			w.shmBasePath, workerstate.NewPodIdentifier(worker.Namespace, worker.WorkerName),
+			workerUID, buildWorkerDeviceConfigs(allocation),
+			worker.Status == api.WorkerStatusRunning || worker.AllocationConfirmed,
+		)
+		if err != nil {
+			return err
+		}
+		w.shmHandles[workerUID] = handle
+	}
+	if fn != nil && !handle.WithState(fn) {
+		return fmt.Errorf("shared memory for worker %s is closed", workerUID)
+	}
+	return nil
 }
 
-func buildSoftDeviceConfigs(allocation *api.WorkerAllocation) []workerstate.DeviceConfig {
+func (w *WorkerController) closeSharedMemoryLocked(workerUID string) {
+	if handle := w.shmHandles[workerUID]; handle != nil {
+		_ = handle.Close()
+		delete(w.shmHandles, workerUID)
+	}
+}
+
+func buildWorkerDeviceConfigs(allocation *api.WorkerAllocation) []workerstate.DeviceConfig {
 	if allocation == nil || allocation.WorkerInfo == nil {
 		return nil
 	}
@@ -640,15 +713,62 @@ func buildSoftDeviceConfigs(allocation *api.WorkerAllocation) []workerstate.Devi
 				smCount = uint32(v)
 			}
 		}
+		deviceUUID := normalizeDeviceUUID(deviceInfo.UUID)
+		totalCores := smCount * 128
+		if allocation.WorkerInfo.IsolationMode != tfv1.IsolationModeSoft {
+			// Preserve the legacy hard/shared client's UUID and CUDA core layout.
+			deviceUUID = deviceInfo.UUID
+			if strings.HasPrefix(deviceUUID, "gpu-") {
+				deviceUUID = "GPU-" + strings.TrimPrefix(deviceUUID, "gpu-")
+			}
+			totalCores = smCount * coresPerSM(deviceInfo.Properties["computeCapability"])
+		}
 		configs = append(configs, workerstate.DeviceConfig{
 			DeviceIdx:  uint32(deviceInfo.Index),
-			DeviceUUID: normalizeDeviceUUID(deviceInfo.UUID),
+			DeviceUUID: deviceUUID,
 			UpLimit:    computeUpLimit(allocation.WorkerInfo, deviceInfo),
 			MemLimit:   memLimit,
-			SMCount:    smCount * 128,
+			SMCount:    totalCores,
 		})
 	}
 	return configs
+}
+
+func coresPerSM(computeCapability string) uint32 {
+	parts := strings.Split(strings.TrimSpace(computeCapability), ".")
+	if len(parts) != 2 {
+		return 0
+	}
+
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0
+	}
+
+	switch (major * 10) + minor {
+	case 20:
+		return 32
+	case 21:
+		return 48
+	case 30, 32, 35, 37:
+		return 192
+	case 50, 52, 53:
+		return 128
+	case 60:
+		return 64
+	case 61, 62:
+		return 128
+	case 70, 72, 75, 80:
+		return 64
+	case 86, 87, 89, 90, 100, 101, 103, 110, 120, 121:
+		return 128
+	default:
+		return 0
+	}
 }
 
 func normalizeDeviceUUID(uuid string) string {

@@ -51,10 +51,10 @@ const (
 type DevicePlugin struct {
 	pluginapi.UnimplementedDevicePluginServer
 
-	ctx                  context.Context
-	deviceController     framework.DeviceController
-	allocationController framework.WorkerAllocationController
-	kubeletClient        *PodCacheManager
+	ctx              context.Context
+	deviceController framework.DeviceController
+	allocateWorker   func(context.Context, *api.WorkerInfo) (*api.WorkerAllocation, error)
+	kubeletClient    *PodCacheManager
 
 	server            *grpc.Server
 	socketPath        string
@@ -67,30 +67,30 @@ type DevicePlugin struct {
 func NewDevicePlugins(
 	ctx context.Context,
 	deviceController framework.DeviceController,
-	allocationController framework.WorkerAllocationController,
+	allocateWorker func(context.Context, *api.WorkerInfo) (*api.WorkerAllocation, error),
 	kubeletClient *PodCacheManager,
 ) []*DevicePlugin {
 	devicePlugins := make([]*DevicePlugin, 0, constants.IndexKeyLength+1)
 	devicePlugins = append(devicePlugins, &DevicePlugin{
-		ctx:                  ctx,
-		deviceController:     deviceController,
-		allocationController: allocationController,
-		kubeletClient:        kubeletClient,
-		socketPath:           filepath.Join(DevicePluginPath, LegacyDevicePluginEndpoint),
-		resourceNameIndex:    -1,
-		resourceName:         constants.PodIndexAnnotation,
-		deviceCount:          constants.LegacyIndexDeviceCount,
+		ctx:               ctx,
+		deviceController:  deviceController,
+		allocateWorker:    allocateWorker,
+		kubeletClient:     kubeletClient,
+		socketPath:        filepath.Join(DevicePluginPath, LegacyDevicePluginEndpoint),
+		resourceNameIndex: -1,
+		resourceName:      constants.PodIndexAnnotation,
+		deviceCount:       constants.LegacyIndexDeviceCount,
 	})
 	for i := range constants.IndexKeyLength {
 		devicePlugins = append(devicePlugins, &DevicePlugin{
-			ctx:                  ctx,
-			deviceController:     deviceController,
-			allocationController: allocationController,
-			kubeletClient:        kubeletClient,
-			socketPath:           filepath.Join(DevicePluginPath, fmt.Sprintf(DevicePluginEndpoint, i)),
-			resourceNameIndex:    i,
-			resourceName:         fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, i),
-			deviceCount:          constants.IndexModLength * (constants.IndexModLength + 1) / 2,
+			ctx:               ctx,
+			deviceController:  deviceController,
+			allocateWorker:    allocateWorker,
+			kubeletClient:     kubeletClient,
+			socketPath:        filepath.Join(DevicePluginPath, fmt.Sprintf(DevicePluginEndpoint, i)),
+			resourceNameIndex: i,
+			resourceName:      fmt.Sprintf("%s%s%x", constants.PodIndexAnnotation, constants.PodIndexDelimiter, i),
+			deviceCount:       constants.IndexModLength * (constants.IndexModLength + 1) / 2,
 		})
 	}
 	return devicePlugins
@@ -275,6 +275,9 @@ func (dp *DevicePlugin) Allocate(
 	ctx context.Context,
 	req *pluginapi.AllocateRequest,
 ) (*pluginapi.AllocateResponse, error) {
+	if dp.allocateWorker == nil {
+		return nil, fmt.Errorf("worker initialization is not configured")
+	}
 	responses := make([]*pluginapi.ContainerAllocateResponse, 0, len(req.ContainerRequests))
 	klog.Infof(
 		"Allocate called for device plugin resource %s, container requests: %d",
@@ -308,7 +311,7 @@ func (dp *DevicePlugin) Allocate(
 		)
 		// Get worker info from kubelet client using pod index
 		// This will automatically check for duplicate indices and fail fast if found
-		workerInfo, err := dp.kubeletClient.GetWorkerInfoForAllocationByIndex(podIndexFull)
+		workerInfo, err := dp.kubeletClient.getWorkerInfoForAllocationByIndex(ctx, podIndexFull)
 		if err != nil {
 			klog.Errorf("Failed to get worker info for pod index %d: %v", podIndexFull, err)
 			return nil, fmt.Errorf("failed to get worker info for pod index %d: %w", podIndexFull, err)
@@ -317,7 +320,7 @@ func (dp *DevicePlugin) Allocate(
 			return nil, fmt.Errorf("worker info not found for pod index %d", podIndexFull)
 		}
 		// Call allocation controller to allocate
-		allocResp, err := dp.allocationController.AllocateWorkerDevices(workerInfo)
+		allocResp, err := dp.allocateWorker(ctx, workerInfo)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"failed to allocate devices for worker %s %s: %w",

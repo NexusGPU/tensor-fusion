@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -26,6 +27,8 @@ type AllocationController struct {
 	mu                sync.RWMutex
 	workerAllocations map[string]*api.WorkerAllocation
 	deviceAllocations map[string][]*api.WorkerAllocation
+	pendingWorkers    map[string][]*api.DeviceInfo
+	pendingPartitions map[string]*api.DeviceInfo
 }
 
 var _ framework.WorkerAllocationController = &AllocationController{}
@@ -42,6 +45,8 @@ func NewAllocationController(deviceController framework.DeviceController) *Alloc
 		isolationPolicy:   tfv1.IsolationModePolicyStatic,
 		workerAllocations: make(map[string]*api.WorkerAllocation, 32),
 		deviceAllocations: make(map[string][]*api.WorkerAllocation, 32),
+		pendingWorkers:    make(map[string][]*api.DeviceInfo),
+		pendingPartitions: make(map[string]*api.DeviceInfo),
 	}
 }
 
@@ -64,15 +69,27 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	}
 
 	// idempotency check
+	if _, deleting := a.pendingWorkers[request.WorkerUID]; deleting {
+		return nil, fmt.Errorf("worker %s still has partitions pending cleanup", request.WorkerUID)
+	}
 	if a.workerAllocations[request.WorkerUID] != nil {
 		klog.Infof("worker %s already allocated, skipping", request.WorkerUID)
 		return a.workerAllocations[request.WorkerUID], nil
 	}
-	if err := a.validateDynamicAllocationLocked(request); err != nil {
+	if err := a.validateAllocationLocked(request); err != nil {
 		return nil, err
 	}
 
 	deviceInfos := make([]*api.DeviceInfo, 0, len(request.AllocatedDevices))
+	// Validate the complete request before creating partitions or recording usage.
+	for _, deviceUUID := range request.AllocatedDevices {
+		info, exists := a.deviceController.GetDevice(deviceUUID)
+		if !exists || info == nil {
+			return nil, fmt.Errorf("worker %s requested device %s not found in device controller",
+				request.WorkerUID, deviceUUID)
+		}
+		deviceInfos = append(deviceInfos, info)
+	}
 
 	// partitioned mode, call split device
 	isPartitioned := request.IsolationMode == tfv1.IsolationModePartitioned && request.PartitionTemplateID != ""
@@ -84,12 +101,7 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	// and the partition stays orphaned until manual intervention.
 	var splittedPartitions []*api.DeviceInfo
 
-	for _, deviceUUID := range request.AllocatedDevices {
-		device, exists := a.deviceController.GetDevice(deviceUUID)
-		if !exists {
-			klog.Errorf("worker %s requested device %s not found in device controller, skipping", request.WorkerUID, deviceUUID)
-			continue
-		}
+	for i, deviceUUID := range request.AllocatedDevices {
 		if isPartitioned {
 			deviceInfo, err := a.deviceController.SplitDevice(deviceUUID, request.PartitionTemplateID)
 			if err != nil {
@@ -97,13 +109,8 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 				return nil, err
 			}
 			splittedPartitions = append(splittedPartitions, deviceInfo)
-			deviceInfos = append(deviceInfos, deviceInfo)
-		} else {
-			deviceInfos = append(deviceInfos, device)
+			deviceInfos[i] = deviceInfo
 		}
-	}
-	if len(deviceInfos) == 0 {
-		return nil, fmt.Errorf("none of the requested devices exist for worker %s", request.WorkerUID)
 	}
 
 	mounts, err := a.deviceController.GetVendorMountLibs()
@@ -204,7 +211,7 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 }
 
 // rollbackSplits releases partitions that were created during a failed
-// allocation. Errors are logged best-effort; the caller is already returning
+// allocation. Failed deletes are retained for retry while the caller returns
 // the original allocation error.
 func (a *AllocationController) rollbackSplits(splits []*api.DeviceInfo) {
 	for _, split := range splits {
@@ -212,6 +219,7 @@ func (a *AllocationController) rollbackSplits(splits []*api.DeviceInfo) {
 			continue
 		}
 		if err := a.deviceController.RemovePartitionedDevice(split.UUID, split.ParentUUID); err != nil {
+			a.pendingPartitions[split.UUID] = split
 			klog.Errorf("rollback partition %s on parent %s failed: %v",
 				split.UUID, split.ParentUUID, err)
 		}
@@ -223,30 +231,66 @@ func (a *AllocationController) rollbackSplits(splits []*api.DeviceInfo) {
 func (a *AllocationController) DeallocateWorker(workerUID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.deallocateWorkerLocked(workerUID)
+}
+
+func (a *AllocationController) deallocateWorkerLocked(workerUID string) error {
 	allocation, exists := a.workerAllocations[workerUID]
 	if !exists {
 		klog.V(4).Infof("worker allocation not found for worker %s, may have already been deallocated", workerUID)
 		return nil
 	}
-	delete(a.workerAllocations, workerUID)
-	for _, deviceUUID := range allocation.WorkerInfo.AllocatedDevices {
-		a.removeDeviceAllocation(deviceUUID, allocation)
+	partitions, retrying := a.pendingWorkers[workerUID]
+	if !retrying {
+		partitions = allocation.DeviceInfos
 	}
 
 	// For partitioned devices, release the partition via device controller
-	for _, deviceInfo := range allocation.DeviceInfos {
+	var cleanupErr error
+	var failed []*api.DeviceInfo
+	for _, deviceInfo := range partitions {
 		if deviceInfo.ParentUUID != "" {
 			// This is a partitioned device, release the partition
 			if err := a.deviceController.RemovePartitionedDevice(deviceInfo.UUID, deviceInfo.ParentUUID); err != nil {
 				klog.Errorf("failed to remove partition %s from device %s for worker %s: %v",
 					deviceInfo.UUID, deviceInfo.ParentUUID, workerUID, err)
-				// Continue deallocating other resources even if partition removal fails
+				cleanupErr = errors.Join(cleanupErr, err)
+				failed = append(failed, deviceInfo)
 			}
 		}
+	}
+	if cleanupErr != nil {
+		// Do not delete successful partitions again: SDK IDs can be reused.
+		a.pendingWorkers[workerUID] = failed
+		return cleanupErr
+	}
+	delete(a.pendingWorkers, workerUID)
+	delete(a.workerAllocations, workerUID)
+	for _, deviceUUID := range allocation.WorkerInfo.AllocatedDevices {
+		a.removeDeviceAllocation(deviceUUID, allocation)
 	}
 
 	klog.Infof("worker %s deallocated", workerUID)
 	return nil
+}
+
+// RetryPendingCleanup retries failed SDK deletes, including partitions created
+// by an allocation that failed before it could be committed to worker state.
+func (a *AllocationController) RetryPendingCleanup() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var cleanupErr error
+	for uid := range a.pendingWorkers {
+		cleanupErr = errors.Join(cleanupErr, a.deallocateWorkerLocked(uid))
+	}
+	for uuid, partition := range a.pendingPartitions {
+		if err := a.deviceController.RemovePartitionedDevice(uuid, partition.ParentUUID); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
+		}
+		delete(a.pendingPartitions, uuid)
+	}
+	return cleanupErr
 }
 
 // RecoverPartitionedWorker rebuilds allocation state for an existing partitioned worker
@@ -305,7 +349,14 @@ func (a *AllocationController) RecoverPartitionedWorker(request *api.WorkerInfo,
 	return nil
 }
 
-func (a *AllocationController) validateDynamicAllocationLocked(request *api.WorkerInfo) error {
+func (a *AllocationController) validateAllocationLocked(request *api.WorkerInfo) error {
+	for _, deviceUUID := range request.AllocatedDevices {
+		for _, partition := range a.pendingPartitions {
+			if partition.ParentUUID == deviceUUID {
+				return fmt.Errorf("device %s still has a partition pending cleanup", deviceUUID)
+			}
+		}
+	}
 	if a.isolationPolicy != tfv1.IsolationModePolicyDynamic {
 		return nil
 	}

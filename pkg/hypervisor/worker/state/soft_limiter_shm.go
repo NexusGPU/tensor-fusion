@@ -3,6 +3,8 @@
 package worker
 
 import (
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -45,7 +47,8 @@ func isProcessAlive(pid uintptr) bool {
 	if pid == 0 {
 		return false
 	}
-	return syscall.Kill(int(pid), 0) == nil
+	// EPERM means the process exists but belongs to another user.
+	return syscall.Kill(int(pid), 0) != syscall.ESRCH
 }
 
 // PodIdentifier contains namespace and name
@@ -612,6 +615,24 @@ func (s *SharedDeviceState) AddPID(pid int) {
 	}
 }
 
+// TryAddPID lets process initialization retry without blocking the worker
+// controller on a lock held by a container (possibly in another PID namespace).
+func (s *SharedDeviceState) TryAddPID(pid int) bool {
+	var mutex *ShmMutex[PIDSet]
+	if s.V1 != nil {
+		mutex = &s.V1.PIDs
+	} else {
+		mutex = &s.V2.PIDs
+	}
+	mutex.CleanupOrphanedLock()
+	if !atomic.CompareAndSwapUintptr(&mutex.LockField, 0, uintptr(os.Getpid())) {
+		return false
+	}
+	defer mutex.Unlock()
+	mutex.Value.InsertIfAbsent(pid)
+	return true
+}
+
 // RemovePID removes a PID
 func (s *SharedDeviceState) RemovePID(pid int) {
 	if s.V1 != nil {
@@ -852,12 +873,15 @@ func NewShmMutex[T any](value T) ShmMutex[T] {
 
 // Lock locks the mutex
 func (m *ShmMutex[T]) Lock() {
+	// PID is part of the persisted ABI and may name a previous hypervisor.
+	// The owner of a new lock must always be the process acquiring it now.
+	pid := uintptr(os.Getpid())
 	for {
-		if atomic.CompareAndSwapUintptr(&m.LockField, 0, m.PID) {
+		if atomic.CompareAndSwapUintptr(&m.LockField, 0, pid) {
 			return
 		}
 		holder := atomic.LoadUintptr(&m.LockField)
-		if holder != 0 && holder != m.PID && !isProcessAlive(holder) {
+		if holder != 0 && holder != pid && !isProcessAlive(holder) {
 			atomic.CompareAndSwapUintptr(&m.LockField, holder, 0)
 			continue
 		}
@@ -867,7 +891,7 @@ func (m *ShmMutex[T]) Lock() {
 
 // Unlock unlocks the mutex
 func (m *ShmMutex[T]) Unlock() {
-	_ = atomic.CompareAndSwapUintptr(&m.LockField, m.PID, 0)
+	_ = atomic.CompareAndSwapUintptr(&m.LockField, uintptr(os.Getpid()), 0)
 }
 
 // CleanupOrphanedLock cleans up orphaned locks (placeholder for now)
@@ -888,7 +912,8 @@ type SharedMemoryHandle struct {
 	fileSize int64
 }
 
-// CreateSharedMemoryHandle creates a new shared memory handle.
+// CreateSharedMemoryHandle creates a fully initialized mapping, or opens the
+// existing mapping without resetting counters or replacing its inode.
 // Namespace and pod name are expected to be single path components.
 func CreateSharedMemoryHandle(
 	basePath string, pod *PodIdentifier, configs []DeviceConfig,
@@ -910,20 +935,37 @@ func CreateSharedMemoryHandle(
 
 	podPath := filepath.Join(basePath, pod.Namespace, pod.Name)
 	shmPath := filepath.Join(podPath, ShmPathSuffix)
+	if handle, err := OpenSharedMemoryHandle(basePath, pod); err == nil {
+		return handle, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(podPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
+	return createSharedMemoryHandle(shmPath, configs)
+}
+
+func createSharedMemoryHandle(shmPath string, configs []DeviceConfig) (*SharedMemoryHandle, error) {
+	if handle, err := openSharedMemoryHandle(shmPath); err == nil {
+		return handle, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 
 	// Rust maps this file as `#[repr(C)] enum SharedDeviceState::V2`.
 	stateSize := int(unsafe.Sizeof(rustSharedDeviceStateV2Layout{}))
 
-	// Create or open the file
-	file, err := os.OpenFile(shmPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	// Publish only after initialization. O_TRUNC would reset live mappings and
+	// can SIGBUS another process reading the file while its length is zero.
+	temporary := filepath.Join(filepath.Dir(shmPath), ".shm-init-"+rand.Text())
+	file, err := os.OpenFile(temporary, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create file: %w", err)
 	}
+	defer func() { _ = os.Remove(file.Name()) }()
 
 	// Truncate to the required size
 	if err := file.Truncate(int64(stateSize)); err != nil {
@@ -948,7 +990,6 @@ func CreateSharedMemoryHandle(
 
 	// Get a pointer to the mapped state
 	mappedState := (*rustSharedDeviceStateV2Layout)(unsafe.Pointer(&data[0]))
-	mappedState.Discriminant = rustSharedDeviceStateV2Discriminant
 
 	// Copy the V2 payload bytes into the mapped enum payload without
 	// assigning the lock-containing struct by value.
@@ -956,6 +997,18 @@ func CreateSharedMemoryHandle(
 	stateBytes := (*[1 << 30]byte)(unsafe.Pointer(state))[:statePayloadSize:statePayloadSize]
 	v2Offset := int(unsafe.Offsetof(rustSharedDeviceStateV2Layout{}.V2))
 	copy(data[v2Offset:v2Offset+statePayloadSize], stateBytes)
+	mappedState.Discriminant = rustSharedDeviceStateV2Discriminant
+
+	// Link is an atomic create-if-absent operation. Concurrent initializers
+	// converge on one inode, including its cross-process memory reservations.
+	if err := os.Link(file.Name(), shmPath); err != nil {
+		_ = syscall.Munmap(data)
+		_ = file.Close()
+		if os.IsExist(err) {
+			return openSharedMemoryHandle(shmPath)
+		}
+		return nil, fmt.Errorf("failed to publish shared memory: %w", err)
+	}
 
 	return &SharedMemoryHandle{
 		path:     shmPath,
@@ -986,9 +1039,20 @@ func OpenSharedMemoryHandle(basePath string, pod *PodIdentifier) (*SharedMemoryH
 
 	podPath := filepath.Join(basePath, pod.Namespace, pod.Name)
 	shmPath := filepath.Join(podPath, ShmPathSuffix)
+	if target, err := os.Readlink(shmPath); err == nil {
+		// A worker can write its mounted directory. Never follow a link to
+		// another Pod's mapping or an arbitrary host file.
+		if filepath.Base(target) != target || !strings.HasPrefix(target, ".shm-uid-") {
+			return nil, fmt.Errorf("invalid shared memory generation link: %q", target)
+		}
+		shmPath = filepath.Join(podPath, target)
+	}
+	return openSharedMemoryHandle(shmPath)
+}
 
+func openSharedMemoryHandle(shmPath string) (*SharedMemoryHandle, error) {
 	// Open the file
-	file, err := os.OpenFile(shmPath, os.O_RDWR, 0666)
+	file, err := os.OpenFile(shmPath, os.O_RDWR|syscall.O_NOFOLLOW, 0666)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
@@ -1020,10 +1084,10 @@ func OpenSharedMemoryHandle(basePath string, pod *PodIdentifier) (*SharedMemoryH
 
 	// Get a pointer to the mapped state and verify the Rust discriminant.
 	mappedState := (*rustSharedDeviceStateV2Layout)(unsafe.Pointer(&data[0]))
-	if mappedState.Discriminant != rustSharedDeviceStateV2Discriminant {
+	if discriminant := mappedState.Discriminant; discriminant != rustSharedDeviceStateV2Discriminant {
 		_ = syscall.Munmap(data)
 		_ = file.Close()
-		return nil, fmt.Errorf("unsupported shared memory discriminant: %d", mappedState.Discriminant)
+		return nil, fmt.Errorf("unsupported shared memory discriminant: %d", discriminant)
 	}
 
 	return &SharedMemoryHandle{

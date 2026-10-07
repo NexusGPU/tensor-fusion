@@ -40,7 +40,10 @@ func (fsm *FileStateManager) ensureStateDir() error {
 func (fsm *FileStateManager) SaveWorkers(workers map[string]*api.WorkerInfo) error {
 	fsm.mu.Lock()
 	defer fsm.mu.Unlock()
+	return fsm.saveWorkersLocked(workers)
+}
 
+func (fsm *FileStateManager) saveWorkersLocked(workers map[string]*api.WorkerInfo) error {
 	if err := fsm.ensureStateDir(); err != nil {
 		return err
 	}
@@ -69,7 +72,10 @@ func (fsm *FileStateManager) SaveWorkers(workers map[string]*api.WorkerInfo) err
 func (fsm *FileStateManager) LoadWorkers() (map[string]*api.WorkerInfo, error) {
 	fsm.mu.RLock()
 	defer fsm.mu.RUnlock()
+	return fsm.loadWorkersLocked()
+}
 
+func (fsm *FileStateManager) loadWorkersLocked() (map[string]*api.WorkerInfo, error) {
 	filePath := filepath.Join(fsm.stateDir, workersFile)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -98,7 +104,10 @@ func (fsm *FileStateManager) LoadWorkers() (map[string]*api.WorkerInfo, error) {
 func (fsm *FileStateManager) SaveDevices(devices map[string]*api.DeviceInfo) error {
 	fsm.mu.Lock()
 	defer fsm.mu.Unlock()
+	return fsm.saveDevicesLocked(devices)
+}
 
+func (fsm *FileStateManager) saveDevicesLocked(devices map[string]*api.DeviceInfo) error {
 	if err := fsm.ensureStateDir(); err != nil {
 		return err
 	}
@@ -127,7 +136,10 @@ func (fsm *FileStateManager) SaveDevices(devices map[string]*api.DeviceInfo) err
 func (fsm *FileStateManager) LoadDevices() (map[string]*api.DeviceInfo, error) {
 	fsm.mu.RLock()
 	defer fsm.mu.RUnlock()
+	return fsm.loadDevicesLocked()
+}
 
+func (fsm *FileStateManager) loadDevicesLocked() (map[string]*api.DeviceInfo, error) {
 	filePath := filepath.Join(fsm.stateDir, devicesFile)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -154,42 +166,50 @@ func (fsm *FileStateManager) LoadDevices() (map[string]*api.DeviceInfo, error) {
 
 // AddWorker adds a worker to the state
 func (fsm *FileStateManager) AddWorker(worker *api.WorkerInfo) error {
-	workers, err := fsm.LoadWorkers()
+	fsm.mu.Lock()
+	defer fsm.mu.Unlock()
+	workers, err := fsm.loadWorkersLocked()
 	if err != nil {
 		return err
 	}
 	workers[worker.WorkerUID] = worker
-	return fsm.SaveWorkers(workers)
+	return fsm.saveWorkersLocked(workers)
 }
 
 // RemoveWorker removes a worker from the state
 func (fsm *FileStateManager) RemoveWorker(workerUID string) error {
-	workers, err := fsm.LoadWorkers()
+	fsm.mu.Lock()
+	defer fsm.mu.Unlock()
+	workers, err := fsm.loadWorkersLocked()
 	if err != nil {
 		return err
 	}
 	delete(workers, workerUID)
-	return fsm.SaveWorkers(workers)
+	return fsm.saveWorkersLocked(workers)
 }
 
 // AddDevice adds a device to the state
 func (fsm *FileStateManager) AddDevice(device *api.DeviceInfo) error {
-	devices, err := fsm.LoadDevices()
+	fsm.mu.Lock()
+	defer fsm.mu.Unlock()
+	devices, err := fsm.loadDevicesLocked()
 	if err != nil {
 		return err
 	}
 	devices[device.UUID] = device
-	return fsm.SaveDevices(devices)
+	return fsm.saveDevicesLocked(devices)
 }
 
 // RemoveDevice removes a device from the state
 func (fsm *FileStateManager) RemoveDevice(deviceUUID string) error {
-	devices, err := fsm.LoadDevices()
+	fsm.mu.Lock()
+	defer fsm.mu.Unlock()
+	devices, err := fsm.loadDevicesLocked()
 	if err != nil {
 		return err
 	}
 	delete(devices, deviceUUID)
-	return fsm.SaveDevices(devices)
+	return fsm.saveDevicesLocked(devices)
 }
 
 // UpdateDevice updates a device in the state
