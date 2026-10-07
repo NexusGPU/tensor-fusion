@@ -18,11 +18,6 @@ type fakeDeviceController struct {
 	processInfos []api.ProcessInformation
 	processErr   error
 	splitCalls   int
-	removeErr    error
-	removeErrors map[string]error
-	mountErr     error
-	partition    *api.DeviceInfo
-	removed      []string
 }
 
 func (f *fakeDeviceController) Start() error { return nil }
@@ -49,9 +44,6 @@ func (f *fakeDeviceController) GetDevice(deviceUUID string) (*api.DeviceInfo, bo
 
 func (f *fakeDeviceController) SplitDevice(deviceUUID, _ string) (*api.DeviceInfo, error) {
 	f.splitCalls++
-	if f.partition != nil {
-		return f.partition, nil
-	}
 	device, ok := f.devices[deviceUUID]
 	if !ok || device == nil {
 		return nil, nil
@@ -60,13 +52,7 @@ func (f *fakeDeviceController) SplitDevice(deviceUUID, _ string) (*api.DeviceInf
 	return &copied, nil
 }
 
-func (f *fakeDeviceController) RemovePartitionedDevice(uuid, _ string) error {
-	f.removed = append(f.removed, uuid)
-	if err := f.removeErrors[uuid]; err != nil {
-		return err
-	}
-	return f.removeErr
-}
+func (f *fakeDeviceController) RemovePartitionedDevice(string, string) error { return nil }
 
 func (f *fakeDeviceController) GetDeviceMetrics() (map[string]*api.GPUUsageMetrics, error) {
 	return nil, nil
@@ -76,7 +62,7 @@ func (f *fakeDeviceController) GetProcessInformation() ([]api.ProcessInformation
 	return f.processInfos, f.processErr
 }
 
-func (f *fakeDeviceController) GetVendorMountLibs() ([]*api.Mount, error) { return nil, f.mountErr }
+func (f *fakeDeviceController) GetVendorMountLibs() ([]*api.Mount, error) { return nil, nil }
 
 func (f *fakeDeviceController) RegisterDeviceUpdateHandler(framework.DeviceChangeHandler) {}
 
@@ -103,8 +89,6 @@ func (f *fakeWorkerAllocationController) DeallocateWorker(uid string) error {
 	f.deallocated = append(f.deallocated, uid)
 	return nil
 }
-
-func (f *fakeWorkerAllocationController) RetryPendingCleanup() error { return nil }
 
 func (f *fakeWorkerAllocationController) RecoverPartitionedWorker(
 	request *api.WorkerInfo, partitionUUIDs string,

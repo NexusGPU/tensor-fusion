@@ -5,7 +5,6 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	workerstate "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/worker/state"
 	"github.com/stretchr/testify/require"
@@ -32,18 +31,14 @@ func newRecoveryTestController(t *testing.T) (*WorkerController, *fakeDeviceCont
 
 func TestRecoverCheckpointedPendingWorker(t *testing.T) {
 	for _, mode := range []tfv1.IsolationModeType{
-		tfv1.IsolationModeSoft, tfv1.IsolationModeHard, tfv1.IsolationModeShared, tfv1.IsolationModePartitioned,
+		tfv1.IsolationModeSoft, tfv1.IsolationModeHard, tfv1.IsolationModeShared,
 	} {
 		t.Run(string(mode), func(t *testing.T) {
-			w, devices := newRecoveryTestController(t)
+			w, _ := newRecoveryTestController(t)
 			info := &api.WorkerInfo{
 				WorkerUID: "checkpointed", Namespace: "ns", WorkerName: "worker", IsolationMode: mode,
 				Status: api.WorkerStatusDeviceAllocating, AllocationConfirmed: true,
 				AllocatedDevices: []string{"gpu-0"},
-			}
-			if mode == tfv1.IsolationModePartitioned {
-				info.PartitionTemplateID = "1g.10gb"
-				info.Annotations = map[string]string{constants.PartitionUUIDsAnnotation: "mig-0:gpu-0"}
 			}
 			if mode == tfv1.IsolationModeSoft || mode == tfv1.IsolationModeHard {
 				// A container may already use a legacy mapping while another
@@ -60,7 +55,6 @@ func TestRecoverCheckpointedPendingWorker(t *testing.T) {
 			require.True(t, ok, "kubelet can reuse its checkpoint without calling Allocate again")
 			require.Len(t, allocation.DeviceInfos, 1)
 			require.Len(t, w.allocationController.GetDeviceAllocations()["gpu-0"], 1)
-			require.Zero(t, devices.splitCalls, "recovery must not create a second hardware partition")
 			if mode == tfv1.IsolationModeSoft || mode == tfv1.IsolationModeHard {
 				handle := w.getShmHandle(info.WorkerUID)
 				require.NotNil(t, handle)

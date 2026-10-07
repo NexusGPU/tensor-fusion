@@ -79,59 +79,6 @@ func TestWorkerRecoveryUsesVerifiedCheckpointUID(t *testing.T) {
 	}
 }
 
-func TestWorkerRecoveryRestoresPartitionAnnotationsFromCheckpoint(t *testing.T) {
-	b := newWorkerSyncTestBackend(t)
-	pod := createTestPodWithIndex(1)
-	pod.Status.Phase = corev1.PodPending
-	b.podCacher.onPodAdd(pod)
-	entries := make([]checkpoint.PodDevicesEntry, 0, 2)
-	// Repeated partition IDs from containers sharing a GPU must be recovered once.
-	for i, partitions := range []string{"MIG-b:gpu-1,MIG-a:gpu-0", "MIG-a:gpu-0"} {
-		response, err := proto.Marshal(&pluginapi.ContainerAllocateResponse{
-			Annotations: map[string]string{constants.PartitionUUIDsAnnotation: partitions, "unrelated": "runtime-only"},
-		})
-		require.NoError(t, err)
-		entries = append(entries, checkpoint.PodDevicesEntry{
-			PodUID: string(pod.UID), ContainerName: []string{"first", "second"}[i],
-			ResourceName: constants.PodIndexAnnotation + "_0",
-			DeviceIDs:    checkpoint.DevicesPerNUMA{-1: {"0"}}, AllocResp: response,
-		})
-	}
-	state := checkpoint.New(entries, nil)
-	data, err := state.MarshalCheckpoint()
-	require.NoError(t, err)
-	b.checkpointPath = filepath.Join(t.TempDir(), "kubelet_internal_checkpoint")
-	require.NoError(t, os.WriteFile(b.checkpointPath, data, 0600))
-	b.reconcileWorkers(framework.WorkerChangeHandler{})
-	info := b.workers[string(pod.UID)]
-	require.True(t, info.AllocationConfirmed)
-	require.Equal(t, "MIG-a:gpu-0,MIG-b:gpu-1", info.Annotations[constants.PartitionUUIDsAnnotation])
-	require.Empty(t, info.Annotations["unrelated"])
-	require.Empty(t, pod.Annotations[constants.PartitionUUIDsAnnotation], "must not mutate the informer Pod")
-
-	// Kubelet may remove its record before the terminal Pod update is observed.
-	// Keep the same UID's recovered metadata available for cleanup.
-	require.NoError(t, os.Remove(b.checkpointPath))
-	failed := pod.DeepCopy()
-	failed.Status.Phase = corev1.PodFailed
-	b.podCacher.onPodUpdate(pod, failed)
-	b.reconcileWorkers(framework.WorkerChangeHandler{})
-	info = b.workers[string(pod.UID)]
-	require.Equal(t, api.WorkerStatusTerminated, info.Status)
-	require.Equal(t, "MIG-a:gpu-0,MIG-b:gpu-1", info.Annotations[constants.PartitionUUIDsAnnotation])
-
-	// Reusing the name and synthetic index must not reuse checkpoint metadata.
-	replacement := pod.DeepCopy()
-	replacement.UID = "replacement-uid"
-	b.podCacher.onPodDelete(failed)
-	b.podCacher.onPodAdd(replacement)
-	require.NoError(t, os.WriteFile(b.checkpointPath, data, 0600))
-	b.reconcileWorkers(framework.WorkerChangeHandler{})
-	info = b.workers[string(replacement.UID)]
-	require.False(t, info.AllocationConfirmed)
-	require.Empty(t, info.Annotations[constants.PartitionUUIDsAnnotation])
-}
-
 func TestTerminalPodReleasesWorkerWithMalformedAnnotations(t *testing.T) {
 	b := newWorkerSyncTestBackend(t)
 	pod := createTestPodWithIndex(1)

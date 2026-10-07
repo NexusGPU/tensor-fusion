@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,7 +20,6 @@ import (
 	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
@@ -296,24 +293,7 @@ func (b *KubeletBackend) reconcileWorkers(handler framework.WorkerChangeHandler)
 			info = old.DeepCopy()
 			info.Status = api.WorkerStatusTerminated
 		}
-		restored := confirmed[uid]
-		info.AllocationConfirmed = restored != nil || (old != nil && old.AllocationConfirmed)
-		partitionUUIDs := ""
-		if restored != nil {
-			partitionUUIDs = strings.Join(sets.List(restored.partitions), ",")
-		}
-		if partitionUUIDs == "" && old != nil {
-			partitionUUIDs = old.Annotations[constants.PartitionUUIDsAnnotation]
-		}
-		if partitionUUIDs != "" {
-			// extractWorkerInfo shares the informer Pod's annotations. Enrich
-			// only this worker snapshot and keep metadata until UID removal.
-			info.Annotations = maps.Clone(info.Annotations)
-			if info.Annotations == nil {
-				info.Annotations = make(map[string]string)
-			}
-			info.Annotations[constants.PartitionUUIDsAnnotation] = partitionUUIDs
-		}
+		info.AllocationConfirmed = confirmed[uid] || (old != nil && old.AllocationConfirmed)
 		b.workers[uid] = info
 		if !exists && handler.OnAdd != nil {
 			handler.OnAdd(info)

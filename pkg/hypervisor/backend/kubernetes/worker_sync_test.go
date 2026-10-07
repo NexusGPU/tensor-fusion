@@ -41,7 +41,6 @@ func (a *syncTestAllocations) DeallocateWorker(uid string) error {
 	delete(a.workers, uid)
 	return nil
 }
-func (a *syncTestAllocations) RetryPendingCleanup() error                             { return nil }
 func (a *syncTestAllocations) RecoverPartitionedWorker(*api.WorkerInfo, string) error { return nil }
 func (a *syncTestAllocations) GetWorkerAllocation(uid string) (*api.WorkerAllocation, bool) {
 	a.mu.Lock()

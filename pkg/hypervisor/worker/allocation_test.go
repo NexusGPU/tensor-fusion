@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -10,99 +9,6 @@ import (
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
-
-func TestFailedPartitionDeletionKeepsAllocationForRetry(t *testing.T) {
-	t.Parallel()
-	devices := &fakeDeviceController{removeErr: errors.New("device is busy")}
-	controller := NewAllocationController(devices)
-	request := &api.WorkerInfo{
-		WorkerUID: "partitioned-worker", IsolationMode: tfv1.IsolationModePartitioned,
-		AllocatedDevices: []string{"gpu-0"},
-	}
-	if err := controller.RecoverPartitionedWorker(request, "mig-0:gpu-0"); err != nil {
-		t.Fatal(err)
-	}
-	if err := controller.DeallocateWorker(request.WorkerUID); err == nil {
-		t.Fatal("SDK deletion failure must be returned to the caller")
-	}
-	if _, exists := controller.GetWorkerAllocation(request.WorkerUID); !exists {
-		t.Fatal("failed partition deletion lost the allocation needed for retry")
-	}
-	if len(controller.GetDeviceAllocations()["gpu-0"]) != 1 {
-		t.Fatal("failed partition deletion prematurely released GPU ownership")
-	}
-	devices.removeErr = nil
-	if err := controller.RetryPendingCleanup(); err != nil {
-		t.Fatal(err)
-	}
-	if _, exists := controller.GetWorkerAllocation(request.WorkerUID); exists {
-		t.Fatal("successful retry must clear worker allocation")
-	}
-	if len(controller.GetDeviceAllocations()["gpu-0"]) != 0 {
-		t.Fatal("successful retry must clear GPU allocation")
-	}
-}
-
-func TestPartialPartitionCleanupDoesNotDeleteSuccessfulPartitionsAgain(t *testing.T) {
-	t.Parallel()
-	devices := &fakeDeviceController{
-		removeErrors: map[string]error{"mig-1": errors.New("device is busy")},
-		devices:      map[string]*api.DeviceInfo{"gpu-0": {UUID: "gpu-0"}},
-	}
-	controller := NewAllocationController(devices)
-	request := &api.WorkerInfo{
-		WorkerUID: "worker", IsolationMode: tfv1.IsolationModePartitioned,
-		AllocatedDevices: []string{"gpu-0", "gpu-1"},
-	}
-	if err := controller.RecoverPartitionedWorker(request, "mig-0:gpu-0,mig-1:gpu-1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := controller.DeallocateWorker(request.WorkerUID); err == nil {
-		t.Fatal("partial cleanup must report failure")
-	}
-	delete(devices.removeErrors, "mig-1")
-	if err := controller.RetryPendingCleanup(); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(devices.removed, ",") != "mig-0,mig-1,mig-1" {
-		t.Fatalf("already deleted partition must not be deleted again after its SDK ID can be reused: %v", devices.removed)
-	}
-}
-
-func TestFailedPartitionRollbackIsRetried(t *testing.T) {
-	t.Parallel()
-	devices := &fakeDeviceController{
-		devices:   map[string]*api.DeviceInfo{"gpu-0": {UUID: "gpu-0"}},
-		partition: &api.DeviceInfo{UUID: "mig-0", ParentUUID: "gpu-0"},
-		mountErr:  errors.New("mount discovery failed"),
-		removeErr: errors.New("device is busy"),
-	}
-	controller := NewAllocationController(devices)
-	request := &api.WorkerInfo{
-		WorkerUID: "worker", IsolationMode: tfv1.IsolationModePartitioned,
-		AllocatedDevices: []string{"gpu-0"}, PartitionTemplateID: "test",
-	}
-	if _, err := controller.AllocateWorkerDevices(request); err == nil {
-		t.Fatal("mount discovery failure must fail allocation")
-	}
-	if _, exists := controller.GetWorkerAllocation(request.WorkerUID); exists {
-		t.Fatal("failed allocation must not commit worker state")
-	}
-	devices.mountErr = nil
-	if _, err := controller.AllocateWorkerDevices(request); err == nil || devices.splitCalls != 1 {
-		t.Fatal("retry must not create another partition before failed rollback is cleaned up")
-	}
-	devices.removeErr = nil
-	if err := controller.RetryPendingCleanup(); err != nil {
-		t.Fatal(err)
-	}
-	if len(devices.removed) != 2 || devices.removed[1] != "mig-0" {
-		t.Fatalf("orphan partition was not retried: %v", devices.removed)
-	}
-	if _, err := controller.AllocateWorkerDevices(request); err != nil {
-		t.Fatalf("allocation after successful cleanup: %v", err)
-	}
-}
 
 func TestAllocateWorkerDevicesRejectsMissingAllocatedDevices(t *testing.T) {
 	t.Parallel()

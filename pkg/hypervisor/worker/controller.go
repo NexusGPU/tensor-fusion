@@ -453,9 +453,6 @@ func (w *WorkerController) startSharedMemorySyncLoop(ctx context.Context) {
 		defer ticker.Stop()
 
 		for {
-			if err := w.allocationController.RetryPendingCleanup(); err != nil {
-				klog.V(4).Infof("Pending allocation cleanup will be retried: %v", err)
-			}
 			w.syncSharedMemoryState()
 
 			select {

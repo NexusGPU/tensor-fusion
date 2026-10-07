@@ -43,9 +43,6 @@ type WorkerAllocationController interface {
 	// DeallocateWorker deallocates devices for a worker
 	DeallocateWorker(workerUID string) error
 
-	// RetryPendingCleanup retries failed worker deletions and partition rollbacks.
-	RetryPendingCleanup() error
-
 	// RecoverPartitionedWorker rebuilds allocation state for an existing partitioned worker
 	// after hypervisor restart. partitionUUIDs is a comma-separated string of "partitionUUID:parentGPU" pairs.
 	RecoverPartitionedWorker(request *api.WorkerInfo, partitionUUIDs string) error
