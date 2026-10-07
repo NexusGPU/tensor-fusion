@@ -105,10 +105,23 @@ func (p KarpenterGPUNodeProvider) CreateNode(ctx context.Context, claim *tfv1.GP
 	if err != nil {
 		return nil, fmt.Errorf("failed to build NodeClaim for node %s: %v", param.NodeName, err)
 	}
-	_ = controllerutil.SetControllerReference(claim, nodeClaim, p.client.Scheme())
+	if err := controllerutil.SetControllerReference(claim, nodeClaim, p.client.Scheme()); err != nil {
+		return nil, fmt.Errorf("set NodeClaim owner: %w", err)
+	}
 
 	// Create the NodeClaim using the Karpenter client
 	err = p.client.Create(ctx, nodeClaim)
+	if apierrors.IsAlreadyExists(err) {
+		// Creation can succeed even when persisting GPUNodeClaim status fails.
+		// Recover only the child owned by this exact claim, never a namesake.
+		err = p.client.Get(ctx, client.ObjectKeyFromObject(nodeClaim), nodeClaim)
+		if err == nil && !metav1.IsControlledBy(nodeClaim, claim) {
+			return nil, fmt.Errorf("NodeClaim %s belongs to a different owner", nodeClaim.Name)
+		}
+		if err == nil && !nodeClaim.DeletionTimestamp.IsZero() {
+			return nil, fmt.Errorf("NodeClaim %s is being deleted", nodeClaim.Name)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create NodeClaim %s: %v", nodeClaim.Name, err)
 	}
@@ -140,12 +153,15 @@ func (p KarpenterGPUNodeProvider) TerminateNode(ctx context.Context, param *type
 	err := p.client.Get(ctx, client.ObjectKey{
 		Name: param.InstanceID, // Using instance ID as NodeClaim name
 	}, nodeClaim)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to find NodeClaim for instance %s: %v", param.InstanceID, err)
 	}
 
 	err = p.client.Delete(ctx, nodeClaim)
-	if err != nil {
+	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete NodeClaim for instance %s: %v", param.InstanceID, err)
 	}
 	log.FromContext(ctx).Info("Terminated NodeClaim", "instanceID", param.InstanceID, "region", param.Region)
