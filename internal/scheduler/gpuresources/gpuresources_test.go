@@ -3,8 +3,10 @@ package gpuresources
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -1393,6 +1395,115 @@ var _ = Describe("GPUFit Plugin", func() {
 			// Lower priority pod needs 800 TFLOPs, 16Gi, which fits
 			Expect(status.Code()).To(Equal(fwk.Success))
 		})
+
+		// node-b holds gpu-2 and gpu-3, so one whole-GPU reservation leaves one GPU.
+		nominateSharedPodOnNodeB := func(name string) {
+			nominatedPod := makePod(name, map[string]string{
+				constants.IsolationModeAnnotation: string(tfv1.IsolationModeShared),
+				constants.GpuCountAnnotation:      "1",
+			})
+			highPriority := int32(100)
+			nominatedPod.Spec.Priority = &highPriority
+			nominatedPod.Status.NominatedNodeName = "node-b"
+			Expect(k8sClient.Update(ctx, nominatedPod)).To(Succeed())
+
+			// The test framework's nominator only tracks pods known to a running
+			// pod informer, so serve the nominated pod from a handle stub instead.
+			podInfo, err := framework.NewPodInfo(nominatedPod)
+			Expect(err).NotTo(HaveOccurred())
+			plugin.fh = &nominatedPodsHandle{Handle: plugin.fh, nominated: map[string][]fwk.PodInfo{"node-b": {podInfo}}}
+		}
+
+		makeLowPriorityPod := func(name string) *v1.Pod {
+			pod := makePod(name, map[string]string{
+				constants.TFLOPSRequestAnnotation: "100",
+				constants.VRAMRequestAnnotation:   "2Gi",
+				constants.GpuCountAnnotation:      "1",
+			})
+			lowPriority := int32(50)
+			pod.Spec.Priority = &lowPriority
+			Expect(k8sClient.Update(ctx, pod)).To(Succeed())
+			return pod
+		}
+
+		makeNodeInfo := func(nodeName string) *framework.NodeInfo {
+			nodeInfo := &framework.NodeInfo{}
+			nodeInfo.SetNode(&v1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}})
+			return nodeInfo
+		}
+
+		It("should reserve the same whole GPUs on every Filter pass of a node", func() {
+			nominateSharedPodOnNodeB("nominated-shared-idempotent")
+			pod := makeLowPriorityPod("low-priority-idempotent")
+
+			state := framework.NewCycleState()
+			_, preFilterStatus := plugin.PreFilter(ctx, state, pod, []fwk.NodeInfo{})
+			Expect(preFilterStatus.IsSuccess()).To(BeTrue())
+
+			// The framework runs Filter twice per node when nominated pods exist,
+			// both times against the same plugin state.
+			Expect(plugin.Filter(ctx, state, pod, makeNodeInfo("node-b")).Code()).To(Equal(fwk.Success))
+			Expect(plugin.Filter(ctx, state, pod, makeNodeInfo("node-b")).Code()).To(Equal(fwk.Success))
+
+			data, err := state.Read(CycleStateGPUSchedulingResult)
+			Expect(err).NotTo(HaveOccurred())
+			schedulingData := data.(*GPUSchedulingStateData)
+			Expect(schedulingData.NodeGPUs["node-b"]).To(HaveLen(2), "PreFilter result must stay untouched")
+			candidates, ok := schedulingData.candidateGPUs("node-b")
+			Expect(ok).To(BeTrue())
+			Expect(candidates).To(HaveLen(1))
+		})
+
+		It("should keep the reserved GPU out of Reserve even when the topology plan picked it", func() {
+			nominateSharedPodOnNodeB("nominated-shared-topology")
+			pod := makeLowPriorityPod("low-priority-topology")
+
+			reserveWithTopologyChoice := func(topologyChoice string) []string {
+				state := framework.NewCycleState()
+				_, preFilterStatus := plugin.PreFilter(ctx, state, pod, []fwk.NodeInfo{})
+				Expect(preFilterStatus.IsSuccess()).To(BeTrue())
+				state.Write("gpuTopologyResult", &fakeTopologyState{best: map[string][]string{"node-b": {topologyChoice}}})
+
+				Expect(plugin.Filter(ctx, state, pod, makeNodeInfo("node-b")).Code()).To(Equal(fwk.Success))
+				Expect(plugin.Reserve(ctx, state, pod, "node-b").Code()).To(Equal(fwk.Success))
+				data, err := state.Read(CycleStateGPUSchedulingResult)
+				Expect(err).NotTo(HaveOccurred())
+				finalGPUs := slices.Clone(data.(*GPUSchedulingStateData).FinalGPUs)
+				plugin.Unreserve(ctx, state, pod, "node-b")
+				return finalGPUs
+			}
+
+			// One of gpu-2/gpu-3 is reserved for the nominated pod, so the pod must
+			// land on the other one whichever GPU the topology plan prefers.
+			Expect(reserveWithTopologyChoice("gpu-2")).To(Equal(reserveWithTopologyChoice("gpu-3")))
+		})
+
+		It("should allow Filter to run for different nodes in parallel", func() {
+			nominateSharedPodOnNodeB("nominated-shared-parallel")
+			pod := makeLowPriorityPod("low-priority-parallel")
+
+			state := framework.NewCycleState()
+			_, preFilterStatus := plugin.PreFilter(ctx, state, pod, []fwk.NodeInfo{})
+			Expect(preFilterStatus.IsSuccess()).To(BeTrue())
+
+			nodeNames := []string{"node-a", "node-b"}
+			var failures atomic.Int32
+			var wg sync.WaitGroup
+			for worker := range 8 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					nodeInfo := makeNodeInfo(nodeNames[worker%len(nodeNames)])
+					for range 200 {
+						if !plugin.Filter(ctx, state, pod, nodeInfo).IsSuccess() {
+							failures.Add(1)
+						}
+					}
+				}()
+			}
+			wg.Wait()
+			Expect(failures.Load()).To(BeZero())
+		})
 	})
 
 	Describe("QueueingHint with nominated pods", func() {
@@ -1481,6 +1592,25 @@ var _ = Describe("GPUFit Plugin", func() {
 		})
 	})
 })
+
+// nominatedPodsHandle overrides the nominated pods reported by the framework handle.
+type nominatedPodsHandle struct {
+	fwk.Handle
+	nominated map[string][]fwk.PodInfo
+}
+
+func (h *nominatedPodsHandle) NominatedPodsForNode(nodeName string) []fwk.PodInfo {
+	return h.nominated[nodeName]
+}
+
+// fakeTopologyState stands in for gputopo.GPUTopologyStateData in CycleState.
+type fakeTopologyState struct {
+	best map[string][]string
+}
+
+func (f *fakeTopologyState) Clone() fwk.StateData { return f }
+
+func (f *fakeTopologyState) GetBestGPUIds(nodeName string) []string { return f.best[nodeName] }
 
 func getPreFilterResult(state *framework.CycleState) []string {
 	data, err := state.Read(CycleStateGPUSchedulingResult)
