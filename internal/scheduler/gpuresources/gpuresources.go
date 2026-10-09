@@ -64,8 +64,14 @@ type GPUFit struct {
 }
 
 type GPUSchedulingStateData struct {
-	// PreFilter stage compose valid nodes and their GPUs
+	// PreFilter stage compose valid nodes and their GPUs.
+	// Read-only after PreFilter: Filter runs for many nodes in parallel and
+	// shares this state (Clone returns the same pointer).
 	NodeGPUs map[string][]*tfv1.GPU
+
+	// Filter stage: node name -> NodeGPUs entry minus the whole GPUs reserved
+	// for nominated shared pods. Only set for nodes that have such reservations.
+	NodeGPUsAfterNominatedReservation sync.Map
 
 	// Score stage compose each node's each GPU's score,
 	// node store is sum of GPU score
@@ -92,6 +98,16 @@ type GPUSchedulingStateData struct {
 
 func (p *GPUSchedulingStateData) Clone() fwk.StateData {
 	return p
+}
+
+// candidateGPUs returns the GPUs the pod may still use on the node: the
+// PreFilter result minus the whole GPUs Filter reserved for nominated shared pods.
+func (p *GPUSchedulingStateData) candidateGPUs(nodeName string) ([]*tfv1.GPU, bool) {
+	if remaining, ok := p.NodeGPUsAfterNominatedReservation.Load(nodeName); ok {
+		return remaining.([]*tfv1.GPU), true
+	}
+	gpus, ok := p.NodeGPUs[nodeName]
+	return gpus, ok
 }
 
 type ProgressiveNodeNamesState struct {
@@ -425,6 +441,10 @@ func (s *GPUFit) Filter(ctx context.Context, state fwk.CycleState, pod *v1.Pod, 
 // checkNominatedPodsGPUReservation checks if there are nominated TensorFusion pods
 // on this node and reserves their resources to prevent scheduling conflicts.
 func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, schedulingData *GPUSchedulingStateData) *fwk.Status {
+	// Filter runs twice per node when nominated pods exist. Always start from
+	// the PreFilter result so both passes reserve the same GPUs.
+	schedulingData.NodeGPUsAfterNominatedReservation.Delete(nodeName)
+
 	nominatedPodInfos := s.fh.NominatedPodsForNode(nodeName)
 	if len(nominatedPodInfos) == 0 {
 		return fwk.NewStatus(fwk.Success, "")
@@ -527,7 +547,7 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 
 	// Remove the whole GPUs reserved for nominated shared pods from this
 	// scheduling cycle's candidate list. This also affects Reserve, which uses
-	// NodeGPUs to choose the final GPU names. If the nominated pod already has
+	// candidateGPUs to choose the final GPU names. If the nominated pod already has
 	// concrete GPU names, reserve those names; otherwise use the same scoring
 	// order as normal GPU selection. The latter is conservative for mixed GPU
 	// nodes, but prevents a lower-priority pod from racing the nominated pod.
@@ -539,7 +559,7 @@ func (s *GPUFit) checkNominatedPodsGPUReservation(pod *v1.Pod, nodeName string, 
 			return fwk.NewStatus(fwk.Unschedulable,
 				fmt.Sprintf("GPU resources reserved for nominated shared pods on node %s (reserved %d whole GPUs)", nodeName, reservedCount))
 		}
-		schedulingData.NodeGPUs[nodeName] = remainingGPUs
+		schedulingData.NodeGPUsAfterNominatedReservation.Store(nodeName, remainingGPUs)
 		availableGPUs = remainingGPUs
 		s.logger.V(4).Info("Reserved whole GPUs for nominated shared pods",
 			"node", nodeName,
@@ -797,7 +817,7 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 
 	// set final GPUs and try update GPU allocator cache
 	schedulingResult := schedulingResultRaw.(*GPUSchedulingStateData)
-	validGPUs, ok := schedulingResult.NodeGPUs[nodeName]
+	validGPUs, ok := schedulingResult.candidateGPUs(nodeName)
 	if !ok {
 		return fwk.NewStatus(fwk.Unschedulable, "not valid node")
 	}
@@ -807,7 +827,9 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 
 	// Try to use topology-aware GPU selection from GPUNetworkTopologyAware plugin.
 	// If the topology plugin produced a BestGPUIds for this node, prefer it.
-	if topoGPUs := s.tryGetTopologyBestGPUs(state, nodeName, neededGPUs); len(topoGPUs) > 0 {
+	// The plan is built in PreFilter, before Filter reserves whole GPUs for
+	// nominated shared pods, so drop it when it picked a reserved GPU.
+	if topoGPUs := s.tryGetTopologyBestGPUs(state, nodeName, neededGPUs); len(topoGPUs) > 0 && containsAllGPUs(validGPUs, topoGPUs) {
 		schedulingResult.FinalGPUs = topoGPUs
 	} else if neededGPUs == uint(len(validGPUs)) {
 		// when needed GPUs equals to valid GPUs, just return all GPUs on this node
@@ -843,6 +865,15 @@ func (s *GPUFit) Reserve(ctx context.Context, state fwk.CycleState, pod *v1.Pod,
 	}
 
 	return fwk.NewStatus(fwk.Success, "")
+}
+
+func containsAllGPUs(gpus []*tfv1.GPU, names []string) bool {
+	for _, name := range names {
+		if !slices.ContainsFunc(gpus, func(gpu *tfv1.GPU) bool { return gpu.Name == name }) {
+			return false
+		}
+	}
+	return true
 }
 
 // topologyBestGPUProvider is satisfied by gputopo.GPUTopologyStateData.
