@@ -178,7 +178,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: constants.StatusCheckInterval}, nil
 	}
 	hypervisorName, err := r.reconcileHypervisorPod(ctx, node, poolObj, coreNode)
-	if err != nil {
+	if err != nil || hypervisorName == "" {
 		nodePhaseChanged, gpuList, pendingErr := r.syncNodeAndOwnedGPUPhases(
 			ctx,
 			node,
@@ -186,7 +186,7 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			tfv1.TensorFusionGPUPhasePending,
 		)
 		if pendingErr != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to mark GPUNode pending after hypervisor reconcile error %q: %w", err.Error(), pendingErr)
+			return ctrl.Result{}, fmt.Errorf("failed to mark GPUNode pending after hypervisor reconcile (error: %v): %w", err, pendingErr)
 		}
 		if nodePhaseChanged {
 			metrics.SetNodeMetrics(node, poolObj, nil)
@@ -194,10 +194,11 @@ func (r *GPUNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if len(gpuList) > 0 {
 			metrics.SetGPUMetrics(gpuList, node.Name, poolObj.Name)
 		}
-		return ctrl.Result{}, err
-	}
-	// pod deleted or deleting, wait next reconcile
-	if hypervisorName == "" {
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		// The hypervisor is deleting or waiting to be recreated. Keep owned GPUs
+		// unschedulable until the replacement is ready, without releasing allocations.
 		return ctrl.Result{RequeueAfter: constants.PendingRequeueDuration}, nil
 	}
 
@@ -220,7 +221,8 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 	}
 
 	// Reconcile GPUNode status with hypervisor pod status, when changed
-	hypervisorNotReady := pod.Status.Phase != corev1.PodRunning || !utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady)
+	hypervisorNotReady := !pod.DeletionTimestamp.IsZero() || pod.Status.Phase != corev1.PodRunning ||
+		!utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady)
 
 	forceGPUNodePhase, exists := forceGPUNodeStateMap[node.Name]
 	if exists {
@@ -329,17 +331,18 @@ func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tf
 		return nil, err
 	}
 
-	for _, gpu := range gpuList {
+	for i := range gpuList {
+		gpu := &gpuList[i]
 		// GPUs marked missing by hypervisor discovery must keep their Unknown
 		// phase, otherwise node level sync would put a physically absent GPU
 		// back into scheduling rotation.
-		if utils.IsGPUMissing(&gpu) {
+		if utils.IsGPUMissing(gpu) {
 			continue
 		}
 		if gpu.Status.Phase != state {
 			patch := client.MergeFrom(gpu.DeepCopy())
 			gpu.Status.Phase = state
-			if err := r.Status().Patch(ctx, &gpu, patch); err != nil {
+			if err := r.Status().Patch(ctx, gpu, patch); err != nil {
 				return nil, fmt.Errorf("failed to patch GPU device status to %s: %w", state, err)
 			}
 		}
@@ -485,6 +488,12 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 
 	// If pod exists and prerequisites are satisfied, verify its status
 	if podExists {
+		if !currentPod.DeletionTimestamp.IsZero() {
+			log.Info("hypervisor pod is still being deleted", "name", key.Name,
+				"hash", currentPod.Labels[constants.LabelKeyPodTemplateHash])
+			return "", nil
+		}
+
 		if crashedContainer, restartCount, threshold, ok := hypervisorPodCrashExceeded(currentPod); ok {
 			log.Info("hypervisor pod crash count exceeded threshold, deleting for recreation",
 				"node", node.Name,
@@ -531,11 +540,6 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 		}
 
 		oldHash := currentPod.Labels[constants.LabelKeyPodTemplateHash]
-		if !currentPod.DeletionTimestamp.IsZero() {
-			log.Info("hypervisor pod is still being deleted", "name", key.Name, "hash", oldHash)
-			return "", nil
-		}
-
 		newHash := utils.HypervisorPodTemplateHash(pool, vendor, desiredIsolationMode)
 		if utils.IsPodStopped(currentPod) || oldHash != newHash {
 			if err := r.Delete(ctx, currentPod); err != nil {
