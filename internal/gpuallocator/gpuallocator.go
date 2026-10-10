@@ -35,7 +35,6 @@ import (
 	"k8s.io/client-go/util/retry"
 	fwk "k8s.io/kube-scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
@@ -3117,10 +3116,11 @@ func (s *GpuAllocator) filterAndRegisterExistingWorkers(workers []v1.Pod) []v1.P
 	activeWorkers := make([]v1.Pod, 0, len(workers))
 	for _, worker := range workers {
 		scheduled := worker.Spec.NodeName != ""
-		deletedAndDeAllocated := !worker.DeletionTimestamp.IsZero() &&
-			!controllerutil.ContainsFinalizer(&worker, constants.Finalizer)
+		// Finalizer cleanup runs independently of kubelet termination. A deleting
+		// worker may still use its GPU after our finalizer has been removed.
+		stopped := utils.IsPodStopped(&worker)
 		hasGPUAnnotation := worker.Annotations[constants.GPUDeviceIDsAnnotation] != ""
-		if !scheduled || deletedAndDeAllocated || !hasGPUAnnotation {
+		if !scheduled || stopped || !hasGPUAnnotation {
 			continue
 		}
 
