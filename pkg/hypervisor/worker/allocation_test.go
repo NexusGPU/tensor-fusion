@@ -77,6 +77,8 @@ func TestAllocateWorkerDevicesEnforcesDynamicIsolationPerDevice(t *testing.T) {
 	allocate := func(uid string, mode tfv1.IsolationModeType, devices ...string) error {
 		_, err := controller.AllocateWorkerDevices(&api.WorkerInfo{
 			WorkerUID:        uid,
+			Namespace:        "test-ns",
+			WorkerName:       "pod-" + uid,
 			AllocatedDevices: devices,
 			IsolationMode:    mode,
 		})
@@ -94,6 +96,16 @@ func TestAllocateWorkerDevicesEnforcesDynamicIsolationPerDevice(t *testing.T) {
 	}
 	if err := allocate("shared-conflict", tfv1.IsolationModeShared, "gpu-0"); err == nil {
 		t.Fatal("expected shared allocation to require an idle GPU")
+	} else {
+		for _, expected := range []string{
+			"shared worker shared-conflict",
+			"test-ns/pod-soft-1 (uid=soft-1, isolation=soft)",
+			"test-ns/pod-soft-2 (uid=soft-2, isolation=soft)",
+		} {
+			if !strings.Contains(err.Error(), expected) {
+				t.Fatalf("missing %q in conflict error: %v", expected, err)
+			}
+		}
 	}
 
 	if err := allocate("shared", tfv1.IsolationModeShared, "gpu-1"); err != nil {

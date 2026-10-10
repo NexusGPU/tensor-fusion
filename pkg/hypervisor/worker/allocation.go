@@ -320,9 +320,19 @@ func (a *AllocationController) validateDynamicAllocationLocked(request *api.Work
 	for _, deviceUUID := range request.AllocatedDevices {
 		allocations := a.deviceAllocations[deviceUUID]
 		if request.IsolationMode == tfv1.IsolationModeShared && len(allocations) > 0 {
+			owners := make([]string, 0, len(allocations))
+			for _, allocation := range allocations {
+				if allocation == nil || allocation.WorkerInfo == nil {
+					owners = append(owners, "unknown")
+					continue
+				}
+				worker := allocation.WorkerInfo
+				owners = append(owners, fmt.Sprintf("%s/%s (uid=%s, isolation=%s)",
+					worker.Namespace, worker.WorkerName, worker.WorkerUID, worker.IsolationMode))
+			}
 			return fmt.Errorf(
-				"device %s is already allocated and cannot be used by shared worker %s",
-				deviceUUID, request.WorkerUID,
+				"device %s is already allocated and cannot be used by shared worker %s; existing workers: [%s]",
+				deviceUUID, request.WorkerUID, strings.Join(owners, ", "),
 			)
 		}
 		for _, allocation := range allocations {
