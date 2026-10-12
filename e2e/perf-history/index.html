@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TensorFusion 性能结果</title>
+<!--
+  Local viewer of e2e/perf-history/runs/**.json. Open this file directly; the
+  data comes from data.js (regenerate with `python3 e2e/tools/perf_history.py build`).
+  No network access, no dependencies.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f4f3f0; --surface-1: #fcfcfb; --surface-2: #f0efec;
+  --border: #dddcd6; --grid: #e6e5e0;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #85847d;
+  --series-native: #6f6e68; --series-soft: #2a78d6; --series-hard: #eb6834; --series-shared: #1baf7a; --series-co: #6250d6;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #262624;
+    --border: #383835; --grid: #2c2c2a;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e85;
+    --series-native: #a3a299; --series-soft: #3987e5; --series-hard: #d95926; --series-shared: #199e70; --series-co: #9085e9;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #262624;
+  --border: #383835; --grid: #2c2c2a;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e85;
+  --series-native: #a3a299; --series-soft: #3987e5; --series-hard: #d95926; --series-shared: #199e70; --series-co: #9085e9;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--surface-1); border-bottom: 1px solid var(--border); padding: 12px 24px; }
+header h1 { font-size: 17px; margin: 0 0 8px; font-weight: 600; }
+.filters { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+.filters label { color: var(--text-secondary); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+select, button { font: inherit; color: var(--text-primary); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+button { cursor: pointer; }
+main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
+section { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 18px; }
+section h2 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+section p.lead { margin: 0 0 14px; color: var(--text-secondary); font-size: 13px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.tile { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; }
+.tile .k { color: var(--text-secondary); font-size: 12px; }
+.tile .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.3; }
+.tile .v small { font-size: 12px; font-weight: 400; color: var(--text-secondary); margin-left: 3px; }
+.tile .d { font-size: 12px; color: var(--text-secondary); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 22px 28px; }
+.chart h3 { font-size: 13px; margin: 0 0 2px; font-weight: 600; }
+.chart .sub { color: var(--text-muted); font-size: 12px; margin-bottom: 8px; }
+.bars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 6px 10px; align-items: center; }
+.bars .lbl { color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
+.bars .track { position: relative; height: 14px; background: transparent; border-left: 1px solid var(--border); }
+.bars .bar { position: absolute; left: 0; top: 2px; height: 10px; border-radius: 0 4px 4px 0; min-width: 2px; }
+.bars .seg { position: absolute; top: 2px; height: 10px; }
+.bars .ref { position: absolute; top: -2px; width: 2px; height: 18px; background: var(--text-primary); opacity: .55; }
+.bars .val { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bars .val .delta { color: var(--text-muted); margin-left: 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-secondary); margin: 6px 0 10px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.legend i.line { width: 2px; height: 12px; border-radius: 0; background: var(--text-primary); opacity: .55; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; white-space: nowrap; }
+th { color: var(--text-secondary); font-weight: 500; position: sticky; top: 0; background: var(--surface-1); }
+th:first-child, td:first-child, td.l, th.l { text-align: left; }
+td.wrap { white-space: normal; max-width: 520px; color: var(--text-secondary); }
+.scroll { overflow-x: auto; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.up { color: var(--good); } .down { color: var(--critical); } .flat { color: var(--text-muted); }
+.status { display: inline-flex; gap: 5px; align-items: center; }
+.muted { color: var(--text-muted); }
+details summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; margin-top: 10px; }
+#tip { position: fixed; pointer-events: none; background: var(--text-primary); color: var(--surface-1); padding: 6px 9px; border-radius: 6px; font-size: 12px; max-width: 340px; z-index: 20; display: none; white-space: pre-line; }
+svg text { fill: var(--text-secondary); font-size: 11px; }
+.empty { color: var(--text-muted); padding: 10px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TensorFusion 性能结果 <span class="muted" style="font-weight:400;font-size:13px">切分、共调度与隔离的端到端性能，按版本留档</span></h1>
+  <div class="filters">
+    <label>环境 <select id="env"></select></label>
+    <label>版本 <select id="ver"></select></label>
+    <label>环比对象 <select id="cmp"></select></label>
+    <button id="theme" title="切换明暗">明 / 暗</button>
+  </div>
+</header>
+<main id="app"></main>
+<div id="tip"></div>
+<script src="data.js"></script>
+<script>
+(function () {
+'use strict';
+const DATA = (window.TF_PERF_HISTORY || {runs: []}).runs;
+const $ = (s) => document.querySelector(s);
+const el = (tag, attrs, ...kids) => {
+  const n = document.createElement(tag);
+  for (const k in (attrs || {})) { if (k === 'html') n.innerHTML = attrs[k]; else if (k === 'style') n.style.cssText = attrs[k]; else n.setAttribute(k, attrs[k]); }
+  kids.flat().forEach((c) => n.append(c && c.nodeType ? c : document.createTextNode(c == null ? '' : c)));
+  return n;
+};
+const verKey = (v) => v.split(/[.\-]/).map((x) => (/^\d+$/.test(x) ? +x : x));
+const cmpVer = (a, b) => { const x = verKey(a), y = verKey(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { if (x[i] === y[i]) continue; return (x[i] === undefined ? -1 : y[i] === undefined ? 1 : x[i] < y[i] ? -1 : 1); } return 0; };
+const fmt = (v, d) => (v == null || isNaN(v) ? '–' : Number(v).toLocaleString('en-US', {maximumFractionDigits: d == null ? (Math.abs(v) >= 100 ? 0 : Math.abs(v) >= 10 ? 1 : 2) : d, minimumFractionDigits: 0}));
+const ms = (s) => (s == null || !s ? null : s * 1000);
+const pct = (r) => (r == null || !isFinite(r) ? '–' : (r >= 0 ? '+' : '') + (r * 100).toFixed(1) + '%');
+const MODE_COLOR = {native: 'var(--series-native)', soft: 'var(--series-soft)', hard: 'var(--series-hard)', shared: 'var(--series-shared)', 'co-scheduled': 'var(--series-co)'};
+const MODE_NAME = {native: '原生（不经 TensorFusion）', soft: 'soft 隔离', hard: 'hard 隔离', shared: 'shared 整卡', 'co-scheduled': '共调度（同卡多租户）'};
+const colorOf = (p) => (p.cotenancy === 'co-scheduled' ? MODE_COLOR['co-scheduled'] : MODE_COLOR[p.mode] || 'var(--series-native)');
+const usable = (p) => !p.error && !p.skipped && p.throughput > 0;
+
+// configuration label of a point: what was limited and how
+function cfg(p) {
+  if (p.mode === 'native') return '原生 100%';
+  let s = p.mode + ' ' + Math.round(p.share * 100) + '%';
+  if (p.cotenancy === 'co-scheduled') s += ' · 共调度' + (p.test ? ' ' + p.test.replace('tenant-', '租户 ').toUpperCase() : '');
+  else if (p.cotenancy && p.cotenancy !== 'alone') s += ' · 有吵闹邻居';
+  else if (p.case === 'PERF-CO-01') s += ' · 共调度用例的独占参照';
+  if (p.load === 'fixed-rate') s += ' · 固定到达率';
+  return s;
+}
+// identity of a point across versions
+const pid = (p) => [p.case, p.workload, p.model, p.test || '', p.mode, p.share, p.vram_limit_gib, p.cotenancy, p.load].join('|');
+
+const tip = $('#tip');
+function hover(node, text) {
+  node.addEventListener('mousemove', (e) => { tip.textContent = text; tip.style.display = 'block'; const w = tip.offsetWidth; tip.style.left = Math.min(e.clientX + 14, window.innerWidth - w - 8) + 'px'; tip.style.top = (e.clientY + 14) + 'px'; });
+  node.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+}
+
+// horizontal bars; one measure, one axis. rows: {label, value, color, ref, tipText, delta, segments}
+function bars(rows, unit, opts) {
+  opts = opts || {};
+  const max = Math.max(...rows.map((r) => Math.max(r.value || 0, r.ref || 0)), 0) * 1.08 || 1;
+  const g = el('div', {class: 'bars'});
+  rows.forEach((r) => {
+    const track = el('div', {class: 'track'});
+    if (r.segments) {
+      let x = 0;
+      r.segments.forEach((s) => { const w = s.value / max * 100; track.append(el('div', {class: 'seg', style: `left:calc(${x}% + 1px);width:calc(${w}% - 2px);background:${s.color};border-radius:2px`})); x += w; });
+    } else {
+      track.append(el('div', {class: 'bar', style: `width:${(r.value || 0) / max * 100}%;background:${r.color}`}));
+    }
+    if (r.ref != null) track.append(el('div', {class: 'ref', style: `left:${r.ref / max * 100}%`}));
+    hover(track, r.tipText || `${r.label}\n${fmt(r.value)} ${unit}`);
+    g.append(el('div', {class: 'lbl'}, r.label), track,
+      el('div', {class: 'val'}, r.value == null ? '–' : fmt(r.value) + ' ' + unit, r.delta ? el('span', {class: 'delta'}, r.delta) : ''));
+  });
+  return g;
+}
+function chart(title, sub, body) { return el('div', {class: 'chart'}, el('h3', null, title), el('div', {class: 'sub'}, sub || ''), body); }
+function legend(items) { return el('div', {class: 'legend'}, items.map((i) => el('span', null, el('i', {class: i.line ? 'line' : '', style: i.line ? '' : `background:${i.color}`}), i.name))); }
+function table(head, rows) {
+  const t = el('table');
+  t.append(el('thead', null, el('tr', null, head.map((h, i) => el('th', i === 0 ? {class: 'l'} : null, h)))));
+  const b = el('tbody');
+  rows.forEach((r) => b.append(el('tr', null, r.map((c) => (c && c.nodeType ? c : el('td', null, c == null ? '–' : c))))));
+  t.append(b);
+  return el('div', {class: 'scroll'}, t);
+}
+function deltaCell(cur, prev, lowerIsBetter) {
+  if (cur == null || prev == null || !prev) return el('td', {class: 'flat'}, '–');
+  const r = cur / prev - 1;
+  const good = lowerIsBetter ? r < -0.03 : r > 0.03, bad = lowerIsBetter ? r > 0.03 : r < -0.03;
+  return el('td', {class: good ? 'up' : bad ? 'down' : 'flat', title: `上一版本 ${fmt(prev)}`}, (good ? '▲ ' : bad ? '▼ ' : '') + pct(r));
+}
+// line over versions (single series, one axis)
+function trend(series, unit) {
+  const W = 400, H = 150, L = 46, R = 12, T = 12, B = 26;
+  const vals = series.map((s) => s.value).filter((v) => v != null);
+  if (!vals.length) return el('div', {class: 'empty'}, '没有数据');
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (lo === hi) { lo = lo * 0.9; hi = hi * 1.1 || 1; }
+  const pad = (hi - lo) * 0.15; lo = Math.max(0, lo - pad); hi += pad;
+  const x = (i) => L + (series.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (series.length - 1));
+  const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', '100%');
+  const add = (tag, attrs, text) => { const n = document.createElementNS(ns, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); if (text != null) n.textContent = text; svg.append(n); return n; };
+  [lo, (lo + hi) / 2, hi].forEach((v) => { add('line', {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--grid)', 'stroke-width': 1}); add('text', {x: L - 6, y: y(v) + 4, 'text-anchor': 'end'}, fmt(v)); });
+  const pts = series.map((s, i) => (s.value == null ? null : [x(i), y(s.value)]));
+  const d = pts.filter(Boolean).map((p, i) => (i ? 'L' : 'M') + p[0] + ' ' + p[1]).join(' ');
+  add('path', {d, fill: 'none', stroke: 'var(--series-soft)', 'stroke-width': 2});
+  series.forEach((s, i) => {
+    add('text', {x: x(i), y: H - 8, 'text-anchor': 'middle'}, s.version);
+    if (!pts[i]) return;
+    const c = add('circle', {cx: pts[i][0], cy: pts[i][1], r: 4.5, fill: 'var(--series-soft)', stroke: 'var(--surface-1)', 'stroke-width': 2});
+    const hit = add('circle', {cx: pts[i][0], cy: pts[i][1], r: 14, fill: 'transparent'});
+    hover(hit, `${s.version}\n${fmt(s.value)} ${unit}`);
+    if (i === series.length - 1 || series.length <= 4) add('text', {x: pts[i][0], y: pts[i][1] - 9, 'text-anchor': 'middle', style: 'fill:var(--text-primary)'}, fmt(s.value));
+    void c;
+  });
+  return svg;
+}
+
+function render() {
+  const app = $('#app');
+  app.innerHTML = '';
+  if (!DATA.length) { app.append(el('section', null, el('h2', null, '没有数据'), el('p', {class: 'lead'}, '先运行 python3 e2e/tools/perf_history.py record --version <版本> --env <环境> e2e/results/<run-id> ...'))); return; }
+  const env = $('#env').value;
+  const runs = DATA.filter((r) => r.env === env).sort((a, b) => cmpVer(a.version, b.version));
+  const run = runs.find((r) => r.version === $('#ver').value) || runs[runs.length - 1];
+  const prev = runs.find((r) => r.version === $('#cmp').value) || null;
+  const prevBy = {};
+  if (prev) prev.points.forEach((p) => { prevBy[pid(p)] = p; });
+  const pts = run.points.filter(usable);
+  const llm = pts.filter((p) => p.workload === 'vllm');
+
+  // ---- 1. what was measured ----
+  const counts = {};
+  run.cases.forEach((c) => { counts[c.status] = (counts[c.status] || 0) + 1; });
+  const tile = (k, v, d) => el('div', {class: 'tile'}, el('div', {class: 'k'}, k), el('div', {class: 'v', html: v}), el('div', {class: 'd'}, d || ''));
+  const s1 = el('section', null, el('h2', null, `${run.label} · 版本 ${run.version}`),
+    el('p', {class: 'lead'}, `operator ${run.release.operator} · hypervisor ${run.release.hypervisor} · Kubernetes ${run.cluster.kubernetes} · 记录于 ${run.date}` + (prev ? ` · 环比对象：版本 ${prev.version}` : ' · 这是该环境的第一个留档版本，环比列为空')),
+    el('div', {class: 'tiles'},
+      tile('GPU', run.cluster.gpu_model || '–', run.cluster.instance_type || ''),
+      tile('用例', `${counts.passed || 0}<small>通过</small>`, `${counts.failed || 0} 失败 · ${counts['known-fail'] || 0} 已知问题 · ${counts.skipped || 0} 跳过`),
+      tile('性能测量点', String(pts.length), `${llm.length} 个 LLM · ${pts.length - llm.length} 个其它负载`),
+      tile('节点供给', run.cluster.karpenter === 'no' ? '静态' : 'Karpenter', run.cluster.karpenter === 'alibaba' ? '阿里云 provider' : run.cluster.karpenter)));
+  if ((run.notes || []).length) s1.append(el('details', null, el('summary', null, '本次留档的说明'), el('ul', null, run.notes.map((n) => el('li', null, n)))));
+  app.append(s1);
+
+  // ---- 2. LLM ----
+  const nativeLLM = llm.find((p) => p.mode === 'native');
+  const sat = llm.filter((p) => p.load === 'saturation' && p.case !== 'PERF-CO-01');
+  const s2 = el('section', null, el('h2', null, 'LLM 流式推理（vLLM）'),
+    el('p', {class: 'lead'}, llm.length ? `模型 ${llm[0].model}，每个租户显存上限 ${llm.find((p) => p.vram_limit_gib)?.vram_limit_gib || '–'} GiB，闭环 ${'8'} 路并发流式请求打满。吞吐应随算力份额成比例下降，延迟应按 1/份额 放大而不出现断崖。` : ''));
+  if (!llm.length) s2.append(el('div', {class: 'empty'}, '这个版本没有 LLM 测量点（perf 档未执行或全部失败）。'));
+  else {
+    const keyTiles = [];
+    const soft100 = sat.find((p) => p.mode === 'soft' && p.share === 1), soft50 = sat.find((p) => p.mode === 'soft' && p.share === 0.5);
+    if (nativeLLM) keyTiles.push(tile('原生吞吐', `${fmt(nativeLLM.throughput)}<small>tokens/s</small>`, `TPM ${fmt(nativeLLM.tpm, 0)}`));
+    if (nativeLLM && soft100) keyTiles.push(tile('soft 100% 相对原生', pct(soft100.throughput / nativeLLM.throughput - 1), '不限额时隔离本身的代价'));
+    if (soft100 && soft50) keyTiles.push(tile('soft 50% / soft 100%', fmt(soft50.throughput / soft100.throughput * 100, 1) + '<small>%</small>', '理想值 50%'));
+    if (soft50) keyTiles.push(tile('soft 50% TTFT p95', fmt(ms(soft50.ttft_s.p95), 0) + '<small>ms</small>', `TPOT p99 ${fmt(ms(soft50.tpot_s.p99), 1)} ms`));
+    s2.append(el('div', {class: 'tiles', style: 'margin-bottom:16px'}, keyTiles));
+
+    const mk = (get, unit, ideal) => bars(sat.map((p) => ({
+      label: cfg(p), value: get(p), color: colorOf(p),
+      ref: ideal ? ideal(p) : null,
+      tipText: `${cfg(p)}\n${fmt(get(p))} ${unit}` + (ideal && ideal(p) != null ? `\n按份额折算的理想值 ${fmt(ideal(p))} ${unit}` : '') + (p.pass === false ? '\n判据未通过：' + (p.verdicts || []).filter((v) => !v.pass).map((v) => v.criterion).join('、') : ''),
+    })), unit);
+    const base = soft100 || nativeLLM;
+    s2.append(legend([{name: MODE_NAME.native, color: MODE_COLOR.native}, {name: MODE_NAME.soft, color: MODE_COLOR.soft}, {name: MODE_NAME.hard, color: MODE_COLOR.hard}, {name: '竖线：按份额折算的理想值', line: true}]));
+    s2.append(el('div', {class: 'grid2'},
+      chart('输出吞吐', 'tokens/s，越高越好；理想值 = 同模式 100% 的吞吐 × 份额', mk((p) => p.throughput, 'tokens/s', (p) => (p.mode === 'native' || !base ? null : (sat.find((q) => q.mode === p.mode && q.share === 1) || base).throughput * p.share))),
+      chart('首 token 时延 TTFT p95', 'ms，越低越好；理想值 = 同模式 100% 的值 ÷ 份额', mk((p) => ms(p.ttft_s.p95), 'ms', (p) => { const b = sat.find((q) => q.mode === p.mode && q.share === 1); return p.mode === 'native' || !b ? null : ms(b.ttft_s.p95) / p.share; })),
+      chart('每 token 时延 TPOT p99', 'ms，按请求统计，越低越好', mk((p) => ms(p.tpot_s.p99 || p.tpot_s.p95), 'ms', (p) => { const b = sat.find((q) => q.mode === p.mode && q.share === 1); return p.mode === 'native' || !b ? null : ms(b.tpot_s.p99 || b.tpot_s.p95) / p.share; })),
+      chart('逐 token 间隔 ITL p99', 'ms，按 token 统计；限流器的周期性停顿会先在这里出现', mk((p) => ms(p.itl_s.p99), 'ms', (p) => { const b = sat.find((q) => q.mode === p.mode && q.share === 1); return p.mode === 'native' || !b ? null : ms(b.itl_s.p99) / p.share; }))));
+
+    s2.append(el('details', {open: ''}, el('summary', null, '全部 LLM 指标（表格）'), table(
+      ['配置', 'tokens/s', '相对原生', '环比', 'TPM', 'TTFT p50', 'TTFT p95', 'TPOT p50', 'TPOT p99', 'ITL p50', 'ITL p99', 'ITL max', '请求时延 p95', '停顿 ≥0.4s', '停顿 ≥0.9s', '错误率', '请求数', '判据'],
+      llm.map((p) => { const q = prevBy[pid(p)]; return [
+        el('td', {class: 'l'}, el('span', {class: 'dot', style: `background:${colorOf(p)}`}), cfg(p)),
+        fmt(p.throughput), nativeLLM && p !== nativeLLM ? pct(p.throughput / nativeLLM.throughput - 1) : '–', deltaCell(p.throughput, q && q.throughput, false),
+        fmt(p.tpm, 0), fmt(ms(p.ttft_s.p50), 0) + ' ms', fmt(ms(p.ttft_s.p95), 0) + ' ms', fmt(ms(p.tpot_s.p50), 1) + ' ms', fmt(ms(p.tpot_s.p99), 1) + ' ms',
+        fmt(ms(p.itl_s.p50), 1) + ' ms', fmt(ms(p.itl_s.p99), 1) + ' ms', fmt(ms(p.itl_s.max), 0) + ' ms', fmt(ms(p.latency_s.p95), 0) + ' ms',
+        String(p.gaps_ge_400ms || 0), String(p.gaps_ge_900ms || 0), (p.error_rate * 100).toFixed(2) + '%', String(p.requests),
+        el('td', {title: (p.verdicts || []).map((v) => `${v.pass ? '✓' : '✗'} ${v.criterion}: ${fmt(v.value, 3)} (${v.bound})`).join('\n')}, p.pass == null ? '–' : p.pass ? '✓ 通过' : '✗ ' + (p.verdicts || []).filter((v) => !v.pass).length + ' 项'),
+      ]; }))));
+  }
+  app.append(s2);
+
+  // ---- 3. co-scheduling ----
+  const co = llm.filter((p) => p.cotenancy === 'co-scheduled');
+  const coAlone = llm.find((p) => p.case === 'PERF-CO-01' && p.cotenancy === 'alone');
+  const s3 = el('section', null, el('h2', null, '切分 + 共调度：一张卡上的两个租户'),
+    el('p', {class: 'lead'}, '两个 vLLM 实例各拿 50% 算力、落在同一张 GPU 上，同时被打满。看三件事：两个租户合计能拿回整卡的多少、两个租户之间是否公平、各自的尾延迟。'));
+  if (co.length < 2 || !coAlone) s3.append(el('div', {class: 'empty'}, '这个版本没有共调度测量点（PERF-CO-01 未执行或失败）。'));
+  else {
+    const sum = co.reduce((a, p) => a + p.throughput, 0);
+    const lo = Math.min(...co.map((p) => p.throughput)), hi = Math.max(...co.map((p) => p.throughput));
+    s3.append(el('div', {class: 'tiles', style: 'margin-bottom:16px'},
+      tile('两租户合计', `${fmt(sum)}<small>tokens/s</small>`, `独占整卡时 ${fmt(coAlone.throughput)} tokens/s`),
+      tile('合计 / 独占', fmt(sum / coAlone.throughput * 100, 1) + '<small>%</small>', '切分带来的总吞吐损失'),
+      tile('租户间公平性', fmt(lo / hi * 100, 1) + '<small>%</small>', '较慢租户 ÷ 较快租户'),
+      tile('最差 TTFT p95', fmt(Math.max(...co.map((p) => ms(p.ttft_s.p95))), 0) + '<small>ms</small>', `独占时 ${fmt(ms(coAlone.ttft_s.p95), 0)} ms`)));
+    s3.append(legend([{name: 'soft 100% 独占', color: MODE_COLOR.soft}, {name: '共调度的租户', color: MODE_COLOR['co-scheduled']}]));
+    s3.append(el('div', {class: 'grid2'},
+      chart('吞吐', 'tokens/s；第二行把两个租户首尾相接', bars([
+        {label: 'soft 100% 独占', value: coAlone.throughput, color: MODE_COLOR.soft},
+        {label: '租户 A + 租户 B', value: sum, segments: co.map((p) => ({value: p.throughput, color: MODE_COLOR['co-scheduled']})), tipText: co.map((p) => `${cfg(p)}: ${fmt(p.throughput)} tokens/s`).join('\n') + `\n合计 ${fmt(sum)} tokens/s`},
+        ...co.map((p) => ({label: cfg(p), value: p.throughput, color: MODE_COLOR['co-scheduled'], ref: coAlone.throughput / 2})),
+      ], 'tokens/s')),
+      chart('尾延迟', 'ms，越低越好', bars([coAlone, ...co].flatMap((p) => [
+        {label: (p === coAlone ? '独占' : cfg(p).split('· ')[1]) + ' · TTFT p95', value: ms(p.ttft_s.p95), color: colorOf(p)},
+        {label: (p === coAlone ? '独占' : cfg(p).split('· ')[1]) + ' · ITL p99', value: ms(p.itl_s.p99), color: colorOf(p)},
+      ]), 'ms'))));
+  }
+  app.append(s3);
+
+  // ---- 4. other runtimes ----
+  const other = pts.filter((p) => p.workload !== 'vllm');
+  const s4 = el('section', null, el('h2', null, '其它负载：ONNX Runtime、TorchBench、MLPerf 风格、matmul'),
+    el('p', {class: 'lead'}, '限流器拦截 kernel launch 的方式因框架而异，所以用不同执行形态各测一遍。相对值都是同一负载、同一模型下的比值。'));
+  if (!other.length) s4.append(el('div', {class: 'empty'}, '没有数据。'));
+  else {
+    const groups = {};
+    other.forEach((p) => { const k = [p.workload, p.model, p.test || ''].join(' · ').replace(/ · $/, ''); (groups[k] = groups[k] || []).push(p); });
+    const rows = [];
+    Object.keys(groups).sort().forEach((k) => {
+      const g = groups[k], nat = g.find((p) => p.mode === 'native');
+      g.forEach((p) => { const base = g.find((q) => q.mode === p.mode && q.share === 1 && q.cotenancy === 'alone'); const q = prevBy[pid(p)]; rows.push([
+        el('td', {class: 'l'}, k), el('td', {class: 'l'}, el('span', {class: 'dot', style: `background:${colorOf(p)}`}), cfg(p)),
+        fmt(p.throughput) + ' ' + p.throughput_unit, nat && p !== nat ? pct(p.throughput / nat.throughput - 1) : '–',
+        base && p !== base ? fmt(p.throughput / base.throughput * 100, 1) + '%' + (p.share < 1 ? `（理想 ${Math.round(p.share * 100)}%）` : '') : '–',
+        deltaCell(p.throughput, q && q.throughput, false),
+        p.latency_s && p.latency_s.p50 ? fmt(ms(p.latency_s.p50), 2) + ' ms' : '–', p.latency_s && p.latency_s.p99 ? fmt(ms(p.latency_s.p99), 2) + ' ms' : '–',
+        String(p.gaps_ge_400ms || 0), p.pass == null ? '–' : p.pass ? '✓' : '✗',
+      ]); });
+    });
+    s4.append(table(['负载 · 模型', '配置', '吞吐', '相对原生', '相对同模式 100%', '环比', '时延 p50', '时延 p99', '停顿 ≥0.4s', '判据'], rows));
+  }
+  app.append(s4);
+
+  // ---- 5. machine ----
+  const mach = pts.filter((p) => p.machine && p.machine.samples > 0);
+  const s5 = el('section', null, el('h2', null, '机器指标：测量窗口内 GPU 自身的读数'),
+    el('p', {class: 'lead'}, '来自 hypervisor 的设备遥测（GreptimeDB 的 tf_gpu_usage），不是容器内看到的值。同一张卡上还有别的租户时，读数是整张卡的。采样间隔较长，窗口内样本数见表。'));
+  if (!mach.length) s5.append(el('div', {class: 'empty'}, '这个版本的测量点没有带机器指标。'));
+  else {
+    const show = mach.filter((p) => p.load === 'saturation').slice(0, 14);
+    const name = (p) => `${p.workload === 'vllm' ? 'LLM' : p.workload + ' ' + p.model} · ${cfg(p)}`;
+    s5.append(el('div', {class: 'grid2'},
+      chart('GPU 利用率（窗口均值）', '%；竖线为窗口内最大值', bars(show.map((p) => ({label: name(p), value: p.machine.gpu_util_avg_pct, ref: p.machine.gpu_util_max_pct, color: colorOf(p)})), '%')),
+      chart('功耗（窗口均值）', 'W；竖线为窗口内最大值', bars(show.map((p) => ({label: name(p), value: p.machine.power_avg_w, ref: p.machine.power_max_w, color: colorOf(p)})), 'W'))));
+    s5.append(el('details', {open: ''}, el('summary', null, '全部机器指标（表格）'), table(
+      ['测量点', '机型', 'GPU 利用率 均值', '最大', '实际算力 TFLOPS', '显存占用 最大', '显存占比', '功耗 均值', '功耗 最大', '温度 最大', '每瓦吞吐', '样本数'],
+      mach.map((p) => { const m = p.machine; return [
+        el('td', {class: 'l'}, el('span', {class: 'dot', style: `background:${colorOf(p)}`}), `${p.case} · ${p.workload} ${p.model !== 'model' ? p.model.split('/').pop() : ''} · ${cfg(p)}`),
+        m.instance_type || '–', fmt(m.gpu_util_avg_pct, 1) + '%', fmt(m.gpu_util_max_pct, 0) + '%', fmt(m.compute_tflops_avg, 1), fmt(m.vram_used_max_mib, 0) + ' MiB', fmt(m.vram_used_max_pct, 1) + '%',
+        fmt(m.power_avg_w, 1) + ' W', fmt(m.power_max_w, 0) + ' W', fmt(m.temperature_max_c, 0) + ' °C',
+        m.power_avg_w ? fmt(p.throughput / m.power_avg_w, 2) + ' ' + p.throughput_unit + '/W' : '–', String(m.samples),
+      ]; }))));
+  }
+  app.append(s5);
+
+  // ---- 6. across versions ----
+  const s6 = el('section', null, el('h2', null, '版本趋势'),
+    el('p', {class: 'lead'}, runs.length > 1 ? `环境 ${run.label} 上已留档 ${runs.length} 个版本。` : `环境 ${run.label} 目前只留档了一个版本；下一个版本用同一条命令留档后，这里和各表的「环比」列会自动出现对比。`));
+  const metric = (r, f) => { try { const v = f(r.points.filter(usable)); return v == null || !isFinite(v) ? null : v; } catch (e) { return null; } };
+  const find = (ps, mode, share, extra) => ps.find((p) => p.workload === 'vllm' && p.mode === mode && p.share === share && p.load === 'saturation' && p.cotenancy === 'alone' && p.case !== 'PERF-CO-01' && (!extra || extra(p)));
+  const defs = [
+    ['原生吞吐', 'tokens/s', (ps) => find(ps, 'native', 1).throughput],
+    ['soft 100% 相对原生的吞吐', '%', (ps) => find(ps, 'soft', 1).throughput / find(ps, 'native', 1).throughput * 100],
+    ['soft 50% 相对 soft 100% 的吞吐', '%（理想 50）', (ps) => find(ps, 'soft', 0.5).throughput / find(ps, 'soft', 1).throughput * 100],
+    ['soft 50% 的 TPOT p99', 'ms', (ps) => ms(find(ps, 'soft', 0.5).tpot_s.p99)],
+    ['soft 50% 的 TTFT p95', 'ms', (ps) => ms(find(ps, 'soft', 0.5).ttft_s.p95)],
+    ['共调度两租户合计 / 独占', '%', (ps) => { const c = ps.filter((p) => p.cotenancy === 'co-scheduled'); const a = ps.find((p) => p.case === 'PERF-CO-01' && p.cotenancy === 'alone'); return c.reduce((s, p) => s + p.throughput, 0) / a.throughput * 100; }],
+  ];
+  s6.append(el('div', {class: 'grid2'}, defs.map((d) => chart(d[0], d[1], trend(runs.map((r) => ({version: r.version, value: metric(r, d[2])})), d[1].split('（')[0])))));
+  app.append(s6);
+
+  // ---- 7. cases ----
+  const ST = {passed: ['var(--good)', '✓ 通过'], failed: ['var(--critical)', '✗ 失败'], 'known-fail': ['var(--warning)', '! 已知问题'], skipped: ['var(--text-muted)', '– 跳过']};
+  const prevCase = {};
+  if (prev) prev.cases.forEach((c) => { prevCase[c.id] = c; });
+  const s7 = el('section', null, el('h2', null, '功能与隔离用例'),
+    el('p', {class: 'lead'}, '同一批运行里的全部用例。带数字的测量值（恢复耗时、扩容耗时、成本）也在这里。'),
+    table(['ID', '用例', '状态', prev ? `版本 ${prev.version}` : '环比', '耗时', '测量值 / 原因'], run.cases.map((c) => {
+      const st = ST[c.status] || ['var(--text-muted)', c.status];
+      const meas = (c.measurements || []).map((m) => `${m.name}=${fmt(m.value)}${m.unit ? ' ' + m.unit : ''}`).join('； ');
+      const pc = prevCase[c.id];
+      return [el('td', {class: 'l'}, c.id), el('td', {class: 'l wrap'}, c.title),
+        el('td', {class: 'l'}, el('span', {class: 'status'}, el('span', {class: 'dot', style: `background:${st[0]}`}), st[1])),
+        el('td', {class: 'l muted'}, pc ? (ST[pc.status] || [0, pc.status])[1] : '–'), c.seconds + ' s',
+        el('td', {class: 'l wrap'}, [meas, c.status !== 'passed' ? c.reason || c.known_issue : ''].filter(Boolean).join(' — ').slice(0, 600))];
+    })));
+  app.append(s7);
+}
+
+function init() {
+  const envs = [...new Map(DATA.map((r) => [r.env, r.label])).entries()];
+  const envSel = $('#env'), verSel = $('#ver'), cmpSel = $('#cmp');
+  envs.forEach(([k, label]) => envSel.append(el('option', {value: k}, label)));
+  const fill = () => {
+    const runs = DATA.filter((r) => r.env === envSel.value).sort((a, b) => cmpVer(a.version, b.version));
+    verSel.innerHTML = ''; runs.forEach((r) => verSel.append(el('option', {value: r.version}, r.version)));
+    if (runs.length) verSel.value = runs[runs.length - 1].version;
+    fillCmp();
+  };
+  const fillCmp = () => {
+    const runs = DATA.filter((r) => r.env === envSel.value && cmpVer(r.version, verSel.value) < 0).sort((a, b) => cmpVer(a.version, b.version));
+    cmpSel.innerHTML = ''; cmpSel.append(el('option', {value: ''}, runs.length ? '不对比' : '没有更早的版本'));
+    runs.forEach((r) => cmpSel.append(el('option', {value: r.version}, r.version)));
+    if (runs.length) cmpSel.value = runs[runs.length - 1].version;
+  };
+  envSel.onchange = () => { fill(); render(); };
+  verSel.onchange = () => { fillCmp(); render(); };
+  cmpSel.onchange = render;
+  $('#theme').onclick = () => { const r = document.documentElement; const dark = getComputedStyle(r).colorScheme.includes('dark'); r.setAttribute('data-theme', dark ? 'light' : 'dark'); };
+  fill(); render();
+}
+init();
+})();
+</script>
+</body>
+</html>

@@ -37,8 +37,10 @@ def main():
     args = ap.parse_args()
 
     import numpy as np
-    import onnxruntime as ort
+    # torch first: it loads the CUDA and cuDNN libraries of the image, which the
+    # CUDA execution provider then finds by name.
     import torch
+    import onnxruntime as ort
 
     providers = {"cuda": ["CUDAExecutionProvider"], "tensorrt": ["TensorrtExecutionProvider", "CUDAExecutionProvider"], "cpu": ["CPUExecutionProvider"]}[args.provider]
     for name in args.models.split(","):

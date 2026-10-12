@@ -116,12 +116,12 @@ kwok-down: ## tier kwok: stop the fake hypervisor, delete the kind cluster
 # ack/install-tf.sh (the chart). Credentials come from the aliyun CLI profile.
 ACK_KUBECONFIG := $(CURDIR)/ack/.work/kubeconfig
 ACK_TEST_ENV   := KUBECONFIG=$(ACK_KUBECONFIG) E2E_PRICING_FILE=$(CURDIR)/pricing/alibaba-us-east-1.json \
-                  E2E_PRICING_REGION=us-east-1 E2E_FINOPS_GPU_TYPE=ecs.gn6i-c4g1.xlarge E2E_PATHB_INSTANCE_TYPES=ecs.gn6i-c8g1.2xlarge E2E_BURST=3
+                  E2E_PRICING_REGION=us-east-1 E2E_FINOPS_GPU_TYPE=ecs.gn6i-c4g1.xlarge E2E_PATHB_INSTANCE_TYPES=ecs.gn6i-c8g1.2xlarge E2E_BURST=3 E2E_ISOLATION_MODES=soft E2E_FIXED_IMAGES=1
 TIER ?= smoke
 
 .PHONY: ack-up
 ack-up: ## ACK: VPC + ACK managed cluster + Karpenter (Alibaba Cloud provider) + TensorFusion
-	@bash ack/up.sh && bash ack/install.sh && bash ack/install-tf.sh
+	@bash ack/run.sh up
 
 .PHONY: ack-test
 ack-test: ## ACK: run a tier against the ACK cluster: make ack-test TIER=core|isolation|karpenter-finops|perf-quick|smoke [FOCUS=..]
@@ -129,7 +129,7 @@ ack-test: ## ACK: run a tier against the ACK cluster: make ack-test TIER=core|is
 
 .PHONY: ack-down
 ack-down: ## ACK: delete the cluster and everything around it, then list leftovers
-	@bash ack/down.sh
+	@bash ack/run.sh down
 
 .PHONY: ack-sweep
 ack-sweep: ## ACK: list what of the stack still exists (exit 1 when something is left)

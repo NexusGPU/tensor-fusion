@@ -4,15 +4,21 @@
 # system node (TensorFusion controller, Karpenter) can use such an image.
 #
 #   ack/load-image.sh <image in the local docker daemon>...
+#   ack/load-image.sh <archive.tar>          a `docker save` archive (no docker daemon needed)
 
 source "$(dirname "$0")/lib.sh"
-need docker kubectl
+need kubectl
 
-[ $# -gt 0 ] || { log "usage: load-image.sh <image>..."; exit 2; }
-tar="$(mktemp -d)/images.tar"
-trap 'kubectl -n kube-system delete pod tf-e2e-image-loader --wait=false >/dev/null 2>&1; rm -f "$tar"' EXIT
-
-docker save "$@" -o "$tar"
+[ $# -gt 0 ] || { log "usage: load-image.sh <image>... | <archive.tar>"; exit 2; }
+if [ $# -eq 1 ] && [ -f "$1" ]; then
+  tar="$1"
+  trap 'kubectl -n kube-system delete pod tf-e2e-image-loader --wait=false >/dev/null 2>&1' EXIT
+else
+  need docker
+  tar="$(mktemp -d)/images.tar"
+  trap 'kubectl -n kube-system delete pod tf-e2e-image-loader --wait=false >/dev/null 2>&1; rm -f "$tar"' EXIT
+  docker save "$@" -o "$tar"
+fi
 kubectl -n kube-system delete pod tf-e2e-image-loader --ignore-not-found >/dev/null
 kubectl apply -f - >/dev/null <<YAML
 apiVersion: v1

@@ -22,7 +22,7 @@ need aliyun kubectl jq
 pass() {
   local instances claimed pool_ids gpu now
   instances=$(ali ecs DescribeInstances --RegionId "$ACK_REGION" --PageSize 100 --Tag.1.Key Project --Tag.1.Value "$ACK_NAME" |
-    jq -c '[.Instances.Instance[] | select(.Status != "Released") | {id: .InstanceId, type: .InstanceType, created: .CreationTime}]') || return 0
+    jq -c '[.Instances.Instance[] | select(.Status != "Released") | {id: .InstanceId, type: .InstanceType, status: .Status, created: .CreationTime}]') || return 0
   claimed=$(kubectl get nodeclaim -o json 2>/dev/null | jq -r '.items[].status.providerID // empty | split(".") | last') || return 0
   pool_ids=$(ali cs GET "/clusters/$1/nodes" | jq -r '.nodes[]?.instance_id') || return 0
   now=$(date -u +%s)
@@ -34,7 +34,9 @@ pass() {
     log "GUARD: instance ${id} belongs to no NodeClaim and no node pool: terminating it"
     ali ecs DeleteInstance --InstanceId "$id" --Force true >/dev/null || true
   done
-  gpu=$(echo "$instances" | jq '[.[] | select(.type | test("^ecs\\.(gn|ebmgn)"))] | length')
+  # Instances on their way out (Stopping / Stopped) no longer cost GPU time and
+  # stay listed for minutes: only the ones that run or are about to count.
+  gpu=$(echo "$instances" | jq '[.[] | select(.type | test("^ecs\\.(gn|ebmgn)")) | select(.status == "Running" or .status == "Starting" or .status == "Pending")] | length')
   if [ "$gpu" -gt "$ACK_MAX_GPU_INSTANCES" ]; then
     log "GUARD: ${gpu} GPU instances exceed the ceiling of ${ACK_MAX_GPU_INSTANCES}: freezing every NodePool"
     for np in $(kubectl get nodepool -o name); do
