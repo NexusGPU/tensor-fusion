@@ -182,6 +182,32 @@ func ExtractPoolNameFromNodeLabel(node *tfv1.GPUNode) string {
 	return poolName
 }
 
+// gpuNodeKind is the kind of the owner reference a GPU carries.
+const gpuNodeKind = "GPUNode"
+
+// GPUOwnerSelector selects the GPU resources of one node. The owner label
+// holds LabelSafeValue(node name), not necessarily the name itself.
+func GPUOwnerSelector(nodeName string) client.MatchingLabels {
+	return client.MatchingLabels{constants.LabelKeyOwner: LabelSafeValue(nodeName)}
+}
+
+// GPUNodeNameOfGPU returns the name of the GPUNode (which is also the name of
+// the Kubernetes node) a GPU belongs to. The GPUNode owner reference the
+// hypervisor sets carries the full name; the owner label is the fallback for
+// objects without one, and is only the full name when that fits a label value.
+func GPUNodeNameOfGPU(gpu *tfv1.GPU) string {
+	if gpu == nil {
+		return ""
+	}
+	for i := range gpu.OwnerReferences {
+		ref := &gpu.OwnerReferences[i]
+		if ref.Kind == gpuNodeKind && strings.HasPrefix(ref.APIVersion, tfv1.GroupVersion.Group+"/") {
+			return ref.Name
+		}
+	}
+	return gpu.Labels[constants.LabelKeyOwner]
+}
+
 func EqualConditionsDisregardTransitionTime(a, b []metav1.Condition) bool {
 	if len(a) != len(b) {
 		return false

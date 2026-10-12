@@ -449,7 +449,9 @@ func (b *KubeletBackend) mutateGPUResourceState(
 	}
 	// Set metadata fields
 	gpu.Labels = map[string]string{
-		constants.LabelKeyOwner: gpuNode.Name,
+		// A label value is limited to 63 bytes, a node name is not: the full
+		// name is in the GPUNode owner reference set below.
+		constants.LabelKeyOwner: utils.LabelSafeValue(gpuNode.Name),
 		constants.GpuPoolKey:    poolName,
 	}
 	gpu.Annotations = map[string]string{

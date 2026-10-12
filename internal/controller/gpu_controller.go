@@ -21,7 +21,7 @@ import (
 	"fmt"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/pkg/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -50,8 +50,9 @@ func (r *GPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	gpunode := &tfv1.GPUNode{}
-	if err := r.Get(ctx, client.ObjectKey{Name: gpu.Labels[constants.LabelKeyOwner]}, gpunode); err != nil {
-		return ctrl.Result{}, fmt.Errorf("can not get node %s: %w", gpu.Labels[constants.LabelKeyOwner], err)
+	gpuNodeName := utils.GPUNodeNameOfGPU(gpu)
+	if err := r.Get(ctx, client.ObjectKey{Name: gpuNodeName}, gpunode); err != nil {
+		return ctrl.Result{}, fmt.Errorf("can not get node %s: %w", gpuNodeName, err)
 	}
 
 	// Fix old version issue when discovery job not set UsedBy field

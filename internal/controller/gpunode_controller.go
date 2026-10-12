@@ -354,7 +354,7 @@ func (r *GPUNodeReconciler) syncStatusToGPUDevices(ctx context.Context, node *tf
 
 func (r *GPUNodeReconciler) fetchAllOwnedGPUDevices(ctx context.Context, node *tfv1.GPUNode) ([]tfv1.GPU, error) {
 	gpuList := &tfv1.GPUList{}
-	if err := r.List(ctx, gpuList, client.MatchingLabels{constants.LabelKeyOwner: node.Name}); err != nil {
+	if err := r.List(ctx, gpuList, utils.GPUOwnerSelector(node.Name)); err != nil {
 		return nil, fmt.Errorf("failed to list GPUs: %w", err)
 	}
 	return gpuList.Items, nil

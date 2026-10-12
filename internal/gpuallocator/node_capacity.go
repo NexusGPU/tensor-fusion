@@ -22,7 +22,7 @@ func RefreshGPUNodeCapacity(
 	coreNode *corev1.Node,
 ) ([]string, error) {
 	gpuList := &tfv1.GPUList{}
-	if err := k8sClient.List(ctx, gpuList, client.MatchingLabels{constants.LabelKeyOwner: node.Name}); err != nil {
+	if err := k8sClient.List(ctx, gpuList, utils.GPUOwnerSelector(node.Name)); err != nil {
 		return nil, fmt.Errorf("failed to list GPUs: %w", err)
 	}
 	if len(gpuList.Items) == 0 {
