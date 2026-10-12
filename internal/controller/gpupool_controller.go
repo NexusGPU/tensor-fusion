@@ -609,7 +609,10 @@ func (r *GPUPoolReconciler) cleanUpPool(ctx context.Context, pool *tfv1.GPUPool)
 	if err := r.List(ctx, nodes, client.MatchingLabels{constants.LabelKeyOwner: pool.Name}); err != nil {
 		return false, err
 	}
-	return len(nodes.Items) == 0, nil
+	// The pool must outlive its GPUNodeClaims: their finalizer terminates the
+	// cloud node through the pool's provisioner config, and the claim controller
+	// cannot finish (it leaves the claim, finalizer and all) once the pool is gone.
+	return len(nodes.Items) == 0 && len(claims.Items) == 0, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
