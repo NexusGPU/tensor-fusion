@@ -51,7 +51,7 @@ type GPUNodeClaimReconciler struct {
 // +kubebuilder:rbac:groups=karpenter.sh,resources=nodepools,verbs=get;list;watch
 // The NodeClass a GPUNodeClaim refers to lives in the API group of the Karpenter
 // provider, not in karpenter.sh; it is read before the NodeClaim is created.
-// +kubebuilder:rbac:groups=karpenter.k8s.aws;karpenter.azure.com;karpenter.k8s.gcp;karpenter.k8s.alibabacloud;karpenter.kwok.sh,resources=*,verbs=get;list;watch
+// +kubebuilder:rbac:groups=karpenter.k8s.aws;karpenter.azure.com;karpenter.k8s.gcp;karpenter.k8s.alibabacloud;karpenter.alibabacloud.com;karpenter.kwok.sh,resources=*,verbs=get;list;watch
 
 // GPUNodeClaim is responsible for creating cloud vendor GPU nodes
 func (r *GPUNodeClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

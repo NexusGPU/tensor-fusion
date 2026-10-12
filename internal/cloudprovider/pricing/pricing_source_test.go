@@ -174,3 +174,38 @@ func TestLookupPricing_UnavailableIsNotFree(t *testing.T) {
 		require.False(t, found, "capacity type %s", capacityType)
 	}
 }
+
+// Alibaba Cloud ECS instance types are a table of their own: they are found by
+// name and priced, and they never show up among the AWS instance types.
+func TestAlibabaInstanceTypes_AreKnownAndKeptApartFromAWS(t *testing.T) {
+	provider, store := newIsolatedProvider(longTestTimeout)
+	store.load(t.Context(), []config.GpuInfo{testGpuInfo("T4", "65")})
+
+	alibaba, err := provider.LookupAlibabaGPUNodeInstanceTypes()
+	require.NoError(t, err)
+	require.NotEmpty(t, alibaba)
+	for _, instance := range alibaba {
+		assert.Equal(t, "T4", instance.GPUModel, instance.InstanceType)
+		assert.InDelta(t, 65, instance.FP16TFlopsPerGPU, 1e-9, instance.InstanceType)
+		assert.Equal(t, int32(16), instance.VRAMGigabytesPerGPU, instance.InstanceType)
+	}
+
+	info, found := provider.GetGPUNodeInstanceTypeInfoByInstance("ecs.gn6i-c8g1.2xlarge", "us-east-1")
+	require.True(t, found)
+	assert.Equal(t, int32(1), info.GPUCount)
+	assert.Equal(t, int32(8), info.CPUs)
+
+	price, source, err := provider.HourlyPriceWithSource("ecs.gn6i-c8g1.2xlarge", tfv1.CapacityTypeOnDemand, "us-east-1")
+	require.NoError(t, err)
+	assert.Equal(t, PriceSourceList, source)
+	assert.Positive(t, price)
+	_, source, err = provider.HourlyPriceWithSource("ecs.gn6i-c8g1.2xlarge", tfv1.CapacityTypeSpot, "us-east-1")
+	require.NoError(t, err)
+	assert.Equal(t, PriceSourceSpotEstimate, source, "the Alibaba data has no spot price: the rate is an estimate")
+
+	aws, err := provider.LookupRegionalGPUNodeInstanceTypes(testRegion)
+	require.NoError(t, err)
+	for _, instance := range aws {
+		assert.NotContains(t, instance.InstanceType, "ecs.", "AWS instance types must not contain Alibaba Cloud ones")
+	}
+}

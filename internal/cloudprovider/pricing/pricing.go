@@ -45,6 +45,8 @@ import (
 const (
 	providerAWS   = "aws"
 	providerAzure = "azure"
+	// providerAlibaba rows use the column layout of the AWS data.
+	providerAlibaba = "alibaba"
 
 	// DefaultFirstLoadTimeout bounds how long readers wait for the first load
 	// of the pricing tables before they give up with ErrPricingNotLoaded.
@@ -148,6 +150,13 @@ var awsCSV string
 //go:embed pricing-data/azure-gpu.csv
 var azureCSV string
 
+// alibabaCSV lists Alibaba Cloud ECS GPU instance types with pay-as-you-go
+// list prices of us-east-1, converted from CNY to USD. Spot prices are not
+// listed, so a spot rate is an estimate, as for AWS.
+//
+//go:embed pricing-data/alibaba-gpu.csv
+var alibabaCSV string
+
 // csvInstance is one row of the embedded instance data, before it is joined
 // with the GPU model info.
 type csvInstance struct {
@@ -158,9 +167,10 @@ type csvInstance struct {
 }
 
 var (
-	csvOnce  sync.Once
-	csvAWS   []csvInstance
-	csvAzure []csvInstance
+	csvOnce    sync.Once
+	csvAWS     []csvInstance
+	csvAzure   []csvInstance
+	csvAlibaba []csvInstance
 )
 
 // embeddedInstanceData parses the embedded CSV files once. The rows never
@@ -169,8 +179,15 @@ func embeddedInstanceData() (aws []csvInstance, azure []csvInstance) {
 	csvOnce.Do(func() {
 		csvAWS = parseCSVInstanceData([]byte(awsCSV), providerAWS)
 		csvAzure = parseCSVInstanceData([]byte(azureCSV), providerAzure)
+		csvAlibaba = parseCSVInstanceData([]byte(alibabaCSV), providerAlibaba)
 	})
 	return csvAWS, csvAzure
+}
+
+// embeddedAlibabaInstanceData returns the Alibaba Cloud rows of the embedded data.
+func embeddedAlibabaInstanceData() []csvInstance {
+	embeddedInstanceData()
+	return csvAlibaba
 }
 
 // pricingSnapshot is one complete, immutable generation of the pricing tables.
@@ -178,10 +195,13 @@ func embeddedInstanceData() (aws []csvInstance, azure []csvInstance) {
 // so a reader works on one consistent generation and never sees a table that
 // is still being filled.
 type pricingSnapshot struct {
-	aws   map[string]GPUNodeInstanceInfoAndPrice
-	azure map[string]GPUNodeInstanceInfoAndPrice
+	aws     map[string]GPUNodeInstanceInfoAndPrice
+	azure   map[string]GPUNodeInstanceInfoAndPrice
+	alibaba map[string]GPUNodeInstanceInfoAndPrice
 	// awsInstanceTypes holds the AWS instance types sorted by name.
 	awsInstanceTypes []types.GPUNodeInstanceInfo
+	// alibabaInstanceTypes holds the Alibaba Cloud instance types sorted by name.
+	alibabaInstanceTypes []types.GPUNodeInstanceInfo
 	// gpuInfo is keyed by both the short and the full GPU model name.
 	gpuInfo map[string]*CompleteGPUInfo
 	// skippedModels lists the GPU models of instance rows that were left out
@@ -291,7 +311,8 @@ func (s *pricingStore) load(ctx context.Context, gpuInfos []config.GpuInfo) {
 		return
 	}
 	logger.Info("GPU pricing tables rebuilt",
-		"gpuModels", len(gpuInfos), "awsInstanceTypes", len(snap.aws), "azureInstanceTypes", len(snap.azure))
+		"gpuModels", len(gpuInfos), "awsInstanceTypes", len(snap.aws), "azureInstanceTypes", len(snap.azure),
+		"alibabaInstanceTypes", len(snap.alibaba))
 	if len(snap.skippedModels) > 0 {
 		logger.Info("instance types skipped because their GPU model has no hardware metadata in any ProviderConfig",
 			"gpuModels", snap.skippedModels)
@@ -348,17 +369,13 @@ func buildSnapshot(gpuInfos []config.GpuInfo) *pricingSnapshot {
 	snap := &pricingSnapshot{
 		aws:     joinInstanceData(awsRows, gpuInfoByModel, skipped),
 		azure:   joinInstanceData(azureRows, gpuInfoByModel, skipped),
+		alibaba: joinInstanceData(embeddedAlibabaInstanceData(), gpuInfoByModel, skipped),
 		gpuInfo: gpuInfoByModel,
 		warned:  &warnSet{},
 	}
 
-	snap.awsInstanceTypes = make([]types.GPUNodeInstanceInfo, 0, len(snap.aws))
-	for _, instance := range snap.aws {
-		snap.awsInstanceTypes = append(snap.awsInstanceTypes, instance.GPUNodeInstanceInfo)
-	}
-	sort.Slice(snap.awsInstanceTypes, func(i, j int) bool {
-		return snap.awsInstanceTypes[i].InstanceType < snap.awsInstanceTypes[j].InstanceType
-	})
+	snap.awsInstanceTypes = sortedInstanceTypes(snap.aws)
+	snap.alibabaInstanceTypes = sortedInstanceTypes(snap.alibaba)
 
 	snap.skippedModels = make([]string, 0, len(skipped))
 	for model := range skipped {
@@ -373,6 +390,17 @@ func buildSnapshot(gpuInfos []config.GpuInfo) *pricingSnapshot {
 	sort.Strings(signature)
 	snap.signature = strings.Join(signature, ";")
 	return snap
+}
+
+func sortedInstanceTypes(table map[string]GPUNodeInstanceInfoAndPrice) []types.GPUNodeInstanceInfo {
+	instanceTypes := make([]types.GPUNodeInstanceInfo, 0, len(table))
+	for _, instance := range table {
+		instanceTypes = append(instanceTypes, instance.GPUNodeInstanceInfo)
+	}
+	sort.Slice(instanceTypes, func(i, j int) bool {
+		return instanceTypes[i].InstanceType < instanceTypes[j].InstanceType
+	})
+	return instanceTypes
 }
 
 // joinInstanceData keeps the instance rows whose GPU model is described by the
@@ -424,7 +452,7 @@ func parseCSVInstanceData(data []byte, provider string) []csvInstance {
 		}
 
 		// Determine required record length based on provider
-		if provider == providerAWS && len(record) < 13 {
+		if (provider == providerAWS || provider == providerAlibaba) && len(record) < 13 {
 			continue // AWS needs at least 13 fields
 		}
 		if provider == providerAzure && len(record) < 12 {
@@ -436,7 +464,7 @@ func parseCSVInstanceData(data []byte, provider string) []csvInstance {
 		var spotEstimated bool
 
 		switch provider {
-		case providerAWS:
+		case providerAWS, providerAlibaba:
 			instanceInfo, prices, spotEstimated = parseAWSRecord(record)
 		case providerAzure:
 			instanceInfo, prices = parseAzureRecord(record)
@@ -632,7 +660,7 @@ func parseAzureGPUSpec(gpuSpec string) (int32, string) {
 	return 0, ""
 }
 
-// lookupInstance finds an instance type, AWS first and then Azure.
+// lookupInstance finds an instance type: AWS first, then Azure, then Alibaba Cloud.
 func (s *pricingStore) lookupInstance(instanceType string) (GPUNodeInstanceInfoAndPrice, error) {
 	snap, err := s.snapshot()
 	if err != nil {
@@ -642,6 +670,9 @@ func (s *pricingStore) lookupInstance(instanceType string) (GPUNodeInstanceInfoA
 		return info, nil
 	}
 	if info, exists := snap.azure[instanceType]; exists {
+		return info, nil
+	}
+	if info, exists := snap.alibaba[instanceType]; exists {
 		return info, nil
 	}
 	return GPUNodeInstanceInfoAndPrice{}, fmt.Errorf("%w: %q", ErrInstanceTypeNotFound, instanceType)
@@ -804,6 +835,16 @@ func (p *StaticPricingProvider) LookupRegionalGPUNodeInstanceTypes(region string
 	// region only support aws now
 	// The copy keeps callers from changing the published snapshot.
 	return slices.Clone(snap.awsInstanceTypes), nil
+}
+
+// LookupAlibabaGPUNodeInstanceTypes returns the known Alibaba Cloud ECS
+// instance types, sorted by name.
+func (p *StaticPricingProvider) LookupAlibabaGPUNodeInstanceTypes() ([]types.GPUNodeInstanceInfo, error) {
+	snap, err := p.tables().snapshot()
+	if err != nil {
+		return nil, err
+	}
+	return slices.Clone(snap.alibabaInstanceTypes), nil
 }
 
 // GetRegionalGPUNodeInstanceTypes implements PricingProvider interface
