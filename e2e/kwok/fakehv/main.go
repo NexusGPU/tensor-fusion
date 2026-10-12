@@ -53,6 +53,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 )
 
 const (
@@ -259,7 +261,10 @@ func (f *fake) register(ctx context.Context, gn, node, hv *unstructured.Unstruct
 		err := f.c.Get(ctx, types.NamespacedName{Name: id}, gpu)
 		if apierrors.IsNotFound(err) {
 			gpu.SetName(id)
-			gpu.SetLabels(map[string]string{tfDomain + "/managed-by": name, tfDomain + "/gpupool": pool, fakeLabel: "true"})
+			gpu.SetLabels(map[string]string{
+				// As KubeletBackend.mutateGPUResourceState: a node name may not fit a label value.
+				tfDomain + "/managed-by": utils.LabelSafeValue(name), tfDomain + "/gpupool": pool, fakeLabel: "true",
+			})
 			gpu.SetAnnotations(map[string]string{
 				tfDomain + "/last-sync":                   time.Now().Format(time.RFC3339),
 				tfDomain + "/virtualization-capabilities": string(caps),

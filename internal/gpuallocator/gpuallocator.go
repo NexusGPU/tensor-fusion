@@ -2961,7 +2961,7 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 		}
 		s.reportGPUOvercommitChange(key, gpu)
 
-		dirtyNodes[gpu.Labels[constants.LabelKeyOwner]] = struct{}{}
+		dirtyNodes[utils.GPUNodeNameOfGPU(gpu)] = struct{}{}
 
 		// Update the GPU status in Kubernetes with retry on conflict
 		// Get the latest version, update status, and retry on conflict

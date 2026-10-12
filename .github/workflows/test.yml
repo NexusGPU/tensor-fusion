@@ -6,20 +6,28 @@ on:
       - main
       - release/**
     paths-ignore:
-      - "*.md"
+      - "**/*.md"
       - "charts/**"
       - "config/**"
+      - "docs/**"
+      - "e2e/**"
   pull_request:
     branches:
       - main
       - release/**
     paths-ignore:
-      - "*.md"
+      - "**/*.md"
       - "charts/**"
       - "config/**"
+      - "docs/**"
+      - "e2e/**"
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -28,7 +36,9 @@ jobs:
     strategy:
       matrix:
         # from https://github.com/kubernetes-sigs/controller-tools/blob/main/envtest-releases.yaml
-        envtest_k8s_version: [1.23.5, 1.35.0]
+        # Pull requests run the current version only; the oldest supported one
+        # runs on main and release branches.
+        envtest_k8s_version: ${{ github.event_name == 'pull_request' && fromJSON('["1.35.0"]') || fromJSON('["1.23.5","1.35.0"]') }}
     steps:
       - name: Clone the code
         uses: actions/checkout@v7

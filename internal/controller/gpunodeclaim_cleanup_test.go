@@ -59,3 +59,36 @@ func TestGPUNodeClaimCleanupTerminatesUnregisteredInstances(t *testing.T) {
 		})
 	}
 }
+
+// A pool being deleted must stay until its GPUNodeClaims are gone, also when
+// no GPUNode is left: the claim's finalizer needs the pool to terminate the
+// cloud node, and is never removed once the pool has disappeared.
+func TestPoolCleanupWaitsForGPUNodeClaims(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, tfv1.AddToScheme(scheme))
+	pool := &tfv1.GPUPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool"},
+		Status:     tfv1.GPUPoolStatus{Phase: tfv1.TensorFusionPoolPhaseDestroying},
+	}
+	claim := &tfv1.GPUNodeClaim{ObjectMeta: metav1.ObjectMeta{
+		Name:       "pool-claim",
+		Labels:     map[string]string{constants.LabelKeyOwner: pool.Name},
+		Finalizers: []string{constants.Finalizer},
+	}}
+	kubeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool, claim).Build()
+	r := &GPUPoolReconciler{Client: kubeClient, Scheme: scheme}
+
+	done, err := r.cleanUpPool(t.Context(), pool)
+	require.NoError(t, err)
+	require.False(t, done, "the claim still exists (its finalizer has not run)")
+	current := &tfv1.GPUNodeClaim{}
+	require.NoError(t, kubeClient.Get(t.Context(), client.ObjectKeyFromObject(claim), current))
+	require.False(t, current.DeletionTimestamp.IsZero(), "the pool asks for the claim's deletion")
+
+	// The claim controller finishes: finalizer removed, object gone.
+	current.Finalizers = nil
+	require.NoError(t, kubeClient.Update(t.Context(), current))
+	done, err = r.cleanUpPool(t.Context(), pool)
+	require.NoError(t, err)
+	require.True(t, done)
+}

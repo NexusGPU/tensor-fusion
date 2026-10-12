@@ -104,6 +104,9 @@ var _ = Describe("karpenter base", func() {
 				return fmt.Sprintf("NodeClaims present: %v", nodeClaimNames(ncs)), len(ncs) == 0
 			})
 			before := nodeClaimNames(env.nodeClaims(ctx, env.CPUNodePool))
+			// GPU nodes of earlier cases may still be around (KWOK tier); what
+			// matters is that this pod adds none.
+			gpuBefore := nodeClaimNames(env.nodeClaims(ctx, env.GPUNodePool))
 			led := newNodeLedger(env.CPUNodePool)
 
 			start := time.Now()
@@ -145,7 +148,9 @@ var _ = Describe("karpenter base", func() {
 			c.Note("launched %s (%s) in %s", claim.GetLabels()["node.kubernetes.io/instance-type"], claim.GetLabels()["karpenter.sh/capacity-type"], claim.GetLabels()["topology.kubernetes.io/zone"])
 
 			By("the system node group is untouched and no GPU or mock node was started")
-			Expect(env.nodeClaims(ctx, env.GPUNodePool)).To(BeEmpty())
+			for _, name := range nodeClaimNames(env.nodeClaims(ctx, env.GPUNodePool)) {
+				Expect(gpuBefore).To(ContainElement(name), "a GPU NodeClaim appeared for a pod that asks for no GPU")
+			}
 
 			By("deleting the workload: Karpenter consolidates the now empty node")
 			del := time.Now()

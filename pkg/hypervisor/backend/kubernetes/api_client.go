@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	authv1 "k8s.io/api/authentication/v1"
@@ -291,8 +292,7 @@ func (a *APIClient) DeleteGPU(uuid string) error {
 // allocation state, and get deleted by a later run once idle.
 func (a *APIClient) CleanupStaleGPUs(gpuNodeName string, aliveDeviceIDs []string) error {
 	gpuList := &tfv1.GPUList{}
-	if err := a.client.List(a.ctx, gpuList,
-		client.MatchingLabels{constants.LabelKeyOwner: gpuNodeName}); err != nil {
+	if err := a.client.List(a.ctx, gpuList, utils.GPUOwnerSelector(gpuNodeName)); err != nil {
 		return fmt.Errorf("list GPUs owned by node %s: %w", gpuNodeName, err)
 	}
 
