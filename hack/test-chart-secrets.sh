@@ -75,7 +75,7 @@ echo "== namespace scope of the cluster agent"
 out=$(render --set agent.agentId="$AGENT_ID" --set agent.enrollToken="$TOKEN")
 deployment=$(doc "$out" Deployment release-controller)
 check "no namespace lists by default" lacks "$deployment" "AGENT_NAMESPACE_"
-check "the default agent image is 1.1.0" contains "$deployment" "tensor-fusion-agent:1.1.0"
+check "the default agent image is 1.1.1" contains "$deployment" "tensor-fusion-agent:1.1.1"
 out=$(render --set agent.agentId="$AGENT_ID" --set agent.enrollToken="$TOKEN" \
     --set 'agent.namespaceAllowlist={team-a,team-b-*}' --set 'agent.namespaceDenylist={kube-system}')
 deployment=$(doc "$out" Deployment release-controller)

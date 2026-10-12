@@ -125,7 +125,7 @@ func (e *Env) waitAllReady(ctx context.Context, ns string, names []string, timeo
 
 var _ = Describe("discovery", func() {
 	Register(Case{
-		ID: "INS-03", Title: "GPU 节点与 GPU 自动发现（含 KRP-A01 纳管 Karpenter 节点）", Tiers: []string{TierCore, TierRehearsal, TierKarpenter},
+		ID: "INS-03", Title: "GPU 节点与 GPU 自动发现（含 KRP-A01 纳管 Karpenter 节点）", Tiers: []string{TierCore, TierRehearsal, TierKarpenter, TierKWOK},
 		Needs: []string{NeedTF}, Timeout: 20 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			if env.Mode == ModeNoGPU {

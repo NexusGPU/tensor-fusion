@@ -22,7 +22,7 @@ import (
 
 var _ = Describe("karpenter base", func() {
 	Register(Case{
-		ID: "KRP-00", Title: "Karpenter 就绪：NodePool / EC2NodeClass Ready，nodeOverlay 特性门打开", Tiers: []string{TierSmoke}, Needs: []string{NeedKarpenter}, NoNS: true,
+		ID: "KRP-00", Title: "Karpenter 就绪：NodePool / EC2NodeClass Ready，nodeOverlay 特性门打开", Tiers: []string{TierSmoke, TierKWOK}, Needs: []string{NeedKarpenter}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			pools, err := env.list(ctx, gvkNodePool, "")
 			Expect(err).NotTo(HaveOccurred())
@@ -31,6 +31,14 @@ var _ = Describe("karpenter base", func() {
 				Expect(condition(&pools[i], "Ready")).To(Equal("True"), "NodePool %s: %s", pools[i].GetName(), toJSON(sliceAt(&pools[i], "status", "conditions")))
 			}
 			c.Note("NodePools: %v", names(pools))
+			if env.HasKWOK {
+				ncs, _ := env.list(ctx, gvkKWOKNC, "")
+				Expect(ncs).NotTo(BeEmpty(), "no KWOKNodeClass")
+				for i := range ncs {
+					Expect(condition(&ncs[i], "Ready")).To(Equal("True"), "KWOKNodeClass %s: %s", ncs[i].GetName(), toJSON(sliceAt(&ncs[i], "status", "conditions")))
+				}
+				c.Note("KWOKNodeClasses: %v (fake nodes, nodeRegistrationDelay %s)", names(ncs), str(&ncs[0], "spec", "nodeRegistrationDelay"))
+			}
 			if env.HasAWS {
 				ncs, _ := env.list(ctx, gvkEC2NC, "")
 				for i := range ncs {
@@ -59,7 +67,7 @@ var _ = Describe("karpenter base", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-01", Title: "NodeOverlay 与 operator 的 NodeClaim RBAC 就位", Tiers: []string{TierSmoke}, Needs: []string{NeedTF, NeedKarpenter}, NoNS: true,
+		ID: "KRP-01", Title: "NodeOverlay 与 operator 的 NodeClaim RBAC 就位", Tiers: []string{TierSmoke, TierKWOK}, Needs: []string{NeedTF, NeedKarpenter}, NoNS: true,
 		Run: func(ctx SpecContext, c *C) {
 			ov, err := env.get(ctx, gvkNodeOverlay, "", "tensor-fusion-overlay")
 			Expect(err).NotTo(HaveOccurred(), "NodeOverlay missing: the chart only renders it when the Karpenter CRD existed at install time")
@@ -87,7 +95,7 @@ var _ = Describe("karpenter base", func() {
 	})
 
 	Register(Case{
-		ID: "KRP-C01", Title: "Karpenter 拉起并回收一台非 GPU 节点（通用 NodePool）", Tiers: []string{TierSmoke}, Needs: []string{NeedKarpenter}, Timeout: 15 * time.Minute,
+		ID: "KRP-C01", Title: "Karpenter 拉起并回收一台非 GPU 节点（通用 NodePool）", Tiers: []string{TierSmoke, TierKWOK}, Needs: []string{NeedKarpenter}, Timeout: 15 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			// A node left in the pool would simply absorb the test pod. An idle pool
 			// is the precondition; Karpenter gets a consolidation cycle to reach it.

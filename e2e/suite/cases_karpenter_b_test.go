@@ -58,7 +58,7 @@ func addPathBPool(ctx context.Context, instanceTypes []string, capacityType stri
 	nm["provisioningMode"] = "Karpenter"
 	nm["nodeCompaction"] = map[string]any{"period": "1m"}
 	nm["nodeProvisioner"] = map[string]any{
-		"karpenterNodeClassRef": map[string]any{"group": "karpenter.k8s.aws", "kind": "EC2NodeClass", "version": "v1", "name": getenv("E2E_GPU_NODECLASS", "tf-gpu")},
+		"karpenterNodeClassRef": pathBNodeClassRef(),
 		"gpuRequirements": []any{
 			map[string]any{"key": "node.kubernetes.io/instance-type", "operator": "In", "values": toAnySlice(instanceTypes)},
 			map[string]any{"key": "karpenter.sh/capacity-type", "operator": "In", "values": []any{capacityType}},
@@ -100,11 +100,20 @@ func addPathBPool(ctx context.Context, instanceTypes []string, capacityType stri
 	return "tensor-fusion-" + pathBPool
 }
 
+// pathBNodeClassRef names the NodeClass path B NodeClaims use: the stack's
+// EC2NodeClass on AWS, the KWOKNodeClass on a KWOK cluster.
+func pathBNodeClassRef() map[string]any {
+	if env.HasKWOK && !env.HasAWS {
+		return map[string]any{"group": "karpenter.kwok.sh", "kind": "KWOKNodeClass", "version": "v1alpha1", "name": getenv("E2E_GPU_NODECLASS", "tf-kwok")}
+	}
+	return map[string]any{"group": "karpenter.k8s.aws", "kind": "EC2NodeClass", "version": "v1", "name": getenv("E2E_GPU_NODECLASS", "tf-gpu")}
+}
+
 var _ = Describe("karpenter path B", func() {
 	Register(Case{
 		ID: "KRP-B02", Title: "路径 B：容量水位 → GPUNodeClaim → 同名 NodeClaim → 节点 → Bound（含 B01 连接检查、B09 删除 Pool 清理）",
-		Tiers: []string{TierKarpenter, TierDryRun}, Needs: []string{NeedTF, NeedKarpenter, NeedAWS, NeedFixedImg}, Timeout: 40 * time.Minute, NoNS: true,
-		KnownIssue: "released controller (<= 2.17.23) never reconciles provisioningMode=Karpenter pools: pricing provider not initialised",
+		Tiers: []string{TierKarpenter, TierDryRun, TierKWOK}, Needs: []string{NeedTF, NeedKarpenter, NeedNodeClass, NeedFixedImg}, Timeout: 40 * time.Minute, NoNS: true,
+		KnownIssue: "<= 2.17.23: provisioningMode=Karpenter pools never reconcile (pricing provider not initialised). 2.17.24 / 2.17.25: the pool reconciles and creates the GPUNodeClaim, but the chart's ClusterRole lets the operator read no Karpenter NodeClass kind, so the GPUNodeClaim controller fails with `failed to query NodeClass ... is forbidden` and no NodeClaim is created",
 		Run: func(ctx SpecContext, c *C) {
 			// g4dn.2xlarge: the built-in price table cannot resolve g4dn.xlarge's GPU
 			// model ("NVIDIA T4 Tensor Core" has no TFLOPS entry), so it is skipped
@@ -170,6 +179,12 @@ var _ = Describe("karpenter path B", func() {
 				Skip("dry-run result: path B created GPUNodeClaim and NodeClaim; EC2 answered with a capacity / quota error")
 			}
 			c.Measure("pool_to_bound_seconds", time.Since(start).Seconds(), "s")
+			if cur, err := env.get(ctx, gvkNodeClaim, "", claim.GetName()); err == nil {
+				nc = cur
+			}
+			if node, err := env.get(ctx, gvkNode, "", str(nc, "status", "nodeName")); err == nil {
+				c.Note("node %s: instance type %s, capacity type %s", node.GetName(), node.GetLabels()["node.kubernetes.io/instance-type"], node.GetLabels()["karpenter.sh/capacity-type"])
+			}
 			waitFor(ctx, "GPU CR in pool "+pool, 5*time.Minute, func() (string, bool) {
 				n := len(env.gpusOf(ctx, pool))
 				return fmt.Sprintf("%d GPU CRs", n), n > 0

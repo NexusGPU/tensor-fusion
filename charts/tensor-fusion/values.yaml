@@ -208,7 +208,7 @@ agent:
   
   image:
     repository: tensorfusion/tensor-fusion-agent
-    tag: "1.1.0"
+    tag: "1.1.1"
   
   resources:
     requests:
@@ -243,7 +243,7 @@ providerConfigs:
     # the hypervisor container in the GPUPool / TensorFusionCluster pod template.
     privilegedHypervisor: true
     images:
-      middleware: tensorfusion/vgpu-provider-nvidia:1.3.9
+      middleware: tensorfusion/vgpu-provider-nvidia:1.3.12
       remoteClient: tensorfusion/tensor-fusion-client:v2.25.0
       remoteWorker: tensorfusion/tensor-fusion-worker:v2.25.0
     inUseResourceNames:

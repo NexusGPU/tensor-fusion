@@ -8,6 +8,7 @@
 | `suite/` | Go + Ginkgo 的端到端用例（build tag `e2e`），靠 kubeconfig 驱动，对任何集群都能跑（EKS、裸金属） |
 | `suite/workloads/` | 在 Pod 里运行的探针与压测脚本（Python） |
 | `mock/` | 演练模式用的 mock accelerator 构建脚本 |
+| `kwok/` | 不需要云账号的一档：kind + KWOK 假节点 + Karpenter KWOK provider + chart + fake hypervisor（`fakehv/`）。见 6.9 |
 | `tools/report.py` | 把一次或多次运行的结果生成对比报告（Markdown + CSV + 图表用 JSON） |
 | `pricing/` | 实例单价表（来自 AWS Price List API），`make cost` 与 FinOps 用例共用 |
 | `GO-LIVE.md` | GPU 配额到位后的真实 GPU 执行步骤 |
@@ -30,6 +31,7 @@
 |---|---|---|---|
 | `real-gpu` | Pod 跑在真实 NVIDIA GPU 上 | 全部 | — |
 | `mock-gpu` | 演练：CPU 节点 + 仓库自带的 example accelerator（mock 设备，16 GiB / 312 TFLOPS） | webhook、调度与装箱、配额、分配记账、hypervisor / operator 重启恢复、Karpenter 扩缩容全链路、清理 | 任何与 CUDA 有关的事：显存 / 算力限额是否生效、容器内 GPU 是否可用、性能 |
+| `fake-gpu` | KWOK 假节点（没有 kubelet，Pod 不会真的启动）+ fake hypervisor 代写 GPU CR 与 `index_*` 容量 | 只有控制面：扩容器 / Karpenter 建多少 NodeClaim、从哪个 NodePool 建、GPU 就绪后调度器多久绑定、回收与清理、路径 B 的对象链 | 节点上的一切：hypervisor 本身、设备发现、limiter、device plugin、kubelet、镜像拉取、任何耗时的绝对值（节点启动与 GPU 注册的延迟是参数，不是测量） |
 | `no-gpu` | 不需要 GPU 的用例 | 控制面、准入、API | — |
 | `dry-run` | 需要 GPU 的用例做到「只差一块卡」 | 清单被准入接受、镜像与模型存在、脚本与判定逻辑可执行、Karpenter 为 GPU NodePool 创建了 NodeClaim 且 EC2 只因配额拒绝 | 功能本身 |
 
@@ -98,6 +100,7 @@ make report RUNS="results/<a> results/<b>"             # 多次运行并排对�
 | `smoke-nogpu` | 无 GPU | 27 | **7 分钟（实测）** | **约 $0.03（实测估算）** | 已执行 |
 | `rehearsal` | mock GPU（1–3 台 t3.medium spot） | 21 | **约 75 分钟（实测）** | **约 $0.35（实测估算）** | 已执行 |
 | `dryrun` | 无 GPU（1 台 CPU spot 节点） | 7 | **10 分钟（实测）** | **约 $0.05（实测估算）** | 已执行 |
+| `kwok` | 不需要云账号：一台有 docker 的 Linux 主机（kind 单节点，内存上限 6g） | 14 | 起栈 76 秒（实测）；已跑的 9 条合计约 10 分钟，全量约 30 分钟（预估） | $0 | 已执行 9 条：8 过、`KRP-B02` 失败；5 条未执行（9.6） |
 | `core` | 1–2 台 g4dn.xlarge | 13 | 约 40 分钟（预估） | 按需约 $1.0，spot 约 $0.5（预估） | 未执行 |
 | `isolation` | 1 台 g4dn.xlarge | 6 | 约 50 分钟（预估） | 按需约 $0.7（预估） | 未执行 |
 | `karpenter-finops` | 最多 3 台 g4dn.xlarge（+ 路径 B 的 1 台 g4dn.2xlarge） | 11 | 约 90 分钟（预估；`consolidateAfter=10m` 下每次等节点回收要 10 分钟以上） | 按需约 $1.7，spot 约 $0.9（预估） | 未执行（其中 9 条已在 mock 上演练） |
@@ -189,6 +192,7 @@ EKS 上全量跑一遍（smoke + core + isolation + karpenter-finops + perf-quic
 | KRP-A15 | karpenter / dryrun | chart 默认 NodeOverlay 的副作用 | 去掉本栈的防护 overlay 后，Pending 的 TF Pod 不应让非 TF NodePool 出现 NodeClaim | **known-fail**（G-01），dry-run 档已复现 |
 | KRP-A02 | karpenter / rehearsal | 路径 A 核心闭环：GPU 不足 → 扩容器建 NodeClaim → 新节点 → Pod Running | 一个 Pending Pod 只新增 1 个 NodeClaim，属于目标 NodePool、不带 `do-not-disrupt`；Pod Running；记录 `expansion-source`、「节点就绪 → Pod 绑定」耗时、节点小时 | mock-gpu：`consolidateAfter=5m` 时失败 1 次（G-16），`=10m` 时通过（381s，其中 330s 在等调度器重试）；真实 GPU 未执行 |
 | KRP-A16 | karpenter / rehearsal | 扩容节点的 GPU 就绪后 Pending Pod 应及时绑定 | `KRP-A02` 测得的「节点 Initialized → Pod 绑定」< 120s | **known-fail**（G-16，mock 实测 330s） |
+| KRP-A17 | karpenter / kwok | N 个整卡 Pod 同时 Pending 时不多扩 | 默认 N=4（`E2E_BURST`）：全程出现过的新 NodeClaim 恰好 N 个、全部来自 TF 的 NodePool；Pod 落在 N 个节点上；全部 Running 后 60 秒内不再出现新的 NodeClaim | 已过（fake-gpu，4 → 4，45s）；真实 GPU 未执行 |
 | KRP-A03 | karpenter / rehearsal | 一次扩容承接多个 Pending Pod | 3 个 20% 的 Pod 只新增 1 个 NodeClaim，落在同一节点同一张卡 | 已过（mock-gpu）；真实 GPU 未执行 |
 | KRP-A09 | karpenter / rehearsal | 负载清空后节点被回收 | 所有空 GPU 节点的 Node / NodeClaim / GPUNode / GPU CR 消失；记录回收耗时、是否先被打 `should-delete` | 已过（mock-gpu）；真实 GPU 未执行 |
 | FIN-01 | karpenter / rehearsal | FinOps：N=3 个分片负载 vs 整卡基线 | 分片方案只用 1 个节点，整卡基线用更多节点；输出两种方案的节点数、节点小时、按需成本、节省比例（演练时用 g4dn.xlarge 单价代入并标 `mock-gpu`） | 已过（mock-gpu）；真实 GPU 未执行 |
@@ -215,6 +219,48 @@ spot 与 on-demand 回退：NodePool 同时允许两种容量类型，节点账�
 | DRY-ISO-01 | GPU 档位清单 | 11 份清单（soft / hard / shared 探针、vLLM soft / hard / eager、ORT、TorchBench、MLPerf、原生基线）通过 server-side dry-run | 已过（dry-run） |
 | DRY-IMG-01 | 镜像与模型 | 所有用到的镜像在 registry 上能解析出 digest 与 linux/amd64 压缩大小；LLM 模型的 `config.json` 不带 token 可访问 | 已过（dry-run） |
 | KRP-A08 / KRP-A15 / KRP-B02 | 见 6.6 | | |
+
+### 6.9 KWOK 档（不需要云账号，label `kwok`）
+
+目的：在没有 AWS 账号、没有 GPU 的时候，仍然能回归 Karpenter 集成的**控制面**——尤其是 2.17.24 修的「GPU 就绪后 Pending Pod 不被重新入队」（G-16，修复前 330s）。
+
+组成（`kwok/up.sh`，参数在 `kwok/lib.sh`）：
+
+| 组件 | 版本 / 来源 | 说明 |
+|---|---|---|
+| kind 单节点 | `kindest/node:v1.36.4` | 唯一有 kubelet 的节点，label `e2e.tensor-fusion.ai/role=system`，跑全部控制面 |
+| KWOK | v0.8.0（`kwok.yaml` + `stage-fast.yaml`） | 假 kubelet：给假节点续心跳，把调度到假节点上的 Pod 标成 Running / Ready |
+| Karpenter | kubernetes-sigs/karpenter **v1.14.1** 的 `kwok/` provider，从源码构建（上游不发布镜像） | 与 EKS 栈同一个 Karpenter 核心版本；`FEATURE_GATES` 含 `NodeOverlay=true`；机型来自 `kwok/instance-types.json`（g4dn.xlarge / g4dn.2xlarge / g5.xlarge / g6.xlarge / c5.large / m5.large / t3.large，按需价取自 `pricing/us-west-2.json`，spot 按 0.4 折） |
+| NodePool | `tf-gpu`（weight 10，WhenEmpty，`consolidateAfter=1m`）、`tf-cpu`（weight 100，30s），`KWOKNodeClass/tf-kwok`（`nodeRegistrationDelay=10s`） | 与 EKS 栈同形；GPU NodePool 的节点带 `nvidia.com/gpu.present=true` 与 `e2e.tensor-fusion.ai/shared-pool=true` |
+| TensorFusion | 本仓库 chart + 发布镜像 `tensor-fusion-operator:2.17.24` | 与 rehearsal 相同的 values；差异：GreptimeDB、alertmanager、hypervisor 的 vector sidecar 关闭，controller 去掉 `-enable-alert`、`-enable-auto-scale`（依赖 TSDB）；`karpenterNodeOverlay.requirements` 改为 `karpenter.kwok.sh/instance-family In [g4dn, g5, g6]`（chart 默认值用的是 AWS provider 的 label，KWOK provider 不产生这些 label） |
+| fake hypervisor | `kwok/fakehv`（Go，build tag `e2e`，在主机上以 kind 的 kubeconfig 运行） | 见下 |
+
+fake hypervisor 代写的内容，逐项对应真实 hypervisor 的写入点：
+
+| 对象 | 字段 | 对应代码 |
+|---|---|---|
+| `Node.status.capacity / allocatable` | 16 个 `tensor-fusion.ai/index_<hex>`，各 36 | `pkg/hypervisor/backend/kubernetes/deviceplugin.go` |
+| `GPU`（每个假设备一个，label `e2e.tensor-fusion.ai/fake=true`） | label `managed-by` / `gpupool`、指向 GPUNode 的 controller ownerRef、`status.capacity`、首次的 `available`、`uuid`、`gpuModel`、`vendor=NVIDIA`、`index`、`numaNode`、`isolationMode` / `isolationPolicy`（取自 operator 写进 hypervisor Pod 的环境变量）、`nodeSelector`、`usedBy`、`phase=Pending`、`message` | `KubeletBackend.mutateGPUResourceState` |
+| `GPUNode.status` | `totalTFlops`、`totalVRAM`、`totalGPUs`、`managedGPUs`、`managedGPUDeviceIDs`、`nodeInfo` | `APIClient.UpdateGPUNodeStatus` |
+
+它只处理同时满足三个条件的节点：带 `kwok.x-k8s.io/node=fake`、已有 GPUNode（即已被 TensorFusion 纳管）、hypervisor Pod 为 Running；并且在该 Pod 首次 Running 之后等 `KWOK_FAKE_HV_DELAY`（默认 20s，代表驱动初始化 + hypervisor 启动 + 设备发现）才写。`phase=Running`、之后的 `available`、`runningApps` 仍然由 operator 写，与生产一致。每节点 1 张卡：g4dn → T4（65 TFLOPS / 15360Mi）、g5 → A10G（125 / 23028Mi）、g6 → L4（121 / 23034Mi）。
+
+这一档**不能证明**的：真实设备与驱动、hypervisor 进程本身（启动、重启恢复、device plugin 注册、worker 记账、指标）、limiter 与隔离、kubelet 行为（镜像拉取、探针、驱逐）、EC2 侧的一切（配额、容量不足、spot 中断、AMI）。假节点上「Pod Running」只表示调度器绑定了它。所有耗时里只有控制面的反应时间是测量值；节点启动与 GPU 注册的延迟是参数。
+
+用例（14 条）：`KRP-00`、`KRP-01`、`KRP-C01`、`INS-03`、`KRP-A08`、`KRP-A15`、`KRP-A02`、`KRP-A16`、`KRP-A03`、`KRP-A17`、`KRP-A09`、`FIN-01`、`NLC-09`、`KRP-B02`。与其它档共用同一份用例代码；KWOK 特有的只有 `E2E_GPU_MODE=fake`（mode 记为 `fake-gpu`）、路径 B 的 NodeClass 引用（`KWOKNodeClass`）、`FIN-01` 的稳态窗口（`E2E_FINOPS_HOLD=45s`）。`KRP-A02` 在所有档都新增了 `gpu_running_to_pod_bound_seconds`（GPU CR 变为 Running → Pod 绑定，500ms 采样），`KRP-A16` 对它的判据是 < 30s。`KRP-A15` 在没有防护 overlay 的集群上不再跳过，直接对 chart 自带的 overlay 断言。
+
+```bash
+make kwok-up kwok-test kwok-down                      # 本机有 docker 时
+KWOK_SSH_HOST=<主机> make kwok-up kwok-test kwok-down  # checkout 拷到该主机上执行，结果拷回 results/
+FOCUS='KRP-A02|KRP-A16' make kwok-test
+TF_RELEASE_TAG=2.17.23 make kwok-up                   # 换被测版本（对比修复前）
+```
+
+镜像站、代理、主机路径通过环境变量给（`KWOK_IMAGE_MIRROR`、`KWOK_K8S_IMAGE_MIRROR`、`KWOK_PULL_TOOL=crane`、`GOPROXY`、`KWOK_HOME`；远程执行时放在 `KWOK_REMOTE_ENV` 指向的远端文件里），不写进仓库。
+
+主机前提：`fs.inotify.max_user_instances` 要有余量（kind 的已知要求，建议 ≥ 512）。kind 节点容器里的 kubelet、containerd 以主机 root 身份占用 inotify 实例，主机上已有别的 Kubernetes 发行版在跑时默认的 128 可能不够，表现为 `kubeadm init` 超时、节点日志里 `error creating fsnotify watcher: too many open files`（未调高时的现象；调到 1024 后一次成功）。
+
+路径 B：chart 的 ClusterRole 不允许 operator 读取任何 Karpenter NodeClass，`KRP-B02` 按原样必然失败；`KWOK_NODECLASS_RBAC=1 make kwok-up` 给 KWOKNodeClass 补上读权限，用来继续验证路径 B 的后半段。
 
 ## 7. 性能与隔离效果的设计（`isolation`、`perf`）
 
@@ -409,6 +455,25 @@ FinOps（`FIN-01`，mock，按 g4dn.xlarge 按需 $0.526/h 代入，每个场景
 
 `UPG-03`：卸载脚本 190s 完成，12 个 CRD、webhook、namespace、NodeOverlay 均消失，节点上没有残留的 `tensor-fusion.ai/*` label 与容量。
 
-### 9.6 镜像拉取的结论
+### 9.6 `kwok`（fake-gpu，2026-10-12）
+
+环境：kind v0.33.0 / Kubernetes 1.36.4、KWOK v0.8.0、Karpenter v1.14.1 KWOK provider（节点名缩短，见 `kwok/up.sh`）、chart 为仓库 checkout、operator `2.17.25`（核心三条在 `2.17.24` 上也各跑过，数字相同）。`up.sh` 从零到可用 76 秒。fake hypervisor 延迟 20s，`nodeRegistrationDelay=10s`，GPU NodePool `consolidateAfter=1m`。全部是控制面结论（mode `fake-gpu`，见第 2 节）。只保留了每批的汇总输出，JUnit / `summary.json` 没有留存。
+
+| ID | 结果 | 实测 |
+|---|---|---|
+| KRP-A02 | 通过（2.17.24 两次、2.17.25 一次） | 一个 Pending Pod 恰好 1 个 NodeClaim（扩容器创建，NodePool `tf-gpu`）；NodeClaim 10–15s，Pod Running 45s；**GPU CR Running → Pod 绑定 < 1s**（500ms 采样、条件时间戳 1s 精度，读数为 0）；节点 Initialized → Pod 绑定 19–20s，等于 fake hypervisor 的延迟 |
+| KRP-A16 | 通过 | 同上两个数，判据 < 120s 与 < 30s。修复前（2.17.23，mock，EKS）为 330s；这一档没有在 2.17.23 上对照 |
+| KRP-A17 | 通过（2.17.24、2.17.25 各一次） | 4 个整卡 Pod → 恰好 4 个 NodeClaim、4 个节点，45s 全部 Running，之后 60s 内没有多余的 NodeClaim |
+| KRP-A09 | 通过 | 2.17.25：4 个空节点 90s 内全部消失；2.17.24：1 个节点 75s。都是 NodePool 的 `consolidateAfter` 先到，没有出现 `should-delete` |
+| KRP-A15 | 通过（2.17.24、2.17.25 各一次） | overlay 的 requirements 限定为 GPU 机型族之后，Pending 的 TF Pod 90s 内没有让 `tf-cpu` 出现 NodeClaim。chart 默认的 requirements 用的是 AWS provider 的 label，AWS 上仍未复测 |
+| KRP-B02 | **失败**（按 chart 原样） | pool 5–20s 内建出 GPUNodeClaim（`g4dn.2xlarge`，`hourly-pricing=0.752000`），`CloudVendorConnectionReady=True`——2.17.23 的 G-08 已不再出现；但 GPUNodeClaim controller 报 `failed to query NodeClass tf-kwok: ... is forbidden: User "system:serviceaccount:tensor-fusion-sys:tensor-fusion-sys" cannot get resource "kwoknodeclasses"`，没有 NodeClaim。chart 的 ClusterRole 里没有任何 Karpenter NodeClass 资源的规则 |
+| KRP-B02（`KWOK_NODECLASS_RBAC=1`） | 未完成 | 补上读权限后：同名 NodeClaim 立即建出（owner 为 GPUNodeClaim、带 `do-not-disrupt`、请求 `nvidia.com/gpu: 1`），KWOK 节点 Ready；之后 100 多秒内 GPUNodeClaim 没有到 Bound、该节点没有留下 GPUNode。时间用完，没有诊断，不能排除是 KWOK 的假象（节点的 `kubernetes.io/hostname` label 是 NodeClaim 名而不是节点名） |
+| INS-03 | 通过 | 冷启动到 GPU Running 35s；节点带 16 个 `index_*`、归属 NodePool |
+| KRP-00、KRP-01 | 通过 | NodePool / KWOKNodeClass Ready，`NodeOverlay=true`；overlay 被 Karpenter 接受，NodeClaim RBAC 就位 |
+| KRP-C01、KRP-A08、KRP-A03、FIN-01、NLC-09 | 未执行 | 时间不够 |
+
+这一档顺带暴露的一点：hypervisor 给每个 GPU CR 打 `tensor-fusion.ai/managed-by=<节点名>`，label 值上限 63 字节。KWOK provider 原本的节点名有 65 个字符以上，fake hypervisor（写法与真实 hypervisor 相同）被 API server 拒绝：`metadata.labels: Invalid value: "kwok-tensor-fusion-…": must be no more than 63 bytes`，该节点永远注册不了 GPU。真实 hypervisor 在节点名超过 63 个字符的集群上会遇到同样的事（未在真实二进制上复现）。
+
+### 9.7 镜像拉取的结论
 
 没有上 ECR pull-through cache：TensorFusion 的镜像在 Docker Hub，pull-through 需要把 Docker Hub 凭证放进 Secrets Manager；而这些镜像一共不到 250 MiB，mock 节点上从节点就绪到 hypervisor Running 约 15 秒。值得关心的只有负载镜像：PyTorch 3.2 GiB、vLLM 11.9 GiB。对策是每个节点只拉一次（perf 用例在同一节点上串行）、GPU 节点根卷吞吐调到 300 MiB/s、模型与 pip 包缓存在节点 hostPath。真实拉取耗时会由 Pod 事件记录，首次 GPU 运行后再决定是否值得预拉。
