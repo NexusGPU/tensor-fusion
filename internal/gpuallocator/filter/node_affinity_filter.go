@@ -6,7 +6,7 @@ import (
 	"sort"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/pkg/constants"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	schedulingcorev1 "k8s.io/component-helpers/scheduling/corev1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -62,8 +62,8 @@ func (f *NodeAffinityFilter) Filter(ctx context.Context, workerPodKey tfv1.NameN
 func (f *NodeAffinityFilter) filterRequired(ctx context.Context, gpus []*tfv1.GPU) ([]*tfv1.GPU, error) {
 	var filteredGPUs []*tfv1.GPU
 	for _, gpu := range gpus {
-		nodeName, exists := gpu.Labels[constants.LabelKeyOwner]
-		if !exists {
+		nodeName := utils.GPUNodeNameOfGPU(gpu)
+		if nodeName == "" {
 			continue
 		}
 
@@ -92,8 +92,8 @@ func (f *NodeAffinityFilter) filterRequired(ctx context.Context, gpus []*tfv1.GP
 func (f *NodeAffinityFilter) filterPreferred(ctx context.Context, gpus []*tfv1.GPU) ([]*tfv1.GPU, error) {
 	gpuScores := make([]gpuScore, 0, len(gpus))
 	for _, gpu := range gpus {
-		nodeName, exists := gpu.Labels[constants.LabelKeyOwner]
-		if !exists {
+		nodeName := utils.GPUNodeNameOfGPU(gpu)
+		if nodeName == "" {
 			continue
 		}
 

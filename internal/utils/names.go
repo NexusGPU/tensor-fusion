@@ -73,3 +73,35 @@ func shortHash(s string, length int) string {
 	}
 	return hex
 }
+
+const (
+	// MaxLabelValueLength is the API server's limit for a label value, in bytes.
+	MaxLabelValueLength = 63
+	// labelValueHashLength is the number of hex chars that keep a truncated
+	// label value unique.
+	labelValueHashLength = 10
+)
+
+// LabelSafeValue maps an object name to a value the API server accepts as a
+// label value. Object names (nodes in particular) may be up to 253 characters,
+// a label value at most 63.
+//
+// A name that fits is returned unchanged, so every object written before this
+// function existed keeps its label and stays selectable. A longer name becomes
+// "<first characters>-<10 hex of its SHA-256>", exactly as long as allowed at
+// most. Writers and selectors must both go through this function; code that
+// needs the name itself has to read it from somewhere else (for a GPU: its
+// GPUNode owner reference, see GPUNodeNameOfGPU), never from the label.
+func LabelSafeValue(name string) string {
+	if len(name) <= MaxLabelValueLength {
+		return name
+	}
+	hash := shortHash(name, labelValueHashLength)
+	// A label value starts and ends with an alphanumeric character; the hash
+	// takes care of the end, the name's own first character of the start.
+	prefix := strings.TrimRight(name[:MaxLabelValueLength-labelValueHashLength-1], "-_.")
+	if prefix == "" {
+		return hash
+	}
+	return prefix + "-" + hash
+}
