@@ -12,6 +12,8 @@ import (
 	. "github.com/onsi/gomega"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Karpenter compatibility, path B: GPUPool provisioningMode=Karpenter. The
@@ -24,7 +26,47 @@ import (
 // Path B cannot be rehearsed on mock GPUs either: instance types come from the
 // operator's built-in GPU price table and the NodeClaim requests nvidia.com/gpu.
 
-const pathBPool = "karp"
+const (
+	pathBPool           = "karp"
+	pathBPoolName       = "tensor-fusion-" + pathBPool
+	pathBCleanupTimeout = 10 * time.Minute
+	// A label value holds at most 63 bytes; a node name up to 253.
+	maxLabelValueLen = 63
+)
+
+// pathBCleanupSeconds is how long the last removal of the path B pool took
+// until nothing of it was left; 0 until a removal has completed.
+var pathBCleanupSeconds float64
+
+// pathBLeftovers lists what still exists of the path B pool: the pool, its
+// GPUNodeClaims, their NodeClaims and nodes, its GPUNodes and GPUs.
+func pathBLeftovers(ctx context.Context) string {
+	var left []string
+	if _, err := env.get(ctx, gvkGPUPool, "", pathBPoolName); err == nil {
+		left = append(left, "GPUPool/"+pathBPoolName)
+	}
+	owned := client.MatchingLabels{tfDomain + "/managed-by": pathBPoolName}
+	claims, _ := env.list(ctx, gvkNodeClaimT, "", owned)
+	for _, o := range claims {
+		left = append(left, "GPUNodeClaim/"+o.GetName())
+	}
+	gpuNodes, _ := env.list(ctx, gvkGPUNode, "", owned)
+	for _, o := range gpuNodes {
+		left = append(left, "GPUNode/"+o.GetName())
+	}
+	for _, g := range env.gpusOf(ctx, pathBPoolName) {
+		left = append(left, "GPU/"+g.Name)
+	}
+	for _, gvk := range []schema.GroupVersionKind{gvkNodeClaim, gvkNode} {
+		items, _ := env.list(ctx, gvk, "", client.HasLabels{tfDomain + "/node-provisioner"})
+		for _, o := range items {
+			if strings.HasPrefix(o.GetLabels()[tfDomain+"/node-provisioner"], pathBPoolName+"-") {
+				left = append(left, gvk.Kind+"/"+o.GetName())
+			}
+		}
+	}
+	return strings.Join(left, ", ")
+}
 
 // addPathBPool adds GPUPool tensor-fusion-karp to the chart's TensorFusionCluster
 // and registers its removal.
@@ -86,18 +128,22 @@ func addPathBPool(ctx context.Context, instanceTypes []string, capacityType stri
 			}
 		}
 		_ = env.patchMerge(bg, cur, toJSON(map[string]any{"spec": map[string]any{"gpuPools": rest}}))
-		// KRP-B09: deleting the pool must take every GPUNodeClaim / NodeClaim with it.
-		deadline := time.Now().Add(10 * time.Minute)
+		// KRP-B09: deleting the pool must take every GPUNodeClaim, NodeClaim,
+		// GPUNode and GPU of the pool with it. An object left behind fails the case.
+		removed := time.Now()
+		left := ""
+		deadline := removed.Add(pathBCleanupTimeout)
 		for time.Now().Before(deadline) {
-			claims, _ := env.list(bg, gvkNodeClaimT, "")
-			if len(claims) == 0 {
+			if left = pathBLeftovers(bg); left == "" {
+				pathBCleanupSeconds = time.Since(removed).Seconds()
+				GinkgoWriter.Printf("path B pool removed: nothing left after %.0fs\n", pathBCleanupSeconds)
 				return
 			}
-			time.Sleep(15 * time.Second)
+			time.Sleep(5 * time.Second)
 		}
-		GinkgoWriter.Printf("WARNING: GPUNodeClaims still present 10 min after removing pool %s\n", pathBPool)
+		Fail(fmt.Sprintf("%s after removing pool %s: still present: %s", pathBCleanupTimeout, pathBPool, left))
 	})
-	return "tensor-fusion-" + pathBPool
+	return pathBPoolName
 }
 
 // pathBNodeClassRef names the NodeClass path B NodeClaims use: the stack's
@@ -112,8 +158,8 @@ func pathBNodeClassRef() map[string]any {
 var _ = Describe("karpenter path B", func() {
 	Register(Case{
 		ID: "KRP-B02", Title: "路径 B：容量水位 → GPUNodeClaim → 同名 NodeClaim → 节点 → Bound（含 B01 连接检查、B09 删除 Pool 清理）",
-		Tiers: []string{TierKarpenter, TierDryRun, TierKWOK}, Needs: []string{NeedTF, NeedKarpenter, NeedNodeClass, NeedFixedImg}, Timeout: 40 * time.Minute, NoNS: true,
-		KnownIssue: "<= 2.17.23: provisioningMode=Karpenter pools never reconcile (pricing provider not initialised). 2.17.24 / 2.17.25: the pool reconciles and creates the GPUNodeClaim, but the chart's ClusterRole lets the operator read no Karpenter NodeClass kind, so the GPUNodeClaim controller fails with `failed to query NodeClass ... is forbidden` and no NodeClaim is created",
+		Tiers: []string{TierKarpenter, TierDryRun, TierKWOK}, Needs: []string{NeedTF, NeedKarpenter, NeedNodeClass, NeedFixedImg}, Timeout: 40 * time.Minute,
+		KnownIssue: "<= 2.17.23: provisioningMode=Karpenter pools never reconcile (pricing provider not initialised). 2.17.24 - 2.17.27: the GPUNodeClaim and (given a chart whose ClusterRole lets the operator read the NodeClass, >= 1.8.9) the NodeClaim and the node appear, but the node controller matches nodes to pools by node selector only, so the node of a pool without one gets no GPUNode, no hypervisor, and the claim never becomes Bound; and a deleted pool leaves its GPUNodeClaim behind",
 		Run: func(ctx SpecContext, c *C) {
 			// g4dn.2xlarge: the built-in price table cannot resolve g4dn.xlarge's GPU
 			// model ("NVIDIA T4 Tensor Core" has no TFLOPS entry), so it is skipped
@@ -185,10 +231,55 @@ var _ = Describe("karpenter path B", func() {
 			if node, err := env.get(ctx, gvkNode, "", str(nc, "status", "nodeName")); err == nil {
 				c.Note("node %s: instance type %s, capacity type %s", node.GetName(), node.GetLabels()["node.kubernetes.io/instance-type"], node.GetLabels()["karpenter.sh/capacity-type"])
 			}
-			waitFor(ctx, "GPU CR in pool "+pool, 5*time.Minute, func() (string, bool) {
-				n := len(env.gpusOf(ctx, pool))
-				return fmt.Sprintf("%d GPU CRs", n), n > 0
+			var gpu GPU
+			waitFor(ctx, "a Running GPU CR in pool "+pool, 5*time.Minute, func() (string, bool) {
+				for _, g := range env.gpusOf(ctx, pool) {
+					if g.Phase == "Running" {
+						gpu = g
+						return "", true
+					}
+				}
+				return fmt.Sprintf("%d GPU CRs, none Running", len(env.gpusOf(ctx, pool))), false
 			})
+			c.Measure("pool_to_gpu_running_seconds", time.Since(start).Seconds(), "s")
+			Expect(gpu.Node).To(Equal(str(nc, "status", "nodeName")), "the GPU belongs to the node of the NodeClaim")
+			if gn, err := env.get(ctx, gvkGPUNode, "", gpu.Node); Expect(err).NotTo(HaveOccurred()) {
+				Expect(gn.GetLabels()).To(HaveKeyWithValue(tfDomain+"/node-provisioner", claim.GetName()))
+				Expect(gn.GetLabels()).To(HaveKeyWithValue(tfDomain+"/managed-by", pool))
+			}
+
+			By("a workload that asks for this pool is scheduled onto the provisioned node")
+			podStart := time.Now()
+			Expect(env.create(ctx, tfPod(c.NS, "on-path-b", merge(fraction(gpu, "soft", 20, 2), map[string]string{lblPool: pool})))).To(Succeed())
+			pod, _ := env.waitPodReady(ctx, c.NS, "on-path-b", 5*time.Minute)
+			c.Measure("pod_create_to_running_seconds", time.Since(podStart).Seconds(), "s")
+			Expect(str(pod, "spec", "nodeName")).To(Equal(gpu.Node))
+			Expect(podGPUIDs(pod)).To(ConsistOf(gpu.Name))
+			Consistently(func() int { return len(mustList(ctx, gvkNodeClaimT)) }, 30*time.Second, 5*time.Second).
+				Should(Equal(1), "a pool at its minimum does not provision a second node")
+
+			By("KRP-B09: removing the pool removes the GPUNodeClaim, NodeClaim, node, GPUNode and GPU")
+			// The removal itself is the cleanup registered by addPathBPool; it fails
+			// this case when anything is left, and KRP-B10 reports how long it took.
+			env.delete(ctx, pod)
+		},
+	})
+
+	Register(Case{
+		ID: "KRP-B10", Title: "路径 B：删除 Pool 后 GPUNodeClaim / NodeClaim / 节点 / GPUNode / GPU 全部回收（接在 KRP-B02 之后）",
+		Tiers: []string{TierKarpenter, TierKWOK}, Needs: []string{NeedTF, NeedKarpenter, NeedNodeClass, NeedFixedImg}, Timeout: 15 * time.Minute, NoNS: true,
+		Run: func(ctx SpecContext, c *C) {
+			if pathBCleanupSeconds == 0 {
+				Skip("KRP-B02 did not get as far as removing its pool in this run")
+			}
+			Expect(pathBLeftovers(ctx)).To(BeEmpty())
+			c.Measure("pool_delete_to_clean_seconds", pathBCleanupSeconds, "s")
 		},
 	})
 })
+
+func mustList(ctx context.Context, gvk schema.GroupVersionKind) []unstructured.Unstructured {
+	items, err := env.list(ctx, gvk, "")
+	Expect(err).NotTo(HaveOccurred())
+	return items
+}

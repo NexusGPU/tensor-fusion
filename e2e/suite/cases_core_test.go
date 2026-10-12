@@ -148,7 +148,7 @@ var _ = Describe("discovery", func() {
 			Expect(str(gn, "status", "phase")).To(Equal("Running"))
 
 			By("hypervisor pod is Ready and owned by both the GPUNode and the Node (so Karpenter may delete the node under it)")
-			hv, err := env.get(ctx, gvkPod, env.TFNamespace, "hypervisor-"+g.Node)
+			hv, err := env.get(ctx, gvkPod, env.TFNamespace, hypervisorPodName(g.Node))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(podReady(hv)).To(BeTrue(), podWhy(hv))
 			kinds := map[string]bool{}
@@ -338,7 +338,7 @@ var _ = Describe("recovery", func() {
 			before, _ := env.get(ctx, gvkGPU, "", gid)
 			availBefore := toGPU(before).AvailTflops
 
-			hvName := "hypervisor-" + node
+			hvName := hypervisorPodName(node)
 			old, err := env.get(ctx, gvkPod, env.TFNamespace, hvName)
 			Expect(err).NotTo(HaveOccurred())
 			oldUID := old.GetUID()

@@ -17,7 +17,7 @@ fi
 docker network rm "$KWOK_CLUSTER" >/dev/null 2>&1 || true
 rm -f "$KUBECONFIG"
 if [ "${KWOK_PURGE:-}" = "1" ]; then
-  docker image rm "${KWOK_CLUSTER}/karpenter-kwok:${KARPENTER_VERSION}-shortnames" >/dev/null 2>&1 || true
+  docker image rm "${KWOK_CLUSTER}/karpenter-kwok:${KARPENTER_VERSION}" >/dev/null 2>&1 || true
   rm -rf "${KWOK_HOME}"
 fi
 left=$(docker ps -a --filter "name=^${KWOK_CLUSTER}" --format '{{.Names}}' | tr '\n' ' ')
