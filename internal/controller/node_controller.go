@@ -96,9 +96,19 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.List(ctx, &poolList); err != nil {
 		return ctrl.Result{}, fmt.Errorf("can not list gpuPool : %w", err)
 	}
-	pool, matched, err := getMatchedPoolName(node, poolList.Items)
+	// A node launched for a GPUNodeClaim belongs to the pool of that claim. A
+	// pool that provisions its nodes need not (and by the API's contract does
+	// not) have a node selector, so the selector match alone would leave such a
+	// node without a GPUNode forever.
+	pool, matched, err := getProvisionerPool(ctx, r.Client, provisioner, poolList.Items)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if !matched {
+		pool, matched, err = getMatchedPoolName(node, poolList.Items)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	if !matched {
 		existingGPUNode := &tfv1.GPUNode{}
@@ -390,6 +400,37 @@ func getMatchedPoolName(node *corev1.Node, poolList []tfv1.GPUPool) (*tfv1.GPUPo
 			if matches {
 				return &pool, true, nil
 			}
+		}
+	}
+	return nil, false, nil
+}
+
+// getProvisionerPool returns the pool that provisioned a node: the owner of the
+// GPUNodeClaim the node's provisioner label names. It reports no match when
+// the node has no such label, the claim is gone, or the claim's pool does not
+// provision nodes; the caller then falls back to the pools' node selectors.
+func getProvisionerPool(
+	ctx context.Context, c client.Reader, provisioner string, poolList []tfv1.GPUPool,
+) (*tfv1.GPUPool, bool, error) {
+	if provisioner == "" {
+		return nil, false, nil
+	}
+	claim := &tfv1.GPUNodeClaim{}
+	if err := c.Get(ctx, client.ObjectKey{Name: provisioner}, claim); err != nil {
+		if errors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("failed to get GPUNodeClaim provisioner(%s): %w", provisioner, err)
+	}
+	poolName := claim.Labels[constants.LabelKeyOwner]
+	for i := range poolList {
+		pool := &poolList[i]
+		if pool.Name != poolName || pool.Spec.NodeManagerConfig == nil {
+			continue
+		}
+		mode := pool.Spec.NodeManagerConfig.ProvisioningMode
+		if mode == tfv1.ProvisioningModeKarpenter || mode == tfv1.ProvisioningModeProvisioned {
+			return pool, true, nil
 		}
 	}
 	return nil, false, nil
