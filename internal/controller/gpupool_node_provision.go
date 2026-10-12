@@ -9,6 +9,7 @@ import (
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/common"
 	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/types"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -211,6 +212,7 @@ func (r *GPUPoolReconciler) reconcilePoolCapacityWithProvisioner(ctx context.Con
 				return
 			}
 			log.Info("Created new GPUNode claim", "gpuNodeClaimName", nodeClaim.NodeName)
+			metrics.SetAutoscalingMetrics(pool.Name, true)
 			resultMu.Lock()
 			newCreatedNodes[nodeClaim.NodeName] = tfv1.Resource{
 				Tflops: nodeClaim.TFlopsOffered,

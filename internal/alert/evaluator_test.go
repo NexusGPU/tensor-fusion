@@ -163,7 +163,7 @@ var _ = Describe("AlertEvaluator", func() {
 		It("should render query template correctly", func() {
 			rule := createTestRule("test-rule")
 
-			query, err := renderQueryTemplate(rule)
+			query, err := renderQueryTemplate(rule, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(query).To(ContainSubstring("80"))
 			Expect(query).To(ContainSubstring("now() - '1m'::INTERVAL"))
@@ -174,7 +174,7 @@ var _ = Describe("AlertEvaluator", func() {
 			rule := createTestRule("test-rule")
 			rule.Query = "SELECT * FROM metrics WHERE value > {{ .InvalidField | invalid}}"
 
-			_, err := renderQueryTemplate(rule)
+			_, err := renderQueryTemplate(rule, nil)
 			Expect(err).To(HaveOccurred())
 		})
 	})

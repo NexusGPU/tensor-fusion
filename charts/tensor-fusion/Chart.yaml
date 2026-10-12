@@ -21,4 +21,10 @@ version: 1.8.8
 # incremented each time you make changes to the application. Versions are not expected to
 # follow Semantic Versioning. They should reflect the version the application is using.
 # It is recommended to use it with quotes.
+#
+# The controller image and the default hypervisor image of the chart-managed
+# pool (cluster.hypervisorImage) both use this tag, so it must name a release
+# for which tensorfusion/tensor-fusion-operator and
+# tensorfusion/tensor-fusion-hypervisor images exist.
+#
 appVersion: "2.17.3"

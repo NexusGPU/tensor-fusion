@@ -11,6 +11,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -40,6 +41,13 @@ type State struct {
 	// drop the stale State so its Recommendation / ActiveCronScalingRule /
 	// AppliedRecommendedReplicas / conditions don't pollute the new workload.
 	uid string
+	// lastResourceChange is when the resources of a running worker were last
+	// changed in place. It is kept in memory only: after an operator restart
+	// the first change is not held back by the minimum interval.
+	lastResourceChange time.Time
+	// changeBounds describes the bounds that limited the latest recommendation
+	// ("recommended X, applied Y because of Z"); empty when none did.
+	changeBounds string
 }
 
 // MatchesUID reports whether this State is currently bound to the given API
@@ -195,12 +203,94 @@ func (w *State) updateCurrentActiveWorkers(podList *corev1.PodList) {
 func (w *State) AddSample(sample *metrics.WorkerUsage) {
 	w.Mu.Lock()
 	defer w.Mu.Unlock()
-	sampler, exists := w.WorkerUsageSamplers[sample.WorkerName]
+	// Samplers are kept per worker Pod name. Usage rows written by the
+	// hypervisor identify the worker by Pod UID, so resolve that to the name;
+	// otherwise the sampler would be dropped again with every refresh of the
+	// active workers, and with it the VRAM peak of the current window.
+	key := sample.WorkerName
+	if _, active := w.CurrentActiveWorkers[key]; !active {
+		for name, pod := range w.CurrentActiveWorkers {
+			if pod != nil && string(pod.UID) == sample.WorkerName {
+				key = name
+				break
+			}
+		}
+	}
+	sampler, exists := w.WorkerUsageSamplers[key]
 	if !exists {
 		sampler = metrics.NewWorkerUsageSampler()
-		w.WorkerUsageSamplers[sample.WorkerName] = sampler
+		w.WorkerUsageSamplers[key] = sampler
 	}
 	sampler.AddSample(w.WorkerUsageAggregator, sample)
+}
+
+// MarkResourcesChanged records that the resources of a running worker were
+// changed in place at the given time.
+func (w *State) MarkResourcesChanged(at time.Time) {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
+	if at.After(w.lastResourceChange) {
+		w.lastResourceChange = at
+	}
+}
+
+// LastResourceChange returns when the resources of a running worker were last
+// changed in place; the zero time when that did not happen since the operator
+// started.
+func (w *State) LastResourceChange() time.Time {
+	w.Mu.RLock()
+	defer w.Mu.RUnlock()
+	return w.lastResourceChange
+}
+
+// SetChangeBounds stores the description of the bounds that limited the latest
+// recommendation, for the event recorded when it is applied.
+func (w *State) SetChangeBounds(description string) {
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
+	w.changeBounds = description
+}
+
+// ChangeBounds returns the description stored by SetChangeBounds.
+func (w *State) ChangeBounds() string {
+	w.Mu.RLock()
+	defer w.Mu.RUnlock()
+	return w.changeBounds
+}
+
+// WorkerResourcesRange returns, per quantity, the lowest and the highest value
+// the workers that receive recommendations currently hold. It reports false
+// when no such worker has readable resource annotations.
+func (w *State) WorkerResourcesRange() (lowest, highest tfv1.Resources, known bool) {
+	w.Mu.RLock()
+	defer w.Mu.RUnlock()
+	for _, worker := range w.CurrentActiveWorkers {
+		if worker == nil || isWorkerHasDedicatedGPU(worker) {
+			continue
+		}
+		held, err := utils.GPUResourcesFromAnnotations(worker.Annotations)
+		if err != nil || held == nil {
+			continue
+		}
+		if !known {
+			lowest, highest, known = *held.DeepCopy(), *held.DeepCopy(), true
+			continue
+		}
+		for _, quantity := range []struct{ low, high, value *resource.Quantity }{
+			{&lowest.Requests.Tflops, &highest.Requests.Tflops, &held.Requests.Tflops},
+			{&lowest.Limits.Tflops, &highest.Limits.Tflops, &held.Limits.Tflops},
+			{&lowest.Requests.Vram, &highest.Requests.Vram, &held.Requests.Vram},
+			{&lowest.Limits.Vram, &highest.Limits.Vram, &held.Limits.Vram},
+		} {
+			if quantity.value.Cmp(*quantity.low) < 0 {
+				*quantity.low = quantity.value.DeepCopy()
+			}
+			if quantity.value.Cmp(*quantity.high) > 0 {
+				*quantity.high = quantity.value.DeepCopy()
+			}
+		}
+	}
+	return lowest, highest, known
 }
 
 func (w *State) LatestRecommendation() *tfv1.Resources {

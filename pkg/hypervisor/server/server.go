@@ -48,6 +48,8 @@ type Server struct {
 	deviceHandler *handlers.DeviceHandler
 	workerHandler *handlers.WorkerHandler
 	legacyHandler *handlers.LegacyHandler
+	// limiterEventsHandler authenticates through legacyHandler.
+	limiterEventsHandler *handlers.LimiterEventsHandler
 }
 
 // NewServer creates a new hypervisor HTTP server
@@ -69,6 +71,7 @@ func NewServer(
 	deviceHandler := handlers.NewDeviceHandler(deviceController)
 	workerHandler := handlers.NewWorkerHandler(workerController, allocationController)
 	legacyHandler := handlers.NewLegacyHandler(workerController, allocationController, backend, deviceController)
+	limiterEventsHandler := handlers.NewLimiterEventsHandler(ctx, legacyHandler, allocationController, backend)
 
 	s := &Server{
 		deviceController:     deviceController,
@@ -86,6 +89,8 @@ func NewServer(
 		deviceHandler: deviceHandler,
 		workerHandler: workerHandler,
 		legacyHandler: legacyHandler,
+
+		limiterEventsHandler: limiterEventsHandler,
 	}
 
 	s.setupRoutes()
@@ -119,6 +124,25 @@ func (s *Server) setupRoutes() {
 		apiV1.POST("/trap", s.legacyHandler.HandleTrap)
 		apiV1.GET("/pod", s.legacyHandler.HandleGetPods)
 		apiV1.POST("/process", s.legacyHandler.HandleInitProcess)
+		// Reports of the in-process limiter. Authenticated like /process: the
+		// handler reviews the Pod token itself and has no unauthenticated mode.
+		apiV1.POST("/limiter/events", s.limiterEventsHandler.HandleLimiterEvents)
+	}
+}
+
+// LimiterEventStats returns the counters of the limiter events the workloads
+// of this node reported.
+func (s *Server) LimiterEventStats() handlers.LimiterEventStats {
+	return s.limiterEventsHandler.Stats()
+}
+
+// EachLimiterEventCount calls yield with every per-Pod counter of
+// LimiterEventStats: the occurrences of one kind of event one Pod reported. It
+// is the source the metrics recorder exports them from, and takes plain values
+// so that neither package has to know the other.
+func (s *Server) EachLimiterEventCount(yield func(namespace, pod, kind string, count uint64)) {
+	for _, count := range s.limiterEventsHandler.Stats().Pods {
+		yield(count.Namespace, count.Pod, count.Kind, count.Count)
 	}
 }
 

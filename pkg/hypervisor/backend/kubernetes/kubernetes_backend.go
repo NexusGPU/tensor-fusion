@@ -44,9 +44,6 @@ type KubeletBackend struct {
 	workers   map[string]*api.WorkerInfo
 	workersMu sync.RWMutex
 
-	deviceTflops   map[string]resource.Quantity
-	deviceTflopsMu sync.RWMutex
-
 	subscribers   map[string]struct{}
 	subscribersMu sync.Mutex
 	stopped       bool
@@ -103,7 +100,6 @@ func NewKubeletBackend(
 		nodeName:             nodeName,
 		checkpointPath:       checkpointPath,
 		workers:              make(map[string]*api.WorkerInfo),
-		deviceTflops:         make(map[string]resource.Quantity),
 		subscribers:          make(map[string]struct{}),
 	}, nil
 }
@@ -388,9 +384,6 @@ func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler 
 			}
 		},
 		OnRemove: func(device *api.DeviceInfo) {
-			if device != nil {
-				b.deleteDeviceTflops(device.UUID)
-			}
 			// Delete only when idle; a missing GPU still referenced by running
 			// apps is marked (Unknown phase + missing-since annotation) so a
 			// transient NVML/driver hiccup cannot wipe allocation accounting.
@@ -412,9 +405,6 @@ func (b *KubeletBackend) GetDeviceChangeHandler() framework.DeviceChangeHandler 
 		},
 		OnDiscoveryComplete: func(nodeInfo *api.NodeInfo) {
 			if nodeInfo != nil {
-				if totalTflops, ok := b.getTotalDeviceTflops(); ok {
-					nodeInfo.TotalTFlops = totalTflops
-				}
 				// GPU CRs owned by this node but absent from the current
 				// enumeration (e.g. card removed while the hypervisor was down,
 				// so no OnRemove ever fired) must be cleaned up, otherwise stale
@@ -466,6 +456,12 @@ func (b *KubeletBackend) mutateGPUResourceState(
 		constants.LastSyncTimeAnnotationKey:               time.Now().Format(time.RFC3339),
 		constants.GPUVirtualizationCapabilitiesAnnotation: buildVirtualizationCapabilitiesAnnotation(device),
 	}
+	// Says whether the capacity below is vendor-published FP16 TFLOPS or had to
+	// fall back to the provider's estimate. The annotations are rewritten on
+	// every sync, so the marker follows the device's current capacity.
+	if device.TflopsCapacitySource != "" {
+		gpu.Annotations[constants.GPUTflopsCapacitySourceAnnotation] = string(device.TflopsCapacitySource)
+	}
 
 	if !metav1.IsControlledBy(gpu, gpuNode) {
 		// Create a new controller ref.
@@ -484,18 +480,12 @@ func (b *KubeletBackend) mutateGPUResourceState(
 		gpu.OwnerReferences = []metav1.OwnerReference{ref}
 	}
 
-	// Set status fields
-	// Prefer ProviderConfig Fp16TFlops if configured, fall back to device-reported value
-	var tflops resource.Quantity
-	if resolved, ok := b.resolveDeviceTflopsFromProviderConfig(device); ok {
-		tflops = resolved
-	} else {
-		tflops = resource.MustParse(fmt.Sprintf("%f", device.MaxTflops))
-	}
-	b.setDeviceTflops(device.UUID, tflops)
+	// Set status fields. The TFLOPS capacity is the one the device controller
+	// resolved for the device; this backend is its only writer on the GPU
+	// resource, and the scheduler allocates against it.
 	gpu.Status.Capacity = &tfv1.Resource{
 		Vram:   resource.MustParse(fmt.Sprintf("%dMi", device.TotalMemoryBytes/1024/1024)),
-		Tflops: tflops,
+		Tflops: api.TflopsQuantity(device.EffectiveTflopsCapacity()),
 	}
 	gpu.Status.UUID = device.UUID
 	gpu.Status.GPUModel = device.Model
@@ -536,16 +526,6 @@ func buildVirtualizationCapabilitiesAnnotation(device *api.DeviceInfo) string {
 	return string(payload)
 }
 
-func (b *KubeletBackend) resolveDeviceTflopsFromProviderConfig(device *api.DeviceInfo) (resource.Quantity, bool) {
-	resolved, ok, err := b.apiClient.ResolveDeviceFp16TFlops(device.Vendor, device.Model)
-	if err != nil {
-		klog.Warningf("Failed to resolve tflops from ProviderConfig: vendor=%s model=%s err=%v",
-			device.Vendor, device.Model, err)
-		return resource.Quantity{}, false
-	}
-	return resolved, ok
-}
-
 func shouldResetAvailable(gpu *tfv1.GPU) bool {
 	if gpu == nil || gpu.Status.Capacity == nil {
 		return false
@@ -561,39 +541,6 @@ func shouldResetAvailable(gpu *tfv1.GPU) bool {
 		return true
 	}
 	return false
-}
-
-func (b *KubeletBackend) setDeviceTflops(uuid string, tflops resource.Quantity) {
-	if uuid == "" {
-		return
-	}
-	b.deviceTflopsMu.Lock()
-	defer b.deviceTflopsMu.Unlock()
-	b.deviceTflops[uuid] = tflops
-}
-
-func (b *KubeletBackend) deleteDeviceTflops(uuid string) {
-	if uuid == "" {
-		return
-	}
-	b.deviceTflopsMu.Lock()
-	defer b.deviceTflopsMu.Unlock()
-	delete(b.deviceTflops, uuid)
-}
-
-func (b *KubeletBackend) getTotalDeviceTflops() (float64, bool) {
-	b.deviceTflopsMu.RLock()
-	defer b.deviceTflopsMu.RUnlock()
-	total := 0.0
-	found := false
-	for _, tflops := range b.deviceTflops {
-		if tflops.IsZero() {
-			continue
-		}
-		total += tflops.AsApproximateFloat64()
-		found = true
-	}
-	return total, found
 }
 
 func convertDeviceTopologyToStatus(topology *api.DeviceTopology) *tfv1.GPUTopologyStatus {

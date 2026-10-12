@@ -48,6 +48,11 @@ import (
 	internalqueue "k8s.io/kubernetes/pkg/scheduler/backend/queue"
 )
 
+// The shared scheme is extended once, before any spec runs. Doing it in every
+// BeforeEach writes to it while goroutines that earlier specs left behind (the
+// index allocator's retry loop) still read it through their client.
+var registerSchemeOnce sync.Once
+
 var _ = Describe("GPUFit Plugin", func() {
 	var (
 		k8sClient      client.Client
@@ -147,7 +152,9 @@ var _ = Describe("GPUFit Plugin", func() {
 		utils.SetProgressiveMigration(true)
 		ctx, cancel = context.WithCancel(context.Background())
 		log.FromContext(ctx).Info("Setting up test")
-		Expect(tfv1.AddToScheme(scheme.Scheme)).To(Succeed())
+		registerSchemeOnce.Do(func() {
+			Expect(tfv1.AddToScheme(scheme.Scheme)).To(Succeed())
+		})
 
 		pods := []*v1.Pod{
 			{
@@ -763,13 +770,16 @@ var _ = Describe("GPUFit Plugin", func() {
 		It("should return correct events", func() {
 			events, err := plugin.EventsToRegister(ctx)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(events).To(HaveLen(2))
+			Expect(events).To(HaveLen(3))
 			Expect(events[0].Event.Resource).To(Equal(fwk.Pod))
 			Expect(events[0].Event.ActionType).To(Equal(fwk.Add))
 			Expect(events[0].QueueingHintFn).NotTo(BeNil())
 			Expect(events[1].Event.Resource).To(Equal(fwk.EventResource("gpus.v1.tensor-fusion.ai")))
 			Expect(events[1].Event.ActionType).To(Equal(fwk.Add | fwk.Update))
 			Expect(events[1].QueueingHintFn).NotTo(BeNil())
+			Expect(events[2].Event.Resource).To(Equal(fwk.Node))
+			Expect(events[2].Event.ActionType).To(Equal(fwk.UpdateNodeAllocatable))
+			Expect(events[2].QueueingHintFn).NotTo(BeNil())
 		})
 	})
 
@@ -1287,6 +1297,7 @@ var _ = Describe("GPUFit Plugin", func() {
 
 		It("should handle same priority nominated pod reservation", func() {
 			Skip("Skipping: requires real scheduler framework with PodNominator support")
+			const nominatedNode = "node-b"
 			log.FromContext(ctx).Info("Running TestCheckNominatedPodsGPUReservation_SamePriority")
 
 			// Create a nominated pod with priority 50
@@ -1299,7 +1310,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			})
 			priority := int32(50)
 			nominatedPod.Spec.Priority = &priority
-			nominatedPod.Status.NominatedNodeName = "node-b"
+			nominatedPod.Status.NominatedNodeName = nominatedNode
 			Expect(k8sClient.Update(ctx, nominatedPod)).To(Succeed())
 
 			// Re-get the pod to ensure it has the latest state
@@ -1309,7 +1320,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			// Add nominated pod to framework's PodNominator
 			podInfo, _ := framework.NewPodInfo(updatedNominatedPod)
 			logger := klog.FromContext(ctx)
-			fwkInstance.AddNominatedPod(logger, podInfo, &fwk.NominatingInfo{NominatedNodeName: "node-b"})
+			fwkInstance.AddNominatedPod(logger, podInfo, &fwk.NominatingInfo{NominatedNodeName: nominatedNode})
 
 			// Create another pod with same priority
 			samePriorityPod := makePod("same-priority-pod", map[string]string{
@@ -1333,7 +1344,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			schedulingData := data.(*GPUSchedulingStateData)
 
 			// Test checkNominatedPodsGPUReservation
-			status := plugin.checkNominatedPodsGPUReservation(samePriorityPod, "node-b", schedulingData)
+			status := plugin.checkNominatedPodsGPUReservation(samePriorityPod, nominatedNode, schedulingData)
 
 			// Should reserve resources even for same priority pods (nominated pods have precedence)
 			Expect(status.Code()).To(Equal(fwk.Unschedulable))

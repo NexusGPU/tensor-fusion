@@ -11,7 +11,7 @@ values 或 TensorFusionCluster/ProviderConfig 中的镜像字段。
 - 使用本仓库 Helm chart 安装，chart 路径为 `charts/tensor-fusion`。
 - Helm release 名称使用 `tensor-fusion-sys`，系统命名空间使用 `tensor-fusion-sys`。
 - GPU 功能验证时，集群已有 GPU 节点，节点能被 `nvidia.com/gpu.present=true` 这类 label 选中。无 GPU 的控制面安装验证不要求此条件。
-- 执行安装的账号具备创建 CRD、ClusterRole、MutatingWebhookConfiguration、Namespace 的权限。
+- 执行安装的账号具备创建 CRD、ClusterRole、MutatingWebhookConfiguration、ValidatingWebhookConfiguration、Namespace 的权限。
 
 ## 1. 前置条件
 
@@ -39,11 +39,12 @@ GPU 节点需要满足：
 
 - TensorFusion CRD、RBAC、controller。
 - Mutating admission webhook。
+- Validating admission webhook（`<release>-validating-webhook`），只处理 `pods/ephemeralcontainers` 的更新，见 2.5。
 - TensorFusion scheduler 配置。
 - NVIDIA ProviderConfig、SchedulingConfigTemplate，以及默认的 NVIDIA TensorFusionCluster/GPUPool。
 - GreptimeDB standalone。
 - Alertmanager。
-- vector sidecar。cluster-agent 默认关闭，仅在显式配置 `agent.agentId` 后启用。
+- vector sidecar（镜像固定为 `timberio/vector:0.56.0-alpine`）。controller Pod 始终带有 vector sidecar；每个 hypervisor Pod 默认也带一个（`cluster.enableVector`，见 2.5）。cluster-agent 默认关闭，仅在显式配置 `agent.agentId` 后启用。
 
 无 GPU 的集群也可以安装控制面。只要没有节点命中
 `initialGpuNodeLabelSelector`，operator 就不会创建 GPUNode 或 Hypervisor Pod；此时只验证
@@ -96,7 +97,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 | --- | --- | --- |
 | `initialGpuNodeLabelSelector` | controller 初始扫描 GPU 节点的 label selector | `nvidia.com/gpu.present=true` |
 | `controller.image.repository` | operator 镜像仓库 | `tensorfusion/tensor-fusion-operator` |
-| `controller.image.tag` | operator 镜像 tag；空值时使用 Chart `appVersion` | `""`（当前解析为 `2.15.0`） |
+| `controller.image.tag` | operator 镜像 tag；空值时使用 Chart `appVersion` | `""`（当前解析为 `2.17.3`） |
 | `controller.replicaCount` | controller 副本数 | `1` |
 | `controller.compatibleWithNvidiaContainerToolkit` | 启用 NVIDIA Container Toolkit 校验及驱动库兼容挂载 | `false` |
 | `greptime.installStandalone` | 是否安装内置 GreptimeDB standalone | `true` |
@@ -117,15 +118,15 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 
 ### 2.4 指定组件版本
 
-Chart 1.8.3 起默认固定与 `appVersion=2.15.0` 配套的组件版本，一键安装不再依赖
+Chart 1.8.3 起默认固定与 Chart `appVersion`（当前为 `2.17.3`）配套的组件版本，一键安装不再依赖
 operator / hypervisor / vgpu-provider / client / worker 的浮动 `latest`。需要使用私有仓库或
 其它已验证版本时，可通过 `--set` 覆盖：
 
 ```bash
 helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
   -n tensor-fusion-sys --create-namespace \
-  --set controller.image.tag=2.15.0 \
-  --set cluster.hypervisorImage=tensorfusion/tensor-fusion-hypervisor:2.15.0 \
+  --set controller.image.tag=2.17.3 \
+  --set cluster.hypervisorImage=tensorfusion/tensor-fusion-hypervisor:2.17.3 \
   --set providerConfigs.nvidia.images.middleware=tensorfusion/vgpu-provider-nvidia:1.3.9 \
   --set providerConfigs.nvidia.images.remoteClient=tensorfusion/tensor-fusion-client:v2.25.0 \
   --set providerConfigs.nvidia.images.remoteWorker=tensorfusion/tensor-fusion-worker:v2.25.0
@@ -136,7 +137,7 @@ helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
 | 组件 | values 键 | 说明 |
 | --- | --- | --- |
 | operator | `controller.image.repository` + `controller.image.tag` | 仓库与 tag 分开两个键 |
-| hypervisor | `cluster.hypervisorImage` | **完整镜像**（含仓库+tag），默认 `tensorfusion/tensor-fusion-hypervisor:2.15.0` |
+| hypervisor | `cluster.hypervisorImage` | **完整镜像**（含仓库+tag）；空值时使用 `tensorfusion/tensor-fusion-hypervisor:<appVersion>`，与 operator 同版本 |
 | vgpu-provider | `providerConfigs.nvidia.images.middleware` | 默认 `tensorfusion/vgpu-provider-nvidia:1.3.9` |
 | client | `providerConfigs.nvidia.images.remoteClient` | 默认 `tensorfusion/tensor-fusion-client:v2.25.0` |
 | worker | `providerConfigs.nvidia.images.remoteWorker` | 默认 `tensorfusion/tensor-fusion-worker:v2.25.0` |
@@ -151,6 +152,41 @@ helm repo update tensor-fusion
 helm upgrade --install tensor-fusion-sys tensor-fusion/tensor-fusion --version 1.8.3 \
   -n tensor-fusion-sys --create-namespace
 ```
+
+### 2.5 本版本新增的安装行为
+
+**临时容器的准入校验。** chart 新增一个 `ValidatingWebhookConfiguration`，只匹配 `pods/ephemeralcontainers` 的 `UPDATE`，不带 namespace 或 label 选择器。handler 只对挂了 TensorFusion 节点数据卷（`/run/tensor-fusion` 下的 hostPath）的 Pod 生效：临时容器不能以注入方式之外的形式挂载该卷，也不能自行定义 `TF_SHM_POD_NAMESPACE`、`TF_SHM_POD_NAME`；其他 Pod 和普通的 `kubectl debug` 容器直接放行。失败策略由 `controller.admissionWebhooks.ephemeralContainers.failurePolicy` 控制，默认 `Ignore`（超时 3 秒），operator 不可用时不会阻塞集群内的 `kubectl debug`；对隔离要求高的集群可以设为 `Fail`。集群自身的 Pod 安全策略仍由管理员负责，见 `docs/pod-security.zh.md`。
+
+**cluster-agent 的凭据。** `agent.enrollToken` 与 `agent.agentId` 不再出现在 Pod spec 中：chart 把它们写入 Secret `<release>-agent`，sidecar 通过 `secretKeyRef` 读取。原有的安装命令（`--set agent.agentId=... --set agent.enrollToken=...`，以及 `helm upgrade --reuse-values`）不需要修改。如果希望自己管理 Secret，改用：
+
+```bash
+kubectl -n tensor-fusion-sys create secret generic my-agent \
+  --from-literal=enroll-token='<token>'
+
+helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
+  -n tensor-fusion-sys \
+  --set agent.agentId='<org>:<env>' \
+  --set agent.existingSecret.name=my-agent \
+  --set agent.existingSecret.key=enroll-token
+```
+
+`agent.existingSecret.agentIdKey` 可选：设置后 agent id 也从该 Secret 读取，`agent.agentId` 可以留空。chart 管理的 Secret 变化时，controller Pod 会随 `checksum/agent-secret` 注解自动重启；自管 Secret 轮换后需要手动重启 controller Pod。Alertmanager 配置同样改为保存在 Secret 中；使用 GreptimeDB Cloud 时，数据库密码只存在于 Secret `<release>-greptimedb-secret`，vector 配置通过环境变量 `GREPTIME_PASSWORD` 引用它。
+
+**vector sidecar 默认开启。** hypervisor Pod 中的 vector 把 `tf_gpu_usage`、`tf_worker_usage` 和日志写入 GreptimeDB，每个 GPU 节点请求 50m CPU / 64Mi 内存，上限 1 CPU / 512Mi；hypervisor 的指标文件最多占用约 1.1 GB 临时存储。GPU 是否可用只取决于 hypervisor 容器，vector 异常不会让 GPU 退出调度。关闭方式：
+
+```bash
+helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion \
+  -n tensor-fusion-sys --reuse-values \
+  --set cluster.enableVector=false
+```
+
+关闭后这两张用量表不再有数据，依赖它们的告警规则和 autoscaler 也随之失效。开启、关闭或升级到本版本都会改变 hypervisor Pod 模板，每个 hypervisor Pod 会被重建一次；业务 Pod 不会重启。
+
+**升级注意事项。** 升级前已经因为缺少 vector ConfigMap 而卡在 ContainerCreating 的 hypervisor Pod 不会被自动替换（该卷改为可选后不计入模板 hash，以免所有 hypervisor 重启），需要手动删除一次。升级顺序是先 hypervisor、后业务 Pod 内的 limiter 库；在两者版本不一致的窗口内，单次 launch 成本超过令牌桶的旧版 limiter Pod 不受限额约束，直到 Pod 重启。已知限制：单次持续数十秒的 launch 在新版 limiter 下会低于其配额运行（不会超出限额）；autoscaler 对从未上报过算力用量的 worker 不会下调算力。
+
+**算力突发窗口。** soft 隔离下，空闲的业务 Pod 可以攒下一段按自身配额速率计的令牌，恢复运行时全速用掉，之后回到配额。攒多少由突发窗口 W（秒）决定，默认 0.1 s，范围 0 到 10 s。池级在 `schedulingConfigTemplate.elasticRateLimitParameters.burstWindow` 设置（字符串，例如 `"0.5"`；只设这一项即可，其余参数留空；hypervisor 在启动时读取该值，修改后已在运行的 hypervisor Pod 不会自动重建，需要删除它们才生效）；单个工作负载用 Pod 注解 `tensor-fusion.ai/compute-burst-window`（Go duration，例如 `500ms`、`2s`），可以在运行中的 Pod 上直接修改，不需要重启，超过 10 s、为负或格式错误的值在创建 Pod 时被拒绝。长期算力配额不受 W 影响：配额为 s 的 Pod 攒满后在空闲设备上最多全速运行约 `s × W / (1 − s)` 秒（W = 2 s 时，25% 配额约 0.67 s，50% 配额约 2 s），同一张卡上其他 Pod 只在这段时间内受到影响。
+
+**指标表的时间列。** `tf_*` 表的时间索引列是 `greptime_timestamp`（由行协议写入时自动建表产生），不是 `ts`。chart 自带的告警规则只使用 `{{ .Conditions }}`，不需要修改；自己编写的告警规则如果直接写了 `ts`，需要改用模板变量 `{{ .TimeColumn }}`（或 `{{ timeColumn "表名" }}`），operator 会按表检测实际的列名，旧集群上名为 `ts` 的表也能继续使用。
 
 ## 3. 验证控制面
 
@@ -548,6 +584,74 @@ curl --noproxy "*" -v --max-time 10 http://127.0.0.1:8000/v1/models
 
 如果日志里有 CUDA OOM，降低 `--gpu-memory-utilization`、减小 `--max-model-len`，或释放同一张 GPU 上其他进程。
 
+### 7.5 `tf_gpu_usage` / `tf_worker_usage` 没有数据
+
+Hypervisor 只把指标写到 `/logs/metrics.log`，由同一个 Pod 里的 `vector` sidecar 上传到 GreptimeDB。Hypervisor 看不到上传结果：数据库拒绝写入时，Hypervisor 日志里没有任何报错，要看 `vector` 容器的日志：
+
+```bash
+kubectl -n tensor-fusion-sys logs <hypervisor-pod> -c vector --since=10m \
+  | grep -E 'Not retriable|Events dropped'
+```
+
+被拒绝时每次上传都有这样两行（`component_id` 是 sink 名，Controller 的 sidecar 对应 `sink_greptimedb_operator_metrics`）：
+
+```text
+ERROR sink{component_kind="sink" component_id=sink_greptimedb_hypervisor_metrics component_type=http}:request{request_id=12}: vector::sinks::util::retries: Not retriable; dropping the request. reason="Default retry strategy: Bad Request"
+ERROR sink{component_kind="sink" component_id=sink_greptimedb_hypervisor_metrics component_type=http}:request{request_id=12}: vector_common::internal_event::component_events_dropped: Events dropped intentional=false count=7 reason="Service call failed. No retries or retries exhausted."
+```
+
+Vector 不打印数据库的应答。取一行指标手工提交，就能看到拒绝原因：
+
+```bash
+kubectl -n tensor-fusion-sys exec <hypervisor-pod> -c vector -- tail -n 1 /logs/metrics.log > line.txt
+curl -sS -X POST --data-binary @line.txt \
+  'http://<greptimedb-host>:4000/v1/influxdb/api/v2/write?db=public&precision=ms'
+```
+
+应答形如 `column memory_bytes expect type UInt64(UInt64Type), given: INT64(4)`，说明这一行里某个字段的类型和表里已有的列不一致：GreptimeDB 按第一次写入的类型建列，之后类型不同的行全部拒绝。`SHOW CREATE TABLE tf_gpu_usage;` 可以看到列类型。本版本 Hypervisor 写入的类型与旧版 Hypervisor 建的表一致（`memory_bytes` 为无符号整数，`power_usage` 为整数）；如果表是用其他类型建的，并且表里的历史数据可以丢弃，`DROP TABLE` 之后下一次写入会重新建表。Hypervisor 的 sidecar 每行指标单独提交一次，被拒绝的行不影响其他行。
+
+### 7.6 Hypervisor 日志
+
+启用 `vector` sidecar（`enableVector: true`）时，Hypervisor 把自己的日志同时写到 `/logs/pods/<pod>/hypervisor.log`（最多 3 个文件，每个 50 MB，保留 7 天），由 sidecar 写入 `tf_system_log`：
+
+```sql
+SELECT greptime_timestamp, pod, message FROM tf_system_log
+WHERE component = 'hypervisor' AND container = 'hypervisor'
+ORDER BY greptime_timestamp DESC LIMIT 50;
+```
+
+默认日志级别是 Info。每个控制周期一行的限速明细（`ERL [...] util=... rate=...`）在日志级别 4 才输出，有两种打开方式。
+
+**临时打开，不重建 Pod。** 给 Hypervisor 进程发 `SIGUSR1`，日志级别升到 4，10 分钟后自动恢复为启动时的级别；这期间再发一次，10 分钟重新计时。启动时的级别已经不低于 4 时，信号不改变任何东西，只输出一行日志。升高和恢复各有一行日志（`Log verbosity raised from 0 to 4 for 10m0s`、`Log verbosity is back to 0`）。
+
+Hypervisor Pod 使用宿主机的 PID 命名空间（`hostPID: true`），进程号不是 1，要先查出来。Hypervisor 是 Pod 的第一个容器，`kubectl exec` 默认进入它；镜像基于 `ubuntu:24.04`，带 shell 和 `pidof`：
+
+```bash
+kubectl -n tensor-fusion-sys exec <hypervisor-pod> -- sh -c 'kill -USR1 $(pidof hypervisor)'
+```
+
+也可以在节点上以 root 执行 `pkill -USR1 -x hypervisor`。本版本之前的 Hypervisor 不处理这个信号，收到后进程直接退出、容器重启，发送前先确认镜像版本。
+
+**长期打开。** 通过 Pool 的 Hypervisor Pod 模板加启动参数 `-v=4`（`TensorFusionCluster` 的 `spec.gpuPools[].specTemplate.componentConfig.hypervisor.podTemplate`）：
+
+```yaml
+podTemplate:
+  template:
+    spec:
+      containers:
+        - name: tensor-fusion-hypervisor
+          args: ["-v=4"]
+```
+
+修改模板会让该 Pool 的 Hypervisor Pod 逐个重建，排查结束后去掉参数时会再重建一次。`-log-output-path=none` 关闭日志文件。
+
+### 7.7 已知问题
+
+- **hard 隔离 + remote-vGPU `v2.26.0` 下 vLLM 0.28.0 启动失败。** client/worker 镜像为 `tensorfusion/tensor-fusion-client:v2.26.0`、`tensorfusion/tensor-fusion-worker:v2.26.0` 时，hard 隔离的 vLLM 0.28.0 报 `call api=cuMemcpy failed … named symbol not found`。缺陷在 remote-vGPU worker（独立组件），不在本 operator。
+- **`shared` 隔离是整卡独占。** 同一张 GPU 上的两个 `shared` Pod 先后运行，不会同时运行。
+- **算力限额约束的是设备时间占比，不是 solo 吞吐的比例。** 多个 Pod 共用一张卡时，GPU 在两个 context 之间每切换一次约耗时 65 µs（RTX 3090 实测），驱动把这段时间也计入利用率，而且大多记在占用引擎时间最长的 Pod 名下。因此配额较大的 Pod 达到自己的利用率目标时，实际得到的 kernel 时间约少 20%：与一个 30% 配额的邻居同卡，60% 配额实测为 solo 吞吐的 0.485，50% 为 0.385，40% 为 0.309。两个不设限的短 kernel 负载同卡时，合计吞吐约为单独运行一个的 0.83（长 kernel 负载 0.93～0.95；ONNX Runtime 的 CNN / encoder 推理和以拷贝为主的负载没有损失）。
+- **混合架构集群上的 Helm hook Job。** 生成和注入 webhook 证书的两个 hook Job 默认只限定 `kubernetes.io/os: linux`，并沿用 controller 的 `affinity`、`tolerations`，不限定 CPU 架构。hook Pod 落到拉不到该镜像的节点时，`helm install` / `helm upgrade` 会一直等到超时。用 `controller.admissionWebhooks.patch.nodeSelector`（例如 `kubernetes.io/arch: amd64`）、`affinity`、`tolerations` 指定 hook Pod 的节点。
+
 ## 8. 升级、回滚、卸载
 
 升级前建议备份当前 Helm values 和关键 CR：
@@ -576,6 +680,17 @@ GPUPool 隔离策略，不执行整包 `helm upgrade`。
 详细步骤及回退方案见：
 
 - `docs/v1-to-v2-upgrade-best-practice.md`
+
+### 8.1 升级说明 / breaking changes
+
+chart 与 operator、hypervisor 镜像要一起升级，不要用新 chart 搭配旧镜像：旧 operator 不提供临时容器校验的 webhook 路径（默认 `failurePolicy: Ignore` 下校验不生效，设为 `Fail` 时集群内所有 `kubectl debug` 会被拒绝），也不会把 `GREPTIME_PASSWORD` 注入 hypervisor Pod 的 vector 容器（`greptime.isCloud=true` 时该容器无法启动，用量指标中断）。
+
+- **指标列类型。** hypervisor 写入 `tf_gpu_usage`、`tf_worker_usage` 的字段类型已固定：`memory_bytes` 为无符号整数，`power_usage`、`nvlink_rx`、`nvlink_tx` 为有符号整数，其余为浮点。表里已有列的类型与此不同的集群（例如曾用自定义参数运行 hypervisor、由其他写入方建表），升级后该表的每一行都会被数据库以 HTTP 400 拒绝，hypervisor 日志里看不到。按 7.5 的方法确认；处理办法是导出需要保留的历史数据后 `DROP TABLE`，表会在下一次写入时按新类型重建。operator 不会自动删表。
+- **NodeOverlay 默认只匹配 AWS 上的 NVIDIA 机型。** `karpenterNodeOverlay.requirements` 的默认值是 `karpenter.k8s.aws/instance-gpu-count > 0` 且 `karpenter.k8s.aws/instance-gpu-manufacturer in [nvidia]`，不再对所有 NodePool 生效。其他云上的 Karpenter 或其他厂商的卡，升级后默认的 overlay 不匹配任何节点，需要自己设置 `karpenterNodeOverlay.requirements`。
+- **`reserved` 容量类型的 Pool。** 内置价格表中没有预留实例价格的 13 个 AWS 机型不再被 `reserved` Pool 选中；需要这些机型时改用 `on-demand` 或在 ProviderConfig 中补充价格。
+- **没有 owner 的空 TensorFusionWorkload 会被回收。** 由 Pod webhook 自动创建、没有 ownerReference、且已经 5 分钟没有任何 Pod 引用的 workload，升级后在第一次 reconcile 时被删除，其 `status.recommendation` 一并丢失。用户自己创建的 workload，以及带有 owner（Deployment、StatefulSet、Job、Pod 等）的 workload 不受影响。
+- **hypervisor Pod 重建一次。** 开启 vector sidecar 的 Pool，升级后每个 hypervisor Pod 会因模板变化重建一次；业务 Pod 不重启。
+- **Go 库接口（引用 `pkg/hypervisor`、`pkg/constants` 的项目）。** `(*APIClient).ResolveDeviceFp16TFlops` 已删除；`constants.TFDataPathWorkerExpr` 现在依赖容器内的 `TF_SHM_POD_NAMESPACE`、`TF_SHM_POD_NAME` 两个环境变量，使用它的调用方需要同时设置这两个变量。
 
 卸载脚本支持 Helm、`helm template | kubectl apply` 和 `make deploy` / Kustomize
 三种安装方式。它会删除集群内全部 TensorFusion CR、控制面、webhook、CRD、

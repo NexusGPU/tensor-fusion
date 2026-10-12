@@ -42,7 +42,7 @@ spec:
             spec: {}
         hypervisor:
           image: docker.io/tensorfusion/tensor-fusion-hypervisor:2.15.1
-          vectorImage: docker.1ms.run/timberio/vector:latest-alpine
+          vectorImage: docker.1ms.run/timberio/vector:0.56.0-alpine
           podTemplate:
             template:
               metadata:
@@ -86,9 +86,9 @@ spec:
                   - name: TF_ENABLE_LOG
                     value: '1'
                   - name: TF_LICENSE
-                    value: '|ee|253372098780000'
+                    value: '<your-license>'
                   - name: TF_LICENSE_SIGN
-                    vaule: 3046022100a9693f16b962e577748106a1c2b0300d89258cda1ab854a23a1ce81b2f1bb16b022100be8e870fac59c3f9299c6fb24bb67e481573e99708edf90b968fbf5c2368108c
+                    value: '<your-license-signature>'
                   name: tensorfusion-worker
                   resources:
                     limits:

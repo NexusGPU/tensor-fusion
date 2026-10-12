@@ -44,16 +44,25 @@ func updateMetricsView(
 		metrics, hasMetrics := metrics[device.UUID]
 		content.WriteString(fmt.Sprintf("%s [%s]\n", device.Model, device.UUID[:8]))
 		if hasMetrics && metrics != nil {
-			content.WriteString(fmt.Sprintf(
-				"  Memory: %.1f%% %s\n",
-				metrics.MemoryPercentage,
-				renderBarChart(metrics.MemoryPercentage, 20),
-			))
-			content.WriteString(fmt.Sprintf(
-				"  Compute: %.1f%% %s\n",
-				metrics.ComputePercentage,
-				renderBarChart(metrics.ComputePercentage, 20),
-			))
+			// A value the provider could not read is shown as such, not as zero.
+			if metrics.MemoryUnavailable {
+				content.WriteString("  Memory: n/a\n")
+			} else {
+				content.WriteString(fmt.Sprintf(
+					"  Memory: %.1f%% %s\n",
+					metrics.MemoryPercentage,
+					renderBarChart(metrics.MemoryPercentage, 20),
+				))
+			}
+			if metrics.ComputeUnavailable {
+				content.WriteString("  Compute: n/a\n")
+			} else {
+				content.WriteString(fmt.Sprintf(
+					"  Compute: %.1f%% %s\n",
+					metrics.ComputePercentage,
+					renderBarChart(metrics.ComputePercentage, 20),
+				))
+			}
 			content.WriteString(fmt.Sprintf("  Temperature: %.1f°C  Power: %dW\n", metrics.Temperature, metrics.PowerUsage))
 		} else {
 			content.WriteString("  No metrics available\n")
@@ -70,13 +79,15 @@ func updateMetricsView(
 			if workerMetrics, exists := workerMetrics[deviceUUID]; exists {
 				if wm, exists := workerMetrics[worker.WorkerUID]; exists {
 					var totalMemory uint64
-					var totalCompute float64
 					for _, metrics := range wm {
 						totalMemory += metrics.MemoryBytes
-						totalCompute += metrics.ComputePercentage
 					}
 					content.WriteString(fmt.Sprintf("  Memory: %s\n", formatBytes(totalMemory)))
-					content.WriteString(fmt.Sprintf("  Compute: %.1f%% %s\n", totalCompute, renderBarChart(totalCompute, 20)))
+					if totalCompute, ok := sumWorkerCompute(wm); ok {
+						content.WriteString(fmt.Sprintf("  Compute: %.1f%% %s\n", totalCompute, renderBarChart(totalCompute, 20)))
+					} else {
+						content.WriteString(fmt.Sprintf("  Compute: %s\n", formatWorkerCompute(wm)))
+					}
 				} else {
 					content.WriteString("  No metrics available\n")
 				}

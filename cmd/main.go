@@ -272,7 +272,7 @@ func main() {
 
 	ensureLeaderInfoConfigMap(mgr)
 
-	startAutoScaler(mgr, allocator)
+	startAutoScaler(ctx, mgr, allocator)
 
 	// Create pricing provider for webhook
 	pricingProvider := pricing.NewStaticPricingProvider()
@@ -404,8 +404,10 @@ func startProviderManager(ctx context.Context, mgr manager.Manager) *provider.Ma
 		// Not fatal - system can work with default configurations
 	}
 
+	// Also loads partition templates, and unblocks the static pricing provider:
+	// without this call node provisioning waits forever for instance type data.
 	gpuInfos := providerManager.GetAllGpuInfos()
-	gpuallocator.LoadPartitionTemplatesFromConfig(gpuInfos)
+	pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, &gpuInfos)
 	setupLog.Info("partition templates loaded from provider configs", "gpuInfoCount", len(gpuInfos))
 
 	setupLog.Info("provider manager initialized", "providerCount", providerManager.ProviderCount())
@@ -663,10 +665,10 @@ func setupTimeSeriesAndWatchGlobalConfigChanges(ctx context.Context, mgr manager
 		if !needTSDB {
 			return nil
 		}
-		timeSeriesDB = setupTimeSeriesDB()
+		timeSeriesDB = setupTimeSeriesDB(ctx)
 		alertEvaluator = alert.NewAlertEvaluator(ctx, timeSeriesDB, config.GetGlobalConfig().AlertRules, alertManagerAddr)
 		alertCanBeEnabled = true
-		setupLog.Info("time series db setup successfully.")
+		setupLog.Info("time series db setup started, connecting in the background.")
 		return nil
 	}))
 	if err != nil {
@@ -735,6 +737,28 @@ func watchAndHandleConfigChanges(ctx context.Context, mgr manager.Manager, needT
 	}
 }
 
+// nodeHourlyPrice is what a node of an instance type costs per hour when
+// bought as the given capacity type ("on-demand", "spot" or "reserved"),
+// according to the pricing tables. It has no answer for a node whose instance
+// type or capacity type the tables do not know (an on-premises node, for
+// example); the metrics recorder then prices the node by its GPUs.
+//
+// The second result says where the figure comes from, as one of the
+// price_source values of the metrics recorder: "list" for a price listed in
+// the pricing tables, "spot-estimate" for a spot rate the tables do not list
+// and that is the on-demand price multiplied by an assumed factor.
+func nodeHourlyPrice(instanceType, capacityType, region string) (float64, string, bool) {
+	parsed, known := pricing.ParseCapacityType(capacityType)
+	if !known {
+		return 0, "", false
+	}
+	price, source, err := pricing.NewStaticPricingProvider().HourlyPriceWithSource(instanceType, parsed, region)
+	if err != nil || price <= 0 {
+		return 0, "", false
+	}
+	return price, string(source), true
+}
+
 func startMetricsRecorder(
 	enableLeaderElection bool,
 	mgr manager.Manager,
@@ -749,6 +773,10 @@ func startMetricsRecorder(
 		// Worker level map will be updated by cluster reconcile
 		// Key is poolName, second level key is QoS level
 		WorkerUnitPriceMap: make(map[string]map[string]metrics.RawBillingPricing, 8),
+
+		// A node bought as spot or reserved capacity is costed at the price of
+		// that capacity type, not at the on-demand one.
+		NodeHourlyPrice: nodeHourlyPrice,
 	}
 	if enableLeaderElection {
 		go func() {
@@ -761,18 +789,29 @@ func startMetricsRecorder(
 	return metricsRecorder
 }
 
-func startAutoScaler(mgr manager.Manager, allocator *gpuallocator.GpuAllocator) {
+func startAutoScaler(ctx context.Context, mgr manager.Manager, allocator *gpuallocator.GpuAllocator) {
 	if enableAutoScale {
 		setupLog.Info("auto scale enabled")
-		if err := autoscaler.SetupWithManager(mgr, allocator); err != nil {
-			setupLog.Error(err, "unable to start auto scaler")
-			os.Exit(1)
-		}
+		// Setting up the auto scaler connects to the time series database, which
+		// is usually still starting when the operator is installed. Exiting on
+		// that error restarted the operator until the database was up. The set-up
+		// is retried in the background instead, and the auto scaler is added to
+		// the manager as soon as the database answers.
+		go func() {
+			if err := metrics.RetryUntilConnected(ctx, "auto scaler metrics database", metrics.ConnectBackoff{}, func() error {
+				return autoscaler.SetupWithManager(mgr, allocator)
+			}); err == nil {
+				setupLog.Info("auto scaler set up")
+			}
+		}()
 	}
 }
 
-// Setup GreptimeDB connection
-func setupTimeSeriesDB() *metrics.TimeSeriesDB {
+// Setup GreptimeDB connection. The handle is returned at once and connects in
+// the background: an unreachable database is not a reason to stop or to block
+// the operator. Until the connection is there, alert rules yield nothing and
+// the metrics TTL is not applied.
+func setupTimeSeriesDB(ctx context.Context) *metrics.TimeSeriesDB {
 	timeSeriesDB := &metrics.TimeSeriesDB{}
 	connection := metrics.GreptimeDBConnection{
 		Host:     utils.GetEnvOrDefault("TSDB_MYSQL_HOST", "127.0.0.1"),
@@ -781,12 +820,19 @@ func setupTimeSeriesDB() *metrics.TimeSeriesDB {
 		Password: utils.GetEnvOrDefault("TSDB_MYSQL_PASSWORD", ""),
 		Database: utils.GetEnvOrDefault("TSDB_MYSQL_DATABASE", "public"),
 	}
-	if err := timeSeriesDB.Setup(connection); err != nil {
-		setupLog.Error(err, "unable to setup time series db, features including alert, "+
-			"autoScaling, rebalance won't work", "connection", connection.Host, "port",
+	go func() {
+		if err := timeSeriesDB.ConnectWithRetry(ctx, connection, metrics.ConnectBackoff{}); err != nil {
+			return
+		}
+		setupLog.Info("time series db connected", "connection", connection.Host, "port",
 			connection.Port, "user", connection.User, "database", connection.Database)
-		return nil
-	}
+		// A TTL configured while the database was unreachable was skipped.
+		if ttl := config.GetGlobalConfig().MetricsTTL; ttl != "" {
+			if ttlErr := timeSeriesDB.SetTableTTL(ttl); ttlErr != nil {
+				setupLog.Error(ttlErr, "unable to update metrics ttl", "ttl config", ttl)
+			}
+		}
+	}()
 	return timeSeriesDB
 }
 

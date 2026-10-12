@@ -153,6 +153,74 @@ func TestWorkerSharedMemoryPreservesHardAndSharedClientConfig(t *testing.T) {
 	}
 }
 
+func workerHeartbeat(t *testing.T, w *WorkerController, workerUID string) uint64 {
+	t.Helper()
+	handle := w.getShmHandle(workerUID)
+	require.NotNil(t, handle)
+	var heartbeat uint64
+	require.True(t, handle.WithState(func(state *workerstate.SharedDeviceState) {
+		heartbeat = state.GetLastHeartbeat()
+	}))
+	return heartbeat
+}
+
+// The backing file is writable by the workload's processes, so its length is
+// not relied on. The sync loop serves every worker on the node: a file that no
+// longer covers its mapping must cost only the affected worker one interval and
+// never the process or its neighbours.
+func TestSyncContainsAndRepairsWorkerWhoseSharedMemoryShrank(t *testing.T) {
+	w, info := newSharedMemoryTestController(t)
+	neighbour := *info
+	neighbour.WorkerUID, neighbour.WorkerName = "neighbour-uid", "neighbour"
+	w.allocationController.(*fakeWorkerAllocationController).allocations[neighbour.WorkerUID] = &api.WorkerAllocation{
+		WorkerInfo: &neighbour, DeviceInfos: []*api.DeviceInfo{{UUID: "gpu-1", TotalMemoryBytes: 1 << 30}},
+	}
+	w.workerChangeHandler().OnAdd(&neighbour)
+	now := time.Unix(1_710_000_000, 0)
+	w.nowFunc = func() time.Time { return now }
+	w.syncSharedMemoryState()
+	require.Equal(t, uint64(now.Unix()), workerHeartbeat(t, w, info.WorkerUID))
+
+	podPath := filepath.Join(w.shmBasePath, info.Namespace, info.WorkerName)
+	generation := filepath.Join(podPath, ".shm-uid-"+info.WorkerUID)
+	intact, err := os.Stat(generation)
+	require.NoError(t, err)
+	require.NoError(t, os.Truncate(generation, 0))
+
+	now = now.Add(time.Second)
+	w.syncSharedMemoryState()
+	require.Equal(t, uint64(now.Unix()), workerHeartbeat(t, w, neighbour.WorkerUID),
+		"other workers keep their heartbeat in the same pass")
+
+	now = now.Add(time.Second)
+	w.syncSharedMemoryState()
+	require.Equal(t, uint64(now.Unix()), workerHeartbeat(t, w, info.WorkerUID),
+		"the affected worker is served again from a fresh segment")
+	require.Equal(t, uint64(now.Unix()), workerHeartbeat(t, w, neighbour.WorkerUID))
+	repaired, err := os.Stat(filepath.Join(podPath, workerstate.ShmPathSuffix))
+	require.NoError(t, err)
+	require.Equal(t, intact.Size(), repaired.Size())
+	require.False(t, os.SameFile(intact, repaired))
+}
+
+func TestProcessRegistrationContainsAndRepairsShrunkSharedMemory(t *testing.T) {
+	w, info := newSharedMemoryTestController(t)
+	generation := filepath.Join(w.shmBasePath, info.Namespace, info.WorkerName, ".shm-uid-"+info.WorkerUID)
+	require.NoError(t, os.Truncate(generation, 0))
+
+	register := func() (registered bool, err error) {
+		err = w.WithWorkerSharedMemory(info.WorkerUID, func(state *workerstate.SharedDeviceState) {
+			registered = state.TryAddPID(42)
+		})
+		return registered, err
+	}
+	_, err := register()
+	require.Error(t, err, "the request that hits the fault fails and can be retried")
+	registered, err := register()
+	require.NoError(t, err)
+	require.True(t, registered)
+}
+
 func TestFirstWorkerNotificationCanAlreadyBeTerminated(t *testing.T) {
 	allocations := &fakeWorkerAllocationController{}
 	w := &WorkerController{

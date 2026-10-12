@@ -38,6 +38,18 @@ func registerLibFunc(handle uintptr, name string, fptr any) error {
 	return nil
 }
 
+// registerOptionalLibFunc binds fptr to a symbol the library may not export
+// and reports whether it does.
+func registerOptionalLibFunc(handle uintptr, name string, fptr any) bool {
+	sym, err := purego.Dlsym(handle, name)
+	if err != nil || sym == 0 {
+		klog.Infof("dlsym %s: not exported by this library", name)
+		return false
+	}
+	purego.RegisterFunc(fptr, sym)
+	return true
+}
+
 // Load loads the accelerator library dynamically using purego on Unix systems
 func (a *AcceleratorInterface) Load() error {
 	if a.libPath == "" {
@@ -96,6 +108,12 @@ func (a *AcceleratorInterface) Load() error {
 	if err := registerLibFunc(handle, "AccelGetVendorMountLibs", &getVendorMountLibs); err != nil {
 		return err
 	}
+	// Added after the first release of the ABI. A library without it has none
+	// of the optional features; the binding of a previously loaded library must
+	// not be left behind.
+	if !registerOptionalLibFunc(handle, "AccelSetFeatures", &setFeatures) {
+		setFeatures = nil
+	}
 	// Register log callback only on non-macOS platforms.
 	// purego callback has issues on macOS ARM64, causing bus errors when C code calls back into Go.
 	// Prefer the current ABI symbol and keep compatibility with older providers.
@@ -114,9 +132,8 @@ func (a *AcceleratorInterface) Load() error {
 		}
 	}
 
-	result := accelInit()
-	if result != ResultSuccess {
-		return fmt.Errorf("failed to initialize accelerator: %d", result)
+	if err := a.initialize(); err != nil {
+		return err
 	}
 
 	a.loaded = true

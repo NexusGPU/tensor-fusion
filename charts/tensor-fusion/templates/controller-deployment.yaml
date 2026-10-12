@@ -16,9 +16,21 @@ spec:
       tensor-fusion.ai/component: operator
   template:
     metadata:
-      {{- with .Values.controller.podAnnotations }}
+      {{- /* A change of the agent Secret restarts the pod, so that the
+             cluster-agent sidecar picks up a rotated token. Only the Secret the
+             chart creates can be tracked this way. */}}
+      {{- $agentSecret := "" }}
+      {{- if include "tensor-fusion.agent.createSecret" . }}
+      {{- $agentSecret = include (print $.Template.BasePath "/agent-secret.yaml") . | sha256sum }}
+      {{- end }}
+      {{- if or .Values.controller.podAnnotations $agentSecret }}
       annotations:
+        {{- with .Values.controller.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with $agentSecret }}
+        checksum/agent-secret: {{ . | quote }}
+        {{- end }}
       {{- end }}
       labels:
         app.kubernetes.io/name: {{ include "tensor-fusion.name" . }}
@@ -77,6 +89,10 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-greptimedb-secret
                   key: password
+            # The Secret the Vector sidecars of the hypervisor pods take the
+            # database password from.
+            - name: TSDB_PASSWORD_SECRET_NAME
+              value: {{ .Release.Name }}-greptimedb-secret
             {{- else }}
             - name: TSDB_MYSQL_USER
               value: root
@@ -106,16 +122,36 @@ spec:
               mountPath: /etc/tensor-fusion/scheduler-config.yaml
               subPath: scheduler-config.yaml
               readOnly: true
-        {{- if .Values.agent.agentId }}
+        {{- if include "tensor-fusion.agent.enabled" . }}
         - name: cluster-agent
           image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag | default "latest" }}"
           env:
             - name: CLOUD_ENDPOINT
               value: "{{ .Values.agent.cloudEndpoint }}"
+            {{- with include "tensor-fusion.agent.namespaceList" (list "namespaceAllowlist" .Values.agent.namespaceAllowlist) }}
+            - name: AGENT_NAMESPACE_ALLOWLIST
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with include "tensor-fusion.agent.namespaceList" (list "namespaceDenylist" .Values.agent.namespaceDenylist) }}
+            - name: AGENT_NAMESPACE_DENYLIST
+              value: {{ . | quote }}
+            {{- end }}
+            # The agent's credentials come from a Secret, never from a value in
+            # this pod spec, which everyone who may read pods can read.
             - name: AGENT_ID
+              {{- if include "tensor-fusion.agent.idKey" . }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tensor-fusion.agent.secretName" . }}
+                  key: {{ include "tensor-fusion.agent.idKey" . }}
+              {{- else }}
               value: "{{ .Values.agent.agentId }}"
+              {{- end }}
             - name: ENROLL_TOKEN
-              value: "{{ .Values.agent.enrollToken }}"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tensor-fusion.agent.secretName" . }}
+                  key: {{ include "tensor-fusion.agent.tokenKey" . }}
             - name: TSDB_MYSQL_HOST
               value: "{{ .Values.greptime.host }}"
             - name: TSDB_MYSQL_PORT
@@ -145,6 +181,14 @@ spec:
                 fieldRef:
                   apiVersion: v1
                   fieldPath: spec.nodeName
+            {{- if .Values.greptime.isCloud }}
+            # Referenced as ${GREPTIME_PASSWORD} by the Vector configuration.
+            - name: GREPTIME_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-greptimedb-secret
+                  key: password
+            {{- end }}
           resources:
             requests:
               cpu: 50m

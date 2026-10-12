@@ -53,13 +53,20 @@ func (a *AcceleratorInterface) Load() error {
 	purego.RegisterLibFunc(&getProcessInformation, libHandle, "AccelGetProcessInformation")
 	purego.RegisterLibFunc(&getDeviceMetrics, libHandle, "AccelGetDeviceMetrics")
 	purego.RegisterLibFunc(&getVendorMountLibs, libHandle, "AccelGetVendorMountLibs")
+	// Added after the first release of the ABI. A library without it has none
+	// of the optional features; the binding of a previously loaded library must
+	// not be left behind.
+	if proc, err := dll.FindProc("AccelSetFeatures"); err == nil {
+		purego.RegisterFunc(&setFeatures, proc.Addr())
+	} else {
+		setFeatures = nil
+	}
 
 	// Note: Log callback is not registered on Windows due to calling convention differences
 	// Windows uses stdcall/cdecl while Unix uses System V ABI
 
-	result := accelInit()
-	if result != ResultSuccess {
-		return fmt.Errorf("failed to initialize accelerator: %d", result)
+	if err := a.initialize(); err != nil {
+		return err
 	}
 
 	a.loaded = true

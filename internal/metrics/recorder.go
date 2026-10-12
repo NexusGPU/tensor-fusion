@@ -64,6 +64,72 @@ type MetricsRecorder struct {
 
 	// Worker level unit price map, key is pool name, second level key is QoS level
 	WorkerUnitPriceMap map[string]map[string]RawBillingPricing
+
+	// NodeHourlyPrice, when set, tells the hourly rate of a whole node bought
+	// as the given capacity type. See nodeHourlyPrice.
+	NodeHourlyPrice NodeHourlyPriceFunc
+}
+
+// NodeHourlyPriceFunc returns the hourly price of a node of an instance type
+// bought as a capacity type (on-demand, spot or reserved, as on the
+// karpenter.sh/capacity-type label) in a region, and false when it has no price
+// for that combination. The region is empty when the node does not say.
+//
+// source says where the price comes from and is one of the PriceSource values:
+// PriceSourceList for a listed price, PriceSourceSpotEstimate for a figure that
+// was derived from an assumption. It is written as the price_source tag, so an
+// estimate must never be returned as PriceSourceList.
+type NodeHourlyPriceFunc func(instanceType, capacityType, region string) (hourlyPrice float64, source string, ok bool)
+
+// Where the hourly rate of a node comes from; these are the values of the
+// price_source tag of tf_node_metrics. A row without the tag has no price.
+const (
+	// PriceSourceList is a price listed in the pricing data for the instance
+	// type and capacity type of the node.
+	PriceSourceList = "list"
+	// PriceSourceSpotEstimate is a listed on-demand price multiplied by an
+	// assumed spot factor: an estimate, not what the node is actually charged.
+	PriceSourceSpotEstimate = "spot-estimate"
+	// PriceSourceConfigured is the sum of the per-GPU unit prices the cluster
+	// administrator configured for the GPU models of the node.
+	PriceSourceConfigured = "configured"
+
+	// ListPriceCurrency is the currency of the built-in instance price lists,
+	// and so of every rate whose source is PriceSourceList or
+	// PriceSourceSpotEstimate.
+	ListPriceCurrency = "USD"
+)
+
+// knownPriceSource keeps the price_source tag to its documented values: a
+// source the recorder does not know is left out rather than passed on.
+func knownPriceSource(source string) string {
+	switch source {
+	case PriceSourceList, PriceSourceSpotEstimate, PriceSourceConfigured:
+		return source
+	}
+	return ""
+}
+
+// Capacity types as the karpenter.sh/capacity-type node label spells them;
+// these are the values of the capacity_type tag of tf_node_metrics.
+const (
+	CapacityTypeOnDemand = "on-demand"
+	CapacityTypeSpot     = "spot"
+	CapacityTypeReserved = "reserved"
+)
+
+// normalizeCapacityType maps a capacity type label value to one of the three
+// tag values, and anything else to "" so that the tag only ever takes them.
+func normalizeCapacityType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case CapacityTypeOnDemand, "ondemand":
+		return CapacityTypeOnDemand
+	case CapacityTypeSpot, "preemptive", "preemptible":
+		return CapacityTypeSpot
+	case CapacityTypeReserved:
+		return CapacityTypeReserved
+	}
+	return ""
 }
 
 // currentPricing returns the live GPU model → hourly unit price map, merging
@@ -217,6 +283,9 @@ func SetWorkerMetricsByWorkload(
 		metricsItem.GPUCount = int(count)
 	}
 	metricsItem.WorkloadName = pod.Labels[constants.WorkloadKey]
+	if pod.Spec.NodeName != "" {
+		metricsItem.NodeName = pod.Spec.NodeName
+	}
 }
 
 func getWorkerTflopsRequestLimit(
@@ -308,6 +377,11 @@ func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []strin
 	metricsItem.PoolName = poolObj.Name
 	metricsItem.Phase = string(node.Status.Phase)
 	metricsItem.SetGPUModelAndCount(gpuModels)
+	// The node controller copies these labels from the Kubernetes Node.
+	labels := node.GetLabels()
+	metricsItem.CapacityType = normalizeCapacityType(labels[string(tfv1.NodeRequirementKeyCapacityType)])
+	metricsItem.InstanceType = labels[string(tfv1.NodeRequirementKeyInstanceType)]
+	metricsItem.region = labels[string(tfv1.NodeRequirementKeyRegion)]
 
 	totalTflops := node.Status.TotalTFlops.AsApproximateFloat64()
 	totalVram := node.Status.TotalVRAM.AsApproximateFloat64()
@@ -337,6 +411,22 @@ func SetNodeMetrics(node *tfv1.GPUNode, poolObj *tfv1.GPUPool, gpuModels []strin
 		metricsItem.AllocatedVramPercentToVirtualCap = 0
 	} else {
 		metricsItem.AllocatedVramPercentToVirtualCap = metricsItem.AllocatedVramBytes / totalVirtualVram * 100
+	}
+
+	// Limits assigned on the node, against its virtual (oversold) capacity. Known
+	// once the allocator has published the node's virtual available capacity.
+	metricsItem.limitedKnown = node.Status.VirtualAvailableTFlops != nil && node.Status.VirtualAvailableVRAM != nil
+	metricsItem.LimitedTFlops, metricsItem.LimitedVramBytes = 0, 0
+	metricsItem.LimitedTFlopsPercentToVirtualCap, metricsItem.LimitedVramPercentToVirtualCap = 0, 0
+	if metricsItem.limitedKnown {
+		metricsItem.LimitedTFlops = totalVirtualTflops - node.Status.VirtualAvailableTFlops.AsApproximateFloat64()
+		metricsItem.LimitedVramBytes = totalVirtualVram - node.Status.VirtualAvailableVRAM.AsApproximateFloat64()
+		if totalVirtualTflops > 0 {
+			metricsItem.LimitedTFlopsPercentToVirtualCap = metricsItem.LimitedTFlops / totalVirtualTflops * 100
+		}
+		if totalVirtualVram > 0 {
+			metricsItem.LimitedVramPercentToVirtualCap = metricsItem.LimitedVramBytes / totalVirtualVram * 100
+		}
 	}
 }
 
@@ -544,8 +634,18 @@ func SetTopologyMetrics(poolName string, satisfied bool, isFallback bool, isDegr
 	}
 }
 
-// TODO should record metrics after autoscaling feature added
+// SetAutoscalingMetrics counts one node scaling decision of a pool: a node
+// requested (scale up: a GPUNodeClaim or Karpenter NodeClaim was created) or a
+// node selected for removal by compaction (scale down). Like the allocation
+// counters, the totals count from the start of this operator process.
+//
+// They are resettable counters: kept in memory only, never seeded from the
+// time-series database, and back at zero after an operator restart or a leader
+// change. See TensorFusionSystemMetrics for what that asks of consumers.
 func SetAutoscalingMetrics(poolName string, isScaleUp bool) {
+	if poolName == "" {
+		return
+	}
 	tensorFusionSystemMetricsLock.Lock()
 	defer tensorFusionSystemMetricsLock.Unlock()
 	if _, ok := TensorFusionSystemMetricsMap[poolName]; !ok {
@@ -620,23 +720,39 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 	gpuResourceMetricsLock.RLock()
 	gpuResourceMetricsCount := len(gpuResourceMetricsMap)
 	gpuResourceMetricsLock.RUnlock()
-	if workerMetricsCount <= 0 && nodeMetricsCount <= 0 && gpuResourceMetricsCount <= 0 {
+	poolMetricsLock.RLock()
+	poolNames := make([]string, 0, len(poolMetricsMap))
+	for poolName := range poolMetricsMap {
+		poolNames = append(poolNames, poolName)
+	}
+	poolMetricsLock.RUnlock()
+	if workerMetricsCount <= 0 && nodeMetricsCount <= 0 && gpuResourceMetricsCount <= 0 && len(poolNames) == 0 {
 		return
 	}
 
 	now := time.Now()
 	enc := NewEncoder(config.GetGlobalConfig().MetricsFormat)
+	// The currency of the cost figures is a label the administrator may set; it
+	// is left out of the cost rows when it is not.
+	currency := config.GetCurrency()
 	workerMetricsLock.Lock()
 
 	activeWorkerCnt := 0
-	activeWorkerAndNodeByPool := map[string]*ActiveNodeAndWorker{}
+	// Every known pool gets a tf_system_metrics row, also one without nodes or
+	// workers: a pool that scaled to zero is a point on its node count chart,
+	// not a gap in it.
+	activeWorkerAndNodeByPool := make(map[string]*ActiveNodeAndWorker, len(poolNames))
+	for _, poolName := range poolNames {
+		activeWorkerAndNodeByPool[poolName] = &ActiveNodeAndWorker{}
+	}
 
 	for _, metrics := range workerMetricsMap {
+		interval := now.Sub(metrics.LastRecordTime)
 		if metrics.deletionTimestamp != nil && !metrics.deletionTimestamp.IsZero() {
-			metrics.RawCost = mr.getWorkerRawCost(metrics, metrics.deletionTimestamp.Sub(metrics.LastRecordTime))
-		} else {
-			metrics.RawCost = mr.getWorkerRawCost(metrics, now.Sub(metrics.LastRecordTime))
+			interval = metrics.deletionTimestamp.Sub(metrics.LastRecordTime)
 		}
+		metrics.RawCost = mr.getWorkerRawCost(metrics, interval)
+		metrics.IntervalSeconds = math.Max(interval.Seconds(), 0)
 		metrics.LastRecordTime = now
 
 		// Skip recording metrics if raw cost is negative
@@ -658,6 +774,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 
 		enc.StartLine("tf_worker_resources")
 		enc.AddTag("namespace", metrics.Namespace)
+		addTagIfSet(enc, "node", metrics.NodeName)
 		enc.AddTag("pool", metrics.PoolName)
 
 		if metrics.QoS == "" {
@@ -666,6 +783,8 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddTag("qos", metrics.QoS)
 		enc.AddTag("worker", metrics.WorkerName)
 		enc.AddTag("workload", metrics.WorkloadName)
+		metrics.Currency = currency
+		addTagIfSet(enc, "currency", metrics.Currency)
 
 		if config.GetGlobalConfig().MetricsExtraPodLabels != nil {
 			for k, v := range config.GetGlobalConfig().MetricsExtraPodLabels {
@@ -677,6 +796,7 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("tflops_limit", metrics.TflopsLimit)
 		enc.AddField("tflops_request", metrics.TflopsRequest)
 		enc.AddField("raw_cost", metrics.RawCost)
+		enc.AddField("interval_seconds", metrics.IntervalSeconds)
 		enc.AddField("vram_bytes_limit", metrics.VramBytesLimit)
 		enc.AddField("vram_bytes_request", metrics.VramBytesRequest)
 		enc.AddField("ready", metrics.Ready)
@@ -687,8 +807,13 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 
 	nodeMetricsLock.Lock()
 
+	gpuHourlyUnitPrices := mr.currentPricing()
 	for _, metrics := range nodeMetricsMap {
-		metrics.RawCost = mr.getNodeRawCost(metrics, now.Sub(metrics.LastRecordTime), mr.currentPricing())
+		interval := now.Sub(metrics.LastRecordTime)
+		metrics.HourlyPrice, metrics.PriceSource = mr.nodeHourlyPrice(metrics, gpuHourlyUnitPrices)
+		metrics.Currency = nodeRateCurrency(metrics.PriceSource, currency)
+		metrics.RawCost = nodeRawCost(metrics.HourlyPrice, interval)
+		metrics.IntervalSeconds = interval.Seconds()
 		metrics.LastRecordTime = now
 
 		if _, ok := activeWorkerAndNodeByPool[metrics.PoolName]; !ok {
@@ -704,6 +829,10 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddTag("node", metrics.NodeName)
 		enc.AddTag("pool", metrics.PoolName)
 		enc.AddTag("phase", metrics.Phase)
+		addTagIfSet(enc, "capacity_type", metrics.CapacityType)
+		addTagIfSet(enc, "instance_type", metrics.InstanceType)
+		addTagIfSet(enc, "price_source", metrics.PriceSource)
+		addTagIfSet(enc, "currency", metrics.Currency)
 
 		enc.AddField("allocated_tflops", metrics.AllocatedTflops)
 		enc.AddField("allocated_tflops_percent", metrics.AllocatedTflopsPercent)
@@ -711,8 +840,16 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("allocated_vram_bytes", metrics.AllocatedVramBytes)
 		enc.AddField("allocated_vram_percent", metrics.AllocatedVramPercent)
 		enc.AddField("allocated_vram_percent_virtual", metrics.AllocatedVramPercentToVirtualCap)
+		if metrics.limitedKnown {
+			enc.AddField("limited_tflops", metrics.LimitedTFlops)
+			enc.AddField("limited_vram_bytes", metrics.LimitedVramBytes)
+			enc.AddField("limited_tflops_percent_virtual", metrics.LimitedTFlopsPercentToVirtualCap)
+			enc.AddField("limited_vram_percent_virtual", metrics.LimitedVramPercentToVirtualCap)
+		}
 		enc.AddField("gpu_count", int64(metrics.GPUCount))
 		enc.AddField("raw_cost", metrics.RawCost)
+		enc.AddField("hourly_price", metrics.HourlyPrice)
+		enc.AddField("interval_seconds", metrics.IntervalSeconds)
 		enc.EndLine(now)
 	}
 
@@ -724,6 +861,9 @@ func (mr *MetricsRecorder) RecordMetrics(writer io.Writer) {
 		enc.AddField("total_nodes_cnt", int64(activeNodeAndWorker.nodeCnt))
 		enc.AddField("total_allocation_fail_cnt", failCount)
 		enc.AddField("total_allocation_success_cnt", successCount)
+		// Resettable counters: they count since this process started, so a
+		// reader sees them drop to zero after an operator restart or a leader
+		// change and has to treat that as a reset (rate/increase style).
 		enc.AddField("total_scale_up_cnt", scaleUpCount)
 		enc.AddField("total_scale_down_cnt", scaleDownCount)
 		tensorFusionSystemMetricsLock.RLock()
@@ -913,11 +1053,58 @@ func (mr *MetricsRecorder) isUnderEvictionProtection(metrics *WorkerResourceMetr
 	return time.Now().Before(protectionEndTime)
 }
 
-// unit price data comes from global config map, and multi-GPU instance should normalized with per GPU pricing, e.g. 8xA100 p4d.24xlarge price should divide by 8
-func (mr *MetricsRecorder) getNodeRawCost(metrics *NodeResourceMetrics, duration time.Duration, hourlyUnitPriceMap map[string]float64) float64 {
-	cost := 0.0
-	for _, gpuModel := range metrics.gpuModels {
-		cost += duration.Seconds() * hourlyUnitPriceMap[gpuModel] / 3600.0
+// nodeHourlyPrice returns the hourly rate a node is charged at and where that
+// rate comes from. They are the rate behind raw_cost, the hourly_price field
+// and the price_source tag of tf_node_metrics. The source is empty when the
+// node has no price.
+func (mr *MetricsRecorder) nodeHourlyPrice(metrics *NodeResourceMetrics, hourlyUnitPriceMap map[string]float64) (float64, string) {
+	// PRICING HOOK (capacity type). This is the one place the recorder asks what
+	// a node costs per hour. With NodeHourlyPrice set, a node whose instance type
+	// and capacity type are known is charged the price of that capacity type, so
+	// a spot node is not billed at the on-demand rate. Without it, or when it has
+	// no price for the node, the rate is the sum of the per-GPU unit prices below.
+	//
+	// The hook also says whether its figure is a listed price or an estimate
+	// (the spot rate of a provider whose pricing data lists no spot prices is
+	// one); the row carries that, so an assumed rate is not read as a fact.
+	if mr.NodeHourlyPrice != nil && metrics.InstanceType != "" && metrics.CapacityType != "" {
+		if price, source, ok := mr.NodeHourlyPrice(metrics.InstanceType, metrics.CapacityType, metrics.region); ok {
+			if price <= 0 {
+				return price, ""
+			}
+			return price, knownPriceSource(source)
+		}
 	}
-	return cost
+
+	// unit price data comes from global config map, and multi-GPU instance should normalized with per GPU pricing, e.g. 8xA100 p4d.24xlarge price should divide by 8
+	price := 0.0
+	for _, gpuModel := range metrics.gpuModels {
+		price += hourlyUnitPriceMap[gpuModel]
+	}
+	if price <= 0 {
+		return price, ""
+	}
+	return price, PriceSourceConfigured
+}
+
+func nodeRawCost(hourlyPrice float64, duration time.Duration) float64 {
+	return duration.Seconds() * hourlyPrice / 3600.0
+}
+
+// addTagIfSet leaves a tag without a value out of the line: a line with an
+// empty tag value is not valid line protocol, and the column reads NULL.
+// nodeRateCurrency is the currency of a node's hourly rate: a rate taken from
+// the built-in price lists is in the currency of those lists, whatever the
+// administrator's own prices are in; any other rate is in the configured one.
+func nodeRateCurrency(priceSource, configured string) string {
+	if priceSource == PriceSourceList || priceSource == PriceSourceSpotEstimate {
+		return ListPriceCurrency
+	}
+	return configured
+}
+
+func addTagIfSet(enc Encoder, key, value string) {
+	if value != "" {
+		enc.AddTag(key, value)
+	}
 }

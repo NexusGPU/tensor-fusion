@@ -1,0 +1,43 @@
+name: Chart tests
+
+# The other workflows ignore charts/**; this one runs when the chart or its
+# checks change.
+on:
+  push:
+    branches:
+      - main
+      - release/**
+    paths:
+      - "charts/**"
+      - "hack/test-chart-*.sh"
+      - "Makefile"
+      - ".github/workflows/test-chart.yml"
+  pull_request:
+    branches:
+      - main
+      - release/**
+    paths:
+      - "charts/**"
+      - "hack/test-chart-*.sh"
+      - "Makefile"
+      - ".github/workflows/test-chart.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  chart:
+    name: Render and check the Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      # Helm and python3 are part of the runner image.
+      - name: Lint the chart
+        run: |
+          helm version --short
+          helm lint charts/tensor-fusion
+
+      - name: Check the rendered chart
+        run: make test-chart

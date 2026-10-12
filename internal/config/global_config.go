@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,6 +14,17 @@ type GlobalConfig struct {
 	MetricsExtraPodLabels map[string]string    `yaml:"metricsExtraPodLabels"`
 	AlertRules            []AlertRule          `yaml:"alertRules"`
 	AutoMigration         *AutoMigrationConfig `yaml:"autoMigration"`
+
+	// Currency names the currency of the prices configured in this cluster (GPU
+	// unit prices and QoS pricing), for example "USD". It is written as the
+	// currency tag of the cost rows (tf_node_metrics, tf_worker_resources). It
+	// is only a label: no amount is converted. Empty, the default, means
+	// unspecified, and the tag is left out.
+	//
+	// The embedded cloud instance price data is in US dollars, so a node whose
+	// rate comes from it (price_source list or spot-estimate) is in US dollars
+	// whatever is set here.
+	Currency string `yaml:"currency"`
 
 	AutoScalingInterval       string `yaml:"autoScalingInterval"`
 	GPUOperatorNamespace      string `yaml:"gpuOperatorNamespace"`
@@ -91,6 +103,12 @@ func GetMaxInFlightNodes() int {
 		return DefaultMaxInFlightNodes
 	}
 	return *cfg.MaxInFlightNodes
+}
+
+// GetCurrency returns the configured currency label of cost figures, or "" when
+// none is configured.
+func GetCurrency() string {
+	return strings.TrimSpace(GetGlobalConfig().Currency)
 }
 
 // GetGPUOperatorNamespace returns the configured GPU operator namespace or default value

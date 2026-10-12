@@ -259,14 +259,49 @@ AccelResult LimiterSetPodMemoryUsed(const char* namespace_, const char* podName,
 // Example Implementation - DeviceInfo APIs
 // ============================================================================
 
+// Optional features (see ACCEL_FEATURE_* in accelerator.h). Everything is off
+// until the caller selects it after AccelInit, and off again after
+// AccelShutdown.
+static _Atomic int g_initialized = 0;
+static _Atomic uint64_t g_features = 0;
+
 AccelResult AccelInit(void) {
     logMessage("INFO", "AccelInit called from provider example");
+    atomic_store(&g_features, 0);
+    atomic_store(&g_initialized, 1);
     return ACCEL_SUCCESS;
 }
 
 AccelResult AccelShutdown(void) {
     logMessage("INFO", "AccelShutdown called from provider example");
+    atomic_store(&g_initialized, 0);
+    atomic_store(&g_features, 0);
     return ACCEL_SUCCESS;
+}
+
+// ACCEL_EXAMPLE_LEGACY_ABI builds the library as it was before AccelSetFeatures
+// existed: the symbol is missing and no feature can be selected. It is what a
+// caller has to cope with when it loads an older provider.
+#ifndef ACCEL_EXAMPLE_LEGACY_ABI
+AccelResult AccelSetFeatures(uint64_t requested, uint64_t* enabled) {
+    if (!atomic_load(&g_initialized)) {
+        if (enabled) {
+            *enabled = 0;
+        }
+        return ACCEL_ERROR_OPERATION_FAILED;
+    }
+    // Bits this library does not know are ignored.
+    uint64_t active = requested & ACCEL_FEATURE_TELEMETRY_MARKERS;
+    atomic_store(&g_features, active);
+    if (enabled) {
+        *enabled = active;
+    }
+    return ACCEL_SUCCESS;
+}
+#endif
+
+static bool telemetryMarkersEnabled(void) {
+    return (atomic_load(&g_features) & ACCEL_FEATURE_TELEMETRY_MARKERS) != 0;
 }
 
 AccelResult AccelGetDeviceCount(size_t* deviceCount) {
@@ -434,6 +469,7 @@ AccelResult AccelGetAllDevicesTopology(ExtendedDeviceTopology* topology) {
                     } else {
                         peer->topoLevel = TOPO_LEVEL_SYSTEM;
                     }
+                    peer->bandwidthBytesPerSec = 0;  // unknown
                     dt->peerCount++;
                 }
             }
@@ -600,9 +636,13 @@ AccelResult AccelGetProcessInformation(
     if (actualCount > fetchedCapacity) {
         actualCount = fetchedCapacity;
     }
+    // Rows that do not fit are not truncated: a partial list would
+    // under-account memory. The caller repeats the call with a larger buffer.
     if (actualCount > maxCount) {
-        actualCount = maxCount;
+        *processInfoCount = 0;
+        return ACCEL_ERROR_RESOURCE_EXHAUSTED;
     }
+    const bool markers = telemetryMarkersEnabled();
 
     // Get one device info sample to calculate percentages.
     // Do not allocate a large ExtendedDeviceInfo array on stack:
@@ -634,10 +674,16 @@ AccelResult AccelGetProcessInformation(
         // Compute utilization from CU occupancy (AMD SMI style)
         info->activeSMs = procInfos[i].cu_occupancy;
         info->totalSMs = totalCUs;
-        if (totalCUs > 0) {
+        if (!markers) {
+            // Not measured unless the caller selected
+            // ACCEL_FEATURE_TELEMETRY_MARKERS: always 0, which says nothing.
+            info->computeUtilizationPercent = 0.0;
+        } else if (totalCUs > 0) {
             info->computeUtilizationPercent = ((double)procInfos[i].cu_occupancy / (double)totalCUs) * 100.0;
         } else {
-            info->computeUtilizationPercent = 0.0;
+            // Not measurable without the device's compute units. Zero would
+            // claim a measured idle process.
+            info->computeUtilizationPercent = ACCEL_COMPUTE_UTILIZATION_UNAVAILABLE;
         }
         
         // Memory utilization (AMD SMI style: memory_usage.used and memory_usage.reserved)

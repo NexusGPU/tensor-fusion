@@ -146,15 +146,15 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 	}
 
 	// Apply recommendation processor
+	bounds := ""
 	if e.recommendationProcessor != nil {
 		var err error
-		var msg string
-		recommendation, msg, err = e.recommendationProcessor.Apply(ctx, workloadState, &recommendation)
+		recommendation, bounds, err = e.recommendationProcessor.Apply(ctx, workloadState, &recommendation)
 		if err != nil {
 			return nil, fmt.Errorf("failed to apply recommendation processor: %v", err)
 		}
-		if msg != "" {
-			log.Info("recommendation processor applied", "message", msg)
+		if bounds != "" {
+			log.Info("recommendation processor applied", "message", bounds)
 		}
 	}
 
@@ -164,12 +164,18 @@ func (e *ExternalRecommender) Recommend(ctx context.Context, workloadState *work
 		if response.Reason != "" {
 			reason = response.Reason
 		}
+		message := fmt.Sprintf("External scaler recommendation: %s", response.Reason)
+		if bounds != "" {
+			message += "; " + bounds
+		}
+		// For the event recorded when the recommendation is applied.
+		workloadState.SetChangeBounds(bounds)
 		workloadState.UpsertStatusCondition(metav1.Condition{
 			Type:               constants.ConditionStatusTypeResourceUpdate,
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),
 			Reason:             reason,
-			Message:            fmt.Sprintf("External scaler recommendation: %s", response.Reason),
+			Message:            message,
 		})
 	}
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -61,6 +60,10 @@ type GPUFit struct {
 	gangManager    *gang.Manager
 	ctx            context.Context
 	cfg            *config.GPUFitConfig
+
+	// allocatorSync holds the wake-ups that wait for the allocator's store to
+	// catch up with a GPU event; see wakeAfterAllocatorSync.
+	allocatorSync allocatorSyncState
 }
 
 type GPUSchedulingStateData struct {
@@ -1245,20 +1248,22 @@ func addSharedLegacyResourceAnnotations(annotations map[string]any, pod *v1.Pod,
 	return nil
 }
 
+// effectiveHardSMPercent is the share of the selected GPU that a TFLOPS limit
+// amounts to. The capacity is the one the hypervisor published on the GPU
+// resource, and the conversion is the one the hypervisor applies to the same
+// capacity, so both sides always derive the same percentage.
 func effectiveHardSMPercent(tflops resource.Quantity, gpus []*tfv1.GPU) (uint32, error) {
 	if len(gpus) == 0 || gpus[0] == nil || gpus[0].Status.Capacity == nil ||
 		gpus[0].Status.Capacity.Tflops.IsZero() {
 		return 0, fmt.Errorf("selected GPU capacity is unavailable")
 	}
-	percent := math.Ceil(tflops.AsApproximateFloat64() /
-		gpus[0].Status.Capacity.Tflops.AsApproximateFloat64() * 100)
-	if percent < 1 {
-		percent = 1
+	percent, ok := utils.TflopsToComputePercent(
+		tflops.AsApproximateFloat64(), gpus[0].Status.Capacity.Tflops.AsApproximateFloat64(),
+	)
+	if !ok {
+		return 0, fmt.Errorf("cannot convert %s TFLOPS to a share of GPU %s", tflops.String(), gpus[0].Name)
 	}
-	if percent > 100 {
-		percent = 100
-	}
-	return uint32(percent), nil
+	return percent, nil
 }
 
 // PostBind is intentionally minimal: by the time we reach here the pod is
@@ -1310,6 +1315,14 @@ func (s *GPUFit) EventsToRegister(_ context.Context) ([]fwk.ClusterEventWithHint
 				ActionType: fwk.Add | fwk.Update,
 			},
 			QueueingHintFn: s.queueingHint,
+		},
+		{
+			// Filter reads the node's tensor-fusion.ai/index_0 allocatable.
+			Event: fwk.ClusterEvent{
+				Resource:   fwk.Node,
+				ActionType: fwk.UpdateNodeAllocatable,
+			},
+			QueueingHintFn: s.nodeQueueingHint,
 		},
 	}, nil
 }
@@ -1413,6 +1426,9 @@ func (s *GPUFit) queueingHint(logger klog.Logger, pod *v1.Pod, oldObj, newObj an
 	}
 
 	if hint, handled := s.phaseRunningWakeupHint(logger, pod, oldGPU, newGPU); handled {
+		if hint == fwk.Queue {
+			s.wakeAfterAllocatorSync(pod, newGPU)
+		}
 		return hint, nil
 	}
 

@@ -1,0 +1,243 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RegionalInfra",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:*",
+        "eks:*",
+        "elasticloadbalancing:*",
+        "autoscaling:Describe*",
+        "ssm:GetParameter",
+        "logs:DescribeLogGroups",
+        "logs:DeleteLogGroup",
+        "servicequotas:GetServiceQuota",
+        "servicequotas:ListServiceQuotas"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "REGION"
+        }
+      }
+    },
+    {
+      "Sid": "NoExpensiveOrPersistentEc2",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:PurchaseReservedInstancesOffering",
+        "ec2:PurchaseHostReservation",
+        "ec2:PurchaseScheduledInstances",
+        "ec2:CreateCapacityReservation",
+        "ec2:CreateCapacityReservationFleet",
+        "ec2:AllocateHosts",
+        "ec2:CreateNatGateway",
+        "ec2:CreateVpcPeeringConnection",
+        "ec2:AcceptVpcPeeringConnection",
+        "ec2:CreateTransitGateway*",
+        "ec2:CreateVpnConnection"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "StackScopedIam",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:PassRole",
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:TagPolicy",
+        "iam:UntagPolicy",
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:TagInstanceProfile",
+        "iam:UntagInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile"
+      ],
+      "Resource": [
+        "arn:aws:iam::ACCOUNT_ID:role/tf-e2e-*",
+        "arn:aws:iam::ACCOUNT_ID:policy/tf-e2e-*",
+        "arn:aws:iam::ACCOUNT_ID:instance-profile/tf-e2e-*"
+      ]
+    },
+    {
+      "Sid": "OnlyKnownManagedPoliciesOnStackRoles",
+      "Effect": "Deny",
+      "Action": "iam:AttachRolePolicy",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/tf-e2e-*",
+      "Condition": {
+        "ArnNotLike": {
+          "iam:PolicyARN": [
+            "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
+            "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+            "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+            "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly",
+            "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+            "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+            "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy",
+            "arn:aws:iam::ACCOUNT_ID:policy/tf-e2e-*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "IamReadForSweep",
+      "Effect": "Allow",
+      "Action": [
+        "iam:ListRoles",
+        "iam:ListPolicies",
+        "iam:ListInstanceProfiles"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ServiceLinkedRoles",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/aws-service-role/*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": [
+            "eks.amazonaws.com",
+            "eks-nodegroup.amazonaws.com",
+            "autoscaling.amazonaws.com",
+            "spot.amazonaws.com",
+            "elasticloadbalancing.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "OptionalKarpenterInterruptionQueue",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:*",
+        "events:*"
+      ],
+      "Resource": [
+        "arn:aws:sqs:REGION:ACCOUNT_ID:tf-e2e-*",
+        "arn:aws:events:REGION:ACCOUNT_ID:rule/tf-e2e*"
+      ]
+    },
+    {
+      "Sid": "ListForSweep",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ListQueues",
+        "events:ListRules",
+        "tag:GetResources",
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "OptionalBudgetAlarm",
+      "Effect": "Allow",
+      "Action": [
+        "budgets:ViewBudget",
+        "budgets:ModifyBudget",
+        "budgets:ListTagsForResource",
+        "budgets:TagResource"
+      ],
+      "Resource": "arn:aws:budgets::ACCOUNT_ID:budget/tf-e2e-*"
+    },
+    {
+      "Sid": "DeadManSwitch",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:ListVersionsByFunction",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:GetPolicy",
+        "lambda:InvokeFunction",
+        "lambda:TagResource",
+        "lambda:ListTags"
+      ],
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:tf-e2e-*"
+    },
+    {
+      "Sid": "DeadManDeadline",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:PutParameter",
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:DeleteParameter",
+        "ssm:AddTagsToResource",
+        "ssm:ListTagsForResource",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": [
+        "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/tf-e2e",
+        "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/tf-e2e/*"
+      ]
+    },
+    {
+      "Sid": "DeadManLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:ListTagsForResource",
+        "logs:FilterLogEvents"
+      ],
+      "Resource": "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/aws/lambda/tf-e2e-*"
+    },
+    {
+      "Sid": "InlinePolicyOnStackRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:ListRolePolicies"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/tf-e2e-*"
+    },
+    {
+      "Sid": "CostAndQuotaReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ce:GetCostAndUsage",
+        "ce:UpdateCostAllocationTagsStatus",
+        "pricing:GetProducts",
+        "servicequotas:GetServiceQuota",
+        "servicequotas:ListRequestedServiceQuotaChangeHistoryByQuota",
+        "ssm:DescribeParameters",
+        "lambda:ListFunctions",
+        "budgets:ViewBudget"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

@@ -21,16 +21,21 @@ type recommendationProcessor struct {
 	workloadHandler workload.Handler
 }
 
+// Apply fits a recommendation to the GPUs the workers are on. Requests and
+// limits are capped at the capacity of the GPUs held, whatever the direction
+// of the change: a value above it can not be honoured by the device. A request
+// that grows is further capped at what those GPUs have left for the workload.
+// The message names every value that was lowered.
 func (r *recommendationProcessor) Apply(
 	ctx context.Context,
 	workload *workload.State,
 	rec *tfv1.Resources) (tfv1.Resources, string, error) {
-	result := *rec
-	msg := ""
+	result, capacityNotes := capAtDeviceCapacity(*rec, r.workloadHandler.GetWorkerDeviceCapacity(workload))
+	msg := describeBounds(capacityNotes)
 	curRes := workload.GetCurrentResourcesSpec()
 
-	isScaleUpTflops := curRes.Requests.Tflops.Cmp(rec.Requests.Tflops) < 0
-	isScaleUpVram := curRes.Requests.Vram.Cmp(rec.Requests.Vram) < 0
+	isScaleUpTflops := curRes.Requests.Tflops.Cmp(result.Requests.Tflops) < 0
+	isScaleUpVram := curRes.Requests.Vram.Cmp(result.Requests.Vram) < 0
 	if !isScaleUpTflops && !isScaleUpVram {
 		return result, msg, nil
 	}
@@ -43,12 +48,15 @@ func (r *recommendationProcessor) Apply(
 	_, workloadName := workload.Coordinates()
 	log.FromContext(ctx).V(4).Info("fetched max allowed resources", "workload", workloadName, "resources", allowedRes)
 
-	if isScaleUpTflops && rec.Requests.Tflops.Cmp(allowedRes.Tflops) > 0 {
+	if isScaleUpTflops && result.Requests.Tflops.Cmp(allowedRes.Tflops) > 0 {
 		result.Requests.Tflops = allowedRes.Tflops
-		msg = fmt.Sprintf("TFlops request set to max allowed: (%s)", result.Requests.Tflops.String())
+		if msg != "" {
+			msg += ", "
+		}
+		msg += fmt.Sprintf("TFlops request set to max allowed: (%s)", result.Requests.Tflops.String())
 	}
 
-	if isScaleUpVram && rec.Requests.Vram.Cmp(allowedRes.Vram) > 0 {
+	if isScaleUpVram && result.Requests.Vram.Cmp(allowedRes.Vram) > 0 {
 		result.Requests.Vram = allowedRes.Vram
 		if msg != "" {
 			msg += ", "

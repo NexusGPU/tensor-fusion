@@ -9,6 +9,7 @@ import (
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/robfig/cron/v3"
 	corev1 "k8s.io/api/core/v1"
@@ -226,6 +227,7 @@ func (r *GPUPoolCompactionReconciler) recordProvisionCompaction(
 
 	capacity.consumeNode(gpuNode)
 	r.markDeletionNodes[k8sNodeName] = compactionNodeMarker{poolName: pool.Name, uid: gpuNode.UID}
+	metrics.SetAutoscalingMetrics(pool.Name, false)
 
 	log.FromContext(ctx).Info("Empty node can be compacted - provision mode", "node", gpuNode.Name,
 		"availableTFlopsAfterCompact", capacity.availableTFlops,
@@ -261,6 +263,7 @@ func (r *GPUPoolCompactionReconciler) recordAutoSelectCompaction(
 
 	capacity.consumeNode(gpuNode)
 	r.markDeletionNodes[k8sNodeName] = compactionNodeMarker{poolName: poolName, uid: gpuNode.UID}
+	metrics.SetAutoscalingMetrics(poolName, false)
 
 	log.FromContext(ctx).Info("Empty node can be compacted - auto-select mode", "node", gpuNode.Name,
 		"availableTFlopsAfterCompact", capacity.availableTFlops,

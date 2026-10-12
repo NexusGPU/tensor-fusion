@@ -64,6 +64,10 @@ type PodReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=bindings,verbs=create
 // +kubebuilder:rbac:groups=core,resources=nodes/finalizers;pods/binding;pods/exec,verbs=create;get;patch;update
 // +kubebuilder:rbac:groups=core,resources=pods/finalizers,verbs=create;get;list;patch;update;watch
+// Reading container logs, for the cluster proxy that serves them with the
+// controller's identity. Nothing broader: no exec beyond the grant above, no
+// proxy subresources.
+// +kubebuilder:rbac:groups=core,resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups=core,resources=nodes/status;pods/status,verbs=get;patch;update
 // +kubebuilder:rbac:groups=core,resources=replicationcontrollers;services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims;persistentvolumes,verbs=get;list;patch;update;watch
@@ -78,9 +82,51 @@ type PodReconciler struct {
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims/status,verbs=get;list;patch;update;watch
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims/binding,verbs=update;patch
 
+// Reconcile handles the pod (see reconcilePod) and then, for a pod counted
+// against its owner's enabled-replicas limit, checks the owner's counter for
+// slots no pod holds.
+func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	res, err := r.reconcilePod(ctx, req)
+	if err != nil {
+		return res, err
+	}
+	if recheck := r.releaseLeakedCounterSlots(ctx, req); recheck > 0 &&
+		(res.RequeueAfter == 0 || recheck < res.RequeueAfter) {
+		res.RequeueAfter = recheck
+	}
+	return res, nil
+}
+
+// releaseLeakedCounterSlots is the only place that notices a slot of the
+// enabled-replicas counter without a pod (see TensorFusionPodCounter.Reserve
+// and ReleaseLeakedSlots): there is no pod whose deletion would give it back.
+// It hangs on the reconcile of the owner's injected pods because those are the
+// objects this controller already watches; the owner can be of any kind. While
+// the owner's last reservation is younger than the grace period the pod is
+// queued again for when it has passed. A failure is logged and tried again
+// later instead of failing the pod's reconcile, which has succeeded.
+func (r *PodReconciler) releaseLeakedCounterSlots(ctx context.Context, req ctrl.Request) time.Duration {
+	pod := &corev1.Pod{}
+	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {
+		// Gone, or the cache cannot answer: the owner's other pods and the
+		// next event of this one get here again.
+		return 0
+	}
+	if pod.Annotations[constants.TensorFusionPodCounterKeyAnnotation] == "" {
+		return 0
+	}
+	counter := &v1.TensorFusionPodCounter{Client: r.Client}
+	recheck, err := counter.ReleaseLeakedSlots(ctx, pod)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "failed to check tf pod count for slots without a pod", "pod", req.NamespacedName)
+		return v1.PodCounterLeakGracePeriod
+	}
+	return recheck
+}
+
 // Add GPU connection for Pods using GPU
 // Have to create TensorFusion connection here because pod UID not available in MutatingWebhook
-func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *PodReconciler) reconcilePod(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	pod := &corev1.Pod{}
 	if err := r.Get(ctx, req.NamespacedName, pod); err != nil {

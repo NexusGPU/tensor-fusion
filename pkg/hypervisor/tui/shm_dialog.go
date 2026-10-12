@@ -193,18 +193,30 @@ func (m *ShmDialogModel) updateContent() {
 		_ = handle.Close()
 	}()
 
-	// Get the state
-	state := handle.GetState()
-	if state == nil {
+	// The file is writable by the workload and can change length while it is
+	// being read; only accesses made inside WithState survive that.
+	var details string
+	if !handle.WithState(func(state *workerstate.SharedDeviceState) { details = renderShmStateDetails(state) }) {
 		content.WriteString(fmt.Sprintf(
 			"%s: %s\n\n",
 			MetricLabelStyle.Render("Error"),
-			MetricValueStyle.Render("Shared memory state is null"),
+			MetricValueStyle.Render("Shared memory state is unavailable"),
 		))
 		m.content = content.String()
 		m.viewport.SetContent(m.content)
 		return
 	}
+	content.WriteString(details)
+
+	m.content = content.String()
+	m.viewport.SetContent(m.content)
+	m.viewport.GotoTop()
+}
+
+// renderShmStateDetails renders the mapped state. It reads the mapping, so it
+// must only be called from within SharedMemoryHandle.WithState.
+func renderShmStateDetails(state *workerstate.SharedDeviceState) string {
+	var content strings.Builder
 
 	// Basic information
 	deviceCount := state.DeviceCount()
@@ -313,7 +325,5 @@ func (m *ShmDialogModel) updateContent() {
 		content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Active PIDs"), strings.Join(pidStrs, ", ")))
 	}
 
-	m.content = content.String()
-	m.viewport.SetContent(m.content)
-	m.viewport.GotoTop()
+	return content.String()
 }

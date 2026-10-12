@@ -48,7 +48,9 @@ data:
         request:
           headers:
             # refer https://docs.greptime.com/user-guide/protocols/http/#post-influxdb-line-protocol-data
-            Authorization: "token {{ .Values.greptime.user }}:{{ .Values.greptime.password }}"
+            # The password is not written into this ConfigMap: Vector takes it
+            # from its environment, where it is injected from the Secret.
+            Authorization: "token {{ .Values.greptime.user }}:${GREPTIME_PASSWORD}"
         {{- end }}
       
       sink_greptimedb_operator_logs:
@@ -64,7 +66,7 @@ data:
         endpoint: https://{{ .Values.greptime.host }}
         dbname: {{ .Values.greptime.db }}
         username: {{ .Values.greptime.user }}
-        password: {{ .Values.greptime.password }}
+        password: "${GREPTIME_PASSWORD}"
         {{- end }}
 
   vector-hypervisor.yaml: |
@@ -80,7 +82,16 @@ data:
         type: file
         data_dir: /logs
         include:
-          - /logs/metrics.log.*
+          - /logs/metrics*.log
+      # The hypervisor's own log, which it also writes to a bounded file in the
+      # volume it shares with this sidecar (the directory is named after the
+      # Pod). The sidecar does not mount the node's Pod log directory, so
+      # kubernetes_logs above finds nothing to read for this Pod.
+      hypervisor_logs:
+        type: file
+        data_dir: /logs
+        include:
+          - /logs/pods/*/hypervisor*.log
     
     transforms:
       prepare_kubernetes_logs:
@@ -96,6 +107,20 @@ data:
           del(.kubernetes)
           del(.file)
           del(.source_type)
+      prepare_hypervisor_logs:
+        type: remap
+        inputs:
+          - hypervisor_logs
+        source: |
+          parsed, err = parse_regex(.file, r'^/logs/pods/(?P<pod>[^/]+)/')
+          .pod = if err == null { parsed.pod } else { "hypervisor" }
+          .container = "hypervisor"
+          .namespace = "{{ include "tensor-fusion.namespace" . }}"
+          .component = "hypervisor"
+          .stream = "stderr"
+          del(.file)
+          del(.host)
+          del(.source_type)
 
     sinks:
       sink_greptimedb_hypervisor_metrics:
@@ -105,6 +130,11 @@ data:
         method: post
         encoding:
           codec: text
+        # One line per request: the database answers a request that holds a
+        # row it rejects (a field whose type differs from the column's) with
+        # an error for the whole request, and Vector then drops all of it.
+        batch:
+          max_events: 1
         {{- if ne .Values.greptime.isCloud true }}
         uri: "http://{{ .Values.greptime.host }}:4000/v1/influxdb/api/v2/write?db=public&precision=ms"
         {{- else }}
@@ -112,7 +142,9 @@ data:
         request:
           headers:
             # refer https://docs.greptime.com/user-guide/protocols/http/#post-influxdb-line-protocol-data
-            Authorization: "token {{ .Values.greptime.user }}:{{ .Values.greptime.password }}"
+            # The password is not written into this ConfigMap: Vector takes it
+            # from its environment, where it is injected from the Secret.
+            Authorization: "token {{ .Values.greptime.user }}:${GREPTIME_PASSWORD}"
         {{- end }}
         
       sink_greptimedb_hypervisor_worker_logs:
@@ -121,6 +153,7 @@ data:
         table: tf_system_log
         inputs:
           - prepare_kubernetes_logs
+          - prepare_hypervisor_logs
         {{- if ne .Values.greptime.isCloud true }}
         endpoint: http://{{ .Values.greptime.host }}:4000
         dbname: public
@@ -128,5 +161,5 @@ data:
         endpoint: https://{{ .Values.greptime.host }}
         dbname: {{ .Values.greptime.db }}
         username: {{ .Values.greptime.user }}
-        password: {{ .Values.greptime.password }}
+        password: "${GREPTIME_PASSWORD}"
         {{- end }}

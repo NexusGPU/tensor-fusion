@@ -139,7 +139,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	// Keep the observed hardware vendor in sync.
+	// Keep the labels mirrored from the node in sync.
 	if syncGPUNodeLabelsFromNode(node, gpuNode) {
 		if err := r.Update(ctx, gpuNode); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to sync GPU node labels from node: %w", err)
@@ -237,12 +237,20 @@ func (r *NodeReconciler) generateGPUNode(node *corev1.Node, pool *tfv1.GPUPool, 
 	if provisioner != "" {
 		gpuNode.Labels[constants.ProvisionerLabelKey] = provisioner
 	}
-	// Copy vendor label from k8s node to GPUNode
-	if node.Labels != nil && node.Labels[constants.AcceleratorLabelVendor] != "" {
-		gpuNode.Labels[constants.AcceleratorLabelVendor] = node.Labels[constants.AcceleratorLabelVendor]
-	}
+	// Copy the mirrored labels from k8s node to GPUNode
+	syncGPUNodeLabelsFromNode(node, gpuNode)
 	_ = controllerutil.SetControllerReference(pool, gpuNode, r.Scheme)
 	return gpuNode
+}
+
+// gpuNodeLabelsFromNode are the labels of a Kubernetes Node that its GPUNode
+// mirrors: the hardware vendor, and how the node is bought (on-demand, spot or
+// reserved) and what instance type it is, so that a reader of GPUNodes and the
+// node cost metrics can tell without reading the Node.
+var gpuNodeLabelsFromNode = []string{
+	constants.AcceleratorLabelVendor,
+	string(tfv1.NodeRequirementKeyCapacityType),
+	string(tfv1.NodeRequirementKeyInstanceType),
 }
 
 func syncGPUNodeLabelsFromNode(node *corev1.Node, gpuNode *tfv1.GPUNode) bool {
@@ -255,18 +263,17 @@ func syncGPUNodeLabelsFromNode(node *corev1.Node, gpuNode *tfv1.GPUNode) bool {
 	nodeLabels := node.GetLabels()
 	changed := false
 
-	desiredVendor := ""
-	if nodeLabels != nil {
-		desiredVendor = nodeLabels[constants.AcceleratorLabelVendor]
-	}
-	if desiredVendor == "" {
-		if _, exists := gpuNode.Labels[constants.AcceleratorLabelVendor]; exists {
-			delete(gpuNode.Labels, constants.AcceleratorLabelVendor)
+	for _, key := range gpuNodeLabelsFromNode {
+		desired := nodeLabels[key]
+		if desired == "" {
+			if _, exists := gpuNode.Labels[key]; exists {
+				delete(gpuNode.Labels, key)
+				changed = true
+			}
+		} else if gpuNode.Labels[key] != desired {
+			gpuNode.Labels[key] = desired
 			changed = true
 		}
-	} else if gpuNode.Labels[constants.AcceleratorLabelVendor] != desiredVendor {
-		gpuNode.Labels[constants.AcceleratorLabelVendor] = desiredVendor
-		changed = true
 	}
 
 	return changed

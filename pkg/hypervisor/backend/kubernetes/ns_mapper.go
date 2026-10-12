@@ -11,33 +11,41 @@ import (
 
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
+	"k8s.io/klog/v2"
 )
 
-// podUIDCgroupRe matches the Kubernetes pod UID embedded in a cgroup path.
-// Handles both the systemd driver (underscores, e.g.
+// podUIDCgroupRe matches the Kubernetes pod UID embedded in a cgroup path, on
+// cgroup v1 and v2 alike. Handles both the systemd driver (underscores, e.g.
 // "kubepods-burstable-pode38c7b11_d82c_4169_b866_361c5d7103af.slice") and the
-// cgroupfs driver (dashes, e.g. "kubepods/burstable/pode38c7b11-...-...").
+// cgroupfs driver (dashes, e.g. "kubepods/burstable/pode38c7b11-...-..."), as
+// well as the hash a static pod uses in place of a UUID. The match has to be a
+// whole path component (or its systemd slice prefix).
 var podUIDCgroupRe = regexp.MustCompile(
-	`pod([0-9a-fA-F]{8}[-_][0-9a-fA-F]{4}[-_]` +
-		`[0-9a-fA-F]{4}[-_][0-9a-fA-F]{4}[-_][0-9a-fA-F]{12})`,
+	`[/-]pod([0-9a-fA-F]{8}[-_][0-9a-fA-F]{4}[-_]` +
+		`[0-9a-fA-F]{4}[-_][0-9a-fA-F]{4}[-_][0-9a-fA-F]{12}|[0-9a-fA-F]{32})(?:[./\n]|$)`,
 )
 
-// GetWorkerInfoFromHostPID extracts worker information from a process's environment
-// by reading /proc/{hostPID}/environ and /proc/{hostPID}/status
-// Returns ProcessMappingInfo with Namespace, PodName, ContainerName for worker lookup
+// GetWorkerInfoFromHostPID extracts worker information for a host process from
+// /proc/{hostPID}: the pod UID from its cgroup, and the pod/container names it
+// carries in its environment.
+// Returns ProcessMappingInfo with PodUID, Namespace, PodName, ContainerName for worker lookup
 func GetWorkerInfoFromHostPID(hostPID uint32) (*framework.ProcessMappingInfo, error) {
-	procDir := fmt.Sprintf("/proc/%d", hostPID)
+	return getWorkerInfoFromProcDir(fmt.Sprintf("/proc/%d", hostPID), hostPID)
+}
 
+func getWorkerInfoFromProcDir(procDir string, hostPID uint32) (*framework.ProcessMappingInfo, error) {
 	// Check if process exists
 	if _, err := os.Stat(procDir); os.IsNotExist(err) {
 		return nil, fmt.Errorf("process %d does not exist", hostPID)
 	}
 
-	// Read environment variables from /proc/{pid}/environ
+	// Read environment variables from /proc/{pid}/environ. The environment is
+	// only descriptive (the cgroup below identifies the pod) and is not always
+	// readable, so a failure here must not hide the process.
 	envPath := filepath.Join(procDir, "environ")
 	envData, err := os.ReadFile(envPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read environment from %s: %w", envPath, err)
+		klog.V(5).Infof("Failed to read environment from %s: %v", envPath, err)
 	}
 
 	// Parse environment variables (null-separated)
@@ -65,13 +73,17 @@ func GetWorkerInfoFromHostPID(hostPID uint32) (*framework.ProcessMappingInfo, er
 		containerPID = hostPID
 	}
 
-	// Parse the pod UID from the cgroup as an environ-independent fallback.
-	// Some GPU workloads spawn the process that actually holds device memory
-	// with a stripped environment (e.g. vLLM's EngineCore subprocess drops
-	// POD_NAME/POD_NAMESPACE), which would otherwise make this process
-	// unattributable. The cgroup is set by the kubelet and inherited by every
-	// child, so it survives such stripping.
-	podUID := getPodUIDFromCgroup(procDir)
+	// Parse the pod UID from the cgroup. This is the identity callers rely on:
+	// the cgroup is set by the kubelet and inherited by every child, so unlike
+	// the environment it neither depends on how the process was started nor
+	// gets lost when a workload spawns the process that actually holds device
+	// memory with a stripped environment (e.g. vLLM's EngineCore subprocess
+	// drops POD_NAME/POD_NAMESPACE).
+	//
+	// A cgroup that names no pod is a statement too (the process runs outside
+	// every pod), and only then may the environment say which worker it is. A
+	// cgroup that could not be read says nothing, and is reported as such.
+	podUID, cgroupRead := readPodUIDFromCgroup(procDir)
 
 	return &framework.ProcessMappingInfo{
 		Namespace:     namespace,
@@ -79,6 +91,7 @@ func GetWorkerInfoFromHostPID(hostPID uint32) (*framework.ProcessMappingInfo, er
 		ContainerName: containerName,
 		GuestID:       fmt.Sprintf("%s_%s_%s", namespace, podName, containerName),
 		PodUID:        podUID,
+		PodUIDUnknown: !cgroupRead,
 		HostPID:       hostPID,
 		GuestPID:      containerPID,
 	}, nil
@@ -87,16 +100,29 @@ func GetWorkerInfoFromHostPID(hostPID uint32) (*framework.ProcessMappingInfo, er
 // getPodUIDFromCgroup reads /proc/<pid>/cgroup and extracts the Kubernetes pod
 // UID, normalized to the canonical dash-separated form (matching pod.UID, i.e.
 // WorkerInfo.WorkerUID). Returns "" when no pod UID can be found.
+//
+// The leftmost match is the pod-level cgroup created by the kubelet. Anything
+// further down the path can be created from inside the container and is
+// ignored.
 func getPodUIDFromCgroup(procDir string) string {
+	podUID, _ := readPodUIDFromCgroup(procDir)
+	return podUID
+}
+
+// readPodUIDFromCgroup is getPodUIDFromCgroup that also reports whether the
+// cgroup could be read at all. An empty UID with read set means the process is
+// in no pod; with read unset its pod is not known.
+func readPodUIDFromCgroup(procDir string) (podUID string, read bool) {
 	data, err := os.ReadFile(filepath.Join(procDir, "cgroup"))
 	if err != nil {
-		return ""
+		klog.V(5).Infof("Failed to read cgroup from %s: %v", procDir, err)
+		return "", false
 	}
 	m := podUIDCgroupRe.FindSubmatch(data)
 	if m == nil {
-		return ""
+		return "", true
 	}
-	return strings.ReplaceAll(string(m[1]), "_", "-")
+	return strings.ReplaceAll(string(m[1]), "_", "-"), true
 }
 
 // getContainerPIDFromStatus reads the container PID (NSpid) from /proc/{pid}/status

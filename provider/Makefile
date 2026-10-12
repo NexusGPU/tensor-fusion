@@ -15,6 +15,10 @@ MOCK_DIR := $(STUB_DIR)/device_mock
 
 # Output libraries
 STUB_LIB := $(BUILD_DIR)/libaccelerator_example.so
+# The example built without AccelSetFeatures, as a provider released before
+# that function existed: what the hypervisor's loader tests load to make sure
+# such a library keeps working.
+STUB_LEGACY_LIB := $(BUILD_DIR)/libaccelerator_example_legacy.so
 ASCEND_LIB := $(BUILD_DIR)/libaccelerator_ascend.so
 
 # Source files
@@ -23,6 +27,7 @@ ASCEND_SRC := $(ASCEND_DIR)/accelerator.c
 
 # Object files
 STUB_OBJ := $(BUILD_DIR)/accelerator_example.o
+STUB_LEGACY_OBJ := $(BUILD_DIR)/accelerator_example_legacy.o
 ASCEND_OBJ := $(BUILD_DIR)/accelerator_ascend.o
 
 # Test executables
@@ -40,13 +45,19 @@ MOCK_APP_BIN := $(BUILD_DIR)/app_mock
 all: example
 
 # Build example implementation
-example: mock-driver $(STUB_LIB)
+example: mock-driver $(STUB_LIB) $(STUB_LEGACY_LIB)
 
 $(STUB_LIB): $(STUB_OBJ) $(MOCK_DRIVER_LIB) | $(BUILD_DIR)
 	$(CC) $(LDFLAGS) -o $@ $< -L$(BUILD_DIR) -ldriver_mock -lpthread
 
 $(STUB_OBJ): $(STUB_SRC) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(PROVIDER_DIR) -I$(MOCK_DIR) -c -o $@ $<
+
+$(STUB_LEGACY_LIB): $(STUB_LEGACY_OBJ) $(MOCK_DRIVER_LIB) | $(BUILD_DIR)
+	$(CC) $(LDFLAGS) -o $@ $< -L$(BUILD_DIR) -ldriver_mock -lpthread
+
+$(STUB_LEGACY_OBJ): $(STUB_SRC) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DACCEL_EXAMPLE_LEGACY_ABI -I$(PROVIDER_DIR) -I$(MOCK_DIR) -c -o $@ $<
 
 # Build Ascend implementation (requires Ascend CANN SDK)
 ascend: $(ASCEND_LIB)

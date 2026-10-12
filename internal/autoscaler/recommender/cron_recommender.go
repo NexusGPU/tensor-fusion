@@ -46,7 +46,7 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 	}
 
 	var recommendation tfv1.Resources
-	var reason, message string
+	var reason, message, bounds string
 	if activeRule == nil {
 		// Revert the resources to those specified in the workload spec
 		recommendation = *w.GetOriginalResourcesSpec()
@@ -69,6 +69,7 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 					return nil, fmt.Errorf("failed to apply recommendation processor: %v", err)
 				}
 				if msg != "" {
+					bounds = msg
 					message += fmt.Sprintf(", %s", msg)
 					log.FromContext(ctx).Info("recommendation processor applied", "message", message)
 				}
@@ -78,6 +79,8 @@ func (c *CronRecommender) Recommend(ctx context.Context, w *workload.State) (*Re
 
 	if len(reason) > 0 {
 		w.SetActiveCronScalingRule(activeRule.DeepCopy())
+		// For the event recorded when the rule's resources are applied.
+		w.SetChangeBounds(bounds)
 		w.UpsertStatusCondition(metav1.Condition{
 			Type:               constants.ConditionStatusTypeRecommendationProvided,
 			Status:             metav1.ConditionTrue,

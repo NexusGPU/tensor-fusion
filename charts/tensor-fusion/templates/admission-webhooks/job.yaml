@@ -1,3 +1,28 @@
+{{- /*
+Scheduling of the hook pods. Helm waits for these Jobs, so a pod placed on a
+node that cannot run or pull the image blocks the install or upgrade until the
+timeout. The pods follow the controller (affinity, tolerations) unless
+controller.admissionWebhooks.patch sets its own, and always select Linux nodes
+unless that selector names kubernetes.io/os itself. Every key is read through
+a default, so values of an older release (--reuse-values) render too.
+*/ -}}
+{{- define "tensor-fusion.admissionWebhooks.patch.scheduling" -}}
+{{- $patch := ((.Values.controller.admissionWebhooks | default dict).patch | default dict) -}}
+{{- $nodeSelector := deepCopy ($patch.nodeSelector | default dict) -}}
+{{- if not (hasKey $nodeSelector "kubernetes.io/os") -}}
+{{- $_ := set $nodeSelector "kubernetes.io/os" "linux" -}}
+{{- end -}}
+nodeSelector:
+  {{- toYaml $nodeSelector | nindent 2 }}
+{{- with ($patch.affinity | default .Values.controller.affinity) }}
+affinity:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with ($patch.tolerations | default .Values.controller.tolerations) }}
+tolerations:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -30,6 +55,7 @@ spec:
                   fieldPath: metadata.namespace
       restartPolicy: OnFailure
       serviceAccountName: {{ include "tensor-fusion.fullname" . }}-webhook-job
+      {{- include "tensor-fusion.admissionWebhooks.patch.scheduling" . | nindent 6 }}
 
 ---
 apiVersion: batch/v1
@@ -65,5 +91,23 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+        - name: patch-validating
+          image: {{ .Values.controller.admissionWebhooks.patch.image }}
+          args:
+            - patch
+            - --webhook-name={{ include "tensor-fusion.fullname" . }}-validating-webhook
+            - --namespace=$(POD_NAMESPACE)
+            - --patch-mutating=false
+            - --patch-validating=true
+            - --secret-name={{.Values.controller.admissionWebhooks.secretName}}
+            # The patch also writes the failure policy, so it has to be the one
+            # the validating webhook is rendered with, not the mutating one.
+            - --patch-failure-policy={{ (.Values.controller.admissionWebhooks.ephemeralContainers | default dict).failurePolicy | default "Ignore" }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
       restartPolicy: OnFailure
       serviceAccountName: {{ include "tensor-fusion.fullname" . }}-webhook-job
+      {{- include "tensor-fusion.admissionWebhooks.patch.scheduling" . | nindent 6 }}

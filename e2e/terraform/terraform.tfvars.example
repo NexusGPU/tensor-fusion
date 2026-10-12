@@ -1,0 +1,36 @@
+# cp terraform.tfvars.example terraform.tfvars   (terraform.tfvars is git-ignored)
+# Every value below is the default; uncomment to change. The same variables can
+# be passed as TF_VAR_<name> environment variables, which is what GO-LIVE.md uses.
+
+# name        = "tf-e2e"       # cluster name + Project tag + IAM name prefix
+# region      = "us-west-2"
+# aws_profile = null           # null = use AWS_PROFILE / the ambient credential chain
+
+# --- versions (see README 版本选择与依据) ------------------------------------------
+# kubernetes_version = "1.36"
+# karpenter_version  = "1.14.1"
+
+# --- system node -----------------------------------------------------------------
+# system_instance_types = ["t3.large"]
+# system_node_count     = 1
+
+# --- GPU NodePool (Karpenter; single-GPU instance types only) -----------------------
+# gpu_instance_types    = ["g4dn.xlarge", "g4dn.2xlarge", "g5.xlarge", "g6.xlarge"]
+# gpu_capacity_types    = ["spot", "on-demand"]   # spot first, on-demand fallback
+# gpu_node_limit        = 4                       # max GPU nodes of the NodePool
+# gpu_consolidate_after = "10m"                   # keep >= 10m, see variables.tf
+# gpu_static_count      = 0                       # managed-node-group GPU nodes; only for NEG-10
+
+# --- general-purpose and mock-GPU NodePools ------------------------------------------
+# cpu_limit      = 4           # vCPUs of NodePool tf-cpu
+# mock_cpu_limit = 6           # vCPUs of NodePool tf-mock (2 per mock node)
+
+# --- cost guard ------------------------------------------------------------------------
+# deadman_ttl           = "3h"    # normally set per run: make up TTL=3h
+# deadman_cluster_grace = "6h"    # control plane is deleted this long after the deadline; "" = never
+# budget_alert_email    = null    # pass via TF_VAR_budget_alert_email, never commit an address
+
+# --- optional ----------------------------------------------------------------------------
+# enable_spot_interruption_queue = false          # needed for a FIS spot-interruption test (KRP-A11)
+# api_public_access_cidrs        = ["203.0.113.7/32"]
+# extra_tags                     = { Owner = "you" }

@@ -1,0 +1,3 @@
+# Test results and infra timing/cost ledgers may contain node names and ARNs.
+results/
+*.test

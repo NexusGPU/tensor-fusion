@@ -29,6 +29,7 @@ func TestERLPreservesLimitsWithoutValidUtilization(t *testing.T) {
 		{name: "query failed", err: errors.New("driver unavailable")},
 		{name: "device absent", metrics: map[string]*api.GPUUsageMetrics{"GPU-other": {ComputePercentage: 0}}},
 		{name: "nil sample", metrics: map[string]*api.GPUUsageMetrics{"GPU-test": nil}},
+		{name: "utilization not read", metrics: map[string]*api.GPUUsageMetrics{"GPU-test": {ComputeUnavailable: true}}},
 		{name: "negative", metrics: map[string]*api.GPUUsageMetrics{"GPU-test": {ComputePercentage: -1}}},
 		{name: "over 100", metrics: map[string]*api.GPUUsageMetrics{"GPU-test": {ComputePercentage: 101}}},
 		{name: "NaN", metrics: map[string]*api.GPUUsageMetrics{"GPU-test": {ComputePercentage: math.NaN()}}},
@@ -76,12 +77,15 @@ func TestERLPreservesLimitsWithoutValidUtilization(t *testing.T) {
 					t.Fatal("invalid telemetry changed shared-memory limits")
 				}
 			})
-			// A genuine idle sample must still permit the normal rate increase.
+			// The next valid sample resumes rate control: the worker is far above
+			// its share, so the rate comes down.
 			device.err = nil
-			device.metrics = map[string]*api.GPUUsageMetrics{"GPU-test": {ComputePercentage: 0}}
-			controller.updateERLControllers()
-			if controller.erlStates["worker:gpu-test"].currentRate <= before.currentRate {
-				t.Fatal("valid idle sample did not resume rate control")
+			device.metrics = map[string]*api.GPUUsageMetrics{"GPU-test": {ComputePercentage: 100}}
+			for range 4 {
+				controller.updateERLControllers()
+			}
+			if controller.erlStates["worker:gpu-test"].currentRate >= before.currentRate {
+				t.Fatal("a valid sample did not resume rate control")
 			}
 		})
 	}

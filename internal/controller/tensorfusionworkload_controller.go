@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -50,16 +51,272 @@ type TensorFusionWorkloadReconciler struct {
 	Scheme        *runtime.Scheme
 	Recorder      events.EventRecorder
 	PortAllocator *portallocator.PortAllocator
+
+	// apiReader reads from the API server instead of the informer cache. It is
+	// set by SetupWithManager; without it the cached client is used.
+	apiReader client.Reader
+	// orphanGracePeriod replaces WorkloadOrphanGracePeriod when set (tests).
+	orphanGracePeriod time.Duration
 }
+
+// WorkloadOrphanGracePeriod is how long a workload the pod webhook created may
+// be without an owner reference and without a pod before it is removed (see
+// collectOrphanWorkload). It is counted from the later of the workload's
+// creation and constants.WorkloadLastPodSeenAnnotation.
+//
+// The webhook creates the workload, or records an admission on an existing
+// one, while the pod's create request is still being handled. After the
+// webhook has answered (it has timeoutSeconds, at most 30s, to do so) the API
+// server runs the remaining admission steps and stores the pod, all inside its
+// request timeout (--request-timeout, 60s by default). So about a minute later
+// the pod is either stored or never will be. That the workload has no pod is
+// confirmed with a list from the API server before it is deleted, so the lag
+// of the informer cache is not part of the budget. The remaining minutes are
+// margin: for clock differences between the API server, the operator replica
+// that served the admission and the one that runs this check, for the time
+// recorded on the workload being up to workloadPodSeenRefreshInterval old, and
+// for an API server with a longer request timeout. The margin is generous on
+// purpose: unlike an admission slot nobody holds (PodCounterLeakGracePeriod),
+// a workload without a pod holds no GPU, quota or replica slot, so keeping it
+// a few minutes longer costs nothing, while removing the workload of a pod
+// that is about to appear leaves that pod without one.
+//
+// A workload whose owner has scaled it to zero is not subject to this period
+// at all: it has an owner reference and is never considered.
+const WorkloadOrphanGracePeriod = 5 * time.Minute
+
+// workloadPodSeenRefreshInterval bounds how often the controller writes
+// constants.WorkloadLastPodSeenAnnotation while a workload without an owner
+// reference has pods, and is how soon such a workload is looked at again.
+const workloadPodSeenRefreshInterval = time.Minute
+
+// workloadOrphanRecheckSlack is added to the delay until the grace period has
+// passed, so the next reconcile does not arrive a moment too early.
+const workloadOrphanRecheckSlack = time.Second
 
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionworkloads,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionworkloads/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=tensor-fusion.ai,resources=tensorfusionworkloads/finalizers,verbs=update
 
-// TensorFusionWorkload Reconciler
+// Reconcile first removes the workload if the pod webhook created it for a
+// pod that was never stored (see collectOrphanWorkload) and otherwise handles
+// it as usual (see reconcileWorkload). A failure of the first step is logged
+// and tried again later instead of failing the reconcile of a workload that
+// may be perfectly in use.
+func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	deleted, recheck, err := r.collectOrphanWorkload(ctx, req.NamespacedName)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "failed to check workload for a missing owner and pod", "workload", req.NamespacedName)
+		recheck = workloadPodSeenRefreshInterval
+	}
+	if deleted {
+		// The deletion arrives as an event of its own; that reconcile takes
+		// the finalizer off.
+		return ctrl.Result{}, nil
+	}
+	res, err := r.reconcileWorkload(ctx, req)
+	if err != nil {
+		return res, err
+	}
+	// An immediate requeue comes back here and asks again; a delay must not
+	// replace it.
+	//nolint:staticcheck // Requeue is still what reconcileWorkload returns on a conflict
+	if recheck > 0 && !res.Requeue && (res.RequeueAfter == 0 || recheck < res.RequeueAfter) {
+		res.RequeueAfter = recheck
+	}
+	return res, nil
+}
+
+// isOrphanCandidate reports whether the workload is one collectOrphanWorkload
+// may remove once it has had no pod for the grace period:
+//   - the pod webhook created it (it marks its workloads with the dynamic
+//     workload mode); a workload a user created is never touched;
+//   - it has no owner reference. The webhook gives the workload the pod's
+//     controller (Deployment, StatefulSet, Job, ...) as owner, and for a pod
+//     without a controller the pod controller makes the stored pod the owner.
+//     Either reference hands the workload's lifetime to the Kubernetes garbage
+//     collector: while the owner exists the workload stays, with or without
+//     pods (an owner scaled to zero, or one whose pods are all being refused),
+//     and when the owner is gone the collector deletes the workload. What no
+//     reference covers is the workload of a pod without a controller that was
+//     refused after admission, or deleted before the pod controller got to it.
+func isOrphanCandidate(workload *tfv1.TensorFusionWorkload) bool {
+	return workload.DeletionTimestamp.IsZero() &&
+		workload.Annotations[constants.WorkloadModeAnnotation] == constants.WorkloadModeDynamic &&
+		len(workload.OwnerReferences) == 0
+}
+
+// podRefersToWorkload reports whether the pod belongs to the workload with
+// that name in its namespace: a worker or a local-GPU client (label), a client
+// of a remote worker (selected-workload annotation), or a pod that is about to
+// become the workload's owner.
+func podRefersToWorkload(pod *corev1.Pod, workloadName string) bool {
+	return pod.Labels[constants.WorkloadKey] == workloadName ||
+		pod.Annotations[constants.SelectedWorkloadAnnotation] == workloadName ||
+		pod.Annotations[constants.SetPendingOwnedWorkloadAnnotation] == workloadName
+}
+
+// workloadHasPod reports whether any pod, terminating ones included, refers to
+// the workload. The annotations cannot be selected on, so all pods of the
+// namespace are looked at; they are only read.
+func workloadHasPod(ctx context.Context, reader client.Reader, workload *tfv1.TensorFusionWorkload) (bool, error) {
+	podList := &corev1.PodList{}
+	if err := reader.List(ctx, podList, client.InNamespace(workload.Namespace), client.UnsafeDisableDeepCopy); err != nil {
+		return false, fmt.Errorf("list pods: %w", err)
+	}
+	for i := range podList.Items {
+		if podRefersToWorkload(&podList.Items[i], workload.Name) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// orphanClockStart returns the time from which the workload counts as being
+// without a pod: the later of its creation and the recorded last time a pod of
+// it was admitted or seen. Both are stored on the workload, so a restart of
+// the operator neither starts the period again nor cuts it short. readable is
+// false when the recorded time cannot be parsed.
+func orphanClockStart(workload *tfv1.TensorFusionWorkload) (start time.Time, readable bool) {
+	start = workload.CreationTimestamp.Time
+	value, ok := workload.Annotations[constants.WorkloadLastPodSeenAnnotation]
+	if !ok {
+		return start, true
+	}
+	seen, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return start, false
+	}
+	if seen.After(start) {
+		start = seen
+	}
+	return start, true
+}
+
+// collectOrphanWorkload deletes a workload that the pod webhook created for a
+// pod that does not exist. The webhook creates the workload during admission,
+// before the pod is stored; when a later admission step, a quota or the
+// validation refuses the pod, or the request times out, nothing else would
+// ever remove a workload that has no owner reference (see isOrphanCandidate).
+//
+// The workload is deleted when no pod has referred to it for the grace period
+// (see WorkloadOrphanGracePeriod and orphanClockStart). Until then the
+// returned delay asks for another look when the period has passed. While pods
+// exist the time is recorded on the workload, at most once per
+// workloadPodSeenRefreshInterval; normally that never happens because the
+// workload gets its owner reference within seconds.
+//
+// Two things keep a pod that is being admitted right now from losing its
+// workload: the webhook records the admission on a workload it reuses, which
+// starts the period again, and the delete carries the resource version this
+// decision was made on, so it is refused when the workload has changed since
+// (the webhook's record, a new owner reference).
+//
+// Deleting the workload releases nothing: GPU allocations, quota and the
+// enabled-replicas counter are all held per pod, and this workload has none.
+// Its finalizer is taken off by the next reconcile (reconcileWorkload).
+func (r *TensorFusionWorkloadReconciler) collectOrphanWorkload(
+	ctx context.Context,
+	key client.ObjectKey,
+) (deleted bool, recheck time.Duration, err error) {
+	workload := &tfv1.TensorFusionWorkload{}
+	if err := r.Get(ctx, key, workload); err != nil {
+		return false, 0, client.IgnoreNotFound(err)
+	}
+	if !isOrphanCandidate(workload) {
+		return false, 0, nil
+	}
+
+	grace := r.orphanGracePeriod
+	if grace <= 0 {
+		grace = WorkloadOrphanGracePeriod
+	}
+	refresh := min(workloadPodSeenRefreshInterval, grace/2)
+	now := time.Now()
+	start, readable := orphanClockStart(workload)
+
+	hasPod, err := workloadHasPod(ctx, r.Client, workload)
+	if err != nil {
+		return false, 0, err
+	}
+	if hasPod {
+		if !readable || now.Sub(start) >= refresh {
+			if err := r.recordPodSeen(ctx, workload, now); err != nil {
+				return false, 0, err
+			}
+		}
+		// A client of a remote worker does not trigger this reconcile when it
+		// goes away, so look again without waiting for an event.
+		return false, refresh, nil
+	}
+
+	if !readable {
+		// Without a usable time there is no telling how long the workload has
+		// been without a pod: start the period now instead of guessing.
+		if err := r.recordPodSeen(ctx, workload, now); err != nil {
+			return false, 0, err
+		}
+		return false, grace + workloadOrphanRecheckSlack, nil
+	}
+	if wait := start.Add(grace).Sub(now); wait > 0 {
+		return false, wait + workloadOrphanRecheckSlack, nil
+	}
+
+	// The cache may be behind: a pod stored a moment ago must be seen.
+	reader := r.apiReader
+	if reader == nil {
+		reader = r.Client
+	}
+	if hasPod, err = workloadHasPod(ctx, reader, workload); err != nil {
+		return false, 0, err
+	}
+	if hasPod {
+		return false, refresh, nil
+	}
+
+	if err := r.Delete(ctx, workload, client.Preconditions{
+		UID:             &workload.UID,
+		ResourceVersion: &workload.ResourceVersion,
+	}); err != nil {
+		if errors.IsNotFound(err) {
+			return true, 0, nil
+		}
+		if errors.IsConflict(err) {
+			// Changed since it was read; decide again on what it is now.
+			return false, workloadOrphanRecheckSlack, nil
+		}
+		return false, 0, fmt.Errorf("delete workload without owner and pod: %w", err)
+	}
+	log.FromContext(ctx).Info("Deleted workload created by the pod webhook: it has no owner and has had no pod",
+		"workload", key, "withoutPodSince", start, "gracePeriod", grace)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(workload, nil, corev1.EventTypeNormal, "OrphanWorkloadDeleted", "Delete",
+			"Workload has no owner and has had no pod since %s", start.Format(time.RFC3339))
+	}
+	return true, 0, nil
+}
+
+// recordPodSeen stores the time as constants.WorkloadLastPodSeenAnnotation.
+func (r *TensorFusionWorkloadReconciler) recordPodSeen(
+	ctx context.Context,
+	workload *tfv1.TensorFusionWorkload,
+	seen time.Time,
+) error {
+	patch := client.MergeFrom(workload.DeepCopy())
+	if workload.Annotations == nil {
+		workload.Annotations = map[string]string{}
+	}
+	workload.Annotations[constants.WorkloadLastPodSeenAnnotation] = seen.UTC().Format(time.RFC3339)
+	if err := r.Patch(ctx, workload, patch); err != nil {
+		return client.IgnoreNotFound(fmt.Errorf("record last pod seen: %w", err))
+	}
+	return nil
+}
+
+// reconcileWorkload handles one TensorFusionWorkload.
 //
 //nolint:gocyclo
-func (r *TensorFusionWorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *TensorFusionWorkloadReconciler) reconcileWorkload(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	log.Info("Reconciling TensorFusionWorkload", "request", req)
 
@@ -599,6 +856,7 @@ func filterActivePods(podList *corev1.PodList) []*corev1.Pod {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *TensorFusionWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.apiReader = mgr.GetAPIReader()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1.TensorFusionWorkload{}).
 		Named("tensorfusionworkload").

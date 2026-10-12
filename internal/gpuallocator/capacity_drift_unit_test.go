@@ -138,17 +138,24 @@ func TestHandleGPUUpdateCapacityDiff_HypervisorRestartPattern(t *testing.T) {
 	assert.Equal(t, "24Gi", old.Status.Capacity.Vram.String())
 }
 
-// TestHandleGPUUpdateCapacityDiff_NormalGrowthStillWorks ensures the recompute
-// only triggers on the zero-capacity transition, not on routine updates.
+// TestHandleGPUUpdateCapacityDiff_NormalGrowthStillWorks covers a routine
+// capacity update on a GPU in use: the allocation recorded in the ledger stays
+// allocated against the new capacity.
 func TestHandleGPUUpdateCapacityDiff_NormalGrowthStillWorks(t *testing.T) {
 	gpuName := testGPU1Name
-	s := &GpuAllocator{uniqueAllocation: map[string]*tfv1.AllocRequest{}}
+	s := &GpuAllocator{uniqueAllocation: map[string]*tfv1.AllocRequest{
+		"worker-uid": {
+			PodMeta:  metav1.ObjectMeta{Name: "worker", Namespace: "ns", UID: "worker-uid"},
+			GPUNames: []string{gpuName},
+			Request:  tfv1.Resource{Tflops: qty("10"), Vram: qty("4Gi")},
+		},
+	}}
 	old := makeGPU(gpuName, "60", "20Gi", "50", "16Gi") // 10/4Gi already used
 	incoming := makeGPU(gpuName, "71", "24Gi", "71", "24Gi")
 
 	s.handleGPUUpdateCapacityDiff(old, incoming)
 
-	// Diff +11/+4Gi added to Available -> 50+11=61, 16Gi+4Gi=20Gi
+	// 71 - 10 = 61, 24Gi - 4Gi = 20Gi
 	assert.Equal(t, "61", old.Status.Available.Tflops.String())
 	assert.Equal(t, "20Gi", old.Status.Available.Vram.String())
 	assert.Equal(t, "71", old.Status.Capacity.Tflops.String())

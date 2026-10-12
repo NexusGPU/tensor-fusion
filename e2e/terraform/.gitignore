@@ -1,0 +1,10 @@
+.terraform/
+.tools/
+.build/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+crash.log
+.kube/
+.helm/

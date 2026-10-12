@@ -18,8 +18,10 @@ package device
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/api"
 	"k8s.io/klog/v2"
@@ -136,6 +138,39 @@ type ProcessInformation struct {
 	MemoryReservedBytes       uint64
 	MemoryUtilizationPercent  float64
 }
+
+// Optional features of provider/accelerator.h (ACCEL_FEATURE_*), selected with
+// AccelSetFeatures. This is the one place where the features this caller
+// understands are declared.
+const (
+	// C: ACCEL_FEATURE_TELEMETRY_MARKERS. Without it the library does not
+	// measure per-process utilization (the field is always 0) and never
+	// returns one of the markers below.
+	featureTelemetryMarkers uint64 = 1 << 0
+
+	// requestedFeatures is what is asked for after every AccelInit.
+	requestedFeatures = featureTelemetryMarkers
+)
+
+// In-band "not supplied" markers of provider/accelerator.h, returned by a
+// library that agreed to featureTelemetryMarkers. They never leave this file:
+// each is turned into an explicit flag of the api type it was found in.
+const (
+	// C: ACCEL_COMPUTE_UTILIZATION_UNAVAILABLE, in ProcessInformation.computeUtilizationPercent.
+	computeUtilizationUnavailable = -1.0
+	// C: ACCEL_DEVICE_UTILIZATION_UNAVAILABLE, in DeviceMetrics.utilizationPercent.
+	deviceUtilizationUnavailable = math.MaxUint32
+	// C: ACCEL_DEVICE_MEMORY_UNAVAILABLE, in DeviceMetrics.memoryUsedBytes.
+	deviceMemoryUnavailable = math.MaxUint64
+)
+
+// The process list is read into a buffer that is kept between calls. The
+// library returns nothing at all when its rows do not fit, so the buffer grows
+// until they do, up to maxProcessRows (about 2.4 MB).
+const (
+	initialProcessRows = 1024
+	maxProcessRows     = 16384
+)
 
 type DeviceMetrics struct {
 	DeviceUUID         [64]byte
@@ -261,6 +296,10 @@ var (
 	getVendorMountLibs    func(*Mount, uintptr, *uintptr) Result
 	// Utility APIs (Unix only, set by accelerator_unix.go)
 	registerLogCallback func(uintptr) Result
+	// AccelResult AccelSetFeatures(uint64_t requested, uint64_t* enabled);
+	// Added after the first release of the ABI: nil for a library that does
+	// not export it.
+	setFeatures func(uint64, *uint64) Result
 )
 
 // AcceleratorInterface provides Go bindings for the C accelerator library using purego
@@ -269,6 +308,54 @@ type AcceleratorInterface struct {
 	deviceProcesses map[string][]string
 	mu              sync.RWMutex
 	loaded          bool
+
+	// telemetryMarkers says that the loaded library agreed to
+	// featureTelemetryMarkers after its last initialization. See
+	// TelemetryMarkers.
+	telemetryMarkers atomic.Bool
+
+	// processRows is the buffer the library writes the process list into, kept
+	// between calls and guarded by processMu.
+	processMu   sync.Mutex
+	processRows []ProcessInformation
+}
+
+// initialize starts the library and selects the optional features this caller
+// understands. Every path that initializes the library goes through it: the
+// library forgets the selection when it is shut down.
+func (a *AcceleratorInterface) initialize() error {
+	a.telemetryMarkers.Store(false)
+	if result := accelInit(); result != ResultSuccess {
+		return fmt.Errorf("failed to initialize accelerator: %d", result)
+	}
+	a.selectFeatures()
+	return nil
+}
+
+// selectFeatures asks the library for requestedFeatures and records what it
+// agreed to. A library without AccelSetFeatures, one that refuses, and one that
+// does not know a feature all leave that feature off.
+func (a *AcceleratorInterface) selectFeatures() {
+	if setFeatures == nil {
+		klog.Infof("Accelerator library %s has no optional features: per-process utilization is not supplied", a.libPath)
+		return
+	}
+	var enabled uint64
+	if result := setFeatures(requestedFeatures, &enabled); result != ResultSuccess {
+		klog.Warningf("Accelerator library %s refused the feature selection (%d): per-process utilization is not supplied",
+			a.libPath, result)
+		return
+	}
+	a.telemetryMarkers.Store(enabled&featureTelemetryMarkers != 0)
+	klog.Infof("Accelerator library %s features: requested 0x%x, enabled 0x%x", a.libPath, requestedFeatures, enabled)
+}
+
+// TelemetryMarkers reports whether the library measures per-process
+// utilization and marks what it could not read (ACCEL_FEATURE_TELEMETRY_MARKERS).
+// When it does not, per-process utilization is not supplied for any device:
+// every api.ProcessInformation has ComputeUtilizationUnavailable set.
+func (a *AcceleratorInterface) TelemetryMarkers() bool {
+	return a.telemetryMarkers.Load()
 }
 
 // NewAcceleratorInterface creates a new accelerator interface and loads the library
@@ -299,6 +386,8 @@ func (a *AcceleratorInterface) Close() error {
 				}
 			}()
 			accelShutdown()
+			// The library forgets the feature selection with it.
+			a.telemetryMarkers.Store(false)
 			if registerLogCallback != nil {
 				registerLogCallback(0)
 			}
@@ -433,10 +522,36 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 	}
 
 	// Convert C metrics to Go metrics
-	metrics := make([]*api.GPUUsageMetrics, deviceCount)
+	metrics := make([]*api.GPUUsageMetrics, 0, deviceCount)
 	for i := range deviceCount {
 		cm := &cMetrics[i]
-		memoryUsed := cm.MemoryUsedBytes
+		// Utilization and memory are marked one by one when they could not be
+		// read; the other fields of the entry still hold what was read. A value
+		// above 100 that is not the marker is outside the contract and no
+		// measurement either.
+		computePercentage, computeUnavailable := float64(cm.UtilizationPercent), false
+		if cm.UtilizationPercent > 100 {
+			if cm.UtilizationPercent != deviceUtilizationUnavailable {
+				klog.V(4).Infof("Ignoring utilization of device %s: %d%% is out of range",
+					byteArrayToString(cm.DeviceUUID[:]), cm.UtilizationPercent)
+			}
+			computePercentage, computeUnavailable = 0, true
+		}
+		// Markers only mean something when the library agreed to return them;
+		// from a library that did not, the value is whatever it reported.
+		markers := a.telemetryMarkers.Load()
+		memoryUsed, memoryUnavailable := cm.MemoryUsedBytes, false
+		if markers && cm.MemoryUsedBytes == deviceMemoryUnavailable {
+			memoryUsed, memoryUnavailable = 0, true
+		}
+		// With both marked the device could not be opened at all. A library
+		// that returns no markers has no way to say which fields it read, so
+		// an unusable utilization leaves nothing to trust in its entry. Either
+		// way the device is left out: "no sample" to every consumer instead of
+		// an idle, cold, powerless device.
+		if computeUnavailable && (memoryUnavailable || !markers) {
+			continue
+		}
 		var memoryPercentage float64 = 0
 
 		// Convert extra metrics from C array to Go map
@@ -450,18 +565,20 @@ func (a *AcceleratorInterface) GetDeviceMetrics(deviceUUIDs []string) ([]*api.GP
 			}
 		}
 
-		metrics[i] = &api.GPUUsageMetrics{
-			DeviceUUID:        byteArrayToString(cm.DeviceUUID[:]),
-			MemoryBytes:       memoryUsed,
-			MemoryPercentage:  memoryPercentage,
-			ComputePercentage: float64(cm.UtilizationPercent),
-			ComputeTflops:     0,
-			Rx:                float64(cm.PCIeRxBytes),
-			Tx:                float64(cm.PCIeTxBytes),
-			Temperature:       float64(cm.TemperatureCelsius),
-			PowerUsage:        int64(cm.PowerUsageWatts),
-			ExtraMetrics:      extraMetrics,
-		}
+		metrics = append(metrics, &api.GPUUsageMetrics{
+			DeviceUUID:         byteArrayToString(cm.DeviceUUID[:]),
+			MemoryBytes:        memoryUsed,
+			MemoryPercentage:   memoryPercentage,
+			ComputePercentage:  computePercentage,
+			ComputeTflops:      0,
+			ComputeUnavailable: computeUnavailable,
+			MemoryUnavailable:  memoryUnavailable,
+			Rx:                 float64(cm.PCIeRxBytes),
+			Tx:                 float64(cm.PCIeTxBytes),
+			Temperature:        float64(cm.TemperatureCelsius),
+			PowerUsage:         int64(cm.PowerUsageWatts),
+			ExtraMetrics:       extraMetrics,
+		})
 	}
 
 	return metrics, nil
@@ -556,7 +673,10 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			NUMANode:         cInfo.Basic.NUMANode,
 			Topology:         topologyMap[strings.ToLower(deviceUUID)],
 			TotalMemoryBytes: cInfo.Basic.TotalMemoryBytes,
-			MaxTflops:        float64(cInfo.Basic.MaxTflops),
+			// The provider's own estimate. The device controller decides what the
+			// device's TFLOPS capacity is.
+			ProviderEstimatedTflops: cInfo.Basic.MaxTflops,
+			MaxTflops:               cInfo.Basic.MaxTflops, //nolint:staticcheck // deprecated mirror, see api.DeviceInfo
 			VirtualizationCapabilities: api.VirtualizationCapabilities{
 				SupportsPartitioning:  cInfo.Capabilities.SupportsPartitioning,
 				SupportsSoftIsolation: cInfo.Capabilities.SupportsSoftIsolation,
@@ -572,7 +692,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 		}
 
 		klog.Infof(
-			"GetAllDevices[%d]: uuid=%s vendor=%s model=%s index=%d numa=%d vram=%d tflops=%.2f props=%v",
+			"GetAllDevices[%d]: uuid=%s vendor=%s model=%s index=%d numa=%d vram=%d providerEstimatedTflops=%.2f props=%v",
 			i,
 			devices[i].UUID,
 			devices[i].Vendor,
@@ -580,7 +700,7 @@ func (a *AcceleratorInterface) GetAllDevices() ([]*api.DeviceInfo, error) {
 			devices[i].Index,
 			devices[i].NUMANode,
 			devices[i].TotalMemoryBytes,
-			devices[i].MaxTflops,
+			devices[i].ProviderEstimatedTflops,
 			devices[i].Properties,
 		)
 	}
@@ -741,38 +861,100 @@ func (a *AcceleratorInterface) SetComputeUnitHardLimit(deviceUUID string, comput
 // on all devices. This combines the functionality of GetProcessComputeUtilization and GetProcessMemoryUtilization
 // following AMD SMI style API design.
 // Note: This directly calls the C API which returns all GPU processes, regardless of what Go tracks internally.
+//
+// With TelemetryMarkers the result carries, besides the processes, one row
+// with ProcessListUnavailable for every device whose process list could not be
+// read. Without, no process has a compute utilization.
+//
+// The call reads the driver's utilization samples and takes milliseconds per
+// device: it is meant to be made once per sampling interval, by one caller.
 func (a *AcceleratorInterface) GetProcessInformation() ([]api.ProcessInformation, error) {
-	// Allocate stack buffer (max 1024 to avoid stack overflow)
-	// The C API GetProcessInformation returns all processes on all devices
-	const maxStackProcessInfos = 1024
-	var stackProcessInfos [maxStackProcessInfos]ProcessInformation
+	a.processMu.Lock()
+	defer a.processMu.Unlock()
 
-	var cCount uintptr
-	result := getProcessInformation(&stackProcessInfos[0], uintptr(maxStackProcessInfos), &cCount)
-	if result != ResultSuccess {
-		return nil, fmt.Errorf("failed to get process information: %d", result)
+	count, err := a.readProcessRowsLocked()
+	if err != nil {
+		return nil, err
 	}
-
-	if cCount == 0 {
+	if count == 0 {
 		return []api.ProcessInformation{}, nil
 	}
 
-	processInfos := make([]api.ProcessInformation, int(cCount))
-	for i := 0; i < int(cCount); i++ {
-		pi := &stackProcessInfos[i]
+	markers := a.telemetryMarkers.Load()
+	processInfos := make([]api.ProcessInformation, count)
+	for i := range count {
+		pi := &a.processRows[i]
+		processID := byteArrayToString(pi.ProcessID[:])
+		if markers && processID == "" {
+			// A row without a process is the marker of a device whose process
+			// list could not be read. Only a library that agreed to return
+			// markers means that by it; from any other, the row is passed on
+			// as it always was and ignored by whoever cannot parse its id.
+			processInfos[i] = api.ProcessInformation{
+				DeviceUUID:                    byteArrayToString(pi.DeviceUUID[:]),
+				ComputeUtilizationUnavailable: true,
+				ProcessListUnavailable:        true,
+			}
+			continue
+		}
+		computePercent, computeUnavailable := convertProcessComputeUtilization(pi.ComputeUtilizationPercent)
+		if !markers {
+			// The library does not measure it: the field is always zero and
+			// carries no information.
+			computePercent, computeUnavailable = 0, true
+		}
 		processInfos[i] = api.ProcessInformation{
-			ProcessID:                 byteArrayToString(pi.ProcessID[:]),
-			DeviceUUID:                byteArrayToString(pi.DeviceUUID[:]),
-			ComputeUtilizationPercent: float64(pi.ComputeUtilizationPercent),
-			ActiveSMs:                 pi.ActiveSMs,
-			TotalSMs:                  pi.TotalSMs,
-			MemoryUsedBytes:           pi.MemoryUsedBytes,
-			MemoryReservedBytes:       pi.MemoryReservedBytes,
-			MemoryUtilizationPercent:  pi.MemoryUtilizationPercent,
+			ProcessID:                     processID,
+			DeviceUUID:                    byteArrayToString(pi.DeviceUUID[:]),
+			ComputeUtilizationPercent:     computePercent,
+			ComputeUtilizationUnavailable: computeUnavailable,
+			ActiveSMs:                     pi.ActiveSMs,
+			TotalSMs:                      pi.TotalSMs,
+			MemoryUsedBytes:               pi.MemoryUsedBytes,
+			MemoryReservedBytes:           pi.MemoryReservedBytes,
+			MemoryUtilizationPercent:      pi.MemoryUtilizationPercent,
 		}
 	}
 
 	return processInfos, nil
+}
+
+// readProcessRowsLocked has the library fill a.processRows and returns the
+// number of rows. A library whose rows do not fit returns none of them (a
+// truncated list would under-account memory), so the buffer is doubled and the
+// call repeated, up to maxProcessRows. The buffer keeps its size afterwards:
+// in the steady state nothing is allocated for it. The caller holds processMu.
+func (a *AcceleratorInterface) readProcessRowsLocked() (int, error) {
+	if len(a.processRows) == 0 {
+		a.processRows = make([]ProcessInformation, initialProcessRows)
+	}
+	for {
+		var cCount uintptr
+		result := getProcessInformation(&a.processRows[0], uintptr(len(a.processRows)), &cCount)
+		switch {
+		case result == ResultSuccess:
+			return min(int(cCount), len(a.processRows)), nil
+		case result != ResultErrorResourceExhausted:
+			return 0, fmt.Errorf("failed to get process information: %d", result)
+		case len(a.processRows) >= maxProcessRows:
+			return 0, fmt.Errorf("failed to get process information: more than %d rows", maxProcessRows)
+		}
+		rows := min(2*len(a.processRows), maxProcessRows)
+		klog.Infof("Process list does not fit in %d rows, growing the buffer to %d", len(a.processRows), rows)
+		a.processRows = make([]ProcessInformation, rows)
+	}
+}
+
+// convertProcessComputeUtilization separates a supplied per-process compute
+// utilization from "not supplied". The provider marks the latter with exactly
+// computeUtilizationUnavailable; zero is a measured idle process. Any other
+// negative or non-finite value is outside the contract and is not a
+// measurement either.
+func convertProcessComputeUtilization(percent float64) (value float64, unavailable bool) {
+	if percent == computeUtilizationUnavailable || math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 {
+		return 0, true
+	}
+	return percent, false
 }
 
 // GetVendorMountLibs retrieves vendor mount libs

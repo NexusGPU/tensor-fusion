@@ -34,6 +34,12 @@ type Controller struct {
 	isolationMode        api.IsolationMode
 	isolationPolicy      tfv1.IsolationModePolicyType
 
+	// hardwareTable is what device TFLOPS capacities are resolved from; nil when
+	// no table is configured. See tflops_capacity.go.
+	hardwareTable *hardwareTable
+	// estimateWarned holds the devices already reported as not listed in it.
+	estimateWarned map[string]struct{}
+
 	// allocationController is set after creation to provide allocation data for telemetry
 	allocationController framework.WorkerAllocationController
 }
@@ -121,6 +127,8 @@ func (m *Controller) discoverDevices() error {
 		device.UUID = strings.ToLower(device.UUID)
 		device.IsolationMode = m.isolationMode
 		device.IsolationPolicy = m.isolationPolicy
+		// The one place a discovered device gets its TFLOPS capacity.
+		m.resolveTflopsCapacityLocked(device)
 		newDevicesMap[device.UUID] = device
 		newNativeUUIDs[device.UUID] = nativeUUID
 	}
@@ -169,6 +177,7 @@ func (m *Controller) discoverDevices() error {
 	for _, device := range removedDevices {
 		delete(m.devices, device.UUID)
 		delete(m.nativeUUIDs, device.UUID)
+		delete(m.estimateWarned, device.UUID)
 	}
 	for _, update := range updatedDevices {
 		m.devices[update.new.UUID] = update.new
@@ -187,7 +196,8 @@ func (m *Controller) discoverDevices() error {
 				handler.OnAdd(device)
 			}
 		})
-		klog.V(4).Infof("Device added: %s (UUID: %s)", device.Model, device.UUID)
+		klog.Infof("Device added: %s (UUID: %s), TFLOPS capacity %.2f from %s",
+			device.Model, device.UUID, device.TflopsCapacity, device.TflopsCapacitySource)
 	}
 	for _, device := range removedDevices {
 		m.notifyHandlers(func(handler framework.DeviceChangeHandler) {
@@ -325,7 +335,20 @@ func (m *Controller) GetDeviceMetrics() (map[string]*api.GPUUsageMetrics, error)
 	}
 	for _, metric := range metrics {
 		// Store with lowercase key for consistency with m.devices
-		result[strings.ToLower(metric.DeviceUUID)] = metric
+		deviceUUID := strings.ToLower(metric.DeviceUUID)
+		// What the provider cannot know is derived from the device: memory in
+		// use as a share of the device's memory, and utilization as TFLOPS in
+		// use, a share of the device's TFLOPS capacity.
+		// Nothing is derived from a value that was not read.
+		if device := m.devices[deviceUUID]; device != nil {
+			if device.TotalMemoryBytes > 0 && !metric.MemoryUnavailable {
+				metric.MemoryPercentage = float64(metric.MemoryBytes) / float64(device.TotalMemoryBytes) * 100
+			}
+			if !metric.ComputeUnavailable {
+				metric.ComputeTflops, _ = api.TflopsInUse(metric.ComputePercentage, device)
+			}
+		}
+		result[deviceUUID] = metric
 	}
 	return result, nil
 }
@@ -334,6 +357,13 @@ func (m *Controller) GetDeviceMetrics() (map[string]*api.GPUUsageMetrics, error)
 // Returns process-level GPU metrics for all processes on all devices
 func (m *Controller) GetProcessInformation() ([]api.ProcessInformation, error) {
 	return m.accelerator.GetProcessInformation()
+}
+
+// TelemetryMarkers reports whether the provider library measures per-process
+// utilization and marks what it could not read; see
+// AcceleratorInterface.TelemetryMarkers.
+func (m *Controller) TelemetryMarkers() bool {
+	return m.accelerator.TelemetryMarkers()
 }
 
 func (m *Controller) GetVendorMountLibs() ([]*api.Mount, error) {
@@ -472,7 +502,11 @@ func (m *Controller) AggregateNodeInfo() *api.NodeInfo {
 		DataDiskBytes: GetDiskInfo(tmpDir),
 	}
 	for _, device := range m.devices {
-		info.TotalTFlops += device.MaxTflops
+		// A partition is a slice of a device that is counted already.
+		if device == nil || device.ParentUUID != "" {
+			continue
+		}
+		info.TotalTFlops += device.EffectiveTflopsCapacity()
 		info.TotalVRAMBytes += int64(device.TotalMemoryBytes)
 		info.DeviceIDs = append(info.DeviceIDs, device.UUID)
 	}

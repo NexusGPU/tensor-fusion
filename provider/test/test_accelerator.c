@@ -48,6 +48,26 @@ void test_accelInit() {
     TEST_ASSERT(result == ACCEL_SUCCESS, "AccelShutdown returns success");
 }
 
+// Test AccelSetFeatures
+void test_setFeatures() {
+    printf("\n=== Testing AccelSetFeatures ===\n");
+
+    uint64_t enabled = 1234;
+    AccelResult result = AccelSetFeatures(ACCEL_FEATURE_TELEMETRY_MARKERS, &enabled);
+    TEST_ASSERT(result == ACCEL_ERROR_OPERATION_FAILED, "Selecting features before AccelInit fails");
+    TEST_ASSERT(enabled == 0, "Nothing is enabled before AccelInit");
+
+    AccelInit();
+    result = AccelSetFeatures(ACCEL_FEATURE_TELEMETRY_MARKERS | (1ULL << 63), &enabled);
+    TEST_ASSERT(result == ACCEL_SUCCESS, "Selecting features after AccelInit succeeds");
+    TEST_ASSERT(enabled == ACCEL_FEATURE_TELEMETRY_MARKERS, "Unknown bits are ignored");
+    result = AccelSetFeatures(ACCEL_FEATURE_TELEMETRY_MARKERS, NULL);
+    TEST_ASSERT(result == ACCEL_SUCCESS, "The output parameter is optional");
+    result = AccelSetFeatures(0, &enabled);
+    TEST_ASSERT(result == ACCEL_SUCCESS && enabled == 0, "A selection replaces the previous one");
+    AccelShutdown();
+}
+
 // Test AccelGetDeviceCount
 void test_getDeviceCount() {
     printf("\n=== Testing AccelGetDeviceCount ===\n");
@@ -274,6 +294,7 @@ int main() {
     printf("========================================\n");
     
     test_accelInit();
+    test_setFeatures();
     test_getDeviceCount();
     test_getAllDevices();
     test_getDeviceTopology();

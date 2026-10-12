@@ -146,16 +146,15 @@ func TestCreateOrUpdateGPU_RecoversMissingGPU(t *testing.T) {
 		WithObjects(gpuNode, missingGPU).Build()
 
 	backend := &KubeletBackend{
-		ctx:          ctx,
-		apiClient:    NewAPIClient(ctx, k8sClient),
-		nodeName:     missingTestGPUNodeName,
-		deviceTflops: map[string]resource.Quantity{},
+		ctx:       ctx,
+		apiClient: NewAPIClient(ctx, k8sClient),
+		nodeName:  missingTestGPUNodeName,
 	}
 	device := &api.DeviceInfo{
 		UUID:             uuid,
 		Model:            "NVIDIA-Test-GPU",
 		TotalMemoryBytes: 16 * 1024 * 1024 * 1024,
-		MaxTflops:        100,
+		TflopsCapacity:   100,
 	}
 
 	err := backend.apiClient.CreateOrUpdateGPU(missingTestGPUNodeName, uuid,

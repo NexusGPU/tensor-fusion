@@ -61,6 +61,9 @@ var (
 	ctx       context.Context
 	k8sClient client.Client
 	testEnv   *envtest.Environment
+	// managerClient is the client of the suite's manager, the one the
+	// registered webhook uses.
+	managerClient *staleWorkloadCache
 )
 
 func TestAPIs(t *testing.T) {
@@ -159,6 +162,17 @@ var _ = BeforeSuite(func() {
 		}),
 		LeaderElection: false,
 		Metrics:        metricsserver.Options{BindAddress: "0"},
+		// The registered webhook reads through this client, which is the
+		// manager's usual cache-backed one; the wrapper only lets a spec hold
+		// the cache back for chosen workloads (see staleWorkloadCache).
+		NewClient: func(config *rest.Config, options client.Options) (client.Client, error) {
+			cached, err := client.New(config, options)
+			if err != nil {
+				return nil, err
+			}
+			managerClient = newStaleWorkloadCache(cached)
+			return managerClient, nil
+		},
 	})
 	Expect(err).NotTo(HaveOccurred())
 
