@@ -1297,6 +1297,7 @@ var _ = Describe("GPUFit Plugin", func() {
 
 		It("should handle same priority nominated pod reservation", func() {
 			Skip("Skipping: requires real scheduler framework with PodNominator support")
+			const nominatedNode = "node-b"
 			log.FromContext(ctx).Info("Running TestCheckNominatedPodsGPUReservation_SamePriority")
 
 			// Create a nominated pod with priority 50
@@ -1309,7 +1310,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			})
 			priority := int32(50)
 			nominatedPod.Spec.Priority = &priority
-			nominatedPod.Status.NominatedNodeName = "node-b"
+			nominatedPod.Status.NominatedNodeName = nominatedNode
 			Expect(k8sClient.Update(ctx, nominatedPod)).To(Succeed())
 
 			// Re-get the pod to ensure it has the latest state
@@ -1319,7 +1320,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			// Add nominated pod to framework's PodNominator
 			podInfo, _ := framework.NewPodInfo(updatedNominatedPod)
 			logger := klog.FromContext(ctx)
-			fwkInstance.AddNominatedPod(logger, podInfo, &fwk.NominatingInfo{NominatedNodeName: "node-b"})
+			fwkInstance.AddNominatedPod(logger, podInfo, &fwk.NominatingInfo{NominatedNodeName: nominatedNode})
 
 			// Create another pod with same priority
 			samePriorityPod := makePod("same-priority-pod", map[string]string{
@@ -1343,7 +1344,7 @@ var _ = Describe("GPUFit Plugin", func() {
 			schedulingData := data.(*GPUSchedulingStateData)
 
 			// Test checkNominatedPodsGPUReservation
-			status := plugin.checkNominatedPodsGPUReservation(samePriorityPod, "node-b", schedulingData)
+			status := plugin.checkNominatedPodsGPUReservation(samePriorityPod, nominatedNode, schedulingData)
 
 			// Should reserve resources even for same priority pods (nominated pods have precedence)
 			Expect(status.Code()).To(Equal(fwk.Unschedulable))
