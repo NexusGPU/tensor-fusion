@@ -152,7 +152,8 @@ func getBatchUpdatePolicy(pool *tfv1.GPUPool) (time.Duration, int32) {
 				batchInterval = duration
 			}
 			percentage := updatePolicy.BatchPercentage
-			if percentage >= 0 && percentage <= 100 {
+			// 0 is accepted by the CRD but used as a divisor; keep the default.
+			if percentage > 0 && percentage <= 100 {
 				batchPercentage = percentage
 			}
 		}
