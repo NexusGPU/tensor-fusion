@@ -2,6 +2,7 @@ package worker
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,9 +15,13 @@ import (
 )
 
 type fakeDeviceController struct {
+	// mu guards devices for the tests that change them while they are read;
+	// the others never contend for it.
+	mu           sync.RWMutex
 	devices      map[string]*api.DeviceInfo
 	processInfos []api.ProcessInformation
 	processErr   error
+	processCalls int
 	splitCalls   int
 }
 
@@ -27,6 +32,8 @@ func (f *fakeDeviceController) Stop() error { return nil }
 func (f *fakeDeviceController) DiscoverDevices() error { return nil }
 
 func (f *fakeDeviceController) ListDevices() ([]*api.DeviceInfo, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if len(f.devices) == 0 {
 		return nil, nil
 	}
@@ -38,8 +45,17 @@ func (f *fakeDeviceController) ListDevices() ([]*api.DeviceInfo, error) {
 }
 
 func (f *fakeDeviceController) GetDevice(deviceUUID string) (*api.DeviceInfo, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	device, ok := f.devices[deviceUUID]
 	return device, ok
+}
+
+// setDevice replaces a device the way a re-resolved capacity does.
+func (f *fakeDeviceController) setDevice(device *api.DeviceInfo) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.devices[device.UUID] = device
 }
 
 func (f *fakeDeviceController) SplitDevice(deviceUUID, _ string) (*api.DeviceInfo, error) {
@@ -59,6 +75,7 @@ func (f *fakeDeviceController) GetDeviceMetrics() (map[string]*api.GPUUsageMetri
 }
 
 func (f *fakeDeviceController) GetProcessInformation() ([]api.ProcessInformation, error) {
+	f.processCalls++
 	return f.processInfos, f.processErr
 }
 
@@ -374,6 +391,9 @@ func TestRecoverExistingSoftWorkerSharedMemory(t *testing.T) {
 		t.Fatalf("create original shared memory: %v", err)
 	}
 	original.GetState().UpdateHeartbeat(123)
+	// What only the existing mapping holds: a registered process and a balance.
+	original.GetState().AddPID(4242)
+	original.GetState().V2.Devices[0].DeviceInfo.SetERLCurrentTokens(77)
 	if err := original.Close(); err != nil {
 		t.Fatalf("close original shared memory: %v", err)
 	}
@@ -403,7 +423,15 @@ func TestRecoverExistingSoftWorkerSharedMemory(t *testing.T) {
 		t.Fatal("soft worker shared memory was not recovered")
 	}
 	defer func() { _ = recovered.Close() }()
-	if got := recovered.GetState().GetLastHeartbeat(); got != 123 {
-		t.Fatalf("recovery recreated shared memory: heartbeat = %d, want 123", got)
+	if got := recovered.GetState().GetAllPIDs(); len(got) != 1 || got[0] != 4242 {
+		t.Fatalf("recovery recreated shared memory: registered processes = %v, want [4242]", got)
+	}
+	if got := recovered.GetState().V2.Devices[0].DeviceInfo.GetERLCurrentTokens(); got != 77 {
+		t.Fatalf("recovery recreated shared memory: balance = %v, want 77", got)
+	}
+	// The reopened mapping is stamped at once, so its limiter stops standing in
+	// for the hypervisor without waiting for a tick.
+	if got := recovered.GetState().GetLastHeartbeat(); got == 123 || got == 0 {
+		t.Fatalf("reopened mapping was not stamped: heartbeat = %d", got)
 	}
 }

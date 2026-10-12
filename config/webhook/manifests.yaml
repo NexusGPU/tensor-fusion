@@ -22,7 +22,9 @@ webhooks:
     - CREATE
     resources:
     - pods
-  sideEffects: None
+  # The handler creates the TensorFusionWorkload and reserves counters, ports
+  # and indices for a real admission, and none of them for a dry-run.
+  sideEffects: NoneOnDryRun
   timeoutSeconds: 30
   objectSelector:
     matchExpressions:
@@ -30,3 +32,32 @@ webhooks:
         operator: In
         values:
           - "true"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-v1-pod-ephemeralcontainers
+  # No objectSelector: labels can be changed after a pod is created, so the
+  # handler selects pods by their volumes instead. The rule therefore sees every
+  # pod, and must not hold up debugging when the operator is unavailable.
+  failurePolicy: Ignore
+  name: vpod-ephemeralcontainers-v1.kb.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - UPDATE
+    resources:
+    - pods/ephemeralcontainers
+  sideEffects: None
+  timeoutSeconds: 3

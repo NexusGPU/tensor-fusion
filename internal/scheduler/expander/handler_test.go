@@ -391,6 +391,12 @@ func testDoNotDisruptAnnotationFiltered(suite *NodeExpanderTestSuite) {
 
 	newClaim := &karpv1.NodeClaim{}
 	Expect(suite.k8sClient.Get(suite.ctx, client.ObjectKey{Name: preparedNode.Name}, newClaim)).To(Succeed())
+	// The source's open-ended protection is not inherited: the copy is only
+	// shielded by the expander itself, with a deadline (see protection_test.go).
+	Expect(newClaim.Annotations).To(HaveKey(expansionProtectedUntilAnnotation))
+	Expect(newClaim.Annotations["karpenter.sh/custom-note"]).To(Equal("keep-me"))
+	suite.nodeExpander.releaseExpansionProtectionOf(suite.ctx, newClaim, pod.UID, time.Now())
+	Expect(suite.k8sClient.Get(suite.ctx, client.ObjectKey{Name: preparedNode.Name}, newClaim)).To(Succeed())
 	_, exists := newClaim.Annotations["karpenter.sh/do-not-disrupt"]
 	Expect(exists).To(BeFalse())
 	Expect(newClaim.Annotations["karpenter.sh/custom-note"]).To(Equal("keep-me"))

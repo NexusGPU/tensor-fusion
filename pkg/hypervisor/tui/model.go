@@ -498,8 +498,13 @@ func (m *Model) updateMetricsHistory() {
 			}
 		}
 
-		history.MemoryChart.AddDataPoint(metrics.MemoryPercentage)
-		history.ComputeChart.AddDataPoint(metrics.ComputePercentage)
+		// A value the provider could not read leaves a gap, not a zero.
+		if !metrics.MemoryUnavailable {
+			history.MemoryChart.AddDataPoint(metrics.MemoryPercentage)
+		}
+		if !metrics.ComputeUnavailable {
+			history.ComputeChart.AddDataPoint(metrics.ComputePercentage)
+		}
 		history.TempChart.AddDataPoint(metrics.Temperature)
 		history.PowerChart.AddDataPoint(float64(metrics.PowerUsage))
 	}
@@ -520,10 +525,8 @@ func (m *Model) updateMetricsHistory() {
 
 			// Aggregate metrics for this worker
 			var totalMemory uint64
-			var totalCompute float64
 			for _, metrics := range workerMetrics {
 				totalMemory += metrics.MemoryBytes
-				totalCompute += metrics.ComputePercentage
 			}
 
 			// Calculate percentage if we have allocation info
@@ -536,7 +539,10 @@ func (m *Model) updateMetricsHistory() {
 			}
 
 			history.MemoryChart.AddDataPoint(memPercent)
-			history.ComputeChart.AddDataPoint(totalCompute)
+			// No point is plotted for utilization the provider did not supply.
+			if totalCompute, ok := sumWorkerCompute(workerMetrics); ok {
+				history.ComputeChart.AddDataPoint(totalCompute)
+			}
 		}
 	}
 }

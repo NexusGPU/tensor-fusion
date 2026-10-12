@@ -32,7 +32,16 @@ type GPUStatus struct {
 	// +optional
 	Model string `json:"model,omitempty"`
 
-	Capacity  *Resource `json:"capacity"`
+	// Capacity is what the device can provide. capacity.tflops is in
+	// vendor-published FP16 TFLOPS when the GPU model is listed in the
+	// ProviderConfig (hardwareMetadata[].fp16TFlops). The annotation
+	// tensor-fusion.ai/tflops-capacity-source on the GPU says which it is:
+	// "provider-config" for that figure, "provider-estimate" when the model is
+	// not listed and the capacity is the provider library's own estimate, which
+	// is not comparable with FP16 capacities.
+	Capacity *Resource `json:"capacity"`
+	// Available is the capacity that is not allocated: capacity minus what the
+	// workloads placed on the device hold, never below zero.
 	Available *Resource `json:"available"`
 
 	UUID string `json:"uuid"`

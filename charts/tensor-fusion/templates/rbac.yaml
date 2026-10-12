@@ -81,6 +81,12 @@ rules:
 - apiGroups:
   - ''
   resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ''
+  resources:
   - replicationcontrollers
   - services
   verbs:

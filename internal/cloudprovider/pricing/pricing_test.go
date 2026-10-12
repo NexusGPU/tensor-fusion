@@ -151,6 +151,7 @@ func TestParseHelperFunctions(t *testing.T) {
 
 func TestIsFractionalGPUCount(t *testing.T) {
 	provider := NewStaticPricingProvider()
+	SetTflopsMapAndInitGPUPricingInfo(t.Context(), config.MockGpuInfo())
 	price, found := provider.GetPricing("NV12ads v710 v5", tfv1.CapacityTypeOnDemand, "us-east-2")
 	assert.False(t, found)
 	assert.Equal(t, 0.0, price)
@@ -158,6 +159,7 @@ func TestIsFractionalGPUCount(t *testing.T) {
 
 func TestUnavailableGPUCount(t *testing.T) {
 	provider := NewStaticPricingProvider()
+	SetTflopsMapAndInitGPUPricingInfo(t.Context(), config.MockGpuInfo())
 	price, found := provider.GetPricing("NG32ads V620 v1", tfv1.CapacityTypeOnDemand, "us-east-2")
 	assert.False(t, found)
 	assert.Equal(t, 0.0, price)

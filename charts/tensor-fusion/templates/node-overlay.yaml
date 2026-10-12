@@ -1,15 +1,52 @@
 {{/*
-CRDs are cluster-scoped, so the lookup namespace must be "" (not the API group).
-The lookup name is the CRD object name, which by Kubernetes convention is the
-plural resource name joined with the API group: <plural>.<group>.
+The overlay tells Karpenter that an instance type can provide the
+tensor-fusion.ai/index* resources TensorFusion worker pods request, so that
+Karpenter provisions a node for a pending worker pod. It must only apply to
+instance types whose nodes will really register those resources, i.e. GPU
+instance types of a TensorFusion pool: on any other instance type Karpenter
+would launch a node for the pod that never registers the resource, never
+becomes initialized and is therefore never consolidated.
+
+Requirements come from .Values.karpenterNodeOverlay.requirements. Values that
+lack the block (an upgrade with --reuse-values) get the same GPU-only default
+as values.yaml; an explicitly empty list renders no overlay. An overlay without
+requirements is never rendered.
+
+"auto" renders when the NodeOverlay CRD is known: through the API versions
+Helm was given (helm template --api-versions, Argo CD), or by looking it up in
+the cluster. CRDs are cluster-scoped, so the lookup namespace is "" and the
+name is <plural>.<group>.
 */}}
-{{- if lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "nodeoverlays.karpenter.sh" -}}
+{{- $cfg := .Values.karpenterNodeOverlay | default dict -}}
+{{- $enabled := "auto" -}}
+{{- if hasKey $cfg "enabled" -}}
+{{- $enabled = toString $cfg.enabled -}}
+{{- end -}}
+{{- $render := eq $enabled "true" -}}
+{{- if eq $enabled "auto" -}}
+{{- if or (.Capabilities.APIVersions.Has "karpenter.sh/v1alpha1/NodeOverlay") (lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "nodeoverlays.karpenter.sh") -}}
+{{- $render = true -}}
+{{- end -}}
+{{- end -}}
+{{- $requirements := list
+  (dict "key" "karpenter.k8s.aws/instance-gpu-count" "operator" "Gt" "values" (list "0"))
+  (dict "key" "karpenter.k8s.aws/instance-gpu-manufacturer" "operator" "In" "values" (list "nvidia")) -}}
+{{- if hasKey $cfg "requirements" -}}
+{{- $requirements = $cfg.requirements | default list -}}
+{{- end -}}
+{{- if and $render (gt (len $requirements) 0) -}}
 apiVersion: karpenter.sh/v1alpha1
 kind: NodeOverlay
 metadata:
   name: tensor-fusion-overlay
 spec:
-  requirements: []
+  {{- if hasKey $cfg "weight" }}
+  {{- if not (kindIs "invalid" $cfg.weight) }}
+  weight: {{ $cfg.weight }}
+  {{- end }}
+  {{- end }}
+  requirements:
+    {{- toYaml $requirements | nindent 4 }}
   capacity:
     # Keep the v1 resource during rolling upgrades and rollback. v1's
     # device plugin advertises one resource with 512 dummy devices.

@@ -77,6 +77,25 @@ one-crd:
 test: build-provider vendor manifests generate fmt vet envtest ## Run tests and generate coverage.
 	KUBEBUILDER_ASSETS="$(ENVTEST_ASSETS_DIR)" GO_TESTING=true go run github.com/onsi/ginkgo/v2/ginkgo -timeout 12m -cover -coverprofile cover.out -r --skip-file ./test/e2e
 
+# Packages whose correctness depends on goroutines sharing state: the node
+# agent's worker and device layers (control and refill loops, shared-memory
+# handles, limit application), the scheduler plugin's allocation state, the
+# GPU allocator, the autoscaler, the metrics recorder and the price table
+# (reloaded while it is read).
+RACE_PACKAGES ?= ./pkg/hypervisor/worker/... ./pkg/hypervisor/device/... ./internal/scheduler/gpuresources/... \
+	./internal/gpuallocator/... ./internal/autoscaler/... ./internal/metrics/... ./internal/cloudprovider/pricing/...
+
+.PHONY: test-race
+test-race: build-provider vendor envtest ## Run the concurrency-sensitive packages under the race detector.
+	KUBEBUILDER_ASSETS="$(ENVTEST_ASSETS_DIR)" GO_TESTING=true go test -race -count=1 -timeout 20m $(RACE_PACKAGES)
+
+.PHONY: test-chart
+test-chart: ## Render the Helm chart and check what it ships: credentials only by reference to Secrets, the Vector configuration, no rate limiter parameters, no Docker Hub image with values-cn.yaml.
+	bash hack/test-chart-secrets.sh
+	bash hack/test-chart-node-overlay.sh
+	bash hack/test-chart-cn-images.sh
+	bash hack/test-chart-hook-jobs.sh
+
 .PHONY: check-coverage
 check-coverage: ## Check if test coverage meets minimum threshold (default: 45%)
 	@if [ ! -f cover.out ]; then \

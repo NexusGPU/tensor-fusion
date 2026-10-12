@@ -6,7 +6,10 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
+	"regexp"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"text/template"
 	"time"
 
@@ -40,7 +43,18 @@ type AlertEvaluator struct {
 	// UpdateAlertRules → StopEvaluate → StartEvaluate leaves a fresh
 	// batch of evaluator goroutines from the previous rule set behind.
 	stopCh chan struct{}
+
+	// dbState remembers whether the last evaluation found the database
+	// connected, so that a change is logged once and not on every evaluation
+	// of every rule.
+	dbState atomic.Int32
 }
+
+const (
+	dbStateUnknown int32 = iota
+	dbStateConnected
+	dbStateNotConnected
+)
 
 func NewAlertEvaluator(ctx context.Context, db *metrics.TimeSeriesDB, rules []config.AlertRule, alertManagerURL string) *AlertEvaluator {
 	return &AlertEvaluator{
@@ -125,9 +139,96 @@ func (e *AlertEvaluator) StopEvaluate() error {
 	return nil
 }
 
-// renderQueryTemplate renders the SQL query template with rule data
-func renderQueryTemplate(rule *config.AlertRule) (string, error) {
-	tmpl, err := template.New("query").Parse(rule.Query)
+var (
+	// conditionsAction is a template action that prints .Conditions and nothing
+	// else, with or without white space trimming.
+	conditionsAction = regexp.MustCompile(`(\{\{-?\s*)\.Conditions(\s*-?\}\})`)
+	// tableReference is a table named after FROM or JOIN, optionally qualified
+	// with its database and quoted.
+	tableReference = regexp.MustCompile("(?i)\\b(?:FROM|JOIN)\\s+`?((?:[A-Za-z_][A-Za-z0-9_]*`?\\.`?)?[A-Za-z_][A-Za-z0-9_]*)`?")
+)
+
+// TimeColumnFunc tells the time index column of a table.
+type TimeColumnFunc func(table string) string
+
+func defaultTimeColumn(string) string {
+	return metrics.DefaultTimeIndexColumn
+}
+
+type queryTable struct {
+	position int
+	name     string
+}
+
+// queryTables lists the tables a query template reads, in the order they appear.
+func queryTables(query string) []queryTable {
+	matches := tableReference.FindAllStringSubmatchIndex(query, -1)
+	tables := make([]queryTable, 0, len(matches))
+	for _, match := range matches {
+		name := strings.ReplaceAll(query[match[2]:match[3]], "`", "")
+		if dot := strings.LastIndex(name, "."); dot >= 0 {
+			name = name[dot+1:]
+		}
+		tables = append(tables, queryTable{position: match[0], name: name})
+	}
+	return tables
+}
+
+// renderQueryTemplate renders the SQL query template with rule data.
+//
+// The time index of a table is not called the same in every database (see
+// metrics.TimeIndexResolver), so a template does not name it:
+//   - {{ .Conditions }} is the time filter of the evaluation interval on the
+//     table whose FROM or JOIN precedes it, so that a query reading two tables
+//     filters each of them on its own time index;
+//   - {{ conditions "table" }} is that filter for the named table;
+//   - {{ .TimeColumn }} and {{ timeColumn "table" }} are the time index column
+//     of the first table of the query and of the named table, for templates
+//     that select, group or order by it.
+func renderQueryTemplate(rule *config.AlertRule, timeColumn TimeColumnFunc) (string, error) {
+	if timeColumn == nil {
+		timeColumn = defaultTimeColumn
+	}
+	columnOf := func(table string) string {
+		if table == "" {
+			return metrics.DefaultTimeIndexColumn
+		}
+		return timeColumn(table)
+	}
+	conditionsOf := func(table string) string {
+		return fmt.Sprintf("%s >= now() - '%s'::INTERVAL", columnOf(table), rule.EvaluationInterval)
+	}
+
+	tables := queryTables(rule.Query)
+	firstTable := ""
+	if len(tables) > 0 {
+		firstTable = tables[0].name
+	}
+
+	// Bind each plain {{ .Conditions }} to the table it filters. A table name
+	// matched by tableReference is a plain identifier, safe inside the action.
+	var query strings.Builder
+	last := 0
+	for _, match := range conditionsAction.FindAllStringSubmatchIndex(rule.Query, -1) {
+		table := firstTable
+		for _, candidate := range tables {
+			if candidate.position > match[0] {
+				break
+			}
+			table = candidate.name
+		}
+		query.WriteString(rule.Query[last:match[0]])
+		query.WriteString(rule.Query[match[2]:match[3]])
+		fmt.Fprintf(&query, "conditions %q", table)
+		query.WriteString(rule.Query[match[4]:match[5]])
+		last = match[1]
+	}
+	query.WriteString(rule.Query[last:])
+
+	tmpl, err := template.New("query").Funcs(template.FuncMap{
+		"conditions": conditionsOf,
+		"timeColumn": columnOf,
+	}).Parse(query.String())
 	if err != nil {
 		return "", fmt.Errorf("failed to parse query template: %w", err)
 	}
@@ -135,7 +236,8 @@ func renderQueryTemplate(rule *config.AlertRule) (string, error) {
 	var buf bytes.Buffer
 	data := map[string]any{
 		"Threshold":  rule.Threshold,
-		"Conditions": fmt.Sprintf("ts >= now() - '%s'::INTERVAL", rule.EvaluationInterval),
+		"Conditions": conditionsOf(firstTable),
+		"TimeColumn": columnOf(firstTable),
 		"Severity":   rule.Severity,
 		"Name":       rule.Name,
 	}
@@ -148,15 +250,30 @@ func renderQueryTemplate(rule *config.AlertRule) (string, error) {
 }
 
 // evaluate evaluates a rule against the database and sends alerts if conditions are met
+//
+// The operator starts before the metrics database is reachable and connects in
+// the background. Until then there is nothing to query: the rule yields no
+// alerts and no error, and the evaluator says so once.
 func (e *AlertEvaluator) evaluate(rule *config.AlertRule) ([]config.PostableAlert, error) {
-	if e.DB == nil {
+	// Conn, not the gorm methods promoted from e.DB: the connection is set by
+	// another goroutine, and is nil before that.
+	db := e.DB.Conn()
+	if db == nil {
+		if e.dbState.Swap(dbStateNotConnected) != dbStateNotConnected {
+			log.FromContext(e.ctx).Info("time series database is not connected, alert rules are not evaluated until it is")
+		}
 		return []config.PostableAlert{}, nil
 	}
-	renderedQuery, err := renderQueryTemplate(rule)
+	if e.dbState.Swap(dbStateConnected) == dbStateNotConnected {
+		log.FromContext(e.ctx).Info("time series database is connected, alert rules are evaluated again")
+	}
+	renderedQuery, err := renderQueryTemplate(rule, func(table string) string {
+		return e.DB.TimeIndexColumn(e.ctx, table)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to render query template for rule %s: %w", rule.Name, err)
 	}
-	rows, err := e.DB.Raw(renderedQuery).Rows()
+	rows, err := db.Raw(renderedQuery).Rows()
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query for rule %s: %w", rule.Name, err)
 	}

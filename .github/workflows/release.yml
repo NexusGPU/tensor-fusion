@@ -44,6 +44,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_digest: ${{ steps.build.outputs.digest }}
+      # The tag the image is pushed with: the release version, or dev-<sha>
+      # for a manual run. Read by the mirror job.
+      tag: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -105,6 +108,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_digest: ${{ steps.build.outputs.digest }}
+      tag: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -155,3 +159,138 @@ jobs:
           file: dockerfile/hypervisor.Dockerfile
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # Copies the two images just pushed to the registry that
+  # charts/tensor-fusion/values-cn.yaml points at. Without the registry
+  # credentials the job only reports that it skipped; any other problem fails
+  # it, after the Docker Hub images are already published.
+  mirror:
+    needs:
+      - publish_operator_image
+      - publish_hypervisor_image
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SRC: docker.io/tensorfusion
+      DST: registry.cn-hangzhou.aliyuncs.com/tensorfusion
+      OPERATOR_TAG: ${{ needs.publish_operator_image.outputs.tag }}
+      HYPERVISOR_TAG: ${{ needs.publish_hypervisor_image.outputs.tag }}
+    steps:
+      # Secrets cannot be read in a job-level `if`, so a step turns their
+      # presence into an output the later steps test.
+      - name: Check mirror registry credentials
+        id: credentials
+        env:
+          ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+          ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "$ALIYUN_REGISTRY_USERNAME" ] || missing+=(ALIYUN_REGISTRY_USERNAME)
+          [ -n "$ALIYUN_REGISTRY_PASSWORD" ] || missing+=(ALIYUN_REGISTRY_PASSWORD)
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          message="Images were not mirrored to $DST: repository secret(s) ${missing[*]} not set."
+          echo "::notice title=Mirror skipped::$message"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Login to the mirror registry
+        if: steps.credentials.outputs.available == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: registry.cn-hangzhou.aliyuncs.com
+          username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+
+      # The registry refuses the attestation manifests that buildx adds to an
+      # image index ("unknown manifest class"), so the index cannot be copied
+      # as a whole (`skopeo copy --all`). Each platform image is copied by
+      # digest and an index of just those is created at the destination.
+      - name: Copy the images
+        if: steps.credentials.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          skopeo --version
+          docker buildx version
+
+          mirror() { # mirror <image name> <tag>
+            local name=$1 tag=$2 platforms arch digest refs=()
+            if ! [[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
+              echo "::error::$name: the image job reported no usable tag ('$tag')"
+              return 1
+            fi
+            platforms=$(skopeo inspect --retry-times 3 --raw "docker://$SRC/$name:$tag" |
+              jq -r '.manifests[] | select(.platform.os=="linux" and (.platform.architecture=="amd64" or .platform.architecture=="arm64")) | "\(.platform.architecture) \(.digest)"' |
+              sort)
+            if [ "$(cut -d' ' -f1 <<<"$platforms" | paste -sd' ' -)" != "amd64 arm64" ]; then
+              echo "::error::$SRC/$name:$tag: expected one linux/amd64 and one linux/arm64 image, found: ${platforms:-none}"
+              return 1
+            fi
+            while read -r arch digest; do
+              echo "Copying $SRC/$name@$digest to $DST/$name:${tag}_$arch"
+              skopeo copy --retry-times 3 --preserve-digests \
+                "docker://$SRC/$name@$digest" "docker://$DST/$name:${tag}_$arch"
+              refs+=("$DST/$name:${tag}_$arch")
+            done <<<"$platforms"
+            docker buildx imagetools create -t "$DST/$name:$tag" "${refs[@]}"
+          }
+
+          mirror tensor-fusion-operator "$OPERATOR_TAG"
+          mirror tensor-fusion-hypervisor "$HYPERVISOR_TAG"
+
+      - name: Verify the mirrored images
+        if: steps.credentials.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          filter='[.manifests[] | "\(.platform.os)/\(.platform.architecture) \(.digest)"] | sort | .[]'
+          failed=0
+          fail() {
+            echo "::error::$1"
+            failed=1
+          }
+
+          verify() { # verify <image name> <tag>
+            local name=$1 tag=$2 released mirrored platform digest copied
+            released=$(skopeo inspect --retry-times 3 --raw "docker://$SRC/$name:$tag" |
+              jq -r "$filter" | grep -E '^linux/(amd64|arm64) ') || released=""
+            if [ "$(cut -d' ' -f1 <<<"$released" | paste -sd' ' -)" != "linux/amd64 linux/arm64" ]; then
+              fail "$SRC/$name:$tag: expected one linux/amd64 and one linux/arm64 image, found: ${released:-none}"
+              return 0
+            fi
+            while read -r platform digest; do
+              copied=$(skopeo inspect --retry-times 3 --format '{{.Digest}}' \
+                "docker://$DST/$name:${tag}_${platform#linux/}") || copied="not readable"
+              if [ "$copied" = "$digest" ]; then
+                echo "ok   $DST/$name:${tag}_${platform#linux/} is $digest"
+              else
+                fail "$DST/$name:${tag}_${platform#linux/} is $copied, but $platform of $SRC/$name:$tag is $digest"
+              fi
+            done <<<"$released"
+            # Every entry of the index is compared, so anything besides the
+            # two platform images is reported as well.
+            mirrored=$(skopeo inspect --retry-times 3 --raw "docker://$DST/$name:$tag" |
+              jq -r "$filter") || mirrored="not readable"
+            if [ "$mirrored" = "$released" ]; then
+              echo "ok   $DST/$name:$tag lists exactly linux/amd64 and linux/arm64, with the digests of $SRC/$name:$tag"
+            else
+              fail "$DST/$name:$tag does not list exactly the linux/amd64 and linux/arm64 images of $SRC/$name:$tag"
+              printf 'released:\n%s\nmirrored:\n%s\n' "$released" "$mirrored"
+            fi
+          }
+
+          verify tensor-fusion-operator "$OPERATOR_TAG"
+          verify tensor-fusion-hypervisor "$HYPERVISOR_TAG"
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::The mirrored images differ from the released ones."
+            exit 1
+          fi
+          {
+            echo "Mirrored to \`$DST\`:"
+            echo "- \`tensor-fusion-operator:$OPERATOR_TAG\`"
+            echo "- \`tensor-fusion-hypervisor:$HYPERVISOR_TAG\`"
+          } >> "$GITHUB_STEP_SUMMARY"

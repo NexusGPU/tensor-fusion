@@ -104,30 +104,43 @@ func updateDeviceDetail(
 		MetricLabelStyle.Render("Total Memory"),
 		formatBytes(device.TotalMemoryBytes),
 	))
-	content.WriteString(fmt.Sprintf("%s: %.2f TFLOPS\n\n", MetricLabelStyle.Render("Max TFLOPS"), device.MaxTflops))
+	content.WriteString(fmt.Sprintf(
+		"%s: %s\n\n", MetricLabelStyle.Render("TFLOPS Capacity"), formatTflopsCapacity(device),
+	))
 
 	if hasMetrics && deviceMetrics != nil {
 		content.WriteString(TitleStyle.Render("Current Metrics\n\n"))
-		content.WriteString(fmt.Sprintf(
-			"%s: %.1f%%\n",
-			MetricLabelStyle.Render("Memory Usage"),
-			deviceMetrics.MemoryPercentage,
-		))
-		content.WriteString(fmt.Sprintf(
-			"%s: %s\n",
-			MetricLabelStyle.Render("Memory Used"),
-			formatBytes(deviceMetrics.MemoryBytes),
-		))
-		content.WriteString(fmt.Sprintf(
-			"%s: %.1f%%\n",
-			MetricLabelStyle.Render("Compute Usage"),
-			deviceMetrics.ComputePercentage,
-		))
-		content.WriteString(fmt.Sprintf(
-			"%s: %.2f TFLOPS\n",
-			MetricLabelStyle.Render("Compute TFLOPS"),
-			deviceMetrics.ComputeTflops,
-		))
+		// A value the provider could not read is shown as such, not as zero.
+		if deviceMetrics.MemoryUnavailable {
+			content.WriteString(fmt.Sprintf("%s: n/a\n", MetricLabelStyle.Render("Memory Usage")))
+			content.WriteString(fmt.Sprintf("%s: n/a\n", MetricLabelStyle.Render("Memory Used")))
+		} else {
+			content.WriteString(fmt.Sprintf(
+				"%s: %.1f%%\n",
+				MetricLabelStyle.Render("Memory Usage"),
+				deviceMetrics.MemoryPercentage,
+			))
+			content.WriteString(fmt.Sprintf(
+				"%s: %s\n",
+				MetricLabelStyle.Render("Memory Used"),
+				formatBytes(deviceMetrics.MemoryBytes),
+			))
+		}
+		if deviceMetrics.ComputeUnavailable {
+			content.WriteString(fmt.Sprintf("%s: n/a\n", MetricLabelStyle.Render("Compute Usage")))
+			content.WriteString(fmt.Sprintf("%s: n/a\n", MetricLabelStyle.Render("Compute TFLOPS")))
+		} else {
+			content.WriteString(fmt.Sprintf(
+				"%s: %.1f%%\n",
+				MetricLabelStyle.Render("Compute Usage"),
+				deviceMetrics.ComputePercentage,
+			))
+			content.WriteString(fmt.Sprintf(
+				"%s: %.2f TFLOPS\n",
+				MetricLabelStyle.Render("Compute TFLOPS"),
+				deviceMetrics.ComputeTflops,
+			))
+		}
 		content.WriteString(fmt.Sprintf("%s: %.1f°C\n", MetricLabelStyle.Render("Temperature"), deviceMetrics.Temperature))
 		content.WriteString(fmt.Sprintf("%s: %d W\n", MetricLabelStyle.Render("Power Usage"), deviceMetrics.PowerUsage))
 		// TODO: handle extra metrics
@@ -165,4 +178,13 @@ func updateDeviceDetail(
 	}
 
 	deviceDetail.SetContent(content.String())
+}
+
+// formatTflopsCapacity renders the device's TFLOPS capacity and says when it is
+// only the provider's estimate rather than a vendor-published FP16 figure.
+func formatTflopsCapacity(device *api.DeviceInfo) string {
+	if device.TflopsCapacityEstimated() {
+		return fmt.Sprintf("%.2f TFLOPS (provider estimate, model not in ProviderConfig)", device.TflopsCapacity)
+	}
+	return fmt.Sprintf("%.2f TFLOPS", device.TflopsCapacity)
 }

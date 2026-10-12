@@ -104,17 +104,15 @@ func updateWorkerDetail(
 			if wm, exists := deviceWorkerMetrics[worker.WorkerUID]; exists {
 				content.WriteString(TitleStyle.Render("Current Metrics\n\n"))
 				var totalMemory uint64
-				var totalCompute float64
 				var totalTflops float64
 
 				for _, metrics := range wm {
 					totalMemory += metrics.MemoryBytes
-					totalCompute += metrics.ComputePercentage
 					totalTflops += metrics.ComputeTflops
 				}
 
 				content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Memory Used"), formatBytes(totalMemory)))
-				content.WriteString(fmt.Sprintf("%s: %.1f%%\n", MetricLabelStyle.Render("Compute Usage"), totalCompute))
+				content.WriteString(fmt.Sprintf("%s: %s\n", MetricLabelStyle.Render("Compute Usage"), formatWorkerCompute(wm)))
 				content.WriteString(fmt.Sprintf("%s: %.2f TFLOPS\n\n", MetricLabelStyle.Render("Compute TFLOPS"), totalTflops))
 
 				// Time-series charts
@@ -130,4 +128,29 @@ func updateWorkerDetail(
 	}
 
 	workerDetail.SetContent(content.String())
+}
+
+// sumWorkerCompute adds up the compute utilization of a worker's processes on
+// one device. It reports false when the provider did not supply it for one of
+// them: the sum would then not be a measurement.
+func sumWorkerCompute(processes map[string]*api.WorkerMetrics) (float64, bool) {
+	total := 0.0
+	for _, metrics := range processes {
+		if metrics == nil {
+			continue
+		}
+		if metrics.ComputeUnavailable {
+			return 0, false
+		}
+		total += metrics.ComputePercentage
+	}
+	return total, true
+}
+
+func formatWorkerCompute(processes map[string]*api.WorkerMetrics) string {
+	total, ok := sumWorkerCompute(processes)
+	if !ok {
+		return "n/a (not reported by the provider)"
+	}
+	return fmt.Sprintf("%.1f%%", total)
 }

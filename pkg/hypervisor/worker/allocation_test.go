@@ -219,9 +219,9 @@ func TestAllocateWorkerDevicesSetsHardSMPercentLimit(t *testing.T) {
 			controller := NewAllocationController(&fakeDeviceController{
 				devices: map[string]*api.DeviceInfo{
 					"gpu-0": {
-						UUID:      "GPU-aaa",
-						Vendor:    constants.AcceleratorVendorNvidia,
-						MaxTflops: 40,
+						UUID:           "GPU-aaa",
+						Vendor:         constants.AcceleratorVendorNvidia,
+						TflopsCapacity: 40,
 					},
 				},
 			})

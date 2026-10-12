@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	fwk "k8s.io/kube-scheduler/framework"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -306,6 +307,19 @@ type GpuAllocator struct {
 	dirtyQueue     map[types.NamespacedName]struct{}
 	dirtyQueueLock sync.Mutex
 
+	// overcommittedGPUs holds the GPUs whose committed allocations exceed
+	// their capacity, as of the last status sync. It exists only so that
+	// entering and leaving that state is reported once instead of on every
+	// sync; placement decisions never read it.
+	overcommittedGPUs    map[types.NamespacedName]struct{}
+	overcommittedGPULock sync.Mutex
+	// overcommitReports limits how often those changes are logged and recorded
+	// as Events; same lock.
+	overcommitReports overcommitReportLimiter
+	// eventRecorder is optional; without it over-commit is reported in the
+	// log only.
+	eventRecorder events.EventRecorder
+
 	// each pod can only allocate and deallocate once, and deallocation must be after allocation
 	uniqueAllocation       map[string]*tfv1.AllocRequest
 	assumedAllocation      map[string]*tfv1.AllocRequest
@@ -416,6 +430,12 @@ func NewGpuAllocator(
 	return allocator
 }
 
+// SetEventRecorder sets the recorder used for GPU events raised by the
+// allocator. SetupWithManager installs the manager's recorder when none is set.
+func (s *GpuAllocator) SetEventRecorder(recorder events.EventRecorder) {
+	s.eventRecorder = recorder
+}
+
 func (s *GpuAllocator) RegisterBindHandler(handler func(req *tfv1.AllocRequest)) {
 	s.bindHandlers = append(s.bindHandlers, handler)
 }
@@ -445,7 +465,12 @@ func (s *GpuAllocator) GetAllocationInfo() (
 		if gpu == nil {
 			continue
 		}
-		gpuStore[key] = gpu.DeepCopy()
+		gpuCopy := gpu.DeepCopy()
+		// This snapshot is for reporting (metrics, the allocation info
+		// endpoint, pool statistics), so it carries the same figure as
+		// status.available on the API server.
+		gpuCopy.Status.Available = publishedGPUAvailable(gpuCopy.Status.Available)
+		gpuStore[key] = gpuCopy
 	}
 
 	nodeWorkerStore = make(map[string]map[types.NamespacedName]struct{}, len(s.nodeWorkerStore))
@@ -2101,15 +2126,18 @@ func (s *GpuAllocator) checkGPUCapacityAndQuota(gpu *tfv1.GPU, oldRes, newRes tf
 		newTflops = newRes.Tflops
 	}
 
+	// Only growth needs room. A GPU whose capacity was lowered below what is
+	// already allocated has negative headroom; a request that shrinks or stays
+	// the same must still be accepted there, it is how the GPU fits again.
 	remainTflops.Add(oldTflops)
 	remainTflops.Sub(newTflops)
-	if remainTflops.Cmp(resource.Quantity{}) < 0 {
+	if newTflops.Cmp(oldTflops) > 0 && remainTflops.Cmp(resource.Quantity{}) < 0 {
 		return remainRes, ScalingQuotaExceededError
 	}
 
 	remainVram.Add(oldRes.Vram)
 	remainVram.Sub(newRes.Vram)
-	if remainVram.Cmp(resource.Quantity{}) < 0 {
+	if newRes.Vram.Cmp(oldRes.Vram) > 0 && remainVram.Cmp(resource.Quantity{}) < 0 {
 		return remainRes, ScalingQuotaExceededError
 	}
 	return remainRes, nil
@@ -2273,9 +2301,15 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 	log.FromContext(ctx).Info("Setting up GPU watches with manager")
 	err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		log := log.FromContext(ctx)
-		// Create a context with cancel function for the sync loop
-		_, cancel := context.WithCancel(ctx)
+		// Create a context with cancel function for the sync loop. Stop must
+		// really end the loop: an allocator that was stopped but kept syncing
+		// would keep publishing its own, by then outdated, figures.
+		syncCtx, cancel := context.WithCancel(ctx)
 		s.cancel = cancel
+
+		if s.eventRecorder == nil {
+			s.eventRecorder = mgr.GetEventRecorder("GPUAllocator")
+		}
 
 		// Initialize the GPU store and quota store, list all CR to memory
 		if err := s.InitGPUAndQuotaStore(); err != nil {
@@ -2310,7 +2344,7 @@ func (s *GpuAllocator) SetupWithManager(ctx context.Context, mgr manager.Manager
 		s.SetAllocatorReady()
 
 		// Start the background sync goroutine
-		go s.startSyncLoop(ctx)
+		go s.startSyncLoop(syncCtx)
 		return nil
 	}))
 	return err
@@ -2386,7 +2420,11 @@ func (s *GpuAllocator) handleGPUCreate(ctx context.Context, gpu *tfv1.GPU) {
 			}
 			mu.Unlock()
 		}
+		// The store was listed before the informer started, so this event can
+		// already carry a newer capacity than the one the store was built with.
+		s.handleGPUUpdateCapacityDiff(s.gpuStore[key], gpu)
 		syncGPUMetadataAndStatusFromCluster(s.gpuStore[key], gpu)
+		s.republishAvailableIfClusterDiffers(key, gpu)
 		log.V(6).Info("GPU already exists in store", "name", key.Name)
 		return
 	}
@@ -2415,6 +2453,7 @@ func (s *GpuAllocator) handleGPUDelete(ctx context.Context, gpu *tfv1.GPU) {
 
 	// Remove GPU from store
 	delete(s.gpuStore, key)
+	s.forgetGPUOvercommit(key)
 	// Remove all secondary indexes using the last known metadata.
 	s.removeGPUFromMaps(gpu)
 	log.Info("Removed GPU from store", "name", key.Name)
@@ -2437,6 +2476,7 @@ func (s *GpuAllocator) handleGPUUpdate(ctx context.Context, gpu *tfv1.GPU) {
 
 		// should never update available and runningApps here, to avoid circular update
 		syncGPUMetadataAndStatusFromCluster(old, gpu)
+		s.republishAvailableIfClusterDiffers(key, gpu)
 		log.V(6).Info("Updated GPU in store (preserve Available)", "name", key.Name, "phase", gpu.Status.Phase)
 	} else {
 		gpuInMem := gpu.DeepCopy()
@@ -2554,6 +2594,23 @@ func syncGPUMetadataAndStatusFromCluster(old *tfv1.GPU, gpu *tfv1.GPU) {
 	// Don't overwrite AllocatedPartitions as that's managed by the allocator
 }
 
+// handleGPUUpdateCapacityDiff takes over the capacity the node agent published
+// for a GPU and settles Available against it. Caller must hold s.storeMutex.
+//
+// The capacity of a GPU that already carries allocations can change in either
+// direction: the node agent is upgraded, or the hardware table it reads the
+// TFLOPS figure from is corrected. Available is then rebuilt as
+// capacity - allocations from uniqueAllocation, the ledger a restart rebuilds
+// from the worker Pods, so a capacity that changed while the operator was
+// running and one that changed while it was down end in the same figures.
+// Adding the capacity difference to Available would not: a compute-percent
+// request, a partition template and a shared whole-GPU allocation all occupy
+// an amount that depends on the capacity itself.
+//
+// Available may come out negative here when the new capacity is below what is
+// allocated. Nothing is evicted; the negative headroom is what keeps new
+// placements away from the GPU until enough is released, and it is published
+// as zero (see publishedGPUAvailable).
 func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
 	if gpu == nil || gpu.Status.Capacity == nil {
 		return
@@ -2564,35 +2621,71 @@ func (s *GpuAllocator) handleGPUUpdateCapacityDiff(old, gpu *tfv1.GPU) {
 		return
 	}
 
-	// Detect the hypervisor-restart pattern: GPU CR was reset to zero capacity
-	// (controller saw it disappear and reappear without status), and now the
-	// hypervisor publishes the real capacity. The naive "Available += diff"
-	// math is wrong in that case because it assumes Available already tracked
-	// active allocations through the transition, which it didn't (the worker
-	// was running the whole time but our in-memory Available was reset).
-	oldCapacityWasZero := old.Status.Capacity.Tflops.IsZero() && old.Status.Capacity.Vram.IsZero()
-
-	tflopsDiff := gpu.Status.Capacity.Tflops.DeepCopy()
-	tflopsDiff.Sub(old.Status.Capacity.Tflops)
-	if tflopsDiff.Value() != 0 {
-		old.Status.Capacity.Tflops.Add(tflopsDiff)
-		old.Status.Available.Tflops.Add(tflopsDiff)
-	}
-	vramDiff := gpu.Status.Capacity.Vram.DeepCopy()
-	vramDiff.Sub(old.Status.Capacity.Vram)
-	if vramDiff.Value() != 0 {
-		old.Status.Capacity.Vram.Add(vramDiff)
-		old.Status.Available.Vram.Add(vramDiff)
+	if old.Status.Capacity.Tflops.Equal(gpu.Status.Capacity.Tflops) &&
+		old.Status.Capacity.Vram.Equal(gpu.Status.Capacity.Vram) {
+		// Safety net: a stale Dealloc can still drift Available above Capacity
+		// (the observable symptom). Clamp to invariant.
+		clampGPUAvailableToCapacity(old)
+		return
 	}
 
-	if oldCapacityWasZero && (!old.Status.Capacity.Tflops.IsZero() || !old.Status.Capacity.Vram.IsZero()) {
-		// Rebuild Available = Capacity - sum(active Request on this GPU).
-		// uniqueAllocation is the authoritative ledger of who holds what.
-		s.recomputeGPUAvailableFromAllocations(old)
+	previousCapacity := old.Status.Capacity.DeepCopy()
+	old.Status.Capacity.Tflops = gpu.Status.Capacity.Tflops.DeepCopy()
+	old.Status.Capacity.Vram = gpu.Status.Capacity.Vram.DeepCopy()
+	s.recomputeGPUAvailableFromAllocations(old)
+
+	log.FromContext(s.ctx).Info("GPU capacity changed, available rebuilt from allocations",
+		"gpu", old.Name,
+		"capacitySource", gpu.Annotations[constants.GPUTflopsCapacitySourceAnnotation],
+		"previousCapacityTflops", previousCapacity.Tflops.String(),
+		"previousCapacityVram", previousCapacity.Vram.String(),
+		"capacityTflops", old.Status.Capacity.Tflops.String(),
+		"capacityVram", old.Status.Capacity.Vram.String(),
+		"headroomTflops", old.Status.Available.Tflops.String(),
+		"headroomVram", old.Status.Available.Vram.String())
+}
+
+// republishAvailableIfClusterDiffers queues a status sync when the allocation
+// figures on the API server are not the ones the allocator would publish.
+// Caller must hold s.storeMutex.
+//
+// The allocator owns status.available, runningApps and allocatedPartitions: it
+// never reads them back from the cluster after start-up. The node agent writes
+// the GPU status too. A current agent leaves these fields alone, except that
+// it settles available itself when it publishes a different capacity; an agent
+// that predates that writes back the whole status it read earlier, which can
+// undo what the allocator published in between. Such a write changes nothing
+// the allocator tracks, so nothing would queue the GPU again and the stale
+// figures would stay until the next allocation on that GPU. The sync queued
+// here is a no-op once both sides agree, so the two cannot ping-pong.
+func (s *GpuAllocator) republishAvailableIfClusterDiffers(key types.NamespacedName, clusterGPU *tfv1.GPU) {
+	stored := s.gpuStore[key]
+	if stored == nil || clusterGPU == nil || clusterGPU.Status.Capacity == nil ||
+		stored.Status.Capacity == nil || stored.Status.Available == nil {
+		// Not a valid GPU yet, the node agent has not reported its capacity.
+		return
 	}
-	// Final safety net: a stale Dealloc or a Capacity downgrade can still drift
-	// Available above Capacity (the observable symptom). Clamp to invariant.
-	clampGPUAvailableToCapacity(old)
+
+	// A capacity change can move the GPU into or out of over-commit without
+	// changing the published figure (zero either way); the sync is where that
+	// transition is reported.
+	_, _, overcommitted := gpuOvercommit(stored)
+	s.overcommittedGPULock.Lock()
+	_, reported := s.overcommittedGPUs[key]
+	s.overcommittedGPULock.Unlock()
+	if overcommitted != reported {
+		s.markGPUDirty(key)
+		return
+	}
+
+	want := publishedGPUAvailable(stored.Status.Available)
+	got := clusterGPU.Status.Available
+	if got != nil && got.Tflops.Equal(want.Tflops) && got.Vram.Equal(want.Vram) &&
+		len(clusterGPU.Status.RunningApps) == len(stored.Status.RunningApps) &&
+		len(clusterGPU.Status.AllocatedPartitions) == len(stored.Status.AllocatedPartitions) {
+		return
+	}
+	s.markGPUDirty(key)
 }
 
 // recomputeGPUAvailableFromAllocations resets gpu.Status.Available to Capacity,
@@ -2656,6 +2749,180 @@ func clampGPUAvailableToCapacity(gpu *tfv1.GPU) {
 	}
 }
 
+// publishedGPUAvailable returns Available in the form that leaves the
+// allocator: status.available on the API server and reporting snapshots. It is
+// a copy with each resource floored at zero.
+//
+// Inside the store Available is the signed headroom capacity - allocations.
+// It is negative for a resource only while a GPU is over-committed, i.e. its
+// capacity was lowered below what running workloads already hold. Keeping the
+// sign there is what makes every allocate / release / resize / preemption
+// calculation stay exact through that state, and what refuses any new
+// placement (a request of zero included) until the GPU fits again. Readers
+// outside the allocator get zero: there is nothing to hand out.
+func publishedGPUAvailable(available *tfv1.Resource) *tfv1.Resource {
+	if available == nil {
+		return nil
+	}
+	published := available.DeepCopy()
+	if published.Tflops.Sign() < 0 {
+		published.Tflops = resource.Quantity{}
+	}
+	if published.Vram.Sign() < 0 {
+		published.Vram = resource.Quantity{}
+	}
+	return published
+}
+
+// gpuOvercommit returns by how much the allocations on a GPU exceed its
+// capacity, per resource, and whether they exceed it at all.
+func gpuOvercommit(gpu *tfv1.GPU) (tflops, vram resource.Quantity, overcommitted bool) {
+	if gpu == nil || gpu.Status.Available == nil {
+		return tflops, vram, false
+	}
+	if gpu.Status.Available.Tflops.Sign() < 0 {
+		tflops = gpu.Status.Available.Tflops.DeepCopy()
+		tflops.Neg()
+		overcommitted = true
+	}
+	if gpu.Status.Available.Vram.Sign() < 0 {
+		vram = gpu.Status.Available.Vram.DeepCopy()
+		vram.Neg()
+		overcommitted = true
+	}
+	return tflops, vram, overcommitted
+}
+
+// reportGPUOvercommitChange logs and records an Event when a GPU becomes
+// over-committed and when it fits again. It runs for every GPU about to be
+// synced, and every change of Available queues a sync, so no transition is
+// missed and a GPU that stays over-committed is reported once, not per sync.
+// A restarted operator reports the GPUs it finds over-committed once more.
+// Caller must hold s.storeMutex (read or write).
+func (s *GpuAllocator) reportGPUOvercommitChange(key types.NamespacedName, gpu *tfv1.GPU) {
+	overTflops, overVram, overcommitted := gpuOvercommit(gpu)
+
+	s.overcommittedGPULock.Lock()
+	_, wasOvercommitted := s.overcommittedGPUs[key]
+	switch {
+	case overcommitted && !wasOvercommitted:
+		if s.overcommittedGPUs == nil {
+			s.overcommittedGPUs = make(map[types.NamespacedName]struct{})
+		}
+		s.overcommittedGPUs[key] = struct{}{}
+	case !overcommitted && wasOvercommitted:
+		delete(s.overcommittedGPUs, key)
+	}
+	s.overcommittedGPULock.Unlock()
+
+	if overcommitted == wasOvercommitted || gpu.Status.Capacity == nil {
+		return
+	}
+
+	logger := log.FromContext(s.ctx)
+	s.overcommittedGPULock.Lock()
+	report, summary := s.overcommitReports.allow(key, overcommitted, overcommitNow())
+	s.overcommittedGPULock.Unlock()
+	if summary > 0 {
+		logger.Info("[Warning] GPUs kept changing between over-committed and fitting; "+
+			"changes that were not reported one by one", "count", summary, "within", overcommitReportInterval.String())
+	}
+	if !report {
+		return
+	}
+	if overcommitted {
+		logger.Info("[Warning] GPU capacity is below what is already allocated; "+
+			"running workloads are kept, new placements on this GPU are refused until it fits again",
+			"gpu", gpu.Name,
+			"capacitySource", gpu.Annotations[constants.GPUTflopsCapacitySourceAnnotation],
+			"capacityTflops", gpu.Status.Capacity.Tflops.String(),
+			"capacityVram", gpu.Status.Capacity.Vram.String(),
+			"overcommittedTflops", overTflops.String(),
+			"overcommittedVram", overVram.String(),
+			"runningApps", len(gpu.Status.RunningApps))
+		if s.eventRecorder != nil {
+			s.eventRecorder.Eventf(gpu.DeepCopy(), nil, v1.EventTypeWarning, "GPUOvercommitted", "BlockPlacement",
+				"Capacity (tflops %s, vram %s) is below what is already allocated by tflops %s, vram %s. "+
+					"Running workloads are kept; new placements on this GPU are refused until it fits again.",
+				gpu.Status.Capacity.Tflops.String(), gpu.Status.Capacity.Vram.String(),
+				overTflops.String(), overVram.String())
+		}
+		return
+	}
+	logger.Info("GPU allocations fit its capacity again, placements on this GPU are accepted",
+		"gpu", gpu.Name,
+		"capacityTflops", gpu.Status.Capacity.Tflops.String(),
+		"capacityVram", gpu.Status.Capacity.Vram.String(),
+		"availableTflops", gpu.Status.Available.Tflops.String(),
+		"availableVram", gpu.Status.Available.Vram.String())
+	if s.eventRecorder != nil {
+		s.eventRecorder.Eventf(gpu.DeepCopy(), nil, v1.EventTypeNormal, "GPUOvercommitResolved", "AllowPlacement",
+			"Allocations fit the capacity (tflops %s, vram %s) again; placements on this GPU are accepted.",
+			gpu.Status.Capacity.Tflops.String(), gpu.Status.Capacity.Vram.String())
+	}
+}
+
+// A GPU whose allocations sit at its capacity can cross it with every sync, and
+// a corrected hardware table changes the capacity of every GPU of a model at
+// once. Reports of over-commit changes (the log line and the Event) are
+// therefore limited: one per GPU and direction per overcommitReportInterval,
+// and overcommitReportBurst in all per interval. What exceeds that is counted
+// and logged as one line when the interval ends. The state itself, and with it
+// the refusal of new placements, is never limited.
+const (
+	overcommitReportInterval = 5 * time.Minute
+	overcommitReportBurst    = 20
+)
+
+// overcommitNow is the clock of the report limiter, replaced in tests.
+var overcommitNow = time.Now
+
+type overcommitReportKey struct {
+	gpu           types.NamespacedName
+	overcommitted bool
+}
+
+type overcommitReportLimiter struct {
+	last        map[overcommitReportKey]time.Time
+	windowStart time.Time
+	reported    int
+	suppressed  int
+}
+
+// allow says whether a change may be reported now, and returns the number of
+// changes that went unreported in the interval that just ended (to be logged
+// as one line), zero in the middle of an interval.
+func (l *overcommitReportLimiter) allow(gpu types.NamespacedName, overcommitted bool, now time.Time) (report bool, summary int) {
+	if l.last == nil {
+		l.last = make(map[overcommitReportKey]time.Time)
+	}
+	if now.Sub(l.windowStart) >= overcommitReportInterval || now.Before(l.windowStart) {
+		summary = l.suppressed
+		l.windowStart, l.reported, l.suppressed = now, 0, 0
+		for key, at := range l.last {
+			if now.Sub(at) >= overcommitReportInterval {
+				delete(l.last, key)
+			}
+		}
+	}
+	key := overcommitReportKey{gpu: gpu, overcommitted: overcommitted}
+	if at, seen := l.last[key]; (seen && now.Sub(at) < overcommitReportInterval && !now.Before(at)) ||
+		l.reported >= overcommitReportBurst {
+		l.suppressed++
+		return false, summary
+	}
+	l.last[key] = now
+	l.reported++
+	return true, summary
+}
+
+// forgetGPUOvercommit drops the over-commit record of a GPU that left the store.
+func (s *GpuAllocator) forgetGPUOvercommit(key types.NamespacedName) {
+	s.overcommittedGPULock.Lock()
+	delete(s.overcommittedGPUs, key)
+	s.overcommittedGPULock.Unlock()
+}
+
 // syncToK8s syncs the modified GPUs and quotas from in-memory store to Kubernetes
 func (s *GpuAllocator) syncToK8s(ctx context.Context) {
 	// Sync GPU status
@@ -2692,6 +2959,7 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 		if !exists {
 			continue
 		}
+		s.reportGPUOvercommitChange(key, gpu)
 
 		dirtyNodes[gpu.Labels[constants.LabelKeyOwner]] = struct{}{}
 
@@ -2708,8 +2976,10 @@ func (s *GpuAllocator) SyncGPUsToK8s() {
 				}
 				return err
 			}
-			// Apply our status updates to the latest version
-			latest.Status.Available = gpu.Status.Available
+			// Apply our status updates to the latest version. Available is
+			// published floored at zero, as a copy: the store keeps the signed
+			// headroom of an over-committed GPU.
+			latest.Status.Available = publishedGPUAvailable(gpu.Status.Available)
 			latest.Status.RunningApps = gpu.Status.RunningApps
 			latest.Status.AllocatedPartitions = gpu.Status.AllocatedPartitions
 			latest.Status.ActiveIsolationMode = gpu.Status.ActiveIsolationMode
@@ -3091,6 +3361,11 @@ func (s *GpuAllocator) reconcileAllocationState() {
 			gpu.Status.Available.Vram = actualAvailableMap[gpuKey].Vram
 			s.markGPUDirtyLocked(gpuKey)
 			log.FromContext(ctx).Info("Correcting gpu available resources", "gpu", gpuKey.Name, "tflops", gpu.Status.Available.Tflops.String(), "vram", gpu.Status.Available.Vram.String())
+		} else if _, _, overcommitted := gpuOvercommit(gpu); overcommitted {
+			// An operator that predates the zero floor published the negative
+			// headroom as is. The store figure is right, the published one is
+			// not: sync it, which also reports the over-commit once.
+			s.markGPUDirtyLocked(gpuKey)
 		}
 
 		if !equality.Semantic.DeepEqual(gpu.Status.RunningApps, actualRunningAppsMap[gpuKey]) {

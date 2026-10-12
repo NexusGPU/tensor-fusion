@@ -81,7 +81,7 @@ spec:
                   runAsGroup: 0
                   runAsUser: 0
           portNumber: 8001
-          vectorImage: docker.m.daocloud.io/timberio/vector:latest-alpine
+          vectorImage: docker.m.daocloud.io/timberio/vector:0.56.0-alpine
         nodeDiscovery:
           image: docker.m.daocloud.io/tensorfusion/tensor-fusion-node-discovery:latest
           podTemplate:
@@ -103,9 +103,9 @@ spec:
                   - name: TF_CUDA_LIB_PATH
                     value: /usr/lib/x86_64-linux-gnu/libcuda.so.1
                   - name: TF_LICENSE
-                    value: '|ee|1784709281000'
+                    value: '<your-license>'
                   - name: TF_LICENSE_SIGN
-                    value: 3046022100ffd7ba9a0007afa86835ea3acf2d7cbfe9d9b52339be7c4caf6ce85d0cadc843022100c991906ce029a0ca79f0a7f6e31114571c7a57a53e0f0d53aed7c78d54643f6c
+                    value: '<your-license-signature>'
                   name: tensorfusion-worker
                   resources:
                     limits:
@@ -215,7 +215,7 @@ spec:
                     type: File
                   name: host-npu-smi
           portNumber: 8001
-          vectorImage: docker.1ms.run/timberio/vector:latest-alpine
+          vectorImage: docker.1ms.run/timberio/vector:0.56.0-alpine
         worker:
           image: rgpu-work:latest
           podTemplate:
@@ -226,9 +226,9 @@ spec:
                   - name: TF_ENABLE_LOG
                     value: '1'
                   - name: TF_LICENSE
-                    value: '|ee|253372098780000'
+                    value: '<your-license>'
                   - name: TF_LICENSE_SIGN
-                    vaule: 3046022100a9693f16b962e577748106a1c2b0300d89258cda1ab854a23a1ce81b2f1bb16b022100be8e870fac59c3f9299c6fb24bb67e481573e99708edf90b968fbf5c2368108c
+                    value: '<your-license-signature>'
                   name: tensorfusion-worker
                   resources:
                     limits:
@@ -391,7 +391,7 @@ spec:
                   runAsGroup: 0
                   runAsUser: 0
           portNumber: 8001
-          vectorImage: docker.m.daocloud.io/timberio/vector:latest-alpine
+          vectorImage: docker.m.daocloud.io/timberio/vector:0.56.0-alpine
         worker:
           image: rgpu-work:latest
           podTemplate:
@@ -502,7 +502,7 @@ spec:
                   runAsGroup: 0
                   runAsUser: 0
           portNumber: 8001
-          vectorImage: docker.m.daocloud.io/timberio/vector:latest-alpine
+          vectorImage: docker.m.daocloud.io/timberio/vector:0.56.0-alpine
         nodeDiscovery:
           image: docker.m.daocloud.io/tensorfusion/tensor-fusion-node-discovery:latest
           podTemplate:

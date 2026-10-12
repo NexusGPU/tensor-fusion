@@ -77,6 +77,37 @@ func ComputePercentToTflops(gpuCapacity resource.Quantity, gpuResRequest tfv1.Re
 	return resource.NewQuantity(int64(requiredTflops), resource.DecimalSI)
 }
 
+// TflopsToComputePercent is the single conversion of a compute quantity given in
+// TFLOPS into the share (1-100, in percent) of a device with the given TFLOPS
+// capacity. The scheduler and the hypervisor both use it, for every isolation
+// mode, so a limit never maps to two different percentages.
+//
+// Both arguments are in TensorFusion TFLOPS, i.e. the unit of the GPU
+// resource's status.capacity.tflops. The result is rounded up to the next whole
+// percent, so a non-zero limit never becomes zero and the granted share always
+// covers the limit, and it is capped at 100. A ratio that is a whole number up
+// to floating-point noise (7 of 25 TFLOPS is 28.000000000000004) is not pushed
+// to the next percent.
+//
+// It returns false when there is nothing to convert: a non-positive or
+// non-finite limit, or an unknown (non-positive or non-finite) capacity.
+func TflopsToComputePercent(tflops, capacityTflops float64) (uint32, bool) {
+	for _, value := range []float64{tflops, capacityTflops} {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+			return 0, false
+		}
+	}
+	const roundingNoise = 1e-9
+	percent := math.Ceil(tflops*100/capacityTflops - roundingNoise)
+	if percent < 1 {
+		return 1, true
+	}
+	if percent > 100 {
+		return 100, true
+	}
+	return uint32(percent), true
+}
+
 // GetActualTflops returns the actual TFLOPs value from a Resource.
 // If ComputePercent is set, it converts it to TFLOPs using the provided GPU capacity.
 // Otherwise, it returns the Tflops value directly.

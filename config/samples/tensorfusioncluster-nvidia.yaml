@@ -45,7 +45,7 @@ spec:
           remoteModeImage: tensorfusion/tensor-fusion-client:v2.25.0
         hypervisor:
           image: docker.io/tensorfusion/tensor-fusion-hypervisor:latest
-          vectorImage: docker.m.daocloud.io/timberio/vector:latest-alpine
+          vectorImage: docker.m.daocloud.io/timberio/vector:0.56.0-alpine
           podTemplate:
             template:
               spec:
@@ -89,9 +89,9 @@ spec:
                   - name: TF_CUDA_LIB_PATH
                     value: /usr/lib/x86_64-linux-gnu/libcuda.so.1
                   - name: TF_LICENSE
-                    value: '|ee|1784709281000'
+                    value: '<your-license>'
                   - name: TF_LICENSE_SIGN
-                    value: 3046022100ffd7ba9a0007afa86835ea3acf2d7cbfe9d9b52339be7c4caf6ce85d0cadc843022100c991906ce029a0ca79f0a7f6e31114571c7a57a53e0f0d53aed7c78d54643f6c
+                    value: '<your-license-signature>'
                   name: tensorfusion-worker
                   resources:
                     limits:

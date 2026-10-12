@@ -250,6 +250,8 @@ cleanup_fixed_name_resources() {
         clusterrolebinding/tensor-fusion-metrics-auth-rolebinding
         "mutatingwebhookconfiguration/${RESOURCE_PREFIX}-mutating-webhook"
         mutatingwebhookconfiguration/tensor-fusion-mutating-webhook-configuration
+        "validatingwebhookconfiguration/${RESOURCE_PREFIX}-validating-webhook"
+        validatingwebhookconfiguration/tensor-fusion-validating-webhook-configuration
         priorityclass/tensor-fusion-critical
         priorityclass/tensor-fusion-high
         priorityclass/tensor-fusion-medium

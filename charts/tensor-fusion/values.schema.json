@@ -92,7 +92,7 @@
         "vectorAgentImage": {
           "type": "string",
           "description": "Tag for the vector agent, for collecting metrics to TSDB",
-          "default": "docker.io/timberio/vector:latest-alpine"
+          "default": "docker.io/timberio/vector:0.56.0-alpine"
         },
         "podAnnotations": {
           "type": "object",
@@ -166,6 +166,25 @@
               "enum": ["Fail", "Ignore"],
               "default": "Fail"
             },
+            "ephemeralContainers": {
+              "type": ["object", "null"],
+              "description": "Settings of the validating webhook for pods/ephemeralcontainers, which receives the request for every pod in the cluster",
+              "properties": {
+                "failurePolicy": {
+                  "type": "string",
+                  "description": "Failure policy of the ephemeral containers webhook. Ignore keeps kubectl debug working while the operator is unavailable, Fail refuses ephemeral containers cluster-wide until it is back",
+                  "enum": ["Fail", "Ignore"],
+                  "default": "Ignore"
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "description": "Timeout of the ephemeral containers webhook in seconds",
+                  "minimum": 1,
+                  "maximum": 30,
+                  "default": 3
+                }
+              }
+            },
             "secretName": {
               "type": "string",
               "description": "Name of the secret containing the webhook certificates",
@@ -179,6 +198,24 @@
                   "type": "string",
                   "description": "Image for the webhook certificate generator",
                   "default": "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0"
+                },
+                "nodeSelector": {
+                  "type": ["object", "null"],
+                  "description": "Node selector of the hook Jobs. kubernetes.io/os: linux is added unless the selector sets that key",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "affinity": {
+                  "type": ["object", "null"],
+                  "description": "Affinity rules of the hook Jobs. Empty: the controller's affinity"
+                },
+                "tolerations": {
+                  "type": ["array", "null"],
+                  "description": "Tolerations of the hook Jobs. Empty: the controller's tolerations",
+                  "items": {
+                    "type": "object"
+                  }
                 }
               }
             }
@@ -289,6 +326,27 @@
           "type": "string",
           "description": "Unique identifier for the agent in the format 'org:env'",
           "default": "org-from-cloud:env"
+        },
+        "existingSecret": {
+          "type": "object",
+          "description": "Secret managed outside the chart that holds the agent's enroll token (and optionally its id); takes precedence over enrollToken",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Name of the Secret, in the release namespace",
+              "default": ""
+            },
+            "key": {
+              "type": "string",
+              "description": "Key that holds the enroll token",
+              "default": "enroll-token"
+            },
+            "agentIdKey": {
+              "type": "string",
+              "description": "Optional key that holds the agent id; when set, agentId may be empty",
+              "default": ""
+            }
+          }
         },
         "cloudEndpoint": {
           "type": "string",

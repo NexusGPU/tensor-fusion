@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
-	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
 	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
@@ -57,8 +57,7 @@ func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err := r.Get(ctx, req.NamespacedName, &providerConfig); err != nil {
 		if errors.IsNotFound(err) {
 			vendor := r.ProviderManager.DeleteProviderByName(req.Name)
-			gpuInfos := r.ProviderManager.GetAllGpuInfos()
-			gpuallocator.LoadPartitionTemplatesFromConfig(gpuInfos)
+			r.refreshGpuInfoConsumers(ctx)
 			if vendor != "" {
 				if err := r.publishProviderRevision(ctx, vendor, ""); err != nil {
 					return ctrl.Result{}, err
@@ -73,9 +72,8 @@ func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Always refresh the in-memory caches: after an operator restart the
 	// ProviderManager is empty and must be repopulated from every ProviderConfig.
 	r.ProviderManager.UpdateProvider(&providerConfig)
-	gpuInfos := r.ProviderManager.GetAllGpuInfos()
-	gpuallocator.LoadPartitionTemplatesFromConfig(gpuInfos)
-	logger.Info("partition templates refreshed", "gpuInfoCount", len(gpuInfos))
+	gpuInfoCount := r.refreshGpuInfoConsumers(ctx)
+	logger.Info("partition templates and pricing tables refreshed", "gpuInfoCount", gpuInfoCount)
 	logger.Info("ProviderConfig synced", "vendor", providerConfig.Spec.Vendor)
 
 	// Publish the revision instead of deleting pods directly. GPUPool owns the
@@ -100,6 +98,17 @@ func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// refreshGpuInfoConsumers hands the GPU model info of all cached
+// ProviderConfigs to everything derived from it: the partition templates and
+// the instance pricing tables. Start-up makes the same call once; repeating it
+// here lets a ProviderConfig that is created, corrected or deleted later take
+// effect without an operator restart. It returns the number of GPU models.
+func (r *ProviderConfigReconciler) refreshGpuInfoConsumers(ctx context.Context) int {
+	gpuInfos := r.ProviderManager.GetAllGpuInfos()
+	pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, &gpuInfos)
+	return len(gpuInfos)
 }
 
 func (r *ProviderConfigReconciler) publishProviderRevision(ctx context.Context, vendor, revision string) error {

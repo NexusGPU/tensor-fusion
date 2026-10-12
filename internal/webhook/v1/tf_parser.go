@@ -46,6 +46,12 @@ func ParseTensorFusionInfo(
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
+	// A compute burst window the hypervisor could not apply as written (not a
+	// duration, negative, above the maximum) is refused here instead of being
+	// adjusted on the node. A valid one stays on the Pod as it is.
+	if _, _, err := utils.ComputeBurstWindow(pod.Annotations); err != nil {
+		return info, err
+	}
 	enabledReplicas, grayMigration := pod.Annotations[constants.TensorFusionEnabledReplicasAnnotation]
 	if !grayMigration {
 		info.EnabledReplicas = nil

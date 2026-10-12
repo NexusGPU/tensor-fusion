@@ -19,14 +19,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
-func makeCounterPod(name string, ownerKey string) *corev1.Pod {
+func makeCounterPod(name string) *corev1.Pod {
 	tt := true
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "ns",
 			Name:      name,
 			Annotations: map[string]string{
-				constants.TensorFusionPodCounterKeyAnnotation: ownerKey,
+				constants.TensorFusionPodCounterKeyAnnotation: reserveTestKey,
 			},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: "apps/v1",
@@ -79,7 +79,7 @@ func TestDecrease_RetriesOnConflict(t *testing.T) {
 		Build()
 
 	counter := &TensorFusionPodCounter{Client: conflictyClient}
-	pod := makeCounterPod("pod-1", "counter-key")
+	pod := makeCounterPod("pod-1")
 	assert.NoError(t, counter.Decrease(context.Background(), pod),
 		"Decrease should swallow transient conflicts via internal retry")
 
@@ -122,7 +122,7 @@ func TestDecrease_PropagatesPersistentError(t *testing.T) {
 		Build()
 
 	counter := &TensorFusionPodCounter{Client: rbacClient}
-	pod := makeCounterPod("pod-2", "counter-key")
+	pod := makeCounterPod("pod-2")
 	err := counter.Decrease(context.Background(), pod)
 	assert.Error(t, err, "persistent (non-conflict) errors must propagate so pod_controller keeps the finalizer")
 }

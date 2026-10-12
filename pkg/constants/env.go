@@ -183,6 +183,12 @@ const (
 
 	SharedMemMountSubPath = "/shm"
 
+	// Pod namespace and name used to locate the pod's own shared-memory
+	// directory (TFDataPathWorkerExpr). Reserved for TensorFusion: whatever a
+	// pod spec defines under these names is replaced with the downward API value.
+	TFShmPodNamespaceEnv = "TF_SHM_POD_NAMESPACE"
+	TFShmPodNameEnv      = "TF_SHM_POD_NAME"
+
 	// disable GPU limiter, for emergency use
 	DisableGpuLimiterEnv = "DISABLE_GPU_LIMITER"
 	// directly forward CUDA calls to GPU driver in nGPU mode, for emergency use
@@ -260,4 +266,16 @@ const (
 
 	TFLicenseEnv     = "TF_LICENSE"
 	TFLicenseHMacEnv = "TF_LICENSE_SIGN"
+)
+
+const (
+	// VectorGreptimePasswordEnv is the variable the Vector configuration reads
+	// the database password from. It is injected into every Vector sidecar from
+	// a Secret, so that the password is in no ConfigMap and no pod spec.
+	VectorGreptimePasswordEnv = "GREPTIME_PASSWORD"
+	// VectorGreptimePasswordSecretEnv tells the operator the name of that
+	// Secret (in its own namespace, key GreptimePasswordSecretKey). Unset when
+	// the database needs no password.
+	VectorGreptimePasswordSecretEnv = "TSDB_PASSWORD_SECRET_NAME"
+	GreptimePasswordSecretKey       = "password"
 )

@@ -84,8 +84,8 @@ func (p AlibabaGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []type
 }
 
 func (p AlibabaGPUNodeProvider) GetInstancePricing(instanceType string, capacityType tfv1.CapacityTypeEnum, region string) (float64, error) {
-	if price, exists := pricingProvider.GetPricing(instanceType, capacityType, region); exists {
-		return price, nil
-	}
-	return 0, nil
+	// An instance type without a price (unknown, or the pricing tables are not
+	// loaded yet) is an error, not a price of zero: zero would make it the
+	// cheapest choice.
+	return pricingProvider.LookupPricing(instanceType, capacityType, region)
 }

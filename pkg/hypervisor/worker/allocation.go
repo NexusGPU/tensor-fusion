@@ -29,6 +29,7 @@ type AllocationController struct {
 }
 
 var _ framework.WorkerAllocationController = &AllocationController{}
+var _ framework.WorkerAllocationRefresher = &AllocationController{}
 
 type visibleDeviceRef struct {
 	index int32
@@ -175,15 +176,11 @@ func (a *AllocationController) AllocateWorkerDevices(request *api.WorkerInfo) (*
 	}
 	if request.IsolationMode == tfv1.IsolationModeHard && len(deviceInfos) > 0 {
 		// Hard isolation consumes a percentage, while users may request either
-		// ComputePercent or absolute TFLOPS. The scheduler records the effective
-		// percentage derived from the selected GPU CR capacity. Keep the device's
-		// discovered capacity as a compatibility fallback for older schedulers.
+		// ComputePercent or absolute TFLOPS. computeUpLimit prefers the
+		// percentage the scheduler recorded from the selected GPU's capacity and
+		// otherwise (older schedulers) applies the same conversion to the same
+		// capacity, held by the device.
 		percent := computeUpLimit(request, deviceInfos[0])
-		if raw := request.Annotations[constants.EffectiveHardSMPercentAnnotation]; raw != "" {
-			if parsed, err := strconv.ParseUint(raw, 10, 32); err == nil && parsed >= 1 && parsed <= 100 {
-				percent = uint32(parsed)
-			}
-		}
 		envs[constants.HardSMLimiterEnv] = strconv.FormatUint(uint64(percent), 10)
 	}
 
@@ -302,6 +299,51 @@ func (a *AllocationController) RecoverPartitionedWorker(request *api.WorkerInfo,
 	}
 	klog.Infof("recovered partitioned worker %s with %d partition(s)", request.WorkerUID, len(deviceInfos))
 	return nil
+}
+
+// RefreshWorkerInfo implements framework.WorkerAllocationRefresher. Devices,
+// envs and mounts were handed to the container at admission and are kept.
+// Allocations are read without a lock once returned, so the existing one is
+// replaced, never modified.
+func (a *AllocationController) RefreshWorkerInfo(worker *api.WorkerInfo) (*api.WorkerAllocation, bool) {
+	if worker == nil {
+		return nil, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	current := a.workerAllocations[worker.WorkerUID]
+	if current == nil || current.WorkerInfo == nil {
+		return nil, false
+	}
+	if current.WorkerInfo == worker {
+		return current, true
+	}
+	// Deallocation releases the devices recorded in the allocation's worker
+	// info, so an update must not change which devices those are.
+	if !slices.Equal(current.WorkerInfo.AllocatedDevices, worker.AllocatedDevices) ||
+		current.WorkerInfo.IsolationMode != worker.IsolationMode ||
+		current.WorkerInfo.PartitionTemplateID != worker.PartitionTemplateID {
+		klog.Warningf("worker %s update changes its device assignment, keeping the existing allocation",
+			worker.WorkerUID)
+		return nil, false
+	}
+
+	refreshed := *current
+	refreshed.WorkerInfo = worker
+	a.workerAllocations[worker.WorkerUID] = &refreshed
+	for _, deviceUUID := range worker.AllocatedDevices {
+		// GetDeviceAllocations shares these slices with its callers.
+		a.deviceAllocations[deviceUUID] = lo.Map(
+			a.deviceAllocations[deviceUUID],
+			func(allocation *api.WorkerAllocation, _ int) *api.WorkerAllocation {
+				if allocation == current {
+					return &refreshed
+				}
+				return allocation
+			},
+		)
+	}
+	return &refreshed, true
 }
 
 func (a *AllocationController) validateDynamicAllocationLocked(request *api.WorkerInfo) error {

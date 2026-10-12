@@ -1,0 +1,23 @@
+{
+  "eks_control_plane_per_hour": 0.10,
+  "gp3_per_gb_month": 0.08,
+  "on_demand": {
+    "c5.large": 0.0850000000,
+    "c6i.large": 0.0850000000,
+    "g4dn.2xlarge": 0.7520000000,
+    "g4dn.xlarge": 0.5260000000,
+    "g5.xlarge": 1.0060000000,
+    "g6.xlarge": 0.8048000000,
+    "m5.large": 0.0960000000,
+    "m5a.large": 0.0860000000,
+    "m6i.large": 0.0960000000,
+    "t3.large": 0.0832000000,
+    "t3.medium": 0.0416000000,
+    "t3a.large": 0.0752000000,
+    "t3a.medium": 0.0376000000
+  },
+  "public_ipv4_per_hour": 0.005,
+  "refreshed": "2026-10-11",
+  "region": "us-west-2",
+  "source": "AWS Price List API, Linux, shared tenancy, on-demand, USD per hour"
+}

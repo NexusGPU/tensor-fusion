@@ -61,14 +61,15 @@ var _ = Describe("Percentile Recommender", func() {
 			// VRAM: original request=20Gi, original limit=40Gi, maxRatio=5.0
 			//   - Request maxAllowed: 20Gi * 5 = 100Gi, lowerBound (100Gi) equals maxAllowed, so 100Gi
 			//   - Limit maxAllowed: 40Gi * 5 = 200Gi, upperBound (300Gi) clamped to 200Gi, so 200Gi
+			// One change goes at most half of the current value towards that.
 			expectRes := tfv1.Resources{
 				Requests: tfv1.Resource{
-					Tflops: resource.MustParse("100"),   // LowerBound, within maxAllowed (200)
-					Vram:   resource.MustParse("100Gi"), // LowerBound equals maxAllowed (100Gi)
+					Tflops: resource.MustParse("30"),
+					Vram:   resource.MustParse("30Gi"),
 				},
 				Limits: tfv1.Resource{
-					Tflops: resource.MustParse("300"),   // UpperBound, within maxAllowed (400)
-					Vram:   resource.MustParse("200Gi"), // UpperBound clamped to maxAllowed (200Gi)
+					Tflops: resource.MustParse("60"),
+					Vram:   resource.MustParse("60Gi"),
 				},
 			}
 
@@ -95,8 +96,25 @@ var _ = Describe("Percentile Recommender", func() {
 			Expect(got.Resources.Limits.Vram.Equal(expectRes.Limits.Vram)).To(BeTrue())
 			condition := meta.FindStatusCondition(ws.Status.Conditions, constants.ConditionStatusTypeResourceUpdate)
 			Expect(condition).ToNot(BeNil())
-			Expect(condition.Message).To(ContainSubstring("Compute scaled"))
-			Expect(condition.Message).To(ContainSubstring("VRAM scaled"))
+			Expect(condition.Message).To(ContainSubstring("Compute scaled: request 20 -> 30, limit 40 -> 60"))
+			Expect(condition.Message).To(ContainSubstring("VRAM scaled: request 20Gi -> 30Gi, limit 40Gi -> 60Gi"))
+			// What the usage calls for, and why it is not applied at once.
+			Expect(condition.Message).To(ContainSubstring("Compute limit: recommended 300, applied 60 (step limit: at most +50% per change)"))
+			Expect(condition.Message).To(ContainSubstring("VRAM request: recommended 100Gi, applied 30Gi (step limit: at most +50% per change)"))
+
+			// Applied step by step, the recommendation arrives where the usage puts it.
+			final := tfv1.Resources{
+				Requests: tfv1.Resource{Tflops: resource.MustParse("100"), Vram: resource.MustParse("100Gi")},
+				Limits:   tfv1.Resource{Tflops: resource.MustParse("300"), Vram: resource.MustParse("200Gi")},
+			}
+			steps := 1
+			for ; steps < 20 && !got.HasApplied; steps++ {
+				ws.SetRecommendation(&got.Resources)
+				got, _ = recommender.Recommend(ctx, ws)
+				Expect(got).ToNot(BeNil())
+			}
+			Expect(ws.GetCurrentResourcesSpec().Equal(&final)).To(BeTrue(), "ended at %v", ws.GetCurrentResourcesSpec())
+			Expect(steps).To(BeNumerically(">", 4))
 		})
 
 		It("should scale down if current resources above upper bounds", func() {

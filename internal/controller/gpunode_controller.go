@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
@@ -220,9 +221,10 @@ func (r *GPUNodeReconciler) checkStatusAndUpdateVirtualCapacity(
 		return fetchErr
 	}
 
-	// Reconcile GPUNode status with hypervisor pod status, when changed
-	hypervisorNotReady := !pod.DeletionTimestamp.IsZero() || pod.Status.Phase != corev1.PodRunning ||
-		!utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady)
+	// Reconcile GPUNode status with hypervisor pod status, when changed.
+	// Only the hypervisor container decides: a sidecar in the same pod must not
+	// take the node's GPUs out of scheduling.
+	hypervisorNotReady := !isHypervisorReady(pod)
 
 	forceGPUNodePhase, exists := forceGPUNodeStateMap[node.Name]
 	if exists {
@@ -375,13 +377,15 @@ func isNodeReady(node *corev1.Node) bool {
 
 // removeStuckHypervisorPodOnNotReadyNode deletes a hypervisor pod that never
 // reached Running on a NotReady node; a Running pod is left alone (k8s NoExecute
-// eviction handles it, and it may be only a transient blip). Returns nil so the
-// caller skips creation. Recovery re-triggers reconcile via the Node watch.
+// eviction handles it, and it may be only a transient blip), and so is a pod
+// that is Pending only because a sidecar has not started while the hypervisor
+// container runs. Returns nil so the caller skips creation. Recovery
+// re-triggers reconcile via the Node watch.
 func (r *GPUNodeReconciler) removeStuckHypervisorPodOnNotReadyNode(
 	ctx context.Context, node *tfv1.GPUNode, currentPod *corev1.Pod, podExists bool,
 ) error {
 	log := log.FromContext(ctx)
-	if podExists && currentPod.Status.Phase != corev1.PodRunning && currentPod.DeletionTimestamp.IsZero() {
+	if podExists && !isHypervisorStarted(currentPod) && currentPod.DeletionTimestamp.IsZero() {
 		log.Info("node is not ready, deleting non-running hypervisor pod",
 			"node", node.Name, "pod", currentPod.Name, "podPhase", currentPod.Status.Phase)
 		if err := r.Delete(ctx, currentPod); err != nil && !errors.IsNotFound(err) {
@@ -682,7 +686,7 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 		schedulingConfigTemplate := &tfv1.SchedulingConfigTemplate{}
 		if err := r.Get(ctx, client.ObjectKey{Name: *pool.Spec.SchedulingConfigTemplate}, schedulingConfigTemplate); err == nil {
 			if schedulingConfigTemplate.Spec.Hypervisor != nil {
-				if cfg, err := json.Marshal(schedulingConfigTemplate.Spec.Hypervisor); err == nil {
+				if cfg, err := json.Marshal(hypervisorSchedulingConfig(log, pool, schedulingConfigTemplate)); err == nil {
 					extraLabelsJson, err := json.Marshal(config.GetGlobalConfig().MetricsExtraPodLabels)
 					if err != nil {
 						return fmt.Errorf("invalid metricsExtraPodLabels config, not valid map: %w", err)
@@ -744,6 +748,34 @@ func (r *GPUNodeReconciler) createHypervisorPod(
 	}
 	log.Info("hypervisor pod created", "name", key.Name, "hash", newHash)
 	return nil
+}
+
+// legacyERLParametersReported remembers, per pool, the SchedulingConfigTemplate
+// generation for which hypervisorSchedulingConfig last reported that it left
+// the rate limit parameters out.
+var legacyERLParametersReported sync.Map
+
+// hypervisorSchedulingConfig returns the scheduling configuration of the
+// pool's template as it is passed to a hypervisor. Rate limit parameters that
+// are those of an earlier chart, not a choice of the user, are left out (see
+// utils.HypervisorSchedulingForHypervisor); that is reported once per pool and
+// template generation rather than for every hypervisor pod.
+func hypervisorSchedulingConfig(
+	log logr.Logger, pool *tfv1.GPUPool, template *tfv1.SchedulingConfigTemplate,
+) *tfv1.HypervisorScheduling {
+	scheduling, ignored := utils.HypervisorSchedulingForHypervisor(template.Spec.Hypervisor)
+	if !ignored {
+		legacyERLParametersReported.Delete(pool.Name)
+		return scheduling
+	}
+	reported := fmt.Sprintf("%s/%d", template.Name, template.Generation)
+	if previous, loaded := legacyERLParametersReported.Swap(pool.Name, reported); !loaded || previous != reported {
+		log.Info("elasticRateLimitParameters of the SchedulingConfigTemplate equal the defaults of earlier "+
+			"Helm charts and are not passed to the hypervisors of this pool, which use their built-in "+
+			"parameters; remove the block from the template, or change a value to keep parameters of your own",
+			"pool", pool.Name, "schedulingConfigTemplate", template.Name)
+	}
+	return scheduling
 }
 
 // effectiveHypervisorIsolationMode is the process-wide compatibility mode
@@ -1342,6 +1374,106 @@ func (r *GPUNodeReconciler) mapDevicePluginPodToGPUNode(ctx context.Context, obj
 	return []ctrl.Request{{NamespacedName: client.ObjectKey{Name: pod.Spec.NodeName}}}
 }
 
+// hypervisorContainerName returns the name of the hypervisor container of a
+// hypervisor pod. utils.AddTFHypervisorConfAfterTemplate always composes the
+// hypervisor as the first container and keeps the name given by the pool's pod
+// template, so the position, not a fixed name, identifies it. Every container
+// after it is a sidecar (e.g. the vector log/metrics shipper).
+func hypervisorContainerName(pod *corev1.Pod) string {
+	if len(pod.Spec.Containers) == 0 {
+		return ""
+	}
+	return pod.Spec.Containers[0].Name
+}
+
+// hypervisorSidecarNames returns the names of the containers that run next to
+// the hypervisor for the whole life of the pod: the regular containers after
+// the first one and the init containers that restart (restartPolicy Always).
+// The one-shot init containers are not sidecars: they prepare the node for the
+// hypervisor, which cannot start until they succeed.
+func hypervisorSidecarNames(pod *corev1.Pod) map[string]struct{} {
+	sidecars := make(map[string]struct{})
+	if len(pod.Spec.Containers) > 1 {
+		for _, c := range pod.Spec.Containers[1:] {
+			sidecars[c.Name] = struct{}{}
+		}
+	}
+	for _, c := range pod.Spec.InitContainers {
+		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			sidecars[c.Name] = struct{}{}
+		}
+	}
+	return sidecars
+}
+
+// hypervisorContainerStatus returns the status the kubelet reported for the
+// hypervisor container. It is absent until the kubelet has reported the pod.
+func hypervisorContainerStatus(pod *corev1.Pod) (*corev1.ContainerStatus, bool) {
+	name := hypervisorContainerName(pod)
+	if name == "" {
+		return nil, false
+	}
+	for i := range pod.Status.ContainerStatuses {
+		if pod.Status.ContainerStatuses[i].Name == name {
+			return &pod.Status.ContainerStatuses[i], true
+		}
+	}
+	return nil, false
+}
+
+// isHypervisorReady reports whether the hypervisor of this pod serves the
+// node's GPUs.
+//
+// Without a sidecar the pod as a whole decides (phase Running and condition
+// Ready), as it always did. With a sidecar the pod-level signals also reflect
+// the sidecar: the pod is not Ready while the sidecar is not ready, and it
+// stays in phase Pending while the sidecar image cannot be pulled, although
+// the hypervisor is running and passing its readiness probe. In that case
+// only the hypervisor container's own status is used.
+//
+// The container status is what the kubelet last reported, so it is only
+// meaningful while the node is Ready; reconcileHypervisorPod returns before
+// this check for a NotReady node.
+func isHypervisorReady(pod *corev1.Pod) bool {
+	if !pod.DeletionTimestamp.IsZero() {
+		return false
+	}
+	podReady := pod.Status.Phase == corev1.PodRunning &&
+		utils.IsPodConditionTrue(pod.Status.Conditions, corev1.PodReady)
+	if len(hypervisorSidecarNames(pod)) == 0 {
+		return podReady
+	}
+	status, reported := hypervisorContainerStatus(pod)
+	if !reported {
+		// Nothing container-level to go by yet (pod just scheduled).
+		return podReady
+	}
+	if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending {
+		// Failed, Succeeded or Unknown: no container of the pod is serving.
+		return false
+	}
+	return status.Ready && status.State.Running != nil
+}
+
+// isHypervisorStarted reports whether the hypervisor container has been
+// started. A pod whose sidecar never started (e.g. its image cannot be pulled)
+// stays in phase Pending while the hypervisor is already running.
+func isHypervisorStarted(pod *corev1.Pod) bool {
+	if pod.Status.Phase == corev1.PodRunning {
+		return true
+	}
+	if pod.Status.Phase != corev1.PodPending || len(hypervisorSidecarNames(pod)) == 0 {
+		return false
+	}
+	status, reported := hypervisorContainerStatus(pod)
+	return reported && status.State.Running != nil
+}
+
+// hypervisorPodCrashExceeded reports whether the hypervisor has restarted more
+// often than the configured threshold, in which case the pod is recreated.
+// The hypervisor container and its one-shot init containers are counted;
+// restarts of a sidecar are not, because recreating the pod would interrupt a
+// healthy hypervisor and would not repair the sidecar.
 func hypervisorPodCrashExceeded(pod *corev1.Pod) (container string, restartCount int32, threshold int32, exceeded bool) {
 	threshold = config.DefaultHypervisorMaxCrashCount
 	if cfg := config.GetGlobalConfig(); cfg != nil && cfg.HypervisorMaxCrashCount != nil {
@@ -1351,8 +1483,12 @@ func hypervisorPodCrashExceeded(pod *corev1.Pod) (container string, restartCount
 		return "", 0, 0, false
 	}
 
+	sidecars := hypervisorSidecarNames(pod)
 	check := func(statuses []corev1.ContainerStatus) (string, int32, bool) {
 		for _, cs := range statuses {
+			if _, isSidecar := sidecars[cs.Name]; isSidecar {
+				continue
+			}
 			if cs.RestartCount > threshold {
 				return cs.Name, cs.RestartCount, true
 			}

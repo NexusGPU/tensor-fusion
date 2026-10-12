@@ -1,49 +1,17 @@
 package computing
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/NexusGPU/tensor-fusion/pkg/hypervisor/framework"
 	workerstate "github.com/NexusGPU/tensor-fusion/pkg/hypervisor/worker/state"
 	"k8s.io/klog/v2"
-)
-
-const (
-	erlUpdateInterval = 500 * time.Millisecond
-
-	// Token bucket defaults.
-	burstWindow = 0.5      // capacity = rate × burstWindow (seconds)
-	rateMin     = 10.0     // minimum refill rate (tokens/s)
-	rateMax     = 200000.0 // maximum refill rate
-	capacityMin = 200.0    // minimum token capacity
-	capacityMax = 200000.0
-
-	// Feedback-control parameters.
-	utilAlpha           = 0.25 // utilization smoothing (EMA)
-	utilDeadband        = 0.03 // ignore tiny error to reduce oscillation
-	kp                  = 0.9
-	ki                  = 0.35
-	kd                  = 0.10
-	integralDecayFactor = 0.85
-	integralClamp       = 1.5
-
-	// Rate slew limiting avoids abrupt oscillation when NVML samples jump.
-	maxRateIncreaseRatio = 0.35 // max +35% per control interval
-	maxRateDecreaseRatio = 0.25 // max -25% per control interval
-
-	// Keep a modest token reserve for bursts while smoothing bucket release.
-	tokenReserveRatio = 0.35
-	tokenDrainRatio   = 0.80 // drain up to 80% of capacity/sec when oversupplied
-	tokenDrainMin     = 25.0
 )
 
 // WorkerInfoSnapshot holds the worker info needed for ERL updates
@@ -58,28 +26,15 @@ type DeviceSnapshot struct {
 	DeviceUUID string
 	DeviceIdx  int
 	UpLimit    uint32
-}
-
-// erlState tracks per-device rate control state
-type erlState struct {
-	currentRate  float64
-	smoothedUtil float64
-	integralErr  float64
-	lastError    float64
-	initialized  bool
-}
-
-type erlConfig struct {
-	burstWindow         float64
-	rateMin             float64
-	rateMax             float64
-	capacityMin         float64
-	capacityMax         float64
-	utilAlpha           float64
-	kp                  float64
-	ki                  float64
-	kd                  float64
-	integralDecayFactor float64
+	// FoundUpLimit is the compute limit the device's slot carried when the
+	// worker's mapping was opened, before the current one was written to it:
+	// the limit that whatever a control loop left in the mapping was published
+	// for. Zero when it is not known.
+	FoundUpLimit uint32
+	// BurstWindow is the worker's own burst window in seconds, nil when it has
+	// none and the pool's applies. It is read in every control interval, so a
+	// change takes effect within one. See burstWindow.
+	BurstWindow *float64
 }
 
 type Controller struct {
@@ -90,91 +45,73 @@ type Controller struct {
 	running bool
 	stopCh  chan struct{}
 
-	workerInfoFn func() map[string]*WorkerInfoSnapshot
-	shmHandleFn  func(workerUID string) *workerstate.SharedMemoryHandle
+	workerInfoFn  func() map[string]*WorkerInfoSnapshot
+	shmHandleFn   func(workerUID string) *workerstate.SharedMemoryHandle
+	processUtilFn func() *ProcessUtilizationSnapshot
 
 	// Per-worker per-device AIMD state: key = workerUID + ":" + deviceUUID.
 	// Guarded by erlStatesMu; the ERL update loop and the worker-delete callback
 	// can race otherwise.
 	erlStatesMu sync.Mutex
 	erlStates   map[string]*erlState
-	config      erlConfig
+	// Token accounting per bucket, same key and lock as erlStates.
+	tokenMeters map[string]*tokenMeter
+	// Per device (lower-case UUID), how the per-process figures have compared
+	// with the device's utilization; same lock as erlStates.
+	processChecks map[string]*processCheck
+	// Workers removed recently, by UID, and when; same lock as erlStates.
+	removedWorkers map[string]time.Time
+	// Per bucket, same key and lock as erlStates: the calibrations of
+	// utilization readings against token spending, and the utilization signal
+	// used in the previous interval.
+	calibrations map[string]*workerCalibration
+	utilSources  map[string]utilizationSource
+	// Latest attribution per bucket, see quota_utilization.go.
+	attributed map[string]attributedUtilization
+	// Buckets by the same key and under the same lock, and the ones the refill
+	// loop currently serves: those of the workers seen by the latest control
+	// interval. The slice is replaced, never modified.
+	buckets   map[string]*refillBucket
+	refillSet atomic.Pointer[[]*refillBucket]
+	// loops tracks the control and refill goroutines of a started limiter.
+	loops  sync.WaitGroup
+	config erlConfig
+
+	nowFunc func() time.Time
+
+	// podEventFn records a Warning Event on a Pod, nil when there is nowhere to
+	// record one. It is called from the control loop and must not wait.
+	podEventFn func(namespace, podName, podUID, reason, message string)
+	// When the Event about a bucket that is left out of the split was last
+	// raised, by worker UID; same lock as erlStates.
+	exclusionEvents map[string]time.Time
 }
 
 func NewQuotaController(
 	deviceController framework.DeviceController,
 	backend framework.Backend,
 ) framework.QuotaController {
-	return &Controller{
+	c := &Controller{
 		deviceController: deviceController,
 		backend:          backend,
 		stopCh:           make(chan struct{}),
 		erlStates:        make(map[string]*erlState),
+		tokenMeters:      make(map[string]*tokenMeter),
 		config:           defaultERLConfig(),
-	}
-}
 
-func defaultERLConfig() erlConfig {
-	return erlConfig{
-		burstWindow:         burstWindow,
-		rateMin:             rateMin,
-		rateMax:             rateMax,
-		capacityMin:         capacityMin,
-		capacityMax:         capacityMax,
-		utilAlpha:           utilAlpha,
-		kp:                  kp,
-		ki:                  ki,
-		kd:                  kd,
-		integralDecayFactor: integralDecayFactor,
-	}
-}
+		processChecks:  make(map[string]*processCheck),
+		removedWorkers: make(map[string]time.Time),
+		calibrations:   make(map[string]*workerCalibration),
+		utilSources:    make(map[string]utilizationSource),
+		buckets:        make(map[string]*refillBucket),
+		nowFunc:        time.Now,
 
-func parsePositiveFloat(raw string, fallback float64) float64 {
-	if raw == "" {
-		return fallback
+		exclusionEvents: make(map[string]time.Time),
 	}
-	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	if err != nil || v <= 0 {
-		return fallback
+	if emitter, ok := backend.(PodEventEmitter); ok {
+		c.SetPodEventEmitter(emitter)
 	}
-	return v
-}
-
-func loadERLConfigFromEnv() erlConfig {
-	cfg := defaultERLConfig()
-
-	raw := os.Getenv(constants.HypervisorSchedulingConfigEnv)
-	if raw == "" {
-		return cfg
-	}
-
-	var scheduling tfv1.HypervisorScheduling
-	if err := json.Unmarshal([]byte(raw), &scheduling); err != nil {
-		klog.Warningf("Failed to parse %s: %v", constants.HypervisorSchedulingConfigEnv, err)
-		return cfg
-	}
-
-	erl := scheduling.ElasticRateLimitParameters
-	cfg.rateMax = parsePositiveFloat(erl.MaxRefillRate, cfg.rateMax)
-	cfg.rateMin = parsePositiveFloat(erl.MinRefillRate, cfg.rateMin)
-	cfg.utilAlpha = parsePositiveFloat(erl.FilterAlpha, cfg.utilAlpha)
-	cfg.kp = parsePositiveFloat(erl.Kp, cfg.kp)
-	cfg.ki = parsePositiveFloat(erl.Ki, cfg.ki)
-	cfg.kd = parsePositiveFloat(erl.Kd, cfg.kd)
-	cfg.burstWindow = parsePositiveFloat(erl.BurstWindow, cfg.burstWindow)
-	cfg.capacityMin = parsePositiveFloat(erl.CapacityMin, cfg.capacityMin)
-	cfg.capacityMax = parsePositiveFloat(erl.CapacityMax, cfg.capacityMax)
-	cfg.integralDecayFactor = parsePositiveFloat(erl.IntegralDecayFactor, cfg.integralDecayFactor)
-
-	if cfg.rateMin > cfg.rateMax {
-		cfg.rateMin = cfg.rateMax
-	}
-	if cfg.capacityMin > cfg.capacityMax {
-		cfg.capacityMin = cfg.capacityMax
-	}
-	cfg.utilAlpha = clampFloat64(cfg.utilAlpha, 0.01, 0.95)
-	cfg.integralDecayFactor = clampFloat64(cfg.integralDecayFactor, 0.01, 0.999)
-	return cfg
+	return c
 }
 
 func (c *Controller) SetWorkerInfoProvider(fn func() map[string]*WorkerInfoSnapshot) {
@@ -183,6 +120,13 @@ func (c *Controller) SetWorkerInfoProvider(fn func() map[string]*WorkerInfoSnaps
 
 func (c *Controller) SetShmHandleProvider(fn func(workerUID string) *workerstate.SharedMemoryHandle) {
 	c.shmHandleFn = fn
+}
+
+// SetProcessUtilizationProvider wires the optional per-process utilization
+// source. Without it, or while it has nothing usable for a device, utilization
+// is derived from token consumption and device metrics.
+func (c *Controller) SetProcessUtilizationProvider(fn func() *ProcessUtilizationSnapshot) {
+	c.processUtilFn = fn
 }
 
 func (c *Controller) SetQuota(workerUID string) error {
@@ -205,11 +149,13 @@ func (c *Controller) StartSoftQuotaLimiter() error {
 	c.running = true
 	c.stopCh = make(chan struct{})
 
-	go c.runERLUpdateLoop()
+	c.loops.Add(2)
+	go c.runERLUpdateLoop(c.stopCh)
+	go c.runERLRefillLoop(c.stopCh)
 	klog.Infof(
-		"Soft quota limiter started (feedback-controlled ERL): "+
-			"rate=[%.2f, %.2f] burstWindow=%.2f cap=[%.2f, %.2f] "+
-			"alpha=%.2f kp=%.2f ki=%.2f kd=%.2f decay=%.3f",
+		"Soft quota limiter started (feedback-controlled ERL), effective configuration: "+
+			"rate=[%g, %g] burstWindow=%g cap=[%g, %g] "+
+			"alpha=%g kp=%g ki=%g kd=%g decay=%g",
 		c.config.rateMin, c.config.rateMax,
 		c.config.burstWindow,
 		c.config.capacityMin, c.config.capacityMax,
@@ -228,6 +174,9 @@ func (c *Controller) StopSoftQuotaLimiter() error {
 	}
 	close(c.stopCh)
 	c.running = false
+	// Both loops have left the mappings alone once this returns.
+	c.loops.Wait()
+	c.refillSet.Store(nil)
 	klog.Info("Soft quota limiter stopped")
 	return nil
 }
@@ -236,13 +185,14 @@ func (c *Controller) GetWorkerQuotaStatus(workerUID string) error {
 	return nil
 }
 
-func (c *Controller) runERLUpdateLoop() {
+func (c *Controller) runERLUpdateLoop(stopCh <-chan struct{}) {
+	defer c.loops.Done()
 	ticker := time.NewTicker(erlUpdateInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-c.stopCh:
+		case <-stopCh:
 			return
 		case <-ticker.C:
 			c.updateERLControllers()
@@ -250,13 +200,56 @@ func (c *Controller) runERLUpdateLoop() {
 	}
 }
 
-func (c *Controller) getOrCreateERLState(key string) *erlState {
+func (c *Controller) nowSecs() float64 {
+	return float64(c.nowFunc().UnixMicro()) / 1e6
+}
+
+// dropBucketState forgets what the control loop keeps for a bucket it could not
+// reach, unless the entry has been replaced in the meantime.
+func (c *Controller) dropBucketState(key string, bucket *refillBucket) {
+	c.erlStatesMu.Lock()
+	defer c.erlStatesMu.Unlock()
+	if c.buckets[key] != bucket {
+		return
+	}
+	delete(c.buckets, key)
+	delete(c.tokenMeters, key)
+	delete(c.calibrations, key)
+}
+
+// getOrCreateBucket returns the bucket of a worker's device. The caller binds
+// it to the worker's current mapping under the bucket's own lock.
+func (c *Controller) getOrCreateBucket(
+	key string, handle *workerstate.SharedMemoryHandle, deviceIdx int,
+) *refillBucket {
+	c.erlStatesMu.Lock()
+	defer c.erlStatesMu.Unlock()
+	bucket, ok := c.buckets[key]
+	if !ok {
+		bucket = newRefillBucket(handle, deviceIdx)
+		c.buckets[key] = bucket
+	}
+	return bucket
+}
+
+// workerRemoved reports whether the worker was cleaned up recently. A control
+// pass works on a list of workers taken at its start; one removed since must
+// not get its state back.
+func (c *Controller) workerRemoved(workerUID string) bool {
+	c.erlStatesMu.Lock()
+	defer c.erlStatesMu.Unlock()
+	_, removed := c.removedWorkers[workerUID]
+	return removed
+}
+
+func (c *Controller) getOrCreateERLState(key string) (state *erlState, created bool) {
 	c.erlStatesMu.Lock()
 	defer c.erlStatesMu.Unlock()
 	st, ok := c.erlStates[key]
+	created = !ok
 	if !ok {
 		st = &erlState{
-			currentRate:  100.0, // Start low to avoid immediate overshoot.
+			currentRate:  initialRate, // Start low to avoid immediate overshoot.
 			smoothedUtil: 0,
 			integralErr:  0,
 			lastError:    0,
@@ -264,116 +257,105 @@ func (c *Controller) getOrCreateERLState(key string) *erlState {
 		}
 		c.erlStates[key] = st
 	}
-	return st
+	return st, created
 }
 
-// CleanupWorker drops every per-device ERL/PID state entry that belongs to the
-// given workerUID and zeroes the token-bucket fields in the worker's shm so
-// stale values cannot bias a freshly scheduled successor pod on the same GPU.
-// Safe to call with an empty workerUID (no-op) or before the soft limiter
-// has started.
+func (c *Controller) getOrCreateTokenMeter(key string) *tokenMeter {
+	c.erlStatesMu.Lock()
+	defer c.erlStatesMu.Unlock()
+	meter, ok := c.tokenMeters[key]
+	if !ok {
+		meter = &tokenMeter{}
+		c.tokenMeters[key] = meter
+	}
+	return meter
+}
+
+func (c *Controller) getOrCreateCalibration(key string) *workerCalibration {
+	c.erlStatesMu.Lock()
+	defer c.erlStatesMu.Unlock()
+	calibration, ok := c.calibrations[key]
+	if !ok {
+		calibration = &workerCalibration{processes: utilizationCalibration{coarse: true}}
+		c.calibrations[key] = calibration
+	}
+	return calibration
+}
+
+// swapUtilizationSource records the signal used for a bucket in this interval
+// and returns the one used in the previous interval ("" if none).
+func (c *Controller) swapUtilizationSource(key string, source utilizationSource) utilizationSource {
+	c.erlStatesMu.Lock()
+	defer c.erlStatesMu.Unlock()
+	previous := c.utilSources[key]
+	c.utilSources[key] = source
+	return previous
+}
+
+// CleanupWorker drops everything the control loop keeps for the given worker,
+// so that nothing of it outlives the worker. The worker's mapping is not
+// touched: it is the worker's own and goes away with it. Safe to call with an
+// empty workerUID (no-op) or before the soft limiter has started.
 func (c *Controller) CleanupWorker(workerUID string) {
 	if workerUID == "" {
 		return
 	}
 
 	prefix := workerUID + ":"
+	now := c.nowFunc()
 	c.erlStatesMu.Lock()
+	defer c.erlStatesMu.Unlock()
+	for uid, removedAt := range c.removedWorkers {
+		if now.Sub(removedAt) > removedWorkerMemory {
+			delete(c.removedWorkers, uid)
+		}
+	}
+	c.removedWorkers[workerUID] = now
+	delete(c.exclusionEvents, workerUID)
 	for key := range c.erlStates {
 		if strings.HasPrefix(key, prefix) {
 			delete(c.erlStates, key)
 		}
 	}
-	c.erlStatesMu.Unlock()
-
-	// Best-effort reset of the worker's per-device shm bucket before the shm
-	// is reaped. shmHandleFn may return nil if the handle was already freed by
-	// the shm cleanup loop, in which case nothing needs to be done.
-	if c.shmHandleFn == nil {
-		return
-	}
-	handle := c.shmHandleFn(workerUID)
-	if handle == nil {
-		return
-	}
-	handle.WithState(func(state *workerstate.SharedDeviceState) {
-		if state.V2 == nil {
-			return
-		}
-		for i := range state.V2.Devices {
-			dev := &state.V2.Devices[i].DeviceInfo
-			dev.SetERLCurrentTokens(0)
-			dev.SetERLLastTokenUpdate(0)
-		}
-	})
-}
-
-func clampFloat64(v, lo, hi float64) float64 {
-	return math.Min(math.Max(v, lo), hi)
-}
-
-func slewRate(current, target, upRatio, downRatio float64) float64 {
-	if target > current {
-		return math.Min(target, current*(1.0+upRatio))
-	}
-	return math.Max(target, current*(1.0-downRatio))
-}
-
-func computeDesiredRate(currentRate, targetUtil, smoothedUtil, dt float64, es *erlState, cfg erlConfig) float64 {
-	if smoothedUtil <= 0.01 {
-		// A valid near-idle sample allows a conservative, steady ramp-up.
-		return math.Min(currentRate*(1.0+maxRateIncreaseRatio), cfg.rateMax)
-	}
-
-	error := targetUtil - smoothedUtil
-	if math.Abs(error) < utilDeadband {
-		es.integralErr *= cfg.integralDecayFactor
-		return currentRate
-	}
-
-	es.integralErr = clampFloat64(es.integralErr*cfg.integralDecayFactor+error*dt, -integralClamp, integralClamp)
-	derivative := 0.0
-	if dt > 0 {
-		derivative = (error - es.lastError) / dt
-	}
-	es.lastError = error
-
-	// Feed-forward: estimate the rate required to move current utilization to target.
-	feedForwardRate := currentRate * (targetUtil / math.Max(smoothedUtil, 0.05))
-	controlFactor := 1.0 + cfg.kp*error + cfg.ki*es.integralErr + cfg.kd*derivative
-	controlFactor = clampFloat64(controlFactor, 0.5, 1.5)
-
-	desiredRate := clampFloat64(feedForwardRate*controlFactor, cfg.rateMin, cfg.rateMax)
-	return slewRate(currentRate, desiredRate, maxRateIncreaseRatio, maxRateDecreaseRatio)
-}
-
-func rebalanceTokenBucket(
-	deviceInfo *workerstate.SharedDeviceInfoV2,
-	nowSecs, refillRate, capacity, targetUtil, smoothedUtil float64,
-) float64 {
-	currentTokens, lastUpdate := deviceInfo.LoadERLTokenState()
-	if lastUpdate > 0 {
-		refillElapsed := nowSecs - lastUpdate
-		if refillElapsed > 0 && refillElapsed < 5.0 {
-			deviceInfo.FetchAddERLTokens(refillRate * refillElapsed)
-			currentTokens = deviceInfo.GetERLCurrentTokens()
+	for key := range c.tokenMeters {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.tokenMeters, key)
 		}
 	}
-
-	reserveTarget := clampFloat64(capacity*tokenReserveRatio, 0.0, capacity)
-	if currentTokens > capacity {
-		drainAmount := math.Max(tokenDrainMin, capacity*tokenDrainRatio) * (erlUpdateInterval.Seconds())
-		currentTokens = math.Max(capacity, currentTokens-drainAmount)
-		deviceInfo.SetERLCurrentTokens(currentTokens)
-	} else if smoothedUtil > targetUtil+utilDeadband && currentTokens > reserveTarget {
-		// Smoothly bleed extra burst budget when utilization is already above target.
-		drainAmount := math.Max(tokenDrainMin, capacity*tokenDrainRatio) * (erlUpdateInterval.Seconds())
-		currentTokens = math.Max(reserveTarget, currentTokens-drainAmount)
-		deviceInfo.SetERLCurrentTokens(currentTokens)
+	for key := range c.calibrations {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.calibrations, key)
+		}
 	}
-
-	deviceInfo.SetERLLastTokenUpdate(nowSecs)
-	return currentTokens
+	for key := range c.utilSources {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.utilSources, key)
+		}
+	}
+	for key := range c.attributed {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.attributed, key)
+		}
+	}
+	removed := make(map[*refillBucket]bool)
+	for key, bucket := range c.buckets {
+		if strings.HasPrefix(key, prefix) {
+			removed[bucket] = true
+			delete(c.buckets, key)
+		}
+	}
+	// Stop refilling the worker's buckets now rather than at the next control
+	// interval. A pass that is already running is harmless: it only reaches the
+	// mapping through its handle, which refuses once closed.
+	if served := c.refillSet.Load(); served != nil && len(removed) > 0 {
+		remaining := make([]*refillBucket, 0, len(*served))
+		for _, bucket := range *served {
+			if !removed[bucket] {
+				remaining = append(remaining, bucket)
+			}
+		}
+		c.refillSet.Store(&remaining)
+	}
 }
 
 func (c *Controller) updateERLControllers() {
@@ -383,84 +365,110 @@ func (c *Controller) updateERLControllers() {
 
 	workers := c.workerInfoFn()
 	if len(workers) == 0 {
+		c.refillSet.Store(nil)
 		return
 	}
 
-	// Get device-level GPU utilization via NVML
-	deviceUtilization := make(map[string]float64)
-	deviceMetrics, metricsErr := c.deviceController.GetDeviceMetrics()
-	if metricsErr != nil {
-		// Preserve the last limits when telemetry is unavailable, not idle.
-		return
-	}
-	for uuid, m := range deviceMetrics {
-		if m == nil || math.IsNaN(m.ComputePercentage) ||
-			m.ComputePercentage < 0 || m.ComputePercentage > 100 {
-			continue
-		}
-		deviceUtilization[strings.ToLower(uuid)] = m.ComputePercentage
-	}
-
-	timestampMicros := uint64(time.Now().UnixMicro())
-	nowSecs := float64(timestampMicros) / 1e6
+	now := c.nowFunc()
 	dt := erlUpdateInterval.Seconds()
 
+	// Missing telemetry is not an idle device: affected workers keep their
+	// rate and keep receiving tokens at it.
+	deviceUtilization := c.sampleDeviceUtilization()
+	var processUtil *ProcessUtilizationSnapshot
+	if c.processUtilFn != nil {
+		processUtil = c.processUtilFn()
+	}
+
+	// Measure what every worker spent first, so each device can be arbitrated
+	// across all of its workers.
+	membersByDevice := make(map[string][]*erlMember)
+	served := make([]*refillBucket, 0, len(workers))
 	for workerUID, workerInfo := range workers {
 		handle := c.shmHandleFn(workerUID)
 		if handle == nil {
 			continue
 		}
-		handle.WithState(func(state *workerstate.SharedDeviceState) {
-			if state.V2 == nil {
-				return
+		for _, dev := range workerInfo.Devices {
+			if c.workerRemoved(workerUID) {
+				break
 			}
-			for _, dev := range workerInfo.Devices {
-				deviceUUID := strings.ToLower(dev.DeviceUUID)
-				utilization, sampled := deviceUtilization[deviceUUID]
-				if !sampled {
-					continue
-				}
-
-				if !state.HasDevice(dev.DeviceIdx) {
-					continue
-				}
-				deviceInfo := &state.V2.Devices[dev.DeviceIdx].DeviceInfo
-
-				stateKey := workerUID + ":" + deviceUUID
-				es := c.getOrCreateERLState(stateKey)
-
-				targetUtil := float64(dev.UpLimit) / 100.0
-
-				// Get NVML GPU utilization (0-100 → 0-1)
-				nvmlUtil := utilization / 100.0
-
-				// EMA smooth utilization
-				if !es.initialized {
-					es.smoothedUtil = nvmlUtil
-					es.initialized = true
-				} else {
-					es.smoothedUtil = c.config.utilAlpha*nvmlUtil + (1-c.config.utilAlpha)*es.smoothedUtil
-				}
-
-				es.currentRate = computeDesiredRate(es.currentRate, targetUtil, es.smoothedUtil, dt, es, c.config)
-
-				// Dynamic capacity
-				newCapacity := clampFloat64(es.currentRate*c.config.burstWindow, c.config.capacityMin, c.config.capacityMax)
-
-				// Write to shm
-				deviceInfo.SetERLTokenRefillRate(es.currentRate)
-				deviceInfo.SetERLTokenCapacity(newCapacity)
-				currentTokens := rebalanceTokenBucket(deviceInfo, nowSecs, es.currentRate, newCapacity, targetUtil, es.smoothedUtil)
-
-				klog.Infof(
-					"ERL [%s] nvml=%.0f%% smooth=%.0f%% target=%.0f%% err=%.1f%% "+
-						"rate=%.0f cap=%.0f tokens=%.1f int=%.3f",
-					stateKey,
-					nvmlUtil*100, es.smoothedUtil*100, targetUtil*100,
-					(targetUtil-es.smoothedUtil)*100,
-					es.currentRate, newCapacity, currentTokens, es.integralErr,
-				)
+			deviceUUID := strings.ToLower(dev.DeviceUUID)
+			member := &erlMember{
+				workerUID: workerUID,
+				stateKey:  workerUID + ":" + deviceUUID,
+				device:    dev,
 			}
-		})
+			member.bucket = c.getOrCreateBucket(member.stateKey, handle, dev.DeviceIdx)
+			member.meter = c.getOrCreateTokenMeter(member.stateKey)
+			calibration := c.getOrCreateCalibration(member.stateKey)
+			member.calibration, member.fallback = &calibration.processes, &calibration.device
+
+			present, excludedBefore := false, member.meter.excluded
+			member.bucket.mu.Lock()
+			if member.bucket.handle != handle || member.bucket.deviceIdx != dev.DeviceIdx {
+				// The mapping was republished: its bucket starts over, and nothing
+				// measured on the previous one describes it.
+				member.bucket.handle, member.bucket.deviceIdx, member.bucket.added = handle, dev.DeviceIdx, 0
+				*member.meter = tokenMeter{}
+			}
+			handle.WithState(func(state *workerstate.SharedDeviceState) {
+				if state.V2 == nil || !state.HasDevice(dev.DeviceIdx) {
+					return
+				}
+				present = true
+				tokens := state.V2.Devices[dev.DeviceIdx].DeviceInfo.GetERLCurrentTokens()
+				// The clock is read here, not at the start of the pass: everything
+				// before this point can take time.
+				if member.bucket.foreign {
+					// Somebody else added tokens during this interval, at the
+					// published rate if it was a limiter.
+					member.meter.foreignRate = math.Max(member.bucket.rate, consumptionFloor)
+					// A foreign timestamp is only taken for one of a writer that
+					// is refilling while it is no more than clockStepTolerance
+					// ahead of the clock (see refillInfo), so a limiter's refill
+					// is seen after a gap of at least the difference.
+					member.meter.foreignExpected = member.bucket.ownGap >= limiterSelfRefillAfter-clockStepTolerance
+					member.bucket.foreign = false
+				}
+				member.bucket.ownGap = 0
+				member.meter.observe(tokens, member.bucket.added, c.nowSecs())
+				member.bucket.added = 0
+				member.tokenBound = member.bucket.capacity <= 0 || tokens < tokenBoundFraction*member.bucket.capacity ||
+					member.bucket.drained
+				member.bucket.drained = false
+			})
+			member.bucket.mu.Unlock()
+			if !present {
+				// Closed or not carrying this device: the worker is going away or
+				// is not set up yet. Keep nothing for it.
+				c.dropBucketState(member.stateKey, member.bucket)
+				continue
+			}
+			c.reportMeterExclusion(member, workerInfo, excludedBefore)
+			membersByDevice[deviceUUID] = append(membersByDevice[deviceUUID], member)
+			served = append(served, member.bucket)
+		}
+	}
+	// From here on the refill loop serves exactly the buckets of this interval.
+	c.refillSet.Store(&served)
+
+	for deviceUUID, members := range membersByDevice {
+		deviceUtil, deviceSampled := deviceUtilization[deviceUUID]
+		attributeDeviceUtilization(members, deviceUtil, deviceSampled,
+			c.processUtilizationFor(deviceUUID, processUtil, now, deviceUtil, deviceSampled),
+			processUtil.unmetered(deviceUUID, now), c.processShortfall(deviceUUID))
+
+		for _, member := range members {
+			member.bucket.mu.Lock()
+			member.bucket.handle.WithState(func(state *workerstate.SharedDeviceState) {
+				if state.V2 == nil || !state.HasDevice(member.device.DeviceIdx) {
+					return
+				}
+				deviceInfo := &state.V2.Devices[member.device.DeviceIdx].DeviceInfo
+				c.updateERLBucket(member, deviceInfo, deviceUtil, dt)
+			})
+			member.bucket.mu.Unlock()
+		}
 	}
 }

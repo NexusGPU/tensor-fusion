@@ -1,11 +1,22 @@
+# Overlay for installations in mainland China: every image the chart can
+# reference is pulled from a registry reachable there, none from Docker Hub.
+#   helm install ... -f charts/tensor-fusion/values-cn.yaml
+#
+# TensorFusion images come from registry.cn-hangzhou.aliyuncs.com/tensorfusion,
+# third-party images from the mirrors already used below. A tag may only be
+# named here once it exists on that mirror. hack/test-chart-cn-images.sh
+# (make test-chart) checks that a render with this file has no Docker Hub
+# reference and uses the same image versions as the default values.
+
 greptime:
   image:
     repository: greptime-registry.cn-hangzhou.cr.aliyuncs.com/greptime/greptimedb
 
 controller:
   image:
+    # The tag follows the chart appVersion (controller.image.tag is empty).
     repository: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-operator
-  vectorAgentImage: docker.m.daocloud.io/timberio/vector:latest-alpine
+  vectorAgentImage: docker.m.daocloud.io/timberio/vector:0.56.0-alpine
 
   admissionWebhooks:
     patch:
@@ -14,8 +25,34 @@ controller:
 agent:
   image:
     repository: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-agent
+    # NOTE(cn-mirror): 1.0.0 is the only agent release on the mirror (its
+    # "latest" tag there is the same image, older than Docker Hub's "latest").
+    # The chart's default is 1.1.0, which is not mirrored yet: mirror it and
+    # raise this tag. Until then agent.namespaceAllowlist / namespaceDenylist
+    # have no effect with this overlay (1.0.0 does not read them).
+    tag: "1.0.0"
+
+providerConfigs:
+  nvidia:
+    # Also used by the chart-managed pool for the client and worker images.
+    images:
+      middleware: registry.cn-hangzhou.aliyuncs.com/tensorfusion/vgpu-provider-nvidia:1.3.9
+      remoteClient: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-client:v2.25.0
+      remoteWorker: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-worker:v2.25.0
+
+cluster:
+  # NOTE(cn-mirror): BUMP WITH appVersion. The template only offers "a full
+  # image reference, or tensorfusion/tensor-fusion-hypervisor:<appVersion>",
+  # so the registry cannot be overridden on its own and the tag has to be
+  # repeated here. It must equal appVersion in Chart.yaml;
+  # hack/test-chart-cn-images.sh fails when it does not.
+  hypervisorImage: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-hypervisor:2.17.3
+  vectorImage: docker.m.daocloud.io/timberio/vector:0.56.0-alpine
+  # NOTE(cn-mirror): "latest" on the mirror is an older, amd64-only build than
+  # Docker Hub's. The operator does not start a Pod from this image; the field
+  # is set so the rendered cluster names no Docker Hub image.
+  nodeDiscoveryImage: registry.cn-hangzhou.aliyuncs.com/tensorfusion/tensor-fusion-node-discovery:latest
 
 alert:
   image:
     repository: docker.m.daocloud.io/prom/alertmanager
-  

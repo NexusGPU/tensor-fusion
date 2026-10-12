@@ -54,6 +54,16 @@ type WorkerAllocationController interface {
 	GetDeviceAllocations() map[string][]*api.WorkerAllocation
 }
 
+// WorkerAllocationRefresher is an optional capability of a
+// WorkerAllocationController. Worker metadata such as resource limits can
+// change while the worker keeps its devices.
+type WorkerAllocationRefresher interface {
+	// RefreshWorkerInfo makes an existing allocation refer to the latest worker
+	// metadata and returns it. It returns false when the worker has no
+	// allocation, or when the update would change which devices it holds.
+	RefreshWorkerInfo(worker *api.WorkerInfo) (*api.WorkerAllocation, bool)
+}
+
 type WorkerController interface {
 	Start() error
 
@@ -121,13 +131,19 @@ type ProcessMappingInfo struct {
 	ContainerName string
 	// GuestID is a composite identifier: namespace_podName_containerName
 	GuestID string
-	// PodUID is the Kubernetes pod UID parsed from the process cgroup. It is
-	// environ-independent (the kubelet-created cgroup is inherited by every
-	// child process and cannot be scrubbed by the workload, unlike POD_NAME in
-	// /proc/<pid>/environ). Used as a fallback when Namespace/PodName are empty
-	// because the GPU-holding process stripped its environment (e.g. vLLM's
-	// spawned EngineCore subprocess). Matches WorkerInfo.WorkerUID (== pod.UID).
+	// PodUID is the Kubernetes pod UID parsed from the process cgroup. The
+	// cgroup is created by the kubelet and inherited by every child process,
+	// whereas POD_NAME in /proc/<pid>/environ is whatever the process was
+	// started with and is dropped by some runtimes (e.g. vLLM's spawned
+	// EngineCore subprocess). When set, PodUID is the authoritative identity of
+	// the process: Namespace/PodName are descriptive only and never select a
+	// different pod. Matches WorkerInfo.WorkerUID (== pod.UID).
 	PodUID string
+	// PodUIDUnknown is set when the cgroup of the process could not be read, so
+	// an empty PodUID does not mean "not in a pod": the pod of the process is
+	// not known, and Namespace/PodName must not stand in for it. A backend
+	// without pod cgroups leaves it unset.
+	PodUIDUnknown bool
 	// HostPID is the process ID in the host namespace
 	HostPID uint32
 	// GuestPID is the process ID in the container namespace

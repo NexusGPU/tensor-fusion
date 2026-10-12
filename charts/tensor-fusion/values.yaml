@@ -21,6 +21,35 @@ serviceAccount:
 
 initialGpuNodeLabelSelector: "nvidia.com/gpu.present=true"
 
+# Karpenter NodeOverlay "tensor-fusion-overlay". It tells Karpenter which
+# instance types provide the tensor-fusion.ai/index* resources that TensorFusion
+# worker pods request, so that Karpenter provisions a node for a pending worker
+# pod.
+karpenterNodeOverlay:
+  # auto: render when the nodeoverlays.karpenter.sh CRD exists (looked up in the
+  # cluster, or passed with `helm template --api-versions karpenter.sh/v1alpha1/NodeOverlay`).
+  # true: always render. false: never render.
+  enabled: auto
+  # Instance types the overlay applies to. Keep it to GPU instance types of the
+  # NodePools that host TensorFusion nodes: on any other instance type Karpenter
+  # launches a node for a pending worker pod that never registers the resources
+  # and is never consolidated. An empty list renders no overlay.
+  # The default uses labels of Karpenter's AWS provider. Other providers do not
+  # set them, so the default matches nothing there; use the provider's own GPU
+  # labels, or scope by NodePool:
+  #   - key: karpenter.sh/nodepool
+  #     operator: In
+  #     values: ["gpu"]
+  requirements:
+    - key: karpenter.k8s.aws/instance-gpu-count
+      operator: Gt
+      values: ["0"]
+    - key: karpenter.k8s.aws/instance-gpu-manufacturer
+      operator: In
+      values: ["nvidia"]
+  # Optional NodeOverlay weight; a higher weight wins when overlays overlap.
+  # weight: 10
+
 controller:
   # This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
   replicaCount: 1
@@ -45,7 +74,7 @@ controller:
   # This is for setting Kubernetes Annotations to a Pod.
   # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/ 
   
-  vectorAgentImage: docker.io/timberio/vector:latest-alpine
+  vectorAgentImage: docker.io/timberio/vector:0.56.0-alpine
 
   # Startup command for TensorFusion controller-manager
   command:
@@ -103,9 +132,31 @@ controller:
     # the required resource injection / control sidecars when the webhook is
     # unavailable.
     failurePolicy: Fail
+    # The validating webhook for pods/ephemeralcontainers has no objectSelector
+    # and receives the request for every pod in the cluster. Ignore keeps
+    # kubectl debug working while the operator is unavailable. Set Fail if the
+    # rule has to hold during an outage too; ephemeral containers are then
+    # refused cluster-wide until the operator is back.
+    ephemeralContainers:
+      failurePolicy: Ignore
+      timeoutSeconds: 3
     secretName: tensor-fusion-webhook-secret
     patch:
       image: registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0
+      # Scheduling of the two hook Jobs that create the webhook certificate and
+      # patch it into the webhook configurations. Helm waits for them, so a
+      # hook pod on a node that cannot pull or run the image holds the install
+      # or upgrade until it times out.
+      # kubernetes.io/os: linux is always added to nodeSelector unless the
+      # selector sets that key itself. No architecture is pinned by default:
+      # on a cluster with nodes that cannot pull the image above (mixed
+      # architectures, a mirror that carries one architecture only) set it
+      # here, e.g. nodeSelector: {kubernetes.io/arch: amd64}.
+      # affinity and tolerations left empty take controller.affinity and
+      # controller.tolerations; a value set here replaces the controller's.
+      nodeSelector: {}
+      affinity: {}
+      tolerations: []
 greptime:
   isCloud: false
   host: greptimedb-standalone.greptimedb.svc.cluster.local
@@ -132,13 +183,32 @@ greptime:
 #   port: 5001
 
 agent:
+  # enrollToken and agentId are stored in a Secret created by the chart and
+  # reach the cluster-agent sidecar by reference, not as values in the pod spec.
   enrollToken: ""
   agentId: ""
+  # To manage that Secret yourself, name it here instead of setting enrollToken.
+  # key is the key that holds the enroll token. agentIdKey is optional: when
+  # set, the agent id is read from that key and agentId can be left empty.
+  # The chart cannot see changes of a Secret it does not create: restart the
+  # controller pod after rotating the token.
+  existingSecret:
+    name: ""
+    key: "enroll-token"
+    agentIdKey: ""
+  # Namespaces the cluster agent may serve to the cloud console; this bounds
+  # what the console can ever read through it. Each entry is a namespace name,
+  # or a prefix followed by "*" (for example "team-*"). An empty allowlist
+  # means every namespace; the denylist wins over the allowlist. Entries are
+  # checked when the chart is rendered: the agent exits at start on an invalid
+  # one, and it shares the controller's pod.
+  namespaceAllowlist: []
+  namespaceDenylist: []
   cloudEndpoint: "wss://app.tensor-fusion.ai"
   
   image:
     repository: tensorfusion/tensor-fusion-agent
-    tag: "1.0.0"
+    tag: "1.1.0"
   
   resources:
     requests:
@@ -814,6 +884,20 @@ providerConfigs:
 schedulingConfigTemplate:
   enabled: true
   name: tf-scheduling-config
+  # Parameters of the soft-isolation rate limiter. Leave empty: the hypervisor
+  # then uses its built-in parameters, the ones each release is tested with.
+  # Individual parameters can be overridden (kp, ki, kd, filterAlpha,
+  # burstWindow, integralDecayFactor, capacityMin, capacityMax, minRefillRate,
+  # maxRefillRate); values are passed as strings, e.g. burstWindow: "0.2".
+  # burstWindow is the compute burst window in seconds, "0" to "10" (built-in
+  # default 0.1): how much of its own token refill an idle workload may save up
+  # and spend at full speed when it resumes. To change only that, set only that,
+  # e.g. elasticRateLimitParameters: {burstWindow: "0.5"}. A workload overrides
+  # it with the annotation tensor-fusion.ai/compute-burst-window (e.g. "2s").
+  # A hypervisor reads these parameters when it starts.
+  # Charts up to 1.8.8 set all ten here. A SchedulingConfigTemplate that still
+  # carries exactly those values is treated as not configured.
+  elasticRateLimitParameters: {}
 
 # Optional, opt-in default TensorFusionCluster created by the chart so a fresh
 # `helm install` is usable out of the box with a single NVIDIA shared GPU pool.
@@ -826,7 +910,12 @@ cluster:
   # Hypervisor image is NOT part of ProviderConfig — it can only be set on the
   # pool, so it lives here. Client / worker images are NOT repeated: they come
   # from providerConfigs.nvidia.images.remoteClient / remoteWorker (single source).
-  hypervisorImage: tensorfusion/tensor-fusion-hypervisor:2.15.0
+  # Empty means tensorfusion/tensor-fusion-hypervisor:<chart appVersion>, so the
+  # hypervisor stays on the same release as the controller.
+  hypervisorImage: ""
+  # Run a vector sidecar in each hypervisor Pod to ship GPU and worker usage
+  # metrics (tf_gpu_usage, tf_worker_usage) and hypervisor / worker logs.
+  enableVector: true
   pool:
     name: shared
     # GPU node label the default pool selects on.
@@ -1008,6 +1097,12 @@ dynamicConfig:
   # extra pod labels to be added to metrics, 
   # you can map label keys to other measure tags
   metricsExtraPodLabels: {}
+  # Currency of the prices configured in this cluster (GPU costPerHour, QoS
+  # pricing), e.g. USD. Written as the `currency` tag of the cost rows of
+  # tf_node_metrics and tf_worker_resources. It is only a label, nothing is
+  # converted; empty means unspecified and the tag is left out. Node rates
+  # taken from the built-in instance price lists are always tagged USD.
+  currency: ""
   preemptClusterWideFromEnv: true
 
   # Cap on how many nodes the auto-expander may provision concurrently.
@@ -1016,40 +1111,6 @@ dynamicConfig:
 
   # alert rules
   alertRules:
-    # Worker TFlops throttled alert
-    - name: WorkerTFlopsThrottled
-      query: |
-        SELECT workload, worker, uuid, node, MAX(compute_throttled_cnt)-MIN(compute_throttled_cnt) as throttled_increase
-        FROM tf_worker_usage
-        WHERE {{ .Conditions }}
-        GROUP BY workload, worker, uuid, node
-        HAVING throttled_increase > {{ .Threshold }}
-      threshold: 0
-      evaluationInterval: 15s
-      consecutiveCount: 3
-      severity: P1
-      summary: "Worker TFlops Throttled"
-      description: "Worker {{ .worker }} from Node {{ .node }} is using more than {{ .Threshold }}% of its TFlops limit"
-      alertTargetInstance: "{{ .worker }}-{{ .uuid }}"
-      runbookURL: "https://tensor-fusion.ai/guide/troubleshooting/handbook"
-    
-    # Worker VRAM switching too frequent alert
-    - name: WorkerVRAMSwitchCountIncreasing
-      query: |
-        SELECT workload, worker, uuid, node, MAX(vram_resumed_cnt)-MIN(vram_resumed_cnt) as switch_increase
-        FROM tf_worker_usage 
-        WHERE {{ .Conditions }}
-        GROUP BY workload, worker, uuid, node
-        HAVING switch_increase > {{ .Threshold }}
-      threshold: 0
-      evaluationInterval: 2m
-      consecutiveCount: 1
-      severity: P1
-      summary: "Worker VRAM Switch Count Increasing"
-      description: "Worker {{ .worker }} from Node {{ .node }} has switched VRAM {{ .switch_increase }} times in last 2 minutes, GPU may be too hot"
-      alertTargetInstance: "{{ .worker }}-{{ .uuid }}"
-      runbookURL: "https://tensor-fusion.ai/guide/troubleshooting/handbook"
-    
     # Worker can not scale up/scheduled alert
     - name: WorkerAllocationFailed
       query: |

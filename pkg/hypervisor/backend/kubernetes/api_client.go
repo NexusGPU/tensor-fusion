@@ -2,11 +2,8 @@ package kubernetes
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
-	"sync"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -40,11 +37,6 @@ func init() {
 type APIClient struct {
 	client client.Client
 	ctx    context.Context
-
-	metadataOnce   sync.Once
-	metadataErr    error
-	metadata       []tfv1.HardwareModelInfo
-	metadataLoaded bool
 }
 
 // NewAPIClient creates a new API client instance with an existing client
@@ -108,24 +100,25 @@ func (a *APIClient) CreateOrUpdateGPU(
 				Name: gpuID,
 			},
 		}
-		var desiredStatus tfv1.GPUStatus
 		_, err := controllerutil.CreateOrPatch(a.ctx, a.client, gpu, func() error {
+			// Metadata only. The status is written in one step below, against
+			// the object as it is at that moment: capacity and available have
+			// to change together, and a status computed from this earlier read
+			// could undo what the allocator published in between.
+			observedStatus := gpu.Status.DeepCopy()
 			if err := mutateFn(gpuNode, gpu); err != nil {
 				return err
 			}
-			// Capture desired status before CreateOrPatch overwrites it with server response.
-			desiredStatus = gpu.Status
+			gpu.Status = *observedStatus
 			return nil
 		})
 		if err != nil {
 			return err
 		}
-		gpu.Status = desiredStatus
 		// Status is a subresource; update it explicitly after CreateOrPatch.
-		if err := a.UpdateGPUStatus(gpu); err != nil {
-			return err
-		}
-		return nil
+		return a.patchGPUStatus(gpuID, func(gpu *tfv1.GPU) error {
+			return mutateFn(gpuNode, gpu)
+		})
 	})
 	return err
 }
@@ -139,18 +132,109 @@ func (a *APIClient) GetGPU(uuid string) (*tfv1.GPU, error) {
 	return gpu, nil
 }
 
-// UpdateGPUStatus updates the status of a GPU resource using merge patch
+// UpdateGPUStatus writes the node agent's fields of a GPU status. The fields
+// the operator's allocator owns (available, runningApps, allocatedPartitions
+// and the dynamic isolation lock) are taken from the resource as it is on the
+// API server, not from the caller's copy, which may be older.
 func (a *APIClient) UpdateGPUStatus(gpu *tfv1.GPU) error {
+	return a.patchGPUStatus(gpu.Name, func(live *tfv1.GPU) error {
+		status := gpu.Status.DeepCopy()
+		status.Available = live.Status.Available
+		status.RunningApps = live.Status.RunningApps
+		status.AllocatedPartitions = live.Status.AllocatedPartitions
+		status.ActiveIsolationMode = live.Status.ActiveIsolationMode
+		status.DynamicIsolationConflict = live.Status.DynamicIsolationConflict
+		live.Status = *status
+		return nil
+	})
+}
+
+// patchGPUStatus reads the GPU, lets mutate set the status the node agent
+// wants on that fresh copy, and writes the difference. The write carries the
+// resource version it was computed from, so a status the allocator publishes
+// in between is not overwritten: the write conflicts and is recomputed.
+func (a *APIClient) patchGPUStatus(name string, mutate func(gpu *tfv1.GPU) error) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		current := &tfv1.GPU{}
-		if err := a.client.Get(a.ctx, client.ObjectKeyFromObject(gpu), current); err != nil {
+		live := &tfv1.GPU{}
+		if err := a.client.Get(a.ctx, client.ObjectKey{Name: name}, live); err != nil {
 			return err
 		}
+		desired := live.DeepCopy()
+		if err := mutate(desired); err != nil {
+			return err
+		}
+		settleGPUAvailable(&live.Status, &desired.Status)
+		if equality.Semantic.DeepEqual(live.Status, desired.Status) {
+			return nil
+		}
 
-		patch := client.MergeFrom(current.DeepCopy())
-		current.Status = gpu.Status
-		return a.client.Status().Patch(a.ctx, current, patch)
+		patch := client.MergeFromWithOptions(live.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		live.Status = desired.Status
+		return a.client.Status().Patch(a.ctx, live, patch)
 	})
+}
+
+// settleGPUAvailable sets desired.Available for the capacity in desired, given
+// the status currently on the API server.
+//
+// status.available belongs to the operator's allocator: it knows the
+// allocations and republishes the figure whenever it changes. The node agent
+// writes it in two cases only, and with the allocator's rule (capacity minus
+// what is allocated, never below zero), so that the two never disagree on a
+// GPU for longer than one sync:
+//
+//   - nothing has been published yet, or mutate reset it: available is the
+//     capacity;
+//   - it publishes a different capacity (agent upgrade, corrected hardware
+//     table): what the resource records as allocated, old capacity minus old
+//     available, stays allocated against the new capacity. Leaving the old
+//     figure would show available above capacity after a decrease and hide the
+//     added capacity after an increase until the allocator's next sync, or for
+//     as long as an operator that does not republish on a capacity change is
+//     running.
+//
+// With an unchanged capacity this only brings a figure outside
+// [0, capacity] back into range.
+func settleGPUAvailable(live, desired *tfv1.GPUStatus) {
+	if desired.Capacity == nil {
+		return
+	}
+	if desired.Available == nil {
+		desired.Available = desired.Capacity.DeepCopy()
+		return
+	}
+
+	available := desired.Available.DeepCopy()
+	carriedOver := live.Available != nil &&
+		live.Available.Tflops.Equal(available.Tflops) &&
+		live.Available.Vram.Equal(available.Vram)
+	if carriedOver && live.Capacity != nil {
+		available.Tflops = availableForCapacity(live.Capacity.Tflops, live.Available.Tflops, desired.Capacity.Tflops)
+		available.Vram = availableForCapacity(live.Capacity.Vram, live.Available.Vram, desired.Capacity.Vram)
+	} else {
+		// Set by mutate (first publication or reset): nothing recorded as
+		// allocated, only keep it within the capacity.
+		available.Tflops = availableForCapacity(desired.Capacity.Tflops, available.Tflops, desired.Capacity.Tflops)
+		available.Vram = availableForCapacity(desired.Capacity.Vram, available.Vram, desired.Capacity.Vram)
+	}
+	desired.Available = available
+}
+
+// availableForCapacity returns capacity - allocated, floored at zero, where
+// allocated is what the previous capacity and available record
+// (previousCapacity - previousAvailable, itself floored at zero).
+func availableForCapacity(previousCapacity, previousAvailable, capacity resource.Quantity) resource.Quantity {
+	allocated := previousCapacity.DeepCopy()
+	allocated.Sub(previousAvailable)
+	if allocated.Sign() <= 0 {
+		return capacity.DeepCopy()
+	}
+	available := capacity.DeepCopy()
+	available.Sub(allocated)
+	if available.Sign() < 0 {
+		return resource.Quantity{}
+	}
+	return available
 }
 
 // UpdateGPUNodeStatus updates the status of a GPUNode resource
@@ -185,76 +269,6 @@ func (a *APIClient) UpdateGPUNodeStatus(nodeName string, nodeInfo *api.NodeInfo)
 		}
 		return a.client.Status().Patch(a.ctx, current, patch)
 	})
-}
-
-// ResolveDeviceFp16TFlops tries to find FP16 TFLOPS from provider hardware metadata env (case-insensitive).
-func (a *APIClient) ResolveDeviceFp16TFlops(vendor, model string) (resource.Quantity, bool, error) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return resource.Quantity{}, false, nil
-	}
-
-	metadata, err := a.getHardwareMetadataFromEnv()
-	if err != nil {
-		return resource.Quantity{}, false, err
-	}
-	if qty, found := matchFp16TFlops(model, vendor, metadata); found {
-		return qty, true, nil
-	}
-	return resource.Quantity{}, false, nil
-}
-
-func (a *APIClient) getHardwareMetadataFromEnv() ([]tfv1.HardwareModelInfo, error) {
-	a.metadataOnce.Do(func() {
-		raw := strings.TrimSpace(os.Getenv(constants.TFProviderHardwareMetadataEnv))
-		if raw == "" {
-			a.metadataErr = fmt.Errorf("%s is not set", constants.TFProviderHardwareMetadataEnv)
-			return
-		}
-		if err := json.Unmarshal([]byte(raw), &a.metadata); err != nil {
-			a.metadataErr = err
-			return
-		}
-		a.metadataLoaded = true
-	})
-	if a.metadataErr != nil {
-		return nil, a.metadataErr
-	}
-	if !a.metadataLoaded {
-		return nil, fmt.Errorf("%s is not set", constants.TFProviderHardwareMetadataEnv)
-	}
-	return a.metadata, nil
-}
-
-func matchFp16TFlops(model, vendor string, metadata []tfv1.HardwareModelInfo) (resource.Quantity, bool) {
-	// Devices report different name shapes depending on the runtime path:
-	//   * NVML returns "NVIDIA A100-SXM4-80GB" (vendor + full marketing name).
-	//   * Some accelerators only fill the short alias (e.g. "A100_SXM_80G").
-	// ProviderConfig.hardwareMetadata stores both `model` (short alias) and
-	// `fullModelName` (the NVML-style string). Try both so the fp16TFlops
-	// fallback fires regardless of which side reports which — important on
-	// MIG parent devices where NVML/CUDA can't report SM count and TFlops
-	// would otherwise be computed as 0.
-	modelsToMatch := []string{model}
-	if vendor != "" && len(model) >= len(vendor) {
-		if strings.EqualFold(model[:len(vendor)], vendor) {
-			trimmed := strings.TrimSpace(model[len(vendor):])
-			if trimmed != "" {
-				modelsToMatch = append(modelsToMatch, trimmed)
-			}
-		}
-	}
-	for _, hw := range metadata {
-		for _, candidate := range modelsToMatch {
-			if strings.EqualFold(hw.Model, candidate) || strings.EqualFold(hw.FullModelName, candidate) {
-				if hw.Fp16TFlops.IsZero() {
-					return resource.Quantity{}, false
-				}
-				return hw.Fp16TFlops.DeepCopy(), true
-			}
-		}
-	}
-	return resource.Quantity{}, false
 }
 
 // DeleteGPU deletes a GPU resource

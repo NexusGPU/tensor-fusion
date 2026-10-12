@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
@@ -147,22 +148,47 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 	curRes := workload.GetCurrentResourcesSpec()
 	originalRes := workload.GetOriginalResourcesSpec()
 	recommendation := tfv1.Resources{}
-	message := ""
+
+	// A resource without a single usage sample is left as it is: the estimate
+	// of an empty histogram is zero, which would read as "scale down to the
+	// minimum" although nothing was measured.
+	scaleCompute := func() *scalingResult { return nil }
+	if !estimations.NoTflopsSamples {
+		scaleCompute = func() *scalingResult {
+			return p.handleResourceScaling(
+				scaleResourceCompute,
+				&curRes.Requests.Tflops,
+				&curRes.Limits.Tflops,
+				&estimations.TargetTflops,
+				&estimations.LowerBoundTflops,
+				&estimations.UpperBoundTflops,
+				&originalRes.Requests.Tflops,
+				&originalRes.Limits.Tflops,
+				config,
+				qos,
+			)
+		}
+	}
+	scaleVram := func() *scalingResult { return nil }
+	if !estimations.NoVramSamples {
+		scaleVram = func() *scalingResult {
+			return p.handleResourceScaling(
+				scaleResourceVram,
+				&curRes.Requests.Vram,
+				&curRes.Limits.Vram,
+				&estimations.TargetVram,
+				&estimations.LowerBoundVram,
+				&estimations.UpperBoundVram,
+				&originalRes.Requests.Vram,
+				&originalRes.Limits.Vram,
+				config,
+				qos,
+			)
+		}
+	}
 
 	// Handle TFLOPS scaling
-	if result := p.handleResourceScaling(
-		scaleResourceCompute,
-		&curRes.Requests.Tflops,
-		&curRes.Limits.Tflops,
-		&estimations.TargetTflops,
-		&estimations.LowerBoundTflops,
-		&estimations.UpperBoundTflops,
-		&originalRes.Requests.Tflops,
-		&originalRes.Limits.Tflops,
-		config,
-		qos,
-	); result != nil {
-		message = result.message
+	if result := scaleCompute(); result != nil {
 		recommendation.Requests.Tflops = result.targetRequest
 		recommendation.Limits.Tflops = result.targetLimit
 	} else {
@@ -171,23 +197,7 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 	}
 
 	// Handle VRAM scaling
-	if result := p.handleResourceScaling(
-		scaleResourceVram,
-		&curRes.Requests.Vram,
-		&curRes.Limits.Vram,
-		&estimations.TargetVram,
-		&estimations.LowerBoundVram,
-		&estimations.UpperBoundVram,
-		&originalRes.Requests.Vram,
-		&originalRes.Limits.Vram,
-		config,
-		qos,
-	); result != nil {
-		if len(message) > 0 {
-			message += fmt.Sprintf(", %s", result.message)
-		} else {
-			message = result.message
-		}
+	if result := scaleVram(); result != nil {
 		recommendation.Requests.Vram = result.targetRequest
 		recommendation.Limits.Vram = result.targetLimit
 	} else {
@@ -195,35 +205,9 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		recommendation.Limits.Vram = curRes.Limits.Vram
 	}
 
-	// Check UpdateThreshold
+	// Avoid fluctuation when scale up/down is too small
 	if !recommendation.IsZero() {
-		updateThreshold := config.UpdateThreshold
-		shouldUpdate := false
-		thresholdMessage := ""
-
-		// Check if change exceeds threshold
-		if !curRes.Requests.Tflops.IsZero() && !recommendation.Requests.Tflops.IsZero() {
-			diff := absDiff(curRes.Requests.Tflops, recommendation.Requests.Tflops)
-			threshold := multiplyQuantity(curRes.Requests.Tflops, updateThreshold)
-			if diff.Cmp(threshold) > 0 {
-				shouldUpdate = true
-			} else {
-				thresholdMessage += fmt.Sprintf("Compute change (%s) within threshold (%s), ", diff.String(), threshold.String())
-			}
-		}
-
-		if !curRes.Requests.Vram.IsZero() && !recommendation.Requests.Vram.IsZero() {
-			diff := absDiff(curRes.Requests.Vram, recommendation.Requests.Vram)
-			threshold := multiplyQuantity(curRes.Requests.Vram, updateThreshold)
-			if diff.Cmp(threshold) > 0 {
-				shouldUpdate = true
-			} else {
-				thresholdMessage += fmt.Sprintf("VRAM change (%s) within threshold (%s), ", diff.String(), threshold.String())
-			}
-		}
-
-		// Avoid fluctuation when scale up/down is too small
-		if !shouldUpdate && thresholdMessage != "" {
+		if thresholdMessage := withinUpdateThreshold(curRes, &recommendation, config.UpdateThreshold); thresholdMessage != "" {
 			workload.UpsertStatusCondition(metav1.Condition{
 				Type:               constants.ConditionStatusTypeResourceUpdate,
 				Status:             metav1.ConditionTrue,
@@ -244,6 +228,11 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 		return nil, nil
 	}
 
+	// A running worker is taken to the recommended resources in bounded steps,
+	// and never below what it was observed using.
+	recommendation, boundNotes := boundChange(workload, curRes, recommendation, estimations)
+	bounds := describeBounds(boundNotes)
+
 	if p.recommendationProcessor != nil {
 		var err error
 		var msg string
@@ -252,13 +241,28 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 			return nil, fmt.Errorf("failed to apply recommendation processor: %v", err)
 		}
 		if msg != "" {
-			message += fmt.Sprintf(", %s", msg)
-			log.Info("recommendation processor applied", "message", message)
+			if bounds != "" {
+				bounds += ", "
+			}
+			bounds += msg
 		}
 	}
 
 	hasApplied := recommendation.Equal(curRes)
 	if !hasApplied {
+		if waiting := waitForMinChangeInterval(workload); waiting != nil {
+			return waiting, nil
+		}
+
+		// The message tells what is applied; when a bound made that differ from
+		// what the usage calls for, it also tells what was recommended and why
+		// it was not applied as it is.
+		message := describeChange(curRes, &recommendation)
+		if bounds != "" {
+			message += "; " + bounds
+			log.Info("recommendation bounded", "workload", name, "message", message)
+		}
+		workload.SetChangeBounds(bounds)
 		workload.UpsertStatusCondition(metav1.Condition{
 			Type:               constants.ConditionStatusTypeResourceUpdate,
 			Status:             metav1.ConditionTrue,
@@ -276,7 +280,6 @@ func (p *PercentileRecommender) Recommend(ctx context.Context, workload *workloa
 }
 
 type scalingResult struct {
-	message       string
 	targetRequest resource.Quantity
 	targetLimit   resource.Quantity
 }
@@ -365,11 +368,82 @@ func (p *PercentileRecommender) handleResourceScaling(
 	}
 
 	return &scalingResult{
-		message: fmt.Sprintf("%s scaled: request %s -> %s, limit %s -> %s",
-			resourceName, currentRequest.String(), targetReq.String(), currentLimit.String(), targetLim.String()),
 		targetRequest: targetReq,
 		targetLimit:   targetLim,
 	}
+}
+
+// withinUpdateThreshold returns a message naming the differences when no
+// request or limit differs from the current one by more than the threshold,
+// and "" when a change is worth making. Limits count as well as requests: a
+// change is made in bounded steps, and a limit may still be on its way when
+// the request has arrived.
+func withinUpdateThreshold(current, recommended *tfv1.Resources, updateThreshold float64) string {
+	message := ""
+	for _, quantity := range []struct {
+		name                 string
+		current, recommended resource.Quantity
+	}{
+		{scaleResourceCompute, current.Requests.Tflops, recommended.Requests.Tflops},
+		{computeLimit, current.Limits.Tflops, recommended.Limits.Tflops},
+		{scaleResourceVram, current.Requests.Vram, recommended.Requests.Vram},
+		{vramLimit, current.Limits.Vram, recommended.Limits.Vram},
+	} {
+		if quantity.current.IsZero() || quantity.recommended.IsZero() {
+			continue
+		}
+		diff := absDiff(quantity.current, quantity.recommended)
+		threshold := multiplyQuantity(quantity.current, updateThreshold)
+		if diff.Cmp(threshold) > 0 {
+			return ""
+		}
+		message += fmt.Sprintf("%s change (%s) within threshold (%s), ", quantity.name, diff.String(), threshold.String())
+	}
+	return message
+}
+
+// waitForMinChangeInterval returns the result that leaves the workload as it
+// is while the previous change of its workers is less than minChangeInterval
+// ago, and nil once a further change may be made. The workers get that time to
+// show their usage under the resources of the previous change.
+func waitForMinChangeInterval(state *workload.State) *RecResult {
+	lastChange := state.LastResourceChange()
+	if lastChange.IsZero() || timeNow().Sub(lastChange) >= minChangeInterval {
+		return nil
+	}
+	state.UpsertStatusCondition(metav1.Condition{
+		Type:               constants.ConditionStatusTypeResourceUpdate,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             "MinChangeInterval",
+		Message: fmt.Sprintf("Resources were changed at %s, no further change before %s (minimum interval %s)",
+			lastChange.UTC().Format(time.RFC3339), lastChange.Add(minChangeInterval).UTC().Format(time.RFC3339), minChangeInterval),
+	})
+	return &RecResult{
+		Resources:        tfv1.Resources{},
+		HasApplied:       true,
+		ScaleDownLocking: false,
+	}
+}
+
+// describeChange words the change from the current resources to the ones that
+// are applied, per resource that changes.
+func describeChange(current, applied *tfv1.Resources) string {
+	parts := []string{}
+	for _, change := range []struct {
+		name                                       string
+		fromRequest, toRequest, fromLimit, toLimit *resource.Quantity
+	}{
+		{scaleResourceCompute, &current.Requests.Tflops, &applied.Requests.Tflops, &current.Limits.Tflops, &applied.Limits.Tflops},
+		{scaleResourceVram, &current.Requests.Vram, &applied.Requests.Vram, &current.Limits.Vram, &applied.Limits.Vram},
+	} {
+		if change.fromRequest.Cmp(*change.toRequest) == 0 && change.fromLimit.Cmp(*change.toLimit) == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s scaled: request %s -> %s, limit %s -> %s", change.name,
+			change.fromRequest.String(), change.toRequest.String(), change.fromLimit.String(), change.toLimit.String()))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func absDiff(a, b resource.Quantity) resource.Quantity {
@@ -391,6 +465,14 @@ type EstimatedResources struct {
 	LowerBoundVram   resource.Quantity
 	TargetVram       resource.Quantity
 	UpperBoundVram   resource.Quantity
+	// NoTflopsSamples / NoVramSamples are set when the estimate of that
+	// resource rests on no usage sample at all and must not be acted on.
+	NoTflopsSamples bool
+	NoVramSamples   bool
+	// RequestFloor and LimitFloor are the observed usage a request and a limit
+	// are not lowered below (see usageFloorRequestPercentile); zero for none.
+	RequestFloor tfv1.Resource
+	LimitFloor   tfv1.Resource
 }
 
 // resourcesEstimator is stateless. It holds no per-call data; estimators are
@@ -428,6 +510,16 @@ func (r *resourcesEstimator) GetResourcesEstimation(wl *workload.State) *Estimat
 			LowerBoundVram:   QuantityFromAmount(est.lowerBoundVram.GetVramEstimation(aggregator), resource.BinarySI),
 			TargetVram:       QuantityFromAmount(est.targetVram.GetVramEstimation(aggregator), resource.BinarySI),
 			UpperBoundVram:   QuantityFromAmount(est.upperBoundVram.GetVramEstimation(aggregator), resource.BinarySI),
+			NoTflopsSamples:  aggregator.TflopsHistogram.IsEmpty(),
+			NoVramSamples:    aggregator.VramHistogram.IsEmpty(),
+			RequestFloor: tfv1.Resource{
+				Tflops: QuantityFromAmount(NewPercentileTflopsEstimator(usageFloorRequestPercentile).GetTflopsEstimation(aggregator), resource.DecimalSI),
+				Vram:   QuantityFromAmount(NewPercentileVramEstimator(usageFloorRequestPercentile).GetVramEstimation(aggregator), resource.BinarySI),
+			},
+			LimitFloor: tfv1.Resource{
+				Tflops: QuantityFromAmount(NewPercentileTflopsEstimator(usageFloorLimitPercentile).GetTflopsEstimation(aggregator), resource.DecimalSI),
+				Vram:   QuantityFromAmount(NewPercentileVramEstimator(usageFloorLimitPercentile).GetVramEstimation(aggregator), resource.BinarySI),
+			},
 		}
 	})
 	return result

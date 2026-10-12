@@ -137,6 +137,24 @@ var _ = Describe("Compose Utils", func() {
 			Entry("with vector", true, "test-image:latest", 2, 7),
 		)
 
+		It("keeps the hypervisor template container and writes metrics to the logs volume when vector is enabled", func() {
+			spec := &corev1.PodSpec{Containers: []corev1.Container{{
+				Name: constants.TFContainerNameHypervisor,
+				Env:  []corev1.EnvVar{{Name: "TF_LOG_LEVEL", Value: "debug"}},
+			}}}
+			pool := &tfv1.GPUPool{Spec: tfv1.GPUPoolSpec{ComponentConfig: &tfv1.ComponentConfig{
+				Hypervisor: &tfv1.HypervisorConfig{Image: "test-image:latest", EnableVector: true},
+			}}}
+
+			utils.AddTFHypervisorConfAfterTemplate(context.Background(), spec, pool, "NVIDIA", false)
+
+			Expect(spec.Containers).To(HaveLen(2))
+			Expect(spec.Containers[0].Env).To(ContainElement(corev1.EnvVar{Name: "TF_LOG_LEVEL", Value: "debug"}),
+				"template settings of the hypervisor container must survive adding the sidecar")
+			Expect(spec.Containers[1].Name).To(Equal(constants.TFContainerVector))
+			Expect(spec.Containers[0].Args).To(ContainElement("-metrics-output-path=/logs/metrics.log"))
+		})
+
 		It("does not duplicate NVIDIA validation volume already present in the pod template", func() {
 			ctx := context.Background()
 			spec := &corev1.PodSpec{

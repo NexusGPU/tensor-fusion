@@ -15,6 +15,11 @@ const (
 	NvidiaGPUDriverUpgradeStateDone  = "upgrade-done"
 )
 
+// ComputeBurstWindowMax is the longest compute burst window a pool or a
+// workload can have (see ComputeBurstWindowAnnotation). The admission webhook
+// rejects a longer one and the hypervisor never applies one.
+const ComputeBurstWindowMax = 10 * time.Second
+
 var (
 	PendingRequeueDuration     = time.Second * 3
 	StatusCheckInterval        = time.Second * 6
@@ -80,6 +85,19 @@ var (
 	// JSON encoded virtualization capability payload from hypervisor discovery.
 	GPUVirtualizationCapabilitiesAnnotation = Domain + "/virtualization-capabilities"
 
+	// GPUTflopsCapacitySourceAnnotation is set by the hypervisor on every GPU
+	// resource and says where status.capacity.tflops comes from:
+	//
+	//   - "provider-config": the vendor-published FP16 TFLOPS of the GPU model,
+	//     from ProviderConfig hardwareMetadata[].fp16TFlops. This is the unit of
+	//     TFLOPS requests and limits.
+	//   - "provider-estimate": the model is not listed in the ProviderConfig, so
+	//     the capacity is the provider library's own theoretical estimate (for
+	//     NVIDIA an FP32 figure). It is not comparable with FP16 capacities: a
+	//     pool that mixes both mixes units. List the model in the ProviderConfig
+	//     to resolve it.
+	GPUTflopsCapacitySourceAnnotation = Domain + "/tflops-capacity-source"
+
 	GpuPoolKey = Domain + "/gpupool"
 
 	// Annotation key constants
@@ -98,6 +116,13 @@ var (
 	// thus, percent should only be used when tenant quota is not needed, and only one type of GPU in cluster
 	ComputeRequestAnnotation = Domain + "/compute-percent-request"
 	ComputeLimitAnnotation   = Domain + "/compute-percent-limit"
+	// ComputeBurstWindowAnnotation is the compute burst window of a soft-isolated
+	// workload: how many seconds of its own token refill it may save up while
+	// idle and spend at full speed when it resumes. A Go duration between 0 and
+	// ComputeBurstWindowMax, such as 500ms or 2s; without it the pool's burst
+	// window applies. It can be changed on a running Pod. The semantics are
+	// described at burstWindow in pkg/hypervisor/worker/computing/quota_config.go.
+	ComputeBurstWindowAnnotation = Domain + "/compute-burst-window"
 	// SharedLegacyResourcesAnnotation stores the original GPU resource
 	// annotations while a whole-GPU shared allocation is active. The request
 	// and limit annotations are temporarily rewritten to the full GPU capacity
@@ -155,6 +180,13 @@ var (
 	WorkloadModeAnnotation = Domain + "/workload-mode"
 	WorkloadModeDynamic    = "dynamic"
 	WorkloadModeFixed      = "fixed"
+
+	// WorkloadLastPodSeenAnnotation holds the time (RFC 3339) at which a pod of
+	// the workload was last admitted by the pod webhook or seen by the workload
+	// controller. It is only kept on workloads the pod webhook created that have
+	// no owner reference; the workload controller removes such a workload when
+	// it has had no pod for a grace period counted from this time.
+	WorkloadLastPodSeenAnnotation = Domain + "/last-pod-seen"
 
 	// Annotations for killer switch: disable features
 	// ['gpu-opt', 'mem-manager', 'gpu-limiter']
@@ -216,6 +248,12 @@ var (
 	HypervisorServiceAccountName = "tensor-fusion-hypervisor-sa"
 
 	TSDBVersionConfigMap = "tensor-fusion-tsdb-version"
+)
+
+// Values of GPUTflopsCapacitySourceAnnotation.
+const (
+	GPUTflopsCapacitySourceProviderConfig = "provider-config"
+	GPUTflopsCapacitySourceEstimate       = "provider-estimate"
 )
 
 const (
@@ -343,8 +381,11 @@ var (
 	ProvisionerNamePlaceholder = "__GPU_NODE_RESOURCE_NAME__"
 )
 var (
+	// TFDataPathWorkerExpr is expanded by the kubelet from the container's
+	// environment. It references the variables reserved for TensorFusion, which
+	// are always set from the downward API (see TFShmPodNamespaceEnv).
 	TFDataPath                       = "/run/tensor-fusion"
-	TFDataPathWorkerExpr             = "shm/$(POD_NAMESPACE)/$(POD_NAME)"
+	TFDataPathWorkerExpr             = "shm/$(" + TFShmPodNamespaceEnv + ")/$(" + TFShmPodNameEnv + ")"
 	DataVolumeName                   = "tf-data"
 	TransportShmVolumeName           = "tf-transport-shm"
 	TransportShmPath                 = "/dev/shm"

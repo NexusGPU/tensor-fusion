@@ -13,6 +13,7 @@ import (
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator/filter"
+	"github.com/NexusGPU/tensor-fusion/internal/metrics"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	"github.com/awslabs/operatorpkg/status"
@@ -102,6 +103,10 @@ func NewNodeExpander(
 
 		removed := expander.removePreSchedulePod(req.PodMeta.Namespace, req.PodMeta.Name, req.PodMeta.UID, true)
 		if removed {
+			// The pod a node was requested for has landed: the node no longer
+			// needs the expander's shield against Karpenter. Not on the bind
+			// path itself, it is a list and a few patches.
+			go expander.releaseExpansionProtection(expander.ctx, req.PodMeta.UID)
 			expander.clearFailedExpansionCandidates(req.PodMeta.Namespace, req.PodMeta.Name, req.PodMeta.UID)
 			recorder.Eventf(obj, nil, corev1.EventTypeNormal, "NodeExpansionCheck", "Scheduled",
 				"new node provisioned and pod scheduled successfully")
@@ -133,6 +138,9 @@ func NewNodeExpander(
 				expander.cleanupInFlightNodeClaim(karpenterNodeClaim)
 				return true
 			})
+			// Also covers what the bind handler cannot: deadlines, pods that
+			// went away, and nodes requested before this process started.
+			expander.releaseExpansionProtection(expander.ctx, "")
 		}
 	}()
 
@@ -1135,6 +1143,7 @@ func (e *NodeExpander) cloneGPUNodeClaim(ctx context.Context, pod *corev1.Pod, p
 			"failed to create new GPUNodeClaim: %v", err)
 		return fmt.Errorf("failed to create new GPUNodeClaim: %w", err)
 	}
+	metrics.SetAutoscalingMetrics(pod.Annotations[constants.GpuPoolKey], true)
 	e.eventRecorder.Eventf(pod, nil, corev1.EventTypeNormal, "NodeExpansionCompleted", "Created",
 		"created new GPUNodeClaim for node expansion: %s", newGPUNodeClaim.Name)
 	e.logger.Info("created new GPUNodeClaim for node expansion", "pod", pod.Name, "namespace", pod.Namespace, "gpuNodeClaim", newGPUNodeClaim.Name, "sourceNode", preparedNode.Name)
@@ -1242,12 +1251,17 @@ func (e *NodeExpander) createKarpenterNodeClaimDirect(ctx context.Context, pod *
 		}
 	}
 
+	// Set after the copy above so that markers of the source NodeClaim, if it
+	// is itself still protected, do not carry over.
+	protectExpansionNodeClaim(newNodeClaim, pod, time.Now())
+
 	// Create the NodeClaim
 	if err := e.client.Create(ctx, newNodeClaim); err != nil {
 		e.eventRecorder.Eventf(pod, nil, corev1.EventTypeWarning, "NodeExpansionFailed", "CreateFailed",
 			"failed to create new NodeClaim: %v", err)
 		return fmt.Errorf("failed to create NodeClaim: %w", err)
 	}
+	metrics.SetAutoscalingMetrics(pod.Annotations[constants.GpuPoolKey], true)
 	e.inFlightNodeClaims.Store(newNodeClaim.Name, inFlightNodeClaim{
 		podKey:       client.ObjectKey{Namespace: pod.Namespace, Name: pod.Name},
 		podUID:       pod.UID,

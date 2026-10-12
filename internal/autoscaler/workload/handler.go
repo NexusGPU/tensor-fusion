@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
@@ -25,6 +26,9 @@ type Handler interface {
 	ApplyRecommendationToWorkload(ctx context.Context, workloadState *State, recommendation *tfv1.Resources) error
 	UpdateWorkloadStatus(ctx context.Context, state *State, recommendation *tfv1.Resources) error
 	GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, error)
+	// GetWorkerDeviceCapacity returns the capacity of the GPUs held by the
+	// workers that receive recommendations, or nil when it is not known.
+	GetWorkerDeviceCapacity(workload *State) *DeviceCapacity
 	SetEventRecorder(recorder events.EventRecorder, scheme *runtime.Scheme)
 }
 
@@ -219,35 +223,6 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 		return nil
 	}
 
-	// Record event when scaling happens
-	if h.eventRecorder != nil && h.scheme != nil && curRes != nil {
-		namespace, name := workload.Coordinates()
-		workloadObj := &tfv1.TensorFusionWorkload{}
-		workloadObj.Namespace = namespace
-		workloadObj.Name = name
-		workloadObj.Kind = "TensorFusionWorkload"
-		workloadObj.APIVersion = tfv1.GroupVersion.String()
-
-		isScaleUp := effectiveRecommendation.Requests.Tflops.Cmp(curRes.Requests.Tflops) > 0 ||
-			effectiveRecommendation.Requests.Vram.Cmp(curRes.Requests.Vram) > 0
-
-		eventType := "Normal"
-		reason := "ResourceScaledDown"
-		message := fmt.Sprintf("Resources scaled down: Compute %s->%s, VRAM %s->%s",
-			curRes.Requests.Tflops.String(), effectiveRecommendation.Requests.Tflops.String(),
-			curRes.Requests.Vram.String(), effectiveRecommendation.Requests.Vram.String())
-
-		if isScaleUp {
-			reason = "ResourceScaledUp"
-			message = fmt.Sprintf("Resources scaled up: Compute %s->%s, VRAM %s->%s",
-				curRes.Requests.Tflops.String(), effectiveRecommendation.Requests.Tflops.String(),
-				curRes.Requests.Vram.String(), effectiveRecommendation.Requests.Vram.String())
-		}
-
-		action := "Scaled"
-		h.eventRecorder.Eventf(workloadObj, nil, eventType, reason, action, message)
-	}
-
 	annotationsToUpdate := utils.GPUResourcesToAnnotations(effectiveRecommendation)
 	if !workload.ShouldScaleResource(tfv1.ResourceTflops) {
 		delete(annotationsToUpdate, constants.TFLOPSRequestAnnotation)
@@ -320,11 +295,59 @@ func (h *handler) applyRecommendationToWorker(ctx context.Context, workload *Sta
 	// next ActiveWorkersSnapshot (now returning deep copies, not shared pointers)
 	// reflects the latest applied resources instead of replaying a stale curRes.
 	workload.UpdateWorkerAnnotations(worker.Name, annotationsToUpdate)
+	workload.MarkResourcesChanged(time.Now())
+
+	// Record the event once the change is in place, with the bounds that shaped
+	// it: an event for a change that was then rejected would mislead.
+	if h.eventRecorder != nil && h.scheme != nil && curRes != nil {
+		namespace, name := workload.Coordinates()
+		workloadObj := &tfv1.TensorFusionWorkload{}
+		workloadObj.Namespace = namespace
+		workloadObj.Name = name
+		workloadObj.Kind = "TensorFusionWorkload"
+		workloadObj.APIVersion = tfv1.GroupVersion.String()
+
+		reason, message := scalingEvent(curRes, effectiveRecommendation, workload.ChangeBounds())
+		// The message is passed as an argument: it may contain a percent sign.
+		h.eventRecorder.Eventf(workloadObj, nil, "Normal", reason, "Scaled", "%s", message)
+	}
 
 	log.Info("apply recommendation to worker successfully",
 		"worker", worker.Name, "recommendation", effectiveRecommendation, "currentResources", curRes)
 
 	return nil
+}
+
+// maxEventNoteLength is the length the API server accepts for the note of an event.
+const maxEventNoteLength = 1024
+
+// scalingEvent returns the reason and the message of the event recorded when a
+// worker's resources are changed from current to applied. bounds describes the
+// bounds that limited the recommendation, if any, so that the event tells what
+// was recommended, what was applied and why they differ.
+func scalingEvent(current, applied *tfv1.Resources, bounds string) (reason, message string) {
+	isScaleUp := applied.Requests.Tflops.Cmp(current.Requests.Tflops) > 0 ||
+		applied.Requests.Vram.Cmp(current.Requests.Vram) > 0
+	reason, direction := "ResourceScaledDown", "down"
+	if isScaleUp {
+		reason, direction = "ResourceScaledUp", "up"
+	}
+	message = fmt.Sprintf("Resources scaled %s: Compute %s->%s, VRAM %s->%s",
+		direction,
+		current.Requests.Tflops.String(), applied.Requests.Tflops.String(),
+		current.Requests.Vram.String(), applied.Requests.Vram.String())
+	if current.Limits.Tflops.Cmp(applied.Limits.Tflops) != 0 || current.Limits.Vram.Cmp(applied.Limits.Vram) != 0 {
+		message += fmt.Sprintf("; limits: Compute %s->%s, VRAM %s->%s",
+			current.Limits.Tflops.String(), applied.Limits.Tflops.String(),
+			current.Limits.Vram.String(), applied.Limits.Vram.String())
+	}
+	if bounds != "" {
+		message += "; " + bounds
+	}
+	if len(message) > maxEventNoteLength {
+		message = message[:maxEventNoteLength-3] + "..."
+	}
+	return reason, message
 }
 
 // recommendationForWorker keeps a non-target resource at the worker's current
@@ -345,6 +368,68 @@ func recommendationForWorker(workload *State, current, recommendation *tfv1.Reso
 		effective.Limits.Vram = current.Limits.Vram.DeepCopy()
 	}
 	return effective
+}
+
+// DeviceCapacity is the capacity of the GPUs held by the workers of a workload.
+type DeviceCapacity struct {
+	// PerGPU is the smallest capacity among those GPUs. The TFLOPS and VRAM of a
+	// worker's request and limit are amounts per GPU: a worker on several GPUs
+	// gets them on each one, so neither can be above what the smallest of its
+	// GPUs has, and the worker as a whole is then within the sum of them.
+	PerGPU tfv1.Resource
+	// GPUsPerWorker is the largest number of GPUs one worker holds.
+	GPUsPerWorker int
+}
+
+func (h *handler) GetWorkerDeviceCapacity(workload *State) *DeviceCapacity {
+	workers := workload.ActiveWorkersSnapshot()
+	if len(workers) == 0 {
+		return nil
+	}
+	gpuStore, _, allocRequests := h.allocator.GetAllocationInfo()
+	return deviceCapacityOf(workers, gpuStore, allocRequests)
+}
+
+// deviceCapacityOf looks up the GPUs the workers hold in the allocator's view
+// and returns their capacity. Workers on a dedicated GPU receive no
+// recommendation and are left out; so are GPUs whose capacity is not reported.
+func deviceCapacityOf(
+	workers []*corev1.Pod,
+	gpuStore map[types.NamespacedName]*tfv1.GPU,
+	allocRequests map[string]*tfv1.AllocRequest,
+) *DeviceCapacity {
+	var capacity *DeviceCapacity
+	for _, worker := range workers {
+		if worker == nil || isWorkerHasDedicatedGPU(worker) {
+			continue
+		}
+		allocated := allocRequests[string(worker.UID)]
+		if allocated == nil {
+			continue
+		}
+		held := 0
+		for _, gpuName := range allocated.GPUNames {
+			gpu := gpuStore[types.NamespacedName{Name: gpuName}]
+			if gpu == nil || gpu.Status.Capacity == nil {
+				continue
+			}
+			held++
+			if capacity == nil {
+				capacity = &DeviceCapacity{PerGPU: *gpu.Status.Capacity.DeepCopy()}
+				continue
+			}
+			if gpu.Status.Capacity.Tflops.Cmp(capacity.PerGPU.Tflops) < 0 {
+				capacity.PerGPU.Tflops = gpu.Status.Capacity.Tflops.DeepCopy()
+			}
+			if gpu.Status.Capacity.Vram.Cmp(capacity.PerGPU.Vram) < 0 {
+				capacity.PerGPU.Vram = gpu.Status.Capacity.Vram.DeepCopy()
+			}
+		}
+		if capacity != nil && held > capacity.GPUsPerWorker {
+			capacity.GPUsPerWorker = held
+		}
+	}
+	return capacity
 }
 
 func (h *handler) GetMaxAllowedResourcesSpec(workload *State) (*tfv1.Resource, error) {

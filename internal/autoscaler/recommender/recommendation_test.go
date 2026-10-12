@@ -155,11 +155,68 @@ var _ = Describe("Recommender", func() {
 		Expect(got.Equal(&recommendation)).To(BeTrue())
 		Expect(msg).To(BeEmpty())
 	})
+
+	It("should cap requests and limits at the capacity of the GPUs held, whatever the direction of the change", func() {
+		// The reported case: a limit of 82 TFLOPS on a GPU of 71.2.
+		recommendation := tfv1.Resources{
+			Requests: tfv1.Resource{Tflops: resource.MustParse("10"), Vram: resource.MustParse("4Gi")},
+			Limits:   tfv1.Resource{Tflops: resource.MustParse("82"), Vram: resource.MustParse("30Gi")},
+		}
+		state := workload.NewWorkloadState()
+		// The request goes down, so nothing asks for the room left on the GPUs.
+		state.Spec.Resources = tfv1.Resources{
+			Requests: tfv1.Resource{Tflops: resource.MustParse("20"), Vram: resource.MustParse("8Gi")},
+			Limits:   tfv1.Resource{Tflops: resource.MustParse("67"), Vram: resource.MustParse("20Gi")},
+		}
+		processor := &recommendationProcessor{&fakeWorkloadHandler{capacity: &workload.DeviceCapacity{
+			PerGPU:        tfv1.Resource{Tflops: resource.MustParse("71.2"), Vram: resource.MustParse("24Gi")},
+			GPUsPerWorker: 1,
+		}}}
+		got, msg, err := processor.Apply(context.Background(), state, &recommendation)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.Limits.Tflops.String()).To(Equal("71"))
+		Expect(got.Limits.Vram.String()).To(Equal("24Gi"))
+		Expect(got.Requests.Tflops.String()).To(Equal("10"))
+		Expect(got.Requests.Vram.String()).To(Equal("4Gi"))
+		Expect(msg).To(Equal("bounds: Compute limit: recommended 82, applied 71 (device capacity: 71200m per GPU held); " +
+			"VRAM limit: recommended 30Gi, applied 24Gi (device capacity: 24Gi per GPU held)"))
+	})
+
+	It("should cap a request above the capacity before fitting it to the room left", func() {
+		recommendation := tfv1.Resources{
+			Requests: tfv1.Resource{Tflops: resource.MustParse("90"), Vram: resource.MustParse("4Gi")},
+			Limits:   tfv1.Resource{Tflops: resource.MustParse("90"), Vram: resource.MustParse("8Gi")},
+		}
+		state := workload.NewWorkloadState()
+		state.Spec.Resources = tfv1.Resources{
+			Requests: tfv1.Resource{Tflops: resource.MustParse("20"), Vram: resource.MustParse("4Gi")},
+			Limits:   tfv1.Resource{Tflops: resource.MustParse("40"), Vram: resource.MustParse("8Gi")},
+		}
+		processor := &recommendationProcessor{&fakeWorkloadHandler{
+			// 50 TFLOPS of the GPU are left for this workload.
+			Resource: tfv1.Resource{Tflops: resource.MustParse("50"), Vram: resource.MustParse("24Gi")},
+			capacity: &workload.DeviceCapacity{
+				PerGPU:        tfv1.Resource{Tflops: resource.MustParse("71.2"), Vram: resource.MustParse("24Gi")},
+				GPUsPerWorker: 1,
+			},
+		}}
+		got, msg, err := processor.Apply(context.Background(), state, &recommendation)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.Requests.Tflops.String()).To(Equal("50"))
+		Expect(got.Limits.Tflops.String()).To(Equal("71"))
+		Expect(msg).To(ContainSubstring("Compute request: recommended 90, applied 71 (device capacity"))
+		Expect(msg).To(ContainSubstring("TFlops request set to max allowed: (50)"))
+	})
 })
 
 type fakeWorkloadHandler struct {
 	tfv1.Resource
 	workload.Handler
+	capacity *workload.DeviceCapacity
+}
+
+func (f *fakeWorkloadHandler) GetWorkerDeviceCapacity(workload *workload.State) *workload.DeviceCapacity {
+	return f.capacity
 }
 
 func (f *fakeWorkloadHandler) GetMaxAllowedResourcesSpec(workload *workload.State) (*tfv1.Resource, error) {

@@ -21,12 +21,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/gpuallocator"
 	"github.com/NexusGPU/tensor-fusion/internal/provider"
+	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -1374,12 +1376,123 @@ var _ = Describe("TensorFusionPodMutator", func() {
 
 			currentBytes, err := json.Marshal(pod)
 			Expect(err).NotTo(HaveOccurred())
-			patch, err := mutator.patchTFClient(context.Background(), pod, pool, false, false, currentBytes, []int{0})
+			patch, err := mutator.patchTFClient(context.Background(), pod, pool, false, false, currentBytes, []int{0}, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(patch).NotTo(BeEmpty())
 			// Should include multiple mutations (e.g. pod labels and container-level changes).
 			Expect(len(patch)).To(BeNumerically(">=", 2))
 		})
+
+	})
+
+	Context("when admitting a pod through the API server", func() {
+		// The per-pod data mount is expanded by the kubelet from the container
+		// environment. In the pod the API server stores, it may only depend on
+		// reserved variables that come from the downward API, in every
+		// container, whatever the pod spec defines.
+		DescribeTable("should keep the per-pod data mount bound to the pod's own identity",
+			func(isolation tfv1.IsolationModeType, userEnv func(name string) corev1.EnvVar) {
+				// The variables the mount expands: namespace first, then name.
+				expanded := regexp.MustCompile(`\$\(([A-Za-z0-9_]+)\)`).FindAllStringSubmatch(constants.TFDataPathWorkerExpr, -1)
+				Expect(expanded).To(HaveLen(2))
+				reserved := map[string]string{
+					expanded[0][1]: constants.NamespaceFieldRef,
+					expanded[1][1]: constants.ResourceNameFieldRef,
+				}
+				names := lo.Uniq([]string{
+					constants.PodNamespaceEnv, constants.PodNameEnv, expanded[0][1], expanded[1][1],
+				})
+				userEnvs := lo.Map(names, func(name string, _ int) corev1.EnvVar { return userEnv(name) })
+				userMount := corev1.VolumeMount{Name: constants.DataVolumeName, MountPath: "/all"}
+				submitted := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace:    "default",
+						GenerateName: "data-mount-identity-",
+						Labels: map[string]string{
+							constants.TensorFusionEnabledLabelKey: "true",
+							"neighbour":                           "another-pod",
+						},
+						Annotations: map[string]string{
+							constants.GpuPoolKey:                "mock",
+							constants.IsLocalGPUAnnotation:      "true",
+							constants.IsolationModeAnnotation:   string(isolation),
+							constants.InjectContainerAnnotation: "main",
+							constants.TFLOPSRequestAnnotation:   "10",
+							constants.VRAMRequestAnnotation:     "1Gi",
+							constants.TFLOPSLimitAnnotation:     "20",
+							constants.VRAMLimitAnnotation:       "2Gi",
+						},
+					},
+					Spec: corev1.PodSpec{
+						InitContainers: []corev1.Container{
+							{Name: "setup", Image: "test-image", Env: userEnvs, VolumeMounts: []corev1.VolumeMount{userMount}},
+						},
+						Containers: []corev1.Container{
+							{Name: "main", Image: "test-image", Env: userEnvs, VolumeMounts: []corev1.VolumeMount{userMount}},
+							{Name: "logger", Image: "test-image", Env: userEnvs, VolumeMounts: []corev1.VolumeMount{userMount}},
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, submitted)).To(Succeed())
+				DeferCleanup(func() { _ = k8sClient.Delete(ctx, submitted) })
+				pod := &corev1.Pod{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(submitted), pod)).To(Succeed())
+				profile := &tfv1.WorkloadProfileSpec{IsLocalGPU: true, Isolation: isolation}
+
+				mounted := 0
+				containers := append(append([]corev1.Container{}, pod.Spec.InitContainers...), pod.Spec.Containers...)
+				for _, container := range containers {
+					for _, mount := range container.VolumeMounts {
+						if mount.Name != constants.DataVolumeName {
+							continue
+						}
+						mounted++
+						Expect(mount.MountPath).To(Equal(constants.TFDataPath+constants.SharedMemMountSubPath), container.Name)
+						Expect(mount.SubPath).To(BeEmpty(), container.Name)
+						Expect(mount.SubPathExpr).To(Equal(constants.TFDataPathWorkerExpr), container.Name)
+						for name, fieldPath := range reserved {
+							Expect(mount.SubPathExpr).To(ContainSubstring("$("+name+")"), container.Name)
+							definitions := lo.Filter(container.Env, func(env corev1.EnvVar, _ int) bool { return env.Name == name })
+							Expect(definitions).To(HaveLen(1), "%s defines %s once", container.Name, name)
+							Expect(definitions[0].Value).To(BeEmpty(), container.Name)
+							Expect(definitions[0].ValueFrom).NotTo(BeNil(), container.Name)
+							Expect(definitions[0].ValueFrom.FieldRef).NotTo(BeNil(), container.Name)
+							Expect(definitions[0].ValueFrom.FieldRef.FieldPath).To(Equal(fieldPath), container.Name)
+						}
+					}
+				}
+				expected := 1
+				if utils.UseLocalWorkerSidecar(profile) {
+					expected = 2 // the injected container and the worker sidecar
+				}
+				Expect(mounted).To(Equal(expected))
+				Expect(lo.ContainsBy(pod.Spec.Volumes, func(volume corev1.Volume) bool {
+					return volume.Name == constants.DataVolumeName && volume.HostPath != nil
+				})).To(BeTrue())
+			},
+			Entry("soft isolation, literal values", tfv1.IsolationModeType(tfv1.IsolationModeSoft), func(name string) corev1.EnvVar {
+				return corev1.EnvVar{Name: name, Value: "another-pod"}
+			}),
+			Entry("soft isolation, empty values", tfv1.IsolationModeType(tfv1.IsolationModeSoft), func(name string) corev1.EnvVar {
+				return corev1.EnvVar{Name: name}
+			}),
+			Entry("soft isolation, other field references", tfv1.IsolationModeType(tfv1.IsolationModeSoft), func(name string) corev1.EnvVar {
+				return corev1.EnvVar{Name: name, ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.labels['neighbour']"},
+				}}
+			}),
+			Entry("worker sidecar, literal values", tfv1.IsolationModeType(tfv1.IsolationModeHard), func(name string) corev1.EnvVar {
+				return corev1.EnvVar{Name: name, Value: "another-pod"}
+			}),
+			Entry("worker sidecar, empty values", tfv1.IsolationModeType(tfv1.IsolationModeHard), func(name string) corev1.EnvVar {
+				return corev1.EnvVar{Name: name}
+			}),
+			Entry("worker sidecar, other field references", tfv1.IsolationModeType(tfv1.IsolationModeHard), func(name string) corev1.EnvVar {
+				return corev1.EnvVar{Name: name, ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.labels['neighbour']"},
+				}}
+			}),
+		)
 	})
 
 	Context("when handling workload", func() {

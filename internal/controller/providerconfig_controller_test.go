@@ -20,6 +20,8 @@ import (
 	"time"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
+	"github.com/NexusGPU/tensor-fusion/internal/cloudprovider/pricing"
+	"github.com/NexusGPU/tensor-fusion/internal/config"
 	"github.com/NexusGPU/tensor-fusion/internal/provider"
 	"github.com/NexusGPU/tensor-fusion/internal/utils"
 	"github.com/NexusGPU/tensor-fusion/pkg/constants"
@@ -112,6 +114,11 @@ var _ = Describe("ProviderConfig controller", func() {
 		_ = k8sClient.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 			Name: podName, Namespace: utils.CurrentNamespace(),
 		}}, client.GracePeriodSeconds(0))
+
+		// Each reconcile rebuilds the process-wide pricing tables from this
+		// spec's private ProviderManager, which knows no GPU model. Put back
+		// what the suite loaded, for the specs that provision nodes.
+		pricing.SetTflopsMapAndInitGPUPricingInfo(ctx, config.MockGpuInfo())
 	})
 
 	It("does not recreate hypervisor pods on reconcile when the spec is unchanged", func() {

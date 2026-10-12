@@ -45,6 +45,7 @@ make test-run
 ### 0. Initialization
 
 - `AccelInit()`: Initialize the accelerator library (must be called before other APIs)
+- `AccelSetFeatures()`: Optional. Select the optional features (`ACCEL_FEATURE_*`) the caller understands, after `AccelInit()`; the selection is reset by `AccelShutdown()`. A library that does not export it has none of them. With `ACCEL_FEATURE_TELEMETRY_MARKERS` the library measures per-process compute utilization and marks in-band what it could not read instead of failing the call; without it `computeUtilizationPercent` is always 0 and no marker is returned
 - `AccelShutdown()`: Shutdown the accelerator library
 
 ### 1. DeviceInfo APIs

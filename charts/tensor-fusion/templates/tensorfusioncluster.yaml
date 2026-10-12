@@ -4,7 +4,7 @@
 # SchedulingConfigTemplate is a shared dependency referenced by EVERY pool (all
 # vendors), so it is created independently of cluster.enabled — non-NVIDIA /
 # multi-vendor installs (cluster.enabled=false) still get it. Values mirror a
-# known-good production config (auto-freeze TTLs per QoS, ERL parameters,
+# known-good production config (auto-freeze TTLs per QoS,
 # NodeCompactGPULowLoad placement). Tune via override files as needed.
 apiVersion: tensor-fusion.ai/v1
 kind: SchedulingConfigTemplate
@@ -54,17 +54,15 @@ spec:
         model: smart-warmup-v1
         historyDataPeriod: 1y
         predictionPeriod: 1m
+    {{- /* The rate limiter's parameters are built into the hypervisor and are
+           not set here; schedulingConfigTemplate.elasticRateLimitParameters
+           overrides individual ones. */}}
+    {{- with $sct.elasticRateLimitParameters }}
     elasticRateLimitParameters:
-      kp: '0.12'
-      ki: '0.4'
-      kd: '1.0'
-      filterAlpha: '0.30'
-      burstWindow: '0.5'
-      integralDecayFactor: '0.85'
-      capacityMin: '150'
-      capacityMax: '6000'
-      minRefillRate: '80'
-      maxRefillRate: '12000'
+      {{- range $name, $value := . }}
+      {{ $name }}: {{ $value | toString | quote }}
+      {{- end }}
+    {{- end }}
 {{- end }}
 {{- if .Values.cluster.enabled }}
 {{- $c := .Values.cluster }}
@@ -99,8 +97,11 @@ spec:
             patchToPod:
               spec: {}
           hypervisor:
-            image: {{ $c.hypervisorImage | quote }}
-            vectorImage: {{ $c.vectorImage | default "docker.io/timberio/vector:latest-alpine" | quote }}
+            image: {{ $c.hypervisorImage | default (printf "tensorfusion/tensor-fusion-hypervisor:%s" .Chart.AppVersion) | quote }}
+            # Ships tf_gpu_usage / tf_worker_usage to GreptimeDB; the usage-based
+            # alert rules and the autoscaler read these tables.
+            enableVector: {{ $c.enableVector }}
+            vectorImage: {{ $c.vectorImage | default "docker.io/timberio/vector:0.56.0-alpine" | quote }}
             podTemplate:
               template:
                 spec:
@@ -127,6 +128,13 @@ spec:
                         privileged: true
                         runAsUser: 0
                         runAsGroup: 0
+                    {{- if $c.enableVector }}
+                    - name: vector
+                      resources:
+                        requests:
+                          cpu: 50m
+                          memory: 64Mi
+                    {{- end }}
           nodeDiscovery:
             image: {{ $c.nodeDiscoveryImage | default "docker.io/tensorfusion/tensor-fusion-node-discovery:latest" | quote }}
             podTemplate:

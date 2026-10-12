@@ -1,0 +1,32 @@
+{{- /* Read through defaults: the keys are absent when a release is upgraded with --reuse-values. */ -}}
+{{- $ec := (.Values.controller.admissionWebhooks.ephemeralContainers | default dict) -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "tensor-fusion.fullname" . }}-validating-webhook
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "tensor-fusion.fullname" . }}-webhook
+      namespace: {{ include "tensor-fusion.namespace" . }}
+      path: /validate-v1-pod-ephemeralcontainers
+  # This webhook has no objectSelector: labels can be changed after a pod is
+  # created, so the handler selects pods by their volumes instead. It therefore
+  # receives the request for every pod in the cluster, and has a failure policy
+  # and a timeout of its own so that an unavailable operator does not hold up
+  # debugging of unrelated pods.
+  failurePolicy: {{ $ec.failurePolicy | default "Ignore" }}
+  name: vpod-ephemeralcontainers.tensor-fusion.ai
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - UPDATE
+    resources:
+    - pods/ephemeralcontainers
+  sideEffects: None
+  timeoutSeconds: {{ $ec.timeoutSeconds | default 3 }}

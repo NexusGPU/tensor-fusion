@@ -133,20 +133,20 @@ func TestSharedMemoryDoesNotOverwriteInvalidExistingState(t *testing.T) {
 }
 
 func TestSharedMemoryRejectsLinksOutsidePodDirectory(t *testing.T) {
-	for _, name := range []string{ShmPathSuffix, ".shm-uid-attacker"} {
+	for _, name := range []string{ShmPathSuffix, ".shm-uid-second"} {
 		t.Run(name, func(t *testing.T) {
 			base := t.TempDir()
-			victim := NewPodIdentifier("namespace", "victim")
-			original, err := CreateSharedMemoryHandle(base, victim, createTestConfigs())
+			first := NewPodIdentifier("namespace", "first")
+			original, err := CreateSharedMemoryHandle(base, first, createTestConfigs())
 			require.NoError(t, err)
 			defer func() { _ = original.Close() }()
 			original.GetState().SetPodMemoryUsed(0, 512)
-			attacker := NewPodIdentifier("namespace", "attacker")
-			require.NoError(t, os.MkdirAll(attacker.ToPath(base), 0755))
+			second := NewPodIdentifier("namespace", "second")
+			require.NoError(t, os.MkdirAll(second.ToPath(base), 0755))
 			require.NoError(t, os.Symlink(
-				filepath.Join(victim.ToPath(base), ShmPathSuffix), filepath.Join(attacker.ToPath(base), name),
+				filepath.Join(first.ToPath(base), ShmPathSuffix), filepath.Join(second.ToPath(base), name),
 			))
-			_, err = PrepareWorkerSharedMemory(base, attacker, "attacker", createTestConfigs(), false)
+			_, err = PrepareWorkerSharedMemory(base, second, "second", createTestConfigs(), false)
 			require.Error(t, err, "a writable Pod directory must not redirect the hypervisor to another Pod")
 			require.Equal(t, uint64(512), original.GetState().GetPodMemoryUsed(0))
 		})

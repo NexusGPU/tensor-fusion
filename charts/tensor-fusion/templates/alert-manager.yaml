@@ -9,15 +9,18 @@ metadata:
     {{- include "tensor-fusion.labels" . | nindent 4 }}
 automountServiceAccountToken: false
 ---
+# The Alertmanager configuration names receivers, and receivers carry webhook
+# URLs with tokens, SMTP passwords and API keys: it is a Secret, not a ConfigMap.
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
 metadata:
   name: {{ .Release.Name }}-alert-manager-config
   namespace: {{ include "tensor-fusion.namespace" . }}
   labels:
     tensor-fusion.ai/component: alert-manager
     {{- include "tensor-fusion.labels" . | nindent 4 }}
-data:
+type: Opaque
+stringData:
   alertmanager.yml: |
     {{- toYaml .Values.alert.alertManagerConfig | nindent 4 }}
 ---
@@ -58,8 +61,8 @@ spec:
       {{- end }}
       volumes:
         - name: config
-          configMap:
-            name: {{ .Release.Name }}-alert-manager-config
+          secret:
+            secretName: {{ .Release.Name }}-alert-manager-config
             defaultMode: 420
         {{- if not .Values.alert.persistence.enabled }}
         - name: storage

@@ -21,7 +21,9 @@ webhooks:
     - CREATE
     resources:
     - pods
-  sideEffects: None
+  # The handler creates the TensorFusionWorkload and reserves counters, ports
+  # and indices for a real admission, and none of them for a dry-run.
+  sideEffects: NoneOnDryRun
   timeoutSeconds: 10
 # Migration modes must inspect pods without the TensorFusion enabled label so
 # that native GPU resource requests can be discovered and converted.

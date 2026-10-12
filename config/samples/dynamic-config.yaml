@@ -11,40 +11,6 @@ preemptClusterWideFromEnv: true
 maxInFlightNodes: 15
 
 alertRules:
-  # Worker TFlops throttled alert
-  - name: WorkerTFlopsThrottled
-    query: |
-      SELECT workload, worker, uuid, node, MAX(compute_throttled_cnt)-MIN(compute_throttled_cnt) as throttled_increase
-      FROM tf_worker_usage
-      WHERE {{ .Conditions }}
-      GROUP BY workload, worker, uuid, node
-      HAVING throttled_increase > {{ .Threshold }}
-    threshold: 0
-    evaluationInterval: 15s
-    consecutiveCount: 3
-    severity: P1
-    summary: "Worker TFlops Throttled"
-    description: "Worker {{ .worker }} from Node {{ .node }} is using more than {{ .Threshold }}% of its TFlops limit"
-    alertTargetInstance: "{{ .worker }}-{{ .uuid }}"
-    runbookURL: "https://tensor-fusion.ai/guide/troubleshooting/handbook"
-  
-  # Worker VRAM switching too frequent alert
-  - name: WorkerVRAMSwitchCountIncreasing
-    query: |
-      SELECT workload, worker, uuid, node, MAX(vram_resumed_cnt)-MIN(vram_resumed_cnt) as switch_increase
-      FROM tf_worker_usage 
-      WHERE {{ .Conditions }}
-      GROUP BY workload, worker, uuid, node
-      HAVING switch_increase > {{ .Threshold }}
-    threshold: 0
-    evaluationInterval: 2m
-    consecutiveCount: 1
-    severity: P1
-    summary: "Worker VRAM Switch Count Increasing"
-    description: "Worker {{ .worker }} from Node {{ .node }} has switched VRAM {{ .switch_increase }} times in last 2 minutes, GPU may be too hot"
-    alertTargetInstance: "{{ .worker }}-{{ .uuid }}"
-    runbookURL: "https://tensor-fusion.ai/guide/troubleshooting/handbook"
-  
   # Worker can not scale up/scheduled alert
   - name: WorkerAllocationFailed
     query: |

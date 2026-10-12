@@ -84,7 +84,7 @@ spec:
                   runAsGroup: 0
                   runAsUser: 0
           portNumber: 8001
-          vectorImage: docker.m.daocloud.io/timberio/vector:latest-alpine
+          vectorImage: docker.m.daocloud.io/timberio/vector:0.56.0-alpine
         worker:
           image: rgpu-work:latest
           podTemplate:

@@ -45,3 +45,22 @@ jobs:
           make test
         env:
           ENVTEST_K8S_VERSION: ${{ matrix.envtest_k8s_version }}
+
+  race:
+    name: Race detector
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.0'
+
+      # The concurrency-sensitive packages only (see RACE_PACKAGES in the
+      # Makefile); the whole suite under the race detector takes too long.
+      - name: Running Tests with the race detector
+        run: make test-race
+        env:
+          ENVTEST_K8S_VERSION: 1.35.0

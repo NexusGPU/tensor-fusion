@@ -3,31 +3,13 @@
 package worker
 
 import (
-	"crypto/rand"
-	"errors"
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"runtime"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unsafe"
-)
-
-// Constants
-const (
-	MaxProcesses  = 2048
-	MaxDevices    = 16
-	MaxUUIDLen    = 64
-	ShmPathSuffix = "shm"
-
-	// Rust `#[repr(C)] enum SharedDeviceState` discriminants.
-	rustSharedDeviceStateV1Discriminant = uint32(0)
-	rustSharedDeviceStateV2Discriminant = uint32(1)
 )
 
 // RefCountError represents errors in reference count operations
@@ -49,394 +31,6 @@ func isProcessAlive(pid uintptr) bool {
 	}
 	// EPERM means the process exists but belongs to another user.
 	return syscall.Kill(int(pid), 0) != syscall.ESRCH
-}
-
-// PodIdentifier contains namespace and name
-type PodIdentifier struct {
-	Namespace string
-	Name      string
-}
-
-// NewPodIdentifier creates a new PodIdentifier
-func NewPodIdentifier(namespace, name string) *PodIdentifier {
-	return &PodIdentifier{
-		Namespace: namespace,
-		Name:      name,
-	}
-}
-
-// ToPath returns the path for this pod identifier
-func (p *PodIdentifier) ToPath(basePath string) string {
-	return filepath.Join(basePath, p.Namespace, p.Name)
-}
-
-// FromShmFilePath parses a PodIdentifier from a full shared memory path
-// Path format: {base_path}/{namespace}/{name}/shm
-func FromShmFilePath(path string) (*PodIdentifier, error) {
-	path = filepath.Clean(path)
-	components := strings.Split(path, string(filepath.Separator))
-
-	// Filter out empty components (from leading/trailing separators)
-	var filtered []string
-	for _, comp := range components {
-		if comp != "" {
-			filtered = append(filtered, comp)
-		}
-	}
-	components = filtered
-
-	// Need at least: namespace, name, and "shm" (3 components minimum)
-	if len(components) < 3 {
-		return nil, fmt.Errorf("invalid path format: %s (need at least namespace/name/shm)", path)
-	}
-
-	// Extract the last 3 components: {namespace}/{name}/shm
-	compLen := len(components)
-
-	// Verify the last component is "shm"
-	if components[compLen-1] != ShmPathSuffix {
-		return nil, fmt.Errorf("invalid path format: %s (last component must be 'shm')", path)
-	}
-
-	namespace := components[compLen-3]
-	name := components[compLen-2]
-
-	// Validate namespace and name are not empty
-	if namespace == "" || name == "" {
-		return nil, fmt.Errorf("invalid path format: %s (namespace and name must be non-empty)", path)
-	}
-
-	return NewPodIdentifier(namespace, name), nil
-}
-
-// String returns the string representation
-func (p *PodIdentifier) String() string {
-	return fmt.Sprintf("%s/%s", p.Namespace, p.Name)
-}
-
-// CleanupEmptyParentDirectories removes empty parent directories after removing a file
-func CleanupEmptyParentDirectories(filePath string, stopAtPath *string) error {
-	parentDir := filepath.Dir(filePath)
-
-	// Skip if we've reached the stop path
-	if stopAtPath != nil && parentDir == *stopAtPath {
-		return nil
-	}
-
-	// Try to remove the immediate parent directory if it's empty
-	entries, err := os.ReadDir(parentDir)
-	if err != nil {
-		return err
-	}
-
-	if len(entries) == 0 {
-		if err := os.Remove(parentDir); err != nil {
-			return err
-		}
-
-		// Recursively try to remove parent directories if they're also empty
-		return CleanupEmptyParentDirectories(parentDir, stopAtPath)
-	}
-
-	return nil
-}
-
-// SharedDeviceInfoV1 is the legacy device state (without ERL)
-type SharedDeviceInfoV1 struct {
-	AvailableCudaCores int32
-	UpLimit            uint32
-	MemLimit           uint64
-	TotalCudaCores     uint32
-	PodMemoryUsed      uint64
-}
-
-// SharedDeviceInfoV2 is the V2 device state with ERL support
-type SharedDeviceInfoV2 struct {
-	UpLimit        uint32
-	MemLimit       uint64
-	TotalCudaCores uint32
-	PodMemoryUsed  uint64
-
-	// ERL (Elastic Rate Limiting) - PID-controlled token bucket
-	ERLTokenRefillRate uint64 // f64 stored as bits
-	ERLTokenCapacity   uint64 // f64 stored as bits
-	ERLCurrentTokens   uint64 // f64 stored as bits
-	ERLLastTokenUpdate uint64 // f64 stored as bits
-}
-
-// SharedDeviceInfo is a type alias for backward compatibility
-type SharedDeviceInfo = SharedDeviceInfoV2
-
-// NewSharedDeviceInfoV1 creates a new V1 device info
-func NewSharedDeviceInfoV1(totalCudaCores, upLimit uint32, memLimit uint64) *SharedDeviceInfoV1 {
-	return &SharedDeviceInfoV1{
-		AvailableCudaCores: 0,
-		UpLimit:            upLimit,
-		MemLimit:           memLimit,
-		TotalCudaCores:     totalCudaCores,
-		PodMemoryUsed:      0,
-	}
-}
-
-// NewSharedDeviceInfoV2 creates a new V2 device info
-func NewSharedDeviceInfoV2(totalCudaCores, upLimit uint32, memLimit uint64) *SharedDeviceInfoV2 {
-	return &SharedDeviceInfoV2{
-		UpLimit:            upLimit,
-		MemLimit:           memLimit,
-		TotalCudaCores:     totalCudaCores,
-		PodMemoryUsed:      0,
-		ERLTokenRefillRate: math.Float64bits(10.0), // Default 10 tokens/sec
-		ERLTokenCapacity:   math.Float64bits(100.0),
-		ERLCurrentTokens:   math.Float64bits(100.0),
-		ERLLastTokenUpdate: math.Float64bits(0.0),
-	}
-}
-
-// DeviceEntryV1 is the legacy device entry
-type DeviceEntryV1 struct {
-	UUID          [MaxUUIDLen]byte
-	DeviceInfo    SharedDeviceInfoV1
-	IsActiveField uint32
-	//nolint:unused // Padding field for memory alignment in shared memory structures
-	_padding [4]byte
-}
-
-// DeviceEntryV2 is the V2 device entry with ERL
-type DeviceEntryV2 struct {
-	UUID          [MaxUUIDLen]byte
-	DeviceInfo    SharedDeviceInfoV2
-	IsActiveField uint32
-}
-
-// DeviceEntry is a type alias for backward compatibility
-type DeviceEntry = DeviceEntryV2
-
-// NewDeviceEntryV1 creates a new V1 device entry
-func NewDeviceEntryV1() *DeviceEntryV1 {
-	return &DeviceEntryV1{
-		DeviceInfo: *NewSharedDeviceInfoV1(0, 0, 0),
-	}
-}
-
-// NewDeviceEntryV2 creates a new V2 device entry
-func NewDeviceEntryV2() *DeviceEntryV2 {
-	return &DeviceEntryV2{
-		DeviceInfo: *NewSharedDeviceInfoV2(0, 0, 0),
-	}
-}
-
-// SetUUID sets the device UUID
-func (d *DeviceEntryV1) SetUUID(uuid string) {
-	copyLen := len(uuid)
-	if copyLen > MaxUUIDLen-1 {
-		copyLen = MaxUUIDLen - 1
-	}
-
-	// Clear the UUID array
-	for i := range d.UUID {
-		d.UUID[i] = 0
-	}
-
-	// Copy the new UUID
-	copy(d.UUID[:], uuid[:copyLen])
-}
-
-// GetUUID gets the device UUID as a string
-func (d *DeviceEntryV1) GetUUID() string {
-	nullPos := MaxUUIDLen - 1
-	for i, b := range d.UUID {
-		if b == 0 {
-			nullPos = i
-			break
-		}
-	}
-	return string(d.UUID[:nullPos])
-}
-
-// IsActive checks if this entry is active
-func (d *DeviceEntryV1) IsActive() bool {
-	return atomic.LoadUint32(&d.IsActiveField) != 0
-}
-
-// SetActive sets the active status
-func (d *DeviceEntryV1) SetActive(active bool) {
-	var val uint32
-	if active {
-		val = 1
-	}
-	atomic.StoreUint32(&d.IsActiveField, val)
-}
-
-// SetUUID sets the device UUID
-func (d *DeviceEntryV2) SetUUID(uuid string) {
-	copyLen := len(uuid)
-	if copyLen > MaxUUIDLen-1 {
-		copyLen = MaxUUIDLen - 1
-	}
-
-	// Clear the UUID array
-	for i := range d.UUID {
-		d.UUID[i] = 0
-	}
-
-	// Copy the new UUID
-	copy(d.UUID[:], uuid[:copyLen])
-}
-
-// GetUUID gets the device UUID as a string
-func (d *DeviceEntryV2) GetUUID() string {
-	nullPos := MaxUUIDLen - 1
-	for i, b := range d.UUID {
-		if b == 0 {
-			nullPos = i
-			break
-		}
-	}
-	return string(d.UUID[:nullPos])
-}
-
-// IsActive checks if this entry is active
-func (d *DeviceEntryV2) IsActive() bool {
-	return atomic.LoadUint32(&d.IsActiveField) != 0
-}
-
-// SetActive sets the active status
-func (d *DeviceEntryV2) SetActive(active bool) {
-	var val uint32
-	if active {
-		val = 1
-	}
-	atomic.StoreUint32(&d.IsActiveField, val)
-}
-
-// DeviceConfig contains device configuration information
-type DeviceConfig struct {
-	DeviceIdx      uint32
-	DeviceUUID     string
-	UpLimit        uint32
-	MemLimit       uint64
-	SMCount        uint32
-	MaxThreadPerSM uint32
-	TotalCudaCores uint32
-}
-
-// SharedDeviceStateV1 is the Rust-compatible V1 shared device state.
-type SharedDeviceStateV1 struct {
-	Devices          [MaxDevices]DeviceEntryV1
-	DeviceCountField uint32
-	LastHeartbeat    uint64
-	PIDs             ShmMutex[PIDSet]
-	//nolint:unused // Padding field for Rust shared memory compatibility.
-	_padding [512]byte
-}
-
-// SharedDeviceStateV2 is the Rust-compatible V2 shared device state with ERL.
-type SharedDeviceStateV2 struct {
-	Devices          [MaxDevices]DeviceEntryV2
-	DeviceCountField uint32
-	LastHeartbeat    uint64
-	PIDs             ShmMutex[PIDSet]
-	//nolint:unused // Padding field for Rust shared memory compatibility.
-	_padding [512]byte
-}
-
-// SharedDeviceState is the Go wrapper used by the hypervisor code.
-type SharedDeviceState struct {
-	V1 *SharedDeviceStateV1
-	V2 *SharedDeviceStateV2
-}
-
-// rustSharedDeviceStateV2Layout matches Rust's `#[repr(C)] enum SharedDeviceState::V2`.
-// The V2 payload begins at offset 8, which is required by `libcuda_limiter.so`.
-type rustSharedDeviceStateV2Layout struct {
-	Discriminant uint32
-	//nolint:unused // Required to align the payload to 8 bytes like Rust's repr(C) enum.
-	_padding [4]byte
-	V2       SharedDeviceStateV2
-}
-
-// Version returns the version number
-func (s *SharedDeviceState) Version() uint32 {
-	if s.V1 != nil {
-		return 1
-	}
-	return 2
-}
-
-// HasERL checks if this state uses ERL features
-func (s *SharedDeviceState) HasERL() bool {
-	return s.V2 != nil
-}
-
-// NewSharedDeviceStateV1 creates a new V1 state
-func NewSharedDeviceStateV1(configs []DeviceConfig) (*SharedDeviceStateV1, error) {
-	now := uint64(time.Now().Unix())
-
-	state := &SharedDeviceStateV1{
-		DeviceCountField: uint32(len(configs)),
-		LastHeartbeat:    now,
-		PIDs:             NewShmMutex(NewPIDSet()),
-	}
-
-	for _, config := range configs {
-		deviceIdx := int(config.DeviceIdx)
-		if deviceIdx >= MaxDevices {
-			return nil, fmt.Errorf("device index %d exceeds maximum devices %d", deviceIdx, MaxDevices)
-		}
-
-		entry := &state.Devices[deviceIdx]
-		entry.SetUUID(config.DeviceUUID)
-		entry.DeviceInfo.TotalCudaCores = config.TotalCudaCores
-		entry.DeviceInfo.AvailableCudaCores = int32(config.TotalCudaCores)
-		entry.DeviceInfo.UpLimit = config.UpLimit
-		entry.DeviceInfo.MemLimit = config.MemLimit
-		entry.SetActive(true)
-	}
-
-	return state, nil
-}
-
-// NewSharedDeviceStateV2 creates a new V2 state
-func NewSharedDeviceStateV2(configs []DeviceConfig) (*SharedDeviceStateV2, error) {
-	now := uint64(time.Now().Unix())
-
-	state := &SharedDeviceStateV2{
-		DeviceCountField: uint32(len(configs)),
-		LastHeartbeat:    now,
-		PIDs:             NewShmMutex(NewPIDSet()),
-	}
-
-	for _, config := range configs {
-		deviceIdx := int(config.DeviceIdx)
-		if deviceIdx >= MaxDevices {
-			return nil, fmt.Errorf("device index %d exceeds maximum devices %d", deviceIdx, MaxDevices)
-		}
-
-		entry := &state.Devices[deviceIdx]
-		entry.SetUUID(config.DeviceUUID)
-		entry.DeviceInfo.TotalCudaCores = config.TotalCudaCores
-		entry.DeviceInfo.UpLimit = config.UpLimit
-		entry.DeviceInfo.MemLimit = config.MemLimit
-
-		// Initialize ERL fields with defaults
-		entry.DeviceInfo.ERLTokenCapacity = math.Float64bits(100.0)
-		entry.DeviceInfo.ERLTokenRefillRate = math.Float64bits(10.0)
-		entry.DeviceInfo.ERLCurrentTokens = math.Float64bits(100.0)
-		entry.DeviceInfo.ERLLastTokenUpdate = math.Float64bits(float64(now))
-
-		entry.SetActive(true)
-	}
-
-	return state, nil
-}
-
-// NewSharedDeviceState creates a new SharedDeviceState (defaults to V2)
-func NewSharedDeviceState(configs []DeviceConfig) (*SharedDeviceState, error) {
-	v2, err := NewSharedDeviceStateV2(configs)
-	if err != nil {
-		return nil, err
-	}
-	return &SharedDeviceState{V2: v2}, nil
 }
 
 // HasDevice checks if a device exists at the given index
@@ -659,201 +253,202 @@ func (s *SharedDeviceState) CleanupOrphanedLocks() {
 	}
 }
 
-// SetPodMemoryUsed sets pod memory used for a device
+// SetPodMemoryUsed sets pod memory used for a device, as a figure without the
+// time of a sample: in a V2 state the time published for the slot is cleared
+// before the figure is replaced, so that a reader never takes the time of an
+// earlier sample for the time of this figure. A figure that comes from a
+// process sample is published with SetPodMemorySample.
 func (s *SharedDeviceState) SetPodMemoryUsed(index int, memory uint64) bool {
-	if s.V1 != nil {
-		if index >= MaxDevices || !s.V1.Devices[index].IsActive() {
-			return false
-		}
-		atomic.StoreUint64(&s.V1.Devices[index].DeviceInfo.PodMemoryUsed, memory)
-		return true
-	}
-	if index >= MaxDevices || !s.V2.Devices[index].IsActive() {
+	return s.SetPodMemorySample(index, memory, 0)
+}
+
+// SetPodMemorySample publishes what a process sample says about the memory a
+// pod holds on a device: used bytes, from a provider query that started at
+// sampledAtSecs (the wall clock read immediately before it, in seconds since
+// the Unix epoch). It reports whether the device exists.
+//
+// A V2 state has one writer of these two fields, the hypervisor, and the
+// order of its stores is the whole protocol; there is no sequence word:
+//
+//  1. store 0 to pod_memory_sampled_at
+//  2. store the figure to pod_memory_used
+//  3. store the bits of the time to pod_memory_sampled_at
+//
+// A reader loads the time, the figure and the time again, and takes the two
+// for one sample only when both readings of the time are the same and not
+// zero (GetPodMemorySample). The time is also how it tells a new sample from
+// the one it has seen, so the time of a sample always differs from the one
+// published before it in the slot, and never lies below it: when the clock did
+// not advance, or went back, the next representable double above the previous
+// time is published instead. The previous time is the one in the mapping,
+// which outlives the hypervisor process. The pair that is already in the
+// mapping is not written again.
+//
+// A sampledAtSecs that is not a finite positive number publishes the figure
+// without a time (steps 1 and 2): the reader then checks against the figure
+// alone, as it did before the time existed. A V1 state has no such field and
+// gets the figure only.
+func (s *SharedDeviceState) SetPodMemorySample(index int, used uint64, sampledAtSecs float64) bool {
+	usedField, sampledAtField := s.podMemoryFields(index)
+	if usedField == nil {
 		return false
 	}
-	atomic.StoreUint64(&s.V2.Devices[index].DeviceInfo.PodMemoryUsed, memory)
+	if sampledAtField == nil {
+		atomic.StoreUint64(usedField, used)
+		return true
+	}
+	storePodMemorySample(atomic.StoreUint64, usedField, sampledAtField, used, sampledAtSecs)
 	return true
 }
 
-// ERL token bucket operations for SharedDeviceInfoV2
+// podMemorySampleReadAttempts is how often a reader looks for a figure and a
+// time that belong together before it settles for the figure alone.
+const podMemorySampleReadAttempts = 4
 
-// GetERLTokenCapacity returns the token capacity
-func (d *SharedDeviceInfoV2) GetERLTokenCapacity() float64 {
-	return math.Float64frombits(atomic.LoadUint64(&d.ERLTokenCapacity))
-}
-
-// SetERLTokenCapacity sets the token capacity
-func (d *SharedDeviceInfoV2) SetERLTokenCapacity(capacity float64) {
-	atomic.StoreUint64(&d.ERLTokenCapacity, math.Float64bits(capacity))
-}
-
-// GetERLTokenRefillRate returns the refill rate
-func (d *SharedDeviceInfoV2) GetERLTokenRefillRate() float64 {
-	return math.Float64frombits(atomic.LoadUint64(&d.ERLTokenRefillRate))
-}
-
-// SetERLTokenRefillRate sets the refill rate
-func (d *SharedDeviceInfoV2) SetERLTokenRefillRate(rate float64) {
-	atomic.StoreUint64(&d.ERLTokenRefillRate, math.Float64bits(rate))
-}
-
-// GetERLCurrentTokens returns the current tokens
-func (d *SharedDeviceInfoV2) GetERLCurrentTokens() float64 {
-	return math.Float64frombits(atomic.LoadUint64(&d.ERLCurrentTokens))
-}
-
-// SetERLCurrentTokens sets the current tokens
-func (d *SharedDeviceInfoV2) SetERLCurrentTokens(tokens float64) {
-	atomic.StoreUint64(&d.ERLCurrentTokens, math.Float64bits(tokens))
-}
-
-// GetERLLastTokenUpdate returns the last token update timestamp
-func (d *SharedDeviceInfoV2) GetERLLastTokenUpdate() float64 {
-	return math.Float64frombits(atomic.LoadUint64(&d.ERLLastTokenUpdate))
-}
-
-// SetERLLastTokenUpdate sets the last token update timestamp
-func (d *SharedDeviceInfoV2) SetERLLastTokenUpdate(timestamp float64) {
-	atomic.StoreUint64(&d.ERLLastTokenUpdate, math.Float64bits(timestamp))
-}
-
-// LoadERLTokenState loads the token state atomically
-func (d *SharedDeviceInfoV2) LoadERLTokenState() (float64, float64) {
-	return d.GetERLCurrentTokens(), d.GetERLLastTokenUpdate()
-}
-
-// StoreERLTokenState stores the token state atomically
-func (d *SharedDeviceInfoV2) StoreERLTokenState(tokens, timestamp float64) {
-	d.SetERLCurrentTokens(tokens)
-	d.SetERLLastTokenUpdate(timestamp)
-}
-
-// LoadERLQuota loads the quota configuration
-func (d *SharedDeviceInfoV2) LoadERLQuota() (float64, float64) {
-	return d.GetERLTokenCapacity(), d.GetERLTokenRefillRate()
-}
-
-// FetchSubERLTokens atomically subtracts tokens and returns the value before subtraction
-func (d *SharedDeviceInfoV2) FetchSubERLTokens(cost float64) float64 {
-	for {
-		currentBits := atomic.LoadUint64(&d.ERLCurrentTokens)
-		current := math.Float64frombits(currentBits)
-
-		if current < cost {
-			return current
+// GetPodMemorySample reads the memory a pod holds on a device the way a
+// limiter does, and reports whether the device exists. sampledAtSecs is zero
+// when no time is published for the figure, or when the writer kept replacing
+// the pair while it was read: used is then a figure without a time.
+func (s *SharedDeviceState) GetPodMemorySample(index int) (used uint64, sampledAtSecs float64, ok bool) {
+	usedField, sampledAtField := s.podMemoryFields(index)
+	if usedField == nil {
+		return 0, 0, false
+	}
+	if sampledAtField == nil {
+		return atomic.LoadUint64(usedField), 0, true
+	}
+	for range podMemorySampleReadAttempts {
+		before := atomic.LoadUint64(sampledAtField)
+		used = atomic.LoadUint64(usedField)
+		if before == 0 {
+			return used, 0, true
 		}
-
-		newValue := math.Max(0.0, current-cost)
-		newBits := math.Float64bits(newValue)
-
-		if atomic.CompareAndSwapUint64(&d.ERLCurrentTokens, currentBits, newBits) {
-			return current
+		if atomic.LoadUint64(sampledAtField) == before {
+			if at := math.Float64frombits(before); isPodMemorySampleTime(at) {
+				return used, at, true
+			}
+			return used, 0, true
 		}
+	}
+	return used, 0, true
+}
+
+// podMemoryFields returns the words of an active device slot that hold the
+// memory figure and, in a V2 state, the time of its sample. usedField is nil
+// when there is no such device.
+func (s *SharedDeviceState) podMemoryFields(index int) (usedField, sampledAtField *uint64) {
+	if index < 0 || index >= MaxDevices {
+		return nil, nil
+	}
+	if s.V1 != nil {
+		if !s.V1.Devices[index].IsActive() {
+			return nil, nil
+		}
+		return &s.V1.Devices[index].DeviceInfo.PodMemoryUsed, nil
+	}
+	if !s.V2.Devices[index].IsActive() {
+		return nil, nil
+	}
+	return &s.V2.Devices[index].DeviceInfo.PodMemoryUsed, &s.V2.PodMemorySampledAt[index]
+}
+
+// isPodMemorySampleTime reports whether a value read from, or meant for,
+// pod_memory_sampled_at is a time: a finite positive number of seconds.
+// Anything else stands for "no time".
+func isPodMemorySampleTime(secs float64) bool {
+	return secs > 0 && !math.IsInf(secs, 0)
+}
+
+// storePodMemorySample is the writer's side of the protocol described at
+// SetPodMemorySample. Every store to the two words goes through store, in the
+// order in which a reader may observe them.
+func storePodMemorySample(
+	store func(field *uint64, value uint64), usedField, sampledAtField *uint64, used uint64, sampledAtSecs float64,
+) {
+	var sampledAt uint64
+	if isPodMemorySampleTime(sampledAtSecs) {
+		// The mapping is writable by the workload's processes; values read from
+		// it are validated: a previous value that is not a time counts as none.
+		if previous := math.Float64frombits(atomic.LoadUint64(sampledAtField)); isPodMemorySampleTime(previous) {
+			if previous == sampledAtSecs && atomic.LoadUint64(usedField) == used {
+				return
+			}
+			if sampledAtSecs <= previous {
+				sampledAtSecs = math.Nextafter(previous, math.Inf(1))
+			}
+		}
+		if isPodMemorySampleTime(sampledAtSecs) {
+			sampledAt = math.Float64bits(sampledAtSecs)
+		}
+	}
+	store(sampledAtField, 0)
+	store(usedField, used)
+	if sampledAt != 0 {
+		store(sampledAtField, sampledAt)
 	}
 }
 
-// FetchAddERLTokens atomically adds tokens (capped at capacity) and returns the value before addition
-func (d *SharedDeviceInfoV2) FetchAddERLTokens(amount float64) float64 {
-	capacity := d.GetERLTokenCapacity()
-
-	for {
-		currentBits := atomic.LoadUint64(&d.ERLCurrentTokens)
-		current := math.Float64frombits(currentBits)
-
-		newValue := math.Max(0.0, math.Min(capacity, current+amount))
-		newBits := math.Float64bits(newValue)
-
-		if atomic.CompareAndSwapUint64(&d.ERLCurrentTokens, currentBits, newBits) {
-			return current
-		}
-	}
-}
-
-// PIDBitmap matches Rust's oversized `Bitmap<MAX_PROCESSES>` layout.
-type PIDBitmap [MaxProcesses]uint64
-
-func (b *PIDBitmap) test(offset uint32) bool {
-	idx := offset / 64
-	if idx >= uint32(len(b)) {
+// SetDeviceLimits publishes the compute limit (percent) and the memory limit
+// (bytes) of an active device to a live mapping, and reports whether either
+// changed. Each limit is one aligned word that readers load atomically and use
+// on its own, so one atomic store per field is all a concurrent reader needs:
+// it sees the previous or the new value of a field, never a mix. A field that
+// already holds the value is not written.
+func (s *SharedDeviceState) SetDeviceLimits(index int, upLimit uint32, memLimit uint64) bool {
+	if index < 0 || index >= MaxDevices {
 		return false
 	}
-	bit := (uint64(1) << 63) >> (offset & 63)
-	return (b[idx] & bit) == bit
-}
-
-func (b *PIDBitmap) testAndSet(offset uint32, value bool) {
-	idx := offset / 64
-	if idx >= uint32(len(b)) {
-		return
-	}
-	bit := (uint64(1) << 63) >> (offset & 63)
-	if value {
-		b[idx] |= bit
-	} else {
-		b[idx] &^= bit
-	}
-}
-
-// PIDSet is a Rust-compatible fixed-capacity set of process IDs.
-type PIDSet struct {
-	values [MaxProcesses]uintptr
-	bitmap PIDBitmap
-	len    uintptr
-}
-
-// NewPIDSet creates a new PID set
-func NewPIDSet() PIDSet {
-	return PIDSet{}
-}
-
-// InsertIfAbsent inserts a value if it's not already present
-func (s *PIDSet) InsertIfAbsent(pid int) bool {
-	pidValue := uintptr(pid)
-	for i := 0; i < MaxProcesses; i++ {
-		if s.bitmap.test(uint32(i)) && s.values[i] == pidValue {
+	var upLimitField *uint32
+	var memLimitField *uint64
+	if s.V1 != nil {
+		if !s.V1.Devices[index].IsActive() {
 			return false
 		}
-	}
-	if s.len >= uintptr(MaxProcesses) {
-		return false
-	}
-	for i := 0; i < MaxProcesses; i++ {
-		if s.bitmap.test(uint32(i)) {
-			continue
+		upLimitField = &s.V1.Devices[index].DeviceInfo.UpLimit
+		memLimitField = &s.V1.Devices[index].DeviceInfo.MemLimit
+	} else {
+		if !s.V2.Devices[index].IsActive() {
+			return false
 		}
-		s.values[i] = pidValue
-		s.bitmap.testAndSet(uint32(i), true)
-		s.len++
-		return true
+		upLimitField = &s.V2.Devices[index].DeviceInfo.UpLimit
+		memLimitField = &s.V2.Devices[index].DeviceInfo.MemLimit
 	}
-	return false
+	changed := false
+	if atomic.LoadUint32(upLimitField) != upLimit {
+		atomic.StoreUint32(upLimitField, upLimit)
+		changed = true
+	}
+	if atomic.LoadUint64(memLimitField) != memLimit {
+		atomic.StoreUint64(memLimitField, memLimit)
+		changed = true
+	}
+	return changed
 }
 
-// RemoveValue removes a value from the set
-func (s *PIDSet) RemoveValue(pid int) bool {
-	pidValue := uintptr(pid)
-	for i := 0; i < MaxProcesses; i++ {
-		if s.bitmap.test(uint32(i)) && s.values[i] == pidValue {
-			s.bitmap.testAndSet(uint32(i), false)
-			s.values[i] = 0
-			if s.len > 0 {
-				s.len--
-			}
-			return true
-		}
+// GetDeviceUpLimit returns the compute limit (percent) an active device slot
+// of the mapping carries, loaded the way a limiter loads it. The mapping is
+// writable by the workload's processes; values read from it are validated: a
+// value that is not a percentage from 1 to 100 is reported as not known.
+func (s *SharedDeviceState) GetDeviceUpLimit(index int) (upLimit uint32, known bool) {
+	if index < 0 || index >= MaxDevices {
+		return 0, false
 	}
-	return false
-}
-
-// Values returns all values in the set
-func (s *PIDSet) Values() []int {
-	result := make([]int, 0, s.len)
-	for i := 0; i < MaxProcesses; i++ {
-		if s.bitmap.test(uint32(i)) {
-			result = append(result, int(s.values[i]))
+	var upLimitField *uint32
+	if s.V1 != nil {
+		if !s.V1.Devices[index].IsActive() {
+			return 0, false
 		}
+		upLimitField = &s.V1.Devices[index].DeviceInfo.UpLimit
+	} else {
+		if !s.V2.Devices[index].IsActive() {
+			return 0, false
+		}
+		upLimitField = &s.V2.Devices[index].DeviceInfo.UpLimit
 	}
-	return result
+	if upLimit = atomic.LoadUint32(upLimitField); upLimit < 1 || upLimit > 100 {
+		return 0, false
+	}
+	return upLimit, true
 }
 
 // ShmMutex is a shared memory mutex wrapper
@@ -900,256 +495,4 @@ func (m *ShmMutex[T]) CleanupOrphanedLock() {
 	if holder != 0 && !isProcessAlive(holder) {
 		atomic.CompareAndSwapUintptr(&m.LockField, holder, 0)
 	}
-}
-
-// SharedMemoryHandle manages a shared memory mapping
-type SharedMemoryHandle struct {
-	mu       sync.RWMutex
-	path     string
-	data     []byte
-	state    *SharedDeviceState
-	file     *os.File
-	fileSize int64
-}
-
-// CreateSharedMemoryHandle creates a fully initialized mapping, or opens the
-// existing mapping without resetting counters or replacing its inode.
-// Namespace and pod name are expected to be single path components.
-func CreateSharedMemoryHandle(
-	basePath string, pod *PodIdentifier, configs []DeviceConfig,
-) (*SharedMemoryHandle, error) {
-	if pod == nil {
-		return nil, fmt.Errorf("pod identifier is required")
-	}
-	if pod.Namespace == "" || pod.Name == "" {
-		return nil, fmt.Errorf("pod identifier must include namespace and name")
-	}
-	if strings.Contains(pod.Namespace, "/") ||
-		strings.Contains(pod.Namespace, "\\") ||
-		strings.Contains(pod.Namespace, "..") {
-		return nil, fmt.Errorf("invalid namespace path component: %q", pod.Namespace)
-	}
-	if strings.Contains(pod.Name, "/") || strings.Contains(pod.Name, "\\") || strings.Contains(pod.Name, "..") {
-		return nil, fmt.Errorf("invalid pod name path component: %q", pod.Name)
-	}
-
-	podPath := filepath.Join(basePath, pod.Namespace, pod.Name)
-	shmPath := filepath.Join(podPath, ShmPathSuffix)
-	if handle, err := OpenSharedMemoryHandle(basePath, pod); err == nil {
-		return handle, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-
-	// Create directory if it doesn't exist
-	if err := os.MkdirAll(podPath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory: %w", err)
-	}
-	return createSharedMemoryHandle(shmPath, configs)
-}
-
-func createSharedMemoryHandle(shmPath string, configs []DeviceConfig) (*SharedMemoryHandle, error) {
-	if handle, err := openSharedMemoryHandle(shmPath); err == nil {
-		return handle, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-
-	// Rust maps this file as `#[repr(C)] enum SharedDeviceState::V2`.
-	stateSize := int(unsafe.Sizeof(rustSharedDeviceStateV2Layout{}))
-
-	// Publish only after initialization. O_TRUNC would reset live mappings and
-	// can SIGBUS another process reading the file while its length is zero.
-	temporary := filepath.Join(filepath.Dir(shmPath), ".shm-init-"+rand.Text())
-	file, err := os.OpenFile(temporary, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create file: %w", err)
-	}
-	defer func() { _ = os.Remove(file.Name()) }()
-
-	// Truncate to the required size
-	if err := file.Truncate(int64(stateSize)); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("failed to truncate file: %w", err)
-	}
-
-	// Memory map the file
-	data, err := syscall.Mmap(int(file.Fd()), 0, stateSize, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
-	if err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("failed to mmap: %w", err)
-	}
-
-	// Initialize the state
-	state, err := NewSharedDeviceStateV2(configs)
-	if err != nil {
-		_ = syscall.Munmap(data)
-		_ = file.Close()
-		return nil, err
-	}
-
-	// Get a pointer to the mapped state
-	mappedState := (*rustSharedDeviceStateV2Layout)(unsafe.Pointer(&data[0]))
-
-	// Copy the V2 payload bytes into the mapped enum payload without
-	// assigning the lock-containing struct by value.
-	statePayloadSize := int(unsafe.Sizeof(*state))
-	stateBytes := (*[1 << 30]byte)(unsafe.Pointer(state))[:statePayloadSize:statePayloadSize]
-	v2Offset := int(unsafe.Offsetof(rustSharedDeviceStateV2Layout{}.V2))
-	copy(data[v2Offset:v2Offset+statePayloadSize], stateBytes)
-	mappedState.Discriminant = rustSharedDeviceStateV2Discriminant
-
-	// Link is an atomic create-if-absent operation. Concurrent initializers
-	// converge on one inode, including its cross-process memory reservations.
-	if err := os.Link(file.Name(), shmPath); err != nil {
-		_ = syscall.Munmap(data)
-		_ = file.Close()
-		if os.IsExist(err) {
-			return openSharedMemoryHandle(shmPath)
-		}
-		return nil, fmt.Errorf("failed to publish shared memory: %w", err)
-	}
-
-	return &SharedMemoryHandle{
-		path:     shmPath,
-		data:     data,
-		state:    &SharedDeviceState{V2: &mappedState.V2},
-		file:     file,
-		fileSize: int64(stateSize),
-	}, nil
-}
-
-// OpenSharedMemoryHandle opens an existing shared memory handle.
-// Namespace and pod name are expected to be single path components.
-func OpenSharedMemoryHandle(basePath string, pod *PodIdentifier) (*SharedMemoryHandle, error) {
-	if pod == nil {
-		return nil, fmt.Errorf("pod identifier is required")
-	}
-	if pod.Namespace == "" || pod.Name == "" {
-		return nil, fmt.Errorf("pod identifier must include namespace and name")
-	}
-	if strings.Contains(pod.Namespace, "/") ||
-		strings.Contains(pod.Namespace, "\\") ||
-		strings.Contains(pod.Namespace, "..") {
-		return nil, fmt.Errorf("invalid namespace path component: %q", pod.Namespace)
-	}
-	if strings.Contains(pod.Name, "/") || strings.Contains(pod.Name, "\\") || strings.Contains(pod.Name, "..") {
-		return nil, fmt.Errorf("invalid pod name path component: %q", pod.Name)
-	}
-
-	podPath := filepath.Join(basePath, pod.Namespace, pod.Name)
-	shmPath := filepath.Join(podPath, ShmPathSuffix)
-	if target, err := os.Readlink(shmPath); err == nil {
-		// A worker can write its mounted directory. Never follow a link to
-		// another Pod's mapping or an arbitrary host file.
-		if filepath.Base(target) != target || !strings.HasPrefix(target, ".shm-uid-") {
-			return nil, fmt.Errorf("invalid shared memory generation link: %q", target)
-		}
-		shmPath = filepath.Join(podPath, target)
-	}
-	return openSharedMemoryHandle(shmPath)
-}
-
-func openSharedMemoryHandle(shmPath string) (*SharedMemoryHandle, error) {
-	// Open the file
-	file, err := os.OpenFile(shmPath, os.O_RDWR|syscall.O_NOFOLLOW, 0666)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
-	}
-
-	// Get file size
-	stat, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("failed to stat file: %w", err)
-	}
-
-	fileSize := stat.Size()
-	expectedSize := int64(unsafe.Sizeof(rustSharedDeviceStateV2Layout{}))
-	legacySize := int64(unsafe.Sizeof(SharedDeviceStateV2{}))
-	if fileSize != expectedSize {
-		_ = file.Close()
-		if fileSize == legacySize {
-			return nil, fmt.Errorf("legacy shared memory layout detected: size=%d expected=%d", fileSize, expectedSize)
-		}
-		return nil, fmt.Errorf("unexpected shared memory size: got=%d expected=%d", fileSize, expectedSize)
-	}
-
-	// Memory map the file
-	data, err := syscall.Mmap(int(file.Fd()), 0, int(fileSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
-	if err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("failed to mmap: %w", err)
-	}
-
-	// Get a pointer to the mapped state and verify the Rust discriminant.
-	mappedState := (*rustSharedDeviceStateV2Layout)(unsafe.Pointer(&data[0]))
-	if discriminant := mappedState.Discriminant; discriminant != rustSharedDeviceStateV2Discriminant {
-		_ = syscall.Munmap(data)
-		_ = file.Close()
-		return nil, fmt.Errorf("unsupported shared memory discriminant: %d", discriminant)
-	}
-
-	return &SharedMemoryHandle{
-		path:     shmPath,
-		data:     data,
-		state:    &SharedDeviceState{V2: &mappedState.V2},
-		file:     file,
-		fileSize: fileSize,
-	}, nil
-}
-
-// GetState returns the shared device state
-func (h *SharedMemoryHandle) GetState() *SharedDeviceState {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if h.data == nil {
-		return nil
-	}
-	return h.state
-}
-
-// WithState runs fn while the shared-memory mapping is protected from Close.
-// Callers that retain the returned state pointer after this callback must not
-// do so; the pointer is only valid for the duration of fn.
-func (h *SharedMemoryHandle) WithState(fn func(*SharedDeviceState)) bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if h.data == nil || h.state == nil {
-		return false
-	}
-	fn(h.state)
-	return true
-}
-
-// Close closes the shared memory handle
-func (h *SharedMemoryHandle) Close() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.data != nil {
-		_ = syscall.Munmap(h.data)
-		h.data = nil
-	}
-	h.state = nil
-	if h.file != nil {
-		_ = h.file.Close()
-		h.file = nil
-	}
-	return nil
-}
-
-// Cleanup removes the shared memory file and cleans up empty directories
-func (h *SharedMemoryHandle) Cleanup(stopAtPath *string) error {
-	if err := h.Close(); err != nil {
-		return err
-	}
-
-	if err := os.Remove(h.path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove file: %w", err)
-	}
-
-	if stopAtPath != nil {
-		return CleanupEmptyParentDirectories(h.path, stopAtPath)
-	}
-	return CleanupEmptyParentDirectories(h.path, nil)
 }
