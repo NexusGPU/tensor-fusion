@@ -76,6 +76,8 @@ type Controller struct {
 	// loops tracks the control and refill goroutines of a started limiter.
 	loops  sync.WaitGroup
 	config erlConfig
+	// sharedCalibration: see sharedCalibrationEnv.
+	sharedCalibration bool
 
 	nowFunc func() time.Time
 
@@ -145,6 +147,7 @@ func (c *Controller) StartSoftQuotaLimiter() error {
 		return fmt.Errorf("soft isolation mode is not supported for vendor: %s", vendor)
 	}
 	c.config = loadERLConfigFromEnv()
+	c.sharedCalibration = loadSharedCalibrationFromEnv()
 
 	c.running = true
 	c.stopCh = make(chan struct{})
@@ -454,7 +457,16 @@ func (c *Controller) updateERLControllers() {
 	c.refillSet.Store(&served)
 
 	for deviceUUID, members := range membersByDevice {
+		sharing := limitedMembers(members) > 1
 		deviceUtil, deviceSampled := deviceUtilization[deviceUUID]
+		more, less := false, false
+		if c.sharedCalibration && sharing && deviceSampled {
+			more, less = c.deviceConfirmation(deviceUUID, members, deviceUtil)
+		}
+		for _, m := range members {
+			m.sharing = c.sharedCalibration && sharing && m.device.UpLimit < 100
+			m.calibration.slow, m.calibration.moreConfirmed, m.calibration.lessShown = m.sharing, more, less
+		}
 		attributeDeviceUtilization(members, deviceUtil, deviceSampled,
 			c.processUtilizationFor(deviceUUID, processUtil, now, deviceUtil, deviceSampled),
 			processUtil.unmetered(deviceUUID, now), c.processShortfall(deviceUUID))
@@ -471,4 +483,15 @@ func (c *Controller) updateERLControllers() {
 			member.bucket.mu.Unlock()
 		}
 	}
+}
+
+// limitedMembers counts the workers of a device that have a compute limit.
+func limitedMembers(members []*erlMember) int {
+	n := 0
+	for _, m := range members {
+		if m.device.UpLimit < 100 {
+			n++
+		}
+	}
+	return n
 }

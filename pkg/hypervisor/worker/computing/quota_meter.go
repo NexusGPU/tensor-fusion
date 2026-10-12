@@ -211,6 +211,14 @@ type utilizationCalibration struct {
 	// frozen keeps readings out of the calibration: they are known to describe
 	// load the worker's tokens do not pay for (see erlState.cutFrom).
 	frozen bool
+
+	// slow says that the readings are those of a worker that shares its device
+	// with other limited workers (see calibrationSlowAlpha): they move the
+	// average slowly, and restart the calibration only when the device's own
+	// utilization shows the change as well (moreConfirmed, lessConfirmed).
+	// matured says that the calibration has been trusted in full once; a
+	// restart after that does not take the trust away.
+	slow, moreConfirmed, lessShown, matured bool
 }
 
 // calibrationSnapshot is what a calibration had learned at some moment.
@@ -298,7 +306,14 @@ func (c *utilizationCalibration) trust() float64 {
 	if !c.coarse {
 		return 1
 	}
-	return clampFloat64(c.evidence/calibrationTrustEvidence, 0, 1)
+	trust := clampFloat64(c.evidence/calibrationTrustEvidence, 0, 1)
+	if c.slow && !c.matured {
+		if c.samples >= calibrationSlowSamples {
+			c.matured = true
+		}
+		trust = math.Min(trust, clampFloat64(float64(c.samples)/calibrationSlowSamples, 0, 1))
+	}
+	return trust
 }
 
 // gain is the utilization (0-1) the worker gets out of one token per second.
@@ -398,7 +413,8 @@ func (c *utilizationCalibration) estimate(reading float64, meter *tokenMeter) (f
 			chance := poissonAtMost(seen, expected)
 			buysLess = chance <= calibrationLessChance || (c.lessConfirmed && chance <= calibrationLessConfirmedChance)
 		}
-		if comparable && (buysMore || buysLess) {
+		confirmed := !c.slow || (buysMore && c.moreConfirmed) || (buysLess && c.lessShown)
+		if comparable && (buysMore || buysLess) && confirmed {
 			c.disagreeing++
 		} else {
 			c.disagreeing = 0
@@ -419,6 +435,9 @@ func (c *utilizationCalibration) estimate(reading float64, meter *tokenMeter) (f
 	slowest := calibrationAlpha
 	if c.coarse {
 		slowest = calibrationCoarseAlpha
+	}
+	if c.slow {
+		slowest = calibrationSlowAlpha
 	}
 	alpha := math.Max(slowest, 1/float64(c.samples+1))
 	c.utilization += alpha * (reading - c.utilization)

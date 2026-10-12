@@ -27,11 +27,14 @@ type erlState struct {
 	coarse  bool
 
 	// limit is the compute limit (percent) the rate was last decided for, 0
-	// before the first interval. probe counts down the intervals in which what
-	// the worker spends unthrottled is measured after it became limited, and
-	// probeSpent says that it spent tokens in the previous one. See followLimit.
+	// before the first interval. While what the worker spends unthrottled is
+	// measured after it became limited, probe counts down the intervals that
+	// yield no figure although the worker spent tokens (or its meter told
+	// nothing), and probeIdle those in which it spent nothing; probeSpent says
+	// that it spent tokens in the previous one. See followLimit.
 	limit      uint32
 	probe      int
+	probeIdle  int
 	probeSpent bool
 	// settling counts down the intervals after the limit moved the rate in
 	// which utilization readings still describe the time before, and are kept
@@ -232,13 +235,23 @@ const (
 // started from those intervals took half a minute to find the rate; the
 // worker ran at a few percent of its limit meanwhile. Instead, the worker
 // stays at the highest rate until two intervals in a row show what it spends:
-// the second is one in which it paid for everything it ran, unthrottled. With
-// the utilization the device shows for it over the same time (its part by
-// tokens next to other workers) that is what a token buys it, and the rate is
-// the one its limit calls for: limit x spent / utilization. Its calibrations
-// start from that figure with little weight. If there is nothing to measure
-// for limitProbeIntervals (an idle worker, no device reading), it starts from
-// the initial rate like a new worker.
+// the second is one in which it paid for everything it ran, unthrottled (its
+// limiter starts to charge a moment after the limit was set, so the first is
+// not). With the utilization read for it over the same time that is what a
+// token buys it, and the rate is the one its limit calls for: limit x spent /
+// utilization. The utilization is the one the device shows (the worker's part
+// by tokens next to other workers) where the device is read for its workers,
+// and otherwise what the worker's own processes read: a device that also
+// carries a process no bucket accounts for, a display server's context for
+// one, is never read, and measured on such a device the measurement used to
+// end without a figure while the meter showed the spending in every interval.
+// The worker's calibrations start from that figure with little weight.
+//
+// The measurement waits for what it needs: intervals in which the worker
+// spends nothing do not count against it for a minute, and it is given up
+// after limitProbeIntervals intervals of spending (or of a meter that tells
+// nothing) without a utilization to go with it; see limitProbeIntervals. The
+// worker then starts from the initial rate like a new one.
 func (c *Controller) followLimit(
 	es *erlState, member *erlMember, targetUtil float64,
 ) (pinned bool, balance balanceReset) {
@@ -258,7 +271,8 @@ func (c *Controller) followLimit(
 		// A rate set by the limit is not a run of lowering to test for effect.
 		es.cutFrom = 0
 		if previous >= 100 {
-			es.currentRate, es.probe, es.probeSpent = c.config.rateMax, limitProbeIntervals, spending
+			es.currentRate, es.probe, es.probeIdle = c.config.rateMax, limitProbeIntervals, limitProbeIdleIntervals
+			es.probeSpent = spending
 			klog.Infof("ERL [%s] limit changed from none to %d%%: measuring what the worker spends unthrottled",
 				member.stateKey, limit)
 			return true, balanceWithoutDebt
@@ -287,41 +301,79 @@ func (c *Controller) followLimit(
 	if es.probe == 0 {
 		return false, balanceKept
 	}
-	if spending && es.probeSpent && member.deviceRead {
-		// The worker's part of what the device shows, by the tokens spent in
-		// this interval; all of it for a worker that has the device to itself.
-		utilization := 0.0
-		if total := member.deviceSpending - member.meter.window + spent; total > 0 {
-			utilization = clampFloat64(member.deviceLoad*spent/total, 0, 1)
+	if utilization, read := probeUtilization(member, spent); spending && es.probeSpent && read &&
+		utilization >= limitProbeMinUtil {
+		es.currentRate = clampFloat64(targetUtil*spent/utilization, c.config.rateMin, c.config.rateMax)
+		es.smoothedUtil, es.initialized, es.probe, es.settling = targetUtil, true, 0, limitSettleIntervals
+		// What the calibrations saw so far relates the utilization of a
+		// worker that was not held back to tokens it did not have to spend.
+		// The one of the kind of reading the figure was taken from starts
+		// from it, with the weight of its first few readings; the one of
+		// per-process readings starts empty next to a device that is read.
+		seed := func(coarse bool) utilizationCalibration {
+			seeded := utilizationCalibration{
+				coarse: coarse, utilization: utilization, consumption: spent, samples: calibrationMinSamples,
+			}
+			seeded.evidence = seeded.minEvidence()
+			return seeded
 		}
-		if utilization >= limitProbeMinUtil {
-			es.currentRate = clampFloat64(targetUtil*spent/utilization, c.config.rateMin, c.config.rateMax)
-			es.smoothedUtil, es.initialized, es.probe, es.settling = targetUtil, true, 0, limitSettleIntervals
-			// What the calibrations saw so far relates the utilization of a
-			// worker that was not held back to tokens it did not have to spend.
+		kind := "its processes' reading"
+		switch {
+		case member.deviceRead:
+			kind = "the device's reading"
 			if member.fallback != nil {
-				*member.fallback = utilizationCalibration{
-					utilization: utilization, consumption: spent,
-					samples: calibrationMinSamples, evidence: calibrationMinEvidence,
-				}
+				*member.fallback = seed(false)
 			}
 			if member.calibration != nil {
 				*member.calibration = utilizationCalibration{coarse: true}
 			}
-			klog.Infof("ERL [%s] limit %d%%: the worker spent %.4g tokens/s at %.0f%% of the device unthrottled: "+
-				"refill rate %.4g tokens/s", member.stateKey, limit, spent, utilization*100, es.currentRate)
-			return true, balanceEmptied
+		case member.calibration != nil:
+			*member.calibration = seed(true)
 		}
+		klog.Infof("ERL [%s] limit %d%%: the worker spent %.4g tokens/s at %.0f%% of the device unthrottled (%s): "+
+			"refill rate %.4g tokens/s", member.stateKey, limit, spent, utilization*100, kind, es.currentRate)
+		return true, balanceEmptied
 	}
+	// An interval in which the meter shows that nothing was spent is one of an
+	// idle worker; any other without a figure is one of a worker that runs
+	// unthrottled, or may.
 	es.probeSpent = spending
-	if es.probe--; es.probe == 0 {
-		es.currentRate = clampFloat64(initialRate, c.config.rateMin, c.config.rateMax)
+	if idle := member.meter.measured && !spending; idle {
+		es.probeIdle--
+	} else {
+		es.probe--
+	}
+	if es.probe <= 0 || es.probeIdle <= 0 {
+		es.currentRate, es.probe = clampFloat64(initialRate, c.config.rateMin, c.config.rateMax), 0
 		es.smoothedUtil, es.initialized = 0, false
-		klog.Infof("ERL [%s] limit %d%%: nothing to measure what the worker spends by: starting from %.4g tokens/s",
-			member.stateKey, limit, es.currentRate)
+		klog.Infof("ERL [%s] limit %d%%: nothing to measure what the worker spends by (spending %t, device read %t, "+
+			"processes read %t): starting from %.4g tokens/s",
+			member.stateKey, limit, spending, member.deviceRead, member.processRead, es.currentRate)
 		return true, balanceEmptied
 	}
 	return true, balanceKept
+}
+
+// probeUtilization is the utilization (0-1) that goes with what a worker spent
+// in this interval (tokens/s) while it runs unthrottled, and whether there is
+// one: its part of what the device shows, by the tokens spent in this interval
+// (all of it for a worker that has the device to itself). Where the device is
+// not read, the same part of what the processes of the device's limited
+// workers read together, or what its own processes read when not all of those
+// workers have a reading.
+func probeUtilization(member *erlMember, spent float64) (utilization float64, read bool) {
+	load, spending := member.deviceLoad, member.deviceSpending
+	switch {
+	case member.deviceRead:
+	case member.processesRead:
+		load, spending = member.processesLoad, member.processesSpending
+	default:
+		return clampFloat64(member.processLoad, 0, 1), member.processRead
+	}
+	if total := spending - member.meter.window + spent; total > 0 {
+		utilization = clampFloat64(load*spent/total, 0, 1)
+	}
+	return utilization, true
 }
 
 // signalReestablished follows the signal of a worker whose rate was adopted,
@@ -667,7 +719,19 @@ func (c *Controller) updateERLBucket(
 			// little to run. The right rate for a worker is then the same
 			// whether it is busy or idle, so it neither climbs while the worker
 			// idles nor has to be found again when it resumes.
-			right := clampFloat64(targetUtil/es.regimeGain(member.gain), c.config.rateMin, c.config.rateMax)
+			regime := es.regimeGain(member.gain)
+			if member.sharing {
+				// Next to other limited workers the rate follows what a token is
+				// found to buy now: what looks there like work alternating
+				// between two kinds is, as a rule, the driver booking a neighbor's
+				// samples under this worker for a while (see calibrationSlowAlpha),
+				// and holding the rate at the highest such figure kept a worker
+				// at a fraction of its limit for two minutes at a time. The
+				// bookkeeping above runs either way; a worker that has its device
+				// to itself is treated as before.
+				regime = member.gain
+			}
+			right := clampFloat64(targetUtil/regime, c.config.rateMin, c.config.rateMax)
 			if math.Abs(right-es.currentRate) > calibratedRateDeadband*es.currentRate {
 				// A worker that its own readings show to be held under its share
 				// by the figure derived from the device, and that drains its

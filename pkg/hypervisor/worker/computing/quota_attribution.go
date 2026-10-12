@@ -56,9 +56,20 @@ type erlMember struct {
 	// between them (deviceRead).
 	deviceLoad, deviceSpending float64
 	deviceRead                 bool
+	// processLoad is what the worker's own processes read in this interval
+	// (0-1), as read, when those readings describe it (processRead).
+	// processesLoad is what the processes of all limited workers of the device
+	// read together and processesSpending what those workers spent in the time
+	// it describes (tokens/s), when every one of them has both
+	// (processesRead); see splitProcessReadings.
+	processLoad, processesLoad, processesSpending float64
+	processRead, processesRead                    bool
 	// held says that the worker's own readings put what a token buys it below
 	// the figure derived from the device: it is being held under its share.
 	held bool
+	// sharing says that the device has other limited workers and that their
+	// per-process readings are treated accordingly (sharedCalibrationEnv).
+	sharing bool
 	// coarse says that the worker's per-process readings took part in its
 	// figure of this interval.
 	coarse bool
@@ -284,6 +295,7 @@ func attributeDeviceUtilization(
 	for _, m := range members {
 		m.utilization, m.source, m.calibrated, m.gain = 0, utilizationUnknown, false, 0
 		m.deviceLoad, m.deviceSpending, m.deviceRead, m.held, m.coarse = 0, 0, false, false, false
+		m.processLoad, m.processRead, m.processesLoad, m.processesSpending, m.processesRead = 0, false, 0, 0, false
 
 		if m.device.UpLimit >= 100 {
 			attributeUnlimitedUtilization(m, len(members), deviceUtil, deviceSampled, processUtil, unmetered)
@@ -317,6 +329,7 @@ func attributeDeviceUtilization(
 		deviceBusy := deviceSampled && deviceUtil >= processCheckBusyUtil && unaccounted >= silentUnaccounted
 		processReading, fromProcesses := processDerivedReading(m, processUtil, deviceBusy)
 		m.coarse = fromProcesses
+		m.processLoad, m.processRead = processReading, fromProcesses
 		if fromProcesses {
 			if m.calibration != nil {
 				ratio, known := m.fallback.recentRatio()
@@ -344,6 +357,34 @@ func attributeDeviceUtilization(
 			m.utilization, m.source = processEstimate, utilizationFromProcesses
 		case deviceSource != utilizationUnknown:
 			m.utilization, m.source = deviceEstimate, deviceSource
+		}
+	}
+	splitProcessReadings(members)
+}
+
+// splitProcessReadings notes, for the limited workers of a device, what their
+// processes read together and what they spent, when all of them have a reading
+// and a measured spending. One worker's reading is coarse: the driver books a
+// sample under a single process, and for seconds at a time part of one worker's
+// work under another's. What they read together does not depend on that, and a
+// worker's part of it by the tokens it spent is to the per-process readings
+// what the split of the device's utilization is to the device's (see
+// deviceDerivedReading), on a device whose own utilization is not read.
+func splitProcessReadings(members []*erlMember) {
+	load, spending := 0.0, 0.0
+	for _, m := range members {
+		if m.device.UpLimit >= 100 {
+			continue
+		}
+		if !m.processRead || !m.meter.measured {
+			return
+		}
+		load += m.processLoad
+		spending += m.meter.window
+	}
+	for _, m := range members {
+		if m.device.UpLimit < 100 {
+			m.processesLoad, m.processesSpending, m.processesRead = clampFloat64(load, 0, 1), spending, true
 		}
 	}
 }
@@ -449,6 +490,11 @@ func processDerivedReading(m *erlMember, processUtil map[string]float64, deviceB
 type processCheck struct {
 	process, device float64 // utilization, 0-1
 	samples         int
+	// What the device showed and what its limited workers' token spending
+	// amounts to by what a token is currently taken to buy each of them, over
+	// the most recent readings; see Controller.deviceConfirmation.
+	shown, expected [calibrationRecent]float64
+	next, count     int
 }
 
 // processUtilizationFor returns the per-worker utilization of a device from the
@@ -509,4 +555,66 @@ func (c *Controller) processShortfall(deviceUUID string) float64 {
 		return 0
 	}
 	return math.Max(check.device-check.process, 0)
+}
+
+// currentGain is what a token is currently taken to buy the worker (utilization
+// per token/s): its per-process calibration as far as that is trusted, the
+// device-derived one for the rest; false while neither is calibrated.
+func (m *erlMember) currentGain() (float64, bool) {
+	process, device := m.calibration.calibrated(), m.fallback.calibrated()
+	switch {
+	case process && device:
+		trust := m.calibration.trust()
+		return trust*m.calibration.gain() + (1-trust)*m.fallback.gain(), true
+	case process:
+		return m.calibration.gain(), true
+	case device:
+		return m.fallback.gain(), true
+	}
+	return 0, false
+}
+
+// deviceConfirmation says whether the device's own utilization shows, over the
+// recent readings, that the tokens its limited workers spend buy more, or
+// less, than they are taken to. The device's figure is exact and does not
+// depend on which process the driver books a sample under, so it tells a real
+// change of somebody's work from the per-process readings merely wandering
+// between the workers; which worker it is, their own readings then say. On a
+// device that is full everybody is slowed down, which is not work that changed:
+// "less" is not concluded from one.
+func (c *Controller) deviceConfirmation(deviceUUID string, members []*erlMember, deviceUtil float64) (more, less bool) {
+	expected := 0.0
+	for _, m := range members {
+		if m.device.UpLimit >= 100 {
+			return false, false
+		}
+		gain, known := m.currentGain()
+		if !known || !m.meter.measured {
+			return false, false
+		}
+		expected += gain * m.meter.window
+	}
+	c.erlStatesMu.Lock()
+	defer c.erlStatesMu.Unlock()
+	check := c.processChecks[deviceUUID]
+	if check == nil {
+		check = &processCheck{}
+		c.processChecks[deviceUUID] = check
+	}
+	check.shown[check.next], check.expected[check.next] = deviceUtil, expected
+	check.next = (check.next + 1) % calibrationRecent
+	check.count = min(check.count+1, calibrationRecent)
+	if check.count < calibrationRecent {
+		return false, false
+	}
+	shown, want := 0.0, 0.0
+	for i := range calibrationRecent {
+		shown += check.shown[i]
+		want += check.expected[i]
+	}
+	if want <= 0 || shown < futilityMinReading*calibrationRecent {
+		return false, false
+	}
+	ratio := shown / want
+	return ratio >= calibrationMoreConfirmation, ratio <= 1/calibrationMoreConfirmation && shown < futilitySaturated*calibrationRecent
 }
