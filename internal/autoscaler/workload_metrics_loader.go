@@ -100,6 +100,15 @@ func (l *workloadMetricsLoader) addWorkload(ctx context.Context, workloadID Work
 		firstLoad:          true,
 	}
 
+	// A cron scaling rule needs no usage data and its window may open at any
+	// time, so a workload that has one is evaluated from the start. The
+	// recommenders that work from usage hold back for InitialDelayPeriod on
+	// their own.
+	if hasEnabledCronScalingRule(state.AutoScalingConfigSnapshot()) {
+		initialDelay = 0
+		loaderState.initialDelay = 0
+	}
+
 	// Set timer for initial delay
 	timeSinceCreation := time.Since(state.CreationTime())
 	if timeSinceCreation < initialDelay {
@@ -245,6 +254,17 @@ func (l *workloadMetricsLoader) loadRealtimeMetricsForWorkload(loaderState *work
 	loaderState.lastQueryTime = now
 
 	return nil
+}
+
+// hasEnabledCronScalingRule reports whether the config has a cron scaling rule
+// the cron recommender would consider (see getActiveCronScalingRule).
+func hasEnabledCronScalingRule(cfg tfv1.AutoScalingConfig) bool {
+	for _, rule := range cfg.CronScalingRules {
+		if rule.Enable && rule.Name != "" && rule.Start != "" && rule.End != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func parseDurationOrDefault(durationStr string, defaultDuration time.Duration) time.Duration {
