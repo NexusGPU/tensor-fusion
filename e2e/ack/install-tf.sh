@@ -2,7 +2,7 @@
 # ACK tier, stage 3: TensorFusion from this checkout's chart, configured like the
 # EKS stack (terraform/scripts/install-tf.sh). Image tags are always explicit.
 #
-#   TF_RELEASE_TAG        operator + hypervisor release under test (default 2.17.28)
+#   TF_RELEASE_TAG        operator + hypervisor release under test (default 2.17.30)
 #   TF_OPERATOR_TAG       operator tag alone, for a development build (default: TF_RELEASE_TAG).
 #                         A tag no registry has must already be in containerd on the system node.
 #   TF_VGPU_PROVIDER_TAG  tensorfusion/vgpu-provider-nvidia tag     (default 1.3.12)
@@ -15,7 +15,7 @@
 source "$(dirname "$0")/lib.sh"
 need kubectl helm jq
 
-: "${TF_RELEASE_TAG:=2.17.28}"
+: "${TF_RELEASE_TAG:=2.17.30}"
 : "${TF_OPERATOR_IMAGE:=tensorfusion/tensor-fusion-operator}"
 : "${TF_OPERATOR_TAG:=${TF_RELEASE_TAG}}"
 : "${TF_HYPERVISOR_IMAGE:=tensorfusion/tensor-fusion-hypervisor:${TF_RELEASE_TAG}}"

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 )
 
 // Evaluation of performance under a compute share. Pure functions: the same
@@ -61,8 +62,32 @@ type PerfPoint struct {
 	Error         string   `json:"error,omitempty"`
 	Skipped       string   `json:"skipped,omitempty"`
 
+	// MeasuredAt is when the measurement was read back (shortly after its window
+	// ended); Machine is what the GPU itself reported over that window.
+	MeasuredAt time.Time `json:"measured_at,omitempty"`
+	Machine    *Machine  `json:"machine,omitempty"`
+
 	Verdicts []Verdict `json:"verdicts,omitempty"`
 	Pass     *bool     `json:"pass,omitempty"`
+}
+
+// Machine holds device-level readings of the busiest GPU of the pool during a
+// measurement window, taken from the hypervisor's own telemetry
+// (tf_gpu_usage in GreptimeDB), not from inside the workload.
+type Machine struct {
+	GPU         string  `json:"gpu"`
+	Node        string  `json:"node"`
+	Samples     int     `json:"samples"`
+	UtilAvg     float64 `json:"gpu_util_avg_pct"`
+	UtilMax     float64 `json:"gpu_util_max_pct"`
+	TFlopsAvg   float64 `json:"compute_tflops_avg"`
+	VRAMMaxMiB  float64 `json:"vram_used_max_mib"`
+	VRAMMaxPct  float64 `json:"vram_used_max_pct"`
+	PowerAvgW   float64 `json:"power_avg_w"`
+	PowerMaxW   float64 `json:"power_max_w"`
+	TempMaxC    float64 `json:"temperature_max_c"`
+	WindowS     float64 `json:"window_s"`
+	InstanceTyp string  `json:"instance_type,omitempty"`
 }
 
 // Verdict is one criterion applied to one point.
@@ -92,19 +117,39 @@ type Criteria struct {
 	// TTFT p95 <= TTFTK * baseline_p95 / s + TTFTFixed. The fixed part is what
 	// separates "proportionally slower" from "stalled once before the first token".
 	TTFTK, TTFTFixed float64
-	// Stall signature of the soft limiter (1 s token wait, 500 ms refill steps).
+	// Stall signature: a limiter that starves a workload shows up as long gaps.
 	MaxGapS       float64 // no inter-token gap / call may reach this
 	GapRatePer1k  float64 // gaps >= 400 ms per 1000 tokens (or calls)
 	TailRatioK    float64 // (ITL p99 / p50) may grow at most this much over the baseline's ratio: bimodal = cliff
 	MaxErrorRate  float64
 	MinSamplesP99 int // below this many samples a p99 is reported but not judged
+
+	// UtilBand: the limit is judged on what the limiter controls, the device's
+	// busy time, and on a floor for the work done (see criteriaFor, soft).
+	UtilBand bool
+	// device utilisation may exceed the share by this much (fraction of the card).
+	UtilOver float64
+	// throughput(s) / throughput(100%) may exceed the share by this much, capped at LooseCap.
+	LooseAbs, LooseCap float64
+	// seconds added to the proportional tail bounds: one refill period of the limiter.
+	TailAbs float64
 }
 
 // criteriaFor returns the bounds for an isolation mode.
 //
-// soft: an in-process token bucket fed by a PID loop on measured utilisation,
-// refilled every 500 ms. It regulates around the target, so +-25 % of the
-// proportional throughput is the honest band; tails get 1.5x.
+// soft: an in-process token bucket whose rate the hypervisor steers so that the
+// device's busy time (NVML utilisation) meets the share; it is refilled every
+// 10 ms and a blocked launch sleeps at most 20 ms. Busy time is a composite
+// signal and work per busy millisecond differs between workloads and between
+// duty-cycled and sustained load (a T4 at a 50 % share holds 56 % utilisation
+// and delivers 80 % of the sustained matmul rate, flat over five minutes). So
+// the limit is judged on three things instead of a symmetric throughput band:
+//   - never too tight: throughput >= 0.85 x share of the 100 % run;
+//   - loose only within bounds: device utilisation <= share + 10 points (when
+//     the window holds at least two device samples), and throughput ratio
+//     <= share + 0.35, capped at 0.98;
+//   - tails: proportional bound plus one refill period.
+//
 // hard: the limit is applied by the worker that executes the calls, a direct
 // mechanism: +-15 % and 1.3x. It pays for that with remoting overhead, hence
 // the larger allowance at 100 %.
@@ -116,12 +161,33 @@ func criteriaFor(mode string) Criteria {
 		MaxGapS: 0.9, GapRatePer1k: 5, TailRatioK: 3, MaxErrorRate: 0.01, MinSamplesP99: 300,
 	}
 	switch mode {
+	case "soft":
+		c.UtilBand, c.BandLow, c.UtilOver, c.LooseAbs, c.LooseCap, c.TailAbs = true, 0.85, 0.10, 0.35, 0.98, 0.012
 	case "hard":
 		c.BandLow, c.BandHigh, c.OverheadMax, c.TailK = 0.85, 1.15, 0.15, 1.3
 	case "shared":
 		c.OverheadMax = 0.03
 	}
 	return c
+}
+
+// limitBinds reports whether a share restricts the workload at all: a
+// launch-bound or CPU-bound workload that keeps the device less busy than its
+// share when unlimited (a tiny MLP on a T4: about 20 %) runs at full speed
+// under that share, and that is the limiter being right, not ineffective.
+// Without device readings of the baseline the share is assumed to bind.
+func limitBinds(base *PerfPoint, share float64) bool {
+	if base == nil || base.Machine == nil || base.Machine.Samples == 0 {
+		return true
+	}
+	return base.Machine.UtilAvg/100 >= share+0.05
+}
+
+func tailAllowance(c Criteria) string {
+	if c.TailAbs <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" + %.0f ms", c.TailAbs*1000)
 }
 
 func (p *PerfPoint) groupKey() string {
@@ -225,6 +291,18 @@ func evaluate(points []PerfPoint) int {
 			// upper bound of the load itself applies there.
 			if p.Load == "fixed-rate" {
 				p.add("fixed-rate-served", ratio >= math.Min(1, lo/s)*0.95 || ratio >= 0.95, ratio, ">= 0.95 of offered load unless the share is below the load")
+			} else if c.UtilBand {
+				p.add("throughput-not-starved", ratio >= lo, ratio, fmt.Sprintf(">= %.2f (%.0f%% of a %.0f%% share)", lo, c.BandLow*100, s*100))
+				loose := math.Min(s+c.LooseAbs, c.LooseCap)
+				if limitBinds(base, s) {
+					p.add("throughput-looseness-bounded", ratio <= loose, ratio, fmt.Sprintf("<= %.2f (share %.0f%%)", loose, s*100))
+				} else {
+					p.add("limit-not-binding", true, base.Machine.UtilAvg/100, fmt.Sprintf("unlimited, the workload keeps the device %.0f%% busy: a %.0f%% share does not restrict it", base.Machine.UtilAvg, s*100))
+				}
+				if p.Machine != nil && p.Machine.Samples >= 2 {
+					util := p.Machine.UtilAvg / 100
+					p.add("utilization-near-share", util <= s+c.UtilOver, util, fmt.Sprintf("device busy time <= %.2f (share %.0f%% + %.0f points)", s+c.UtilOver, s*100, c.UtilOver*100))
+				}
 			} else {
 				p.add("throughput-proportional", ratio >= lo && ratio <= hi, ratio, fmt.Sprintf("%.2f..%.2f (share %.0f%%)", lo, hi, s*100))
 			}
@@ -240,15 +318,15 @@ func evaluate(points []PerfPoint) int {
 				// one sample per token, and a per-request mean (TPOT) hides stalls
 				// that a stream of tokens shows.
 				if bt.P99 > 0 && pt.N >= c.MinSamplesP99 {
-					r := pt.P99 / (bt.P99 / s)
-					p.add("p99-no-cliff", r <= c.TailK, r, fmt.Sprintf("<= %.1fx of baseline/share", c.TailK))
+					r := math.Max(0, pt.P99-c.TailAbs) / (bt.P99 / s)
+					p.add("p99-no-cliff", r <= c.TailK, r, fmt.Sprintf("<= %.1fx of baseline/share%s", c.TailK, tailAllowance(c)))
 				} else if bt.P95 > 0 && pt.N >= c.MinSamplesP99/5 {
-					r := pt.P95 / (bt.P95 / s)
-					p.add("p95-no-cliff", r <= c.TailK, r, fmt.Sprintf("<= %.1fx of baseline/share (too few samples for p99)", c.TailK))
+					r := math.Max(0, pt.P95-c.TailAbs) / (bt.P95 / s)
+					p.add("p95-no-cliff", r <= c.TailK, r, fmt.Sprintf("<= %.1fx of baseline/share%s (too few samples for p99)", c.TailK, tailAllowance(c)))
 				}
 				if base.ITL.P99 > 0 && p.ITL.N >= c.MinSamplesP99 {
-					r := p.ITL.P99 / (base.ITL.P99 / s)
-					p.add("itl-p99-no-cliff", r <= c.TailK, r, fmt.Sprintf("<= %.1fx of baseline/share", c.TailK))
+					r := math.Max(0, p.ITL.P99-c.TailAbs) / (base.ITL.P99 / s)
+					p.add("itl-p99-no-cliff", r <= c.TailK, r, fmt.Sprintf("<= %.1fx of baseline/share%s", c.TailK, tailAllowance(c)))
 				}
 			}
 			if base.TTFT.P95 > 0 && p.TTFT.N > 0 {
@@ -262,7 +340,7 @@ func evaluate(points []PerfPoint) int {
 		}
 
 		// Flat curve: judged on the lowest share of a sweep.
-		if base != nil && lowest[p.groupKey()] == p && base != p && base.Throughput > 0 && p.Load != "fixed-rate" && s <= 0.6 {
+		if base != nil && lowest[p.groupKey()] == p && base != p && base.Throughput > 0 && p.Load != "fixed-rate" && s <= 0.6 && limitBinds(base, s) {
 			ratio := p.Throughput / base.Throughput
 			p.add("limit-is-effective", ratio <= c.FlatMax, ratio, fmt.Sprintf("<= %.2f of the 100%% throughput at share %.0f%%", c.FlatMax, s*100))
 		}

@@ -103,6 +103,7 @@ def cmd_burn(args):
 
     emit({
         "size": n, "fp16": args.fp16, "seconds": args.seconds, "warmup": args.warmup,
+        "window_s": span,
         "iters": iters, "iters_per_s": iters / span if span > 0 else 0.0,
         "tflops": iters / span * flops_per_iter / 1e12 if span > 0 else 0.0,
         "iter_s": {"p50": pct(50), "p95": pct(95), "p99": pct(99), "max": durations[-1] if durations else None},

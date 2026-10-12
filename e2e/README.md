@@ -8,6 +8,8 @@
 | `suite/` | Go + Ginkgo 的端到端用例（build tag `e2e`），靠 kubeconfig 驱动，对任何集群都能跑（EKS、裸金属） |
 | `suite/workloads/` | 在 Pod 里运行的探针与压测脚本（Python） |
 | `mock/` | 演练模式用的 mock accelerator 构建脚本 |
+| `ack/` | 阿里云 ACK + Karpenter 阿里云 provider 的一次性环境（真实 T4）。说明见 `ack/README.md`，结论见 `ack/TEST-SUMMARY.md`，手工步骤见 `ack/MANUAL-TEST-CASES.md` |
+| `perf-history/` | 每个版本的性能结果留档（`runs/<版本>/<环境>.json`）与本地查看器 `index.html`；由 `tools/perf_history.py` 写入 |
 | `kwok/` | 不需要云账号的一档：kind + KWOK 假节点 + Karpenter KWOK provider + chart + fake hypervisor（`fakehv/`）。见 6.9 |
 | `tools/report.py` | 把一次或多次运行的结果生成对比报告（Markdown + CSV + 图表用 JSON） |
 | `pricing/` | 实例单价表（来自 AWS Price List API），`make cost` 与 FinOps 用例共用 |
@@ -17,11 +19,12 @@
 
 ---
 
-## 1. 现状（2026-10-12）
+## 1. 现状（2026-10-13）
 
-- GPU 配额为 0（按需和 spot 的 G/VT vCPU 都是 0，提额申请在 AWS 人工审核中），**没有任何用例在真实 GPU 上执行过**。
+- **真实 GPU 上的首次执行在阿里云 ACK（T4）上完成**：smoke、core、isolation、karpenter-finops（路径 A 与路径 B）、perf-quick 都已执行，逐条结果、发现的问题与修复见 `ack/TEST-SUMMARY.md`。本文各表的「状态」栏仍按 AWS 环境记录。
+- AWS：GPU 配额为 0（按需和 spot 的 G/VT vCPU 都是 0，提额申请在 AWS 人工审核中），**没有任何用例在 AWS 的真实 GPU 上执行过**。
 - 已在真实 AWS 上执行的：环境起停（3 轮）、自毁开关（2 次）、`smoke-nogpu` 档、`rehearsal` 档（mock GPU）、`dryrun` 档。结果见第 9 节。
-- `isolation`、`perf` 两档只做到了 dry-run：清单过了 server-side dry-run、镜像与模型可解析、压测脚本与判定逻辑在 CPU 上跑通。它们的断言阈值是设计值，**第一次真实执行前不要把这两档的任何结论当成已验证**。
+- 在 AWS 上，`isolation`、`perf` 两档只做到了 dry-run：清单过了 server-side dry-run、镜像与模型可解析、压测脚本与判定逻辑在 CPU 上跑通。它们的断言阈值是设计值，**第一次真实执行前不要把这两档的任何结论当成已验证**。
 
 ## 2. 执行模式：谁也别把演练当成硬件验证
 
@@ -274,7 +277,7 @@ TF_RELEASE_TAG=2.17.23 make kwok-up                   # 换被测版本（对比
 | LLM 流式推理（vLLM） | 输出 tokens/s、TPM、请求/s | TTFT、TPOT、逐 token 间隔（ITL）、请求总时延，各 p50 / p95 / p99 / max | ITL ≥0.4s、≥0.9s 的次数；落在 0.5s、1s 附近的次数；ITL 的双峰系数；错误率、超时数 |
 | ONNX Runtime / TorchBench / MLPerf / matmul | samples/s 或 iters/s | 单次调用时延 p50 / p95 / p99 / max | 单次调用 ≥0.4s、≥0.9s 的次数 |
 
-为什么盯 0.5s / 1s：soft limiter 等 token 的超时是 1s，令牌每 500ms 补一次。限流器「饿死」负载时的特征就是周期性的约 0.5s / 1s 停顿。
+为什么盯 0.5s / 1s：早期的 soft limiter 等 token 的超时是 1s、令牌每 500ms 补一次，「饿死」负载时的特征是周期性的约 0.5s / 1s 停顿。现在的限流器每 10ms 补充、单次等待至多 20ms，正常工作时不会出现这样的间隔，所以这两个计数仍然是「限流器出了问题」的信号。
 
 LLM 压测端（`workloads/llm_client.py`，纯标准库）两种负载：闭环固定并发（饱和）和开环固定到达率（低于容量时不应有任何退化）。
 
@@ -299,9 +302,10 @@ LLM 压测端（`workloads/llm_client.py`，纯标准库）两种负载：闭环
 | 判据 | soft | hard | 说明 |
 |---|---|---|---|
 | **(a) 有效：吞吐成比例** `thr(s)/thr(100%)` | `[0.75·s, 1.25·s + 0.05]` | `[0.85·s, 1.15·s + 0.05]` | soft 是进程内令牌桶 + 对利用率的 PID 反馈、500ms 补充一次，围绕目标调节，±25% 是诚实的带宽；hard 在执行调用的 worker 里直接限制，机制更直接，取 ±15% |
+| (a) soft 的实际判法（T4 实测后改，2026-10-13） | 吞吐 ≥ 0.85·s（不得偏紧）；吞吐 ≤ min(s + 0.35, 0.98)（偏松有界）；窗口内有 ≥ 2 个设备样本时，设备利用率 ≤ s + 10 个点 | 仍按上一行的对称带 | soft 限流控制的是设备忙时比例（NVML 利用率），不是吞吐。同一张 T4 上限额 50% 时利用率 53–56%、matmul 吞吐为满载的 79–81%，五分钟内不变：间歇负载下每毫秒完成的计算多于持续满载。所以偏松看利用率，吞吐只设下限和一个宽上限 |
 | (a) 限额不是摆设 | 最低份额（≤60%）的吞吐 ≤ 100% 时的 0.85 | 同 | 曲线是平的就是没限住 |
 | (a) 100% 份额相对 native 的开销 | 吞吐损失 ≤ 5% | ≤ 15%（shared ≤ 3%） | 「不限时隔离没有代价」是要验证的说法；hard 有 remoting 开销 |
-| **(b) 无断崖：尾延迟** TPOT（LLM，按请求）或单次调用时延的 p99（样本不足 300 时用 p95） | ≤ 1.5 × 基线 / s | ≤ 1.3 × | 按比例变慢是预期，超过比例的部分是断崖 |
+| **(b) 无断崖：尾延迟** TPOT（LLM，按请求）或单次调用时延的 p99（样本不足 300 时用 p95） | ≤ 1.5 × 基线 / s + 12 ms | ≤ 1.3 × | 按比例变慢是预期，超过比例的部分是断崖。soft 的 12 ms 是限流器的一个补充周期（10 ms 补充、单次等待至多 20 ms），亚毫秒级的调用每个周期必然有一次落在间隙上 |
 | (b) ITL p99（LLM，按 token） | ≤ 1.5 × 基线 ITL p99 / s | ≤ 1.3 × | TPOT 是每个请求的均值，会把停顿抹平；逐 token 间隔不会。演练里「500ms 阶梯放行」的 stand-in：TPOT p50 完全成比例，ITL p99 是比例值的 4.5 倍 |
 | (b) p50 | ≤ 1.3 × 基线 p50 / s | 同 | |
 | (b) TTFT p95 | ≤ 1.5 × 基线 p95 / s + 0.25s | 同 | 加一个固定项，用来区分「按比例变慢」和「首 token 前卡了一下」 |
@@ -327,6 +331,7 @@ LLM 压测端（`workloads/llm_client.py`，纯标准库）两种负载：闭环
 | ID | 档位 | 内容 |
 |---|---|---|
 | PERF-LLM-01 | perf / perf-quick | vLLM：native 基线 + soft 份额扫描（quick：100 / 50 / 25；full：100 / 75 / 50 / 25）+ 50% 份额下的固定到达率 |
+| PERF-CO-01 | perf / perf-quick | 切分 + 共调度：soft 100% 独占作参照，然后两个 vLLM 实例各 50% 落在同一张卡、同时打满。判定：同卡、合计吞吐 ≥ 独占的 70%、两租户吞吐之比 ≥ 0.7、无停顿 |
 | PERF-LLM-02 | perf / perf-quick | vLLM：native + hard 份额扫描（quick：100 / 50） |
 | PERF-LLM-03 | perf | vLLM 变体：整卡 shared；VRAM 紧 / 松 × soft 100 / 50；`--enforce-eager` |
 | PERF-ORT-01 | perf / perf-quick | ONNX Runtime：native、soft 100、soft 50（full 追加 soft 25、shared、hard 100 / 50、soft 50 + 吵闹邻居） |
@@ -341,6 +346,8 @@ LLM 压测端（`workloads/llm_client.py`，纯标准库）两种负载：闭环
 | `perf-quick`（默认） | 每次都跑，适合 EKS spot 节点 | 15s 预热 + 60s 窗口 | 1 张 T4 上约 60 分钟，约 $0.75（按需） |
 | `perf-full`（`E2E_PERF_PROFILE=full`） | 完整设计，主要给免费的裸金属 2×RTX 3090；EKS 上只建议 `FOCUS='PERF-LLM-0[12]'` 做跨硬件确认 | 30s 预热 + 180s 窗口 | 裸金属约 6 小时；EKS 精简子集约 50 分钟、约 $0.6 |
 
+每个测量点还带一组机器指标（`machine`）：测量窗口内这张 GPU 的利用率、实际算力、显存占用、功耗、温度，取自 hypervisor 的设备遥测（GreptimeDB 的 `tf_gpu_usage`，每分钟一行），不是容器内看到的值。窗口短于两分钟时可能只有一个样本，样本数随指标一起记录。
+
 ### 7.5 输出
 
 每次运行一个机器可读结果（`summary.json`）加每个用例的 `<ID>.perf.json`（每个测量点的全部指标与逐条判据）。`make report` 生成：
@@ -350,6 +357,15 @@ LLM 压测端（`workloads/llm_client.py`，纯标准库）两种负载：闭环
 - `perf.json`：画图用的序列（每个 运行 × 负载 × 模型 × 模式 × 指标 一条，点为 `[份额, 值, 是否通过]`）。
 
 把裸金属和 EKS 的结果目录一起传给 `make report RUNS="…"` 就是并排对比；把两个版本的结果一起传就能看回归。
+
+**按版本留档**：`results/` 不入库，要长期保留的一次运行用
+
+```bash
+python3 tools/perf_history.py record --version 2.17 --env ack-us-east-1-t4 --label "阿里云 ACK us-east-1 · T4" results/<run-id> ...
+open perf-history/index.html
+```
+
+写进 `perf-history/runs/<版本>/<环境>.json`（入库；节点名与 GPU UUID 被去掉）并重新生成 `perf-history/data.js`。查看器是一个直接从文件系统打开的页面：LLM 的吞吐 / TTFT / TPOT / ITL、共调度两租户、其它负载、机器指标、同一环境上各版本的趋势，以及与上一个版本的环比。同一版本同一环境再次留档会覆盖。
 
 ## 8. 没有自动化的用例及原因
 

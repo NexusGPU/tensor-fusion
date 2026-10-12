@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -23,10 +24,17 @@ import (
 // pod builders (also used by DRY-ISO-01)
 // ---------------------------------------------------------------------------
 
-const pipGPU = "pip install -q onnx onnxruntime-gpu transformers"
+// onnxruntime-gpu is pinned to a build for CUDA 12 / cuDNN 9, the libraries the
+// PyTorch image carries. They sit in site-packages/nvidia/*/lib, off the loader
+// path, and torch only loads the ones it needs; the CUDA execution provider
+// wants all of cuDNN (libcudnn_adv.so.9) and otherwise falls back to CPU
+// without failing, so the directories are put on LD_LIBRARY_PATH.
+const pipGPU = "pip install -q onnx onnxruntime-gpu==1.20.0 transformers"
+
+const cudaLibPath = `export LD_LIBRARY_PATH="$(python3 -c "import glob; print(':'.join(glob.glob('/opt/conda/lib/python3*/site-packages/nvidia/*/lib')))"):$LD_LIBRARY_PATH"`
 
 func ortCommand(models string, warmup, duration, vramGi float64) string {
-	return fmt.Sprintf("%s && python3 /e2e/ort_bench.py --provider cuda --models %s --warmup %.0f --duration %.0f --vram-limit-mib %.0f", pipGPU, models, warmup, duration, vramGi*1024)
+	return fmt.Sprintf("%s && "+cudaLibPath+" && python3 /e2e/ort_bench.py --provider cuda --models %s --warmup %.0f --duration %.0f --vram-limit-mib %.0f", pipGPU, models, warmup, duration, vramGi*1024)
 }
 
 func torchCommand(models, tests string, warmup, duration, vramGi float64) string {
@@ -34,7 +42,7 @@ func torchCommand(models, tests string, warmup, duration, vramGi float64) string
 }
 
 func mlperfCommand(models, scenarios string, duration float64) string {
-	return fmt.Sprintf("%s mlcommons-loadgen && python3 /e2e/mlperf_mini.py --provider cuda --models %s --scenarios %s --duration %.0f", pipGPU, models, scenarios, duration)
+	return fmt.Sprintf("%s mlcommons-loadgen && "+cudaLibPath+" && python3 /e2e/mlperf_mini.py --provider cuda --models %s --scenarios %s --duration %.0f", pipGPU, models, scenarios, duration)
 }
 
 func burnCommand(seconds, warmup float64) string {
@@ -55,7 +63,19 @@ func vllmServer(ns, name string, g GPU, mode string, share, vramGi float64, extr
 	model := llmModel(vramGi)
 	// Under a VRAM limit the container sees its quota as the card's total, so
 	// the utilisation fraction applies to the quota.
-	cmd := fmt.Sprintf("python3 -m vllm.entrypoints.openai.api_server --model %s --served-model-name model --port 8000 --dtype half --max-model-len 2048 --gpu-memory-utilization 0.85 %s", model, extra)
+	// VLLM_USE_FLASHINFER_SAMPLER=0: the FlashInfer sampler of vLLM 0.11.0 JIT-builds
+	// a module and its architecture check raises on a compute-capability-7 card
+	// (T4: "'int' object has no attribute 'isdigit'"), natively as well; the
+	// PyTorch sampler runs everywhere.
+	// The native baseline gets the memory budget of a slice, not 85 % of the
+	// whole card: the comparison is then between equal KV-cache sizes, and
+	// vLLM 0.11.0 with the whole of a T4 dies under 8 concurrent streams
+	// ("CUDA error: an illegal memory access"), which is not ours to measure.
+	memFraction := 0.85
+	if mode == "native" && vramGi > 0 && g.CapVRAM > vramGi {
+		memFraction = 0.85 * vramGi / g.CapVRAM
+	}
+	cmd := fmt.Sprintf("VLLM_USE_FLASHINFER_SAMPLER=0 python3 -m vllm.entrypoints.openai.api_server --model %s --served-model-name model --port 8000 --dtype half --max-model-len 2048 --gpu-memory-utilization %.2f %s", model, memFraction, extra)
 	probe := func(pod map[string]any) {
 		ct := pod["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
 		ct["ports"] = []any{map[string]any{"containerPort": int64(8000)}}
@@ -91,7 +111,8 @@ func (e *Env) runBench(ctx context.Context, c *C, name string, g GPU, base PerfP
 	}
 	e.delete(ctx, newObj(gvkPod, c.NS, name))
 	e.waitGone(ctx, gvkPod, c.NS, name, 3*time.Minute)
-	if base.Mode != "native" {
+	// With a neighbour on the card the pool is not expected to be idle.
+	if base.Mode != "native" && (base.Cotenancy == "" || base.Cotenancy == "alone") {
 		e.waitResourcesReturned(ctx, 3*time.Minute)
 	}
 	return points
@@ -173,7 +194,9 @@ var _ = Describe("isolation", func() {
 			var points []PerfPoint
 			for _, s := range []float64{1, 0.5, 0.25} {
 				base := PerfPoint{Workload: "matmul", Model: "fp16-2048", Mode: "soft", Share: s, VRAMGiB: 4, Cotenancy: "alone", Load: "saturation"}
-				points = append(points, env.runBench(ctx, c, fmt.Sprintf("burn-%03.0f", s*100), g, base, burnCommand(45, 10), 10*time.Minute)...)
+				// 150 s: the hypervisor reports the device once a minute, and the
+				// utilisation criterion needs at least two samples inside the window.
+				points = append(points, env.runBench(ctx, c, fmt.Sprintf("burn-%03.0f", s*100), g, base, burnCommand(150, 20), 12*time.Minute)...)
 			}
 			failed := recordPerf(c, points)
 			Expect(failed).To(BeEmpty(), "compute limit not honoured:\n%s", strings.Join(failed, "\n"))
@@ -186,7 +209,7 @@ var _ = Describe("isolation", func() {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
 			env.shipWorkloads(ctx, c.NS)
-			for _, mode := range []string{"soft", "hard"} {
+			for _, mode := range isolationModes() {
 				By(mode + ": a neighbour holds 2 GiB of its own 4 GiB limit")
 				neighbour := "hold-" + mode
 				Expect(env.create(ctx, benchPod(c.NS, neighbour, g, mode, 0.2, 4, "", "python3 /e2e/gpu_probe.py vram --target-mib 2048 --hold 600"))).To(Succeed())
@@ -221,6 +244,7 @@ var _ = Describe("isolation", func() {
 
 	Register(Case{
 		ID: "ISO-04", Title: "hard 算力限额实测（sidecar worker）", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 40 * time.Minute,
+		KnownIssue: "the worker that hard isolation runs as a sidecar (tensorfusion/tensor-fusion-worker v2.25.0, community edition) quits at start with \"VerifyLicense: License is not set\" and the workload process then dies with a bus error; neither the chart nor the operator has a setting that hands it a license (seen on a real T4, 2026-10-12)",
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
@@ -241,7 +265,7 @@ var _ = Describe("isolation", func() {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
 			env.shipWorkloads(ctx, c.NS)
-			for _, mode := range []string{"soft", "hard"} {
+			for _, mode := range isolationModes() {
 				base := PerfPoint{Workload: "matmul", Model: "fp16-2048", Mode: mode, Share: 0.4, VRAMGiB: 3, Cotenancy: "alone", Load: "saturation"}
 				alone := env.runBench(ctx, c, "quiet-alone-"+mode, g, base, burnCommand(45, 10), 12*time.Minute)
 				Expect(alone[0].Error).To(BeEmpty())
@@ -336,6 +360,7 @@ spec:
 
 	Register(Case{
 		ID: "ISO-13", Title: "disable-features: gpu-limiter 关闭限流后不再受限", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 30 * time.Minute,
+		KnownIssue: "under soft isolation the annotation is ignored: the webhook only turns disable-features into environment variables on the remote / hard client path (compose_client.go), the soft branch returns before it, so a 30 % limit still throttles to 27 % (seen on a real T4, 2026-10-12)",
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
@@ -424,8 +449,74 @@ var _ = Describe("perf", func() {
 	})
 
 	Register(Case{
+		ID: "PERF-CO-01", Title: "切分 + 共调度：两个 vLLM 实例各占 50% 同卡并发，各自的吞吐与尾延迟、合计吞吐", Tiers: []string{TierPerf, "perf-quick"},
+		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 90 * time.Minute,
+		Run: func(ctx SpecContext, c *C) {
+			gpus, _ := env.ensureGPUs(ctx, c, 1)
+			g := gpus[0]
+			env.shipWorkloads(ctx, c.NS)
+			prof := profile()
+			vram := gpuVRAMSlice(g)
+
+			// Reference of the same mode and VRAM slice with the card to itself.
+			points := env.llmSweep(ctx, c, g, "soft", []float64{1}, vram, prof, "", 0)
+
+			By("two tenants at 50% each on one GPU, both under load at the same time")
+			tenants := []string{"vllm-co-a", "vllm-co-b"}
+			start := time.Now()
+			for _, name := range tenants {
+				Expect(env.create(ctx, vllmServer(c.NS, name, g, "soft", 0.5, vram, ""))).To(Succeed())
+			}
+			var ids []string
+			for _, name := range tenants {
+				p, _ := env.waitPodReady(ctx, c.NS, name, 25*time.Minute)
+				ids = append(ids, strings.Join(podGPUIDs(p), ","))
+			}
+			setup := time.Since(start).Seconds()
+			Expect(ids[0]).To(Equal(ids[1]), "the two tenants must share one GPU")
+			c.Note("both tenants on GPU %s", ids[0])
+
+			results := make([]map[string]any, len(tenants))
+			var wg sync.WaitGroup
+			for i, name := range tenants {
+				wg.Add(1)
+				go func(i int, name string) {
+					defer GinkgoRecover()
+					defer wg.Done()
+					url := "http://" + env.podIP(ctx, c.NS, name) + ":8000"
+					results[i] = env.runLLMClient(ctx, c, "load-"+name, url, "model", "closed", prof, 0)
+				}(i, name)
+			}
+			wg.Wait()
+			combined := 0.0
+			for i, name := range tenants {
+				Expect(results[i]).NotTo(BeNil(), "no result from the load generator of %s", name)
+				base := PerfPoint{Workload: "vllm", Model: llmModel(vram), Mode: "soft", Share: 0.5, VRAMGiB: vram,
+					Cotenancy: "co-scheduled", Load: "saturation", GPUModel: g.Model, SetupSeconds: setup, Test: "tenant-" + name[len(name)-1:]}
+				p := llmPoint(results[i], base)
+				combined += p.Throughput
+				points = append(points, p)
+			}
+			failed := recordPerf(c, points)
+			alone := points[0].Throughput
+			c.Measure("combined_tokens_per_s", combined, "tokens/s")
+			if alone > 0 {
+				c.Measure("combined_vs_alone_ratio", combined/alone, "")
+				c.Measure("tenant_balance_ratio", minFloat(points[1].Throughput, points[2].Throughput)/maxFloat(points[1].Throughput, points[2].Throughput), "")
+			}
+			c.Note("model %s, VRAM limit %.0f GiB per tenant, profile %s", llmModel(vram), vram, prof.Name)
+			Expect(failed).To(BeEmpty(), "criteria failed:\n%s", strings.Join(failed, "\n"))
+			// Splitting a card between two tenants must not cost a large part of it,
+			// and neither tenant may starve the other.
+			Expect(combined/alone).To(BeNumerically(">", 0.7), "two 50%% tenants together deliver less than 70%% of one tenant with the whole card")
+			Expect(minFloat(points[1].Throughput, points[2].Throughput)/maxFloat(points[1].Throughput, points[2].Throughput)).To(BeNumerically(">", 0.7), "the two equal tenants are served unequally")
+		},
+	})
+
+	Register(Case{
 		ID: "PERF-LLM-02", Title: "vLLM 流式推理 vs 算力份额（hard）", Tiers: []string{TierPerf, "perf-quick"},
 		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 90 * time.Minute,
+		KnownIssue: "the worker that hard isolation runs as a sidecar (tensorfusion/tensor-fusion-worker v2.25.0, community edition) quits at start with \"VerifyLicense: License is not set\" and the workload process then dies with a bus error; neither the chart nor the operator has a setting that hands it a license (seen on a real T4, 2026-10-12)",
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
@@ -599,4 +690,25 @@ func perfDesign() []Run {
 		}
 		return true
 	})
+}
+
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// isolationModes lists the modes the cases that cover both soft and hard run
+// with. E2E_ISOLATION_MODES=soft leaves hard to its own cases (ISO-04,
+// PERF-LLM-02) on a stack where the hard worker cannot start.
+func isolationModes() []string {
+	return strings.Split(getenv("E2E_ISOLATION_MODES", "soft,hard"), ",")
 }

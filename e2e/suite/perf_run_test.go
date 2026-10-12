@@ -179,6 +179,7 @@ func text(m map[string]any, key string) string {
 // llmPoint converts an llm_client.py result.
 func llmPoint(res map[string]any, base PerfPoint) PerfPoint {
 	p := base
+	p.MeasuredAt = time.Now().UTC()
 	p.Throughput, p.ThroughputUnit, p.TPM = num(res, "tokens_per_s"), "tokens/s", num(res, "tpm")
 	p.TTFT, p.TPOT, p.ITL, p.Latency = dist(res, "ttft_s"), dist(res, "tpot_s"), dist(res, "itl_s"), dist(res, "latency_s")
 	p.Requests, p.Samples, p.WindowS = int(num(res, "requests")), int(num(res, "output_tokens")), num(res, "window_s")
@@ -197,6 +198,7 @@ func llmPoint(res map[string]any, base PerfPoint) PerfPoint {
 // benchPoint converts a result of ort_bench.py / torch_mini.py / mlperf_mini.py / gpu_probe.py burn.
 func benchPoint(res map[string]any, base PerfPoint) PerfPoint {
 	p := base
+	p.MeasuredAt = time.Now().UTC()
 	if m := text(res, "model"); m != "" {
 		p.Model = m
 	}
@@ -263,10 +265,14 @@ func profile() perfProfile {
 		// 180 s at 8 streams x ~64 tokens: ~600 requests (TTFT p99 from 6 samples
 		// above it - reported, TTFT p95 is the gate) and > 30k tokens (ITL p99
 		// from > 300 samples above it).
-		return perfProfile{Name: "full", Warmup: 30, Window: 180, Shares: []float64{1, 0.75, 0.5, 0.25}, Concurrency: 8, MaxTokens: 64}
+		return perfProfile{Name: "full", Warmup: 120, Window: 180, Shares: []float64{1, 0.75, 0.5, 0.25}, Concurrency: 8, MaxTokens: 64}
 	}
 	// 60 s: ~200 requests, ~10k tokens. Enough for ITL / TPOT p99, TTFT p95.
-	return perfProfile{Name: "quick", Warmup: 15, Window: 60, Shares: []float64{1, 0.5, 0.25}, Concurrency: 8, MaxTokens: 64}
+	// Warm-up 90 s: vLLM captures a CUDA graph per batch size on first use, and on
+	// a T4 the first requests of every new concurrency level stall for seconds
+	// (the server reports 0.1 tokens/s with 8 streams running for ~15 s). With a
+	// 15 s warm-up those stalls landed inside the window as 5 s token gaps.
+	return perfProfile{Name: "quick", Warmup: 90, Window: 60, Shares: []float64{1, 0.5, 0.25}, Concurrency: 8, MaxTokens: 64}
 }
 
 // llmModel picks an ungated model that fits the VRAM the pod is given.
@@ -326,6 +332,7 @@ func recordPerf(c *C, points []PerfPoint) []string {
 			points[i].ExecMode = env.Mode
 		}
 	}
+	attachMachine(points)
 	evaluate(points)
 	c.Attach("perf", points)
 	for _, p := range points {
@@ -346,4 +353,56 @@ func recordPerf(c *C, points []PerfPoint) []string {
 		}
 	}
 	return failedVerdicts(points)
+}
+
+// attachMachine adds the device-level readings of each point's window. Best
+// effort: without GPU telemetry (CPU stand-ins, a cluster without GreptimeDB)
+// the points simply carry none.
+func attachMachine(points []PerfPoint) {
+	if env.Mode != ModeRealGPU {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	// The hypervisor reports on an interval and the rows arrive with a delay.
+	time.Sleep(20 * time.Second)
+	for i := range points {
+		p := &points[i]
+		if p.MeasuredAt.IsZero() || p.Error != "" || p.Skipped != "" {
+			continue
+		}
+		window := p.WindowS
+		if window <= 0 {
+			window = 60
+		}
+		// The reading is taken a few seconds after the load ended (the pod is polled
+		// for completion); rows of that idle tail must stay out, so the window ends
+		// early rather than late. The hypervisor samples once a minute: a short
+		// window may hold a single sample or none, which is why Samples is reported.
+		to := p.MeasuredAt.Add(-8 * time.Second)
+		from := to.Add(-time.Duration(window * float64(time.Second)))
+		sql := fmt.Sprintf("select uuid, node, count(*), avg(compute_percentage), max(compute_percentage), avg(compute_tflops), "+
+			"max(memory_bytes), max(memory_percentage), avg(power_usage), max(power_usage), max(temperature) from tf_gpu_usage "+
+			"where pool = '%s' and greptime_timestamp >= %d and greptime_timestamp <= %d group by uuid, node order by avg(compute_percentage) desc limit 1",
+			env.Pool, from.UnixNano(), to.UnixNano())
+		rows, err := env.greptimeSQL(ctx, sql)
+		if err != nil || len(rows) == 0 || len(rows[0]) < 11 {
+			continue
+		}
+		f := func(v any) float64 {
+			x, _ := v.(float64)
+			return x
+		}
+		r := rows[0]
+		m := &Machine{
+			GPU: fmt.Sprint(r[0]), Node: fmt.Sprint(r[1]), Samples: int(f(r[2])),
+			UtilAvg: f(r[3]), UtilMax: f(r[4]), TFlopsAvg: f(r[5]),
+			VRAMMaxMiB: f(r[6]) / (1 << 20), VRAMMaxPct: f(r[7]),
+			PowerAvgW: f(r[8]), PowerMaxW: f(r[9]), TempMaxC: f(r[10]), WindowS: window,
+		}
+		if n, err := env.get(ctx, gvkNode, "", m.Node); err == nil {
+			m.InstanceTyp = n.GetLabels()["node.kubernetes.io/instance-type"]
+		}
+		p.Machine = m
+	}
 }

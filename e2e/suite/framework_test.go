@@ -475,6 +475,10 @@ func (e *Env) waitPodReady(ctx context.Context, ns, name string, timeout time.Du
 			return err.Error(), false
 		}
 		pod = p
+		// A pod that ended can never become Ready: fail now instead of at the timeout.
+		if phase := str(p, "status", "phase"); phase == "Failed" || phase == "Succeeded" {
+			Fail(fmt.Sprintf("pod %s/%s ended before it was Ready: %s", ns, name, podWhy(p)))
+		}
 		return podWhy(p), podReady(p)
 	})
 	return pod, d
