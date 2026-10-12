@@ -6,17 +6,25 @@ on:
       - main
       - release/**
     paths-ignore:
-      - "*.md"
+      - "**/*.md"
       - "charts/**"
       - "config/**"
+      - "docs/**"
+      - "e2e/**"
   pull_request:
     branches:
       - main
       - release/**
     paths-ignore:
-      - "*.md"
+      - "**/*.md"
       - "charts/**"
       - "config/**"
+      - "docs/**"
+      - "e2e/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   lint:
