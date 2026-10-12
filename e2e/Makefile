@@ -6,6 +6,9 @@
 #   make test-<tier>   core | isolation | karpenter-finops | perf-quick | perf-full
 #   make down          destroy + leftover sweep
 #
+# No cloud account at all (Karpenter on fake KWOK nodes in a kind cluster):
+#   make kwok-up kwok-test kwok-down   [KWOK_SSH_HOST=<docker host>]
+#
 # The suite runs against whatever KUBECONFIG points at; by default the kubeconfig
 # of the terraform stack. For a bare-metal cluster: make test-core KUBECONFIG=~/.kube/bm
 #
@@ -86,6 +89,22 @@ test-perf-quick: build ## tier perf, quick profile (a few minutes per runtime)
 .PHONY: test-perf-full
 test-perf-full: build ## tier perf, full design (mainly for the bare-metal host)
 	$(call run_tier,perf,real)
+
+# --- tier kwok: Karpenter + TensorFusion on fake nodes, no cloud, no GPU ---------------
+# kind + KWOK + Karpenter (kwok provider) + the chart + a fake hypervisor; see
+# kwok/up.sh and README "KWOK 档". Runs where docker is: here, or on
+# KWOK_SSH_HOST (the checkout is copied there; results are copied back).
+.PHONY: kwok-up
+kwok-up: ## tier kwok: kind cluster with fake GPU nodes (Karpenter KWOK provider) + TensorFusion + fake hypervisor
+	@bash kwok/run.sh up
+
+.PHONY: kwok-test
+kwok-test: ## tier kwok: Karpenter path A / path B / FinOps cases on fake nodes (control plane only)
+	@bash kwok/run.sh test
+
+.PHONY: kwok-down
+kwok-down: ## tier kwok: stop the fake hypervisor, delete the kind cluster
+	@bash kwok/run.sh down
 
 .PHONY: test
 test: build ## any label filter: make test FILTER='core && !disruptive' [FOCUS=ISO-0]

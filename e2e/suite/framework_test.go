@@ -50,6 +50,9 @@ const (
 const (
 	ModeRealGPU = "real-gpu"
 	ModeMockGPU = "mock-gpu"
+	// ModeFakeGPU: KWOK nodes (no kubelet) whose GPUs are registered by the fake
+	// hypervisor of e2e/kwok. Control plane only: nothing runs on such a node.
+	ModeFakeGPU = "fake-gpu"
 	ModeNoGPU   = "no-gpu"
 	ModeDryRun  = "dry-run"
 )
@@ -77,6 +80,7 @@ var (
 	gvkNodePool    = schema.GroupVersionKind{Group: "karpenter.sh", Version: "v1", Kind: "NodePool"}
 	gvkNodeOverlay = schema.GroupVersionKind{Group: "karpenter.sh", Version: "v1alpha1", Kind: "NodeOverlay"}
 	gvkEC2NC       = schema.GroupVersionKind{Group: "karpenter.k8s.aws", Version: "v1", Kind: "EC2NodeClass"}
+	gvkKWOKNC      = schema.GroupVersionKind{Group: "karpenter.kwok.sh", Version: "v1alpha1", Kind: "KWOKNodeClass"}
 )
 
 func gvk(group, version, kind string) schema.GroupVersionKind {
@@ -109,6 +113,7 @@ type Env struct {
 
 	HasKarpenter bool
 	HasAWS       bool // EC2NodeClass CRD present: Karpenter AWS provider
+	HasKWOK      bool // KWOKNodeClass CRD present: Karpenter KWOK provider (fake nodes)
 	GPUNodePool  string
 	CPUNodePool  string
 	MockNodePool string
@@ -191,6 +196,7 @@ func (e *Env) detect(ctx context.Context) {
 	}
 	e.HasKarpenter = e.crdExists(ctx, "nodeclaims.karpenter.sh")
 	e.HasAWS = e.crdExists(ctx, "ec2nodeclasses.karpenter.k8s.aws")
+	e.HasKWOK = e.crdExists(ctx, "kwoknodeclasses.karpenter.kwok.sh")
 
 	if d, err := e.get(ctx, gvkDeployment, e.TFNamespace, e.TFRelease+"-controller"); err == nil {
 		e.OperatorImage = firstContainerImage(d, "controller")
@@ -218,6 +224,9 @@ func (e *Env) detect(ctx context.Context) {
 		e.Mode, e.Pool = ModeRealGPU, e.RealPool
 	case "mock", ModeMockGPU:
 		e.Mode, e.Pool = ModeMockGPU, e.MockPool
+	case "fake", ModeFakeGPU:
+		// Fake nodes carry the labels of real GPU nodes and join the chart's pool.
+		e.Mode, e.Pool = ModeFakeGPU, e.RealPool
 	default:
 		e.Mode, e.Pool = ModeNoGPU, e.RealPool
 	}

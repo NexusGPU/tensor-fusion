@@ -1,3 +1,5 @@
 # Test results and infra timing/cost ledgers may contain node names and ARNs.
 results/
 *.test
+# KWOK tier: binaries, sources, kubeconfig, logs.
+kwok/.work/

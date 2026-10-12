@@ -198,6 +198,18 @@ rules:
   - update
   - watch
 - apiGroups:
+  - karpenter.azure.com
+  - karpenter.k8s.alibabacloud
+  - karpenter.k8s.aws
+  - karpenter.k8s.gcp
+  - karpenter.kwok.sh
+  resources:
+  - '*'
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - karpenter.sh
   resources:
   - '*'
