@@ -16,7 +16,7 @@ source "$(dirname "$0")/lib.sh"
 need docker kind kubectl helm "$GO"
 
 node="${KWOK_CLUSTER}-control-plane"
-karpenter_image="${KWOK_CLUSTER}/karpenter-kwok:${KARPENTER_VERSION}-shortnames"
+karpenter_image="${KWOK_CLUSTER}/karpenter-kwok:${KARPENTER_VERSION}"
 kwok_image="registry.k8s.io/kwok/kwok:${KWOK_VERSION}"
 certgen_image="$(sed -n 's/^ *image: *\(registry.k8s.io\/ingress-nginx\/kube-webhook-certgen:[^ ]*\).*/\1/p' "${TF_CHART}/values.yaml" | head -1)"
 vector_image="$(sed -n 's/^ *vectorAgentImage: *\([^ ]*\).*/\1/p' "${TF_CHART}/values.yaml" | head -1)"
@@ -34,18 +34,6 @@ if ! docker image inspect "$karpenter_image" >/dev/null 2>&1; then
     need git
     log "cloning ${KARPENTER_REPO} ${KARPENTER_VERSION}"
     git clone -q --depth 1 --branch "$KARPENTER_VERSION" "$KARPENTER_REPO" "$KARPENTER_SRC"
-  fi
-  # The provider names nodes kwok-<nodeclaim>-<two words>-<n>-<random>-<uint32>,
-  # 65+ characters for a NodeClaim of the TensorFusion expander. The hypervisor
-  # (and so the fake one) labels each GPU with tensor-fusion.ai/managed-by=<node
-  # name>, and a label value is limited to 63 bytes: such a node can never
-  # register a GPU. Node names are shortened to kwok-<nodeclaim>-<uint32>; this
-  # is the only change to the upstream source.
-  if grep -q 'kwok-%s-%s-%d' "${KARPENTER_SRC}/kwok/cloudprovider/cloudprovider.go"; then
-    sed -i.orig 's|fmt.Sprintf("kwok-%s-%s-%d", nodeClaim.Name, kwokutils.RandomName(), rand.Uint32())|fmt.Sprintf("kwok-%s-%d", nodeClaim.Name, rand.Uint32())|' \
-      "${KARPENTER_SRC}/kwok/cloudprovider/cloudprovider.go"
-    sed -i.orig2 '/kwokutils "sigs.k8s.io\/karpenter\/kwok\/utils"/d' "${KARPENTER_SRC}/kwok/cloudprovider/cloudprovider.go"
-    rm -f "${KWOK_HOME}/bin/karpenter-kwok"
   fi
   if [ ! -x "${KWOK_HOME}/bin/karpenter-kwok" ]; then
     log "building the Karpenter KWOK provider ${KARPENTER_VERSION} from source"
@@ -241,41 +229,6 @@ karpenterNodeOverlay:
       values: ["g4dn", "g5", "g6"]
 YAML
 wait_for 120 "default GPUPool" kubectl get gpupool tensor-fusion-shared
-
-# Path B (provisioningMode: Karpenter) reads the NodeClass named in the pool, and
-# the chart's ClusterRole has no rule for any Karpenter NodeClass kind, so the
-# GPUNodeClaim controller is refused and never creates the NodeClaim (KRP-B02
-# fails on the chart as shipped). KWOK_NODECLASS_RBAC=1 adds the missing read
-# permission so that the rest of path B can be exercised; default off, because
-# the default run must show what a user gets.
-if [ "${KWOK_NODECLASS_RBAC:-0}" = "1" ]; then
-  log "granting the operator read access to KWOKNodeClass (workaround, see KRP-B02)"
-  kubectl apply -f - >/dev/null <<YAML
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: ${KWOK_CLUSTER}-nodeclass-reader
-rules:
-  - apiGroups: ["karpenter.kwok.sh"]
-    resources: ["kwoknodeclasses"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: ${KWOK_CLUSTER}-nodeclass-reader
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: ${KWOK_CLUSTER}-nodeclass-reader
-subjects:
-  - kind: ServiceAccount
-    name: $(kubectl -n "$TF_NAMESPACE" get deploy "${TF_RELEASE}-controller" -o jsonpath='{.spec.template.spec.serviceAccountName}')
-    namespace: ${TF_NAMESPACE}
-YAML
-else
-  kubectl delete clusterrolebinding "${KWOK_CLUSTER}-nodeclass-reader" --ignore-not-found >/dev/null 2>&1 || true
-fi
 
 # --- 6. fake hypervisor ---------------------------------------------------------------
 if [ -f "${KWOK_HOME}/fakehv.pid" ] && kill -0 "$(cat "${KWOK_HOME}/fakehv.pid")" 2>/dev/null; then
