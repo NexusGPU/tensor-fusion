@@ -462,6 +462,13 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 		podExists = true
 	}
 
+	// Wait for deletion before checking prerequisites or attempting another delete.
+	if podExists && !currentPod.DeletionTimestamp.IsZero() {
+		log.Info("hypervisor pod is still being deleted", "name", key.Name,
+			"hash", currentPod.Labels[constants.LabelKeyPodTemplateHash])
+		return "", nil
+	}
+
 	// A NotReady node cannot run a hypervisor pod: creating one just leaves it
 	// Pending on the dead node forever (the pod tolerates the not-ready /
 	// unreachable taints to survive transient blips). Skip creation and clean
@@ -492,12 +499,6 @@ func (r *GPUNodeReconciler) reconcileHypervisorPod(
 
 	// If pod exists and prerequisites are satisfied, verify its status
 	if podExists {
-		if !currentPod.DeletionTimestamp.IsZero() {
-			log.Info("hypervisor pod is still being deleted", "name", key.Name,
-				"hash", currentPod.Labels[constants.LabelKeyPodTemplateHash])
-			return "", nil
-		}
-
 		if crashedContainer, restartCount, threshold, ok := hypervisorPodCrashExceeded(currentPod); ok {
 			log.Info("hypervisor pod crash count exceeded threshold, deleting for recreation",
 				"node", node.Name,

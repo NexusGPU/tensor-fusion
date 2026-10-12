@@ -52,6 +52,12 @@ func ManageUpdate(ctx context.Context, r client.Client, pool *tfv1.GPUPool, comp
 		if err := r.Patch(ctx, pool, patch); err != nil {
 			return nil, fmt.Errorf("failed to patch pool: %w", err)
 		}
+		// Persist the new hash before any early return below (pending
+		// resources, no resources); otherwise every requeue re-detects the
+		// change and restarts the same rollout.
+		if err := patchComponentStatus(r, ctx, pool, newStatus); err != nil {
+			return nil, err
+		}
 	} else {
 		if !autoUpdateEnabled {
 			return nil, nil
