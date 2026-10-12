@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestHypervisorProviderRevisionOnlySelectsMatchingVendorNodes(t *testing.T) {
@@ -297,4 +298,66 @@ func TestHypervisorProviderRevisionUsesConfiguredBatchSize(t *testing.T) {
 	if pending != 2 {
 		t.Fatalf("expected first 50%% batch to mark two of four nodes Pending, got %d", pending)
 	}
+}
+
+func TestHypervisorPendingRolloutDoesNotRepeatPatch(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	if err := tfv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	pool := &tfv1.GPUPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pending-rollout"},
+		Spec: tfv1.GPUPoolSpec{
+			NodeManagerConfig: &tfv1.NodeManagerConfig{NodePoolRollingUpdatePolicy: &tfv1.NodeRollingUpdatePolicy{AutoUpdateHypervisor: true, BatchPercentage: 100}},
+			ComponentConfig:   &tfv1.ComponentConfig{Hypervisor: &tfv1.HypervisorConfig{}},
+		},
+	}
+	pool.Status.ComponentStatus.HypervisorVersion = "old"
+	node := &tfv1.GPUNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "pending-node", Labels: map[string]string{fmt.Sprintf(constants.GPUNodePoolIdentifierLabelFormat, pool.Name): "true"}},
+		Status:     tfv1.GPUNodeStatus{Phase: tfv1.TensorFusionGPUNodePhasePending},
+	}
+	patches := 0
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(pool, node).WithObjects(pool, node).
+		WithInterceptorFuncs(interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			patches++
+			return c.Patch(ctx, obj, patch, opts...)
+		}}).Build()
+	for range 3 {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(pool), pool); err != nil {
+			t.Fatal(err)
+		}
+		result, err := ManageUpdate(ctx, c, pool, &Hypervisor{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || result.RequeueAfter != constants.PendingRequeueDuration {
+			t.Fatalf("expected pending requeue, got %v", result)
+		}
+	}
+	if patches != 1 {
+		t.Fatalf("expected one rollout metadata patch, got %d", patches)
+	}
+	// Once the blocking node is ready, the rollout must still select it for update.
+	if err := c.Get(ctx, client.ObjectKeyFromObject(node), node); err != nil {
+		t.Fatal(err)
+	}
+	node.Status.Phase = tfv1.TensorFusionGPUNodePhaseRunning
+	if err := c.Status().Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ManageUpdate(ctx, c, pool, &Hypervisor{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(node), node); err != nil {
+		t.Fatal(err)
+	}
+	if node.Status.Phase != tfv1.TensorFusionGPUNodePhasePending {
+		t.Fatal("rollout did not resume after node became ready")
+	}
+
 }

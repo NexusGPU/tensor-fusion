@@ -18,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestGPUNodeReconcileHypervisorDeletionMarksGPUsPending(t *testing.T) {
@@ -210,4 +211,30 @@ func (f *hypervisorPhaseFixture) assertPendingWithoutDeallocation(t *testing.T) 
 		require.Equal(t, expected.Phase, updated.Status.Phase)
 		require.True(t, equality.Semantic.DeepEqual(*expected, updated.Status), "phase synchronization must preserve existing GPU allocations")
 	}
+}
+
+func TestTerminatingHypervisorWaitsBeforePrerequisiteCheck(t *testing.T) {
+	f := newHypervisorPhaseFixture(t, tfv1.TensorFusionGPUNodePhasePending, true)
+	f.node.Labels[constants.AcceleratorLabelVendor] = constants.AcceleratorVendorNvidia
+	f.reconciler.CompatibleWithNvidiaContainerToolkit = true
+	deletes := 0
+	f.reconciler.Client = interceptor.NewClient(f.reconciler.Client.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if pods, ok := list.(*corev1.PodList); ok {
+				pods.Items = nil // No NVIDIA device plugin is ready.
+				return nil
+			}
+			return c.List(ctx, list, opts...)
+		},
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			deletes++
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	for range 3 {
+		name, err := f.reconciler.reconcileHypervisorPod(context.Background(), f.node, f.pool, f.coreNode)
+		require.NoError(t, err)
+		require.Empty(t, name)
+	}
+	require.Zero(t, deletes, "an already deleting hypervisor must not be deleted again")
 }
