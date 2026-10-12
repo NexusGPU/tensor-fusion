@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tfv1 "github.com/NexusGPU/tensor-fusion/api/v1"
 	"github.com/NexusGPU/tensor-fusion/internal/autoscaler/workload"
@@ -183,6 +184,52 @@ var _ = Describe("CronRecommender", func() {
 				},
 			}
 			Expect(recommender.getActiveCronScalingRule(&asc)).To(BeNil())
+		})
+
+		It("should apply and revert a cron rule without usage data while the usage recommender is inside InitialDelayPeriod", func() {
+			// A pod with tensor-fusion.ai/autoscale: "true" whose profile only has
+			// a cron rule: the webhook switches autoSetResources on, no usage was
+			// ever sampled, and the workload was created a moment ago.
+			spec := tfv1.Resources{
+				Requests: tfv1.Resource{Tflops: resource.MustParse("20"), Vram: resource.MustParse("4Gi")},
+				Limits:   tfv1.Resource{Tflops: resource.MustParse("65"), Vram: resource.MustParse("4Gi")},
+			}
+			desired := tfv1.Resources{
+				Requests: tfv1.Resource{Tflops: resource.MustParse("20"), Vram: resource.MustParse("4Gi")},
+				Limits:   tfv1.Resource{Tflops: resource.MustParse("20"), Vram: resource.MustParse("4Gi")},
+			}
+			ws := workload.NewWorkloadState()
+			ws.CreationTimestamp = metav1.Now()
+			ws.Spec.Resources = spec
+			ws.Spec.AutoScalingConfig = tfv1.AutoScalingConfig{
+				AutoSetResources: &tfv1.AutoSetResources{Enable: true, TargetResource: tfv1.ScalingTargetResourceAll},
+				CronScalingRules: []tfv1.CronScalingRule{{
+					Enable: true, Name: "shrink", Start: "0 0 * * *", End: "59 23 * * *", DesiredResources: desired,
+				}},
+			}
+			recommenders := []Interface{
+				NewPercentileRecommender(nil),
+				NewCronRecommender(nil),
+				NewExternalRecommender(nil, nil),
+			}
+
+			rec, err := GetRecommendation(ctx, ws, recommenders)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rec).NotTo(BeNil())
+			Expect(rec.Equal(&desired)).To(BeTrue(), "got %+v", rec)
+			ws.SetRecommendation(rec)
+
+			// Nothing new while the rule stays active.
+			rec, err = GetRecommendation(ctx, ws, recommenders)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rec).To(BeNil())
+
+			// The window closed: back to what the workload asks for.
+			ws.Spec.AutoScalingConfig.CronScalingRules[0].Enable = false
+			rec, err = GetRecommendation(ctx, ws, recommenders)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rec).NotTo(BeNil())
+			Expect(rec.Equal(&spec)).To(BeTrue(), "got %+v", rec)
 		})
 
 		It("should return the active cron scaling rule if the current time falls within its scheduled interval", func() {
