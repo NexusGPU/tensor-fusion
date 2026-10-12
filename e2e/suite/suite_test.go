@@ -68,7 +68,7 @@ const (
 	NeedRealGPU   = "real-gpu"  // CUDA device; never satisfied by the mock accelerator
 	NeedKarpenter = "karpenter" // karpenter.sh CRDs
 	NeedAWS       = "aws"       // Karpenter AWS provider (EC2NodeClass)
-	NeedNodeClass = "nodeclass" // a Karpenter provider whose NodeClass the suite can reference: AWS or KWOK
+	NeedNodeClass = "nodeclass" // a Karpenter provider whose NodeClass the suite can reference: AWS, Alibaba Cloud or KWOK
 	NeedTwoGPUs   = "two-gpus"  // two GPU CRs (any nodes)
 	NeedFixedImg  = "fixed-img" // behaviour known broken on the released images, see KnownIssue
 	NeedTF        = "tensor-fusion"
@@ -170,8 +170,8 @@ func unmet(ctx context.Context, reqs []string) string {
 				return "not an AWS Karpenter cluster (no EC2NodeClass CRD)"
 			}
 		case NeedNodeClass:
-			if !env.HasAWS && !env.HasKWOK {
-				return "no known Karpenter NodeClass kind (neither EC2NodeClass nor KWOKNodeClass)"
+			if !env.HasAWS && !env.HasAlibaba && !env.HasKWOK {
+				return "no known Karpenter NodeClass kind (EC2NodeClass, ECSNodeClass or KWOKNodeClass)"
 			}
 		case NeedGPU:
 			if env.Mode == ModeNoGPU {
@@ -265,7 +265,7 @@ var _ = ReportAfterSuite("summary", func(report Report) {
 		Seconds: report.RunTime.Seconds(),
 		Cluster: map[string]any{
 			"kubernetes": env.K8sVersion, "gpu_mode": env.Mode, "pool": env.Pool,
-			"karpenter": env.HasKarpenter, "karpenter_kwok": env.HasKWOK, "operator_image": env.OperatorImage, "hypervisor_image": env.HypervisorImage,
+			"karpenter": env.HasKarpenter, "karpenter_kwok": env.HasKWOK, "karpenter_alibaba": env.HasAlibaba, "operator_image": env.OperatorImage, "hypervisor_image": env.HypervisorImage,
 		},
 		LabelFilter: report.SuiteConfig.LabelFilter,
 		Counts:      map[string]int{},

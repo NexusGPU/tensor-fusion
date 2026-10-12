@@ -9,6 +9,11 @@
 # No cloud account at all (Karpenter on fake KWOK nodes in a kind cluster):
 #   make kwok-up kwok-test kwok-down   [KWOK_SSH_HOST=<docker host>]
 #
+# Alibaba Cloud ACK + Karpenter's Alibaba Cloud provider (real T4 nodes):
+#   make ack-up                        VPC + ACK cluster + Karpenter + TensorFusion
+#   make ack-test TIER=core            any test-<tier> target against that cluster
+#   make ack-down                      delete everything + leftover sweep
+#
 # The suite runs against whatever KUBECONFIG points at; by default the kubeconfig
 # of the terraform stack. For a bare-metal cluster: make test-core KUBECONFIG=~/.kube/bm
 #
@@ -105,6 +110,30 @@ kwok-test: ## tier kwok: Karpenter path A / path B / FinOps cases on fake nodes 
 .PHONY: kwok-down
 kwok-down: ## tier kwok: stop the fake hypervisor, delete the kind cluster
 	@bash kwok/run.sh down
+
+# --- ACK: Alibaba Cloud ACK + Karpenter (Alibaba Cloud provider), real GPUs ----------------
+# ack/up.sh (VPC, cluster, system node pool), ack/install.sh (Karpenter, NodePools),
+# ack/install-tf.sh (the chart). Credentials come from the aliyun CLI profile.
+ACK_KUBECONFIG := $(CURDIR)/ack/.work/kubeconfig
+ACK_TEST_ENV   := KUBECONFIG=$(ACK_KUBECONFIG) E2E_PRICING_FILE=$(CURDIR)/pricing/alibaba-us-east-1.json \
+                  E2E_PRICING_REGION=us-east-1 E2E_FINOPS_GPU_TYPE=ecs.gn6i-c4g1.xlarge E2E_PATHB_INSTANCE_TYPES=ecs.gn6i-c8g1.2xlarge E2E_BURST=3
+TIER ?= smoke
+
+.PHONY: ack-up
+ack-up: ## ACK: VPC + ACK managed cluster + Karpenter (Alibaba Cloud provider) + TensorFusion
+	@bash ack/up.sh && bash ack/install.sh && bash ack/install-tf.sh
+
+.PHONY: ack-test
+ack-test: ## ACK: run a tier against the ACK cluster: make ack-test TIER=core|isolation|karpenter-finops|perf-quick|smoke [FOCUS=..]
+	@$(ACK_TEST_ENV) $(MAKE) --no-print-directory test-$(TIER) KUBECONFIG=$(ACK_KUBECONFIG)
+
+.PHONY: ack-down
+ack-down: ## ACK: delete the cluster and everything around it, then list leftovers
+	@bash ack/down.sh
+
+.PHONY: ack-sweep
+ack-sweep: ## ACK: list what of the stack still exists (exit 1 when something is left)
+	@bash ack/down.sh sweep
 
 .PHONY: test
 test: build ## any label filter: make test FILTER='core && !disruptive' [FOCUS=ISO-0]
