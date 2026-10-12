@@ -214,7 +214,8 @@ func TestAliasedProcessReadingsDoNotMoveTenantsOffTheirLimits(t *testing.T) {
 				}
 			}
 			if c.name == "released" && !defect {
-				t.Errorf("the released control loop holds every tenant at its limit: the simulation does not contain the measured defect")
+				t.Errorf("the released control loop holds every tenant at its limit: " +
+					"the simulation does not contain the measured defect")
 			}
 		})
 	}
@@ -259,7 +260,8 @@ func TestCandidatesFollowAChangeOfWork(t *testing.T) {
 					}
 					neighborOff = math.Max(neighborOff, math.Abs(neighbor.meanOver(settle, settle+after)-0.40))
 				}
-				t.Logf("CHANGE x%.2f %-56s back within 6 points after %5.0f s; 30 s means %.2f..%.2f (limit 0.30); neighbor off by %.3f",
+				t.Logf("CHANGE x%.2f %-56s back within 6 points after %5.0f s; "+
+					"30 s means %.2f..%.2f (limit 0.30); neighbor off by %.3f",
 					factor, c.name, back, low, high, neighborOff)
 			})
 		}
@@ -311,7 +313,8 @@ func TestCandidatesFollowALimitChange(t *testing.T) {
 					}
 				}
 			}
-			t.Logf("LIMIT %-42s lowest 30 s before the change %.2f of the limit; at the new limit after %4.1f s; 30 s windows %.2f..%.2f of it; neighbor %.2f..%.2f",
+			t.Logf("LIMIT %-42s lowest 30 s before the change %.2f of the limit; at the new limit after %4.1f s; "+
+				"30 s windows %.2f..%.2f of it; neighbor %.2f..%.2f",
 				c.name, before, worstBack, low, high, neighborLow, neighborHigh)
 			if c.sufficient && (worstBack > 30 || low < 0.75 || high > 1.35 || neighborLow < 0.75 || neighborHigh > 1.30) {
 				t.Errorf("a limit change is not followed cleanly: %.1f s, worker %.2f..%.2f, neighbor %.2f..%.2f",

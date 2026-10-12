@@ -547,7 +547,8 @@ func loadSharedCalibrationFromEnv() bool {
 	case "", "released":
 		return false
 	case "confirmed":
-		klog.Infof("Per-process utilization of limited workers sharing a device is a slow, device-confirmed calibration (%s=%s)",
+		klog.Infof("Per-process utilization of limited workers sharing a device is "+
+			"a slow, device-confirmed calibration (%s=%s)",
 			sharedCalibrationEnv, mode)
 		return true
 	default:

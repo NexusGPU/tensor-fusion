@@ -616,5 +616,7 @@ func (c *Controller) deviceConfirmation(deviceUUID string, members []*erlMember,
 		return false, false
 	}
 	ratio := shown / want
-	return ratio >= calibrationMoreConfirmation, ratio <= 1/calibrationMoreConfirmation && shown < futilitySaturated*calibrationRecent
+	more = ratio >= calibrationMoreConfirmation
+	less = ratio <= 1/calibrationMoreConfirmation && shown < futilitySaturated*calibrationRecent
+	return more, less
 }
