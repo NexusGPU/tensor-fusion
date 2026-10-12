@@ -50,6 +50,18 @@ var _ = Describe("karpenter base", func() {
 					c.Note("EC2NodeClass %s resolved AMIs: %v", ncs[i].GetName(), amis)
 				}
 			}
+			if env.HasAlibaba {
+				ncs, _ := env.list(ctx, gvkECSNC, "")
+				Expect(ncs).NotTo(BeEmpty(), "no ECSNodeClass")
+				for i := range ncs {
+					Expect(condition(&ncs[i], "Ready")).To(Equal("True"), "ECSNodeClass %s: %s", ncs[i].GetName(), toJSON(sliceAt(&ncs[i], "status", "conditions")))
+					var images []string
+					for _, a := range sliceAt(&ncs[i], "status", "images") {
+						images = append(images, fmt.Sprint(a.(map[string]any)["id"]))
+					}
+					c.Note("ECSNodeClass %s resolved images: %v", ncs[i].GetName(), images)
+				}
+			}
 			dep, err := env.get(ctx, gvkDeployment, "kube-system", "karpenter")
 			if err == nil {
 				envs := map[string]string{}

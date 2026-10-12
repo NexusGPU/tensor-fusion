@@ -1,0 +1,90 @@
+diff --git a/cmd/controller/main.go b/cmd/controller/main.go
+index 8fc0273..e8c4a4c 100644
+--- a/cmd/controller/main.go
++++ b/cmd/controller/main.go
+@@ -64,6 +64,7 @@ func main() {
+ 
+ 	overlayUndecoratedCloudProvider := metrics.Decorate(alibabaCloudProvider)
+ 	cloudProvider := overlay.Decorate(overlayUndecoratedCloudProvider, coreOp.Manager.GetClient(), coreOp.InstanceTypeStore)
++	alibabaCloudProvider.SetOverlaidCloudProvider(cloudProvider)
+ 	clusterState := state.NewCluster(coreOp.Clock, coreOp.Manager.GetClient(), cloudProvider)
+ 
+ 	// Set the CloudProvider in the Alibaba operator
+diff --git a/pkg/cloudprovider/cloudprovider.go b/pkg/cloudprovider/cloudprovider.go
+index 92b01e3..b148530 100644
+--- a/pkg/cloudprovider/cloudprovider.go
++++ b/pkg/cloudprovider/cloudprovider.go
+@@ -76,6 +76,65 @@ type CloudProvider struct {
+ 	csClient                clients.CSClient
+ 
+ 	clusterNetworkConfig *cluster.NetworkConfig
++
++	// overlaid is this provider behind Karpenter's NodeOverlay decorator. Create
++	// reads the launched instance type through it, so that the NodeClaim reports
++	// the capacity the scheduler planned with.
++	overlaid cloudprovider.CloudProvider
++}
++
++// SetOverlaidCloudProvider hands the NodeOverlay-decorated provider back to the
++// provider it wraps.
++func (c *CloudProvider) SetOverlaidCloudProvider(overlaid cloudprovider.CloudProvider) {
++	c.overlaid = overlaid
++}
++
++// addOverlayCapacity adds the resources a NodeOverlay declares for the launched
++// instance type to the capacity of the created NodeClaim. Without them the
++// NodeClaim of an instance that has not registered yet looks too small for the
++// pod it was launched for (a pod requesting an overlay-only extended resource),
++// and every provisioning round launches one more instance for the same pod
++// until the NodePool limit is reached.
++func (c *CloudProvider) addOverlayCapacity(ctx context.Context, requested, created *coreapis.NodeClaim) {
++	nodePoolName := requested.Labels[coreapis.NodePoolLabelKey]
++	if c.overlaid == nil || nodePoolName == "" || created == nil {
++		return
++	}
++	nodePool := &coreapis.NodePool{}
++	if err := c.kubeClient.Get(ctx, client.ObjectKey{Name: nodePoolName}, nodePool); err != nil {
++		log.FromContext(ctx).Error(err, "reading the NodePool for overlay capacity", "nodePool", nodePoolName)
++		return
++	}
++	instanceTypes, err := c.overlaid.GetInstanceTypes(ctx, nodePool)
++	if err != nil {
++		log.FromContext(ctx).Error(err, "listing overlaid instance types", "nodePool", nodePoolName)
++		return
++	}
++	launched := created.Labels[corev1.LabelInstanceTypeStable]
++	for _, it := range instanceTypes {
++		if it.Name != launched {
++			continue
++		}
++		allocatable := it.Allocatable()
++		for name, quantity := range it.Capacity {
++			if _, known := created.Status.Capacity[name]; known {
++				continue
++			}
++			if created.Status.Capacity == nil {
++				created.Status.Capacity = corev1.ResourceList{}
++			}
++			if created.Status.Allocatable == nil {
++				created.Status.Allocatable = corev1.ResourceList{}
++			}
++			created.Status.Capacity[name] = quantity.DeepCopy()
++			if alloc, ok := allocatable[name]; ok {
++				created.Status.Allocatable[name] = alloc.DeepCopy()
++			} else {
++				created.Status.Allocatable[name] = quantity.DeepCopy()
++			}
++		}
++		return
++	}
+ }
+ 
+ // New creates a new CloudProvider with injected dependencies
+@@ -217,6 +276,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
+ 
+ 	// 11. Convert instance to NodeClaim
+ 	createdNodeClaim := c.convertInstanceToNodeClaim(ctx, inst, nodeClaim, filteredTypes, nodeClass.Spec.ClusterID)
++	c.addOverlayCapacity(ctx, nodeClaim, createdNodeClaim)
+ 
+ 	// 12. Set NodeClass hash annotation for drift detection
+ 	hash := calculateNodeClassHash(nodeClass)

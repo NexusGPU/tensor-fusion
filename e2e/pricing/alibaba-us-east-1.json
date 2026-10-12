@@ -1,0 +1,13 @@
+{
+  "eks_control_plane_per_hour": 0,
+  "on_demand": {
+    "ecs.gn6i-c4g1.xlarge": 1.0941,
+    "ecs.gn6i-c8g1.2xlarge": 1.2753,
+    "ecs.c7.large": 0.0666,
+    "ecs.g7.large": 0.0753,
+    "ecs.g7.xlarge": 0.1505
+  },
+  "refreshed": "2026-10-12",
+  "region": "us-east-1",
+  "source": "Alibaba Cloud ECS DescribePrice, Linux, pay-as-you-go, list price in CNY per hour converted to USD at 7.12; ACK managed Basic control plane is free"
+}

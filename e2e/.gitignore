@@ -3,3 +3,5 @@ results/
 *.test
 # KWOK tier: binaries, sources, kubeconfig, logs.
 kwok/.work/
+# ACK tier: kubeconfig, state, helm cache.
+ack/.work/

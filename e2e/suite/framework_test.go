@@ -81,6 +81,7 @@ var (
 	gvkNodeOverlay = schema.GroupVersionKind{Group: "karpenter.sh", Version: "v1alpha1", Kind: "NodeOverlay"}
 	gvkEC2NC       = schema.GroupVersionKind{Group: "karpenter.k8s.aws", Version: "v1", Kind: "EC2NodeClass"}
 	gvkKWOKNC      = schema.GroupVersionKind{Group: "karpenter.kwok.sh", Version: "v1alpha1", Kind: "KWOKNodeClass"}
+	gvkECSNC       = schema.GroupVersionKind{Group: "karpenter.alibabacloud.com", Version: "v1alpha1", Kind: "ECSNodeClass"}
 )
 
 func gvk(group, version, kind string) schema.GroupVersionKind {
@@ -114,6 +115,7 @@ type Env struct {
 	HasKarpenter bool
 	HasAWS       bool // EC2NodeClass CRD present: Karpenter AWS provider
 	HasKWOK      bool // KWOKNodeClass CRD present: Karpenter KWOK provider (fake nodes)
+	HasAlibaba   bool // ECSNodeClass CRD present: Karpenter Alibaba Cloud provider
 	GPUNodePool  string
 	CPUNodePool  string
 	MockNodePool string
@@ -185,7 +187,8 @@ func newEnv() *Env {
 			Curl:    getenv("E2E_IMAGE_PYTHON", "public.ecr.aws/docker/library/python:3.12-slim"),
 		},
 	}
-	e.Prices = loadPrices(filepath.Join(repo, "e2e", "pricing", getenv("E2E_PRICING_REGION", "us-west-2")+".json"))
+	// E2E_PRICING_FILE: a price table of another cloud (pricing/alibaba-us-east-1.json).
+	e.Prices = loadPrices(getenv("E2E_PRICING_FILE", filepath.Join(repo, "e2e", "pricing", getenv("E2E_PRICING_REGION", "us-west-2")+".json")))
 	return e
 }
 
@@ -197,6 +200,7 @@ func (e *Env) detect(ctx context.Context) {
 	e.HasKarpenter = e.crdExists(ctx, "nodeclaims.karpenter.sh")
 	e.HasAWS = e.crdExists(ctx, "ec2nodeclasses.karpenter.k8s.aws")
 	e.HasKWOK = e.crdExists(ctx, "kwoknodeclasses.karpenter.kwok.sh")
+	e.HasAlibaba = e.crdExists(ctx, "ecsnodeclasses.karpenter.alibabacloud.com")
 
 	if d, err := e.get(ctx, gvkDeployment, e.TFNamespace, e.TFRelease+"-controller"); err == nil {
 		e.OperatorImage = firstContainerImage(d, "controller")

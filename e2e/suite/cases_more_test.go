@@ -84,6 +84,7 @@ var _ = Describe("scheduling", func() {
 	Register(Case{
 		ID: "ISO-06", Title: "remote 模式：业务 Pod 在 CPU 节点，经 TensorFusionConnection 使用远端 GPU", Tiers: []string{TierCore},
 		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 30 * time.Minute,
+		KnownIssue: "the remote worker of the default ProviderConfig (tensorfusion/tensor-fusion-worker v2.25.0, community edition) quits at start with \"VerifyLicense: License is not set\" and the pod goes into CrashLoopBackOff with exit code 0; neither the chart nor the operator has a setting that hands it a license, so the client never gets a GPU (seen on a real T4, 2026-10-12)",
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
@@ -93,7 +94,12 @@ var _ = Describe("scheduling", func() {
 			Expect(env.create(ctx, pod)).To(Succeed())
 			p, _ := env.waitPodReady(ctx, c.NS, "remote", 15*time.Minute)
 			Expect(p.GetLabels()).To(HaveKeyWithValue(lblComponent, "client"))
-			Expect(str(p, "spec", "nodeName")).NotTo(Equal(g.Node), "the client must not run on the GPU node")
+			// Any GPU of the pool may serve the connection, not only the first one.
+			var gpuNodes []string
+			for _, x := range gpus {
+				gpuNodes = append(gpuNodes, x.Node)
+			}
+			Expect(gpuNodes).NotTo(ContainElement(str(p, "spec", "nodeName")), "the client must not run on a GPU node")
 
 			conns, err := env.list(ctx, gvkConnection, c.NS)
 			Expect(err).NotTo(HaveOccurred())
@@ -101,7 +107,7 @@ var _ = Describe("scheduling", func() {
 			c.Note("connection status: %s", toJSON(mapAt(&conns[0], "status")))
 			workers, _ := env.list(ctx, gvkPod, c.NS, client.MatchingLabels{lblComponent: "worker"})
 			Expect(workers).NotTo(BeEmpty(), "no worker pod")
-			Expect(str(&workers[0], "spec", "nodeName")).To(Equal(g.Node))
+			Expect(gpuNodes).To(ContainElement(str(&workers[0], "spec", "nodeName")), "the worker must run on a GPU node of the pool")
 
 			var info map[string]any
 			waitFor(ctx, "probe output from the client", 5*time.Minute, func() (string, bool) {

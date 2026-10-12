@@ -147,8 +147,12 @@ func addPathBPool(ctx context.Context, instanceTypes []string, capacityType stri
 }
 
 // pathBNodeClassRef names the NodeClass path B NodeClaims use: the stack's
-// EC2NodeClass on AWS, the KWOKNodeClass on a KWOK cluster.
+// EC2NodeClass on AWS, the ECSNodeClass on Alibaba Cloud, the KWOKNodeClass on
+// a KWOK cluster.
 func pathBNodeClassRef() map[string]any {
+	if env.HasAlibaba && !env.HasAWS {
+		return map[string]any{"group": "karpenter.alibabacloud.com", "kind": "ECSNodeClass", "version": "v1alpha1", "name": getenv("E2E_GPU_NODECLASS", "tf-gpu")}
+	}
 	if env.HasKWOK && !env.HasAWS {
 		return map[string]any{"group": "karpenter.kwok.sh", "kind": "KWOKNodeClass", "version": "v1alpha1", "name": getenv("E2E_GPU_NODECLASS", "tf-kwok")}
 	}

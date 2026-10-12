@@ -335,8 +335,18 @@ var _ = Describe("recovery", func() {
 			p, _ := env.waitPodReady(ctx, c.NS, "app", 8*time.Minute)
 			node := str(p, "spec", "nodeName")
 			gid := podGPUIDs(p)[0]
-			before, _ := env.get(ctx, gvkGPU, "", gid)
-			availBefore := toGPU(before).AvailTflops
+			// The allocator syncs to the GPU CR asynchronously: a baseline read before
+			// the CR shows this pod's share would be the full capacity.
+			var availBefore float64
+			waitFor(ctx, "GPU CR accounting to show the allocation", 2*time.Minute, func() (string, bool) {
+				u, err := env.get(ctx, gvkGPU, "", gid)
+				if err != nil {
+					return err.Error(), false
+				}
+				g := toGPU(u)
+				availBefore = g.AvailTflops
+				return fmt.Sprintf("available %.1f of %.1f TFLOPS", g.AvailTflops, g.CapTflops), g.AvailTflops < g.CapTflops-1
+			})
 
 			hvName := hypervisorPodName(node)
 			old, err := env.get(ctx, gvkPod, env.TFNamespace, hvName)
