@@ -91,6 +91,21 @@ func TestCalculateDesiredUpdatedDelta(t *testing.T) {
 	}
 }
 
+func TestGetBatchUpdatePolicyZeroPercentage(t *testing.T) {
+	// Regression: batchPercentage=0 passes CRD validation but is a divisor in
+	// calculateDesiredUpdatedDelta.
+	pool := &tfv1.GPUPool{
+		Spec: tfv1.GPUPoolSpec{
+			NodeManagerConfig: &tfv1.NodeManagerConfig{
+				NodePoolRollingUpdatePolicy: &tfv1.NodeRollingUpdatePolicy{BatchPercentage: 0},
+			},
+		},
+	}
+	if _, got := getBatchUpdatePolicy(pool); got != 100 {
+		t.Errorf("getBatchUpdatePolicy() percentage = %v, want 100", got)
+	}
+}
+
 func TestIsAutoUpdateEnableNilPolicy(t *testing.T) {
 	// Regression: pools without nodePoolRollingUpdatePolicy must not panic
 	// (nil pointer dereference) and default to auto-update disabled.
