@@ -29,6 +29,8 @@ var (
 	KarpenterVersion       = "v1"
 	DefaultGPUResourceName = "nvidia.com/gpu"
 	EC2NodeClassGroup      = "karpenter.k8s.aws"
+	// ECSNodeClassGroup is the NodeClass API group of Karpenter's Alibaba Cloud provider.
+	ECSNodeClassGroup = "karpenter.alibabacloud.com"
 	// AWS capacity type: https://karpenter.sh/docs/concepts/scheduling/#well-known-labels
 	AWSOnDemandType = "on-demand"
 	AWSReservedType = "reserved"
@@ -224,12 +226,30 @@ func (p KarpenterGPUNodeProvider) GetInstancePricing(instanceType string, capaci
 }
 
 func (p KarpenterGPUNodeProvider) GetGPUNodeInstanceTypeInfo(region string) []types.GPUNodeInstanceInfo {
+	// The NodeClass the pool refers to tells which cloud the NodeClaims land
+	// on, and with it which instance types exist.
+	if p.nodeClassGroup() == ECSNodeClassGroup {
+		instanceTypes, err := p.pricingProvider.LookupAlibabaGPUNodeInstanceTypes()
+		if err != nil || len(instanceTypes) == 0 {
+			log.FromContext(p.ctx).Error(err, "no Alibaba Cloud instance type info found", "region", region)
+			return []types.GPUNodeInstanceInfo{}
+		}
+		return instanceTypes
+	}
 	instanceTypes, exists := p.pricingProvider.GetRegionalGPUNodeInstanceTypes(region)
 	if !exists {
 		log.FromContext(p.ctx).Error(nil, "no instance type info found for region %s", region)
 		return []types.GPUNodeInstanceInfo{} // avoid panic
 	}
 	return instanceTypes
+}
+
+func (p KarpenterGPUNodeProvider) nodeClassGroup() string {
+	if p.nodeManagerConfig == nil || p.nodeManagerConfig.NodeProvisioner == nil ||
+		p.nodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef == nil {
+		return ""
+	}
+	return p.nodeManagerConfig.NodeProvisioner.KarpenterNodeClassRef.Group
 }
 
 // parseKarpenterConfig extracts Karpenter-specific configuration from ExtraParams

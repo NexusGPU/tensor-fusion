@@ -198,6 +198,7 @@ rules:
   - update
   - watch
 - apiGroups:
+  - karpenter.alibabacloud.com
   - karpenter.azure.com
   - karpenter.k8s.alibabacloud
   - karpenter.k8s.aws

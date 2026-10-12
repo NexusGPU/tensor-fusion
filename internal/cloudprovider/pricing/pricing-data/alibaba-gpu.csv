@@ -1,0 +1,20 @@
+Name,API Name,Instance Memory,vCPUs,GPUs,GPU model,GPU memory,Arch,Network Performance,On Demand,Linux Reserved cost,Linux Spot Minimum cost,Windows On Demand cost,Windows Reserved cost
+GN6I gn6i-c4g1.xlarge,ecs.gn6i-c4g1.xlarge,15 GiB,4 vCPUs,1,T4,16 GiB,x86_64,unavailable,$1.0941 hourly,unavailable,unavailable,unavailable,unavailable
+GN6I gn6i-c8g1.2xlarge,ecs.gn6i-c8g1.2xlarge,31 GiB,8 vCPUs,1,T4,16 GiB,x86_64,unavailable,$1.2752 hourly,unavailable,unavailable,unavailable,unavailable
+GN6I gn6i-c16g1.4xlarge,ecs.gn6i-c16g1.4xlarge,62 GiB,16 vCPUs,1,T4,16 GiB,x86_64,unavailable,$1.6404 hourly,unavailable,unavailable,unavailable,unavailable
+GN6I gn6i-c24g1.6xlarge,ecs.gn6i-c24g1.6xlarge,93 GiB,24 vCPUs,1,T4,16 GiB,x86_64,unavailable,$2.0842 hourly,unavailable,unavailable,unavailable,unavailable
+GN6I gn6i-c24g1.12xlarge,ecs.gn6i-c24g1.12xlarge,186 GiB,48 vCPUs,2,T4,32 GiB,x86_64,unavailable,$4.1699 hourly,unavailable,unavailable,unavailable,unavailable
+GN6I gn6i-c24g1.24xlarge,ecs.gn6i-c24g1.24xlarge,372 GiB,96 vCPUs,4,T4,64 GiB,x86_64,unavailable,$8.3412 hourly,unavailable,unavailable,unavailable,unavailable
+GN6I gn6i-c40g1.10xlarge,ecs.gn6i-c40g1.10xlarge,155 GiB,40 vCPUs,1,T4,16 GiB,x86_64,unavailable,$2.7303 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-c8g1.2xlarge,ecs.gn7i-c8g1.2xlarge,30 GiB,8 vCPUs,1,A10,24 GiB,x86_64,unavailable,$2.1269 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-c16g1.4xlarge,ecs.gn7i-c16g1.4xlarge,60 GiB,16 vCPUs,1,A10,24 GiB,x86_64,unavailable,$2.2521 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-c32g1.8xlarge,ecs.gn7i-c32g1.8xlarge,188 GiB,32 vCPUs,1,A10,24 GiB,x86_64,unavailable,$2.5023 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-c32g1.16xlarge,ecs.gn7i-c32g1.16xlarge,376 GiB,64 vCPUs,2,A10,48 GiB,x86_64,unavailable,$5.0046 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-c32g1.32xlarge,ecs.gn7i-c32g1.32xlarge,752 GiB,128 vCPUs,4,A10,96 GiB,x86_64,unavailable,$10.0093 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-c56g1.14xlarge,ecs.gn7i-c56g1.14xlarge,346 GiB,56 vCPUs,1,A10,24 GiB,x86_64,unavailable,$3.6033 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-c48g1.12xlarge,ecs.gn7i-c48g1.12xlarge,310 GiB,48 vCPUs,1,A10,24 GiB,x86_64,unavailable,$3.0028 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-8x.16xlarge,ecs.gn7i-8x.16xlarge,256 GiB,64 vCPUs,8,A10,192 GiB,x86_64,unavailable,$11.8068 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-4x.8xlarge,ecs.gn7i-4x.8xlarge,128 GiB,32 vCPUs,4,A10,96 GiB,x86_64,unavailable,$4.9900 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-2x.8xlarge,ecs.gn7i-2x.8xlarge,128 GiB,32 vCPUs,2,A10,48 GiB,x86_64,unavailable,$3.1253 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-8x.32xlarge,ecs.gn7i-8x.32xlarge,512 GiB,128 vCPUs,8,A10,192 GiB,x86_64,unavailable,$12.5013 hourly,unavailable,unavailable,unavailable,unavailable
+GN7I gn7i-4x.16xlarge,ecs.gn7i-4x.16xlarge,256 GiB,64 vCPUs,4,A10,96 GiB,x86_64,unavailable,$6.2506 hourly,unavailable,unavailable,unavailable,unavailable
