@@ -254,9 +254,27 @@ const (
 	// few percent. Until it is trusted in full the calibration of the device's
 	// own utilization, which is exact from the start, makes up the difference;
 	// see attributeDeviceUtilization.
-	calibrationCoarseAlpha    = 0.01
-	calibrationCoarseEvidence = 2.0
-	calibrationTrustEvidence  = 16.0
+	calibrationCoarseAlpha = 0.01
+	// Per-process readings of a worker that shares its device with other limited
+	// workers (sharedCalibration, see loadSharedCalibrationFromEnv). The driver
+	// books each of its utilization samples, one every 200 ms, under the process
+	// that holds the device at that moment. Limited workers are refilled every
+	// 10 ms, all at the same instant, so the sample lands on the same point of
+	// the refill cycle for seconds on end and moves around it once in about 33 s
+	// (measured on an RTX 3090): a small worker reads zero for ten to twenty
+	// seconds, then twice its share. Such readings only move the average slowly
+	// (calibrationSlowAlpha, about 100 s, three of those cycles), are trusted in
+	// full after calibrationSlowSamples of them, and do not restart the
+	// calibration by themselves: only when the device's own utilization, which is
+	// exact and does not depend on who is booked, shows over the same readings
+	// calibrationMoreConfirmation times what the workers' spending amounts to by
+	// what a token is taken to buy each of them, or that much less (see
+	// Controller.deviceConfirmation).
+	calibrationSlowAlpha        = 0.005
+	calibrationSlowSamples      = 200
+	calibrationMoreConfirmation = 1.10
+	calibrationCoarseEvidence   = 2.0
+	calibrationTrustEvidence    = 16.0
 	// A calibrated rate is left alone while it is within this fraction of the
 	// right one.
 	calibratedRateDeadband = 0.03
@@ -342,12 +360,24 @@ const (
 	regimeAlpha         = 0.02
 
 	// A worker that gets a limit after having none is left at the highest rate
-	// until what it spends unthrottled has been measured, for at most
-	// limitProbeIntervals intervals, and the measurement only counts with a
-	// utilization of at least limitProbeMinUtil (whole percents say little
-	// below that); see Controller.followLimit.
-	limitProbeIntervals = 4
-	limitProbeMinUtil   = 0.05
+	// until what it spends unthrottled has been measured; see
+	// Controller.followLimit. The measurement takes two intervals in which the
+	// worker spends tokens and a utilization of at least limitProbeMinUtil for
+	// the second (whole percents say little below that). It is given up, and
+	// the worker started from the initial rate like a new one,
+	//   - after limitProbeIntervals intervals in which the worker spent tokens,
+	//     or its meter told nothing, without yielding a figure: that long, two
+	//     seconds, a worker runs unthrottled under a limit at the most;
+	//   - after limitProbeIdleIntervals intervals in which the meter showed
+	//     that it spent nothing. Nothing goes through a limiter in those, so
+	//     the rate holds nothing back that a lower one would: waiting costs
+	//     nothing, and a worker that resumes within that time is measured like
+	//     a busy one instead of starting from a rate far below its limit. A
+	//     minute, the longest an adopted rate waits for its signal
+	//     (adoptionHoldMaxIntervals).
+	limitProbeIntervals     = 4
+	limitProbeIdleIntervals = 120
+	limitProbeMinUtil       = 0.05
 	// After the limit moved a worker's rate, utilization readings describe the
 	// time before for as long as the driver averages over (a second) and its
 	// latest sample is old: that many intervals are kept out of the
@@ -500,4 +530,29 @@ func loadERLConfigFromEnv() erlConfig {
 		klog.Infof("Rate limiter overrides in effect: %s", strings.Join(applied, ", "))
 	}
 	return cfg
+}
+
+// sharedCalibrationEnv switches the treatment of per-process readings on
+// devices that limited workers share (see calibrationSlowAlpha): unset or
+// "released", readings are used as on a device with one worker; "confirmed",
+// they are a slow calibration that restarts only on a change the device's own
+// utilization confirms, and the rate of such a worker follows what a token is
+// found to buy now instead of the most expensive kind of work seen recently
+// (erlState.heavyGain), which under these readings is the neighbor's work
+// booked under the worker for a while.
+const sharedCalibrationEnv = "TF_ERL_SHARED_CALIBRATION"
+
+func loadSharedCalibrationFromEnv() bool {
+	switch mode := strings.TrimSpace(os.Getenv(sharedCalibrationEnv)); mode {
+	case "", "released":
+		return false
+	case "confirmed":
+		klog.Infof("Per-process utilization of limited workers sharing a device is "+
+			"a slow, device-confirmed calibration (%s=%s)",
+			sharedCalibrationEnv, mode)
+		return true
+	default:
+		klog.Warningf("%s=%q is not known (released, confirmed); the released behavior is used", sharedCalibrationEnv, mode)
+		return false
+	}
 }

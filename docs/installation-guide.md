@@ -650,6 +650,7 @@ podTemplate:
 - **hard 隔离 + remote-vGPU `v2.26.0` 下 vLLM 0.28.0 启动失败。** client/worker 镜像为 `tensorfusion/tensor-fusion-client:v2.26.0`、`tensorfusion/tensor-fusion-worker:v2.26.0` 时，hard 隔离的 vLLM 0.28.0 报 `call api=cuMemcpy failed … named symbol not found`。缺陷在 remote-vGPU worker（独立组件），不在本 operator。
 - **`shared` 隔离是整卡独占。** 同一张 GPU 上的两个 `shared` Pod 先后运行，不会同时运行。
 - **算力限额约束的是设备时间占比，不是 solo 吞吐的比例。** 多个 Pod 共用一张卡时，GPU 在两个 context 之间每切换一次约耗时 65 µs（RTX 3090 实测），驱动把这段时间也计入利用率，而且大多记在占用引擎时间最长的 Pod 名下。因此配额较大的 Pod 达到自己的利用率目标时，实际得到的 kernel 时间约少 20%：与一个 30% 配额的邻居同卡，60% 配额实测为 solo 吞吐的 0.485，50% 为 0.385，40% 为 0.309。两个不设限的短 kernel 负载同卡时，合计吞吐约为单独运行一个的 0.83（长 kernel 负载 0.93～0.95；ONNX Runtime 的 CNN / encoder 推理和以拷贝为主的负载没有损失）。
+- **多个限额 Pod 同卡时，短 kernel 负载的小配额 Pod 可能长时间低于配额。** 驱动约每 200 ms 采一次利用率并整份记到当时占用设备的进程名下，和 10 ms 一次的令牌补充叠加后，小配额 Pod 的进程利用率会连续十几秒读成 0。默认的控制逻辑在这种读数下可能把它的速率压住约两分钟（RTX 3090 实测：0.28 ms 矩阵乘负载，30% / 60% 两个 Pod，30% 的一方只有 solo 吞吐的 0.16）。长 kernel 负载和 3B～7B 的 LLM 推理不受影响。可以在 pool 的 hypervisor Pod 模板里设置环境变量 `TF_ERL_SHARED_CALIBRATION=confirmed` 启用另一套处理方式（进程利用率只作慢校准，由设备自身的利用率确认变化）：上述场景变为 0.27，但令牌成本差异很大的负载混部时，一方可能超出配额 10%～30%，负载突然变重时前 10 秒可能超出更多。该开关默认关闭，属于实验性选项。
 - **混合架构集群上的 Helm hook Job。** 生成和注入 webhook 证书的两个 hook Job 默认只限定 `kubernetes.io/os: linux`，并沿用 controller 的 `affinity`、`tolerations`，不限定 CPU 架构。hook Pod 落到拉不到该镜像的节点时，`helm install` / `helm upgrade` 会一直等到超时。用 `controller.admissionWebhooks.patch.nodeSelector`（例如 `kubernetes.io/arch: amd64`）、`affinity`、`tolerations` 指定 hook Pod 的节点。
 
 ## 8. 升级、回滚、卸载

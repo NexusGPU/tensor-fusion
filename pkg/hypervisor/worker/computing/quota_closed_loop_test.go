@@ -39,6 +39,14 @@ type simWorker struct {
 	// the worker has no limit (100%), as measured on a device: the balance
 	// stayed at the capacity while the worker used the whole device.
 	freeWithoutLimit bool
+	// limiterLag is how long the worker's limiter goes on acting on the limit
+	// it knew after the limit has changed. The limiter looks the limit up every
+	// 200 ms, and the control loop can see a change before the limiter does.
+	// limiterLimit is the limit the limiter acts on, and lagFor how long it has
+	// differed from the worker's; see limiterSees.
+	limiterLag   time.Duration
+	limiterLimit uint32
+	lagFor       time.Duration
 	// foundUpLimit is the limit the worker's mapping carried when the current
 	// controller was started; see closedLoopSim.publishLimits.
 	foundUpLimit uint32
@@ -88,9 +96,25 @@ func (w *simWorker) limiterAdmits(info *workerstate.SharedDeviceInfoV2) (admitte
 	return true, true
 }
 
+// limiterSees advances the limit the worker's limiter acts on by one refill
+// period: the worker's limit, limiterLag after it changed.
+func (w *simWorker) limiterSees() {
+	if w.limiterLimit == w.upLimit || w.limiterLimit == 0 || w.limiterLag <= 0 {
+		w.limiterLimit, w.lagFor = w.upLimit, 0
+		return
+	}
+	if w.lagFor += erlRefillInterval; w.lagFor > w.limiterLag {
+		w.limiterLimit, w.lagFor = w.upLimit, 0
+	}
+}
+
 // pays reports whether the worker's work goes through its token bucket.
 func (w *simWorker) pays() bool {
-	return !w.unpaid && (!w.freeWithoutLimit || w.upLimit < 100)
+	limit := w.upLimit
+	if w.limiterLimit != 0 {
+		limit = w.limiterLimit
+	}
+	return !w.unpaid && (!w.freeWithoutLimit || limit < 100)
 }
 
 func (w *simWorker) deviceInfo(t *testing.T) *workerstate.SharedDeviceInfoV2 {
@@ -288,6 +312,7 @@ func (s *closedLoopSim) step() {
 		total := 0.0
 		for i, w := range s.workers {
 			spend[i], stalled[i] = 0, false
+			w.limiterSees()
 			admitted := !w.pays()
 			if w.pays() {
 				admitted, stalled[i] = w.limiterAdmits(infos[i])

@@ -30,6 +30,17 @@ type limitChange struct {
 	// restart makes the change while the hypervisor is away for four seconds
 	// instead of while it runs.
 	restart bool
+	// unmetered puts a process on the device that no token bucket accounts
+	// for, as a display server's context is on a workstation: idle, but with
+	// it there the device's own utilization is not read for the workers. The
+	// provider reports utilization per process, as the driver does.
+	unmetered bool
+	// limiterLag is how long after the change the worker's limiter starts to
+	// act on the new limit (simWorker.limiterLag).
+	limiterLag time.Duration
+	// idle is the number of intervals from the change on in which the worker
+	// has nothing to run; what is returned then starts when it resumes.
+	idle int
 }
 
 func (lc limitChange) String() string {
@@ -42,6 +53,15 @@ func (lc limitChange) String() string {
 	}
 	if lc.charged {
 		name += ", limiter that charges without a limit"
+	}
+	if lc.unmetered {
+		name += ", device with an unmetered process"
+	}
+	if lc.limiterLag > 0 {
+		name += fmt.Sprintf(", limiter %v behind", lc.limiterLag)
+	}
+	if lc.idle > 0 {
+		name += fmt.Sprintf(", idle for %d intervals", lc.idle)
 	}
 	return name
 }
@@ -64,9 +84,19 @@ func (lc limitChange) run(t *testing.T, seed uint64) (worker, neighbor []float64
 		n = &simWorker{uid: "neighbor", upLimit: lc.neighbor, demand: 1}
 		workers = append(workers, n)
 	}
+	w.limiterLag = lc.limiterLag
 	sim := newClosedLoopSim(t, workers...)
 	sim.selfRefill = true
 	realisticTelemetry(sim, rng)
+	if lc.unmetered {
+		reportProcessUtilizationInRuns(sim, rng)
+		report := sim.controller.processUtilFn
+		sim.controller.SetProcessUtilizationProvider(func() *ProcessUtilizationSnapshot {
+			snapshot := report()
+			snapshot.MarkUnmetered(simDeviceUUID)
+			return snapshot
+		})
+	}
 	sim.run(240 + int(seed%7))
 	if lc.from >= 100 {
 		w.upLimit = lc.from
@@ -93,6 +123,11 @@ func (lc limitChange) run(t *testing.T, seed uint64) (worker, neighbor []float64
 		sim.startController()
 	} else {
 		w.upLimit = lc.to
+	}
+	if lc.idle > 0 {
+		w.demand = 0
+		sim.run(lc.idle)
+		w.demand = 1
 	}
 	from := len(w.history)
 	sim.run(120)
@@ -204,6 +239,103 @@ func TestLiveLimitChangeIsFollowedWithinTwoIntervals(t *testing.T) {
 			}
 			if got[3].value > 0 {
 				t.Errorf("seed %d: the rate was held for alternating work after a change of the limit", got[3].seed)
+			}
+		})
+	}
+}
+
+// On a device the hypervisor does not read for its workers, and with a limiter
+// that acts on a new limit some time after it was set, a worker that gets a
+// limit after having none is measured all the same.
+//
+// Measured on a device (a workstation whose display server holds a context on
+// every card, so that each carries a process no token bucket accounts for): the
+// limiter began to charge 0.2 s after the limit was set to 30%, the meter
+// showed what the worker spent in each of the four intervals of the
+// measurement, about 5500 tokens/s, and the measurement ended without a figure
+// because it took the utilization from the device alone, which is not read
+// there. The worker then started from 100 tokens/s where 1500 were needed, ran
+// at 2% of the device and took 12 s to get to its limit. Its own processes read
+// 97% all along.
+//
+// Asserted on the worst of twenty seeds, in control intervals after the change:
+// the worker is throttled from the interval after the second one in which it
+// spent tokens (two intervals after the change when the limiter acts on it
+// within the first, three when the control loop sees the change before the
+// limiter does), it is not left at a rate far below its limit, and over the ten
+// seconds from then on it is at its limit on average. Next to another worker
+// on a device that is not read, "at its limit" is what the per-process readings
+// alone make of it: no further from it than a worker that had the same limit
+// all along is under the same readings.
+func TestLimitAfterNoneIsMeasuredWithoutTheDeviceReading(t *testing.T) {
+	const short, long = 200 * time.Millisecond, 700 * time.Millisecond
+	for _, tc := range []struct {
+		change limitChange
+		within int
+		// asNew is set where the measurement has been given up by the time the
+		// worker runs: it starts from the initial rate, like a new worker.
+		asNew bool
+	}{
+		{change: limitChange{from: 100, to: 30, unmetered: true, limiterLag: short}, within: 2},
+		{change: limitChange{from: 100, to: 30, unmetered: true, limiterLag: long}, within: 3},
+		{change: limitChange{from: 100, to: 30, neighbor: 60, unmetered: true, limiterLag: short}, within: 2},
+		{change: limitChange{from: 100, to: 30, limiterLag: short}, within: 2},
+		{change: limitChange{from: 100, to: 30, limiterLag: long}, within: 3},
+		{change: limitChange{from: 100, to: 30, neighbor: 60, limiterLag: long}, within: 3},
+		// A worker that is idle when it gets its limit is measured when it
+		// resumes, within a minute; after that it starts as a new one.
+		{change: limitChange{from: 100, to: 30, unmetered: true, idle: 20}, within: 2},
+		{change: limitChange{from: 100, to: 30, idle: 20}, within: 2},
+		{change: limitChange{from: 100, to: 30, idle: limitProbeIdleIntervals + 2}, asNew: true},
+	} {
+		t.Run(tc.change.String(), func(t *testing.T) {
+			limit := float64(tc.change.to) / 100
+			tolerance := 0.2 * limit
+			if tc.change.unmetered && tc.change.neighbor > 0 {
+				unchanged := tc.change
+				unchanged.from = unchanged.to
+				steady := worst(func(seed uint64) []float64 {
+					worker, _, _ := unchanged.run(t, seed)
+					return []float64{math.Abs(meanOf(worker[tc.within:tc.within+limitBandFor]) - limit)}
+				})
+				t.Logf("a worker that had the limit all along is %.1f points from it over the same ten seconds (seed %d)",
+					steady[0].value*100, steady[0].seed)
+				tolerance = steady[0].value + 0.02
+			}
+			got := worst(func(seed uint64) []float64 {
+				worker, _, _ := tc.change.run(t, seed)
+				// Throttled: no longer above what its limit allows with a burst.
+				throttled := len(worker)
+				for i, used := range worker {
+					if used <= 1.5*limit {
+						throttled = i
+						break
+					}
+				}
+				lowest := 1.0
+				for _, used := range worker[min(throttled, len(worker)-1):] {
+					lowest = math.Min(lowest, used)
+				}
+				from := min(throttled, len(worker)-limitBandFor)
+				return []float64{float64(throttled), -lowest, math.Abs(meanOf(worker[from:from+limitBandFor]) - limit)}
+			})
+			t.Logf("worst seeds: throttled after %.0f intervals (seed %d), lowest use from then on %.3f (seed %d), "+
+				"%.1f points from the limit over the ten seconds after (seed %d)",
+				got[0].value, got[0].seed, -got[1].value, got[1].seed, got[2].value*100, got[2].seed)
+			if got[0].value > float64(tc.within) {
+				t.Errorf("seed %d: the worker ran unthrottled for %.0f intervals after the change, want %d",
+					got[0].seed, got[0].value, tc.within)
+			}
+			if tc.asNew {
+				return
+			}
+			if -got[1].value < limit/3 {
+				t.Errorf("seed %d: the worker fell to %.3f of the device with a limit of %.2f",
+					got[1].seed, -got[1].value, limit)
+			}
+			if got[2].value > tolerance {
+				t.Errorf("seed %d: the worker was %.3f from its limit over the ten seconds after the measurement, "+
+					"want at most %.3f", got[2].seed, got[2].value, tolerance)
 			}
 		})
 	}
