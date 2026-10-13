@@ -680,6 +680,12 @@ func (m *TensorFusionPodMutator) patchTFClient(
 				applyPodIndexResource(&pod.Spec.Containers[i], index)
 			}
 		}
+		// the worker of a pod that is meant to finish is a native sidecar
+		for i := range pod.Spec.InitContainers {
+			if pod.Spec.InitContainers[i].Name == constants.TFContainerNameWorker {
+				applyPodIndexResource(&pod.Spec.InitContainers[i], index)
+			}
+		}
 	}
 
 	// Patch hostPort allocation

@@ -419,6 +419,7 @@ func AddTFDefaultClientConfBeforePatch(
 				true,
 			)
 			applyProviderRemoteWorkerConfigToContainerIndex(&pod.Spec, tfInfo.Profile.GPUVendor, workerContainerIndex)
+			moveWorkerToNativeSidecar(pod, workerContainerIndex)
 		}
 
 		for _, injectContainerIndex := range injectContainerIndices {
@@ -576,4 +577,21 @@ func configureFeatures4InjectLib(isLocalGPU bool, disabledFeatures string) []v1.
 		}
 	}
 	return envList
+}
+
+// moveWorkerToNativeSidecar makes the worker of a pod that is meant to finish
+// (restartPolicy Never or OnFailure: a Job, a one-off pod) a native sidecar: an
+// init container with restartPolicy Always. As an ordinary container it keeps
+// running after the workload has exited, and the pod never completes. The
+// kubelet starts a native sidecar before the workload's containers and stops it
+// when they are done. Pods that restart their containers anyway (Deployments,
+// StatefulSets) keep the worker as an ordinary container.
+func moveWorkerToNativeSidecar(pod *v1.Pod, workerContainerIndex int) {
+	if pod.Spec.RestartPolicy != v1.RestartPolicyNever && pod.Spec.RestartPolicy != v1.RestartPolicyOnFailure {
+		return
+	}
+	worker := pod.Spec.Containers[workerContainerIndex]
+	worker.RestartPolicy = ptr.To(v1.ContainerRestartPolicyAlways)
+	pod.Spec.Containers = append(pod.Spec.Containers[:workerContainerIndex], pod.Spec.Containers[workerContainerIndex+1:]...)
+	pod.Spec.InitContainers = append(pod.Spec.InitContainers, worker)
 }

@@ -1,0 +1,64 @@
+//
+// smprobe kernel: every thread block reports the streaming multiprocessor (SM)
+// it runs on.
+//
+//   hist[0 .. nslots-1]  number of blocks that ran on SM id i
+//   hist[nslots]         largest %nsmid seen (upper bound of SM ids)
+//   hist[nslots + 1]     blocks whose SM id was >= nslots
+//
+// Thread 0 of each block reads the PTX special register %smid once and adds 1
+// to its slot. All threads then spin for `ticks` cycles of %clock64, so that a
+// block stays on its SM long enough for the launch to fill every SM the
+// context may use.
+//
+// The .version and .target lines are rewritten by build.sh for each
+// architecture; as written here the text is the JIT fallback for any GPU.
+//
+.version 6.4
+.target sm_50
+.address_size 64
+
+.visible .entry smprobe(
+	.param .u64 p_hist,
+	.param .u32 p_nslots,
+	.param .u64 p_ticks
+)
+{
+	.reg .pred %p<5>;
+	.reg .b32 %r<8>;
+	.reg .b64 %rd<10>;
+
+	ld.param.u64 %rd1, [p_hist];
+	ld.param.u32 %r1, [p_nslots];
+	ld.param.u64 %rd2, [p_ticks];
+	mov.u64 %rd3, %clock64;
+
+	mov.u32 %r2, %tid.x;
+	setp.ne.u32 %p1, %r2, 0;
+	@%p1 bra L_spin;
+
+	mov.u32 %r3, %smid;
+	mov.u32 %r4, %nsmid;
+
+	// hist[nslots] = max(hist[nslots], %nsmid)
+	cvt.u64.u32 %rd4, %r1;
+	shl.b64 %rd4, %rd4, 2;
+	add.u64 %rd4, %rd1, %rd4;
+	atom.global.max.u32 %r5, [%rd4], %r4;
+
+	// slot = smid < nslots ? smid : nslots + 1
+	add.u32 %r6, %r1, 1;
+	setp.lt.u32 %p2, %r3, %r1;
+	selp.u32 %r6, %r3, %r6, %p2;
+	cvt.u64.u32 %rd5, %r6;
+	shl.b64 %rd5, %rd5, 2;
+	add.u64 %rd5, %rd1, %rd5;
+	atom.global.add.u32 %r7, [%rd5], 1;
+
+L_spin:
+	mov.u64 %rd6, %clock64;
+	sub.u64 %rd7, %rd6, %rd3;
+	setp.lt.u64 %p3, %rd7, %rd2;
+	@%p3 bra L_spin;
+	ret;
+}
