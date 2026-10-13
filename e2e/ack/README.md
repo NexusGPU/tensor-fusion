@@ -41,6 +41,7 @@ VPC 10.43.0.0/16 (2 vSwitches / 2 zones, NAT gateway + EIP for egress)
 | `install.sh` | Karpenter's RAM role, chart, ECSNodeClass, NodePool |
 | `install-tf.sh` | TensorFusion chart, with the image tag passed explicitly; the console agent's credentials go from environment variables into a Secret |
 | `build-karpenter.sh` | Builds the provider with `patches/` and imports it onto the system node |
+| `registry.sh` | The image cache inside the cluster: a pull-through registry on the system node for `docker.io`, `quay.io`, `registry.k8s.io` and `ghcr.io`, which every node's containerd tries first. See "Image cache" |
 | `load-image.sh` | Imports a local image (or a `docker save` archive) into containerd on the system node |
 | `guard.sh` | Cost guard |
 | `down.sh` | Deletes all resources by name and tag, then checks for leftovers |
@@ -48,6 +49,19 @@ VPC 10.43.0.0/16 (2 vSwitches / 2 zones, NAT gateway + EIP for egress)
 `run.sh up` reads three local inputs under `ack/.work/` (none of them is committed): `images/*.tar` (development builds that no image registry hosts), `stack.env` (e.g. `KARPENTER_ALIBABA_IMAGE=`, `TF_OPERATOR_TAG=`), and `agent.env` (`TF_AGENT_ID` / `TF_ENROLL_TOKEN` of the console environment, mode 600).
 
 The vGPU worker license, which hard isolation and remote mode need, is read from `TF_LICENSE` / `TF_LICENSE_SIGN` in the environment or from the file `TF_LICENSE_FILE` (default `~/.config/tensor-fusion/license.env`, mode 600; set another path in `stack.env`). `install-tf.sh` stores it in the Secret `tensor-fusion-license` and points the worker at it; the suite puts the same Secret into every case namespace. Without a license the stack is installed as before and the cases that need one are skipped with that reason. See `tools/tf-license.sh`.
+
+## Image cache
+
+A new GPU node pulls its images through the NAT gateway of the VPC: 200 Mbit/s, shared by all nodes. `vllm/vllm-openai:v0.11.0` (12 GB on disk) took 12 minutes that way, of the 20 minutes between a pending pod and a ready model server on a new T4 (VM boot to GPU registered: 5.5 minutes; model download and load: 3). `registry.sh` takes the pull out of that path:
+
+- One pod on the system node (namespace `tf-registry`, host network) runs CNCF Distribution as a pull-through cache, one instance per upstream registry, on ports 5000 to 5003. What it served stays on the node's local disk.
+- A sidecar copies new layers to an OSS bucket through the S3-compatible API over the internal network, and an init container restores the local disk from the bucket. The bucket is kept by `make ack-down`, so the next stack starts with a filled cache; `ack/registry.sh purge` removes it.
+- A DaemonSet writes `/etc/containerd/certs.d/<registry>/hosts.toml` on every node, the ones Karpenter adds included. containerd reads the files on every pull; the upstream registry remains the fallback when the cache is down.
+- The bucket is used by a RAM user that may only use this bucket; its access key is in `ack/.work/registry.env` (mode 600) and in a Secret of the cluster.
+
+Measured on 2026-10-13 with `vllm/vllm-openai:v0.11.0` on a new `ecs.gn6i-c4g1.xlarge`: the download of the layers went from about 12 minutes to about 70 seconds (the largest layer, 4.9 GB, at 73 MB/s). What remained was the node's disk: a pull writes 39 GB (13 GB of layers and 26 GB unpacked), and the 120 GiB PL0 system disk wrote 140 MB/s, so the whole pull still took 7 min 07 s. With a 300 GiB PL1 disk (`ACK_GPU_DISK_GB`, `ACK_GPU_DISK_PL`, now the defaults) it took 4 min 24 s, and a cold start, from a pending pod to a ready model server, 11 min 58 s instead of 20 min 40 s: VM boot and join 4 min 19 s, GPU registered and pod scheduled 33 s, image 4 min 24 s, model download and load 2 min 38 s.
+
+`make ack-up` installs the cache before Karpenter and TensorFusion. An image is in the cache after its first pull; `make ack-registry ARGS="warm <image>..."` pulls images through it ahead of time, and `make ack-registry ARGS=status` lists what it holds. The system node's disk (`ACK_SYSTEM_DISK_GB`, 160 by default) holds the layers.
 
 ## Cost safety
 

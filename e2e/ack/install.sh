@@ -115,7 +115,7 @@ settings:
 YAML
 
 log "applying ECSNodeClasses and NodePools"
-nodeclass() { # nodeclass <name> <disk GiB>
+nodeclass() { # nodeclass <name> <disk GiB> <ESSD performance level>
   cat <<YAML
 ---
 apiVersion: karpenter.alibabacloud.com/v1alpha1
@@ -135,7 +135,7 @@ spec:
   systemDisk:
     category: cloud_essd
     size: $2
-    performanceLevel: PL0
+    performanceLevel: $3
   tags:
     Project: ${ACK_NAME}
 YAML
@@ -179,8 +179,8 @@ YAML
 }
 # shellcheck disable=SC2086  # the instance type lists are word-split on purpose
 {
-  nodeclass "$GPU_NODECLASS" "$ACK_GPU_DISK_GB"
-  nodeclass "$CPU_NODECLASS" 40
+  nodeclass "$GPU_NODECLASS" "$ACK_GPU_DISK_GB" "$ACK_GPU_DISK_PL"
+  nodeclass "$CPU_NODECLASS" 40 PL0
   # weight: a pod that could go anywhere lands on the general-purpose pool, never on a GPU node.
   nodepool "$CPU_NODEPOOL" "$CPU_NODECLASS" 100 "$(json_list $ACK_CPU_INSTANCE_TYPES)" "{cpu: ${ACK_CPU_LIMIT}}" \
     WhenEmptyOrUnderutilized 30s "{${ROLE_LABEL}: cpu}"

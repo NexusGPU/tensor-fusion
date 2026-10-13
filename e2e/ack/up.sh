@@ -100,11 +100,12 @@ fi
 if [ -z "$np" ]; then
   log "creating node pool system (1 x ${ACK_SYSTEM_INSTANCE_TYPE}, ${ACK_IMAGE_TYPE})"
   body=$(jq -n --argjson vsws "$vsw_json" --arg itype "$ACK_SYSTEM_INSTANCE_TYPE" --arg img "$ACK_IMAGE_TYPE" \
-    --arg key "$ACK_KEY_PAIR" --arg role "$ROLE_LABEL" --arg rtver "$ACK_RUNTIME_VERSION" --arg name "$ACK_NAME" '{
+    --arg key "$ACK_KEY_PAIR" --arg role "$ROLE_LABEL" --arg rtver "$ACK_RUNTIME_VERSION" --arg name "$ACK_NAME" \
+    --argjson disk "$ACK_SYSTEM_DISK_GB" '{
       nodepool_info: {name: "system"},
       scaling_group: {
         vswitch_ids: $vsws, instance_types: [$itype], instance_charge_type: "PostPaid",
-        system_disk_category: "cloud_essd", system_disk_size: 80, key_pair: $key,
+        system_disk_category: "cloud_essd", system_disk_size: $disk, key_pair: $key,
         desired_size: 1, image_type: $img,
         tags: [{key: "Project", value: $name}]
       },

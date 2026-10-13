@@ -19,6 +19,7 @@ REPO_ROOT="$(cd "${ACK_DIR}/../.." && pwd)"
 : "${ACK_POD_CIDR:=172.20.0.0/16}"              # Flannel
 : "${ACK_SERVICE_CIDR:=172.21.0.0/20}"
 : "${ACK_SYSTEM_INSTANCE_TYPE:=ecs.g7.xlarge}"  # 4 vCPU / 16 GiB: ACK add-ons + Karpenter + TF controller + GreptimeDB
+: "${ACK_SYSTEM_DISK_GB:=160}"                # system node disk: the image cache (registry.sh) keeps its layers there
 : "${ACK_IMAGE_TYPE:=AliyunLinux3ContainerOptimized}" # node image family; must be cgroup v2 (Kubernetes >= 1.35)
 : "${ACK_KEY_PAIR:=tensor-fusion-shared}"       # existing ECS key pair of the region (node login)
 : "${ACK_GPU_INSTANCE_TYPES:=ecs.gn6i-c4g1.xlarge ecs.gn6i-c8g1.2xlarge}" # 1 x T4 each
@@ -26,7 +27,8 @@ REPO_ROOT="$(cd "${ACK_DIR}/../.." && pwd)"
 : "${ACK_GPU_NODE_LIMIT:=3}"                    # NodePool limit nvidia.com/gpu (FIN-01 needs 3 whole-GPU nodes); guard.sh enforces a hard ceiling
 : "${ACK_CPU_LIMIT:=8}"                         # NodePool limit cpu of the general-purpose pool
 : "${ACK_GPU_CONSOLIDATE:=2m}"                  # consolidateAfter of the GPU NodePool
-: "${ACK_GPU_DISK_GB:=120}"
+: "${ACK_GPU_DISK_GB:=300}"                   # an ESSD's throughput grows with its size, and unpacking a 12 GB image writes 39 GB
+: "${ACK_GPU_DISK_PL:=PL1}"                   # PL1 at 300 GiB: 270 MB/s. PL0 at 120 GiB gave 140 MB/s: 6 of the 7 minutes of a pull
 : "${KARPENTER_ALIBABA_VERSION:=0.2.5}"         # AliyunContainerService/karpenter-provider-alibabacloud chart version
 : "${KARPENTER_ALIBABA_CHART_REF:=67a27fd141a777527ac8ce0c66f1e98ab12b04d3}" # commit that carries helm-charts/karpenter-<version>.tgz (added after the tag)
 : "${KARPENTER_ALIBABA_REPO:=https://github.com/AliyunContainerService/karpenter-provider-alibabacloud}"

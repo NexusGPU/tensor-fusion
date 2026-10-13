@@ -47,6 +47,9 @@ sweep() {
   [ -z "$out" ] || log "note  EIPs of the region that are unassociated or named after this stack: $(echo "$out" | tr '\n' ' ')"
   report "RAM role ${KARPENTER_ROLE}" "$(aliyun ram GetRole --RoleName "$KARPENTER_ROLE" 2>/dev/null | jq -r '.Role.RoleName // empty')"
   report "RAM policy ${KARPENTER_ROLE}" "$(aliyun ram GetPolicy --PolicyType Custom --PolicyName "$KARPENTER_ROLE" 2>/dev/null | jq -r '.Policy.PolicyName // empty')"
+  # Kept on purpose: the image cache of the next stack (registry.sh). Storage only.
+  out=$(aliyun oss ls --region "$ACK_REGION" 2>/dev/null | grep -o "oss://${ACK_NAME}-registry-[a-z0-9]*" | tr '\n' ' ')
+  [ -z "$out" ] || log "kept  image cache bucket ${out}and RAM user ${ACK_NAME}-registry (remove with: ack/registry.sh purge)"
   return $left
 }
 
