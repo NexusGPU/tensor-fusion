@@ -61,6 +61,7 @@ var (
 	gvkPod        = schema.GroupVersionKind{Version: "v1", Kind: "Pod"}
 	gvkNode       = schema.GroupVersionKind{Version: "v1", Kind: "Node"}
 	gvkNamespace  = schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
+	gvkSecret     = schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
 	gvkEvent      = schema.GroupVersionKind{Version: "v1", Kind: "Event"}
 	gvkDeployment = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
 	gvkCRD        = schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"}
@@ -596,8 +597,48 @@ func (e *Env) newNamespace(ctx context.Context, caseID string) string {
 	ns := newObj(gvkNamespace, "", name)
 	ns.SetLabels(map[string]string{"tf-e2e/run": e.RunID, "tf-e2e/case": strings.ToLower(caseID)})
 	Expect(e.C.Create(ctx, ns)).To(Succeed())
+	if license, sign := workerLicense(); license != "" {
+		secret := newObj(gvkSecret, name, getenv("TF_LICENSE_SECRET", "tensor-fusion-license"))
+		Expect(unstructured.SetNestedStringMap(secret.Object,
+			map[string]string{"TF_LICENSE": license, "TF_LICENSE_SIGN": sign}, "stringData")).To(Succeed())
+		Expect(e.C.Create(ctx, secret)).To(Succeed())
+	}
 	return name
 }
+
+// workerLicense returns the vGPU worker license, which hard isolation and
+// remote mode need, or two empty strings. Same sources as tools/tf-license.sh:
+// TF_LICENSE and TF_LICENSE_SIGN in the environment, otherwise the file
+// TF_LICENSE_FILE (default ~/.config/tensor-fusion/license.env). The install
+// scripts point the worker at a Secret with this name in the namespace of the
+// workload; newNamespace puts it into every case namespace.
+var workerLicense = sync.OnceValues(func() (license, sign string) {
+	license, sign = os.Getenv("TF_LICENSE"), os.Getenv("TF_LICENSE_SIGN")
+	if license == "" || sign == "" {
+		home, _ := os.UserHomeDir()
+		data, err := os.ReadFile(getenv("TF_LICENSE_FILE", filepath.Join(home, ".config", "tensor-fusion", "license.env")))
+		if err != nil {
+			return "", ""
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+			if !ok {
+				continue
+			}
+			value = strings.Trim(value, `'"`)
+			switch strings.TrimPrefix(key, "export ") {
+			case "TF_LICENSE":
+				license = value
+			case "TF_LICENSE_SIGN":
+				sign = value
+			}
+		}
+	}
+	if license == "" || sign == "" {
+		return "", ""
+	}
+	return license, sign
+})
 
 // deleteNamespace removes a case namespace and waits until the TensorFusion
 // objects in it are really gone: a leaked TensorFusionWorkload keeps GPU

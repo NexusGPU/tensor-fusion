@@ -618,6 +618,57 @@ var _ = Describe("Compose Utils", func() {
 			Expect(signature).To(Equal("signature-value"))
 		})
 
+		It("should make the hard isolation worker a native sidecar in a pod that is meant to finish", func() {
+			for _, policy := range []corev1.RestartPolicy{corev1.RestartPolicyNever, corev1.RestartPolicyOnFailure} {
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+					Spec:       corev1.PodSpec{RestartPolicy: policy, Containers: []corev1.Container{{Name: "main"}}},
+				}
+
+				utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+					Profile: &tfv1.WorkloadProfileSpec{
+						IsLocalGPU: true,
+						Isolation:  tfv1.IsolationModeHard,
+						GPUVendor:  constants.AcceleratorVendorNvidia,
+					},
+				}, []int{0})
+
+				// the workload's containers only: the pod is done when they are
+				Expect(pod.Spec.Containers).To(HaveLen(1))
+				Expect(pod.Spec.Containers[0].Name).To(Equal("main"))
+				worker := pod.Spec.InitContainers[len(pod.Spec.InitContainers)-1]
+				Expect(worker.Name).To(Equal(constants.TFContainerNameWorker))
+				Expect(worker.RestartPolicy).NotTo(BeNil())
+				Expect(*worker.RestartPolicy).To(Equal(corev1.ContainerRestartPolicyAlways))
+				Expect(worker.Image).NotTo(BeEmpty())
+				Expect(worker.VolumeMounts).To(ContainElement(HaveField("MountPath", constants.TransportShmPath)))
+			}
+		})
+
+		It("should keep the hard isolation worker an ordinary container in a pod that restarts its containers", func() {
+			for _, policy := range []corev1.RestartPolicy{corev1.RestartPolicyAlways, ""} {
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+					Spec:       corev1.PodSpec{RestartPolicy: policy, Containers: []corev1.Container{{Name: "main"}}},
+				}
+
+				utils.AddTFDefaultClientConfBeforePatch(context.Background(), pod, newPool(), utils.TensorFusionInfo{
+					Profile: &tfv1.WorkloadProfileSpec{
+						IsLocalGPU: true,
+						Isolation:  tfv1.IsolationModeHard,
+						GPUVendor:  constants.AcceleratorVendorNvidia,
+					},
+				}, []int{0})
+
+				Expect(pod.Spec.Containers).To(HaveLen(2))
+				Expect(pod.Spec.Containers[1].Name).To(Equal(constants.TFContainerNameWorker))
+				Expect(pod.Spec.Containers[1].RestartPolicy).To(BeNil())
+				for _, c := range pod.Spec.InitContainers {
+					Expect(c.Name).NotTo(Equal(constants.TFContainerNameWorker))
+				}
+			}
+		})
+
 		It("should keep local shared mode as embedded worker without tf-data shm", func() {
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},

@@ -371,6 +371,49 @@ var _ = Describe("TensorFusionWorkload Controller", func() {
 		})
 	})
 
+	Context("When the workload names no pool", func() {
+		It("Should run it in the default pool and store the pool name", func() {
+			pool := tfEnv.GetGPUPool(0)
+			Eventually(func(g Gomega) {
+				latest := &tfv1.GPUPool{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pool), latest)).Should(Succeed())
+				if latest.Annotations == nil {
+					latest.Annotations = map[string]string{}
+				}
+				latest.Annotations[constants.TensorFusionDefaultPoolKeyAnnotation] = constants.TrueStringValue
+				g.Expect(k8sClient.Update(ctx, latest)).Should(Succeed())
+			}).Should(Succeed())
+
+			workload := createTensorFusionWorkload("", key, 1)
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
+				g.Expect(workload.Spec.PoolName).Should(Equal(pool.Name))
+			}).Should(Succeed())
+			_ = checkWorkerPodCount(workload)
+		})
+
+		It("Should not create worker pods when no pool is the default", func() {
+			pool := tfEnv.GetGPUPool(0)
+			Eventually(func(g Gomega) {
+				latest := &tfv1.GPUPool{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pool), latest)).Should(Succeed())
+				delete(latest.Annotations, constants.TensorFusionDefaultPoolKeyAnnotation)
+				g.Expect(k8sClient.Update(ctx, latest)).Should(Succeed())
+			}).Should(Succeed())
+
+			workload := createTensorFusionWorkload("", key, 1)
+			podList := &corev1.PodList{}
+			Consistently(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, key, workload)).Should(Succeed())
+				g.Expect(workload.Spec.PoolName).Should(BeEmpty())
+				g.Expect(k8sClient.List(ctx, podList,
+					client.InNamespace(workload.Namespace),
+					client.MatchingLabels{constants.WorkloadKey: workload.Name})).Should(Succeed())
+				g.Expect(podList.Items).Should(BeEmpty())
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+		})
+	})
+
 	Context("When GPUPool doesn't exist", func() {
 		It("Should not create worker pod when reconciling a workload with non-existent pool", func() {
 			workload := createTensorFusionWorkload("non-existent-pool", key, 1)

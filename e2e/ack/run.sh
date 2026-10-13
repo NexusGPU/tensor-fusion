@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ACK tier, one command for the whole stack.
 #
-#   ack/run.sh up      up.sh + install.sh + install-tf.sh + the cost guard in the background
+#   ack/run.sh up      up.sh + registry.sh + install.sh + install-tf.sh + the cost guard in the background
 #   ack/run.sh down    stop the guard + down.sh
 #
 # Optional local inputs under ${ACK_HOME} (git-ignored), picked up when present:
@@ -33,6 +33,8 @@ case "${1:-}" in
       [ -f "$tar" ] && bash "${ACK_DIR}/load-image.sh" "$tar"
     done
     load_env
+    # The image cache first: everything installed after it is pulled through it.
+    bash "${ACK_DIR}/registry.sh"
     bash "${ACK_DIR}/install.sh"
     bash "${ACK_DIR}/install-tf.sh"
     nohup bash "${ACK_DIR}/guard.sh" >>"${ACK_HOME}/guard.log" 2>&1 &

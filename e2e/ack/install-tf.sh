@@ -10,9 +10,16 @@
 #                         cloud console agent. Read from the environment only and
 #                         stored in a Secret created through stdin; never on a
 #                         command line, never echoed, never written into the repo.
+#   TF_LICENSE / TF_LICENSE_SIGN / TF_LICENSE_FILE
+#                         vGPU worker license (hard isolation, remote mode), see
+#                         tools/tf-license.sh. Read from the environment or from the
+#                         file (default ~/.config/tensor-fusion/license.env) and stored
+#                         in a Secret created through stdin. Without one the stack is
+#                         installed as before and those two modes do not work.
 #   TF_HELM_ARGS          extra arguments appended to `helm upgrade --install`.
 
 source "$(dirname "$0")/lib.sh"
+source "$(dirname "$0")/../tools/tf-license.sh"
 need kubectl helm jq
 
 : "${TF_RELEASE_TAG:=2.17.31}"
@@ -68,13 +75,22 @@ if kubectl -n "$TF_NAMESPACE" get secret "$AGENT_SECRET" >/dev/null 2>&1; then
   [ -n "${TF_CLOUD_ENDPOINT:-}" ] && agent_args+=(--set-string "agent.cloudEndpoint=${TF_CLOUD_ENDPOINT}")
 fi
 
+license_args=()
+if tf_license_load; then
+  tf_license_secret default
+  license_args=(--set-string "cluster.workerLicenseSecret=${TF_LICENSE_SECRET}")
+  log "worker license: $(tf_license_summary); Secret ${TF_LICENSE_SECRET} in namespace default"
+else
+  log "no worker license (TF_LICENSE / ${TF_LICENSE_FILE}): hard isolation and remote mode will not work"
+fi
+
 log "installing TensorFusion: chart=${TF_CHART} operator=${TF_OPERATOR_IMAGE}:${TF_OPERATOR_TAG} hypervisor=${TF_HYPERVISOR_IMAGE} middleware=vgpu-provider-nvidia:${TF_VGPU_PROVIDER_TAG}"
 start=$(date +%s)
 # karpenterNodeOverlay.requirements: the chart default selects on labels of
 # Karpenter's AWS provider; the Alibaba Cloud provider's own GPU label is used.
 # shellcheck disable=SC2086  # TF_HELM_ARGS is intentionally word-split
 helm upgrade --install "$TF_RELEASE" "$TF_CHART" --namespace "$TF_NAMESPACE" --create-namespace \
-  --wait --timeout 10m ${agent_args[@]+"${agent_args[@]}"} ${TF_HELM_ARGS:-} -f - >/dev/null <<YAML
+  --wait --timeout 10m ${agent_args[@]+"${agent_args[@]}"} ${license_args[@]+"${license_args[@]}"} ${TF_HELM_ARGS:-} -f - >/dev/null <<YAML
 cluster:
   hypervisorImage: ${TF_HYPERVISOR_IMAGE}
   pool:

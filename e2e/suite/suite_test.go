@@ -71,6 +71,7 @@ const (
 	NeedNodeClass = "nodeclass" // a Karpenter provider whose NodeClass the suite can reference: AWS, Alibaba Cloud or KWOK
 	NeedTwoGPUs   = "two-gpus"  // two GPU CRs (any nodes)
 	NeedFixedImg  = "fixed-img" // behaviour known broken on the released images, see KnownIssue
+	NeedLicense   = "license"   // a vGPU worker license (hard isolation, remote mode), see workerLicense
 	NeedTF        = "tensor-fusion"
 )
 
@@ -184,6 +185,10 @@ func unmet(ctx context.Context, reqs []string) string {
 		case NeedTwoGPUs:
 			if gpus := env.poolGPUs(ctx); len(gpus) < 2 {
 				return fmt.Sprintf("needs 2 GPUs in pool %s, found %d", env.Pool, len(gpus))
+			}
+		case NeedLicense:
+			if license, _ := workerLicense(); license == "" {
+				return "needs a vGPU worker license: set TF_LICENSE and TF_LICENSE_SIGN or write them to ~/.config/tensor-fusion/license.env (tools/tf-license.sh)"
 			}
 		case NeedFixedImg:
 			if os.Getenv("E2E_FIXED_IMAGES") == "" {

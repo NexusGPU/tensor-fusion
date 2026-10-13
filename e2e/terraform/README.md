@@ -100,6 +100,7 @@ All are read from environment variables, and image tags are always passed to hel
 | `TF_VGPU_PROVIDER_TAG` | Tag of `vgpu-provider-nvidia` | `1.3.9` |
 | `TF_CLIENT_TAG` / `TF_WORKER_TAG` | remote client / worker | Chart default |
 | `TF_AGENT_ID` / `TF_ENROLL_TOKEN` / `TF_CLOUD_ENDPOINT` | Console agent. Read only from the environment and passed to helm through a temporary values file with mode 0600; never on the command line, never echoed, never stored in the repository | Disabled |
+| `TF_LICENSE` / `TF_LICENSE_SIGN` / `TF_LICENSE_FILE` | vGPU worker license (hard isolation, remote mode). Read from the environment or from the file (default `~/.config/tensor-fusion/license.env`), stored in the Secret `tensor-fusion-license` through stdin; see `tools/tf-license.sh` | None: the cases that need one are skipped |
 | `TF_HELM_ARGS` | Arguments appended to `helm upgrade --install` | Empty |
 
 ```bash
