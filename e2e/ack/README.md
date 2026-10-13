@@ -47,6 +47,8 @@ VPC 10.43.0.0/16 (2 vSwitches / 2 zones, NAT gateway + EIP for egress)
 
 `run.sh up` reads three local inputs under `ack/.work/` (none of them is committed): `images/*.tar` (development builds that no image registry hosts), `stack.env` (e.g. `KARPENTER_ALIBABA_IMAGE=`, `TF_OPERATOR_TAG=`), and `agent.env` (`TF_AGENT_ID` / `TF_ENROLL_TOKEN` of the console environment, mode 600).
 
+The vGPU worker license, which hard isolation and remote mode need, is read from `TF_LICENSE` / `TF_LICENSE_SIGN` in the environment or from the file `TF_LICENSE_FILE` (default `~/.config/tensor-fusion/license.env`, mode 600; set another path in `stack.env`). `install-tf.sh` stores it in the Secret `tensor-fusion-license` and points the worker at it; the suite puts the same Secret into every case namespace. Without a license the stack is installed as before and the cases that need one are skipped with that reason. See `tools/tf-license.sh`.
+
 ## Cost safety
 
 - All resources carry the tag `Project=tf-e2e-ack`.

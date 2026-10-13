@@ -83,8 +83,7 @@ var _ = Describe("scheduling", func() {
 
 	Register(Case{
 		ID: "ISO-06", Title: "remote mode: the application Pod is on a CPU node and uses a remote GPU through a TensorFusionConnection", Tiers: []string{TierCore},
-		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 30 * time.Minute,
-		KnownIssue: "the remote worker of the default ProviderConfig (tensorfusion/tensor-fusion-worker v2.25.0, community edition) quits at start with \"VerifyLicense: License is not set\" and the pod goes into CrashLoopBackOff with exit code 0; neither the chart nor the operator has a setting that hands it a license, so the client never gets a GPU (seen on a real T4, 2026-10-12)",
+		Needs: []string{NeedTF, NeedRealGPU, NeedLicense}, Timeout: 30 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]

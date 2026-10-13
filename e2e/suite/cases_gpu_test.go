@@ -243,8 +243,7 @@ var _ = Describe("isolation", func() {
 	})
 
 	Register(Case{
-		ID: "ISO-04", Title: "hard compute limit, measured (sidecar worker)", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU}, Timeout: 40 * time.Minute,
-		KnownIssue: "the worker that hard isolation runs as a sidecar (tensorfusion/tensor-fusion-worker v2.25.0, community edition) quits at start with \"VerifyLicense: License is not set\" and the workload process then dies with a bus error; neither the chart nor the operator has a setting that hands it a license (seen on a real T4, 2026-10-12)",
+		ID: "ISO-04", Title: "hard compute limit, measured (sidecar worker)", Tiers: []string{TierIsolation}, Needs: []string{NeedTF, NeedRealGPU, NeedLicense}, Timeout: 40 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]
@@ -515,8 +514,7 @@ var _ = Describe("perf", func() {
 
 	Register(Case{
 		ID: "PERF-LLM-02", Title: "vLLM streaming inference vs. compute share (hard)", Tiers: []string{TierPerf, "perf-quick"},
-		Needs: []string{NeedTF, NeedRealGPU}, Timeout: 90 * time.Minute,
-		KnownIssue: "the worker that hard isolation runs as a sidecar (tensorfusion/tensor-fusion-worker v2.25.0, community edition) quits at start with \"VerifyLicense: License is not set\" and the workload process then dies with a bus error; neither the chart nor the operator has a setting that hands it a license (seen on a real T4, 2026-10-12)",
+		Needs: []string{NeedTF, NeedRealGPU, NeedLicense}, Timeout: 90 * time.Minute,
 		Run: func(ctx SpecContext, c *C) {
 			gpus, _ := env.ensureGPUs(ctx, c, 1)
 			g := gpus[0]

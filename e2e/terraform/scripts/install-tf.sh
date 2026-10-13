@@ -20,13 +20,19 @@
 #                        cloud console agent. Read from the environment only, handed to
 #                        helm through a 0600 temp file (never on a command line, never
 #                        echoed, never written into the repo).
+#   TF_LICENSE / TF_LICENSE_SIGN / TF_LICENSE_FILE
+#                        vGPU worker license (hard isolation, remote mode), see
+#                        tools/tf-license.sh. Read from the environment or from the file
+#                        (default ~/.config/tensor-fusion/license.env) and stored in a
+#                        Secret created through stdin.
 #   TF_HELM_ARGS         extra arguments appended to `helm upgrade --install`.
 #
 #   scripts/install-tf.sh            install / upgrade
 #   scripts/install-tf.sh uninstall  remove the release, CRs and CRDs (scripts/uninstall.sh of the repo)
 
 source "$(dirname "$0")/lib.sh"
-need aws kubectl helm
+source "$(dirname "$0")/../../tools/tf-license.sh"
+need aws kubectl helm jq
 
 setup_kubeconfig
 
@@ -130,6 +136,14 @@ if [ -n "${TF_AGENT_ID:-}" ]; then
   log "cloud console agent enabled (agent id and token taken from the environment)"
 else
   echo '{}' >"$secrets"
+fi
+
+if tf_license_load; then
+  KUBECTL=kubectl tf_license_secret default
+  set_args+=(--set-string "cluster.workerLicenseSecret=${TF_LICENSE_SECRET}")
+  log "worker license: $(tf_license_summary); Secret ${TF_LICENSE_SECRET} in namespace default"
+else
+  log "no worker license (TF_LICENSE / ${TF_LICENSE_FILE}): hard isolation and remote mode will not work"
 fi
 
 version_args=()

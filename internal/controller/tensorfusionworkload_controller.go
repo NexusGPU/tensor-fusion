@@ -369,9 +369,32 @@ func (r *TensorFusionWorkloadReconciler) reconcileWorkload(ctx context.Context, 
 		return ctrl.Result{}, nil
 	}
 
+	// A workload that names no pool runs in the default pool, like a pod
+	// without the pool annotation does (the pod webhook). The name is stored
+	// on the workload: its workers and its status then refer to a pool that
+	// stays the same when another pool becomes the default.
+	if workload.Spec.PoolName == "" {
+		poolName, err := r.defaultPoolName(ctx)
+		if err != nil {
+			r.warn(workload, "NoDefaultPool", err.Error())
+			return ctrl.Result{}, err
+		}
+		patch := client.MergeFrom(workload.DeepCopy())
+		workload.Spec.PoolName = poolName
+		if err := r.Patch(ctx, workload, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("set default pool: %w", err)
+		}
+		log.Info("Workload names no pool, using the default pool", "name", workload.Name, "namespace", workload.Namespace, "pool", poolName)
+		// The update arrives as an event of its own.
+		return ctrl.Result{}, nil
+	}
+
 	// Fetch the GPUPool
 	pool := &tfv1.GPUPool{}
 	if err := r.Get(ctx, client.ObjectKey{Name: workload.Spec.PoolName}, pool); err != nil {
+		if errors.IsNotFound(err) {
+			r.warn(workload, "PoolNotFound", fmt.Sprintf("GPU pool %q does not exist", workload.Spec.PoolName))
+		}
 		return ctrl.Result{}, fmt.Errorf("gpu pool(%s) does not exist", workload.Spec.PoolName)
 	}
 	// Create worker generator
@@ -431,6 +454,38 @@ func (r *TensorFusionWorkloadReconciler) reconcileWorkload(ctx context.Context, 
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// defaultPoolName returns the name of the pool marked as the default one
+// (constants.TensorFusionDefaultPoolKeyAnnotation), the first by name when
+// several are.
+func (r *TensorFusionWorkloadReconciler) defaultPoolName(ctx context.Context) (string, error) {
+	pools := &tfv1.GPUPoolList{}
+	if err := r.List(ctx, pools); err != nil {
+		return "", fmt.Errorf("list gpu pools: %w", err)
+	}
+	name := ""
+	for i := range pools.Items {
+		pool := &pools.Items[i]
+		if pool.Annotations[constants.TensorFusionDefaultPoolKeyAnnotation] != constants.TrueStringValue {
+			continue
+		}
+		if name == "" || pool.Name < name {
+			name = pool.Name
+		}
+	}
+	if name == "" {
+		return "", fmt.Errorf("the workload names no gpu pool (spec.poolName) and no pool is marked as the default")
+	}
+	return name, nil
+}
+
+// warn records a warning event on the workload, where the user who created it
+// looks; the reconcile error alone only reaches the operator log.
+func (r *TensorFusionWorkloadReconciler) warn(workload *tfv1.TensorFusionWorkload, reason, message string) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning, reason, "Reconcile", "%s", message)
+	}
 }
 
 // reconcileScaling handles scaling up and down of worker pods and updates replica status

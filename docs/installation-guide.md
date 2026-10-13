@@ -144,6 +144,21 @@ The values keys for each component:
 
 > Note: `cluster.hypervisorImage` takes a full image reference (`repository:tag`), whereas the operator uses the two separate keys `repository` + `tag`.
 
+### Worker license
+
+Hard isolation (the worker runs as a sidecar of the workload Pod) and remote mode (the worker is a Pod of its own) use the vGPU worker, which needs a license; without one it quits at start with `License is not set`, and the workload gets no GPU. Soft, shared, and partitioned isolation with a local GPU do not use the worker and need no license.
+
+The license is two values, `TF_LICENSE` and `TF_LICENSE_SIGN`. Keep them in a Secret and name the Secret in the values:
+
+```bash
+# license.env holds the two lines TF_LICENSE=... and TF_LICENSE_SIGN=...; keep it out of version control
+kubectl -n <workload namespace> create secret generic tensor-fusion-license --from-env-file=license.env
+helm upgrade --install tensor-fusion-sys ./charts/tensor-fusion -n tensor-fusion-sys \
+  --set cluster.workerLicenseSecret=tensor-fusion-license
+```
+
+The worker runs in the namespace of the workload, so the Secret must exist in every namespace that uses these two modes; the chart does not create it. In a namespace without the Secret the worker still starts and reports the missing license itself. A license of an edition other than `ee` lists GPU UUIDs, and the worker refuses to start on a node that has any other GPU (`Device UUID ... is not found in the license`).
+
 When installing from the Helm repository (rather than a local chart path), `--version` can pin the **chart version** (which is independent of the image tags):
 
 ```bash

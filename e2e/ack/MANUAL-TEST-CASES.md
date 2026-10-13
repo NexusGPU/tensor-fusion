@@ -331,7 +331,7 @@ Confirm item by item in the cloud app: the environment is online; the node / GPU
 
 | Feature | Symptom | Cause |
 |---|---|---|
-| remote mode (ISO-06) | The worker Pod is in `CrashLoopBackOff` with exit code 0, and the client reports `cuda_available: false` | The community remote worker reports `License is not set` at startup and exits; neither the chart nor the operator has any configuration for delivering a License |
+| remote mode (ISO-06) | The worker Pod is in `CrashLoopBackOff` with exit code 0, and the client reports `cuda_available: false` | The worker has no license: it reports `License is not set` at startup and exits. Provide one (`tools/tf-license.sh`, `cluster.workerLicenseSecret`); with a license this works |
 | hard isolation (ISO-04, PERF-LLM-02) | The sidecar worker exits and the application process gets `Bus error` | Same as above |
 | `disable-features: gpu-limiter` under soft (ISO-13) | A 30% limit is still limited to about 27% | The webhook only handles this annotation on the remote / hard client path |
 | Images without libstdc++ (ISO-14) | The process in the container exits with 127 | The soft limiter is injected through `ld.so.preload` and depends on glibc and libstdc++ |

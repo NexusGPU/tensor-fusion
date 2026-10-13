@@ -916,6 +916,16 @@ cluster:
   # Run a vector sidecar in each hypervisor Pod to ship GPU and worker usage
   # metrics (tf_gpu_usage, tf_worker_usage) and hypervisor / worker logs.
   enableVector: true
+  # Name of a Secret with the keys TF_LICENSE and TF_LICENSE_SIGN: the license of
+  # the vGPU worker, which hard isolation (worker sidecar) and remote GPU mode
+  # (worker Pod) need; without one the worker quits with "License is not set".
+  # The worker runs in the namespace of the workload, so the Secret must exist
+  # in every namespace that uses those two modes. The chart does not create it:
+  #   kubectl -n <namespace> create secret generic tensor-fusion-license \
+  #     --from-env-file=<file with TF_LICENSE=... and TF_LICENSE_SIGN=...>
+  # A license other than the "ee" edition lists GPU UUIDs and is refused on a
+  # node with any other GPU.
+  workerLicenseSecret: ""
   pool:
     name: shared
     # GPU node label the default pool selects on.

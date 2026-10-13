@@ -7,6 +7,7 @@
 #   - a release upgraded with --reuse-values from a chart that had the token
 #     inline renders (its values lack every key added since);
 #   - the Alertmanager configuration is a Secret.
+#   - the worker license is read from a Secret the user names.
 # It also checks what the hypervisor pods depend on:
 #   - the Vector ConfigMap they mount is rendered whatever the values are, and
 #     never holds the database password;
@@ -205,6 +206,15 @@ check "and no other" lacks "$template" "capacityMin"
 template=$(doc "$(render --set schedulingConfigTemplate.elasticRateLimitParameters=null)" \
     SchedulingConfigTemplate tf-scheduling-config || true)
 check "renders for a release whose values lack the key" contains "$template" "autoFreezeAndResume:"
+
+echo "== worker license"
+cluster=$(doc "$(render)" TensorFusionCluster tensor-fusion)
+check "no license variable unless a Secret is named" lacks "$cluster" "TF_LICENSE"
+cluster=$(doc "$(render --set-string cluster.workerLicenseSecret=example-license)" TensorFusionCluster tensor-fusion)
+check "the worker reads TF_LICENSE from the named Secret" contains "$cluster" "key: TF_LICENSE"
+check "and TF_LICENSE_SIGN" contains "$cluster" "key: TF_LICENSE_SIGN"
+check "by reference" contains "$cluster" 'name: "example-license"'
+check "renders for a release whose values lack the key" render --set cluster.workerLicenseSecret=null
 
 echo "== images"
 app_version=$(sed -n 's/^appVersion: *"\(.*\)"$/\1/p' "$CHART/Chart.yaml")
