@@ -164,6 +164,12 @@ func (r *TensorFusionClusterReconciler) Reconcile(ctx context.Context, req ctrl.
 		tfc.Status.RetryCount = tfc.Status.RetryCount + 1
 		// store additional check result for each component
 		tfc.SetAsUpdating(conditions...)
+		// capacity is still there while one pool settles; keep the totals current
+		gpupools, err := r.listOwnedGPUPools(ctx, tfc)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		tfc.RefreshStatus(gpupools)
 
 		if err := r.updateTFClusterStatus(ctx, tfc, originalStatus); err != nil {
 			return ctrl.Result{}, err

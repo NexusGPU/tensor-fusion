@@ -104,7 +104,7 @@ func (tfc *TensorFusionCluster) SetAsReady(conditions ...metav1.Condition) bool 
 func (tfc *TensorFusionCluster) RefreshStatus(ownedPools []GPUPool) {
 	tfc.Status.TotalPools = int32(len(tfc.Spec.GPUPools))
 
-	tfc.Status.ReadyGPUPools = make([]string, len(tfc.Spec.GPUPools))
+	tfc.Status.ReadyGPUPools = make([]string, 0, len(tfc.Spec.GPUPools))
 	tfc.Status.NotReadyGPUPools = make([]string, 0)
 	tfc.Status.TotalNodes = 0
 	tfc.Status.TotalGPUs = 0
@@ -119,11 +119,11 @@ func (tfc *TensorFusionCluster) RefreshStatus(ownedPools []GPUPool) {
 	tfc.Status.VirtualAvailableTFlops = &resource.Quantity{}
 	tfc.Status.VirtualAvailableVRAM = &resource.Quantity{}
 
-	for i, gpuPool := range ownedPools {
+	for _, gpuPool := range ownedPools {
 		if gpuPool.Status.Phase != PhaseRunning {
 			tfc.Status.NotReadyGPUPools = append(tfc.Status.NotReadyGPUPools, gpuPool.Name)
 		} else {
-			tfc.Status.ReadyGPUPools[i] = gpuPool.Name
+			tfc.Status.ReadyGPUPools = append(tfc.Status.ReadyGPUPools, gpuPool.Name)
 		}
 		tfc.Status.TotalNodes += gpuPool.Status.TotalNodes
 		tfc.Status.TotalGPUs += gpuPool.Status.TotalGPUs

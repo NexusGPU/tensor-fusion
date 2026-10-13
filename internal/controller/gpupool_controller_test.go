@@ -388,6 +388,24 @@ var _ = Describe("GPUPool Controller", func() {
 		})
 	})
 
+	Context("When a pool has no nodes", func() {
+		It("Should be Running in AutoSelect mode even with MinResources set", func() {
+			tfEnv := NewTensorFusionEnvBuilder().
+				AddPoolWithNodeCount(0).
+				Build()
+
+			Eventually(func(g Gomega) {
+				pool := tfEnv.GetGPUPool(0)
+				g.Expect(pool.Spec.CapacityConfig.MinResources.TFlops.Value()).Should(BeNumerically(">", 0))
+				g.Expect(pool.Status.TotalNodes).Should(BeZero())
+				g.Expect(pool.Status.Phase).Should(Equal(tfv1.TensorFusionPoolPhaseRunning))
+				g.Expect(tfEnv.GetCluster().Status.Phase).Should(Equal(tfv1.TensorFusionClusterRunning))
+			}).Should(Succeed())
+
+			tfEnv.Cleanup()
+		})
+	})
+
 	Context("When NodeManagerConfig is nil", func() {
 		It("Should reject GPUPool creation when NodeManagerConfig is nil", func() {
 			pool := &tfv1.GPUPool{

@@ -370,8 +370,15 @@ func (r *GPUPoolReconciler) reconcilePoolCurrentCapacityAndReadiness(
 
 	pool.Status.RunningAppsCnt = runningAppsCnt
 
+	// MinResources is a floor the operator provisions up to, so it only binds in
+	// the provisioning modes. Where nodes are brought by someone else (AutoSelect:
+	// Karpenter, a cluster autoscaler, or by hand) an empty pool is at rest, not
+	// mid-update: nothing in this controller is going to add a node to it.
 	allowScaleToZero := true
-	if pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MinResources != nil {
+	provisions := pool.Spec.NodeManagerConfig != nil &&
+		(pool.Spec.NodeManagerConfig.ProvisioningMode == tfv1.ProvisioningModeProvisioned ||
+			pool.Spec.NodeManagerConfig.ProvisioningMode == tfv1.ProvisioningModeKarpenter)
+	if provisions && pool.Spec.CapacityConfig != nil && pool.Spec.CapacityConfig.MinResources != nil {
 		minTFlops := pool.Spec.CapacityConfig.MinResources.TFlops.Value()
 		minVRAM := pool.Spec.CapacityConfig.MinResources.VRAM.Value()
 
