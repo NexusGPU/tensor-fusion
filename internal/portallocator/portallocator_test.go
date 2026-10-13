@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var _ = Describe("Port Allocator", func() {
@@ -118,6 +121,46 @@ var _ = Describe("Port Allocator", func() {
 			port, err = pa.AssignClusterLevelHostPort(podName)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(port).To(Equal(42002))
+		})
+
+		// The pod controller reconciles a pod's deletion more than once, and the
+		// pod only goes away after such a reconcile has returned. A release that
+		// waits for the pod inside the reconcile stops the controller for good.
+		It("should not block when the release of a pod that is still there is asked for again", func() {
+			saved := RETRY_CONFIG
+			RETRY_CONFIG = wait.Backoff{Steps: 200, Duration: 50 * time.Millisecond, Factor: 1.0}
+			DeferCleanup(func() { RETRY_CONFIG = saved })
+
+			port, err := pa.AssignClusterLevelHostPort("release-twice")
+			Expect(err).NotTo(HaveOccurred())
+			pod := genHostPortPod("release-twice", "node-1", int32(port), true)
+			Expect(k8sClient.Create(ctx, &pod)).To(Succeed())
+
+			for i := 0; i < 3; i++ {
+				released := make(chan error, 1)
+				go func() { released <- pa.ReleaseClusterLevelHostPort("default", "release-twice", port, false) }()
+				Eventually(released, "2s").Should(Receive(BeNil()), "release call %d blocked", i+1)
+			}
+
+			By("keeping the port while the pod exists")
+			other, err := pa.AssignClusterLevelHostPort("other-pod")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(other).NotTo(Equal(port))
+			Expect(pa.ReleaseClusterLevelHostPort("default", "other-pod", other, true)).To(Succeed())
+
+			By("giving the port back once the pod is gone")
+			Expect(k8sClient.Delete(ctx, &pod, client.GracePeriodSeconds(0))).To(Succeed())
+			Eventually(func() bool {
+				pa.storeMutexCluster.RLock()
+				defer pa.storeMutexCluster.RUnlock()
+				offset := port - pa.PortRangeStartCluster
+				return pa.BitmapCluster[offset/64]&(1<<(offset%64)) == 0
+			}, "10s", "100ms").Should(BeTrue())
+			Eventually(func() int {
+				pa.pendingClusterReleaseMutex.Lock()
+				defer pa.pendingClusterReleaseMutex.Unlock()
+				return len(pa.pendingClusterReleases)
+			}, "5s", "100ms").Should(BeZero())
 		})
 
 		It("should fail to release a cluster port with invalid parameters", func() {

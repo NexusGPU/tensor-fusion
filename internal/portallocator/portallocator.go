@@ -51,17 +51,23 @@ type PortAllocator struct {
 	storeMutexCluster sync.RWMutex
 	ctx               context.Context
 
-	clusterLevelPortReleaseQueue chan struct {
-		namespace string
-		podName   string
-		port      int
-	}
+	// Cluster-level ports whose pod is being deleted: each one is given back
+	// once the pod is gone. A pod's deletion is reconciled several times, the
+	// set keeps that to one waiter per pod and port.
+	pendingClusterReleases     map[clusterPortRelease]struct{}
+	pendingClusterReleaseMutex sync.Mutex
 
 	nodeLevelPortReleaseQueue chan struct {
 		nodeName string
 		podName  string
 		port     int
 	}
+}
+
+type clusterPortRelease struct {
+	namespace string
+	podName   string
+	port      int
 }
 
 // parsePortRange parses an "<start>-<end>" string and validates that both
@@ -116,11 +122,7 @@ func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRa
 		storeMutexCluster: sync.RWMutex{},
 		ctx:               ctx,
 
-		clusterLevelPortReleaseQueue: make(chan struct {
-			namespace string
-			podName   string
-			port      int
-		}),
+		pendingClusterReleases: make(map[clusterPortRelease]struct{}),
 		nodeLevelPortReleaseQueue: make(chan struct {
 			nodeName string
 			podName  string
@@ -128,7 +130,6 @@ func NewPortAllocator(ctx context.Context, client client.Client, nodeLevelPortRa
 		}),
 	}
 
-	go allocator.releaseClusterPortUntilPodDeleted()
 	go allocator.releaseNodePortUntilPodDeleted()
 
 	return allocator, nil
@@ -252,6 +253,14 @@ func (s *PortAllocator) clusterPortOffset(port int) (int, error) {
 	return offset, nil
 }
 
+// ReleaseClusterLevelHostPort gives a cluster-level port back, at once with
+// immediateRelease and otherwise as soon as the pod is gone. It never waits:
+// the pod controller calls it while it reconciles the pod's deletion, and the
+// pod can only go away after that reconcile has returned and removed the
+// finalizer. (It used to hand the request to a single worker over an
+// unbuffered channel. The second reconcile of the same deletion then blocked
+// on the channel while the worker waited for a pod that this very reconcile
+// had to let go, which stopped the pod controller for every pod.)
 func (s *PortAllocator) ReleaseClusterLevelHostPort(namespace string, podName string, port int, immediateRelease bool) error {
 	portOffset, err := s.clusterPortOffset(port)
 	if err != nil {
@@ -259,48 +268,55 @@ func (s *PortAllocator) ReleaseClusterLevelHostPort(namespace string, podName st
 	}
 
 	if immediateRelease {
-		s.storeMutexCluster.Lock()
-		defer s.storeMutexCluster.Unlock()
-		s.BitmapCluster[portOffset/64] &^= 1 << (portOffset % 64)
+		s.clearClusterPort(portOffset)
 		return nil
-	} else {
-		// put into queue, release until Pod not found
-		s.clusterLevelPortReleaseQueue <- struct {
-			namespace string
-			podName   string
-			port      int
-		}{namespace, podName, port}
+	}
+
+	item := clusterPortRelease{namespace: namespace, podName: podName, port: port}
+	s.pendingClusterReleaseMutex.Lock()
+	if s.pendingClusterReleases == nil {
+		s.pendingClusterReleases = make(map[clusterPortRelease]struct{})
+	}
+	_, pending := s.pendingClusterReleases[item]
+	if !pending {
+		s.pendingClusterReleases[item] = struct{}{}
+	}
+	s.pendingClusterReleaseMutex.Unlock()
+	if !pending {
+		go s.releaseClusterPortWhenPodGone(item, portOffset)
 	}
 	return nil
 }
 
-func (s *PortAllocator) releaseClusterPortUntilPodDeleted() {
-	for item := range s.clusterLevelPortReleaseQueue {
-		namespace := item.namespace
-		podName := item.podName
-		portOffset, offsetErr := s.clusterPortOffset(item.port)
-		if offsetErr != nil {
-			// Defensive: queue is fed by ReleaseClusterLevelHostPort which
-			// already validates, but guard the bitmap indexing anyway so a
-			// bad item can never crash the background worker.
-			log.Log.Error(offsetErr, "drop release request for invalid port",
-				"namespace", namespace, "pod", podName, "port", item.port)
-			continue
-		}
+func (s *PortAllocator) clearClusterPort(portOffset int) {
+	s.storeMutexCluster.Lock()
+	defer s.storeMutexCluster.Unlock()
+	s.BitmapCluster[portOffset/64] &^= 1 << (portOffset % 64)
+}
 
-		_ = retry.OnError(RETRY_CONFIG, func(_ error) bool {
-			return true
-		}, func() error {
-			pod := &v1.Pod{}
-			err := s.Client.Get(s.ctx, client.ObjectKey{Namespace: namespace, Name: podName}, pod)
-			if errors.IsNotFound(err) {
-				s.storeMutexCluster.Lock()
-				defer s.storeMutexCluster.Unlock()
-				s.BitmapCluster[portOffset/64] &^= 1 << (portOffset % 64)
-				return nil
-			}
-			return fmt.Errorf("pod still there, can not release port %s/%s", namespace, podName)
-		})
+// releaseClusterPortWhenPodGone waits for the pod to be gone and then frees
+// its port. When the pod outlives every retry the port stays taken and the
+// request is forgotten, so a later reconcile of the pod starts a new wait.
+func (s *PortAllocator) releaseClusterPortWhenPodGone(item clusterPortRelease, portOffset int) {
+	defer func() {
+		s.pendingClusterReleaseMutex.Lock()
+		delete(s.pendingClusterReleases, item)
+		s.pendingClusterReleaseMutex.Unlock()
+	}()
+	err := retry.OnError(RETRY_CONFIG, func(_ error) bool {
+		return s.ctx == nil || s.ctx.Err() == nil
+	}, func() error {
+		pod := &v1.Pod{}
+		err := s.Client.Get(s.ctx, client.ObjectKey{Namespace: item.namespace, Name: item.podName}, pod)
+		if errors.IsNotFound(err) {
+			s.clearClusterPort(portOffset)
+			return nil
+		}
+		return fmt.Errorf("pod still there, can not release port %s/%s", item.namespace, item.podName)
+	})
+	if err != nil {
+		log.Log.Info("cluster level host port not released, its pod is still there",
+			"namespace", item.namespace, "pod", item.podName, "port", item.port)
 	}
 }
 
