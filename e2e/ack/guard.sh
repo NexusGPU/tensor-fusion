@@ -54,8 +54,18 @@ if [ "${1:-}" = "once" ]; then
   exit 0
 fi
 log "guard running: ceiling ${ACK_MAX_GPU_INSTANCES} GPU instances, every ${ACK_GUARD_INTERVAL}s"
-while [ -n "$(cluster_id)" ]; do
-  pass "$cid"
+# Leave only when the API answered and the cluster is not in the answer, three
+# times in a row. A failed call (DNS, network, throttling) says nothing about
+# the cluster, and a guard that quits on one is no guard.
+gone=0
+while [ "$gone" -lt 3 ]; do
+  if out=$(ali cs GET /api/v1/clusters --name "$ACK_NAME" 2>/dev/null) &&
+    [ -z "$(echo "$out" | jq -r '.clusters[]? | select(.state != "deleted") | .cluster_id')" ]; then
+    gone=$((gone + 1))
+  else
+    gone=0
+    pass "$cid" || log "guard pass failed, retrying next round"
+  fi
   sleep "$ACK_GUARD_INTERVAL"
 done
 log "cluster gone, guard exits"
